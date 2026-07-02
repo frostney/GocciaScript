@@ -214,6 +214,8 @@ type
 
   TGocciaStringClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function DefaultPrototypeForNewTarget(const ANewTarget: TGocciaValue;
+      const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
     // ECMAScript 22.1.1.1: String constructor length is 1.
     function GetClassLength: Integer; override;
   end;
@@ -358,6 +360,7 @@ uses
   Goccia.Values.ResponseValue,
   Goccia.Values.SetValue,
   Goccia.Values.SharedArrayBufferValue,
+  Goccia.Values.StringObjectValue,
   Goccia.Values.TextDecoderValue,
   Goccia.Values.TextEncoderValue,
   Goccia.Values.ToPrimitive,
@@ -377,6 +380,27 @@ begin
     Exit(TGocciaNumberLiteralValue.Create(
       TGocciaBigIntValue(AValue).Value.ToDouble));
   Result := AValue.ToNumberLiteral;
+end;
+
+function ToStringConstructorValue(const AValue: TGocciaValue;
+  const AAllowSymbol: Boolean): TGocciaStringLiteralValue;
+var
+  Prim: TGocciaValue;
+begin
+  if AValue is TGocciaSymbolValue then
+  begin
+    if AAllowSymbol then
+      Exit(TGocciaSymbolValue(AValue).ToDisplayString);
+    ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
+  end;
+
+  if AValue is TGocciaObjectValue then
+  begin
+    Prim := ToPrimitive(AValue, tphString);
+    Exit(Prim.ToStringLiteral);
+  end;
+
+  Result := AValue.ToStringLiteral;
 end;
 
 function GetTypedArrayPrototypeFromConstructor(
@@ -438,6 +462,9 @@ begin
     if AConstructorName = CONSTRUCTOR_NUMBER then
       FallbackPrototype :=
         TGocciaNumberObjectValue.GetSharedPrototypeForRealm(FallbackRealm)
+    else if AConstructorName = CONSTRUCTOR_STRING then
+      FallbackPrototype :=
+        TGocciaStringObjectValue.GetSharedPrototypeForRealm(FallbackRealm)
     else if AConstructorName = CONSTRUCTOR_BOOLEAN then
       FallbackPrototype :=
         TGocciaBooleanObjectValue.GetSharedPrototypeForRealm(FallbackRealm)
@@ -1456,6 +1483,9 @@ begin
       else if NativeClass is TGocciaArrayClassValue then
         InstancePrototype := GetArrayPrototypeFromConstructor(ANewTarget,
           NativeIntrinsicPrototype)
+      else if NativeClass is TGocciaStringClassValue then
+        InstancePrototype := TGocciaStringClassValue(NativeClass).
+          DefaultPrototypeForNewTarget(ANewTarget, NativeIntrinsicPrototype)
       else if NativeClass is TGocciaNumberClassValue then
         InstancePrototype := TGocciaNumberClassValue(NativeClass).
           DefaultPrototypeForNewTarget(ANewTarget, NativeIntrinsicPrototype)
@@ -1896,10 +1926,8 @@ begin
   begin
     if AArguments.Length = 0 then
       Result := TGocciaStringLiteralValue.Create('')
-    else if AArguments.GetElement(0) is TGocciaSymbolValue then
-      Result := TGocciaSymbolValue(AArguments.GetElement(0)).ToDisplayString
     else
-      Result := AArguments.GetElement(0).ToStringLiteral;
+      Result := ToStringConstructorValue(AArguments.GetElement(0), True);
   end
   else if FName = CONSTRUCTOR_NUMBER then
   begin
@@ -2106,11 +2134,17 @@ var
 begin
   if AArguments.Length = 0 then
     Prim := TGocciaStringLiteralValue.Create('')
-  else if AArguments.GetElement(0) is TGocciaSymbolValue then
-    Prim := TGocciaSymbolValue(AArguments.GetElement(0)).ToDisplayString
   else
-    Prim := AArguments.GetElement(0).ToStringLiteral;
+    Prim := ToStringConstructorValue(AArguments.GetElement(0), False);
   Result := Prim.Box;
+end;
+
+function TGocciaStringClassValue.DefaultPrototypeForNewTarget(
+  const ANewTarget: TGocciaValue;
+  const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
+begin
+  Result := DefaultNativePrototypeForNewTarget(ANewTarget,
+    ACurrentRealmDefault, CONSTRUCTOR_STRING);
 end;
 
 function TGocciaStringClassValue.GetClassLength: Integer;

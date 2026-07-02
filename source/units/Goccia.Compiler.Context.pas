@@ -51,6 +51,8 @@ type
 
 function EmitInstruction(const ACtx: TGocciaCompilationContext;
   const AInstruction: UInt32): Integer; inline;
+procedure EmitLoadStringLiteral(const ACtx: TGocciaCompilationContext;
+  const ADest: UInt8; const AValue: string);
 procedure EmitLineMapping(const ACtx: TGocciaCompilationContext;
   const ALine, AColumn: Integer);
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
@@ -72,10 +74,36 @@ function ShortCircuitJumpOp(
 
 implementation
 
+uses
+  TextSemantics;
+
 function EmitInstruction(const ACtx: TGocciaCompilationContext;
   const AInstruction: UInt32): Integer;
 begin
   Result := ACtx.Template.EmitInstruction(AInstruction);
+end;
+
+function TrySingleUTF16CodeUnitString(const AValue: string;
+  out ACodeUnit: Cardinal): Boolean;
+begin
+  Result := (UTF16CodeUnitLength(AValue) = 1) and
+    TryUTF16CodePointValueAt(AValue, 0, ACodeUnit) and
+    (ACodeUnit <= High(UInt16));
+end;
+
+procedure EmitLoadStringLiteral(const ACtx: TGocciaCompilationContext;
+  const ADest: UInt8; const AValue: string);
+var
+  CodeUnit: Cardinal;
+  ConstantIndex: UInt16;
+begin
+  if TrySingleUTF16CodeUnitString(AValue, CodeUnit) then
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CHAR, ADest, UInt16(CodeUnit)))
+  else
+  begin
+    ConstantIndex := ACtx.Template.AddConstantString(AValue);
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ADest, ConstantIndex));
+  end;
 end;
 
 procedure EmitLineMapping(const ACtx: TGocciaCompilationContext;

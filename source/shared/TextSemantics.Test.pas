@@ -15,6 +15,7 @@ type
     procedure TestTrimECMAScriptWhitespace;
     procedure TestUnicodeCaseMapping;
     procedure TestUTF8WellFormedChecks;
+    procedure TestUTF16WellFormedChecks;
     procedure TestUTF8CodePointIndexing;
     procedure TestUTF16CodeUnitIndexing;
     procedure TestReplacementPatternExpansion;
@@ -32,6 +33,8 @@ begin
     TestUnicodeCaseMapping);
   Test('UTF-8 well-formed helpers reject invalid sequences',
     TestUTF8WellFormedChecks);
+  Test('UTF-16 well-formed helpers follow surrogate pairing',
+    TestUTF16WellFormedChecks);
   Test('UTF-8 code point helpers index multibyte characters',
     TestUTF8CodePointIndexing);
   Test('UTF-16 code unit helpers count astral characters as surrogate pairs',
@@ -65,10 +68,18 @@ end;
 procedure TTextSemanticsTests.TestUnicodeCaseMapping;
 const
   UPPER_TEXT = #$C3#$89 + #$C3#$96 + #$CE#$A3;
-  LOWER_TEXT = #$C3#$A9 + #$C3#$B6 + #$CF#$83;
+  LOWER_TEXT = #$C3#$A9 + #$C3#$B6 + #$CF#$82;
+  NONCHARACTER = #$EF#$B7#$90;
 begin
   Expect<string>(UnicodeLowerCaseUTF8(UPPER_TEXT)).ToBe(LOWER_TEXT);
   Expect<string>(UnicodeUpperCaseUTF8(LOWER_TEXT)).ToBe(UPPER_TEXT);
+  Expect<string>(UnicodeLowerCaseUTF8(#$C4#$B0)).ToBe('i' + #$CC#$87);
+  Expect<string>(UnicodeLowerCaseUTF8('A' + #$CE#$A3)).ToBe(
+    'a' + #$CF#$82);
+  Expect<string>(UnicodeUpperCaseUTF8('a' + NONCHARACTER + #$C3#$9F)).ToBe(
+    'A' + NONCHARACTER + 'SS');
+  Expect<string>(UnicodeLowerCaseUTF8('A' + NONCHARACTER + #$C4#$B0)).ToBe(
+    'a' + NONCHARACTER + 'i' + #$CC#$87);
 end;
 
 procedure TTextSemanticsTests.TestUTF8WellFormedChecks;
@@ -86,6 +97,29 @@ begin
     UTF8_REPLACEMENT_CHARACTER + 'AB');
   Expect<string>(ToWellFormedUTF8(#$E2#$80 + 'A')).ToBe(
     UTF8_REPLACEMENT_CHARACTER + 'A');
+end;
+
+procedure TTextSemanticsTests.TestUTF16WellFormedChecks;
+const
+  UTF8_HIGH_SURROGATE = #$ED#$A0#$BD;
+  UTF8_LOW_SURROGATE = #$ED#$B2#$A9;
+  UTF8_PILE_OF_POO = #$F0#$9F#$92#$A9;
+begin
+  Expect<Boolean>(IsWellFormedUTF16('a' + UTF8_HIGH_SURROGATE +
+    UTF8_LOW_SURROGATE + 'd')).ToBe(True);
+  Expect<Boolean>(IsWellFormedUTF16(UTF8_PILE_OF_POO)).ToBe(True);
+  Expect<Boolean>(IsWellFormedUTF16(UTF8_HIGH_SURROGATE)).ToBe(False);
+  Expect<Boolean>(IsWellFormedUTF16(UTF8_LOW_SURROGATE)).ToBe(False);
+  Expect<Boolean>(IsWellFormedUTF16(UTF8_HIGH_SURROGATE +
+    UTF8_HIGH_SURROGATE)).ToBe(False);
+  Expect<string>(ToWellFormedUTF16('a' + UTF8_HIGH_SURROGATE +
+    UTF8_LOW_SURROGATE + 'd')).ToBe(
+    'a' + UTF8_HIGH_SURROGATE + UTF8_LOW_SURROGATE + 'd');
+  Expect<string>(ToWellFormedUTF16('a' + UTF8_HIGH_SURROGATE + 'd')).ToBe(
+    'a' + UTF8_REPLACEMENT_CHARACTER + 'd');
+  Expect<string>(ToWellFormedUTF16(UTF8_LOW_SURROGATE +
+    UTF8_HIGH_SURROGATE)).ToBe(
+    UTF8_REPLACEMENT_CHARACTER + UTF8_REPLACEMENT_CHARACTER);
 end;
 
 procedure TTextSemanticsTests.TestUTF8CodePointIndexing;

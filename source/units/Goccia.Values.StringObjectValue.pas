@@ -9,6 +9,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
@@ -33,11 +34,16 @@ type
     function GetAllPropertyNames: TArray<string>; override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
     function HasOwnProperty(const AName: string): Boolean; override;
+    function DeleteProperty(const AName: string): Boolean; override;
 
+    procedure InitializeNativeFromArguments(
+      const AArguments: TGocciaArgumentsCollection); override;
     procedure InitializePrototype;
     procedure MarkReferences; override;
 
     class function GetSharedPrototype: TGocciaObjectValue;
+    class function GetSharedPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; static;
 
     property Primitive: TGocciaStringLiteralValue read FPrimitive;
 
@@ -100,7 +106,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
-  Goccia.Realm,
   Goccia.RegExp.Runtime,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
@@ -315,6 +320,20 @@ begin
     Result := TGocciaClassValue(AValue).GetSymbolProperty(ASymbol)
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  if (Result is TGocciaNullLiteralValue) or (Result = nil) then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function ThisStringValue(const AValue: TGocciaValue): string;
+begin
+  if AValue is TGocciaStringLiteralValue then
+    Result := TGocciaStringLiteralValue(AValue).Value
+  else if AValue is TGocciaStringObjectValue then
+    Result := TGocciaStringObjectValue(AValue).Primitive.Value
+  else
+    ThrowTypeError(SErrorStringPrototypeRequiresNonNullish,
+      SSuggestCheckNullBeforeAccess);
 end;
 
 function RegexReplacementCapture(const AMatchArray: TGocciaArrayValue;
@@ -647,6 +666,41 @@ begin
   Result := inherited HasOwnProperty(AName);
 end;
 
+function TGocciaStringObjectValue.DeleteProperty(const AName: string): Boolean;
+var
+  Index: Integer;
+  StringValue: string;
+begin
+  if AName = PROP_LENGTH then
+    Exit(False);
+
+  if TryStrToInt(AName, Index) and (AName = IntToStr(Index)) then
+  begin
+    StringValue := FPrimitive.ToStringLiteral.Value;
+    if (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue)) then
+      Exit(False);
+  end;
+
+  Result := inherited DeleteProperty(AName);
+end;
+
+procedure TGocciaStringObjectValue.InitializeNativeFromArguments(
+  const AArguments: TGocciaArgumentsCollection);
+var
+  Arg: TGocciaValue;
+begin
+  if AArguments.Length = 0 then
+    FPrimitive := TGocciaStringLiteralValue.Create('')
+  else
+  begin
+    Arg := AArguments.GetElement(0);
+    if Arg is TGocciaSymbolValue then
+      ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion)
+    else
+      FPrimitive := Arg.ToStringLiteral;
+  end;
+end;
+
 procedure TGocciaStringObjectValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
@@ -682,7 +736,7 @@ begin
     Members.AddMethod(StringTrimEnd, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddNamedMethod('replace', StringReplaceMethod, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddNamedMethod('replaceAll', StringReplaceAllMethod, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-    Members.AddMethod(StringSplit, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringSplit, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(StringMatch, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(StringMatchAll, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(StringSearch, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -716,6 +770,15 @@ begin
   if not Assigned(GetSharedStringPrototype) then
     TGocciaStringObjectValue.Create(TGocciaStringLiteralValue.Create(''));
   Result := GetSharedStringPrototype;
+end;
+
+class function TGocciaStringObjectValue.GetSharedPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  if Assigned(ARealm) then
+    Result := TGocciaObjectValue(ARealm.GetSlot(GStringPrototypeSlot))
+  else
+    Result := nil;
 end;
 
 // ES2026 §22.1.3 String.prototype.length (accessor)
@@ -863,7 +926,10 @@ begin
   StartIndex := NormalizeRelativeIndex(StartIndex, Len);
 
   // Step 6: If end is undefined, let intEnd be len; else let intEnd be ToIntegerOrInfinity(end)
-  EndIndex := ToIntegerFromArgs(AArgs, 1, Len);
+  if (AArgs.Length <= 1) or (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
+    EndIndex := Len
+  else
+    EndIndex := ToIntegerFromArgs(AArgs, 1, Len);
 
   // Step 7: If intEnd < 0, let to be max(len + intEnd, 0); else let to be min(intEnd, len)
   EndIndex := NormalizeRelativeIndex(EndIndex, Len);
@@ -896,7 +962,10 @@ begin
   else
     StartIndex := Min(StartIndex, Len);
 
-  RequestedLength := ToIntegerFromArgs(AArgs, 1, Len);
+  if (AArgs.Length <= 1) or (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
+    RequestedLength := Len
+  else
+    RequestedLength := ToIntegerFromArgs(AArgs, 1, Len);
   ResultLength := Min(Max(RequestedLength, 0), Len - StartIndex);
 
   if ResultLength > 0 then
@@ -925,7 +994,10 @@ begin
   StartIndex := ToIntegerFromArgs(AArgs);
 
   // Step 5: If end is undefined, let intEnd be len; else let intEnd be ToIntegerOrInfinity(end)
-  EndIndex := ToIntegerFromArgs(AArgs, 1, Len);
+  if (AArgs.Length <= 1) or (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
+    EndIndex := Len
+  else
+    EndIndex := ToIntegerFromArgs(AArgs, 1, Len);
 
   // Step 6: Let finalStart be min(max(intStart, 0), len)
   // Step 7: Let finalEnd be min(max(intEnd, 0), len)
@@ -1571,52 +1643,59 @@ begin
   else
     SeparatorArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  HasLimit := (AArgs.Length > 1) and
-    not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue);
-  if HasLimit then
-  begin
-    Limit := ToUint32Value(AArgs.GetElement(1));
-    if Limit = 0 then
-    begin
-      Result := TGocciaArrayValue.Create;
-      Exit;
-    end;
-  end;
-
   ResultArray := TGocciaArrayValue.Create;
   TGarbageCollector.Instance.AddTempRoot(ResultArray);
   try
-    SplitMethod := GetMethodBySymbol(SeparatorArg,
-      TGocciaSymbolValue.WellKnownSplit);
-    if not (SplitMethod is TGocciaUndefinedLiteralValue) then
+    if not ((SeparatorArg is TGocciaUndefinedLiteralValue) or
+            (SeparatorArg is TGocciaNullLiteralValue)) then
     begin
-      if not SplitMethod.IsCallable then
-        ThrowTypeError(SErrorSymbolSplitNotCallable, SSuggestWellKnownSymbolCallable);
-      // Spec passes O directly to the @@split callable, not a stringified copy.
-      if HasLimit then
+      SplitMethod := GetMethodBySymbol(SeparatorArg,
+        TGocciaSymbolValue.WellKnownSplit);
+      if not (SplitMethod is TGocciaUndefinedLiteralValue) then
+      begin
+        if not SplitMethod.IsCallable then
+          ThrowTypeError(SErrorSymbolSplitNotCallable, SSuggestWellKnownSymbolCallable);
+        // Spec passes O directly to the @@split callable, not a stringified copy.
         CallArgs := TGocciaArgumentsCollection.Create([
           AThisValue,
           AArgs.GetElement(1)
-        ])
-      else
-        CallArgs := TGocciaArgumentsCollection.Create([
-          AThisValue
         ]);
-      try
-        Result := InvokeCallable(SplitMethod, CallArgs, SeparatorArg);
-      finally
-        CallArgs.Free;
+        try
+          Result := InvokeCallable(SplitMethod, CallArgs, SeparatorArg);
+        finally
+          CallArgs.Free;
+        end;
+        Exit;
       end;
-      Exit;
     end;
 
     // Step 3 (spec): Let S be ? ToString(O). Only reached when no @@split.
     StringValue := ExtractStringValue(AThisValue);
 
-    // §22.1.3.23 step 5: Let R be ? ToString(separator).
+    HasLimit := (AArgs.Length > 1) and
+      not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue);
+    if HasLimit then
+      Limit := ToUint32Value(AArgs.GetElement(1))
+    else
+      Limit := High(Cardinal);
+
+    // §22.1.3.23 step 7: Let R be ? ToString(separator).
     Separator := SeparatorArg.ToStringLiteral.Value;
 
-    // Step 5: If separator is undefined, return [S]
+    if Limit = 0 then
+    begin
+      Result := ResultArray;
+      Exit;
+    end;
+
+    // Step 9: If separator is undefined, return [S].
+    if SeparatorArg is TGocciaUndefinedLiteralValue then
+    begin
+      ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(StringValue));
+      Result := ResultArray;
+      Exit;
+    end;
+
     if StringValue = '' then
     begin
       if Separator <> '' then
@@ -1729,6 +1808,24 @@ begin
 
   TGarbageCollector.Instance.AddTempRoot(RegexValue);
   try
+    MatchMethod := GetMethodBySymbol(RegexValue,
+      TGocciaSymbolValue.WellKnownMatch);
+    if not (MatchMethod is TGocciaUndefinedLiteralValue) then
+    begin
+      if not MatchMethod.IsCallable then
+        ThrowTypeError(SErrorSymbolMatchNotCallable, SSuggestWellKnownSymbolCallable);
+      CallArgs := TGocciaArgumentsCollection.Create([
+        TGocciaStringLiteralValue.Create(StringValue)
+      ]);
+      try
+        Result := InvokeCallable(MatchMethod, CallArgs, RegexValue);
+      finally
+        CallArgs.Free;
+      end;
+      Exit;
+    end;
+    ThrowTypeError(SErrorSymbolMatchNotCallable, SSuggestWellKnownSymbolCallable);
+
     if GetRegExpBooleanProperty(RegexValue, PROP_GLOBAL) then
     begin
       ResultArray := TGocciaArrayValue.Create;
@@ -1822,9 +1919,32 @@ begin
     RegexValue := CoerceRegExpValue(TGocciaUndefinedLiteralValue.UndefinedValue,
       'g');
 
-  Result := TGocciaRegExpMatchAllIteratorValue.Create(RegexValue, StringValue,
-    True, HasUnicodeRegExpFlag(RegexValue.GetProperty(PROP_FLAGS)
-    .ToStringLiteral.Value));
+  TGarbageCollector.Instance.AddTempRoot(RegexValue);
+  try
+    MatchAllMethod := GetMethodBySymbol(RegexValue,
+      TGocciaSymbolValue.WellKnownMatchAll);
+    if not (MatchAllMethod is TGocciaUndefinedLiteralValue) then
+    begin
+      if not MatchAllMethod.IsCallable then
+        ThrowTypeError(SErrorSymbolMatchAllNotCallable, SSuggestWellKnownSymbolCallable);
+      CallArgs := TGocciaArgumentsCollection.Create([
+        TGocciaStringLiteralValue.Create(StringValue)
+      ]);
+      try
+        Result := InvokeCallable(MatchAllMethod, CallArgs, RegexValue);
+      finally
+        CallArgs.Free;
+      end;
+      Exit;
+    end;
+    ThrowTypeError(SErrorSymbolMatchAllNotCallable, SSuggestWellKnownSymbolCallable);
+
+    Result := TGocciaRegExpMatchAllIteratorValue.Create(RegexValue, StringValue,
+      True, HasUnicodeRegExpFlag(RegexValue.GetProperty(PROP_FLAGS)
+      .ToStringLiteral.Value));
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(RegexValue);
+  end;
 end;
 
 // ES2026 §22.1.3.27 String.prototype.search(regexp)
@@ -1877,6 +1997,24 @@ begin
 
   TGarbageCollector.Instance.AddTempRoot(RegexValue);
   try
+    SearchMethod := GetMethodBySymbol(RegexValue,
+      TGocciaSymbolValue.WellKnownSearch);
+    if not (SearchMethod is TGocciaUndefinedLiteralValue) then
+    begin
+      if not SearchMethod.IsCallable then
+        ThrowTypeError(SErrorSymbolSearchNotCallable, SSuggestWellKnownSymbolCallable);
+      CallArgs := TGocciaArgumentsCollection.Create([
+        TGocciaStringLiteralValue.Create(StringValue)
+      ]);
+      try
+        Result := InvokeCallable(SearchMethod, CallArgs, RegexValue);
+      finally
+        CallArgs.Free;
+      end;
+      Exit;
+    end;
+    ThrowTypeError(SErrorSymbolSearchNotCallable, SSuggestWellKnownSymbolCallable);
+
     if MatchRegExpObjectValue(RegexValue, StringValue, 0, False, False,
       MatchArray,
       MatchIndex, MatchEnd, NextIndex) then
@@ -2071,14 +2209,14 @@ end;
 function TGocciaStringObjectValue.StringValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   // Step 1: Return the [[StringData]] internal slot of this value
-  Result := TGocciaStringLiteralValue.Create(ExtractStringValue(AThisValue));
+  Result := TGocciaStringLiteralValue.Create(ThisStringValue(AThisValue));
 end;
 
 // ES2026 §22.1.3.27 String.prototype.toString()
 function TGocciaStringObjectValue.StringToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   // Step 1: Return the [[StringData]] internal slot of this value (same as valueOf)
-  Result := TGocciaStringLiteralValue.Create(ExtractStringValue(AThisValue));
+  Result := TGocciaStringLiteralValue.Create(ThisStringValue(AThisValue));
 end;
 
 // ES2026 §22.1.3.34 String.prototype[@@iterator]()
@@ -2147,7 +2285,7 @@ end;
 // ES2026 §22.1.3.13 String.prototype.normalize([form])
 function TGocciaStringObjectValue.StringNormalize(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  StringValue, Form: string;
+  StringValue, Form, NormalizedValue: string;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
@@ -2164,7 +2302,10 @@ begin
     ThrowRangeError(SErrorInvalidNormalizationForm, SSuggestNormalizationForm);
 
   // Step 5: Return the Unicode Normalization Form f of S
-  Result := TGocciaStringLiteralValue.Create(StringValue);
+  if TryICUNormalize(Form, StringValue, NormalizedValue) then
+    Result := TGocciaStringLiteralValue.Create(NormalizedValue)
+  else
+    Result := TGocciaStringLiteralValue.Create(StringValue);
 end;
 
 // ES2026 §22.1.3.8 String.prototype.isWellFormed()
@@ -2178,7 +2319,7 @@ begin
   // Step 2: Let S be ToString(O)
   StringValue := ExtractStringValue(AThisValue);
   // Step 3: Return IsStringWellFormedUnicode(S)
-  Result := TGocciaBooleanLiteralValue.Create(IsWellFormedUTF8(StringValue));
+  Result := TGocciaBooleanLiteralValue.Create(IsWellFormedUTF16(StringValue));
 end;
 
 // ES2026 §22.1.3.33 String.prototype.toWellFormed()
@@ -2192,7 +2333,7 @@ begin
   // Step 2: Let S be ToString(O)
   StringValue := ExtractStringValue(AThisValue);
   // Step 3-5: Replace ill-formed Unicode sequences with U+FFFD.
-  Result := TGocciaStringLiteralValue.Create(ToWellFormedUTF8(StringValue));
+  Result := TGocciaStringLiteralValue.Create(ToWellFormedUTF16(StringValue));
 end;
 
 initialization

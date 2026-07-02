@@ -10,7 +10,13 @@ test("String.prototype.toLowerCase converts to lowercase", () => {
 });
 
 test("String.prototype.toLowerCase maps Unicode characters", () => {
-  expect("ÉÖΣ".toLowerCase()).toBe("éöσ");
+  expect("ÉÖΣ".toLowerCase()).toBe("éöς");
+});
+
+test("String.prototype.toLowerCase applies Unicode special casing", () => {
+  expect("\u0130".toLowerCase()).toBe("i\u0307");
+  expect("A\u03A3".toLowerCase()).toBe("a\u03C2");
+  expect("A\u03A3B".toLowerCase()).toBe("a\u03C3b");
 });
 
 test("String.prototype.toLowerCase coerces non-string receivers", () => {

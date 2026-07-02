@@ -48,6 +48,8 @@ type
       const ATemplate: TGocciaFunctionTemplate): Integer;
     function HasLoadInt(const ATemplate: TGocciaFunctionTemplate;
       const AValue: Int16): Boolean;
+    function HasLoadChar(const ATemplate: TGocciaFunctionTemplate;
+      const ACodeUnit: UInt16): Boolean;
     function HasNaNFloatConstant(
       const ATemplate: TGocciaFunctionTemplate): Boolean;
     function HasInfinityFloatConstant(
@@ -61,6 +63,7 @@ type
     function NegativeZero: Double;
 
     procedure TestCompileLiteral;
+    procedure TestSingleCodeUnitStringLiteralsUseImmediateOpcode;
     procedure TestCompileRegExpLiteral;
     procedure TestCompileArithmetic;
     procedure TestCompileVariable;
@@ -104,6 +107,8 @@ type
 procedure TTestCompiler.SetupTests;
 begin
   Test('Compile literal', TestCompileLiteral);
+  Test('Single-code-unit string literals use immediate opcode',
+    TestSingleCodeUnitStringLiteralsUseImmediateOpcode);
   Test('Compile RegExp literal', TestCompileRegExpLiteral);
   Test('Compile arithmetic', TestCompileArithmetic);
   Test('Compile variable', TestCompileVariable);
@@ -251,6 +256,22 @@ begin
   Result := False;
 end;
 
+function TTestCompiler.HasLoadChar(const ATemplate: TGocciaFunctionTemplate;
+  const ACodeUnit: UInt16): Boolean;
+var
+  I: Integer;
+  Instruction: UInt32;
+begin
+  for I := 0 to ATemplate.CodeCount - 1 do
+  begin
+    Instruction := ATemplate.GetInstruction(I);
+    if (TGocciaOpCode(DecodeOp(Instruction)) = OP_LOAD_CHAR) and
+       (DecodeBx(Instruction) = ACodeUnit) then
+      Exit(True);
+  end;
+  Result := False;
+end;
+
 function TTestCompiler.HasNaNFloatConstant(
   const ATemplate: TGocciaFunctionTemplate): Boolean;
 var
@@ -336,6 +357,22 @@ begin
     Expect<Boolean>(Assigned(Module)).ToBe(True);
     Expect<Boolean>(Assigned(Module.TopLevel)).ToBe(True);
     Expect<Boolean>(Module.TopLevel.CodeCount > 0).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestSingleCodeUnitStringLiteralsUseImmediateOpcode;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('const a = "A"; const b = "\u0800"; const c = "ab";');
+  try
+    Expect<Boolean>(HasLoadChar(Module.TopLevel, Ord('A'))).ToBe(True);
+    Expect<Boolean>(HasLoadChar(Module.TopLevel, $0800)).ToBe(True);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_LOAD_CHAR)).ToBe(2);
+    Expect<Integer>(Module.TopLevel.ConstantCount).ToBe(1);
+    Expect<string>(Module.TopLevel.GetConstant(0).StringValue).ToBe('ab');
   finally
     Module.Free;
   end;
