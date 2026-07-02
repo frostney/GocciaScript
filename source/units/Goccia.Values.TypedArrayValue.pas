@@ -201,10 +201,10 @@ uses
 
 var
   GTypedArraySharedSlot: TGocciaRealmOwnedSlotId;
+  GUint8PrototypeSlot: TGocciaRealmSlotId;
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-  FUint8Prototype: TGocciaObjectValue;
 
 procedure ClearThreadvarMembers;
 begin
@@ -237,6 +237,14 @@ function GetTypedArrayShared: TGocciaSharedPrototype; inline;
 begin
   if Assigned(CurrentRealm) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTypedArraySharedSlot))
+  else
+    Result := nil;
+end;
+
+function GetUint8Prototype: TGocciaObjectValue; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GUint8PrototypeSlot))
   else
     Result := nil;
 end;
@@ -758,6 +766,7 @@ var
   ByteLen64: Int64;
   Buf: TGocciaArrayBufferValue;
   Shared: TGocciaSharedPrototype;
+  Uint8Prototype: TGocciaObjectValue;
 begin
   inherited Create(nil);
   FKind := AKind;
@@ -773,8 +782,9 @@ begin
   FBufferData := Buf.Data;
   InitializePrototype;
   Shared := GetTypedArrayShared;
-  if (AKind = takUint8) and Assigned(FUint8Prototype) then
-    FPrototype := FUint8Prototype
+  Uint8Prototype := GetUint8Prototype;
+  if (AKind = takUint8) and Assigned(Uint8Prototype) then
+    FPrototype := Uint8Prototype
   else if Assigned(Shared) then
     FPrototype := Shared.Prototype;
 end;
@@ -784,6 +794,7 @@ constructor TGocciaTypedArrayValue.Create(const AKind: TGocciaTypedArrayKind;
 var
   BPE: Integer;
   Shared: TGocciaSharedPrototype;
+  Uint8Prototype: TGocciaObjectValue;
 begin
   inherited Create(nil);
   FKind := AKind;
@@ -800,8 +811,9 @@ begin
 
   InitializePrototype;
   Shared := GetTypedArrayShared;
-  if (AKind = takUint8) and Assigned(FUint8Prototype) then
-    FPrototype := FUint8Prototype
+  Uint8Prototype := GetUint8Prototype;
+  if (AKind = takUint8) and Assigned(Uint8Prototype) then
+    FPrototype := Uint8Prototype
   else if Assigned(Shared) then
     FPrototype := Shared.Prototype;
 end;
@@ -811,6 +823,7 @@ constructor TGocciaTypedArrayValue.Create(const AKind: TGocciaTypedArrayKind;
 var
   BPE: Integer;
   Shared: TGocciaSharedPrototype;
+  Uint8Prototype: TGocciaObjectValue;
 begin
   inherited Create(nil);
   FKind := AKind;
@@ -827,8 +840,9 @@ begin
 
   InitializePrototype;
   Shared := GetTypedArrayShared;
-  if (AKind = takUint8) and Assigned(FUint8Prototype) then
-    FPrototype := FUint8Prototype
+  Uint8Prototype := GetUint8Prototype;
+  if (AKind = takUint8) and Assigned(Uint8Prototype) then
+    FPrototype := Uint8Prototype
   else if Assigned(Shared) then
     FPrototype := Shared.Prototype;
 end;
@@ -960,7 +974,8 @@ end;
 
 class procedure TGocciaTypedArrayValue.SetUint8Prototype(const APrototype: TGocciaObjectValue);
 begin
-  FUint8Prototype := APrototype;
+  if Assigned(CurrentRealm) then
+    CurrentRealm.SetSlot(GUint8PrototypeSlot, APrototype);
 end;
 
 { Property access — indexed elements }
@@ -3427,5 +3442,6 @@ end;
 initialization
   RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GTypedArraySharedSlot := RegisterRealmOwnedSlot('TypedArray.shared');
+  GUint8PrototypeSlot := RegisterRealmSlot('Uint8Array.prototype');
 
 end.
