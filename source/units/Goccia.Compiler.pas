@@ -1030,12 +1030,6 @@ begin
   for I := 0 to ANames.Count - 1 do
   begin
     NameIdx := ACtx.Template.AddConstantString(ANames[I]);
-    if NameIdx <= High(UInt8) then
-    begin
-      EmitInstruction(ACtx, EncodeABC(OP_DEFINE_GLOBAL_CONST, 0,
-        GLOBAL_DEFINE_VAR_DECL, UInt8(NameIdx)));
-      Continue;
-    end;
     EmitInstruction(ACtx, EncodeABx(OP_DEFINE_GLOBAL_VAR_DECL_LONG, 0,
       NameIdx));
   end;
@@ -1086,11 +1080,9 @@ begin
       Continue;
 
     NameIdx := ACtx.Template.AddConstantString(Local.Name);
-    if NameIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: global name index exceeds 255');
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Local.Slot, 0, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_DEFINE_GLOBAL_CONST, Local.Slot,
-      GLOBAL_DEFINE_VAR_DECL, UInt8(NameIdx)));
+    EmitInstruction(ACtx, EncodeABx(OP_DEFINE_GLOBAL_VAR_DECL_LONG,
+      Local.Slot, NameIdx));
   end;
 end;
 
@@ -1098,7 +1090,7 @@ procedure EmitGlobalLexicalPredeclarations(const ACtx: TGocciaCompilationContext
   const AScope: TGocciaCompilerScope; const AStartIndex: Integer);
 var
   I: Integer;
-  DeclMode: UInt8;
+  OpCode: TGocciaOpCode;
   Local: TGocciaCompilerLocal;
   NameIdx: UInt16;
 begin
@@ -1110,14 +1102,11 @@ begin
       Continue;
 
     if Local.IsConst then
-      DeclMode := GLOBAL_DEFINE_CONST_PREDECLARE
+      OpCode := OP_PREDECLARE_GLOBAL_CONST_LONG
     else
-      DeclMode := GLOBAL_DEFINE_LET_PREDECLARE;
+      OpCode := OP_PREDECLARE_GLOBAL_LET_LONG;
     NameIdx := ACtx.Template.AddConstantString(Local.Name);
-    if NameIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: global name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_DEFINE_GLOBAL_CONST, Local.Slot,
-      DeclMode, UInt8(NameIdx)));
+    EmitInstruction(ACtx, EncodeABx(OpCode, Local.Slot, NameIdx));
   end;
 end;
 

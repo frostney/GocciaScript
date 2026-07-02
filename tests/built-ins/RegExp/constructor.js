@@ -5,7 +5,6 @@ features: [RegExp]
 
 const regexpAccessorNames = [
   "source",
-  "flags",
   "global",
   "ignoreCase",
   "multiline",
@@ -70,6 +69,19 @@ test("RegExp clones another regex when passed a regex argument", () => {
   expect(cloned.toString()).toBe("/test/gi");
 });
 
+test("RegExp instances expose source and flags through prototype accessors", () => {
+  const regex = /test/g;
+  Object.defineProperty(regex, "source", { value: "other" });
+  Object.defineProperty(regex, "flags", { value: "i" });
+
+  expect(regex.source).toBe("other");
+  expect(regex.flags).toBe("i");
+
+  const cloned = new RegExp(regex);
+  expect(cloned.source).toBe("test");
+  expect(cloned.flags).toBe("g");
+});
+
 test("RegExp called without new returns the same regex when flags are omitted", () => {
   const original = /test/gi;
   const result = RegExp(original);
@@ -100,6 +112,15 @@ test("RegExp throws SyntaxError for invalid patterns at construction time", () =
   expect(() => {
     new RegExp("[");
   }).toThrow(SyntaxError);
+});
+
+test("compile throws SyntaxError for invalid patterns", () => {
+  const regex = /valid/;
+
+  expect(() => {
+    regex.compile("[");
+  }).toThrow(SyntaxError);
+  expect(regex.source).toBe("valid");
 });
 
 test("RegExp accepts d flag and exposes hasIndices", () => {
@@ -249,10 +270,59 @@ test("plain object with source and flags is not a RegExp instance", () => {
   expect(() => { RegExp.prototype.test.call(fake, "abc"); }).toThrow(TypeError);
 });
 
+test("compile reinitializes RegExp and resets lastIndex last", () => {
+  const regex = /foo/i;
+
+  expect(regex.compile("bar", "m")).toBe(regex);
+  expect(regex.source).toBe("bar");
+  expect(regex.flags).toBe("m");
+  expect(regex.lastIndex).toBe(0);
+
+  Object.defineProperty(regex, "lastIndex", { value: 42, writable: false });
+  expect(() => regex.compile("baz")).toThrow(TypeError);
+  expect(regex.source).toBe("baz");
+  expect(regex.flags).toBe("");
+  expect(regex.lastIndex).toBe(42);
+});
+
 test.each(regexpAccessorNames)("%s getter throws TypeError for invalid this values", (accessorName) => {
   const getter = Object.getOwnPropertyDescriptor(RegExp.prototype, accessorName).get;
 
   for (const thisValue of invalidThisValues) {
+    expect(() => {
+      getter.call(thisValue);
+    }).toThrow(TypeError);
+  }
+});
+
+test("flags getter is generic for object receivers", () => {
+  const getter = Object.getOwnPropertyDescriptor(RegExp.prototype, "flags").get;
+  const order = [];
+  const receiver = {};
+  const accessorOrder = [
+    "hasIndices",
+    "global",
+    "ignoreCase",
+    "multiline",
+    "dotAll",
+    "unicode",
+    "unicodeSets",
+    "sticky",
+  ];
+
+  for (const name of accessorOrder) {
+    Object.defineProperty(receiver, name, {
+      get() {
+        order.push(name);
+        return name === "global" || name === "unicode";
+      },
+    });
+  }
+
+  expect(getter.call(receiver)).toBe("gu");
+  expect(order).toEqual(accessorOrder);
+
+  for (const thisValue of [null, undefined, 1, true, "x", Symbol("regexp")]) {
     expect(() => {
       getter.call(thisValue);
     }).toThrow(TypeError);

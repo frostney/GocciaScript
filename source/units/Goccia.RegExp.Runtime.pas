@@ -10,6 +10,7 @@ uses
 
 function GetRegExpPrototype: TGocciaValue;
 procedure SetRegExpPrototype(const APrototype: TGocciaValue);
+procedure SetRegExpBuiltinExec(const AExec: TGocciaValue);
 
 function IsRegExpInstance(const AValue: TGocciaValue): Boolean;
 function IsRegExp(const AValue: TGocciaValue): Boolean;
@@ -17,6 +18,10 @@ function CreateRegExpObject(const APattern, AFlags: string): TGocciaValue;
 function CreateRegExpLiteralObject(const APattern, AFlags: string;
   const AProgramCache: TObject; out AUpdatedProgramCache: TObject): TGocciaValue;
 function CloneRegExpObject(const AValue: TGocciaValue): TGocciaValue;
+procedure ReinitializeRegExpObject(const AValue: TGocciaValue;
+  const APattern, AFlags: string);
+function GetRegExpInternalSource(const AValue: TGocciaValue): string;
+function GetRegExpInternalFlags(const AValue: TGocciaValue): string;
 function MatchRegExpObjectOnce(const AValue: TGocciaValue; const AInput: string;
   out AMatchArray: TGocciaValue): Boolean;
 function MatchRegExpObject(const AValue: TGocciaValue; const AInput: string;
@@ -57,9 +62,14 @@ type
   TGocciaRegExpProgramData = class
   private
     FCompiledProgram: TRegExpProgram;
+    FOriginalSource: string;
+    FOriginalFlags: string;
   public
-    constructor Create(const AProgram: TRegExpProgram);
+    constructor Create(const AProgram: TRegExpProgram;
+      const AOriginalSource, AOriginalFlags: string);
     property CompiledProgram: TRegExpProgram read FCompiledProgram;
+    property OriginalSource: string read FOriginalSource;
+    property OriginalFlags: string read FOriginalFlags;
   end;
 
   TGocciaCachedRegExpProgram = class
@@ -77,11 +87,15 @@ threadvar
   // realm-owned object set on each engine run), so it is not a thread-exit leak
   // (object-reference threadvar audit, #892).
   GRegExpPrototype: TGocciaObjectValue;
+  GRegExpBuiltinExec: TGocciaValue;
 
-constructor TGocciaRegExpProgramData.Create(const AProgram: TRegExpProgram);
+constructor TGocciaRegExpProgramData.Create(const AProgram: TRegExpProgram;
+  const AOriginalSource, AOriginalFlags: string);
 begin
   inherited Create;
   FCompiledProgram := AProgram;
+  FOriginalSource := AOriginalSource;
+  FOriginalFlags := AOriginalFlags;
 end;
 
 constructor TGocciaCachedRegExpProgram.Create(const AProgram: TRegExpProgram;
@@ -102,8 +116,21 @@ begin
   GRegExpPrototype := TGocciaObjectValue(APrototype);
 end;
 
+procedure SetRegExpBuiltinExec(const AExec: TGocciaValue);
+begin
+  GRegExpBuiltinExec := AExec;
+end;
+
 function CreateRegExpObjectFromProgram(const APattern, AFlags: string;
   const ACompiledProgram: TRegExpProgram): TGocciaValue; forward;
+
+function GetRegExpProgramData(const AValue: TGocciaValue): TGocciaRegExpProgramData;
+begin
+  if (not IsRegExpInstance(AValue)) or
+     not (TGocciaObjectValue(AValue).RegExpData is TGocciaRegExpProgramData) then
+    ThrowTypeError(SErrorRegExpExecNonRegExp);
+  Result := TGocciaRegExpProgramData(TGocciaObjectValue(AValue).RegExpData);
+end;
 
 function GetStringProperty(const AObject: TGocciaObjectValue;
   const AName: string): string;
@@ -115,6 +142,22 @@ function GetBooleanProperty(const AObject: TGocciaObjectValue;
   const AName: string): Boolean;
 begin
   Result := AObject.GetProperty(AName).ToBooleanLiteral.Value;
+end;
+
+function IsDefaultRegExpExecMethod(const AMethod: TGocciaValue): Boolean;
+begin
+  Result := Assigned(GRegExpBuiltinExec) and (AMethod = GRegExpBuiltinExec);
+end;
+
+function HasCustomRegExpExecMethod(const AObject: TGocciaObjectValue): Boolean;
+var
+  ExecMethod: TGocciaValue;
+begin
+  ExecMethod := AObject.GetProperty(PROP_EXEC);
+  Result := Assigned(ExecMethod) and
+    (not (ExecMethod is TGocciaUndefinedLiteralValue)) and
+    ExecMethod.IsCallable and
+    (not IsDefaultRegExpExecMethod(ExecMethod));
 end;
 
 function ToLengthIndex(const AValue: TGocciaValue): Double;
@@ -330,6 +373,27 @@ begin
   Result := CreateRegExpObjectFromProgram(APattern, CanonicalFlags, CompiledProgram);
 end;
 
+procedure ReinitializeRegExpObject(const AValue: TGocciaValue;
+  const APattern, AFlags: string);
+var
+  CanonicalFlags: string;
+  CompiledProgram: TRegExpProgram;
+  Source: string;
+begin
+  if not IsRegExpInstance(AValue) then
+    ThrowTypeError(SErrorRegExpExecNonRegExp);
+  try
+    CanonicalFlags := CanonicalizeRegExpFlags(AFlags);
+    CompiledProgram := CompileRegExpProgram(APattern, CanonicalFlags);
+  except
+    on E: Exception do
+      ThrowSyntaxError(E.Message);
+  end;
+  Source := NormalizeRegExpSource(APattern);
+  TGocciaObjectValue(AValue).RegExpData := TGocciaRegExpProgramData.Create(
+    CompiledProgram, Source, CanonicalFlags);
+end;
+
 function CreateRegExpObjectFromProgram(const APattern, AFlags: string;
   const ACompiledProgram: TRegExpProgram): TGocciaValue;
 var
@@ -339,13 +403,8 @@ begin
   Source := NormalizeRegExpSource(APattern);
   Obj := TGocciaObjectValue.Create(GRegExpPrototype);
   Obj.HasRegExpData := True;
-  Obj.RegExpData := TGocciaRegExpProgramData.Create(ACompiledProgram);
-  Obj.DefineProperty(PROP_SOURCE,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(Source), []));
-  Obj.DefineProperty(PROP_FLAGS,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(AFlags), []));
+  Obj.RegExpData := TGocciaRegExpProgramData.Create(ACompiledProgram, Source,
+    AFlags);
   Obj.DefineProperty(PROP_LAST_INDEX,
     TGocciaPropertyDescriptorData.Create(
       TGocciaNumberLiteralValue.Create(0), [pfWritable]));
@@ -379,16 +438,27 @@ end;
 function CloneRegExpObject(const AValue: TGocciaValue): TGocciaValue;
 begin
   Result := CreateRegExpObject(
-    GetStringProperty(TGocciaObjectValue(AValue), PROP_SOURCE),
-    GetStringProperty(TGocciaObjectValue(AValue), PROP_FLAGS));
+    GetRegExpInternalSource(AValue),
+    GetRegExpInternalFlags(AValue));
   Result.SetProperty(PROP_LAST_INDEX, TGocciaNumberLiteralValue.Create(
     GetRegExpLastIndexLength(AValue)));
+end;
+
+function GetRegExpInternalSource(const AValue: TGocciaValue): string;
+begin
+  Result := GetRegExpProgramData(AValue).OriginalSource;
+end;
+
+function GetRegExpInternalFlags(const AValue: TGocciaValue): string;
+begin
+  Result := GetRegExpProgramData(AValue).OriginalFlags;
 end;
 
 function MatchRegExpObjectOnce(const AValue: TGocciaValue; const AInput: string;
   out AMatchArray: TGocciaValue): Boolean;
 var
   Obj: TGocciaObjectValue;
+  Flags: string;
   StartIndex, MatchIndex, MatchEnd, NextIndex: Integer;
   InputLength: Integer;
   LastIndex: Double;
@@ -401,10 +471,18 @@ begin
     Exit;
   end;
 
-  if GetBooleanProperty(Obj, PROP_GLOBAL) or GetBooleanProperty(Obj, PROP_STICKY) then
+  if HasCustomRegExpExecMethod(Obj) then
+  begin
+    Result := MatchRegExpObject(AValue, AInput, 0, False, False, AMatchArray,
+      MatchIndex, MatchEnd, NextIndex);
+    Exit;
+  end;
+
+  Flags := GetRegExpInternalFlags(AValue);
+  LastIndex := GetRegExpLastIndexLength(AValue);
+  if HasRegExpFlag(Flags, 'g') or HasRegExpFlag(Flags, 'y') then
   begin
     InputLength := UTF16CodeUnitLength(AInput);
-    LastIndex := GetRegExpLastIndexLength(AValue);
     if LastIndex > InputLength then
     begin
       if InputLength < MaxInt then
@@ -418,7 +496,7 @@ begin
   else
     StartIndex := 0;
   Result := MatchRegExpObject(AValue, AInput, StartIndex,
-    GetBooleanProperty(Obj, PROP_STICKY), True, AMatchArray, MatchIndex,
+    HasRegExpFlag(Flags, 'y'), True, AMatchArray, MatchIndex,
     MatchEnd, NextIndex);
 end;
 
@@ -426,56 +504,55 @@ function MatchRegExpObject(const AValue: TGocciaValue; const AInput: string;
   const AStartIndex: Integer; const ARequireStart, AUpdateLastIndex: Boolean;
   out AMatchArray: TGocciaValue; out AMatchIndex, AMatchEnd,
   ANextIndex: Integer): Boolean;
-const
-  MATCH_TEXT_PROPERTY = '0';
 var
   Obj: TGocciaObjectValue;
   ExecMethod: TGocciaValue;
   ExecArgs: TGocciaArgumentsCollection;
   ExecResult: TGocciaValue;
-  MatchText: string;
   MatchResult: TGocciaRegExpMatchResult;
   ProgramData: TGocciaRegExpProgramData;
   ShouldUpdate: Boolean;
 begin
   Obj := TGocciaObjectValue(AValue);
   ExecMethod := Obj.GetProperty(PROP_EXEC);
-  if (not IsRegExpInstance(AValue)) and Assigned(ExecMethod) and
-     (not (ExecMethod is TGocciaUndefinedLiteralValue)) then
+  if Assigned(ExecMethod) and
+     (not (ExecMethod is TGocciaUndefinedLiteralValue)) and
+     (not IsDefaultRegExpExecMethod(ExecMethod)) then
   begin
     if not ExecMethod.IsCallable then
-      ThrowTypeError(SErrorRegExpExecNotCallable);
-
-    ExecArgs := TGocciaArgumentsCollection.Create([
-      TGocciaStringLiteralValue.Create(AInput)
-    ]);
-    try
-      ExecResult := InvokeCallable(ExecMethod, ExecArgs, Obj);
-    finally
-      ExecArgs.Free;
-    end;
-
-    if ExecResult is TGocciaNullLiteralValue then
     begin
-      AMatchArray := nil;
-      AMatchIndex := -1;
-      AMatchEnd := -1;
-      ANextIndex := -1;
-      Exit(False);
+      if not IsRegExpInstance(AValue) then
+        ThrowTypeError(SErrorRegExpExecNotCallable);
+    end
+    else
+    begin
+      ExecArgs := TGocciaArgumentsCollection.Create([
+        TGocciaStringLiteralValue.Create(AInput)
+      ]);
+      try
+        ExecResult := InvokeCallable(ExecMethod, ExecArgs, Obj);
+      finally
+        ExecArgs.Free;
+      end;
+
+      if ExecResult is TGocciaNullLiteralValue then
+      begin
+        AMatchArray := nil;
+        AMatchIndex := -1;
+        AMatchEnd := -1;
+        ANextIndex := -1;
+        Exit(False);
+      end;
+
+      if not (ExecResult is TGocciaObjectValue) then
+        ThrowTypeError(SErrorRegExpExecReturnType);
+
+      AMatchArray := ExecResult;
+      AMatchIndex := 0;
+      AMatchEnd := 0;
+      ANextIndex := 0;
+      Exit(True);
     end;
-
-    if not (ExecResult is TGocciaObjectValue) then
-      ThrowTypeError(SErrorRegExpExecReturnType);
-
-    AMatchArray := ExecResult;
-    AMatchIndex := GetClampedIndexValue(
-      TGocciaObjectValue(ExecResult).GetProperty(PROP_INDEX),
-      UTF16CodeUnitLength(AInput));
-    MatchText := TGocciaObjectValue(ExecResult).GetProperty(MATCH_TEXT_PROPERTY)
-      .ToStringLiteral.Value;
-    AMatchEnd := AMatchIndex + UTF16CodeUnitLength(MatchText);
-    ANextIndex := AMatchEnd;
-    Exit(True);
   end;
 
   if not IsRegExpInstance(AValue) then
@@ -487,8 +564,8 @@ begin
       ProgramData := TGocciaRegExpProgramData(Obj.RegExpData);
       Result := ExecuteCompiledRegExp(
         ProgramData.FCompiledProgram,
-        GetStringProperty(Obj, PROP_SOURCE),
-        GetStringProperty(Obj, PROP_FLAGS),
+        ProgramData.FOriginalSource,
+        ProgramData.FOriginalFlags,
         AInput,
         AStartIndex,
         ARequireStart,
@@ -496,8 +573,8 @@ begin
     end
     else
       Result := ExecuteRegExp(
-        GetStringProperty(Obj, PROP_SOURCE),
-        GetStringProperty(Obj, PROP_FLAGS),
+        GetRegExpInternalSource(Obj),
+        GetRegExpInternalFlags(Obj),
         AInput,
         AStartIndex,
         ARequireStart,
@@ -508,7 +585,8 @@ begin
   end;
 
   ShouldUpdate := AUpdateLastIndex and
-    (GetBooleanProperty(Obj, PROP_GLOBAL) or GetBooleanProperty(Obj, PROP_STICKY));
+    (HasRegExpFlag(GetRegExpInternalFlags(AValue), 'g') or
+     HasRegExpFlag(GetRegExpInternalFlags(AValue), 'y'));
 
   if not Result then
   begin
@@ -532,8 +610,8 @@ end;
 function RegExpObjectToString(const AValue: TGocciaValue): string;
 begin
   Result := Goccia.RegExp.Engine.RegExpToString(
-    GetStringProperty(TGocciaObjectValue(AValue), PROP_SOURCE),
-    GetStringProperty(TGocciaObjectValue(AValue), PROP_FLAGS));
+    GetRegExpInternalSource(AValue),
+    GetRegExpInternalFlags(AValue));
 end;
 
 end.

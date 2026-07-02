@@ -529,8 +529,14 @@ const
         'const __GocciaDateClass = class Date {'#10 +
         '  static {'#10 +
         '    Object.defineProperty(this.prototype, Symbol.toStringTag, {'#10 +
-        '      value: "Date",'#10 +
-        '      writable: true,'#10 +
+        '      get(): any { return __GocciaDateSlots.get(this) === undefined ? undefined : "Date"; },'#10 +
+        '      set(value: any): void {'#10 +
+        '        Object.defineProperty(this, Symbol.toStringTag, {'#10 +
+        '          value,'#10 +
+        '          writable: true,'#10 +
+        '          configurable: true'#10 +
+        '        });'#10 +
+        '      },'#10 +
         '      configurable: true'#10 +
         '    });'#10 +
         '  }'#10 +

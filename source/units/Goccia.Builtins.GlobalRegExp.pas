@@ -30,6 +30,8 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     function RegExpEscape(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+    function RegExpCompile(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     function RegExpExec(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function RegExpTest(const AArgs: TGocciaArgumentsCollection;
@@ -86,6 +88,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.RegExp.Engine,
   Goccia.RegExp.Runtime,
   Goccia.Utils,
@@ -120,6 +123,9 @@ type
 
 const
   INITIAL_REPLACEMENT_FRAGMENT_CAPACITY = 8;
+
+var
+  GRegExpPrototypeSlot: TGocciaRealmSlotId;
 
 function RequireRegExpObjectReceiver(const AValue: TGocciaValue;
   const AMethodName: string): TGocciaObjectValue;
@@ -235,11 +241,13 @@ begin
   if (Length(AReferenceText) >= 2) and CharInSet(AReferenceText[2], ['0'..'9']) then
   begin
     TwoDigitIndex := (OneDigitIndex * 10) + (Ord(AReferenceText[2]) - Ord('0'));
-    if TwoDigitIndex <= CaptureCount then
+    if (TwoDigitIndex > 0) and (TwoDigitIndex <= CaptureCount) then
       Exit(GetRegexReplacementGroup(ACaptures, TwoDigitIndex));
+    if OneDigitIndex = 0 then
+      Exit('$' + AReferenceText);
   end;
 
-  if OneDigitIndex <= CaptureCount then
+  if (OneDigitIndex > 0) and (OneDigitIndex <= CaptureCount) then
   begin
     Result := GetRegexReplacementGroup(ACaptures, OneDigitIndex);
     if Length(AReferenceText) >= 2 then
@@ -506,8 +514,11 @@ begin
           begin
             GroupName := Copy(AReplaceValue, I + 2, CloseAngle - I - 2);
             if not Assigned(ANamedCaptures) then
+            begin
               AddReplacementTextFragment(Fragments, FragmentCount, TotalLength,
-                Copy(AReplaceValue, I, CloseAngle - I + 1))
+                '$<');
+              Inc(I, 2);
+            end
             else
             begin
               GroupValue := ANamedCaptures.GetProperty(GroupName);
@@ -519,11 +530,11 @@ begin
                 AddReplacementTextFragment(Fragments, FragmentCount,
                   TotalLength,
                   GroupValue.ToStringLiteral.Value);
+              I := CloseAngle + 1;
             end;
-            I := CloseAngle + 1;
           end;
         end;
-      '1'..'9':
+      '0'..'9':
         begin
           GroupText := NextChar;
           if (I + 2 <= Length(AReplaceValue)) and
@@ -566,6 +577,8 @@ begin
 
   Members := TGocciaMemberCollection.Create;
   try
+    Members.AddNamedMethod('compile', RegExpCompile, 2, gmkPrototypeMethod,
+      [gmfNoFunctionPrototype]);
     Members.AddNamedMethod('exec', RegExpExec, 1, gmkPrototypeMethod,
       [gmfNoFunctionPrototype]);
     Members.AddNamedMethod('test', RegExpTest, 1, gmkPrototypeMethod,
@@ -613,7 +626,10 @@ begin
   end;
   RegisterMemberDefinitions(FRegExpPrototype, PrototypeMembers);
 
+  if Assigned(CurrentRealm) then
+    CurrentRealm.SetSlot(GRegExpPrototypeSlot, FRegExpPrototype);
   SetRegExpPrototype(FRegExpPrototype);
+  SetRegExpBuiltinExec(FRegExpPrototype.GetProperty(PROP_EXEC));
 
   FRegExpConstructor := TGocciaNativeFunctionValue.Create(RegExpConstructorFn,
     CONSTRUCTOR_REGEXP, 2);
@@ -648,36 +664,52 @@ begin
   Result := TGocciaObjectValue(AThisValue);
 end;
 
-function GetRegExpInternalFlags(const AObj: TGocciaObjectValue): string;
-begin
-  Result := AObj.GetProperty(PROP_FLAGS).ToStringLiteral.Value;
-end;
-
 function TGocciaGlobalRegExp.RegExpSourceGetter(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if AThisValue = GetRegExpPrototype then
+  if AThisValue = FRegExpPrototype then
     Exit(TGocciaStringLiteralValue.Create('(?:)'));
-  Result := RequireRegExpThis(AThisValue, 'get RegExp.prototype.source')
-    .GetProperty(PROP_SOURCE);
+  Result := TGocciaStringLiteralValue.Create(EscapeRegExpPattern(
+    GetRegExpInternalSource(
+      RequireRegExpThis(AThisValue, 'get RegExp.prototype.source'))));
 end;
 
 function TGocciaGlobalRegExp.RegExpFlagsGetter(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Obj: TGocciaObjectValue;
+  Flags: string;
 begin
-  if AThisValue = GetRegExpPrototype then
-    Exit(TGocciaStringLiteralValue.Create(''));
-  Result := RequireRegExpThis(AThisValue, 'get RegExp.prototype.flags')
-    .GetProperty(PROP_FLAGS);
+  if not (AThisValue is TGocciaObjectValue) then
+    ThrowTypeError('get RegExp.prototype.flags requires an object');
+  Obj := TGocciaObjectValue(AThisValue);
+  Flags := '';
+  if Obj.GetProperty(PROP_HAS_INDICES).ToBooleanLiteral.Value then
+    Flags := Flags + 'd';
+  if Obj.GetProperty(PROP_GLOBAL).ToBooleanLiteral.Value then
+    Flags := Flags + 'g';
+  if Obj.GetProperty(PROP_IGNORE_CASE).ToBooleanLiteral.Value then
+    Flags := Flags + 'i';
+  if Obj.GetProperty(PROP_MULTILINE).ToBooleanLiteral.Value then
+    Flags := Flags + 'm';
+  if Obj.GetProperty(PROP_DOT_ALL).ToBooleanLiteral.Value then
+    Flags := Flags + 's';
+  if Obj.GetProperty(PROP_UNICODE).ToBooleanLiteral.Value then
+    Flags := Flags + 'u';
+  if Obj.GetProperty(PROP_UNICODE_SETS).ToBooleanLiteral.Value then
+    Flags := Flags + 'v';
+  if Obj.GetProperty(PROP_STICKY).ToBooleanLiteral.Value then
+    Flags := Flags + 'y';
+  Result := TGocciaStringLiteralValue.Create(Flags);
 end;
 
 function TGocciaGlobalRegExp.RegExpGlobalGetter(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if AThisValue = GetRegExpPrototype then
+  if AThisValue = FRegExpPrototype then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   Result := TGocciaBooleanLiteralValue.Create(
     HasRegExpFlag(GetRegExpInternalFlags(
@@ -688,7 +720,7 @@ function TGocciaGlobalRegExp.RegExpIgnoreCaseGetter(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if AThisValue = GetRegExpPrototype then
+  if AThisValue = FRegExpPrototype then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   Result := TGocciaBooleanLiteralValue.Create(
     HasRegExpFlag(GetRegExpInternalFlags(
@@ -699,7 +731,7 @@ function TGocciaGlobalRegExp.RegExpMultilineGetter(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if AThisValue = GetRegExpPrototype then
+  if AThisValue = FRegExpPrototype then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   Result := TGocciaBooleanLiteralValue.Create(
     HasRegExpFlag(GetRegExpInternalFlags(
@@ -710,7 +742,7 @@ function TGocciaGlobalRegExp.RegExpDotAllGetter(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if AThisValue = GetRegExpPrototype then
+  if AThisValue = FRegExpPrototype then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   Result := TGocciaBooleanLiteralValue.Create(
     HasRegExpFlag(GetRegExpInternalFlags(
@@ -721,7 +753,7 @@ function TGocciaGlobalRegExp.RegExpUnicodeGetter(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if AThisValue = GetRegExpPrototype then
+  if AThisValue = FRegExpPrototype then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   Result := TGocciaBooleanLiteralValue.Create(
     HasRegExpFlag(GetRegExpInternalFlags(
@@ -732,7 +764,7 @@ function TGocciaGlobalRegExp.RegExpStickyGetter(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if AThisValue = GetRegExpPrototype then
+  if AThisValue = FRegExpPrototype then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   Result := TGocciaBooleanLiteralValue.Create(
     HasRegExpFlag(GetRegExpInternalFlags(
@@ -743,7 +775,7 @@ function TGocciaGlobalRegExp.RegExpUnicodeSetsGetter(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if AThisValue = GetRegExpPrototype then
+  if AThisValue = FRegExpPrototype then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   Result := TGocciaBooleanLiteralValue.Create(
     HasRegExpFlag(GetRegExpInternalFlags(
@@ -754,7 +786,7 @@ function TGocciaGlobalRegExp.RegExpHasIndicesGetter(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if AThisValue = GetRegExpPrototype then
+  if AThisValue = FRegExpPrototype then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   Result := TGocciaBooleanLiteralValue.Create(
     HasRegExpFlag(GetRegExpInternalFlags(
@@ -848,6 +880,26 @@ begin
   end;
 end;
 
+function EncodeControlEscapeForRegExpEscape(const ACodePoint: Cardinal;
+  out AEscaped: string): Boolean; inline;
+begin
+  Result := True;
+  case ACodePoint of
+    $0009:
+      AEscaped := '\t';
+    $000A:
+      AEscaped := '\n';
+    $000B:
+      AEscaped := '\v';
+    $000C:
+      AEscaped := '\f';
+    $000D:
+      AEscaped := '\r';
+  else
+    Result := False;
+  end;
+end;
+
 // TC39 RegExp Escaping §1.1 RegExp.escape(string)
 function TGocciaGlobalRegExp.RegExpEscape(
   const AArgs: TGocciaArgumentsCollection;
@@ -855,11 +907,11 @@ function TGocciaGlobalRegExp.RegExpEscape(
 const
   SYNTAX_CHARACTERS = ['^', '$', '\', '.', '*', '+', '?',
     '(', ')', '[', ']', '{', '}', '|', '/'];
-  CLASS_SET_RESERVED_PUNCTUATORS = ['&', '-', '!', '#', '%', ',',
+  CLASS_SET_RESERVED_PUNCTUATORS = ['"', '&', '''', '-', '!', '#', '%', ',',
     ':', ';', '<', '=', '>', '@', '`', '~'];
 var
   Arg: TGocciaValue;
-  Input, Escaped: string;
+  Input, Escaped, EscapedCodePoint: string;
   I, ByteLen: Integer;
   CodePoint: Cardinal;
   IsFirst: Boolean;
@@ -879,7 +931,8 @@ begin
 
   while I <= Length(Input) do
   begin
-    ByteLen := DecodeUTF8CodePoint(Input, I, CodePoint);
+    if not TryReadUTF8CodePointAllowSurrogates(Input, I, CodePoint, ByteLen) then
+      ByteLen := DecodeUTF8CodePoint(Input, I, CodePoint);
 
     // TC39 RegExp Escaping §1.1 step 4a: first code point is digit or letter
     if IsFirst and (CodePoint < $80) and
@@ -892,6 +945,21 @@ begin
     end;
 
     IsFirst := False;
+
+    // ES2026 §22.2.5.1.1 step 2: ControlEscape code points
+    if EncodeControlEscapeForRegExpEscape(CodePoint, EscapedCodePoint) then
+    begin
+      Escaped := Escaped + EscapedCodePoint;
+      Inc(I, ByteLen);
+      Continue;
+    end;
+
+    if (CodePoint >= $D800) and (CodePoint <= $DFFF) then
+    begin
+      Escaped := Escaped + EncodeForRegExpEscape(CodePoint);
+      Inc(I, ByteLen);
+      Continue;
+    end;
 
     // TC39 RegExp Escaping §1.1 step 4b: SyntaxCharacter or solidus
     if (CodePoint < $80) and CharInSet(Chr(CodePoint), SYNTAX_CHARACTERS) then
@@ -955,17 +1023,27 @@ begin
     // §22.2.3.1 steps 3–4: read source/flags when regexp-like
     if PatternIsRegExp then
     begin
-      PropVal := TGocciaObjectValue(PatternArg).GetProperty(PROP_SOURCE);
-      if not (PropVal is TGocciaUndefinedLiteralValue) then
-        Pattern := PropVal.ToStringLiteral.Value;
+      if IsRegExpInstance(PatternArg) then
+        Pattern := GetRegExpInternalSource(PatternArg)
+      else
+      begin
+        PropVal := TGocciaObjectValue(PatternArg).GetProperty(PROP_SOURCE);
+        if not (PropVal is TGocciaUndefinedLiteralValue) then
+          Pattern := PropVal.ToStringLiteral.Value;
+      end;
       if (AArgs.Length > 1) and
          not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
         Flags := AArgs.GetElement(1).ToStringLiteral.Value
       else
       begin
-        PropVal := TGocciaObjectValue(PatternArg).GetProperty(PROP_FLAGS);
-        if not (PropVal is TGocciaUndefinedLiteralValue) then
-          Flags := PropVal.ToStringLiteral.Value;
+        if IsRegExpInstance(PatternArg) then
+          Flags := GetRegExpInternalFlags(PatternArg)
+        else
+        begin
+          PropVal := TGocciaObjectValue(PatternArg).GetProperty(PROP_FLAGS);
+          if not (PropVal is TGocciaUndefinedLiteralValue) then
+            Flags := PropVal.ToStringLiteral.Value;
+        end;
       end;
     end
     else
@@ -1002,20 +1080,31 @@ begin
     PatternIsRegExp := IsRegExp(PatternArg);
     if PatternIsRegExp then
     begin
-      PropVal := TGocciaObjectValue(PatternArg).GetProperty(PROP_SOURCE);
-      if not (PropVal is TGocciaUndefinedLiteralValue) then
-        Pattern := PropVal.ToStringLiteral.Value;
+      if IsRegExpInstance(PatternArg) then
+        Pattern := GetRegExpInternalSource(PatternArg)
+      else
+      begin
+        PropVal := TGocciaObjectValue(PatternArg).GetProperty(PROP_SOURCE);
+        if not (PropVal is TGocciaUndefinedLiteralValue) then
+          Pattern := PropVal.ToStringLiteral.Value;
+      end;
       if not FlagsProvided then
       begin
-        PropVal := TGocciaObjectValue(PatternArg).GetProperty(PROP_FLAGS);
-        if not (PropVal is TGocciaUndefinedLiteralValue) then
-          Flags := PropVal.ToStringLiteral.Value;
+        if IsRegExpInstance(PatternArg) then
+          Flags := GetRegExpInternalFlags(PatternArg)
+        else
+        begin
+          PropVal := TGocciaObjectValue(PatternArg).GetProperty(PROP_FLAGS);
+          if not (PropVal is TGocciaUndefinedLiteralValue) then
+            Flags := PropVal.ToStringLiteral.Value;
+        end;
       end;
     end;
   end;
 
   // §22.2.4.1 step 6: RegExpAlloc(newTarget) → OrdinaryCreateFromConstructor
-  Proto := GetProtoFromConstructorWithIntrinsic(ANewTarget, FRegExpPrototype);
+  Proto := GetProtoFromConstructorWithIntrinsic(ANewTarget, FRegExpPrototype,
+    GRegExpPrototypeSlot);
 
   // §22.2.4.1 step 7: RegExpInitialize — remaining ToString coercions
   if not PatternIsRegExp and (AArgs.Length > 0) then
@@ -1025,6 +1114,59 @@ begin
 
   Result := CreateRegExpObject(Pattern, Flags);
   TGocciaObjectValue(Result).Prototype := Proto;
+end;
+
+function TGocciaGlobalRegExp.RegExpCompile(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Flags: string;
+  Pattern: string;
+  PatternArg, PropVal: TGocciaValue;
+  PatternIsRegExp: Boolean;
+begin
+  if not IsRegExpInstance(AThisValue) then
+    ThrowTypeError(SErrorRegExpExecNonRegExp, SSuggestRegExpThisType);
+
+  Pattern := '';
+  Flags := '';
+  if AArgs.Length > 0 then
+  begin
+    PatternArg := AArgs.GetElement(0);
+    PatternIsRegExp := IsRegExp(PatternArg);
+    if PatternIsRegExp then
+    begin
+      if (AArgs.Length > 1) and
+         not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
+        ThrowTypeError('Cannot supply flags when compiling from a RegExp');
+      if IsRegExpInstance(PatternArg) then
+      begin
+        Pattern := GetRegExpInternalSource(PatternArg);
+        Flags := GetRegExpInternalFlags(PatternArg);
+      end
+      else
+      begin
+        PropVal := TGocciaObjectValue(PatternArg).GetProperty(PROP_SOURCE);
+        if not (PropVal is TGocciaUndefinedLiteralValue) then
+          Pattern := PropVal.ToStringLiteral.Value;
+        PropVal := TGocciaObjectValue(PatternArg).GetProperty(PROP_FLAGS);
+        if not (PropVal is TGocciaUndefinedLiteralValue) then
+          Flags := PropVal.ToStringLiteral.Value;
+      end;
+    end
+    else
+    begin
+      Pattern := PatternArg.ToStringLiteral.Value;
+      if (AArgs.Length > 1) and
+         not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
+        Flags := AArgs.GetElement(1).ToStringLiteral.Value;
+    end;
+  end;
+
+  ReinitializeRegExpObject(AThisValue, Pattern, Flags);
+  TGocciaObjectValue(AThisValue).SetProperty(PROP_LAST_INDEX,
+    TGocciaNumberLiteralValue.Create(0));
+  Result := AThisValue;
 end;
 
 // ES2026 §22.2.6.2 RegExp.prototype.exec(string)
@@ -1052,10 +1194,12 @@ end;
 function TGocciaGlobalRegExp.RegExpTest(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
+  CallArgs: TGocciaArgumentsCollection;
+  ExecMethod: TGocciaValue;
   Input: string;
   MatchValue: TGocciaValue;
 begin
-  if not IsRegExpInstance(AThisValue) then
+  if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorRegExpTestNonRegExp, SSuggestRegExpThisType);
 
   if AArgs.Length > 0 then
@@ -1063,19 +1207,45 @@ begin
   else
     Input := TGocciaUndefinedLiteralValue.UndefinedValue.ToStringLiteral.Value;
 
-  Result := TGocciaBooleanLiteralValue.Create(
-    MatchRegExpObjectOnce(AThisValue, Input, MatchValue));
+  if IsRegExpInstance(AThisValue) then
+    Result := TGocciaBooleanLiteralValue.Create(
+      MatchRegExpObjectOnce(AThisValue, Input, MatchValue))
+  else
+  begin
+    ExecMethod := TGocciaObjectValue(AThisValue).GetProperty(PROP_EXEC);
+    if not ExecMethod.IsCallable then
+      ThrowTypeError('RegExp exec property is not callable');
+    CallArgs := TGocciaArgumentsCollection.Create;
+    try
+      CallArgs.Add(TGocciaStringLiteralValue.Create(Input));
+      MatchValue := InvokeCallable(ExecMethod, CallArgs, AThisValue);
+    finally
+      CallArgs.Free;
+    end;
+    if not (MatchValue is TGocciaObjectValue) and
+       not (MatchValue is TGocciaNullLiteralValue) then
+      ThrowTypeError(
+        'RegExp exec method returned something other than an Object or null');
+    Result := TGocciaBooleanLiteralValue.Create(
+      not (MatchValue is TGocciaNullLiteralValue));
+  end;
 end;
 
 // ES2026 §22.2.6.17 RegExp.prototype.toString()
 function TGocciaGlobalRegExp.RegExpToStringMethod(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Flags, Source: string;
+  Obj: TGocciaObjectValue;
 begin
-  if not IsRegExpInstance(AThisValue) then
+  if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorRegExpToStringNonRegExp, SSuggestRegExpThisType);
 
-  Result := TGocciaStringLiteralValue.Create(RegExpObjectToString(AThisValue));
+  Obj := TGocciaObjectValue(AThisValue);
+  Source := Obj.GetProperty(PROP_SOURCE).ToStringLiteral.Value;
+  Flags := Obj.GetProperty(PROP_FLAGS).ToStringLiteral.Value;
+  Result := TGocciaStringLiteralValue.Create('/' + Source + '/' + Flags);
 end;
 
 // ES2026 §22.2.6.8 RegExp.prototype [ @@match ] ( string )
@@ -1470,5 +1640,8 @@ begin
     TGarbageCollector.Instance.RemoveTempRoot(ResultArray);
   end;
 end;
+
+initialization
+  GRegExpPrototypeSlot := RegisterRealmSlot('RegExp.prototype');
 
 end.

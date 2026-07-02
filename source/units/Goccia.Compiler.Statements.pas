@@ -692,29 +692,34 @@ begin
   end;
 end;
 
+function GlobalDefineOpcode(const AIsConst: Boolean; const AIsVar: Boolean;
+  const AHasInitializer: Boolean; const AIsFunctionDeclaration: Boolean)
+  : TGocciaOpCode;
+begin
+  if AIsFunctionDeclaration then
+    Result := OP_DEFINE_GLOBAL_FUNCTION_LONG
+  else if AIsVar and (not AHasInitializer) then
+    Result := OP_DEFINE_GLOBAL_VAR_DECL_LONG
+  else if AIsVar then
+    Result := OP_DEFINE_GLOBAL_VAR_LONG
+  else if AIsConst then
+    Result := OP_DEFINE_GLOBAL_CONST_LONG
+  else
+    Result := OP_DEFINE_GLOBAL_LET_LONG;
+end;
+
 procedure EmitGlobalDefine(const ACtx: TGocciaCompilationContext;
   const ASlot: UInt8; const AName: string; const AIsConst: Boolean;
   const AIsVar: Boolean = False; const AHasInitializer: Boolean = True;
   const AIsFunctionDeclaration: Boolean = False);
 var
   NameIdx: UInt16;
-  DeclMode: UInt8;
+  OpCode: TGocciaOpCode;
 begin
-  if AIsFunctionDeclaration then
-    DeclMode := GLOBAL_DEFINE_FUNCTION
-  else if AIsVar and (not AHasInitializer) then
-    DeclMode := GLOBAL_DEFINE_VAR_DECL
-  else if AIsVar then
-    DeclMode := GLOBAL_DEFINE_VAR
-  else if AIsConst then
-    DeclMode := GLOBAL_DEFINE_CONST
-  else
-    DeclMode := GLOBAL_DEFINE_LET;
   NameIdx := ACtx.Template.AddConstantString(AName);
-  if NameIdx > High(UInt8) then
-    raise Exception.Create('Constant pool overflow: global name index exceeds 255');
-  EmitInstruction(ACtx, EncodeABC(OP_DEFINE_GLOBAL_CONST, ASlot,
-    DeclMode, UInt8(NameIdx)));
+  OpCode := GlobalDefineOpcode(AIsConst, AIsVar, AHasInitializer,
+    AIsFunctionDeclaration);
+  EmitInstruction(ACtx, EncodeABx(OpCode, ASlot, NameIdx));
 end;
 
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;

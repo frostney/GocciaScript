@@ -220,12 +220,16 @@ type
 
   TGocciaNumberClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function DefaultPrototypeForNewTarget(const ANewTarget: TGocciaValue;
+      const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
     // ECMAScript 21.1.1.1: Number constructor length is 1.
     function GetClassLength: Integer; override;
   end;
 
   TGocciaBooleanClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function DefaultPrototypeForNewTarget(const ANewTarget: TGocciaValue;
+      const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
     // ECMAScript 20.3.1.1: Boolean constructor length is 1.
     function GetClassLength: Integer; override;
   end;
@@ -342,6 +346,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.AutoAccessor,
   Goccia.Values.BigIntValue,
+  Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.DataViewValue,
   Goccia.Values.ErrorHelper,
@@ -349,6 +354,7 @@ uses
   Goccia.Values.HeadersValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
+  Goccia.Values.NumberObjectValue,
   Goccia.Values.ResponseValue,
   Goccia.Values.SetValue,
   Goccia.Values.SharedArrayBufferValue,
@@ -404,6 +410,45 @@ begin
   Result := GetSharedArrayPrototypeForRealm(FallbackRealm);
   if not Assigned(Result) then
     Result := ACurrentRealmDefault;
+end;
+
+function DefaultNativePrototypeForNewTarget(
+  const ANewTarget: TGocciaValue;
+  const ACurrentRealmDefault: TGocciaObjectValue;
+  const AConstructorName: string): TGocciaObjectValue;
+var
+  FallbackPrototype: TGocciaObjectValue;
+  FallbackRealm: TGocciaRealm;
+  ProtoValue: TGocciaValue;
+begin
+  if ANewTarget is TGocciaObjectValue then
+    ProtoValue := TGocciaObjectValue(ANewTarget).GetProperty(PROP_PROTOTYPE)
+  else
+    ProtoValue := nil;
+
+  if ProtoValue is TGocciaObjectValue then
+    Exit(TGocciaObjectValue(ProtoValue));
+
+  FallbackRealm := nil;
+  if ANewTarget is TGocciaFunctionBase then
+    FallbackRealm := TGocciaFunctionBase(ANewTarget).CreationRealm;
+
+  if Assigned(FallbackRealm) then
+  begin
+    if AConstructorName = CONSTRUCTOR_NUMBER then
+      FallbackPrototype :=
+        TGocciaNumberObjectValue.GetSharedPrototypeForRealm(FallbackRealm)
+    else if AConstructorName = CONSTRUCTOR_BOOLEAN then
+      FallbackPrototype :=
+        TGocciaBooleanObjectValue.GetSharedPrototypeForRealm(FallbackRealm)
+    else
+      FallbackPrototype := nil;
+
+    if Assigned(FallbackPrototype) then
+      Exit(FallbackPrototype);
+  end;
+
+  Result := ACurrentRealmDefault;
 end;
 
 // SetDefaultPrototype / PatchDefaultPrototype previously cached the
@@ -1411,6 +1456,12 @@ begin
       else if NativeClass is TGocciaArrayClassValue then
         InstancePrototype := GetArrayPrototypeFromConstructor(ANewTarget,
           NativeIntrinsicPrototype)
+      else if NativeClass is TGocciaNumberClassValue then
+        InstancePrototype := TGocciaNumberClassValue(NativeClass).
+          DefaultPrototypeForNewTarget(ANewTarget, NativeIntrinsicPrototype)
+      else if NativeClass is TGocciaBooleanClassValue then
+        InstancePrototype := TGocciaBooleanClassValue(NativeClass).
+          DefaultPrototypeForNewTarget(ANewTarget, NativeIntrinsicPrototype)
       else
         InstancePrototype := GetProtoFromConstructorWithIntrinsic(ANewTarget,
           NativeIntrinsicPrototype);
@@ -2080,6 +2131,14 @@ begin
   Result := Prim.Box;
 end;
 
+function TGocciaNumberClassValue.DefaultPrototypeForNewTarget(
+  const ANewTarget: TGocciaValue;
+  const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
+begin
+  Result := DefaultNativePrototypeForNewTarget(ANewTarget,
+    ACurrentRealmDefault, CONSTRUCTOR_NUMBER);
+end;
+
 function TGocciaNumberClassValue.GetClassLength: Integer;
 begin
   Result := 1;
@@ -2096,6 +2155,14 @@ begin
   else
     Prim := AArguments.GetElement(0).ToBooleanLiteral;
   Result := Prim.Box;
+end;
+
+function TGocciaBooleanClassValue.DefaultPrototypeForNewTarget(
+  const ANewTarget: TGocciaValue;
+  const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
+begin
+  Result := DefaultNativePrototypeForNewTarget(ANewTarget,
+    ACurrentRealmDefault, CONSTRUCTOR_BOOLEAN);
 end;
 
 function TGocciaBooleanClassValue.GetClassLength: Integer;

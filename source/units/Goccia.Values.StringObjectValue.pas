@@ -250,13 +250,20 @@ var
 begin
   if IsRegExp(AValue) then
   begin
-    PropVal := TGocciaObjectValue(AValue).GetProperty(PROP_SOURCE);
-    if PropVal is TGocciaUndefinedLiteralValue then
-      Pattern := ''
+    if IsRegExpInstance(AValue) then
+      Pattern := GetRegExpInternalSource(AValue)
     else
-      Pattern := PropVal.ToStringLiteral.Value;
+    begin
+      PropVal := TGocciaObjectValue(AValue).GetProperty(PROP_SOURCE);
+      if PropVal is TGocciaUndefinedLiteralValue then
+        Pattern := ''
+      else
+        Pattern := PropVal.ToStringLiteral.Value;
+    end;
     if ANewFlags <> '' then
       Flags := ANewFlags
+    else if IsRegExpInstance(AValue) then
+      Flags := GetRegExpInternalFlags(AValue)
     else
     begin
       PropVal := TGocciaObjectValue(AValue).GetProperty(PROP_FLAGS);
