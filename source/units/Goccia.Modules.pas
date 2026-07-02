@@ -224,6 +224,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Keywords.Reserved,
+  Goccia.Realm,
   Goccia.Scope,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -233,8 +234,8 @@ const
   IMPORT_ATTRIBUTE_SEPARATOR = #0;
 
 var
-  GJSModuleSourceSharedPrototype: TGocciaObjectValue;
-  GModuleSourceSharedPrototype: TGocciaObjectValue;
+  GModuleSourcePrototypeSlot: TGocciaRealmSlotId;
+  GJSModuleSourcePrototypeSlot: TGocciaRealmSlotId;
 
 procedure SortStringArray(var ANames: TArray<string>);
 var
@@ -955,26 +956,30 @@ end;
 
 class function TGocciaModuleSourceValue.SharedPrototype: TGocciaObjectValue;
 begin
-  if not Assigned(GModuleSourceSharedPrototype) then
+  if not Assigned(CurrentRealm) then
+    Exit(nil);
+
+  Result := TGocciaObjectValue(CurrentRealm.GetSlot(GModuleSourcePrototypeSlot));
+  if not Assigned(Result) then
   begin
-    GModuleSourceSharedPrototype := TGocciaObjectValue.Create(nil);
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PinObject(GModuleSourceSharedPrototype);
+    Result := TGocciaObjectValue.Create(
+      TGocciaObjectValue.SharedObjectPrototype);
+    CurrentRealm.SetSlot(GModuleSourcePrototypeSlot, Result);
   end;
-  Result := GModuleSourceSharedPrototype;
 end;
 
 class function TGocciaModuleSourceValue.SharedModuleSourcePrototype:
   TGocciaObjectValue;
 begin
-  if not Assigned(GJSModuleSourceSharedPrototype) then
+  if not Assigned(CurrentRealm) then
+    Exit(nil);
+
+  Result := TGocciaObjectValue(CurrentRealm.GetSlot(GJSModuleSourcePrototypeSlot));
+  if not Assigned(Result) then
   begin
-    GJSModuleSourceSharedPrototype := TGocciaObjectValue.Create(
-      SharedPrototype);
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PinObject(GJSModuleSourceSharedPrototype);
+    Result := TGocciaObjectValue.Create(SharedPrototype);
+    CurrentRealm.SetSlot(GJSModuleSourcePrototypeSlot, Result);
   end;
-  Result := GJSModuleSourceSharedPrototype;
 end;
 
 constructor TGocciaModuleSourceValue.Create(const APath: string;
@@ -1299,5 +1304,11 @@ begin
   AModulePath := Copy(AEncodedModulePath, 1, SeparatorIndex - 1);
   AAttributeType := Copy(AEncodedModulePath, SeparatorIndex + 1, MaxInt);
 end;
+
+initialization
+  GModuleSourcePrototypeSlot := RegisterRealmSlot(
+    'AbstractModuleSource.prototype');
+  GJSModuleSourcePrototypeSlot := RegisterRealmSlot(
+    'ModuleSource.prototype');
 
 end.
