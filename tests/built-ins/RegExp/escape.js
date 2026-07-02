@@ -49,7 +49,9 @@ describe("RegExp.escape", () => {
   });
 
   test("hex-encodes ClassSetReservedPunctuator characters", () => {
+    expect(RegExp.escape('"')).toBe("\\x22");
     expect(RegExp.escape("&")).toBe("\\x26");
+    expect(RegExp.escape("'")).toBe("\\x27");
     expect(RegExp.escape("-")).toBe("\\x2d");
     expect(RegExp.escape("!")).toBe("\\x21");
     expect(RegExp.escape("#")).toBe("\\x23");
@@ -65,12 +67,12 @@ describe("RegExp.escape", () => {
     expect(RegExp.escape("~")).toBe("\\x7e");
   });
 
-  test("hex-encodes ASCII whitespace and line terminators", () => {
-    expect(RegExp.escape("\t")).toBe("\\x09");
-    expect(RegExp.escape("\n")).toBe("\\x0a");
-    expect(RegExp.escape("\x0b")).toBe("\\x0b");
-    expect(RegExp.escape("\x0c")).toBe("\\x0c");
-    expect(RegExp.escape("\r")).toBe("\\x0d");
+  test("escapes control characters and whitespace", () => {
+    expect(RegExp.escape("\t")).toBe("\\t");
+    expect(RegExp.escape("\n")).toBe("\\n");
+    expect(RegExp.escape("\x0b")).toBe("\\v");
+    expect(RegExp.escape("\x0c")).toBe("\\f");
+    expect(RegExp.escape("\r")).toBe("\\r");
     expect(RegExp.escape(" ")).toBe("\\x20");
   });
 
@@ -80,8 +82,6 @@ describe("RegExp.escape", () => {
 
   test("passes through normal characters", () => {
     expect(RegExp.escape("_")).toBe("_");
-    expect(RegExp.escape("'")).toBe("'");
-    expect(RegExp.escape('"')).toBe('"');
   });
 
   test("escapes mixed content correctly", () => {

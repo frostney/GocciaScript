@@ -187,6 +187,14 @@ test("\\q{} mixed single and multi-codepoint", () => {
   expect(re.test("y")).toBe(false);
 });
 
+test("large \\q{} string sets backtrack from prefix alternatives", () => {
+  const extras = Array.from({ length: 130 }, (_, i) => "z" + i);
+
+  const re = new RegExp("^[\\q{ab|a|" + extras.join("|") + "}]b$", "v");
+
+  expect(re.test("ab")).toBe(true);
+});
+
 // --- Properties of strings ---
 
 test("\\p{Emoji_Keycap_Sequence} matches keycap sequences", () => {
@@ -197,7 +205,14 @@ test("\\p{Emoji_Keycap_Sequence} matches keycap sequences", () => {
 
 test("\\p{Basic_Emoji} matches emoji code points", () => {
   const re = new RegExp("[\\p{Basic_Emoji}]", "v");
-  expect(re.test("❤")).toBe(true);
+  expect(re.test("❤️")).toBe(true);
+  expect(re.test("⌚")).toBe(true);
+  expect(re.test("a")).toBe(false);
+});
+
+test("\\p{RGI_Emoji} matches string and code point emoji", () => {
+  const re = new RegExp("[\\p{RGI_Emoji}]", "v");
+  expect(re.test("1️⃣")).toBe(true);
   expect(re.test("⌚")).toBe(true);
   expect(re.test("a")).toBe(false);
 });
