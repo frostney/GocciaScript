@@ -33,10 +33,14 @@ uses
 
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.InstructionLimit,
+  Goccia.MicrotaskQueue,
   Goccia.ThreadCleanupRegistry,
+  Goccia.Timeout,
   Goccia.Utils,
   Goccia.Utils.Arrays,
   Goccia.Values.ArrayValue,
@@ -50,6 +54,7 @@ uses
   Goccia.Values.Iterator.Generic,
   Goccia.Values.IteratorSupport,
   Goccia.Values.IteratorValue,
+  Goccia.Values.NativeFunction,
   Goccia.Values.PromiseValue,
   Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue,
@@ -59,9 +64,199 @@ uses
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
 
+type
+  TArrayFromAsyncSyncIteratorJob = class(TGocciaObjectValue)
+  private
+    FPromise: TGocciaPromiseValue;
+    FResultObj: TGocciaObjectValue;
+    FIterator: TGocciaIteratorValue;
+    FMapCallback: TGocciaValue;
+    FThisArg: TGocciaValue;
+    FNextResult: TGocciaObjectValue;
+    FMapArgs: TGocciaArgumentsCollection;
+    FK: Integer;
+    FMapping: Boolean;
+    FSettled: Boolean;
+    procedure RejectWithException(const AException: Exception);
+    procedure Schedule;
+  public
+    constructor Create(const APromise: TGocciaPromiseValue;
+      const AResultObj: TGocciaObjectValue; const AIterator: TGocciaIteratorValue;
+      const AMapping: Boolean; const AMapCallback, AThisArg: TGocciaValue;
+      const AFirstResult: TGocciaObjectValue);
+    destructor Destroy; override;
+    function ContinueJob(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure MarkReferences; override;
+  end;
+
 procedure ClearThreadvarMembers;
 begin
   SetLength(FStaticMembers, 0);
+end;
+
+constructor TArrayFromAsyncSyncIteratorJob.Create(
+  const APromise: TGocciaPromiseValue; const AResultObj: TGocciaObjectValue;
+  const AIterator: TGocciaIteratorValue; const AMapping: Boolean;
+  const AMapCallback, AThisArg: TGocciaValue;
+  const AFirstResult: TGocciaObjectValue);
+begin
+  inherited Create(nil);
+  FPromise := APromise;
+  FResultObj := AResultObj;
+  FIterator := AIterator;
+  FMapping := AMapping;
+  FMapCallback := AMapCallback;
+  FThisArg := AThisArg;
+  FNextResult := AFirstResult;
+  FK := 0;
+  FSettled := False;
+  if FMapping then
+    FMapArgs := TGocciaArgumentsCollection.Create([
+      TGocciaUndefinedLiteralValue.UndefinedValue,
+      TGocciaNumberLiteralValue.ZeroValue])
+  else
+    FMapArgs := nil;
+end;
+
+destructor TArrayFromAsyncSyncIteratorJob.Destroy;
+begin
+  FMapArgs.Free;
+  inherited;
+end;
+
+procedure TArrayFromAsyncSyncIteratorJob.RejectWithException(
+  const AException: Exception);
+begin
+  if FSettled then
+    Exit;
+  FSettled := True;
+
+  if AException is EGocciaBytecodeThrow then
+    FPromise.Reject(EGocciaBytecodeThrow(AException).ThrownValue)
+  else if AException is TGocciaThrowValue then
+    FPromise.Reject(TGocciaThrowValue(AException).Value)
+  else if AException is TGocciaTypeError then
+    FPromise.Reject(CreateErrorObject(TYPE_ERROR_NAME, AException.Message))
+  else if AException is TGocciaReferenceError then
+    FPromise.Reject(CreateErrorObject(REFERENCE_ERROR_NAME, AException.Message))
+  else if AException is TGocciaSyntaxError then
+    FPromise.Reject(CreateErrorObject(SYNTAX_ERROR_NAME, AException.Message))
+  else
+    FPromise.Reject(CreateErrorObject(ERROR_NAME, AException.Message));
+end;
+
+procedure TArrayFromAsyncSyncIteratorJob.Schedule;
+var
+  ContinueFunction: TGocciaNativeFunctionValue;
+  Task: TGocciaMicrotask;
+  Queue: TGocciaMicrotaskQueue;
+  Args: TGocciaArgumentsCollection;
+begin
+  Queue := TGocciaMicrotaskQueue.Instance;
+  ContinueFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    ContinueJob, 'array-fromAsync-sync-continue', 1);
+  ContinueFunction.CapturedRoot := Self;
+
+  if Assigned(Queue) then
+  begin
+    Task.Handler := ContinueFunction;
+    Task.Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Task.ResultPromise := nil;
+    Task.ReactionType := prtFulfill;
+    Queue.Enqueue(Task);
+  end
+  else
+  begin
+    Task.Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Args := TGocciaArgumentsCollection.Create([Task.Value]);
+    try
+      ContinueJob(Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+    finally
+      Args.Free;
+    end;
+  end;
+end;
+
+function TArrayFromAsyncSyncIteratorJob.ContinueJob(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  DoneValue, KValue: TGocciaValue;
+  Done: Boolean;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if FSettled then
+    Exit;
+
+  try
+    DoneValue := FNextResult.GetProperty(PROP_DONE);
+    Done := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
+    if Done then
+    begin
+      FResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(FK));
+      FPromise.Resolve(FResultObj);
+      FSettled := True;
+      Exit;
+    end;
+
+    KValue := FNextResult.GetProperty(PROP_VALUE);
+    if not Assigned(KValue) then
+      KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    KValue := AwaitValue(KValue);
+
+    if FMapping then
+    begin
+      FMapArgs.SetElement(0, KValue);
+      FMapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(FK));
+      KValue := InvokeCallable(FMapCallback, FMapArgs, FThisArg);
+      KValue := AwaitValue(KValue);
+    end;
+
+    FResultObj.CreateDataPropertyOrThrow(IntToStr(FK), KValue);
+    Inc(FK);
+    FNextResult := FIterator.AdvanceNext;
+    Schedule;
+  except
+    on E: TGocciaTimeoutError do
+      raise;
+    on E: TGocciaInstructionLimitError do
+      raise;
+    on E: Exception do
+    begin
+      if Assigned(FIterator) then
+      begin
+        try
+          FIterator.Close;
+        except
+          on CloseError: Exception do
+          begin
+            RejectWithException(CloseError);
+            Exit;
+          end;
+        end;
+      end;
+      RejectWithException(E);
+    end;
+  end;
+end;
+
+procedure TArrayFromAsyncSyncIteratorJob.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FPromise) then
+    FPromise.MarkReferences;
+  if Assigned(FResultObj) then
+    FResultObj.MarkReferences;
+  if Assigned(FIterator) then
+    FIterator.MarkReferences;
+  if Assigned(FMapCallback) then
+    FMapCallback.MarkReferences;
+  if Assigned(FThisArg) then
+    FThisArg.MarkReferences;
+  if Assigned(FNextResult) then
+    FNextResult.MarkReferences;
 end;
 
 constructor TGocciaGlobalArray.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -396,6 +591,8 @@ var
   IterResult: TGocciaObjectValue;
   EmptyArgs, MapArgs: TGocciaArgumentsCollection;
   Mapping: Boolean;
+  PromisePendingAsync: Boolean;
+  SyncIteratorJob: TArrayFromAsyncSyncIteratorJob;
   K, Len: Integer;
   LengthValue: TGocciaValue;
   GC: TGarbageCollector;
@@ -486,6 +683,7 @@ begin
       MapArgs := TGocciaArgumentsCollection.Create([TGocciaUndefinedLiteralValue.UndefinedValue, TGocciaNumberLiteralValue.ZeroValue]);
 
     ResultObj := nil;
+    PromisePendingAsync := False;
     try
       try
         // TC39 Array.fromAsync §2.1.1.1 step 3.c: GetMethod(asyncItems, @@asyncIterator)
@@ -629,34 +827,17 @@ begin
             if Assigned(GC) then
               GC.AddTempRoot(Iterator);
             try
-              K := 0;
-              try
-                // TC39 Array.fromAsync §2.1.1.1 step 4.b: Repeat (sync iterator path)
-                IterResult := Iterator.AdvanceNext;
-                while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
-                begin
-                  // TC39 Array.fromAsync §2.1.1.1 step 4.b.v: Await(IteratorValue(next))
-                  KValue := IterResult.GetProperty(PROP_VALUE);
-                  KValue := AwaitValue(KValue);
-
-                  if Mapping then
-                  begin
-                    MapArgs.SetElement(0, KValue);
-                    MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K));
-                    KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
-                    KValue := AwaitValue(KValue);
-                  end;
-
-                  AddElement(K, KValue);
-                  Inc(K);
-                  IterResult := Iterator.AdvanceNext;
-                end;
-              except
-                CloseSyncIterator(Iterator);
-                raise;
-              end;
-
-              ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(K));
+              // The first next() call is immediate, but its processing and
+              // all subsequent next() calls run as promise jobs.  This
+              // matches CreateAsyncFromSyncIterator + Await(nextResult):
+              // callers can mutate an array after Array.fromAsync(items)
+              // returns, and the iterator observes those later changes.
+              IterResult := Iterator.AdvanceNext;
+              SyncIteratorJob := TArrayFromAsyncSyncIteratorJob.Create(
+                Promise, ResultObj, Iterator, Mapping, MapCallback, ThisArg,
+                IterResult);
+              PromisePendingAsync := True;
+              SyncIteratorJob.Schedule;
             finally
               if Assigned(GC) then
                 GC.RemoveTempRoot(Iterator);
@@ -702,7 +883,8 @@ begin
           end;
         end;
 
-        Promise.Resolve(ResultObj);
+        if not PromisePendingAsync then
+          Promise.Resolve(ResultObj);
       except
         on E: TGocciaThrowValue do
           Promise.Reject(E.Value);

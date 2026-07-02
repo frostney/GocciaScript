@@ -11782,7 +11782,6 @@ end;
 function TGocciaVM.HasPropertyValue(const AObject, AKey: TGocciaValue): TGocciaValue;
 var
   KeyStr: string;
-  Index: Integer;
   Prop: TGocciaValue;
   ResolvedKey: TGocciaValue;
   PrivateBrandToken: string;
@@ -11848,22 +11847,6 @@ begin
   if AObject is TGocciaProxyValue then
   begin
     if TGocciaProxyValue(AObject).HasTrap(KeyStr) then
-      Exit(TGocciaBooleanLiteralValue.TrueValue);
-    Exit(TGocciaBooleanLiteralValue.FalseValue);
-  end;
-
-  if AObject is TGocciaArrayValue then
-  begin
-    if TryGetArrayIndex(AKey, Index) then
-    begin
-      if (Index >= 0) and (Index < TGocciaArrayValue(AObject).Elements.Count) and
-         (TGocciaArrayValue(AObject).Elements[Index] <> TGocciaHoleValue.HoleValue) then
-        Exit(TGocciaBooleanLiteralValue.TrueValue);
-      Exit(TGocciaBooleanLiteralValue.FalseValue);
-    end;
-
-    Prop := TGocciaArrayValue(AObject).GetProperty(KeyStr);
-    if Assigned(Prop) and not (Prop is TGocciaUndefinedLiteralValue) then
       Exit(TGocciaBooleanLiteralValue.TrueValue);
     Exit(TGocciaBooleanLiteralValue.FalseValue);
   end;

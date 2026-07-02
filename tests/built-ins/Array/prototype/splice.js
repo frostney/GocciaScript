@@ -71,13 +71,19 @@ describe("Array.prototype.splice", () => {
     expect(() => Array.prototype.splice.call(obj, 0, 0, 1)).toThrow(TypeError);
   });
 
-  test("throws RangeError when deleteCount exceeds engine MaxInt on huge receiver", () => {
-    // splice(0, 2^40 - 100) on a length-2^40 receiver: NewLen would fit in
-    // MaxInt (=100), but the delete count itself overflows the in-place
-    // shift loop's Integer counter.  Reject up-front rather than wrapping.
-    const obj = { length: 2 ** 40 };
-    expect(() => Array.prototype.splice.call(obj, 0, 2 ** 40 - 100))
-      .toThrow(RangeError);
+  test("shrinks huge sparse array-like receivers without truncating indices", () => {
+    const obj = {
+      [2 ** 40 - 2]: "removed",
+      [2 ** 40 - 1]: "tail",
+      length: 2 ** 40
+    };
+
+    const removed = Array.prototype.splice.call(obj, 2 ** 40 - 2, 1);
+    expect(removed.length).toBe(1);
+    expect(removed[0]).toBe("removed");
+    expect(obj.length).toBe(2 ** 40 - 1);
+    expect(obj[2 ** 40 - 2]).toBe("tail");
+    expect((2 ** 40 - 1) in obj).toBe(false);
   });
 
   test("shifts high-index source past MaxInt via sparse iteration", () => {

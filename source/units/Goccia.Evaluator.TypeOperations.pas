@@ -25,11 +25,9 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Keywords.Reserved,
-  Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
-  Goccia.Values.HoleValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue,
@@ -69,7 +67,6 @@ end;
 function EvaluateInOperator(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
   PropertyName: string;
-  Index: Integer;
   ResolvedKey: TGocciaValue;
 begin
   // ECMAScript §13.10.1 step 5: If rval is not an Object, throw TypeError
@@ -122,32 +119,7 @@ begin
     Exit;
   end;
 
-  if ARight is TGocciaArrayValue then
-  begin
-    // For arrays, first try to parse as integer index
-    try
-      Index := StrToInt(PropertyName);
-      // Check if index is valid (in bounds and not a hole)
-      if (Index >= 0) and (Index < TGocciaArrayValue(ARight).Elements.Count) then
-      begin
-        // For sparse arrays, holes do not count as present elements.
-        if TGocciaArrayValue(ARight).Elements[Index] <> TGocciaHoleValue.HoleValue then
-          Result := TGocciaBooleanLiteralValue.TrueValue
-        else
-          Result := TGocciaBooleanLiteralValue.FalseValue;
-      end
-      else
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-    except
-      // If not a valid integer, check if it's a property in the prototype chain
-      // This includes 'length', array methods like 'push', 'pop', etc.
-      if TGocciaArrayValue(ARight).HasProperty(PropertyName) then
-        Result := TGocciaBooleanLiteralValue.TrueValue
-      else
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-    end;
-  end
-  else if ARight is TGocciaInstanceValue then
+  if ARight is TGocciaInstanceValue then
   begin
     // Check if property exists in class instance
     if TGocciaInstanceValue(ARight).HasProperty(PropertyName) then

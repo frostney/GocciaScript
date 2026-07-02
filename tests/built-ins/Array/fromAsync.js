@@ -25,6 +25,14 @@ describe("Array.fromAsync", () => {
     expect(await Array.fromAsync([1, 2, 3])).toEqual([1, 2, 3]);
   });
 
+  test("sync array iterator observes mutation after the first next call", async () => {
+    const items = [1, 2, 3];
+    const promise = Array.fromAsync(items);
+    items[1] = 8;
+    items.push(4);
+    expect(await promise).toEqual([1, 8, 3, 4]);
+  });
+
   test("creates arrays from strings", async () => {
     expect(await Array.fromAsync("abc")).toEqual(["a", "b", "c"]);
   });
