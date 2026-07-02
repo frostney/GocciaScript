@@ -89,7 +89,8 @@ type
       const AIsThrow: Boolean);
     procedure AwaitYieldValue(const AValue: TGocciaValue);
     procedure AwaitReturnValue(const AValue: TGocciaValue;
-      const AThrowIntoGenerator: Boolean = False);
+      const AThrowIntoGenerator: Boolean = False;
+      const AResolvedPromise: TGocciaPromiseValue = nil);
     procedure CompleteCurrentRequest(const AValue: TGocciaValue;
       const AIsThrow, ADone: Boolean);
     procedure ResolveAwaitedYield(const AValue: TGocciaValue);
@@ -1001,7 +1002,8 @@ end;
 
 // ES2026 §27.6.3.9 AsyncGeneratorAwaitReturn(gen)
 procedure TGocciaAsyncGeneratorObjectValue.AwaitReturnValue(
-  const AValue: TGocciaValue; const AThrowIntoGenerator: Boolean = False);
+  const AValue: TGocciaValue; const AThrowIntoGenerator: Boolean = False;
+  const AResolvedPromise: TGocciaPromiseValue = nil);
 var
   AwaitPromise: TGocciaPromiseValue;
   FulfillFunction: TGocciaNativeFunctionValue;
@@ -1009,24 +1011,29 @@ var
   RejectFunction: TGocciaNativeFunctionValue;
   RejectHandler: TGocciaAsyncGeneratorAwaitReturnHandler;
 begin
-  try
-    AwaitPromise := AsyncGeneratorPromiseResolve(AValue);
-  except
-    on E: TGocciaThrowValue do
-    begin
-      if AThrowIntoGenerator then
-        RejectAwaitedYield(E.Value)
-      else
-        RejectAwaitedReturn(E.Value);
-      Exit;
-    end;
-    on E: Exception do
-    begin
-      if AThrowIntoGenerator then
-        RejectAwaitedYield(ExceptionToErrorValue(E))
-      else
-        RejectAwaitedReturn(ExceptionToErrorValue(E));
-      Exit;
+  if Assigned(AResolvedPromise) then
+    AwaitPromise := AResolvedPromise
+  else
+  begin
+    try
+      AwaitPromise := AsyncGeneratorPromiseResolve(AValue);
+    except
+      on E: TGocciaThrowValue do
+      begin
+        if AThrowIntoGenerator then
+          RejectAwaitedYield(E.Value)
+        else
+          RejectAwaitedReturn(E.Value);
+        Exit;
+      end;
+      on E: Exception do
+      begin
+        if AThrowIntoGenerator then
+          RejectAwaitedYield(ExceptionToErrorValue(E))
+        else
+          RejectAwaitedReturn(ExceptionToErrorValue(E));
+        Exit;
+      end;
     end;
   end;
 
@@ -1128,11 +1135,12 @@ end;
 procedure TGocciaAsyncGeneratorObjectValue.StartRequest(
   const ARequest: TGocciaAsyncGeneratorRequest);
 var
-  CheckedPromise: TGocciaPromiseValue;
+  CheckedReturnPromise: TGocciaPromiseValue;
   Done: Boolean;
   UnwrappedValue: TGocciaValue;
   Value: TGocciaValue;
 begin
+  CheckedReturnPromise := nil;
   try
     if (ARequest.Kind = grkReturn) and
        (FState in [gsSuspendedStart, gsCompleted]) then
@@ -1169,8 +1177,7 @@ begin
        (ARequest.Value is TGocciaPromiseValue) then
     begin
       try
-        CheckedPromise := AsyncGeneratorPromiseResolve(ARequest.Value);
-        CheckedPromise := nil;
+        CheckedReturnPromise := AsyncGeneratorPromiseResolve(ARequest.Value);
       except
         on E: TGocciaThrowValue do
         begin
@@ -1201,7 +1208,11 @@ begin
     begin
       if FContinuation.ReturnRequiresAwait then
       begin
-        AwaitReturnValue(Value, True);
+        if Assigned(CheckedReturnPromise) and
+           IsSameValue(Value, ARequest.Value) then
+          AwaitReturnValue(Value, True, CheckedReturnPromise)
+        else
+          AwaitReturnValue(Value, True);
         Exit;
       end;
       UnwrappedValue := Value;

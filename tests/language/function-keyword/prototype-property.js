@@ -556,6 +556,33 @@ test("async generator return awaits fulfilled and rejected promise values", asyn
   });
 });
 
+test("async generator return resolves promised value once before finally", async () => {
+  const events = [];
+  const returnedValue = Promise.resolve("done");
+  Object.defineProperty(returnedValue, "constructor", {
+    get() {
+      events.push("constructor");
+      return Promise;
+    },
+  });
+
+  async function* values() {
+    try {
+      yield 1;
+    } finally {
+      events.push("finally");
+    }
+  }
+
+  const iterator = values();
+  await iterator.next();
+  await expect(iterator.return(returnedValue)).resolves.toEqual({
+    value: "done",
+    done: true,
+  });
+  expect(events).toEqual(["constructor", "finally"]);
+});
+
 test("async generator queued requests wait behind awaited return fulfillment", async () => {
   const events = [];
   async function* values() {
