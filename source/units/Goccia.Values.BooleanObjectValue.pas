@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -22,10 +23,11 @@ type
     procedure InitializePrototype;
     function ToStringTag: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
-    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
 
     class function GetSharedPrototype: TGocciaObjectValue;
+    class function GetSharedPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; static;
 
     property Primitive: TGocciaBooleanLiteralValue read FPrimitive;
   published
@@ -36,7 +38,6 @@ type
 implementation
 
 uses
-  Goccia.Realm,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ToObject;
 
@@ -118,25 +119,20 @@ begin
   Result := 'Boolean';
 end;
 
-function TGocciaBooleanObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
-var
-  SharedPrototype: TGocciaObjectValue;
-begin
-  Result := inherited GetPropertyWithContext(AName, AThisContext);
-  if not (Result is TGocciaUndefinedLiteralValue) then
-    Exit;
-
-  SharedPrototype := GetSharedBooleanPrototype;
-  if not Assigned(Prototype) and Assigned(SharedPrototype) and
-     (SharedPrototype <> TGocciaObjectValue(Self)) then
-    Result := SharedPrototype.GetPropertyWithContext(AName, AThisContext);
-end;
-
 class function TGocciaBooleanObjectValue.GetSharedPrototype: TGocciaObjectValue;
 begin
   if not Assigned(GetSharedBooleanPrototype) then
     TGocciaBooleanObjectValue.Create(TGocciaBooleanLiteralValue.FalseValue);
   Result := GetSharedBooleanPrototype;
+end;
+
+class function TGocciaBooleanObjectValue.GetSharedPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  if Assigned(ARealm) then
+    Result := TGocciaObjectValue(ARealm.GetSlot(GBooleanPrototypeSlot))
+  else
+    Result := nil;
 end;
 
 function TGocciaBooleanObjectValue.BooleanValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

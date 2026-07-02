@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -21,11 +22,12 @@ type
     constructor Create(const APrimitive: TGocciaNumberLiteralValue; const AClass: TGocciaClassValue = nil);
     function ToStringTag: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
-    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure InitializePrototype;
     procedure MarkReferences; override;
 
     class function GetSharedPrototype: TGocciaObjectValue;
+    class function GetSharedPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; static;
 
     property Primitive: TGocciaNumberLiteralValue read FPrimitive;
 
@@ -49,7 +51,6 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Realm,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
@@ -371,20 +372,6 @@ begin
   Result := GetPropertyWithContext(AName, Self);
 end;
 
-function TGocciaNumberObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
-var
-  SharedPrototype: TGocciaObjectValue;
-begin
-  Result := inherited GetPropertyWithContext(AName, AThisContext);
-  if not (Result is TGocciaUndefinedLiteralValue) then
-    Exit;
-
-  SharedPrototype := GetSharedNumberPrototype;
-  if not Assigned(Prototype) and Assigned(SharedPrototype) and
-     (SharedPrototype <> TGocciaObjectValue(Self)) then
-    Result := SharedPrototype.GetPropertyWithContext(AName, AThisContext);
-end;
-
 procedure TGocciaNumberObjectValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
@@ -418,6 +405,15 @@ begin
   if not Assigned(GetSharedNumberPrototype) then
     TGocciaNumberObjectValue.Create(TGocciaNumberLiteralValue.ZeroValue);
   Result := GetSharedNumberPrototype;
+end;
+
+class function TGocciaNumberObjectValue.GetSharedPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  if Assigned(ARealm) then
+    Result := TGocciaObjectValue(ARealm.GetSlot(GNumberPrototypeSlot))
+  else
+    Result := nil;
 end;
 
 procedure TGocciaNumberObjectValue.MarkReferences;

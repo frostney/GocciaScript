@@ -342,11 +342,11 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
-  Goccia.Scope,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.AutoAccessor,
   Goccia.Values.BigIntValue,
+  Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.DataViewValue,
   Goccia.Values.ErrorHelper,
@@ -354,6 +354,7 @@ uses
   Goccia.Values.HeadersValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
+  Goccia.Values.NumberObjectValue,
   Goccia.Values.ResponseValue,
   Goccia.Values.SetValue,
   Goccia.Values.SharedArrayBufferValue,
@@ -392,9 +393,9 @@ function DefaultNativePrototypeForNewTarget(
   const ACurrentRealmDefault: TGocciaObjectValue;
   const AConstructorName: string): TGocciaObjectValue;
 var
-  ConstructorPrototype, ConstructorValue, ProtoValue: TGocciaValue;
+  FallbackPrototype: TGocciaObjectValue;
   FallbackRealm: TGocciaRealm;
-  GlobalScope: TGocciaScope;
+  ProtoValue: TGocciaValue;
 begin
   if ANewTarget is TGocciaObjectValue then
     ProtoValue := TGocciaObjectValue(ANewTarget).GetProperty(PROP_PROTOTYPE)
@@ -408,18 +409,19 @@ begin
   if ANewTarget is TGocciaFunctionBase then
     FallbackRealm := TGocciaFunctionBase(ANewTarget).CreationRealm;
 
-  if Assigned(FallbackRealm) and
-     (FallbackRealm.GlobalEnv is TGocciaScope) then
+  if Assigned(FallbackRealm) then
   begin
-    GlobalScope := TGocciaScope(FallbackRealm.GlobalEnv);
-    if GlobalScope.TryGetBindingValue(AConstructorName, ConstructorValue) and
-       (ConstructorValue is TGocciaObjectValue) then
-    begin
-      ConstructorPrototype :=
-        TGocciaObjectValue(ConstructorValue).GetProperty(PROP_PROTOTYPE);
-      if ConstructorPrototype is TGocciaObjectValue then
-        Exit(TGocciaObjectValue(ConstructorPrototype));
-    end;
+    if AConstructorName = CONSTRUCTOR_NUMBER then
+      FallbackPrototype :=
+        TGocciaNumberObjectValue.GetSharedPrototypeForRealm(FallbackRealm)
+    else if AConstructorName = CONSTRUCTOR_BOOLEAN then
+      FallbackPrototype :=
+        TGocciaBooleanObjectValue.GetSharedPrototypeForRealm(FallbackRealm)
+    else
+      FallbackPrototype := nil;
+
+    if Assigned(FallbackPrototype) then
+      Exit(FallbackPrototype);
   end;
 
   Result := ACurrentRealmDefault;

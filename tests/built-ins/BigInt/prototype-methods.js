@@ -25,6 +25,16 @@ test("BigInt.prototype inherits from Object.prototype", () => {
   expect(Object.getPrototypeOf(BigInt.prototype)).toBe(Object.prototype);
 });
 
+test("boxed BigInt respects an explicit null prototype", () => {
+  const boxed = Object(7n);
+
+  Object.setPrototypeOf(boxed, null);
+
+  expect(Object.getPrototypeOf(boxed)).toBeNull();
+  expect(boxed.valueOf).toBeUndefined();
+  expect(boxed.toString).toBeUndefined();
+});
+
 test("toLocaleString()", () => {
   expect((42n).toLocaleString()).toBe("42");
   expect(typeof Object(42n).toLocaleString).toBe("function");
