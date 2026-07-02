@@ -69,12 +69,17 @@ procedure TTextSemanticsTests.TestUnicodeCaseMapping;
 const
   UPPER_TEXT = #$C3#$89 + #$C3#$96 + #$CE#$A3;
   LOWER_TEXT = #$C3#$A9 + #$C3#$B6 + #$CF#$82;
+  NONCHARACTER = #$EF#$B7#$90;
 begin
   Expect<string>(UnicodeLowerCaseUTF8(UPPER_TEXT)).ToBe(LOWER_TEXT);
   Expect<string>(UnicodeUpperCaseUTF8(LOWER_TEXT)).ToBe(UPPER_TEXT);
   Expect<string>(UnicodeLowerCaseUTF8(#$C4#$B0)).ToBe('i' + #$CC#$87);
   Expect<string>(UnicodeLowerCaseUTF8('A' + #$CE#$A3)).ToBe(
     'a' + #$CF#$82);
+  Expect<string>(UnicodeUpperCaseUTF8('a' + NONCHARACTER + #$C3#$9F)).ToBe(
+    'A' + NONCHARACTER + 'SS');
+  Expect<string>(UnicodeLowerCaseUTF8('A' + NONCHARACTER + #$C4#$B0)).ToBe(
+    'a' + NONCHARACTER + 'i' + #$CC#$87);
 end;
 
 procedure TTextSemanticsTests.TestUTF8WellFormedChecks;

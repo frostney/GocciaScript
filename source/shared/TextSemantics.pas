@@ -1020,33 +1020,9 @@ begin
   Result := RetagUTF8Text(Bytes);
 end;
 
-function ContainsUnicodeNonCharacter(const AText: string): Boolean;
-var
-  ByteLength: Integer;
-  CodePoint: Cardinal;
-  Index: Integer;
-begin
-  Index := 1;
-  while Index <= Length(AText) do
-  begin
-    if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
-      ByteLength) then
-    begin
-      if ((CodePoint >= $FDD0) and (CodePoint <= $FDEF)) or
-         (((CodePoint and $FFFE) = $FFFE) and
-          (CodePoint <= $10FFFF)) then
-        Exit(True);
-      Inc(Index, ByteLength);
-    end
-    else
-      Inc(Index);
-  end;
-  Result := False;
-end;
-
 function UnicodeLowerCaseUTF8(const AText: string): string;
 begin
-  if (not IsWellFormedUTF16(AText)) or ContainsUnicodeNonCharacter(AText) then
+  if not IsWellFormedUTF16(AText) then
     Exit(AText);
   if TryICULowerCase('', AText, Result) then
     Exit;
@@ -1056,7 +1032,7 @@ end;
 
 function UnicodeUpperCaseUTF8(const AText: string): string;
 begin
-  if (not IsWellFormedUTF16(AText)) or ContainsUnicodeNonCharacter(AText) then
+  if not IsWellFormedUTF16(AText) then
     Exit(AText);
   if TryICUUpperCase('', AText, Result) then
     Exit;
