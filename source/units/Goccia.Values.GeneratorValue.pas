@@ -818,16 +818,11 @@ var
   Request: TGocciaAsyncGeneratorRequest;
 begin
   Promise := TGocciaPromiseValue.Create;
-  try
-    Request.Kind := AKind;
-    Request.Value := AValue;
-    Request.Promise := Promise;
-    EnqueueRequest(Request);
-    ProcessQueue;
-  except
-    Promise.Free;
-    raise;
-  end;
+  Request.Kind := AKind;
+  Request.Value := AValue;
+  Request.Promise := Promise;
+  EnqueueRequest(Request);
+  ProcessQueue;
   Result := Promise;
 end;
 
