@@ -101,7 +101,6 @@ type
   private
     FResolve: TGocciaValue;
     FReject: TGocciaValue;
-    FInvoked: Boolean;
   public
     function Invoke(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -286,10 +285,13 @@ function TPromiseCapabilityExecutor.Invoke(
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  if FInvoked then
+  if Assigned(FResolve) and
+     not (FResolve is TGocciaUndefinedLiteralValue) then
+    ThrowTypeError(SErrorPromiseResolverNotFunction, SSuggestPromiseResolver);
+  if Assigned(FReject) and
+     not (FReject is TGocciaUndefinedLiteralValue) then
     ThrowTypeError(SErrorPromiseResolverNotFunction, SSuggestPromiseResolver);
 
-  FInvoked := True;
   FResolve := AArgs.GetElement(0);
   FReject := AArgs.GetElement(1);
 end;

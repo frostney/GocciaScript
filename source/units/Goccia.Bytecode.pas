@@ -138,16 +138,11 @@ const
   //   v66 -> v67: added OP_GET_IMPORT_BINDING so bytecode rejects a named
   //               import of a missing export at its use site, matching the
   //               interpreter's link-time SyntaxError (ADR 0014).
-  GOCCIA_FORMAT_VERSION = 67;
+  //   v67 -> v68: added long-name global define/predeclare opcodes so
+  //               generated sources with more than 255 global names can keep
+  //               using 16-bit constant-pool indices.
+  GOCCIA_FORMAT_VERSION = 68;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
-  // OP_DEFINE_GLOBAL_CONST operand B declaration modes.
-  GLOBAL_DEFINE_VAR = 0;
-  GLOBAL_DEFINE_LET = 1;
-  GLOBAL_DEFINE_CONST = 2;
-  GLOBAL_DEFINE_VAR_DECL = 3;
-  GLOBAL_DEFINE_LET_PREDECLARE = 4;
-  GLOBAL_DEFINE_CONST_PREDECLARE = 5;
-  GLOBAL_DEFINE_FUNCTION = 6;
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
   GOCCIA_NULLISH_MATCH_HOLE = 2;
@@ -297,7 +292,6 @@ type
     OP_SET_GLOBAL_LOOSE = 96,
     OP_THROW_TYPE_ERROR_CONST_LONG = 97,
     OP_THROW_TYPE_ERROR_CONST = 98,
-    OP_DEFINE_GLOBAL_CONST = 99,
     OP_FINALIZE_ENUM = 100,
     OP_SUPER_GET_CONST = 101,
     OP_SETUP_AUTO_ACCESSOR_CONST = 102,
@@ -387,7 +381,13 @@ type
     OP_DEFINE_GLOBAL_VAR_DECL_LONG = 210,
     OP_DEFINE_STATIC_PROP_DYNAMIC = 211,
     OP_PUSH_FINALLY_HANDLER = 212,
-    OP_GET_IMPORT_BINDING = 213
+    OP_GET_IMPORT_BINDING = 213,
+    OP_DEFINE_GLOBAL_VAR_LONG = 214,
+    OP_DEFINE_GLOBAL_LET_LONG = 215,
+    OP_DEFINE_GLOBAL_CONST_LONG = 216,
+    OP_DEFINE_GLOBAL_FUNCTION_LONG = 217,
+    OP_PREDECLARE_GLOBAL_LET_LONG = 218,
+    OP_PREDECLARE_GLOBAL_CONST_LONG = 219
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;

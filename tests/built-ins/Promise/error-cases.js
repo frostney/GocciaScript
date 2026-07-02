@@ -208,3 +208,100 @@ test("Promise capability executor throws when called twice by constructor", () =
     expect(e.name).toBe("TypeError");
   }
 });
+
+test("Promise capability executor can be called again after undefined resolving functions", () => {
+  class CallsExecutorWithUndefinedFirst {
+    constructor(executor) {
+      executor(undefined, undefined);
+      executor(() => {}, () => {});
+    }
+  }
+
+  expect(Promise.resolve.call(CallsExecutorWithUndefinedFirst, 1)).toBeInstanceOf(
+    CallsExecutorWithUndefinedFirst
+  );
+});
+
+test("Promise capability executor throws when only one resolving function was captured", () => {
+  class CallsExecutorWithRejectFirst {
+    constructor(executor) {
+      executor(undefined, () => {});
+      executor(() => {}, () => {});
+    }
+  }
+
+  try {
+    Promise.resolve.call(CallsExecutorWithRejectFirst, 1);
+    throw new Error("Expected TypeError");
+  } catch (e) {
+    expect(e.name).toBe("TypeError");
+  }
+});
+
+test("Promise capability executor throws when only resolve was captured", () => {
+  class CallsExecutorWithResolveFirst {
+    constructor(executor) {
+      executor(() => {}, undefined);
+      executor(() => {}, () => {});
+    }
+  }
+
+  try {
+    Promise.resolve.call(CallsExecutorWithResolveFirst, 1);
+    throw new Error("Expected TypeError");
+  } catch (e) {
+    expect(e.name).toBe("TypeError");
+  }
+});
+
+test("Promise.prototype.then species capability executor can be called again after undefined resolving functions", () => {
+  class CallsExecutorWithUndefinedFirst {
+    constructor(executor) {
+      executor(undefined, undefined);
+      executor(() => {}, () => {});
+    }
+  }
+
+  const promise = Promise.resolve(1);
+  promise.constructor = { [Symbol.species]: CallsExecutorWithUndefinedFirst };
+
+  expect(promise.then()).toBeInstanceOf(CallsExecutorWithUndefinedFirst);
+});
+
+test("Promise.prototype.then species capability executor throws when only reject was captured", () => {
+  class CallsExecutorWithRejectFirst {
+    constructor(executor) {
+      executor(undefined, () => {});
+      executor(() => {}, () => {});
+    }
+  }
+
+  const promise = Promise.resolve(1);
+  promise.constructor = { [Symbol.species]: CallsExecutorWithRejectFirst };
+
+  try {
+    promise.then();
+    throw new Error("Expected TypeError");
+  } catch (e) {
+    expect(e.name).toBe("TypeError");
+  }
+});
+
+test("Promise.prototype.then species capability executor throws when only resolve was captured", () => {
+  class CallsExecutorWithResolveFirst {
+    constructor(executor) {
+      executor(() => {}, undefined);
+      executor(() => {}, () => {});
+    }
+  }
+
+  const promise = Promise.resolve(1);
+  promise.constructor = { [Symbol.species]: CallsExecutorWithResolveFirst };
+
+  try {
+    promise.then();
+    throw new Error("Expected TypeError");
+  } catch (e) {
+    expect(e.name).toBe("TypeError");
+  }
+});
