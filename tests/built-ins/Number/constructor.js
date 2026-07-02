@@ -10,6 +10,11 @@ describe("Number constructor", () => {
     expect(n.toFixed(2)).toBe("3.14");
   });
 
+  test("Number wrapper prototypes are wired to the realm intrinsics", () => {
+    expect(Object.getPrototypeOf(Number.prototype)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(new Number(1))).toBe(Number.prototype);
+  });
+
   test("boxed Number respects an explicit null prototype", () => {
     const boxed = Object(7);
 

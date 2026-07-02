@@ -382,6 +382,7 @@ begin
   if Assigned(GetSharedNumberPrototype) then Exit;
 
   SharedPrototype := Self;
+  SharedPrototype.Prototype := TGocciaObjectValue.SharedObjectPrototype;
   CurrentRealm.SetSlot(GNumberPrototypeSlot, SharedPrototype);
   // The native methods below bind to this instance (Self); keep it alive for the
   // realm's lifetime in its own slot so the realm unpins it on Destroy. #892
