@@ -19,7 +19,6 @@ type
     constructor Create(const APrimitive: TGocciaValue; const AClass: TGocciaClassValue = nil);
     procedure InitializePrototype;
     function GetProperty(const AName: string): TGocciaValue; override;
-    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
 
     class function GetSharedPrototype: TGocciaObjectValue;
@@ -70,17 +69,6 @@ end;
 function TGocciaBigIntObjectValue.GetProperty(const AName: string): TGocciaValue;
 begin
   Result := GetPropertyWithContext(AName, Self);
-end;
-
-function TGocciaBigIntObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
-begin
-  Result := inherited GetPropertyWithContext(AName, AThisContext);
-  if not (Result is TGocciaUndefinedLiteralValue) then
-    Exit;
-
-  if Assigned(TGocciaBigIntValue.SharedPrototype) then
-    Result := TGocciaObjectValue(TGocciaBigIntValue.SharedPrototype)
-      .GetPropertyWithContext(AName, AThisContext);
 end;
 
 class function TGocciaBigIntObjectValue.GetSharedPrototype: TGocciaObjectValue;

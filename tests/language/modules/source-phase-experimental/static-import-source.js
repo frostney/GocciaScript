@@ -8,4 +8,11 @@ describe("experimental static source-phase imports", () => {
     expect(Object.prototype.toString.call(sideEffectModuleSource)).toBe("[object ModuleSource]");
     expect(globalThis.__gocciaSourceDynamicImportEvaluated).toBeUndefined();
   });
+
+  test("ModuleSource prototypes inherit from Object.prototype", () => {
+    const moduleSourcePrototype = Object.getPrototypeOf(mathModuleSource);
+    const abstractModuleSourcePrototype = Object.getPrototypeOf(moduleSourcePrototype);
+
+    expect(Object.getPrototypeOf(abstractModuleSourcePrototype)).toBe(Object.prototype);
+  });
 });

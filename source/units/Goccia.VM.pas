@@ -15992,40 +15992,6 @@ begin
         ThrowTypeError(
           Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue);
 
-      OP_DEFINE_GLOBAL_CONST:
-      begin
-        GlobalName := Template.GetConstantUnchecked(C).StringValue;
-        if B = GLOBAL_DEFINE_VAR then
-          DefineGlobalBinding(GlobalName, GetRegister(A), dtVar,
-            not Template.StrictCode)
-        else if B = GLOBAL_DEFINE_VAR_DECL then
-        begin
-          if Assigned(FGlobalScope) then
-            FGlobalScope.DefineVariableBinding(GlobalName,
-              TGocciaUndefinedLiteralValue.UndefinedValue, False);
-        end
-        else if B = GLOBAL_DEFINE_FUNCTION then
-        begin
-          if Assigned(FGlobalScope) then
-            FGlobalScope.CreateGlobalFunctionBinding(GlobalName, GetRegister(A),
-              False);
-        end
-        else if B = GLOBAL_DEFINE_CONST then
-          DefineGlobalBinding(GlobalName, GetRegister(A), dtConst)
-        else if B = GLOBAL_DEFINE_LET_PREDECLARE then
-        begin
-          if Assigned(FGlobalScope) then
-            FGlobalScope.PredeclareLexicalBinding(GlobalName, dtLet);
-        end
-        else if B = GLOBAL_DEFINE_CONST_PREDECLARE then
-        begin
-          if Assigned(FGlobalScope) then
-            FGlobalScope.PredeclareLexicalBinding(GlobalName, dtConst);
-        end
-        else
-          DefineGlobalBinding(GlobalName, GetRegister(A), dtLet);
-      end;
-
       OP_DEFINE_GLOBAL_VAR_DECL_LONG:
       begin
         GlobalName := Template.GetConstantUnchecked(
@@ -16033,6 +15999,53 @@ begin
         if Assigned(FGlobalScope) then
           FGlobalScope.DefineVariableBinding(GlobalName,
             TGocciaUndefinedLiteralValue.UndefinedValue, False);
+      end;
+
+      OP_DEFINE_GLOBAL_VAR_LONG:
+      begin
+        GlobalName := Template.GetConstantUnchecked(
+          DecodeBx(Instruction)).StringValue;
+        DefineGlobalBinding(GlobalName, GetRegister(A), dtVar,
+          not Template.StrictCode);
+      end;
+
+      OP_DEFINE_GLOBAL_LET_LONG:
+      begin
+        GlobalName := Template.GetConstantUnchecked(
+          DecodeBx(Instruction)).StringValue;
+        DefineGlobalBinding(GlobalName, GetRegister(A), dtLet);
+      end;
+
+      OP_DEFINE_GLOBAL_CONST_LONG:
+      begin
+        GlobalName := Template.GetConstantUnchecked(
+          DecodeBx(Instruction)).StringValue;
+        DefineGlobalBinding(GlobalName, GetRegister(A), dtConst);
+      end;
+
+      OP_DEFINE_GLOBAL_FUNCTION_LONG:
+      begin
+        GlobalName := Template.GetConstantUnchecked(
+          DecodeBx(Instruction)).StringValue;
+        if Assigned(FGlobalScope) then
+          FGlobalScope.CreateGlobalFunctionBinding(GlobalName, GetRegister(A),
+            False);
+      end;
+
+      OP_PREDECLARE_GLOBAL_LET_LONG:
+      begin
+        GlobalName := Template.GetConstantUnchecked(
+          DecodeBx(Instruction)).StringValue;
+        if Assigned(FGlobalScope) then
+          FGlobalScope.PredeclareLexicalBinding(GlobalName, dtLet);
+      end;
+
+      OP_PREDECLARE_GLOBAL_CONST_LONG:
+      begin
+        GlobalName := Template.GetConstantUnchecked(
+          DecodeBx(Instruction)).StringValue;
+        if Assigned(FGlobalScope) then
+          FGlobalScope.PredeclareLexicalBinding(GlobalName, dtConst);
       end;
 
       OP_FINALIZE_ENUM:

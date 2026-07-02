@@ -214,6 +214,23 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
     const bareStdin = await $`cat ${bothSrc} | ${BARE} --print - --compat-var --compat-function 2>&1`.text();
     if (bareStdin.trim() !== "22") throw new Error(`Bare stdin --compat-var --compat-function expected 22, got: ${bareStdin}`);
 
+    const largeGlobalSrc = join(tmp, "large-global-declarations.js");
+    writeFileSync(
+      largeGlobalSrc,
+      [
+        `var ${Array.from({ length: 260 }, (_, i) => `globalName${i}`).join(", ")};`,
+        "var lateVarBinding = 4;",
+        "const lateConstBinding = 1;",
+        "let lateLetBinding = 2;",
+        "function lateFunctionBinding() { return 3; }",
+        "lateVarBinding + lateConstBinding + lateLetBinding + lateFunctionBinding();",
+        "",
+      ].join("\n"),
+    );
+    const largeGlobalOut = await $`${BARE} --print ${largeGlobalSrc} --mode=bytecode --compat-var --compat-function 2>&1`.text();
+    if (largeGlobalOut.trim() !== "10")
+      throw new Error(`Bare bytecode large global declarations expected 10, got: ${largeGlobalOut}`);
+
     const thrownObjectSrc = join(tmp, "throw-test262-object.js");
     writeFileSync(
       thrownObjectSrc,

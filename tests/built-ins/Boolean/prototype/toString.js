@@ -1,8 +1,21 @@
 describe("Boolean.prototype.toString", () => {
   test("returns primitive boolean strings", () => {
+    expect(Boolean.prototype.toString()).toBe("false");
     expect(Boolean.prototype.toString.call(true)).toBe("true");
     expect(Boolean.prototype.toString.call(false)).toBe("false");
     expect(new Boolean(true).toString()).toBe("true");
+  });
+
+  test("Boolean.prototype has Boolean wrapper internal data", () => {
+    expect(Object.prototype.toString.call(Boolean.prototype)).toBe("[object Boolean]");
+
+    const ownToString = Boolean.prototype.toString;
+    delete Boolean.prototype.toString;
+    try {
+      expect(Boolean.prototype.toString()).toBe("[object Boolean]");
+    } finally {
+      Boolean.prototype.toString = ownToString;
+    }
   });
 
   test("rejects nullish receivers", () => {

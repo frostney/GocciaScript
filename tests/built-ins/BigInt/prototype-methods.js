@@ -21,6 +21,20 @@ test("valueOf()", () => {
   expect(Object(42n).valueOf()).toBe(42n);
 });
 
+test("BigInt.prototype inherits from Object.prototype", () => {
+  expect(Object.getPrototypeOf(BigInt.prototype)).toBe(Object.prototype);
+});
+
+test("boxed BigInt respects an explicit null prototype", () => {
+  const boxed = Object(7n);
+
+  Object.setPrototypeOf(boxed, null);
+
+  expect(Object.getPrototypeOf(boxed)).toBeNull();
+  expect(boxed.valueOf).toBeUndefined();
+  expect(boxed.toString).toBeUndefined();
+});
+
 test("toLocaleString()", () => {
   expect((42n).toLocaleString()).toBe("42");
   expect(typeof Object(42n).toLocaleString).toBe("function");
@@ -54,4 +68,35 @@ describe("BigInt.prototype.toString non-finite radix", () => {
   test("NaN radix throws RangeError", () => {
     expect(() => (5n).toString(NaN)).toThrow(RangeError);
   });
+});
+
+test("boxed BigInt ordinary ToPrimitive observes prototype accessors once", () => {
+  const bigIntValueOf = BigInt.prototype.valueOf;
+  let toStringGets = 0;
+  let valueOfGets = 0;
+  let valueOfCalls = 0;
+  const valueOfFunction = {
+    valueOfReplacement() {
+      valueOfCalls++;
+      return bigIntValueOf.call(this) * 2n;
+    },
+  }.valueOfReplacement;
+
+  Object.defineProperty(BigInt.prototype, "toString", {
+    get() {
+      toStringGets++;
+      return undefined;
+    },
+  });
+  Object.defineProperty(BigInt.prototype, "valueOf", {
+    get() {
+      valueOfGets++;
+      return valueOfFunction;
+    },
+  });
+
+  expect("".concat(Object(1n))).toBe("2");
+  expect(toStringGets).toBe(1);
+  expect(valueOfGets).toBe(1);
+  expect(valueOfCalls).toBe(1);
 });

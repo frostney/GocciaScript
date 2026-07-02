@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -21,11 +22,12 @@ type
     constructor Create(const APrimitive: TGocciaNumberLiteralValue; const AClass: TGocciaClassValue = nil);
     function ToStringTag: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
-    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure InitializePrototype;
     procedure MarkReferences; override;
 
     class function GetSharedPrototype: TGocciaObjectValue;
+    class function GetSharedPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; static;
 
     property Primitive: TGocciaNumberLiteralValue read FPrimitive;
 
@@ -49,7 +51,6 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Realm,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
@@ -214,6 +215,19 @@ begin
   Result := ASign + '0.' + StringOfChar('0', -(ADecimalExponent + 1)) + ADigits;
 end;
 
+function RoundedScaledIntegerDigits(const ANumerator, ADenominator: TBigInteger;
+  const AScale: Integer): string;
+var
+  Quotient, Remainder, ScaledNumerator: TBigInteger;
+begin
+  ScaledNumerator := ANumerator.Multiply(BigIntPower10(AScale));
+  Quotient := ScaledNumerator.Divide(ADenominator);
+  Remainder := ScaledNumerator.Modulo(ADenominator);
+  if Remainder.Multiply(TBigInteger.FromInt64(2)).Compare(ADenominator) >= 0 then
+    Quotient := Quotient.Add(TBigInteger.One);
+  Result := Quotient.ToString;
+end;
+
 function FormatDoubleToPrecision(const AValue: Double;
   const APrecision: Integer): string;
 var
@@ -245,6 +259,77 @@ begin
   Result := FormatPrecisionString(Sign, Digits, DecimalExponent, APrecision);
 end;
 
+function FormatDoubleToFixed(const AValue: Double; const AFractionDigits: Integer): string;
+var
+  Denominator, Numerator: TBigInteger;
+  Digits, Sign: string;
+  Value: Double;
+begin
+  Value := AValue;
+  if Value < 0 then
+  begin
+    Sign := '-';
+    Value := -Value;
+  end
+  else
+    Sign := '';
+
+  PositiveDoubleToBinaryRational(Value, Numerator, Denominator);
+  Digits := RoundedScaledIntegerDigits(Numerator, Denominator, AFractionDigits);
+  if AFractionDigits = 0 then
+    Exit(Sign + Digits);
+
+  Digits := PadLeftWithZeros(Digits, AFractionDigits + 1);
+  Result := Sign + Copy(Digits, 1, Length(Digits) - AFractionDigits) + '.' +
+    Copy(Digits, Length(Digits) - AFractionDigits + 1, AFractionDigits);
+end;
+
+function FormatDoubleToExponential(const AValue: Double;
+  const AFractionDigits: Integer): string;
+var
+  DecimalExponent: Integer;
+  Denominator, Numerator: TBigInteger;
+  Digits, ExponentSign, Mantissa, Sign: string;
+  Precision: Integer;
+  Value: Double;
+begin
+  Value := AValue;
+  if Value < 0 then
+  begin
+    Sign := '-';
+    Value := -Value;
+  end
+  else
+    Sign := '';
+
+  Precision := AFractionDigits + 1;
+  if Value = 0 then
+  begin
+    if AFractionDigits = 0 then
+      Mantissa := '0'
+    else
+      Mantissa := '0.' + StringOfChar('0', AFractionDigits);
+    Exit(Sign + Mantissa + 'e+0');
+  end;
+
+  PositiveDoubleToBinaryRational(Value, Numerator, Denominator);
+  DecimalExponent := DecimalExponentForBinaryRational(Numerator,
+    Denominator, Value);
+  Digits := RoundedPrecisionDigits(Numerator, Denominator, Precision,
+    DecimalExponent);
+
+  if AFractionDigits = 0 then
+    Mantissa := Digits[1]
+  else
+    Mantissa := Digits[1] + '.' + Copy(Digits, 2, AFractionDigits);
+
+  if DecimalExponent >= 0 then
+    ExponentSign := '+'
+  else
+    ExponentSign := '';
+  Result := Sign + Mantissa + 'e' + ExponentSign + IntToStr(DecimalExponent);
+end;
+
 function GetSharedNumberPrototype: TGocciaObjectValue; inline;
 begin
   if Assigned(CurrentRealm) then
@@ -272,7 +357,8 @@ begin
   FPrimitive := APrimitive;
   InitializePrototype;
   SharedPrototype := GetSharedNumberPrototype;
-  if not Assigned(AClass) and Assigned(SharedPrototype) then
+  if not Assigned(AClass) and Assigned(SharedPrototype) and
+     (SharedPrototype <> TGocciaObjectValue(Self)) then
     FPrototype := SharedPrototype;
 end;
 
@@ -286,19 +372,6 @@ begin
   Result := GetPropertyWithContext(AName, Self);
 end;
 
-function TGocciaNumberObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
-var
-  SharedPrototype: TGocciaObjectValue;
-begin
-  Result := inherited GetPropertyWithContext(AName, AThisContext);
-  if not (Result is TGocciaUndefinedLiteralValue) then
-    Exit;
-
-  SharedPrototype := GetSharedNumberPrototype;
-  if Assigned(SharedPrototype) then
-    Result := SharedPrototype.GetPropertyWithContext(AName, AThisContext);
-end;
-
 procedure TGocciaNumberObjectValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
@@ -308,7 +381,8 @@ begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetSharedNumberPrototype) then Exit;
 
-  SharedPrototype := TGocciaObjectValue.Create;
+  SharedPrototype := Self;
+  SharedPrototype.Prototype := TGocciaObjectValue.SharedObjectPrototype;
   CurrentRealm.SetSlot(GNumberPrototypeSlot, SharedPrototype);
   // The native methods below bind to this instance (Self); keep it alive for the
   // realm's lifetime in its own slot so the realm unpins it on Destroy. #892
@@ -332,6 +406,15 @@ begin
   if not Assigned(GetSharedNumberPrototype) then
     TGocciaNumberObjectValue.Create(TGocciaNumberLiteralValue.ZeroValue);
   Result := GetSharedNumberPrototype;
+end;
+
+class function TGocciaNumberObjectValue.GetSharedPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  if Assigned(ARealm) then
+    Result := TGocciaObjectValue(ARealm.GetSlot(GNumberPrototypeSlot))
+  else
+    Result := nil;
 end;
 
 procedure TGocciaNumberObjectValue.MarkReferences;
@@ -369,8 +452,16 @@ begin
     Exit;
   end;
 
-  // Step 6: Format x with exactly f digits after the decimal point
-  Result := TGocciaStringLiteralValue.Create(FormatFloat('0.' + StringOfChar('0', Digits), Prim.Value, InvariantFormatSettings));
+  // Step 6: If x ≥ 10^21, return ! ToString(x)
+  if Abs(Prim.Value) >= 1.0E21 then
+  begin
+    Result := Prim.ToStringLiteral;
+    Exit;
+  end;
+
+  // Steps 7-11: Format x with exactly f digits after the decimal point.
+  Result := TGocciaStringLiteralValue.Create(FormatDoubleToFixed(Prim.Value,
+    Digits));
 end;
 
 // Convert a finite non-negative integer-valued Double to its base-ARadix
@@ -462,13 +553,6 @@ begin
   // Step 1: Let x be ? thisNumberValue(this value)
   Prim := ExtractPrimitive(AThisValue);
 
-  // Special values always return their default string regardless of radix
-  if Prim.IsNaN or Prim.IsInfinity or Prim.IsNegativeInfinity or Prim.IsNegativeZero then
-  begin
-    Result := Prim.ToStringLiteral;
-    Exit;
-  end;
-
   // Step 2: If radix is undefined, let radixMV be 10
   if (AArgs.Length > 0) and not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
   begin
@@ -477,6 +561,12 @@ begin
     if (Radix < 2) or (Radix > 36) then
       ThrowRangeError(SErrorBigIntInvalidRadix, SSuggestBigIntInvalidRadix);
     if Radix = 10 then
+    begin
+      Result := Prim.ToStringLiteral;
+      Exit;
+    end;
+    if Prim.IsNaN or Prim.IsInfinity or Prim.IsNegativeInfinity or
+       Prim.IsNegativeZero then
     begin
       Result := Prim.ToStringLiteral;
       Exit;
@@ -568,6 +658,15 @@ begin
   // Step 1: Let x be ? thisNumberValue(this value)
   Prim := ExtractPrimitive(AThisValue);
 
+  // Step 2: Let f be ? ToIntegerOrInfinity(fractionDigits)
+  HasExplicitDigits := (AArgs.Length > 0) and not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue);
+  if HasExplicitDigits then
+  begin
+    FractionDigits := ToIntegerFromArgs(AArgs, 0);
+  end
+  else
+    FractionDigits := -1;
+
   // Steps 3-4: If x is not finite, return Number::toString(x, 10)
   if Prim.IsNaN or Prim.IsInfinity or Prim.IsNegativeInfinity then
   begin
@@ -575,17 +674,9 @@ begin
     Exit;
   end;
 
-  // Step 2: Let f be ? ToIntegerOrInfinity(fractionDigits)
-  HasExplicitDigits := (AArgs.Length > 0) and not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue);
-  if HasExplicitDigits then
-  begin
-    FractionDigits := ToIntegerFromArgs(AArgs, 0);
-    // Step 5: If f < 0 or f > 100, throw a RangeError exception
-    if (FractionDigits < 0) or (FractionDigits > 100) then
-      ThrowRangeError(SErrorToExponentialArgRange, SSuggestNumberRange);
-  end
-  else
-    FractionDigits := -1;
+  // Step 5: If f < 0 or f > 100, throw a RangeError exception
+  if HasExplicitDigits and ((FractionDigits < 0) or (FractionDigits > 100)) then
+    ThrowRangeError(SErrorToExponentialArgRange, SSuggestNumberRange);
 
   // Step 6: If x < 0, let s be "-" and let x be -x; otherwise let s be ""
   NumVal := Prim.Value;
@@ -609,27 +700,20 @@ begin
     Exit;
   end;
 
-  // Step 8: Compute exponent e such that 10^e ≤ x < 10^(e+1)
-  Exp := Trunc(Math.Floor(Math.Log10(NumVal)));
-  // Step 9: Compute mantissa m = x / 10^e
-  Mantissa := NumVal / Math.Power(10, Exp);
-
-  // Step 10: Format mantissa with f fraction digits
+  // Step 10: Format mantissa with f fraction digits.
   if FractionDigits < 0 then
   begin
+    Exp := Trunc(Math.Floor(Math.Log10(NumVal)));
+    Mantissa := NumVal / Math.Power(10, Exp);
     MantissaStr := FloatToStrF(Mantissa, ffGeneral, 15, 0, InvariantFormatSettings);
     if Pos('.', MantissaStr) = 0 then
       MantissaStr := MantissaStr;
   end
   else
   begin
-    MantissaStr := FormatFloat('0.' + StringOfChar('0', FractionDigits), Mantissa, InvariantFormatSettings);
-    if Pos('.', MantissaStr) > 2 then
-    begin
-      Mantissa := Mantissa / 10;
-      Inc(Exp);
-      MantissaStr := FormatFloat('0.' + StringOfChar('0', FractionDigits), Mantissa, InvariantFormatSettings);
-    end;
+    Result := TGocciaStringLiteralValue.Create(FormatDoubleToExponential(
+      Prim.Value, FractionDigits));
+    Exit;
   end;
 
   // Step 11: Build the exponent sign and return s + m + "e" + expSign + e
