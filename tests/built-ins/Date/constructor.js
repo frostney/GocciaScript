@@ -33,6 +33,15 @@ describe("Date constructor", () => {
     expect(d.getUTCDate()).toBe(1);
   });
 
+  test("Date instances allow own Symbol.toStringTag overrides", () => {
+    const d = new Date(0);
+    expect(Object.prototype.toString.call(d)).toBe("[object Date]");
+
+    d[Symbol.toStringTag] = "test262";
+    expect(Object.hasOwn(d, Symbol.toStringTag)).toBe(true);
+    expect(Object.prototype.toString.call(d)).toBe("[object test262]");
+  });
+
   test("Reflect.construct initializes Date internal slot with custom newTarget", () => {
     class NewTarget {}
 
