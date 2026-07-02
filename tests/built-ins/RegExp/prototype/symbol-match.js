@@ -62,3 +62,28 @@ test("Symbol.match uses ToLength when advancing lastIndex after empty global mat
     "set-lastIndex:1",
   ]);
 });
+
+test("Symbol.match does not coerce lastIndex after non-empty custom exec matches", () => {
+  const regex = /./g;
+  let nextMatch = "a non-empty string";
+
+  regex.exec = () => {
+    const thisMatch = nextMatch;
+    if (thisMatch === null) {
+      return null;
+    }
+    nextMatch = null;
+    return {
+      get 0() {
+        regex.lastIndex = {
+          valueOf() {
+            throw new Error("lastIndex should not be coerced");
+          },
+        };
+        return thisMatch;
+      },
+    };
+  };
+
+  expect(regex[Symbol.match]("")).toEqual(["a non-empty string"]);
+});

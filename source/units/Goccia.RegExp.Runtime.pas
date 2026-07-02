@@ -206,6 +206,62 @@ begin
   Result := Trunc(Index.Value);
 end;
 
+function TryRunRegExpCustomExec(const AValue: TGocciaValue;
+  const AInput: string; out AMatchArray: TGocciaValue; out AMatchIndex,
+  AMatchEnd, ANextIndex: Integer; out AHandled: Boolean): Boolean;
+var
+  ExecArgs: TGocciaArgumentsCollection;
+  ExecMethod: TGocciaValue;
+  ExecResult: TGocciaValue;
+  Obj: TGocciaObjectValue;
+begin
+  Obj := TGocciaObjectValue(AValue);
+  AHandled := False;
+
+  ExecMethod := Obj.GetProperty(PROP_EXEC);
+  if Assigned(ExecMethod) and
+     (not (ExecMethod is TGocciaUndefinedLiteralValue)) and
+     (not IsDefaultRegExpExecMethod(ExecMethod)) then
+  begin
+    if not ExecMethod.IsCallable then
+    begin
+      if not IsRegExpInstance(AValue) then
+        ThrowTypeError(SErrorRegExpExecNotCallable);
+      Exit(False);
+    end;
+
+    AHandled := True;
+    ExecArgs := TGocciaArgumentsCollection.Create([
+      TGocciaStringLiteralValue.Create(AInput)
+    ]);
+    try
+      ExecResult := InvokeCallable(ExecMethod, ExecArgs, Obj);
+    finally
+      ExecArgs.Free;
+    end;
+
+    if ExecResult is TGocciaNullLiteralValue then
+    begin
+      AMatchArray := nil;
+      AMatchIndex := -1;
+      AMatchEnd := -1;
+      ANextIndex := -1;
+      Exit(False);
+    end;
+
+    if not (ExecResult is TGocciaObjectValue) then
+      ThrowTypeError(SErrorRegExpExecReturnType);
+
+    AMatchArray := ExecResult;
+    AMatchIndex := 0;
+    AMatchEnd := 0;
+    ANextIndex := 0;
+    Exit(True);
+  end;
+
+  Result := False;
+end;
+
 function HasUnicodeRegExpFlag(const AFlags: string): Boolean;
 begin
   Result := HasRegExpFlag(AFlags, 'u') or HasRegExpFlag(AFlags, 'v');
@@ -480,6 +536,7 @@ var
   StartIndex, MatchIndex, MatchEnd, NextIndex: Integer;
   InputLength: Integer;
   LastIndex: Double;
+  HandledCustomExec: Boolean;
 begin
   Obj := TGocciaObjectValue(AValue);
   if not IsRegExpInstance(AValue) then
@@ -488,6 +545,11 @@ begin
       MatchIndex, MatchEnd, NextIndex);
     Exit;
   end;
+
+  Result := TryRunRegExpCustomExec(AValue, AInput, AMatchArray, MatchIndex,
+    MatchEnd, NextIndex, HandledCustomExec);
+  if HandledCustomExec then
+    Exit;
 
   Flags := GetRegExpInternalFlags(AValue);
   LastIndex := GetRegExpLastIndexLength(AValue);
@@ -551,9 +613,7 @@ function MatchRegExpObject(const AValue: TGocciaValue; const AInput: string;
   ANextIndex: Integer; const AUseCustomExec: Boolean): Boolean;
 var
   Obj: TGocciaObjectValue;
-  ExecMethod: TGocciaValue;
-  ExecArgs: TGocciaArgumentsCollection;
-  ExecResult: TGocciaValue;
+  HandledCustomExec: Boolean;
   MatchResult: TGocciaRegExpMatchResult;
   ProgramData: TGocciaRegExpProgramData;
   ShouldUpdate: Boolean;
@@ -561,46 +621,10 @@ begin
   Obj := TGocciaObjectValue(AValue);
   if AUseCustomExec then
   begin
-    ExecMethod := Obj.GetProperty(PROP_EXEC);
-    if Assigned(ExecMethod) and
-       (not (ExecMethod is TGocciaUndefinedLiteralValue)) and
-       (not IsDefaultRegExpExecMethod(ExecMethod)) then
-    begin
-      if not ExecMethod.IsCallable then
-      begin
-        if not IsRegExpInstance(AValue) then
-          ThrowTypeError(SErrorRegExpExecNotCallable);
-      end
-      else
-      begin
-        ExecArgs := TGocciaArgumentsCollection.Create([
-          TGocciaStringLiteralValue.Create(AInput)
-        ]);
-        try
-          ExecResult := InvokeCallable(ExecMethod, ExecArgs, Obj);
-        finally
-          ExecArgs.Free;
-        end;
-
-        if ExecResult is TGocciaNullLiteralValue then
-        begin
-          AMatchArray := nil;
-          AMatchIndex := -1;
-          AMatchEnd := -1;
-          ANextIndex := -1;
-          Exit(False);
-        end;
-
-        if not (ExecResult is TGocciaObjectValue) then
-          ThrowTypeError(SErrorRegExpExecReturnType);
-
-        AMatchArray := ExecResult;
-        AMatchIndex := 0;
-        AMatchEnd := 0;
-        ANextIndex := 0;
-        Exit(True);
-      end;
-    end;
+    Result := TryRunRegExpCustomExec(AValue, AInput, AMatchArray,
+      AMatchIndex, AMatchEnd, ANextIndex, HandledCustomExec);
+    if HandledCustomExec then
+      Exit;
   end;
 
   if not IsRegExpInstance(AValue) then
