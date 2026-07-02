@@ -936,7 +936,7 @@ begin
     Exit(False);
 
   CodePoint := StrToInt('$' + HexStr);
-  ASB.AppendChar(Chr(CodePoint));
+  ASB.Append(TextSemantics.CodePointToUTF8(CodePoint));
   Result := True;
 end;
 

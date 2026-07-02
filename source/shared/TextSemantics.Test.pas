@@ -70,6 +70,7 @@ const
   UPPER_TEXT = #$C3#$89 + #$C3#$96 + #$CE#$A3;
   LOWER_TEXT = #$C3#$A9 + #$C3#$B6 + #$CF#$82;
   NONCHARACTER = #$EF#$B7#$90;
+  UTF8_HIGH_SURROGATE = #$ED#$A0#$80;
 begin
   Expect<string>(UnicodeLowerCaseUTF8(UPPER_TEXT)).ToBe(LOWER_TEXT);
   Expect<string>(UnicodeUpperCaseUTF8(LOWER_TEXT)).ToBe(UPPER_TEXT);
@@ -80,6 +81,10 @@ begin
     'A' + NONCHARACTER + 'SS');
   Expect<string>(UnicodeLowerCaseUTF8('A' + NONCHARACTER + #$C4#$B0)).ToBe(
     'a' + NONCHARACTER + 'i' + #$CC#$87);
+  Expect<string>(UnicodeLowerCaseUTF8('A' + UTF8_HIGH_SURROGATE)).ToBe(
+    'a' + UTF8_HIGH_SURROGATE);
+  Expect<string>(UnicodeUpperCaseUTF8('a' + UTF8_HIGH_SURROGATE)).ToBe(
+    'A' + UTF8_HIGH_SURROGATE);
 end;
 
 procedure TTextSemanticsTests.TestUTF8WellFormedChecks;

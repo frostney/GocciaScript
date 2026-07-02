@@ -89,6 +89,20 @@ describe("String constructor", () => {
     expect(s.valueOf()).toBe("wrapped");
   });
 
+  test("new String(obj) coerces the argument once", () => {
+    let calls = 0;
+    const obj = {
+      toString() {
+        calls += 1;
+        return "wrapped once";
+      },
+    };
+
+    const s = new String(obj);
+    expect(s.valueOf()).toBe("wrapped once");
+    expect(calls).toBe(1);
+  });
+
   test("String(stringWrapper) unwraps via toString()", () => {
     const wrapped = new String("hi");
     expect(String(wrapped)).toBe("hi");

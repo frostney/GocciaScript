@@ -38,3 +38,7 @@ test("template braced unicode escapes accept padded code points", () => {
   expect(`\u{0000000000010FFFF}`).toBe(String.fromCodePoint(0x10ffff));
   expect(`\u{D800}`.charCodeAt(0)).toBe(0xd800);
 });
+
+test("template hex escapes above ASCII are cooked as UTF-8", () => {
+  expect(`\xA9`).toBe(String.fromCharCode(0x00a9));
+});

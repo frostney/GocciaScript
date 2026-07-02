@@ -689,6 +689,9 @@ procedure TGocciaStringObjectValue.InitializeNativeFromArguments(
 var
   Arg: TGocciaValue;
 begin
+  if Assigned(FPrimitive) then
+    Exit;
+
   if AArguments.Length = 0 then
     FPrimitive := TGocciaStringLiteralValue.Create('')
   else

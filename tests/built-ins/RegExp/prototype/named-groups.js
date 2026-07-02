@@ -128,8 +128,13 @@ test("unknown named backreference is legacy literal when no named groups exist",
   expect(re.test("k<nosuchgroup>")).toBe(true);
 });
 
+test("unknown unicode named backreference is legacy literal when no named groups exist", () => {
+  const re = new RegExp("\\k<π>");
+  expect(re.test("k<π>")).toBe(true);
+});
+
 test("invalid named backreference throws when named groups exist", () => {
   expect(() => {
     new RegExp("(?<x>a)\\k<nosuchgroup>");
-  }).toThrow();
+  }).toThrow(SyntaxError);
 });

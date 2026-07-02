@@ -2032,7 +2032,7 @@ begin
     Exit(False);
   Inc(APos, 2);
   CodePoint := StrToInt('$' + HexStr);
-  ASB.AppendChar(Chr(CodePoint));
+  ASB.Append(TextSemantics.CodePointToUTF8(CodePoint));
   Result := True;
 end;
 

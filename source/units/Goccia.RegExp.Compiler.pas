@@ -2182,8 +2182,12 @@ begin
                 'Invalid named backreference: ' + GroupName);
             EmitCharMatch(Ord('k'));
             EmitCharMatch(Ord('<'));
-            for I := 1 to Length(GroupName) do
-              EmitCharMatch(Ord(GroupName[I]));
+            I := 1;
+            while I <= Length(GroupName) do
+            begin
+              CodePoint := ReadRegExpGroupNameLiteralCodePoint(GroupName, I);
+              EmitCharMatch(CodePoint);
+            end;
             EmitCharMatch(Ord('>'));
             Exit;
           end;

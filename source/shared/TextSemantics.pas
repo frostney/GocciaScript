@@ -1020,24 +1020,72 @@ begin
   Result := RetagUTF8Text(Bytes);
 end;
 
+function UnicodeCaseMapFallbackUTF8(const AText: string;
+  const AUpperCase: Boolean): string;
+var
+  Buffer: TStringBuffer;
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  Index: Integer;
+  Segment: string;
+  SegmentStart: Integer;
+
+  procedure AppendMappedSegment(const AEndIndex: Integer);
+  begin
+    if AEndIndex <= SegmentStart then
+      Exit;
+    Segment := Copy(AText, SegmentStart, AEndIndex - SegmentStart);
+    if AUpperCase then
+      Buffer.Append(UnicodeStringToUTF8Text(
+        UnicodeUpperCase(UTF8TextToUnicodeString(Segment))))
+    else
+      Buffer.Append(UnicodeStringToUTF8Text(
+        UnicodeLowerCase(UTF8TextToUnicodeString(Segment))));
+  end;
+
+begin
+  Buffer := TStringBuffer.Create(Length(AText));
+  Index := 1;
+  SegmentStart := 1;
+  while Index <= Length(AText) do
+  begin
+    if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
+      ByteLength) then
+    begin
+      if IsUnicodeSurrogateCodePoint(CodePoint) then
+      begin
+        AppendMappedSegment(Index);
+        Buffer.Append(Copy(AText, Index, ByteLength));
+        Inc(Index, ByteLength);
+        SegmentStart := Index;
+      end
+      else
+        Inc(Index, ByteLength);
+    end
+    else
+    begin
+      AppendMappedSegment(Index);
+      Buffer.AppendChar(AText[Index]);
+      Inc(Index);
+      SegmentStart := Index;
+    end;
+  end;
+  AppendMappedSegment(Index);
+  Result := RetagUTF8Text(Buffer.ToString);
+end;
+
 function UnicodeLowerCaseUTF8(const AText: string): string;
 begin
-  if not IsWellFormedUTF16(AText) then
-    Exit(AText);
-  if TryICULowerCase('', AText, Result) then
+  if IsWellFormedUTF16(AText) and TryICULowerCase('', AText, Result) then
     Exit;
-  Result := UnicodeStringToUTF8Text(
-    UnicodeLowerCase(UTF8TextToUnicodeString(AText)));
+  Result := UnicodeCaseMapFallbackUTF8(AText, False);
 end;
 
 function UnicodeUpperCaseUTF8(const AText: string): string;
 begin
-  if not IsWellFormedUTF16(AText) then
-    Exit(AText);
-  if TryICUUpperCase('', AText, Result) then
+  if IsWellFormedUTF16(AText) and TryICUUpperCase('', AText, Result) then
     Exit;
-  Result := UnicodeStringToUTF8Text(
-    UnicodeUpperCase(UTF8TextToUnicodeString(AText)));
+  Result := UnicodeCaseMapFallbackUTF8(AText, True);
 end;
 
 function AdvanceUTF16StringIndex(const AText: string; const AIndex: Integer;
