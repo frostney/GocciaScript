@@ -28,6 +28,7 @@ type
   end;
 
 function NormalizeRegExpSource(const APattern: string): string;
+function EscapeRegExpPattern(const APattern: string): string;
 function HasRegExpFlag(const AFlags: string; const AFlag: Char): Boolean;
 procedure ValidateRegExpFlags(const AFlags: string);
 procedure ValidateRegExpPattern(const APattern, AFlags: string);
@@ -61,6 +62,47 @@ begin
     Result := EMPTY_REGEX
   else
     Result := APattern;
+end;
+
+// ES2026 §22.2.6.13.1 EscapeRegExpPattern ( pattern, flags )
+function EscapeRegExpPattern(const APattern: string): string;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  I: Integer;
+begin
+  Result := '';
+  I := 1;
+  while I <= Length(APattern) do
+  begin
+    if TryReadUTF8CodePointAllowSurrogates(APattern, I, CodePoint,
+       ByteLength) then
+    begin
+      case CodePoint of
+        Ord('/'):
+          Result := Result + '\/';
+        $000A:
+          Result := Result + '\n';
+        $000D:
+          Result := Result + '\r';
+        $2028:
+          Result := Result + '\u2028';
+        $2029:
+          Result := Result + '\u2029';
+      else
+        Result := Result + Copy(APattern, I, ByteLength);
+      end;
+      Inc(I, ByteLength);
+    end
+    else
+    begin
+      if APattern[I] = '/' then
+        Result := Result + '\/'
+      else
+        Result := Result + APattern[I];
+      Inc(I);
+    end;
+  end;
 end;
 
 function HasRegExpFlag(const AFlags: string; const AFlag: Char): Boolean;
@@ -117,7 +159,7 @@ end;
 
 function RegExpToString(const APattern, AFlags: string): string;
 begin
-  Result := '/' + StringReplace(APattern, '/', '\/', [rfReplaceAll]) + '/' +
+  Result := '/' + EscapeRegExpPattern(APattern) + '/' +
     CanonicalizeRegExpFlags(AFlags);
 end;
 

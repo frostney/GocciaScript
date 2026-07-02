@@ -24,7 +24,12 @@ type
     RX_LOOKAHEAD     = 12,
     RX_LOOKBEHIND    = 13,
     RX_MATCH         = 14,
-    RX_FAIL          = 15
+    RX_FAIL          = 15,
+    RX_CLEAR_CAPTURES = 16,
+    RX_REPEAT_ENTER  = 17,
+    RX_REPEAT_CHECK  = 18,
+    RX_CAPTURE_UNDEFINED_JUMP = 19,
+    RX_STRING_SET    = 20
   );
 
 const
@@ -36,6 +41,8 @@ const
   LOOK_TARGET_MASK = $7FFFFF;
   WORD_ASSERT_NEGATED_FLAG = $1;
   WORD_ASSERT_ICASE_FLAG = $2;
+  CLEAR_CAPTURE_COUNT_BITS = 12;
+  CLEAR_CAPTURE_COUNT_MASK = (1 shl CLEAR_CAPTURE_COUNT_BITS) - 1;
 
 function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;
 
@@ -59,10 +66,6 @@ type
     DotAll: Boolean;
   end;
 
-  TRegExpStringSequence = record
-    CodePoints: array of Cardinal;
-  end;
-
   TRegExpTermCode = record
     Code: array of UInt32;
     Length: Integer;
@@ -83,6 +86,7 @@ type
     FCode: array of UInt32;
     FCodeLen: Integer;
     FCharClasses: array of TRegExpCharClass;
+    FStringSets: array of TRegExpStringSet;
     FCaptureCount: Integer;
     FNamedGroups: TGocciaRegExpNamedGroups;
     FAltStack: array of Integer;
@@ -90,6 +94,7 @@ type
     FModifier: TModifierState;
     FUnicode: Boolean;
     FUnicodeSets: Boolean;
+    FPreScanCaptureCount: Integer;
     FPendingCodeUnit: Integer;
     FBackward: Boolean;
     function Peek: Char;
@@ -104,6 +109,7 @@ type
     function EncodeOp(AOp: TRegExpOpCode): UInt32;
     function EncodeOpBx(AOp: TRegExpOpCode; ABx: Integer): UInt32;
     function AddCharClass(const ARanges: array of TRegExpCharRange): Integer;
+    function AddStringSet(const AContents: TRegExpClassContents): Integer;
     procedure EmitRawCharClassRanges(const ARanges: array of TRegExpCharRange;
       ANegated: Boolean);
     procedure CompilePattern;
@@ -308,6 +314,7 @@ begin
   FCodeLen := 0;
   SetLength(FCode, 256);
   SetLength(FCharClasses, 0);
+  SetLength(FStringSets, 0);
   FCaptureCount := 0;
   SetLength(FNamedGroups, 0);
   SetLength(FAltStack, 64);
@@ -318,6 +325,7 @@ begin
   FModifier.DotAll := HasRegExpFlag(AFlags, 's');
   FUnicodeSets := HasRegExpFlag(AFlags, 'v');
   FUnicode := HasRegExpFlag(AFlags, 'u') or FUnicodeSets;
+  FPreScanCaptureCount := 0;
   FPendingCodeUnit := -1;
   FBackward := False;
 end;
@@ -446,6 +454,30 @@ begin
     SetLength(FCharClasses[Result].PageFirstRange, 0);
 end;
 
+function TRegExpCompiler.AddStringSet(
+  const AContents: TRegExpClassContents): Integer;
+var
+  I, StringIndex: Integer;
+  Ranges: TRegExpCharRangeArray;
+begin
+  Result := Length(FStringSets);
+  SetLength(FStringSets, Result + 1);
+
+  SetLength(Ranges, AContents.RangeCount);
+  for I := 0 to AContents.RangeCount - 1 do
+    Ranges[I] := AContents.Ranges[I];
+  FStringSets[Result].CharClassIndex := AddCharClass(Ranges);
+
+  SetLength(FStringSets[Result].Strings, AContents.StringCount);
+  StringIndex := 0;
+  for I := AContents.StringCount - 1 downto 0 do
+    if Length(AContents.Strings[I].CodePoints) > 1 then
+    begin
+      FStringSets[Result].Strings[StringIndex] := AContents.Strings[I];
+      Inc(StringIndex);
+    end;
+  SetLength(FStringSets[Result].Strings, StringIndex);
+end;
 
 procedure TRegExpCompiler.EmitCharMatch(ACodePoint: Cardinal);
 var
@@ -540,7 +572,7 @@ procedure TRegExpCompiler.GetUnicodePropertyRanges(const APropertyName: string;
   var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
 var
   EqPos, I: Integer;
-  PropPart, ValuePart: string;
+  LookupPropPart, LookupValuePart, PropPart, ValuePart: string;
   ICURanges: TUnicodePropertyRangeArray;
 
   procedure CopyICURanges;
@@ -551,6 +583,70 @@ var
       raise EConvertError.Create('Unicode property range count exceeds buffer capacity');
     for J := 0 to High(ICURanges) do
       AddRange(ARanges, ARangeCount, ICURanges[J].Lo, ICURanges[J].Hi);
+  end;
+
+  procedure SubtractUnicodeRanges(var ABase: TUnicodePropertyRangeArray;
+    const ARemove: TUnicodePropertyRangeArray);
+  var
+    BaseRange, RemoveRange: TUnicodePropertyRange;
+    Cursor: Cardinal;
+    OutRanges: TUnicodePropertyRangeArray;
+    OutCount, RemoveIndex, ScanIndex: Integer;
+  begin
+    SetLength(OutRanges, Length(ABase) + Length(ARemove));
+    OutCount := 0;
+    RemoveIndex := 0;
+
+    for BaseRange in ABase do
+    begin
+      Cursor := BaseRange.Lo;
+      while (RemoveIndex <= High(ARemove)) and
+            (ARemove[RemoveIndex].Hi < Cursor) do
+        Inc(RemoveIndex);
+
+      ScanIndex := RemoveIndex;
+      while (ScanIndex <= High(ARemove)) and
+            (ARemove[ScanIndex].Lo <= BaseRange.Hi) do
+      begin
+        RemoveRange := ARemove[ScanIndex];
+        if RemoveRange.Lo > Cursor then
+        begin
+          OutRanges[OutCount].Lo := Cursor;
+          OutRanges[OutCount].Hi := RemoveRange.Lo - 1;
+          Inc(OutCount);
+        end;
+        if RemoveRange.Hi = High(Cardinal) then
+        begin
+          Cursor := High(Cardinal);
+          Break;
+        end;
+        Cursor := Max(Cursor, RemoveRange.Hi + 1);
+        if Cursor > BaseRange.Hi then
+          Break;
+        Inc(ScanIndex);
+      end;
+
+      if Cursor <= BaseRange.Hi then
+      begin
+        OutRanges[OutCount].Lo := Cursor;
+        OutRanges[OutCount].Hi := BaseRange.Hi;
+        Inc(OutCount);
+      end;
+    end;
+
+    SetLength(OutRanges, OutCount);
+    ABase := OutRanges;
+  end;
+
+  procedure ExcludeUnknownFromCommonScriptExtensions;
+  var
+    UnknownRanges: TUnicodePropertyRangeArray;
+  begin
+    if (LookupPropPart = 'scx') and
+       ((LookupValuePart = 'Zyyy') or (ValuePart = 'Common')) and
+       (TryGetUnicodePropertyRanges('scx/Zzzz', UnknownRanges) or
+        TryGetUnicodePropertyRanges('scx/Unknown', UnknownRanges)) then
+      SubtractUnicodeRanges(ICURanges, UnknownRanges);
   end;
 
 begin
@@ -566,16 +662,39 @@ begin
     ValuePart := '';
   end;
 
-  if TryICUGetUnicodePropertyRanges(PropPart, ValuePart, ICURanges) then
-  begin
-    CopyICURanges;
-    Exit;
-  end;
+  if (PropPart = 'Script_Extensions') or (PropPart = 'scx') then
+    LookupPropPart := 'scx'
+  else if (PropPart = 'Script') or (PropPart = 'sc') then
+    LookupPropPart := 'sc'
+  else if (PropPart = 'General_Category') or (PropPart = 'gc') then
+    LookupPropPart := 'gc'
+  else
+    LookupPropPart := PropPart;
+
+  if ((LookupPropPart = 'sc') or (LookupPropPart = 'scx')) and
+     (ValuePart = 'Common') then
+    LookupValuePart := 'Zyyy'
+  else if ((LookupPropPart = 'sc') or (LookupPropPart = 'scx')) and
+          (ValuePart = 'Unknown') then
+    LookupValuePart := 'Zzzz'
+  else
+    LookupValuePart := ValuePart;
 
   if EqPos > 0 then
   begin
-    if TryGetUnicodePropertyRanges(PropPart + '/' + ValuePart, ICURanges) then
+    if TryGetUnicodePropertyRanges(LookupPropPart + '/' + LookupValuePart,
+       ICURanges) then
     begin
+      ExcludeUnknownFromCommonScriptExtensions;
+      CopyICURanges;
+      Exit;
+    end;
+
+    if (LookupValuePart <> ValuePart) and
+       TryGetUnicodePropertyRanges(LookupPropPart + '/' + ValuePart,
+       ICURanges) then
+    begin
+      ExcludeUnknownFromCommonScriptExtensions;
       CopyICURanges;
       Exit;
     end;
@@ -593,6 +712,13 @@ begin
       CopyICURanges;
       Exit;
     end;
+  end;
+
+  if TryICUGetUnicodePropertyRanges(PropPart, ValuePart, ICURanges) then
+  begin
+    ExcludeUnknownFromCommonScriptExtensions;
+    CopyICURanges;
+    Exit;
   end;
 
   raise EConvertError.Create('Invalid Unicode property name: ' + APropertyName);
@@ -757,6 +883,9 @@ begin
     Bx := Integer(Instr shr 8);
     case Op of
       RX_SAVE,
+      RX_CLEAR_CAPTURES,
+      RX_REPEAT_ENTER,
+      RX_REPEAT_CHECK,
       RX_ASSERT_START,
       RX_ASSERT_END,
       RX_ASSERT_WORD:
@@ -1062,12 +1191,30 @@ begin
     (APropertyName = 'RGI_Emoji_Flag_Sequence') or
     (APropertyName = 'RGI_Emoji_Modifier_Sequence') or
     (APropertyName = 'RGI_Emoji_Tag_Sequence') or
-    (APropertyName = 'RGI_Emoji_ZWJ_Sequence');
+    (APropertyName = 'RGI_Emoji_ZWJ_Sequence') or
+    (APropertyName = 'RGI_Emoji');
 end;
 
 procedure TRegExpCompiler.GetStringPropertySequences(
   const APropertyName: string; var AContents: TRegExpClassContents);
+var
+  I: Integer;
+  Sequences: TUnicodeStringSequenceArray;
 begin
+  if TryGetUnicodeStringPropertySequences('strings/' + APropertyName,
+     Sequences) then
+  begin
+    for I := 0 to High(Sequences) do
+    begin
+      if Length(Sequences[I].CodePoints) = 1 then
+        AddClassRange(AContents, Sequences[I].CodePoints[0],
+          Sequences[I].CodePoints[0])
+      else if Length(Sequences[I].CodePoints) > 1 then
+        AddClassString(AContents, Sequences[I].CodePoints);
+    end;
+    Exit;
+  end;
+
   if APropertyName = 'Basic_Emoji' then
   begin
     AddClassRange(AContents, $231A, $231B);
@@ -1643,6 +1790,13 @@ var
   JumpHoles: array of Integer;
   JumpCount: Integer;
 begin
+  if (AContents.StringCount > 128) and (not ANegated) and
+     (not FBackward) then
+  begin
+    Emit(EncodeOpBx(RX_STRING_SET, AddStringSet(AContents)));
+    Exit;
+  end;
+
   if (AContents.StringCount = 0) or ANegated then
   begin
     EmitCharClassRanges(AContents.Ranges, AContents.RangeCount, ANegated);
@@ -1816,20 +1970,36 @@ end;
 function TRegExpCompiler.ParseUnicodeEscape: Cardinal;
 var
   HighSurrogate: Cardinal;
+  HasDigit: Boolean;
 begin
   if Match('{') then
   begin
     Result := 0;
+    HasDigit := False;
     while not AtEnd and (Peek <> '}') do
     begin
       case Peek of
-        '0'..'9': Result := Result * 16 + Cardinal(Ord(Advance) - Ord('0'));
-        'a'..'f': Result := Result * 16 + Cardinal(Ord(Advance) - Ord('a') + 10);
-        'A'..'F': Result := Result * 16 + Cardinal(Ord(Advance) - Ord('A') + 10);
+        '0'..'9':
+          begin
+            HasDigit := True;
+            Result := Result * 16 + Cardinal(Ord(Advance) - Ord('0'));
+          end;
+        'a'..'f':
+          begin
+            HasDigit := True;
+            Result := Result * 16 + Cardinal(Ord(Advance) - Ord('a') + 10);
+          end;
+        'A'..'F':
+          begin
+            HasDigit := True;
+            Result := Result * 16 + Cardinal(Ord(Advance) - Ord('A') + 10);
+          end;
       else
         raise EConvertError.Create('Invalid Unicode escape');
       end;
     end;
+    if not HasDigit then
+      raise EConvertError.Create('Invalid Unicode escape');
     if not Match('}') then
       raise EConvertError.Create('Unterminated Unicode escape');
     if Result > $10FFFF then
@@ -1882,7 +2052,7 @@ procedure TRegExpCompiler.EmitDuplicateNamedBackref(const AName: string;
 var
   Indices: array of Integer;
   Count, I: Integer;
-  SplitHole: Integer;
+  UndefinedJumpHole: Integer;
   JumpHoles: array of Integer;
   JumpCount: Integer;
 begin
@@ -1904,16 +2074,15 @@ begin
   SetLength(JumpHoles, Count + 1);
   for I := 0 to Count - 1 do
   begin
-    SplitHole := CurrentPC;
-    Emit(EncodeOpBx(RX_SPLIT, 0));
-    Emit(EncodeOpBx(RX_BACKREF, Indices[I] or BACKREF_STRICT_FLAG or
-      ABackrefFlags));
+    Emit(EncodeOpBx(RX_CAPTURE_UNDEFINED_JUMP, Indices[I]));
+    UndefinedJumpHole := CurrentPC;
+    Emit(0);
+    Emit(EncodeOpBx(RX_BACKREF, Indices[I] or ABackrefFlags));
     JumpHoles[JumpCount] := CurrentPC;
     Inc(JumpCount);
     Emit(0);
-    PatchHole(SplitHole, CurrentPC);
+    FCode[UndefinedJumpHole] := EncodeOpBx(RX_JUMP, CurrentPC);
   end;
-  Emit(EncodeOp(RX_FAIL));
   for I := 0 to JumpCount - 1 do
     FCode[JumpHoles[I]] := EncodeOpBx(RX_JUMP, CurrentPC);
 end;
@@ -1926,6 +2095,7 @@ var
   PropertyName: string;
   Negated: Boolean;
   GroupName: string;
+  Contents: TRegExpClassContents;
   BackrefIdx, I, GroupCount, BackrefFlags, WordAssertFlags: Integer;
   CodePoint: Cardinal;
 begin
@@ -1966,8 +2136,21 @@ begin
             PropertyName := PropertyName + Advance;
           if not Match('}') then
             raise EConvertError.Create('Unterminated Unicode property escape');
-          EmitUnicodePropertyClass(PropertyName, Negated);
+          if FUnicodeSets and IsStringProperty(PropertyName) then
+          begin
+            if Negated then
+              raise EConvertError.Create(
+                'Negated \\P{} cannot be used with properties of strings');
+            InitClassContents(Contents);
+            GetStringPropertySequences(PropertyName, Contents);
+            EmitClassContents(Contents, False);
+          end
+          else
+            EmitUnicodePropertyClass(PropertyName, Negated);
         end
+        else if FUnicode then
+          raise EConvertError.Create(
+            'Invalid regular expression: invalid escape in unicode mode')
         else
           EmitCharMatch(Ord(C));
       end;
@@ -1993,6 +2176,9 @@ begin
           else
             EmitDuplicateNamedBackref(GroupName, BackrefFlags);
         end
+        else if FUnicode then
+          raise EConvertError.Create(
+            'Invalid regular expression: invalid escape in unicode mode')
         else
           EmitCharMatch(Ord('k'));
       end;
@@ -2001,6 +2187,9 @@ begin
         BackrefIdx := Ord(C) - Ord('0');
         while not AtEnd and (Peek >= '0') and (Peek <= '9') do
           BackrefIdx := BackrefIdx * 10 + (Ord(Advance) - Ord('0'));
+        if FUnicode and (BackrefIdx > FPreScanCaptureCount) then
+          raise EConvertError.Create(
+            'Invalid regular expression: invalid decimal escape in unicode mode');
         Emit(EncodeOpBx(RX_BACKREF, BackrefIdx or BackrefFlags));
       end;
     'n': EmitCharMatch($0A);
@@ -2010,6 +2199,9 @@ begin
     'f': EmitCharMatch($0C);
     '0':
       begin
+        if FUnicode and not AtEnd and (Peek >= '0') and (Peek <= '9') then
+          raise EConvertError.Create(
+            'Invalid regular expression: invalid decimal escape in unicode mode');
         if not AtEnd and (Peek >= '0') and (Peek <= '9') then
           EmitCharMatch(Ord(C))
         else
@@ -2050,6 +2242,10 @@ var
   C: Char;
   PropertyName: string;
   CodePoint: Cardinal;
+  AllRange: array[0..0] of TRegExpCharRange;
+  PropertyRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
+  ComplementRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
+  PropertyRangeCount, ComplementRangeCount, I: Integer;
 begin
   C := Advance;
   case C of
@@ -2062,6 +2258,9 @@ begin
     'f': AddRange(ARanges, ARangeCount, $0C, $0C);
     '0':
       begin
+        if FUnicode and not AtEnd and (Peek >= '0') and (Peek <= '9') then
+          raise EConvertError.Create(
+            'Invalid regular expression: invalid decimal escape in unicode mode');
         if not AtEnd and (Peek >= '0') and (Peek <= '9') then
           AddRange(ARanges, ARangeCount, Ord(C), Ord(C))
         else
@@ -2092,11 +2291,24 @@ begin
           if not Match('}') then
             raise EConvertError.Create('Unterminated Unicode property escape');
           if C = 'P' then
-            raise EConvertError.Create(
-              'Negated Unicode property escape \\P{...} is not supported inside character classes')
+          begin
+            PropertyRangeCount := 0;
+            GetUnicodePropertyRanges(PropertyName, PropertyRanges,
+              PropertyRangeCount);
+            AllRange[0].Lo := 0;
+            AllRange[0].Hi := $10FFFF;
+            SubtractRanges(AllRange, 1, PropertyRanges, PropertyRangeCount,
+              ComplementRanges, ComplementRangeCount);
+            for I := 0 to ComplementRangeCount - 1 do
+              AddRange(ARanges, ARangeCount, ComplementRanges[I].Lo,
+                ComplementRanges[I].Hi);
+          end
           else
             GetUnicodePropertyRanges(PropertyName, ARanges, ARangeCount);
         end
+        else if FUnicode then
+          raise EConvertError.Create(
+            'Invalid regular expression: invalid escape in unicode mode')
         else
           AddRange(ARanges, ARangeCount, Ord(C), Ord(C));
       end;
@@ -2132,6 +2344,7 @@ var
   C: Char;
   Lo, Hi: Cardinal;
   SavePos: Integer;
+  IsClassEscape: Boolean;
 begin
   Negated := Match('^');
   RangeCount := 0;
@@ -2140,7 +2353,49 @@ begin
     if Peek = '\' then
     begin
       Inc(FPos);
+      IsClassEscape := FUnicode and CharInSet(Peek,
+        ['d', 'D', 'w', 'W', 's', 'S', 'p', 'P']);
+      SavePos := RangeCount;
       CompileEscape(Ranges, RangeCount);
+      if (not AtEnd) and (Peek = '-') and (PeekAt(1) <> ']') then
+      begin
+        if IsClassEscape then
+          raise EConvertError.Create(
+            'Invalid regular expression: character class escape in range');
+        if RangeCount > SavePos then
+        begin
+          Lo := Ranges[RangeCount - 1].Lo;
+          Dec(RangeCount);
+          Inc(FPos);
+          if Peek = '\' then
+          begin
+            Inc(FPos);
+            if FUnicode and CharInSet(Peek,
+               ['d', 'D', 'w', 'W', 's', 'S', 'p', 'P']) then
+              raise EConvertError.Create(
+                'Invalid regular expression: character class escape in range');
+            SavePos := RangeCount;
+            CompileEscape(Ranges, RangeCount);
+            if RangeCount > SavePos then
+            begin
+              Hi := Ranges[RangeCount - 1].Lo;
+              Dec(RangeCount);
+              if Lo > Hi then
+                raise EConvertError.Create(
+                  'Invalid regular expression: range out of order in character class');
+              AddRange(Ranges, RangeCount, Lo, Hi);
+            end;
+          end
+          else
+          begin
+            Hi := ReadCodePoint;
+            if Lo > Hi then
+              raise EConvertError.Create(
+                'Invalid regular expression: range out of order in character class');
+            AddRange(Ranges, RangeCount, Lo, Hi);
+          end;
+        end;
+      end;
       Continue;
     end;
     Lo := ReadCodePoint;
@@ -2151,6 +2406,10 @@ begin
       begin
         SavePos := RangeCount;
         Inc(FPos);
+        if FUnicode and CharInSet(Peek,
+           ['d', 'D', 'w', 'W', 's', 'S', 'p', 'P']) then
+          raise EConvertError.Create(
+            'Invalid regular expression: character class escape in range');
         CompileEscape(Ranges, RangeCount);
         if RangeCount > SavePos then
         begin
@@ -2422,6 +2681,8 @@ begin
       end;
   else
     begin
+      if FUnicode and CharInSet(C, [']', '}']) then
+        raise EConvertError.Create('Invalid regular expression: unexpected token');
       CodePoint := ReadCodePoint;
       EmitCharMatch(CodePoint);
     end;
@@ -2488,6 +2749,73 @@ var
   BodyLen: Integer;
   BodyCode: array of UInt32;
   SavePos: Integer;
+  ClearOperand: Integer;
+  HasCaptureClear: Boolean;
+  NeedsRepeatGuard: Boolean;
+
+  function BodyRequiresProgress: Boolean;
+  var
+    Op: TRegExpOpCode;
+  begin
+    if BodyLen <> 1 then
+      Exit(False);
+    Op := TRegExpOpCode(BodyCode[0] and $FF);
+    Result := Op in [RX_CHAR, RX_CHAR_CLASS, RX_CHAR_CLASS_NEG, RX_ANY];
+  end;
+
+  function TryBuildCaptureClearOperand(out AOperand: Integer): Boolean;
+  var
+    GroupIndex: Integer;
+    Instr: UInt32;
+    J: Integer;
+    MaxGroup: Integer;
+    MinGroup: Integer;
+    Op: TRegExpOpCode;
+    SlotIndex: Integer;
+  begin
+    MinGroup := High(Integer);
+    MaxGroup := -1;
+    for J := 0 to BodyLen - 1 do
+    begin
+      Instr := BodyCode[J];
+      Op := TRegExpOpCode(Instr and $FF);
+      if Op <> RX_SAVE then
+        Continue;
+      SlotIndex := Integer(Instr shr 8);
+      GroupIndex := SlotIndex div 2;
+      if GroupIndex <= 0 then
+        Continue;
+      if GroupIndex < MinGroup then
+        MinGroup := GroupIndex;
+      if GroupIndex > MaxGroup then
+        MaxGroup := GroupIndex;
+    end;
+
+    Result := MaxGroup >= MinGroup;
+    if not Result then
+      Exit;
+    if (MinGroup > CLEAR_CAPTURE_COUNT_MASK) or
+       ((MaxGroup - MinGroup + 1) > CLEAR_CAPTURE_COUNT_MASK) then
+      raise EConvertError.Create('Too many captures in quantified atom');
+    AOperand := (MinGroup shl CLEAR_CAPTURE_COUNT_BITS) or
+      (MaxGroup - MinGroup + 1);
+  end;
+
+  procedure EmitCaptureClearIfNeeded;
+  begin
+    if HasCaptureClear then
+      Emit(EncodeOpBx(RX_CLEAR_CAPTURES, ClearOperand));
+  end;
+
+  procedure EmitOptionalBody;
+  begin
+    if NeedsRepeatGuard then
+      Emit(EncodeOp(RX_REPEAT_ENTER));
+    EmitCaptureClearIfNeeded;
+    EmitBodyAt(BodyCode, BodyLen, AAtomStart);
+    if NeedsRepeatGuard then
+      Emit(EncodeOp(RX_REPEAT_CHECK));
+  end;
 begin
   if AtEnd then
     Exit;
@@ -2535,9 +2863,14 @@ begin
     Exit;
   SetLength(BodyCode, BodyLen);
   Move(FCode[AAtomStart], BodyCode[0], BodyLen * SizeOf(UInt32));
+  HasCaptureClear := TryBuildCaptureClearOperand(ClearOperand);
+  NeedsRepeatGuard := not BodyRequiresProgress;
   FCodeLen := AAtomStart;
   for I := 1 to MinCount do
+  begin
+    EmitCaptureClearIfNeeded;
     EmitBodyAt(BodyCode, BodyLen, AAtomStart);
+  end;
   if MaxCount = -1 then
   begin
     SplitPC := CurrentPC;
@@ -2545,7 +2878,7 @@ begin
       Emit(EncodeOpBx(RX_SPLIT_LAZY, 0))
     else
       Emit(EncodeOpBx(RX_SPLIT, 0));
-    EmitBodyAt(BodyCode, BodyLen, AAtomStart);
+    EmitOptionalBody;
     Emit(EncodeOpBx(RX_JUMP, SplitPC));
     PatchHole(SplitPC, CurrentPC);
   end
@@ -2558,7 +2891,7 @@ begin
         Emit(EncodeOpBx(RX_SPLIT_LAZY, 0))
       else
         Emit(EncodeOpBx(RX_SPLIT, 0));
-      EmitBodyAt(BodyCode, BodyLen, AAtomStart);
+      EmitOptionalBody;
       PatchHole(SplitPC, CurrentPC);
     end;
   end;
@@ -2708,6 +3041,8 @@ procedure TRegExpCompiler.CompilePattern;
 begin
   Emit(EncodeOpBx(RX_SAVE, 0));
   CompileDisjunction;
+  if not AtEnd then
+    raise EConvertError.Create('Invalid regular expression: unexpected token');
   Emit(EncodeOpBx(RX_SAVE, 1));
   Emit(EncodeOp(RX_MATCH));
 end;
@@ -2809,6 +3144,7 @@ begin
     end;
     Inc(I);
   end;
+  FPreScanCaptureCount := GroupIndex;
 end;
 
 procedure TRegExpCompiler.ValidateNamedGroups;
@@ -2849,6 +3185,7 @@ begin
   Result.FullUnicode := FUnicode;
   BuildStartCheck(FCode, FCodeLen, FCharClasses, Result.StartCheck);
   Result.NamedGroups := FNamedGroups;
+  Result.StringSets := FStringSets;
 end;
 
 function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;

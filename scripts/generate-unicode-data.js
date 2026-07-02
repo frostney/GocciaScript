@@ -35,6 +35,11 @@ const UCD_FILES = [
   "UnicodeData.txt",
 ];
 
+const EMOJI_SEQUENCE_FILES = [
+  "emoji-sequences.txt",
+  "emoji-zwj-sequences.txt",
+];
+
 const RESOURCE_NAME = "GOCCIA_UCD";
 const RESOURCE_MAGIC = Buffer.from("GOCCIAUC", "ascii");
 
@@ -80,6 +85,12 @@ function parseArguments() {
 async function downloadUCDFile(unicodeVersion, filePath) {
   const url = `${UCD_BASE_URL}/${unicodeVersion}/ucd/${filePath}`;
   console.log(`  Downloading ${filePath}...`);
+  return downloadText(url);
+}
+
+async function downloadEmojiFile(unicodeVersion, filePath) {
+  const url = `${UCD_BASE_URL}/${unicodeVersion}/emoji/${filePath}`;
+  console.log(`  Downloading emoji/${filePath}...`);
   return downloadText(url);
 }
 
@@ -253,6 +264,40 @@ function complementRanges(ranges) {
   return result;
 }
 
+function subtractRanges(baseRanges, removeRanges) {
+  const base = mergeRanges([...baseRanges]);
+  const remove = mergeRanges([...removeRanges]);
+  const result = [];
+  let removeIndex = 0;
+
+  for (const baseRange of base) {
+    let cursor = baseRange.lo;
+
+    while (removeIndex < remove.length && remove[removeIndex].hi < cursor) {
+      removeIndex += 1;
+    }
+
+    let scanIndex = removeIndex;
+    while (scanIndex < remove.length && remove[scanIndex].lo <= baseRange.hi) {
+      const removeRange = remove[scanIndex];
+      if (removeRange.lo > cursor) {
+        result.push({ lo: cursor, hi: removeRange.lo - 1 });
+      }
+      cursor = Math.max(cursor, removeRange.hi + 1);
+      if (cursor > baseRange.hi) {
+        break;
+      }
+      scanIndex += 1;
+    }
+
+    if (cursor <= baseRange.hi) {
+      result.push({ lo: cursor, hi: baseRange.hi });
+    }
+  }
+
+  return result;
+}
+
 function buildRangeDataBlob(ranges) {
   const buffer = Buffer.alloc(ranges.length * 8);
   for (let i = 0; i < ranges.length; i += 1) {
@@ -260,6 +305,121 @@ function buildRangeDataBlob(ranges) {
     buffer.writeUInt32LE(ranges[i].hi, i * 8 + 4);
   }
   return buffer;
+}
+
+function buildStringSequenceBlob(sequences) {
+  let wordCount = 1;
+  for (const sequence of sequences) {
+    wordCount += 1 + sequence.length;
+  }
+
+  const buffer = Buffer.alloc(wordCount * 4);
+  let offset = 0;
+  buffer.writeUInt32LE(sequences.length, offset);
+  offset += 4;
+  for (const sequence of sequences) {
+    buffer.writeUInt32LE(sequence.length, offset);
+    offset += 4;
+    for (const codePoint of sequence) {
+      buffer.writeUInt32LE(codePoint, offset);
+      offset += 4;
+    }
+  }
+  return buffer;
+}
+
+function parseEmojiSequenceCodePoints(value) {
+  if (value.includes("..")) {
+    const range = parseRange(value);
+    const sequences = [];
+    for (let codePoint = range.lo; codePoint <= range.hi; codePoint += 1) {
+      sequences.push([codePoint]);
+    }
+    return sequences;
+  }
+
+  return [
+    value
+      .split(/\s+/)
+      .filter((part) => part.length > 0)
+      .map((part) => parseInt(part, 16)),
+  ];
+}
+
+function parseEmojiSequenceProperties(text) {
+  const properties = new Map();
+
+  forEachUCDLine(text, 2, (parts) => {
+    const sequences = parseEmojiSequenceCodePoints(parts[0]);
+    const property = parts[1];
+    if (!properties.has(property)) {
+      properties.set(property, []);
+    }
+    properties.get(property).push(...sequences);
+  });
+
+  return properties;
+}
+
+function collectEmojiStringProperties(sequenceFiles) {
+  const properties = new Map();
+
+  function addSequence(property, sequence) {
+    if (!properties.has(property)) {
+      properties.set(property, []);
+    }
+    properties.get(property).push(sequence);
+  }
+
+  for (const text of sequenceFiles) {
+    const parsed = parseEmojiSequenceProperties(text);
+    for (const [property, sequences] of parsed) {
+      for (const sequence of sequences) {
+        addSequence(property, sequence);
+      }
+    }
+  }
+
+  const rgiParts = [
+    "Basic_Emoji",
+    "Emoji_Keycap_Sequence",
+    "RGI_Emoji_Flag_Sequence",
+    "RGI_Emoji_Modifier_Sequence",
+    "RGI_Emoji_Tag_Sequence",
+    "RGI_Emoji_ZWJ_Sequence",
+  ];
+  for (const property of rgiParts) {
+    for (const sequence of properties.get(property) || []) {
+      addSequence("RGI_Emoji", sequence);
+    }
+  }
+
+  for (const [property, sequences] of properties) {
+    const seen = new Set();
+    const unique = [];
+    for (const sequence of sequences) {
+      const key = sequence.join(",");
+      if (!seen.has(key)) {
+        seen.add(key);
+        unique.push(sequence);
+      }
+    }
+    unique.sort((a, b) => {
+      if (a.length !== b.length) {
+        return a.length - b.length;
+      }
+      const length = Math.min(a.length, b.length);
+      for (let i = 0; i < length; i += 1) {
+        if (a[i] !== b[i]) {
+          return a[i] - b[i];
+        }
+      }
+      return 0;
+    });
+    properties.set(property, unique);
+  }
+
+  return properties;
 }
 
 function generatePascalUnit(
@@ -318,6 +478,7 @@ function collectAllEntries(
   binaryProperties,
   caseFoldingPairs,
   nonUnicodeUppercasePairs,
+  stringProperties,
   pvAliases,
   pAliases,
 ) {
@@ -338,6 +499,13 @@ function collectAllEntries(
     if (canonical && !entries.has(key)) {
       entries.set(key, canonical);
     }
+  }
+
+  function addBlobEntry(key, blob) {
+    if (blob.length === 0 || entries.has(key)) {
+      return;
+    }
+    entries.set(key, { blob });
   }
 
   function registerProperty(data, prefix, aliasMap, addBareAlias) {
@@ -384,6 +552,10 @@ function collectAllEntries(
   addEntry("Any", [{ lo: 0, hi: 0x10ffff }]);
   addEntry("CaseFolding/Simple", caseFoldingPairs);
   addEntry("CaseMapping/RegExpNonUnicodeUppercase", nonUnicodeUppercasePairs);
+
+  for (const [property, sequences] of stringProperties) {
+    addBlobEntry(`strings/${property}`, buildStringSequenceBlob(sequences));
+  }
 
   const cnRanges = gcData.get("Cn");
   if (cnRanges) {
@@ -512,20 +684,42 @@ async function main() {
   ] = await Promise.all(
     UCD_FILES.map((file) => downloadUCDFile(unicodeVersion, file)),
   );
+  const emojiSequenceTexts = await Promise.all(
+    EMOJI_SEQUENCE_FILES.map((file) => downloadEmojiFile(unicodeVersion, file)),
+  );
 
   console.log("Parsing UCD data...");
   const pvAliases = parsePropertyValueAliases(pvAliasesText);
   const pAliases = parsePropertyAliases(pAliasesText);
   const gcData = parseUCDRangeFile(gcText);
   const scriptData = parseUCDRangeFile(scriptsText);
+  scriptData.set(
+    "Unknown",
+    complementRanges(unionRanges(
+      [...scriptData]
+        .filter(([script]) => script !== "Unknown")
+        .map(([, ranges]) => ranges),
+    )),
+  );
   const scAliasMap = pvAliases.get("sc") || new Map();
   const scxData = parseScriptExtensions(scxText, scriptData, scAliasMap);
+  scxData.set("Unknown", scriptData.get("Unknown"));
+  scxData.set("Zzzz", scriptData.get("Unknown"));
+  for (const commonKey of ["Common", "Zyyy"]) {
+    if (scxData.has(commonKey)) {
+      scxData.set(commonKey, subtractRanges(
+        scxData.get(commonKey),
+        scriptData.get("Unknown"),
+      ));
+    }
+  }
   const propListData = parseUCDRangeFile(propListText);
   const derivedCoreData = parseUCDRangeFile(derivedCoreText);
   const derivedBinaryData = parseUCDRangeFile(derivedBinaryText);
   const emojiData = parseUCDRangeFile(emojiText);
   const caseFoldingPairs = parseCaseFolding(caseFoldingText);
   const nonUnicodeUppercasePairs = parseRegExpNonUnicodeUppercase(unicodeDataText);
+  const stringProperties = collectEmojiStringProperties(emojiSequenceTexts);
 
   const binaryProperties = new Map([
     ...propListData, ...derivedCoreData, ...derivedBinaryData, ...emojiData,
@@ -538,6 +732,7 @@ async function main() {
   console.log(`  Binary properties: ${binaryProperties.size} values`);
   console.log(`  Simple case folding pairs: ${caseFoldingPairs.length}`);
   console.log(`  Non-Unicode uppercase pairs: ${nonUnicodeUppercasePairs.length}`);
+  console.log(`  String properties: ${stringProperties.size} values`);
 
   const allEntries = collectAllEntries(
     gcData,
@@ -546,6 +741,7 @@ async function main() {
     binaryProperties,
     caseFoldingPairs,
     nonUnicodeUppercasePairs,
+    stringProperties,
     pvAliases,
     pAliases,
   );

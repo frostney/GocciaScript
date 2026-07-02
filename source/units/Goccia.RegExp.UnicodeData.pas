@@ -7,8 +7,17 @@ interface
 uses
   UnicodeICU;
 
+type
+  TUnicodeStringSequence = record
+    CodePoints: array of Cardinal;
+  end;
+
+  TUnicodeStringSequenceArray = array of TUnicodeStringSequence;
+
 function TryGetUnicodePropertyRanges(const AKey: string;
   out ARanges: TUnicodePropertyRangeArray): Boolean;
+function TryGetUnicodeStringPropertySequences(const AKey: string;
+  out ASequences: TUnicodeStringSequenceArray): Boolean;
 function TryGetUnicodeSimpleCaseFold(ACodePoint: Cardinal;
   out AFoldedCodePoint: Cardinal): Boolean;
 function RegExpCanonicalizeCodePoint(ACodePoint: Cardinal;
@@ -109,6 +118,48 @@ begin
   end;
 
   Result := True;
+end;
+
+function TryExtractStringSequences(const ABuffer: TBytes;
+  const AContainer: TEmbeddedResourceContainer;
+  const AEntry: TEmbeddedResourceEntry;
+  out ASequences: TUnicodeStringSequenceArray): Boolean;
+var
+  DataOffset, DataLength: Integer;
+  I, J, Offset, SequenceCount, SequenceLength: Integer;
+begin
+  Result := False;
+  SetLength(ASequences, 0);
+
+  if not TryGetEmbeddedResourceEntryDataBounds(ABuffer, AContainer, AEntry,
+     DataOffset, DataLength) then
+    Exit;
+
+  if DataLength < SizeOf(UInt32) then
+    Exit;
+
+  Offset := DataOffset;
+  SequenceCount := Integer(ReadUInt32LE(ABuffer, Offset));
+  Inc(Offset, SizeOf(UInt32));
+  SetLength(ASequences, SequenceCount);
+
+  for I := 0 to SequenceCount - 1 do
+  begin
+    if Offset + SizeOf(UInt32) > DataOffset + DataLength then
+      Exit(False);
+    SequenceLength := Integer(ReadUInt32LE(ABuffer, Offset));
+    Inc(Offset, SizeOf(UInt32));
+    SetLength(ASequences[I].CodePoints, SequenceLength);
+    if Offset + SequenceLength * SizeOf(UInt32) > DataOffset + DataLength then
+      Exit(False);
+    for J := 0 to SequenceLength - 1 do
+    begin
+      ASequences[I].CodePoints[J] := ReadUInt32LE(ABuffer, Offset);
+      Inc(Offset, SizeOf(UInt32));
+    end;
+  end;
+
+  Result := Offset = DataOffset + DataLength;
 end;
 
 var
@@ -244,6 +295,21 @@ function TryGetUnicodePropertyRanges(const AKey: string;
   out ARanges: TUnicodePropertyRangeArray): Boolean;
 begin
   Result := TryGetEmbeddedPropertyRanges(AKey, ARanges);
+end;
+
+function TryGetUnicodeStringPropertySequences(const AKey: string;
+  out ASequences: TUnicodeStringSequenceArray): Boolean;
+var
+  Resource: TBytes;
+  Container: TEmbeddedResourceContainer;
+  Entry: TEmbeddedResourceEntry;
+begin
+  SetLength(ASequences, 0);
+  Result :=
+    TryReadEmbeddedResource(Resource) and
+    TryReadEmbeddedResourceContainer(Resource, UCD_MAGIC, Container) and
+    TryFindEmbeddedResourceEntry(Resource, AKey, Container, Entry) and
+    TryExtractStringSequences(Resource, Container, Entry, ASequences);
 end;
 
 function TryGetUnicodeSimpleCaseFold(ACodePoint: Cardinal;
@@ -458,6 +524,13 @@ function TryGetUnicodePropertyRanges(const AKey: string;
 begin
   Result := False;
   SetLength(ARanges, 0);
+end;
+
+function TryGetUnicodeStringPropertySequences(const AKey: string;
+  out ASequences: TUnicodeStringSequenceArray): Boolean;
+begin
+  Result := False;
+  SetLength(ASequences, 0);
 end;
 
 function TryGetUnicodeSimpleCaseFold(ACodePoint: Cardinal;

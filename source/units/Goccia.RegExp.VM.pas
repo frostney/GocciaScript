@@ -59,6 +59,7 @@ type
   TBacktrackEntry = record
     PC: Integer;
     InputPos: Integer;
+    RepeatDepth: Integer;
     Slots: array of Integer;
   end;
 
@@ -500,6 +501,8 @@ var
   ComparePos: Integer;
   RefCP, InputCP: Cardinal;
   RefByteLen, InputByteLen: Integer;
+  RepeatStack: array of Integer;
+  RepeatDepth: Integer;
 
   procedure PushBacktrack(APC, AInputPos: Integer);
   begin
@@ -512,10 +515,92 @@ var
       SetLength(AStack, StackTop * 2 + 16);
     AStack[StackTop].PC := APC;
     AStack[StackTop].InputPos := AInputPos;
+    AStack[StackTop].RepeatDepth := RepeatDepth;
     if Length(AStack[StackTop].Slots) <> SlotCount then
       SetLength(AStack[StackTop].Slots, SlotCount);
     if SlotCount > 0 then
       Move(ASlots[0], AStack[StackTop].Slots[0], SlotCount * SizeOf(Integer));
+  end;
+
+  function MatchStringSequence(const ASequence: TRegExpStringSequence;
+    AStartPos: Integer; out AEndPos: Integer): Boolean;
+  var
+    CandidatePos: Integer;
+    I: Integer;
+  begin
+    CandidatePos := AStartPos;
+    for I := 0 to High(ASequence.CodePoints) do
+    begin
+      if not ReadInputCodePoint(AInput, CandidatePos, AProgram.FullUnicode,
+         CodePoint, ByteLen) or (CodePoint <> ASequence.CodePoints[I]) then
+        Exit(False);
+      Inc(CandidatePos, ByteLen);
+    end;
+    AEndPos := CandidatePos;
+    Result := True;
+  end;
+
+  function TryMatchStringSet(ASetIndex, ANextPC: Integer): Boolean;
+  var
+    FirstEndPos: Integer;
+    FirstIndex: Integer;
+    I: Integer;
+    RangeEndPos: Integer;
+    RangeMatches: Boolean;
+    SequenceEndPos: Integer;
+    StringSet: TRegExpStringSet;
+  begin
+    Result := False;
+    if (ASetIndex < 0) or (ASetIndex > High(AProgram.StringSets)) then
+      Exit;
+
+    StringSet := AProgram.StringSets[ASetIndex];
+    FirstIndex := -1;
+    FirstEndPos := -1;
+    for I := 0 to High(StringSet.Strings) do
+    begin
+      if MatchStringSequence(StringSet.Strings[I], InputPos, SequenceEndPos) then
+      begin
+        FirstIndex := I;
+        FirstEndPos := SequenceEndPos;
+        Break;
+      end;
+    end;
+
+    RangeMatches := False;
+    RangeEndPos := -1;
+    if ReadInputCodePoint(AInput, InputPos, AProgram.FullUnicode,
+       CodePoint, ByteLen) and (StringSet.CharClassIndex >= 0) and
+       (StringSet.CharClassIndex <= High(AProgram.CharClasses)) and
+       CharClassContains(AProgram.CharClasses[StringSet.CharClassIndex],
+       CodePoint) then
+    begin
+      RangeMatches := True;
+      RangeEndPos := InputPos + ByteLen;
+    end;
+
+    if FirstIndex < 0 then
+    begin
+      if RangeMatches then
+      begin
+        InputPos := RangeEndPos;
+        Exit(True);
+      end;
+      Exit(False);
+    end;
+
+    if RangeMatches and not MemoContains(Memo, ANextPC, RangeEndPos) then
+      PushBacktrack(ANextPC, RangeEndPos);
+
+    for I := High(StringSet.Strings) downto FirstIndex + 1 do
+    begin
+      if MatchStringSequence(StringSet.Strings[I], InputPos, SequenceEndPos) and
+         not MemoContains(Memo, ANextPC, SequenceEndPos) then
+        PushBacktrack(ANextPC, SequenceEndPos);
+    end;
+
+    InputPos := FirstEndPos;
+    Result := True;
   end;
 
   function PopBacktrack: Boolean;
@@ -524,6 +609,7 @@ var
     begin
       PC := AStack[StackTop].PC;
       InputPos := AStack[StackTop].InputPos;
+      RepeatDepth := AStack[StackTop].RepeatDepth;
       if SlotCount > 0 then
         Move(AStack[StackTop].Slots[0], ASlots[0], SlotCount * SizeOf(Integer));
       Dec(StackTop);
@@ -643,6 +729,7 @@ begin
   if StepLimit < MIN_STEP_LIMIT then
     StepLimit := MIN_STEP_LIMIT;
   StackTop := -1;
+  RepeatDepth := 0;
   MemoInit(Memo);
 
   while PC < Length(AProgram.Code) do
@@ -802,13 +889,18 @@ begin
           if (Bx >= 0) and (Bx < Length(AProgram.Code)) and
              (TRegExpOpCode(AProgram.Code[Bx] and $FF) = RX_SPLIT) then
           begin
-            if (StackTop >= 0) and
-               (AStack[StackTop].PC = Integer(AProgram.Code[Bx] shr 8)) and
-               (AStack[StackTop].InputPos = InputPos) then
-            begin
-              PC := Integer(AProgram.Code[Bx] shr 8);
-              Continue;
-            end;
+          if (StackTop >= 0) and
+             (AStack[StackTop].PC = Integer(AProgram.Code[Bx] shr 8)) and
+             (AStack[StackTop].InputPos = InputPos) then
+          begin
+            PC := Integer(AProgram.Code[Bx] shr 8);
+            if SlotCount > 0 then
+              Move(AStack[StackTop].Slots[0], ASlots[0],
+                SlotCount * SizeOf(Integer));
+            RepeatDepth := AStack[StackTop].RepeatDepth;
+            Dec(StackTop);
+            Continue;
+          end;
           end;
           PC := Bx;
         end;
@@ -817,6 +909,68 @@ begin
         begin
           if Bx < SlotCount then
             ASlots[Bx] := InputPos;
+          Inc(PC);
+        end;
+
+      RX_CLEAR_CAPTURES:
+        begin
+          RefStart := Bx shr CLEAR_CAPTURE_COUNT_BITS;
+          RefEnd := RefStart + (Bx and CLEAR_CAPTURE_COUNT_MASK) - 1;
+          for RefPos := RefStart to RefEnd do
+          begin
+            if (RefPos * 2) < SlotCount then
+              ASlots[RefPos * 2] := -1;
+            if (RefPos * 2 + 1) < SlotCount then
+              ASlots[RefPos * 2 + 1] := -1;
+          end;
+          Inc(PC);
+        end;
+
+      RX_REPEAT_ENTER:
+        begin
+          if RepeatDepth >= Length(RepeatStack) then
+            SetLength(RepeatStack, RepeatDepth * 2 + 8);
+          RepeatStack[RepeatDepth] := InputPos;
+          Inc(RepeatDepth);
+          Inc(PC);
+        end;
+
+      RX_REPEAT_CHECK:
+        begin
+          if RepeatDepth <= 0 then
+            raise ERegExpRuntimeError.Create('Invalid regular expression bytecode: repeat check without enter');
+          Dec(RepeatDepth);
+          if RepeatStack[RepeatDepth] = InputPos then
+          begin
+            if not BacktrackOrFail then Exit;
+            Continue;
+          end;
+          Inc(PC);
+        end;
+
+      RX_CAPTURE_UNDEFINED_JUMP:
+        begin
+          if (PC + 1) >= Length(AProgram.Code) then
+            raise ERegExpRuntimeError.Create('Invalid regular expression bytecode: capture guard without target');
+          RefStart := -1;
+          RefEnd := -1;
+          if (Bx * 2) < SlotCount then
+            RefStart := ASlots[Bx * 2];
+          if (Bx * 2 + 1) < SlotCount then
+            RefEnd := ASlots[Bx * 2 + 1];
+          if (RefStart < 0) or (RefEnd < 0) or (RefStart > RefEnd) then
+            PC := Integer(AProgram.Code[PC + 1] shr 8)
+          else
+            Inc(PC, 2);
+        end;
+
+      RX_STRING_SET:
+        begin
+          if ABackward or (not TryMatchStringSet(Bx, PC + 1)) then
+          begin
+            if not BacktrackOrFail then Exit;
+            Continue;
+          end;
           Inc(PC);
         end;
 

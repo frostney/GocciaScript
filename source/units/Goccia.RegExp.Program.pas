@@ -13,6 +13,12 @@ type
 
   TGocciaRegExpNamedGroups = array of TGocciaRegExpNamedGroup;
 
+  TRegExpStringSequence = record
+    CodePoints: array of Cardinal;
+  end;
+
+  TRegExpStringSequenceArray = array of TRegExpStringSequence;
+
   TRegExpCharRange = record
     Lo: Cardinal;
     Hi: Cardinal;
@@ -24,6 +30,13 @@ type
     Ranges: TRegExpCharRangeArray;
     PageFirstRange: array of Integer;
   end;
+
+  TRegExpStringSet = record
+    CharClassIndex: Integer;
+    Strings: TRegExpStringSequenceArray;
+  end;
+
+  TRegExpStringSetArray = array of TRegExpStringSet;
 
 const
   REGEXP_CHAR_CLASS_PAGE_BITS = 8;
@@ -44,6 +57,7 @@ type
     FullUnicode: Boolean;
     StartCheck: TRegExpStartCheck;
     NamedGroups: TGocciaRegExpNamedGroups;
+    StringSets: TRegExpStringSetArray;
   end;
 
 implementation

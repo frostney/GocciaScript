@@ -21,3 +21,26 @@ test("test respects global lastIndex", () => {
   expect(regex.test("aba")).toBe(false);
   expect(regex.lastIndex).toBe(0);
 });
+
+test("test uses generic exec protocol for object receivers", () => {
+  const receiver = {
+    exec(value) {
+      expect(value).toBe("input");
+      return {};
+    },
+  };
+
+  expect(RegExp.prototype.test.call(receiver, "input")).toBe(true);
+});
+
+test("test throws when generic exec returns a primitive", () => {
+  const receiver = {
+    exec() {
+      return 1;
+    },
+  };
+
+  expect(() => {
+    RegExp.prototype.test.call(receiver, "input");
+  }).toThrow(TypeError);
+});
