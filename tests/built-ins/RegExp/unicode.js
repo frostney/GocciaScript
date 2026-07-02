@@ -88,6 +88,12 @@ test("unicode escape \\u{} does not match wrong character", () => {
   expect(new RegExp("\\u{41}", "u").test("B")).toBe(false);
 });
 
+test("oversized unicode escape \\u{} throws SyntaxError", () => {
+  expect(() => {
+    new RegExp("\\u{FFFFFFFFFFFFFFFF}", "u");
+  }).toThrow(SyntaxError);
+});
+
 test("unicode four-digit escape \\uHHHH syntax", () => {
   expect(new RegExp("\\u0041", "u").test("A")).toBe(true);
   expect(new RegExp("\\u0061", "u").test("a")).toBe(true);

@@ -88,8 +88,14 @@ async function downloadUCDFile(unicodeVersion, filePath) {
   return downloadText(url);
 }
 
+function emojiVersionForUnicodeVersion(unicodeVersion) {
+  const match = /^(\d+\.\d+)(?:\.0)?$/.exec(unicodeVersion);
+  return match ? match[1] : unicodeVersion;
+}
+
 async function downloadEmojiFile(unicodeVersion, filePath) {
-  const url = `${UCD_BASE_URL}/${unicodeVersion}/emoji/${filePath}`;
+  const emojiVersion = emojiVersionForUnicodeVersion(unicodeVersion);
+  const url = `${UCD_BASE_URL}/emoji/${emojiVersion}/${filePath}`;
   console.log(`  Downloading emoji/${filePath}...`);
   return downloadText(url);
 }

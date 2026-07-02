@@ -210,6 +210,13 @@ test("\\p{Basic_Emoji} matches emoji code points", () => {
   expect(re.test("a")).toBe(false);
 });
 
+test("\\p{RGI_Emoji} matches string and code point emoji", () => {
+  const re = new RegExp("[\\p{RGI_Emoji}]", "v");
+  expect(re.test("1️⃣")).toBe(true);
+  expect(re.test("⌚")).toBe(true);
+  expect(re.test("a")).toBe(false);
+});
+
 test("\\P{} rejected for properties of strings", () => {
   expect(() => new RegExp("[\\P{Basic_Emoji}]", "v")).toThrow(SyntaxError);
   expect(() => new RegExp("[\\P{Emoji_Keycap_Sequence}]", "v")).toThrow(SyntaxError);

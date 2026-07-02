@@ -1237,20 +1237,15 @@ function TGocciaGlobalRegExp.RegExpToStringMethod(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Flags, Source: string;
+  Obj: TGocciaObjectValue;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorRegExpToStringNonRegExp, SSuggestRegExpThisType);
 
-  if IsRegExpInstance(AThisValue) then
-    Result := TGocciaStringLiteralValue.Create(RegExpObjectToString(AThisValue))
-  else
-  begin
-    Source := TGocciaObjectValue(AThisValue).GetProperty(PROP_SOURCE)
-      .ToStringLiteral.Value;
-    Flags := TGocciaObjectValue(AThisValue).GetProperty(PROP_FLAGS)
-      .ToStringLiteral.Value;
-    Result := TGocciaStringLiteralValue.Create('/' + Source + '/' + Flags);
-  end;
+  Obj := TGocciaObjectValue(AThisValue);
+  Source := Obj.GetProperty(PROP_SOURCE).ToStringLiteral.Value;
+  Flags := Obj.GetProperty(PROP_FLAGS).ToStringLiteral.Value;
+  Result := TGocciaStringLiteralValue.Create('/' + Source + '/' + Flags);
 end;
 
 // ES2026 §22.2.6.8 RegExp.prototype [ @@match ] ( string )

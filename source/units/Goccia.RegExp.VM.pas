@@ -60,6 +60,7 @@ type
     PC: Integer;
     InputPos: Integer;
     RepeatDepth: Integer;
+    RepeatStack: array of Integer;
     Slots: array of Integer;
   end;
 
@@ -516,6 +517,15 @@ var
     AStack[StackTop].PC := APC;
     AStack[StackTop].InputPos := AInputPos;
     AStack[StackTop].RepeatDepth := RepeatDepth;
+    if RepeatDepth = 0 then
+      SetLength(AStack[StackTop].RepeatStack, 0)
+    else
+    begin
+      if Length(AStack[StackTop].RepeatStack) <> RepeatDepth then
+        SetLength(AStack[StackTop].RepeatStack, RepeatDepth);
+      Move(RepeatStack[0], AStack[StackTop].RepeatStack[0],
+        RepeatDepth * SizeOf(Integer));
+    end;
     if Length(AStack[StackTop].Slots) <> SlotCount then
       SetLength(AStack[StackTop].Slots, SlotCount);
     if SlotCount > 0 then
@@ -610,6 +620,13 @@ var
       PC := AStack[StackTop].PC;
       InputPos := AStack[StackTop].InputPos;
       RepeatDepth := AStack[StackTop].RepeatDepth;
+      if RepeatDepth > 0 then
+      begin
+        if Length(RepeatStack) < RepeatDepth then
+          SetLength(RepeatStack, RepeatDepth);
+        Move(AStack[StackTop].RepeatStack[0], RepeatStack[0],
+          RepeatDepth * SizeOf(Integer));
+      end;
       if SlotCount > 0 then
         Move(AStack[StackTop].Slots[0], ASlots[0], SlotCount * SizeOf(Integer));
       Dec(StackTop);

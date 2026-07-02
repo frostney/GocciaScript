@@ -1215,6 +1215,17 @@ begin
     Exit;
   end;
 
+  if APropertyName = 'RGI_Emoji' then
+  begin
+    GetStringPropertySequences('Basic_Emoji', AContents);
+    GetStringPropertySequences('Emoji_Keycap_Sequence', AContents);
+    GetStringPropertySequences('RGI_Emoji_Flag_Sequence', AContents);
+    GetStringPropertySequences('RGI_Emoji_Modifier_Sequence', AContents);
+    GetStringPropertySequences('RGI_Emoji_Tag_Sequence', AContents);
+    GetStringPropertySequences('RGI_Emoji_ZWJ_Sequence', AContents);
+    Exit;
+  end;
+
   if APropertyName = 'Basic_Emoji' then
   begin
     AddClassRange(AContents, $231A, $231B);
@@ -1969,6 +1980,7 @@ end;
 
 function TRegExpCompiler.ParseUnicodeEscape: Cardinal;
 var
+  Digit: Cardinal;
   HighSurrogate: Cardinal;
   HasDigit: Boolean;
 begin
@@ -1980,23 +1992,18 @@ begin
     begin
       case Peek of
         '0'..'9':
-          begin
-            HasDigit := True;
-            Result := Result * 16 + Cardinal(Ord(Advance) - Ord('0'));
-          end;
+          Digit := Cardinal(Ord(Advance) - Ord('0'));
         'a'..'f':
-          begin
-            HasDigit := True;
-            Result := Result * 16 + Cardinal(Ord(Advance) - Ord('a') + 10);
-          end;
+          Digit := Cardinal(Ord(Advance) - Ord('a') + 10);
         'A'..'F':
-          begin
-            HasDigit := True;
-            Result := Result * 16 + Cardinal(Ord(Advance) - Ord('A') + 10);
-          end;
+          Digit := Cardinal(Ord(Advance) - Ord('A') + 10);
       else
         raise EConvertError.Create('Invalid Unicode escape');
       end;
+      HasDigit := True;
+      if Result > (($10FFFF - Digit) div 16) then
+        raise EConvertError.Create('Unicode escape out of range');
+      Result := Result * 16 + Digit;
     end;
     if not HasDigit then
       raise EConvertError.Create('Invalid Unicode escape');

@@ -126,7 +126,8 @@ function TryExtractStringSequences(const ABuffer: TBytes;
   out ASequences: TUnicodeStringSequenceArray): Boolean;
 var
   DataOffset, DataLength: Integer;
-  I, J, Offset, SequenceCount, SequenceLength: Integer;
+  I, J, MaxSequences, Offset, SequenceCount, SequenceLength: Integer;
+  SequenceCountValue, SequenceLengthValue: UInt32;
 begin
   Result := False;
   SetLength(ASequences, 0);
@@ -139,19 +140,25 @@ begin
     Exit;
 
   Offset := DataOffset;
-  SequenceCount := Integer(ReadUInt32LE(ABuffer, Offset));
+  SequenceCountValue := ReadUInt32LE(ABuffer, Offset);
   Inc(Offset, SizeOf(UInt32));
+  MaxSequences := (DataOffset + DataLength - Offset) div SizeOf(UInt32);
+  if SequenceCountValue > UInt32(MaxSequences) then
+    Exit;
+  SequenceCount := Integer(SequenceCountValue);
   SetLength(ASequences, SequenceCount);
 
   for I := 0 to SequenceCount - 1 do
   begin
     if Offset + SizeOf(UInt32) > DataOffset + DataLength then
       Exit(False);
-    SequenceLength := Integer(ReadUInt32LE(ABuffer, Offset));
+    SequenceLengthValue := ReadUInt32LE(ABuffer, Offset);
     Inc(Offset, SizeOf(UInt32));
-    SetLength(ASequences[I].CodePoints, SequenceLength);
-    if Offset + SequenceLength * SizeOf(UInt32) > DataOffset + DataLength then
+    if SequenceLengthValue > UInt32((DataOffset + DataLength - Offset) div
+       SizeOf(UInt32)) then
       Exit(False);
+    SequenceLength := Integer(SequenceLengthValue);
+    SetLength(ASequences[I].CodePoints, SequenceLength);
     for J := 0 to SequenceLength - 1 do
     begin
       ASequences[I].CodePoints[J] := ReadUInt32LE(ABuffer, Offset);

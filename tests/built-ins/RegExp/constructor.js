@@ -114,6 +114,15 @@ test("RegExp throws SyntaxError for invalid patterns at construction time", () =
   }).toThrow(SyntaxError);
 });
 
+test("compile throws SyntaxError for invalid patterns", () => {
+  const regex = /valid/;
+
+  expect(() => {
+    regex.compile("[");
+  }).toThrow(SyntaxError);
+  expect(regex.source).toBe("valid");
+});
+
 test("RegExp accepts d flag and exposes hasIndices", () => {
   const regex = new RegExp("a", "dg");
   expect(regex.flags).toBe("dg");

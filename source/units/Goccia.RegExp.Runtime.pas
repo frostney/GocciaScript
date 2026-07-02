@@ -382,8 +382,13 @@ var
 begin
   if not IsRegExpInstance(AValue) then
     ThrowTypeError(SErrorRegExpExecNonRegExp);
-  CanonicalFlags := CanonicalizeRegExpFlags(AFlags);
-  CompiledProgram := CompileRegExpProgram(APattern, CanonicalFlags);
+  try
+    CanonicalFlags := CanonicalizeRegExpFlags(AFlags);
+    CompiledProgram := CompileRegExpProgram(APattern, CanonicalFlags);
+  except
+    on E: Exception do
+      ThrowSyntaxError(E.Message);
+  end;
   Source := NormalizeRegExpSource(APattern);
   TGocciaObjectValue(AValue).RegExpData := TGocciaRegExpProgramData.Create(
     CompiledProgram, Source, CanonicalFlags);
