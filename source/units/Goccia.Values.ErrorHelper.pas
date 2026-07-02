@@ -94,9 +94,8 @@ begin
   Result.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(AMessage));
 
   if Assigned(TGocciaCallStack.Instance) then
-    Result.AssignProperty(PROP_STACK,
-      TGocciaStringLiteralValue.Create(
-        TGocciaCallStack.Instance.CaptureStackTrace(AName, AMessage, ASkipTop)));
+    Result.ErrorStack :=
+      TGocciaCallStack.Instance.CaptureStackTrace(AName, AMessage, ASkipTop);
 end;
 
 function CreateErrorObjectInRealm(const AName, AMessage: string;

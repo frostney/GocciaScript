@@ -94,3 +94,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0082 — Unify embedded-data caches onto a lock-free publication primitive](0082-lazy-published-cache-primitive.md)
 - [0083 — Migrate explicit per-thread cache clears into the thread-cleanup registry](0083-migrate-cache-clears-into-cleanup-registry.md)
 - [0084 — Realm-owned prototype method hosts and object-reference threadvar audit](0084-realm-owned-prototype-method-hosts.md)
+- [0085 — Defer broad Annex B support before 1.0](0085-defer-annex-b-before-1-0.md)
