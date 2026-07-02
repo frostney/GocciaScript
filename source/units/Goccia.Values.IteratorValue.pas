@@ -334,7 +334,7 @@ begin
   if ValueWasRooted then
     GC.AddTempRoot(AValue);
   try
-    Result := TGocciaObjectValue.Create;
+    Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
     ResultWasRooted := Assigned(GC) and not GC.IsTempRoot(Result);
     if ResultWasRooted then
       GC.AddTempRoot(Result);

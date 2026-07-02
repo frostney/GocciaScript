@@ -14,12 +14,29 @@ uses
   Goccia.Values.FunctionValue,
   Goccia.Values.IteratorValue,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.Values.Primitives,
+  Goccia.Values.PromiseValue;
 
 type
   TGocciaGeneratorState = (gsSuspendedStart, gsSuspendedYield, gsExecuting, gsCompleted);
 
-  TGocciaGeneratorObjectValue = class(TGocciaIteratorValue)
+  TGocciaAsyncGeneratorRequest = record
+    Kind: TGocciaGeneratorResumeKind;
+    Value: TGocciaValue;
+    Promise: TGocciaPromiseValue;
+  end;
+
+  TGocciaGeneratorBaseValue = class(TGocciaIteratorValue)
+  public
+    function GeneratorNext(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue; virtual; abstract;
+    function GeneratorReturn(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue; virtual; abstract;
+    function GeneratorThrow(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue; virtual; abstract;
+  end;
+
+  TGocciaGeneratorObjectValue = class(TGocciaGeneratorBaseValue)
   private
     FContinuation: TGocciaGeneratorContinuation;
     FState: TGocciaGeneratorState;
@@ -36,26 +53,58 @@ type
     procedure MarkReferences; override;
     function ToStringTag: string; override;
     function BuiltinTagFallback: Boolean; override;
-    function GeneratorNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function GeneratorReturn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function GeneratorThrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GeneratorNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
+    function GeneratorReturn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
+    function GeneratorThrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
   end;
 
-  TGocciaAsyncGeneratorObjectValue = class(TGocciaObjectValue)
+  TGocciaAsyncGeneratorBaseValue = class(TGocciaObjectValue)
+  public
+    function AsyncGeneratorNext(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue; virtual; abstract;
+    function AsyncGeneratorReturn(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue; virtual; abstract;
+    function AsyncGeneratorThrow(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue; virtual; abstract;
+  end;
+
+  TGocciaAsyncGeneratorObjectValue = class(TGocciaAsyncGeneratorBaseValue)
   private
     FContinuation: TGocciaGeneratorContinuation;
     FState: TGocciaGeneratorState;
+    FQueue: array of TGocciaAsyncGeneratorRequest;
+    FQueueHead: Integer;
+    FQueueCount: Integer;
+    FQueueRunning: Boolean;
     function ResumeAsPromise(const AKind: TGocciaGeneratorResumeKind;
       const AValue: TGocciaValue): TGocciaValue;
+    function DequeueRequest(out ARequest: TGocciaAsyncGeneratorRequest): Boolean;
+    function PeekRequest(out ARequest: TGocciaAsyncGeneratorRequest): Boolean;
+    procedure EnqueueRequest(const ARequest: TGocciaAsyncGeneratorRequest);
+    procedure FinishRequest;
+    procedure ProcessQueue;
+    procedure StartRequest(const ARequest: TGocciaAsyncGeneratorRequest);
+    procedure AttachBodyAwait(const ASuspension: EGocciaAsyncAwaitSuspend);
+    procedure ContinueBodyAwait(const AValue: TGocciaValue;
+      const AIsThrow: Boolean);
+    procedure AwaitYieldValue(const AValue: TGocciaValue);
+    procedure AwaitReturnValue(const AValue: TGocciaValue;
+      const AThrowIntoGenerator: Boolean = False);
+    procedure CompleteCurrentRequest(const AValue: TGocciaValue;
+      const AIsThrow, ADone: Boolean);
+    procedure ResolveAwaitedYield(const AValue: TGocciaValue);
+    procedure RejectAwaitedYield(const AReason: TGocciaValue);
+    procedure ResolveAwaitedReturn(const AValue: TGocciaValue);
+    procedure RejectAwaitedReturn(const AReason: TGocciaValue);
   public
     constructor Create(const AContinuation: TGocciaGeneratorContinuation);
     destructor Destroy; override;
     procedure MarkReferences; override;
     function ToStringTag: string; override;
     function BuiltinTagFallback: Boolean; override;
-    function AsyncGeneratorNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function AsyncGeneratorReturn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function AsyncGeneratorThrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function AsyncGeneratorNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
+    function AsyncGeneratorReturn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
+    function AsyncGeneratorThrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     function AsyncIteratorSelf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
@@ -89,17 +138,20 @@ type
   end;
 
 procedure EnsureGeneratorPrototypeMethods(const APrototype: TGocciaObjectValue);
+procedure EnsureAsyncGeneratorPrototypeMethods(const APrototype: TGocciaObjectValue);
 
 implementation
 
 uses
   SysUtils,
 
+  Goccia.Arithmetic,
   Goccia.AST.BindingPatterns,
   Goccia.AST.Expressions,
   Goccia.AST.Statements,
   Goccia.Bytecode.Chunk,
   Goccia.Constants,
+  Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Evaluator,
@@ -110,13 +162,11 @@ uses
   Goccia.Types.Enforcement,
   Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.ArrayValue,
-  Goccia.Values.Await,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.PromiseValue,
   Goccia.Values.SymbolValue;
 
 type
@@ -130,8 +180,44 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
+  TGocciaAsyncGeneratorPrototypeMethodHost = class
+  public
+    function AsyncGeneratorNext(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function AsyncGeneratorReturn(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function AsyncGeneratorThrow(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+  end;
+
+  TGocciaAsyncGeneratorAwaitReturnHandler = class(TGocciaObjectValue)
+  private
+    FGenerator: TGocciaAsyncGeneratorObjectValue;
+    FReject: Boolean;
+    FReturn: Boolean;
+  public
+    constructor Create(const AGenerator: TGocciaAsyncGeneratorObjectValue;
+      const AReject: Boolean; const AReturn: Boolean = False);
+    function Invoke(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure MarkReferences; override;
+  end;
+
+  TGocciaAsyncGeneratorBodyAwaitHandler = class(TGocciaObjectValue)
+  private
+    FGenerator: TGocciaAsyncGeneratorObjectValue;
+    FReject: Boolean;
+  public
+    constructor Create(const AGenerator: TGocciaAsyncGeneratorObjectValue;
+      const AReject: Boolean);
+    function Invoke(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure MarkReferences; override;
+  end;
+
 var
   GGeneratorPrototypeMethodHostSlot: TGocciaRealmOwnedSlotId;
+  GAsyncGeneratorPrototypeMethodHostSlot: TGocciaRealmOwnedSlotId;
 
 function GeneratorObjectIntrinsicParent(
   const AKind: TGocciaFunctionObjectIntrinsicKind;
@@ -156,7 +242,9 @@ begin
       TGocciaObjectValue.SharedObjectPrototype,
       IteratorPrototype);
     if AKind = foikGenerator then
-      EnsureGeneratorPrototypeMethods(Result);
+      EnsureGeneratorPrototypeMethods(Result)
+    else if AKind = foikAsyncGenerator then
+      EnsureAsyncGeneratorPrototypeMethods(Result);
   finally
     if ShouldSwitchRealm then
       SetCurrentRealm(PreviousRealm);
@@ -193,6 +281,65 @@ begin
   end;
 end;
 
+function PromiseConstructorIntrinsic: TGocciaValue;
+var
+  GlobalScope: TGocciaScope;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if not Assigned(CurrentRealm) or
+     not (CurrentRealm.GlobalEnv is TGocciaScope) then
+    Exit;
+
+  GlobalScope := TGocciaScope(CurrentRealm.GlobalEnv);
+  if GlobalScope.Contains(CONSTRUCTOR_PROMISE) then
+    Result := GlobalScope.GetValue(CONSTRUCTOR_PROMISE);
+end;
+
+function AsyncGeneratorPromiseResolve(
+  const AValue: TGocciaValue): TGocciaPromiseValue;
+var
+  ConstructorValue: TGocciaValue;
+  IsRooted: Boolean;
+  ValueConstructor: TGocciaValue;
+begin
+  ConstructorValue := PromiseConstructorIntrinsic;
+  if AValue is TGocciaPromiseValue then
+  begin
+    ValueConstructor := TGocciaPromiseValue(AValue).GetProperty(
+      PROP_CONSTRUCTOR);
+    if IsSameValue(ValueConstructor, ConstructorValue) then
+      Exit(TGocciaPromiseValue(AValue));
+  end;
+
+  Result := TGocciaPromiseValue.Create;
+  IsRooted := Assigned(TGarbageCollector.Instance);
+  if IsRooted then
+    TGarbageCollector.Instance.AddTempRoot(Result);
+  try
+    Result.Resolve(AValue);
+  except
+    if IsRooted then
+    begin
+      TGarbageCollector.Instance.RemoveTempRoot(Result);
+      IsRooted := False;
+    end;
+    Result.Free;
+    raise;
+  end;
+  if IsRooted then
+    TGarbageCollector.Instance.RemoveTempRoot(Result);
+end;
+
+function ExceptionToErrorValue(const AException: Exception): TGocciaValue;
+var
+  MessageText: string;
+begin
+  MessageText := AException.Message;
+  if Copy(MessageText, 1, 7) = 'Error: ' then
+    Delete(MessageText, 1, 7);
+  Result := CreateErrorObject(ERROR_NAME, MessageText);
+end;
+
 function GeneratorPrototypeMethodHost: TGocciaGeneratorPrototypeMethodHost;
 begin
   if not Assigned(CurrentRealm) then
@@ -205,13 +352,25 @@ begin
   CurrentRealm.SetOwnedSlot(GGeneratorPrototypeMethodHostSlot, Result);
 end;
 
+function AsyncGeneratorPrototypeMethodHost: TGocciaAsyncGeneratorPrototypeMethodHost;
+begin
+  if not Assigned(CurrentRealm) then
+    raise Exception.Create('AsyncGenerator prototype methods require an active realm');
+  Result := TGocciaAsyncGeneratorPrototypeMethodHost(
+    CurrentRealm.GetOwnedSlot(GAsyncGeneratorPrototypeMethodHostSlot));
+  if Assigned(Result) then
+    Exit;
+  Result := TGocciaAsyncGeneratorPrototypeMethodHost.Create;
+  CurrentRealm.SetOwnedSlot(GAsyncGeneratorPrototypeMethodHostSlot, Result);
+end;
+
 function TGocciaGeneratorPrototypeMethodHost.GeneratorNext(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if not (AThisValue is TGocciaGeneratorObjectValue) then
+  if not (AThisValue is TGocciaGeneratorBaseValue) then
     raise TGocciaThrowValue.Create(GeneratorIncompatibleReceiverError);
-  Result := TGocciaGeneratorObjectValue(AThisValue).GeneratorNext(AArgs,
+  Result := TGocciaGeneratorBaseValue(AThisValue).GeneratorNext(AArgs,
     AThisValue);
 end;
 
@@ -219,9 +378,9 @@ function TGocciaGeneratorPrototypeMethodHost.GeneratorReturn(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if not (AThisValue is TGocciaGeneratorObjectValue) then
+  if not (AThisValue is TGocciaGeneratorBaseValue) then
     raise TGocciaThrowValue.Create(GeneratorIncompatibleReceiverError);
-  Result := TGocciaGeneratorObjectValue(AThisValue).GeneratorReturn(AArgs,
+  Result := TGocciaGeneratorBaseValue(AThisValue).GeneratorReturn(AArgs,
     AThisValue);
 end;
 
@@ -229,10 +388,106 @@ function TGocciaGeneratorPrototypeMethodHost.GeneratorThrow(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if not (AThisValue is TGocciaGeneratorObjectValue) then
+  if not (AThisValue is TGocciaGeneratorBaseValue) then
     raise TGocciaThrowValue.Create(GeneratorIncompatibleReceiverError);
-  Result := TGocciaGeneratorObjectValue(AThisValue).GeneratorThrow(AArgs,
+  Result := TGocciaGeneratorBaseValue(AThisValue).GeneratorThrow(AArgs,
     AThisValue);
+end;
+
+function TGocciaAsyncGeneratorPrototypeMethodHost.AsyncGeneratorNext(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaAsyncGeneratorBaseValue) then
+    Exit(RejectedTypeErrorPromise('AsyncGenerator method called on incompatible receiver'));
+  Result := TGocciaAsyncGeneratorBaseValue(AThisValue).AsyncGeneratorNext(
+    AArgs, AThisValue);
+end;
+
+function TGocciaAsyncGeneratorPrototypeMethodHost.AsyncGeneratorReturn(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaAsyncGeneratorBaseValue) then
+    Exit(RejectedTypeErrorPromise('AsyncGenerator method called on incompatible receiver'));
+  Result := TGocciaAsyncGeneratorBaseValue(AThisValue).AsyncGeneratorReturn(
+    AArgs, AThisValue);
+end;
+
+function TGocciaAsyncGeneratorPrototypeMethodHost.AsyncGeneratorThrow(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaAsyncGeneratorBaseValue) then
+    Exit(RejectedTypeErrorPromise('AsyncGenerator method called on incompatible receiver'));
+  Result := TGocciaAsyncGeneratorBaseValue(AThisValue).AsyncGeneratorThrow(
+    AArgs, AThisValue);
+end;
+
+constructor TGocciaAsyncGeneratorAwaitReturnHandler.Create(
+  const AGenerator: TGocciaAsyncGeneratorObjectValue; const AReject: Boolean;
+  const AReturn: Boolean = False);
+begin
+  inherited Create(nil);
+  FGenerator := AGenerator;
+  FReject := AReject;
+  FReturn := AReturn;
+end;
+
+function TGocciaAsyncGeneratorAwaitReturnHandler.Invoke(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Value: TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if not Assigned(FGenerator) then
+    Exit;
+
+  Value := ArgumentOrUndefined(AArgs);
+  if FReturn and FReject then
+    FGenerator.RejectAwaitedReturn(Value)
+  else if FReturn then
+    FGenerator.ResolveAwaitedReturn(Value)
+  else if FReject then
+    FGenerator.RejectAwaitedYield(Value)
+  else
+    FGenerator.ResolveAwaitedYield(Value);
+end;
+
+procedure TGocciaAsyncGeneratorAwaitReturnHandler.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FGenerator) then
+    FGenerator.MarkReferences;
+end;
+
+constructor TGocciaAsyncGeneratorBodyAwaitHandler.Create(
+  const AGenerator: TGocciaAsyncGeneratorObjectValue; const AReject: Boolean);
+begin
+  inherited Create(nil);
+  FGenerator := AGenerator;
+  FReject := AReject;
+end;
+
+function TGocciaAsyncGeneratorBodyAwaitHandler.Invoke(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if not Assigned(FGenerator) then
+    Exit;
+
+  FGenerator.ContinueBodyAwait(ArgumentOrUndefined(AArgs), FReject);
+end;
+
+procedure TGocciaAsyncGeneratorBodyAwaitHandler.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FGenerator) then
+    FGenerator.MarkReferences;
 end;
 
 procedure EnsureGeneratorPrototypeMethods(const APrototype: TGocciaObjectValue);
@@ -271,6 +526,46 @@ begin
       TGocciaPropertyDescriptorData.Create(
         TGocciaNativeFunctionValue.CreateWithoutPrototype(
           Host.GeneratorThrow, PROP_THROW, 1),
+        [pfConfigurable, pfWritable]));
+  end;
+end;
+
+procedure EnsureAsyncGeneratorPrototypeMethods(const APrototype: TGocciaObjectValue);
+var
+  Host: TGocciaAsyncGeneratorPrototypeMethodHost;
+begin
+  if not Assigned(APrototype) then
+    Exit;
+
+  Host := nil;
+  if not APrototype.HasOwnProperty(PROP_NEXT) then
+  begin
+    if not Assigned(Host) then
+      Host := AsyncGeneratorPrototypeMethodHost;
+    APrototype.DefineProperty(PROP_NEXT,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          Host.AsyncGeneratorNext, PROP_NEXT, 1),
+        [pfConfigurable, pfWritable]));
+  end;
+  if not APrototype.HasOwnProperty(PROP_RETURN) then
+  begin
+    if not Assigned(Host) then
+      Host := AsyncGeneratorPrototypeMethodHost;
+    APrototype.DefineProperty(PROP_RETURN,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          Host.AsyncGeneratorReturn, PROP_RETURN, 1),
+        [pfConfigurable, pfWritable]));
+  end;
+  if not APrototype.HasOwnProperty(PROP_THROW) then
+  begin
+    if not Assigned(Host) then
+      Host := AsyncGeneratorPrototypeMethodHost;
+    APrototype.DefineProperty(PROP_THROW,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          Host.AsyncGeneratorThrow, PROP_THROW, 1),
         [pfConfigurable, pfWritable]));
   end;
 end;
@@ -507,22 +802,6 @@ begin
   FContinuation := AContinuation;
   FState := gsSuspendedStart;
   Prototype := GeneratorObjectIntrinsicParent(foikAsyncGenerator);
-  DefineProperty(PROP_NEXT,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.Create(AsyncGeneratorNext, PROP_NEXT, 1),
-      [pfConfigurable, pfWritable]));
-  DefineProperty(PROP_RETURN,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.Create(AsyncGeneratorReturn, PROP_RETURN, 1),
-      [pfConfigurable, pfWritable]));
-  DefineProperty(PROP_THROW,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.Create(AsyncGeneratorThrow, PROP_THROW, 1),
-      [pfConfigurable, pfWritable]));
-  DefineSymbolProperty(TGocciaSymbolValue.WellKnownAsyncIterator,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.Create(AsyncIteratorSelf, '[Symbol.asyncIterator]', 0),
-      [pfConfigurable, pfWritable]));
 end;
 
 destructor TGocciaAsyncGeneratorObjectValue.Destroy;
@@ -535,63 +814,15 @@ function TGocciaAsyncGeneratorObjectValue.ResumeAsPromise(
   const AKind: TGocciaGeneratorResumeKind; const AValue: TGocciaValue): TGocciaValue;
 var
   Promise: TGocciaPromiseValue;
-  Done: Boolean;
-  UnwrappedValue: TGocciaValue;
-  Value: TGocciaValue;
+  Request: TGocciaAsyncGeneratorRequest;
 begin
   Promise := TGocciaPromiseValue.Create;
   try
-    try
-      if FState = gsCompleted then
-      begin
-        case AKind of
-          grkNext:
-            begin
-              Promise.Resolve(CreateIteratorResult(
-                TGocciaUndefinedLiteralValue.UndefinedValue, True));
-              Exit(Promise);
-            end;
-          grkThrow:
-            begin
-              Promise.Reject(AValue);
-              Exit(Promise);
-            end;
-        else
-          begin
-            UnwrappedValue := AwaitValue(AValue);
-            Promise.Resolve(CreateIteratorResult(UnwrappedValue, True));
-            Exit(Promise);
-          end;
-        end;
-      end
-      else
-      begin
-        FState := gsExecuting;
-        Value := FContinuation.Resume(AKind, AValue, Done);
-        if Done then
-          FState := gsCompleted
-        else
-          FState := gsSuspendedYield;
-      end;
-      if Done then
-      begin
-        if FContinuation.ReturnRequiresAwait then
-          UnwrappedValue := AwaitValue(Value)
-        else
-          UnwrappedValue := Value;
-      end
-      else if FContinuation.LastYieldWasDelegate then
-        UnwrappedValue := Value
-      else
-        UnwrappedValue := AwaitValue(Value);
-      Promise.Resolve(CreateIteratorResult(UnwrappedValue, Done));
-    except
-      on E: TGocciaThrowValue do
-      begin
-        FState := gsCompleted;
-        Promise.Reject(E.Value);
-      end;
-    end;
+    Request.Kind := AKind;
+    Request.Value := AValue;
+    Request.Promise := Promise;
+    EnqueueRequest(Request);
+    ProcessQueue;
   except
     Promise.Free;
     raise;
@@ -599,12 +830,433 @@ begin
   Result := Promise;
 end;
 
+function TGocciaAsyncGeneratorObjectValue.DequeueRequest(
+  out ARequest: TGocciaAsyncGeneratorRequest): Boolean;
+begin
+  Result := FQueueCount > 0;
+  if not Result then
+    Exit;
+
+  ARequest := FQueue[FQueueHead];
+  FQueue[FQueueHead].Value := nil;
+  FQueue[FQueueHead].Promise := nil;
+  Inc(FQueueHead);
+  Dec(FQueueCount);
+  if FQueueCount = 0 then
+    FQueueHead := 0;
+end;
+
+function TGocciaAsyncGeneratorObjectValue.PeekRequest(
+  out ARequest: TGocciaAsyncGeneratorRequest): Boolean;
+begin
+  Result := FQueueCount > 0;
+  if Result then
+    ARequest := FQueue[FQueueHead];
+end;
+
+procedure TGocciaAsyncGeneratorObjectValue.EnqueueRequest(
+  const ARequest: TGocciaAsyncGeneratorRequest);
+var
+  I: Integer;
+begin
+  if FQueueHead > 0 then
+  begin
+    for I := 0 to FQueueCount - 1 do
+      FQueue[I] := FQueue[FQueueHead + I];
+    for I := FQueueCount to High(FQueue) do
+    begin
+      FQueue[I].Value := nil;
+      FQueue[I].Promise := nil;
+    end;
+    FQueueHead := 0;
+  end;
+
+  if FQueueCount >= Length(FQueue) then
+    SetLength(FQueue, FQueueCount * 2 + 4);
+
+  FQueue[FQueueCount] := ARequest;
+  Inc(FQueueCount);
+end;
+
+procedure TGocciaAsyncGeneratorObjectValue.FinishRequest;
+begin
+  FQueueRunning := False;
+  ProcessQueue;
+end;
+
+procedure TGocciaAsyncGeneratorObjectValue.ProcessQueue;
+var
+  Request: TGocciaAsyncGeneratorRequest;
+begin
+  if FQueueRunning then
+    Exit;
+  if not PeekRequest(Request) then
+    Exit;
+
+  FQueueRunning := True;
+  StartRequest(Request);
+end;
+
+procedure TGocciaAsyncGeneratorObjectValue.AttachBodyAwait(
+  const ASuspension: EGocciaAsyncAwaitSuspend);
+var
+  FulfillFunction: TGocciaNativeFunctionValue;
+  FulfillHandler: TGocciaAsyncGeneratorBodyAwaitHandler;
+  RejectFunction: TGocciaNativeFunctionValue;
+  RejectHandler: TGocciaAsyncGeneratorBodyAwaitHandler;
+begin
+  FulfillHandler := TGocciaAsyncGeneratorBodyAwaitHandler.Create(Self, False);
+  FulfillFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    FulfillHandler.Invoke, 'async-generator-body-await-fulfill', 1);
+  FulfillFunction.CapturedRoot := FulfillHandler;
+
+  RejectHandler := TGocciaAsyncGeneratorBodyAwaitHandler.Create(Self, True);
+  RejectFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    RejectHandler.Invoke, 'async-generator-body-await-reject', 1);
+  RejectFunction.CapturedRoot := RejectHandler;
+
+  ASuspension.Promise.InvokeThen(FulfillFunction, RejectFunction);
+end;
+
+procedure TGocciaAsyncGeneratorObjectValue.ContinueBodyAwait(
+  const AValue: TGocciaValue; const AIsThrow: Boolean);
+var
+  Done: Boolean;
+  ResultValue: TGocciaValue;
+begin
+  try
+    FState := gsExecuting;
+    PushAsyncAwaitSuspension;
+    try
+      if AIsThrow then
+        ResultValue := FContinuation.Resume(grkThrow, AValue, Done)
+      else
+        ResultValue := FContinuation.Resume(grkNext, AValue, Done);
+    finally
+      PopAsyncAwaitSuspension;
+    end;
+
+    if Done then
+      FState := gsCompleted
+    else
+      FState := gsSuspendedYield;
+
+    if Done then
+    begin
+      if FContinuation.ReturnRequiresAwait then
+      begin
+        AwaitReturnValue(ResultValue, True);
+        Exit;
+      end;
+      CompleteCurrentRequest(ResultValue, False, True);
+    end
+    else if FContinuation.LastYieldWasDelegate then
+      CompleteCurrentRequest(ResultValue, False, False)
+    else
+      AwaitYieldValue(ResultValue);
+  except
+    on E: EGocciaAsyncAwaitSuspend do
+      AttachBodyAwait(E);
+    on E: TGocciaThrowValue do
+    begin
+      FState := gsCompleted;
+      CompleteCurrentRequest(E.Value, True, True);
+    end;
+  end;
+end;
+
+procedure TGocciaAsyncGeneratorObjectValue.AwaitYieldValue(
+  const AValue: TGocciaValue);
+var
+  AwaitPromise: TGocciaPromiseValue;
+  FulfillFunction: TGocciaNativeFunctionValue;
+  FulfillHandler: TGocciaAsyncGeneratorAwaitReturnHandler;
+  RejectFunction: TGocciaNativeFunctionValue;
+  RejectHandler: TGocciaAsyncGeneratorAwaitReturnHandler;
+begin
+  try
+    AwaitPromise := AsyncGeneratorPromiseResolve(AValue);
+  except
+    on E: TGocciaThrowValue do
+    begin
+      RejectAwaitedYield(E.Value);
+      Exit;
+    end;
+  end;
+
+  FulfillHandler := TGocciaAsyncGeneratorAwaitReturnHandler.Create(
+    Self, False, False);
+  FulfillFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    FulfillHandler.Invoke, 'async-generator-yield-fulfill', 1);
+  FulfillFunction.CapturedRoot := FulfillHandler;
+
+  RejectHandler := TGocciaAsyncGeneratorAwaitReturnHandler.Create(
+    Self, True, False);
+  RejectFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    RejectHandler.Invoke, 'async-generator-yield-reject', 1);
+  RejectFunction.CapturedRoot := RejectHandler;
+
+  AwaitPromise.InvokeThen(FulfillFunction, RejectFunction);
+end;
+
+// ES2026 §27.6.3.9 AsyncGeneratorAwaitReturn(gen)
+procedure TGocciaAsyncGeneratorObjectValue.AwaitReturnValue(
+  const AValue: TGocciaValue; const AThrowIntoGenerator: Boolean = False);
+var
+  AwaitPromise: TGocciaPromiseValue;
+  FulfillFunction: TGocciaNativeFunctionValue;
+  FulfillHandler: TGocciaAsyncGeneratorAwaitReturnHandler;
+  RejectFunction: TGocciaNativeFunctionValue;
+  RejectHandler: TGocciaAsyncGeneratorAwaitReturnHandler;
+begin
+  try
+    AwaitPromise := AsyncGeneratorPromiseResolve(AValue);
+  except
+    on E: TGocciaThrowValue do
+    begin
+      if AThrowIntoGenerator then
+        RejectAwaitedYield(E.Value)
+      else
+        RejectAwaitedReturn(E.Value);
+      Exit;
+    end;
+    on E: Exception do
+    begin
+      if AThrowIntoGenerator then
+        RejectAwaitedYield(ExceptionToErrorValue(E))
+      else
+        RejectAwaitedReturn(ExceptionToErrorValue(E));
+      Exit;
+    end;
+  end;
+
+  FulfillHandler := TGocciaAsyncGeneratorAwaitReturnHandler.Create(
+    Self, False, True);
+  FulfillFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    FulfillHandler.Invoke, 'async-generator-return-fulfill', 1);
+  FulfillFunction.CapturedRoot := FulfillHandler;
+
+  RejectHandler := TGocciaAsyncGeneratorAwaitReturnHandler.Create(
+    Self, True, True);
+  RejectFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    RejectHandler.Invoke, 'async-generator-return-reject', 1);
+  RejectFunction.CapturedRoot := RejectHandler;
+
+  AwaitPromise.InvokeThen(FulfillFunction, RejectFunction);
+end;
+
+// ES2026 §27.6.3.5 AsyncGeneratorCompleteStep(gen, completion, done)
+procedure TGocciaAsyncGeneratorObjectValue.CompleteCurrentRequest(
+  const AValue: TGocciaValue; const AIsThrow, ADone: Boolean);
+var
+  Request: TGocciaAsyncGeneratorRequest;
+begin
+  if not DequeueRequest(Request) then
+  begin
+    FQueueRunning := False;
+    Exit;
+  end;
+
+  if AIsThrow then
+    Request.Promise.Reject(AValue)
+  else
+  Request.Promise.Resolve(CreateIteratorResult(AValue, ADone));
+  FinishRequest;
+end;
+
+procedure TGocciaAsyncGeneratorObjectValue.ResolveAwaitedYield(
+  const AValue: TGocciaValue);
+begin
+  CompleteCurrentRequest(AValue, False, False);
+end;
+
+procedure TGocciaAsyncGeneratorObjectValue.RejectAwaitedYield(
+  const AReason: TGocciaValue);
+var
+  Done: Boolean;
+  ResultValue: TGocciaValue;
+begin
+  try
+    FState := gsExecuting;
+    PushAsyncAwaitSuspension;
+    try
+      ResultValue := FContinuation.Resume(grkThrow, AReason, Done);
+    finally
+      PopAsyncAwaitSuspension;
+    end;
+    if Done then
+      FState := gsCompleted
+    else
+      FState := gsSuspendedYield;
+
+    if Done then
+    begin
+      if FContinuation.ReturnRequiresAwait then
+      begin
+        AwaitReturnValue(ResultValue, True);
+        Exit;
+      end;
+      CompleteCurrentRequest(ResultValue, False, True);
+    end
+    else if FContinuation.LastYieldWasDelegate then
+      CompleteCurrentRequest(ResultValue, False, False)
+    else
+      AwaitYieldValue(ResultValue);
+  except
+    on E: EGocciaAsyncAwaitSuspend do
+      AttachBodyAwait(E);
+    on E: TGocciaThrowValue do
+    begin
+      FState := gsCompleted;
+      CompleteCurrentRequest(E.Value, True, True);
+    end;
+  end;
+end;
+
+procedure TGocciaAsyncGeneratorObjectValue.ResolveAwaitedReturn(
+  const AValue: TGocciaValue);
+begin
+  CompleteCurrentRequest(AValue, False, True);
+end;
+
+procedure TGocciaAsyncGeneratorObjectValue.RejectAwaitedReturn(
+  const AReason: TGocciaValue);
+begin
+  CompleteCurrentRequest(AReason, True, True);
+end;
+
+procedure TGocciaAsyncGeneratorObjectValue.StartRequest(
+  const ARequest: TGocciaAsyncGeneratorRequest);
+var
+  CheckedPromise: TGocciaPromiseValue;
+  Done: Boolean;
+  UnwrappedValue: TGocciaValue;
+  Value: TGocciaValue;
+begin
+  try
+    if (ARequest.Kind = grkReturn) and
+       (FState in [gsSuspendedStart, gsCompleted]) then
+    begin
+      FState := gsCompleted;
+      AwaitReturnValue(ARequest.Value);
+      Exit;
+    end;
+
+    if FState = gsCompleted then
+    begin
+      case ARequest.Kind of
+        grkNext:
+          begin
+            CompleteCurrentRequest(TGocciaUndefinedLiteralValue.UndefinedValue,
+              False, True);
+            Exit;
+          end;
+        grkThrow:
+          begin
+            CompleteCurrentRequest(ARequest.Value, True, True);
+            Exit;
+          end;
+      else
+        begin
+          AwaitReturnValue(ARequest.Value);
+          Exit;
+        end;
+      end;
+    end;
+
+    if (ARequest.Kind = grkReturn) and
+       (FState = gsSuspendedYield) and
+       (ARequest.Value is TGocciaPromiseValue) then
+    begin
+      try
+        CheckedPromise := AsyncGeneratorPromiseResolve(ARequest.Value);
+        CheckedPromise := nil;
+      except
+        on E: TGocciaThrowValue do
+        begin
+          RejectAwaitedYield(E.Value);
+          Exit;
+        end;
+        on E: Exception do
+        begin
+          RejectAwaitedYield(ExceptionToErrorValue(E));
+          Exit;
+        end;
+      end;
+    end;
+
+    FState := gsExecuting;
+    PushAsyncAwaitSuspension;
+    try
+      Value := FContinuation.Resume(ARequest.Kind, ARequest.Value, Done);
+    finally
+      PopAsyncAwaitSuspension;
+    end;
+    if Done then
+      FState := gsCompleted
+    else
+      FState := gsSuspendedYield;
+
+    if Done then
+    begin
+      if FContinuation.ReturnRequiresAwait then
+      begin
+        AwaitReturnValue(Value, True);
+        Exit;
+      end;
+      UnwrappedValue := Value;
+    end
+    else if FContinuation.LastYieldWasDelegate then
+      UnwrappedValue := Value
+    else
+    begin
+      AwaitYieldValue(Value);
+      Exit;
+    end;
+
+    CompleteCurrentRequest(UnwrappedValue, False, Done);
+  except
+    on E: EGocciaAsyncAwaitSuspend do
+    begin
+      AttachBodyAwait(E);
+    end;
+    on E: TGocciaThrowValue do
+    begin
+      FState := gsCompleted;
+      CompleteCurrentRequest(E.Value, True, True);
+    end;
+    on E: Exception do
+    begin
+      if ARequest.Kind = grkReturn then
+      begin
+        FState := gsCompleted;
+        CompleteCurrentRequest(ExceptionToErrorValue(E), True, True);
+        Exit;
+      end;
+      raise;
+    end;
+  end;
+end;
+
 procedure TGocciaAsyncGeneratorObjectValue.MarkReferences;
+var
+  I: Integer;
+  Index: Integer;
 begin
   if GCMarked then Exit;
   inherited;
   if Assigned(FContinuation) then
     FContinuation.MarkReferences;
+  for I := 0 to FQueueCount - 1 do
+  begin
+    Index := FQueueHead + I;
+    if (Index < 0) or (Index > High(FQueue)) then
+      Continue;
+    if Assigned(FQueue[Index].Value) then
+      FQueue[Index].Value.MarkReferences;
+    if Assigned(FQueue[Index].Promise) then
+      FQueue[Index].Promise.MarkReferences;
+  end;
 end;
 
 function TGocciaAsyncGeneratorObjectValue.ToStringTag: string;
@@ -1085,5 +1737,7 @@ end;
 initialization
   GGeneratorPrototypeMethodHostSlot := RegisterRealmOwnedSlot(
     'Generator prototype method host');
+  GAsyncGeneratorPrototypeMethodHostSlot := RegisterRealmOwnedSlot(
+    'AsyncGenerator prototype method host');
 
 end.

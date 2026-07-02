@@ -406,6 +406,208 @@ test("async generator prototype assignment updates the own prototype property", 
   expect(g.prototype).toBe(replacement);
 });
 
+const expectWritableNonEnumerableConfigurableMethod = (descriptor) => {
+  expect(descriptor).toBeDefined();
+  if (descriptor !== undefined) {
+    expect(typeof descriptor.value).toBe("function");
+    expect(descriptor.writable).toBe(true);
+    expect(descriptor.enumerable).toBe(false);
+    expect(descriptor.configurable).toBe(true);
+  }
+};
+
+test("generator prototype exposes inherited next return and throw methods", () => {
+  function* values() {
+    yield 1;
+  }
+
+  const iterator = values();
+  const generatorPrototype = Object.getPrototypeOf(values.prototype);
+  expect(Object.getPrototypeOf(Object.getPrototypeOf(iterator))).toBe(generatorPrototype);
+  expect(Object.getOwnPropertyDescriptor(iterator, "next")).toBeUndefined();
+  expect(Object.getOwnPropertyDescriptor(Object.getPrototypeOf(iterator), "next")).toBeUndefined();
+
+  expectWritableNonEnumerableConfigurableMethod(
+    Object.getOwnPropertyDescriptor(generatorPrototype, "next"),
+  );
+  expectWritableNonEnumerableConfigurableMethod(
+    Object.getOwnPropertyDescriptor(generatorPrototype, "return"),
+  );
+  expectWritableNonEnumerableConfigurableMethod(
+    Object.getOwnPropertyDescriptor(generatorPrototype, "throw"),
+  );
+});
+
+test("generator next and return create ordinary iterator result objects", () => {
+  function* values() {
+    yield 1;
+  }
+
+  const iterator = values();
+  const nextResult = iterator.next();
+  const returnResult = iterator.return(2);
+
+  expect(Object.getPrototypeOf(nextResult)).toBe(Object.prototype);
+  expect(Object.getOwnPropertyDescriptor(nextResult, "value")).toEqual({
+    value: 1,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+  expect(Object.getOwnPropertyDescriptor(nextResult, "done")).toEqual({
+    value: false,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+
+  expect(Object.getPrototypeOf(returnResult)).toBe(Object.prototype);
+  expect(Object.getOwnPropertyDescriptor(returnResult, "value")).toEqual({
+    value: 2,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+  expect(Object.getOwnPropertyDescriptor(returnResult, "done")).toEqual({
+    value: true,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+});
+
+test("async generator prototype exposes inherited next return and throw methods", () => {
+  async function* values() {
+    yield 1;
+  }
+
+  const iterator = values();
+  const asyncGeneratorPrototype = Object.getPrototypeOf(values.prototype);
+  expect(Object.getPrototypeOf(Object.getPrototypeOf(iterator))).toBe(asyncGeneratorPrototype);
+  expect(Object.getOwnPropertyDescriptor(iterator, "next")).toBeUndefined();
+  expect(Object.getOwnPropertyDescriptor(Object.getPrototypeOf(iterator), "next")).toBeUndefined();
+
+  expectWritableNonEnumerableConfigurableMethod(
+    Object.getOwnPropertyDescriptor(asyncGeneratorPrototype, "next"),
+  );
+  expectWritableNonEnumerableConfigurableMethod(
+    Object.getOwnPropertyDescriptor(asyncGeneratorPrototype, "return"),
+  );
+  expectWritableNonEnumerableConfigurableMethod(
+    Object.getOwnPropertyDescriptor(asyncGeneratorPrototype, "throw"),
+  );
+});
+
+test("async generator next and return create ordinary iterator result objects", async () => {
+  async function* values() {
+    yield 1;
+  }
+
+  const iterator = values();
+  const nextResult = await iterator.next();
+  const returnResult = await iterator.return(2);
+
+  expect(Object.getPrototypeOf(nextResult)).toBe(Object.prototype);
+  expect(Object.getOwnPropertyDescriptor(nextResult, "value")).toEqual({
+    value: 1,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+  expect(Object.getOwnPropertyDescriptor(nextResult, "done")).toEqual({
+    value: false,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+
+  expect(Object.getPrototypeOf(returnResult)).toBe(Object.prototype);
+  expect(Object.getOwnPropertyDescriptor(returnResult, "value")).toEqual({
+    value: 2,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+  expect(Object.getOwnPropertyDescriptor(returnResult, "done")).toEqual({
+    value: true,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+});
+
+test("async generator return awaits fulfilled and rejected promise values", async () => {
+  async function* empty() {}
+  async function* values() {
+    yield 1;
+  }
+
+  await expect(empty().return(Promise.resolve("done"))).resolves.toEqual({
+    value: "done",
+    done: true,
+  });
+  await expect(empty().return(Promise.reject("boom"))).rejects.toBe("boom");
+
+  const iterator = values();
+  await expect(iterator.next()).resolves.toEqual({ value: 1, done: false });
+  await expect(iterator.return(Promise.resolve(2))).resolves.toEqual({
+    value: 2,
+    done: true,
+  });
+});
+
+test("async generator queued requests wait behind awaited return fulfillment", async () => {
+  const events = [];
+  async function* values() {
+    yield 1;
+  }
+
+  const iterator = values();
+  await iterator.next();
+  const returnValue = Promise.resolve().then(() => {
+    events.push("return value");
+    return 2;
+  });
+  const returned = iterator.return(returnValue).then((result) => {
+    events.push("return:" + result.value + ":" + result.done);
+  });
+  const nexted = iterator.next().then((result) => {
+    events.push("next:" + result.value + ":" + result.done);
+  });
+
+  const tick = Promise.resolve().then(() => events.push("tick"));
+  await Promise.all([returned, nexted, tick]);
+  expect(events).toEqual([
+    "return value",
+    "tick",
+    "return:2:true",
+    "next:undefined:true",
+  ]);
+});
+
+test("async generator queued requests drain after awaited return rejection", async () => {
+  const events = [];
+  async function* values() {
+    yield 1;
+  }
+
+  const iterator = values();
+  await iterator.next();
+  const returned = iterator.return(Promise.reject("boom")).then(
+    () => events.push("return fulfilled"),
+    (reason) => events.push("return rejected:" + reason),
+  );
+  const nexted = iterator.next().then((result) => {
+    events.push("next:" + result.value + ":" + result.done);
+  });
+
+  await Promise.all([returned, nexted]);
+  expect(events).toEqual([
+    "return rejected:boom",
+    "next:undefined:true",
+  ]);
+});
+
 test("arrow function does NOT have own prototype property", () => {
   const f = () => 42;
   expect(f.prototype).toBeUndefined();
