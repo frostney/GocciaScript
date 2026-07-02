@@ -82,6 +82,13 @@ describe("Function.prototype.toString", () => {
     expect(str.includes("return x * 2")).toBe(true);
   });
 
+  test("class static method source text excludes static modifier", () => {
+    class MathUtils {
+      static /* before */ triple /* name */ (x) { return x * 3; }
+    }
+    expect(MathUtils.triple.toString()).toBe("triple /* name */ (x) { return x * 3; }");
+  });
+
   test("object getter returns source text", () => {
     const obj = { get name() { return "hello"; } };
     const desc = Object.getOwnPropertyDescriptor(obj, "name");

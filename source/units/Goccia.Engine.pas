@@ -2884,7 +2884,161 @@ begin
       ValidateStrictDynamicExpression(
         TGocciaSequenceExpression(AExpr).Expressions[I])
   else if AExpr is TGocciaUnaryExpression then
-    ValidateStrictDynamicExpression(TGocciaUnaryExpression(AExpr).Operand);
+      ValidateStrictDynamicExpression(TGocciaUnaryExpression(AExpr).Operand);
+end;
+
+procedure ValidateDynamicFunctionSuperExpression(
+  const AExpr: TGocciaExpression); forward;
+procedure ValidateDynamicFunctionSuperStatement(
+  const AStmt: TGocciaStatement); forward;
+
+procedure ValidateDynamicFunctionSuperFunction(
+  const AFunction: TGocciaFunctionExpression);
+begin
+  if not Assigned(AFunction) then
+    Exit;
+  if AFunction.Body is TGocciaStatement then
+    ValidateDynamicFunctionSuperStatement(TGocciaStatement(AFunction.Body))
+  else if AFunction.Body is TGocciaExpression then
+    ValidateDynamicFunctionSuperExpression(TGocciaExpression(AFunction.Body));
+end;
+
+procedure ValidateDynamicFunctionSuperExpression(
+  const AExpr: TGocciaExpression);
+var
+  ArrowExpr: TGocciaArrowFunctionExpression;
+  BinaryExpr: TGocciaBinaryExpression;
+  CallExpr: TGocciaCallExpression;
+  ConditionalExpr: TGocciaConditionalExpression;
+  MemberExpr: TGocciaMemberExpression;
+  NewExpr: TGocciaNewExpression;
+  I: Integer;
+begin
+  if not Assigned(AExpr) then
+    Exit;
+
+  if AExpr is TGocciaSuperExpression then
+    ThrowSyntaxError('super is not allowed in this function context');
+
+  if AExpr is TGocciaFunctionExpression then
+    ValidateDynamicFunctionSuperFunction(TGocciaFunctionExpression(AExpr))
+  else if AExpr is TGocciaArrowFunctionExpression then
+  begin
+    ArrowExpr := TGocciaArrowFunctionExpression(AExpr);
+    for I := 0 to High(ArrowExpr.Parameters) do
+      ValidateDynamicFunctionSuperExpression(ArrowExpr.Parameters[I].DefaultValue);
+    if ArrowExpr.Body is TGocciaStatement then
+      ValidateDynamicFunctionSuperStatement(TGocciaStatement(ArrowExpr.Body))
+    else if ArrowExpr.Body is TGocciaExpression then
+      ValidateDynamicFunctionSuperExpression(TGocciaExpression(ArrowExpr.Body));
+  end
+  else if AExpr is TGocciaCallExpression then
+  begin
+    CallExpr := TGocciaCallExpression(AExpr);
+    if CallExpr.Callee is TGocciaSuperExpression then
+      ThrowSyntaxError('super() is not allowed in this function context');
+    ValidateDynamicFunctionSuperExpression(CallExpr.Callee);
+    for I := 0 to CallExpr.Arguments.Count - 1 do
+      ValidateDynamicFunctionSuperExpression(CallExpr.Arguments[I]);
+  end
+  else if AExpr is TGocciaMemberExpression then
+  begin
+    MemberExpr := TGocciaMemberExpression(AExpr);
+    if MemberExpr.ObjectExpr is TGocciaSuperExpression then
+      ThrowSyntaxError('super property access is not allowed in this function context');
+    ValidateDynamicFunctionSuperExpression(MemberExpr.ObjectExpr);
+    if MemberExpr.Computed then
+      ValidateDynamicFunctionSuperExpression(MemberExpr.PropertyExpression);
+  end
+  else if AExpr is TGocciaBinaryExpression then
+  begin
+    BinaryExpr := TGocciaBinaryExpression(AExpr);
+    ValidateDynamicFunctionSuperExpression(BinaryExpr.Left);
+    ValidateDynamicFunctionSuperExpression(BinaryExpr.Right);
+  end
+  else if AExpr is TGocciaSequenceExpression then
+    for I := 0 to TGocciaSequenceExpression(AExpr).Expressions.Count - 1 do
+      ValidateDynamicFunctionSuperExpression(
+        TGocciaSequenceExpression(AExpr).Expressions[I])
+  else if AExpr is TGocciaUnaryExpression then
+    ValidateDynamicFunctionSuperExpression(TGocciaUnaryExpression(AExpr).Operand)
+  else if AExpr is TGocciaAssignmentExpression then
+    ValidateDynamicFunctionSuperExpression(TGocciaAssignmentExpression(AExpr).Value)
+  else if AExpr is TGocciaCompoundAssignmentExpression then
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaCompoundAssignmentExpression(AExpr).Value)
+  else if AExpr is TGocciaConditionalExpression then
+  begin
+    ConditionalExpr := TGocciaConditionalExpression(AExpr);
+    ValidateDynamicFunctionSuperExpression(ConditionalExpr.Condition);
+    ValidateDynamicFunctionSuperExpression(ConditionalExpr.Consequent);
+    ValidateDynamicFunctionSuperExpression(ConditionalExpr.Alternate);
+  end
+  else if AExpr is TGocciaNewExpression then
+  begin
+    NewExpr := TGocciaNewExpression(AExpr);
+    ValidateDynamicFunctionSuperExpression(NewExpr.Callee);
+    for I := 0 to NewExpr.Arguments.Count - 1 do
+      ValidateDynamicFunctionSuperExpression(NewExpr.Arguments[I]);
+  end;
+end;
+
+procedure ValidateDynamicFunctionSuperStatement(
+  const AStmt: TGocciaStatement);
+var
+  BlockStmt: TGocciaBlockStatement;
+  ExpressionStmt: TGocciaExpressionStatement;
+  IfStmt: TGocciaIfStatement;
+  ReturnStmt: TGocciaReturnStatement;
+  ThrowStmt: TGocciaThrowStatement;
+  VarDecl: TGocciaVariableDeclaration;
+  I: Integer;
+begin
+  if not Assigned(AStmt) then
+    Exit;
+  if AStmt is TGocciaExpressionStatement then
+  begin
+    ExpressionStmt := TGocciaExpressionStatement(AStmt);
+    ValidateDynamicFunctionSuperExpression(ExpressionStmt.Expression);
+  end
+  else if AStmt is TGocciaBlockStatement then
+  begin
+    BlockStmt := TGocciaBlockStatement(AStmt);
+    for I := 0 to BlockStmt.Nodes.Count - 1 do
+      if BlockStmt.Nodes[I] is TGocciaStatement then
+        ValidateDynamicFunctionSuperStatement(TGocciaStatement(BlockStmt.Nodes[I]))
+      else if BlockStmt.Nodes[I] is TGocciaExpression then
+        ValidateDynamicFunctionSuperExpression(TGocciaExpression(BlockStmt.Nodes[I]));
+  end
+  else if AStmt is TGocciaVariableDeclaration then
+  begin
+    VarDecl := TGocciaVariableDeclaration(AStmt);
+    for I := 0 to High(VarDecl.Variables) do
+      ValidateDynamicFunctionSuperExpression(VarDecl.Variables[I].Initializer);
+  end
+  else if AStmt is TGocciaDestructuringDeclaration then
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaDestructuringDeclaration(AStmt).Initializer)
+  else if AStmt is TGocciaFunctionDeclaration then
+    ValidateDynamicFunctionSuperFunction(
+      TGocciaFunctionDeclaration(AStmt).FunctionExpression)
+  else if AStmt is TGocciaIfStatement then
+  begin
+    IfStmt := TGocciaIfStatement(AStmt);
+    ValidateDynamicFunctionSuperExpression(IfStmt.Condition);
+    ValidateDynamicFunctionSuperStatement(IfStmt.Consequent);
+    ValidateDynamicFunctionSuperStatement(IfStmt.Alternate);
+  end
+  else if AStmt is TGocciaReturnStatement then
+  begin
+    ReturnStmt := TGocciaReturnStatement(AStmt);
+    ValidateDynamicFunctionSuperExpression(ReturnStmt.Value);
+  end
+  else if AStmt is TGocciaThrowStatement then
+  begin
+    ThrowStmt := TGocciaThrowStatement(AStmt);
+    ValidateDynamicFunctionSuperExpression(ThrowStmt.Value);
+  end;
 end;
 
 function TGocciaEngine.CompileDynamicFunction(
@@ -2956,6 +3110,8 @@ begin
     if BodyParseResult.HasUseStrictDirective and
        Assigned(FunctionExpression) then
       ValidateStrictDynamicFunction(FunctionExpression);
+    if Assigned(FunctionExpression) then
+      ValidateDynamicFunctionSuperFunction(FunctionExpression);
 
     ResultValue := FExecutor.ExecuteDynamicFunction(ProgramNode);
     Result := TGocciaFunctionBase(ResultValue);

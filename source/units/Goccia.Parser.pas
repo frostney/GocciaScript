@@ -47,15 +47,29 @@ type
     Column: Integer;
   end;
 
+  TGocciaPrivateNameDeclarationKind = (
+    pndField,
+    pndMethod,
+    pndGetter,
+    pndSetter
+  );
+
   TGocciaPrivateClassContext = class
   private
     FDeclaredNames: TStringList;
     FReferences: array of TGocciaPrivateNameReference;
+    function DeclarationNameOf(const AEntry: string): string;
+    function DeclarationKindOf(const AEntry: string): TGocciaPrivateNameDeclarationKind;
+    function DeclarationStaticOf(const AEntry: string): Boolean;
+    function IsAccessorPair(const AExistingKind, ANewKind: TGocciaPrivateNameDeclarationKind;
+      const AExistingStatic, ANewStatic: Boolean): Boolean;
   public
     constructor Create;
     destructor Destroy; override;
 
-    procedure DeclareName(const AName: string);
+    function DeclareName(const AName: string;
+      const AKind: TGocciaPrivateNameDeclarationKind;
+      const AIsStatic: Boolean): Boolean;
     procedure AddReference(const AName: string; const ALine, AColumn: Integer);
     function HasDeclaration(const AName: string): Boolean;
     function ReferenceCount: Integer;
@@ -106,7 +120,9 @@ type
     procedure PushPrivateClassContext;
     procedure PopPrivateClassContext;
     procedure ValidateCurrentPrivateClassContext;
-    procedure DeclarePrivateName(const AName: string);
+    procedure DeclarePrivateName(const AName: string;
+      const AKind: TGocciaPrivateNameDeclarationKind = pndField;
+      const AIsStatic: Boolean = False);
     procedure RecordPrivateNameReference(const AName: string; const ALine, AColumn: Integer);
     function CurrentPrivateClassContext: TGocciaPrivateClassContext;
     function HasVisiblePrivateNameDeclaration(const AName: string): Boolean;
@@ -361,10 +377,70 @@ begin
   inherited;
 end;
 
-procedure TGocciaPrivateClassContext.DeclareName(const AName: string);
+function TGocciaPrivateClassContext.DeclarationNameOf(
+  const AEntry: string): string;
+var
+  FirstSep, SecondSep: Integer;
 begin
-  if FDeclaredNames.IndexOf(AName) < 0 then
-    FDeclaredNames.Add(AName);
+  FirstSep := Pos(':', AEntry);
+  SecondSep := Pos(':', Copy(AEntry, FirstSep + 1, MaxInt));
+  if SecondSep > 0 then
+    SecondSep := SecondSep + FirstSep;
+  if SecondSep > 0 then
+    Result := Copy(AEntry, SecondSep + 1, MaxInt)
+  else
+    Result := AEntry;
+end;
+
+function TGocciaPrivateClassContext.DeclarationKindOf(
+  const AEntry: string): TGocciaPrivateNameDeclarationKind;
+begin
+  if AEntry = '' then
+    Exit(pndField);
+  case AEntry[1] of
+    '1': Result := pndMethod;
+    '2': Result := pndGetter;
+    '3': Result := pndSetter;
+  else
+    Result := pndField;
+  end;
+end;
+
+function TGocciaPrivateClassContext.DeclarationStaticOf(
+  const AEntry: string): Boolean;
+begin
+  Result := (Length(AEntry) >= 3) and (AEntry[3] = '1');
+end;
+
+function TGocciaPrivateClassContext.IsAccessorPair(
+  const AExistingKind, ANewKind: TGocciaPrivateNameDeclarationKind;
+  const AExistingStatic, ANewStatic: Boolean): Boolean;
+begin
+  Result := (AExistingStatic = ANewStatic) and
+    (((AExistingKind = pndGetter) and (ANewKind = pndSetter)) or
+     ((AExistingKind = pndSetter) and (ANewKind = pndGetter)));
+end;
+
+function TGocciaPrivateClassContext.DeclareName(const AName: string;
+  const AKind: TGocciaPrivateNameDeclarationKind;
+  const AIsStatic: Boolean): Boolean;
+var
+  Entry: string;
+  I: Integer;
+begin
+  for I := 0 to FDeclaredNames.Count - 1 do
+    if DeclarationNameOf(FDeclaredNames[I]) = AName then
+    begin
+      if IsAccessorPair(DeclarationKindOf(FDeclaredNames[I]), AKind,
+        DeclarationStaticOf(FDeclaredNames[I]), AIsStatic) then
+        Continue;
+      Exit(False);
+    end;
+
+  Entry := Chr(Ord('0') + Ord(AKind)) + ':' +
+    Chr(Ord('0') + Ord(AIsStatic)) + ':' + AName;
+  FDeclaredNames.Add(Entry);
+  Result := True;
 end;
 
 procedure TGocciaPrivateClassContext.AddReference(const AName: string; const ALine, AColumn: Integer);
@@ -379,8 +455,13 @@ begin
 end;
 
 function TGocciaPrivateClassContext.HasDeclaration(const AName: string): Boolean;
+var
+  I: Integer;
 begin
-  Result := FDeclaredNames.IndexOf(AName) >= 0;
+  for I := 0 to FDeclaredNames.Count - 1 do
+    if DeclarationNameOf(FDeclaredNames[I]) = AName then
+      Exit(True);
+  Result := False;
 end;
 
 function TGocciaPrivateClassContext.ReferenceCount: Integer;
@@ -608,13 +689,17 @@ begin
   end;
 end;
 
-procedure TGocciaParser.DeclarePrivateName(const AName: string);
+procedure TGocciaParser.DeclarePrivateName(const AName: string;
+  const AKind: TGocciaPrivateNameDeclarationKind; const AIsStatic: Boolean);
 var
   Context: TGocciaPrivateClassContext;
 begin
   Context := CurrentPrivateClassContext;
-  if Assigned(Context) then
-    Context.DeclareName(AName);
+  if Assigned(Context) and not Context.DeclareName(AName, AKind, AIsStatic) then
+    raise TGocciaSyntaxError.Create(
+      Format('Duplicate private field ''#%s''', [AName]),
+      Previous.Line, Previous.Column, FFileName, FSourceLines,
+      SSuggestDeclarePrivateField);
 end;
 
 procedure TGocciaParser.RecordPrivateNameReference(const AName: string; const ALine, AColumn: Integer);
@@ -1492,6 +1577,8 @@ var
   Op: TGocciaToken;
   Pattern: TGocciaMatchPattern;
   TypeAnnotation: string;
+  PrivateToken: TGocciaToken;
+  PrivateName: string;
 
   procedure ParseIsExpressions;
   begin
@@ -1504,6 +1591,23 @@ var
     end;
   end;
 begin
+  if Check(gttHash) then
+  begin
+    PrivateToken := Advance;
+    PrivateName := Consume(gttIdentifier,
+      'Expected private field name after "#"',
+      SSuggestPrivateFieldMustFollow).Lexeme;
+    RecordPrivateNameReference(PrivateName, Previous.Line, Previous.Column);
+    Consume(gttIn, 'Expected "in" after private field name',
+      SSuggestExpressionExpected);
+    Result := TGocciaBinaryExpression.Create(
+      TGocciaPrivateMemberExpression.Create(
+        TGocciaThisExpression.Create(PrivateToken.Line, PrivateToken.Column),
+        PrivateName, PrivateToken.Line, PrivateToken.Column),
+      gttIn, Shift, PrivateToken.Line, PrivateToken.Column);
+    Exit;
+  end;
+
   Result := Shift;
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType in [gttGreater, gttGreaterEqual, gttLess, gttLessEqual, gttInstanceof, gttIn] do
   begin
@@ -1582,6 +1686,8 @@ end;
 function TGocciaParser.Unary: TGocciaExpression;
 var
   Operator: TGocciaToken;
+  PrivateToken: TGocciaToken;
+  PrivateName: string;
   Right: TGocciaExpression;
 begin
   // ES2026 §16.1 top-level await / §15.8.2 AwaitExpression: await UnaryExpression
@@ -1592,7 +1698,18 @@ begin
     if FFunctionDepth = 0 then
       FHasTopLevelAwait := True;
     Operator := Advance; // consume 'await'
-    Right := Unary;
+    if Check(gttHash) then
+    begin
+      PrivateToken := Advance;
+      PrivateName := Consume(gttIdentifier, 'Expected private field name after "#"',
+        SSuggestPrivateFieldMustFollow).Lexeme;
+      RecordPrivateNameReference(PrivateName, Previous.Line, Previous.Column);
+      Right := TGocciaPrivateMemberExpression.Create(
+        TGocciaThisExpression.Create(PrivateToken.Line, PrivateToken.Column),
+        PrivateName, PrivateToken.Line, PrivateToken.Column);
+    end
+    else
+      Right := Unary;
     Result := TGocciaAwaitExpression.Create(Right, Operator.Line, Operator.Column);
     Exit;
   end;
@@ -1632,7 +1749,9 @@ begin
         Right := Unary;
 
         // Only allow on identifiers and member expressions
-        if not ((Right is TGocciaIdentifierExpression) or (Right is TGocciaMemberExpression)) then
+        if not ((Right is TGocciaIdentifierExpression) or
+                (Right is TGocciaMemberExpression) or
+                (Right is TGocciaPrivateMemberExpression)) then
           raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
             Operator.Line, Operator.Column, FFileName, FSourceLines,
             SSuggestValidIncrementTarget);
@@ -1794,7 +1913,9 @@ begin
           Column := Token.Column;
 
           // Only allow on identifiers and member expressions
-          if not ((Result is TGocciaIdentifierExpression) or (Result is TGocciaMemberExpression)) then
+          if not ((Result is TGocciaIdentifierExpression) or
+                  (Result is TGocciaMemberExpression) or
+                  (Result is TGocciaPrivateMemberExpression)) then
             raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
               Line, Column, FFileName, FSourceLines,
               SSuggestValidIncrementTarget);
@@ -2695,18 +2816,6 @@ begin
         Result := TGocciaIdentifierExpression.Create(Token.Lexeme,
           Token.Line, Token.Column);
       end;
-    gttHash:
-      begin
-        Advance;
-        Token := Consume(gttIdentifier, 'Expected private field name after "#"',
-          SSuggestPrivateFieldMustFollow);
-        Name := Token.Lexeme;
-        RecordPrivateNameReference(Name, Token.Line, Token.Column);
-        // Private field access is equivalent to this.#fieldName
-        Result := TGocciaPrivateMemberExpression.Create(
-          TGocciaThisExpression.Create(Token.Line, Token.Column),
-          Name, Token.Line, Token.Column);
-      end;
     gttLeftParen:
       begin
         Advance;
@@ -3550,6 +3659,10 @@ begin
     // Generator method syntax: *methodName() { ... } or async *methodName() { ... }
     if Check(gttStar) then
     begin
+      if IsGetter or IsSetter then
+        raise TGocciaSyntaxError.Create('Accessor methods cannot be generator methods',
+          Peek.Line, Peek.Column, FFileName, FSourceLines,
+          'Remove the "*" from the getter or setter declaration');
       Advance;
       IsGenerator := True;
     end;
@@ -3701,6 +3814,10 @@ begin
       // Check for shorthand property syntax: { name } means { name: name }
       if Check(gttColon) then
       begin
+        if IsGenerator then
+          raise TGocciaSyntaxError.Create('Generator method syntax requires a parameter list',
+            Peek.Line, Peek.Column, FFileName, FSourceLines,
+            'Use *name() { ... } for a generator method');
         // Regular property: key: value
         Consume(gttColon, 'Expected ":" after property key',
           SSuggestAddColonPropertyValue);
@@ -4284,12 +4401,95 @@ begin
     Name := ''; // Anonymous class
 
   ClassDef := ParseClassBody(Name);
+  ClassDef.SourceText := ExtractSourceRange(Line, Column);
   Result := TGocciaClassExpression.Create(ClassDef, Line, Column);
 end;
 
 function TGocciaParser.Statement: TGocciaStatement;
 var
   Line, Column: Integer;
+  function FindMatchingToken(const AStart: Integer; const AOpen,
+    AClose: TGocciaTokenType): Integer;
+  var
+    Depth: Integer;
+    I: Integer;
+  begin
+    Result := -1;
+    Depth := 0;
+    for I := AStart to FTokens.Count - 1 do
+    begin
+      if FTokens[I].TokenType = AOpen then
+        Inc(Depth)
+      else if FTokens[I].TokenType = AClose then
+      begin
+        Dec(Depth);
+        if Depth = 0 then
+          Exit(I);
+      end;
+    end;
+  end;
+
+  function IsPropertyNameStart(const AIndex: Integer): Boolean;
+  begin
+    if (AIndex < 0) or (AIndex >= FTokens.Count) then
+      Exit(False);
+    Result := FTokens[AIndex].TokenType in [
+      gttIdentifier, gttString, gttNumber, gttBigInt, gttLeftBracket,
+      gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends,
+      gttNew, gttThis, gttSuper, gttStatic, gttReturn, gttFor, gttWhile,
+      gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
+      gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport,
+      gttFrom, gttAs, gttTrue, gttFalse, gttNull, gttTypeof, gttVoid,
+      gttInstanceof, gttIn, gttDelete, gttVar, gttWith, gttFunction];
+  end;
+
+  function IsConciseMethodTail(const ANameIndex: Integer): Boolean;
+  var
+    NameEnd: Integer;
+    ParamOpen: Integer;
+    ParamClose: Integer;
+  begin
+    Result := False;
+    if not IsPropertyNameStart(ANameIndex) then
+      Exit;
+    if FTokens[ANameIndex].TokenType = gttLeftBracket then
+    begin
+      NameEnd := FindMatchingToken(ANameIndex, gttLeftBracket, gttRightBracket);
+      if NameEnd < 0 then
+        Exit;
+    end
+    else
+      NameEnd := ANameIndex;
+    ParamOpen := NameEnd + 1;
+    if (ParamOpen >= FTokens.Count) or
+       (FTokens[ParamOpen].TokenType <> gttLeftParen) then
+      Exit;
+    ParamClose := FindMatchingToken(ParamOpen, gttLeftParen, gttRightParen);
+    Result := (ParamClose >= 0) and (ParamClose + 1 < FTokens.Count) and
+      (FTokens[ParamClose + 1].TokenType = gttLeftBrace);
+  end;
+
+  function IsInvalidConciseMethodStatementStart: Boolean;
+  begin
+    Result := IsConciseMethodTail(FCurrent);
+    if Result then
+      Exit;
+
+    if Check(gttStar) then
+      Exit(IsConciseMethodTail(FCurrent + 1));
+
+    if CheckUnescapedIdentifierKeyword(KEYWORD_GET) or
+       CheckUnescapedIdentifierKeyword(KEYWORD_SET) then
+      Exit(IsPropertyNameStart(FCurrent + 1));
+
+    if CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) then
+    begin
+      if (FCurrent + 1 < FTokens.Count) and
+         (FTokens[FCurrent + 1].TokenType = gttStar) then
+        Exit(IsConciseMethodTail(FCurrent + 2));
+      Exit(IsConciseMethodTail(FCurrent + 1));
+    end;
+  end;
 begin
   if CheckUnescapedIdentifierKeyword(KEYWORD_TYPE) and IsTypeDeclaration then
   begin
@@ -4413,6 +4613,10 @@ begin
         'Wrap in an async function or use ''using'' for synchronous disposal');
     Result := UsingStatement;
   end
+  else if IsInvalidConciseMethodStatementStart then
+    raise TGocciaSyntaxError.Create('Method definitions are only valid inside object literals or class bodies',
+      Peek.Line, Peek.Column, FFileName, FSourceLines,
+      'Wrap the method in an object literal or declare a function instead')
   else if Check(gttIdentifier) and CheckNextWithLexicalGoal(gttColon, glgInputElementDiv) then
   begin
     if FLabelStatementsEnabled then
@@ -4687,6 +4891,16 @@ begin
   Expr := Expression;
   Line := Expr.Line;
   Column := Expr.Column;
+
+  if (Expr is TGocciaCallExpression) and Check(gttLeftBrace) and
+     (Previous.Line = Peek.Line) then
+    raise TGocciaSyntaxError.Create('Method definitions are only valid inside object literals or class bodies',
+      Peek.Line, Peek.Column, FFileName, FSourceLines,
+      'Wrap the method in an object literal or declare a function instead');
+  if Check(gttNumber) and (Previous.Line = Peek.Line) then
+    raise TGocciaSyntaxError.Create('Unexpected numeric literal after expression',
+      Peek.Line, Peek.Column, FFileName, FSourceLines,
+      'Insert an operator or separate the statements with a semicolon');
 
   // Only require semicolon if we're not in a class method
   if not Check(gttSemicolon) then
@@ -6107,6 +6321,7 @@ begin
   Name := ConsumeIdentifierBinding('Expected class name',
     SSuggestProvideClassName).Lexeme;
   ClassDef := ParseClassBody(Name);
+  ClassDef.SourceText := ExtractSourceRange(Line, Column);
   Result := TGocciaClassDeclaration.Create(ClassDef, Line, Column);
 end;
 
@@ -6210,6 +6425,7 @@ begin
   Name := ConsumeIdentifierBinding('Expected class name',
     SSuggestProvideClassName).Lexeme;
   ClassDef := ParseClassBody(Name);
+  ClassDef.SourceText := ExtractSourceRange(Line, Column);
   ClassDef.FDecorators := ADecorators;
   Result := TGocciaClassDeclaration.Create(ClassDef, Line, Column);
 end;
@@ -6922,6 +7138,7 @@ var
   IsGenerator: Boolean;
   PresetMemberName: Boolean;
   MemberStartLine, MemberStartColumn: Integer;
+  MemberSourceLine, MemberSourceColumn: Integer;
   TypePair: TStringStringMap.TKeyValuePair;
   SavedStrictModeActive: Boolean;
   SavedStrictModeSourceActive: Boolean;
@@ -7000,6 +7217,8 @@ begin
       IsAccessor := False;
       MemberStartLine := Peek.Line;
       MemberStartColumn := Peek.Column;
+      MemberSourceLine := MemberStartLine;
+      MemberSourceColumn := MemberStartColumn;
 
       IsStatic := Match(gttStatic);
       PresetMemberName := False;
@@ -7039,10 +7258,20 @@ begin
       while Check(gttIdentifier) and not Peek.ContainsEscape and
         ((Peek.Lexeme = KEYWORD_PUBLIC) or (Peek.Lexeme = KEYWORD_PROTECTED) or (Peek.Lexeme = KEYWORD_PRIVATE) or
          (Peek.Lexeme = KEYWORD_READONLY) or (Peek.Lexeme = KEYWORD_OVERRIDE) or (Peek.Lexeme = KEYWORD_ABSTRACT)) do
+      begin
+        if CheckNext(gttLeftParen) then
+          Break;
         Advance;
+      end;
 
       if not IsStatic and Check(gttStatic) then
         IsStatic := Match(gttStatic);
+
+      if not PresetMemberName then
+      begin
+        MemberSourceLine := Peek.Line;
+        MemberSourceColumn := Peek.Column;
+      end;
 
       if CheckUnescapedIdentifierKeyword(KEYWORD_ACCESSOR) then
         EnsureToken(FCurrent + 1, glgInputElementRegExp);
@@ -7149,6 +7378,11 @@ begin
       end
       else if Check(gttLeftBracket) then
       begin
+        if IsPrivate then
+          raise TGocciaSyntaxError.Create(
+            'Computed private fields are not allowed',
+            Peek.Line, Peek.Column, FFileName, FSourceLines,
+            SSuggestPrivateFieldMustFollow);
         Advance;
         ComputedKeyExpression := Assignment;
         Consume(gttRightBracket, 'Expected "]" after computed property name',
@@ -7162,9 +7396,6 @@ begin
           'Expected method or property name', SSuggestClassMemberSyntax);
       end;
 
-      if IsPrivate and not IsComputed and (MemberName <> '') then
-        DeclarePrivateName(MemberName);
-
       FieldType := '';
       if Check(gttQuestion) then
         Advance;
@@ -7176,6 +7407,9 @@ begin
 
       if IsAccessor then
       begin
+        if IsPrivate and not IsComputed and (MemberName <> '') then
+          DeclarePrivateName(MemberName, pndField, IsStatic);
+
         if Check(gttAssign) then
         begin
           Advance;
@@ -7199,6 +7433,9 @@ begin
       end
       else if (not IsGetter) and (not IsSetter) and Check(gttAssign) then
       begin
+        if IsPrivate and not IsComputed and (MemberName <> '') then
+          DeclarePrivateName(MemberName, pndField, IsStatic);
+
         Consume(gttAssign, 'Expected "=" in property',
           SSuggestAddPropertyInitializer);
         PropertyValue := Assignment;
@@ -7263,6 +7500,9 @@ begin
       end
       else if (not IsGetter) and (not IsSetter) and CheckSemicolonOrASI then
       begin
+        if IsPrivate and not IsComputed and (MemberName <> '') then
+          DeclarePrivateName(MemberName, pndField, IsStatic);
+
         if Check(gttSemicolon) then
           Advance;
         PropertyValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, Peek.Line, Peek.Column);
@@ -7325,21 +7565,21 @@ begin
       end
       else if IsGetter then
       begin
-        Getter := ParseGetterExpression;
-        Getter.SourceText := ExtractSourceRange(MemberStartLine, MemberStartColumn);
+        if IsPrivate and not IsComputed and (MemberName <> '') then
+          DeclarePrivateName(MemberName, pndGetter, IsStatic);
 
-        if (Length(MemberDecorators) > 0) or IsComputed then
-        begin
-          SetLength(Elements, Length(Elements) + 1);
-          Elements[High(Elements)].Kind := cekGetter;
-          Elements[High(Elements)].Name := MemberName;
-          Elements[High(Elements)].IsStatic := IsStatic;
-          Elements[High(Elements)].IsPrivate := IsPrivate;
-          Elements[High(Elements)].IsComputed := IsComputed;
-          Elements[High(Elements)].ComputedKeyExpression := ComputedKeyExpression;
-          Elements[High(Elements)].Decorators := MemberDecorators;
-          Elements[High(Elements)].GetterNode := Getter;
-        end;
+        Getter := ParseGetterExpression;
+        Getter.SourceText := ExtractSourceRange(MemberSourceLine, MemberSourceColumn);
+
+        SetLength(Elements, Length(Elements) + 1);
+        Elements[High(Elements)].Kind := cekGetter;
+        Elements[High(Elements)].Name := MemberName;
+        Elements[High(Elements)].IsStatic := IsStatic;
+        Elements[High(Elements)].IsPrivate := IsPrivate;
+        Elements[High(Elements)].IsComputed := IsComputed;
+        Elements[High(Elements)].ComputedKeyExpression := ComputedKeyExpression;
+        Elements[High(Elements)].Decorators := MemberDecorators;
+        Elements[High(Elements)].GetterNode := Getter;
 
         if IsStatic then
         begin
@@ -7367,21 +7607,21 @@ begin
       end
       else if IsSetter then
       begin
-        Setter := ParseSetterExpression;
-        Setter.SourceText := ExtractSourceRange(MemberStartLine, MemberStartColumn);
+        if IsPrivate and not IsComputed and (MemberName <> '') then
+          DeclarePrivateName(MemberName, pndSetter, IsStatic);
 
-        if (Length(MemberDecorators) > 0) or IsComputed then
-        begin
-          SetLength(Elements, Length(Elements) + 1);
-          Elements[High(Elements)].Kind := cekSetter;
-          Elements[High(Elements)].Name := MemberName;
-          Elements[High(Elements)].IsStatic := IsStatic;
-          Elements[High(Elements)].IsPrivate := IsPrivate;
-          Elements[High(Elements)].IsComputed := IsComputed;
-          Elements[High(Elements)].ComputedKeyExpression := ComputedKeyExpression;
-          Elements[High(Elements)].Decorators := MemberDecorators;
-          Elements[High(Elements)].SetterNode := Setter;
-        end;
+        Setter := ParseSetterExpression;
+        Setter.SourceText := ExtractSourceRange(MemberSourceLine, MemberSourceColumn);
+
+        SetLength(Elements, Length(Elements) + 1);
+        Elements[High(Elements)].Kind := cekSetter;
+        Elements[High(Elements)].Name := MemberName;
+        Elements[High(Elements)].IsStatic := IsStatic;
+        Elements[High(Elements)].IsPrivate := IsPrivate;
+        Elements[High(Elements)].IsComputed := IsComputed;
+        Elements[High(Elements)].ComputedKeyExpression := ComputedKeyExpression;
+        Elements[High(Elements)].Decorators := MemberDecorators;
+        Elements[High(Elements)].SetterNode := Setter;
 
         if IsStatic then
         begin
@@ -7409,26 +7649,26 @@ begin
       end
       else if Check(gttLeftParen) or Check(gttLess) then
       begin
+        if IsPrivate and not IsComputed and (MemberName <> '') then
+          DeclarePrivateName(MemberName, pndMethod, IsStatic);
+
         Method := ClassMethod(IsStatic, IsAsync, IsGenerator);
         Method.Name := MemberName;
         Method.IsAsync := IsAsync;
         Method.IsGenerator := IsGenerator;
-        Method.SourceText := ExtractSourceRange(MemberStartLine, MemberStartColumn);
+        Method.SourceText := ExtractSourceRange(MemberSourceLine, MemberSourceColumn);
 
-        if (Length(MemberDecorators) > 0) or IsComputed then
-        begin
-          SetLength(Elements, Length(Elements) + 1);
-          Elements[High(Elements)].Kind := cekMethod;
-          Elements[High(Elements)].Name := MemberName;
-          Elements[High(Elements)].IsStatic := IsStatic;
-          Elements[High(Elements)].IsPrivate := IsPrivate;
-          Elements[High(Elements)].IsComputed := IsComputed;
-          Elements[High(Elements)].ComputedKeyExpression := ComputedKeyExpression;
-          Elements[High(Elements)].Decorators := MemberDecorators;
-          Elements[High(Elements)].MethodNode := Method;
-          Elements[High(Elements)].IsAsync := IsAsync;
-          Elements[High(Elements)].IsGenerator := IsGenerator;
-        end;
+        SetLength(Elements, Length(Elements) + 1);
+        Elements[High(Elements)].Kind := cekMethod;
+        Elements[High(Elements)].Name := MemberName;
+        Elements[High(Elements)].IsStatic := IsStatic;
+        Elements[High(Elements)].IsPrivate := IsPrivate;
+        Elements[High(Elements)].IsComputed := IsComputed;
+        Elements[High(Elements)].ComputedKeyExpression := ComputedKeyExpression;
+        Elements[High(Elements)].Decorators := MemberDecorators;
+        Elements[High(Elements)].MethodNode := Method;
+        Elements[High(Elements)].IsAsync := IsAsync;
+        Elements[High(Elements)].IsGenerator := IsGenerator;
 
         if IsComputed then
         begin

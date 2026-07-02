@@ -175,12 +175,19 @@ var
 
 const
   MAX_PROTOTYPE_CHAIN_DEPTH = 256;
+  BYTECODE_PRIVATE_SLOT_PREFIX = '#slot:';
+  BYTECODE_PRIVATE_BRAND_PREFIX = '#brand:';
   BYTECODE_PRIVATE_INITIALIZED_PREFIX = '#initialized:';
 
-function IsBytecodePrivateInitializerMarker(const AName: string): Boolean;
+function IsInternalPrivateStorageKey(const AName: string): Boolean;
 begin
-  Result := Copy(AName, 1, Length(BYTECODE_PRIVATE_INITIALIZED_PREFIX)) =
-    BYTECODE_PRIVATE_INITIALIZED_PREFIX;
+  Result :=
+    (Copy(AName, 1, Length(BYTECODE_PRIVATE_SLOT_PREFIX)) =
+      BYTECODE_PRIVATE_SLOT_PREFIX) or
+    (Copy(AName, 1, Length(BYTECODE_PRIVATE_BRAND_PREFIX)) =
+      BYTECODE_PRIVATE_BRAND_PREFIX) or
+    (Copy(AName, 1, Length(BYTECODE_PRIVATE_INITIALIZED_PREFIX)) =
+      BYTECODE_PRIVATE_INITIALIZED_PREFIX);
 end;
 
 function IsHiddenRegExpDataProperty(const AObject: TGocciaObjectValue;
@@ -1324,7 +1331,7 @@ begin
   Count := 0;
   for Key in FProperties.Keys do
   begin
-    if IsBytecodePrivateInitializerMarker(Key) or
+    if IsInternalPrivateStorageKey(Key) or
        IsHiddenRegExpDataProperty(Self, Key) then
       Continue;
     Keys[Count] := Key;
@@ -1493,7 +1500,7 @@ begin
 
   for Pair in FProperties do
     if Pair.Value.Enumerable and
-       not IsBytecodePrivateInitializerMarker(Pair.Key) then
+       not IsInternalPrivateStorageKey(Pair.Key) then
     begin
       Names[Count] := Pair.Key;
       Inc(Count);
@@ -1567,7 +1574,7 @@ begin
   Count := 0;
   for Key in FProperties.Keys do
   begin
-    if IsBytecodePrivateInitializerMarker(Key) or
+    if IsInternalPrivateStorageKey(Key) or
        IsHiddenRegExpDataProperty(Self, Key) then
       Continue;
     Names[Count] := Key;

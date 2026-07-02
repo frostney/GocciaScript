@@ -69,6 +69,7 @@ type
     FStaticDecoratorFieldInitializers: array of TGocciaDecoratorFieldInitializerEntry;
     FNameDeleted: Boolean;
     FLengthDeleted: Boolean;
+    FSourceText: string;
     function GetPropertyGetter(const AName: string): TGocciaFunctionBase; inline;
     function GetPropertySetter(const AName: string): TGocciaFunctionBase; inline;
     function GetStaticPropertyGetter(const AName: string): TGocciaFunctionBase; inline;
@@ -139,11 +140,15 @@ type
 
     procedure ReplacePrototype(const APrototype: TGocciaObjectValue);
     procedure SetConstructorPrototype(const APrototype: TGocciaObjectValue);
+    function GetConstructorPrototype: TGocciaObjectValue;
     procedure LinkNativeSuperConstructor(const ASuperConstructor: TGocciaObjectValue);
     procedure SetInferredName(const AName: string);
+    procedure SetSourceText(const ASourceText: string);
+    function GetSourceText: string;
     function GetOwnStaticSymbolDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
 
     property Name: string read FName;
+    property SourceText: string read FSourceText write FSourceText;
     property CreationRealm: TGocciaRealm read FCreationRealm;
     property PrivateBrandToken: string read FPrivateBrandToken;
     property SuperClass: TGocciaClassValue read FSuperClass write FSuperClass;
@@ -677,6 +682,7 @@ end;
 
 procedure TGocciaClassValue.AddMethod(const AName: string; const AMethod: TGocciaMethodValue);
 begin
+  AMethod.OwningClass := Self;
   // If this is the constructor, store it separately
   if AName = PROP_CONSTRUCTOR then
   begin
@@ -1196,13 +1202,19 @@ end;
 
 procedure TGocciaClassValue.DeclarePrivateName(const AName: string;
   const AInternalKey: string);
+var
+  ExistingInternalKey: string;
 begin
   if AName = '' then
     Exit;
   if FDeclaredPrivateNames.IndexOf(AName) < 0 then
     FDeclaredPrivateNames.Add(AName);
   if AInternalKey <> '' then
-    FDeclaredPrivateKeys.Values[AName] := AInternalKey;
+  begin
+    ExistingInternalKey := FDeclaredPrivateKeys.Values[AName];
+    if ExistingInternalKey = '' then
+      FDeclaredPrivateKeys.Values[AName] := AInternalKey;
+  end;
 end;
 
 function TGocciaClassValue.ResolveDeclaredPrivateKey(const AName: string;
@@ -1303,6 +1315,11 @@ begin
   FPrototype := APrototype;
 end;
 
+function TGocciaClassValue.GetConstructorPrototype: TGocciaObjectValue;
+begin
+  Result := FPrototype;
+end;
+
 procedure TGocciaClassValue.LinkNativeSuperConstructor(
   const ASuperConstructor: TGocciaObjectValue);
 begin
@@ -1316,6 +1333,16 @@ begin
   // FName update is sufficient; GetOwnPropertyDescriptor synthesizes the descriptor.
   if (FName = '') or (FName = '<anonymous>') then
     FName := AName;
+end;
+
+procedure TGocciaClassValue.SetSourceText(const ASourceText: string);
+begin
+  FSourceText := ASourceText;
+end;
+
+function TGocciaClassValue.GetSourceText: string;
+begin
+  Result := FSourceText;
 end;
 
 procedure TGocciaClassValue.SetFieldOrder(const AOrder: array of TGocciaClassFieldOrderEntry);
@@ -1377,6 +1404,7 @@ function TGocciaClassValue.Instantiate(const AArguments: TGocciaArgumentsCollect
 var
   Instance: TGocciaObjectValue;
   WalkClass: TGocciaClassValue;
+  ImplicitSuperClass: TGocciaClassValue;
   NativeClass: TGocciaClassValue;
   NativeInstance: TGocciaObjectValue;
   NativeSuperConstructor: TGocciaObjectValue;
@@ -1496,8 +1524,11 @@ begin
   end;
 
   ConstructorToCall := FConstructorMethod;
-  if not Assigned(ConstructorToCall) and Assigned(FSuperClass) then
-    ConstructorToCall := FSuperClass.ConstructorMethod;
+  ImplicitSuperClass := FSuperClass;
+  if GetConstructorPrototype is TGocciaClassValue then
+    ImplicitSuperClass := TGocciaClassValue(GetConstructorPrototype);
+  if not Assigned(ConstructorToCall) and Assigned(ImplicitSuperClass) then
+    ConstructorToCall := ImplicitSuperClass.ConstructorMethod;
 
   if Assigned(ConstructorToCall) then
   begin
@@ -1539,6 +1570,9 @@ begin
   begin
     if (not Assigned(NativeInstance)) and Assigned(NativeSuperConstructor) then
     begin
+      if NativeSuperConstructor = TGocciaFunctionBase.GetSharedPrototype then
+        ThrowTypeError('Super constructor is not a constructor',
+          SSuggestNotConstructorType);
       NativeInstance := ConstructNativeSuperInstance(NativeSuperConstructor);
       NativeInstanceConstructedByNativeSuper := Assigned(NativeInstance);
       if Assigned(NativeInstance) then
