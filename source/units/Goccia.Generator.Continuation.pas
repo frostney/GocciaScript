@@ -125,6 +125,7 @@ type
     FCompletedExpressionValues: TDictionary<TObject, TGocciaValue>;
     FExpressionValues: TDictionary<TObject, TGocciaValue>;
     FStatementIndexes: TDictionary<TObject, Integer>;
+    FBlockScopes: TDictionary<TObject, TGocciaScope>;
     FTryStates: TDictionary<TObject, TGocciaGeneratorTryState>;
     FLoopStates: TDictionary<TObject, TGocciaGeneratorLoopState>;
     FForLoopStates: TDictionary<TObject, TGocciaGeneratorForLoopState>;
@@ -155,6 +156,10 @@ type
     procedure SaveStatementIndex(const AStatements: TObject; const AIndex: Integer);
     procedure ClearStatementIndex(const AStatements: TObject);
     procedure ClearStatementIndexes;
+    function GetBlockScope(const ABlockStatement: TObject): TGocciaScope;
+    procedure SaveBlockScope(const ABlockStatement: TObject; const AScope: TGocciaScope);
+    procedure ClearBlockScope(const ABlockStatement: TObject);
+    procedure ClearBlockScopes;
     function EnsureTryState(const ATryStatement: TObject): TGocciaGeneratorTryState;
     function GetTryState(const ATryStatement: TObject): TGocciaGeneratorTryState;
     procedure ClearTryState(const ATryStatement: TObject);
@@ -599,6 +604,7 @@ begin
   FCompletedExpressionValues := TDictionary<TObject, TGocciaValue>.Create;
   FExpressionValues := TDictionary<TObject, TGocciaValue>.Create;
   FStatementIndexes := TDictionary<TObject, Integer>.Create;
+  FBlockScopes := TDictionary<TObject, TGocciaScope>.Create;
   FTryStates := TDictionary<TObject, TGocciaGeneratorTryState>.Create;
   FLoopStates := TDictionary<TObject, TGocciaGeneratorLoopState>.Create;
   FForLoopStates := TDictionary<TObject, TGocciaGeneratorForLoopState>.Create;
@@ -615,6 +621,7 @@ begin
   FLoopStates.Free;
   ClearTryStates;
   FTryStates.Free;
+  FBlockScopes.Free;
   FStatementIndexes.Free;
   FExpressionValues.Free;
   FCompletedExpressionValues.Free;
@@ -696,6 +703,7 @@ begin
           ClearDelegateState;
           ClearExpressionValues;
           ClearStatementIndexes;
+          ClearBlockScopes;
           ClearTryStates;
           ClearLoopStates;
           ClearForLoopStates;
@@ -726,6 +734,7 @@ begin
           ClearDelegateState;
           ClearExpressionValues;
           ClearStatementIndexes;
+          ClearBlockScopes;
           ClearTryStates;
           ClearLoopStates;
           ClearForLoopStates;
@@ -744,6 +753,7 @@ begin
   ClearDelegateState;
   ClearExpressionValues;
   ClearStatementIndexes;
+  ClearBlockScopes;
   ClearTryStates;
   ClearLoopStates;
   ClearForLoopStates;
@@ -1168,6 +1178,30 @@ begin
   FStatementIndexes.Clear;
 end;
 
+function TGocciaGeneratorContinuation.GetBlockScope(
+  const ABlockStatement: TObject): TGocciaScope;
+begin
+  if not FBlockScopes.TryGetValue(ABlockStatement, Result) then
+    Result := nil;
+end;
+
+procedure TGocciaGeneratorContinuation.SaveBlockScope(
+  const ABlockStatement: TObject; const AScope: TGocciaScope);
+begin
+  FBlockScopes.AddOrSetValue(ABlockStatement, AScope);
+end;
+
+procedure TGocciaGeneratorContinuation.ClearBlockScope(
+  const ABlockStatement: TObject);
+begin
+  FBlockScopes.Remove(ABlockStatement);
+end;
+
+procedure TGocciaGeneratorContinuation.ClearBlockScopes;
+begin
+  FBlockScopes.Clear;
+end;
+
 function TGocciaGeneratorContinuation.EnsureTryState(
   const ATryStatement: TObject): TGocciaGeneratorTryState;
 begin
@@ -1331,6 +1365,7 @@ var
   LoopState: TGocciaGeneratorLoopState;
   ForLoopState: TGocciaGeneratorForLoopState;
   TryState: TGocciaGeneratorTryState;
+  Scope: TGocciaScope;
   Value: TGocciaValue;
 begin
   if Assigned(FCallScope) then
@@ -1349,6 +1384,9 @@ begin
   for Value in FExpressionValues.Values do
     if Assigned(Value) then
       Value.MarkReferences;
+  for Scope in FBlockScopes.Values do
+    if Assigned(Scope) then
+      Scope.MarkReferences;
   for TryState in FTryStates.Values do
     if Assigned(TryState) then
       TryState.MarkReferences;

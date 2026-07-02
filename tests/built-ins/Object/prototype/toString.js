@@ -98,6 +98,10 @@ describe("Object.prototype.toString", () => {
     test("ArrayBuffer returns [object ArrayBuffer]", () => {
       expect(Object.prototype.toString.call(new ArrayBuffer(8))).toBe("[object ArrayBuffer]");
     });
+
+    test("Proxy wrapping Date does not expose Date builtin brand", () => {
+      expect(Object.prototype.toString.call(new Proxy(new Date(0), {}))).toBe("[object Object]");
+    });
   });
 
   describe("Symbol.toStringTag override", () => {

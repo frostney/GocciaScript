@@ -388,6 +388,30 @@ begin
     ACurrentRealmDefault);
 end;
 
+function GetArrayPrototypeFromConstructor(
+  const ANewTarget: TGocciaValue;
+  const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
+var
+  FallbackRealm: TGocciaRealm;
+  ProtoValue: TGocciaValue;
+begin
+  if ANewTarget is TGocciaObjectValue then
+    ProtoValue := TGocciaObjectValue(ANewTarget).GetProperty(PROP_PROTOTYPE)
+  else
+    ProtoValue := nil;
+
+  if ProtoValue is TGocciaObjectValue then
+    Exit(TGocciaObjectValue(ProtoValue));
+
+  FallbackRealm := nil;
+  if ANewTarget is TGocciaFunctionBase then
+    FallbackRealm := TGocciaFunctionBase(ANewTarget).CreationRealm;
+
+  Result := GetSharedArrayPrototypeForRealm(FallbackRealm);
+  if not Assigned(Result) then
+    Result := ACurrentRealmDefault;
+end;
+
 function DefaultNativePrototypeForNewTarget(
   const ANewTarget: TGocciaValue;
   const ACurrentRealmDefault: TGocciaObjectValue;
@@ -1428,6 +1452,9 @@ begin
       if NativeClass is TGocciaTypedArrayClassValue then
         InstancePrototype := GetTypedArrayPrototypeFromConstructor(
           TGocciaTypedArrayClassValue(NativeClass), ANewTarget,
+          NativeIntrinsicPrototype)
+      else if NativeClass is TGocciaArrayClassValue then
+        InstancePrototype := GetArrayPrototypeFromConstructor(ANewTarget,
           NativeIntrinsicPrototype)
       else if NativeClass is TGocciaNumberClassValue then
         InstancePrototype := TGocciaNumberClassValue(NativeClass).

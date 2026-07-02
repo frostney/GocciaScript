@@ -125,4 +125,34 @@ describe("Array.prototype.sort", () => {
     expect(2 in arr).toBe(false);
     expect(arr.length).toBe(3);
   });
+
+  test("in operator sees array accessors without invoking getters", () => {
+    const arr = [0, , 2];
+    let ownGetterCalls = 0;
+    let protoGetterCalls = 0;
+
+    Object.defineProperty(arr, "1", {
+      configurable: true,
+      get() {
+        ownGetterCalls++;
+        return 1;
+      },
+    });
+    Object.defineProperty(Array.prototype, "3", {
+      configurable: true,
+      get() {
+        protoGetterCalls++;
+        return 3;
+      },
+    });
+
+    try {
+      expect(1 in arr).toBe(true);
+      expect(3 in arr).toBe(true);
+      expect(ownGetterCalls).toBe(0);
+      expect(protoGetterCalls).toBe(0);
+    } finally {
+      delete Array.prototype[3];
+    }
+  });
 });

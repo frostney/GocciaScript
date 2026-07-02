@@ -64,7 +64,7 @@ const DEFAULT_CATEGORIES = [
   "staging",
 ] as const;
 
-const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_MEMORY = 2 * 1024 * 1024 * 1024; // 2 GiB
 const DEFAULT_JOBS = 4;
 const DEFAULT_PROFILE_MODE = "all" as const;

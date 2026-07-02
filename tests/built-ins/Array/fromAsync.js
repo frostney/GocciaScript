@@ -25,6 +25,14 @@ describe("Array.fromAsync", () => {
     expect(await Array.fromAsync([1, 2, 3])).toEqual([1, 2, 3]);
   });
 
+  test("sync array iterator observes mutation after the first next call", async () => {
+    const items = [1, 2, 3];
+    const promise = Array.fromAsync(items);
+    items[1] = 8;
+    items.push(4);
+    expect(await promise).toEqual([1, 8, 3, 4]);
+  });
+
   test("creates arrays from strings", async () => {
     expect(await Array.fromAsync("abc")).toEqual(["a", "b", "c"]);
   });
@@ -98,6 +106,26 @@ describe("Array.fromAsync", () => {
     };
 
     expect(await Array.fromAsync(arrayLike)).toEqual(["a", "b"]);
+  });
+
+  test("array-like path preserves block lexicals across await", async () => {
+    const arrayIterator = [].values();
+    const iteratorPrototype = Object.getPrototypeOf(arrayIterator);
+    const originalNext = iteratorPrototype.next;
+
+    try {
+      iteratorPrototype.next = () => {
+        throw new Error("Array.fromAsync array-like path used ArrayIteratorPrototype.next");
+      };
+
+      const expected = [0, 1, 2];
+      const input = { length: 3, 0: 0, 1: 1, 2: 2 };
+      const output = await Array.fromAsync(input);
+
+      expect(output).toEqual(expected);
+    } finally {
+      iteratorPrototype.next = originalNext;
+    }
   });
 
   test("passes thisArg to the mapping function for array-like input", async () => {

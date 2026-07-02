@@ -528,7 +528,17 @@ const
         '};'#10 +
         'const __GocciaDateClass = class Date {'#10 +
         '  static {'#10 +
-        '    Object.defineProperty(this.prototype, Symbol.toStringTag, { value: "Date", writable: true, configurable: true });'#10 +
+        '    Object.defineProperty(this.prototype, Symbol.toStringTag, {'#10 +
+        '      get(): any { return __GocciaDateSlots.get(this) === undefined ? undefined : "Date"; },'#10 +
+        '      set(value: any): void {'#10 +
+        '        Object.defineProperty(this, Symbol.toStringTag, {'#10 +
+        '          value,'#10 +
+        '          writable: true,'#10 +
+        '          configurable: true'#10 +
+        '        });'#10 +
+        '      },'#10 +
+        '      configurable: true'#10 +
+        '    });'#10 +
         '  }'#10 +
         '  static now(): number { return Temporal.Now.instant().epochMilliseconds; }'#10 +
         '  static parse(str: string): number { return parseDateStringToEpoch(str); }'#10 +
@@ -827,7 +837,7 @@ const
         '      const elementString = (index: number): string => {'#10 +
         '        const nextElement: any = array[index];'#10 +
         '        if (nextElement !== undefined && nextElement !== null) {'#10 +
-        '          const method: any = Object(nextElement).toLocaleString;'#10 +
+        '          const method: any = nextElement.toLocaleString;'#10 +
         '          if (typeof method !== "function")'#10 +
         '            throw new TypeError("Array.prototype.toLocaleString element toLocaleString is not a function");'#10 +
         '          return String(method.call(nextElement, args[0], args[1]));'#10 +

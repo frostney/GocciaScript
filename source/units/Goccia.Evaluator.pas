@@ -6956,6 +6956,10 @@ var
   CaughtError: TGocciaValue;
   HasCaughtError: Boolean;
   GC: TGarbageCollector;
+  Continuation: TGocciaGeneratorContinuation;
+  SavedBlockScope: TGocciaScope;
+  ReusingBlockScope: Boolean;
+  PreserveBlockScope: Boolean;
 begin
   NeedsChildScope := False;
   HasUsingDeclarations := False;
@@ -6980,20 +6984,50 @@ begin
   if not HasUsingDeclarations then
   begin
     BlockContext := AContext;
+    Continuation := CurrentGeneratorContinuation;
+    ReusingBlockScope := False;
+    PreserveBlockScope := False;
     if NeedsChildScope then
-      BlockContext.Scope := AContext.Scope.CreateChild(skBlock, 'BlockScope')
+    begin
+      SavedBlockScope := nil;
+      if Assigned(Continuation) then
+        SavedBlockScope := Continuation.GetBlockScope(ABlockStatement);
+
+      if Assigned(SavedBlockScope) then
+      begin
+        BlockContext.Scope := SavedBlockScope;
+        ReusingBlockScope := True;
+      end
+      else
+      begin
+        BlockContext.Scope := AContext.Scope.CreateChild(skBlock, 'BlockScope');
+        if Assigned(Continuation) then
+          Continuation.SaveBlockScope(ABlockStatement, BlockContext.Scope);
+      end;
+    end
     else
       BlockContext.Scope := AContext.Scope;
     GC := TGarbageCollector.Instance;
     if NeedsChildScope and Assigned(GC) then
       GC.AddTempRoot(BlockContext.Scope);
     try
-      if NeedsChildScope then
-      PredeclareBlockLexicalBindings(ABlockStatement.Nodes, BlockContext);
-      HoistFunctionDeclarations(ABlockStatement.Nodes, BlockContext,
-        NeedsChildScope);
-      Result := EvaluateStatements(ABlockStatement.Nodes, BlockContext);
+      try
+        if NeedsChildScope and (not ReusingBlockScope) then
+          PredeclareBlockLexicalBindings(ABlockStatement.Nodes, BlockContext);
+        if (not NeedsChildScope) or (not ReusingBlockScope) then
+          HoistFunctionDeclarations(ABlockStatement.Nodes, BlockContext,
+            NeedsChildScope);
+        Result := EvaluateStatements(ABlockStatement.Nodes, BlockContext);
+      except
+        on E: EGocciaGeneratorYield do
+        begin
+          PreserveBlockScope := True;
+          raise;
+        end;
+      end;
     finally
+      if NeedsChildScope and (not PreserveBlockScope) and Assigned(Continuation) then
+        Continuation.ClearBlockScope(ABlockStatement);
       if NeedsChildScope and Assigned(GC) then
         GC.RemoveTempRoot(BlockContext.Scope);
     end;

@@ -39,6 +39,7 @@ uses
 function GetIteratorFromValue(const AValue: TGocciaValue): TGocciaIteratorValue;
 var
   IteratorHost: TGocciaObjectValue;
+  IteratorReceiver: TGocciaValue;
   IteratorMethod, IteratorObj, NextMethod: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   WasSourceRooted, WasMethodRooted, WasIteratorRooted: Boolean;
@@ -67,6 +68,7 @@ begin
   end;
 
   IteratorHost := nil;
+  IteratorReceiver := AValue;
   if AValue is TGocciaObjectValue then
     IteratorHost := TGocciaObjectValue(AValue)
   else if not (AValue is TGocciaNullLiteralValue) and
@@ -77,7 +79,8 @@ begin
   begin
     WasSourceRooted := AddRootIfNeeded(IteratorHost);
     try
-      IteratorMethod := IteratorHost.GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+      IteratorMethod := IteratorHost.GetSymbolPropertyWithReceiver(
+        TGocciaSymbolValue.WellKnownIterator, IteratorReceiver);
       if Assigned(IteratorMethod) and
          not (IteratorMethod is TGocciaUndefinedLiteralValue) and
          not (IteratorMethod is TGocciaNullLiteralValue) then
@@ -89,7 +92,7 @@ begin
         try
           CallArgs := TGocciaArgumentsCollection.Create;
           try
-            IteratorObj := InvokeCallable(IteratorMethod, CallArgs, IteratorHost);
+            IteratorObj := InvokeCallable(IteratorMethod, CallArgs, IteratorReceiver);
           finally
             CallArgs.Free;
           end;
