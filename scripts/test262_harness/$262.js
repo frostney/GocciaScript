@@ -21,12 +21,34 @@ const AbstractModuleSource = () => {
 };
 const IsHTMLDDA = Goccia.test262.isHTMLDDA;
 
+function installRealm262(realm) {
+  const realm262 = {
+    global: realm.global,
+
+    detachArrayBuffer(buffer) {
+      if (buffer.detached) return;
+      buffer.transfer();
+    },
+
+    evalScript(sourceText) {
+      return realm.evalScript(sourceText);
+    },
+
+    createRealm() {
+      return installRealm262(realm.createRealm());
+    },
+  };
+  realm.global.$262 = realm262;
+  return realm;
+}
+
 var $262 = {
   global: globalThis,
   AbstractModuleSource,
   IsHTMLDDA,
 
   detachArrayBuffer(buffer) {
+    if (buffer.detached) return;
     buffer.transfer();
   },
 
@@ -39,7 +61,7 @@ var $262 = {
   },
 
   createRealm() {
-    return Goccia.test262.createRealm();
+    return installRealm262(Goccia.test262.createRealm());
   },
 
   agent: {

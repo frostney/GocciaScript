@@ -2643,25 +2643,36 @@ begin
         // Parse the callee: class name with optional member access (e.g. new a.B.C())
         // but NOT call expressions — those belong to the outer Call loop.
         Expr := Primary;
-        while Check(gttDot) do
+        while Check(gttDot) or Check(gttLeftBracket) do
         begin
-          Advance;
-          if Check(gttIdentifier) then
-            Expr := TGocciaMemberExpression.Create(Expr, Advance.Lexeme, False, Previous.Line, Previous.Column, False)
-          else if Peek.TokenType in [gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
-                                     gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
-                                     gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                                     gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith,
-                                     gttFunction] then
+          if Match(gttLeftBracket) then
           begin
-            Token := Advance;
-            // Reserved words are valid property names after "." per ES spec
-            Expr := TGocciaMemberExpression.Create(Expr, Token.Lexeme, False,
-              Token.Line, Token.Column, False);
+            Token := Previous;
+            Expr := TGocciaMemberExpression.Create(Expr, Expression,
+              Token.Line, Token.Column);
+            Consume(gttRightBracket, 'Expected "]" after computed member expression',
+              SSuggestCloseBracketComputedProperty);
           end
           else
-            raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
-              SSuggestPropertyNameIdentifier);
+          begin
+            Advance;
+            if Check(gttIdentifier) then
+              Expr := TGocciaMemberExpression.Create(Expr, Advance.Lexeme, False, Previous.Line, Previous.Column, False)
+            else if Peek.TokenType in [gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
+                                       gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
+                                       gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
+                                       gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith,
+                                       gttFunction] then
+            begin
+              Token := Advance;
+              // Reserved words are valid property names after "." per ES spec
+              Expr := TGocciaMemberExpression.Create(Expr, Token.Lexeme, False,
+                Token.Line, Token.Column, False);
+            end
+            else
+              raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
+                SSuggestPropertyNameIdentifier);
+          end;
         end;
         while Check(gttTemplate) or Check(gttTemplateHead) do
         begin
@@ -8386,7 +8397,7 @@ begin
         Consume(gttRightBracket, 'Expected "]" after computed property key',
           SSuggestCloseBracketComputedPropertyKey);
       end
-      else if Check(gttIdentifier) then
+      else if IsIdentifierNameToken(Peek.TokenType) then
       begin
         CanUseShorthand := True;
         Key := Advance.Lexeme;

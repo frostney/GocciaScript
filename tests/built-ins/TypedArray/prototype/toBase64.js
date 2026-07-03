@@ -68,6 +68,31 @@ describe("Uint8Array.prototype.toBase64", () => {
     expect(() => bytes.toBase64("bad")).toThrow(TypeError);
   });
 
+  test("throws TypeError when options detach the buffer before encoding", () => {
+    const buffer = new ArrayBuffer(2);
+    const bytes = new Uint8Array(buffer);
+    let getterCalls = 0;
+    const options = {};
+    Object.defineProperty(options, "alphabet", {
+      get() {
+        getterCalls += 1;
+        buffer.transfer();
+        return "base64";
+      }
+    });
+
+    expect(() => bytes.toBase64(options)).toThrow(TypeError);
+    expect(getterCalls).toBe(1);
+  });
+
+  test("throws TypeError on detached buffers", () => {
+    const buffer = new ArrayBuffer(2);
+    const bytes = new Uint8Array(buffer);
+    buffer.transfer();
+
+    expect(() => bytes.toBase64()).toThrow(TypeError);
+  });
+
   test("works with buffer offset", () => {
     const buffer = new ArrayBuffer(8);
     const full = new Uint8Array(buffer);

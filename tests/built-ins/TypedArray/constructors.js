@@ -12,6 +12,16 @@ describe("TypedArray constructors", () => {
     test("Float64Array is defined", () => { expect(Float64Array).toBeDefined(); });
   });
 
+  describe("%TypedArray% intrinsic", () => {
+    test("is not directly callable or constructable", () => {
+      const TypedArray = Object.getPrototypeOf(Int8Array);
+
+      expect(() => TypedArray()).toThrow(TypeError);
+      expect(() => new TypedArray()).toThrow(TypeError);
+      expect(Object.getPrototypeOf(Uint8Array)).toBe(TypedArray);
+    });
+  });
+
   describe("new TypedArray() — zero-length", () => {
     test("new Int8Array()", () => {
       const ta = new Int8Array();

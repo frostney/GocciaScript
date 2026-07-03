@@ -80,6 +80,23 @@ describe("Uint8Array.fromBase64", () => {
     expect(result.length).toBe(5);
   });
 
+  test("decodes padded final chunks in all modes", () => {
+    const loose = Uint8Array.fromBase64("ZXhhZg==");
+    const strict = Uint8Array.fromBase64("ZXhhZg==", {
+      lastChunkHandling: "strict"
+    });
+    const stopBeforePartial = Uint8Array.fromBase64("ZXhhZg==", {
+      lastChunkHandling: "stop-before-partial"
+    });
+
+    expect(loose.length).toBe(4);
+    expect(loose[3]).toBe(102);
+    expect(strict.length).toBe(4);
+    expect(strict[3]).toBe(102);
+    expect(stopBeforePartial.length).toBe(4);
+    expect(stopBeforePartial[3]).toBe(102);
+  });
+
   test("strict mode rejects non-zero padding bits", () => {
     // "AR==" has non-zero padding bits (the R encodes 0x11, trailing bits are non-zero)
     expect(() => Uint8Array.fromBase64("AR==", {
@@ -95,6 +112,22 @@ describe("Uint8Array.fromBase64", () => {
     expect(result[0]).toBe(65);
     expect(result[1]).toBe(66);
     expect(result[2]).toBe(67);
+  });
+
+  test("stop-before-partial skips incomplete padding", () => {
+    const result = Uint8Array.fromBase64("ZXhhZg=", {
+      lastChunkHandling: "stop-before-partial"
+    });
+    expect(result.length).toBe(3);
+    expect(result[0]).toBe(101);
+    expect(result[1]).toBe(120);
+    expect(result[2]).toBe(97);
+  });
+
+  test("throws SyntaxError for malformed padding", () => {
+    expect(() => Uint8Array.fromBase64("AA=")).toThrow(SyntaxError);
+    expect(() => Uint8Array.fromBase64("AAAA=")).toThrow(SyntaxError);
+    expect(() => Uint8Array.fromBase64("ZXhhZg===")).toThrow(SyntaxError);
   });
 
   test("throws TypeError for invalid alphabet option", () => {

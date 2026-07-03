@@ -232,7 +232,8 @@ uses
   Goccia.Values.SetValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToObject,
-  Goccia.Values.ToPrimitive;
+  Goccia.Values.ToPrimitive,
+  Goccia.Values.TypedArrayValue;
 
 procedure RunClassInstanceInitializers(const AClassValue: TGocciaClassValue;
   const AInstance: TGocciaObjectValue;
@@ -245,6 +246,13 @@ function DisposeTrackedResourcesAsync(const ATracker: TGocciaDisposalTracker;
 function HasAsyncDisposals(const ATracker: TGocciaDisposalTracker): Boolean; forward;
 function CollectDeclaredPrivateNames(
   const AContext: TGocciaEvaluationContext): TStringList; forward;
+
+function ShouldUseNativeClassInstantiation(
+  const AClassValue: TGocciaClassValue): Boolean; inline;
+begin
+  Result := (AClassValue is TGocciaTypedArrayClassValue) or
+    (AClassValue is TGocciaTypedArrayIntrinsicClassValue);
+end;
 
 const
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
@@ -3624,10 +3632,27 @@ var
   I: Integer;
 
   function InvokeImplicitClassConstructor: TGocciaValue;
+  var
+    NativeInstance: TGocciaObjectValue;
+    ReceiverPrototype: TGocciaObjectValue;
   begin
     Result := AReceiver;
 
-    if Assigned(ClassConstructor.SuperClass) then
+    if Assigned(ClassConstructor.NativeInstanceDefaultPrototype) then
+    begin
+      NativeInstance := ClassConstructor.CreateNativeInstance(AArguments);
+      if not Assigned(NativeInstance) then
+        ThrowTypeError('Superclass constructor did not return an object',
+          SSuggestNotConstructorType);
+      if NativeInstance is TGocciaInstanceValue then
+        TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
+      ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
+      NativeInstance.Prototype := ReceiverPrototype;
+      if NativeInstance is TGocciaInstanceValue then
+        TGocciaInstanceValue(NativeInstance).FinalizeNativeFromArguments(AArguments);
+      Result := NativeInstance;
+    end
+    else if Assigned(ClassConstructor.SuperClass) then
       Result := InvokeConstructableWithReceiver(ClassConstructor.SuperClass,
         AArguments, AReceiver, AContext, EffectiveNewTarget)
     else if Assigned(ClassConstructor.NativeSuperConstructor) then
@@ -8093,7 +8118,13 @@ begin
     else if Target is TGocciaProxyValue then
       Result := TGocciaProxyValue(Target).ConstructTrap(BoundArgs)
     else if Target is TGocciaClassValue then
-      Result := InstantiateClass(TGocciaClassValue(Target), BoundArgs, AContext)
+    begin
+      if ShouldUseNativeClassInstantiation(TGocciaClassValue(Target)) then
+        Result := TGocciaClassValue(Target).Instantiate(BoundArgs)
+      else
+        Result := InstantiateClass(TGocciaClassValue(Target), BoundArgs,
+          AContext);
+    end
     else if Target is TGocciaNativeFunctionValue then
     begin
       if TGocciaNativeFunctionValue(Target).NotConstructable then
@@ -8190,7 +8221,11 @@ begin
       end
       else if Callee is TGocciaClassValue then
       begin
-        Result := InstantiateClass(TGocciaClassValue(Callee), Arguments, AContext);
+        if ShouldUseNativeClassInstantiation(TGocciaClassValue(Callee)) then
+          Result := TGocciaClassValue(Callee).Instantiate(Arguments)
+        else
+          Result := InstantiateClass(TGocciaClassValue(Callee), Arguments,
+            AContext);
       end
       else if Callee is TGocciaNativeFunctionValue then
       begin
@@ -10658,6 +10693,9 @@ var
       ConstructedValue := TGocciaNativeFunctionValue(AConstructor).Construct(
         AArguments, EffectiveNewTarget);
     end
+    else if AConstructor is TGocciaClassValue then
+      ConstructedValue := ConstructValue(AConstructor, AArguments,
+        EffectiveNewTarget)
     else if AConstructor is TGocciaFunctionBase then
     begin
       Result := TGocciaInstanceValue.Create(AClassValue,
@@ -10838,7 +10876,10 @@ begin
         ApplyReplacementResult(ConstructedValue);
       end
       else if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then
+      begin
         TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
+        TGocciaInstanceValue(NativeInstance).FinalizeNativeFromArguments(AArguments);
+      end;
     end;
 
     if Assigned(InitializerReplayReceiver) and
