@@ -24,6 +24,8 @@ const IsHTMLDDA = Goccia.test262.isHTMLDDA;
 function installRealm262(realm) {
   const realm262 = {
     global: realm.global,
+    AbstractModuleSource,
+    IsHTMLDDA,
 
     detachArrayBuffer(buffer) {
       if (buffer.detached) return;
@@ -39,7 +41,7 @@ function installRealm262(realm) {
     },
   };
   realm.global.$262 = realm262;
-  return realm;
+  return realm262;
 }
 
 var $262 = {

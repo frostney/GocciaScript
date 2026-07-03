@@ -3634,43 +3634,54 @@ var
   function InvokeImplicitClassConstructor: TGocciaValue;
   var
     NativeInstance: TGocciaObjectValue;
+    NativeInstanceRooted: Boolean;
     ReceiverPrototype: TGocciaObjectValue;
   begin
-    Result := AReceiver;
-
-    if Assigned(ClassConstructor.NativeInstanceDefaultPrototype) then
-    begin
-      NativeInstance := ClassConstructor.CreateNativeInstance(AArguments);
-      if not Assigned(NativeInstance) then
-        ThrowTypeError('Superclass constructor did not return an object',
-          SSuggestNotConstructorType);
-      if NativeInstance is TGocciaInstanceValue then
-        TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
-      ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
-      NativeInstance.Prototype := ReceiverPrototype;
-      if NativeInstance is TGocciaInstanceValue then
-        TGocciaInstanceValue(NativeInstance).FinalizeNativeFromArguments(AArguments);
-      Result := NativeInstance;
-    end
-    else if Assigned(ClassConstructor.SuperClass) then
-      Result := InvokeConstructableWithReceiver(ClassConstructor.SuperClass,
-        AArguments, AReceiver, AContext, EffectiveNewTarget)
-    else if Assigned(ClassConstructor.NativeSuperConstructor) then
-      Result := InvokeConstructableWithReceiver(
-        ClassConstructor.NativeSuperConstructor, AArguments, AReceiver,
-        AContext, EffectiveNewTarget)
-    else if AReceiver is TGocciaInstanceValue then
-      TGocciaInstanceValue(AReceiver).InitializeNativeFromArguments(AArguments);
-
-    ValidateClassConstructorReturn(ClassConstructor, Result);
-    if Result is TGocciaObjectValue then
-      RunClassInstanceInitializers(ClassConstructor,
-        TGocciaObjectValue(Result), AContext, iimFirstPass)
-    else if AReceiver is TGocciaObjectValue then
-    begin
-      RunClassInstanceInitializers(ClassConstructor,
-        TGocciaObjectValue(AReceiver), AContext, iimFirstPass);
+    NativeInstance := nil;
+    NativeInstanceRooted := False;
+    try
       Result := AReceiver;
+
+      if Assigned(ClassConstructor.NativeInstanceDefaultPrototype) then
+      begin
+        NativeInstance := ClassConstructor.CreateNativeInstance(AArguments);
+        if not Assigned(NativeInstance) then
+          ThrowTypeError('Superclass constructor did not return an object',
+            SSuggestNotConstructorType);
+        TGarbageCollector.Instance.AddTempRoot(NativeInstance);
+        NativeInstanceRooted := True;
+        if NativeInstance is TGocciaInstanceValue then
+          TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
+        ReceiverPrototype := GetNativePrototypeFromConstructor(ClassConstructor,
+          EffectiveNewTarget, ClassConstructor.NativeInstanceDefaultPrototype);
+        NativeInstance.Prototype := ReceiverPrototype;
+        if NativeInstance is TGocciaInstanceValue then
+          TGocciaInstanceValue(NativeInstance).FinalizeNativeFromArguments(AArguments);
+        Result := NativeInstance;
+      end
+      else if Assigned(ClassConstructor.SuperClass) then
+        Result := InvokeConstructableWithReceiver(ClassConstructor.SuperClass,
+          AArguments, AReceiver, AContext, EffectiveNewTarget)
+      else if Assigned(ClassConstructor.NativeSuperConstructor) then
+        Result := InvokeConstructableWithReceiver(
+          ClassConstructor.NativeSuperConstructor, AArguments, AReceiver,
+          AContext, EffectiveNewTarget)
+      else if AReceiver is TGocciaInstanceValue then
+        TGocciaInstanceValue(AReceiver).InitializeNativeFromArguments(AArguments);
+
+      ValidateClassConstructorReturn(ClassConstructor, Result);
+      if Result is TGocciaObjectValue then
+        RunClassInstanceInitializers(ClassConstructor,
+          TGocciaObjectValue(Result), AContext, iimFirstPass)
+      else if AReceiver is TGocciaObjectValue then
+      begin
+        RunClassInstanceInitializers(ClassConstructor,
+          TGocciaObjectValue(AReceiver), AContext, iimFirstPass);
+        Result := AReceiver;
+      end;
+    finally
+      if NativeInstanceRooted then
+        TGarbageCollector.Instance.RemoveTempRoot(NativeInstance);
     end;
   end;
 begin

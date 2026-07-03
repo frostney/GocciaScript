@@ -2656,7 +2656,20 @@ begin
           else
           begin
             Advance;
-            if Check(gttIdentifier) then
+            Line := Previous.Line;
+            Column := Previous.Column;
+            if Check(gttHash) then
+            begin
+              Advance;
+              Token := Consume(gttIdentifier,
+                'Expected private field name after "#"',
+                SSuggestPrivateFieldMustFollow);
+              Name := Token.Lexeme;
+              RecordPrivateNameReference(Name, Token.Line, Token.Column);
+              Expr := TGocciaPrivateMemberExpression.Create(Expr, Name,
+                Line, Column);
+            end
+            else if Check(gttIdentifier) then
               Expr := TGocciaMemberExpression.Create(Expr, Advance.Lexeme, False, Previous.Line, Previous.Column, False)
             else if Peek.TokenType in [gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
                                        gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
