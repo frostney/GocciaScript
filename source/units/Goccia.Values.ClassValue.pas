@@ -338,6 +338,15 @@ type
 function ShouldDelayTypedArrayPrototypeLookup(
   const ANativeClass: TGocciaClassValue;
   const AArguments: TGocciaArgumentsCollection): Boolean;
+function ShouldDelayNativePrototypeLookup(
+  const ANativeClass: TGocciaClassValue;
+  const AArguments: TGocciaArgumentsCollection): Boolean;
+function ShouldDelayNativeSuperPrototypeLookup(
+  const ANativeSuperConstructor: TGocciaObjectValue): Boolean;
+function GetNativePrototypeFromConstructor(
+  const ANativeClass: TGocciaClassValue;
+  const ANewTarget: TGocciaValue;
+  const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
 
 implementation
 
@@ -441,6 +450,24 @@ begin
     not (FirstArg is TGocciaTypedArrayValue);
 end;
 
+function ShouldDelayNativePrototypeLookup(
+  const ANativeClass: TGocciaClassValue;
+  const AArguments: TGocciaArgumentsCollection): Boolean;
+begin
+  Result := Assigned(ANativeClass) and
+    (ShouldDelayTypedArrayPrototypeLookup(ANativeClass, AArguments) or
+     (ANativeClass is TGocciaArrayBufferClassValue) or
+     (ANativeClass is TGocciaSharedArrayBufferClassValue) or
+     (ANativeClass is TGocciaDataViewClassValue));
+end;
+
+function ShouldDelayNativeSuperPrototypeLookup(
+  const ANativeSuperConstructor: TGocciaObjectValue): Boolean;
+begin
+  Result := Assigned(ANativeSuperConstructor) and
+    (ANativeSuperConstructor <> TGocciaFunctionBase.GetSharedPrototype);
+end;
+
 function GetArrayPrototypeFromConstructor(
   const ANewTarget: TGocciaValue;
   const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
@@ -514,6 +541,29 @@ begin
   end;
 
   Result := ACurrentRealmDefault;
+end;
+
+function GetNativePrototypeFromConstructor(
+  const ANativeClass: TGocciaClassValue;
+  const ANewTarget: TGocciaValue;
+  const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
+begin
+  if ANativeClass is TGocciaTypedArrayClassValue then
+    Result := GetTypedArrayPrototypeFromConstructor(
+      TGocciaTypedArrayClassValue(ANativeClass), ANewTarget,
+      ACurrentRealmDefault)
+  else if ANativeClass is TGocciaArrayBufferClassValue then
+    Result := DefaultNativePrototypeForNewTarget(ANewTarget,
+      ACurrentRealmDefault, CONSTRUCTOR_ARRAY_BUFFER)
+  else if ANativeClass is TGocciaSharedArrayBufferClassValue then
+    Result := DefaultNativePrototypeForNewTarget(ANewTarget,
+      ACurrentRealmDefault, CONSTRUCTOR_SHARED_ARRAY_BUFFER)
+  else if ANativeClass is TGocciaDataViewClassValue then
+    Result := DefaultNativePrototypeForNewTarget(ANewTarget,
+      ACurrentRealmDefault, CONSTRUCTOR_DATA_VIEW)
+  else
+    Result := GetProtoFromConstructorWithIntrinsic(ANewTarget,
+      ACurrentRealmDefault);
 end;
 
 // SetDefaultPrototype / PatchDefaultPrototype previously cached the
@@ -1547,6 +1597,11 @@ begin
     end;
     if Assigned(WalkClass.NativeSuperConstructor) then
     begin
+      if WalkClass.NativeSuperConstructor is TGocciaClassValue then
+      begin
+        NativeClass := TGocciaClassValue(WalkClass.NativeSuperConstructor);
+        NativeIntrinsicPrototype := NativeClass.NativeInstanceDefaultPrototype;
+      end;
       NativeSuperConstructor := WalkClass.NativeSuperConstructor;
       Break;
     end;
@@ -1557,11 +1612,8 @@ begin
   // OrdinaryCreateFromConstructor reaches GetPrototypeFromConstructor. TypedArray
   // does so only for object sources that are neither ArrayBuffer-backed nor
   // typed-array-backed.
-  DelayNativePrototypeLookup := Assigned(NativeClass) and
-    (ShouldDelayTypedArrayPrototypeLookup(NativeClass, AArguments) or
-     (NativeClass is TGocciaArrayBufferClassValue) or
-     (NativeClass is TGocciaSharedArrayBufferClassValue) or
-     (NativeClass is TGocciaDataViewClassValue));
+  DelayNativePrototypeLookup := ShouldDelayNativePrototypeLookup(NativeClass,
+    AArguments) or ShouldDelayNativeSuperPrototypeLookup(NativeSuperConstructor);
 
   // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget)
   if Assigned(ANewTarget) and not DelayNativePrototypeLookup then
@@ -1619,22 +1671,10 @@ begin
     end;
   end;
 
-  if Assigned(ANewTarget) and DelayNativePrototypeLookup then
-  begin
-    if NativeClass is TGocciaTypedArrayClassValue then
-      InstancePrototype := GetTypedArrayPrototypeFromConstructor(
-        TGocciaTypedArrayClassValue(NativeClass), ANewTarget,
-        NativeIntrinsicPrototype)
-    else if NativeClass is TGocciaArrayBufferClassValue then
-      InstancePrototype := DefaultNativePrototypeForNewTarget(ANewTarget,
-        NativeIntrinsicPrototype, CONSTRUCTOR_ARRAY_BUFFER)
-    else if NativeClass is TGocciaSharedArrayBufferClassValue then
-      InstancePrototype := DefaultNativePrototypeForNewTarget(ANewTarget,
-        NativeIntrinsicPrototype, CONSTRUCTOR_SHARED_ARRAY_BUFFER)
-    else if NativeClass is TGocciaDataViewClassValue then
-      InstancePrototype := DefaultNativePrototypeForNewTarget(ANewTarget,
-        NativeIntrinsicPrototype, CONSTRUCTOR_DATA_VIEW);
-  end;
+  if Assigned(NativeClass) and Assigned(ANewTarget) and
+     DelayNativePrototypeLookup then
+    InstancePrototype := GetNativePrototypeFromConstructor(NativeClass,
+      ANewTarget, NativeIntrinsicPrototype);
 
   // ES2026 §10.2.2 step 6: Set proto on the instance before constructor runs
   if Assigned(NativeInstance) then
@@ -1716,7 +1756,8 @@ begin
       if Assigned(NativeInstance) then
       begin
         Instance := NativeInstance;
-        Instance.Prototype := InstancePrototype;
+        if Assigned(NativeClass) or not DelayNativePrototypeLookup then
+          Instance.Prototype := InstancePrototype;
         if NativeInstance is TGocciaInstanceValue then
           TGocciaInstanceValue(NativeInstance).ClassValue := Self;
       end;

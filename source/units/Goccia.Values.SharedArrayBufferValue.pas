@@ -545,8 +545,10 @@ begin
         SSuggestSharedArrayBufferThisType);
   end;
 
-  // ES2026 §25.2.5.6 step 11: If new.[[ArrayBufferData]] is O.[[ArrayBufferData]], throw TypeError
-  if Pointer(NewBuf.FData) = Pointer(Buf.FData) then
+  // ES2026 §25.2.5.6 step 11: If new.[[ArrayBufferData]] is O.[[ArrayBufferData]], throw TypeError.
+  // Zero-length Pascal dynamic arrays may both have nil storage; that does not
+  // represent the same ECMAScript data block.
+  if (NewLen > 0) and (Pointer(NewBuf.FData) = Pointer(Buf.FData)) then
     ThrowTypeError(SErrorSharedArrayBufferSpeciesReturnedThis, SSuggestSpeciesConstructor);
 
   if NewLen > 0 then
