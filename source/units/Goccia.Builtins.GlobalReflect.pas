@@ -118,8 +118,6 @@ var
   ArgsList: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 3, 'Reflect.apply', ThrowError);
-
   Target := AArgs.GetElement(0);
   ThisArg := AArgs.GetElement(1);
   ArgsList := AArgs.GetElement(2);
@@ -200,26 +198,22 @@ var
   SymbolKey: TGocciaSymbolValue;
   Success: Boolean;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 3, 'Reflect.defineProperty', ThrowError);
-
   Target := AArgs.GetElement(0);
-  PropKey := ToPropertyKey(AArgs.GetElement(1));
-  Attrs := AArgs.GetElement(2);
 
   // Step 1: If target is not an Object, throw a TypeError exception
   RequireObjectTarget(Target, 'Reflect.defineProperty');
 
+  // Step 2: Let key be ? ToPropertyKey(propertyKey)
+  PropKey := ToPropertyKey(AArgs.GetElement(1));
+  Attrs := AArgs.GetElement(2);
   if not (Attrs is TGocciaObjectValue) then
     ThrowTypeError(SErrorReflectDefinePropertyAttrsMustBeObject, SSuggestPropertyDescriptorObject);
 
-  Obj := TGocciaObjectValue(Target);
-  DescriptorObject := TGocciaObjectValue(Attrs);
-
-  // Step 2: Let key be ? ToPropertyKey(propertyKey)
   IsSymbolKey := PropKey is TGocciaSymbolValue;
   SymbolKey := nil;
   PropertyName := '';
   ExistingDescriptor := nil;
+  Obj := TGocciaObjectValue(Target);
 
   if IsSymbolKey then
   begin
@@ -235,6 +229,7 @@ begin
   end;
 
   // Step 3: Let desc be ? ToPropertyDescriptor(Attributes)
+  DescriptorObject := TGocciaObjectValue(Attrs);
   Descriptor := ToPropertyDescriptor(DescriptorObject, ExistingDescriptor);
 
   // Step 4: Return target.[[DefineOwnProperty]](key, desc) — returns boolean.
@@ -387,7 +382,6 @@ begin
         DescriptorObj.AssignProperty(PROP_SET, TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
   end;
-
   if Descriptor.HasEnumerableField then
   begin
     if Descriptor.Enumerable then
@@ -552,17 +546,10 @@ begin
   RequireObjectTarget(Target, 'Reflect.preventExtensions');
 
   // Step 2: Return ? target.[[PreventExtensions]]()
-  if Target is TGocciaProxyValue then
-  begin
-    if TGocciaProxyValue(Target).TryPreventExtensionsTrap then
-      Result := TGocciaBooleanLiteralValue.TrueValue
-    else
-      Result := TGocciaBooleanLiteralValue.FalseValue;
-    Exit;
-  end;
-
-  TGocciaObjectValue(Target).PreventExtensions;
-  Result := TGocciaBooleanLiteralValue.TrueValue;
+  if TGocciaObjectValue(Target).TryPreventExtensions then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 // ES2026 §28.1.12 Reflect.set(target, propertyKey, V [, receiver])

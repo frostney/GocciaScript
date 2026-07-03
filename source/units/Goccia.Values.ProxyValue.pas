@@ -96,8 +96,8 @@ type
     // ES2026 §28.1.1 [[IsExtensible]]()
     function IsExtensibleTrap: Boolean;
 
-    // ES2026 §28.1.1 [[PreventExtensions]]()
-    function TryPreventExtensionsTrap: Boolean;
+    // ES2026 §10.5.4 [[PreventExtensions]]()
+    function TryPreventExtensions: Boolean; override;
     procedure PreventExtensions; override;
 
     // ES2026 §28.1.1 [[Call]](thisArgument, argumentsList)
@@ -1785,8 +1785,8 @@ begin
     Result := ProxyTargetIsExtensible(FTarget);
 end;
 
-// ES2026 §28.1.1 [[PreventExtensions]]()
-function TGocciaProxyValue.TryPreventExtensionsTrap: Boolean;
+// ES2026 §10.5.4 [[PreventExtensions]]()
+function TGocciaProxyValue.TryPreventExtensions: Boolean;
 var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;
@@ -1810,20 +1810,17 @@ begin
   end
   else
   begin
-    if FTarget is TGocciaProxyValue then
-      Exit(TGocciaProxyValue(FTarget).TryPreventExtensionsTrap);
-    if not (FTarget is TGocciaObjectValue) then
-      Exit(False);
-    TGocciaObjectValue(FTarget).PreventExtensions;
-    Result := True;
+    if FTarget is TGocciaObjectValue then
+      Result := TGocciaObjectValue(FTarget).TryPreventExtensions
+    else
+      Result := False;
   end;
 end;
 
 procedure TGocciaProxyValue.PreventExtensions;
 begin
-  if not TryPreventExtensionsTrap then
-    ThrowTypeError(SErrorProxyPreventExtensionsFalse,
-      SSuggestProxyTrapInvariant);
+  if not TryPreventExtensions then
+    ThrowTypeError(SErrorProxyPreventExtensionsFalse, SSuggestProxyTrapInvariant);
 end;
 
 // ES2026 §28.1.1 [[Call]](thisArgument, argumentsList)
