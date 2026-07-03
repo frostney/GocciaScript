@@ -20,6 +20,10 @@ describe("String.prototype.isWellFormed", () => {
     expect("\uD83D\uDE00".isWellFormed()).toBe(true);
   });
 
+  test("surrogate pair formed by concatenation is well-formed", () => {
+    expect(("\uD83D" + "\uDCA9").isWellFormed()).toBe(true);
+  });
+
   test("lone high surrogate is not well-formed", () => {
     expect("\uD800".isWellFormed()).toBe(false);
   });

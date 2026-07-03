@@ -213,6 +213,7 @@ begin
     OP_DEFINE_GLOBAL_FUNCTION_LONG:    Result := 'OP_DEFINE_GLOBAL_FUNCTION_LONG';
     OP_PREDECLARE_GLOBAL_LET_LONG:     Result := 'OP_PREDECLARE_GLOBAL_LET_LONG';
     OP_PREDECLARE_GLOBAL_CONST_LONG:   Result := 'OP_PREDECLARE_GLOBAL_CONST_LONG';
+    OP_LOAD_CHAR:                      Result := 'OP_LOAD_CHAR';
   else
     Result := Format('OP_UNKNOWN_%d', [AOp]);
   end;

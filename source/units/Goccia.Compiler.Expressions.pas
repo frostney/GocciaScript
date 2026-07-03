@@ -573,11 +573,7 @@ begin
     end;
   end
   else if Value is TGocciaStringLiteralValue then
-  begin
-    Idx := ACtx.Template.AddConstantString(
-      TGocciaStringLiteralValue(Value).Value);
-    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ADest, Idx));
-  end
+    EmitLoadStringLiteral(ACtx, ADest, TGocciaStringLiteralValue(Value).Value)
   else if Value is TGocciaBigIntValue then
   begin
     Idx := ACtx.Template.AddConstantBigInt(

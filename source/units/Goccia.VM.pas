@@ -670,7 +670,9 @@ begin
       TGocciaObjectValue.SharedObjectPrototype,
       IteratorPrototype);
     if AKind = foikGenerator then
-      EnsureGeneratorPrototypeMethods(Result);
+      EnsureGeneratorPrototypeMethods(Result)
+    else if AKind = foikAsyncGenerator then
+      EnsureAsyncGeneratorPrototypeMethods(Result);
   finally
     if ShouldSwitchRealm then
       SetCurrentRealm(PreviousRealm);
@@ -705,6 +707,19 @@ function BytecodePrivateTokenForKey(const AKey,
   AFallbackPrivateBrandToken: string): string; forward;
 function BytecodePrivateReceiverBrandToken(
   const AObject: TGocciaValue): string; forward;
+
+function UTF16CodeUnitImmediateToUTF8(const ACodeUnit: UInt16): string;
+begin
+  if ACodeUnit <= $7F then
+    Result := Chr(ACodeUnit)
+  else if ACodeUnit <= $7FF then
+    Result := Chr($C0 or (ACodeUnit shr 6)) +
+      Chr($80 or (ACodeUnit and $3F))
+  else
+    Result := Chr($E0 or (ACodeUnit shr 12)) +
+      Chr($80 or ((ACodeUnit shr 6) and $3F)) +
+      Chr($80 or (ACodeUnit and $3F));
+end;
 
 { TGocciaVMDirectEvalScope }
 
@@ -2527,7 +2542,7 @@ type
     property Value: TGocciaValue read FValue;
   end;
 
-  TGocciaBytecodeGeneratorObjectValue = class(TGocciaIteratorValue)
+  TGocciaBytecodeGeneratorObjectValue = class(TGocciaGeneratorBaseValue)
   private
     FVM: TGocciaVM;
     FClosure: TGocciaBytecodeClosure;
@@ -2540,6 +2555,7 @@ type
     FReturnSentinel: TGocciaValue;
     FReturnValue: TGocciaValue;
     FReturnRequiresAwait: Boolean;
+    FReturnResumeValueAwaited: Boolean;
     FHasContinuation: Boolean;
     FContinuationIP: Integer;
     FContinuationRegisters: TGocciaRegisterArray;
@@ -2582,11 +2598,11 @@ type
     function ThrowValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
     procedure Close; override;
     function GeneratorNext(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
+      const AThisValue: TGocciaValue): TGocciaValue; override;
     function GeneratorReturn(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
+      const AThisValue: TGocciaValue): TGocciaValue; override;
     function GeneratorThrow(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
+      const AThisValue: TGocciaValue): TGocciaValue; override;
     procedure HandleYield(const AValue: TGocciaRegister;
       const AResumeRegister: UInt8; const AFrame: TGocciaVMCallFrame;
       const AHandlerBaseCount: Integer; const APrevCovLine: UInt32;
@@ -2600,7 +2616,7 @@ type
     function BuiltinTagFallback: Boolean; override;
   end;
 
-  TGocciaBytecodeAsyncGeneratorObjectValue = class(TGocciaObjectValue)
+  TGocciaBytecodeAsyncGeneratorObjectValue = class(TGocciaAsyncGeneratorBaseValue)
   private
     FInner: TGocciaBytecodeGeneratorObjectValue;
     FQueue: array of TGocciaBytecodeAsyncGeneratorRequest;
@@ -2617,9 +2633,15 @@ type
     procedure ContinueWhenPromiseSettles(const APromise: TGocciaPromiseValue);
     procedure AwaitYieldValue(const ARequestPromise: TGocciaPromiseValue;
       const AValue: TGocciaValue);
+    procedure AwaitReturnValue(const ARequestPromise: TGocciaPromiseValue;
+      const AValue: TGocciaValue);
     procedure ResolveAwaitedYield(const ARequestPromise: TGocciaPromiseValue;
       const AValue: TGocciaValue);
     procedure RejectAwaitedYield(const ARequestPromise: TGocciaPromiseValue;
+      const AReason: TGocciaValue);
+    procedure ResolveAwaitedReturn(const ARequestPromise: TGocciaPromiseValue;
+      const AValue: TGocciaValue);
+    procedure RejectAwaitedReturn(const ARequestPromise: TGocciaPromiseValue;
       const AReason: TGocciaValue);
     procedure ProcessQueue;
     function ResumeAsPromise(const AKind: TGocciaBytecodeGeneratorResumeKind;
@@ -2632,11 +2654,11 @@ type
       const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaRegister;
       const AArguments: TGocciaRegisterArray);
     function AsyncGeneratorNext(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
+      const AThisValue: TGocciaValue): TGocciaValue; override;
     function AsyncGeneratorReturn(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
+      const AThisValue: TGocciaValue): TGocciaValue; override;
     function AsyncGeneratorThrow(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
+      const AThisValue: TGocciaValue): TGocciaValue; override;
     function AsyncIteratorSelf(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure MarkReferences; override;
@@ -2649,9 +2671,11 @@ type
     FGenerator: TGocciaBytecodeAsyncGeneratorObjectValue;
     FRequestPromise: TGocciaPromiseValue;
     FReject: Boolean;
+    FReturn: Boolean;
   public
     constructor Create(const AGenerator: TGocciaBytecodeAsyncGeneratorObjectValue;
-      const ARequestPromise: TGocciaPromiseValue; const AReject: Boolean);
+      const ARequestPromise: TGocciaPromiseValue; const AReject: Boolean;
+      const AReturn: Boolean = False);
     function Invoke(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure MarkReferences; override;
@@ -3933,15 +3957,7 @@ begin
   FResumeValue := RegisterUndefined;
   FIgnoreNextResume := False;
   FReturnRequiresAwait := False;
-  DefineProperty(PROP_NEXT, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(GeneratorNext, PROP_NEXT, 1),
-    [pfConfigurable, pfWritable]));
-  DefineProperty(PROP_RETURN, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(GeneratorReturn, PROP_RETURN, 1),
-    [pfConfigurable, pfWritable]));
-  DefineProperty(PROP_THROW, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(GeneratorThrow, PROP_THROW, 1),
-    [pfConfigurable, pfWritable]));
+  FReturnResumeValueAwaited := False;
   if Assigned(FClosure.Template) and (FClosure.Template.ParameterPreambleSize > 0) then
     FVM.ExecuteGeneratorParameterPreamble(Self);
 end;
@@ -3971,15 +3987,7 @@ begin
   FResumeValue := RegisterUndefined;
   FIgnoreNextResume := False;
   FReturnRequiresAwait := False;
-  DefineProperty(PROP_NEXT, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(GeneratorNext, PROP_NEXT, 1),
-    [pfConfigurable, pfWritable]));
-  DefineProperty(PROP_RETURN, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(GeneratorReturn, PROP_RETURN, 1),
-    [pfConfigurable, pfWritable]));
-  DefineProperty(PROP_THROW, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(GeneratorThrow, PROP_THROW, 1),
-    [pfConfigurable, pfWritable]));
+  FReturnResumeValueAwaited := False;
   if ARunParameterPreamble and Assigned(FClosure.Template) and
      (FClosure.Template.ParameterPreambleSize > 0) then
     FVM.ExecuteGeneratorParameterPreamble(Self);
@@ -4456,6 +4464,8 @@ begin
   FResumeKind := AKind;
   FResumeValue := VMValueToRegisterFast(AValue);
   FReturnRequiresAwait := False;
+  if AKind <> bgrkReturn then
+    FReturnResumeValueAwaited := False;
   FState := bgsExecuting;
 
   PreviousGenerator := GActiveBytecodeGenerator;
@@ -4623,7 +4633,9 @@ begin
   try
     try
       ResultValue := FContinuation.ResumeRaw(FResumeKind, ResumeValue, Done);
-      if FAsyncGeneratorResult then
+      if FAsyncGeneratorResult and (FResumeKind = bgrkReturn) then
+        FPromise.Resolve(CreateIteratorResult(ResultValue, Done))
+      else if FAsyncGeneratorResult then
         FPromise.Resolve(CreateIteratorResult(AwaitValue(ResultValue), Done))
       else if Done then
         FPromise.Resolve(ResultValue);
@@ -4891,19 +4903,6 @@ begin
   Prototype := VMGeneratorObjectPrototype(foikAsyncGenerator);
   FInner := TGocciaBytecodeGeneratorObjectValue.Create(AVM, AClosure,
     AThisValue, AArguments);
-  DefineProperty(PROP_NEXT, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(AsyncGeneratorNext, PROP_NEXT, 1),
-    [pfConfigurable, pfWritable]));
-  DefineProperty(PROP_RETURN, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(AsyncGeneratorReturn, PROP_RETURN, 1),
-    [pfConfigurable, pfWritable]));
-  DefineProperty(PROP_THROW, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(AsyncGeneratorThrow, PROP_THROW, 1),
-    [pfConfigurable, pfWritable]));
-  DefineSymbolProperty(TGocciaSymbolValue.WellKnownAsyncIterator,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.Create(AsyncIteratorSelf, '[Symbol.asyncIterator]', 0),
-      [pfConfigurable, pfWritable]));
 end;
 
 constructor TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(
@@ -4914,19 +4913,6 @@ begin
   Prototype := VMGeneratorObjectPrototype(foikAsyncGenerator);
   FInner := TGocciaBytecodeGeneratorObjectValue.CreateRegisters(AVM, AClosure,
     AThisValue, AArguments);
-  DefineProperty(PROP_NEXT, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(AsyncGeneratorNext, PROP_NEXT, 1),
-    [pfConfigurable, pfWritable]));
-  DefineProperty(PROP_RETURN, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(AsyncGeneratorReturn, PROP_RETURN, 1),
-    [pfConfigurable, pfWritable]));
-  DefineProperty(PROP_THROW, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(AsyncGeneratorThrow, PROP_THROW, 1),
-    [pfConfigurable, pfWritable]));
-  DefineSymbolProperty(TGocciaSymbolValue.WellKnownAsyncIterator,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.Create(AsyncIteratorSelf, '[Symbol.asyncIterator]', 0),
-      [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaBytecodeAsyncGeneratorObjectValue.ResumeAsPromise(
@@ -5034,6 +5020,33 @@ begin
   AwaitPromise.InvokeThen(FulfillFunction, RejectFunction);
 end;
 
+// ES2026 §27.6.3.9 AsyncGeneratorAwaitReturn(gen)
+procedure TGocciaBytecodeAsyncGeneratorObjectValue.AwaitReturnValue(
+  const ARequestPromise: TGocciaPromiseValue; const AValue: TGocciaValue);
+var
+  AwaitPromise: TGocciaPromiseValue;
+  FulfillFunction: TGocciaNativeFunctionValue;
+  FulfillHandler: TGocciaVMAsyncGeneratorYieldAwaitHandler;
+  RejectFunction: TGocciaNativeFunctionValue;
+  RejectHandler: TGocciaVMAsyncGeneratorYieldAwaitHandler;
+begin
+  AwaitPromise := FInner.FVM.PromiseResolveIntrinsic(AValue);
+
+  FulfillHandler := TGocciaVMAsyncGeneratorYieldAwaitHandler.Create(
+    Self, ARequestPromise, False, True);
+  FulfillFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    FulfillHandler.Invoke, 'async-generator-return-fulfill', 1);
+  FulfillFunction.CapturedRoot := FulfillHandler;
+
+  RejectHandler := TGocciaVMAsyncGeneratorYieldAwaitHandler.Create(
+    Self, ARequestPromise, True, True);
+  RejectFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    RejectHandler.Invoke, 'async-generator-return-reject', 1);
+  RejectFunction.CapturedRoot := RejectHandler;
+
+  AwaitPromise.InvokeThen(FulfillFunction, RejectFunction);
+end;
+
 procedure TGocciaBytecodeAsyncGeneratorObjectValue.ResolveAwaitedYield(
   const ARequestPromise: TGocciaPromiseValue; const AValue: TGocciaValue);
 begin
@@ -5057,9 +5070,11 @@ begin
       if Done then
       begin
         if FInner.FReturnRequiresAwait then
-          UnwrappedValue := AwaitValue(ResultValue)
-        else
-          UnwrappedValue := ResultValue;
+        begin
+          AwaitReturnValue(ARequestPromise, ResultValue);
+          Exit;
+        end;
+        UnwrappedValue := ResultValue;
         ARequestPromise.Resolve(CreateIteratorResult(UnwrappedValue, True));
         FinishRequest;
       end
@@ -5087,6 +5102,20 @@ begin
   finally
     FInner.FVM.FCurrentAsyncPromise := PreviousAsyncPromise;
   end;
+end;
+
+procedure TGocciaBytecodeAsyncGeneratorObjectValue.ResolveAwaitedReturn(
+  const ARequestPromise: TGocciaPromiseValue; const AValue: TGocciaValue);
+begin
+  ARequestPromise.Resolve(CreateIteratorResult(AValue, True));
+  FinishRequest;
+end;
+
+procedure TGocciaBytecodeAsyncGeneratorObjectValue.RejectAwaitedReturn(
+  const ARequestPromise: TGocciaPromiseValue; const AReason: TGocciaValue);
+begin
+  ARequestPromise.Reject(AReason);
+  FinishRequest;
 end;
 
 procedure TGocciaBytecodeAsyncGeneratorObjectValue.ProcessQueue;
@@ -5121,6 +5150,14 @@ begin
         FInner.FVM.FCurrentAsyncPromise := ARequest.Promise;
         try
           try
+            if (ARequest.Kind = bgrkReturn) and
+               (FInner.FState in [bgsSuspendedStart, bgsCompleted]) then
+            begin
+              FInner.FState := bgsCompleted;
+              AwaitReturnValue(ARequest.Promise, ARequest.Value);
+              Exit;
+            end;
+
             if FInner.FState = bgsCompleted then
             begin
               case ARequest.Kind of
@@ -5139,10 +5176,7 @@ begin
 	                  end;
 	              else
 	                begin
-	                  UnwrappedValue := AwaitValue(ARequest.Value);
-	                  ARequest.Promise.Resolve(CreateIteratorResult(
-	                    UnwrappedValue, True));
-                    FinishRequest;
+	                  AwaitReturnValue(ARequest.Promise, ARequest.Value);
 	                  Exit;
 	                end;
               end;
@@ -5153,9 +5187,11 @@ begin
               if Done then
               begin
                 if FInner.FReturnRequiresAwait then
-                  UnwrappedValue := AwaitValue(Value)
-                else
-                  UnwrappedValue := Value;
+                begin
+                  AwaitReturnValue(ARequest.Promise, Value);
+                  Exit;
+                end;
+                UnwrappedValue := Value;
               end
               else if FInner.FDelegateActive then
                 UnwrappedValue := Value
@@ -5213,12 +5249,14 @@ end;
 
 constructor TGocciaVMAsyncGeneratorYieldAwaitHandler.Create(
   const AGenerator: TGocciaBytecodeAsyncGeneratorObjectValue;
-  const ARequestPromise: TGocciaPromiseValue; const AReject: Boolean);
+  const ARequestPromise: TGocciaPromiseValue; const AReject: Boolean;
+  const AReturn: Boolean = False);
 begin
   inherited Create(nil);
   FGenerator := AGenerator;
   FRequestPromise := ARequestPromise;
   FReject := AReject;
+  FReturn := AReturn;
 end;
 
 function TGocciaVMAsyncGeneratorYieldAwaitHandler.Invoke(
@@ -5232,7 +5270,11 @@ begin
     Exit;
 
   Value := VMArgumentOrUndefined(AArgs);
-  if FReject then
+  if FReturn and FReject then
+    FGenerator.RejectAwaitedReturn(FRequestPromise, Value)
+  else if FReturn then
+    FGenerator.ResolveAwaitedReturn(FRequestPromise, Value)
+  else if FReject then
     FGenerator.RejectAwaitedYield(FRequestPromise, Value)
   else
     FGenerator.ResolveAwaitedYield(FRequestPromise, Value);
@@ -12846,6 +12888,7 @@ var
   AwaitContinuation: TGocciaBytecodeGeneratorObjectValue;
   SpreadArray: TGocciaArrayValue;
   RestoredContinuation: Boolean;
+  ReturnAwaitAbrupt: Boolean;
   ForInKey: string;
   PreviousRealm: TGocciaRealm;
   ExecutionRealm: TGocciaRealm;
@@ -12932,15 +12975,56 @@ begin
             begin
               GActiveBytecodeGenerator.FReturnValue :=
                 RegisterToValue(GActiveBytecodeGenerator.FResumeValue);
+              ReturnAwaitAbrupt := False;
               if Assigned(Template) and Template.IsAsync and
-                 Template.IsGenerator then
-                GActiveBytecodeGenerator.FReturnValue :=
-                  AwaitValue(GActiveBytecodeGenerator.FReturnValue);
-              if not Assigned(GActiveBytecodeGenerator.FReturnSentinel) then
-                GActiveBytecodeGenerator.FReturnSentinel := TGocciaObjectValue.Create;
-              HandleExceptionUnwind(GActiveBytecodeGenerator.FReturnSentinel,
-                InitialFrameStackCount, SavedHandlerCount,
-                Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                 Template.IsGenerator and
+                 not GActiveBytecodeGenerator.FReturnResumeValueAwaited then
+              begin
+                try
+                  AwaitPromise := PromiseResolveIntrinsic(
+                    GActiveBytecodeGenerator.FReturnValue);
+                except
+                  on E: EGocciaBytecodeThrow do
+                  begin
+                    HandleExceptionUnwind(E.ThrownValue,
+                      InitialFrameStackCount, SavedHandlerCount,
+                      Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                    ReturnAwaitAbrupt := True;
+                  end;
+                  on E: TGocciaThrowValue do
+                  begin
+                    HandleExceptionUnwind(E.Value,
+                      InitialFrameStackCount, SavedHandlerCount,
+                      Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                    ReturnAwaitAbrupt := True;
+                  end;
+                end;
+                if not ReturnAwaitAbrupt then
+                begin
+                  GActiveBytecodeGenerator.FReturnResumeValueAwaited := True;
+                  GActiveBytecodeGenerator.CaptureContinuation(Frame,
+                    SavedHandlerCount, PrevCovLine,
+                    GActiveBytecodeGenerator.FResumeRegister, Frame.IP);
+                  GActiveBytecodeGenerator.FState := bgsSuspendedYield;
+                  AwaitPromise.InvokeThen(
+                    TGocciaVMAsyncAwaitContinuationValue.Create(Self,
+                      GActiveBytecodeGenerator, FCurrentAsyncPromise, bgrkReturn,
+                      True),
+                    TGocciaVMAsyncAwaitContinuationValue.Create(Self,
+                      GActiveBytecodeGenerator, FCurrentAsyncPromise, bgrkThrow,
+                      True));
+                  raise EGocciaBytecodeAsyncSuspend.Create('');
+                end;
+              end;
+              if not ReturnAwaitAbrupt then
+              begin
+                GActiveBytecodeGenerator.FReturnResumeValueAwaited := False;
+                if not Assigned(GActiveBytecodeGenerator.FReturnSentinel) then
+                  GActiveBytecodeGenerator.FReturnSentinel := TGocciaObjectValue.Create;
+                HandleExceptionUnwind(GActiveBytecodeGenerator.FReturnSentinel,
+                  InitialFrameStackCount, SavedHandlerCount,
+                  Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+              end;
             end;
         end;
       end;
@@ -12990,6 +13074,10 @@ begin
         else
           FRegisters[A] := ValueToRegister(
             ConstantToValue(Template.GetConstantUnchecked(DecodeBx(Instruction))));
+
+      OP_LOAD_CHAR:
+        FRegisters[A] := ValueToRegister(TGocciaStringLiteralValue.Create(
+          UTF16CodeUnitImmediateToUTF8(DecodeBx(Instruction))));
 
       OP_LOAD_REGEXP:
         FRegisters[A] := ValueToRegister(

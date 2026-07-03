@@ -131,6 +131,7 @@ const
   CARRIAGE_RETURN_CODE_POINT = $000D;
   LINE_SEPARATOR_CODE_POINT = $2028;
   PARAGRAPH_SEPARATOR_CODE_POINT = $2029;
+  MAX_UNICODE_CODE_POINT = $10FFFF;
 
 type
   TKeywordTokenEntry = record
@@ -230,6 +231,31 @@ begin
     if not CharInSet(AValue[I], ['0'..'9', 'a'..'f', 'A'..'F']) then
       Exit(False);
   Result := True;
+end;
+
+function TryParseUnicodeCodePointHex(const AValue: string;
+  out ACodePoint: Cardinal): Boolean;
+var
+  CodePointValue: QWord;
+  SignificantHex: string;
+  StartIndex: Integer;
+begin
+  ACodePoint := 0;
+  StartIndex := 1;
+  while (StartIndex <= Length(AValue)) and (AValue[StartIndex] = '0') do
+    Inc(StartIndex);
+
+  if StartIndex > Length(AValue) then
+    Exit(True);
+
+  SignificantHex := Copy(AValue, StartIndex, Length(AValue) - StartIndex + 1);
+  if Length(SignificantHex) > 6 then
+    Exit(False);
+
+  Result := TryStrToQWord('$' + SignificantHex, CodePointValue) and
+    (CodePointValue <= MAX_UNICODE_CODE_POINT);
+  if Result then
+    ACodePoint := Cardinal(CodePointValue);
 end;
 
 function TryKeywordToken(const AText: string; out ATokenType: TGocciaTokenType): Boolean; inline;
@@ -643,7 +669,6 @@ end;
 function TGocciaLexer.ScanUnicodeEscape: string;
 var
   CodePoint, LowSurrogate: Cardinal;
-  CodePointValue: QWord;
   HexStr: string;
   I, HexStart, SavedCurrent, SavedColumn: Integer;
 begin
@@ -662,11 +687,9 @@ begin
       raise TGocciaLexerError.Create('Invalid unicode escape', FLine, FColumn, FFileName, GetSourceLines,
         SSuggestUnicodeHexDigits);
     Advance; // consume '}'
-    if not TryStrToQWord('$' + HexStr, CodePointValue) or
-       (CodePointValue > $10FFFF) then
+    if not TryParseUnicodeCodePointHex(HexStr, CodePoint) then
       raise TGocciaLexerError.Create('Invalid unicode code point', FLine, FColumn, FFileName, GetSourceLines,
         SSuggestUnicodeCodePointRange);
-    CodePoint := Cardinal(CodePointValue);
   end
   else
   begin
@@ -717,7 +740,7 @@ begin
     end;
   end;
 
-  if CodePoint > $10FFFF then
+  if CodePoint > MAX_UNICODE_CODE_POINT then
     raise TGocciaLexerError.Create('Invalid unicode code point', FLine, FColumn, FFileName, GetSourceLines,
       SSuggestUnicodeCodePointRange);
   Result := TextSemantics.CodePointToUTF8(CodePoint);
@@ -745,7 +768,7 @@ begin
       SSuggestHexEscapeFormat);
 
   CodePoint := StrToInt('$' + HexStr);
-  Result := Chr(CodePoint);
+  Result := TextSemantics.CodePointToUTF8(CodePoint);
 end;
 
 procedure TGocciaLexer.ProcessEscapeSequence(var ASB: TStringBuffer);
@@ -789,7 +812,7 @@ begin
           OctalValue := OctalValue * 8 + Ord(Peek) - Ord('0');
           Advance;
         end;
-        ASB.AppendChar(Chr(OctalValue));
+        ASB.Append(TextSemantics.CodePointToUTF8(OctalValue));
       end;
     'u': begin Advance; ASB.Append(ScanUnicodeEscape); end;
     'x': begin Advance; ASB.Append(ScanHexEscape); end;
@@ -806,7 +829,6 @@ end;
 function TGocciaLexer.ScanUnicodeEscapeForTemplate(var ASB: TStringBuffer): Boolean;
 var
   CodePoint, LowSurrogate: Cardinal;
-  CodePointValue: QWord;
   HexStr: string;
   I, HexStart, SavedCurrent, SavedColumn: Integer;
 begin
@@ -829,12 +851,8 @@ begin
     if not IsValidHexString(HexStr) then
       Exit(False);
     Advance; // consume '}'
-    // Use TryStrToQWord to safely handle arbitrarily long hex payloads
-    // without raising on overflow (e.g. \u{FFFFFFFF}).
-    if not TryStrToQWord('$' + HexStr, CodePointValue) or
-       (CodePointValue > $10FFFF) then
+    if not TryParseUnicodeCodePointHex(HexStr, CodePoint) then
       Exit(False);
-    CodePoint := Cardinal(CodePointValue);
   end
   else
   begin
@@ -890,7 +908,7 @@ begin
     end;
   end;
 
-  if CodePoint > $10FFFF then
+  if CodePoint > MAX_UNICODE_CODE_POINT then
     Exit(False);
   ASB.Append(TextSemantics.CodePointToUTF8(CodePoint));
   Result := True;
@@ -918,7 +936,7 @@ begin
     Exit(False);
 
   CodePoint := StrToInt('$' + HexStr);
-  ASB.AppendChar(Chr(CodePoint));
+  ASB.Append(TextSemantics.CodePointToUTF8(CodePoint));
   Result := True;
 end;
 

@@ -13,6 +13,10 @@ test("String.prototype.toUpperCase maps Unicode characters", () => {
   expect("éöσ".toUpperCase()).toBe("ÉÖΣ");
 });
 
+test("String.prototype.toUpperCase applies Unicode special casing", () => {
+  expect("\u00DF".toUpperCase()).toBe("SS");
+});
+
 test("String.prototype.toUpperCase coerces non-string receivers", () => {
   expect(String.prototype.toUpperCase.call(true)).toBe("TRUE");
 });

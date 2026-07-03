@@ -76,6 +76,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Realm,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.GeneratorValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -216,6 +217,7 @@ begin
     GeneratorPrototype.DefineProperty(PROP_CONSTRUCTOR,
       TGocciaPropertyDescriptorData.Create(FunctionPrototype,
         [pfConfigurable]));
+    EnsureGeneratorPrototypeMethods(GeneratorPrototype);
     DefineToStringTag(GeneratorPrototype, 'Generator');
 
     CurrentRealm.SetSlot(GGeneratorFunctionPrototypeSlot, FunctionPrototype);
@@ -226,6 +228,7 @@ begin
     ConstructorFunction := FunctionPrototype.GetProperty(PROP_CONSTRUCTOR) as
       TGocciaFunctionConstructorClassValue;
   end;
+  EnsureGeneratorPrototypeMethods(GeneratorPrototype);
   FGeneratorFunctionConstructor := ConstructorFunction;
   FGeneratorFunctionPrototype := FunctionPrototype;
   FGeneratorPrototype := GeneratorPrototype;
@@ -280,6 +283,7 @@ begin
     AsyncGeneratorPrototype.DefineProperty(PROP_CONSTRUCTOR,
       TGocciaPropertyDescriptorData.Create(FunctionPrototype,
         [pfConfigurable]));
+    EnsureAsyncGeneratorPrototypeMethods(AsyncGeneratorPrototype);
     DefineToStringTag(AsyncGeneratorPrototype, 'AsyncGenerator');
 
     CurrentRealm.SetSlot(GAsyncGeneratorFunctionPrototypeSlot,
@@ -292,6 +296,7 @@ begin
     ConstructorFunction := FunctionPrototype.GetProperty(PROP_CONSTRUCTOR) as
       TGocciaFunctionConstructorClassValue;
   end;
+  EnsureAsyncGeneratorPrototypeMethods(AsyncGeneratorPrototype);
   FAsyncGeneratorFunctionConstructor := ConstructorFunction;
   FAsyncGeneratorFunctionPrototype := FunctionPrototype;
   FAsyncIteratorPrototype := AsyncIteratorPrototype;

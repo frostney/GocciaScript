@@ -44,10 +44,9 @@ describe("String constructor", () => {
     expect(s instanceof String).toBe(true);
   });
 
-  test("new String(symbol) wraps display string (ES2026 §22.1.1.1)", () => {
-    const s = new String(Symbol("x"));
-    expect(typeof s).toBe("object");
-    expect(s.valueOf()).toBe("Symbol(x)");
+  test("new String(symbol) throws TypeError (ES2026 §22.1.1.1)", () => {
+    expect(() => new String(Symbol("x"))).toThrow(TypeError);
+    expect(String(Symbol("x"))).toBe("Symbol(x)");
   });
 
   test("String(obj) invokes user toString() (ES2026 §7.1.17 ToString)", () => {
@@ -88,6 +87,20 @@ describe("String constructor", () => {
     const s = new String(new Foo());
     expect(typeof s).toBe("object");
     expect(s.valueOf()).toBe("wrapped");
+  });
+
+  test("new String(obj) coerces the argument once", () => {
+    let calls = 0;
+    const obj = {
+      toString() {
+        calls += 1;
+        return "wrapped once";
+      },
+    };
+
+    const s = new String(obj);
+    expect(s.valueOf()).toBe("wrapped once");
+    expect(calls).toBe(1);
   });
 
   test("String(stringWrapper) unwraps via toString()", () => {

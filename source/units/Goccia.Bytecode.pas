@@ -141,9 +141,12 @@ const
   //   v67 -> v68: added long-name global define/predeclare opcodes so
   //               generated sources with more than 255 global names can keep
   //               using 16-bit constant-pool indices.
-  //   v68 -> v69: added OP_SET_CLASS_SOURCE_CONST so Function.prototype.toString
+  //   v68 -> v69: added OP_LOAD_CHAR so generated sources with many distinct
+  //               one-code-unit string literals do not exhaust the 16-bit
+  //               constant pool.
+  //   v69 -> v70: added OP_SET_CLASS_SOURCE_CONST so Function.prototype.toString
   //               can return exact class source text in bytecode mode.
-  GOCCIA_FORMAT_VERSION = 69;
+  GOCCIA_FORMAT_VERSION = 70;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -390,7 +393,8 @@ type
     OP_DEFINE_GLOBAL_CONST_LONG = 216,
     OP_DEFINE_GLOBAL_FUNCTION_LONG = 217,
     OP_PREDECLARE_GLOBAL_LET_LONG = 218,
-    OP_PREDECLARE_GLOBAL_CONST_LONG = 219
+    OP_PREDECLARE_GLOBAL_CONST_LONG = 219,
+    OP_LOAD_CHAR     = 220
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;
