@@ -22,6 +22,7 @@ uses
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.HoleValue,
   Goccia.Values.ObjectValue;
 
 const
@@ -49,7 +50,12 @@ begin
     ArrVal := TGocciaArrayValue(AValue);
     Result := TGocciaArgumentsCollection.CreateWithCapacity(ArrVal.Elements.Count);
     for I := 0 to ArrVal.Elements.Count - 1 do
-      Result.Add(ArrVal.Elements[I]);
+    begin
+      Element := ArrVal.Elements[I];
+      if Element = TGocciaHoleValue.HoleValue then
+        Element := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Result.Add(Element);
+    end;
     Exit;
   end;
 

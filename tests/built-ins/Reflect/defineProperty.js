@@ -71,6 +71,20 @@ describe("Reflect.defineProperty", () => {
     expect(() => Reflect.defineProperty(obj, "v", undefined)).toThrow(TypeError);
   });
 
+  test("propagates abrupt completion from property key before validating descriptor", () => {
+    const obj = {};
+    let propertyKeyWasConverted = false;
+    const propertyKey = {
+      toString() {
+        propertyKeyWasConverted = true;
+        throw new Error("property key failure");
+      },
+    };
+
+    expect(() => Reflect.defineProperty(obj, propertyKey)).toThrow(Error);
+    expect(propertyKeyWasConverted).toBe(true);
+  });
+
   test("throws TypeError for mixed data and accessor descriptors", () => {
     const obj = {};
 

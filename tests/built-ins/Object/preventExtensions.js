@@ -18,6 +18,12 @@ describe("Object.preventExtensions", () => {
     expect(result).toBe(obj);
   });
 
+  test("throws when the object internal method returns false", () => {
+    const buffer = new ArrayBuffer(4, { maxByteLength: 8 });
+
+    expect(() => Object.preventExtensions(new Uint8Array(buffer))).toThrow(TypeError);
+  });
+
   test("non-objects are returned as-is", () => {
     expect(Object.preventExtensions(42)).toBe(42);
   });
