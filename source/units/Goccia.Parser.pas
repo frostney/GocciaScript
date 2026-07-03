@@ -8367,6 +8367,7 @@ var
   CanUseShorthand: Boolean;
   NumericValue: Double;
   KeyExpression: TGocciaExpression;
+  KeyToken: TGocciaToken;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -8400,7 +8401,8 @@ begin
       else if IsIdentifierNameToken(Peek.TokenType) then
       begin
         CanUseShorthand := True;
-        Key := Advance.Lexeme;
+        KeyToken := Advance;
+        Key := KeyToken.Lexeme;
       end
       else if Check(gttString) then
       begin
@@ -8438,8 +8440,15 @@ begin
             'Object pattern shorthand requires an identifier property name',
             Previous.Line, Previous.Column, FFileName, FSourceLines,
             'Use "key: binding" for string, numeric, or computed keys');
+        if not IsIdentifierBindingToken(KeyToken.TokenType) then
+          raise TGocciaSyntaxError.Create(
+            'Object pattern shorthand requires an identifier binding',
+            KeyToken.Line, KeyToken.Column, FFileName, FSourceLines,
+            'Use "key: binding" when the property name is a keyword');
+        ValidateIdentifierBinding(KeyToken);
         // Shorthand syntax: {name} means {name: name}
-        Pattern := TGocciaIdentifierDestructuringPattern.Create(Key, Previous.Line, Previous.Column);
+        Pattern := TGocciaIdentifierDestructuringPattern.Create(Key,
+          KeyToken.Line, KeyToken.Column);
 
         // Check for default value in shorthand
         if Match(gttAssign) then

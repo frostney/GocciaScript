@@ -444,8 +444,7 @@ begin
     Exit;
 
   FirstArg := AArguments.GetElement(0);
-  Result := (FirstArg is TGocciaObjectValue) and
-    not (FirstArg is TGocciaArrayBufferValue) and
+  Result := not (FirstArg is TGocciaArrayBufferValue) and
     not (FirstArg is TGocciaSharedArrayBufferValue) and
     not (FirstArg is TGocciaTypedArrayValue);
 end;
@@ -1548,6 +1547,7 @@ var
   FinalThis: TGocciaValue;
   ConstructResult: TGocciaValue;
   EffectiveNewTarget: TGocciaValue;
+  PreviousRealm: TGocciaRealm;
   DelayNativePrototypeLookup: Boolean;
   NativeInstanceInitialized: Boolean;
   NativeInstanceConstructedByNativeSuper: Boolean;
@@ -1578,6 +1578,30 @@ begin
     EffectiveNewTarget := ANewTarget
   else
     EffectiveNewTarget := Self;
+
+  // ES2026 §20.1.1.1 Object(value): direct Object construction boxes
+  // primitive inputs and returns object inputs unchanged.  Derived Object
+  // subclasses still allocate through NewTarget below.
+  if (FName = CONSTRUCTOR_OBJECT) and (EffectiveNewTarget = Self) and
+     (AArguments.Length > 0) and
+     not (AArguments.GetElement(0) is TGocciaUndefinedLiteralValue) and
+     not (AArguments.GetElement(0) is TGocciaNullLiteralValue) then
+  begin
+    if AArguments.GetElement(0).IsPrimitive then
+    begin
+      PreviousRealm := CurrentRealm;
+      if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+        SetCurrentRealm(FCreationRealm);
+      try
+        Exit(TGocciaObjectValue(AArguments.GetElement(0).Box));
+      finally
+        if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+          SetCurrentRealm(PreviousRealm);
+      end;
+    end;
+    if AArguments.GetElement(0) is TGocciaObjectValue then
+      Exit(TGocciaObjectValue(AArguments.GetElement(0)));
+  end;
 
   NativeClass := nil;
   NativeInstance := nil;

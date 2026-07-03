@@ -8936,7 +8936,9 @@ var
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   BoundArgs: TGocciaArgumentsCollection;
   BoundFunction: TGocciaBoundFunctionValue;
+  ClassConstructor: TGocciaClassValue;
   ConstructorName: string;
+  EvalContext: TGocciaEvaluationContext;
   EffectiveNewTarget: TGocciaValue;
   I: Integer;
   ReceiverPrototype, ReceiverInstance: TGocciaObjectValue;
@@ -8963,8 +8965,37 @@ begin
 
   if AConstructor is TGocciaClassValue then
   begin
-    Result := TGocciaClassValue(AConstructor).Instantiate(AArguments,
-      EffectiveNewTarget);
+    ClassConstructor := TGocciaClassValue(AConstructor);
+    if (ClassConstructor.SourceText <> '') and
+       (ClassConstructor.NativeInstanceDefaultPrototype = nil) and
+       (ClassConstructor.NativeSuperConstructor = nil) then
+    begin
+      EvalContext := Default(TGocciaEvaluationContext);
+      EvalContext.Realm := FRealm;
+      if Assigned(FCurrentDynamicVarScope) then
+        EvalContext.Scope := FCurrentDynamicVarScope
+      else
+        EvalContext.Scope := FGlobalScope;
+      EvalContext.OnError := ThrowError;
+      EvalContext.LoadModule := FLoadModule;
+      EvalContext.LoadModuleSource := FLoadModuleSource;
+      EvalContext.CurrentFilePath := FCurrentModuleSourcePath;
+      EvalContext.CoverageEnabled := FCoverageEnabled;
+      EvalContext.StrictTypes := False;
+      if Assigned(FGlobalScope) then
+      begin
+        EvalContext.StrictTypes := FGlobalScope.EffectiveStrictTypes;
+        EvalContext.CompatibilityNonStrictMode :=
+          FGlobalScope.EffectiveNonStrictMode;
+      end;
+      EvalContext.NonStrictMode := not (Assigned(FCurrentClosure) and
+        Assigned(FCurrentClosure.Template) and
+        FCurrentClosure.Template.StrictCode);
+      Result := InstantiateClass(ClassConstructor, AArguments, EvalContext,
+        EffectiveNewTarget);
+    end
+    else
+      Result := ClassConstructor.Instantiate(AArguments, EffectiveNewTarget);
     Exit;
   end;
 
