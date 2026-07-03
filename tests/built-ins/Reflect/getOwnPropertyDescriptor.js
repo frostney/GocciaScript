@@ -19,6 +19,23 @@ describe("Reflect.getOwnPropertyDescriptor", () => {
     expect(desc.configurable).toBe(true);
   });
 
+  test("returns data descriptor keys in FromPropertyDescriptor order", () => {
+    const obj = {};
+    Object.defineProperty(obj, "x", {
+      value: 42,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+
+    expect(Object.keys(Reflect.getOwnPropertyDescriptor(obj, "x"))).toEqual([
+      "value",
+      "writable",
+      "enumerable",
+      "configurable",
+    ]);
+  });
+
   test("returns descriptor for accessor property", () => {
     const obj = {};
     const getter = () => 10;
@@ -31,6 +48,43 @@ describe("Reflect.getOwnPropertyDescriptor", () => {
     expect(desc.get).toBe(getter);
     expect(desc.enumerable).toBe(true);
     expect(desc.configurable).toBe(true);
+  });
+
+  test("returns accessor descriptor keys in FromPropertyDescriptor order", () => {
+    const obj = {};
+    const getter = () => 10;
+    const setter = () => {};
+    Object.defineProperty(obj, "y", {
+      get: getter,
+      set: setter,
+      enumerable: true,
+      configurable: true,
+    });
+
+    expect(Object.keys(Reflect.getOwnPropertyDescriptor(obj, "y"))).toEqual([
+      "get",
+      "set",
+      "enumerable",
+      "configurable",
+    ]);
+  });
+
+  test("returns symbol data descriptor keys in FromPropertyDescriptor order", () => {
+    const sym = Symbol("x");
+    const obj = {};
+    Object.defineProperty(obj, sym, {
+      value: 1,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+
+    expect(Object.keys(Reflect.getOwnPropertyDescriptor(obj, sym))).toEqual([
+      "value",
+      "writable",
+      "enumerable",
+      "configurable",
+    ]);
   });
 
   test("returns undefined for non-existent property", () => {
