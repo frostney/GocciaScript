@@ -586,10 +586,10 @@ begin
 end;
 
 procedure ValidateProxyGetOwnTrapDescriptor(const APropertyLabel: string;
-  const ATargetObject: TGocciaObjectValue;
+  const AExtensibleTarget: Boolean;
   const ATargetDesc, AResultDesc: TGocciaPropertyDescriptor);
 begin
-  if not IsCompatibleProxyTrapPropertyDescriptor(ATargetObject.Extensible,
+  if not IsCompatibleProxyTrapPropertyDescriptor(AExtensibleTarget,
     AResultDesc, ATargetDesc) then
     ThrowTypeError(Format(SErrorProxyGetOwnIncompatible, [APropertyLabel]),
       SSuggestProxyTrapInvariant);
@@ -780,7 +780,7 @@ begin
     end;
   end;
 
-  if TargetObj.Extensible then
+  if ProxyTargetIsExtensible(FTarget) then
     Exit;
 
   for I := 0 to Length(TargetKeys) - 1 do
@@ -1357,8 +1357,8 @@ begin
     end;
     try
       if Assigned(TargetObject) then
-        ValidateProxyGetOwnTrapDescriptor(AName, TargetObject, TargetDesc,
-          CompletedDesc);
+        ValidateProxyGetOwnTrapDescriptor(AName,
+          ProxyTargetIsExtensible(FTarget), TargetDesc, CompletedDesc);
       Result := CompletedDesc;
     except
       CompletedDesc.Free;
@@ -1434,8 +1434,8 @@ begin
     end;
     try
       if Assigned(TargetObject) then
-        ValidateProxyGetOwnTrapDescriptor(PropertyLabel, TargetObject,
-          TargetDesc, CompletedDesc);
+        ValidateProxyGetOwnTrapDescriptor(PropertyLabel,
+          ProxyTargetIsExtensible(FTarget), TargetDesc, CompletedDesc);
       Result := CompletedDesc;
     except
       CompletedDesc.Free;
