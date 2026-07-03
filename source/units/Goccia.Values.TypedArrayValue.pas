@@ -82,6 +82,7 @@ type
     function GetOwnPropertyKeys: TArray<string>; override;
     function GetAllPropertyNames: TArray<string>; override;
     function ToStringTag: string; override;
+    function TryPreventExtensions: Boolean; override;
 
     procedure MarkReferences; override;
 
@@ -839,7 +840,7 @@ begin
   FBufferData := ASharedBuffer.Data;
   FByteOffset := AByteOffset;
   BPE := BytesPerElement(AKind);
-  FAutoLength := False;
+  FAutoLength := (ALength < 0) and (ASharedBuffer.MaxByteLength >= 0);
 
   if ALength >= 0 then
     FLength := ALength
@@ -1146,6 +1147,17 @@ begin
   end;
 
   Result := inherited GetOwnPropertyDescriptor(AName);
+end;
+
+function TGocciaTypedArrayValue.TryPreventExtensions: Boolean;
+begin
+  if (FBufferValue is TGocciaArrayBufferValue) and
+     (TGocciaArrayBufferValue(FBufferValue).MaxByteLength >= 0) then
+    Exit(False);
+  if (FBufferValue is TGocciaSharedArrayBufferValue) and FAutoLength then
+    Exit(False);
+
+  Result := inherited TryPreventExtensions;
 end;
 
 // ES2026 §10.4.5.7 [[Delete]](P)
@@ -3022,7 +3034,8 @@ begin
   if FirstArg is TGocciaArrayBufferValue then
   begin
     Buf := TGocciaArrayBufferValue(FirstArg);
-    if AArguments.Length > 1 then
+    if (AArguments.Length > 1) and
+       not (AArguments.GetElement(1) is TGocciaUndefinedLiteralValue) then
       ByteOff := ToIntegerOrInfinityBounded(AArguments.GetElement(1))
     else
       ByteOff := 0;
@@ -3074,7 +3087,8 @@ begin
   if FirstArg is TGocciaSharedArrayBufferValue then
   begin
     SAB := TGocciaSharedArrayBufferValue(FirstArg);
-    if AArguments.Length > 1 then
+    if (AArguments.Length > 1) and
+       not (AArguments.GetElement(1) is TGocciaUndefinedLiteralValue) then
       ByteOff := ToIntegerOrInfinityBounded(AArguments.GetElement(1))
     else
       ByteOff := 0;
@@ -3104,6 +3118,8 @@ begin
       if Int64(ByteOff) + Int64(ElemLen) * Int64(BPE) > Int64(BufferByteLength) then
         ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
     end
+    else if SAB.MaxByteLength >= 0 then
+      ElemLen := -1
     else
     begin
       if ((Int64(BufferByteLength) - Int64(ByteOff)) mod Int64(BPE)) <> 0 then

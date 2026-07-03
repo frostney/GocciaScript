@@ -66,6 +66,9 @@ resourcestring
   // Type errors — delete
   SErrorCannotDeletePropertyOf = 'Cannot delete property ''%s'' of %s';
 
+  // Type errors — object integrity
+  SErrorCannotPreventExtensions = 'Cannot prevent extensions on this object';
+
   // Array errors
   SErrorSpeciesNotConstructor = 'Species is not a constructor';
   SErrorInvalidArrayLength = 'Invalid array length';

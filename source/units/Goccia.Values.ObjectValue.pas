@@ -109,6 +109,7 @@ type
 
     procedure Freeze; virtual;
     procedure Seal; virtual;
+    function TryPreventExtensions: Boolean; virtual;
     procedure PreventExtensions; virtual;
 
     // ES2026 §7.3.16 TestIntegrityLevel(O, level)
@@ -1975,9 +1976,16 @@ begin
   FExtensible := False;
 end;
 
-procedure TGocciaObjectValue.PreventExtensions;
+function TGocciaObjectValue.TryPreventExtensions: Boolean;
 begin
   FExtensible := False;
+  Result := True;
+end;
+
+procedure TGocciaObjectValue.PreventExtensions;
+begin
+  if not TryPreventExtensions then
+    ThrowTypeError(SErrorCannotPreventExtensions, SSuggestObjectNotExtensible);
 end;
 
 // ES2026 §7.3.16 TestIntegrityLevel(O, frozen)

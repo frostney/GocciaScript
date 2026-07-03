@@ -52,6 +52,12 @@ describe("Reflect.apply", () => {
     expect(result[1]).toBe(undefined);
   });
 
+  test("array holes in argumentsList are passed as undefined", () => {
+    const fn = (a, b, c, d) => [a, b, c, d];
+    const result = Reflect.apply(fn, undefined, ["arg1", 2, , null]);
+    expect(result).toEqual(["arg1", 2, undefined, null]);
+  });
+
   test("works with array-like object with string length", () => {
     const fn = (a) => a;
     const arrayLike = { 0: "hello", length: "1" };
@@ -63,5 +69,10 @@ describe("Reflect.apply", () => {
     expect(() => Reflect.apply(fn, undefined, "not-array")).toThrow(TypeError);
     expect(() => Reflect.apply(fn, undefined, 42)).toThrow(TypeError);
     expect(() => Reflect.apply(fn, undefined, true)).toThrow(TypeError);
+  });
+
+  test("throws TypeError when argumentsList is missing", () => {
+    const fn = () => {};
+    expect(() => Reflect.apply(fn, undefined)).toThrow(TypeError);
   });
 });
