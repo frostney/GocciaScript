@@ -539,6 +539,30 @@ begin
   Result := True;
 end;
 
+function TryGetNameValueExact(const AList: TStringList; const AName: string;
+  out AValue: string): Boolean;
+var
+  I, Sep: Integer;
+  Entry: string;
+begin
+  AValue := '';
+  if not Assigned(AList) then
+    Exit(False);
+
+  for I := 0 to AList.Count - 1 do
+  begin
+    Entry := AList[I];
+    Sep := Pos(AList.NameValueSeparator, Entry);
+    if (Sep > 0) and (Copy(Entry, 1, Sep - 1) = AName) then
+    begin
+      AValue := Copy(Entry, Sep + 1, MaxInt);
+      Exit(True);
+    end;
+  end;
+
+  Result := False;
+end;
+
 constructor TGocciaClassValue.Create(const AName: string; const ASuperClass: TGocciaClassValue);
 begin
   inherited Create;
@@ -1238,17 +1262,17 @@ begin
     FDeclaredPrivateNames.Add(AName);
   if AInternalKey <> '' then
   begin
-    ExistingInternalKey := FDeclaredPrivateKeys.Values[AName];
-    if ExistingInternalKey = '' then
-      FDeclaredPrivateKeys.Values[AName] := AInternalKey;
+    if not TryGetNameValueExact(FDeclaredPrivateKeys, AName,
+      ExistingInternalKey) then
+      FDeclaredPrivateKeys.Add(AName + FDeclaredPrivateKeys.NameValueSeparator +
+        AInternalKey);
   end;
 end;
 
 function TGocciaClassValue.ResolveDeclaredPrivateKey(const AName: string;
   out AInternalKey: string): Boolean;
 begin
-  AInternalKey := FDeclaredPrivateKeys.Values[AName];
-  Result := AInternalKey <> '';
+  Result := TryGetNameValueExact(FDeclaredPrivateKeys, AName, AInternalKey);
 end;
 
 procedure TGocciaClassValue.AppendOwnPrivateNames(const ANames: TStrings);
@@ -1267,8 +1291,8 @@ begin
   for I := 0 to FDeclaredPrivateNames.Count - 1 do
   begin
     DeclaredName := FDeclaredPrivateNames[I];
-    DeclaredKey := FDeclaredPrivateKeys.Values[DeclaredName];
-    if DeclaredKey = '' then
+    if not TryGetNameValueExact(FDeclaredPrivateKeys, DeclaredName,
+      DeclaredKey) then
       DeclaredKey := DeclaredName;
     if ANames.IndexOf(DeclaredKey) < 0 then
       ANames.Add(DeclaredKey);

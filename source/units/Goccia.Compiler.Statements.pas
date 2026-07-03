@@ -5956,7 +5956,8 @@ begin
   for I := 0 to High(AClassDef.FElements) do
   begin
     Elem := AClassDef.FElements[I];
-    if (Elem.Kind <> cekAccessor) or
+    if Elem.IsStatic or
+       (Elem.Kind <> cekAccessor) or
        ((not Elem.IsPrivate) and not Assigned(Elem.FieldInitializer)) then
       Continue;
     ValReg := ChildScope.AllocateRegister;

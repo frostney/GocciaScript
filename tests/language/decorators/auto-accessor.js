@@ -82,4 +82,23 @@ describe("auto-accessor", () => {
     c[key] = 2;
     expect(c[key]).toBe(2);
   });
+
+  test("static private auto-accessor initializer does not run per instance", () => {
+    let calls = 0;
+
+    class C {
+      static accessor #value = ++calls;
+
+      static read() {
+        return this.#value;
+      }
+    }
+
+    expect(calls).toBe(1);
+    expect(C.read()).toBe(1);
+    new C();
+    new C();
+    expect(calls).toBe(1);
+    expect(C.read()).toBe(1);
+  });
 });

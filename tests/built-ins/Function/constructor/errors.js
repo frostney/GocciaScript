@@ -15,4 +15,14 @@ describe("Function constructor errors", () => {
   test("strict body rejects future reserved identifier references", () => {
     expect(() => new Function('"use strict"; public = 1;')).toThrow(SyntaxError);
   });
+
+  test("super is rejected inside nested dynamic body containers", () => {
+    expect(() => new Function("for (; super.value; ) {}")).toThrow(SyntaxError);
+    expect(() => new Function("while (super.value) {}")).toThrow(SyntaxError);
+    expect(() => new Function("switch (0) { case super.value: break; }")).toThrow(SyntaxError);
+    expect(() => new Function("try {} finally { super.value; }")).toThrow(SyntaxError);
+    expect(() => new Function("return [super.value];")).toThrow(SyntaxError);
+    expect(() => new Function("return { [super.value]: 1 };")).toThrow(SyntaxError);
+    expect(() => new Function("return `${super.value}`;")).toThrow(SyntaxError);
+  });
 });
