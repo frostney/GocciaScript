@@ -61,6 +61,11 @@ describe("Iterator.concat()", () => {
     expect(() => Iterator.concat("hi", [1, 2])).toThrow(TypeError);
   });
 
+  test("concatenates boxed string objects", () => {
+    const result = Iterator.concat(Object("ab"), Object("cd")).toArray();
+    expect(result).toEqual(["a", "b", "c", "d"]);
+  });
+
   test("is lazy — does not consume iterables until next() is called", () => {
     let opened = 0;
     const iterable1 = {

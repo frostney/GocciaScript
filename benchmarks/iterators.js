@@ -233,9 +233,9 @@ suite("Iterator.concat", () => {
     },
   });
 
-  bench("concat strings (13 + 13 characters)", {
+  bench("concat boxed strings (13 + 13 characters)", {
     run: () => {
-      const result = Iterator.concat("abcdefghijklm", "nopqrstuvwxyz").toArray();
+      const result = Iterator.concat(Object("abcdefghijklm"), Object("nopqrstuvwxyz")).toArray();
     },
   });
 });
