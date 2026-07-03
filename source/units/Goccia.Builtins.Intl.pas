@@ -195,9 +195,7 @@ begin
   if PrototypeValue is TGocciaObjectValue then
     Exit(TGocciaObjectValue(PrototypeValue));
 
-  FallbackRealm := nil;
-  if ANewTarget is TGocciaFunctionBase then
-    FallbackRealm := TGocciaFunctionBase(ANewTarget).CreationRealm;
+  FallbackRealm := GetFunctionRealm(ANewTarget);
 
   Result := IntlConstructorPrototypeFromRealm(FallbackRealm, AConstructorName);
   if Assigned(Result) then

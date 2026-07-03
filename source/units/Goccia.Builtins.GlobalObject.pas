@@ -131,21 +131,6 @@ end;
 function FromPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor): TGocciaObjectValue;
 begin
   Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  if ADescriptor.HasEnumerableField then
-  begin
-    if ADescriptor.Enumerable then
-      Result.CreateDataPropertyOrThrow(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
-    else
-      Result.CreateDataPropertyOrThrow(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
-  end;
-  if ADescriptor.HasConfigurableField then
-  begin
-    if ADescriptor.Configurable then
-      Result.CreateDataPropertyOrThrow(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
-    else
-      Result.CreateDataPropertyOrThrow(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.FalseValue);
-  end;
-
   if ADescriptor is TGocciaPropertyDescriptorData then
   begin
     if ADescriptor.HasValue then
@@ -180,6 +165,21 @@ begin
         Result.CreateDataPropertyOrThrow(PROP_SET,
           TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
+  end;
+
+  if ADescriptor.HasEnumerableField then
+  begin
+    if ADescriptor.Enumerable then
+      Result.CreateDataPropertyOrThrow(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
+    else
+      Result.CreateDataPropertyOrThrow(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
+  end;
+  if ADescriptor.HasConfigurableField then
+  begin
+    if ADescriptor.Configurable then
+      Result.CreateDataPropertyOrThrow(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
+    else
+      Result.CreateDataPropertyOrThrow(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.FalseValue);
   end;
 end;
 
@@ -648,7 +648,7 @@ var
   PropertyName: string;
   KeyValue: TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.getOwnPropertyDescriptor', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.getOwnPropertyDescriptor', ThrowError);
 
   // Step 1: Let obj be ? ToObject(O)
   Obj := ToObject(AArgs.GetElement(0));
@@ -781,12 +781,14 @@ begin
   if IsSymbolKey then
   begin
     SymbolKey := TGocciaSymbolValue(KeyValue);
-    ExistingDescriptor := Obj.GetOwnSymbolPropertyDescriptor(SymbolKey);
+    if not (Obj is TGocciaProxyValue) then
+      ExistingDescriptor := Obj.GetOwnSymbolPropertyDescriptor(SymbolKey);
   end
   else
   begin
     PropertyName := TGocciaStringLiteralValue(KeyValue).Value;
-    ExistingDescriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
+    if not (Obj is TGocciaProxyValue) then
+      ExistingDescriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
   end;
 
   // Step 3: Let desc be ? ToPropertyDescriptor(Attributes)
