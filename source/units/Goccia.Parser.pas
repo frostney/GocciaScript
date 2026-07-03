@@ -8386,9 +8386,9 @@ begin
         Consume(gttRightBracket, 'Expected "]" after computed property key',
           SSuggestCloseBracketComputedPropertyKey);
       end
-      else if Check(gttIdentifier) then
+      else if IsIdentifierNameToken(Peek.TokenType) then
       begin
-        CanUseShorthand := True;
+        CanUseShorthand := IsIdentifierBindingToken(Peek.TokenType);
         Key := Advance.Lexeme;
       end
       else if Check(gttString) then

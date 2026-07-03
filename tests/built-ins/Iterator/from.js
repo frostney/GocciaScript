@@ -74,14 +74,14 @@ describe("Iterator.from()", () => {
     expect(iter.next().done).toBe(true);
   });
 
-  test("wrapped iterator throws TypeError when next returns non-object", () => {
+  test("wrapped iterator next returns the underlying raw result", () => {
     const iteratorLike = {
       next() {
         return 1;
       }
     };
     const iter = Iterator.from(iteratorLike);
-    expect(() => iter.next()).toThrow(TypeError);
+    expect(iter.next()).toBe(1);
   });
 
   test("wrapped iterator has helper methods", () => {
@@ -134,11 +134,12 @@ describe("Iterator.from()", () => {
     expect(() => Iterator.from(bad)).toThrow(TypeError);
   });
 
-  test("throws TypeError when [Symbol.iterator]() result has non-callable next", () => {
+  test("wrapped iterator throws TypeError when [Symbol.iterator]() result has non-callable next", () => {
     const bad = {
       [Symbol.iterator]: () => ({ next: 42 }),
       next: () => ({ done: true }) // outer next is callable but must NOT be used
     };
-    expect(() => Iterator.from(bad)).toThrow(TypeError);
+    const iter = Iterator.from(bad);
+    expect(() => iter.next()).toThrow(TypeError);
   });
 });

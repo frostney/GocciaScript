@@ -61,7 +61,7 @@ describe("Iterator.prototype.reduce()", () => {
     expect(closed).toBe(1);
   });
 
-  test("reduce closes the source iterator when next() throws after iteration starts", () => {
+  test("reduce does not close the source iterator when next() throws after iteration starts", () => {
     let closed = 0;
     const source = Iterator.from({
       count: 0,
@@ -79,7 +79,7 @@ describe("Iterator.prototype.reduce()", () => {
     });
 
     expect(() => source.reduce((acc, x) => acc + x)).toThrow(Error);
-    expect(closed).toBe(1);
+    expect(closed).toBe(0);
   });
 
   test("reduce preserves the original error when return is not callable", () => {

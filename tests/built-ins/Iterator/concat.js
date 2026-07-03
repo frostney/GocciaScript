@@ -53,14 +53,12 @@ describe("Iterator.concat()", () => {
     expect(result).toEqual([1, 2, 3, 4]);
   });
 
-  test("concatenates strings (character iteration)", () => {
-    const result = Iterator.concat("ab", "cd").toArray();
-    expect(result).toEqual(["a", "b", "c", "d"]);
+  test("throws TypeError for string primitive arguments", () => {
+    expect(() => Iterator.concat("ab", "cd")).toThrow(TypeError);
   });
 
-  test("concatenates string with array", () => {
-    const result = Iterator.concat("hi", [1, 2]).toArray();
-    expect(result).toEqual(["h", "i", 1, 2]);
+  test("throws TypeError when a string primitive is mixed with arrays", () => {
+    expect(() => Iterator.concat("hi", [1, 2])).toThrow(TypeError);
   });
 
   test("is lazy — does not consume iterables until next() is called", () => {

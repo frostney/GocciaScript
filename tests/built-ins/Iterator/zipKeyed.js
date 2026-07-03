@@ -102,15 +102,11 @@ describe("Iterator.zipKeyed()", () => {
     expect(result).toEqual([33, 44]);
   });
 
-  test("zips with string values (character iteration)", () => {
-    const result = Iterator.zipKeyed({
+  test("throws TypeError for string primitive property values", () => {
+    expect(() => Iterator.zipKeyed({
       first: "ab",
       second: "cd",
-    }).toArray();
-    expect(result).toEqual([
-      { first: "a", second: "c" },
-      { first: "b", second: "d" },
-    ]);
+    })).toThrow(TypeError);
   });
 
   test("throws TypeError for non-object first argument", () => {
@@ -129,8 +125,8 @@ describe("Iterator.zipKeyed()", () => {
     expect(() => Iterator.zipKeyed()).toThrow(TypeError);
   });
 
-  test("throws RangeError for invalid mode", () => {
-    expect(() => Iterator.zipKeyed({ x: [1] }, { mode: "bad" })).toThrow(RangeError);
+  test("throws TypeError for invalid mode", () => {
+    expect(() => Iterator.zipKeyed({ x: [1] }, { mode: "bad" })).toThrow(TypeError);
   });
 
   test("ignores options if undefined", () => {

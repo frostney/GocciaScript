@@ -63,9 +63,8 @@ describe("Iterator.zip()", () => {
     expect(result).toEqual([[1, "a"], [2, "b"]]);
   });
 
-  test("zips strings (character iteration)", () => {
-    const result = Iterator.zip(["ab", "cd"]).toArray();
-    expect(result).toEqual([["a", "c"], ["b", "d"]]);
+  test("throws TypeError for string primitive iterable items", () => {
+    expect(() => Iterator.zip(["ab", "cd"])).toThrow(TypeError);
   });
 
   test("result is an iterator (has next and Symbol.iterator)", () => {
@@ -143,8 +142,8 @@ describe("Iterator.zip()", () => {
     expect(() => Iterator.zip()).toThrow(TypeError);
   });
 
-  test("throws RangeError for invalid mode", () => {
-    expect(() => Iterator.zip([[1]], { mode: "invalid" })).toThrow(RangeError);
+  test("throws TypeError for invalid mode", () => {
+    expect(() => Iterator.zip([[1]], { mode: "invalid" })).toThrow(TypeError);
   });
 
   test("ignores options if undefined", () => {

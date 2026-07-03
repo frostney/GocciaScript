@@ -248,12 +248,14 @@ end;
 
 procedure TGocciaConcatIteratorValue.Close;
 begin
-  inherited;
+  if FDone then
+    Exit;
   if Assigned(FCurrentIterator) then
   begin
     FCurrentIterator.Close;
     FCurrentIterator := nil;
   end;
+  inherited;
 end;
 
 procedure TGocciaConcatIteratorValue.MarkReferences;
