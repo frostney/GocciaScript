@@ -26,6 +26,7 @@ type
     const AScope: TGocciaCompilerScope) of object;
   TSetDerivedConstructorThisGuardProc = procedure(
     const AGuard: Boolean) of object;
+  TSetNonStrictModeProc = procedure(const AEnabled: Boolean) of object;
 
   TFormalParameterCountMap = THashMap<TGocciaFunctionTemplate, Integer>;
 
@@ -47,6 +48,7 @@ type
     CompileFunctionBody: TCompileFunctionBodyProc;
     SwapState: TSwapStateProc;
     SetDerivedConstructorThisGuard: TSetDerivedConstructorThisGuardProc;
+    SetNonStrictMode: TSetNonStrictModeProc;
   end;
 
 function EmitInstruction(const ACtx: TGocciaCompilationContext;

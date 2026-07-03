@@ -148,6 +148,7 @@ begin
     OP_SET_OBJECT_PROTO:               Result := 'OP_SET_OBJECT_PROTO';
     OP_DEFINE_PROP_DYNAMIC:            Result := 'OP_DEFINE_PROP_DYNAMIC';
     OP_DEFINE_CLASS_METHOD_DYNAMIC:    Result := 'OP_DEFINE_CLASS_METHOD_DYNAMIC';
+    OP_SET_CLASS_SOURCE_CONST:         Result := 'OP_SET_CLASS_SOURCE_CONST';
     OP_ADD:                            Result := 'OP_ADD';
     OP_SUB:                            Result := 'OP_SUB';
     OP_MUL:                            Result := 'OP_MUL';

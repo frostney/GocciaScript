@@ -369,6 +369,7 @@ type
     FDecorators: TGocciaDecoratorList;
     FElements: array of TGocciaClassElement;
     FFieldOrder: array of TGocciaFieldOrderEntry;
+    FSourceText: string;
 
     constructor Create(const AName, ASuperClass: string;
       const AMethods: TGocciaClassMethodMap;
@@ -384,6 +385,7 @@ type
     destructor Destroy; override;
     property Name: string read FName;
     property SuperClass: string read FSuperClass;
+    property SourceText: string read FSourceText write FSourceText;
     property SuperClassExpression: TGocciaExpression read FSuperClassExpression;
     property Methods: TGocciaClassMethodMap read FMethods;
     property StaticMethods: TGocciaClassMethodMap read FStaticMethods;

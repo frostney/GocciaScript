@@ -47,6 +47,32 @@ test("private fields", () => {
   expect(keys).not.toContain("balance");
 });
 
+test("private names are case-sensitive", () => {
+  class CaseSensitive {
+    #x = 1;
+    #X = 2;
+
+    get lower() {
+      return this.#x;
+    }
+
+    get upper() {
+      return this.#X;
+    }
+
+    set lower(value) {
+      this.#x = value;
+    }
+  }
+
+  const instance = new CaseSensitive();
+  expect(instance.lower).toBe(1);
+  expect(instance.upper).toBe(2);
+  instance.lower = 3;
+  expect(instance.lower).toBe(3);
+  expect(instance.upper).toBe(2);
+});
+
 test("private methods", () => {
   class Calculator {
     #result = 0;

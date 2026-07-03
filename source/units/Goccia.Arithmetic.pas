@@ -683,6 +683,14 @@ begin
   if IsNullOrUndefined(ALeft) and IsNullOrUndefined(ARight) then
     Exit(True);
 
+  // ES2026 §7.2.13 IsLooselyEqual, Annex B web-compat insertion:
+  // objects with [[IsHTMLDDA]] compare loosely equal to null/undefined.
+  if IsNullOrUndefined(ALeft) and ARight.HasHTMLDDAInternalSlot then
+    Exit(True);
+
+  if ALeft.HasHTMLDDAInternalSlot and IsNullOrUndefined(ARight) then
+    Exit(True);
+
   if (ALeft is TGocciaNumberLiteralValue) and
      (ARight is TGocciaStringLiteralValue) then
     Exit(IsLooselyEqual(ALeft, ARight.ToNumberLiteral));

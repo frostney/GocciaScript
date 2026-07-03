@@ -66,6 +66,9 @@ function EvaluateClassDefinition(const AClassDef: TGocciaClassDefinition; const 
 function EvaluateNewExpression(const ANewExpression: TGocciaNewExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluatePrivateMember(const APrivateMemberExpression: TGocciaPrivateMemberExpression; const AContext: TGocciaEvaluationContext): TGocciaValue; overload;
 function EvaluatePrivateMember(const APrivateMemberExpression: TGocciaPrivateMemberExpression; const AContext: TGocciaEvaluationContext; out AObjectValue: TGocciaValue): TGocciaValue; overload;
+procedure AssignPrivateMemberValue(const AObjectValue: TGocciaValue;
+  const APrivateName: string; const AValue: TGocciaValue;
+  const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer);
 function EvaluatePrivateInOperator(
   const APrivateMemberExpression: TGocciaPrivateMemberExpression;
   const ARightExpression: TGocciaExpression;
@@ -3731,6 +3734,9 @@ begin
     if (Current is TGocciaCallScope) and
        not (Current is TGocciaArrowCallScope) then
       Exit(Current);
+    if (Current.ScopeKind = skFunction) and
+       (Current.CustomLabel = 'BytecodeDirectEval') then
+      Exit(Current);
     if Current.ScopeKind in [skGlobal, skModule] then
       Exit(nil);
     Current := Current.Parent;
@@ -3743,9 +3749,13 @@ var
   CallerFunctionScope: TGocciaScope;
 begin
   CallerFunctionScope := FindDirectEvalCallerFunctionScope(AScope);
-  Result := (CallerFunctionScope is TGocciaMethodCallScope) and
-    (TGocciaMethodCallScope(CallerFunctionScope).CustomLabel = 'constructor') and
-    Assigned(TGocciaMethodCallScope(CallerFunctionScope).SuperClass);
+  if CallerFunctionScope is TGocciaMethodCallScope then
+    Exit((TGocciaMethodCallScope(CallerFunctionScope).CustomLabel = 'constructor') and
+      Assigned(TGocciaMethodCallScope(CallerFunctionScope).SuperClass));
+  Result := Assigned(CallerFunctionScope) and
+    (CallerFunctionScope.CustomLabel = 'BytecodeDirectEval') and
+    Assigned(CallerFunctionScope.FindSuperConstructor) and
+    Assigned(CallerFunctionScope.FindNewTarget);
 end;
 
 function DirectEvalRejectsArgumentsReference(
@@ -3885,7 +3895,7 @@ begin
         AllowNewTarget := Assigned(CallerFunctionScope);
         AllowSuperProperty := Assigned(CallerFunctionScope) and
           Assigned(CallerFunctionScope.FindSuperClass);
-        AllowSuperCall := DirectEvalAllowsSuperCall(CallerFunctionScope);
+        AllowSuperCall := DirectEvalAllowsSuperCall(AContext.Scope);
         AResult := EvaluateEvalProgram(PipelineResult.ProgramNode,
           EvalContext, VarScope, EvalScope, StrictEval,
           EvalContext.RejectArgumentsVarDeclarationInEval,
@@ -7508,12 +7518,27 @@ end;
 function EvaluateClass(const AClassDeclaration: TGocciaClassDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   ClassDef: TGocciaClassDefinition;
+  InnerContext: TGocciaEvaluationContext;
+  InnerScope: TGocciaScope;
 begin
   ClassDef := AClassDeclaration.ClassDefinition;
-  Result := EvaluateClassDefinition(ClassDef, AContext, AClassDeclaration.Line, AClassDeclaration.Column);
 
-  // For class declarations, bind the class name to the scope
-  AContext.Scope.DefineLexicalBinding(ClassDef.Name, Result, dtLet);
+  if ClassDef.Name <> '' then
+  begin
+    InnerScope := AContext.Scope.CreateChild(skBlock);
+    InnerScope.PredeclareLexicalBinding(ClassDef.Name, dtConst,
+      AClassDeclaration.Line, AClassDeclaration.Column);
+    InnerContext := AContext;
+    InnerContext.Scope := InnerScope;
+    Result := EvaluateClassDefinition(ClassDef, InnerContext,
+      AClassDeclaration.Line, AClassDeclaration.Column);
+  end
+  else
+    Result := EvaluateClassDefinition(ClassDef, AContext,
+      AClassDeclaration.Line, AClassDeclaration.Column);
+
+  // Publish the declaration binding after the class body has evaluated.
+  AContext.Scope.ForceUpdateBinding(ClassDef.Name, Result);
 end;
 
 // TC39 proposal-enum
@@ -8258,8 +8283,8 @@ begin
     // ES2026 §15.7.14: Named class expressions create an inner binding
     // visible only inside the class body
     InnerScope := AContext.Scope.CreateChild(skBlock);
-    InnerScope.DefineLexicalBinding(ClassDef.Name,
-      TGocciaUndefinedLiteralValue.UndefinedValue, dtConst);
+    InnerScope.PredeclareLexicalBinding(ClassDef.Name, dtConst,
+      AClassExpression.Line, AClassExpression.Column);
     InnerContext := AContext;
     InnerContext.Scope := InnerScope;
     Result := EvaluateClassDefinition(ClassDef, InnerContext,
@@ -8421,6 +8446,7 @@ var
   StaticFieldContext: TGocciaEvaluationContext;
   StaticFieldScope: TGocciaScope;
   HeritageContext: TGocciaEvaluationContext;
+  ClassStrictContext: TGocciaEvaluationContext;
 
   function BuildClassGetter(const AGetterExpression: TGocciaGetterExpression): TGocciaFunctionValue;
   begin
@@ -8552,50 +8578,52 @@ var
     SetLength(Entries, 0);
     Order := 0;
 
-    for MethodPair in AClassDef.Methods do
-      AddClassCallableEvalEntry(Entries, ccekMethod, MethodPair.Key, False,
-        False, MethodPair.Value.Line, MethodPair.Value.Column, Order, -1,
-        MethodPair.Value);
+    if Length(AClassDef.FElements) = 0 then
+    begin
+      for MethodPair in AClassDef.Methods do
+        AddClassCallableEvalEntry(Entries, ccekMethod, MethodPair.Key, False,
+          False, MethodPair.Value.Line, MethodPair.Value.Column, Order, -1,
+          MethodPair.Value);
 
-    for MethodPair in AClassDef.StaticMethods do
-      AddClassCallableEvalEntry(Entries, ccekMethod, MethodPair.Key, True,
-        False, MethodPair.Value.Line, MethodPair.Value.Column, Order, -1,
-        MethodPair.Value);
+      for MethodPair in AClassDef.StaticMethods do
+        AddClassCallableEvalEntry(Entries, ccekMethod, MethodPair.Key, True,
+          False, MethodPair.Value.Line, MethodPair.Value.Column, Order, -1,
+          MethodPair.Value);
 
-    for MethodPair in AClassDef.PrivateMethods do
-      AddClassCallableEvalEntry(Entries, ccekMethod, MethodPair.Key,
-        MethodPair.Value.IsStatic, True, MethodPair.Value.Line,
-        MethodPair.Value.Column, Order, -1, MethodPair.Value);
+      for MethodPair in AClassDef.PrivateMethods do
+        AddClassCallableEvalEntry(Entries, ccekMethod, MethodPair.Key,
+          MethodPair.Value.IsStatic, True, MethodPair.Value.Line,
+          MethodPair.Value.Column, Order, -1, MethodPair.Value);
 
-    for GetterPair in AClassDef.Getters do
-      AddClassCallableEvalEntry(Entries, ccekGetter, GetterPair.Key, False,
-        (GetterPair.Key <> '') and (GetterPair.Key[1] = '#'),
-        GetterPair.Value.Line, GetterPair.Value.Column, Order, -1, nil,
-        GetterPair.Value);
+      for GetterPair in AClassDef.Getters do
+        AddClassCallableEvalEntry(Entries, ccekGetter, GetterPair.Key, False,
+          (GetterPair.Key <> '') and (GetterPair.Key[1] = '#'),
+          GetterPair.Value.Line, GetterPair.Value.Column, Order, -1, nil,
+          GetterPair.Value);
 
-    for SetterPair in AClassDef.Setters do
-      AddClassCallableEvalEntry(Entries, ccekSetter, SetterPair.Key, False,
-        (SetterPair.Key <> '') and (SetterPair.Key[1] = '#'),
-        SetterPair.Value.Line, SetterPair.Value.Column, Order, -1, nil, nil,
-        SetterPair.Value);
+      for SetterPair in AClassDef.Setters do
+        AddClassCallableEvalEntry(Entries, ccekSetter, SetterPair.Key, False,
+          (SetterPair.Key <> '') and (SetterPair.Key[1] = '#'),
+          SetterPair.Value.Line, SetterPair.Value.Column, Order, -1, nil, nil,
+          SetterPair.Value);
 
-    for GetterPair in AClassDef.FStaticGetters do
-      AddClassCallableEvalEntry(Entries, ccekGetter, GetterPair.Key, True,
-        (GetterPair.Key <> '') and (GetterPair.Key[1] = '#'),
-        GetterPair.Value.Line, GetterPair.Value.Column, Order, -1, nil,
-        GetterPair.Value);
+      for GetterPair in AClassDef.FStaticGetters do
+        AddClassCallableEvalEntry(Entries, ccekGetter, GetterPair.Key, True,
+          (GetterPair.Key <> '') and (GetterPair.Key[1] = '#'),
+          GetterPair.Value.Line, GetterPair.Value.Column, Order, -1, nil,
+          GetterPair.Value);
 
-    for SetterPair in AClassDef.FStaticSetters do
-      AddClassCallableEvalEntry(Entries, ccekSetter, SetterPair.Key, True,
-        (SetterPair.Key <> '') and (SetterPair.Key[1] = '#'),
-        SetterPair.Value.Line, SetterPair.Value.Column, Order, -1, nil, nil,
-        SetterPair.Value);
+      for SetterPair in AClassDef.FStaticSetters do
+        AddClassCallableEvalEntry(Entries, ccekSetter, SetterPair.Key, True,
+          (SetterPair.Key <> '') and (SetterPair.Key[1] = '#'),
+          SetterPair.Value.Line, SetterPair.Value.Column, Order, -1, nil, nil,
+          SetterPair.Value);
+    end;
 
     for K := 0 to High(AClassDef.FElements) do
     begin
       Elem := AClassDef.FElements[K];
-      if Elem.IsComputed and
-         (Elem.Kind in [cekMethod, cekGetter, cekSetter, cekField, cekAccessor]) then
+      if Elem.Kind in [cekMethod, cekGetter, cekSetter, cekField, cekAccessor] then
         AddClassCallableEvalEntry(Entries, ccekElement, '', Elem.IsStatic,
           Elem.IsPrivate, ClassEvalElementSourceLine(Elem),
           ClassEvalElementSourceColumn(Elem), Order, K);
@@ -8658,7 +8686,52 @@ var
 
       Elem := AClassDef.FElements[Entry.ElementIndex];
       if not Elem.IsComputed then
+      begin
+        case Elem.Kind of
+          cekMethod:
+          begin
+            Method := TGocciaMethodValue(EvaluateClassMethod(
+              Elem.MethodNode, AContext, MethodSuperClass));
+            Method.OwningClass := ClassValue;
+            if Elem.IsPrivate then
+            begin
+              if Elem.IsStatic then
+                ClassValue.AddPrivateStaticMethod(Elem.Name, Method)
+              else
+                ClassValue.AddPrivateMethod(Elem.Name, Method);
+            end
+            else if Elem.IsStatic then
+              ClassValue.DefineProperty(Elem.Name,
+                TGocciaPropertyDescriptorData.Create(Method,
+                  [pfConfigurable, pfWritable]))
+            else
+              ClassValue.AddMethod(Elem.Name, Method);
+          end;
+          cekGetter:
+          begin
+            GetterFunction := BuildClassGetter(Elem.GetterNode);
+            GetterFunction.SetInferredName('get ' + Elem.Name);
+            if Elem.IsPrivate then
+              ClassValue.AddPrivateGetter(Elem.Name, GetterFunction)
+            else if Elem.IsStatic then
+              ClassValue.AddStaticGetter(Elem.Name, GetterFunction)
+            else
+              ClassValue.AddGetter(Elem.Name, GetterFunction);
+          end;
+          cekSetter:
+          begin
+            SetterFunction := BuildClassSetter(Elem.SetterNode);
+            SetterFunction.SetInferredName('set ' + Elem.Name);
+            if Elem.IsPrivate then
+              ClassValue.AddPrivateSetter(Elem.Name, SetterFunction)
+            else if Elem.IsStatic then
+              ClassValue.AddStaticSetter(Elem.Name, SetterFunction)
+            else
+              ClassValue.AddSetter(Elem.Name, SetterFunction);
+          end;
+        end;
         Continue;
+      end;
       if not (Elem.Kind in [cekMethod, cekGetter, cekSetter, cekField, cekAccessor]) then
         Continue;
 
@@ -8668,7 +8741,7 @@ var
           Elem.ComputedKeyExpression, ComputedKey);
       if not HasReplayedComputedKey then
         ComputedKey := ToPropertyKey(EvaluateExpression(
-          Elem.ComputedKeyExpression, AContext));
+          Elem.ComputedKeyExpression, ClassStrictContext));
       if Assigned(Continuation) then
         Continuation.SaveCompletedExpressionValue(
           Elem.ComputedKeyExpression, ComputedKey);
@@ -8704,7 +8777,9 @@ var
               TGocciaPropertyDescriptorData.Create(Method,
                 [pfConfigurable, pfWritable]))
           else
-            ClassValue.AddMethod(ComputedKey.ToStringLiteral.Value, Method);
+            ClassValue.Prototype.DefineProperty(ComputedKey.ToStringLiteral.Value,
+              TGocciaPropertyDescriptorData.Create(Method,
+                [pfConfigurable, pfWritable]));
         end;
         cekGetter:
         begin
@@ -8788,6 +8863,8 @@ var
   end;
 begin
   Continuation := CurrentGeneratorContinuation;
+  ClassStrictContext := AContext;
+  ClassStrictContext.NonStrictMode := False;
   SuperClass := nil;
   SuperClassValue := nil;
   MethodSuperClass := nil;
@@ -8802,6 +8879,8 @@ begin
       SuperClass := TGocciaClassValue(SuperClassValue);
       MethodSuperClass := SuperClass;
     end
+    else if SuperClassValue is TGocciaNullLiteralValue then
+      MethodSuperClass := TGocciaFunctionBase.GetSharedPrototype
     else if not ((SuperClassValue is TGocciaObjectValue) and
        SuperClassValue.IsConstructable) then
       ThrowTypeError(Format('Superclass expression is not a constructor (found %s)',
@@ -8834,7 +8913,13 @@ begin
     ClassName := '<anonymous>';
 
   ClassValue := TGocciaClassValue.Create(ClassName, SuperClass);
-  if (SuperClass = nil) and (SuperClassValue is TGocciaObjectValue) and
+  ClassValue.SetSourceText(AClassDef.SourceText);
+  if SuperClassValue is TGocciaNullLiteralValue then
+  begin
+    ClassValue.LinkNativeSuperConstructor(TGocciaFunctionBase.GetSharedPrototype);
+    ClassValue.Prototype.Prototype := nil;
+  end
+  else if (SuperClass = nil) and (SuperClassValue is TGocciaObjectValue) and
      SuperClassValue.IsConstructable then
   begin
     ClassValue.LinkNativeSuperConstructor(
@@ -8853,27 +8938,10 @@ begin
   ClassValue.Prototype.DefineProperty(PROP_CONSTRUCTOR,
     TGocciaPropertyDescriptorData.Create(ClassValue, [pfConfigurable, pfWritable]));
 
-  if Length(AClassDef.FElements) > 0 then
-    EvaluateClassCallableElements
-  else
-  begin
-  for MethodPair in AClassDef.Methods do
-  begin
-    Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, AContext, MethodSuperClass));
-    Method.OwningClass := ClassValue;
+  EvaluateClassCallableElements;
 
-    ClassValue.AddMethod(MethodPair.Key, Method);
-  end;
-
-  for MethodPair in AClassDef.StaticMethods do
-  begin
-    Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, AContext, MethodSuperClass));
-    Method.OwningClass := ClassValue;
-
-    ClassValue.DefineProperty(MethodPair.Key,
-      TGocciaPropertyDescriptorData.Create(Method, [pfConfigurable, pfWritable]));
-  end;
-  end;
+  if AClassDef.Name <> '' then
+    AContext.Scope.ForceUpdateBinding(AClassDef.Name, ClassValue);
 
   // Static fields without FElements entries (legacy / no static blocks)
   if Length(AClassDef.FElements) = 0 then
@@ -8990,12 +9058,21 @@ begin
           ComputedKey := ResolvedComputedElementKeys[I];
         if not Assigned(ComputedKey) then
           ComputedKey := ToPropertyKey(EvaluateExpression(
-            Elem.ComputedKeyExpression, AContext));
+            Elem.ComputedKeyExpression, ClassStrictContext));
         AccessorBackingName := '__accessor_computed_' + IntToStr(I);
       end;
 
+      if Elem.IsPrivate then
+      begin
+        if not Elem.IsStatic then
+          ClassValue.AddPrivateInstanceProperty(Elem.Name,
+            Elem.FieldInitializer);
+        Continue;
+      end;
+
       if Assigned(Elem.FieldInitializer) then
-        ClassValue.AddInstanceProperty(AccessorBackingName, Elem.FieldInitializer);
+        ClassValue.AddInstanceProperty(AccessorBackingName,
+          Elem.FieldInitializer);
 
       if Elem.IsComputed then
         ClassValue.AddAutoAccessorWithKey(
@@ -9011,7 +9088,9 @@ begin
     Elem := AClassDef.FElements[I];
     if Elem.Kind = cekStaticBlock then
       ExecuteStaticBlock(Elem.StaticBlockBody, AContext, ClassValue)
-    else if (Elem.Kind = cekField) and Elem.IsStatic then
+    else if ((Elem.Kind = cekField) or
+             ((Elem.Kind = cekAccessor) and Elem.IsPrivate)) and
+            Elem.IsStatic then
     begin
       if Assigned(Elem.FieldInitializer) then
       begin
@@ -9034,7 +9113,7 @@ begin
           ComputedKey := ResolvedComputedElementKeys[I];
         if not Assigned(ComputedKey) then
           ComputedKey := ToPropertyKey(EvaluateExpression(
-            Elem.ComputedKeyExpression, AContext));
+            Elem.ComputedKeyExpression, ClassStrictContext));
         if ComputedKey is TGocciaSymbolValue then
           ClassValue.DefineSymbolProperty(
             TGocciaSymbolValue(ComputedKey),
@@ -10555,6 +10634,7 @@ var
   Instance: TGocciaObjectValue;
   RootedInstance: TGocciaObjectValue;
   WalkClass: TGocciaClassValue;
+  ImplicitSuperClass: TGocciaClassValue;
   NativeInstance: TGocciaObjectValue;
   ConstructedValue: TGocciaValue;
   ConstructorThisValue: TGocciaValue;
@@ -10727,27 +10807,39 @@ begin
         ThrowReferenceError(
           'Must call super constructor before returning from derived constructor');
     end
-    else if Assigned(AClassValue.SuperClass) and Assigned(AClassValue.SuperClass.ConstructorMethod) then
+    else
     begin
-      ConstructedValue := AClassValue.SuperClass.ConstructorMethod.CallWithThisValue(
-        AArguments, Instance, ConstructorThisValue, EffectiveNewTarget);
-      ValidateClassConstructorReturn(AClassValue.SuperClass, ConstructedValue);
-      if IsUndefinedConstructedValue(ConstructedValue) then
-        ApplyReplacementResult(ConstructorThisValue)
-      else
+      ImplicitSuperClass := AClassValue.SuperClass;
+      if AClassValue.GetConstructorPrototype is TGocciaClassValue then
+        ImplicitSuperClass := TGocciaClassValue(AClassValue.GetConstructorPrototype);
+
+      if Assigned(ImplicitSuperClass) and
+         Assigned(ImplicitSuperClass.ConstructorMethod) then
+      begin
+        ConstructedValue := ImplicitSuperClass.ConstructorMethod.CallWithThisValue(
+          AArguments, Instance, ConstructorThisValue, EffectiveNewTarget);
+        ValidateClassConstructorReturn(ImplicitSuperClass, ConstructedValue);
+        if IsUndefinedConstructedValue(ConstructedValue) then
+          ApplyReplacementResult(ConstructorThisValue)
+        else
+          ApplyReplacementResult(ConstructedValue);
+      end
+      else if Assigned(AClassValue.NativeSuperConstructor) and
+              (AClassValue.NativeSuperConstructor is TGocciaFunctionBase) and
+              not (AClassValue.NativeSuperConstructor is TGocciaNativeFunctionValue) then
+      begin
+        if AClassValue.NativeSuperConstructor =
+           TGocciaFunctionBase.GetSharedPrototype then
+          ThrowTypeError('Super constructor is not a constructor',
+            SSuggestNotConstructorType);
+        ConstructedValue := InvokeConstructableWithReceiver(
+          AClassValue.NativeSuperConstructor, AArguments, Instance, AContext,
+          EffectiveNewTarget);
         ApplyReplacementResult(ConstructedValue);
-    end
-    else if Assigned(AClassValue.NativeSuperConstructor) and
-            (AClassValue.NativeSuperConstructor is TGocciaFunctionBase) and
-            not (AClassValue.NativeSuperConstructor is TGocciaNativeFunctionValue) then
-    begin
-      ConstructedValue := InvokeConstructableWithReceiver(
-        AClassValue.NativeSuperConstructor, AArguments, Instance, AContext,
-        EffectiveNewTarget);
-      ApplyReplacementResult(ConstructedValue);
-    end
-    else if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then
-      TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
+      end
+      else if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then
+        TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
+    end;
 
     if Assigned(InitializerReplayReceiver) and
        (Instance = InitializerReplayReceiver) and

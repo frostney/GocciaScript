@@ -1146,8 +1146,6 @@ end;
 // ES2026 §20.1.2.18 Object.preventExtensions(O)
 function TGocciaGlobalObject.ObjectPreventExtensions(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.preventExtensions', ThrowError);
-
   // Step 1: If Type(O) is not Object, return O
   if not (AArgs.GetElement(0) is TGocciaObjectValue) then
   begin

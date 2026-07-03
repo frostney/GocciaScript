@@ -251,6 +251,7 @@ type
   protected
     function GetOwningClass: TGocciaValue; override;
     function GetSuperClass: TGocciaValue; override;
+    function GetSuperConstructor: TGocciaValue; override;
     function GetNewTarget: TGocciaValue; override;
     function MarkSuperConstructorCalled: Boolean; override;
   public
@@ -1551,6 +1552,17 @@ end;
 
 function TGocciaMethodCallScope.GetSuperClass: TGocciaValue;
 begin
+  Result := FSuperClass;
+end;
+
+function TGocciaMethodCallScope.GetSuperConstructor: TGocciaValue;
+begin
+  if FOwningClass is TGocciaClassValue then
+  begin
+    Result := TGocciaClassValue(FOwningClass).GetConstructorPrototype;
+    if Assigned(Result) then
+      Exit;
+  end;
   Result := FSuperClass;
 end;
 

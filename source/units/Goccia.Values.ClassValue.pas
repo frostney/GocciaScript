@@ -69,6 +69,7 @@ type
     FStaticDecoratorFieldInitializers: array of TGocciaDecoratorFieldInitializerEntry;
     FNameDeleted: Boolean;
     FLengthDeleted: Boolean;
+    FSourceText: string;
     function GetPropertyGetter(const AName: string): TGocciaFunctionBase; inline;
     function GetPropertySetter(const AName: string): TGocciaFunctionBase; inline;
     function GetStaticPropertyGetter(const AName: string): TGocciaFunctionBase; inline;
@@ -139,11 +140,15 @@ type
 
     procedure ReplacePrototype(const APrototype: TGocciaObjectValue);
     procedure SetConstructorPrototype(const APrototype: TGocciaObjectValue);
+    function GetConstructorPrototype: TGocciaObjectValue;
     procedure LinkNativeSuperConstructor(const ASuperConstructor: TGocciaObjectValue);
     procedure SetInferredName(const AName: string);
+    procedure SetSourceText(const ASourceText: string);
+    function GetSourceText: string;
     function GetOwnStaticSymbolDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
 
     property Name: string read FName;
+    property SourceText: string read FSourceText write FSourceText;
     property CreationRealm: TGocciaRealm read FCreationRealm;
     property PrivateBrandToken: string read FPrivateBrandToken;
     property SuperClass: TGocciaClassValue read FSuperClass write FSuperClass;
@@ -534,6 +539,30 @@ begin
   Result := True;
 end;
 
+function TryGetNameValueExact(const AList: TStringList; const AName: string;
+  out AValue: string): Boolean;
+var
+  I, Sep: Integer;
+  Entry: string;
+begin
+  AValue := '';
+  if not Assigned(AList) then
+    Exit(False);
+
+  for I := 0 to AList.Count - 1 do
+  begin
+    Entry := AList[I];
+    Sep := Pos(AList.NameValueSeparator, Entry);
+    if (Sep > 0) and (Copy(Entry, 1, Sep - 1) = AName) then
+    begin
+      AValue := Copy(Entry, Sep + 1, MaxInt);
+      Exit(True);
+    end;
+  end;
+
+  Result := False;
+end;
+
 constructor TGocciaClassValue.Create(const AName: string; const ASuperClass: TGocciaClassValue);
 begin
   inherited Create;
@@ -704,6 +733,7 @@ end;
 
 procedure TGocciaClassValue.AddMethod(const AName: string; const AMethod: TGocciaMethodValue);
 begin
+  AMethod.OwningClass := Self;
   // If this is the constructor, store it separately
   if AName = PROP_CONSTRUCTOR then
   begin
@@ -1223,20 +1253,26 @@ end;
 
 procedure TGocciaClassValue.DeclarePrivateName(const AName: string;
   const AInternalKey: string);
+var
+  ExistingInternalKey: string;
 begin
   if AName = '' then
     Exit;
   if FDeclaredPrivateNames.IndexOf(AName) < 0 then
     FDeclaredPrivateNames.Add(AName);
   if AInternalKey <> '' then
-    FDeclaredPrivateKeys.Values[AName] := AInternalKey;
+  begin
+    if not TryGetNameValueExact(FDeclaredPrivateKeys, AName,
+      ExistingInternalKey) then
+      FDeclaredPrivateKeys.Add(AName + FDeclaredPrivateKeys.NameValueSeparator +
+        AInternalKey);
+  end;
 end;
 
 function TGocciaClassValue.ResolveDeclaredPrivateKey(const AName: string;
   out AInternalKey: string): Boolean;
 begin
-  AInternalKey := FDeclaredPrivateKeys.Values[AName];
-  Result := AInternalKey <> '';
+  Result := TryGetNameValueExact(FDeclaredPrivateKeys, AName, AInternalKey);
 end;
 
 procedure TGocciaClassValue.AppendOwnPrivateNames(const ANames: TStrings);
@@ -1255,8 +1291,8 @@ begin
   for I := 0 to FDeclaredPrivateNames.Count - 1 do
   begin
     DeclaredName := FDeclaredPrivateNames[I];
-    DeclaredKey := FDeclaredPrivateKeys.Values[DeclaredName];
-    if DeclaredKey = '' then
+    if not TryGetNameValueExact(FDeclaredPrivateKeys, DeclaredName,
+      DeclaredKey) then
       DeclaredKey := DeclaredName;
     if ANames.IndexOf(DeclaredKey) < 0 then
       ANames.Add(DeclaredKey);
@@ -1330,6 +1366,11 @@ begin
   FPrototype := APrototype;
 end;
 
+function TGocciaClassValue.GetConstructorPrototype: TGocciaObjectValue;
+begin
+  Result := FPrototype;
+end;
+
 procedure TGocciaClassValue.LinkNativeSuperConstructor(
   const ASuperConstructor: TGocciaObjectValue);
 begin
@@ -1343,6 +1384,16 @@ begin
   // FName update is sufficient; GetOwnPropertyDescriptor synthesizes the descriptor.
   if (FName = '') or (FName = '<anonymous>') then
     FName := AName;
+end;
+
+procedure TGocciaClassValue.SetSourceText(const ASourceText: string);
+begin
+  FSourceText := ASourceText;
+end;
+
+function TGocciaClassValue.GetSourceText: string;
+begin
+  Result := FSourceText;
 end;
 
 procedure TGocciaClassValue.SetFieldOrder(const AOrder: array of TGocciaClassFieldOrderEntry);
@@ -1404,6 +1455,7 @@ function TGocciaClassValue.Instantiate(const AArguments: TGocciaArgumentsCollect
 var
   Instance: TGocciaObjectValue;
   WalkClass: TGocciaClassValue;
+  ImplicitSuperClass: TGocciaClassValue;
   NativeClass: TGocciaClassValue;
   NativeInstance: TGocciaObjectValue;
   NativeSuperConstructor: TGocciaObjectValue;
@@ -1526,8 +1578,11 @@ begin
   end;
 
   ConstructorToCall := FConstructorMethod;
-  if not Assigned(ConstructorToCall) and Assigned(FSuperClass) then
-    ConstructorToCall := FSuperClass.ConstructorMethod;
+  ImplicitSuperClass := FSuperClass;
+  if GetConstructorPrototype is TGocciaClassValue then
+    ImplicitSuperClass := TGocciaClassValue(GetConstructorPrototype);
+  if not Assigned(ConstructorToCall) and Assigned(ImplicitSuperClass) then
+    ConstructorToCall := ImplicitSuperClass.ConstructorMethod;
 
   if Assigned(ConstructorToCall) then
   begin
@@ -1569,6 +1624,9 @@ begin
   begin
     if (not Assigned(NativeInstance)) and Assigned(NativeSuperConstructor) then
     begin
+      if NativeSuperConstructor = TGocciaFunctionBase.GetSharedPrototype then
+        ThrowTypeError('Super constructor is not a constructor',
+          SSuggestNotConstructorType);
       NativeInstance := ConstructNativeSuperInstance(NativeSuperConstructor);
       NativeInstanceConstructedByNativeSuper := Assigned(NativeInstance);
       if Assigned(NativeInstance) then

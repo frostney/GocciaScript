@@ -178,6 +178,7 @@ type
     FParameterPreambleSize: UInt16;
     FTypeCheckPreambleSize: UInt8;
     FDirectEvalSyntheticArgumentsSlot: Integer;
+    FDerivedThisInitializedSlot: Integer;
     FRejectArgumentsInDirectEval: Boolean;
     FProfileIndex: Integer;
     FSourceText: string;
@@ -287,6 +288,7 @@ type
     property ParameterPreambleSize: UInt16 read FParameterPreambleSize write FParameterPreambleSize;
     property TypeCheckPreambleSize: UInt8 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
     property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
+    property DerivedThisInitializedSlot: Integer read FDerivedThisInitializedSlot write FDerivedThisInitializedSlot;
     property RejectArgumentsInDirectEval: Boolean read FRejectArgumentsInDirectEval write FRejectArgumentsInDirectEval;
     property ProfileIndex: Integer read FProfileIndex write FProfileIndex;
     property SourceText: string read FSourceText write FSourceText;
@@ -348,6 +350,7 @@ begin
   FParameterPreambleSize := 0;
   FTypeCheckPreambleSize := 0;
   FDirectEvalSyntheticArgumentsSlot := -1;
+  FDerivedThisInitializedSlot := -1;
   FRejectArgumentsInDirectEval := False;
   FProfileIndex := -1;
   FTemplateSiteId := AllocateTemplateSiteId;

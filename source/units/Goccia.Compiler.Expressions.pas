@@ -161,6 +161,9 @@ uses
   Goccia.Values.BigIntValue,
   Goccia.Values.Primitives;
 
+const
+  DERIVED_THIS_INITIALIZED_LOCAL = '__derived_this_initialized';
+
 type
   TGocciaCompilerJumpArray = array of Integer;
   TPreparedDestructuringTargetKind = (
@@ -168,12 +171,16 @@ type
     pdtIdentifierWithBinding,
     pdtStringProperty,
     pdtComputedProperty,
+    pdtSuperStringProperty,
+    pdtSuperComputedProperty,
     pdtPrivateProperty
   );
   TPreparedDestructuringTarget = record
     Kind: TPreparedDestructuringTargetKind;
     ObjectReg: Integer;
     KeyReg: Integer;
+    ThisReg: Integer;
+    SuperReg: Integer;
     PropertyName: string;
   end;
 
@@ -849,7 +856,7 @@ procedure PrepareIdentifierWithBindingTarget(
   const ACtx: TGocciaCompilationContext; const AName: string;
   var ATarget: TPreparedDestructuringTarget);
 var
-  ObjReg, CondReg: UInt8;
+  ObjReg, CondReg, ThisReg, BaseReg, SuperReg: UInt8;
   NameIdx: UInt16;
   I, EndCount: Integer;
   MissJump: Integer;
@@ -1640,6 +1647,7 @@ begin
     (AName <> KEYWORD_THIS) and
     (AName <> '__receiver') and
     (AName <> '__super__') and
+    (AName <> DERIVED_THIS_INITIALIZED_LOCAL) and
     (Copy(AName, 1, 1) <> '#') and
     (Copy(AName, 1, 7) <> '__param') and
     (Copy(AName, 1, 19) <> '__accessor_computed');
@@ -1659,7 +1667,8 @@ procedure AddDirectEvalBinding(var ABindings: TGocciaDirectEvalBindingArray;
 var
   BindingIndex: Integer;
 begin
-  if (AKind <> debWithLocal) and (AKind <> debWithUpvalue) and
+  if (AName <> DERIVED_THIS_INITIALIZED_LOCAL) and
+     (AKind <> debWithLocal) and (AKind <> debWithUpvalue) and
      (AName <> KEYWORD_THIS) and
      not IsDirectEvalVisibleCompilerName(AName) then
     Exit;
@@ -1677,6 +1686,86 @@ begin
     AIsVarEnvironmentBinding;
   ABindings[BindingIndex].IsEvalSyntheticArguments :=
     AIsEvalSyntheticArguments;
+end;
+
+procedure EmitDerivedThisInitializedCheck(
+  const ACtx: TGocciaCompilationContext);
+var
+  FlagReg: UInt8;
+  LocalIdx, UpvalueIdx: Integer;
+  Local: TGocciaCompilerLocal;
+  OkJump: Integer;
+begin
+  if not ACtx.DerivedConstructorThisGuard then
+    Exit;
+
+  UpvalueIdx := -1;
+  FlagReg := ACtx.Scope.AllocateRegister;
+  try
+    LocalIdx := ACtx.Scope.ResolveLocal(DERIVED_THIS_INITIALIZED_LOCAL);
+    if LocalIdx >= 0 then
+    begin
+      Local := ACtx.Scope.GetLocal(LocalIdx);
+      if Local.IsCaptured then
+        EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, FlagReg,
+          UInt16(Local.Slot)))
+      else if Local.Slot <> FlagReg then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, FlagReg, Local.Slot, 0));
+    end
+    else
+    begin
+      UpvalueIdx := ACtx.Scope.ResolveUpvalue(DERIVED_THIS_INITIALIZED_LOCAL);
+      if UpvalueIdx >= 0 then
+        EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, FlagReg,
+          UInt16(UpvalueIdx)))
+      else
+        EmitInstruction(ACtx, EncodeABC(OP_CHECK_DERIVED_THIS, 0, 0, 0));
+    end;
+
+    if (LocalIdx >= 0) or (UpvalueIdx >= 0) then
+    begin
+      OkJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, FlagReg);
+      EmitReferenceError(ACtx,
+        'Must call super constructor before accessing this');
+      PatchJumpTarget(ACtx, OkJump);
+    end;
+  finally
+    ACtx.Scope.FreeRegister;
+  end;
+end;
+
+procedure EmitSetDerivedThisInitialized(
+  const ACtx: TGocciaCompilationContext);
+var
+  FlagReg: UInt8;
+  LocalIdx, UpvalueIdx: Integer;
+  Local: TGocciaCompilerLocal;
+begin
+  LocalIdx := ACtx.Scope.ResolveLocal(DERIVED_THIS_INITIALIZED_LOCAL);
+  UpvalueIdx := -1;
+  if LocalIdx < 0 then
+    UpvalueIdx := ACtx.Scope.ResolveUpvalue(DERIVED_THIS_INITIALIZED_LOCAL);
+  if (LocalIdx < 0) and (UpvalueIdx < 0) then
+    Exit;
+
+  FlagReg := ACtx.Scope.AllocateRegister;
+  try
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_TRUE, FlagReg, 0, 0));
+    if LocalIdx >= 0 then
+    begin
+      Local := ACtx.Scope.GetLocal(LocalIdx);
+      if Local.Slot <> FlagReg then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, Local.Slot, FlagReg, 0));
+      if Local.IsCaptured then
+        EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Local.Slot,
+          UInt16(Local.Slot)));
+    end
+    else
+      EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, FlagReg,
+        UInt16(UpvalueIdx)));
+  finally
+    ACtx.Scope.FreeRegister;
+  end;
 end;
 
 procedure CaptureDirectEvalEnvironment(const ACtx: TGocciaCompilationContext;
@@ -1722,6 +1811,18 @@ begin
         Local := ScopeCursor.GetLocal(LocalIdx);
         if DirectEvalBindingNameSeen(Names, Local.Name) then
           Continue;
+        if Local.Name = DERIVED_THIS_INITIALIZED_LOCAL then
+        begin
+          UpvalueIdx := ACtx.Scope.ResolveUpvalue(Local.Name);
+          if UpvalueIdx >= 0 then
+          begin
+            UV := ACtx.Scope.GetUpvalue(UpvalueIdx);
+            AddDirectEvalBinding(Bindings, Names, Local.Name, debUpvalue,
+              UInt8(UpvalueIdx), UV.IsConst, UV.IsVar,
+              UV.IsNonStrictImmutable);
+          end;
+          Continue;
+        end;
         if HiddenWithBindingName(Local.Name) then
         begin
           UpvalueIdx := ACtx.Scope.ResolveUpvalue(Local.Name);
@@ -2029,6 +2130,8 @@ begin
       ObjReg := ACtx.Scope.AllocateRegister;
       try
         CompileThis(ACtx, ObjReg);
+        if MemberExpr.Computed and Assigned(MemberExpr.PropertyExpression) then
+          ACtx.CompileExpression(MemberExpr.PropertyExpression, ObjReg);
         EmitReferenceError(ACtx, 'Cannot delete super property');
         EmitInstruction(ACtx, EncodeABC(OP_LOAD_TRUE, ADest, 0, 0));
       finally
@@ -2642,6 +2745,8 @@ begin
   ATarget.Kind := pdtNone;
   ATarget.ObjectReg := -1;
   ATarget.KeyReg := -1;
+  ATarget.ThisReg := -1;
+  ATarget.SuperReg := -1;
   ATarget.PropertyName := '';
 end;
 
@@ -2651,7 +2756,11 @@ procedure ReleasePreparedDestructuringTarget(
 begin
   if ATarget.KeyReg >= 0 then
     ACtx.Scope.FreeRegister;
+  if ATarget.SuperReg >= 0 then
+    ACtx.Scope.FreeRegister;
   if ATarget.ObjectReg >= 0 then
+    ACtx.Scope.FreeRegister;
+  if ATarget.ThisReg >= 0 then
     ACtx.Scope.FreeRegister;
   InitPreparedDestructuringTarget(ATarget);
 end;
@@ -2666,7 +2775,7 @@ var
   IdentPat: TGocciaIdentifierDestructuringPattern;
   MemberPat: TGocciaMemberExpressionDestructuringPattern;
   PrivatePat: TGocciaPrivateMemberExpressionDestructuringPattern;
-  ObjReg, CondReg: UInt8;
+  ObjReg, CondReg, ThisReg, BaseReg, SuperReg: UInt8;
   NameIdx: UInt16;
   I, EndCount: Integer;
   MissJump: Integer;
@@ -2733,6 +2842,32 @@ begin
   if APattern is TGocciaMemberExpressionDestructuringPattern then
   begin
     MemberPat := TGocciaMemberExpressionDestructuringPattern(APattern);
+    if MemberPat.Expression.ObjectExpr is TGocciaSuperExpression then
+    begin
+      PrepareSuperPropertyBase(ACtx, ThisReg, BaseReg, SuperReg);
+      ATarget.ThisReg := ThisReg;
+      ATarget.ObjectReg := BaseReg;
+      ATarget.SuperReg := SuperReg;
+      ATarget.KeyReg := ACtx.Scope.AllocateRegister;
+      if MemberPat.Expression.Computed then
+      begin
+        ATarget.Kind := pdtSuperComputedProperty;
+        ACtx.CompileExpression(MemberPat.Expression.PropertyExpression,
+          UInt8(ATarget.KeyReg));
+        EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY,
+          UInt8(ATarget.KeyReg), UInt8(ATarget.KeyReg), 0));
+      end
+      else
+      begin
+        ATarget.Kind := pdtSuperStringProperty;
+        ATarget.PropertyName := MemberPat.Expression.PropertyName;
+        NameIdx := ACtx.Template.AddConstantString(ATarget.PropertyName);
+        EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST,
+          UInt8(ATarget.KeyReg), NameIdx));
+      end;
+      Exit;
+    end;
+
     ATarget.ObjectReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(MemberPat.Expression.ObjectExpr,
       UInt8(ATarget.ObjectReg));
@@ -2788,6 +2923,9 @@ begin
     pdtComputedProperty:
       EmitInstruction(ACtx, EncodeABC(StoreByKeyOpcode(ACtx),
         UInt8(ATarget.ObjectReg), UInt8(ATarget.KeyReg), AValueReg));
+    pdtSuperStringProperty, pdtSuperComputedProperty:
+      EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET, UInt8(ATarget.ObjectReg),
+        UInt8(ATarget.KeyReg), AValueReg));
   end;
 end;
 
@@ -2973,7 +3111,7 @@ var
   AssignPat: TGocciaAssignmentDestructuringPattern;
   IdentPat: TGocciaIdentifierDestructuringPattern;
   Prop: TGocciaDestructuringProperty;
-  DestSlot, IdxReg: UInt8;
+  DestSlot, IdxReg, ThisReg, BaseReg, SuperReg: UInt8;
   PropIdx: UInt16;
   JumpIdx, I: Integer;
   HasRest: Boolean;
@@ -3204,6 +3342,35 @@ begin
   end
   else if APattern is TGocciaMemberExpressionDestructuringPattern then
   begin
+    if TGocciaMemberExpressionDestructuringPattern(APattern)
+       .Expression.ObjectExpr is TGocciaSuperExpression then
+    begin
+      PrepareSuperPropertyBase(ACtx, ThisReg, BaseReg, SuperReg);
+      IdxReg := ACtx.Scope.AllocateRegister;
+      if TGocciaMemberExpressionDestructuringPattern(APattern).Expression.Computed then
+      begin
+        ACtx.CompileExpression(
+          TGocciaMemberExpressionDestructuringPattern(APattern)
+            .Expression.PropertyExpression,
+          IdxReg);
+        EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, IdxReg,
+          IdxReg, 0));
+      end
+      else
+      begin
+        PropIdx := ACtx.Template.AddConstantString(
+          TGocciaMemberExpressionDestructuringPattern(APattern)
+            .Expression.PropertyName);
+        EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, IdxReg, PropIdx));
+      end;
+      EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET, BaseReg, IdxReg, ASrcReg));
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+      Exit;
+    end;
+
     DestSlot := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(
       TGocciaMemberExpressionDestructuringPattern(APattern).Expression.ObjectExpr,
@@ -3949,7 +4116,8 @@ begin
   // the nullish guard runs after the call, and super() writes `this` back after
   // the call, so neither is the last operation.  Only mark the plain and direct
   // member call forms.
-  if ATail and not AExpr.Optional then
+  if ATail and not AExpr.Optional and
+     not (AExpr.Callee is TGocciaSuperExpression) then
     MethodTailFlag := CALL_FLAG_TAIL
   else
     MethodTailFlag := 0;
@@ -4005,24 +4173,29 @@ begin
     begin
       ThisLocal := ACtx.Scope.GetLocal(ThisLocalIdx);
       ThisSlot := ThisLocal.Slot;
-      if ThisSlot <> BaseReg then
-        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ThisSlot, BaseReg, 0));
-      if ThisLocal.IsCaptured then
-        EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ThisSlot,
-          UInt16(ThisSlot)));
-    end
-    else
-    begin
+    if ThisSlot <> BaseReg then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ThisSlot, BaseReg, 0));
+    if ThisLocal.IsCaptured then
+      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ThisSlot,
+        UInt16(ThisSlot)));
+    EmitSetDerivedThisInitialized(ACtx);
+  end
+  else
+  begin
       ThisUpvalIdx := ACtx.Scope.ResolveUpvalue(KEYWORD_THIS);
       if ThisUpvalIdx >= 0 then
+      begin
         EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, BaseReg,
-          UInt16(ThisUpvalIdx)))
+          UInt16(ThisUpvalIdx)));
+        EmitSetDerivedThisInitialized(ACtx);
+      end
       else
       begin
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, 0, BaseReg, 0));
         EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, 0, 0));
+        EmitSetDerivedThisInitialized(ACtx);
       end;
-    end;
+  end;
 
     if AExpr.Optional then
     begin
@@ -6151,6 +6324,7 @@ var
   Op, NumericOp, PostNumericOp: TGocciaOpCode;
   Ident: TGocciaIdentifierExpression;
   MemberExpr: TGocciaMemberExpression;
+  PrivateExpr: TGocciaPrivateMemberExpression;
   ReservedDestRegister: Boolean;
   NameIdx: UInt16;
   I, EndCount: Integer;
@@ -6188,6 +6362,23 @@ begin
       else
         CompileIncrementMember(ACtx, AExpr, MemberExpr, ADest, Op,
           NumericOp, PostNumericOp, AKeepResult);
+      Exit;
+    end;
+
+    if AExpr.Operand is TGocciaPrivateMemberExpression then
+    begin
+      PrivateExpr := TGocciaPrivateMemberExpression(AExpr.Operand);
+      ObjReg := ACtx.Scope.AllocateRegister;
+      RegResult := ACtx.Scope.AllocateRegister;
+      ACtx.CompileExpression(PrivateExpr.ObjectExpr, ObjReg);
+      EmitLoadPropertyByName(ACtx, RegResult, ObjReg,
+        PrivateKey(ACtx.Scope, PrivateExpr.PrivateName));
+      EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
+        PostNumericOp, AKeepResult);
+      EmitStorePropertyByName(ACtx, ObjReg,
+        PrivateKey(ACtx.Scope, PrivateExpr.PrivateName), RegResult);
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
       Exit;
     end;
 
@@ -6565,15 +6756,18 @@ procedure CompileThis(const ACtx: TGocciaCompilationContext;
   const ADest: UInt8);
 var
   LocalIdx, UpvalIdx: Integer;
+  Local: TGocciaCompilerLocal;
   Slot: UInt8;
 begin
   LocalIdx := ACtx.Scope.ResolveLocal(KEYWORD_THIS);
   if LocalIdx >= 0 then
   begin
-    Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
-    if ACtx.DerivedConstructorThisGuard then
-      EmitInstruction(ACtx, EncodeABC(OP_CHECK_DERIVED_THIS, 0, 0, 0));
-    if Slot <> ADest then
+    Local := ACtx.Scope.GetLocal(LocalIdx);
+    Slot := Local.Slot;
+    EmitDerivedThisInitializedCheck(ACtx);
+    if Local.IsCaptured then
+      EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, ADest, UInt16(Slot)))
+    else if Slot <> ADest then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
     Exit;
   end;
@@ -6581,8 +6775,7 @@ begin
   UpvalIdx := ACtx.Scope.ResolveUpvalue(KEYWORD_THIS);
   if UpvalIdx >= 0 then
   begin
-    if ACtx.DerivedConstructorThisGuard then
-      EmitInstruction(ACtx, EncodeABC(OP_CHECK_DERIVED_THIS, 0, 0, 0));
+    EmitDerivedThisInitializedCheck(ACtx);
     EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, ADest, UInt16(UpvalIdx)));
     Exit;
   end;

@@ -2152,6 +2152,7 @@ function TGocciaIncrementExpression.Evaluate(const AContext: TGocciaEvaluationCo
 var
   Obj, OldValue, NewValue, PropertyKeyValue: TGocciaValue;
   MemberExpr: TGocciaMemberExpression;
+  PrivateExpr: TGocciaPrivateMemberExpression;
   PropName: string;
 begin
   if Operand is TGocciaIdentifierExpression then
@@ -2221,6 +2222,19 @@ begin
     NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
     AssignProperty(Obj, PropName, NewValue, AContext.OnError, Line, Column,
       AContext.NonStrictMode);
+    if IsPrefix then
+      Result := NewValue
+    else
+      Result := OldValue;
+  end
+  else if Operand is TGocciaPrivateMemberExpression then
+  begin
+    PrivateExpr := TGocciaPrivateMemberExpression(Operand);
+    OldValue := ToNumericValue(EvaluatePrivateMember(PrivateExpr, AContext,
+      Obj));
+    NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
+    AssignPrivateMemberValue(Obj, PrivateExpr.PrivateName, NewValue, AContext,
+      Line, Column);
     if IsPrefix then
       Result := NewValue
     else

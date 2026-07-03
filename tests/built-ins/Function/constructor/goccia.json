@@ -1,3 +1,5 @@
 {
+  "compat-traditional-for-loop": true,
+  "compat-while-loops": true,
   "unsafe-function-constructor": true
 }

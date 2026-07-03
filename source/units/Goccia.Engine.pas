@@ -2884,7 +2884,514 @@ begin
       ValidateStrictDynamicExpression(
         TGocciaSequenceExpression(AExpr).Expressions[I])
   else if AExpr is TGocciaUnaryExpression then
-    ValidateStrictDynamicExpression(TGocciaUnaryExpression(AExpr).Operand);
+      ValidateStrictDynamicExpression(TGocciaUnaryExpression(AExpr).Operand);
+end;
+
+procedure ValidateDynamicFunctionSuperExpression(
+  const AExpr: TGocciaExpression); forward;
+procedure ValidateDynamicFunctionSuperStatement(
+  const AStmt: TGocciaStatement); forward;
+procedure ValidateDynamicFunctionSuperPattern(
+  const APattern: TGocciaDestructuringPattern); forward;
+procedure ValidateDynamicFunctionSuperMatchPattern(
+  const APattern: TGocciaMatchPattern); forward;
+
+procedure ValidateDynamicFunctionSuperFunction(
+  const AFunction: TGocciaFunctionExpression);
+var
+  I: Integer;
+begin
+  if not Assigned(AFunction) then
+    Exit;
+  for I := 0 to High(AFunction.Parameters) do
+  begin
+    if AFunction.Parameters[I].IsPattern then
+      ValidateDynamicFunctionSuperPattern(AFunction.Parameters[I].Pattern);
+    ValidateDynamicFunctionSuperExpression(AFunction.Parameters[I].DefaultValue);
+  end;
+  if AFunction.Body is TGocciaStatement then
+    ValidateDynamicFunctionSuperStatement(TGocciaStatement(AFunction.Body))
+  else if AFunction.Body is TGocciaExpression then
+    ValidateDynamicFunctionSuperExpression(TGocciaExpression(AFunction.Body));
+end;
+
+procedure ValidateDynamicFunctionSuperPattern(
+  const APattern: TGocciaDestructuringPattern);
+var
+  ArrPat: TGocciaArrayDestructuringPattern;
+  AssignmentPattern: TGocciaAssignmentDestructuringPattern;
+  ObjPat: TGocciaObjectDestructuringPattern;
+  Prop: TGocciaDestructuringProperty;
+  RestPattern: TGocciaRestDestructuringPattern;
+  I: Integer;
+begin
+  if not Assigned(APattern) then
+    Exit;
+
+  if APattern is TGocciaArrayDestructuringPattern then
+  begin
+    ArrPat := TGocciaArrayDestructuringPattern(APattern);
+    for I := 0 to ArrPat.Elements.Count - 1 do
+      ValidateDynamicFunctionSuperPattern(ArrPat.Elements[I]);
+  end
+  else if APattern is TGocciaObjectDestructuringPattern then
+  begin
+    ObjPat := TGocciaObjectDestructuringPattern(APattern);
+    for I := 0 to ObjPat.Properties.Count - 1 do
+    begin
+      Prop := ObjPat.Properties[I];
+      if Prop.Computed then
+        ValidateDynamicFunctionSuperExpression(Prop.KeyExpression);
+      ValidateDynamicFunctionSuperPattern(Prop.Pattern);
+    end;
+  end
+  else if APattern is TGocciaAssignmentDestructuringPattern then
+  begin
+    AssignmentPattern := TGocciaAssignmentDestructuringPattern(APattern);
+    ValidateDynamicFunctionSuperPattern(AssignmentPattern.Left);
+    ValidateDynamicFunctionSuperExpression(AssignmentPattern.Right);
+  end
+  else if APattern is TGocciaRestDestructuringPattern then
+  begin
+    RestPattern := TGocciaRestDestructuringPattern(APattern);
+    ValidateDynamicFunctionSuperPattern(RestPattern.Argument);
+  end
+  else if APattern is TGocciaMemberExpressionDestructuringPattern then
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaMemberExpressionDestructuringPattern(APattern).Expression)
+  else if APattern is TGocciaPrivateMemberExpressionDestructuringPattern then
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaPrivateMemberExpressionDestructuringPattern(APattern).Expression);
+end;
+
+procedure ValidateDynamicFunctionSuperMatchPattern(
+  const APattern: TGocciaMatchPattern);
+var
+  ArrayPattern: TGocciaArrayMatchPattern;
+  ObjectPattern: TGocciaObjectMatchPattern;
+  PatternList: TGocciaMatchPatternList;
+  ExtractorPattern: TGocciaExtractorMatchPattern;
+  I: Integer;
+begin
+  if not Assigned(APattern) then
+    Exit;
+
+  if APattern is TGocciaValueMatchPattern then
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaValueMatchPattern(APattern).Expression)
+  else if APattern is TGocciaArrayMatchPattern then
+  begin
+    ArrayPattern := TGocciaArrayMatchPattern(APattern);
+    for I := 0 to ArrayPattern.Elements.Count - 1 do
+      ValidateDynamicFunctionSuperMatchPattern(ArrayPattern.Elements[I]);
+    ValidateDynamicFunctionSuperMatchPattern(ArrayPattern.RestPattern);
+  end
+  else if APattern is TGocciaObjectMatchPattern then
+  begin
+    ObjectPattern := TGocciaObjectMatchPattern(APattern);
+    for I := 0 to ObjectPattern.Properties.Count - 1 do
+    begin
+      if ObjectPattern.Properties[I].Computed then
+        ValidateDynamicFunctionSuperExpression(
+          ObjectPattern.Properties[I].KeyExpression);
+      ValidateDynamicFunctionSuperMatchPattern(
+        ObjectPattern.Properties[I].Pattern);
+    end;
+    ValidateDynamicFunctionSuperMatchPattern(ObjectPattern.RestPattern);
+  end
+  else if APattern is TGocciaRelationalMatchPattern then
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaRelationalMatchPattern(APattern).Expression)
+  else if APattern is TGocciaGuardMatchPattern then
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaGuardMatchPattern(APattern).Condition)
+  else if APattern is TGocciaAsMatchPattern then
+    ValidateDynamicFunctionSuperMatchPattern(
+      TGocciaAsMatchPattern(APattern).Pattern)
+  else if APattern is TGocciaAndMatchPattern then
+  begin
+    PatternList := TGocciaAndMatchPattern(APattern).Patterns;
+    for I := 0 to PatternList.Count - 1 do
+      ValidateDynamicFunctionSuperMatchPattern(PatternList[I]);
+  end
+  else if APattern is TGocciaOrMatchPattern then
+  begin
+    PatternList := TGocciaOrMatchPattern(APattern).Patterns;
+    for I := 0 to PatternList.Count - 1 do
+      ValidateDynamicFunctionSuperMatchPattern(PatternList[I]);
+  end
+  else if APattern is TGocciaNotMatchPattern then
+    ValidateDynamicFunctionSuperMatchPattern(
+      TGocciaNotMatchPattern(APattern).Pattern)
+  else if APattern is TGocciaExtractorMatchPattern then
+  begin
+    ExtractorPattern := TGocciaExtractorMatchPattern(APattern);
+    ValidateDynamicFunctionSuperExpression(ExtractorPattern.MatcherExpression);
+    for I := 0 to ExtractorPattern.Arguments.Count - 1 do
+      ValidateDynamicFunctionSuperMatchPattern(ExtractorPattern.Arguments[I]);
+    ValidateDynamicFunctionSuperMatchPattern(ExtractorPattern.RestPattern);
+  end;
+end;
+
+procedure ValidateDynamicFunctionSuperExpression(
+  const AExpr: TGocciaExpression);
+var
+  ArrayExpr: TGocciaArrayExpression;
+  ArrowExpr: TGocciaArrowFunctionExpression;
+  BinaryExpr: TGocciaBinaryExpression;
+  CallExpr: TGocciaCallExpression;
+  ConditionalExpr: TGocciaConditionalExpression;
+  ImportExpr: TGocciaImportCallExpression;
+  MemberExpr: TGocciaMemberExpression;
+  NewExpr: TGocciaNewExpression;
+  ObjectExpr: TGocciaObjectExpression;
+  Pair: TPair<TGocciaExpression, TGocciaExpression>;
+  I: Integer;
+begin
+  if not Assigned(AExpr) then
+    Exit;
+
+  if AExpr is TGocciaSuperExpression then
+    ThrowSyntaxError('super is not allowed in this function context');
+
+  if AExpr is TGocciaFunctionExpression then
+    ValidateDynamicFunctionSuperFunction(TGocciaFunctionExpression(AExpr))
+  else if AExpr is TGocciaArrowFunctionExpression then
+  begin
+    ArrowExpr := TGocciaArrowFunctionExpression(AExpr);
+    for I := 0 to High(ArrowExpr.Parameters) do
+      ValidateDynamicFunctionSuperExpression(ArrowExpr.Parameters[I].DefaultValue);
+    if ArrowExpr.Body is TGocciaStatement then
+      ValidateDynamicFunctionSuperStatement(TGocciaStatement(ArrowExpr.Body))
+    else if ArrowExpr.Body is TGocciaExpression then
+      ValidateDynamicFunctionSuperExpression(TGocciaExpression(ArrowExpr.Body));
+  end
+  else if AExpr is TGocciaCallExpression then
+  begin
+    CallExpr := TGocciaCallExpression(AExpr);
+    if CallExpr.Callee is TGocciaSuperExpression then
+      ThrowSyntaxError('super() is not allowed in this function context');
+    ValidateDynamicFunctionSuperExpression(CallExpr.Callee);
+    for I := 0 to CallExpr.Arguments.Count - 1 do
+      ValidateDynamicFunctionSuperExpression(CallExpr.Arguments[I]);
+  end
+  else if AExpr is TGocciaMemberExpression then
+  begin
+    MemberExpr := TGocciaMemberExpression(AExpr);
+    if MemberExpr.ObjectExpr is TGocciaSuperExpression then
+      ThrowSyntaxError('super property access is not allowed in this function context');
+    ValidateDynamicFunctionSuperExpression(MemberExpr.ObjectExpr);
+    if MemberExpr.Computed then
+      ValidateDynamicFunctionSuperExpression(MemberExpr.PropertyExpression);
+  end
+  else if AExpr is TGocciaBinaryExpression then
+  begin
+    BinaryExpr := TGocciaBinaryExpression(AExpr);
+    ValidateDynamicFunctionSuperExpression(BinaryExpr.Left);
+    ValidateDynamicFunctionSuperExpression(BinaryExpr.Right);
+  end
+  else if AExpr is TGocciaSequenceExpression then
+    for I := 0 to TGocciaSequenceExpression(AExpr).Expressions.Count - 1 do
+      ValidateDynamicFunctionSuperExpression(
+        TGocciaSequenceExpression(AExpr).Expressions[I])
+  else if AExpr is TGocciaUnaryExpression then
+    ValidateDynamicFunctionSuperExpression(TGocciaUnaryExpression(AExpr).Operand)
+  else if AExpr is TGocciaAssignmentExpression then
+    ValidateDynamicFunctionSuperExpression(TGocciaAssignmentExpression(AExpr).Value)
+  else if AExpr is TGocciaPropertyAssignmentExpression then
+  begin
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaPropertyAssignmentExpression(AExpr).ObjectExpr);
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaPropertyAssignmentExpression(AExpr).Value);
+  end
+  else if AExpr is TGocciaComputedPropertyAssignmentExpression then
+  begin
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaComputedPropertyAssignmentExpression(AExpr).ObjectExpr);
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaComputedPropertyAssignmentExpression(AExpr).PropertyExpression);
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaComputedPropertyAssignmentExpression(AExpr).Value);
+  end
+  else if AExpr is TGocciaCompoundAssignmentExpression then
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaCompoundAssignmentExpression(AExpr).Value)
+  else if AExpr is TGocciaPropertyCompoundAssignmentExpression then
+  begin
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaPropertyCompoundAssignmentExpression(AExpr).ObjectExpr);
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaPropertyCompoundAssignmentExpression(AExpr).Value);
+  end
+  else if AExpr is TGocciaComputedPropertyCompoundAssignmentExpression then
+  begin
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).ObjectExpr);
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).PropertyExpression);
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).Value);
+  end
+  else if AExpr is TGocciaIncrementExpression then
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaIncrementExpression(AExpr).Operand)
+  else if AExpr is TGocciaArrayExpression then
+  begin
+    ArrayExpr := TGocciaArrayExpression(AExpr);
+    for I := 0 to ArrayExpr.Elements.Count - 1 do
+      ValidateDynamicFunctionSuperExpression(ArrayExpr.Elements[I]);
+  end
+  else if AExpr is TGocciaObjectExpression then
+  begin
+    ObjectExpr := TGocciaObjectExpression(AExpr);
+    for I := 0 to High(ObjectExpr.PropertySourceOrder) do
+      case ObjectExpr.PropertySourceOrder[I].PropertyType of
+        pstStatic:
+          ValidateDynamicFunctionSuperExpression(
+            ObjectExpr.PropertySourceOrder[I].Expression);
+        pstComputed:
+          begin
+            Pair := ObjectExpr.ComputedPropertiesInOrder[
+              ObjectExpr.PropertySourceOrder[I].ComputedIndex];
+            ValidateDynamicFunctionSuperExpression(Pair.Key);
+            ValidateDynamicFunctionSuperExpression(Pair.Value);
+          end;
+        pstComputedGetter,
+        pstComputedSetter:
+          begin
+            Pair := ObjectExpr.ComputedPropertiesInOrder[
+              ObjectExpr.PropertySourceOrder[I].ComputedIndex];
+            ValidateDynamicFunctionSuperExpression(Pair.Key);
+          end;
+      end;
+  end
+  else if AExpr is TGocciaYieldExpression then
+    ValidateDynamicFunctionSuperExpression(TGocciaYieldExpression(AExpr).Operand)
+  else if AExpr is TGocciaAwaitExpression then
+    ValidateDynamicFunctionSuperExpression(TGocciaAwaitExpression(AExpr).Operand)
+  else if AExpr is TGocciaConditionalExpression then
+  begin
+    ConditionalExpr := TGocciaConditionalExpression(AExpr);
+    ValidateDynamicFunctionSuperExpression(ConditionalExpr.Condition);
+    ValidateDynamicFunctionSuperExpression(ConditionalExpr.Consequent);
+    ValidateDynamicFunctionSuperExpression(ConditionalExpr.Alternate);
+  end
+  else if AExpr is TGocciaNewExpression then
+  begin
+    NewExpr := TGocciaNewExpression(AExpr);
+    ValidateDynamicFunctionSuperExpression(NewExpr.Callee);
+    for I := 0 to NewExpr.Arguments.Count - 1 do
+      ValidateDynamicFunctionSuperExpression(NewExpr.Arguments[I]);
+  end
+  else if AExpr is TGocciaImportCallExpression then
+  begin
+    ImportExpr := TGocciaImportCallExpression(AExpr);
+    ValidateDynamicFunctionSuperExpression(ImportExpr.Specifier);
+    ValidateDynamicFunctionSuperExpression(ImportExpr.Options);
+  end
+  else if AExpr is TGocciaSpreadExpression then
+    ValidateDynamicFunctionSuperExpression(TGocciaSpreadExpression(AExpr).Argument)
+  else if AExpr is TGocciaTemplateWithInterpolationExpression then
+  begin
+    for I := 0 to TGocciaTemplateWithInterpolationExpression(AExpr).Parts.Count - 1 do
+      ValidateDynamicFunctionSuperExpression(
+        TGocciaTemplateWithInterpolationExpression(AExpr).Parts[I]);
+  end
+  else if AExpr is TGocciaTaggedTemplateExpression then
+  begin
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaTaggedTemplateExpression(AExpr).Tag);
+    for I := 0 to TGocciaTaggedTemplateExpression(AExpr).Expressions.Count - 1 do
+      ValidateDynamicFunctionSuperExpression(
+        TGocciaTaggedTemplateExpression(AExpr).Expressions[I]);
+  end
+  else if AExpr is TGocciaDestructuringAssignmentExpression then
+  begin
+    ValidateDynamicFunctionSuperPattern(
+      TGocciaDestructuringAssignmentExpression(AExpr).Left);
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaDestructuringAssignmentExpression(AExpr).Right);
+  end
+  else if AExpr is TGocciaPrivateMemberExpression then
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaPrivateMemberExpression(AExpr).ObjectExpr)
+  else if AExpr is TGocciaPrivatePropertyAssignmentExpression then
+  begin
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaPrivatePropertyAssignmentExpression(AExpr).ObjectExpr);
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaPrivatePropertyAssignmentExpression(AExpr).Value);
+  end
+  else if AExpr is TGocciaPrivatePropertyCompoundAssignmentExpression then
+  begin
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).ObjectExpr);
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).Value);
+  end
+  else if AExpr is TGocciaIsExpression then
+  begin
+    ValidateDynamicFunctionSuperExpression(TGocciaIsExpression(AExpr).Subject);
+    ValidateDynamicFunctionSuperMatchPattern(TGocciaIsExpression(AExpr).Pattern);
+  end
+  else if AExpr is TGocciaMatchExpression then
+  begin
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaMatchExpression(AExpr).Subject);
+    for I := 0 to TGocciaMatchExpression(AExpr).Clauses.Count - 1 do
+    begin
+      ValidateDynamicFunctionSuperMatchPattern(
+        TGocciaMatchExpression(AExpr).Clauses[I].Pattern);
+      ValidateDynamicFunctionSuperExpression(
+        TGocciaMatchExpression(AExpr).Clauses[I].Expression);
+    end;
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaMatchExpression(AExpr).DefaultExpression);
+  end;
+end;
+
+procedure ValidateDynamicFunctionSuperStatement(
+  const AStmt: TGocciaStatement);
+var
+  BlockStmt: TGocciaBlockStatement;
+  CaseClause: TGocciaCaseClause;
+  DoWhileStmt: TGocciaDoWhileStatement;
+  ExpressionStmt: TGocciaExpressionStatement;
+  ForInStmt: TGocciaForInStatement;
+  ForOfStmt: TGocciaForOfStatement;
+  ForStmt: TGocciaForStatement;
+  IfStmt: TGocciaIfStatement;
+  ReturnStmt: TGocciaReturnStatement;
+  SwitchStmt: TGocciaSwitchStatement;
+  ThrowStmt: TGocciaThrowStatement;
+  TryStmt: TGocciaTryStatement;
+  UsingDecl: TGocciaUsingDeclaration;
+  VarDecl: TGocciaVariableDeclaration;
+  WhileStmt: TGocciaWhileStatement;
+  WithStmt: TGocciaWithStatement;
+  I, J: Integer;
+begin
+  if not Assigned(AStmt) then
+    Exit;
+  if AStmt is TGocciaExpressionStatement then
+  begin
+    ExpressionStmt := TGocciaExpressionStatement(AStmt);
+    ValidateDynamicFunctionSuperExpression(ExpressionStmt.Expression);
+  end
+  else if AStmt is TGocciaBlockStatement then
+  begin
+    BlockStmt := TGocciaBlockStatement(AStmt);
+    for I := 0 to BlockStmt.Nodes.Count - 1 do
+      if BlockStmt.Nodes[I] is TGocciaStatement then
+        ValidateDynamicFunctionSuperStatement(TGocciaStatement(BlockStmt.Nodes[I]))
+      else if BlockStmt.Nodes[I] is TGocciaExpression then
+        ValidateDynamicFunctionSuperExpression(TGocciaExpression(BlockStmt.Nodes[I]));
+  end
+  else if AStmt is TGocciaVariableDeclaration then
+  begin
+    VarDecl := TGocciaVariableDeclaration(AStmt);
+    for I := 0 to High(VarDecl.Variables) do
+      ValidateDynamicFunctionSuperExpression(VarDecl.Variables[I].Initializer);
+  end
+  else if AStmt is TGocciaDestructuringDeclaration then
+  begin
+    ValidateDynamicFunctionSuperPattern(
+      TGocciaDestructuringDeclaration(AStmt).Pattern);
+    ValidateDynamicFunctionSuperExpression(
+      TGocciaDestructuringDeclaration(AStmt).Initializer);
+  end
+  else if AStmt is TGocciaFunctionDeclaration then
+    ValidateDynamicFunctionSuperFunction(
+      TGocciaFunctionDeclaration(AStmt).FunctionExpression)
+  else if AStmt is TGocciaIfStatement then
+  begin
+    IfStmt := TGocciaIfStatement(AStmt);
+    ValidateDynamicFunctionSuperExpression(IfStmt.Condition);
+    ValidateDynamicFunctionSuperStatement(IfStmt.Consequent);
+    ValidateDynamicFunctionSuperStatement(IfStmt.Alternate);
+  end
+  else if AStmt is TGocciaReturnStatement then
+  begin
+    ReturnStmt := TGocciaReturnStatement(AStmt);
+    ValidateDynamicFunctionSuperExpression(ReturnStmt.Value);
+  end
+  else if AStmt is TGocciaThrowStatement then
+  begin
+    ThrowStmt := TGocciaThrowStatement(AStmt);
+    ValidateDynamicFunctionSuperExpression(ThrowStmt.Value);
+  end
+  else if AStmt is TGocciaForStatement then
+  begin
+    ForStmt := TGocciaForStatement(AStmt);
+    ValidateDynamicFunctionSuperStatement(ForStmt.Init);
+    ValidateDynamicFunctionSuperExpression(ForStmt.Condition);
+    ValidateDynamicFunctionSuperExpression(ForStmt.Update);
+    ValidateDynamicFunctionSuperStatement(ForStmt.Body);
+  end
+  else if AStmt is TGocciaWhileStatement then
+  begin
+    WhileStmt := TGocciaWhileStatement(AStmt);
+    ValidateDynamicFunctionSuperExpression(WhileStmt.Condition);
+    ValidateDynamicFunctionSuperStatement(WhileStmt.Body);
+  end
+  else if AStmt is TGocciaDoWhileStatement then
+  begin
+    DoWhileStmt := TGocciaDoWhileStatement(AStmt);
+    ValidateDynamicFunctionSuperStatement(DoWhileStmt.Body);
+    ValidateDynamicFunctionSuperExpression(DoWhileStmt.Condition);
+  end
+  else if AStmt is TGocciaWithStatement then
+  begin
+    WithStmt := TGocciaWithStatement(AStmt);
+    ValidateDynamicFunctionSuperExpression(WithStmt.ObjectExpression);
+    ValidateDynamicFunctionSuperStatement(WithStmt.Body);
+  end
+  else if AStmt is TGocciaForOfStatement then
+  begin
+    ForOfStmt := TGocciaForOfStatement(AStmt);
+    ValidateDynamicFunctionSuperPattern(ForOfStmt.BindingPattern);
+    ValidateDynamicFunctionSuperPattern(ForOfStmt.AssignmentTarget);
+    ValidateDynamicFunctionSuperMatchPattern(ForOfStmt.MatchPattern);
+    ValidateDynamicFunctionSuperExpression(ForOfStmt.Iterable);
+    ValidateDynamicFunctionSuperStatement(ForOfStmt.Body);
+  end
+  else if AStmt is TGocciaForInStatement then
+  begin
+    ForInStmt := TGocciaForInStatement(AStmt);
+    ValidateDynamicFunctionSuperPattern(ForInStmt.BindingPattern);
+    ValidateDynamicFunctionSuperPattern(ForInStmt.AssignmentTarget);
+    ValidateDynamicFunctionSuperExpression(ForInStmt.ObjectExpression);
+    ValidateDynamicFunctionSuperStatement(ForInStmt.Body);
+  end
+  else if AStmt is TGocciaTryStatement then
+  begin
+    TryStmt := TGocciaTryStatement(AStmt);
+    ValidateDynamicFunctionSuperStatement(TryStmt.Block);
+    ValidateDynamicFunctionSuperMatchPattern(TryStmt.CatchPattern);
+    ValidateDynamicFunctionSuperPattern(TryStmt.CatchBindingPattern);
+    ValidateDynamicFunctionSuperStatement(TryStmt.CatchBlock);
+    ValidateDynamicFunctionSuperStatement(TryStmt.FinallyBlock);
+  end
+  else if AStmt is TGocciaSwitchStatement then
+  begin
+    SwitchStmt := TGocciaSwitchStatement(AStmt);
+    ValidateDynamicFunctionSuperExpression(SwitchStmt.Discriminant);
+    for I := 0 to SwitchStmt.Cases.Count - 1 do
+    begin
+      CaseClause := SwitchStmt.Cases[I];
+      ValidateDynamicFunctionSuperExpression(CaseClause.Test);
+      for J := 0 to CaseClause.Consequent.Count - 1 do
+        ValidateDynamicFunctionSuperStatement(CaseClause.Consequent[J]);
+    end;
+  end
+  else if AStmt is TGocciaUsingDeclaration then
+  begin
+    UsingDecl := TGocciaUsingDeclaration(AStmt);
+    for I := 0 to High(UsingDecl.Variables) do
+      ValidateDynamicFunctionSuperExpression(
+        UsingDecl.Variables[I].Initializer);
+  end;
 end;
 
 function TGocciaEngine.CompileDynamicFunction(
@@ -2956,6 +3463,8 @@ begin
     if BodyParseResult.HasUseStrictDirective and
        Assigned(FunctionExpression) then
       ValidateStrictDynamicFunction(FunctionExpression);
+    if Assigned(FunctionExpression) then
+      ValidateDynamicFunctionSuperFunction(FunctionExpression);
 
     ResultValue := FExecutor.ExecuteDynamicFunction(ProgramNode);
     Result := TGocciaFunctionBase(ResultValue);

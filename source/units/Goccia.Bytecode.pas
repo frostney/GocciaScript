@@ -144,7 +144,9 @@ const
   //   v68 -> v69: added OP_LOAD_CHAR so generated sources with many distinct
   //               one-code-unit string literals do not exhaust the 16-bit
   //               constant pool.
-  GOCCIA_FORMAT_VERSION = 69;
+  //   v69 -> v70: added OP_SET_CLASS_SOURCE_CONST so Function.prototype.toString
+  //               can return exact class source text in bytecode mode.
+  GOCCIA_FORMAT_VERSION = 70;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -338,6 +340,7 @@ type
     OP_SHR           = 140,
     OP_USHR          = 141,
     OP_DEFINE_CLASS_METHOD_DYNAMIC = 142,
+    OP_SET_CLASS_SOURCE_CONST = 143,
     OP_IMPORT        = 167,
     OP_EXPORT        = 168,
     OP_AWAIT         = 169,

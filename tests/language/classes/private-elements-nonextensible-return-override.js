@@ -178,4 +178,26 @@ describe("Private elements on constructor return overrides", () => {
     new WithPrivateFieldInitializer(forged);
     expect(WithPrivateFieldInitializer.read(forged)).toBe(1);
   });
+
+  test("private fields remain writable on frozen replacement objects", () => {
+    class WithMutablePrivateField extends ReturnOverrideBase {
+      #value = 1;
+
+      static read(obj) {
+        return obj.#value;
+      }
+
+      static increment(obj) {
+        obj.#value++;
+      }
+    }
+
+    const obj = {};
+    new WithMutablePrivateField(obj);
+    Object.freeze(obj);
+    WithMutablePrivateField.increment(obj);
+
+    expect(WithMutablePrivateField.read(obj)).toBe(2);
+    expect(Object.isFrozen(obj)).toBe(true);
+  });
 });

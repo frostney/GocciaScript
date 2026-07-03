@@ -1280,6 +1280,15 @@ begin
       Exit;
     end;
   end;
+  if AThisValue is TGocciaClassValue then
+  begin
+    SrcText := TGocciaClassValue(AThisValue).GetSourceText;
+    if SrcText <> '' then
+    begin
+      Result := TGocciaStringLiteralValue.Create(SrcText);
+      Exit;
+    end;
+  end;
 
   // Built-in functions and bound functions: NativeFunction string
   if AThisValue is TGocciaFunctionBase then
@@ -1365,6 +1374,8 @@ begin
   FBoundLength := SnapshotBoundFunctionLength(FOriginalFunction,
     FBoundArgCount);
   FBoundName := SnapshotBoundFunctionName(FOriginalFunction);
+  if FOriginalFunction is TGocciaObjectValue then
+    Self.Prototype := TGocciaObjectValue(FOriginalFunction).Prototype;
 
   FProperties.Add(PROP_LENGTH, TGocciaPropertyDescriptorData.Create(
     TGocciaNumberLiteralValue.Create(FBoundLength), [pfConfigurable]));

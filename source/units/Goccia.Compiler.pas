@@ -42,6 +42,7 @@ type
     procedure DoSwapState(const ATemplate: TGocciaFunctionTemplate;
       const AScope: TGocciaCompilerScope);
     procedure DoSetDerivedConstructorThisGuard(const AGuard: Boolean);
+    procedure DoSetNonStrictMode(const AEnabled: Boolean);
     function BuildContext: TGocciaCompilationContext;
     function NonStrictBlockFunctionVarBindingsEnabled: Boolean;
   public
@@ -129,6 +130,7 @@ begin
   Result.CompileFunctionBody := DoCompileFunctionBody;
   Result.SwapState := DoSwapState;
   Result.SetDerivedConstructorThisGuard := DoSetDerivedConstructorThisGuard;
+  Result.SetNonStrictMode := DoSetNonStrictMode;
 end;
 
 function TGocciaCompiler.NonStrictBlockFunctionVarBindingsEnabled: Boolean;
@@ -144,6 +146,11 @@ begin
   if Assigned(FCurrentTemplate) then
     FTemplateDerivedConstructorThisGuards.AddOrSetValue(
       FCurrentTemplate, AGuard);
+end;
+
+procedure TGocciaCompiler.DoSetNonStrictMode(const AEnabled: Boolean);
+begin
+  FNonStrictMode := AEnabled;
 end;
 
 procedure TGocciaCompiler.DoSwapState(

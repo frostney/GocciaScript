@@ -32,6 +32,31 @@ describe("auto-accessor", () => {
     expect(c.x).toBe(undefined);
   });
 
+  test("private auto-accessor uses private storage", () => {
+    class C {
+      accessor #x;
+
+      hasX() {
+        return #x in this;
+      }
+
+      read() {
+        return this.#x;
+      }
+
+      write(value) {
+        this.#x = value;
+      }
+    }
+
+    const c = new C();
+    expect(c.hasX()).toBe(true);
+    expect(c.read()).toBe(undefined);
+    c.write(42);
+    expect(c.read()).toBe(42);
+    expect(Object.getOwnPropertyNames(c).length).toBe(0);
+  });
+
   test("computed auto-accessor uses resolved property key", () => {
     const key = "x";
 
@@ -56,5 +81,24 @@ describe("auto-accessor", () => {
     expect(c[key]).toBe(1);
     c[key] = 2;
     expect(c[key]).toBe(2);
+  });
+
+  test("static private auto-accessor initializer does not run per instance", () => {
+    let calls = 0;
+
+    class C {
+      static accessor #value = ++calls;
+
+      static read() {
+        return this.#value;
+      }
+    }
+
+    expect(calls).toBe(1);
+    expect(C.read()).toBe(1);
+    new C();
+    new C();
+    expect(calls).toBe(1);
+    expect(C.read()).toBe(1);
   });
 });
