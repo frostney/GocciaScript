@@ -205,6 +205,10 @@ begin
 
   // Step 2: Let key be ? ToPropertyKey(propertyKey)
   PropKey := ToPropertyKey(AArgs.GetElement(1));
+  Attrs := AArgs.GetElement(2);
+  if not (Attrs is TGocciaObjectValue) then
+    ThrowTypeError(SErrorReflectDefinePropertyAttrsMustBeObject, SSuggestPropertyDescriptorObject);
+
   IsSymbolKey := PropKey is TGocciaSymbolValue;
   SymbolKey := nil;
   PropertyName := '';
@@ -223,10 +227,6 @@ begin
   end;
 
   // Step 3: Let desc be ? ToPropertyDescriptor(Attributes)
-  Attrs := AArgs.GetElement(2);
-  if not (Attrs is TGocciaObjectValue) then
-    ThrowTypeError(SErrorReflectDefinePropertyAttrsMustBeObject, SSuggestPropertyDescriptorObject);
-
   DescriptorObject := TGocciaObjectValue(Attrs);
   Descriptor := ToPropertyDescriptor(DescriptorObject, ExistingDescriptor);
 

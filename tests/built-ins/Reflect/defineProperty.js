@@ -71,6 +71,19 @@ describe("Reflect.defineProperty", () => {
     expect(() => Reflect.defineProperty(obj, "v", undefined)).toThrow(TypeError);
   });
 
+  test("throws for invalid descriptor before target descriptor lookup", () => {
+    let trapCalled = false;
+    const proxy = new Proxy({}, {
+      getOwnPropertyDescriptor() {
+        trapCalled = true;
+        throw new Error("trap should not be called");
+      },
+    });
+
+    expect(() => Reflect.defineProperty(proxy, "x", undefined)).toThrow(TypeError);
+    expect(trapCalled).toBe(false);
+  });
+
   test("propagates abrupt completion from property key before validating descriptor", () => {
     const obj = {};
     let propertyKeyWasConverted = false;
