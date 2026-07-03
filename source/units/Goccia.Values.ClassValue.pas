@@ -464,7 +464,10 @@ function ShouldDelayNativeSuperPrototypeLookup(
   const ANativeSuperConstructor: TGocciaObjectValue): Boolean;
 begin
   Result := Assigned(ANativeSuperConstructor) and
-    (ANativeSuperConstructor <> TGocciaFunctionBase.GetSharedPrototype);
+    (ANativeSuperConstructor <> TGocciaFunctionBase.GetSharedPrototype) and
+    (ANativeSuperConstructor is TGocciaClassValue) and
+    Assigned(TGocciaClassValue(ANativeSuperConstructor).
+      NativeInstanceDefaultPrototype);
 end;
 
 function GetArrayPrototypeFromConstructor(

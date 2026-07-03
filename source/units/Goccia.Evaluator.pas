@@ -10674,6 +10674,7 @@ var
   ConstructedValue: TGocciaValue;
   ConstructorThisValue: TGocciaValue;
   EffectiveNewTarget: TGocciaValue;
+  InstancePrototype: TGocciaObjectValue;
   InitializerReplayReceiver: TGocciaObjectValue;
   function ConstructNativeSuperInstance(
     const AConstructor: TGocciaObjectValue): TGocciaObjectValue;
@@ -10700,6 +10701,7 @@ var
     begin
       Result := TGocciaInstanceValue.Create(AClassValue,
         AClassValue.EstimatedInstancePropertyCapacity);
+      Result.Prototype := GetProtoFromConstructor(EffectiveNewTarget);
       Exit;
     end
     else
@@ -10782,6 +10784,10 @@ begin
     EffectiveNewTarget := ANewTarget
   else
     EffectiveNewTarget := AClassValue;
+  if Assigned(ANewTarget) then
+    InstancePrototype := GetProtoFromConstructor(ANewTarget)
+  else
+    InstancePrototype := AClassValue.Prototype;
 
   // ES2026 §20.1.1.1 Object(value): direct Object construction with a
   // non-nullish argument returns that object or ToObject(value).
@@ -10818,14 +10824,14 @@ begin
   if Assigned(NativeInstance) then
   begin
     Instance := NativeInstance;
-    Instance.Prototype := AClassValue.Prototype;
+    Instance.Prototype := InstancePrototype;
     if NativeInstance is TGocciaInstanceValue then
       TGocciaInstanceValue(NativeInstance).ClassValue := AClassValue;
   end
   else
   begin
     Instance := TGocciaInstanceValue.Create(AClassValue);
-    Instance.Prototype := AClassValue.Prototype;
+    Instance.Prototype := InstancePrototype;
   end;
 
   RootedInstance := Instance;
