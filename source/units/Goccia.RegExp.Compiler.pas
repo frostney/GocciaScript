@@ -2176,8 +2176,21 @@ begin
               Inc(GroupCount);
             end;
           if BackrefIdx < 0 then
-            raise EConvertError.Create(
-              'Invalid named backreference: ' + GroupName);
+          begin
+            if FUnicode or (Length(FNamedGroups) > 0) then
+              raise EConvertError.Create(
+                'Invalid named backreference: ' + GroupName);
+            EmitCharMatch(Ord('k'));
+            EmitCharMatch(Ord('<'));
+            I := 1;
+            while I <= Length(GroupName) do
+            begin
+              CodePoint := ReadRegExpGroupNameLiteralCodePoint(GroupName, I);
+              EmitCharMatch(CodePoint);
+            end;
+            EmitCharMatch(Ord('>'));
+            Exit;
+          end;
           if GroupCount <= 1 then
             Emit(EncodeOpBx(RX_BACKREF, BackrefIdx or BackrefFlags))
           else
@@ -2214,7 +2227,24 @@ begin
         else
           EmitCharMatch(0);
       end;
-    'x': EmitCharMatch(ParseHexEscape(2));
+    'x':
+      begin
+        if FUnicode then
+          EmitCharMatch(ParseHexEscape(2))
+        else
+        begin
+          I := FPos;
+          try
+            EmitCharMatch(ParseHexEscape(2));
+          except
+            on E: EConvertError do
+            begin
+              FPos := I;
+              EmitCharMatch(Ord('x'));
+            end;
+          end;
+        end;
+      end;
     'u':
       begin
         if (not FUnicode) and (Peek = '{') then
@@ -2275,7 +2305,21 @@ begin
       end;
     'x':
       begin
-        CodePoint := ParseHexEscape(2);
+        if FUnicode then
+          CodePoint := ParseHexEscape(2)
+        else
+        begin
+          I := FPos;
+          try
+            CodePoint := ParseHexEscape(2);
+          except
+            on E: EConvertError do
+            begin
+              FPos := I;
+              CodePoint := Ord('x');
+            end;
+          end;
+        end;
         AddRange(ARanges, ARangeCount, CodePoint, CodePoint);
       end;
     'u':

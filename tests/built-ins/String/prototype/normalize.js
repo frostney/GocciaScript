@@ -14,6 +14,16 @@ describe("String.prototype.normalize", () => {
     expect("abc".normalize("NFKD")).toBe("abc");
   });
 
+  test("normalizes canonical forms", () => {
+    expect("e\u0301".normalize("NFC")).toBe("\u00E9");
+    expect("\u00E9".normalize("NFD")).toBe("e\u0301");
+  });
+
+  test("normalizes compatibility forms", () => {
+    expect("\uFB01".normalize("NFKD")).toBe("fi");
+    expect("\u212B".normalize("NFKC")).toBe("\u00C5");
+  });
+
   test("throws RangeError for invalid form", () => {
     expect(() => "abc".normalize("INVALID")).toThrow(RangeError);
   });

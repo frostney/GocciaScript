@@ -114,10 +114,7 @@ begin
     ctvkNumber:
       EmitFoldedNumber(ACtx, AValue.NumberValue, ADest);
     ctvkString:
-    begin
-      Idx := ACtx.Template.AddConstantString(AValue.StringValue);
-      EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ADest, Idx));
-    end;
+      EmitLoadStringLiteral(ACtx, ADest, AValue.StringValue);
     ctvkBigInt:
     begin
       Idx := ACtx.Template.AddConstantBigInt(AValue.BigIntValue.ToString);

@@ -79,6 +79,27 @@ console.log("String line continuation...");
   }
 }
 
+// -- Large padded braced Unicode escapes ----------------------------------------
+
+console.log("String braced Unicode escapes with large padding...");
+{
+  const padding = "0".repeat(65536);
+  const cases: [string, string][] = [
+    [`"\\u{${padding}1234}".charCodeAt(0);\n`, "string literal"],
+  ];
+
+  for (const [source, desc] of cases) {
+    const { exitCode, json, stderr } = runLoaderJson(source, ["--print"], { timeout: 10000 });
+    if (exitCode !== 0) {
+      throw new Error(`Large padded ${desc} escape should succeed, but failed: ${stderr.trim()}`);
+    }
+    const result = json.files?.[0]?.result;
+    if (result !== 0x1234) {
+      throw new Error(`Large padded ${desc} escape should produce 0x1234, got ${JSON.stringify(result)}`);
+    }
+  }
+}
+
 // -- Lexer errors surface as SyntaxError (#626) ---------------------------------
 
 console.log("Lexer errors are SyntaxError...");
