@@ -341,8 +341,7 @@ begin
   Getter := nil;
   Setter := nil;
 
-  // ES2026 §6.2.5.5 steps 3-9: extract descriptor fields. The has/get
-  // pairs are observably ordered when Desc is a Proxy.
+  // ES2026 §6.2.5.5 steps 3-9: extract descriptor fields in observable order.
   HasEnumerableField := DescObj.HasProperty(PROP_ENUMERABLE);
   if HasEnumerableField then
     Enumerable := DescObj.GetProperty(PROP_ENUMERABLE).ToBooleanLiteral.Value;

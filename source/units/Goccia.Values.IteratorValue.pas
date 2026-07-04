@@ -19,9 +19,12 @@ type
       const AToStringTag: string): TGocciaObjectValue; static;
   public
     function IteratorNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IteratorHelperNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorSelf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorDispose(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorHelperReturn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IteratorWrapNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IteratorWrapReturn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     function IteratorMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorFilter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -110,9 +113,11 @@ uses
   Goccia.Values.Iterator.Generic,
   Goccia.Values.Iterator.Lazy,
   Goccia.Values.Iterator.Zip,
+  Goccia.Values.IteratorSupport,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToObject;
 
 // Iterator.prototype, its helper prototype, the Iterator constructor, and the
 // method host all live in per-realm slots, so the realm pins them on SetSlot and
@@ -122,6 +127,7 @@ uses
 var
   GIteratorPrototypeSlot: TGocciaRealmSlotId;
   GIteratorHelperPrototypeSlot: TGocciaRealmSlotId;
+  GWrapForValidIteratorPrototypeSlot: TGocciaRealmSlotId;
   GIteratorConstructorSlot: TGocciaRealmSlotId;
   GIteratorMethodHostSlot: TGocciaRealmSlotId;
 
@@ -149,6 +155,15 @@ begin
     Result := nil;
 end;
 
+function GetSharedWrapForValidIteratorPrototype: TGocciaObjectValue; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(
+      GWrapForValidIteratorPrototypeSlot))
+  else
+    Result := nil;
+end;
+
 // The per-realm method host (Self from InitializePrototype) that the helper,
 // constructor, and static methods bind to.  Populated by InitializePrototype,
 // which every entry point calls via EnsurePrototypeInitialized first. #892
@@ -158,6 +173,96 @@ begin
     Result := TGocciaIteratorValue(CurrentRealm.GetSlot(GIteratorMethodHostSlot))
   else
     Result := nil;
+end;
+
+type
+  TGocciaWrapForValidIteratorValue = class(TGocciaGenericIteratorValue)
+  public
+    constructor Create(const AIteratorObject, ANextMethod: TGocciaValue);
+    function RawNext: TGocciaValue;
+    function RawReturn: TGocciaValue;
+  end;
+
+procedure EnsureWrapForValidIteratorPrototypeInitialized;
+var
+  Members: TGocciaMemberCollection;
+  Prototype: TGocciaObjectValue;
+begin
+  if not Assigned(CurrentRealm) then
+    Exit;
+  if Assigned(GetSharedWrapForValidIteratorPrototype) then
+    Exit;
+
+  TGocciaIteratorValue.EnsurePrototypeInitialized;
+  Prototype := TGocciaObjectValue.Create(GetSharedIteratorPrototype);
+  CurrentRealm.SetSlot(GWrapForValidIteratorPrototypeSlot, Prototype);
+
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('next', GetIteratorMethodHost.IteratorWrapNext, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_RETURN, GetIteratorMethodHost.IteratorWrapReturn, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolMethod(
+      TGocciaSymbolValue.WellKnownIterator, '[Symbol.iterator]',
+      GetIteratorMethodHost.IteratorSelf, 0, [pfConfigurable, pfWritable],
+      [gmfNoFunctionPrototype]);
+    RegisterMemberDefinitions(Prototype, Members.ToDefinitions);
+  finally
+    Members.Free;
+  end;
+end;
+
+constructor TGocciaWrapForValidIteratorValue.Create(
+  const AIteratorObject, ANextMethod: TGocciaValue);
+var
+  Prototype: TGocciaObjectValue;
+begin
+  inherited Create(AIteratorObject, ANextMethod);
+  EnsureWrapForValidIteratorPrototypeInitialized;
+  Prototype := GetSharedWrapForValidIteratorPrototype;
+  if Assigned(Prototype) then
+    FPrototype := Prototype;
+end;
+
+function TGocciaWrapForValidIteratorValue.RawNext: TGocciaValue;
+var
+  CallArgs: TGocciaArgumentsCollection;
+begin
+  if not Assigned(FNextMethod) or
+     (FNextMethod is TGocciaUndefinedLiteralValue) or
+     not FNextMethod.IsCallable then
+    ThrowTypeError(SErrorIteratorNextMustBeCallable, SSuggestIteratorProtocol);
+
+  CallArgs := TGocciaArgumentsCollection.Create;
+  try
+    Result := InvokeCallable(FNextMethod, CallArgs, FSource);
+  finally
+    CallArgs.Free;
+  end;
+end;
+
+function TGocciaWrapForValidIteratorValue.RawReturn: TGocciaValue;
+var
+  ReturnMethod: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
+begin
+  ReturnMethod := FSource.GetProperty(PROP_RETURN);
+  if not Assigned(ReturnMethod) or
+     (ReturnMethod is TGocciaUndefinedLiteralValue) or
+     (ReturnMethod is TGocciaNullLiteralValue) then
+    Exit(CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue,
+      True));
+  if not ReturnMethod.IsCallable then
+    ThrowTypeError(SErrorIteratorReturnMustBeCallable,
+      SSuggestIteratorProtocol);
+
+  CallArgs := TGocciaArgumentsCollection.Create;
+  try
+    Result := InvokeCallable(ReturnMethod, CallArgs, FSource);
+  finally
+    CallArgs.Free;
+  end;
 end;
 
 function IteratorThisToDirectIterator(
@@ -311,7 +416,7 @@ begin
 
   Members := TGocciaMemberCollection.Create;
   try
-    Members.AddNamedMethod('next', GetIteratorMethodHost.IteratorNext, 0,
+    Members.AddNamedMethod('next', GetIteratorMethodHost.IteratorHelperNext, 0,
       gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddNamedMethod(PROP_RETURN, GetIteratorMethodHost.IteratorHelperReturn, 0,
       gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -679,7 +784,8 @@ begin
 
   SharedPrototype := GetSharedIteratorPrototype;
   Result := TGocciaObjectValue.Create(
-    GetProtoFromConstructorWithIntrinsic(ANewTarget, SharedPrototype));
+    GetProtoFromConstructorWithIntrinsic(ANewTarget, SharedPrototype,
+      GIteratorPrototypeSlot));
 end;
 
 // ES2026 §27.1.3.3.1.1 get Iterator.prototype.constructor
@@ -744,6 +850,15 @@ begin
   Result := TGocciaIteratorValue(AThisValue).AdvanceNext;
 end;
 
+function TGocciaIteratorValue.IteratorHelperNext(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaIteratorHelperValue) then
+    ThrowTypeError(SErrorIteratorNextNonIterator, SSuggestIteratorThisType);
+  Result := TGocciaIteratorHelperValue(AThisValue).AdvanceNext;
+end;
+
 function TGocciaIteratorValue.IteratorSelf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := AThisValue;
@@ -791,6 +906,26 @@ begin
     ThrowTypeError('Iterator helper return called on non-helper');
   Result := TGocciaIteratorHelperValue(AThisValue).ReturnValue(
     TGocciaUndefinedLiteralValue.UndefinedValue);
+end;
+
+// ES2026 §27.1.5.3.2 %WrapForValidIteratorPrototype%.next()
+function TGocciaIteratorValue.IteratorWrapNext(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaWrapForValidIteratorValue) then
+    ThrowTypeError('WrapForValidIterator next called on non-wrapper');
+  Result := TGocciaWrapForValidIteratorValue(AThisValue).RawNext;
+end;
+
+// ES2026 §27.1.5.3.1 %WrapForValidIteratorPrototype%.return()
+function TGocciaIteratorValue.IteratorWrapReturn(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaWrapForValidIteratorValue) then
+    ThrowTypeError('WrapForValidIterator return called on non-wrapper');
+  Result := TGocciaWrapForValidIteratorValue(AThisValue).RawReturn;
 end;
 
 { Lazy helper methods — return new lazy iterators }
@@ -967,17 +1102,17 @@ begin
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
-    try
-      Value := Iterator.DirectNext(Done);
-      while not Done do
-      begin
+    Value := Iterator.DirectNext(Done);
+    while not Done do
+    begin
+      try
         InvokeIteratorCallback(Callback, Value, Index);
-        Inc(Index);
-        Value := Iterator.DirectNext(Done);
+      except
+        CloseIteratorPreservingError(Iterator);
+        raise;
       end;
-    except
-      CloseIteratorPreservingError(Iterator);
-      raise;
+      Inc(Index);
+      Value := Iterator.DirectNext(Done);
     end;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
@@ -990,8 +1125,8 @@ function TGocciaIteratorValue.IteratorReduce(const AArgs: TGocciaArgumentsCollec
 var
   Iterator: TGocciaIteratorValue;
   Callback: TGocciaValue;
-  Accumulator, NewAccumulator, Value: TGocciaValue;
-  HasInitial, Done: Boolean;
+  Accumulator, NewAccumulator, Value, IndexValue: TGocciaValue;
+  HasInitial, Done, ValueWasRooted, IndexWasRooted: Boolean;
   CallArgs: TGocciaArgumentsCollection;
   Index: Integer;
 begin
@@ -1007,44 +1142,52 @@ begin
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
-    try
-      if HasInitial then
-        Accumulator := AArgs.GetElement(1)
-      else
-      begin
-        Accumulator := Iterator.DirectNext(Done);
-        if Done then
-          ThrowTypeError(SErrorReduceEmptyIterator,
-            SSuggestReduceInitialValue);
-        Index := 1;
-      end;
+    if HasInitial then
+      Accumulator := AArgs.GetElement(1)
+    else
+    begin
+      Accumulator := Iterator.DirectNext(Done);
+      if Done then
+        ThrowTypeError(SErrorReduceEmptyIterator,
+          SSuggestReduceInitialValue);
+      Index := 1;
+    end;
 
-      TGarbageCollector.Instance.AddTempRoot(Accumulator);
-      try
-        Value := Iterator.DirectNext(Done);
-        while not Done do
-        begin
-          CallArgs := TGocciaArgumentsCollection.Create([Accumulator, Value, TGocciaNumberLiteralValue.Create(Index)]);
+    TGarbageCollector.Instance.AddTempRoot(Accumulator);
+    try
+      Value := Iterator.DirectNext(Done);
+      while not Done do
+      begin
+        ValueWasRooted := AddTempRootIfNeeded(Value);
+        IndexValue := TGocciaNumberLiteralValue.Create(Index);
+        IndexWasRooted := AddTempRootIfNeeded(IndexValue);
+        try
+          CallArgs := TGocciaArgumentsCollection.Create([Accumulator, Value, IndexValue]);
           try
-            NewAccumulator := InvokeCallable(Callback, CallArgs,
-              TGocciaUndefinedLiteralValue.UndefinedValue);
+            try
+              NewAccumulator := InvokeCallable(Callback, CallArgs,
+                TGocciaUndefinedLiteralValue.UndefinedValue);
+            except
+              CloseIteratorPreservingError(Iterator);
+              raise;
+            end;
           finally
             CallArgs.Free;
           end;
-          TGarbageCollector.Instance.RemoveTempRoot(Accumulator);
-          Accumulator := NewAccumulator;
-          TGarbageCollector.Instance.AddTempRoot(Accumulator);
-          Value := Iterator.DirectNext(Done);
-          Inc(Index);
+        finally
+          RemoveTempRootIfNeeded(IndexValue, IndexWasRooted);
+          RemoveTempRootIfNeeded(Value, ValueWasRooted);
         end;
-
-        Result := Accumulator;
-      finally
         TGarbageCollector.Instance.RemoveTempRoot(Accumulator);
+        Accumulator := NewAccumulator;
+        TGarbageCollector.Instance.AddTempRoot(Accumulator);
+        Value := Iterator.DirectNext(Done);
+        Inc(Index);
       end;
-    except
-      CloseIteratorPreservingError(Iterator);
-      raise;
+
+      Result := Accumulator;
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(Accumulator);
     end;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
@@ -1116,11 +1259,11 @@ begin
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
-    try
-      Value := Iterator.DirectNext(Done);
-      while not Done do
-      begin
-        ValueWasRooted := AddTempRootIfNeeded(Value);
+    Value := Iterator.DirectNext(Done);
+    while not Done do
+    begin
+      ValueWasRooted := AddTempRootIfNeeded(Value);
+      try
         try
           PredicateValue := InvokeIteratorCallback(Callback, Value, Index);
           PredicateWasRooted := AddTempRootIfNeeded(PredicateValue);
@@ -1134,18 +1277,18 @@ begin
           finally
             RemoveTempRootIfNeeded(PredicateValue, PredicateWasRooted);
           end;
-        finally
-          RemoveTempRootIfNeeded(Value, ValueWasRooted);
+        except
+          CloseIteratorPreservingError(Iterator);
+          raise;
         end;
-        Inc(Index);
-        Value := Iterator.DirectNext(Done);
+      finally
+        RemoveTempRootIfNeeded(Value, ValueWasRooted);
       end;
-
-      Result := TGocciaBooleanLiteralValue.FalseValue;
-    except
-      CloseIteratorPreservingError(Iterator);
-      raise;
+      Inc(Index);
+      Value := Iterator.DirectNext(Done);
     end;
+
+    Result := TGocciaBooleanLiteralValue.FalseValue;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
@@ -1169,11 +1312,11 @@ begin
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
-    try
-      Value := Iterator.DirectNext(Done);
-      while not Done do
-      begin
-        ValueWasRooted := AddTempRootIfNeeded(Value);
+    Value := Iterator.DirectNext(Done);
+    while not Done do
+    begin
+      ValueWasRooted := AddTempRootIfNeeded(Value);
+      try
         try
           PredicateValue := InvokeIteratorCallback(Callback, Value, Index);
           PredicateWasRooted := AddTempRootIfNeeded(PredicateValue);
@@ -1187,18 +1330,18 @@ begin
           finally
             RemoveTempRootIfNeeded(PredicateValue, PredicateWasRooted);
           end;
-        finally
-          RemoveTempRootIfNeeded(Value, ValueWasRooted);
+        except
+          CloseIteratorPreservingError(Iterator);
+          raise;
         end;
-        Inc(Index);
-        Value := Iterator.DirectNext(Done);
+      finally
+        RemoveTempRootIfNeeded(Value, ValueWasRooted);
       end;
-
-      Result := TGocciaBooleanLiteralValue.TrueValue;
-    except
-      CloseIteratorPreservingError(Iterator);
-      raise;
+      Inc(Index);
+      Value := Iterator.DirectNext(Done);
     end;
+
+    Result := TGocciaBooleanLiteralValue.TrueValue;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
@@ -1222,11 +1365,11 @@ begin
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
-    try
-      Value := Iterator.DirectNext(Done);
-      while not Done do
-      begin
-        ValueWasRooted := AddTempRootIfNeeded(Value);
+    Value := Iterator.DirectNext(Done);
+    while not Done do
+    begin
+      ValueWasRooted := AddTempRootIfNeeded(Value);
+      try
         try
           PredicateValue := InvokeIteratorCallback(Callback, Value, Index);
           PredicateWasRooted := AddTempRootIfNeeded(PredicateValue);
@@ -1240,18 +1383,18 @@ begin
           finally
             RemoveTempRootIfNeeded(PredicateValue, PredicateWasRooted);
           end;
-        finally
-          RemoveTempRootIfNeeded(Value, ValueWasRooted);
+        except
+          CloseIteratorPreservingError(Iterator);
+          raise;
         end;
-        Inc(Index);
-        Value := Iterator.DirectNext(Done);
+      finally
+        RemoveTempRootIfNeeded(Value, ValueWasRooted);
       end;
-
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    except
-      CloseIteratorPreservingError(Iterator);
-      raise;
+      Inc(Index);
+      Value := Iterator.DirectNext(Done);
     end;
+
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
@@ -1261,10 +1404,12 @@ end;
 
 function TGocciaIteratorValue.IteratorFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Value, IteratorMethod, IteratorObj, NextMethod: TGocciaValue;
+  Value, IteratorConstructor, IteratorMethod, IteratorObj, NextMethod: TGocciaValue;
+  IteratorHost: TGocciaObjectValue;
+  IteratorReceiver: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   GC: TGarbageCollector;
-  ValueWasRooted, MethodWasRooted, IteratorWasRooted: Boolean;
+  HostWasRooted, MethodWasRooted, IteratorWasRooted: Boolean;
 
   function AddRootIfNeeded(const ARootValue: TGocciaValue): Boolean;
   begin
@@ -1288,94 +1433,70 @@ begin
   GC := TGarbageCollector.Instance;
   Value := AArgs.GetElement(0);
 
-  if Value is TGocciaIteratorValue then
-  begin
-    Result := Value;
-    Exit;
-  end;
-
   if Value is TGocciaObjectValue then
   begin
-    ValueWasRooted := AddRootIfNeeded(Value);
-    try
-      IteratorMethod := TGocciaObjectValue(Value).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
-      // Per ES2024 GetMethod: a present-but-non-callable @@iterator is
-      // a TypeError.  Falling through to the iterator-like (`next` on
-      // Value) branch when @@iterator was malformed would mask the
-      // protocol violation.
-      if Assigned(IteratorMethod) and
-         not (IteratorMethod is TGocciaUndefinedLiteralValue) and
-         not (IteratorMethod is TGocciaNullLiteralValue) and
-         not IteratorMethod.IsCallable then
-        ThrowTypeError(Format(SErrorValueNotFunction, ['[Symbol.iterator]']),
-          SSuggestIteratorProtocol);
-      if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
-      begin
-        MethodWasRooted := AddRootIfNeeded(IteratorMethod);
-        try
-          CallArgs := TGocciaArgumentsCollection.Create;
-          try
-            IteratorObj := InvokeCallable(IteratorMethod, CallArgs, Value);
-          finally
-            CallArgs.Free;
-          end;
-        finally
-          RemoveRootIfNeeded(IteratorMethod, MethodWasRooted);
-        end;
-
-        if IteratorObj is TGocciaIteratorValue then
-        begin
-          Result := IteratorObj;
-          Exit;
-        end;
-        // §7.4.3 GetIterator step 4 / TC39 Iterator Helpers
-        // GetIteratorFlattenable step 5: the value returned from
-        // [@@iterator]() must be an Object — anything else is a
-        // protocol violation, NOT a cue to fall back to iterator-like
-        // handling on the outer Value.
-        if not (IteratorObj is TGocciaObjectValue) then
-          ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
-        IteratorWasRooted := AddRootIfNeeded(IteratorObj);
-        try
-          NextMethod := IteratorObj.GetProperty(PROP_NEXT);
-          if not Assigned(NextMethod) or
-             (NextMethod is TGocciaUndefinedLiteralValue) or
-             not NextMethod.IsCallable then
-            // §7.4.2 GetIteratorDirect step 2: missing/non-callable next.
-            ThrowTypeError(SErrorIteratorNextMustBeCallable,
-              SSuggestIteratorProtocol);
-          // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
-          Result := CreateRootedGenericIterator(IteratorObj, NextMethod);
-        finally
-          RemoveRootIfNeeded(IteratorObj, IteratorWasRooted);
-        end;
-        Exit;
-      end;
-
-      // No @@iterator (undefined/null): TC39 Iterator Helpers
-      // GetIteratorFlattenable iterator-like fallback — try the value
-      // itself as a duck-typed iterator (must have a callable next).
-      NextMethod := Value.GetProperty(PROP_NEXT);
-      if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
-      begin
-        // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
-        Result := CreateRootedGenericIterator(Value, NextMethod);
-        Exit;
-      end;
-    finally
-      RemoveRootIfNeeded(Value, ValueWasRooted);
-    end;
+    IteratorHost := TGocciaObjectValue(Value);
+    IteratorReceiver := Value;
   end;
 
   if Value is TGocciaStringLiteralValue then
   begin
-    Result := TGocciaStringIteratorValue.Create(Value);
-    Exit;
-  end;
+    IteratorHost := ToObject(Value);
+    IteratorReceiver := Value;
+  end
+  else if not (Value is TGocciaObjectValue) then
+    ThrowTypeError(SErrorIteratorFromRequiresIterable,
+      SSuggestIteratorFromArg);
 
-  ThrowTypeError(SErrorIteratorFromRequiresIterable,
-    SSuggestIteratorFromArg);
-  Result := nil;
+  HostWasRooted := AddRootIfNeeded(IteratorHost);
+  try
+    IteratorMethod := IteratorHost.GetSymbolPropertyWithReceiver(
+      TGocciaSymbolValue.WellKnownIterator, IteratorReceiver);
+    if Assigned(IteratorMethod) and
+       not (IteratorMethod is TGocciaUndefinedLiteralValue) and
+       not (IteratorMethod is TGocciaNullLiteralValue) then
+    begin
+      if not IteratorMethod.IsCallable then
+        ThrowTypeError(Format(SErrorValueNotFunction, ['[Symbol.iterator]']),
+          SSuggestIteratorProtocol);
+      MethodWasRooted := AddRootIfNeeded(IteratorMethod);
+      try
+        CallArgs := TGocciaArgumentsCollection.Create;
+        try
+          IteratorObj := InvokeCallable(IteratorMethod, CallArgs,
+            IteratorReceiver);
+        finally
+          CallArgs.Free;
+        end;
+      finally
+        RemoveRootIfNeeded(IteratorMethod, MethodWasRooted);
+      end;
+    end
+    else
+      IteratorObj := IteratorHost;
+
+    if not (IteratorObj is TGocciaObjectValue) then
+      ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
+
+    IteratorWasRooted := AddRootIfNeeded(IteratorObj);
+    try
+      NextMethod := TGocciaObjectValue(IteratorObj).GetProperty(PROP_NEXT);
+      IteratorConstructor := GetSharedIteratorConstructor;
+      if not Assigned(IteratorConstructor) then
+        IteratorConstructor := TGocciaIteratorValue.CreateGlobalObject;
+      if OrdinaryHasInstance(IteratorConstructor, IteratorObj) then
+      begin
+        Result := IteratorObj;
+        Exit;
+      end;
+      Result := TGocciaWrapForValidIteratorValue.Create(IteratorObj,
+        NextMethod);
+    finally
+      RemoveRootIfNeeded(IteratorObj, IteratorWasRooted);
+    end;
+  finally
+    RemoveRootIfNeeded(IteratorHost, HostWasRooted);
+  end;
 end;
 
 { Iterator.concat() }
@@ -1395,13 +1516,7 @@ begin
   begin
     Item := AArgs.GetElement(I);
 
-    if Item is TGocciaStringLiteralValue then
-    begin
-      // Strings are iterable primitives — handle specially
-      Iterables[I].Iterable := Item;
-      Iterables[I].IteratorMethod := nil;
-    end
-    else if Item is TGocciaObjectValue then
+    if Item is TGocciaObjectValue then
     begin
       // TC39 Iterator Sequencing §1 step 2b: Let method be GetMethod(item, @@iterator)
       IteratorMethod := TGocciaObjectValue(Item).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
@@ -1429,14 +1544,13 @@ const
   ZIP_MODE_LONGEST = 'longest';
   ZIP_MODE_STRICT = 'strict';
 var
-  IterablesArg, OptionsArg, Item, ModeVal, PaddingVal, PaddingItem: TGocciaValue;
+  IterablesArg, OptionsArg, Item, ModeVal, PaddingOption, PaddingItem: TGocciaValue;
   OuterIterator, InnerIterator, PaddingIterator: TGocciaIteratorValue;
   OuterDone, PaddingDone: Boolean;
   Iterators: array of TGocciaIteratorValue;
   Padding: array of TGocciaValue;
+  PaddingRoots: array of Boolean;
   Mode: TGocciaZipMode;
-  Items: TGocciaValueList;
-  PaddingItems: TGocciaValueList;
   I, J, Count, Acquired: Integer;
   ModeStr: string;
   GC: TGarbageCollector;
@@ -1447,119 +1561,129 @@ begin
     ThrowTypeError(SErrorIteratorZipRequiresArg, SSuggestNotIterable);
 
   IterablesArg := AArgs.GetElement(0);
+  if not (IterablesArg is TGocciaObjectValue) then
+    ThrowTypeError(SErrorIteratorZipFirstIterable, SSuggestNotIterable);
   GC := TGarbageCollector.Instance;
 
-  // TC39 Joint Iteration §1.1 step 2: Get iterator from iterables
+  // TC39 Joint Iteration §1.1: options are read before iterables are touched.
+  Mode := zmShortest;
+  PaddingOption := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if AArgs.Length >= 2 then
+  begin
+    OptionsArg := AArgs.GetElement(1);
+    if Assigned(OptionsArg) and not (OptionsArg is TGocciaUndefinedLiteralValue) then
+    begin
+      if not (OptionsArg is TGocciaObjectValue) then
+        ThrowTypeError(SErrorIteratorZipOptionsObject, SSuggestIteratorZipOptions);
+
+      ModeVal := OptionsArg.GetProperty(PROP_MODE);
+      if Assigned(ModeVal) and not (ModeVal is TGocciaUndefinedLiteralValue) then
+      begin
+        if not (ModeVal is TGocciaStringLiteralValue) then
+          ThrowTypeError(SErrorIteratorZipModeString, SSuggestIteratorZipMode);
+        ModeStr := TGocciaStringLiteralValue(ModeVal).Value;
+        if ModeStr = ZIP_MODE_SHORTEST then
+          Mode := zmShortest
+        else if ModeStr = ZIP_MODE_LONGEST then
+          Mode := zmLongest
+        else if ModeStr = ZIP_MODE_STRICT then
+          Mode := zmStrict
+        else
+          ThrowTypeError(Format(SErrorIteratorZipInvalidMode, [ModeStr]),
+            SSuggestIteratorZipMode);
+      end;
+
+      if Mode = zmLongest then
+      begin
+        PaddingOption := OptionsArg.GetProperty(PROP_PADDING);
+        if Assigned(PaddingOption) and
+           not (PaddingOption is TGocciaUndefinedLiteralValue) and
+           not (PaddingOption is TGocciaObjectValue) then
+          ThrowTypeError(SErrorIteratorZipPaddingIterable, SSuggestNotIterable);
+      end;
+    end;
+  end;
+
   OuterIterator := GetIteratorFromIterable(IterablesArg);
   if OuterIterator = nil then
     ThrowTypeError(SErrorIteratorZipFirstIterable, SSuggestNotIterable);
 
   GC.AddTempRoot(OuterIterator);
   try
-    // TC39 Joint Iteration §1.1 step 3: Collect all inner iterables
-    Items := TGocciaValueList.Create(False);
-    try
-      Item := OuterIterator.DirectNext(OuterDone);
-      while not OuterDone do
-      begin
-        Items.Add(Item);
-        Item := OuterIterator.DirectNext(OuterDone);
-      end;
-
-      Count := Items.Count;
-      SetLength(Iterators, Count);
-      Acquired := 0;
-
-      // TC39 Joint Iteration §1.1 step 4: Get iterators from each iterable
+    Count := 0;
+    Acquired := 0;
+    SetLength(Iterators, 0);
+    while True do
+    begin
       try
-        for I := 0 to Count - 1 do
-        begin
-          InnerIterator := GetIteratorFromIterable(Items[I]);
-          if InnerIterator = nil then
-            ThrowTypeError(SErrorIteratorZipItemIterable, SSuggestNotIterable);
-          Iterators[I] := InnerIterator;
-          GC.AddTempRoot(InnerIterator);
-          Acquired := I + 1;
-        end;
+        Item := OuterIterator.DirectNext(OuterDone);
       except
-        // Close and unroot already-acquired iterators before re-raising
         AcquireExceptionObject;
-        for J := 0 to Acquired - 1 do
+        for J := Acquired - 1 downto 0 do
         begin
           CloseIteratorPreservingError(Iterators[J]);
           GC.RemoveTempRoot(Iterators[J]);
         end;
         raise;
       end;
-    finally
-      Items.Free;
+      if OuterDone then
+        Break;
+
+      try
+        InnerIterator := GetIteratorFlattenable(Item, iphRejectPrimitives);
+      except
+        AcquireExceptionObject;
+        for J := Acquired - 1 downto 0 do
+        begin
+          CloseIteratorPreservingError(Iterators[J]);
+          GC.RemoveTempRoot(Iterators[J]);
+        end;
+        CloseIteratorPreservingError(OuterIterator);
+        raise;
+      end;
+      if InnerIterator = nil then
+        ThrowTypeError(SErrorIteratorZipItemIterable, SSuggestNotIterable);
+      SetLength(Iterators, Count + 1);
+      Iterators[Count] := InnerIterator;
+      GC.AddTempRoot(InnerIterator);
+      Inc(Count);
+      Acquired := Count;
     end;
   finally
     GC.RemoveTempRoot(OuterIterator);
   end;
 
-  // TC39 Joint Iteration §1.1 step 5: Parse options
-  Mode := zmShortest;
   SetLength(Padding, Count);
+  SetLength(PaddingRoots, Count);
   for I := 0 to Count - 1 do
     Padding[I] := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   Success := False;
   try
-    if AArgs.Length >= 2 then
+    if (Mode = zmLongest) and Assigned(PaddingOption) and
+       not (PaddingOption is TGocciaUndefinedLiteralValue) then
     begin
-      OptionsArg := AArgs.GetElement(1);
-      if Assigned(OptionsArg) and not (OptionsArg is TGocciaUndefinedLiteralValue) then
-      begin
-        if not (OptionsArg is TGocciaObjectValue) then
-          ThrowTypeError(SErrorIteratorZipOptionsObject, SSuggestIteratorZipOptions);
-
-        // TC39 Joint Iteration §1.1 step 5a: Get mode
-        ModeVal := OptionsArg.GetProperty(PROP_MODE);
-        if Assigned(ModeVal) and not (ModeVal is TGocciaUndefinedLiteralValue) then
+      PaddingIterator := GetIteratorFromIterable(PaddingOption);
+      if PaddingIterator = nil then
+        ThrowTypeError(SErrorIteratorZipPaddingIterable, SSuggestNotIterable);
+      GC.AddTempRoot(PaddingIterator);
+      try
+        PaddingDone := False;
+        for I := 0 to Count - 1 do
         begin
-          if not (ModeVal is TGocciaStringLiteralValue) then
-            ThrowTypeError(SErrorIteratorZipModeString, SSuggestIteratorZipMode);
-          ModeStr := TGocciaStringLiteralValue(ModeVal).Value;
-          if ModeStr = ZIP_MODE_SHORTEST then
-            Mode := zmShortest
-          else if ModeStr = ZIP_MODE_LONGEST then
-            Mode := zmLongest
-          else if ModeStr = ZIP_MODE_STRICT then
-            Mode := zmStrict
-          else
-            ThrowRangeError(Format(SErrorIteratorZipInvalidMode, [ModeStr]), SSuggestIteratorZipMode);
-        end;
-
-        // TC39 Joint Iteration §1.1 step 5b: Get padding (only for longest mode)
-        if Mode = zmLongest then
-        begin
-          PaddingVal := OptionsArg.GetProperty(PROP_PADDING);
-          if Assigned(PaddingVal) and not (PaddingVal is TGocciaUndefinedLiteralValue) then
+          if PaddingDone then
+            Break;
+          PaddingItem := PaddingIterator.DirectNext(PaddingDone);
+          if not PaddingDone then
           begin
-            PaddingIterator := GetIteratorFromIterable(PaddingVal);
-            if PaddingIterator = nil then
-              ThrowTypeError(SErrorIteratorZipPaddingIterable, SSuggestNotIterable);
-            GC.AddTempRoot(PaddingIterator);
-            PaddingItems := TGocciaValueList.Create(False);
-            try
-              PaddingItem := PaddingIterator.DirectNext(PaddingDone);
-              while not PaddingDone do
-              begin
-                PaddingItems.Add(PaddingItem);
-                PaddingItem := PaddingIterator.DirectNext(PaddingDone);
-              end;
-              for I := 0 to Count - 1 do
-              begin
-                if I < PaddingItems.Count then
-                  Padding[I] := PaddingItems[I];
-              end;
-            finally
-              PaddingItems.Free;
-              GC.RemoveTempRoot(PaddingIterator);
-            end;
+            PaddingRoots[I] := AddTempRootIfNeeded(PaddingItem);
+            Padding[I] := PaddingItem;
           end;
         end;
+        if not PaddingDone then
+          CloseIterator(PaddingIterator);
+      finally
+        GC.RemoveTempRoot(PaddingIterator);
       end;
     end;
 
@@ -1569,12 +1693,14 @@ begin
     // On error, close all iterators so generator finally blocks run
     if not Success then
     begin
-      for I := 0 to Count - 1 do
+      for I := Count - 1 downto 0 do
         CloseIteratorPreservingError(Iterators[I]);
     end;
     // Unroot iterators — the zip iterator now owns them via MarkReferences
     for I := 0 to Count - 1 do
       GC.RemoveTempRoot(Iterators[I]);
+    for I := 0 to Count - 1 do
+      RemoveTempRootIfNeeded(Padding[I], PaddingRoots[I]);
   end;
 end;
 
@@ -1587,16 +1713,28 @@ const
   ZIP_MODE_LONGEST = 'longest';
   ZIP_MODE_STRICT = 'strict';
 var
-  IterablesArg, OptionsArg, ModeVal, PaddingVal, PropValue: TGocciaValue;
+  IterablesArg, OptionsArg, ModeVal, PaddingOption, PropValue: TGocciaValue;
+  Descriptor: TGocciaPropertyDescriptor;
   InnerIterator: TGocciaIteratorValue;
-  Keys: TArray<string>;
+  AllKeys, Keys: TArray<TGocciaValue>;
+  KeyRoots: array of Boolean;
   Iterators: array of TGocciaIteratorValue;
   Padding: array of TGocciaValue;
+  PaddingRoots: array of Boolean;
   Mode: TGocciaZipMode;
   I, J, Count, Acquired: Integer;
   ModeStr: string;
   GC: TGarbageCollector;
   Success: Boolean;
+
+  function GetPropertyByKey(const AObject: TGocciaObjectValue;
+    const AKey: TGocciaValue): TGocciaValue;
+  begin
+    if AKey is TGocciaSymbolValue then
+      Result := AObject.GetSymbolProperty(TGocciaSymbolValue(AKey))
+    else
+      Result := AObject.GetProperty(AKey.ToStringLiteral.Value);
+  end;
 begin
   // TC39 Joint Iteration §1.2 step 1: If iterables is not an Object, throw TypeError
   if AArgs.Length < 1 then
@@ -1608,83 +1746,108 @@ begin
 
   GC := TGarbageCollector.Instance;
 
-  // TC39 Joint Iteration §1.2 step 2: Get own enumerable property keys
-  Keys := TGocciaObjectValue(IterablesArg).GetEnumerablePropertyNames;
-  Count := Length(Keys);
+  Mode := zmShortest;
+  PaddingOption := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if AArgs.Length >= 2 then
+  begin
+    OptionsArg := AArgs.GetElement(1);
+    if Assigned(OptionsArg) and not (OptionsArg is TGocciaUndefinedLiteralValue) then
+    begin
+      if not (OptionsArg is TGocciaObjectValue) then
+        ThrowTypeError(SErrorIteratorZipKeyedOptionsObject, SSuggestIteratorZipOptions);
 
-  // TC39 Joint Iteration §1.2 step 3: Get iterators from each property value
-  SetLength(Iterators, Count);
+      ModeVal := OptionsArg.GetProperty(PROP_MODE);
+      if Assigned(ModeVal) and not (ModeVal is TGocciaUndefinedLiteralValue) then
+      begin
+        if not (ModeVal is TGocciaStringLiteralValue) then
+          ThrowTypeError(SErrorIteratorZipKeyedModeString,
+            SSuggestIteratorZipMode);
+        ModeStr := TGocciaStringLiteralValue(ModeVal).Value;
+        if ModeStr = ZIP_MODE_SHORTEST then
+          Mode := zmShortest
+        else if ModeStr = ZIP_MODE_LONGEST then
+          Mode := zmLongest
+        else if ModeStr = ZIP_MODE_STRICT then
+          Mode := zmStrict
+        else
+          ThrowTypeError(Format(SErrorIteratorZipKeyedInvalidMode, [ModeStr]),
+            SSuggestIteratorZipMode);
+      end;
+
+      if Mode = zmLongest then
+      begin
+        PaddingOption := OptionsArg.GetProperty(PROP_PADDING);
+        if Assigned(PaddingOption) and
+           not (PaddingOption is TGocciaUndefinedLiteralValue) and
+           not (PaddingOption is TGocciaObjectValue) then
+          ThrowTypeError(SErrorIteratorZipKeyedPaddingObject,
+            SSuggestIteratorZipKeyedPadding);
+      end;
+    end;
+  end;
+
+  AllKeys := TGocciaObjectValue(IterablesArg).OwnPropertyKeyValues;
+  SetLength(Keys, Length(AllKeys));
+  SetLength(KeyRoots, Length(AllKeys));
+  SetLength(Iterators, Length(AllKeys));
+  Count := 0;
+
   Acquired := 0;
   try
-    for I := 0 to Count - 1 do
+    for I := 0 to High(AllKeys) do
     begin
-      PropValue := IterablesArg.GetProperty(Keys[I]);
-      InnerIterator := GetIteratorFromIterable(PropValue);
+      Descriptor := TGocciaObjectValue(IterablesArg).OwnPropertyDescriptorForKey(
+        AllKeys[I]);
+      if not Assigned(Descriptor) or not Descriptor.Enumerable then
+        Continue;
+      PropValue := GetPropertyByKey(TGocciaObjectValue(IterablesArg),
+        AllKeys[I]);
+      if not Assigned(PropValue) then
+        PropValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      InnerIterator := GetIteratorFlattenable(PropValue, iphRejectPrimitives);
       if InnerIterator = nil then
-        ThrowTypeError(Format(SErrorIteratorZipKeyedPropertyNotIterable, [Keys[I]]), SSuggestNotIterable);
-      Iterators[I] := InnerIterator;
+        ThrowTypeError(Format(SErrorIteratorZipKeyedPropertyNotIterable,
+          [AllKeys[I].ToStringLiteral.Value]), SSuggestNotIterable);
+      Keys[Count] := AllKeys[I];
+      KeyRoots[Count] := AddTempRootIfNeeded(Keys[Count]);
+      Iterators[Count] := InnerIterator;
       GC.AddTempRoot(InnerIterator);
-      Acquired := I + 1;
+      Inc(Count);
+      Acquired := Count;
     end;
+    SetLength(Keys, Count);
+    SetLength(Iterators, Count);
   except
     // Close and unroot already-acquired iterators before re-raising
     AcquireExceptionObject;
-    for J := 0 to Acquired - 1 do
+    for J := Acquired - 1 downto 0 do
     begin
       CloseIteratorPreservingError(Iterators[J]);
       GC.RemoveTempRoot(Iterators[J]);
+      RemoveTempRootIfNeeded(Keys[J], KeyRoots[J]);
     end;
     raise;
   end;
 
-  // TC39 Joint Iteration §1.2 step 4: Parse options
-  Mode := zmShortest;
   SetLength(Padding, Count);
+  SetLength(PaddingRoots, Count);
   for I := 0 to Count - 1 do
     Padding[I] := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   Success := False;
   try
-    if AArgs.Length >= 2 then
+    if (Mode = zmLongest) and Assigned(PaddingOption) and
+       not (PaddingOption is TGocciaUndefinedLiteralValue) then
     begin
-      OptionsArg := AArgs.GetElement(1);
-      if Assigned(OptionsArg) and not (OptionsArg is TGocciaUndefinedLiteralValue) then
+      for I := 0 to Count - 1 do
       begin
-        if not (OptionsArg is TGocciaObjectValue) then
-          ThrowTypeError(SErrorIteratorZipKeyedOptionsObject, SSuggestIteratorZipOptions);
-
-        // TC39 Joint Iteration §1.2 step 4a: Get mode
-        ModeVal := OptionsArg.GetProperty(PROP_MODE);
-        if Assigned(ModeVal) and not (ModeVal is TGocciaUndefinedLiteralValue) then
+        PropValue := GetPropertyByKey(TGocciaObjectValue(PaddingOption),
+          Keys[I]);
+        if Assigned(PropValue) and
+           not (PropValue is TGocciaUndefinedLiteralValue) then
         begin
-          if not (ModeVal is TGocciaStringLiteralValue) then
-            ThrowTypeError(SErrorIteratorZipKeyedModeString, SSuggestIteratorZipMode);
-          ModeStr := TGocciaStringLiteralValue(ModeVal).Value;
-          if ModeStr = ZIP_MODE_SHORTEST then
-            Mode := zmShortest
-          else if ModeStr = ZIP_MODE_LONGEST then
-            Mode := zmLongest
-          else if ModeStr = ZIP_MODE_STRICT then
-            Mode := zmStrict
-          else
-            ThrowRangeError(Format(SErrorIteratorZipKeyedInvalidMode, [ModeStr]), SSuggestIteratorZipMode);
-        end;
-
-        // TC39 Joint Iteration §1.2 step 4b: Get padding (only for longest mode)
-        if Mode = zmLongest then
-        begin
-          PaddingVal := OptionsArg.GetProperty(PROP_PADDING);
-          if Assigned(PaddingVal) and not (PaddingVal is TGocciaUndefinedLiteralValue) then
-          begin
-            if not (PaddingVal is TGocciaObjectValue) then
-              ThrowTypeError(SErrorIteratorZipKeyedPaddingObject, SSuggestIteratorZipKeyedPadding);
-            for I := 0 to Count - 1 do
-            begin
-              PropValue := PaddingVal.GetProperty(Keys[I]);
-              if Assigned(PropValue) and not (PropValue is TGocciaUndefinedLiteralValue) then
-                Padding[I] := PropValue;
-            end;
-          end;
+          PaddingRoots[I] := AddTempRootIfNeeded(PropValue);
+          Padding[I] := PropValue;
         end;
       end;
     end;
@@ -1695,12 +1858,16 @@ begin
     // On error, close all iterators so generator finally blocks run
     if not Success then
     begin
-      for I := 0 to Count - 1 do
+      for I := Count - 1 downto 0 do
         CloseIteratorPreservingError(Iterators[I]);
     end;
     // Unroot iterators — the zipKeyed iterator now owns them via MarkReferences
     for I := 0 to Count - 1 do
       GC.RemoveTempRoot(Iterators[I]);
+    for I := 0 to Count - 1 do
+      RemoveTempRootIfNeeded(Keys[I], KeyRoots[I]);
+    for I := 0 to Count - 1 do
+      RemoveTempRootIfNeeded(Padding[I], PaddingRoots[I]);
   end;
 end;
 
@@ -1810,10 +1977,10 @@ end;
 function TGocciaIteratorHelperValue.ReturnValue(
   const AValue: TGocciaValue): TGocciaObjectValue;
 begin
-  if FExecuting then
-    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
   if FDone then
     Exit(CreateIteratorResult(AValue, True));
+  if FExecuting then
+    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
   FExecuting := True;
   try
     Close;
@@ -1837,6 +2004,8 @@ end;
 initialization
   GIteratorPrototypeSlot := RegisterRealmSlot('Iterator.prototype');
   GIteratorHelperPrototypeSlot := RegisterRealmSlot('IteratorHelper.prototype');
+  GWrapForValidIteratorPrototypeSlot := RegisterRealmSlot(
+    'WrapForValidIterator.prototype');
   GIteratorConstructorSlot := RegisterRealmSlot('Iterator');
   GIteratorMethodHostSlot := RegisterRealmSlot('Iterator.prototype.methodHost');
 

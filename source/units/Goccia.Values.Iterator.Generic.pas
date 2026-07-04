@@ -11,7 +11,7 @@ uses
 
 type
   TGocciaGenericIteratorValue = class(TGocciaIteratorValue)
-  private
+  protected
     FSource: TGocciaValue;
     // Captured at construction per ES2024 §7.4.2 GetIteratorDirect:
     // the iterator record's [[NextMethod]] is the result of `GetV(obj,
@@ -367,6 +367,12 @@ begin
         ThrowTypeError(SErrorIteratorReturnObject, SSuggestIteratorResultObject);
       ReturnResultWasRooted := AddTempRootIfNeeded(ReturnResult);
       try
+        if not AHasValue then
+        begin
+          FDone := True;
+          Result := TGocciaObjectValue(ReturnResult);
+          Exit;
+        end;
         // ES2026 §15.5.5 YieldExpression : yield * AssignmentExpression:
         // return() results with done:false are yielded and may resume delegation.
         DoneValue := TGocciaObjectValue(ReturnResult).GetProperty(PROP_DONE);

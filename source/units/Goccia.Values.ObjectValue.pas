@@ -95,6 +95,13 @@ type
     function GetOwnPropertyNames: TArray<string>; virtual;
     function GetOwnPropertyKeys: TArray<string>; virtual;
 
+    function OwnPropertyKeyValues: TArray<TGocciaValue>;
+    function OwnPropertyDescriptorForKey(
+      const AKey: TGocciaValue): TGocciaPropertyDescriptor;
+    procedure DefineOwnPropertyOrThrowForKey(
+      const AKey: TGocciaValue;
+      const ADescriptor: TGocciaPropertyDescriptor);
+
     procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor); virtual;
     function TryDefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor): Boolean; virtual;
     procedure AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
@@ -366,6 +373,25 @@ begin
     ADescriptor.Free;
     raise;
   end;
+end;
+
+function TGocciaObjectValue.OwnPropertyKeyValues: TArray<TGocciaValue>;
+begin
+  Result := Goccia.Values.ObjectValue.OwnPropertyKeyValues(Self);
+end;
+
+function TGocciaObjectValue.OwnPropertyDescriptorForKey(
+  const AKey: TGocciaValue): TGocciaPropertyDescriptor;
+begin
+  Result := Goccia.Values.ObjectValue.OwnPropertyDescriptorForKey(Self, AKey);
+end;
+
+procedure TGocciaObjectValue.DefineOwnPropertyOrThrowForKey(
+  const AKey: TGocciaValue;
+  const ADescriptor: TGocciaPropertyDescriptor);
+begin
+  Goccia.Values.ObjectValue.DefineOwnPropertyOrThrowForKey(Self, AKey,
+    ADescriptor);
 end;
 
 procedure MarkPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor);
@@ -1939,10 +1965,10 @@ var
   Keys: TArray<TGocciaValue>;
 begin
   PreventExtensions;
-  Keys := OwnPropertyKeyValues(Self);
+  Keys := Self.OwnPropertyKeyValues;
   for I := 0 to High(Keys) do
   begin
-    Descriptor := OwnPropertyDescriptorForKey(Self, Keys[I]);
+    Descriptor := Self.OwnPropertyDescriptorForKey(Keys[I]);
     if not Assigned(Descriptor) then
       Continue;
     if IsAccessorDescriptor(Descriptor) then
@@ -1955,7 +1981,7 @@ begin
     else
       NewDescriptor := TGocciaPropertyDescriptor.Create([],
         [pdfConfigurable]);
-    DefineOwnPropertyOrThrowForKey(Self, Keys[I], NewDescriptor);
+    Self.DefineOwnPropertyOrThrowForKey(Keys[I], NewDescriptor);
   end;
   FFrozen := True;
   FSealed := True;
@@ -1968,9 +1994,9 @@ var
   Keys: TArray<TGocciaValue>;
 begin
   PreventExtensions;
-  Keys := OwnPropertyKeyValues(Self);
+  Keys := Self.OwnPropertyKeyValues;
   for I := 0 to High(Keys) do
-    DefineOwnPropertyOrThrowForKey(Self, Keys[I],
+    Self.DefineOwnPropertyOrThrowForKey(Keys[I],
       TGocciaPropertyDescriptor.Create([], [pdfConfigurable]));
   FSealed := True;
   FExtensible := False;
@@ -2006,10 +2032,10 @@ begin
     Exit(False);
 
   // Step 5: For each element key of keys
-  Keys := OwnPropertyKeyValues(Self);
+  Keys := Self.OwnPropertyKeyValues;
   for I := 0 to High(Keys) do
   begin
-    Descriptor := OwnPropertyDescriptorForKey(Self, Keys[I]);
+    Descriptor := Self.OwnPropertyDescriptorForKey(Keys[I]);
     if not Assigned(Descriptor) then
       Continue;
     if Descriptor.Configurable then
@@ -2040,10 +2066,10 @@ begin
     Exit(False);
 
   // Step 5: For each element key of keys
-  Keys := OwnPropertyKeyValues(Self);
+  Keys := Self.OwnPropertyKeyValues;
   for I := 0 to High(Keys) do
   begin
-    Descriptor := OwnPropertyDescriptorForKey(Self, Keys[I]);
+    Descriptor := Self.OwnPropertyDescriptorForKey(Keys[I]);
     if Assigned(Descriptor) and Descriptor.Configurable then
       Exit(False);
   end;

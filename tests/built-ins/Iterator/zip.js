@@ -3,6 +3,8 @@ description: Iterator.zip() combines multiple iterables into an iterator of arra
 features: [Iterator, Iterator.zip]
 ---*/
 
+const hasGoccia = typeof Goccia !== "undefined";
+
 describe("Iterator.zip()", () => {
   test("zips two arrays of equal length", () => {
     const result = Iterator.zip([[1, 2, 3], ["a", "b", "c"]]).toArray();
@@ -63,9 +65,8 @@ describe("Iterator.zip()", () => {
     expect(result).toEqual([[1, "a"], [2, "b"]]);
   });
 
-  test("zips strings (character iteration)", () => {
-    const result = Iterator.zip(["ab", "cd"]).toArray();
-    expect(result).toEqual([["a", "c"], ["b", "d"]]);
+  test("throws TypeError for string primitive iterable items", () => {
+    expect(() => Iterator.zip(["ab", "cd"])).toThrow(TypeError);
   });
 
   test("result is an iterator (has next and Symbol.iterator)", () => {
@@ -143,8 +144,8 @@ describe("Iterator.zip()", () => {
     expect(() => Iterator.zip()).toThrow(TypeError);
   });
 
-  test("throws RangeError for invalid mode", () => {
-    expect(() => Iterator.zip([[1]], { mode: "invalid" })).toThrow(RangeError);
+  test("throws TypeError for invalid mode", () => {
+    expect(() => Iterator.zip([[1]], { mode: "invalid" })).toThrow(TypeError);
   });
 
   test("ignores options if undefined", () => {
@@ -199,6 +200,36 @@ describe("Iterator.zip() — longest mode", () => {
       { mode: "longest", padding: [99, 0] }
     ).toArray();
     expect(result).toEqual([[99, 1], [99, 2]]);
+  });
+
+  describe.runIf(hasGoccia)("explicit GC", () => {
+    test("keeps padding values alive until the zip iterator owns them", () => {
+      let index = 0;
+      const padding = {
+        [Symbol.iterator]() {
+          return {
+            next() {
+              index = index + 1;
+              if (index === 2) {
+                Goccia.gc();
+              }
+              if (index <= 2) {
+                return { value: { marker: "padding-" + index }, done: false };
+              }
+              return { value: undefined, done: true };
+            },
+          };
+        },
+      };
+
+      const result = Iterator.zip(
+        [[1], [2, 3]],
+        { mode: "longest", padding }
+      ).toArray();
+
+      expect(result[1][0].marker).toBe("padding-1");
+      expect(result[1][1]).toBe(3);
+    });
   });
 });
 
