@@ -214,11 +214,11 @@ begin
 
       WasIteratorRooted := AddRootIfNeeded(Iterator);
       try
-        try
-          NextValue := Iterator.DirectNext(Done);
-          while not Done do
-          begin
-            WasNextRooted := AddRootIfNeeded(NextValue);
+        NextValue := Iterator.DirectNext(Done);
+        while not Done do
+        begin
+          WasNextRooted := AddRootIfNeeded(NextValue);
+          try
             try
               CallArgs := TGocciaArgumentsCollection.Create([NextValue]);
               try
@@ -226,15 +226,14 @@ begin
               finally
                 CallArgs.Free;
               end;
-            finally
-              RemoveRootIfNeeded(NextValue, WasNextRooted);
+            except
+              CloseIteratorPreservingError(Iterator);
+              raise;
             end;
-            NextValue := Iterator.DirectNext(Done);
+          finally
+            RemoveRootIfNeeded(NextValue, WasNextRooted);
           end;
-        except
-          AcquireExceptionObject;
-          CloseIteratorPreservingError(Iterator);
-          raise;
+          NextValue := Iterator.DirectNext(Done);
         end;
       finally
         RemoveRootIfNeeded(Iterator, WasIteratorRooted);

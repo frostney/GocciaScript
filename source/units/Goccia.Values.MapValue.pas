@@ -66,6 +66,8 @@ type
 implementation
 
 uses
+  SysUtils,
+
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -76,6 +78,8 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
+  Goccia.Values.IteratorSupport,
+  Goccia.Values.IteratorValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
@@ -169,33 +173,96 @@ end;
 
 procedure TGocciaMapValue.InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
 var
-  InitArg: TGocciaValue;
-  ArrValue: TGocciaArrayValue;
-  EntryArr: TGocciaArrayValue;
-  EntryObj: TGocciaObjectValue;
-  I: Integer;
+  InitArg, Adder, NextValue, Key, Value: TGocciaValue;
+  Iterator: TGocciaIteratorValue;
+  CallArgs: TGocciaArgumentsCollection;
+  Done: Boolean;
+  GC: TGarbageCollector;
+  WasSelfRooted, WasInitRooted, WasAdderRooted, WasIteratorRooted: Boolean;
+  WasNextRooted, WasKeyRooted, WasValueRooted: Boolean;
+
+  function AddRootIfNeeded(const AValue: TGocciaValue): Boolean;
+  begin
+    Result := Assigned(GC) and Assigned(AValue) and not GC.IsTempRoot(AValue);
+    if Result then
+      GC.AddTempRoot(AValue);
+  end;
+
+  procedure RemoveRootIfNeeded(const AValue: TGocciaValue; const AWasAdded: Boolean);
+  begin
+    if AWasAdded then
+      GC.RemoveTempRoot(AValue);
+  end;
+
 begin
   if AArguments.Length = 0 then
     Exit;
   InitArg := AArguments.GetElement(0);
-  if InitArg is TGocciaArrayValue then
-  begin
-    ArrValue := TGocciaArrayValue(InitArg);
-    for I := 0 to ArrValue.Elements.Count - 1 do
-    begin
-      if Assigned(ArrValue.Elements[I]) and (ArrValue.Elements[I] is TGocciaArrayValue) then
-      begin
-        EntryArr := TGocciaArrayValue(ArrValue.Elements[I]);
-        if EntryArr.Elements.Count >= 2 then
-          SetEntry(EntryArr.Elements[0], EntryArr.Elements[1]);
-      end
-      else if Assigned(ArrValue.Elements[I]) and
-              (ArrValue.Elements[I] is TGocciaObjectValue) then
-      begin
-        EntryObj := TGocciaObjectValue(ArrValue.Elements[I]);
-        SetEntry(EntryObj.GetProperty('0'), EntryObj.GetProperty('1'));
+  if (InitArg is TGocciaUndefinedLiteralValue) or
+     (InitArg is TGocciaNullLiteralValue) then
+    Exit;
+
+  GC := TGarbageCollector.Instance;
+  WasSelfRooted := AddRootIfNeeded(Self);
+  WasInitRooted := AddRootIfNeeded(InitArg);
+  try
+    Adder := GetProperty(PROP_SET);
+    if not Assigned(Adder) or not Adder.IsCallable then
+      ThrowTypeError(Format(SErrorValueNotFunction, [PROP_SET]), SSuggestMapThisType);
+
+    WasAdderRooted := AddRootIfNeeded(Adder);
+    try
+      Iterator := GetIteratorFromValue(InitArg);
+      if not Assigned(Iterator) then
+        ThrowTypeError(Format(SErrorMapConstructorNotIterable, [CONSTRUCTOR_MAP]), SSuggestNotIterable);
+
+      WasIteratorRooted := AddRootIfNeeded(Iterator);
+      try
+        NextValue := Iterator.DirectNext(Done);
+        while not Done do
+        begin
+          WasNextRooted := AddRootIfNeeded(NextValue);
+          try
+            try
+              if not (NextValue is TGocciaObjectValue) then
+                ThrowTypeError(SErrorMapConstructorEntryNotObject, SSuggestIteratorProtocol);
+
+              Key := TGocciaObjectValue(NextValue).GetProperty('0');
+              WasKeyRooted := AddRootIfNeeded(Key);
+              try
+                Value := TGocciaObjectValue(NextValue).GetProperty('1');
+                WasValueRooted := AddRootIfNeeded(Value);
+                try
+                  CallArgs := TGocciaArgumentsCollection.Create([Key, Value]);
+                  try
+                    InvokeCallable(Adder, CallArgs, Self);
+                  finally
+                    CallArgs.Free;
+                  end;
+                finally
+                  RemoveRootIfNeeded(Value, WasValueRooted);
+                end;
+              finally
+                RemoveRootIfNeeded(Key, WasKeyRooted);
+              end;
+            except
+              CloseIteratorPreservingError(Iterator);
+              raise;
+            end;
+          finally
+            RemoveRootIfNeeded(NextValue, WasNextRooted);
+          end;
+          NextValue := Iterator.DirectNext(Done);
+        end;
+      finally
+        RemoveRootIfNeeded(Iterator, WasIteratorRooted);
       end;
+    finally
+      RemoveRootIfNeeded(Adder, WasAdderRooted);
     end;
+  finally
+    RemoveRootIfNeeded(InitArg, WasInitRooted);
+    RemoveRootIfNeeded(Self, WasSelfRooted);
   end;
 end;
 

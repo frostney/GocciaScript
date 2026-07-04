@@ -89,3 +89,73 @@ test("Set.prototype.constructor is non-enumerable", () => {
   expect(desc.enumerable).toBe(false);
   expect(desc.configurable).toBe(true);
 });
+
+test("Set constructor closes iterator when subclass add throws and preserves original error", () => {
+  const sentinel = new Error("add failed");
+  let closed = false;
+  class ThrowingSet extends Set {
+    add() {
+      throw sentinel;
+    }
+  }
+
+  const iterable = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return { value: "value", done: false };
+        },
+        return() {
+          closed = true;
+          throw new Error("return failed");
+        },
+      };
+    },
+  };
+
+  try {
+    new ThrowingSet(iterable);
+    throw new Error("expected Set constructor to throw");
+  } catch (error) {
+    expect(error).toBe(sentinel);
+  }
+  expect(closed).toBe(true);
+});
+
+test("Set constructor does not close iterator when next throws", () => {
+  const sentinel = new Error("next failed");
+  let closed = false;
+  const iterable = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          throw sentinel;
+        },
+        return() {
+          closed = true;
+          return {};
+        },
+      };
+    },
+  };
+
+  try {
+    new Set(iterable);
+    throw new Error("expected Set constructor to throw");
+  } catch (error) {
+    expect(error).toBe(sentinel);
+  }
+  expect(closed).toBe(false);
+});
+
+test("Set constructor observes native iterator @@iterator overrides", () => {
+  const iterator = [][Symbol.iterator]();
+  Object.defineProperty(iterator, Symbol.iterator, {
+    configurable: true,
+    value() {
+      return 1;
+    },
+  });
+
+  expect(() => new Set(iterator)).toThrow(TypeError);
+});

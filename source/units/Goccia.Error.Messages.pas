@@ -685,6 +685,8 @@ resourcestring
   SErrorMapIteratorNonMap = 'Map.prototype[Symbol.iterator] called on non-Map object';
   SErrorMapGetOrInsertNonMap = 'Map.prototype.getOrInsert called on non-Map object';
   SErrorMapGetOrInsertComputedNonMap = 'Map.prototype.getOrInsertComputed called on non-Map object';
+  SErrorMapConstructorEntryNotObject = 'Map constructor requires each entry to be an object';
+  SErrorMapConstructorNotIterable = '%s constructor requires an iterable';
 
   // WeakMap/WeakSet brand-check and key validation errors
   SErrorWeakMapGetNonWeakMap = 'WeakMap.prototype.get called on non-WeakMap object';

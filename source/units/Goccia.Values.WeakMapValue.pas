@@ -232,11 +232,11 @@ begin
 
       WasIteratorRooted := AddRootIfNeeded(Iterator);
       try
-        try
-          NextValue := Iterator.DirectNext(Done);
-          while not Done do
-          begin
-            WasNextRooted := AddRootIfNeeded(NextValue);
+        NextValue := Iterator.DirectNext(Done);
+        while not Done do
+        begin
+          WasNextRooted := AddRootIfNeeded(NextValue);
+          try
             try
               if not (NextValue is TGocciaObjectValue) then
                 ThrowTypeError(SErrorWeakMapConstructorEntryNotObject, SSuggestIteratorProtocol);
@@ -259,15 +259,14 @@ begin
               finally
                 RemoveRootIfNeeded(Key, WasKeyRooted);
               end;
-            finally
-              RemoveRootIfNeeded(NextValue, WasNextRooted);
+            except
+              CloseIteratorPreservingError(Iterator);
+              raise;
             end;
-            NextValue := Iterator.DirectNext(Done);
+          finally
+            RemoveRootIfNeeded(NextValue, WasNextRooted);
           end;
-        except
-          AcquireExceptionObject;
-          CloseIteratorPreservingError(Iterator);
-          raise;
+          NextValue := Iterator.DirectNext(Done);
         end;
       finally
         RemoveRootIfNeeded(Iterator, WasIteratorRooted);
