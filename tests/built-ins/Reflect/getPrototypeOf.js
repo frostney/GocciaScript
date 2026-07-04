@@ -25,6 +25,16 @@ describe("Reflect.getPrototypeOf", () => {
     expect(Reflect.getPrototypeOf(a)).toBe(Animal.prototype);
   });
 
+  test("uses proxy getPrototypeOf trap and propagates abrupt completion", () => {
+    const proxy = new Proxy({}, {
+      getPrototypeOf() {
+        throw new Error("getPrototypeOf trap failed");
+      },
+    });
+
+    expect(() => Reflect.getPrototypeOf(proxy)).toThrow(Error);
+  });
+
   test("throws TypeError if target is not an object", () => {
     expect(() => Reflect.getPrototypeOf(42)).toThrow(TypeError);
     expect(() => Reflect.getPrototypeOf("str")).toThrow(TypeError);

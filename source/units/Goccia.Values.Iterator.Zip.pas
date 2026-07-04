@@ -18,7 +18,9 @@ type
     FPadding: array of TGocciaValue;
     FMode: TGocciaZipMode;
     FExhausted: array of Boolean;
-    procedure CloseAllIterators;
+    FStarted: Boolean;
+    procedure CloseAllIterators(const APreserveError: Boolean = True;
+      const AExcludeIndex: Integer = -1);
   protected
     function DoAdvanceNext: TGocciaObjectValue; override;
     function DoDirectNext(out ADone: Boolean): TGocciaValue; override;
@@ -31,17 +33,19 @@ type
 
   TGocciaZipKeyedIteratorValue = class(TGocciaIteratorHelperValue)
   private
-    FKeys: array of string;
+    FKeys: array of TGocciaValue;
     FIterators: array of TGocciaIteratorValue;
     FPadding: array of TGocciaValue;
     FMode: TGocciaZipMode;
     FExhausted: array of Boolean;
-    procedure CloseAllIterators;
+    FStarted: Boolean;
+    procedure CloseAllIterators(const APreserveError: Boolean = True;
+      const AExcludeIndex: Integer = -1);
   protected
     function DoAdvanceNext: TGocciaObjectValue; override;
     function DoDirectNext(out ADone: Boolean): TGocciaValue; override;
   public
-    constructor Create(const AKeys: array of string;
+    constructor Create(const AKeys: array of TGocciaValue;
       const AIterators: array of TGocciaIteratorValue;
       const APadding: array of TGocciaValue; const AMode: TGocciaZipMode);
     procedure Close; override;
@@ -53,12 +57,15 @@ function GetIteratorFromIterable(const AValue: TGocciaValue): TGocciaIteratorVal
 implementation
 
 uses
+  SysUtils,
+
   Goccia.Arguments.Collection,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
+  Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
@@ -185,20 +192,46 @@ begin
   for I := 0 to High(APadding) do
     FPadding[I] := APadding[I];
   FMode := AMode;
+  FStarted := False;
   SetLength(FExhausted, Length(AIterators));
   for I := 0 to High(FExhausted) do
     FExhausted[I] := False;
 end;
 
-procedure TGocciaZipIteratorValue.CloseAllIterators;
+procedure TGocciaZipIteratorValue.CloseAllIterators(
+  const APreserveError: Boolean; const AExcludeIndex: Integer);
 var
   I: Integer;
+  FirstException: Exception;
+  HasFirstError: Boolean;
 begin
-  for I := 0 to High(FIterators) do
+  HasFirstError := False;
+  FirstException := nil;
+  for I := High(FIterators) downto 0 do
   begin
-    if not FExhausted[I] then
-      CloseIteratorPreservingError(FIterators[I]);
+    if (I <> AExcludeIndex) and not FExhausted[I] then
+    begin
+      if APreserveError then
+        CloseIteratorPreservingError(FIterators[I])
+      else
+      begin
+        try
+          FIterators[I].Close;
+        except
+          on E: Exception do
+          begin
+            if not HasFirstError then
+            begin
+              HasFirstError := True;
+              FirstException := Exception(AcquireExceptionObject);
+            end;
+          end;
+        end;
+      end;
+    end;
   end;
+  if HasFirstError then
+    raise FirstException;
 end;
 
 // TC39 Joint Iteration §1.1 Iterator.zip(iterables [, options])
@@ -221,10 +254,11 @@ end;
 function TGocciaZipIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaValue;
 var
   ResultArray: TGocciaArrayValue;
+  InnerResult: TGocciaObjectValue;
   I: Integer;
   InnerValue: TGocciaValue;
   InnerDone: Boolean;
-  AnyDone, AllDone: Boolean;
+  AnyDone, AllDone, HadDoneBefore: Boolean;
 begin
   if Length(FIterators) = 0 then
   begin
@@ -233,6 +267,7 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
+  FStarted := True;
 
   ResultArray := TGocciaArrayValue.Create;
   TGarbageCollector.Instance.AddTempRoot(ResultArray);
@@ -253,19 +288,57 @@ begin
         Continue;
       end;
 
+      if (FMode = zmStrict) and AnyDone then
+      begin
+        try
+          InnerResult := FIterators[I].AdvanceNext;
+          InnerDone := IteratorResultDone(InnerResult);
+        except
+          AcquireExceptionObject;
+          CloseAllIterators(True, I);
+          FDone := True;
+          raise;
+        end;
+        if InnerDone then
+        begin
+          FExhausted[I] := True;
+          Continue;
+        end;
+        CloseAllIterators(True);
+        FDone := True;
+        ThrowTypeError(SErrorIteratorZipStrictLengthMismatch,
+          SSuggestIteratorZipMode);
+      end;
+
       try
         InnerValue := FIterators[I].DirectNext(InnerDone);
       except
         AcquireExceptionObject;
-        CloseAllIterators;
+        CloseAllIterators(True, I);
         FDone := True;
         raise;
       end;
 
       if InnerDone then
       begin
+        HadDoneBefore := AnyDone;
         FExhausted[I] := True;
         AnyDone := True;
+        if FMode = zmShortest then
+        begin
+          CloseAllIterators(False);
+          FDone := True;
+          ADone := True;
+          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+          Exit;
+        end;
+        if (FMode = zmStrict) and (I <> 0) and not HadDoneBefore then
+        begin
+          CloseAllIterators(True, I);
+          FDone := True;
+          ThrowTypeError(SErrorIteratorZipStrictLengthMismatch,
+            SSuggestIteratorZipMode);
+        end;
         if I < Length(FPadding) then
           ResultArray.Elements.Add(FPadding[I])
         else
@@ -286,7 +359,7 @@ begin
       begin
         if AnyDone then
         begin
-          CloseAllIterators;
+          CloseAllIterators(False);
           FDone := True;
           ADone := True;
           Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -307,7 +380,7 @@ begin
       begin
         if AnyDone and not AllDone then
         begin
-          CloseAllIterators;
+          CloseAllIterators(True);
           FDone := True;
           ThrowTypeError(SErrorIteratorZipStrictLengthMismatch, SSuggestIteratorZipMode);
         end;
@@ -331,8 +404,10 @@ end;
 procedure TGocciaZipIteratorValue.Close;
 begin
   if FDone then Exit;
+  if not FStarted then
+    FDone := True;
+  CloseAllIterators(False);
   FDone := True;
-  CloseAllIterators;
 end;
 
 procedure TGocciaZipIteratorValue.MarkReferences;
@@ -355,7 +430,7 @@ end;
 
 { TGocciaZipKeyedIteratorValue }
 
-constructor TGocciaZipKeyedIteratorValue.Create(const AKeys: array of string;
+constructor TGocciaZipKeyedIteratorValue.Create(const AKeys: array of TGocciaValue;
   const AIterators: array of TGocciaIteratorValue;
   const APadding: array of TGocciaValue; const AMode: TGocciaZipMode);
 var
@@ -372,20 +447,46 @@ begin
   for I := 0 to High(APadding) do
     FPadding[I] := APadding[I];
   FMode := AMode;
+  FStarted := False;
   SetLength(FExhausted, Length(AIterators));
   for I := 0 to High(FExhausted) do
     FExhausted[I] := False;
 end;
 
-procedure TGocciaZipKeyedIteratorValue.CloseAllIterators;
+procedure TGocciaZipKeyedIteratorValue.CloseAllIterators(
+  const APreserveError: Boolean; const AExcludeIndex: Integer);
 var
   I: Integer;
+  FirstException: Exception;
+  HasFirstError: Boolean;
 begin
-  for I := 0 to High(FIterators) do
+  HasFirstError := False;
+  FirstException := nil;
+  for I := High(FIterators) downto 0 do
   begin
-    if not FExhausted[I] then
-      CloseIteratorPreservingError(FIterators[I]);
+    if (I <> AExcludeIndex) and not FExhausted[I] then
+    begin
+      if APreserveError then
+        CloseIteratorPreservingError(FIterators[I])
+      else
+      begin
+        try
+          FIterators[I].Close;
+        except
+          on E: Exception do
+          begin
+            if not HasFirstError then
+            begin
+              HasFirstError := True;
+              FirstException := Exception(AcquireExceptionObject);
+            end;
+          end;
+        end;
+      end;
+    end;
   end;
+  if HasFirstError then
+    raise FirstException;
 end;
 
 // TC39 Joint Iteration §1.2 Iterator.zipKeyed(iterables [, options])
@@ -408,10 +509,11 @@ end;
 function TGocciaZipKeyedIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaValue;
 var
   ResultObj: TGocciaObjectValue;
+  InnerResult: TGocciaObjectValue;
   I: Integer;
   InnerValue: TGocciaValue;
   InnerDone: Boolean;
-  AnyDone, AllDone: Boolean;
+  AnyDone, AllDone, HadDoneBefore: Boolean;
 begin
   if Length(FIterators) = 0 then
   begin
@@ -420,8 +522,9 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
+  FStarted := True;
 
-  ResultObj := TGocciaObjectValue.Create;
+  ResultObj := TGocciaObjectValue.Create(TGocciaObjectValue(nil));
   TGarbageCollector.Instance.AddTempRoot(ResultObj);
   try
     AnyDone := False;
@@ -433,35 +536,73 @@ begin
       if FExhausted[I] then
       begin
         if I < Length(FPadding) then
-          ResultObj.AssignProperty(FKeys[I], FPadding[I])
+      ResultObj.CreateDataPropertyOrThrow(FKeys[I], FPadding[I])
         else
-          ResultObj.AssignProperty(FKeys[I], TGocciaUndefinedLiteralValue.UndefinedValue);
+          ResultObj.CreateDataPropertyOrThrow(FKeys[I], TGocciaUndefinedLiteralValue.UndefinedValue);
         AnyDone := True;
         Continue;
+      end;
+
+      if (FMode = zmStrict) and AnyDone then
+      begin
+        try
+          InnerResult := FIterators[I].AdvanceNext;
+          InnerDone := IteratorResultDone(InnerResult);
+        except
+          AcquireExceptionObject;
+          CloseAllIterators(True, I);
+          FDone := True;
+          raise;
+        end;
+        if InnerDone then
+        begin
+          FExhausted[I] := True;
+          Continue;
+        end;
+        CloseAllIterators(True);
+        FDone := True;
+        ThrowTypeError(SErrorIteratorZipKeyedStrictLengthMismatch,
+          SSuggestIteratorZipMode);
       end;
 
       try
         InnerValue := FIterators[I].DirectNext(InnerDone);
       except
         AcquireExceptionObject;
-        CloseAllIterators;
+        CloseAllIterators(True, I);
         FDone := True;
         raise;
       end;
 
       if InnerDone then
       begin
+        HadDoneBefore := AnyDone;
         FExhausted[I] := True;
         AnyDone := True;
+        if FMode = zmShortest then
+        begin
+          CloseAllIterators(False);
+          FDone := True;
+          ADone := True;
+          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+          Exit;
+        end;
+        if (FMode = zmStrict) and (I <> 0) and not HadDoneBefore then
+        begin
+          CloseAllIterators(True, I);
+          FDone := True;
+          ThrowTypeError(SErrorIteratorZipKeyedStrictLengthMismatch,
+            SSuggestIteratorZipMode);
+        end;
         if I < Length(FPadding) then
-          ResultObj.AssignProperty(FKeys[I], FPadding[I])
+          ResultObj.CreateDataPropertyOrThrow(FKeys[I], FPadding[I])
         else
-          ResultObj.AssignProperty(FKeys[I], TGocciaUndefinedLiteralValue.UndefinedValue);
+          ResultObj.CreateDataPropertyOrThrow(FKeys[I], TGocciaUndefinedLiteralValue.UndefinedValue);
       end
       else
       begin
         AllDone := False;
-        ResultObj.AssignProperty(FKeys[I], InnerValue);
+        ResultObj.CreateDataPropertyOrThrow(FKeys[I], InnerValue);
       end;
     end;
 
@@ -473,7 +614,7 @@ begin
       begin
         if AnyDone then
         begin
-          CloseAllIterators;
+          CloseAllIterators(False);
           FDone := True;
           ADone := True;
           Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -494,7 +635,7 @@ begin
       begin
         if AnyDone and not AllDone then
         begin
-          CloseAllIterators;
+          CloseAllIterators(True);
           FDone := True;
           ThrowTypeError(SErrorIteratorZipKeyedStrictLengthMismatch, SSuggestIteratorZipMode);
         end;
@@ -518,8 +659,10 @@ end;
 procedure TGocciaZipKeyedIteratorValue.Close;
 begin
   if FDone then Exit;
+  if not FStarted then
+    FDone := True;
+  CloseAllIterators(False);
   FDone := True;
-  CloseAllIterators;
 end;
 
 procedure TGocciaZipKeyedIteratorValue.MarkReferences;
@@ -532,6 +675,11 @@ begin
   begin
     if Assigned(FIterators[I]) then
       FIterators[I].MarkReferences;
+  end;
+  for I := 0 to High(FKeys) do
+  begin
+    if Assigned(FKeys[I]) then
+      FKeys[I].MarkReferences;
   end;
   for I := 0 to High(FPadding) do
   begin

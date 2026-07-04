@@ -96,7 +96,8 @@ type
     // ES2026 §28.1.1 [[IsExtensible]]()
     function IsExtensibleTrap: Boolean;
 
-    // ES2026 §28.1.1 [[PreventExtensions]]()
+    // ES2026 §10.5.4 [[PreventExtensions]]()
+    function TryPreventExtensions: Boolean; override;
     procedure PreventExtensions; override;
 
     // ES2026 §28.1.1 [[Call]](thisArgument, argumentsList)
@@ -1675,8 +1676,8 @@ begin
   end;
 end;
 
-// ES2026 §28.1.1 [[PreventExtensions]]()
-procedure TGocciaProxyValue.PreventExtensions;
+// ES2026 §10.5.4 [[PreventExtensions]]()
+function TGocciaProxyValue.TryPreventExtensions: Boolean;
 var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;
@@ -1691,7 +1692,7 @@ begin
       Args.Add(FTarget);
       TrapResult := InvokeTrap(Trap, Args);
       if not TrapResult.ToBooleanLiteral.Value then
-        ThrowTypeError(SErrorProxyPreventExtensionsFalse, SSuggestProxyTrapInvariant);
+        Exit(False);
     finally
       Args.Free;
     end;
@@ -1701,12 +1702,21 @@ begin
     if (FTarget is TGocciaObjectValue) and
        TGocciaObjectValue(FTarget).Extensible then
       ThrowTypeError(SErrorProxyPreventExtensionsStillExtensible, SSuggestProxyTrapInvariant);
+    Result := True;
   end
   else
   begin
     if FTarget is TGocciaObjectValue then
-      TGocciaObjectValue(FTarget).PreventExtensions;
+      Result := TGocciaObjectValue(FTarget).TryPreventExtensions
+    else
+      Result := False;
   end;
+end;
+
+procedure TGocciaProxyValue.PreventExtensions;
+begin
+  if not TryPreventExtensions then
+    ThrowTypeError(SErrorProxyPreventExtensionsFalse, SSuggestProxyTrapInvariant);
 end;
 
 // ES2026 §28.1.1 [[Call]](thisArgument, argumentsList)

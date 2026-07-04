@@ -118,8 +118,6 @@ var
   ArgsList: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 3, 'Reflect.apply', ThrowError);
-
   Target := AArgs.GetElement(0);
   ThisArg := AArgs.GetElement(1);
   ArgsList := AArgs.GetElement(2);
@@ -200,26 +198,22 @@ var
   SymbolKey: TGocciaSymbolValue;
   Success: Boolean;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 3, 'Reflect.defineProperty', ThrowError);
-
   Target := AArgs.GetElement(0);
-  PropKey := ToPropertyKey(AArgs.GetElement(1));
-  Attrs := AArgs.GetElement(2);
 
   // Step 1: If target is not an Object, throw a TypeError exception
   RequireObjectTarget(Target, 'Reflect.defineProperty');
 
+  // Step 2: Let key be ? ToPropertyKey(propertyKey)
+  PropKey := ToPropertyKey(AArgs.GetElement(1));
+  Attrs := AArgs.GetElement(2);
   if not (Attrs is TGocciaObjectValue) then
     ThrowTypeError(SErrorReflectDefinePropertyAttrsMustBeObject, SSuggestPropertyDescriptorObject);
 
-  Obj := TGocciaObjectValue(Target);
-  DescriptorObject := TGocciaObjectValue(Attrs);
-
-  // Step 2: Let key be ? ToPropertyKey(propertyKey)
   IsSymbolKey := PropKey is TGocciaSymbolValue;
   SymbolKey := nil;
   PropertyName := '';
   ExistingDescriptor := nil;
+  Obj := TGocciaObjectValue(Target);
 
   if IsSymbolKey then
   begin
@@ -233,6 +227,7 @@ begin
   end;
 
   // Step 3: Let desc be ? ToPropertyDescriptor(Attributes)
+  DescriptorObject := TGocciaObjectValue(Attrs);
   Descriptor := ToPropertyDescriptor(DescriptorObject, ExistingDescriptor);
 
   // Step 4: Return target.[[DefineOwnProperty]](key, desc) — returns boolean.
@@ -356,21 +351,6 @@ begin
   end;
 
   DescriptorObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  if Descriptor.HasEnumerableField then
-  begin
-    if Descriptor.Enumerable then
-      DescriptorObj.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
-    else
-      DescriptorObj.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
-  end;
-  if Descriptor.HasConfigurableField then
-  begin
-    if Descriptor.Configurable then
-      DescriptorObj.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
-    else
-      DescriptorObj.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.FalseValue);
-  end;
-
   if Descriptor is TGocciaPropertyDescriptorData then
   begin
     if Descriptor.HasValue then
@@ -400,6 +380,20 @@ begin
         DescriptorObj.AssignProperty(PROP_SET, TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
   end;
+  if Descriptor.HasEnumerableField then
+  begin
+    if Descriptor.Enumerable then
+      DescriptorObj.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
+    else
+      DescriptorObj.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
+  end;
+  if Descriptor.HasConfigurableField then
+  begin
+    if Descriptor.Configurable then
+      DescriptorObj.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
+    else
+      DescriptorObj.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.FalseValue);
+  end;
 
   Result := DescriptorObj;
 end;
@@ -417,6 +411,12 @@ begin
   RequireObjectTarget(Target, 'Reflect.getPrototypeOf');
 
   // Step 2: Return ? target.[[GetPrototypeOf]]()
+  if Target is TGocciaProxyValue then
+  begin
+    Result := TGocciaProxyValue(Target).GetPrototypeTrap;
+    Exit;
+  end;
+
   if Assigned(TGocciaObjectValue(Target).Prototype) then
     Result := TGocciaObjectValue(Target).Prototype
   else
@@ -472,6 +472,15 @@ begin
   RequireObjectTarget(Target, 'Reflect.isExtensible');
 
   // Step 2: Return ? target.[[IsExtensible]]()
+  if Target is TGocciaProxyValue then
+  begin
+    if TGocciaProxyValue(Target).IsExtensibleTrap then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+    Exit;
+  end;
+
   if TGocciaObjectValue(Target).Extensible then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
@@ -535,8 +544,10 @@ begin
   RequireObjectTarget(Target, 'Reflect.preventExtensions');
 
   // Step 2: Return ? target.[[PreventExtensions]]()
-  TGocciaObjectValue(Target).PreventExtensions;
-  Result := TGocciaBooleanLiteralValue.TrueValue;
+  if TGocciaObjectValue(Target).TryPreventExtensions then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 // ES2026 §28.1.12 Reflect.set(target, propertyKey, V [, receiver])
@@ -599,6 +610,15 @@ begin
     ThrowTypeError(SErrorReflectSetPrototypeOfProtoType, SSuggestReflectObjectArg);
 
   // Step 3: Return ? target.[[SetPrototypeOf]](proto)
+  if Target is TGocciaProxyValue then
+  begin
+    if TGocciaProxyValue(Target).SetPrototypeTrap(ProtoArg) then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+    Exit;
+  end;
+
   // ES2026 §10.1.2 OrdinarySetPrototypeOf step 2: If SameValue(V, current) return true
   if ProtoArg is TGocciaNullLiteralValue then
   begin
