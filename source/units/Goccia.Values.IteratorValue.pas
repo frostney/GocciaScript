@@ -1546,6 +1546,7 @@ var
   OuterDone, PaddingDone: Boolean;
   Iterators: array of TGocciaIteratorValue;
   Padding: array of TGocciaValue;
+  PaddingRoots: array of Boolean;
   Mode: TGocciaZipMode;
   I, J, Count, Acquired: Integer;
   ModeStr: string;
@@ -1650,6 +1651,7 @@ begin
   end;
 
   SetLength(Padding, Count);
+  SetLength(PaddingRoots, Count);
   for I := 0 to Count - 1 do
     Padding[I] := TGocciaUndefinedLiteralValue.UndefinedValue;
 
@@ -1670,7 +1672,10 @@ begin
             Break;
           PaddingItem := PaddingIterator.DirectNext(PaddingDone);
           if not PaddingDone then
+          begin
+            PaddingRoots[I] := AddTempRootIfNeeded(PaddingItem);
             Padding[I] := PaddingItem;
+          end;
         end;
         if not PaddingDone then
           CloseIterator(PaddingIterator);
@@ -1691,6 +1696,8 @@ begin
     // Unroot iterators — the zip iterator now owns them via MarkReferences
     for I := 0 to Count - 1 do
       GC.RemoveTempRoot(Iterators[I]);
+    for I := 0 to Count - 1 do
+      RemoveTempRootIfNeeded(Padding[I], PaddingRoots[I]);
   end;
 end;
 
@@ -1707,8 +1714,10 @@ var
   Descriptor: TGocciaPropertyDescriptor;
   InnerIterator: TGocciaIteratorValue;
   AllKeys, Keys: TArray<TGocciaValue>;
+  KeyRoots: array of Boolean;
   Iterators: array of TGocciaIteratorValue;
   Padding: array of TGocciaValue;
+  PaddingRoots: array of Boolean;
   Mode: TGocciaZipMode;
   I, J, Count, Acquired: Integer;
   ModeStr: string;
@@ -1776,6 +1785,7 @@ begin
 
   AllKeys := TGocciaObjectValue(IterablesArg).OwnPropertyKeyValues;
   SetLength(Keys, Length(AllKeys));
+  SetLength(KeyRoots, Length(AllKeys));
   SetLength(Iterators, Length(AllKeys));
   Count := 0;
 
@@ -1797,6 +1807,7 @@ begin
         ThrowTypeError(Format(SErrorIteratorZipKeyedPropertyNotIterable,
           [AllKeys[I].ToStringLiteral.Value]), SSuggestNotIterable);
       Keys[Count] := AllKeys[I];
+      KeyRoots[Count] := AddTempRootIfNeeded(Keys[Count]);
       Iterators[Count] := InnerIterator;
       GC.AddTempRoot(InnerIterator);
       Inc(Count);
@@ -1811,11 +1822,13 @@ begin
     begin
       CloseIteratorPreservingError(Iterators[J]);
       GC.RemoveTempRoot(Iterators[J]);
+      RemoveTempRootIfNeeded(Keys[J], KeyRoots[J]);
     end;
     raise;
   end;
 
   SetLength(Padding, Count);
+  SetLength(PaddingRoots, Count);
   for I := 0 to Count - 1 do
     Padding[I] := TGocciaUndefinedLiteralValue.UndefinedValue;
 
@@ -1830,7 +1843,10 @@ begin
           Keys[I]);
         if Assigned(PropValue) and
            not (PropValue is TGocciaUndefinedLiteralValue) then
+        begin
+          PaddingRoots[I] := AddTempRootIfNeeded(PropValue);
           Padding[I] := PropValue;
+        end;
       end;
     end;
 
@@ -1846,6 +1862,10 @@ begin
     // Unroot iterators — the zipKeyed iterator now owns them via MarkReferences
     for I := 0 to Count - 1 do
       GC.RemoveTempRoot(Iterators[I]);
+    for I := 0 to Count - 1 do
+      RemoveTempRootIfNeeded(Keys[I], KeyRoots[I]);
+    for I := 0 to Count - 1 do
+      RemoveTempRootIfNeeded(Padding[I], PaddingRoots[I]);
   end;
 end;
 

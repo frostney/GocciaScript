@@ -3,6 +3,8 @@ description: Iterator.zipKeyed() combines keyed iterables into an iterator of ob
 features: [Iterator, Iterator.zipKeyed]
 ---*/
 
+const hasGoccia = typeof Goccia !== "undefined";
+
 describe("Iterator.zipKeyed()", () => {
   test("zips keyed object with array values", () => {
     const result = Iterator.zipKeyed({
@@ -198,6 +200,28 @@ describe("Iterator.zipKeyed() — longest mode", () => {
       { mode: "longest" }
     ).toArray();
     expect(result).toEqual([]);
+  });
+
+  describe.runIf(hasGoccia)("explicit GC", () => {
+    test("keeps padding values alive until the zipKeyed iterator owns them", () => {
+      const padding = {
+        get x() {
+          return { marker: "padding-x" };
+        },
+        get y() {
+          Goccia.gc();
+          return { marker: "padding-y" };
+        },
+      };
+
+      const result = Iterator.zipKeyed(
+        { x: [1], y: [2, 3] },
+        { mode: "longest", padding }
+      ).toArray();
+
+      expect(result[1].x.marker).toBe("padding-x");
+      expect(result[1].y).toBe(3);
+    });
   });
 });
 
