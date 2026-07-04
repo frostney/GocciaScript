@@ -3,6 +3,8 @@ description: Iterator.zipKeyed() combines keyed iterables into an iterator of ob
 features: [Iterator, Iterator.zipKeyed]
 ---*/
 
+const hasGoccia = typeof Goccia !== "undefined";
+
 describe("Iterator.zipKeyed()", () => {
   test("zips keyed object with array values", () => {
     const result = Iterator.zipKeyed({
@@ -102,15 +104,11 @@ describe("Iterator.zipKeyed()", () => {
     expect(result).toEqual([33, 44]);
   });
 
-  test("zips with string values (character iteration)", () => {
-    const result = Iterator.zipKeyed({
+  test("throws TypeError for string primitive property values", () => {
+    expect(() => Iterator.zipKeyed({
       first: "ab",
       second: "cd",
-    }).toArray();
-    expect(result).toEqual([
-      { first: "a", second: "c" },
-      { first: "b", second: "d" },
-    ]);
+    })).toThrow(TypeError);
   });
 
   test("throws TypeError for non-object first argument", () => {
@@ -123,14 +121,15 @@ describe("Iterator.zipKeyed()", () => {
   test("throws TypeError for non-iterable property value", () => {
     expect(() => Iterator.zipKeyed({ x: 42 }).toArray()).toThrow(TypeError);
     expect(() => Iterator.zipKeyed({ x: [1], y: null }).toArray()).toThrow(TypeError);
+    expect(() => Iterator.zipKeyed({ x: undefined }).toArray()).toThrow(TypeError);
   });
 
   test("throws TypeError with no arguments", () => {
     expect(() => Iterator.zipKeyed()).toThrow(TypeError);
   });
 
-  test("throws RangeError for invalid mode", () => {
-    expect(() => Iterator.zipKeyed({ x: [1] }, { mode: "bad" })).toThrow(RangeError);
+  test("throws TypeError for invalid mode", () => {
+    expect(() => Iterator.zipKeyed({ x: [1] }, { mode: "bad" })).toThrow(TypeError);
   });
 
   test("ignores options if undefined", () => {
@@ -202,6 +201,28 @@ describe("Iterator.zipKeyed() — longest mode", () => {
       { mode: "longest" }
     ).toArray();
     expect(result).toEqual([]);
+  });
+
+  describe.runIf(hasGoccia)("explicit GC", () => {
+    test("keeps padding values alive until the zipKeyed iterator owns them", () => {
+      const padding = {
+        get x() {
+          return { marker: "padding-x" };
+        },
+        get y() {
+          Goccia.gc();
+          return { marker: "padding-y" };
+        },
+      };
+
+      const result = Iterator.zipKeyed(
+        { x: [1], y: [2, 3] },
+        { mode: "longest", padding }
+      ).toArray();
+
+      expect(result[1].x.marker).toBe("padding-x");
+      expect(result[1].y).toBe(3);
+    });
   });
 });
 

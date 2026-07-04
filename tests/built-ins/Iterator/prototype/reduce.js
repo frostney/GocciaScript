@@ -3,6 +3,8 @@ description: Iterator.prototype.reduce helper behavior
 features: [Iterator.prototype.reduce]
 ---*/
 
+const hasGoccia = typeof Goccia !== "undefined";
+
 describe("Iterator.prototype.reduce()", () => {
   test("reduces with an initial value", () => {
     expect([1, 2, 3].values().reduce((acc, x) => acc + x, 0)).toBe(6);
@@ -61,7 +63,7 @@ describe("Iterator.prototype.reduce()", () => {
     expect(closed).toBe(1);
   });
 
-  test("reduce closes the source iterator when next() throws after iteration starts", () => {
+  test("reduce does not close the source iterator when next() throws after iteration starts", () => {
     let closed = 0;
     const source = Iterator.from({
       count: 0,
@@ -79,7 +81,7 @@ describe("Iterator.prototype.reduce()", () => {
     });
 
     expect(() => source.reduce((acc, x) => acc + x)).toThrow(Error);
-    expect(closed).toBe(1);
+    expect(closed).toBe(0);
   });
 
   test("reduce preserves the original error when return is not callable", () => {
@@ -105,5 +107,28 @@ describe("Iterator.prototype.reduce()", () => {
       }, []);
 
     expect(result).toEqual([3, 4, 6, 3, 6, 9]);
+  });
+
+  describe.runIf(hasGoccia)("explicit GC", () => {
+    test("keeps callback value and index alive while reducer runs", () => {
+      let count = 0;
+      const source = Iterator.from({
+        next() {
+          count = count + 1;
+          if (count <= 2) {
+            return { value: { marker: "v" + count }, done: false };
+          }
+          return { value: undefined, done: true };
+        }
+      });
+
+      const result = source.reduce((acc, value, index) => {
+        Goccia.gc();
+        acc.push(value.marker + ":" + index);
+        return acc;
+      }, []);
+
+      expect(result).toEqual(["v1:0", "v2:1"]);
+    });
   });
 });
