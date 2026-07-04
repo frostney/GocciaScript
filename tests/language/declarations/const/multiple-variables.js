@@ -188,4 +188,9 @@ test("const with destructuring patterns", () => {
   } = sourceObject;
   expect(city).toBe("New York");
   expect(zip).toBe("10001");
+
+  // Full object binding syntax accepts IdentifierName property keys even when
+  // the key itself would be reserved as a binding name.
+  const { return: returnValue } = { return: "done" };
+  expect(returnValue).toBe("done");
 });

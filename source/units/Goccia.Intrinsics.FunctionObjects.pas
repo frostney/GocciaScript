@@ -34,6 +34,8 @@ type
 
     function AsyncIteratorSelf(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+    function AsyncIteratorAsyncDispose(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     function CreateHiddenFunctionConstructor(const AName: string;
       const AFunctionPrototype, AConstructorPrototype: TGocciaObjectValue;
       const AKind: TGocciaDynamicFunctionKind):
@@ -74,11 +76,16 @@ uses
   SysUtils,
 
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Realm,
+  Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
   Goccia.Values.GeneratorValue,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.PromiseValue,
+  Goccia.Values.SymbolValue,
+  Goccia.VM.Exception;
 
 var
   GFunctionObjectIntrinsicsSlot: TGocciaRealmOwnedSlotId;
@@ -88,6 +95,20 @@ var
   GAsyncIteratorPrototypeSlot: TGocciaRealmSlotId;
   GAsyncGeneratorFunctionPrototypeSlot: TGocciaRealmSlotId;
   GAsyncGeneratorPrototypeSlot: TGocciaRealmSlotId;
+
+type
+  TGocciaAsyncDisposeFulfillHandler = class(TGocciaObjectValue)
+  public
+    function Invoke(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+  end;
+
+function TGocciaAsyncDisposeFulfillHandler.Invoke(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
 
 procedure RequirePrototype(const APrototype: TGocciaObjectValue;
   const AName: string);
@@ -117,6 +138,78 @@ function TGocciaFunctionObjectIntrinsics.AsyncIteratorSelf(
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := AThisValue;
+end;
+
+function TGocciaFunctionObjectIntrinsics.AsyncIteratorAsyncDispose(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Promise: TGocciaPromiseValue;
+  Awaited: TGocciaPromiseValue;
+  ReturnMethod: TGocciaValue;
+  ReturnResult: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
+  FulfillHost: TGocciaAsyncDisposeFulfillHandler;
+  FulfillFn: TGocciaNativeFunctionValue;
+  GC: TGarbageCollector;
+begin
+  Promise := TGocciaPromiseValue.Create;
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    GC.AddTempRoot(Promise);
+  try
+    try
+      if not (AThisValue is TGocciaObjectValue) then
+        ThrowTypeError('AsyncIterator.prototype[Symbol.asyncDispose] called on non-object');
+
+      ReturnMethod := TGocciaObjectValue(AThisValue).GetProperty(PROP_RETURN);
+      if (not Assigned(ReturnMethod)) or
+         (ReturnMethod is TGocciaUndefinedLiteralValue) or
+         (ReturnMethod is TGocciaNullLiteralValue) then
+      begin
+        Promise.Resolve(TGocciaUndefinedLiteralValue.UndefinedValue);
+        Exit(Promise);
+      end;
+      if not ReturnMethod.IsCallable then
+        ThrowTypeError('Async iterator return must be callable');
+
+      CallArgs := TGocciaArgumentsCollection.Create;
+      try
+        ReturnResult := DispatchCall(ReturnMethod, CallArgs, AThisValue);
+      finally
+        CallArgs.Free;
+      end;
+    except
+      on E: EGocciaBytecodeThrow do
+      begin
+        Promise.Reject(E.ThrownValue);
+        Exit(Promise);
+      end;
+      on E: TGocciaThrowValue do
+      begin
+        Promise.Reject(E.Value);
+        Exit(Promise);
+      end;
+    end;
+
+    Awaited := TGocciaPromiseValue.Create;
+    if Assigned(GC) then
+      GC.AddTempRoot(Awaited);
+    try
+      Awaited.Resolve(ReturnResult);
+      FulfillHost := TGocciaAsyncDisposeFulfillHandler.Create;
+      FulfillFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        FulfillHost.Invoke, '', 1);
+      FulfillFn.CapturedRoot := FulfillHost;
+      Result := Awaited.InvokeThen(FulfillFn, nil);
+    finally
+      if Assigned(GC) then
+        GC.RemoveTempRoot(Awaited);
+    end;
+  finally
+    if Assigned(GC) then
+      GC.RemoveTempRoot(Promise);
+  end;
 end;
 
 function TGocciaFunctionObjectIntrinsics.CreateHiddenFunctionConstructor(
@@ -271,6 +364,12 @@ begin
       TGocciaPropertyDescriptorData.Create(
         TGocciaNativeFunctionValue.CreateWithoutPrototype(
           AsyncIteratorSelf, '[Symbol.asyncIterator]', 0),
+        [pfConfigurable, pfWritable]));
+    AsyncIteratorPrototype.DefineSymbolProperty(
+      TGocciaSymbolValue.WellKnownAsyncDispose,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          AsyncIteratorAsyncDispose, '[Symbol.asyncDispose]', 0),
         [pfConfigurable, pfWritable]));
 
     FunctionPrototype.DefineProperty(PROP_PROTOTYPE,

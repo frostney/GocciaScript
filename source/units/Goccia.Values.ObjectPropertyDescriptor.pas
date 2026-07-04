@@ -341,24 +341,25 @@ begin
   Getter := nil;
   Setter := nil;
 
-  // ES2026 §6.2.5.5 steps 3–9: extract descriptor fields
+  // ES2026 §6.2.5.5 steps 3-9: extract descriptor fields in observable order.
   HasEnumerableField := DescObj.HasProperty(PROP_ENUMERABLE);
-  HasConfigurableField := DescObj.HasProperty(PROP_CONFIGURABLE);
-  HasValue := DescObj.HasProperty(PROP_VALUE);
-  HasGet := DescObj.HasProperty(PROP_GET);
-  HasSet := DescObj.HasProperty(PROP_SET);
-  HasWritableField := DescObj.HasProperty(PROP_WRITABLE);
-
   if HasEnumerableField then
     Enumerable := DescObj.GetProperty(PROP_ENUMERABLE).ToBooleanLiteral.Value;
+
+  HasConfigurableField := DescObj.HasProperty(PROP_CONFIGURABLE);
   if HasConfigurableField then
     Configurable := DescObj.GetProperty(PROP_CONFIGURABLE).ToBooleanLiteral.Value;
+
+  HasValue := DescObj.HasProperty(PROP_VALUE);
   if HasValue then
     Value := DescObj.GetProperty(PROP_VALUE);
+
+  HasWritableField := DescObj.HasProperty(PROP_WRITABLE);
   if HasWritableField then
     Writable := DescObj.GetProperty(PROP_WRITABLE).ToBooleanLiteral.Value;
 
   // ES2026 §6.2.5.5 step 7: validate getter
+  HasGet := DescObj.HasProperty(PROP_GET);
   if HasGet then
   begin
     Getter := DescObj.GetProperty(PROP_GET);
@@ -369,6 +370,7 @@ begin
   end;
 
   // ES2026 §6.2.5.5 step 8: validate setter
+  HasSet := DescObj.HasProperty(PROP_SET);
   if HasSet then
   begin
     Setter := DescObj.GetProperty(PROP_SET);

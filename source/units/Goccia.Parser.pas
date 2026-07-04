@@ -8413,8 +8413,8 @@ begin
       end
       else if IsIdentifierNameToken(Peek.TokenType) then
       begin
-        CanUseShorthand := True;
         KeyToken := Advance;
+        CanUseShorthand := IsIdentifierBindingToken(KeyToken.TokenType);
         Key := KeyToken.Lexeme;
       end
       else if Check(gttString) then
