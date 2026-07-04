@@ -74,6 +74,18 @@ describe("Iterator.from()", () => {
     expect(iter.next().done).toBe(true);
   });
 
+  test("wrapped iterator inherits Symbol.iterator from the shared prototype", () => {
+    const iteratorLike = {
+      next() {
+        return { value: undefined, done: true };
+      }
+    };
+    const iter = Iterator.from(iteratorLike);
+
+    expect(Object.prototype.hasOwnProperty.call(iter, Symbol.iterator)).toBe(false);
+    expect(iter[Symbol.iterator]()).toBe(iter);
+  });
+
   test("wrapped iterator next returns the underlying raw result", () => {
     const iteratorLike = {
       next() {

@@ -223,11 +223,6 @@ begin
   Prototype := GetSharedWrapForValidIteratorPrototype;
   if Assigned(Prototype) then
     FPrototype := Prototype;
-  DefineSymbolProperty(TGocciaSymbolValue.WellKnownIterator,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        GetIteratorMethodHost.IteratorSelf, '[Symbol.iterator]', 0),
-      [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaWrapForValidIteratorValue.RawNext: TGocciaValue;
@@ -1130,8 +1125,8 @@ function TGocciaIteratorValue.IteratorReduce(const AArgs: TGocciaArgumentsCollec
 var
   Iterator: TGocciaIteratorValue;
   Callback: TGocciaValue;
-  Accumulator, NewAccumulator, Value: TGocciaValue;
-  HasInitial, Done: Boolean;
+  Accumulator, NewAccumulator, Value, IndexValue: TGocciaValue;
+  HasInitial, Done, ValueWasRooted, IndexWasRooted: Boolean;
   CallArgs: TGocciaArgumentsCollection;
   Index: Integer;
 begin
@@ -1163,17 +1158,25 @@ begin
       Value := Iterator.DirectNext(Done);
       while not Done do
       begin
-        CallArgs := TGocciaArgumentsCollection.Create([Accumulator, Value, TGocciaNumberLiteralValue.Create(Index)]);
+        ValueWasRooted := AddTempRootIfNeeded(Value);
+        IndexValue := TGocciaNumberLiteralValue.Create(Index);
+        IndexWasRooted := AddTempRootIfNeeded(IndexValue);
         try
+          CallArgs := TGocciaArgumentsCollection.Create([Accumulator, Value, IndexValue]);
           try
-            NewAccumulator := InvokeCallable(Callback, CallArgs,
-              TGocciaUndefinedLiteralValue.UndefinedValue);
-          except
-            CloseIteratorPreservingError(Iterator);
-            raise;
+            try
+              NewAccumulator := InvokeCallable(Callback, CallArgs,
+                TGocciaUndefinedLiteralValue.UndefinedValue);
+            except
+              CloseIteratorPreservingError(Iterator);
+              raise;
+            end;
+          finally
+            CallArgs.Free;
           end;
         finally
-          CallArgs.Free;
+          RemoveTempRootIfNeeded(IndexValue, IndexWasRooted);
+          RemoveTempRootIfNeeded(Value, ValueWasRooted);
         end;
         TGarbageCollector.Instance.RemoveTempRoot(Accumulator);
         Accumulator := NewAccumulator;
@@ -1799,9 +1802,8 @@ begin
         Continue;
       PropValue := GetPropertyByKey(TGocciaObjectValue(IterablesArg),
         AllKeys[I]);
-      if (not Assigned(PropValue)) or
-         (PropValue is TGocciaUndefinedLiteralValue) then
-        Continue;
+      if not Assigned(PropValue) then
+        PropValue := TGocciaUndefinedLiteralValue.UndefinedValue;
       InnerIterator := GetIteratorFlattenable(PropValue, iphRejectPrimitives);
       if InnerIterator = nil then
         ThrowTypeError(Format(SErrorIteratorZipKeyedPropertyNotIterable,
