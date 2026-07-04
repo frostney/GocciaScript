@@ -203,6 +203,20 @@ begin
   end;
 end;
 
+function CreateStringLengthDescriptor(
+  const APrimitive: TGocciaStringLiteralValue;
+  const AName: string): TGocciaPropertyDescriptor;
+begin
+  Result := nil;
+  if AName <> PROP_LENGTH then
+    Exit;
+
+  Result := TGocciaPropertyDescriptorData.Create(
+    TGocciaNumberLiteralValue.Create(
+      UTF16CodeUnitLength(APrimitive.ToStringLiteral.Value)),
+    []);
+end;
+
 function LocaleCompareArgumentToLocale(const AArg: TGocciaValue): string;
 var
   Element: TGocciaValue;
@@ -714,6 +728,8 @@ var
   ExistingDescriptor: TGocciaPropertyDescriptor;
 begin
   ExistingDescriptor := CreateStringIndexDescriptor(FPrimitive, AName);
+  if not Assigned(ExistingDescriptor) then
+    ExistingDescriptor := CreateStringLengthDescriptor(FPrimitive, AName);
   try
     if Assigned(ExistingDescriptor) and
        not IsCompatibleStringDefineDescriptor(ExistingDescriptor,
@@ -740,6 +756,8 @@ var
   ExistingDescriptor: TGocciaPropertyDescriptor;
 begin
   ExistingDescriptor := CreateStringIndexDescriptor(FPrimitive, AName);
+  if not Assigned(ExistingDescriptor) then
+    ExistingDescriptor := CreateStringLengthDescriptor(FPrimitive, AName);
   try
     if Assigned(ExistingDescriptor) and
        not IsCompatibleStringDefineDescriptor(ExistingDescriptor,
@@ -835,7 +853,6 @@ begin
 
   Members := TGocciaMemberCollection.Create;
   try
-    Members.AddAccessor(PROP_LENGTH, StringLength, nil, []);
     Members.AddMethod(StringCharAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(StringCharCodeAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(StringToUpperCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
