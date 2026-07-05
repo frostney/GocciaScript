@@ -132,6 +132,7 @@ console.log('awfy-driver: PR comment markdown...');
     generatedAt: '2026-07-05T00:00:00.000Z',
     metadata: {
       driver: { version: 1 },
+      options: { repetitions: 3 },
       corpus: {
         awfy: {
           repository: 'https://github.com/smarr/are-we-fast-yet',
@@ -146,9 +147,9 @@ console.log('awfy-driver: PR comment markdown...');
         summary: {
           checksumAgreement: { ok: true, checksums: ['verified'] },
           engineStats: {
-            goccia: { ok: 1, medianMicros: 1000 },
-            qjs: { ok: 1, medianMicros: 500 },
-            node: { ok: 1, medianMicros: 250 },
+            goccia: { ok: 3, rawCount: 3, medianMicros: 1000 },
+            qjs: { ok: 3, rawCount: 3, medianMicros: 500 },
+            node: { ok: 3, rawCount: 3, medianMicros: 250 },
           },
         },
       },
@@ -164,14 +165,17 @@ console.log('awfy-driver: PR comment markdown...');
   });
   assert(comment.includes(MARKER), 'comment includes stable marker');
   assert(comment.includes('NBody'), 'comment includes target name');
-  assert(comment.includes('| Target | Outcome | Verify | Goccia | QuickJS | Node |'), 'comment uses concise target table');
+  assert(comment.includes('| Target | Status | Goccia | QuickJS | Node |'), 'comment uses concise target table');
   assert(!comment.includes('| Kind |'), 'comment does not need a kind column for the PR AWFY lane');
   assert(!comment.includes('Checksum'), 'comment avoids ambiguous checksum wording');
-  assert(comment.includes('| NBody | ok | pass | 1.00ms | 0.50ms | 250.00µs |'), 'comment renders verification pass and timings');
+  assert(!comment.includes('| Outcome |'), 'comment avoids separate outcome and verification columns');
+  assert(!comment.includes('| Verify |'), 'comment avoids separate outcome and verification columns');
+  assert(comment.includes('| NBody | pass | 1.00ms | 0.50ms | 250.00µs |'), 'comment renders status and timings');
   assert(comment.includes('| Ratio (row / column) | Goccia | QuickJS | Node |'), 'comment uses a ratio matrix');
   assert(comment.includes('| Goccia | 1.000 | 2.000 | 4.000 |'), 'comment includes geomean matrix row');
   assert(comment.includes('1 pinned AWFY benchmark'), 'comment summarizes AWFY count');
-  assert(comment.includes('Use repeated runs for timing claims.'), 'comment caveats one-sample timing rows');
+  assert(comment.includes('Medians from 3 samples per engine'), 'comment reports sample count');
+  assert(comment.includes('raw JSON includes min/max/CV'), 'comment points to variation stats');
   assert(!comment.includes('diagnostic probe'), 'comment omits zero diagnostic probe noise');
   assert(!comment.includes('Pinned corpus:'), 'comment omits pin boilerplate');
   assert(!comment.includes('Generated:'), 'comment omits generated timestamp boilerplate');

@@ -22,7 +22,7 @@ function plural(count, singular) {
   return `${count} ${singular}${count === 1 ? '' : 's'}`;
 }
 
-function targetOutcome(target) {
+function targetStatus(target) {
   const stats = target.summary?.engineStats || {};
   const bad = [];
   for (const [engine, engineStats] of Object.entries(stats)) {
@@ -35,8 +35,12 @@ function targetOutcome(target) {
       (engineStats.missingResult || 0);
     if (ok === 0 || failures > 0) bad.push(engine);
   }
-  if (target.summary?.checksumAgreement?.ok === false) bad.push('correctness');
-  return bad.length === 0 ? 'ok' : `check ${bad.join(', ')}`;
+  const agreement = target.summary?.checksumAgreement;
+  const checksums = agreement?.checksums || [];
+  if (bad.length > 0) return `engine issue: ${bad.join(', ')}`;
+  if (agreement?.ok === false) return `verify mismatch: ${checksums.join(', ') || 'unknown'}`;
+  if (checksums.length === 0) return 'no verification';
+  return 'pass';
 }
 
 function engineCells(target) {
@@ -47,14 +51,6 @@ function engineCells(target) {
     if ((engineStats.ok || 0) === 0) return 'no ok sample';
     return formatMicros(engineStats.medianMicros);
   });
-}
-
-function targetVerification(target) {
-  const agreement = target.summary?.checksumAgreement;
-  const checksums = agreement?.checksums || [];
-  if (agreement?.ok === false) return `mismatch: ${checksums.join(', ') || 'unknown'}`;
-  if (checksums.length === 0) return '-';
-  return 'pass';
 }
 
 function ratioCell(geomean, numerator, denominator) {
@@ -79,14 +75,27 @@ function buildGeomeanTable(geomean) {
   return body;
 }
 
+function reportSampleCount(report) {
+  const repetitions = report.metadata?.options?.repetitions;
+  if (typeof repetitions === 'number') return repetitions;
+
+  const counts = new Set();
+  for (const target of report.targets || []) {
+    for (const engineStats of Object.values(target.summary?.engineStats || {})) {
+      if (typeof engineStats.rawCount === 'number') counts.add(engineStats.rawCount);
+    }
+  }
+  return counts.size === 1 ? [...counts][0] : null;
+}
+
 function buildAwfySmokeComment(report) {
   let body = `${MARKER}\n## AWFY Smoke\n\n`;
 
-  body += '| Target | Outcome | Verify | Goccia | QuickJS | Node |\n';
-  body += '|--------|---------|-------|--------|---------|------|\n';
+  body += '| Target | Status | Goccia | QuickJS | Node |\n';
+  body += '|--------|--------|--------|---------|------|\n';
   for (const target of report.targets || []) {
     const [goccia, qjs, node] = engineCells(target);
-    body += `| ${target.name} | ${targetOutcome(target)} | ${targetVerification(target)} | ${goccia} | ${qjs} | ${node} |\n`;
+    body += `| ${target.name} | ${targetStatus(target)} | ${goccia} | ${qjs} | ${node} |\n`;
   }
 
   body += buildGeomeanTable(report.geomeanRatios || {});
@@ -95,9 +104,10 @@ function buildAwfySmokeComment(report) {
   const probeCount = (report.targets || []).filter((target) => target.kind === 'probe').length;
   const countParts = [plural(awfyCount, 'pinned AWFY benchmark')];
   if (probeCount > 0) countParts.push(plural(probeCount, 'diagnostic probe'));
+  const sampleCount = reportSampleCount(report);
   body += `\n<sub>${countParts.join(' plus ')}. `;
-  body += 'One PR sample per engine; raw JSON is attached as the `awfy-smoke` artifact. ';
-  body += 'Use repeated runs for timing claims.</sub>\n';
+  if (sampleCount !== null) body += `Medians from ${plural(sampleCount, 'sample')} per engine; `;
+  body += 'raw JSON includes min/max/CV and is attached as the `awfy-smoke` artifact.</sub>\n';
   return body;
 }
 
@@ -139,6 +149,6 @@ module.exports = {
   MARKER,
   buildAwfySmokeComment,
   formatMicros,
-  targetOutcome,
+  targetStatus,
   unavailableComment,
 };

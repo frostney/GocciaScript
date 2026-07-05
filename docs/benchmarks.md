@@ -317,7 +317,7 @@ node scripts/awfy-driver.js \
   --awfy-dir /path/to/are-we-fast-yet/benchmarks/JavaScript \
   --benchmark NBody \
   --inner-iterations 1 \
-  --repetitions 1 \
+  --repetitions 3 \
   --engines goccia,qjs,node \
   --output tmp/awfy-smoke.json
 
@@ -364,10 +364,11 @@ The normalized report records:
 
 Pull requests run a bounded AWFY smoke lane from `.github/workflows/pr.yml`.
 The target set is recorded in `perf/awfy/manifest.json` under `ciSmoke`: all
-pinned AWFY benchmarks under Goccia bytecode, QuickJS, and Node. The workflow
-uploads the normalized JSON report and posts an `AWFY Smoke` PR comment.
-Diagnostic probes remain available through the same driver for focused engine
-work, but they are not mixed into the PR AWFY summary.
+pinned AWFY benchmarks under Goccia bytecode, QuickJS, and Node, with three raw
+samples per engine. The workflow uploads the normalized JSON report and posts an
+`AWFY Smoke` PR comment with medians; min/max/CV and raw samples stay in the
+artifact. Diagnostic probes remain available through the same driver for focused
+engine work, but they are not mixed into the PR AWFY summary.
 
 When comparing two Goccia binaries, pass `--goccia-baseline` and
 `--goccia-candidate`; the driver interleaves baseline and candidate samples per

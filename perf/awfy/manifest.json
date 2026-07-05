@@ -27,6 +27,7 @@
     "version": 1
   },
   "ciSmoke": {
+    "repetitions": 3,
     "benchmarks": [
       "Bounce",
       { "name": "CD", "innerIterations": 2 },

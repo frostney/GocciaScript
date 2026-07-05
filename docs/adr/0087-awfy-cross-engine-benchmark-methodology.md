@@ -36,8 +36,9 @@ may be rerun with `--profile=opcodes`, `--profile=functions`, or `--profile=all`
 for explanation.
 
 Pull-request CI runs a bounded smoke target set from `perf/awfy/manifest.json`:
-all pinned AWFY benchmarks under GocciaScript, QuickJS, and Node, surfaced as an
-`AWFY Smoke` PR comment.
+all pinned AWFY benchmarks under GocciaScript, QuickJS, and Node, with three raw
+samples per engine. CI surfaces the median timings as an `AWFY Smoke` PR comment
+and keeps min/max/CV plus raw samples in the JSON artifact.
 
 AWFY and web-tooling are roadmap-level proof, not the only gate for optimization
 work. The repo also keeps a small Goccia-owned diagnostic probe corpus under
