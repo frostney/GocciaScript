@@ -73,6 +73,7 @@ function CreateECMAScriptSourceLines(const AText: string): TStringList;
 function CreateUTF8FileTextLines(const AText: UTF8String): TStringList;
 function NormalizeNewlinesToLF(const AText: string): string;
 function NormalizeUTF8NewlinesToLF(const AText: UTF8String): UTF8String;
+function StringListToSourceText(const ALines: TStrings): string;
 function StringListToLFText(const ALines: TStrings): string;
 
 { Release the per-thread is-ASCII memo. FPC does not auto-finalize managed
@@ -92,6 +93,14 @@ uses
   fpwidestring,
   IntlICU,
   StringBuffer;
+
+type
+  TSourceTextStringList = class(TStringList)
+  private
+    FSourceText: string;
+  public
+    property SourceText: string read FSourceText write FSourceText;
+  end;
 
 function RetagUTF8Text(const ABytes: RawByteString): string;
 var
@@ -1280,7 +1289,8 @@ var
   LineStart: Integer;
   TextIndex: Integer;
 begin
-  Result := TStringList.Create;
+  Result := TSourceTextStringList.Create;
+  TSourceTextStringList(Result).SourceText := AText;
   LineStart := 1;
   TextIndex := 1;
 
@@ -1324,7 +1334,8 @@ var
   LineStart: Integer;
   TextIndex: Integer;
 begin
-  Result := TStringList.Create;
+  Result := TSourceTextStringList.Create;
+  TSourceTextStringList(Result).SourceText := AText;
   LineStart := 1;
   TextIndex := 1;
 
@@ -1366,7 +1377,8 @@ var
   LineStart: Integer;
   TextIndex: Integer;
 begin
-  Result := TStringList.Create;
+  Result := TSourceTextStringList.Create;
+  TSourceTextStringList(Result).SourceText := RetagUTF8Text(RawByteString(AText));
   LineStart := 1;
   TextIndex := 1;
 
@@ -1418,6 +1430,15 @@ begin
   NormalizedBytes := NormalizeRawNewlinesToLF(RawByteString(AText));
   SetCodePage(NormalizedBytes, CP_UTF8, False);
   Result := UTF8String(NormalizedBytes);
+end;
+
+function StringListToSourceText(const ALines: TStrings): string;
+begin
+  if not Assigned(ALines) then
+    Exit('');
+  if ALines is TSourceTextStringList then
+    Exit(TSourceTextStringList(ALines).SourceText);
+  Result := StringListToLFText(ALines);
 end;
 
 function StringListToLFText(const ALines: TStrings): string;

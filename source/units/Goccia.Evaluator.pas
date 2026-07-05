@@ -4770,6 +4770,7 @@ begin
       FunctionIntrinsicKind(FunctionExpression.IsAsync,
         FunctionExpression.IsGenerator));
   MethodValue := TGocciaMethodValue(Result);
+  MethodValue.HideNestedFunctionSourceText := AContext.HideFunctionSourceText;
   MethodValue.OwningClass := AHomeObject;
   if AContext.NonStrictMode and not HasStrictDirective then
   begin
@@ -4780,7 +4781,8 @@ begin
     MethodValue.StrictCode := True;
   MethodValue.SourceFilePath := AContext.CurrentFilePath;
   MethodValue.SourceLine := FunctionExpression.Line;
-  MethodValue.SourceText := FunctionExpression.SourceText;
+  if not AContext.HideFunctionSourceText then
+    MethodValue.SourceText := FunctionExpression.SourceText;
 end;
 
 function EvaluateObject(const AObjectExpression: TGocciaObjectExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -5035,6 +5037,8 @@ begin
     Result := TGocciaMethodValue.Create(EmptyParameters, Statements, AContext.Scope.CreateChild, '', ASuperClass)
   else
     Result := TGocciaFunctionValue.Create(EmptyParameters, Statements, AContext.Scope.CreateChild);
+  TGocciaFunctionValue(Result).HideNestedFunctionSourceText :=
+    AContext.HideFunctionSourceText;
   if AContext.NonStrictMode and not HasStrictDirective and
      not (AAsMethod or Assigned(ASuperClass)) then
   begin
@@ -5045,7 +5049,8 @@ begin
     TGocciaFunctionValue(Result).StrictCode := True;
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AGetterExpression.Line;
-  TGocciaFunctionValue(Result).SourceText := AGetterExpression.SourceText;
+  if not AContext.HideFunctionSourceText then
+    TGocciaFunctionValue(Result).SourceText := AGetterExpression.SourceText;
 end;
 
 function EvaluateSetter(const ASetterExpression: TGocciaSetterExpression; const AContext: TGocciaEvaluationContext; const ASuperClass: TGocciaValue = nil; const AAsMethod: Boolean = False): TGocciaValue;
@@ -5064,6 +5069,8 @@ begin
     Result := TGocciaMethodValue.Create(Parameters, Statements, AContext.Scope.CreateChild, '', ASuperClass)
   else
     Result := TGocciaFunctionValue.Create(Parameters, Statements, AContext.Scope.CreateChild);
+  TGocciaFunctionValue(Result).HideNestedFunctionSourceText :=
+    AContext.HideFunctionSourceText;
   if AContext.NonStrictMode and not HasStrictDirective and
      not (AAsMethod or Assigned(ASuperClass)) then
   begin
@@ -5074,7 +5081,8 @@ begin
     TGocciaFunctionValue(Result).StrictCode := True;
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := ASetterExpression.Line;
-  TGocciaFunctionValue(Result).SourceText := ASetterExpression.SourceText;
+  if not AContext.HideFunctionSourceText then
+    TGocciaFunctionValue(Result).SourceText := ASetterExpression.SourceText;
 end;
 
 // ES2026 §27.7.5.3 Await(value)
@@ -6787,13 +6795,16 @@ begin
     Result := TGocciaArrowFunctionValue.Create(AArrowFunctionExpression.Parameters, Statements, AContext.Scope.CreateChild);
   ApplyFunctionObjectPrototype(Result,
     FunctionIntrinsicKind(AArrowFunctionExpression.IsAsync, False));
+  TGocciaFunctionValue(Result).HideNestedFunctionSourceText :=
+    AContext.HideFunctionSourceText;
   TGocciaFunctionValue(Result).StrictCode :=
     (not AContext.NonStrictMode) or
     HasUseStrictDirective(AArrowFunctionExpression.Body);
   TGocciaFunctionValue(Result).IsExpressionBody := not (AArrowFunctionExpression.Body is TGocciaBlockStatement);
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AArrowFunctionExpression.Line;
-  TGocciaFunctionValue(Result).SourceText := AArrowFunctionExpression.SourceText;
+  if not AContext.HideFunctionSourceText then
+    TGocciaFunctionValue(Result).SourceText := AArrowFunctionExpression.SourceText;
 end;
 
 function EvaluateFunctionExpression(const AFunctionExpression: TGocciaFunctionExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -6838,6 +6849,8 @@ begin
   ApplyFunctionObjectPrototype(Result,
     FunctionIntrinsicKind(AFunctionExpression.IsAsync,
       AFunctionExpression.IsGenerator));
+  TGocciaFunctionValue(Result).HideNestedFunctionSourceText :=
+    AContext.HideFunctionSourceText;
   TGocciaFunctionValue(Result).Name := AFunctionExpression.Name;
   if AContext.NonStrictMode and not HasStrictDirective then
   begin
@@ -6852,7 +6865,8 @@ begin
     TGocciaFunctionValue(Result).StrictCode := True;
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AFunctionExpression.Line;
-  TGocciaFunctionValue(Result).SourceText := AFunctionExpression.SourceText;
+  if not AContext.HideFunctionSourceText then
+    TGocciaFunctionValue(Result).SourceText := AFunctionExpression.SourceText;
 
   // ES2026 §10.2.5 MakeConstructor: function declarations / expressions and
   // (async) generator declarations / expressions get their own `prototype`
@@ -7543,12 +7557,15 @@ begin
     Result := TGocciaMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass);
   ApplyFunctionObjectPrototype(Result,
     FunctionIntrinsicKind(AClassMethod.IsAsync, AClassMethod.IsGenerator));
+  TGocciaFunctionValue(Result).HideNestedFunctionSourceText :=
+    AContext.HideFunctionSourceText;
   if AClassMethod.IsGenerator then
     InstallFunctionOwnPrototypeProperty(Result,
       FunctionIntrinsicKind(AClassMethod.IsAsync, AClassMethod.IsGenerator));
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AClassMethod.Line;
-  TGocciaFunctionValue(Result).SourceText := AClassMethod.SourceText;
+  if not AContext.HideFunctionSourceText then
+    TGocciaFunctionValue(Result).SourceText := AClassMethod.SourceText;
 end;
 
 function EvaluateClass(const AClassDeclaration: TGocciaClassDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -8959,7 +8976,8 @@ begin
     ClassName := '<anonymous>';
 
   ClassValue := TGocciaClassValue.Create(ClassName, SuperClass);
-  ClassValue.SetSourceText(AClassDef.SourceText);
+  if not AContext.HideFunctionSourceText then
+    ClassValue.SetSourceText(AClassDef.SourceText);
   if SuperClassValue is TGocciaNullLiteralValue then
   begin
     ClassValue.LinkNativeSuperConstructor(TGocciaFunctionBase.GetSharedPrototype);

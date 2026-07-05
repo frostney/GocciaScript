@@ -586,9 +586,62 @@ end;
 
 function TGocciaParser.ExtractSourceRange(const AStartLine, AStartColumn: Integer): string;
 var
-  EndLine, EndColumn, I: Integer;
-  SB: TStringBuffer;
-  SourceLine: string;
+  EndLine, EndColumn, StartOffset, EndOffset: Integer;
+  SourceText: string;
+
+  function IsUnicodeLineTerminatorAt(const AIndex: Integer): Boolean; inline;
+  begin
+    Result := (AIndex + 2 <= Length(SourceText)) and
+      (SourceText[AIndex] = #$E2) and (SourceText[AIndex + 1] = #$80) and
+      ((SourceText[AIndex + 2] = #$A8) or
+       (SourceText[AIndex + 2] = #$A9));
+  end;
+
+  function OffsetForLineColumn(const ALine, AColumn: Integer): Integer;
+  var
+    CurrentLine, CurrentColumn, Index: Integer;
+  begin
+    CurrentLine := 1;
+    CurrentColumn := 1;
+    Index := 1;
+
+    while (Index <= Length(SourceText)) and
+      ((CurrentLine < ALine) or (CurrentColumn < AColumn)) do
+    begin
+      case SourceText[Index] of
+        #13:
+          begin
+            Inc(Index);
+            if (Index <= Length(SourceText)) and
+               (SourceText[Index] = #10) then
+              Inc(Index);
+            Inc(CurrentLine);
+            CurrentColumn := 1;
+            Continue;
+          end;
+        #10:
+          begin
+            Inc(Index);
+            Inc(CurrentLine);
+            CurrentColumn := 1;
+            Continue;
+          end;
+      end;
+
+      if IsUnicodeLineTerminatorAt(Index) then
+      begin
+        Inc(Index, 3);
+        Inc(CurrentLine);
+        CurrentColumn := 1;
+        Continue;
+      end;
+
+      Inc(Index);
+      Inc(CurrentColumn);
+    end;
+
+    Result := Index;
+  end;
 begin
   // End position is after the last consumed token (Previous).
   // Use EndColumn directly from the token, which correctly handles multi-line
@@ -599,31 +652,14 @@ begin
   if (AStartLine < 1) or (AStartLine > FSourceLines.Count) then
     Exit('');
 
-  if AStartLine = EndLine then
-  begin
-    SourceLine := FSourceLines[AStartLine - 1];
-    Result := Copy(SourceLine, AStartColumn, EndColumn - AStartColumn + 1);
-    Exit;
-  end;
+  SourceText := FLexer.Source;
+  StartOffset := OffsetForLineColumn(AStartLine, AStartColumn);
+  EndOffset := OffsetForLineColumn(EndLine, EndColumn + 1);
+  if (StartOffset < 1) or (StartOffset > Length(SourceText)) or
+     (EndOffset < StartOffset) then
+    Exit('');
 
-  SB := TStringBuffer.Create;
-  // First line from start column to end
-  SourceLine := FSourceLines[AStartLine - 1];
-  SB.Append(Copy(SourceLine, AStartColumn, Length(SourceLine) - AStartColumn + 1));
-  // Middle lines
-  for I := AStartLine to EndLine - 2 do
-  begin
-    SB.AppendChar(#10);
-    SB.Append(FSourceLines[I]);
-  end;
-  // Last line from start to end column
-  if EndLine >= 2 then
-  begin
-    SB.AppendChar(#10);
-    SourceLine := FSourceLines[EndLine - 1];
-    SB.Append(Copy(SourceLine, 1, EndColumn));
-  end;
-  Result := SB.ToString;
+  Result := Copy(SourceText, StartOffset, EndOffset - StartOffset);
 end;
 
 procedure TGocciaParser.PushPrivateClassContext;

@@ -28,6 +28,7 @@ type
     FSourceFilePath: string;
     FSourceLine: Integer;
     FSourceText: string;
+    FHideNestedFunctionSourceText: Boolean;
     FIsExpressionBody: Boolean;
     FIsSimpleParams: Boolean;
     // Memoized arguments-object decision: 0 = not yet computed, 1 = may
@@ -65,6 +66,7 @@ type
     property Closure: TGocciaScope read FClosure;
     property Name: string read FName write FName;
     property IsExpressionBody: Boolean read FIsExpressionBody write FIsExpressionBody;
+    property HideNestedFunctionSourceText: Boolean read FHideNestedFunctionSourceText write FHideNestedFunctionSourceText;
     property SourceFilePath: string read FSourceFilePath write FSourceFilePath;
     property SourceLine: Integer read FSourceLine write FSourceLine;
     property SourceText: string read FSourceText write SetSourceText;
@@ -591,6 +593,7 @@ begin
   ArgumentsObjectEnabled := FClosure.EffectiveArgumentsObjectEnabled;
   Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
   Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
+  Context.HideFunctionSourceText := FHideNestedFunctionSourceText;
   Context.DisposalTracker := nil;
   HasParamExpressions := HasParameterExpressions;
   // EvalRejectNames is only read while evaluating a parameter default, so
@@ -925,6 +928,7 @@ begin
     ArgumentsObjectEnabled := FClosure.EffectiveArgumentsObjectEnabled;
     Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
     Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
+    Context.HideFunctionSourceText := FHideNestedFunctionSourceText;
     Context.DisposalTracker := nil;
     HasParamExpressions := HasParameterExpressions;
     if HasParamExpressions then

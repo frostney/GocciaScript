@@ -27,6 +27,13 @@ describe("Function.prototype.call", () => {
     expect(typeof Function.prototype.call).toBe("function");
   });
 
+  test("throws TypeError when this value is not callable", () => {
+    const call = Function.prototype.call;
+
+    expect(() => call.call({})).toThrow(TypeError);
+    expect(() => call.call(0)).toThrow(TypeError);
+  });
+
   test("Function.prototype is a callable no-op", () => {
     expect(typeof Function.prototype).toBe("function");
     expect(Function.prototype()).toBe(undefined);

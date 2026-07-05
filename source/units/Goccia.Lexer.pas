@@ -105,6 +105,7 @@ type
     function ScanNextToken(const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken;
     property ScanTimeNanoseconds: Int64 read FScanTimeNanoseconds;
     property Tokens: TObjectList<TGocciaToken> read FTokens;
+    property Source: string read FSource;
     property SourceLines: TStringList read GetSourceLines;
   end;
 

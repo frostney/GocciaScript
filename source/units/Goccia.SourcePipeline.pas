@@ -253,8 +253,8 @@ begin
   else
     Prefix := 'function';
   end;
-  Result := '(' + Prefix + ' anonymous(' + AParametersSource + ') {' + #10 +
-    ABodySource + #10 + '})';
+  Result := '(' + Prefix + ' anonymous(' + AParametersSource + #10 + ') {' +
+    #10 + ABodySource + #10 + '})';
 end;
 
 procedure AddNameOnce(const ANames: TStrings; const AName: string);
@@ -496,7 +496,7 @@ begin
   try
     StartTime := GetNanoseconds;
     if Assigned(ASource) then
-      SourceText := StringListToLFText(ASource)
+      SourceText := StringListToSourceText(ASource)
     else
       SourceText := '';
     OriginalSourceText := SourceText;
