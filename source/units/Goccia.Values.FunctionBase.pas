@@ -320,6 +320,9 @@ begin
   if AValue is TGocciaFunctionBase then
     Exit(TGocciaFunctionBase(AValue).CreationRealm);
 
+  if AValue is TGocciaClassValue then
+    Exit(TGocciaClassValue(AValue).CreationRealm);
+
   if IsRegisteredProxyValue(AValue) and Assigned(GProxyGetFunctionRealmHook) then
     Exit(GProxyGetFunctionRealmHook(AValue));
 
