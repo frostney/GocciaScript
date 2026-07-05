@@ -138,6 +138,17 @@ function parsePositiveInteger(value, optionName) {
   return parsed;
 }
 
+function parseTargetSpec(value, optionName) {
+  const marker = value.lastIndexOf(':');
+  if (marker <= 0) return { name: value, innerIterations: null };
+  const suffix = value.slice(marker + 1);
+  if (!/^[0-9]+$/.test(suffix)) return { name: value, innerIterations: null };
+  return {
+    name: value.slice(0, marker),
+    innerIterations: parsePositiveInteger(suffix, optionName),
+  };
+}
+
 function readJSON(fileName) {
   return JSON.parse(fs.readFileSync(fileName, 'utf8'));
 }
@@ -235,7 +246,9 @@ function resolveTargets(options, manifest) {
   const benchmarkMap = manifest.awfy?.benchmarks || {};
   const probes = new Map((manifest.diagnosticProbes || []).map((probe) => [probe.name, probe]));
 
-  for (const benchmarkName of options.benchmarks) {
+  for (const benchmarkSpec of options.benchmarks) {
+    const parsed = parseTargetSpec(benchmarkSpec, '--benchmark');
+    const benchmarkName = parsed.name;
     const moduleName = benchmarkMap[benchmarkName];
     if (!moduleName) throw new Error(`Unknown AWFY benchmark: ${benchmarkName}`);
     if (!options.awfyDir) throw new Error('--awfy-dir is required when --benchmark is used');
@@ -243,22 +256,24 @@ function resolveTargets(options, manifest) {
       kind: 'awfy',
       name: benchmarkName,
       moduleName,
-      innerIterations: options.innerIterations || DEFAULT_INNER_ITERATIONS,
-      workstreams: ['#856'],
+      innerIterations: options.innerIterations || parsed.innerIterations || DEFAULT_INNER_ITERATIONS,
+      focusAreas: ['awfy'],
       tags: ['awfy'],
       source: `${options.awfyDir}/${moduleName}.js`,
     });
   }
 
-  for (const probeName of options.probes) {
+  for (const probeSpec of options.probes) {
+    const parsed = parseTargetSpec(probeSpec, '--probe');
+    const probeName = parsed.name;
     const probe = probes.get(probeName);
     if (!probe) throw new Error(`Unknown diagnostic probe: ${probeName}`);
     targets.push({
       kind: 'probe',
       name: probe.name,
       probe,
-      innerIterations: options.innerIterations || probe.defaultInnerIterations || DEFAULT_INNER_ITERATIONS,
-      workstreams: probe.workstreams || [],
+      innerIterations: options.innerIterations || parsed.innerIterations || probe.defaultInnerIterations || DEFAULT_INNER_ITERATIONS,
+      focusAreas: probe.focusAreas || [],
       tags: probe.tags || [],
       source: probe.file,
       engines: probe.engines || null,
@@ -408,7 +423,7 @@ function coefficientOfVariation(values) {
 
 function summarizeSamples(samples) {
   const values = samples
-    .filter((sample) => sample.outcome === 'ok' && typeof sample.durationMicros === 'number' && sample.durationMicros > 0)
+    .filter((sample) => sample.outcome === 'ok' && typeof sample.durationMicros === 'number' && sample.durationMicros >= 0)
     .map((sample) => sample.durationMicros);
   const filtered = iqrFiltered(values);
   return {
@@ -608,7 +623,7 @@ function main(argv = process.argv.slice(2)) {
         name: target.name,
         source: target.source,
         generatedBundle: options.keepTemp ? bundleFile : null,
-        workstreams: target.workstreams,
+        focusAreas: target.focusAreas,
         tags: target.tags,
         innerIterations: target.innerIterations,
         samples,

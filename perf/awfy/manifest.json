@@ -29,6 +29,7 @@
   "ciSmoke": {
     "benchmarks": [
       "Bounce",
+      { "name": "CD", "innerIterations": 2 },
       "DeltaBlue",
       "Havlak",
       "Json",
@@ -42,128 +43,125 @@
       "Storage",
       "Towers"
     ],
-    "probes": ["generic-plus-scalars"],
-    "excludedBenchmarks": {
-      "CD": "Current portable bundle crashes before a normalized result under GocciaScript, QuickJS, and Node."
-    }
+    "probes": [{ "name": "generic-plus-scalars", "innerIterations": 1 }]
   },
   "diagnosticProbes": [
     {
       "name": "propaccess-monomorphic",
       "file": "perf/probes/propaccess-monomorphic.js",
-      "workstreams": ["W3", "W6"],
+      "focusAreas": ["property-access", "primitive-coercion", "scalar-plus"],
       "defaultInnerIterations": 40000,
       "tags": ["property-access", "op-to-primitive", "scalar-plus"]
     },
     {
       "name": "generic-plus-scalars",
       "file": "perf/probes/generic-plus-scalars.js",
-      "workstreams": ["W3"],
+      "focusAreas": ["scalar-plus"],
       "defaultInnerIterations": 200000,
       "tags": ["arithmetic", "scalar-plus"]
     },
     {
       "name": "loop-dispatch-floor",
       "file": "perf/probes/loop-dispatch-floor.js",
-      "workstreams": ["W1", "W2"],
+      "focusAreas": ["dispatch", "loop"],
       "defaultInnerIterations": 400000,
       "tags": ["dispatch", "loop"]
     },
     {
       "name": "nbody-minimal",
       "file": "perf/probes/nbody-minimal.js",
-      "workstreams": ["W2", "W3"],
+      "focusAreas": ["arithmetic", "loop"],
       "defaultInnerIterations": 2000,
       "tags": ["arithmetic", "loops"]
     },
     {
       "name": "fib-recursive",
       "file": "perf/probes/fib-recursive.js",
-      "workstreams": ["W5"],
+      "focusAreas": ["call-path", "recursion"],
       "defaultInnerIterations": 25,
       "tags": ["call", "recursion"]
     },
     {
       "name": "fixed-arg-call",
       "file": "perf/probes/fixed-arg-call.js",
-      "workstreams": ["W5"],
+      "focusAreas": ["call-path", "fixed-args"],
       "defaultInnerIterations": 100000,
       "tags": ["call", "fixed-args"]
     },
     {
       "name": "method-call-fixed-arg",
       "file": "perf/probes/method-call-fixed-arg.js",
-      "workstreams": ["W5", "W6"],
+      "focusAreas": ["call-path", "method-dispatch"],
       "defaultInnerIterations": 100000,
       "tags": ["call", "method"]
     },
     {
       "name": "sort-comparator",
       "file": "perf/probes/sort-comparator.js",
-      "workstreams": ["W5"],
+      "focusAreas": ["call-path", "array-sort"],
       "defaultInnerIterations": 2000,
       "tags": ["call", "array-sort"]
     },
     {
       "name": "bound-spread-apply",
       "file": "perf/probes/bound-spread-apply.js",
-      "workstreams": ["W5"],
+      "focusAreas": ["call-path", "bound", "spread", "apply"],
       "defaultInnerIterations": 50000,
       "tags": ["call", "bound", "spread", "apply"]
     },
     {
       "name": "string-append-30k",
       "file": "perf/probes/string-append-30k.js",
-      "workstreams": ["W6"],
+      "focusAreas": ["string", "append"],
       "defaultInnerIterations": 30000,
       "tags": ["string", "append"]
     },
     {
       "name": "string-builder-shaped",
       "file": "perf/probes/string-builder-shaped.js",
-      "workstreams": ["W6"],
+      "focusAreas": ["string", "join"],
       "defaultInnerIterations": 30000,
       "tags": ["string", "join"]
     },
     {
       "name": "regexp-corpus-build",
       "file": "perf/probes/regexp-corpus-build.js",
-      "workstreams": ["W6"],
+      "focusAreas": ["regexp", "string-corpus-build"],
       "defaultInnerIterations": 20000,
       "tags": ["regexp", "string-corpus-build"]
     },
     {
       "name": "regexp-exec-replace",
       "file": "perf/probes/regexp-exec-replace.js",
-      "workstreams": ["W6"],
+      "focusAreas": ["regexp", "string-corpus"],
       "defaultInnerIterations": 20000,
       "tags": ["regexp", "string-corpus"]
     },
     {
       "name": "typed-array-call-return",
       "file": "perf/probes/typed-array-call-return.js",
-      "workstreams": ["W5", "W6", "#860"],
+      "focusAreas": ["typed-array", "boxing", "call-return"],
       "defaultInnerIterations": 20000,
       "tags": ["typed-array", "boxing", "call-return"]
     },
     {
       "name": "prop-polymorphic",
       "file": "perf/probes/prop-polymorphic.js",
-      "workstreams": ["#861"],
+      "focusAreas": ["inline-cache", "polymorphic"],
       "defaultInnerIterations": 50000,
       "tags": ["inline-cache", "polymorphic"]
     },
     {
       "name": "prop-megamorphic",
       "file": "perf/probes/prop-megamorphic.js",
-      "workstreams": ["#861"],
+      "focusAreas": ["inline-cache", "megamorphic"],
       "defaultInnerIterations": 50000,
       "tags": ["inline-cache", "megamorphic"]
     },
     {
       "name": "strict-typed-arith",
       "file": "perf/probes/strict-typed-arith.js",
-      "workstreams": ["W4"],
+      "focusAreas": ["strict-types", "arithmetic"],
       "defaultInnerIterations": 100000,
       "engines": ["goccia", "goccia-baseline", "goccia-candidate"],
       "gocciaFlags": ["--strict-types"],
@@ -172,7 +170,7 @@
     {
       "name": "strict-typed-call",
       "file": "perf/probes/strict-typed-call.js",
-      "workstreams": ["W4", "W5"],
+      "focusAreas": ["strict-types", "call-path"],
       "defaultInnerIterations": 100000,
       "engines": ["goccia", "goccia-baseline", "goccia-candidate"],
       "gocciaFlags": ["--strict-types"],

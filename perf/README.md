@@ -1,4 +1,4 @@
-# Performance Handover Tooling
+# Cross-Engine Performance Tooling
 
 ## Executive Summary
 
@@ -13,10 +13,10 @@
   by the other pinned upstream suites.
 - Timing runs and Goccia profiler-backed diagnostic runs are separate by design.
 
-Use this directory for cross-engine performance handover work that needs Node,
-QuickJS, and GocciaScript to run the same script entrypoints. Use `benchmarks/`
-for the in-repo benchmark runner corpus.
+Use this directory for cross-engine performance work that needs Node, QuickJS,
+and GocciaScript to run the same script entrypoints. Use `benchmarks/` for the
+in-repo benchmark runner corpus.
 
 See [Benchmarks](../docs/benchmarks.md#awfy-cross-engine-lane) and
-[ADR 0086](../docs/adr/0086-awfy-cross-engine-handover-methodology.md) for the
+[ADR 0086](../docs/adr/0086-awfy-cross-engine-benchmark-methodology.md) for the
 methodology and acceptance criteria.

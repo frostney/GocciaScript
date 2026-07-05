@@ -1,4 +1,4 @@
-# AWFY cross-engine handover methodology
+# AWFY cross-engine benchmark methodology
 
 **Date:** 2026-07-05
 **Area:** `benchmarking`, `tooling`
@@ -23,7 +23,7 @@ surface and report first-class failures for the rest. Per-benchmark bundles make
 each timeout, crash, OOM, parse failure, or checksum failure an explicit result
 instead of a reason the whole corpus disappears.
 
-Cross-engine timing claims from this lane must follow the handover protocol:
+Cross-engine timing claims from this lane must follow the benchmark protocol:
 production Goccia bytecode binaries, raw samples retained in JSON, medians plus
 IQR/min/max/CV, checksum/verification agreement across engines, and environment
 metadata for Goccia commit, FPC version, platform, architecture, reference-engine
@@ -36,18 +36,16 @@ may be rerun with `--profile=opcodes`, `--profile=functions`, or `--profile=all`
 for explanation.
 
 Pull-request CI runs a bounded smoke target set from `perf/awfy/manifest.json`:
-thirteen pinned AWFY benchmarks and one diagnostic probe under GocciaScript,
-QuickJS, and Node, surfaced as an `AWFY Smoke` PR comment. Full-corpus AWFY
-timing stays out of the PR gate until the remaining benchmarks are stable enough
-for that budget.
+all pinned AWFY benchmarks and one diagnostic probe under GocciaScript, QuickJS,
+and Node, surfaced as an `AWFY Smoke` PR comment.
 
 AWFY and web-tooling are roadmap-level proof, not the only gate for optimization
 work. The repo also keeps a small Goccia-owned diagnostic probe corpus under
-`perf/probes/` for the handover workstreams: dispatch preamble and loop floor (W1/W2), scalar `+` and
-`OP_TO_PRIMITIVE` pressure (W3), strict-types typed emission probes where syntax
-is Goccia-only (W4), call-path probes (W5), string/RegExp cliffs (W6), and the
-later typed-array boxing / inline-cache levers (#860/#861). Those probes use the
-same normalized driver/report schema but are not upstream AWFY benchmarks.
+`perf/probes/` for targeted engine surfaces: dispatch preamble and loop floor,
+scalar `+` and `OP_TO_PRIMITIVE` pressure, strict-types typed emission probes
+where syntax is Goccia-only, call-path probes, string/RegExp cliffs, and the
+later typed-array boxing / inline-cache levers (#860/#861). Those probes use
+the same normalized driver/report schema but are not upstream AWFY benchmarks.
 
 Consequences:
 

@@ -301,7 +301,7 @@ The PR workflow (`.github/workflows/pr.yml`) builds the PR's base commit (`main`
 ## AWFY Cross-Engine Lane
 
 The `benchmarks/` directory is reserved for `GocciaBenchmarkRunner` inputs that
-register `suite()` / `bench()` cases. Cross-engine AWFY and handover diagnostic
+register `suite()` / `bench()` cases. Cross-engine AWFY and diagnostic
 probes live under `perf/` because they are plain shell-portable scripts driven by
 Node tooling, not benchmark-runner files. This keeps CI's recursive benchmark
 scan from treating diagnostic probes as missing `suite()` files.
@@ -363,11 +363,10 @@ The normalized report records:
   AWFY corpus SHA, and driver version
 
 Pull requests run a bounded AWFY smoke lane from `.github/workflows/pr.yml`.
-The target set is recorded in `perf/awfy/manifest.json` under `ciSmoke`: thirteen
+The target set is recorded in `perf/awfy/manifest.json` under `ciSmoke`: all
 pinned AWFY benchmarks plus `generic-plus-scalars`, under Goccia bytecode,
 QuickJS, and Node. The workflow uploads the normalized JSON report and posts an
-`AWFY Smoke` PR comment. This is a driver/corpus-shape guardrail only; it is not
-a full-corpus timing gate.
+`AWFY Smoke` PR comment.
 
 When comparing two Goccia binaries, pass `--goccia-baseline` and
 `--goccia-candidate`; the driver interleaves baseline and candidate samples per

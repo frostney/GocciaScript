@@ -43,15 +43,7 @@ function engineCells(target) {
 }
 
 function buildAwfySmokeComment(report) {
-  const awfy = report.metadata?.corpus?.awfy || {};
-  const shortSha = typeof awfy.commit === 'string' ? awfy.commit.slice(0, 8) : 'unknown';
-  const repo = awfy.repository || 'https://github.com/smarr/are-we-fast-yet';
-  const commitUrl = awfy.commit ? `${repo}/commit/${awfy.commit}` : repo;
-
   let body = `${MARKER}\n## AWFY Smoke\n\n`;
-  body += `Pinned corpus: [\`${shortSha}\`](${commitUrl})  \n`;
-  body += `Driver version: ${report.metadata?.driver?.version ?? 'unknown'}  \n`;
-  body += `Generated: ${report.generatedAt ?? 'unknown'}\n\n`;
 
   body += '| Target | Kind | Outcome | Checksum | Goccia | QuickJS | Node |\n';
   body += '|--------|------|---------|----------|--------|---------|------|\n';
@@ -75,8 +67,8 @@ function buildAwfySmokeComment(report) {
 
   const awfyCount = (report.targets || []).filter((target) => target.kind === 'awfy').length;
   const probeCount = (report.targets || []).filter((target) => target.kind === 'probe').length;
-  body += `\n<sub>Smoke only: ${plural(awfyCount, 'pinned AWFY benchmark')} plus ${plural(probeCount, 'diagnostic probe')}. `;
-  body += 'Full-corpus AWFY timing remains a handover/manual or scheduled lane, not a PR gate.</sub>\n';
+  body += `\n<sub>${plural(awfyCount, 'pinned AWFY benchmark')} plus ${plural(probeCount, 'diagnostic probe')}. `;
+  body += 'One PR sample per engine; raw JSON is attached as the `awfy-smoke` artifact.</sub>\n';
   return body;
 }
 

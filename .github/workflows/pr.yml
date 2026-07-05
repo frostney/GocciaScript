@@ -415,15 +415,14 @@ jobs:
           args=()
           while IFS= read -r benchmark; do
             args+=(--benchmark "$benchmark")
-          done < <(node -e "const m = require('./perf/awfy/manifest.json'); for (const name of m.ciSmoke.benchmarks) console.log(name)")
+          done < <(node -e "const m = require('./perf/awfy/manifest.json'); const spec = (item) => typeof item === 'string' ? item : (item.innerIterations ? item.name + ':' + item.innerIterations : item.name); for (const item of m.ciSmoke.benchmarks) console.log(spec(item))")
           while IFS= read -r probe; do
             args+=(--probe "$probe")
-          done < <(node -e "const m = require('./perf/awfy/manifest.json'); for (const name of m.ciSmoke.probes) console.log(name)")
+          done < <(node -e "const m = require('./perf/awfy/manifest.json'); const spec = (item) => typeof item === 'string' ? item : (item.innerIterations ? item.name + ':' + item.innerIterations : item.name); for (const item of m.ciSmoke.probes) console.log(spec(item))")
 
           node scripts/awfy-driver.js \
             --awfy-dir awfy-suite/benchmarks/JavaScript \
             "${args[@]}" \
-            --inner-iterations 1 \
             --repetitions 1 \
             --timeout-ms 300000 \
             --engines goccia,qjs,node \
@@ -434,15 +433,22 @@ jobs:
           node <<'NODE'
           const fs = require('fs');
           const report = JSON.parse(fs.readFileSync('awfy-smoke.json', 'utf8'));
+          const expectedEngines = ['goccia', 'qjs', 'node'];
           const failures = [];
           for (const target of report.targets || []) {
             if (target.summary?.checksumAgreement?.ok === false) {
               failures.push(`${target.name}: checksum mismatch`);
             }
-            for (const [engine, stats] of Object.entries(target.summary?.engineStats || {})) {
+            for (const engine of expectedEngines) {
+              const stats = target.summary?.engineStats?.[engine];
+              if (!stats) {
+                failures.push(`${target.name}/${engine}: missing engine stats`);
+                continue;
+              }
               const nonOk = (stats.timeout || 0) + (stats.crash || 0) + (stats.oom || 0) +
                 (stats.verificationFailed || 0) + (stats.missingResult || 0);
-              if ((stats.ok || 0) === 0 || nonOk > 0) {
+              if ((stats.ok || 0) === 0 || (stats.rawCount || 0) === 0 ||
+                typeof stats.medianMicros !== 'number' || nonOk > 0) {
                 failures.push(`${target.name}/${engine}: ${JSON.stringify(stats)}`);
               }
             }

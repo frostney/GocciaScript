@@ -43,6 +43,10 @@ console.log('awfy-driver: statistics...');
   assertEqual(summary.ok, 2, 'summary counts ok samples');
   assertEqual(summary.timeout, 1, 'summary counts timeout samples');
   assertEqual(summary.medianMicros, 105, 'summary reports sample median');
+
+  const zeroSummary = summarizeSamples([{ outcome: 'ok', durationMicros: 0 }]);
+  assertEqual(zeroSummary.rawCount, 1, 'summary keeps zero-duration samples visible');
+  assertEqual(zeroSummary.medianMicros, 0, 'summary reports zero-duration sample median');
 }
 
 console.log('awfy-driver: checksum agreement...');
@@ -150,6 +154,8 @@ console.log('awfy-driver: PR comment markdown...');
   assert(comment.includes('NBody'), 'comment includes target name');
   assert(comment.includes('goccia over qjs'), 'comment includes geomean ratio');
   assert(comment.includes('1 pinned AWFY benchmark'), 'comment summarizes AWFY count');
+  assert(!comment.includes('Pinned corpus:'), 'comment omits pin boilerplate');
+  assert(!comment.includes('Generated:'), 'comment omits generated timestamp boilerplate');
 }
 
 console.log(`awfy-driver: ${passed} assertions passed.`);
