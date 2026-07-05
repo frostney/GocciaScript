@@ -232,7 +232,15 @@ function FormatDouble(AValue: Double): string;
 var
   IsNeg: Boolean;
   SciStr, Mantissa, TestStr: string;
+{$IFDEF LAKON}
+  // Lakon retired ShortString (LK-RETIRED R3); its one string type is
+  // managed UTF-16, and its Str/Val are the FPC-exact flt_core port,
+  // so the fixed buffer degrades to a plain string with identical
+  // bytes (the leading-space strip and Val round-trip are unchanged).
+  Buf: string;
+{$ELSE}
   Buf: ShortString;
+{$ENDIF}
   Exp, N, K, I, W, EPos, D, Code: Integer;
   Parsed: Double;
   FS: TFormatSettings;
