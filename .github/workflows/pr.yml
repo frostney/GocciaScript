@@ -388,7 +388,7 @@ jobs:
           tar -C "$RUNNER_TEMP" -xf "$archive"
           make -C "$RUNNER_TEMP/quickjs-$version" install PREFIX="$prefix" CONFIG_M32=
           echo "$prefix/bin" >> "$GITHUB_PATH"
-          "$prefix/bin/qjs" --help | head -1
+          "$prefix/bin/qjs" --eval 'print("QuickJS " + (1 + 2))'
 
       - name: Download build
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
