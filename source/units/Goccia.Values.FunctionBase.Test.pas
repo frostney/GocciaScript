@@ -6,9 +6,15 @@ uses
   TestingPascalLibrary,
 
   Goccia.Arguments.Collection,
+  Goccia.Constants.ErrorNames,
+  Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Realm,
   Goccia.TestSetup,
   Goccia.Values.ClassValue,
+  Goccia.Values.Error,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
@@ -25,12 +31,14 @@ type
     procedure TestGetFunctionRealmReturnsClassCreationRealm;
     procedure TestGetFunctionRealmReturnsFunctionCreationRealm;
     procedure TestGetFunctionRealmUsesRegisteredProxyHook;
+    procedure TestGetFunctionRealmPropagatesRevokedProxyTypeError;
     procedure TestGetFunctionRealmReturnsNilForOtherValues;
   end;
 
 var
   GProxyRealmTestValue: TGocciaValue;
   GProxyRealmTestRealm: TGocciaRealm;
+  GProxyRealmTestRevoked: Boolean;
 
 function TestProxyPredicate(const AValue: TGocciaValue): Boolean;
 begin
@@ -59,6 +67,9 @@ end;
 
 function TestProxyGetFunctionRealm(const AProxy: TGocciaValue): TGocciaRealm;
 begin
+  if GProxyRealmTestRevoked then
+    ThrowTypeError(SErrorProxyRevoked, SSuggestProxyRevoked);
+
   Result := GProxyRealmTestRealm;
 end;
 
@@ -70,6 +81,8 @@ begin
     TestGetFunctionRealmReturnsFunctionCreationRealm);
   Test('GetFunctionRealm uses the registered proxy hook',
     TestGetFunctionRealmUsesRegisteredProxyHook);
+  Test('GetFunctionRealm propagates revoked proxy TypeError',
+    TestGetFunctionRealmPropagatesRevokedProxyTypeError);
   Test('GetFunctionRealm returns nil for other values',
     TestGetFunctionRealmReturnsNilForOtherValues);
 end;
@@ -135,7 +148,58 @@ begin
     RegisterProxyDispatchHooks(nil, nil, nil, nil, nil);
     GProxyRealmTestValue := nil;
     GProxyRealmTestRealm := nil;
+    GProxyRealmTestRevoked := False;
     Realm.Free;
+  end;
+end;
+
+procedure TTestFunctionBase.TestGetFunctionRealmPropagatesRevokedProxyTypeError;
+var
+  ProxyValue: TGocciaObjectValue;
+  RaisedExpected: Boolean;
+  ThrownMessage: string;
+  ThrownName: string;
+  ThrownNameValue: TGocciaValue;
+  ThrownMessageValue: TGocciaValue;
+begin
+  ProxyValue := TGocciaObjectValue.Create(nil);
+  GProxyRealmTestValue := ProxyValue;
+  GProxyRealmTestRevoked := True;
+  RegisterProxyDispatchHooks(TestProxyPredicate, TestProxyApply,
+    TestProxyConstruct, TestProxyGetPrototype, TestProxyGetFunctionRealm);
+
+  RaisedExpected := False;
+  ThrownName := '';
+  ThrownMessage := '';
+  try
+    try
+      GetFunctionRealm(ProxyValue);
+    except
+      on E: TGocciaThrowValue do
+      begin
+        RaisedExpected := True;
+        ThrownNameValue := nil;
+        ThrownMessageValue := nil;
+        if E.Value is TGocciaObjectValue then
+        begin
+          ThrownNameValue := TGocciaObjectValue(E.Value).GetProperty(PROP_NAME);
+          ThrownMessageValue := TGocciaObjectValue(E.Value).GetProperty(PROP_MESSAGE);
+        end;
+        if ThrownNameValue is TGocciaStringLiteralValue then
+          ThrownName := TGocciaStringLiteralValue(ThrownNameValue).Value;
+        if ThrownMessageValue is TGocciaStringLiteralValue then
+          ThrownMessage := TGocciaStringLiteralValue(ThrownMessageValue).Value;
+      end;
+    end;
+
+    Expect<Boolean>(RaisedExpected).ToBe(True);
+    Expect<string>(ThrownName).ToBe(TYPE_ERROR_NAME);
+    Expect<string>(ThrownMessage).ToBe(SErrorProxyRevoked);
+  finally
+    RegisterProxyDispatchHooks(nil, nil, nil, nil, nil);
+    GProxyRealmTestValue := nil;
+    GProxyRealmTestRealm := nil;
+    GProxyRealmTestRevoked := False;
   end;
 end;
 
@@ -144,6 +208,7 @@ var
   Value: TGocciaObjectValue;
 begin
   RegisterProxyDispatchHooks(nil, nil, nil, nil, nil);
+  GProxyRealmTestRevoked := False;
   Value := TGocciaObjectValue.Create(nil);
   Expect<TGocciaRealm>(GetFunctionRealm(Value)).ToBe(nil);
 end;
