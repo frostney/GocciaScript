@@ -1574,18 +1574,21 @@ begin
       else
       begin
         DiscardedLeft := Result;
-        if Op.TokenType = gttLooseEqual then
-          AddUnsupportedFeatureWarning('''=='' (loose equality) is not supported in GocciaScript',
-            'Use ''==='' (strict equality), or enable --compat-loose-equality',
-            Op.Line, Op.Column)
-        else
-          AddUnsupportedFeatureWarning('''!='' (loose inequality) is not supported in GocciaScript',
-            'Use ''!=='' (strict inequality), or enable --compat-loose-equality',
-            Op.Line, Op.Column);
-        DiscardedLeft.Free;
-        Right.Free;
-        Result := TGocciaLiteralExpression.Create(
-          TGocciaUndefinedLiteralValue.UndefinedValue, Op.Line, Op.Column);
+        try
+          if Op.TokenType = gttLooseEqual then
+            AddUnsupportedFeatureWarning('''=='' (loose equality) is not supported in GocciaScript',
+              'Use ''==='' (strict equality), or enable --compat-loose-equality',
+              Op.Line, Op.Column)
+          else
+            AddUnsupportedFeatureWarning('''!='' (loose inequality) is not supported in GocciaScript',
+              'Use ''!=='' (strict inequality), or enable --compat-loose-equality',
+              Op.Line, Op.Column);
+          Result := TGocciaLiteralExpression.Create(
+            TGocciaUndefinedLiteralValue.UndefinedValue, Op.Line, Op.Column);
+        finally
+          DiscardedLeft.Free;
+          Right.Free;
+        end;
       end;
     end
     else

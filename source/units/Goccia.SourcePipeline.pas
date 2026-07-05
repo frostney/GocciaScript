@@ -543,14 +543,6 @@ begin
           for I := 0 to Parser.WarningCount - 1 do
           begin
             ParserWarning := Parser.GetWarning(I);
-            if (AOptions.SourceType = stModule) and
-               (ParserWarning.Message =
-                 '''with'' statements require --compat-non-strict-mode') then
-              raise TGocciaSyntaxError.Create(
-                '''with'' statements are not allowed in strict mode',
-                ParserWarning.Line, ParserWarning.Column, AFileName,
-                Lexer.SourceLines);
-
             OrigLine := ParserWarning.Line;
             OrigCol := ParserWarning.Column;
             if Assigned(Result.FSourceMap) then

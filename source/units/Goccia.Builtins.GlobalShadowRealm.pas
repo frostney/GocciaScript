@@ -204,6 +204,8 @@ begin
   FEngine.ForInLoopsEnabled := AParentEngine.ForInLoopsEnabled;
   FEngine.ExperimentalJSModuleSourceEnabled :=
     AParentEngine.ExperimentalJSModuleSourceEnabled;
+  FEngine.WarningUnsupportedFeatures :=
+    AParentEngine.WarningUnsupportedFeatures;
   FEngine.Preprocessors := AParentEngine.Preprocessors;
   FEngine.RefreshGlobalThis;
   EnableShadowRealm(FEngine);

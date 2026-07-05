@@ -1,15 +1,16 @@
 // This script lists syntax that GocciaScript rejects by default and shows
 // supported alternatives. To observe the legacy warning/recovery behavior for
-// these snippets, run a separate file with --warning-unsupported-features.
+// these snippets, run tests/language/statements/unsupported-features with its
+// local warning-unsupported-features fixture config.
 
 const unsupported = [
   {
     syntax: "var x = 42;",
-    alternative: "let x = 42; or const x = 42;",
+    alternative: "let x = 42; const x = 42; or --compat-var",
   },
   {
     syntax: "for (let i = 0; i < 5; i++) { ... }",
-    alternative: "array methods or for...of",
+    alternative: "array methods, for...of, or --compat-traditional-for-loop",
   },
   {
     syntax: "while (condition) { ... }",
@@ -17,7 +18,7 @@ const unsupported = [
   },
   {
     syntax: "with (object) { ... }",
-    alternative: "explicit property access",
+    alternative: "explicit property access, or --compat-non-strict-mode",
   },
 ];
 

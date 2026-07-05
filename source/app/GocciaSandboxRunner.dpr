@@ -586,22 +586,11 @@ var
   Runtime: TGocciaRuntimeCore;
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
   EmptyConfig: TConfigEntryArray;
-  Compatibility: TGocciaCompatibilityFlags;
 begin
   EmptyConfig := EmptyConfigEntries;
   AEngine.SourceType := ResolveSourceTypeOption(EngineOptions.SourceType,
     EmptyConfig, AFileName);
-  ResolveCompatibilityFlags(EngineOptions, EmptyConfig, Compatibility);
-  AEngine.Compatibility := Compatibility;
-  AEngine.LabelStatementsEnabled := ResolveFlagOption(
-    EngineOptions.CompatibilityFlagOption(cfLabel), EmptyConfig);
-  AEngine.ForInLoopsEnabled := ResolveFlagOption(
-    EngineOptions.CompatibilityFlagOption(cfForIn), EmptyConfig);
-  AEngine.ExperimentalJSModuleSourceEnabled := ResolveFlagOption(
-    EngineOptions.CompatibilityFlagOption(cfExperimentalJSModuleSource),
-    EmptyConfig);
-  AEngine.WarningUnsupportedFeatures := ResolveFlagOption(
-    EngineOptions.WarningUnsupportedFeatures, EmptyConfig);
+  ApplyCompatibilityAndWarningFlags(AEngine, EngineOptions, EmptyConfig);
   AEngine.StrictTypes := ResolveFlagOption(EngineOptions.StrictTypes,
     EmptyConfig);
   AEngine.FunctionConstructor.Enabled := ResolveFlagOption(

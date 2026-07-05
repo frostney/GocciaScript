@@ -287,6 +287,23 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
         throw new Error(`Bare warning mode stdin should warn and print 23, got: ${bareWarningStdin}`);
     }
 
+    const shadowWarningSrc = join(tmp, "shadow-warning.js");
+    writeFileSync(
+      shadowWarningSrc,
+      [
+        "const realm = new ShadowRealm();",
+        "const fromEvaluate = realm.evaluate('while (false) {} 23;');",
+        "const fromEval = realm.evaluate(\"eval('while (false) {} 24;')\");",
+        "fromEvaluate + fromEval;",
+        "",
+      ].join("\n"),
+    );
+    const shadowWarningProc = await $`${BARE} --print ${shadowWarningSrc} --unsafe-shadowrealm --test262-host --warning-unsupported-features 2>&1`.nothrow();
+    const shadowWarningOut = shadowWarningProc.text();
+    if (shadowWarningProc.exitCode !== 0 ||
+        !shadowWarningOut.replace(/\r/g, "").split("\n").includes("47"))
+      throw new Error(`ShadowRealm child realm should inherit warning-unsupported-features, got: ${shadowWarningOut}`);
+
     const forSrc = join(tmp, "use-for.js");
     writeFileSync(forSrc, "let s = 0;\nfor (let i = 1; i <= 5; i++) { s = s + i; }\ns;\n");
     const forOut = await $`${BARE} --print ${forSrc} --compat-traditional-for-loop 2>&1`.text();
