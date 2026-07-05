@@ -39,6 +39,14 @@ describe("Uint8Array.prototype.toHex", () => {
     expect(() => fn.call(new Int32Array(1))).toThrow(TypeError);
   });
 
+  test("throws TypeError on detached buffers", () => {
+    const buffer = new ArrayBuffer(2);
+    const bytes = new Uint8Array(buffer);
+    buffer.transfer();
+
+    expect(() => bytes.toHex()).toThrow(TypeError);
+  });
+
   test("works with buffer offset", () => {
     const buffer = new ArrayBuffer(8);
     const full = new Uint8Array(buffer);

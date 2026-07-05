@@ -12,6 +12,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.BinaryData,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.SharedPrototype,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ClassValue,
@@ -51,9 +52,12 @@ type
     function BuiltinTagFallback: Boolean; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
+    procedure FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
+    class function GetSharedPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; static;
 
     property BufferValue: TGocciaValue read FBufferValue;
     property ByteOffset: Integer read FByteOffset;
@@ -95,7 +99,6 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Realm,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -141,9 +144,10 @@ begin
   else
     IntegerIndex := Trunc(Num.Value);
 
-  if (IntegerIndex < 0) or (IntegerIndex > MAX_SAFE_INTEGER_F) or
-     (IntegerIndex > High(Integer)) then
+  if (IntegerIndex < 0) or (IntegerIndex > MAX_SAFE_INTEGER_F) then
     ThrowRangeError(SErrorInvalidDataViewOffset, SSuggestTypedArrayLength);
+  if IntegerIndex > High(Integer) then
+    Exit(High(Integer));
 
   Result := Trunc(IntegerIndex);
 end;
@@ -315,6 +319,19 @@ begin
     ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
+class function TGocciaDataViewValue.GetSharedPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+var
+  Shared: TGocciaSharedPrototype;
+begin
+  Result := nil;
+  if not Assigned(ARealm) then
+    Exit;
+  Shared := TGocciaSharedPrototype(ARealm.GetOwnedSlot(GDataViewSharedSlot));
+  if Assigned(Shared) then
+    Result := Shared.Prototype;
+end;
+
 procedure TGocciaDataViewValue.SyncBufferData;
 begin
   if FBufferValue is TGocciaArrayBufferValue then
@@ -419,7 +436,10 @@ begin
 
   FByteOffset := Offset;
   FByteLength := ViewByteLength;
+end;
 
+procedure TGocciaDataViewValue.FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
+begin
   if IsDetachedBuffer then
     ThrowTypeError(SErrorCannotUseDetachedDataView, SSuggestArrayBufferDetached);
   if IsViewOutOfBounds then

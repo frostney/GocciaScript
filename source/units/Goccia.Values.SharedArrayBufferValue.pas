@@ -9,6 +9,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.SharedPrototype,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
@@ -21,6 +22,9 @@ type
   private
     FData: TBytes;
     FMaxByteLength: Integer;
+    FHasPendingAllocation: Boolean;
+    FPendingByteLength: Double;
+    FPendingMaxByteLength: Double;
 
     function GetByteLength: Integer;
 
@@ -36,9 +40,12 @@ type
     function BuiltinTagFallback: Boolean; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
+    procedure FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
+    class function GetSharedPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; static;
 
     property Data: TBytes read FData write FData;
     property MaxByteLength: Integer read FMaxByteLength;
@@ -61,8 +68,8 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Realm,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -103,6 +110,74 @@ begin
   Result := Trunc(IntegerIndex);
 end;
 
+function ToSharedArrayBufferConstructorIndex(const AValue: TGocciaValue): Double;
+var
+  IntegerIndex: Double;
+  Num: TGocciaNumberLiteralValue;
+begin
+  if (AValue = nil) or (AValue is TGocciaUndefinedLiteralValue) then
+    Exit(0);
+
+  Num := AValue.ToNumberLiteral;
+  if Num.IsNaN then
+    Exit(0);
+  if Num.IsInfinite then
+    ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
+
+  IntegerIndex := Trunc(Num.Value);
+  if (IntegerIndex < 0) or (IntegerIndex > MAX_SAFE_INTEGER_F) then
+    ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
+
+  Result := IntegerIndex;
+end;
+
+function ToSharedArrayBufferSliceIndex(const AValue: TGocciaValue;
+  const ALength: Integer): Integer;
+var
+  IntegerIndex: Double;
+  Num: TGocciaNumberLiteralValue;
+begin
+  Num := AValue.ToNumberLiteral;
+  if Num.IsNaN or Num.IsNegativeInfinity then
+    Exit(0);
+  if Num.IsInfinity then
+    Exit(ALength);
+
+  IntegerIndex := Trunc(Num.Value);
+  if IntegerIndex < 0 then
+  begin
+    if IntegerIndex <= -ALength then
+      Exit(0);
+    Exit(Max(ALength + Trunc(IntegerIndex), 0));
+  end;
+
+  if IntegerIndex >= ALength then
+    Exit(ALength);
+  Result := Trunc(IntegerIndex);
+end;
+
+function SharedArrayBufferSpeciesConstructor(
+  const ABuffer: TGocciaSharedArrayBufferValue): TGocciaValue;
+var
+  ConstructorValue, SpeciesValue: TGocciaValue;
+begin
+  // ES2026 §7.3.22 SpeciesConstructor(O, defaultConstructor)
+  ConstructorValue := ABuffer.GetProperty(PROP_CONSTRUCTOR);
+  if ConstructorValue is TGocciaUndefinedLiteralValue then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  if not (ConstructorValue is TGocciaObjectValue) then
+    ThrowTypeError(SErrorSpeciesNotConstructor, SSuggestSpeciesConstructor);
+
+  SpeciesValue := TGocciaObjectValue(ConstructorValue).GetSymbolProperty(
+    TGocciaSymbolValue.WellKnownSpecies);
+  if (SpeciesValue is TGocciaUndefinedLiteralValue) or
+     (SpeciesValue is TGocciaNullLiteralValue) then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  if not SpeciesValue.IsConstructable then
+    ThrowTypeError(SErrorSpeciesNotConstructor, SSuggestSpeciesConstructor);
+  Result := SpeciesValue;
+end;
+
 function TGocciaSharedArrayBufferValue.GetByteLength: Integer;
 begin
   Result := Length(FData);
@@ -114,6 +189,9 @@ var
 begin
   inherited Create(nil);
   FMaxByteLength := NO_MAX_BYTE_LENGTH;
+  FHasPendingAllocation := False;
+  FPendingByteLength := 0;
+  FPendingMaxByteLength := NO_MAX_BYTE_LENGTH;
   SetLength(FData, AByteLength);
   if AByteLength > 0 then
     FillChar(FData[0], AByteLength, 0);
@@ -128,6 +206,9 @@ var
   Shared: TGocciaSharedPrototype;
 begin
   inherited Create(nil);
+  FHasPendingAllocation := False;
+  FPendingByteLength := 0;
+  FPendingMaxByteLength := NO_MAX_BYTE_LENGTH;
   if AMaxByteLength >= 0 then
   begin
     if AByteLength > AMaxByteLength then
@@ -151,6 +232,9 @@ var
 begin
   inherited Create(AClass);
   FMaxByteLength := NO_MAX_BYTE_LENGTH;
+  FHasPendingAllocation := False;
+  FPendingByteLength := 0;
+  FPendingMaxByteLength := NO_MAX_BYTE_LENGTH;
   SetLength(FData, 0);
   InitializePrototype;
   Shared := GetSharedArrayBufferShared;
@@ -201,18 +285,31 @@ begin
     ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
+class function TGocciaSharedArrayBufferValue.GetSharedPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+var
+  Shared: TGocciaSharedPrototype;
+begin
+  Result := nil;
+  if not Assigned(ARealm) then
+    Exit;
+  Shared := TGocciaSharedPrototype(ARealm.GetOwnedSlot(GSharedArrayBufferSharedSlot));
+  if Assigned(Shared) then
+    Result := Shared.Prototype;
+end;
+
 // ES2026 §25.2.3.1 SharedArrayBuffer(length [, options])
 procedure TGocciaSharedArrayBufferValue.InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
 var
-  Len: Integer;
+  Len: Double;
   MaxByteLengthValue: TGocciaValue;
   OptionsArg: TGocciaValue;
-  RequestedMaxByteLength: Integer;
+  RequestedMaxByteLength: Double;
 begin
   if AArguments.Length = 0 then
     Len := 0
   else
-    Len := ToSharedArrayBufferIndex(AArguments.GetElement(0));
+    Len := ToSharedArrayBufferConstructorIndex(AArguments.GetElement(0));
 
   RequestedMaxByteLength := NO_MAX_BYTE_LENGTH;
   if AArguments.Length > 1 then
@@ -224,7 +321,7 @@ begin
       MaxByteLengthValue := OptionsArg.GetProperty(PROP_MAX_BYTE_LENGTH);
       if Assigned(MaxByteLengthValue) and
          not (MaxByteLengthValue is TGocciaUndefinedLiteralValue) then
-        RequestedMaxByteLength := ToSharedArrayBufferIndex(MaxByteLengthValue);
+        RequestedMaxByteLength := ToSharedArrayBufferConstructorIndex(MaxByteLengthValue);
     end;
   end;
 
@@ -232,14 +329,36 @@ begin
   begin
     if Len > RequestedMaxByteLength then
       ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
-    FMaxByteLength := RequestedMaxByteLength;
   end
+  else
+    RequestedMaxByteLength := NO_MAX_BYTE_LENGTH;
+
+  FHasPendingAllocation := True;
+  FPendingByteLength := Len;
+  FPendingMaxByteLength := RequestedMaxByteLength;
+end;
+
+procedure TGocciaSharedArrayBufferValue.FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
+var
+  Len: Integer;
+begin
+  if not FHasPendingAllocation then
+    Exit;
+
+  if (FPendingByteLength > High(Integer)) or
+     ((FPendingMaxByteLength >= 0) and (FPendingMaxByteLength > High(Integer))) then
+    ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
+
+  Len := Trunc(FPendingByteLength);
+  if FPendingMaxByteLength >= 0 then
+    FMaxByteLength := Trunc(FPendingMaxByteLength)
   else
     FMaxByteLength := NO_MAX_BYTE_LENGTH;
 
   SetLength(FData, Len);
   if Len > 0 then
     FillChar(FData[0], Len, 0);
+  FHasPendingAllocation := False;
 end;
 
 procedure TGocciaSharedArrayBufferValue.MarkReferences;
@@ -255,6 +374,13 @@ end;
 
 function TGocciaSharedArrayBufferValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 begin
+  if ((AName = PROP_BYTE_LENGTH) or
+      (AName = PROP_MAX_BYTE_LENGTH) or
+      (AName = PROP_GROWABLE)) and
+     ((AThisContext <> Self) or HasOwnProperty(AName) or
+      (Assigned(Prototype) and Prototype.HasProperty(AName))) then
+    Exit(inherited GetPropertyWithContext(AName, AThisContext));
+
   if (AName = PROP_MAX_BYTE_LENGTH) and HasOwnProperty(AName) then
     Exit(inherited GetPropertyWithContext(AName, AThisContext));
 
@@ -369,7 +495,9 @@ function TGocciaSharedArrayBufferValue.SharedArrayBufferSlice(const AArgs: TGocc
 var
   Buf: TGocciaSharedArrayBufferValue;
   Len, First, Final, NewLen: Integer;
-  StartNum, EndNum: TGocciaNumberLiteralValue;
+  SpeciesConstructor: TGocciaValue;
+  ConstructedValue: TGocciaValue;
+  ConstructorArgs: TGocciaArgumentsCollection;
   NewBuf: TGocciaSharedArrayBufferValue;
 begin
   if not (AThisValue is TGocciaSharedArrayBufferValue) then
@@ -380,45 +508,47 @@ begin
   Buf := TGocciaSharedArrayBufferValue(AThisValue);
   Len := Length(Buf.FData);
 
-  if AArgs.Length > 0 then
-  begin
-    StartNum := AArgs.GetElement(0).ToNumberLiteral;
-    if StartNum.IsNaN then
-      First := 0
-    else
-      First := Trunc(StartNum.Value);
-  end
+  if AArgs.Length = 0 then
+    First := 0
   else
-    First := 0;
-
-  if First < 0 then
-    First := Max(Len + First, 0)
-  else
-    First := Min(First, Len);
+    First := ToSharedArrayBufferSliceIndex(AArgs.GetElement(0), Len);
 
   // ES2026 §25.2.5.6 step 15: If end is undefined, let relativeEnd be len
   if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
-  begin
-    EndNum := AArgs.GetElement(1).ToNumberLiteral;
-    if EndNum.IsNaN then
-      Final := 0
-    else
-      Final := Trunc(EndNum.Value);
-  end
+    Final := ToSharedArrayBufferSliceIndex(AArgs.GetElement(1), Len)
   else
     Final := Len;
 
-  if Final < 0 then
-    Final := Max(Len + Final, 0)
-  else
-    Final := Min(Final, Len);
-
   NewLen := Max(Final - First, 0);
 
-  NewBuf := TGocciaSharedArrayBufferValue.Create(NewLen);
+  SpeciesConstructor := SharedArrayBufferSpeciesConstructor(Buf);
+  if SpeciesConstructor is TGocciaUndefinedLiteralValue then
+    NewBuf := TGocciaSharedArrayBufferValue.Create(NewLen)
+  else
+  begin
+    ConstructorArgs := TGocciaArgumentsCollection.Create(
+      [TGocciaNumberLiteralValue.Create(NewLen)]);
+    try
+      ConstructedValue := ConstructValue(SpeciesConstructor, ConstructorArgs,
+        SpeciesConstructor);
+    finally
+      ConstructorArgs.Free;
+    end;
+    if not (ConstructedValue is TGocciaSharedArrayBufferValue) then
+      ThrowTypeError('SharedArrayBuffer species constructor did not return a SharedArrayBuffer',
+        SSuggestSharedArrayBufferThisType);
+    NewBuf := TGocciaSharedArrayBufferValue(ConstructedValue);
+    if NewBuf = Buf then
+      ThrowTypeError(SErrorSharedArrayBufferSpeciesReturnedThis, SSuggestSpeciesConstructor);
+    if Length(NewBuf.FData) < NewLen then
+      ThrowTypeError('SharedArrayBuffer species constructor returned a buffer that is too small',
+        SSuggestSharedArrayBufferThisType);
+  end;
 
-  // ES2026 §25.2.5.6 step 11: If new.[[ArrayBufferData]] is O.[[ArrayBufferData]], throw TypeError
-  if Pointer(NewBuf.FData) = Pointer(Buf.FData) then
+  // ES2026 §25.2.5.6 step 11: If new.[[ArrayBufferData]] is O.[[ArrayBufferData]], throw TypeError.
+  // Zero-length Pascal dynamic arrays may both have nil storage; that does not
+  // represent the same ECMAScript data block.
+  if (NewLen > 0) and (Pointer(NewBuf.FData) = Pointer(Buf.FData)) then
     ThrowTypeError(SErrorSharedArrayBufferSpeciesReturnedThis, SSuggestSpeciesConstructor);
 
   if NewLen > 0 then

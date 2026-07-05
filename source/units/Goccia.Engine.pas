@@ -1102,7 +1102,10 @@ begin
       nil, [pfConfigurable]));
   if Assigned(FBuiltinArrayBuffer) then
     for Key in FBuiltinArrayBuffer.BuiltinObject.GetAllPropertyNames do
-      ArrayBufferConstructor.SetProperty(Key, FBuiltinArrayBuffer.BuiltinObject.GetProperty(Key));
+      ArrayBufferConstructor.DefineProperty(Key,
+        TGocciaPropertyDescriptorData.Create(
+          FBuiltinArrayBuffer.BuiltinObject.GetProperty(Key),
+          [pfConfigurable, pfWritable]));
   FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_ARRAY_BUFFER, ArrayBufferConstructor, dtConst, True);
 
   SharedArrayBufferConstructor := TGocciaSharedArrayBufferClassValue.Create(CONSTRUCTOR_SHARED_ARRAY_BUFFER, nil);
@@ -1122,7 +1125,7 @@ begin
   FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_DATA_VIEW, DataViewConstructor, dtConst, True);
 
   // Create %TypedArray% intrinsic (not globally exposed per spec §23.2.1)
-  FTypedArrayIntrinsic := TGocciaClassValue.Create('TypedArray', nil);
+  FTypedArrayIntrinsic := TGocciaTypedArrayIntrinsicClassValue.Create('TypedArray', nil);
   // §17: built-in name/length are {writable: false, enumerable: false, configurable: true}
   FTypedArrayIntrinsic.DefineProperty(PROP_NAME,
     TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create('TypedArray'), [pfConfigurable]));
