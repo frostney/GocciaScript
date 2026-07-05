@@ -75,4 +75,30 @@ describe("Uint8Array.prototype.setFromHex", () => {
     const target = new Uint8Array(5);
     expect(() => target.setFromHex("zzzz")).toThrow(SyntaxError);
   });
+
+  test("writes decoded bytes before throwing on later invalid data", () => {
+    const target = new Uint8Array([255, 255, 255]);
+    expect(() => target.setFromHex("aaag")).toThrow(SyntaxError);
+    expect(target[0]).toBe(0xAA);
+    expect(target[1]).toBe(255);
+    expect(target[2]).toBe(255);
+  });
+
+  test("throws TypeError on detached targets", () => {
+    const buffer = new ArrayBuffer(2);
+    const target = new Uint8Array(buffer);
+    buffer.transfer();
+
+    expect(() => target.setFromHex("aa")).toThrow(TypeError);
+  });
+
+  test("throws TypeError on immutable targets before reading the string", () => {
+    const buffer = new ArrayBuffer(2);
+    const seed = new Uint8Array(buffer);
+    seed[0] = 1;
+    const target = new Uint8Array(buffer.transferToImmutable());
+
+    expect(() => target.setFromHex("aa")).toThrow(TypeError);
+    expect(target[0]).toBe(1);
+  });
 });
