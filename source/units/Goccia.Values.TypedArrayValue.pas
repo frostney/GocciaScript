@@ -2952,9 +2952,7 @@ begin
   if ProtoValue is TGocciaObjectValue then
     Exit(TGocciaObjectValue(ProtoValue));
 
-  FallbackRealm := nil;
-  if ANewTarget is TGocciaFunctionBase then
-    FallbackRealm := TGocciaFunctionBase(ANewTarget).CreationRealm;
+  FallbackRealm := GetFunctionRealm(ANewTarget);
 
   if Assigned(FallbackRealm) and
      (FallbackRealm.GlobalEnv is TGocciaScope) then

@@ -124,7 +124,7 @@ begin
   ResultObj.AssignProperty(PROP_PROXY, ProxyInstance);
   ResultObj.AssignProperty(PROP_REVOKE,
     TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      Revoker.RevokeCallback, PROP_REVOKE, 0));
+      Revoker.RevokeCallback, '', 0));
 
   Result := ResultObj;
 end;

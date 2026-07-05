@@ -485,9 +485,7 @@ begin
   if ProtoValue is TGocciaObjectValue then
     Exit(TGocciaObjectValue(ProtoValue));
 
-  FallbackRealm := nil;
-  if ANewTarget is TGocciaFunctionBase then
-    FallbackRealm := TGocciaFunctionBase(ANewTarget).CreationRealm;
+  FallbackRealm := GetFunctionRealm(ANewTarget);
 
   Result := GetSharedArrayPrototypeForRealm(FallbackRealm);
   if not Assigned(Result) then
@@ -511,9 +509,7 @@ begin
   if ProtoValue is TGocciaObjectValue then
     Exit(TGocciaObjectValue(ProtoValue));
 
-  FallbackRealm := nil;
-  if ANewTarget is TGocciaFunctionBase then
-    FallbackRealm := TGocciaFunctionBase(ANewTarget).CreationRealm;
+  FallbackRealm := GetFunctionRealm(ANewTarget);
 
   if Assigned(FallbackRealm) then
   begin
