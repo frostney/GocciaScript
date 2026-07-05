@@ -336,15 +336,15 @@ begin
   WasSelfRooted := AddRootIfNeeded(Self);
   WasInitRooted := AddRootIfNeeded(InitArg);
   try
-    Adder := GetProperty('add');
+    Adder := GetProperty(PROP_ADD);
     if not Assigned(Adder) or not Adder.IsCallable then
-      ThrowTypeError(Format(SErrorValueNotFunction, ['add']), SSuggestSetThisType);
+      ThrowTypeError(Format(SErrorValueNotFunction, [PROP_ADD]), SSuggestSetThisType);
 
     WasAdderRooted := AddRootIfNeeded(Adder);
     try
       Iterator := GetIteratorFromValue(InitArg);
       if not Assigned(Iterator) then
-        ThrowTypeError('Set constructor argument is not iterable');
+        ThrowTypeError(Format(SErrorMapConstructorNotIterable, [CONSTRUCTOR_SET]), SSuggestNotIterable);
 
       WasIteratorRooted := AddRootIfNeeded(Iterator);
       try

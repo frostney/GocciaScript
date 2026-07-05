@@ -56,6 +56,7 @@ const
   PROP_CONFIGURABLE = 'configurable';
   PROP_GET          = 'get';
   PROP_SET          = 'set';
+  PROP_ADD          = 'add';
   PROP_INIT         = 'init';
   PROP_KIND         = 'kind';
   PROP_STATIC       = 'static';
