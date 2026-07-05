@@ -57,6 +57,24 @@ describe("SharedArrayBuffer constructor error cases", () => {
     expect(() => new SharedArrayBuffer(-Infinity)).toThrow(RangeError);
   });
 
+  test("subclass validates length before resolving newTarget prototype", () => {
+    const events = [];
+    class Sub extends SharedArrayBuffer {}
+    class NewTargetBase {}
+    const NewTarget = new Proxy(NewTargetBase, {
+      get(target, property) {
+        if (property === "prototype") {
+          events.push("prototype");
+          throw new Error("prototype");
+        }
+        return target[property];
+      },
+    });
+
+    expect(() => Reflect.construct(Sub, [-1], NewTarget)).toThrow(RangeError);
+    expect(events).toEqual([]);
+  });
+
   test("throws RangeError when length is 2^31 (one past High(Integer))", () => {
     expect(() => new SharedArrayBuffer(2147483648)).toThrow(RangeError);
   });

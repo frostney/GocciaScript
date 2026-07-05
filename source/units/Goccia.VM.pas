@@ -2407,6 +2407,7 @@ type
   TGocciaBytecodeFunctionValue = class(TGocciaFunctionBase)
   private
     FClosure: TGocciaBytecodeClosure;
+    FConstructClassValue: TGocciaValue;
     FVM: TGocciaVM;
   protected
     function GetFunctionLength: Integer; override;
@@ -2869,6 +2870,7 @@ begin
   inherited Create;
   FVM := AVM;
   FClosure := AClosure;
+  FConstructClassValue := nil;
   if Assigned(FClosure) then
     FClosure.FunctionValue := Self;
   if Assigned(AClosure) and Assigned(AClosure.Template) then
@@ -6094,13 +6096,15 @@ begin
       ThrowTypeError(
         'Superclass constructor did not return an object',
         SSuggestNotConstructorType);
-    ReceiverPrototype := GetProtoFromConstructor(FNewTarget);
-    TGocciaObjectValue(NewThis).Prototype := ReceiverPrototype;
     if NewThis is TGocciaInstanceValue then
     begin
       TGocciaInstanceValue(NewThis).ClassValue := FCurrentCtorClass;
       TGocciaInstanceValue(NewThis).InitializeNativeFromArguments(AArguments);
     end;
+    ReceiverPrototype := GetProtoFromConstructor(FNewTarget);
+    TGocciaObjectValue(NewThis).Prototype := ReceiverPrototype;
+    if NewThis is TGocciaInstanceValue then
+      TGocciaInstanceValue(NewThis).FinalizeNativeFromArguments(AArguments);
     MarkCurrentConstructorSuperCalled;
     InitializeCurrentCtorReceiver(NewThis);
     Exit(NewThis);
@@ -6259,7 +6263,10 @@ var
   RootedInstance: TGocciaObjectValue;
   WalkClass: TGocciaClassValue;
   ImplicitSuperClass: TGocciaClassValue;
+  NativeClass: TGocciaClassValue;
   NativeInstance: TGocciaObjectValue;
+  NativeSuperConstructorForPrototype: TGocciaObjectValue;
+  NativeIntrinsicPrototype: TGocciaObjectValue;
   ConstructorToCall: TGocciaMethodValue;
   InstancePrototype: TGocciaObjectValue;
   ConstructedValue: TGocciaValue;
@@ -6267,6 +6274,8 @@ var
   InitializerReplayReceiver: TGocciaObjectValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
+  DelayNativePrototypeLookup: Boolean;
+  NativeInstanceInitialized: Boolean;
   NativeInstanceConstructedByNativeSuper: Boolean;
   function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
   begin
@@ -6358,13 +6367,42 @@ var
     end;
   end;
 begin
+  NativeClass := nil;
+  NativeSuperConstructorForPrototype := nil;
+  NativeIntrinsicPrototype := nil;
+  WalkClass := Self;
+  while Assigned(WalkClass) do
+  begin
+    NativeIntrinsicPrototype := WalkClass.NativeInstanceDefaultPrototype;
+    if Assigned(NativeIntrinsicPrototype) then
+    begin
+      NativeClass := WalkClass;
+      Break;
+    end;
+    if Assigned(WalkClass.NativeSuperConstructor) then
+    begin
+      NativeSuperConstructorForPrototype := WalkClass.NativeSuperConstructor;
+      if WalkClass.NativeSuperConstructor is TGocciaClassValue then
+      begin
+        NativeClass := TGocciaClassValue(WalkClass.NativeSuperConstructor);
+        NativeIntrinsicPrototype := NativeClass.NativeInstanceDefaultPrototype;
+      end;
+      Break;
+    end;
+    WalkClass := WalkClass.SuperClass;
+  end;
+  DelayNativePrototypeLookup :=
+    ShouldDelayNativePrototypeLookup(NativeClass, AArguments) or
+    ShouldDelayNativeSuperPrototypeLookup(NativeSuperConstructorForPrototype);
+
   // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget)
-  if Assigned(ANewTarget) then
+  if Assigned(ANewTarget) and not DelayNativePrototypeLookup then
     InstancePrototype := GetProtoFromConstructor(ANewTarget)
   else
     InstancePrototype := Prototype;
 
   NativeInstance := nil;
+  NativeInstanceInitialized := False;
   NativeInstanceConstructedByNativeSuper := False;
   if not (Assigned(FConstructorValue) and HasDerivedConstructorReturnRestriction) then
   begin
@@ -6389,11 +6427,31 @@ begin
     end;
   end;
 
+  if Assigned(NativeInstance) and DelayNativePrototypeLookup and
+     (not NativeInstanceConstructedByNativeSuper) and
+     (NativeInstance is TGocciaInstanceValue) then
+  begin
+    TGarbageCollector.Instance.AddTempRoot(NativeInstance);
+    try
+      TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(
+        AArguments);
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(NativeInstance);
+    end;
+    NativeInstanceInitialized := True;
+  end;
+
+  if Assigned(NativeInstance) and Assigned(NativeClass) and
+     Assigned(ANewTarget) and DelayNativePrototypeLookup then
+    InstancePrototype := GetNativePrototypeFromConstructor(WalkClass,
+      ANewTarget, NativeIntrinsicPrototype);
+
   // ES2026 §10.2.2 step 6: Set proto on the instance before constructor runs
   if Assigned(NativeInstance) then
   begin
     Instance := NativeInstance;
-    Instance.Prototype := InstancePrototype;
+    if Assigned(NativeClass) or not DelayNativePrototypeLookup then
+      Instance.Prototype := InstancePrototype;
     if NativeInstance is TGocciaInstanceValue then
       TGocciaInstanceValue(NativeInstance).ClassValue := Self;
   end
@@ -6401,6 +6459,17 @@ begin
   begin
     Instance := TGocciaInstanceValue.Create(Self);
     Instance.Prototype := InstancePrototype;
+  end;
+
+  if NativeInstanceInitialized and (NativeInstance is TGocciaInstanceValue) then
+  begin
+    TGarbageCollector.Instance.AddTempRoot(Instance);
+    try
+      TGocciaInstanceValue(NativeInstance).FinalizeNativeFromArguments(
+        AArguments);
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(Instance);
+    end;
   end;
 
   if Assigned(FConstructorValue) then
@@ -6460,7 +6529,15 @@ begin
           // as newTarget and replace the derived instance.
           if (Instance is TGocciaInstanceValue) and
              not NativeInstanceConstructedByNativeSuper then
-            TGocciaInstanceValue(Instance).InitializeNativeFromArguments(AArguments);
+          begin
+            if not NativeInstanceInitialized then
+            begin
+              TGocciaInstanceValue(Instance).InitializeNativeFromArguments(
+                AArguments);
+              TGocciaInstanceValue(Instance).FinalizeNativeFromArguments(
+                AArguments);
+            end;
+          end;
         end
         else
         begin
@@ -6534,7 +6611,10 @@ begin
               ThrowTypeError('Super constructor is not a constructor',
                 SSuggestNotConstructorType)
             else if Instance is TGocciaInstanceValue then
+            begin
               TGocciaInstanceValue(Instance).InitializeNativeFromArguments(AArguments);
+              TGocciaInstanceValue(Instance).FinalizeNativeFromArguments(AArguments);
+            end;
           end;
         end;
       finally
@@ -6858,7 +6938,10 @@ begin
             EnsureBoxedArgs;
             if (Instance is TGocciaInstanceValue) and
                not NativeInstanceConstructedByNativeSuper then
+            begin
               TGocciaInstanceValue(Instance).InitializeNativeFromArguments(BoxedArgs);
+              TGocciaInstanceValue(Instance).FinalizeNativeFromArguments(BoxedArgs);
+            end;
           end
           else
           begin
@@ -6961,7 +7044,10 @@ begin
                     SSuggestNotConstructorType);
                 EnsureBoxedArgs;
                 if Instance is TGocciaInstanceValue then
+                begin
                   TGocciaInstanceValue(Instance).InitializeNativeFromArguments(BoxedArgs);
+                  TGocciaInstanceValue(Instance).FinalizeNativeFromArguments(BoxedArgs);
+                end;
               end;
             end;
           end;
@@ -7081,6 +7167,8 @@ end;
 procedure TGocciaVMClassValue.SetVMConstructor(const AValue: TGocciaValue);
 begin
   FConstructorValue := AValue;
+  if AValue is TGocciaBytecodeFunctionValue then
+    TGocciaBytecodeFunctionValue(AValue).FConstructClassValue := Self;
 end;
 
 procedure TGocciaVMClassValue.MarkReferences;
@@ -7124,6 +7212,8 @@ begin
     FClosure.NewTarget.MarkReferences;
   if Assigned(FClosure.GlobalScope) then
     FClosure.GlobalScope.MarkReferences;
+  if Assigned(FConstructClassValue) then
+    FConstructClassValue.MarkReferences;
 
   for I := 0 to FClosure.UpvalueCount - 1 do
   begin
@@ -8846,8 +8936,9 @@ var
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   BoundArgs: TGocciaArgumentsCollection;
   BoundFunction: TGocciaBoundFunctionValue;
-  Context: TGocciaEvaluationContext;
+  ClassConstructor: TGocciaClassValue;
   ConstructorName: string;
+  EvalContext: TGocciaEvaluationContext;
   EffectiveNewTarget: TGocciaValue;
   I: Integer;
   ReceiverPrototype, ReceiverInstance: TGocciaObjectValue;
@@ -8874,11 +8965,37 @@ begin
 
   if AConstructor is TGocciaClassValue then
   begin
-    FillChar(Context, SizeOf(Context), 0);
-    Context.Realm := FRealm;
-    Context.Scope := FGlobalScope;
-    Result := InstantiateClass(TGocciaClassValue(AConstructor), AArguments,
-      Context);
+    ClassConstructor := TGocciaClassValue(AConstructor);
+    if (ClassConstructor.SourceText <> '') and
+       (ClassConstructor.NativeInstanceDefaultPrototype = nil) and
+       (ClassConstructor.NativeSuperConstructor = nil) then
+    begin
+      EvalContext := Default(TGocciaEvaluationContext);
+      EvalContext.Realm := FRealm;
+      if Assigned(FCurrentDynamicVarScope) then
+        EvalContext.Scope := FCurrentDynamicVarScope
+      else
+        EvalContext.Scope := FGlobalScope;
+      EvalContext.OnError := ThrowError;
+      EvalContext.LoadModule := FLoadModule;
+      EvalContext.LoadModuleSource := FLoadModuleSource;
+      EvalContext.CurrentFilePath := FCurrentModuleSourcePath;
+      EvalContext.CoverageEnabled := FCoverageEnabled;
+      EvalContext.StrictTypes := False;
+      if Assigned(FGlobalScope) then
+      begin
+        EvalContext.StrictTypes := FGlobalScope.EffectiveStrictTypes;
+        EvalContext.CompatibilityNonStrictMode :=
+          FGlobalScope.EffectiveNonStrictMode;
+      end;
+      EvalContext.NonStrictMode := not (Assigned(FCurrentClosure) and
+        Assigned(FCurrentClosure.Template) and
+        FCurrentClosure.Template.StrictCode);
+      Result := InstantiateClass(ClassConstructor, AArguments, EvalContext,
+        EffectiveNewTarget);
+    end
+    else
+      Result := ClassConstructor.Instantiate(AArguments, EffectiveNewTarget);
     Exit;
   end;
 
@@ -8934,6 +9051,14 @@ begin
       ThrowTypeError(Format(SErrorNotConstructor,
         [BytecodeFunction.GetProperty(PROP_NAME).ToStringLiteral.Value]),
         SSuggestNotConstructorType);
+    if (BytecodeFunction.FConstructClassValue is TGocciaVMClassValue) and
+       (TGocciaVMClassValue(BytecodeFunction.FConstructClassValue)
+          .FConstructorValue = AConstructor) then
+    begin
+      Result := TGocciaVMClassValue(BytecodeFunction.FConstructClassValue)
+        .Instantiate(AArguments, EffectiveNewTarget);
+      Exit;
+    end;
   end;
 
   if AConstructor is TGocciaFunctionBase then
@@ -10030,8 +10155,6 @@ begin
       ThrowTypeError(
         'Superclass constructor did not return an object',
         SSuggestNotConstructorType);
-    ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
-    TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
     if TargetInstance is TGocciaInstanceValue then
     begin
       if AInstance is TGocciaInstanceValue then
@@ -10041,6 +10164,10 @@ begin
         TGocciaInstanceValue(TargetInstance).ClassValue := AClassValue;
       TGocciaInstanceValue(TargetInstance).InitializeNativeFromArguments(AArguments);
     end;
+    ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
+    TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
+    if TargetInstance is TGocciaInstanceValue then
+      TGocciaInstanceValue(TargetInstance).FinalizeNativeFromArguments(AArguments);
     Exit(TargetInstance);
   end;
 
@@ -10185,8 +10312,6 @@ begin
         ThrowTypeError(
           'Superclass constructor did not return an object',
           SSuggestNotConstructorType);
-      ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
-      TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
       if TargetInstance is TGocciaInstanceValue then
       begin
         if AInstance is TGocciaInstanceValue then
@@ -10196,6 +10321,10 @@ begin
           TGocciaInstanceValue(TargetInstance).ClassValue := AClassValue;
         TGocciaInstanceValue(TargetInstance).InitializeNativeFromArguments(BoxedArgs);
       end;
+      ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
+      TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
+      if TargetInstance is TGocciaInstanceValue then
+        TGocciaInstanceValue(TargetInstance).FinalizeNativeFromArguments(BoxedArgs);
       Exit(TargetInstance);
     finally
       ReleaseArguments(BoxedArgs);
@@ -16462,5 +16591,33 @@ begin
     EmptyArgs.Free;
   end;
 end;
+
+function RedirectBytecodeClassConstruct(
+  const ATarget: TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue;
+  out AResult: TGocciaValue): Boolean;
+var
+  BytecodeFunction: TGocciaBytecodeFunctionValue;
+  ClassValue: TGocciaVMClassValue;
+begin
+  Result := False;
+  if not (ATarget is TGocciaBytecodeFunctionValue) then
+    Exit;
+
+  BytecodeFunction := TGocciaBytecodeFunctionValue(ATarget);
+  if not (BytecodeFunction.FConstructClassValue is TGocciaVMClassValue) then
+    Exit;
+
+  ClassValue := TGocciaVMClassValue(BytecodeFunction.FConstructClassValue);
+  if ClassValue.FConstructorValue <> ATarget then
+    Exit;
+
+  AResult := ClassValue.Instantiate(AArguments, ANewTarget);
+  Result := True;
+end;
+
+initialization
+  RegisterFunctionConstructRedirectHook(RedirectBytecodeClassConstruct);
 
 end.

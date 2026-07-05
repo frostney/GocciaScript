@@ -203,6 +203,9 @@ type
     function LogicalOr: TGocciaExpression;
     function NullishCoalescing: TGocciaExpression;
     function LogicalAnd: TGocciaExpression;
+    function ParseMemberAccessSegment(const AReceiver: TGocciaExpression;
+      const AUsePropertyNameLocation, AAllowOptionalCall: Boolean;
+      out ASegmentLine, ASegmentColumn: Integer): TGocciaExpression;
 
     // Parameter list parsing (shared by arrow functions, class methods, object methods)
     function ParseParameterList: TGocciaParameterArray;
@@ -1764,14 +1767,128 @@ begin
   end;
 end;
 
+function TGocciaParser.ParseMemberAccessSegment(
+  const AReceiver: TGocciaExpression; const AUsePropertyNameLocation,
+  AAllowOptionalCall: Boolean; out ASegmentLine,
+  ASegmentColumn: Integer): TGocciaExpression;
+var
+  Arguments: TObjectList<TGocciaExpression>;
+  Argument: TGocciaExpression;
+  PropertyName: string;
+  Token: TGocciaToken;
+  PropertyLine, PropertyColumn: Integer;
+  IsOptionalChain: Boolean;
+  CurrentType: TGocciaTokenType;
+begin
+  CurrentType := PeekWithLexicalGoal(glgInputElementDiv).TokenType;
+  Token := Advance;
+  ASegmentLine := Token.Line;
+  ASegmentColumn := Token.Column;
+  IsOptionalChain := CurrentType = gttOptionalChaining;
+
+  case CurrentType of
+    gttDot, gttOptionalChaining:
+      begin
+        if Check(gttHash) then
+        begin
+          Advance;
+          Token := Consume(gttIdentifier, 'Expected private field name after "#"',
+            SSuggestPrivateFieldMustFollow);
+          PropertyName := Token.Lexeme;
+          RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
+          Result := TGocciaPrivateMemberExpression.Create(
+            AReceiver, PropertyName, ASegmentLine, ASegmentColumn,
+            IsOptionalChain);
+        end
+        else if Check(gttLeftBracket) and IsOptionalChain then
+        begin
+          Advance;
+          Argument := Expression;
+          Consume(gttRightBracket, 'Expected "]" after computed member expression',
+            SSuggestCloseBracketComputedProperty);
+          Result := TGocciaMemberExpression.Create(AReceiver, Argument,
+            ASegmentLine, ASegmentColumn, True);
+        end
+        else if Check(gttLeftParen) and IsOptionalChain and AAllowOptionalCall then
+        begin
+          Advance;
+          Arguments := TObjectList<TGocciaExpression>.Create(True);
+          try
+            if not Check(gttRightParen) then
+            begin
+              repeat
+                if Match(gttSpread) then
+                  Argument := TGocciaSpreadExpression.Create(Assignment,
+                    Previous.Line, Previous.Column)
+                else
+                  Argument := Assignment;
+                Arguments.Add(Argument);
+              until not MatchWithLexicalGoal(gttComma, glgInputElementDiv) or Check(gttRightParen);
+            end;
+            Consume(gttRightParen, 'Expected ")" after arguments',
+              SSuggestCloseParenArguments);
+            Result := TGocciaCallExpression.Create(AReceiver, Arguments,
+              ASegmentLine, ASegmentColumn, True);
+          except
+            Arguments.Free;
+            raise;
+          end;
+        end
+        else
+        begin
+          if IsIdentifierNameToken(Peek.TokenType) then
+          begin
+            Token := Advance;
+            PropertyName := Token.Lexeme;
+            if AUsePropertyNameLocation then
+            begin
+              PropertyLine := Token.Line;
+              PropertyColumn := Token.Column;
+            end
+            else
+            begin
+              PropertyLine := ASegmentLine;
+              PropertyColumn := ASegmentColumn;
+            end;
+          end
+          else
+            raise TGocciaSyntaxError.Create('Expected property name after "."',
+              Peek.Line, Peek.Column, FFileName, FSourceLines,
+              SSuggestPropertyNameIdentifier);
+
+          Result := TGocciaMemberExpression.Create(AReceiver, PropertyName,
+            False, PropertyLine, PropertyColumn, IsOptionalChain);
+        end;
+      end;
+    gttHash:
+      begin
+        Token := Consume(gttIdentifier, 'Expected private field name after "#"',
+          SSuggestPrivateFieldMustFollow);
+        PropertyName := Token.Lexeme;
+        RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
+        Result := TGocciaPrivateMemberExpression.Create(AReceiver, PropertyName,
+          ASegmentLine, ASegmentColumn);
+      end;
+    gttLeftBracket:
+      begin
+        Argument := Expression;
+        Consume(gttRightBracket, 'Expected "]" after computed member expression',
+          SSuggestCloseBracketComputedProperty);
+        Result := TGocciaMemberExpression.Create(AReceiver, Argument,
+          ASegmentLine, ASegmentColumn);
+      end;
+  else
+    raise TGocciaSyntaxError.Create('Expected member access',
+      Token.Line, Token.Column, FFileName, FSourceLines);
+  end;
+end;
+
 function TGocciaParser.Call: TGocciaExpression;
 var
   Arguments: TObjectList<TGocciaExpression>;
   Arg: TGocciaExpression;
-  PropertyName: string;
   Token: TGocciaToken;
   Line, Column: Integer;
-  IsOptionalChain: Boolean;
   CurrentType: TGocciaTokenType;
 begin
   Result := Primary;
@@ -1808,94 +1925,15 @@ begin
         end;
       gttDot, gttOptionalChaining:
         begin
-          Token := Advance;
-          Line := Token.Line;
-          Column := Token.Column;
-          IsOptionalChain := CurrentType = gttOptionalChaining;
-
-          // Check if this is a private field access (this.#field)
-          if Check(gttHash) then
-          begin
-            Advance; // consume the #
-            Token := Consume(gttIdentifier, 'Expected private field name after "#"',
-              SSuggestPrivateFieldMustFollow);
-            PropertyName := Token.Lexeme;
-            RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
-            Result := TGocciaPrivateMemberExpression.Create(
-              Result, PropertyName, Line, Column, IsOptionalChain);
-          end
-          else if Check(gttLeftBracket) and IsOptionalChain then
-          begin
-            // Optional chaining with computed property: obj?.[expr]
-            Advance; // consume [
-            Arg := Expression;
-            Consume(gttRightBracket, 'Expected "]" after computed member expression',
-              SSuggestCloseBracketComputedProperty);
-            Result := TGocciaMemberExpression.Create(Result, Arg, Line, Column, True);
-          end
-          else if Check(gttLeftParen) and IsOptionalChain then
-          begin
-            // Optional chaining with call: func?.()
-            Advance; // consume (
-            Arguments := TObjectList<TGocciaExpression>.Create(True);
-            try
-              if not Check(gttRightParen) then
-              begin
-                repeat
-                  if Match(gttSpread) then
-                    Arg := TGocciaSpreadExpression.Create(Assignment, Previous.Line, Previous.Column)
-                  else
-                    Arg := Assignment;
-                  Arguments.Add(Arg);
-                until not MatchWithLexicalGoal(gttComma, glgInputElementDiv) or Check(gttRightParen);
-              end;
-              Consume(gttRightParen, 'Expected ")" after arguments',
-                SSuggestCloseParenArguments);
-              Result := TGocciaCallExpression.Create(Result, Arguments, Line, Column, True);
-            except
-              Arguments.Free;
-              raise;
-            end;
-          end
-          else
-          begin
-            if Check(gttIdentifier) then
-              PropertyName := Advance.Lexeme
-            else if Peek.TokenType in [gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
-                                       gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
-                                       gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                                       gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith,
-                                       gttFunction] then
-              PropertyName := Advance.Lexeme  // Reserved words are allowed as property names
-            else
-              raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
-                SSuggestPropertyNameIdentifier);
-
-            Result := TGocciaMemberExpression.Create(Result, PropertyName, False,
-              Line, Column, IsOptionalChain);
-          end;
+          Result := ParseMemberAccessSegment(Result, False, True, Line, Column);
         end;
       gttHash:
         begin
-          Token := Advance;
-          Line := Token.Line;
-          Column := Token.Column;
-          Token := Consume(gttIdentifier, 'Expected private field name after "#"',
-            SSuggestPrivateFieldMustFollow);
-          PropertyName := Token.Lexeme;
-          RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
-          Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName, Line, Column);
+          Result := ParseMemberAccessSegment(Result, False, True, Line, Column);
         end;
       gttLeftBracket:
         begin
-          Token := Advance;
-          Line := Token.Line;
-          Column := Token.Column;
-          Arg := Expression;
-          Consume(gttRightBracket, 'Expected "]" after computed member expression',
-            SSuggestCloseBracketComputedProperty);
-          // For computed access, store the expression directly to be evaluated at runtime
-          Result := TGocciaMemberExpression.Create(Result, Arg, Line, Column);
+          Result := ParseMemberAccessSegment(Result, False, True, Line, Column);
         end;
       gttIncrement, gttDecrement:
         begin
@@ -2643,26 +2681,8 @@ begin
         // Parse the callee: class name with optional member access (e.g. new a.B.C())
         // but NOT call expressions — those belong to the outer Call loop.
         Expr := Primary;
-        while Check(gttDot) do
-        begin
-          Advance;
-          if Check(gttIdentifier) then
-            Expr := TGocciaMemberExpression.Create(Expr, Advance.Lexeme, False, Previous.Line, Previous.Column, False)
-          else if Peek.TokenType in [gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
-                                     gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
-                                     gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                                     gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith,
-                                     gttFunction] then
-          begin
-            Token := Advance;
-            // Reserved words are valid property names after "." per ES spec
-            Expr := TGocciaMemberExpression.Create(Expr, Token.Lexeme, False,
-              Token.Line, Token.Column, False);
-          end
-          else
-            raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
-              SSuggestPropertyNameIdentifier);
-        end;
+        while Check(gttDot) or Check(gttLeftBracket) do
+          Expr := ParseMemberAccessSegment(Expr, True, False, Line, Column);
         while Check(gttTemplate) or Check(gttTemplateHead) do
         begin
           Token := Advance;
@@ -8356,6 +8376,7 @@ var
   CanUseShorthand: Boolean;
   NumericValue: Double;
   KeyExpression: TGocciaExpression;
+  KeyToken: TGocciaToken;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -8388,8 +8409,9 @@ begin
       end
       else if IsIdentifierNameToken(Peek.TokenType) then
       begin
-        CanUseShorthand := IsIdentifierBindingToken(Peek.TokenType);
-        Key := Advance.Lexeme;
+        KeyToken := Advance;
+        CanUseShorthand := True;
+        Key := KeyToken.Lexeme;
       end
       else if Check(gttString) then
       begin
@@ -8427,8 +8449,15 @@ begin
             'Object pattern shorthand requires an identifier property name',
             Previous.Line, Previous.Column, FFileName, FSourceLines,
             'Use "key: binding" for string, numeric, or computed keys');
+        if not IsIdentifierBindingToken(KeyToken.TokenType) then
+          raise TGocciaSyntaxError.Create(
+            'Object pattern shorthand requires an identifier binding',
+            KeyToken.Line, KeyToken.Column, FFileName, FSourceLines,
+            'Use "key: binding" when the property name is a keyword');
+        ValidateIdentifierBinding(KeyToken);
         // Shorthand syntax: {name} means {name: name}
-        Pattern := TGocciaIdentifierDestructuringPattern.Create(Key, Previous.Line, Previous.Column);
+        Pattern := TGocciaIdentifierDestructuringPattern.Create(Key,
+          KeyToken.Line, KeyToken.Column);
 
         // Check for default value in shorthand
         if Match(gttAssign) then

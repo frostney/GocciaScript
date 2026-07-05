@@ -46,6 +46,7 @@ const
   PROP_GOCCIA       = 'Goccia';
   PROP_GLOBAL_THIS  = 'globalThis';
   PROP_SLICE        = 'slice';
+  PROP_SLICE_TO_IMMUTABLE = 'sliceToImmutable';
   PROP_TAG_NAME     = 'tagName';
   PROP_NEXT         = 'next';
   PROP_RETURN       = 'return';

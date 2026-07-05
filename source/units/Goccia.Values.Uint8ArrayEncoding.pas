@@ -31,6 +31,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Values.ArrayBufferValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue,
   Goccia.Values.TypedArrayValue;
@@ -108,6 +109,21 @@ begin
     ThrowTypeError(Format(SErrorRequiresUint8Array, [AMethod]),
       SSuggestUint8ArrayThisType);
   Result := TGocciaTypedArrayValue(AThisValue);
+end;
+
+procedure EnsureUint8ArrayInBounds(const AArray: TGocciaTypedArrayValue; const AMethod: string);
+begin
+  if IsTypedArrayOutOfBounds(AArray) then
+    ThrowTypeError(Format(SErrorCannotUseDetachedTypedArray, [AMethod]),
+      SSuggestArrayBufferDetached);
+end;
+
+procedure EnsureUint8ArrayWritable(const AArray: TGocciaTypedArrayValue; const AMethod: string);
+begin
+  EnsureUint8ArrayInBounds(AArray, AMethod);
+  if (AArray.BufferValue is TGocciaArrayBufferValue) and
+     TGocciaArrayBufferValue(AArray.BufferValue).Immutable then
+    ThrowTypeError(AMethod + ' cannot write to an immutable ArrayBuffer');
 end;
 
 function ReadAlphabetOption(const AOptions: TGocciaValue): string;
@@ -259,27 +275,131 @@ end;
 { ---- Base64 decoding ---- }
 
 type
+  TBase64DecodeError = (
+    bdeNone,
+    bdeInvalidCharacter,
+    bdeIncompleteChunk,
+    bdeNonZeroPaddingBits,
+    bdeMalformedPadding,
+    bdeIncompleteChunkStrict,
+    bdeUnexpectedPadding
+  );
+
   TBase64DecodeResult = record
     Bytes: TBytes;
     ByteLength: Integer;
     CharsRead: Integer;
+    Error: TBase64DecodeError;
   end;
+
+procedure RaiseBase64DecodeError(const AError: TBase64DecodeError);
+begin
+  case AError of
+    bdeInvalidCharacter:
+      ThrowSyntaxError(SErrorInvalidBase64Character, SSuggestBase64Format);
+    bdeIncompleteChunk:
+      ThrowSyntaxError(SErrorBase64IncompleteChunk, SSuggestBase64Format);
+    bdeNonZeroPaddingBits:
+      ThrowSyntaxError(SErrorBase64NonZeroPaddingBits, SSuggestBase64Format);
+    bdeMalformedPadding:
+      ThrowSyntaxError(SErrorBase64MalformedPadding, SSuggestBase64Format);
+    bdeIncompleteChunkStrict:
+      ThrowSyntaxError(SErrorBase64IncompleteChunkStrict, SSuggestBase64Format);
+    bdeUnexpectedPadding:
+      ThrowSyntaxError(SErrorBase64UnexpectedPadding, SSuggestBase64Format);
+  else
+  end;
+end;
 
 function DecodeBase64(const AInput: string; const AAlphabet: string;
   const ALastChunkHandling: string; const AMaxBytes: Integer): TBase64DecodeResult;
 var
   DecodeTable: TBase64DecodeTable;
-  Cleaned: string;
-  CleanedLen, I, ChunkLen: Integer;
+  Chunk: string;
+  Index, InputLength, ChunkLength, Capacity: Integer;
   Ch: Char;
-  HasPadding: Boolean;
-  PadStart, FullChunks, Remainder: Integer;
-  Pos, OutPos: Integer;
   V0, V1, V2, V3: Byte;
-  CharsConsumed: Integer;
+  ThrowOnExtraBits: Boolean;
 
-  { Map cleaned index back to original input index }
-  CleanedToOriginal: array of Integer;
+  function SkipAsciiWhitespaceFrom(const AIndex: Integer): Integer;
+  begin
+    Result := AIndex;
+    while (Result <= InputLength) and IsAsciiWhitespace(AInput[Result]) do
+      Inc(Result);
+  end;
+
+  procedure FinishWithError(const AError: TBase64DecodeError);
+  begin
+    Result.Error := AError;
+    SetLength(Result.Bytes, Result.ByteLength);
+  end;
+
+  procedure FinishSuccessfully(const ARead: Integer);
+  begin
+    Result.CharsRead := ARead;
+    Result.Error := bdeNone;
+    SetLength(Result.Bytes, Result.ByteLength);
+  end;
+
+  procedure AppendByte(const AByte: Byte);
+  begin
+    Result.Bytes[Result.ByteLength] := AByte;
+    Inc(Result.ByteLength);
+  end;
+
+  procedure DecodeFinalChunk(const AThrowOnExtraBits: Boolean;
+    out AError: TBase64DecodeError; out ASucceeded: Boolean);
+  begin
+    ASucceeded := False;
+    AError := bdeNone;
+    if ChunkLength < 2 then
+    begin
+      AError := bdeIncompleteChunk;
+      Exit;
+    end;
+
+    V0 := DecodeTable[Ord(Chunk[1])];
+    V1 := DecodeTable[Ord(Chunk[2])];
+    if AThrowOnExtraBits and (ChunkLength = 2) and ((V1 and $0F) <> 0) then
+    begin
+      AError := bdeNonZeroPaddingBits;
+      Exit;
+    end;
+
+    AppendByte(Byte((V0 shl 2) or (V1 shr 4)));
+
+    if ChunkLength >= 3 then
+    begin
+      V2 := DecodeTable[Ord(Chunk[3])];
+      if AThrowOnExtraBits and ((V2 and $03) <> 0) then
+      begin
+        Dec(Result.ByteLength);
+        AError := bdeNonZeroPaddingBits;
+        Exit;
+      end;
+      AppendByte(Byte(((V1 and $0F) shl 4) or (V2 shr 2)));
+    end;
+
+    ASucceeded := True;
+  end;
+
+  procedure DecodeFullChunk;
+  begin
+    V0 := DecodeTable[Ord(Chunk[1])];
+    V1 := DecodeTable[Ord(Chunk[2])];
+    V2 := DecodeTable[Ord(Chunk[3])];
+    V3 := DecodeTable[Ord(Chunk[4])];
+    AppendByte(Byte((V0 shl 2) or (V1 shr 4)));
+    AppendByte(Byte(((V1 and $0F) shl 4) or (V2 shr 2)));
+    AppendByte(Byte(((V2 and $03) shl 6) or V3));
+    Chunk := '';
+    ChunkLength := 0;
+  end;
+
+var
+  DecodeError: TBase64DecodeError;
+  DecodeSucceeded: Boolean;
+  Remaining: Integer;
 begin
   InitDecodeTables;
   if AAlphabet = ALPHABET_BASE64URL then
@@ -287,190 +407,137 @@ begin
   else
     DecodeTable := Base64StandardDecode;
 
-  // Step 1: Strip ASCII whitespace and track original positions
-  SetLength(Cleaned, Length(AInput));
-  SetLength(CleanedToOriginal, Length(AInput) + 1);
-  CleanedLen := 0;
-  for I := 1 to Length(AInput) do
+  Result.ByteLength := 0;
+  Result.CharsRead := 0;
+  Result.Error := bdeNone;
+
+  if AMaxBytes = 0 then
   begin
-    Ch := AInput[I];
-    if not IsAsciiWhitespace(Ch) then
+    SetLength(Result.Bytes, 0);
+    Exit;
+  end;
+
+  InputLength := Length(AInput);
+  Capacity := InputLength;
+  if (AMaxBytes >= 0) and (AMaxBytes < Capacity) then
+    Capacity := AMaxBytes;
+  SetLength(Result.Bytes, Capacity);
+
+  Chunk := '';
+  ChunkLength := 0;
+  Index := 1;
+
+  while True do
+  begin
+    Index := SkipAsciiWhitespaceFrom(Index);
+    if Index > InputLength then
     begin
-      Inc(CleanedLen);
-      Cleaned[CleanedLen] := Ch;
-      CleanedToOriginal[CleanedLen] := I;
-    end;
-  end;
-  SetLength(Cleaned, CleanedLen);
-
-  // Step 2: Handle padding — remove trailing '=' and record
-  HasPadding := False;
-  PadStart := CleanedLen;
-  if (CleanedLen >= 1) and (Cleaned[CleanedLen] = BASE64_PAD_CHAR) then
-  begin
-    HasPadding := True;
-    Dec(PadStart);
-    if (PadStart >= 1) and (Cleaned[PadStart] = BASE64_PAD_CHAR) then
-      Dec(PadStart);
-  end;
-
-  if HasPadding then
-    ChunkLen := PadStart
-  else
-    ChunkLen := CleanedLen;
-
-  // Step 3: Validate all non-padding characters
-  for I := 1 to ChunkLen do
-  begin
-    Ch := Cleaned[I];
-    if (Ord(Ch) > 127) or (DecodeTable[Ord(Ch)] = INVALID_BASE64_VALUE) then
-      ThrowSyntaxError(SErrorInvalidBase64Character, SSuggestBase64Format);
-  end;
-
-  // Step 4: Compute full chunks and remainder
-  FullChunks := ChunkLen div 4;
-  Remainder := ChunkLen mod 4;
-
-  // Step 5: Handle last chunk based on mode
-  if Remainder = 1 then
-  begin
-    // A single trailing character is never valid
-    if ALastChunkHandling = LAST_CHUNK_STOP_BEFORE_PARTIAL then
-    begin
-      // Just ignore the last char, treat only full chunks
-      Dec(ChunkLen, 1);
-      Remainder := 0;
-    end
-    else
-      ThrowSyntaxError(SErrorBase64IncompleteChunk, SSuggestBase64Format);
-  end;
-
-  if Remainder > 0 then
-  begin
-    if ALastChunkHandling = LAST_CHUNK_STRICT then
-    begin
-      if HasPadding then
+      if ChunkLength > 0 then
       begin
-        // In strict mode with padding, the padded chunk must be exactly 4 chars
-        // Check that the padding makes it a complete 4-char chunk
-        if (Remainder = 2) and (CleanedLen - PadStart = 2) then
+        if ALastChunkHandling = LAST_CHUNK_STOP_BEFORE_PARTIAL then
         begin
-          // 2 data + 2 pad = 4: OK, check overflow bits
-          V0 := DecodeTable[Ord(Cleaned[PadStart - 1])];
-          V1 := DecodeTable[Ord(Cleaned[PadStart])];
-          if (V1 and $0F) <> 0 then
-            ThrowSyntaxError(SErrorBase64NonZeroPaddingBits, SSuggestBase64Format);
-        end
-        else if (Remainder = 3) and (CleanedLen - PadStart = 1) then
+          FinishSuccessfully(Result.CharsRead);
+          Exit;
+        end;
+        if ALastChunkHandling = LAST_CHUNK_STRICT then
         begin
-          // 3 data + 1 pad = 4: OK, check overflow bits
-          V0 := DecodeTable[Ord(Cleaned[PadStart])];
-          if (V0 and $03) <> 0 then
-            ThrowSyntaxError(SErrorBase64NonZeroPaddingBits, SSuggestBase64Format);
-        end
-        else
-          ThrowSyntaxError(SErrorBase64MalformedPadding, SSuggestBase64Format);
-      end
-      else
-      begin
-        // In strict mode without padding, partial chunks are invalid
-        ThrowSyntaxError(SErrorBase64IncompleteChunkStrict, SSuggestBase64Format);
+          FinishWithError(bdeIncompleteChunkStrict);
+          Exit;
+        end;
+        if ChunkLength = 1 then
+        begin
+          FinishWithError(bdeIncompleteChunk);
+          Exit;
+        end;
+        DecodeFinalChunk(False, DecodeError, DecodeSucceeded);
+        if not DecodeSucceeded then
+        begin
+          FinishWithError(DecodeError);
+          Exit;
+        end;
       end;
-    end
-    else if ALastChunkHandling = LAST_CHUNK_STOP_BEFORE_PARTIAL then
-    begin
-      // Don't decode the partial last chunk
-      Dec(ChunkLen, Remainder);
-      Remainder := 0;
-      FullChunks := ChunkLen div 4;
+      FinishSuccessfully(InputLength);
+      Exit;
     end;
-    // 'loose' mode: decode the partial chunk normally
-  end
-  else if HasPadding and (ALastChunkHandling = LAST_CHUNK_STRICT) then
-  begin
-    // Padding present but no remainder means the padding was part of a complete chunk
-    // Validate the padding makes sense
-    // (This case occurs when e.g., "AAAA==" — the padding overflows a complete chunk)
-    // Actually if Remainder = 0 and HasPadding, the padding was stripped from a complete set
-    // which means padding was erroneous
-    if PadStart <> CleanedLen then
-      ThrowSyntaxError(SErrorBase64UnexpectedPadding, SSuggestBase64Format);
-  end;
 
-  // Step 6: Compute output size
-  Result.ByteLength := FullChunks * 3;
-  case Remainder of
-    2: Inc(Result.ByteLength, 1);
-    3: Inc(Result.ByteLength, 2);
-  end;
+    Ch := AInput[Index];
+    Inc(Index);
 
-  if (AMaxBytes >= 0) and (Result.ByteLength > AMaxBytes) then
-    Result.ByteLength := AMaxBytes;
-
-  SetLength(Result.Bytes, Result.ByteLength);
-
-  // Step 7: Decode full 4-char chunks — only consume when all 3 output bytes fit
-  Pos := 1;
-  OutPos := 0;
-  for I := 0 to FullChunks - 1 do
-  begin
-    if OutPos + 3 > Result.ByteLength then Break;
-    V0 := DecodeTable[Ord(Cleaned[Pos])];
-    V1 := DecodeTable[Ord(Cleaned[Pos + 1])];
-    V2 := DecodeTable[Ord(Cleaned[Pos + 2])];
-    V3 := DecodeTable[Ord(Cleaned[Pos + 3])];
-    Result.Bytes[OutPos]     := (V0 shl 2) or (V1 shr 4);
-    Result.Bytes[OutPos + 1] := ((V1 and $0F) shl 4) or (V2 shr 2);
-    Result.Bytes[OutPos + 2] := ((V2 and $03) shl 6) or V3;
-    Inc(OutPos, 3);
-    Inc(Pos, 4);
-  end;
-
-  // Step 8: Decode remainder — only consume when all output bytes fit
-  // 2 trailing chars → 1 byte; 3 trailing chars → 2 bytes
-  if (Remainder >= 2) and (OutPos + (Remainder - 1) <= Result.ByteLength) then
-  begin
-    V0 := DecodeTable[Ord(Cleaned[Pos])];
-    V1 := DecodeTable[Ord(Cleaned[Pos + 1])];
-    Result.Bytes[OutPos] := (V0 shl 2) or (V1 shr 4);
-    Inc(OutPos);
-    if Remainder >= 3 then
+    if Ch = BASE64_PAD_CHAR then
     begin
-      V2 := DecodeTable[Ord(Cleaned[Pos + 2])];
-      Result.Bytes[OutPos] := ((V1 and $0F) shl 4) or (V2 shr 2);
-      Inc(OutPos);
+      if ChunkLength < 2 then
+      begin
+        FinishWithError(bdeMalformedPadding);
+        Exit;
+      end;
+
+      Index := SkipAsciiWhitespaceFrom(Index);
+      if ChunkLength = 2 then
+      begin
+        if Index > InputLength then
+        begin
+          if ALastChunkHandling = LAST_CHUNK_STOP_BEFORE_PARTIAL then
+          begin
+            FinishSuccessfully(Result.CharsRead);
+            Exit;
+          end;
+          FinishWithError(bdeIncompleteChunk);
+          Exit;
+        end;
+
+        Ch := AInput[Index];
+        if Ch = BASE64_PAD_CHAR then
+          Index := SkipAsciiWhitespaceFrom(Index + 1);
+      end;
+
+      if Index <= InputLength then
+      begin
+        FinishWithError(bdeUnexpectedPadding);
+        Exit;
+      end;
+
+      ThrowOnExtraBits := ALastChunkHandling = LAST_CHUNK_STRICT;
+      DecodeFinalChunk(ThrowOnExtraBits, DecodeError, DecodeSucceeded);
+      if not DecodeSucceeded then
+      begin
+        FinishWithError(DecodeError);
+        Exit;
+      end;
+      FinishSuccessfully(InputLength);
+      Exit;
     end;
-    Inc(Pos, Remainder);
-  end;
 
-  Result.ByteLength := OutPos;
-  SetLength(Result.Bytes, Result.ByteLength);
+    if (Ord(Ch) > 127) or (DecodeTable[Ord(Ch)] = INVALID_BASE64_VALUE) then
+    begin
+      FinishWithError(bdeInvalidCharacter);
+      Exit;
+    end;
 
-  // Compute characters read from the original input
-  // After successful decode, all characters (including padding) were consumed
-  if (Pos > ChunkLen) then
-  begin
-    // All data chars were decoded — consumed everything including padding
-    if CleanedLen > 0 then
-      CharsConsumed := CleanedToOriginal[CleanedLen]
+    if AMaxBytes < 0 then
+      Remaining := MaxInt
     else
-      CharsConsumed := 0;
-  end
-  else if Pos > 1 then
-    CharsConsumed := CleanedToOriginal[Pos - 1]
-  else
-    CharsConsumed := 0;
+      Remaining := AMaxBytes - Result.ByteLength;
+    if ((Remaining = 1) and (ChunkLength = 2)) or
+       ((Remaining = 2) and (ChunkLength = 3)) then
+    begin
+      FinishSuccessfully(Result.CharsRead);
+      Exit;
+    end;
 
-  // For stop-before-partial, report only up to the chars that were actually decoded
-  if (ALastChunkHandling = LAST_CHUNK_STOP_BEFORE_PARTIAL) and (ChunkLen < PadStart) then
-  begin
-    if ChunkLen > 0 then
-      CharsConsumed := CleanedToOriginal[ChunkLen]
-    else
-      CharsConsumed := 0;
+    Chunk := Chunk + Ch;
+    ChunkLength := Length(Chunk);
+
+    if ChunkLength = 4 then
+    begin
+      DecodeFullChunk;
+      Result.CharsRead := Index - 1;
+      if (AMaxBytes >= 0) and (Result.ByteLength = AMaxBytes) then
+      begin
+        FinishSuccessfully(Result.CharsRead);
+        Exit;
+      end;
+    end;
   end;
-
-  Result.CharsRead := CharsConsumed;
 end;
 
 { ---- Public methods ---- }
@@ -501,6 +568,7 @@ begin
     end;
   end;
 
+  EnsureUint8ArrayInBounds(TA, 'Uint8Array.prototype.toBase64');
   Encoded := EncodeBase64(TA.BufferData, TA.ByteOffset, TA.Length, Alphabet, OmitPadding);
   Result := TGocciaStringLiteralValue.Create(Encoded);
 end;
@@ -515,6 +583,7 @@ var
   B: Byte;
 begin
   TA := RequireUint8Array(AThisValue, 'Uint8Array.prototype.toHex');
+  EnsureUint8ArrayInBounds(TA, 'Uint8Array.prototype.toHex');
 
   SetLength(Hex, TA.Length * 2);
   Offset := TA.ByteOffset;
@@ -539,6 +608,7 @@ var
   ResultObj: TGocciaObjectValue;
 begin
   TA := RequireUint8Array(AThisValue, 'Uint8Array.prototype.setFromBase64');
+  EnsureUint8ArrayWritable(TA, 'Uint8Array.prototype.setFromBase64');
 
   if AArgs.Length = 0 then
     ThrowTypeError(SErrorSetFromBase64RequiresString, SSuggestStringArgRequired);
@@ -561,6 +631,7 @@ begin
     end;
   end;
 
+  EnsureUint8ArrayInBounds(TA, 'Uint8Array.prototype.setFromBase64');
   DecResult := DecodeBase64(Input, Alphabet, LastChunkHandling, TA.Length);
 
   Written := DecResult.ByteLength;
@@ -569,6 +640,9 @@ begin
 
   for I := 0 to Written - 1 do
     TA.BufferData[TA.ByteOffset + I] := DecResult.Bytes[I];
+
+  if DecResult.Error <> bdeNone then
+    RaiseBase64DecodeError(DecResult.Error);
 
   ResultObj := TGocciaObjectValue.Create;
   TGarbageCollector.Instance.AddTempRoot(ResultObj);
@@ -592,6 +666,7 @@ var
   CharsRead: Integer;
 begin
   TA := RequireUint8Array(AThisValue, 'Uint8Array.prototype.setFromHex');
+  EnsureUint8ArrayWritable(TA, 'Uint8Array.prototype.setFromHex');
 
   if AArgs.Length = 0 then
     ThrowTypeError(SErrorSetFromHexRequiresString, SSuggestStringArgRequired);
@@ -664,6 +739,8 @@ begin
   end;
 
   DecResult := DecodeBase64(Input, Alphabet, LastChunkHandling, -1);
+  if DecResult.Error <> bdeNone then
+    RaiseBase64DecodeError(DecResult.Error);
 
   NewTA := TGocciaTypedArrayValue.Create(takUint8, DecResult.ByteLength);
   for I := 0 to DecResult.ByteLength - 1 do
