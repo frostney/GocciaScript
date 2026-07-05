@@ -165,6 +165,14 @@ type
     property Kind: TGocciaTypedArrayKind read FKind;
   end;
 
+  TGocciaTypedArrayIntrinsicClassValue = class(TGocciaClassValue)
+  public
+    function Call(const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue; override;
+    function Instantiate(const AArguments: TGocciaArgumentsCollection;
+      const ANewTarget: TGocciaValue = nil): TGocciaValue; override;
+  end;
+
   TGocciaTypedArrayStaticFrom = class
   public
     constructor Create;
@@ -1738,7 +1746,8 @@ end;
 function TGocciaTypedArrayValue.TypedArraySlice(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA, NewTA: TGocciaTypedArrayValue;
-  First, Final, NewLen, SourceLength, I: Integer;
+  BPE, CopyBytes, CopyElements, CurrentLength, First, Final, NewLen,
+    SourceByteIndex, SourceLength, TargetByteIndex, I: Integer;
   ConstructorArgs: TGocciaArgumentsCollection;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.slice');
@@ -1773,16 +1782,30 @@ begin
     EnsureTypedArrayAttached(TA, 'TypedArray.prototype.slice');
   if NewTA.FBufferValue <> TA.FBufferValue then
     EnsureTypedArrayWritable(NewTA, 'TypedArray.prototype.slice');
-  if IsBigIntKind(TA.FKind) then
+  CurrentLength := TA.Length;
+  CopyElements := Max(Min(Final, CurrentLength) - First, 0);
+  if CopyElements > NewLen then
+    CopyElements := NewLen;
+  if (CopyElements > 0) and (NewTA.FKind = TA.FKind) then
   begin
-    for I := 0 to NewLen - 1 do
-      if First + I < TA.Length then
+    BPE := BytesPerElement(TA.FKind);
+    CopyBytes := CopyElements * BPE;
+    SourceByteIndex := TA.FByteOffset + First * BPE;
+    TargetByteIndex := NewTA.FByteOffset;
+    for I := 0 to CopyBytes - 1 do
+      NewTA.FBufferData[TargetByteIndex + I] :=
+        TA.FBufferData[SourceByteIndex + I];
+  end
+  else if IsBigIntKind(TA.FKind) then
+  begin
+    for I := 0 to CopyElements - 1 do
+      if First + I < CurrentLength then
         NewTA.WriteValueToElement(I, TA.GetElementAsValue(First + I));
   end
   else
   begin
-    for I := 0 to NewLen - 1 do
-      if First + I < TA.Length then
+    for I := 0 to CopyElements - 1 do
+      if First + I < CurrentLength then
         NewTA.WriteValueToElement(I, TA.GetElementAsValue(First + I));
   end;
   Result := NewTA;
@@ -1842,15 +1865,15 @@ function TGocciaTypedArrayValue.TypedArraySet(const AArgs: TGocciaArgumentsColle
 var
   TA, SrcTA: TGocciaTypedArrayValue;
   TargetOffset, I, SrcLen, TargetLen, SourceLen: Integer;
-  SrcArray: TGocciaArrayValue;
   SrcObj: TGocciaObjectValue;
   NumberSnapshot: array of Double;
   BigIntSnapshot: array of Int64;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.set');
-  EnsureTypedArrayWritable(TA, 'TypedArray.prototype.set');
   if AArgs.Length = 0 then
     ThrowTypeError(SErrorTypedArraySetRequiresArg, SSuggestTypedArraySetSource);
+  if IsTypedArrayBackedByImmutableArrayBuffer(TA) then
+    ThrowTypeError('TypedArray.prototype.set cannot write to an immutable ArrayBuffer');
 
   if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
   begin
@@ -1862,6 +1885,7 @@ begin
     TargetOffset := 0;
 
   EnsureTypedArrayAttached(TA, 'TypedArray.prototype.set');
+  EnsureTypedArrayWritable(TA, 'TypedArray.prototype.set');
   TargetLen := TA.Length;
 
   if AArgs.GetElement(0) is TGocciaTypedArrayValue then
@@ -1892,15 +1916,6 @@ begin
         TA.WriteElement(TargetOffset + I, NumberSnapshot[I]);
     end;
   end
-  else if AArgs.GetElement(0) is TGocciaArrayValue then
-  begin
-    SrcArray := TGocciaArrayValue(AArgs.GetElement(0));
-    if (TargetOffset > TargetLen) or
-       (SrcArray.Elements.Count > TargetLen - TargetOffset) then
-      ThrowRangeError(SErrorTypedArraySourceTooLarge, SSuggestTypedArrayLength);
-    for I := 0 to SrcArray.Elements.Count - 1 do
-      TA.WriteValueToElement(TargetOffset + I, SrcArray.Elements[I]);
-  end
   else
   begin
     // ES2026 §23.2.3.25.2 SetTypedArrayFromArrayLike
@@ -1910,7 +1925,8 @@ begin
        (SrcLen > TargetLen - TargetOffset) then
       ThrowRangeError(SErrorTypedArraySourceTooLarge, SSuggestTypedArrayLength);
     for I := 0 to SrcLen - 1 do
-      TA.WriteValueToElement(TargetOffset + I, SrcObj.GetProperty(IntToStr(I)));
+      TA.SetIntegerIndexedElement(TargetOffset + I, False,
+        SrcObj.GetProperty(IntToStr(I)));
   end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -2893,6 +2909,22 @@ end;
 
 { TGocciaTypedArrayClassValue }
 
+function TGocciaTypedArrayIntrinsicClassValue.Call(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  ThrowTypeError('TypedArray cannot be called directly', SSuggestIllegalConstructor);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaTypedArrayIntrinsicClassValue.Instantiate(
+  const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue): TGocciaValue;
+begin
+  ThrowTypeError('TypedArray cannot be constructed directly', SSuggestIllegalConstructor);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
 constructor TGocciaTypedArrayClassValue.Create(const AName: string; const ASuperClass: TGocciaClassValue; const AKind: TGocciaTypedArrayKind);
 begin
   inherited Create(AName, ASuperClass);
@@ -2920,9 +2952,7 @@ begin
   if ProtoValue is TGocciaObjectValue then
     Exit(TGocciaObjectValue(ProtoValue));
 
-  FallbackRealm := nil;
-  if ANewTarget is TGocciaFunctionBase then
-    FallbackRealm := TGocciaFunctionBase(ANewTarget).CreationRealm;
+  FallbackRealm := GetFunctionRealm(ANewTarget);
 
   if Assigned(FallbackRealm) and
      (FallbackRealm.GlobalEnv is TGocciaScope) then

@@ -77,9 +77,9 @@ describe("ShadowRealm.prototype.evaluate", () => {
     // A return/break inside a nested function, or a break inside a loop, is
     // valid and must not be flagged by the early-error check.
     expect(
-      realm.evaluate("(() => { for (let i = 0; i < 1; i++) break; return 7; })()"),
+      realm.evaluate("(() => { for (const i of [0]) break; return 7; })()"),
     ).toBe(7);
-    expect(realm.evaluate("for (let i = 0; i < 1; i++) break; 9")).toBe(9);
+    expect(realm.evaluate("for (const i of [0]) break; 9")).toBe(9);
   });
 
   test("throws a TypeError when the result is a non-callable object", () => {

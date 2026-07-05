@@ -32,7 +32,12 @@ type
     function GetEnumerablePropertyValues: TArray<TGocciaValue>; override;
     function GetEnumerablePropertyEntries: TArray<TPair<string, TGocciaValue>>; override;
     function GetAllPropertyNames: TArray<string>; override;
+    function GetOwnPropertyKeys: TArray<string>; override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
+    procedure DefineProperty(const AName: string;
+      const ADescriptor: TGocciaPropertyDescriptor); override;
+    function TryDefineProperty(const AName: string;
+      const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
     function HasOwnProperty(const AName: string): Boolean; override;
     function DeleteProperty(const AName: string): Boolean; override;
 
@@ -101,6 +106,7 @@ uses
   IntlTypes,
   TextSemantics,
 
+  Goccia.Arithmetic,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -132,6 +138,83 @@ begin
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GStringPrototypeSlot))
   else
     Result := nil;
+end;
+
+function IsCompatibleStringDefineDescriptor(
+  const ACurrent: TGocciaPropertyDescriptor;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+var
+  CurrentData: TGocciaPropertyDescriptorData;
+  DescriptorData: TGocciaPropertyDescriptorData;
+begin
+  if not Assigned(ACurrent) then
+    Exit(True);
+
+  if ADescriptor.Fields = [] then
+    Exit(True);
+
+  if ADescriptor.HasConfigurableField and ADescriptor.Configurable then
+    Exit(False);
+
+  if ADescriptor.HasEnumerableField and
+     (ACurrent.Enumerable <> ADescriptor.Enumerable) then
+    Exit(False);
+
+  if IsGenericDescriptor(ADescriptor) then
+    Exit(True);
+
+  if IsDataDescriptor(ACurrent) <> IsDataDescriptor(ADescriptor) then
+    Exit(False);
+
+  if IsAccessorDescriptor(ACurrent) then
+    Exit(False);
+
+  CurrentData := TGocciaPropertyDescriptorData(ACurrent);
+  DescriptorData := TGocciaPropertyDescriptorData(ADescriptor);
+  if not CurrentData.Writable then
+  begin
+    if ADescriptor.HasWritableField and DescriptorData.Writable then
+      Exit(False);
+    if ADescriptor.HasValue and
+       not IsSameValue(CurrentData.Value, DescriptorData.Value) then
+      Exit(False);
+  end;
+
+  Result := True;
+end;
+
+function CreateStringIndexDescriptor(
+  const APrimitive: TGocciaStringLiteralValue;
+  const AName: string): TGocciaPropertyDescriptor;
+var
+  Index: Integer;
+  StringValue: string;
+begin
+  Result := nil;
+  // Canonical decimal string indices only; StringGetOwnProperty does not cover
+  // "length", which is an ordinary own property created separately.
+  if TryStrToInt(AName, Index) and (AName = IntToStr(Index)) then
+  begin
+    StringValue := APrimitive.ToStringLiteral.Value;
+    if (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue)) then
+      Result := TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create(UTF16CodeUnitAt(StringValue, Index)),
+        [pfEnumerable]);
+  end;
+end;
+
+function CreateStringLengthDescriptor(
+  const APrimitive: TGocciaStringLiteralValue;
+  const AName: string): TGocciaPropertyDescriptor;
+begin
+  Result := nil;
+  if AName <> PROP_LENGTH then
+    Exit;
+
+  Result := TGocciaPropertyDescriptorData.Create(
+    TGocciaNumberLiteralValue.Create(
+      UTF16CodeUnitLength(APrimitive.ToStringLiteral.Value)),
+    []);
 end;
 
 function LocaleCompareArgumentToLocale(const AArg: TGocciaValue): string;
@@ -611,26 +694,21 @@ begin
   end;
 end;
 
+function TGocciaStringObjectValue.GetOwnPropertyKeys: TArray<string>;
+begin
+  Result := GetAllPropertyNames;
+end;
+
 // ES2026 §10.4.3.1 StringExoticObject [[GetOwnProperty]](P)
 function TGocciaStringObjectValue.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
-var
-  Index: Integer;
-  StringValue: string;
 begin
-  // Only canonical non-negative decimal integers are string indices (e.g. "0", "1",
-  // not "01" or "-0"). AName = IntToStr(Index) ensures round-trip canonicality.
-  if TryStrToInt(AName, Index) and (AName = IntToStr(Index)) then
-  begin
-    StringValue := FPrimitive.ToStringLiteral.Value;
-    if (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue)) then
-    begin
-      // String character indices: enumerable, non-writable, non-configurable
-      Result := TGocciaPropertyDescriptorData.Create(
-        TGocciaStringLiteralValue.Create(UTF16CodeUnitAt(StringValue, Index)),
-        [pfEnumerable]);
-      Exit;
-    end;
-  end;
+  Result := inherited GetOwnPropertyDescriptor(AName);
+  if Assigned(Result) then
+    Exit;
+
+  Result := CreateStringIndexDescriptor(FPrimitive, AName);
+  if Assigned(Result) then
+    Exit;
 
   if AName = PROP_LENGTH then
   begin
@@ -641,8 +719,64 @@ begin
       []);
     Exit;
   end;
+end;
 
-  Result := inherited GetOwnPropertyDescriptor(AName);
+// ES2026 §10.4.3.2 StringExoticObject [[DefineOwnProperty]](P, Desc)
+procedure TGocciaStringObjectValue.DefineProperty(const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor);
+var
+  ExistingDescriptor: TGocciaPropertyDescriptor;
+begin
+  ExistingDescriptor := CreateStringIndexDescriptor(FPrimitive, AName);
+  if not Assigned(ExistingDescriptor) then
+    ExistingDescriptor := CreateStringLengthDescriptor(FPrimitive, AName);
+  try
+    if Assigned(ExistingDescriptor) and
+       not IsCompatibleStringDefineDescriptor(ExistingDescriptor,
+         ADescriptor) then
+      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
+        SSuggestCannotDeleteNonConfigurable);
+    if Assigned(ExistingDescriptor) then
+    begin
+      ADescriptor.Free;
+      Exit;
+    end;
+  finally
+    if Assigned(ExistingDescriptor) then
+      ExistingDescriptor.Free;
+  end;
+
+  inherited DefineProperty(AName, ADescriptor);
+end;
+
+// ES2026 §10.4.3.2 StringExoticObject [[DefineOwnProperty]](P, Desc)
+function TGocciaStringObjectValue.TryDefineProperty(const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+var
+  ExistingDescriptor: TGocciaPropertyDescriptor;
+begin
+  ExistingDescriptor := CreateStringIndexDescriptor(FPrimitive, AName);
+  if not Assigned(ExistingDescriptor) then
+    ExistingDescriptor := CreateStringLengthDescriptor(FPrimitive, AName);
+  try
+    if Assigned(ExistingDescriptor) and
+       not IsCompatibleStringDefineDescriptor(ExistingDescriptor,
+         ADescriptor) then
+    begin
+      ADescriptor.Free;
+      Exit(False);
+    end;
+    if Assigned(ExistingDescriptor) then
+    begin
+      ADescriptor.Free;
+      Exit(True);
+    end;
+  finally
+    if Assigned(ExistingDescriptor) then
+      ExistingDescriptor.Free;
+  end;
+
+  Result := inherited TryDefineProperty(AName, ADescriptor);
 end;
 
 // ES2026 §10.4.3.1 StringExoticObject [[GetOwnProperty]](P) — existence check
@@ -719,7 +853,6 @@ begin
 
   Members := TGocciaMemberCollection.Create;
   try
-    Members.AddAccessor(PROP_LENGTH, StringLength, nil, []);
     Members.AddMethod(StringCharAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(StringCharCodeAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(StringToUpperCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);

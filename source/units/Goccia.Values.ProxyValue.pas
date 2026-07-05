@@ -158,6 +158,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
@@ -295,11 +296,300 @@ begin
   Result := True;
 end;
 
+function IsCompatibleProxyDefineDescriptor(const AExtensible: Boolean;
+  const ADescriptor: TGocciaPropertyDescriptor;
+  const ATargetDesc: TGocciaPropertyDescriptor): Boolean;
+var
+  DescriptorAccessor: TGocciaPropertyDescriptorAccessor;
+  DescriptorData: TGocciaPropertyDescriptorData;
+  TargetAccessor: TGocciaPropertyDescriptorAccessor;
+  TargetData: TGocciaPropertyDescriptorData;
+begin
+  if not Assigned(ATargetDesc) then
+    Exit(AExtensible);
+
+  if ADescriptor.Fields = [] then
+    Exit(True);
+
+  if ATargetDesc.Configurable then
+    Exit(True);
+
+  if ADescriptor.HasConfigurableField and ADescriptor.Configurable then
+    Exit(False);
+
+  if ADescriptor.HasEnumerableField and
+     (ATargetDesc.Enumerable <> ADescriptor.Enumerable) then
+    Exit(False);
+
+  if IsGenericDescriptor(ADescriptor) then
+    Exit(True);
+
+  if IsDataDescriptor(ATargetDesc) <> IsDataDescriptor(ADescriptor) then
+    Exit(False);
+
+  if IsAccessorDescriptor(ATargetDesc) and IsAccessorDescriptor(ADescriptor) then
+  begin
+    TargetAccessor := TGocciaPropertyDescriptorAccessor(ATargetDesc);
+    DescriptorAccessor := TGocciaPropertyDescriptorAccessor(ADescriptor);
+    if ADescriptor.HasGet and
+       (TargetAccessor.Getter <> DescriptorAccessor.Getter) then
+      Exit(False);
+    if ADescriptor.HasSet and
+       (TargetAccessor.Setter <> DescriptorAccessor.Setter) then
+      Exit(False);
+  end;
+
+  if IsDataDescriptor(ATargetDesc) and IsDataDescriptor(ADescriptor) then
+  begin
+    TargetData := TGocciaPropertyDescriptorData(ATargetDesc);
+    DescriptorData := TGocciaPropertyDescriptorData(ADescriptor);
+    if not TargetData.Writable then
+    begin
+      if ADescriptor.HasWritableField and DescriptorData.Writable then
+        Exit(False);
+      if ADescriptor.HasValue and
+         not IsSameValue(TargetData.Value, DescriptorData.Value) then
+        Exit(False);
+    end;
+  end;
+
+  Result := True;
+end;
+
+function ProxyTargetIsExtensible(const ATarget: TGocciaValue): Boolean;
+begin
+  if ATarget is TGocciaProxyValue then
+    Result := TGocciaProxyValue(ATarget).IsExtensibleTrap
+  else if ATarget is TGocciaObjectValue then
+    Result := TGocciaObjectValue(ATarget).Extensible
+  else
+    Result := False;
+end;
+
+function ProxyTargetGetPrototype(const ATarget: TGocciaValue): TGocciaValue;
+begin
+  if ATarget is TGocciaProxyValue then
+    Exit(TGocciaProxyValue(ATarget).GetPrototypeTrap);
+
+  if ATarget is TGocciaObjectValue then
+  begin
+    if Assigned(TGocciaObjectValue(ATarget).Prototype) then
+      Exit(TGocciaObjectValue(ATarget).Prototype);
+    Exit(TGocciaNullLiteralValue.NullValue);
+  end;
+
+  Result := TGocciaNullLiteralValue.NullValue;
+end;
+
+function ProxyTargetSetPrototype(const ATarget, AProto: TGocciaValue): Boolean;
+var
+  TargetObject: TGocciaObjectValue;
+  Walker: TGocciaObjectValue;
+begin
+  if ATarget is TGocciaProxyValue then
+    Exit(TGocciaProxyValue(ATarget).SetPrototypeTrap(AProto));
+
+  if not (ATarget is TGocciaObjectValue) then
+    Exit(False);
+
+  TargetObject := TGocciaObjectValue(ATarget);
+
+  if AProto is TGocciaObjectValue then
+  begin
+    if TargetObject.Prototype = TGocciaObjectValue(AProto) then
+      Exit(True);
+  end
+  else if AProto is TGocciaNullLiteralValue then
+  begin
+    if not Assigned(TargetObject.Prototype) then
+      Exit(True);
+  end
+  else
+    Exit(False);
+
+  if TargetObject = TGocciaObjectValue.SharedObjectPrototype then
+    Exit(False);
+
+  if not TargetObject.Extensible then
+    Exit(False);
+
+  if AProto is TGocciaObjectValue then
+  begin
+    Walker := TGocciaObjectValue(AProto);
+    while Assigned(Walker) do
+    begin
+      if Walker = TargetObject then
+        Exit(False);
+      if Walker is TGocciaProxyValue then
+        Break;
+      Walker := Walker.Prototype;
+    end;
+  end;
+
+  if AProto is TGocciaObjectValue then
+    TargetObject.Prototype := TGocciaObjectValue(AProto)
+  else
+    TargetObject.Prototype := nil;
+
+  Result := True;
+end;
+
+function ProxyTargetHasSymbolProperty(
+  const ATarget: TGocciaValue;
+  const ASymbol: TGocciaSymbolValue): Boolean;
+var
+  Current: TGocciaObjectValue;
+begin
+  if ATarget is TGocciaProxyValue then
+    Exit(TGocciaProxyValue(ATarget).HasSymbolTrap(ASymbol));
+
+  if not (ATarget is TGocciaObjectValue) then
+    Exit(False);
+
+  Current := TGocciaObjectValue(ATarget);
+  while Assigned(Current) do
+  begin
+    if Current is TGocciaProxyValue then
+      Exit(TGocciaProxyValue(Current).HasSymbolTrap(ASymbol));
+    if Current.HasSymbolProperty(ASymbol) then
+      Exit(True);
+    Current := Current.Prototype;
+  end;
+
+  Result := False;
+end;
+
+function CreateProxyTrapDescriptorObject(
+  const ADescriptor: TGocciaPropertyDescriptor): TGocciaObjectValue;
+begin
+  Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  if ADescriptor is TGocciaPropertyDescriptorAccessor then
+  begin
+    if ADescriptor.HasGet then
+    begin
+      if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
+        Result.AssignProperty(PROP_GET,
+          TGocciaPropertyDescriptorAccessor(ADescriptor).Getter)
+      else
+        Result.AssignProperty(PROP_GET,
+          TGocciaUndefinedLiteralValue.UndefinedValue);
+    end;
+    if ADescriptor.HasSet then
+    begin
+      if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
+        Result.AssignProperty(PROP_SET,
+          TGocciaPropertyDescriptorAccessor(ADescriptor).Setter)
+      else
+        Result.AssignProperty(PROP_SET,
+          TGocciaUndefinedLiteralValue.UndefinedValue);
+    end;
+  end
+  else if ADescriptor is TGocciaPropertyDescriptorData then
+  begin
+    if ADescriptor.HasValue then
+      Result.AssignProperty(PROP_VALUE,
+        TGocciaPropertyDescriptorData(ADescriptor).Value);
+    if ADescriptor.HasWritableField then
+      Result.AssignProperty(PROP_WRITABLE,
+        TGocciaBooleanLiteralValue.Create(ADescriptor.Writable));
+  end;
+  if ADescriptor.HasEnumerableField then
+    Result.AssignProperty(PROP_ENUMERABLE,
+      TGocciaBooleanLiteralValue.Create(ADescriptor.Enumerable));
+  if ADescriptor.HasConfigurableField then
+    Result.AssignProperty(PROP_CONFIGURABLE,
+      TGocciaBooleanLiteralValue.Create(ADescriptor.Configurable));
+end;
+
+procedure ValidateProxyDefineTrapResult(const APropertyLabel: string;
+  const ATarget: TGocciaValue;
+  const ADescriptor: TGocciaPropertyDescriptor);
+var
+  ExtensibleTarget: Boolean;
+  SettingConfigFalse: Boolean;
+  TargetDesc: TGocciaPropertyDescriptor;
+begin
+  TargetDesc := nil;
+  if ATarget is TGocciaObjectValue then
+    TargetDesc := TGocciaObjectValue(ATarget).GetOwnPropertyDescriptor(
+      APropertyLabel);
+
+  ExtensibleTarget := ProxyTargetIsExtensible(ATarget);
+  SettingConfigFalse := ADescriptor.HasConfigurableField and
+    not ADescriptor.Configurable;
+
+  if not Assigned(TargetDesc) then
+  begin
+    if (not ExtensibleTarget) or SettingConfigFalse then
+      ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [APropertyLabel]),
+        SSuggestProxyTrapInvariant);
+    Exit;
+  end;
+
+  if not IsCompatibleProxyDefineDescriptor(ExtensibleTarget, ADescriptor,
+    TargetDesc) then
+    ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [APropertyLabel]),
+      SSuggestProxyTrapInvariant);
+
+  if SettingConfigFalse and TargetDesc.Configurable then
+    ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [APropertyLabel]),
+      SSuggestProxyTrapInvariant);
+
+  if IsDataDescriptor(TargetDesc) and not TargetDesc.Configurable and
+     TargetDesc.Writable and ADescriptor.HasWritableField and
+     not ADescriptor.Writable then
+    ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [APropertyLabel]),
+      SSuggestProxyTrapInvariant);
+end;
+
+procedure ValidateProxyDefineSymbolTrapResult(
+  const ASymbol: TGocciaSymbolValue; const ATarget: TGocciaValue;
+  const ADescriptor: TGocciaPropertyDescriptor);
+var
+  ExtensibleTarget: Boolean;
+  PropertyLabel: string;
+  SettingConfigFalse: Boolean;
+  TargetDesc: TGocciaPropertyDescriptor;
+begin
+  TargetDesc := nil;
+  if ATarget is TGocciaObjectValue then
+    TargetDesc := TGocciaObjectValue(ATarget).GetOwnSymbolPropertyDescriptor(
+      ASymbol);
+
+  PropertyLabel := ASymbol.ToDisplayString.Value;
+  ExtensibleTarget := ProxyTargetIsExtensible(ATarget);
+  SettingConfigFalse := ADescriptor.HasConfigurableField and
+    not ADescriptor.Configurable;
+
+  if not Assigned(TargetDesc) then
+  begin
+    if (not ExtensibleTarget) or SettingConfigFalse then
+      ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [PropertyLabel]),
+        SSuggestProxyTrapInvariant);
+    Exit;
+  end;
+
+  if not IsCompatibleProxyDefineDescriptor(ExtensibleTarget, ADescriptor,
+    TargetDesc) then
+    ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [PropertyLabel]),
+      SSuggestProxyTrapInvariant);
+
+  if SettingConfigFalse and TargetDesc.Configurable then
+    ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [PropertyLabel]),
+      SSuggestProxyTrapInvariant);
+
+  if IsDataDescriptor(TargetDesc) and not TargetDesc.Configurable and
+     TargetDesc.Writable and ADescriptor.HasWritableField and
+     not ADescriptor.Writable then
+    ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [PropertyLabel]),
+      SSuggestProxyTrapInvariant);
+end;
+
 procedure ValidateProxyGetOwnTrapDescriptor(const APropertyLabel: string;
-  const ATargetObject: TGocciaObjectValue;
+  const AExtensibleTarget: Boolean;
   const ATargetDesc, AResultDesc: TGocciaPropertyDescriptor);
 begin
-  if not IsCompatibleProxyTrapPropertyDescriptor(ATargetObject.Extensible,
+  if not IsCompatibleProxyTrapPropertyDescriptor(AExtensibleTarget,
     AResultDesc, ATargetDesc) then
     ThrowTypeError(Format(SErrorProxyGetOwnIncompatible, [APropertyLabel]),
       SSuggestProxyTrapInvariant);
@@ -349,7 +639,31 @@ begin
   Trap := GetTrap(PROP_OWN_KEYS);
   if not Assigned(Trap) then
   begin
-    if FTarget is TGocciaObjectValue then
+    if FTarget is TGocciaProxyValue then
+    begin
+      AOrderedKeys := TGocciaProxyValue(FTarget).GetOwnPropertyKeyValues;
+      SetLength(AStringKeys, Length(AOrderedKeys));
+      SetLength(ASymbolKeys, Length(AOrderedKeys));
+      Count := 0;
+      SymbolCount := 0;
+      for I := 0 to High(AOrderedKeys) do
+      begin
+        if AOrderedKeys[I] is TGocciaStringLiteralValue then
+        begin
+          AStringKeys[Count] :=
+            TGocciaStringLiteralValue(AOrderedKeys[I]).Value;
+          Inc(Count);
+        end
+        else if AOrderedKeys[I] is TGocciaSymbolValue then
+        begin
+          ASymbolKeys[SymbolCount] := TGocciaSymbolValue(AOrderedKeys[I]);
+          Inc(SymbolCount);
+        end;
+      end;
+      SetLength(AStringKeys, Count);
+      SetLength(ASymbolKeys, SymbolCount);
+    end
+    else if FTarget is TGocciaObjectValue then
     begin
       TargetObj := TGocciaObjectValue(FTarget);
       AStringKeys := TargetObj.GetOwnPropertyKeys;
@@ -466,7 +780,7 @@ begin
     end;
   end;
 
-  if TargetObj.Extensible then
+  if ProxyTargetIsExtensible(FTarget) then
     Exit;
 
   for I := 0 to Length(TargetKeys) - 1 do
@@ -767,10 +1081,7 @@ begin
   end
   else
   begin
-    if FTarget is TGocciaObjectValue then
-      Result := TGocciaObjectValue(FTarget).HasSymbolProperty(ASymbol)
-    else
-      Result := False;
+    Result := ProxyTargetHasSymbolProperty(FTarget, ASymbol);
   end;
 end;
 
@@ -1046,8 +1357,8 @@ begin
     end;
     try
       if Assigned(TargetObject) then
-        ValidateProxyGetOwnTrapDescriptor(AName, TargetObject, TargetDesc,
-          CompletedDesc);
+        ValidateProxyGetOwnTrapDescriptor(AName,
+          ProxyTargetIsExtensible(FTarget), TargetDesc, CompletedDesc);
       Result := CompletedDesc;
     except
       CompletedDesc.Free;
@@ -1123,8 +1434,8 @@ begin
     end;
     try
       if Assigned(TargetObject) then
-        ValidateProxyGetOwnTrapDescriptor(PropertyLabel, TargetObject,
-          TargetDesc, CompletedDesc);
+        ValidateProxyGetOwnTrapDescriptor(PropertyLabel,
+          ProxyTargetIsExtensible(FTarget), TargetDesc, CompletedDesc);
       Result := CompletedDesc;
     except
       CompletedDesc.Free;
@@ -1153,45 +1464,7 @@ begin
   Trap := GetTrap(PROP_DEFINE_PROPERTY);
   if Assigned(Trap) then
   begin
-    // Build descriptor object — preserve descriptor field presence.
-    DescObj := TGocciaObjectValue.Create;
-    if ADescriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      if ADescriptor.HasGet then
-      begin
-        if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
-          DescObj.AssignProperty(PROP_GET,
-            TGocciaPropertyDescriptorAccessor(ADescriptor).Getter)
-        else
-          DescObj.AssignProperty(PROP_GET,
-            TGocciaUndefinedLiteralValue.UndefinedValue);
-      end;
-      if ADescriptor.HasSet then
-      begin
-        if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
-          DescObj.AssignProperty(PROP_SET,
-            TGocciaPropertyDescriptorAccessor(ADescriptor).Setter)
-        else
-          DescObj.AssignProperty(PROP_SET,
-            TGocciaUndefinedLiteralValue.UndefinedValue);
-      end;
-    end
-    else if ADescriptor is TGocciaPropertyDescriptorData then
-    begin
-      if ADescriptor.HasValue then
-        DescObj.AssignProperty(PROP_VALUE,
-          TGocciaPropertyDescriptorData(ADescriptor).Value);
-      if ADescriptor.HasWritableField then
-        DescObj.AssignProperty(PROP_WRITABLE,
-          TGocciaBooleanLiteralValue.Create(ADescriptor.Writable));
-    end;
-    if ADescriptor.HasEnumerableField then
-      DescObj.AssignProperty(PROP_ENUMERABLE,
-        TGocciaBooleanLiteralValue.Create(ADescriptor.Enumerable));
-    if ADescriptor.HasConfigurableField then
-      DescObj.AssignProperty(PROP_CONFIGURABLE,
-        TGocciaBooleanLiteralValue.Create(ADescriptor.Configurable));
-
+    DescObj := CreateProxyTrapDescriptorObject(ADescriptor);
     Args := TGocciaArgumentsCollection.Create;
     try
       Args.Add(FTarget);
@@ -1200,6 +1473,7 @@ begin
       TrapResult := InvokeTrap(Trap, Args);
       if not TrapResult.ToBooleanLiteral.Value then
         ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [AName]), SSuggestProxyTrapInvariant);
+      ValidateProxyDefineTrapResult(AName, FTarget, ADescriptor);
       ADescriptor.Free;
     finally
       Args.Free;
@@ -1228,45 +1502,7 @@ begin
   Trap := GetTrap(PROP_DEFINE_PROPERTY);
   if Assigned(Trap) then
   begin
-    // Build descriptor object — preserve descriptor field presence.
-    DescObj := TGocciaObjectValue.Create;
-    if ADescriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      if ADescriptor.HasGet then
-      begin
-        if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
-          DescObj.AssignProperty(PROP_GET,
-            TGocciaPropertyDescriptorAccessor(ADescriptor).Getter)
-        else
-          DescObj.AssignProperty(PROP_GET,
-            TGocciaUndefinedLiteralValue.UndefinedValue);
-      end;
-      if ADescriptor.HasSet then
-      begin
-        if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
-          DescObj.AssignProperty(PROP_SET,
-            TGocciaPropertyDescriptorAccessor(ADescriptor).Setter)
-        else
-          DescObj.AssignProperty(PROP_SET,
-            TGocciaUndefinedLiteralValue.UndefinedValue);
-      end;
-    end
-    else if ADescriptor is TGocciaPropertyDescriptorData then
-    begin
-      if ADescriptor.HasValue then
-        DescObj.AssignProperty(PROP_VALUE,
-          TGocciaPropertyDescriptorData(ADescriptor).Value);
-      if ADescriptor.HasWritableField then
-        DescObj.AssignProperty(PROP_WRITABLE,
-          TGocciaBooleanLiteralValue.Create(ADescriptor.Writable));
-    end;
-    if ADescriptor.HasEnumerableField then
-      DescObj.AssignProperty(PROP_ENUMERABLE,
-        TGocciaBooleanLiteralValue.Create(ADescriptor.Enumerable));
-    if ADescriptor.HasConfigurableField then
-      DescObj.AssignProperty(PROP_CONFIGURABLE,
-        TGocciaBooleanLiteralValue.Create(ADescriptor.Configurable));
-
+    DescObj := CreateProxyTrapDescriptorObject(ADescriptor);
     Args := TGocciaArgumentsCollection.Create;
     try
       Args.Add(FTarget);
@@ -1275,6 +1511,7 @@ begin
       TrapResult := InvokeTrap(Trap, Args);
       if not TrapResult.ToBooleanLiteral.Value then
         ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [ASymbol.ToDisplayString.Value]), SSuggestProxyTrapInvariant);
+      ValidateProxyDefineSymbolTrapResult(ASymbol, FTarget, ADescriptor);
       ADescriptor.Free;
     finally
       Args.Free;
@@ -1303,45 +1540,7 @@ begin
   Trap := GetTrap(PROP_DEFINE_PROPERTY);
   if Assigned(Trap) then
   begin
-    // Build descriptor object — preserve descriptor field presence.
-    DescObj := TGocciaObjectValue.Create;
-    if ADescriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      if ADescriptor.HasGet then
-      begin
-        if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
-          DescObj.AssignProperty(PROP_GET,
-            TGocciaPropertyDescriptorAccessor(ADescriptor).Getter)
-        else
-          DescObj.AssignProperty(PROP_GET,
-            TGocciaUndefinedLiteralValue.UndefinedValue);
-      end;
-      if ADescriptor.HasSet then
-      begin
-        if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
-          DescObj.AssignProperty(PROP_SET,
-            TGocciaPropertyDescriptorAccessor(ADescriptor).Setter)
-        else
-          DescObj.AssignProperty(PROP_SET,
-            TGocciaUndefinedLiteralValue.UndefinedValue);
-      end;
-    end
-    else if ADescriptor is TGocciaPropertyDescriptorData then
-    begin
-      if ADescriptor.HasValue then
-        DescObj.AssignProperty(PROP_VALUE,
-          TGocciaPropertyDescriptorData(ADescriptor).Value);
-      if ADescriptor.HasWritableField then
-        DescObj.AssignProperty(PROP_WRITABLE,
-          TGocciaBooleanLiteralValue.Create(ADescriptor.Writable));
-    end;
-    if ADescriptor.HasEnumerableField then
-      DescObj.AssignProperty(PROP_ENUMERABLE,
-        TGocciaBooleanLiteralValue.Create(ADescriptor.Enumerable));
-    if ADescriptor.HasConfigurableField then
-      DescObj.AssignProperty(PROP_CONFIGURABLE,
-        TGocciaBooleanLiteralValue.Create(ADescriptor.Configurable));
-
+    DescObj := CreateProxyTrapDescriptorObject(ADescriptor);
     Args := TGocciaArgumentsCollection.Create;
     try
       try
@@ -1350,6 +1549,8 @@ begin
         Args.Add(DescObj);
         TrapResult := InvokeTrap(Trap, Args);
         Result := TrapResult.ToBooleanLiteral.Value;
+        if Result then
+          ValidateProxyDefineTrapResult(AName, FTarget, ADescriptor);
       finally
         ADescriptor.Free;
       end;
@@ -1383,45 +1584,7 @@ begin
   Trap := GetTrap(PROP_DEFINE_PROPERTY);
   if Assigned(Trap) then
   begin
-    // Build descriptor object — preserve descriptor field presence.
-    DescObj := TGocciaObjectValue.Create;
-    if ADescriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      if ADescriptor.HasGet then
-      begin
-        if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
-          DescObj.AssignProperty(PROP_GET,
-            TGocciaPropertyDescriptorAccessor(ADescriptor).Getter)
-        else
-          DescObj.AssignProperty(PROP_GET,
-            TGocciaUndefinedLiteralValue.UndefinedValue);
-      end;
-      if ADescriptor.HasSet then
-      begin
-        if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
-          DescObj.AssignProperty(PROP_SET,
-            TGocciaPropertyDescriptorAccessor(ADescriptor).Setter)
-        else
-          DescObj.AssignProperty(PROP_SET,
-            TGocciaUndefinedLiteralValue.UndefinedValue);
-      end;
-    end
-    else if ADescriptor is TGocciaPropertyDescriptorData then
-    begin
-      if ADescriptor.HasValue then
-        DescObj.AssignProperty(PROP_VALUE,
-          TGocciaPropertyDescriptorData(ADescriptor).Value);
-      if ADescriptor.HasWritableField then
-        DescObj.AssignProperty(PROP_WRITABLE,
-          TGocciaBooleanLiteralValue.Create(ADescriptor.Writable));
-    end;
-    if ADescriptor.HasEnumerableField then
-      DescObj.AssignProperty(PROP_ENUMERABLE,
-        TGocciaBooleanLiteralValue.Create(ADescriptor.Enumerable));
-    if ADescriptor.HasConfigurableField then
-      DescObj.AssignProperty(PROP_CONFIGURABLE,
-        TGocciaBooleanLiteralValue.Create(ADescriptor.Configurable));
-
+    DescObj := CreateProxyTrapDescriptorObject(ADescriptor);
     Args := TGocciaArgumentsCollection.Create;
     try
       try
@@ -1430,6 +1593,8 @@ begin
         Args.Add(DescObj);
         TrapResult := InvokeTrap(Trap, Args);
         Result := TrapResult.ToBooleanLiteral.Value;
+        if Result then
+          ValidateProxyDefineSymbolTrapResult(ASymbol, FTarget, ADescriptor);
       finally
         ADescriptor.Free;
       end;
@@ -1545,29 +1710,15 @@ begin
 
     // ES2026 §28.1.1 step 8: If target is non-extensible, trap result
     // must be the same as the target's actual prototype.
-    if (FTarget is TGocciaObjectValue) and
-       not TGocciaObjectValue(FTarget).Extensible then
+    if not ProxyTargetIsExtensible(FTarget) then
     begin
-      if Assigned(TGocciaObjectValue(FTarget).Prototype) then
-        TargetProto := TGocciaObjectValue(FTarget).Prototype
-      else
-        TargetProto := TGocciaNullLiteralValue.NullValue;
+      TargetProto := ProxyTargetGetPrototype(FTarget);
       if Result <> TargetProto then
         ThrowTypeError(SErrorProxyGetProtoMismatch, SSuggestProxyTrapInvariant);
     end;
   end
   else
-  begin
-    if FTarget is TGocciaObjectValue then
-    begin
-      if Assigned(TGocciaObjectValue(FTarget).Prototype) then
-        Result := TGocciaObjectValue(FTarget).Prototype
-      else
-        Result := TGocciaNullLiteralValue.NullValue;
-    end
-    else
-      Result := TGocciaNullLiteralValue.NullValue;
-  end;
+    Result := ProxyTargetGetPrototype(FTarget);
 end;
 
 // ES2026 §28.1.1 [[SetPrototypeOf]](V)
@@ -1594,48 +1745,14 @@ begin
 
     // ES2026 §28.1.1 step 12: If trap returns true and target is
     // non-extensible, the new prototype must match the target's current one.
-    if Result and (FTarget is TGocciaObjectValue) and
-       not TGocciaObjectValue(FTarget).Extensible then
+    if Result and not ProxyTargetIsExtensible(FTarget) then
     begin
-      if AProto is TGocciaObjectValue then
-      begin
-        if TGocciaObjectValue(FTarget).Prototype <> TGocciaObjectValue(AProto) then
-          ThrowTypeError(SErrorProxySetProtoNonExtensible, SSuggestProxyTrapInvariant);
-      end
-      else if AProto is TGocciaNullLiteralValue then
-      begin
-        if Assigned(TGocciaObjectValue(FTarget).Prototype) then
-          ThrowTypeError(SErrorProxySetProtoNonExtensible, SSuggestProxyTrapInvariant);
-      end;
+      if ProxyTargetGetPrototype(FTarget) <> AProto then
+        ThrowTypeError(SErrorProxySetProtoNonExtensible, SSuggestProxyTrapInvariant);
     end;
   end
   else
-  begin
-    if FTarget is TGocciaObjectValue then
-    begin
-      // ES2026 §10.1.2 step 4: If target is not extensible and the new
-      // prototype differs from the current one, return false.
-      if not TGocciaObjectValue(FTarget).Extensible then
-      begin
-        if AProto is TGocciaObjectValue then
-          Result := TGocciaObjectValue(FTarget).Prototype = TGocciaObjectValue(AProto)
-        else if AProto is TGocciaNullLiteralValue then
-          Result := not Assigned(TGocciaObjectValue(FTarget).Prototype)
-        else
-          Result := False;
-      end
-      else
-      begin
-        if AProto is TGocciaObjectValue then
-          TGocciaObjectValue(FTarget).Prototype := TGocciaObjectValue(AProto)
-        else if (AProto is TGocciaNullLiteralValue) then
-          TGocciaObjectValue(FTarget).Prototype := nil;
-        Result := True;
-      end;
-    end
-    else
-      Result := False;
-  end;
+    Result := ProxyTargetSetPrototype(FTarget, AProto);
 end;
 
 // ES2026 §28.1.1 [[IsExtensible]]()
@@ -1660,20 +1777,12 @@ begin
     end;
 
     // ES2026 §28.1.1 step 7: Validate against target extensibility
-    if FTarget is TGocciaObjectValue then
-      TargetExtensible := TGocciaObjectValue(FTarget).Extensible
-    else
-      TargetExtensible := False;
+    TargetExtensible := ProxyTargetIsExtensible(FTarget);
     if Result <> TargetExtensible then
       ThrowTypeError(SErrorProxyIsExtensibleMismatch, SSuggestProxyTrapInvariant);
   end
   else
-  begin
-    if FTarget is TGocciaObjectValue then
-      Result := TGocciaObjectValue(FTarget).Extensible
-    else
-      Result := False;
-  end;
+    Result := ProxyTargetIsExtensible(FTarget);
 end;
 
 // ES2026 §10.5.4 [[PreventExtensions]]()
@@ -1691,18 +1800,13 @@ begin
     try
       Args.Add(FTarget);
       TrapResult := InvokeTrap(Trap, Args);
-      if not TrapResult.ToBooleanLiteral.Value then
-        Exit(False);
+      Result := TrapResult.ToBooleanLiteral.Value;
     finally
       Args.Free;
     end;
 
-    // ES2026 §28.1.1 step 8: Invariant — if trap returned true, target
-    // must actually be non-extensible now.
-    if (FTarget is TGocciaObjectValue) and
-       TGocciaObjectValue(FTarget).Extensible then
+    if Result and ProxyTargetIsExtensible(FTarget) then
       ThrowTypeError(SErrorProxyPreventExtensionsStillExtensible, SSuggestProxyTrapInvariant);
-    Result := True;
   end
   else
   begin
@@ -1927,8 +2031,29 @@ begin
   Result := TGocciaProxyValue(AProxy).GetPrototypeTrap;
 end;
 
+function DispatchProxyGetFunctionRealm(
+  const AProxy: TGocciaValue): TGocciaRealm;
+var
+  Proxy: TGocciaProxyValue;
+begin
+  Proxy := TGocciaProxyValue(AProxy);
+  Proxy.CheckRevoked;
+
+  if Proxy.FTarget is TGocciaProxyValue then
+    Exit(DispatchProxyGetFunctionRealm(Proxy.FTarget));
+
+  if Proxy.FTarget is TGocciaFunctionBase then
+    Exit(TGocciaFunctionBase(Proxy.FTarget).CreationRealm);
+
+  if Proxy.FTarget is TGocciaClassValue then
+    Exit(TGocciaClassValue(Proxy.FTarget).CreationRealm);
+
+  Result := nil;
+end;
+
 initialization
   RegisterProxyDispatchHooks(IsProxyDispatchValue, DispatchProxyApply,
-    DispatchProxyConstruct, DispatchProxyGetPrototype);
+    DispatchProxyConstruct, DispatchProxyGetPrototype,
+    DispatchProxyGetFunctionRealm);
 
 end.

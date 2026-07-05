@@ -160,6 +160,44 @@ test("WeakMap constructor closes iterator on malformed entries", () => {
   expect(closed).toBe(true);
 });
 
+test("WeakMap constructor does not close iterator when next throws", () => {
+  const sentinel = new Error("next failed");
+  let closed = false;
+  const iterable = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          throw sentinel;
+        },
+        return() {
+          closed = true;
+          return {};
+        },
+      };
+    },
+  };
+
+  try {
+    new WeakMap(iterable);
+    throw new Error("expected WeakMap constructor to throw");
+  } catch (error) {
+    expect(error).toBe(sentinel);
+  }
+  expect(closed).toBe(false);
+});
+
+test("WeakMap constructor observes native iterator @@iterator overrides", () => {
+  const iterator = [][Symbol.iterator]();
+  Object.defineProperty(iterator, Symbol.iterator, {
+    configurable: true,
+    value() {
+      return 1;
+    },
+  });
+
+  expect(() => new WeakMap(iterator)).toThrow(TypeError);
+});
+
 test("WeakMap.prototype.constructor is WeakMap", () => {
   expect(WeakMap.prototype.constructor).toBe(WeakMap);
   expect(new WeakMap().constructor).toBe(WeakMap);

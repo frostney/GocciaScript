@@ -36,9 +36,11 @@ type
     LooseEqualityEnabled: Boolean;
     NonStrictModeEnabled: Boolean;
     InheritedStrictMode: Boolean;
+    ModuleSource: Boolean;
     ImportMetaAllowed: Boolean;
     LabelStatementsEnabled: Boolean;
     ForInLoopsEnabled: Boolean;
+    WarningUnsupportedFeatures: Boolean;
   end;
 
   TGocciaPrivateNameReference = record
@@ -110,13 +112,16 @@ type
     FLooseEqualityEnabled: Boolean;
     FNonStrictModeEnabled: Boolean;
     FInheritedStrictMode: Boolean;
+    FModuleSource: Boolean;
     FImportMetaAllowed: Boolean;
     FLabelStatementsEnabled: Boolean;
     FForInLoopsEnabled: Boolean;
+    FWarningUnsupportedFeatures: Boolean;
     FStrictModeActive: Boolean;
     FStrictModeSourceActive: Boolean;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
+    procedure AddUnsupportedFeatureWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure PushPrivateClassContext;
     procedure PopPrivateClassContext;
     procedure ValidateCurrentPrivateClassContext;
@@ -203,6 +208,9 @@ type
     function LogicalOr: TGocciaExpression;
     function NullishCoalescing: TGocciaExpression;
     function LogicalAnd: TGocciaExpression;
+    function ParseMemberAccessSegment(const AReceiver: TGocciaExpression;
+      const AUsePropertyNameLocation, AAllowOptionalCall: Boolean;
+      out ASegmentLine, ASegmentColumn: Integer): TGocciaExpression;
 
     // Parameter list parsing (shared by arrow functions, class methods, object methods)
     function ParseParameterList: TGocciaParameterArray;
@@ -524,9 +532,11 @@ begin
   FLooseEqualityEnabled := AOptions.LooseEqualityEnabled;
   FNonStrictModeEnabled := AOptions.NonStrictModeEnabled;
   FInheritedStrictMode := AOptions.InheritedStrictMode;
+  FModuleSource := AOptions.ModuleSource;
   FImportMetaAllowed := AOptions.ImportMetaAllowed;
   FLabelStatementsEnabled := AOptions.LabelStatementsEnabled;
   FForInLoopsEnabled := AOptions.ForInLoopsEnabled;
+  FWarningUnsupportedFeatures := AOptions.WarningUnsupportedFeatures;
 end;
 
 function TGocciaParser.Options: TGocciaParserOptions;
@@ -539,9 +549,11 @@ begin
   Result.LooseEqualityEnabled := FLooseEqualityEnabled;
   Result.NonStrictModeEnabled := FNonStrictModeEnabled;
   Result.InheritedStrictMode := FInheritedStrictMode;
+  Result.ModuleSource := FModuleSource;
   Result.ImportMetaAllowed := FImportMetaAllowed;
   Result.LabelStatementsEnabled := FLabelStatementsEnabled;
   Result.ForInLoopsEnabled := FForInLoopsEnabled;
+  Result.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
 end;
 
 destructor TGocciaParser.Destroy;
@@ -560,6 +572,16 @@ begin
   FWarnings[FWarningCount - 1].Suggestion := ASuggestion;
   FWarnings[FWarningCount - 1].Line := ALine;
   FWarnings[FWarningCount - 1].Column := AColumn;
+end;
+
+procedure TGocciaParser.AddUnsupportedFeatureWarning(const AMessage,
+  ASuggestion: string; const ALine, AColumn: Integer);
+begin
+  if FWarningUnsupportedFeatures then
+    AddWarning(AMessage, ASuggestion, ALine, AColumn)
+  else
+    raise TGocciaSyntaxError.Create(AMessage, ALine, AColumn, FFileName,
+      FSourceLines, ASuggestion);
 end;
 
 function TGocciaParser.ExtractSourceRange(const AStartLine, AStartColumn: Integer): string;
@@ -1552,18 +1574,21 @@ begin
       else
       begin
         DiscardedLeft := Result;
-        if Op.TokenType = gttLooseEqual then
-          AddWarning('''=='' (loose equality) is not supported in GocciaScript',
-            'Use ''==='' (strict equality), or enable --compat-loose-equality',
-            Op.Line, Op.Column)
-        else
-          AddWarning('''!='' (loose inequality) is not supported in GocciaScript',
-            'Use ''!=='' (strict inequality), or enable --compat-loose-equality',
-            Op.Line, Op.Column);
-        DiscardedLeft.Free;
-        Right.Free;
-        Result := TGocciaLiteralExpression.Create(
-          TGocciaUndefinedLiteralValue.UndefinedValue, Op.Line, Op.Column);
+        try
+          if Op.TokenType = gttLooseEqual then
+            AddUnsupportedFeatureWarning('''=='' (loose equality) is not supported in GocciaScript',
+              'Use ''==='' (strict equality), or enable --compat-loose-equality',
+              Op.Line, Op.Column)
+          else
+            AddUnsupportedFeatureWarning('''!='' (loose inequality) is not supported in GocciaScript',
+              'Use ''!=='' (strict inequality), or enable --compat-loose-equality',
+              Op.Line, Op.Column);
+          Result := TGocciaLiteralExpression.Create(
+            TGocciaUndefinedLiteralValue.UndefinedValue, Op.Line, Op.Column);
+        finally
+          DiscardedLeft.Free;
+          Right.Free;
+        end;
       end;
     end
     else
@@ -1764,14 +1789,128 @@ begin
   end;
 end;
 
+function TGocciaParser.ParseMemberAccessSegment(
+  const AReceiver: TGocciaExpression; const AUsePropertyNameLocation,
+  AAllowOptionalCall: Boolean; out ASegmentLine,
+  ASegmentColumn: Integer): TGocciaExpression;
+var
+  Arguments: TObjectList<TGocciaExpression>;
+  Argument: TGocciaExpression;
+  PropertyName: string;
+  Token: TGocciaToken;
+  PropertyLine, PropertyColumn: Integer;
+  IsOptionalChain: Boolean;
+  CurrentType: TGocciaTokenType;
+begin
+  CurrentType := PeekWithLexicalGoal(glgInputElementDiv).TokenType;
+  Token := Advance;
+  ASegmentLine := Token.Line;
+  ASegmentColumn := Token.Column;
+  IsOptionalChain := CurrentType = gttOptionalChaining;
+
+  case CurrentType of
+    gttDot, gttOptionalChaining:
+      begin
+        if Check(gttHash) then
+        begin
+          Advance;
+          Token := Consume(gttIdentifier, 'Expected private field name after "#"',
+            SSuggestPrivateFieldMustFollow);
+          PropertyName := Token.Lexeme;
+          RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
+          Result := TGocciaPrivateMemberExpression.Create(
+            AReceiver, PropertyName, ASegmentLine, ASegmentColumn,
+            IsOptionalChain);
+        end
+        else if Check(gttLeftBracket) and IsOptionalChain then
+        begin
+          Advance;
+          Argument := Expression;
+          Consume(gttRightBracket, 'Expected "]" after computed member expression',
+            SSuggestCloseBracketComputedProperty);
+          Result := TGocciaMemberExpression.Create(AReceiver, Argument,
+            ASegmentLine, ASegmentColumn, True);
+        end
+        else if Check(gttLeftParen) and IsOptionalChain and AAllowOptionalCall then
+        begin
+          Advance;
+          Arguments := TObjectList<TGocciaExpression>.Create(True);
+          try
+            if not Check(gttRightParen) then
+            begin
+              repeat
+                if Match(gttSpread) then
+                  Argument := TGocciaSpreadExpression.Create(Assignment,
+                    Previous.Line, Previous.Column)
+                else
+                  Argument := Assignment;
+                Arguments.Add(Argument);
+              until not MatchWithLexicalGoal(gttComma, glgInputElementDiv) or Check(gttRightParen);
+            end;
+            Consume(gttRightParen, 'Expected ")" after arguments',
+              SSuggestCloseParenArguments);
+            Result := TGocciaCallExpression.Create(AReceiver, Arguments,
+              ASegmentLine, ASegmentColumn, True);
+          except
+            Arguments.Free;
+            raise;
+          end;
+        end
+        else
+        begin
+          if IsIdentifierNameToken(Peek.TokenType) then
+          begin
+            Token := Advance;
+            PropertyName := Token.Lexeme;
+            if AUsePropertyNameLocation then
+            begin
+              PropertyLine := Token.Line;
+              PropertyColumn := Token.Column;
+            end
+            else
+            begin
+              PropertyLine := ASegmentLine;
+              PropertyColumn := ASegmentColumn;
+            end;
+          end
+          else
+            raise TGocciaSyntaxError.Create('Expected property name after "."',
+              Peek.Line, Peek.Column, FFileName, FSourceLines,
+              SSuggestPropertyNameIdentifier);
+
+          Result := TGocciaMemberExpression.Create(AReceiver, PropertyName,
+            False, PropertyLine, PropertyColumn, IsOptionalChain);
+        end;
+      end;
+    gttHash:
+      begin
+        Token := Consume(gttIdentifier, 'Expected private field name after "#"',
+          SSuggestPrivateFieldMustFollow);
+        PropertyName := Token.Lexeme;
+        RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
+        Result := TGocciaPrivateMemberExpression.Create(AReceiver, PropertyName,
+          ASegmentLine, ASegmentColumn);
+      end;
+    gttLeftBracket:
+      begin
+        Argument := Expression;
+        Consume(gttRightBracket, 'Expected "]" after computed member expression',
+          SSuggestCloseBracketComputedProperty);
+        Result := TGocciaMemberExpression.Create(AReceiver, Argument,
+          ASegmentLine, ASegmentColumn);
+      end;
+  else
+    raise TGocciaSyntaxError.Create('Expected member access',
+      Token.Line, Token.Column, FFileName, FSourceLines);
+  end;
+end;
+
 function TGocciaParser.Call: TGocciaExpression;
 var
   Arguments: TObjectList<TGocciaExpression>;
   Arg: TGocciaExpression;
-  PropertyName: string;
   Token: TGocciaToken;
   Line, Column: Integer;
-  IsOptionalChain: Boolean;
   CurrentType: TGocciaTokenType;
 begin
   Result := Primary;
@@ -1808,94 +1947,15 @@ begin
         end;
       gttDot, gttOptionalChaining:
         begin
-          Token := Advance;
-          Line := Token.Line;
-          Column := Token.Column;
-          IsOptionalChain := CurrentType = gttOptionalChaining;
-
-          // Check if this is a private field access (this.#field)
-          if Check(gttHash) then
-          begin
-            Advance; // consume the #
-            Token := Consume(gttIdentifier, 'Expected private field name after "#"',
-              SSuggestPrivateFieldMustFollow);
-            PropertyName := Token.Lexeme;
-            RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
-            Result := TGocciaPrivateMemberExpression.Create(
-              Result, PropertyName, Line, Column, IsOptionalChain);
-          end
-          else if Check(gttLeftBracket) and IsOptionalChain then
-          begin
-            // Optional chaining with computed property: obj?.[expr]
-            Advance; // consume [
-            Arg := Expression;
-            Consume(gttRightBracket, 'Expected "]" after computed member expression',
-              SSuggestCloseBracketComputedProperty);
-            Result := TGocciaMemberExpression.Create(Result, Arg, Line, Column, True);
-          end
-          else if Check(gttLeftParen) and IsOptionalChain then
-          begin
-            // Optional chaining with call: func?.()
-            Advance; // consume (
-            Arguments := TObjectList<TGocciaExpression>.Create(True);
-            try
-              if not Check(gttRightParen) then
-              begin
-                repeat
-                  if Match(gttSpread) then
-                    Arg := TGocciaSpreadExpression.Create(Assignment, Previous.Line, Previous.Column)
-                  else
-                    Arg := Assignment;
-                  Arguments.Add(Arg);
-                until not MatchWithLexicalGoal(gttComma, glgInputElementDiv) or Check(gttRightParen);
-              end;
-              Consume(gttRightParen, 'Expected ")" after arguments',
-                SSuggestCloseParenArguments);
-              Result := TGocciaCallExpression.Create(Result, Arguments, Line, Column, True);
-            except
-              Arguments.Free;
-              raise;
-            end;
-          end
-          else
-          begin
-            if Check(gttIdentifier) then
-              PropertyName := Advance.Lexeme
-            else if Peek.TokenType in [gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
-                                       gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
-                                       gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                                       gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith,
-                                       gttFunction] then
-              PropertyName := Advance.Lexeme  // Reserved words are allowed as property names
-            else
-              raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
-                SSuggestPropertyNameIdentifier);
-
-            Result := TGocciaMemberExpression.Create(Result, PropertyName, False,
-              Line, Column, IsOptionalChain);
-          end;
+          Result := ParseMemberAccessSegment(Result, False, True, Line, Column);
         end;
       gttHash:
         begin
-          Token := Advance;
-          Line := Token.Line;
-          Column := Token.Column;
-          Token := Consume(gttIdentifier, 'Expected private field name after "#"',
-            SSuggestPrivateFieldMustFollow);
-          PropertyName := Token.Lexeme;
-          RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
-          Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName, Line, Column);
+          Result := ParseMemberAccessSegment(Result, False, True, Line, Column);
         end;
       gttLeftBracket:
         begin
-          Token := Advance;
-          Line := Token.Line;
-          Column := Token.Column;
-          Arg := Expression;
-          Consume(gttRightBracket, 'Expected "]" after computed member expression',
-            SSuggestCloseBracketComputedProperty);
-          // For computed access, store the expression directly to be evaluated at runtime
-          Result := TGocciaMemberExpression.Create(Result, Arg, Line, Column);
+          Result := ParseMemberAccessSegment(Result, False, True, Line, Column);
         end;
       gttIncrement, gttDecrement:
         begin
@@ -2643,26 +2703,8 @@ begin
         // Parse the callee: class name with optional member access (e.g. new a.B.C())
         // but NOT call expressions — those belong to the outer Call loop.
         Expr := Primary;
-        while Check(gttDot) do
-        begin
-          Advance;
-          if Check(gttIdentifier) then
-            Expr := TGocciaMemberExpression.Create(Expr, Advance.Lexeme, False, Previous.Line, Previous.Column, False)
-          else if Peek.TokenType in [gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
-                                     gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
-                                     gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                                     gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith,
-                                     gttFunction] then
-          begin
-            Token := Advance;
-            // Reserved words are valid property names after "." per ES spec
-            Expr := TGocciaMemberExpression.Create(Expr, Token.Lexeme, False,
-              Token.Line, Token.Column, False);
-          end
-          else
-            raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
-              SSuggestPropertyNameIdentifier);
-        end;
+        while Check(gttDot) or Check(gttLeftBracket) do
+          Expr := ParseMemberAccessSegment(Expr, True, False, Line, Column);
         while Check(gttTemplate) or Check(gttTemplateHead) do
         begin
           Token := Advance;
@@ -2840,7 +2882,7 @@ begin
         Token := Advance;
         if not FFunctionDeclarationsEnabled then
         begin
-          AddWarning('''function'' expressions are not supported in GocciaScript',
+          AddUnsupportedFeatureWarning('''function'' expressions are not supported in GocciaScript',
             'Use arrow functions: const f = (...) => { ... }; for wrappers needing call-site this, use method shorthand: ({ m(...) {} }).m',
             Token.Line, Token.Column);
           SkipUnsupportedFunctionSignature;
@@ -4625,7 +4667,7 @@ begin
     begin
       Line := Peek.Line;
       Column := Peek.Column;
-      AddWarning('Labeled statements are not supported in GocciaScript',
+      AddUnsupportedFeatureWarning('Labeled statements are not supported in GocciaScript',
         'Enable --compat-label for JavaScript labeled break/continue compatibility',
         Line, Column);
       Advance;
@@ -5233,7 +5275,7 @@ begin
 
   if not FFunctionDeclarationsEnabled then
   begin
-    AddWarning('''async function'' is not supported in GocciaScript',
+    AddUnsupportedFeatureWarning('''async function'' is not supported in GocciaScript',
       'Use async arrow functions: const name = async (...) => { ... }; for this binding, use async method shorthand: ({ async m(...) {} }).m',
       AAsyncLine, AAsyncColumn);
     SkipUnsupportedFunctionSignature;
@@ -5275,7 +5317,7 @@ begin
 
   if not FVarDeclarationsEnabled then
   begin
-    AddWarning('''var'' declarations are not supported in GocciaScript',
+    AddUnsupportedFeatureWarning('''var'' declarations are not supported in GocciaScript',
       'Use ''let'' or ''const'' instead',
       Line, Column);
     SkipUntilSemicolon;
@@ -5504,7 +5546,7 @@ begin
         FCurrent := SavedCurrent;
         if FTraditionalForLoopsEnabled and LooksLikeTraditionalForHeader then
           Exit(ParseTraditionalForBody(Line, Column));
-        AddWarning('Traditional ''for(;;)'' loops are not supported by default in GocciaScript',
+        AddUnsupportedFeatureWarning('Traditional ''for(;;)'' loops are not supported by default in GocciaScript',
           'Use for...of/array methods, or enable --compat-traditional-for-loop',
           Line, Column);
         SkipBalancedParens;
@@ -5552,7 +5594,7 @@ begin
 
         if not FForInLoopsEnabled then
         begin
-          AddWarning('''for...in'' loops are not supported by default in GocciaScript',
+          AddUnsupportedFeatureWarning('''for...in'' loops are not supported by default in GocciaScript',
             'Use Object.keys()/Object.entries() with for...of, or enable --compat-for-in-loop',
             Line, Column);
           FCurrent := SavedCurrent;
@@ -5617,7 +5659,7 @@ begin
 
         if not FForInLoopsEnabled then
         begin
-          AddWarning('''for...in'' loops are not supported by default in GocciaScript',
+          AddUnsupportedFeatureWarning('''for...in'' loops are not supported by default in GocciaScript',
             'Use Object.keys()/Object.entries() with for...of, or enable --compat-for-in-loop',
             Line, Column);
           FCurrent := SavedCurrent;
@@ -5675,7 +5717,7 @@ begin
     Exit;
   end;
 
-  AddWarning('Traditional ''for(;;)'' loops are not supported by default in GocciaScript',
+  AddUnsupportedFeatureWarning('Traditional ''for(;;)'' loops are not supported by default in GocciaScript',
     'Use for...of/array methods, or enable --compat-traditional-for-loop',
     Line, Column);
 
@@ -5879,7 +5921,7 @@ begin
   end
   else if Check(gttVar) then
   begin
-    AddWarning('''var'' in for-init requires --compat-var',
+    AddUnsupportedFeatureWarning('''var'' in for-init requires --compat-var',
       'Use ''let''/''const'' or enable --compat-var',
       Peek.Line, Peek.Column);
     SkipUntilSemicolon;
@@ -5956,7 +5998,7 @@ begin
 
   if not FWhileLoopsEnabled then
   begin
-    AddWarning('''while'' loops are not supported by default in GocciaScript',
+    AddUnsupportedFeatureWarning('''while'' loops are not supported by default in GocciaScript',
       'Use for...of/array methods, or enable --compat-while-loops',
       Line, Column);
 
@@ -5991,7 +6033,7 @@ begin
 
   if not FWhileLoopsEnabled then
   begin
-    AddWarning('''do...while'' loops are not supported by default in GocciaScript',
+    AddUnsupportedFeatureWarning('''do...while'' loops are not supported by default in GocciaScript',
       'Use for...of/array methods, or enable --compat-while-loops',
       Line, Column);
 
@@ -6042,7 +6084,13 @@ begin
 
   if not FNonStrictModeEnabled then
   begin
-    AddWarning('''with'' statements require --compat-non-strict-mode',
+    if FModuleSource then
+      raise TGocciaSyntaxError.Create(
+        '''with'' statements are not allowed in strict mode',
+        Line, Column, FFileName, FSourceLines,
+        'Use explicit property access; modules are always strict');
+
+    AddUnsupportedFeatureWarning('''with'' statements require --compat-non-strict-mode',
       'Use explicit property access, or enable --compat-non-strict-mode',
       Line, Column);
     SkipBalancedParens;
@@ -6074,7 +6122,7 @@ begin
 
   if not FFunctionDeclarationsEnabled then
   begin
-    AddWarning('''function'' declarations are not supported in GocciaScript',
+    AddUnsupportedFeatureWarning('''function'' declarations are not supported in GocciaScript',
       'Use arrow functions: const name = (...) => { ... }; for this binding, use method shorthand: ({ name(...) {} }).name',
       Line, Column);
     SkipUnsupportedFunctionSignature;
@@ -6982,7 +7030,7 @@ begin
   begin
     if not FFunctionDeclarationsEnabled then
     begin
-      AddWarning('''function'' declarations are not supported in GocciaScript',
+      AddUnsupportedFeatureWarning('''function'' declarations are not supported in GocciaScript',
         'Use arrow functions: const name = (...) => { ... }; for this binding, use method shorthand: ({ name(...) {} }).name',
         Line, Column);
       Advance;
@@ -8356,6 +8404,7 @@ var
   CanUseShorthand: Boolean;
   NumericValue: Double;
   KeyExpression: TGocciaExpression;
+  KeyToken: TGocciaToken;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -8388,8 +8437,9 @@ begin
       end
       else if IsIdentifierNameToken(Peek.TokenType) then
       begin
-        CanUseShorthand := IsIdentifierBindingToken(Peek.TokenType);
-        Key := Advance.Lexeme;
+        KeyToken := Advance;
+        CanUseShorthand := True;
+        Key := KeyToken.Lexeme;
       end
       else if Check(gttString) then
       begin
@@ -8427,8 +8477,15 @@ begin
             'Object pattern shorthand requires an identifier property name',
             Previous.Line, Previous.Column, FFileName, FSourceLines,
             'Use "key: binding" for string, numeric, or computed keys');
+        if not IsIdentifierBindingToken(KeyToken.TokenType) then
+          raise TGocciaSyntaxError.Create(
+            'Object pattern shorthand requires an identifier binding',
+            KeyToken.Line, KeyToken.Column, FFileName, FSourceLines,
+            'Use "key: binding" when the property name is a keyword');
+        ValidateIdentifierBinding(KeyToken);
         // Shorthand syntax: {name} means {name: name}
-        Pattern := TGocciaIdentifierDestructuringPattern.Create(Key, Previous.Line, Previous.Column);
+        Pattern := TGocciaIdentifierDestructuringPattern.Create(Key,
+          KeyToken.Line, KeyToken.Column);
 
         // Check for default value in shorthand
         if Match(gttAssign) then

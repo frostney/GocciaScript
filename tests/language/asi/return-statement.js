@@ -1,6 +1,6 @@
 /*---
 description: ASI for return statements including restricted production
-features: [automatic-semicolon-insertion]
+features: [automatic-semicolon-insertion, compat-label]
 ---*/
 
 describe("ASI return statement", () => {
@@ -33,7 +33,7 @@ describe("ASI return statement", () => {
     expect(fn()).toBeUndefined();
   });
 
-  test("restricted production: return + newline + object returns undefined", () => {
+  test("restricted production: return + newline + labeled block returns undefined", () => {
     // Classic ASI pitfall: the object literal is NOT returned
     const fn = () => {
       return

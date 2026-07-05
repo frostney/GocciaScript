@@ -67,6 +67,29 @@ describe("Proxy getOwnPropertyDescriptor trap", () => {
     expect(() => Object.getOwnPropertyDescriptor(proxy, "x")).toThrow(TypeError);
   });
 
+  test("applies non-extensible target invariants through nested proxies", () => {
+    const target = {};
+    Object.preventExtensions(target);
+
+    const inner = new Proxy(target, {
+      isExtensible() {
+        return false;
+      },
+    });
+    const outer = new Proxy(inner, {
+      getOwnPropertyDescriptor() {
+        return {
+          value: 1,
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        };
+      },
+    });
+
+    expect(() => Object.getOwnPropertyDescriptor(outer, "x")).toThrow(TypeError);
+  });
+
   test("rejects incompatible descriptors for non-configurable target properties", () => {
     const target = {};
     Object.defineProperty(target, "x", {

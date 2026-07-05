@@ -135,6 +135,30 @@ describe("Object.freeze", () => {
     expect(arr[0]).toBe("a");
   });
 
+  test("freezing String objects preserves virtual indices and length", () => {
+    const str = new String("abc");
+    str.foo = 10;
+
+    Object.freeze(str);
+
+    const index = Object.getOwnPropertyDescriptor(str, "0");
+    const length = Object.getOwnPropertyDescriptor(str, "length");
+    const foo = Object.getOwnPropertyDescriptor(str, "foo");
+
+    expect(Object.isFrozen(str)).toBe(true);
+    expect(index.value).toBe("a");
+    expect(index.writable).toBe(false);
+    expect(index.enumerable).toBe(true);
+    expect(index.configurable).toBe(false);
+    expect(length.value).toBe(3);
+    expect(length.writable).toBe(false);
+    expect(length.enumerable).toBe(false);
+    expect(length.configurable).toBe(false);
+    expect(foo.value).toBe(10);
+    expect(foo.writable).toBe(false);
+    expect(foo.configurable).toBe(false);
+  });
+
   test("proxy freeze does not pass a value field in data descriptors", () => {
     const seen = [];
     const target = { value: 1 };

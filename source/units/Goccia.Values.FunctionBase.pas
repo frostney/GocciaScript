@@ -24,6 +24,13 @@ type
     const ANewTarget: TGocciaValue): TGocciaValue;
   TGocciaProxyGetPrototypeHook = function(
     const AProxy: TGocciaObjectValue): TGocciaValue;
+  TGocciaProxyGetFunctionRealmHook = function(
+    const AProxy: TGocciaValue): TGocciaRealm;
+  TGocciaFunctionConstructRedirectHook = function(
+    const ATarget: TGocciaValue;
+    const AArguments: TGocciaArgumentsCollection;
+    const ANewTarget: TGocciaValue;
+    out AResult: TGocciaValue): Boolean;
 
   TGocciaFunctionSharedPrototype = class(TGocciaObjectValue)
   public
@@ -154,6 +161,7 @@ function GetProtoFromConstructor(const ANewTarget: TGocciaValue): TGocciaObjectV
 function GetProtoFromConstructorWithIntrinsic(const ANewTarget: TGocciaValue;
   const AIntrinsicDefault: TGocciaObjectValue;
   const AIntrinsicSlot: TGocciaRealmSlotId = -1): TGocciaObjectValue;
+function GetFunctionRealm(const AValue: TGocciaValue): TGocciaRealm;
 
 // ES2026 §10.2.4.1 %ThrowTypeError%: one frozen thrower per realm, reused by
 // AddRestrictedFunctionProperties and unmapped arguments objects.
@@ -184,7 +192,10 @@ procedure RegisterProxyDispatchHooks(
   const APredicate: TGocciaProxyPredicate;
   const AApply: TGocciaProxyApplyHook;
   const AConstruct: TGocciaProxyConstructHook;
-  const AGetPrototype: TGocciaProxyGetPrototypeHook);
+  const AGetPrototype: TGocciaProxyGetPrototypeHook;
+  const AGetFunctionRealm: TGocciaProxyGetFunctionRealmHook);
+procedure RegisterFunctionConstructRedirectHook(
+  const AHook: TGocciaFunctionConstructRedirectHook);
 
 // ES2026 §10.2.9 SetFunctionName property-key formatting shared by
 // interpreter and bytecode named-evaluation paths.
@@ -226,17 +237,27 @@ var
   GProxyApplyHook: TGocciaProxyApplyHook;
   GProxyConstructHook: TGocciaProxyConstructHook;
   GProxyGetPrototypeHook: TGocciaProxyGetPrototypeHook;
+  GProxyGetFunctionRealmHook: TGocciaProxyGetFunctionRealmHook;
+  GFunctionConstructRedirectHook: TGocciaFunctionConstructRedirectHook;
 
 procedure RegisterProxyDispatchHooks(
   const APredicate: TGocciaProxyPredicate;
   const AApply: TGocciaProxyApplyHook;
   const AConstruct: TGocciaProxyConstructHook;
-  const AGetPrototype: TGocciaProxyGetPrototypeHook);
+  const AGetPrototype: TGocciaProxyGetPrototypeHook;
+  const AGetFunctionRealm: TGocciaProxyGetFunctionRealmHook);
 begin
   GProxyPredicate := APredicate;
   GProxyApplyHook := AApply;
   GProxyConstructHook := AConstruct;
   GProxyGetPrototypeHook := AGetPrototype;
+  GProxyGetFunctionRealmHook := AGetFunctionRealm;
+end;
+
+procedure RegisterFunctionConstructRedirectHook(
+  const AHook: TGocciaFunctionConstructRedirectHook);
+begin
+  GFunctionConstructRedirectHook := AHook;
 end;
 
 function IsRegisteredProxyValue(const AValue: TGocciaValue): Boolean; inline;
@@ -266,9 +287,7 @@ begin
     Result := TGocciaObjectValue(ProtoValue)
   else
   begin
-    FallbackRealm := nil;
-    if ANewTarget is TGocciaFunctionBase then
-      FallbackRealm := TGocciaFunctionBase(ANewTarget).CreationRealm;
+    FallbackRealm := GetFunctionRealm(ANewTarget);
     Result := TGocciaObjectValue.GetSharedObjectPrototypeForRealm(
       FallbackRealm);
     if Assigned(Result) then
@@ -296,9 +315,9 @@ begin
     Result := TGocciaObjectValue(ProtoValue)
   else
   begin
-    if (AIntrinsicSlot >= 0) and (ANewTarget is TGocciaFunctionBase) then
+    FallbackRealm := GetFunctionRealm(ANewTarget);
+    if AIntrinsicSlot >= 0 then
     begin
-      FallbackRealm := TGocciaFunctionBase(ANewTarget).CreationRealm;
       if Assigned(FallbackRealm) then
       begin
         Result := TGocciaObjectValue(FallbackRealm.GetSlot(AIntrinsicSlot));
@@ -308,6 +327,20 @@ begin
     end;
     Result := AIntrinsicDefault;
   end;
+end;
+
+function GetFunctionRealm(const AValue: TGocciaValue): TGocciaRealm;
+begin
+  if AValue is TGocciaFunctionBase then
+    Exit(TGocciaFunctionBase(AValue).CreationRealm);
+
+  if AValue is TGocciaClassValue then
+    Exit(TGocciaClassValue(AValue).CreationRealm);
+
+  if IsRegisteredProxyValue(AValue) and Assigned(GProxyGetFunctionRealmHook) then
+    Exit(GProxyGetFunctionRealmHook(AValue));
+
+  Result := nil;
 end;
 
 function GetThrowTypeErrorIntrinsic: TGocciaFunctionBase;
@@ -410,6 +443,10 @@ begin
     else if EffectiveTarget is TGocciaNativeFunctionValue then
       Result := TGocciaNativeFunctionValue(EffectiveTarget).Construct(WorkingArgs,
         EffectiveNewTarget)
+    else if Assigned(GFunctionConstructRedirectHook) and
+            GFunctionConstructRedirectHook(EffectiveTarget, WorkingArgs,
+              EffectiveNewTarget, Result) then
+      Exit
     else if EffectiveTarget is TGocciaFunctionBase then
       Result := ConstructOrdinaryWithReceiver(TGocciaFunctionBase(EffectiveTarget),
         WorkingArgs,

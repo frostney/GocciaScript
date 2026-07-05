@@ -426,6 +426,7 @@ var
   Source: TStringList;
   PipelineOptions: TGocciaSourcePipelineOptions;
   SourcePipelineResult: TGocciaCLISourcePipelineResult;
+  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
@@ -459,45 +460,58 @@ begin
           PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
           PipelineOptions.Preprocessors := Engine.Preprocessors;
           PipelineOptions.Compatibility := Engine.Compatibility;
+          PipelineOptions.LabelStatementsEnabled :=
+            Engine.LabelStatementsEnabled;
+          PipelineOptions.ForInLoopsEnabled := Engine.ForInLoopsEnabled;
+          PipelineOptions.ExperimentalJSModuleSourceEnabled :=
+            Engine.ExperimentalJSModuleSourceEnabled;
+          PipelineOptions.WarningUnsupportedFeatures :=
+            Engine.WarningUnsupportedFeatures;
           PipelineOptions.SourceType := Engine.SourceType;
-          SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(Source, AFileName,
-            PipelineOptions, True);
-          LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
-          ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
-
-          CompileStart := GetNanoseconds;
+          ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
+            PipelineOptions);
           try
-            Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
-            CompileEnd := GetNanoseconds;
+            SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(Source, AFileName,
+              PipelineOptions, True);
+            LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
+            ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
+
+            CompileStart := GetNanoseconds;
+            try
+              Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
+              CompileEnd := GetNanoseconds;
+            finally
+              SourcePipelineResult.Free;
+              SourcePipelineResult := nil;
+            end;
+
+            ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
+
+            StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+            StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+            try
+              RunBytecodeBenchmarkModule(Engine, Module, AFileName);
+              ExecEnd := GetNanoseconds;
+              if FProfileDeterministic.Present and
+                 Assigned(TGocciaProfiler.Instance) then
+                TGocciaProfiler.Instance.ResetCounts;
+
+              FileResult.FileName := AFileName;
+              FileResult.DeterministicProfile := FProfileDeterministic.Present;
+              FileResult.LexTimeNanoseconds := LexTimeNanoseconds;
+              FileResult.ParseTimeNanoseconds := ParseTimeNanoseconds;
+              FileResult.CompileTimeNanoseconds := CompileEnd - CompileStart;
+              BenchStart := GetNanoseconds;
+              ScriptResult := RunRegisteredBenchmarks(Engine,
+                FProfileDeterministic.Present);
+              FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd +
+                (GetNanoseconds - BenchStart);
+            finally
+              ClearExecutionTimeout;
+              ClearInstructionLimit;
+            end;
           finally
-            SourcePipelineResult.Free;
-            SourcePipelineResult := nil;
-          end;
-
-          ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
-
-          StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
-          StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
-          try
-            RunBytecodeBenchmarkModule(Engine, Module, AFileName);
-            ExecEnd := GetNanoseconds;
-            if FProfileDeterministic.Present and
-               Assigned(TGocciaProfiler.Instance) then
-              TGocciaProfiler.Instance.ResetCounts;
-
-            FileResult.FileName := AFileName;
-            FileResult.DeterministicProfile := FProfileDeterministic.Present;
-            FileResult.LexTimeNanoseconds := LexTimeNanoseconds;
-            FileResult.ParseTimeNanoseconds := ParseTimeNanoseconds;
-            FileResult.CompileTimeNanoseconds := CompileEnd - CompileStart;
-            BenchStart := GetNanoseconds;
-            ScriptResult := RunRegisteredBenchmarks(Engine,
-              FProfileDeterministic.Present);
-            FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd +
-              (GetNanoseconds - BenchStart);
-          finally
-            ClearExecutionTimeout;
-            ClearInstructionLimit;
+            ActiveOptionsScope.Free;
           end;
 
           GC := TGarbageCollector.Instance;
@@ -643,6 +657,7 @@ procedure TBenchmarkRunnerApp.CollectBenchmarkSourceBytecode(
 var
   PipelineOptions: TGocciaSourcePipelineOptions;
   SourcePipelineResult: TGocciaCLISourcePipelineResult;
+  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
@@ -662,45 +677,57 @@ begin
         PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
         PipelineOptions.Preprocessors := Engine.Preprocessors;
         PipelineOptions.Compatibility := Engine.Compatibility;
+        PipelineOptions.LabelStatementsEnabled := Engine.LabelStatementsEnabled;
+        PipelineOptions.ForInLoopsEnabled := Engine.ForInLoopsEnabled;
+        PipelineOptions.ExperimentalJSModuleSourceEnabled :=
+          Engine.ExperimentalJSModuleSourceEnabled;
+        PipelineOptions.WarningUnsupportedFeatures :=
+          Engine.WarningUnsupportedFeatures;
         PipelineOptions.SourceType := Engine.SourceType;
-        SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(ASource, AFileName,
-          PipelineOptions, True);
-        LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
-        ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
-
-        CompileStart := GetNanoseconds;
+        ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
+          PipelineOptions);
         try
-          Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
-          CompileEnd := GetNanoseconds;
+          SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(ASource, AFileName,
+            PipelineOptions, True);
+          LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
+          ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
+
+          CompileStart := GetNanoseconds;
+          try
+            Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
+            CompileEnd := GetNanoseconds;
+          finally
+            SourcePipelineResult.Free;
+            SourcePipelineResult := nil;
+          end;
+
+          ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
+
+          StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+          StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+          try
+            RunBytecodeBenchmarkModule(Engine, Module, AFileName);
+            ExecEnd := GetNanoseconds;
+            if FProfileDeterministic.Present and
+               Assigned(TGocciaProfiler.Instance) then
+              TGocciaProfiler.Instance.ResetCounts;
+
+            FileResult.FileName := AFileName;
+            FileResult.DeterministicProfile := FProfileDeterministic.Present;
+            FileResult.LexTimeNanoseconds := LexTimeNanoseconds;
+            FileResult.ParseTimeNanoseconds := ParseTimeNanoseconds;
+            FileResult.CompileTimeNanoseconds := CompileEnd - CompileStart;
+            BenchStart := GetNanoseconds;
+            ScriptResult := RunRegisteredBenchmarks(Engine,
+              FProfileDeterministic.Present);
+            FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd +
+              (GetNanoseconds - BenchStart);
+          finally
+            ClearExecutionTimeout;
+            ClearInstructionLimit;
+          end;
         finally
-          SourcePipelineResult.Free;
-          SourcePipelineResult := nil;
-        end;
-
-        ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
-
-        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
-        StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
-        try
-          RunBytecodeBenchmarkModule(Engine, Module, AFileName);
-          ExecEnd := GetNanoseconds;
-          if FProfileDeterministic.Present and
-             Assigned(TGocciaProfiler.Instance) then
-            TGocciaProfiler.Instance.ResetCounts;
-
-          FileResult.FileName := AFileName;
-          FileResult.DeterministicProfile := FProfileDeterministic.Present;
-          FileResult.LexTimeNanoseconds := LexTimeNanoseconds;
-          FileResult.ParseTimeNanoseconds := ParseTimeNanoseconds;
-          FileResult.CompileTimeNanoseconds := CompileEnd - CompileStart;
-          BenchStart := GetNanoseconds;
-          ScriptResult := RunRegisteredBenchmarks(Engine,
-            FProfileDeterministic.Present);
-          FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd +
-            (GetNanoseconds - BenchStart);
-        finally
-          ClearExecutionTimeout;
-          ClearInstructionLimit;
+          ActiveOptionsScope.Free;
         end;
 
         GC := TGarbageCollector.Instance;

@@ -53,12 +53,12 @@ describe("Proxy defineProperty trap", () => {
       value: 123,
       writable: false,
       enumerable: true,
-      configurable: false,
+      configurable: true,
     });
     expect(receivedDescriptor.value).toBe(123);
     expect(receivedDescriptor.writable).toBe(false);
     expect(receivedDescriptor.enumerable).toBe(true);
-    expect(receivedDescriptor.configurable).toBe(false);
+    expect(receivedDescriptor.configurable).toBe(true);
   });
 
   test("preserves omitted descriptor fields", () => {

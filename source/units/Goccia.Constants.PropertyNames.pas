@@ -46,6 +46,7 @@ const
   PROP_GOCCIA       = 'Goccia';
   PROP_GLOBAL_THIS  = 'globalThis';
   PROP_SLICE        = 'slice';
+  PROP_SLICE_TO_IMMUTABLE = 'sliceToImmutable';
   PROP_TAG_NAME     = 'tagName';
   PROP_NEXT         = 'next';
   PROP_RETURN       = 'return';
@@ -55,6 +56,7 @@ const
   PROP_CONFIGURABLE = 'configurable';
   PROP_GET          = 'get';
   PROP_SET          = 'set';
+  PROP_ADD          = 'add';
   PROP_INIT         = 'init';
   PROP_KIND         = 'kind';
   PROP_STATIC       = 'static';

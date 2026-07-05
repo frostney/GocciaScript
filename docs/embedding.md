@@ -507,6 +507,7 @@ Runtime globals can be reduced by installing only a concrete extension, for exam
 |--------|------|---------|---------|
 | `Preprocessors` | `TGocciaPreprocessors` | `[ppJSX]` | Source transformations before parsing |
 | `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | ECMAScript conformance and legacy-behavior toggles; leave empty for the recommended defaults |
+| `WarningUnsupportedFeatures` | `Boolean` | `False` | Parser diagnostic policy for disabled syntax; `True` restores warning/no-op recovery without enabling compatibility semantics |
 | `SourceType` | `TGocciaSourceType` | `stScript` | Load entry as script source (default) or module source; `.mjs` file names infer `stModule` |
 | `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations (works in both interpreter and bytecode); setter propagates to the active executor and interpreter scope |
 
@@ -525,6 +526,7 @@ try
     cfWhileLoops,
     cfExperimentalJSModuleSource
   ];                                       // Enable selected source-pipeline flags
+  Engine.WarningUnsupportedFeatures := True; // Optional migration mode for disabled syntax diagnostics
   Engine.SourceType := stModule;           // Run entry as module source (top-level this is undefined; import.meta resolves)
   Engine.StrictTypes := True;              // Enforce type annotations in both execution modes
 finally
@@ -977,7 +979,7 @@ For CLI tools, use `TGocciaCLIApplication` instead, which adds argument parsing,
 1. Add `source/units/` and `source/shared/` to your FreePascal unit search path (or use `config.cfg`)
 2. `uses Goccia.Runtime, Goccia.Values.Primitives;`
 3. Create `TGocciaRuntime.Create(...)` for the runtime layer and file loading
-4. Use `Runtime.Engine` for engine-level options such as ASI, source type, and compatibility flags
+4. Use `Runtime.Engine` for engine-level options such as ASI, source type, parser diagnostic policy, and compatibility flags
 5. Choose your runtime surface and runtime globals via runtime profiles or runtime extensions
 6. Inject custom globals via `Runtime.Engine.Interpreter.GlobalScope.DefineLexicalBinding(...)`
 7. Handle exceptions from `Goccia.Error`

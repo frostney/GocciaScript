@@ -110,6 +110,7 @@ var
   ResultValue: TGocciaValue;
   PipelineOptions: TGocciaSourcePipelineOptions;
   SourcePipelineResult: TGocciaCLISourcePipelineResult;
+  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   Module: TGocciaCompiledModule;
   StartTime, CompileStart, CompileEnd, ExecStart, ExecEnd: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
@@ -165,25 +166,38 @@ begin
             PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
             PipelineOptions.Preprocessors := Eng.Preprocessors;
             PipelineOptions.Compatibility := Eng.Compatibility;
+            PipelineOptions.LabelStatementsEnabled :=
+              Eng.LabelStatementsEnabled;
+            PipelineOptions.ForInLoopsEnabled := Eng.ForInLoopsEnabled;
+            PipelineOptions.ExperimentalJSModuleSourceEnabled :=
+              Eng.ExperimentalJSModuleSourceEnabled;
+            PipelineOptions.WarningUnsupportedFeatures :=
+              Eng.WarningUnsupportedFeatures;
             PipelineOptions.SourceType := Eng.SourceType;
-            SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(Source,
-              REPL_FILE_NAME, PipelineOptions, True);
-            LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
-            ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
-
-            CompileStart := GetNanoseconds;
+            ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
+              PipelineOptions);
             try
-              Module := Eng.CompileModule(SourcePipelineResult.ProgramNode);
-              CompileEnd := GetNanoseconds;
-            finally
-              SourcePipelineResult.Free;
-              SourcePipelineResult := nil;
-            end;
+              SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(Source,
+                REPL_FILE_NAME, PipelineOptions, True);
+              LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
+              ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
 
-            ExecStart := GetNanoseconds;
-            ResultValue := Eng.RunModuleForSourceType(Module,
-              REPL_FILE_NAME);
-            ExecEnd := GetNanoseconds;
+              CompileStart := GetNanoseconds;
+              try
+                Module := Eng.CompileModule(SourcePipelineResult.ProgramNode);
+                CompileEnd := GetNanoseconds;
+              finally
+                SourcePipelineResult.Free;
+                SourcePipelineResult := nil;
+              end;
+
+              ExecStart := GetNanoseconds;
+              ResultValue := Eng.RunModuleForSourceType(Module,
+                REPL_FILE_NAME);
+              ExecEnd := GetNanoseconds;
+            finally
+              ActiveOptionsScope.Free;
+            end;
 
             if ResultValue <> nil then
               WriteLn(FormatREPLValue(ResultValue, IsColorTerminal));

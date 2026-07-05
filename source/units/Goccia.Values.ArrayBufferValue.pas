@@ -9,6 +9,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.SharedPrototype,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
@@ -23,6 +24,9 @@ type
     FDetached: Boolean;
     FImmutable: Boolean;
     FMaxByteLength: Integer;
+    FHasPendingAllocation: Boolean;
+    FPendingByteLength: Double;
+    FPendingMaxByteLength: Double;
 
     function GetByteLength: Integer;
 
@@ -44,10 +48,13 @@ type
     function BuiltinTagFallback: Boolean; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
+    procedure FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
     procedure Detach;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
+    class function GetSharedPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; static;
 
     property Data: TBytes read FData write FData;
     property Detached: Boolean read FDetached;
@@ -60,6 +67,7 @@ type
     function ArrayBufferTransfer(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayBufferTransferToFixedLength(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayBufferTransferToImmutable(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ArrayBufferSliceToImmutable(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayBufferByteLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayBufferMaxByteLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayBufferResizableGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -77,7 +85,6 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Realm,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -158,6 +165,24 @@ begin
   Result := Trunc(IntegerIndex);
 end;
 
+function ToArrayBufferConstructorIndex(const AValue: TGocciaValue): Double;
+var
+  Num: TGocciaNumberLiteralValue;
+begin
+  if (AValue = nil) or (AValue is TGocciaUndefinedLiteralValue) then
+    Exit(0);
+
+  Num := AValue.ToNumberLiteral;
+  if Num.IsNaN then
+    Exit(0);
+  if Num.IsInfinite then
+    ThrowRangeError(SErrorInvalidArrayBufferLength, SSuggestArrayLengthRange);
+
+  Result := Trunc(Num.Value);
+  if (Result < 0) or (Result > MAX_SAFE_INTEGER_F) then
+    ThrowRangeError(SErrorInvalidArrayBufferLength, SSuggestArrayLengthRange);
+end;
+
 function ToArrayBufferSliceIndex(const AValue: TGocciaValue;
   const ALength: Integer): Integer;
 var
@@ -199,6 +224,9 @@ begin
   FDetached := False;
   FImmutable := False;
   FMaxByteLength := NO_MAX_BYTE_LENGTH;
+  FHasPendingAllocation := False;
+  FPendingByteLength := 0;
+  FPendingMaxByteLength := NO_MAX_BYTE_LENGTH;
   SetLength(FData, AByteLength);
   if AByteLength > 0 then
     FillChar(FData[0], AByteLength, 0);
@@ -215,6 +243,9 @@ begin
   inherited Create(nil);
   FDetached := False;
   FImmutable := False;
+  FHasPendingAllocation := False;
+  FPendingByteLength := 0;
+  FPendingMaxByteLength := NO_MAX_BYTE_LENGTH;
   if AMaxByteLength >= 0 then
   begin
     if AByteLength > AMaxByteLength then
@@ -240,6 +271,9 @@ begin
   FDetached := False;
   FImmutable := False;
   FMaxByteLength := NO_MAX_BYTE_LENGTH;
+  FHasPendingAllocation := False;
+  FPendingByteLength := 0;
+  FPendingMaxByteLength := NO_MAX_BYTE_LENGTH;
   SetLength(FData, 0);
   InitializePrototype;
   Shared := GetArrayBufferShared;
@@ -276,6 +310,9 @@ begin
     Members.AddMethod(ArrayBufferTransfer, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(ArrayBufferTransferToFixedLength, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(ArrayBufferTransferToImmutable, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_SLICE_TO_IMMUTABLE,
+      ArrayBufferSliceToImmutable, 2, gmkPrototypeMethod,
+      [gmfNoFunctionPrototype]);
     Members.AddAccessor(PROP_BYTE_LENGTH, ArrayBufferByteLengthGetter, nil, [pfConfigurable]);
     Members.AddAccessor(PROP_MAX_BYTE_LENGTH, ArrayBufferMaxByteLengthGetter, nil, [pfConfigurable]);
     Members.AddAccessor(PROP_RESIZABLE, ArrayBufferResizableGetter, nil, [pfConfigurable]);
@@ -306,18 +343,31 @@ begin
     ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
+class function TGocciaArrayBufferValue.GetSharedPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+var
+  Shared: TGocciaSharedPrototype;
+begin
+  Result := nil;
+  if not Assigned(ARealm) then
+    Exit;
+  Shared := TGocciaSharedPrototype(ARealm.GetOwnedSlot(GArrayBufferSharedSlot));
+  if Assigned(Shared) then
+    Result := Shared.Prototype;
+end;
+
 // ES2026 §25.1.4.1 ArrayBuffer(length [, options])
 procedure TGocciaArrayBufferValue.InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
 var
-  Len: Integer;
+  Len: Double;
   OptionsArg, MaxByteLengthValue: TGocciaValue;
-  RequestedMaxByteLength: Integer;
+  RequestedMaxByteLength: Double;
 begin
   // ES2026 §6.2.4.2 ToIndex(value)
   if AArguments.Length = 0 then
     Len := 0
   else
-    Len := ToIndex(AArguments.GetElement(0));
+    Len := ToArrayBufferConstructorIndex(AArguments.GetElement(0));
 
   // ES2026 §25.1.4.1 step 3: GetArrayBufferMaxByteLengthOption(options)
   RequestedMaxByteLength := NO_MAX_BYTE_LENGTH;
@@ -331,7 +381,7 @@ begin
     begin
       MaxByteLengthValue := OptionsArg.GetProperty(PROP_MAX_BYTE_LENGTH);
       if Assigned(MaxByteLengthValue) and not (MaxByteLengthValue is TGocciaUndefinedLiteralValue) then
-        RequestedMaxByteLength := ToIndex(MaxByteLengthValue);
+        RequestedMaxByteLength := ToArrayBufferConstructorIndex(MaxByteLengthValue);
     end;
   end;
 
@@ -340,14 +390,36 @@ begin
   begin
     if Len > RequestedMaxByteLength then
       ThrowRangeError(SErrorArrayBufferExceedsMaxByteLength, SSuggestArrayBufferResizable);
-    FMaxByteLength := RequestedMaxByteLength;
   end
+  else
+    RequestedMaxByteLength := NO_MAX_BYTE_LENGTH;
+
+  FHasPendingAllocation := True;
+  FPendingByteLength := Len;
+  FPendingMaxByteLength := RequestedMaxByteLength;
+end;
+
+procedure TGocciaArrayBufferValue.FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
+var
+  Len: Integer;
+begin
+  if not FHasPendingAllocation then
+    Exit;
+
+  if (FPendingByteLength > High(Integer)) or
+     ((FPendingMaxByteLength >= 0) and (FPendingMaxByteLength > High(Integer))) then
+    ThrowRangeError(SErrorInvalidArrayBufferLength, SSuggestArrayLengthRange);
+
+  Len := Trunc(FPendingByteLength);
+  if FPendingMaxByteLength >= 0 then
+    FMaxByteLength := Trunc(FPendingMaxByteLength)
   else
     FMaxByteLength := NO_MAX_BYTE_LENGTH;
 
   SetLength(FData, Len);
   if Len > 0 then
     FillChar(FData[0], Len, 0);
+  FHasPendingAllocation := False;
 end;
 
 procedure TGocciaArrayBufferValue.Detach;
@@ -369,6 +441,15 @@ end;
 
 function TGocciaArrayBufferValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 begin
+  if ((AName = PROP_BYTE_LENGTH) or
+      (AName = PROP_MAX_BYTE_LENGTH) or
+      (AName = PROP_RESIZABLE) or
+      (AName = PROP_DETACHED) or
+      (AName = PROP_IMMUTABLE)) and
+     ((AThisContext <> Self) or HasOwnProperty(AName) or
+      (Assigned(Prototype) and Prototype.HasProperty(AName))) then
+    Exit(inherited GetPropertyWithContext(AName, AThisContext));
+
   if AName = PROP_BYTE_LENGTH then
   begin
     if FDetached then
@@ -497,6 +578,14 @@ var
 begin
   Buf := RequireArrayBuffer(AThisValue, 'ArrayBuffer.prototype.resize');
 
+  if Buf.FImmutable then
+    ThrowTypeError('Cannot resize an immutable ArrayBuffer',
+      SSuggestArrayBufferResizable);
+
+  // ES2026 §25.1.6.5 step 5: If IsFixedLengthArrayBuffer(O), throw TypeError
+  if Buf.FMaxByteLength < 0 then
+    ThrowTypeError(SErrorCannotResizeFixedLengthArrayBuffer, SSuggestArrayBufferResizable);
+
   // ES2026 §25.1.6.5: ToIndex(newLength) can detach the receiver.
   if AArgs.Length > 0 then
     NewByteLength := ToIndex(AArgs.GetElement(0))
@@ -505,10 +594,6 @@ begin
 
   // Revalidate before checking fixed/resizable state or touching storage.
   EnsureArrayBufferAttached(Buf, SErrorCannotResizeDetachedArrayBuffer);
-
-  // ES2026 §25.1.6.5 step 5: If IsFixedLengthArrayBuffer(O), throw TypeError
-  if Buf.FMaxByteLength < 0 then
-    ThrowTypeError(SErrorCannotResizeFixedLengthArrayBuffer, SSuggestArrayBufferResizable);
 
   // ES2026 §25.1.6.5 step 7: If newByteLength > maxByteLength, throw RangeError
   if NewByteLength > Buf.FMaxByteLength then
@@ -620,6 +705,41 @@ begin
   Result := ArrayBufferCopyAndDetach(Buf, NewByteLength, False, True);
 end;
 
+// Immutable ArrayBuffers proposal § ArrayBuffer.prototype.sliceToImmutable(start, end)
+function TGocciaArrayBufferValue.ArrayBufferSliceToImmutable(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Buf: TGocciaArrayBufferValue;
+  Bytes: TBytes;
+  CurrentLen, Final, First, Len, NewLen: Integer;
+begin
+  Buf := RequireArrayBuffer(AThisValue, 'ArrayBuffer.prototype.sliceToImmutable');
+  EnsureArrayBufferAttached(Buf, SErrorCannotSliceDetachedArrayBuffer);
+
+  Len := Length(Buf.FData);
+  if AArgs.Length = 0 then
+    First := 0
+  else
+    First := ToArrayBufferSliceIndex(AArgs.GetElement(0), Len);
+
+  if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
+    Final := ToArrayBufferSliceIndex(AArgs.GetElement(1), Len)
+  else
+    Final := Len;
+
+  EnsureArrayBufferAttached(Buf, SErrorCannotSliceDetachedArrayBuffer);
+  CurrentLen := Length(Buf.FData);
+  if CurrentLen < Final then
+    ThrowRangeError(SErrorInvalidArrayBufferLength, SSuggestArrayLengthRange);
+
+  NewLen := Max(Final - First, 0);
+  SetLength(Bytes, NewLen);
+  if NewLen > 0 then
+    Move(Buf.FData[First], Bytes[0], NewLen);
+
+  Result := TGocciaArrayBufferValue.CreateImmutableFromBytes(Bytes);
+end;
+
 // ES2026 §25.1.6.8 ArrayBuffer.prototype.slice(start, end)
 function TGocciaArrayBufferValue.ArrayBufferSlice(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -679,6 +799,9 @@ begin
       ThrowTypeError('ArrayBuffer species constructor returned this',
         SSuggestArrayBufferThisType);
     NewBuf := TGocciaArrayBufferValue(ConstructedValue);
+    if NewBuf.FImmutable then
+      ThrowTypeError('ArrayBuffer species constructor returned an immutable ArrayBuffer',
+        SSuggestArrayBufferThisType);
     if Length(NewBuf.FData) < NewLen then
       ThrowTypeError('ArrayBuffer species constructor returned a buffer that is too small',
         SSuggestArrayBufferThisType);

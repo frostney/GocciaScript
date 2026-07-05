@@ -200,6 +200,12 @@ begin
   // same syntax the host enabled (e.g. --compat-function), while staying a
   // fresh realm with its own intrinsics and global object.
   FEngine.Compatibility := AParentEngine.Compatibility;
+  FEngine.LabelStatementsEnabled := AParentEngine.LabelStatementsEnabled;
+  FEngine.ForInLoopsEnabled := AParentEngine.ForInLoopsEnabled;
+  FEngine.ExperimentalJSModuleSourceEnabled :=
+    AParentEngine.ExperimentalJSModuleSourceEnabled;
+  FEngine.WarningUnsupportedFeatures :=
+    AParentEngine.WarningUnsupportedFeatures;
   FEngine.Preprocessors := AParentEngine.Preprocessors;
   FEngine.RefreshGlobalThis;
   EnableShadowRealm(FEngine);
@@ -301,6 +307,11 @@ begin
     Options.SourceType := stScript;
     Options.Preprocessors := FEngine.Preprocessors;
     Options.Compatibility := FEngine.Compatibility;
+    Options.LabelStatementsEnabled := FEngine.LabelStatementsEnabled;
+    Options.ForInLoopsEnabled := FEngine.ForInLoopsEnabled;
+    Options.ExperimentalJSModuleSourceEnabled :=
+      FEngine.ExperimentalJSModuleSourceEnabled;
+    Options.WarningUnsupportedFeatures := FEngine.WarningUnsupportedFeatures;
     OptionsScope := TGocciaSourcePipeline.ActivateOptions(Options);
     try
       RealmScope := FEngine.ActivateRealmExecutionContext;
@@ -512,6 +523,12 @@ begin
       Options.SourceType := stScript;
       Options.Preprocessors := ChildEngine.Preprocessors;
       Options.Compatibility := ChildEngine.Compatibility;
+      Options.LabelStatementsEnabled := ChildEngine.LabelStatementsEnabled;
+      Options.ForInLoopsEnabled := ChildEngine.ForInLoopsEnabled;
+      Options.ExperimentalJSModuleSourceEnabled :=
+        ChildEngine.ExperimentalJSModuleSourceEnabled;
+      Options.WarningUnsupportedFeatures :=
+        ChildEngine.WarningUnsupportedFeatures;
 
       OptionsScope := TGocciaSourcePipeline.ActivateOptions(Options);
       try

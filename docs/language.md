@@ -8,8 +8,8 @@
 - **Recommended defaults** — Modern, explicit ECMAScript: `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules
 - **Conformance objective** — Core ECMAScript compatibility is a release-track objective, measured by generated test262 reports; Annex B's browser-only legacy surface is deferred until any future Web API/browser-compatibility profile
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
-- **Excluded by design** — Runtime `eval`, wildcard re-exports
-- **Graceful handling** — Parser-recognized excluded or disabled syntax (`==`/`!=` when `--compat-loose-equality` is off, labels when `--compat-label` is off, `while`/`do...while` when `--compat-while-loops` is off, `with` when `--compat-non-strict-mode` is off, traditional `for(;;)` when `--compat-traditional-for-loop` is off, `for...in` when `--compat-for-in-loop` is off) parses successfully but executes as a no-op with a warning and suggestion
+- **Excluded by design** — Runtime `eval` outside private conformance host hooks
+- **Parser policy** — Parser-recognized excluded or disabled syntax (`var`, `function`, `==`/`!=`, labels, `while`/`do...while`, `with`, traditional `for(;;)`, `for...in`) is a `SyntaxError` by default. `--warning-unsupported-features` / `"warning-unsupported-features": true` restores warning plus recovery behavior for migration and diagnostics without enabling real semantics.
 - **Compatibility flags** — `--compat-*` flags primarily exist for ECMAScript conformance and legacy semantic requirements. Userland code should usually prefer default forms instead of enabling ASI (`--compat-asi`), `var` (`--compat-var`), `function` (`--compat-function`), implicit `arguments` (`--compat-arguments-object`), non-strict Script compatibility (`--compat-non-strict-mode`), loose equality (`--compat-loose-equality`), labels (`--compat-label`), traditional loops (`--compat-traditional-for-loop`), `for...in` (`--compat-for-in-loop`), or `while`/`do...while` (`--compat-while-loops`) preemptively.
 - **Conformance-only host hooks** — `GocciaScriptLoaderBare --test262-host` exposes private test262 hooks (`eval`, `evalScript`, `createRealm`) without making them part of the public runtime surface
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
@@ -39,6 +39,8 @@ Annex B is not a general compatibility target before 1.0. ECMA-262 describes Ann
 | `--compat-while-loops` | `while` and `do...while` | Use `for...of`, iterators, or array methods when possible |
 
 Runtime type enforcement (`--strict-types`) is separate from ECMAScript compatibility. It enforces GocciaScript's parsed type annotations at runtime and is opt-in for hosts that want that extra contract.
+
+`--warning-unsupported-features` is also separate from ECMAScript compatibility. It changes parser diagnostics for disabled syntax from hard errors back into the historical warning/recovery path, but it does not enable `var`, `function`, loose equality, labels, legacy loops, `for...in`, or `with` semantics. Use the matching `--compat-*` flag when code needs those semantics.
 
 ## Supported Features
 
@@ -262,13 +264,7 @@ Directory/index resolution:
 import { setup } from "./utils";  // resolves to ./utils/index.js (or .ts, .jsx, etc.)
 ```
 
-**Not supported:** `import "module"` (side-effect import), `export * from` (wildcard re-export). The parser accepts these syntactically but treats them as no-ops, emitting a warning with a suggestion:
-
-```text
-Warning: Wildcard re-exports (export * from ...) are not supported in GocciaScript
-  Suggestion: Use named re-exports instead: export { name } from 'module'
-  --> script.js:1:1
-```
+Side-effect imports (`import "module";`) are supported and evaluate the dependency for its side effects. Wildcard re-exports (`export * from "module";`) are supported and forward named exports from the dependency; as in ECMAScript, they do not forward the dependency's default export.
 
 `import.meta` (ES2026 §13.3.12) is supported and provides per-module metadata. The `import.meta` object has a null prototype and is identity-stable — the same object is returned on every access within the same module. Two host-defined properties are available:
 
@@ -702,13 +698,15 @@ console.log(x); // 5
 
 With `let`/`const`, accessing before declaration is a `ReferenceError` (Temporal Dead Zone), which catches bugs early.
 
+When disabled (default), `var` declarations are a `SyntaxError`. With `--warning-unsupported-features`, the parser warns and skips the declaration for migration diagnostics, but no `var` binding is created. Use `--compat-var` for real `var` semantics.
+
 When enabled (CLI: `--compat-var`, engine API: include `cfVar` in `Engine.Compatibility`, config: `{"compat-var": true}`), `var` declarations follow ES2026 §14.3.2 semantics: function-scoped (escapes blocks), hoisted to function top as `undefined`, redeclaration allowed, no TDZ, with destructuring, for-of, and enabled for-in support. Script-level `var` bindings are global-backed: they create or reuse own `globalThis` properties, new properties are writable/enumerable/non-configurable, and declaration-only redeclarations preserve an existing own global property value. Var bindings are stored in a separate binding map (`FVarBindings`) on function/module/global scopes, distinct from lexical bindings. See [interpreter.md § Scope Chain Design](interpreter.md#scope-chain-design).
 
 ### `function` Keyword
 
 **Opt-in.** Excluded by default; use arrow functions or shorthand methods instead. Available as a compatibility mode via `--compat-function`.
 
-When disabled (default), the parser accepts `function` declarations and expressions but treats them as no-ops (the function body is not executed and the binding is not created), and emits a warning:
+When disabled (default), `function` declarations and expressions are a `SyntaxError`. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating declarations as no-ops and expressions as `undefined`:
 
 ```text
 Warning: 'function' declarations are not supported in GocciaScript
@@ -716,7 +714,7 @@ Warning: 'function' declarations are not supported in GocciaScript
   --> script.js:1:1
 ```
 
-Function expressions in assignment position evaluate to `undefined`. Generator function declarations (`function*`) are also skipped.
+In warning mode, function expressions in assignment position evaluate to `undefined`. Generator function declarations (`function*`) are also skipped. Use `--compat-function` for real function syntax and binding semantics.
 
 GocciaScript provides two function definition styles that cover most use cases without the `function` keyword's legacy pitfalls (`this` binding confusion and hoisting surprises):
 
@@ -738,7 +736,7 @@ When enabled (CLI: `--compat-function`, engine API: include `cfFunction` in `Eng
 
 When enabled, `==` and `!=` follow [ES2026 §7.2.13 IsLooselyEqual](https://tc39.es/ecma262/2026/multipage/abstract-operations.html#sec-islooselyequal) in both interpreter and bytecode modes, including `null == undefined`, string/number coercion, boolean-to-number coercion, BigInt/string and BigInt/number comparisons, and object `ToPrimitive` conversion.
 
-When disabled (default), the parser accepts `==` and `!=` but treats them as no-ops (the expression evaluates to `undefined`), and emits a warning:
+When disabled (default), `==` and `!=` are `SyntaxError`s. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by making the expression evaluate to `undefined`:
 
 ```text
 Warning: '==' (loose equality) is not supported in GocciaScript
@@ -746,7 +744,7 @@ Warning: '==' (loose equality) is not supported in GocciaScript
   --> script.js:1:10
 ```
 
-Both operands are parsed but not evaluated at runtime (no side effects). Because the entire expression becomes `undefined`, which is falsy, `==`/`!=` in conditions (e.g., `if (a == b)`) will never enter the truthy branch.
+In warning mode, both operands are parsed but not evaluated at runtime (no side effects). Because the entire expression becomes `undefined`, which is falsy, `==`/`!=` in conditions (e.g., `if (a == b)`) will never enter the truthy branch.
 
 Loose equality's type coercion rules are notoriously confusing, which is why the flag is off by default:
 
@@ -816,7 +814,7 @@ When enabled, GocciaScript follows the ECMAScript ASI rules (ES2026 §12.10):
 
 **Opt-in for JavaScript compatibility.** Excluded by default. Available via `--compat-traditional-for-loop` (CLI flag, `cfTraditionalFor` in `Engine.Compatibility`, or `{"compat-traditional-for-loop": true}` in config) when a program or conformance suite needs ECMAScript `for(init; test; update)` semantics.
 
-When disabled (default), the parser accepts the syntax but treats it as a no-op and emits a warning. When enabled, `for(init; test; update) body` is fully supported in both interpreter and bytecode modes:
+When disabled (default), `for(init; test; update)` is a `SyntaxError`. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating the loop as a no-op. When enabled, `for(init; test; update) body` is fully supported in both interpreter and bytecode modes:
 
 - `let`/`const` in init create a fresh per-iteration lexical environment per [ES2026 §14.7.4.4](https://tc39.es/ecma262/#sec-runtime-semantics-forbodyevaluation), so closures captured during iteration N pin to that iteration's binding (the textbook `fns.push(() => i)` case yields `[0, 1, 2]`, not `[3, 3, 3]`).
 - `var` in init requires both `--compat-var` and `--compat-traditional-for-loop`, hoists out of the loop, and is shared across iterations (closures all see the final value).
@@ -840,7 +838,7 @@ items.reduce((acc, item) => acc + item, 0);
 
 **Opt-in for JavaScript compatibility.** Excluded by default. Available via `--compat-for-in-loop` (CLI flag, `cfForIn` in `Engine.Compatibility`, or `{"compat-for-in-loop": true}` in config) when a program or conformance suite needs ECMAScript property enumeration semantics.
 
-When disabled (default), the parser accepts `for...in` declaration and assignment-target forms but treats the loop as a no-op and emits a warning. When enabled, declaration-head loops such as `for (const key in object) body` / `for (let key in object) body` and assignment-target loops such as `for (key in object) body` are supported in interpreter and bytecode modes:
+When disabled (default), `for...in` declaration and assignment-target forms are `SyntaxError`s. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating the loop as a no-op. When enabled, declaration-head loops such as `for (const key in object) body` / `for (let key in object) body` and assignment-target loops such as `for (key in object) body` are supported in interpreter and bytecode modes:
 
 - The right-hand side follows ECMAScript `ForIn/OfHeadEvaluation`: `null` and `undefined` produce an empty loop; other primitives are boxed with `ToObject`.
 - The loop enumerates enumerable string property names, including inherited enumerable properties, and never returns symbol keys.
@@ -860,7 +858,7 @@ for (const key of Object.keys(obj)) {
 
 **Opt-in for JavaScript compatibility.** Excluded by default. Available via `--compat-while-loops` (CLI flag, `cfWhileLoops` in `Engine.Compatibility`, or `{"compat-while-loops": true}` in config) when a program or conformance suite needs ECMAScript `while` or `do...while` semantics.
 
-When disabled (default), the parser accepts `while` and `do...while` syntax but treats each loop as a no-op and emits a warning. When enabled, both loop forms are supported in interpreter and bytecode modes:
+When disabled (default), `while` and `do...while` syntax is a `SyntaxError`. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating each loop as a no-op. When enabled, both loop forms are supported in interpreter and bytecode modes:
 
 - `while (condition) body` evaluates the condition before each iteration and skips the body when the initial condition is falsy.
 - `do body while (condition);` runs the body once before testing the condition.
@@ -883,7 +881,9 @@ do {
 
 ### `with` Statement
 
-**Opt-in for script source.** Excluded by default; use explicit property access. Available via `--compat-non-strict-mode` (CLI flag, `cfNonStrictMode` in `Engine.Compatibility`, or `{"compat-non-strict-mode": true}` in config). Module source remains strict even when this flag is enabled. When enabled in script source, `with (object) statement` evaluates the object expression, converts it with `ToObject`, and resolves unqualified identifiers through that object before falling back to outer lexical scopes. `Symbol.unscopables` is honored. Calls to functions resolved through the object environment use that object as `this`, closures created inside the body retain the object environment, and writes through non-writable or setter-less object properties silently keep the original value instead of throwing. When disabled (default), the parser accepts the syntax but treats the statement as a no-op and emits a warning suggesting explicit property access or the flag. `with` creates ambiguous scope and is forbidden by JavaScript strict mode, so new GocciaScript code should prefer explicit property access. The keyword is reserved (it cannot be used as a variable name), but it can be used as a property name (for example, `obj.with`).
+**Opt-in for script source.** Excluded by default; use explicit property access. Available via `--compat-non-strict-mode` (CLI flag, `cfNonStrictMode` in `Engine.Compatibility`, or `{"compat-non-strict-mode": true}` in config). Module source remains strict even when this flag is enabled. When enabled in script source, `with (object) statement` evaluates the object expression, converts it with `ToObject`, and resolves unqualified identifiers through that object before falling back to outer lexical scopes. `Symbol.unscopables` is honored. Calls to functions resolved through the object environment use that object as `this`, closures created inside the body retain the object environment, and writes through non-writable or setter-less object properties silently keep the original value instead of throwing.
+
+When disabled (default), script-source `with` is a `SyntaxError`. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating the statement as a no-op. Module-source `with` is always a strict-mode `SyntaxError`, even with warning recovery enabled. `with` creates ambiguous scope and is forbidden by JavaScript strict mode, so new GocciaScript code should prefer explicit property access. The keyword is reserved (it cannot be used as a variable name), but it can be used as a property name (for example, `obj.with`).
 
 ### Non-Strict Assignment Semantics
 
@@ -897,14 +897,14 @@ By default, GocciaScript follows strict delete behavior: deleting an unqualified
 
 **Opt-in for JavaScript compatibility.** Excluded by default. Available via `--compat-label` (CLI flag, `cfLabel` in `Engine.Compatibility`, or `{"compat-label": true}` in config) when a program or conformance suite needs ECMAScript labeled control flow.
 
-When disabled (default), the parser accepts labeled statements but strips the label and emits a warning:
+When disabled (default), labeled statements are `SyntaxError`s. With `--warning-unsupported-features`, the parser emits the historical warning, strips the label, and parses the labeled statement:
 
 ```text
 Warning: Labeled statements are not supported in GocciaScript
   --> script.js:1:1
 ```
 
-The labeled statement itself (the statement after the `:`) is still parsed and executed normally. For example, `myLabel: x = 2;` strips the label and executes `x = 2;`. If the labeled statement is itself unsupported (e.g., `outer: for (...)`), both a label warning and a loop warning are emitted.
+In warning mode, the labeled statement itself (the statement after the `:`) is still parsed and executed normally. For example, `myLabel: x = 2;` strips the label and executes `x = 2;`. If the labeled statement is itself unsupported (e.g., `outer: for (...)`), both a label warning and a loop warning are emitted.
 
 When enabled, labels can target `break` and `continue` statements in interpreter and bytecode modes:
 

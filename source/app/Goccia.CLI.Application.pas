@@ -112,6 +112,9 @@ function ResolveSourceTypeOption(
   const AOption: TEnumOption<Goccia.CLI.Options.TGocciaSourceType>;
   const AFileConfig: TConfigEntryArray;
   const AFileName: string): Goccia.Engine.TGocciaSourceType;
+procedure ApplyCompatibilityAndWarningFlags(const AEngine: TGocciaEngine;
+  const AEngineOptions: TGocciaEngineOptions;
+  const AFileConfig: TConfigEntryArray);
 
 implementation
 
@@ -539,6 +542,25 @@ begin
   Result := DefaultSourceTypeForFileName(AFileName);
 end;
 
+procedure ApplyCompatibilityAndWarningFlags(const AEngine: TGocciaEngine;
+  const AEngineOptions: TGocciaEngineOptions;
+  const AFileConfig: TConfigEntryArray);
+var
+  Compatibility: TGocciaCompatibilityFlags;
+begin
+  ResolveCompatibilityFlags(AEngineOptions, AFileConfig, Compatibility);
+  AEngine.Compatibility := Compatibility;
+  AEngine.LabelStatementsEnabled := ResolveFlagOption(
+    AEngineOptions.CompatibilityFlagOption(cfLabel), AFileConfig);
+  AEngine.ForInLoopsEnabled := ResolveFlagOption(
+    AEngineOptions.CompatibilityFlagOption(cfForIn), AFileConfig);
+  AEngine.ExperimentalJSModuleSourceEnabled := ResolveFlagOption(
+    AEngineOptions.CompatibilityFlagOption(cfExperimentalJSModuleSource),
+    AFileConfig);
+  AEngine.WarningUnsupportedFeatures := ResolveFlagOption(
+    AEngineOptions.WarningUnsupportedFeatures, AFileConfig);
+end;
+
 { Apply per-file config entries to the engine.
   Priority: CLI option > per-file config > root config > default.
   FromCommandLine distinguishes CLI-set options from root config values
@@ -562,8 +584,7 @@ begin
     AEngineOptions.SourceType, AFileConfig, AFileName);
 
   { compatibility flags: CLI flag > per-file config > root config > default (empty) }
-  AEngine.Compatibility := ResolveCompatibilityFlags(
-    AEngineOptions, AFileConfig);
+  ApplyCompatibilityAndWarningFlags(AEngine, AEngineOptions, AFileConfig);
 
   { strict-types: CLI flag > per-file config > root config > default (false) }
   AEngine.StrictTypes := ResolveFlagOption(

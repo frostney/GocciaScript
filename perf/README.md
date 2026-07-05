@@ -18,5 +18,5 @@ and GocciaScript to run the same script entrypoints. Use `benchmarks/` for the
 in-repo benchmark runner corpus.
 
 See [Benchmarks](../docs/benchmarks.md#awfy-cross-engine-lane) and
-[ADR 0086](../docs/adr/0086-awfy-cross-engine-benchmark-methodology.md) for the
+[ADR 0087](../docs/adr/0087-awfy-cross-engine-benchmark-methodology.md) for the
 methodology and acceptance criteria.
