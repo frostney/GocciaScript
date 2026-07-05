@@ -54,11 +54,12 @@ describe("SharedArrayBuffer.prototype.slice", () => {
     expect(sliced.byteLength).toBe(8);
   });
 
-  // ES2026 §25.2.5.6 step 11: If new.[[ArrayBufferData]] is O.[[ArrayBufferData]], throw TypeError
-  // Zero-length SharedArrayBuffers share the same backing data block, triggering the identity check.
-  test("slicing a zero-length buffer throws TypeError", () => {
+  test("slicing a zero-length buffer returns a distinct empty buffer", () => {
     const sab = new SharedArrayBuffer(0);
-    expect(() => sab.slice()).toThrow(TypeError);
+    const sliced = sab.slice();
+    expect(sliced).not.toBe(sab);
+    expect(sliced instanceof SharedArrayBuffer).toBe(true);
+    expect(sliced.byteLength).toBe(0);
   });
 
   test("result is a new SharedArrayBuffer instance", () => {

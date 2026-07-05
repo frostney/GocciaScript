@@ -26,6 +26,11 @@ type
     const AProxy: TGocciaObjectValue): TGocciaValue;
   TGocciaProxyGetFunctionRealmHook = function(
     const AProxy: TGocciaValue): TGocciaRealm;
+  TGocciaFunctionConstructRedirectHook = function(
+    const ATarget: TGocciaValue;
+    const AArguments: TGocciaArgumentsCollection;
+    const ANewTarget: TGocciaValue;
+    out AResult: TGocciaValue): Boolean;
 
   TGocciaFunctionSharedPrototype = class(TGocciaObjectValue)
   public
@@ -189,6 +194,8 @@ procedure RegisterProxyDispatchHooks(
   const AConstruct: TGocciaProxyConstructHook;
   const AGetPrototype: TGocciaProxyGetPrototypeHook;
   const AGetFunctionRealm: TGocciaProxyGetFunctionRealmHook);
+procedure RegisterFunctionConstructRedirectHook(
+  const AHook: TGocciaFunctionConstructRedirectHook);
 
 // ES2026 §10.2.9 SetFunctionName property-key formatting shared by
 // interpreter and bytecode named-evaluation paths.
@@ -231,6 +238,7 @@ var
   GProxyConstructHook: TGocciaProxyConstructHook;
   GProxyGetPrototypeHook: TGocciaProxyGetPrototypeHook;
   GProxyGetFunctionRealmHook: TGocciaProxyGetFunctionRealmHook;
+  GFunctionConstructRedirectHook: TGocciaFunctionConstructRedirectHook;
 
 procedure RegisterProxyDispatchHooks(
   const APredicate: TGocciaProxyPredicate;
@@ -244,6 +252,12 @@ begin
   GProxyConstructHook := AConstruct;
   GProxyGetPrototypeHook := AGetPrototype;
   GProxyGetFunctionRealmHook := AGetFunctionRealm;
+end;
+
+procedure RegisterFunctionConstructRedirectHook(
+  const AHook: TGocciaFunctionConstructRedirectHook);
+begin
+  GFunctionConstructRedirectHook := AHook;
 end;
 
 function IsRegisteredProxyValue(const AValue: TGocciaValue): Boolean; inline;
@@ -429,6 +443,10 @@ begin
     else if EffectiveTarget is TGocciaNativeFunctionValue then
       Result := TGocciaNativeFunctionValue(EffectiveTarget).Construct(WorkingArgs,
         EffectiveNewTarget)
+    else if Assigned(GFunctionConstructRedirectHook) and
+            GFunctionConstructRedirectHook(EffectiveTarget, WorkingArgs,
+              EffectiveNewTarget, Result) then
+      Exit
     else if EffectiveTarget is TGocciaFunctionBase then
       Result := ConstructOrdinaryWithReceiver(TGocciaFunctionBase(EffectiveTarget),
         WorkingArgs,

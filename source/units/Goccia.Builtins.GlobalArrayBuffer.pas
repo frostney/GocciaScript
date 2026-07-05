@@ -148,8 +148,8 @@ var
   Proto: TGocciaObjectValue;
   AB: TGocciaArrayBufferValue;
 begin
-  Proto := GetProtoFromConstructorWithIntrinsic(ANewTarget, FArrayBufferIntrinsicProto);
   AB := TGocciaArrayBufferValue(ArrayBufferConstructorFn(AArgs, TGocciaHoleValue.HoleValue));
+  Proto := GetProtoFromConstructorWithIntrinsic(ANewTarget, FArrayBufferIntrinsicProto);
   AB.Prototype := Proto;
   Result := AB;
 end;

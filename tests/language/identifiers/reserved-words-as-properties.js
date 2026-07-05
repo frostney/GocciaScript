@@ -62,6 +62,15 @@ test("reserved words as object property names", () => {
   expect(obj.with).toBe("scope");
 });
 
+test("reserved words in object patterns require explicit binding names", () => {
+  const readKeywordProperty = new Function(
+    "const { if: value } = { if: 1 }; return value;"
+  );
+
+  expect(readKeywordProperty()).toBe(1);
+  expect(() => new Function("const { if } = { if: 1 };")).toThrow(SyntaxError);
+});
+
 test("reserved words as object property names with bracket notation", () => {
   const obj = {};
 

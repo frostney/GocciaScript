@@ -68,6 +68,21 @@ describe("Reflect.construct on function-keyword targets", () => {
     expect(obj instanceof Foo).toBe(false);
   });
 
+  test("derived class extending a function honors function newTarget.prototype", () => {
+    function Base() {}
+    function NewTarget() {}
+    class Derived extends Base {
+      constructor() {
+        super();
+      }
+    }
+
+    const obj = Reflect.construct(Derived, [], NewTarget);
+    expect(Object.getPrototypeOf(obj)).toBe(NewTarget.prototype);
+    expect(obj instanceof NewTarget).toBe(true);
+    expect(obj instanceof Derived).toBe(false);
+  });
+
   test("when newTarget.prototype is non-object, the instance falls back to Object.prototype", () => {
     function Foo() {
       this.x = 1;
@@ -77,6 +92,21 @@ describe("Reflect.construct on function-keyword targets", () => {
     const obj = Reflect.construct(Foo, [], Bar);
     expect(obj.x).toBe(1);
     expect(Object.getPrototypeOf(obj)).toBe(Object.prototype);
+  });
+
+  test("derived class extending a function falls back from non-object function newTarget.prototype", () => {
+    function Base() {}
+    function NewTarget() {}
+    NewTarget.prototype = null;
+    class Derived extends Base {
+      constructor() {
+        super();
+      }
+    }
+
+    const obj = Reflect.construct(Derived, [], NewTarget);
+    expect(Object.getPrototypeOf(obj)).toBe(Object.prototype);
+    expect(obj instanceof Derived).toBe(false);
   });
 
   test("instanceof against newTarget is observable from inside the constructor body", () => {
