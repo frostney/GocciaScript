@@ -361,6 +361,100 @@ jobs:
           if-no-files-found: ignore
           path: profile-main/
 
+  awfy-smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      - name: Install QuickJS
+        run: sudo apt-get update && sudo apt-get install quickjs -qq > /dev/null
+
+      - name: Download build
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: build-pr
+          path: build/
+
+      - name: Make binaries executable
+        run: chmod +x build/*
+
+      - name: Read AWFY pin
+        id: awfy-pin
+        run: |
+          sha="$(node -e "const m = require('./perf/awfy/manifest.json'); process.stdout.write(m.awfy.commit)")"
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid AWFY pin in perf/awfy/manifest.json"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout AWFY corpus
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: smarr/are-we-fast-yet
+          ref: ${{ steps.awfy-pin.outputs.sha }}
+          path: awfy-suite
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check AWFY driver helpers
+        run: node scripts/test-awfy-driver.js
+
+      - name: Run AWFY smoke
+        run: |
+          node scripts/awfy-driver.js \
+            --awfy-dir awfy-suite/benchmarks/JavaScript \
+            --benchmark NBody \
+            --probe generic-plus-scalars \
+            --inner-iterations 1 \
+            --repetitions 1 \
+            --timeout-ms 30000 \
+            --engines goccia,qjs,node \
+            --output awfy-smoke.json
+
+      - name: Check AWFY smoke outcomes
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const report = JSON.parse(fs.readFileSync('awfy-smoke.json', 'utf8'));
+          const failures = [];
+          for (const target of report.targets || []) {
+            if (target.summary?.checksumAgreement?.ok === false) {
+              failures.push(`${target.name}: checksum mismatch`);
+            }
+            for (const [engine, stats] of Object.entries(target.summary?.engineStats || {})) {
+              const nonOk = (stats.timeout || 0) + (stats.crash || 0) + (stats.oom || 0) +
+                (stats.verificationFailed || 0) + (stats.missingResult || 0);
+              if ((stats.ok || 0) === 0 || nonOk > 0) {
+                failures.push(`${target.name}/${engine}: ${JSON.stringify(stats)}`);
+              }
+            }
+          }
+          if (failures.length > 0) {
+            console.error(failures.join('\n'));
+            process.exit(1);
+          }
+          NODE
+
+      - name: Upload AWFY smoke
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: awfy-smoke
+          retention-days: 7
+          if-no-files-found: ignore
+          path: awfy-smoke.json
+
   cli:
     needs: build
     runs-on: ubuntu-latest
@@ -604,6 +698,61 @@ jobs:
 
             const marker = '<!-- benchmark-comparison -->';
             const body = marker + '\n' + inner;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+  awfy-comment:
+    needs: awfy-smoke
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Download AWFY smoke
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        continue-on-error: true
+        with:
+          name: awfy-smoke
+
+      - name: Build AWFY comment markdown
+        run: node scripts/awfy-comment.js awfy-smoke.json > awfy-comment.md
+
+      - name: Post AWFY comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- awfy-smoke -->';
+            const body = fs.readFileSync('awfy-comment.md', 'utf8');
 
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,

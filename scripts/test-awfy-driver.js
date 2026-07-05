@@ -14,6 +14,7 @@ const {
   parseResult,
   summarizeSamples,
 } = require('./awfy-driver.js');
+const { MARKER, buildAwfySmokeComment } = require('./awfy-comment.js');
 
 let passed = 0;
 
@@ -114,6 +115,40 @@ console.log('awfy-driver: portable AWFY bundle...');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+console.log('awfy-driver: PR comment markdown...');
+{
+  const comment = buildAwfySmokeComment({
+    generatedAt: '2026-07-05T00:00:00.000Z',
+    metadata: {
+      driver: { version: 1 },
+      corpus: {
+        awfy: {
+          repository: 'https://github.com/smarr/are-we-fast-yet',
+          commit: '1234567890abcdef1234567890abcdef12345678',
+        },
+      },
+    },
+    targets: [
+      {
+        name: 'NBody',
+        kind: 'awfy',
+        summary: {
+          checksumAgreement: { ok: true, checksums: ['verified'] },
+          engineStats: {
+            goccia: { ok: 1, medianMicros: 1000 },
+            qjs: { ok: 1, medianMicros: 500 },
+            node: { ok: 1, medianMicros: 250 },
+          },
+        },
+      },
+    ],
+    geomeanRatios: { goccia_over_qjs: 2 },
+  });
+  assert(comment.includes(MARKER), 'comment includes stable marker');
+  assert(comment.includes('NBody'), 'comment includes target name');
+  assert(comment.includes('goccia over qjs'), 'comment includes geomean ratio');
 }
 
 console.log(`awfy-driver: ${passed} assertions passed.`);
