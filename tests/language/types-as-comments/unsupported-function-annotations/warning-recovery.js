@@ -1,5 +1,5 @@
 /*---
-description: typed annotations on unsupported function syntax still follow GocciaScript's graceful function fallback
+description: typed annotations on unsupported function syntax follow warning-mode function fallback
 features: [types-as-comments, parser-warnings, unsupported-features]
 ---*/
 

@@ -95,3 +95,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0083 — Migrate explicit per-thread cache clears into the thread-cleanup registry](0083-migrate-cache-clears-into-cleanup-registry.md)
 - [0084 — Realm-owned prototype method hosts and object-reference threadvar audit](0084-realm-owned-prototype-method-hosts.md)
 - [0085 — Defer broad Annex B support before 1.0](0085-defer-annex-b-before-1-0.md)
+- [0086 — Parser errors for unsupported default syntax](0086-parser-errors-for-unsupported-default-syntax.md)

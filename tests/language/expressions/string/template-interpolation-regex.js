@@ -116,9 +116,9 @@ describe("template interpolation regex literal scanning", () => {
     expect(x).toBe("0.25");
   });
 
-  test("regex after while-head close paren inside arrow body", () => {
+  test("regex after for-of head close paren inside arrow body", () => {
     const s = "x}";
-    const x = `${(() => { while (false) /[}]/.test(s); return 7; })()}`;
+    const x = `${(() => { for (const _ of []) /[}]/.test(s); return 7; })()}`;
     expect(x).toBe("7");
   });
 

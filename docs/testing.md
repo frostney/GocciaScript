@@ -120,7 +120,7 @@ tests/
     ├── objects/            # Object literals, methods, computed properties
     ├── statements/         # if/else, switch/case/break, try/catch/finally
     │   ├── try-catch/      # Try-catch-finally edge cases
-    │   └── unsupported-features.js  # Verifies parser skip for disabled compatibility syntax
+    │   └── unsupported-features/    # Warning-mode recovery tests for disabled compatibility syntax
     └── unary-operators.js
 ```
 

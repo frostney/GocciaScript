@@ -12,8 +12,7 @@
 
 GocciaScript uses a self-hosted build script written in FreePascal, executed via `instantfpc`. No external build tools (Make, CMake, npm) are required beyond the FreePascal compiler itself.
 
-This file is the authoritative command reference for local builds and CLI
-usage. Root-level files such as `README.md`, `CONTRIBUTING.md`, and
+This file is the authoritative command reference for local builds and CLI usage. Root-level files such as `README.md`, `CONTRIBUTING.md`, and
 `AGENTS.md` link here instead of duplicating the complete command list.
 
 ## Prerequisites
@@ -279,6 +278,7 @@ Relative paths are resolved against the current working directory. A missing fil
 {
   "mode": "bytecode",
   "source-type": "module",
+  "warning-unsupported-features": true,
   "compat-asi": true,
   "compat-non-strict-mode": true,
   "compat-arguments-object": true,
@@ -302,7 +302,7 @@ Relative paths are resolved against the current working directory. A missing fil
 }
 ```
 
-Config keys mirror CLI option names (e.g. `--mode` -> `"mode"`, `--max-memory` -> `"max-memory"`). A config value is the value assigned to a config key and the setting it carries: boolean flags use `true`/`false`, and array-valued options like `alias` and `allowed-hosts` use JSON arrays. The `imports` object is handled by the module resolver and coexists with CLI option keys.
+Config keys mirror CLI option names (e.g. `--mode` -> `"mode"`, `--max-memory` -> `"max-memory"`). A config value is the value assigned to a config key and the setting it carries: boolean flags use `true`/`false`, and array-valued options like `alias` and `allowed-hosts` use JSON arrays. `warning-unsupported-features` is a parser diagnostic policy flag, not a compatibility flag: it restores warning/recovery behavior for disabled syntax without enabling that syntax's runtime semantics. The `imports` object is handled by the module resolver and coexists with CLI option keys.
 
 **`extends`** — A config file can inherit from a base config using the `extends` key. The path is resolved relative to the config file's directory. Child values override parent values:
 

@@ -4,7 +4,8 @@
  *
  * Common CLI options tested across all apps: stdin smoke, --help, --unsafe-ffi,
  * --compat-asi, --source-type, .mjs source-type inference, --compat-var, --compat-loose-equality, --compat-non-strict-mode,
- * --compat-for-in-loop, --compat-while-loops, --mode, --timeout, --max-instructions, --max-memory, --stack-size, --log,
+ * --compat-for-in-loop, --compat-while-loops, --warning-unsupported-features,
+ * --mode, --timeout, --max-instructions, --max-memory, --stack-size, --log,
  * example scripts.
  */
 
@@ -100,6 +101,8 @@ console.log("--help (all 6 apps)...");
 for (const bin of [LOADER, BARE, REPL, TESTRUNNER, BUNDLER, BENCHRUNNER]) {
   const help = await $`${bin} --help 2>&1`.text();
   if (!help.includes("--")) throw new Error(`${bin} --help missing options`);
+  if (!help.includes("--warning-unsupported-features"))
+    throw new Error(`${bin} --help missing --warning-unsupported-features`);
 }
 
 // -- --unsafe-ffi gating --------------------------------------------------------
@@ -207,6 +210,8 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
     if (bareOut.trim() !== "22") throw new Error(`Bare --compat-var --compat-function expected 22, got: ${bareOut}`);
     const bareNoFlag = await $`${BARE} ${bothSrc} 2>&1`.nothrow();
     if (bareNoFlag.exitCode === 0) throw new Error("Bare without compat flags should reject var/function");
+    if (!bareNoFlag.text().includes("SyntaxError"))
+      throw new Error(`Bare without compat flags should report SyntaxError, got: ${bareNoFlag.text()}`);
 
     // Stdin path — the exact shape run_test262_suite.ts uses (source piped
     // into a `-` argument).  Without this, file-path is the only invocation
@@ -260,6 +265,44 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
     const compatAllOut = bareCompatAll.stdout.toString();
     if (bareCompatAll.exitCode === 0 || !compatAllOut.includes("--compat-all"))
       throw new Error(`Bare must reject --compat-all, got exit ${bareCompatAll.exitCode}: ${compatAllOut}`);
+
+    const bareWarningSrc = join(tmp, "warning-unsupported.js");
+    writeFileSync(bareWarningSrc, "while (false) {}\n23;\n");
+    const bareWarningDefault = await $`${BARE} --print ${bareWarningSrc} 2>&1`.nothrow();
+    if (bareWarningDefault.exitCode === 0)
+      throw new Error("Bare without warning flag should reject unsupported while");
+    if (!bareWarningDefault.text().includes("SyntaxError") ||
+        !bareWarningDefault.text().includes("'while' loops are not supported by default"))
+      throw new Error(`Bare without warning flag should report while SyntaxError, got: ${bareWarningDefault.text()}`);
+
+    for (const args of [[] as string[], ["--mode=bytecode"]]) {
+      const bareWarningFile = await $`${BARE} --print ${bareWarningSrc} --warning-unsupported-features ${args} 2>&1`.text();
+      if (!bareWarningFile.includes("Warning: 'while' loops are not supported by default") ||
+          !bareWarningFile.includes("23"))
+        throw new Error(`Bare warning mode file path should warn and print 23, got: ${bareWarningFile}`);
+
+      const bareWarningStdin = await $`cat ${bareWarningSrc} | ${BARE} --print - --warning-unsupported-features ${args} 2>&1`.text();
+      if (!bareWarningStdin.includes("Warning: 'while' loops are not supported by default") ||
+          !bareWarningStdin.includes("23"))
+        throw new Error(`Bare warning mode stdin should warn and print 23, got: ${bareWarningStdin}`);
+    }
+
+    const shadowWarningSrc = join(tmp, "shadow-warning.js");
+    writeFileSync(
+      shadowWarningSrc,
+      [
+        "const realm = new ShadowRealm();",
+        "const fromEvaluate = realm.evaluate('while (false) {} 23;');",
+        "const fromEval = realm.evaluate(\"eval('while (false) {} 24;')\");",
+        "fromEvaluate + fromEval;",
+        "",
+      ].join("\n"),
+    );
+    const shadowWarningProc = await $`${BARE} --print ${shadowWarningSrc} --unsafe-shadowrealm --test262-host --warning-unsupported-features 2>&1`.nothrow();
+    const shadowWarningOut = shadowWarningProc.text();
+    if (shadowWarningProc.exitCode !== 0 ||
+        !shadowWarningOut.replace(/\r/g, "").split("\n").includes("47"))
+      throw new Error(`ShadowRealm child realm should inherit warning-unsupported-features, got: ${shadowWarningOut}`);
 
     const forSrc = join(tmp, "use-for.js");
     writeFileSync(forSrc, "let s = 0;\nfor (let i = 1; i <= 5; i++) { s = s + i; }\ns;\n");
@@ -382,6 +425,10 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
     const moduleWithBytecodeOutput = moduleWithBytecode.text();
     if (moduleWithBytecode.exitCode === 0 || !moduleWithBytecodeOutput.includes("'with' statements are not allowed in strict mode"))
       throw new Error(`Module with should fail as strict code in bytecode mode, got: ${moduleWithBytecodeOutput}`);
+    const moduleWithWarning = await $`${LOADER} ${moduleWithSrc} --source-type=module --compat-non-strict-mode --warning-unsupported-features 2>&1`.nothrow();
+    const moduleWithWarningOutput = moduleWithWarning.text();
+    if (moduleWithWarning.exitCode === 0 || !moduleWithWarningOutput.includes("'with' statements are not allowed in strict mode"))
+      throw new Error(`Module with should remain strict even in warning mode, got: ${moduleWithWarningOutput}`);
 
     const testSrc = join(tmp, "test-nonstrict.js");
     writeFileSync(
@@ -428,8 +475,16 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
 
     const noFlagOut = join(tmp, "no-flag.gbc");
     const bundleNoFlag = await $`${BUNDLER} ${src} --compat-function --output=${noFlagOut} 2>&1`.nothrow();
-    if (bundleNoFlag.exitCode !== 0) throw new Error(`Bundler without --compat-non-strict-mode should skip unsupported with and still compile, got: ${bundleNoFlag.stderr.toString()}`);
-    if (!existsSync(noFlagOut)) throw new Error("Bundler without --compat-non-strict-mode did not write bytecode output");
+    if (bundleNoFlag.exitCode === 0)
+      throw new Error(`Bundler without --compat-non-strict-mode should fail unsupported with by default`);
+    if (!bundleNoFlag.text().includes("SyntaxError") ||
+        !bundleNoFlag.text().includes("'with' statements require --compat-non-strict-mode"))
+      throw new Error(`Bundler without --compat-non-strict-mode should report SyntaxError, got: ${bundleNoFlag.text()}`);
+    if (existsSync(noFlagOut)) throw new Error("Bundler default failure should not write bytecode output");
+
+    const warningOut = join(tmp, "warning-with.gbc");
+    await $`${BUNDLER} ${src} --compat-function --warning-unsupported-features --output=${warningOut}`.quiet();
+    if (!existsSync(warningOut)) throw new Error("Bundler --warning-unsupported-features should preserve warning recovery mode");
   } finally {
     clean(tmp);
   }

@@ -27,6 +27,10 @@ type
   TGocciaSourcePipelineOptions = record
     Preprocessors: TGocciaPreprocessors;
     Compatibility: TGocciaCompatibilityFlags;
+    LabelStatementsEnabled: Boolean;
+    ForInLoopsEnabled: Boolean;
+    ExperimentalJSModuleSourceEnabled: Boolean;
+    WarningUnsupportedFeatures: Boolean;
     SourceType: TGocciaSourceType;
     InheritedStrictMode: Boolean;
   end;
@@ -184,27 +188,36 @@ begin
   end;
 end;
 
-function ParserOptionsForSourcePipeline(
-  const AOptions: TGocciaSourcePipelineOptions): TGocciaParserOptions;
+procedure BuildParserOptionsForSourcePipeline(
+  const AOptions: TGocciaSourcePipelineOptions;
+  out AParserOptions: TGocciaParserOptions);
 begin
-  Result.AutomaticSemicolonInsertion := cfASI in AOptions.Compatibility;
-  Result.VarDeclarationsEnabled := cfVar in AOptions.Compatibility;
-  Result.FunctionDeclarationsEnabled := cfFunction in AOptions.Compatibility;
-  Result.TraditionalForLoopsEnabled := cfTraditionalFor in AOptions.Compatibility;
-  Result.WhileLoopsEnabled := cfWhileLoops in AOptions.Compatibility;
-  Result.LooseEqualityEnabled := cfLooseEquality in AOptions.Compatibility;
-  Result.NonStrictModeEnabled := (cfNonStrictMode in AOptions.Compatibility) and
+  FillChar(AParserOptions, SizeOf(AParserOptions), 0);
+  AParserOptions.AutomaticSemicolonInsertion := cfASI in AOptions.Compatibility;
+  AParserOptions.VarDeclarationsEnabled := cfVar in AOptions.Compatibility;
+  AParserOptions.FunctionDeclarationsEnabled := cfFunction in AOptions.Compatibility;
+  AParserOptions.TraditionalForLoopsEnabled := cfTraditionalFor in AOptions.Compatibility;
+  AParserOptions.WhileLoopsEnabled := cfWhileLoops in AOptions.Compatibility;
+  AParserOptions.LooseEqualityEnabled := cfLooseEquality in AOptions.Compatibility;
+  AParserOptions.NonStrictModeEnabled := (cfNonStrictMode in AOptions.Compatibility) and
     (AOptions.SourceType <> stModule);
-  Result.InheritedStrictMode := AOptions.InheritedStrictMode;
-  Result.ImportMetaAllowed := AOptions.SourceType = stModule;
-  Result.LabelStatementsEnabled := cfLabel in AOptions.Compatibility;
-  Result.ForInLoopsEnabled := cfForIn in AOptions.Compatibility;
+  AParserOptions.InheritedStrictMode := AOptions.InheritedStrictMode;
+  AParserOptions.ModuleSource := AOptions.SourceType = stModule;
+  AParserOptions.ImportMetaAllowed := AOptions.SourceType = stModule;
+  AParserOptions.LabelStatementsEnabled := AOptions.LabelStatementsEnabled or
+    (cfLabel in AOptions.Compatibility);
+  AParserOptions.ForInLoopsEnabled := AOptions.ForInLoopsEnabled or
+    (cfForIn in AOptions.Compatibility);
+  AParserOptions.WarningUnsupportedFeatures := AOptions.WarningUnsupportedFeatures;
 end;
 
 procedure ConfigureParser(const AParser: TGocciaParser;
   const AOptions: TGocciaSourcePipelineOptions);
+var
+  ParserOptions: TGocciaParserOptions;
 begin
-  AParser.ApplyOptions(ParserOptionsForSourcePipeline(AOptions));
+  BuildParserOptionsForSourcePipeline(AOptions, ParserOptions);
+  AParser.ApplyOptions(ParserOptions);
 end;
 
 function HasSingleArrowFunctionProgram(const AProgramNode: TGocciaProgram;
@@ -444,6 +457,10 @@ class function TGocciaSourcePipeline.DefaultOptions: TGocciaSourcePipelineOption
 begin
   Result.Preprocessors := [];
   Result.Compatibility := [];
+  Result.LabelStatementsEnabled := False;
+  Result.ForInLoopsEnabled := False;
+  Result.ExperimentalJSModuleSourceEnabled := False;
+  Result.WarningUnsupportedFeatures := False;
   Result.SourceType := stScript;
   Result.InheritedStrictMode := False;
 end;
@@ -526,14 +543,6 @@ begin
           for I := 0 to Parser.WarningCount - 1 do
           begin
             ParserWarning := Parser.GetWarning(I);
-            if (AOptions.SourceType = stModule) and
-               (ParserWarning.Message =
-                 '''with'' statements require --compat-non-strict-mode') then
-              raise TGocciaSyntaxError.Create(
-                '''with'' statements are not allowed in strict mode',
-                ParserWarning.Line, ParserWarning.Column, AFileName,
-                Lexer.SourceLines);
-
             OrigLine := ParserWarning.Line;
             OrigCol := ParserWarning.Column;
             if Assigned(Result.FSourceMap) then

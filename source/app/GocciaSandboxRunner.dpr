@@ -590,8 +590,7 @@ begin
   EmptyConfig := EmptyConfigEntries;
   AEngine.SourceType := ResolveSourceTypeOption(EngineOptions.SourceType,
     EmptyConfig, AFileName);
-  AEngine.Compatibility := ResolveCompatibilityFlags(EngineOptions,
-    EmptyConfig);
+  ApplyCompatibilityAndWarningFlags(AEngine, EngineOptions, EmptyConfig);
   AEngine.StrictTypes := ResolveFlagOption(EngineOptions.StrictTypes,
     EmptyConfig);
   AEngine.FunctionConstructor.Enabled := ResolveFlagOption(
