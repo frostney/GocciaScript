@@ -113,7 +113,7 @@ end;
 
 function ToNumericOperand(const AValue: TGocciaValue): TGocciaValue; inline;
 begin
-  Result := ToPrimitive(AValue);
+  Result := ToPrimitive(AValue, tphNumber);
   if Result is TGocciaSymbolValue then
     ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
   if Result is TGocciaBigIntValue then
@@ -538,7 +538,7 @@ function EvaluateBitwiseNot(const AOperand: TGocciaValue): TGocciaValue;
 var
   PrimOperand: TGocciaValue;
 begin
-  PrimOperand := ToPrimitive(AOperand);
+  PrimOperand := ToPrimitive(AOperand, tphNumber);
   if PrimOperand is TGocciaBigIntValue then
     Exit(TGocciaBigIntValue.Create(
       TGocciaBigIntValue(PrimOperand).Value.BitwiseNot));

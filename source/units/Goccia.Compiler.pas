@@ -83,7 +83,8 @@ uses
   Goccia.Compiler.Expressions,
   Goccia.Compiler.PatternMatching,
   Goccia.Compiler.Statements,
-  Goccia.Keywords.Reserved;
+  Goccia.Keywords.Reserved,
+  Goccia.Modules;
 
 { TGocciaCompiler }
 
@@ -453,6 +454,8 @@ procedure PredeclareLexicalLocals(const ANode: TGocciaASTNode;
 var
   ImportDecl: TGocciaImportDeclaration;
   ImportPair: TStringStringMap.TKeyValuePair;
+  EncodedPath: string;
+  LocalIdx: Integer;
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
 begin
@@ -516,12 +519,32 @@ begin
   else if ANode is TGocciaImportDeclaration then
   begin
     ImportDecl := TGocciaImportDeclaration(ANode);
+    EncodedPath := EncodeImportSpecifierAttribute(ImportDecl.ModulePath,
+      ImportDecl.AttributeType);
     if (ImportDecl.NamespaceName <> '') and
        (AScope.ResolveLocal(ImportDecl.NamespaceName) < 0) then
       AScope.DeclareLocal(ImportDecl.NamespaceName, True);
+    if ImportDecl.NamespaceName <> '' then
+    begin
+      LocalIdx := AScope.ResolveLocal(ImportDecl.NamespaceName);
+      if LocalIdx >= 0 then
+        AScope.MarkImportBinding(LocalIdx, ImportDecl.Phase, EncodedPath, '');
+    end;
     for ImportPair in ImportDecl.Imports do
+    begin
       if AScope.ResolveLocal(ImportPair.Key) < 0 then
         AScope.DeclareLocal(ImportPair.Key, True);
+      LocalIdx := AScope.ResolveLocal(ImportPair.Key);
+      if LocalIdx >= 0 then
+      begin
+        if ImportDecl.Phase = icpEvaluation then
+          AScope.MarkImportBinding(LocalIdx, ImportDecl.Phase, EncodedPath,
+            ImportPair.Value)
+        else
+          AScope.MarkImportBinding(LocalIdx, ImportDecl.Phase, EncodedPath,
+            '');
+      end;
+    end;
   end;
 end;
 

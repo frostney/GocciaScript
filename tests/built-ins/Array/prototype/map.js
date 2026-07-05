@@ -129,3 +129,7 @@ test("map preserves trailing holes in sparse array", () => {
   expect(0 in result).toBe(true);
   expect(2 in result).toBe(false);
 });
+
+test("map can call standard built-ins that ignore extra callback arguments", () => {
+  expect([1.5, 2.7].map(Math.floor)).toEqual([1, 2]);
+});

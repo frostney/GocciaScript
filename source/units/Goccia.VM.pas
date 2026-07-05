@@ -14360,7 +14360,7 @@ begin
           grkUndefined, grkHole:
             SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
         else
-          LeftValue := ToPrimitive(GetRegisterFast(B));
+          LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
             SetRegister(A, TGocciaBigIntValue.Create(
               TGocciaBigIntValue(LeftValue).Value.Add(TBigInteger.One)))
@@ -14384,7 +14384,7 @@ begin
           grkUndefined, grkHole:
             SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
         else
-          LeftValue := ToPrimitive(GetRegisterFast(B));
+          LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
             SetRegister(A, TGocciaBigIntValue.Create(
               TGocciaBigIntValue(LeftValue).Value.Subtract(TBigInteger.One)))
@@ -14448,7 +14448,7 @@ begin
             SetRegister(B, TGocciaNumberLiteralValue.NaNValue);
           end;
         else
-          LeftValue := ToPrimitive(GetRegisterFast(B));
+          LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
           begin
             SetRegisterFast(A, LeftValue);
@@ -14519,7 +14519,7 @@ begin
             SetRegister(B, TGocciaNumberLiteralValue.NaNValue);
           end;
         else
-          LeftValue := ToPrimitive(GetRegisterFast(B));
+          LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
           begin
             SetRegisterFast(A, LeftValue);
@@ -14618,7 +14618,7 @@ begin
           // (Object(1n)) unbox to their primitive and take the
           // BigInt::unaryMinus path; without it the box's
           // ToNumberLiteral coerces to NaN and we lose the BigInt.
-          LeftValue := ToPrimitive(GetRegisterFast(B));
+          LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
             SetRegister(A, TGocciaBigIntValue.Create(
               TGocciaBigIntValue(LeftValue).Value.Negate))
@@ -14914,7 +14914,7 @@ begin
           grkUndefined, grkHole:
             FRegisters[A] := RegisterObject(TGocciaNumberLiteralValue.NaNValue);
         else
-          LeftValue := ToPrimitive(GetRegisterFast(B));
+          LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
             SetRegisterFast(A, LeftValue)
           else

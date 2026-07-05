@@ -1007,24 +1007,36 @@ end;
 // §21.3.2.18 Math.hypot ( ...args )
 function TGocciaMath.MathHypot(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  X, Y: TGocciaNumberLiteralValue;
+  Arg: TGocciaNumberLiteralValue;
+  Accumulator: Double;
+  HasNaN, HasInfinity: Boolean;
+  I: Integer;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Math.hypot', ThrowError);
-
   // Step 1: Let coerced be a new empty List.
   // Step 2: For each element arg of args, append ? ToNumber(arg) to coerced.
-  X := TGocciaArgumentConverter.GetNumber(AArgs, 0);
-  Y := TGocciaArgumentConverter.GetNumber(AArgs, 1);
+  Accumulator := 0;
+  HasNaN := False;
+  HasInfinity := False;
 
-  // Step 3: If any element is NaN, return NaN.
-  if X.IsNaN or Y.IsNaN then
-    Result := TGocciaNumberLiteralValue.NaNValue
-  // Step 4: If any element is ±∞, return +∞𝔽.
-  else if (X.IsInfinity or X.IsNegativeInfinity) or (Y.IsInfinity or Y.IsNegativeInfinity) then
-    Result := TGocciaNumberLiteralValue.InfinityValue
+  for I := 0 to AArgs.Length - 1 do
+  begin
+    Arg := TGocciaArgumentConverter.GetNumber(AArgs, I);
+    if Arg.IsNaN then
+      HasNaN := True
+    else if Arg.IsInfinity or Arg.IsNegativeInfinity then
+      HasInfinity := True
+    else
+      Accumulator := Hypot(Accumulator, Arg.Value);
+  end;
+
+  // Step 3: If any element is ±∞, return +∞𝔽.
+  if HasInfinity then
+    Exit(TGocciaNumberLiteralValue.InfinityValue);
+  // Step 4: If any element is NaN, return NaN.
+  if HasNaN then
+    Exit(TGocciaNumberLiteralValue.NaNValue);
   // Step 5: Return sqrt(sum of squares).
-  else
-    Result := TGocciaNumberLiteralValue.Create(Hypot(X.Value, Y.Value));
+  Result := TGocciaNumberLiteralValue.Create(Accumulator);
 end;
 
 // §21.3.2.19 Math.imul ( x, y )
