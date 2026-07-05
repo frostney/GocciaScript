@@ -119,8 +119,7 @@ begin
   { Resolve source pipeline flags: CLI flag > per-file config >
     root config > default. }
   FileConfig := DiscoverFileConfig(AFileName);
-  EffectiveCompatibility := ResolveCompatibilityFlags(
-    EngineOptions, FileConfig);
+  ResolveCompatibilityFlags(EngineOptions, FileConfig, EffectiveCompatibility);
   EffectiveSourceType := ResolveSourceTypeOption(EngineOptions.SourceType,
     FileConfig, AFileName);
   EffectiveStrictTypes := ResolveFlagOption(

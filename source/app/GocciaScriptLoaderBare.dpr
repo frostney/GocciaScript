@@ -1329,32 +1329,32 @@ begin
   WriteProfileJSON(TGocciaProfiler.Instance, AOptions.ProfileOutputPath);
 end;
 
-function ParseOptions: TBareOptions;
+procedure ParseOptions(out AOptions: TBareOptions);
 var
   I: Integer;
   Arg: string;
   SourceMetadataPath: string;
 begin
-  Result.Compatibility := [];
-  Result.WarningUnsupportedFeatures := False;
-  Result.StrictTypes := False;
-  Result.UnsafeFunctionConstructor := False;
-  Result.UnsafeShadowRealm := False;
-  Result.Test262Host := False;
-  Result.Test262AgentCanSuspend := True;
-  Result.Print := False;
-  Result.Mode := bemInterpreted;
-  Result.SourceType := stScript;
-  Result.SourceTypeExplicit := False;
-  Result.FileName := STDIN_PATH_MARKER;
-  Result.SourceName := '';
-  Result.TimeoutMs := 0;
-  Result.MaxMemoryBytes := 0;
-  Result.MaxInstructions := 0;
-  Result.StackSize := BARE_DEFAULT_MAX_STACK_DEPTH;
-  Result.ProfileModePresent := False;
-  Result.ProfileMode := Goccia.CLI.Options.pmAll;
-  Result.ProfileOutputPath := '';
+  AOptions.Compatibility := [];
+  AOptions.WarningUnsupportedFeatures := False;
+  AOptions.StrictTypes := False;
+  AOptions.UnsafeFunctionConstructor := False;
+  AOptions.UnsafeShadowRealm := False;
+  AOptions.Test262Host := False;
+  AOptions.Test262AgentCanSuspend := True;
+  AOptions.Print := False;
+  AOptions.Mode := bemInterpreted;
+  AOptions.SourceType := stScript;
+  AOptions.SourceTypeExplicit := False;
+  AOptions.FileName := STDIN_PATH_MARKER;
+  AOptions.SourceName := '';
+  AOptions.TimeoutMs := 0;
+  AOptions.MaxMemoryBytes := 0;
+  AOptions.MaxInstructions := 0;
+  AOptions.StackSize := BARE_DEFAULT_MAX_STACK_DEPTH;
+  AOptions.ProfileModePresent := False;
+  AOptions.ProfileMode := Goccia.CLI.Options.pmAll;
+  AOptions.ProfileOutputPath := '';
 
   for I := 1 to ParamCount do
   begin
@@ -1364,68 +1364,69 @@ begin
       PrintUsage;
       Halt(0);
     end
-    else if TryApplyCompatibilityFlagArg(Arg, Result.Compatibility) then
+    else if TryApplyCompatibilityFlagArg(Arg, AOptions.Compatibility) then
     begin
       { handled by source compatibility flag registry }
     end
     else if Arg = '--warning-unsupported-features' then
-      Result.WarningUnsupportedFeatures := True
+      AOptions.WarningUnsupportedFeatures := True
     else if Arg = '--strict-types' then
-      Result.StrictTypes := True
+      AOptions.StrictTypes := True
     else if Arg = '--unsafe-function-constructor' then
-      Result.UnsafeFunctionConstructor := True
+      AOptions.UnsafeFunctionConstructor := True
     else if Arg = '--unsafe-shadowrealm' then
-      Result.UnsafeShadowRealm := True
+      AOptions.UnsafeShadowRealm := True
     else if Arg = '--test262-host' then
-      Result.Test262Host := True
+      AOptions.Test262Host := True
     else if Arg = '--print' then
-      Result.Print := True
+      AOptions.Print := True
     else if Copy(Arg, 1, Length('--mode=')) = '--mode=' then
-      ParseMode(Copy(Arg, Length('--mode=') + 1, MaxInt), Result)
+      ParseMode(Copy(Arg, Length('--mode=') + 1, MaxInt), AOptions)
     else if Copy(Arg, 1, Length('--source-type=')) = '--source-type=' then
-      ParseSourceType(Copy(Arg, Length('--source-type=') + 1, MaxInt), Result)
+      ParseSourceType(Copy(Arg, Length('--source-type=') + 1, MaxInt),
+        AOptions)
     else if Copy(Arg, 1, Length('--source-name=')) = '--source-name=' then
-      Result.SourceName := Copy(Arg, Length('--source-name=') + 1, MaxInt)
+      AOptions.SourceName := Copy(Arg, Length('--source-name=') + 1, MaxInt)
     else if Copy(Arg, 1, Length('--timeout=')) = '--timeout=' then
-      ParseTimeout(Copy(Arg, Length('--timeout=') + 1, MaxInt), Result)
+      ParseTimeout(Copy(Arg, Length('--timeout=') + 1, MaxInt), AOptions)
     else if Copy(Arg, 1, Length('--max-memory=')) = '--max-memory=' then
-      ParseMaxMemory(Copy(Arg, Length('--max-memory=') + 1, MaxInt), Result)
+      ParseMaxMemory(Copy(Arg, Length('--max-memory=') + 1, MaxInt), AOptions)
     else if Copy(Arg, 1, Length('--max-instructions=')) = '--max-instructions=' then
       ParseMaxInstructions(Copy(Arg, Length('--max-instructions=') + 1, MaxInt),
-        Result)
+        AOptions)
     else if Copy(Arg, 1, Length('--stack-size=')) = '--stack-size=' then
-      ParseStackSize(Copy(Arg, Length('--stack-size=') + 1, MaxInt), Result)
+      ParseStackSize(Copy(Arg, Length('--stack-size=') + 1, MaxInt), AOptions)
     else if Copy(Arg, 1, Length('--profile=')) = '--profile=' then
-      ParseProfileMode(Copy(Arg, Length('--profile=') + 1, MaxInt), Result)
+      ParseProfileMode(Copy(Arg, Length('--profile=') + 1, MaxInt), AOptions)
     else if Copy(Arg, 1, Length('--profile-output=')) = '--profile-output=' then
-      Result.ProfileOutputPath := Copy(Arg, Length('--profile-output=') + 1,
+      AOptions.ProfileOutputPath := Copy(Arg, Length('--profile-output=') + 1,
         MaxInt)
     else if Copy(Arg, 1, 2) = '--' then
       raise Exception.Create('Unknown option: ' + Arg)
-    else if Result.FileName = STDIN_PATH_MARKER then
-      Result.FileName := Arg
+    else if AOptions.FileName = STDIN_PATH_MARKER then
+      AOptions.FileName := Arg
     else
       raise Exception.Create('Unexpected argument: ' + Arg);
   end;
 
-  if (not Result.SourceTypeExplicit) and
-     IsModuleSourceFileName(Result.FileName) then
-    Result.SourceType := stModule;
+  if (not AOptions.SourceTypeExplicit) and
+     IsModuleSourceFileName(AOptions.FileName) then
+    AOptions.SourceType := stModule;
 
-  if Result.ProfileModePresent then
-    Result.Mode := bemBytecode;
+  if AOptions.ProfileModePresent then
+    AOptions.Mode := bemBytecode;
 
-  if (Result.ProfileOutputPath <> '') and not Result.ProfileModePresent then
+  if (AOptions.ProfileOutputPath <> '') and not AOptions.ProfileModePresent then
     raise Exception.Create(
       '--profile-output requires --profile=opcodes|functions|all');
 
-  if Result.Test262Host then
+  if AOptions.Test262Host then
   begin
-    if Result.SourceName <> '' then
-      SourceMetadataPath := Result.SourceName
+    if AOptions.SourceName <> '' then
+      SourceMetadataPath := AOptions.SourceName
     else
-      SourceMetadataPath := Result.FileName;
-    Result.Test262AgentCanSuspend :=
+      SourceMetadataPath := AOptions.FileName;
+    AOptions.Test262AgentCanSuspend :=
       Test262SourceCanSuspendAgent(SourceMetadataPath);
   end;
 end;
@@ -1591,7 +1592,7 @@ var
 begin
   Options := Default(TBareOptions);
   try
-    Options := ParseOptions;
+    ParseOptions(Options);
     ExitCode := RunBare(Options);
   except
     on E: TGocciaTimeoutError do

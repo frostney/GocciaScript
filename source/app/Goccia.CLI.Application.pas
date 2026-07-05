@@ -549,6 +549,7 @@ procedure ApplyFileConfigToEngine(const AEngine: TGocciaEngine;
 var
   ValueStr: string;
   MemoryLimit: Int64;
+  Compatibility: TGocciaCompatibilityFlags;
   GC: TGarbageCollector;
   FileHosts: TStringList;
   HasFileHosts: Boolean;
@@ -562,8 +563,8 @@ begin
     AEngineOptions.SourceType, AFileConfig, AFileName);
 
   { compatibility flags: CLI flag > per-file config > root config > default (empty) }
-  AEngine.Compatibility := ResolveCompatibilityFlags(
-    AEngineOptions, AFileConfig);
+  ResolveCompatibilityFlags(AEngineOptions, AFileConfig, Compatibility);
+  AEngine.Compatibility := Compatibility;
 
   { warning-unsupported-features: CLI flag > per-file config > root config > default (false) }
   AEngine.WarningUnsupportedFeatures := ResolveFlagOption(

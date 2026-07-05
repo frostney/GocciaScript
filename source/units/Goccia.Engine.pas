@@ -178,7 +178,7 @@ type
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetModuleResolver: TGocciaModuleResolver;
     procedure SetPreprocessors(const AValue: TGocciaPreprocessors);
-    procedure SetCompatibility(const AValue: TGocciaCompatibilityFlags);
+    procedure SetCompatibility(AValue: TGocciaCompatibilityFlags);
     procedure SetWarningUnsupportedFeatures(const AValue: Boolean);
 
     procedure PinSingletons;
@@ -2425,7 +2425,7 @@ begin
   FInterpreter.JSXEnabled := ppJSX in AValue;
 end;
 
-procedure TGocciaEngine.SetCompatibility(const AValue: TGocciaCompatibilityFlags);
+procedure TGocciaEngine.SetCompatibility(AValue: TGocciaCompatibilityFlags);
 begin
   FCompatibility := AValue;
   FInterpreter.ASIEnabled := cfASI in AValue;

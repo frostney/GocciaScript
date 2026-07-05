@@ -101,8 +101,9 @@ type
 
 function CompatibilityFlagDescriptor(
   const AFlag: TGocciaCompatibility): TGocciaCompatibilityFlagDescriptor;
-function ResolveCompatibilityFlags(const AEngineOptions: TGocciaEngineOptions;
-  const AFileConfig: TConfigEntryArray): TGocciaCompatibilityFlags;
+procedure ResolveCompatibilityFlags(const AEngineOptions: TGocciaEngineOptions;
+  const AFileConfig: TConfigEntryArray;
+  out AFlags: TGocciaCompatibilityFlags);
 function TryApplyCompatibilityFlagArg(const AArg: string;
   var AFlags: TGocciaCompatibilityFlags): Boolean;
 
@@ -149,19 +150,20 @@ begin
   Result := SOURCE_COMPATIBILITY_FLAGS[AFlag];
 end;
 
-function ResolveCompatibilityFlags(const AEngineOptions: TGocciaEngineOptions;
-  const AFileConfig: TConfigEntryArray): TGocciaCompatibilityFlags;
+procedure ResolveCompatibilityFlags(const AEngineOptions: TGocciaEngineOptions;
+  const AFileConfig: TConfigEntryArray;
+  out AFlags: TGocciaCompatibilityFlags);
 var
   Flag: TGocciaCompatibility;
 begin
-  Result := [];
+  AFlags := [];
   if not Assigned(AEngineOptions) then
     Exit;
 
   for Flag := Low(TGocciaCompatibility) to High(TGocciaCompatibility) do
     if ResolveFlagOption(AEngineOptions.CompatibilityFlagOption(Flag),
        AFileConfig) then
-      Include(Result, Flag);
+      Include(AFlags, Flag);
 end;
 
 function TryApplyCompatibilityFlagArg(const AArg: string;

@@ -586,12 +586,13 @@ var
   Runtime: TGocciaRuntimeCore;
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
   EmptyConfig: TConfigEntryArray;
+  Compatibility: TGocciaCompatibilityFlags;
 begin
   EmptyConfig := EmptyConfigEntries;
   AEngine.SourceType := ResolveSourceTypeOption(EngineOptions.SourceType,
     EmptyConfig, AFileName);
-  AEngine.Compatibility := ResolveCompatibilityFlags(EngineOptions,
-    EmptyConfig);
+  ResolveCompatibilityFlags(EngineOptions, EmptyConfig, Compatibility);
+  AEngine.Compatibility := Compatibility;
   AEngine.WarningUnsupportedFeatures := ResolveFlagOption(
     EngineOptions.WarningUnsupportedFeatures, EmptyConfig);
   AEngine.StrictTypes := ResolveFlagOption(EngineOptions.StrictTypes,
