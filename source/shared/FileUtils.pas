@@ -127,9 +127,38 @@ begin
 end;
 
 function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList;
+var
+  // A named array rather than the bracket-constructor argument:
+  // context-typed constructor arguments refuse OVERLOAD resolution
+  // under Lakon (its documented minimal-overload boundary), and the
+  // explicit form is identical native code.
+  Extensions: array[0..0] of string;
 begin
-  Result := FindAllFiles(ADirectory, [AFileExtension]);
+  Extensions[0] := AFileExtension;
+  Result := FindAllFiles(ADirectory, Extensions);
 end;
+
+{$IFDEF LAKON}
+
+// The Lakon/WASI lane preopens no directories yet (the file lane —
+// preopen forwarding plus path_open/fd_read primordials — has not
+// landed), so every existence probe above is already False and no
+// path can reach these readers; raising keeps a hypothetical direct
+// call honest instead of returning silent empties.
+
+function ReadUTF8FileText(const APath: string): UTF8String;
+begin
+  raise EInOutError.Create(
+    'file access is not available on this runtime yet: ' + APath);
+end;
+
+function ReadFileBytes(const APath: string): TBytes;
+begin
+  raise EInOutError.Create(
+    'file access is not available on this runtime yet: ' + APath);
+end;
+
+{$ELSE}
 
 function ReadUTF8FileText(const APath: string): UTF8String;
 var
@@ -162,5 +191,7 @@ begin
     Stream.Free;
   end;
 end;
+
+{$ENDIF}
 
 end.
