@@ -377,7 +377,18 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
 
       - name: Install QuickJS
-        run: sudo apt-get update && sudo apt-get install quickjs -qq > /dev/null
+        run: |
+          version="2026-06-04"
+          sha256="b376e839b322978313d929fd20663b11ba58b75df5a46c126dd19ea2fa70ad2a"
+          archive="$RUNNER_TEMP/quickjs-$version.tar.xz"
+          prefix="$RUNNER_TEMP/quickjs"
+
+          curl -fsSLo "$archive" "https://bellard.org/quickjs/quickjs-$version.tar.xz"
+          echo "$sha256  $archive" | shasum -a 256 --check
+          tar -C "$RUNNER_TEMP" -xf "$archive"
+          make -C "$RUNNER_TEMP/quickjs-$version" install PREFIX="$prefix" CONFIG_M32=
+          echo "$prefix/bin" >> "$GITHUB_PATH"
+          "$prefix/bin/qjs" --help | head -1
 
       - name: Download build
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
