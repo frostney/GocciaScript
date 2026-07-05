@@ -303,10 +303,27 @@ end;
 
 procedure TGocciaSetValue.InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
 var
-  InitArg: TGocciaValue;
+  InitArg, Adder, Item: TGocciaValue;
   Iterator: TGocciaIteratorValue;
-  Item: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
   Done: Boolean;
+  GC: TGarbageCollector;
+  WasSelfRooted, WasInitRooted, WasAdderRooted, WasIteratorRooted: Boolean;
+  WasItemRooted: Boolean;
+
+  function AddRootIfNeeded(const AValue: TGocciaValue): Boolean;
+  begin
+    Result := Assigned(GC) and Assigned(AValue) and not GC.IsTempRoot(AValue);
+    if Result then
+      GC.AddTempRoot(AValue);
+  end;
+
+  procedure RemoveRootIfNeeded(const AValue: TGocciaValue; const AWasAdded: Boolean);
+  begin
+    if AWasAdded then
+      GC.RemoveTempRoot(AValue);
+  end;
+
 begin
   if AArguments.Length = 0 then
     Exit;
@@ -315,19 +332,52 @@ begin
      (InitArg is TGocciaNullLiteralValue) then
     Exit;
 
-  Iterator := GetIteratorFromValue(InitArg);
-  if not Assigned(Iterator) then
-    ThrowTypeError('Set constructor argument is not iterable');
-
+  GC := TGarbageCollector.Instance;
+  WasSelfRooted := AddRootIfNeeded(Self);
+  WasInitRooted := AddRootIfNeeded(InitArg);
   try
-    repeat
-      Item := Iterator.DirectNext(Done);
-      if not Done then
-        AddItem(Item);
-    until Done;
-  except
-    CloseIteratorPreservingError(Iterator);
-    raise;
+    Adder := GetProperty(PROP_ADD);
+    if not Assigned(Adder) or not Adder.IsCallable then
+      ThrowTypeError(Format(SErrorValueNotFunction, [PROP_ADD]), SSuggestSetThisType);
+
+    WasAdderRooted := AddRootIfNeeded(Adder);
+    try
+      Iterator := GetIteratorFromValue(InitArg);
+      if not Assigned(Iterator) then
+        ThrowTypeError(Format(SErrorMapConstructorNotIterable, [CONSTRUCTOR_SET]), SSuggestNotIterable);
+
+      WasIteratorRooted := AddRootIfNeeded(Iterator);
+      try
+        Item := Iterator.DirectNext(Done);
+        while not Done do
+        begin
+          WasItemRooted := AddRootIfNeeded(Item);
+          try
+            try
+              CallArgs := TGocciaArgumentsCollection.Create([Item]);
+              try
+                InvokeCallable(Adder, CallArgs, Self);
+              finally
+                CallArgs.Free;
+              end;
+            except
+              CloseIteratorPreservingError(Iterator);
+              raise;
+            end;
+          finally
+            RemoveRootIfNeeded(Item, WasItemRooted);
+          end;
+          Item := Iterator.DirectNext(Done);
+        end;
+      finally
+        RemoveRootIfNeeded(Iterator, WasIteratorRooted);
+      end;
+    finally
+      RemoveRootIfNeeded(Adder, WasAdderRooted);
+    end;
+  finally
+    RemoveRootIfNeeded(InitArg, WasInitRooted);
+    RemoveRootIfNeeded(Self, WasSelfRooted);
   end;
 end;
 
