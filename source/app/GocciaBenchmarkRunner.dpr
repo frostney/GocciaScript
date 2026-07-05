@@ -50,6 +50,7 @@ uses
   Goccia.VM.Exception,
 
   Goccia.Threading,
+  Goccia.Threading.Flags,
   Goccia.Threading.Init,
 
   FileUtils in 'units/FileUtils.pas';

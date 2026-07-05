@@ -336,7 +336,6 @@ uses
   Goccia.Scope.Redeclaration,
   Goccia.Shims,
   Goccia.Spec,
-  Goccia.Threading,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,

@@ -181,7 +181,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.InstructionLimit,
   Goccia.Profiler,
-  Goccia.Threading,
+  Goccia.Threading.Flags,
   Goccia.Timeout,
   Goccia.Values.ErrorHelper;
 
