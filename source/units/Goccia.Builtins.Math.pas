@@ -166,7 +166,7 @@ function TGocciaMath.MathAbs(const AArgs: TGocciaArgumentsCollection; const AThi
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.abs', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.abs', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -187,7 +187,7 @@ var
   NumberArg: TGocciaNumberLiteralValue;
   IntegralPart: Double;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.floor', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.floor', ThrowError);
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := TGocciaArgumentConverter.GetNumber(AArgs, 0);
   // Step 2: If n is NaN, +∞𝔽, -∞𝔽, return n. Signed-zero is preserved
@@ -215,7 +215,7 @@ var
   NumberArg: TGocciaNumberLiteralValue;
   V: Double;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.ceil', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.ceil', ThrowError);
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := TGocciaArgumentConverter.GetNumber(AArgs, 0);
   // Step 2: If n is NaN, +∞𝔽, -∞𝔽, or an integral Number, return n.
@@ -240,7 +240,7 @@ function TGocciaMath.MathRound(const AArgs: TGocciaArgumentsCollection; const AT
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.round', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.round', ThrowError);
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: If n is NaN, +∞𝔽, -∞𝔽, or an integral Number, return n.
@@ -345,7 +345,7 @@ var
   IntPart: Double;
   ExpIsOddInteger: Boolean;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Math.pow', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Math.pow', ThrowError);
   Base := TGocciaArgumentConverter.GetNumber(AArgs, 0);
   Exponent := TGocciaArgumentConverter.GetNumber(AArgs, 1);
   B := Base.Value;
@@ -457,7 +457,7 @@ function TGocciaMath.MathSqrt(const AArgs: TGocciaArgumentsCollection; const ATh
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.sqrt', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.sqrt', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -480,7 +480,6 @@ end;
 // §21.3.2.27 Math.random ( )
 function TGocciaMath.MathRandom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireNone(AArgs, 'Math.random', ThrowError);
   // Step 1: Return a Number value with positive sign, ≥ +0𝔽 and < 1𝔽,
   // chosen randomly with approximately uniform distribution.
   Result := TGocciaNumberLiteralValue.Create(Random);
@@ -491,7 +490,7 @@ function TGocciaMath.MathClamp(const AArgs: TGocciaArgumentsCollection; const AT
 var
   Value, MinVal, MaxVal: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 3, 'Math.clamp', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 3, 'Math.clamp', ThrowError);
 
   // Step 1: Let x be ? ToNumber(x).
   Value := AArgs.GetElement(0).ToNumberLiteral;
@@ -528,7 +527,7 @@ function TGocciaMath.MathSign(const AArgs: TGocciaArgumentsCollection; const ATh
 var
   NumberLiteral: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.sign', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.sign', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberLiteral := AArgs.GetElement(0).ToNumberLiteral;
@@ -552,7 +551,7 @@ function TGocciaMath.MathTrunc(const AArgs: TGocciaArgumentsCollection; const AT
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.trunc', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.trunc', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -573,7 +572,7 @@ function TGocciaMath.MathExp(const AArgs: TGocciaArgumentsCollection; const AThi
 var
   NumberLiteral: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.exp', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.exp', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberLiteral := AArgs.GetElement(0).ToNumberLiteral;
@@ -594,7 +593,7 @@ function TGocciaMath.MathLog(const AArgs: TGocciaArgumentsCollection; const AThi
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.log', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.log', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -618,7 +617,7 @@ function TGocciaMath.MathLog10(const AArgs: TGocciaArgumentsCollection; const AT
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.log10', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.log10', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -642,7 +641,7 @@ function TGocciaMath.MathSin(const AArgs: TGocciaArgumentsCollection; const AThi
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.sin', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.sin', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -660,7 +659,7 @@ function TGocciaMath.MathCos(const AArgs: TGocciaArgumentsCollection; const AThi
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.cos', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.cos', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -678,7 +677,7 @@ function TGocciaMath.MathTan(const AArgs: TGocciaArgumentsCollection; const AThi
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.tan', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.tan', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -696,7 +695,7 @@ function TGocciaMath.MathAcos(const AArgs: TGocciaArgumentsCollection; const ATh
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.acos', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.acos', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -717,7 +716,7 @@ function TGocciaMath.MathAsin(const AArgs: TGocciaArgumentsCollection; const ATh
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.asin', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.asin', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -738,7 +737,7 @@ function TGocciaMath.MathAtan(const AArgs: TGocciaArgumentsCollection; const ATh
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.atan', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.atan', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -760,7 +759,7 @@ function TGocciaMath.MathAtan2(const AArgs: TGocciaArgumentsCollection; const AT
 var
   Y, X: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Math.atan2', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Math.atan2', ThrowError);
 
   // Step 1: Let ny be ? ToNumber(y).
   Y := TGocciaArgumentConverter.GetNumber(AArgs, 0);
@@ -788,7 +787,7 @@ var
   NumberArg: TGocciaNumberLiteralValue;
   SignVal: Double;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.cbrt', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.cbrt', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -813,7 +812,7 @@ function TGocciaMath.MathCosh(const AArgs: TGocciaArgumentsCollection; const ATh
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.cosh', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.cosh', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -831,7 +830,7 @@ function TGocciaMath.MathSinh(const AArgs: TGocciaArgumentsCollection; const ATh
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.sinh', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.sinh', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -851,7 +850,7 @@ function TGocciaMath.MathTanh(const AArgs: TGocciaArgumentsCollection; const ATh
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.tanh', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.tanh', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -871,7 +870,7 @@ function TGocciaMath.MathAcosh(const AArgs: TGocciaArgumentsCollection; const AT
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.acosh', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.acosh', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -894,7 +893,7 @@ function TGocciaMath.MathAsinh(const AArgs: TGocciaArgumentsCollection; const AT
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.asinh', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.asinh', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -914,7 +913,7 @@ function TGocciaMath.MathAtanh(const AArgs: TGocciaArgumentsCollection; const AT
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.atanh', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.atanh', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -943,7 +942,7 @@ function TGocciaMath.MathExpm1(const AArgs: TGocciaArgumentsCollection; const AT
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.expm1', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.expm1', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -963,7 +962,7 @@ function TGocciaMath.MathF16round(const AArgs: TGocciaArgumentsCollection; const
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.f16round', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.f16round', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -985,7 +984,7 @@ var
   NumberArg: TGocciaNumberLiteralValue;
   SingleVal: Single;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.fround', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.fround', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -1045,7 +1044,7 @@ var
   X, Y: TGocciaNumberLiteralValue;
   XInt, YInt: LongInt;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Math.imul', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Math.imul', ThrowError);
 
   X := TGocciaArgumentConverter.GetNumber(AArgs, 0);
   Y := TGocciaArgumentConverter.GetNumber(AArgs, 1);
@@ -1069,7 +1068,7 @@ function TGocciaMath.MathLog1p(const AArgs: TGocciaArgumentsCollection; const AT
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.log1p', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.log1p', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -1095,7 +1094,7 @@ function TGocciaMath.MathLog2(const AArgs: TGocciaArgumentsCollection; const ATh
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.log2', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.log2', ThrowError);
 
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -1121,7 +1120,7 @@ var
   Value: LongWord;
   Count: Integer;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.clz32', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.clz32', ThrowError);
 
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 1: Let n be ? ToUint32(x). NaN/±∞ coerce to 0, yielding 32.
@@ -1190,7 +1189,7 @@ var
   Sum, Compensation: Double;
   HasPosInf, HasNegInf, HasNaN, HasAnyValue: Boolean;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.sumPrecise', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.sumPrecise', ThrowError);
 
   Iterable := AArgs.GetElement(0);
 

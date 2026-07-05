@@ -28,9 +28,7 @@ uses
 
 class procedure TGocciaArgumentValidator.RequireExactly(const ACollection: TGocciaArgumentsCollection; const AExpectedCount: Integer; const AFunctionName: string; const AThrowError: TGocciaThrowErrorCallback);
 begin
-  // ECMAScript built-ins ignore extra arguments; this validator enforces the
-  // required positional count for historical fixed-arity call sites.
-  if ACollection.Length < AExpectedCount then
+  if ACollection.Length <> AExpectedCount then
   begin
     if AExpectedCount = 0 then
       AThrowError(Format('%s expects no arguments but got %d', [AFunctionName, ACollection.Length]), 0, 0)
@@ -70,14 +68,7 @@ begin
   if (ACollection.Length < AMinCount) or (ACollection.Length > AMaxCount) then
   begin
     if AMinCount = AMaxCount then
-    begin
-      if AMinCount = 0 then
-        AThrowError(Format('%s expects no arguments but got %d', [AFunctionName, ACollection.Length]), 0, 0)
-      else if AMinCount = 1 then
-        AThrowError(Format('%s expects 1 argument but got %d', [AFunctionName, ACollection.Length]), 0, 0)
-      else
-        AThrowError(Format('%s expects %d arguments but got %d', [AFunctionName, AMinCount, ACollection.Length]), 0, 0);
-    end
+      RequireExactly(ACollection, AMinCount, AFunctionName, AThrowError)
     else
       AThrowError(Format('%s expects between %d and %d arguments but got %d', [AFunctionName, AMinCount, AMaxCount, ACollection.Length]), 0, 0);
   end;
