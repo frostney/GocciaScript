@@ -571,6 +571,7 @@ var
   Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
+  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   PipelineOptions: TGocciaSourcePipelineOptions;
   StartTime, CompileStart, CompileEnd, ExecEnd: Int64;
 begin
@@ -585,33 +586,41 @@ begin
       PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
       PipelineOptions.Preprocessors := Engine.Preprocessors;
       PipelineOptions.Compatibility := Engine.Compatibility;
+      PipelineOptions.WarningUnsupportedFeatures :=
+        Engine.WarningUnsupportedFeatures;
       PipelineOptions.SourceType := Engine.SourceType;
-      SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(ASource, AFileName,
-        PipelineOptions, IsJsonOutput);
+      ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
+        PipelineOptions);
       try
-        Result.Timing.LexTimeNanoseconds :=
-          SourcePipelineResult.LexTimeNanoseconds;
-        Result.Timing.ParseTimeNanoseconds :=
-          SourcePipelineResult.ParseTimeNanoseconds;
-        WriteSourceMapIfEnabled(SourcePipelineResult.SourceMap, AFileName);
-        SourcePipelineResult.RegisterCoverageSource(AFileName);
+        SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(ASource, AFileName,
+          PipelineOptions, IsJsonOutput);
+        try
+          Result.Timing.LexTimeNanoseconds :=
+            SourcePipelineResult.LexTimeNanoseconds;
+          Result.Timing.ParseTimeNanoseconds :=
+            SourcePipelineResult.ParseTimeNanoseconds;
+          WriteSourceMapIfEnabled(SourcePipelineResult.SourceMap, AFileName);
+          SourcePipelineResult.RegisterCoverageSource(AFileName);
 
-        CompileStart := GetNanoseconds;
-        Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
-        CompileEnd := GetNanoseconds;
-        Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;
-      finally
-        SourcePipelineResult.Free;
-      end;
+          CompileStart := GetNanoseconds;
+          Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
+          CompileEnd := GetNanoseconds;
+          Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;
+        finally
+          SourcePipelineResult.Free;
+        end;
 
-      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
-      StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
-      try
-        ApplyModuleGlobalsToEngine(Engine);
-        Result.ResultValue := RunBytecodeModule(Engine, Module, AFileName);
+        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+        StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+        try
+          ApplyModuleGlobalsToEngine(Engine);
+          Result.ResultValue := RunBytecodeModule(Engine, Module, AFileName);
+        finally
+          ClearExecutionTimeout;
+          ClearInstructionLimit;
+        end;
       finally
-        ClearExecutionTimeout;
-        ClearInstructionLimit;
+        ActiveOptionsScope.Free;
       end;
       ExecEnd := GetNanoseconds;
       Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;

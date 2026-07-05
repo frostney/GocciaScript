@@ -40,6 +40,7 @@ type
   private
     FPreprocessors: TGocciaPreprocessors;
     FCompatibility: TGocciaCompatibilityFlags;
+    FWarningUnsupportedFeatures: Boolean;
     FStrictTypesEnabled: Boolean;
     FContentProvider: TGocciaModuleContentProvider;
     FEvaluateModuleBody: TGocciaModuleBodyEvaluator;
@@ -139,6 +140,8 @@ type
       read FPreprocessors write FPreprocessors;
     property Compatibility: TGocciaCompatibilityFlags
       read FCompatibility write FCompatibility;
+    property WarningUnsupportedFeatures: Boolean
+      read FWarningUnsupportedFeatures write FWarningUnsupportedFeatures;
     property ASIEnabled: Boolean read GetASIEnabled write SetASIEnabled;
     property JSXEnabled: Boolean read GetJSXEnabled write SetJSXEnabled;
     property VarEnabled: Boolean read GetVarEnabled write SetVarEnabled;
@@ -1306,6 +1309,7 @@ begin
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
+    PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
     PipelineOptions.SourceType := stModule;
     ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
       ResolvedPath, PipelineOptions);
@@ -1515,6 +1519,7 @@ begin
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
+    PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
     PipelineOptions.SourceType := stModule;
     ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
       ResolvedPath, PipelineOptions);
@@ -1591,6 +1596,7 @@ begin
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
+    PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
     PipelineOptions.SourceType := stModule;
     ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
       PhysicalPath, PipelineOptions);
@@ -1668,6 +1674,7 @@ begin
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
+    PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
     PipelineOptions.SourceType := stModule;
     ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
       PhysicalPath, PipelineOptions);
@@ -1757,6 +1764,7 @@ begin
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
+    PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
     PipelineOptions.SourceType := stModule;
     ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
       PhysicalPath, PipelineOptions);

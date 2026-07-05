@@ -4,7 +4,7 @@
  *
  * Config file loading and per-file config: goccia.json, goccia.toml,
  * goccia.json5, priority, discovery, timeout, stack-size, imports, extends,
- * TestRunner integration, per-file compat flags, multi-directory, CLI override.
+ * TestRunner integration, per-file engine flags, multi-directory, CLI override.
  */
 
 import { $ } from "bun";
@@ -645,6 +645,25 @@ const nonStrictSource = [
 
 for (const testCase of [
   {
+    name: "warning-unsupported-features",
+    config: '{"warning-unsupported-features": true}\n',
+    loaderSource: "while (false) {}\n42;\n",
+    loaderExpectedLine: "42",
+    testRunnerSource: [
+      "while (false) {}",
+      'test("warning recovery", () => { expect(2 + 2).toBe(4); });',
+    ].join("\n") + "\n",
+    benchSource: [
+      "while (false) {}",
+      'suite("warning", () => {',
+      '  bench("recovery", {',
+      "    run: () => 1 + 1,",
+      "  });",
+      "});",
+    ].join("\n") + "\n",
+    benchNeedle: "warning",
+  },
+  {
     name: "compat-var",
     config: '{"compat-var": true}\n',
     loaderSource: "var x = 10;\nx;\n",
@@ -765,9 +784,9 @@ for (const testCase of [
   await runCompatAcrossAppsCase(testCase);
 }
 
-// -- compat-traditional-for-loop off -> warning, no crash -----------------------
+// -- compat-traditional-for-loop off -> SyntaxError by default ------------------
 
-console.log("compat-traditional-for-loop OFF emits warning and no-ops...");
+console.log("compat-traditional-for-loop OFF errors by default...");
 {
   const tmp = makeTmp();
   try {
@@ -775,21 +794,34 @@ console.log("compat-traditional-for-loop OFF emits warning and no-ops...");
       join(tmp, "no-flag.js"),
       "for (let i = 0; i < 3; i++) { console.log('should not run'); }\n",
     );
-    const stderr = await $`${LOADER} ${join(tmp, "no-flag.js")} 2>&1`.text();
-    if (!stderr.includes("Traditional 'for(;;)' loops are not supported")) {
-      throw new Error(`Loader without flag should emit warning, got: ${stderr}`);
+    const defaultRes = await $`${LOADER} ${join(tmp, "no-flag.js")} 2>&1`.nothrow();
+    const defaultOutput = defaultRes.text();
+    if (defaultRes.exitCode === 0) {
+      throw new Error(`Loader without flag should fail for traditional for-loop`);
     }
-    if (stderr.includes("should not run")) {
-      throw new Error(`Loader without flag should not execute the loop body, got: ${stderr}`);
+    if (!defaultOutput.includes("SyntaxError") ||
+        !defaultOutput.includes("Traditional 'for(;;)' loops are not supported")) {
+      throw new Error(`Loader without flag should emit SyntaxError, got: ${defaultOutput}`);
+    }
+    const warningRes = await $`${LOADER} ${join(tmp, "no-flag.js")} --warning-unsupported-features 2>&1`.nothrow();
+    const warningOutput = warningRes.text();
+    if (warningRes.exitCode !== 0) {
+      throw new Error(`Loader with warning flag should recover, got: ${warningOutput}`);
+    }
+    if (!warningOutput.includes("Warning: Traditional 'for(;;)' loops are not supported")) {
+      throw new Error(`Loader with warning flag should emit warning, got: ${warningOutput}`);
+    }
+    if (warningOutput.includes("should not run")) {
+      throw new Error(`Loader with warning flag should not execute the loop body, got: ${warningOutput}`);
     }
   } finally {
     clean(tmp);
   }
 }
 
-// -- compat-while-loops off -> warning, no crash -------------------------------
+// -- compat-while-loops off -> SyntaxError by default --------------------------
 
-console.log("compat-while-loops OFF emits warning and no-ops...");
+console.log("compat-while-loops OFF errors by default...");
 {
   const tmp = makeTmp();
   try {
@@ -797,12 +829,25 @@ console.log("compat-while-loops OFF emits warning and no-ops...");
       join(tmp, "no-flag.js"),
       "let x = 0;\nwhile (x < 3) { console.log('should not run'); x++; }\n",
     );
-    const stderr = await $`${LOADER} ${join(tmp, "no-flag.js")} 2>&1`.text();
-    if (!stderr.includes("'while' loops are not supported by default")) {
-      throw new Error(`Loader without flag should emit warning, got: ${stderr}`);
+    const defaultRes = await $`${LOADER} ${join(tmp, "no-flag.js")} 2>&1`.nothrow();
+    const defaultOutput = defaultRes.text();
+    if (defaultRes.exitCode === 0) {
+      throw new Error(`Loader without flag should fail for while loop`);
     }
-    if (stderr.includes("should not run")) {
-      throw new Error(`Loader without flag should not execute the loop body, got: ${stderr}`);
+    if (!defaultOutput.includes("SyntaxError") ||
+        !defaultOutput.includes("'while' loops are not supported by default")) {
+      throw new Error(`Loader without flag should emit SyntaxError, got: ${defaultOutput}`);
+    }
+    const warningRes = await $`${LOADER} ${join(tmp, "no-flag.js")} --warning-unsupported-features 2>&1`.nothrow();
+    const warningOutput = warningRes.text();
+    if (warningRes.exitCode !== 0) {
+      throw new Error(`Loader with warning flag should recover, got: ${warningOutput}`);
+    }
+    if (!warningOutput.includes("Warning: 'while' loops are not supported by default")) {
+      throw new Error(`Loader with warning flag should emit warning, got: ${warningOutput}`);
+    }
+    if (warningOutput.includes("should not run")) {
+      throw new Error(`Loader with warning flag should not execute the loop body, got: ${warningOutput}`);
     }
   } finally {
     clean(tmp);

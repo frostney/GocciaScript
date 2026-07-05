@@ -124,6 +124,7 @@ type
   public
     const DefaultPreprocessors: TGocciaPreprocessors = [ppJSX];
     const DefaultCompatibility: TGocciaCompatibilityFlags = [];
+    const DefaultWarningUnsupportedFeatures = False;
     const DefaultSourceType: TGocciaSourceType = stScript;
   private
     FInterpreter: TGocciaInterpreter;
@@ -133,6 +134,7 @@ type
     FInjectedGlobals: TStringList;
     FPreprocessors: TGocciaPreprocessors;
     FCompatibility: TGocciaCompatibilityFlags;
+    FWarningUnsupportedFeatures: Boolean;
     FSourceType: TGocciaSourceType;
     FStrictTypes: Boolean;
     FShims: TStringList;
@@ -177,6 +179,7 @@ type
     function GetModuleResolver: TGocciaModuleResolver;
     procedure SetPreprocessors(const AValue: TGocciaPreprocessors);
     procedure SetCompatibility(const AValue: TGocciaCompatibilityFlags);
+    procedure SetWarningUnsupportedFeatures(const AValue: Boolean);
 
     procedure PinSingletons;
     procedure RegisterBuiltIns;
@@ -284,6 +287,8 @@ type
     property ObjectConstructor: TGocciaClassValue read FObjectConstructor;
     property Preprocessors: TGocciaPreprocessors read FPreprocessors write SetPreprocessors;
     property Compatibility: TGocciaCompatibilityFlags read FCompatibility write SetCompatibility;
+    property WarningUnsupportedFeatures: Boolean
+      read FWarningUnsupportedFeatures write SetWarningUnsupportedFeatures;
     property SourceType: TGocciaSourceType read FSourceType write FSourceType;
     property StrictTypes: Boolean read FStrictTypes write SetStrictTypes;
     property Shims: TStringList read FShims;
@@ -655,6 +660,9 @@ begin
   FInterpreter.JSXEnabled := ppJSX in FPreprocessors;
   FRealm.GlobalEnv := FInterpreter.GlobalScope;
   FRealm.LoadedModules := FModuleLoader;
+  FWarningUnsupportedFeatures := DefaultWarningUnsupportedFeatures;
+  if Assigned(FModuleLoader) then
+    FModuleLoader.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
   FRealmExecutionContext := TGocciaExecutionContextScope.Create(
     CreateExecutionContext(FRealm, FInterpreter.GlobalScope, AFileName));
 
@@ -2052,6 +2060,7 @@ begin
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
+    PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
     PipelineOptions.SourceType := FSourceType;
     PipelineResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
       PipelineOptions);
@@ -2437,6 +2446,13 @@ begin
     TGocciaBytecodeExecutor(FExecutor).ArgumentsObjectEnabled :=
       cfArgumentsObject in AValue;
   end;
+end;
+
+procedure TGocciaEngine.SetWarningUnsupportedFeatures(const AValue: Boolean);
+begin
+  FWarningUnsupportedFeatures := AValue;
+  if Assigned(FModuleLoader) then
+    FModuleLoader.WarningUnsupportedFeatures := AValue;
 end;
 
 procedure TGocciaEngine.ThrowError(const AMessage: string; const ALine, AColumn: Integer);
@@ -3428,6 +3444,7 @@ begin
   PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
   PipelineOptions.Preprocessors := [];
   PipelineOptions.Compatibility := FCompatibility + [cfFunction];
+  PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
   PipelineOptions.SourceType := stScript;
   if not TGocciaSourcePipeline.ParseFunctionParameters(ParamStr,
     '<Function:params>', PipelineOptions, AKind) then

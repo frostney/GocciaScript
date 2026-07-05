@@ -666,6 +666,7 @@ var
   Source: TStringList;
   PipelineOptions: TGocciaSourcePipelineOptions;
   SourcePipelineResult: TGocciaCLISourcePipelineResult;
+  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
@@ -724,31 +725,39 @@ begin
             PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
             PipelineOptions.Preprocessors := Engine.Preprocessors;
             PipelineOptions.Compatibility := Engine.Compatibility;
+            PipelineOptions.WarningUnsupportedFeatures :=
+              Engine.WarningUnsupportedFeatures;
             PipelineOptions.SourceType := Engine.SourceType;
-            SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(Source, AFileName,
-              PipelineOptions, FSilent.Present or IsJsonOutput);
-            LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
-            ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
-            SourcePipelineResult.RegisterCoverageSource(AFileName);
-
-            CompileStart := GetNanoseconds;
-            Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
-            CompileEnd := GetNanoseconds;
-            SourcePipelineResult.Free;
-            SourcePipelineResult := nil;
-
-            StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
-            StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+            ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
+              PipelineOptions);
             try
-              ResultValue := RunBytecodeTestModule(Engine, Module, AFileName);
-              if Assigned(GC) and Assigned(ResultValue) then
-              begin
-                GC.AddTempRoot(ResultValue);
-                ResultValueRooted := True;
+              SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(Source, AFileName,
+                PipelineOptions, FSilent.Present or IsJsonOutput);
+              LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
+              ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
+              SourcePipelineResult.RegisterCoverageSource(AFileName);
+
+              CompileStart := GetNanoseconds;
+              Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
+              CompileEnd := GetNanoseconds;
+              SourcePipelineResult.Free;
+              SourcePipelineResult := nil;
+
+              StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
+              StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+              try
+                ResultValue := RunBytecodeTestModule(Engine, Module, AFileName);
+                if Assigned(GC) and Assigned(ResultValue) then
+                begin
+                  GC.AddTempRoot(ResultValue);
+                  ResultValueRooted := True;
+                end;
+              finally
+                ClearExecutionTimeout;
+                ClearInstructionLimit;
               end;
             finally
-              ClearExecutionTimeout;
-              ClearInstructionLimit;
+              ActiveOptionsScope.Free;
             end;
             ExecEnd := GetNanoseconds;
 

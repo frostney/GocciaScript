@@ -144,7 +144,7 @@ describe.runIf(hasJSON5)("JSON5.stringify", () => {
     ).toBe("{a:2,b:2}");
     expect(
       JSON5.stringify({ a: 1, b: 2 }, (key, value) =>
-        key === "a" ? function noop() {} : value),
+        key === "a" ? () => {} : value),
     ).toBe("{b:2}");
     expect(
       JSON5.stringify([1, 2], (key, value) =>

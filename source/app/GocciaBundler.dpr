@@ -110,6 +110,7 @@ var
   CompiledModule: TGocciaBytecodeModule;
   FileConfig: TConfigEntryArray;
   EffectiveStrictTypes: Boolean;
+  EffectiveWarningUnsupportedFeatures: Boolean;
   EffectiveSourceType: TGocciaSourceType;
   EffectiveCompatibility: TGocciaCompatibilityFlags;
   PipelineOptions: TGocciaSourcePipelineOptions;
@@ -124,11 +125,15 @@ begin
     FileConfig, AFileName);
   EffectiveStrictTypes := ResolveFlagOption(
     EngineOptions.StrictTypes, FileConfig);
+  EffectiveWarningUnsupportedFeatures := ResolveFlagOption(
+    EngineOptions.WarningUnsupportedFeatures, FileConfig);
 
   CompiledModule := nil;
   PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
   PipelineOptions.Preprocessors := TGocciaEngine.DefaultPreprocessors;
   PipelineOptions.Compatibility := EffectiveCompatibility;
+  PipelineOptions.WarningUnsupportedFeatures :=
+    EffectiveWarningUnsupportedFeatures;
   PipelineOptions.SourceType := EffectiveSourceType;
   SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(ASource, AFileName,
     PipelineOptions, False);

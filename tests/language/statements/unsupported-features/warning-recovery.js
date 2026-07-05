@@ -1,15 +1,16 @@
 /*---
 description: >
   Unsupported features (for, while, do...while, var, function, with, ==, !=,
-  export *, labels) are parsed as no-ops. Code after skipped statements must
-  still execute correctly, even when the unsupported statement contains nested
-  parentheses or complex expressions.
+  labels) are parsed as warnings/no-ops when warning-unsupported-features is
+  enabled. Code after skipped statements must still execute correctly, even
+  when the unsupported statement contains nested parentheses or complex
+  expressions.
 features: [parser-warnings, unsupported-features]
 ---*/
 
 const hasGoccia = typeof Goccia !== "undefined";
 
-describe.runIf(hasGoccia)("unsupported features are skipped", () => {
+describe.runIf(hasGoccia)("unsupported features are skipped in warning mode", () => {
   test("code after skipped for loop executes", () => {
     let x = 1;
     for (let i = 0; i < 10; i++) { x = 99; }

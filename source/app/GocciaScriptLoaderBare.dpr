@@ -65,6 +65,7 @@ type
 
   TBareOptions = record
     Compatibility: TGocciaCompatibilityFlags;
+    WarningUnsupportedFeatures: Boolean;
     StrictTypes: Boolean;
     UnsafeFunctionConstructor: Boolean;
     UnsafeShadowRealm: Boolean;
@@ -328,6 +329,8 @@ begin
     EvalOptions := TGocciaSourcePipeline.DefaultOptions;
     EvalOptions.Preprocessors := FEngine.Preprocessors;
     EvalOptions.Compatibility := FEngine.Compatibility;
+    EvalOptions.WarningUnsupportedFeatures :=
+      FEngine.WarningUnsupportedFeatures;
     EvalOptions.SourceType := stScript;
 
     ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(EvalOptions);
@@ -406,6 +409,8 @@ begin
     ScriptOptions := TGocciaSourcePipeline.DefaultOptions;
     ScriptOptions.Preprocessors := FEngine.Preprocessors;
     ScriptOptions.Compatibility := FEngine.Compatibility;
+    ScriptOptions.WarningUnsupportedFeatures :=
+      FEngine.WarningUnsupportedFeatures;
     ScriptOptions.SourceType := stScript;
 
     ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(ScriptOptions);
@@ -1197,6 +1202,8 @@ begin
       Descriptor.HelpText]));
   end;
   WriteLn('  --strict-types                Enforce type annotations at runtime');
+  WriteLn('  --warning-unsupported-features');
+  WriteLn('                                Warn and recover for unsupported/default-disabled syntax');
   WriteLn('  --mode=interpreted|bytecode   Execution mode (default: interpreted)');
   WriteLn('  --source-type=script|module   Load entry as script source or module source (.mjs infers module)');
   WriteLn('  --source-name=PATH            Name stdin source as PATH for diagnostics and module resolution');
@@ -1329,6 +1336,7 @@ var
   SourceMetadataPath: string;
 begin
   Result.Compatibility := [];
+  Result.WarningUnsupportedFeatures := False;
   Result.StrictTypes := False;
   Result.UnsafeFunctionConstructor := False;
   Result.UnsafeShadowRealm := False;
@@ -1360,6 +1368,8 @@ begin
     begin
       { handled by source compatibility flag registry }
     end
+    else if Arg = '--warning-unsupported-features' then
+      Result.WarningUnsupportedFeatures := True
     else if Arg = '--strict-types' then
       Result.StrictTypes := True
     else if Arg = '--unsafe-function-constructor' then
@@ -1432,6 +1442,7 @@ procedure ConfigureEngine(const AEngine: TGocciaEngine;
   const AExecutor: TGocciaExecutor; const AOptions: TBareOptions);
 begin
   AEngine.Compatibility := AOptions.Compatibility;
+  AEngine.WarningUnsupportedFeatures := AOptions.WarningUnsupportedFeatures;
   AEngine.StrictTypes := AOptions.StrictTypes;
   AEngine.SourceType := AOptions.SourceType;
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;

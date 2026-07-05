@@ -592,6 +592,8 @@ begin
     EmptyConfig, AFileName);
   AEngine.Compatibility := ResolveCompatibilityFlags(EngineOptions,
     EmptyConfig);
+  AEngine.WarningUnsupportedFeatures := ResolveFlagOption(
+    EngineOptions.WarningUnsupportedFeatures, EmptyConfig);
   AEngine.StrictTypes := ResolveFlagOption(EngineOptions.StrictTypes,
     EmptyConfig);
   AEngine.FunctionConstructor.Enabled := ResolveFlagOption(

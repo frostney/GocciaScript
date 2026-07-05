@@ -6,6 +6,7 @@
 
 - **ECMAScript table** — Feature-by-feature status from ES1 through ES2027, sorted chronologically
 - **Annex B policy** — Browser-only legacy Annex B semantics are not a pre-1.0 target; selected existing shims remain documented individually
+- **Parser policy** — Disabled parser syntax is a `SyntaxError` by default; `--warning-unsupported-features` restores warning/no-op recovery without enabling compatibility semantics
 - **Web Platform APIs table** — WHATWG and W3C APIs supported beyond ECMA-262
 - **TC39 proposals table** — Active proposals sorted by stage (highest first), with links to specs
 - **Canonical source** — Detailed semantics, examples, and rationale live in [language.md](language.md)
@@ -14,20 +15,20 @@
 
 | Feature | Spec | Status |
 |---------|------|--------|
-| `var` | ES1 | Opt-in (`--compat-var`) — ES script-global bindings are global-backed and non-configurable; use `let`/`const` by default |
-| `function` keyword | ES1 | Opt-in (`--compat-function`) — use arrow functions or shorthand methods by default |
+| `var` | ES1 | Opt-in (`--compat-var`) — ES script-global bindings are global-backed and non-configurable; disabled syntax is a parser error by default; use `let`/`const` |
+| `function` keyword | ES1 | Opt-in (`--compat-function`) — disabled syntax is a parser error by default; use arrow functions or shorthand methods |
 | Comma operator (`,`) | ES1 | Supported |
-| `==` / `!=` (loose equality) | ES1 | Opt-in (`--compat-loose-equality`) — use `===` / `!==` by default |
+| `==` / `!=` (loose equality) | ES1 | Opt-in (`--compat-loose-equality`) — disabled syntax is a parser error by default; use `===` / `!==` |
 | `eval()` | ES1 | Excluded from normal runtimes; private `GocciaScriptLoaderBare --test262-host` hook only for conformance |
 | Annex B web-browser legacy features | ES Annex B | Deferred before 1.0; `annexB` test262 results are informational, not a release gate. Selected existing surfaces remain documented individually; broad support should be revisited only with a future Web API/browser-compatibility profile. See [ADR 0085](adr/0085-defer-annex-b-before-1-0.md) |
 | Non-strict function `this` binding | ES1 | Strict by default; script source `--compat-non-strict-mode` coerces nullish regular-function `this` to `globalThis`; modules remain strict and arrows remain lexical |
 | `arguments` object | ES1 | Opt-in (`--compat-arguments-object`) for ordinary functions, methods, accessors, and generators; `--compat-non-strict-mode` does not enable it by itself, but sloppy simple parameter lists use mapped semantics when it is enabled; strict functions, modules, and non-simple parameter lists stay unmapped; arrows resolve it lexically; prefer rest parameters for new code |
 | Non-strict assignment failures | ES1 | Strict by default; script source `--compat-non-strict-mode` silently ignores failed ordinary object/global writes while assignment expressions return the assigned value |
-| Labeled statements | ES1 | Opt-in for JavaScript compatibility (`--compat-label`); disabled by default |
-| Traditional `for(init; test; update)` loop | ES1 | Opt-in for JavaScript compatibility (`--compat-traditional-for-loop`); disabled by default |
-| `for...in` | ES1 | Opt-in for JavaScript compatibility (`--compat-for-in-loop`); supports `var` heads with `--compat-var`; disabled by default |
-| `while` / `do...while` | ES1 | Opt-in for JavaScript compatibility (`--compat-while-loops`); disabled by default |
-| `with` statement | ES1 | Opt-in for script source (`--compat-non-strict-mode`) for compatibility with object-environment lookup, `Symbol.unscopables`, closure capture, method-call receivers, and non-strict write failures — prefer explicit property access |
+| Labeled statements | ES1 | Opt-in for JavaScript compatibility (`--compat-label`); disabled syntax is a parser error by default |
+| Traditional `for(init; test; update)` loop | ES1 | Opt-in for JavaScript compatibility (`--compat-traditional-for-loop`); disabled syntax is a parser error by default |
+| `for...in` | ES1 | Opt-in for JavaScript compatibility (`--compat-for-in-loop`); supports `var` heads with `--compat-var`; disabled syntax is a parser error by default |
+| `while` / `do...while` | ES1 | Opt-in for JavaScript compatibility (`--compat-while-loops`); disabled syntax is a parser error by default |
+| `with` statement | ES1 | Opt-in for script source (`--compat-non-strict-mode`) for compatibility with object-environment lookup, `Symbol.unscopables`, closure capture, method-call receivers, and non-strict write failures; disabled syntax is a parser error by default, and modules always reject it — prefer explicit property access |
 | `delete` non-strict return values | ES1 | Strict by default; script source `--compat-non-strict-mode` makes `delete identifier` handle declared bindings, configurable global object properties, and unresolvable names with legacy booleans; non-configurable property deletion returns `false` |
 | ASI (automatic semicolon insertion) | ES1 | Opt-in (`--compat-asi`) |
 | Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` | ES1 | Supported as legacy global shims installed through Goccia.shims; `parseInt`/`parseFloat` delegate to `Number.parseInt`/`Number.parseFloat`, while `isNaN`/`isFinite` keep standard global coercion behavior. Prefer `Number.*` in new code |

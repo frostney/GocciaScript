@@ -1,30 +1,31 @@
-// This script demonstrates unsupported features in GocciaScript.
-// Each construct below parses successfully and is treated as a no-op,
-// with a warning emitted to stdout.
+// This script lists syntax that GocciaScript rejects by default and shows
+// supported alternatives. To observe the legacy warning/recovery behavior for
+// these snippets, run a separate file with --warning-unsupported-features.
 
-// --- var declarations (use let/const instead) ---
+const unsupported = [
+  {
+    syntax: "var x = 42;",
+    alternative: "let x = 42; or const x = 42;",
+  },
+  {
+    syntax: "for (let i = 0; i < 5; i++) { ... }",
+    alternative: "array methods or for...of",
+  },
+  {
+    syntax: "while (condition) { ... }",
+    alternative: "for...of, array methods, or --compat-while-loops",
+  },
+  {
+    syntax: "with (object) { ... }",
+    alternative: "explicit property access",
+  },
+];
 
-var x = 42;
+unsupported.forEach((entry) => {
+  console.log("Unsupported by default:", entry.syntax);
+  console.log("  Prefer:", entry.alternative);
+});
 
-// The idiomatic GocciaScript alternative:
-let mutable = 42;
-const immutable = 42;
-
-// --- Traditional loops (use array methods instead) ---
-
-for (let i = 0; i < 5; i++) {
-  console.log("This will NOT execute");
-}
-
-while (true) {
-  console.log("This will NOT execute either");
-}
-
-do {
-  console.log("Nor will this");
-} while (false);
-
-// The idiomatic GocciaScript alternative:
 const numbers = [1, 2, 3, 4, 5];
 numbers.forEach((n) => console.log("forEach:", n));
 
@@ -37,10 +38,4 @@ console.log("filter:", evens);
 const sum = numbers.reduce((acc, n) => acc + n, 0);
 console.log("reduce:", sum);
 
-// --- with statement (no alternative) ---
-
-with (Math) {
-  console.log("This will NOT execute");
-}
-
-console.log("Script completed successfully despite unsupported features above.");
+console.log("Script completed successfully with supported syntax.");

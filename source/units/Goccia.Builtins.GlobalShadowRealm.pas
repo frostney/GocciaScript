@@ -301,6 +301,7 @@ begin
     Options.SourceType := stScript;
     Options.Preprocessors := FEngine.Preprocessors;
     Options.Compatibility := FEngine.Compatibility;
+    Options.WarningUnsupportedFeatures := FEngine.WarningUnsupportedFeatures;
     OptionsScope := TGocciaSourcePipeline.ActivateOptions(Options);
     try
       RealmScope := FEngine.ActivateRealmExecutionContext;
@@ -512,6 +513,8 @@ begin
       Options.SourceType := stScript;
       Options.Preprocessors := ChildEngine.Preprocessors;
       Options.Compatibility := ChildEngine.Compatibility;
+      Options.WarningUnsupportedFeatures :=
+        ChildEngine.WarningUnsupportedFeatures;
 
       OptionsScope := TGocciaSourcePipeline.ActivateOptions(Options);
       try

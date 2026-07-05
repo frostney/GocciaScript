@@ -27,6 +27,7 @@ type
   TGocciaSourcePipelineOptions = record
     Preprocessors: TGocciaPreprocessors;
     Compatibility: TGocciaCompatibilityFlags;
+    WarningUnsupportedFeatures: Boolean;
     SourceType: TGocciaSourceType;
     InheritedStrictMode: Boolean;
   end;
@@ -196,9 +197,11 @@ begin
   Result.NonStrictModeEnabled := (cfNonStrictMode in AOptions.Compatibility) and
     (AOptions.SourceType <> stModule);
   Result.InheritedStrictMode := AOptions.InheritedStrictMode;
+  Result.ModuleSource := AOptions.SourceType = stModule;
   Result.ImportMetaAllowed := AOptions.SourceType = stModule;
   Result.LabelStatementsEnabled := cfLabel in AOptions.Compatibility;
   Result.ForInLoopsEnabled := cfForIn in AOptions.Compatibility;
+  Result.WarningUnsupportedFeatures := AOptions.WarningUnsupportedFeatures;
 end;
 
 procedure ConfigureParser(const AParser: TGocciaParser;
@@ -444,6 +447,7 @@ class function TGocciaSourcePipeline.DefaultOptions: TGocciaSourcePipelineOption
 begin
   Result.Preprocessors := [];
   Result.Compatibility := [];
+  Result.WarningUnsupportedFeatures := False;
   Result.SourceType := stScript;
   Result.InheritedStrictMode := False;
 end;

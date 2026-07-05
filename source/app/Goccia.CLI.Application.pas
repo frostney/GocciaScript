@@ -565,6 +565,10 @@ begin
   AEngine.Compatibility := ResolveCompatibilityFlags(
     AEngineOptions, AFileConfig);
 
+  { warning-unsupported-features: CLI flag > per-file config > root config > default (false) }
+  AEngine.WarningUnsupportedFeatures := ResolveFlagOption(
+    AEngineOptions.WarningUnsupportedFeatures, AFileConfig);
+
   { strict-types: CLI flag > per-file config > root config > default (false) }
   AEngine.StrictTypes := ResolveFlagOption(
     AEngineOptions.StrictTypes, AFileConfig);
