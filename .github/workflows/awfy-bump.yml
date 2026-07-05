@@ -2,7 +2,7 @@ name: AWFY weekly bump
 
 # Pulls the latest smarr/are-we-fast-yet master SHA, updates the shared
 # perf/awfy/manifest.json pin, and opens a PR. Merge once the benchmark
-# methodology smoke remains acceptable.
+# report remains acceptable.
 #
 # Cadence: weekly (Mondays 07:00 UTC). Manual trigger available via
 # workflow_dispatch. See docs/benchmarks.md "Updating the AWFY pin".
@@ -55,8 +55,8 @@ jobs:
           body: |
             Automated bump of the AWFY SHA pin to `${{ steps.latest.outputs.sha }}`.
 
-            Review with `node scripts/awfy-driver.js --list` and a selected
-            cross-engine smoke before merging if the corpus shape changed.
+            Review with `node scripts/awfy-driver.js --list` and the
+            cross-engine AWFY report before merging if the corpus shape changed.
 
             Cron: weekly, Mondays 07:00 UTC. See `.github/workflows/awfy-bump.yml`.
           labels: |

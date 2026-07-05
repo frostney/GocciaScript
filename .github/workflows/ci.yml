@@ -710,6 +710,84 @@ jobs:
             --markdown ../test262-profile-aggregate.md \
             --details-archive ../test262-profile-details.tar.gz
 
+  awfy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      - name: Install QuickJS
+        run: bash ./.github/scripts/install-quickjs.sh
+
+      - name: Download build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: gocciascript-x86_64-linux
+          path: build/
+
+      - name: Make binaries executable
+        run: chmod +x build/*
+
+      - name: Read AWFY pin
+        id: awfy-pin
+        run: |
+          sha="$(node -e "const m = require('./perf/awfy/manifest.json'); process.stdout.write(m.awfy.commit)")"
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid AWFY pin in perf/awfy/manifest.json"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout AWFY corpus
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: smarr/are-we-fast-yet
+          ref: ${{ steps.awfy-pin.outputs.sha }}
+          path: awfy-suite
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check AWFY driver helpers
+        run: node scripts/test-awfy-driver.js
+
+      - name: Run AWFY report
+        run: |
+          node scripts/awfy-ci-report.js \
+            --awfy-dir awfy-suite/benchmarks/JavaScript \
+            --output awfy-report.json
+
+      - name: Upload AWFY report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: awfy-report
+          retention-days: 30
+          if-no-files-found: ignore
+          path: awfy-report.json
+
+      - name: Publish AWFY report
+        if: github.ref == 'refs/heads/main' && hashFiles('awfy-report.json') != ''
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          AWFY_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
+        run: |
+          if [ -z "${BLOB_READ_WRITE_TOKEN:-}" ]; then
+            echo "BLOB_READ_WRITE_TOKEN is not configured; skipping AWFY publish."
+            exit 0
+          fi
+          cd website
+          bun install --frozen-lockfile
+          bun run publish-awfy ../awfy-report.json
+
   benchmark:
     needs: build
     strategy:
@@ -956,7 +1034,7 @@ jobs:
           }
 
   artifacts:
-    needs: [test, toml-compliance, json5-compliance, benchmark, cli]
+    needs: [test, toml-compliance, json5-compliance, awfy, benchmark, cli]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     strategy:
@@ -991,7 +1069,7 @@ jobs:
           path: release-artifacts/*
 
   nightly:
-    needs: [test, toml-compliance, json5-compliance, benchmark, cli]
+    needs: [test, toml-compliance, json5-compliance, awfy, benchmark, cli]
     if: github.ref == 'refs/heads/main'
     concurrency:
       group: nightly-release
@@ -1091,7 +1169,7 @@ jobs:
             gocciascript-nightly-*.tar.gz gocciascript-nightly-*.zip
 
   release:
-    needs: [test, toml-compliance, json5-compliance, benchmark, cli]
+    needs: [test, toml-compliance, json5-compliance, awfy, benchmark, cli]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:

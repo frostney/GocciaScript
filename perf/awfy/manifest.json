@@ -26,8 +26,8 @@
     "script": "scripts/awfy-driver.js",
     "version": 1
   },
-  "ciSmoke": {
-    "repetitions": 3,
+  "ciReport": {
+    "repetitions": 5,
     "benchmarks": [
       "Bounce",
       { "name": "CD", "innerIterations": 2 },

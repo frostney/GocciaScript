@@ -2,7 +2,8 @@
 
 const fs = require('fs');
 
-const MARKER = '<!-- awfy-smoke -->';
+const MARKER = '<!-- awfy-results -->';
+const LEGACY_MARKER = '<!-- awfy-smoke -->';
 const COMMENT_ENGINES = ['goccia', 'qjs', 'node'];
 const ENGINE_LABELS = {
   goccia: 'Goccia',
@@ -88,8 +89,8 @@ function reportSampleCount(report) {
   return counts.size === 1 ? [...counts][0] : null;
 }
 
-function buildAwfySmokeComment(report) {
-  let body = `${MARKER}\n## AWFY Smoke\n\n`;
+function buildAwfyReportComment(report) {
+  let body = `${MARKER}\n## AWFY Results\n\n`;
 
   body += '| Target | Status | Goccia | QuickJS | Node |\n';
   body += '|--------|--------|--------|---------|------|\n';
@@ -106,25 +107,26 @@ function buildAwfySmokeComment(report) {
   if (probeCount > 0) countParts.push(plural(probeCount, 'diagnostic probe'));
   const sampleCount = reportSampleCount(report);
   body += `\n<sub>${countParts.join(' plus ')}. `;
-  if (sampleCount !== null) body += `Medians from ${plural(sampleCount, 'sample')} per engine; `;
-  body += 'raw JSON includes min/max/CV and is attached as the `awfy-smoke` artifact.</sub>\n';
+  if (sampleCount !== null) body += `Medians from ${plural(sampleCount, 'interleaved sample')} per engine; `;
+  body += 'raw JSON includes min/max/CV and is attached as the `awfy-report` artifact. ';
+  body += 'Rows below 0.5ms are timer-floor sensitive.</sub>\n';
   return body;
 }
 
 function unavailableComment(message) {
   return [
     MARKER,
-    '## AWFY Smoke',
+    '## AWFY Results',
     '',
-    `_AWFY smoke results were not produced for this run: ${message}._`,
+    `_AWFY results were not produced for this run: ${message}._`,
     '',
-    '<sub>Smoke only. See the workflow run for the failing step.</sub>',
+    '<sub>See the workflow run for the failing step.</sub>',
     '',
   ].join('\n');
 }
 
 function main(argv) {
-  const [fileName = 'awfy-smoke.json'] = argv;
+  const [fileName = 'awfy-report.json'] = argv;
   if (!fs.existsSync(fileName)) {
     process.stdout.write(unavailableComment(`${fileName} is missing`));
     return 0;
@@ -132,7 +134,7 @@ function main(argv) {
 
   try {
     const report = JSON.parse(fs.readFileSync(fileName, 'utf8'));
-    process.stdout.write(buildAwfySmokeComment(report));
+    process.stdout.write(buildAwfyReportComment(report));
     return 0;
   } catch (error) {
     process.stdout.write(unavailableComment(error.message));
@@ -146,8 +148,10 @@ if (require.main === module) {
 
 module.exports = {
   buildGeomeanTable,
+  buildAwfyReportComment,
+  buildAwfySmokeComment: buildAwfyReportComment,
+  LEGACY_MARKER,
   MARKER,
-  buildAwfySmokeComment,
   formatMicros,
   targetStatus,
   unavailableComment,

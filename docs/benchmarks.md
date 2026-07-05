@@ -312,22 +312,22 @@ Use `scripts/awfy-driver.js` for #856/#862 investigation:
 # List pinned AWFY benchmark names and Goccia-owned probes
 node scripts/awfy-driver.js --list
 
-# Smoke one AWFY benchmark from a local upstream checkout
+# Run one AWFY benchmark from a local upstream checkout
 node scripts/awfy-driver.js \
   --awfy-dir /path/to/are-we-fast-yet/benchmarks/JavaScript \
   --benchmark NBody \
   --inner-iterations 1 \
-  --repetitions 3 \
+  --repetitions 5 \
   --engines goccia,qjs,node \
-  --output tmp/awfy-smoke.json
+  --output tmp/awfy-report.json
 
-# Smoke one diagnostic probe through the same normalized report schema
+# Run one diagnostic probe through the same normalized report schema
 node scripts/awfy-driver.js \
   --probe generic-plus-scalars \
   --inner-iterations 1000 \
   --repetitions 1 \
   --engines goccia,qjs,node \
-  --output tmp/probe-smoke.json
+  --output tmp/probe-report.json
 ```
 
 `perf/awfy/manifest.json` records the upstream AWFY repository, pinned commit,
@@ -362,13 +362,28 @@ The normalized report records:
 - Goccia commit, FPC version, platform, architecture, reference-engine versions,
   AWFY corpus SHA, and driver version
 
-Pull requests run a bounded AWFY smoke lane from `.github/workflows/pr.yml`.
-The target set is recorded in `perf/awfy/manifest.json` under `ciSmoke`: all
-pinned AWFY benchmarks under Goccia bytecode, QuickJS, and Node, with three raw
-samples per engine. The workflow uploads the normalized JSON report and posts an
-`AWFY Smoke` PR comment with medians; min/max/CV and raw samples stay in the
-artifact. Diagnostic probes remain available through the same driver for focused
-engine work, but they are not mixed into the PR AWFY summary.
+Pull requests run an AWFY report lane from `.github/workflows/pr.yml`.
+The target set is recorded in `perf/awfy/manifest.json` under `ciReport`: all
+pinned AWFY benchmarks under Goccia bytecode, QuickJS, and Node, with five raw
+samples per engine. Sampling is interleaved as target -> repetition -> engine,
+so every repetition runs the selected engines next to each other instead of
+collecting engine-sized batches. The workflow uploads the normalized JSON report
+and posts an `AWFY Results` PR comment with medians; min/max/CV and raw samples
+stay in the `awfy-report` artifact. Diagnostic probes remain available through
+the same driver for focused engine work, but they are not mixed into the PR AWFY
+summary.
+
+AWFY rows with sub-0.5ms medians are useful for verifying that the benchmark
+runs consistently, but they are timer-floor sensitive. Before using one of those
+rows as evidence for a broad runtime claim, rerun that target with a higher
+`--inner-iterations` value and inspect the artifact's min/max/CV.
+
+Full CI runs the same AWFY report on the ubuntu-latest x64 build. It uploads the
+`awfy-report` artifact on every full CI run. On `main`, when
+`BLOB_READ_WRITE_TOKEN` is configured, the workflow also publishes the compressed
+report JSON to Vercel Blob under the separate `awfy/` namespace. The default
+paths are `awfy/runs/<artifactId>/report.json.gz` and
+`awfy/daily/<YYYY-MM-DD>.json`.
 
 When comparing two Goccia binaries, pass `--goccia-baseline` and
 `--goccia-candidate`; the driver interleaves baseline and candidate samples per

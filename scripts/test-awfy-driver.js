@@ -14,7 +14,8 @@ const {
   parseResult,
   summarizeSamples,
 } = require('./awfy-driver.js');
-const { MARKER, buildAwfySmokeComment, formatMicros } = require('./awfy-comment.js');
+const { MARKER, buildAwfyReportComment, formatMicros } = require('./awfy-comment.js');
+const { reportConfig, targetSpecs, validateReport } = require('./awfy-ci-report.js');
 
 let passed = 0;
 
@@ -128,11 +129,11 @@ console.log('awfy-driver: PR comment markdown...');
   assertEqual(formatMicros(750), '0.75ms', 'comment switches to ms at the project threshold');
   assertEqual(formatMicros(1250), '1.25ms', 'comment formats millisecond durations');
 
-  const comment = buildAwfySmokeComment({
+  const comment = buildAwfyReportComment({
     generatedAt: '2026-07-05T00:00:00.000Z',
     metadata: {
       driver: { version: 1 },
-      options: { repetitions: 3 },
+      options: { repetitions: 5 },
       corpus: {
         awfy: {
           repository: 'https://github.com/smarr/are-we-fast-yet',
@@ -147,9 +148,9 @@ console.log('awfy-driver: PR comment markdown...');
         summary: {
           checksumAgreement: { ok: true, checksums: ['verified'] },
           engineStats: {
-            goccia: { ok: 3, rawCount: 3, medianMicros: 1000 },
-            qjs: { ok: 3, rawCount: 3, medianMicros: 500 },
-            node: { ok: 3, rawCount: 3, medianMicros: 250 },
+            goccia: { ok: 5, rawCount: 5, medianMicros: 1000 },
+            qjs: { ok: 5, rawCount: 5, medianMicros: 500 },
+            node: { ok: 5, rawCount: 5, medianMicros: 250 },
           },
         },
       },
@@ -164,6 +165,7 @@ console.log('awfy-driver: PR comment markdown...');
     },
   });
   assert(comment.includes(MARKER), 'comment includes stable marker');
+  assert(comment.includes('## AWFY Results'), 'comment uses results title');
   assert(comment.includes('NBody'), 'comment includes target name');
   assert(comment.includes('| Target | Status | Goccia | QuickJS | Node |'), 'comment uses concise target table');
   assert(!comment.includes('| Kind |'), 'comment does not need a kind column for the PR AWFY lane');
@@ -174,11 +176,47 @@ console.log('awfy-driver: PR comment markdown...');
   assert(comment.includes('| Ratio (row / column) | Goccia | QuickJS | Node |'), 'comment uses a ratio matrix');
   assert(comment.includes('| Goccia | 1.000 | 2.000 | 4.000 |'), 'comment includes geomean matrix row');
   assert(comment.includes('1 pinned AWFY benchmark'), 'comment summarizes AWFY count');
-  assert(comment.includes('Medians from 3 samples per engine'), 'comment reports sample count');
+  assert(comment.includes('Medians from 5 interleaved samples per engine'), 'comment reports interleaved sample count');
   assert(comment.includes('raw JSON includes min/max/CV'), 'comment points to variation stats');
+  assert(comment.includes('`awfy-report` artifact'), 'comment points to report artifact');
+  assert(comment.includes('Rows below 0.5ms are timer-floor sensitive'), 'comment flags very small timing rows');
   assert(!comment.includes('diagnostic probe'), 'comment omits zero diagnostic probe noise');
   assert(!comment.includes('Pinned corpus:'), 'comment omits pin boilerplate');
   assert(!comment.includes('Generated:'), 'comment omits generated timestamp boilerplate');
+}
+
+console.log('awfy-ci-report: manifest helpers...');
+{
+  const manifest = {
+    ciReport: {
+      repetitions: 5,
+      benchmarks: ['NBody', { name: 'CD', innerIterations: 2 }],
+      probes: [],
+    },
+  };
+  assertEqual(reportConfig(manifest).repetitions, 5, 'ci report config is preferred');
+  assertEqual(targetSpecs(manifest.ciReport, 'benchmarks').join(','), 'NBody,CD:2', 'ci report target specs keep inner iterations');
+}
+
+console.log('awfy-ci-report: validation...');
+{
+  const manifest = { ciReport: { repetitions: 5 }, diagnosticProbes: [] };
+  validateReport({
+    metadata: { options: { repetitions: 5 } },
+    targets: [{
+      kind: 'awfy',
+      name: 'NBody',
+      summary: {
+        checksumAgreement: { ok: true, checksums: ['verified'] },
+        engineStats: {
+          goccia: { ok: 5, rawCount: 5, medianMicros: 1000 },
+          qjs: { ok: 5, rawCount: 5, medianMicros: 500 },
+          node: { ok: 5, rawCount: 5, medianMicros: 250 },
+        },
+      },
+    }],
+  }, manifest, ['goccia', 'qjs', 'node']);
+  assert(true, 'ci report validation accepts five clean samples');
 }
 
 console.log(`awfy-driver: ${passed} assertions passed.`);

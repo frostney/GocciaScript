@@ -361,10 +361,10 @@ jobs:
           if-no-files-found: ignore
           path: profile-main/
 
-  awfy-smoke:
+  awfy-report:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     defaults:
       run:
         shell: bash
@@ -377,18 +377,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
 
       - name: Install QuickJS
-        run: |
-          version="2026-06-04"
-          sha256="b376e839b322978313d929fd20663b11ba58b75df5a46c126dd19ea2fa70ad2a"
-          archive="$RUNNER_TEMP/quickjs-$version.tar.xz"
-          prefix="$RUNNER_TEMP/quickjs"
-
-          curl -fsSLo "$archive" "https://bellard.org/quickjs/quickjs-$version.tar.xz"
-          echo "$sha256  $archive" | shasum -a 256 --check
-          tar -C "$RUNNER_TEMP" -xf "$archive"
-          make -C "$RUNNER_TEMP/quickjs-$version" install PREFIX="$prefix" CONFIG_M32=
-          echo "$prefix/bin" >> "$GITHUB_PATH"
-          "$prefix/bin/qjs" --eval 'print("QuickJS " + (1 + 2))'
+        run: bash ./.github/scripts/install-quickjs.sh
 
       - name: Download build
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
@@ -421,69 +410,20 @@ jobs:
       - name: Check AWFY driver helpers
         run: node scripts/test-awfy-driver.js
 
-      - name: Run AWFY smoke
+      - name: Run AWFY report
         run: |
-          repetitions=$(node -e "const m = require('./perf/awfy/manifest.json'); console.log(m.ciSmoke.repetitions || 3)")
-          args=()
-          while IFS= read -r benchmark; do
-            args+=(--benchmark "$benchmark")
-          done < <(node -e "const m = require('./perf/awfy/manifest.json'); const spec = (item) => typeof item === 'string' ? item : (item.innerIterations ? item.name + ':' + item.innerIterations : item.name); for (const item of m.ciSmoke.benchmarks) console.log(spec(item))")
-          while IFS= read -r probe; do
-            args+=(--probe "$probe")
-          done < <(node -e "const m = require('./perf/awfy/manifest.json'); const spec = (item) => typeof item === 'string' ? item : (item.innerIterations ? item.name + ':' + item.innerIterations : item.name); for (const item of m.ciSmoke.probes) console.log(spec(item))")
-
-          node scripts/awfy-driver.js \
+          node scripts/awfy-ci-report.js \
             --awfy-dir awfy-suite/benchmarks/JavaScript \
-            "${args[@]}" \
-            --repetitions "$repetitions" \
-            --timeout-ms 300000 \
-            --engines goccia,qjs,node \
-            --output awfy-smoke.json
+            --output awfy-report.json
 
-      - name: Check AWFY smoke outcomes
-        run: |
-          node <<'NODE'
-          const fs = require('fs');
-          const report = JSON.parse(fs.readFileSync('awfy-smoke.json', 'utf8'));
-          const manifest = JSON.parse(fs.readFileSync('perf/awfy/manifest.json', 'utf8'));
-          const expectedEngines = ['goccia', 'qjs', 'node'];
-          const expectedRepetitions = manifest.ciSmoke?.repetitions || 3;
-          const failures = [];
-          if (report.metadata?.options?.repetitions !== expectedRepetitions) {
-            failures.push(`expected ${expectedRepetitions} repetitions, report recorded ${report.metadata?.options?.repetitions}`);
-          }
-          for (const target of report.targets || []) {
-            if (target.summary?.checksumAgreement?.ok === false) {
-              failures.push(`${target.name}: checksum mismatch`);
-            }
-            for (const engine of expectedEngines) {
-              const stats = target.summary?.engineStats?.[engine];
-              if (!stats) {
-                failures.push(`${target.name}/${engine}: missing engine stats`);
-                continue;
-              }
-              const nonOk = (stats.timeout || 0) + (stats.crash || 0) + (stats.oom || 0) +
-                (stats.verificationFailed || 0) + (stats.missingResult || 0);
-              if ((stats.ok || 0) === 0 || (stats.rawCount || 0) !== expectedRepetitions ||
-                typeof stats.medianMicros !== 'number' || nonOk > 0) {
-                failures.push(`${target.name}/${engine}: ${JSON.stringify(stats)}`);
-              }
-            }
-          }
-          if (failures.length > 0) {
-            console.error(failures.join('\n'));
-            process.exit(1);
-          }
-          NODE
-
-      - name: Upload AWFY smoke
+      - name: Upload AWFY report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: awfy-smoke
+          name: awfy-report
           retention-days: 7
           if-no-files-found: ignore
-          path: awfy-smoke.json
+          path: awfy-report.json
 
   cli:
     needs: build
@@ -753,7 +693,7 @@ jobs:
             }
 
   awfy-comment:
-    needs: awfy-smoke
+    needs: awfy-report
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -767,21 +707,21 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Download AWFY smoke
+      - name: Download AWFY report
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         continue-on-error: true
         with:
-          name: awfy-smoke
+          name: awfy-report
 
       - name: Build AWFY comment markdown
-        run: node scripts/awfy-comment.js awfy-smoke.json > awfy-comment.md
+        run: node scripts/awfy-comment.js awfy-report.json > awfy-comment.md
 
       - name: Post AWFY comment
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const fs = require('fs');
-            const marker = '<!-- awfy-smoke -->';
+            const markers = ['<!-- awfy-results -->', '<!-- awfy-smoke -->'];
             const body = fs.readFileSync('awfy-comment.md', 'utf8');
 
             const { data: comments } = await github.rest.issues.listComments({
@@ -790,7 +730,7 @@ jobs:
               issue_number: context.issue.number,
             });
 
-            const existing = comments.find(c => c.body && c.body.includes(marker));
+            const existing = comments.find(c => c.body && markers.some(marker => c.body.includes(marker)));
             if (existing) {
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,

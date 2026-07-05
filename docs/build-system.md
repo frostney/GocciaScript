@@ -641,15 +641,10 @@ GitHub Actions CI is split into two workflow files:
 ### `ci.yml` — Push to main + tags
 
 ```text
-build → test (JS + native)   → artifacts (main only)
-      → toml-compliance      →
-      → json5-compliance     →
-      → test262              →
-      → benchmark            →
-      → cli                  →
+build -> test / toml-compliance / json5-compliance / test262 / awfy / benchmark / cli -> artifacts/release
 ```
 
-All matrix strategies use `fail-fast: false`, so one platform failing does not cancel other platforms. The post-build jobs (`test`, `toml-compliance`, `json5-compliance`, `test262`, `benchmark`, `cli`) are independent.
+All matrix strategies use `fail-fast: false`, so one platform failing does not cancel other platforms. The post-build jobs (`test`, `toml-compliance`, `json5-compliance`, `test262`, `awfy`, `benchmark`, `cli`) are independent.
 
 Runs on the full platform matrix:
 
@@ -669,21 +664,20 @@ Runs on the full platform matrix:
 
 **`test262`** (needs build, ubuntu-latest x64 only, **non-blocking**) — Downloads the `gocciascript-x86_64-linux` build, checks out [`tc39/test262`](https://github.com/tc39/test262) at the SHA pinned in `scripts/test262-suite-sha.txt`, runs `bun scripts/run_test262_suite.ts --suite-dir test262-suite --mode=bytecode --jobs=4 --timeout-ms=20000 --output=test262-results.json`, and uploads the report as a 30-day workflow artifact. The run step uses `continue-on-error: true` because the conformance lane is allowed to carry known steady-state failures while the engine closes compatibility gaps. On main, the JSON is also stashed via `actions/cache/save` under `test262-baseline-<sha>` so the PR workflow can compute Δ vs main, and `cd website && bun run publish-test262 ../test262-results.json` publishes the compressed run report plus its UTC daily dashboard pointer to Vercel Blob when `BLOB_READ_WRITE_TOKEN` is configured. Main runs also upload the `test262-profile` artifact and publish matching aggregate/detail profile payloads under the separate `test262-profiles/` Blob namespace for weekly performance review. The one-off `cd website && bun run backfill-test262` command seeds retained artifact reports and reruns expired historical days directly into Blob. The pin is bumped weekly by `.github/workflows/test262-bump.yml`. See [docs/test262.md](test262.md) for the harness and profile report contracts.
 
+**`awfy`** (needs build, ubuntu-latest x64 only) — Downloads the `gocciascript-x86_64-linux` build, installs QuickJS, checks out `smarr/are-we-fast-yet` at the SHA pinned in `perf/awfy/manifest.json`, and runs `node scripts/awfy-ci-report.js --awfy-dir awfy-suite/benchmarks/JavaScript --output awfy-report.json`. The report set is `ciReport` from the manifest: all pinned AWFY JavaScript benchmarks under Goccia bytecode, QuickJS, and Node, with five interleaved samples per engine. The job uploads `awfy-report` as a 30-day artifact. On main, `cd website && bun run publish-awfy ../awfy-report.json` publishes the compressed report plus its UTC daily pointer to the separate `awfy/` Vercel Blob namespace when `BLOB_READ_WRITE_TOKEN` is configured.
+
 **`benchmark`** (needs build) — Runs all benchmarks on all platforms. On main (ubuntu-latest x64), it additionally emits JSON and validates the report shape. PR comparison no longer reads a cached baseline from here — each PR builds and benchmarks `main` on its own runner ([ADR 0076](adr/0076-same-runner-benchmark-comparison.md)). The main bytecode benchmark lane also captures deterministic VM profile details, uploads the `benchmark-profile` artifact, and publishes aggregate/detail profile payloads under the separate `benchmark-profiles/` Blob namespace when `BLOB_READ_WRITE_TOKEN` is configured.
 
 **`cli`** (needs build) — Downloads pre-built binaries and runs CLI behavior smoke tests on all platforms via Bun: options across all apps, lexer numeric-separator rejection, parser error display, config-file loading, and app-specific features including Sandbox Runner seed baselines. Windows runs additionally assert that the loader binary does not link OpenSSL DLLs (HTTPS must use the platform TLS stack statically).
 
-**`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + cli, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints.
+**`artifacts`** (needs test + toml-compliance + json5-compliance + awfy + benchmark + cli, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints.
 
-**`release`** (needs test + toml-compliance + json5-compliance + benchmark + cli, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the `source/app/*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), generates categorized release notes via [git-cliff](https://git-cliff.org/) (`cliff.toml`), and creates a GitHub release using `softprops/action-gh-release`.
+**`release`** (needs test + toml-compliance + json5-compliance + awfy + benchmark + cli, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the `source/app/*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), generates categorized release notes via [git-cliff](https://git-cliff.org/) (`cliff.toml`), and creates a GitHub release using `softprops/action-gh-release`.
 
 ### `pr.yml` — Pull requests
 
 ```text
-build → test (JS + native)
-      → benchmark → PR comment (comparison)
-      → test262   → PR comment (conformance)
-      → cli
+build -> test / benchmark -> comment / test262 -> comment / awfy -> comment / cli
 ```
 
 Runs on **ubuntu-latest x64 only** (single runner, no matrix).
@@ -696,9 +690,11 @@ Runs on **ubuntu-latest x64 only** (single runner, no matrix).
 
 **`test262`** (needs build, **non-blocking**) — Checks out `tc39/test262` at the pinned SHA, runs `bun scripts/run_test262_suite.ts --suite-dir test262-suite --mode=bytecode --jobs=4 --timeout-ms=20000 --output=test262-results.json`, and uploads the JSON report. Failing tests do not fail the job. The downstream `test262-comment` job (`if: always()`) restores the most recent `test262-baseline-` cache entry from main, then `bun scripts/run_test262_suite.ts --comment test262-results.json <baseline>` builds the markdown body and the workflow posts/updates a comment using marker `<!-- test262-results -->`. The comment shows a per-category breakdown (built-ins, harness, intl402, language, staging) with Δ-vs-main columns when a baseline is cached, an "Areas closest to 100%" sub-table, and a collapsible per-test delta list. PR CI does not generate or upload the full-corpus test262 profile artifact.
 
+**`awfy`** (needs build) — Runs the same `ciReport` AWFY set as full CI on the PR x64 build, using Goccia bytecode, QuickJS, and Node with five interleaved samples per engine. It uploads the normalized `awfy-report` JSON artifact. The downstream `awfy-comment` job posts or updates an `AWFY Results` comment with median timings and geomean ratios; min/max/CV and raw samples remain in the artifact.
+
 **`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection), plus `GocciaSandboxRunner` coverage for seed config imports, inline text/base64 files, virtual `fs`, `$`, shared and child-sandbox `runScript` / shell `goccia`, bytecode mode, and diff output.
 
-FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, benchmark, test262, and cli jobs do the same.
+FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, AWFY, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, AWFY, benchmark, test262, and cli jobs do the same.
 
 ## Changelog
 

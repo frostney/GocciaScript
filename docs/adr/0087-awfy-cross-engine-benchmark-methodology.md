@@ -35,10 +35,20 @@ remain separate from timing runs; selected AWFY outliers and diagnostic probes
 may be rerun with `--profile=opcodes`, `--profile=functions`, or `--profile=all`
 for explanation.
 
-Pull-request CI runs a bounded smoke target set from `perf/awfy/manifest.json`:
-all pinned AWFY benchmarks under GocciaScript, QuickJS, and Node, with three raw
-samples per engine. CI surfaces the median timings as an `AWFY Smoke` PR comment
-and keeps min/max/CV plus raw samples in the JSON artifact.
+Pull-request CI runs the AWFY report set from `perf/awfy/manifest.json`: all
+pinned AWFY benchmarks under GocciaScript, QuickJS, and Node, with five raw
+samples per engine. Samples are collected in target -> repetition -> engine
+order, so reference engines and optional baseline/candidate Goccia binaries are
+interleaved within each target rather than measured in sequential engine-sized
+batches. CI surfaces the median timings as an `AWFY Results` PR comment and
+keeps min/max/CV plus raw samples in the JSON artifact. Full CI runs the same
+report on the ubuntu-latest x64 build and publishes the compressed report JSON
+plus a daily pointer to the `awfy/` Vercel Blob namespace on `main` when
+`BLOB_READ_WRITE_TOKEN` is configured.
+
+Rows with sub-0.5ms medians are timer-floor sensitive. They can prove that a
+benchmark verifies across engines, but they should be rerun with higher
+inner-iteration counts before being used for broad runtime claims.
 
 AWFY and web-tooling are roadmap-level proof, not the only gate for optimization
 work. The repo also keeps a small Goccia-owned diagnostic probe corpus under
