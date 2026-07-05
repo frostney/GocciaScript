@@ -26,6 +26,27 @@
     "script": "scripts/awfy-driver.js",
     "version": 1
   },
+  "ciSmoke": {
+    "benchmarks": [
+      "Bounce",
+      "DeltaBlue",
+      "Havlak",
+      "Json",
+      "List",
+      "Mandelbrot",
+      "NBody",
+      "Permute",
+      "Queens",
+      "Richards",
+      "Sieve",
+      "Storage",
+      "Towers"
+    ],
+    "probes": ["generic-plus-scalars"],
+    "excludedBenchmarks": {
+      "CD": "Current portable bundle crashes before a normalized result under GocciaScript, QuickJS, and Node."
+    }
+  },
   "diagnosticProbes": [
     {
       "name": "propaccess-monomorphic",

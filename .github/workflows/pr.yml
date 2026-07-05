@@ -412,13 +412,20 @@ jobs:
 
       - name: Run AWFY smoke
         run: |
+          args=()
+          while IFS= read -r benchmark; do
+            args+=(--benchmark "$benchmark")
+          done < <(node -e "const m = require('./perf/awfy/manifest.json'); for (const name of m.ciSmoke.benchmarks) console.log(name)")
+          while IFS= read -r probe; do
+            args+=(--probe "$probe")
+          done < <(node -e "const m = require('./perf/awfy/manifest.json'); for (const name of m.ciSmoke.probes) console.log(name)")
+
           node scripts/awfy-driver.js \
             --awfy-dir awfy-suite/benchmarks/JavaScript \
-            --benchmark NBody \
-            --probe generic-plus-scalars \
+            "${args[@]}" \
             --inner-iterations 1 \
             --repetitions 1 \
-            --timeout-ms 30000 \
+            --timeout-ms 300000 \
             --engines goccia,qjs,node \
             --output awfy-smoke.json
 

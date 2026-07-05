@@ -35,10 +35,11 @@ remain separate from timing runs; selected AWFY outliers and diagnostic probes
 may be rerun with `--profile=opcodes`, `--profile=functions`, or `--profile=all`
 for explanation.
 
-Pull-request CI runs only a cheap smoke: one pinned AWFY benchmark and one
-diagnostic probe under GocciaScript, QuickJS, and Node, surfaced as an `AWFY
-Smoke` PR comment. Full-corpus AWFY timing stays out of the PR gate until the
-cost and stability are known.
+Pull-request CI runs a bounded smoke target set from `perf/awfy/manifest.json`:
+thirteen pinned AWFY benchmarks and one diagnostic probe under GocciaScript,
+QuickJS, and Node, surfaced as an `AWFY Smoke` PR comment. Full-corpus AWFY
+timing stays out of the PR gate until the remaining benchmarks are stable enough
+for that budget.
 
 AWFY and web-tooling are roadmap-level proof, not the only gate for optimization
 work. The repo also keeps a small Goccia-owned diagnostic probe corpus under

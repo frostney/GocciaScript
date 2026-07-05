@@ -149,6 +149,7 @@ console.log('awfy-driver: PR comment markdown...');
   assert(comment.includes(MARKER), 'comment includes stable marker');
   assert(comment.includes('NBody'), 'comment includes target name');
   assert(comment.includes('goccia over qjs'), 'comment includes geomean ratio');
+  assert(comment.includes('1 pinned AWFY benchmark'), 'comment summarizes AWFY count');
 }
 
 console.log(`awfy-driver: ${passed} assertions passed.`);

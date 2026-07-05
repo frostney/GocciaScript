@@ -11,6 +11,10 @@ function formatMicros(value) {
   return `${value.toFixed(2)}us`;
 }
 
+function plural(count, singular) {
+  return `${count} ${singular}${count === 1 ? '' : 's'}`;
+}
+
 function targetOutcome(target) {
   const stats = target.summary?.engineStats || {};
   const bad = [];
@@ -69,7 +73,9 @@ function buildAwfySmokeComment(report) {
     }
   }
 
-  body += '\n<sub>Smoke only: one pinned AWFY benchmark plus one diagnostic probe. ';
+  const awfyCount = (report.targets || []).filter((target) => target.kind === 'awfy').length;
+  const probeCount = (report.targets || []).filter((target) => target.kind === 'probe').length;
+  body += `\n<sub>Smoke only: ${plural(awfyCount, 'pinned AWFY benchmark')} plus ${plural(probeCount, 'diagnostic probe')}. `;
   body += 'Full-corpus AWFY timing remains a handover/manual or scheduled lane, not a PR gate.</sub>\n';
   return body;
 }

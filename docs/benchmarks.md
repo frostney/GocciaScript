@@ -362,11 +362,12 @@ The normalized report records:
 - Goccia commit, FPC version, platform, architecture, reference-engine versions,
   AWFY corpus SHA, and driver version
 
-Pull requests run a cheap AWFY smoke lane from `.github/workflows/pr.yml`: one
-pinned AWFY benchmark (`NBody`) and one diagnostic probe (`generic-plus-scalars`)
-under Goccia bytecode, QuickJS, and Node. The workflow uploads the normalized
-JSON report and posts an `AWFY Smoke` PR comment. This is a driver/corpus-shape
-guardrail only; it is not a full-corpus timing gate.
+Pull requests run a bounded AWFY smoke lane from `.github/workflows/pr.yml`.
+The target set is recorded in `perf/awfy/manifest.json` under `ciSmoke`: thirteen
+pinned AWFY benchmarks plus `generic-plus-scalars`, under Goccia bytecode,
+QuickJS, and Node. The workflow uploads the normalized JSON report and posts an
+`AWFY Smoke` PR comment. This is a driver/corpus-shape guardrail only; it is not
+a full-corpus timing gate.
 
 When comparing two Goccia binaries, pass `--goccia-baseline` and
 `--goccia-candidate`; the driver interleaves baseline and candidate samples per
