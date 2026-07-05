@@ -1,0 +1,64 @@
+name: AWFY weekly bump
+
+# Pulls the latest smarr/are-we-fast-yet master SHA, updates the shared
+# perf/awfy/manifest.json pin, and opens a PR. Merge once the benchmark
+# methodology smoke remains acceptable.
+#
+# Cadence: weekly (Mondays 07:00 UTC). Manual trigger available via
+# workflow_dispatch. See docs/benchmarks.md "Updating the AWFY pin".
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      - id: latest
+        run: |
+          sha=$(gh api repos/smarr/are-we-fast-yet/commits/master --jq .sha)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short=${sha:0:8}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update AWFY pin
+        run: bun scripts/awfy-bump-pin.ts ${{ steps.latest.outputs.sha }}
+
+      - id: changed
+        run: |
+          if git diff --quiet -- perf/awfy/manifest.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "AWFY already pinned to ${{ steps.latest.outputs.short }}; no PR to open."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update PR
+        if: steps.changed.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          branch: chore/awfy-bump
+          commit-message: "chore(awfy): bump pin to ${{ steps.latest.outputs.short }}"
+          title: "chore(awfy): bump pin to ${{ steps.latest.outputs.short }}"
+          body: |
+            Automated bump of the AWFY SHA pin to `${{ steps.latest.outputs.sha }}`.
+
+            Review with `node scripts/awfy-driver.js --list` and a selected
+            cross-engine smoke before merging if the corpus shape changed.
+
+            Cron: weekly, Mondays 07:00 UTC. See `.github/workflows/awfy-bump.yml`.
+          labels: |
+            performance
+            automated

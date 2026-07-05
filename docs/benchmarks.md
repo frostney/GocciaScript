@@ -9,6 +9,7 @@
 - **Profiler-backed runs** — Bytecode benchmark runs can emit opcode/function profiles with `--profile`, including deterministic single-run capture
 - **CI integration** — PR workflow posts benchmark comparison comments with range-overlap classification; main CI retains deterministic profile reports
 - **Environment tuning** — Calibration time, warmup iterations, and measurement rounds configurable via environment variables
+- **Cross-engine AWFY lane** — `scripts/awfy-driver.js` runs pinned AWFY and `perf/probes/` diagnostics under GocciaScript, QuickJS, and Node without mixing them into the `suite`/`bench` corpus
 
 GocciaScript includes a benchmark runner for measuring execution performance. Benchmarks live in the `benchmarks/` directory and use a `suite`/`bench` API.
 
@@ -296,3 +297,92 @@ The PR workflow (`.github/workflows/pr.yml`) builds the PR's base commit (`main`
 - The **overall PR summary** shows per-mode totals on separate lines with average percentage deltas
 - The comparison is **advisory** (comment-only, never merge-blocking)
 - 🟢 marks non-overlapping improvements, 🔴 marks non-overlapping regressions, `~ overlap` marks overlapping ranges, and 🆕 marks new benchmarks absent from the `main` build
+
+## AWFY Cross-Engine Lane
+
+The `benchmarks/` directory is reserved for `GocciaBenchmarkRunner` inputs that
+register `suite()` / `bench()` cases. Cross-engine AWFY and handover diagnostic
+probes live under `perf/` because they are plain shell-portable scripts driven by
+Node tooling, not benchmark-runner files. This keeps CI's recursive benchmark
+scan from treating diagnostic probes as missing `suite()` files.
+
+Use `scripts/awfy-driver.js` for #856/#862 investigation:
+
+```bash
+# List pinned AWFY benchmark names and Goccia-owned probes
+node scripts/awfy-driver.js --list
+
+# Smoke one AWFY benchmark from a local upstream checkout
+node scripts/awfy-driver.js \
+  --awfy-dir /path/to/are-we-fast-yet/benchmarks/JavaScript \
+  --benchmark NBody \
+  --inner-iterations 1 \
+  --repetitions 1 \
+  --engines goccia,qjs,node \
+  --output tmp/awfy-smoke.json
+
+# Smoke one diagnostic probe through the same normalized report schema
+node scripts/awfy-driver.js \
+  --probe generic-plus-scalars \
+  --inner-iterations 1000 \
+  --repetitions 1 \
+  --engines goccia,qjs,node \
+  --output tmp/probe-smoke.json
+```
+
+`perf/awfy/manifest.json` records the upstream AWFY repository, pinned commit,
+JavaScript corpus path, driver version, and diagnostic probe catalog. The driver
+generates per-benchmark portable AWFY bundles from the selected benchmark's
+CommonJS dependency graph instead of using upstream `harness.js` directly. That
+avoids Node-only globals (`require`, `process.argv`, `process.hrtime`,
+`process.stdout`) and prevents one unrelated benchmark parse failure from
+blocking every other benchmark.
+
+### Updating the AWFY Pin
+
+The AWFY corpus SHA is pinned in `perf/awfy/manifest.json`. A weekly workflow
+(`.github/workflows/awfy-bump.yml`) fetches the latest
+`smarr/are-we-fast-yet` `master` SHA, runs `bun scripts/awfy-bump-pin.ts`, and
+opens an automated PR when the manifest changes. The workflow no-ops when the
+pin is already current, matching the test262 and TOML suite bump pattern.
+
+Manual bump:
+
+```bash
+bun scripts/awfy-bump-pin.ts <40-hex-sha>
+```
+
+The normalized report records:
+
+- raw samples for every engine/target/repetition
+- medians, IQR-filtered medians, min/max, coefficient of variation, and
+  geomean pairwise ratios
+- checksum/verification results and cross-engine checksum agreement
+- timeout, crash, OOM, missing-result, and verification-failed outcomes
+- Goccia commit, FPC version, platform, architecture, reference-engine versions,
+  AWFY corpus SHA, and driver version
+
+When comparing two Goccia binaries, pass `--goccia-baseline` and
+`--goccia-candidate`; the driver interleaves baseline and candidate samples per
+target and repetition. Runtime claims for #862 should use this interleaved
+shape, not sequential baseline-then-candidate batches.
+
+Profiler-backed runs stay separate from timing. For selected Goccia outliers or
+diagnostic probes, add `--profile=opcodes|functions|all --profile-dir=<dir>` and
+run a dedicated diagnostic pass; do not mix profiled timings into ratio claims.
+
+### Issue Acceptance Criteria
+
+Issue #856 is complete when AWFY JavaScript benchmarks run under GocciaScript
+bytecode, QuickJS, and Node from the same driver; reports retain raw samples and
+derived statistics; verification/checksum results agree or fail explicitly;
+timeout, crash, and OOM are first-class outcomes; metadata is sufficient to
+reproduce the run; and at least one Goccia AWFY outlier can be rerun with
+opcode/function profiles attached.
+
+Issue #862 should use `perf/probes/` as implementation gates for dispatch,
+primitive lowering, call path, string/RegExp cliffs, typed-array call/return
+boxing, and inline-cache shape behavior. AWFY and web-tooling remain
+roadmap-level transfer proof. Allocation reductions are supporting evidence
+only; they do not prove a runtime win without interleaved timing movement and
+profile evidence for the mechanism.
