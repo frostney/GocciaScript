@@ -565,6 +565,13 @@ begin
   { compatibility flags: CLI flag > per-file config > root config > default (empty) }
   ResolveCompatibilityFlags(AEngineOptions, AFileConfig, Compatibility);
   AEngine.Compatibility := Compatibility;
+  AEngine.LabelStatementsEnabled := ResolveFlagOption(
+    AEngineOptions.CompatibilityFlagOption(cfLabel), AFileConfig);
+  AEngine.ForInLoopsEnabled := ResolveFlagOption(
+    AEngineOptions.CompatibilityFlagOption(cfForIn), AFileConfig);
+  AEngine.ExperimentalJSModuleSourceEnabled := ResolveFlagOption(
+    AEngineOptions.CompatibilityFlagOption(cfExperimentalJSModuleSource),
+    AFileConfig);
 
   { warning-unsupported-features: CLI flag > per-file config > root config > default (false) }
   AEngine.WarningUnsupportedFeatures := ResolveFlagOption(

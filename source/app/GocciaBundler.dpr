@@ -113,6 +113,9 @@ var
   EffectiveWarningUnsupportedFeatures: Boolean;
   EffectiveSourceType: TGocciaSourceType;
   EffectiveCompatibility: TGocciaCompatibilityFlags;
+  EffectiveLabelStatementsEnabled: Boolean;
+  EffectiveForInLoopsEnabled: Boolean;
+  EffectiveExperimentalJSModuleSourceEnabled: Boolean;
   PipelineOptions: TGocciaSourcePipelineOptions;
 begin
   ASourceMap := nil;
@@ -120,6 +123,13 @@ begin
     root config > default. }
   FileConfig := DiscoverFileConfig(AFileName);
   ResolveCompatibilityFlags(EngineOptions, FileConfig, EffectiveCompatibility);
+  EffectiveLabelStatementsEnabled := ResolveFlagOption(
+    EngineOptions.CompatibilityFlagOption(cfLabel), FileConfig);
+  EffectiveForInLoopsEnabled := ResolveFlagOption(
+    EngineOptions.CompatibilityFlagOption(cfForIn), FileConfig);
+  EffectiveExperimentalJSModuleSourceEnabled := ResolveFlagOption(
+    EngineOptions.CompatibilityFlagOption(cfExperimentalJSModuleSource),
+    FileConfig);
   EffectiveSourceType := ResolveSourceTypeOption(EngineOptions.SourceType,
     FileConfig, AFileName);
   EffectiveStrictTypes := ResolveFlagOption(
@@ -131,6 +141,10 @@ begin
   PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
   PipelineOptions.Preprocessors := TGocciaEngine.DefaultPreprocessors;
   PipelineOptions.Compatibility := EffectiveCompatibility;
+  PipelineOptions.LabelStatementsEnabled := EffectiveLabelStatementsEnabled;
+  PipelineOptions.ForInLoopsEnabled := EffectiveForInLoopsEnabled;
+  PipelineOptions.ExperimentalJSModuleSourceEnabled :=
+    EffectiveExperimentalJSModuleSourceEnabled;
   PipelineOptions.WarningUnsupportedFeatures :=
     EffectiveWarningUnsupportedFeatures;
   PipelineOptions.SourceType := EffectiveSourceType;

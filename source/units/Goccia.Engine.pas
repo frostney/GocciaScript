@@ -134,6 +134,9 @@ type
     FInjectedGlobals: TStringList;
     FPreprocessors: TGocciaPreprocessors;
     FCompatibility: TGocciaCompatibilityFlags;
+    FLabelStatementsEnabled: Boolean;
+    FForInLoopsEnabled: Boolean;
+    FExperimentalJSModuleSourceEnabled: Boolean;
     FWarningUnsupportedFeatures: Boolean;
     FSourceType: TGocciaSourceType;
     FStrictTypes: Boolean;
@@ -179,6 +182,9 @@ type
     function GetModuleResolver: TGocciaModuleResolver;
     procedure SetPreprocessors(const AValue: TGocciaPreprocessors);
     procedure SetCompatibility(AValue: TGocciaCompatibilityFlags);
+    procedure SetLabelStatementsEnabled(const AValue: Boolean);
+    procedure SetForInLoopsEnabled(const AValue: Boolean);
+    procedure SetExperimentalJSModuleSourceEnabled(const AValue: Boolean);
     procedure SetWarningUnsupportedFeatures(const AValue: Boolean);
 
     procedure PinSingletons;
@@ -287,6 +293,13 @@ type
     property ObjectConstructor: TGocciaClassValue read FObjectConstructor;
     property Preprocessors: TGocciaPreprocessors read FPreprocessors write SetPreprocessors;
     property Compatibility: TGocciaCompatibilityFlags read FCompatibility write SetCompatibility;
+    property LabelStatementsEnabled: Boolean
+      read FLabelStatementsEnabled write SetLabelStatementsEnabled;
+    property ForInLoopsEnabled: Boolean
+      read FForInLoopsEnabled write SetForInLoopsEnabled;
+    property ExperimentalJSModuleSourceEnabled: Boolean
+      read FExperimentalJSModuleSourceEnabled
+      write SetExperimentalJSModuleSourceEnabled;
     property WarningUnsupportedFeatures: Boolean
       read FWarningUnsupportedFeatures write SetWarningUnsupportedFeatures;
     property SourceType: TGocciaSourceType read FSourceType write FSourceType;
@@ -660,9 +673,18 @@ begin
   FInterpreter.JSXEnabled := ppJSX in FPreprocessors;
   FRealm.GlobalEnv := FInterpreter.GlobalScope;
   FRealm.LoadedModules := FModuleLoader;
+  FLabelStatementsEnabled := False;
+  FForInLoopsEnabled := False;
+  FExperimentalJSModuleSourceEnabled := False;
   FWarningUnsupportedFeatures := DefaultWarningUnsupportedFeatures;
   if Assigned(FModuleLoader) then
+  begin
+    FModuleLoader.LabelStatementsEnabled := FLabelStatementsEnabled;
+    FModuleLoader.ForInLoopsEnabled := FForInLoopsEnabled;
+    FModuleLoader.ExperimentalJSModuleSourceEnabled :=
+      FExperimentalJSModuleSourceEnabled;
     FModuleLoader.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
+  end;
   FRealmExecutionContext := TGocciaExecutionContextScope.Create(
     CreateExecutionContext(FRealm, FInterpreter.GlobalScope, AFileName));
 
@@ -2060,6 +2082,10 @@ begin
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
+    PipelineOptions.LabelStatementsEnabled := FLabelStatementsEnabled;
+    PipelineOptions.ForInLoopsEnabled := FForInLoopsEnabled;
+    PipelineOptions.ExperimentalJSModuleSourceEnabled :=
+      FExperimentalJSModuleSourceEnabled;
     PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
     PipelineOptions.SourceType := FSourceType;
     PipelineResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
@@ -2428,6 +2454,10 @@ end;
 procedure TGocciaEngine.SetCompatibility(AValue: TGocciaCompatibilityFlags);
 begin
   FCompatibility := AValue;
+  FLabelStatementsEnabled := cfLabel in AValue;
+  FForInLoopsEnabled := cfForIn in AValue;
+  FExperimentalJSModuleSourceEnabled :=
+    cfExperimentalJSModuleSource in AValue;
   FInterpreter.ASIEnabled := cfASI in AValue;
   FInterpreter.VarEnabled := cfVar in AValue;
   FInterpreter.FunctionEnabled := cfFunction in AValue;
@@ -2438,7 +2468,13 @@ begin
   FInterpreter.ArgumentsObjectEnabled :=
     cfArgumentsObject in AValue;
   if Assigned(FModuleLoader) then
+  begin
     FModuleLoader.Compatibility := AValue;
+    FModuleLoader.LabelStatementsEnabled := FLabelStatementsEnabled;
+    FModuleLoader.ForInLoopsEnabled := FForInLoopsEnabled;
+    FModuleLoader.ExperimentalJSModuleSourceEnabled :=
+      FExperimentalJSModuleSourceEnabled;
+  end;
   if FExecutor is TGocciaBytecodeExecutor then
   begin
     TGocciaBytecodeExecutor(FExecutor).NonStrictMode :=
@@ -2446,6 +2482,28 @@ begin
     TGocciaBytecodeExecutor(FExecutor).ArgumentsObjectEnabled :=
       cfArgumentsObject in AValue;
   end;
+end;
+
+procedure TGocciaEngine.SetLabelStatementsEnabled(const AValue: Boolean);
+begin
+  FLabelStatementsEnabled := AValue;
+  if Assigned(FModuleLoader) then
+    FModuleLoader.LabelStatementsEnabled := AValue;
+end;
+
+procedure TGocciaEngine.SetForInLoopsEnabled(const AValue: Boolean);
+begin
+  FForInLoopsEnabled := AValue;
+  if Assigned(FModuleLoader) then
+    FModuleLoader.ForInLoopsEnabled := AValue;
+end;
+
+procedure TGocciaEngine.SetExperimentalJSModuleSourceEnabled(
+  const AValue: Boolean);
+begin
+  FExperimentalJSModuleSourceEnabled := AValue;
+  if Assigned(FModuleLoader) then
+    FModuleLoader.ExperimentalJSModuleSourceEnabled := AValue;
 end;
 
 procedure TGocciaEngine.SetWarningUnsupportedFeatures(const AValue: Boolean);
@@ -3444,6 +3502,10 @@ begin
   PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
   PipelineOptions.Preprocessors := [];
   PipelineOptions.Compatibility := FCompatibility + [cfFunction];
+  PipelineOptions.LabelStatementsEnabled := FLabelStatementsEnabled;
+  PipelineOptions.ForInLoopsEnabled := FForInLoopsEnabled;
+  PipelineOptions.ExperimentalJSModuleSourceEnabled :=
+    FExperimentalJSModuleSourceEnabled;
   PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
   PipelineOptions.SourceType := stScript;
   if not TGocciaSourcePipeline.ParseFunctionParameters(ParamStr,

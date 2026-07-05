@@ -166,6 +166,11 @@ begin
             PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
             PipelineOptions.Preprocessors := Eng.Preprocessors;
             PipelineOptions.Compatibility := Eng.Compatibility;
+            PipelineOptions.LabelStatementsEnabled :=
+              Eng.LabelStatementsEnabled;
+            PipelineOptions.ForInLoopsEnabled := Eng.ForInLoopsEnabled;
+            PipelineOptions.ExperimentalJSModuleSourceEnabled :=
+              Eng.ExperimentalJSModuleSourceEnabled;
             PipelineOptions.WarningUnsupportedFeatures :=
               Eng.WarningUnsupportedFeatures;
             PipelineOptions.SourceType := Eng.SourceType;

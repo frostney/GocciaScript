@@ -593,6 +593,13 @@ begin
     EmptyConfig, AFileName);
   ResolveCompatibilityFlags(EngineOptions, EmptyConfig, Compatibility);
   AEngine.Compatibility := Compatibility;
+  AEngine.LabelStatementsEnabled := ResolveFlagOption(
+    EngineOptions.CompatibilityFlagOption(cfLabel), EmptyConfig);
+  AEngine.ForInLoopsEnabled := ResolveFlagOption(
+    EngineOptions.CompatibilityFlagOption(cfForIn), EmptyConfig);
+  AEngine.ExperimentalJSModuleSourceEnabled := ResolveFlagOption(
+    EngineOptions.CompatibilityFlagOption(cfExperimentalJSModuleSource),
+    EmptyConfig);
   AEngine.WarningUnsupportedFeatures := ResolveFlagOption(
     EngineOptions.WarningUnsupportedFeatures, EmptyConfig);
   AEngine.StrictTypes := ResolveFlagOption(EngineOptions.StrictTypes,

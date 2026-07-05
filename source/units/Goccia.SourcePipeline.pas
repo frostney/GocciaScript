@@ -27,6 +27,9 @@ type
   TGocciaSourcePipelineOptions = record
     Preprocessors: TGocciaPreprocessors;
     Compatibility: TGocciaCompatibilityFlags;
+    LabelStatementsEnabled: Boolean;
+    ForInLoopsEnabled: Boolean;
+    ExperimentalJSModuleSourceEnabled: Boolean;
     WarningUnsupportedFeatures: Boolean;
     SourceType: TGocciaSourceType;
     InheritedStrictMode: Boolean;
@@ -201,8 +204,10 @@ begin
   AParserOptions.InheritedStrictMode := AOptions.InheritedStrictMode;
   AParserOptions.ModuleSource := AOptions.SourceType = stModule;
   AParserOptions.ImportMetaAllowed := AOptions.SourceType = stModule;
-  AParserOptions.LabelStatementsEnabled := cfLabel in AOptions.Compatibility;
-  AParserOptions.ForInLoopsEnabled := cfForIn in AOptions.Compatibility;
+  AParserOptions.LabelStatementsEnabled := AOptions.LabelStatementsEnabled or
+    (cfLabel in AOptions.Compatibility);
+  AParserOptions.ForInLoopsEnabled := AOptions.ForInLoopsEnabled or
+    (cfForIn in AOptions.Compatibility);
   AParserOptions.WarningUnsupportedFeatures := AOptions.WarningUnsupportedFeatures;
 end;
 
@@ -452,6 +457,9 @@ class function TGocciaSourcePipeline.DefaultOptions: TGocciaSourcePipelineOption
 begin
   Result.Preprocessors := [];
   Result.Compatibility := [];
+  Result.LabelStatementsEnabled := False;
+  Result.ForInLoopsEnabled := False;
+  Result.ExperimentalJSModuleSourceEnabled := False;
   Result.WarningUnsupportedFeatures := False;
   Result.SourceType := stScript;
   Result.InheritedStrictMode := False;

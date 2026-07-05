@@ -65,6 +65,9 @@ type
 
   TBareOptions = record
     Compatibility: TGocciaCompatibilityFlags;
+    LabelStatementsEnabled: Boolean;
+    ForInLoopsEnabled: Boolean;
+    ExperimentalJSModuleSourceEnabled: Boolean;
     WarningUnsupportedFeatures: Boolean;
     StrictTypes: Boolean;
     UnsafeFunctionConstructor: Boolean;
@@ -329,6 +332,10 @@ begin
     EvalOptions := TGocciaSourcePipeline.DefaultOptions;
     EvalOptions.Preprocessors := FEngine.Preprocessors;
     EvalOptions.Compatibility := FEngine.Compatibility;
+    EvalOptions.LabelStatementsEnabled := FEngine.LabelStatementsEnabled;
+    EvalOptions.ForInLoopsEnabled := FEngine.ForInLoopsEnabled;
+    EvalOptions.ExperimentalJSModuleSourceEnabled :=
+      FEngine.ExperimentalJSModuleSourceEnabled;
     EvalOptions.WarningUnsupportedFeatures :=
       FEngine.WarningUnsupportedFeatures;
     EvalOptions.SourceType := stScript;
@@ -409,6 +416,10 @@ begin
     ScriptOptions := TGocciaSourcePipeline.DefaultOptions;
     ScriptOptions.Preprocessors := FEngine.Preprocessors;
     ScriptOptions.Compatibility := FEngine.Compatibility;
+    ScriptOptions.LabelStatementsEnabled := FEngine.LabelStatementsEnabled;
+    ScriptOptions.ForInLoopsEnabled := FEngine.ForInLoopsEnabled;
+    ScriptOptions.ExperimentalJSModuleSourceEnabled :=
+      FEngine.ExperimentalJSModuleSourceEnabled;
     ScriptOptions.WarningUnsupportedFeatures :=
       FEngine.WarningUnsupportedFeatures;
     ScriptOptions.SourceType := stScript;
@@ -1336,6 +1347,9 @@ var
   SourceMetadataPath: string;
 begin
   AOptions.Compatibility := [];
+  AOptions.LabelStatementsEnabled := False;
+  AOptions.ForInLoopsEnabled := False;
+  AOptions.ExperimentalJSModuleSourceEnabled := False;
   AOptions.WarningUnsupportedFeatures := False;
   AOptions.StrictTypes := False;
   AOptions.UnsafeFunctionConstructor := False;
@@ -1364,6 +1378,12 @@ begin
       PrintUsage;
       Halt(0);
     end
+    else if Arg = '--compat-label' then
+      AOptions.LabelStatementsEnabled := True
+    else if Arg = '--compat-for-in-loop' then
+      AOptions.ForInLoopsEnabled := True
+    else if Arg = '--experimental-js-module-source' then
+      AOptions.ExperimentalJSModuleSourceEnabled := True
     else if TryApplyCompatibilityFlagArg(Arg, AOptions.Compatibility) then
     begin
       { handled by source compatibility flag registry }
@@ -1443,6 +1463,10 @@ procedure ConfigureEngine(const AEngine: TGocciaEngine;
   const AExecutor: TGocciaExecutor; const AOptions: TBareOptions);
 begin
   AEngine.Compatibility := AOptions.Compatibility;
+  AEngine.LabelStatementsEnabled := AOptions.LabelStatementsEnabled;
+  AEngine.ForInLoopsEnabled := AOptions.ForInLoopsEnabled;
+  AEngine.ExperimentalJSModuleSourceEnabled :=
+    AOptions.ExperimentalJSModuleSourceEnabled;
   AEngine.WarningUnsupportedFeatures := AOptions.WarningUnsupportedFeatures;
   AEngine.StrictTypes := AOptions.StrictTypes;
   AEngine.SourceType := AOptions.SourceType;
