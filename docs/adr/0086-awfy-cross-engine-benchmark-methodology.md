@@ -36,8 +36,8 @@ may be rerun with `--profile=opcodes`, `--profile=functions`, or `--profile=all`
 for explanation.
 
 Pull-request CI runs a bounded smoke target set from `perf/awfy/manifest.json`:
-all pinned AWFY benchmarks and one diagnostic probe under GocciaScript, QuickJS,
-and Node, surfaced as an `AWFY Smoke` PR comment.
+all pinned AWFY benchmarks under GocciaScript, QuickJS, and Node, surfaced as an
+`AWFY Smoke` PR comment.
 
 AWFY and web-tooling are roadmap-level proof, not the only gate for optimization
 work. The repo also keeps a small Goccia-owned diagnostic probe corpus under
@@ -46,6 +46,8 @@ scalar `+` and `OP_TO_PRIMITIVE` pressure, strict-types typed emission probes
 where syntax is Goccia-only, call-path probes, string/RegExp cliffs, and the
 later typed-array boxing / inline-cache levers (#860/#861). Those probes use
 the same normalized driver/report schema but are not upstream AWFY benchmarks.
+They should be run as focused optimization gates or profiler-backed diagnostic
+passes, not folded into the public AWFY PR summary.
 
 Consequences:
 

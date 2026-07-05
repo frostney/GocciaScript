@@ -14,7 +14,7 @@ const {
   parseResult,
   summarizeSamples,
 } = require('./awfy-driver.js');
-const { MARKER, buildAwfySmokeComment } = require('./awfy-comment.js');
+const { MARKER, buildAwfySmokeComment, formatMicros } = require('./awfy-comment.js');
 
 let passed = 0;
 
@@ -123,6 +123,11 @@ console.log('awfy-driver: portable AWFY bundle...');
 
 console.log('awfy-driver: PR comment markdown...');
 {
+  assertEqual(formatMicros(0.25), '250ns', 'comment formats sub-microsecond durations as ns');
+  assertEqual(formatMicros(250), '250.00µs', 'comment formats microsecond durations with project unit');
+  assertEqual(formatMicros(750), '0.75ms', 'comment switches to ms at the project threshold');
+  assertEqual(formatMicros(1250), '1.25ms', 'comment formats millisecond durations');
+
   const comment = buildAwfySmokeComment({
     generatedAt: '2026-07-05T00:00:00.000Z',
     metadata: {
@@ -148,12 +153,26 @@ console.log('awfy-driver: PR comment markdown...');
         },
       },
     ],
-    geomeanRatios: { goccia_over_qjs: 2 },
+    geomeanRatios: {
+      goccia_over_qjs: 2,
+      goccia_over_node: 4,
+      qjs_over_goccia: 0.5,
+      qjs_over_node: 2,
+      node_over_goccia: 0.25,
+      node_over_qjs: 0.5,
+    },
   });
   assert(comment.includes(MARKER), 'comment includes stable marker');
   assert(comment.includes('NBody'), 'comment includes target name');
-  assert(comment.includes('goccia over qjs'), 'comment includes geomean ratio');
+  assert(comment.includes('| Target | Outcome | Verify | Goccia | QuickJS | Node |'), 'comment uses concise target table');
+  assert(!comment.includes('| Kind |'), 'comment does not need a kind column for the PR AWFY lane');
+  assert(!comment.includes('Checksum'), 'comment avoids ambiguous checksum wording');
+  assert(comment.includes('| NBody | ok | pass | 1.00ms | 0.50ms | 250.00µs |'), 'comment renders verification pass and timings');
+  assert(comment.includes('| Ratio (row / column) | Goccia | QuickJS | Node |'), 'comment uses a ratio matrix');
+  assert(comment.includes('| Goccia | 1.000 | 2.000 | 4.000 |'), 'comment includes geomean matrix row');
   assert(comment.includes('1 pinned AWFY benchmark'), 'comment summarizes AWFY count');
+  assert(comment.includes('Use repeated runs for timing claims.'), 'comment caveats one-sample timing rows');
+  assert(!comment.includes('diagnostic probe'), 'comment omits zero diagnostic probe noise');
   assert(!comment.includes('Pinned corpus:'), 'comment omits pin boilerplate');
   assert(!comment.includes('Generated:'), 'comment omits generated timestamp boilerplate');
 }

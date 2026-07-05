@@ -43,7 +43,7 @@
       "Storage",
       "Towers"
     ],
-    "probes": [{ "name": "generic-plus-scalars", "innerIterations": 1 }]
+    "probes": []
   },
   "diagnosticProbes": [
     {

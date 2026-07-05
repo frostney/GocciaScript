@@ -364,9 +364,10 @@ The normalized report records:
 
 Pull requests run a bounded AWFY smoke lane from `.github/workflows/pr.yml`.
 The target set is recorded in `perf/awfy/manifest.json` under `ciSmoke`: all
-pinned AWFY benchmarks plus `generic-plus-scalars`, under Goccia bytecode,
-QuickJS, and Node. The workflow uploads the normalized JSON report and posts an
-`AWFY Smoke` PR comment.
+pinned AWFY benchmarks under Goccia bytecode, QuickJS, and Node. The workflow
+uploads the normalized JSON report and posts an `AWFY Smoke` PR comment.
+Diagnostic probes remain available through the same driver for focused engine
+work, but they are not mixed into the PR AWFY summary.
 
 When comparing two Goccia binaries, pass `--goccia-baseline` and
 `--goccia-candidate`; the driver interleaves baseline and candidate samples per
