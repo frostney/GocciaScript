@@ -545,21 +545,21 @@ Create `benchmarks/yourtype.js`:
 description: YourType operation benchmarks
 ---*/
 
-suite("YourType creation", () => {
-  bench("create YourType", {
-    run: () => {
-      const obj = new YourType();
-    },
+import { bench, group } from "goccia:microbench";
+
+group("YourType creation", () => {
+  bench("create YourType", () => {
+    const obj = new YourType();
   });
 });
 
-suite("YourType methods", () => {
-  bench("method call", {
-    setup: () => new YourType(),
-    run: (obj) => {
+group("YourType methods", () => {
+  bench("method call", ({ *setup() {
+    const obj = new YourType();
+    yield () => {
       obj.method();
-    },
-  });
+    };
+  } }).setup);
 });
 ```
 

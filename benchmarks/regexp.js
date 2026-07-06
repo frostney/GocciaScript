@@ -2,94 +2,92 @@
 description: RegExp constructor, prototype, and string integration benchmarks
 ---*/
 
-suite("RegExp construction", () => {
-  bench("regex literal creation", {
-    run: () => {
-      const regex = /foo(bar)?/gi;
-    },
+import { bench, group } from "goccia:microbench";
+
+group("RegExp construction", () => {
+  bench("regex literal creation", () => {
+    const regex = /foo(bar)?/gi;
   });
 
-  bench("new RegExp(pattern, flags)", {
-    run: () => {
-      const regex = new RegExp("foo(bar)?", "gi");
-    },
+  bench("new RegExp(pattern, flags)", () => {
+    const regex = new RegExp("foo(bar)?", "gi");
   });
 
-  bench("RegExp(existingRegex) returns the same regex", {
-    setup: () => /foo(bar)?/gi,
-    run: (regex) => {
+  bench("RegExp(existingRegex) returns the same regex", ({ *setup() {
+    const regex = (() => /foo(bar)?/gi)();
+    yield () => {
       const result = RegExp(regex);
-    },
-  });
+    };
+  } }).setup);
 });
 
-suite("RegExp prototype methods", () => {
-  bench("test() on a global regex", {
-    setup: () => ({
+group("RegExp prototype methods", () => {
+  bench("test() on a global regex", ({ *setup() {
+    const { regex, input } = (() => ({
       regex: /foo/g,
       input: "foo bar foo baz foo",
-    }),
-    run: ({ regex, input }) => {
+    }))();
+    yield () => {
       regex.lastIndex = 0;
       const matched = regex.test(input);
-    },
-  });
+    };
+  } }).setup);
 
-  bench("exec() with capture groups", {
-    setup: () => ({
+  bench("exec() with capture groups", ({ *setup() {
+    const { regex, input } = (() => ({
       regex: /(foo)(bar)?/g,
       input: "foo foobar foo",
-    }),
-    run: ({ regex, input }) => {
+    }))();
+    yield () => {
       regex.lastIndex = 0;
       const match = regex.exec(input);
-    },
-  });
+    };
+  } }).setup);
 
-  bench("toString()", {
-    setup: () => /foo(bar)?/gim,
-    run: (regex) => {
+  bench("toString()", ({ *setup() {
+    const regex = (() => /foo(bar)?/gim)();
+    yield () => {
       const value = regex.toString();
-    },
-  });
+    };
+  } }).setup);
 });
 
-suite("String integration with RegExp", () => {
-  bench("match() with global regex", {
-    setup: () => "foo bar foo baz foo",
-    run: (input) => {
+group("String integration with RegExp", () => {
+  bench("match() with global regex", ({ *setup() {
+    const input = (() => "foo bar foo baz foo")();
+    yield () => {
       const matches = input.match(/foo/g);
-    },
-  });
+    };
+  } }).setup);
 
-  bench("matchAll() with capture groups", {
-    setup: () => "foo1 foo2 foo3",
-    run: (input) => {
+  bench("matchAll() with capture groups", ({ *setup() {
+    const input = (() => "foo1 foo2 foo3")();
+    yield () => {
       const results = [];
-      for (const match of input.matchAll(/(foo)(\d)/g)) {
+      for (const match of input.matchAll(/(foo)([0-9])/g)) {
         results.push(match[1]);
       }
-    },
-  });
+    };
+  } }).setup);
 
-  bench("replace() with global regex", {
-    setup: () => "foo bar foo baz foo",
-    run: (input) => {
+  bench("replace() with global regex", ({ *setup() {
+    const input = (() => "foo bar foo baz foo")();
+    yield () => {
       const replaced = input.replace(/foo/g, "qux");
-    },
-  });
+    };
+  } }).setup);
 
-  bench("search() with regex", {
-    setup: () => "alpha beta gamma delta",
-    run: (input) => {
+  bench("search() with regex", ({ *setup() {
+    const input = (() => "alpha beta gamma delta")();
+    yield () => {
       const index = input.search(/gamma/);
-    },
-  });
+    };
+  } }).setup);
 
-  bench("split() with regex separator", {
-    setup: () => "foo,bar;baz,qux",
-    run: (input) => {
+  bench("split() with regex separator", ({ *setup() {
+    const input = (() => "foo,bar;baz,qux")();
+    yield () => {
       const parts = input.split(/[;,]/);
-    },
-  });
+    };
+  } }).setup);
 });

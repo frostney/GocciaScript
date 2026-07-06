@@ -2,11 +2,13 @@
 description: Cross-instance property access benchmarks (shape-sensitive patterns)
 ---*/
 
+import { bench, group } from "goccia:microbench";
+
 const INSTANCE_COUNT = 1000;
 
-suite("cross-instance field reads", () => {
-  bench("class instance fields across 1000 instances", {
-    setup: () => {
+group("cross-instance field reads", () => {
+  bench("class instance fields across 1000 instances", ({ *setup() {
+    const points = (() => {
       class Point {
         x;
         y;
@@ -16,29 +18,29 @@ suite("cross-instance field reads", () => {
         }
       }
       return Array.from({ length: INSTANCE_COUNT }, (_, i) => new Point(i, i * 2));
-    },
-    run: (points) => {
+    })();
+    yield () => {
       let sum = 0;
       for (const p of points) {
         sum += p.x + p.y;
       }
       return sum;
-    },
-  });
+    };
+  } }).setup);
 
-  bench("object literal fields across 1000 literals", {
-    setup: () => Array.from({ length: INSTANCE_COUNT }, (_, i) => ({ x: i, y: i * 2 })),
-    run: (objects) => {
+  bench("object literal fields across 1000 literals", ({ *setup() {
+    const objects = (() => Array.from({ length: INSTANCE_COUNT }, (_, i) => ({ x: i, y: i * 2 })))();
+    yield () => {
       let sum = 0;
       for (const o of objects) {
         sum += o.x + o.y;
       }
       return sum;
-    },
-  });
+    };
+  } }).setup);
 
-  bench("mixed-shape literals across 1000 literals", {
-    setup: () =>
+  bench("mixed-shape literals across 1000 literals", ({ *setup() {
+    const objects = (() =>
       Array.from({ length: INSTANCE_COUNT }, (_, i) => {
         switch (i % 4) {
           case 0:
@@ -50,20 +52,20 @@ suite("cross-instance field reads", () => {
           default:
             return { pad: true, x: i, y: i * 2 };
         }
-      }),
-    run: (objects) => {
+      }))();
+    yield () => {
       let sum = 0;
       for (const o of objects) {
         sum += o.x + o.y;
       }
       return sum;
-    },
-  });
+    };
+  } }).setup);
 });
 
-suite("cross-instance method dispatch", () => {
-  bench("own-class method across 1000 instances", {
-    setup: () => {
+group("cross-instance method dispatch", () => {
+  bench("own-class method across 1000 instances", ({ *setup() {
+    const points = (() => {
       class Point {
         x;
         y;
@@ -76,18 +78,18 @@ suite("cross-instance method dispatch", () => {
         }
       }
       return Array.from({ length: INSTANCE_COUNT }, (_, i) => new Point(i, i * 2));
-    },
-    run: (points) => {
+    })();
+    yield () => {
       let sum = 0;
       for (const p of points) {
         sum += p.norm();
       }
       return sum;
-    },
-  });
+    };
+  } }).setup);
 
-  bench("inherited method across 1000 instances", {
-    setup: () => {
+  bench("inherited method across 1000 instances", ({ *setup() {
+    const points = (() => {
       class Base {
         x;
         constructor(x) {
@@ -105,13 +107,13 @@ suite("cross-instance method dispatch", () => {
         }
       }
       return Array.from({ length: INSTANCE_COUNT }, (_, i) => new Derived(i, i * 2));
-    },
-    run: (points) => {
+    })();
+    yield () => {
       let sum = 0;
       for (const p of points) {
         sum += p.value();
       }
       return sum;
-    },
-  });
+    };
+  } }).setup);
 });
