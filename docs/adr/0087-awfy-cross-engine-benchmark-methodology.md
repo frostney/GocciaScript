@@ -36,9 +36,10 @@ may be rerun with `--profile=opcodes`, `--profile=functions`, or `--profile=all`
 for explanation.
 
 Pull-request CI runs the AWFY report set from `perf/awfy/manifest.json`: all
-pinned AWFY benchmarks under GocciaScript, QuickJS, and Node, with five raw
-samples per engine. Samples are collected in target -> repetition -> engine
-order, so reference engines and optional baseline/candidate Goccia binaries are
+pinned AWFY benchmarks under GocciaScript, QuickJS, and the latest Node Current
+release resolved by `actions/setup-node` at workflow time, with five raw samples
+per engine. Samples are collected in target -> repetition -> engine order, so
+reference engines and optional baseline/candidate Goccia binaries are
 interleaved within each target rather than measured in sequential engine-sized
 batches. CI surfaces the median timings as an `AWFY Results` PR comment and
 keeps min/max/CV plus raw samples in the JSON artifact. Full CI runs the same
@@ -63,8 +64,9 @@ passes, not folded into the public AWFY PR summary.
 Consequences:
 
 - Issue #856 is complete only when AWFY JavaScript benchmarks run under
-  GocciaScript bytecode, QuickJS, and Node from the same driver with raw samples,
-  verification results, first-class failure outcomes, and reproducible metadata.
+  GocciaScript bytecode, QuickJS, and the latest Node Current release from the
+  same driver with raw samples, verification results, first-class failure
+  outcomes, and reproducible metadata.
 - Issue #862 should use diagnostic probes as implementation gates and AWFY /
   web-tooling as transfer proof for the worst measured hotspots.
 - Existing `GocciaBenchmarkRunner` remains the in-repo benchmark runner and CI PR

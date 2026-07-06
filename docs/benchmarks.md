@@ -364,7 +364,8 @@ The normalized report records:
 
 Pull requests run an AWFY report lane from `.github/workflows/pr.yml`.
 The target set is recorded in `perf/awfy/manifest.json` under `ciReport`: all
-pinned AWFY benchmarks under Goccia bytecode, QuickJS, and Node, with five raw
+pinned AWFY benchmarks under Goccia bytecode, QuickJS, and the latest Node
+Current release resolved by `actions/setup-node` at workflow time, with five raw
 samples per engine. Sampling is interleaved as target -> repetition -> engine,
 so every repetition runs the selected engines next to each other instead of
 collecting engine-sized batches. The workflow uploads the normalized JSON report
@@ -397,11 +398,11 @@ run a dedicated diagnostic pass; do not mix profiled timings into ratio claims.
 ### Issue Acceptance Criteria
 
 Issue #856 is complete when AWFY JavaScript benchmarks run under GocciaScript
-bytecode, QuickJS, and Node from the same driver; reports retain raw samples and
-derived statistics; verification/checksum results agree or fail explicitly;
-timeout, crash, and OOM are first-class outcomes; metadata is sufficient to
-reproduce the run; and at least one Goccia AWFY outlier can be rerun with
-opcode/function profiles attached.
+bytecode, QuickJS, and the latest Node Current release from the same driver;
+reports retain raw samples and derived statistics; verification/checksum results
+agree or fail explicitly; timeout, crash, and OOM are first-class outcomes;
+metadata is sufficient to reproduce the run; and at least one Goccia AWFY outlier
+can be rerun with opcode/function profiles attached.
 
 Issue #862 should use `perf/probes/` as implementation gates for dispatch,
 primitive lowering, call path, string/RegExp cliffs, typed-array call/return
