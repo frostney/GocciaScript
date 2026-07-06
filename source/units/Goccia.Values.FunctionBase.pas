@@ -599,9 +599,9 @@ begin
     Exit;
 
   Result := Int(LengthNumber.Value) - ABoundArgCount;
-  if Result < 0 then
-    Result := 0;
-  if Result = 0 then
+  if Result <= 0 then
+    // Canonicalize -0 to +0 so the bound function's length does not expose
+    // the sign bit from a target length of -0.
     Result := 0;
 end;
 
