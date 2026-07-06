@@ -2242,6 +2242,42 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       if (!profile.functions.some((fn: Record<string, unknown>) => typeof fn.allocations === "number"))
         throw new Error("Deterministic profile should include function allocation counts");
     }
+    const scriptRunProfileBench = join(tmp, "profile-deterministic-script-run.js");
+    const scriptRunProfileOut = join(tmp, "profile-script-run.json");
+    writeFileSync(scriptRunProfileBench, microbenchModuleWithExports("bench, group, run", [
+      "let count = 0;",
+      'group("profile-script-run", () => {',
+      '  bench("reruns deterministically", () => { count++; });',
+      "});",
+      "run();",
+    ]));
+    {
+      const proc = Bun.spawnSync(
+        [
+          resolve(BENCHRUNNER),
+          scriptRunProfileBench,
+          "--source-type=module",
+          "--profile-deterministic",
+          "--profile=all",
+          `--profile-output=${scriptRunProfileOut}`,
+          "--no-progress",
+          "--format=compact-json",
+        ],
+        { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
+      );
+      if (proc.exitCode !== 0) throw new Error(`Deterministic script-run profile benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const report = JSON.parse(proc.stdout.toString());
+      const bench = report.files?.[0]?.benchmarks?.[0];
+      if (bench?.iterations !== 1)
+        throw new Error(`Deterministic script-run profile report should record one iteration, got ${bench?.iterations}`);
+    }
+    {
+      const profile = JSON.parse(readFileSync(scriptRunProfileOut, "utf-8"));
+      if (!Array.isArray(profile.opcodes) || profile.opcodes.length === 0)
+        throw new Error("Deterministic script-run profile should include opcode counts");
+      if (!Array.isArray(profile.functions) || profile.functions.length === 0)
+        throw new Error("Deterministic script-run profile should include function counts");
+    }
 
     console.log("BenchmarkRunner: file benchmark JSON output...");
     if (!fileJson.includes('"totalBenchmarks":')) throw new Error('JSON should contain totalBenchmarks');

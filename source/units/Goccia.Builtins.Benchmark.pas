@@ -27,6 +27,8 @@ type
   TBenchmarkProgressEvent = procedure(const ASuiteName, ABenchName: string; const AIndex, ATotal: Integer) of object;
   TBenchmarkNotifyEvent = procedure of object;
 
+  TBenchmarkRunMode = (brmStandard, brmDeterministicProfile);
+
   TBenchmarkCase = class
   public
     Name: string;
@@ -62,6 +64,7 @@ type
     FOwnsNamespaceRoot: Boolean;
     FHasCompletedRun: Boolean;
     FLastRunResult: TGocciaObjectValue;
+    FLastRunMode: TBenchmarkRunMode;
     FOwnsLastRunRoot: Boolean;
     FOnProgress: TBenchmarkProgressEvent;
     FOnBeforeMeasurement: TBenchmarkNotifyEvent;
@@ -74,7 +77,8 @@ type
     function ExecuteWrapper(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function IsGeneratorBenchmarkFunction(const AFunction: TGocciaFunctionBase): Boolean;
-    procedure StoreLastRunResult(const AResult: TGocciaObjectValue);
+    procedure StoreLastRunResult(const AResult: TGocciaObjectValue;
+      const AMode: TBenchmarkRunMode);
     procedure ClearLastRunResult;
     function RunSingleBenchmark(const ABenchCase: TBenchmarkCase): TBenchmarkResult;
     function RunSingleBenchmarkDeterministic(const ABenchCase: TBenchmarkCase): TBenchmarkResult;
@@ -223,6 +227,7 @@ begin
   FOwnsNamespaceRoot := False;
   FHasCompletedRun := False;
   FLastRunResult := nil;
+  FLastRunMode := brmStandard;
   FOwnsLastRunRoot := False;
 
   if Assigned(TGarbageCollector.Instance) then
@@ -305,13 +310,16 @@ begin
   FOwnsLastRunRoot := False;
   FHasCompletedRun := False;
   FLastRunResult := nil;
+  FLastRunMode := brmStandard;
 end;
 
-procedure TGocciaBenchmark.StoreLastRunResult(const AResult: TGocciaObjectValue);
+procedure TGocciaBenchmark.StoreLastRunResult(const AResult: TGocciaObjectValue;
+  const AMode: TBenchmarkRunMode);
 begin
   ClearLastRunResult;
   FLastRunResult := AResult;
   FHasCompletedRun := Assigned(AResult);
+  FLastRunMode := AMode;
   if FHasCompletedRun and Assigned(TGarbageCollector.Instance) then
   begin
     TGarbageCollector.Instance.AddRootObject(AResult);
@@ -820,7 +828,8 @@ var
   StartNanoseconds, TotalDurationNanoseconds: Int64;
   GC: TGarbageCollector;
 begin
-  if FHasCompletedRun and Assigned(FLastRunResult) then
+  if FHasCompletedRun and Assigned(FLastRunResult) and
+     (FLastRunMode = brmStandard) then
     Exit(FLastRunResult);
 
   StartNanoseconds := GetNanoseconds;
@@ -899,7 +908,7 @@ begin
       ResultObj.AssignProperty('results', ResultsArray);
       ResultObj.AssignProperty('durationNanoseconds', TGocciaNumberLiteralValue.Create(TotalDurationNanoseconds));
 
-      StoreLastRunResult(ResultObj);
+      StoreLastRunResult(ResultObj, brmStandard);
       Result := ResultObj;
     finally
       if Assigned(GC) then
@@ -925,7 +934,8 @@ var
   StartNanoseconds, TotalDurationNanoseconds: Int64;
   GC: TGarbageCollector;
 begin
-  if FHasCompletedRun and Assigned(FLastRunResult) then
+  if FHasCompletedRun and Assigned(FLastRunResult) and
+     (FLastRunMode = brmDeterministicProfile) then
     Exit(FLastRunResult);
 
   StartNanoseconds := GetNanoseconds;
@@ -1000,7 +1010,7 @@ begin
       ResultObj.AssignProperty('totalBenchmarks', TGocciaNumberLiteralValue.Create(FRegisteredBenchmarks.Count));
       ResultObj.AssignProperty('durationNanoseconds', TGocciaNumberLiteralValue.Create(TotalDurationNanoseconds));
       ResultObj.AssignProperty('results', ResultsArray);
-      StoreLastRunResult(ResultObj);
+      StoreLastRunResult(ResultObj, brmDeterministicProfile);
       Result := ResultObj;
     finally
       if Assigned(GC) then
@@ -1016,8 +1026,15 @@ function TGocciaBenchmark.RunForHost(
   const ADeterministicProfile: Boolean): TGocciaValue;
 var
   EmptyArgs: TGocciaArgumentsCollection;
+  RequestedMode: TBenchmarkRunMode;
 begin
-  if FHasCompletedRun and Assigned(FLastRunResult) then
+  if ADeterministicProfile then
+    RequestedMode := brmDeterministicProfile
+  else
+    RequestedMode := brmStandard;
+
+  if FHasCompletedRun and Assigned(FLastRunResult) and
+     (FLastRunMode = RequestedMode) then
     Exit(FLastRunResult);
 
   EmptyArgs := TGocciaArgumentsCollection.Create;
