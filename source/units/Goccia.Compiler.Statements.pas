@@ -3991,9 +3991,10 @@ var
   PathIdx, NameIdx: UInt16;
   Pair: TStringStringMap.TKeyValuePair;
   Slots: array of UInt8;
+  Captured: array of Boolean;
   Names: array of string;
   EncodedPath: string;
-  HasNamespace: Boolean;
+  HasNamespace, NamespaceCaptured: Boolean;
   I, Count: Integer;
 
   function ImportSlot(const AName: string): UInt8;
@@ -4016,10 +4017,26 @@ var
       ACtx.Scope.MarkImportBinding(LocalIdx, AStmt.Phase, EncodedPath,
         AExportName);
   end;
+
+  function ImportLocalIsCaptured(const AName: string): Boolean;
+  var
+    LocalIdx: Integer;
+  begin
+    LocalIdx := ACtx.Scope.ResolveLocal(AName);
+    Result := (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured;
+  end;
+
+  procedure SyncCapturedImportSlot(const ASlot: UInt8; const AIsCaptured: Boolean);
+  begin
+    if AIsCaptured then
+      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ASlot, UInt16(ASlot)));
+  end;
 begin
   HasNamespace := AStmt.NamespaceName <> '';
+  NamespaceCaptured := False;
   Count := AStmt.Imports.Count;
   SetLength(Slots, Count);
+  SetLength(Captured, Count);
   SetLength(Names, Count);
   EncodedPath := EncodeImportSpecifierAttribute(AStmt.ModulePath,
     AStmt.AttributeType);
@@ -4028,6 +4045,7 @@ begin
   begin
     NamespaceSlot := ImportSlot(AStmt.NamespaceName);
     MarkImportSlot(AStmt.NamespaceName, '');
+    NamespaceCaptured := ImportLocalIsCaptured(AStmt.NamespaceName);
   end;
 
   I := 0;
@@ -4039,6 +4057,7 @@ begin
       MarkImportSlot(Pair.Key, Pair.Value)
     else
       MarkImportSlot(Pair.Key, '');
+    Captured[I] := ImportLocalIsCaptured(Pair.Key);
     Inc(I);
   end;
 
@@ -4052,12 +4071,18 @@ begin
     EmitInstruction(ACtx, EncodeABx(OP_IMPORT, ModReg, PathIdx));
 
   if HasNamespace then
+  begin
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, NamespaceSlot, ModReg, 0));
+    SyncCapturedImportSlot(NamespaceSlot, NamespaceCaptured);
+  end;
 
   for I := 0 to Count - 1 do
   begin
     if AStmt.Phase = icpSource then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slots[I], ModReg, 0))
+    begin
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slots[I], ModReg, 0));
+      SyncCapturedImportSlot(Slots[I], Captured[I]);
+    end
     else if AStmt.Phase <> icpEvaluation then
     begin
       NameIdx := ACtx.Template.AddConstantString(Names[I]);
@@ -4065,6 +4090,15 @@ begin
         raise Exception.Create('Constant pool overflow: import name index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, Slots[I], ModReg,
         UInt8(NameIdx)));
+      SyncCapturedImportSlot(Slots[I], Captured[I]);
+    end
+    else if Captured[I] then
+    begin
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slots[I], ModReg, 0));
+      NameIdx := ACtx.Template.AddConstantString(Names[I]);
+      EmitInstruction(ACtx, EncodeABx(OP_GET_IMPORT_BINDING, Slots[I],
+        NameIdx));
+      SyncCapturedImportSlot(Slots[I], True);
     end;
   end;
 
