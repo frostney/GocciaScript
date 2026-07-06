@@ -71,9 +71,9 @@ Consequences:
   web-tooling as transfer proof for the worst measured hotspots.
 - Existing `GocciaBenchmarkRunner` remains the in-repo benchmark runner and CI PR
   comparison surface. The AWFY driver is an external-shell comparison lane for
-  reference engines that do not provide Goccia's injected `suite`/`bench` API,
+  reference engines that do not provide Goccia's `"goccia:microbench"` API,
   and its raw probes stay outside `benchmarks/` so CI does not mistake them for
-  runner-managed `suite()` files.
+  runner-managed benchmark files.
 - Strict-types probes are Goccia-only because type annotations are not portable
   JavaScript syntax for Node or QuickJS; they are paired with untyped probes for
   cross-engine context.
