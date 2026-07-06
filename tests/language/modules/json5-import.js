@@ -6,6 +6,7 @@ import {
   tags,
   database,
 } from "./helpers/config.json5";
+import { parse as parseJSON5 } from "goccia:json5";
 
 describe("JSON5 import", () => {
   test("exports top-level scalar values", () => {
@@ -23,6 +24,6 @@ describe("JSON5 import", () => {
   });
 
   test("JSON5.parse reports malformed JSON5 syntax", () => {
-    expect(() => JSON5.parse("{a: 0x}")).toThrow(SyntaxError);
+    expect(() => parseJSON5("{a: 0x}")).toThrow(SyntaxError);
   });
 });

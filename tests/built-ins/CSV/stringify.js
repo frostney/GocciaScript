@@ -3,9 +3,9 @@ description: CSV.stringify converts JavaScript arrays/objects to CSV text
 features: [CSV.stringify]
 ---*/
 
-const hasCSV = typeof CSV !== "undefined";
+import * as CSV from "goccia:csv";
 
-describe.runIf(hasCSV)("CSV.stringify", () => {
+describe("CSV.stringify", () => {
   test("stringifies array of objects with headers", () => {
     const data = [
       { name: "Alice", age: "30" },
@@ -124,7 +124,7 @@ describe.runIf(hasCSV)("CSV.stringify", () => {
   });
 });
 
-describe.runIf(hasCSV)("CSV.stringify with replacer", () => {
+describe("CSV.stringify with replacer", () => {
   test("replacer transforms values", () => {
     const data = [{ name: "alice", age: "30" }];
     const result = CSV.stringify(data, {}, (key, value) => {
@@ -165,7 +165,7 @@ describe.runIf(hasCSV)("CSV.stringify with replacer", () => {
   });
 });
 
-describe.runIf(hasCSV)("CSV.stringify error handling", () => {
+describe("CSV.stringify error handling", () => {
   test("throws when called with no arguments", () => {
     expect(() => CSV.stringify()).toThrow();
   });

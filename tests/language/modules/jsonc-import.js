@@ -6,6 +6,7 @@ import {
   tags,
   database,
 } from "./helpers/config.jsonc";
+import { parse as parseJSON5 } from "goccia:json5";
 
 describe("JSONC import", () => {
   test("exports top-level scalar values", () => {
@@ -23,6 +24,6 @@ describe("JSONC import", () => {
   });
 
   test("fails on malformed JSONC", () => {
-    expect(() => JSON5.parse('{ "key": }')).toThrow(SyntaxError);
+    expect(() => parseJSON5('{ "key": }')).toThrow(SyntaxError);
   });
 });

@@ -3,9 +3,9 @@ description: CSV.parseChunk parses CSV text incrementally for streaming
 features: [CSV.parseChunk]
 ---*/
 
-const hasCSV = typeof CSV !== "undefined";
+import * as CSV from "goccia:csv";
 
-describe.runIf(hasCSV)("CSV.parseChunk", () => {
+describe("CSV.parseChunk", () => {
   test("parses a complete chunk with headers", () => {
     const result = CSV.parseChunk("name,age\nAlice,30\nBob,25\n", {});
 
@@ -53,7 +53,7 @@ describe.runIf(hasCSV)("CSV.parseChunk", () => {
   });
 });
 
-describe.runIf(hasCSV)("CSV.parseChunk non-finite offsets", () => {
+describe("CSV.parseChunk non-finite offsets", () => {
   test("Infinity start offset does not crash", () => {
     expect(typeof CSV.parseChunk("a,b\n1,2", ",", Infinity)).toBe("object");
   });

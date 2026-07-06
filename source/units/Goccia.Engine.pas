@@ -271,6 +271,9 @@ type
     procedure InjectGlobalsFromModule(const APath: string);
     procedure ClearTransientCaches;
     procedure RegisterGlobalModule(const AName: string; const AModule: TGocciaModule);
+    procedure RegisterGlobalModuleProvider(const AName: string;
+      const AProvider: TGocciaGlobalModuleProvider);
+    procedure UnregisterGlobalModuleProvider(const AName: string);
     procedure RefreshGlobalThis;
     procedure SuspendRealmExecutionContext;
     function ActivateRealmExecutionContext: TGocciaExecutionContextScope;
@@ -2058,6 +2061,17 @@ end;
 procedure TGocciaEngine.RegisterGlobalModule(const AName: string; const AModule: TGocciaModule);
 begin
   FInterpreter.GlobalModules.AddOrSetValue(AName, AModule);
+end;
+
+procedure TGocciaEngine.RegisterGlobalModuleProvider(const AName: string;
+  const AProvider: TGocciaGlobalModuleProvider);
+begin
+  FModuleLoader.RegisterGlobalModuleProvider(AName, AProvider);
+end;
+
+procedure TGocciaEngine.UnregisterGlobalModuleProvider(const AName: string);
+begin
+  FModuleLoader.UnregisterGlobalModuleProvider(AName);
 end;
 
 function TGocciaEngine.Execute: TGocciaScriptResult;
