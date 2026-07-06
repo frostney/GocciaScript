@@ -2364,6 +2364,59 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       if (file?.ok !== false) throw new Error(`Failing benchmark file should mark ok=false, got ${file?.ok}`);
       if (typeof file?.error?.message !== "string") throw new Error("Failing benchmark file should include shared error object");
     }
+    console.log("BenchmarkRunner: generator cleanup preserves original benchmark failure...");
+    const cleanupFailBench = join(tmp, "benchmark-cleanup-fail.js");
+    const cleanupFailOut = join(tmp, "benchmark-cleanup-fail.json");
+    writeFileSync(cleanupFailBench, microbenchModule([
+      'group("cleanup", () => {',
+      '  bench("body error wins", ({ *setup() {',
+      "    try {",
+      '      yield () => { throw new Error("body failure"); };',
+      "    } finally {",
+      '      throw new Error("cleanup failure");',
+      "    }",
+      "  } }).setup);",
+      "});",
+    ]));
+    {
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), cleanupFailBench, "--source-type=module", "--no-progress", "--format=json", `--output=${cleanupFailOut}`],
+        { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
+      );
+      if (proc.exitCode === 0) throw new Error("Generator cleanup failure preservation benchmark should fail");
+    }
+    {
+      const json = JSON.parse(readFileSync(cleanupFailOut, "utf-8"));
+      const message = json.files?.[0]?.benchmarks?.[0]?.error;
+      if (typeof message !== "string" || !message.includes("body failure") || message.includes("cleanup failure"))
+        throw new Error(`Generator cleanup should preserve body failure, got ${JSON.stringify(message)}`);
+    }
+    console.log("BenchmarkRunner: deterministic generator cleanup preserves original benchmark failure...");
+    const deterministicCleanupFailOut = join(tmp, "benchmark-cleanup-fail-deterministic.json");
+    const deterministicCleanupProfileOut = join(tmp, "benchmark-cleanup-fail-profile.json");
+    {
+      const proc = Bun.spawnSync(
+        [
+          resolve(BENCHRUNNER),
+          cleanupFailBench,
+          "--source-type=module",
+          "--profile-deterministic",
+          "--profile=all",
+          `--profile-output=${deterministicCleanupProfileOut}`,
+          "--no-progress",
+          "--format=json",
+          `--output=${deterministicCleanupFailOut}`,
+        ],
+        { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
+      );
+      if (proc.exitCode === 0) throw new Error("Deterministic generator cleanup failure preservation benchmark should fail");
+    }
+    {
+      const json = JSON.parse(readFileSync(deterministicCleanupFailOut, "utf-8"));
+      const message = json.files?.[0]?.benchmarks?.[0]?.error;
+      if (typeof message !== "string" || !message.includes("body failure") || message.includes("cleanup failure"))
+        throw new Error(`Deterministic generator cleanup should preserve body failure, got ${JSON.stringify(message)}`);
+    }
 
     console.log("BenchmarkRunner: callback timeout is enforced...");
     {

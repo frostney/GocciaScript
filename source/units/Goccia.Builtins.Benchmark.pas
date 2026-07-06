@@ -120,6 +120,7 @@ uses
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.GeneratorValue,
+  Goccia.Values.IteratorSupport,
   Goccia.Values.NativeFunction,
   Goccia.Values.NativeFunctionCallback,
   Goccia.Values.PromiseValue,
@@ -747,17 +748,25 @@ begin
       Result.MeanMs := MeanRounds[FilteredStart + (FilteredCount div 2)];
       Result.MinOpsPerSec := OpsRounds[FilteredStart];
       Result.MaxOpsPerSec := OpsRounds[FilteredEnd];
-    finally
       if Assigned(GC) then
         GC.Enabled := WasGCEnabled;
       if Assigned(GeneratorIterator) then
       begin
         StartNanoseconds := GetNanoseconds;
-        GeneratorIterator.Close;
+        CloseIterator(GeneratorIterator);
         WaitForFetchIdle;
         Result.TeardownMs := (GetNanoseconds - StartNanoseconds) / 1000000;
         GeneratorIterator := nil;
       end;
+    except
+      if Assigned(GC) then
+        GC.Enabled := WasGCEnabled;
+      if Assigned(GeneratorIterator) then
+      begin
+        CloseIteratorPreservingError(GeneratorIterator);
+        GeneratorIterator := nil;
+      end;
+      raise;
     end;
   finally
     RunArgs.Free;
@@ -796,22 +805,29 @@ begin
   ActiveRoots.Add(ABenchCase.GeneratorFunction);
   RunArgs := TGocciaArgumentsCollection.CreateWithCapacity(1);
   try
-    if Assigned(ABenchCase.GeneratorFunction) then
-      RunFunction := CreateRunFunctionFromGenerator(ABenchCase, ActiveRoots,
-        GeneratorIterator);
+    try
+      if Assigned(ABenchCase.GeneratorFunction) then
+        RunFunction := CreateRunFunctionFromGenerator(ABenchCase, ActiveRoots,
+          GeneratorIterator);
 
-    InvokeBenchmarkFunction(RunFunction, SetupResult, RunArgs);
-    WaitForFetchIdle;
-
-    if Assigned(GeneratorIterator) then
-    begin
-      GeneratorIterator.Close;
+      InvokeBenchmarkFunction(RunFunction, SetupResult, RunArgs);
       WaitForFetchIdle;
-      GeneratorIterator := nil;
+
+      if Assigned(GeneratorIterator) then
+      begin
+        CloseIterator(GeneratorIterator);
+        WaitForFetchIdle;
+        GeneratorIterator := nil;
+      end;
+    except
+      if Assigned(GeneratorIterator) then
+      begin
+        CloseIteratorPreservingError(GeneratorIterator);
+        GeneratorIterator := nil;
+      end;
+      raise;
     end;
   finally
-    if Assigned(GeneratorIterator) then
-      GeneratorIterator.Close;
     RunArgs.Free;
     ActiveRoots.Clear;
   end;

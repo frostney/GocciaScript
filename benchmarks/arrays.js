@@ -66,10 +66,12 @@ group("array transformation", () => {
 });
 
 group("nested callbacks", () => {
-  bench("map inside map (5x5)", () => {
-    const matrix = [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11, 12, 13, 14, 15], [16, 17, 18, 19, 20], [21, 22, 23, 24, 25]];
-    const result = matrix.map((row) => row.map((x) => x * 2));
-  });
+  bench("map inside map (5x5)", ({ *setup() {
+    const matrix = (() => [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11, 12, 13, 14, 15], [16, 17, 18, 19, 20], [21, 22, 23, 24, 25]])();
+    yield () => {
+      const result = matrix.map((row) => row.map((x) => x * 2));
+    };
+  } }).setup);
 
   bench("filter inside map (5x10)", ({ *setup() {
     const data = (() => Array.from({ length: 5 }, (_, i) => Array.from({ length: 10 }, (_, j) => i * 10 + j)))();
