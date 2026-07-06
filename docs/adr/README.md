@@ -97,3 +97,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0085 — Defer broad Annex B support before 1.0](0085-defer-annex-b-before-1-0.md)
 - [0086 — Parser errors for unsupported default syntax](0086-parser-errors-for-unsupported-default-syntax.md)
 - [0087 — AWFY cross-engine benchmark methodology](0087-awfy-cross-engine-benchmark-methodology.md)
+- [0088 — Reject broader property inline caches without AWFY transfer](0088-reject-broader-property-inline-caches.md)
