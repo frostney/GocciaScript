@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "webTooling": {
+    "repository": "https://github.com/v8/web-tooling-benchmark",
+    "ref": "master",
+    "commit": "4a12828c6a1eed02a70c011bd080445dd319a05f",
+    "workloads": [
+      "acorn",
+      "babel",
+      "babel-minify",
+      "babylon",
+      "buble",
+      "chai",
+      "coffeescript",
+      "espree",
+      "esprima",
+      "jshint",
+      "lebab",
+      "postcss",
+      "prepack",
+      "prettier",
+      "source-map",
+      "terser",
+      "typescript",
+      "uglify-js"
+    ]
+  },
+  "driver": {
+    "script": "scripts/web-tooling-driver.js",
+    "version": 1
+  },
+  "ciReport": {
+    "repetitions": 1,
+    "workloads": [
+      "acorn",
+      "babel",
+      "babel-minify",
+      "babylon",
+      "buble",
+      "chai",
+      "coffeescript",
+      "espree",
+      "esprima",
+      "jshint",
+      "lebab",
+      "postcss",
+      "prepack",
+      "prettier",
+      "source-map",
+      "terser",
+      "typescript",
+      "uglify-js"
+    ]
+  }
+}
