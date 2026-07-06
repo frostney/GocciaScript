@@ -4,15 +4,15 @@
 
 ## Executive Summary
 
-- **`suite`/`bench` API** — `bench(name, { setup?, run, teardown? })` with auto-calibration, warmup, and IQR outlier filtering
+- **Module-only benchmark API** — Import `bench`, `group`, `run`, `summary`, and `boxplot` from `"goccia:microbench"`; no benchmark helpers are ambient globals
 - **Five output formats** — `console` (default), `text`, `csv`, `json`, `compact-json`; configurable via `--format` and `--output`
 - **Profiler-backed runs** — Bytecode benchmark runs can emit opcode/function profiles with `--profile`, including deterministic single-run capture
 - **CI integration** — PR workflow posts benchmark comparison comments with range-overlap classification; main CI retains deterministic profile reports
 - **Environment tuning** — Calibration time, warmup iterations, and measurement rounds configurable via environment variables
-- **Cross-engine AWFY lane** — `scripts/awfy-driver.js` runs pinned AWFY and `perf/probes/` diagnostics under GocciaScript, QuickJS, and Node without mixing them into the `suite`/`bench` corpus
+- **Cross-engine AWFY lane** — `scripts/awfy-driver.js` runs pinned AWFY and `perf/probes/` diagnostics under GocciaScript, QuickJS, and Node without mixing them into the benchmark-runner corpus
 - **Web Tooling Goccia lane** — `scripts/web-tooling-driver.js` runs every pinned V8 Web Tooling workload under GocciaScript only and publishes retained JSON artifacts
 
-GocciaScript includes a benchmark runner for measuring execution performance. Benchmarks live in the `benchmarks/` directory and use a `suite`/`bench` API.
+GocciaScript includes a benchmark runner for measuring execution performance. Benchmarks live in the `benchmarks/` directory and import the benchmark API from `"goccia:microbench"`.
 
 ## Running Benchmarks
 
@@ -27,8 +27,8 @@ GocciaScript includes a benchmark runner for measuring execution performance. Be
 ./build/GocciaBenchmarkRunner benchmarks/fibonacci.js
 
 # Run a benchmark from stdin
-printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner
-printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner - --mode=bytecode
+printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner --source-type=module
+printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner - --source-type=module --mode=bytecode
 
 # Run benchmarks with 2 parallel workers (default: CPU count)
 ./build/GocciaBenchmarkRunner benchmarks --jobs=2
@@ -54,7 +54,7 @@ The GocciaBenchmarkRunner supports five output formats via the `--format` option
 
 | Format | Description |
 |--------|-------------|
-| `console` (default) | Pretty-printed columnar output with suite headers, variance, setup/teardown times, and summary |
+| `console` (default) | Pretty-printed columnar output with group headers, variance, setup/teardown times, and summary |
 | `text` | Compact one-line-per-benchmark format with optional `setup=Xms teardown=Xms` suffixes |
 | `csv` | Standard CSV with header row (`file,suite,name,ops_per_sec,variance_percentage,mean_ms,iterations,setup_ms,teardown_ms,error`) |
 | `json` | Structured JSON with the common CLI envelope (`build`, aggregate `output`, `timing`, `memory`, `workers`) and a `files[]` array containing each `fileName`, per-file timing, and nested `benchmarks[]`, including `opsPerSec`, `variancePercentage`, `minOpsPerSec`, `maxOpsPerSec`, `setupMs`, and `teardownMs` |
@@ -84,10 +84,10 @@ allocation attribution:
 
 For deterministic CI signals, add `--profile-deterministic`. This skips warmup,
 calibration, and repeated measurement rounds, then runs each registered benchmark
-once through the existing `setup`/`run`/`teardown` path. If `--profile` is not
-provided, it defaults to `--profile=all`. The benchmark report remains
-structurally valid, but throughput fields are placeholders; use the profile JSON
-for deterministic comparisons.
+once through the same setup/measurement/teardown lifecycle used by normal
+benchmark runs. If `--profile` is not provided, it defaults to `--profile=all`.
+The benchmark report remains structurally valid, but throughput fields are
+placeholders; use the profile JSON for deterministic comparisons.
 
 ```bash
 ./build/GocciaBenchmarkRunner benchmarks/numbers.js \
@@ -120,48 +120,93 @@ GOCCIA_BENCH_CALIBRATION_MS=500 GOCCIA_BENCH_ROUNDS=15 ./build/GocciaBenchmarkRu
 
 ## Writing Benchmarks
 
-The `bench()` function takes a name and an options object with `setup`, `run`, and `teardown` fields:
+Import benchmark helpers from `"goccia:microbench"`:
 
 ```javascript
-suite("collections", () => {
-  bench("Set iteration", {
-    setup: () => new Set(Array.from({ length: 50 }, (_, i) => i)),
-    run: (s) => {
-      let sum = 0;
-      s.forEach((v) => { sum = sum + v; });
-    },
-    teardown: (s) => { s.clear(); },
-  });
+import { bench, group, summary, boxplot } from "goccia:microbench";
 
-  bench("simple computation", {
-    run: () => {
-      const result = 1 + 2 + 3;
+group("collections", () => {
+  const setIteration = {
+    *run() {
+      const set = new Set(Array.from({ length: 50 }, (_, i) => i));
+      try {
+        yield () => {
+          let sum = 0;
+          set.forEach((v) => { sum = sum + v; });
+        };
+      } finally {
+        set.clear();
+      }
     },
+  }.run;
+
+  bench("Set iteration", setIteration);
+
+  bench("simple computation", () => {
+    const result = 1 + 2 + 3;
+  });
+});
+
+summary(() => {
+  boxplot(() => {
+    group("numbers", () => {
+      bench("addition", () => 1 + 1);
+    });
   });
 });
 ```
 
 ### API
 
-- **`setup`** (optional): Called once before warmup. Its return value is passed as the first argument to `run` and `teardown`, even when that value is `undefined`.
-- **`run`** (required): The timed benchmark function. Called many times during warmup, calibration, and measurement.
-- **`teardown`** (optional): Called once after all measurement rounds complete. Receives the setup return value.
-- All three phases are independently timed and reported as `setupMs`, `teardownMs`, and the main `opsPerSec`/`meanMs` metrics.
+The primary benchmark form is `bench(name, fn)`, where `fn` is called many times during measurement. Generator callbacks provide setup and teardown without including that setup cost in the measured body:
+
+```javascript
+import { bench, group } from "goccia:microbench";
+
+group("collections", () => {
+  const setIteration = {
+    *run() {
+      const set = new Set(Array.from({ length: 50 }, (_, i) => i));
+      try {
+        yield () => {
+          let sum = 0;
+          set.forEach((v) => { sum = sum + v; });
+        };
+      } finally {
+        set.clear();
+      }
+    },
+  }.run;
+
+  bench("Set iteration", setIteration);
+
+  bench("simple computation", () => {
+    const result = 1 + 2 + 3;
+  });
+});
+```
+
+- Code before the generator's first `yield` is setup.
+- The yielded function is the timed benchmark body.
+- Cleanup that must run during generator close belongs in a `finally` block around the `yield`.
+- Setup and teardown are independently timed and reported as `setupMs`, `teardownMs`, and the main `opsPerSec`/`meanMs` metrics.
+- `summary(fn)` and `boxplot(fn)` are accepted output-shaping wrappers. Rich percentile and chart rendering belongs to issue #855, so today they should be treated as registration wrappers rather than a promise of additional report fields.
+- `run(opts?)` executes the currently registered benchmarks from script code. `GocciaBenchmarkRunner` also auto-runs registered benchmarks after loading a file, but a script-callable `run()` consumes the pending registry so the runner does not measure the same benchmarks twice.
 
 ### Data flow
 
 ```text
-setup() → [return value] → warmup(run × N) → calibrate(run × N) → measure(run × N × rounds) → teardown()
-   ↓                                                                    ↓                          ↓
- setupMs                                                        opsPerSec, meanMs, variance   teardownMs
+setup before yield → yielded run function → warmup/calibrate/measure → close generator
+        ↓                         ↓                                      ↓
+     setupMs             opsPerSec, meanMs, variance                 teardownMs
 ```
 
 ### Guidelines
 
-- Use `setup` to create data structures that the `run` function operates on. This isolates allocation cost from the operation being measured.
-- Use `teardown` for cleanup when the setup creates resources that should be explicitly released.
-- When the benchmark IS the creation (e.g., measuring `Array.from` speed), put everything in `run` with no `setup`.
-- The `run` function can be `async` for benchmarking async/await operations.
+- Use generator setup to create data structures that the yielded benchmark function operates on. This isolates allocation cost from the operation being measured.
+- Put cleanup in a generator `finally` block when setup creates resources that should be explicitly released.
+- When the benchmark IS the creation (e.g., measuring `Array.from` speed), use a plain benchmark function with no setup.
+- The benchmark function can be `async` for benchmarking async/await operations.
 
 ## How the GocciaBenchmarkRunner Works
 
@@ -170,15 +215,15 @@ The `GocciaBenchmarkRunner` program:
 1. Parses CLI inputs (`--format`, `--output`, and the benchmark path or stdin marker).
 2. Scans the provided path for `.js` files.
 3. For each file, creates a `TGocciaEngine`, attaches `TGocciaRuntimeCore`, applies the loader runtime profile, and installs the benchmark runtime extension.
-4. Loads and executes the source so benchmark files register their suites and benchmarks without running measurements from inside the script body.
+4. Loads and executes the source so benchmark files import `"goccia:microbench"` and register groups and benchmarks.
 5. Measures lex, parse, compile (bytecode mode), script execution, and benchmark execution phases separately with nanosecond precision via `TimingUtils.GetNanoseconds`.
-6. `suite()` calls execute immediately, registering `bench()` entries.
-7. After the script finishes, the runner invokes `runBenchmarks()` from Pascal to run each registered benchmark:
-   - **Setup:** Calls the `setup` function once (timed), caches the return value.
-   - **Warmup:** Configurable iterations to stabilize (default 5). The setup return value is passed to each call.
+6. `group()` calls execute immediately, registering nested `bench()` entries.
+7. After the script finishes, the runner auto-runs any benchmarks that were registered but not already consumed by a script-callable `run()`:
+   - **Setup:** Advances generator callbacks to their first `yield` (timed) when a benchmark uses generator-style setup.
+   - **Warmup:** Configurable iterations to stabilize (default 5). The yielded function or plain benchmark function is called for each iteration.
    - **Calibrate:** Scales batch size until it runs for at least the target calibration time (default 200ms). Uses nanosecond-resolution timing via `TimingUtils` (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows).
    - **Measure:** Runs multiple measurement rounds (default 7). GC is disabled during measurement for identical behavior in both interpreter and bytecode modes. Between rounds, `CollectYoung` reclaims measurement garbage efficiently (pre-marks old objects, only traverses new allocations). After all rounds, IQR-based outlier filtering removes noise spikes before computing the coefficient of variation (CV%) and median values.
-   - **Teardown:** Calls the `teardown` function once (timed) after measurement completes.
+   - **Teardown:** Closes generator callbacks after measurement (timed), running `finally` cleanup when present.
 8. After each file completes, `GC.Collect` runs to reclaim memory between script executions.
 9. Collects all results into a `TBenchmarkReporter`, which renders the chosen output format.
 10. After rendering, checks for failures via `TBenchmarkReporter.HasFailures`. If any benchmark entry has a non-empty `Error` field or zero `OpsPerSec`/`MeanMs`, the process exits with code 1.
@@ -196,9 +241,11 @@ The non-zero exit code ensures CI pipelines fail when benchmarks crash or produc
 
 | Function | Description |
 |----------|-------------|
-| `suite(name, fn)` | Group benchmarks (like `describe` in tests). Executes `fn` immediately. |
-| `bench(name, { setup?, run, teardown? })` | Register a benchmark with optional setup/teardown. `run` is called many times during measurement; `setup` and `teardown` run once each and are independently timed. |
-| `runBenchmarks()` | Execute all registered benchmarks and return results. GocciaBenchmarkRunner calls this automatically after the benchmark file finishes registering suites. |
+| `bench(name, fn)` | Register a benchmark function. `fn` is called many times during measurement; generator callbacks use pre-yield setup, a yielded measured function, and `finally` cleanup on close. |
+| `group(name, fn)` | Group benchmarks (like `describe` in tests). Executes `fn` immediately. |
+| `run(opts?)` | Execute registered benchmarks from script code and return results. Calling `run()` prevents the runner's post-load auto-run from measuring the same registry again. |
+| `summary(fn)` | Accepted registration wrapper for summary-shaped output. Richer summary reporting is tracked in #855. |
+| `boxplot(fn)` | Accepted registration wrapper for boxplot-shaped output. Richer chart output is tracked in #855. |
 
 ## Available Benchmarks
 
@@ -302,10 +349,10 @@ The PR workflow (`.github/workflows/pr.yml`) builds the PR's base commit (`main`
 ## AWFY Cross-Engine Lane
 
 The `benchmarks/` directory is reserved for `GocciaBenchmarkRunner` inputs that
-register `suite()` / `bench()` cases. Cross-engine AWFY and diagnostic
+import `"goccia:microbench"` and register `group()` / `bench()` cases. Cross-engine AWFY and diagnostic
 probes live under `perf/` because they are plain shell-portable scripts driven by
 Node tooling, not benchmark-runner files. This keeps CI's recursive benchmark
-scan from treating diagnostic probes as missing `suite()` files.
+scan from treating diagnostic probes as missing benchmark-runner inputs.
 
 Use `scripts/awfy-driver.js` for #856/#862 investigation:
 

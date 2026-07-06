@@ -1,3 +1,4 @@
 {
+  "source-type": "module",
   "compat-for-in-loop": true
 }

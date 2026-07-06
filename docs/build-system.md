@@ -86,7 +86,7 @@ then diagnose the reported source line only if the same target still fails.
 ```bash
 ./build.pas loader && ./build/GocciaScriptLoader ./example.js
 printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader
-printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner
+printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner --source-type=module
 ```
 
 Both loaders are silent about the script's last evaluated value unless you pass `--print`. For local dev that's fine; for CI scripts and shell pipelines that previously parsed `Result: <value>` from the loader's stdout, pass `--print` and parse the bare value on the line after the timing banner — or switch to `--output=json` and read the `result` field, which is always populated regardless of `--print`.
@@ -214,7 +214,7 @@ printf '1;\n---\n2;\n---\n3;\n' | ./build/GocciaScriptLoader --multifile
 
 # Run benchmarks via bytecode VM
 ./build/GocciaBenchmarkRunner benchmarks --mode=bytecode
-printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner - --mode=bytecode
+printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner - --source-type=module --mode=bytecode
 ```
 
 ### `--multifile` (split a single input on `---` separators)

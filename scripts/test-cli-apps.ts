@@ -35,6 +35,16 @@ import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
 
+const MICROBENCH_MODULE_IMPORT = 'import { bench, group } from "goccia:microbench";';
+
+function microbenchModule(lines: string[]): string {
+  return [MICROBENCH_MODULE_IMPORT, ...lines, ""].join("\n");
+}
+
+function microbenchModuleWithExports(exports: string, lines: string[]): string {
+  return [`import { ${exports} } from "goccia:microbench";`, ...lines, ""].join("\n");
+}
+
 async function withFetchTestServer(
   callback: (baseUrl: string) => void | Promise<void>,
 ): Promise<void> {
@@ -134,6 +144,13 @@ function assertCommonJsonFile(file: any, label: string, fileName: string, ok = t
   if (typeof file?.timing?.total_ns !== "number") throw new Error(`${label} timing.total_ns should be present`);
   if ("total_ms" in file.timing) throw new Error(`${label} timing should not include millisecond fields`);
   if (ok && file.error !== null) throw new Error(`${label} error should be null`);
+}
+
+function assertPreservesBodyFailure(outputPath: string, label: string): void {
+  const json = JSON.parse(readFileSync(outputPath, "utf-8"));
+  const message = json.files?.[0]?.benchmarks?.[0]?.error;
+  if (typeof message !== "string" || !message.includes("body failure") || message.includes("cleanup failure"))
+    throw new Error(`${label} should preserve body failure, got ${JSON.stringify(message)}`);
 }
 
 // ============================================================================
@@ -2088,13 +2105,17 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
   } as Record<string, string>;
 
   try {
-    const stdinSource = 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n';
+    const stdinSource = microbenchModule([
+      'group("stdin", () => {',
+      '  bench("sum", () => 1 + 1);',
+      "});",
+    ]);
 
     console.log("BenchmarkRunner: file benchmark (interpreted)...");
     const fileOut = join(tmp, "file-interp.json");
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "benchmarks/fibonacci.js", "--no-progress", "--format=json", `--output=${fileOut}`],
+        [resolve(BENCHRUNNER), "benchmarks/fibonacci.js", "--source-type=module", "--no-progress", "--format=json", `--output=${fileOut}`],
         { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
       );
       if (proc.exitCode !== 0) throw new Error(`File benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
@@ -2121,7 +2142,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     const fileBcOut = join(tmp, "file-bc.json");
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "benchmarks/fibonacci.js", "--no-progress", "--format=json", `--output=${fileBcOut}`, "--mode=bytecode"],
+        [resolve(BENCHRUNNER), "benchmarks/fibonacci.js", "--source-type=module", "--no-progress", "--format=json", `--output=${fileBcOut}`, "--mode=bytecode"],
         { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
       );
       if (proc.exitCode !== 0) throw new Error(`Bytecode file benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
@@ -2142,29 +2163,69 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       if (valid.length === 0) throw new Error("Bytecode benchmark JSON should contain at least one valid result");
     }
 
+    console.log("BenchmarkRunner: microbench API is module-only and accepts wrappers...");
+    const moduleOnlyOut = join(tmp, "module-only.json");
+    {
+      const moduleOnlySource = microbenchModuleWithExports(
+        "bench as microBench, group as microGroup, summary, boxplot",
+        [
+          'if (typeof bench !== "undefined") throw new Error("ambient bench should not exist");',
+          'if (typeof group !== "undefined") throw new Error("ambient group should not exist");',
+          'if (typeof suite !== "undefined") throw new Error("ambient suite should not exist");',
+          'if (typeof runBenchmarks !== "undefined") throw new Error("ambient runBenchmarks should not exist");',
+          "summary(() => {",
+          "  boxplot(() => {",
+          '    microGroup("module-only", () => {',
+          '      microBench("sum", () => 1 + 1);',
+          "    });",
+          "  });",
+          "});",
+        ],
+      );
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${moduleOnlyOut}`],
+        {
+          stdin: new TextEncoder().encode(moduleOnlySource),
+          stdout: "pipe",
+          stderr: "pipe",
+          env: benchEnv,
+          timeout: 120_000,
+        },
+      );
+      if (proc.exitCode !== 0) throw new Error(`Module-only microbench API exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+    }
+    {
+      const json = JSON.parse(readFileSync(moduleOnlyOut, "utf-8"));
+      if (json.files?.[0]?.benchmarks?.[0]?.name !== "sum")
+        throw new Error(`Module-only microbench JSON should contain benchmark name "sum", got: ${JSON.stringify(json.files?.[0]?.benchmarks)}`);
+      if (json.totalBenchmarks !== 1)
+        throw new Error(`Module-only microbench JSON should contain totalBenchmarks: 1, got ${json.totalBenchmarks}`);
+    }
+
     console.log("BenchmarkRunner: deterministic profile mode...");
     const profileBench = join(tmp, "profile-deterministic.js");
     const profileOut = join(tmp, "profile.json");
-    writeFileSync(profileBench, [
+    writeFileSync(profileBench, microbenchModule([
       'let count = 0;',
-      'suite("profile", () => {',
-      '  bench("runs once", {',
-      '    setup: () => ({ value: 1 }),',
-      '    run: async (state) => {',
-      '      count = count + await Promise.resolve(state.value);',
-      '    },',
-      '    teardown: () => {',
+      "const profiledBenchmark = {",
+      "  *run() {",
+      "    const state = { value: 1 };",
+      "    yield async () => {",
+      "      count = count + await Promise.resolve(state.value);",
+      "    };",
       '      if (count !== 1) { throw new Error("expected one deterministic run, got " + count); }',
-      '    },',
-      '  });',
-      '});',
-      '',
-    ].join("\n"));
+      "  },",
+      "}.run;",
+      'group("profile", () => {',
+      '  bench("runs once", profiledBenchmark);',
+      "});",
+    ]));
     {
       const proc = Bun.spawnSync(
         [
           resolve(BENCHRUNNER),
           profileBench,
+          "--source-type=module",
           "--profile-deterministic",
           "--profile=all",
           `--profile-output=${profileOut}`,
@@ -2188,6 +2249,42 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       if (!profile.functions.some((fn: Record<string, unknown>) => typeof fn.allocations === "number"))
         throw new Error("Deterministic profile should include function allocation counts");
     }
+    const scriptRunProfileBench = join(tmp, "profile-deterministic-script-run.js");
+    const scriptRunProfileOut = join(tmp, "profile-script-run.json");
+    writeFileSync(scriptRunProfileBench, microbenchModuleWithExports("bench, group, run", [
+      "let count = 0;",
+      'group("profile-script-run", () => {',
+      '  bench("reruns deterministically", () => { count++; });',
+      "});",
+      "run();",
+    ]));
+    {
+      const proc = Bun.spawnSync(
+        [
+          resolve(BENCHRUNNER),
+          scriptRunProfileBench,
+          "--source-type=module",
+          "--profile-deterministic",
+          "--profile=all",
+          `--profile-output=${scriptRunProfileOut}`,
+          "--no-progress",
+          "--format=compact-json",
+        ],
+        { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
+      );
+      if (proc.exitCode !== 0) throw new Error(`Deterministic script-run profile benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const report = JSON.parse(proc.stdout.toString());
+      const bench = report.files?.[0]?.benchmarks?.[0];
+      if (bench?.iterations !== 1)
+        throw new Error(`Deterministic script-run profile report should record one iteration, got ${bench?.iterations}`);
+    }
+    {
+      const profile = JSON.parse(readFileSync(scriptRunProfileOut, "utf-8"));
+      if (!Array.isArray(profile.opcodes) || profile.opcodes.length === 0)
+        throw new Error("Deterministic script-run profile should include opcode counts");
+      if (!Array.isArray(profile.functions) || profile.functions.length === 0)
+        throw new Error("Deterministic script-run profile should include function counts");
+    }
 
     console.log("BenchmarkRunner: file benchmark JSON output...");
     if (!fileJson.includes('"totalBenchmarks":')) throw new Error('JSON should contain totalBenchmarks');
@@ -2196,11 +2293,11 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     const benchA = join(tmp, "bench-a.js");
     const benchB = join(tmp, "bench-b.js");
     const multiBenchOut = join(tmp, "bench-multi.json");
-    writeFileSync(benchA, 'suite("a", () => { bench("one", { run: () => 1 + 1 }); });\n');
-    writeFileSync(benchB, 'suite("b", () => { bench("two", { run: () => 2 + 2 }); });\n');
+    writeFileSync(benchA, microbenchModule(['group("a", () => { bench("one", () => 1 + 1); });']));
+    writeFileSync(benchB, microbenchModule(['group("b", () => { bench("two", () => 2 + 2); });']));
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), benchA, benchB, "--no-progress", "--jobs=2", "--format=json", `--output=${multiBenchOut}`],
+        [resolve(BENCHRUNNER), benchA, benchB, "--source-type=module", "--no-progress", "--jobs=2", "--format=json", `--output=${multiBenchOut}`],
         { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
       );
       if (proc.exitCode !== 0) throw new Error(`Multi-file benchmark JSON exit ${proc.exitCode}: ${proc.stderr.toString()}`);
@@ -2230,7 +2327,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     const compactBenchOut = join(tmp, "bench-compact.json");
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), benchA, benchB, "--no-progress", "--jobs=2", "--format=compact-json", `--output=${compactBenchOut}`],
+        [resolve(BENCHRUNNER), benchA, benchB, "--source-type=module", "--no-progress", "--jobs=2", "--format=compact-json", `--output=${compactBenchOut}`],
         { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
       );
       if (proc.exitCode !== 0) throw new Error(`Benchmark --format=compact-json exit ${proc.exitCode}: ${proc.stderr.toString()}`);
@@ -2259,10 +2356,10 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     console.log("BenchmarkRunner: benchmark failure JSON output...");
     const failBench = join(tmp, "benchmark-fail.js");
     const failOut = join(tmp, "benchmark-fail.json");
-    writeFileSync(failBench, 'suite("fail", () => { bench("boom", { run: () => { throw new Error("boom"); } }); });\n');
+    writeFileSync(failBench, microbenchModule(['group("fail", () => { bench("boom", () => { throw new Error("boom"); }); });']));
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), failBench, "--no-progress", "--format=json", `--output=${failOut}`],
+        [resolve(BENCHRUNNER), failBench, "--source-type=module", "--no-progress", "--format=json", `--output=${failOut}`],
         { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
       );
       if (proc.exitCode === 0) throw new Error("Failing benchmark JSON export should fail");
@@ -2274,17 +2371,63 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       if (file?.ok !== false) throw new Error(`Failing benchmark file should mark ok=false, got ${file?.ok}`);
       if (typeof file?.error?.message !== "string") throw new Error("Failing benchmark file should include shared error object");
     }
+    console.log("BenchmarkRunner: generator cleanup preserves original benchmark failure...");
+    const cleanupFailBench = join(tmp, "benchmark-cleanup-fail.js");
+    const cleanupFailOut = join(tmp, "benchmark-cleanup-fail.json");
+    writeFileSync(cleanupFailBench, microbenchModule([
+      'group("cleanup", () => {',
+      '  bench("body error wins", function* () {',
+      "    try {",
+      '      yield () => { throw new Error("body failure"); };',
+      "    } finally {",
+      '      throw new Error("cleanup failure");',
+      "    }",
+      "  });",
+      "});",
+    ]));
+    {
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), cleanupFailBench, "--source-type=module", "--no-progress", "--format=json", `--output=${cleanupFailOut}`],
+        { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
+      );
+      if (proc.exitCode === 0) throw new Error("Generator cleanup failure preservation benchmark should fail");
+    }
+    {
+      assertPreservesBodyFailure(cleanupFailOut, "Generator cleanup");
+    }
+    console.log("BenchmarkRunner: deterministic generator cleanup preserves original benchmark failure...");
+    const deterministicCleanupFailOut = join(tmp, "benchmark-cleanup-fail-deterministic.json");
+    const deterministicCleanupProfileOut = join(tmp, "benchmark-cleanup-fail-profile.json");
+    {
+      const proc = Bun.spawnSync(
+        [
+          resolve(BENCHRUNNER),
+          cleanupFailBench,
+          "--source-type=module",
+          "--profile-deterministic",
+          "--profile=all",
+          `--profile-output=${deterministicCleanupProfileOut}`,
+          "--no-progress",
+          "--format=json",
+          `--output=${deterministicCleanupFailOut}`,
+        ],
+        { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
+      );
+      if (proc.exitCode === 0) throw new Error("Deterministic generator cleanup failure preservation benchmark should fail");
+    }
+    {
+      assertPreservesBodyFailure(deterministicCleanupFailOut, "Deterministic generator cleanup");
+    }
 
     console.log("BenchmarkRunner: callback timeout is enforced...");
     {
-      const timeoutSource = [
-        'suite("limit", () => {',
-        '  bench("loop", { run: () => { while (true) {} } });',
+      const timeoutSource = microbenchModule([
+        'group("limit", () => {',
+        '  bench("loop", () => { while (true) {} });',
         "});",
-        "",
-      ].join("\n");
+      ]);
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--no-progress", "--timeout=1"],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--timeout=1"],
         {
           stdin: new TextEncoder().encode(timeoutSource),
           stdout: "pipe",
@@ -2300,7 +2443,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     const stdinOutPath = join(tmp, "stdin-interp.json");
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--no-progress", "--format=json", `--output=${stdinOutPath}`],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${stdinOutPath}`],
         {
           stdin: new TextEncoder().encode(stdinSource),
           stdout: "pipe",
@@ -2318,19 +2461,26 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       if (json.totalBenchmarks !== 1) throw new Error(`Stdin JSON should contain totalBenchmarks: 1, got ${json.totalBenchmarks}`);
     }
 
-    console.log("BenchmarkRunner: registered callbacks survive repeated runs...");
+    console.log("BenchmarkRunner: script-callable run avoids auto-run double measurement...");
     const repeatedRunOutPath = join(tmp, "repeated-run.json");
     {
-      const repeatedRunSource = [
-        'suite("twice", () => {',
-        '  bench("sum", { run: () => 1 + 1 });',
+      const repeatedRunSource = microbenchModuleWithExports("bench, group, run", [
+        "let setupCount = 0;",
+        "const failsIfMeasuredTwice = {",
+        "  *run() {",
+        "    setupCount++;",
+        '    if (setupCount > 1) throw new Error("benchmark was measured more than once");',
+        "    yield () => 1 + 1;",
+        "  },",
+        "}.run;",
+        'group("twice", () => {',
+        '  bench("sum", failsIfMeasuredTwice);',
         "});",
-        "runBenchmarks();",
+        "run();",
         "Goccia.gc();",
-        "",
-      ].join("\n");
+      ]);
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--no-progress", "--format=json", `--output=${repeatedRunOutPath}`],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${repeatedRunOutPath}`],
         {
           stdin: new TextEncoder().encode(repeatedRunSource),
           stdout: "pipe",
@@ -2351,7 +2501,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     const stdinBcOutPath = join(tmp, "stdin-bc.json");
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--no-progress", "--format=json", `--output=${stdinBcOutPath}`, "--mode=bytecode"],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${stdinBcOutPath}`, "--mode=bytecode"],
         {
           stdin: new TextEncoder().encode(stdinSource),
           stdout: "pipe",
@@ -2372,21 +2522,18 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     console.log("BenchmarkRunner: async generator bytecode benchmark...");
     const asyncGeneratorBcOutPath = join(tmp, "async-generator-bc.json");
     {
-      const asyncGeneratorSource = [
-        'suite("async generator", () => {',
+      const asyncGeneratorSource = microbenchModule([
+        'group("async generator", () => {',
         "  const source = { async *values() { yield 1; yield 2; } };",
-        '  bench("consume", {',
-        "    run: async () => {",
+        '  bench("consume", async () => {',
         "      let sum = 0;",
         "      for await (const value of source.values()) sum = sum + value;",
         "      return sum;",
-        "    },",
         "  });",
         "});",
-        "",
-      ].join("\n");
+      ]);
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--no-progress", "--format=json", `--output=${asyncGeneratorBcOutPath}`, "--mode=bytecode"],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${asyncGeneratorBcOutPath}`, "--mode=bytecode"],
         {
           stdin: new TextEncoder().encode(asyncGeneratorSource),
           stdout: "pipe",
@@ -2410,7 +2557,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     const emptyBcOutPath = join(tmp, "empty-bc.json");
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--no-progress", "--format=json", `--output=${emptyBcOutPath}`, "--mode=bytecode"],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${emptyBcOutPath}`, "--mode=bytecode"],
         {
           stdin: new TextEncoder().encode("const value = 1;\n"),
           stdout: "pipe",
@@ -3377,11 +3524,11 @@ console.log("BenchmarkRunner: --multifile produces multiple file entries...");
     const file = join(tmp, "bench.js");
     writeFileSync(
       file,
-      'suite("A", () => { bench("a", { run: () => 1 + 1, iterations: 10, warmup: 0, repeats: 1 }); });\n' +
+      microbenchModule(['group("A", () => { bench("a", () => 1 + 1); });']) +
       "---\n" +
-      'suite("B", () => { bench("b", { run: () => 2 + 2, iterations: 10, warmup: 0, repeats: 1 }); });\n',
+      microbenchModule(['group("B", () => { bench("b", () => 2 + 2); });']),
     );
-    const proc = Bun.spawnSync([BENCHRUNNER, "--multifile", "--no-progress", "--format=json", file], {
+    const proc = Bun.spawnSync([BENCHRUNNER, "--multifile", "--source-type=module", "--no-progress", "--format=json", file], {
       stdout: "pipe",
       stderr: "pipe",
       env: benchEnv,
