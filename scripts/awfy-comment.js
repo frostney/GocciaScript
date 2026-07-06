@@ -25,8 +25,14 @@ function plural(count, singular) {
 
 function targetStatus(target) {
   const stats = target.summary?.engineStats || {};
+  const expectedEngines = target.kind === 'awfy' ? COMMENT_ENGINES : Object.keys(stats);
   const bad = [];
-  for (const [engine, engineStats] of Object.entries(stats)) {
+  for (const engine of expectedEngines) {
+    const engineStats = stats[engine];
+    if (!engineStats) {
+      bad.push(engine);
+      continue;
+    }
     const ok = engineStats.ok || 0;
     const failures =
       (engineStats.timeout || 0) +

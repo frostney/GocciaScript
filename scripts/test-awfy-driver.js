@@ -188,6 +188,32 @@ console.log('awfy-driver: PR comment markdown...');
   assert(!comment.includes('diagnostic probe'), 'comment omits zero diagnostic probe noise');
   assert(!comment.includes('Pinned corpus:'), 'comment omits pin boilerplate');
   assert(!comment.includes('Generated:'), 'comment omits generated timestamp boilerplate');
+
+  const missingEngineComment = buildAwfyReportComment({
+    metadata: {
+      options: { repetitions: 5 },
+      engines: [
+        { name: 'goccia', version: '' },
+        { name: 'qjs', version: 'QuickJS version 2026-06-04' },
+        { name: 'node', version: 'v24.0.1' },
+      ],
+    },
+    targets: [
+      {
+        name: 'NBody',
+        kind: 'awfy',
+        summary: {
+          checksumAgreement: { ok: true, checksums: ['verified'] },
+          engineStats: {
+            goccia: { ok: 5, rawCount: 5, medianMicros: 1000 },
+            qjs: { ok: 5, rawCount: 5, medianMicros: 500 },
+          },
+        },
+      },
+    ],
+    geomeanRatios: {},
+  });
+  assert(missingEngineComment.includes('| NBody | engine issue: node | 1.00ms | 0.50ms | - |'), 'comment flags missing AWFY engine stats');
 }
 
 console.log('awfy-ci-report: manifest helpers...');

@@ -11,10 +11,10 @@ harness directly. Upstream AWFY remains the source of benchmark semantics and is
 recorded by repository SHA in `perf/awfy/manifest.json`, with weekly/manual
 pin-refresh PRs handled by `.github/workflows/awfy-bump.yml`. Each selected
 benchmark is bundled into a per-benchmark shell-portable entrypoint with a tiny
-`require` adapter and a `Date.now`-based timer. This keeps the benchmark source
-comparable across Node, QuickJS, and GocciaScript while avoiding Node-only
-globals such as `require`, `process.argv`, `process.hrtime`, and
-`process.stdout`.
+`require` adapter and a `performance.now()` timer with a `Date.now()` fallback.
+This keeps the benchmark source comparable across Node, QuickJS, and GocciaScript
+while avoiding Node-only globals such as `require`, `process.argv`,
+`process.hrtime`, and `process.stdout`.
 
 The adapter deliberately builds one benchmark entrypoint at a time. A monolithic
 bundle lets one parser or syntax issue in an unrelated benchmark block every
