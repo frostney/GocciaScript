@@ -146,6 +146,13 @@ function assertCommonJsonFile(file: any, label: string, fileName: string, ok = t
   if (ok && file.error !== null) throw new Error(`${label} error should be null`);
 }
 
+function assertPreservesBodyFailure(outputPath: string, label: string): void {
+  const json = JSON.parse(readFileSync(outputPath, "utf-8"));
+  const message = json.files?.[0]?.benchmarks?.[0]?.error;
+  if (typeof message !== "string" || !message.includes("body failure") || message.includes("cleanup failure"))
+    throw new Error(`${label} should preserve body failure, got ${JSON.stringify(message)}`);
+}
+
 // ============================================================================
 // GocciaScriptLoader
 // ============================================================================
@@ -2369,13 +2376,13 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     const cleanupFailOut = join(tmp, "benchmark-cleanup-fail.json");
     writeFileSync(cleanupFailBench, microbenchModule([
       'group("cleanup", () => {',
-      '  bench("body error wins", ({ *setup() {',
+      '  bench("body error wins", function* () {',
       "    try {",
       '      yield () => { throw new Error("body failure"); };',
       "    } finally {",
       '      throw new Error("cleanup failure");',
       "    }",
-      "  } }).setup);",
+      "  });",
       "});",
     ]));
     {
@@ -2386,10 +2393,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       if (proc.exitCode === 0) throw new Error("Generator cleanup failure preservation benchmark should fail");
     }
     {
-      const json = JSON.parse(readFileSync(cleanupFailOut, "utf-8"));
-      const message = json.files?.[0]?.benchmarks?.[0]?.error;
-      if (typeof message !== "string" || !message.includes("body failure") || message.includes("cleanup failure"))
-        throw new Error(`Generator cleanup should preserve body failure, got ${JSON.stringify(message)}`);
+      assertPreservesBodyFailure(cleanupFailOut, "Generator cleanup");
     }
     console.log("BenchmarkRunner: deterministic generator cleanup preserves original benchmark failure...");
     const deterministicCleanupFailOut = join(tmp, "benchmark-cleanup-fail-deterministic.json");
@@ -2412,10 +2416,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       if (proc.exitCode === 0) throw new Error("Deterministic generator cleanup failure preservation benchmark should fail");
     }
     {
-      const json = JSON.parse(readFileSync(deterministicCleanupFailOut, "utf-8"));
-      const message = json.files?.[0]?.benchmarks?.[0]?.error;
-      if (typeof message !== "string" || !message.includes("body failure") || message.includes("cleanup failure"))
-        throw new Error(`Deterministic generator cleanup should preserve body failure, got ${JSON.stringify(message)}`);
+      assertPreservesBodyFailure(deterministicCleanupFailOut, "Deterministic generator cleanup");
     }
 
     console.log("BenchmarkRunner: callback timeout is enforced...");
