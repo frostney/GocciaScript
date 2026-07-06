@@ -98,9 +98,32 @@ type
   TSourceTextStringList = class(TStringList)
   private
     FSourceText: string;
+    FSourceTextValid: Boolean;
+  protected
+    procedure Changed; override;
   public
-    property SourceText: string read FSourceText write FSourceText;
+    procedure SetSourceText(const ASourceText: string);
+    function HasSourceText: Boolean;
+    property SourceText: string read FSourceText;
   end;
+
+procedure TSourceTextStringList.Changed;
+begin
+  inherited Changed;
+  FSourceText := '';
+  FSourceTextValid := False;
+end;
+
+procedure TSourceTextStringList.SetSourceText(const ASourceText: string);
+begin
+  FSourceText := ASourceText;
+  FSourceTextValid := True;
+end;
+
+function TSourceTextStringList.HasSourceText: Boolean;
+begin
+  Result := FSourceTextValid;
+end;
 
 function RetagUTF8Text(const ABytes: RawByteString): string;
 var
@@ -1290,7 +1313,6 @@ var
   TextIndex: Integer;
 begin
   Result := TSourceTextStringList.Create;
-  TSourceTextStringList(Result).SourceText := AText;
   LineStart := 1;
   TextIndex := 1;
 
@@ -1316,6 +1338,7 @@ begin
   else if (Length(AText) > 0) and ((AText[Length(AText)] = #10) or
     (AText[Length(AText)] = #13)) then
     Result.Add('');
+  TSourceTextStringList(Result).SetSourceText(AText);
 end;
 
 function IsUTF8LineOrParagraphSeparatorAt(const AText: string;
@@ -1335,7 +1358,6 @@ var
   TextIndex: Integer;
 begin
   Result := TSourceTextStringList.Create;
-  TSourceTextStringList(Result).SourceText := AText;
   LineStart := 1;
   TextIndex := 1;
 
@@ -1369,6 +1391,7 @@ begin
     IsUTF8LineOrParagraphSeparatorAt(AText,
     Length(AText) - UTF8_LINE_TERMINATOR_BYTE_LENGTH + 1)) then
     Result.Add('');
+  TSourceTextStringList(Result).SetSourceText(AText);
 end;
 
 function CreateUTF8FileTextLines(const AText: UTF8String): TStringList;
@@ -1378,7 +1401,6 @@ var
   TextIndex: Integer;
 begin
   Result := TSourceTextStringList.Create;
-  TSourceTextStringList(Result).SourceText := RetagUTF8Text(RawByteString(AText));
   LineStart := 1;
   TextIndex := 1;
 
@@ -1409,6 +1431,8 @@ begin
   else if (Length(AText) > 0) and ((AText[Length(AText)] = #10) or
     (AText[Length(AText)] = #13)) then
     Result.Add('');
+  TSourceTextStringList(Result).SetSourceText(
+    RetagUTF8Text(RawByteString(AText)));
 end;
 
 function NormalizeNewlinesToLF(const AText: string): string;
@@ -1436,7 +1460,8 @@ function StringListToSourceText(const ALines: TStrings): string;
 begin
   if not Assigned(ALines) then
     Exit('');
-  if ALines is TSourceTextStringList then
+  if (ALines is TSourceTextStringList) and
+     TSourceTextStringList(ALines).HasSourceText then
     Exit(TSourceTextStringList(ALines).SourceText);
   Result := StringListToLFText(ALines);
 end;

@@ -125,6 +125,11 @@ type
     procedure PushPrivateClassContext;
     procedure PopPrivateClassContext;
     procedure ValidateCurrentPrivateClassContext;
+    procedure ValidateParameterEarlyErrors(
+      const AParameters: TGocciaParameterArray;
+      const ALine, AColumn: Integer;
+      const ARejectDuplicateBindingNames, ARejectAwaitExpression,
+      ARejectYieldExpression: Boolean);
     procedure DeclarePrivateName(const AName: string;
       const AKind: TGocciaPrivateNameDeclarationKind = pndField;
       const AIsStatic: Boolean = False);
@@ -360,6 +365,7 @@ uses
   StringBuffer,
   TextSemantics,
 
+  Goccia.AST.BindingPatterns,
   Goccia.Constants,
   Goccia.Error,
   Goccia.Error.Suggestions,
@@ -492,6 +498,7 @@ begin
   FCurrent := 0;
   FWarningCount := 0;
   FInAsyncFunction := 0;
+  FInGeneratorFunction := 0;
   FFunctionDepth := 0;
   FHasTopLevelAwait := False;
   FPrivateClassContexts := TObjectList<TGocciaPrivateClassContext>.Create(True);
@@ -512,6 +519,7 @@ begin
   FCurrent := 0;
   FWarningCount := 0;
   FInAsyncFunction := 0;
+  FInGeneratorFunction := 0;
   FFunctionDepth := 0;
   FHasTopLevelAwait := False;
   FPrivateClassContexts := TObjectList<TGocciaPrivateClassContext>.Create(True);
@@ -582,6 +590,36 @@ begin
   else
     raise TGocciaSyntaxError.Create(AMessage, ALine, AColumn, FFileName,
       FSourceLines, ASuggestion);
+end;
+
+procedure TGocciaParser.ValidateParameterEarlyErrors(
+  const AParameters: TGocciaParameterArray;
+  const ALine, AColumn: Integer;
+  const ARejectDuplicateBindingNames, ARejectAwaitExpression,
+  ARejectYieldExpression: Boolean);
+begin
+  // ES2026 §15.1.1, §15.3.1, §15.4.1, §15.8.1, §15.9.1:
+  // parameter-list early errors depend on the syntactic form and the
+  // active Await/Yield grammar parameters.
+  if ParameterListHasDuplicateBindingNames(AParameters) and
+     (ARejectDuplicateBindingNames or not ParameterListIsSimple(AParameters)) then
+    raise TGocciaSyntaxError.Create(
+      'Duplicate parameter name not allowed',
+      ALine, AColumn, FFileName, FSourceLines);
+
+  if ARejectAwaitExpression and
+     (ParameterListContainsExpressionClass(AParameters, TGocciaAwaitExpression) or
+      ParameterListBindsName(AParameters, KEYWORD_AWAIT)) then
+    raise TGocciaSyntaxError.Create(
+      'await is not allowed in function parameters',
+      ALine, AColumn, FFileName, FSourceLines);
+
+  if ARejectYieldExpression and
+     (ParameterListContainsExpressionClass(AParameters, TGocciaYieldExpression) or
+      ParameterListBindsName(AParameters, KEYWORD_YIELD)) then
+    raise TGocciaSyntaxError.Create(
+      'yield is not allowed in function parameters',
+      ALine, AColumn, FFileName, FSourceLines);
 end;
 
 function TGocciaParser.ExtractSourceRange(const AStartLine, AStartColumn: Integer): string;
@@ -2595,6 +2633,7 @@ var
   Line, Column: Integer;
   AsyncStartLine, AsyncStartColumn: Integer;
   IsGenerator: Boolean;
+  SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
 begin
   case Peek.TokenType of
     gttTrue:
@@ -2816,16 +2855,20 @@ begin
           Consume(gttArrow, 'Expected "=>" in async arrow function',
             SSuggestArrowFunctionSyntax);
 
-          Inc(FInAsyncFunction);
+          SavedInAsyncFunction := FInAsyncFunction;
+          SavedInGeneratorFunction := FInGeneratorFunction;
           Inc(FFunctionDepth);
+          FInAsyncFunction := 1;
+          FInGeneratorFunction := 0;
           try
             if Match(gttLeftBrace) then
               ArrowBody := BlockStatement
             else
               ArrowBody := Assignment;
           finally
+            FInGeneratorFunction := SavedInGeneratorFunction;
+            FInAsyncFunction := SavedInAsyncFunction;
             Dec(FFunctionDepth);
-            Dec(FInAsyncFunction);
           end;
 
           SetLength(Parameters, 1);
@@ -3878,6 +3921,8 @@ begin
     begin
       MethodFunction := TGocciaFunctionExpression(ParseFunctionBodyExpression(
         MemberStartLine, MemberStartColumn, IsAsync, IsGenerator));
+      ValidateParameterEarlyErrors(MethodFunction.Parameters,
+        MemberStartLine, MemberStartColumn, True, False, False);
       MethodFunction.SourceText := ExtractSourceRange(
         MemberStartLine, MemberStartColumn);
       if IsAsync then
@@ -4181,6 +4226,8 @@ begin
     Parameters := ParseParameterList;
     Consume(gttRightParen, 'Expected ")" after parameters',
       SSuggestCloseParenParameterList);
+    ValidateParameterEarlyErrors(Parameters, ALine, AColumn, False,
+      AIsAsync, AIsGenerator);
 
     if Check(gttColon) then
     begin
@@ -4267,15 +4314,26 @@ var
   FnReturnType: string;
   SavedActiveLabels, SavedActiveIterationLabels: TStringList;
   SavedDirectLabelStart: Integer;
+  SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
+  ParametersParsedInAwaitContext: Boolean;
+  ParametersParsedInYieldContext: Boolean;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
 
+  SavedInAsyncFunction := FInAsyncFunction;
+  SavedInGeneratorFunction := FInGeneratorFunction;
   Inc(FFunctionDepth);
+  if AIsAsync then
+    FInAsyncFunction := 1;
   try
     Parameters := ParseParameterList;
     Consume(gttRightParen, 'Expected ")" after parameters',
       SSuggestCloseParenParameterList);
+    ParametersParsedInAwaitContext := FInAsyncFunction > 0;
+    ParametersParsedInYieldContext := FInGeneratorFunction > 0;
+    ValidateParameterEarlyErrors(Parameters, Line, Column, True,
+      ParametersParsedInAwaitContext, ParametersParsedInYieldContext);
 
     FnReturnType := '';
     if Check(gttColon) then
@@ -4287,7 +4345,8 @@ begin
     Consume(gttArrow, 'Expected "=>" in arrow function',
       SSuggestArrowFunctionSyntax);
 
-    if AIsAsync then Inc(FInAsyncFunction);
+    FInAsyncFunction := Ord(AIsAsync);
+    FInGeneratorFunction := 0;
     EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
       SavedDirectLabelStart);
     try
@@ -4298,9 +4357,10 @@ begin
     finally
       LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
         SavedDirectLabelStart);
-      if AIsAsync then Dec(FInAsyncFunction);
     end;
   finally
+    FInGeneratorFunction := SavedInGeneratorFunction;
+    FInAsyncFunction := SavedInAsyncFunction;
     Dec(FFunctionDepth);
   end;
 
@@ -4322,6 +4382,7 @@ var
   OperatorToken: TGocciaToken;
   SavedActiveLabels, SavedActiveIterationLabels: TStringList;
   SavedDirectLabelStart: Integer;
+  SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
 begin
   Left := Conditional;
 
@@ -4338,8 +4399,13 @@ begin
       Parameters[0].IsPattern := False;
       Parameters[0].IsRest := False;
       Parameters[0].IsOptional := False;
+      Parameters[0].TypeAnnotation := '';
       Advance; // consume =>
+      SavedInAsyncFunction := FInAsyncFunction;
+      SavedInGeneratorFunction := FInGeneratorFunction;
       Inc(FFunctionDepth);
+      FInAsyncFunction := 0;
+      FInGeneratorFunction := 0;
       EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
         SavedDirectLabelStart);
       try
@@ -4350,6 +4416,8 @@ begin
       finally
         LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
           SavedDirectLabelStart);
+        FInGeneratorFunction := SavedInGeneratorFunction;
+        FInAsyncFunction := SavedInAsyncFunction;
         Dec(FFunctionDepth);
       end;
       ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, Line, Column);
@@ -6336,6 +6404,8 @@ begin
     Parameters := ParseParameterList;
     Consume(gttRightParen, 'Expected ")" after parameters',
       SSuggestCloseParenParameterList);
+    ValidateParameterEarlyErrors(Parameters, Line, Column, True,
+      AIsAsync, AIsGenerator);
 
     MethodReturnType := '';
     if Check(gttColon) then
