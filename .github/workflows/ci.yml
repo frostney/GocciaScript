@@ -587,6 +587,8 @@ jobs:
         run: chmod +x build/*
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          no-cache: true
 
       - name: Read test262 pin
         id: test262-pin
@@ -724,6 +726,8 @@ jobs:
           persist-credentials: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          no-cache: true
 
       - name: Set up latest Node.js reference
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -907,6 +911,8 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && matrix.mode == 'bytecode'
+        with:
+          no-cache: true
 
       - name: Capture deterministic profile baseline
         if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && matrix.mode == 'bytecode'

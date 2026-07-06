@@ -9,5 +9,5 @@ __gocciaRegisterProbe({
     }
     return total;
   },
-  verify: (checksum) => checksum === checksum,
+  verify: (checksum) => !Number.isNaN(checksum),
 });

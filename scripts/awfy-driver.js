@@ -193,7 +193,7 @@ function buildAwfyBundle({ awfyDir, benchmarkName, moduleName, innerIterations }
     'const __modules = Object.create(null);',
     'const __cache = Object.create(null);',
     'const __define = (id, factory) => { __modules[id] = factory; };',
-    'const require = (id) => { const normalized = id.endsWith(".js") ? id.slice(0, -3) : id; const key = normalized.startsWith("./") ? normalized : "./" + normalized; if (__cache[key]) return __cache[key].exports; if (!__modules[key]) throw new Error("Missing AWFY module " + key); const module = { exports: {} }; __cache[key] = module; __modules[key](module, module.exports, require); return module.exports; };',
+    'const __awfyRequire = (id) => { const normalized = id.endsWith(".js") ? id.slice(0, -3) : id; const key = normalized.startsWith("./") ? normalized : "./" + normalized; if (__cache[key]) return __cache[key].exports; if (!__modules[key]) throw new Error("Missing AWFY module " + key); const module = { exports: {} }; __cache[key] = module; __modules[key](module, module.exports, __awfyRequire); return module.exports; };',
   ];
 
   for (const [id, source] of modules) {
@@ -201,7 +201,7 @@ function buildAwfyBundle({ awfyDir, benchmarkName, moduleName, innerIterations }
   }
 
   chunks.push([
-    `const __suite = require(${JSON.stringify(entryId)});`,
+    `const __suite = __awfyRequire(${JSON.stringify(entryId)});`,
     'const __bench = __suite.newInstance();',
     'const __started = __awfyNowMicros();',
     'const __verificationPassed = __bench.innerBenchmarkLoop(__awfyConfig.innerIterations) === true;',
@@ -387,7 +387,7 @@ function parseResult(stdout) {
 function classifyProcessOutcome(proc, parsed, stdout, stderr) {
   if (proc.error && proc.error.code === 'ETIMEDOUT') return 'timeout';
   const combined = `${stdout}\n${stderr}`.toLowerCase();
-  if (combined.includes('out of memory') || combined.includes('oom') || proc.signal === 'SIGKILL') return 'oom';
+  if (/\bout[\s-]of[\s-]memory\b/.test(combined) || /\boom\b/.test(combined) || proc.signal === 'SIGKILL') return 'oom';
   if (!parsed) return proc.status === 0 ? 'missing-result' : 'crash';
   if (!parsed.verificationPassed) return 'verification-failed';
   if (proc.status !== 0) return 'crash';
@@ -668,6 +668,7 @@ module.exports = {
   buildAwfyBundle,
   buildGeomeanRatios,
   buildProbeBundle,
+  classifyProcessOutcome,
   checksumAgreement,
   collectAwfyModules,
   coefficientOfVariation,

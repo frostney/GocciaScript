@@ -9,6 +9,7 @@ const {
   RESULT_MARKER,
   buildAwfyBundle,
   buildGeomeanRatios,
+  classifyProcessOutcome,
   checksumAgreement,
   median,
   parseResult,
@@ -107,6 +108,8 @@ console.log('awfy-driver: portable AWFY bundle...');
       innerIterations: 2,
     });
     assert(!bundle.includes('deliberately invalid'), 'bundle only includes selected dependency graph');
+    assert(!bundle.includes('const require ='), 'portable bundle avoids a top-level require shim');
+    assert(bundle.includes('const __awfyRequire ='), 'portable bundle uses a private AWFY loader');
 
     const bundleFile = path.join(tmp, 'bundle.js');
     fs.writeFileSync(bundleFile, bundle);
@@ -120,6 +123,30 @@ console.log('awfy-driver: portable AWFY bundle...');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+console.log('awfy-driver: outcome classification...');
+{
+  assertEqual(
+    classifyProcessOutcome({ status: 1, signal: null }, null, '', 'benchmark boom'),
+    'crash',
+    'ordinary words containing oom are not memory failures',
+  );
+  assertEqual(
+    classifyProcessOutcome({ status: 1, signal: null }, null, '', 'JavaScript heap out of memory'),
+    'oom',
+    'out of memory stderr is classified as oom',
+  );
+  assertEqual(
+    classifyProcessOutcome({ status: 1, signal: null }, null, 'OOM killed', ''),
+    'oom',
+    'standalone OOM marker is classified as oom',
+  );
+  assertEqual(
+    classifyProcessOutcome({ status: null, signal: 'SIGKILL' }, null, '', ''),
+    'oom',
+    'SIGKILL remains classified as oom',
+  );
 }
 
 console.log('awfy-driver: PR comment markdown...');
