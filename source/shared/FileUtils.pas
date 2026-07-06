@@ -140,22 +140,38 @@ end;
 
 {$IFDEF LAKON}
 
-// The Lakon/WASI lane preopens no directories yet (the file lane —
-// preopen forwarding plus path_open/fd_read primordials — has not
-// landed), so every existence probe above is already False and no
-// path can reach these readers; raising keeps a hypothetical direct
-// call honest instead of returning silent empties.
-
-function ReadUTF8FileText(const APath: string): UTF8String;
-begin
-  raise EInOutError.Create(
-    'file access is not available on this runtime yet: ' + APath);
-end;
+// The Lakon/WASI file lane is real since rung 5 (read-only) and
+// rung 6 (the write lane): the readers mirror the native shapes
+// over a TBytes buffer. Lakon's strings ride bytes one per code
+// unit, so the byte-to-text conversion is a plain widening copy
+// (UTF8String aliases string there); share flags stay ignored on
+// the single-process lane.
 
 function ReadFileBytes(const APath: string): TBytes;
+var
+  Stream: TFileStream;
 begin
-  raise EInOutError.Create(
-    'file access is not available on this runtime yet: ' + APath);
+  Stream := TFileStream.Create(APath, fmOpenRead);
+  try
+    SetLength(Result, Stream.Size);
+    if Length(Result) > 0 then
+      Stream.ReadBuffer(Result[0], Length(Result));
+  finally
+    Stream.Free;
+  end;
+end;
+
+function ReadUTF8FileText(const APath: string): UTF8String;
+var
+  Bytes: TBytes;
+  Text: string;
+  Index: Integer;
+begin
+  Bytes := ReadFileBytes(APath);
+  SetLength(Text, Length(Bytes));
+  for Index := 1 to Length(Bytes) do
+    Text[Index] := Chr(Bytes[Index - 1]);
+  Result := Text;
 end;
 
 {$ELSE}
