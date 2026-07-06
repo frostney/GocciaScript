@@ -4,9 +4,12 @@ const fs = require('fs');
 
 const MARKER = '<!-- awfy-results -->';
 const LEGACY_MARKER = '<!-- awfy-smoke -->';
-const COMMENT_ENGINES = ['goccia', 'qjs', 'node'];
+const DEFAULT_COMMENT_ENGINES = ['goccia', 'qjs', 'node'];
+const COMPARISON_COMMENT_ENGINES = ['goccia-baseline', 'goccia-candidate', 'qjs', 'node'];
 const ENGINE_LABELS = {
   goccia: 'Goccia',
+  'goccia-baseline': 'Goccia main',
+  'goccia-candidate': 'Goccia PR',
   qjs: 'QuickJS',
   node: 'NodeJS',
 };
@@ -23,9 +26,24 @@ function plural(count, singular) {
   return `${count} ${singular}${count === 1 ? '' : 's'}`;
 }
 
-function targetStatus(target) {
+function reportHasGocciaComparison(report) {
+  const metadataEngines = report?.metadata?.engines || [];
+  if (metadataEngines.some((engine) => engine.name === 'goccia-baseline' || engine.name === 'goccia-candidate')) {
+    return true;
+  }
+  return (report?.targets || []).some((target) => {
+    const stats = target.summary?.engineStats || {};
+    return stats['goccia-baseline'] || stats['goccia-candidate'];
+  });
+}
+
+function commentEngines(report) {
+  return reportHasGocciaComparison(report) ? COMPARISON_COMMENT_ENGINES : DEFAULT_COMMENT_ENGINES;
+}
+
+function targetStatus(target, engines = DEFAULT_COMMENT_ENGINES) {
   const stats = target.summary?.engineStats || {};
-  const expectedEngines = target.kind === 'awfy' ? COMMENT_ENGINES : Object.keys(stats);
+  const expectedEngines = target.kind === 'awfy' ? engines : Object.keys(stats);
   const bad = [];
   for (const engine of expectedEngines) {
     const engineStats = stats[engine];
@@ -50,9 +68,9 @@ function targetStatus(target) {
   return 'pass';
 }
 
-function engineCells(target) {
+function engineCells(target, engines = DEFAULT_COMMENT_ENGINES) {
   const stats = target.summary?.engineStats || {};
-  return COMMENT_ENGINES.map((engine) => {
+  return engines.map((engine) => {
     const engineStats = stats[engine];
     if (!engineStats) return '-';
     if ((engineStats.ok || 0) === 0) return 'no ok sample';
@@ -82,7 +100,7 @@ function cleanEngineVersion(engine, version) {
 function engineLabels(report) {
   const labels = { ...ENGINE_LABELS };
   const metadata = report?.metadata?.engines || [];
-  for (const engine of COMMENT_ENGINES) {
+  for (const engine of Object.keys(ENGINE_LABELS)) {
     const version = cleanEngineVersion(
       engine,
       metadata.find((entry) => entry.name === engine)?.version,
@@ -92,14 +110,21 @@ function engineLabels(report) {
   return labels;
 }
 
-function buildGeomeanTable(geomean, labels = ENGINE_LABELS) {
+function deltaCell(target) {
+  const ratio = target.summary?.ratios?.['goccia-candidate_over_goccia-baseline'];
+  if (typeof ratio !== 'number' || !Number.isFinite(ratio) || ratio <= 0) return '-';
+  const delta = (1 - ratio) * 100;
+  return `${delta >= 0 ? '+' : ''}${delta.toFixed(2)}%`;
+}
+
+function buildGeomeanTable(geomean, labels = ENGINE_LABELS, engines = DEFAULT_COMMENT_ENGINES) {
   if (Object.keys(geomean).length === 0) return '';
 
   let body = '\n### Geomean Ratios\n\n';
-  body += `| Ratio (row / column) | ${labels.goccia} | ${labels.qjs} | ${labels.node} |\n`;
-  body += '|----------------------|--------|---------|------|\n';
-  for (const numerator of COMMENT_ENGINES) {
-    const cells = COMMENT_ENGINES.map((denominator) => ratioCell(geomean, numerator, denominator));
+  body += `| Ratio (row / column) | ${engines.map((engine) => labels[engine]).join(' | ')} |\n`;
+  body += `|----------------------|${engines.map(() => '--------').join('|')}|\n`;
+  for (const numerator of engines) {
+    const cells = engines.map((denominator) => ratioCell(geomean, numerator, denominator));
     body += `| ${ENGINE_LABELS[numerator]} | ${cells.join(' | ')} |\n`;
   }
   return body;
@@ -121,15 +146,23 @@ function reportSampleCount(report) {
 function buildAwfyReportComment(report) {
   let body = `${MARKER}\n## AWFY Results\n\n`;
   const labels = engineLabels(report);
+  const engines = commentEngines(report);
+  const hasComparison = reportHasGocciaComparison(report);
 
-  body += `| Target | Status | ${labels.goccia} | ${labels.qjs} | ${labels.node} |\n`;
-  body += '|--------|--------|--------|---------|------|\n';
+  body += `| Target | Status | ${engines.map((engine) => labels[engine]).join(' | ')}`;
+  if (hasComparison) body += ' | Δ PR vs main';
+  body += ' |\n';
+  body += `|--------|--------|${engines.map(() => '--------').join('|')}`;
+  if (hasComparison) body += '|-------------';
+  body += '|\n';
   for (const target of report.targets || []) {
-    const [goccia, qjs, node] = engineCells(target);
-    body += `| ${target.name} | ${targetStatus(target)} | ${goccia} | ${qjs} | ${node} |\n`;
+    const cells = engineCells(target, engines);
+    body += `| ${target.name} | ${targetStatus(target, engines)} | ${cells.join(' | ')}`;
+    if (hasComparison) body += ` | ${deltaCell(target)}`;
+    body += ' |\n';
   }
 
-  body += buildGeomeanTable(report.geomeanRatios || {}, labels);
+  body += buildGeomeanTable(report.geomeanRatios || {}, labels, engines);
 
   const awfyCount = (report.targets || []).filter((target) => target.kind === 'awfy').length;
   const probeCount = (report.targets || []).filter((target) => target.kind === 'probe').length;
@@ -139,6 +172,7 @@ function buildAwfyReportComment(report) {
   body += `\n<sub>${countParts.join(' plus ')}. `;
   if (sampleCount !== null) body += `Medians from ${plural(sampleCount, 'interleaved sample')} per engine; `;
   body += 'raw JSON includes min/max/CV and is attached as the `awfy-report` artifact. ';
+  if (hasComparison) body += 'Δ compares PR Goccia median against the same-runner main Goccia median. ';
   body += 'Rows below 0.5ms are timer-floor sensitive.</sub>\n';
   return body;
 }
@@ -181,6 +215,8 @@ module.exports = {
   buildAwfyReportComment,
   buildAwfySmokeComment: buildAwfyReportComment,
   cleanEngineVersion,
+  commentEngines,
+  deltaCell,
   engineLabels,
   LEGACY_MARKER,
   MARKER,

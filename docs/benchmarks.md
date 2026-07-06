@@ -411,15 +411,16 @@ The normalized report records:
 
 Pull requests run an AWFY report lane from `.github/workflows/pr.yml`.
 The target set is recorded in `perf/awfy/manifest.json` under `ciReport`: all
-pinned AWFY benchmarks under Goccia bytecode, QuickJS, and the latest Node
-Current release resolved by `actions/setup-node` at workflow time, with five raw
-samples per engine. Sampling is interleaved as target -> repetition -> engine,
-so every repetition runs the selected engines next to each other instead of
-collecting engine-sized batches. The workflow uploads the normalized JSON report
-and posts an `AWFY Results` PR comment with medians; min/max/CV and raw samples
-stay in the `awfy-report` artifact. Diagnostic probes remain available through
-the same driver for focused engine work, but they are not mixed into the PR AWFY
-summary.
+pinned AWFY benchmarks under the PR Goccia bytecode loader, the PR's `main`
+baseline loader, QuickJS, and the latest Node Current release resolved by
+`actions/setup-node` at workflow time, with five raw samples per engine.
+Sampling is interleaved as target -> repetition -> engine, so every repetition
+runs the selected engines next to each other instead of collecting engine-sized
+batches. The workflow uploads the normalized JSON report and posts an
+`AWFY Results` PR comment with main/PR Goccia medians, the per-target PR-vs-main
+delta, and reference-engine medians; min/max/CV and raw samples stay in the
+`awfy-report` artifact. Diagnostic probes remain available through the same
+driver for focused engine work, but they are not mixed into the PR AWFY summary.
 
 AWFY rows with sub-0.5ms medians are useful for verifying that the benchmark
 runs consistently, but they are timer-floor sensitive. Before using one of those
