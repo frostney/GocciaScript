@@ -484,7 +484,8 @@ const
         '};'#10 +
         'const __GocciaDateTimeClip = (epochMilliseconds: any): number => {'#10 +
         '  const t: number = Math.trunc(Number(epochMilliseconds));'#10 +
-        '  return Number.isFinite(t) && Math.abs(t) <= dateTimeClipLimit ? t : NaN;'#10 +
+        '  if (!Number.isFinite(t) || Math.abs(t) > dateTimeClipLimit) return NaN;'#10 +
+        '  return t === 0 ? 0 : t;'#10 +
         '};'#10 +
         'const __GocciaDatePad = (value: number, length: number): string => {'#10 +
         '  return String(Math.abs(Math.trunc(value))).padStart(length, "0");'#10 +
