@@ -1,11 +1,18 @@
+const genericPlusScalarsRangeSum = (start, count) =>
+  (count * ((start * 2) + count - 1)) / 2;
+
+const genericPlusScalarsRemainderSum = (remainder, modulus, offset) => {
+  const firstSegment = Math.min(remainder, modulus - offset);
+  const wrappedSegment = remainder - firstSegment;
+  return genericPlusScalarsRangeSum(offset, firstSegment) +
+    genericPlusScalarsRangeSum(0, wrappedSegment);
+};
+
 const genericPlusScalarsModularSum = (count, modulus, offset) => {
   const fullCycles = Math.floor(count / modulus);
   const remainder = count % modulus;
-  let total = fullCycles * ((modulus - 1) * modulus / 2);
-  for (let i = 0; i < remainder; i = i + 1) {
-    total = total + ((i + offset) % modulus);
-  }
-  return total;
+  return fullCycles * ((modulus - 1) * modulus / 2) +
+    genericPlusScalarsRemainderSum(remainder, modulus, offset);
 };
 
 const expectedGenericPlusScalarsChecksum = (innerIterations) =>
