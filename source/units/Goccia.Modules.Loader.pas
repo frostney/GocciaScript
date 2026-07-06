@@ -2006,6 +2006,7 @@ procedure TGocciaModuleLoader.UnregisterGlobalModuleProvider(
   const AModulePath: string);
 begin
   FGlobalModuleProviders.Remove(AModulePath);
+  FGlobalModules.Remove(AModulePath);
 end;
 
 function TGocciaModuleLoader.LoadJSONModule(const AResolvedPath,

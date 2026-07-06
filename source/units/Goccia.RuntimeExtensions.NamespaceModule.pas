@@ -53,10 +53,7 @@ end;
 destructor TGocciaRuntimeNamespaceModuleRegistration.Destroy;
 begin
   if Assigned(FRuntime) and Assigned(FRuntime.Engine) then
-  begin
     FRuntime.Engine.UnregisterGlobalModuleProvider(FModuleName);
-    FRuntime.Engine.ModuleLoader.GlobalModules.Remove(FModuleName);
-  end;
   if Assigned(FNamespaceObject) and Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.RemoveRootObject(FNamespaceObject);
   FModule.Free;
