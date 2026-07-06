@@ -2,6 +2,8 @@
 description: Number operation benchmarks
 ---*/
 
+import { bench, group } from "goccia:microbench";
+
 // Hoisted so the bench measures FormatDouble's shortest-round-trip path rather
 // than the per-iteration cost of rebuilding the list and recomputing constants.
 const ToStringNonIntegerSamples = [
@@ -14,114 +16,90 @@ const ToStringNonIntegerSamples = [
   5.7016275775556e-8,
 ];
 
-suite("number creation", () => {
-  bench("integer arithmetic", {
-    run: () => {
-      const a = 42;
-      const b = 17;
-      const sum = a + b;
-      const diff = a - b;
-      const prod = a * b;
-      const quot = a / b;
-    },
+group("number creation", () => {
+  bench("integer arithmetic", () => {
+    const a = 42;
+    const b = 17;
+    const sum = a + b;
+    const diff = a - b;
+    const prod = a * b;
+    const quot = a / b;
   });
 
-  bench("floating point arithmetic", {
-    run: () => {
-      const a = 3.14159;
-      const b = 2.71828;
-      const sum = a + b;
-      const prod = a * b;
-      const quot = a / b;
-    },
+  bench("floating point arithmetic", () => {
+    const a = 3.14159;
+    const b = 2.71828;
+    const sum = a + b;
+    const prod = a * b;
+    const quot = a / b;
   });
 
-  bench("number coercion", {
-    run: () => {
-      const a = Number("42");
-      const b = Number("3.14");
-      const c = Number(true);
-      const d = Number(false);
-      const e = Number(null);
-    },
+  bench("number coercion", () => {
+    const a = Number("42");
+    const b = Number("3.14");
+    const c = Number(true);
+    const d = Number(false);
+    const e = Number(null);
   });
 });
 
-suite("number prototype methods", () => {
-  bench("toFixed", {
-    run: () => {
-      const num = 3.14159;
-      const a = num.toFixed(0);
-      const b = num.toFixed(2);
-      const c = num.toFixed(5);
-    },
+group("number prototype methods", () => {
+  bench("toFixed", () => {
+    const num = 3.14159;
+    const a = num.toFixed(0);
+    const b = num.toFixed(2);
+    const c = num.toFixed(5);
   });
 
-  bench("toString", {
-    run: () => {
-      const num = 255;
-      const a = num.toString();
-      const b = num.toString(16);
-      const c = num.toString(10);
-    },
+  bench("toString", () => {
+    const num = 255;
+    const a = num.toString();
+    const b = num.toString(16);
+    const c = num.toString(10);
   });
 
-  bench("toString non-integer (shortest round-trip)", {
-    run: () => {
-      let total = 0;
-      for (const x of ToStringNonIntegerSamples) total += x.toString().length;
-      return total;
-    },
+  bench("toString non-integer (shortest round-trip)", () => {
+    let total = 0;
+    for (const x of ToStringNonIntegerSamples) total += x.toString().length;
+    return total;
   });
 
-  bench("valueOf", {
-    run: () => {
-      const a = (42).valueOf();
-      const b = (3.14).valueOf();
-      const c = (0).valueOf();
-    },
+  bench("valueOf", () => {
+    const a = (42).valueOf();
+    const b = (3.14).valueOf();
+    const c = (0).valueOf();
   });
 
-  bench("toPrecision", {
-    run: () => {
-      const num = 123.456;
-      const a = num.toPrecision();
-      const b = num.toPrecision(4);
-      const c = num.toPrecision(2);
-    },
+  bench("toPrecision", () => {
+    const num = 123.456;
+    const a = num.toPrecision();
+    const b = num.toPrecision(4);
+    const c = num.toPrecision(2);
   });
 });
 
-suite("number static methods", () => {
-  bench("Number.isNaN", {
-    run: () => {
-      const a = Number.isNaN(NaN);
-      const b = Number.isNaN(42);
-      const c = Number.isNaN("hello");
-    },
+group("number static methods", () => {
+  bench("Number.isNaN", () => {
+    const a = Number.isNaN(NaN);
+    const b = Number.isNaN(42);
+    const c = Number.isNaN("hello");
   });
 
-  bench("Number.isFinite", {
-    run: () => {
-      const a = Number.isFinite(42);
-      const b = Number.isFinite(Infinity);
-      const c = Number.isFinite(NaN);
-    },
+  bench("Number.isFinite", () => {
+    const a = Number.isFinite(42);
+    const b = Number.isFinite(Infinity);
+    const c = Number.isFinite(NaN);
   });
 
-  bench("Number.isInteger", {
-    run: () => {
-      const a = Number.isInteger(42);
-      const b = Number.isInteger(3.14);
-      const c = Number.isInteger(0);
-    },
+  bench("Number.isInteger", () => {
+    const a = Number.isInteger(42);
+    const b = Number.isInteger(3.14);
+    const c = Number.isInteger(0);
   });
 
-  bench("Number.parseInt and parseFloat", {
-    run: () => {
-      const a = Number.parseInt("42");
-      const b = Number.parseFloat("3.14");
-      const c = Number.parseInt("ff", 16);
-    },
+  bench("Number.parseInt and parseFloat", () => {
+    const a = Number.parseInt("42");
+    const b = Number.parseFloat("3.14");
+    const c = Number.parseInt("ff", 16);
   });
 });

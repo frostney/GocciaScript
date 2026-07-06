@@ -2,66 +2,50 @@
 description: Module import benchmarks
 ---*/
 
+import { bench, group } from "goccia:microbench";
+
 import { add, multiply, PI, greeting } from "./helpers/bench-module.js";
 import { name, version, debug, maxRetries, tags } from "./helpers/bench-config.json";
 
-suite("script module import", () => {
-  bench("call imported function", {
-    run: () => {
-      const r = add(2, 3);
-    },
+group("script module import", () => {
+  bench("call imported function", () => {
+    const r = add(2, 3);
   });
 
-  bench("call two imported functions", {
-    run: () => {
-      const r1 = add(2, 3);
-      const r2 = multiply(4, 5);
-    },
+  bench("call two imported functions", () => {
+    const r1 = add(2, 3);
+    const r2 = multiply(4, 5);
   });
 
-  bench("read imported constant", {
-    run: () => {
-      const r = PI;
-    },
+  bench("read imported constant", () => {
+    const r = PI;
   });
 
-  bench("read imported string", {
-    run: () => {
-      const r = greeting;
-    },
+  bench("read imported string", () => {
+    const r = greeting;
   });
 });
 
-suite("JSON module import", () => {
-  bench("read JSON string property", {
-    run: () => {
-      const r = name;
-    },
+group("JSON module import", () => {
+  bench("read JSON string property", () => {
+    const r = name;
   });
 
-  bench("read JSON number property", {
-    run: () => {
-      const r = maxRetries;
-    },
+  bench("read JSON number property", () => {
+    const r = maxRetries;
   });
 
-  bench("read JSON boolean property", {
-    run: () => {
-      const r = debug;
-    },
+  bench("read JSON boolean property", () => {
+    const r = debug;
   });
 
-  bench("read JSON array property", {
-    run: () => {
-      const r = tags;
-    },
+  bench("read JSON array property", () => {
+    const r = tags;
   });
 
-  bench("read multiple JSON properties", {
-    run: () => {
-      const r1 = name;
-      const r2 = version;
-      const r3 = maxRetries;
-    },
+  bench("read multiple JSON properties", () => {
+    const r1 = name;
+    const r2 = version;
+    const r3 = maxRetries;
   });
 });

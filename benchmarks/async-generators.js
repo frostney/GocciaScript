@@ -2,7 +2,9 @@
 description: Async generator benchmarks
 ---*/
 
-suite("async generators", () => {
+import { bench, group } from "goccia:microbench";
+
+group("async generators", () => {
   const values = Array.from({ length: 25 }, (_, i) => i);
 
   const source = {
@@ -15,23 +17,19 @@ suite("async generators", () => {
     },
   };
 
-  bench("for-await-of over async generator", {
-    run: async () => {
-      let sum = 0;
-      for await (const value of source.values()) {
-        sum = sum + value;
-      }
-      return sum;
-    },
+  bench("for-await-of over async generator", async () => {
+    let sum = 0;
+    for await (const value of source.values()) {
+      sum = sum + value;
+    }
+    return sum;
   });
 
-  bench("async generator with await in body", {
-    run: async () => {
-      let sum = 0;
-      for await (const value of source.awaitedValues()) {
-        sum = sum + value;
-      }
-      return sum;
-    },
+  bench("async generator with await in body", async () => {
+    let sum = 0;
+    for await (const value of source.awaitedValues()) {
+      sum = sum + value;
+    }
+    return sum;
   });
 });

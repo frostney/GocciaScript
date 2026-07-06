@@ -834,12 +834,14 @@ All matchers support `.not` negation: `expect(value).not.toBe(wrong)`.
 
 ### Benchmark (`Goccia.Builtins.Benchmark.pas`)
 
-Only available when `TGocciaBenchmarkRuntimeExtension` is installed in the runtime (used by the GocciaBenchmarkRunner). See [benchmarks.md](benchmarks.md) for usage, output formats, and CI integration.
+Only available when `TGocciaBenchmarkRuntimeExtension` is installed in the runtime (used by the GocciaBenchmarkRunner). The benchmark API is import-only from `"goccia:microbench"`; it does not install ambient `suite`, `bench`, or `runBenchmarks` globals. See [benchmarks.md](benchmarks.md) for usage, output formats, and CI integration.
 
 **Benchmark structure:**
 
 ```javascript
-suite("group name", () => {
+import { bench, group } from "goccia:microbench";
+
+group("group name", () => {
   bench("benchmark name", () => {
     // Code to benchmark — called many times during measurement
     someOperation();
@@ -851,11 +853,13 @@ suite("group name", () => {
 
 | Function | Description |
 |----------|-------------|
-| `suite(name, fn)` | Group benchmarks. Executes `fn` immediately to register `bench` entries. |
-| `bench(name, fn)` | Register a benchmark function. Called repeatedly during calibration and measurement. |
-| `runBenchmarks()` | Execute all registered benchmarks and return results. GocciaBenchmarkRunner calls this automatically after benchmark files register suites. |
+| `bench(name, fn)` | Register a benchmark function. Called repeatedly during calibration and measurement. Generator callbacks can provide setup around a yielded measured function, with `finally` cleanup on close. |
+| `group(name, fn)` | Group benchmarks. Executes `fn` immediately to register `bench` entries. |
+| `run(opts?)` | Execute registered benchmarks from script code. GocciaBenchmarkRunner also auto-runs registered benchmarks after loading a file, unless `run()` already consumed that registry. |
+| `summary(fn)` | Accepted registration wrapper for summary-shaped output. Richer summary reporting is tracked separately. |
+| `boxplot(fn)` | Accepted registration wrapper for boxplot-shaped output. Richer chart output is tracked separately. |
 
-**Result object** (returned by `runBenchmarks()`):
+**Result object** (returned by `run()`):
 
 Each benchmark result includes: `name`, `suite`, `opsPerSec`, `meanMs`, `iterations`, `totalMs`, `variancePercentage`, and optionally `error`.
 
