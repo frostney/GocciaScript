@@ -116,9 +116,13 @@ type
     destructor Destroy; override;
 
     function Parse(const AText: string): TGocciaValue; overload;
+{$IFNDEF LAKON}
     function Parse(const AText: UTF8String): TGocciaValue; overload;
+{$ENDIF}
     function ParseDocuments(const AText: string): TGocciaArrayValue; overload;
+{$IFNDEF LAKON}
     function ParseDocuments(const AText: UTF8String): TGocciaArrayValue; overload;
+{$ENDIF}
   end;
 
 implementation
@@ -2157,10 +2161,12 @@ begin
   end;
 end;
 
+{$IFNDEF LAKON}
 function TGocciaYAMLParser.Parse(const AText: UTF8String): TGocciaValue;
 begin
   Result := Parse(RetagUTF8Text(RawByteString(AText)));
 end;
+{$ENDIF}
 
 function TGocciaYAMLParser.ParseDocuments(const AText: string): TGocciaArrayValue;
 var
@@ -2177,11 +2183,13 @@ begin
   end;
 end;
 
+{$IFNDEF LAKON}
 function TGocciaYAMLParser.ParseDocuments(
   const AText: UTF8String): TGocciaArrayValue;
 begin
   Result := ParseDocuments(RetagUTF8Text(RawByteString(AText)));
 end;
+{$ENDIF}
 
 function TGocciaYAMLParser.ParseNode(const AIndent: Integer): TGocciaValue;
 var

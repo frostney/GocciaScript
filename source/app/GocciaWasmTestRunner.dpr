@@ -72,10 +72,6 @@ type
     ErrorMessage: string;
   end;
 
-const
-  CONFIG_BASE_NAME = 'goccia';
-  CONFIG_EXTENSIONS: array[0..0] of string = ('.json');
-
 function FirstLine(const AText: string): string;
 var
   Cut: Integer;
@@ -102,7 +98,7 @@ begin
   if StartDirectory = '' then
     StartDirectory := GetCurrentDir;
   ConfigPath := DiscoverConfigFile(StartDirectory,
-    [CONFIG_BASE_NAME], CONFIG_EXTENSIONS);
+    ['goccia'], ['.json']);
   if ConfigPath <> '' then
     Result := ParseConfigFile(ConfigPath);
 end;

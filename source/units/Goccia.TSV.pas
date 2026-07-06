@@ -33,22 +33,28 @@ type
   public
     function Parse(const AText: string; const AHeaders: Boolean = True;
       const ASkipEmptyLines: Boolean = False): TGocciaArrayValue; overload;
+{$IFNDEF LAKON}
     function Parse(const AText: UTF8String; const AHeaders: Boolean = True;
       const ASkipEmptyLines: Boolean = False): TGocciaArrayValue; overload;
+{$ENDIF}
     function ParseChunk(const AText: string; const AHeaders: Boolean;
       const ASkipEmptyLines: Boolean; const AStart: Integer = 0;
       const AEnd: Integer = -1): TGocciaTSVChunkParseResult; overload;
+{$IFNDEF LAKON}
     function ParseChunk(const AText: UTF8String; const AHeaders: Boolean;
       const ASkipEmptyLines: Boolean; const AStart: Integer = 0;
       const AEnd: Integer = -1): TGocciaTSVChunkParseResult; overload;
+{$ENDIF}
     function ParseWithFieldInfo(const AText: string;
       const AHeaders: Boolean = True;
       const ASkipEmptyLines: Boolean = False):
       TArray<TArray<TGocciaTSVFieldInfo>>; overload;
+{$IFNDEF LAKON}
     function ParseWithFieldInfo(const AText: UTF8String;
       const AHeaders: Boolean = True;
       const ASkipEmptyLines: Boolean = False):
       TArray<TArray<TGocciaTSVFieldInfo>>; overload;
+{$ENDIF}
   end;
 
   TGocciaTSVStringifier = class
@@ -251,6 +257,7 @@ begin
   end;
 end;
 
+{$IFNDEF LAKON}
 function TGocciaTSVParser.Parse(const AText: UTF8String;
   const AHeaders: Boolean;
   const ASkipEmptyLines: Boolean): TGocciaArrayValue;
@@ -258,6 +265,7 @@ begin
   Result := Parse(RetagUTF8Text(RawByteString(AText)), AHeaders,
     ASkipEmptyLines);
 end;
+{$ENDIF}
 
 function TGocciaTSVParser.ParseWithFieldInfo(const AText: string;
   const AHeaders: Boolean;
@@ -304,6 +312,7 @@ begin
   SetLength(Result, Count);
 end;
 
+{$IFNDEF LAKON}
 function TGocciaTSVParser.ParseWithFieldInfo(const AText: UTF8String;
   const AHeaders: Boolean;
   const ASkipEmptyLines: Boolean): TArray<TArray<TGocciaTSVFieldInfo>>;
@@ -311,6 +320,7 @@ begin
   Result := ParseWithFieldInfo(RetagUTF8Text(RawByteString(AText)),
     AHeaders, ASkipEmptyLines);
 end;
+{$ENDIF}
 
 function TGocciaTSVParser.ParseChunk(const AText: string;
   const AHeaders: Boolean; const ASkipEmptyLines: Boolean;
@@ -413,6 +423,7 @@ begin
   Result.Read := EffectiveEnd;
 end;
 
+{$IFNDEF LAKON}
 function TGocciaTSVParser.ParseChunk(const AText: UTF8String;
   const AHeaders: Boolean; const ASkipEmptyLines: Boolean;
   const AStart: Integer; const AEnd: Integer): TGocciaTSVChunkParseResult;
@@ -420,6 +431,7 @@ begin
   Result := ParseChunk(RetagUTF8Text(RawByteString(AText)), AHeaders,
     ASkipEmptyLines, AStart, AEnd);
 end;
+{$ENDIF}
 
 class function TGocciaTSVStringifier.EscapeField(
   const AValue: string): string;
