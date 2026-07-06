@@ -517,13 +517,14 @@ Each test starts with a `BeforeEach` override that calls `FAssertions.ResetCurre
 
 ## CI Integration
 
-GitHub Actions CI (`.github/workflows/ci.yml`) runs on push to `main` and tags, with a six-job pipeline plus release packaging:
+GitHub Actions CI (`.github/workflows/ci.yml`) runs on push to `main` and tags, with a post-build job fan-out plus release packaging:
 
 ```text
 build → test             → artifacts
       → toml-compliance  →
       → json5-compliance →
       → test262          →
+      → awfy             →
       → benchmark        →
       → cli              →
 ```
@@ -538,15 +539,17 @@ build → test             → artifacts
 
 **`test262`** (needs build, ubuntu-latest x64 only, **non-blocking**) — Runs the official conformance suite in bytecode mode from the shared pin in `scripts/test262-suite-sha.txt`, uploads the JSON report, and saves a `main` baseline cache for PR deltas. The run step is `continue-on-error: true` so known steady-state conformance failures do not block unrelated work; the downstream PR comment still gates regressions against the cached main baseline. **See [test262.md](test262.md) for the harness contract** and [Build System](build-system.md#ciyml--push-to-main--tags) for the workflow wiring.
 
+**`awfy`** (needs build, ubuntu-latest x64 only) — Runs the pinned AWFY JavaScript report set from `perf/awfy/manifest.json` under Goccia bytecode, QuickJS, and the latest Node Current release resolved at workflow time with five interleaved samples per engine. Uploads the normalized `awfy-report` artifact; on `main`, publishes the compressed report plus daily pointer to the `awfy/` Vercel Blob namespace when `BLOB_READ_WRITE_TOKEN` is configured.
+
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 
 **`cli`** (needs build, all platforms) — Downloads pre-built binaries and runs CLI behavior smoke tests via Bun: `test-cli.ts` (options across all apps), `test-cli-lexer.ts` (numeric-separator rejection), `test-cli-parser.ts` (error display), `test-cli-config.ts` (config-file loading and per-file inheritance), and `test-cli-apps.ts` (app-specific features, including `GocciaScriptLoaderBare` stdin/file checks, CLI-local `print`, and runtime-global absence). Windows runs additionally assert that the loader binary does not link against OpenSSL DLLs.
 
-**`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + cli, `main` only) — Uploads release binaries after all checks pass. `test262` is **not** a gating dependency — failing tests there cannot block a release.
+**`artifacts`** (needs test + toml-compliance + json5-compliance + awfy + benchmark + cli, `main` only) — Uploads release binaries after all checks pass. `test262` is **not** a gating dependency — failing tests there cannot block a release.
 
-**`release`** (needs test + toml-compliance + json5-compliance + benchmark + cli, tags only) — Packages and publishes release archives after the same gates pass.
+**`release`** (needs test + toml-compliance + json5-compliance + awfy + benchmark + cli, tags only) — Packages and publishes release archives after the same gates pass.
 
-The `test`, `benchmark`, `cli`, `toml-compliance`, `json5-compliance`, and `test262` jobs run in parallel after `build`. The TOML, JSON5, and test262 lanes all reuse the already-built binaries from the matrix build artifacts instead of installing FPC again, so platform-specific issues are caught on the same Linux, macOS, and Windows targets as the main test lanes (test262 runs on Linux only since conformance outcomes are platform-independent for this engine).
+The `test`, `awfy`, `benchmark`, `cli`, `toml-compliance`, `json5-compliance`, and `test262` jobs run in parallel after `build`. The AWFY, TOML, JSON5, and test262 lanes all reuse the already-built binaries from the matrix build artifacts instead of installing FPC again, so platform-specific issues are caught on the same Linux, macOS, and Windows targets as the main test lanes (AWFY and test262 run on Linux only since those outcomes are platform-independent for this engine).
 
 ### PR Workflow (`.github/workflows/pr.yml`)
 
@@ -556,10 +559,13 @@ Runs on pull requests targeting `main`, on **ubuntu-latest x64 only**:
 build → test
       → benchmark → benchmark / timing comments
       → test262   → test262 comment
+      → awfy      → AWFY Results comment
       → cli
 ```
 
 The PR workflow also posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing, top-level GocciaScript GC metrics, and selected FreePascal heap allocation metrics for interpreter mode and bytecode mode. GC memory rows aggregate the main thread plus all worker thread-local GCs. The test runner does not count worker shutdown reclamation as GC collections, while the benchmark runner explicitly collects between benchmark files, so collection counts are expected to differ. The comment hides negative FreePascal heap free-space deltas because they are valid allocator diagnostics but are noisy in a PR summary. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
+
+The **AWFY Results** comment posts median timings and geomean ratios for the pinned AWFY report set under Goccia bytecode, QuickJS, and the latest Node Current release. The underlying `awfy-report` artifact keeps the five raw interleaved samples per engine, min/max/CV, environment metadata, and first-class failure outcomes.
 
 The **test262 conformance comment** posts a non-blocking summary using the [`actions/github-script@v7`](https://github.com/actions/github-script) pattern, marker `<!-- test262-results -->`. The markdown is generated by `bun scripts/run_test262_suite.ts --comment <results.json> <baseline.json|->`. It contains:
 
