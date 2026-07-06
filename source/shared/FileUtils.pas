@@ -29,6 +29,21 @@ function ReadFileBytes(const APath: string): TBytes;
 
 implementation
 
+{$IFDEF LAKON}
+
+{ Lakon's one string type carries UTF-8 bytes one per char (the
+  byte-ride discipline) and its WASI path lane passes those bytes
+  through raw — a byte-ride path IS already canonical, so the
+  conversion pair collapses to identity. Decoding here would make
+  the existence probes look up a DIFFERENT on-disk name than the
+  writers created. }
+function UTF8PathToUnicodeString(const APath: string): UnicodeString;
+begin
+  Result := APath;
+end;
+
+{$ELSE}
+
 function UTF8PathToUnicodeString(const APath: string): UnicodeString;
 var
   Bytes: RawByteString;
@@ -38,6 +53,18 @@ begin
   Result := UTF8Decode(UTF8String(Bytes));
 end;
 
+{$ENDIF}
+
+{$IFDEF LAKON}
+
+function UnicodeStringToUTF8Path(const APath: UnicodeString): string;
+begin
+  { The identity twin — see UTF8PathToUnicodeString above. }
+  Result := APath;
+end;
+
+{$ELSE}
+
 function UnicodeStringToUTF8Path(const APath: UnicodeString): string;
 var
   Bytes: RawByteString;
@@ -46,6 +73,8 @@ begin
   SetCodePage(Bytes, CP_UTF8, False);
   Result := string(Bytes);
 end;
+
+{$ENDIF}
 
 function ExpandUTF8FileName(const APath: string): string;
 begin
