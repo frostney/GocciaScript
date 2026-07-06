@@ -63,6 +63,9 @@ implementation
 
 uses
   Math,
+  SysUtils,
+
+  BigInteger,
 
   Goccia.Arguments.Converter,
   Goccia.Arguments.Validator,
@@ -78,12 +81,337 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Generic,
+  Goccia.Values.IteratorSupport,
   Goccia.Values.IteratorValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
+const
+  DOUBLE_SIGN_MASK = QWord($8000000000000000);
+  DOUBLE_EXP_MASK  = QWord($7FF0000000000000);
+  DOUBLE_FRAC_MASK = QWord($000FFFFFFFFFFFFF);
+  DOUBLE_HIDDEN_BIT = QWord($0010000000000000);
+  DOUBLE_EXP_BIAS = 1023;
+  DOUBLE_FRAC_BITS = 52;
+  DOUBLE_MIN_NORMAL_EXPONENT = -1022;
+  DOUBLE_MIN_SUBNORMAL_EXPONENT = -1074;
+  DOUBLE_MAX_EXPONENT = 1023;
+  DOUBLE_INTEGRAL_LIMIT = 4503599627370496.0; // 2^52
+
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
+
+{$IFDEF DARWIN}
+function LibMSinh(const AValue: Double): Double; cdecl; external name 'sinh';
+function LibMTanh(const AValue: Double): Double; cdecl; external name 'tanh';
+function LibMAsinh(const AValue: Double): Double; cdecl; external name 'asinh';
+function LibMAtanh(const AValue: Double): Double; cdecl; external name 'atanh';
+{$ENDIF}
+{$IFDEF LINUX}
+function LibMSinh(const AValue: Double): Double; cdecl; external 'm' name 'sinh';
+function LibMTanh(const AValue: Double): Double; cdecl; external 'm' name 'tanh';
+function LibMAsinh(const AValue: Double): Double; cdecl; external 'm' name 'asinh';
+function LibMAtanh(const AValue: Double): Double; cdecl; external 'm' name 'atanh';
+{$ENDIF}
+
+function IsFiniteIntegral(const AValue: Double): Boolean; inline;
+begin
+  Result := (not IsNan(AValue)) and (not IsInfinite(AValue)) and
+    ((Abs(AValue) >= DOUBLE_INTEGRAL_LIMIT) or (Frac(AValue) = 0));
+end;
+
+function CubeRootApprox(const AValue: Double): Double;
+var
+  AbsValue, Guess: Double;
+  I: Integer;
+begin
+  if AValue = 0 then
+    Exit(AValue);
+  AbsValue := Abs(AValue);
+  Guess := Power(AbsValue, 1.0 / 3.0);
+  for I := 0 to 2 do
+    Guess := (2.0 * Guess + AbsValue / (Guess * Guess)) / 3.0;
+  if AValue < 0 then
+    Result := -Guess
+  else
+    Result := Guess;
+end;
+
+function Expm1Approx(const AValue: Double): Double;
+var
+  Term: Double;
+  N: Integer;
+begin
+  if Abs(AValue) >= 0.5 then
+    Exit(Exp(AValue) - 1.0);
+  Result := AValue;
+  Term := AValue;
+  for N := 2 to 48 do
+  begin
+    Term := Term * AValue / N;
+    Result := Result + Term;
+    if Abs(Term) <= Abs(Result) * 1.0E-17 then
+      Break;
+  end;
+end;
+
+function Log1pApprox(const AValue: Double): Double;
+var
+  X2, X3, X4, X5, X6: Double;
+begin
+  if Abs(AValue) >= 1.0E-3 then
+    Exit(Ln(1.0 + AValue));
+  X2 := AValue * AValue;
+  X3 := X2 * AValue;
+  X4 := X3 * AValue;
+  X5 := X4 * AValue;
+  X6 := X5 * AValue;
+  Result := AValue - X2 / 2.0 + X3 / 3.0 - X4 / 4.0 +
+    X5 / 5.0 - X6 / 6.0;
+end;
+
+function AcoshApprox(const AValue: Double): Double;
+var
+  Delta: Double;
+  Root: Double;
+begin
+  Delta := AValue - 1.0;
+  if Delta = 0 then
+    Result := 0
+  else if Delta < 1.0E-3 then
+  begin
+    Root := Sqrt(2.0 * Delta);
+    Result := Root * (1.0 - Delta / 12.0 + 3.0 * Delta * Delta / 160.0 -
+      5.0 * Delta * Delta * Delta / 896.0);
+  end
+  else if AValue > 1.0E154 then
+    Result := Ln(AValue) + Ln(2.0)
+  else
+    Result := Ln(AValue + Sqrt(AValue - 1.0) * Sqrt(AValue + 1.0));
+end;
+
+function AsinhApprox(const AValue: Double): Double;
+var
+  AbsValue, Inner, Term, X2: Double;
+  N: Integer;
+begin
+  {$IFDEF DARWIN}
+  Exit(LibMAsinh(AValue));
+  {$ENDIF}
+  {$IFDEF LINUX}
+  Exit(LibMAsinh(AValue));
+  {$ENDIF}
+
+  if AValue = 0 then
+    Exit(AValue);
+  AbsValue := Abs(AValue);
+  if AbsValue < 0.5 then
+  begin
+    Result := AValue;
+    Term := AValue;
+    X2 := AValue * AValue;
+    for N := 1 to 80 do
+    begin
+      Term := -Term * X2 * Sqr(2 * N - 1) / ((2 * N) * (2 * N + 1));
+      Result := Result + Term;
+      if Abs(Term) <= Abs(Result) * 1.0E-17 then
+        Break;
+    end;
+    Exit;
+  end;
+  if AbsValue > 1.0E154 then
+    Inner := Ln(AbsValue) + Ln(2.0)
+  else
+    Inner := ArcSinh(AbsValue);
+  if AValue < 0 then
+    Result := -Inner
+  else
+    Result := Inner;
+end;
+
+function AtanhApprox(const AValue: Double): Double;
+var
+  X2, Term: Double;
+  Denominator: Integer;
+begin
+  {$IFDEF DARWIN}
+  Exit(LibMAtanh(AValue));
+  {$ENDIF}
+  {$IFDEF LINUX}
+  Exit(LibMAtanh(AValue));
+  {$ENDIF}
+
+  if AValue = 0 then
+    Exit(AValue);
+  if Abs(AValue) < 0.5 then
+  begin
+    Result := AValue;
+    Term := AValue;
+    X2 := AValue * AValue;
+    Denominator := 3;
+    while Denominator <= 161 do
+    begin
+      Term := Term * X2;
+      Result := Result + Term / Denominator;
+      if Abs(Term / Denominator) <= Abs(Result) * 1.0E-17 then
+        Break;
+      Inc(Denominator, 2);
+    end;
+    Exit;
+  end;
+  Result := ArcTanh(AValue);
+end;
+
+function TanhApprox(const AValue: Double): Double;
+var
+  E: Double;
+begin
+  {$IFDEF DARWIN}
+  Exit(LibMTanh(AValue));
+  {$ENDIF}
+  {$IFDEF LINUX}
+  Exit(LibMTanh(AValue));
+  {$ENDIF}
+
+  if AValue = 0 then
+    Exit(AValue);
+  if AValue > 20 then
+    Exit(1.0);
+  if AValue < -20 then
+    Exit(-1.0);
+  if Abs(AValue) < 0.25 then
+  begin
+    E := Expm1Approx(2.0 * AValue);
+    Exit(E / (E + 2.0));
+  end;
+  Result := Tanh(AValue);
+end;
+
+function SinhApprox(const AValue: Double): Double;
+var
+  Term, X2: Double;
+  N: Integer;
+begin
+  {$IFDEF DARWIN}
+  Exit(LibMSinh(AValue));
+  {$ENDIF}
+  {$IFDEF LINUX}
+  Exit(LibMSinh(AValue));
+  {$ENDIF}
+
+  if AValue = 0 then
+    Exit(AValue);
+  if Abs(AValue) >= 0.125 then
+    Exit(Sinh(AValue));
+  Result := AValue;
+  Term := AValue;
+  X2 := AValue * AValue;
+  for N := 1 to 24 do
+  begin
+    Term := Term * X2 / ((2 * N) * (2 * N + 1));
+    Result := Result + Term;
+    if Abs(Term) <= Abs(Result) * 1.0E-17 then
+      Break;
+  end;
+end;
+
+function DecomposeFiniteDouble(const AValue: Double; out AMantissa: TBigInteger;
+  out AExponent: Integer): Boolean;
+var
+  Bits, Fraction: QWord;
+  RawExponent: Integer;
+begin
+  Bits := PQWord(@AValue)^;
+  Fraction := Bits and DOUBLE_FRAC_MASK;
+  RawExponent := Integer((Bits and DOUBLE_EXP_MASK) shr DOUBLE_FRAC_BITS);
+  if RawExponent = 0 then
+  begin
+    if Fraction = 0 then
+      Exit(False);
+    AMantissa := TBigInteger.FromInt64(Int64(Fraction));
+    AExponent := DOUBLE_MIN_SUBNORMAL_EXPONENT;
+  end
+  else
+  begin
+    AMantissa := TBigInteger.FromInt64(Int64(DOUBLE_HIDDEN_BIT or Fraction));
+    AExponent := RawExponent - DOUBLE_EXP_BIAS - DOUBLE_FRAC_BITS;
+  end;
+  if (Bits and DOUBLE_SIGN_MASK) <> 0 then
+    AMantissa := AMantissa.Negate;
+  Result := True;
+end;
+
+function RoundShiftRightToEven(const AValue: TBigInteger;
+  const AShift: Integer): TBigInteger;
+var
+  Divisor, Quotient, Remainder, TwiceRemainder: TBigInteger;
+  Cmp: Integer;
+begin
+  if AShift <= 0 then
+    Exit(AValue.ShiftLeft(-AShift));
+  Quotient := AValue.ShiftRight(AShift);
+  Remainder := AValue.Subtract(Quotient.ShiftLeft(AShift));
+  if Remainder.IsZero then
+    Exit(Quotient);
+  Divisor := TBigInteger.One.ShiftLeft(AShift);
+  TwiceRemainder := Remainder.ShiftLeft(1);
+  Cmp := TwiceRemainder.Compare(Divisor);
+  if (Cmp > 0) or ((Cmp = 0) and Quotient.GetBit(0)) then
+    Quotient := Quotient.Add(TBigInteger.One);
+  Result := Quotient;
+end;
+
+function ExactScaledIntegerToDouble(const AValue: TBigInteger;
+  const AExponent: Integer): Double;
+var
+  Negative: Boolean;
+  Magnitude, Significand: TBigInteger;
+  Exponent, Shift: Integer;
+begin
+  if AValue.IsZero then
+    Exit(0.0);
+
+  Negative := AValue.IsNegative;
+  Magnitude := AValue.AbsValue;
+  Exponent := Magnitude.BitLength - 1 + AExponent;
+
+  if Exponent > DOUBLE_MAX_EXPONENT then
+  begin
+    if Negative then
+      Exit(NegInfinity);
+    Exit(Infinity);
+  end;
+
+  if Exponent >= DOUBLE_MIN_NORMAL_EXPONENT then
+  begin
+    Shift := Exponent - DOUBLE_FRAC_BITS - AExponent;
+    Significand := RoundShiftRightToEven(Magnitude, Shift);
+    if Significand.BitLength > DOUBLE_FRAC_BITS + 1 then
+    begin
+      Significand := Significand.ShiftRight(1);
+      Inc(Exponent);
+      if Exponent > DOUBLE_MAX_EXPONENT then
+      begin
+        if Negative then
+          Exit(NegInfinity);
+        Exit(Infinity);
+      end;
+    end;
+    Result := Ldexp(Significand.ToDouble, Exponent - DOUBLE_FRAC_BITS);
+  end
+  else
+  begin
+    Shift := DOUBLE_MIN_SUBNORMAL_EXPONENT - AExponent;
+    Significand := RoundShiftRightToEven(Magnitude, Shift);
+    if Significand.IsZero then
+      Result := 0.0
+    else
+      Result := Ldexp(Significand.ToDouble, DOUBLE_MIN_SUBNORMAL_EXPONENT);
+  end;
+
+  if Negative then
+    Result := -Result;
+end;
 
 procedure ClearThreadvarMembers;
 begin
@@ -166,8 +494,6 @@ function TGocciaMath.MathAbs(const AArgs: TGocciaArgumentsCollection; const AThi
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.abs', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: If n is NaN, return NaN.
@@ -187,7 +513,6 @@ var
   NumberArg: TGocciaNumberLiteralValue;
   IntegralPart: Double;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.floor', ThrowError);
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := TGocciaArgumentConverter.GetNumber(AArgs, 0);
   // Step 2: If n is NaN, +∞𝔽, -∞𝔽, return n. Signed-zero is preserved
@@ -215,11 +540,11 @@ var
   NumberArg: TGocciaNumberLiteralValue;
   V: Double;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.ceil', ThrowError);
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := TGocciaArgumentConverter.GetNumber(AArgs, 0);
   // Step 2: If n is NaN, +∞𝔽, -∞𝔽, or an integral Number, return n.
-  if NumberArg.IsNaN or NumberArg.IsInfinite then
+  if NumberArg.IsNaN or NumberArg.IsInfinite or NumberArg.IsNegativeZero or
+     (NumberArg.Value = 0) or IsFiniteIntegral(NumberArg.Value) then
   begin
     Result := NumberArg;
     Exit;
@@ -240,11 +565,11 @@ function TGocciaMath.MathRound(const AArgs: TGocciaArgumentsCollection; const AT
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.round', ThrowError);
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: If n is NaN, +∞𝔽, -∞𝔽, or an integral Number, return n.
-  if NumberArg.IsNaN or NumberArg.IsInfinite then
+  if NumberArg.IsNaN or NumberArg.IsInfinite or NumberArg.IsNegativeZero or
+     (NumberArg.Value = 0) or IsFiniteIntegral(NumberArg.Value) then
   begin
     Result := NumberArg;
     Exit;
@@ -252,6 +577,8 @@ begin
   // Step 3: If n < +0𝔽 and n ≥ -0.5𝔽, return -0𝔽.
   if (NumberArg.Value < 0) and (NumberArg.Value >= -0.5) then
     Result := TGocciaNumberLiteralValue.NegativeZeroValue
+  else if (NumberArg.Value > 0) and (NumberArg.Value < 0.5) then
+    Result := TGocciaNumberLiteralValue.ZeroValue
   // Step 4: Return floor(n + 0.5).
   else
     Result := TGocciaNumberLiteralValue.Create(Floor(NumberArg.Value + 0.5));
@@ -262,6 +589,8 @@ function TGocciaMath.MathMax(const AArgs: TGocciaArgumentsCollection; const AThi
 var
   I: Integer;
   MaxVal, NumVal: TGocciaNumberLiteralValue;
+  Coerced: array of TGocciaNumberLiteralValue;
+  HasNaN: Boolean;
 begin
   // Step 1: Let coerced be a new empty List.
   // Step 2: For each element arg of args, append ? ToNumber(arg) to coerced.
@@ -270,27 +599,27 @@ begin
     Result := TGocciaNumberLiteralValue.NegativeInfinityValue
   else
   begin
-    MaxVal := AArgs.GetElement(0).ToNumberLiteral;
-
-    // Step 4: If any element is NaN, return NaN.
-    if MaxVal.IsNaN then
+    SetLength(Coerced, AArgs.Length);
+    HasNaN := False;
+    for I := 0 to AArgs.Length - 1 do
     begin
-      Result := TGocciaNumberLiteralValue.NaNValue;
-      Exit;
+      Coerced[I] := AArgs.GetElement(I).ToNumberLiteral;
+      if Coerced[I].IsNaN then
+        HasNaN := True;
     end;
 
+    // Step 4: If any element is NaN, return NaN after all coercions.
+    if HasNaN then
+      Exit(TGocciaNumberLiteralValue.NaNValue);
+
     // Step 5: Return the largest value among the elements of coerced.
-    for I := 1 to AArgs.Length - 1 do
+    MaxVal := Coerced[0];
+    for I := 1 to High(Coerced) do
     begin
-      NumVal := AArgs.GetElement(I).ToNumberLiteral;
-
-      if NumVal.IsNaN then
-      begin
-        Result := TGocciaNumberLiteralValue.NaNValue;
-        Exit;
-      end;
-
-      if NumVal.IsGreaterThan(MaxVal).Value then
+      NumVal := Coerced[I];
+      if NumVal.IsGreaterThan(MaxVal).Value or
+         ((NumVal.Value = 0) and (not NumVal.IsNegativeZero) and
+          MaxVal.IsNegativeZero) then
         MaxVal := NumVal;
     end;
     Result := MaxVal;
@@ -302,6 +631,8 @@ function TGocciaMath.MathMin(const AArgs: TGocciaArgumentsCollection; const AThi
 var
   I: Integer;
   MinVal, NumVal: TGocciaNumberLiteralValue;
+  Coerced: array of TGocciaNumberLiteralValue;
+  HasNaN: Boolean;
 begin
   // Step 1: Let coerced be a new empty List.
   // Step 2: For each element arg of args, append ? ToNumber(arg) to coerced.
@@ -310,27 +641,27 @@ begin
     Result := TGocciaNumberLiteralValue.InfinityValue
   else
   begin
-    MinVal := AArgs.GetElement(0).ToNumberLiteral;
-
-    // Step 4: If any element is NaN, return NaN.
-    if MinVal.IsNaN then
+    SetLength(Coerced, AArgs.Length);
+    HasNaN := False;
+    for I := 0 to AArgs.Length - 1 do
     begin
-      Result := TGocciaNumberLiteralValue.NaNValue;
-      Exit;
+      Coerced[I] := AArgs.GetElement(I).ToNumberLiteral;
+      if Coerced[I].IsNaN then
+        HasNaN := True;
     end;
 
+    // Step 4: If any element is NaN, return NaN after all coercions.
+    if HasNaN then
+      Exit(TGocciaNumberLiteralValue.NaNValue);
+
     // Step 5: Return the smallest value among the elements of coerced.
-    for I := 1 to AArgs.Length - 1 do
+    MinVal := Coerced[0];
+    for I := 1 to High(Coerced) do
     begin
-      NumVal := AArgs.GetElement(I).ToNumberLiteral;
-
-      if NumVal.IsNaN then
-      begin
-        Result := TGocciaNumberLiteralValue.NaNValue;
-        Exit;
-      end;
-
-      if NumVal.IsLessThan(MinVal).Value then
+      NumVal := Coerced[I];
+      if NumVal.IsLessThan(MinVal).Value or
+         (NumVal.IsNegativeZero and (MinVal.Value = 0) and
+          (not MinVal.IsNegativeZero)) then
         MinVal := NumVal;
     end;
     Result := MinVal;
@@ -345,7 +676,6 @@ var
   IntPart: Double;
   ExpIsOddInteger: Boolean;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Math.pow', ThrowError);
   Base := TGocciaArgumentConverter.GetNumber(AArgs, 0);
   Exponent := TGocciaArgumentConverter.GetNumber(AArgs, 1);
   B := Base.Value;
@@ -457,8 +787,6 @@ function TGocciaMath.MathSqrt(const AArgs: TGocciaArgumentsCollection; const ATh
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.sqrt', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: If n is NaN, return NaN.
@@ -527,8 +855,6 @@ function TGocciaMath.MathSign(const AArgs: TGocciaArgumentsCollection; const ATh
 var
   NumberLiteral: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.sign', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberLiteral := AArgs.GetElement(0).ToNumberLiteral;
 
@@ -542,8 +868,12 @@ begin
   else if NumberLiteral.IsNegativeInfinity then
     Result := TGocciaNumberLiteralValue.Create(-1)
   // Step 5: If n < +0𝔽, return -1𝔽. If n > +0𝔽, return 1𝔽. Otherwise return n (±0).
+  else if NumberLiteral.Value = 0 then
+    Result := NumberLiteral
+  else if NumberLiteral.Value < 0 then
+    Result := TGocciaNumberLiteralValue.Create(-1)
   else
-    Result := TGocciaNumberLiteralValue.Create(Sign(NumberLiteral.Value));
+    Result := TGocciaNumberLiteralValue.OneValue;
 end;
 
 // §21.3.2.35 Math.trunc ( x )
@@ -551,8 +881,6 @@ function TGocciaMath.MathTrunc(const AArgs: TGocciaArgumentsCollection; const AT
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.trunc', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: If n is NaN, +∞𝔽, -∞𝔽, +0𝔽, or -0𝔽, return n.
@@ -562,6 +890,12 @@ begin
     Result := TGocciaNumberLiteralValue.InfinityValue
   else if NumberArg.IsNegativeInfinity then
     Result := TGocciaNumberLiteralValue.NegativeInfinityValue
+  else if NumberArg.IsNegativeZero or (NumberArg.Value = 0) then
+    Result := NumberArg
+  else if Abs(NumberArg.Value) >= DOUBLE_INTEGRAL_LIMIT then
+    Result := NumberArg
+  else if (NumberArg.Value < 0) and (NumberArg.Value > -1) then
+    Result := TGocciaNumberLiteralValue.NegativeZeroValue
   // Step 3: Return the integral Number nearest n in the direction of +0𝔽.
   else
     Result := TGocciaNumberLiteralValue.Create(Trunc(NumberArg.Value));
@@ -572,8 +906,6 @@ function TGocciaMath.MathExp(const AArgs: TGocciaArgumentsCollection; const AThi
 var
   NumberLiteral: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.exp', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberLiteral := AArgs.GetElement(0).ToNumberLiteral;
 
@@ -593,8 +925,6 @@ function TGocciaMath.MathLog(const AArgs: TGocciaArgumentsCollection; const AThi
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.log', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for ln(n).
@@ -617,8 +947,6 @@ function TGocciaMath.MathLog10(const AArgs: TGocciaArgumentsCollection; const AT
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.log10', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for log10(n).
@@ -641,8 +969,6 @@ function TGocciaMath.MathSin(const AArgs: TGocciaArgumentsCollection; const AThi
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.sin', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for sin(n).
@@ -659,8 +985,6 @@ function TGocciaMath.MathCos(const AArgs: TGocciaArgumentsCollection; const AThi
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.cos', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for cos(n).
@@ -677,8 +1001,6 @@ function TGocciaMath.MathTan(const AArgs: TGocciaArgumentsCollection; const AThi
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.tan', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for tan(n).
@@ -695,8 +1017,6 @@ function TGocciaMath.MathAcos(const AArgs: TGocciaArgumentsCollection; const ATh
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.acos', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for acos(n).
@@ -716,8 +1036,6 @@ function TGocciaMath.MathAsin(const AArgs: TGocciaArgumentsCollection; const ATh
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.asin', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for asin(n).
@@ -737,8 +1055,6 @@ function TGocciaMath.MathAtan(const AArgs: TGocciaArgumentsCollection; const ATh
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.atan', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for atan(n).
@@ -759,8 +1075,6 @@ function TGocciaMath.MathAtan2(const AArgs: TGocciaArgumentsCollection; const AT
 var
   Y, X: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Math.atan2', ThrowError);
-
   // Step 1: Let ny be ? ToNumber(y).
   Y := TGocciaArgumentConverter.GetNumber(AArgs, 0);
   // Step 2: Let nx be ? ToNumber(x).
@@ -769,14 +1083,46 @@ begin
   // Step 3: Return the implementation-approximated Number value for atan2(ny, nx).
   if Y.IsNaN or X.IsNaN then
     Result := TGocciaNumberLiteralValue.NaNValue
+  else if Y.Value = 0 then
+  begin
+    if Y.IsNegativeZero then
+    begin
+      if X.IsNegativeZero or (X.Value < 0) or X.IsNegativeInfinity then
+        Result := TGocciaNumberLiteralValue.Create(-Pi)
+      else
+        Result := TGocciaNumberLiteralValue.NegativeZeroValue;
+    end
+    else if X.IsNegativeZero or (X.Value < 0) or X.IsNegativeInfinity then
+      Result := TGocciaNumberLiteralValue.Create(Pi)
+    else
+      Result := TGocciaNumberLiteralValue.ZeroValue;
+  end
   else if Y.IsInfinity and X.IsInfinity then
-    Result := TGocciaNumberLiteralValue.NaNValue
-  else if Y.IsNegativeInfinity and X.IsInfinity then
-    Result := TGocciaNumberLiteralValue.NaNValue
+    Result := TGocciaNumberLiteralValue.Create(Pi / 4)
   else if Y.IsInfinity and X.IsNegativeInfinity then
-    Result := TGocciaNumberLiteralValue.NaNValue
+    Result := TGocciaNumberLiteralValue.Create(3 * Pi / 4)
+  else if Y.IsInfinity then
+    Result := TGocciaNumberLiteralValue.Create(Pi / 2)
+  else if Y.IsNegativeInfinity and X.IsInfinity then
+    Result := TGocciaNumberLiteralValue.Create(-Pi / 4)
   else if Y.IsNegativeInfinity and X.IsNegativeInfinity then
-    Result := TGocciaNumberLiteralValue.NaNValue
+    Result := TGocciaNumberLiteralValue.Create(-3 * Pi / 4)
+  else if Y.IsNegativeInfinity then
+    Result := TGocciaNumberLiteralValue.Create(-Pi / 2)
+  else if X.IsInfinity then
+  begin
+    if Y.Value < 0 then
+      Result := TGocciaNumberLiteralValue.NegativeZeroValue
+    else
+      Result := TGocciaNumberLiteralValue.ZeroValue;
+  end
+  else if X.IsNegativeInfinity then
+  begin
+    if Y.Value < 0 then
+      Result := TGocciaNumberLiteralValue.Create(-Pi)
+    else
+      Result := TGocciaNumberLiteralValue.Create(Pi);
+  end
   else
     Result := TGocciaNumberLiteralValue.Create(ArcTan2(Y.Value, X.Value));
 end;
@@ -785,10 +1131,7 @@ end;
 function TGocciaMath.MathCbrt(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
-  SignVal: Double;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.cbrt', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for cbrt(n).
@@ -799,12 +1142,9 @@ begin
   else if NumberArg.IsNegativeInfinity then
     Result := TGocciaNumberLiteralValue.NegativeInfinityValue
   else if NumberArg.Value = 0.0 then
-    Result := TGocciaNumberLiteralValue.ZeroValue
+    Result := NumberArg
   else
-  begin
-    SignVal := Sign(NumberArg.Value);
-    Result := TGocciaNumberLiteralValue.Create(SignVal * Power(Abs(NumberArg.Value), 1.0 / 3.0));
-  end;
+    Result := TGocciaNumberLiteralValue.Create(CubeRootApprox(NumberArg.Value));
 end;
 
 // §21.3.2.13 Math.cosh ( x )
@@ -812,8 +1152,6 @@ function TGocciaMath.MathCosh(const AArgs: TGocciaArgumentsCollection; const ATh
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.cosh', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for cosh(n).
@@ -830,8 +1168,6 @@ function TGocciaMath.MathSinh(const AArgs: TGocciaArgumentsCollection; const ATh
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.sinh', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for sinh(n).
@@ -841,8 +1177,10 @@ begin
     Result := TGocciaNumberLiteralValue.InfinityValue
   else if NumberArg.IsNegativeInfinity then
     Result := TGocciaNumberLiteralValue.NegativeInfinityValue
+  else if NumberArg.Value = 0 then
+    Result := NumberArg
   else
-    Result := TGocciaNumberLiteralValue.Create(Sinh(NumberArg.Value));
+    Result := TGocciaNumberLiteralValue.Create(SinhApprox(NumberArg.Value));
 end;
 
 // §21.3.2.34 Math.tanh ( x )
@@ -850,8 +1188,6 @@ function TGocciaMath.MathTanh(const AArgs: TGocciaArgumentsCollection; const ATh
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.tanh', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for tanh(n).
@@ -861,8 +1197,10 @@ begin
     Result := TGocciaNumberLiteralValue.OneValue
   else if NumberArg.IsNegativeInfinity then
     Result := TGocciaNumberLiteralValue.Create(-1)
+  else if NumberArg.Value = 0 then
+    Result := NumberArg
   else
-    Result := TGocciaNumberLiteralValue.Create(Tanh(NumberArg.Value));
+    Result := TGocciaNumberLiteralValue.Create(TanhApprox(NumberArg.Value));
 end;
 
 // §21.3.2.3 Math.acosh ( x )
@@ -870,8 +1208,6 @@ function TGocciaMath.MathAcosh(const AArgs: TGocciaArgumentsCollection; const AT
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.acosh', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for acosh(n).
@@ -885,7 +1221,7 @@ begin
   else if NumberArg.Value < 1.0 then
     Result := TGocciaNumberLiteralValue.NaNValue
   else
-    Result := TGocciaNumberLiteralValue.Create(ArcCosh(NumberArg.Value));
+    Result := TGocciaNumberLiteralValue.Create(AcoshApprox(NumberArg.Value));
 end;
 
 // §21.3.2.5 Math.asinh ( x )
@@ -893,8 +1229,6 @@ function TGocciaMath.MathAsinh(const AArgs: TGocciaArgumentsCollection; const AT
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.asinh', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for asinh(n).
@@ -905,7 +1239,7 @@ begin
   else if NumberArg.IsNegativeInfinity then
     Result := TGocciaNumberLiteralValue.NegativeInfinityValue
   else
-    Result := TGocciaNumberLiteralValue.Create(ArcSinh(NumberArg.Value));
+    Result := TGocciaNumberLiteralValue.Create(AsinhApprox(NumberArg.Value));
 end;
 
 // §21.3.2.7 Math.atanh ( x )
@@ -913,8 +1247,6 @@ function TGocciaMath.MathAtanh(const AArgs: TGocciaArgumentsCollection; const AT
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.atanh', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for atanh(n).
@@ -933,8 +1265,10 @@ begin
   // If n is -1𝔽, return -∞𝔽.
   else if NumberArg.Value = -1.0 then
     Result := TGocciaNumberLiteralValue.NegativeInfinityValue
+  else if NumberArg.Value = 0 then
+    Result := NumberArg
   else
-    Result := TGocciaNumberLiteralValue.Create(ArcTanh(NumberArg.Value));
+    Result := TGocciaNumberLiteralValue.Create(AtanhApprox(NumberArg.Value));
 end;
 
 // §21.3.2.15 Math.expm1 ( x )
@@ -942,8 +1276,6 @@ function TGocciaMath.MathExpm1(const AArgs: TGocciaArgumentsCollection; const AT
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.expm1', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for e^n - 1.
@@ -953,8 +1285,10 @@ begin
     Result := TGocciaNumberLiteralValue.Create(-1)
   else if NumberArg.IsInfinity then
     Result := TGocciaNumberLiteralValue.InfinityValue
+  else if NumberArg.Value = 0 then
+    Result := NumberArg
   else
-    Result := TGocciaNumberLiteralValue.Create(Exp(NumberArg.Value) - 1.0);
+    Result := TGocciaNumberLiteralValue.Create(Expm1Approx(NumberArg.Value));
 end;
 
 // ES2026 §21.3.2.17 Math.f16round ( x )
@@ -962,8 +1296,6 @@ function TGocciaMath.MathF16round(const AArgs: TGocciaArgumentsCollection; const
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.f16round', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: If n is NaN, return NaN. If n is ±∞ or ±0, return n.
@@ -973,6 +1305,8 @@ begin
     Result := TGocciaNumberLiteralValue.InfinityValue
   else if NumberArg.IsNegativeInfinity then
     Result := TGocciaNumberLiteralValue.NegativeInfinityValue
+  else if NumberArg.Value = 0 then
+    Result := NumberArg
   // Step 3: Return the result of rounding n to the nearest float16 value.
   else
     Result := TGocciaNumberLiteralValue.Create(Float16ToDouble(DoubleToFloat16(NumberArg.Value)));
@@ -984,8 +1318,6 @@ var
   NumberArg: TGocciaNumberLiteralValue;
   SingleVal: Single;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.fround', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: If n is NaN, return NaN. If n is ±∞, return n.
@@ -995,6 +1327,8 @@ begin
     Result := TGocciaNumberLiteralValue.InfinityValue
   else if NumberArg.IsNegativeInfinity then
     Result := TGocciaNumberLiteralValue.NegativeInfinityValue
+  else if NumberArg.Value = 0 then
+    Result := NumberArg
   // Step 3: Return the result of rounding n to the nearest float32 value.
   else
   begin
@@ -1041,26 +1375,22 @@ end;
 // §21.3.2.19 Math.imul ( x, y )
 function TGocciaMath.MathImul(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  X, Y: TGocciaNumberLiteralValue;
-  XInt, YInt: LongInt;
+  X, Y: Cardinal;
+  Product: UInt64;
+  SignedProduct: Int64;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Math.imul', ThrowError);
-
-  X := TGocciaArgumentConverter.GetNumber(AArgs, 0);
-  Y := TGocciaArgumentConverter.GetNumber(AArgs, 1);
-
-  if X.IsNaN or Y.IsNaN then
-    Result := TGocciaNumberLiteralValue.ZeroValue
+  // Step 1: Let a be ? ToUint32(x).
+  X := ToUint32Value(AArgs.GetElement(0));
+  // Step 2: Let b be ? ToUint32(y).
+  Y := ToUint32Value(AArgs.GetElement(1));
+  // Step 3: Let product be (a x b) modulo 2^32.
+  Product := (UInt64(X) * UInt64(Y)) and UInt64($FFFFFFFF);
+  // Step 4: If product >= 2^31, return product - 2^32; otherwise return product.
+  if Product >= UInt64($80000000) then
+    SignedProduct := Int64(Product) - Int64($100000000)
   else
-  begin
-    // Step 1: Let a be ? ToUint32(x).
-    XInt := LongInt(Trunc(X.Value));
-    // Step 2: Let b be ? ToUint32(y).
-    YInt := LongInt(Trunc(Y.Value));
-    // Step 3: Let product be (a × b) modulo 2^32.
-    // Step 4: If product ≥ 2^31, return product - 2^32; otherwise return product.
-    Result := TGocciaNumberLiteralValue.Create(XInt * YInt);
-  end;
+    SignedProduct := Int64(Product);
+  Result := TGocciaNumberLiteralValue.Create(SignedProduct);
 end;
 
 // §21.3.2.22 Math.log1p ( x )
@@ -1068,8 +1398,6 @@ function TGocciaMath.MathLog1p(const AArgs: TGocciaArgumentsCollection; const AT
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.log1p', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for ln(1 + n).
@@ -1085,17 +1413,19 @@ begin
   // If n < -1𝔽, return NaN.
   else if NumberArg.Value < -1.0 then
     Result := TGocciaNumberLiteralValue.NaNValue
+  else if NumberArg.Value = 0 then
+    Result := NumberArg
   else
-    Result := TGocciaNumberLiteralValue.Create(Ln(1.0 + NumberArg.Value));
+    Result := TGocciaNumberLiteralValue.Create(Log1pApprox(NumberArg.Value));
 end;
 
 // §21.3.2.23 Math.log2 ( x )
 function TGocciaMath.MathLog2(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
+  LogValue: Double;
+  RoundedLog: Integer;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.log2', ThrowError);
-
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 2: Return the implementation-approximated Number value for log2(n).
@@ -1110,57 +1440,57 @@ begin
   else if NumberArg.Value < 0 then
     Result := TGocciaNumberLiteralValue.NaNValue
   else
-    Result := TGocciaNumberLiteralValue.Create(Log2(NumberArg.Value));
+  begin
+    LogValue := Log2(NumberArg.Value);
+    RoundedLog := Round(LogValue);
+    if (RoundedLog > -1075) and (RoundedLog < 1024) and
+       (Power(2.0, RoundedLog) = NumberArg.Value) then
+      Result := TGocciaNumberLiteralValue.Create(RoundedLog)
+    else
+      Result := TGocciaNumberLiteralValue.Create(LogValue);
+  end;
 end;
 
 // §21.3.2.11 Math.clz32 ( x )
 function TGocciaMath.MathClz32(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  NumberArg: TGocciaNumberLiteralValue;
   Value: LongWord;
   Count: Integer;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.clz32', ThrowError);
-
-  NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   // Step 1: Let n be ? ToUint32(x). NaN/±∞ coerce to 0, yielding 32.
-  if NumberArg.IsNaN or NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then
-    Result := TGocciaNumberLiteralValue.Create(32)
+  Value := ToUint32Value(AArgs.GetElement(0));
+  if Value = 0 then
+    Count := 32
   else
   begin
-    Value := LongWord(Trunc(NumberArg.Value));
     // Step 2: Let p be the number of leading zero bits in the unsigned 32-bit
     // binary representation of n.
-    if Value = 0 then
-      Count := 32
-    else
+    Count := 0;
+    while (Value and $80000000) = 0 do
     begin
-      Count := 0;
-      while (Value and $80000000) = 0 do
-      begin
-        Inc(Count);
-        Value := Value shl 1;
-      end;
+      Inc(Count);
+      Value := Value shl 1;
     end;
-    // Step 3: Return 𝔽(p).
-    Result := TGocciaNumberLiteralValue.Create(Count);
   end;
+  // Step 3: Return 𝔽(p).
+  Result := TGocciaNumberLiteralValue.Create(Count);
 end;
 
 // TC39 proposal-math-sum §1 Math.sumPrecise(items)
 function TGocciaMath.MathSumPrecise(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
   procedure AccumulateValue(const AElement: TGocciaValue;
-    var ASum, ACompensation: Double;
-    var AHasPosInf, AHasNegInf, AHasNaN, AHasAnyValue: Boolean);
+    var AExactSum: TBigInteger; var ACommonExponent: Integer;
+    var AHasExactSum, AHasPosInf, AHasNegInf, AHasNaN,
+    AHasNonMinusZero: Boolean);
   var
     NumVal: TGocciaNumberLiteralValue;
-    T: Double;
+    Mantissa: TBigInteger;
+    Exponent: Integer;
   begin
     if not (AElement is TGocciaNumberLiteralValue) then
       Goccia.Values.ErrorHelper.ThrowTypeError(SErrorMathSumPreciseNotNumber, SSuggestNumberRange);
     NumVal := TGocciaNumberLiteralValue(AElement);
-    AHasAnyValue := True;
     if NumVal.IsNaN then
       AHasNaN := True
     else if NumVal.IsInfinity then
@@ -1169,93 +1499,69 @@ function TGocciaMath.MathSumPrecise(const AArgs: TGocciaArgumentsCollection; con
       AHasNegInf := True
     else
     begin
-      // Neumaier compensated summation
-      T := ASum + NumVal.Value;
-      if Abs(ASum) >= Abs(NumVal.Value) then
-        ACompensation := ACompensation + ((ASum - T) + NumVal.Value)
-      else
-        ACompensation := ACompensation + ((NumVal.Value - T) + ASum);
-      ASum := T;
+      if (NumVal.Value <> 0) or not NumVal.IsNegativeZero then
+        AHasNonMinusZero := True;
+      if DecomposeFiniteDouble(NumVal.Value, Mantissa, Exponent) then
+      begin
+        if not AHasExactSum then
+        begin
+          AExactSum := Mantissa;
+          ACommonExponent := Exponent;
+          AHasExactSum := True;
+        end
+        else
+        begin
+          if Exponent < ACommonExponent then
+          begin
+            AExactSum := AExactSum.ShiftLeft(ACommonExponent - Exponent);
+            ACommonExponent := Exponent;
+          end;
+          AExactSum := AExactSum.Add(Mantissa.ShiftLeft(Exponent - ACommonExponent));
+        end;
+      end;
     end;
   end;
 
 var
-  Iterable, IteratorMethod, IteratorObj, NextMethod, Element: TGocciaValue;
+  Iterable, Element: TGocciaValue;
   Iterator: TGocciaIteratorValue;
-  IterResult: TGocciaObjectValue;
-  ArrValue: TGocciaArrayValue;
-  CallArgs: TGocciaArgumentsCollection;
-  I: Integer;
-  Sum, Compensation: Double;
-  HasPosInf, HasNegInf, HasNaN, HasAnyValue: Boolean;
+  Done: Boolean;
+  ExactSum: TBigInteger;
+  CommonExponent: Integer;
+  Sum: Double;
+  HasExactSum, HasPosInf, HasNegInf, HasNaN, HasNonMinusZero: Boolean;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Math.sumPrecise', ThrowError);
-
   Iterable := AArgs.GetElement(0);
 
-  Sum := 0.0;
-  Compensation := 0.0;
+  ExactSum := TBigInteger.Zero;
+  CommonExponent := 0;
+  HasExactSum := False;
   HasPosInf := False;
   HasNegInf := False;
   HasNaN := False;
-  HasAnyValue := False;
+  HasNonMinusZero := False;
 
-  // Fast path for arrays
-  if Iterable is TGocciaArrayValue then
-  begin
-    ArrValue := TGocciaArrayValue(Iterable);
-    for I := 0 to ArrValue.Elements.Count - 1 do
+  Iterator := GetIteratorFromValue(Iterable);
+  if not Assigned(Iterator) then
+    Goccia.Values.ErrorHelper.ThrowTypeError(SErrorMathSumPreciseNotIterable,
+      SSuggestNotIterable);
+
+  TGarbageCollector.Instance.AddTempRoot(Iterator);
+  try
+    Element := Iterator.DirectNext(Done);
+    while not Done do
     begin
-      Element := ArrValue.Elements[I];
-      if not Assigned(Element) then
-        Element := TGocciaUndefinedLiteralValue.UndefinedValue;
-      AccumulateValue(Element, Sum, Compensation, HasPosInf, HasNegInf, HasNaN, HasAnyValue);
-    end;
-  end
-  else
-  begin
-    // Resolve [Symbol.iterator] on the iterable
-    Iterator := nil;
-    if Iterable is TGocciaIteratorValue then
-      Iterator := TGocciaIteratorValue(Iterable)
-    else if Iterable is TGocciaObjectValue then
-    begin
-      IteratorMethod := TGocciaObjectValue(Iterable).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
-      if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
-      begin
-        CallArgs := TGocciaArgumentsCollection.Create;
-        try
-          IteratorObj := InvokeCallable(IteratorMethod, CallArgs, Iterable);
-        finally
-          CallArgs.Free;
-        end;
-        if IteratorObj is TGocciaIteratorValue then
-          Iterator := TGocciaIteratorValue(IteratorObj)
-        else if IteratorObj is TGocciaObjectValue then
-        begin
-          NextMethod := IteratorObj.GetProperty(PROP_NEXT);
-          if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
-            // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
-            Iterator := CreateRootedGenericIterator(IteratorObj, NextMethod);
-        end;
+      try
+        AccumulateValue(Element, ExactSum, CommonExponent, HasExactSum,
+          HasPosInf, HasNegInf, HasNaN, HasNonMinusZero);
+      except
+        CloseIteratorPreservingError(Iterator);
+        raise;
       end;
+      Element := Iterator.DirectNext(Done);
     end;
-
-    if not Assigned(Iterator) then
-      Goccia.Values.ErrorHelper.ThrowTypeError(SErrorMathSumPreciseNotIterable, SSuggestNotIterable);
-
-    TGarbageCollector.Instance.AddTempRoot(Iterator);
-    try
-      IterResult := Iterator.AdvanceNext;
-      while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
-      begin
-        Element := IterResult.GetProperty(PROP_VALUE);
-        AccumulateValue(Element, Sum, Compensation, HasPosInf, HasNegInf, HasNaN, HasAnyValue);
-        IterResult := Iterator.AdvanceNext;
-      end;
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(Iterator);
-    end;
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
 
   // Handle special cases per spec
@@ -1267,10 +1573,13 @@ begin
     Exit(TGocciaNumberLiteralValue.InfinityValue);
   if HasNegInf then
     Exit(TGocciaNumberLiteralValue.NegativeInfinityValue);
-  if not HasAnyValue then
+  if not HasNonMinusZero and not HasExactSum then
     Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
 
-  Result := TGocciaNumberLiteralValue.Create(Sum + Compensation);
+  Sum := ExactScaledIntegerToDouble(ExactSum, CommonExponent);
+  if (Sum = 0) and not HasNonMinusZero then
+    Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
+  Result := TGocciaNumberLiteralValue.Create(Sum);
 end;
 
 initialization

@@ -73,7 +73,7 @@ Implements the [ECMAScript Math object](https://developer.mozilla.org/en-US/docs
 |--------|-------------|
 | `Math.clamp(x, min, max)` | Clamp to range (Stage 2 [proposal-math-clamp](https://github.com/tc39/proposal-math-clamp)) |
 | `Math.f16round(x)` | Nearest 16-bit float |
-| `Math.sumPrecise(iterable)` | Precise sum via Kahan-Babuska-Neumaier compensated summation. Throws `TypeError` for non-iterable or non-number elements. Empty iterable returns `-0`. Mixed `±Infinity` returns `NaN`. |
+| `Math.sumPrecise(iterable)` | Precise sum via exact finite accumulation and final double rounding. Throws `TypeError` for non-iterable or non-number elements. Empty iterable returns `-0`. Mixed `±Infinity` returns `NaN`. |
 
 ### Data Formats (JSON, JSON5, YAML, JSONL, CSV, TSV, TOML)
 
