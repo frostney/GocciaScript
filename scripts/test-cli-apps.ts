@@ -1047,6 +1047,83 @@ console.log("Bare Loader: bytecode --test262-host eval keeps sloppy var declarat
     throw new Error(`Bare bytecode sloppy eval var probe got: ${proc.stdout.toString()}`);
 }
 
+console.log("Bare Loader: bytecode --test262-host eval exposes later sloppy vars to existing closures...");
+{
+  const proc = Bun.spawnSync([
+    BARE,
+    "--test262-host",
+    "--mode=bytecode",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode([
+      "var y = 42;",
+      "function testY() {",
+      "  const before = () => y;",
+      "  eval('var y = 5;');",
+      "  const after = () => y;",
+      "  print([before(), after(), y].join(','));",
+      "  return before;",
+      "}",
+      "const beforeClosure = testY();",
+      "print(beforeClosure());",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const expected = [
+    "5,5,5",
+    "5",
+  ].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode sloppy eval pre-closure probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare bytecode sloppy eval pre-closure probe got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: bytecode --test262-host eval var declarations shadow outer upvalues...");
+{
+  const proc = Bun.spawnSync([
+    BARE,
+    "--test262-host",
+    "--mode=bytecode",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode([
+      "function outerNormal() {",
+      "  var x = 1;",
+      "  function inner() {",
+      "    eval('var x = 2;');",
+      "    return x;",
+      "  }",
+      "  print([inner(), x].join(','));",
+      "}",
+      "function outerArrow() {",
+      "  var x = 1;",
+      "  const inner = () => { eval('var x = 2;'); return x; };",
+      "  print([inner(), x].join(','));",
+      "}",
+      "outerNormal();",
+      "outerArrow();",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const expected = [
+    "2,1",
+    "2,1",
+  ].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode sloppy eval upvalue shadow probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare bytecode sloppy eval upvalue shadow probe got: ${proc.stdout.toString()}`);
+}
+
 console.log("Bare Loader: --test262-host eval reports strict delete identifier as SyntaxError...");
 {
   const source = [

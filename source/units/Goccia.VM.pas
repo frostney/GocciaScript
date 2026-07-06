@@ -1455,7 +1455,7 @@ begin
   if ContainsOwnLexicalBinding(AName) or ContainsOwnVarBinding(AName) then
     Exit(True);
   Result := TryFindBinding(AName, Binding) and
-    (Binding.Kind in [debLocal, debUpvalue]);
+    (Binding.Kind = debLocal) and Binding.IsVarEnvironmentBinding;
 end;
 
 procedure TGocciaVMDirectEvalScope.CopyBackVariableBindings;
@@ -12955,6 +12955,9 @@ begin
   SetLocalRaw(0, AThisValue);
   for I := 0 to FArgCount - 1 do
     SetLocalRaw(I + 1, FArguments[I]);
+  if (ATemplate.DirectEvalEnvironmentCount > 0) and
+     not TemplateUsesGlobalEvalEnvironment(ATemplate) then
+    EnsureCurrentDynamicVarScope;
 
   ExecutionRealm := BytecodeClosureExecutionRealm(AClosure, FRealm);
 
