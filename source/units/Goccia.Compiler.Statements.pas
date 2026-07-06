@@ -673,8 +673,9 @@ procedure PrepareLexicalDeclarationLocals(
   const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration);
 var
-  I, LocalIdx: Integer;
+  I, J, LocalIdx: Integer;
   Info: TGocciaVariableInfo;
+  Names: TStringList;
   Slot: UInt8;
 begin
   if AStmt.IsVar then
@@ -683,6 +684,30 @@ begin
   for I := 0 to High(AStmt.Variables) do
   begin
     Info := AStmt.Variables[I];
+    if Info.IsPattern or Assigned(Info.Pattern) then
+    begin
+      Names := TStringList.Create;
+      Names.CaseSensitive := True;
+      try
+        CollectPatternBindingNames(Info.Pattern, Names, True);
+        for J := 0 to Names.Count - 1 do
+        begin
+          LocalIdx := ACtx.Scope.ResolveLocal(Names[J]);
+          if (LocalIdx >= 0) and
+             (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) and
+             (ACtx.Scope.GetLocal(LocalIdx).Slot <>
+              ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
+            Slot := ACtx.Scope.GetLocal(LocalIdx).Slot
+          else
+            Slot := ACtx.Scope.DeclareLocal(Names[J], AStmt.IsConst);
+          EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+        end;
+      finally
+        Names.Free;
+      end;
+      Continue;
+    end;
+
     LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
     if (LocalIdx >= 0) and
        (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) and
@@ -753,6 +778,35 @@ begin
     if ACtx.GlobalBackedTopLevel and AStmt.IsVar and
        (not Info.HasInitializer) then
       Continue;
+
+    if Info.IsPattern or Assigned(Info.Pattern) then
+    begin
+      IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
+        (AStmt.IsVar or (ACtx.Scope.Depth = 0));
+
+      if AStmt.IsVar then
+        CollectDestructuringVarBindings(Info.Pattern, ACtx.Scope)
+      else
+        Goccia.Compiler.Expressions.CollectDestructuringBindings(
+          Info.Pattern, ACtx.Scope, AStmt.IsConst);
+
+      if IsTopLevelGlobalBacked and AStmt.IsVar then
+        EmitGlobalDefinesForPattern(ACtx, Info.Pattern, False, True, False);
+
+      InitSlot := ACtx.Scope.AllocateRegister;
+      try
+        ACtx.CompileExpression(Info.Initializer, InitSlot);
+        EmitDestructuring(ACtx, Info.Pattern, InitSlot,
+          IsTopLevelGlobalBacked and AStmt.IsVar);
+      finally
+        ACtx.Scope.FreeRegister;
+      end;
+
+      if IsTopLevelGlobalBacked and not AStmt.IsVar then
+        EmitGlobalDefinesForPattern(ACtx, Info.Pattern, AStmt.IsConst,
+          False, True);
+      Continue;
+    end;
 
     if AStmt.IsVar then
     begin
@@ -1396,21 +1450,31 @@ procedure PredeclareBlockVariableLocals(const ACtx: TGocciaCompilationContext;
   const AVarDecl: TGocciaVariableDeclaration;
   const AEmitInitializers: Boolean = True);
 var
-  I, LocalIdx: Integer;
+  I, J, LocalIdx: Integer;
+  Names: TStringList;
   Slot: UInt8;
 begin
   for I := 0 to High(AVarDecl.Variables) do
   begin
-    LocalIdx := ACtx.Scope.ResolveLocal(AVarDecl.Variables[I].Name);
-    if (LocalIdx < 0) or
-       (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) or
-       (ACtx.Scope.GetLocal(LocalIdx).Slot =
-        ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
-    begin
-      Slot := ACtx.Scope.DeclareLocal(AVarDecl.Variables[I].Name,
-        AVarDecl.IsConst);
-      if AEmitInitializers then
-        EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+    Names := TStringList.Create;
+    Names.CaseSensitive := True;
+    try
+      CollectVariableInfoBindingNames(AVarDecl.Variables[I], Names, True);
+      for J := 0 to Names.Count - 1 do
+      begin
+        LocalIdx := ACtx.Scope.ResolveLocal(Names[J]);
+        if (LocalIdx < 0) or
+           (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) or
+           (ACtx.Scope.GetLocal(LocalIdx).Slot =
+            ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
+        begin
+          Slot := ACtx.Scope.DeclareLocal(Names[J], AVarDecl.IsConst);
+          if AEmitInitializers then
+            EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+        end;
+      end;
+    finally
+      Names.Free;
     end;
   end;
 end;
@@ -1563,7 +1627,8 @@ end;
 procedure EmitBlockLexicalHoleInitializers(const ANode: TGocciaASTNode;
   const ACtx: TGocciaCompilationContext);
 var
-  I: Integer;
+  I, J: Integer;
+  Names: TStringList;
   VarDecl: TGocciaVariableDeclaration;
   UsingDecl: TGocciaUsingDeclaration;
 begin
@@ -1573,7 +1638,17 @@ begin
     if VarDecl.IsVar then
       Exit;
     for I := 0 to High(VarDecl.Variables) do
-      EmitBlockLexicalHoleInitializer(ACtx, VarDecl.Variables[I].Name);
+    begin
+      Names := TStringList.Create;
+      Names.CaseSensitive := True;
+      try
+        CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
+        for J := 0 to Names.Count - 1 do
+          EmitBlockLexicalHoleInitializer(ACtx, Names[J]);
+      finally
+        Names.Free;
+      end;
+    end;
   end
   else if ANode is TGocciaExportVariableDeclaration then
   begin
@@ -1581,7 +1656,17 @@ begin
     if VarDecl.IsVar then
       Exit;
     for I := 0 to High(VarDecl.Variables) do
-      EmitBlockLexicalHoleInitializer(ACtx, VarDecl.Variables[I].Name);
+    begin
+      Names := TStringList.Create;
+      Names.CaseSensitive := True;
+      try
+        CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
+        for J := 0 to Names.Count - 1 do
+          EmitBlockLexicalHoleInitializer(ACtx, Names[J]);
+      finally
+        Names.Free;
+      end;
+    end;
   end
   else if (ANode is TGocciaDestructuringDeclaration) and
           not TGocciaDestructuringDeclaration(ANode).IsVar then
@@ -3119,6 +3204,8 @@ begin
   VarDecl := TGocciaVariableDeclaration(AStmt.Init);
   if Length(VarDecl.Variables) <> 1 then
     Exit;
+  if VarDecl.Variables[0].IsPattern or Assigned(VarDecl.Variables[0].Pattern) then
+    Exit;
   if not VarDecl.Variables[0].HasInitializer then
     Exit;
   if not (VarDecl.Variables[0].Initializer is TGocciaLiteralExpression) then
@@ -3477,9 +3564,13 @@ begin
   begin
     VarDecl := TGocciaVariableDeclaration(ANode);
     for I := 0 to High(VarDecl.Variables) do
+    begin
+      if VarDecl.Variables[I].IsPattern or Assigned(VarDecl.Variables[I].Pattern) then
+        Exit(True);
       if VarDecl.Variables[I].HasInitializer and
          ExpressionNeedsPerIterationEnvironment(VarDecl.Variables[I].Initializer) then
         Exit(True);
+    end;
   end
   else if ANode is TGocciaDestructuringDeclaration then
     Exit(True)
@@ -3656,8 +3747,7 @@ begin
       VarDecl := TGocciaVariableDeclaration(AStmt.Init);
       PerIterIsConst := VarDecl.IsConst;
       PerIterNames := TStringList.Create;
-      for I := 0 to High(VarDecl.Variables) do
-        PerIterNames.Add(VarDecl.Variables[I].Name);
+      CollectVariableDeclarationBindingNames(VarDecl, PerIterNames, True);
     end
     else if (AStmt.Init is TGocciaDestructuringDeclaration)
             and not TGocciaDestructuringDeclaration(AStmt.Init).IsVar then
@@ -4216,24 +4306,36 @@ procedure CompileExportVariableDeclaration(
   const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExportVariableDeclaration);
 var
-  I: Integer;
+  I, J: Integer;
   VarInfo: TGocciaVariableInfo;
   LocalIdx: Integer;
+  Names: TStringList;
   Reg: UInt8;
   NameIdx: UInt16;
 begin
   CompileVariableDeclaration(ACtx, AStmt.Declaration);
 
-  for I := 0 to Length(AStmt.Declaration.Variables) - 1 do
-  begin
-    VarInfo := AStmt.Declaration.Variables[I];
-    LocalIdx := ACtx.Scope.ResolveLocal(VarInfo.Name);
-    if LocalIdx >= 0 then
+  Names := TStringList.Create;
+  Names.CaseSensitive := True;
+  try
+    for I := 0 to Length(AStmt.Declaration.Variables) - 1 do
     begin
-      Reg := ACtx.Scope.GetLocal(LocalIdx).Slot;
-      NameIdx := ACtx.Template.AddConstantString(VarInfo.Name);
-      EmitInstruction(ACtx, EncodeABx(OP_EXPORT, Reg, NameIdx));
+      VarInfo := AStmt.Declaration.Variables[I];
+      Names.Clear;
+      CollectVariableInfoBindingNames(VarInfo, Names, True);
+      for J := 0 to Names.Count - 1 do
+      begin
+        LocalIdx := ACtx.Scope.ResolveLocal(Names[J]);
+        if LocalIdx >= 0 then
+        begin
+          Reg := ACtx.Scope.GetLocal(LocalIdx).Slot;
+          NameIdx := ACtx.Template.AddConstantString(Names[J]);
+          EmitInstruction(ACtx, EncodeABx(OP_EXPORT, Reg, NameIdx));
+        end;
+      end;
     end;
+  finally
+    Names.Free;
   end;
 end;
 

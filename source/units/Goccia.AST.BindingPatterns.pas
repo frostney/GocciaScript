@@ -20,6 +20,11 @@ type
 
 procedure CollectPatternBindingNames(const APattern: TGocciaDestructuringPattern;
   const ANames: TStrings; const AUnique: Boolean = False);
+procedure CollectVariableInfoBindingNames(const AInfo: TGocciaVariableInfo;
+  const ANames: TStrings; const AUnique: Boolean = False);
+procedure CollectVariableDeclarationBindingNames(
+  const ADeclaration: TGocciaVariableDeclaration; const ANames: TStrings;
+  const AUnique: Boolean = False);
 function ParameterListBindsName(const AParameters: TGocciaParameterArray;
   const AName: string): Boolean;
 function ParameterListHasDuplicateBindingNames(
@@ -81,6 +86,26 @@ begin
   else if APattern is TGocciaRestDestructuringPattern then
     CollectPatternBindingNames(
       TGocciaRestDestructuringPattern(APattern).Argument, ANames, AUnique);
+end;
+
+procedure CollectVariableInfoBindingNames(const AInfo: TGocciaVariableInfo;
+  const ANames: TStrings; const AUnique: Boolean = False);
+begin
+  if AInfo.IsPattern or Assigned(AInfo.Pattern) then
+    CollectPatternBindingNames(AInfo.Pattern, ANames, AUnique)
+  else
+    AddBindingName(ANames, AInfo.Name, AUnique);
+end;
+
+procedure CollectVariableDeclarationBindingNames(
+  const ADeclaration: TGocciaVariableDeclaration; const ANames: TStrings;
+  const AUnique: Boolean = False);
+var
+  I: Integer;
+begin
+  for I := 0 to High(ADeclaration.Variables) do
+    CollectVariableInfoBindingNames(ADeclaration.Variables[I], ANames,
+      AUnique);
 end;
 
 function ParameterListBindsName(const AParameters: TGocciaParameterArray;
@@ -519,8 +544,7 @@ begin
   begin
     VarDecl := TGocciaVariableDeclaration(ANode);
     if VarDecl.IsVar then
-      for I := 0 to Length(VarDecl.Variables) - 1 do
-        AddBindingName(ANames, VarDecl.Variables[I].Name, True);
+      CollectVariableDeclarationBindingNames(VarDecl, ANames, True);
   end
   else if (ANode is TGocciaFunctionDeclaration) and
           (AAtVarScopedLevel or

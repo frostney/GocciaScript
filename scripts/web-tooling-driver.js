@@ -224,8 +224,14 @@ function classifyProcessOutcome(proc, metric, stdout, stderr) {
   if (proc.error && proc.error.code === 'ETIMEDOUT') return 'timeout';
   const combined = `${stdout}\n${stderr}`.toLowerCase();
   if (/\bout[\s-]of[\s-]memory\b/.test(combined) || /\boom\b/.test(combined) || proc.signal === 'SIGKILL') return 'oom';
-  if (!metric) return proc.status === 0 ? 'missing-result' : 'crash';
-  if (proc.status !== 0) return 'crash';
+  if (proc.status !== 0) {
+    if (/\bsyntaxerror:/.test(combined)) return 'syntax-error';
+    if (/\b(referenceerror|typeerror|rangeerror|urierror|evalerror|aggregateerror):/.test(combined)) return 'runtime-error';
+    if (proc.signal) return 'crash';
+    if (/\bfatal error:/.test(combined)) return 'crash';
+    return metric ? 'runtime-error' : 'crash';
+  }
+  if (!metric) return 'missing-result';
   return 'ok';
 }
 
@@ -297,6 +303,8 @@ function summarizeSamples(samples) {
     ok: samples.filter((sample) => sample.outcome === 'ok').length,
     timeout: samples.filter((sample) => sample.outcome === 'timeout').length,
     crash: samples.filter((sample) => sample.outcome === 'crash').length,
+    syntaxError: samples.filter((sample) => sample.outcome === 'syntax-error').length,
+    runtimeError: samples.filter((sample) => sample.outcome === 'runtime-error').length,
     oom: samples.filter((sample) => sample.outcome === 'oom').length,
     missingResult: samples.filter((sample) => sample.outcome === 'missing-result').length,
     rawCount: values.length,
@@ -316,6 +324,8 @@ function buildOverallSummary(targetReports, repetitions) {
     buildFailedCount: 0,
     timeoutCount: 0,
     crashCount: 0,
+    syntaxErrorCount: 0,
+    runtimeErrorCount: 0,
     oomCount: 0,
     missingResultCount: 0,
     repetitions,
@@ -327,6 +337,8 @@ function buildOverallSummary(targetReports, repetitions) {
     if (target.build.outcome !== 'ok') counts.buildFailedCount += 1;
     counts.timeoutCount += target.summary.timeout || 0;
     counts.crashCount += target.summary.crash || 0;
+    counts.syntaxErrorCount += target.summary.syntaxError || 0;
+    counts.runtimeErrorCount += target.summary.runtimeError || 0;
     counts.oomCount += target.summary.oom || 0;
     counts.missingResultCount += target.summary.missingResult || 0;
   }

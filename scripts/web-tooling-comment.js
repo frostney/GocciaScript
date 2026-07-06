@@ -21,11 +21,15 @@ function targetStatus(target) {
   const failureParts = [];
   if (summary.timeout > 0) failureParts.push(`timeout ${summary.timeout}`);
   if (summary.crash > 0) failureParts.push(`crash ${summary.crash}`);
+  if (summary.syntaxError > 0) failureParts.push(`syntax error ${summary.syntaxError}`);
+  if (summary.runtimeError > 0) failureParts.push(`runtime error ${summary.runtimeError}`);
   if (summary.oom > 0) failureParts.push(`oom ${summary.oom}`);
   if (summary.missingResult > 0) failureParts.push(`missing ${summary.missingResult}`);
   const failures =
     (summary.timeout || 0) +
     (summary.crash || 0) +
+    (summary.syntaxError || 0) +
+    (summary.runtimeError || 0) +
     (summary.oom || 0) +
     (summary.missingResult || 0);
   if ((summary.ok || 0) === 0 && failures === 0) return 'not run';

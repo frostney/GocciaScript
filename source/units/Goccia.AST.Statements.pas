@@ -24,8 +24,10 @@ const
 type
   TGocciaVariableInfo = record
     Name: string;
+    Pattern: TGocciaDestructuringPattern;
     Initializer: TGocciaExpression;
     HasInitializer: Boolean;
+    IsPattern: Boolean;
     TypeAnnotation: string;
   end;
   TGocciaExpressionStatement = class(TGocciaStatement)
@@ -1243,6 +1245,38 @@ end;
     begin
       ResolvedObjectBinding := nil;
       ResolvedScopeBinding := nil;
+      if Variables[I].IsPattern or Assigned(Variables[I].Pattern) then
+      begin
+        try
+          Value := EvaluateExpression(Variables[I].Initializer, AContext);
+        except
+          on E: EGocciaGeneratorYield do
+          begin
+            if Assigned(Continuation) then
+              Continuation.SaveStatementIndex(Self, I);
+            raise;
+          end;
+          else
+          begin
+            if Assigned(Continuation) then
+              Continuation.ClearStatementIndex(Self);
+            raise;
+          end;
+        end;
+
+        if IsVar then
+          AssignVariablePattern(Variables[I].Pattern, Value, AContext)
+        else if IsConst then
+          AssignPattern(Variables[I].Pattern, Value, AContext, True, dtConst)
+        else
+          AssignPattern(Variables[I].Pattern, Value, AContext, True, dtLet);
+
+        if Assigned(Continuation) then
+          Continuation.SaveStatementIndex(Self, I + 1);
+        Inc(I);
+        Continue;
+      end;
+
       if IsVar and Variables[I].HasInitializer then
       begin
         if not AContext.InEvalCode then

@@ -125,6 +125,13 @@ begin
       VarDecl := TGocciaVariableDeclaration(Stmt);
       for J := 0 to High(VarDecl.Variables) do
       begin
+        if VarDecl.Variables[J].IsPattern or Assigned(VarDecl.Variables[J].Pattern) then
+        begin
+          CheckPatternRedeclarations(VarDecl.Variables[J].Pattern, AScope,
+            ASourcePath, VarDecl.IsVar);
+          Continue;
+        end;
+
         DeclName := VarDecl.Variables[J].Name;
         if VarDecl.IsVar then
         begin

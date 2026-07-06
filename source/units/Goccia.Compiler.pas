@@ -440,11 +440,19 @@ end;
 procedure PredeclareVarDeclLocals(const AVarDecl: TGocciaVariableDeclaration;
   const AScope: TGocciaCompilerScope);
 var
-  J: Integer;
+  I: Integer;
+  Names: TStringList;
 begin
-  for J := 0 to High(AVarDecl.Variables) do
-    if AScope.ResolveLocal(AVarDecl.Variables[J].Name) < 0 then
-      AScope.DeclareLocal(AVarDecl.Variables[J].Name, AVarDecl.IsConst);
+  Names := TStringList.Create;
+  Names.CaseSensitive := True;
+  try
+    CollectVariableDeclarationBindingNames(AVarDecl, Names, True);
+    for I := 0 to Names.Count - 1 do
+      if AScope.ResolveLocal(Names[I]) < 0 then
+        AScope.DeclareLocal(Names[I], AVarDecl.IsConst);
+  finally
+    Names.Free;
+  end;
 end;
 
 // Pre-declare lexical locals from any statement node that introduces bindings,
@@ -570,7 +578,6 @@ var
   Name: string;
   Names: TStringList;
   Stmt: TGocciaStatement;
-  VarInfo: TGocciaVariableInfo;
 begin
   for I := 0 to AStatements.Count - 1 do
   begin
@@ -589,8 +596,16 @@ begin
     else if Stmt is TGocciaExportVariableDeclaration then
     begin
       ExportVarDecl := TGocciaExportVariableDeclaration(Stmt);
-      for VarInfo in ExportVarDecl.Declaration.Variables do
-        MarkLocalExport(AScope, VarInfo.Name, VarInfo.Name);
+      Names := TStringList.Create;
+      try
+        Names.CaseSensitive := True;
+        CollectVariableDeclarationBindingNames(ExportVarDecl.Declaration,
+          Names, True);
+        for Name in Names do
+          MarkLocalExport(AScope, Name, Name);
+      finally
+        Names.Free;
+      end;
     end
     else if Stmt is TGocciaExportDestructuringDeclaration then
     begin
@@ -804,6 +819,7 @@ var
   WithStmt: TGocciaWithStatement;
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
+  Names: TStringList;
   I, J: Integer;
 begin
   if ANode is TGocciaVariableDeclaration then
@@ -813,7 +829,17 @@ begin
       for I := 0 to High(VarDecl.Variables) do
         if not (ASkipUninitializedVars and
            (not VarDecl.Variables[I].HasInitializer)) then
-          AScope.DeclareVarLocal(VarDecl.Variables[I].Name);
+        begin
+          Names := TStringList.Create;
+          Names.CaseSensitive := True;
+          try
+            CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
+            for J := 0 to Names.Count - 1 do
+              AScope.DeclareVarLocal(Names[J]);
+          finally
+            Names.Free;
+          end;
+        end;
   end
   else if (ANode is TGocciaFunctionDeclaration) and
           (AAtVarScopedLevel or
@@ -828,7 +854,17 @@ begin
       for I := 0 to High(VarDecl.Variables) do
         if not (ASkipUninitializedVars and
            (not VarDecl.Variables[I].HasInitializer)) then
-          AScope.DeclareVarLocal(VarDecl.Variables[I].Name);
+        begin
+          Names := TStringList.Create;
+          Names.CaseSensitive := True;
+          try
+            CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
+            for J := 0 to Names.Count - 1 do
+              AScope.DeclareVarLocal(Names[J]);
+          finally
+            Names.Free;
+          end;
+        end;
   end
   else if (ANode is TGocciaExportFunctionDeclaration) and
           (AAtVarScopedLevel or

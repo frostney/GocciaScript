@@ -83,6 +83,21 @@ console.log('web-tooling-driver: outcome classification...');
     'oom',
     'oom stderr is classified',
   );
+  assertEqual(
+    classifyProcessOutcome({ status: 1, signal: null }, null, 'SyntaxError: Unterminated regular expression literal', ''),
+    'syntax-error',
+    'Goccia syntax errors are not process crashes',
+  );
+  assertEqual(
+    classifyProcessOutcome({ status: 1, signal: null }, null, 'ReferenceError: missing is not defined', ''),
+    'runtime-error',
+    'Goccia runtime errors are not process crashes',
+  );
+  assertEqual(
+    classifyProcessOutcome({ status: 1, signal: null }, null, 'Fatal error: Range check error', ''),
+    'crash',
+    'native fatal errors remain crashes',
+  );
 }
 
 console.log('web-tooling-driver: statistics...');
@@ -91,9 +106,13 @@ console.log('web-tooling-driver: statistics...');
     { outcome: 'ok', runsPerSecond: 8 },
     { outcome: 'ok', runsPerSecond: 10 },
     { outcome: 'timeout', runsPerSecond: null },
+    { outcome: 'syntax-error', runsPerSecond: null },
+    { outcome: 'runtime-error', runsPerSecond: null },
   ]);
   assertEqual(summary.ok, 2, 'summary counts ok samples');
   assertEqual(summary.timeout, 1, 'summary counts timeouts');
+  assertEqual(summary.syntaxError, 1, 'summary counts syntax errors');
+  assertEqual(summary.runtimeError, 1, 'summary counts runtime errors');
   assertEqual(summary.medianRunsPerSecond, 9, 'summary reports median runs/s');
 }
 
@@ -118,7 +137,7 @@ console.log('web-tooling-ci-report: validation...');
         kind: 'web-tooling',
         name: 'babel',
         build: { outcome: 'ok' },
-        summary: { ok: 0, crash: 1 },
+        summary: { ok: 0, syntaxError: 1 },
       },
     ],
   }, manifest);
@@ -141,7 +160,7 @@ console.log('web-tooling-comment: markdown...');
       {
         name: 'babel',
         build: { outcome: 'ok' },
-        summary: { ok: 0, crash: 1 },
+        summary: { ok: 0, syntaxError: 1 },
       },
     ],
   });
@@ -149,7 +168,7 @@ console.log('web-tooling-comment: markdown...');
   assert(comment.includes('## Web Tooling Benchmark'), 'comment title is present');
   assert(comment.includes('| Workload | Status | Goccia |'), 'comment is Goccia-only');
   assert(comment.includes('| acorn | pass | 8.59 runs/s |'), 'comment renders passing workload');
-  assert(comment.includes('| babel | crash 1 | - |'), 'comment renders failed workload outcome');
+  assert(comment.includes('| babel | syntax error 1 | - |'), 'comment renders syntax error workload outcome');
   assert(comment.includes('`web-tooling-report` artifact'), 'comment points to artifact');
 }
 

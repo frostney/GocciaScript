@@ -1567,6 +1567,7 @@ var
   Stmt: TGocciaStatement;
   Value: TGocciaValue;
   VarInfo: TGocciaVariableInfo;
+  VarName: string;
 
   procedure AddStarExportForwardings(const ASourceModule: TGocciaModule);
   var
@@ -1734,8 +1735,16 @@ begin
     else if Stmt is TGocciaExportVariableDeclaration then
     begin
       ExportVarDecl := TGocciaExportVariableDeclaration(Stmt);
-      for VarInfo in ExportVarDecl.Declaration.Variables do
-        AModule.AddExportBinding(VarInfo.Name, VarInfo.Name, AModuleScope);
+      Names := TStringList.Create;
+      try
+        Names.CaseSensitive := True;
+        for VarInfo in ExportVarDecl.Declaration.Variables do
+          CollectVariableInfoBindingNames(VarInfo, Names, True);
+        for VarName in Names do
+          AModule.AddExportBinding(VarName, VarName, AModuleScope);
+      finally
+        Names.Free;
+      end;
     end
     else if Stmt is TGocciaExportDestructuringDeclaration then
     begin
@@ -2642,8 +2651,11 @@ begin
     VarDecl := TGocciaVariableDeclaration(AStmt);
     for I := 0 to High(VarDecl.Variables) do
     begin
-      RejectStrictDynamicBindingName(VarDecl.Variables[I].Name,
-        AStmt.Line, AStmt.Column);
+      if VarDecl.Variables[I].IsPattern or Assigned(VarDecl.Variables[I].Pattern) then
+        ValidateStrictDynamicPattern(VarDecl.Variables[I].Pattern)
+      else
+        RejectStrictDynamicBindingName(VarDecl.Variables[I].Name,
+          AStmt.Line, AStmt.Column);
       ValidateStrictDynamicExpression(VarDecl.Variables[I].Initializer);
     end;
   end
@@ -3140,7 +3152,11 @@ begin
   begin
     VarDecl := TGocciaVariableDeclaration(AStmt);
     for I := 0 to High(VarDecl.Variables) do
+    begin
+      if VarDecl.Variables[I].IsPattern or Assigned(VarDecl.Variables[I].Pattern) then
+        ValidateDynamicFunctionSuperPattern(VarDecl.Variables[I].Pattern);
       ValidateDynamicFunctionSuperExpression(VarDecl.Variables[I].Initializer);
+    end;
   end
   else if AStmt is TGocciaDestructuringDeclaration then
   begin
