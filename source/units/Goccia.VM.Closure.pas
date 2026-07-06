@@ -20,6 +20,7 @@ type
     FHomeClass: TGocciaObjectValue;
     FFunctionValue: TGocciaValue;
     FGlobalScope: TGocciaScope;
+    FDynamicVarScope: TGocciaScope;
     FNewTarget: TGocciaValue;
     FAllowsNewTarget: Boolean;
   public
@@ -36,6 +37,7 @@ type
     property HomeClass: TGocciaObjectValue read FHomeClass write FHomeClass;
     property FunctionValue: TGocciaValue read FFunctionValue write FFunctionValue;
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
+    property DynamicVarScope: TGocciaScope read FDynamicVarScope write FDynamicVarScope;
     property NewTarget: TGocciaValue read FNewTarget write FNewTarget;
     property AllowsNewTarget: Boolean read FAllowsNewTarget write FAllowsNewTarget;
   end;
@@ -51,6 +53,7 @@ begin
   FHomeClass := nil;
   FFunctionValue := nil;
   FGlobalScope := nil;
+  FDynamicVarScope := nil;
   FNewTarget := nil;
   FAllowsNewTarget := False;
   SetLength(FUpvalues, AUpvalueCount);
@@ -71,6 +74,7 @@ begin
   Result.FHomeClass := FHomeClass;
   Result.FFunctionValue := FFunctionValue;
   Result.FGlobalScope := FGlobalScope;
+  Result.FDynamicVarScope := FDynamicVarScope;
   Result.FNewTarget := FNewTarget;
   Result.FAllowsNewTarget := FAllowsNewTarget;
   for I := 0 to High(FUpvalues) do

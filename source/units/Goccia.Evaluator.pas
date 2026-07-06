@@ -2473,6 +2473,7 @@ var
   NewExpr: TGocciaNewExpression;
   ObjectExpr: TGocciaObjectExpression;
   Pair: TPair<TGocciaExpression, TGocciaExpression>;
+  UnaryExpr: TGocciaUnaryExpression;
   I: Integer;
 begin
   if not Assigned(AExpr) then
@@ -2589,7 +2590,15 @@ begin
         TGocciaSequenceExpression(AExpr).Expressions[I]);
   end
   else if AExpr is TGocciaUnaryExpression then
-    ValidateStrictEvalAssignmentExpression(TGocciaUnaryExpression(AExpr).Operand)
+  begin
+    UnaryExpr := TGocciaUnaryExpression(AExpr);
+    if (UnaryExpr.Operator = gttDelete) and
+       (UnaryExpr.Operand is TGocciaIdentifierExpression) then
+      raise TGocciaSyntaxError.Create(
+        'Delete of an unqualified identifier in strict mode',
+        AExpr.Line, AExpr.Column, '', nil);
+    ValidateStrictEvalAssignmentExpression(UnaryExpr.Operand);
+  end
   else if AExpr is TGocciaArrayExpression then
   begin
     ArrayExpr := TGocciaArrayExpression(AExpr);
@@ -2881,7 +2890,8 @@ begin
           TGocciaFunctionValue(FunctionValue).Name := Name;
         if AVarScope.ScopeKind = skGlobal then
           AVarScope.CreateGlobalFunctionBinding(Name, FunctionValue, True)
-        else if (not AStrictEval) and AVarScope.Contains(Name) then
+        else if (not AStrictEval) and
+                AVarScope.ContainsVarEnvironmentBinding(Name) then
           AVarScope.AssignBinding(Name, FunctionValue, 0, 0, False)
         else
           AVarScope.DefineVariableBinding(Name, FunctionValue, True, True);
@@ -2896,7 +2906,8 @@ begin
       Name := DeclaredVarNames[I];
       if AVarScope.ScopeKind = skGlobal then
         AVarScope.CreateGlobalVarBinding(Name, True)
-      else if (not AStrictEval) and AVarScope.Contains(Name) then
+      else if (not AStrictEval) and
+              AVarScope.ContainsVarEnvironmentBinding(Name) then
         Continue
       else
         AVarScope.DefineVariableBinding(Name,

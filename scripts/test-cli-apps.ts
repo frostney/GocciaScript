@@ -995,6 +995,85 @@ console.log("Bare Loader: bytecode --test262-host eval is direct eval...");
     throw new Error(`Bare bytecode direct eval got: ${proc.stdout.toString()}`);
 }
 
+console.log("Bare Loader: bytecode --test262-host eval keeps sloppy var declarations in the caller environment...");
+{
+  const proc = Bun.spawnSync([
+    BARE,
+    "--test262-host",
+    "--mode=bytecode",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode([
+      "var y = 42;",
+      "function globalY() { return y; }",
+      "function testY() {",
+      "  const f = eval(",
+      "    'var y = 5;' +",
+      "    'function actY(action) {' +",
+      "    '  switch (action) {' +",
+      "    \"    case 'get': return y;\" +",
+      "    \"    case 'set': y = 2; return;\" +",
+      "    \"    case 'delete': return eval('delete y');\" +",
+      "    '  }' +",
+      "    '}' +",
+      "    'actY;'",
+      "  );",
+      "  print([f('get'), y, globalY()].join(','));",
+      "  y = 8;",
+      "  print([f('get'), y, globalY()].join(','));",
+      "  f('set');",
+      "  print([f('get'), y, globalY()].join(','));",
+      "  print(f('delete'));",
+      "  print([f('get'), y, globalY()].join(','));",
+      "}",
+      "testY();",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const expected = [
+    "5,5,42",
+    "8,8,42",
+    "2,2,42",
+    "true",
+    "42,42,42",
+  ].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode sloppy eval var probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare bytecode sloppy eval var probe got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: --test262-host eval reports strict delete identifier as SyntaxError...");
+{
+  const source = [
+    "try {",
+    "  eval('\"use strict\"; delete x');",
+    "  print('no error');",
+    "} catch (e) {",
+    "  print(e.name);",
+    "}",
+    "",
+  ].join("\n");
+  for (const mode of [
+    { label: "interpreted", args: [BARE, "--test262-host"] },
+    { label: "bytecode", args: [BARE, "--test262-host", "--mode=bytecode"] },
+  ]) {
+    const proc = Bun.spawnSync(mode.args, {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode.label} strict delete eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== "SyntaxError")
+      throw new Error(`Bare ${mode.label} strict delete eval probe got: ${proc.stdout.toString()}`);
+  }
+}
+
 console.log("Bare Loader: --test262-host eval validates destructuring pattern early errors...");
 {
   const source = [

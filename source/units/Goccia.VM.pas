@@ -602,6 +602,7 @@ type
     procedure ResolveAssignmentTarget(const AName: string;
       out AObjectBinding: TGocciaObjectValue; out AScopeBinding: TGocciaScope); override;
     function Contains(const AName: string): Boolean; override;
+    function ContainsVarEnvironmentBinding(const AName: string): Boolean; override;
     procedure CopyBackVariableBindings;
     procedure CopyNewVariableBindingsToParent;
   end;
@@ -1446,6 +1447,17 @@ begin
     (Binding.Kind in [debLocal, debGlobal]);
 end;
 
+function TGocciaVMDirectEvalScope.ContainsVarEnvironmentBinding(
+  const AName: string): Boolean;
+var
+  Binding: TGocciaDirectEvalBindingInfo;
+begin
+  if ContainsOwnLexicalBinding(AName) or ContainsOwnVarBinding(AName) then
+    Exit(True);
+  Result := TryFindBinding(AName, Binding) and
+    (Binding.Kind in [debLocal, debUpvalue]);
+end;
+
 procedure TGocciaVMDirectEvalScope.CopyBackVariableBindings;
 var
   Env: TGocciaDirectEvalEnvironment;
@@ -1495,6 +1507,7 @@ begin
     if not TryGetOwnBinding(Name, Binding) then
       Continue;
     Parent.DefineVariableBinding(Name, Binding.Value, True, True);
+    DeleteBinding(Name);
   end;
 end;
 
@@ -2775,6 +2788,8 @@ begin
     AClosure.NewTarget.MarkReferences;
   if Assigned(AClosure.GlobalScope) then
     AClosure.GlobalScope.MarkReferences;
+  if Assigned(AClosure.DynamicVarScope) then
+    AClosure.DynamicVarScope.MarkReferences;
   for I := 0 to AClosure.UpvalueCount - 1 do
   begin
     Upvalue := AClosure.GetUpvalue(I);
@@ -4899,6 +4914,8 @@ begin
       FClosure.NewTarget.MarkReferences;
     if Assigned(FClosure.GlobalScope) then
       FClosure.GlobalScope.MarkReferences;
+    if Assigned(FClosure.DynamicVarScope) then
+      FClosure.DynamicVarScope.MarkReferences;
     for I := 0 to FClosure.UpvalueCount - 1 do
     begin
       Upvalue := FClosure.GetUpvalue(I);
@@ -7259,6 +7276,8 @@ begin
     FClosure.NewTarget.MarkReferences;
   if Assigned(FClosure.GlobalScope) then
     FClosure.GlobalScope.MarkReferences;
+  if Assigned(FClosure.DynamicVarScope) then
+    FClosure.DynamicVarScope.MarkReferences;
   if Assigned(FConstructClassValue) then
     FConstructClassValue.MarkReferences;
 
@@ -12885,7 +12904,10 @@ begin
   FCurrentClosure := AClosure;
   if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
     FGlobalScope := AClosure.GlobalScope;
-  FCurrentDynamicVarScope := nil;
+  if Assigned(AClosure) then
+    FCurrentDynamicVarScope := AClosure.DynamicVarScope
+  else
+    FCurrentDynamicVarScope := nil;
   FCurrentExecutionContextPushed := False;
   Inc(FFrameDepth);
   // Push a deferred frame: store the template pointer and (only when the
@@ -13141,6 +13163,8 @@ begin
       Frame, Template, PrevCovLine, ProfileEntryTimestamp);
     if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
       FGlobalScope := AClosure.GlobalScope;
+    if Assigned(AClosure) then
+      FCurrentDynamicVarScope := AClosure.DynamicVarScope;
     if Assigned(FPendingNewTarget) then
       FCurrentNewTarget := FPendingNewTarget;
     FPendingNewTarget := nil;
@@ -15008,6 +15032,7 @@ begin
         ChildClosure := TGocciaBytecodeClosure.Create(
           ChildTemplate, ChildTemplate.UpvalueCount);
         ChildClosure.GlobalScope := FGlobalScope;
+        ChildClosure.DynamicVarScope := FCurrentDynamicVarScope;
         if ChildTemplate.IsArrow and Assigned(FCurrentClosure) then
         begin
           ChildClosure.HomeObject := FCurrentClosure.HomeObject;

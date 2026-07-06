@@ -86,6 +86,7 @@ type
     procedure DefineVariableBinding(const AName: string; const AValue: TGocciaValue;
       const AHasInitializer: Boolean; const ACanDelete: Boolean = False);
     function ContainsOwnVarBinding(const AName: string): Boolean;
+    function ContainsVarEnvironmentBinding(const AName: string): Boolean; virtual;
     function HasLexicalDeclaration(const AName: string): Boolean;
     function HasRestrictedGlobalProperty(const AName: string): Boolean;
     function CanDeclareGlobalVar(const AName: string): Boolean;
@@ -835,6 +836,11 @@ function TGocciaScope.ContainsOwnVarBinding(const AName: string): Boolean;
 begin
   Result := (Assigned(FVarBindings) and FVarBindings.ContainsKey(AName)) or
     (Assigned(FGlobalVarNames) and FGlobalVarNames.ContainsKey(AName));
+end;
+
+function TGocciaScope.ContainsVarEnvironmentBinding(const AName: string): Boolean;
+begin
+  Result := ContainsOwnLexicalBinding(AName) or ContainsOwnVarBinding(AName);
 end;
 
 // ES2026 §9.1.1.4.15 HasLexicalDeclaration(N) — global-scope approximation.

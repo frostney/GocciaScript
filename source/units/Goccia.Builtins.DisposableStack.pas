@@ -18,6 +18,10 @@ type
     FAsyncDisposableStackPrototype: TGocciaValue;
     FDisposableStackConstructorValue: TGocciaValue;
     FAsyncDisposableStackConstructorValue: TGocciaValue;
+    function DisposableStackConstruct(const AArgs: TGocciaArgumentsCollection;
+      const ANewTarget: TGocciaValue): TGocciaValue;
+    function AsyncDisposableStackConstruct(const AArgs: TGocciaArgumentsCollection;
+      const ANewTarget: TGocciaValue): TGocciaValue;
   published
     function DisposableStackConstructor(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -74,6 +78,7 @@ uses
   Goccia.DisposalTracker,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Realm,
   Goccia.Scope.BindingMap,
   Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
@@ -120,6 +125,10 @@ type
 
 threadvar
   GSlotMap: THashMap<TGocciaObjectValue, PDisposableStackSlot>;
+
+var
+  GDisposableStackPrototypeSlot: TGocciaRealmSlotId;
+  GAsyncDisposableStackPrototypeSlot: TGocciaRealmSlotId;
 
 function EnsureSlotMap: THashMap<TGocciaObjectValue, PDisposableStackSlot>;
 begin
@@ -336,6 +345,61 @@ end;
 
 function CreateDisposableStackInstance(const AIsAsync: Boolean;
   const APrototype: TGocciaObjectValue): TGocciaObjectValue; forward;
+
+function DisposableStackPrototypeFromNewTarget(const ANewTarget: TGocciaValue;
+  const ACurrentRealmDefault: TGocciaObjectValue;
+  const AIntrinsicSlot: TGocciaRealmSlotId;
+  const AConstructorName: string): TGocciaObjectValue;
+var
+  ConstructorValue: TGocciaValue;
+  FallbackRealm: TGocciaRealm;
+  PreviousRealm: TGocciaRealm;
+  ProtoValue: TGocciaValue;
+begin
+  if ANewTarget is TGocciaObjectValue then
+    ProtoValue := TGocciaObjectValue(ANewTarget).GetProperty(PROP_PROTOTYPE)
+  else
+    ProtoValue := nil;
+
+  if ProtoValue is TGocciaObjectValue then
+    Exit(TGocciaObjectValue(ProtoValue));
+
+  FallbackRealm := GetFunctionRealm(ANewTarget);
+  if Assigned(FallbackRealm) then
+  begin
+    Result := TGocciaObjectValue(FallbackRealm.GetSlot(AIntrinsicSlot));
+    if Assigned(Result) then
+      Exit;
+
+    if FallbackRealm.GlobalObject is TGocciaObjectValue then
+    begin
+      PreviousRealm := CurrentRealm;
+      if PreviousRealm <> FallbackRealm then
+        SetCurrentRealm(FallbackRealm);
+      try
+        ConstructorValue := TGocciaObjectValue(FallbackRealm.GlobalObject).
+          GetProperty(AConstructorName);
+      finally
+        if PreviousRealm <> FallbackRealm then
+          SetCurrentRealm(PreviousRealm);
+      end;
+
+      if ConstructorValue is TGocciaObjectValue then
+      begin
+        ProtoValue := TGocciaObjectValue(ConstructorValue).GetProperty(
+          PROP_PROTOTYPE);
+        if ProtoValue is TGocciaObjectValue then
+          Exit(TGocciaObjectValue(ProtoValue));
+      end;
+
+      Result := TGocciaObjectValue(FallbackRealm.GetSlot(AIntrinsicSlot));
+      if Assigned(Result) then
+        Exit;
+    end;
+  end;
+
+  Result := ACurrentRealmDefault;
+end;
 
 // TC39 Explicit Resource Management §3.4.3.2 DisposableStack.prototype.use(value)
 function TGocciaBuiltinDisposableStack.StackUse(const AArgs: TGocciaArgumentsCollection;
@@ -717,9 +781,17 @@ begin
 
   FDisposableStackPrototype := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   FAsyncDisposableStackPrototype := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  if Assigned(CurrentRealm) then
+  begin
+    CurrentRealm.SetSlot(GDisposableStackPrototypeSlot,
+      TGocciaObjectValue(FDisposableStackPrototype));
+    CurrentRealm.SetSlot(GAsyncDisposableStackPrototypeSlot,
+      TGocciaObjectValue(FAsyncDisposableStackPrototype));
+  end;
 
   DisposableStackFunc := TGocciaNativeFunctionValue.Create(
     DisposableStackConstructor, CONSTRUCTOR_DISPOSABLE_STACK, 0);
+  DisposableStackFunc.ConstructCallback := DisposableStackConstruct;
   TGocciaObjectValue(FDisposableStackPrototype).DefineProperty(PROP_CONSTRUCTOR,
     TGocciaPropertyDescriptorData.Create(DisposableStackFunc, [pfWritable, pfConfigurable]));
   DisposableStackFunc.DefineProperty(PROP_PROTOTYPE,
@@ -730,6 +802,7 @@ begin
 
   AsyncDisposableStackFunc := TGocciaNativeFunctionValue.Create(
     AsyncDisposableStackConstructor, CONSTRUCTOR_ASYNC_DISPOSABLE_STACK, 0);
+  AsyncDisposableStackFunc.ConstructCallback := AsyncDisposableStackConstruct;
   TGocciaObjectValue(FAsyncDisposableStackPrototype).DefineProperty(PROP_CONSTRUCTOR,
     TGocciaPropertyDescriptorData.Create(AsyncDisposableStackFunc, [pfWritable, pfConfigurable]));
   AsyncDisposableStackFunc.DefineProperty(PROP_PROTOTYPE,
@@ -791,15 +864,39 @@ end;
 function TGocciaBuiltinDisposableStack.DisposableStackConstructor(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := CreateDisposableStackInstance(False,
-    TGocciaObjectValue(FDisposableStackPrototype));
+  ThrowTypeError(CONSTRUCTOR_DISPOSABLE_STACK +
+    ' constructor cannot be called without new', SSuggestNotConstructorType);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaBuiltinDisposableStack.AsyncDisposableStackConstructor(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := CreateDisposableStackInstance(True,
-    TGocciaObjectValue(FAsyncDisposableStackPrototype));
+  ThrowTypeError(CONSTRUCTOR_ASYNC_DISPOSABLE_STACK +
+    ' constructor cannot be called without new', SSuggestNotConstructorType);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaBuiltinDisposableStack.DisposableStackConstruct(
+  const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
+var
+  Prototype: TGocciaObjectValue;
+begin
+  Prototype := DisposableStackPrototypeFromNewTarget(ANewTarget,
+    TGocciaObjectValue(FDisposableStackPrototype), GDisposableStackPrototypeSlot,
+    CONSTRUCTOR_DISPOSABLE_STACK);
+  Result := CreateDisposableStackInstance(False, Prototype);
+end;
+
+function TGocciaBuiltinDisposableStack.AsyncDisposableStackConstruct(
+  const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
+var
+  Prototype: TGocciaObjectValue;
+begin
+  Prototype := DisposableStackPrototypeFromNewTarget(ANewTarget,
+    TGocciaObjectValue(FAsyncDisposableStackPrototype),
+    GAsyncDisposableStackPrototypeSlot, CONSTRUCTOR_ASYNC_DISPOSABLE_STACK);
+  Result := CreateDisposableStackInstance(True, Prototype);
 end;
 
 procedure ClearDisposableStackSlotMap;
@@ -819,6 +916,9 @@ begin
 end;
 
 initialization
+  GDisposableStackPrototypeSlot := RegisterRealmSlot('DisposableStack.prototype');
+  GAsyncDisposableStackPrototypeSlot :=
+    RegisterRealmSlot('AsyncDisposableStack.prototype');
   // FPC does not auto-finalize managed threadvars at thread exit. The registry
   // drain releases this thread's slot map on worker exit (ShutdownThreadRuntime)
   // and on the main thread (Goccia.ThreadCleanupRegistry's finalization).
