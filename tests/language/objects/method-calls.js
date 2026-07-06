@@ -26,3 +26,26 @@ test("object method calls with parameters", () => {
   expect(result.total).toBe(60);
   expect(result.type).toBe("number");
 });
+
+test("object method calls preserve receiver and fixed arguments", () => {
+  const obj = {
+    base: 10,
+    zero() {
+      return this.base;
+    },
+    one(a) {
+      return this.base + a;
+    },
+    two(a, b) {
+      return this.base + a + b;
+    },
+    three(a, b, c) {
+      return this.base + a + b + c;
+    },
+  };
+
+  expect(obj.zero()).toBe(10);
+  expect(obj.one(1)).toBe(11);
+  expect(obj.two(1, 2)).toBe(13);
+  expect(obj.three(1, 2, 3)).toBe(16);
+});

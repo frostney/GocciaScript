@@ -57,4 +57,11 @@ describe("Function.prototype.call", () => {
     expect(Boolean.call(null, 1)).toBe(true);
     expect(Boolean.call(null, 0)).toBe(false);
   });
+
+  test("calls native functions with fixed arguments", () => {
+    const fromCodePoint = String.fromCodePoint;
+
+    expect(fromCodePoint(65, 66, 67)).toBe("ABC");
+    expect(String.fromCodePoint.call(null, 65, 66, 67)).toBe("ABC");
+  });
 });

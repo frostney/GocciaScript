@@ -23,6 +23,8 @@ type
     FNotConstructable: Boolean;
     FDirectEvalHost: Boolean;
     FCapturedRoot: TGocciaValue;
+    function InvokeCallback(const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
   protected
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
@@ -32,6 +34,10 @@ type
     constructor CreateWithoutPrototype(const AFunction: TGocciaNativeFunctionCallback; const AName: string;
       const AArity: Integer);
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
+    function CallNoArgs(const AThisValue: TGocciaValue): TGocciaValue; override;
+    function CallOneArg(const AArg0, AThisValue: TGocciaValue): TGocciaValue; override;
+    function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; override;
+    function CallThreeArgs(const AArg0, AArg1, AArg2, AThisValue: TGocciaValue): TGocciaValue; override;
     function Construct(const AArguments: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
     function IsConstructable: Boolean; override;
     procedure MarkReferences; override;
@@ -72,7 +78,9 @@ begin
   inherited Create; // No prototype for methods that are part of the prototype
 end;
 
-function TGocciaNativeFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaNativeFunctionValue.InvokeCallback(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
   PreviousRealm: TGocciaRealm;
   RealmSwitched: Boolean;
@@ -87,6 +95,65 @@ begin
   finally
     if RealmSwitched then
       SetCurrentRealm(PreviousRealm);
+  end;
+end;
+
+function TGocciaNativeFunctionValue.Call(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := InvokeCallback(AArguments, AThisValue);
+end;
+
+function TGocciaNativeFunctionValue.CallNoArgs(
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Args: TGocciaFixedArgumentsCollection;
+begin
+  Args := TGocciaFixedArgumentsCollection.CreateNoArgs;
+  try
+    Result := InvokeCallback(Args, AThisValue);
+  finally
+    Args.Free;
+  end;
+end;
+
+function TGocciaNativeFunctionValue.CallOneArg(const AArg0,
+  AThisValue: TGocciaValue): TGocciaValue;
+var
+  Args: TGocciaFixedArgumentsCollection;
+begin
+  Args := TGocciaFixedArgumentsCollection.CreateOneArg(AArg0);
+  try
+    Result := InvokeCallback(Args, AThisValue);
+  finally
+    Args.Free;
+  end;
+end;
+
+function TGocciaNativeFunctionValue.CallTwoArgs(const AArg0, AArg1,
+  AThisValue: TGocciaValue): TGocciaValue;
+var
+  Args: TGocciaFixedArgumentsCollection;
+begin
+  Args := TGocciaFixedArgumentsCollection.CreateTwoArgs(AArg0, AArg1);
+  try
+    Result := InvokeCallback(Args, AThisValue);
+  finally
+    Args.Free;
+  end;
+end;
+
+function TGocciaNativeFunctionValue.CallThreeArgs(const AArg0, AArg1, AArg2,
+  AThisValue: TGocciaValue): TGocciaValue;
+var
+  Args: TGocciaFixedArgumentsCollection;
+begin
+  Args := TGocciaFixedArgumentsCollection.CreateThreeArgs(AArg0, AArg1, AArg2);
+  try
+    Result := InvokeCallback(Args, AThisValue);
+  finally
+    Args.Free;
   end;
 end;
 

@@ -13080,6 +13080,7 @@ var
   FixedArg0, FixedArg1, FixedArg2: TGocciaRegister;
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   BoundFunction: TGocciaBoundFunctionValue;
+  NativeFunction: TGocciaNativeFunctionValue;
   JumpOffset: Integer;
   PrevCovLine, CovLine: UInt32;
   ProfileEntryTimestamp: Int64;
@@ -15229,6 +15230,40 @@ begin
           end;
         end;
 
+        if ((C and CALL_FLAG_SPREAD) = 0) and (B <= 3) and
+           (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) then
+        begin
+          NativeFunction := TGocciaNativeFunctionValue(FRegisters[A].ObjectValue);
+          case B of
+            0:
+              SetRegister(A, NativeFunction.CallNoArgs(
+                TGocciaUndefinedLiteralValue.UndefinedValue));
+            1:
+            begin
+              LeftValue := GetRegister(A + 1);
+              SetRegister(A, NativeFunction.CallOneArg(LeftValue,
+                TGocciaUndefinedLiteralValue.UndefinedValue));
+            end;
+            2:
+            begin
+              LeftValue := GetRegister(A + 1);
+              RightValue := GetRegister(A + 2);
+              SetRegister(A, NativeFunction.CallTwoArgs(LeftValue, RightValue,
+                TGocciaUndefinedLiteralValue.UndefinedValue));
+            end;
+            3:
+            begin
+              LeftValue := GetRegister(A + 1);
+              RightValue := GetRegister(A + 2);
+              PropKeyValue := GetRegister(A + 3);
+              SetRegister(A, NativeFunction.CallThreeArgs(LeftValue, RightValue,
+                PropKeyValue, TGocciaUndefinedLiteralValue.UndefinedValue));
+            end;
+          end;
+          Continue;
+        end;
+
         if (C and 1) = 1 then
           CallArgs := AcquireArguments
         else
@@ -15418,20 +15453,42 @@ begin
           begin
             if (C and 1) = 0 then
             begin
-              SetLength(RegisterArgs, B);
-              for I := 0 to B - 1 do
-                RegisterArgs[I] := FRegisters[A + 1 + I];
               CallThisRegister := FRegisters[A - 1];
-              if (C and CALL_FLAG_TAIL) <> 0 then
-                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
-                  InitialFrameStackCount, SavedHandlerCount)
+              if B <= 3 then
+              begin
+                if B >= 1 then FixedArg0 := FRegisters[A + 1]
+                else FixedArg0 := RegisterUndefined;
+                if B >= 2 then FixedArg1 := FRegisters[A + 2]
+                else FixedArg1 := RegisterUndefined;
+                if B >= 3 then FixedArg2 := FRegisters[A + 3]
+                else FixedArg2 := RegisterUndefined;
+                if (C and CALL_FLAG_TAIL) <> 0 then
+                  PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                    InitialFrameStackCount, SavedHandlerCount)
+                else
+                  PushFrame(A, Frame.IP, Template, PrevCovLine,
+                    ProfileEntryTimestamp);
+                SetupNewFrame(BytecodeFunction.FClosure,
+                  CallThisRegister, TGocciaRegisterArray(nil), B,
+                  FixedArg0, FixedArg1, FixedArg2, True, True,
+                  Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+              end
               else
-                PushFrame(A, Frame.IP, Template, PrevCovLine,
-                  ProfileEntryTimestamp);
-              SetupNewFrame(BytecodeFunction.FClosure,
-                CallThisRegister, RegisterArgs, B,
-                RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
-                Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+              begin
+                SetLength(RegisterArgs, B);
+                for I := 0 to B - 1 do
+                  RegisterArgs[I] := FRegisters[A + 1 + I];
+                if (C and CALL_FLAG_TAIL) <> 0 then
+                  PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                    InitialFrameStackCount, SavedHandlerCount)
+                else
+                  PushFrame(A, Frame.IP, Template, PrevCovLine,
+                    ProfileEntryTimestamp);
+                SetupNewFrame(BytecodeFunction.FClosure,
+                  CallThisRegister, RegisterArgs, B,
+                  RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
+                  Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+              end;
               Continue;
             end
             else if (FRegisters[B].Kind = grkObject) and
@@ -15456,6 +15513,39 @@ begin
               Continue;
             end;
           end;
+        end;
+
+        if ((C and CALL_FLAG_SPREAD) = 0) and (B <= 3) and
+           (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) then
+        begin
+          NativeFunction := TGocciaNativeFunctionValue(FRegisters[A].ObjectValue);
+          TargetValue := GetRegister(A - 1);
+          case B of
+            0:
+              SetRegister(A, NativeFunction.CallNoArgs(TargetValue));
+            1:
+            begin
+              LeftValue := GetRegister(A + 1);
+              SetRegister(A, NativeFunction.CallOneArg(LeftValue, TargetValue));
+            end;
+            2:
+            begin
+              LeftValue := GetRegister(A + 1);
+              RightValue := GetRegister(A + 2);
+              SetRegister(A, NativeFunction.CallTwoArgs(LeftValue, RightValue,
+                TargetValue));
+            end;
+            3:
+            begin
+              LeftValue := GetRegister(A + 1);
+              RightValue := GetRegister(A + 2);
+              PropKeyValue := GetRegister(A + 3);
+              SetRegister(A, NativeFunction.CallThreeArgs(LeftValue, RightValue,
+                PropKeyValue, TargetValue));
+            end;
+          end;
+          Continue;
         end;
 
         if (C and 1) = 1 then

@@ -103,7 +103,7 @@ begin
   I := 0;
   while I < AArgs.Length do
   begin
-    ArgValue := AArgs.Items[I];
+    ArgValue := AArgs.GetElement(I);
     if ArgValue is TGocciaNumberLiteralValue then
       NumArg := TGocciaNumberLiteralValue(ArgValue)
     else
