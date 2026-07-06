@@ -8,7 +8,7 @@ const COMMENT_ENGINES = ['goccia', 'qjs', 'node'];
 const ENGINE_LABELS = {
   goccia: 'Goccia',
   qjs: 'QuickJS',
-  node: 'Node',
+  node: 'NodeJS',
 };
 
 function formatMicros(value) {
@@ -63,11 +63,34 @@ function ratioCell(geomean, numerator, denominator) {
   return '-';
 }
 
-function buildGeomeanTable(geomean) {
+function cleanEngineVersion(engine, version) {
+  if (typeof version !== 'string') return '';
+  let cleaned = version.trim();
+  if (engine === 'qjs') {
+    cleaned = cleaned.replace(/^QuickJS\s+version\s+/i, '');
+    cleaned = cleaned.replace(/^QuickJS\s+/i, '');
+  }
+  return cleaned;
+}
+
+function engineLabels(report) {
+  const labels = { ...ENGINE_LABELS };
+  const metadata = report?.metadata?.engines || [];
+  for (const engine of COMMENT_ENGINES) {
+    const version = cleanEngineVersion(
+      engine,
+      metadata.find((entry) => entry.name === engine)?.version,
+    );
+    if (version) labels[engine] = `${ENGINE_LABELS[engine]} ${version}`;
+  }
+  return labels;
+}
+
+function buildGeomeanTable(geomean, labels = ENGINE_LABELS) {
   if (Object.keys(geomean).length === 0) return '';
 
   let body = '\n### Geomean Ratios\n\n';
-  body += '| Ratio (row / column) | Goccia | QuickJS | Node |\n';
+  body += `| Ratio (row / column) | ${labels.goccia} | ${labels.qjs} | ${labels.node} |\n`;
   body += '|----------------------|--------|---------|------|\n';
   for (const numerator of COMMENT_ENGINES) {
     const cells = COMMENT_ENGINES.map((denominator) => ratioCell(geomean, numerator, denominator));
@@ -91,15 +114,16 @@ function reportSampleCount(report) {
 
 function buildAwfyReportComment(report) {
   let body = `${MARKER}\n## AWFY Results\n\n`;
+  const labels = engineLabels(report);
 
-  body += '| Target | Status | Goccia | QuickJS | Node |\n';
+  body += `| Target | Status | ${labels.goccia} | ${labels.qjs} | ${labels.node} |\n`;
   body += '|--------|--------|--------|---------|------|\n';
   for (const target of report.targets || []) {
     const [goccia, qjs, node] = engineCells(target);
     body += `| ${target.name} | ${targetStatus(target)} | ${goccia} | ${qjs} | ${node} |\n`;
   }
 
-  body += buildGeomeanTable(report.geomeanRatios || {});
+  body += buildGeomeanTable(report.geomeanRatios || {}, labels);
 
   const awfyCount = (report.targets || []).filter((target) => target.kind === 'awfy').length;
   const probeCount = (report.targets || []).filter((target) => target.kind === 'probe').length;
@@ -150,6 +174,8 @@ module.exports = {
   buildGeomeanTable,
   buildAwfyReportComment,
   buildAwfySmokeComment: buildAwfyReportComment,
+  cleanEngineVersion,
+  engineLabels,
   LEGACY_MARKER,
   MARKER,
   formatMicros,

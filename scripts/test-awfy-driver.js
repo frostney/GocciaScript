@@ -134,6 +134,11 @@ console.log('awfy-driver: PR comment markdown...');
     metadata: {
       driver: { version: 1 },
       options: { repetitions: 5 },
+      engines: [
+        { name: 'goccia', version: '' },
+        { name: 'qjs', version: 'QuickJS version 2026-06-04' },
+        { name: 'node', version: 'v24.0.1' },
+      ],
       corpus: {
         awfy: {
           repository: 'https://github.com/smarr/are-we-fast-yet',
@@ -167,13 +172,13 @@ console.log('awfy-driver: PR comment markdown...');
   assert(comment.includes(MARKER), 'comment includes stable marker');
   assert(comment.includes('## AWFY Results'), 'comment uses results title');
   assert(comment.includes('NBody'), 'comment includes target name');
-  assert(comment.includes('| Target | Status | Goccia | QuickJS | Node |'), 'comment uses concise target table');
+  assert(comment.includes('| Target | Status | Goccia | QuickJS 2026-06-04 | NodeJS v24.0.1 |'), 'comment table header includes reference engine versions');
   assert(!comment.includes('| Kind |'), 'comment does not need a kind column for the PR AWFY lane');
   assert(!comment.includes('Checksum'), 'comment avoids ambiguous checksum wording');
   assert(!comment.includes('| Outcome |'), 'comment avoids separate outcome and verification columns');
   assert(!comment.includes('| Verify |'), 'comment avoids separate outcome and verification columns');
   assert(comment.includes('| NBody | pass | 1.00ms | 0.50ms | 250.00µs |'), 'comment renders status and timings');
-  assert(comment.includes('| Ratio (row / column) | Goccia | QuickJS | Node |'), 'comment uses a ratio matrix');
+  assert(comment.includes('| Ratio (row / column) | Goccia | QuickJS 2026-06-04 | NodeJS v24.0.1 |'), 'geomean matrix header includes reference engine versions');
   assert(comment.includes('| Goccia | 1.000 | 2.000 | 4.000 |'), 'comment includes geomean matrix row');
   assert(comment.includes('1 pinned AWFY benchmark'), 'comment summarizes AWFY count');
   assert(comment.includes('Medians from 5 interleaved samples per engine'), 'comment reports interleaved sample count');
