@@ -588,8 +588,7 @@ const
         '  getUTCSeconds(): number { const z = Date.#utc(this); return z ? z.second : NaN; }'#10 +
         '  getUTCMilliseconds(): number { const z = Date.#utc(this); return z ? z.millisecond : NaN; }'#10 +
         '  static #clip(epochMilliseconds: number): number {'#10 +
-        '    const t = Math.trunc(epochMilliseconds);'#10 +
-        '    return Number.isFinite(t) && Math.abs(t) <= dateTimeClipLimit ? t : NaN;'#10 +
+        '    return __GocciaDateTimeClip(epochMilliseconds);'#10 +
         '  }'#10 +
         '  static #epochFromParts(year: number, month: number, day: number, hour: number, minute: number, second: number, millisecond: number, timeZone: string): number {'#10 +
         '    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day) ||'#10 +
