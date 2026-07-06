@@ -2143,7 +2143,7 @@ end;
 
 function ToNumericValue(const AValue: TGocciaValue): TGocciaValue; inline;
 begin
-  Result := ToPrimitive(AValue);
+  Result := ToPrimitive(AValue, tphNumber);
   if not (Result is TGocciaBigIntValue) then
     Result := Result.ToNumberLiteral;
 end;

@@ -19,6 +19,9 @@ describe("Math miscellaneous methods", () => {
   test("Math.hypot", () => {
     expect(Math.hypot(3, 4)).toBe(5);
     expect(Math.hypot(0, 0)).toBe(0);
+    expect(Math.hypot()).toBe(0);
+    expect(Math.hypot(2, 3, 6)).toBe(7);
+    expect(Math.hypot(Infinity, NaN)).toBe(Infinity);
     expect(Number.isNaN(Math.hypot(NaN, 1))).toBe(true);
   });
 

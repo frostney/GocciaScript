@@ -81,6 +81,15 @@ describe("Date constructor", () => {
     expect(Number(d)).toBe(0);
   });
 
+  test("Date numeric operators use the number primitive hint", () => {
+    const d = new Date(2026, 0, 1);
+    const time = d.valueOf();
+
+    expect(+d).toBe(time);
+    expect(d - 0).toBe(time);
+    expect(0 - d).toBe(-time);
+  });
+
   test("Date UTC string methods are present", () => {
     const d = new Date(0);
     expect(typeof Date.prototype.toUTCString).toBe("function");
