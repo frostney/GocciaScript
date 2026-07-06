@@ -349,6 +349,7 @@ uses
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
+  Goccia.Keywords.Contextual,
   Goccia.MicrotaskQueue,
   Goccia.Platform,
   Goccia.Scope.Redeclaration,
@@ -2538,250 +2539,20 @@ end;
 procedure ValidateStrictDynamicExpression(const AExpr: TGocciaExpression); forward;
 procedure ValidateStrictDynamicStatement(const AStmt: TGocciaStatement); forward;
 
-function DynamicExpressionContainsAwait(const AExpr: TGocciaExpression): Boolean; forward;
-
-function DynamicPatternContainsAwait(
-  const APattern: TGocciaDestructuringPattern): Boolean;
-var
-  ArrPat: TGocciaArrayDestructuringPattern;
-  AssignmentPattern: TGocciaAssignmentDestructuringPattern;
-  ObjPat: TGocciaObjectDestructuringPattern;
-  Prop: TGocciaDestructuringProperty;
-  RestPattern: TGocciaRestDestructuringPattern;
-  I: Integer;
-begin
-  if not Assigned(APattern) then
-    Exit(False);
-
-  if APattern is TGocciaArrayDestructuringPattern then
-  begin
-    ArrPat := TGocciaArrayDestructuringPattern(APattern);
-    for I := 0 to ArrPat.Elements.Count - 1 do
-      if DynamicPatternContainsAwait(ArrPat.Elements[I]) then
-        Exit(True);
-  end
-  else if APattern is TGocciaObjectDestructuringPattern then
-  begin
-    ObjPat := TGocciaObjectDestructuringPattern(APattern);
-    for I := 0 to ObjPat.Properties.Count - 1 do
-    begin
-      Prop := ObjPat.Properties[I];
-      if (Prop.Computed and DynamicExpressionContainsAwait(Prop.KeyExpression)) or
-         DynamicPatternContainsAwait(Prop.Pattern) then
-        Exit(True);
-    end;
-  end
-  else if APattern is TGocciaAssignmentDestructuringPattern then
-  begin
-    AssignmentPattern := TGocciaAssignmentDestructuringPattern(APattern);
-    Exit(DynamicPatternContainsAwait(AssignmentPattern.Left) or
-      DynamicExpressionContainsAwait(AssignmentPattern.Right));
-  end
-  else if APattern is TGocciaRestDestructuringPattern then
-  begin
-    RestPattern := TGocciaRestDestructuringPattern(APattern);
-    Exit(DynamicPatternContainsAwait(RestPattern.Argument));
-  end
-  else if APattern is TGocciaMemberExpressionDestructuringPattern then
-    Exit(DynamicExpressionContainsAwait(
-      TGocciaMemberExpressionDestructuringPattern(APattern).Expression))
-  else if APattern is TGocciaPrivateMemberExpressionDestructuringPattern then
-    Exit(DynamicExpressionContainsAwait(
-      TGocciaPrivateMemberExpressionDestructuringPattern(APattern).Expression));
-
-  Result := False;
-end;
-
-function DynamicExpressionContainsAwait(const AExpr: TGocciaExpression): Boolean;
-var
-  ArrayExpr: TGocciaArrayExpression;
-  CallExpr: TGocciaCallExpression;
-  ImportExpr: TGocciaImportCallExpression;
-  MemberExpr: TGocciaMemberExpression;
-  NewExpr: TGocciaNewExpression;
-  ObjectExpr: TGocciaObjectExpression;
-  Pair: TPair<TGocciaExpression, TGocciaExpression>;
-  I: Integer;
-begin
-  if not Assigned(AExpr) then
-    Exit(False);
-
-  if AExpr is TGocciaAwaitExpression then
-    Exit(True)
-  else if AExpr is TGocciaCallExpression then
-  begin
-    CallExpr := TGocciaCallExpression(AExpr);
-    if DynamicExpressionContainsAwait(CallExpr.Callee) then
-      Exit(True);
-    for I := 0 to CallExpr.Arguments.Count - 1 do
-      if DynamicExpressionContainsAwait(CallExpr.Arguments[I]) then
-        Exit(True);
-  end
-  else if AExpr is TGocciaMemberExpression then
-  begin
-    MemberExpr := TGocciaMemberExpression(AExpr);
-    if DynamicExpressionContainsAwait(MemberExpr.ObjectExpr) then
-      Exit(True);
-    if MemberExpr.Computed and
-       DynamicExpressionContainsAwait(MemberExpr.PropertyExpression) then
-      Exit(True);
-  end
-  else if AExpr is TGocciaBinaryExpression then
-    Exit(DynamicExpressionContainsAwait(TGocciaBinaryExpression(AExpr).Left) or
-      DynamicExpressionContainsAwait(TGocciaBinaryExpression(AExpr).Right))
-  else if AExpr is TGocciaSequenceExpression then
-  begin
-    for I := 0 to TGocciaSequenceExpression(AExpr).Expressions.Count - 1 do
-      if DynamicExpressionContainsAwait(
-        TGocciaSequenceExpression(AExpr).Expressions[I]) then
-        Exit(True);
-  end
-  else if AExpr is TGocciaUnaryExpression then
-    Exit(DynamicExpressionContainsAwait(TGocciaUnaryExpression(AExpr).Operand))
-  else if AExpr is TGocciaAssignmentExpression then
-    Exit(DynamicExpressionContainsAwait(TGocciaAssignmentExpression(AExpr).Value))
-  else if AExpr is TGocciaPropertyAssignmentExpression then
-    Exit(DynamicExpressionContainsAwait(
-      TGocciaPropertyAssignmentExpression(AExpr).ObjectExpr) or
-      DynamicExpressionContainsAwait(
-        TGocciaPropertyAssignmentExpression(AExpr).Value))
-  else if AExpr is TGocciaComputedPropertyAssignmentExpression then
-    Exit(DynamicExpressionContainsAwait(
-      TGocciaComputedPropertyAssignmentExpression(AExpr).ObjectExpr) or
-      DynamicExpressionContainsAwait(
-        TGocciaComputedPropertyAssignmentExpression(AExpr).PropertyExpression) or
-      DynamicExpressionContainsAwait(
-        TGocciaComputedPropertyAssignmentExpression(AExpr).Value))
-  else if AExpr is TGocciaCompoundAssignmentExpression then
-    Exit(DynamicExpressionContainsAwait(
-      TGocciaCompoundAssignmentExpression(AExpr).Value))
-  else if AExpr is TGocciaPropertyCompoundAssignmentExpression then
-    Exit(DynamicExpressionContainsAwait(
-      TGocciaPropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
-      DynamicExpressionContainsAwait(
-        TGocciaPropertyCompoundAssignmentExpression(AExpr).Value))
-  else if AExpr is TGocciaComputedPropertyCompoundAssignmentExpression then
-    Exit(DynamicExpressionContainsAwait(
-      TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
-      DynamicExpressionContainsAwait(
-        TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).PropertyExpression) or
-      DynamicExpressionContainsAwait(
-        TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).Value))
-  else if AExpr is TGocciaIncrementExpression then
-    Exit(DynamicExpressionContainsAwait(
-      TGocciaIncrementExpression(AExpr).Operand))
-  else if AExpr is TGocciaArrayExpression then
-  begin
-    ArrayExpr := TGocciaArrayExpression(AExpr);
-    for I := 0 to ArrayExpr.Elements.Count - 1 do
-      if DynamicExpressionContainsAwait(ArrayExpr.Elements[I]) then
-        Exit(True);
-  end
-  else if AExpr is TGocciaObjectExpression then
-  begin
-    ObjectExpr := TGocciaObjectExpression(AExpr);
-    for I := 0 to High(ObjectExpr.PropertySourceOrder) do
-      case ObjectExpr.PropertySourceOrder[I].PropertyType of
-        pstStatic:
-          if DynamicExpressionContainsAwait(
-            ObjectExpr.PropertySourceOrder[I].Expression) then
-            Exit(True);
-        pstComputed:
-          begin
-            Pair := ObjectExpr.ComputedPropertiesInOrder[
-              ObjectExpr.PropertySourceOrder[I].ComputedIndex];
-            if DynamicExpressionContainsAwait(Pair.Key) or
-               DynamicExpressionContainsAwait(Pair.Value) then
-              Exit(True);
-          end;
-        pstComputedGetter,
-        pstComputedSetter:
-          begin
-            Pair := ObjectExpr.ComputedPropertiesInOrder[
-              ObjectExpr.PropertySourceOrder[I].ComputedIndex];
-            if DynamicExpressionContainsAwait(Pair.Key) then
-              Exit(True);
-          end;
-      end;
-  end
-  else if AExpr is TGocciaYieldExpression then
-    Exit(DynamicExpressionContainsAwait(TGocciaYieldExpression(AExpr).Operand))
-  else if AExpr is TGocciaConditionalExpression then
-    Exit(DynamicExpressionContainsAwait(
-      TGocciaConditionalExpression(AExpr).Condition) or
-      DynamicExpressionContainsAwait(
-        TGocciaConditionalExpression(AExpr).Consequent) or
-      DynamicExpressionContainsAwait(
-        TGocciaConditionalExpression(AExpr).Alternate))
-  else if AExpr is TGocciaNewExpression then
-  begin
-    NewExpr := TGocciaNewExpression(AExpr);
-    if DynamicExpressionContainsAwait(NewExpr.Callee) then
-      Exit(True);
-    for I := 0 to NewExpr.Arguments.Count - 1 do
-      if DynamicExpressionContainsAwait(NewExpr.Arguments[I]) then
-        Exit(True);
-  end
-  else if AExpr is TGocciaImportCallExpression then
-  begin
-    ImportExpr := TGocciaImportCallExpression(AExpr);
-    Exit(DynamicExpressionContainsAwait(ImportExpr.Specifier) or
-      DynamicExpressionContainsAwait(ImportExpr.Options));
-  end
-  else if AExpr is TGocciaSpreadExpression then
-    Exit(DynamicExpressionContainsAwait(TGocciaSpreadExpression(AExpr).Argument))
-  else if AExpr is TGocciaTemplateWithInterpolationExpression then
-  begin
-    for I := 0 to TGocciaTemplateWithInterpolationExpression(AExpr).Parts.Count - 1 do
-      if DynamicExpressionContainsAwait(
-        TGocciaTemplateWithInterpolationExpression(AExpr).Parts[I]) then
-        Exit(True);
-  end
-  else if AExpr is TGocciaTaggedTemplateExpression then
-  begin
-    if DynamicExpressionContainsAwait(TGocciaTaggedTemplateExpression(AExpr).Tag) then
-      Exit(True);
-    for I := 0 to TGocciaTaggedTemplateExpression(AExpr).Expressions.Count - 1 do
-      if DynamicExpressionContainsAwait(
-        TGocciaTaggedTemplateExpression(AExpr).Expressions[I]) then
-        Exit(True);
-  end
-  else if AExpr is TGocciaDestructuringAssignmentExpression then
-    Exit(DynamicPatternContainsAwait(
-      TGocciaDestructuringAssignmentExpression(AExpr).Left) or
-      DynamicExpressionContainsAwait(
-        TGocciaDestructuringAssignmentExpression(AExpr).Right))
-  else if AExpr is TGocciaPrivateMemberExpression then
-    Exit(DynamicExpressionContainsAwait(
-      TGocciaPrivateMemberExpression(AExpr).ObjectExpr))
-  else if AExpr is TGocciaPrivatePropertyAssignmentExpression then
-    Exit(DynamicExpressionContainsAwait(
-      TGocciaPrivatePropertyAssignmentExpression(AExpr).ObjectExpr) or
-      DynamicExpressionContainsAwait(
-        TGocciaPrivatePropertyAssignmentExpression(AExpr).Value))
-  else if AExpr is TGocciaPrivatePropertyCompoundAssignmentExpression then
-    Exit(DynamicExpressionContainsAwait(
-      TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
-      DynamicExpressionContainsAwait(
-        TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).Value));
-
-  Result := False;
-end;
-
 function DynamicParametersContainAwait(
   const AParameters: TGocciaParameterArray): Boolean;
-var
-  I: Integer;
 begin
-  for I := 0 to High(AParameters) do
-  begin
-    if AParameters[I].IsPattern and
-       DynamicPatternContainsAwait(AParameters[I].Pattern) then
-      Exit(True);
-    if DynamicExpressionContainsAwait(AParameters[I].DefaultValue) then
-      Exit(True);
-  end;
-  Result := False;
+  Result := ParameterListContainsExpressionClass(AParameters,
+    TGocciaAwaitExpression) or ParameterListBindsName(AParameters,
+    KEYWORD_AWAIT);
+end;
+
+function DynamicParametersContainYield(
+  const AParameters: TGocciaParameterArray): Boolean;
+begin
+  Result := ParameterListContainsExpressionClass(AParameters,
+    TGocciaYieldExpression) or ParameterListBindsName(AParameters,
+    KEYWORD_YIELD);
 end;
 
 procedure ValidateStrictDynamicPattern(
@@ -3496,7 +3267,7 @@ begin
   for I := 0 to High(AParamsSources) do
   begin
     if I > 0 then
-      ParamStr := ParamStr + ', ';
+      ParamStr := ParamStr + ',';
     ParamStr := ParamStr + AParamsSources[I];
   end;
 
@@ -3541,6 +3312,10 @@ begin
        ((AKind = dfkAsync) or (AKind = dfkAsyncGenerator)) and
        DynamicParametersContainAwait(FunctionExpression.Parameters) then
       ThrowSyntaxError('await is not allowed in dynamic async function parameters');
+    if Assigned(FunctionExpression) and
+       ((AKind = dfkGenerator) or (AKind = dfkAsyncGenerator)) and
+       DynamicParametersContainYield(FunctionExpression.Parameters) then
+      ThrowSyntaxError('yield is not allowed in dynamic generator function parameters');
 
     if BodyParseResult.HasUseStrictDirective and
        Assigned(FunctionExpression) then

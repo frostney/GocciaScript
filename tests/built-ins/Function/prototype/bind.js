@@ -85,6 +85,19 @@ describe("Function.prototype.bind", () => {
     expect(infinite.bind(null, 1).length).toBe(Infinity);
   });
 
+  test("bound length normalizes negative zero", () => {
+    const negativeZeroLength = () => {};
+    Object.defineProperty(negativeZeroLength, "length", {
+      value: -0,
+      configurable: true,
+    });
+
+    const bound = negativeZeroLength.bind(null);
+
+    expect(bound.length).toBe(0);
+    expect(Object.is(bound.length, -0)).toBe(false);
+  });
+
   test("bound name is snapshotted at bind time", () => {
     const fn = () => {};
     Object.defineProperty(fn, "name", { value: "before", configurable: true });

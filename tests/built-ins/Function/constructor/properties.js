@@ -25,4 +25,14 @@ describe("Function constructor properties", () => {
     const f = new Function("return 1");
     expect(typeof f).toBe("function");
   });
+
+  test("toString preserves dynamic function wrapper shape", () => {
+    const f = new Function("a", "b", "return a + b");
+    expect(f.toString()).toBe("function anonymous(a,b\n) {\nreturn a + b\n}");
+  });
+
+  test("toString preserves line comments in dynamic parameters", () => {
+    const f = new Function("value // comment", "return value;");
+    expect(f.toString()).toBe("function anonymous(value // comment\n) {\nreturn value;\n}");
+  });
 });

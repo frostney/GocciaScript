@@ -161,6 +161,8 @@ function GetProtoFromConstructor(const ANewTarget: TGocciaValue): TGocciaObjectV
 function GetProtoFromConstructorWithIntrinsic(const ANewTarget: TGocciaValue;
   const AIntrinsicDefault: TGocciaObjectValue;
   const AIntrinsicSlot: TGocciaRealmSlotId = -1): TGocciaObjectValue;
+function GetFunctionPrototypeFromConstructor(const ANewTarget: TGocciaValue;
+  const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
 function GetFunctionRealm(const AValue: TGocciaValue): TGocciaRealm;
 
 // ES2026 §10.2.4.1 %ThrowTypeError%: one frozen thrower per realm, reused by
@@ -329,8 +331,18 @@ begin
   end;
 end;
 
+function GetFunctionPrototypeFromConstructor(const ANewTarget: TGocciaValue;
+  const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
+begin
+  Result := GetProtoFromConstructorWithIntrinsic(ANewTarget,
+    ACurrentRealmDefault, GFunctionPrototypeSlot);
+end;
+
 function GetFunctionRealm(const AValue: TGocciaValue): TGocciaRealm;
 begin
+  if AValue is TGocciaBoundFunctionValue then
+    Exit(GetFunctionRealm(TGocciaBoundFunctionValue(AValue).OriginalFunction));
+
   if AValue is TGocciaFunctionBase then
     Exit(TGocciaFunctionBase(AValue).CreationRealm);
 
@@ -587,7 +599,9 @@ begin
     Exit;
 
   Result := Int(LengthNumber.Value) - ABoundArgCount;
-  if Result < 0 then
+  if Result <= 0 then
+    // Canonicalize -0 to +0 so the bound function's length does not expose
+    // the sign bit from a target length of -0.
     Result := 0;
 end;
 
@@ -1150,7 +1164,8 @@ begin
   // AThisValue is the function being called
 
   if not AThisValue.IsCallable then
-    raise TGocciaError.Create('Function.prototype.call called on non-function', 0, 0, '', nil);
+    ThrowTypeError('Function.prototype.call called on non-function',
+      SSuggestNotFunctionType);
 
   // First argument is the 'this' value for the call
   if AArgs.Length > 0 then
@@ -1328,8 +1343,12 @@ begin
   end;
 
   // Built-in functions and bound functions: NativeFunction string
-  if AThisValue is TGocciaFunctionBase then
+  if AThisValue is TGocciaBoundFunctionValue then
+    FuncName := ''
+  else if AThisValue is TGocciaFunctionBase then
     FuncName := TGocciaFunctionBase(AThisValue).GetFunctionName
+  else if AThisValue is TGocciaClassValue then
+    FuncName := TGocciaClassValue(AThisValue).Name
   else
     FuncName := '';
 

@@ -1379,6 +1379,7 @@ begin
   ArgumentsObjectEnabled := FClosure.EffectiveArgumentsObjectEnabled;
   Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
   Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
+  Context.HideFunctionSourceText := FHideNestedFunctionSourceText;
   Context.DisposalTracker := nil;
   HasParamExpressions := HasParameterExpressions;
   // EvalRejectNames is only read while evaluating a parameter default, so
@@ -1611,6 +1612,7 @@ begin
   ArgumentsObjectEnabled := FClosure.EffectiveArgumentsObjectEnabled;
   Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
   Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
+  Context.HideFunctionSourceText := FHideNestedFunctionSourceText;
   Context.DisposalTracker := nil;
   HasParamExpressions := HasParameterExpressions;
   // EvalRejectNames is only read while evaluating a parameter default, so

@@ -252,7 +252,9 @@ type
     procedure ExecGetComputedPropertyFallback(const ADest: Integer;
       const AReceiverReg, AKeyReg: TGocciaRegister);
     function CoerceNonStrictThisRegister(
-      const AThisRegister: TGocciaRegister): TGocciaRegister;
+      const AThisRegister: TGocciaRegister;
+      const AGlobalThisValue: TGocciaValue = nil;
+      const ARealm: TGocciaRealm = nil): TGocciaRegister;
     procedure SetFunctionNameFromKey(const AFunction, AKey: TGocciaValue;
       const APrefixKind: UInt8);
     function EnsureCurrentDynamicVarScope: TGocciaScope;
@@ -688,6 +690,46 @@ begin
      (AClosure.FunctionValue is TGocciaFunctionBase) and
      Assigned(TGocciaFunctionBase(AClosure.FunctionValue).CreationRealm) then
     Result := TGocciaFunctionBase(AClosure.FunctionValue).CreationRealm;
+end;
+
+function BytecodeClosureGlobalThis(
+  const AClosure: TGocciaBytecodeClosure;
+  const AFallbackGlobalThis: TGocciaValue): TGocciaValue;
+var
+  Root: TGocciaScope;
+begin
+  if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
+  begin
+    Root := AClosure.GlobalScope;
+    while Assigned(Root.Parent) do
+      Root := Root.Parent;
+    if Assigned(Root.ThisValue) then
+      Exit(Root.ThisValue);
+  end;
+  Result := AFallbackGlobalThis;
+end;
+
+function CoerceBytecodeNonStrictThisValue(
+  const AClosure: TGocciaBytecodeClosure;
+  const AThisValue, AFallbackGlobalThis: TGocciaValue;
+  const AFallbackRealm: TGocciaRealm): TGocciaValue;
+var
+  BoxingRealm, PreviousRealm: TGocciaRealm;
+  ShouldSwitchRealm: Boolean;
+begin
+  BoxingRealm := BytecodeClosureExecutionRealm(AClosure, AFallbackRealm);
+  PreviousRealm := CurrentRealm;
+  ShouldSwitchRealm := Assigned(BoxingRealm) and
+    (BoxingRealm <> PreviousRealm);
+  if ShouldSwitchRealm then
+    SetCurrentRealm(BoxingRealm);
+  try
+    Result := CoerceNonStrictThis(AThisValue,
+      BytecodeClosureGlobalThis(AClosure, AFallbackGlobalThis));
+  finally
+    if ShouldSwitchRealm then
+      SetCurrentRealm(PreviousRealm);
+  end;
 end;
 
 function IsBytecodePrivateKey(const AKey: string): Boolean; forward;
@@ -5558,7 +5600,8 @@ begin
   if FStrictThis then
     EffectiveThis := AThisValue
   else
-    EffectiveThis := CoerceNonStrictThis(AThisValue, FVM.FGlobalThisValue);
+    EffectiveThis := CoerceBytecodeNonStrictThisValue(FClosure,
+      AThisValue, FVM.FGlobalThisValue, FVM.FRealm);
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
@@ -5650,7 +5693,8 @@ begin
   if FStrictThis then
     EffectiveThis := AThisValue
   else
-    EffectiveThis := CoerceNonStrictThis(AThisValue, FVM.FGlobalThisValue);
+    EffectiveThis := CoerceBytecodeNonStrictThisValue(FClosure,
+      AThisValue, FVM.FGlobalThisValue, FVM.FRealm);
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
@@ -5713,7 +5757,8 @@ begin
   if FStrictThis then
     EffectiveThis := AThisValue
   else
-    EffectiveThis := CoerceNonStrictThis(AThisValue, FVM.FGlobalThisValue);
+    EffectiveThis := CoerceBytecodeNonStrictThisValue(FClosure,
+      AThisValue, FVM.FGlobalThisValue, FVM.FRealm);
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
@@ -5778,7 +5823,8 @@ begin
   if FStrictThis then
     EffectiveThis := AThisValue
   else
-    EffectiveThis := CoerceNonStrictThis(AThisValue, FVM.FGlobalThisValue);
+    EffectiveThis := CoerceBytecodeNonStrictThisValue(FClosure,
+      AThisValue, FVM.FGlobalThisValue, FVM.FRealm);
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
@@ -5847,7 +5893,8 @@ begin
   if FStrictThis then
     EffectiveThis := AThisValue
   else
-    EffectiveThis := CoerceNonStrictThis(AThisValue, FVM.FGlobalThisValue);
+    EffectiveThis := CoerceBytecodeNonStrictThisValue(FClosure,
+      AThisValue, FVM.FGlobalThisValue, FVM.FRealm);
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
@@ -11713,12 +11760,23 @@ end;
 // operating on registers so the f.call/f.apply fast paths avoid a
 // register/value round trip for receivers that are already objects.
 function TGocciaVM.CoerceNonStrictThisRegister(
-  const AThisRegister: TGocciaRegister): TGocciaRegister;
+  const AThisRegister: TGocciaRegister;
+  const AGlobalThisValue: TGocciaValue;
+  const ARealm: TGocciaRealm): TGocciaRegister;
+var
+  BoxingRealm, PreviousRealm: TGocciaRealm;
+  GlobalThisValue: TGocciaValue;
+  ShouldSwitchRealm: Boolean;
 begin
+  if Assigned(AGlobalThisValue) then
+    GlobalThisValue := AGlobalThisValue
+  else
+    GlobalThisValue := FGlobalThisValue;
+
   if AThisRegister.Kind in [grkUndefined, grkNull] then
   begin
-    if Assigned(FGlobalThisValue) then
-      Result := VMValueToRegisterFast(FGlobalThisValue)
+    if Assigned(GlobalThisValue) then
+      Result := VMValueToRegisterFast(GlobalThisValue)
     else
       Result := AThisRegister;
   end
@@ -11726,8 +11784,21 @@ begin
           (AThisRegister.ObjectValue is TGocciaObjectValue) then
     Result := AThisRegister
   else
-    Result := VMValueToRegisterFast(CoerceNonStrictThis(
-      RegisterToValue(AThisRegister), FGlobalThisValue));
+  begin
+    BoxingRealm := ARealm;
+    PreviousRealm := CurrentRealm;
+    ShouldSwitchRealm := Assigned(BoxingRealm) and
+      (BoxingRealm <> PreviousRealm);
+    if ShouldSwitchRealm then
+      SetCurrentRealm(BoxingRealm);
+    try
+      Result := VMValueToRegisterFast(CoerceNonStrictThis(
+        RegisterToValue(AThisRegister), GlobalThisValue));
+    finally
+      if ShouldSwitchRealm then
+        SetCurrentRealm(PreviousRealm);
+    end;
+  end;
 end;
 
 procedure TGocciaVM.SetPropertyValue(const AObject: TGocciaValue;
@@ -13005,6 +13076,7 @@ var
   BuiltinConstructorMatch: Boolean;
   RegisterArgs: TGocciaRegisterArray;
   CallThisRegister: TGocciaRegister;
+  CallGlobalThisValue: TGocciaValue;
   FixedArg0, FixedArg1, FixedArg2: TGocciaRegister;
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   BoundFunction: TGocciaBoundFunctionValue;
@@ -15016,7 +15088,11 @@ begin
                 CallThisRegister := ValueToRegister(BoundFunction.BoundThis);
                 if not BytecodeFunction.FStrictThis then
                   CallThisRegister := CoerceNonStrictThisRegister(
-                    CallThisRegister);
+                    CallThisRegister,
+                    BytecodeClosureGlobalThis(BytecodeFunction.FClosure,
+                      FGlobalThisValue),
+                    BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
+                      FRealm));
                 if (C and CALL_FLAG_TAIL) <> 0 then
                   PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
                     InitialFrameStackCount, SavedHandlerCount)
@@ -15044,7 +15120,11 @@ begin
                 CallThisRegister := ValueToRegister(BoundFunction.BoundThis);
                 if not BytecodeFunction.FStrictThis then
                   CallThisRegister := CoerceNonStrictThisRegister(
-                    CallThisRegister);
+                    CallThisRegister,
+                    BytecodeClosureGlobalThis(BytecodeFunction.FClosure,
+                      FGlobalThisValue),
+                    BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
+                      FRealm));
                 if (C and CALL_FLAG_TAIL) <> 0 then
                   PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
                     InitialFrameStackCount, SavedHandlerCount)
@@ -15071,8 +15151,15 @@ begin
              (not BytecodeFunction.FClosure.Template.IsAsync) and
              (not BytecodeFunction.FClosure.Template.IsGenerator) then
           begin
-            if (not BytecodeFunction.FStrictThis) and Assigned(FGlobalThisValue) then
-              CallThisRegister := VMValueToRegisterFast(FGlobalThisValue)
+            if not BytecodeFunction.FStrictThis then
+            begin
+              CallGlobalThisValue := BytecodeClosureGlobalThis(
+                BytecodeFunction.FClosure, FGlobalThisValue);
+              if Assigned(CallGlobalThisValue) then
+                CallThisRegister := VMValueToRegisterFast(CallGlobalThisValue)
+              else
+                CallThisRegister := RegisterUndefined;
+            end
             else
               CallThisRegister := RegisterUndefined;
             if (C and 1) = 0 then
@@ -15216,7 +15303,11 @@ begin
                     CallThisRegister := FRegisters[A + 1];
                   if not BytecodeFunction.FStrictThis then
                     CallThisRegister := CoerceNonStrictThisRegister(
-                      CallThisRegister);
+                      CallThisRegister,
+                      BytecodeClosureGlobalThis(BytecodeFunction.FClosure,
+                        FGlobalThisValue),
+                      BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
+                        FRealm));
                   PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
                   case B of
                     0:
@@ -15265,7 +15356,11 @@ begin
                   CallThisRegister := FRegisters[A + 1];
                   if not BytecodeFunction.FStrictThis then
                     CallThisRegister := CoerceNonStrictThisRegister(
-                      CallThisRegister);
+                      CallThisRegister,
+                      BytecodeClosureGlobalThis(BytecodeFunction.FClosure,
+                        FGlobalThisValue),
+                      BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
+                        FRealm));
                   PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
                   case ArgsArray.Elements.Count of
                     0:

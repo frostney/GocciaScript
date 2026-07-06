@@ -217,9 +217,9 @@ test("async and generator function prototype constructors are their own intrinsi
   expect(generatorFunctionConstructor.prototype).toBe(generatorFunctionPrototype);
   expect(asyncGeneratorFunctionConstructor.prototype).toBe(asyncGeneratorFunctionPrototype);
 
-  expect(Object.getPrototypeOf(asyncFunctionConstructor)).toBe(Function.prototype);
-  expect(Object.getPrototypeOf(generatorFunctionConstructor)).toBe(Function.prototype);
-  expect(Object.getPrototypeOf(asyncGeneratorFunctionConstructor)).toBe(Function.prototype);
+  expect(Object.getPrototypeOf(asyncFunctionConstructor)).toBe(Function);
+  expect(Object.getPrototypeOf(generatorFunctionConstructor)).toBe(Function);
+  expect(Object.getPrototypeOf(asyncGeneratorFunctionConstructor)).toBe(Function);
 });
 
 test("generator function.prototype's [[Prototype]] is GeneratorFunction.prototype.prototype", () => {

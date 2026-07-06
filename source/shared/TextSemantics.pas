@@ -73,6 +73,7 @@ function CreateECMAScriptSourceLines(const AText: string): TStringList;
 function CreateUTF8FileTextLines(const AText: UTF8String): TStringList;
 function NormalizeNewlinesToLF(const AText: string): string;
 function NormalizeUTF8NewlinesToLF(const AText: UTF8String): UTF8String;
+function StringListToSourceText(const ALines: TStrings): string;
 function StringListToLFText(const ALines: TStrings): string;
 
 { Release the per-thread is-ASCII memo. FPC does not auto-finalize managed
@@ -92,6 +93,37 @@ uses
   fpwidestring,
   IntlICU,
   StringBuffer;
+
+type
+  TSourceTextStringList = class(TStringList)
+  private
+    FSourceText: string;
+    FSourceTextValid: Boolean;
+  protected
+    procedure Changed; override;
+  public
+    procedure SetSourceText(const ASourceText: string);
+    function HasSourceText: Boolean;
+    property SourceText: string read FSourceText;
+  end;
+
+procedure TSourceTextStringList.Changed;
+begin
+  inherited Changed;
+  FSourceText := '';
+  FSourceTextValid := False;
+end;
+
+procedure TSourceTextStringList.SetSourceText(const ASourceText: string);
+begin
+  FSourceText := ASourceText;
+  FSourceTextValid := True;
+end;
+
+function TSourceTextStringList.HasSourceText: Boolean;
+begin
+  Result := FSourceTextValid;
+end;
 
 function RetagUTF8Text(const ABytes: RawByteString): string;
 var
@@ -1280,7 +1312,7 @@ var
   LineStart: Integer;
   TextIndex: Integer;
 begin
-  Result := TStringList.Create;
+  Result := TSourceTextStringList.Create;
   LineStart := 1;
   TextIndex := 1;
 
@@ -1306,6 +1338,7 @@ begin
   else if (Length(AText) > 0) and ((AText[Length(AText)] = #10) or
     (AText[Length(AText)] = #13)) then
     Result.Add('');
+  TSourceTextStringList(Result).SetSourceText(AText);
 end;
 
 function IsUTF8LineOrParagraphSeparatorAt(const AText: string;
@@ -1324,7 +1357,7 @@ var
   LineStart: Integer;
   TextIndex: Integer;
 begin
-  Result := TStringList.Create;
+  Result := TSourceTextStringList.Create;
   LineStart := 1;
   TextIndex := 1;
 
@@ -1358,6 +1391,7 @@ begin
     IsUTF8LineOrParagraphSeparatorAt(AText,
     Length(AText) - UTF8_LINE_TERMINATOR_BYTE_LENGTH + 1)) then
     Result.Add('');
+  TSourceTextStringList(Result).SetSourceText(AText);
 end;
 
 function CreateUTF8FileTextLines(const AText: UTF8String): TStringList;
@@ -1366,7 +1400,7 @@ var
   LineStart: Integer;
   TextIndex: Integer;
 begin
-  Result := TStringList.Create;
+  Result := TSourceTextStringList.Create;
   LineStart := 1;
   TextIndex := 1;
 
@@ -1397,6 +1431,8 @@ begin
   else if (Length(AText) > 0) and ((AText[Length(AText)] = #10) or
     (AText[Length(AText)] = #13)) then
     Result.Add('');
+  TSourceTextStringList(Result).SetSourceText(
+    RetagUTF8Text(RawByteString(AText)));
 end;
 
 function NormalizeNewlinesToLF(const AText: string): string;
@@ -1418,6 +1454,16 @@ begin
   NormalizedBytes := NormalizeRawNewlinesToLF(RawByteString(AText));
   SetCodePage(NormalizedBytes, CP_UTF8, False);
   Result := UTF8String(NormalizedBytes);
+end;
+
+function StringListToSourceText(const ALines: TStrings): string;
+begin
+  if not Assigned(ALines) then
+    Exit('');
+  if (ALines is TSourceTextStringList) and
+     TSourceTextStringList(ALines).HasSourceText then
+    Exit(TSourceTextStringList(ALines).SourceText);
+  Result := StringListToLFText(ALines);
 end;
 
 function StringListToLFText(const ALines: TStrings): string;

@@ -308,6 +308,7 @@ type
     property Enabled: Boolean read FEnabled write FEnabled;
     property CompileDynamicFunction: TGocciaCompileDynamicFunction
       read FCompileDynamicFunction write FCompileDynamicFunction;
+    property DynamicKind: TGocciaDynamicFunctionKind read FDynamicKind;
   end;
 
   TGocciaInstanceValue = class(TGocciaObjectValue)
@@ -363,6 +364,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Intrinsics.FunctionObjects,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.AutoAccessor,
@@ -454,7 +456,8 @@ function ShouldDelayNativePrototypeLookup(
   const AArguments: TGocciaArgumentsCollection): Boolean;
 begin
   Result := Assigned(ANativeClass) and
-    (ShouldDelayTypedArrayPrototypeLookup(ANativeClass, AArguments) or
+    ((ANativeClass is TGocciaFunctionConstructorClassValue) or
+     ShouldDelayTypedArrayPrototypeLookup(ANativeClass, AArguments) or
      (ANativeClass is TGocciaArrayBufferClassValue) or
      (ANativeClass is TGocciaSharedArrayBufferClassValue) or
      (ANativeClass is TGocciaDataViewClassValue));
@@ -550,6 +553,10 @@ begin
     Result := GetTypedArrayPrototypeFromConstructor(
       TGocciaTypedArrayClassValue(ANativeClass), ANewTarget,
       ACurrentRealmDefault)
+  else if ANativeClass is TGocciaFunctionConstructorClassValue then
+    Result := FunctionObjectIntrinsicPrototypeFromConstructor(
+      TGocciaFunctionConstructorClassValue(ANativeClass).DynamicKind,
+      ANewTarget, ACurrentRealmDefault)
   else if ANativeClass is TGocciaArrayBufferClassValue then
     Result := DefaultNativePrototypeForNewTarget(ANewTarget,
       ACurrentRealmDefault, CONSTRUCTOR_ARRAY_BUFFER)
@@ -1668,6 +1675,10 @@ begin
       else if NativeClass is TGocciaDataViewClassValue then
         InstancePrototype := DefaultNativePrototypeForNewTarget(ANewTarget,
           NativeIntrinsicPrototype, CONSTRUCTOR_DATA_VIEW)
+      else if NativeClass is TGocciaFunctionConstructorClassValue then
+        InstancePrototype := FunctionObjectIntrinsicPrototypeFromConstructor(
+          TGocciaFunctionConstructorClassValue(NativeClass).DynamicKind,
+          ANewTarget, NativeIntrinsicPrototype)
       else
         InstancePrototype := GetProtoFromConstructorWithIntrinsic(ANewTarget,
           NativeIntrinsicPrototype);
@@ -2178,7 +2189,18 @@ begin
       Result := Instantiate(AArguments);
   end
   else
-    ThrowTypeError(Format(SErrorClassConstructorRequiresNew, [FName]), SSuggestRequiresNew);
+  begin
+    PreviousRealm := CurrentRealm;
+    if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+      SetCurrentRealm(FCreationRealm);
+    try
+      ThrowTypeError(Format(SErrorClassConstructorRequiresNew, [FName]),
+        SSuggestRequiresNew);
+    finally
+      if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+        SetCurrentRealm(PreviousRealm);
+    end;
+  end;
 end;
 
 { TGocciaArrayClassValue }
@@ -2431,6 +2453,7 @@ var
   I: Integer;
   PrototypeDescriptor: TGocciaPropertyDescriptor;
   PrototypeValue: TGocciaValue;
+  PreviousRealm: TGocciaRealm;
 begin
   if not FEnabled then
     ThrowTypeError('Dynamic code generation is disabled. ' +
@@ -2458,7 +2481,15 @@ begin
     BodyStr := AArguments.GetElement(AArguments.Length - 1).ToStringLiteral.Value;
   end;
 
-  Result := FCompileDynamicFunction(ParamSources, BodyStr, FDynamicKind);
+  PreviousRealm := CurrentRealm;
+  if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+    SetCurrentRealm(FCreationRealm);
+  try
+    Result := FCompileDynamicFunction(ParamSources, BodyStr, FDynamicKind);
+  finally
+    if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+      SetCurrentRealm(PreviousRealm);
+  end;
   if FDynamicKind in [dfkGenerator, dfkAsyncGenerator] then
   begin
     PrototypeDescriptor := Result.GetOwnPropertyDescriptor(PROP_PROTOTYPE);

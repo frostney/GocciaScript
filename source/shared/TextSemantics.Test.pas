@@ -21,6 +21,7 @@ type
     procedure TestReplacementPatternExpansion;
     procedure TestECMAScriptSourceLinesSplitUnicodeLineTerminators;
     procedure TestTextLineHelpersPreserveUTF8;
+    procedure TestSourceTextFallsBackAfterMutation;
   public
     procedure SetupTests; override;
   end;
@@ -45,6 +46,8 @@ begin
     TestECMAScriptSourceLinesSplitUnicodeLineTerminators);
   Test('Text line helpers preserve UTF-8 bytes',
     TestTextLineHelpersPreserveUTF8);
+  Test('Preserved source text falls back after line-list mutation',
+    TestSourceTextFallsBackAfterMutation);
 end;
 
 procedure TTextSemanticsTests.TestTrimECMAScriptWhitespace;
@@ -244,6 +247,24 @@ begin
     for I := 1 to Length(Text) do
       Expect<Integer>(Ord(Text[I])).ToBe(
         Ord(('first' + #10 + UTF8_WORD_BYTES + #10)[I]));
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure TTextSemanticsTests.TestSourceTextFallsBackAfterMutation;
+var
+  Lines: TStringList;
+begin
+  Lines := CreateECMAScriptSourceLines('test("one", () => {});' + #13#10 +
+    'test("two", () => {});');
+  try
+    Expect<string>(StringListToSourceText(Lines)).ToBe(
+      'test("one", () => {});' + #13#10 + 'test("two", () => {});');
+    Lines.Add('runTests();');
+    Expect<string>(StringListToSourceText(Lines)).ToBe(
+      'test("one", () => {});' + #10 + 'test("two", () => {});' + #10 +
+      'runTests();');
   finally
     Lines.Free;
   end;

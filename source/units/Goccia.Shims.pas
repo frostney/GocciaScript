@@ -1022,6 +1022,7 @@ begin
       ModuleScope.ArgumentsObjectEnabled := True;
       Context := AInterpreter.CreateEvaluationContext;
       Context.Scope := ModuleScope;
+      Context.HideFunctionSourceText := True;
       for I := 0 to ProgramNode.Body.Count - 1 do
         EvaluateStatement(ProgramNode.Body[I], Context);
       Result := ModuleScope.GetValue(AShim.Name);

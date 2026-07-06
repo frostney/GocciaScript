@@ -25,6 +25,7 @@ type
     StrictTypes: Boolean;
     NonStrictMode: Boolean;
     CompatibilityNonStrictMode: Boolean;
+    HideFunctionSourceText: Boolean;
     InEvalCode: Boolean;
     EvalVarScope: TGocciaScope;
     RejectArgumentsVarDeclarationInEval: Boolean;

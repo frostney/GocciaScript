@@ -12,6 +12,20 @@ describe("Function constructor errors", () => {
     expect(() => new Function("@bad", "return 1")).toThrow(SyntaxError);
   });
 
+  test("AsyncFunction constructor rejects await in its parameter list", () => {
+    const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+    expect(() => AsyncFunction("x = await 1", "return x;")).toThrow(SyntaxError);
+    expect(() => AsyncFunction("await", "return await;")).toThrow(SyntaxError);
+    expect(() => AsyncFunction("...await", "return await.length;")).toThrow(SyntaxError);
+  });
+
+  test("GeneratorFunction constructor rejects yield in its parameter list", () => {
+    const GeneratorFunction = Object.getPrototypeOf({ *g() {} }.g).constructor;
+    expect(() => GeneratorFunction("x = yield 1", "yield x;")).toThrow(SyntaxError);
+    expect(() => GeneratorFunction("yield", "yield yield;")).toThrow(SyntaxError);
+    expect(() => GeneratorFunction("...yield", "yield yield.length;")).toThrow(SyntaxError);
+  });
+
   test("strict body rejects future reserved identifier references", () => {
     expect(() => new Function('"use strict"; public = 1;')).toThrow(SyntaxError);
   });

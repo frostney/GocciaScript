@@ -92,6 +92,69 @@ console.log("Accessor properties are invalid destructuring assignment targets...
   }
 }
 
+// -- Function parameter-list early errors ---------------------------------------
+
+console.log("Function parameter-list early errors...");
+{
+  const cases = [
+    {
+      desc: "async function parameter default containing await",
+      source: "async function f(a = await 1) {}\n",
+      args: ["--compat-function"],
+    },
+    {
+      desc: "async arrow parameter default containing await",
+      source: "const f = async (a = await 1) => a;\n",
+      args: [],
+    },
+    {
+      desc: "async function parameter binding named await",
+      source: "async function f(await) {}\n",
+      args: ["--compat-function"],
+    },
+    {
+      desc: "async arrow rest binding named await",
+      source: "const f = async (...await) => {};\n",
+      args: [],
+    },
+    {
+      desc: "generator function rest binding named yield",
+      source: "function* g(...yield) {}\n",
+      args: ["--compat-function"],
+    },
+    {
+      desc: "arrow duplicate parameter names",
+      source: "const f = (a, a) => a;\n",
+      args: [],
+    },
+    {
+      desc: "object method duplicate parameter names",
+      source: "const obj = { m(a, a) {} };\n",
+      args: [],
+    },
+    {
+      desc: "class method duplicate parameter names",
+      source: "class C { m(a, a) {} }\n",
+      args: [],
+    },
+    {
+      desc: "function duplicate binding with rest parameter",
+      source: "function f(a, ...a) {}\n",
+      args: ["--compat-function"],
+    },
+    {
+      desc: "function duplicate binding with default parameter",
+      source: "function f(a = 0, a) {}\n",
+      args: ["--compat-function"],
+    },
+  ] as const;
+
+  for (const { desc, source, args } of cases) {
+    assertSyntaxError(source, desc, [...args]);
+    assertSyntaxError(source, `${desc} (bytecode)`, [...args, "--mode=bytecode"]);
+  }
+}
+
 // -- Strict-mode legacy octal literal rejection ---------------------------------
 
 console.log("Strict-mode legacy octal literal rejection...");
