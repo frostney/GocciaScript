@@ -19,3 +19,16 @@ describe("toBeCloseTo -Infinity precision", () => {
     expect(0.1).toBeCloseTo(99999, -Infinity);
   });
 });
+
+describe("testing library arity validation", () => {
+  test("matchers reject extra arguments", () => {
+    expect(() => expect(1).toBe(1, "unexpected")).toThrow();
+  });
+
+  test("zero-argument matchers reject extra arguments", () => {
+    const fn = mock();
+    fn();
+
+    expect(() => expect(fn).toHaveBeenCalled("unexpected")).toThrow();
+  });
+});

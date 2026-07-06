@@ -3530,7 +3530,7 @@ begin
         // their primitive and take the BigInt::unaryMinus path
         // instead of being silently coerced to NaN by the boxed
         // object's ToNumberLiteral.
-        Operand := ToPrimitive(Operand);
+        Operand := ToPrimitive(Operand, tphNumber);
         AddValueRoot(Roots, Operand);
         if Operand is TGocciaSymbolValue then
           ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
@@ -3568,7 +3568,7 @@ begin
       // BigInt? throw).  Apply ToPrimitive here so boxed BigInts
       // surface the spec-mandated TypeError instead of silently
       // producing a number from the boxed object's coercion path.
-      Operand := ToPrimitive(Operand);
+      Operand := ToPrimitive(Operand, tphNumber);
       AddValueRoot(Roots, Operand);
       if Operand is TGocciaSymbolValue then
         ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);

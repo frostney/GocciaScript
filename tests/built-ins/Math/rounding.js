@@ -40,3 +40,9 @@ test("Math rounding with zero", () => {
   expect(Math.floor(0)).toBe(0);
   expect(Math.ceil(0)).toBe(0);
 });
+
+test("Math rounding methods ignore extra arguments", () => {
+  expect(Math.floor(1.9, "ignored", {})).toBe(1);
+  expect(Math.ceil(1.1, "ignored", {})).toBe(2);
+  expect(Math.round(1.4, "ignored", {})).toBe(1);
+});

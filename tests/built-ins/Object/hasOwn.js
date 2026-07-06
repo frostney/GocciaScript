@@ -8,6 +8,11 @@ test("Object.hasOwn has the correct function length", () => {
   expect(Object.hasOwn.length).toBe(2);
 });
 
+test("Object.hasOwn ignores extra arguments", () => {
+  const obj = { name: "John" };
+  expect(Object.hasOwn(obj, "name", "ignored")).toBe(true);
+});
+
 test("Object.hasOwn with prototype", () => {
   const obj = Object.create({ name: "John" });
   expect(Object.hasOwn(obj, "name")).toBe(false);
