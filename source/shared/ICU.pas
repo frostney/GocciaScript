@@ -4,8 +4,22 @@ unit ICU;
 
 interface
 
+{$IFNDEF LAKON}
 uses
   DynLibs;
+{$ENDIF}
+
+{$IFDEF LAKON}
+type
+  { Lakon's WASM lane has no dynamic libraries (the UnicodeICU
+    pattern): the loader below stays constant-False, and this local
+    handle type stands in for DynLibs.TLibHandle so the shared
+    interface keeps its shape. }
+  TLibHandle = PtrInt;
+
+const
+  NilHandle = TLibHandle(0);
+{$ENDIF}
 
 function TryGetICULibraryHandle(out AHandle: TLibHandle): Boolean;
 function ICULibraryAvailable: Boolean;
@@ -284,7 +298,9 @@ begin
   Result := nil;
   if not TryGetICULibraryHandle(Handle) then
     Exit;
+  {$IFNDEF LAKON}
   Result := GetProcAddress(Handle, AName);
+  {$ENDIF}
   {$IFDEF LINUX}
   if (Result = nil) and (ICUVersionSuffix <> '') then
   begin
@@ -315,8 +331,10 @@ initialization
 
 finalization
   DoneCriticalSection(InitLock);
+  {$IFNDEF LAKON}
   if LibraryHandle <> NilHandle then
     UnloadLibrary(LibraryHandle);
+  {$ENDIF}
   {$IFDEF LINUX}
   if UCHandle <> NilHandle then
     UnloadLibrary(UCHandle);

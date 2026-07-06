@@ -139,8 +139,12 @@ type
     FExecutor: TGocciaExecutor;
     FSourceLines: TStringList;
     FExtensions: TGocciaEngineExtensionList;
-    FRetainedModules: TObjectList;
-    FLazyThunks: TObjectList;
+    // Qualified: Generics.Collections' TObjectList<T> shadows the
+    // classic Contnrs form for unqualified references under lakon's
+    // stricter later-unit-wins rule; the qualification is a no-op
+    // for FPC.
+    FRetainedModules: Contnrs.TObjectList;
+    FLazyThunks: Contnrs.TObjectList;
 
     // Core language built-in objects
     FBuiltinMath: TGocciaMath;
@@ -662,7 +666,7 @@ begin
   FInjectedGlobals := TStringList.Create;
   // Owns the lazy materializers (shims, runtime namespaces) whose factory
   // closures back lazy global properties; freed in the destructor.
-  FLazyThunks := TObjectList.Create(True);
+  FLazyThunks := Contnrs.TObjectList.Create(True);
   RegisterDefaultShimNames(FShims);
   PinSingletons;
   RegisterBuiltIns;
@@ -672,7 +676,7 @@ begin
   // caller chose interpreter mode, bind the bootstrapped interpreter into
   // it now so its tree-walk methods can dispatch.  The bytecode executor
   // does not need this hook.
-  FRetainedModules := TObjectList.Create(True);
+  FRetainedModules := Contnrs.TObjectList.Create(True);
 
   if FExecutor is TGocciaInterpreterExecutor then
     TGocciaInterpreterExecutor(FExecutor).Interpreter := FInterpreter;
