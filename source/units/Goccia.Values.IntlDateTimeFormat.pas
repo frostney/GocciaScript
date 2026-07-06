@@ -42,6 +42,7 @@ type
 
     procedure InitializePrototype;
     procedure ReadOptions(const AOptions: TGocciaObjectValue);
+    procedure SetResolvedTimeZone(const ATimeZone: string);
     function TryGetResolvedDateFormatter(out AFormatter: Pointer): Boolean;
     function TryFormatResolvedDateTime(AMillis: Double; out AFormatted: string): Boolean;
     function TryFormatResolvedDateTimeToParts(AMillis: Double;
@@ -1895,8 +1896,7 @@ begin
   begin
     ZDT := TGocciaTemporalZonedDateTimeValue(AValue);
     TimeZoneId := NormalizeDateTimeFormatTimeZone(ZDT.TimeZone);
-    DTF.FTimeZone := TimeZoneId;
-    DTF.FResolvedOptions.TimeZone := ICUDateTimeFormatTimeZone(TimeZoneId);
+    DTF.SetResolvedTimeZone(TimeZoneId);
   end;
 
   Result := FormatTemporalValueWithDateTimeFormat(DTF, AValue, True);
@@ -2055,6 +2055,20 @@ destructor TGocciaIntlDateTimeFormatValue.Destroy;
 begin
   ICUCloseDateTimeFormatter(FResolvedDateFormatter);
   inherited;
+end;
+
+procedure TGocciaIntlDateTimeFormatValue.SetResolvedTimeZone(
+  const ATimeZone: string);
+var
+  ICUTimeZone: string;
+begin
+  ICUTimeZone := ICUDateTimeFormatTimeZone(ATimeZone);
+  if (FTimeZone = ATimeZone) and (FResolvedOptions.TimeZone = ICUTimeZone) then
+    Exit;
+
+  ICUCloseDateTimeFormatter(FResolvedDateFormatter);
+  FTimeZone := ATimeZone;
+  FResolvedOptions.TimeZone := ICUTimeZone;
 end;
 
 function TGocciaIntlDateTimeFormatValue.TryGetResolvedDateFormatter(
