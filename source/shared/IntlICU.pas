@@ -7,6 +7,9 @@ interface
 uses
   IntlTypes;
 
+type
+  TIntlDateTimeFormatter = Pointer;
+
 function IntlICUAvailable: Boolean;
 
 function TryICUCanonicalizeLocale(const ATag: string; out ACanonical: string): Boolean;
@@ -43,6 +46,17 @@ function TryICUFormatDateTime(const ALocale: string; AMillis: Double;
   const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
 function TryICUFormatDateTimeToParts(const ALocale: string; AMillis: Double;
   const AOptions: TIntlDateTimeFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+function TryICUOpenDateTimeFormatter(const ALocale: string;
+  const AOptions: TIntlDateTimeFormatOptions;
+  out AFormatter: TIntlDateTimeFormatter): Boolean;
+procedure ICUCloseDateTimeFormatter(var AFormatter: TIntlDateTimeFormatter);
+function TryICUFormatDateTimeWithFormatter(
+  const AFormatter: TIntlDateTimeFormatter; AMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
+function TryICUFormatDateTimeToPartsWithFormatter(
+  const AFormatter: TIntlDateTimeFormatter; AMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions;
+  out AParts: TIntlFormatPartArray): Boolean;
 function TryICUFormatDateTimeRange(const ALocale: string; AStartMillis, AEndMillis: Double;
   const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
 function TryICUFormatDateTimeRangeToParts(const ALocale: string; AStartMillis, AEndMillis: Double;
@@ -3132,44 +3146,59 @@ begin
   Result := ICUSucceeded(Status) and Assigned(AFormatter);
 end;
 
-function TryICUFormatDateTime(const ALocale: string; AMillis: Double;
+function TryICUOpenDateTimeFormatter(const ALocale: string;
+  const AOptions: TIntlDateTimeFormatOptions;
+  out AFormatter: TIntlDateTimeFormatter): Boolean;
+begin
+  AFormatter := nil;
+  if not EnsureLoaded then
+    Exit(False);
+  Result := OpenDateFormatter(ALocale, AOptions, AFormatter);
+end;
+
+procedure ICUCloseDateTimeFormatter(var AFormatter: TIntlDateTimeFormatter);
+begin
+  if Assigned(AFormatter) then
+  begin
+    if Assigned(IntlFunctions.UdatClose) then
+      IntlFunctions.UdatClose(AFormatter);
+    AFormatter := nil;
+  end;
+end;
+
+function TryICUFormatDateTimeWithFormatter(
+  const AFormatter: TIntlDateTimeFormatter; AMillis: Double;
   const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
 var
   Status: TICUErrorCode;
-  Formatter: Pointer;
   Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
   ResultLen: LongInt;
 begin
   Result := False;
   AFormatted := '';
 
-  if not EnsureLoaded then
+  if not Assigned(AFormatter) or not Assigned(IntlFunctions.UdatFormat) then
     Exit;
 
-  if not OpenDateFormatter(ALocale, AOptions, Formatter) then
+  FillChar(Buffer, SizeOf(Buffer), 0);
+  Status := ICU_SUCCESS;
+  ResultLen := IntlFunctions.UdatFormat(AFormatter, AMillis,
+    @Buffer[0], FORMAT_BUFFER_CAPACITY, nil, Status);
+  if not ICUSucceeded(Status) or (ResultLen <= 0) then
     Exit;
 
-  try
-    FillChar(Buffer, SizeOf(Buffer), 0);
-    Status := ICU_SUCCESS;
-    ResultLen := IntlFunctions.UdatFormat(Formatter, AMillis,
-      @Buffer[0], FORMAT_BUFFER_CAPACITY, nil, Status);
-    if not ICUSucceeded(Status) or (ResultLen <= 0) then
-      Exit;
-
-    AFormatted := UnicodeToString(Buffer, ResultLen);
-    AFormatted := PadTwoDigitHourFormatted(AFormatted, AOptions);
-    Result := True;
-  finally
-    IntlFunctions.UdatClose(Formatter);
-  end;
+  AFormatted := UnicodeToString(Buffer, ResultLen);
+  AFormatted := PadTwoDigitHourFormatted(AFormatted, AOptions);
+  Result := True;
 end;
 
-function TryICUFormatDateTimeToParts(const ALocale: string; AMillis: Double;
-  const AOptions: TIntlDateTimeFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+function TryICUFormatDateTimeToPartsWithFormatter(
+  const AFormatter: TIntlDateTimeFormatter; AMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions;
+  out AParts: TIntlFormatPartArray): Boolean;
 var
   Status: TICUErrorCode;
-  Formatter, Iterator: Pointer;
+  Iterator: Pointer;
   Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
   ResultLen: LongInt;
   Spans: TICUFieldSpanArray;
@@ -3178,40 +3207,70 @@ begin
   Result := False;
   SetLength(AParts, 0);
 
-  if not EnsureLoaded or not Assigned(IntlFunctions.UdatFormatForFields) or
+  if not Assigned(AFormatter) or
+     not Assigned(IntlFunctions.UdatFormatForFields) or
      not Assigned(IntlFunctions.UfieldpositerOpen) or
      not Assigned(IntlFunctions.UfieldpositerClose) or
      not Assigned(IntlFunctions.UfieldpositerNext) then
     Exit;
 
-  if not OpenDateFormatter(ALocale, AOptions, Formatter) then
+  Status := ICU_SUCCESS;
+  Iterator := IntlFunctions.UfieldpositerOpen(Status);
+  if not ICUSucceeded(Status) or not Assigned(Iterator) then
     Exit;
-
   try
+    FillChar(Buffer, SizeOf(Buffer), 0);
     Status := ICU_SUCCESS;
-    Iterator := IntlFunctions.UfieldpositerOpen(Status);
-    if not ICUSucceeded(Status) or not Assigned(Iterator) then
+    ResultLen := IntlFunctions.UdatFormatForFields(AFormatter, AMillis,
+      @Buffer[0], FORMAT_BUFFER_CAPACITY, Iterator, Status);
+    if not ICUSucceeded(Status) or (ResultLen <= 0) then
       Exit;
-    try
-      FillChar(Buffer, SizeOf(Buffer), 0);
-      Status := ICU_SUCCESS;
-      ResultLen := IntlFunctions.UdatFormatForFields(Formatter, AMillis,
-        @Buffer[0], FORMAT_BUFFER_CAPACITY, Iterator, Status);
-      if not ICUSucceeded(Status) or (ResultLen <= 0) then
-        Exit;
 
-      UFormatted := UnicodeString(UnicodeToString(Buffer, ResultLen));
-      SetLength(Spans, 0);
-      CollectIteratorFieldSpans(Iterator, UFIELD_CATEGORY_DATE, Spans);
-      Result := BuildPartsFromFieldSpans(UFormatted, Spans,
-        UFIELD_CATEGORY_DATE, 0, DateFieldToPartType, AParts);
-      if Result then
-        PadTwoDigitHourParts(AParts, AOptions);
-    finally
-      IntlFunctions.UfieldpositerClose(Iterator);
-    end;
+    UFormatted := UnicodeString(UnicodeToString(Buffer, ResultLen));
+    SetLength(Spans, 0);
+    CollectIteratorFieldSpans(Iterator, UFIELD_CATEGORY_DATE, Spans);
+    Result := BuildPartsFromFieldSpans(UFormatted, Spans,
+      UFIELD_CATEGORY_DATE, 0, DateFieldToPartType, AParts);
+    if Result then
+      PadTwoDigitHourParts(AParts, AOptions);
   finally
-    IntlFunctions.UdatClose(Formatter);
+    IntlFunctions.UfieldpositerClose(Iterator);
+  end;
+end;
+
+function TryICUFormatDateTime(const ALocale: string; AMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
+var
+  Formatter: TIntlDateTimeFormatter;
+begin
+  if not TryICUOpenDateTimeFormatter(ALocale, AOptions, Formatter) then
+  begin
+    AFormatted := '';
+    Exit(False);
+  end;
+  try
+    Result := TryICUFormatDateTimeWithFormatter(Formatter, AMillis, AOptions,
+      AFormatted);
+  finally
+    ICUCloseDateTimeFormatter(Formatter);
+  end;
+end;
+
+function TryICUFormatDateTimeToParts(const ALocale: string; AMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+var
+  Formatter: TIntlDateTimeFormatter;
+begin
+  if not TryICUOpenDateTimeFormatter(ALocale, AOptions, Formatter) then
+  begin
+    SetLength(AParts, 0);
+    Exit(False);
+  end;
+  try
+    Result := TryICUFormatDateTimeToPartsWithFormatter(Formatter, AMillis,
+      AOptions, AParts);
+  finally
+    ICUCloseDateTimeFormatter(Formatter);
   end;
 end;
 

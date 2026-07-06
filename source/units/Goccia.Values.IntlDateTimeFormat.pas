@@ -38,11 +38,17 @@ type
     FResolvedOptions: TIntlDateTimeFormatOptions;
     FHasExplicitCoreOptions: Boolean;
     FBoundFormat: TGocciaValue;
+    FResolvedDateFormatter: Pointer;
 
     procedure InitializePrototype;
     procedure ReadOptions(const AOptions: TGocciaObjectValue);
+    function TryGetResolvedDateFormatter(out AFormatter: Pointer): Boolean;
+    function TryFormatResolvedDateTime(AMillis: Double; out AFormatted: string): Boolean;
+    function TryFormatResolvedDateTimeToParts(AMillis: Double;
+      out AParts: TIntlFormatPartArray): Boolean;
   public
     constructor Create(const ALocale: string; const AOptions: TGocciaObjectValue = nil);
+    destructor Destroy; override;
 
     function ToStringTag: string; override;
     procedure MarkReferences; override;
@@ -1791,8 +1797,11 @@ var
   EffectiveOptions: TIntlDateTimeFormatOptions;
   Input: TDateTimeFormattable;
   Parts: TIntlFormatPartArray;
+  FormatSucceeded: Boolean;
+  UseResolvedFormatter: Boolean;
 begin
   EffectiveOptions := ADTF.FResolvedOptions;
+  UseResolvedFormatter := False;
   Input := ToDateTimeFormattable(AValue);
   if IsTemporalDateTimeKind(Input.Kind) then
   begin
@@ -1814,12 +1823,21 @@ begin
       Millis := TimeClipMillis(Millis);
   end
   else
+  begin
     Millis := TimeClipMillis(Input.Millis);
+    UseResolvedFormatter := True;
+  end;
 
   if IsNan(Millis) then
     ThrowRangeError('Invalid time value');
 
-  if TryICUFormatDateTime(ADTF.FLocale, Millis, EffectiveOptions, Formatted) then
+  if UseResolvedFormatter then
+    FormatSucceeded := ADTF.TryFormatResolvedDateTime(Millis, Formatted)
+  else
+    FormatSucceeded := TryICUFormatDateTime(ADTF.FLocale, Millis,
+      EffectiveOptions, Formatted);
+
+  if FormatSucceeded then
   begin
     Formatted := AdjustProlepticGregorianYearEra(Formatted, Millis,
       EffectiveOptions);
@@ -2033,6 +2051,57 @@ begin
     FPrototype := GetIntlDateTimeFormatShared.Prototype;
 end;
 
+destructor TGocciaIntlDateTimeFormatValue.Destroy;
+begin
+  ICUCloseDateTimeFormatter(FResolvedDateFormatter);
+  inherited;
+end;
+
+function TGocciaIntlDateTimeFormatValue.TryGetResolvedDateFormatter(
+  out AFormatter: Pointer): Boolean;
+begin
+  if not Assigned(FResolvedDateFormatter) then
+    if not TryICUOpenDateTimeFormatter(FLocale, FResolvedOptions,
+      FResolvedDateFormatter) then
+    begin
+      AFormatter := nil;
+      Exit(False);
+    end;
+
+  AFormatter := FResolvedDateFormatter;
+  Result := True;
+end;
+
+function TGocciaIntlDateTimeFormatValue.TryFormatResolvedDateTime(
+  AMillis: Double; out AFormatted: string): Boolean;
+var
+  Formatter: Pointer;
+begin
+  if not TryGetResolvedDateFormatter(Formatter) then
+  begin
+    AFormatted := '';
+    Exit(False);
+  end;
+
+  Result := TryICUFormatDateTimeWithFormatter(Formatter, AMillis,
+    FResolvedOptions, AFormatted);
+end;
+
+function TGocciaIntlDateTimeFormatValue.TryFormatResolvedDateTimeToParts(
+  AMillis: Double; out AParts: TIntlFormatPartArray): Boolean;
+var
+  Formatter: Pointer;
+begin
+  if not TryGetResolvedDateFormatter(Formatter) then
+  begin
+    SetLength(AParts, 0);
+    Exit(False);
+  end;
+
+  Result := TryICUFormatDateTimeToPartsWithFormatter(Formatter, AMillis,
+    FResolvedOptions, AParts);
+end;
+
 function TGocciaIntlDateTimeFormatValue.ToStringTag: string;
 begin
   Result := 'Object';
@@ -2116,7 +2185,7 @@ begin
   if AArgs.GetElement(0) is TGocciaUndefinedLiteralValue then
   begin
     Millis := CurrentEpochMilliseconds;
-    if TryICUFormatDateTime(DTF.FLocale, Millis, DTF.FResolvedOptions, Formatted) then
+    if DTF.TryFormatResolvedDateTime(Millis, Formatted) then
     begin
       Formatted := AdjustProlepticGregorianYearEra(Formatted, Millis,
         DTF.FResolvedOptions);
@@ -2139,11 +2208,17 @@ var
   Parts: TIntlFormatPartArray;
   EffectiveOptions: TIntlDateTimeFormatOptions;
   Input: TDateTimeFormattable;
+  FormatSucceeded: Boolean;
+  UseResolvedFormatter: Boolean;
 begin
   DTF := AsDateTimeFormat(AThisValue, 'Intl.DateTimeFormat.prototype.formatToParts');
   EffectiveOptions := DTF.FResolvedOptions;
+  UseResolvedFormatter := False;
   if AArgs.GetElement(0) is TGocciaUndefinedLiteralValue then
-    Millis := CurrentEpochMilliseconds
+  begin
+    Millis := CurrentEpochMilliseconds;
+    UseResolvedFormatter := True;
+  end
   else
   begin
     Input := ToDateTimeFormattable(AArgs.GetElement(0));
@@ -2167,13 +2242,22 @@ begin
         Millis := TimeClipMillis(Millis);
     end
     else
+    begin
       Millis := TimeClipMillis(Input.Millis);
+      UseResolvedFormatter := True;
+    end;
 
     if IsNan(Millis) then
       ThrowRangeError('Invalid time value');
   end;
 
-  if TryICUFormatDateTimeToParts(DTF.FLocale, Millis, EffectiveOptions, Parts) then
+  if UseResolvedFormatter then
+    FormatSucceeded := DTF.TryFormatResolvedDateTimeToParts(Millis, Parts)
+  else
+    FormatSucceeded := TryICUFormatDateTimeToParts(DTF.FLocale, Millis,
+      EffectiveOptions, Parts);
+
+  if FormatSucceeded then
   begin
     AdjustLunisolarLeapMonthParts(Parts, Millis, EffectiveOptions);
     EnsureCopticEraPart(Parts, EffectiveOptions);
