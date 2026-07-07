@@ -1999,6 +1999,7 @@ procedure TGocciaModuleLoader.RegisterGlobalModuleProvider(
 begin
   if not Assigned(AProvider) then
     raise Exception.Create('Global module provider cannot be nil.');
+  FGlobalModules.Remove(AModulePath);
   FGlobalModuleProviders.AddOrSetValue(AModulePath, AProvider);
 end;
 
