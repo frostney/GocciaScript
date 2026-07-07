@@ -53,12 +53,42 @@ describe.runIf(hasGoccia)("Math.sumPrecise", () => {
     expect(Math.sumPrecise(s)).toBe(6);
   });
 
+  test("uses the iterable protocol instead of array indexing", () => {
+    const values = [1, 2, 3];
+    let index = 0;
+    values[Symbol.iterator] = () => ({
+      next: () => {
+        index += 1;
+        if (index === 1) return { value: 4, done: false };
+        if (index === 2) return { value: 5, done: false };
+        return { value: undefined, done: true };
+      },
+    });
+
+    expect(Math.sumPrecise(values)).toBe(9);
+  });
+
   test("throws TypeError for non-number elements", () => {
     expect(() => Math.sumPrecise([1, "2", 3])).toThrow(TypeError);
     expect(() => Math.sumPrecise([true])).toThrow(TypeError);
     expect(() => Math.sumPrecise([null])).toThrow(TypeError);
     expect(() => Math.sumPrecise([undefined])).toThrow(TypeError);
     expect(() => Math.sumPrecise([{}])).toThrow(TypeError);
+  });
+
+  test("closes iterators when a non-number element throws", () => {
+    let closed = false;
+    const iterable = {};
+    iterable[Symbol.iterator] = () => ({
+      next: () => ({ value: "not a number", done: false }),
+      return: () => {
+        closed = true;
+        return {};
+      },
+    });
+
+    expect(() => Math.sumPrecise(iterable)).toThrow(TypeError);
+    expect(closed).toBe(true);
   });
 
   test("throws TypeError for non-iterable argument", () => {

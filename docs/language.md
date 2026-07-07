@@ -662,7 +662,7 @@ Clamp a value to a range: `Math.clamp(value, min, max)`. See [proposal-math-clam
 
 ### Math.sumPrecise (ES2026)
 
-Precise summation of iterables using a compensated algorithm: `Math.sumPrecise(iterable)`. See [ES2026 §21.3.2.33](https://tc39.es/ecma262/#sec-math.sumprecise).
+Precise summation of iterables using exact finite accumulation and final double rounding: `Math.sumPrecise(iterable)`. See [ES2026 §21.3.2.33](https://tc39.es/ecma262/#sec-math.sumprecise).
 
 ### Map.prototype.getOrInsert (ES2026)
 

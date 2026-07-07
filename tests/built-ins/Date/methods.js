@@ -138,6 +138,14 @@ describe("Date methods", () => {
     expect(value.getUTCDate()).toBe(2);
   });
 
+  test("setTime() TimeClip canonicalizes negative zero", () => {
+    const value = new Date(1);
+    expect(Object.is(value.setTime(-0), +0)).toBe(true);
+    expect(Object.is(value.getTime(), +0)).toBe(true);
+    expect(Object.is(value.setTime(-1.23e-15), +0)).toBe(true);
+    expect(Object.is(value.valueOf(), +0)).toBe(true);
+  });
+
   test("multi-argument setters distinguish omitted fields from explicit undefined", () => {
     const base = Date.UTC(2024, 0, 2, 3, 4, 5, 6);
 
