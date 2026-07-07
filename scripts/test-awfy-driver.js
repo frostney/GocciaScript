@@ -264,8 +264,24 @@ console.log('awfy-driver: PR comment markdown...');
         summary: {
           checksumAgreement: { ok: true, checksums: ['verified'] },
           engineStats: {
-            'goccia-baseline': { ok: 5, rawCount: 5, medianMicros: 1000 },
-            'goccia-candidate': { ok: 5, rawCount: 5, medianMicros: 900 },
+            'goccia-baseline': { ok: 5, rawCount: 5, medianMicros: 1000, minMicros: 990, maxMicros: 1010 },
+            'goccia-candidate': { ok: 5, rawCount: 5, medianMicros: 900, minMicros: 890, maxMicros: 910 },
+            qjs: { ok: 5, rawCount: 5, medianMicros: 500 },
+            node: { ok: 5, rawCount: 5, medianMicros: 250 },
+          },
+          ratios: {
+            'goccia-candidate_over_goccia-baseline': 0.9,
+          },
+        },
+      },
+      {
+        name: 'Noisy',
+        kind: 'awfy',
+        summary: {
+          checksumAgreement: { ok: true, checksums: ['verified'] },
+          engineStats: {
+            'goccia-baseline': { ok: 5, rawCount: 5, medianMicros: 1000, minMicros: 900, maxMicros: 1100 },
+            'goccia-candidate': { ok: 5, rawCount: 5, medianMicros: 900, minMicros: 850, maxMicros: 1050 },
             qjs: { ok: 5, rawCount: 5, medianMicros: 500 },
             node: { ok: 5, rawCount: 5, medianMicros: 250 },
           },
@@ -281,8 +297,13 @@ console.log('awfy-driver: PR comment markdown...');
     },
   });
   assert(comparisonComment.includes('| Target | Status | Goccia main | Goccia PR | QuickJS 2026-06-04 | NodeJS v26.4.0 | Δ PR vs main |'), 'comparison comment shows main and PR Goccia columns');
-  assert(comparisonComment.includes('| NBody | pass | 1.00ms | 0.90ms | 0.50ms | 250.00µs | +10.00% |'), 'comparison comment renders per-target delta');
-  assert(comparisonComment.includes('Δ compares PR Goccia median against the same-runner main Goccia median'), 'comparison comment explains delta basis');
+  assert(comparisonComment.includes('| NBody | pass | 1.00ms | 0.90ms | 0.50ms | 250.00µs | 🟢 +10.00% |'), 'comparison comment renders non-overlapping improvement delta');
+  assert(comparisonComment.includes('| Noisy | pass | 1.00ms | 0.90ms | 0.50ms | 250.00µs | ~ overlap (+10.00%) |'), 'comparison comment marks overlapping ranges as unchanged noise');
+  assert(comparisonComment.includes('| Goccia main | 1.000 | 1.111 | - | - |'), 'comparison geomean rows use main label');
+  assert(comparisonComment.includes('| Goccia PR | 0.900 | 1.000 | - | - |'), 'comparison geomean rows use PR label');
+  assert(comparisonComment.includes('| QuickJS 2026-06-04 | - | - | 1.000 | - |'), 'comparison geomean rows use versioned QuickJS label');
+  assert(comparisonComment.includes('| NodeJS v26.4.0 | - | - | - | 1.000 |'), 'comparison geomean rows use versioned Node label');
+  assert(comparisonComment.includes('Δ compares PR Goccia median against the same-runner main Goccia median; overlapping min/max ranges are treated as unchanged noise'), 'comparison comment explains delta basis and overlap classifier');
 }
 
 console.log('awfy-ci-report: manifest helpers...');

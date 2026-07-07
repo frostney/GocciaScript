@@ -297,14 +297,9 @@ function resolveEngines(options) {
     });
   };
 
-  for (const name of requested) {
+  for (const name of expandGocciaEngines(requested, options)) {
     if (name === 'goccia') {
-      if (options.gocciaBaseline || options.gocciaCandidate) {
-        if (options.gocciaBaseline) addGoccia('goccia-baseline', options.gocciaBaseline);
-        if (options.gocciaCandidate) addGoccia('goccia-candidate', options.gocciaCandidate);
-      } else {
-        addGoccia('goccia', options.goccia);
-      }
+      addGoccia('goccia', options.goccia);
     } else if (name === 'goccia-baseline') {
       if (!options.gocciaBaseline) throw new Error('--goccia-baseline is required for engine goccia-baseline');
       addGoccia('goccia-baseline', options.gocciaBaseline);
@@ -320,6 +315,19 @@ function resolveEngines(options) {
     }
   }
 
+  return engines;
+}
+
+function expandGocciaEngines(requested, options) {
+  const engines = [];
+  for (const name of requested) {
+    if (name === 'goccia' && (options.gocciaBaseline || options.gocciaCandidate)) {
+      if (options.gocciaBaseline) engines.push('goccia-baseline');
+      if (options.gocciaCandidate) engines.push('goccia-candidate');
+    } else {
+      engines.push(name);
+    }
+  }
   return engines;
 }
 
@@ -672,6 +680,7 @@ module.exports = {
   checksumAgreement,
   collectAwfyModules,
   coefficientOfVariation,
+  expandGocciaEngines,
   iqrFiltered,
   median,
   parseArgs,

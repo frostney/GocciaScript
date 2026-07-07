@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const { spawnSync } = require('child_process');
+const { expandGocciaEngines } = require('./awfy-driver.js');
 
 const DEFAULT_MANIFEST = 'perf/awfy/manifest.json';
 const DEFAULT_OUTPUT = 'awfy-report.json';
@@ -79,18 +80,7 @@ function parsePositiveInteger(value, optionName) {
 
 function expectedEnginesForRun(options) {
   const requested = options.engines.split(',').map((engine) => engine.trim()).filter(Boolean);
-  const expected = [];
-
-  for (const engine of requested) {
-    if (engine === 'goccia' && (options.gocciaBaseline || options.gocciaCandidate)) {
-      if (options.gocciaBaseline) expected.push('goccia-baseline');
-      if (options.gocciaCandidate) expected.push('goccia-candidate');
-    } else {
-      expected.push(engine);
-    }
-  }
-
-  return expected;
+  return expandGocciaEngines(requested, options);
 }
 
 function reportConfig(manifest) {

@@ -411,9 +411,10 @@ The normalized report records:
 
 Pull requests run an AWFY report lane from `.github/workflows/pr.yml`.
 The target set is recorded in `perf/awfy/manifest.json` under `ciReport`: all
-pinned AWFY benchmarks under the PR Goccia bytecode loader, the PR's `main`
-baseline loader, QuickJS, and the latest Node Current release resolved by
-`actions/setup-node` at workflow time, with five raw samples per engine.
+pinned AWFY benchmarks under the production-built PR Goccia bytecode loader, the
+production-built PR `main` baseline loader, QuickJS, and the latest Node Current
+release resolved by `actions/setup-node` at workflow time, with five raw samples
+per engine.
 Sampling is interleaved as target -> repetition -> engine, so every repetition
 runs the selected engines next to each other instead of collecting engine-sized
 batches. The workflow uploads the normalized JSON report and posts an

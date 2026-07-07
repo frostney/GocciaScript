@@ -110,22 +110,53 @@ function engineLabels(report) {
   return labels;
 }
 
+function finiteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function formatDeltaPercent(delta) {
+  return `${delta >= 0 ? '+' : ''}${delta.toFixed(2)}%`;
+}
+
+function gocciaComparisonClassification(target) {
+  const stats = target.summary?.engineStats || {};
+  const baseline = stats['goccia-baseline'];
+  const candidate = stats['goccia-candidate'];
+  if (
+    !finiteNumber(baseline?.minMicros) ||
+    !finiteNumber(baseline?.maxMicros) ||
+    !finiteNumber(candidate?.minMicros) ||
+    !finiteNumber(candidate?.maxMicros)
+  ) {
+    return null;
+  }
+
+  if (candidate.maxMicros < baseline.minMicros) return 'improved';
+  if (candidate.minMicros > baseline.maxMicros) return 'regressed';
+  return 'unchanged';
+}
+
 function deltaCell(target) {
   const ratio = target.summary?.ratios?.['goccia-candidate_over_goccia-baseline'];
   if (typeof ratio !== 'number' || !Number.isFinite(ratio) || ratio <= 0) return '-';
   const delta = (1 - ratio) * 100;
-  return `${delta >= 0 ? '+' : ''}${delta.toFixed(2)}%`;
+  const formatted = formatDeltaPercent(delta);
+  const classification = gocciaComparisonClassification(target);
+  if (classification === 'improved') return `🟢 ${formatted}`;
+  if (classification === 'regressed') return `🔴 ${formatted}`;
+  if (classification === 'unchanged') return `~ overlap (${formatted})`;
+  return formatted;
 }
 
 function buildGeomeanTable(geomean, labels = ENGINE_LABELS, engines = DEFAULT_COMMENT_ENGINES) {
   if (Object.keys(geomean).length === 0) return '';
 
   let body = '\n### Geomean Ratios\n\n';
-  body += `| Ratio (row / column) | ${engines.map((engine) => labels[engine]).join(' | ')} |\n`;
+  body += `| Ratio (row / column) | ${engines.map((engine) => labels[engine] || ENGINE_LABELS[engine] || engine).join(' | ')} |\n`;
   body += `|----------------------|${engines.map(() => '--------').join('|')}|\n`;
   for (const numerator of engines) {
     const cells = engines.map((denominator) => ratioCell(geomean, numerator, denominator));
-    body += `| ${ENGINE_LABELS[numerator]} | ${cells.join(' | ')} |\n`;
+    body += `| ${labels[numerator] || ENGINE_LABELS[numerator] || numerator} | ${cells.join(' | ')} |\n`;
   }
   return body;
 }
@@ -172,7 +203,7 @@ function buildAwfyReportComment(report) {
   body += `\n<sub>${countParts.join(' plus ')}. `;
   if (sampleCount !== null) body += `Medians from ${plural(sampleCount, 'interleaved sample')} per engine; `;
   body += 'raw JSON includes min/max/CV and is attached as the `awfy-report` artifact. ';
-  if (hasComparison) body += 'Δ compares PR Goccia median against the same-runner main Goccia median. ';
+  if (hasComparison) body += 'Δ compares PR Goccia median against the same-runner main Goccia median; overlapping min/max ranges are treated as unchanged noise. ';
   body += 'Rows below 0.5ms are timer-floor sensitive.</sub>\n';
   return body;
 }
