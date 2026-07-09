@@ -23,7 +23,7 @@ describe("JSON5 import", () => {
     expect(database.port).toBe(5432);
   });
 
-  test("JSON5.parse reports malformed JSON5 syntax", () => {
+  test("parseJSON5 reports malformed JSON5 syntax", () => {
     expect(() => parseJSON5("{a: 0x}")).toThrow(SyntaxError);
   });
 });
