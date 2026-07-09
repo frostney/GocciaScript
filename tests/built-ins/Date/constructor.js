@@ -33,6 +33,11 @@ describe("Date constructor", () => {
     expect(d.getUTCDate()).toBe(1);
   });
 
+  test("new Date(ms) TimeClip canonicalizes negative zero", () => {
+    expect(Object.is(new Date(-0).getTime(), +0)).toBe(true);
+    expect(Object.is(new Date(-1.23e-15).valueOf(), +0)).toBe(true);
+  });
+
   test("Date instances allow own Symbol.toStringTag overrides", () => {
     const d = new Date(0);
     expect(Object.prototype.toString.call(d)).toBe("[object Date]");
