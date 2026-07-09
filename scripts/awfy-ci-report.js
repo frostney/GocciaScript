@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const { spawnSync } = require('child_process');
+const { expandGocciaEngines } = require('./awfy-driver.js');
 
 const DEFAULT_MANIFEST = 'perf/awfy/manifest.json';
 const DEFAULT_OUTPUT = 'awfy-report.json';
@@ -17,6 +18,10 @@ function usage() {
     '  --awfy-dir <path>    Path to are-we-fast-yet/benchmarks/JavaScript',
     '  --output <path>      Report path (default: awfy-report.json)',
     '  --engines <csv>      Engine order (default: goccia,qjs,node)',
+    '  --goccia-baseline <path>',
+    '                       Optional baseline Goccia binary, interleaved as goccia-baseline',
+    '  --goccia-candidate <path>',
+    '                       Optional candidate Goccia binary, interleaved as goccia-candidate',
     '  --timeout-ms <n>     Per-sample timeout (default: 300000)',
   ].join('\n');
 }
@@ -27,6 +32,8 @@ function parseArgs(argv) {
     awfyDir: '',
     output: DEFAULT_OUTPUT,
     engines: DEFAULT_ENGINES,
+    gocciaBaseline: '',
+    gocciaCandidate: '',
     timeoutMs: DEFAULT_TIMEOUT_MS,
   };
 
@@ -49,6 +56,10 @@ function parseArgs(argv) {
       options.output = nextValue();
     } else if (arg === '--engines' || arg.startsWith('--engines=')) {
       options.engines = nextValue();
+    } else if (arg === '--goccia-baseline' || arg.startsWith('--goccia-baseline=')) {
+      options.gocciaBaseline = nextValue();
+    } else if (arg === '--goccia-candidate' || arg.startsWith('--goccia-candidate=')) {
+      options.gocciaCandidate = nextValue();
     } else if (arg === '--timeout-ms' || arg.startsWith('--timeout-ms=')) {
       options.timeoutMs = parsePositiveInteger(nextValue(), '--timeout-ms');
     } else {
@@ -65,6 +76,11 @@ function parsePositiveInteger(value, optionName) {
     throw new Error(`${optionName} must be a positive integer, got ${value}`);
   }
   return parsed;
+}
+
+function expectedEnginesForRun(options) {
+  const requested = options.engines.split(',').map((engine) => engine.trim()).filter(Boolean);
+  return expandGocciaEngines(requested, options);
 }
 
 function reportConfig(manifest) {
@@ -139,6 +155,8 @@ function runReport(options, manifest) {
   for (const probe of targetSpecs(config, 'probes')) {
     args.push('--probe', probe);
   }
+  if (options.gocciaBaseline) args.push('--goccia-baseline', options.gocciaBaseline);
+  if (options.gocciaCandidate) args.push('--goccia-candidate', options.gocciaCandidate);
   args.push(
     '--repetitions', String(repetitions),
     '--timeout-ms', String(options.timeoutMs),
@@ -152,7 +170,7 @@ function runReport(options, manifest) {
   }
 
   const report = JSON.parse(fs.readFileSync(options.output, 'utf8'));
-  const expectedEngines = options.engines.split(',').map((engine) => engine.trim()).filter(Boolean);
+  const expectedEngines = expectedEnginesForRun(options);
   validateReport(report, manifest, expectedEngines);
 }
 
@@ -179,6 +197,7 @@ if (require.main === module) {
 
 module.exports = {
   expectedEnginesForTarget,
+  expectedEnginesForRun,
   parseArgs,
   reportConfig,
   targetSpec,

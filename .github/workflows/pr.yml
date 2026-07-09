@@ -58,15 +58,17 @@ jobs:
       - name: Install FPC
         run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
 
-      - name: Build benchmark runner (main base)
-        run: ./build.pas benchmarkrunner --prod
+      - name: Build benchmark runner and loader (main base)
+        run: ./build.pas --prod benchmarkrunner loader
 
-      - name: Upload main benchmark runner
+      - name: Upload main build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: build-main
           retention-days: 1
-          path: build/GocciaBenchmarkRunner
+          path: |
+            build/GocciaBenchmarkRunner
+            build/GocciaScriptLoader
 
   docs:
     runs-on: ubuntu-latest
@@ -362,9 +364,9 @@ jobs:
           path: profile-main/
 
   awfy-report:
-    needs: build
+    needs: [build, build-main]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -389,8 +391,16 @@ jobs:
           name: build-pr
           path: build/
 
+      - name: Download main build
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: build-main
+          path: build-main/
+
       - name: Make binaries executable
-        run: chmod +x build/*
+        run: |
+          chmod +x build/*
+          chmod +x build-main/*
 
       - name: Read AWFY pin
         id: awfy-pin
@@ -418,6 +428,8 @@ jobs:
         run: |
           node scripts/awfy-ci-report.js \
             --awfy-dir awfy-suite/benchmarks/JavaScript \
+            --goccia-baseline build-main/GocciaScriptLoader \
+            --goccia-candidate build/GocciaScriptLoader \
             --output awfy-report.json
 
       - name: Upload AWFY report
