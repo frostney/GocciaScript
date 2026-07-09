@@ -30,10 +30,16 @@ type
   TRuntimeTests = class(TTestSuite)
   private
     FCustomRuntimeLoaderCalled: Boolean;
+    FProvidedGlobalModule: TGocciaModule;
+    FReplacementGlobalModule: TGocciaModule;
     function CreateEmptySource: TStringList;
+    function CreateProvidedGlobalModule: TGocciaModule;
+    function CreateReplacementGlobalModule: TGocciaModule;
     function LoadCustomRuntimeModule(const AResolvedPath: string;
       out AModule: TGocciaModule): Boolean;
     procedure TestEngineRejectsNilExtension;
+    procedure TestGlobalModuleProviderReplacementClearsLoadedModule;
+    procedure TestGlobalModuleProviderUnregisterClearsLoadedModule;
     procedure TestRuntimeConstructorAcceptsExistingEngine;
     procedure TestRuntimeInstallIsIdempotent;
     procedure TestRuntimePreservesResolverExtensions;
@@ -56,6 +62,10 @@ procedure TRuntimeTests.SetupTests;
 begin
   Test('Engine rejects nil extension',
     TestEngineRejectsNilExtension);
+  Test('Global module provider unregister clears loaded module',
+    TestGlobalModuleProviderUnregisterClearsLoadedModule);
+  Test('Global module provider replacement clears loaded module',
+    TestGlobalModuleProviderReplacementClearsLoadedModule);
   Test('Runtime constructor accepts existing engine',
     TestRuntimeConstructorAcceptsExistingEngine);
   Test('Runtime extension install is idempotent',
@@ -72,6 +82,20 @@ function TRuntimeTests.CreateEmptySource: TStringList;
 begin
   Result := TStringList.Create;
   Result.Text := '';
+end;
+
+function TRuntimeTests.CreateProvidedGlobalModule: TGocciaModule;
+begin
+  if not Assigned(FProvidedGlobalModule) then
+    FProvidedGlobalModule := TGocciaModule.Create('virtual:provider');
+  Result := FProvidedGlobalModule;
+end;
+
+function TRuntimeTests.CreateReplacementGlobalModule: TGocciaModule;
+begin
+  if not Assigned(FReplacementGlobalModule) then
+    FReplacementGlobalModule := TGocciaModule.Create('virtual:provider');
+  Result := FReplacementGlobalModule;
 end;
 
 function TRuntimeTests.LoadCustomRuntimeModule(
@@ -121,6 +145,98 @@ begin
       Source.Free;
     end;
   finally
+    Executor.Free;
+  end;
+end;
+
+procedure TRuntimeTests.TestGlobalModuleProviderUnregisterClearsLoadedModule;
+var
+  Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
+  LoadedModule: TGocciaModule;
+  RaisedExpected: Boolean;
+  Source: TStringList;
+begin
+  Source := CreateEmptySource;
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := nil;
+  FProvidedGlobalModule := nil;
+  try
+    Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
+    Engine.RegisterGlobalModuleProvider('virtual:provider',
+      CreateProvidedGlobalModule);
+
+    LoadedModule := Engine.ModuleLoader.LoadModule('virtual:provider',
+      '<runtime-test>');
+    Expect<Boolean>(LoadedModule = FProvidedGlobalModule).ToBe(True);
+    Expect<Boolean>(
+      Engine.ModuleLoader.GlobalModules.ContainsKey('virtual:provider')).ToBe(True);
+
+    Engine.UnregisterGlobalModuleProvider('virtual:provider');
+    Expect<Boolean>(
+      Engine.ModuleLoader.GlobalModules.ContainsKey('virtual:provider')).ToBe(False);
+
+    RaisedExpected := False;
+    try
+      Engine.ModuleLoader.LoadModule('virtual:provider', '<runtime-test>');
+      Fail('Expected unregistered global module provider to stop resolving.');
+    except
+      on Exception do
+        RaisedExpected := True;
+    end;
+    Expect<Boolean>(RaisedExpected).ToBe(True);
+  finally
+    if Assigned(Engine) then
+      Engine.UnregisterGlobalModuleProvider('virtual:provider');
+    FProvidedGlobalModule.Free;
+    FProvidedGlobalModule := nil;
+    Engine.Free;
+    Source.Free;
+    Executor.Free;
+  end;
+end;
+
+procedure TRuntimeTests.TestGlobalModuleProviderReplacementClearsLoadedModule;
+var
+  Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
+  LoadedModule: TGocciaModule;
+  Source: TStringList;
+begin
+  Source := CreateEmptySource;
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := nil;
+  FProvidedGlobalModule := nil;
+  FReplacementGlobalModule := nil;
+  try
+    Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
+    Engine.RegisterGlobalModuleProvider('virtual:provider',
+      CreateProvidedGlobalModule);
+
+    LoadedModule := Engine.ModuleLoader.LoadModule('virtual:provider',
+      '<runtime-test>');
+    Expect<Boolean>(LoadedModule = FProvidedGlobalModule).ToBe(True);
+    Expect<Boolean>(
+      Engine.ModuleLoader.GlobalModules.ContainsKey('virtual:provider')).ToBe(True);
+
+    Engine.RegisterGlobalModuleProvider('virtual:provider',
+      CreateReplacementGlobalModule);
+    Expect<Boolean>(
+      Engine.ModuleLoader.GlobalModules.ContainsKey('virtual:provider')).ToBe(False);
+
+    LoadedModule := Engine.ModuleLoader.LoadModule('virtual:provider',
+      '<runtime-test>');
+    Expect<Boolean>(LoadedModule = FReplacementGlobalModule).ToBe(True);
+    Expect<Boolean>(LoadedModule = FProvidedGlobalModule).ToBe(False);
+  finally
+    if Assigned(Engine) then
+      Engine.UnregisterGlobalModuleProvider('virtual:provider');
+    FProvidedGlobalModule.Free;
+    FProvidedGlobalModule := nil;
+    FReplacementGlobalModule.Free;
+    FReplacementGlobalModule := nil;
+    Engine.Free;
+    Source.Free;
     Executor.Free;
   end;
 end;

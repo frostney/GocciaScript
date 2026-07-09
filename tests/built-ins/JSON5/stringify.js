@@ -1,6 +1,6 @@
-const hasJSON5 = typeof JSON5 !== "undefined";
+import * as JSON5 from "goccia:json5";
 
-describe.runIf(hasJSON5)("JSON5.stringify", () => {
+describe("JSON5.stringify", () => {
   test("stringifies objects with JSON5 key and string syntax", () => {
     expect(JSON5.stringify({ a: 1 })).toBe("{a:1}");
     expect(JSON5.stringify({ "a-b": 1 })).toBe("{'a-b':1}");

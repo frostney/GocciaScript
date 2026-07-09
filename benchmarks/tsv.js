@@ -3,10 +3,11 @@ description: TSV parse and stringify benchmarks
 ---*/
 
 import { bench, group } from "goccia:microbench";
+import { parse, stringify } from "goccia:tsv";
 
 group("TSV.parse", () => {
   bench("parse simple 3-column TSV", () => {
-    const result = TSV.parse("name\tage\tcity\nAlice\t30\tNYC\nBob\t25\tLA\nCharlie\t35\tChicago");
+    const result = parse("name\tage\tcity\nAlice\t30\tNYC\nBob\t25\tLA\nCharlie\t35\tChicago");
   });
 
   bench("parse 10-row TSV", ({ *setup() {
@@ -18,7 +19,7 @@ group("TSV.parse", () => {
       return header + "\n" + rows.join("\n");
     })();
     yield () => {
-      const result = TSV.parse(tsv);
+      const result = parse(tsv);
     };
   } }).setup);
 
@@ -31,7 +32,7 @@ group("TSV.parse", () => {
       return header + "\n" + rows.join("\n");
     })();
     yield () => {
-      const result = TSV.parse(tsv);
+      const result = parse(tsv);
     };
   } }).setup);
 
@@ -44,7 +45,7 @@ group("TSV.parse", () => {
       return header + "\n" + rows.join("\n");
     })();
     yield () => {
-      const result = TSV.parse(tsv);
+      const result = parse(tsv);
     };
   } }).setup);
 
@@ -55,7 +56,7 @@ group("TSV.parse", () => {
       ).join("\n");
     })();
     yield () => {
-      const result = TSV.parse(tsv, { headers: false });
+      const result = parse(tsv, { headers: false });
     };
   } }).setup);
 });
@@ -68,7 +69,7 @@ group("TSV.stringify", () => {
       active: "true",
     })))();
     yield () => {
-      const s = TSV.stringify(data);
+      const s = stringify(data);
     };
   } }).setup);
 
@@ -77,7 +78,7 @@ group("TSV.stringify", () => {
       String(i), "item" + i, String(i * 2),
     ]))();
     yield () => {
-      const s = TSV.stringify(data, { headers: false });
+      const s = stringify(data, { headers: false });
     };
   } }).setup);
 
@@ -88,7 +89,7 @@ group("TSV.stringify", () => {
       tab: "col1\tcol2",
     })))();
     yield () => {
-      const s = TSV.stringify(data);
+      const s = stringify(data);
     };
   } }).setup);
 });
@@ -103,8 +104,8 @@ group("TSV roundtrip", () => {
       return header + "\n" + rows.join("\n");
     })();
     yield () => {
-      const parsed = TSV.parse(tsv);
-      const back = TSV.stringify(parsed);
+      const parsed = parse(tsv);
+      const back = stringify(parsed);
     };
   } }).setup);
 });

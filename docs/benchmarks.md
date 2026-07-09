@@ -263,6 +263,8 @@ The non-zero exit code ensures CI pipelines fail when benchmarks crash or produc
 | `benchmarks/collections.js` | Set add/has/delete/forEach, Map set/get/has/delete/forEach/keys/values |
 | `benchmarks/weak-collections.js` | WeakMap/WeakSet construction, mutation, lookup, non-registered symbol keys/values, upsert methods, and GC smoke cases |
 | `benchmarks/json.js` | JSON.parse, JSON.stringify, roundtrip with nested and mixed data |
+| `benchmarks/csv.js` | CSV parse/stringify named module imports, delimiter options, revivers, and roundtrips |
+| `benchmarks/tsv.js` | TSV parse/stringify named module imports, escaped fields, and roundtrips |
 | `benchmarks/destructuring.js` | Array/object/parameter/callback destructuring, rest, defaults, nesting |
 | `benchmarks/promises.js` | Promise.resolve/reject, then chains, catch/finally, all/race/allSettled/any |
 | `benchmarks/numbers.js` | Integer/float arithmetic, coercion, prototype methods, static methods |

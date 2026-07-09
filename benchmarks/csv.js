@@ -3,10 +3,11 @@ description: CSV parse and stringify benchmarks
 ---*/
 
 import { bench, group } from "goccia:microbench";
+import { parse, stringify } from "goccia:csv";
 
 group("CSV.parse", () => {
   bench("parse simple 3-column CSV", () => {
-    const result = CSV.parse("name,age,city\nAlice,30,NYC\nBob,25,LA\nCharlie,35,Chicago");
+    const result = parse("name,age,city\nAlice,30,NYC\nBob,25,LA\nCharlie,35,Chicago");
   });
 
   bench("parse 10-row CSV", ({ *setup() {
@@ -18,7 +19,7 @@ group("CSV.parse", () => {
       return header + "\n" + rows.join("\n");
     })();
     yield () => {
-      const result = CSV.parse(csv);
+      const result = parse(csv);
     };
   } }).setup);
 
@@ -31,12 +32,12 @@ group("CSV.parse", () => {
       return header + "\n" + rows.join("\n");
     })();
     yield () => {
-      const result = CSV.parse(csv);
+      const result = parse(csv);
     };
   } }).setup);
 
   bench("parse CSV with quoted fields", () => {
-    const result = CSV.parse('name,address,note\n"Smith, John","123 Main St, Apt 4","He said ""hello"""');
+    const result = parse('name,address,note\n"Smith, John","123 Main St, Apt 4","He said ""hello"""');
   });
 
   bench("parse without headers (array of arrays)", ({ *setup() {
@@ -46,7 +47,7 @@ group("CSV.parse", () => {
       ).join("\n");
     })();
     yield () => {
-      const result = CSV.parse(csv, { headers: false });
+      const result = parse(csv, { headers: false });
     };
   } }).setup);
 
@@ -59,7 +60,7 @@ group("CSV.parse", () => {
       return header + "\n" + rows.join("\n");
     })();
     yield () => {
-      const result = CSV.parse(csv, { delimiter: ";" });
+      const result = parse(csv, { delimiter: ";" });
     };
   } }).setup);
 });
@@ -72,7 +73,7 @@ group("CSV.stringify", () => {
       active: "true",
     })))();
     yield () => {
-      const s = CSV.stringify(data);
+      const s = stringify(data);
     };
   } }).setup);
 
@@ -81,7 +82,7 @@ group("CSV.stringify", () => {
       String(i), "item" + i, String(i * 2),
     ]))();
     yield () => {
-      const s = CSV.stringify(data, { headers: false });
+      const s = stringify(data, { headers: false });
     };
   } }).setup);
 
@@ -91,7 +92,7 @@ group("CSV.stringify", () => {
       note: "line1\nline2",
     })))();
     yield () => {
-      const s = CSV.stringify(data);
+      const s = stringify(data);
     };
   } }).setup);
 });
@@ -106,7 +107,7 @@ group("CSV.parse with reviver", () => {
       return header + "\n" + rows.join("\n");
     })();
     yield () => {
-      const result = CSV.parse(csv, {}, (key, value, ctx) => {
+      const result = parse(csv, {}, (key, value, ctx) => {
         const n = Number(value);
         return Number.isNaN(n) ? value : n;
       });
@@ -114,7 +115,7 @@ group("CSV.parse with reviver", () => {
   } }).setup);
 
   bench("reviver filters empty to null", () => {
-    const result = CSV.parse("a,b,c\n1,,3\n,2,\n,,", {}, (key, value, ctx) => {
+    const result = parse("a,b,c\n1,,3\n,2,\n,,", {}, (key, value, ctx) => {
       if (!ctx.quoted && value === "") return null;
       return value;
     });
@@ -131,8 +132,8 @@ group("CSV roundtrip", () => {
       return header + "\n" + rows.join("\n");
     })();
     yield () => {
-      const parsed = CSV.parse(csv);
-      const back = CSV.stringify(parsed);
+      const parsed = parse(csv);
+      const back = stringify(parsed);
     };
   } }).setup);
 
@@ -143,8 +144,8 @@ group("CSV roundtrip", () => {
       active: i % 2 === 0 ? "true" : "false",
     })))();
     yield () => {
-      const csv = CSV.stringify(data);
-      const parsed = CSV.parse(csv);
+      const csv = stringify(data);
+      const parsed = parse(csv);
     };
   } }).setup);
 });

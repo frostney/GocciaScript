@@ -3,9 +3,9 @@ description: CSV.parse converts CSV text to JavaScript arrays/objects
 features: [CSV.parse]
 ---*/
 
-const hasCSV = typeof CSV !== "undefined";
+import * as CSV from "goccia:csv";
 
-describe.runIf(hasCSV)("CSV.parse", () => {
+describe("CSV.parse", () => {
   test("parses CSV with headers (default)", () => {
     const result = CSV.parse("name,age\nAlice,30\nBob,25");
 
@@ -259,7 +259,7 @@ describe.runIf(hasCSV)("CSV.parse", () => {
   });
 });
 
-describe.runIf(hasCSV)("CSV.parse error handling", () => {
+describe("CSV.parse error handling", () => {
   test("throws SyntaxError on unterminated quoted field", () => {
     expect(() => CSV.parse('"unterminated')).toThrow(SyntaxError);
   });
@@ -289,7 +289,7 @@ describe.runIf(hasCSV)("CSV.parse error handling", () => {
   });
 });
 
-describe.runIf(hasCSV)("CSV.parse with reviver", () => {
+describe("CSV.parse with reviver", () => {
   test("reviver receives key, value, and context", () => {
     const calls = [];
     CSV.parse("a,b\n1,2", {}, (key, value, ctx) => {
@@ -377,7 +377,7 @@ describe.runIf(hasCSV)("CSV.parse with reviver", () => {
   });
 });
 
-describe.runIf(hasCSV)("CSV.parse skipEmptyLines edge cases", () => {
+describe("CSV.parse skipEmptyLines edge cases", () => {
   test("skipEmptyLines preserves quoted empty field rows", () => {
     const result = CSV.parse('""\n\ndata', {
       headers: false,
@@ -400,7 +400,7 @@ describe.runIf(hasCSV)("CSV.parse skipEmptyLines edge cases", () => {
   });
 });
 
-describe.runIf(hasCSV)("CSV.parseChunk error reporting", () => {
+describe("CSV.parseChunk error reporting", () => {
   test("returns error message for unterminated quoted field", () => {
     const result = CSV.parseChunk('name,age\nAlice,"30', {});
 
@@ -409,8 +409,8 @@ describe.runIf(hasCSV)("CSV.parseChunk error reporting", () => {
   });
 });
 
-describe.runIf(hasCSV)("CSV metadata", () => {
-  test("Symbol.toStringTag is CSV", () => {
-    expect(CSV[Symbol.toStringTag]).toBe("CSV");
+describe("CSV metadata", () => {
+  test("namespace Symbol.toStringTag is Module", () => {
+    expect(CSV[Symbol.toStringTag]).toBe("Module");
   });
 });

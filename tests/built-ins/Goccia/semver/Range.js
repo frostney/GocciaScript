@@ -1,14 +1,14 @@
 /*---
-description: Goccia.semver.Range constructs range objects
-features: [Goccia.semver.Range]
+description: semver.Range constructs range objects
+features: [semver.Range]
 ---*/
 
-const hasGoccia = typeof Goccia !== "undefined";
+import * as semver from "goccia:semver";
 
-describe.runIf(hasGoccia)("Goccia.semver.Range", () => {
-  test("new Goccia.semver.Range builds range instances", () => {
-    const range = new Goccia.semver.Range("^1.2.3");
-    expect(range instanceof Goccia.semver.Range).toBe(true);
+describe("semver.Range", () => {
+  test("new semver.Range builds range instances", () => {
+    const range = new semver.Range("^1.2.3");
+    expect(range instanceof semver.Range).toBe(true);
     expect(range.range).toBe(">=1.2.3 <2.0.0-0");
     expect(range.test("1.5.0")).toBe(true);
     expect(range.test("2.0.0")).toBe(false);
