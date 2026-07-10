@@ -2448,6 +2448,22 @@ begin
 end;
 
 type
+  TGocciaResolvedEnvironmentReferenceValue = class(TGocciaValue)
+  private
+    FScope: TGocciaScope;
+    FStrict: Boolean;
+  public
+    constructor Create(const AScope: TGocciaScope; const AStrict: Boolean);
+    procedure MarkReferences; override;
+    function TypeName: string; override;
+    function TypeOf: string; override;
+    function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
+    function ToNumberLiteral: TGocciaNumberLiteralValue; override;
+    function ToStringLiteral: TGocciaStringLiteralValue; override;
+    property Scope: TGocciaScope read FScope;
+    property Strict: Boolean read FStrict;
+  end;
+
   TGocciaBytecodeGeneratorObjectValue = class;
 
   TGocciaVMDecoratorSession = class
@@ -2766,6 +2782,50 @@ type
     procedure SetVMConstructor(const AValue: TGocciaValue);
     procedure MarkReferences; override;
   end;
+
+constructor TGocciaResolvedEnvironmentReferenceValue.Create(
+  const AScope: TGocciaScope; const AStrict: Boolean);
+begin
+  inherited Create;
+  FScope := AScope;
+  FStrict := AStrict;
+end;
+
+procedure TGocciaResolvedEnvironmentReferenceValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FScope) then
+    FScope.MarkReferences;
+end;
+
+function TGocciaResolvedEnvironmentReferenceValue.TypeName: string;
+begin
+  Result := '<environment-reference>';
+end;
+
+function TGocciaResolvedEnvironmentReferenceValue.TypeOf: string;
+begin
+  Result := '<environment-reference>';
+end;
+
+function TGocciaResolvedEnvironmentReferenceValue.ToBooleanLiteral:
+  TGocciaBooleanLiteralValue;
+begin
+  Result := TGocciaBooleanLiteralValue.TrueValue;
+end;
+
+function TGocciaResolvedEnvironmentReferenceValue.ToNumberLiteral:
+  TGocciaNumberLiteralValue;
+begin
+  Result := TGocciaNumberLiteralValue.NaNValue;
+end;
+
+function TGocciaResolvedEnvironmentReferenceValue.ToStringLiteral:
+  TGocciaStringLiteralValue;
+begin
+  Result := TGocciaStringLiteralValue.Create('<environment-reference>');
+end;
 
 { TGocciaVMStackRoot }
 
@@ -13112,6 +13172,7 @@ var
   SavedGlobalScope: TGocciaScope;
   SavedDynamicVarScope: TGocciaScope;
   ResolvedDynamicVarScope: TGocciaScope;
+  ResolvedEnvironmentReference: TGocciaResolvedEnvironmentReferenceValue;
   SavedExecutionContextPushed: Boolean;
   SavedHandlerCount: Integer;
   InitialFrameStackCount: Integer;
@@ -13476,16 +13537,6 @@ begin
       begin
         if Assigned(FCurrentClosure) then
         begin
-          Desc := Template.GetUpvalueDescriptor(DecodeBx(Instruction));
-          ResolvedDynamicVarScope := ResolveDynamicUpvalueScope(
-            DecodeBx(Instruction), Desc.Name);
-          if Assigned(ResolvedDynamicVarScope) then
-          begin
-            ResolvedDynamicVarScope.AssignBinding(Desc.Name,
-              RegisterToValue(FRegisters[A]));
-            Continue;
-          end;
-
           Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
           begin
@@ -13494,6 +13545,54 @@ begin
             Upvalue.Cell.Value := FRegisters[A];
           end;
         end;
+      end;
+
+      OP_RESOLVE_UPVALUE_REF:
+      begin
+        Desc := Template.GetUpvalueDescriptor(B);
+        ResolvedDynamicVarScope := ResolveDynamicUpvalueScope(B, Desc.Name);
+        if Assigned(ResolvedDynamicVarScope) then
+          SetRegister(A, TGocciaResolvedEnvironmentReferenceValue.Create(
+            ResolvedDynamicVarScope, C <> 0))
+        else
+          FRegisters[A] := RegisterUndefined;
+      end;
+
+      OP_SET_UPVALUE_REF:
+      begin
+        Desc := Template.GetUpvalueDescriptor(C);
+        if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is
+             TGocciaResolvedEnvironmentReferenceValue) then
+        begin
+          ResolvedEnvironmentReference :=
+            TGocciaResolvedEnvironmentReferenceValue(
+              FRegisters[B].ObjectValue);
+          ResolvedEnvironmentReference.Scope.SetOwnMutableBinding(Desc.Name,
+            RegisterToValue(FRegisters[A]),
+            ResolvedEnvironmentReference.Strict);
+        end
+        else if Assigned(FCurrentClosure) then
+        begin
+          Upvalue := FCurrentClosure.GetUpvalue(C);
+          if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
+          begin
+            if Upvalue.Cell.Value.Kind = grkHole then
+              ThrowReferenceError(
+                'Cannot access lexical binding before initialization');
+            Upvalue.Cell.Value := FRegisters[A];
+          end;
+        end;
+      end;
+
+      OP_SET_GLOBAL_STATIC:
+      begin
+        GlobalName := Template.GetConstantUnchecked(
+          DecodeBx(Instruction)).StringValue;
+        if Assigned(FGlobalScope) and
+           not FGlobalScope.TryAssignExistingBinding(GlobalName,
+             RegisterToValue(FRegisters[A])) then
+          ThrowReferenceError(GlobalName + ' is not defined');
       end;
 
       OP_CLOSE_UPVALUE:

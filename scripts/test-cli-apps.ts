@@ -1222,6 +1222,57 @@ console.log("Bare Loader: bytecode --test262-host eval preserves lexical upvalue
     throw new Error(`Bare bytecode eval lexical precedence probe got: ${proc.stdout.toString()}`);
 }
 
+console.log("Bare Loader: bytecode assignment retains its resolved eval environment reference...");
+{
+  const proc = Bun.spawnSync([
+    BARE,
+    "--test262-host",
+    "--mode=bytecode",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode([
+      "function simpleAssignment() {",
+      "  var x = 0;",
+      "  function inner() {",
+      "    x = (eval('var x = 2;'), 1);",
+      "    return x;",
+      "  }",
+      "  print([inner(), x].join(','));",
+      "}",
+      "function compoundAssignment() {",
+      "  var x = 0;",
+      "  function inner() {",
+      "    x += (eval('var x = 2;'), 1);",
+      "    return x;",
+      "  }",
+      "  print([inner(), x].join(','));",
+      "}",
+      "var globalX = 0;",
+      "function globalBackedAssignment() {",
+      "  globalX = (eval('var globalX = 2;'), 1);",
+      "  return globalX;",
+      "}",
+      "simpleAssignment();",
+      "compoundAssignment();",
+      "print([globalBackedAssignment(), globalX].join(','));",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const expected = [
+    "2,1",
+    "2,1",
+    "2,1",
+  ].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode eval assignment reference probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare bytecode eval assignment reference probe got: ${proc.stdout.toString()}`);
+}
+
 console.log("Bare Loader: --test262-host generator parameter eval uses the parameter var environment...");
 {
   const source = [
