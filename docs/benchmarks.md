@@ -192,6 +192,7 @@ group("collections", () => {
 - `summary(fn)` creates a comparison scope. Its measured benchmarks are ordered by median invocation time and compared with the fastest member. The central ratio uses medians; the displayed range divides the competitor's p25/p75 by the fastest member's p75/p25. A range crossing `1.0x` is reported as inconclusive.
 - `boxplot(fn)` creates a visualization scope. Its measured benchmarks share an interquartile chart scale from the fastest observed sample through the slowest p99.
 - Nested `summary()` and `boxplot()` wrappers retain both memberships. Benchmarks outside a wrapper still receive percentile statistics and an individual interquartile bar, but do not participate in that scoped view.
+- Wrapper callbacks may be async; the wrapper waits for the returned promise before closing its reporting scope.
 - `run(opts?)` executes the currently registered benchmarks from script code. `GocciaBenchmarkRunner` also auto-runs registered benchmarks after loading a file, but a script-callable `run()` consumes the pending registry so the runner does not measure the same benchmarks twice.
 
 ### Data flow

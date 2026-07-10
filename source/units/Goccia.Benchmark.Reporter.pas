@@ -201,8 +201,17 @@ begin
 end;
 
 procedure CalculateRelativeComparison(const AEntry, AFastest: TBenchmarkEntry;
-  out ARatio, ALowRatio, AHighRatio: Double; out AInconclusive: Boolean);
+  const AIsBaseline: Boolean; out ARatio, ALowRatio, AHighRatio: Double;
+  out AInconclusive: Boolean);
 begin
+  if AIsBaseline then
+  begin
+    ARatio := 1;
+    ALowRatio := 1;
+    AHighRatio := 1;
+    AInconclusive := False;
+    Exit;
+  end;
   ARatio := AEntry.MedianMs / AFastest.MedianMs;
   if (AFastest.P75Ms > 0) and (AFastest.P25Ms > 0) then
   begin
@@ -398,7 +407,7 @@ begin
         Continue;
 
       CalculateRelativeComparison(AFile.Entries[CandidateIndex],
-        AFile.Entries[FastestIndex], Ratio, LowRatio, HighRatio,
+        AFile.Entries[FastestIndex], False, Ratio, LowRatio, HighRatio,
         Inconclusive);
       if Inconclusive then
         FOutput.Add(SysUtils.Format(
@@ -630,10 +639,8 @@ begin
           if FastestIndex >= 0 then
           begin
             CalculateRelativeComparison(Entry,
-              FFiles[F].Entries[FastestIndex], Ratio, LowRatio, HighRatio,
-              Inconclusive);
-            if E = FastestIndex then
-              Inconclusive := False;
+              FFiles[F].Entries[FastestIndex], E = FastestIndex, Ratio,
+              LowRatio, HighRatio, Inconclusive);
             RelativeFields := SysUtils.Format('%.6f,%.6f,%.6f,%s',
               [Ratio, LowRatio, HighRatio,
                LowerCase(BoolToStr(Inconclusive, True))], CSVFormatSettings);
@@ -715,10 +722,8 @@ begin
         if FastestIndex >= 0 then
         begin
           CalculateRelativeComparison(Entry,
-            FFiles[F].Entries[FastestIndex], Ratio, LowRatio, HighRatio,
-            Inconclusive);
-          if E = FastestIndex then
-            Inconclusive := False;
+            FFiles[F].Entries[FastestIndex], E = FastestIndex, Ratio,
+            LowRatio, HighRatio, Inconclusive);
           RelativeJSON := SysUtils.Format(
             '{"median":%s,"low":%s,"high":%s,"inconclusive":%s}',
             [FormatJSONNumber(Ratio, JSONFormatSettings),

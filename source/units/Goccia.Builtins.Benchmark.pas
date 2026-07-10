@@ -188,17 +188,11 @@ begin
   if MEASUREMENT_ROUNDS < 1 then MEASUREMENT_ROUNDS := 1;
 end;
 
-function InvokeBenchmarkFunction(const AFunction: TGocciaFunctionBase;
-  const ASetupResult: TGocciaValue;
-  const ARunArgs: TGocciaArgumentsCollection): TGocciaValue;
+function AwaitBenchmarkResult(const AValue: TGocciaValue): TGocciaValue;
 var
   ThenMethod: TGocciaValue;
 begin
-  ARunArgs.Clear;
-  if Assigned(ASetupResult) then
-    ARunArgs.Add(ASetupResult);
-  Result := AFunction.CallPreparedArgs(ARunArgs,
-    TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := AValue;
   if Result is TGocciaPromiseValue then
     Result := AwaitValue(Result)
   else if Result is TGocciaObjectValue then
@@ -208,6 +202,17 @@ begin
        ThenMethod.IsCallable then
       Result := AwaitValue(Result);
   end;
+end;
+
+function InvokeBenchmarkFunction(const AFunction: TGocciaFunctionBase;
+  const ASetupResult: TGocciaValue;
+  const ARunArgs: TGocciaArgumentsCollection): TGocciaValue;
+begin
+  ARunArgs.Clear;
+  if Assigned(ASetupResult) then
+    ARunArgs.Add(ASetupResult);
+  Result := AwaitBenchmarkResult(AFunction.CallPreparedArgs(ARunArgs,
+    TGocciaUndefinedLiteralValue.UndefinedValue));
 end;
 
 function BenchmarkExceptionMessage(const AException: Exception): string;
@@ -485,13 +490,16 @@ function TGocciaBenchmark.ExecuteWrapper(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   WrapperFunction: TGocciaFunctionBase;
+  WrapperResult: TGocciaValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if (AArgs.Length < 1) or not (AArgs.GetElement(0) is TGocciaFunctionBase) then
     ThrowTypeError('benchmark wrapper requires a callback function');
 
   WrapperFunction := TGocciaFunctionBase(AArgs.GetElement(0));
-  WrapperFunction.CallNoArgs(TGocciaUndefinedLiteralValue.UndefinedValue);
+  WrapperResult := WrapperFunction.CallNoArgs(
+    TGocciaUndefinedLiteralValue.UndefinedValue);
+  AwaitBenchmarkResult(WrapperResult);
 end;
 
 function TGocciaBenchmark.ExecuteScopedWrapper(
@@ -639,6 +647,33 @@ begin
     end;
     A[J + 1] := Temp;
   end;
+end;
+
+procedure QuickSortDoubles(var AValues: array of Double;
+  const ALow, AHigh: Integer);
+var
+  LowIndex, HighIndex: Integer;
+  Pivot, TemporaryValue: Double;
+begin
+  LowIndex := ALow;
+  HighIndex := AHigh;
+  Pivot := AValues[(ALow + AHigh) div 2];
+  repeat
+    while AValues[LowIndex] < Pivot do Inc(LowIndex);
+    while AValues[HighIndex] > Pivot do Dec(HighIndex);
+    if LowIndex <= HighIndex then
+    begin
+      TemporaryValue := AValues[LowIndex];
+      AValues[LowIndex] := AValues[HighIndex];
+      AValues[HighIndex] := TemporaryValue;
+      Inc(LowIndex);
+      Dec(HighIndex);
+    end;
+  until LowIndex > HighIndex;
+  if ALow < HighIndex then
+    QuickSortDoubles(AValues, ALow, HighIndex);
+  if LowIndex < AHigh then
+    QuickSortDoubles(AValues, LowIndex, AHigh);
 end;
 
 function PercentileValue(const ASorted: array of Double;
@@ -875,7 +910,8 @@ begin
         SampleDurations[K] := SampleDuration;
       end;
       WaitForFetchIdle;
-      InsertionSort(SampleDurations, SampleCount);
+      if SampleCount > 1 then
+        QuickSortDoubles(SampleDurations, 0, SampleCount - 1);
       Result.SampleCount := SampleCount;
       Result.MinSampleMs := PercentileValue(SampleDurations, SampleCount, 0);
       Result.P25Ms := PercentileValue(SampleDurations, SampleCount, 0.25);

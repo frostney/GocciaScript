@@ -2230,6 +2230,22 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
         }
       }
 
+      const scopedBenchmarks = json.files[0].benchmarks.filter(
+        (benchmark: Record<string, unknown>) => benchmark.summaryScope === 1,
+      );
+      const baseline = scopedBenchmarks.reduce(
+        (fastest: any, benchmark: any) => benchmark.medianMs < fastest.medianMs ? benchmark : fastest,
+      );
+      if (baseline.relative.median !== 1 || baseline.relative.low !== 1 ||
+          baseline.relative.high !== 1 || baseline.relative.inconclusive !== false)
+        throw new Error(`Summary baseline should compare exactly to itself: ${JSON.stringify(baseline)}`);
+      for (const benchmark of scopedBenchmarks) {
+        if (benchmark === baseline) continue;
+        const expectedInconclusive = benchmark.relative.low <= 1 && benchmark.relative.high >= 1;
+        if (benchmark.relative.inconclusive !== expectedInconclusive)
+          throw new Error(`Summary overlap classification should match its range: ${JSON.stringify(benchmark)}`);
+      }
+
     }
 
     const consoleProc = Bun.spawnSync(
@@ -2248,6 +2264,42 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     for (const expected of ["p75", "p99", "p999", "boxplot", "summary", "fastest:"])
       if (!consoleOutput.includes(expected))
         throw new Error(`Module-only microbench console should contain ${expected}: ${consoleOutput}`);
+
+    console.log("BenchmarkRunner: async summary and boxplot callbacks retain scopes...");
+    const asyncScopeSource = microbenchModuleWithExports(
+      "bench, summary, boxplot",
+      [
+        "await boxplot(async () => {",
+        "  await Promise.resolve();",
+        "  await summary(async () => {",
+        "    await Promise.resolve();",
+        '    bench("async fast", () => 1 + 1);',
+        '    bench("async slow", () => [1, 2, 3, 4].map((value) => value + 1));',
+        "  });",
+        "});",
+      ],
+    );
+    for (const run of [
+      { output: join(tmp, "async-scopes.json"), modeArguments: [] },
+      { output: join(tmp, "async-scopes-bytecode.json"), modeArguments: ["--mode=bytecode"] },
+    ]) {
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${run.output}`, ...run.modeArguments],
+        {
+          stdin: new TextEncoder().encode(asyncScopeSource),
+          stdout: "pipe",
+          stderr: "pipe",
+          env: benchEnv,
+          timeout: 120_000,
+        },
+      );
+      if (proc.exitCode !== 0)
+        throw new Error(`Async microbench scopes exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const benchmarks = JSON.parse(readFileSync(run.output, "utf-8")).files?.[0]?.benchmarks;
+      if (!Array.isArray(benchmarks) || benchmarks.length !== 2 ||
+          benchmarks.some((benchmark: any) => benchmark.summaryScope !== 1 || benchmark.boxplotScope !== 1))
+        throw new Error(`Async microbench callbacks should retain both scopes: ${JSON.stringify(benchmarks)}`);
+    }
 
     console.log("BenchmarkRunner: deterministic profile mode...");
     const profileBench = join(tmp, "profile-deterministic.js");
