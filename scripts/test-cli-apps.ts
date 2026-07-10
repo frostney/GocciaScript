@@ -1141,6 +1141,87 @@ console.log("Bare Loader: bytecode --test262-host eval var declarations shadow o
     throw new Error(`Bare bytecode sloppy eval upvalue shadow probe got: ${proc.stdout.toString()}`);
 }
 
+console.log("Bare Loader: bytecode --test262-host eval keeps nested variable environments isolated...");
+{
+  const proc = Bun.spawnSync([
+    BARE,
+    "--test262-host",
+    "--mode=bytecode",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode([
+      "function outer() {",
+      "  eval('var outerOnly = 1;');",
+      "  function inner() {",
+      "    eval('var innerOnly = 2;');",
+      "    return [innerOnly, outerOnly].join(':');",
+      "  }",
+      "  print([inner(), typeof innerOnly, outerOnly].join(','));",
+      "}",
+      "outer();",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const expected = "2:1,undefined,1";
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode nested eval environment probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare bytecode nested eval environment probe got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: bytecode --test262-host eval preserves lexical upvalue precedence...");
+{
+  const proc = Bun.spawnSync([
+    BARE,
+    "--test262-host",
+    "--mode=bytecode",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode([
+      "function lexicalShadow() {",
+      "  eval('var x = \"eval\";');",
+      "  {",
+      "    let x = 'lexical';",
+      "    const read = () => x;",
+      "    print([read(), x].join(','));",
+      "  }",
+      "}",
+      "function writeOuter() {",
+      "  var x = 'outer';",
+      "  function inner() {",
+      "    const set = () => { x = 'set'; };",
+      "    const readDeep = () => () => x;",
+      "    eval('var x = \"eval\";');",
+      "    set();",
+      "    print([readDeep()(), x].join(','));",
+      "  }",
+      "  inner();",
+      "  print(x);",
+      "}",
+      "lexicalShadow();",
+      "writeOuter();",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const expected = [
+    "lexical,lexical",
+    "set,set",
+    "outer",
+  ].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode eval lexical precedence probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare bytecode eval lexical precedence probe got: ${proc.stdout.toString()}`);
+}
+
 console.log("Bare Loader: --test262-host generator parameter eval uses the parameter var environment...");
 {
   const source = [

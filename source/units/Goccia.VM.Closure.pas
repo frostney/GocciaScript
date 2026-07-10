@@ -16,6 +16,9 @@ type
   private
     FTemplate: TGocciaFunctionTemplate;
     FUpvalues: array of TGocciaBytecodeUpvalue;
+    // Marks static captures whose path crosses the function environment that
+    // owns DynamicVarScope, allowing eval-created vars to shadow them.
+    FDynamicVarUpvalues: array of Boolean;
     FHomeObject: TGocciaObjectValue;
     FHomeClass: TGocciaObjectValue;
     FFunctionValue: TGocciaValue;
@@ -30,6 +33,9 @@ type
     function Clone: TGocciaBytecodeClosure;
     procedure SetUpvalue(const AIndex: Integer; const AUpvalue: TGocciaBytecodeUpvalue);
     function GetUpvalue(const AIndex: Integer): TGocciaBytecodeUpvalue;
+    procedure SetDynamicVarUpvalue(const AIndex: Integer;
+      const AEnabled: Boolean);
+    function IsDynamicVarUpvalue(const AIndex: Integer): Boolean;
     function GetUpvalueCount: Integer;
     property Template: TGocciaFunctionTemplate read FTemplate;
     property UpvalueCount: Integer read GetUpvalueCount;
@@ -57,11 +63,13 @@ begin
   FNewTarget := nil;
   FAllowsNewTarget := False;
   SetLength(FUpvalues, AUpvalueCount);
+  SetLength(FDynamicVarUpvalues, AUpvalueCount);
 end;
 
 destructor TGocciaBytecodeClosure.Destroy;
 begin
   SetLength(FUpvalues, 0);
+  SetLength(FDynamicVarUpvalues, 0);
   inherited;
 end;
 
@@ -78,7 +86,10 @@ begin
   Result.FNewTarget := FNewTarget;
   Result.FAllowsNewTarget := FAllowsNewTarget;
   for I := 0 to High(FUpvalues) do
+  begin
     Result.FUpvalues[I] := FUpvalues[I];
+    Result.FDynamicVarUpvalues[I] := FDynamicVarUpvalues[I];
+  end;
 end;
 
 procedure TGocciaBytecodeClosure.SetUpvalue(const AIndex: Integer;
@@ -96,6 +107,21 @@ begin
     Result := FUpvalues[AIndex]
   else
     Result := nil;
+end;
+
+procedure TGocciaBytecodeClosure.SetDynamicVarUpvalue(const AIndex: Integer;
+  const AEnabled: Boolean);
+begin
+  if (AIndex < 0) or (AIndex >= Length(FDynamicVarUpvalues)) then
+    Exit;
+  FDynamicVarUpvalues[AIndex] := AEnabled;
+end;
+
+function TGocciaBytecodeClosure.IsDynamicVarUpvalue(
+  const AIndex: Integer): Boolean;
+begin
+  Result := (AIndex >= 0) and (AIndex < Length(FDynamicVarUpvalues)) and
+    FDynamicVarUpvalues[AIndex];
 end;
 
 function TGocciaBytecodeClosure.GetUpvalueCount: Integer;
