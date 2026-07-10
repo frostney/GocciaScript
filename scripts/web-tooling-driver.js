@@ -255,7 +255,7 @@ function buildWebToolingBundle({ webToolingDir, workload, tempDir }) {
   if (!/^[a-z0-9-]+$/.test(workload)) {
     throw new Error(`Invalid Web Tooling workload name: ${workload}`);
   }
-  const sourceDir = path.join(webToolingDir, 'src');
+  const sourceDir = path.resolve(webToolingDir, 'src');
   const entryBase = `.goccia-${workload}-cli.js`;
   const vfsBase = `.goccia-${workload}-vfs.js`;
   const entryFile = path.join(sourceDir, entryBase);
