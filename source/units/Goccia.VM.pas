@@ -13234,41 +13234,42 @@ begin
     Running := True;
     while Running and (Frame.IP < Template.CodeCount) do
     begin
-      if (AStopAtIP >= 0) and (Frame.IP >= AStopAtIP) and
-         Assigned(AStopGenerator) then
-      begin
-        TGocciaBytecodeGeneratorObjectValue(AStopGenerator).
-          CaptureInitialContinuation(Frame, SavedHandlerCount, PrevCovLine,
-            Frame.IP);
-        Result := RegisterUndefined;
-        Exit;
-      end;
-
       try
-        CheckInstructionLimit;
-        Instruction := Template.GetInstructionUnchecked(Frame.IP);
-        Inc(Frame.IP);
-        IncrementInstructionCounter;
-
-        if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and
-           Assigned(Template.DebugInfo) then
+        while Running and (Frame.IP < Template.CodeCount) do
         begin
-          CovLine := Template.DebugInfo.GetLineForPC(Frame.IP - 1);
-          if (CovLine <> 0) and (CovLine <> PrevCovLine) then
+          if (AStopAtIP >= 0) and (Frame.IP >= AStopAtIP) and
+             Assigned(AStopGenerator) then
           begin
-            TGocciaCoverageTracker.Instance.RecordLineHit(
-              Template.DebugInfo.SourceFile, CovLine);
-            PrevCovLine := CovLine;
+            TGocciaBytecodeGeneratorObjectValue(AStopGenerator).
+              CaptureInitialContinuation(Frame, SavedHandlerCount, PrevCovLine,
+                Frame.IP);
+            Result := RegisterUndefined;
+            Exit;
           end;
-        end;
 
-        Op := DecodeOp(Instruction);
-        if FProfilingOpcodes then
-          TGocciaProfiler.Instance.RecordOpcode(Op);
-        A := DecodeA(Instruction);
-        B := DecodeB(Instruction);
-        C := DecodeC(Instruction);
-        case TGocciaOpCode(Op) of
+          PollInstructionLimit;
+          Instruction := Template.GetInstructionUnchecked(Frame.IP);
+          Inc(Frame.IP);
+
+          if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and
+             Assigned(Template.DebugInfo) then
+          begin
+            CovLine := Template.DebugInfo.GetLineForPC(Frame.IP - 1);
+            if (CovLine <> 0) and (CovLine <> PrevCovLine) then
+            begin
+              TGocciaCoverageTracker.Instance.RecordLineHit(
+                Template.DebugInfo.SourceFile, CovLine);
+              PrevCovLine := CovLine;
+            end;
+          end;
+
+          Op := DecodeOp(Instruction);
+          if FProfilingOpcodes then
+            TGocciaProfiler.Instance.RecordOpcode(Op);
+          A := DecodeA(Instruction);
+          B := DecodeB(Instruction);
+          C := DecodeC(Instruction);
+          case TGocciaOpCode(Op) of
       OP_LOAD_CONST:
         // ES2026 §13.2.8.3: bckTemplateObject constants are lazily built and cached
         if Template.GetConstantUnchecked(DecodeBx(Instruction)).Kind = bckTemplateObject then
@@ -16596,6 +16597,7 @@ begin
       end;
         else
           raise Exception.CreateFmt('Unsupported Goccia VM opcode in minimal executor: %d', [Op]);
+        end;
         end;
       except
         on E: EGocciaBytecodeThrow do

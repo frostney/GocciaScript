@@ -14,4 +14,7 @@ test("Math.trunc", () => {
   expect(Math.trunc(Infinity)).toBe(Infinity);
   expect(Math.trunc(-Infinity)).toBe(-Infinity);
   expect(Math.trunc(NaN)).toBeNaN();
+  expect(Object.is(Math.trunc(-0), -0)).toBe(true);
+  expect(Object.is(Math.trunc(-0.25), -0)).toBe(true);
+  expect(Math.trunc(Number.MAX_VALUE)).toBe(Number.MAX_VALUE);
 });

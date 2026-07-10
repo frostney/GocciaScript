@@ -3,9 +3,9 @@ description: TSV.stringify converts JavaScript arrays/objects to tab-separated t
 features: [TSV.stringify]
 ---*/
 
-const hasTSV = typeof TSV !== "undefined";
+import * as TSV from "goccia:tsv";
 
-describe.runIf(hasTSV)("TSV.stringify", () => {
+describe("TSV.stringify", () => {
   test("stringifies array of objects with headers", () => {
     const data = [
       { name: "Alice", age: "30" },
@@ -119,7 +119,7 @@ describe.runIf(hasTSV)("TSV.stringify", () => {
   });
 });
 
-describe.runIf(hasTSV)("TSV.stringify with replacer", () => {
+describe("TSV.stringify with replacer", () => {
   test("replacer transforms values", () => {
     const data = [{ name: "alice", age: "30" }];
     const result = TSV.stringify(data, {}, (key, value) => {
@@ -140,7 +140,7 @@ describe.runIf(hasTSV)("TSV.stringify with replacer", () => {
   });
 });
 
-describe.runIf(hasTSV)("TSV.stringify error handling", () => {
+describe("TSV.stringify error handling", () => {
   test("throws when called with no arguments", () => {
     expect(() => TSV.stringify()).toThrow();
   });

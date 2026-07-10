@@ -10,6 +10,7 @@ uses
   Goccia.Builtins.TSV,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.IndexedDataModule,
+  Goccia.RuntimeExtensions.NamespaceModule,
   Goccia.Scope,
   Goccia.Values.ArrayValue,
   Goccia.Values.Primitives;
@@ -18,6 +19,7 @@ type
   TGocciaTSVRuntimeExtension = class(TGocciaIndexedDataModuleRuntimeExtension)
   private
     FBuiltinTSV: TGocciaTSVBuiltin;
+    FTSVModule: TGocciaRuntimeNamespaceModuleRegistration;
     function MaterializeTSV: TGocciaValue;
   protected
     function MatchesModulePath(const AResolvedPath: string): Boolean; override;
@@ -41,8 +43,9 @@ uses
 procedure TGocciaTSVRuntimeExtension.Attach(const ARuntime: TGocciaRuntimeCore);
 begin
   inherited Attach(ARuntime);
-  // Defer building the TSV namespace until first reflective access.
-  Runtime.Engine.RegisterLazyGlobal('TSV', MaterializeTSV, dtLet);
+  FTSVModule := TGocciaRuntimeNamespaceModuleRegistration.Create(Runtime,
+    'goccia:tsv',
+    MaterializeTSV);
 end;
 
 function TGocciaTSVRuntimeExtension.MaterializeTSV: TGocciaValue;
@@ -55,6 +58,8 @@ end;
 
 procedure TGocciaTSVRuntimeExtension.Detach;
 begin
+  FTSVModule.Free;
+  FTSVModule := nil;
   FBuiltinTSV.Free;
   FBuiltinTSV := nil;
   inherited;

@@ -7,6 +7,10 @@ describe("Math.f16round", () => {
     expect(Number.isNaN(Math.f16round(NaN))).toBe(true);
   });
 
+  test("returns NaN for missing input", () => {
+    expect(Number.isNaN(Math.f16round())).toBe(true);
+  });
+
   test("returns Infinity for Infinity", () => {
     expect(Math.f16round(Infinity)).toBe(Infinity);
   });

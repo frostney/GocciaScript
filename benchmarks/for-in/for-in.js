@@ -2,7 +2,9 @@
 description: for...in enumeration and prototype-chain key dedup benchmarks
 ---*/
 
-suite("for...in", () => {
+import { bench, group } from "goccia:microbench";
+
+group("for...in", () => {
   // Build a `levels`-deep prototype chain where every level redeclares the
   // same `width` keys (plus one unique key per level). for...in must dedup
   // the shared keys down the chain, which stresses the key-dedup set.
@@ -21,29 +23,27 @@ suite("for...in", () => {
     return obj;
   }, {});
 
-  bench("for...in over 50 own keys", {
-    run: () => {
-      let count = 0;
-      for (const key in flat50) count = count + 1;
-      return count;
-    },
+  bench("for...in over 50 own keys", () => {
+    let count = 0;
+    for (const key in flat50) count = count + 1;
+    return count;
   });
 
-  bench("for...in over an 8-level chain of 50 shared keys", {
-    setup: () => buildChain(8, 50),
-    run: (obj) => {
+  bench("for...in over an 8-level chain of 50 shared keys", ({ *setup() {
+    const obj = (() => buildChain(8, 50))();
+    yield () => {
       let count = 0;
       for (const key in obj) count = count + 1;
       return count;
-    },
-  });
+    };
+  } }).setup);
 
-  bench("for...in over a 16-level chain of 100 shared keys", {
-    setup: () => buildChain(16, 100),
-    run: (obj) => {
+  bench("for...in over a 16-level chain of 100 shared keys", ({ *setup() {
+    const obj = (() => buildChain(16, 100))();
+    yield () => {
       let count = 0;
       for (const key in obj) count = count + 1;
       return count;
-    },
-  });
+    };
+  } }).setup);
 });

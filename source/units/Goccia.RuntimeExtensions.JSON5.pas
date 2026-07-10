@@ -10,12 +10,14 @@ uses
   Goccia.Builtins.JSON5,
   Goccia.Modules,
   Goccia.Runtime,
+  Goccia.RuntimeExtensions.NamespaceModule,
   Goccia.Values.Primitives;
 
 type
   TGocciaJSON5RuntimeExtension = class(TGocciaRuntimeExtension)
   private
     FBuiltinJSON5: TGocciaJSON5Builtin;
+    FJSON5Module: TGocciaRuntimeNamespaceModuleRegistration;
     function MaterializeJSON5: TGocciaValue;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
@@ -45,8 +47,9 @@ procedure TGocciaJSON5RuntimeExtension.Attach(
   const ARuntime: TGocciaRuntimeCore);
 begin
   inherited Attach(ARuntime);
-  // Defer building the JSON5 namespace until first reflective access.
-  Runtime.Engine.RegisterLazyGlobal('JSON5', MaterializeJSON5, dtLet);
+  FJSON5Module := TGocciaRuntimeNamespaceModuleRegistration.Create(Runtime,
+    'goccia:json5',
+    MaterializeJSON5);
 end;
 
 function TGocciaJSON5RuntimeExtension.MaterializeJSON5: TGocciaValue;
@@ -59,6 +62,8 @@ end;
 
 procedure TGocciaJSON5RuntimeExtension.Detach;
 begin
+  FJSON5Module.Free;
+  FJSON5Module := nil;
   FBuiltinJSON5.Free;
   FBuiltinJSON5 := nil;
   inherited;

@@ -3,9 +3,9 @@ description: TSV.parse converts tab-separated text to JavaScript arrays/objects
 features: [TSV.parse]
 ---*/
 
-const hasTSV = typeof TSV !== "undefined";
+import * as TSV from "goccia:tsv";
 
-describe.runIf(hasTSV)("TSV.parse", () => {
+describe("TSV.parse", () => {
   test("parses TSV with headers (default)", () => {
     const result = TSV.parse("name\tage\nAlice\t30\nBob\t25");
 
@@ -38,7 +38,7 @@ describe.runIf(hasTSV)("TSV.parse", () => {
   });
 });
 
-describe.runIf(hasTSV)("TSV.parse backslash escaping", () => {
+describe("TSV.parse backslash escaping", () => {
   test("unescapes backslash-t to tab", () => {
     const result = TSV.parse("col1\\tcol2", { headers: false });
 
@@ -88,7 +88,7 @@ describe.runIf(hasTSV)("TSV.parse backslash escaping", () => {
   });
 });
 
-describe.runIf(hasTSV)("TSV.parse edge cases", () => {
+describe("TSV.parse edge cases", () => {
   test("handles empty fields", () => {
     const result = TSV.parse("a\t\tc", { headers: false });
 
@@ -185,7 +185,7 @@ describe.runIf(hasTSV)("TSV.parse edge cases", () => {
   });
 });
 
-describe.runIf(hasTSV)("TSV.parse error handling", () => {
+describe("TSV.parse error handling", () => {
   test("throws TypeError when first argument is not a string", () => {
     expect(() => TSV.parse(42)).toThrow(TypeError);
   });
@@ -199,7 +199,7 @@ describe.runIf(hasTSV)("TSV.parse error handling", () => {
   });
 });
 
-describe.runIf(hasTSV)("TSV.parse with reviver", () => {
+describe("TSV.parse with reviver", () => {
   test("reviver receives key, value, and context", () => {
     const calls = [];
     TSV.parse("name\tage\nAlice\t30", {}, (key, value, ctx) => {
@@ -245,7 +245,7 @@ describe.runIf(hasTSV)("TSV.parse with reviver", () => {
   });
 });
 
-describe.runIf(hasTSV)("TSV.parseChunk edge cases", () => {
+describe("TSV.parseChunk edge cases", () => {
   test("handles incomplete row at chunk boundary with done false", () => {
     const result = TSV.parseChunk("name\tage\nAlice\t30\nBob", {});
 
@@ -262,8 +262,8 @@ describe.runIf(hasTSV)("TSV.parseChunk edge cases", () => {
   });
 });
 
-describe.runIf(hasTSV)("TSV metadata", () => {
-  test("Symbol.toStringTag is TSV", () => {
-    expect(TSV[Symbol.toStringTag]).toBe("TSV");
+describe("TSV metadata", () => {
+  test("namespace Symbol.toStringTag is Module", () => {
+    expect(TSV[Symbol.toStringTag]).toBe("Module");
   });
 });

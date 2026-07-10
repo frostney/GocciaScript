@@ -1,15 +1,15 @@
 /*---
-description: Goccia.semver.validRange normalizes semver ranges
-features: [Goccia.semver.validRange]
+description: semver.validRange normalizes semver ranges
+features: [semver.validRange]
 ---*/
 
-const hasGoccia = typeof Goccia !== "undefined";
+import * as semver from "goccia:semver";
 
-describe.runIf(hasGoccia)("Goccia.semver.validRange", () => {
-  test("Goccia.semver.validRange returns formatted ranges or null", () => {
-    expect(Goccia.semver.validRange("^1.2.3")).toBe(">=1.2.3 <2.0.0-0");
-    expect(Goccia.semver.validRange("1.x")).toBe(">=1.0.0 <2.0.0-0");
-    expect(Goccia.semver.validRange("")).toBe("*");
-    expect(Goccia.semver.validRange("invalid")).toBe(null);
+describe("semver.validRange", () => {
+  test("semver.validRange returns formatted ranges or null", () => {
+    expect(semver.validRange("^1.2.3")).toBe(">=1.2.3 <2.0.0-0");
+    expect(semver.validRange("1.x")).toBe(">=1.0.0 <2.0.0-0");
+    expect(semver.validRange("")).toBe("*");
+    expect(semver.validRange("invalid")).toBe(null);
   });
 });
