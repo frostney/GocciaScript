@@ -6,20 +6,21 @@
 
 ## Executive Summary
 
-- **Core vs runtime registration** — `TGocciaEngine` always registers core language built-ins (Math, Object, Array, String, Number, RegExp, JSON, Symbol, Set, Map, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, TypedArrays, Proxy, Reflect, Iterator, DisposableStack, etc.); `Goccia.Runtime` provides optional runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer)
-- **Runtime opt-ins** — Testing, benchmarking, FFI, and data-format APIs extend the runtime surface through concrete runtime extension classes
+- **Core vs runtime registration** — `TGocciaEngine` always registers core language built-ins (Math, Object, Array, String, Number, RegExp, JSON, Symbol, Set, Map, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, TypedArrays, Proxy, Reflect, Iterator, DisposableStack, etc.); `Goccia.Runtime` provides optional runtime globals (Console, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response) and import-only `goccia:` runtime modules
+- **Runtime opt-ins** — Testing, benchmarking, FFI, data-format APIs, and SemVer extend the runtime surface through concrete runtime extension classes
+- **Goccia runtime modules** — Non-standard data-format APIs and SemVer are named-export-only modules (`goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, `goccia:semver`); use namespace imports for `CSV.parse(...)`-style call sites
 - **Sandbox modules** — `GocciaSandboxRunner` installs import-only `"fs"` and `"goccia"` modules for sandbox filesystem and shell/nested-execution access; they are not globals
 - **ECMAScript shims** — Legacy standard names such as global `parseInt`, `parseFloat`, `isNaN`, `isFinite`, `Date`, `__proto__`, and legacy getter/setter helpers are installed through Goccia.shims
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
 - **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all built-ins
 
-GocciaScript provides a set of built-in global objects that mirror JavaScript's standard library. Core language built-ins are implemented as Pascal units and registered by the engine. Runtime globals live behind runtime extensions so binaries can import only the runtime surface they need. Test assertions, benchmarks, and FFI are runtime-level opt-ins.
+GocciaScript provides a set of built-in global objects that mirror JavaScript's standard library. Core language built-ins are implemented as Pascal units and registered by the engine. Runtime globals and runtime modules live behind runtime extensions so binaries can import only the runtime surface they need. Test assertions, benchmarks, data-format modules, SemVer, and FFI are runtime-level opt-ins.
 
 ## Registration System
 
 Core language built-ins (Math, Object, Array, Number, JSON, Symbol, Set, Map, WeakSet, WeakMap, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, Proxy, Reflect, etc.) are always registered unconditionally by the engine.
 
-Runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer) are registered by the loader runtime profile and runtime extension classes under `source/units/Goccia.RuntimeExtensions.*.pas`. CLI hosts such as `GocciaScriptLoader` and `GocciaREPL` call `ApplyLoaderRuntimeProfile`; `GocciaTestRunner` applies the loader runtime profile plus `TGocciaTestingLibraryRuntimeExtension`; `GocciaBenchmarkRunner` applies the loader runtime profile plus `TGocciaBenchmarkRuntimeExtension`. `GocciaScriptLoaderBare` does not attach a runtime and exposes only a CLI-local `print(...args)` helper by default; the test262 conformance runner may opt into private test262 host capabilities with `--test262-host`.
+Runtime globals (Console, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response) are registered by the loader runtime profile and runtime extension classes under `source/units/Goccia.RuntimeExtensions.*.pas`. The same runtime profile also installs named-export-only Goccia modules for non-standard data-format APIs and SemVer: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. CLI hosts such as `GocciaScriptLoader` and `GocciaREPL` call `ApplyLoaderRuntimeProfile`; `GocciaTestRunner` applies the loader runtime profile plus `TGocciaTestingLibraryRuntimeExtension`; `GocciaBenchmarkRunner` applies the loader runtime profile plus `TGocciaBenchmarkRuntimeExtension`. `GocciaScriptLoaderBare` does not attach a runtime and exposes only a CLI-local `print(...args)` helper by default; the test262 conformance runner may opt into private test262 host capabilities with `--test262-host`.
 
 `GocciaSandboxRunner` applies the loader runtime profile and then installs `TGocciaSandboxRuntimeExtension`. That extension registers sandbox capabilities as import-only global modules named `"fs"` and `"goccia"`; it does not create global `fs`, `$`, or `runScript` bindings.
 
@@ -73,11 +74,11 @@ Implements the [ECMAScript Math object](https://developer.mozilla.org/en-US/docs
 |--------|-------------|
 | `Math.clamp(x, min, max)` | Clamp to range (Stage 2 [proposal-math-clamp](https://github.com/tc39/proposal-math-clamp)) |
 | `Math.f16round(x)` | Nearest 16-bit float |
-| `Math.sumPrecise(iterable)` | Precise sum via Kahan-Babuska-Neumaier compensated summation. Throws `TypeError` for non-iterable or non-number elements. Empty iterable returns `-0`. Mixed `±Infinity` returns `NaN`. |
+| `Math.sumPrecise(iterable)` | Precise sum via exact finite accumulation and final double rounding. Throws `TypeError` for non-iterable or non-number elements. Empty iterable returns `-0`. Mixed `±Infinity` returns `NaN`. |
 
 ### Data Formats (JSON, JSON5, YAML, JSONL, CSV, TSV, TOML)
 
-See [Data Format Built-ins](built-ins-data-formats.md) for the complete JSON, JSON5, YAML, JSONL, CSV, TSV, and TOML API reference.
+JSON is the standard ECMAScript global. JSON5, YAML, JSONL, CSV, TSV, and TOML are import-only Goccia runtime modules with named exports and no default export. See [Data Format Built-ins](built-ins-data-formats.md) for the complete JSON and Goccia data-format module API reference.
 
 ### Object (`Goccia.Builtins.GlobalObject.pas`)
 
@@ -256,10 +257,9 @@ A `const` global providing engine metadata and Goccia-owned utility APIs:
 | `version` | `string` | Semver version from the latest git tag (e.g., `"0.2.0"`), or tag + `-dev` suffix if there are commits after the tag (e.g., `"0.2.0-dev"`) |
 | `commit` | `string` | Short git commit hash (e.g., `"a1b2c3d"`) |
 | `build` | `object` | Compile-time platform information (see below) |
-| `semver` | `object` | Runtime-provided SemVer 2.0.0 API namespace (see below) |
 | `spec` | `object` | ES specification features implemented by GocciaScript, keyed by year (e.g., `"2015"`, `"2025"`). Each year maps to an array of `{ name, link }` entries. |
 | `proposal` | `object` | TC39 proposals implemented by GocciaScript, keyed by stage (e.g., `"stage-3"`, `"stage-1"`). Each stage maps to an array of `{ name, link }` entries. |
-| `runtimeGlobals` | `string[]` | Names of runtime globals installed by the active runtime profile or runtime extensions. Empty in core-language-only engines. |
+| `runtimeGlobals` | `string[]` | Names of runtime globals installed by the active runtime profile or runtime extensions. Empty in core-language-only engines. Import-only `goccia:` modules are not listed as globals. |
 | `shims` | `string[]` | Names of registered ECMAScript shims installed by the engine |
 | `gc` | `function` | Trigger manual garbage collection. Returns `undefined`. Also exposes read-only `gc.bytesAllocated` (approximate GC heap size in bytes) and `gc.maxBytes` (active ceiling; defaults to half of physical memory capped at 8 GB on 64-bit or 700 MB on 32-bit, overridable via `--max-memory`). Allocations exceeding the ceiling throw a `RangeError`. |
 
@@ -295,11 +295,16 @@ Current default shims:
 | `arch` | `string` | Processor architecture: `"x86_64"`, `"aarch64"`, `"x86"`, `"arm"`, `"powerpc64"`, `"powerpc"`, or `"unknown"` |
 | `date` | `string` | Build date in `YYYY-MM-DD` format (e.g., `"2026-04-20"`) |
 
-**`Goccia.semver`**
+**`goccia:semver` module**
 
-`Goccia.semver` is provided by `TGocciaRuntime`; it is not part of the bare engine namespace. `GocciaScriptLoaderBare` exposes `Goccia` but does not expose `Goccia.semver`.
+The SemVer 2.0.0 API is provided by the loader runtime profile as the named-export-only module `goccia:semver`. It is not part of the bare engine namespace, not a property of `Goccia`, and not installed as a global. Use either named imports or a namespace import:
 
-`Goccia.semver` exposes a SemVer 2.0.0 API modeled after the main `node-semver` export plus its documented module-group aliases:
+```javascript
+import { valid, SemVer } from "goccia:semver";
+import * as semver from "goccia:semver";
+```
+
+There is no default export. The module exposes an API modeled after the main `node-semver` export plus its documented module-group aliases:
 
 | Property | Type | Description |
 |----------|------|-------------|
@@ -320,9 +325,9 @@ The constructor-backed objects mirror the `node-semver` public fields and core i
 
 | Constructor | Instance fields | Instance methods |
 |-------------|-----------------|------------------|
-| `new Goccia.semver.SemVer(version, options?)` | `raw`, `version`, `major`, `minor`, `patch`, `prerelease`, `build`, `options`, `loose`, `includePrerelease` | `format()`, `toString()`, `compare(other)`, `compareMain(other)`, `comparePre(other)`, `compareBuild(other)`, `inc(releaseType, identifier?)` |
-| `new Goccia.semver.Comparator(comparator, options?)` | `operator`, `semver`, `value`, `options`, `loose` | `toString()`, `test(version)`, `intersects(other, options?)` |
-| `new Goccia.semver.Range(range, options?)` | `raw`, `range`, `set`, `options`, `loose`, `includePrerelease` | `format()`, `toString()`, `test(version)`, `intersects(other, options?)` |
+| `new semver.SemVer(version, options?)` | `raw`, `version`, `major`, `minor`, `patch`, `prerelease`, `build`, `options`, `loose`, `includePrerelease` | `format()`, `toString()`, `compare(other)`, `compareMain(other)`, `comparePre(other)`, `compareBuild(other)`, `inc(releaseType, identifier?)` |
+| `new semver.Comparator(comparator, options?)` | `operator`, `semver`, `value`, `options`, `loose` | `toString()`, `test(version)`, `intersects(other, options?)` |
+| `new semver.Range(range, options?)` | `raw`, `range`, `set`, `options`, `loose`, `includePrerelease` | `format()`, `toString()`, `test(version)`, `intersects(other, options?)` |
 
 **Global functions:**
 

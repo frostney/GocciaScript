@@ -1,6 +1,6 @@
-const hasTOML = typeof TOML !== "undefined";
+import * as TOML from "goccia:toml";
 
-describe.runIf(hasTOML)("TOML.parse", () => {
+describe("TOML.parse", () => {
   test("parses scalars, strings, arrays, tables, and arrays of tables", () => {
     const value = TOML.parse(`
 title = "TOML Example"

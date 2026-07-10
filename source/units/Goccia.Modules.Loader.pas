@@ -35,6 +35,7 @@ type
     out AProgramConsumed: Boolean): TGocciaValue of object;
   TGocciaRuntimeModuleLoader = function(const AResolvedPath: string;
     out AModule: TGocciaModule): Boolean of object;
+  TGocciaGlobalModuleProvider = function: TGocciaModule of object;
 
   TGocciaModuleLoader = class
   private
@@ -53,6 +54,7 @@ type
     FFailedModuleErrors: TOrderedStringMap<TGocciaValue>;
     FFailedModuleErrorModifiedTimes: TOrderedStringMap<TDateTime>;
     FGlobalModules: TOrderedStringMap<TGocciaModule>;
+    FGlobalModuleProviders: TOrderedStringMap<TGocciaGlobalModuleProvider>;
     FGlobalScope: TGocciaGlobalScope;
     FLoadingModules: TOrderedStringMap<Boolean>;
     FModules: TOrderedStringMap<TGocciaModule>;
@@ -78,6 +80,9 @@ type
     procedure ClearFailedModuleError(const ACacheKey: string);
     function TryGetCachedFailedModuleError(const AResolvedPath,
       ACacheKey: string; out AValue: TGocciaValue): Boolean;
+    function HasGlobalModuleRequest(const AModulePath: string): Boolean;
+    function TryLoadGlobalModule(const AModulePath: string;
+      out AModule: TGocciaModule): Boolean;
     function DeferredGraphTouchesEvaluating(const AResolvedPath: string;
       const ASeen: TOrderedStringMap<Boolean>): Boolean;
     procedure EvaluateDeferredAsyncDependencies(const AResolvedPath,
@@ -129,6 +134,9 @@ type
       const ARequestedModules: TGocciaModuleList): TGocciaValue;
     procedure RegisterModule(const AResolvedPath: string;
       const AModule: TGocciaModule);
+    procedure RegisterGlobalModuleProvider(const AModulePath: string;
+      const AProvider: TGocciaGlobalModuleProvider);
+    procedure UnregisterGlobalModuleProvider(const AModulePath: string);
     procedure SetContentProvider(
       const AContentProvider: TGocciaModuleContentProvider;
       const AOwnsContentProvider: Boolean);
@@ -383,6 +391,7 @@ begin
   FModuleSourceValues := TOrderedStringMap<TGocciaValue>.Create;
   FLoadingModules := TOrderedStringMap<Boolean>.Create;
   FGlobalModules := TOrderedStringMap<TGocciaModule>.Create;
+  FGlobalModuleProviders := TOrderedStringMap<TGocciaGlobalModuleProvider>.Create;
 
   if Assigned(AResolver) then
   begin
@@ -429,6 +438,7 @@ begin
   FModules.Free;
   FModuleSourceValues.Free;
   FLoadingModules.Free;
+  FGlobalModuleProviders.Free;
   FGlobalModules.Free;
   if FOwnsResolver then
     FResolver.Free;
@@ -578,6 +588,9 @@ end;
 function TGocciaModuleLoader.ResolveModuleRequestWithAttribute(
   const AModulePath, AAttributeType, AImportingFilePath: string): string;
 begin
+  if (AAttributeType = '') and HasGlobalModuleRequest(AModulePath) then
+    Exit(AModulePath);
+
   if Assigned(FResolver) then
     Result := FResolver.Resolve(AModulePath, AImportingFilePath)
   else
@@ -618,6 +631,37 @@ begin
     ClearFailedModuleError(ACacheKey);
     Result := False;
   end;
+end;
+
+function TGocciaModuleLoader.HasGlobalModuleRequest(
+  const AModulePath: string): Boolean;
+begin
+  Result := FGlobalModules.ContainsKey(AModulePath) or
+    FGlobalModuleProviders.ContainsKey(AModulePath);
+end;
+
+function TGocciaModuleLoader.TryLoadGlobalModule(const AModulePath: string;
+  out AModule: TGocciaModule): Boolean;
+var
+  Provider: TGocciaGlobalModuleProvider;
+begin
+  if FGlobalModules.TryGetValue(AModulePath, AModule) then
+    Exit(True);
+
+  if not FGlobalModuleProviders.TryGetValue(AModulePath, Provider) then
+  begin
+    AModule := nil;
+    Exit(False);
+  end;
+
+  AModule := Provider();
+  if not Assigned(AModule) then
+    raise TGocciaRuntimeError.Create(
+      Format('Global module provider for "%s" returned nil.', [AModulePath]),
+      0, 0, AModulePath, nil);
+
+  FGlobalModules.AddOrSetValue(AModulePath, AModule);
+  Result := True;
 end;
 
 procedure TGocciaModuleLoader.BindRuntime(const AGlobalScope: TGocciaGlobalScope;
@@ -1229,7 +1273,7 @@ begin
       Format('Unsupported import attribute type "%s"', [AttributeType]),
       0, 0, AImportingFilePath, nil);
 
-  if (AttributeType = '') and FGlobalModules.TryGetValue(RequestedModulePath,
+  if (AttributeType = '') and TryLoadGlobalModule(RequestedModulePath,
      Result) then
     Exit;
 
@@ -1869,7 +1913,7 @@ begin
       Format('Unsupported import attribute type "%s"', [AttributeType]),
       0, 0, AImportingFilePath, nil);
 
-  if (AttributeType = '') and FGlobalModules.ContainsKey(RequestedModulePath) then
+  if (AttributeType = '') and HasGlobalModuleRequest(RequestedModulePath) then
     ResolvedPath := RequestedModulePath
   else
   begin
@@ -1956,6 +2000,22 @@ begin
       end;
     end;
   end;
+end;
+
+procedure TGocciaModuleLoader.RegisterGlobalModuleProvider(
+  const AModulePath: string; const AProvider: TGocciaGlobalModuleProvider);
+begin
+  if not Assigned(AProvider) then
+    raise Exception.Create('Global module provider cannot be nil.');
+  FGlobalModules.Remove(AModulePath);
+  FGlobalModuleProviders.AddOrSetValue(AModulePath, AProvider);
+end;
+
+procedure TGocciaModuleLoader.UnregisterGlobalModuleProvider(
+  const AModulePath: string);
+begin
+  FGlobalModuleProviders.Remove(AModulePath);
+  FGlobalModules.Remove(AModulePath);
 end;
 
 function TGocciaModuleLoader.LoadJSONModule(const AResolvedPath,

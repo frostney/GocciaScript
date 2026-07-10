@@ -1,6 +1,6 @@
-const hasYAML = typeof YAML !== "undefined";
+import * as YAML from "goccia:yaml";
 
-describe.runIf(hasYAML)("YAML.parseDocuments", () => {
+describe("YAML.parseDocuments", () => {
   test("always returns an array for a single document", () => {
     const parsed = YAML.parse("name: app");
     const documents = YAML.parseDocuments("name: app");
