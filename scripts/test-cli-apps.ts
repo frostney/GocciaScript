@@ -2165,25 +2165,31 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
 
     console.log("BenchmarkRunner: microbench API is module-only and accepts wrappers...");
     const moduleOnlyOut = join(tmp, "module-only.json");
-    {
-      const moduleOnlySource = microbenchModuleWithExports(
-        "bench as microBench, group as microGroup, summary, boxplot",
-        [
-          'if (typeof bench !== "undefined") throw new Error("ambient bench should not exist");',
-          'if (typeof group !== "undefined") throw new Error("ambient group should not exist");',
-          'if (typeof suite !== "undefined") throw new Error("ambient suite should not exist");',
-          'if (typeof runBenchmarks !== "undefined") throw new Error("ambient runBenchmarks should not exist");',
-          "summary(() => {",
-          "  boxplot(() => {",
-          '    microGroup("module-only", () => {',
-          '      microBench("sum", () => 1 + 1);',
-          "    });",
-          "  });",
-          "});",
-        ],
-      );
+    const moduleOnlyBytecodeOut = join(tmp, "module-only-bytecode.json");
+    const moduleOnlySource = microbenchModuleWithExports(
+      "bench as microBench, group as microGroup, summary, boxplot",
+      [
+        'if (typeof bench !== "undefined") throw new Error("ambient bench should not exist");',
+        'if (typeof group !== "undefined") throw new Error("ambient group should not exist");',
+        'if (typeof suite !== "undefined") throw new Error("ambient suite should not exist");',
+        'if (typeof runBenchmarks !== "undefined") throw new Error("ambient runBenchmarks should not exist");',
+        "summary(() => {",
+        "  boxplot(() => {",
+        '    microGroup("module-only", () => {',
+        '      microBench("sum", () => 1 + 1);',
+        '      microBench("array map", () => [1, 2, 3, 4].map((value) => value + 1));',
+        "    });",
+        "  });",
+        "});",
+        'microBench("outside wrappers", () => 2 + 2);',
+      ],
+    );
+    for (const run of [
+      { output: moduleOnlyOut, modeArguments: [] },
+      { output: moduleOnlyBytecodeOut, modeArguments: ["--mode=bytecode"] },
+    ]) {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${moduleOnlyOut}`],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${run.output}`, ...run.modeArguments],
         {
           stdin: new TextEncoder().encode(moduleOnlySource),
           stdout: "pipe",
@@ -2194,12 +2200,108 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       );
       if (proc.exitCode !== 0) throw new Error(`Module-only microbench API exit ${proc.exitCode}: ${proc.stderr.toString()}`);
     }
-    {
-      const json = JSON.parse(readFileSync(moduleOnlyOut, "utf-8"));
+    for (const outputFile of [moduleOnlyOut, moduleOnlyBytecodeOut]) {
+      const json = JSON.parse(readFileSync(outputFile, "utf-8"));
       if (json.files?.[0]?.benchmarks?.[0]?.name !== "sum")
         throw new Error(`Module-only microbench JSON should contain benchmark name "sum", got: ${JSON.stringify(json.files?.[0]?.benchmarks)}`);
-      if (json.totalBenchmarks !== 1)
-        throw new Error(`Module-only microbench JSON should contain totalBenchmarks: 1, got ${json.totalBenchmarks}`);
+      if (json.totalBenchmarks !== 3)
+        throw new Error(`Module-only microbench JSON should contain totalBenchmarks: 3, got ${json.totalBenchmarks}`);
+      for (const benchmark of json.files[0].benchmarks) {
+        if (!(benchmark.sampleCount > 0 && benchmark.sampleCount <= benchmark.iterations && benchmark.sampleCount <= 10_000))
+          throw new Error(`Benchmark sampleCount should be bounded by calibrated iterations and the fixed cap: ${JSON.stringify(benchmark)}`);
+        if (!(benchmark.minSampleMs <= benchmark.p25Ms &&
+              benchmark.p25Ms <= benchmark.medianMs &&
+              benchmark.medianMs <= benchmark.p75Ms &&
+              benchmark.p75Ms <= benchmark.p99Ms &&
+              benchmark.p99Ms <= benchmark.p999Ms &&
+              benchmark.p999Ms <= benchmark.maxSampleMs))
+          throw new Error(`Benchmark percentiles should be ordered: ${JSON.stringify(benchmark)}`);
+        if (benchmark.name === "outside wrappers") {
+          if (benchmark.summaryScope !== null || benchmark.boxplotScope !== null || benchmark.relative !== null)
+            throw new Error(`Unwrapped benchmark should stay outside scoped views: ${JSON.stringify(benchmark)}`);
+        } else {
+          if (benchmark.summaryScope !== 1 || benchmark.boxplotScope !== 1)
+            throw new Error(`Benchmark wrapper scopes should be retained: ${JSON.stringify(benchmark)}`);
+          if (typeof benchmark.relative?.median !== "number" ||
+              typeof benchmark.relative?.low !== "number" ||
+              typeof benchmark.relative?.high !== "number" ||
+              typeof benchmark.relative?.inconclusive !== "boolean")
+            throw new Error(`Benchmark relative comparison should be structured: ${JSON.stringify(benchmark)}`);
+        }
+      }
+
+      const scopedBenchmarks = json.files[0].benchmarks.filter(
+        (benchmark: Record<string, unknown>) => benchmark.summaryScope === 1,
+      );
+      const baseline = scopedBenchmarks.reduce(
+        (fastest: any, benchmark: any) => benchmark.medianMs < fastest.medianMs ? benchmark : fastest,
+      );
+      if (baseline.relative.median !== 1 || baseline.relative.low !== 1 ||
+          baseline.relative.high !== 1 || baseline.relative.inconclusive !== false)
+        throw new Error(`Summary baseline should compare exactly to itself: ${JSON.stringify(baseline)}`);
+      for (const benchmark of scopedBenchmarks) {
+        if (benchmark === baseline) continue;
+        const { low, high } = benchmark.relative;
+        if (!Number.isFinite(low) || !Number.isFinite(high) || low > high)
+          throw new Error(`Summary relative bounds should be finite and ordered: ${JSON.stringify(benchmark)}`);
+        const expectedInconclusive = low <= 1 && high >= 1;
+        if (benchmark.relative.inconclusive !== expectedInconclusive)
+          throw new Error(`Summary overlap classification should match its range: ${JSON.stringify(benchmark)}`);
+      }
+
+    }
+
+    const consoleProc = Bun.spawnSync(
+      [resolve(BENCHRUNNER), "--source-type=module", "--no-progress"],
+      {
+        stdin: new TextEncoder().encode(moduleOnlySource),
+        stdout: "pipe",
+        stderr: "pipe",
+        env: benchEnv,
+        timeout: 120_000,
+      },
+    );
+    if (consoleProc.exitCode !== 0)
+      throw new Error(`Module-only microbench console exit ${consoleProc.exitCode}: ${consoleProc.stderr.toString()}`);
+    const consoleOutput = consoleProc.stdout.toString();
+    for (const expected of ["p75", "p99", "p999", "boxplot", "summary", "fastest:"])
+      if (!consoleOutput.includes(expected))
+        throw new Error(`Module-only microbench console should contain ${expected}: ${consoleOutput}`);
+
+    console.log("BenchmarkRunner: async summary and boxplot callbacks retain scopes...");
+    const asyncScopeSource = microbenchModuleWithExports(
+      "bench, summary, boxplot",
+      [
+        "await boxplot(async () => {",
+        "  await Promise.resolve();",
+        "  await summary(async () => {",
+        "    await Promise.resolve();",
+        '    bench("async fast", () => 1 + 1);',
+        '    bench("async slow", () => [1, 2, 3, 4].map((value) => value + 1));',
+        "  });",
+        "});",
+      ],
+    );
+    for (const run of [
+      { output: join(tmp, "async-scopes.json"), modeArguments: [] },
+      { output: join(tmp, "async-scopes-bytecode.json"), modeArguments: ["--mode=bytecode"] },
+    ]) {
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${run.output}`, ...run.modeArguments],
+        {
+          stdin: new TextEncoder().encode(asyncScopeSource),
+          stdout: "pipe",
+          stderr: "pipe",
+          env: benchEnv,
+          timeout: 120_000,
+        },
+      );
+      if (proc.exitCode !== 0)
+        throw new Error(`Async microbench scopes exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const benchmarks = JSON.parse(readFileSync(run.output, "utf-8")).files?.[0]?.benchmarks;
+      if (!Array.isArray(benchmarks) || benchmarks.length !== 2 ||
+          benchmarks.some((benchmark: any) => benchmark.summaryScope !== 1 || benchmark.boxplotScope !== 1))
+        throw new Error(`Async microbench callbacks should retain both scopes: ${JSON.stringify(benchmarks)}`);
     }
 
     console.log("BenchmarkRunner: deterministic profile mode...");
