@@ -39,6 +39,14 @@ test("division in initializer remains division", () => {
   expect(result).toEqual([2, 3, 4]);
 });
 
+test("division does not hide the header semicolon during lookahead", () => {
+  let elapsed = 2;
+  let scale = 2;
+  let result = 0;
+  for (result = elapsed / scale; result < elapsed / scale + 1; result++);
+  expect(result).toBe(2);
+});
+
 test("regex in initializer remains a regex literal", () => {
   let matched = false;
   for (let pattern = /\)/; !matched; matched = true) {

@@ -28,6 +28,15 @@ test("named async function expression source text starts at async keyword", () =
   expect(source.includes("return value")).toBe(true);
 });
 
+test("contextual keyword can name an async function expression", async () => {
+  const f = async function from(value) {
+    return value;
+  };
+
+  expect(await f(42)).toBe(42);
+  expect(f.name).toBe("from");
+});
+
 test("async function with await", async () => {
   async function delayed() {
     const value = await Promise.resolve(10);

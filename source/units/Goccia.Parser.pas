@@ -2904,7 +2904,7 @@ begin
                 IsGenerator := True;
               end;
               Name := '';
-              if Check(gttIdentifier) then
+              if IsIdentifierBindingToken(Peek.TokenType) then
               begin
                 Token := Advance;
                 ValidateIdentifierBinding(Token);
@@ -2972,7 +2972,7 @@ begin
         begin
           Advance;
           Name := '';
-          if Check(gttIdentifier) then
+          if IsIdentifierBindingToken(Peek.TokenType) then
             Name := ConsumeIdentifierBinding(
               'Expected generator function name').Lexeme;
           CollectGenericParameters;
@@ -2988,7 +2988,7 @@ begin
         else
         begin
           Name := '';
-          if Check(gttIdentifier) then
+          if IsIdentifierBindingToken(Peek.TokenType) then
             Name := ConsumeIdentifierBinding(
               'Expected function name').Lexeme;
           CollectGenericParameters;
@@ -5102,7 +5102,7 @@ end;
 // backtick.  The error-recovery skips below (SkipBlock, SkipBalancedParens,
 // SkipUntilSemicolon) and the speculative parenthesized-group probes
 // (IsArrowFunction's SkipExpressionWithLexicalGoal / SkipDestructuringPattern,
-// IsMatchExpressionAhead, LooksLikeTraditionalForHeader) must route templates
+// IsMatchExpressionAhead, and LooksLikeTraditionalForHeader) must route templates
 // through here: the '}' that closes a '${ ... }' substitution is lexed as a
 // plain gttRightBrace under any non-template goal, so naive brace/paren counting
 // would miscount it as a structural brace, stop early, and then re-scan the
@@ -5632,7 +5632,7 @@ begin
       else
       begin
         FCurrent := SavedCurrent;
-        if FTraditionalForLoopsEnabled and LooksLikeTraditionalForHeader then
+        if FTraditionalForLoopsEnabled then
           Exit(ParseTraditionalForBody(Line, Column));
         AddUnsupportedFeatureWarning('Traditional ''for(;;)'' loops are not supported by default in GocciaScript',
           'Use for...of/array methods, or enable --compat-traditional-for-loop',
@@ -5799,7 +5799,7 @@ begin
     FCurrent := SavedCurrent;
   end;
 
-  if FTraditionalForLoopsEnabled and LooksLikeTraditionalForHeader then
+  if FTraditionalForLoopsEnabled then
   begin
     Result := ParseTraditionalForBody(Line, Column);
     Exit;
@@ -5816,96 +5816,100 @@ begin
   Result := TGocciaEmptyStatement.Create(Line, Column);
 end;
 
-// Cheap shape detector for the for-header at the current cursor (which
-// points at the leading '(' of `for ( ... )`). Returns True iff at least
-// one top-depth ';' appears inside the parens — that's the unambiguous
-// signal of a traditional `for(init; test; update)`. for-of / for-in
-// heads contain no top-level ';', so they return False and fall through
-// to warn-and-skip rather than getting (mis)parsed by ParseTraditionalForBody.
-// Pure peek, doesn't advance.
 function TGocciaParser.LooksLikeTraditionalForHeader: Boolean;
-  function TryScanWithGoal(const ALexicalGoal: TGocciaLexicalGoal;
-    out ALexError: Boolean): Boolean;
-  var
-    SavedCurrent: Integer;
-    SavedLexer: TGocciaLexerCheckpoint;
-    Idx, Depth: Integer;
-    Tok: TGocciaToken;
-  begin
-    Result := False;
-    ALexError := False;
-    SavedCurrent := FCurrent;
-    if Assigned(FLexer) then
-      SavedLexer := FLexer.CreateCheckpoint;
+var
+  SavedCurrent: Integer;
+  SavedLexer: TGocciaLexerCheckpoint;
+  ParenCount, BracketCount, BraceCount: Integer;
+  CurrentType: TGocciaTokenType;
+  NeedsOperand: Boolean;
 
-    try
-      try
-        Idx := FCurrent;
-        EnsureToken(Idx, ALexicalGoal);
-        if (Idx >= FTokens.Count) or (FTokens[Idx].TokenType <> gttLeftParen) then
-          Exit;
-        Inc(Idx); // step past '('
-        Depth := 1;
-        EnsureToken(Idx, ALexicalGoal);
-        while (Idx < FTokens.Count) and (Depth > 0) do
-        begin
-          // Skip a template literal whole so its '${ ... }' substitution
-          // closer (a gttRightBrace under this goal) is not miscounted as a
-          // structural brace, which would drop Depth to 0 and misclassify a
-          // traditional `for(init; ...)` whose init holds a template as a
-          // for-of/in head. SkipTemplateLiteral works off the live cursor, so
-          // drive it from Idx and resume past the template; the outer finally
-          // restores FCurrent (see SkipTemplateLiteral).
-          if FTokens[Idx].TokenType in [gttTemplateHead, gttTemplate] then
-          begin
-            FCurrent := Idx;
-            SkipTemplateLiteral;
-            Idx := FCurrent;
-            EnsureToken(Idx, ALexicalGoal);
-            Continue;
-          end;
-          Tok := FTokens[Idx];
-          case Tok.TokenType of
-            gttLeftParen, gttLeftBracket, gttLeftBrace:
-              Inc(Depth);
-            gttRightParen, gttRightBracket, gttRightBrace:
-            begin
-              Dec(Depth);
-              if Depth = 0 then
-                Break;
-            end;
-            gttSemicolon:
-              if Depth = 1 then
-                Exit(True);
-          end;
-          Inc(Idx);
-          EnsureToken(Idx, ALexicalGoal);
-        end;
-      except
-        on E: TGocciaLexerError do
-        begin
-          ALexError := True;
-          Result := False;
-        end;
-      end;
-    finally
-      FCurrent := SavedCurrent;
-      // Keep the speculatively-scanned tokens cached on the normal path. Drop
-      // them (rewinding the lexer) only when a lex error means the group is
-      // retried under the other goal, or when a goal-sensitive token was
-      // scanned and must be re-lexed under the parser's real goal (issue #808).
-      if Assigned(FLexer) and
-        (ALexError or FLexer.HasGoalSensitiveTokenSince(SavedLexer.TokenCount)) then
-        FLexer.RestoreCheckpoint(SavedLexer);
-    end;
+  function NextGoal: TGocciaLexicalGoal;
+  begin
+    if NeedsOperand then
+      Exit(glgInputElementRegExp);
+    Result := glgInputElementDiv;
   end;
 
-var
-  LexError: Boolean;
 begin
-  Result := TryScanWithGoal(glgInputElementRegExp, LexError);
-  if (not Result) and LexError then
-    Result := TryScanWithGoal(glgInputElementDiv, LexError);
+  Result := False;
+  SavedCurrent := FCurrent;
+  if Assigned(FLexer) then
+    SavedLexer := FLexer.CreateCheckpoint;
+
+  try
+    if not Check(gttLeftParen) then
+      Exit;
+    Advance;
+    ParenCount := 0;
+    BracketCount := 0;
+    BraceCount := 0;
+    NeedsOperand := True;
+
+    while True do
+    begin
+      CurrentType := PeekWithLexicalGoal(NextGoal).TokenType;
+      if CurrentType = gttEOF then
+        Exit;
+
+      if (ParenCount = 0) and (BracketCount = 0) and
+         (BraceCount = 0) then
+      begin
+        if CurrentType = gttSemicolon then
+          Exit(True);
+        if CurrentType = gttRightParen then
+          Exit;
+      end;
+
+      if CurrentType in [gttTemplateHead, gttTemplate] then
+      begin
+        SkipTemplateLiteral;
+        NeedsOperand := False;
+        Continue;
+      end;
+
+      case CurrentType of
+        gttLeftParen:
+          begin
+            Inc(ParenCount);
+            NeedsOperand := True;
+          end;
+        gttRightParen:
+          begin
+            Dec(ParenCount);
+            NeedsOperand := False;
+          end;
+        gttLeftBracket:
+          begin
+            Inc(BracketCount);
+            NeedsOperand := True;
+          end;
+        gttRightBracket:
+          begin
+            Dec(BracketCount);
+            NeedsOperand := False;
+          end;
+        gttLeftBrace:
+          begin
+            Inc(BraceCount);
+            NeedsOperand := True;
+          end;
+        gttRightBrace:
+          begin
+            Dec(BraceCount);
+            NeedsOperand := False;
+          end;
+      else
+        NeedsOperand := TokenRequiresFollowingOperand(CurrentType);
+      end;
+      Advance;
+    end;
+  finally
+    FCurrent := SavedCurrent;
+    if Assigned(FLexer) and
+       FLexer.HasGoalSensitiveTokenSince(SavedLexer.TokenCount) then
+      FLexer.RestoreCheckpoint(SavedLexer);
+  end;
 end;
 
 function TGocciaParser.ParseTraditionalForBody(
