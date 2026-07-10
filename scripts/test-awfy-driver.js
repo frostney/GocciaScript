@@ -16,7 +16,12 @@ const {
   summarizeSamples,
 } = require('./awfy-driver.js');
 const { MARKER, buildAwfyReportComment, formatMicros } = require('./awfy-comment.js');
-const { reportConfig, targetSpecs, validateReport } = require('./awfy-ci-report.js');
+const {
+  expectedEnginesForRun,
+  reportConfig,
+  targetSpecs,
+  validateReport,
+} = require('./awfy-ci-report.js');
 
 let passed = 0;
 
@@ -241,6 +246,64 @@ console.log('awfy-driver: PR comment markdown...');
     geomeanRatios: {},
   });
   assert(missingEngineComment.includes('| NBody | engine issue: node | 1.00ms | 0.50ms | - |'), 'comment flags missing AWFY engine stats');
+
+  const comparisonComment = buildAwfyReportComment({
+    metadata: {
+      options: { repetitions: 5 },
+      engines: [
+        { name: 'goccia-baseline', version: '' },
+        { name: 'goccia-candidate', version: '' },
+        { name: 'qjs', version: 'QuickJS version 2026-06-04' },
+        { name: 'node', version: 'v26.4.0' },
+      ],
+    },
+    targets: [
+      {
+        name: 'NBody',
+        kind: 'awfy',
+        summary: {
+          checksumAgreement: { ok: true, checksums: ['verified'] },
+          engineStats: {
+            'goccia-baseline': { ok: 5, rawCount: 5, medianMicros: 1000, minMicros: 990, maxMicros: 1010 },
+            'goccia-candidate': { ok: 5, rawCount: 5, medianMicros: 900, minMicros: 890, maxMicros: 910 },
+            qjs: { ok: 5, rawCount: 5, medianMicros: 500 },
+            node: { ok: 5, rawCount: 5, medianMicros: 250 },
+          },
+          ratios: {
+            'goccia-candidate_over_goccia-baseline': 0.9,
+          },
+        },
+      },
+      {
+        name: 'Noisy',
+        kind: 'awfy',
+        summary: {
+          checksumAgreement: { ok: true, checksums: ['verified'] },
+          engineStats: {
+            'goccia-baseline': { ok: 5, rawCount: 5, medianMicros: 1000, minMicros: 900, maxMicros: 1100 },
+            'goccia-candidate': { ok: 5, rawCount: 5, medianMicros: 900, minMicros: 850, maxMicros: 1050 },
+            qjs: { ok: 5, rawCount: 5, medianMicros: 500 },
+            node: { ok: 5, rawCount: 5, medianMicros: 250 },
+          },
+          ratios: {
+            'goccia-candidate_over_goccia-baseline': 0.9,
+          },
+        },
+      },
+    ],
+    geomeanRatios: {
+      'goccia-baseline_over_goccia-candidate': 1.111111111,
+      'goccia-candidate_over_goccia-baseline': 0.9,
+    },
+  });
+  assert(comparisonComment.includes('| Target | Status | Goccia main | Goccia PR | QuickJS 2026-06-04 | NodeJS v26.4.0 | Δ PR vs main |'), 'comparison comment shows main and PR Goccia columns');
+  assert(comparisonComment.includes('| NBody | pass | 1.00ms | 0.90ms | 0.50ms | 250.00µs | 🟢 +10.00% |'), 'comparison comment renders non-overlapping improvement delta');
+  assert(comparisonComment.includes('| Noisy | pass | 1.00ms | 0.90ms | 0.50ms | 250.00µs | ~ overlap (+10.00%) |'), 'comparison comment marks overlapping ranges as unchanged noise');
+  assert(comparisonComment.includes('| Goccia main | 1.000 | 1.111 | - | - |'), 'comparison geomean rows use main label');
+  assert(comparisonComment.includes('| Goccia PR | 0.900 | 1.000 | - | - |'), 'comparison geomean rows use PR label');
+  assert(comparisonComment.includes('| QuickJS 2026-06-04 | - | - | 1.000 | - |'), 'comparison geomean rows use versioned QuickJS label');
+  assert(comparisonComment.includes('| NodeJS v26.4.0 | - | - | - | 1.000 |'), 'comparison geomean rows use versioned Node label');
+  assert(comparisonComment.includes('Δ compares PR Goccia median against the same-runner main Goccia median; overlapping min/max ranges are treated as unchanged noise'), 'comparison comment explains delta basis and overlap classifier');
 }
 
 console.log('awfy-ci-report: manifest helpers...');
@@ -254,6 +317,15 @@ console.log('awfy-ci-report: manifest helpers...');
   };
   assertEqual(reportConfig(manifest).repetitions, 5, 'ci report config is preferred');
   assertEqual(targetSpecs(manifest.ciReport, 'benchmarks').join(','), 'NBody,CD:2', 'ci report target specs keep inner iterations');
+  assertEqual(
+    expectedEnginesForRun({
+      engines: 'goccia,qjs,node',
+      gocciaBaseline: 'main-loader',
+      gocciaCandidate: 'pr-loader',
+    }).join(','),
+    'goccia-baseline,goccia-candidate,qjs,node',
+    'ci report validation expands goccia into baseline/candidate engines',
+  );
 }
 
 console.log('awfy-ci-report: validation...');
@@ -275,6 +347,24 @@ console.log('awfy-ci-report: validation...');
     }],
   }, manifest, ['goccia', 'qjs', 'node']);
   assert(true, 'ci report validation accepts five clean samples');
+
+  validateReport({
+    metadata: { options: { repetitions: 5 } },
+    targets: [{
+      kind: 'awfy',
+      name: 'NBody',
+      summary: {
+        checksumAgreement: { ok: true, checksums: ['verified'] },
+        engineStats: {
+          'goccia-baseline': { ok: 5, rawCount: 5, medianMicros: 1000 },
+          'goccia-candidate': { ok: 5, rawCount: 5, medianMicros: 900 },
+          qjs: { ok: 5, rawCount: 5, medianMicros: 500 },
+          node: { ok: 5, rawCount: 5, medianMicros: 250 },
+        },
+      },
+    }],
+  }, manifest, ['goccia-baseline', 'goccia-candidate', 'qjs', 'node']);
+  assert(true, 'ci report validation accepts baseline/candidate Goccia samples');
 }
 
 console.log(`awfy-driver: ${passed} assertions passed.`);

@@ -10,6 +10,7 @@ uses
   Goccia.Builtins.CSV,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.IndexedDataModule,
+  Goccia.RuntimeExtensions.NamespaceModule,
   Goccia.Scope,
   Goccia.Values.ArrayValue,
   Goccia.Values.Primitives;
@@ -18,6 +19,7 @@ type
   TGocciaCSVRuntimeExtension = class(TGocciaIndexedDataModuleRuntimeExtension)
   private
     FBuiltinCSV: TGocciaCSVBuiltin;
+    FCSVModule: TGocciaRuntimeNamespaceModuleRegistration;
     function MaterializeCSV: TGocciaValue;
   protected
     function MatchesModulePath(const AResolvedPath: string): Boolean; override;
@@ -41,10 +43,9 @@ uses
 procedure TGocciaCSVRuntimeExtension.Attach(const ARuntime: TGocciaRuntimeCore);
 begin
   inherited Attach(ARuntime);
-  // The CSV global is a heavyweight, rarely-touched data-format namespace, so
-  // defer building it until first reflective access instead of constructing it
-  // eagerly at profile-install time.
-  Runtime.Engine.RegisterLazyGlobal('CSV', MaterializeCSV, dtLet);
+  FCSVModule := TGocciaRuntimeNamespaceModuleRegistration.Create(Runtime,
+    'goccia:csv',
+    MaterializeCSV);
 end;
 
 function TGocciaCSVRuntimeExtension.MaterializeCSV: TGocciaValue;
@@ -57,6 +58,8 @@ end;
 
 procedure TGocciaCSVRuntimeExtension.Detach;
 begin
+  FCSVModule.Free;
+  FCSVModule := nil;
   FBuiltinCSV.Free;
   FBuiltinCSV := nil;
   inherited;

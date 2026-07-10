@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-- **Engine/runtime split** — `TGocciaEngine` orchestrates parsing, execution, core language built-ins, and source text execution; `Goccia.Runtime` attaches runtime globals, file helpers, and extensions
+- **Engine/runtime split** — `TGocciaEngine` orchestrates parsing, execution, core language built-ins, and source text execution; `Goccia.Runtime` attaches runtime globals, import-only runtime modules, file helpers, and extensions
 - **Execution mode abstraction** — `TGocciaExecutor` is the abstract class; `TGocciaInterpreterExecutor` and `TGocciaBytecodeExecutor` implement it independently
 - **Shared source pipeline** — Preprocessors, lexer, parser, warning data, source maps, and AST artifacts are shared between execution modes
 - **Shared execution substrate** — Both execution modes share the same value types, core scope model, runtime extension mechanism, and mark-and-sweep GC
@@ -13,7 +13,7 @@
 
 ## Overview
 
-GocciaScript has two execution modes: interpreter mode (tree-walk over the AST) and bytecode mode (`TGocciaVM`). A single `TGocciaEngine` class orchestrates both, delegating execution to a pluggable `TGocciaExecutor`. Both execution modes share the same source pipeline, value system, core language built-ins, and garbage collector. Runtime globals are attached through runtime extensions; see [Main Layers](#main-layers) for the `Goccia.Engine` / `Goccia.Runtime` split. See [Bytecode VM](bytecode-vm.md) for the bytecode executor's architecture.
+GocciaScript has two execution modes: interpreter mode (tree-walk over the AST) and bytecode mode (`TGocciaVM`). A single `TGocciaEngine` class orchestrates both, delegating execution to a pluggable `TGocciaExecutor`. Both execution modes share the same source pipeline, value system, core language built-ins, and garbage collector. Runtime globals and import-only runtime modules are attached through runtime extensions; see [Main Layers](#main-layers) for the `Goccia.Engine` / `Goccia.Runtime` split. See [Bytecode VM](bytecode-vm.md) for the bytecode executor's architecture.
 
 The source pipeline public API is `TGocciaSourcePipeline` in `Goccia.SourcePipeline`. `Parse` accepts source text plus `TGocciaSourcePipelineOptions` (preprocessors, compatibility flag set, unsupported-feature warning policy, and source type) and returns an owning `TGocciaSourcePipelineResult` containing the AST, generated-source lines, source map, timings, and warnings as data. Narrow source-pipeline entry points cover module source, dynamic `Function` validation/wrapper parsing, and expression fragments so hosts do not construct or configure `TGocciaParser` directly. Embedders that want to run source should continue using `TGocciaEngine.Execute` or the `RunScript*` helpers; direct source-pipeline use is for hosts that need parse artifacts, such as bytecode compilation paths.
 
@@ -53,7 +53,7 @@ Source -> Preprocessors (optional, e.g. JSX) -> Lexer -> Parser -> Compiler -> G
 
 For **tree-walk execution**, see [Interpreter](interpreter.md); for **bytecode execution**, see [Bytecode VM](bytecode-vm.md). For **canonical terminology**, see [GocciaScript Context](../CONTEXT.md). For **recurring implementation patterns** and Define vs Assign implementation details, see [Core patterns](core-patterns.md).
 
-Source type belongs to the `SourceType` property on `TGocciaEngine`, because script source and module source change language execution (`this`, import metadata, and top-level scope lifetime). File names ending in `.mjs` infer module source unless an explicit source type is provided. `TGocciaRuntimeCore` may be attached to an engine, but it does not decide the entry file's source type. File-backed convenience APIs and the default filesystem module content provider live in `Goccia.Runtime`; runtime globals are added by installing concrete `TGocciaRuntimeExtension` classes or by applying a profile such as `ApplyLoaderRuntimeProfile`. Engine APIs accept source text or caller-provided `TStringList` instances. CLI hosts may still read their entry file or stdin before constructing the engine, as `GocciaScriptLoaderBare` does, but that file read is outside the engine API and does not attach runtime globals.
+Source type belongs to the `SourceType` property on `TGocciaEngine`, because script source and module source change language execution (`this`, import metadata, and top-level scope lifetime). File names ending in `.mjs` infer module source unless an explicit source type is provided. `TGocciaRuntimeCore` may be attached to an engine, but it does not decide the entry file's source type. File-backed convenience APIs and the default filesystem module content provider live in `Goccia.Runtime`; runtime globals and import-only runtime modules are added by installing concrete `TGocciaRuntimeExtension` classes or by applying a profile such as `ApplyLoaderRuntimeProfile`. Engine APIs accept source text or caller-provided `TStringList` instances. CLI hosts may still read their entry file or stdin before constructing the engine, as `GocciaScriptLoaderBare` does, but that file read is outside the engine API and does not attach runtime globals or runtime modules.
 
 ## Design Direction
 

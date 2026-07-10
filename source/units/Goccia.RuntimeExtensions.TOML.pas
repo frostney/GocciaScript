@@ -10,12 +10,14 @@ uses
   Goccia.Builtins.TOML,
   Goccia.Modules,
   Goccia.Runtime,
+  Goccia.RuntimeExtensions.NamespaceModule,
   Goccia.Values.Primitives;
 
 type
   TGocciaTOMLRuntimeExtension = class(TGocciaRuntimeExtension)
   private
     FBuiltinTOML: TGocciaTOMLBuiltin;
+    FTOMLModule: TGocciaRuntimeNamespaceModuleRegistration;
     function MaterializeTOML: TGocciaValue;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
@@ -45,8 +47,9 @@ procedure TGocciaTOMLRuntimeExtension.Attach(
   const ARuntime: TGocciaRuntimeCore);
 begin
   inherited Attach(ARuntime);
-  // Defer building the TOML namespace until first reflective access.
-  Runtime.Engine.RegisterLazyGlobal('TOML', MaterializeTOML, dtLet);
+  FTOMLModule := TGocciaRuntimeNamespaceModuleRegistration.Create(Runtime,
+    'goccia:toml',
+    MaterializeTOML);
 end;
 
 function TGocciaTOMLRuntimeExtension.MaterializeTOML: TGocciaValue;
@@ -59,6 +62,8 @@ end;
 
 procedure TGocciaTOMLRuntimeExtension.Detach;
 begin
+  FTOMLModule.Free;
+  FTOMLModule := nil;
   FBuiltinTOML.Free;
   FBuiltinTOML := nil;
   inherited;

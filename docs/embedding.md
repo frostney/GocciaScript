@@ -5,12 +5,12 @@
 
 ## Executive Summary
 
-- **Quick start** — `TGocciaRuntime.Create(...)` creates the runtime layer for file loading and runtime extension installation; apply a runtime profile or install concrete runtime extensions for runtime globals. `TGocciaEngine.Create(...)` remains available for core-language-only embedders and requires an explicit executor (`TGocciaInterpreterExecutor` for tree-walk or `TGocciaBytecodeExecutor` for bytecode VM)
+- **Quick start** — `TGocciaRuntime.Create(...)` creates the runtime layer for file loading and runtime extension installation; apply a runtime profile or install concrete runtime extensions for runtime globals and `goccia:` runtime modules. `TGocciaEngine.Create(...)` remains available for core-language-only embedders and requires an explicit executor (`TGocciaInterpreterExecutor` for tree-walk or `TGocciaBytecodeExecutor` for bytecode VM)
 - **Sandboxing** — Choose runtime extensions and tool-specific runtime APIs explicitly; inject custom globals via `DefineLexicalBinding`; enforce execution limits via timeout or instruction cap
 - **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, and global modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
 
-GocciaScript is designed to be embedded in FreePascal applications. `TGocciaRuntime` is the embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, `URL`, JSON5, TOML, YAML, CSV/TSV, and SemVer usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals.
+GocciaScript is designed to be embedded in FreePascal applications. `TGocciaRuntime` is the embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, and `URL`, plus import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, and `goccia:semver`, usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals or runtime modules.
 
 ## Quick Start
 
@@ -29,13 +29,13 @@ finally
 end;
 ```
 
-For files, load `app.js` into the `Source` list, pass the real filename to `TGocciaRuntime.Create('app.js', Source)`, and apply the runtime profile or runtime extensions your host needs before executing. Use `TGocciaEngine.RunScript*` only for core-language scripts that do not need runtime file loading or runtime globals.
+For files, load `app.js` into the `Source` list, pass the real filename to `TGocciaRuntime.Create('app.js', Source)`, and apply the runtime profile or runtime extensions your host needs before executing. Use `TGocciaEngine.RunScript*` only for core-language scripts that do not need runtime file loading, runtime globals, or `goccia:` runtime modules.
 
 ## Engine API
 
 ### Class Methods (One-Shot Execution)
 
-These helpers create, execute, and clean up in a single call. The `TGocciaEngine` methods create a core-language-only engine. The `TGocciaRuntime` methods attach the runtime layer for file loading, but they do not apply a runtime profile; install runtime extensions explicitly when scripts need runtime globals such as `console`, `fetch`, `URL`, JSON5, TOML, YAML, CSV/TSV, or SemVer.
+These helpers create, execute, and clean up in a single call. The `TGocciaEngine` methods create a core-language-only engine. The `TGocciaRuntime` methods attach the runtime layer for file loading, but they do not apply a runtime profile; install runtime extensions explicitly when scripts need runtime globals such as `console`, `fetch`, and `URL`, or import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, or `goccia:semver`.
 
 | Method | Description |
 |--------|-------------|
@@ -445,7 +445,7 @@ The CLI hosts based on `TGocciaCLIApplication` (ScriptLoader, TestRunner, Benchm
 
 ## Built-in Registration
 
-Core language built-ins (Math, Object, Array, JSON, Promise, Temporal, typed arrays, etc.) are registered by `TGocciaEngine`. Runtime globals that are not part of the language core (Console, CSV, JSON5, JSONL, TOML, TSV, YAML, TextEncoder/TextDecoder, URL, fetch, performance, SemVer) are provided by concrete runtime units. Hosts can call `ApplyLoaderRuntimeProfile` for the ordinary CLI runtime surface or install only the extension classes they need for a smaller runtime surface.
+Core language built-ins (Math, Object, Array, JSON, Promise, Temporal, typed arrays, etc.) are registered by `TGocciaEngine`. Runtime globals that are not part of the language core (Console, TextEncoder/TextDecoder, URL, fetch, performance, etc.) and import-only runtime modules (`goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, `goccia:semver`) are provided by concrete runtime units. Hosts can call `ApplyLoaderRuntimeProfile` for the ordinary CLI runtime surface or install only the extension classes they need for a smaller runtime surface. The `goccia:` modules expose named exports only; callers can use namespace imports such as `import * as CSV from "goccia:csv"` when they want namespace-style access.
 
 When you already have an engine, pass it to the runtime constructor:
 
@@ -474,7 +474,7 @@ Runtime extensions are ordinary Pascal classes installed on `TGocciaRuntimeCore`
 
 | Extension/profile | Provides | Notes |
 |------|----------|-------|
-| `ApplyLoaderRuntimeProfile` | ordinary CLI runtime surface: console, data modules, text assets, performance, text encoding, URL/fetch, SemVer, and related runtime globals | Used by ScriptLoader and REPL |
+| `ApplyLoaderRuntimeProfile` | ordinary CLI runtime surface: console, `goccia:` data-format/SemVer modules, text assets, performance, text encoding, URL/fetch, and related runtime globals | Used by ScriptLoader and REPL |
 | `TGocciaTestingLibraryRuntimeExtension` | `describe`, `test`, `expect` | Testing framework; TestRunner installs this through `ApplyTestRunnerRuntimeProfile` |
 | `TGocciaBenchmarkRuntimeExtension` | `suite`, `bench` | Benchmark framework; BenchmarkRunner installs this through `ApplyBenchmarkRunnerRuntimeProfile` |
 | `TGocciaFFIRuntimeExtension` | `FFI.open`, `FFILibrary`, `FFIPointer` | Native shared-library FFI; CLI tools install this for `--unsafe-ffi` or `"unsafe-ffi": true` in config |
@@ -499,7 +499,7 @@ finally
 end;
 ```
 
-Runtime globals can be reduced by installing only a concrete extension, for example `Runtime.Install(TGocciaConsoleRuntimeExtension.Create)`.
+Runtime globals and runtime modules can be reduced by installing only concrete extensions, for example `Runtime.Install(TGocciaConsoleRuntimeExtension.Create)`.
 
 ### Preprocessors and Compatibility
 
@@ -980,7 +980,7 @@ For CLI tools, use `TGocciaCLIApplication` instead, which adds argument parsing,
 2. `uses Goccia.Runtime, Goccia.Values.Primitives;`
 3. Create `TGocciaRuntime.Create(...)` for the runtime layer and file loading
 4. Use `Runtime.Engine` for engine-level options such as ASI, source type, parser diagnostic policy, and compatibility flags
-5. Choose your runtime surface and runtime globals via runtime profiles or runtime extensions
+5. Choose your runtime surface, runtime globals, and `goccia:` modules via runtime profiles or runtime extensions
 6. Inject custom globals via `Runtime.Engine.Interpreter.GlobalScope.DefineLexicalBinding(...)`
 7. Handle exceptions from `Goccia.Error`
 8. Free the runtime when done; it owns and frees the engine only when it created the engine itself, or when you used an ownership-transfer overload such as `TGocciaRuntime.Create(Engine, True)`. `TGocciaRuntime.Create(Engine)` is non-owning by default, so embedders wrapping an existing engine must also free that engine.

@@ -1,6 +1,6 @@
-const hasJSONL = typeof JSONL !== "undefined";
+import * as JSONL from "goccia:jsonl";
 
-describe.runIf(hasJSONL)("JSONL.parseChunk", () => {
+describe("JSONL.parseChunk", () => {
   test("parses complete records and leaves an incomplete record unread", () => {
     const input = '{"id":1}\n{"id":2}\n{"id":';
     const secondNewline = input.indexOf("\n", input.indexOf("\n") + 1);

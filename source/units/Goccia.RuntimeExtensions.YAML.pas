@@ -10,12 +10,14 @@ uses
   Goccia.Builtins.YAML,
   Goccia.Modules,
   Goccia.Runtime,
+  Goccia.RuntimeExtensions.NamespaceModule,
   Goccia.Values.Primitives;
 
 type
   TGocciaYAMLRuntimeExtension = class(TGocciaRuntimeExtension)
   private
     FBuiltinYAML: TGocciaYAMLBuiltin;
+    FYAMLModule: TGocciaRuntimeNamespaceModuleRegistration;
     function MaterializeYAML: TGocciaValue;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
@@ -46,8 +48,9 @@ procedure TGocciaYAMLRuntimeExtension.Attach(
   const ARuntime: TGocciaRuntimeCore);
 begin
   inherited Attach(ARuntime);
-  // Defer building the YAML namespace until first reflective access.
-  Runtime.Engine.RegisterLazyGlobal('YAML', MaterializeYAML, dtLet);
+  FYAMLModule := TGocciaRuntimeNamespaceModuleRegistration.Create(Runtime,
+    'goccia:yaml',
+    MaterializeYAML);
 end;
 
 function TGocciaYAMLRuntimeExtension.MaterializeYAML: TGocciaValue;
@@ -60,6 +63,8 @@ end;
 
 procedure TGocciaYAMLRuntimeExtension.Detach;
 begin
+  FYAMLModule.Free;
+  FYAMLModule := nil;
   FBuiltinYAML.Free;
   FBuiltinYAML := nil;
   inherited;

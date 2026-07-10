@@ -69,6 +69,15 @@ type CompatAcrossAppsCase = {
   benchNeedle: string;
 };
 
+function microbenchScript(lines: string[]): string {
+  return [
+    'import("goccia:microbench").then(({ bench, group }) => {',
+    ...lines.map((line) => `  ${line}`),
+    "});",
+    "",
+  ].join("\n");
+}
+
 async function runCompatAcrossAppsCase(testCase: CompatAcrossAppsCase): Promise<void> {
   const tmp = makeTmp();
   try {
@@ -421,13 +430,11 @@ console.log("Per-file ASI config across all apps...");
     );
     writeFileSync(
       join(asiDir, "bench.js"),
-      [
-        'suite("asi", () => {',
-        '  bench("sum", {',
-        "    run: () => 1 + 1",
-        "  })",
+      microbenchScript([
+        'group("asi", () => {',
+        '  bench("sum", () => 1 + 1)',
         "})",
-      ].join("\n") + "\n",
+      ]),
     );
 
     // Strict subdirectory (no config)
@@ -520,16 +527,14 @@ console.log("Per-file unsafe-ffi config across runtime apps...");
     );
     writeFileSync(
       join(tmp, "bench.js"),
-      [
-        'suite("unsafe-ffi", () => {',
-        '  bench("global", {',
-        "    run: () => {",
+      microbenchScript([
+        'group("unsafe-ffi", () => {',
+        '  bench("global", () => {',
         '      if (typeof FFI !== "object") throw new Error("FFI missing");',
         "      return FFI.suffix;",
-        "    },",
         "  });",
         "});",
-      ].join("\n") + "\n",
+      ]),
     );
 
     const loaderNoConfig = await $`${LOADER} --print ${join(noConfigDir, "test.js")} 2>&1`.text();
@@ -597,16 +602,14 @@ console.log("Per-file unsafe-ffi config across runtime apps...");
     for (const name of ["a", "b"]) {
       writeFileSync(
         join(parallelBenchDir, `${name}.js`),
-        [
-          `suite("unsafe-ffi-${name}", () => {`,
-          '  bench("global", {',
-          "    run: () => {",
+        microbenchScript([
+          `group("unsafe-ffi-${name}", () => {`,
+          '  bench("global", () => {',
           '      if (typeof FFI !== "object") throw new Error("FFI missing");',
           "      return FFI.suffix;",
-          "    },",
           "  });",
           "});",
-        ].join("\n") + "\n",
+        ]),
       );
     }
     const benchParallel = Bun.spawnSync(
@@ -653,14 +656,12 @@ for (const testCase of [
       "while (false) {}",
       'test("warning recovery", () => { expect(2 + 2).toBe(4); });',
     ].join("\n") + "\n",
-    benchSource: [
+    benchSource: microbenchScript([
       "while (false) {}",
-      'suite("warning", () => {',
-      '  bench("recovery", {',
-      "    run: () => 1 + 1,",
-      "  });",
+      'group("warning", () => {',
+      '  bench("recovery", () => 1 + 1);',
       "});",
-    ].join("\n") + "\n",
+    ]),
     benchNeedle: "warning",
   },
   {
@@ -676,14 +677,12 @@ for (const testCase of [
       "  });",
       "});",
     ].join("\n") + "\n",
-    benchSource: [
+    benchSource: microbenchScript([
       "var z = 1;",
-      'suite("var", () => {',
-      '  bench("add", {',
-      "    run: () => z + 1,",
-      "  });",
+      'group("var", () => {',
+      '  bench("add", () => z + 1);',
       "});",
-    ].join("\n") + "\n",
+    ]),
     benchNeedle: "var",
   },
   {
@@ -700,17 +699,15 @@ for (const testCase of [
       "  });",
       "});",
     ].join("\n") + "\n",
-    benchSource: [
-      'suite("for", () => {',
-      '  bench("count", {',
-      "    run: () => {",
+    benchSource: microbenchScript([
+      'group("for", () => {',
+      '  bench("count", () => {',
       "      let s = 0;",
       "      for (let i = 0; i < 10; i++) s += i;",
       "      return s;",
-      "    },",
       "  });",
       "});",
-    ].join("\n") + "\n",
+    ]),
     benchNeedle: "for",
   },
   {
@@ -731,10 +728,9 @@ for (const testCase of [
       "  });",
       "});",
     ].join("\n") + "\n",
-    benchSource: [
-      'suite("while", () => {',
-      '  bench("count", {',
-      "    run: () => {",
+    benchSource: microbenchScript([
+      'group("while", () => {',
+      '  bench("count", () => {',
       "      let s = 0;",
       "      let i = 0;",
       "      while (i < 10) {",
@@ -742,10 +738,9 @@ for (const testCase of [
       "        i++;",
       "      }",
       "      return s;",
-      "    },",
       "  });",
       "});",
-    ].join("\n") + "\n",
+    ]),
     benchNeedle: "while",
   },
   {
@@ -754,13 +749,11 @@ for (const testCase of [
     loaderSource: '"1" == 1;\n',
     loaderExpectedLine: "true",
     testRunnerSource: 'test("loose equality", () => { expect("1" == 1).toBe(true); });\n',
-    benchSource: [
-      'suite("loose", () => {',
-      '  bench("eq", {',
-      '    run: () => "1" == 1,',
-      "  });",
+    benchSource: microbenchScript([
+      'group("loose", () => {',
+      '  bench("eq", () => "1" == 1);',
       "});",
-    ].join("\n") + "\n",
+    ]),
     benchNeedle: "loose",
   },
   {
@@ -769,14 +762,12 @@ for (const testCase of [
     loaderSource: nonStrictSource,
     loaderExpectedLine: "7",
     testRunnerSource: nonStrictSource + 'test("nonstrict", () => { expect(f(1, 2)).toBe(7); });\n',
-    benchSource: [
+    benchSource: microbenchScript([
       nonStrictSource,
-      'suite("nonstrict", () => {',
-      '  bench("call", {',
-      "    run: () => f(1, 2),",
-      "  });",
+      'group("nonstrict", () => {',
+      '  bench("call", () => f(1, 2));',
       "});",
-    ].join("\n") + "\n",
+    ]),
     benchNeedle: "nonstrict",
   },
 ]) {
@@ -1394,14 +1385,12 @@ console.log("--config works on BenchmarkRunner...");
     writeFileSync(join(cfgDir, "goccia.toml"), 'compat-asi = true\n');
     writeFileSync(
       join(tmp, "bench.js"),
-      [
+      microbenchScript([
         // No semicolons — proves --config-supplied ASI is in effect.
-        'suite("config-flag", () => {',
-        '  bench("sum", {',
-        "    run: () => 1 + 1",
-        "  })",
+        'group("config-flag", () => {',
+        '  bench("sum", () => 1 + 1)',
         "})",
-      ].join("\n") + "\n",
+      ]),
     );
 
     const proc = Bun.spawnSync(

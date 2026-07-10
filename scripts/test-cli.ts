@@ -67,11 +67,11 @@ console.log("Stdin smoke (TestRunner)...");
 
 console.log("Stdin smoke (BenchmarkRunner)...");
 {
-  const src = `suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n`;
-  const out = await $`echo ${src} | ${BENCHRUNNER} --no-progress 2>&1`.text();
+  const src = `import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n`;
+  const out = await $`echo ${src} | ${BENCHRUNNER} --source-type=module --no-progress 2>&1`.text();
   if (!out.includes("sum")) throw new Error(`BenchmarkRunner stdin expected "sum" benchmark, got: ${out}`);
 
-  const outDash = await $`echo ${src} | ${BENCHRUNNER} - --no-progress 2>&1`.text();
+  const outDash = await $`echo ${src} | ${BENCHRUNNER} - --source-type=module --no-progress 2>&1`.text();
   if (!outDash.includes("sum")) throw new Error(`BenchmarkRunner stdin ("-" arg) expected "sum" benchmark, got: ${outDash}`);
 }
 

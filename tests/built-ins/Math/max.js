@@ -20,6 +20,24 @@ test("Math.max", () => {
   expect(Math.max(Infinity, -Infinity)).toBe(Infinity);
 });
 
+test("Math.max coerces all arguments before returning NaN", () => {
+  let calls = 0;
+  const coercible = {
+    valueOf: () => {
+      calls += 1;
+      return 1;
+    },
+  };
+
+  expect(Math.max(NaN, coercible)).toBeNaN();
+  expect(calls).toBe(1);
+});
+
+test("Math.max treats positive zero as greater than negative zero", () => {
+  expect(Object.is(Math.max(-0, +0), +0)).toBe(true);
+  expect(Object.is(Math.max(+0, -0), +0)).toBe(true);
+});
+
 test("Math.max has correct name and length", () => {
   expect(Math.max.name).toBe("max");
   expect(Math.max.length).toBe(2);

@@ -10,7 +10,6 @@ uses
   TimingUtils,
 
   Goccia.Application,
-  Goccia.Arguments.Collection,
   Goccia.Benchmark.Reporter,
   Goccia.Builtins.Benchmark,
   Goccia.Bytecode.Module,
@@ -285,24 +284,13 @@ function RunRegisteredBenchmarks(const AEngine: TGocciaEngine;
   const ADeterministicProfile: Boolean): TGocciaObjectValue;
 var
   Benchmark: TGocciaBenchmark;
-  EmptyArgs: TGocciaArgumentsCollection;
   Value: TGocciaValue;
 begin
   Benchmark := RuntimeBenchmark(AEngine);
   if not Assigned(Benchmark) then
     Exit(nil);
 
-  EmptyArgs := TGocciaArgumentsCollection.Create;
-  try
-    if ADeterministicProfile then
-      Value := Benchmark.RunDeterministicProfile(EmptyArgs,
-        TGocciaUndefinedLiteralValue.UndefinedValue)
-    else
-      Value := Benchmark.RunBenchmarks(EmptyArgs,
-        TGocciaUndefinedLiteralValue.UndefinedValue);
-  finally
-    EmptyArgs.Free;
-  end;
+  Value := Benchmark.RunForHost(ADeterministicProfile);
 
   if Value is TGocciaObjectValue then
     Result := TGocciaObjectValue(Value)
