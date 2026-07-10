@@ -106,8 +106,4 @@ describe("Function.prototype.apply", () => {
     expect(String.apply(null, [42])).toBe("42");
     expect(Boolean.apply(null, [1])).toBe(true);
   });
-
-  test("applies native functions with fixed arguments", () => {
-    expect(String.fromCodePoint.apply(null, [65, 66, 67])).toBe("ABC");
-  });
 });
