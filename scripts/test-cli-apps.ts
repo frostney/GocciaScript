@@ -1141,6 +1141,96 @@ console.log("Bare Loader: bytecode --test262-host eval var declarations shadow o
     throw new Error(`Bare bytecode sloppy eval upvalue shadow probe got: ${proc.stdout.toString()}`);
 }
 
+console.log("Bare Loader: --test262-host generator parameter eval uses the parameter var environment...");
+{
+  const source = [
+    "var x = 'outside';",
+    "var declaredBefore, declaredAfter;",
+    "function* declared(",
+    "  _ = declaredBefore = function() { return x; },",
+    "  __ = (eval('var x = \"inside\";'), declaredAfter = function() { return x; })",
+    ") {}",
+    "declared().next();",
+    "print([declaredBefore(), declaredAfter(), x].join(','));",
+    "var expressionBefore, expressionAfter;",
+    "(function*(",
+    "  _ = expressionBefore = function() { return x; },",
+    "  ...[__ = (eval('var x = \"inside\";'), expressionAfter = function() { return x; })]",
+    ") {})().next();",
+    "print([expressionBefore(), expressionAfter(), x].join(','));",
+    "var methodBefore, methodAfter;",
+    "({",
+    "  *method(",
+    "    _ = methodBefore = function() { return x; },",
+    "    ...[__ = (eval('var x = \"inside\";'), methodAfter = function() { return x; })]",
+    "  ) {}",
+    "}).method().next();",
+    "print([methodBefore(), methodAfter(), x].join(','));",
+    "",
+  ].join("\n");
+  const expected = [
+    "inside,inside,outside",
+    "inside,inside,outside",
+    "inside,inside,outside",
+  ].join("\n");
+  for (const mode of [
+    { label: "interpreted", args: [BARE] },
+    { label: "bytecode", args: [BARE, "--mode=bytecode"] },
+  ]) {
+    const proc = Bun.spawnSync([
+      ...mode.args,
+      "--test262-host",
+      "--compat-var",
+      "--compat-function",
+      "--compat-non-strict-mode",
+    ], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode.label} generator parameter eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Bare ${mode.label} generator parameter eval probe got: ${proc.stdout.toString()}`);
+  }
+}
+
+console.log("Bare Loader: --test262-host Annex B eval preserves with-object properties...");
+{
+  const source = [
+    "function checkAnnexBEval() {",
+    "  function g() { return 'outer-g'; }",
+    "  var object = { g: function() { return 'with-g'; } };",
+    "  with (object) {",
+    "    eval('{ function g() { return \"eval-g\"; } }');",
+    "  }",
+    "  print([g(), object.g()].join(','));",
+    "}",
+    "checkAnnexBEval();",
+    "",
+  ].join("\n");
+  for (const mode of [
+    { label: "interpreted", args: [BARE] },
+    { label: "bytecode", args: [BARE, "--mode=bytecode"] },
+  ]) {
+    const proc = Bun.spawnSync([
+      ...mode.args,
+      "--test262-host",
+      "--compat-var",
+      "--compat-function",
+      "--compat-non-strict-mode",
+    ], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode.label} Annex B eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== "eval-g,with-g")
+      throw new Error(`Bare ${mode.label} Annex B eval probe got: ${proc.stdout.toString()}`);
+  }
+}
+
 console.log("Bare Loader: --test262-host eval reports strict delete identifier as SyntaxError...");
 {
   const source = [

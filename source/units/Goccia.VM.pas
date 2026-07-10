@@ -1507,7 +1507,11 @@ begin
     if not TryGetOwnBinding(Name, Binding) then
       Continue;
     Parent.DefineVariableBinding(Name, Binding.Value, True, True);
-    DeleteBinding(Name);
+    // ES2026 §19.2.1.3 EvalDeclarationInstantiation creates deletable
+    // bindings in variableEnv. Remove only this adapter's temporary binding;
+    // virtual DeleteBinding would resolve a same-named with-object property.
+    if inherited DeleteBinding(Name) then
+      MarkDeletedVarBinding(Name);
   end;
 end;
 
@@ -12955,6 +12959,8 @@ begin
   SetLocalRaw(0, AThisValue);
   for I := 0 to FArgCount - 1 do
     SetLocalRaw(I + 1, FArguments[I]);
+  // ES2026 §10.2.11 FunctionDeclarationInstantiation steps 19-20: sloppy
+  // parameter expressions need a separate var environment for direct eval.
   if (ATemplate.DirectEvalEnvironmentCount > 0) and
      not TemplateUsesGlobalEvalEnvironment(ATemplate) then
     EnsureCurrentDynamicVarScope;
@@ -13166,8 +13172,6 @@ begin
       Frame, Template, PrevCovLine, ProfileEntryTimestamp);
     if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
       FGlobalScope := AClosure.GlobalScope;
-    if Assigned(AClosure) then
-      FCurrentDynamicVarScope := AClosure.DynamicVarScope;
     if Assigned(FPendingNewTarget) then
       FCurrentNewTarget := FPendingNewTarget;
     FPendingNewTarget := nil;
