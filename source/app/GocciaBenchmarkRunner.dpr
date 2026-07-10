@@ -121,6 +121,8 @@ begin
 
         Entry.Suite := SingleResult.GetProperty('suite').ToStringLiteral.Value;
         Entry.Name := SingleResult.GetProperty(PROP_NAME).ToStringLiteral.Value;
+        Entry.SummaryScope := Round(SingleResult.GetProperty('summaryScope').ToNumberLiteral.Value);
+        Entry.BoxplotScope := Round(SingleResult.GetProperty('boxplotScope').ToNumberLiteral.Value);
 
         ErrorMsg := SingleResult.GetProperty('error').ToStringLiteral.Value;
         if ErrorMsg <> 'undefined' then
@@ -144,6 +146,14 @@ begin
           Entry.TeardownMs := SingleResult.GetProperty('teardownMs').ToNumberLiteral.Value;
           Entry.MinOpsPerSec := SingleResult.GetProperty('minOpsPerSec').ToNumberLiteral.Value;
           Entry.MaxOpsPerSec := SingleResult.GetProperty('maxOpsPerSec').ToNumberLiteral.Value;
+          Entry.SampleCount := Round(SingleResult.GetProperty('sampleCount').ToNumberLiteral.Value);
+          Entry.MinSampleMs := SingleResult.GetProperty('minSampleMs').ToNumberLiteral.Value;
+          Entry.P25Ms := SingleResult.GetProperty('p25Ms').ToNumberLiteral.Value;
+          Entry.MedianMs := SingleResult.GetProperty('medianMs').ToNumberLiteral.Value;
+          Entry.P75Ms := SingleResult.GetProperty('p75Ms').ToNumberLiteral.Value;
+          Entry.P99Ms := SingleResult.GetProperty('p99Ms').ToNumberLiteral.Value;
+          Entry.P999Ms := SingleResult.GetProperty('p999Ms').ToNumberLiteral.Value;
+          Entry.MaxSampleMs := SingleResult.GetProperty('maxSampleMs').ToNumberLiteral.Value;
         end;
 
         MutableFileResult.Entries[I] := Entry;

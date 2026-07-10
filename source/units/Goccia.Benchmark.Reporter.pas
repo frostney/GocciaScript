@@ -21,6 +21,16 @@ type
     TeardownMs: Double;
     MinOpsPerSec: Double;
     MaxOpsPerSec: Double;
+    SampleCount: Integer;
+    MinSampleMs: Double;
+    P25Ms: Double;
+    MedianMs: Double;
+    P75Ms: Double;
+    P99Ms: Double;
+    P999Ms: Double;
+    MaxSampleMs: Double;
+    SummaryScope: Integer;
+    BoxplotScope: Integer;
     Error: string;
   end;
 
@@ -53,6 +63,8 @@ type
     procedure RenderText;
     procedure RenderCSV;
     procedure RenderJSON;
+    procedure RenderScopedViews(const AFile: TBenchmarkFileResult;
+      const AIndent: string);
 
     function GetFileResult(AIndex: Integer): TBenchmarkFileResult;
     function FormatOpsPerSec(const AOps: Double): string;
@@ -102,6 +114,107 @@ begin
   else
     Result := (AEntry.Error = '') and IsPositiveFinite(AEntry.OpsPerSec) and
       IsPositiveFinite(AEntry.MeanMs) and (AEntry.Iterations > 0);
+end;
+
+function FormatSampleTime(const AMilliseconds: Double): string;
+var
+  FormatSettings: TFormatSettings;
+begin
+  FormatSettings := DefaultFormatSettings;
+  FormatSettings.DecimalSeparator := '.';
+  if AMilliseconds < 0.001 then
+    Result := SysUtils.Format('%.2f ns', [AMilliseconds * 1000000],
+      FormatSettings)
+  else if AMilliseconds < 1 then
+    Result := SysUtils.Format('%.2f us', [AMilliseconds * 1000],
+      FormatSettings)
+  else
+    Result := SysUtils.Format('%.2f ms', [AMilliseconds], FormatSettings);
+end;
+
+function ScaleSample(const AValue, AMinimum, AMaximum: Double;
+  const AWidth: Integer): Integer;
+begin
+  if AMaximum <= AMinimum then
+    Exit(0);
+  Result := Round(((AValue - AMinimum) / (AMaximum - AMinimum)) *
+    (AWidth - 1));
+  if Result < 0 then
+    Result := 0
+  else if Result >= AWidth then
+    Result := AWidth - 1;
+end;
+
+function BuildInterquartileBar(const AEntry: TBenchmarkEntry;
+  const AMinimum, AMaximum: Double): string;
+const
+  BAR_WIDTH = 24;
+var
+  I, MinimumOffset, P25Offset, MedianOffset, P75Offset,
+    P99Offset: Integer;
+begin
+  Result := StringOfChar(' ', BAR_WIDTH);
+  MinimumOffset := ScaleSample(AEntry.MinSampleMs, AMinimum, AMaximum,
+    BAR_WIDTH) + 1;
+  P25Offset := ScaleSample(AEntry.P25Ms, AMinimum, AMaximum, BAR_WIDTH) + 1;
+  MedianOffset := ScaleSample(AEntry.MedianMs, AMinimum, AMaximum,
+    BAR_WIDTH) + 1;
+  P75Offset := ScaleSample(AEntry.P75Ms, AMinimum, AMaximum, BAR_WIDTH) + 1;
+  P99Offset := ScaleSample(AEntry.P99Ms, AMinimum, AMaximum, BAR_WIDTH) + 1;
+
+  for I := MinimumOffset to P99Offset do
+    Result[I] := '-';
+  for I := P25Offset to P75Offset do
+    Result[I] := '=';
+  Result[MinimumOffset] := '|';
+  Result[P99Offset] := '|';
+  if P25Offset = P75Offset then
+    Result[P25Offset] := '|'
+  else
+  begin
+    Result[P25Offset] := '[';
+    Result[P75Offset] := ']';
+    Result[MedianOffset] := '|';
+  end;
+end;
+
+function BenchmarkDisplayName(const AEntry: TBenchmarkEntry): string;
+begin
+  if AEntry.Suite = '' then
+    Result := AEntry.Name
+  else
+    Result := AEntry.Suite + ' > ' + AEntry.Name;
+end;
+
+function FindFastestSummaryEntry(const AFile: TBenchmarkFileResult;
+  const AScope: Integer): Integer;
+var
+  I: Integer;
+begin
+  Result := -1;
+  for I := 0 to Length(AFile.Entries) - 1 do
+    if (AFile.Entries[I].SummaryScope = AScope) and
+      (AFile.Entries[I].Error = '') and (AFile.Entries[I].MedianMs > 0) and
+      ((Result < 0) or
+       (AFile.Entries[I].MedianMs < AFile.Entries[Result].MedianMs)) then
+      Result := I;
+end;
+
+procedure CalculateRelativeComparison(const AEntry, AFastest: TBenchmarkEntry;
+  out ARatio, ALowRatio, AHighRatio: Double; out AInconclusive: Boolean);
+begin
+  ARatio := AEntry.MedianMs / AFastest.MedianMs;
+  if (AFastest.P75Ms > 0) and (AFastest.P25Ms > 0) then
+  begin
+    ALowRatio := AEntry.P25Ms / AFastest.P75Ms;
+    AHighRatio := AEntry.P75Ms / AFastest.P25Ms;
+  end
+  else
+  begin
+    ALowRatio := ARatio;
+    AHighRatio := ARatio;
+  end;
+  AInconclusive := (ALowRatio <= 1) and (AHighRatio >= 1);
 end;
 
 function FormatJSONNumber(const AValue: Double;
@@ -195,6 +308,112 @@ begin
   Result := TGocciaCSVStringifier.EscapeField(S, ',');
 end;
 
+procedure TBenchmarkReporter.RenderScopedViews(
+  const AFile: TBenchmarkFileResult; const AIndent: string);
+var
+  Scope, MaximumBoxplotScope, MaximumSummaryScope, I, Count, Rank,
+    CandidateIndex, FastestIndex: Integer;
+  MinimumSample, MaximumSample, Ratio, LowRatio, HighRatio: Double;
+  Inconclusive: Boolean;
+  Printed: array of Boolean;
+begin
+  MaximumBoxplotScope := 0;
+  MaximumSummaryScope := 0;
+  for I := 0 to Length(AFile.Entries) - 1 do
+  begin
+    if AFile.Entries[I].BoxplotScope > MaximumBoxplotScope then
+      MaximumBoxplotScope := AFile.Entries[I].BoxplotScope;
+    if AFile.Entries[I].SummaryScope > MaximumSummaryScope then
+      MaximumSummaryScope := AFile.Entries[I].SummaryScope;
+  end;
+
+  for Scope := 1 to MaximumBoxplotScope do
+  begin
+    Count := 0;
+    MinimumSample := MaxDouble;
+    MaximumSample := 0;
+    for I := 0 to Length(AFile.Entries) - 1 do
+      if (AFile.Entries[I].BoxplotScope = Scope) and
+        (AFile.Entries[I].Error = '') and
+        (AFile.Entries[I].SampleCount > 0) then
+      begin
+        Inc(Count);
+        if AFile.Entries[I].MinSampleMs < MinimumSample then
+          MinimumSample := AFile.Entries[I].MinSampleMs;
+        if AFile.Entries[I].P99Ms > MaximumSample then
+          MaximumSample := AFile.Entries[I].P99Ms;
+      end;
+    if Count = 0 then
+      Continue;
+
+    FOutput.Add('');
+    FOutput.Add(AIndent + 'boxplot');
+    for I := 0 to Length(AFile.Entries) - 1 do
+      if (AFile.Entries[I].BoxplotScope = Scope) and
+        (AFile.Entries[I].Error = '') and
+        (AFile.Entries[I].SampleCount > 0) then
+        FOutput.Add(SysUtils.Format('%s  %-30s %s',
+          [AIndent, BenchmarkDisplayName(AFile.Entries[I]),
+           BuildInterquartileBar(AFile.Entries[I], MinimumSample,
+             MaximumSample)]));
+    FOutput.Add(SysUtils.Format('%s  %s .. %s (p99)',
+      [AIndent, FormatSampleTime(MinimumSample),
+       FormatSampleTime(MaximumSample)]));
+  end;
+
+  for Scope := 1 to MaximumSummaryScope do
+  begin
+    Count := 0;
+    for I := 0 to Length(AFile.Entries) - 1 do
+      if (AFile.Entries[I].SummaryScope = Scope) and
+        (AFile.Entries[I].Error = '') and
+        (AFile.Entries[I].SampleCount > 0) then
+        Inc(Count);
+    if Count < 2 then
+      Continue;
+
+    FastestIndex := FindFastestSummaryEntry(AFile, Scope);
+    if FastestIndex < 0 then
+      Continue;
+    SetLength(Printed, Length(AFile.Entries));
+    FOutput.Add('');
+    FOutput.Add(AIndent + 'summary');
+    FOutput.Add(AIndent + '  fastest: ' +
+      BenchmarkDisplayName(AFile.Entries[FastestIndex]));
+    for Rank := 0 to Count - 1 do
+    begin
+      CandidateIndex := -1;
+      for I := 0 to Length(AFile.Entries) - 1 do
+        if not Printed[I] and (AFile.Entries[I].SummaryScope = Scope) and
+          (AFile.Entries[I].Error = '') and
+          (AFile.Entries[I].SampleCount > 0) and
+          ((CandidateIndex < 0) or
+           (AFile.Entries[I].MedianMs <
+            AFile.Entries[CandidateIndex].MedianMs)) then
+          CandidateIndex := I;
+      if CandidateIndex < 0 then
+        Break;
+      Printed[CandidateIndex] := True;
+      if CandidateIndex = FastestIndex then
+        Continue;
+
+      CalculateRelativeComparison(AFile.Entries[CandidateIndex],
+        AFile.Entries[FastestIndex], Ratio, LowRatio, HighRatio,
+        Inconclusive);
+      if Inconclusive then
+        FOutput.Add(SysUtils.Format(
+          '%s  %6.2fx median (%.2fx..%.2fx IQR; inconclusive)  %s',
+          [AIndent, Ratio, LowRatio, HighRatio,
+           BenchmarkDisplayName(AFile.Entries[CandidateIndex])]))
+      else
+        FOutput.Add(SysUtils.Format(
+          '%s  %6.2fx faster (%.2fx..%.2fx IQR)        %s',
+          [AIndent, Ratio, LowRatio, HighRatio,
+           BenchmarkDisplayName(AFile.Entries[CandidateIndex])]));
+    end;
+  end;
+end;
+
 procedure TBenchmarkReporter.Render(const AFormat: TBenchmarkReportFormat);
 begin
   FOutput.Clear;
@@ -261,6 +480,17 @@ begin
         FOutput.Add(SysUtils.Format('    %-30s  range: %s .. %s ops/sec',
           ['', FormatOpsPerSec(Entry.MinOpsPerSec), FormatOpsPerSec(Entry.MaxOpsPerSec)]));
 
+      if (Entry.Error = '') and (Entry.SampleCount > 0) then
+      begin
+        FOutput.Add(SysUtils.Format(
+          '    %-30s  p75 %9s  p99 %9s  p999 %9s  (%d samples)',
+          ['', FormatSampleTime(Entry.P75Ms), FormatSampleTime(Entry.P99Ms),
+           FormatSampleTime(Entry.P999Ms), Entry.SampleCount]));
+        FOutput.Add(SysUtils.Format('    %-30s  %s',
+          ['', BuildInterquartileBar(Entry, Entry.MinSampleMs,
+            Entry.P99Ms)]));
+      end;
+
       HasSetupTeardown := (Entry.SetupMs > 0) or (Entry.TeardownMs > 0);
       if HasSetupTeardown and (Entry.Error = '') then
       begin
@@ -272,6 +502,8 @@ begin
           FOutput.Add(SysUtils.Format('    %-30s  teardown: %.4fms', ['', Entry.TeardownMs]));
       end;
     end;
+
+    RenderScopedViews(FFiles[F], '  ');
 
     TotalBenchmarks := TotalBenchmarks + FFiles[F].TotalBenchmarks;
     TotalDurationNanoseconds := TotalDurationNanoseconds + FFiles[F].DurationNanoseconds;
@@ -326,10 +558,18 @@ begin
           Line := Line + SysUtils.Format(' setup=%.4fms', [Entry.SetupMs]);
         if Entry.TeardownMs > 0 then
           Line := Line + SysUtils.Format(' teardown=%.4fms', [Entry.TeardownMs]);
+        if Entry.SampleCount > 0 then
+          Line := Line + SysUtils.Format(
+            ' p75=%s p99=%s p999=%s samples=%d %s',
+            [FormatSampleTime(Entry.P75Ms), FormatSampleTime(Entry.P99Ms),
+             FormatSampleTime(Entry.P999Ms), Entry.SampleCount,
+             BuildInterquartileBar(Entry, Entry.MinSampleMs, Entry.P99Ms)]);
 
         FOutput.Add(Line);
       end;
     end;
+
+    RenderScopedViews(FFiles[F], '');
 
     TotalBenchmarks := TotalBenchmarks + FFiles[F].TotalBenchmarks;
     TotalDurationNanoseconds := TotalDurationNanoseconds + FFiles[F].DurationNanoseconds;
@@ -345,10 +585,20 @@ end;
 
 procedure TBenchmarkReporter.RenderCSV;
 var
-  F, E: Integer;
+  F, E, FastestIndex: Integer;
   Entry: TBenchmarkEntry;
+  SummaryScope, BoxplotScope, RelativeFields: string;
+  Ratio, LowRatio, HighRatio: Double;
+  Inconclusive: Boolean;
+  CSVFormatSettings: TFormatSettings;
 begin
-  FOutput.Add('file,suite,name,ops_per_sec,variance_percentage,mean_ms,iterations,setup_ms,teardown_ms,min_ops_per_sec,max_ops_per_sec,error');
+  CSVFormatSettings := DefaultFormatSettings;
+  CSVFormatSettings.DecimalSeparator := '.';
+  FOutput.Add('file,suite,name,ops_per_sec,variance_percentage,mean_ms,' +
+    'iterations,setup_ms,teardown_ms,min_ops_per_sec,max_ops_per_sec,' +
+    'sample_count,min_sample_ms,p25_ms,median_ms,p75_ms,p99_ms,p999_ms,' +
+    'max_sample_ms,summary_scope,boxplot_scope,relative_median,' +
+    'relative_low,relative_high,relative_inconclusive,error');
 
   for F := 0 to FFileCount - 1 do
   begin
@@ -356,23 +606,57 @@ begin
     begin
       Entry := FFiles[F].Entries[E];
 
-      if Entry.Error <> '' then
-        FOutput.Add(SysUtils.Format('%s,%s,%s,,,,,,,,,%s',
-          [EscapeCSVField(FFiles[F].FileName), EscapeCSVField(Entry.Suite),
-           EscapeCSVField(Entry.Name), EscapeCSVField(Entry.Error)]))
+      if Entry.SummaryScope > 0 then
+        SummaryScope := IntToStr(Entry.SummaryScope)
       else
-        FOutput.Add(SysUtils.Format('%s,%s,%s,%.6f,%.4f,%.6f,%d,%.6f,%.6f,%.6f,%.6f,',
+        SummaryScope := '';
+      if Entry.BoxplotScope > 0 then
+        BoxplotScope := IntToStr(Entry.BoxplotScope)
+      else
+        BoxplotScope := '';
+
+      if Entry.Error <> '' then
+        FOutput.Add(EscapeCSVField(FFiles[F].FileName) + ',' +
+          EscapeCSVField(Entry.Suite) + ',' + EscapeCSVField(Entry.Name) +
+          StringOfChar(',', 17) + SummaryScope + ',' + BoxplotScope +
+          StringOfChar(',', 5) + EscapeCSVField(Entry.Error))
+      else
+      begin
+        RelativeFields := ',,,';
+        if Entry.SummaryScope > 0 then
+        begin
+          FastestIndex := FindFastestSummaryEntry(FFiles[F],
+            Entry.SummaryScope);
+          if FastestIndex >= 0 then
+          begin
+            CalculateRelativeComparison(Entry,
+              FFiles[F].Entries[FastestIndex], Ratio, LowRatio, HighRatio,
+              Inconclusive);
+            if E = FastestIndex then
+              Inconclusive := False;
+            RelativeFields := SysUtils.Format('%.6f,%.6f,%.6f,%s',
+              [Ratio, LowRatio, HighRatio,
+               LowerCase(BoolToStr(Inconclusive, True))], CSVFormatSettings);
+          end;
+        end;
+        FOutput.Add(SysUtils.Format(
+          '%s,%s,%s,%.6f,%.4f,%.6f,%d,%.6f,%.6f,%.6f,%.6f,' +
+          '%d,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%s,%s,%s,',
           [EscapeCSVField(FFiles[F].FileName), EscapeCSVField(Entry.Suite),
            EscapeCSVField(Entry.Name), Entry.OpsPerSec, Entry.VariancePercentage,
            Entry.MeanMs, Entry.Iterations, Entry.SetupMs, Entry.TeardownMs,
-           Entry.MinOpsPerSec, Entry.MaxOpsPerSec]));
+           Entry.MinOpsPerSec, Entry.MaxOpsPerSec, Entry.SampleCount,
+           Entry.MinSampleMs, Entry.P25Ms, Entry.MedianMs, Entry.P75Ms,
+           Entry.P99Ms, Entry.P999Ms, Entry.MaxSampleMs, SummaryScope,
+           BoxplotScope, RelativeFields], CSVFormatSettings));
+      end;
     end;
   end;
 end;
 
 procedure TBenchmarkReporter.RenderJSON;
 var
-  F, E: Integer;
+  F, E, FastestIndex: Integer;
   Entry: TBenchmarkEntry;
   TotalBenchmarks: Integer;
   TotalDurationNanoseconds: Int64;
@@ -383,7 +667,10 @@ var
   FileOk: Boolean;
   ValidFileBenchmarkCount: Integer;
   FilesJSON, FileJSON, BenchmarksJSON, BenchmarkJSON, ExtraJSON: string;
-  FileErrorJSON, FileErrorMessage: string;
+  FileErrorJSON, FileErrorMessage, SummaryScopeJSON, BoxplotScopeJSON,
+    RelativeJSON: string;
+  Ratio, LowRatio, HighRatio: Double;
+  Inconclusive: Boolean;
 begin
   TotalBenchmarks := 0;
   TotalDurationNanoseconds := 0;
@@ -412,6 +699,35 @@ begin
     begin
       Entry := FFiles[F].Entries[E];
 
+      if Entry.SummaryScope > 0 then
+        SummaryScopeJSON := IntToStr(Entry.SummaryScope)
+      else
+        SummaryScopeJSON := 'null';
+      if Entry.BoxplotScope > 0 then
+        BoxplotScopeJSON := IntToStr(Entry.BoxplotScope)
+      else
+        BoxplotScopeJSON := 'null';
+      RelativeJSON := 'null';
+      if (Entry.Error = '') and (Entry.SummaryScope > 0) then
+      begin
+        FastestIndex := FindFastestSummaryEntry(FFiles[F],
+          Entry.SummaryScope);
+        if FastestIndex >= 0 then
+        begin
+          CalculateRelativeComparison(Entry,
+            FFiles[F].Entries[FastestIndex], Ratio, LowRatio, HighRatio,
+            Inconclusive);
+          if E = FastestIndex then
+            Inconclusive := False;
+          RelativeJSON := SysUtils.Format(
+            '{"median":%s,"low":%s,"high":%s,"inconclusive":%s}',
+            [FormatJSONNumber(Ratio, JSONFormatSettings),
+             FormatJSONNumber(LowRatio, JSONFormatSettings),
+             FormatJSONNumber(HighRatio, JSONFormatSettings),
+             LowerCase(BoolToStr(Inconclusive, True))]);
+        end;
+      end;
+
       if IsValidBenchmarkEntry(Entry, FFiles[F].DeterministicProfile) then
         Inc(ValidFileBenchmarkCount)
       else if FileOk then
@@ -428,8 +744,10 @@ begin
       if Entry.Error <> '' then
       begin
         BenchmarkJSON := SysUtils.Format(
-          '{"suite":"%s","name":"%s","error":"%s"}',
+          '{"suite":"%s","name":"%s","summaryScope":%s,' +
+          '"boxplotScope":%s,"error":"%s"}',
           [EscapeJSONString(Entry.Suite), EscapeJSONString(Entry.Name),
+           SummaryScopeJSON, BoxplotScopeJSON,
            EscapeJSONString(Entry.Error)])
       end
       else
@@ -437,7 +755,10 @@ begin
           '{"suite":"%s","name":"%s","opsPerSec":%s,' +
           '"variancePercentage":%s,"meanMs":%s,"iterations":%d,' +
           '"setupMs":%s,"teardownMs":%s,"minOpsPerSec":%s,' +
-          '"maxOpsPerSec":%s}',
+          '"maxOpsPerSec":%s,"sampleCount":%d,"minSampleMs":%s,' +
+          '"p25Ms":%s,"medianMs":%s,"p75Ms":%s,"p99Ms":%s,' +
+          '"p999Ms":%s,"maxSampleMs":%s,"summaryScope":%s,' +
+          '"boxplotScope":%s,"relative":%s}',
           [EscapeJSONString(Entry.Suite), EscapeJSONString(Entry.Name),
            FormatJSONNumber(Entry.OpsPerSec, JSONFormatSettings),
            FormatJSONPercentage(Entry.VariancePercentage, JSONFormatSettings),
@@ -445,7 +766,16 @@ begin
            FormatJSONNumber(Entry.SetupMs, JSONFormatSettings),
            FormatJSONNumber(Entry.TeardownMs, JSONFormatSettings),
            FormatJSONNumber(Entry.MinOpsPerSec, JSONFormatSettings),
-           FormatJSONNumber(Entry.MaxOpsPerSec, JSONFormatSettings)]);
+           FormatJSONNumber(Entry.MaxOpsPerSec, JSONFormatSettings),
+           Entry.SampleCount,
+           FormatJSONNumber(Entry.MinSampleMs, JSONFormatSettings),
+           FormatJSONNumber(Entry.P25Ms, JSONFormatSettings),
+           FormatJSONNumber(Entry.MedianMs, JSONFormatSettings),
+           FormatJSONNumber(Entry.P75Ms, JSONFormatSettings),
+           FormatJSONNumber(Entry.P99Ms, JSONFormatSettings),
+           FormatJSONNumber(Entry.P999Ms, JSONFormatSettings),
+           FormatJSONNumber(Entry.MaxSampleMs, JSONFormatSettings),
+           SummaryScopeJSON, BoxplotScopeJSON, RelativeJSON]);
 
       if BenchmarksJSON <> '' then
         BenchmarksJSON := BenchmarksJSON + ',';

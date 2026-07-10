@@ -33,12 +33,15 @@ type
   public
     Name: string;
     SuiteName: string;
+    SummaryScope: Integer;
+    BoxplotScope: Integer;
     RunFunction: TGocciaFunctionBase;
     GeneratorFunction: TGocciaFunctionBase;
     OwnsRunRoot: Boolean;
     OwnsGeneratorRoot: Boolean;
     constructor Create(const AName: string; const ARunFunction: TGocciaFunctionBase;
-      const ASuiteName: string; const AGeneratorFunction: TGocciaFunctionBase = nil);
+      const ASuiteName: string; const ASummaryScope, ABoxplotScope: Integer;
+      const AGeneratorFunction: TGocciaFunctionBase = nil);
   end;
 
   TBenchmarkResult = record
@@ -53,6 +56,16 @@ type
     TeardownMs: Double;
     MinOpsPerSec: Double;
     MaxOpsPerSec: Double;
+    SampleCount: Integer;
+    MinSampleMs: Double;
+    P25Ms: Double;
+    MedianMs: Double;
+    P75Ms: Double;
+    P99Ms: Double;
+    P999Ms: Double;
+    MaxSampleMs: Double;
+    SummaryScope: Integer;
+    BoxplotScope: Integer;
   end;
 
   TGocciaBenchmark = class(TGocciaBuiltin)
@@ -60,6 +73,10 @@ type
     FRegisteredSuites: TStringList;
     FRegisteredBenchmarks: TObjectList<TBenchmarkCase>;
     FCurrentSuiteName: string;
+    FCurrentSummaryScope: Integer;
+    FCurrentBoxplotScope: Integer;
+    FNextSummaryScope: Integer;
+    FNextBoxplotScope: Integer;
     FNamespaceObject: TGocciaObjectValue;
     FOwnsNamespaceRoot: Boolean;
     FHasCompletedRun: Boolean;
@@ -76,6 +93,9 @@ type
       out AGeneratorIterator: TGocciaIteratorValue): TGocciaFunctionBase;
     function ExecuteWrapper(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+    function ExecuteScopedWrapper(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue; var ACurrentScope,
+      ANextScope: Integer): TGocciaValue;
     function IsGeneratorBenchmarkFunction(const AFunction: TGocciaFunctionBase): Boolean;
     procedure StoreLastRunResult(const AResult: TGocciaObjectValue;
       const AMode: TBenchmarkRunMode);
@@ -132,6 +152,7 @@ const
   DEFAULT_CALIBRATION_BATCH = 5;
   DEFAULT_MEASUREMENT_ROUNDS = 7;
   MAX_MEASUREMENT_ROUNDS = 50;
+  MAX_PERCENTILE_SAMPLES = 10000;
   IQR_MULTIPLIER = 1.5;
 
 var
@@ -200,16 +221,54 @@ begin
   Result := AException.Message;
 end;
 
+procedure AssignBenchmarkScopeProperties(const AObject: TGocciaObjectValue;
+  const ASummaryScope, ABoxplotScope: Integer);
+begin
+  AObject.AssignProperty('summaryScope',
+    TGocciaNumberLiteralValue.Create(ASummaryScope));
+  AObject.AssignProperty('boxplotScope',
+    TGocciaNumberLiteralValue.Create(ABoxplotScope));
+end;
+
+procedure AssignBenchmarkResultProperties(const AObject: TGocciaObjectValue;
+  const AResult: TBenchmarkResult);
+begin
+  AObject.AssignProperty('name', TGocciaStringLiteralValue.Create(AResult.Name));
+  AObject.AssignProperty('suite', TGocciaStringLiteralValue.Create(AResult.SuiteName));
+  AObject.AssignProperty('opsPerSec', TGocciaNumberLiteralValue.Create(AResult.OpsPerSec));
+  AObject.AssignProperty('meanMs', TGocciaNumberLiteralValue.Create(AResult.MeanMs));
+  AObject.AssignProperty('iterations', TGocciaNumberLiteralValue.Create(AResult.Iterations));
+  AObject.AssignProperty('totalMs', TGocciaNumberLiteralValue.Create(AResult.TotalMs));
+  AObject.AssignProperty('variancePercentage', TGocciaNumberLiteralValue.Create(AResult.VariancePercentage));
+  AObject.AssignProperty('setupMs', TGocciaNumberLiteralValue.Create(AResult.SetupMs));
+  AObject.AssignProperty('teardownMs', TGocciaNumberLiteralValue.Create(AResult.TeardownMs));
+  AObject.AssignProperty('minOpsPerSec', TGocciaNumberLiteralValue.Create(AResult.MinOpsPerSec));
+  AObject.AssignProperty('maxOpsPerSec', TGocciaNumberLiteralValue.Create(AResult.MaxOpsPerSec));
+  AObject.AssignProperty('sampleCount', TGocciaNumberLiteralValue.Create(AResult.SampleCount));
+  AObject.AssignProperty('minSampleMs', TGocciaNumberLiteralValue.Create(AResult.MinSampleMs));
+  AObject.AssignProperty('p25Ms', TGocciaNumberLiteralValue.Create(AResult.P25Ms));
+  AObject.AssignProperty('medianMs', TGocciaNumberLiteralValue.Create(AResult.MedianMs));
+  AObject.AssignProperty('p75Ms', TGocciaNumberLiteralValue.Create(AResult.P75Ms));
+  AObject.AssignProperty('p99Ms', TGocciaNumberLiteralValue.Create(AResult.P99Ms));
+  AObject.AssignProperty('p999Ms', TGocciaNumberLiteralValue.Create(AResult.P999Ms));
+  AObject.AssignProperty('maxSampleMs', TGocciaNumberLiteralValue.Create(AResult.MaxSampleMs));
+  AssignBenchmarkScopeProperties(AObject, AResult.SummaryScope,
+    AResult.BoxplotScope);
+end;
+
 { TBenchmarkCase }
 
 constructor TBenchmarkCase.Create(const AName: string;
   const ARunFunction: TGocciaFunctionBase; const ASuiteName: string;
+  const ASummaryScope, ABoxplotScope: Integer;
   const AGeneratorFunction: TGocciaFunctionBase);
 begin
   inherited Create;
   Name := AName;
   RunFunction := ARunFunction;
   SuiteName := ASuiteName;
+  SummaryScope := ASummaryScope;
+  BoxplotScope := ABoxplotScope;
   GeneratorFunction := AGeneratorFunction;
   OwnsRunRoot := False;
   OwnsGeneratorRoot := False;
@@ -224,6 +283,10 @@ begin
   FRegisteredSuites := TStringList.Create;
   FRegisteredBenchmarks := TObjectList<TBenchmarkCase>.Create;
   FCurrentSuiteName := '';
+  FCurrentSummaryScope := 0;
+  FCurrentBoxplotScope := 0;
+  FNextSummaryScope := 0;
+  FNextBoxplotScope := 0;
   FNamespaceObject := CreateNamespaceObject;
   FOwnsNamespaceRoot := False;
   FHasCompletedRun := False;
@@ -335,6 +398,10 @@ begin
   FRegisteredBenchmarks.Clear;
   FRegisteredSuites.Clear;
   FCurrentSuiteName := '';
+  FCurrentSummaryScope := 0;
+  FCurrentBoxplotScope := 0;
+  FNextSummaryScope := 0;
+  FNextBoxplotScope := 0;
 end;
 
 function TGocciaBenchmark.IsGeneratorBenchmarkFunction(
@@ -427,16 +494,35 @@ begin
   WrapperFunction.CallNoArgs(TGocciaUndefinedLiteralValue.UndefinedValue);
 end;
 
+function TGocciaBenchmark.ExecuteScopedWrapper(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue; var ACurrentScope,
+  ANextScope: Integer): TGocciaValue;
+var
+  PreviousScope: Integer;
+begin
+  PreviousScope := ACurrentScope;
+  Inc(ANextScope);
+  ACurrentScope := ANextScope;
+  try
+    Result := ExecuteWrapper(AArgs, AThisValue);
+  finally
+    ACurrentScope := PreviousScope;
+  end;
+end;
+
 function TGocciaBenchmark.Summary(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := ExecuteWrapper(AArgs, AThisValue);
+  Result := ExecuteScopedWrapper(AArgs, AThisValue, FCurrentSummaryScope,
+    FNextSummaryScope);
 end;
 
 function TGocciaBenchmark.Boxplot(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := ExecuteWrapper(AArgs, AThisValue);
+  Result := ExecuteScopedWrapper(AArgs, AThisValue, FCurrentBoxplotScope,
+    FNextBoxplotScope);
 end;
 
 function TGocciaBenchmark.Run(const AArgs: TGocciaArgumentsCollection;
@@ -474,7 +560,8 @@ begin
     GeneratorFn := nil;
   end;
 
-  BenchCase := TBenchmarkCase.Create(BenchName, RunFn, FCurrentSuiteName, GeneratorFn);
+  BenchCase := TBenchmarkCase.Create(BenchName, RunFn, FCurrentSuiteName,
+    FCurrentSummaryScope, FCurrentBoxplotScope, GeneratorFn);
   if Assigned(TGarbageCollector.Instance) then
   begin
     if Assigned(RunFn) and not TGarbageCollector.Instance.IsTempRoot(RunFn) then
@@ -554,6 +641,17 @@ begin
   end;
 end;
 
+function PercentileValue(const ASorted: array of Double;
+  const ACount: Integer; const APercentile: Double): Double;
+var
+  PercentileIndex: Integer;
+begin
+  if ACount = 0 then
+    Exit(0);
+  PercentileIndex := Trunc(APercentile * (ACount - 1));
+  Result := ASorted[PercentileIndex] / 1000000;
+end;
+
 procedure FilterOutliersIQR(const ASorted: array of Double; const ACount: Integer;
   out AFilteredStart, AFilteredEnd: Integer);
 var
@@ -602,6 +700,10 @@ var
   I: Int64;
   Round, K: Integer;
   OpsRounds, MeanRounds: array of Double;
+  SampleDurations: array of Double;
+  SampleCount: Integer;
+  SampleStartNanoseconds, SampleDurationNanoseconds: Int64;
+  SampleDuration: Double;
   OpsMean, OpsVariance: Double;
   FilteredStart, FilteredEnd, FilteredCount: Integer;
   GC: TGarbageCollector;
@@ -618,6 +720,16 @@ begin
   Result.TeardownMs := 0;
   Result.MinOpsPerSec := 0;
   Result.MaxOpsPerSec := 0;
+  Result.SampleCount := 0;
+  Result.MinSampleMs := 0;
+  Result.P25Ms := 0;
+  Result.MedianMs := 0;
+  Result.P75Ms := 0;
+  Result.P99Ms := 0;
+  Result.P999Ms := 0;
+  Result.MaxSampleMs := 0;
+  Result.SummaryScope := ABenchCase.SummaryScope;
+  Result.BoxplotScope := ABenchCase.BoxplotScope;
 
   SetLength(OpsRounds, MEASUREMENT_ROUNDS);
   SetLength(MeanRounds, MEASUREMENT_ROUNDS);
@@ -748,6 +860,30 @@ begin
       Result.MeanMs := MeanRounds[FilteredStart + (FilteredCount div 2)];
       Result.MinOpsPerSec := OpsRounds[FilteredStart];
       Result.MaxOpsPerSec := OpsRounds[FilteredEnd];
+
+      if Iterations > MAX_PERCENTILE_SAMPLES then
+        SampleCount := MAX_PERCENTILE_SAMPLES
+      else
+        SampleCount := Iterations;
+      SetLength(SampleDurations, SampleCount);
+      for K := 0 to SampleCount - 1 do
+      begin
+        SampleStartNanoseconds := GetNanoseconds;
+        InvokeBenchmarkFunction(RunFunction, SetupResult, RunArgs);
+        SampleDurationNanoseconds := GetNanoseconds - SampleStartNanoseconds;
+        SampleDuration := SampleDurationNanoseconds;
+        SampleDurations[K] := SampleDuration;
+      end;
+      WaitForFetchIdle;
+      InsertionSort(SampleDurations, SampleCount);
+      Result.SampleCount := SampleCount;
+      Result.MinSampleMs := PercentileValue(SampleDurations, SampleCount, 0);
+      Result.P25Ms := PercentileValue(SampleDurations, SampleCount, 0.25);
+      Result.MedianMs := PercentileValue(SampleDurations, SampleCount, 0.5);
+      Result.P75Ms := PercentileValue(SampleDurations, SampleCount, 0.75);
+      Result.P99Ms := PercentileValue(SampleDurations, SampleCount, 0.99);
+      Result.P999Ms := PercentileValue(SampleDurations, SampleCount, 0.999);
+      Result.MaxSampleMs := PercentileValue(SampleDurations, SampleCount, 1);
       if Assigned(GC) then
         GC.Enabled := WasGCEnabled;
       if Assigned(GeneratorIterator) then
@@ -795,6 +931,16 @@ begin
   Result.TeardownMs := 0;
   Result.MinOpsPerSec := 0;
   Result.MaxOpsPerSec := 0;
+  Result.SampleCount := 0;
+  Result.MinSampleMs := 0;
+  Result.P25Ms := 0;
+  Result.MedianMs := 0;
+  Result.P75Ms := 0;
+  Result.P99Ms := 0;
+  Result.P999Ms := 0;
+  Result.MaxSampleMs := 0;
+  Result.SummaryScope := ABenchCase.SummaryScope;
+  Result.BoxplotScope := ABenchCase.BoxplotScope;
 
   GC := TGarbageCollector.Instance;
   SetupResult := nil;
@@ -871,17 +1017,7 @@ begin
         if Assigned(GC) then
           GC.AddTempRoot(SingleResult);
         try
-          SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchResult.Name));
-          SingleResult.AssignProperty('suite', TGocciaStringLiteralValue.Create(BenchResult.SuiteName));
-          SingleResult.AssignProperty('opsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.OpsPerSec));
-          SingleResult.AssignProperty('meanMs', TGocciaNumberLiteralValue.Create(BenchResult.MeanMs));
-          SingleResult.AssignProperty('iterations', TGocciaNumberLiteralValue.Create(BenchResult.Iterations));
-          SingleResult.AssignProperty('totalMs', TGocciaNumberLiteralValue.Create(BenchResult.TotalMs));
-          SingleResult.AssignProperty('variancePercentage', TGocciaNumberLiteralValue.Create(BenchResult.VariancePercentage));
-          SingleResult.AssignProperty('setupMs', TGocciaNumberLiteralValue.Create(BenchResult.SetupMs));
-          SingleResult.AssignProperty('teardownMs', TGocciaNumberLiteralValue.Create(BenchResult.TeardownMs));
-          SingleResult.AssignProperty('minOpsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.MinOpsPerSec));
-          SingleResult.AssignProperty('maxOpsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.MaxOpsPerSec));
+          AssignBenchmarkResultProperties(SingleResult, BenchResult);
 
           ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
         finally
@@ -901,6 +1037,8 @@ begin
           try
             SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchCase.Name));
             SingleResult.AssignProperty('suite', TGocciaStringLiteralValue.Create(BenchCase.SuiteName));
+            AssignBenchmarkScopeProperties(SingleResult,
+              BenchCase.SummaryScope, BenchCase.BoxplotScope);
             SingleResult.AssignProperty('error',
               TGocciaStringLiteralValue.Create(BenchmarkExceptionMessage(E)));
 
@@ -977,17 +1115,7 @@ begin
         if Assigned(GC) then
           GC.AddTempRoot(SingleResult);
         try
-          SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchResult.Name));
-          SingleResult.AssignProperty('suite', TGocciaStringLiteralValue.Create(BenchResult.SuiteName));
-          SingleResult.AssignProperty('opsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.OpsPerSec));
-          SingleResult.AssignProperty('meanMs', TGocciaNumberLiteralValue.Create(BenchResult.MeanMs));
-          SingleResult.AssignProperty('iterations', TGocciaNumberLiteralValue.Create(BenchResult.Iterations));
-          SingleResult.AssignProperty('totalMs', TGocciaNumberLiteralValue.Create(BenchResult.TotalMs));
-          SingleResult.AssignProperty('variancePercentage', TGocciaNumberLiteralValue.Create(BenchResult.VariancePercentage));
-          SingleResult.AssignProperty('setupMs', TGocciaNumberLiteralValue.Create(BenchResult.SetupMs));
-          SingleResult.AssignProperty('teardownMs', TGocciaNumberLiteralValue.Create(BenchResult.TeardownMs));
-          SingleResult.AssignProperty('minOpsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.MinOpsPerSec));
-          SingleResult.AssignProperty('maxOpsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.MaxOpsPerSec));
+          AssignBenchmarkResultProperties(SingleResult, BenchResult);
 
           ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
         finally
@@ -1007,6 +1135,8 @@ begin
           try
             SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchCase.Name));
             SingleResult.AssignProperty('suite', TGocciaStringLiteralValue.Create(BenchCase.SuiteName));
+            AssignBenchmarkScopeProperties(SingleResult,
+              BenchCase.SummaryScope, BenchCase.BoxplotScope);
             SingleResult.AssignProperty('error',
               TGocciaStringLiteralValue.Create(BenchmarkExceptionMessage(E)));
             ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
