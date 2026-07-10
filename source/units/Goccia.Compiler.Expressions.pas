@@ -2336,6 +2336,29 @@ begin
   PatchJumpTarget(ACtx, EndJump);
 end;
 
+procedure EmitCurrentUpvalueAssignment(
+  const ACtx: TGocciaCompilationContext;
+  const AUpvalue: TGocciaCompilerUpvalue; const AUpvalueIndex: Integer;
+  const AValueReg, ATypeCheckReg: UInt8;
+  const AValueType: TGocciaLocalType);
+var
+  ReferenceReg: UInt8;
+begin
+  if AUpvalue.IsConst or AUpvalue.IsStrictlyTyped or
+     (AUpvalue.ExportNameCount > 0) then
+  begin
+    ReferenceReg := PrepareUpvalueAssignmentReference(ACtx, AUpvalueIndex);
+    EmitPreparedUpvalueAssignment(ACtx, AUpvalue, AUpvalueIndex,
+      ReferenceReg, AValueReg, ATypeCheckReg, AValueType);
+    ACtx.Scope.FreeRegister;
+  end
+  else if AUpvalue.IsGlobalBacked then
+    EmitSetGlobalByName(ACtx, AValueReg, AUpvalue.Name)
+  else
+    EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE_DYNAMIC, AValueReg,
+      UInt16(AUpvalueIndex)));
+end;
+
 procedure CompileAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaAssignmentExpression; const ADest: UInt8);
 var
@@ -2423,7 +2446,7 @@ begin
     end;
   end;
 
-  if UpvalIdx >= 0 then
+  if (UpvalIdx >= 0) and ExpressionContainsDirectEval(AExpr.Value) then
     TargetReg := PrepareUpvalueAssignmentReference(ACtx, UpvalIdx);
 
   CompileAssignmentValue(ACtx, AExpr.Value, ADest, AExpr.Name,
@@ -2469,9 +2492,15 @@ begin
   if UpvalIdx >= 0 then
   begin
     Upvalue := ACtx.Scope.GetUpvalue(UpvalIdx);
-    EmitPreparedUpvalueAssignment(ACtx, Upvalue, UpvalIdx,
-      UInt8(TargetReg), ADest, ADest, InferLocalType(AExpr.Value));
-    ACtx.Scope.FreeRegister;
+    if TargetReg >= 0 then
+    begin
+      EmitPreparedUpvalueAssignment(ACtx, Upvalue, UpvalIdx,
+        UInt8(TargetReg), ADest, ADest, InferLocalType(AExpr.Value));
+      ACtx.Scope.FreeRegister;
+    end
+    else
+      EmitCurrentUpvalueAssignment(ACtx, Upvalue, UpvalIdx, ADest, ADest,
+        InferLocalType(AExpr.Value));
     Exit;
   end;
 
@@ -2687,7 +2716,7 @@ var
   LocalIdx, UpvalIdx: Integer;
   Local: TGocciaCompilerLocal;
   Upvalue: TGocciaCompilerUpvalue;
-  Slot, ReferenceReg: UInt8;
+  Slot: UInt8;
 begin
   LocalIdx := ACtx.Scope.ResolveLocal(AName);
   if LocalIdx >= 0 then
@@ -2736,12 +2765,8 @@ begin
   begin
     Upvalue := ACtx.Scope.GetUpvalue(UpvalIdx);
     if AAssignmentMode then
-    begin
-      ReferenceReg := PrepareUpvalueAssignmentReference(ACtx, UpvalIdx);
-      EmitPreparedUpvalueAssignment(ACtx, Upvalue, UpvalIdx, ReferenceReg,
-        AValueReg, AValueReg, sltUntyped);
-      ACtx.Scope.FreeRegister;
-    end
+      EmitCurrentUpvalueAssignment(ACtx, Upvalue, UpvalIdx, AValueReg,
+        AValueReg, sltUntyped)
     else
     begin
       if Upvalue.IsGlobalBacked then
@@ -5847,16 +5872,30 @@ begin
     if UpvalIdx >= 0 then
     begin
       Upvalue := ACtx.Scope.GetUpvalue(UpvalIdx);
-      ReferenceReg := PrepareUpvalueAssignmentReference(ACtx, UpvalIdx);
-      EmitPreparedUpvalueLoad(ACtx, Upvalue, UpvalIdx,
-        UInt8(ReferenceReg), ADest);
+      ReferenceReg := -1;
+      if ExpressionContainsDirectEval(AExpr.Value) then
+        ReferenceReg := PrepareUpvalueAssignmentReference(ACtx, UpvalIdx);
+      if ReferenceReg >= 0 then
+        EmitPreparedUpvalueLoad(ACtx, Upvalue, UpvalIdx,
+          UInt8(ReferenceReg), ADest)
+      else if Upvalue.IsGlobalBacked then
+        EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest,
+          ACtx.Template.AddConstantString(AExpr.Name)))
+      else
+        EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, ADest,
+          UInt16(UpvalIdx)));
       JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
       CompileAssignmentValue(ACtx, AExpr.Value, ADest, AExpr.Name,
         AExpr.InferName);
-      EmitPreparedUpvalueAssignment(ACtx, Upvalue, UpvalIdx,
-        UInt8(ReferenceReg), ADest, ADest, InferLocalType(AExpr.Value));
+      if ReferenceReg >= 0 then
+        EmitPreparedUpvalueAssignment(ACtx, Upvalue, UpvalIdx,
+          UInt8(ReferenceReg), ADest, ADest, InferLocalType(AExpr.Value))
+      else
+        EmitCurrentUpvalueAssignment(ACtx, Upvalue, UpvalIdx, ADest, ADest,
+          InferLocalType(AExpr.Value));
       PatchJumpTarget(ACtx, JumpIdx);
-      ACtx.Scope.FreeRegister;
+      if ReferenceReg >= 0 then
+        ACtx.Scope.FreeRegister;
       Exit;
     end;
 
@@ -5995,17 +6034,31 @@ begin
     Upvalue := ACtx.Scope.GetUpvalue(UpvalIdx);
     RegVal := ACtx.Scope.AllocateRegister;
     RegResult := ACtx.Scope.AllocateRegister;
-    ReferenceReg := PrepareUpvalueAssignmentReference(ACtx, UpvalIdx);
-    EmitPreparedUpvalueLoad(ACtx, Upvalue, UpvalIdx,
-      UInt8(ReferenceReg), RegResult);
+    ReferenceReg := -1;
+    if ExpressionContainsDirectEval(AExpr.Value) then
+      ReferenceReg := PrepareUpvalueAssignmentReference(ACtx, UpvalIdx);
+    if ReferenceReg >= 0 then
+      EmitPreparedUpvalueLoad(ACtx, Upvalue, UpvalIdx,
+        UInt8(ReferenceReg), RegResult)
+    else if Upvalue.IsGlobalBacked then
+      EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
+        ACtx.Template.AddConstantString(AExpr.Name)))
+    else
+      EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, RegResult,
+        UInt16(UpvalIdx)));
     ACtx.CompileExpression(AExpr.Value, RegVal);
     EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, RegVal));
-    EmitPreparedUpvalueAssignment(ACtx, Upvalue, UpvalIdx,
-      UInt8(ReferenceReg), RegResult, RegResult,
-      InferLocalType(AExpr.Value));
+    if ReferenceReg >= 0 then
+      EmitPreparedUpvalueAssignment(ACtx, Upvalue, UpvalIdx,
+        UInt8(ReferenceReg), RegResult, RegResult,
+        InferLocalType(AExpr.Value))
+    else
+      EmitCurrentUpvalueAssignment(ACtx, Upvalue, UpvalIdx, RegResult,
+        RegResult, InferLocalType(AExpr.Value));
     if ADest <> RegResult then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
-    ACtx.Scope.FreeRegister;
+    if ReferenceReg >= 0 then
+      ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
     Exit;
@@ -6336,7 +6389,6 @@ procedure CompileIncrement(const ACtx: TGocciaCompilationContext;
 var
   LocalIdx, UpvalIdx: Integer;
   Slot, RegResult, ObjReg, KeyReg, CondReg: UInt8;
-  ReferenceReg: UInt8;
   Op, NumericOp, PostNumericOp: TGocciaOpCode;
   Ident: TGocciaIdentifierExpression;
   MemberExpr: TGocciaMemberExpression;
@@ -6502,15 +6554,17 @@ begin
     if UpvalIdx >= 0 then
     begin
       Upvalue := ACtx.Scope.GetUpvalue(UpvalIdx);
-      ReferenceReg := PrepareUpvalueAssignmentReference(ACtx, UpvalIdx);
       RegResult := ACtx.Scope.AllocateRegister;
-      EmitPreparedUpvalueLoad(ACtx, Upvalue, UpvalIdx, ReferenceReg,
-        RegResult);
+      if Upvalue.IsGlobalBacked then
+        EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
+          ACtx.Template.AddConstantString(Ident.Name)))
+      else
+        EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, RegResult,
+          UInt16(UpvalIdx)));
       EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
         PostNumericOp, AKeepResult);
-      EmitPreparedUpvalueAssignment(ACtx, Upvalue, UpvalIdx, ReferenceReg,
-        RegResult, RegResult, sltUntyped);
-      ACtx.Scope.FreeRegister;
+      EmitCurrentUpvalueAssignment(ACtx, Upvalue, UpvalIdx, RegResult,
+        RegResult, sltUntyped);
       ACtx.Scope.FreeRegister;
       Exit;
     end;

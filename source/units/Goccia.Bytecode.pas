@@ -400,7 +400,8 @@ type
     OP_LOAD_CHAR     = 220,
     OP_RESOLVE_UPVALUE_REF = 221,
     OP_SET_UPVALUE_REF = 222,
-    OP_SET_GLOBAL_STATIC = 223
+    OP_SET_GLOBAL_STATIC = 223,
+    OP_SET_UPVALUE_DYNAMIC = 224
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;

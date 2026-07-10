@@ -13547,6 +13547,27 @@ begin
         end;
       end;
 
+      OP_SET_UPVALUE_DYNAMIC:
+      begin
+        Desc := Template.GetUpvalueDescriptor(DecodeBx(Instruction));
+        ResolvedDynamicVarScope := ResolveDynamicUpvalueScope(
+          DecodeBx(Instruction), Desc.Name);
+        if Assigned(ResolvedDynamicVarScope) then
+          ResolvedDynamicVarScope.AssignBinding(Desc.Name,
+            RegisterToValue(FRegisters[A]))
+        else if Assigned(FCurrentClosure) then
+        begin
+          Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
+          if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
+          begin
+            if Upvalue.Cell.Value.Kind = grkHole then
+              ThrowReferenceError(
+                'Cannot access lexical binding before initialization');
+            Upvalue.Cell.Value := FRegisters[A];
+          end;
+        end;
+      end;
+
       OP_RESOLVE_UPVALUE_REF:
       begin
         Desc := Template.GetUpvalueDescriptor(B);

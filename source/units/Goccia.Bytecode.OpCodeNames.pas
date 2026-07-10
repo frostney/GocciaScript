@@ -217,6 +217,7 @@ begin
     OP_RESOLVE_UPVALUE_REF:             Result := 'OP_RESOLVE_UPVALUE_REF';
     OP_SET_UPVALUE_REF:                 Result := 'OP_SET_UPVALUE_REF';
     OP_SET_GLOBAL_STATIC:               Result := 'OP_SET_GLOBAL_STATIC';
+    OP_SET_UPVALUE_DYNAMIC:             Result := 'OP_SET_UPVALUE_DYNAMIC';
   else
     Result := Format('OP_UNKNOWN_%d', [AOp]);
   end;
