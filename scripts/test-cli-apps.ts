@@ -2241,7 +2241,10 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
         throw new Error(`Summary baseline should compare exactly to itself: ${JSON.stringify(baseline)}`);
       for (const benchmark of scopedBenchmarks) {
         if (benchmark === baseline) continue;
-        const expectedInconclusive = benchmark.relative.low <= 1 && benchmark.relative.high >= 1;
+        const { low, high } = benchmark.relative;
+        if (!Number.isFinite(low) || !Number.isFinite(high) || low > high)
+          throw new Error(`Summary relative bounds should be finite and ordered: ${JSON.stringify(benchmark)}`);
+        const expectedInconclusive = low <= 1 && high >= 1;
         if (benchmark.relative.inconclusive !== expectedInconclusive)
           throw new Error(`Summary overlap classification should match its range: ${JSON.stringify(benchmark)}`);
       }

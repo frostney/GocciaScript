@@ -865,9 +865,6 @@ begin
            GC.ManagedObjectCount, GC.TotalCollected, GC.TotalCollections]));
       {$ENDIF}
 
-      if Assigned(GC) then
-        GC.Enabled := WasGCEnabled;
-
       InsertionSort(OpsRounds, MEASUREMENT_ROUNDS);
       InsertionSort(MeanRounds, MEASUREMENT_ROUNDS);
 
