@@ -494,14 +494,20 @@ all pinned upstream workloads: `acorn`, `babel`, `babel-minify`, `babylon`,
 `postcss`, `prepack`, `prettier`, `source-map`, `terser`, `typescript`, and
 `uglify-js`.
 
-The driver prepares upstream's generated Terser/UglifyJS self-bundles, builds
-one upstream `dist/cli.js` bundle per workload with
-`npm run build -- --env.only <workload>`, then executes that bundle with
-`GocciaScriptLoader` in bytecode mode and the broad ECMAScript compatibility flag
-set used for legacy tooling bundles. A workload build failure, timeout, crash,
+The driver prepares upstream's generated Terser/UglifyJS self-bundles, then
+generates one static entry and payload-only `fs.readFileSync` adapter per
+workload. Webpack therefore includes only the selected upstream benchmark
+module, its tooling dependency, and the `third_party` files named by that
+module. The generated entry times one direct call to the module's exported
+`fn()`; process repetitions provide the raw samples, so Benchmark.js and its
+Lodash-based measurement machinery are not part of the measured bundle.
+
+Each bundle runs with `GocciaScriptLoader` in bytecode mode and the broad
+ECMAScript compatibility flag set used for legacy tooling bundles. The default
+per-process timeout is 15 minutes. A workload build failure, timeout, crash,
 OOM, or missing benchmark result is recorded as data in the JSON report; the CI
-runner itself fails only when it cannot produce a complete report entry for every
-manifest workload.
+runner itself fails only when it cannot produce a complete report entry for
+every manifest workload.
 
 The normalized report records:
 
@@ -510,10 +516,11 @@ The normalized report records:
   reported `runs/s`
 - first-class build-failed, timeout, crash, OOM, and missing-result outcomes
 - Goccia commit, FPC version, platform, architecture, compatibility flags, Web
-  Tooling corpus SHA, and driver version
+  Tooling corpus SHA, direct-invocation harness metadata, and driver version
 
-Pull requests run the same all-workload report on the PR x64 build. The workflow
-uploads the normalized `web-tooling-report` JSON artifact and posts a
+Pull requests run the same all-workload report on the PR x64 build, with one
+workload per CI matrix job and a final merge step. The workflow uploads the
+normalized `web-tooling-report` JSON artifact and posts a
 `Web Tooling Benchmark` PR comment with per-workload status and Goccia `runs/s`
 where available. Full CI uploads the same artifact on every run. On `main`, when
 `BLOB_READ_WRITE_TOKEN` is configured, the workflow also publishes the compressed

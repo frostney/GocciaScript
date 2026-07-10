@@ -5,9 +5,9 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const DRIVER_VERSION = 1;
+const DRIVER_VERSION = 2;
 const DEFAULT_MANIFEST = path.join('perf', 'web-tooling', 'manifest.json');
-const DEFAULT_TIMEOUT_MS = 300000;
+const DEFAULT_TIMEOUT_MS = 900000;
 const DEFAULT_REPETITIONS = 1;
 const DEFAULT_GOCCIA_FLAGS = [
   '--mode=bytecode',
@@ -40,7 +40,7 @@ function usage() {
     '',
     'Measurement:',
     '  --repetitions <n>            Raw runs per workload (default: 1)',
-    '  --timeout-ms <n>             Per-run timeout (default: 300000)',
+    '  --timeout-ms <n>             Per-run timeout (default: 900000)',
     '  --output <path>              Write normalized JSON report',
     '  --keep-bundles               Keep generated upstream dist/cli.js copies',
   ].join('\n');
@@ -144,15 +144,144 @@ function trimOutput(value) {
   return text.slice(0, 2000) + '\n...[truncated]...\n' + text.slice(-2000);
 }
 
+function walkAST(node, visit) {
+  if (!node || typeof node !== 'object') return;
+  visit(node);
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'start' || key === 'end' || key === 'loc') continue;
+    if (Array.isArray(value)) {
+      for (const item of value) walkAST(item, visit);
+    } else {
+      walkAST(value, visit);
+    }
+  }
+}
+
+function parseUpstreamSource(acorn, source, fileName) {
+  try {
+    return acorn.parse(source, { ecmaVersion: 9, sourceType: 'script' });
+  } catch (error) {
+    throw new Error(`Failed to parse pinned Web Tooling source ${fileName}: ${error.message}`);
+  }
+}
+
+function readWebToolingPayloadEntries(webToolingDir, workload) {
+  const acorn = require(path.join(webToolingDir, 'node_modules', 'acorn'));
+  const vfsFile = path.join(webToolingDir, 'src', 'vfs.js');
+  const benchmarkFile = path.join(webToolingDir, 'src', `${workload}-benchmark.js`);
+  const vfsSource = fs.readFileSync(vfsFile, 'utf8');
+  const benchmarkSource = fs.readFileSync(benchmarkFile, 'utf8');
+  const vfsAST = parseUpstreamSource(acorn, vfsSource, vfsFile);
+  const benchmarkAST = parseUpstreamSource(acorn, benchmarkSource, benchmarkFile);
+  const entries = [];
+  const benchmarkStrings = new Set();
+  let importsFS = false;
+
+  walkAST(vfsAST, (node) => {
+    if (node.type !== 'CallExpression' || node.arguments.length < 2) return;
+    const callee = node.callee;
+    const fileArg = node.arguments[0];
+    const contentsArg = node.arguments[1];
+    if (callee?.type !== 'MemberExpression' || callee.computed ||
+        callee.property?.name !== 'writeFileSync' ||
+        fileArg?.type !== 'Literal' || typeof fileArg.value !== 'string' ||
+        contentsArg?.type !== 'CallExpression' ||
+        contentsArg.callee?.type !== 'Identifier' || contentsArg.callee.name !== 'require' ||
+        contentsArg.arguments.length !== 1 ||
+        contentsArg.arguments[0]?.type !== 'Literal' ||
+        typeof contentsArg.arguments[0].value !== 'string') return;
+    entries.push({ fileName: fileArg.value, request: contentsArg.arguments[0].value });
+  });
+
+  walkAST(benchmarkAST, (node) => {
+    if (node.type === 'Literal' && typeof node.value === 'string') {
+      benchmarkStrings.add(node.value);
+      if (node.value === 'fs') importsFS = true;
+    }
+  });
+
+  const selected = entries.filter((entry) => {
+    const relativeName = entry.fileName.replace(/^third_party\//, '');
+    return benchmarkStrings.has(entry.fileName) ||
+      benchmarkStrings.has(relativeName) ||
+      benchmarkStrings.has(path.basename(entry.fileName));
+  });
+  if (importsFS && selected.length === 0) {
+    throw new Error(`Could not resolve payload files for Web Tooling workload ${workload}`);
+  }
+  return selected;
+}
+
+function webToolingEntrySource(workload) {
+  return [
+    `var packageJson = require(${JSON.stringify('../package.json')});`,
+    `var target = require(${JSON.stringify(`./${workload}-benchmark`)});`,
+    '',
+    'console.log("Running Web Tooling Benchmark v" + packageJson.version + "...");',
+    'console.log("-------------------------------------");',
+    'var started = performance.now();',
+    'target.fn();',
+    'var elapsed = performance.now() - started;',
+    'if (!(elapsed > 0)) elapsed = 0.001;',
+    'var runsPerSecond = 1000 / elapsed;',
+    'console.log(target.name + ": " + runsPerSecond.toFixed(6) + " runs/s");',
+    'console.log("-------------------------------------");',
+    'console.log("Geometric mean: " + runsPerSecond.toFixed(6) + " runs/s");',
+    '',
+  ].join('\n');
+}
+
+function webToolingVirtualFSSource(entries) {
+  const lines = ['var files = Object.create(null);'];
+  for (const entry of entries) {
+    lines.push(`files[${JSON.stringify(entry.fileName)}] = require(${JSON.stringify(entry.request)});`);
+  }
+  lines.push(
+    '',
+    'module.exports = {',
+    '  readFileSync: function(fileName) {',
+    '    if (!Object.prototype.hasOwnProperty.call(files, fileName)) {',
+    '      throw new Error("File not found: " + fileName);',
+    '    }',
+    '    return files[fileName];',
+    '  }',
+    '};',
+    '',
+  );
+  return lines.join('\n');
+}
+
 function buildWebToolingBundle({ webToolingDir, workload, tempDir }) {
-  const command = ['npm', 'run', 'build', '--', '--env.only', workload];
+  if (!/^[a-z0-9-]+$/.test(workload)) {
+    throw new Error(`Invalid Web Tooling workload name: ${workload}`);
+  }
+  const sourceDir = path.join(webToolingDir, 'src');
+  const entryBase = `.goccia-${workload}-cli.js`;
+  const vfsBase = `.goccia-${workload}-vfs.js`;
+  const entryFile = path.join(sourceDir, entryBase);
+  const vfsFile = path.join(sourceDir, vfsBase);
+  const payloadEntries = readWebToolingPayloadEntries(webToolingDir, workload);
+  const command = [
+    'npm', 'run', 'build', '--',
+    '--entry', `./${entryBase}`,
+    '--env.only', workload,
+    '--resolve-alias', `fs=${vfsFile}`,
+  ];
   const startedAt = new Date().toISOString();
   const started = Date.now();
-  const proc = spawnSync(command[0], command.slice(1), {
-    cwd: webToolingDir,
-    encoding: 'utf8',
-    maxBuffer: 32 * 1024 * 1024,
-  });
+  fs.writeFileSync(entryFile, webToolingEntrySource(workload));
+  fs.writeFileSync(vfsFile, webToolingVirtualFSSource(payloadEntries));
+  let proc;
+  try {
+    proc = spawnSync(command[0], command.slice(1), {
+      cwd: webToolingDir,
+      encoding: 'utf8',
+      maxBuffer: 32 * 1024 * 1024,
+    });
+  } finally {
+    fs.rmSync(entryFile, { force: true });
+    fs.rmSync(vfsFile, { force: true });
+  }
   const durationMs = Date.now() - started;
   const distFile = path.join(webToolingDir, 'dist', 'cli.js');
   const outputFile = path.join(tempDir, `web-tooling-${workload}.js`);
@@ -379,6 +508,8 @@ function collectMetadata(options, manifest) {
     options: {
       repetitions: options.repetitions,
       timeoutMs: options.timeoutMs,
+      workloadInvocationCount: 1,
+      harness: 'direct-upstream-workload',
       gocciaFlags: DEFAULT_GOCCIA_FLAGS.concat(options.gocciaFlags),
     },
   };
@@ -482,6 +613,7 @@ if (require.main === module) {
 
 module.exports = {
   DEFAULT_GOCCIA_FLAGS,
+  buildOverallSummary,
   classifyProcessOutcome,
   coefficientOfVariation,
   iqrFiltered,
@@ -490,5 +622,8 @@ module.exports = {
   parseArgs,
   parseMetric,
   prepareWebToolingBuildDependencies,
+  readWebToolingPayloadEntries,
   summarizeSamples,
+  webToolingEntrySource,
+  webToolingVirtualFSSource,
 };

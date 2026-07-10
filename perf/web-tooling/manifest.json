@@ -27,7 +27,7 @@
   },
   "driver": {
     "script": "scripts/web-tooling-driver.js",
-    "version": 1
+    "version": 2
   },
   "ciReport": {
     "repetitions": 1,

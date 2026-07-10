@@ -429,10 +429,31 @@ jobs:
           if-no-files-found: ignore
           path: awfy-report.json
 
-  web-tooling-report:
-    needs: build
+  web-tooling-plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    outputs:
+      matrix: ${{ steps.workloads.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Check Web Tooling driver helpers
+        run: node scripts/test-web-tooling-driver.js
+
+      - name: Read Web Tooling workload matrix
+        id: workloads
+        run: |
+          matrix="$(node -e "const m = require('./perf/web-tooling/manifest.json'); process.stdout.write(JSON.stringify({ workload: m.ciReport.workloads }))")"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  web-tooling-workload:
+    needs: [build, web-tooling-plan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.web-tooling-plan.outputs.matrix) }}
     defaults:
       run:
         shell: bash
@@ -480,22 +501,54 @@ jobs:
         working-directory: web-tooling-suite
         run: npm install --ignore-scripts --no-audit --no-fund
 
-      - name: Check Web Tooling driver helpers
-        run: node scripts/test-web-tooling-driver.js
-
       - name: Run Web Tooling report
         run: |
           node scripts/web-tooling-ci-report.js \
             --web-tooling-dir web-tooling-suite \
-            --output web-tooling-report.json
+            --workload '${{ matrix.workload }}' \
+            --output 'web-tooling-report-${{ matrix.workload }}.json'
+
+      - name: Upload Web Tooling workload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: web-tooling-report-${{ matrix.workload }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: web-tooling-report-${{ matrix.workload }}.json
+
+  web-tooling-report:
+    needs: web-tooling-workload
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download Web Tooling workload reports
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: web-tooling-report-*
+          path: web-tooling-reports
+          merge-multiple: true
+
+      - name: Merge Web Tooling report
+        run: |
+          node scripts/web-tooling-merge-reports.js \
+            --output web-tooling-report.json \
+            web-tooling-reports/*.json
 
       - name: Upload Web Tooling report
-        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: web-tooling-report
           retention-days: 7
-          if-no-files-found: ignore
           path: web-tooling-report.json
 
   cli:

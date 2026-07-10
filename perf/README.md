@@ -10,9 +10,9 @@
   `GocciaBenchmarkRunner` `suite()` / `bench()` files.
 - `scripts/awfy-driver.js` owns timing, interleaving, reference-engine commands,
   checksum comparison, first-class failure outcomes, and normalized JSON output.
-- `scripts/web-tooling-driver.js` owns target-specific Web Tooling builds,
-  Goccia-only execution, first-class failure outcomes, and normalized JSON
-  output.
+- `scripts/web-tooling-driver.js` owns workload-specific Web Tooling bundles,
+  direct Goccia-only workload timing, first-class failure outcomes, and
+  normalized JSON output.
 - `scripts/awfy-bump-pin.ts` and `.github/workflows/awfy-bump.yml` keep the
   AWFY corpus SHA refreshable through the same automated bump-PR pattern used
   by the other pinned upstream suites.

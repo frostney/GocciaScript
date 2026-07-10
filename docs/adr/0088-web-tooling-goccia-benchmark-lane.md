@@ -20,21 +20,29 @@ curated subset: the current report set is `acorn`, `babel`, `babel-minify`,
 `typescript`, and `uglify-js`.
 
 The driver prepares upstream's generated Terser/UglifyJS self-bundles, then
-builds each workload through upstream's supported target-specific Webpack path
-(`npm run build -- --env.only <workload>`) and runs it with `GocciaScriptLoader`
-in bytecode mode. The runner passes the broad ECMAScript compatibility flags
-needed by legacy tooling bundles, including `var`, `function`, ASI, non-strict
-Script semantics, legacy loops, loose equality, labels, `arguments`, and the
-explicit `--unsafe-function-constructor` gate. Those flags are part of the
-measurement contract: Web Tooling is a compatibility and viability probe, not a
+generates a static entry and payload-only `fs.readFileSync` adapter for each
+workload. The entry imports exactly one upstream `*-benchmark` module and times
+one direct call to its exported `fn()`; process repetitions are the raw samples.
+This keeps the upstream workload and `third_party` inputs intact while excluding
+Benchmark.js, Lodash, `virtualfs`, and unrelated workloads from the measured
+bundle. It also avoids making those measurement dependencies compatibility
+requirements for GocciaScript.
+
+Each workload runs with `GocciaScriptLoader` in bytecode mode. The runner passes
+the broad ECMAScript compatibility flags needed by legacy tooling bundles,
+including `var`, `function`, ASI, non-strict Script semantics, legacy loops,
+loose equality, labels, `arguments`, and the explicit
+`--unsafe-function-constructor` gate. Those flags are part of the measurement
+contract: Web Tooling is a compatibility and viability probe, not a
 recommendation for default-style GocciaScript code.
 
 The report is normalized JSON with one target entry per workload. A build
 failure, timeout, crash, OOM, or missing `runs/s` line is recorded as a
 first-class target outcome instead of failing the whole report. The job fails
 only when the driver cannot produce a structurally complete report for every
-manifest workload. PR CI uploads the `web-tooling-report` artifact and posts a
-Goccia-only comment. Main CI uploads the same artifact and, when
+manifest workload. CI runs one workload per matrix job, then validates and
+merges those shards into one report. PR CI uploads the `web-tooling-report`
+artifact and posts a Goccia-only comment. Main CI uploads the same artifact and, when
 `BLOB_READ_WRITE_TOKEN` is configured, publishes the compressed report plus a
 UTC daily pointer to Vercel Blob under `web-tooling/`.
 

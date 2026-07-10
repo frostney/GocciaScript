@@ -5,7 +5,7 @@ const { spawnSync } = require('child_process');
 
 const DEFAULT_MANIFEST = 'perf/web-tooling/manifest.json';
 const DEFAULT_OUTPUT = 'web-tooling-report.json';
-const DEFAULT_TIMEOUT_MS = 300000;
+const DEFAULT_TIMEOUT_MS = 900000;
 
 function usage() {
   return [
@@ -14,8 +14,9 @@ function usage() {
     'Options:',
     '  --manifest <path>          Web Tooling manifest path (default: perf/web-tooling/manifest.json)',
     '  --web-tooling-dir <path>   Path to v8/web-tooling-benchmark checkout',
+    '  --workload <name>          Run one manifest workload; repeatable',
     '  --output <path>            Report path (default: web-tooling-report.json)',
-    '  --timeout-ms <n>           Per-workload Goccia timeout (default: 300000)',
+    '  --timeout-ms <n>           Per-workload Goccia timeout (default: 900000)',
   ].join('\n');
 }
 
@@ -23,6 +24,7 @@ function parseArgs(argv) {
   const options = {
     manifestPath: DEFAULT_MANIFEST,
     webToolingDir: '',
+    workloads: [],
     output: DEFAULT_OUTPUT,
     timeoutMs: DEFAULT_TIMEOUT_MS,
     help: false,
@@ -43,6 +45,8 @@ function parseArgs(argv) {
       options.manifestPath = nextValue();
     } else if (arg === '--web-tooling-dir' || arg.startsWith('--web-tooling-dir=')) {
       options.webToolingDir = nextValue();
+    } else if (arg === '--workload' || arg.startsWith('--workload=')) {
+      options.workloads.push(nextValue());
     } else if (arg === '--output' || arg.startsWith('--output=')) {
       options.output = nextValue();
     } else if (arg === '--timeout-ms' || arg.startsWith('--timeout-ms=')) {
@@ -67,17 +71,22 @@ function reportConfig(manifest) {
   return manifest.ciReport || {};
 }
 
-function targetSpecs(config, manifest) {
-  const workloads = config.workloads || manifest.webTooling?.workloads || [];
+function targetSpecs(config, manifest, requested = []) {
+  const configured = config.workloads || manifest.webTooling?.workloads || [];
+  const workloads = requested.length > 0 ? requested : configured;
   if (!Array.isArray(workloads) || workloads.length === 0) {
     throw new Error('Web Tooling CI report has no workloads');
+  }
+  const known = new Set(configured);
+  for (const workload of workloads) {
+    if (!known.has(workload)) throw new Error(`Unknown Web Tooling CI workload: ${workload}`);
   }
   return workloads;
 }
 
-function validateReport(report, manifest) {
+function validateReport(report, manifest, expectedWorkloads = null) {
   const config = reportConfig(manifest);
-  const expectedWorkloads = targetSpecs(config, manifest);
+  const workloads = expectedWorkloads || targetSpecs(config, manifest);
   const expectedRepetitions = config.repetitions || 1;
   const failures = [];
 
@@ -87,7 +96,7 @@ function validateReport(report, manifest) {
 
   const targets = Array.isArray(report.targets) ? report.targets : [];
   const byName = new Map(targets.map((target) => [target.name, target]));
-  for (const workload of expectedWorkloads) {
+  for (const workload of workloads) {
     const target = byName.get(workload);
     if (!target) {
       failures.push(`${workload}: missing target report`);
@@ -102,8 +111,8 @@ function validateReport(report, manifest) {
     }
   }
 
-  if (report.summary?.workloadCount !== expectedWorkloads.length) {
-    failures.push(`expected ${expectedWorkloads.length} workloads, report recorded ${report.summary?.workloadCount}`);
+  if (report.summary?.workloadCount !== workloads.length) {
+    failures.push(`expected ${workloads.length} workloads, report recorded ${report.summary?.workloadCount}`);
   }
 
   if (failures.length > 0) throw new Error(failures.join('\n'));
@@ -114,9 +123,10 @@ function runReport(options, manifest) {
 
   const config = reportConfig(manifest);
   const repetitions = config.repetitions || 1;
+  const workloads = targetSpecs(config, manifest, options.workloads);
   const args = ['scripts/web-tooling-driver.js', '--web-tooling-dir', options.webToolingDir];
 
-  for (const workload of targetSpecs(config, manifest)) {
+  for (const workload of workloads) {
     args.push('--workload', workload);
   }
   args.push(
@@ -131,7 +141,7 @@ function runReport(options, manifest) {
   }
 
   const report = JSON.parse(fs.readFileSync(options.output, 'utf8'));
-  validateReport(report, manifest);
+  validateReport(report, manifest, workloads);
 }
 
 function main(argv = process.argv.slice(2)) {

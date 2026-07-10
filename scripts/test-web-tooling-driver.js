@@ -7,8 +7,11 @@ const {
   parseArgs,
   parseMetric,
   summarizeSamples,
+  webToolingEntrySource,
+  webToolingVirtualFSSource,
 } = require('./web-tooling-driver.js');
 const { targetSpecs, validateReport } = require('./web-tooling-ci-report.js');
+const { mergeReports } = require('./web-tooling-merge-reports.js');
 const {
   MARKER,
   buildWebToolingReportComment,
@@ -49,6 +52,23 @@ console.log('web-tooling-driver: manifest workloads...');
 {
   const manifest = { webTooling: { workloads: ['acorn', 'babel'] } };
   assertEqual(manifestWorkloads(manifest).join(','), 'acorn,babel', 'reads workload list');
+}
+
+console.log('web-tooling-driver: generated harness...');
+{
+  const entry = webToolingEntrySource('acorn');
+  assert(entry.includes('require("./acorn-benchmark")'), 'entry statically imports one workload');
+  assert(entry.includes('target.fn();'), 'entry invokes the upstream workload directly');
+  assert(!entry.includes('Benchmark.Suite'), 'entry does not bundle Benchmark.js measurement machinery');
+
+  const vfs = webToolingVirtualFSSource([
+    {
+      fileName: 'third_party/input.js',
+      request: 'raw-loader!../third_party/input.js',
+    },
+  ]);
+  assert(vfs.includes('files["third_party/input.js"]'), 'VFS embeds selected workload payloads');
+  assert(vfs.includes('readFileSync: function(fileName)'), 'VFS exposes the upstream fs surface');
 }
 
 console.log('web-tooling-driver: output parsing...');
@@ -142,6 +162,36 @@ console.log('web-tooling-ci-report: validation...');
     ],
   }, manifest);
   assert(true, 'ci report validation accepts complete workload reports with recorded failures');
+
+  const shardMetadata = {
+    goccia: { commit: 'abc123' },
+    options: { repetitions: 1 },
+  };
+  const merged = mergeReports([
+    {
+      schemaVersion: 1,
+      metadata: shardMetadata,
+      targets: [{
+        kind: 'web-tooling',
+        name: 'babel',
+        build: { outcome: 'ok' },
+        summary: { ok: 1 },
+      }],
+    },
+    {
+      schemaVersion: 1,
+      metadata: shardMetadata,
+      targets: [{
+        kind: 'web-tooling',
+        name: 'acorn',
+        build: { outcome: 'ok' },
+        summary: { ok: 1 },
+      }],
+    },
+  ], manifest);
+  assertEqual(merged.targets.map((target) => target.name).join(','), 'acorn,babel', 'merge restores manifest order');
+  assertEqual(merged.summary.completedCount, 2, 'merge rebuilds the overall summary');
+  assertEqual(merged.metadata.shards.count, 2, 'merge records shard count');
 }
 
 console.log('web-tooling-comment: markdown...');
