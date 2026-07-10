@@ -5,7 +5,7 @@
 ## Executive Summary
 
 - **Module-only benchmark API** — Import `bench`, `group`, `run`, `summary`, and `boxplot` from `"goccia:microbench"`; no benchmark helpers are ambient globals
-- **Five output formats** — `console` (default), `text`, `csv`, `json`, `compact-json`; configurable via `--format` and `--output`
+- **Distribution-aware reports** — Five output formats report p75/p99/p999 and interquartile bars; scoped `boxplot()` and `summary()` wrappers add charts and uncertainty-aware comparisons, with reproducible statistics in structured output
 - **Profiler-backed runs** — Bytecode benchmark runs can emit opcode/function profiles with `--profile`, including deterministic single-run capture
 - **CI integration** — PR workflow posts benchmark comparison comments with range-overlap classification; main CI retains deterministic profile reports
 - **Environment tuning** — Calibration time, warmup iterations, and measurement rounds configurable via environment variables
@@ -53,10 +53,10 @@ The GocciaBenchmarkRunner supports five output formats via the `--format` option
 
 | Format | Description |
 |--------|-------------|
-| `console` (default) | Pretty-printed columnar output with group headers, variance, setup/teardown times, and summary |
-| `text` | Compact one-line-per-benchmark format with optional `setup=Xms teardown=Xms` suffixes |
-| `csv` | Standard CSV with header row (`file,suite,name,ops_per_sec,variance_percentage,mean_ms,iterations,setup_ms,teardown_ms,error`) |
-| `json` | Structured JSON with the common CLI envelope (`build`, aggregate `output`, `timing`, `memory`, `workers`) and a `files[]` array containing each `fileName`, per-file timing, and nested `benchmarks[]`, including `opsPerSec`, `variancePercentage`, `minOpsPerSec`, `maxOpsPerSec`, `setupMs`, and `teardownMs` |
+| `console` (default) | Pretty-printed output with group headers, throughput, variance, p75/p99/p999, per-benchmark interquartile bars, scoped boxplots, relative summaries, and setup/teardown times |
+| `text` | Compact one-line-per-benchmark output followed by any scoped boxplots and relative summaries |
+| `csv` | Scalar throughput and sample statistics, wrapper-scope identifiers, and derived relative-comparison fields |
+| `json` | Structured JSON with the common CLI envelope and per-benchmark throughput, sample statistics, wrapper scopes, and uncertainty-aware relative comparison data |
 | `compact-json` | Same structured JSON shape, omitting `build`, `memory`, `stdout`, and `stderr` for smaller machine-readable output |
 
 Use `--output=<file>` to write results to a file instead of stdout.
@@ -189,15 +189,18 @@ group("collections", () => {
 - The yielded function is the timed benchmark body.
 - Cleanup that must run during generator close belongs in a `finally` block around the `yield`.
 - Setup and teardown are independently timed and reported as `setupMs`, `teardownMs`, and the main `opsPerSec`/`meanMs` metrics.
-- `summary(fn)` and `boxplot(fn)` are accepted output-shaping wrappers. Rich percentile and chart rendering belongs to issue #855, so today they should be treated as registration wrappers rather than a promise of additional report fields.
+- `summary(fn)` creates a comparison scope. Its measured benchmarks are ordered by median invocation time and compared with the fastest member. The central ratio uses medians; the displayed range divides the competitor's p25/p75 by the fastest member's p75/p25. A range crossing `1.0x` is reported as inconclusive.
+- `boxplot(fn)` creates a visualization scope. Its measured benchmarks share an interquartile chart scale from the fastest observed sample through the slowest p99.
+- Nested `summary()` and `boxplot()` wrappers retain both memberships. Benchmarks outside a wrapper still receive percentile statistics and an individual interquartile bar, but do not participate in that scoped view.
+- Wrapper callbacks may be async; the wrapper waits for the returned promise before closing its reporting scope.
 - `run(opts?)` executes the currently registered benchmarks from script code. `GocciaBenchmarkRunner` also auto-runs registered benchmarks after loading a file, but a script-callable `run()` consumes the pending registry so the runner does not measure the same benchmarks twice.
 
 ### Data flow
 
 ```text
-setup before yield → yielded run function → warmup/calibrate/measure → close generator
-        ↓                         ↓                                      ↓
-     setupMs             opsPerSec, meanMs, variance                 teardownMs
+setup before yield → yielded run function → warmup/calibrate → throughput rounds → bounded samples → close generator
+        ↓                         ↓                         ↓                  ↓                 ↓
+     setupMs                iterations          ops/sec, CV, range     percentiles       teardownMs
 ```
 
 ### Guidelines
@@ -222,6 +225,7 @@ The `GocciaBenchmarkRunner` program:
    - **Warmup:** Configurable iterations to stabilize (default 5). The yielded function or plain benchmark function is called for each iteration.
    - **Calibrate:** Scales batch size until it runs for at least the target calibration time (default 200ms). Uses nanosecond-resolution timing via `TimingUtils` (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows).
    - **Measure:** Runs multiple measurement rounds (default 7). GC is disabled during measurement for identical behavior in both interpreter and bytecode modes. Between rounds, `CollectYoung` reclaims measurement garbage efficiently (pre-marks old objects, only traverses new allocations). After all rounds, IQR-based outlier filtering removes noise spikes before computing the coefficient of variation (CV%) and median values.
+   - **Sample:** Individually times at most 10,000 calibrated invocations. This separate pass leaves historical ops/sec and variance semantics unchanged and cannot add more invocations than calibration selected.
    - **Teardown:** Closes generator callbacks after measurement (timed), running `finally` cleanup when present.
 8. After each file completes, `GC.Collect` runs to reclaim memory between script executions.
 9. Collects all results into a `TBenchmarkReporter`, which renders the chosen output format.
@@ -243,8 +247,8 @@ The non-zero exit code ensures CI pipelines fail when benchmarks crash or produc
 | `bench(name, fn)` | Register a benchmark function. `fn` is called many times during measurement; generator callbacks use pre-yield setup, a yielded measured function, and `finally` cleanup on close. |
 | `group(name, fn)` | Group benchmarks (like `describe` in tests). Executes `fn` immediately. |
 | `run(opts?)` | Execute registered benchmarks from script code and return results. Calling `run()` prevents the runner's post-load auto-run from measuring the same registry again. |
-| `summary(fn)` | Accepted registration wrapper for summary-shaped output. Richer summary reporting is tracked in #855. |
-| `boxplot(fn)` | Accepted registration wrapper for boxplot-shaped output. Richer chart output is tracked in #855. |
+| `summary(fn)` | Register a comparison scope that reports median relative speed, a conservative interquartile ratio range, and inconclusive overlap. |
+| `boxplot(fn)` | Register a visualization scope whose benchmarks share an interquartile chart scale. |
 
 ## Available Benchmarks
 
