@@ -68,7 +68,6 @@ type
 
     function GetFileResult(AIndex: Integer): TBenchmarkFileResult;
     function FormatOpsPerSec(const AOps: Double): string;
-    function EscapeCSVField(const S: string): string;
   public
     constructor Create;
     destructor Destroy; override;
@@ -99,6 +98,36 @@ uses
 
   Goccia.CSV,
   Goccia.JSON.Utils;
+
+type
+  TBenchmarkCSVField = (bcfFile, bcfSuite, bcfName, bcfOpsPerSec,
+    bcfVariancePercentage, bcfMeanMs, bcfIterations, bcfSetupMs,
+    bcfTeardownMs, bcfMinOpsPerSec, bcfMaxOpsPerSec, bcfSampleCount,
+    bcfMinSampleMs, bcfP25Ms, bcfMedianMs, bcfP75Ms, bcfP99Ms, bcfP999Ms,
+    bcfMaxSampleMs, bcfSummaryScope, bcfBoxplotScope, bcfRelativeMedian,
+    bcfRelativeLow, bcfRelativeHigh, bcfRelativeInconclusive, bcfError);
+  TBenchmarkCSVFields = array[TBenchmarkCSVField] of string;
+
+const
+  BENCHMARK_CSV_HEADER: TBenchmarkCSVFields = ('file', 'suite', 'name',
+    'ops_per_sec', 'variance_percentage', 'mean_ms', 'iterations', 'setup_ms',
+    'teardown_ms', 'min_ops_per_sec', 'max_ops_per_sec', 'sample_count',
+    'min_sample_ms', 'p25_ms', 'median_ms', 'p75_ms', 'p99_ms', 'p999_ms',
+    'max_sample_ms', 'summary_scope', 'boxplot_scope', 'relative_median',
+    'relative_low', 'relative_high', 'relative_inconclusive', 'error');
+
+function JoinCSVFields(const AFields: TBenchmarkCSVFields): string;
+var
+  Field: TBenchmarkCSVField;
+begin
+  Result := '';
+  for Field := Low(TBenchmarkCSVField) to High(TBenchmarkCSVField) do
+  begin
+    if Field <> Low(TBenchmarkCSVField) then
+      Result := Result + ',';
+    Result := Result + TGocciaCSVStringifier.EscapeField(AFields[Field], ',');
+  end;
+end;
 
 function IsPositiveFinite(const AValue: Double): Boolean;
 begin
@@ -310,11 +339,6 @@ begin
       Result := Result + ',';
     Result := Result + S[I];
   end;
-end;
-
-function TBenchmarkReporter.EscapeCSVField(const S: string): string;
-begin
-  Result := TGocciaCSVStringifier.EscapeField(S, ',');
 end;
 
 procedure TBenchmarkReporter.RenderScopedViews(
@@ -596,18 +620,15 @@ procedure TBenchmarkReporter.RenderCSV;
 var
   F, E, FastestIndex: Integer;
   Entry: TBenchmarkEntry;
-  SummaryScope, BoxplotScope, RelativeFields: string;
+  Field: TBenchmarkCSVField;
+  Fields: TBenchmarkCSVFields;
   Ratio, LowRatio, HighRatio: Double;
   Inconclusive: Boolean;
   CSVFormatSettings: TFormatSettings;
 begin
   CSVFormatSettings := DefaultFormatSettings;
   CSVFormatSettings.DecimalSeparator := '.';
-  FOutput.Add('file,suite,name,ops_per_sec,variance_percentage,mean_ms,' +
-    'iterations,setup_ms,teardown_ms,min_ops_per_sec,max_ops_per_sec,' +
-    'sample_count,min_sample_ms,p25_ms,median_ms,p75_ms,p99_ms,p999_ms,' +
-    'max_sample_ms,summary_scope,boxplot_scope,relative_median,' +
-    'relative_low,relative_high,relative_inconclusive,error');
+  FOutput.Add(JoinCSVFields(BENCHMARK_CSV_HEADER));
 
   for F := 0 to FFileCount - 1 do
   begin
@@ -615,23 +636,50 @@ begin
     begin
       Entry := FFiles[F].Entries[E];
 
+      for Field := Low(TBenchmarkCSVField) to High(TBenchmarkCSVField) do
+        Fields[Field] := '';
+      Fields[bcfFile] := FFiles[F].FileName;
+      Fields[bcfSuite] := Entry.Suite;
+      Fields[bcfName] := Entry.Name;
       if Entry.SummaryScope > 0 then
-        SummaryScope := IntToStr(Entry.SummaryScope)
-      else
-        SummaryScope := '';
+        Fields[bcfSummaryScope] := IntToStr(Entry.SummaryScope);
       if Entry.BoxplotScope > 0 then
-        BoxplotScope := IntToStr(Entry.BoxplotScope)
-      else
-        BoxplotScope := '';
+        Fields[bcfBoxplotScope] := IntToStr(Entry.BoxplotScope);
 
       if Entry.Error <> '' then
-        FOutput.Add(EscapeCSVField(FFiles[F].FileName) + ',' +
-          EscapeCSVField(Entry.Suite) + ',' + EscapeCSVField(Entry.Name) +
-          StringOfChar(',', 17) + SummaryScope + ',' + BoxplotScope +
-          StringOfChar(',', 5) + EscapeCSVField(Entry.Error))
+        Fields[bcfError] := Entry.Error
       else
       begin
-        RelativeFields := ',,,';
+        Fields[bcfOpsPerSec] := SysUtils.Format('%.6f', [Entry.OpsPerSec],
+          CSVFormatSettings);
+        Fields[bcfVariancePercentage] := SysUtils.Format('%.4f',
+          [Entry.VariancePercentage], CSVFormatSettings);
+        Fields[bcfMeanMs] := SysUtils.Format('%.6f', [Entry.MeanMs],
+          CSVFormatSettings);
+        Fields[bcfIterations] := IntToStr(Entry.Iterations);
+        Fields[bcfSetupMs] := SysUtils.Format('%.6f', [Entry.SetupMs],
+          CSVFormatSettings);
+        Fields[bcfTeardownMs] := SysUtils.Format('%.6f', [Entry.TeardownMs],
+          CSVFormatSettings);
+        Fields[bcfMinOpsPerSec] := SysUtils.Format('%.6f',
+          [Entry.MinOpsPerSec], CSVFormatSettings);
+        Fields[bcfMaxOpsPerSec] := SysUtils.Format('%.6f',
+          [Entry.MaxOpsPerSec], CSVFormatSettings);
+        Fields[bcfSampleCount] := IntToStr(Entry.SampleCount);
+        Fields[bcfMinSampleMs] := SysUtils.Format('%.6f',
+          [Entry.MinSampleMs], CSVFormatSettings);
+        Fields[bcfP25Ms] := SysUtils.Format('%.6f', [Entry.P25Ms],
+          CSVFormatSettings);
+        Fields[bcfMedianMs] := SysUtils.Format('%.6f', [Entry.MedianMs],
+          CSVFormatSettings);
+        Fields[bcfP75Ms] := SysUtils.Format('%.6f', [Entry.P75Ms],
+          CSVFormatSettings);
+        Fields[bcfP99Ms] := SysUtils.Format('%.6f', [Entry.P99Ms],
+          CSVFormatSettings);
+        Fields[bcfP999Ms] := SysUtils.Format('%.6f', [Entry.P999Ms],
+          CSVFormatSettings);
+        Fields[bcfMaxSampleMs] := SysUtils.Format('%.6f',
+          [Entry.MaxSampleMs], CSVFormatSettings);
         if Entry.SummaryScope > 0 then
         begin
           FastestIndex := FindFastestSummaryEntry(FFiles[F],
@@ -641,22 +689,18 @@ begin
             CalculateRelativeComparison(Entry,
               FFiles[F].Entries[FastestIndex], E = FastestIndex, Ratio,
               LowRatio, HighRatio, Inconclusive);
-            RelativeFields := SysUtils.Format('%.6f,%.6f,%.6f,%s',
-              [Ratio, LowRatio, HighRatio,
-               LowerCase(BoolToStr(Inconclusive, True))], CSVFormatSettings);
+            Fields[bcfRelativeMedian] := SysUtils.Format('%.6f', [Ratio],
+              CSVFormatSettings);
+            Fields[bcfRelativeLow] := SysUtils.Format('%.6f', [LowRatio],
+              CSVFormatSettings);
+            Fields[bcfRelativeHigh] := SysUtils.Format('%.6f', [HighRatio],
+              CSVFormatSettings);
+            Fields[bcfRelativeInconclusive] := LowerCase(
+              BoolToStr(Inconclusive, True));
           end;
         end;
-        FOutput.Add(SysUtils.Format(
-          '%s,%s,%s,%.6f,%.4f,%.6f,%d,%.6f,%.6f,%.6f,%.6f,' +
-          '%d,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%s,%s,%s,',
-          [EscapeCSVField(FFiles[F].FileName), EscapeCSVField(Entry.Suite),
-           EscapeCSVField(Entry.Name), Entry.OpsPerSec, Entry.VariancePercentage,
-           Entry.MeanMs, Entry.Iterations, Entry.SetupMs, Entry.TeardownMs,
-           Entry.MinOpsPerSec, Entry.MaxOpsPerSec, Entry.SampleCount,
-           Entry.MinSampleMs, Entry.P25Ms, Entry.MedianMs, Entry.P75Ms,
-           Entry.P99Ms, Entry.P999Ms, Entry.MaxSampleMs, SummaryScope,
-           BoxplotScope, RelativeFields], CSVFormatSettings));
       end;
+      FOutput.Add(JoinCSVFields(Fields));
     end;
   end;
 end;
