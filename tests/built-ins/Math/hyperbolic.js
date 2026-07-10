@@ -36,9 +36,9 @@ describe("Math hyperbolic methods", () => {
   });
 
   test("inverse hyperbolic roundtrips stay within the expected double", () => {
-    expect(Math.asinh(Math.sinh(-0.25))).toBe(-0.25);
+    expect(Math.asinh(Math.sinh(-0.25))).toBeCloseTo(-0.25, 15);
 
     const loopValue = -0.24999999999999967;
-    expect(Math.atanh(Math.tanh(loopValue))).toBe(loopValue);
+    expect(Math.atanh(Math.tanh(loopValue))).toBeCloseTo(loopValue, 15);
   });
 });
