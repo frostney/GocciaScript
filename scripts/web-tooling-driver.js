@@ -166,7 +166,7 @@ function parseUpstreamSource(acorn, source, fileName) {
 }
 
 function readWebToolingPayloadEntries(webToolingDir, workload) {
-  const acorn = require(path.join(webToolingDir, 'node_modules', 'acorn'));
+  const acorn = require(path.resolve(webToolingDir, 'node_modules', 'acorn'));
   const vfsFile = path.join(webToolingDir, 'src', 'vfs.js');
   const benchmarkFile = path.join(webToolingDir, 'src', `${workload}-benchmark.js`);
   const vfsSource = fs.readFileSync(vfsFile, 'utf8');
