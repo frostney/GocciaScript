@@ -146,7 +146,10 @@ const
   //               constant pool.
   //   v69 -> v70: added OP_SET_CLASS_SOURCE_CONST so Function.prototype.toString
   //               can return exact class source text in bytecode mode.
-  GOCCIA_FORMAT_VERSION = 70;
+  //   v70 -> v71: added resolved environment-reference and static global-set
+  //               opcodes so assignment preserves its left-hand Reference
+  //               across direct eval.
+  GOCCIA_FORMAT_VERSION = 71;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -394,7 +397,11 @@ type
     OP_DEFINE_GLOBAL_FUNCTION_LONG = 217,
     OP_PREDECLARE_GLOBAL_LET_LONG = 218,
     OP_PREDECLARE_GLOBAL_CONST_LONG = 219,
-    OP_LOAD_CHAR     = 220
+    OP_LOAD_CHAR     = 220,
+    OP_RESOLVE_UPVALUE_REF = 221,
+    OP_SET_UPVALUE_REF = 222,
+    OP_SET_GLOBAL_STATIC = 223,
+    OP_SET_UPVALUE_DYNAMIC = 224
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;

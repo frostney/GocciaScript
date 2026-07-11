@@ -258,6 +258,8 @@ type
     procedure SetFunctionNameFromKey(const AFunction, AKey: TGocciaValue;
       const APrefixKind: UInt8);
     function EnsureCurrentDynamicVarScope: TGocciaScope;
+    function ResolveDynamicUpvalueScope(const AIndex: Integer;
+      const AName: string): TGocciaScope;
     function KeyDisplaySafe(const AKey: TGocciaRegister): string;
     // ALimit semantics:
     //   ALimit < 0 → unbounded (drain until iterator returns done:true);
@@ -602,6 +604,7 @@ type
     procedure ResolveAssignmentTarget(const AName: string;
       out AObjectBinding: TGocciaObjectValue; out AScopeBinding: TGocciaScope); override;
     function Contains(const AName: string): Boolean; override;
+    function ContainsVarEnvironmentBinding(const AName: string): Boolean; override;
     procedure CopyBackVariableBindings;
     procedure CopyNewVariableBindingsToParent;
   end;
@@ -1446,6 +1449,17 @@ begin
     (Binding.Kind in [debLocal, debGlobal]);
 end;
 
+function TGocciaVMDirectEvalScope.ContainsVarEnvironmentBinding(
+  const AName: string): Boolean;
+var
+  Binding: TGocciaDirectEvalBindingInfo;
+begin
+  if ContainsOwnLexicalBinding(AName) or ContainsOwnVarBinding(AName) then
+    Exit(True);
+  Result := TryFindBinding(AName, Binding) and
+    (Binding.Kind = debLocal) and Binding.IsVarEnvironmentBinding;
+end;
+
 procedure TGocciaVMDirectEvalScope.CopyBackVariableBindings;
 var
   Env: TGocciaDirectEvalEnvironment;
@@ -1495,6 +1509,11 @@ begin
     if not TryGetOwnBinding(Name, Binding) then
       Continue;
     Parent.DefineVariableBinding(Name, Binding.Value, True, True);
+    // ES2026 §19.2.1.3 EvalDeclarationInstantiation creates deletable
+    // bindings in variableEnv. Remove only this adapter's temporary binding;
+    // virtual DeleteBinding would resolve a same-named with-object property.
+    if inherited DeleteBinding(Name) then
+      MarkDeletedVarBinding(Name);
   end;
 end;
 
@@ -2429,6 +2448,22 @@ begin
 end;
 
 type
+  TGocciaResolvedEnvironmentReferenceValue = class(TGocciaValue)
+  private
+    FScope: TGocciaScope;
+    FStrict: Boolean;
+  public
+    constructor Create(const AScope: TGocciaScope; const AStrict: Boolean);
+    procedure MarkReferences; override;
+    function TypeName: string; override;
+    function TypeOf: string; override;
+    function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
+    function ToNumberLiteral: TGocciaNumberLiteralValue; override;
+    function ToStringLiteral: TGocciaStringLiteralValue; override;
+    property Scope: TGocciaScope read FScope;
+    property Strict: Boolean read FStrict;
+  end;
+
   TGocciaBytecodeGeneratorObjectValue = class;
 
   TGocciaVMDecoratorSession = class
@@ -2748,6 +2783,50 @@ type
     procedure MarkReferences; override;
   end;
 
+constructor TGocciaResolvedEnvironmentReferenceValue.Create(
+  const AScope: TGocciaScope; const AStrict: Boolean);
+begin
+  inherited Create;
+  FScope := AScope;
+  FStrict := AStrict;
+end;
+
+procedure TGocciaResolvedEnvironmentReferenceValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FScope) then
+    FScope.MarkReferences;
+end;
+
+function TGocciaResolvedEnvironmentReferenceValue.TypeName: string;
+begin
+  Result := '<environment-reference>';
+end;
+
+function TGocciaResolvedEnvironmentReferenceValue.TypeOf: string;
+begin
+  Result := '<environment-reference>';
+end;
+
+function TGocciaResolvedEnvironmentReferenceValue.ToBooleanLiteral:
+  TGocciaBooleanLiteralValue;
+begin
+  Result := TGocciaBooleanLiteralValue.TrueValue;
+end;
+
+function TGocciaResolvedEnvironmentReferenceValue.ToNumberLiteral:
+  TGocciaNumberLiteralValue;
+begin
+  Result := TGocciaNumberLiteralValue.NaNValue;
+end;
+
+function TGocciaResolvedEnvironmentReferenceValue.ToStringLiteral:
+  TGocciaStringLiteralValue;
+begin
+  Result := TGocciaStringLiteralValue.Create('<environment-reference>');
+end;
+
 { TGocciaVMStackRoot }
 
 constructor TGocciaVMStackRoot.Create(const AVM: TGocciaVM);
@@ -2775,6 +2854,8 @@ begin
     AClosure.NewTarget.MarkReferences;
   if Assigned(AClosure.GlobalScope) then
     AClosure.GlobalScope.MarkReferences;
+  if Assigned(AClosure.DynamicVarScope) then
+    AClosure.DynamicVarScope.MarkReferences;
   for I := 0 to AClosure.UpvalueCount - 1 do
   begin
     Upvalue := AClosure.GetUpvalue(I);
@@ -4899,6 +4980,8 @@ begin
       FClosure.NewTarget.MarkReferences;
     if Assigned(FClosure.GlobalScope) then
       FClosure.GlobalScope.MarkReferences;
+    if Assigned(FClosure.DynamicVarScope) then
+      FClosure.DynamicVarScope.MarkReferences;
     for I := 0 to FClosure.UpvalueCount - 1 do
     begin
       Upvalue := FClosure.GetUpvalue(I);
@@ -7259,6 +7342,8 @@ begin
     FClosure.NewTarget.MarkReferences;
   if Assigned(FClosure.GlobalScope) then
     FClosure.GlobalScope.MarkReferences;
+  if Assigned(FClosure.DynamicVarScope) then
+    FClosure.DynamicVarScope.MarkReferences;
   if Assigned(FConstructClassValue) then
     FConstructClassValue.MarkReferences;
 
@@ -9572,6 +9657,8 @@ begin
 end;
 
 function TGocciaVM.EnsureCurrentDynamicVarScope: TGocciaScope;
+var
+  ParentScope: TGocciaScope;
 begin
   if Assigned(FCurrentDynamicVarScope) then
     Exit(FCurrentDynamicVarScope);
@@ -9579,7 +9666,11 @@ begin
   if not Assigned(FGlobalScope) then
     Exit(nil);
 
-  FCurrentDynamicVarScope := FGlobalScope.CreateChild(skFunction,
+  ParentScope := FGlobalScope;
+  if Assigned(FCurrentClosure) and
+     Assigned(FCurrentClosure.DynamicVarScope) then
+    ParentScope := FCurrentClosure.DynamicVarScope;
+  FCurrentDynamicVarScope := ParentScope.CreateChild(skFunction,
     'BytecodeDynamicVarEnv');
   if FLocalCellCount > 0 then
     FCurrentDynamicVarScope.ThisValue := GetLocal(0)
@@ -9589,12 +9680,51 @@ begin
   Result := FCurrentDynamicVarScope;
 end;
 
+function FindDynamicVarBindingScope(const AScope: TGocciaScope;
+  const AName: string): TGocciaScope;
+var
+  ScopeCursor: TGocciaScope;
+begin
+  ScopeCursor := AScope;
+  while Assigned(ScopeCursor) and (ScopeCursor.ScopeKind <> skGlobal) do
+  begin
+    if ScopeCursor.ContainsOwnVarBinding(AName) or
+       ScopeCursor.ContainsOwnLexicalBinding(AName) then
+      Exit(ScopeCursor);
+    ScopeCursor := ScopeCursor.Parent;
+  end;
+  Result := nil;
+end;
+
 function HasDynamicVarBinding(const AScope: TGocciaScope;
+  const AName: string): Boolean; inline;
+begin
+  Result := Assigned(FindDynamicVarBindingScope(AScope, AName));
+end;
+
+function HasOwnDynamicVarBinding(const AScope: TGocciaScope;
   const AName: string): Boolean; inline;
 begin
   Result := Assigned(AScope) and
     (AScope.ContainsOwnVarBinding(AName) or
      AScope.ContainsOwnLexicalBinding(AName));
+end;
+
+function TGocciaVM.ResolveDynamicUpvalueScope(const AIndex: Integer;
+  const AName: string): TGocciaScope;
+begin
+  Result := nil;
+  if (AName = '') or not Assigned(FCurrentClosure) or
+     not Assigned(FCurrentDynamicVarScope) then
+    Exit;
+
+  if (FCurrentDynamicVarScope <> FCurrentClosure.DynamicVarScope) and
+     HasOwnDynamicVarBinding(FCurrentDynamicVarScope, AName) then
+    Exit(FCurrentDynamicVarScope);
+
+  if FCurrentClosure.IsDynamicVarUpvalue(AIndex) then
+    Result := FindDynamicVarBindingScope(FCurrentClosure.DynamicVarScope,
+      AName);
 end;
 
 procedure TGocciaVM.DefineGlobalBinding(const AName: string;
@@ -12885,7 +13015,11 @@ begin
   FCurrentClosure := AClosure;
   if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
     FGlobalScope := AClosure.GlobalScope;
-  FCurrentDynamicVarScope := nil;
+  if Assigned(AClosure) and
+     (ATemplate.DirectEvalEnvironmentCount = 0) then
+    FCurrentDynamicVarScope := AClosure.DynamicVarScope
+  else
+    FCurrentDynamicVarScope := nil;
   FCurrentExecutionContextPushed := False;
   Inc(FFrameDepth);
   // Push a deferred frame: store the template pointer and (only when the
@@ -12933,6 +13067,11 @@ begin
   SetLocalRaw(0, AThisValue);
   for I := 0 to FArgCount - 1 do
     SetLocalRaw(I + 1, FArguments[I]);
+  // ES2026 §10.2.11 FunctionDeclarationInstantiation steps 19-20: sloppy
+  // parameter expressions need a separate var environment for direct eval.
+  if (ATemplate.DirectEvalEnvironmentCount > 0) and
+     not TemplateUsesGlobalEvalEnvironment(ATemplate) then
+    EnsureCurrentDynamicVarScope;
 
   ExecutionRealm := BytecodeClosureExecutionRealm(AClosure, FRealm);
 
@@ -13032,6 +13171,8 @@ var
   SavedNewTarget: TGocciaValue;
   SavedGlobalScope: TGocciaScope;
   SavedDynamicVarScope: TGocciaScope;
+  ResolvedDynamicVarScope: TGocciaScope;
+  ResolvedEnvironmentReference: TGocciaResolvedEnvironmentReferenceValue;
   SavedExecutionContextPushed: Boolean;
   SavedHandlerCount: Integer;
   InitialFrameStackCount: Integer;
@@ -13369,11 +13510,12 @@ begin
         if Assigned(FCurrentClosure) then
         begin
           Desc := Template.GetUpvalueDescriptor(DecodeBx(Instruction));
-          if (Desc.Name <> '') and
-             HasDynamicVarBinding(FCurrentDynamicVarScope, Desc.Name) then
+          ResolvedDynamicVarScope := ResolveDynamicUpvalueScope(
+            DecodeBx(Instruction), Desc.Name);
+          if Assigned(ResolvedDynamicVarScope) then
           begin
             FRegisters[A] := VMValueToRegisterFast(
-              FCurrentDynamicVarScope.GetValue(Desc.Name));
+              ResolvedDynamicVarScope.GetValue(Desc.Name));
             Continue;
           end;
 
@@ -13403,6 +13545,75 @@ begin
             Upvalue.Cell.Value := FRegisters[A];
           end;
         end;
+      end;
+
+      OP_SET_UPVALUE_DYNAMIC:
+      begin
+        Desc := Template.GetUpvalueDescriptor(DecodeBx(Instruction));
+        ResolvedDynamicVarScope := ResolveDynamicUpvalueScope(
+          DecodeBx(Instruction), Desc.Name);
+        if Assigned(ResolvedDynamicVarScope) then
+          ResolvedDynamicVarScope.AssignBinding(Desc.Name,
+            RegisterToValue(FRegisters[A]))
+        else if Assigned(FCurrentClosure) then
+        begin
+          Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
+          if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
+          begin
+            if Upvalue.Cell.Value.Kind = grkHole then
+              ThrowReferenceError(
+                'Cannot access lexical binding before initialization');
+            Upvalue.Cell.Value := FRegisters[A];
+          end;
+        end;
+      end;
+
+      OP_RESOLVE_UPVALUE_REF:
+      begin
+        Desc := Template.GetUpvalueDescriptor(B);
+        ResolvedDynamicVarScope := ResolveDynamicUpvalueScope(B, Desc.Name);
+        if Assigned(ResolvedDynamicVarScope) then
+          SetRegister(A, TGocciaResolvedEnvironmentReferenceValue.Create(
+            ResolvedDynamicVarScope, C <> 0))
+        else
+          FRegisters[A] := RegisterUndefined;
+      end;
+
+      OP_SET_UPVALUE_REF:
+      begin
+        Desc := Template.GetUpvalueDescriptor(C);
+        if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is
+             TGocciaResolvedEnvironmentReferenceValue) then
+        begin
+          ResolvedEnvironmentReference :=
+            TGocciaResolvedEnvironmentReferenceValue(
+              FRegisters[B].ObjectValue);
+          ResolvedEnvironmentReference.Scope.SetOwnMutableBinding(Desc.Name,
+            RegisterToValue(FRegisters[A]),
+            ResolvedEnvironmentReference.Strict);
+        end
+        else if Assigned(FCurrentClosure) then
+        begin
+          Upvalue := FCurrentClosure.GetUpvalue(C);
+          if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
+          begin
+            if Upvalue.Cell.Value.Kind = grkHole then
+              ThrowReferenceError(
+                'Cannot access lexical binding before initialization');
+            Upvalue.Cell.Value := FRegisters[A];
+          end;
+        end;
+      end;
+
+      OP_SET_GLOBAL_STATIC:
+      begin
+        GlobalName := Template.GetConstantUnchecked(
+          DecodeBx(Instruction)).StringValue;
+        if Assigned(FGlobalScope) and
+           not FGlobalScope.TryAssignExistingBinding(GlobalName,
+             RegisterToValue(FRegisters[A])) then
+          ThrowReferenceError(GlobalName + ' is not defined');
       end;
 
       OP_CLOSE_UPVALUE:
@@ -15009,6 +15220,7 @@ begin
         ChildClosure := TGocciaBytecodeClosure.Create(
           ChildTemplate, ChildTemplate.UpvalueCount);
         ChildClosure.GlobalScope := FGlobalScope;
+        ChildClosure.DynamicVarScope := FCurrentDynamicVarScope;
         if ChildTemplate.IsArrow and Assigned(FCurrentClosure) then
         begin
           ChildClosure.HomeObject := FCurrentClosure.HomeObject;
@@ -15031,7 +15243,14 @@ begin
             ChildClosure.SetUpvalue(I, TGocciaBytecodeUpvalue.Create(
               GetLocalCell(Desc.Index)))
           else if Assigned(FCurrentClosure) then
+          begin
             ChildClosure.SetUpvalue(I, FCurrentClosure.GetUpvalue(Desc.Index));
+            ChildClosure.SetDynamicVarUpvalue(I,
+              ((FCurrentDynamicVarScope <>
+                FCurrentClosure.DynamicVarScope) and
+               Assigned(FCurrentDynamicVarScope)) or
+              FCurrentClosure.IsDynamicVarUpvalue(Desc.Index));
+          end;
         end;
         BytecodeFunction := TGocciaBytecodeFunctionValue.Create(Self, ChildClosure);
         // ES2026 §10.2.5 MakeConstructor: install own `prototype` data property

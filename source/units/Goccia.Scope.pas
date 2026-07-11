@@ -78,6 +78,8 @@ type
     procedure AssignBinding(const AName: string; const AValue: TGocciaValue;
       const ALine: Integer = 0; const AColumn: Integer = 0;
       const ANonStrictMode: Boolean = False); virtual;
+    procedure SetOwnMutableBinding(const AName: string;
+      const AValue: TGocciaValue; const AStrict: Boolean);
     procedure ForceUpdateBinding(const AName: string; const AValue: TGocciaValue);
     procedure MarkGlobalObjectBackedBinding(const AName: string);
     function IsGlobalObjectBackedBinding(const AName: string): Boolean;
@@ -86,6 +88,7 @@ type
     procedure DefineVariableBinding(const AName: string; const AValue: TGocciaValue;
       const AHasInitializer: Boolean; const ACanDelete: Boolean = False);
     function ContainsOwnVarBinding(const AName: string): Boolean;
+    function ContainsVarEnvironmentBinding(const AName: string): Boolean; virtual;
     function HasLexicalDeclaration(const AName: string): Boolean;
     function HasRestrictedGlobalProperty(const AName: string): Boolean;
     function CanDeclareGlobalVar(const AName: string): Boolean;
@@ -837,6 +840,11 @@ begin
     (Assigned(FGlobalVarNames) and FGlobalVarNames.ContainsKey(AName));
 end;
 
+function TGocciaScope.ContainsVarEnvironmentBinding(const AName: string): Boolean;
+begin
+  Result := ContainsOwnLexicalBinding(AName) or ContainsOwnVarBinding(AName);
+end;
+
 // ES2026 §9.1.1.4.15 HasLexicalDeclaration(N) — global-scope approximation.
 function TGocciaScope.HasLexicalDeclaration(const AName: string): Boolean;
 begin
@@ -996,6 +1004,46 @@ begin
   end;
 
   RaiseUndefinedVariable(AName, ALine, AColumn);
+end;
+
+// ES2026 §9.1.1.1.5 SetMutableBinding(N, V, S)
+procedure TGocciaScope.SetOwnMutableBinding(const AName: string;
+  const AValue: TGocciaValue; const AStrict: Boolean);
+var
+  Binding: TLexicalBinding;
+begin
+  if FLexicalBindings.TryGetValue(AName, Binding) then
+  begin
+    if not Binding.IsAccessible then
+      RaiseBindingNotInitialized(AName, 0, 0);
+    if not Binding.Writable then
+    begin
+      if AStrict then
+        raise TGocciaTypeError.Create(
+          Format(SErrorAssignToConstant, [AName]),
+          0, 0, '', nil, SSuggestUseLetNotConst);
+      Exit;
+    end;
+    if EffectiveStrictTypes and (Binding.TypeHint <> sltUntyped) then
+      EnforceStrictType(AValue, Binding.TypeHint);
+    Binding.Value := AValue;
+    Binding.Initialized := True;
+    FLexicalBindings.AddOrSetValue(AName, Binding);
+    Exit;
+  end;
+
+  if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, Binding) then
+  begin
+    if EffectiveStrictTypes and (Binding.TypeHint <> sltUntyped) then
+      EnforceStrictType(AValue, Binding.TypeHint);
+    Binding.Value := AValue;
+    FVarBindings.AddOrSetValue(AName, Binding);
+    Exit;
+  end;
+
+  if AStrict then
+    RaiseUndefinedVariable(AName, 0, 0);
+  DefineVariableBinding(AName, AValue, True, True);
 end;
 
 function TGocciaScope.TryAssignExistingBinding(const AName: string;
