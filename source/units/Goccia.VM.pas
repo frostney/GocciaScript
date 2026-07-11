@@ -160,6 +160,7 @@ type
     // separately from FFrameDepth because each native re-entry costs a real
     // native stack frame; see CheckNativeReentryDepth in Goccia.StackLimit.
     FNativeExecutionDepth: Integer;
+    FMemoryPressureCheckCountdown: Integer;
     FFrameStack: array of TGocciaVMCallFrame;
     FFrameStackCount: Integer;
     FCurrentExecutionContextPushed: Boolean;
@@ -535,6 +536,7 @@ const
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
   FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
   DERIVED_THIS_INITIALIZED_LOCAL = '__derived_this_initialized';
+  MEMORY_PRESSURE_CHECK_INTERVAL = 1024;
 
 type
   TGocciaVMSuperConstructorValue = class(TGocciaFunctionBase)
@@ -6234,6 +6236,7 @@ begin
   FPrivateInitializerReceiver := nil;
   FPrivateInitializerPreserveExisting := False;
   FTempSavedStateRootCount := 0;
+  FMemoryPressureCheckCountdown := MEMORY_PRESSURE_CHECK_INTERVAL;
   FCurrentExecutionContextPushed := False;
   FCurrentDynamicVarScope := nil;
   FGlobalBackedTopLevel := False;
@@ -16524,6 +16527,14 @@ begin
         else
           raise Exception.CreateFmt('Unsupported Goccia VM opcode in minimal executor: %d', [Op]);
         end;
+        if FMemoryPressureCheckCountdown = 0 then
+        begin
+          if Assigned(TGarbageCollector.Instance) then
+            TGarbageCollector.Instance.CollectForMemoryPressure(nil);
+          FMemoryPressureCheckCountdown := MEMORY_PRESSURE_CHECK_INTERVAL;
+        end
+        else
+          Dec(FMemoryPressureCheckCountdown);
         end;
       except
         on E: EGocciaBytecodeThrow do

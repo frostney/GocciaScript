@@ -786,7 +786,9 @@ var
   Reserve: Int64;
 begin
   Result := False;
-  if not FEnabled or (FMaxBytes <= 0) or FCollecting or FMemoryLimitFiring then
+  // Explicit pressure checks remain active when routine threshold GC is
+  // disabled, as it is during bytecode execution and benchmark measurement.
+  if (FMaxBytes <= 0) or FCollecting or FMemoryLimitFiring then
     Exit;
 
   Reserve := FMaxBytes div 8;

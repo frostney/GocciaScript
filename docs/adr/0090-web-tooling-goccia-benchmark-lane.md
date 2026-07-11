@@ -37,6 +37,10 @@ loose equality, labels, `arguments`, and the explicit
 contract: Web Tooling is a compatibility and viability probe, not a
 recommendation for default-style GocciaScript code.
 
+Per-workload resource ceilings are also part of the manifest contract. PostCSS
+uses a 25 MB managed-heap ceiling so bytecode memory-pressure collections run
+before a constrained CI host can terminate the process.
+
 The report is normalized JSON with one target entry per workload. A build
 failure, timeout, crash, OOM, or missing `runs/s` line is recorded as a
 first-class target outcome instead of failing the whole report. The job fails

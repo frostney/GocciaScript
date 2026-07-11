@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const DRIVER_VERSION = 2;
+const DRIVER_VERSION = 3;
 const DEFAULT_MANIFEST = path.join('perf', 'web-tooling', 'manifest.json');
 const DEFAULT_TIMEOUT_MS = 1500000;
 const DEFAULT_REPETITIONS = 1;
@@ -376,10 +376,21 @@ function classifyProcessOutcome(proc, metric, stdout, stderr) {
   return 'ok';
 }
 
-function runGocciaSample({ bundleFile, workload, repetition, options }) {
+function workloadGocciaFlags(manifest, workload) {
+  const configured = manifest.webTooling?.maxMemoryBytesByWorkload?.[workload];
+  if (configured === undefined) return [];
+  const maxMemoryBytes = parsePositiveInteger(
+    String(configured),
+    `max memory for ${workload}`,
+  );
+  return [`--max-memory=${maxMemoryBytes}`];
+}
+
+function runGocciaSample({ bundleFile, workload, repetition, options, manifest }) {
   const args = [
     bundleFile,
     ...DEFAULT_GOCCIA_FLAGS,
+    ...workloadGocciaFlags(manifest, workload),
     ...options.gocciaFlags,
   ];
   const startedAt = new Date().toISOString();
@@ -523,6 +534,8 @@ function collectMetadata(options, manifest) {
       workloadInvocationCount: 1,
       harness: 'direct-upstream-workload',
       gocciaFlags: DEFAULT_GOCCIA_FLAGS.concat(options.gocciaFlags),
+      maxMemoryBytesByWorkload:
+        manifest.webTooling?.maxMemoryBytesByWorkload || {},
     },
   };
 }
@@ -562,6 +575,7 @@ function main(argv = process.argv.slice(2)) {
             workload: target.name,
             repetition,
             options,
+            manifest,
           });
           samples.push(sample);
           const metric = typeof sample.runsPerSecond === 'number' ? ` ${sample.runsPerSecond} runs/s` : '';
@@ -638,4 +652,5 @@ module.exports = {
   summarizeSamples,
   webToolingEntrySource,
   webToolingVirtualFSSource,
+  workloadGocciaFlags,
 };

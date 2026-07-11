@@ -746,6 +746,29 @@ console.log("--max-memory (interpreter recursive expression pressure reclaims)..
   if ((json.memory?.gc?.collections ?? 0) <= 0) throw new Error(`Recursive expression pressure should report collections, got ${json.memory?.gc?.collections}`);
 }
 
+console.log("--max-memory (bytecode loop pressure reclaims)...");
+{
+  const src = [
+    "let total = 0;",
+    "for (let round = 0; round < 1000; round++) {",
+    "  let junk = Array.from({ length: 500 }, (_, i) => ({ round, i }));",
+    "  total += junk.length;",
+    "  junk = null;",
+    "}",
+    "total;",
+    "",
+  ].join("\n");
+  const { exitCode, json, stderr } = runLoaderJson(src, [
+    "--mode=bytecode",
+    "--max-memory=100000000",
+    "--compat-asi",
+    "--compat-traditional-for-loop",
+  ], { timeout: 30_000 });
+  if (exitCode !== 0) throw new Error(`Bytecode loop pressure exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
+  if (json.files?.[0]?.result !== 500000) throw new Error(`Bytecode loop pressure should return 500000, got ${json.files?.[0]?.result}`);
+  if ((json.memory?.gc?.collections ?? 0) <= 0) throw new Error(`Bytecode loop pressure should report collections, got ${json.memory?.gc?.collections}`);
+}
+
 console.log("--max-memory (maxBytes readonly)...");
 {
   const res = await $`echo 'Goccia.gc.maxBytes = 999' | ${LOADER} --compat-asi 2>&1`.nothrow();

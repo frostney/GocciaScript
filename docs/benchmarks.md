@@ -515,6 +515,8 @@ ECMAScript compatibility flag set used for legacy tooling bundles. The default
 per-process timeout is 25 minutes. Workloads with a demonstrated longer runtime
 can pin an override in the manifest. PostCSS currently has a 60-minute cap and
 CoffeeScript has a 240-minute cap based on hosted-runner measurements.
+PostCSS also runs with a 25 MB managed-heap ceiling so VM pressure collections
+occur before the hosted runner's process-memory limit.
 A workload build failure, timeout, crash,
 OOM, or missing benchmark result is recorded as data in the JSON report; the CI
 runner itself fails only when it cannot produce a complete report entry for

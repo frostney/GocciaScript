@@ -9,6 +9,7 @@ const {
   summarizeSamples,
   webToolingEntrySource,
   webToolingVirtualFSSource,
+  workloadGocciaFlags,
 } = require('./web-tooling-driver.js');
 const {
   targetSpecs,
@@ -54,8 +55,15 @@ console.log('web-tooling-driver: CLI parsing...');
 
 console.log('web-tooling-driver: manifest workloads...');
 {
-  const manifest = { webTooling: { workloads: ['acorn', 'babel'] } };
+  const manifest = {
+    webTooling: {
+      workloads: ['acorn', 'babel'],
+      maxMemoryBytesByWorkload: { postcss: 25000000 },
+    },
+  };
   assertEqual(manifestWorkloads(manifest).join(','), 'acorn,babel', 'reads workload list');
+  assertEqual(workloadGocciaFlags(manifest, 'acorn').length, 0, 'ordinary workloads keep the default memory ceiling');
+  assertEqual(workloadGocciaFlags(manifest, 'postcss').join(','), '--max-memory=25000000', 'workload memory ceilings become Goccia flags');
 }
 
 console.log('web-tooling-driver: generated harness...');

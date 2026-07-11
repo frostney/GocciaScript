@@ -23,11 +23,14 @@
       "terser",
       "typescript",
       "uglify-js"
-    ]
+    ],
+    "maxMemoryBytesByWorkload": {
+      "postcss": 25000000
+    }
   },
   "driver": {
     "script": "scripts/web-tooling-driver.js",
-    "version": 2
+    "version": 3
   },
   "ciReport": {
     "repetitions": 1,
