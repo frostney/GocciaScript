@@ -513,7 +513,8 @@ Lodash-based measurement machinery are not part of the measured bundle.
 Each bundle runs with `GocciaScriptLoader` in bytecode mode and the broad
 ECMAScript compatibility flag set used for legacy tooling bundles. The default
 per-process timeout is 25 minutes. Workloads with a demonstrated longer runtime
-can pin an override in the manifest; CoffeeScript currently has a 90-minute cap.
+can pin an override in the manifest. PostCSS currently has a 60-minute cap and
+CoffeeScript has a 240-minute cap based on hosted-runner measurements.
 A workload build failure, timeout, crash,
 OOM, or missing benchmark result is recorded as data in the JSON report; the CI
 runner itself fails only when it cannot produce a complete report entry for

@@ -460,6 +460,7 @@ jobs:
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   web-tooling-workload:
+    name: web-tooling-workload (${{ matrix.workload }})
     needs: [build, web-tooling-plan]
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.timeoutMinutes }}

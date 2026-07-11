@@ -33,7 +33,8 @@
     "repetitions": 1,
     "timeoutMs": 1500000,
     "timeoutMsByWorkload": {
-      "coffeescript": 5400000
+      "coffeescript": 14400000,
+      "postcss": 3600000
     },
     "workloads": [
       "acorn",
