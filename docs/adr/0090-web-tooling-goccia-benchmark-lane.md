@@ -20,7 +20,8 @@ curated subset: the current report set is `acorn`, `babel`, `babel-minify`,
 `typescript`, and `uglify-js`.
 
 The driver prepares upstream's generated Terser/UglifyJS self-bundles, then
-generates a static entry and payload-only `fs.readFileSync` adapter for each
+generates a static entry and payload-only `fs.readFile`/`fs.readFileSync`
+adapter for each
 workload. The entry imports exactly one upstream `*-benchmark` module and times
 one direct call to its exported `fn()`; process repetitions are the raw samples.
 This keeps the upstream workload and `third_party` inputs intact while excluding

@@ -27,5 +27,5 @@ See [Benchmarks](../docs/benchmarks.md#awfy-cross-engine-lane) and
 [ADR 0087](../docs/adr/0087-awfy-cross-engine-benchmark-methodology.md) for the
 AWFY methodology. See
 [Web Tooling Goccia Lane](../docs/benchmarks.md#web-tooling-goccia-lane) and
-[ADR 0089](../docs/adr/0089-web-tooling-goccia-benchmark-lane.md) for the
+[ADR 0090](../docs/adr/0090-web-tooling-goccia-benchmark-lane.md) for the
 Goccia-only Web Tooling lane.
