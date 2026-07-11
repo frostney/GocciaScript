@@ -499,7 +499,7 @@ all pinned upstream workloads: `acorn`, `babel`, `babel-minify`, `babylon`,
 `uglify-js`.
 
 The driver prepares upstream's generated Terser/UglifyJS self-bundles, then
-generates one static entry and payload-only `fs.readFileSync` adapter per
+generates one static entry and payload-only `fs.readFile`/`fs.readFileSync` adapter per
 workload. Webpack therefore includes only the selected upstream benchmark
 module, its tooling dependency, and the `third_party` files named by that
 module. The generated entry times one direct call to the module's exported
@@ -508,7 +508,9 @@ Lodash-based measurement machinery are not part of the measured bundle.
 
 Each bundle runs with `GocciaScriptLoader` in bytecode mode and the broad
 ECMAScript compatibility flag set used for legacy tooling bundles. The default
-per-process timeout is 15 minutes. A workload build failure, timeout, crash,
+per-process timeout is 25 minutes. Workloads with a demonstrated longer runtime
+can pin an override in the manifest; CoffeeScript currently has a 90-minute cap.
+A workload build failure, timeout, crash,
 OOM, or missing benchmark result is recorded as data in the JSON report; the CI
 runner itself fails only when it cannot produce a complete report entry for
 every manifest workload.

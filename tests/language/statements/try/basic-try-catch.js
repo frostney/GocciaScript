@@ -65,3 +65,18 @@ test("no exception thrown - catch without parameter should not execute", () => {
   }
   expect(shouldNotExecute2).toBe(false);
 });
+
+test("return expression remains inside the catch handler", () => {
+  const throwFromReturn = () => {
+    throw "caught return expression";
+  };
+  const run = () => {
+    try {
+      return throwFromReturn();
+    } catch (error) {
+      return error;
+    }
+  };
+
+  expect(run()).toBe("caught return expression");
+});

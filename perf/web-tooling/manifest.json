@@ -31,6 +31,10 @@
   },
   "ciReport": {
     "repetitions": 1,
+    "timeoutMs": 1500000,
+    "timeoutMsByWorkload": {
+      "coffeescript": 5400000
+    },
     "workloads": [
       "acorn",
       "babel",

@@ -214,6 +214,8 @@ begin
     OP_PREDECLARE_GLOBAL_LET_LONG:     Result := 'OP_PREDECLARE_GLOBAL_LET_LONG';
     OP_PREDECLARE_GLOBAL_CONST_LONG:   Result := 'OP_PREDECLARE_GLOBAL_CONST_LONG';
     OP_LOAD_CHAR:                      Result := 'OP_LOAD_CHAR';
+    OP_WIDE:                           Result := 'OP_WIDE';
+    OP_CONSTRUCT_SPREAD:               Result := 'OP_CONSTRUCT_SPREAD';
   else
     Result := Format('OP_UNKNOWN_%d', [AOp]);
   end;

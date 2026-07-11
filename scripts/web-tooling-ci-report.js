@@ -5,7 +5,7 @@ const { spawnSync } = require('child_process');
 
 const DEFAULT_MANIFEST = 'perf/web-tooling/manifest.json';
 const DEFAULT_OUTPUT = 'web-tooling-report.json';
-const DEFAULT_TIMEOUT_MS = 900000;
+const DEFAULT_TIMEOUT_MS = 1500000;
 
 function usage() {
   return [
@@ -16,7 +16,7 @@ function usage() {
     '  --web-tooling-dir <path>   Path to v8/web-tooling-benchmark checkout',
     '  --workload <name>          Run one manifest workload; repeatable',
     '  --output <path>            Report path (default: web-tooling-report.json)',
-    '  --timeout-ms <n>           Per-workload Goccia timeout (default: 900000)',
+    '  --timeout-ms <n>           Override the configured Goccia timeout',
   ].join('\n');
 }
 
@@ -27,6 +27,7 @@ function parseArgs(argv) {
     workloads: [],
     output: DEFAULT_OUTPUT,
     timeoutMs: DEFAULT_TIMEOUT_MS,
+    timeoutExplicit: false,
     help: false,
   };
 
@@ -51,6 +52,7 @@ function parseArgs(argv) {
       options.output = nextValue();
     } else if (arg === '--timeout-ms' || arg.startsWith('--timeout-ms=')) {
       options.timeoutMs = parsePositiveInteger(nextValue(), '--timeout-ms');
+      options.timeoutExplicit = true;
     } else {
       throw new Error(`Unknown option: ${arg}`);
     }
@@ -69,6 +71,15 @@ function parsePositiveInteger(value, optionName) {
 
 function reportConfig(manifest) {
   return manifest.ciReport || {};
+}
+
+function workloadTimeoutMs(config, workload, fallback = DEFAULT_TIMEOUT_MS) {
+  const configuredDefault = config.timeoutMs ?? fallback;
+  const configuredOverride = config.timeoutMsByWorkload?.[workload];
+  return parsePositiveInteger(
+    String(configuredOverride ?? configuredDefault),
+    `timeout for ${workload}`,
+  );
 }
 
 function targetSpecs(config, manifest, requested = []) {
@@ -124,6 +135,9 @@ function runReport(options, manifest) {
   const config = reportConfig(manifest);
   const repetitions = config.repetitions || 1;
   const workloads = targetSpecs(config, manifest, options.workloads);
+  const timeoutMs = options.timeoutExplicit
+    ? options.timeoutMs
+    : Math.max(...workloads.map((workload) => workloadTimeoutMs(config, workload)));
   const args = ['scripts/web-tooling-driver.js', '--web-tooling-dir', options.webToolingDir];
 
   for (const workload of workloads) {
@@ -131,7 +145,7 @@ function runReport(options, manifest) {
   }
   args.push(
     '--repetitions', String(repetitions),
-    '--timeout-ms', String(options.timeoutMs),
+    '--timeout-ms', String(timeoutMs),
     '--output', options.output,
   );
 
@@ -170,4 +184,5 @@ module.exports = {
   reportConfig,
   targetSpecs,
   validateReport,
+  workloadTimeoutMs,
 };

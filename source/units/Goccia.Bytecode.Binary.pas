@@ -132,10 +132,10 @@ var
   Handler: TGocciaExceptionHandler;
 begin
   WriteString(AProto.Name);
-  WriteUInt8(AProto.MaxRegisters);
-  WriteUInt8(AProto.ParameterCount);
-  WriteUInt8(AProto.FormalParameterCount);
-  WriteUInt8(AProto.UpvalueCount);
+  WriteUInt16(AProto.MaxRegisters);
+  WriteUInt16(AProto.ParameterCount);
+  WriteUInt16(AProto.FormalParameterCount);
+  WriteUInt16(AProto.UpvalueCount);
   WriteBoolean(AProto.IsArrow);
   WriteBoolean(AProto.IsGenerator);
   WriteBoolean(AProto.IsAsync);
@@ -185,7 +185,7 @@ begin
   begin
     Descriptor := AProto.GetUpvalueDescriptor(I);
     WriteBoolean(Descriptor.IsLocal);
-    WriteUInt8(Descriptor.Index);
+    WriteUInt16(Descriptor.Index);
     WriteString(Descriptor.Name);
   end;
 
@@ -201,7 +201,7 @@ begin
       EvalBinding := EvalEnv.Bindings[J];
       WriteString(EvalBinding.Name);
       WriteUInt8(Ord(EvalBinding.Kind));
-      WriteUInt8(EvalBinding.Index);
+      WriteUInt16(EvalBinding.Index);
       WriteBoolean(EvalBinding.IsConst);
       WriteBoolean(EvalBinding.IsVarEnvironmentBinding);
       WriteBoolean(EvalBinding.IsEvalSyntheticArguments);
@@ -216,7 +216,7 @@ begin
     WriteUInt32(Handler.TryEnd);
     WriteUInt32(Handler.CatchTarget);
     WriteUInt32(Handler.FinallyTarget);
-    WriteUInt8(Handler.CatchRegister);
+    WriteUInt16(Handler.CatchRegister);
   end;
 
   WriteUInt16(UInt16(AProto.FunctionCount));
@@ -238,21 +238,21 @@ begin
     for I := 0 to AProto.DebugInfo.LocalCount - 1 do
     begin
       WriteString(AProto.DebugInfo.GetLocalInfo(I).Name);
-      WriteUInt8(AProto.DebugInfo.GetLocalInfo(I).Slot);
+      WriteUInt16(AProto.DebugInfo.GetLocalInfo(I).Slot);
       WriteUInt32(AProto.DebugInfo.GetLocalInfo(I).StartPC);
       WriteUInt32(AProto.DebugInfo.GetLocalInfo(I).EndPC);
     end;
   end;
 
-  WriteUInt8(AProto.LocalTypeCount);
+  WriteUInt16(AProto.LocalTypeCount);
   for I := 0 to AProto.LocalTypeCount - 1 do
-    WriteUInt8(Ord(AProto.GetLocalType(UInt8(I))));
+    WriteUInt8(Ord(AProto.GetLocalType(UInt16(I))));
 
-  WriteUInt8(AProto.LocalStrictCount);
+  WriteUInt16(AProto.LocalStrictCount);
   for I := 0 to AProto.LocalStrictCount - 1 do
-    WriteBoolean(AProto.GetLocalStrictFlag(UInt8(I)));
+    WriteBoolean(AProto.GetLocalStrictFlag(UInt16(I)));
 
-  WriteUInt8(AProto.TypeCheckPreambleSize);
+  WriteUInt16(AProto.TypeCheckPreambleSize);
   WriteUInt16(AProto.ParameterPreambleSize);
   if AProto.DirectEvalSyntheticArgumentsSlot < 0 then
     WriteUInt16(High(UInt16))
@@ -357,7 +357,7 @@ end;
 function TGocciaBytecodeReader.ReadFunctionTemplate: TGocciaFunctionTemplate;
 var
   Name: string;
-  MaxRegs, ParamCount, UpvalueCount, LocalTypeCount, LocalStrictCount: UInt8;
+  ParamCount, UpvalueCount, MaxRegs, LocalTypeCount, LocalStrictCount: UInt16;
   CodeCount: UInt32;
   ConstCount, FuncCount, HandlerCount, StrCount, EvalEnvCount,
     EvalBindingCount: UInt16;
@@ -368,7 +368,7 @@ var
   EvalBindings: TGocciaDirectEvalBindingArray;
   EvalBinding: TGocciaDirectEvalBindingInfo;
   UpvalueIsLocal: Boolean;
-  UpvalueIndex: UInt8;
+  UpvalueIndex: UInt16;
   UpvalueName: string;
   HasDebug: Boolean;
   DebugInfo: TGocciaDebugInfo;
@@ -378,8 +378,8 @@ var
   CookedValid: TGocciaBytecodeTemplateCookedValid;
 begin
   Name := ReadString;
-  MaxRegs := ReadUInt8;
-  ParamCount := ReadUInt8;
+  MaxRegs := ReadUInt16;
+  ParamCount := ReadUInt16;
   LocalTypeCount := 0;
   LocalStrictCount := 0;
   HasDebug := False;
@@ -387,8 +387,8 @@ begin
   Result := TGocciaFunctionTemplate.Create(Name);
   Result.MaxRegisters := MaxRegs;
   Result.ParameterCount := ParamCount;
-  Result.FormalParameterCount := ReadUInt8;
-  UpvalueCount := ReadUInt8;
+  Result.FormalParameterCount := ReadUInt16;
+  UpvalueCount := ReadUInt16;
   Result.IsArrow := ReadBoolean;
   Result.IsGenerator := ReadBoolean;
   Result.IsAsync := ReadBoolean;
@@ -438,7 +438,7 @@ begin
   for I := 0 to UpvalueCount - 1 do
   begin
     UpvalueIsLocal := ReadBoolean;
-    UpvalueIndex := ReadUInt8;
+    UpvalueIndex := ReadUInt16;
     UpvalueName := ReadString;
     Result.AddUpvalueDescriptor(UpvalueIsLocal, UpvalueIndex, UpvalueName);
   end;
@@ -454,7 +454,7 @@ begin
     begin
       EvalBinding.Name := ReadString;
       EvalBinding.Kind := TGocciaDirectEvalBindingKind(ReadUInt8);
-      EvalBinding.Index := ReadUInt8;
+      EvalBinding.Index := ReadUInt16;
       EvalBinding.IsConst := ReadBoolean;
       EvalBinding.IsVarEnvironmentBinding := ReadBoolean;
       EvalBinding.IsEvalSyntheticArguments := ReadBoolean;
@@ -467,7 +467,7 @@ begin
   HandlerCount := ReadUInt16;
   for I := 0 to HandlerCount - 1 do
     Result.AddExceptionHandler(ReadUInt32, ReadUInt32, ReadUInt32,
-      ReadUInt32, ReadUInt8);
+      ReadUInt32, ReadUInt16);
 
   FuncCount := ReadUInt16;
   for I := 0 to FuncCount - 1 do
@@ -485,20 +485,20 @@ begin
 
     LocalCount := ReadUInt32;
     for I := 0 to LocalCount - 1 do
-      DebugInfo.AddLocal(ReadString, ReadUInt8, ReadUInt32, ReadUInt32);
+      DebugInfo.AddLocal(ReadString, ReadUInt16, ReadUInt32, ReadUInt32);
 
     Result.DebugInfo := DebugInfo;
   end;
 
-  LocalTypeCount := ReadUInt8;
+  LocalTypeCount := ReadUInt16;
   for I := 0 to LocalTypeCount - 1 do
-    Result.SetLocalType(UInt8(I), TGocciaLocalType(ReadUInt8));
+    Result.SetLocalType(UInt16(I), TGocciaLocalType(ReadUInt8));
 
-  LocalStrictCount := ReadUInt8;
+  LocalStrictCount := ReadUInt16;
   for I := 0 to LocalStrictCount - 1 do
-    Result.SetLocalStrictFlag(UInt8(I), ReadBoolean);
+    Result.SetLocalStrictFlag(UInt16(I), ReadBoolean);
 
-  Result.TypeCheckPreambleSize := ReadUInt8;
+  Result.TypeCheckPreambleSize := ReadUInt16;
   Result.ParameterPreambleSize := ReadUInt16;
   I := ReadUInt16;
   if I = High(UInt16) then

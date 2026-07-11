@@ -7,7 +7,7 @@ const { spawnSync } = require('child_process');
 
 const DRIVER_VERSION = 2;
 const DEFAULT_MANIFEST = path.join('perf', 'web-tooling', 'manifest.json');
-const DEFAULT_TIMEOUT_MS = 900000;
+const DEFAULT_TIMEOUT_MS = 1500000;
 const DEFAULT_REPETITIONS = 1;
 const DEFAULT_GOCCIA_FLAGS = [
   '--mode=bytecode',
@@ -40,7 +40,7 @@ function usage() {
     '',
     'Measurement:',
     '  --repetitions <n>            Raw runs per workload (default: 1)',
-    '  --timeout-ms <n>             Per-run timeout (default: 900000)',
+    '  --timeout-ms <n>             Per-run timeout (default: 1500000)',
     '  --output <path>              Write normalized JSON report',
     '  --keep-bundles               Keep generated upstream dist/cli.js copies',
   ].join('\n');
@@ -238,13 +238,25 @@ function webToolingVirtualFSSource(entries) {
   }
   lines.push(
     '',
-    'module.exports = {',
-    '  readFileSync: function(fileName) {',
-    '    if (!Object.prototype.hasOwnProperty.call(files, fileName)) {',
-    '      throw new Error("File not found: " + fileName);',
-    '    }',
-    '    return files[fileName];',
+    'function readFileSync(fileName) {',
+    '  if (!Object.prototype.hasOwnProperty.call(files, fileName)) {',
+    '    throw new Error("File not found: " + fileName);',
     '  }',
+    '  return files[fileName];',
+    '}',
+    '',
+    'function readFile(fileName, options, callback) {',
+    '  if (typeof options === "function") callback = options;',
+    '  try {',
+    '    callback(null, readFileSync(fileName));',
+    '  } catch (error) {',
+    '    callback(error);',
+    '  }',
+    '}',
+    '',
+    'module.exports = {',
+    '  readFile: readFile,',
+    '  readFileSync: readFileSync',
     '};',
     '',
   );

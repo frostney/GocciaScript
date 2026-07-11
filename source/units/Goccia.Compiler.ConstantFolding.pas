@@ -13,18 +13,18 @@ uses
 function TryEvaluateConstantExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; out AValue: TGocciaCompileTimeValue): Boolean;
 function TryEmitConstantExpression(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaExpression; const ADest: UInt8): Boolean;
+  const AExpr: TGocciaExpression; const ADest: UInt16): Boolean;
 procedure EmitCompileTimeValue(const ACtx: TGocciaCompilationContext;
-  const AValue: TGocciaCompileTimeValue; const ADest: UInt8);
+  const AValue: TGocciaCompileTimeValue; const ADest: UInt16);
 function CompileTimeValueToBoolean(
   const AValue: TGocciaCompileTimeValue): Boolean; inline;
 function CompileTimeValueIsNullish(
   const AValue: TGocciaCompileTimeValue): Boolean; inline;
 
 function TryFoldBinary(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaBinaryExpression; const ADest: UInt8): Boolean;
+  const AExpr: TGocciaBinaryExpression; const ADest: UInt16): Boolean;
 function TryFoldUnary(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaUnaryExpression; const ADest: UInt8): Boolean;
+  const AExpr: TGocciaUnaryExpression; const ADest: UInt16): Boolean;
 function IsNegativeZeroFloat(const AValue: Double): Boolean; inline;
 
 implementation
@@ -81,7 +81,7 @@ begin
 end;
 
 procedure EmitFoldedNumber(const ACtx: TGocciaCompilationContext;
-  const AValue: Double; const ADest: UInt8);
+  const AValue: Double; const ADest: UInt16);
 var
   Idx: UInt16;
 begin
@@ -97,7 +97,7 @@ begin
 end;
 
 procedure EmitCompileTimeValue(const ACtx: TGocciaCompilationContext;
-  const AValue: TGocciaCompileTimeValue; const ADest: UInt8);
+  const AValue: TGocciaCompileTimeValue; const ADest: UInt16);
 var
   Idx: UInt16;
 begin
@@ -854,7 +854,7 @@ begin
 end;
 
 function TryEmitStrictTypeSimplification(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaExpression; const ADest: UInt8): Boolean;
+  const AExpr: TGocciaExpression; const ADest: UInt16): Boolean;
 var
   Unary: TGocciaUnaryExpression;
   InnerUnary: TGocciaUnaryExpression;
@@ -932,7 +932,7 @@ begin
 end;
 
 function TryEmitConstantExpression(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaExpression; const ADest: UInt8): Boolean;
+  const AExpr: TGocciaExpression; const ADest: UInt16): Boolean;
 var
   Value: TGocciaCompileTimeValue;
 begin
@@ -946,13 +946,13 @@ begin
 end;
 
 function TryFoldBinary(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaBinaryExpression; const ADest: UInt8): Boolean;
+  const AExpr: TGocciaBinaryExpression; const ADest: UInt16): Boolean;
 begin
   Result := TryEmitConstantExpression(ACtx, AExpr, ADest);
 end;
 
 function TryFoldUnary(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaUnaryExpression; const ADest: UInt8): Boolean;
+  const AExpr: TGocciaUnaryExpression; const ADest: UInt16): Boolean;
 begin
   Result := TryEmitConstantExpression(ACtx, AExpr, ADest);
 end;

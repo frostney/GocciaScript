@@ -146,7 +146,13 @@ const
   //               constant pool.
   //   v69 -> v70: added OP_SET_CLASS_SOURCE_CONST so Function.prototype.toString
   //               can return exact class source text in bytecode mode.
-  GOCCIA_FORMAT_VERSION = 70;
+  //   v70 -> v71: OP_WIDE prefixes extend A/B/C operands to 16 bits. Function
+  //               metadata that names registers, locals, upvalues, parameters,
+  //               or preamble instructions uses matching 16-bit fields.
+  //               OP_CLOSE_UPVALUE stores its local slot in Bx, and
+  //               OP_CONSTRUCT_SPREAD carries its argument-array register
+  //               without the old 7-bit flag packing.
+  GOCCIA_FORMAT_VERSION = 71;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -394,13 +400,18 @@ type
     OP_DEFINE_GLOBAL_FUNCTION_LONG = 217,
     OP_PREDECLARE_GLOBAL_LET_LONG = 218,
     OP_PREDECLARE_GLOBAL_CONST_LONG = 219,
-    OP_LOAD_CHAR     = 220
+    OP_LOAD_CHAR     = 220,
+    // Prefix for the following instruction. A/B/C contain the high byte of
+    // the following instruction's A/B/C operands; the base word keeps the
+    // ordinary compact encoding.
+    OP_WIDE          = 221,
+    OP_CONSTRUCT_SPREAD = 222
   );
 
-function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;
-function EncodeABx(const AOp: TGocciaOpCode; const A: UInt8; const ABx: UInt16): UInt32; inline;
-function EncodeAsBx(const AOp: TGocciaOpCode; const A: UInt8; const AAsBx: Int16): UInt32; inline;
-function EncodeAx(const AOp: TGocciaOpCode; const AAx: Int32): UInt32; inline;
+function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt16): UInt64; inline;
+function EncodeABx(const AOp: TGocciaOpCode; const A: UInt16; const ABx: UInt16): UInt64; inline;
+function EncodeAsBx(const AOp: TGocciaOpCode; const A: UInt16; const AAsBx: Int16): UInt64; inline;
+function EncodeAx(const AOp: TGocciaOpCode; const AAx: Int32): UInt64; inline;
 
 function DecodeOp(const AInstruction: UInt32): UInt8; inline;
 function DecodeA(const AInstruction: UInt32): UInt8; inline;
@@ -416,33 +427,37 @@ const
   SBIAS_16 = 32767;
   SBIAS_24 = 8388607;
 
-function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32;
+function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt16): UInt64;
 begin
-  Result := UInt32(Ord(AOp)) or (UInt32(A) shl 8) or (UInt32(B) shl 16) or
-    (UInt32(C) shl 24);
+  Result := UInt64(Ord(AOp)) or (UInt64(A and $FF) shl 8) or
+    (UInt64(B and $FF) shl 16) or (UInt64(C and $FF) shl 24) or
+    (UInt64(A shr 8) shl 32) or (UInt64(B shr 8) shl 40) or
+    (UInt64(C shr 8) shl 48);
 end;
 
-function EncodeABx(const AOp: TGocciaOpCode; const A: UInt8;
-  const ABx: UInt16): UInt32;
+function EncodeABx(const AOp: TGocciaOpCode; const A: UInt16;
+  const ABx: UInt16): UInt64;
 begin
-  Result := UInt32(Ord(AOp)) or (UInt32(A) shl 8) or (UInt32(ABx) shl 16);
+  Result := UInt64(Ord(AOp)) or (UInt64(A and $FF) shl 8) or
+    (UInt64(ABx) shl 16) or (UInt64(A shr 8) shl 32);
 end;
 
-function EncodeAsBx(const AOp: TGocciaOpCode; const A: UInt8;
-  const AAsBx: Int16): UInt32;
+function EncodeAsBx(const AOp: TGocciaOpCode; const A: UInt16;
+  const AAsBx: Int16): UInt64;
 var
   Biased: UInt16;
 begin
   Biased := UInt16(Integer(AAsBx) + SBIAS_16);
-  Result := UInt32(Ord(AOp)) or (UInt32(A) shl 8) or (UInt32(Biased) shl 16);
+  Result := UInt64(Ord(AOp)) or (UInt64(A and $FF) shl 8) or
+    (UInt64(Biased) shl 16) or (UInt64(A shr 8) shl 32);
 end;
 
-function EncodeAx(const AOp: TGocciaOpCode; const AAx: Int32): UInt32;
+function EncodeAx(const AOp: TGocciaOpCode; const AAx: Int32): UInt64;
 var
   Biased: UInt32;
 begin
   Biased := UInt32(AAx + SBIAS_24) and $FFFFFF;
-  Result := UInt32(Ord(AOp)) or (Biased shl 8);
+  Result := UInt64(Ord(AOp)) or (UInt64(Biased) shl 8);
 end;
 
 function DecodeOp(const AInstruction: UInt32): UInt8;

@@ -7941,10 +7941,7 @@ begin
 
         case CurrentType of
           gttLeftParen:
-            begin
-              Inc(ParenCount);
-              Advance;
-            end;
+            Exit;
           gttRightParen:
             begin
               Dec(ParenCount);

@@ -24,3 +24,8 @@ test("String.prototype.trimStart coerces non-string receivers", () => {
   expect(String.prototype.trimStart.call(42)).toBe("42");
   expect(String.prototype.trimStart.call(true)).toBe("true");
 });
+
+test("String.prototype.trimLeft aliases trimStart", () => {
+  expect(String.prototype.trimLeft).toBe(String.prototype.trimStart);
+  expect("  hello  ".trimLeft()).toBe("hello  ");
+});

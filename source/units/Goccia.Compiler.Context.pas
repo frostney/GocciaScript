@@ -19,7 +19,7 @@ uses
 
 type
   TCompileExpressionProc = procedure(const AExpr: TGocciaExpression;
-    const ADest: UInt8) of object;
+    const ADest: UInt16) of object;
   TCompileStatementProc = function(const AStmt: TGocciaStatement): Boolean of object;
   TCompileFunctionBodyProc = procedure(const ABody: TGocciaASTNode) of object;
   TSwapStateProc = procedure(const ATemplate: TGocciaFunctionTemplate;
@@ -52,15 +52,15 @@ type
   end;
 
 function EmitInstruction(const ACtx: TGocciaCompilationContext;
-  const AInstruction: UInt32): Integer; inline;
+  const AInstruction: UInt64): Integer; inline;
 procedure EmitLoadStringLiteral(const ACtx: TGocciaCompilationContext;
-  const ADest: UInt8; const AValue: string);
+  const ADest: UInt16; const AValue: string);
 procedure EmitLineMapping(const ACtx: TGocciaCompilationContext;
   const ALine, AColumn: Integer);
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
-  const AOp: TGocciaOpCode; const AReg: UInt8): Integer; overload;
+  const AOp: TGocciaOpCode; const AReg: UInt16): Integer; overload;
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
-  const AOp: TGocciaOpCode; const AReg, AFlags: UInt8): Integer; overload;
+  const AOp: TGocciaOpCode; const AReg, AFlags: UInt16): Integer; overload;
 procedure PatchJumpTarget(const ACtx: TGocciaCompilationContext;
   const AIndex: Integer);
 function CurrentCodePosition(const ACtx: TGocciaCompilationContext): Integer;
@@ -80,7 +80,7 @@ uses
   TextSemantics;
 
 function EmitInstruction(const ACtx: TGocciaCompilationContext;
-  const AInstruction: UInt32): Integer;
+  const AInstruction: UInt64): Integer;
 begin
   Result := ACtx.Template.EmitInstruction(AInstruction);
 end;
@@ -94,7 +94,7 @@ begin
 end;
 
 procedure EmitLoadStringLiteral(const ACtx: TGocciaCompilationContext;
-  const ADest: UInt8; const AValue: string);
+  const ADest: UInt16; const AValue: string);
 var
   CodeUnit: Cardinal;
   ConstantIndex: UInt16;
@@ -117,7 +117,7 @@ begin
 end;
 
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
-  const AOp: TGocciaOpCode; const AReg: UInt8): Integer;
+  const AOp: TGocciaOpCode; const AReg: UInt16): Integer;
 begin
   if AOp = OP_JUMP then
     Result := EmitInstruction(ACtx, EncodeAx(AOp, 0))
@@ -130,7 +130,7 @@ begin
 end;
 
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
-  const AOp: TGocciaOpCode; const AReg, AFlags: UInt8): Integer;
+  const AOp: TGocciaOpCode; const AReg, AFlags: UInt16): Integer;
 begin
   Result := EmitInstruction(ACtx, EncodeABC(AOp, AReg, AFlags, 0));
 end;
@@ -140,7 +140,8 @@ procedure PatchJumpTarget(const ACtx: TGocciaCompilationContext;
 var
   Offset: Integer;
   Instruction: UInt32;
-  Op, A, B: UInt8;
+  Op: UInt16;
+  A, B: UInt16;
 begin
   Offset := CurrentCodePosition(ACtx) - AIndex - 1;
   Instruction := ACtx.Template.GetInstruction(AIndex);
@@ -152,6 +153,10 @@ begin
           (TGocciaOpCode(Op) = OP_PUSH_FINALLY_HANDLER) then
   begin
     A := DecodeA(Instruction);
+    if (AIndex > 0) and
+       (DecodeOp(ACtx.Template.GetInstruction(AIndex - 1)) = Ord(OP_WIDE)) then
+      A := A or (UInt16(DecodeA(
+        ACtx.Template.GetInstruction(AIndex - 1))) shl 8);
     ACtx.Template.PatchInstruction(AIndex,
       EncodeABx(TGocciaOpCode(Op), A, UInt16(Offset)));
   end
@@ -160,14 +165,26 @@ begin
   begin
     A := DecodeA(Instruction);
     B := DecodeB(Instruction);
-    if Offset > High(UInt8) then
-      raise Exception.Create('Nullish jump offset exceeds 8-bit range');
+    if (AIndex > 0) and
+       (DecodeOp(ACtx.Template.GetInstruction(AIndex - 1)) = Ord(OP_WIDE)) then
+    begin
+      A := A or (UInt16(DecodeA(
+        ACtx.Template.GetInstruction(AIndex - 1))) shl 8);
+      B := B or (UInt16(DecodeB(
+        ACtx.Template.GetInstruction(AIndex - 1))) shl 8);
+    end;
+    if Offset > High(UInt16) then
+      raise Exception.Create('Nullish jump offset exceeds 16-bit range');
     ACtx.Template.PatchInstruction(AIndex,
-      EncodeABC(TGocciaOpCode(Op), A, B, UInt8(Offset)));
+      EncodeABC(TGocciaOpCode(Op), A, B, UInt16(Offset)));
   end
   else
   begin
     A := DecodeA(Instruction);
+    if (AIndex > 0) and
+       (DecodeOp(ACtx.Template.GetInstruction(AIndex - 1)) = Ord(OP_WIDE)) then
+      A := A or (UInt16(DecodeA(
+        ACtx.Template.GetInstruction(AIndex - 1))) shl 8);
     ACtx.Template.PatchInstruction(AIndex,
       EncodeAsBx(TGocciaOpCode(Op), A, Int16(Offset)));
   end;

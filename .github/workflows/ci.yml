@@ -813,13 +813,13 @@ jobs:
       - name: Read Web Tooling workload matrix
         id: workloads
         run: |
-          matrix="$(node -e "const m = require('./perf/web-tooling/manifest.json'); process.stdout.write(JSON.stringify({ workload: m.ciReport.workloads }))")"
+          matrix="$(node -e "const m = require('./perf/web-tooling/manifest.json'); const { workloadTimeoutMs } = require('./scripts/web-tooling-ci-report.js'); process.stdout.write(JSON.stringify({ include: m.ciReport.workloads.map(workload => ({ workload, timeoutMinutes: Math.ceil(workloadTimeoutMs(m.ciReport, workload) / 60000) + 15 })) }))")"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   web-tooling-workload:
     needs: [build, web-tooling-plan]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.timeoutMinutes }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.web-tooling-plan.outputs.matrix) }}

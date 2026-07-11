@@ -899,6 +899,10 @@ begin
     Members.Free;
   end;
   RegisterMemberDefinitions(Self, PrototypeMembers);
+  DefineProperty('trimLeft', TGocciaPropertyDescriptorData.Create(
+    GetProperty('trimStart'), [pfConfigurable, pfWritable]));
+  DefineProperty('trimRight', TGocciaPropertyDescriptorData.Create(
+    GetProperty('trimEnd'), [pfConfigurable, pfWritable]));
 end;
 
 class function TGocciaStringObjectValue.GetSharedPrototype: TGocciaObjectValue;

@@ -36,7 +36,7 @@ type
     FDerivedConstructorThisGuard: Boolean;
     FTemplateDerivedConstructorThisGuards: TDictionary<TGocciaFunctionTemplate, Boolean>;
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
-      const ADest: UInt8);
+      const ADest: UInt16);
     function DoCompileStatement(const AStmt: TGocciaStatement): Boolean;
     procedure DoCompileFunctionBody(const ABody: TGocciaASTNode);
     procedure DoSwapState(const ATemplate: TGocciaFunctionTemplate;
@@ -170,7 +170,7 @@ begin
 end;
 
 procedure TGocciaCompiler.DoCompileExpression(
-  const AExpr: TGocciaExpression; const ADest: UInt8);
+  const AExpr: TGocciaExpression; const ADest: UInt16);
 var
   Ctx: TGocciaCompilationContext;
 begin
@@ -690,7 +690,7 @@ var
   Block: TGocciaBlockStatement;
   I: Integer;
   Node: TGocciaASTNode;
-  Reg: UInt8;
+  Reg: UInt16;
   HasUsing, HasFunctionDecl: Boolean;
   StatementAbrupt: Boolean;
   SavedFinally: TObject;
@@ -1180,7 +1180,7 @@ function TGocciaCompiler.Compile(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
   I: Integer;
-  RetReg: UInt8;
+  RetReg: UInt16;
   Ctx: TGocciaCompilationContext;
   HasFunctionDecl, BodyAbrupt, StatementAbrupt: Boolean;
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;

@@ -10,7 +10,11 @@ const {
   webToolingEntrySource,
   webToolingVirtualFSSource,
 } = require('./web-tooling-driver.js');
-const { targetSpecs, validateReport } = require('./web-tooling-ci-report.js');
+const {
+  targetSpecs,
+  validateReport,
+  workloadTimeoutMs,
+} = require('./web-tooling-ci-report.js');
 const { mergeReports } = require('./web-tooling-merge-reports.js');
 const {
   MARKER,
@@ -68,7 +72,17 @@ console.log('web-tooling-driver: generated harness...');
     },
   ]);
   assert(vfs.includes('files["third_party/input.js"]'), 'VFS embeds selected workload payloads');
-  assert(vfs.includes('readFileSync: function(fileName)'), 'VFS exposes the upstream fs surface');
+  const vfsModule = { exports: {} };
+  Function('module', 'exports', 'require', vfs)(
+    vfsModule,
+    vfsModule.exports,
+    () => 'payload',
+  );
+  assertEqual(vfsModule.exports.readFileSync('third_party/input.js'), 'payload', 'VFS exposes synchronous reads');
+  vfsModule.exports.readFile('third_party/input.js', (error, value) => {
+    assertEqual(error, null, 'VFS callback read succeeds');
+    assertEqual(value, 'payload', 'VFS callback read returns the payload');
+  });
 }
 
 console.log('web-tooling-driver: output parsing...');
@@ -139,10 +153,17 @@ console.log('web-tooling-driver: statistics...');
 console.log('web-tooling-ci-report: validation...');
 {
   const manifest = {
-    webTooling: { workloads: ['acorn', 'babel'] },
-    ciReport: { repetitions: 1, workloads: ['acorn', 'babel'] },
+    webTooling: { workloads: ['acorn', 'coffeescript'] },
+    ciReport: {
+      repetitions: 1,
+      timeoutMs: 1500000,
+      timeoutMsByWorkload: { coffeescript: 5400000 },
+      workloads: ['acorn', 'coffeescript'],
+    },
   };
-  assertEqual(targetSpecs(manifest.ciReport, manifest).join(','), 'acorn,babel', 'ci target specs keep all workloads');
+  assertEqual(targetSpecs(manifest.ciReport, manifest).join(','), 'acorn,coffeescript', 'ci target specs keep all workloads');
+  assertEqual(workloadTimeoutMs(manifest.ciReport, 'acorn'), 1500000, 'ci uses the default workload timeout');
+  assertEqual(workloadTimeoutMs(manifest.ciReport, 'coffeescript'), 5400000, 'ci applies a workload timeout override');
   validateReport({
     metadata: { options: { repetitions: 1 } },
     summary: { workloadCount: 2 },
@@ -155,7 +176,7 @@ console.log('web-tooling-ci-report: validation...');
       },
       {
         kind: 'web-tooling',
-        name: 'babel',
+        name: 'coffeescript',
         build: { outcome: 'ok' },
         summary: { ok: 0, syntaxError: 1 },
       },
@@ -173,7 +194,7 @@ console.log('web-tooling-ci-report: validation...');
       metadata: shardMetadata,
       targets: [{
         kind: 'web-tooling',
-        name: 'babel',
+        name: 'coffeescript',
         build: { outcome: 'ok' },
         summary: { ok: 1 },
       }],
@@ -189,7 +210,7 @@ console.log('web-tooling-ci-report: validation...');
       }],
     },
   ], manifest);
-  assertEqual(merged.targets.map((target) => target.name).join(','), 'acorn,babel', 'merge restores manifest order');
+  assertEqual(merged.targets.map((target) => target.name).join(','), 'acorn,coffeescript', 'merge restores manifest order');
   assertEqual(merged.summary.completedCount, 2, 'merge rebuilds the overall summary');
   assertEqual(merged.metadata.shards.count, 2, 'merge records shard count');
 }
