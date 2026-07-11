@@ -872,11 +872,13 @@ jobs:
         run: npm install --ignore-scripts --no-audit --no-fund
 
       - name: Run Web Tooling report
+        env:
+          WORKLOAD: ${{ matrix.workload }}
         run: |
           node scripts/web-tooling-ci-report.js \
             --web-tooling-dir web-tooling-suite \
-            --workload '${{ matrix.workload }}' \
-            --output 'web-tooling-report-${{ matrix.workload }}.json'
+            --workload "$WORKLOAD" \
+            --output "web-tooling-report-$WORKLOAD.json"
 
       - name: Upload Web Tooling workload report
         if: always()

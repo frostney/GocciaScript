@@ -1,10 +1,11 @@
 /*---
 description: Bytecode supports function frames with more than 255 live slots
-features: [closures, function-scope]
+features: [closures, function-scope, generators]
 ---*/
 
 test("wide bytecode operands preserve locals, calls, and captured slots", () => {
-  const run = () => {
+  const runner = {
+    *run() {
     let
       v000 = 0,
       v001 = 1,
@@ -314,10 +315,20 @@ test("wide bytecode operands preserve locals, calls, and captured slots", () => 
     }
 
     const captured = () => v299;
+    const delegate = {
+      *[Symbol.iterator]() {
+        yield 7;
+        return 42;
+      },
+    };
+    const delegatedResult = yield* delegate;
     const args = [captured()];
     const box = new Box(...args);
-    return v000 + v255 + box.value;
+    return v000 + v255 + box.value + delegatedResult;
+    },
   };
 
-  expect(run()).toBe(554);
+  const iterator = runner.run();
+  expect(iterator.next()).toEqual({ value: 7, done: false });
+  expect(iterator.next()).toEqual({ value: 596, done: true });
 });

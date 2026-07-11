@@ -1920,7 +1920,7 @@ function CompileBlockStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaBlockStatement): Boolean;
 var
   I: Integer;
-  ClosedLocals: array[0..255] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   Node: TGocciaASTNode;
   Reg: UInt16;
@@ -2113,7 +2113,7 @@ function CompileWithStatement(const ACtx: TGocciaCompilationContext;
 var
   HiddenName: string;
   HiddenSlot, ErrorReg: UInt16;
-  ClosedLocals: array[0..255] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount, I: Integer;
   HandlerJump, EndJump: Integer;
   CleanupEntry: TPendingFinallyEntry;
@@ -2174,7 +2174,7 @@ var
   ElseJump, EndJump: Integer;
   HasPatternBindings: Boolean;
   PatternFailJumps: TGocciaJumpArray;
-  ClosedLocals: array[0..255] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount, I: Integer;
   ConditionValue: TGocciaCompileTimeValue;
   ConsequentAbrupt, AlternateAbrupt: Boolean;
@@ -2356,7 +2356,7 @@ var
   HasCatch, HasFinally: Boolean;
   HasCatchInitHandler: Boolean;
   I: Integer;
-  ClosedLocals: array[0..255] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   Entry: TPendingFinallyEntry;
 begin
@@ -2577,7 +2577,7 @@ var
   Names: TStringList;
   I: Integer;
   Slot: UInt16;
-  ClosedLocals: array[0..255] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
 begin
   if not AHasLexicalDeclaration then
@@ -2623,7 +2623,7 @@ var
   ArrReg, LenReg, IdxReg, OneReg, CmpReg, ValueReg: UInt16;
   LoopStart, ExitJump, MismatchJump, I, BindLocalIdx: Integer;
   Slot: UInt16;
-  ClosedLocals: array[0..255] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   LoopControl: TLoopControlState;
   ElemAnnotation: string;
@@ -2741,7 +2741,7 @@ var
   LoopStart, ExitJump, MismatchJump, HandlerJump, UsingHandlerJump,
     UsingEndJump, NullishJump, I: Integer;
   Slot: UInt16;
-  ClosedLocals: array[0..255] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   LoopControl: TLoopControlState;
   ArrayLocalIdx: Integer;
@@ -2943,7 +2943,7 @@ var
   LoopStart, ExitJump, I: Integer;
   Slot: UInt16;
   LocalIdx: Integer;
-  ClosedLocals: array[0..255] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   LoopControl: TLoopControlState;
 begin
@@ -3054,7 +3054,7 @@ var
   IterReg, ValueReg, DoneReg, CloseErrorReg: UInt16;
   LoopStart, ExitJump, MismatchJump, HandlerJump, I: Integer;
   Slot: UInt16;
-  ClosedLocals: array[0..255] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   LoopControl: TLoopControlState;
   PendingEntry: TPendingFinallyEntry;
@@ -3194,7 +3194,7 @@ var
   StartReg, LimitReg, OneReg, CmpReg: UInt16;
   Slot, OuterSlot: UInt16;
   LoopStart, ExitJump, I: Integer;
-  ClosedLocals: array[0..255] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   LoopControl: TLoopControlState;
   IsAscending: Boolean;
@@ -3707,11 +3707,11 @@ procedure CompileForStatement(const ACtx: TGocciaCompilationContext;
 var
   CondReg: UInt16;
   LoopStart, ExitJump, I: Integer;
-  ClosedLocals: array[0..255] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
-  BodyClosedLocals: array[0..255] of UInt16;
+  BodyClosedLocals: TArray<UInt16>;
   BodyClosedCount: Integer;
-  UpdateClosedLocals: array[0..255] of UInt16;
+  UpdateClosedLocals: TArray<UInt16>;
   UpdateClosedCount: Integer;
   LoopControl: TLoopControlState;
   HasLexicalInit: Boolean;
@@ -4432,7 +4432,7 @@ var
   BreakJumps: TList<Integer>;
   Node: TGocciaASTNode;
   Reg: UInt16;
-  ClosedLocals: array[0..255] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   HasFunctionDecl, NeedsPrelude, StatementAbrupt, HasUsing: Boolean;
   SavedResourceBase, ResourceCount: Integer;
@@ -5907,7 +5907,7 @@ procedure CompileStaticFieldInitializerExpression(
   const AExpression: TGocciaExpression; const ADest: UInt16;
   const AInferredName: string = '');
 var
-  ClosedLocals: array[0..0] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount, I: Integer;
   ThisReg: UInt16;
   OldRejectArgumentsInDirectEval: Boolean;
@@ -6473,7 +6473,7 @@ var
   ComputedKeyName: string;
   InnerNameSlot: UInt16;
   HasInnerNameBinding: Boolean;
-  ClosedLocals: array[0..255] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   HeritageCtx: TGocciaCompilationContext;
   ComputedCtx: TGocciaCompilationContext;
@@ -6695,7 +6695,7 @@ var
   PrivPrefix: string;
   PrivateNameMark: Integer;
   HasNameBinding: Boolean;
-  ClosedLocals: array[0..255] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount, I: Integer;
   ComputedFieldKeyLocals: TComputedFieldKeyLocals;
   ComputedKeyName: string;
@@ -6999,7 +6999,7 @@ var
   EnumSlot, InnerSlot, MemberSlot: UInt16;
   I: Integer;
   KeyIdx: UInt16;
-  ClosedLocals: array[0..255] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount, J: Integer;
   LocalIdx: Integer;
 begin

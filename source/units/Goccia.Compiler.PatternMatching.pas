@@ -610,7 +610,7 @@ procedure CompileIsExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIsExpression; const ADest: UInt16);
 var
   SubjectReg: UInt16;
-  ClosedLocals: array[0..255] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount, I: Integer;
 begin
   SubjectReg := ACtx.Scope.AllocateRegister;
@@ -630,7 +630,7 @@ var
   SubjectReg, TestReg: UInt16;
   I, FalseJump, EndJump: Integer;
   EndJumps: TList<Integer>;
-  ClosedLocals: array[0..255] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount, ClosedIndex: Integer;
   TypeErrorReg, MessageReg: UInt16;
 begin

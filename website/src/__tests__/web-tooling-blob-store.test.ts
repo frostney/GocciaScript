@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { gunzipSync } from "node:zlib";
+import { summaryFromReport } from "../../scripts/publish-web-tooling-report";
 
 type BlobPutCall = {
   pathname: string;
@@ -64,6 +65,8 @@ describe("Web Tooling Blob store", () => {
           buildFailedCount: 0,
           timeoutCount: 1,
           crashCount: 14,
+          syntaxErrorCount: 0,
+          runtimeErrorCount: 0,
           oomCount: 0,
           missingResultCount: 0,
           repetitions: 1,
@@ -91,5 +94,29 @@ describe("Web Tooling Blob store", () => {
     );
     expect(runs.map((run) => run.artifactId)).toEqual([2002]);
     expect(runs[0]?.summary.workloadCount).toBe(18);
+  });
+
+  test("retains every report outcome in the daily summary", () => {
+    expect(
+      summaryFromReport({
+        summary: {
+          workloadCount: 4,
+          builtCount: 4,
+          completedCount: 2,
+          buildFailedCount: 0,
+          timeoutCount: 0,
+          crashCount: 0,
+          syntaxErrorCount: 1,
+          runtimeErrorCount: 1,
+          oomCount: 0,
+          missingResultCount: 0,
+        },
+        metadata: { options: { repetitions: 1 } },
+        targets: [{}, {}, {}, {}],
+      }),
+    ).toMatchObject({
+      syntaxErrorCount: 1,
+      runtimeErrorCount: 1,
+    });
   });
 });

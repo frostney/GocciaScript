@@ -804,7 +804,6 @@ var
   SourceModule: TGocciaModule;
   Stmt: TGocciaStatement;
   Value: TGocciaValue;
-  VarInfo: TGocciaVariableInfo;
   LoadSucceeded: Boolean;
   Name: string;
   Names: TStringList;
@@ -1148,8 +1147,8 @@ var
           Names := TStringList.Create;
           try
             Names.CaseSensitive := True;
-            for VarInfo in ExportVarDecl.Declaration.Variables do
-              CollectVariableInfoBindingNames(VarInfo, Names, True);
+            CollectVariableDeclarationBindingNames(
+              ExportVarDecl.Declaration, Names, True);
             for Name in Names do
               Module.AddExportBinding(Name, Name, ModuleScope);
           finally

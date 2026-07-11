@@ -101,7 +101,7 @@ type
     function AllocateRegister: UInt16;
     procedure FreeRegister;
     procedure BeginScope;
-    procedure EndScope(out AClosedLocals: array of UInt16;
+    procedure EndScope(out AClosedLocals: TArray<UInt16>;
       out AClosedCount: Integer);
 
     property Parent: TGocciaCompilerScope read FParent;
@@ -464,11 +464,12 @@ begin
   Inc(FDepth);
 end;
 
-procedure TGocciaCompilerScope.EndScope(out AClosedLocals: array of UInt16;
+procedure TGocciaCompilerScope.EndScope(out AClosedLocals: TArray<UInt16>;
   out AClosedCount: Integer);
 var
   RemovedName: string;
 begin
+  SetLength(AClosedLocals, 0);
   AClosedCount := 0;
   while (FLocalCount > 0) and (FLocals[FLocalCount - 1].Depth = FDepth) do
   begin
@@ -477,13 +478,14 @@ begin
     if FLocals[FLocalCount].IsCaptured then
     begin
       if AClosedCount >= Length(AClosedLocals) then
-        raise Exception.Create('AClosedLocals buffer too small for captured locals');
+        SetLength(AClosedLocals, AClosedCount * 2 + 4);
       AClosedLocals[AClosedCount] := FLocals[FLocalCount].Slot;
       Inc(AClosedCount);
     end;
     Dec(FNextSlot);
     RestoreLocalIndexBinding(RemovedName);
   end;
+  SetLength(AClosedLocals, AClosedCount);
   Dec(FDepth);
 end;
 

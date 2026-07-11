@@ -50,6 +50,7 @@ console.log('web-tooling-driver: CLI parsing...');
   assertEqual(options.workloads.join(','), 'acorn', 'parses workload list');
   assertEqual(options.repetitions, 2, 'parses repetitions');
   assertEqual(options.timeoutMs, 123, 'parses timeout');
+  assertEqual(options.timeoutExplicit, true, 'tracks explicit timeout override');
   assert(DEFAULT_GOCCIA_FLAGS.includes('--unsafe-function-constructor'), 'Web Tooling enables dynamic Function compatibility');
 }
 
@@ -161,10 +162,11 @@ console.log('web-tooling-driver: statistics...');
 console.log('web-tooling-ci-report: validation...');
 {
   const manifest = {
+    driver: { version: 4 },
     webTooling: { workloads: ['acorn', 'coffeescript'] },
     ciReport: {
       repetitions: 1,
-      timeoutMs: 1500000,
+      timeoutMs: 300000,
       timeoutMsByWorkload: {
         coffeescript: 900000,
         postcss: 3600000,
@@ -173,11 +175,11 @@ console.log('web-tooling-ci-report: validation...');
     },
   };
   assertEqual(targetSpecs(manifest.ciReport, manifest).join(','), 'acorn,coffeescript', 'ci target specs keep all workloads');
-  assertEqual(workloadTimeoutMs(manifest.ciReport, 'acorn'), 1500000, 'ci uses the default workload timeout');
+  assertEqual(workloadTimeoutMs(manifest.ciReport, 'acorn'), 300000, 'ci uses the five-minute workload timeout');
   assertEqual(workloadTimeoutMs(manifest.ciReport, 'coffeescript'), 900000, 'ci applies the CoffeeScript timeout override');
   assertEqual(workloadTimeoutMs(manifest.ciReport, 'postcss'), 3600000, 'ci applies the PostCSS timeout override');
   validateReport({
-    metadata: { options: { repetitions: 1 } },
+    metadata: { driver: { version: 4 }, options: { repetitions: 1 } },
     summary: { workloadCount: 2 },
     targets: [
       {
@@ -197,6 +199,7 @@ console.log('web-tooling-ci-report: validation...');
   assert(true, 'ci report validation accepts complete workload reports with recorded failures');
 
   const shardMetadata = {
+    driver: { version: 4 },
     goccia: { commit: 'abc123' },
     options: { repetitions: 1 },
   };

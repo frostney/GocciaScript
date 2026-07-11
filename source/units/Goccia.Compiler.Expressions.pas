@@ -5627,7 +5627,7 @@ var
   ArgumentsSlot: Integer;
   HasNameBinding: Boolean;
   NameSlot: UInt16;
-  ClosedLocals: array[0..0] of UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
 begin
   OldTemplate := ACtx.Template;

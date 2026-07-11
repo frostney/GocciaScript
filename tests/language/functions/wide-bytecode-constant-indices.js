@@ -5,7 +5,9 @@ features: [object-literals, getters]
 
 test("wide bytecode operands preserve property constant indices", () => {
   const run = () => {
-    const values = [
+    let maybeValues = [];
+    maybeValues[259] = "value259";
+    const values = maybeValues ?? [
       "value000", "value001", "value002", "value003", "value004", "value005", "value006", "value007",
       "value008", "value009", "value010", "value011", "value012", "value013", "value014", "value015",
       "value016", "value017", "value018", "value019", "value020", "value021", "value022", "value023",

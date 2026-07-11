@@ -236,6 +236,41 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
     if (largeGlobalOut.trim() !== "10")
       throw new Error(`Bare bytecode large global declarations expected 10, got: ${largeGlobalOut}`);
 
+    const wideNames = Array.from({ length: 260 }, (_, i) => `wideName${i}`);
+    const wideDirectEvalSrc = join(tmp, "wide-direct-eval.js");
+    writeFileSync(
+      wideDirectEvalSrc,
+      [
+        "function readWideLocal() {",
+        ...wideNames.map((name, index) => `  let ${name} = ${index};`),
+        '  return eval("wideName259");',
+        "}",
+        "readWideLocal();",
+        "",
+      ].join("\n"),
+    );
+    const wideDirectEvalOut = await $`${BARE} --print ${wideDirectEvalSrc} --mode=bytecode --compat-function --test262-host 2>&1`.text();
+    if (wideDirectEvalOut.trim() !== "259")
+      throw new Error(`Bare bytecode wide direct eval expected 259, got: ${wideDirectEvalOut}`);
+
+    const wideCapturedBlockSrc = join(tmp, "wide-captured-block.js");
+    writeFileSync(
+      wideCapturedBlockSrc,
+      [
+        "let readWideBlock;",
+        "{",
+        ...wideNames.map((name, index) => `  let ${name} = ${index};`),
+        `  readWideBlock = () => [${wideNames.join(", ")}];`,
+        "}",
+        "const wideValues = readWideBlock();",
+        "wideValues[0] + wideValues[259];",
+        "",
+      ].join("\n"),
+    );
+    const wideCapturedBlockOut = await $`${BARE} --print ${wideCapturedBlockSrc} --mode=bytecode 2>&1`.text();
+    if (wideCapturedBlockOut.trim() !== "259")
+      throw new Error(`Bare bytecode wide captured block expected 259, got: ${wideCapturedBlockOut}`);
+
     const thrownObjectSrc = join(tmp, "throw-test262-object.js");
     writeFileSync(
       thrownObjectSrc,

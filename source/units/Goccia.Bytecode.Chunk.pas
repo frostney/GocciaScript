@@ -208,7 +208,8 @@ type
     constructor Create(const AName: string);
     destructor Destroy; override;
 
-    function EmitInstruction(const AInstruction: UInt64): Integer;
+    function EmitInstruction(const AInstruction: UInt64;
+      const AForceWide: Boolean = False): Integer;
     procedure PatchInstruction(const AIndex: Integer; const AInstruction: UInt64);
     function AddConstantNil: UInt16;
     function AddConstantBoolean(const AValue: Boolean): UInt16;
@@ -378,12 +379,12 @@ begin
 end;
 
 function TGocciaFunctionTemplate.EmitInstruction(
-  const AInstruction: UInt64): Integer;
+  const AInstruction: UInt64; const AForceWide: Boolean): Integer;
 var
   HighOperands: UInt32;
 begin
   HighOperands := UInt32(AInstruction shr 32);
-  if HighOperands <> 0 then
+  if AForceWide or (HighOperands <> 0) then
   begin
     if FCodeCount >= Length(FCode) then
       SetLength(FCode, FCodeCount * 2 + 16);

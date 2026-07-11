@@ -30,15 +30,11 @@
   },
   "driver": {
     "script": "scripts/web-tooling-driver.js",
-    "version": 3
+    "version": 4
   },
   "ciReport": {
     "repetitions": 1,
-    "timeoutMs": 1500000,
-    "timeoutMsByWorkload": {
-      "coffeescript": 900000,
-      "postcss": 3600000
-    },
+    "timeoutMs": 300000,
     "workloads": [
       "acorn",
       "babel",

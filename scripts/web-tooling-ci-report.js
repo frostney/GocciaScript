@@ -2,10 +2,13 @@
 
 const fs = require('fs');
 const { spawnSync } = require('child_process');
+const {
+  DEFAULT_TIMEOUT_MS,
+  workloadTimeoutMs,
+} = require('./web-tooling-driver.js');
 
 const DEFAULT_MANIFEST = 'perf/web-tooling/manifest.json';
 const DEFAULT_OUTPUT = 'web-tooling-report.json';
-const DEFAULT_TIMEOUT_MS = 1500000;
 
 function usage() {
   return [
@@ -73,15 +76,6 @@ function reportConfig(manifest) {
   return manifest.ciReport || {};
 }
 
-function workloadTimeoutMs(config, workload, fallback = DEFAULT_TIMEOUT_MS) {
-  const configuredDefault = config.timeoutMs ?? fallback;
-  const configuredOverride = config.timeoutMsByWorkload?.[workload];
-  return parsePositiveInteger(
-    String(configuredOverride ?? configuredDefault),
-    `timeout for ${workload}`,
-  );
-}
-
 function targetSpecs(config, manifest, requested = []) {
   const configured = config.workloads || manifest.webTooling?.workloads || [];
   const workloads = requested.length > 0 ? requested : configured;
@@ -103,6 +97,10 @@ function validateReport(report, manifest, expectedWorkloads = null) {
 
   if (report.metadata?.options?.repetitions !== expectedRepetitions) {
     failures.push(`expected ${expectedRepetitions} repetitions, report recorded ${report.metadata?.options?.repetitions}`);
+  }
+  if (manifest.driver?.version !== undefined &&
+      report.metadata?.driver?.version !== manifest.driver.version) {
+    failures.push(`expected driver version ${manifest.driver.version}, report recorded ${report.metadata?.driver?.version}`);
   }
 
   const targets = Array.isArray(report.targets) ? report.targets : [];
@@ -135,19 +133,20 @@ function runReport(options, manifest) {
   const config = reportConfig(manifest);
   const repetitions = config.repetitions || 1;
   const workloads = targetSpecs(config, manifest, options.workloads);
-  const timeoutMs = options.timeoutExplicit
-    ? options.timeoutMs
-    : Math.max(...workloads.map((workload) => workloadTimeoutMs(config, workload)));
-  const args = ['scripts/web-tooling-driver.js', '--web-tooling-dir', options.webToolingDir];
+  const args = [
+    'scripts/web-tooling-driver.js',
+    '--manifest', options.manifestPath,
+    '--web-tooling-dir', options.webToolingDir,
+  ];
 
   for (const workload of workloads) {
     args.push('--workload', workload);
   }
-  args.push(
-    '--repetitions', String(repetitions),
-    '--timeout-ms', String(timeoutMs),
-    '--output', options.output,
-  );
+  args.push('--repetitions', String(repetitions));
+  if (options.timeoutExplicit) {
+    args.push('--timeout-ms', String(options.timeoutMs));
+  }
+  args.push('--output', options.output);
 
   const result = spawnSync(process.execPath, args, { stdio: 'inherit' });
   if (result.status !== 0) {

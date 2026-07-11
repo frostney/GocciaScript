@@ -13183,6 +13183,7 @@ var
   ReturnValue: TGocciaRegister;
   ResultReg: Integer;
   TargetHandlerCount: Integer;
+  InstructionStartIP: Integer;
   Instruction: UInt32;
   Op: UInt8;
   A, B, C: UInt16;
@@ -13247,8 +13248,8 @@ var
     AColumn := 0;
     if (not Assigned(Template)) or (not Assigned(Template.DebugInfo)) then
       Exit;
-    ALine := Template.DebugInfo.GetLineForPC(Frame.IP - 1);
-    AColumn := Template.DebugInfo.GetColumnForPC(Frame.IP - 1);
+    ALine := Template.DebugInfo.GetLineForPC(InstructionStartIP);
+    AColumn := Template.DebugInfo.GetColumnForPC(InstructionStartIP);
   end;
 
 begin
@@ -13393,6 +13394,7 @@ begin
           end;
 
           PollInstructionLimit;
+          InstructionStartIP := Frame.IP;
           Instruction := Template.GetInstructionUnchecked(Frame.IP);
           Inc(Frame.IP);
 
@@ -13413,7 +13415,7 @@ begin
           if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and
              Assigned(Template.DebugInfo) then
           begin
-            CovLine := Template.DebugInfo.GetLineForPC(Frame.IP - 1);
+            CovLine := Template.DebugInfo.GetLineForPC(InstructionStartIP);
             if (CovLine <> 0) and (CovLine <> PrevCovLine) then
             begin
               TGocciaCoverageTracker.Instance.RecordLineHit(
@@ -13684,8 +13686,8 @@ begin
           if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
               Template.DebugInfo.SourceFile,
-              Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-              Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 0);
+              Template.DebugInfo.GetLineForPC(InstructionStartIP),
+              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
           if JumpOffset < 0 then
@@ -13694,8 +13696,8 @@ begin
         else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
             Template.DebugInfo.SourceFile,
-            Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-            Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 1);
+            Template.DebugInfo.GetLineForPC(InstructionStartIP),
+            Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
 
       OP_JUMP_IF_FALSE:
         if not RegisterToBoolean(FRegisters[A]) then
@@ -13703,8 +13705,8 @@ begin
           if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
               Template.DebugInfo.SourceFile,
-              Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-              Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 0);
+              Template.DebugInfo.GetLineForPC(InstructionStartIP),
+              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
           if JumpOffset < 0 then
@@ -13713,8 +13715,8 @@ begin
         else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
             Template.DebugInfo.SourceFile,
-            Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-            Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 1);
+            Template.DebugInfo.GetLineForPC(InstructionStartIP),
+            Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
 
       OP_JUMP_IF_NULLISH:
         if RegisterMatchesNullishKind(FRegisters[A], B) then
@@ -13722,15 +13724,15 @@ begin
           if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
               Template.DebugInfo.SourceFile,
-              Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-              Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 0);
+              Template.DebugInfo.GetLineForPC(InstructionStartIP),
+              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
           Inc(Frame.IP, C);
         end
         else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
             Template.DebugInfo.SourceFile,
-            Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-            Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 1);
+            Template.DebugInfo.GetLineForPC(InstructionStartIP),
+            Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
 
       OP_JUMP_IF_NOT_NULLISH:
         if not RegisterMatchesNullishKind(FRegisters[A], B) then
@@ -13738,15 +13740,15 @@ begin
           if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
               Template.DebugInfo.SourceFile,
-              Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-              Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 0);
+              Template.DebugInfo.GetLineForPC(InstructionStartIP),
+              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
           Inc(Frame.IP, C);
         end
         else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
             Template.DebugInfo.SourceFile,
-            Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-            Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 1);
+            Template.DebugInfo.GetLineForPC(InstructionStartIP),
+            Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
 
       OP_PUSH_HANDLER:
         FHandlerStack.Push(Frame.IP + DecodeBx(Instruction), A, FFrameDepth);
@@ -15308,7 +15310,7 @@ begin
           else if B > 0 then
             EvalSourceValue := GetRegister(A + 1);
           SetRegister(A, ExecuteDirectEval(EvalSourceValue, Template,
-            UInt32(Frame.IP - 1), Template.StrictCode));
+            UInt32(InstructionStartIP), Template.StrictCode));
           Continue;
         end;
         if (FRegisters[A].Kind = grkObject) and
@@ -15957,7 +15959,7 @@ begin
           if (C and 1) <> 0 then
             GActiveBytecodeGenerator.HandleYieldDelegate(
               FRegisters[A], B, Frame, SavedHandlerCount, PrevCovLine,
-              Frame.IP - 1)
+              InstructionStartIP)
           else
             GActiveBytecodeGenerator.HandleYield(
               FRegisters[A], B, Frame, SavedHandlerCount, PrevCovLine,

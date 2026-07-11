@@ -511,11 +511,10 @@ module. The generated entry times one direct call to the module's exported
 Lodash-based measurement machinery are not part of the measured bundle.
 
 Each bundle runs with `GocciaScriptLoader` in bytecode mode and the broad
-ECMAScript compatibility flag set used for legacy tooling bundles. The default
-per-process timeout is 25 minutes. Workloads with a demonstrated longer runtime
-can pin an override in the manifest. PostCSS currently has a 60-minute cap and
-CoffeeScript has a 15-minute cap to prevent regressions to its former multi-hour
-runtime.
+ECMAScript compatibility flag set used for legacy tooling bundles. Every
+workload has a five-minute process ceiling. A workload-specific override can be
+pinned in the manifest only when a future corpus change has a documented reason
+to exceed that shared budget.
 PostCSS also runs with a 25 MB managed-heap ceiling so VM pressure collections
 occur before the hosted runner's process-memory limit.
 A workload build failure, timeout, crash,

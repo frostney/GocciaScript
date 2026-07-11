@@ -93,6 +93,7 @@ type
     FCurrent: Integer;
     FFileName: string;
     FSourceLines: TStringList;
+    FSourceLineOffsets: TArray<Integer>;
     FWarnings: array of TGocciaParserWarning;
     FWarningCount: Integer;
     FInAsyncFunction: Integer;
@@ -140,6 +141,7 @@ type
     procedure LeaveFunctionLabelScope(const ASavedActiveLabels, ASavedActiveIterationLabels: TStringList; const ASavedDirectLabelStart: Integer);
     procedure EnsureToken(const AIndex: Integer;
       const ALexicalGoal: TGocciaLexicalGoal);
+    procedure InitializeSourceLineOffsets;
 
     function IsAtEnd: Boolean; inline;
     function Peek: TGocciaToken; inline;
@@ -495,6 +497,7 @@ begin
   FLexer := nil;
   FFileName := AFileName;
   FSourceLines := ASourceLines;
+  SetLength(FSourceLineOffsets, 0);
   FCurrent := 0;
   FWarningCount := 0;
   FInAsyncFunction := 0;
@@ -516,6 +519,7 @@ begin
   FLexer := ALexer;
   FFileName := AFileName;
   FSourceLines := ASourceLines;
+  InitializeSourceLineOffsets;
   FCurrent := 0;
   FWarningCount := 0;
   FInAsyncFunction := 0;
@@ -528,6 +532,55 @@ begin
   FActiveIterationLabels := TStringList.Create;
   FActiveIterationLabels.CaseSensitive := True;
   FDirectLabelStart := -1;
+end;
+
+procedure TGocciaParser.InitializeSourceLineOffsets;
+var
+  Capacity, Index, LineCount: Integer;
+  SourceText: string;
+begin
+  SetLength(FSourceLineOffsets, 0);
+  if not Assigned(FLexer) then
+    Exit;
+
+  SourceText := FLexer.Source;
+  if Assigned(FSourceLines) then
+    Capacity := FSourceLines.Count + 1
+  else
+    Capacity := 16;
+  if Capacity < 16 then
+    Capacity := 16;
+  SetLength(FSourceLineOffsets, Capacity);
+  FSourceLineOffsets[0] := 1;
+  LineCount := 1;
+  Index := 1;
+  while Index <= Length(SourceText) do
+  begin
+    if SourceText[Index] = #13 then
+    begin
+      Inc(Index);
+      if (Index <= Length(SourceText)) and (SourceText[Index] = #10) then
+        Inc(Index);
+    end
+    else if SourceText[Index] = #10 then
+      Inc(Index)
+    else if (Index + 2 <= Length(SourceText)) and
+      (SourceText[Index] = #$E2) and (SourceText[Index + 1] = #$80) and
+      ((SourceText[Index + 2] = #$A8) or
+       (SourceText[Index + 2] = #$A9)) then
+      Inc(Index, 3)
+    else
+    begin
+      Inc(Index);
+      Continue;
+    end;
+
+    Inc(LineCount);
+    if LineCount > Length(FSourceLineOffsets) then
+      SetLength(FSourceLineOffsets, Length(FSourceLineOffsets) * 2);
+    FSourceLineOffsets[LineCount - 1] := Index;
+  end;
+  SetLength(FSourceLineOffsets, LineCount);
 end;
 
 procedure TGocciaParser.ApplyOptions(const AOptions: TGocciaParserOptions);
@@ -627,58 +680,14 @@ var
   EndLine, EndColumn, StartOffset, EndOffset: Integer;
   SourceText: string;
 
-  function IsUnicodeLineTerminatorAt(const AIndex: Integer): Boolean; inline;
-  begin
-    Result := (AIndex + 2 <= Length(SourceText)) and
-      (SourceText[AIndex] = #$E2) and (SourceText[AIndex + 1] = #$80) and
-      ((SourceText[AIndex + 2] = #$A8) or
-       (SourceText[AIndex + 2] = #$A9));
-  end;
-
   function OffsetForLineColumn(const ALine, AColumn: Integer): Integer;
-  var
-    CurrentLine, CurrentColumn, Index: Integer;
   begin
-    CurrentLine := 1;
-    CurrentColumn := 1;
-    Index := 1;
-
-    while (Index <= Length(SourceText)) and
-      ((CurrentLine < ALine) or (CurrentColumn < AColumn)) do
-    begin
-      case SourceText[Index] of
-        #13:
-          begin
-            Inc(Index);
-            if (Index <= Length(SourceText)) and
-               (SourceText[Index] = #10) then
-              Inc(Index);
-            Inc(CurrentLine);
-            CurrentColumn := 1;
-            Continue;
-          end;
-        #10:
-          begin
-            Inc(Index);
-            Inc(CurrentLine);
-            CurrentColumn := 1;
-            Continue;
-          end;
-      end;
-
-      if IsUnicodeLineTerminatorAt(Index) then
-      begin
-        Inc(Index, 3);
-        Inc(CurrentLine);
-        CurrentColumn := 1;
-        Continue;
-      end;
-
-      Inc(Index);
-      Inc(CurrentColumn);
-    end;
-
-    Result := Index;
+    if (ALine < 1) or (ALine > Length(FSourceLineOffsets)) or
+      (AColumn < 1) then
+      Exit(0);
+    Result := FSourceLineOffsets[ALine - 1] + AColumn - 1;
+    if Result > Length(SourceText) + 1 then
+      Result := Length(SourceText) + 1;
   end;
 begin
   // End position is after the last consumed token (Previous).
@@ -687,7 +696,7 @@ begin
   EndLine := Previous.Line;
   EndColumn := Previous.EndColumn;
 
-  if (AStartLine < 1) or (AStartLine > FSourceLines.Count) then
+  if (AStartLine < 1) or (AStartLine > Length(FSourceLineOffsets)) then
     Exit('');
 
   SourceText := FLexer.Source;

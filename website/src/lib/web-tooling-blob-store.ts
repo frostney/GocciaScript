@@ -17,6 +17,8 @@ export type WebToolingBlobRunSummary = {
   buildFailedCount: number;
   timeoutCount: number;
   crashCount: number;
+  syntaxErrorCount: number;
+  runtimeErrorCount: number;
   oomCount: number;
   missingResultCount: number;
   repetitions: number | null;

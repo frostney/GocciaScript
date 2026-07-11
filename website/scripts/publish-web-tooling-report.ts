@@ -47,7 +47,7 @@ function safeCount(value: unknown): number {
   return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0;
 }
 
-function summaryFromReport(
+export function summaryFromReport(
   report: WebToolingReport,
 ): WebToolingBlobPublishEntry["summary"] {
   const summary = report.summary ?? {};
@@ -59,6 +59,8 @@ function summaryFromReport(
     buildFailedCount: safeCount(summary.buildFailedCount),
     timeoutCount: safeCount(summary.timeoutCount),
     crashCount: safeCount(summary.crashCount),
+    syntaxErrorCount: safeCount(summary.syntaxErrorCount),
+    runtimeErrorCount: safeCount(summary.runtimeErrorCount),
     oomCount: safeCount(summary.oomCount),
     missingResultCount: safeCount(summary.missingResultCount),
     repetitions:
@@ -145,8 +147,10 @@ async function main() {
   log(`published ${runs.length} Web Tooling report(s)`);
 }
 
-main().catch((err) => {
-  const message = err instanceof Error ? err.message : String(err);
-  console.error(`[publish-web-tooling] failed: ${message}`);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[publish-web-tooling] failed: ${message}`);
+    process.exit(1);
+  });
+}

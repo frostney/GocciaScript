@@ -5,9 +5,9 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const DRIVER_VERSION = 3;
+const DRIVER_VERSION = 4;
 const DEFAULT_MANIFEST = path.join('perf', 'web-tooling', 'manifest.json');
-const DEFAULT_TIMEOUT_MS = 1500000;
+const DEFAULT_TIMEOUT_MS = 300000;
 const DEFAULT_REPETITIONS = 1;
 const DEFAULT_GOCCIA_FLAGS = [
   '--mode=bytecode',
@@ -40,7 +40,7 @@ function usage() {
     '',
     'Measurement:',
     '  --repetitions <n>            Raw runs per workload (default: 1)',
-    '  --timeout-ms <n>             Per-run timeout (default: 1500000)',
+    '  --timeout-ms <n>             Override the per-workload timeout',
     '  --output <path>              Write normalized JSON report',
     '  --keep-bundles               Keep generated upstream dist/cli.js copies',
   ].join('\n');
@@ -55,6 +55,7 @@ function parseArgs(argv) {
     gocciaFlags: [],
     repetitions: DEFAULT_REPETITIONS,
     timeoutMs: DEFAULT_TIMEOUT_MS,
+    timeoutExplicit: false,
     output: '',
     keepBundles: false,
     list: false,
@@ -90,6 +91,7 @@ function parseArgs(argv) {
       options.repetitions = parsePositiveInteger(nextValue(), '--repetitions');
     } else if (arg === '--timeout-ms' || arg.startsWith('--timeout-ms=')) {
       options.timeoutMs = parsePositiveInteger(nextValue(), '--timeout-ms');
+      options.timeoutExplicit = true;
     } else if (arg === '--output' || arg.startsWith('--output=')) {
       options.output = nextValue();
     } else {
@@ -279,8 +281,8 @@ function buildWebToolingBundle({ webToolingDir, workload, tempDir }) {
     '--env.only', workload,
     '--resolve-alias', `fs=${vfsFile}`,
   ];
-  const startedAt = new Date().toISOString();
   const started = Date.now();
+  const startedAt = new Date(started).toISOString();
   fs.writeFileSync(entryFile, webToolingEntrySource(workload));
   fs.writeFileSync(vfsFile, webToolingVirtualFSSource(payloadEntries));
   let proc;
@@ -386,19 +388,33 @@ function workloadGocciaFlags(manifest, workload) {
   return [`--max-memory=${maxMemoryBytes}`];
 }
 
+function workloadTimeoutMs(config, workload, fallback = DEFAULT_TIMEOUT_MS) {
+  const configuredDefault = config.timeoutMs ?? fallback;
+  const configuredOverride = config.timeoutMsByWorkload?.[workload];
+  return parsePositiveInteger(
+    String(configuredOverride ?? configuredDefault),
+    `timeout for ${workload}`,
+  );
+}
+
 function runGocciaSample({ bundleFile, workload, repetition, options, manifest }) {
+  const timeoutMs = options.timeoutExplicit
+    ? options.timeoutMs
+    : workloadTimeoutMs(manifest.ciReport || {}, workload);
   const args = [
     bundleFile,
     ...DEFAULT_GOCCIA_FLAGS,
     ...workloadGocciaFlags(manifest, workload),
     ...options.gocciaFlags,
   ];
-  const startedAt = new Date().toISOString();
+  const started = Date.now();
+  const startedAt = new Date(started).toISOString();
   const proc = spawnSync(options.goccia, args, {
     encoding: 'utf8',
-    timeout: options.timeoutMs,
+    timeout: timeoutMs,
     maxBuffer: 32 * 1024 * 1024,
   });
+  const durationMs = Date.now() - started;
   const stdout = proc.stdout || '';
   const stderr = proc.stderr || '';
   const metric = parseMetric(stdout, workload);
@@ -414,6 +430,8 @@ function runGocciaSample({ bundleFile, workload, repetition, options, manifest }
     exitCode: proc.status,
     signal: proc.signal || null,
     command: [options.goccia, ...args],
+    timeoutMs,
+    durationMs,
     stdout: outcome === 'ok' ? '' : trimOutput(stdout),
     stderr: outcome === 'ok' ? '' : trimOutput(stderr),
   };
@@ -531,6 +549,7 @@ function collectMetadata(options, manifest) {
     options: {
       repetitions: options.repetitions,
       timeoutMs: options.timeoutMs,
+      timeoutMsByWorkload: manifest.ciReport?.timeoutMsByWorkload || {},
       workloadInvocationCount: 1,
       harness: 'direct-upstream-workload',
       gocciaFlags: DEFAULT_GOCCIA_FLAGS.concat(options.gocciaFlags),
@@ -638,6 +657,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  DEFAULT_TIMEOUT_MS,
   DEFAULT_GOCCIA_FLAGS,
   buildOverallSummary,
   classifyProcessOutcome,
@@ -653,4 +673,5 @@ module.exports = {
   webToolingEntrySource,
   webToolingVirtualFSSource,
   workloadGocciaFlags,
+  workloadTimeoutMs,
 };
