@@ -146,13 +146,16 @@ const
   //               constant pool.
   //   v69 -> v70: added OP_SET_CLASS_SOURCE_CONST so Function.prototype.toString
   //               can return exact class source text in bytecode mode.
-  //   v70 -> v71: OP_WIDE prefixes extend A/B/C operands to 16 bits. Function
+  //   v70 -> v71: added resolved environment-reference and static global-set
+  //               opcodes so assignment preserves its left-hand Reference
+  //               across direct eval.
+  //   v71 -> v72: OP_WIDE prefixes extend A/B/C operands to 16 bits. Function
   //               metadata that names registers, locals, upvalues, parameters,
   //               or preamble instructions uses matching 16-bit fields.
   //               OP_CLOSE_UPVALUE stores its local slot in Bx, and
   //               OP_CONSTRUCT_SPREAD carries its argument-array register
   //               without the old 7-bit flag packing.
-  GOCCIA_FORMAT_VERSION = 71;
+  GOCCIA_FORMAT_VERSION = 72;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -401,11 +404,15 @@ type
     OP_PREDECLARE_GLOBAL_LET_LONG = 218,
     OP_PREDECLARE_GLOBAL_CONST_LONG = 219,
     OP_LOAD_CHAR     = 220,
+    OP_RESOLVE_UPVALUE_REF = 221,
+    OP_SET_UPVALUE_REF = 222,
+    OP_SET_GLOBAL_STATIC = 223,
+    OP_SET_UPVALUE_DYNAMIC = 224,
     // Prefix for the following instruction. A/B/C contain the high byte of
     // the following instruction's A/B/C operands; the base word keeps the
     // ordinary compact encoding.
-    OP_WIDE          = 221,
-    OP_CONSTRUCT_SPREAD = 222
+    OP_WIDE          = 225,
+    OP_CONSTRUCT_SPREAD = 226
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt16): UInt64; inline;
