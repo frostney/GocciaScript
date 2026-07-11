@@ -166,7 +166,7 @@ console.log('web-tooling-ci-report: validation...');
       repetitions: 1,
       timeoutMs: 1500000,
       timeoutMsByWorkload: {
-        coffeescript: 14400000,
+        coffeescript: 900000,
         postcss: 3600000,
       },
       workloads: ['acorn', 'coffeescript'],
@@ -174,7 +174,7 @@ console.log('web-tooling-ci-report: validation...');
   };
   assertEqual(targetSpecs(manifest.ciReport, manifest).join(','), 'acorn,coffeescript', 'ci target specs keep all workloads');
   assertEqual(workloadTimeoutMs(manifest.ciReport, 'acorn'), 1500000, 'ci uses the default workload timeout');
-  assertEqual(workloadTimeoutMs(manifest.ciReport, 'coffeescript'), 14400000, 'ci applies the CoffeeScript timeout override');
+  assertEqual(workloadTimeoutMs(manifest.ciReport, 'coffeescript'), 900000, 'ci applies the CoffeeScript timeout override');
   assertEqual(workloadTimeoutMs(manifest.ciReport, 'postcss'), 3600000, 'ci applies the PostCSS timeout override');
   validateReport({
     metadata: { options: { repetitions: 1 } },

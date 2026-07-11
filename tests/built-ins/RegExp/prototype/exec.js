@@ -347,6 +347,12 @@ test("catastrophic backtracking throws Error instead of hanging", () => {
   }).toThrow(Error);
 });
 
+test("large failure memo growth preserves backtracking matches", () => {
+  const input = "a".repeat(20) + "b";
+  expect(/^(a|aa)*b$/.test(input)).toBe(true);
+  expect(/^(a|aa)*c$/.test(input)).toBe(false);
+});
+
 // --- Large input (#515 regression) ---
 
 test("exec on large input does not crash", () => {
