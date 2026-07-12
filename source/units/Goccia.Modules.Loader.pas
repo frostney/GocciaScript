@@ -804,7 +804,6 @@ var
   SourceModule: TGocciaModule;
   Stmt: TGocciaStatement;
   Value: TGocciaValue;
-  VarInfo: TGocciaVariableInfo;
   LoadSucceeded: Boolean;
   Name: string;
   Names: TStringList;
@@ -1145,8 +1144,16 @@ var
         else if Stmt is TGocciaExportVariableDeclaration then
         begin
           ExportVarDecl := TGocciaExportVariableDeclaration(Stmt);
-          for VarInfo in ExportVarDecl.Declaration.Variables do
-            Module.AddExportBinding(VarInfo.Name, VarInfo.Name, ModuleScope);
+          Names := TStringList.Create;
+          try
+            Names.CaseSensitive := True;
+            CollectVariableDeclarationBindingNames(
+              ExportVarDecl.Declaration, Names, True);
+            for Name in Names do
+              Module.AddExportBinding(Name, Name, ModuleScope);
+          finally
+            Names.Free;
+          end;
         end
         else if Stmt is TGocciaExportDestructuringDeclaration then
         begin

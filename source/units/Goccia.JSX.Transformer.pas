@@ -496,6 +496,9 @@ begin
 end;
 
 function TGocciaJSXTransformer.IsJSXStart: Boolean;
+var
+  Index: Integer;
+  Tail: Char;
 begin
   if not IsJSXContext then
     Exit(False);
@@ -503,7 +506,38 @@ begin
     Exit(False);
   if CurrentChar <> '<' then
     Exit(False);
-  Result := IsIdentifierStart(PeekAt(1)) or (PeekAt(1) = '>');
+  if PeekAt(1) = '>' then
+    Exit(True);
+  if not IsIdentifierStart(PeekAt(1)) then
+    Exit(False);
+
+  Index := FPos + 2;
+  while (Index <= Length(FSource)) and IsIdentifierPart(FSource[Index]) do
+    Inc(Index);
+  while (Index <= Length(FSource)) and (FSource[Index] = '.') do
+  begin
+    Inc(Index);
+    if (Index > Length(FSource)) or not IsIdentifierStart(FSource[Index]) then
+      Exit(False);
+    Inc(Index);
+    while (Index <= Length(FSource)) and IsIdentifierPart(FSource[Index]) do
+      Inc(Index);
+  end;
+
+  if Index > Length(FSource) then
+    Exit(False);
+  Tail := FSource[Index];
+  if Tail in ['/', '>'] then
+    Exit(True);
+  if not (Tail in [' ', #9, #10, #13]) then
+    Exit(False);
+
+  while (Index <= Length(FSource)) and (FSource[Index] in [' ', #9, #10, #13]) do
+    Inc(Index);
+  if Index > Length(FSource) then
+    Exit(False);
+  Tail := FSource[Index];
+  Result := IsIdentifierStart(Tail) or (Tail in ['{', '/', '>']);
 end;
 
 function TGocciaJSXTransformer.IsIdentifierStart(const AChar: Char): Boolean;

@@ -42,6 +42,14 @@ test("named function* expression exposes its name internally", () => {
   expect(make().next()).toEqual({ value: "named", done: false });
 });
 
+test("contextual keyword can name a function* expression", () => {
+  const make = function* from() {
+    yield from.name;
+  };
+
+  expect(make().next()).toEqual({ value: "from", done: false });
+});
+
 test("function* is not constructable", () => {
   const make = function* () {
     yield 1;

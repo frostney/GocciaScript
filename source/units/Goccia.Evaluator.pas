@@ -361,7 +361,7 @@ end;
 
 function TryParseForInArrayIndex(const AKey: string; out AIndex: Int64): Boolean;
 var
-  I: Integer;
+  I, J, K: Integer;
   Digit: Int64;
   MaxIndex: Int64;
 begin
@@ -896,7 +896,7 @@ var
   ImportPair: TStringStringMap.TKeyValuePair;
   UsingDecl: TGocciaUsingDeclaration;
   Names: TStringList;
-  I: Integer;
+  I, J: Integer;
 begin
   if ANode is TGocciaVariableDeclaration then
   begin
@@ -904,9 +904,19 @@ begin
     if VarDecl.IsVar then
       Exit;
     for I := 0 to High(VarDecl.Variables) do
-      PredeclareBlockLexicalName(AScope, VarDecl.Variables[I].Name,
-        BlockLexicalDeclarationType(VarDecl.IsConst), VarDecl.Line,
-        VarDecl.Column);
+    begin
+      Names := TStringList.Create;
+      Names.CaseSensitive := True;
+      try
+        CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
+        for J := 0 to Names.Count - 1 do
+          PredeclareBlockLexicalName(AScope, Names[J],
+            BlockLexicalDeclarationType(VarDecl.IsConst), VarDecl.Line,
+            VarDecl.Column);
+      finally
+        Names.Free;
+      end;
+    end;
   end
   else if ANode is TGocciaExportVariableDeclaration then
   begin
@@ -914,9 +924,19 @@ begin
     if VarDecl.IsVar then
       Exit;
     for I := 0 to High(VarDecl.Variables) do
-      PredeclareBlockLexicalName(AScope, VarDecl.Variables[I].Name,
-        BlockLexicalDeclarationType(VarDecl.IsConst), VarDecl.Line,
-        VarDecl.Column);
+    begin
+      Names := TStringList.Create;
+      Names.CaseSensitive := True;
+      try
+        CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
+        for J := 0 to Names.Count - 1 do
+          PredeclareBlockLexicalName(AScope, Names[J],
+            BlockLexicalDeclarationType(VarDecl.IsConst), VarDecl.Line,
+            VarDecl.Column);
+      finally
+        Names.Free;
+      end;
+    end;
   end
   else if (ANode is TGocciaFunctionDeclaration) and
           AIncludeFunctionDeclarations then
@@ -1206,7 +1226,7 @@ var
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
   Names: TStringList;
-  I, J: Integer;
+  I, J, K: Integer;
 begin
   for I := 0 to ANodes.Count - 1 do
   begin
@@ -1216,7 +1236,17 @@ begin
       if VarDecl.IsVar then
         Continue;
       for J := 0 to High(VarDecl.Variables) do
-        AddUniqueEvalName(ANames, VarDecl.Variables[J].Name);
+      begin
+        Names := TStringList.Create;
+        try
+          Names.CaseSensitive := True;
+          CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
+          for K := 0 to Names.Count - 1 do
+            AddUniqueEvalName(ANames, Names[K]);
+        finally
+          Names.Free;
+        end;
+      end;
     end
     else if ANodes[I] is TGocciaExportVariableDeclaration then
     begin
@@ -1224,7 +1254,17 @@ begin
       if VarDecl.IsVar then
         Continue;
       for J := 0 to High(VarDecl.Variables) do
-        AddUniqueEvalName(ANames, VarDecl.Variables[J].Name);
+      begin
+        Names := TStringList.Create;
+        try
+          Names.CaseSensitive := True;
+          CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
+          for K := 0 to Names.Count - 1 do
+            AddUniqueEvalName(ANames, Names[K]);
+        finally
+          Names.Free;
+        end;
+      end;
     end
     else if ANodes[I] is TGocciaDestructuringDeclaration then
     begin
@@ -1258,7 +1298,7 @@ var
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
   Names: TStringList;
-  I, J: Integer;
+  I, J, K: Integer;
 begin
   for I := 0 to ANodes.Count - 1 do
   begin
@@ -1268,9 +1308,19 @@ begin
       if VarDecl.IsVar then
         Continue;
       for J := 0 to High(VarDecl.Variables) do
-        PredeclareBlockLexicalName(AScope, VarDecl.Variables[J].Name,
-          BlockLexicalDeclarationType(VarDecl.IsConst), VarDecl.Line,
-          VarDecl.Column);
+      begin
+        Names := TStringList.Create;
+        try
+          Names.CaseSensitive := True;
+          CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
+          for K := 0 to Names.Count - 1 do
+            PredeclareBlockLexicalName(AScope, Names[K],
+              BlockLexicalDeclarationType(VarDecl.IsConst), VarDecl.Line,
+              VarDecl.Column);
+        finally
+          Names.Free;
+        end;
+      end;
     end
     else if ANodes[I] is TGocciaExportVariableDeclaration then
     begin
@@ -1278,9 +1328,19 @@ begin
       if VarDecl.IsVar then
         Continue;
       for J := 0 to High(VarDecl.Variables) do
-        PredeclareBlockLexicalName(AScope, VarDecl.Variables[J].Name,
-          BlockLexicalDeclarationType(VarDecl.IsConst), VarDecl.Line,
-          VarDecl.Column);
+      begin
+        Names := TStringList.Create;
+        try
+          Names.CaseSensitive := True;
+          CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
+          for K := 0 to Names.Count - 1 do
+            PredeclareBlockLexicalName(AScope, Names[K],
+              BlockLexicalDeclarationType(VarDecl.IsConst), VarDecl.Line,
+              VarDecl.Column);
+        finally
+          Names.Free;
+        end;
+      end;
     end
     else if ANodes[I] is TGocciaDestructuringDeclaration then
     begin
@@ -1799,8 +1859,13 @@ begin
   begin
     VarDecl := TGocciaVariableDeclaration(AStmt);
     for I := 0 to High(VarDecl.Variables) do
+    begin
+      if VarDecl.Variables[I].IsPattern or Assigned(VarDecl.Variables[I].Pattern) then
+        ValidateEvalEarlyErrorPattern(VarDecl.Variables[I].Pattern,
+          AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
       ValidateEvalEarlyErrorExpression(VarDecl.Variables[I].Initializer,
         AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
+    end;
   end
   else if AStmt is TGocciaDestructuringDeclaration then
   begin
@@ -2348,8 +2413,11 @@ begin
     VarDecl := TGocciaVariableDeclaration(AStmt);
     for I := 0 to High(VarDecl.Variables) do
     begin
-      RejectStrictEvalAssignmentName(VarDecl.Variables[I].Name, AStmt.Line,
-        AStmt.Column);
+      if VarDecl.Variables[I].IsPattern or Assigned(VarDecl.Variables[I].Pattern) then
+        ValidateStrictEvalAssignmentPattern(VarDecl.Variables[I].Pattern)
+      else
+        RejectStrictEvalAssignmentName(VarDecl.Variables[I].Name, AStmt.Line,
+          AStmt.Column);
       ValidateStrictEvalAssignmentExpression(VarDecl.Variables[I].Initializer);
     end;
   end
@@ -5808,8 +5876,7 @@ begin
       else
         DeclarationType := dtLet;
       PerIterNames := TStringList.Create;
-      for I := 0 to High(VarDecl.Variables) do
-        PerIterNames.Add(VarDecl.Variables[I].Name);
+      CollectVariableDeclarationBindingNames(VarDecl, PerIterNames, True);
     end
     else if (AForStatement.Init is TGocciaDestructuringDeclaration)
             and not TGocciaDestructuringDeclaration(AForStatement.Init).IsVar then

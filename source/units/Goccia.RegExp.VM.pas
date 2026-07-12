@@ -21,6 +21,7 @@ type
 function ExecuteRegExpVM(const AProgram: TRegExpProgram;
   const AInput: string; const AStartIndex: Integer;
   const ARequireStart: Boolean; out AResult: TRegExpVMResult): Boolean;
+function RegExpInputCodeUnitLength(const AInput: string): Integer;
 
 { Release the per-thread input-decode memo. Registered with
   Goccia.ThreadCleanupRegistry from this unit's initialization, so the drain
@@ -42,8 +43,9 @@ const
   MIN_STEP_LIMIT = 10000000;
   STEPS_PER_INPUT_BYTE = 100;
   DEFAULT_BACKTRACK_CAP = 10000000;
-  MEMO_CAPACITY = 65536;
-  MEMO_LOAD_LIMIT = 49152;
+  MEMO_INITIAL_CAPACITY = 64;
+  MEMO_MAX_CAPACITY = 65536;
+  MEMO_MAX_PROBES = 16;
   SIMPLE_GREEDY_LOOP_MIN_REMAINING = 32;
   HIGH_SURROGATE_START = $D800;
   HIGH_SURROGATE_END = $DBFF;
@@ -72,8 +74,10 @@ type
     InputPos: Integer;
   end;
 
+  TMemoEntries = array of TMemoEntry;
+
   TMemoTable = record
-    Entries: array of TMemoEntry;
+    Entries: TMemoEntries;
     Count: Integer;
   end;
 
@@ -85,46 +89,79 @@ end;
 procedure MemoEnsureAllocated(var AMemo: TMemoTable); inline;
 begin
   if Length(AMemo.Entries) = 0 then
-    SetLength(AMemo.Entries, MEMO_CAPACITY);
+    SetLength(AMemo.Entries, MEMO_INITIAL_CAPACITY);
 end;
 
-function MemoHash(APC, APos: Integer): Integer; inline;
+function MemoHash(APC, APos, ACapacity: Integer): Integer; inline;
 var
   H: Cardinal;
 begin
   H := Cardinal(APC);
   H := (H shl 5) xor (H shr 3) xor Cardinal(APos);
   H := H xor (H shr 7) xor (H shr 15);
-  Result := Integer(H and (MEMO_CAPACITY - 1));
+  Result := Integer(H and Cardinal(ACapacity - 1));
 end;
 
 function MemoContains(var AMemo: TMemoTable; APC, APos: Integer): Boolean;
 var
-  Idx, I: Integer;
+  Capacity, Idx, I: Integer;
 begin
-  if Length(AMemo.Entries) = 0 then
+  Capacity := Length(AMemo.Entries);
+  if Capacity = 0 then
     Exit(False);
-  Idx := MemoHash(APC, APos);
-  for I := 0 to 15 do
+  Idx := MemoHash(APC, APos, Capacity);
+  for I := 0 to MEMO_MAX_PROBES - 1 do
   begin
     if not AMemo.Entries[Idx].Occupied then
       Exit(False);
     if (AMemo.Entries[Idx].PC = APC) and (AMemo.Entries[Idx].InputPos = APos) then
       Exit(True);
-    Idx := (Idx + 1) and (MEMO_CAPACITY - 1);
+    Idx := (Idx + 1) and (Capacity - 1);
   end;
   Result := False;
 end;
 
-procedure MemoAdd(var AMemo: TMemoTable; APC, APos: Integer);
+procedure MemoGrow(var AMemo: TMemoTable);
 var
-  Idx, I: Integer;
+  Capacity, Idx, I, NewCapacity, Probe: Integer;
+  OldEntries: TMemoEntries;
 begin
-  MemoEnsureAllocated(AMemo);
-  if AMemo.Count >= MEMO_LOAD_LIMIT then
+  Capacity := Length(AMemo.Entries);
+  if Capacity >= MEMO_MAX_CAPACITY then
     Exit;
-  Idx := MemoHash(APC, APos);
-  for I := 0 to 15 do
+
+  NewCapacity := Capacity * 2;
+  if NewCapacity > MEMO_MAX_CAPACITY then
+    NewCapacity := MEMO_MAX_CAPACITY;
+  OldEntries := AMemo.Entries;
+  SetLength(AMemo.Entries, NewCapacity);
+  FillChar(AMemo.Entries[0], NewCapacity * SizeOf(TMemoEntry), 0);
+  AMemo.Count := 0;
+
+  for I := 0 to High(OldEntries) do
+    if OldEntries[I].Occupied then
+    begin
+      Idx := MemoHash(OldEntries[I].PC, OldEntries[I].InputPos, NewCapacity);
+      for Probe := 0 to MEMO_MAX_PROBES - 1 do
+      begin
+        if not AMemo.Entries[Idx].Occupied then
+        begin
+          AMemo.Entries[Idx] := OldEntries[I];
+          Inc(AMemo.Count);
+          Break;
+        end;
+        Idx := (Idx + 1) and (NewCapacity - 1);
+      end;
+    end;
+end;
+
+function MemoTryAdd(var AMemo: TMemoTable; APC, APos: Integer): Boolean;
+var
+  Capacity, Idx, I: Integer;
+begin
+  Capacity := Length(AMemo.Entries);
+  Idx := MemoHash(APC, APos, Capacity);
+  for I := 0 to MEMO_MAX_PROBES - 1 do
   begin
     if not AMemo.Entries[Idx].Occupied then
     begin
@@ -132,11 +169,34 @@ begin
       AMemo.Entries[Idx].PC := APC;
       AMemo.Entries[Idx].InputPos := APos;
       Inc(AMemo.Count);
-      Exit;
+      Exit(True);
     end;
     if (AMemo.Entries[Idx].PC = APC) and (AMemo.Entries[Idx].InputPos = APos) then
+      Exit(True);
+    Idx := (Idx + 1) and (Capacity - 1);
+  end;
+  Result := False;
+end;
+
+procedure MemoAdd(var AMemo: TMemoTable; APC, APos: Integer);
+var
+  Capacity: Integer;
+begin
+  MemoEnsureAllocated(AMemo);
+  while True do
+  begin
+    Capacity := Length(AMemo.Entries);
+    if (Capacity = MEMO_MAX_CAPACITY) and
+       (AMemo.Count * 4 >= Capacity * 3) then
       Exit;
-    Idx := (Idx + 1) and (MEMO_CAPACITY - 1);
+    if (AMemo.Count * 4 >= Capacity * 3) and
+       (Capacity < MEMO_MAX_CAPACITY) then
+      MemoGrow(AMemo);
+    if MemoTryAdd(AMemo, APC, APos) then
+      Exit;
+    if Capacity >= MEMO_MAX_CAPACITY then
+      Exit;
+    MemoGrow(AMemo);
   end;
 end;
 
@@ -1249,6 +1309,39 @@ threadvar
   GRegExpInputMemoLength: Integer;
   GRegExpInputMemoValid: Boolean;
 
+function TryGetRegExpInputMemo(const AInput: string;
+  out ADecodedInput: TRegExpInput): Boolean; inline;
+begin
+  Result := GRegExpInputMemoValid and
+    (Pointer(AInput) = Pointer(GRegExpInputMemoStr));
+  if Result then
+  begin
+    ADecodedInput.Units := GRegExpInputMemoUnits;
+    ADecodedInput.Length := GRegExpInputMemoLength;
+  end;
+end;
+
+procedure GetRegExpInput(const AInput: string;
+  out ADecodedInput: TRegExpInput); inline;
+begin
+  if TryGetRegExpInputMemo(AInput, ADecodedInput) then
+    Exit;
+
+  BuildRegExpInput(AInput, ADecodedInput);
+  GRegExpInputMemoStr := AInput;
+  GRegExpInputMemoUnits := ADecodedInput.Units;
+  GRegExpInputMemoLength := ADecodedInput.Length;
+  GRegExpInputMemoValid := True;
+end;
+
+function RegExpInputCodeUnitLength(const AInput: string): Integer;
+var
+  Input: TRegExpInput;
+begin
+  GetRegExpInput(AInput, Input);
+  Result := Input.Length;
+end;
+
 function ExecuteRegExpVM(const AProgram: TRegExpProgram;
   const AInput: string; const AStartIndex: Integer;
   const ARequireStart: Boolean; out AResult: TRegExpVMResult): Boolean;
@@ -1260,24 +1353,12 @@ var
 begin
   Result := False;
   AResult.Matched := False;
-  if GRegExpInputMemoValid and (Pointer(AInput) = Pointer(GRegExpInputMemoStr)) then
-  begin
-    // Cache hit: reuse the decoded units. The raw-input start-candidate
-    // pre-scan is redundant here — FindNextStartCandidate below scans the
-    // decoded units and yields the same no-candidate result.
-    Input.Units := GRegExpInputMemoUnits;
-    Input.Length := GRegExpInputMemoLength;
-  end
-  else
+  if not TryGetRegExpInputMemo(AInput, Input) then
   begin
     if (not ARequireStart) and StartCheckIsASCIIOnly(AProgram.StartCheck) and
        not RawInputHasASCIIStartCandidate(AProgram.StartCheck, AInput) then
       Exit;
-    BuildRegExpInput(AInput, Input);
-    GRegExpInputMemoStr := AInput;
-    GRegExpInputMemoUnits := Input.Units;
-    GRegExpInputMemoLength := Input.Length;
-    GRegExpInputMemoValid := True;
+    GetRegExpInput(AInput, Input);
   end;
   SlotCount := (AProgram.CaptureCount + 1) * 2;
   SetLength(Slots, SlotCount);

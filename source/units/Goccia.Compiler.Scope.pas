@@ -18,7 +18,7 @@ type
 
   TGocciaCompilerLocal = record
     Name: string;
-    Slot: UInt8;
+    Slot: UInt16;
     Depth: Integer;
     IsCaptured: Boolean;
     IsConst: Boolean;
@@ -44,7 +44,7 @@ type
 
   TGocciaCompilerUpvalue = record
     Name: string;
-    Index: UInt8;
+    Index: UInt16;
     IsLocal: Boolean;
     IsConst: Boolean;
     IsNonStrictImmutable: Boolean;
@@ -71,8 +71,8 @@ type
     FUpvalues: array of TGocciaCompilerUpvalue;
     FUpvalueCount: Integer;
     FDepth: Integer;
-    FNextSlot: UInt8;
-    FMaxSlot: UInt8;
+    FNextSlot: Integer;
+    FMaxSlot: UInt16;
     FPrivatePrefix: string;
     FPrivateNames: array of string;
     FPrivatePrefixes: array of string;
@@ -90,26 +90,26 @@ type
     destructor Destroy; override;
 
     function DeclareLocal(const AName: string;
-      const AIsConst: Boolean): UInt8;
-    function DeclareVarLocal(const AName: string): UInt8;
+      const AIsConst: Boolean): UInt16;
+    function DeclareVarLocal(const AName: string): UInt16;
     function ResolveLocal(const AName: string): Integer;
     function ResolveUpvalue(const AName: string): Integer;
-    function AddUpvalue(const AName: string; const AIndex: UInt8;
+    function AddUpvalue(const AName: string; const AIndex: UInt16;
       const AIsLocal: Boolean; const AIsConst: Boolean = False;
       const AIsVar: Boolean = False): Integer;
 
-    function AllocateRegister: UInt8;
+    function AllocateRegister: UInt16;
     procedure FreeRegister;
     procedure BeginScope;
-    procedure EndScope(out AClosedLocals: array of UInt8;
+    procedure EndScope(out AClosedLocals: TArray<UInt16>;
       out AClosedCount: Integer);
 
     property Parent: TGocciaCompilerScope read FParent;
     property LocalCount: Integer read FLocalCount;
     property UpvalueCount: Integer read FUpvalueCount;
     property Depth: Integer read FDepth;
-    property MaxSlot: UInt8 read FMaxSlot;
-    property NextSlot: UInt8 read FNextSlot;
+    property MaxSlot: UInt16 read FMaxSlot;
+    property NextSlot: Integer read FNextSlot;
 
     function GetLocal(const AIndex: Integer): TGocciaCompilerLocal;
     function GetUpvalue(const AIndex: Integer): TGocciaCompilerUpvalue;
@@ -239,14 +239,14 @@ begin
 end;
 
 function TGocciaCompilerScope.DeclareLocal(const AName: string;
-  const AIsConst: Boolean): UInt8;
+  const AIsConst: Boolean): UInt16;
 begin
-  if FNextSlot >= High(UInt8) then
-    raise Exception.Create('Compiler error: local variable slot overflow (>255)');
+  if FNextSlot >= High(UInt16) then
+    raise Exception.Create('Compiler error: local variable slot overflow (>65535)');
   if FLocalCount >= Length(FLocals) then
     SetLength(FLocals, FLocalCount * 2 + 8);
   FLocals[FLocalCount].Name := AName;
-  FLocals[FLocalCount].Slot := FNextSlot;
+  FLocals[FLocalCount].Slot := UInt16(FNextSlot);
   FLocals[FLocalCount].Depth := FDepth;
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsConst := AIsConst;
@@ -268,17 +268,17 @@ begin
   FLocals[FLocalCount].ImportExportName := '';
   FLocals[FLocalCount].ExportNameCount := 0;
   SetLength(FLocals[FLocalCount].ExportNames, 0);
-  Result := FNextSlot;
+  Result := UInt16(FNextSlot);
   EnsureLocalIndex;
   if Assigned(FLocalIndex) then
     FLocalIndex.Add(AName, FLocalCount);
   Inc(FLocalCount);
   Inc(FNextSlot);
   if FNextSlot > FMaxSlot then
-    FMaxSlot := FNextSlot;
+    FMaxSlot := UInt16(FNextSlot);
 end;
 
-function TGocciaCompilerScope.DeclareVarLocal(const AName: string): UInt8;
+function TGocciaCompilerScope.DeclareVarLocal(const AName: string): UInt16;
 var
   I: Integer;
 begin
@@ -293,12 +293,12 @@ begin
     end;
 
   // Declare at depth 0 so EndScope never pops it
-  if FNextSlot >= High(UInt8) then
-    raise Exception.Create('Compiler error: local variable slot overflow (>255)');
+  if FNextSlot >= High(UInt16) then
+    raise Exception.Create('Compiler error: local variable slot overflow (>65535)');
   if FLocalCount >= Length(FLocals) then
     SetLength(FLocals, FLocalCount * 2 + 8);
   FLocals[FLocalCount].Name := AName;
-  FLocals[FLocalCount].Slot := FNextSlot;
+  FLocals[FLocalCount].Slot := UInt16(FNextSlot);
   FLocals[FLocalCount].Depth := 0;
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsConst := False;
@@ -320,14 +320,14 @@ begin
   FLocals[FLocalCount].ImportExportName := '';
   FLocals[FLocalCount].ExportNameCount := 0;
   SetLength(FLocals[FLocalCount].ExportNames, 0);
-  Result := FNextSlot;
+  Result := UInt16(FNextSlot);
   EnsureLocalIndex;
   if Assigned(FLocalIndex) then
     FLocalIndex.Add(AName, FLocalCount);
   Inc(FLocalCount);
   Inc(FNextSlot);
   if FNextSlot > FMaxSlot then
-    FMaxSlot := FNextSlot;
+    FMaxSlot := UInt16(FNextSlot);
 end;
 
 function TGocciaCompilerScope.ResolveLocal(const AName: string): Integer;
@@ -384,9 +384,9 @@ begin
   UpvalueIdx := FParent.ResolveUpvalue(AName);
   if UpvalueIdx >= 0 then
   begin
-    if UpvalueIdx > High(UInt8) then
-      raise Exception.Create('Compiler error: upvalue index overflow (>255)');
-    Idx := AddUpvalue(AName, UInt8(UpvalueIdx), False,
+    if UpvalueIdx > High(UInt16) then
+      raise Exception.Create('Compiler error: upvalue index overflow (>65535)');
+    Idx := AddUpvalue(AName, UInt16(UpvalueIdx), False,
       FParent.FUpvalues[UpvalueIdx].IsConst,
       FParent.FUpvalues[UpvalueIdx].IsVar);
     FUpvalues[Idx].IsNonStrictImmutable :=
@@ -408,7 +408,7 @@ begin
   Result := -1;
 end;
 
-function TGocciaCompilerScope.AddUpvalue(const AName: string; const AIndex: UInt8;
+function TGocciaCompilerScope.AddUpvalue(const AName: string; const AIndex: UInt16;
   const AIsLocal: Boolean; const AIsConst: Boolean;
   const AIsVar: Boolean): Integer;
 var
@@ -418,8 +418,8 @@ begin
     if (FUpvalues[I].Index = AIndex) and (FUpvalues[I].IsLocal = AIsLocal) then
       Exit(I);
 
-  if FUpvalueCount >= High(UInt8) then
-    raise Exception.Create('Compiler error: upvalue count overflow (>255)');
+  if FUpvalueCount >= High(UInt16) then
+    raise Exception.Create('Compiler error: upvalue count overflow (>65535)');
   if FUpvalueCount >= Length(FUpvalues) then
     SetLength(FUpvalues, FUpvalueCount * 2 + 4);
   FUpvalues[FUpvalueCount].Name := AName;
@@ -443,14 +443,14 @@ begin
   Inc(FUpvalueCount);
 end;
 
-function TGocciaCompilerScope.AllocateRegister: UInt8;
+function TGocciaCompilerScope.AllocateRegister: UInt16;
 begin
-  if FNextSlot >= High(UInt8) then
-    raise Exception.Create('Compiler error: register slot overflow (>255)');
-  Result := FNextSlot;
+  if FNextSlot >= High(UInt16) then
+    raise Exception.Create('Compiler error: register slot overflow (>65535)');
+  Result := UInt16(FNextSlot);
   Inc(FNextSlot);
   if FNextSlot > FMaxSlot then
-    FMaxSlot := FNextSlot;
+    FMaxSlot := UInt16(FNextSlot);
 end;
 
 procedure TGocciaCompilerScope.FreeRegister;
@@ -464,11 +464,12 @@ begin
   Inc(FDepth);
 end;
 
-procedure TGocciaCompilerScope.EndScope(out AClosedLocals: array of UInt8;
+procedure TGocciaCompilerScope.EndScope(out AClosedLocals: TArray<UInt16>;
   out AClosedCount: Integer);
 var
   RemovedName: string;
 begin
+  SetLength(AClosedLocals, 0);
   AClosedCount := 0;
   while (FLocalCount > 0) and (FLocals[FLocalCount - 1].Depth = FDepth) do
   begin
@@ -477,13 +478,14 @@ begin
     if FLocals[FLocalCount].IsCaptured then
     begin
       if AClosedCount >= Length(AClosedLocals) then
-        raise Exception.Create('AClosedLocals buffer too small for captured locals');
+        SetLength(AClosedLocals, AClosedCount * 2 + 4);
       AClosedLocals[AClosedCount] := FLocals[FLocalCount].Slot;
       Inc(AClosedCount);
     end;
     Dec(FNextSlot);
     RestoreLocalIndexBinding(RemovedName);
   end;
+  SetLength(AClosedLocals, AClosedCount);
   Dec(FDepth);
 end;
 

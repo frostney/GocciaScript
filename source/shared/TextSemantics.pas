@@ -606,12 +606,14 @@ begin
       Chr($80 or (ACodeUnit and $3F));
 end;
 
-// Per-thread is-ASCII memo. The UTF-16 helpers are called repeatedly against
+// Per-thread text memo. The UTF-16 helpers are called repeatedly against
 // the same subject (charCodeAt loops, replaceAll/split, regex substring
 // extraction). For an all-ASCII (single-byte) string, UTF-16 code-unit index
 // equals byte index, so those operations reduce to plain byte ops. The memo
 // makes the all-ASCII test O(1) across repeated calls; two slots avoid
-// thrashing when a haystack and needle are tested alternately. Pure cache.
+// thrashing when a haystack and needle are tested alternately. Non-ASCII
+// strings also retain their decoded UTF-16 length so length checks do not
+// rescan a large subject on every indexed operation. Pure cache.
 // The slots hold a reference to the keyed string, so its buffer cannot be
 // freed while cached and its pointer cannot alias a different live string —
 // that is what keeps the pointer-identity key sound (do not drop the refs
@@ -622,6 +624,8 @@ threadvar
   GAsciiMemoStr1: string;
   GAsciiMemoVal0: Boolean;
   GAsciiMemoVal1: Boolean;
+  GAsciiMemoUTF16Length0: Integer;
+  GAsciiMemoUTF16Length1: Integer;
   GAsciiMemoNext: Integer;
 
 function StringIsAllAscii(const AText: string): Boolean;
@@ -645,12 +649,20 @@ begin
   begin
     GAsciiMemoStr0 := AText;
     GAsciiMemoVal0 := Result;
+    if Result then
+      GAsciiMemoUTF16Length0 := Length(AText)
+    else
+      GAsciiMemoUTF16Length0 := -1;
     GAsciiMemoNext := 1;
   end
   else
   begin
     GAsciiMemoStr1 := AText;
     GAsciiMemoVal1 := Result;
+    if Result then
+      GAsciiMemoUTF16Length1 := Length(AText)
+    else
+      GAsciiMemoUTF16Length1 := -1;
     GAsciiMemoNext := 0;
   end;
 end;
@@ -663,6 +675,12 @@ var
 begin
   if StringIsAllAscii(AText) then
     Exit(Length(AText));
+  if (Pointer(AText) = Pointer(GAsciiMemoStr0)) and
+    (GAsciiMemoUTF16Length0 >= 0) then
+    Exit(GAsciiMemoUTF16Length0);
+  if (Pointer(AText) = Pointer(GAsciiMemoStr1)) and
+    (GAsciiMemoUTF16Length1 >= 0) then
+    Exit(GAsciiMemoUTF16Length1);
   Result := 0;
   Index := 1;
   while Index <= Length(AText) do
@@ -682,6 +700,10 @@ begin
       Inc(Index);
     end;
   end;
+  if Pointer(AText) = Pointer(GAsciiMemoStr0) then
+    GAsciiMemoUTF16Length0 := Result
+  else if Pointer(AText) = Pointer(GAsciiMemoStr1) then
+    GAsciiMemoUTF16Length1 := Result;
 end;
 
 function UTF16CodeUnitAt(const AText: string; const AIndex: Integer): string;
@@ -1495,6 +1517,8 @@ begin
   GAsciiMemoStr1 := '';
   GAsciiMemoVal0 := False;
   GAsciiMemoVal1 := False;
+  GAsciiMemoUTF16Length0 := -1;
+  GAsciiMemoUTF16Length1 := -1;
   GAsciiMemoNext := 0;
 end;
 

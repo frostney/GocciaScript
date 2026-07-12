@@ -291,7 +291,7 @@ var
   InputLength: Integer;
   ThisIndex, NextIndex: Double;
 begin
-  InputLength := UTF16CodeUnitLength(AInput);
+  InputLength := RegExpInputCodeUnitLength(AInput);
   ThisIndex := GetRegExpLastIndexLength(AValue);
   if ThisIndex > InputLength then
     NextIndex := ThisIndex + 1
@@ -555,7 +555,7 @@ begin
   LastIndex := GetRegExpLastIndexLength(AValue);
   if HasRegExpFlag(Flags, 'g') or HasRegExpFlag(Flags, 'y') then
   begin
-    InputLength := UTF16CodeUnitLength(AInput);
+    InputLength := RegExpInputCodeUnitLength(AInput);
     if LastIndex > InputLength then
     begin
       if InputLength < MaxInt then
@@ -588,7 +588,7 @@ begin
   LastIndex := GetRegExpLastIndexLength(AValue);
   if HasRegExpFlag(Flags, 'g') or HasRegExpFlag(Flags, 'y') then
   begin
-    InputLength := UTF16CodeUnitLength(AInput);
+    InputLength := RegExpInputCodeUnitLength(AInput);
     if LastIndex > InputLength then
     begin
       if InputLength < MaxInt then

@@ -156,6 +156,8 @@ begin
       Compiler.StrictTypes := EffectiveStrictTypes;
       Compiler.NonStrictMode := (cfNonStrictMode in EffectiveCompatibility) and
         (EffectiveSourceType = stScript);
+      Compiler.ArgumentsObjectEnabled :=
+        cfArgumentsObject in EffectiveCompatibility;
       CompiledModule := Compiler.Compile(SourcePipelineResult.ProgramNode);
       ASourceMap := SourcePipelineResult.TakeSourceMap;
       Result := CompiledModule;

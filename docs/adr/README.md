@@ -99,3 +99,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0087 — AWFY cross-engine benchmark methodology](0087-awfy-cross-engine-benchmark-methodology.md)
 - [0088 — Reject broader property inline caches without AWFY transfer](0088-reject-broader-property-inline-caches.md)
 - [0089 — Defer fixed-arity call specialization without end-to-end transfer](0089-defer-fixed-arity-call-specialization.md)
+- [0090 — Web Tooling Goccia benchmark lane](0090-web-tooling-goccia-benchmark-lane.md)

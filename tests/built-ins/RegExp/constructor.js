@@ -170,6 +170,16 @@ test("dangling quantifier throws SyntaxError", () => {
   expect(() => { new RegExp("*"); }).toThrow(SyntaxError);
 });
 
+test("non-Unicode patterns treat non-quantifier braces as literals", () => {
+  const placeholders = new RegExp("{(\\d+)}", "g");
+
+  expect("value {12}".replace(placeholders, "[$1]")).toBe("value [12]");
+  expect(new RegExp("{name}").test("{name}")).toBe(true);
+  expect(new RegExp("{1x").test("{1x")).toBe(true);
+  expect(() => { new RegExp("{1}"); }).toThrow(SyntaxError);
+  expect(() => { new RegExp("{name}", "u"); }).toThrow(SyntaxError);
+});
+
 test("invalid character class range throws SyntaxError", () => {
   expect(() => { new RegExp("[z-a]"); }).toThrow(SyntaxError);
   expect(() => { new RegExp("[b-ac-e]"); }).toThrow(SyntaxError);

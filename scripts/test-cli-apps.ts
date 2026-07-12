@@ -2358,6 +2358,22 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     await $`${BUNDLER} ${customSrc} --output=${customOut}`.quiet();
     if (!existsSync(customOut)) throw new Error("Custom --output .gbc should exist");
 
+    console.log("Bundler: compatibility arguments object roundtrip...");
+    const argumentsSrc = join(tmp, "arguments.js");
+    const argumentsOut = join(tmp, "arguments.gbc");
+    writeFileSync(
+      argumentsSrc,
+      [
+        "var count = function() { return arguments.length; };",
+        "count(1, 2);",
+        "",
+      ].join("\n"),
+    );
+    await $`${BUNDLER} ${argumentsSrc} --output=${argumentsOut} --compat-var --compat-function --compat-arguments-object`.quiet();
+    const argumentsRoundtrip = await $`${LOADER} --print ${argumentsOut} 2>&1`.text();
+    if (!containsLine(argumentsRoundtrip, "2"))
+      throw new Error(`Arguments-object roundtrip should print 2, got: ${argumentsRoundtrip}`);
+
     console.log("Bundler: repeated NaN constants compile + roundtrip...");
     const nanSrc = join(tmp, "nan-constants.js");
     const nanOut = join(tmp, "nan-constants.gbc");

@@ -14,17 +14,17 @@ type
   TGocciaJumpArray = array of Integer;
 
 procedure CompileIsExpression(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaIsExpression; const ADest: UInt8);
+  const AExpr: TGocciaIsExpression; const ADest: UInt16);
 procedure CompileMatchExpression(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaMatchExpression; const ADest: UInt8);
+  const AExpr: TGocciaMatchExpression; const ADest: UInt16);
 procedure CompilePatternTest(const ACtx: TGocciaCompilationContext;
-  const ASubjectReg: UInt8; const APattern: TGocciaMatchPattern;
-  const ADest: UInt8);
+  const ASubjectReg: UInt16; const APattern: TGocciaMatchPattern;
+  const ADest: UInt16);
 procedure DeclarePatternBindings(const ACtx: TGocciaCompilationContext;
   const APattern: TGocciaMatchPattern);
 function CompileConditionWithPatternBindings(const ACtx: TGocciaCompilationContext;
-  const ACondition: TGocciaExpression; const ADest: UInt8;
-  out ASubjectReg: UInt8; out AFailJumps: TGocciaJumpArray): Boolean;
+  const ACondition: TGocciaExpression; const ADest: UInt16;
+  out ASubjectReg: UInt16; out AFailJumps: TGocciaJumpArray): Boolean;
 
 implementation
 
@@ -38,7 +38,7 @@ uses
   Goccia.Scope.BindingMap,
   Goccia.Token;
 
-procedure EmitBoolean(const ACtx: TGocciaCompilationContext; const ADest: UInt8;
+procedure EmitBoolean(const ACtx: TGocciaCompilationContext; const ADest: UInt16;
   const AValue: Boolean);
 begin
   if AValue then
@@ -48,10 +48,10 @@ begin
 end;
 
 procedure EmitMoveToBinding(const ACtx: TGocciaCompilationContext;
-  const AName: string; const AIsConst: Boolean; const ASubjectReg: UInt8);
+  const AName: string; const AIsConst: Boolean; const ASubjectReg: UInt16);
 var
   LocalIdx: Integer;
-  Slot: UInt8;
+  Slot: UInt16;
 begin
   LocalIdx := ACtx.Scope.ResolveLocal(AName);
   if (LocalIdx >= 0) and
@@ -127,11 +127,11 @@ begin
 end;
 
 procedure BeginTentativeBindings(const ACtx: TGocciaCompilationContext;
-  const ANames: TStringList; const ASnapshotRegs, ABindingSlots: TList<UInt8>;
+  const ANames: TStringList; const ASnapshotRegs, ABindingSlots: TList<UInt16>;
   const ACapturedSlots: TList<Boolean>);
 var
   I, LocalIdx: Integer;
-  Slot, SnapshotReg: UInt8;
+  Slot, SnapshotReg: UInt16;
 begin
   for I := 0 to ANames.Count - 1 do
   begin
@@ -149,7 +149,7 @@ begin
 end;
 
 procedure RestoreTentativeBindings(const ACtx: TGocciaCompilationContext;
-  const ASnapshotRegs, ABindingSlots: TList<UInt8>;
+  const ASnapshotRegs, ABindingSlots: TList<UInt16>;
   const ACapturedSlots: TList<Boolean>);
 var
   I: Integer;
@@ -165,7 +165,7 @@ begin
 end;
 
 procedure FreeTentativeBindings(const ACtx: TGocciaCompilationContext;
-  const ASnapshotRegs: TList<UInt8>);
+  const ASnapshotRegs: TList<UInt16>);
 var
   I: Integer;
 begin
@@ -235,13 +235,13 @@ begin
 end;
 
 procedure CompileObjectPatternTest(const ACtx: TGocciaCompilationContext;
-  const ASubjectReg: UInt8; const APattern: TGocciaObjectMatchPattern;
-  const ADest: UInt8);
+  const ASubjectReg: UInt16; const APattern: TGocciaObjectMatchPattern;
+  const ADest: UInt16);
 var
   I, EndJump: Integer;
   FailJumps: TList<Integer>;
   Prop: TGocciaObjectMatchProperty;
-  KeyReg, ValueReg, ExclusionReg, RemainderReg, AdjacentReg: UInt8;
+  KeyReg, ValueReg, ExclusionReg, RemainderReg, AdjacentReg: UInt16;
   KeyIdx: UInt16;
   HasRest: Boolean;
 begin
@@ -277,7 +277,7 @@ begin
           EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, ValueReg, ASubjectReg, KeyReg))
         else
           EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, ValueReg,
-            ASubjectReg, UInt8(KeyIdx)));
+            ASubjectReg, UInt16(KeyIdx)));
       end;
       CompilePatternTest(ACtx, ValueReg, Prop.Pattern, ADest);
       FailJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest));
@@ -316,14 +316,14 @@ begin
 end;
 
 procedure CompileArrayPatternItemsTest(const ACtx: TGocciaCompilationContext;
-  const ASubjectReg: UInt8; const AElements: TGocciaMatchPatternList;
+  const ASubjectReg: UInt16; const AElements: TGocciaMatchPatternList;
   const ARestPattern: TGocciaMatchPattern; const AHasRestWildcard: Boolean;
-  const ADest: UInt8);
+  const ADest: UInt16);
 var
   I, EndJump: Integer;
   FailJumps: TList<Integer>;
-  ItemsReg, LenReg, ExpectedReg, IndexReg, ValueReg: UInt8;
-  TailThisReg, TailMethodReg, TailStartReg: UInt8;
+  ItemsReg, LenReg, ExpectedReg, IndexReg, ValueReg: UInt16;
+  TailThisReg, TailMethodReg, TailStartReg: UInt16;
   SliceIdx: UInt16;
 begin
   FailJumps := TList<Integer>.Create;
@@ -372,7 +372,7 @@ begin
       end
       else
         EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, TailMethodReg,
-          ItemsReg, UInt8(SliceIdx)));
+          ItemsReg, UInt16(SliceIdx)));
       EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, TailStartReg,
         AElements.Count));
       EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, TailMethodReg, 1, 0));
@@ -401,18 +401,18 @@ begin
 end;
 
 procedure CompileArrayPatternTest(const ACtx: TGocciaCompilationContext;
-  const ASubjectReg: UInt8; const APattern: TGocciaArrayMatchPattern;
-  const ADest: UInt8);
+  const ASubjectReg: UInt16; const APattern: TGocciaArrayMatchPattern;
+  const ADest: UInt16);
 begin
   CompileArrayPatternItemsTest(ACtx, ASubjectReg, APattern.Elements,
     APattern.RestPattern, APattern.HasRestWildcard, ADest);
 end;
 
 procedure CompileExtractorPatternTest(const ACtx: TGocciaCompilationContext;
-  const ASubjectReg: UInt8; const APattern: TGocciaExtractorMatchPattern;
-  const ADest: UInt8);
+  const ASubjectReg: UInt16; const APattern: TGocciaExtractorMatchPattern;
+  const ADest: UInt16);
 var
-  MatcherReg, ExtractedReg: UInt8;
+  MatcherReg, ExtractedReg: UInt16;
   FailJump, EndJump: Integer;
 begin
   MatcherReg := ACtx.Scope.AllocateRegister;
@@ -435,10 +435,10 @@ begin
 end;
 
 procedure CompileRelationalPatternTest(const ACtx: TGocciaCompilationContext;
-  const ASubjectReg: UInt8; const APattern: TGocciaRelationalMatchPattern;
-  const ADest: UInt8);
+  const ASubjectReg: UInt16; const APattern: TGocciaRelationalMatchPattern;
+  const ADest: UInt16);
 var
-  CandidateReg: UInt8;
+  CandidateReg: UInt16;
   Op: TGocciaOpCode;
 begin
   CandidateReg := ACtx.Scope.AllocateRegister;
@@ -459,8 +459,8 @@ begin
 end;
 
 procedure CompileAndPatternTest(const ACtx: TGocciaCompilationContext;
-  const ASubjectReg: UInt8; const APattern: TGocciaAndMatchPattern;
-  const ADest: UInt8);
+  const ASubjectReg: UInt16; const APattern: TGocciaAndMatchPattern;
+  const ADest: UInt16);
 var
   I, EndJump: Integer;
   FailJumps: TList<Integer>;
@@ -484,13 +484,13 @@ begin
 end;
 
 procedure CompileOrPatternTest(const ACtx: TGocciaCompilationContext;
-  const ASubjectReg: UInt8; const APattern: TGocciaOrMatchPattern;
-  const ADest: UInt8);
+  const ASubjectReg: UInt16; const APattern: TGocciaOrMatchPattern;
+  const ADest: UInt16);
 var
   I, EndJump: Integer;
   SuccessJumps: TList<Integer>;
   BindingNames: TStringList;
-  SnapshotRegs, BindingSlots: TList<UInt8>;
+  SnapshotRegs, BindingSlots: TList<UInt16>;
   CapturedSlots: TList<Boolean>;
 begin
   SuccessJumps := TList<Integer>.Create;
@@ -500,8 +500,8 @@ begin
     CollectPatternBindingNames(APattern, BindingNames);
     for I := 0 to APattern.Patterns.Count - 1 do
     begin
-      SnapshotRegs := TList<UInt8>.Create;
-      BindingSlots := TList<UInt8>.Create;
+      SnapshotRegs := TList<UInt16>.Create;
+      BindingSlots := TList<UInt16>.Create;
       CapturedSlots := TList<Boolean>.Create;
       try
         BeginTentativeBindings(ACtx, BindingNames, SnapshotRegs, BindingSlots,
@@ -529,8 +529,8 @@ begin
 end;
 
 procedure CompileAsPatternTest(const ACtx: TGocciaCompilationContext;
-  const ASubjectReg: UInt8; const APattern: TGocciaAsMatchPattern;
-  const ADest: UInt8);
+  const ASubjectReg: UInt16; const APattern: TGocciaAsMatchPattern;
+  const ADest: UInt16);
 var
   EndJump: Integer;
 begin
@@ -542,10 +542,10 @@ begin
 end;
 
 procedure CompilePatternTest(const ACtx: TGocciaCompilationContext;
-  const ASubjectReg: UInt8; const APattern: TGocciaMatchPattern;
-  const ADest: UInt8);
+  const ASubjectReg: UInt16; const APattern: TGocciaMatchPattern;
+  const ADest: UInt16);
 var
-  CandidateReg: UInt8;
+  CandidateReg: UInt16;
 begin
   // TC39 Pattern Matching §30.1: compile each pattern to a boolean test,
   // moving bindings into lexical slots only after the local test succeeds.
@@ -607,10 +607,10 @@ begin
 end;
 
 procedure CompileIsExpression(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaIsExpression; const ADest: UInt8);
+  const AExpr: TGocciaIsExpression; const ADest: UInt16);
 var
-  SubjectReg: UInt8;
-  ClosedLocals: array[0..255] of UInt8;
+  SubjectReg: UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount, I: Integer;
 begin
   SubjectReg := ACtx.Scope.AllocateRegister;
@@ -620,19 +620,19 @@ begin
   CompilePatternTest(ACtx, SubjectReg, AExpr.Pattern, ADest);
   ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
   for I := 0 to ClosedCount - 1 do
-    EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+    EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
   ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileMatchExpression(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaMatchExpression; const ADest: UInt8);
+  const AExpr: TGocciaMatchExpression; const ADest: UInt16);
 var
-  SubjectReg, TestReg: UInt8;
+  SubjectReg, TestReg: UInt16;
   I, FalseJump, EndJump: Integer;
   EndJumps: TList<Integer>;
-  ClosedLocals: array[0..255] of UInt8;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount, ClosedIndex: Integer;
-  TypeErrorReg, MessageReg: UInt8;
+  TypeErrorReg, MessageReg: UInt16;
 begin
   SubjectReg := ACtx.Scope.AllocateRegister;
   TestReg := ACtx.Scope.AllocateRegister;
@@ -648,11 +648,11 @@ begin
       ACtx.CompileExpression(AExpr.Clauses[I].Expression, ADest);
       ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
       for ClosedIndex := 0 to ClosedCount - 1 do
-        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[ClosedIndex], 0, 0));
+        EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[ClosedIndex])));
       EndJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
       PatchJumpTarget(ACtx, FalseJump);
       for ClosedIndex := 0 to ClosedCount - 1 do
-        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[ClosedIndex], 0, 0));
+        EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[ClosedIndex])));
     end;
 
     if Assigned(AExpr.DefaultExpression) then
@@ -682,8 +682,8 @@ begin
 end;
 
 function CompileConditionWithPatternBindings(const ACtx: TGocciaCompilationContext;
-  const ACondition: TGocciaExpression; const ADest: UInt8;
-  out ASubjectReg: UInt8; out AFailJumps: TGocciaJumpArray): Boolean;
+  const ACondition: TGocciaExpression; const ADest: UInt16;
+  out ASubjectReg: UInt16; out AFailJumps: TGocciaJumpArray): Boolean;
 var
   FailJumps: TList<Integer>;
   I: Integer;

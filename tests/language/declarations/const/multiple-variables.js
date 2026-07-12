@@ -194,3 +194,21 @@ test("const with destructuring patterns", () => {
   const { return: returnValue } = { return: "done" };
   expect(returnValue).toBe("done");
 });
+
+test("const declaration list mixes simple and destructuring declarators", () => {
+  const _ref = { first: 11, second: 22, third: 33 },
+        { first, second } = _ref,
+        third = _ref.third;
+
+  expect(first).toBe(11);
+  expect(second).toBe(22);
+  expect(third).toBe(33);
+});
+
+test("const declaration list accepts destructuring before simple declarators", () => {
+  const { first } = { first: 41 },
+        second = first + 1;
+
+  expect(first).toBe(41);
+  expect(second).toBe(42);
+});

@@ -160,6 +160,7 @@ type
     // separately from FFrameDepth because each native re-entry costs a real
     // native stack frame; see CheckNativeReentryDepth in Goccia.StackLimit.
     FNativeExecutionDepth: Integer;
+    FMemoryPressureCheckCountdown: Integer;
     FFrameStack: array of TGocciaVMCallFrame;
     FFrameStackCount: Integer;
     FCurrentExecutionContextPushed: Boolean;
@@ -537,6 +538,7 @@ const
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
   FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
   DERIVED_THIS_INITIALIZED_LOCAL = '__derived_this_initialized';
+  MEMORY_PRESSURE_CHECK_INTERVAL = 1024;
 
 type
   TGocciaVMSuperConstructorValue = class(TGocciaFunctionBase)
@@ -2629,7 +2631,7 @@ type
     FState: TGocciaBytecodeGeneratorState;
     FResumeKind: TGocciaBytecodeGeneratorResumeKind;
     FResumeValue: TGocciaRegister;
-    FResumeRegister: UInt8;
+    FResumeRegister: UInt16;
     FReturnSentinel: TGocciaValue;
     FReturnValue: TGocciaValue;
     FReturnRequiresAwait: Boolean;
@@ -2653,7 +2655,7 @@ type
       const ADone: Boolean): TGocciaObjectValue;
     procedure CaptureContinuation(const AFrame: TGocciaVMCallFrame;
       const AHandlerBaseCount: Integer; const APrevCovLine: UInt32;
-      const AResumeRegister: UInt8; const AContinuationIP: Integer);
+      const AResumeRegister: UInt16; const AContinuationIP: Integer);
     procedure CaptureInitialContinuation(const AFrame: TGocciaVMCallFrame;
       const AHandlerBaseCount: Integer; const APrevCovLine: UInt32;
       const AContinuationIP: Integer);
@@ -2682,11 +2684,11 @@ type
     function GeneratorThrow(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
     procedure HandleYield(const AValue: TGocciaRegister;
-      const AResumeRegister: UInt8; const AFrame: TGocciaVMCallFrame;
+      const AResumeRegister: UInt16; const AFrame: TGocciaVMCallFrame;
       const AHandlerBaseCount: Integer; const APrevCovLine: UInt32;
       const AContinuationIP: Integer);
     procedure HandleYieldDelegate(const AIterable: TGocciaRegister;
-      const AResumeRegister: UInt8; const AFrame: TGocciaVMCallFrame;
+      const AResumeRegister: UInt16; const AFrame: TGocciaVMCallFrame;
       const AHandlerBaseCount: Integer; const APrevCovLine: UInt32;
       const AContinuationIP: Integer);
     procedure MarkReferences; override;
@@ -4120,7 +4122,7 @@ end;
 
 procedure TGocciaBytecodeGeneratorObjectValue.CaptureContinuation(
   const AFrame: TGocciaVMCallFrame; const AHandlerBaseCount: Integer;
-  const APrevCovLine: UInt32; const AResumeRegister: UInt8;
+  const APrevCovLine: UInt32; const AResumeRegister: UInt16;
   const AContinuationIP: Integer);
 var
   I: Integer;
@@ -4204,7 +4206,7 @@ begin
 end;
 
 procedure TGocciaBytecodeGeneratorObjectValue.HandleYield(
-  const AValue: TGocciaRegister; const AResumeRegister: UInt8;
+  const AValue: TGocciaRegister; const AResumeRegister: UInt16;
   const AFrame: TGocciaVMCallFrame; const AHandlerBaseCount: Integer;
   const APrevCovLine: UInt32; const AContinuationIP: Integer);
 begin
@@ -4215,7 +4217,7 @@ begin
 end;
 
 procedure TGocciaBytecodeGeneratorObjectValue.HandleYieldDelegate(
-  const AIterable: TGocciaRegister; const AResumeRegister: UInt8;
+  const AIterable: TGocciaRegister; const AResumeRegister: UInt16;
   const AFrame: TGocciaVMCallFrame; const AHandlerBaseCount: Integer;
   const APrevCovLine: UInt32; const AContinuationIP: Integer);
 var
@@ -6317,6 +6319,7 @@ begin
   FPrivateInitializerReceiver := nil;
   FPrivateInitializerPreserveExisting := False;
   FTempSavedStateRootCount := 0;
+  FMemoryPressureCheckCountdown := MEMORY_PRESSURE_CHECK_INTERVAL;
   FCurrentExecutionContextPushed := False;
   FCurrentDynamicVarScope := nil;
   FGlobalBackedTopLevel := False;
@@ -7607,7 +7610,8 @@ function TGocciaVM.GetLocalCell(const AIndex: Integer): TGocciaBytecodeCell;
 begin
   EnsureLocalCapacity(AIndex + 1);
   if not Assigned(FLocalCells[AIndex]) then
-    FLocalCells[AIndex] := TGocciaBytecodeCell.Create(FRegisters[AIndex]);
+    FLocalCells[AIndex] := TGocciaBytecodeCell.Create(
+      GetLocalRegister(AIndex));
   Result := FLocalCells[AIndex];
 end;
 
@@ -13179,9 +13183,11 @@ var
   ReturnValue: TGocciaRegister;
   ResultReg: Integer;
   TargetHandlerCount: Integer;
+  InstructionStartIP: Integer;
   Instruction: UInt32;
   Op: UInt8;
-  A, B, C: UInt8;
+  A, B, C: UInt16;
+  WideA, WideB, WideC: UInt16;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
   KeyIndex: Integer;
   ArgsArray: TGocciaArrayValue;
@@ -13242,8 +13248,8 @@ var
     AColumn := 0;
     if (not Assigned(Template)) or (not Assigned(Template.DebugInfo)) then
       Exit;
-    ALine := Template.DebugInfo.GetLineForPC(Frame.IP - 1);
-    AColumn := Template.DebugInfo.GetColumnForPC(Frame.IP - 1);
+    ALine := Template.DebugInfo.GetLineForPC(InstructionStartIP);
+    AColumn := Template.DebugInfo.GetColumnForPC(InstructionStartIP);
   end;
 
 begin
@@ -13388,13 +13394,28 @@ begin
           end;
 
           PollInstructionLimit;
+          InstructionStartIP := Frame.IP;
           Instruction := Template.GetInstructionUnchecked(Frame.IP);
           Inc(Frame.IP);
+
+          WideA := 0;
+          WideB := 0;
+          WideC := 0;
+          if DecodeOp(Instruction) = Ord(OP_WIDE) then
+          begin
+            WideA := UInt16(DecodeA(Instruction)) shl 8;
+            WideB := UInt16(DecodeB(Instruction)) shl 8;
+            WideC := UInt16(DecodeC(Instruction)) shl 8;
+            if Frame.IP >= Template.CodeCount then
+              raise Exception.Create('Truncated OP_WIDE bytecode prefix');
+            Instruction := Template.GetInstructionUnchecked(Frame.IP);
+            Inc(Frame.IP);
+          end;
 
           if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and
              Assigned(Template.DebugInfo) then
           begin
-            CovLine := Template.DebugInfo.GetLineForPC(Frame.IP - 1);
+            CovLine := Template.DebugInfo.GetLineForPC(InstructionStartIP);
             if (CovLine <> 0) and (CovLine <> PrevCovLine) then
             begin
               TGocciaCoverageTracker.Instance.RecordLineHit(
@@ -13406,9 +13427,9 @@ begin
           Op := DecodeOp(Instruction);
           if FProfilingOpcodes then
             TGocciaProfiler.Instance.RecordOpcode(Op);
-          A := DecodeA(Instruction);
-          B := DecodeB(Instruction);
-          C := DecodeC(Instruction);
+          A := WideA or DecodeA(Instruction);
+          B := WideB or DecodeB(Instruction);
+          C := WideC or DecodeC(Instruction);
           case TGocciaOpCode(Op) of
       OP_LOAD_CONST:
         // ES2026 §13.2.8.3: bckTemplateObject constants are lazily built and cached
@@ -13459,10 +13480,13 @@ begin
         VMStrictTypeCheckRegisterValue(GetRegister(A), TGocciaLocalType(B));
 
       OP_TO_PRIMITIVE:
-        if FRegisters[B].Kind <> grkObject then
-          FRegisters[A] := FRegisters[B]
+      begin
+        KeyIndex := DecodeBx(Instruction);
+        if FRegisters[KeyIndex].Kind <> grkObject then
+          FRegisters[A] := FRegisters[KeyIndex]
         else
-          SetRegisterFast(A, ToPrimitive(GetRegisterFast(B)));
+          SetRegisterFast(A, ToPrimitive(GetRegisterFast(KeyIndex)));
+      end;
 
       OP_TO_OBJECT:
         SetRegister(A, ToObject(GetRegister(B)));
@@ -13617,8 +13641,11 @@ begin
       end;
 
       OP_CLOSE_UPVALUE:
-        if (A >= 0) and (A < FLocalCellCount) then
-          FLocalCells[A] := nil;
+      begin
+        KeyIndex := DecodeBx(Instruction);
+        if KeyIndex < FLocalCellCount then
+          FLocalCells[KeyIndex] := nil;
+      end;
 
       OP_ARG_COUNT:
         FRegisters[A] := RegisterInt(FArgCount);
@@ -13659,8 +13686,8 @@ begin
           if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
               Template.DebugInfo.SourceFile,
-              Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-              Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 0);
+              Template.DebugInfo.GetLineForPC(InstructionStartIP),
+              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
           if JumpOffset < 0 then
@@ -13669,8 +13696,8 @@ begin
         else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
             Template.DebugInfo.SourceFile,
-            Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-            Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 1);
+            Template.DebugInfo.GetLineForPC(InstructionStartIP),
+            Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
 
       OP_JUMP_IF_FALSE:
         if not RegisterToBoolean(FRegisters[A]) then
@@ -13678,8 +13705,8 @@ begin
           if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
               Template.DebugInfo.SourceFile,
-              Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-              Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 0);
+              Template.DebugInfo.GetLineForPC(InstructionStartIP),
+              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
           if JumpOffset < 0 then
@@ -13688,8 +13715,8 @@ begin
         else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
             Template.DebugInfo.SourceFile,
-            Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-            Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 1);
+            Template.DebugInfo.GetLineForPC(InstructionStartIP),
+            Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
 
       OP_JUMP_IF_NULLISH:
         if RegisterMatchesNullishKind(FRegisters[A], B) then
@@ -13697,15 +13724,15 @@ begin
           if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
               Template.DebugInfo.SourceFile,
-              Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-              Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 0);
+              Template.DebugInfo.GetLineForPC(InstructionStartIP),
+              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
           Inc(Frame.IP, C);
         end
         else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
             Template.DebugInfo.SourceFile,
-            Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-            Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 1);
+            Template.DebugInfo.GetLineForPC(InstructionStartIP),
+            Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
 
       OP_JUMP_IF_NOT_NULLISH:
         if not RegisterMatchesNullishKind(FRegisters[A], B) then
@@ -13713,15 +13740,15 @@ begin
           if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
               Template.DebugInfo.SourceFile,
-              Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-              Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 0);
+              Template.DebugInfo.GetLineForPC(InstructionStartIP),
+              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
           Inc(Frame.IP, C);
         end
         else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
             Template.DebugInfo.SourceFile,
-            Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-            Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 1);
+            Template.DebugInfo.GetLineForPC(InstructionStartIP),
+            Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
 
       OP_PUSH_HANDLER:
         FHandlerStack.Push(Frame.IP + DecodeBx(Instruction), A, FFrameDepth);
@@ -15283,7 +15310,7 @@ begin
           else if B > 0 then
             EvalSourceValue := GetRegister(A + 1);
           SetRegister(A, ExecuteDirectEval(EvalSourceValue, Template,
-            UInt32(Frame.IP - 1), Template.StrictCode));
+            UInt32(InstructionStartIP), Template.StrictCode));
           Continue;
         end;
         if (FRegisters[A].Kind = grkObject) and
@@ -15700,55 +15727,50 @@ begin
 
       OP_CONSTRUCT:
       begin
-        // C high bit clear: normal — C = arg count, args in B+1..B+C
-        // C high bit set:   spread — (C and $7F) = register holding args array
-        if (C and $80) = 0 then
+        if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaVMClassValue) then
         begin
-          if (FRegisters[B].Kind = grkObject) and
-             (FRegisters[B].ObjectValue is TGocciaVMClassValue) then
-          begin
-            SetLength(RegisterArgs, C);
-            for I := 0 to C - 1 do
-              RegisterArgs[I] := FRegisters[B + 1 + I];
-            FRegisters[A] := TGocciaVMClassValue(FRegisters[B].ObjectValue)
-              .InstantiateRegisters(RegisterArgs);
-          end
-          else
-          begin
-            CallArgs := AcquireArguments(C);
-            try
-              for I := 0 to C - 1 do
-                CallArgs.Add(GetRegister(B + 1 + I));
-              SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
-            finally
-              ReleaseArguments(CallArgs);
-            end;
-          end;
+          SetLength(RegisterArgs, C);
+          for I := 0 to C - 1 do
+            RegisterArgs[I] := FRegisters[B + 1 + I];
+          FRegisters[A] := TGocciaVMClassValue(FRegisters[B].ObjectValue)
+            .InstantiateRegisters(RegisterArgs);
         end
         else
         begin
-          // Spread path: args array register = C and $7F
-          SpreadArray := TGocciaArrayValue(FRegisters[C and $7F].ObjectValue);
-          if (FRegisters[B].Kind = grkObject) and
-             (FRegisters[B].ObjectValue is TGocciaVMClassValue) then
-          begin
-	            SetLength(RegisterArgs, SpreadArray.Elements.Count);
-	            for I := 0 to SpreadArray.Elements.Count - 1 do
-	              RegisterArgs[I] := VMValueToRegisterFast(
-	                SpreadArray.GetProperty(IntToStr(I)));
-            FRegisters[A] := TGocciaVMClassValue(FRegisters[B].ObjectValue)
-              .InstantiateRegisters(RegisterArgs);
-          end
-          else
-          begin
-            CallArgs := AcquireArguments(SpreadArray.Elements.Count);
-            try
-	              for I := 0 to SpreadArray.Elements.Count - 1 do
-	                CallArgs.Add(SpreadArray.GetProperty(IntToStr(I)));
-              SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
-            finally
-              ReleaseArguments(CallArgs);
-            end;
+          CallArgs := AcquireArguments(C);
+          try
+            for I := 0 to C - 1 do
+              CallArgs.Add(GetRegister(B + 1 + I));
+            SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
+          finally
+            ReleaseArguments(CallArgs);
+          end;
+        end;
+      end;
+
+      OP_CONSTRUCT_SPREAD:
+      begin
+        SpreadArray := TGocciaArrayValue(FRegisters[C].ObjectValue);
+        if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaVMClassValue) then
+        begin
+          SetLength(RegisterArgs, SpreadArray.Elements.Count);
+          for I := 0 to SpreadArray.Elements.Count - 1 do
+            RegisterArgs[I] := VMValueToRegisterFast(
+              SpreadArray.GetProperty(IntToStr(I)));
+          FRegisters[A] := TGocciaVMClassValue(FRegisters[B].ObjectValue)
+            .InstantiateRegisters(RegisterArgs);
+        end
+        else
+        begin
+          CallArgs := AcquireArguments(SpreadArray.Elements.Count);
+          try
+            for I := 0 to SpreadArray.Elements.Count - 1 do
+              CallArgs.Add(SpreadArray.GetProperty(IntToStr(I)));
+            SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
+          finally
+            ReleaseArguments(CallArgs);
           end;
         end;
       end;
@@ -15937,7 +15959,7 @@ begin
           if (C and 1) <> 0 then
             GActiveBytecodeGenerator.HandleYieldDelegate(
               FRegisters[A], B, Frame, SavedHandlerCount, PrevCovLine,
-              Frame.IP - 1)
+              InstructionStartIP)
           else
             GActiveBytecodeGenerator.HandleYield(
               FRegisters[A], B, Frame, SavedHandlerCount, PrevCovLine,
@@ -16460,8 +16482,7 @@ begin
         end;
       end;
 
-      OP_THROW:
-        raise EGocciaBytecodeThrow.Create(GetRegister(A));
+      OP_THROW: raise EGocciaBytecodeThrow.Create(GetRegister(A));
 
       OP_NOT:
         FRegisters[A] := RegisterBoolean(not RegisterToBoolean(FRegisters[B]));
@@ -16727,6 +16748,14 @@ begin
         else
           raise Exception.CreateFmt('Unsupported Goccia VM opcode in minimal executor: %d', [Op]);
         end;
+        if FMemoryPressureCheckCountdown = 0 then
+        begin
+          if Assigned(TGarbageCollector.Instance) then
+            TGarbageCollector.Instance.CollectForMemoryPressure(nil);
+          FMemoryPressureCheckCountdown := MEMORY_PRESSURE_CHECK_INTERVAL;
+        end
+        else
+          Dec(FMemoryPressureCheckCountdown);
         end;
       except
         on E: EGocciaBytecodeThrow do

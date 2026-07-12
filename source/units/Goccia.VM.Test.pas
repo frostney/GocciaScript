@@ -375,7 +375,7 @@ begin
     Template.EmitInstruction(EncodeABx(OP_SET_LOCAL, 0, 1));
     Template.AddFunction(ChildTemplate);
     Template.EmitInstruction(EncodeABx(OP_CLOSURE, 2, 0));
-    Template.EmitInstruction(EncodeABC(OP_CLOSE_UPVALUE, 1, 0, 0));
+    Template.EmitInstruction(EncodeABx(OP_CLOSE_UPVALUE, 0, 1));
     Template.EmitInstruction(EncodeABC(OP_RETURN, 2, 0, 0));
 
     ClosureValue := VM.ExecuteFunction(Template);

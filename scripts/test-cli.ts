@@ -236,6 +236,41 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
     if (largeGlobalOut.trim() !== "10")
       throw new Error(`Bare bytecode large global declarations expected 10, got: ${largeGlobalOut}`);
 
+    const wideNames = Array.from({ length: 260 }, (_, i) => `wideName${i}`);
+    const wideDirectEvalSrc = join(tmp, "wide-direct-eval.js");
+    writeFileSync(
+      wideDirectEvalSrc,
+      [
+        "function readWideLocal() {",
+        ...wideNames.map((name, index) => `  let ${name} = ${index};`),
+        '  return eval("wideName259");',
+        "}",
+        "readWideLocal();",
+        "",
+      ].join("\n"),
+    );
+    const wideDirectEvalOut = await $`${BARE} --print ${wideDirectEvalSrc} --mode=bytecode --compat-function --test262-host 2>&1`.text();
+    if (wideDirectEvalOut.trim() !== "259")
+      throw new Error(`Bare bytecode wide direct eval expected 259, got: ${wideDirectEvalOut}`);
+
+    const wideCapturedBlockSrc = join(tmp, "wide-captured-block.js");
+    writeFileSync(
+      wideCapturedBlockSrc,
+      [
+        "let readWideBlock;",
+        "{",
+        ...wideNames.map((name, index) => `  let ${name} = ${index};`),
+        `  readWideBlock = () => [${wideNames.join(", ")}];`,
+        "}",
+        "const wideValues = readWideBlock();",
+        "wideValues[0] + wideValues[259];",
+        "",
+      ].join("\n"),
+    );
+    const wideCapturedBlockOut = await $`${BARE} --print ${wideCapturedBlockSrc} --mode=bytecode 2>&1`.text();
+    if (wideCapturedBlockOut.trim() !== "259")
+      throw new Error(`Bare bytecode wide captured block expected 259, got: ${wideCapturedBlockOut}`);
+
     const thrownObjectSrc = join(tmp, "throw-test262-object.js");
     writeFileSync(
       thrownObjectSrc,
@@ -744,6 +779,29 @@ console.log("--max-memory (interpreter recursive expression pressure reclaims)..
   if (exitCode !== 0) throw new Error(`Recursive expression pressure exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
   if (json.files?.[0]?.result !== 46368) throw new Error(`Recursive expression pressure should return 46368, got ${json.files?.[0]?.result}`);
   if ((json.memory?.gc?.collections ?? 0) <= 0) throw new Error(`Recursive expression pressure should report collections, got ${json.memory?.gc?.collections}`);
+}
+
+console.log("--max-memory (bytecode loop pressure reclaims)...");
+{
+  const src = [
+    "let total = 0;",
+    "for (let round = 0; round < 1000; round++) {",
+    "  let junk = Array.from({ length: 500 }, (_, i) => ({ round, i }));",
+    "  total += junk.length;",
+    "  junk = null;",
+    "}",
+    "total;",
+    "",
+  ].join("\n");
+  const { exitCode, json, stderr } = runLoaderJson(src, [
+    "--mode=bytecode",
+    "--max-memory=100000000",
+    "--compat-asi",
+    "--compat-traditional-for-loop",
+  ], { timeout: 30_000 });
+  if (exitCode !== 0) throw new Error(`Bytecode loop pressure exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
+  if (json.files?.[0]?.result !== 500000) throw new Error(`Bytecode loop pressure should return 500000, got ${json.files?.[0]?.result}`);
+  if ((json.memory?.gc?.collections ?? 0) <= 0) throw new Error(`Bytecode loop pressure should report collections, got ${json.memory?.gc?.collections}`);
 }
 
 console.log("--max-memory (maxBytes readonly)...");

@@ -10,6 +10,7 @@
 - **CI integration** — PR workflow posts benchmark comparison comments with range-overlap classification; main CI retains deterministic profile reports
 - **Environment tuning** — Calibration time, warmup iterations, and measurement rounds configurable via environment variables
 - **Cross-engine AWFY lane** — `scripts/awfy-driver.js` runs pinned AWFY and `perf/probes/` diagnostics under GocciaScript, QuickJS, and Node without mixing them into the benchmark-runner corpus
+- **Web Tooling Goccia lane** — `scripts/web-tooling-driver.js` runs every pinned V8 Web Tooling workload under GocciaScript only and publishes retained JSON artifacts
 
 GocciaScript includes a benchmark runner for measuring execution performance. Benchmarks live in the `benchmarks/` directory and import the benchmark API from `"goccia:microbench"`.
 
@@ -465,3 +466,77 @@ boxing, and inline-cache shape behavior. AWFY and web-tooling remain
 roadmap-level transfer proof. Allocation reductions are supporting evidence
 only; they do not prove a runtime win without interleaved timing movement and
 profile evidence for the mechanism.
+
+## Web Tooling Goccia Lane
+
+The Web Tooling lane runs the pinned
+[`v8/web-tooling-benchmark`](https://github.com/v8/web-tooling-benchmark)
+corpus under GocciaScript only. Unlike AWFY, this is not a reference-engine
+comparison lane: it is a real-world tooling viability probe for GocciaScript.
+Node is used only as the upstream build tool for Webpack, not as a measured
+engine.
+
+Use `scripts/web-tooling-driver.js` for #857 investigation:
+
+```bash
+# List pinned Web Tooling workload names
+node scripts/web-tooling-driver.js --list
+
+# Run one workload from a local upstream checkout
+node scripts/web-tooling-driver.js \
+  --web-tooling-dir /path/to/web-tooling-benchmark \
+  --workload acorn \
+  --repetitions 1 \
+  --output tmp/web-tooling-report.json
+
+# Run the CI report set, which includes every pinned upstream workload
+node scripts/web-tooling-ci-report.js \
+  --web-tooling-dir /path/to/web-tooling-benchmark \
+  --output tmp/web-tooling-report.json
+```
+
+`perf/web-tooling/manifest.json` records the upstream repository, pinned commit,
+driver version, and the full workload list. The CI report set is intentionally
+all pinned upstream workloads: `acorn`, `babel`, `babel-minify`, `babylon`,
+`buble`, `chai`, `coffeescript`, `espree`, `esprima`, `jshint`, `lebab`,
+`postcss`, `prepack`, `prettier`, `source-map`, `terser`, `typescript`, and
+`uglify-js`.
+
+The driver prepares upstream's generated Terser/UglifyJS self-bundles, then
+generates one static entry and payload-only `fs.readFile`/`fs.readFileSync` adapter per
+workload. Webpack therefore includes only the selected upstream benchmark
+module, its tooling dependency, and the `third_party` files named by that
+module. The generated entry times one direct call to the module's exported
+`fn()`; process repetitions provide the raw samples, so Benchmark.js and its
+Lodash-based measurement machinery are not part of the measured bundle.
+
+Each bundle runs with `GocciaScriptLoader` in bytecode mode and the broad
+ECMAScript compatibility flag set used for legacy tooling bundles. Every
+workload has a five-minute process ceiling. A workload-specific override can be
+pinned in the manifest only when a future corpus change has a documented reason
+to exceed that shared budget.
+PostCSS also runs with a 25 MB managed-heap ceiling so VM pressure collections
+occur before the hosted runner's process-memory limit.
+A workload build failure, timeout, crash,
+OOM, or missing benchmark result is recorded as data in the JSON report; the CI
+runner itself fails only when it cannot produce a complete report entry for
+every manifest workload.
+
+The normalized report records:
+
+- raw Goccia samples for every workload/repetition
+- median, IQR-filtered median, min/max, and coefficient of variation for
+  reported `runs/s`
+- first-class build-failed, timeout, crash, OOM, and missing-result outcomes
+- Goccia commit, FPC version, platform, architecture, compatibility flags, Web
+  Tooling corpus SHA, direct-invocation harness metadata, and driver version
+
+Pull requests run the same all-workload report on the PR x64 build, with one
+workload per CI matrix job and a final merge step. The workflow uploads the
+normalized `web-tooling-report` JSON artifact and posts a
+`Web Tooling Benchmark` PR comment with per-workload status and Goccia `runs/s`
+where available. Full CI uploads the same artifact on every run. On `main`, when
+`BLOB_READ_WRITE_TOKEN` is configured, the workflow also publishes the compressed
+report JSON to Vercel Blob under the separate `web-tooling/` namespace. The
+default paths are `web-tooling/runs/<artifactId>/report.json.gz` and
+`web-tooling/daily/<YYYY-MM-DD>.json`.

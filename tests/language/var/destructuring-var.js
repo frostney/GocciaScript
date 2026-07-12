@@ -20,6 +20,15 @@ test("var with array destructuring", () => {
   expect(y).toBe(20);
 });
 
+test("var declaration list mixes simple and destructuring declarators", () => {
+  var _ref = { a: 1, b: 2 },
+      { a } = _ref,
+      b = _ref.b;
+
+  expect(a).toBe(1);
+  expect(b).toBe(2);
+});
+
 test("top-level destructuring assignment updates global-backed var", () => {
   expect(__gocciaGlobalDestructuringVar).toBe(73);
   expect(globalThis.__gocciaGlobalDestructuringVar).toBe(73);

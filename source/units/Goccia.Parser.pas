@@ -93,6 +93,7 @@ type
     FCurrent: Integer;
     FFileName: string;
     FSourceLines: TStringList;
+    FSourceLineOffsets: TArray<Integer>;
     FWarnings: array of TGocciaParserWarning;
     FWarningCount: Integer;
     FInAsyncFunction: Integer;
@@ -140,6 +141,7 @@ type
     procedure LeaveFunctionLabelScope(const ASavedActiveLabels, ASavedActiveIterationLabels: TStringList; const ASavedDirectLabelStart: Integer);
     procedure EnsureToken(const AIndex: Integer;
       const ALexicalGoal: TGocciaLexicalGoal);
+    procedure InitializeSourceLineOffsets;
 
     function IsAtEnd: Boolean; inline;
     function Peek: TGocciaToken; inline;
@@ -495,6 +497,7 @@ begin
   FLexer := nil;
   FFileName := AFileName;
   FSourceLines := ASourceLines;
+  SetLength(FSourceLineOffsets, 0);
   FCurrent := 0;
   FWarningCount := 0;
   FInAsyncFunction := 0;
@@ -516,6 +519,7 @@ begin
   FLexer := ALexer;
   FFileName := AFileName;
   FSourceLines := ASourceLines;
+  InitializeSourceLineOffsets;
   FCurrent := 0;
   FWarningCount := 0;
   FInAsyncFunction := 0;
@@ -528,6 +532,55 @@ begin
   FActiveIterationLabels := TStringList.Create;
   FActiveIterationLabels.CaseSensitive := True;
   FDirectLabelStart := -1;
+end;
+
+procedure TGocciaParser.InitializeSourceLineOffsets;
+var
+  Capacity, Index, LineCount: Integer;
+  SourceText: string;
+begin
+  SetLength(FSourceLineOffsets, 0);
+  if not Assigned(FLexer) then
+    Exit;
+
+  SourceText := FLexer.Source;
+  if Assigned(FSourceLines) then
+    Capacity := FSourceLines.Count + 1
+  else
+    Capacity := 16;
+  if Capacity < 16 then
+    Capacity := 16;
+  SetLength(FSourceLineOffsets, Capacity);
+  FSourceLineOffsets[0] := 1;
+  LineCount := 1;
+  Index := 1;
+  while Index <= Length(SourceText) do
+  begin
+    if SourceText[Index] = #13 then
+    begin
+      Inc(Index);
+      if (Index <= Length(SourceText)) and (SourceText[Index] = #10) then
+        Inc(Index);
+    end
+    else if SourceText[Index] = #10 then
+      Inc(Index)
+    else if (Index + 2 <= Length(SourceText)) and
+      (SourceText[Index] = #$E2) and (SourceText[Index + 1] = #$80) and
+      ((SourceText[Index + 2] = #$A8) or
+       (SourceText[Index + 2] = #$A9)) then
+      Inc(Index, 3)
+    else
+    begin
+      Inc(Index);
+      Continue;
+    end;
+
+    Inc(LineCount);
+    if LineCount > Length(FSourceLineOffsets) then
+      SetLength(FSourceLineOffsets, Length(FSourceLineOffsets) * 2);
+    FSourceLineOffsets[LineCount - 1] := Index;
+  end;
+  SetLength(FSourceLineOffsets, LineCount);
 end;
 
 procedure TGocciaParser.ApplyOptions(const AOptions: TGocciaParserOptions);
@@ -627,58 +680,14 @@ var
   EndLine, EndColumn, StartOffset, EndOffset: Integer;
   SourceText: string;
 
-  function IsUnicodeLineTerminatorAt(const AIndex: Integer): Boolean; inline;
-  begin
-    Result := (AIndex + 2 <= Length(SourceText)) and
-      (SourceText[AIndex] = #$E2) and (SourceText[AIndex + 1] = #$80) and
-      ((SourceText[AIndex + 2] = #$A8) or
-       (SourceText[AIndex + 2] = #$A9));
-  end;
-
   function OffsetForLineColumn(const ALine, AColumn: Integer): Integer;
-  var
-    CurrentLine, CurrentColumn, Index: Integer;
   begin
-    CurrentLine := 1;
-    CurrentColumn := 1;
-    Index := 1;
-
-    while (Index <= Length(SourceText)) and
-      ((CurrentLine < ALine) or (CurrentColumn < AColumn)) do
-    begin
-      case SourceText[Index] of
-        #13:
-          begin
-            Inc(Index);
-            if (Index <= Length(SourceText)) and
-               (SourceText[Index] = #10) then
-              Inc(Index);
-            Inc(CurrentLine);
-            CurrentColumn := 1;
-            Continue;
-          end;
-        #10:
-          begin
-            Inc(Index);
-            Inc(CurrentLine);
-            CurrentColumn := 1;
-            Continue;
-          end;
-      end;
-
-      if IsUnicodeLineTerminatorAt(Index) then
-      begin
-        Inc(Index, 3);
-        Inc(CurrentLine);
-        CurrentColumn := 1;
-        Continue;
-      end;
-
-      Inc(Index);
-      Inc(CurrentColumn);
-    end;
-
-    Result := Index;
+    if (ALine < 1) or (ALine > Length(FSourceLineOffsets)) or
+      (AColumn < 1) then
+      Exit(0);
+    Result := FSourceLineOffsets[ALine - 1] + AColumn - 1;
+    if Result > Length(SourceText) + 1 then
+      Result := Length(SourceText) + 1;
   end;
 begin
   // End position is after the last consumed token (Previous).
@@ -687,7 +696,7 @@ begin
   EndLine := Previous.Line;
   EndColumn := Previous.EndColumn;
 
-  if (AStartLine < 1) or (AStartLine > FSourceLines.Count) then
+  if (AStartLine < 1) or (AStartLine > Length(FSourceLineOffsets)) then
     Exit('');
 
   SourceText := FLexer.Source;
@@ -2904,7 +2913,7 @@ begin
                 IsGenerator := True;
               end;
               Name := '';
-              if Check(gttIdentifier) then
+              if IsIdentifierBindingToken(Peek.TokenType) then
               begin
                 Token := Advance;
                 ValidateIdentifierBinding(Token);
@@ -2972,7 +2981,7 @@ begin
         begin
           Advance;
           Name := '';
-          if Check(gttIdentifier) then
+          if IsIdentifierBindingToken(Peek.TokenType) then
             Name := ConsumeIdentifierBinding(
               'Expected generator function name').Lexeme;
           CollectGenericParameters;
@@ -2988,7 +2997,7 @@ begin
         else
         begin
           Name := '';
-          if Check(gttIdentifier) then
+          if IsIdentifierBindingToken(Peek.TokenType) then
             Name := ConsumeIdentifierBinding(
               'Expected function name').Lexeme;
           CollectGenericParameters;
@@ -4899,43 +4908,35 @@ function TGocciaParser.DeclarationStatement: TGocciaStatement;
 var
   IsConst: Boolean;
   Name: string;
-  Initializer: TGocciaExpression;
   Line, Column: Integer;
   Variables: TArray<TGocciaVariableInfo>;
   VariableCount: Integer;
-  Pattern: TGocciaDestructuringPattern;
-  DestructuringType: string;
-  DestructuringDecl: TGocciaDestructuringDeclaration;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
   IsConst := Previous.TokenType = gttConst;
   VariableCount := 0;
 
-  // Check for destructuring pattern
-  if Check(gttLeftBracket) or Check(gttLeftBrace) then
-  begin
-    Pattern := ParsePattern;
-    DestructuringType := '';
-    if Check(gttColon) then
-    begin
-      Advance;
-      DestructuringType := CollectTypeAnnotation([gttAssign]);
-    end;
-    Consume(gttAssign, 'Destructuring declarations must have an initializer',
-      SSuggestDestructuringRequiresInitializer);
-    Initializer := Assignment;
-    ConsumeSemicolonOrASI('Expected ";" after destructuring declaration',
-      SSuggestAddSemicolon);
-    DestructuringDecl := TGocciaDestructuringDeclaration.Create(Pattern, Initializer, IsConst, Line, Column);
-    DestructuringDecl.TypeAnnotation := DestructuringType;
-    Result := DestructuringDecl;
-  end
-  else
-  begin
-    repeat
-      SetLength(Variables, VariableCount + 1);
+  repeat
+    SetLength(Variables, VariableCount + 1);
 
+    if Check(gttLeftBracket) or Check(gttLeftBrace) then
+    begin
+      Variables[VariableCount].Pattern := ParsePattern;
+      Variables[VariableCount].IsPattern := True;
+      if Check(gttColon) then
+      begin
+        Advance;
+        Variables[VariableCount].TypeAnnotation :=
+          CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
+      end;
+      Consume(gttAssign, 'Destructuring declarations must have an initializer',
+        SSuggestDestructuringRequiresInitializer);
+      Variables[VariableCount].HasInitializer := True;
+      Variables[VariableCount].Initializer := Assignment;
+    end
+    else
+    begin
       Name := ConsumeIdentifierBinding('Expected variable name',
         SSuggestProvideVariableName).Lexeme;
       Variables[VariableCount].Name := Name;
@@ -4961,14 +4962,14 @@ begin
         Variables[VariableCount].Initializer := TGocciaLiteralExpression.Create(
           TGocciaUndefinedLiteralValue.UndefinedValue, Line, Column);
       end;
+    end;
 
-      Inc(VariableCount);
-    until not Match(gttComma);
+    Inc(VariableCount);
+  until not Match(gttComma);
 
-    ConsumeSemicolonOrASI('Expected ";" after variable declaration',
-      SSuggestAddSemicolon);
-    Result := TGocciaVariableDeclaration.Create(Variables, IsConst, Line, Column);
-  end;
+  ConsumeSemicolonOrASI('Expected ";" after variable declaration',
+    SSuggestAddSemicolon);
+  Result := TGocciaVariableDeclaration.Create(Variables, IsConst, Line, Column);
 end;
 
 // TC39 Explicit Resource Management: using / await using declarations
@@ -5110,7 +5111,7 @@ end;
 // backtick.  The error-recovery skips below (SkipBlock, SkipBalancedParens,
 // SkipUntilSemicolon) and the speculative parenthesized-group probes
 // (IsArrowFunction's SkipExpressionWithLexicalGoal / SkipDestructuringPattern,
-// IsMatchExpressionAhead, LooksLikeTraditionalForHeader) must route templates
+// IsMatchExpressionAhead, and LooksLikeTraditionalForHeader) must route templates
 // through here: the '}' that closes a '${ ... }' substitution is lexed as a
 // plain gttRightBrace under any non-template goal, so naive brace/paren counting
 // would miscount it as a structural brace, stop early, and then re-scan the
@@ -5401,12 +5402,8 @@ function TGocciaParser.VarStatement: TGocciaStatement;
 var
   Line, Column: Integer;
   Name: string;
-  Initializer: TGocciaExpression;
   Variables: TArray<TGocciaVariableInfo>;
   VariableCount: Integer;
-  Pattern: TGocciaDestructuringPattern;
-  DestructuringType: string;
-  DestructuringDecl: TGocciaDestructuringDeclaration;
 
   function ConsumeVarBindingName: TGocciaToken;
   begin
@@ -5431,30 +5428,26 @@ begin
 
   VariableCount := 0;
 
-  // Check for destructuring pattern
-  if Check(gttLeftBracket) or Check(gttLeftBrace) then
-  begin
-    Pattern := ParsePattern;
-    DestructuringType := '';
-    if Check(gttColon) then
-    begin
-      Advance;
-      DestructuringType := CollectTypeAnnotation([gttAssign]);
-    end;
-    Consume(gttAssign, 'Destructuring declarations must have an initializer',
-      SSuggestDestructuringRequiresInitializer);
-    Initializer := Assignment;
-    ConsumeSemicolonOrASI('Expected ";" after destructuring declaration',
-      SSuggestAddSemicolon);
-    DestructuringDecl := TGocciaDestructuringDeclaration.Create(Pattern, Initializer, False, Line, Column, True);
-    DestructuringDecl.TypeAnnotation := DestructuringType;
-    Result := DestructuringDecl;
-  end
-  else
-  begin
-    repeat
-      SetLength(Variables, VariableCount + 1);
+  repeat
+    SetLength(Variables, VariableCount + 1);
 
+    if Check(gttLeftBracket) or Check(gttLeftBrace) then
+    begin
+      Variables[VariableCount].Pattern := ParsePattern;
+      Variables[VariableCount].IsPattern := True;
+      if Check(gttColon) then
+      begin
+        Advance;
+        Variables[VariableCount].TypeAnnotation :=
+          CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
+      end;
+      Consume(gttAssign, 'Destructuring declarations must have an initializer',
+        SSuggestDestructuringRequiresInitializer);
+      Variables[VariableCount].HasInitializer := True;
+      Variables[VariableCount].Initializer := Assignment;
+    end
+    else
+    begin
       Name := ConsumeVarBindingName.Lexeme;
       Variables[VariableCount].Name := Name;
 
@@ -5475,14 +5468,14 @@ begin
         Variables[VariableCount].Initializer := TGocciaLiteralExpression.Create(
           TGocciaUndefinedLiteralValue.UndefinedValue, Line, Column);
       end;
+    end;
 
-      Inc(VariableCount);
-    until not Match(gttComma);
+    Inc(VariableCount);
+  until not Match(gttComma);
 
-    ConsumeSemicolonOrASI('Expected ";" after variable declaration',
-      SSuggestAddSemicolon);
-    Result := TGocciaVariableDeclaration.Create(Variables, False, Line, Column, True);
-  end;
+  ConsumeSemicolonOrASI('Expected ";" after variable declaration',
+    SSuggestAddSemicolon);
+  Result := TGocciaVariableDeclaration.Create(Variables, False, Line, Column, True);
 end;
 
 // ES2026 §14.7.5 ForIn/OfStatement
@@ -5648,7 +5641,7 @@ begin
       else
       begin
         FCurrent := SavedCurrent;
-        if FTraditionalForLoopsEnabled and LooksLikeTraditionalForHeader then
+        if FTraditionalForLoopsEnabled then
           Exit(ParseTraditionalForBody(Line, Column));
         AddUnsupportedFeatureWarning('Traditional ''for(;;)'' loops are not supported by default in GocciaScript',
           'Use for...of/array methods, or enable --compat-traditional-for-loop',
@@ -5815,7 +5808,7 @@ begin
     FCurrent := SavedCurrent;
   end;
 
-  if FTraditionalForLoopsEnabled and LooksLikeTraditionalForHeader then
+  if FTraditionalForLoopsEnabled then
   begin
     Result := ParseTraditionalForBody(Line, Column);
     Exit;
@@ -5832,96 +5825,100 @@ begin
   Result := TGocciaEmptyStatement.Create(Line, Column);
 end;
 
-// Cheap shape detector for the for-header at the current cursor (which
-// points at the leading '(' of `for ( ... )`). Returns True iff at least
-// one top-depth ';' appears inside the parens — that's the unambiguous
-// signal of a traditional `for(init; test; update)`. for-of / for-in
-// heads contain no top-level ';', so they return False and fall through
-// to warn-and-skip rather than getting (mis)parsed by ParseTraditionalForBody.
-// Pure peek, doesn't advance.
 function TGocciaParser.LooksLikeTraditionalForHeader: Boolean;
-  function TryScanWithGoal(const ALexicalGoal: TGocciaLexicalGoal;
-    out ALexError: Boolean): Boolean;
-  var
-    SavedCurrent: Integer;
-    SavedLexer: TGocciaLexerCheckpoint;
-    Idx, Depth: Integer;
-    Tok: TGocciaToken;
-  begin
-    Result := False;
-    ALexError := False;
-    SavedCurrent := FCurrent;
-    if Assigned(FLexer) then
-      SavedLexer := FLexer.CreateCheckpoint;
+var
+  SavedCurrent: Integer;
+  SavedLexer: TGocciaLexerCheckpoint;
+  ParenCount, BracketCount, BraceCount: Integer;
+  CurrentType: TGocciaTokenType;
+  NeedsOperand: Boolean;
 
-    try
-      try
-        Idx := FCurrent;
-        EnsureToken(Idx, ALexicalGoal);
-        if (Idx >= FTokens.Count) or (FTokens[Idx].TokenType <> gttLeftParen) then
-          Exit;
-        Inc(Idx); // step past '('
-        Depth := 1;
-        EnsureToken(Idx, ALexicalGoal);
-        while (Idx < FTokens.Count) and (Depth > 0) do
-        begin
-          // Skip a template literal whole so its '${ ... }' substitution
-          // closer (a gttRightBrace under this goal) is not miscounted as a
-          // structural brace, which would drop Depth to 0 and misclassify a
-          // traditional `for(init; ...)` whose init holds a template as a
-          // for-of/in head. SkipTemplateLiteral works off the live cursor, so
-          // drive it from Idx and resume past the template; the outer finally
-          // restores FCurrent (see SkipTemplateLiteral).
-          if FTokens[Idx].TokenType in [gttTemplateHead, gttTemplate] then
-          begin
-            FCurrent := Idx;
-            SkipTemplateLiteral;
-            Idx := FCurrent;
-            EnsureToken(Idx, ALexicalGoal);
-            Continue;
-          end;
-          Tok := FTokens[Idx];
-          case Tok.TokenType of
-            gttLeftParen, gttLeftBracket, gttLeftBrace:
-              Inc(Depth);
-            gttRightParen, gttRightBracket, gttRightBrace:
-            begin
-              Dec(Depth);
-              if Depth = 0 then
-                Break;
-            end;
-            gttSemicolon:
-              if Depth = 1 then
-                Exit(True);
-          end;
-          Inc(Idx);
-          EnsureToken(Idx, ALexicalGoal);
-        end;
-      except
-        on E: TGocciaLexerError do
-        begin
-          ALexError := True;
-          Result := False;
-        end;
-      end;
-    finally
-      FCurrent := SavedCurrent;
-      // Keep the speculatively-scanned tokens cached on the normal path. Drop
-      // them (rewinding the lexer) only when a lex error means the group is
-      // retried under the other goal, or when a goal-sensitive token was
-      // scanned and must be re-lexed under the parser's real goal (issue #808).
-      if Assigned(FLexer) and
-        (ALexError or FLexer.HasGoalSensitiveTokenSince(SavedLexer.TokenCount)) then
-        FLexer.RestoreCheckpoint(SavedLexer);
-    end;
+  function NextGoal: TGocciaLexicalGoal;
+  begin
+    if NeedsOperand then
+      Exit(glgInputElementRegExp);
+    Result := glgInputElementDiv;
   end;
 
-var
-  LexError: Boolean;
 begin
-  Result := TryScanWithGoal(glgInputElementRegExp, LexError);
-  if (not Result) and LexError then
-    Result := TryScanWithGoal(glgInputElementDiv, LexError);
+  Result := False;
+  SavedCurrent := FCurrent;
+  if Assigned(FLexer) then
+    SavedLexer := FLexer.CreateCheckpoint;
+
+  try
+    if not Check(gttLeftParen) then
+      Exit;
+    Advance;
+    ParenCount := 0;
+    BracketCount := 0;
+    BraceCount := 0;
+    NeedsOperand := True;
+
+    while True do
+    begin
+      CurrentType := PeekWithLexicalGoal(NextGoal).TokenType;
+      if CurrentType = gttEOF then
+        Exit;
+
+      if (ParenCount = 0) and (BracketCount = 0) and
+         (BraceCount = 0) then
+      begin
+        if CurrentType = gttSemicolon then
+          Exit(True);
+        if CurrentType = gttRightParen then
+          Exit;
+      end;
+
+      if CurrentType in [gttTemplateHead, gttTemplate] then
+      begin
+        SkipTemplateLiteral;
+        NeedsOperand := False;
+        Continue;
+      end;
+
+      case CurrentType of
+        gttLeftParen:
+          begin
+            Inc(ParenCount);
+            NeedsOperand := True;
+          end;
+        gttRightParen:
+          begin
+            Dec(ParenCount);
+            NeedsOperand := False;
+          end;
+        gttLeftBracket:
+          begin
+            Inc(BracketCount);
+            NeedsOperand := True;
+          end;
+        gttRightBracket:
+          begin
+            Dec(BracketCount);
+            NeedsOperand := False;
+          end;
+        gttLeftBrace:
+          begin
+            Inc(BraceCount);
+            NeedsOperand := True;
+          end;
+        gttRightBrace:
+          begin
+            Dec(BraceCount);
+            NeedsOperand := False;
+          end;
+      else
+        NeedsOperand := TokenRequiresFollowingOperand(CurrentType);
+      end;
+      Advance;
+    end;
+  finally
+    FCurrent := SavedCurrent;
+    if Assigned(FLexer) and
+       FLexer.HasGoalSensitiveTokenSince(SavedLexer.TokenCount) then
+      FLexer.RestoreCheckpoint(SavedLexer);
+  end;
 end;
 
 function TGocciaParser.ParseTraditionalForBody(
@@ -5934,10 +5931,6 @@ var
   Variables: TArray<TGocciaVariableInfo>;
   VarCount: Integer;
   DeclLine, DeclColumn: Integer;
-  Pattern: TGocciaDestructuringPattern;
-  Initializer: TGocciaExpression;
-  DestructTypeAnnotation: string;
-  DestructDecl: TGocciaDestructuringDeclaration;
 begin
   InitStmt := nil;
   CondExpr := nil;
@@ -5960,31 +5953,26 @@ begin
     IsConst := Check(gttConst);
     Advance; // consume let/const/var
 
-    if Check(gttLeftBracket) or Check(gttLeftBrace) then
-    begin
-      // Destructuring init: for (let [a, b] = …; …; …)
-      Pattern := ParsePattern;
-      DestructTypeAnnotation := '';
-      if Check(gttColon) then
+    VarCount := 0;
+    repeat
+      SetLength(Variables, VarCount + 1);
+      if Check(gttLeftBracket) or Check(gttLeftBrace) then
       begin
-        Advance;
-        DestructTypeAnnotation := CollectTypeAnnotation([gttAssign]);
-      end;
-      Consume(gttAssign, 'Destructuring declarations must have an initializer',
-        SSuggestDestructuringRequiresInitializer);
-      Initializer := Assignment;
-      Consume(gttSemicolon, 'Expected '';'' after for-init declaration',
-        SSuggestAddSemicolon);
-      DestructDecl := TGocciaDestructuringDeclaration.Create(Pattern, Initializer,
-        IsConst, DeclLine, DeclColumn, IsVarKeyword);
-      DestructDecl.TypeAnnotation := DestructTypeAnnotation;
-      InitStmt := DestructDecl;
-    end
-    else
-    begin
-      VarCount := 0;
-      repeat
-        SetLength(Variables, VarCount + 1);
+        Variables[VarCount].Pattern := ParsePattern;
+        Variables[VarCount].IsPattern := True;
+        if Check(gttColon) then
+        begin
+          Advance;
+          Variables[VarCount].TypeAnnotation :=
+            CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
+        end;
+        Consume(gttAssign, 'Destructuring declarations must have an initializer',
+          SSuggestDestructuringRequiresInitializer);
+        Variables[VarCount].HasInitializer := True;
+        Variables[VarCount].Initializer := Assignment;
+      end
+      else
+      begin
         if IsVarKeyword then
           Variables[VarCount].Name :=
             ConsumeVarBindingName('Expected variable name in for-init',
@@ -6015,13 +6003,13 @@ begin
           Variables[VarCount].Initializer := TGocciaLiteralExpression.Create(
             TGocciaUndefinedLiteralValue.UndefinedValue, DeclLine, DeclColumn);
         end;
-        Inc(VarCount);
-      until not Match(gttComma);
-      Consume(gttSemicolon, 'Expected '';'' after for-init declaration',
-        SSuggestAddSemicolon);
-      InitStmt := TGocciaVariableDeclaration.Create(Variables, IsConst,
-        DeclLine, DeclColumn, IsVarKeyword);
-    end;
+      end;
+      Inc(VarCount);
+    until not Match(gttComma);
+    Consume(gttSemicolon, 'Expected '';'' after for-init declaration',
+      SSuggestAddSemicolon);
+    InitStmt := TGocciaVariableDeclaration.Create(Variables, IsConst,
+      DeclLine, DeclColumn, IsVarKeyword);
   end
   else if Check(gttVar) then
   begin
@@ -7920,116 +7908,123 @@ var
   SavedLexer: TGocciaLexerCheckpoint;
   ParenCount: Integer;
   CurrentType: TGocciaTokenType;
+  LexError: Boolean;
 begin
   // Probe the parenthesized group for an arrow, then rewind the parser cursor.
   // The tokens scanned here are kept for the real parse to reuse instead of
   // being re-lexed — unless the probe scanned a goal-sensitive token ('/' or a
   // template-tail '}'), in which case they are dropped and re-lexed under the
-  // real goal (issue #808). This probe scans under InputElementDiv only and
-  // never catches lexer errors — a lex error here is a genuine syntax error.
+  // real goal (issue #808). Lexer errors inside the speculative probe only mean
+  // "not an arrow" here; the real parse will re-run and report genuine errors.
   SavedCurrent := FCurrent;
   if Assigned(FLexer) then
     SavedLexer := FLexer.CreateCheckpoint;
   Result := False;
+  LexError := False;
 
   try
-    // Look for pattern: () => or (id) => or (id, id) =>
-    // We're already past the opening (
-    ParenCount := 1;
+    try
+      // Look for pattern: () => or (id) => or (id, id) =>
+      // We're already past the opening (
+      ParenCount := 1;
 
-    if Check(gttRightParen) then
-    begin
-      Advance;
+      if Check(gttRightParen) then
+      begin
+        Advance;
+        if CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
+        begin
+          Advance;
+          CollectTypeAnnotation([gttArrow]);
+        end;
+        Result := CheckWithLexicalGoal(gttArrow, glgInputElementDiv);
+        Exit;
+      end;
+
+      // Look for parameter list patterns. Check the depth before peeking so a
+      // failed arrow probe does not lex the following expression token.
+      while ParenCount > 0 do
+      begin
+        CurrentType := PeekWithLexicalGoal(glgInputElementDiv).TokenType;
+        if CurrentType = gttEOF then
+          Break;
+
+        case CurrentType of
+          gttLeftParen:
+            Exit;
+          gttRightParen:
+            begin
+              Dec(ParenCount);
+              Advance;
+            end;
+          gttLeftBracket, gttLeftBrace:
+            begin
+              Advance;
+              SkipDestructuringPattern;
+              if CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
+              begin
+                Advance;
+                CollectTypeAnnotation([gttAssign, gttRightParen, gttComma]);
+              end;
+              if CheckWithLexicalGoal(gttAssign, glgInputElementDiv) then
+              begin
+                Advance;
+                SkipExpressionWithLexicalGoal(glgInputElementDiv);
+              end;
+              if CheckWithLexicalGoal(gttComma, glgInputElementDiv) then
+                Advance;
+            end;
+          gttSpread:
+            begin
+              Advance;
+              if IsIdentifierBindingToken(
+                PeekWithLexicalGoal(glgInputElementDiv).TokenType) then
+                Advance;
+              if CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
+              begin
+                Advance;
+                CollectTypeAnnotation([gttRightParen, gttComma]);
+              end;
+            end;
+          gttIdentifier, gttAs, gttFrom, gttStatic:
+            begin
+              Advance;
+              if CheckWithLexicalGoal(gttQuestion, glgInputElementDiv) then
+                Advance;
+              if CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
+              begin
+                Advance;
+                CollectTypeAnnotation([gttAssign, gttRightParen, gttComma]);
+              end;
+              if CheckWithLexicalGoal(gttAssign, glgInputElementDiv) then
+              begin
+                Advance;
+                SkipExpressionWithLexicalGoal(glgInputElementDiv);
+              end;
+              if CheckWithLexicalGoal(gttComma, glgInputElementDiv) then
+                Advance;
+            end;
+          gttComma:
+            Advance;
+        else
+          // If we hit anything else, it's probably not an arrow function
+          Exit;
+        end;
+      end;
+
       if CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
       begin
         Advance;
         CollectTypeAnnotation([gttArrow]);
       end;
+
       Result := CheckWithLexicalGoal(gttArrow, glgInputElementDiv);
-      Exit;
-    end;
-
-    // Look for parameter list patterns. Check the depth before peeking so a
-    // failed arrow probe does not lex the following expression token.
-    while ParenCount > 0 do
-    begin
-      CurrentType := PeekWithLexicalGoal(glgInputElementDiv).TokenType;
-      if CurrentType = gttEOF then
-        Break;
-
-      case CurrentType of
-        gttLeftParen:
-          begin
-            Inc(ParenCount);
-            Advance;
-          end;
-        gttRightParen:
-          begin
-            Dec(ParenCount);
-            Advance;
-          end;
-        gttLeftBracket, gttLeftBrace:
-          begin
-            Advance;
-            SkipDestructuringPattern;
-            if CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
-            begin
-              Advance;
-              CollectTypeAnnotation([gttAssign, gttRightParen, gttComma]);
-            end;
-            if CheckWithLexicalGoal(gttAssign, glgInputElementDiv) then
-            begin
-              Advance;
-              SkipExpressionWithLexicalGoal(glgInputElementDiv);
-            end;
-            if CheckWithLexicalGoal(gttComma, glgInputElementDiv) then
-              Advance;
-          end;
-        gttSpread:
-          begin
-            Advance;
-            if IsIdentifierBindingToken(
-              PeekWithLexicalGoal(glgInputElementDiv).TokenType) then
-              Advance;
-            if CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
-            begin
-              Advance;
-              CollectTypeAnnotation([gttRightParen, gttComma]);
-            end;
-          end;
-        gttIdentifier, gttAs, gttFrom, gttStatic:
-          begin
-            Advance;
-            if CheckWithLexicalGoal(gttQuestion, glgInputElementDiv) then
-              Advance;
-            if CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
-            begin
-              Advance;
-              CollectTypeAnnotation([gttAssign, gttRightParen, gttComma]);
-            end;
-            if CheckWithLexicalGoal(gttAssign, glgInputElementDiv) then
-            begin
-              Advance;
-              SkipExpressionWithLexicalGoal(glgInputElementDiv);
-            end;
-            if CheckWithLexicalGoal(gttComma, glgInputElementDiv) then
-              Advance;
-          end;
-        gttComma:
-          Advance;
-      else
-        // If we hit anything else, it's probably not an arrow function
-        Exit;
+    except
+      on E: TGocciaLexerError do
+      begin
+        LexError := True;
+        Result := False;
       end;
     end;
-
-    if CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
-    begin
-      Advance;
-      CollectTypeAnnotation([gttArrow]);
-    end;
-
-    Result := CheckWithLexicalGoal(gttArrow, glgInputElementDiv);
   finally
     FCurrent := SavedCurrent;
     // Keep the probe's look-ahead tokens cached unless one of them is
@@ -8037,7 +8032,7 @@ begin
     // goal), in which case drop them so the real parse re-lexes under the
     // correct goal (issue #808).
     if Assigned(FLexer) and
-      FLexer.HasGoalSensitiveTokenSince(SavedLexer.TokenCount) then
+      (LexError or FLexer.HasGoalSensitiveTokenSince(SavedLexer.TokenCount)) then
       FLexer.RestoreCheckpoint(SavedLexer);
   end;
 end;

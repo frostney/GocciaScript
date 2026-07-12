@@ -218,6 +218,8 @@ begin
     OP_SET_UPVALUE_REF:                 Result := 'OP_SET_UPVALUE_REF';
     OP_SET_GLOBAL_STATIC:               Result := 'OP_SET_GLOBAL_STATIC';
     OP_SET_UPVALUE_DYNAMIC:             Result := 'OP_SET_UPVALUE_DYNAMIC';
+    OP_WIDE:                           Result := 'OP_WIDE';
+    OP_CONSTRUCT_SPREAD:               Result := 'OP_CONSTRUCT_SPREAD';
   else
     Result := Format('OP_UNKNOWN_%d', [AOp]);
   end;

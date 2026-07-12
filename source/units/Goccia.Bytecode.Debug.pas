@@ -13,7 +13,7 @@ type
 
   TGocciaLocalInfo = record
     Name: string;
-    Slot: UInt8;
+    Slot: UInt16;
     StartPC: UInt32;
     EndPC: UInt32;
   end;
@@ -30,7 +30,7 @@ type
 
     procedure AddLineMapping(const APC: UInt32; const ALine: UInt32;
       const AColumn: UInt16);
-    procedure AddLocal(const AName: string; const ASlot: UInt8;
+    procedure AddLocal(const AName: string; const ASlot: UInt16;
       const AStartPC, AEndPC: UInt32);
 
     function GetLineForPC(const APC: UInt32): UInt32;
@@ -65,7 +65,7 @@ begin
   Inc(FLineMapCount);
 end;
 
-procedure TGocciaDebugInfo.AddLocal(const AName: string; const ASlot: UInt8;
+procedure TGocciaDebugInfo.AddLocal(const AName: string; const ASlot: UInt16;
   const AStartPC, AEndPC: UInt32);
 begin
   if FLocalCount >= Length(FLocals) then

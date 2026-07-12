@@ -86,7 +86,7 @@ procedure CompileUsingDeclaration(const ACtx: TGocciaCompilationContext;
 procedure CompileClassDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaClassDeclaration);
 procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
-  const AClassDef: TGocciaClassDefinition; const ADest: UInt8;
+  const AClassDef: TGocciaClassDefinition; const ADest: UInt16;
   const AInferredName: string = '');
 
 function IsArrayTypeAnnotation(const AAnnotation: string): Boolean;
@@ -134,15 +134,15 @@ const
 
 type
   TUsingResourceEntry = record
-    ValueSlot: UInt8;
-    DisposeSlot: UInt8;
+    ValueSlot: UInt16;
+    DisposeSlot: UInt16;
     IsAwait: Boolean;
   end;
 
   TPreallocatedUsingDisposeSlot = record
     Declaration: TGocciaUsingDeclaration;
     VariableIndex: Integer;
-    DisposeSlot: UInt8;
+    DisposeSlot: UInt16;
     ResourceRegistered: Boolean;
   end;
 
@@ -182,12 +182,13 @@ type
     // CompileReturnStatement emits the disposal sequence instead of
     // compiling a FinallyBlock when this array is populated.
     UsingResources: array of TUsingResourceEntry;
-    UsingErrorReg: UInt8;
+    UsingErrorReg: UInt16;
     IsIteratorClose: Boolean;
     IsAsyncIterator: Boolean;
-    IteratorReg: UInt8;
+    IteratorReg: UInt16;
     IsScopedHandlerCleanup: Boolean;
     ScopedCleanupDepth: Integer;
+    // Active catch/finally handlers that abrupt exits must remove.
     HandlerPopCount: Integer;
   end;
 
@@ -355,7 +356,7 @@ end;
 procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExpressionStatement);
 var
-  Reg: UInt8;
+  Reg: UInt16;
 begin
   Reg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AStmt.Expression, Reg);
@@ -365,7 +366,7 @@ end;
 procedure CompileDiscardedExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression);
 var
-  Reg: UInt8;
+  Reg: UInt16;
 begin
   Reg := ACtx.Scope.AllocateRegister;
   try
@@ -664,7 +665,7 @@ end;
 function FindVarLocalIndex(const AScope: TGocciaCompilerScope;
   const AName: string): Integer; forward;
 function FindLocalBySlot(const AScope: TGocciaCompilerScope;
-  const AName: string; const ASlot: UInt8): Integer; forward;
+  const AName: string; const ASlot: UInt16): Integer; forward;
 
 procedure CopyLocalTypeMetadata(const ACtx: TGocciaCompilationContext;
   const ASourceIdx, ATargetIdx: Integer); forward;
@@ -673,9 +674,10 @@ procedure PrepareLexicalDeclarationLocals(
   const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration);
 var
-  I, LocalIdx: Integer;
+  I, J, LocalIdx: Integer;
   Info: TGocciaVariableInfo;
-  Slot: UInt8;
+  Names: TStringList;
+  Slot: UInt16;
 begin
   if AStmt.IsVar then
     Exit;
@@ -683,6 +685,30 @@ begin
   for I := 0 to High(AStmt.Variables) do
   begin
     Info := AStmt.Variables[I];
+    if Info.IsPattern or Assigned(Info.Pattern) then
+    begin
+      Names := TStringList.Create;
+      Names.CaseSensitive := True;
+      try
+        CollectPatternBindingNames(Info.Pattern, Names, True);
+        for J := 0 to Names.Count - 1 do
+        begin
+          LocalIdx := ACtx.Scope.ResolveLocal(Names[J]);
+          if (LocalIdx >= 0) and
+             (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) and
+             (ACtx.Scope.GetLocal(LocalIdx).Slot <>
+              ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
+            Slot := ACtx.Scope.GetLocal(LocalIdx).Slot
+          else
+            Slot := ACtx.Scope.DeclareLocal(Names[J], AStmt.IsConst);
+          EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+        end;
+      finally
+        Names.Free;
+      end;
+      Continue;
+    end;
+
     LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
     if (LocalIdx >= 0) and
        (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) and
@@ -712,7 +738,7 @@ begin
 end;
 
 procedure EmitGlobalDefine(const ACtx: TGocciaCompilationContext;
-  const ASlot: UInt8; const AName: string; const AIsConst: Boolean;
+  const ASlot: UInt16; const AName: string; const AIsConst: Boolean;
   const AIsVar: Boolean = False; const AHasInitializer: Boolean = True;
   const AIsFunctionDeclaration: Boolean = False);
 var
@@ -730,8 +756,8 @@ procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
 var
   I, FuncCount, LocalIdx: Integer;
   Info: TGocciaVariableInfo;
-  Slot: UInt8;
-  TargetObjReg, ProbeObjReg, KeyReg, CondReg: UInt8;
+  Slot: UInt16;
+  TargetObjReg, ProbeObjReg, KeyReg, CondReg: UInt16;
   InferredTemplate: TGocciaFunctionTemplate;
   TypeHint, AnnotationType: TGocciaLocalType;
   ConstantValue: TGocciaCompileTimeValue;
@@ -739,7 +765,7 @@ var
   IsStrict, HasInitializer, HasRealInitializer, IsTopLevelGlobalBacked,
   IsVarRedeclaration, UseWithVarInitializer: Boolean;
   CanTrackConstant: Boolean;
-  InitSlot: UInt8;
+  InitSlot: UInt16;
   NameIdx: UInt16;
   ProbeMissJump, TargetMissJump, TargetEndJump: Integer;
   ProbeEndJumps: array of Integer;
@@ -753,6 +779,35 @@ begin
     if ACtx.GlobalBackedTopLevel and AStmt.IsVar and
        (not Info.HasInitializer) then
       Continue;
+
+    if Info.IsPattern or Assigned(Info.Pattern) then
+    begin
+      IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
+        (AStmt.IsVar or (ACtx.Scope.Depth = 0));
+
+      if AStmt.IsVar then
+        CollectDestructuringVarBindings(Info.Pattern, ACtx.Scope)
+      else
+        Goccia.Compiler.Expressions.CollectDestructuringBindings(
+          Info.Pattern, ACtx.Scope, AStmt.IsConst);
+
+      if IsTopLevelGlobalBacked and AStmt.IsVar then
+        EmitGlobalDefinesForPattern(ACtx, Info.Pattern, False, True, False);
+
+      InitSlot := ACtx.Scope.AllocateRegister;
+      try
+        ACtx.CompileExpression(Info.Initializer, InitSlot);
+        EmitDestructuring(ACtx, Info.Pattern, InitSlot,
+          IsTopLevelGlobalBacked and AStmt.IsVar);
+      finally
+        ACtx.Scope.FreeRegister;
+      end;
+
+      if IsTopLevelGlobalBacked and not AStmt.IsVar then
+        EmitGlobalDefinesForPattern(ACtx, Info.Pattern, AStmt.IsConst,
+          False, True);
+      Continue;
+    end;
 
     if AStmt.IsVar then
     begin
@@ -863,9 +918,6 @@ begin
       try
         EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, TargetObjReg, 0, 0));
         NameIdx := ACtx.Template.AddConstantString(Info.Name);
-        if NameIdx > High(UInt8) then
-          raise Exception.Create(
-            'Constant pool overflow: with binding name index exceeds 255');
         EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, NameIdx));
         ProbeEndCount := 0;
         SetLength(ProbeEndJumps, ACtx.Scope.WithBindingCount);
@@ -1039,7 +1091,7 @@ end;
 procedure CompileFunctionDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaFunctionDeclaration);
 var
-  Slot: UInt8;
+  Slot: UInt16;
   LocalIdx, FuncCount: Integer;
   InferredTemplate: TGocciaFunctionTemplate;
   IsBlockScoped, IsTopLevelGlobalBacked, IsPreinitializedTopLevel,
@@ -1117,7 +1169,7 @@ procedure CompileCompatBlockFunctionActivation(
   const ACtx: TGocciaCompilationContext; const AStmt: TGocciaFunctionDeclaration);
 var
   LocalIdx, VarLocalIdx: Integer;
-  Slot: UInt8;
+  Slot: UInt16;
 begin
   if (not ACtx.NonStrictMode) or
      (not ACtx.CompatibilityNonStrictMode) or
@@ -1179,7 +1231,7 @@ end;
 
 function TryUsePreallocatedUsingDisposeSlot(
   const ADeclaration: TGocciaUsingDeclaration; const AVariableIndex: Integer;
-  out ADisposeSlot: UInt8; out AResourceRegistered: Boolean): Boolean;
+  out ADisposeSlot: UInt16; out AResourceRegistered: Boolean): Boolean;
 var
   I: Integer;
   Preallocated: TPreallocatedUsingDisposeSlot;
@@ -1213,8 +1265,8 @@ procedure CompileUsingDeclaration(const ACtx: TGocciaCompilationContext;
 var
   I, FuncCount, LocalIdx: Integer;
   Info: TGocciaVariableInfo;
-  ValueSlot, DisposeSlot: UInt8;
-  Flags: UInt8;
+  ValueSlot, DisposeSlot: UInt16;
+  Flags: UInt16;
   Entry: TUsingResourceEntry;
   InferredTemplate: TGocciaFunctionTemplate;
   ResourceRegistered: Boolean;
@@ -1297,7 +1349,7 @@ end;
 // we emit OP_AWAIT on DisposeSlot to await the actual dispose Promise.
 procedure EmitDisposalSequence(const ACtx: TGocciaCompilationContext;
   const AResources: array of TUsingResourceEntry;
-  const AResourceCount: Integer; const AErrorReg: UInt8);
+  const AResourceCount: Integer; const AErrorReg: UInt16);
 var
   I: Integer;
 begin
@@ -1338,7 +1390,7 @@ begin
 end;
 
 function FindLocalBySlot(const AScope: TGocciaCompilerScope;
-  const AName: string; const ASlot: UInt8): Integer;
+  const AName: string; const ASlot: UInt16): Integer;
 var
   I: Integer;
   Local: TGocciaCompilerLocal;
@@ -1396,21 +1448,31 @@ procedure PredeclareBlockVariableLocals(const ACtx: TGocciaCompilationContext;
   const AVarDecl: TGocciaVariableDeclaration;
   const AEmitInitializers: Boolean = True);
 var
-  I, LocalIdx: Integer;
-  Slot: UInt8;
+  I, J, LocalIdx: Integer;
+  Names: TStringList;
+  Slot: UInt16;
 begin
   for I := 0 to High(AVarDecl.Variables) do
   begin
-    LocalIdx := ACtx.Scope.ResolveLocal(AVarDecl.Variables[I].Name);
-    if (LocalIdx < 0) or
-       (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) or
-       (ACtx.Scope.GetLocal(LocalIdx).Slot =
-        ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
-    begin
-      Slot := ACtx.Scope.DeclareLocal(AVarDecl.Variables[I].Name,
-        AVarDecl.IsConst);
-      if AEmitInitializers then
-        EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+    Names := TStringList.Create;
+    Names.CaseSensitive := True;
+    try
+      CollectVariableInfoBindingNames(AVarDecl.Variables[I], Names, True);
+      for J := 0 to Names.Count - 1 do
+      begin
+        LocalIdx := ACtx.Scope.ResolveLocal(Names[J]);
+        if (LocalIdx < 0) or
+           (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) or
+           (ACtx.Scope.GetLocal(LocalIdx).Slot =
+            ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
+        begin
+          Slot := ACtx.Scope.DeclareLocal(Names[J], AVarDecl.IsConst);
+          if AEmitInitializers then
+            EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+        end;
+      end;
+    finally
+      Names.Free;
     end;
   end;
 end;
@@ -1421,7 +1483,7 @@ procedure PredeclareBlockPatternLocals(const ACtx: TGocciaCompilationContext;
 var
   I, LocalIdx: Integer;
   Names: TStringList;
-  Slot: UInt8;
+  Slot: UInt16;
 begin
   Names := TStringList.Create;
   Names.CaseSensitive := True;
@@ -1450,7 +1512,7 @@ procedure PredeclareBlockNamedLexicalLocal(
   const AIsConst: Boolean; const AEmitInitializer: Boolean = True);
 var
   LocalIdx: Integer;
-  Slot: UInt8;
+  Slot: UInt16;
 begin
   LocalIdx := ACtx.Scope.ResolveLocal(AName);
   if (LocalIdx < 0) or
@@ -1563,7 +1625,8 @@ end;
 procedure EmitBlockLexicalHoleInitializers(const ANode: TGocciaASTNode;
   const ACtx: TGocciaCompilationContext);
 var
-  I: Integer;
+  I, J: Integer;
+  Names: TStringList;
   VarDecl: TGocciaVariableDeclaration;
   UsingDecl: TGocciaUsingDeclaration;
 begin
@@ -1573,7 +1636,17 @@ begin
     if VarDecl.IsVar then
       Exit;
     for I := 0 to High(VarDecl.Variables) do
-      EmitBlockLexicalHoleInitializer(ACtx, VarDecl.Variables[I].Name);
+    begin
+      Names := TStringList.Create;
+      Names.CaseSensitive := True;
+      try
+        CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
+        for J := 0 to Names.Count - 1 do
+          EmitBlockLexicalHoleInitializer(ACtx, Names[J]);
+      finally
+        Names.Free;
+      end;
+    end;
   end
   else if ANode is TGocciaExportVariableDeclaration then
   begin
@@ -1581,7 +1654,17 @@ begin
     if VarDecl.IsVar then
       Exit;
     for I := 0 to High(VarDecl.Variables) do
-      EmitBlockLexicalHoleInitializer(ACtx, VarDecl.Variables[I].Name);
+    begin
+      Names := TStringList.Create;
+      Names.CaseSensitive := True;
+      try
+        CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
+        for J := 0 to Names.Count - 1 do
+          EmitBlockLexicalHoleInitializer(ACtx, Names[J]);
+      finally
+        Names.Free;
+      end;
+    end;
   end
   else if (ANode is TGocciaDestructuringDeclaration) and
           not TGocciaDestructuringDeclaration(ANode).IsVar then
@@ -1812,7 +1895,7 @@ begin
       if Local.Depth <= AEntry.ScopedCleanupDepth then
         Break;
       if Local.IsCaptured then
-        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, Local.Slot, 0, 0));
+        EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(Local.Slot)));
     end;
     Exit;
   end;
@@ -1837,13 +1920,13 @@ function CompileBlockStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaBlockStatement): Boolean;
 var
   I: Integer;
-  ClosedLocals: array[0..255] of UInt8;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   Node: TGocciaASTNode;
-  Reg: UInt8;
+  Reg: UInt16;
   HasUsing: Boolean;
   SavedResourceBase, ResourceCount: Integer;
-  CatchReg, ErrorReg: UInt8;
+  CatchReg, ErrorReg: UInt16;
   HandlerJump, EndJump, NullishJump: Integer;
   SavedResources: array of TUsingResourceEntry;
   PendingEntry: TPendingFinallyEntry;
@@ -1904,7 +1987,7 @@ begin
     end;
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
-      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+      EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
     Exit;
   end;
 
@@ -2022,15 +2105,15 @@ begin
 
   ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
   for I := 0 to ClosedCount - 1 do
-    EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+    EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 end;
 
 function CompileWithStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaWithStatement): Boolean;
 var
   HiddenName: string;
-  HiddenSlot, ErrorReg: UInt8;
-  ClosedLocals: array[0..255] of UInt8;
+  HiddenSlot, ErrorReg: UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount, I: Integer;
   HandlerJump, EndJump: Integer;
   CleanupEntry: TPendingFinallyEntry;
@@ -2072,12 +2155,12 @@ begin
 
   ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
   for I := 0 to ClosedCount - 1 do
-    EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+    EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 
   EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
   PatchJumpTarget(ACtx, HandlerJump);
   for I := 0 to ClosedCount - 1 do
-    EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+    EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
   EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
   PatchJumpTarget(ACtx, EndJump);
 
@@ -2087,11 +2170,11 @@ end;
 function CompileIfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaIfStatement): Boolean;
 var
-  CondReg, PatternSubjectReg: UInt8;
+  CondReg, PatternSubjectReg: UInt16;
   ElseJump, EndJump: Integer;
   HasPatternBindings: Boolean;
   PatternFailJumps: TGocciaJumpArray;
-  ClosedLocals: array[0..255] of UInt8;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount, I: Integer;
   ConditionValue: TGocciaCompileTimeValue;
   ConsequentAbrupt, AlternateAbrupt: Boolean;
@@ -2106,7 +2189,7 @@ var
     for J := 0 to High(PatternFailJumps) do
       PatchJumpTarget(ACtx, PatternFailJumps[J]);
     for J := 0 to ClosedCount - 1 do
-      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[J], 0, 0));
+      EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[J])));
   end;
 begin
   Result := False;
@@ -2139,7 +2222,7 @@ begin
     begin
       ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
       for I := 0 to ClosedCount - 1 do
-        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+        EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
     end;
 
     if Assigned(AStmt.Alternate) then
@@ -2164,8 +2247,8 @@ begin
   end;
 end;
 
-// Emit pending finally/disposal blocks before a return or abrupt exit.
-// Handles both regular try/finally blocks and using-block disposal entries.
+// Emit pending handler/finally/disposal work before a return or abrupt exit.
+// Handles try/catch handlers, regular try/finally blocks, and using disposal.
 // Processes entries from innermost to outermost. Each entry is temporarily
 // popped so that if a finally block contains a nested return, that return
 // sees the remaining outer entries for its own cleanup.
@@ -2199,10 +2282,11 @@ end;
 
 // ES2026 §15.10 Tail Position Calls.  A call in tail position reuses the
 // caller's frame (PrepareForTailCall).  A `return <expr>` puts <expr> in tail
-// position, but only when no finally/using/iterator cleanup runs after it
-// (CurrentPendingFinallyBase = 0): e.g. `try { return f(); } finally {...}` is
-// NOT a tail call because the finally still runs, whereas `try {} finally {
-// return f(); }` IS.  Proper tail calls apply in strict-mode code only, and
+// position, but only when no catch handler or finally/using/iterator cleanup
+// remains active (CurrentPendingFinallyBase = 0). For example,
+// `try { return f(); } catch {}` cannot reuse the frame because the catch must
+// observe exceptions from f(), and `try { return f(); } finally {...}` must run
+// its finally block. Proper tail calls apply in strict-mode code only, and
 // generators/async functions are never candidates.
 function ReturnIsTailPositionEligible(
   const ACtx: TGocciaCompilationContext): Boolean;
@@ -2217,7 +2301,7 @@ end;
 procedure CompileReturnStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaReturnStatement);
 var
-  Reg: UInt8;
+  Reg: UInt16;
   ReturnNeedsAwait: Boolean;
 begin
   if AStmt.HasExpression then
@@ -2252,7 +2336,7 @@ end;
 procedure CompileThrowStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaThrowStatement);
 var
-  Reg: UInt8;
+  Reg: UInt16;
 begin
   Reg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AStmt.Value, Reg);
@@ -2263,8 +2347,8 @@ end;
 procedure CompileTryStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaTryStatement);
 var
-  CatchReg, PatternTestReg, CatchInitErrorReg: UInt8;
-  CatchBodyErrorReg: UInt8;
+  CatchReg, PatternTestReg, CatchInitErrorReg: UInt16;
+  CatchBodyErrorReg: UInt16;
   HandlerJump, EndJump, PatternMismatchJump, CatchSuccessJump: Integer;
   FinallyHandlerJump, FinallyHandlerSuccessJump: Integer;
   CatchInitHandlerJump, CatchInitSuccessJump: Integer;
@@ -2272,7 +2356,7 @@ var
   HasCatch, HasFinally: Boolean;
   HasCatchInitHandler: Boolean;
   I: Integer;
-  ClosedLocals: array[0..255] of UInt8;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   Entry: TPendingFinallyEntry;
 begin
@@ -2299,14 +2383,18 @@ begin
   else
     HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_FINALLY_HANDLER, CatchReg);
 
-  if HasFinally then
+  if HasCatch or HasFinally then
   begin
     if not Assigned(GPendingFinally) then
       GPendingFinally := TList<TPendingFinallyEntry>.Create;
     FillChar(Entry, SizeOf(Entry), 0);
-    Entry.FinallyBlock := AStmt.FinallyBlock;
+    if HasFinally then
+      Entry.FinallyBlock := AStmt.FinallyBlock;
     if HasCatch then
-      Entry.HandlerPopCount := 2;
+      if HasFinally then
+        Entry.HandlerPopCount := 2
+      else
+        Entry.HandlerPopCount := 1;
     GPendingFinally.Add(Entry);
   end;
 
@@ -2316,7 +2404,7 @@ begin
   if HasCatch and HasFinally then
     EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
 
-  if HasFinally then
+  if HasCatch or HasFinally then
     GPendingFinally.Delete(GPendingFinally.Count - 1);
 
   if HasFinally then
@@ -2386,7 +2474,7 @@ begin
     begin
       ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
       for I := 0 to ClosedCount - 1 do
-        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+        EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
     end;
 
     if HasFinally then
@@ -2402,8 +2490,8 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
       if (AStmt.CatchParam <> '') or Assigned(AStmt.CatchBindingPattern) then
         for I := 0 to ClosedCount - 1 do
-          EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I],
-            0, 0));
+          EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0,
+            UInt16(ClosedLocals[I])));
       CompileBlockStatement(ACtx, AStmt.FinallyBlock);
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchBodyErrorReg, 0, 0));
       PatchJumpTarget(ACtx, CatchBodySuccessJump);
@@ -2416,7 +2504,7 @@ begin
       PatchJumpTarget(ACtx, PatternMismatchJump);
       if (AStmt.CatchParam <> '') or Assigned(AStmt.CatchBindingPattern) then
         for I := 0 to ClosedCount - 1 do
-          EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+          EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
       if HasFinally then
         EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
       if HasFinally then
@@ -2432,7 +2520,7 @@ begin
       PatchJumpTarget(ACtx, CatchInitHandlerJump);
       EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
       for I := 0 to ClosedCount - 1 do
-        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+        EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
       CompileBlockStatement(ACtx, AStmt.FinallyBlock);
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchInitErrorReg, 0, 0));
       PatchJumpTarget(ACtx, CatchInitSuccessJump);
@@ -2481,15 +2569,15 @@ end;
 procedure CompileExpressionWithLoopHeadTDZ(
   const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression;
-  const ADest: UInt8;
+  const ADest: UInt16;
   const ABindingName: string;
   const ABindingPattern: TGocciaDestructuringPattern;
   const AHasLexicalDeclaration: Boolean);
 var
   Names: TStringList;
   I: Integer;
-  Slot: UInt8;
-  ClosedLocals: array[0..255] of UInt8;
+  Slot: UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
 begin
   if not AHasLexicalDeclaration then
@@ -2523,7 +2611,7 @@ begin
 
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
-      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+      EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
   finally
     Names.Free;
   end;
@@ -2532,10 +2620,10 @@ end;
 procedure CompileCountedForOf(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement; const AArrayLocalIdx: Integer);
 var
-  ArrReg, LenReg, IdxReg, OneReg, CmpReg, ValueReg: UInt8;
+  ArrReg, LenReg, IdxReg, OneReg, CmpReg, ValueReg: UInt16;
   LoopStart, ExitJump, MismatchJump, I, BindLocalIdx: Integer;
-  Slot: UInt8;
-  ClosedLocals: array[0..255] of UInt8;
+  Slot: UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   LoopControl: TLoopControlState;
   ElemAnnotation: string;
@@ -2625,7 +2713,7 @@ begin
 
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
-      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+      EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 
     EmitInstruction(ACtx, EncodeABC(OP_ADD_INT, IdxReg, IdxReg, OneReg));
     EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
@@ -2649,11 +2737,11 @@ procedure CompileForOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement);
 var
   IterReg, ValueReg, DoneReg, CloseErrorReg, DisposeReg, UsingErrorReg,
-    UsingCatchReg: UInt8;
+    UsingCatchReg: UInt16;
   LoopStart, ExitJump, MismatchJump, HandlerJump, UsingHandlerJump,
     UsingEndJump, NullishJump, I: Integer;
-  Slot: UInt8;
-  ClosedLocals: array[0..255] of UInt8;
+  Slot: UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   LoopControl: TLoopControlState;
   ArrayLocalIdx: Integer;
@@ -2809,7 +2897,7 @@ begin
 
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
-      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+      EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 
     if NeedsIteratorClose then
     begin
@@ -2851,11 +2939,11 @@ procedure CompileForInStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForInStatement);
 var
   EntriesReg, LenReg, IdxReg, OneReg, CmpReg, EntryReg, KeyReg,
-    ValidReg: UInt8;
+    ValidReg: UInt16;
   LoopStart, ExitJump, I: Integer;
-  Slot: UInt8;
+  Slot: UInt16;
   LocalIdx: Integer;
-  ClosedLocals: array[0..255] of UInt8;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   LoopControl: TLoopControlState;
 begin
@@ -2939,7 +3027,7 @@ begin
 
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
-      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+      EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 
     EmitInstruction(ACtx,
       EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
@@ -2963,10 +3051,10 @@ end;
 procedure CompileForAwaitOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForAwaitOfStatement);
 var
-  IterReg, ValueReg, DoneReg, CloseErrorReg: UInt8;
+  IterReg, ValueReg, DoneReg, CloseErrorReg: UInt16;
   LoopStart, ExitJump, MismatchJump, HandlerJump, I: Integer;
-  Slot: UInt8;
-  ClosedLocals: array[0..255] of UInt8;
+  Slot: UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   LoopControl: TLoopControlState;
   PendingEntry: TPendingFinallyEntry;
@@ -3047,7 +3135,7 @@ begin
 
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
-      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+      EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 
     EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
 
@@ -3103,10 +3191,10 @@ var
   CondLeftIdent: TGocciaIdentifierExpression;
   IncExpr: TGocciaIncrementExpression;
   IncOperandIdent: TGocciaIdentifierExpression;
-  StartReg, LimitReg, OneReg, CmpReg: UInt8;
-  Slot, OuterSlot: UInt8;
+  StartReg, LimitReg, OneReg, CmpReg: UInt16;
+  Slot, OuterSlot: UInt16;
   LoopStart, ExitJump, I: Integer;
-  ClosedLocals: array[0..255] of UInt8;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   LoopControl: TLoopControlState;
   IsAscending: Boolean;
@@ -3118,6 +3206,8 @@ begin
     Exit;
   VarDecl := TGocciaVariableDeclaration(AStmt.Init);
   if Length(VarDecl.Variables) <> 1 then
+    Exit;
+  if VarDecl.Variables[0].IsPattern or Assigned(VarDecl.Variables[0].Pattern) then
     Exit;
   if not VarDecl.Variables[0].HasInitializer then
     Exit;
@@ -3240,7 +3330,7 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, OuterSlot, Slot, 0));
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
-      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+      EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 
     EmitInstruction(ACtx, EncodeABC(StepOpcode, OuterSlot, OuterSlot, OneReg));
     EmitInstruction(ACtx, EncodeAx(OP_JUMP,
@@ -3260,7 +3350,7 @@ begin
 
   ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
   for I := 0 to ClosedCount - 1 do
-    EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+    EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 
   Result := True;
 end;
@@ -3477,9 +3567,13 @@ begin
   begin
     VarDecl := TGocciaVariableDeclaration(ANode);
     for I := 0 to High(VarDecl.Variables) do
+    begin
+      if VarDecl.Variables[I].IsPattern or Assigned(VarDecl.Variables[I].Pattern) then
+        Exit(True);
       if VarDecl.Variables[I].HasInitializer and
          ExpressionNeedsPerIterationEnvironment(VarDecl.Variables[I].Initializer) then
         Exit(True);
+    end;
   end
   else if ANode is TGocciaDestructuringDeclaration then
     Exit(True)
@@ -3611,20 +3705,20 @@ end;
 procedure CompileForStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForStatement);
 var
-  CondReg: UInt8;
+  CondReg: UInt16;
   LoopStart, ExitJump, I: Integer;
-  ClosedLocals: array[0..255] of UInt8;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
-  BodyClosedLocals: array[0..255] of UInt8;
+  BodyClosedLocals: TArray<UInt16>;
   BodyClosedCount: Integer;
-  UpdateClosedLocals: array[0..255] of UInt8;
+  UpdateClosedLocals: TArray<UInt16>;
   UpdateClosedCount: Integer;
   LoopControl: TLoopControlState;
   HasLexicalInit: Boolean;
   UseSharedLexicalFor: Boolean;
   PerIterNames: TStringList;
   PerIterIsConst: Boolean;
-  OuterSlots, CarrierSlots, BodySlots, UpdateSlots: array of UInt8;
+  OuterSlots, CarrierSlots, BodySlots, UpdateSlots: array of UInt16;
   OuterLocalIdxs: array of Integer;
   Name: string;
   VarDecl: TGocciaVariableDeclaration;
@@ -3632,7 +3726,7 @@ var
   LocalIdx: Integer;
   HasUsingInit: Boolean;
   SavedResourceBase, ResourceCount: Integer;
-  CatchReg, ErrorReg: UInt8;
+  CatchReg, ErrorReg: UInt16;
   HandlerJump, EndJump, NullishJump: Integer;
   PendingEntry: TPendingFinallyEntry;
   SavedResources: array of TUsingResourceEntry;
@@ -3656,8 +3750,7 @@ begin
       VarDecl := TGocciaVariableDeclaration(AStmt.Init);
       PerIterIsConst := VarDecl.IsConst;
       PerIterNames := TStringList.Create;
-      for I := 0 to High(VarDecl.Variables) do
-        PerIterNames.Add(VarDecl.Variables[I].Name);
+      CollectVariableDeclarationBindingNames(VarDecl, PerIterNames, True);
     end
     else if (AStmt.Init is TGocciaDestructuringDeclaration)
             and not TGocciaDestructuringDeclaration(AStmt.Init).IsVar then
@@ -3774,7 +3867,7 @@ begin
         ACtx.Scope.EndScope(BodyClosedLocals, BodyClosedCount);
         for I := 0 to BodyClosedCount - 1 do
           EmitInstruction(ACtx,
-            EncodeABC(OP_CLOSE_UPVALUE, BodyClosedLocals[I], 0, 0));
+            EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(BodyClosedLocals[I])));
 
         // ES2026 §14.7.4.4 step 3.e: create a fresh per-iteration
         // environment for the update expression, distinct from the body
@@ -3800,7 +3893,7 @@ begin
         ACtx.Scope.EndScope(UpdateClosedLocals, UpdateClosedCount);
         for I := 0 to UpdateClosedCount - 1 do
           EmitInstruction(ACtx,
-            EncodeABC(OP_CLOSE_UPVALUE, UpdateClosedLocals[I], 0, 0));
+            EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(UpdateClosedLocals[I])));
 
         EmitInstruction(ACtx,
           EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
@@ -3810,7 +3903,7 @@ begin
           PatchJumpTarget(ACtx, ExitJump);
           for I := 0 to BodyClosedCount - 1 do
             EmitInstruction(ACtx,
-              EncodeABC(OP_CLOSE_UPVALUE, BodyClosedLocals[I], 0, 0));
+              EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(BodyClosedLocals[I])));
         end;
 
         PatchJumpList(ACtx, LoopControl.BreakJumps);
@@ -3843,7 +3936,7 @@ begin
         ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
         for I := 0 to ClosedCount - 1 do
           EmitInstruction(ACtx,
-            EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+            EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 
         if Assigned(AStmt.Update) then
           CompileDiscardedExpression(ACtx, AStmt.Update);
@@ -3905,7 +3998,7 @@ begin
     begin
       ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
       for I := 0 to ClosedCount - 1 do
-        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+        EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
     end;
   finally
     if Assigned(PerIterNames) then
@@ -3917,7 +4010,7 @@ end;
 procedure CompileWhileStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaWhileStatement);
 var
-  CondReg: UInt8;
+  CondReg: UInt16;
   LoopStart, ExitJump: Integer;
   LoopControl: TLoopControlState;
 begin
@@ -3953,7 +4046,7 @@ end;
 procedure CompileDoWhileStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaDoWhileStatement);
 var
-  CondReg: UInt8;
+  CondReg: UInt16;
   LoopStart: Integer;
   LoopControl: TLoopControlState;
 begin
@@ -3986,18 +4079,18 @@ end;
 procedure CompileImportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaImportDeclaration);
 var
-  ModReg: UInt8;
-  NamespaceSlot: UInt8;
+  ModReg: UInt16;
+  NamespaceSlot: UInt16;
   PathIdx, NameIdx: UInt16;
   Pair: TStringStringMap.TKeyValuePair;
-  Slots: array of UInt8;
+  Slots: array of UInt16;
   Captured: array of Boolean;
   Names: array of string;
   EncodedPath: string;
   HasNamespace, NamespaceCaptured: Boolean;
   I, Count: Integer;
 
-  function ImportSlot(const AName: string): UInt8;
+  function ImportSlot(const AName: string): UInt16;
   var
     LocalIdx: Integer;
   begin
@@ -4026,7 +4119,7 @@ var
     Result := (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured;
   end;
 
-  procedure SyncCapturedImportSlot(const ASlot: UInt8; const AIsCaptured: Boolean);
+  procedure SyncCapturedImportSlot(const ASlot: UInt16; const AIsCaptured: Boolean);
   begin
     if AIsCaptured then
       EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ASlot, UInt16(ASlot)));
@@ -4086,10 +4179,8 @@ begin
     else if AStmt.Phase <> icpEvaluation then
     begin
       NameIdx := ACtx.Template.AddConstantString(Names[I]);
-      if NameIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: import name index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, Slots[I], ModReg,
-        UInt8(NameIdx)));
+        UInt16(NameIdx)));
       SyncCapturedImportSlot(Slots[I], Captured[I]);
     end
     else if Captured[I] then
@@ -4111,7 +4202,7 @@ var
   Pair: TStringStringMap.TKeyValuePair;
   LocalIdx: Integer;
   Local: TGocciaCompilerLocal;
-  Reg: UInt8;
+  Reg: UInt16;
   NameIdx, SourceNameIdx: UInt16;
 begin
   for Pair in AStmt.ExportsTable do
@@ -4141,7 +4232,7 @@ end;
 procedure CompileExportDefaultDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExportDefaultDeclaration);
 var
-  Slot: UInt8;
+  Slot: UInt16;
   LocalIdx, FuncCount: Integer;
   InferredTemplate: TGocciaFunctionTemplate;
   NameIdx: UInt16;
@@ -4216,24 +4307,36 @@ procedure CompileExportVariableDeclaration(
   const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExportVariableDeclaration);
 var
-  I: Integer;
+  I, J: Integer;
   VarInfo: TGocciaVariableInfo;
   LocalIdx: Integer;
-  Reg: UInt8;
+  Names: TStringList;
+  Reg: UInt16;
   NameIdx: UInt16;
 begin
   CompileVariableDeclaration(ACtx, AStmt.Declaration);
 
-  for I := 0 to Length(AStmt.Declaration.Variables) - 1 do
-  begin
-    VarInfo := AStmt.Declaration.Variables[I];
-    LocalIdx := ACtx.Scope.ResolveLocal(VarInfo.Name);
-    if LocalIdx >= 0 then
+  Names := TStringList.Create;
+  Names.CaseSensitive := True;
+  try
+    for I := 0 to Length(AStmt.Declaration.Variables) - 1 do
     begin
-      Reg := ACtx.Scope.GetLocal(LocalIdx).Slot;
-      NameIdx := ACtx.Template.AddConstantString(VarInfo.Name);
-      EmitInstruction(ACtx, EncodeABx(OP_EXPORT, Reg, NameIdx));
+      VarInfo := AStmt.Declaration.Variables[I];
+      Names.Clear;
+      CollectVariableInfoBindingNames(VarInfo, Names, True);
+      for J := 0 to Names.Count - 1 do
+      begin
+        LocalIdx := ACtx.Scope.ResolveLocal(Names[J]);
+        if LocalIdx >= 0 then
+        begin
+          Reg := ACtx.Scope.GetLocal(LocalIdx).Slot;
+          NameIdx := ACtx.Template.AddConstantString(Names[J]);
+          EmitInstruction(ACtx, EncodeABx(OP_EXPORT, Reg, NameIdx));
+        end;
+      end;
     end;
+  finally
+    Names.Free;
   end;
 end;
 
@@ -4245,7 +4348,7 @@ var
   Name: string;
   NameIdx: UInt16;
   Names: TStringList;
-  Reg: UInt8;
+  Reg: UInt16;
 begin
   CompileDestructuringDeclaration(ACtx, AStmt.Declaration);
 
@@ -4273,7 +4376,7 @@ procedure CompileExportFunctionDeclaration(
   const AStmt: TGocciaExportFunctionDeclaration);
 var
   LocalIdx: Integer;
-  Reg: UInt8;
+  Reg: UInt16;
   NameIdx: UInt16;
 begin
   CompileFunctionDeclaration(ACtx, AStmt.Declaration);
@@ -4292,7 +4395,7 @@ procedure CompileExportClassDeclaration(
   const AStmt: TGocciaExportClassDeclaration);
 var
   LocalIdx: Integer;
-  Reg: UInt8;
+  Reg: UInt16;
   NameIdx: UInt16;
 begin
   CompileClassDeclaration(ACtx, AStmt.Declaration);
@@ -4318,7 +4421,7 @@ end;
 procedure CompileSwitchStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaSwitchStatement);
 var
-  DiscReg, TestReg, CmpReg: UInt8;
+  DiscReg, TestReg, CmpReg: UInt16;
   I, J, DefaultIndex: Integer;
   CaseClause: TGocciaCaseClause;
   CaseBodyJumps: array of Integer;
@@ -4328,12 +4431,12 @@ var
   OldBreakScopeDepth: Integer;
   BreakJumps: TList<Integer>;
   Node: TGocciaASTNode;
-  Reg: UInt8;
-  ClosedLocals: array[0..255] of UInt8;
+  Reg: UInt16;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   HasFunctionDecl, NeedsPrelude, StatementAbrupt, HasUsing: Boolean;
   SavedResourceBase, ResourceCount: Integer;
-  CatchReg, ErrorReg: UInt8;
+  CatchReg, ErrorReg: UInt16;
   HandlerJump, DisposalEndJump, NullishJump: Integer;
   SavedResources: array of TUsingResourceEntry;
   PendingEntry: TPendingFinallyEntry;
@@ -4592,7 +4695,7 @@ begin
 
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for J := 0 to ClosedCount - 1 do
-      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[J], 0, 0));
+      EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[J])));
   finally
     if Assigned(PreallocatedUsingDisposeSlots) then
     begin
@@ -4640,7 +4743,7 @@ begin
     if Local.Depth <= AScopeDepth then
       Break;
     if Local.IsCaptured then
-      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, Local.Slot, 0, 0));
+      EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(Local.Slot)));
   end;
 end;
 
@@ -4758,17 +4861,17 @@ begin
 end;
 
 procedure EmitDefineStaticPropertyByName(const ACtx: TGocciaCompilationContext;
-  const ATargetReg, AValueReg: UInt8; const AName: string);
+  const ATargetReg, AValueReg: UInt16; const AName: string);
 var
   KeyIdx: UInt16;
-  KeyReg, TargetReg: UInt8;
+  KeyReg, TargetReg: UInt16;
   ProtoNameIdx: UInt16;
 begin
   KeyIdx := ACtx.Template.AddConstantString(AName);
   if KeyIdx <= High(UInt8) then
   begin
     EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST,
-      ATargetReg, UInt8(KeyIdx), AValueReg));
+      ATargetReg, UInt16(KeyIdx), AValueReg));
     Exit;
   end;
 
@@ -4783,7 +4886,7 @@ begin
 end;
 
 procedure CompileMethodBody(const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt8; const AMethodName: string;
+  const AClassReg: UInt16; const AMethodName: string;
   const AMethod: TGocciaClassMethod; const AStoreOpcode: TGocciaOpCode;
   const AGuardDerivedThis: Boolean = False);
 var
@@ -4793,7 +4896,7 @@ var
   ChildScope: TGocciaCompilerScope;
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
-  MethodReg: UInt8;
+  MethodReg: UInt16;
   MethodNameIdx: UInt16;
   FormalCount, RestParamIndex, I: Integer;
   ArgumentsSlot: Integer;
@@ -4844,7 +4947,7 @@ begin
     ChildTemplate.SourceText);
   if FormalCount < 0 then
     FormalCount := Length(AMethod.Parameters);
-  ChildTemplate.FormalParameterCount := UInt8(FormalCount);
+  ChildTemplate.FormalParameterCount := UInt16(FormalCount);
   if Assigned(ACtx.FormalParameterCounts) then
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
 
@@ -4866,14 +4969,14 @@ begin
 
   if AGuardDerivedThis then
     EmitInstruction(ChildCtx, EncodeABC(OP_LOAD_FALSE,
-      UInt8(ChildScope.ResolveLocal(DERIVED_THIS_INITIALIZED_LOCAL)), 0, 0));
+      UInt16(ChildScope.ResolveLocal(DERIVED_THIS_INITIALIZED_LOCAL)), 0, 0));
 
   if (RestParamIndex >= 0) and
      not ParameterListHasDefaultValues(AMethod.Parameters) then
     EmitInstruction(ChildCtx, EncodeABC(OP_PACK_ARGS,
-      UInt8(ChildScope.ResolveLocal(
+      UInt16(ChildScope.ResolveLocal(
         AMethod.Parameters[RestParamIndex].Name)),
-      UInt8(RestParamIndex), 0));
+      UInt16(RestParamIndex), 0));
 
   EmitDefaultParameters(ChildCtx, AMethod.Parameters);
   EmitDestructuringParameters(ChildCtx, AMethod.Parameters);
@@ -4900,17 +5003,15 @@ begin
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, MethodReg, FuncIdx));
 
   MethodNameIdx := ACtx.Template.AddConstantString(AMethodName);
-  if MethodNameIdx > High(UInt8) then
-    raise Exception.Create('Constant pool overflow: method name index exceeds 255');
   EmitInstruction(ACtx, EncodeABC(AStoreOpcode,
-    AClassReg, UInt8(MethodNameIdx), MethodReg));
+    AClassReg, UInt16(MethodNameIdx), MethodReg));
   ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileGetterBody(const ACtx: TGocciaCompilationContext;
-  const ATargetReg: UInt8; const AName: string;
+  const ATargetReg: UInt16; const AName: string;
   const AGetter: TGocciaGetterExpression; const AOpcode: TGocciaOpCode;
-  const AFlags: UInt8);
+  const AFlags: UInt16);
 var
   OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
@@ -4918,7 +5019,7 @@ var
   ChildScope: TGocciaCompilerScope;
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
-  FnReg, TargetReg, AccessorReg: UInt8;
+  FnReg, TargetReg, AccessorReg: UInt16;
   NameIdx: UInt16;
   EmptyParams: TGocciaParameterArray;
   ArgumentsSlot: Integer;
@@ -4968,24 +5069,22 @@ begin
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, FnReg, FuncIdx));
 
   NameIdx := ACtx.Template.AddConstantString(AName);
-  if NameIdx > High(UInt8) then
-    raise Exception.Create('Constant pool overflow: getter name index exceeds 255');
   TargetReg := ACtx.Scope.AllocateRegister;
   AccessorReg := ACtx.Scope.AllocateRegister;
   Assert(AccessorReg = TargetReg + 1,
     'OP_DEFINE_ACCESSOR_* expects accessor register at target + 1');
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetReg, ATargetReg, 0));
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, AccessorReg, FnReg, 0));
-  EmitInstruction(ACtx, EncodeABC(AOpcode, TargetReg, AFlags, UInt8(NameIdx)));
+  EmitInstruction(ACtx, EncodeABC(AOpcode, TargetReg, AFlags, UInt16(NameIdx)));
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileSetterBody(const ACtx: TGocciaCompilationContext;
-  const ATargetReg: UInt8; const AName: string;
+  const ATargetReg: UInt16; const AName: string;
   const ASetter: TGocciaSetterExpression; const AOpcode: TGocciaOpCode;
-  const AFlags: UInt8);
+  const AFlags: UInt16);
 var
   OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
@@ -4993,7 +5092,7 @@ var
   ChildScope: TGocciaCompilerScope;
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
-  FnReg, TargetReg, AccessorReg: UInt8;
+  FnReg, TargetReg, AccessorReg: UInt16;
   NameIdx: UInt16;
   SetterParams: TGocciaParameterArray;
   ArgumentsSlot: Integer;
@@ -5029,7 +5128,7 @@ begin
   if (Length(SetterParams) > 0) and
      (SetterParams[0].IsRest or Assigned(SetterParams[0].DefaultValue)) then
     FormalCount := 0;
-  ChildTemplate.FormalParameterCount := UInt8(FormalCount);
+  ChildTemplate.FormalParameterCount := UInt16(FormalCount);
   if Assigned(ACtx.FormalParameterCounts) then
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams,
@@ -5068,24 +5167,22 @@ begin
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, FnReg, FuncIdx));
 
   NameIdx := ACtx.Template.AddConstantString(AName);
-  if NameIdx > High(UInt8) then
-    raise Exception.Create('Constant pool overflow: setter name index exceeds 255');
   TargetReg := ACtx.Scope.AllocateRegister;
   AccessorReg := ACtx.Scope.AllocateRegister;
   Assert(AccessorReg = TargetReg + 1,
     'OP_DEFINE_ACCESSOR_* expects accessor register at target + 1');
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetReg, ATargetReg, 0));
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, AccessorReg, FnReg, 0));
-  EmitInstruction(ACtx, EncodeABC(AOpcode, TargetReg, AFlags, UInt8(NameIdx)));
+  EmitInstruction(ACtx, EncodeABC(AOpcode, TargetReg, AFlags, UInt16(NameIdx)));
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileComputedGetterBody(const ACtx: TGocciaCompilationContext;
-  const ATargetReg: UInt8; const AKeyReg: UInt8;
+  const ATargetReg: UInt16; const AKeyReg: UInt16;
   const AGetter: TGocciaGetterExpression; const AOpcode: TGocciaOpCode;
-  const AFlags: UInt8);
+  const AFlags: UInt16);
 var
   OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
@@ -5093,7 +5190,7 @@ var
   ChildScope: TGocciaCompilerScope;
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
-  FnReg, TargetReg, AccessorReg: UInt8;
+  FnReg, TargetReg, AccessorReg: UInt16;
   EmptyParams: TGocciaParameterArray;
   ArgumentsSlot: Integer;
   I: Integer;
@@ -5157,9 +5254,9 @@ begin
 end;
 
 procedure CompileComputedSetterBody(const ACtx: TGocciaCompilationContext;
-  const ATargetReg: UInt8; const AKeyReg: UInt8;
+  const ATargetReg: UInt16; const AKeyReg: UInt16;
   const ASetter: TGocciaSetterExpression; const AOpcode: TGocciaOpCode;
-  const AFlags: UInt8);
+  const AFlags: UInt16);
 var
   OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
@@ -5167,7 +5264,7 @@ var
   ChildScope: TGocciaCompilerScope;
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
-  FnReg, TargetReg, AccessorReg: UInt8;
+  FnReg, TargetReg, AccessorReg: UInt16;
   SetterParams: TGocciaParameterArray;
   ArgumentsSlot: Integer;
   FormalCount, I: Integer;
@@ -5203,7 +5300,7 @@ begin
   if (Length(SetterParams) > 0) and
      (SetterParams[0].IsRest or Assigned(SetterParams[0].DefaultValue)) then
     FormalCount := 0;
-  ChildTemplate.FormalParameterCount := UInt8(FormalCount);
+  ChildTemplate.FormalParameterCount := UInt16(FormalCount);
   if Assigned(ACtx.FormalParameterCounts) then
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams,
@@ -5256,7 +5353,7 @@ begin
 end;
 
 procedure CompileComputedMethodBody(const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt8; const AKeyReg: UInt8;
+  const AClassReg: UInt16; const AKeyReg: UInt16;
   const AMethod: TGocciaClassMethod; const AIsStatic: Boolean);
 var
   OldTemplate: TGocciaFunctionTemplate;
@@ -5265,7 +5362,7 @@ var
   ChildScope: TGocciaCompilerScope;
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
-  FnReg, TargetReg: UInt8;
+  FnReg, TargetReg: UInt16;
   ProtoNameIdx: UInt16;
   FormalCount, RestParamIndex, I: Integer;
   ArgumentsSlot: Integer;
@@ -5309,7 +5406,7 @@ begin
     ChildTemplate.SourceText);
   if FormalCount < 0 then
     FormalCount := Length(AMethod.Parameters);
-  ChildTemplate.FormalParameterCount := UInt8(FormalCount);
+  ChildTemplate.FormalParameterCount := UInt16(FormalCount);
   if Assigned(ACtx.FormalParameterCounts) then
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
 
@@ -5330,9 +5427,9 @@ begin
   if (RestParamIndex >= 0) and
      not ParameterListHasDefaultValues(AMethod.Parameters) then
     EmitInstruction(ChildCtx, EncodeABC(OP_PACK_ARGS,
-      UInt8(ChildScope.ResolveLocal(
+      UInt16(ChildScope.ResolveLocal(
         AMethod.Parameters[RestParamIndex].Name)),
-      UInt8(RestParamIndex), 0));
+      UInt16(RestParamIndex), 0));
 
   EmitDefaultParameters(ChildCtx, AMethod.Parameters);
   EmitDestructuringParameters(ChildCtx, AMethod.Parameters);
@@ -5366,7 +5463,7 @@ begin
     TargetReg := ACtx.Scope.AllocateRegister;
     ProtoNameIdx := ACtx.Template.AddConstantString(PROP_PROTOTYPE);
     EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, TargetReg,
-      AClassReg, UInt8(ProtoNameIdx)));
+      AClassReg, UInt16(ProtoNameIdx)));
     EmitInstruction(ACtx, EncodeABC(OP_DEFINE_CLASS_METHOD_DYNAMIC,
       TargetReg, AKeyReg, FnReg));
     ACtx.Scope.FreeRegister;
@@ -5477,7 +5574,7 @@ begin
 end;
 
 procedure CompileComputedElements(const ACtx: TGocciaCompilationContext;
-  const ATargetReg: UInt8; const AClassDef: TGocciaClassDefinition;
+  const ATargetReg: UInt16; const AClassDef: TGocciaClassDefinition;
   const APrivatePrefix: string; const AHasSuper: Boolean;
   var AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
@@ -5488,13 +5585,13 @@ var
   MethodPair: TGocciaClassMethodMap.TKeyValuePair;
   GetterPair: TGocciaGetterExpressionMap.TKeyValuePair;
   SetterPair: TGocciaSetterExpressionMap.TKeyValuePair;
-  KeyReg, TargetReg: UInt8;
+  KeyReg, TargetReg: UInt16;
   ProtoNameIdx: UInt16;
   ComputedKeyName: string;
   ClassKeyPrefix: string;
   NeedsKeyLocal: Boolean;
   KeyIsLocal: Boolean;
-  AccessorFlags: UInt8;
+  AccessorFlags: UInt16;
   Order: Integer;
   StorageName: string;
 begin
@@ -5661,7 +5758,7 @@ begin
             TargetReg := ACtx.Scope.AllocateRegister;
             ProtoNameIdx := ACtx.Template.AddConstantString(PROP_PROTOTYPE);
             EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, TargetReg,
-              ATargetReg, UInt8(ProtoNameIdx)));
+              ATargetReg, UInt16(ProtoNameIdx)));
             CompileComputedGetterBody(ACtx, TargetReg, KeyReg,
               Elem.GetterNode, OP_DEFINE_ACCESSOR_DYNAMIC, 0);
             ACtx.Scope.FreeRegister;
@@ -5694,7 +5791,7 @@ begin
             TargetReg := ACtx.Scope.AllocateRegister;
             ProtoNameIdx := ACtx.Template.AddConstantString(PROP_PROTOTYPE);
             EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, TargetReg,
-              ATargetReg, UInt8(ProtoNameIdx)));
+              ATargetReg, UInt16(ProtoNameIdx)));
             CompileComputedSetterBody(ACtx, TargetReg, KeyReg,
               Elem.SetterNode, OP_DEFINE_ACCESSOR_DYNAMIC,
               ACCESSOR_FLAG_SETTER);
@@ -5793,7 +5890,7 @@ end;
 
 procedure CompileFieldValueWithInferredName(
   const ACtx: TGocciaCompilationContext; const AExpression: TGocciaExpression;
-  const ADest: UInt8; const AInferredName: string);
+  const ADest: UInt16; const AInferredName: string);
 begin
   if not Assigned(AExpression) then
   begin
@@ -5806,13 +5903,13 @@ begin
 end;
 
 procedure CompileStaticFieldInitializerExpression(
-  const ACtx: TGocciaCompilationContext; const AClassReg: UInt8;
-  const AExpression: TGocciaExpression; const ADest: UInt8;
+  const ACtx: TGocciaCompilationContext; const AClassReg: UInt16;
+  const AExpression: TGocciaExpression; const ADest: UInt16;
   const AInferredName: string = '');
 var
-  ClosedLocals: array[0..0] of UInt8;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount, I: Integer;
-  ThisReg: UInt8;
+  ThisReg: UInt16;
   OldRejectArgumentsInDirectEval: Boolean;
 begin
   OldRejectArgumentsInDirectEval := ACtx.Template.RejectArgumentsInDirectEval;
@@ -5826,7 +5923,7 @@ begin
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx,
-        EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+        EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
   finally
     ACtx.Template.RejectArgumentsInDirectEval :=
       OldRejectArgumentsInDirectEval;
@@ -5881,7 +5978,7 @@ begin
 end;
 
 procedure CompileFieldInitializer(const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition;
+  const AClassReg: UInt16; const AClassDef: TGocciaClassDefinition;
   const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
   OldTemplate: TGocciaFunctionTemplate;
@@ -5890,8 +5987,8 @@ var
   ChildScope: TGocciaCompilerScope;
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
-  FnReg: UInt8;
-  ValReg, ThisReg, KeyReg: UInt8;
+  FnReg: UInt16;
+  ValReg, ThisReg, KeyReg: UInt16;
   KeyIdx: UInt16;
   I, UpvalueIdx: Integer;
   Entry: TGocciaExpressionMap.TKeyValuePair;
@@ -6016,7 +6113,7 @@ begin
     KeyIdx := ChildTemplate.AddConstantString(AccessorBackingName);
     if KeyIdx <= High(UInt8) then
       EmitInstruction(ChildCtx, EncodeABC(OP_SET_PROP_CONST, ThisReg,
-        UInt8(KeyIdx), ValReg))
+        UInt16(KeyIdx), ValReg))
     else
     begin
       KeyReg := ChildScope.AllocateRegister;
@@ -6050,7 +6147,7 @@ end;
 
 // ES2022 §15.7.14 ClassStaticBlockDefinition
 procedure CompileStaticBlock(const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt8; const ABody: TGocciaBlockStatement);
+  const AClassReg: UInt16; const ABody: TGocciaBlockStatement);
 var
   OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
@@ -6058,7 +6155,7 @@ var
   ChildScope: TGocciaCompilerScope;
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
-  FnReg: UInt8;
+  FnReg: UInt16;
   I: Integer;
 begin
   OldTemplate := ACtx.Template;
@@ -6146,13 +6243,13 @@ begin
 end;
 
 procedure CompileAutoAccessors(const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition;
+  const AClassReg: UInt16; const AClassDef: TGocciaClassDefinition;
   const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
   I: Integer;
   Elem: TGocciaClassElement;
   NameIdx: UInt16;
-  KeyReg: UInt8;
+  KeyReg: UInt16;
   LocalIdx: Integer;
   ComputedKeyName: string;
   BackingName: string;
@@ -6172,8 +6269,6 @@ begin
       BackingName := Elem.Name;
 
     NameIdx := ACtx.Template.AddConstantString(BackingName);
-    if NameIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: accessor name index exceeds 255');
 
     Flags := 0;
     if Elem.IsStatic then
@@ -6188,17 +6283,17 @@ begin
         raise Exception.Create('Compiler error: computed auto-accessor key was not captured');
       KeyReg := ACtx.Scope.GetLocal(LocalIdx).Slot;
       EmitInstruction(ACtx, EncodeABC(OP_SETUP_AUTO_ACCESSOR_DYNAMIC,
-        KeyReg, Flags, UInt8(NameIdx)));
+        KeyReg, Flags, UInt16(NameIdx)));
     end
     else
       EmitInstruction(ACtx, EncodeABC(OP_SETUP_AUTO_ACCESSOR_CONST,
-        0, Flags, UInt8(NameIdx)));
+        0, Flags, UInt16(NameIdx)));
   end;
 end;
 
 procedure CompilePrivateAutoAccessorDeclarations(
   const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition);
+  const AClassReg: UInt16; const AClassDef: TGocciaClassDefinition);
 var
   I: Integer;
   Elem: TGocciaClassElement;
@@ -6214,29 +6309,27 @@ begin
 
     PrivateName := '#slot:' + ACtx.Scope.ResolvePrivatePrefix + Elem.Name;
     NameIdx := ACtx.Template.AddConstantString(PrivateName);
-    if NameIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: private accessor name index exceeds 255');
 
     Flags := 2;
     if Elem.IsStatic then
       Flags := Flags or 1;
     EmitInstruction(ACtx, EncodeABC(OP_SETUP_AUTO_ACCESSOR_CONST,
-      AClassReg, Flags, UInt8(NameIdx)));
+      AClassReg, Flags, UInt16(NameIdx)));
   end;
 end;
 
 procedure CompileDecoratorOrchestration(
   const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition;
+  const AClassReg: UInt16; const AClassDef: TGocciaClassDefinition;
   const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
   I, J: Integer;
   Elem: TGocciaClassElement;
-  DecoRegs: array of array of UInt8;
-  ClassDecoRegs: array of UInt8;
+  DecoRegs: array of array of UInt16;
+  ClassDecoRegs: array of UInt16;
   DescIdx: UInt16;
   Desc: string;
-  PairReg, ExtraReg: UInt8;
+  PairReg, ExtraReg: UInt16;
   HasElementDecorators: Boolean;
   ComputedKeyName: string;
   LocalIdx: Integer;
@@ -6282,8 +6375,6 @@ begin
       Desc := ElementDescriptor(Elem.Kind, Elem.Name,
         Elem.IsStatic, Elem.IsPrivate);
       DescIdx := ACtx.Template.AddConstantString(Desc);
-      if DescIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: descriptor index exceeds 255');
 
       PairReg := ACtx.Scope.AllocateRegister;
       ExtraReg := ACtx.Scope.AllocateRegister;
@@ -6298,13 +6389,13 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg,
           ACtx.Scope.GetLocal(LocalIdx).Slot, 0));
         EmitInstruction(ACtx, EncodeABC(OP_APPLY_ELEMENT_DECORATOR_CONST,
-          PairReg, ExtraReg, UInt8(DescIdx)));
+          PairReg, ExtraReg, UInt16(DescIdx)));
       end
       else
       begin
         EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
         EmitInstruction(ACtx, EncodeABC(OP_APPLY_ELEMENT_DECORATOR_CONST,
-          PairReg, 0, UInt8(DescIdx)));
+          PairReg, 0, UInt16(DescIdx)));
       end;
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
@@ -6331,11 +6422,11 @@ end;
 
 procedure CompileDecoratorAndAccessorPass(
   const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition;
+  const AClassReg: UInt16; const AClassDef: TGocciaClassDefinition;
   const ASuperReg: Integer;
   const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
-  PairReg, ExtraReg: UInt8;
+  PairReg, ExtraReg: UInt16;
 begin
   if not HasDecoratorsOrAccessors(AClassDef) then
     Exit;
@@ -6344,7 +6435,7 @@ begin
   ExtraReg := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, AClassReg, 0));
   if ASuperReg >= 0 then
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg, UInt8(ASuperReg), 0))
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg, UInt16(ASuperReg), 0))
   else
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
   EmitInstruction(ACtx, EncodeABC(OP_BEGIN_DECORATORS, PairReg, 0, 0));
@@ -6370,7 +6461,7 @@ procedure CompileClassDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaClassDeclaration);
 var
   ClassDef: TGocciaClassDefinition;
-  ClassReg, SuperReg, ValReg, KeyReg: UInt8;
+  ClassReg, SuperReg, ValReg, KeyReg: UInt16;
   NameIdx, KeyIdx: UInt16;
   StaticPropPair: TGocciaExpressionMap.TKeyValuePair;
   I, ClassLocalIdx, LocalIdx, UpvalIdx: Integer;
@@ -6380,9 +6471,9 @@ var
   PrivateNameMark: Integer;
   ComputedFieldKeyLocals: TComputedFieldKeyLocals;
   ComputedKeyName: string;
-  InnerNameSlot: UInt8;
+  InnerNameSlot: UInt16;
   HasInnerNameBinding: Boolean;
-  ClosedLocals: array[0..255] of UInt8;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   HeritageCtx: TGocciaCompilationContext;
   ComputedCtx: TGocciaCompilationContext;
@@ -6485,10 +6576,8 @@ begin
       CompileStaticFieldInitializerExpression(
         ACtx, ClassReg, StaticPropPair.Value, ValReg, StaticPropPair.Key);
       KeyIdx := ACtx.Template.AddConstantString(StaticPropPair.Key);
-      if KeyIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ClassReg,
-        UInt8(KeyIdx), ValReg));
+        UInt16(KeyIdx), ValReg));
       ACtx.Scope.FreeRegister;
     end;
 
@@ -6499,12 +6588,10 @@ begin
         ACtx, ClassReg, StaticPropPair.Value, ValReg,
         '#' + StaticPropPair.Key);
       KeyIdx := ACtx.Template.AddConstantString('#slot:' + PrivPrefix + StaticPropPair.Key);
-      if KeyIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
-        ClassReg, UInt8(KeyIdx), 0));
+        ClassReg, UInt16(KeyIdx), 0));
       EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ClassReg,
-        UInt8(KeyIdx), ValReg));
+        UInt16(KeyIdx), ValReg));
       ACtx.Scope.FreeRegister;
     end;
   end;
@@ -6546,12 +6633,10 @@ begin
       begin
         KeyIdx := ACtx.Template.AddConstantString(
           '#slot:' + PrivPrefix + ClassDef.FElements[I].Name);
-        if KeyIdx > High(UInt8) then
-          raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
         EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
-          ClassReg, UInt8(KeyIdx), 0));
+          ClassReg, UInt16(KeyIdx), 0));
         EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ClassReg,
-          UInt8(KeyIdx), ValReg));
+          UInt16(KeyIdx), ValReg));
       end
       else if ClassDef.FElements[I].IsComputed then
         EmitInstruction(ACtx, EncodeABC(OP_DEFINE_PROP_DYNAMIC,
@@ -6559,10 +6644,8 @@ begin
       else
       begin
         KeyIdx := ACtx.Template.AddConstantString(ClassDef.FElements[I].Name);
-        if KeyIdx > High(UInt8) then
-          raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
         EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ClassReg,
-          UInt8(KeyIdx), ValReg));
+          UInt16(KeyIdx), ValReg));
       end;
       ACtx.Scope.FreeRegister;
     end;
@@ -6577,7 +6660,7 @@ begin
 
   ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
   for I := 0 to ClosedCount - 1 do
-    EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+    EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 
   // Sync cell if the class local was pre-declared and captured by a hoisted
   // function (see CompileVariableDeclaration for the full explanation)
@@ -6592,7 +6675,7 @@ begin
   begin
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
-      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+      EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
   end;
 
   ACtx.Scope.PrivatePrefix := OldPrivatePrefix;
@@ -6600,11 +6683,11 @@ begin
 end;
 
 procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
-  const AClassDef: TGocciaClassDefinition; const ADest: UInt8;
+  const AClassDef: TGocciaClassDefinition; const ADest: UInt16;
   const AInferredName: string = '');
 var
   ClassDef: TGocciaClassDefinition;
-  SuperReg, ValReg, KeyReg: UInt8;
+  SuperReg, ValReg, KeyReg: UInt16;
   NameIdx, KeyIdx: UInt16;
   StaticPropPair: TGocciaExpressionMap.TKeyValuePair;
   LocalIdx, UpvalIdx: Integer;
@@ -6612,11 +6695,11 @@ var
   PrivPrefix: string;
   PrivateNameMark: Integer;
   HasNameBinding: Boolean;
-  ClosedLocals: array[0..255] of UInt8;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount, I: Integer;
   ComputedFieldKeyLocals: TComputedFieldKeyLocals;
   ComputedKeyName: string;
-  NameSlot: UInt8;
+  NameSlot: UInt16;
   HeritageCtx: TGocciaCompilationContext;
   ComputedCtx: TGocciaCompilationContext;
   OldPrivatePrefix: string;
@@ -6708,10 +6791,8 @@ begin
       CompileStaticFieldInitializerExpression(
         ACtx, ADest, StaticPropPair.Value, ValReg, StaticPropPair.Key);
       KeyIdx := ACtx.Template.AddConstantString(StaticPropPair.Key);
-      if KeyIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ADest,
-        UInt8(KeyIdx), ValReg));
+        UInt16(KeyIdx), ValReg));
       ACtx.Scope.FreeRegister;
     end;
 
@@ -6722,12 +6803,10 @@ begin
         ACtx, ADest, StaticPropPair.Value, ValReg,
         '#' + StaticPropPair.Key);
       KeyIdx := ACtx.Template.AddConstantString('#slot:' + PrivPrefix + StaticPropPair.Key);
-      if KeyIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
-        ADest, UInt8(KeyIdx), 0));
+        ADest, UInt16(KeyIdx), 0));
       EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ADest,
-        UInt8(KeyIdx), ValReg));
+        UInt16(KeyIdx), ValReg));
       ACtx.Scope.FreeRegister;
     end;
   end;
@@ -6769,12 +6848,10 @@ begin
       begin
         KeyIdx := ACtx.Template.AddConstantString(
           '#slot:' + PrivPrefix + ClassDef.FElements[I].Name);
-        if KeyIdx > High(UInt8) then
-          raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
         EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
-          ADest, UInt8(KeyIdx), 0));
+          ADest, UInt16(KeyIdx), 0));
         EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ADest,
-          UInt8(KeyIdx), ValReg));
+          UInt16(KeyIdx), ValReg));
       end
       else if ClassDef.FElements[I].IsComputed then
         EmitInstruction(ACtx, EncodeABC(OP_DEFINE_PROP_DYNAMIC,
@@ -6782,10 +6859,8 @@ begin
       else
       begin
         KeyIdx := ACtx.Template.AddConstantString(ClassDef.FElements[I].Name);
-        if KeyIdx > High(UInt8) then
-          raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
         EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ADest,
-          UInt8(KeyIdx), ValReg));
+          UInt16(KeyIdx), ValReg));
       end;
       ACtx.Scope.FreeRegister;
     end;
@@ -6800,14 +6875,14 @@ begin
 
   ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
   for I := 0 to ClosedCount - 1 do
-    EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+    EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 
   // Only free __super__ manually when there is no name binding scope — when
   // HasNameBinding is true, __super__ lives inside the inner scope and EndScope
   // below will free it together with the name binding local.
   if HasSuper and not HasNameBinding then
   begin
-    EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, SuperReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(SuperReg)));
     ACtx.Scope.FreeRegister;
   end;
 
@@ -6815,7 +6890,7 @@ begin
   begin
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
-      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+      EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
   end;
 
   ACtx.Scope.PrivatePrefix := OldPrivatePrefix;
@@ -6890,7 +6965,7 @@ end;
 procedure CompileDestructuringDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaDestructuringDeclaration);
 var
-  SrcReg: UInt8;
+  SrcReg: UInt16;
   IsTopLevelGlobalBacked: Boolean;
 begin
   IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
@@ -6921,10 +6996,10 @@ end;
 procedure CompileEnumDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaEnumDeclaration);
 var
-  EnumSlot, InnerSlot, MemberSlot: UInt8;
+  EnumSlot, InnerSlot, MemberSlot: UInt16;
   I: Integer;
   KeyIdx: UInt16;
-  ClosedLocals: array[0..255] of UInt8;
+  ClosedLocals: TArray<UInt16>;
   ClosedCount, J: Integer;
   LocalIdx: Integer;
 begin
@@ -6955,20 +7030,16 @@ begin
     MemberSlot := ACtx.Scope.DeclareLocal(AStmt.Members[I].Name, False);
     ACtx.CompileExpression(AStmt.Members[I].Initializer, MemberSlot);
     KeyIdx := ACtx.Template.AddConstantString(AStmt.Members[I].Name);
-    if KeyIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: enum member name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, EnumSlot, UInt8(KeyIdx), MemberSlot));
+    EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, EnumSlot, UInt16(KeyIdx), MemberSlot));
   end;
 
   KeyIdx := ACtx.Template.AddConstantString(AStmt.Name);
-  if KeyIdx > High(UInt8) then
-    raise Exception.Create('Constant pool overflow: enum name index exceeds 255');
   EmitInstruction(ACtx, EncodeABC(OP_FINALIZE_ENUM, EnumSlot,
-    0, UInt8(KeyIdx)));
+    0, UInt16(KeyIdx)));
 
   ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
   for J := 0 to ClosedCount - 1 do
-    EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, ClosedLocals[J], 0));
+    EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[J])));
 
   // Sync cell if the enum local was pre-declared and captured by a hoisted
   // function (see CompileVariableDeclaration for the full explanation)
@@ -6984,7 +7055,7 @@ procedure CompileExportEnumDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExportEnumDeclaration);
 var
   LocalIdx: Integer;
-  Reg: UInt8;
+  Reg: UInt16;
   NameIdx: UInt16;
 begin
   CompileEnumDeclaration(ACtx, AStmt.Declaration);

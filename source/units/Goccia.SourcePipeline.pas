@@ -145,6 +145,7 @@ uses
   TextSemantics,
   TimingUtils,
 
+  Goccia.AST.BindingPatterns,
   Goccia.AST.Statements,
   Goccia.Error,
   Goccia.FileExtensions,
@@ -266,17 +267,28 @@ end;
 procedure CollectTopLevelModuleDeclarationNames(const AStmt: TGocciaStatement;
   const AVarNames, ALexicalNames: TStrings);
 var
-  I: Integer;
+  I, J: Integer;
+  Names: TStringList;
   VarDecl: TGocciaVariableDeclaration;
 begin
   if AStmt is TGocciaVariableDeclaration then
   begin
     VarDecl := TGocciaVariableDeclaration(AStmt);
     for I := 0 to High(VarDecl.Variables) do
-      if VarDecl.IsVar then
-        AddNameOnce(AVarNames, VarDecl.Variables[I].Name)
-      else
-        AddNameOnce(ALexicalNames, VarDecl.Variables[I].Name);
+    begin
+      Names := TStringList.Create;
+      Names.CaseSensitive := True;
+      try
+        CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
+        for J := 0 to Names.Count - 1 do
+          if VarDecl.IsVar then
+            AddNameOnce(AVarNames, Names[J])
+          else
+            AddNameOnce(ALexicalNames, Names[J]);
+      finally
+        Names.Free;
+      end;
+    end;
     Exit;
   end;
 

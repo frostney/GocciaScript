@@ -162,6 +162,7 @@ const
   UTF8_HIGH_SURROGATE = #$ED#$A0#$80;
 var
   CodePoint: Cardinal;
+  Text1, Text2: string;
 begin
   Expect<Integer>(UTF16CodeUnitLength('a' + UTF8_LINE_SEPARATOR + 'b')).ToBe(3);
   Expect<string>(UTF16CodeUnitAt('a' + UTF8_LINE_SEPARATOR + 'b', 1)).ToBe(
@@ -188,6 +189,11 @@ begin
     UTF8_GRINNING_FACE)).ToBe(1);
   Expect<Integer>(UTF16LastIndexOf(UTF8_GRINNING_FACE + 'a' +
     UTF8_GRINNING_FACE, UTF8_GRINNING_FACE, 4)).ToBe(3);
+  Text1 := 'a' + UTF8_GRINNING_FACE + 'b';
+  Text2 := UTF8_LINE_SEPARATOR + UTF8_GRINNING_FACE;
+  Expect<Integer>(UTF16CodeUnitLength(Text1)).ToBe(4);
+  Expect<Integer>(UTF16CodeUnitLength(Text2)).ToBe(3);
+  Expect<Integer>(UTF16CodeUnitLength(Text1)).ToBe(4);
 end;
 
 procedure TTextSemanticsTests.TestReplacementPatternExpansion;
