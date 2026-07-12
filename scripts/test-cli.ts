@@ -795,7 +795,9 @@ console.log("--max-memory (bytecode loop pressure reclaims)...");
   ].join("\n");
   const { exitCode, json, stderr } = runLoaderJson(src, [
     "--mode=bytecode",
-    "--max-memory=100000000",
+    // Keep the pressure threshold below both 32-bit and 64-bit allocation
+    // totals while leaving enough room for the loop's live object graph.
+    "--max-memory=20000000",
     "--compat-asi",
     "--compat-traditional-for-loop",
   ], { timeout: 30_000 });
