@@ -515,7 +515,10 @@ Reports retain raw scores, subscores, medians, IQR/min/max/CV, verification
 outcomes, failure stdout/stderr, corpus and driver versions, Goccia commit/FPC,
 and QuickJS/Node versions. Timeouts, crashes, OOMs, missing results, and
 verification failures remain structurally valid report rows and fail the CI gate
-after the artifact has been written.
+after the artifact has been written. CI runs one workload per parallel shard,
+preserving repetition-to-engine interleaving inside each workload, then validates
+metadata and recomputes geomean ratios in manifest order. Shards checkpoint after
+every sample so an outer cancellation still leaves diagnostic report data.
 
 The public Performance Barometer normalizes both external lanes so `1.00×` means
 aligned performance and values above one mean GocciaScript was proportionally

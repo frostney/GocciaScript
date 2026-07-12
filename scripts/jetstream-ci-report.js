@@ -16,6 +16,7 @@ function usage() {
     '  --manifest <path>            Manifest path',
     '  --jetstream-dir <path>       Pinned WebKit/JetStream checkout',
     '  --output <path>              Report path',
+    '  --benchmark <name>           Run one manifest workload; repeatable',
     '  --engines <csv>              Engine order (default: goccia,qjs,node)',
     '  --goccia-baseline <path>     Optional baseline Goccia binary',
     '  --goccia-candidate <path>    Optional candidate Goccia binary',
@@ -37,6 +38,7 @@ function parseArgs(argv) {
     engines: DEFAULT_ENGINES,
     gocciaBaseline: '',
     gocciaCandidate: '',
+    benchmarks: [],
     timeoutMs: DEFAULT_TIMEOUT_MS,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -51,6 +53,7 @@ function parseArgs(argv) {
     else if (arg === '--manifest' || arg.startsWith('--manifest=')) options.manifestPath = nextValue();
     else if (arg === '--jetstream-dir' || arg.startsWith('--jetstream-dir=')) options.jetStreamDir = nextValue();
     else if (arg === '--output' || arg.startsWith('--output=')) options.output = nextValue();
+    else if (arg === '--benchmark' || arg.startsWith('--benchmark=')) options.benchmarks.push(nextValue());
     else if (arg === '--engines' || arg.startsWith('--engines=')) options.engines = nextValue();
     else if (arg === '--goccia-baseline' || arg.startsWith('--goccia-baseline=')) options.gocciaBaseline = nextValue();
     else if (arg === '--goccia-candidate' || arg.startsWith('--goccia-candidate=')) options.gocciaCandidate = nextValue();
@@ -65,15 +68,28 @@ function expectedEngines(options) {
   return expandGocciaEngines(requested, options);
 }
 
-function validationFailures(report, manifest, engines) {
+function reportBenchmarks(manifest, requested = []) {
+  const configured = manifest.ciReport?.benchmarks || [];
+  const benchmarks = requested.length > 0 ? requested : configured;
+  if (!Array.isArray(benchmarks) || benchmarks.length === 0) {
+    throw new Error('JetStream CI report has no benchmarks');
+  }
+  const known = new Set(configured);
+  for (const benchmark of benchmarks) {
+    if (!known.has(benchmark)) throw new Error(`Unknown JetStream CI benchmark: ${benchmark}`);
+  }
+  return benchmarks;
+}
+
+function validationFailures(report, manifest, engines, expectedBenchmarks = null) {
   const failures = [];
-  const expectedBenchmarks = manifest.ciReport?.benchmarks || [];
+  const benchmarks = expectedBenchmarks || reportBenchmarks(manifest);
   const expectedRepetitions = manifest.ciReport?.repetitions || 5;
   const targets = new Map((report.targets || []).map((target) => [target.name, target]));
   if (report.metadata?.options?.repetitions !== expectedRepetitions) {
     failures.push(`expected ${expectedRepetitions} repetitions, report recorded ${report.metadata?.options?.repetitions}`);
   }
-  for (const name of expectedBenchmarks) {
+  for (const name of benchmarks) {
     const target = targets.get(name);
     if (!target) {
       failures.push(`${name}: missing target`);
@@ -99,7 +115,8 @@ function validationFailures(report, manifest, engines) {
 function runReport(options, manifest) {
   if (!options.jetStreamDir) throw new Error('--jetstream-dir is required');
   const args = ['scripts/jetstream-driver.js', '--jetstream-dir', options.jetStreamDir];
-  for (const benchmark of manifest.ciReport?.benchmarks || []) args.push('--benchmark', benchmark);
+  const benchmarks = reportBenchmarks(manifest, options.benchmarks);
+  for (const benchmark of benchmarks) args.push('--benchmark', benchmark);
   if (options.gocciaBaseline) args.push('--goccia-baseline', options.gocciaBaseline);
   if (options.gocciaCandidate) args.push('--goccia-candidate', options.gocciaCandidate);
   args.push(
@@ -113,7 +130,7 @@ function runReport(options, manifest) {
   if (!fs.existsSync(options.output)) throw new Error(`JetStream driver did not produce ${options.output}`);
   const report = JSON.parse(fs.readFileSync(options.output, 'utf8'));
   if (!Array.isArray(report.targets)) throw new Error('JetStream report has no targets array');
-  const failures = validationFailures(report, manifest, expectedEngines(options));
+  const failures = validationFailures(report, manifest, expectedEngines(options), benchmarks);
   if (result.status !== 0) failures.unshift(`JetStream driver exited with status ${result.status}`);
   return failures;
 }
@@ -139,4 +156,10 @@ if (require.main === module) {
   }
 }
 
-module.exports = { expectedEngines, parseArgs, runReport, validationFailures };
+module.exports = {
+  expectedEngines,
+  parseArgs,
+  reportBenchmarks,
+  runReport,
+  validationFailures,
+};

@@ -441,10 +441,32 @@ jobs:
           if-no-files-found: ignore
           path: awfy-report.json
 
-  jetstream-report:
-    needs: [build, build-main]
+  jetstream-plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    outputs:
+      matrix: ${{ steps.workloads.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Check JetStream driver helpers
+        run: node scripts/test-jetstream-driver.js
+
+      - name: Read JetStream workload matrix
+        id: workloads
+        run: |
+          matrix="$(node -e "const m = require('./perf/jetstream/manifest.json'); process.stdout.write(JSON.stringify({ include: m.ciReport.benchmarks.map(workload => ({ workload })) }))")"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  jetstream-workload:
+    name: jetstream-workload (${{ matrix.workload }})
+    needs: [build, build-main, jetstream-plan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.jetstream-plan.outputs.matrix) }}
     defaults:
       run:
         shell: bash
@@ -509,24 +531,58 @@ jobs:
             /generators/sync-file-system.js
             /generators/lazy-collections.js
 
-      - name: Check JetStream driver helpers
-        run: node scripts/test-jetstream-driver.js
-
-      - name: Run JetStream report
+      - name: Run JetStream workload report
+        env:
+          WORKLOAD: ${{ matrix.workload }}
         run: |
           node scripts/jetstream-ci-report.js \
             --jetstream-dir jetstream-suite \
+            --benchmark "$WORKLOAD" \
             --goccia-baseline build-main/GocciaScriptLoader \
             --goccia-candidate build/GocciaScriptLoader \
-            --output jetstream-report.json
+            --output "jetstream-report-$WORKLOAD.json"
+
+      - name: Upload JetStream workload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: jetstream-report-${{ matrix.workload }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: jetstream-report-${{ matrix.workload }}.json
+
+  jetstream-report:
+    needs: jetstream-workload
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download JetStream workload reports
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: jetstream-report-*
+          path: jetstream-reports
+          merge-multiple: true
+
+      - name: Merge JetStream report
+        run: |
+          node scripts/jetstream-merge-reports.js \
+            --output jetstream-report.json \
+            jetstream-reports/*.json
 
       - name: Upload JetStream report
-        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: jetstream-report
           retention-days: 7
-          if-no-files-found: ignore
           path: jetstream-report.json
 
   web-tooling-plan:

@@ -250,6 +250,42 @@ function collectMetadata(options, manifest, engines) {
   };
 }
 
+function buildTargetReport(target, samples, generatedBundle = null) {
+  return {
+    kind: target.kind,
+    name: target.name,
+    source: target.source,
+    generatedBundle,
+    focusAreas: target.focusAreas,
+    tags: target.tags,
+    iterations: target.benchmark.iterations,
+    samples,
+    summary: buildMetricTargetSummary(samples, {
+      field: 'score',
+      outputPrefix: 'Score',
+      ratioDirection: 'higher-is-better',
+    }),
+  };
+}
+
+function buildReport(metadata, targetReports) {
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    metadata,
+    targets: targetReports,
+    geomeanRatios: buildGeomeanRatios(targetReports),
+  };
+}
+
+function writeReport(fileName, report) {
+  const outputDirectory = path.dirname(fileName);
+  if (outputDirectory && outputDirectory !== '.') fs.mkdirSync(outputDirectory, { recursive: true });
+  const temporaryFile = `${fileName}.tmp`;
+  fs.writeFileSync(temporaryFile, `${JSON.stringify(report, null, 2)}\n`);
+  fs.renameSync(temporaryFile, fileName);
+}
+
 function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   if (options.help) {
@@ -264,6 +300,7 @@ function main(argv = process.argv.slice(2)) {
   const targets = resolveTargets(options, manifest);
   if (targets.length === 0) throw new Error('No targets selected. Use --benchmark or --list.');
   const engines = resolveEngines(options);
+  const metadata = collectMetadata(options, manifest, engines);
   const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'goccia-jetstream-'));
   const targetReports = [];
   try {
@@ -276,6 +313,13 @@ function main(argv = process.argv.slice(2)) {
       const bundleFile = path.join(temporaryDirectory, `jetstream-${target.name}.js`);
       fs.writeFileSync(bundleFile, bundle);
       const samples = [];
+      const generatedBundle = options.keepTemp ? bundleFile : null;
+      if (options.output) {
+        writeReport(options.output, buildReport(metadata, [
+          ...targetReports,
+          buildTargetReport(target, samples, generatedBundle),
+        ]));
+      }
       for (let repetition = 0; repetition < options.repetitions; repetition += 1) {
         for (const engine of engines) {
           if (!engineAllowedForTarget(engine, target)) continue;
@@ -290,40 +334,22 @@ function main(argv = process.argv.slice(2)) {
           });
           samples.push(sample);
           console.error(`${target.name} ${engine.name} rep ${repetition + 1}/${options.repetitions}: ${sample.outcome}${sample.score ? ` ${sample.score.toFixed(2)} pts` : ''}`);
+          if (options.output) {
+            writeReport(options.output, buildReport(metadata, [
+              ...targetReports,
+              buildTargetReport(target, samples, generatedBundle),
+            ]));
+          }
         }
       }
-      targetReports.push({
-        kind: target.kind,
-        name: target.name,
-        source: target.source,
-        generatedBundle: options.keepTemp ? bundleFile : null,
-        focusAreas: target.focusAreas,
-        tags: target.tags,
-        iterations: target.benchmark.iterations,
-        samples,
-        summary: buildMetricTargetSummary(samples, {
-          field: 'score',
-          outputPrefix: 'Score',
-          ratioDirection: 'higher-is-better',
-        }),
-      });
+      targetReports.push(buildTargetReport(target, samples, generatedBundle));
     }
   } finally {
     if (!options.keepTemp) fs.rmSync(temporaryDirectory, { recursive: true, force: true });
   }
-  const report = {
-    schemaVersion: 1,
-    generatedAt: new Date().toISOString(),
-    metadata: collectMetadata(options, manifest, engines),
-    targets: targetReports,
-    geomeanRatios: buildGeomeanRatios(targetReports),
-  };
-  const json = `${JSON.stringify(report, null, 2)}\n`;
-  if (options.output) {
-    const outputDirectory = path.dirname(options.output);
-    if (outputDirectory && outputDirectory !== '.') fs.mkdirSync(outputDirectory, { recursive: true });
-    fs.writeFileSync(options.output, json);
-  } else process.stdout.write(json);
+  const report = buildReport(metadata, targetReports);
+  if (options.output) writeReport(options.output, report);
+  else process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   return 0;
 }
 
@@ -338,8 +364,11 @@ if (require.main === module) {
 
 module.exports = {
   RESULT_MARKER,
+  buildReport,
   buildJetStreamBundle,
+  buildTargetReport,
   normalizeJetStreamResult,
   parseArgs,
   resolveTargets,
+  writeReport,
 };
