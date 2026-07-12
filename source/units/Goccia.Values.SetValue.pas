@@ -290,15 +290,8 @@ end;
 
 class function TGocciaSetValue.GetSharedPrototypeForRealm(
   const ARealm: TGocciaRealm): TGocciaObjectValue;
-var
-  Shared: TGocciaSharedPrototype;
 begin
-  Result := nil;
-  if not Assigned(ARealm) then
-    Exit;
-  Shared := TGocciaSharedPrototype(ARealm.GetOwnedSlot(GSetSharedSlot));
-  if Assigned(Shared) then
-    Result := Shared.Prototype;
+  Result := GetSharedPrototypeFromOwnedSlot(ARealm, GSetSharedSlot);
 end;
 
 destructor TGocciaSetValue.Destroy;

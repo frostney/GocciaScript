@@ -165,15 +165,8 @@ end;
 
 class function TGocciaMapValue.GetSharedPrototypeForRealm(
   const ARealm: TGocciaRealm): TGocciaObjectValue;
-var
-  Shared: TGocciaSharedPrototype;
 begin
-  Result := nil;
-  if not Assigned(ARealm) then
-    Exit;
-  Shared := TGocciaSharedPrototype(ARealm.GetOwnedSlot(GMapSharedSlot));
-  if Assigned(Shared) then
-    Result := Shared.Prototype;
+  Result := GetSharedPrototypeFromOwnedSlot(ARealm, GMapSharedSlot);
 end;
 
 

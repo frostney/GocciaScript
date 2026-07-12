@@ -143,15 +143,8 @@ end;
 
 class function TGocciaWeakSetValue.GetSharedPrototypeForRealm(
   const ARealm: TGocciaRealm): TGocciaObjectValue;
-var
-  Shared: TGocciaSharedPrototype;
 begin
-  Result := nil;
-  if not Assigned(ARealm) then
-    Exit;
-  Shared := TGocciaSharedPrototype(ARealm.GetOwnedSlot(GWeakSetSharedSlot));
-  if Assigned(Shared) then
-    Result := Shared.Prototype;
+  Result := GetSharedPrototypeFromOwnedSlot(ARealm, GWeakSetSharedSlot);
 end;
 
 function TGocciaWeakSetValue.ContainsValue(const AValue: TGocciaValue): Boolean;
