@@ -48,14 +48,14 @@ uses
 function GetSharedPrototypeFromOwnedSlot(const ARealm: TGocciaRealm;
   const ASlotId: TGocciaRealmOwnedSlotId): TGocciaObjectValue;
 var
-  Shared: TGocciaSharedPrototype;
+  Owned: TObject;
 begin
   Result := nil;
   if not Assigned(ARealm) then
     Exit;
-  Shared := TGocciaSharedPrototype(ARealm.GetOwnedSlot(ASlotId));
-  if Assigned(Shared) then
-    Result := Shared.Prototype;
+  Owned := ARealm.GetOwnedSlot(ASlotId);
+  if Owned is TGocciaSharedPrototype then
+    Result := TGocciaSharedPrototype(Owned).Prototype;
 end;
 
 constructor TGocciaSharedPrototype.Create(const AMethodHost: TGocciaValue);
