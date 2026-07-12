@@ -119,6 +119,7 @@ type
     procedure AppendOwnPrivateNames(const ANames: TStrings);
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; virtual;
     function NativeInstanceDefaultPrototype: TGocciaObjectValue; virtual;
+    function SupportsRealmIntrinsicPrototypeFallback: Boolean; virtual;
     function IntrinsicPrototypeForRealm(
       const ARealm: TGocciaRealm): TGocciaObjectValue; virtual;
     function Instantiate(const AArguments: TGocciaArgumentsCollection;
@@ -195,24 +196,28 @@ type
 
   TGocciaMapClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function SupportsRealmIntrinsicPrototypeFallback: Boolean; override;
     function IntrinsicPrototypeForRealm(
       const ARealm: TGocciaRealm): TGocciaObjectValue; override;
   end;
 
   TGocciaSetClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function SupportsRealmIntrinsicPrototypeFallback: Boolean; override;
     function IntrinsicPrototypeForRealm(
       const ARealm: TGocciaRealm): TGocciaObjectValue; override;
   end;
 
   TGocciaWeakMapClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function SupportsRealmIntrinsicPrototypeFallback: Boolean; override;
     function IntrinsicPrototypeForRealm(
       const ARealm: TGocciaRealm): TGocciaObjectValue; override;
   end;
 
   TGocciaWeakSetClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function SupportsRealmIntrinsicPrototypeFallback: Boolean; override;
     function IntrinsicPrototypeForRealm(
       const ARealm: TGocciaRealm): TGocciaObjectValue; override;
   end;
@@ -563,9 +568,7 @@ var
   FallbackRealm: TGocciaRealm;
   ProtoValue: TGocciaValue;
 begin
-  FallbackRealm := GetFunctionRealm(ANewTarget);
-  FallbackPrototype := ANativeClass.IntrinsicPrototypeForRealm(FallbackRealm);
-  if Assigned(FallbackPrototype) then
+  if ANativeClass.SupportsRealmIntrinsicPrototypeFallback then
   begin
     if ANewTarget is TGocciaObjectValue then
       ProtoValue := TGocciaObjectValue(ANewTarget).GetProperty(PROP_PROTOTYPE)
@@ -573,7 +576,12 @@ begin
       ProtoValue := nil;
     if ProtoValue is TGocciaObjectValue then
       Exit(TGocciaObjectValue(ProtoValue));
-    Exit(FallbackPrototype);
+
+    FallbackRealm := GetFunctionRealm(ANewTarget);
+    FallbackPrototype := ANativeClass.IntrinsicPrototypeForRealm(FallbackRealm);
+    if Assigned(FallbackPrototype) then
+      Exit(FallbackPrototype);
+    Exit(ACurrentRealmDefault);
   end;
 
   if ANativeClass is TGocciaTypedArrayClassValue then
@@ -1488,6 +1496,11 @@ begin
   Result := nil;
 end;
 
+function TGocciaClassValue.SupportsRealmIntrinsicPrototypeFallback: Boolean;
+begin
+  Result := False;
+end;
+
 procedure TGocciaClassValue.ReplacePrototype(const APrototype: TGocciaObjectValue);
 begin
   FClassPrototype := APrototype;
@@ -2241,6 +2254,11 @@ begin
   Result := TGocciaMapValue.GetSharedPrototypeForRealm(ARealm);
 end;
 
+function TGocciaMapClassValue.SupportsRealmIntrinsicPrototypeFallback: Boolean;
+begin
+  Result := True;
+end;
+
 { TGocciaSetClassValue }
 
 function TGocciaSetClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
@@ -2252,6 +2270,11 @@ function TGocciaSetClassValue.IntrinsicPrototypeForRealm(
   const ARealm: TGocciaRealm): TGocciaObjectValue;
 begin
   Result := TGocciaSetValue.GetSharedPrototypeForRealm(ARealm);
+end;
+
+function TGocciaSetClassValue.SupportsRealmIntrinsicPrototypeFallback: Boolean;
+begin
+  Result := True;
 end;
 
 { TGocciaWeakMapClassValue }
@@ -2267,6 +2290,11 @@ begin
   Result := TGocciaWeakMapValue.GetSharedPrototypeForRealm(ARealm);
 end;
 
+function TGocciaWeakMapClassValue.SupportsRealmIntrinsicPrototypeFallback: Boolean;
+begin
+  Result := True;
+end;
+
 { TGocciaWeakSetClassValue }
 
 function TGocciaWeakSetClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
@@ -2278,6 +2306,11 @@ function TGocciaWeakSetClassValue.IntrinsicPrototypeForRealm(
   const ARealm: TGocciaRealm): TGocciaObjectValue;
 begin
   Result := TGocciaWeakSetValue.GetSharedPrototypeForRealm(ARealm);
+end;
+
+function TGocciaWeakSetClassValue.SupportsRealmIntrinsicPrototypeFallback: Boolean;
+begin
+  Result := True;
 end;
 
 { TGocciaWeakRefClassValue }
