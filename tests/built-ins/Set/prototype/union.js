@@ -27,6 +27,26 @@ describe("Set.prototype.union", () => {
     expect(result.size).toBe(0);
   });
 
+  test("copies the receiver after acquiring the other keys iterator", () => {
+    const receiver = new Set([1, 2, 3]);
+    const setLike = {
+      size: 0,
+      has() {
+        return false;
+      },
+      keys() {
+        return {
+          get next() {
+            receiver.clear();
+            receiver.add(4);
+            return () => ({ done: true });
+          },
+        };
+      },
+    };
+    expect([...receiver.union(setLike)]).toEqual([4]);
+  });
+
   test("accepts set-like object", () => {
     const setLike = {
       size: "3",

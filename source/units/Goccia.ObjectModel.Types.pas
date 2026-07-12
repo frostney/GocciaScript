@@ -20,7 +20,9 @@ type
     gmkSymbolProperty,
     gmkSymbolMethod,
     gmkSymbolAccessor,
-    gmkDataProperty
+    gmkDataProperty,
+    gmkPropertyAlias,
+    gmkSymbolAlias
   );
 
   TGocciaMemberFlag = (
@@ -41,6 +43,7 @@ type
     PropertyFlags: TPropertyFlags;
     MemberFlags: TGocciaMemberFlags;
     DataValue: TGocciaValue;
+    AliasTargetName: string;
   end;
 
 implementation

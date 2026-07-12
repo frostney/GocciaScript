@@ -9,6 +9,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.SharedPrototype,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
@@ -41,6 +42,8 @@ type
     procedure SweepWeakReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
+    class function GetSharedPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; static;
 
     property Items: TGocciaWeakSetStorage read FItems;
   end;
@@ -55,7 +58,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
-  Goccia.Realm,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.IteratorSupport,
@@ -137,6 +139,12 @@ begin
   end;
   if Assigned(Shared) then
     ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
+end;
+
+class function TGocciaWeakSetValue.GetSharedPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  Result := GetSharedPrototypeFromOwnedSlot(ARealm, GWeakSetSharedSlot);
 end;
 
 function TGocciaWeakSetValue.ContainsValue(const AValue: TGocciaValue): Boolean;

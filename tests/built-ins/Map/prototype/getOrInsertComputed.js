@@ -35,6 +35,17 @@ describe.runIf(hasGoccia)("Map.prototype.getOrInsertComputed", () => {
     expect(receivedKey).toBe("myKey");
   });
 
+  test("callback receives canonical positive zero", () => {
+    const map = new Map();
+    let receivedKey;
+    map.getOrInsertComputed(-0, (key) => {
+      receivedKey = key;
+      return "value";
+    });
+    expect(Object.is(receivedKey, 0)).toBe(true);
+    expect(Object.is(receivedKey, -0)).toBe(false);
+  });
+
   test("throws TypeError for non-callable callback", () => {
     const map = new Map();
     expect(() => map.getOrInsertComputed("key", "not a function")).toThrow(

@@ -36,3 +36,19 @@ test("size is 0 after clear", () => {
   set.clear();
   expect(set.size).toBe(0);
 });
+
+test("size is a configurable non-enumerable prototype getter", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(Set.prototype, "size");
+  expect(typeof descriptor.get).toBe("function");
+  expect(descriptor.get.name).toBe("get size");
+  expect(descriptor.get.length).toBe(0);
+  expect(descriptor.set).toBe(undefined);
+  expect(descriptor.enumerable).toBe(false);
+  expect(descriptor.configurable).toBe(true);
+});
+
+test("size getter rejects values without Set data", () => {
+  const getter = Object.getOwnPropertyDescriptor(Set.prototype, "size").get;
+  expect(() => getter.call(Set.prototype)).toThrow(TypeError);
+  expect(() => getter.call(new Map())).toThrow(TypeError);
+});
