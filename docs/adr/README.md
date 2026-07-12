@@ -100,3 +100,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0088 — Reject broader property inline caches without AWFY transfer](0088-reject-broader-property-inline-caches.md)
 - [0089 — Defer fixed-arity call specialization without end-to-end transfer](0089-defer-fixed-arity-call-specialization.md)
 - [0090 — Web Tooling Goccia benchmark lane](0090-web-tooling-goccia-benchmark-lane.md)
+- [0091 — Unified performance barometer with a frozen JetStream subset](0091-unified-performance-barometer.md)

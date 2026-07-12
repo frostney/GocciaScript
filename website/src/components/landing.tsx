@@ -1064,8 +1064,8 @@ export function Landing({
                 and legacy code. They opt back into excluded syntax such as{" "}
                 <code className={inlineCodeClass}>var</code>,{" "}
                 <code className={inlineCodeClass}>function</code>, loose
-                equality, <code className={inlineCodeClass}>arguments</code>, and
-                ASI via CLI or config flags.
+                equality, <code className={inlineCodeClass}>arguments</code>,
+                and ASI via CLI or config flags.
               </p>
               <div className="mt-10">
                 <p className="text-ink-2 mb-0 text-[0.92rem]">

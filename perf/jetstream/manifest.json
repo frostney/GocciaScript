@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "jetStream": {
+    "repository": "https://github.com/WebKit/JetStream",
+    "ref": "main",
+    "commit": "3967678fa8ab98d847ab33cf3728dba726fa854b",
+    "release": "3.0",
+    "benchmarks": {
+      "hash-map": {
+        "files": ["simple/hash-map.js"],
+        "iterations": 3,
+        "worstCaseCount": 1,
+        "focusAreas": ["collections", "object-model"]
+      },
+      "ai-astar": {
+        "files": ["SeaMonster/ai-astar.js"],
+        "iterations": 3,
+        "worstCaseCount": 1,
+        "focusAreas": ["collections", "control-flow"]
+      },
+      "gaussian-blur": {
+        "files": ["SeaMonster/gaussian-blur.js"],
+        "iterations": 3,
+        "worstCaseCount": 1,
+        "focusAreas": ["arrays", "numeric-compute"]
+      },
+      "raytrace-public-class-fields": {
+        "files": ["class-fields/raytrace-public-class-fields.js"],
+        "iterations": 3,
+        "worstCaseCount": 1,
+        "focusAreas": ["class-fields", "numeric-compute"]
+      },
+      "sync-fs": {
+        "files": ["generators/sync-file-system.js"],
+        "iterations": 3,
+        "worstCaseCount": 1,
+        "deterministicRandom": true,
+        "focusAreas": ["generators", "collections"]
+      },
+      "lazy-collections": {
+        "files": ["generators/lazy-collections.js"],
+        "iterations": 3,
+        "worstCaseCount": 1,
+        "focusAreas": ["generators", "iterators"]
+      }
+    }
+  },
+  "driver": {
+    "script": "scripts/jetstream-driver.js",
+    "version": 1
+  },
+  "ciReport": {
+    "repetitions": 5,
+    "benchmarks": [
+      "hash-map",
+      "ai-astar",
+      "gaussian-blur",
+      "raytrace-public-class-fields",
+      "sync-fs",
+      "lazy-collections"
+    ]
+  }
+}

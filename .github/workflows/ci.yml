@@ -798,6 +798,102 @@ jobs:
           bun install --frozen-lockfile
           bun run publish-awfy ../awfy-report.json
 
+  jetstream:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          no-cache: true
+
+      - name: Set up latest Node.js reference
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: current
+          package-manager-cache: false
+
+      - name: Install QuickJS
+        run: bash ./.github/scripts/install-quickjs.sh
+
+      - name: Download build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: gocciascript-x86_64-linux
+          path: build/
+
+      - name: Make binaries executable
+        run: chmod +x build/*
+
+      - name: Read JetStream pin
+        id: jetstream-pin
+        run: |
+          sha="$(node -e "const m = require('./perf/jetstream/manifest.json'); process.stdout.write(m.jetStream.commit)")"
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid JetStream pin in perf/jetstream/manifest.json"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout JetStream corpus
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: WebKit/JetStream
+          ref: ${{ steps.jetstream-pin.outputs.sha }}
+          path: jetstream-suite
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /LICENSE
+            /README.md
+            /simple/hash-map.js
+            /SeaMonster/ai-astar.js
+            /SeaMonster/gaussian-blur.js
+            /class-fields/raytrace-public-class-fields.js
+            /generators/sync-file-system.js
+            /generators/lazy-collections.js
+
+      - name: Check JetStream driver helpers
+        run: node scripts/test-jetstream-driver.js
+
+      - name: Run JetStream report
+        run: |
+          node scripts/jetstream-ci-report.js \
+            --jetstream-dir jetstream-suite \
+            --output jetstream-report.json
+
+      - name: Upload JetStream report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: jetstream-report
+          retention-days: 30
+          if-no-files-found: ignore
+          path: jetstream-report.json
+
+      - name: Publish JetStream report
+        if: always() && github.ref == 'refs/heads/main' && hashFiles('jetstream-report.json') != ''
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          JETSTREAM_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
+        run: |
+          if [ -z "${BLOB_READ_WRITE_TOKEN:-}" ]; then
+            echo "BLOB_READ_WRITE_TOKEN is not configured; skipping JetStream publish."
+            exit 0
+          fi
+          cd website
+          bun install --frozen-lockfile
+          bun run publish-jetstream ../jetstream-report.json
+
   web-tooling-plan:
     runs-on: ubuntu-latest
     outputs:
@@ -1189,7 +1285,7 @@ jobs:
           }
 
   artifacts:
-    needs: [test, toml-compliance, json5-compliance, awfy, web-tooling, benchmark, cli]
+    needs: [test, toml-compliance, json5-compliance, awfy, jetstream, web-tooling, benchmark, cli]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     strategy:
@@ -1224,7 +1320,7 @@ jobs:
           path: release-artifacts/*
 
   nightly:
-    needs: [test, toml-compliance, json5-compliance, awfy, web-tooling, benchmark, cli]
+    needs: [test, toml-compliance, json5-compliance, awfy, jetstream, web-tooling, benchmark, cli]
     if: github.ref == 'refs/heads/main'
     concurrency:
       group: nightly-release
@@ -1324,7 +1420,7 @@ jobs:
             gocciascript-nightly-*.tar.gz gocciascript-nightly-*.zip
 
   release:
-    needs: [test, toml-compliance, json5-compliance, awfy, web-tooling, benchmark, cli]
+    needs: [test, toml-compliance, json5-compliance, awfy, jetstream, web-tooling, benchmark, cli]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:

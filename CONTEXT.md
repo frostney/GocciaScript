@@ -174,6 +174,22 @@ _Avoid_: Loader profile.
 A JavaScript-visible hook exposed on the `Goccia` namespace only when a CLI host opts into the test262 conformance contract, such as `GocciaScriptLoaderBare --test262-host`. It is not a core language built-in and not part of the normal runtime surface.
 _Avoid_: Runtime global, compatibility flag.
 
+**Performance Barometer**:
+The public, directional view of GocciaScript performance against selected reference engines using retained, versioned benchmark reports. It is a north-star aid, not a product ranking.
+_Avoid_: Leaderboard, competitor comparison.
+
+**Reference engine**:
+An independently developed JavaScript engine or runtime measured beside GocciaScript to provide external scale and trend context. A reference engine is not assumed to share GocciaScript's goals or constraints.
+_Avoid_: Competitor, baseline engine.
+
+**Reference ratio**:
+A dimensionless comparison normalized so `1.00×` means aligned performance and a value above `1.00×` means GocciaScript was proportionally slower. For elapsed-time suites it is Goccia time divided by reference time; for score suites it is reference score divided by Goccia score.
+_Avoid_: Speedup, ranking score.
+
+**North-star trend**:
+The retained direction of compatible reference-ratio measurements over time. A trend line breaks when the corpus, subset, driver, or reference-engine version changes rather than implying continuity across different measurement contracts.
+_Avoid_: Release gate, competitive ranking.
+
 **Bundler**:
 The CLI host that compiles source to `.gbc` artifacts without executing the program.
 _Avoid_: Compiler when referring to the user-facing tool.

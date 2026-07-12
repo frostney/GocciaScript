@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const crossEngine = require('./cross-engine-report.js');
 
 const DRIVER_VERSION = 1;
 const RESULT_MARKER = 'GOCCIA_AWFY_RESULT ';
@@ -11,13 +12,6 @@ const DEFAULT_MANIFEST = path.join('perf', 'awfy', 'manifest.json');
 const DEFAULT_TIMEOUT_MS = 120000;
 const DEFAULT_REPETITIONS = 3;
 const DEFAULT_INNER_ITERATIONS = 1;
-const DEFAULT_GOCCIA_FLAGS = [
-  '--mode=bytecode',
-  '--compat-traditional-for-loop',
-  '--compat-while-loops',
-  '--compat-for-in-loop',
-  '--compat-function',
-];
 
 function usage() {
   return [
@@ -285,228 +279,72 @@ function resolveTargets(options, manifest) {
 }
 
 function resolveEngines(options) {
-  const requested = options.engines || ['goccia', 'qjs', 'node'];
-  const engines = [];
-
-  const addGoccia = (name, command) => {
-    engines.push({
-      name,
-      kind: 'goccia',
-      command,
-      baseArgs: DEFAULT_GOCCIA_FLAGS.concat(options.gocciaFlags),
-    });
-  };
-
-  for (const name of expandGocciaEngines(requested, options)) {
-    if (name === 'goccia') {
-      addGoccia('goccia', options.goccia);
-    } else if (name === 'goccia-baseline') {
-      if (!options.gocciaBaseline) throw new Error('--goccia-baseline is required for engine goccia-baseline');
-      addGoccia('goccia-baseline', options.gocciaBaseline);
-    } else if (name === 'goccia-candidate') {
-      if (!options.gocciaCandidate) throw new Error('--goccia-candidate is required for engine goccia-candidate');
-      addGoccia('goccia-candidate', options.gocciaCandidate);
-    } else if (name === 'qjs') {
-      engines.push({ name: 'qjs', kind: 'qjs', command: options.qjs, baseArgs: [] });
-    } else if (name === 'node') {
-      engines.push({ name: 'node', kind: 'node', command: options.node, baseArgs: [] });
-    } else {
-      throw new Error(`Unknown engine: ${name}`);
-    }
-  }
-
-  return engines;
+  return crossEngine.resolveEngines(options);
 }
 
 function expandGocciaEngines(requested, options) {
-  const engines = [];
-  for (const name of requested) {
-    if (name === 'goccia' && (options.gocciaBaseline || options.gocciaCandidate)) {
-      if (options.gocciaBaseline) engines.push('goccia-baseline');
-      if (options.gocciaCandidate) engines.push('goccia-candidate');
-    } else {
-      engines.push(name);
-    }
-  }
-  return engines;
+  return crossEngine.expandGocciaEngines(requested, options);
 }
 
 function engineAllowedForTarget(engine, target) {
-  if (!target.engines) return true;
-  return target.engines.includes(engine.name) || target.engines.includes(engine.kind);
-}
-
-function profileArgs(options, target, engine, repetition) {
-  if (!options.profile || engine.kind !== 'goccia') return [];
-  const args = [`--profile=${options.profile}`];
-  if (options.profileDir) {
-    fs.mkdirSync(options.profileDir, { recursive: true });
-    args.push(`--profile-output=${path.join(options.profileDir, `${target.name}-${engine.name}-${repetition}.json`)}`);
-  }
-  return args;
+  return crossEngine.engineAllowedForTarget(engine, target);
 }
 
 function runEngineSample({ engine, target, fileName, repetition, options }) {
-  const args = [];
-  if (engine.kind === 'goccia') {
-    args.push(fileName, ...engine.baseArgs, ...(target.gocciaFlags || []), ...profileArgs(options, target, engine, repetition));
-  } else {
-    args.push(...engine.baseArgs, fileName);
-  }
-
-  const startedAt = new Date().toISOString();
-  const proc = spawnSync(engine.command, args, {
-    encoding: 'utf8',
-    timeout: options.timeoutMs,
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  const stdout = proc.stdout || '';
-  const stderr = proc.stderr || '';
-  const parsed = parseResult(stdout);
-  const outcome = classifyProcessOutcome(proc, parsed, stdout, stderr);
-
-  return {
-    engine: engine.name,
+  return crossEngine.runEngineSample({
+    engine,
+    target,
+    fileName,
     repetition,
-    startedAt,
-    outcome,
-    durationMicros: parsed?.durationMicros ?? null,
-    checksum: parsed?.checksum ?? null,
-    verificationPassed: parsed?.verificationPassed ?? false,
-    innerIterations: target.innerIterations,
-    exitCode: proc.status,
-    signal: proc.signal || null,
-    command: [engine.command, ...args],
-    stderr: outcome === 'ok' ? '' : stderr.slice(0, 4000),
-  };
+    options,
+    marker: RESULT_MARKER,
+    normalizeResult: (parsed) => ({
+      durationMicros: parsed?.durationMicros ?? null,
+      checksum: parsed?.checksum ?? null,
+      verificationPassed: parsed?.verificationPassed ?? false,
+      innerIterations: target.innerIterations,
+    }),
+  });
 }
 
 function parseResult(stdout) {
-  const lines = stdout.split(/\r?\n/);
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i];
-    if (line.startsWith(RESULT_MARKER)) {
-      return JSON.parse(line.slice(RESULT_MARKER.length));
-    }
-  }
-  return null;
+  return crossEngine.parseMarkedResult(stdout, RESULT_MARKER);
 }
 
 function classifyProcessOutcome(proc, parsed, stdout, stderr) {
-  if (proc.error && proc.error.code === 'ETIMEDOUT') return 'timeout';
-  const combined = `${stdout}\n${stderr}`.toLowerCase();
-  if (/\bout[\s-]of[\s-]memory\b/.test(combined) || /\boom\b/.test(combined) || proc.signal === 'SIGKILL') return 'oom';
-  if (!parsed) return proc.status === 0 ? 'missing-result' : 'crash';
-  if (!parsed.verificationPassed) return 'verification-failed';
-  if (proc.status !== 0) return 'crash';
-  return 'ok';
+  return crossEngine.classifyProcessOutcome(proc, parsed, stdout, stderr);
 }
 
 function median(values) {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  return crossEngine.median(values);
 }
 
 function iqrFiltered(values) {
-  if (values.length < 4) return [...values];
-  const sorted = [...values].sort((a, b) => a - b);
-  const q1 = sorted[Math.floor(sorted.length / 4)];
-  const q3 = sorted[Math.floor((sorted.length * 3) / 4)];
-  const iqr = q3 - q1;
-  if (iqr <= 0) return sorted;
-  const lower = q1 - 1.5 * iqr;
-  const upper = q3 + 1.5 * iqr;
-  return sorted.filter((value) => value >= lower && value <= upper);
+  return crossEngine.iqrFiltered(values);
 }
 
 function coefficientOfVariation(values) {
-  if (values.length === 0) return null;
-  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
-  if (mean === 0) return null;
-  const variance = values.reduce((sum, value) => sum + ((value - mean) * (value - mean)), 0) / values.length;
-  return (Math.sqrt(variance) / mean) * 100;
+  return crossEngine.coefficientOfVariation(values);
 }
 
 function summarizeSamples(samples) {
-  const values = samples
-    .filter((sample) => sample.outcome === 'ok' && typeof sample.durationMicros === 'number' && sample.durationMicros >= 0)
-    .map((sample) => sample.durationMicros);
-  const filtered = iqrFiltered(values);
-  return {
-    ok: samples.filter((sample) => sample.outcome === 'ok').length,
-    timeout: samples.filter((sample) => sample.outcome === 'timeout').length,
-    crash: samples.filter((sample) => sample.outcome === 'crash').length,
-    oom: samples.filter((sample) => sample.outcome === 'oom').length,
-    verificationFailed: samples.filter((sample) => sample.outcome === 'verification-failed').length,
-    missingResult: samples.filter((sample) => sample.outcome === 'missing-result').length,
-    rawCount: values.length,
-    medianMicros: median(values),
-    iqrMedianMicros: median(filtered),
-    minMicros: values.length ? Math.min(...values) : null,
-    maxMicros: values.length ? Math.max(...values) : null,
-    coefficientOfVariation: coefficientOfVariation(values),
-  };
+  return crossEngine.summarizeMetric(samples, 'durationMicros', 'Micros');
 }
 
 function checksumAgreement(samples) {
-  const checksums = new Set(samples
-    .filter((sample) => sample.outcome === 'ok')
-    .map((sample) => sample.checksum));
-  return {
-    ok: checksums.size <= 1,
-    checksums: [...checksums].sort(),
-  };
+  return crossEngine.checksumAgreement(samples);
 }
 
 function buildTargetSummary(samples) {
-  const byEngine = new Map();
-  for (const sample of samples) {
-    if (!byEngine.has(sample.engine)) byEngine.set(sample.engine, []);
-    byEngine.get(sample.engine).push(sample);
-  }
-
-  const engineStats = {};
-  for (const [engine, engineSamples] of byEngine.entries()) {
-    engineStats[engine] = summarizeSamples(engineSamples);
-  }
-
-  const ratios = {};
-  const engines = Object.keys(engineStats);
-  for (const left of engines) {
-    for (const right of engines) {
-      if (left === right) continue;
-      const leftMedian = engineStats[left].medianMicros;
-      const rightMedian = engineStats[right].medianMicros;
-      if (leftMedian && rightMedian) {
-        ratios[`${left}_over_${right}`] = leftMedian / rightMedian;
-      }
-    }
-  }
-
-  return {
-    checksumAgreement: checksumAgreement(samples),
-    engineStats,
-    ratios,
-  };
+  return crossEngine.buildMetricTargetSummary(samples, {
+    field: 'durationMicros',
+    outputPrefix: 'Micros',
+    ratioDirection: 'lower-is-better',
+  });
 }
 
 function buildGeomeanRatios(targetReports) {
-  const buckets = new Map();
-  for (const target of targetReports) {
-    for (const [pair, ratio] of Object.entries(target.summary.ratios)) {
-      if (!Number.isFinite(ratio) || ratio <= 0) continue;
-      if (!buckets.has(pair)) buckets.set(pair, []);
-      buckets.get(pair).push(Math.log(ratio));
-    }
-  }
-
-  const result = {};
-  for (const [pair, logs] of buckets.entries()) {
-    result[pair] = Math.exp(logs.reduce((sum, value) => sum + value, 0) / logs.length);
-  }
-  return result;
+  return crossEngine.buildGeomeanRatios(targetReports);
 }
 
 function collectMetadata(options, manifest, engines) {
