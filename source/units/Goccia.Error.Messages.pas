@@ -664,9 +664,8 @@ resourcestring
   SErrorSetClearNonSet = 'Set.prototype.clear called on non-Set object';
   SErrorSetForEachNonSet = 'Set.prototype.forEach called on non-Set object';
   SErrorSetValuesNonSet = 'Set.prototype.values called on non-Set object';
-  SErrorSetKeysNonSet = 'Set.prototype.keys called on non-Set object';
   SErrorSetEntriesNonSet = 'Set.prototype.entries called on non-Set object';
-  SErrorSetIteratorNonSet = 'Set.prototype[Symbol.iterator] called on non-Set object';
+  SErrorSetSizeNonSet = 'Set.prototype.size called on non-Set object';
   SErrorSetUnionNonSet = 'Set.prototype.union called on non-Set object';
   SErrorSetIntersectionNonSet = 'Set.prototype.intersection called on non-Set object';
   SErrorSetDifferenceNonSet = 'Set.prototype.difference called on non-Set object';
@@ -685,7 +684,7 @@ resourcestring
   SErrorMapKeysNonMap = 'Map.prototype.keys called on non-Map object';
   SErrorMapValuesNonMap = 'Map.prototype.values called on non-Map object';
   SErrorMapEntriesNonMap = 'Map.prototype.entries called on non-Map object';
-  SErrorMapIteratorNonMap = 'Map.prototype[Symbol.iterator] called on non-Map object';
+  SErrorMapSizeNonMap = 'Map.prototype.size called on non-Map object';
   SErrorMapGetOrInsertNonMap = 'Map.prototype.getOrInsert called on non-Map object';
   SErrorMapGetOrInsertComputedNonMap = 'Map.prototype.getOrInsertComputed called on non-Map object';
   SErrorMapConstructorEntryNotObject = 'Map constructor requires each entry to be an object';

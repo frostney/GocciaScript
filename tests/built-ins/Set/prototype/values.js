@@ -30,11 +30,13 @@ test("values returns an iterator with next()", () => {
 });
 
 test("keys is same as values for Set", () => {
+  expect(Set.prototype.keys).toBe(Set.prototype.values);
   const set = new Set([1, 2, 3]);
   expect([...set.keys()]).toEqual([1, 2, 3]);
 });
 
 test("Set default iterator is values", () => {
+  expect(Set.prototype[Symbol.iterator]).toBe(Set.prototype.values);
   const set = new Set([1, 2, 3]);
   const iter = set[Symbol.iterator]();
   expect(iter.next().value).toBe(1);

@@ -31,6 +31,7 @@ test("entries returns an iterator with next()", () => {
 });
 
 test("Map default iterator is entries", () => {
+  expect(Map.prototype[Symbol.iterator]).toBe(Map.prototype.entries);
   const map = new Map([["a", 1], ["b", 2]]);
   const iter = map[Symbol.iterator]();
   const first = iter.next().value;
