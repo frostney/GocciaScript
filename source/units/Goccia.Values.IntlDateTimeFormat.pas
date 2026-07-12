@@ -1771,12 +1771,12 @@ begin
   else if AValue is TGocciaTemporalPlainYearMonthValue then
   begin
     ValueCalendar := TGocciaTemporalPlainYearMonthValue(AValue).CalendarId;
-    AllowISOCalendar := True;
+    AllowISOCalendar := False;
   end
   else if AValue is TGocciaTemporalPlainMonthDayValue then
   begin
     ValueCalendar := TGocciaTemporalPlainMonthDayValue(AValue).CalendarId;
-    AllowISOCalendar := True;
+    AllowISOCalendar := False;
   end
   else if AValue is TGocciaTemporalZonedDateTimeValue then
   begin

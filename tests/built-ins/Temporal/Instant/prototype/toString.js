@@ -17,4 +17,10 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.toString", () => {
     const instant = Temporal.Instant.fromEpochMilliseconds(ms);
     expect(instant.toString()).toBe("2024-01-15T12:30:45Z");
   });
+
+  test("toString rounds historical sub-minute offsets", () => {
+    const instant = new Temporal.Instant(0n);
+    expect(instant.toString({ timeZone: "Africa/Monrovia" }))
+      .toBe("1969-12-31T23:15:30-00:45");
+  });
 });

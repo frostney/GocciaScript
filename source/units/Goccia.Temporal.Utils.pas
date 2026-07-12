@@ -807,7 +807,7 @@ function TryStripTemporalAnnotationsForTime(const AStr: string; out AStripped: s
 var
   Value: string;
   BracketStart, BracketEnd, EqualsPos: Integer;
-  Annotation, Key, CalendarValue, CanonicalCalendar: string;
+  Annotation, Key, CalendarValue: string;
   Critical: Boolean;
   TimeZoneSeen: Boolean;
   CalendarCount: Integer;
@@ -846,8 +846,10 @@ begin
       begin
         CalendarValue := Copy(Annotation, EqualsPos + 1,
           Length(Annotation) - EqualsPos);
-        CanonicalCalendar := CanonicalizeTemporalCalendarIdentifier(CalendarValue);
-        if CanonicalCalendar = '' then
+        // ParseISODateTime records the annotation, but ToTemporalTime ignores
+        // its calendar value. Unknown calendar identifiers are therefore
+        // valid here as long as the RFC 9557 annotation value is non-empty.
+        if CalendarValue = '' then
           Exit;
         Inc(CalendarCount);
         if Critical then

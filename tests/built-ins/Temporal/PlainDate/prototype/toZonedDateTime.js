@@ -15,4 +15,13 @@ describe.runIf(isTemporal)("Temporal.PlainDate.prototype.toZonedDateTime", () =>
     expect(zdt.hour).toBe(0);
     expect(zdt.timeZoneId).toBe("UTC");
   });
+
+  test("toZonedDateTime ignores a plainTime calendar annotation", () => {
+    const date = new Temporal.PlainDate(2024, 3, 15);
+    const result = date.toZonedDateTime({
+      plainTime: "12:34:56.987654321[!u-ca=unknown]",
+      timeZone: "UTC"
+    });
+    expect(result.toPlainTime().toString()).toBe("12:34:56.987654321");
+  });
 });

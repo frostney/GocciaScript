@@ -1929,7 +1929,7 @@ begin
 
   if Ord(LargestUnit) > Ord(SmallestUnit) then
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  ValidateRoundingIncrement(Increment, SmallestUnit, LargestUnit);
+  ValidateRoundingIncrement(Increment, SmallestUnit);
   if (Increment > 1) and (LargestUnit <> SmallestUnit) and IsDurationDateUnit(SmallestUnit) then
     ThrowRangeError('roundingIncrement must be 1 when rounding a calendar unit into a larger unit',
       SSuggestTemporalRoundArg);
@@ -3430,43 +3430,6 @@ begin
   Result := nil;
 end;
 
-function DurationFractionalSecondDigitsOption(
-  const AOptions: TGocciaObjectValue): Integer;
-var
-  V: TGocciaValue;
-  NumberValue: Double;
-  StringValue: string;
-begin
-  Result := -1;
-  if AOptions = nil then
-    Exit;
-
-  V := AOptions.GetProperty('fractionalSecondDigits');
-  if DurationIsUndefinedValue(V) then
-    Exit;
-
-  if V is TGocciaNumberLiteralValue then
-  begin
-    NumberValue := TGocciaNumberLiteralValue(V).Value;
-    if IsNaN(NumberValue) or IsInfinite(NumberValue) then
-      ThrowRangeError(SErrorFractionalDigitsRange, SSuggestTemporalRoundArg);
-    NumberValue := Floor(NumberValue);
-    if (NumberValue < 0) or (NumberValue > 9) then
-      ThrowRangeError(SErrorFractionalDigitsRange, SSuggestTemporalRoundArg);
-    Result := Trunc(NumberValue);
-    Exit;
-  end;
-
-  StringValue := V.ToStringLiteral.Value;
-  if StringValue = 'auto' then
-    Result := -1
-  else if (Length(StringValue) = 1) and (StringValue[1] in ['0'..'9']) then
-    Result := Ord(StringValue[1]) - Ord('0')
-  else
-    ThrowRangeError(Format(SErrorInvalidFractionalDigits, [StringValue]),
-      SSuggestTemporalRoundArg);
-end;
-
 function DurationRoundingModeOption(
   const AOptions: TGocciaObjectValue): TTemporalRoundingMode;
 var
@@ -3516,7 +3479,7 @@ end;
 procedure ReadDurationToStringOptions(const AOptions: TGocciaObjectValue;
   out AFractionalDigits: Integer; out ARoundingMode: TTemporalRoundingMode);
 begin
-  AFractionalDigits := DurationFractionalSecondDigitsOption(AOptions);
+  AFractionalDigits := GetFractionalSecondDigits(AOptions);
   ARoundingMode := DurationRoundingModeOption(AOptions);
   AFractionalDigits := DurationDigitsForSmallestUnit(AOptions,
     AFractionalDigits);

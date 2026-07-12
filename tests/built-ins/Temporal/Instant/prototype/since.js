@@ -60,4 +60,14 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.since", () => {
     expect(dur.nanoseconds).toBe(5000000000);
     expect(dur.toString()).toBe("PT5S");
   });
+
+  test("since rejects increments equal to the unit maximum", () => {
+    const later = new Temporal.Instant(1000000000000000000n);
+    const earlier = new Temporal.Instant(0n);
+    expect(() => later.since(earlier, {
+      largestUnit: "hours",
+      smallestUnit: "hours",
+      roundingIncrement: 24
+    })).toThrow(RangeError);
+  });
 });

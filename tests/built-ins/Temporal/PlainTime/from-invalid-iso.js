@@ -12,9 +12,9 @@ describe.runIf(isTemporal)("Temporal.PlainTime.from invalid ISO", () => {
     }).toThrow(RangeError);
   });
 
-  test("throws RangeError for invalid calendar annotation value", () => {
+  test("throws RangeError for an empty calendar annotation value", () => {
     expect(() => {
-      Temporal.PlainTime.from("12:00[u-ca=doesnotexist]");
+      Temporal.PlainTime.from("12:00[u-ca=]");
     }).toThrow(RangeError);
   });
 });
