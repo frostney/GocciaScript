@@ -35,6 +35,8 @@ const
   gmkSymbolMethod = Goccia.ObjectModel.Types.gmkSymbolMethod;
   gmkSymbolAccessor = Goccia.ObjectModel.Types.gmkSymbolAccessor;
   gmkDataProperty = Goccia.ObjectModel.Types.gmkDataProperty;
+  gmkPropertyAlias = Goccia.ObjectModel.Types.gmkPropertyAlias;
+  gmkSymbolAlias = Goccia.ObjectModel.Types.gmkSymbolAlias;
   gmfNoFunctionPrototype = Goccia.ObjectModel.Types.gmfNoFunctionPrototype;
   gmfVariadic = Goccia.ObjectModel.Types.gmfVariadic;
   gmfNotConstructable = Goccia.ObjectModel.Types.gmfNotConstructable;
@@ -77,6 +79,12 @@ type
       const AValue: TGocciaValue; const AFlags: TPropertyFlags;
       const AKind: TGocciaMemberKind = gmkDataProperty;
       const AMemberFlags: TGocciaMemberFlags = []);
+    procedure AddPropertyAlias(const AExposedName, ATargetName: string;
+      const AFlags: TPropertyFlags;
+      const AMemberFlags: TGocciaMemberFlags = []);
+    procedure AddSymbolAlias(const ASymbol: TGocciaValue;
+      const ATargetName: string; const AFlags: TPropertyFlags;
+      const AMemberFlags: TGocciaMemberFlags = []);
     procedure AddPublishedGetter(const AInstanceClass: TClass;
       const APascalPropertyName, AExposedName: string;
       const AFlags: TPropertyFlags;
@@ -116,6 +124,11 @@ function DefineAccessor(const AExposedName: string;
 function DefineDataProperty(const AExposedName: string; const AValue: TGocciaValue;
   const AFlags: TPropertyFlags;
   const AKind: TGocciaMemberKind = gmkDataProperty): TGocciaMemberDefinition;
+function DefinePropertyAlias(const AExposedName, ATargetName: string;
+  const AFlags: TPropertyFlags): TGocciaMemberDefinition;
+function DefineSymbolAlias(const ASymbol: TGocciaValue;
+  const ATargetName: string;
+  const AFlags: TPropertyFlags): TGocciaMemberDefinition;
 function DefinePublishedGetter(const AInstanceClass: TClass;
   const APascalPropertyName, AExposedName: string; const AFlags: TPropertyFlags;
   const AKind: TGocciaMemberKind = gmkPrototypeGetter): TGocciaMemberDefinition;
@@ -181,6 +194,8 @@ begin
     gmkSymbolMethod: Result := 'symbol method';
     gmkSymbolAccessor: Result := 'symbol accessor';
     gmkDataProperty: Result := 'data property';
+    gmkPropertyAlias: Result := 'property alias';
+    gmkSymbolAlias: Result := 'symbol alias';
   else
     Result := 'member';
   end;
@@ -321,6 +336,7 @@ begin
   Result.PropertyFlags := [];
   Result.MemberFlags := [];
   Result.DataValue := nil;
+  Result.AliasTargetName := '';
   if AArity < 0 then
     Include(Result.MemberFlags, gmfVariadic);
 end;
@@ -365,6 +381,7 @@ begin
   Result.PropertyFlags := AFlags;
   Result.MemberFlags := [];
   Result.DataValue := nil;
+  Result.AliasTargetName := '';
 end;
 
 function DefineDataProperty(const AExposedName: string; const AValue: TGocciaValue;
@@ -380,6 +397,24 @@ begin
   Result.PropertyFlags := AFlags;
   Result.MemberFlags := [];
   Result.DataValue := AValue;
+  Result.AliasTargetName := '';
+end;
+
+function DefinePropertyAlias(const AExposedName, ATargetName: string;
+  const AFlags: TPropertyFlags): TGocciaMemberDefinition;
+begin
+  Result := DefineDataProperty(AExposedName, nil, AFlags,
+    gmkPropertyAlias);
+  Result.AliasTargetName := ATargetName;
+end;
+
+function DefineSymbolAlias(const ASymbol: TGocciaValue;
+  const ATargetName: string;
+  const AFlags: TPropertyFlags): TGocciaMemberDefinition;
+begin
+  Result := DefineDataProperty('', nil, AFlags, gmkSymbolAlias);
+  Result.Symbol := ASymbol;
+  Result.AliasTargetName := ATargetName;
 end;
 
 constructor TGocciaPublishedGetterHost.Create(const ATargetClass: TClass;
@@ -597,6 +632,28 @@ begin
   AddDefinition(Definition);
 end;
 
+procedure TGocciaMemberCollection.AddPropertyAlias(
+  const AExposedName, ATargetName: string; const AFlags: TPropertyFlags;
+  const AMemberFlags: TGocciaMemberFlags);
+var
+  Definition: TGocciaMemberDefinition;
+begin
+  Definition := DefinePropertyAlias(AExposedName, ATargetName, AFlags);
+  Definition.MemberFlags := Definition.MemberFlags + AMemberFlags;
+  AddDefinition(Definition);
+end;
+
+procedure TGocciaMemberCollection.AddSymbolAlias(const ASymbol: TGocciaValue;
+  const ATargetName: string; const AFlags: TPropertyFlags;
+  const AMemberFlags: TGocciaMemberFlags);
+var
+  Definition: TGocciaMemberDefinition;
+begin
+  Definition := DefineSymbolAlias(ASymbol, ATargetName, AFlags);
+  Definition.MemberFlags := Definition.MemberFlags + AMemberFlags;
+  AddDefinition(Definition);
+end;
+
 procedure TGocciaMemberCollection.AddPublishedGetter(
   const AInstanceClass: TClass;
   const APascalPropertyName, AExposedName: string;
@@ -662,6 +719,20 @@ begin
         raise EGocciaObjectModelError.CreateFmt(
           'Invalid %s "%s": symbol members require a symbol value',
           [KindToString(ADefinition.Kind), ADefinition.ExposedName]);
+    gmkPropertyAlias:
+      if ADefinition.AliasTargetName = '' then
+        raise EGocciaObjectModelError.CreateFmt(
+          'Invalid %s: alias target name must not be empty',
+          [KindToString(ADefinition.Kind)]);
+    gmkSymbolAlias:
+    begin
+      if not Assigned(ADefinition.Symbol) then
+        raise EGocciaObjectModelError.Create(
+          'Invalid symbol alias: symbol value must not be nil');
+      if ADefinition.AliasTargetName = '' then
+        raise EGocciaObjectModelError.Create(
+          'Invalid symbol alias: alias target name must not be empty');
+    end;
   end;
 end;
 
@@ -671,6 +742,8 @@ var
   I: Integer;
   Def: TGocciaMemberDefinition;
   GetterFn, SetterFn: TGocciaNativeFunctionValue;
+  AliasDescriptor: TGocciaPropertyDescriptor;
+  AliasValue: TGocciaValue;
   TargetObject: TGocciaObjectValue;
 begin
   if not (ATarget is TGocciaObjectValue) then
@@ -733,6 +806,24 @@ begin
       gmkDataProperty:
         TargetObject.DefineProperty(Def.ExposedName,
           TGocciaPropertyDescriptorData.Create(Def.DataValue, Def.PropertyFlags));
+      gmkPropertyAlias, gmkSymbolAlias:
+      begin
+        AliasDescriptor := TargetObject.GetOwnPropertyDescriptor(
+          Def.AliasTargetName);
+        if not (AliasDescriptor is TGocciaPropertyDescriptorData) then
+          raise EGocciaObjectModelError.CreateFmt(
+            'Cannot register %s: target "%s" is not an existing data property',
+            [KindToString(Def.Kind), Def.AliasTargetName]);
+        AliasValue := TGocciaPropertyDescriptorData(AliasDescriptor).Value;
+        if Def.Kind = gmkPropertyAlias then
+          TargetObject.DefineProperty(Def.ExposedName,
+            TGocciaPropertyDescriptorData.Create(AliasValue,
+              Def.PropertyFlags))
+        else
+          TargetObject.DefineSymbolProperty(TGocciaSymbolValue(Def.Symbol),
+            TGocciaPropertyDescriptorData.Create(AliasValue,
+              Def.PropertyFlags));
+      end;
     end;
   end;
 end;

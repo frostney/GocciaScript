@@ -10,6 +10,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.ExecutionContext,
   Goccia.Realm,
+  Goccia.SharedPrototype,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.Shape,
   TestingPascalLibrary,
@@ -63,6 +64,7 @@ type
     procedure TestSetOwnedSlotRoundtrip;
     procedure TestSetOwnedSlotReplacesPreviousAndFreesIt;
     procedure TestSetOwnedSlotSameValueIsNoOp;
+    procedure TestSharedPrototypeLookupRejectsMismatchedOwnedSlot;
     procedure TestDestructorFreesOwnedSlots;
     procedure TestDestructorUnpinsSlotObjects;
     procedure TestSlotIdGrowsArrayLazily;
@@ -92,6 +94,8 @@ begin
     TestSetOwnedSlotReplacesPreviousAndFreesIt);
   Test('SetOwnedSlot with the same value is a no-op',
     TestSetOwnedSlotSameValueIsNoOp);
+  Test('shared-prototype lookup rejects a mismatched owned-slot type',
+    TestSharedPrototypeLookupRejectsMismatchedOwnedSlot);
   Test('Destructor frees every owned slot', TestDestructorFreesOwnedSlots);
   Test('Destructor unpins slot objects so the GC can collect them',
     TestDestructorUnpinsSlotObjects);
@@ -267,6 +271,22 @@ begin
     Realm.Free;
   end;
   Expect<Integer>(GOwnedDestructorCount).ToBe(1);
+end;
+
+procedure TTestRealm.TestSharedPrototypeLookupRejectsMismatchedOwnedSlot;
+var
+  Realm: TGocciaRealm;
+  Slot: TGocciaRealmOwnedSlotId;
+begin
+  Slot := RegisterRealmOwnedSlot('test/owned/shared-prototype-mismatch');
+  Realm := TGocciaRealm.Create;
+  try
+    Realm.SetOwnedSlot(Slot, TCountingOwned.Create);
+    Expect<Boolean>(
+      GetSharedPrototypeFromOwnedSlot(Realm, Slot) = nil).ToBe(True);
+  finally
+    Realm.Free;
+  end;
 end;
 
 procedure TTestRealm.TestDestructorFreesOwnedSlots;

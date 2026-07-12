@@ -36,3 +36,20 @@ test("size is 0 after clear", () => {
   map.clear();
   expect(map.size).toBe(0);
 });
+
+test("size is a configurable non-enumerable prototype getter", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(Map.prototype, "size");
+  expect(typeof descriptor.get).toBe("function");
+  expect(descriptor.get.name).toBe("get size");
+  expect(descriptor.get.length).toBe(0);
+  expect(descriptor.set).toBe(undefined);
+  expect(descriptor.enumerable).toBe(false);
+  expect(descriptor.configurable).toBe(true);
+});
+
+test("size getter rejects values without Map data", () => {
+  const getter = Object.getOwnPropertyDescriptor(Map.prototype, "size").get;
+  expect(() => getter.call(Map.prototype)).toThrow(TypeError);
+  expect(() => getter.call(new Set())).toThrow(TypeError);
+  expect(() => getter.call(new WeakMap())).toThrow(TypeError);
+});

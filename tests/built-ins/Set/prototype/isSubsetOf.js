@@ -36,6 +36,27 @@ describe("Set.prototype.isSubsetOf", () => {
     expect(new Set([1, 4]).isSubsetOf(setLike)).toBe(false);
   });
 
+  test("visits members appended by the set-like has callback", () => {
+    const receiver = new Set([1, 2, 3]);
+    const additions = [4, 5];
+    const seen = [];
+    const setLike = {
+      size: 5,
+      has(value) {
+        seen.push(value);
+        receiver.delete(value);
+        if (additions.length > 0) receiver.add(additions.shift());
+        return true;
+      },
+      keys() {
+        return [].values();
+      },
+    };
+    expect(receiver.isSubsetOf(setLike)).toBe(true);
+    expect(seen).toEqual([1, 2, 3, 4, 5]);
+    expect(receiver.size).toBe(0);
+  });
+
   test("throws TypeError when called on non-Set", () => {
     const isSubsetOf = Set.prototype.isSubsetOf;
     expect(() => isSubsetOf.call(Set.prototype, new Set())).toThrow(TypeError);
