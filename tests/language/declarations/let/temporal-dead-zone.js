@@ -102,6 +102,35 @@ describe("Temporal Dead Zone", () => {
     }
   });
 
+  test("direct assignment before a function-body declaration throws after its rhs", () => {
+    let rhsEvaluated = false;
+
+    expect(() => {
+      assignedBeforeDeclaration = (rhsEvaluated = true, 1);
+      let assignedBeforeDeclaration;
+    }).toThrow(ReferenceError);
+    expect(rhsEvaluated).toBe(true);
+  });
+
+  test("logical assignment reads an uninitialized binding before short-circuiting", () => {
+    expect(() => {
+      nullishBeforeDeclaration ??= 1;
+      let nullishBeforeDeclaration;
+    }).toThrow(ReferenceError);
+
+    expect(() => {
+      truthyBeforeDeclaration &&= 1;
+      let truthyBeforeDeclaration;
+    }).toThrow(ReferenceError);
+  });
+
+  test("destructuring assignment rejects an uninitialized binding", () => {
+    expect(() => {
+      [destructuredBeforeDeclaration] = [1];
+      let destructuredBeforeDeclaration;
+    }).toThrow(ReferenceError);
+  });
+
   test("captured const read before declaration throws", () => {
     {
       const readBeforeDeclaration = () => capturedConst;

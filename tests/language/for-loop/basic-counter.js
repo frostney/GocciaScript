@@ -53,3 +53,29 @@ test("regex in initializer remains a regex literal", () => {
     expect(pattern.test(")")).toBe(true);
   }
 });
+
+test("nested function bodies restore the in operator in initializers", () => {
+  let arrow;
+  let holder;
+
+  for (arrow = () => { return "x" in { x: true }; }; false;) {}
+  for (holder = { check() { return "x" in { x: true }; } }; false;) {}
+
+  expect(arrow()).toBe(true);
+  expect(holder.check()).toBe(true);
+});
+
+test("nested function parameters restore the in operator in initializers", () => {
+  let arrow;
+  let holder;
+
+  for (arrow = (value = "x" in { x: true }) => value; false;) {}
+  for (holder = {
+    check(value = "x" in { x: true }) {
+      return value;
+    },
+  }; false;) {}
+
+  expect(arrow()).toBe(true);
+  expect(holder.check()).toBe(true);
+});
