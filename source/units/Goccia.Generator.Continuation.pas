@@ -386,7 +386,10 @@ begin
       if not Assigned(Value) then
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
       try
-        UnwrappedValue := AwaitValue(Value);
+        // AsyncFromSyncIteratorContinuation first applies
+        // PromiseResolve(%Promise%, value).  This constructor observation is
+        // observable and may abruptly complete before awaiting the wrapper.
+        UnwrappedValue := AwaitValue(PromiseResolveIntrinsic(Value));
       except
         AcquireExceptionObject;
         if ACloseOnRejection and not Done then
@@ -489,7 +492,10 @@ begin
   try
     if Assigned(FIterator) then
     begin
-      IteratorResult := FIterator.ReturnValue(Value);
+      if AArgs.Length > 0 then
+        IteratorResult := FIterator.ReturnValue(Value)
+      else
+        IteratorResult := FIterator.ReturnValueWithoutValue;
       DoneValue := IteratorResult.GetProperty(PROP_DONE);
       if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
         FIterator := nil;

@@ -59,4 +59,19 @@ describe("addition with ToPrimitive", () => {
     };
     expect(() => { obj + 1; }).toThrow(TypeError);
   });
+
+  test("left primitive remains alive while the right operand triggers GC", () => {
+    const left = {
+      [Symbol.toPrimitive]() {
+        return String.fromCharCode(108, 101, 102, 116);
+      },
+    };
+    const right = {
+      [Symbol.toPrimitive]() {
+        Goccia.gc();
+        return "right";
+      },
+    };
+    expect(left + right).toBe("leftright");
+  });
 });

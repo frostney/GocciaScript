@@ -46,3 +46,12 @@ describe("String.fromCharCode ToUint16 non-finite code units", () => {
     expect(String.fromCharCode(-1e30).charCodeAt(0)).toBe(0);
   });
 });
+
+describe("String.fromCharCode surrogate-pair identity", () => {
+  test("paired code units equal the corresponding supplementary character", () => {
+    const pair = String.fromCharCode(0xD83D, 0xDE00);
+    expect(pair).toBe("😀");
+    expect(new Map([["😀", 1]]).get(pair)).toBe(1);
+    expect({ ["😀"]: 2 }[pair]).toBe(2);
+  });
+});

@@ -1094,10 +1094,17 @@ begin
       end;
     end;
     if not LexicalBinding.Writable then
+    begin
+      // ES2026 SetMutableBinding with S = false silently ignores assignment
+      // to the non-writable global value properties (Infinity, NaN, and
+      // undefined). User-declared const bindings remain errors in every mode.
+      if ANonStrictMode and LexicalBinding.BuiltIn then
+        Exit(True);
       raise TGocciaTypeError.Create(
         Format(SErrorAssignToConstant, [AName]),
         ALine, AColumn, '', nil,
         SSuggestUseLetNotConst);
+    end;
     if StrictActive and (LexicalBinding.TypeHint <> sltUntyped) then
       EnforceStrictType(AValue, LexicalBinding.TypeHint);
     LexicalBinding.Value := AValue;

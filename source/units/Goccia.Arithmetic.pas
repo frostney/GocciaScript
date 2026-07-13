@@ -47,6 +47,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
@@ -108,7 +109,14 @@ procedure ToPrimitiveOperands(const ALeft, ARight: TGocciaValue;
   out APrimitiveLeft, APrimitiveRight: TGocciaValue); inline;
 begin
   APrimitiveLeft := ToPrimitive(ALeft);
-  APrimitiveRight := ToPrimitive(ARight);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(APrimitiveLeft);
+  try
+    APrimitiveRight := ToPrimitive(ARight);
+  finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(APrimitiveLeft);
+  end;
 end;
 
 function ToNumericOperand(const AValue: TGocciaValue): TGocciaValue; inline;
@@ -628,8 +636,8 @@ begin
 
   if (ALeft is TGocciaStringLiteralValue) and
      (ARight is TGocciaStringLiteralValue) then
-    Exit(TGocciaStringLiteralValue(ALeft).Value =
-      TGocciaStringLiteralValue(ARight).Value);
+    Exit(UTF16StringsEqual(TGocciaStringLiteralValue(ALeft).Value,
+      TGocciaStringLiteralValue(ARight).Value));
 
   if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue(ALeft).Value.Equal(

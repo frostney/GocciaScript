@@ -77,6 +77,7 @@ implementation
 
 uses
   BigInteger,
+  TextSemantics,
 
   Goccia.Arithmetic,
   Goccia.Values.BigIntValue;
@@ -118,16 +119,10 @@ begin
     Exit(Cardinal(Bits xor (Bits shr 32)));
   end;
 
-  // Strings: DJB2 over the content, mirroring OrderedStringMap so string keys
-  // hash identically to the engine's other string-keyed maps.
+  // Strings: hash the ECMAScript UTF-16 value, not its internal UTF-8/WTF-8
+  // byte representation. This mirrors OrderedStringMap and SameValueZero.
   if AKey is TGocciaStringLiteralValue then
-  begin
-    S := TGocciaStringLiteralValue(AKey).Value;
-    Result := 5381;
-    for I := 1 to Length(S) do
-      Result := Result * 33 + Ord(S[I]);
-    Exit;
-  end;
+    Exit(UTF16StringHash(TGocciaStringLiteralValue(AKey).Value));
 
   if AKey is TGocciaBooleanLiteralValue then
   begin

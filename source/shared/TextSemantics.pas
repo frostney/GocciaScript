@@ -50,6 +50,8 @@ function UTF8CodePointAt(const AText: string; const AIndex: Integer): string;
 function UTF16CodeUnitToUTF8(const ACodeUnit: Cardinal): string;
 function UTF16CodeUnitLength(const AText: string): Integer;
 function UTF16CodeUnitAt(const AText: string; const AIndex: Integer): string;
+function UTF16StringsEqual(const ALeft, ARight: string): Boolean;
+function UTF16StringHash(const AText: string): Cardinal;
 function TryUTF16CodePointValueAt(const AText: string; const AIndex: Integer;
   out ACodePoint: Cardinal): Boolean;
 function UTF16Substring(const AText: string; const AStart,
@@ -666,6 +668,95 @@ begin
     GAsciiMemoNext := 0;
   end;
 end;
+
+function ReadNextUTF16CodeUnit(const AText: string; var AByteIndex: Integer;
+  var APendingLowSurrogate: Integer; out ACodeUnit: Cardinal): Boolean;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  Supplementary: Cardinal;
+begin
+  if APendingLowSurrogate >= 0 then
+  begin
+    ACodeUnit := Cardinal(APendingLowSurrogate);
+    APendingLowSurrogate := -1;
+    Exit(True);
+  end;
+
+  if AByteIndex > Length(AText) then
+    Exit(False);
+
+  if TryReadUTF8CodePointAllowSurrogates(AText, AByteIndex, CodePoint,
+     ByteLength) then
+  begin
+    Inc(AByteIndex, ByteLength);
+    if CodePoint <= $FFFF then
+    begin
+      ACodeUnit := CodePoint;
+      Exit(True);
+    end;
+
+    Supplementary := CodePoint - $10000;
+    ACodeUnit := $D800 + (Supplementary shr 10);
+    APendingLowSurrogate := Integer($DC00 + (Supplementary and $3FF));
+    Exit(True);
+  end;
+
+  ACodeUnit := Ord(AText[AByteIndex]);
+  Inc(AByteIndex);
+  Result := True;
+end;
+
+function UTF16StringsEqual(const ALeft, ARight: string): Boolean;
+var
+  LeftByteIndex, RightByteIndex: Integer;
+  LeftPendingLow, RightPendingLow: Integer;
+  LeftUnit, RightUnit: Cardinal;
+  HasLeft, HasRight: Boolean;
+begin
+  if ALeft = ARight then
+    Exit(True);
+  if StringIsAllAscii(ALeft) or StringIsAllAscii(ARight) then
+    Exit(False);
+
+  LeftByteIndex := 1;
+  RightByteIndex := 1;
+  LeftPendingLow := -1;
+  RightPendingLow := -1;
+  repeat
+    HasLeft := ReadNextUTF16CodeUnit(ALeft, LeftByteIndex, LeftPendingLow,
+      LeftUnit);
+    HasRight := ReadNextUTF16CodeUnit(ARight, RightByteIndex,
+      RightPendingLow, RightUnit);
+    if HasLeft <> HasRight then
+      Exit(False);
+    if not HasLeft then
+      Exit(True);
+    if LeftUnit <> RightUnit then
+      Exit(False);
+  until False;
+end;
+
+{$PUSH}{$R-}{$Q-}
+function UTF16StringHash(const AText: string): Cardinal;
+var
+  ByteIndex, I, PendingLow: Integer;
+  CodeUnit: Cardinal;
+begin
+  Result := 5381;
+  if StringIsAllAscii(AText) then
+  begin
+    for I := 1 to Length(AText) do
+      Result := Result * 33 + Ord(AText[I]);
+    Exit;
+  end;
+
+  ByteIndex := 1;
+  PendingLow := -1;
+  while ReadNextUTF16CodeUnit(AText, ByteIndex, PendingLow, CodeUnit) do
+    Result := Result * 33 + CodeUnit;
+end;
+{$POP}
 
 function UTF16CodeUnitLength(const AText: string): Integer;
 var

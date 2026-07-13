@@ -280,7 +280,6 @@ type
       const AExclusionKeys: TGocciaArrayValue): TGocciaObjectValue;
     function ForInEntriesArray(const AValue: TGocciaValue): TGocciaArrayValue;
     function TryForInEntryKey(const AEntry: TGocciaValue; out AKey: string): Boolean;
-    function PromiseConstructorIntrinsic: TGocciaValue;
     function PromiseResolveIntrinsic(const AValue: TGocciaValue): TGocciaPromiseValue;
     function GetIteratorValue(const AIterable: TGocciaValue;
       const ATryAsync: Boolean): TGocciaValue;
@@ -3635,7 +3634,16 @@ var
   RejectFunction: TGocciaNativeFunctionValue;
   ValueWrapper: TGocciaPromiseValue;
 begin
-  ValueWrapper := TGocciaPromiseValue(PromiseResolve(AValue));
+  try
+    ValueWrapper := TGocciaPromiseValue(PromiseResolve(AValue));
+  except
+    // ES2026 §27.1.5.4 step 6: an abrupt PromiseResolve closes a
+    // non-complete sync iterator when this continuation owns rejection
+    // cleanup.  The caller converts the preserved exception into rejection.
+    if ACloseOnRejection and not ADone then
+      CloseIteratorAfterRejectedValue;
+    raise;
+  end;
 
   FulfillHandler := TGocciaVMAsyncFromSyncFulfillValue.Create(ADone);
   FulfillFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
@@ -3840,7 +3848,11 @@ begin
 
     if FIteratorValue is TGocciaIteratorValue then
     begin
-      IteratorResult := TGocciaIteratorValue(FIteratorValue).ReturnValue(Value);
+      if Assigned(AArgs) and (AArgs.Length > 0) then
+        IteratorResult := TGocciaIteratorValue(FIteratorValue).ReturnValue(Value)
+      else
+        IteratorResult := TGocciaIteratorValue(FIteratorValue)
+          .ReturnValueWithoutValue;
       DoneValue := IteratorResult.GetProperty(PROP_DONE);
       Done := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
       Value := IteratorResult.GetProperty(PROP_VALUE);
@@ -3862,7 +3874,10 @@ begin
     if not ReturnMethod.IsCallable then
       ThrowTypeError('Iterator return is not callable');
 
-    CallArgs := TGocciaArgumentsCollection.Create([Value]);
+    if Assigned(AArgs) and (AArgs.Length > 0) then
+      CallArgs := TGocciaArgumentsCollection.Create([Value])
+    else
+      CallArgs := TGocciaArgumentsCollection.Create;
     try
       IteratorResult := InvokeCallable(ReturnMethod, CallArgs, FIteratorValue);
     finally
@@ -8913,46 +8928,10 @@ begin
   Result := Assigned(Descriptor) and Descriptor.Enumerable;
 end;
 
-function TGocciaVM.PromiseConstructorIntrinsic: TGocciaValue;
-begin
-  Result := nil;
-  if Assigned(FGlobalScope) and FGlobalScope.Contains(CONSTRUCTOR_PROMISE) then
-    Result := FGlobalScope.GetValue(CONSTRUCTOR_PROMISE);
-  if not Assigned(Result) then
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
 function TGocciaVM.PromiseResolveIntrinsic(
   const AValue: TGocciaValue): TGocciaPromiseValue;
-var
-  ConstructorValue, ValueConstructor: TGocciaValue;
-  IsRooted: Boolean;
 begin
-  ConstructorValue := PromiseConstructorIntrinsic;
-  if AValue is TGocciaPromiseValue then
-  begin
-    ValueConstructor := TGocciaPromiseValue(AValue).GetProperty(PROP_CONSTRUCTOR);
-    if IsSameValue(ValueConstructor, ConstructorValue) then
-      Exit(TGocciaPromiseValue(AValue));
-  end;
-
-  Result := TGocciaPromiseValue.Create;
-  IsRooted := Assigned(TGarbageCollector.Instance);
-  if IsRooted then
-    TGarbageCollector.Instance.AddTempRoot(Result);
-  try
-    Result.Resolve(AValue);
-  except
-    if IsRooted then
-    begin
-      TGarbageCollector.Instance.RemoveTempRoot(Result);
-      IsRooted := False;
-    end;
-    Result.Free;
-    raise;
-  end;
-  if IsRooted then
-    TGarbageCollector.Instance.RemoveTempRoot(Result);
+  Result := Goccia.Values.PromiseValue.PromiseResolveIntrinsic(AValue);
 end;
 
 function TGocciaVM.GetIteratorValue(const AIterable: TGocciaValue;

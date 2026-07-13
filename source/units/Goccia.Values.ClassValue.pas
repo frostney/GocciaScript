@@ -224,11 +224,17 @@ type
 
   TGocciaWeakRefClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function SupportsRealmIntrinsicPrototypeFallback: Boolean; override;
+    function IntrinsicPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; override;
     function GetClassLength: Integer; override;
   end;
 
   TGocciaFinalizationRegistryClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function SupportsRealmIntrinsicPrototypeFallback: Boolean; override;
+    function IntrinsicPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; override;
     function GetClassLength: Integer; override;
   end;
 
@@ -2320,6 +2326,17 @@ begin
   Result := TGocciaWeakRefValue.Create;
 end;
 
+function TGocciaWeakRefClassValue.IntrinsicPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  Result := TGocciaWeakRefValue.GetSharedPrototypeForRealm(ARealm);
+end;
+
+function TGocciaWeakRefClassValue.SupportsRealmIntrinsicPrototypeFallback: Boolean;
+begin
+  Result := True;
+end;
+
 function TGocciaWeakRefClassValue.GetClassLength: Integer;
 begin
   Result := 1;
@@ -2330,6 +2347,17 @@ end;
 function TGocciaFinalizationRegistryClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 begin
   Result := TGocciaFinalizationRegistryValue.Create;
+end;
+
+function TGocciaFinalizationRegistryClassValue.IntrinsicPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  Result := TGocciaFinalizationRegistryValue.GetSharedPrototypeForRealm(ARealm);
+end;
+
+function TGocciaFinalizationRegistryClassValue.SupportsRealmIntrinsicPrototypeFallback: Boolean;
+begin
+  Result := True;
 end;
 
 function TGocciaFinalizationRegistryClassValue.GetClassLength: Integer;
