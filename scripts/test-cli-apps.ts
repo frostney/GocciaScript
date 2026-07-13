@@ -3233,6 +3233,65 @@ console.log("SandboxRunner: inline seeds, fs, $, runScript, and diffs...");
   }
 }
 
+console.log("SandboxRunner: fs errors are Node-shaped in every execution mode...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import fs from "fs";',
+            'const printError = (label, error) => console.log([',
+            '  label,',
+            '  error instanceof Error,',
+            '  Error.isError(error),',
+            '  error.name,',
+            '  error.code,',
+            '  typeof error.errno === "number" && error.errno < 0,',
+            '  error.syscall,',
+            '  error.path,',
+            '  typeof error.dest,',
+            '  error.message,',
+            '].join("|"));',
+            'try { fs.readFileSync("/missing.txt", "utf8"); }',
+            'catch (error) { printError("sync", error); }',
+            'try { await fs.promises.readFile("/missing.txt", "utf8"); }',
+            'catch (error) { printError("promise", error); }',
+            'try { fs.renameSync("/missing.txt", "/destination.txt"); }',
+            'catch (error) { printError("rename", error); }',
+          ].join("\n"),
+        },
+      ],
+    }));
+
+    const expected = [
+      "sync|true|true|Error|ENOENT|true|readFile|/missing.txt|undefined|ENOENT: no such file or directory, readFile '/missing.txt'",
+      "promise|true|true|Error|ENOENT|true|readFile|/missing.txt|undefined|ENOENT: no such file or directory, readFile '/missing.txt'",
+      "rename|true|true|Error|ENOENT|true|rename|/missing.txt|string|ENOENT: no such file or directory, rename '/missing.txt' -> '/destination.txt'",
+    ];
+    for (const [label, extraArgs] of [
+      ["interpreter", []],
+      ["bytecode", ["--mode=bytecode"]],
+    ] as const) {
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+      if (proc.exitCode !== 0)
+        throw new Error(`SandboxRunner ${label} fs error run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const actual = stdout.split("\n");
+      if (JSON.stringify(actual) !== JSON.stringify(expected))
+        throw new Error(`SandboxRunner ${label} fs errors should be Node-shaped, got: ${stdout}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("SandboxRunner: aliases and import maps resolve sandbox module paths...");
 {
   const tmp = makeTmp();

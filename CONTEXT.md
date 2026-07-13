@@ -38,6 +38,10 @@ _Avoid_: Runtime, built-in surface, host surface.
 An explicitly imported snapshot used to initialise a sandbox-visible filesystem. Top-level sandbox seeds copy from host paths or inline seed config entries; nested child sandbox seeds copy from the parent virtual filesystem or inline child entries. A seed baseline is not a live mount and does not make the source path ambiently available to running source.
 _Avoid_: Mount, host filesystem access.
 
+**Sandbox filesystem error**:
+A JavaScript `Error` reported by a sandbox runtime extension when a virtual filesystem operation fails. It carries a stable error code and operation/path context plus a target-appropriate numeric errno. It is shared by synchronous and promise APIs, and by callback APIs when installed.
+_Avoid_: Raw virtual filesystem exception, host filesystem error.
+
 **WinterTC compatibility**:
 The open product direction of aligning selected runtime globals and host behavior with web-interoperable server runtime standards, especially WinterTC's Minimum Common Web API. It is distinct from Node.js host compatibility, CommonJS support, and `node:` built-ins.
 _Avoid_: WHATWG API compatibility, browser host environment, Node.js host compatibility.
