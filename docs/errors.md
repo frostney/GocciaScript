@@ -161,6 +161,7 @@ than claiming that the sandbox performed an operating-system call.
 | Directory is not empty | `ENOTEMPTY` | `directory not empty` |
 | File or directory is busy | `EBUSY` | `resource busy or locked` |
 | Sandbox byte quota exceeded | `ENOSPC` | `no space left on device` |
+| Unexpected unclassified filesystem failure (internal fallback) | `EIO` | `i/o error` |
 
 Messages follow Node's system-error wording:
 
