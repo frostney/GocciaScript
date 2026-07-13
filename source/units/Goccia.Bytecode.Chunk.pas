@@ -96,11 +96,17 @@ type
   );
 
   // Runtime-only inline cache for OP_GET_GLOBAL sites, indexed by the
-  // instruction's name-constant index.  Scope is a weak pointer compared for
-  // identity only (never dereferenced); Version/EntryIndex validate against
-  // the scope's lexical binding map.  Not serialised to .gbc.
+  // instruction's name-constant index.  Scope/ObjectValue are weak pointers
+  // compared for identity only (never dereferenced).  ObjectValue = nil means
+  // Version/EntryIndex validate against the scope's lexical binding map;
+  // otherwise they validate against that ordinary global object's property
+  // map.  Not serialised to .gbc.
   TGocciaGlobalReadCacheEntry = record
     Scope: Pointer;
+    ObjectValue: Pointer;
+    ObjectBindingKind: Byte;
+    BindingVersion: Cardinal;
+    BindingEntryIndex: Integer;
     Version: Cardinal;
     EntryIndex: Integer;
   end;

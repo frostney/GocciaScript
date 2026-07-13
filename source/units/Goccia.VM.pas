@@ -1605,6 +1605,65 @@ begin
     TGocciaPropertyDescriptorData(Descriptor).Value := AValue;
 end;
 
+function VMTryGetCachedGlobalOwnDataProperty(
+  const AObject: TGocciaObjectValue; const AEntryIndex: Integer;
+  const AVersion: Cardinal; out AValue: TGocciaValue): Boolean; inline;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  // The exact object/descriptor checks exclude every exotic lookup override
+  // and lazy data descriptors.  EntryVersion changes when deletion, clear, or
+  // compaction could invalidate an entry index; value updates and unrelated
+  // additions leave the cached index valid and the live descriptor is re-read.
+  Result := Assigned(AObject) and
+    (AObject.ClassType = TGocciaObjectValue) and
+    (AObject.Properties.EntryVersion = AVersion) and
+    AObject.Properties.TryGetValueAtEntry(AEntryIndex, Descriptor) and
+    (Descriptor.ClassType = TGocciaPropertyDescriptorData);
+  if Result then
+    AValue := TGocciaPropertyDescriptorData(Descriptor).Value
+  else
+    AValue := nil;
+end;
+
+function VMTryGetGlobalOwnDataPropertyFillCache(
+  const AObject: TGocciaObjectValue; const AName: string;
+  out AEntryIndex: Integer; out AVersion: Cardinal): Boolean; inline;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  AEntryIndex := -1;
+  AVersion := 0;
+  Result := Assigned(AObject) and
+    (AObject.ClassType = TGocciaObjectValue) and
+    AObject.Properties.TryGetEntryIndex(AName, AEntryIndex) and
+    AObject.Properties.TryGetValueAtEntry(AEntryIndex, Descriptor) and
+    (Descriptor.ClassType = TGocciaPropertyDescriptorData);
+  if Result then
+    AVersion := AObject.Properties.EntryVersion;
+end;
+
+const
+  GLOBAL_READ_OBJECT_BINDING_NONE = 0;
+  GLOBAL_READ_OBJECT_BINDING_VAR = 1;
+  GLOBAL_READ_OBJECT_BINDING_BUILTIN = 2;
+
+function VMGlobalObjectBindingCacheStillPrecedes(
+  const AScope: TGocciaScope; const ACache: PGocciaGlobalReadCacheEntry): Boolean; inline;
+begin
+  case ACache^.ObjectBindingKind of
+    GLOBAL_READ_OBJECT_BINDING_VAR:
+      // Registered global var names cannot legally gain a same-name global
+      // lexical declaration; global declaration instantiation rejects it.
+      Result := True;
+    GLOBAL_READ_OBJECT_BINDING_BUILTIN:
+      Result := AScope.IsGlobalBuiltInObjectBindingAt(
+        ACache^.BindingEntryIndex, ACache^.BindingVersion);
+  else
+    Result := False;
+  end;
+end;
+
 function VMValueToRegisterFast(const AValue: TGocciaValue): TGocciaRegister; inline;
 var
   NumberValue: Double;
@@ -13192,6 +13251,8 @@ var
   I: Integer;
   GlobalName: string;
   GlobalBindingValue: TGocciaValue;
+  GlobalBindingEntryIndex: Integer;
+  GlobalBindingVersion: Cardinal;
   GlobalReadCache: PGocciaGlobalReadCacheEntry;
   DebugLine, DebugColumn: Integer;
   PropertyReadCache: PGocciaPropertyReadCacheEntry;
@@ -16061,28 +16122,72 @@ begin
         end
         else
         begin
-          // Hot shape: per-site inline cache keyed by the name-constant
-          // index, validated against (scope identity, binding-map version).
-          // A nil slot (out-of-range constant index in corrupt bytecode)
-          // degrades to the uncached single-lookup read.  A miss leaves
-          // Scope untouched: EntryIndex = -1 alone guarantees the next
-          // validation fails.
+          // Per-site inline cache keyed by the name-constant index.  It serves
+          // either an own lexical-map entry or an ordinary global object's own
+          // plain-data entry.  Both modes re-read the live value by a
+          // version-validated entry index; exotic objects, accessors, lazy
+          // descriptors, and dynamic scopes remain on the named lookup path.
           GlobalReadCache := Template.GlobalReadCacheSlot(DecodeBx(Instruction));
           if Assigned(GlobalReadCache) and
              (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
+             (GlobalReadCache^.ObjectValue = nil) and
              FGlobalScope.TryGetLexicalValueAt(GlobalReadCache^.EntryIndex,
                GlobalReadCache^.Version, GlobalBindingValue) then
+            FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
+          else if Assigned(GlobalReadCache) and
+             (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
+             (FGlobalScope.ThisValue is TGocciaObjectValue) and
+             (GlobalReadCache^.ObjectValue =
+               Pointer(FGlobalScope.ThisValue)) and
+             VMGlobalObjectBindingCacheStillPrecedes(FGlobalScope,
+               GlobalReadCache) and
+             VMTryGetCachedGlobalOwnDataProperty(
+               TGocciaObjectValue(FGlobalScope.ThisValue),
+               GlobalReadCache^.EntryIndex, GlobalReadCache^.Version,
+               GlobalBindingValue) then
             FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
           else
           begin
             GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
             if Assigned(GlobalReadCache) then
             begin
+              GlobalReadCache^.Scope := nil;
+              GlobalReadCache^.ObjectValue := nil;
+              GlobalReadCache^.ObjectBindingKind :=
+                GLOBAL_READ_OBJECT_BINDING_NONE;
               if FGlobalScope.TryGetBindingValueFillCache(GlobalName,
                 GlobalReadCache^.EntryIndex, GlobalReadCache^.Version,
                 GlobalBindingValue) then
               begin
-                if GlobalReadCache^.EntryIndex >= 0 then
+                GlobalBindingEntryIndex := GlobalReadCache^.EntryIndex;
+                GlobalBindingVersion := GlobalReadCache^.Version;
+                if (FGlobalScope.ThisValue is TGocciaObjectValue) and
+                   ((not FGlobalScope.ContainsOwnLexicalBinding(GlobalName) and
+                     FGlobalScope.ContainsOwnVarBinding(GlobalName)) or
+                    (FGlobalScope.IsBuiltInBinding(GlobalName) and
+                     FGlobalScope.IsGlobalObjectBackedBinding(GlobalName))) and
+                   VMTryGetGlobalOwnDataPropertyFillCache(
+                     TGocciaObjectValue(FGlobalScope.ThisValue), GlobalName,
+                     GlobalReadCache^.EntryIndex,
+                     GlobalReadCache^.Version) then
+                begin
+                  GlobalReadCache^.Scope := Pointer(FGlobalScope);
+                  GlobalReadCache^.ObjectValue :=
+                    Pointer(FGlobalScope.ThisValue);
+                  if FGlobalScope.ContainsOwnVarBinding(GlobalName) then
+                    GlobalReadCache^.ObjectBindingKind :=
+                      GLOBAL_READ_OBJECT_BINDING_VAR
+                  else
+                  begin
+                    GlobalReadCache^.ObjectBindingKind :=
+                      GLOBAL_READ_OBJECT_BINDING_BUILTIN;
+                    GlobalReadCache^.BindingEntryIndex :=
+                      GlobalBindingEntryIndex;
+                    GlobalReadCache^.BindingVersion :=
+                      GlobalBindingVersion;
+                  end;
+                end
+                else if GlobalReadCache^.EntryIndex >= 0 then
                   GlobalReadCache^.Scope := Pointer(FGlobalScope);
                 FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue);
               end
