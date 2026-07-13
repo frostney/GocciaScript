@@ -760,34 +760,8 @@ Shell `goccia` supports `--sandbox`, repeatable `--seed <from[=to]>` / `--seed=<
 
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 
-Foreign Function Interface for calling native shared libraries. Only available when `TGocciaFFIRuntimeExtension` is installed (CLI tools do this for `--unsafe-ffi` or `"unsafe-ffi": true` in config).
-
-**FFI global object:**
-
-| Method/Property | Description |
-|--------|-------------|
-| `FFI.open(path)` | Open a dynamic library, returns an `FFILibrary` |
-| `FFI.nullptr` | Singleton null pointer value |
-| `FFI.suffix` | Platform library suffix (`.dylib`, `.so`, `.dll`) |
-
-**FFILibrary methods:**
-
-| Method/Property | Description |
-|--------|-------------|
-| `library.bind(funcName, signature)` | Bind a native function. `signature` is `{ args: ['i32', ...], returns: 'i32' }`. Returns a callable function. |
-| `library.symbol(name)` | Get raw pointer to a named symbol |
-| `library.close()` | Unload the library |
-| `library.path` | Full path to the loaded library |
-| `library.closed` | Whether the library has been closed |
-
-**FFIPointer properties:**
-
-| Property | Description |
-|----------|-------------|
-| `ptr.address` | Numeric address |
-| `ptr.isNull` | Whether pointer is null |
-
-**Supported FFI types:** `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `pointer`, `cstring`, `bool`, `void` (return only). `i64`/`u64` are not available on i386. Max 8 arguments per function. Pointer arguments accept `FFIPointer`, `ArrayBuffer`, `SharedArrayBuffer`, `TypedArray`, or `null`.
+See [FFI Built-ins](built-ins-ffi.md) for the complete native-library,
+aggregate type, callback, lifetime, and safety reference.
 
 ### Test Assertions (`Goccia.Builtins.TestingLibrary.pas`)
 

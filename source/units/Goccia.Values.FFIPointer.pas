@@ -10,6 +10,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
+  Goccia.FFI.LibraryGuard,
   Goccia.ObjectModel,
   Goccia.SharedPrototype,
   Goccia.Values.ObjectValue,
@@ -19,13 +20,19 @@ type
   TGocciaFFIPointerValue = class(TGocciaObjectValue)
   private
     FAddress: Pointer;
+    FLibraryGuard: TGocciaFFILibraryGuard;
 
+    constructor CreatePrototypeHost;
+    function GetAddress: Pointer;
+    procedure EnsureOpen;
     procedure InitializePrototype;
   published
     function IsNullGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function AddressGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
-    constructor Create(const AAddress: Pointer);
+    constructor Create(const AAddress: Pointer;
+      const ALibraryGuard: TGocciaFFILibraryGuard = nil);
+    destructor Destroy; override;
 
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
@@ -35,7 +42,7 @@ type
     class function NullPointer: TGocciaFFIPointerValue;
     class procedure ExposePrototype(const ATarget: TGocciaObjectValue);
 
-    property Address: Pointer read FAddress;
+    property Address: Pointer read GetAddress;
   end;
 
 implementation
@@ -66,7 +73,8 @@ end;
 const
   FFI_POINTER_TAG = 'FFIPointer';
 
-constructor TGocciaFFIPointerValue.Create(const AAddress: Pointer);
+constructor TGocciaFFIPointerValue.Create(const AAddress: Pointer;
+  const ALibraryGuard: TGocciaFFILibraryGuard);
 var
   Shared: TGocciaSharedPrototype;
 begin
@@ -76,23 +84,56 @@ begin
   Shared := GetFFIPointerShared;
   if Assigned(Shared) then
     FPrototype := Shared.Prototype;
+  if Assigned(ALibraryGuard) then
+  begin
+    ALibraryGuard.RetainDependent;
+    FLibraryGuard := ALibraryGuard;
+  end;
+end;
+
+constructor TGocciaFFIPointerValue.CreatePrototypeHost;
+begin
+  inherited Create;
+end;
+
+destructor TGocciaFFIPointerValue.Destroy;
+begin
+  if Assigned(FLibraryGuard) then
+    FLibraryGuard.ReleaseDependent;
+  inherited;
+end;
+
+procedure TGocciaFFIPointerValue.EnsureOpen;
+begin
+  if Assigned(FLibraryGuard) and FLibraryGuard.IsClosed then
+    ThrowTypeError(SErrorFFIPointerLibraryClosed, SSuggestFFIUsage);
+end;
+
+function TGocciaFFIPointerValue.GetAddress: Pointer;
+begin
+  EnsureOpen;
+  Result := FAddress;
 end;
 
 procedure TGocciaFFIPointerValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  MethodHost: TGocciaFFIPointerValue;
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetFFIPointerShared) then Exit;
 
-  Shared := TGocciaSharedPrototype.Create(Self);
+  MethodHost := TGocciaFFIPointerValue.CreatePrototypeHost;
+  Shared := TGocciaSharedPrototype.Create(MethodHost);
   CurrentRealm.SetOwnedSlot(GFFIPointerSharedSlot, Shared);
   Members := TGocciaMemberCollection.Create;
   try
-    Members.AddAccessor(PROP_IS_NULL, IsNullGetter, nil, [pfConfigurable]);
-    Members.AddAccessor(PROP_FFI_ADDRESS, AddressGetter, nil, [pfConfigurable]);
+    Members.AddAccessor(PROP_IS_NULL, MethodHost.IsNullGetter, nil,
+      [pfConfigurable]);
+    Members.AddAccessor(PROP_FFI_ADDRESS, MethodHost.AddressGetter, nil,
+      [pfConfigurable]);
     Members.AddSymbolDataProperty(
       TGocciaSymbolValue.WellKnownToStringTag,
       TGocciaStringLiteralValue.Create(FFI_POINTER_TAG),
@@ -146,13 +187,13 @@ function TGocciaFFIPointerValue.GetPropertyWithContext(const AName: string; cons
 begin
   if AName = PROP_IS_NULL then
   begin
-    if Assigned(FAddress) then
+    if Assigned(GetAddress) then
       Result := TGocciaBooleanLiteralValue.FalseValue
     else
       Result := TGocciaBooleanLiteralValue.TrueValue;
   end
   else if AName = PROP_FFI_ADDRESS then
-    Result := TGocciaNumberLiteralValue.Create(PtrUInt(FAddress))
+    Result := TGocciaNumberLiteralValue.Create(PtrUInt(GetAddress))
   else
     Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
@@ -174,7 +215,7 @@ function TGocciaFFIPointerValue.IsNullGetter(const AArgs: TGocciaArgumentsCollec
 begin
   if not (AThisValue is TGocciaFFIPointerValue) then
     ThrowTypeError(Format(SErrorFFIPointerRequiresFFIPointer, [PROP_IS_NULL]), SSuggestFFIUsage);
-  if Assigned(TGocciaFFIPointerValue(AThisValue).FAddress) then
+  if Assigned(TGocciaFFIPointerValue(AThisValue).GetAddress) then
     Result := TGocciaBooleanLiteralValue.FalseValue
   else
     Result := TGocciaBooleanLiteralValue.TrueValue;
@@ -185,7 +226,7 @@ begin
   if not (AThisValue is TGocciaFFIPointerValue) then
     ThrowTypeError(Format(SErrorFFIPointerRequiresFFIPointer, [PROP_FFI_ADDRESS]), SSuggestFFIUsage);
   Result := TGocciaNumberLiteralValue.Create(
-    PtrUInt(TGocciaFFIPointerValue(AThisValue).FAddress));
+    PtrUInt(TGocciaFFIPointerValue(AThisValue).GetAddress));
 end;
 
 initialization

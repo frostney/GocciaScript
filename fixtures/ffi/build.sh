@@ -9,11 +9,11 @@ SRC="$SCRIPT_DIR/fixture.c"
 
 case "$(uname -s)" in
   Darwin*)
-    cc -shared -o "$SCRIPT_DIR/libfixture.dylib" "$SRC"
+    cc -shared -pthread -o "$SCRIPT_DIR/libfixture.dylib" "$SRC"
     echo "Built $SCRIPT_DIR/libfixture.dylib"
     ;;
   Linux*)
-    cc -shared -fPIC -o "$SCRIPT_DIR/libfixture.so" "$SRC"
+    cc -shared -fPIC -pthread -o "$SCRIPT_DIR/libfixture.so" "$SRC"
     echo "Built $SCRIPT_DIR/libfixture.so"
     ;;
   MINGW*|MSYS*|CYGWIN*)

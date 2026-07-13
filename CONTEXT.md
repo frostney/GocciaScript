@@ -62,6 +62,30 @@ _Avoid_: Runtime global.
 An optional global object, function, constructor, or namespace installed by a runtime extension.
 _Avoid_: Core language built-in, runtime surface when referring to one global.
 
+**FFI callback type**:
+An FFI type descriptor that declares the argument and return types used when native code calls a user-defined function on the callback's owning runtime thread.
+_Avoid_: Bare callback type when the signature is not known.
+
+**Call-scoped FFI callback**:
+A temporary native callback created when a user-defined function is passed to an FFI callback-typed argument. Its lifetime ends when the enclosing native call returns.
+_Avoid_: Persistent callback, retained callback.
+
+**Persistent FFI callback**:
+An explicitly created, closable callback handle whose native entry point remains valid across native calls until the handle is closed.
+_Avoid_: Call-scoped callback, raw callback pointer.
+
+**FFI library guard**:
+A shared lifetime record retained by an open native library and every bound function or symbol derived from it. It separates logical closure from physical library unloading.
+_Avoid_: Raw library handle, owning bound function.
+
+**Logical FFI close**:
+The immediate invalidation of a native library and its derived values; physical unloading occurs later when no FFI library guards remain.
+_Avoid_: Immediate unload, delayed close.
+
+**FFI aggregate type**:
+A compositional FFI type descriptor for a structure, union, or fixed-length array. Aggregate types may nest and may appear in native by-value argument and return positions.
+_Avoid_: Buffer layout when the value participates in native ABI marshalling.
+
 **Shim**:
 A GocciaScript-provided legacy ECMAScript surface layered over a newer native capability so conformance can include old names without making them the recommended path for new code.
 _Avoid_: Polyfill, compatibility flag.
