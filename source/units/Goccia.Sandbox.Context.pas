@@ -38,6 +38,7 @@ type
     Isolated: Boolean;
     Seeds: TGocciaSandboxSeedSpecArray;
     IncludeDiff: Boolean;
+    DiffMetadata: Boolean;
     DiffFormat: string;
   end;
 
@@ -76,13 +77,19 @@ type
     function JsonEscape(const AValue: string): string;
     procedure AppendJsonChange(const ABuilder: TStrings; var AFirst: Boolean;
       const AKind, APath: string; const AOldBytes, ANewBytes: Int64);
+    procedure AppendJsonMetadataChange(const ABuilder: TStrings;
+      var AFirst: Boolean; const APath: string;
+      const ABaselineStat, ACurrentStat: TSandboxFsStat);
+    procedure AppendUnifiedMetadataChange(var AResult: string;
+      const APath: string; const ABaselineStat,
+      ACurrentStat: TSandboxFsStat);
   public
     constructor Create(const AQuotaBytes: Int64 = 0);
     destructor Destroy; override;
 
     procedure CaptureBaseline;
-    function DiffJson: string;
-    function DiffUnified: string;
+    function DiffJson(const AIncludeMetadata: Boolean = False): string;
+    function DiffUnified(const AIncludeMetadata: Boolean = False): string;
 
     property Fs: TSandboxVirtualFileSystem read FFs;
     property Baseline: TSandboxVirtualFileSystem read FBaseline;
@@ -105,6 +112,7 @@ begin
   Result.Isolated := False;
   Result.Seeds := nil;
   Result.IncludeDiff := False;
+  Result.DiffMetadata := False;
   Result.DiffFormat := 'json';
 end;
 
@@ -212,6 +220,12 @@ begin
       AOptions.IncludeDiff := True;
       AOptions.Isolated := True;
     end
+    else if Arg = '--diff-metadata' then
+    begin
+      AOptions.DiffMetadata := True;
+      AOptions.IncludeDiff := True;
+      AOptions.Isolated := True;
+    end
     else if Arg = '--seed' then
     begin
       Inc(Index);
@@ -316,7 +330,7 @@ begin
   if not AFs.IsDirectory(APath) then
     Exit;
 
-  Entries := AFs.List(APath);
+  Entries := AFs.SnapshotList(APath);
   for I := 0 to High(Entries) do
     CollectPaths(AFs, Entries[I].Path, APaths);
 end;
@@ -372,7 +386,91 @@ begin
   AFirst := False;
 end;
 
-function TGocciaSandboxContext.DiffJson: string;
+function TimestampMillisecondsText(const AValue: TDateTime): string;
+var
+  FormatSettings: TFormatSettings;
+begin
+  FormatSettings := DefaultFormatSettings;
+  FormatSettings.DecimalSeparator := '.';
+  Result := FloatToStr(SandboxDateTimeToUnixMilliseconds(AValue),
+    FormatSettings);
+end;
+
+procedure TGocciaSandboxContext.AppendJsonMetadataChange(
+  const ABuilder: TStrings; var AFirst: Boolean; const APath: string;
+  const ABaselineStat, ACurrentStat: TSandboxFsStat);
+var
+  Changes: string;
+  FirstField: Boolean;
+
+  procedure AppendTimestamp(const AName: string; const AOldValue,
+    ANewValue: TDateTime);
+  begin
+    if AOldValue = ANewValue then
+      Exit;
+    if not FirstField then
+      Changes := Changes + ', ';
+    Changes := Changes + '"' + AName + '": { "old": ' +
+      TimestampMillisecondsText(AOldValue) + ', "new": ' +
+      TimestampMillisecondsText(ANewValue) + ' }';
+    FirstField := False;
+  end;
+
+begin
+  Changes := '';
+  FirstField := True;
+  AppendTimestamp('atimeMs', ABaselineStat.AccessedAt,
+    ACurrentStat.AccessedAt);
+  AppendTimestamp('mtimeMs', ABaselineStat.ModifiedAt,
+    ACurrentStat.ModifiedAt);
+  AppendTimestamp('ctimeMs', ABaselineStat.ChangedAt,
+    ACurrentStat.ChangedAt);
+  AppendTimestamp('birthtimeMs', ABaselineStat.BirthTime,
+    ACurrentStat.BirthTime);
+  if FirstField then
+    Exit;
+
+  if not AFirst then
+    ABuilder[ABuilder.Count - 1] := ABuilder[ABuilder.Count - 1] + ',';
+  ABuilder.Add('    { "path": "' + JsonEscape(APath) +
+    '", "changes": { ' + Changes + ' } }');
+  AFirst := False;
+end;
+
+procedure TGocciaSandboxContext.AppendUnifiedMetadataChange(
+  var AResult: string; const APath: string; const ABaselineStat,
+  ACurrentStat: TSandboxFsStat);
+var
+  Changes: string;
+
+  procedure AppendTimestamp(const AName: string; const AOldValue,
+    ANewValue: TDateTime);
+  begin
+    if AOldValue = ANewValue then
+      Exit;
+    Changes := Changes + '-' + AName + ': ' +
+      TimestampMillisecondsText(AOldValue) + LineEnding;
+    Changes := Changes + '+' + AName + ': ' +
+      TimestampMillisecondsText(ANewValue) + LineEnding;
+  end;
+
+begin
+  Changes := '';
+  AppendTimestamp('atimeMs', ABaselineStat.AccessedAt,
+    ACurrentStat.AccessedAt);
+  AppendTimestamp('mtimeMs', ABaselineStat.ModifiedAt,
+    ACurrentStat.ModifiedAt);
+  AppendTimestamp('ctimeMs', ABaselineStat.ChangedAt,
+    ACurrentStat.ChangedAt);
+  AppendTimestamp('birthtimeMs', ABaselineStat.BirthTime,
+    ACurrentStat.BirthTime);
+  if Changes <> '' then
+    AResult := AResult + '@@ sandbox metadata changed ' + APath + ' @@' +
+      LineEnding + Changes;
+end;
+
+function TGocciaSandboxContext.DiffJson(
+  const AIncludeMetadata: Boolean): string;
 var
   Builder: TStringList;
   CurrentPaths: TStringList;
@@ -425,8 +523,8 @@ begin
 
       if CurrentStat.Kind = nkFile then
       begin
-        CurrentBytes := FFs.ReadAllBytes(Path);
-        BaselineBytes := FBaseline.ReadAllBytes(Path);
+        CurrentBytes := FFs.SnapshotReadAllBytes(Path);
+        BaselineBytes := FBaseline.SnapshotReadAllBytes(Path);
         if not BytesEqual(CurrentBytes, BaselineBytes) then
           AppendJsonChange(Builder, First, 'modify', Path,
             BytesLength(BaselineBytes), BytesLength(CurrentBytes));
@@ -445,6 +543,24 @@ begin
     end;
 
     Builder.Add('  ]');
+    if AIncludeMetadata then
+    begin
+      Builder[Builder.Count - 1] := Builder[Builder.Count - 1] + ',';
+      Builder.Add('  "metadataChanges": [');
+      First := True;
+      if Assigned(FBaseline) then
+        for I := 0 to CurrentPaths.Count - 1 do
+        begin
+          Path := CurrentPaths[I];
+          if not FBaseline.Exists(Path) then
+            Continue;
+          CurrentStat := FFs.Stat(Path);
+          BaselineStat := FBaseline.Stat(Path);
+          AppendJsonMetadataChange(Builder, First, Path, BaselineStat,
+            CurrentStat);
+        end;
+      Builder.Add('  ]');
+    end;
     Builder.Add('}');
     Result := Builder.Text;
   finally
@@ -454,12 +570,15 @@ begin
   end;
 end;
 
-function TGocciaSandboxContext.DiffUnified: string;
+function TGocciaSandboxContext.DiffUnified(
+  const AIncludeMetadata: Boolean): string;
 var
   CurrentPaths: TStringList;
   BaselinePaths: TStringList;
   I: Integer;
   Path: string;
+  CurrentStat: TSandboxFsStat;
+  BaselineStat: TSandboxFsStat;
 begin
   CurrentPaths := TStringList.Create;
   BaselinePaths := TStringList.Create;
@@ -476,14 +595,16 @@ begin
       if (Path = '/') or (not FFs.IsFile(Path)) then
         Continue;
       if Assigned(FBaseline) and FBaseline.IsFile(Path) and
-         BytesEqual(FBaseline.ReadAllBytes(Path), FFs.ReadAllBytes(Path)) then
+         BytesEqual(FBaseline.SnapshotReadAllBytes(Path),
+           FFs.SnapshotReadAllBytes(Path)) then
         Continue;
       Result := Result + '--- ' + Path + LineEnding;
       Result := Result + '+++ ' + Path + LineEnding;
       Result := Result + '@@ sandbox file changed @@' + LineEnding;
       if Assigned(FBaseline) and FBaseline.IsFile(Path) then
-        Result := Result + '-' + FBaseline.ReadAllText(Path) + LineEnding;
-      Result := Result + '+' + FFs.ReadAllText(Path) + LineEnding;
+        Result := Result + '-' + FBaseline.SnapshotReadAllText(Path) +
+          LineEnding;
+      Result := Result + '+' + FFs.SnapshotReadAllText(Path) + LineEnding;
     end;
 
     for I := 0 to BaselinePaths.Count - 1 do
@@ -494,8 +615,20 @@ begin
       Result := Result + '--- ' + Path + LineEnding;
       Result := Result + '+++ ' + Path + LineEnding;
       Result := Result + '@@ sandbox file deleted @@' + LineEnding;
-      Result := Result + '-' + FBaseline.ReadAllText(Path) + LineEnding;
+      Result := Result + '-' + FBaseline.SnapshotReadAllText(Path) +
+        LineEnding;
     end;
+
+    if AIncludeMetadata and Assigned(FBaseline) then
+      for I := 0 to CurrentPaths.Count - 1 do
+      begin
+        Path := CurrentPaths[I];
+        if not FBaseline.Exists(Path) then
+          Continue;
+        CurrentStat := FFs.Stat(Path);
+        BaselineStat := FBaseline.Stat(Path);
+        AppendUnifiedMetadataChange(Result, Path, BaselineStat, CurrentStat);
+      end;
   finally
     BaselinePaths.Free;
     CurrentPaths.Free;

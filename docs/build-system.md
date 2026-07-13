@@ -459,15 +459,15 @@ Nested scripts share the current sandbox filesystem unless child isolation is re
 const child = runScript("/child.js", {
   sandbox: true,
   seed: ["/child.js", { from: "/fixtures", to: "/fixtures" }],
-  diff: true
+  diffMetadata: true
 });
 
-const shellChild = await $`goccia --sandbox --seed /child.js --diff /child.js`.text();
+const shellChild = await $`goccia --sandbox --seed /child.js --diff-metadata /child.js`.text();
 ```
 
-Child seed entries are copied from the parent virtual filesystem, not the host filesystem. Child writes are discarded with the child VFS; request `diff: true` or shell `--diff` to inspect them.
+Child seed entries are copied from the parent virtual filesystem, not the host filesystem. Child writes are discarded with the child VFS; request `diff: true` or shell `--diff` to inspect them. Use nested `diffMetadata: true` or shell `--diff-metadata` to include timestamp changes; either form implies a diff.
 
-Diff output is explicit. `--diff` prints the diff after execution, `--diff-output=<host-path>` writes it to a host file, and `--diff-format=json|unified` selects the format. JSON is the default.
+Diff output is explicit. `--diff` prints the diff after execution, `--diff-output=<host-path>` writes it to a host file, and `--diff-format=json|unified` selects the format. JSON is the default. Metadata is omitted unless `--diff-metadata` is present. In JSON it appears as a separate `metadataChanges` array whose per-path `changes` object contains only changed `atimeMs`, `mtimeMs`, `ctimeMs`, and `birthtimeMs` fields; timestamp-only changes never appear as content modifications.
 
 ## Build Output
 

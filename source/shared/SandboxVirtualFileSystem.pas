@@ -33,12 +33,22 @@ type
 
   TSandboxFsNodeKind = (nkFile, nkDirectory);
 
+  { Optional, non-owned clock used by the VFS.  Embedders can inject a
+    deterministic clock; nil selects the host wall clock. }
+  TSandboxFsClock = class
+  public
+    function Now: TDateTime; virtual; abstract;
+  end;
+
   TSandboxFsStat = record
     Path: string;
     Name: string;
     Kind: TSandboxFsNodeKind;
     Size: Int64;
+    AccessedAt: TDateTime;
     ModifiedAt: TDateTime;
+    ChangedAt: TDateTime;
+    BirthTime: TDateTime;
   end;
 
   TSandboxFsStatArray = array of TSandboxFsStat;
@@ -60,17 +70,23 @@ type
     FName: string;
     FKind: TSandboxFsNodeKind;
     FParent: TSandboxFsNode;
+    FAccessedAt: TDateTime;
     FModifiedAt: TDateTime;
+    FChangedAt: TDateTime;
+    FBirthTime: TDateTime;
     FData: TBytes;
     FSize: Int64;
     FOpenCount: Integer;
     FChildren: TStringList;
     function FullPath: string;
     function FindChild(const AName: string): TSandboxFsNode;
-    procedure AttachChild(const AChild: TSandboxFsNode);
-    procedure DetachChild(const AChild: TSandboxFsNode);
+    procedure AttachChild(const AChild: TSandboxFsNode;
+      const ATime: TDateTime);
+    procedure DetachChild(const AChild: TSandboxFsNode;
+      const ATime: TDateTime);
   public
-    constructor Create(const AName: string; const AKind: TSandboxFsNodeKind);
+    constructor Create(const AName: string; const AKind: TSandboxFsNodeKind;
+      const ATime: TDateTime);
     destructor Destroy; override;
   end;
 
@@ -82,6 +98,8 @@ type
     FQuotaBytes: Int64;
     FUsedBytes: Int64;
     FNodeCount: Integer;
+    FClock: TSandboxFsClock;
+    function CurrentTime: TDateTime;
     function LookupNode(const ACanonicalPath: string): TSandboxFsNode;
     function RequireNode(const APath: string): TSandboxFsNode;
     function RequireDirectory(const APath: string): TSandboxFsNode;
@@ -89,7 +107,10 @@ type
     function ResolveParent(const ACanonicalPath: string;
       out ALeafName: string): TSandboxFsNode;
     function StatOf(const ANode: TSandboxFsNode): TSandboxFsStat;
-    function CloneNode(const ASource: TSandboxFsNode): TSandboxFsNode;
+    function CloneNodePreservingMetadata(
+      const ASource: TSandboxFsNode): TSandboxFsNode;
+    function CloneNodeForCopy(const ASource: TSandboxFsNode;
+      const ATime: TDateTime): TSandboxFsNode;
     function SubtreeBytes(const ANode: TSandboxFsNode): Int64;
     function SubtreeNodes(const ANode: TSandboxFsNode): Integer;
     function SubtreeHasOpenHandles(const ANode: TSandboxFsNode): Boolean;
@@ -99,7 +120,8 @@ type
     procedure ValidateLeafName(const AName: string);
     function CreateFileNode(const ACanonicalPath: string): TSandboxFsNode;
   public
-    constructor Create(const AQuotaBytes: Int64 = 0);
+    constructor Create(const AQuotaBytes: Int64 = 0;
+      const AClock: TSandboxFsClock = nil);
     destructor Destroy; override;
 
     { Canonicalize APath against ABase ('/'-rooted). Collapses '.',
@@ -127,6 +149,11 @@ type
     procedure AppendAllText(const APath: string; const AText: string);
     function ReadAllBytes(const APath: string): TBytes;
     function ReadAllText(const APath: string): string;
+
+    { Non-observing reads for baselines, diffing, and diagnostics. }
+    function SnapshotList(const APath: string): TSandboxFsStatArray;
+    function SnapshotReadAllBytes(const APath: string): TBytes;
+    function SnapshotReadAllText(const APath: string): string;
 
     function Open(const APath: string;
       const AMode: TSandboxFsOpenMode): TSandboxFsFile;
@@ -172,13 +199,18 @@ type
 
 function SandboxFsKindName(const AKind: TSandboxFsNodeKind): string;
 function SandboxHumanBytes(const ABytes: Int64): string;
+function SandboxDateTimeToUnixMilliseconds(const AValue: TDateTime): Double;
 function NormalizeSandboxPathSeparators(const APath: string): string;
 
 implementation
 
+uses
+  TimingUtils;
+
 const
   PathSeparator = '/';
   AlternatePathSeparator = '\';
+  MillisecondsPerDay = 24 * 60 * 60 * 1000;
 
 function NormalizeSandboxPathSeparators(const APath: string): string;
 begin
@@ -214,6 +246,11 @@ begin
     Result := Format('%.1f %s', [Value, Units[UnitIndex]]);
 end;
 
+function SandboxDateTimeToUnixMilliseconds(const AValue: TDateTime): Double;
+begin
+  Result := (AValue - EncodeDate(1970, 1, 1)) * MillisecondsPerDay;
+end;
+
 function SplitPath(const ACanonicalPath: string): TStringArray;
 var
   Count: Integer;
@@ -240,12 +277,15 @@ end;
 { TSandboxFsNode }
 
 constructor TSandboxFsNode.Create(const AName: string;
-  const AKind: TSandboxFsNodeKind);
+  const AKind: TSandboxFsNodeKind; const ATime: TDateTime);
 begin
   inherited Create;
   FName := AName;
   FKind := AKind;
-  FModifiedAt := Now;
+  FAccessedAt := ATime;
+  FModifiedAt := ATime;
+  FChangedAt := ATime;
+  FBirthTime := ATime;
   if AKind = nkDirectory then
   begin
     FChildren := TStringList.Create;
@@ -288,32 +328,60 @@ begin
     Result := TSandboxFsNode(FChildren.Objects[Index]);
 end;
 
-procedure TSandboxFsNode.AttachChild(const AChild: TSandboxFsNode);
+procedure TSandboxFsNode.AttachChild(const AChild: TSandboxFsNode;
+  const ATime: TDateTime);
 begin
   FChildren.AddObject(AChild.FName, AChild);
   AChild.FParent := Self;
-  FModifiedAt := Now;
+  FModifiedAt := ATime;
+  FChangedAt := ATime;
 end;
 
-procedure TSandboxFsNode.DetachChild(const AChild: TSandboxFsNode);
+procedure TSandboxFsNode.DetachChild(const AChild: TSandboxFsNode;
+  const ATime: TDateTime);
 var
   Index: Integer;
 begin
   if FChildren.Find(AChild.FName, Index) then
     FChildren.Delete(Index);
   AChild.FParent := nil;
-  FModifiedAt := Now;
+  FModifiedAt := ATime;
+  FChangedAt := ATime;
 end;
 
 { TSandboxVirtualFileSystem }
 
-constructor TSandboxVirtualFileSystem.Create(const AQuotaBytes: Int64);
+constructor TSandboxVirtualFileSystem.Create(const AQuotaBytes: Int64;
+  const AClock: TSandboxFsClock);
 begin
   inherited Create;
-  FRoot := TSandboxFsNode.Create('', nkDirectory);
+  FClock := AClock;
+  FRoot := TSandboxFsNode.Create('', nkDirectory, CurrentTime);
   FQuotaBytes := AQuotaBytes;
   FUsedBytes := 0;
   FNodeCount := 0;
+end;
+
+function TSandboxVirtualFileSystem.CurrentTime: TDateTime;
+var
+  EpochNanoseconds: Int64;
+  EpochSeconds: Int64;
+  WholeDays: Int64;
+  SecondsOfDay: Int64;
+begin
+  if Assigned(FClock) then
+    Result := FClock.Now
+  else
+  begin
+    EpochNanoseconds := GetEpochNanoseconds;
+    EpochSeconds := EpochNanoseconds div 1000000000;
+    WholeDays := EpochSeconds div (24 * 60 * 60);
+    SecondsOfDay := EpochSeconds mod (24 * 60 * 60);
+    Result := EncodeDate(1970, 1, 1) + WholeDays +
+      (Double(SecondsOfDay) / Double(24 * 60 * 60)) +
+      (Double(EpochNanoseconds mod 1000000000) /
+        (Double(MillisecondsPerDay) * 1000000));
+  end;
 end;
 
 destructor TSandboxVirtualFileSystem.Destroy;
@@ -492,11 +560,13 @@ function TSandboxVirtualFileSystem.CreateFileNode(
 var
   Parent: TSandboxFsNode;
   LeafName: string;
+  Time: TDateTime;
 begin
   Parent := ResolveParent(ACanonicalPath, LeafName);
   ValidateLeafName(LeafName);
-  Result := TSandboxFsNode.Create(LeafName, nkFile);
-  Parent.AttachChild(Result);
+  Time := CurrentTime;
+  Result := TSandboxFsNode.Create(LeafName, nkFile, Time);
+  Parent.AttachChild(Result, Time);
   Inc(FNodeCount);
 end;
 
@@ -509,7 +579,10 @@ begin
     Result.Size := ANode.FSize
   else
     Result.Size := ANode.FChildren.Count;
+  Result.AccessedAt := ANode.FAccessedAt;
   Result.ModifiedAt := ANode.FModifiedAt;
+  Result.ChangedAt := ANode.FChangedAt;
+  Result.BirthTime := ANode.FBirthTime;
 end;
 
 function TSandboxVirtualFileSystem.Exists(const APath: string): Boolean;
@@ -545,6 +618,7 @@ var
 begin
   Result := nil;
   Node := RequireDirectory(APath);
+  Node.FAccessedAt := CurrentTime;
   SetLength(Result, Node.FChildren.Count);
   for Index := 0 to Node.FChildren.Count - 1 do
     Result[Index] := StatOf(TSandboxFsNode(Node.FChildren.Objects[Index]));
@@ -558,6 +632,7 @@ var
   Current: TSandboxFsNode;
   Next: TSandboxFsNode;
   Index: Integer;
+  Time: TDateTime;
 begin
   Canonical := Normalize(APath);
   if Canonical = PathSeparator then
@@ -581,8 +656,9 @@ begin
         raise ESandboxFsNotFound.CreateFmt(
           '%s: no such file or directory', [Canonical]);
       ValidateLeafName(Segments[Index]);
-      Next := TSandboxFsNode.Create(Segments[Index], nkDirectory);
-      Current.AttachChild(Next);
+      Time := CurrentTime;
+      Next := TSandboxFsNode.Create(Segments[Index], nkDirectory, Time);
+      Current.AttachChild(Next, Time);
       Inc(FNodeCount);
     end
     else if (Index = High(Segments)) and not ARecursive then
@@ -651,6 +727,7 @@ procedure TSandboxVirtualFileSystem.DeletePath(const APath: string;
   const ARecursive: Boolean);
 var
   Node: TSandboxFsNode;
+  Time: TDateTime;
 begin
   Node := RequireNode(APath);
   if Node = FRoot then
@@ -664,7 +741,8 @@ begin
       [Node.FullPath]);
   FUsedBytes := FUsedBytes - SubtreeBytes(Node);
   FNodeCount := FNodeCount - SubtreeNodes(Node);
-  Node.FParent.DetachChild(Node);
+  Time := CurrentTime;
+  Node.FParent.DetachChild(Node, Time);
   Node.Free;
 end;
 
@@ -675,6 +753,7 @@ var
   DestParent: TSandboxFsNode;
   DestCanonical: string;
   LeafName: string;
+  Time: TDateTime;
 begin
   SourceNode := RequireNode(ASource);
   if SourceNode = FRoot then
@@ -715,18 +794,21 @@ begin
         [DestNode.FullPath]);
   end;
 
-  SourceNode.FParent.DetachChild(SourceNode);
+  Time := CurrentTime;
+  SourceNode.FParent.DetachChild(SourceNode, Time);
   SourceNode.FName := LeafName;
-  DestParent.AttachChild(SourceNode);
+  SourceNode.FChangedAt := Time;
+  DestParent.AttachChild(SourceNode, Time);
 end;
 
-function TSandboxVirtualFileSystem.CloneNode(const ASource: TSandboxFsNode): TSandboxFsNode;
+function TSandboxVirtualFileSystem.CloneNodePreservingMetadata(
+  const ASource: TSandboxFsNode): TSandboxFsNode;
 var
   Index: Integer;
   Child: TSandboxFsNode;
 begin
-  Result := TSandboxFsNode.Create(ASource.FName, ASource.FKind);
-  Result.FModifiedAt := ASource.FModifiedAt;
+  Result := TSandboxFsNode.Create(ASource.FName, ASource.FKind,
+    ASource.FBirthTime);
   if ASource.FKind = nkFile then
   begin
     Result.FSize := ASource.FSize;
@@ -737,8 +819,37 @@ begin
   else
     for Index := 0 to ASource.FChildren.Count - 1 do
     begin
-      Child := CloneNode(TSandboxFsNode(ASource.FChildren.Objects[Index]));
-      Result.AttachChild(Child);
+      Child := CloneNodePreservingMetadata(
+        TSandboxFsNode(ASource.FChildren.Objects[Index]));
+      Result.AttachChild(Child, ASource.FModifiedAt);
+    end;
+  Result.FAccessedAt := ASource.FAccessedAt;
+  Result.FModifiedAt := ASource.FModifiedAt;
+  Result.FChangedAt := ASource.FChangedAt;
+  Result.FBirthTime := ASource.FBirthTime;
+end;
+
+function TSandboxVirtualFileSystem.CloneNodeForCopy(
+  const ASource: TSandboxFsNode; const ATime: TDateTime): TSandboxFsNode;
+var
+  Index: Integer;
+  Child: TSandboxFsNode;
+begin
+  ASource.FAccessedAt := ATime;
+  Result := TSandboxFsNode.Create(ASource.FName, ASource.FKind, ATime);
+  if ASource.FKind = nkFile then
+  begin
+    Result.FSize := ASource.FSize;
+    SetLength(Result.FData, ASource.FSize);
+    if ASource.FSize > 0 then
+      System.Move(ASource.FData[0], Result.FData[0], ASource.FSize);
+  end
+  else
+    for Index := 0 to ASource.FChildren.Count - 1 do
+    begin
+      Child := CloneNodeForCopy(
+        TSandboxFsNode(ASource.FChildren.Objects[Index]), ATime);
+      Result.AttachChild(Child, ATime);
     end;
 end;
 
@@ -751,6 +862,7 @@ var
   DestCanonical: string;
   LeafName: string;
   Clone: TSandboxFsNode;
+  Time: TDateTime;
 begin
   SourceNode := RequireNode(ASource);
   if (SourceNode.FKind = nkDirectory) and not ARecursive then
@@ -780,6 +892,8 @@ begin
 
   if Assigned(DestNode) then
   begin
+    if DestNode = SourceNode then
+      Exit;
     if (DestNode.FKind = nkFile) and (SourceNode.FKind = nkFile) then
       DeletePath(DestNode.FullPath)
     else
@@ -788,9 +902,10 @@ begin
   end;
 
   EnsureGrowth(SubtreeBytes(SourceNode));
-  Clone := CloneNode(SourceNode);
+  Time := CurrentTime;
+  Clone := CloneNodeForCopy(SourceNode, Time);
   Clone.FName := LeafName;
-  DestParent.AttachChild(Clone);
+  DestParent.AttachChild(Clone, Time);
   FUsedBytes := FUsedBytes + SubtreeBytes(Clone);
   FNodeCount := FNodeCount + SubtreeNodes(Clone);
 end;
@@ -799,11 +914,17 @@ procedure TSandboxVirtualFileSystem.Touch(const APath: string);
 var
   Canonical: string;
   Node: TSandboxFsNode;
+  Time: TDateTime;
 begin
   Canonical := Normalize(APath);
   Node := LookupNode(Canonical);
   if Assigned(Node) then
-    Node.FModifiedAt := Now
+  begin
+    Time := CurrentTime;
+    Node.FAccessedAt := Time;
+    Node.FModifiedAt := Time;
+    Node.FChangedAt := Time;
+  end
   else
     CreateFileNode(Canonical);
 end;
@@ -854,12 +975,51 @@ var
 begin
   Result := nil;
   Node := RequireFile(APath);
+  Node.FAccessedAt := CurrentTime;
   SetLength(Result, Node.FSize);
   if Node.FSize > 0 then
     System.Move(Node.FData[0], Result[0], Node.FSize);
 end;
 
 function TSandboxVirtualFileSystem.ReadAllText(const APath: string): string;
+var
+  Node: TSandboxFsNode;
+begin
+  Result := '';
+  Node := RequireFile(APath);
+  Node.FAccessedAt := CurrentTime;
+  SetLength(Result, Node.FSize);
+  if Node.FSize > 0 then
+    System.Move(Node.FData[0], Result[1], Node.FSize);
+end;
+
+function TSandboxVirtualFileSystem.SnapshotList(
+  const APath: string): TSandboxFsStatArray;
+var
+  Node: TSandboxFsNode;
+  Index: Integer;
+begin
+  Result := nil;
+  Node := RequireDirectory(APath);
+  SetLength(Result, Node.FChildren.Count);
+  for Index := 0 to Node.FChildren.Count - 1 do
+    Result[Index] := StatOf(TSandboxFsNode(Node.FChildren.Objects[Index]));
+end;
+
+function TSandboxVirtualFileSystem.SnapshotReadAllBytes(
+  const APath: string): TBytes;
+var
+  Node: TSandboxFsNode;
+begin
+  Result := nil;
+  Node := RequireFile(APath);
+  SetLength(Result, Node.FSize);
+  if Node.FSize > 0 then
+    System.Move(Node.FData[0], Result[0], Node.FSize);
+end;
+
+function TSandboxVirtualFileSystem.SnapshotReadAllText(
+  const APath: string): string;
 var
   Node: TSandboxFsNode;
 begin
@@ -896,9 +1056,9 @@ end;
 
 function TSandboxVirtualFileSystem.Fork: TSandboxVirtualFileSystem;
 begin
-  Result := TSandboxVirtualFileSystem.Create(FQuotaBytes);
+  Result := TSandboxVirtualFileSystem.Create(FQuotaBytes, FClock);
   Result.FRoot.Free;
-  Result.FRoot := CloneNode(FRoot);
+  Result.FRoot := CloneNodePreservingMetadata(FRoot);
   Result.FUsedBytes := FUsedBytes;
   Result.FNodeCount := FNodeCount;
 end;
@@ -918,6 +1078,8 @@ begin
     begin
       FFs.FUsedBytes := FFs.FUsedBytes - FNode.FSize;
       FNode.FSize := 0;
+      FNode.FModifiedAt := FFs.CurrentTime;
+      FNode.FChangedAt := FNode.FModifiedAt;
       FPosition := 0;
     end;
     omAppend:
@@ -963,6 +1125,7 @@ begin
     Exit(0);
   System.Move(FNode.FData[FPosition], ABuffer, Result);
   FPosition := FPosition + Result;
+  FNode.FAccessedAt := FFs.CurrentTime;
 end;
 
 function TSandboxFsFile.Write(const ABuffer;
@@ -981,7 +1144,8 @@ begin
     FFs.GrowFile(FNode, FPosition + ACount);
   System.Move(ABuffer, FNode.FData[FPosition], ACount);
   FPosition := FPosition + ACount;
-  FNode.FModifiedAt := Now;
+  FNode.FModifiedAt := FFs.CurrentTime;
+  FNode.FChangedAt := FNode.FModifiedAt;
   Result := ACount;
 end;
 
@@ -1018,7 +1182,8 @@ begin
   end;
   if FPosition > FNode.FSize then
     FPosition := FNode.FSize;
-  FNode.FModifiedAt := Now;
+  FNode.FModifiedAt := FFs.CurrentTime;
+  FNode.FChangedAt := FNode.FModifiedAt;
 end;
 
 function TSandboxFsFile.ReadText(const ACount: Integer): string;
