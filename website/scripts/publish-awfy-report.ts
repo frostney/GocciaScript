@@ -76,7 +76,8 @@ function finiteRatio(value: unknown): number | null {
 
 export function summaryFromReport(report: AwfyReport) {
   const targets = Array.isArray(report.targets) ? report.targets : [];
-  const reportedTargetNames = targets
+  const workloadTargets = targets.filter((target) => target.kind !== "probe");
+  const reportedTargetNames = workloadTargets
     .map((target) => target.name)
     .filter((name): name is string => typeof name === "string");
   const configuredTargetNames = Object.keys(
@@ -93,7 +94,7 @@ export function summaryFromReport(report: AwfyReport) {
   const requiredEngines = ["goccia", "qjs", "node"];
   const failedWorkloadCount =
     missingWorkloadCount +
-    targets.filter((target) => {
+    workloadTargets.filter((target) => {
       const statsByEngine = target.summary?.engineStats ?? {};
       return (
         target.summary?.checksumAgreement?.ok === false ||

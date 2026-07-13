@@ -255,6 +255,17 @@ describe("Performance Barometer data", () => {
               },
             },
           },
+          {
+            name: "RuntimeProbe",
+            kind: "probe",
+            summary: {
+              engineStats: {
+                goccia: { crash: 1 },
+                qjs: { ok: 5 },
+                node: { ok: 5 },
+              },
+            },
+          },
         ],
         geomeanRatios: { goccia_over_qjs: 2, goccia_over_node: 4 },
       }),

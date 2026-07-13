@@ -125,7 +125,11 @@ console.log('jetstream-driver: upstream bundle and score...');
     fs.writeFileSync(uncheckedFile, uncheckedBundle);
     const uncheckedResult = spawnSync(process.execPath, [uncheckedFile], { encoding: 'utf8' });
     const uncheckedPayload = JSON.parse(uncheckedResult.stdout.split('GOCCIA_JETSTREAM_RESULT ')[1]);
-    equal(uncheckedPayload.score > 0, true, 'reports a finite score for one diagnostic iteration');
+    equal(
+      Number.isFinite(uncheckedPayload.score) && uncheckedPayload.score > 0,
+      true,
+      'reports a finite score for one diagnostic iteration',
+    );
     equal(Object.keys(uncheckedPayload.subScores).join(','), 'First', 'omits unavailable subscores for one iteration');
     equal(uncheckedPayload.checksum, null, 'does not invent a checksum without upstream validation');
     equal(uncheckedPayload.verificationPassed, null, 'does not claim unavailable validation passed');
