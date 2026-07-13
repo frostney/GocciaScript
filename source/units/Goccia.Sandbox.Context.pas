@@ -552,7 +552,7 @@ begin
         for I := 0 to CurrentPaths.Count - 1 do
         begin
           Path := CurrentPaths[I];
-          if not FBaseline.Exists(Path) then
+          if (Path = '/') or (not FBaseline.Exists(Path)) then
             Continue;
           CurrentStat := FFs.Stat(Path);
           BaselineStat := FBaseline.Stat(Path);
@@ -623,7 +623,7 @@ begin
       for I := 0 to CurrentPaths.Count - 1 do
       begin
         Path := CurrentPaths[I];
-        if not FBaseline.Exists(Path) then
+        if (Path = '/') or (not FBaseline.Exists(Path)) then
           Continue;
         CurrentStat := FFs.Stat(Path);
         BaselineStat := FBaseline.Stat(Path);

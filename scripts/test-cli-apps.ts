@@ -3333,6 +3333,7 @@ console.log("SandboxRunner: metadata diffing is opt-in and separate from content
             'for (const i of Array.from({ length: 10000 }, (_, index) => index)) { Math.sqrt(i); }',
             'const text = fs.readFileSync("/tracked.txt", "utf8");',
             'fs.writeFileSync("/tracked.txt", text);',
+            'fs.mkdirSync("/created");',
           ].join("\n"),
         },
         { path: "/tracked.txt", text: "unchanged" },
@@ -3346,6 +3347,8 @@ console.log("SandboxRunner: metadata diffing is opt-in and separate from content
     if (proc.exitCode !== 0)
       throw new Error(`SandboxRunner metadata diff should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
     const parsed = JSON.parse(readFileSync(diff, "utf-8"));
+    if (parsed.metadataChanges.some((change: any) => change.path === "/"))
+      throw new Error(`Metadata diff must not expose the implicit root, got ${JSON.stringify(parsed.metadataChanges)}`);
     if (parsed.changes.some((change: any) => change.path === "/tracked.txt"))
       throw new Error(`Timestamp-only writes must not become content modifications, got ${JSON.stringify(parsed.changes)}`);
     const tracked = parsed.metadataChanges.find((change: any) => change.path === "/tracked.txt");
@@ -3365,7 +3368,8 @@ console.log("SandboxRunner: metadata diffing is opt-in and separate from content
       throw new Error(`SandboxRunner unified metadata diff should exit 0, got ${unifiedProc.exitCode}: ${unifiedProc.stderr.toString()}`);
     const unified = readFileSync(unifiedDiff, "utf-8");
     if (!unified.includes("@@ sandbox metadata changed /tracked.txt @@") ||
-        unified.includes("@@ sandbox file changed @@"))
+        unified.includes("@@ sandbox file changed @@") ||
+        unified.includes("@@ sandbox metadata changed / @@"))
       throw new Error(`Unified metadata diff should keep timestamp-only changes separate, got: ${unified}`);
   } finally {
     clean(tmp);

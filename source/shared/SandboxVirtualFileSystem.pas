@@ -380,6 +380,8 @@ var
   EpochSeconds: Int64;
   WholeDays: Int64;
   SecondsOfDay: Int64;
+  SecondsOfDayValue: Double;
+  NanosecondRemainderValue: Double;
 begin
   if Assigned(FClock) then
     Result := FClock.Now
@@ -389,10 +391,12 @@ begin
     EpochSeconds := EpochNanoseconds div 1000000000;
     WholeDays := EpochSeconds div (24 * 60 * 60);
     SecondsOfDay := EpochSeconds mod (24 * 60 * 60);
+    SecondsOfDayValue := SecondsOfDay;
+    NanosecondRemainderValue := EpochNanoseconds mod 1000000000;
     Result := EncodeDate(1970, 1, 1) + WholeDays +
-      (Double(SecondsOfDay) / Double(24 * 60 * 60)) +
-      (Double(EpochNanoseconds mod 1000000000) /
-        (Double(MillisecondsPerDay) * 1000000));
+      (SecondsOfDayValue / (24 * 60 * 60)) +
+      (NanosecondRemainderValue /
+        (MillisecondsPerDay * 1000000));
   end;
 end;
 
