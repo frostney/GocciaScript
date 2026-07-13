@@ -1,33 +1,32 @@
 import { gunzipSync, gzipSync } from "node:zlib";
 import { BlobNotFoundError, get, list, put } from "@vercel/blob";
 
-export type AwfyBlobAccess = "public" | "private";
+export type JetStreamBlobAccess = "public" | "private";
 
-export type AwfyBlobReport = {
-  path: string;
-  url: string;
-  downloadUrl: string;
-  size: number;
+export type JetStreamReferenceRatios = {
+  quickjs: number | null;
+  node: number | null;
 };
 
-export type AwfyBlobRunSummary = {
-  targetCount: number;
-  awfyCount: number;
-  probeCount: number;
+export type JetStreamBlobRunSummary = {
   workloadCount: number;
   failedWorkloadCount: number;
   repetitions: number | null;
-  referenceRatios: {
-    quickjs: number | null;
-    node: number | null;
-  };
+  referenceRatios: JetStreamReferenceRatios;
   engineVersions: Record<string, string>;
   corpusCommit: string;
   driverVersion: number | null;
   targetNames: string[];
 };
 
-export type AwfyBlobRun = {
+export type JetStreamBlobReport = {
+  path: string;
+  url: string;
+  downloadUrl: string;
+  size: number;
+};
+
+export type JetStreamBlobRun = {
   runId: number;
   runNumber: number;
   artifactId: number;
@@ -38,72 +37,68 @@ export type AwfyBlobRun = {
   createdAt: string;
   updatedAt: string;
   artifactCreatedAt: string;
-  summary: AwfyBlobRunSummary;
-  report: AwfyBlobReport;
+  summary: JetStreamBlobRunSummary;
+  report: JetStreamBlobReport;
   publishedAt: string;
 };
 
-export type AwfyBlobPublishEntry = Omit<
-  AwfyBlobRun,
+export type JetStreamBlobPublishEntry = Omit<
+  JetStreamBlobRun,
   "report" | "publishedAt"
-> & {
-  reportJson: string;
-};
+> & { reportJson: string };
 
-const DEFAULT_PREFIX = "awfy";
-const DEFAULT_ACCESS: AwfyBlobAccess = "public";
+const DEFAULT_PREFIX = "jetstream";
+const DEFAULT_ACCESS: JetStreamBlobAccess = "public";
 
 function cleanPrefix(value: string | undefined, fallback: string): string {
   const trimmed = (value ?? fallback).trim().replace(/^\/+|\/+$/g, "");
   return trimmed || fallback;
 }
 
-export function awfyBlobPrefix(): string {
-  return cleanPrefix(process.env.AWFY_BLOB_PREFIX, DEFAULT_PREFIX);
+export function jetStreamBlobPrefix(): string {
+  return cleanPrefix(process.env.JETSTREAM_BLOB_PREFIX, DEFAULT_PREFIX);
 }
 
-export function awfyBlobAccess(): AwfyBlobAccess {
-  return process.env.AWFY_BLOB_ACCESS === "private"
+export function jetStreamBlobAccess(): JetStreamBlobAccess {
+  return process.env.JETSTREAM_BLOB_ACCESS === "private"
     ? "private"
     : DEFAULT_ACCESS;
 }
 
-export function awfyBlobRunsPrefix(prefix = awfyBlobPrefix()): string {
+export function jetStreamBlobRunsPrefix(
+  prefix = jetStreamBlobPrefix(),
+): string {
   return `${prefix}/runs`;
 }
 
-export function awfyBlobDailyPrefix(prefix = awfyBlobPrefix()): string {
+export function jetStreamBlobDailyPrefix(
+  prefix = jetStreamBlobPrefix(),
+): string {
   return `${prefix}/daily`;
 }
 
-export function awfyBlobReportPathForArtifactId(
+export function jetStreamBlobReportPathForArtifactId(
   artifactId: number,
-  prefix = awfyBlobPrefix(),
+  prefix = jetStreamBlobPrefix(),
 ): string {
-  return `${awfyBlobRunsPrefix(prefix)}/${artifactId}/report.json.gz`;
+  return `${jetStreamBlobRunsPrefix(prefix)}/${artifactId}/report.json.gz`;
 }
 
-export function awfyBlobDailyPathForDay(
+export function jetStreamBlobDailyPathForRun(
   day: string,
-  prefix = awfyBlobPrefix(),
+  runId: number,
+  prefix = jetStreamBlobPrefix(),
 ): string {
-  return `${awfyBlobDailyPrefix(prefix)}/${day}.json`;
-}
-
-function dailyPathForRun(
-  run: Pick<AwfyBlobRun, "createdAt">,
-  prefix = awfyBlobPrefix(),
-): string {
-  return awfyBlobDailyPathForDay(run.createdAt.slice(0, 10), prefix);
+  return `${jetStreamBlobDailyPrefix(prefix)}/${day}/${runId}.json`;
 }
 
 function byCreatedAtThenRunNumber(
-  a: Pick<AwfyBlobRun, "createdAt" | "runNumber">,
-  b: Pick<AwfyBlobRun, "createdAt" | "runNumber">,
+  left: Pick<JetStreamBlobRun, "createdAt" | "runNumber">,
+  right: Pick<JetStreamBlobRun, "createdAt" | "runNumber">,
 ): number {
   return (
-    Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
-    a.runNumber - b.runNumber
+    Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
+    left.runNumber - right.runNumber
   );
 }
 
@@ -128,7 +123,7 @@ async function streamToBytes(stream: ReadableStream<Uint8Array>) {
 
 async function readBlobBytes(pathname: string): Promise<Uint8Array | null> {
   try {
-    const result = await get(pathname, { access: awfyBlobAccess() });
+    const result = await get(pathname, { access: jetStreamBlobAccess() });
     if (!result || result.statusCode !== 200 || !result.stream) return null;
     return await streamToBytes(result.stream);
   } catch (error) {
@@ -137,12 +132,7 @@ async function readBlobBytes(pathname: string): Promise<Uint8Array | null> {
   }
 }
 
-async function readBlobText(pathname: string): Promise<string | null> {
-  const bytes = await readBlobBytes(pathname);
-  return bytes ? new TextDecoder().decode(bytes) : null;
-}
-
-function isAwfyBlobRun(value: unknown): value is AwfyBlobRun {
+function isJetStreamBlobRun(value: unknown): value is JetStreamBlobRun {
   if (!value || typeof value !== "object") return false;
   const run = value as Record<string, unknown>;
   return (
@@ -151,36 +141,38 @@ function isAwfyBlobRun(value: unknown): value is AwfyBlobRun {
     Number.isSafeInteger(run.artifactId) &&
     typeof run.createdAt === "string" &&
     Number.isFinite(Date.parse(run.createdAt)) &&
+    typeof run.summary === "object" &&
+    run.summary !== null &&
     typeof run.report === "object" &&
     run.report !== null
   );
 }
 
-export async function readAwfyBlobReportJson(
-  run: Pick<AwfyBlobRun, "report">,
+export async function readJetStreamBlobReportJson(
+  run: Pick<JetStreamBlobRun, "report">,
 ): Promise<string | null> {
   const bytes = await readBlobBytes(run.report.path);
   return bytes ? gunzipSync(bytes).toString("utf8") : null;
 }
 
-export async function listAwfyBlobDailyRuns(
-  prefix = awfyBlobPrefix(),
-): Promise<AwfyBlobRun[]> {
-  const runs: AwfyBlobRun[] = [];
+export async function listJetStreamBlobDailyRuns(
+  prefix = jetStreamBlobPrefix(),
+): Promise<JetStreamBlobRun[]> {
+  const runs: JetStreamBlobRun[] = [];
   let cursor: string | undefined;
   do {
     const page = await list({
       cursor,
       limit: 1000,
-      prefix: `${awfyBlobDailyPrefix(prefix)}/`,
+      prefix: `${jetStreamBlobDailyPrefix(prefix)}/`,
     });
     cursor = page.cursor;
     for (const blob of page.blobs) {
-      const text = await readBlobText(blob.pathname);
-      if (!text) continue;
+      const bytes = await readBlobBytes(blob.pathname);
+      if (!bytes) continue;
       try {
-        const parsed: unknown = JSON.parse(text);
-        if (isAwfyBlobRun(parsed)) runs.push(parsed);
+        const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+        if (isJetStreamBlobRun(parsed)) runs.push(parsed);
       } catch {
         // Ignore malformed historical pointers and retain the valid timeline.
       }
@@ -190,15 +182,14 @@ export async function listAwfyBlobDailyRuns(
   return runs.sort(byCreatedAtThenRunNumber);
 }
 
-export async function publishAwfyReportsToBlob(
-  entries: AwfyBlobPublishEntry[],
-): Promise<AwfyBlobRun[]> {
-  const prefix = awfyBlobPrefix();
-  const access = awfyBlobAccess();
-  const publishedRuns: AwfyBlobRun[] = [];
-
+export async function publishJetStreamReportsToBlob(
+  entries: JetStreamBlobPublishEntry[],
+): Promise<JetStreamBlobRun[]> {
+  const prefix = jetStreamBlobPrefix();
+  const access = jetStreamBlobAccess();
+  const publishedRuns: JetStreamBlobRun[] = [];
   for (const entry of entries) {
-    const reportPath = awfyBlobReportPathForArtifactId(
+    const reportPath = jetStreamBlobReportPathForArtifactId(
       entry.artifactId,
       prefix,
     );
@@ -209,19 +200,8 @@ export async function publishAwfyReportsToBlob(
       cacheControlMaxAge: 31_536_000,
       contentType: "application/gzip",
     });
-
-    const published: AwfyBlobRun = {
-      runId: entry.runId,
-      runNumber: entry.runNumber,
-      artifactId: entry.artifactId,
-      title: entry.title,
-      headSha: entry.headSha,
-      shortSha: entry.shortSha,
-      runUrl: entry.runUrl,
-      createdAt: entry.createdAt,
-      updatedAt: entry.updatedAt,
-      artifactCreatedAt: entry.artifactCreatedAt,
-      summary: entry.summary,
+    const published: JetStreamBlobRun = {
+      ...entry,
       report: {
         path: reportPath,
         url: reportBlob.url,
@@ -231,7 +211,11 @@ export async function publishAwfyReportsToBlob(
       publishedAt: new Date().toISOString(),
     };
     await put(
-      dailyPathForRun(published, prefix),
+      jetStreamBlobDailyPathForRun(
+        entry.createdAt.slice(0, 10),
+        entry.runId,
+        prefix,
+      ),
       JSON.stringify(published, null, 2),
       {
         access,
@@ -242,6 +226,5 @@ export async function publishAwfyReportsToBlob(
     );
     publishedRuns.push(published);
   }
-
   return publishedRuns.sort(byCreatedAtThenRunNumber);
 }

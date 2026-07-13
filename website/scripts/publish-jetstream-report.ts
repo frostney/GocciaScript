@@ -1,69 +1,54 @@
 #!/usr/bin/env bun
-import { readFile } from "node:fs/promises";
-import {
-  type AwfyBlobPublishEntry,
-  awfyBlobDailyPathForDay,
-  awfyBlobPrefix,
-  awfyBlobReportPathForArtifactId,
-  publishAwfyReportsToBlob,
-} from "../src/lib/awfy-blob-store";
-import { GITHUB_REPO_URL } from "../src/lib/github";
 
-type AwfyReport = {
+import { readFile } from "node:fs/promises";
+import { GITHUB_REPO_URL } from "../src/lib/github";
+import {
+  type JetStreamBlobPublishEntry,
+  jetStreamBlobDailyPathForRun,
+  jetStreamBlobPrefix,
+  jetStreamBlobReportPathForArtifactId,
+  publishJetStreamReportsToBlob,
+} from "../src/lib/jetstream-blob-store";
+
+type EngineStats = {
+  ok?: number;
+  timeout?: number;
+  crash?: number;
+  oom?: number;
+  verificationFailed?: number;
+  missingResult?: number;
+};
+
+export type JetStreamReport = {
   metadata?: {
     driver?: { version?: unknown };
     corpus?: {
-      awfy?: {
+      jetStream?: {
         commit?: unknown;
         benchmarks?: Record<string, unknown>;
       };
     };
     engines?: Array<{ name?: unknown; version?: unknown }>;
-    options?: {
-      repetitions?: unknown;
-    };
+    options?: { repetitions?: unknown };
   };
   targets?: Array<{
     name?: unknown;
-    kind?: unknown;
     summary?: {
-      engineStats?: Record<
-        string,
-        {
-          ok?: number;
-          timeout?: number;
-          crash?: number;
-          oom?: number;
-          verificationFailed?: number;
-          missingResult?: number;
-        }
-      >;
+      engineStats?: Record<string, EngineStats>;
       checksumAgreement?: { ok?: unknown };
     };
   }>;
   geomeanRatios?: Record<string, unknown>;
 };
 
-function log(message: string) {
-  console.log(`[publish-awfy] ${message}`);
-}
-
 function numberFromEnv(name: string): number | null {
-  const value = process.env[name];
-  if (!value) return null;
-  const parsed = Number(value);
+  const parsed = Number(process.env[name]);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function timestampFromEnv(name: string): string | null {
   const value = process.env[name]?.trim();
   if (!value) return null;
-  if (/^\d+$/.test(value)) {
-    const seconds = Number(value);
-    if (Number.isSafeInteger(seconds) && seconds > 0) {
-      return new Date(seconds * 1000).toISOString();
-    }
-  }
   const time = Date.parse(value);
   return Number.isNaN(time) ? null : new Date(time).toISOString();
 }
@@ -74,14 +59,13 @@ function finiteRatio(value: unknown): number | null {
     : null;
 }
 
-export function summaryFromReport(report: AwfyReport) {
+export function summaryFromReport(report: JetStreamReport) {
   const targets = Array.isArray(report.targets) ? report.targets : [];
-  const workloadTargets = targets.filter((target) => target.kind !== "probe");
-  const reportedTargetNames = workloadTargets
+  const reportedTargetNames = targets
     .map((target) => target.name)
     .filter((name): name is string => typeof name === "string");
   const configuredTargetNames = Object.keys(
-    report.metadata?.corpus?.awfy?.benchmarks ?? {},
+    report.metadata?.corpus?.jetStream?.benchmarks ?? {},
   );
   const targetNames = (
     configuredTargetNames.length > 0
@@ -94,7 +78,7 @@ export function summaryFromReport(report: AwfyReport) {
   const requiredEngines = ["goccia", "qjs", "node"];
   const failedWorkloadCount =
     missingWorkloadCount +
-    workloadTargets.filter((target) => {
+    targets.filter((target) => {
       const statsByEngine = target.summary?.engineStats ?? {};
       return (
         target.summary?.checksumAgreement?.ok === false ||
@@ -122,9 +106,6 @@ export function summaryFromReport(report: AwfyReport) {
       .map((engine) => [engine.name, engine.version]),
   );
   return {
-    targetCount: targets.length,
-    awfyCount: targets.filter((target) => target.kind === "awfy").length,
-    probeCount: targets.filter((target) => target.kind === "probe").length,
     workloadCount: targetNames.length,
     failedWorkloadCount,
     repetitions:
@@ -137,8 +118,8 @@ export function summaryFromReport(report: AwfyReport) {
     },
     engineVersions,
     corpusCommit:
-      typeof report.metadata?.corpus?.awfy?.commit === "string"
-        ? report.metadata.corpus.awfy.commit
+      typeof report.metadata?.corpus?.jetStream?.commit === "string"
+        ? report.metadata.corpus.jetStream.commit
         : "unknown",
     driverVersion:
       typeof report.metadata?.driver?.version === "number"
@@ -148,30 +129,23 @@ export function summaryFromReport(report: AwfyReport) {
   };
 }
 
-async function readEntryFromFile(
-  filePath: string,
-): Promise<AwfyBlobPublishEntry> {
+async function readEntry(filePath: string): Promise<JetStreamBlobPublishEntry> {
   const reportJson = await readFile(filePath, "utf8");
-  const parsed = JSON.parse(reportJson) as AwfyReport;
-  if (!Array.isArray(parsed.targets)) {
-    throw new Error(`${filePath} is not a valid AWFY report`);
+  const report = JSON.parse(reportJson) as JetStreamReport;
+  if (!Array.isArray(report.targets)) {
+    throw new Error(`${filePath} is not a valid JetStream report`);
   }
-
   const runId = numberFromEnv("GITHUB_RUN_ID");
-  const runNumber = numberFromEnv("GITHUB_RUN_NUMBER");
   const artifactId =
-    numberFromEnv("AWFY_ARTIFACT_ID") ??
-    numberFromEnv("GITHUB_RUN_ID") ??
-    Date.now();
+    numberFromEnv("JETSTREAM_ARTIFACT_ID") ?? runId ?? Date.now();
   const repository = process.env.GITHUB_REPOSITORY ?? "frostney/GocciaScript";
   const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
   const headSha = process.env.GITHUB_SHA ?? "unknown";
   const now = new Date().toISOString();
-  const createdAt = timestampFromEnv("AWFY_RUN_CREATED_AT") ?? now;
-
+  const createdAt = timestampFromEnv("JETSTREAM_RUN_CREATED_AT") ?? now;
   return {
     runId: runId ?? artifactId,
-    runNumber: runNumber ?? 0,
+    runNumber: numberFromEnv("GITHUB_RUN_NUMBER") ?? 0,
     artifactId,
     title: process.env.GITHUB_WORKFLOW ?? "CI",
     headSha,
@@ -182,49 +156,36 @@ async function readEntryFromFile(
     createdAt,
     updatedAt: now,
     artifactCreatedAt: now,
-    summary: summaryFromReport(parsed),
-    reportJson: `${JSON.stringify(parsed, null, 2)}\n`,
+    summary: summaryFromReport(report),
+    reportJson: `${JSON.stringify(report, null, 2)}\n`,
   };
 }
 
-function usage(): never {
-  console.error(`Usage:
-  bun scripts/publish-awfy-report.ts awfy-report.json
-
-Environment:
-  BLOB_READ_WRITE_TOKEN   Required Vercel Blob token.
-  AWFY_BLOB_ACCESS        public (default) or private.
-  AWFY_BLOB_PREFIX        Blob path prefix, default "awfy".
-`);
-  process.exit(2);
-}
-
 async function main() {
-  const args = process.argv.slice(2);
-  if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
-    usage();
-  }
+  const filePath = process.argv.slice(2).find((arg) => !arg.startsWith("--"));
+  if (!filePath)
+    throw new Error(
+      "Usage: bun scripts/publish-jetstream-report.ts jetstream-report.json",
+    );
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    throw new Error("Set BLOB_READ_WRITE_TOKEN to publish AWFY Blob data");
+    throw new Error("Set BLOB_READ_WRITE_TOKEN to publish JetStream data");
   }
-
-  const filePath = args.find((arg) => !arg.startsWith("--")) ?? usage();
-  const entry = await readEntryFromFile(filePath);
-  const prefix = awfyBlobPrefix();
-  const day = entry.createdAt.slice(0, 10);
-
-  log(
-    `publishing ${filePath} to ${awfyBlobReportPathForArtifactId(entry.artifactId, prefix)}`,
+  const entry = await readEntry(filePath);
+  const prefix = jetStreamBlobPrefix();
+  console.log(
+    `[publish-jetstream] publishing ${jetStreamBlobReportPathForArtifactId(entry.artifactId, prefix)}`,
   );
-  log(`publishing daily pointer to ${awfyBlobDailyPathForDay(day, prefix)}`);
-  const runs = await publishAwfyReportsToBlob([entry]);
-  log(`published ${runs.length} AWFY report(s)`);
+  console.log(
+    `[publish-jetstream] publishing ${jetStreamBlobDailyPathForRun(entry.createdAt.slice(0, 10), entry.runId, prefix)}`,
+  );
+  await publishJetStreamReportsToBlob([entry]);
 }
 
 if (import.meta.main) {
-  main().catch((err) => {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[publish-awfy] failed: ${message}`);
+  main().catch((error) => {
+    console.error(
+      `[publish-jetstream] ${error instanceof Error ? error.message : String(error)}`,
+    );
     process.exit(1);
   });
 }
