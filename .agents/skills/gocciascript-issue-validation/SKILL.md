@@ -9,7 +9,7 @@ Project-specific validation rules for GocciaScript issues. Use this skill with t
 
 ## Spec Lookup
 
-For ECMA-262 or ECMA-402 semantics, use the pinned `tc39-mcp@0.6.0` server from the project MCP config under `.agents/mcp/` when it is available. `tc39-mcp` spec-reading tools default to ECMA-262, so pass the spec explicitly for the standard you are checking:
+For ECMA-262 or ECMA-402 semantics, use the pinned `tc39-mcp@0.6.1` server from the project MCP config under `.agents/mcp/` when it is available. `tc39-mcp` spec-reading tools default to ECMA-262, so pass the spec explicitly for the standard you are checking:
 
 - ECMA-262 language/core built-ins: `spec: "262"`
 - ECMA-402 Intl behavior: `spec: "402"`

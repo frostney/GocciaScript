@@ -2,7 +2,7 @@
   "mcpServers": {
     "tc39": {
       "command": "npx",
-      "args": ["-y", "tc39-mcp@0.6.0"]
+      "args": ["-y", "tc39-mcp@0.6.1"]
     }
   }
 }
