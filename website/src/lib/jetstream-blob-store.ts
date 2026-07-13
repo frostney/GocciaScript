@@ -16,6 +16,7 @@ export type JetStreamBlobRunSummary = {
   engineVersions: Record<string, string>;
   corpusCommit: string;
   driverVersion: number | null;
+  targetNames: string[];
 };
 
 export type JetStreamBlobReport = {
@@ -83,11 +84,12 @@ export function jetStreamBlobReportPathForArtifactId(
   return `${jetStreamBlobRunsPrefix(prefix)}/${artifactId}/report.json.gz`;
 }
 
-export function jetStreamBlobDailyPathForDay(
+export function jetStreamBlobDailyPathForRun(
   day: string,
+  runId: number,
   prefix = jetStreamBlobPrefix(),
 ): string {
-  return `${jetStreamBlobDailyPrefix(prefix)}/${day}.json`;
+  return `${jetStreamBlobDailyPrefix(prefix)}/${day}/${runId}.json`;
 }
 
 function byCreatedAtThenRunNumber(
@@ -209,7 +211,11 @@ export async function publishJetStreamReportsToBlob(
       publishedAt: new Date().toISOString(),
     };
     await put(
-      jetStreamBlobDailyPathForDay(entry.createdAt.slice(0, 10), prefix),
+      jetStreamBlobDailyPathForRun(
+        entry.createdAt.slice(0, 10),
+        entry.runId,
+        prefix,
+      ),
       JSON.stringify(published, null, 2),
       {
         access,

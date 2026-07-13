@@ -105,6 +105,23 @@ type RunMeta = Pick<
   | "createdAt"
 >;
 
+type RunSummary = {
+  workloadCount?: unknown;
+  targetCount?: unknown;
+  failedWorkloadCount?: unknown;
+  repetitions?: unknown;
+  referenceRatios?: {
+    quickjs?: unknown;
+    node?: unknown;
+  };
+  engineVersions?: Record<string, unknown>;
+  corpusCommit?: unknown;
+  driverVersion?: unknown;
+  targetNames?: unknown;
+};
+
+type RunWithSummary = RunMeta & { summary: RunSummary };
+
 function finitePositive(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
@@ -217,17 +234,6 @@ function normalizeReport(
   };
 }
 
-function failuresForStats(stats: EngineStats | undefined): number {
-  if (!stats) return 1;
-  return (
-    nonNegativeInteger(stats.timeout) +
-    nonNegativeInteger(stats.crash) +
-    nonNegativeInteger(stats.oom) +
-    nonNegativeInteger(stats.verificationFailed) +
-    nonNegativeInteger(stats.missingResult)
-  );
-}
-
 function targetFailure(
   target: NormalizedReport["targets"][number],
 ): string | null {
@@ -277,32 +283,41 @@ function targetsFromReport(
 function timelinePoint(
   suite: PerformanceSuite,
   run: RunMeta,
-  report: NormalizedReport | null,
+  summary: RunSummary | null,
 ): PerformanceTimelinePoint {
-  const workloadCount = report?.targets.length ?? 0;
-  const failedWorkloadCount = report
-    ? report.targets.filter((target) =>
-        ["goccia", "qjs", "node"].some(
-          (engine) => failuresForStats(target.engineStats[engine]) > 0,
-        ),
-      ).length
-    : 0;
-  const quickjsRatio = finitePositive(report?.geomeanRatios.goccia_over_qjs);
-  const nodeRatio = finitePositive(report?.geomeanRatios.goccia_over_node);
+  const workloadCount = nonNegativeInteger(
+    summary?.workloadCount ?? summary?.targetCount,
+  );
+  const failedWorkloadCount = nonNegativeInteger(summary?.failedWorkloadCount);
+  const quickjsRatio = finitePositive(summary?.referenceRatios?.quickjs);
+  const nodeRatio = finitePositive(summary?.referenceRatios?.node);
+  const engineVersions = Object.fromEntries(
+    Object.entries(summary?.engineVersions ?? {}).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
+  const targetNames = Array.isArray(summary?.targetNames)
+    ? summary.targetNames.filter(
+        (name): name is string => typeof name === "string",
+      )
+    : [];
   const complete =
-    Boolean(report) &&
+    Boolean(summary) &&
     workloadCount > 0 &&
     failedWorkloadCount === 0 &&
     quickjsRatio !== null &&
     nodeRatio !== null;
-  const metadata = report?.metadata;
   const compatibilityKey = JSON.stringify({
     suite,
-    corpus: metadata?.corpusCommit ?? "unknown",
-    driver: metadata?.driverVersion ?? null,
-    quickjs: metadata?.engineVersions.qjs ?? "unknown",
-    node: metadata?.engineVersions.node ?? "unknown",
-    targets: report?.targets.map((target) => target.name).sort() ?? [],
+    corpus:
+      typeof summary?.corpusCommit === "string"
+        ? summary.corpusCommit
+        : "unknown",
+    driver:
+      typeof summary?.driverVersion === "number" ? summary.driverVersion : null,
+    quickjs: engineVersions.qjs ?? "unknown",
+    node: engineVersions.node ?? "unknown",
+    targets: targetNames.sort(),
   });
   return {
     suite,
@@ -313,10 +328,15 @@ function timelinePoint(
     nodeRatio: complete ? nodeRatio : null,
     failedWorkloadCount,
     workloadCount,
-    repetitions: metadata?.repetitions ?? null,
-    engineVersions: metadata?.engineVersions ?? {},
-    corpusCommit: metadata?.corpusCommit ?? "unknown",
-    driverVersion: metadata?.driverVersion ?? null,
+    repetitions:
+      typeof summary?.repetitions === "number" ? summary.repetitions : null,
+    engineVersions,
+    corpusCommit:
+      typeof summary?.corpusCommit === "string"
+        ? summary.corpusCommit
+        : "unknown",
+    driverVersion:
+      typeof summary?.driverVersion === "number" ? summary.driverVersion : null,
     compatibilityKey,
   };
 }
@@ -333,28 +353,25 @@ async function parseReport(
   }
 }
 
-async function buildSuiteData<Run extends RunMeta>(
+async function buildSuiteData<Run extends RunWithSummary>(
   suite: PerformanceSuite,
   runs: Run[],
   readReport: (run: Run) => Promise<string | null>,
 ): Promise<PerformanceSuiteData> {
-  const reports = await Promise.all(
-    runs.map(async (run) => {
-      try {
-        return await parseReport(await readReport(run), suite);
-      } catch {
-        return null;
-      }
-    }),
-  );
-  const timeline = runs.map((run, index) =>
-    timelinePoint(suite, run, reports[index] ?? null),
-  );
+  const timeline = runs.map((run) => timelinePoint(suite, run, run.summary));
   const latest = timeline.at(-1) ?? null;
   const latestComplete =
     [...timeline].reverse().find((point) => point.complete) ?? null;
   if (latest && !latest.complete && latestComplete) latestComplete.stale = true;
-  const latestReport = reports.at(-1) ?? null;
+  const latestRun = runs.at(-1);
+  let latestReport: NormalizedReport | null = null;
+  if (latestRun) {
+    try {
+      latestReport = await parseReport(await readReport(latestRun), suite);
+    } catch {
+      latestReport = null;
+    }
+  }
   return {
     latest,
     latestComplete,
@@ -427,6 +444,7 @@ export const loadPerformanceDashboardData = unstable_cache(
 
 export const performanceDashboardTestApi = {
   normalizeReport,
+  buildSuiteData,
   targetsFromReport,
   timelinePoint,
 };

@@ -34,7 +34,12 @@ function parseArgs(argv) {
 }
 
 function comparableEngineMetadata(report) {
-  return (report.metadata?.engines || []).map(({ name, kind, version }) => ({ name, kind, version }));
+  return (report.metadata?.engines || []).map(({ name, kind, version, sourceCommit }) => ({
+    name,
+    kind,
+    version,
+    sourceCommit: sourceCommit || null,
+  }));
 }
 
 function mergeReports(reports, manifest) {
@@ -49,8 +54,8 @@ function mergeReports(reports, manifest) {
     if (report.schemaVersion !== first.schemaVersion) {
       throw new Error('JetStream shard schema versions do not match');
     }
-    if (report.metadata?.goccia?.commit !== first.metadata?.goccia?.commit) {
-      throw new Error('JetStream shard Goccia commits do not match');
+    if (report.metadata?.goccia?.checkoutCommit !== first.metadata?.goccia?.checkoutCommit) {
+      throw new Error('JetStream shard checkout commits do not match');
     }
     if (report.metadata?.corpus?.jetStream?.commit !== first.metadata?.corpus?.jetStream?.commit) {
       throw new Error('JetStream shard corpus commits do not match');
@@ -88,7 +93,7 @@ function mergeReports(reports, manifest) {
   };
   const engines = (first.metadata?.engines || []).map((engine) => engine.name);
   const failures = validationFailures(merged, manifest, engines, expected);
-  if (failures.length > 0) throw new Error(failures.join('\n'));
+  merged.validationFailures = failures;
   return merged;
 }
 
@@ -101,6 +106,7 @@ function main(argv = process.argv.slice(2)) {
   const outputDirectory = path.dirname(options.output);
   if (outputDirectory !== '.') fs.mkdirSync(outputDirectory, { recursive: true });
   fs.writeFileSync(options.output, `${JSON.stringify(merged, null, 2)}\n`);
+  if (merged.validationFailures.length > 0) throw new Error(merged.validationFailures.join('\n'));
 }
 
 if (require.main === module) {

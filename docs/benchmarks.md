@@ -511,24 +511,29 @@ uses three suite iterations and five process repetitions. Therefore the result i
 a stable GocciaScript project measurement, not an official full-suite JetStream
 score.
 
-Reports retain raw scores, subscores, medians, IQR/min/max/CV, verification
-outcomes, failure stdout/stderr, corpus and driver versions, Goccia commit/FPC,
-and QuickJS/Node versions. Timeouts, crashes, OOMs, missing results, and
-verification failures remain structurally valid report rows and fail the CI gate
-after the artifact has been written. CI runs one workload per parallel shard,
-preserving repetition-to-engine interleaving inside each workload, then validates
-metadata and recomputes geomean ratios in manifest order. Shards checkpoint after
-every sample so an outer cancellation still leaves diagnostic report data.
+Reports retain raw scores, subscores, medians, IQR/min/max/CV, explicit upstream
+validation availability and outcomes, failure stdout/stderr, corpus and driver
+versions, per-binary Goccia source revisions/FPC, and QuickJS/Node versions.
+Workloads without an upstream `validate()` hook are labeled `execution-only`; the
+adapter does not invent a checksum or claim that validation passed. Timeouts,
+crashes, OOMs, missing results, and verification failures remain structurally
+valid report rows and fail the CI gate after the artifact and main-branch Blob
+pointer have been written. CI runs one workload per parallel shard, preserving
+repetition-to-engine interleaving inside each workload, then validates metadata
+and recomputes geomean ratios in manifest order. Shards checkpoint after every
+sample so an outer cancellation still leaves diagnostic report data.
 
 The public Performance Barometer normalizes both external lanes so `1.00×` means
 aligned performance and values above one mean GocciaScript was proportionally
 slower. AWFY uses `Goccia time / reference time`; JetStream uses
 `reference score / Goccia score`. QuickJS and Node.js stay separate reference
 engines. Main publishes JetStream reports under the independent `jetstream/`
-Blob namespace, and `/performance` combines their history with AWFY. Trend lines
-break when corpus, subset, driver, or reference-engine versions change. Failed
-runs remain visible as gaps; the most recent complete point is labeled stale
-instead of being silently carried forward.
+Blob namespace, and `/performance` combines their history with AWFY. Daily
+pointers carry the normalized timeline summary, so the dashboard reads retained
+history without downloading every full report; only the latest report is fetched
+for the workload-detail tables. Trend lines break when corpus, subset, driver, or
+reference-engine versions change. Failed runs remain visible as gaps; the most
+recent complete point is labeled stale instead of being silently carried forward.
 
 ## Web Tooling Goccia Lane
 

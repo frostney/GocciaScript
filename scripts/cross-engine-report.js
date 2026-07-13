@@ -29,10 +29,16 @@ function resolveEngines(options) {
   const requested = options.engines || ['goccia', 'qjs', 'node'];
   const engines = [];
   const addGoccia = (name, command) => {
+    const sourceCommit = name === 'goccia-baseline'
+      ? options.gocciaBaselineCommit
+      : name === 'goccia-candidate'
+        ? options.gocciaCandidateCommit
+        : options.gocciaCommit;
     engines.push({
       name,
       kind: 'goccia',
       command,
+      sourceCommit: sourceCommit || null,
       baseArgs: DEFAULT_GOCCIA_FLAGS.concat(options.gocciaFlags || []),
     });
   };
@@ -87,7 +93,7 @@ function classifyProcessOutcome(proc, parsed, stdout, stderr) {
   const combined = `${stdout}\n${stderr}`.toLowerCase();
   if (/\bout[\s-]of[\s-]memory\b/.test(combined) || /\boom\b/.test(combined) || proc.signal === 'SIGKILL') return 'oom';
   if (!parsed) return proc.status === 0 ? 'missing-result' : 'crash';
-  if (!parsed.verificationPassed) return 'verification-failed';
+  if (parsed.verificationPassed === false) return 'verification-failed';
   if (proc.status !== 0) return 'crash';
   return 'ok';
 }
@@ -178,10 +184,17 @@ function summarizeMetric(samples, field, outputPrefix) {
 }
 
 function checksumAgreement(samples) {
-  const checksums = new Set(samples
+  const checkedSamples = samples
     .filter((sample) => sample.outcome === 'ok')
-    .map((sample) => sample.checksum));
-  return { ok: checksums.size <= 1, checksums: [...checksums].sort() };
+    .map((sample) => sample.checksum)
+    .filter((checksum) => checksum !== null && checksum !== undefined);
+  const checksums = new Set(checkedSamples);
+  return {
+    available: checkedSamples.length > 0,
+    checkedSampleCount: checkedSamples.length,
+    ok: checkedSamples.length > 0 ? checksums.size <= 1 : null,
+    checksums: [...checksums].sort(),
+  };
 }
 
 function buildMetricTargetSummary(samples, { field, outputPrefix, ratioDirection }) {

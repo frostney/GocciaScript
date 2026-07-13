@@ -11,13 +11,37 @@ import { GITHUB_REPO_URL } from "../src/lib/github";
 
 type AwfyReport = {
   metadata?: {
+    driver?: { version?: unknown };
+    corpus?: {
+      awfy?: {
+        commit?: unknown;
+        benchmarks?: Record<string, unknown>;
+      };
+    };
+    engines?: Array<{ name?: unknown; version?: unknown }>;
     options?: {
       repetitions?: unknown;
     };
   };
   targets?: Array<{
+    name?: unknown;
     kind?: unknown;
+    summary?: {
+      engineStats?: Record<
+        string,
+        {
+          ok?: number;
+          timeout?: number;
+          crash?: number;
+          oom?: number;
+          verificationFailed?: number;
+          missingResult?: number;
+        }
+      >;
+      checksumAgreement?: { ok?: unknown };
+    };
   }>;
+  geomeanRatios?: Record<string, unknown>;
 };
 
 function log(message: string) {
@@ -44,16 +68,82 @@ function timestampFromEnv(name: string): string | null {
   return Number.isNaN(time) ? null : new Date(time).toISOString();
 }
 
-function summaryFromReport(report: AwfyReport) {
+function finiteRatio(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
+export function summaryFromReport(report: AwfyReport) {
   const targets = Array.isArray(report.targets) ? report.targets : [];
+  const reportedTargetNames = targets
+    .map((target) => target.name)
+    .filter((name): name is string => typeof name === "string");
+  const configuredTargetNames = Object.keys(
+    report.metadata?.corpus?.awfy?.benchmarks ?? {},
+  );
+  const targetNames = (
+    configuredTargetNames.length > 0
+      ? configuredTargetNames
+      : reportedTargetNames
+  ).sort();
+  const missingWorkloadCount = targetNames.filter(
+    (name) => !reportedTargetNames.includes(name),
+  ).length;
+  const requiredEngines = ["goccia", "qjs", "node"];
+  const failedWorkloadCount =
+    missingWorkloadCount +
+    targets.filter((target) => {
+      const statsByEngine = target.summary?.engineStats ?? {};
+      return (
+        target.summary?.checksumAgreement?.ok === false ||
+        requiredEngines.some((engine) => {
+          const stats = statsByEngine[engine];
+          return (
+            !stats ||
+            (stats.ok ?? 0) === 0 ||
+            (stats.timeout ?? 0) +
+              (stats.crash ?? 0) +
+              (stats.oom ?? 0) +
+              (stats.verificationFailed ?? 0) +
+              (stats.missingResult ?? 0) >
+              0
+          );
+        })
+      );
+    }).length;
+  const engineVersions = Object.fromEntries(
+    (report.metadata?.engines ?? [])
+      .filter(
+        (engine): engine is { name: string; version: string } =>
+          typeof engine.name === "string" && typeof engine.version === "string",
+      )
+      .map((engine) => [engine.name, engine.version]),
+  );
   return {
     targetCount: targets.length,
     awfyCount: targets.filter((target) => target.kind === "awfy").length,
     probeCount: targets.filter((target) => target.kind === "probe").length,
+    workloadCount: targetNames.length,
+    failedWorkloadCount,
     repetitions:
       typeof report.metadata?.options?.repetitions === "number"
         ? report.metadata.options.repetitions
         : null,
+    referenceRatios: {
+      quickjs: finiteRatio(report.geomeanRatios?.goccia_over_qjs),
+      node: finiteRatio(report.geomeanRatios?.goccia_over_node),
+    },
+    engineVersions,
+    corpusCommit:
+      typeof report.metadata?.corpus?.awfy?.commit === "string"
+        ? report.metadata.corpus.awfy.commit
+        : "unknown",
+    driverVersion:
+      typeof report.metadata?.driver?.version === "number"
+        ? report.metadata.driver.version
+        : null,
+    targetNames,
   };
 }
 
@@ -130,8 +220,10 @@ async function main() {
   log(`published ${runs.length} AWFY report(s)`);
 }
 
-main().catch((err) => {
-  const message = err instanceof Error ? err.message : String(err);
-  console.error(`[publish-awfy] failed: ${message}`);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[publish-awfy] failed: ${message}`);
+    process.exit(1);
+  });
+}

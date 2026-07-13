@@ -41,6 +41,9 @@ function usage() {
     '  --goccia <path>              GocciaScriptLoader path (default: build/GocciaScriptLoader)',
     '  --goccia-baseline <path>     Optional baseline Goccia binary',
     '  --goccia-candidate <path>    Optional candidate Goccia binary',
+    '  --goccia-commit <sha>         Source revision for the Goccia binary',
+    '  --goccia-baseline-commit <sha> Source revision for the baseline binary',
+    '  --goccia-candidate-commit <sha> Source revision for the candidate binary',
     '  --qjs <path>                 QuickJS shell path (default: qjs)',
     '  --node <path>                Node.js path (default: current node)',
     '  --goccia-flag <flag>         Extra Goccia flag; repeatable',
@@ -71,6 +74,9 @@ function parseArgs(argv) {
     goccia: path.join('build', 'GocciaScriptLoader'),
     gocciaBaseline: '',
     gocciaCandidate: '',
+    gocciaCommit: '',
+    gocciaBaselineCommit: '',
+    gocciaCandidateCommit: '',
     qjs: 'qjs',
     node: process.execPath,
     gocciaFlags: [...JETSTREAM_GOCCIA_FLAGS],
@@ -101,6 +107,9 @@ function parseArgs(argv) {
     else if (arg === '--goccia' || arg.startsWith('--goccia=')) options.goccia = nextValue();
     else if (arg === '--goccia-baseline' || arg.startsWith('--goccia-baseline=')) options.gocciaBaseline = nextValue();
     else if (arg === '--goccia-candidate' || arg.startsWith('--goccia-candidate=')) options.gocciaCandidate = nextValue();
+    else if (arg === '--goccia-commit' || arg.startsWith('--goccia-commit=')) options.gocciaCommit = nextValue();
+    else if (arg === '--goccia-baseline-commit' || arg.startsWith('--goccia-baseline-commit=')) options.gocciaBaselineCommit = nextValue();
+    else if (arg === '--goccia-candidate-commit' || arg.startsWith('--goccia-candidate-commit=')) options.gocciaCandidateCommit = nextValue();
     else if (arg === '--qjs' || arg.startsWith('--qjs=')) options.qjs = nextValue();
     else if (arg === '--node' || arg.startsWith('--node=')) options.node = nextValue();
     else if (arg === '--goccia-flag' || arg.startsWith('--goccia-flag=')) options.gocciaFlags.push(nextValue());
@@ -161,13 +170,14 @@ for (let index = 0; index < __jetStreamConfig.iterations; index += 1) {
   __benchmark.runIteration(index);
   __times.push(Math.max(1, __jetStreamNow() - started));
 }
-if (__benchmark.validate) __benchmark.validate(__jetStreamConfig.iterations);
+const __hasExplicitValidation = typeof __benchmark.validate === "function";
+if (__hasExplicitValidation) __benchmark.validate(__jetStreamConfig.iterations);
 const __firstTime = __times[0];
 const __remaining = __times.slice(1).sort((left, right) => right - left);
 const __mean = (values) => values.reduce((sum, value) => sum + value, 0) / values.length;
 const __toScore = (time) => 5000 / Math.max(time, 1);
 const __subScores = { First: __toScore(__firstTime) };
-if (__jetStreamConfig.worstCaseCount > 0) {
+if (__jetStreamConfig.worstCaseCount > 0 && __remaining.length > 0) {
   __subScores.Worst = __toScore(__mean(__remaining.slice(0, __jetStreamConfig.worstCaseCount)));
 }
 if (__jetStreamConfig.iterations > 1) __subScores.Average = __toScore(__mean(__remaining));
@@ -178,8 +188,9 @@ const __result = {
   name: __jetStreamConfig.name,
   score: __score,
   subScores: __subScores,
-  checksum: "verified",
-  verificationPassed: true,
+  checksum: __hasExplicitValidation ? "validated" : null,
+  verificationPassed: __hasExplicitValidation ? true : null,
+  verificationKind: __hasExplicitValidation ? "explicit" : "execution-only",
   iterations: __jetStreamConfig.iterations,
 };
 console.log(${JSON.stringify(RESULT_MARKER)} + JSON.stringify(__result));
@@ -209,7 +220,8 @@ function normalizeJetStreamResult(parsed, target) {
     score: parsed?.score ?? null,
     subScores: parsed?.subScores ?? null,
     checksum: parsed?.checksum ?? null,
-    verificationPassed: parsed?.verificationPassed ?? false,
+    verificationPassed: parsed?.verificationPassed === undefined ? false : parsed.verificationPassed,
+    verificationKind: parsed?.verificationKind ?? 'unknown',
     iterations: target.benchmark.iterations,
   };
 }
@@ -232,8 +244,8 @@ function collectMetadata(options, manifest, engines) {
   return {
     driver: { version: DRIVER_VERSION, script: 'scripts/jetstream-driver.js' },
     goccia: {
-      commit: commandText('git', ['rev-parse', 'HEAD']),
-      shortCommit: commandText('git', ['rev-parse', '--short', 'HEAD']),
+      checkoutCommit: commandText('git', ['rev-parse', 'HEAD']),
+      checkoutShortCommit: commandText('git', ['rev-parse', '--short', 'HEAD']),
       status: commandText('git', ['status', '--short']),
       buildMode: 'external-binary',
       fpcVersion: commandText('fpc', ['-iV']),
@@ -245,6 +257,7 @@ function collectMetadata(options, manifest, engines) {
       kind: engine.kind,
       command: engine.command,
       version: engineVersion(engine),
+      sourceCommit: engine.sourceCommit,
     })),
     options: { repetitions: options.repetitions, timeoutMs: options.timeoutMs },
   };

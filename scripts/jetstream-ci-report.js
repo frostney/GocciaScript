@@ -20,6 +20,9 @@ function usage() {
     '  --engines <csv>              Engine order (default: goccia,qjs,node)',
     '  --goccia-baseline <path>     Optional baseline Goccia binary',
     '  --goccia-candidate <path>    Optional candidate Goccia binary',
+    '  --goccia-commit <sha>         Source revision for the Goccia binary',
+    '  --goccia-baseline-commit <sha> Source revision for the baseline binary',
+    '  --goccia-candidate-commit <sha> Source revision for the candidate binary',
     '  --timeout-ms <n>             Per-sample timeout',
   ].join('\n');
 }
@@ -38,6 +41,9 @@ function parseArgs(argv) {
     engines: DEFAULT_ENGINES,
     gocciaBaseline: '',
     gocciaCandidate: '',
+    gocciaCommit: '',
+    gocciaBaselineCommit: '',
+    gocciaCandidateCommit: '',
     benchmarks: [],
     timeoutMs: DEFAULT_TIMEOUT_MS,
   };
@@ -57,6 +63,9 @@ function parseArgs(argv) {
     else if (arg === '--engines' || arg.startsWith('--engines=')) options.engines = nextValue();
     else if (arg === '--goccia-baseline' || arg.startsWith('--goccia-baseline=')) options.gocciaBaseline = nextValue();
     else if (arg === '--goccia-candidate' || arg.startsWith('--goccia-candidate=')) options.gocciaCandidate = nextValue();
+    else if (arg === '--goccia-commit' || arg.startsWith('--goccia-commit=')) options.gocciaCommit = nextValue();
+    else if (arg === '--goccia-baseline-commit' || arg.startsWith('--goccia-baseline-commit=')) options.gocciaBaselineCommit = nextValue();
+    else if (arg === '--goccia-candidate-commit' || arg.startsWith('--goccia-candidate-commit=')) options.gocciaCandidateCommit = nextValue();
     else if (arg === '--timeout-ms' || arg.startsWith('--timeout-ms=')) options.timeoutMs = positiveInteger(nextValue(), '--timeout-ms');
     else throw new Error(`Unknown option: ${arg}`);
   }
@@ -119,6 +128,9 @@ function runReport(options, manifest) {
   for (const benchmark of benchmarks) args.push('--benchmark', benchmark);
   if (options.gocciaBaseline) args.push('--goccia-baseline', options.gocciaBaseline);
   if (options.gocciaCandidate) args.push('--goccia-candidate', options.gocciaCandidate);
+  if (options.gocciaCommit) args.push('--goccia-commit', options.gocciaCommit);
+  if (options.gocciaBaselineCommit) args.push('--goccia-baseline-commit', options.gocciaBaselineCommit);
+  if (options.gocciaCandidateCommit) args.push('--goccia-candidate-commit', options.gocciaCandidateCommit);
   args.push(
     '--manifest', options.manifestPath,
     '--repetitions', String(manifest.ciReport?.repetitions || 5),

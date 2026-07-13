@@ -540,6 +540,8 @@ jobs:
             --benchmark "$WORKLOAD" \
             --goccia-baseline build-main/GocciaScriptLoader \
             --goccia-candidate build/GocciaScriptLoader \
+            --goccia-baseline-commit "${{ github.event.pull_request.base.sha }}" \
+            --goccia-candidate-commit "${{ github.sha }}" \
             --output "jetstream-report-$WORKLOAD.json"
 
       - name: Upload JetStream workload report
@@ -573,17 +575,24 @@ jobs:
           merge-multiple: true
 
       - name: Merge JetStream report
+        id: jetstream-merge
+        continue-on-error: true
         run: |
           node scripts/jetstream-merge-reports.js \
             --output jetstream-report.json \
             jetstream-reports/*.json
 
       - name: Upload JetStream report
+        if: always() && hashFiles('jetstream-report.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: jetstream-report
           retention-days: 7
           path: jetstream-report.json
+
+      - name: Fail when JetStream validation failed
+        if: steps.jetstream-merge.outcome == 'failure'
+        run: exit 1
 
   web-tooling-plan:
     runs-on: ubuntu-latest

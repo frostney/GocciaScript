@@ -770,6 +770,8 @@ jobs:
         run: node scripts/test-awfy-driver.js
 
       - name: Run AWFY report
+        id: awfy-report
+        continue-on-error: true
         run: |
           node scripts/awfy-ci-report.js \
             --awfy-dir awfy-suite/benchmarks/JavaScript \
@@ -785,7 +787,7 @@ jobs:
           path: awfy-report.json
 
       - name: Publish AWFY report
-        if: github.ref == 'refs/heads/main' && hashFiles('awfy-report.json') != ''
+        if: always() && github.ref == 'refs/heads/main' && hashFiles('awfy-report.json') != ''
         env:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
           AWFY_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
@@ -797,6 +799,10 @@ jobs:
           cd website
           bun install --frozen-lockfile
           bun run publish-awfy ../awfy-report.json
+
+      - name: Fail when AWFY validation failed
+        if: steps.awfy-report.outcome == 'failure'
+        run: exit 1
 
   jetstream-plan:
     runs-on: ubuntu-latest
@@ -887,6 +893,7 @@ jobs:
           node scripts/jetstream-ci-report.js \
             --jetstream-dir jetstream-suite \
             --benchmark "$WORKLOAD" \
+            --goccia-commit "${{ github.sha }}" \
             --output "jetstream-report-$WORKLOAD.json"
 
       - name: Upload JetStream workload report
@@ -924,12 +931,15 @@ jobs:
           merge-multiple: true
 
       - name: Merge JetStream report
+        id: jetstream-merge
+        continue-on-error: true
         run: |
           node scripts/jetstream-merge-reports.js \
             --output jetstream-report.json \
             jetstream-reports/*.json
 
       - name: Upload JetStream report
+        if: always() && hashFiles('jetstream-report.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: jetstream-report
@@ -937,7 +947,7 @@ jobs:
           path: jetstream-report.json
 
       - name: Publish JetStream report
-        if: github.ref == 'refs/heads/main' && hashFiles('jetstream-report.json') != ''
+        if: always() && github.ref == 'refs/heads/main' && hashFiles('jetstream-report.json') != ''
         env:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
           JETSTREAM_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
@@ -949,6 +959,10 @@ jobs:
           cd website
           bun install --frozen-lockfile
           bun run publish-jetstream ../jetstream-report.json
+
+      - name: Fail when JetStream validation failed
+        if: steps.jetstream-merge.outcome == 'failure'
+        run: exit 1
 
   web-tooling-plan:
     runs-on: ubuntu-latest

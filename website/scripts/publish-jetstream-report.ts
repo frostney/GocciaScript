@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { GITHUB_REPO_URL } from "../src/lib/github";
 import {
   type JetStreamBlobPublishEntry,
-  jetStreamBlobDailyPathForDay,
+  jetStreamBlobDailyPathForRun,
   jetStreamBlobPrefix,
   jetStreamBlobReportPathForArtifactId,
   publishJetStreamReportsToBlob,
@@ -22,11 +22,22 @@ type EngineStats = {
 export type JetStreamReport = {
   metadata?: {
     driver?: { version?: unknown };
-    corpus?: { jetStream?: { commit?: unknown } };
+    corpus?: {
+      jetStream?: {
+        commit?: unknown;
+        benchmarks?: Record<string, unknown>;
+      };
+    };
     engines?: Array<{ name?: unknown; version?: unknown }>;
     options?: { repetitions?: unknown };
   };
-  targets?: Array<{ summary?: { engineStats?: Record<string, EngineStats> } }>;
+  targets?: Array<{
+    name?: unknown;
+    summary?: {
+      engineStats?: Record<string, EngineStats>;
+      checksumAgreement?: { ok?: unknown };
+    };
+  }>;
   geomeanRatios?: Record<string, unknown>;
 };
 
@@ -50,17 +61,42 @@ function finiteRatio(value: unknown): number | null {
 
 export function summaryFromReport(report: JetStreamReport) {
   const targets = Array.isArray(report.targets) ? report.targets : [];
-  const failedWorkloadCount = targets.filter((target) =>
-    Object.values(target.summary?.engineStats ?? {}).some(
-      (stats) =>
-        (stats.timeout ?? 0) +
-          (stats.crash ?? 0) +
-          (stats.oom ?? 0) +
-          (stats.verificationFailed ?? 0) +
-          (stats.missingResult ?? 0) >
-        0,
-    ),
+  const reportedTargetNames = targets
+    .map((target) => target.name)
+    .filter((name): name is string => typeof name === "string");
+  const configuredTargetNames = Object.keys(
+    report.metadata?.corpus?.jetStream?.benchmarks ?? {},
+  );
+  const targetNames = (
+    configuredTargetNames.length > 0
+      ? configuredTargetNames
+      : reportedTargetNames
+  ).sort();
+  const missingWorkloadCount = targetNames.filter(
+    (name) => !reportedTargetNames.includes(name),
   ).length;
+  const requiredEngines = ["goccia", "qjs", "node"];
+  const failedWorkloadCount =
+    missingWorkloadCount +
+    targets.filter((target) => {
+      const statsByEngine = target.summary?.engineStats ?? {};
+      return (
+        target.summary?.checksumAgreement?.ok === false ||
+        requiredEngines.some((engine) => {
+          const stats = statsByEngine[engine];
+          return (
+            !stats ||
+            (stats.ok ?? 0) === 0 ||
+            (stats.timeout ?? 0) +
+              (stats.crash ?? 0) +
+              (stats.oom ?? 0) +
+              (stats.verificationFailed ?? 0) +
+              (stats.missingResult ?? 0) >
+              0
+          );
+        })
+      );
+    }).length;
   const engineVersions = Object.fromEntries(
     (report.metadata?.engines ?? [])
       .filter(
@@ -70,7 +106,7 @@ export function summaryFromReport(report: JetStreamReport) {
       .map((engine) => [engine.name, engine.version]),
   );
   return {
-    workloadCount: targets.length,
+    workloadCount: targetNames.length,
     failedWorkloadCount,
     repetitions:
       typeof report.metadata?.options?.repetitions === "number"
@@ -89,6 +125,7 @@ export function summaryFromReport(report: JetStreamReport) {
       typeof report.metadata?.driver?.version === "number"
         ? report.metadata.driver.version
         : null,
+    targetNames,
   };
 }
 
@@ -139,7 +176,7 @@ async function main() {
     `[publish-jetstream] publishing ${jetStreamBlobReportPathForArtifactId(entry.artifactId, prefix)}`,
   );
   console.log(
-    `[publish-jetstream] publishing ${jetStreamBlobDailyPathForDay(entry.createdAt.slice(0, 10), prefix)}`,
+    `[publish-jetstream] publishing ${jetStreamBlobDailyPathForRun(entry.createdAt.slice(0, 10), entry.runId, prefix)}`,
   );
   await publishJetStreamReportsToBlob([entry]);
 }

@@ -14,7 +14,17 @@ export type AwfyBlobRunSummary = {
   targetCount: number;
   awfyCount: number;
   probeCount: number;
+  workloadCount: number;
+  failedWorkloadCount: number;
   repetitions: number | null;
+  referenceRatios: {
+    quickjs: number | null;
+    node: number | null;
+  };
+  engineVersions: Record<string, string>;
+  corpusCommit: string;
+  driverVersion: number | null;
+  targetNames: string[];
 };
 
 export type AwfyBlobRun = {

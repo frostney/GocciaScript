@@ -22,8 +22,16 @@ const RANGE_OPTIONS: Array<{
 ];
 
 const SERIES = [
-  { key: "quickjsRatio", label: "QuickJS reference", color: "#b8651b" },
-  { key: "nodeRatio", label: "Node.js reference", color: "#4d7fb8" },
+  {
+    key: "quickjsRatio",
+    label: "QuickJS reference",
+    color: "var(--perf-quickjs)",
+  },
+  {
+    key: "nodeRatio",
+    label: "Node.js reference",
+    color: "var(--perf-node)",
+  },
 ] as const;
 
 function dateLabel(value: string): string {
