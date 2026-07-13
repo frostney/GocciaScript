@@ -7,6 +7,7 @@
 - **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus `TimeoutError` for the `--timeout` option
 - **Parser errors** -- Displayed with source context, a caret pointing to the exact column, and optional suggestion text (e.g., "Use 'let' or 'const' instead")
 - **Runtime errors** -- Carry `name`, `message`, `stack`, and optional `cause`; catchable with `try`/`catch`/`finally`
+- **Sandbox filesystem errors** -- Use real `Error` objects with Node-shaped `code`, `errno`, `path`, `syscall`, and optional `dest` metadata
 - **JSON output** -- `--output=json` wraps every execution result in a structured envelope with `ok`, `error.type`, `error.message`, `error.line`, and `error.column`. `--output=compact-json` produces the same envelope without the `build`, `memory`, `stdout`, or `stderr` fields, leaving only the normalized `output` array and structured `error` for console output. The same `compact-json` value is recognised by `GocciaTestRunner` (via `--output`) and `GocciaBenchmarkRunner` (via `--format`).
 - **`Error.cause`** -- All error constructors accept an options bag with a `cause` property for error chaining (ES2022+)
 
@@ -127,6 +128,50 @@ Every error object has the following properties:
 |----------|------|-------------|
 | `error` | any | The error that triggered the suppression |
 | `suppressed` | any | The original error that was suppressed |
+
+### Sandbox filesystem errors
+
+The Sandbox Runner's `fs` module converts virtual filesystem failures into
+real JavaScript `Error` objects. Synchronous methods throw the error and
+`fs.promises` methods reject with the same shape. Callback methods use this
+same error contract when the callback API is installed.
+
+In addition to the standard error properties, sandbox filesystem errors have:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `code` | `string` | Portable error code such as `"ENOENT"` |
+| `errno` | `number` | Negative, target-appropriate libuv-style error number |
+| `path` | `string` | Original source path passed to the `fs` method |
+| `syscall` | `string` | Stable sandbox operation name, such as `"readFile"` or `"rename"` |
+| `dest` | `string` | Original destination path; present only for `rename` and `copyFile` |
+
+The sandbox operation name is independent of the API form: for example,
+`readFileSync`, `fs.promises.readFile`, and callback `readFile` failures all
+report `syscall === "readFile"`. This identifies the virtual operation rather
+than claiming that the sandbox performed an operating-system call.
+
+| Virtual filesystem failure | `code` | Message description |
+|----------------------------|--------|---------------------|
+| Invalid path | `EINVAL` | `invalid argument` |
+| Path not found | `ENOENT` | `no such file or directory` |
+| Path already exists | `EEXIST` | `file already exists` |
+| Path component is not a directory | `ENOTDIR` | `not a directory` |
+| File operation targets a directory | `EISDIR` | `illegal operation on a directory` |
+| Directory is not empty | `ENOTEMPTY` | `directory not empty` |
+| File or directory is busy | `EBUSY` | `resource busy or locked` |
+| Sandbox byte quota exceeded | `ENOSPC` | `no space left on device` |
+| Unexpected unclassified filesystem failure (internal fallback) | `EIO` | `i/o error` |
+
+Messages follow Node's system-error wording:
+
+```text
+ENOENT: no such file or directory, readFile '/missing.txt'
+ENOENT: no such file or directory, rename '/missing.txt' -> '/destination.txt'
+```
+
+`code` is the portable field to branch on. Numeric `errno` follows libuv's
+target convention, so its value can differ between operating systems.
 
 ### Stack Traces
 

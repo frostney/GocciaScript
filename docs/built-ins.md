@@ -702,6 +702,12 @@ The `"fs"` module operates on the sandbox virtual filesystem. It follows a Node.
 
 `readFileSync` returns a `Uint8Array` by default so binary seed entries can round-trip without text coercion.
 
+Filesystem failures are real JavaScript `Error` objects with Node-shaped
+`code`, `errno`, `path`, `syscall`, and optional `dest` metadata. Synchronous
+methods throw them and promise methods reject with the same shape. See
+[Sandbox filesystem errors](errors.md#sandbox-filesystem-errors) for the full
+mapping and message format.
+
 The `"goccia"` module exposes sandbox runner orchestration helpers.
 
 | Export | Description |

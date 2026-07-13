@@ -13,6 +13,9 @@ const
   PROP_MESSAGE      = 'message';
   PROP_CAUSE        = 'cause';
   PROP_CODE         = 'code';
+  PROP_ERRNO        = 'errno';
+  PROP_SYSCALL      = 'syscall';
+  PROP_DEST         = 'dest';
   PROP_STACK        = 'stack';
   PROP_ERRORS       = 'errors';
   PROP_ERROR        = 'error';

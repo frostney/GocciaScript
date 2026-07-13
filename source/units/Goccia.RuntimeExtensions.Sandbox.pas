@@ -83,6 +83,7 @@ uses
 
   Goccia.JSON,
   Goccia.Keywords.Reserved,
+  Goccia.Sandbox.FileSystemErrors,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.Error,
@@ -849,109 +850,195 @@ var
   Bytes: TBytes;
 begin
   Path := RequireStringArg(AArgs, 0, 'fs.readFileSync');
-  if WantsTextResult(AArgs.GetElement(1)) then
-    Exit(TGocciaStringLiteralValue.Create(FContext.Fs.ReadAllText(Path)));
-  Bytes := FContext.Fs.ReadAllBytes(Path);
-  Result := BytesToUint8Array(Bytes);
+  try
+    if WantsTextResult(AArgs.GetElement(1)) then
+      Exit(TGocciaStringLiteralValue.Create(FContext.Fs.ReadAllText(Path)));
+    Bytes := FContext.Fs.ReadAllBytes(Path);
+    Result := BytesToUint8Array(Bytes);
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'readFile', Path));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsWriteFileSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Bytes: TBytes;
 begin
-  FContext.Fs.WriteAllBytes(RequireStringArg(AArgs, 0, 'fs.writeFileSync'),
-    ValueToBytes(AArgs.GetElement(1), 'fs.writeFileSync'));
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Path := RequireStringArg(AArgs, 0, 'fs.writeFileSync');
+  Bytes := ValueToBytes(AArgs.GetElement(1), 'fs.writeFileSync');
+  try
+    FContext.Fs.WriteAllBytes(Path, Bytes);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'writeFile', Path));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsAppendFileSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
+  Path: string;
   Existing: TBytes;
   Added: TBytes;
   Combined: TBytes;
 begin
+  Path := RequireStringArg(AArgs, 0, 'fs.appendFileSync');
   Existing := nil;
-  if FContext.Fs.Exists(RequireStringArg(AArgs, 0, 'fs.appendFileSync')) then
-    Existing := FContext.Fs.ReadAllBytes(RequireStringArg(AArgs, 0,
-      'fs.appendFileSync'));
-  Added := ValueToBytes(AArgs.GetElement(1), 'fs.appendFileSync');
-  SetLength(Combined, Length(Existing) + Length(Added));
-  if Length(Existing) > 0 then
-    Move(Existing[0], Combined[0], Length(Existing));
-  if Length(Added) > 0 then
-    Move(Added[0], Combined[Length(Existing)], Length(Added));
-  FContext.Fs.WriteAllBytes(RequireStringArg(AArgs, 0, 'fs.appendFileSync'),
-    Combined);
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  try
+    if FContext.Fs.Exists(Path) then
+      Existing := FContext.Fs.ReadAllBytes(Path);
+    Added := ValueToBytes(AArgs.GetElement(1), 'fs.appendFileSync');
+    SetLength(Combined, Length(Existing) + Length(Added));
+    if Length(Existing) > 0 then
+      Move(Existing[0], Combined[0], Length(Existing));
+    if Length(Added) > 0 then
+      Move(Added[0], Combined[Length(Existing)], Length(Added));
+    FContext.Fs.WriteAllBytes(Path, Combined);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'appendFile', Path));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsMkdirSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Recursive: Boolean;
 begin
-  FContext.Fs.MakeDirectory(RequireStringArg(AArgs, 0, 'fs.mkdirSync'),
-    OptionRecursive(AArgs.GetElement(1)));
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Path := RequireStringArg(AArgs, 0, 'fs.mkdirSync');
+  Recursive := OptionRecursive(AArgs.GetElement(1));
+  try
+    FContext.Fs.MakeDirectory(Path, Recursive);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'mkdir', Path));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsReaddirSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
+  Path: string;
   Entries: TSandboxFsStatArray;
   Arr: TGocciaArrayValue;
   I: Integer;
 begin
-  Entries := FContext.Fs.List(RequireStringArg(AArgs, 0, 'fs.readdirSync'));
-  Arr := TGocciaArrayValue.Create(nil, Length(Entries));
-  for I := 0 to High(Entries) do
-    Arr.SetElement(I, TGocciaStringLiteralValue.Create(Entries[I].Name));
-  Result := Arr;
+  Path := RequireStringArg(AArgs, 0, 'fs.readdirSync');
+  try
+    Entries := FContext.Fs.List(Path);
+    Arr := TGocciaArrayValue.Create(nil, Length(Entries));
+    for I := 0 to High(Entries) do
+      Arr.SetElement(I, TGocciaStringLiteralValue.Create(Entries[I].Name));
+    Result := Arr;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'readdir', Path));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsStatSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
 begin
-  Result := TGocciaSandboxStatValue.Create(
-    FContext.Fs.Stat(RequireStringArg(AArgs, 0, 'fs.statSync')));
+  Path := RequireStringArg(AArgs, 0, 'fs.statSync');
+  try
+    Result := TGocciaSandboxStatValue.Create(FContext.Fs.Stat(Path));
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'stat', Path));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsExistsSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
 begin
-  Result := TGocciaBooleanLiteralValue.Create(
-    FContext.Fs.Exists(RequireStringArg(AArgs, 0, 'fs.existsSync')));
+  Path := RequireStringArg(AArgs, 0, 'fs.existsSync');
+  try
+    Result := TGocciaBooleanLiteralValue.Create(FContext.Fs.Exists(Path));
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'exists', Path));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsRmSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Recursive: Boolean;
 begin
-  FContext.Fs.DeletePath(RequireStringArg(AArgs, 0, 'fs.rmSync'),
-    OptionRecursive(AArgs.GetElement(1)));
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Path := RequireStringArg(AArgs, 0, 'fs.rmSync');
+  Recursive := OptionRecursive(AArgs.GetElement(1));
+  try
+    FContext.Fs.DeletePath(Path, Recursive);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'rm', Path));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsRenameSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Destination: string;
 begin
-  FContext.Fs.MovePath(RequireStringArg(AArgs, 0, 'fs.renameSync'),
-    RequireStringArg(AArgs, 1, 'fs.renameSync'));
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Path := RequireStringArg(AArgs, 0, 'fs.renameSync');
+  Destination := RequireStringArg(AArgs, 1, 'fs.renameSync');
+  try
+    FContext.Fs.MovePath(Path, Destination);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(CreateSandboxFileSystemError(E,
+        'rename', Path, Destination));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsCopyFileSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Destination: string;
 begin
-  FContext.Fs.CopyPath(RequireStringArg(AArgs, 0, 'fs.copyFileSync'),
-    RequireStringArg(AArgs, 1, 'fs.copyFileSync'), False);
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Path := RequireStringArg(AArgs, 0, 'fs.copyFileSync');
+  Destination := RequireStringArg(AArgs, 1, 'fs.copyFileSync');
+  try
+    FContext.Fs.CopyPath(Path, Destination, False);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(CreateSandboxFileSystemError(E,
+        'copyFile', Path, Destination));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsReadFile(
