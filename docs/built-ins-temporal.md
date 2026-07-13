@@ -18,6 +18,14 @@ Implements the [ECMAScript Temporal API](https://developer.mozilla.org/en-US/doc
 
 An implementation of the ECMAScript Temporal API providing modern date/time handling. ISO 8601 calendar only. All Temporal types are immutable — operations return new instances.
 
+`Goccia.Builtins.Temporal` registers constructors and static methods. Shared
+specification behavior lives behind the Temporal modules:
+`Goccia.Temporal.AbstractOperations` owns calendar coercion/defaulting,
+`Goccia.Temporal.Options` owns option validation and rounding,
+`Goccia.Temporal.Utils` owns ISO 8601 / RFC 9557 parsing, and
+`Goccia.Temporal.TimeZone` owns time-zone resolution and offset formatting.
+Value types delegate to those modules so observable semantics stay consistent.
+
 **Namespace structure:**
 
 ```javascript
@@ -154,8 +162,6 @@ Represents a date and time without timezone. Combines PlainDate and PlainTime.
 | `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
 | `equals(other)` | Equality check |
 | `toPlainDate()` / `toPlainTime()` | Extract date or time component |
-| `toPlainYearMonth()` | Extract year and month as PlainYearMonth |
-| `toPlainMonthDay()` | Extract month and day as PlainMonthDay |
 | `toZonedDateTime(timeZone)` | Combine with a timezone (string or `{ timeZone }` object) to create a ZonedDateTime |
 | `toString([options])` / `toJSON()` | ISO string (e.g., `"2024-03-15T13:45:30"`). `toString` accepts `{ fractionalSecondDigits }` (0-9 or `"auto"`). |
 | `valueOf()` | Throws TypeError |
@@ -267,7 +273,6 @@ Represents an absolute date and time in a specific timezone. Combines an instant
 | Method | Description |
 |--------|-------------|
 | `with(fields)` | Return new ZonedDateTime with overridden fields |
-| `withPlainDate(date)` | Replace date component |
 | `withPlainTime(time?)` | Replace time component |
 | `withTimeZone(timeZone)` | Re-interpret the same instant in a different timezone |
 | `add(duration)` / `subtract(duration)` | Date-time arithmetic |

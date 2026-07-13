@@ -76,25 +76,6 @@ begin
     Dec(Result);
 end;
 
-function FormatInstantOffsetString(const AOffsetSeconds: Integer): string;
-var
-  AbsSeconds, Hours, Minutes, Seconds: Integer;
-  Sign: Char;
-begin
-  if AOffsetSeconds < 0 then
-    Sign := '-'
-  else
-    Sign := '+';
-  AbsSeconds := Abs(AOffsetSeconds);
-  Hours := AbsSeconds div 3600;
-  Minutes := (AbsSeconds mod 3600) div 60;
-  Seconds := AbsSeconds mod 60;
-  if Seconds = 0 then
-    Result := Sign + Format('%.2d:%.2d', [Hours, Minutes])
-  else
-    Result := Sign + Format('%.2d:%.2d:%.2d', [Hours, Minutes, Seconds]);
-end;
-
 function GetTemporalInstantShared: TGocciaSharedPrototype; inline;
 begin
   if Assigned(CurrentRealm) then
@@ -543,76 +524,6 @@ begin
 
   AEpochMilliseconds := BigIntToInstantInt64(MillisecondsBig, 'epochMilliseconds');
   ASubMillisecondNanoseconds := Integer(SubMillisecondBig.ToInt64);
-end;
-
-function RoundInstantEpochNanosecondsToIncrement(const AValue, AIncrement: TBigInteger;
-  const AMode: TTemporalRoundingMode): TBigInteger;
-var
-  Quotient, Remainder, Lower, Upper, DistanceToLower, DistanceToUpper: TBigInteger;
-  Compare: Integer;
-  IsNegative: Boolean;
-begin
-  IsNegative := AValue.IsNegative;
-  Quotient := AValue.Divide(AIncrement);
-  Remainder := AValue.Modulo(AIncrement);
-  if Remainder.IsNegative then
-  begin
-    Quotient := Quotient.Subtract(TBigInteger.One);
-    Remainder := Remainder.Add(AIncrement);
-  end;
-  Lower := Quotient.Multiply(AIncrement);
-  if Remainder.IsZero then
-    Exit(Lower);
-  Upper := Lower.Add(AIncrement);
-
-  case AMode of
-    rmFloor:
-      Exit(Lower);
-    rmCeil:
-      Exit(Upper);
-    rmTrunc:
-      if IsNegative then
-        Exit(Upper)
-      else
-        Exit(Lower);
-    rmExpand:
-      if IsNegative then
-        Exit(Lower)
-      else
-        Exit(Upper);
-  else
-    ;
-  end;
-
-  DistanceToLower := Remainder;
-  DistanceToUpper := AIncrement.Subtract(Remainder);
-  Compare := DistanceToLower.Compare(DistanceToUpper);
-  if Compare < 0 then
-    Exit(Lower);
-  if Compare > 0 then
-    Exit(Upper);
-
-  case AMode of
-    rmHalfFloor:
-      Result := Lower;
-    rmHalfTrunc:
-      if IsNegative then
-        Result := Upper
-      else
-        Result := Lower;
-    rmHalfExpand:
-      if IsNegative then
-        Result := Lower
-      else
-        Result := Upper;
-    rmHalfEven:
-      if Quotient.GetBit(0) then
-        Result := Upper
-      else
-        Result := Lower;
-  else
-    Result := Upper;
-  end;
 end;
 
 procedure ValidateInstantRoundingIncrement(const AIncrement: Integer;
@@ -1308,30 +1219,6 @@ begin
     Result := tuSecond;
 end;
 
-procedure ValidateInstantDiffRoundingIncrement(const AIncrement: Integer;
-  const ASmallestUnit, ALargestUnit: TTemporalUnit);
-var
-  MaxVal: Integer;
-begin
-  if ASmallestUnit = ALargestUnit then
-    Exit;
-  if AIncrement <= 1 then
-    Exit;
-  case ASmallestUnit of
-    tuHour: MaxVal := 24;
-    tuMinute,
-    tuSecond: MaxVal := 60;
-    tuMillisecond,
-    tuMicrosecond,
-    tuNanosecond: MaxVal := 1000;
-  else
-    Exit;
-  end;
-  if (AIncrement >= MaxVal) or (MaxVal mod AIncrement <> 0) then
-    ThrowRangeError(Format(SErrorRoundingIncrementDivisor, [AIncrement, MaxVal]),
-      SSuggestTemporalRoundArg);
-end;
-
 function TGocciaTemporalInstantValue.InstantUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Inst, Other: TGocciaTemporalInstantValue;
@@ -1358,7 +1245,7 @@ begin
     ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.until', 'smallestUnit']), SSuggestTemporalValidUnits);
   if Ord(LargestUnit) > Ord(SmallestUnit) then
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  ValidateInstantDiffRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit);
 
   StartNs := EpochNanosecondsFromParts(Inst.FEpochMilliseconds, Inst.FSubMillisecondNanoseconds);
   EndNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds, Other.FSubMillisecondNanoseconds);
@@ -1398,7 +1285,7 @@ begin
     ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.since', 'smallestUnit']), SSuggestTemporalValidUnits);
   if Ord(LargestUnit) > Ord(SmallestUnit) then
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  ValidateInstantDiffRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit);
 
   StartNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds, Other.FSubMillisecondNanoseconds);
   EndNs := EpochNanosecondsFromParts(Inst.FEpochMilliseconds, Inst.FSubMillisecondNanoseconds);
@@ -1476,7 +1363,7 @@ begin
     .Add(TBigInteger.FromInt64(Inst.FSubMillisecondNanoseconds));
   BigDivisor := TBigInteger.FromInt64(UnitToNanoseconds(SmallestUnit))
     .Multiply(TBigInteger.FromInt64(Increment));
-  BigRounded := RoundInstantEpochNanosecondsToIncrement(BigTotal, BigDivisor, Mode);
+  BigRounded := RoundNumberToIncrementAsIfPositive(BigTotal, BigDivisor, Mode);
 
   SplitInstantEpochNanoseconds(BigRounded, NewMs, NewSubMs);
 
@@ -1580,7 +1467,7 @@ begin
     DateRec := AddDaysToDate(DateRec.Year, DateRec.Month, DateRec.Day, ExtraDays);
 
   if HasTimeZone then
-    OffsetText := FormatInstantOffsetString(OffsetSeconds)
+    OffsetText := FormatDateTimeUTCOffsetRounded(OffsetSeconds)
   else
     OffsetText := 'Z';
 

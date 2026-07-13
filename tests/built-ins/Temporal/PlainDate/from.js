@@ -32,6 +32,16 @@ describe.runIf(isTemporal)("Temporal.PlainDate.from", () => {
     expect(d.day).toBe(15);
   });
 
+  test("from reads calendar without probing calendarId", () => {
+    const fields = { year: 2024, month: 6, day: 15, calendar: "iso8601" };
+    Object.defineProperty(fields, "calendarId", {
+      get() {
+        throw new Error("calendarId must not be read");
+      }
+    });
+    expect(Temporal.PlainDate.from(fields).toString()).toBe("2024-06-15");
+  });
+
   test("constrain clamps day", () => {
     const d = Temporal.PlainDate.from({ year: 2024, month: 2, day: 30 }, { overflow: "constrain" });
     expect(d.day).toBe(29);

@@ -464,6 +464,37 @@ begin
   Result := True;
 end;
 
+function IsValidAnnotationValue(const AValue: string): Boolean;
+var
+  I: Integer;
+  Ch: Char;
+  ComponentHasCharacter: Boolean;
+begin
+  Result := False;
+  if AValue = '' then
+    Exit;
+
+  ComponentHasCharacter := False;
+  for I := 1 to Length(AValue) do
+  begin
+    Ch := AValue[I];
+    if Ch = '-' then
+    begin
+      if not ComponentHasCharacter then
+        Exit;
+      ComponentHasCharacter := False;
+    end
+    else if ((Ch >= 'a') and (Ch <= 'z')) or
+            ((Ch >= 'A') and (Ch <= 'Z')) or
+            ((Ch >= '0') and (Ch <= '9')) then
+      ComponentHasCharacter := True
+    else
+      Exit;
+  end;
+
+  Result := ComponentHasCharacter;
+end;
+
 function IsValidTemporalCalendarIdentifier(const AValue: string): Boolean;
 var
   I: Integer;
@@ -807,7 +838,7 @@ function TryStripTemporalAnnotationsForTime(const AStr: string; out AStripped: s
 var
   Value: string;
   BracketStart, BracketEnd, EqualsPos: Integer;
-  Annotation, Key, CalendarValue, CanonicalCalendar: string;
+  Annotation, Key, CalendarValue: string;
   Critical: Boolean;
   TimeZoneSeen: Boolean;
   CalendarCount: Integer;
@@ -846,8 +877,10 @@ begin
       begin
         CalendarValue := Copy(Annotation, EqualsPos + 1,
           Length(Annotation) - EqualsPos);
-        CanonicalCalendar := CanonicalizeTemporalCalendarIdentifier(CalendarValue);
-        if CanonicalCalendar = '' then
+        // ParseISODateTime records the annotation, but ToTemporalTime ignores
+        // its calendar value. Unknown identifiers are valid here, but the
+        // value must still match the RFC 9557 AnnotationValue grammar.
+        if not IsValidAnnotationValue(CalendarValue) then
           Exit;
         Inc(CalendarCount);
         if Critical then

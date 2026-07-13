@@ -51,7 +51,6 @@ type
     function GetEpochNanoseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     function ZonedDateTimeWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function ZonedDateTimeWithPlainDate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ZonedDateTimeWithPlainTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ZonedDateTimeWithTimeZone(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ZonedDateTimeWithCalendar(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1285,18 +1284,6 @@ begin
   Result := Sign * RoundedMinutes * 60;
 end;
 
-function TruncateOffsetSecondsToMinute(const AOffsetSeconds: Integer): Integer;
-var
-  Sign, AbsOffset: Integer;
-begin
-  if AOffsetSeconds < 0 then
-    Sign := -1
-  else
-    Sign := 1;
-  AbsOffset := Abs(AOffsetSeconds);
-  Result := Sign * ((AbsOffset div 60) * 60);
-end;
-
 function ApplyOffsetOption(const AYear, AMonth, ADay: Integer;
   const ATime: TTemporalTimeRecord; const ATimeZone: string;
   const AHasOffset: Boolean; const AOffsetSeconds: Integer;
@@ -2065,7 +2052,6 @@ begin
     Members.AddAccessor('epochMilliseconds', GetEpochMilliseconds, nil, [pfConfigurable]);
     Members.AddAccessor('epochNanoseconds', GetEpochNanoseconds, nil, [pfConfigurable]);
     Members.AddMethod(ZonedDateTimeWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-    Members.AddMethod(ZonedDateTimeWithPlainDate, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(ZonedDateTimeWithPlainTime, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(ZonedDateTimeWithTimeZone, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(ZonedDateTimeWithCalendar, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -2654,41 +2640,6 @@ begin
     OffsetHasSubMinuteSyntax, False, OffsetOption, Disambiguation,
     'ZonedDateTime.prototype.with');
   Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, NewUs * 1000 + NewNs, Zdt.FTimeZone,
-    Zdt.FCalendarId);
-end;
-
-// TC39 Temporal §6.3.23 Temporal.ZonedDateTime.prototype.withPlainDate(plainDateLike)
-function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeWithPlainDate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  Zdt: TGocciaTemporalZonedDateTimeValue;
-  Arg: TGocciaValue;
-  DateRec: TTemporalDateRecord;
-  PlainDate: TGocciaTemporalPlainDateValue;
-  LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
-  NewEpochMs: Int64;
-begin
-  Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.withPlainDate');
-  Arg := AArgs.GetElement(0);
-
-  if Arg is TGocciaTemporalPlainDateValue then
-    PlainDate := TGocciaTemporalPlainDateValue(Arg)
-  else if Arg is TGocciaStringLiteralValue then
-  begin
-    if not CoerceToISODate(TGocciaStringLiteralValue(Arg).Value, DateRec) then
-      ThrowRangeError(SErrorInvalidDateStringForZDT, SSuggestTemporalISOFormat);
-    PlainDate := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day, Zdt.FCalendarId);
-  end
-  else
-  begin
-    ThrowTypeError(SErrorZDTWithPlainDateArg, SSuggestTemporalFromArg);
-    PlainDate := nil;
-  end;
-
-  ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
-
-  NewEpochMs := LocalToEpochMs(PlainDate.Year, PlainDate.Month, PlainDate.Day,
-    LHour, LMinute, LSecond, LMs, Zdt.FTimeZone);
-  Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, LUs * 1000 + LNs, Zdt.FTimeZone,
     Zdt.FCalendarId);
 end;
 
@@ -3635,7 +3586,7 @@ begin
     tuNanosecond: MaxVal := 1000;
   else
     begin
-      ValidateRoundingIncrement(AIncrement, ASmallestUnit, ALargestUnit);
+      ValidateRoundingIncrement(AIncrement, ASmallestUnit);
       Exit;
     end;
   end;
@@ -3975,11 +3926,6 @@ begin
   AExtraDays := Integer(ExDays);
 end;
 
-function FormatRoundedOffsetString(const AOffsetSeconds: Integer): string;
-begin
-  Result := FormatOffsetString(TruncateOffsetSecondsToMinute(AOffsetSeconds));
-end;
-
 function GetZonedDateTimeFractionalSecondDigits(const AOptions: TGocciaObjectValue): Integer;
 var
   V: TGocciaValue;
@@ -4148,7 +4094,7 @@ begin
 
   S := FormatDateString(DateRec.Year, DateRec.Month, DateRec.Day) + 'T' + TimeStr;
   if OffsetOption <> 'never' then
-    S := S + FormatRoundedOffsetString(OffsetSeconds);
+    S := S + FormatDateTimeUTCOffsetRounded(OffsetSeconds);
   if TimeZoneNameOption = 'critical' then
     S := S + '[!' + Zdt.FTimeZone + ']'
   else if TimeZoneNameOption <> 'never' then

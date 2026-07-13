@@ -260,8 +260,6 @@ resourcestring
   SErrorZonedDateTimeRequiresTZ = 'ZonedDateTime requires a timezone';
   SErrorUnknownTimezone = 'Unknown timezone: %s';
   SErrorZonedDateTimeRequiresTZAnnotation = 'ZonedDateTime requires a timezone annotation in the string';
-  SErrorInvalidDateStringForZDT = 'Invalid date string for ZonedDateTime.prototype.withPlainDate';
-  SErrorZDTWithPlainDateArg = 'ZonedDateTime.prototype.withPlainDate requires a PlainDate or string';
   SErrorInvalidTimeStringForZDT = 'Invalid time string for ZonedDateTime.prototype.withPlainTime';
   SErrorZDTWithPlainTimeArg = 'ZonedDateTime.prototype.withPlainTime requires a PlainTime or string';
   SErrorZDTWithTimeZoneArg = 'ZonedDateTime.prototype.withTimeZone requires a timezone argument';

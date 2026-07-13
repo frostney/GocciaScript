@@ -15,4 +15,10 @@ describe.runIf(isTemporal)("Temporal.PlainDate.prototype.toPlainDateTime", () =>
     expect(dt.hour).toBe(0);
     expect(dt.minute).toBe(0);
   });
+
+  test("toPlainDateTime ignores a time string calendar annotation", () => {
+    const date = new Temporal.PlainDate(2024, 3, 15);
+    const result = date.toPlainDateTime("12:34:56.987654321[u-ca=unknown]");
+    expect(result.toString()).toBe("2024-03-15T12:34:56.987654321");
+  });
 });

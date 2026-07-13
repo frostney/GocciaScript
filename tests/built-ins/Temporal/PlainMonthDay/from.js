@@ -31,6 +31,23 @@ describe.runIf(isTemporal)("Temporal.PlainMonthDay.from", () => {
     expect(md.day).toBe(4);
   });
 
+  test("from reads calendar without probing calendarId", () => {
+    const fields = { month: 7, day: 4, calendar: "iso8601" };
+    Object.defineProperty(fields, "calendarId", {
+      get() {
+        throw new Error("calendarId must not be read");
+      }
+    });
+    expect(Temporal.PlainMonthDay.from(fields).toString()).toBe("07-04");
+  });
+
+  test("from preserves a Temporal object's internal calendar", () => {
+    const date = new Temporal.PlainDate(2024, 1, 1, "hebrew");
+    const monthDay = Temporal.PlainMonthDay.from(date);
+    expect(monthDay.calendarId).toBe("hebrew");
+    expect(monthDay.toPlainDate({ year: date.year }).equals(date)).toBe(true);
+  });
+
   test("from throws on missing month", () => {
     expect(() => Temporal.PlainMonthDay.from({ day: 15 })).toThrow();
   });

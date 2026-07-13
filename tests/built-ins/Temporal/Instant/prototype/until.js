@@ -103,4 +103,14 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.until", () => {
     const i2 = Temporal.Instant.fromEpochMilliseconds(50 * 60000);
     expect(i1.until(i2, { largestUnit: "hours", smallestUnit: "minutes", roundingIncrement: 15 }).toString()).toBe("PT45M");
   });
+
+  test("until rejects increments that do not divide the unit maximum", () => {
+    const i1 = new Temporal.Instant(0n);
+    const i2 = new Temporal.Instant(1000000000000000000n);
+    expect(() => i1.until(i2, {
+      largestUnit: "hours",
+      smallestUnit: "hours",
+      roundingIncrement: 11
+    })).toThrow(RangeError);
+  });
 });

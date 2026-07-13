@@ -61,8 +61,6 @@ type
     function DateTimeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DateTimeToPlainDate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DateTimeToPlainTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DateTimeToPlainYearMonth(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DateTimeToPlainMonthDay(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DateTimeToZonedDateTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DateTimeToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DateTimeWithCalendar(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -644,8 +642,6 @@ begin
     Members.AddMethod(DateTimeValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(DateTimeToPlainDate, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(DateTimeToPlainTime, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-    Members.AddMethod(DateTimeToPlainYearMonth, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-    Members.AddMethod(DateTimeToPlainMonthDay, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(DateTimeToZonedDateTime, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(DateTimeToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(DateTimeWithCalendar, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -1190,7 +1186,7 @@ begin
   end;
   if Ord(LargestUnit) > Ord(SmallestUnit) then
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit);
 
   if D.FCalendarId <> Other.FCalendarId then
     ThrowRangeError('Temporal.PlainDateTime calendars must match',
@@ -1591,46 +1587,6 @@ begin
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.toPlainTime');
   Result := TGocciaTemporalPlainTimeValue.Create(D.FHour, D.FMinute, D.FSecond,
     D.FMillisecond, D.FMicrosecond, D.FNanosecond);
-end;
-
-function TGocciaTemporalPlainDateTimeValue.DateTimeToPlainYearMonth(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  D: TGocciaTemporalPlainDateTimeValue;
-begin
-  D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.toPlainYearMonth');
-  if D.FCalendarId = 'iso8601' then
-    Result := TGocciaTemporalPlainYearMonthValue.Create(D.FYear, D.FMonth, 1,
-      D.FCalendarId)
-  else
-    Result := TGocciaTemporalPlainYearMonthValue.Create(D.FYear, D.FMonth,
-      D.FDay, D.FCalendarId);
-end;
-
-function TGocciaTemporalPlainDateTimeValue.DateTimeToPlainMonthDay(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  D: TGocciaTemporalPlainDateTimeValue;
-  Info: TTemporalCalendarDateInfo;
-  DateRec: TTemporalDateRecord;
-  MonthPart: Integer;
-  IsLeapMonth: Boolean;
-begin
-  D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.toPlainMonthDay');
-  if D.FCalendarId = 'iso8601' then
-    Result := TGocciaTemporalPlainMonthDayValue.Create(D.FMonth, D.FDay,
-      1972, D.FCalendarId)
-  else
-  begin
-    Info := CalendarInfoForPlainDateTime(D, 'PlainDateTime.prototype.toPlainMonthDay');
-    if not TryParseTemporalMonthCode(Info.MonthCode, MonthPart, IsLeapMonth) then
-      ThrowRangeError(Format(SErrorInvalidMonthDayStringFor,
-        ['PlainDateTime.prototype.toPlainMonthDay']), SSuggestTemporalDateRange);
-    if not TryResolvePlainMonthDayReferenceDate(D.FCalendarId, MonthPart,
-      Info.Date.Day, True, IsLeapMonth, DateRec) then
-      ThrowRangeError(Format(SErrorInvalidMonthDayStringFor,
-        ['PlainDateTime.prototype.toPlainMonthDay']), SSuggestTemporalDateRange);
-    Result := TGocciaTemporalPlainMonthDayValue.Create(DateRec.Month,
-      DateRec.Day, DateRec.Year, D.FCalendarId);
-  end;
 end;
 
 function TGocciaTemporalPlainDateTimeValue.DateTimeToZonedDateTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
