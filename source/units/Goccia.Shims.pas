@@ -58,16 +58,24 @@ procedure RegisterDefaultShimNames(const AShims: TStringList);
 function LoadShimValue(const AInterpreter: TGocciaInterpreter;
   const AShim: TGocciaShimDefinition): TGocciaValue;
 
+{ Return the realm's original Date constructor without consulting the mutable
+  global property.  Materializes the Date shim on first use. }
+function GetDateIntrinsic(const AInterpreter: TGocciaInterpreter): TGocciaValue;
+
 implementation
 
 uses
+  SysUtils,
+
   Goccia.AST.Node,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
+  Goccia.Realm,
   Goccia.Scope,
   Goccia.SourcePipeline;
 
 const
+  DATE_SHIM_NAME = 'Date';
   DEFAULT_SHIMS: array[0..13] of TGocciaShimDefinition = (
     ( // WHATWG HTML spec §8.3 — legacy btoa(data) via Uint8Array.toBase64
       Name: 'btoa';
@@ -159,7 +167,7 @@ const
         ' Number.isFinite(Number(x));'
     ),
     ( // Legacy Date constructor via Temporal
-      Name: 'Date';
+      Name: DATE_SHIM_NAME;
       FileName: '<shim:Date>';
       Source:
         'const dateTimeClipLimit: number = 8.64e15;'#10 +
@@ -975,6 +983,9 @@ const
     )
   );
 
+var
+  GDateIntrinsicSlot: TGocciaRealmSlotId;
+
 function DefaultShimCount: Integer;
 begin
   Result := Length(DEFAULT_SHIMS);
@@ -996,6 +1007,7 @@ end;
 function LoadShimValue(const AInterpreter: TGocciaInterpreter;
   const AShim: TGocciaShimDefinition): TGocciaValue;
 var
+  CachedValue: TObject;
   ModuleParseResult: TGocciaSourcePipelineModuleResult;
   PipelineOptions: TGocciaSourcePipelineOptions;
   ProgramNode: TGocciaProgram;
@@ -1003,6 +1015,13 @@ var
   Context: TGocciaEvaluationContext;
   I: Integer;
 begin
+  if AShim.Name = DATE_SHIM_NAME then
+  begin
+    CachedValue := CurrentRealm.GetSlot(GDateIntrinsicSlot);
+    if CachedValue is TGocciaValue then
+      Exit(TGocciaValue(CachedValue));
+  end;
+
   PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
   PipelineOptions.Preprocessors := [];
   PipelineOptions.Compatibility := [cfFunction];
@@ -1026,12 +1045,25 @@ begin
       for I := 0 to ProgramNode.Body.Count - 1 do
         EvaluateStatement(ProgramNode.Body[I], Context);
       Result := ModuleScope.GetValue(AShim.Name);
+      if AShim.Name = DATE_SHIM_NAME then
+        CurrentRealm.SetSlot(GDateIntrinsicSlot, Result);
     finally
       ProgramNode.Free;
     end;
   finally
     ModuleParseResult.Free;
   end;
+end;
+
+function GetDateIntrinsic(
+  const AInterpreter: TGocciaInterpreter): TGocciaValue;
+var
+  I: Integer;
+begin
+  for I := Low(DEFAULT_SHIMS) to High(DEFAULT_SHIMS) do
+    if DEFAULT_SHIMS[I].Name = DATE_SHIM_NAME then
+      Exit(LoadShimValue(AInterpreter, DEFAULT_SHIMS[I]));
+  raise Exception.Create('Date shim is not registered');
 end;
 
 function IsSideEffectShim(const AName: string): Boolean;
@@ -1054,5 +1086,8 @@ function TGocciaShimMaterializer.Materialize: TGocciaValue;
 begin
   Result := LoadShimValue(FInterpreter, FShim);
 end;
+
+initialization
+  GDateIntrinsicSlot := RegisterRealmSlot('%Date%');
 
 end.

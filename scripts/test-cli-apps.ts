@@ -3247,6 +3247,11 @@ console.log("SandboxRunner: fs Stats expose realm-owned lazy Date metadata in ev
           path: "/main.js",
           text: [
             'import fs from "fs";',
+            'const intrinsicStat = fs.statSync("/tracked.txt");',
+            'globalThis.Date = class ReplacementDate { constructor() { this.replacement = true; } };',
+            'const intrinsicMtime = intrinsicStat.mtime;',
+            'const intrinsicDateValid = typeof intrinsicMtime.getTime === "function" && !Object.hasOwn(intrinsicMtime, "replacement");',
+            'globalThis.Date = Object.getPrototypeOf(intrinsicMtime).constructor;',
             'const syncStat = fs.statSync("/tracked.txt");',
             'const promiseStat = await fs.promises.stat("/tracked.txt");',
             'const checks = (stat) => {',
@@ -3279,6 +3284,7 @@ console.log("SandboxRunner: fs Stats expose realm-owned lazy Date metadata in ev
             'console.log("sync-stats:" + valid(syncStat));',
             'console.log("promise-stats:" + valid(promiseStat));',
             'console.log("shared-stats-prototype:" + (Object.getPrototypeOf(syncStat) === Object.getPrototypeOf(promiseStat)));',
+            'console.log("intrinsic-stats-date:" + intrinsicDateValid);',
           ].join("\n"),
         },
         { path: "/tracked.txt", text: "tracked" },
@@ -3296,7 +3302,12 @@ console.log("SandboxRunner: fs Stats expose realm-owned lazy Date metadata in ev
       const stdout = normalizeLineEndings(proc.stdout.toString());
       if (proc.exitCode !== 0)
         throw new Error(`SandboxRunner ${label} Stats run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
-      for (const expected of ["sync-stats:true", "promise-stats:true", "shared-stats-prototype:true"]) {
+      for (const expected of [
+        "sync-stats:true",
+        "promise-stats:true",
+        "shared-stats-prototype:true",
+        "intrinsic-stats-date:true",
+      ]) {
         if (!containsLine(`\n${stdout}`, expected))
           throw new Error(`SandboxRunner ${label} Stats stdout should include ${expected}, got: ${stdout}`);
       }

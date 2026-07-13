@@ -99,6 +99,7 @@ type
     FUsedBytes: Int64;
     FNodeCount: Integer;
     FClock: TSandboxFsClock;
+    constructor CreateFork(const ASource: TSandboxVirtualFileSystem);
     function CurrentTime: TDateTime;
     function LookupNode(const ACanonicalPath: string): TSandboxFsNode;
     function RequireNode(const APath: string): TSandboxFsNode;
@@ -360,6 +361,17 @@ begin
   FQuotaBytes := AQuotaBytes;
   FUsedBytes := 0;
   FNodeCount := 0;
+end;
+
+constructor TSandboxVirtualFileSystem.CreateFork(
+  const ASource: TSandboxVirtualFileSystem);
+begin
+  inherited Create;
+  FClock := ASource.FClock;
+  FRoot := CloneNodePreservingMetadata(ASource.FRoot);
+  FQuotaBytes := ASource.FQuotaBytes;
+  FUsedBytes := ASource.FUsedBytes;
+  FNodeCount := ASource.FNodeCount;
 end;
 
 function TSandboxVirtualFileSystem.CurrentTime: TDateTime;
@@ -1056,11 +1068,7 @@ end;
 
 function TSandboxVirtualFileSystem.Fork: TSandboxVirtualFileSystem;
 begin
-  Result := TSandboxVirtualFileSystem.Create(FQuotaBytes, FClock);
-  Result.FRoot.Free;
-  Result.FRoot := CloneNodePreservingMetadata(FRoot);
-  Result.FUsedBytes := FUsedBytes;
-  Result.FNodeCount := FNodeCount;
+  Result := TSandboxVirtualFileSystem.CreateFork(Self);
 end;
 
 { TSandboxFsFile }

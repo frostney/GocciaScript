@@ -104,6 +104,7 @@ uses
   Goccia.Keywords.Reserved,
   Goccia.Realm,
   Goccia.Sandbox.FileSystemErrors,
+  Goccia.Shims,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.Error,
@@ -782,7 +783,7 @@ var
   Fraction: Double;
   RoundedMilliseconds: Double;
 begin
-  DateConstructor := Runtime.Engine.Interpreter.GlobalScope.GetValue('Date');
+  DateConstructor := GetDateIntrinsic(Runtime.Engine.Interpreter);
   Fraction := Frac(AMilliseconds);
   RoundedMilliseconds := AMilliseconds - Fraction;
   if Fraction >= 0.5 then

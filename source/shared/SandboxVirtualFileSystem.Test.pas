@@ -14,9 +14,11 @@ uses
 type
   TDeterministicSandboxClock = class(TSandboxFsClock)
   private
+    FCallCount: Integer;
     FValue: TDateTime;
   public
     function Now: TDateTime; override;
+    property CallCount: Integer read FCallCount;
     property Value: TDateTime read FValue write FValue;
   end;
 
@@ -33,6 +35,7 @@ type
 
     procedure TestTracksIndependentFileTimestamps;
     procedure TestCopyRenameAndForkMetadata;
+    procedure TestForkDoesNotReadClock;
     procedure TestSnapshotReadsDoNotAdvanceAccessTime;
     procedure TestDirectoryEntryChangesUpdateParentMetadata;
     procedure TestDefaultClockUsesUnixEpoch;
@@ -40,6 +43,7 @@ type
 
 function TDeterministicSandboxClock.Now: TDateTime;
 begin
+  Inc(FCallCount);
   Result := FValue;
 end;
 
@@ -49,6 +53,7 @@ begin
     TestTracksIndependentFileTimestamps);
   Test('Copy, rename, and fork preserve their timestamp contracts',
     TestCopyRenameAndForkMetadata);
+  Test('Fork does not read the shared clock', TestForkDoesNotReadClock);
   Test('Snapshot reads do not advance access time',
     TestSnapshotReadsDoNotAdvanceAccessTime);
   Test('Directory entry changes update parent metadata',
@@ -168,6 +173,23 @@ begin
   ExpectTime(RenamedStat.ModifiedAt, SourceBefore.ModifiedAt);
   ExpectTime(RenamedStat.ChangedAt, TimeAt(40));
   ExpectTime(RenamedStat.BirthTime, SourceBefore.BirthTime);
+end;
+
+procedure TTestSandboxVirtualFileSystem.TestForkDoesNotReadClock;
+var
+  CallsBeforeFork: Integer;
+  Forked: TSandboxVirtualFileSystem;
+begin
+  FClock.Value := TimeAt(10);
+  FFs.WriteAllText('/source.txt', 'source');
+  CallsBeforeFork := FClock.CallCount;
+
+  Forked := FFs.Fork;
+  try
+    Expect<Integer>(FClock.CallCount).ToBe(CallsBeforeFork);
+  finally
+    Forked.Free;
+  end;
 end;
 
 procedure TTestSandboxVirtualFileSystem.TestSnapshotReadsDoNotAdvanceAccessTime;
