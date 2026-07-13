@@ -53,6 +53,7 @@ export function buildSitemap(
     "/installation",
     "/docs",
     "/compatibility",
+    "/performance",
     "/playground",
     "/sandbox",
   ].map((path) => ({

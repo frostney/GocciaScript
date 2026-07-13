@@ -19,4 +19,10 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.toString", () => {
     expect(new Temporal.Duration(0, 0, 0, 0, 0, 0, 0, 0, 1).toString()).toBe("PT0.000001S");
     expect(new Temporal.Duration(0, 0, 0, 0, 0, 0, 0, 0, 0, 1).toString()).toBe("PT0.000000001S");
   });
+
+  test("fractionalSecondDigits converts non-numbers to strings", () => {
+    const duration = new Temporal.Duration(0, 0, 0, 0, 0, 0, 1);
+    expect(() => duration.toString({ fractionalSecondDigits: 2n })).toThrow(RangeError);
+    expect(() => duration.toString({ fractionalSecondDigits: "2" })).toThrow(RangeError);
+  });
 });

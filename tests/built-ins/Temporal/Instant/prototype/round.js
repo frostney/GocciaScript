@@ -39,4 +39,14 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.round", () => {
       inst.round({ smallestUnit: "day", roundingIncrement: 200000 });
     }).toThrow(RangeError);
   });
+
+  test("negative instants use as-if-positive rounding directions", () => {
+    const hour = new Temporal.Instant(-1000000000000000000n);
+    expect(hour.round({ smallestUnit: "hour", roundingMode: "expand" }).epochNanoseconds)
+      .toBe(-999997200000000000n);
+
+    const second = new Temporal.Instant(-65261246399500000000n);
+    expect(second.round({ smallestUnit: "second", roundingMode: "trunc" }).epochNanoseconds)
+      .toBe(-65261246400000000000n);
+  });
 });

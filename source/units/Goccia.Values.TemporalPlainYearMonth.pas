@@ -825,7 +825,7 @@ begin
   if Ord(ALargestUnit) > Ord(ASmallestUnit) then
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest,
       SSuggestTemporalRoundArg);
-  ValidateRoundingIncrement(ARoundingIncrement, ASmallestUnit, ALargestUnit);
+  ValidateRoundingIncrement(ARoundingIncrement, ASmallestUnit);
 end;
 
 procedure CheckPlainYearMonthRoundingEndpoint(const AStart: TGocciaTemporalPlainYearMonthValue;

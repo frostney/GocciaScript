@@ -640,11 +640,9 @@ GitHub Actions CI is split into two workflow files:
 
 ### `ci.yml` — Push to main + tags
 
-```text
-build -> test / toml-compliance / json5-compliance / test262 / awfy / web-tooling / benchmark / cli -> artifacts/release
-```
+Job graph: `build -> test / toml-compliance / json5-compliance / test262 / awfy / jetstream / web-tooling / benchmark / cli -> artifacts/release`.
 
-All matrix strategies use `fail-fast: false`, so one platform failing does not cancel other platforms. The post-build jobs (`test`, `toml-compliance`, `json5-compliance`, `test262`, `awfy`, `web-tooling`, `benchmark`, `cli`) are independent.
+All matrix strategies use `fail-fast: false`, so one platform failing does not cancel other platforms. The post-build jobs (`test`, `toml-compliance`, `json5-compliance`, `test262`, `awfy`, `jetstream`, `web-tooling`, `benchmark`, `cli`) are independent.
 
 Runs on the full platform matrix:
 
@@ -666,23 +664,23 @@ Runs on the full platform matrix:
 
 **`awfy`** (needs build, ubuntu-latest x64 only) — Downloads the `gocciascript-x86_64-linux` build, installs QuickJS, installs the latest Node Current release via `actions/setup-node` for the Node reference engine, checks out `smarr/are-we-fast-yet` at the SHA pinned in `perf/awfy/manifest.json`, and runs `node scripts/awfy-ci-report.js --awfy-dir awfy-suite/benchmarks/JavaScript --output awfy-report.json`. The report set is `ciReport` from the manifest: all pinned AWFY JavaScript benchmarks under Goccia bytecode, QuickJS, and Node Current, with five interleaved samples per engine. The job uploads `awfy-report` as a 30-day artifact. On main, `cd website && bun run publish-awfy ../awfy-report.json` publishes the compressed report plus its UTC daily pointer to the separate `awfy/` Vercel Blob namespace when `BLOB_READ_WRITE_TOKEN` is configured.
 
+**`jetstream-plan` / `jetstream-workload` / `jetstream`** (needs build, ubuntu-latest x64 only) — Reads the six-workload manifest into a fail-independent matrix, then each workload job downloads the same production Goccia binary, installs QuickJS and Node Current, and sparse-checks out the exact upstream files at the pinned JetStream 3.0 commit. Each shard keeps five interleaved process repetitions per engine and checkpoints its report after every sample; the final job merges all shards into `jetstream-report`, publishes complete or degraded reports on main, then preserves the validation failure as the job result. The compressed report and UTC daily pointer live under the independent `jetstream/` Blob namespace. The website combines retained JetStream and AWFY summaries at `/performance` and fetches only the latest full reports for workload detail.
+
 **`web-tooling-workload` / `web-tooling`** (needs build, ubuntu-latest x64 only) — The workload matrix downloads the `gocciascript-x86_64-linux` build, installs the latest Node Current release as the upstream build runtime, checks out `v8/web-tooling-benchmark` at the SHA pinned in `perf/web-tooling/manifest.json`, and installs upstream dependencies without running postinstall. Each matrix job runs one pinned workload under Goccia bytecode and uploads its report shard. Each workload bundle contains one upstream benchmark module and only its declared `third_party` payloads; the Goccia harness times one direct `fn()` invocation per process sample. The `web-tooling` merge job requires one structurally complete shard for every manifest workload and uploads the normalized all-workload `web-tooling-report` as a 30-day artifact. On main, `cd website && bun run publish-web-tooling ../web-tooling-report.json` publishes the compressed report plus its UTC daily pointer to the separate `web-tooling/` Vercel Blob namespace when `BLOB_READ_WRITE_TOKEN` is configured.
 
 **`benchmark`** (needs build) — Runs all benchmarks on all platforms. On main (ubuntu-latest x64), it additionally emits JSON and validates the report shape. PR comparison no longer reads a cached baseline from here — each PR builds and benchmarks `main` on its own runner ([ADR 0076](adr/0076-same-runner-benchmark-comparison.md)). The main bytecode benchmark lane also captures deterministic VM profile details, uploads the `benchmark-profile` artifact, and publishes aggregate/detail profile payloads under the separate `benchmark-profiles/` Blob namespace when `BLOB_READ_WRITE_TOKEN` is configured.
 
 **`cli`** (needs build) — Downloads pre-built binaries and runs CLI behavior smoke tests on all platforms via Bun: options across all apps, lexer numeric-separator rejection, parser error display, config-file loading, and app-specific features including Sandbox Runner seed baselines. Windows runs additionally assert that the loader binary does not link OpenSSL DLLs (HTTPS must use the platform TLS stack statically).
 
-**`artifacts`** (needs test + toml-compliance + json5-compliance + awfy + web-tooling + benchmark + cli, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints.
+**`artifacts`** (needs test + toml-compliance + json5-compliance + awfy + jetstream + web-tooling + benchmark + cli, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints.
 
-**`release`** (needs test + toml-compliance + json5-compliance + awfy + web-tooling + benchmark + cli, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the `source/app/*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), generates categorized release notes via [git-cliff](https://git-cliff.org/) (`cliff.toml`), and creates a GitHub release using `softprops/action-gh-release`.
+**`release`** (needs test + toml-compliance + json5-compliance + awfy + jetstream + web-tooling + benchmark + cli, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the `source/app/*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), generates categorized release notes via [git-cliff](https://git-cliff.org/) (`cliff.toml`), and creates a GitHub release using `softprops/action-gh-release`.
 
 ### `pr.yml` — Pull requests
 
-```text
-build -> test / benchmark -> comment / test262 -> comment / awfy -> comment / web-tooling -> comment / cli
-```
+Job graph: `build -> test / benchmark -> comment / test262 -> comment / awfy -> comment / jetstream -> comment / web-tooling -> comment / cli`.
 
-Runs on **ubuntu-latest x64 only** (single runner, no matrix).
+Runs on **ubuntu-latest x64 only**; workload suites may fan out through matrices on that platform.
 
 **`build`** — Installs FPC, compiles all binaries with `--prod`, stages the `source/app/*.dpr` binaries plus Pascal test executables, and uploads that staged set as `build-pr`.
 
@@ -694,11 +692,13 @@ Runs on **ubuntu-latest x64 only** (single runner, no matrix).
 
 **`awfy`** (needs build) — Runs the same `ciReport` AWFY set as full CI on the PR x64 build, using Goccia bytecode, QuickJS, and the latest Node Current release with five interleaved samples per engine. It uploads the normalized `awfy-report` JSON artifact. The downstream `awfy-comment` job posts or updates an `AWFY Results` comment with median timings and geomean ratios; min/max/CV and raw samples remain in the artifact.
 
+**`jetstream-plan` / `jetstream-workload` / `jetstream-report`** (needs build + build-main) — Runs each frozen JetStream workload in parallel under the main and PR Goccia bytecode loaders, QuickJS, and Node Current. Engine samples remain interleaved within a workload and each shard keeps five repetitions; the merge job restores manifest order, validates compatible metadata, recomputes geomean ratios, and uploads the normalized report. The downstream `jetstream-comment` job posts or updates a `JetStream 3 Performance Barometer` comment with separate QuickJS and Node.js reference ratios.
+
 **`web-tooling-workload` / `web-tooling-report`** (needs build) — Runs the same direct-invocation workload matrix as full CI on the PR x64 build, using Goccia bytecode only, then validates and merges the shards into the normalized `web-tooling-report` JSON artifact. The downstream `web-tooling-comment` job posts or updates a `Web Tooling Benchmark` comment with per-workload build/execution status and Goccia `runs/s` where available; full stdout/stderr for failures and min/max/CV remain in the artifact.
 
 **`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection), plus `GocciaSandboxRunner` coverage for seed config imports, inline text/base64 files, virtual `fs`, `$`, shared and child-sandbox `runScript` / shell `goccia`, bytecode mode, and diff output.
 
-FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, AWFY, Web Tooling, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, AWFY, Web Tooling, benchmark, test262, and cli jobs do the same.
+FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, test262, and cli jobs do the same.
 
 ## Changelog
 

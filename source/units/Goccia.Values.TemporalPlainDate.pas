@@ -594,7 +594,7 @@ var
   NewYear, NewMonth, NewDay, MonthFieldValue: Integer;
   MonthCodeStr: string;
   HasYear, HasMonth, HasMonthCode, HasDay, HasEra, HasEraYear,
-    IsLeapMonth, UseMonthCode, SawDateField: Boolean;
+    IsLeapMonth, IsValidMonthCode, UseMonthCode, SawDateField: Boolean;
   Overflow: TTemporalOverflow;
 
   function IsPresent(const AValue: TGocciaValue): Boolean;
@@ -625,6 +625,7 @@ begin
   NewMonth := Info.Date.Month;
   NewDay := Info.Date.Day;
   IsLeapMonth := False;
+  IsValidMonthCode := True;
   UseMonthCode := False;
   SawDateField := False;
 
@@ -649,10 +650,8 @@ begin
   begin
     SawDateField := True;
     MonthCodeStr := VMonthCode.ToStringLiteral.Value;
-    if (not TryParseTemporalMonthCode(MonthCodeStr, NewMonth, IsLeapMonth)) or
-       ((D.FCalendarId = 'iso8601') and IsLeapMonth) then
-      ThrowTypeError(Format(SErrorInvalidMonthCodeFor, ['PlainDate.prototype.with']),
-        SSuggestTemporalMonthCode);
+    IsValidMonthCode := TryParseTemporalMonthCode(MonthCodeStr, NewMonth,
+      IsLeapMonth);
     UseMonthCode := not HasMonth;
   end;
   VYear := Obj.GetProperty(PROP_YEAR);
@@ -702,6 +701,11 @@ begin
   end;
 
   Overflow := GetOverflowOptionFromValue(AArgs.GetElement(1), 'PlainDate.prototype.with');
+
+  if (not IsValidMonthCode) or
+     (HasMonthCode and (D.FCalendarId = 'iso8601') and IsLeapMonth) then
+    ThrowRangeError(Format(SErrorInvalidMonthCodeFor,
+      ['PlainDate.prototype.with']), SSuggestTemporalMonthCode);
 
   if not TryResolveCalendarDateToISO(D.FCalendarId, NewYear, NewMonth, NewDay,
     UseMonthCode, IsLeapMonth, Overflow = toConstrain, DateRec) then
@@ -835,7 +839,7 @@ begin
     ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainDate.prototype.until', 'largestUnit']), SSuggestTemporalValidUnits);
   if Ord(LargestUnit) > Ord(SmallestUnit) then
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  ValidateRoundingIncrement(Increment, SmallestUnit, LargestUnit);
+  ValidateRoundingIncrement(Increment, SmallestUnit);
 
   if D.FCalendarId <> Other.FCalendarId then
     ThrowRangeError('Temporal.PlainDate calendars must match',
@@ -888,7 +892,7 @@ begin
     ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainDate.prototype.since', 'largestUnit']), SSuggestTemporalValidUnits);
   if Ord(LargestUnit) > Ord(SmallestUnit) then
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  ValidateRoundingIncrement(Increment, SmallestUnit, LargestUnit);
+  ValidateRoundingIncrement(Increment, SmallestUnit);
   Mode := NegateTemporalRoundingMode(Mode);
 
   if D.FCalendarId <> Other.FCalendarId then

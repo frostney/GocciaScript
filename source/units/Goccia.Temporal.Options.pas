@@ -66,10 +66,12 @@ function GetOverflowOptionFromValue(const AOptions: TGocciaValue;
   const AMethod: string): TTemporalOverflow;
 function GetFractionalSecondDigits(const AOptions: TGocciaObjectValue): Integer;
 procedure ValidateRoundingIncrement(const AIncrement: Integer;
-  const ASmallestUnit, ALargestUnit: TTemporalUnit);
+  const AUnit: TTemporalUnit);
 function UnitToNanoseconds(const AUnit: TTemporalUnit): Int64;
 function RoundWithMode(const AValue: Int64; const ADivisor: Int64; const AMode: TTemporalRoundingMode): Int64;
 function RoundBigIntWithMode(const AValue: TBigInteger; const ADivisor: TBigInteger; const AMode: TTemporalRoundingMode): TBigInteger;
+function RoundNumberToIncrementAsIfPositive(const AValue,
+  AIncrement: TBigInteger; const AMode: TTemporalRoundingMode): TBigInteger;
 function FormatTimeWithPrecision(const AHour, AMinute, ASecond, AMillisecond,
   AMicrosecond, ANanosecond: Integer; const AFractionalDigits: Integer): string;
 
@@ -274,17 +276,15 @@ begin
 end;
 
 procedure ValidateRoundingIncrement(const AIncrement: Integer;
-  const ASmallestUnit, ALargestUnit: TTemporalUnit);
+  const AUnit: TTemporalUnit);
 var
   MaxVal: Integer;
 begin
-  // Per TC39 MaximumTemporalDurationRoundingIncrement: when smallestUnit
-  // equals largestUnit the unit is unbounded, so any increment >= 1 is valid.
-  // For sub-largest units the increment must evenly divide the unit maximum.
+  // TC39 Temporal §13.23 MaximumTemporalDurationRoundingIncrement and
+  // §13.29 ValidateTemporalRoundingIncrement.
   if AIncrement <= 1 then Exit;
-  if ASmallestUnit = ALargestUnit then Exit;
 
-  case ASmallestUnit of
+  case AUnit of
     tuHour:        MaxVal := 24;
     tuMinute,
     tuSecond:      MaxVal := 60;
@@ -635,6 +635,62 @@ begin
     end;
   else
     Result := Quotient.Multiply(ADivisor);
+  end;
+end;
+
+// TC39 Temporal §13.30 RoundNumberToIncrementAsIfPositive.
+function RoundNumberToIncrementAsIfPositive(const AValue,
+  AIncrement: TBigInteger; const AMode: TTemporalRoundingMode): TBigInteger;
+var
+  Quotient, Remainder, Lower, Upper, DistanceToLower,
+    DistanceToUpper: TBigInteger;
+  Comparison: Integer;
+begin
+  Quotient := AValue.Divide(AIncrement);
+  Remainder := AValue.Modulo(AIncrement);
+  if Remainder.IsNegative then
+  begin
+    Quotient := Quotient.Subtract(TBigInteger.One);
+    Remainder := Remainder.Add(AIncrement);
+  end;
+  Lower := Quotient.Multiply(AIncrement);
+  if Remainder.IsZero then
+    Exit(Lower);
+  Upper := Lower.Add(AIncrement);
+
+  case AMode of
+    rmFloor,
+    rmTrunc:
+      Exit(Lower);
+    rmCeil,
+    rmExpand:
+      Exit(Upper);
+  else
+    ;
+  end;
+
+  DistanceToLower := Remainder;
+  DistanceToUpper := AIncrement.Subtract(Remainder);
+  Comparison := DistanceToLower.Compare(DistanceToUpper);
+  if Comparison < 0 then
+    Exit(Lower);
+  if Comparison > 0 then
+    Exit(Upper);
+
+  case AMode of
+    rmHalfFloor,
+    rmHalfTrunc:
+      Result := Lower;
+    rmHalfCeil,
+    rmHalfExpand:
+      Result := Upper;
+    rmHalfEven:
+      if Quotient.GetBit(0) then
+        Result := Upper
+      else
+        Result := Lower;
+  else
+    Result := Lower;
   end;
 end;
 

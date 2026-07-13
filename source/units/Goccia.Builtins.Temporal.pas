@@ -98,6 +98,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Temporal.AbstractOperations,
   Goccia.Temporal.Calendar,
   Goccia.Temporal.DurationMath,
   Goccia.Temporal.Options,
@@ -157,45 +158,6 @@ begin
   finally
     TGarbageCollector.Instance.RemoveTempRoot(FTemporalNamespace);
   end;
-end;
-
-function TemporalCalendarIdFromValue(const AValue: TGocciaValue;
-  const AAllowISOStrings: Boolean = True): string;
-var
-  CalendarString: string;
-begin
-  if (AValue = nil) or (AValue is TGocciaUndefinedLiteralValue) then
-    Exit('iso8601');
-
-  if AValue is TGocciaTemporalPlainDateValue then
-    Exit(TGocciaTemporalPlainDateValue(AValue).CalendarId);
-  if AValue is TGocciaTemporalPlainDateTimeValue then
-    Exit(TGocciaTemporalPlainDateTimeValue(AValue).CalendarId);
-  if AValue is TGocciaTemporalPlainMonthDayValue then
-    Exit(TGocciaTemporalPlainMonthDayValue(AValue).CalendarId);
-  if AValue is TGocciaTemporalPlainYearMonthValue then
-    Exit(TGocciaTemporalPlainYearMonthValue(AValue).CalendarId);
-  if AValue is TGocciaTemporalZonedDateTimeValue then
-    Exit(TGocciaTemporalZonedDateTimeValue(AValue).CalendarId);
-
-  if not (AValue is TGocciaStringLiteralValue) then
-    ThrowTypeError('Calendar must be a string or Temporal object',
-      SSuggestTemporalFromArg);
-
-  CalendarString := TGocciaStringLiteralValue(AValue).Value;
-  if AAllowISOStrings then
-    Result := ParseTemporalCalendarStringIdentifierStrict(CalendarString)
-  else
-    Result := CanonicalizeTemporalCalendarIdentifier(CalendarString);
-  if Result = '' then
-    ThrowRangeError('Unknown calendar: ' + CalendarString, SSuggestTemporalDateRange);
-end;
-
-function TemporalCalendarPropertyFromObject(const AObject: TGocciaObjectValue): TGocciaValue;
-begin
-  Result := AObject.GetProperty(PROP_CALENDAR_ID);
-  if (Result = nil) or (Result is TGocciaUndefinedLiteralValue) then
-    Result := AObject.GetProperty('calendar');
 end;
 
 function TemporalOverflowOptionFromArgs(const AArgs: TGocciaArgumentsCollection;
@@ -674,7 +636,7 @@ begin
   Year := ToIntegerWithTruncationValue(AArgs.GetElement(0));
   Month := ToIntegerWithTruncationValue(AArgs.GetElement(1));
   Day := ToIntegerWithTruncationValue(AArgs.GetElement(2));
-  CalendarId := TemporalCalendarIdFromValue(AArgs.GetElement(3), False);
+  CalendarId := ToTemporalCalendarIdentifier(AArgs.GetElement(3), False);
   Result := TGocciaTemporalPlainDateValue.Create(
     Year, Month, Day, CalendarId);
 end;
@@ -734,8 +696,7 @@ begin
   else if Arg is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(Arg);
-    V := TemporalCalendarPropertyFromObject(Obj);
-    CalendarId := TemporalCalendarIdFromValue(V);
+    CalendarId := GetTemporalCalendarIdentifierWithISODefault(Obj);
     CalendarHasEra := TemporalCalendarUsesEra(CalendarId);
 
     VDay := Obj.GetProperty(PROP_DAY);
@@ -1103,7 +1064,7 @@ begin
   Millisecond := GetArgOr(6, 0);
   Microsecond := GetArgOr(7, 0);
   Nanosecond := GetArgOr(8, 0);
-  CalendarId := TemporalCalendarIdFromValue(AArgs.GetElement(9), False);
+  CalendarId := ToTemporalCalendarIdentifier(AArgs.GetElement(9), False);
   Result := TGocciaTemporalPlainDateTimeValue.Create(
     Year, Month, Day, Hour, Minute, Second, Millisecond, Microsecond,
     Nanosecond, CalendarId);
@@ -1174,8 +1135,7 @@ begin
   else if Arg is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(Arg);
-    V := TemporalCalendarPropertyFromObject(Obj);
-    CalendarId := TemporalCalendarIdFromValue(V);
+    CalendarId := GetTemporalCalendarIdentifierWithISODefault(Obj);
     CalendarHasEra := TemporalCalendarUsesEra(CalendarId);
     Y := 0; Mo := 0; D := 0; H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
 
@@ -1366,7 +1326,7 @@ begin
   if AArgs.Length < 2 then
     ThrowRangeError(SErrorTemporalPlainYearMonthArgs, SSuggestTemporalDateRange);
   MonthValue := ToIntegerWithTruncationValue(AArgs.GetElement(1));
-  CalendarId := TemporalCalendarIdFromValue(AArgs.GetElement(2), False);
+  CalendarId := ToTemporalCalendarIdentifier(AArgs.GetElement(2), False);
   RefDay := 1;
   if (AArgs.Length >= 4) and not (AArgs.GetElement(3) is TGocciaUndefinedLiteralValue) then
     RefDay := ToIntegerWithTruncationValue(AArgs.GetElement(3));
@@ -1421,8 +1381,7 @@ begin
   else if Arg is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(Arg);
-    V := TemporalCalendarPropertyFromObject(Obj);
-    CalendarId := TemporalCalendarIdFromValue(V);
+    CalendarId := GetTemporalCalendarIdentifierWithISODefault(Obj);
     CalendarHasEra := TemporalCalendarUsesEra(CalendarId);
 
     VMonth := Obj.GetProperty(PROP_MONTH);
@@ -1591,7 +1550,7 @@ begin
   if AArgs.Length < 2 then
     ThrowRangeError(SErrorTemporalPlainMonthDayArgs, SSuggestTemporalDateRange);
   DayValue := ToIntegerWithTruncationValue(AArgs.GetElement(1));
-  CalendarId := TemporalCalendarIdFromValue(AArgs.GetElement(2), False);
+  CalendarId := ToTemporalCalendarIdentifier(AArgs.GetElement(2), False);
   ReferenceYear := PLAIN_MONTH_DAY_DEFAULT_REFERENCE_YEAR;
   V := AArgs.GetElement(3);
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
@@ -1935,8 +1894,7 @@ begin
   else if Arg is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(Arg);
-    V := TemporalCalendarPropertyFromObject(Obj);
-    CalendarId := TemporalCalendarIdFromValue(V);
+    CalendarId := GetTemporalCalendarIdentifierWithISODefault(Obj);
 
     VDay := Obj.GetProperty(PROP_DAY);
     if not IsPresent(VDay) then
@@ -2185,7 +2143,7 @@ begin
   TZ := CanonicalizeTemporalTimeZoneIdentifier(TimeZoneString);
 
   Result := TGocciaTemporalZonedDateTimeValue.Create(Ms, SubMs, TZ,
-    TemporalCalendarIdFromValue(AArgs.GetElement(2), False));
+    ToTemporalCalendarIdentifier(AArgs.GetElement(2), False));
 end;
 
 function TGocciaTemporalBuiltin.ZonedDateTimeFrom(const AArgs: TGocciaArgumentsCollection;

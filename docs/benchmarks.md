@@ -10,6 +10,8 @@
 - **CI integration** — PR workflow posts benchmark comparison comments with range-overlap classification; main CI retains deterministic profile reports
 - **Environment tuning** — Calibration time, warmup iterations, and measurement rounds configurable via environment variables
 - **Cross-engine AWFY lane** — `scripts/awfy-driver.js` runs pinned AWFY and `perf/probes/` diagnostics under GocciaScript, QuickJS, and Node without mixing them into the benchmark-runner corpus
+- **JetStream 3 reference lane** — `scripts/jetstream-driver.js` runs a frozen, shell-portable subset of the pinned JetStream 3 corpus under the same three engines while preserving upstream workload source
+- **Performance Barometer** — Main-branch AWFY and JetStream reports feed the unified `/performance` dashboard with version-bounded history and visible failed-run gaps
 - **Web Tooling Goccia lane** — `scripts/web-tooling-driver.js` runs every pinned V8 Web Tooling workload under GocciaScript only and publishes retained JSON artifacts
 
 GocciaScript includes a benchmark runner for measuring execution performance. Benchmarks live in the `benchmarks/` directory and import the benchmark API from `"goccia:microbench"`.
@@ -466,6 +468,72 @@ boxing, and inline-cache shape behavior. AWFY and web-tooling remain
 roadmap-level transfer proof. Allocation reductions are supporting evidence
 only; they do not prove a runtime win without interleaved timing movement and
 profile evidence for the mechanism.
+
+## JetStream 3 Reference Lane
+
+The JetStream lane supplements AWFY with a frozen set of modern, pure-JavaScript
+workloads from [`WebKit/JetStream`](https://github.com/WebKit/JetStream). It is a
+directional reference-engine barometer, not an attempt to reproduce the official
+browser suite or rank runtimes with different goals.
+
+```bash
+# List the frozen workload set
+node scripts/jetstream-driver.js --list
+
+# Run one workload from the pinned upstream checkout
+node scripts/jetstream-driver.js \
+  --jetstream-dir /path/to/JetStream \
+  --benchmark hash-map \
+  --repetitions 1 \
+  --engines goccia,qjs,node \
+  --output tmp/jetstream-report.json
+
+# Run the retained CI report contract
+node scripts/jetstream-ci-report.js \
+  --jetstream-dir /path/to/JetStream \
+  --output tmp/jetstream-report.json
+```
+
+`perf/jetstream/manifest.json` pins JetStream 3.0 commit
+`3967678fa8ab98d847ab33cf3728dba726fa854b`, driver version, process
+repetitions, and these six workloads: `hash-map`, `ai-astar`, `gaussian-blur`,
+`raytrace-public-class-fields`, `sync-fs`, and `lazy-collections`. The selection
+covers collections, control flow, numeric/array work, public class fields,
+generators, and iterators without requiring Wasm, DOM, workers, a host filesystem,
+or a second copy of the Web Tooling lane. The private-field raytrace variant is
+excluded because it does not complete inside the diagnostic time budget.
+
+The driver concatenates the listed upstream files unchanged into one generated
+shell entry per workload. The generic adapter supplies timing, deterministic
+randomness where the manifest requests it, and result serialization. Each suite
+iteration uses JetStream's First/Worst/Average subscore formula; CI deliberately
+uses three suite iterations and five process repetitions. Therefore the result is
+a stable GocciaScript project measurement, not an official full-suite JetStream
+score.
+
+Reports retain raw scores, subscores, medians, IQR/min/max/CV, explicit upstream
+validation availability and outcomes, failure stdout/stderr, corpus and driver
+versions, per-binary Goccia source revisions/FPC, and QuickJS/Node versions.
+Workloads without an upstream `validate()` hook are labeled `execution-only`; the
+adapter does not invent a checksum or claim that validation passed. Timeouts,
+crashes, OOMs, missing results, and verification failures remain structurally
+valid report rows and fail the CI gate after the artifact and main-branch Blob
+pointer have been written. CI runs one workload per parallel shard, preserving
+repetition-to-engine interleaving inside each workload, then validates metadata
+and recomputes geomean ratios in manifest order. Shards checkpoint after every
+sample so an outer cancellation still leaves diagnostic report data.
+
+The public Performance Barometer normalizes both external lanes so `1.00×` means
+aligned performance and values above one mean GocciaScript was proportionally
+slower. AWFY uses `Goccia time / reference time`; JetStream uses
+`reference score / Goccia score`. QuickJS and Node.js stay separate reference
+engines. Main publishes JetStream reports under the independent `jetstream/`
+Blob namespace, and `/performance` combines their history with AWFY. Daily
+pointers carry the normalized timeline summary, so the dashboard reads retained
+history without downloading every full report; only the latest report is fetched
+for the workload-detail tables. Trend lines break when corpus, subset, driver, or
+reference-engine versions change. Failed runs remain visible as gaps; the most
+recent complete point is labeled stale instead of being silently carried forward.
 
 ## Web Tooling Goccia Lane
 

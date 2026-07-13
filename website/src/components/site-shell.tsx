@@ -36,6 +36,7 @@ type Tab =
   | "install"
   | "docs"
   | "compatibility"
+  | "performance"
   | "playground"
   | "sandbox";
 
@@ -43,6 +44,7 @@ const TABS: { id: Tab; label: string; href: string }[] = [
   { id: "home", label: "Home", href: "/" },
   { id: "install", label: "Installation", href: "/installation" },
   { id: "docs", label: "Docs", href: "/docs" },
+  { id: "performance", label: "Performance", href: "/performance" },
   { id: "playground", label: "Playground", href: "/playground" },
   { id: "sandbox", label: "Sandbox", href: "/sandbox" },
 ];
@@ -52,6 +54,7 @@ function activeTab(pathname: string): Tab {
   if (pathname.startsWith("/installation")) return "install";
   if (pathname.startsWith("/docs")) return "docs";
   if (pathname.startsWith("/compatibility")) return "compatibility";
+  if (pathname.startsWith("/performance")) return "performance";
   if (pathname.startsWith("/playground")) return "playground";
   if (pathname.startsWith("/sandbox")) return "sandbox";
   return "home";
