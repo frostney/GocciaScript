@@ -42,6 +42,13 @@ describe.runIf(isTemporal)("Temporal.PlainYearMonth.from", () => {
     expect(Temporal.PlainYearMonth.from(fields).toString()).toBe("2024-05");
   });
 
+  test("from preserves a Temporal object's internal calendar", () => {
+    const date = new Temporal.PlainDate(2024, 1, 1, "hebrew");
+    const yearMonth = Temporal.PlainYearMonth.from(date);
+    expect(yearMonth.calendarId).toBe("hebrew");
+    expect(yearMonth.toPlainDate({ day: date.day }).equals(date)).toBe(true);
+  });
+
   test("from object with consistent month and monthCode", () => {
     const ym = Temporal.PlainYearMonth.from({ year: 2024, monthCode: "M03", month: 3 });
     expect(ym.month).toBe(3);

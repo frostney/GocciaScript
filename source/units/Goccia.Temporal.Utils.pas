@@ -464,6 +464,37 @@ begin
   Result := True;
 end;
 
+function IsValidAnnotationValue(const AValue: string): Boolean;
+var
+  I: Integer;
+  Ch: Char;
+  ComponentHasCharacter: Boolean;
+begin
+  Result := False;
+  if AValue = '' then
+    Exit;
+
+  ComponentHasCharacter := False;
+  for I := 1 to Length(AValue) do
+  begin
+    Ch := AValue[I];
+    if Ch = '-' then
+    begin
+      if not ComponentHasCharacter then
+        Exit;
+      ComponentHasCharacter := False;
+    end
+    else if ((Ch >= 'a') and (Ch <= 'z')) or
+            ((Ch >= 'A') and (Ch <= 'Z')) or
+            ((Ch >= '0') and (Ch <= '9')) then
+      ComponentHasCharacter := True
+    else
+      Exit;
+  end;
+
+  Result := ComponentHasCharacter;
+end;
+
 function IsValidTemporalCalendarIdentifier(const AValue: string): Boolean;
 var
   I: Integer;
@@ -847,9 +878,9 @@ begin
         CalendarValue := Copy(Annotation, EqualsPos + 1,
           Length(Annotation) - EqualsPos);
         // ParseISODateTime records the annotation, but ToTemporalTime ignores
-        // its calendar value. Unknown calendar identifiers are therefore
-        // valid here as long as the RFC 9557 annotation value is non-empty.
-        if CalendarValue = '' then
+        // its calendar value. Unknown identifiers are valid here, but the
+        // value must still match the RFC 9557 AnnotationValue grammar.
+        if not IsValidAnnotationValue(CalendarValue) then
           Exit;
         Inc(CalendarCount);
         if Critical then

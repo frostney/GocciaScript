@@ -22,6 +22,7 @@ describe.runIf(isTemporal)("Temporal.PlainTime.from", () => {
   test("from ignores valid calendar annotations", () => {
     const values = [
       "12:34:56.987654321[u-ca=unknown]",
+      "12:34:56.987654321[u-ca=Unknown-123]",
       "T12:34:56.987654321[UTC][!u-ca=unknown]",
       "1970-01-01T12:34:56.987654321[u-ca=iso8601][u-ca=discord]"
     ];
