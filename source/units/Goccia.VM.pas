@@ -1587,6 +1587,24 @@ begin
     AValue := nil;
 end;
 
+function VMTrySetOwnWritableDataProperty(const AObject: TGocciaObjectValue;
+  const AName: string; const AValue: TGocciaValue): Boolean; inline;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  // This is the ordinary-object own writable-data branch of
+  // OrdinarySetWithOwnDescriptor with Receiver = O.  Exact class checks keep
+  // exotic/overridden assignment semantics on the virtual fallback, while
+  // exact descriptor checks keep lazy properties on their materializing path.
+  Result := Assigned(AObject) and
+    (AObject.ClassType = TGocciaObjectValue) and
+    AObject.Properties.TryGetValue(AName, Descriptor) and
+    (Descriptor.ClassType = TGocciaPropertyDescriptorData) and
+    Descriptor.Writable;
+  if Result then
+    TGocciaPropertyDescriptorData(Descriptor).Value := AValue;
+end;
+
 function VMValueToRegisterFast(const AValue: TGocciaValue): TGocciaRegister; inline;
 var
   NumberValue: Double;
@@ -16114,8 +16132,15 @@ begin
             RegisterToValue(FRegisters[A]), 0, 0, True)
         else if Assigned(FGlobalScope) then
         begin
+          GlobalBindingValue := RegisterToValue(FRegisters[A]);
+          if FGlobalScope.ContainsOwnVarBinding(GlobalName) and
+             (FGlobalScope.ThisValue is TGocciaObjectValue) and
+             VMTrySetOwnWritableDataProperty(
+               TGocciaObjectValue(FGlobalScope.ThisValue), GlobalName,
+               GlobalBindingValue) then
+            Continue;
           if (not FGlobalScope.TryAssignExistingBinding(GlobalName,
-            RegisterToValue(FRegisters[A]), True)) and
+            GlobalBindingValue, True)) and
              (FGlobalScope.ThisValue is TGocciaObjectValue) then
           begin
             if ((GlobalName = PROP_GOCCIA) or (GlobalName = PROP_GLOBAL_THIS)) and
@@ -16128,7 +16153,7 @@ begin
                 '', nil, SSuggestUseLetNotConst);
             end;
             TGocciaObjectValue(FGlobalScope.ThisValue).AssignPropertyWithReceiver(
-              GlobalName, RegisterToValue(FRegisters[A]), FGlobalScope.ThisValue);
+              GlobalName, GlobalBindingValue, FGlobalScope.ThisValue);
           end;
         end;
       end;
@@ -16669,6 +16694,7 @@ begin
       begin
         GlobalName := Template.GetConstantUnchecked(
           DecodeBx(Instruction)).StringValue;
+        GlobalBindingValue := GetRegister(A);
         // Top-level var names are instantiated before body execution.
         // Initializers inside loops can therefore use ordinary assignment
         // resolution instead of repeating CreateGlobalVarBinding each time.
@@ -16676,23 +16702,28 @@ begin
            FGlobalScope.ContainsOwnVarBinding(GlobalName) then
         begin
           if (FGlobalScope.ThisValue is TGocciaObjectValue) and
+             VMTrySetOwnWritableDataProperty(
+               TGocciaObjectValue(FGlobalScope.ThisValue), GlobalName,
+               GlobalBindingValue) then
+            Continue
+          else if (FGlobalScope.ThisValue is TGocciaObjectValue) and
              TGocciaObjectValue(FGlobalScope.ThisValue).HasOwnProperty(
                GlobalName) then
           begin
             if Template.StrictCode then
               TGocciaObjectValue(FGlobalScope.ThisValue).AssignProperty(
-                GlobalName, GetRegister(A))
+                GlobalName, GlobalBindingValue)
             else
               TGocciaObjectValue(FGlobalScope.ThisValue).
-                AssignPropertyWithReceiver(GlobalName, GetRegister(A),
+                AssignPropertyWithReceiver(GlobalName, GlobalBindingValue,
                   FGlobalScope.ThisValue);
           end
           else
-            FGlobalScope.AssignBinding(GlobalName, GetRegister(A), 0, 0,
+            FGlobalScope.AssignBinding(GlobalName, GlobalBindingValue, 0, 0,
               not Template.StrictCode);
         end
         else
-          DefineGlobalBinding(GlobalName, GetRegister(A), dtVar,
+          DefineGlobalBinding(GlobalName, GlobalBindingValue, dtVar,
             not Template.StrictCode);
       end;
 
