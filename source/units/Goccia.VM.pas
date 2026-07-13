@@ -11800,7 +11800,7 @@ var
   PropertyValue: TGocciaValue;
   Boxed: TGocciaObjectValue;
   PropertyName: string;
-  StringValue: string;
+  StringUnit, StringValue: string;
   KeyIndex: Integer;
 begin
   if (AReceiverReg.Kind = grkObject) and
@@ -11808,10 +11808,10 @@ begin
      TryGetArrayIndexRegister(AKeyReg, KeyIndex) then
   begin
     StringValue := TGocciaStringLiteralValue(AReceiverReg.ObjectValue).Value;
-    if (KeyIndex >= 0) and (KeyIndex < UTF16CodeUnitLength(StringValue)) then
+    StringUnit := UTF16CodeUnitAt(StringValue, KeyIndex);
+    if StringUnit <> '' then
     begin
-      SetRegister(ADest, TGocciaStringLiteralValue.Create(
-        UTF16CodeUnitAt(StringValue, KeyIndex)));
+      SetRegister(ADest, TGocciaStringLiteralValue.Create(StringUnit));
       Exit;
     end;
   end;
@@ -14947,6 +14947,13 @@ begin
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := RegisterBoolean(
             FRegisters[B].IntValue = FRegisters[C].IntValue)
+        else if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[C].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) and
+           (FRegisters[C].ObjectValue is TGocciaStringLiteralValue) then
+          FRegisters[A] := RegisterBoolean(UTF16StringsEqual(
+            TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value,
+            TGocciaStringLiteralValue(FRegisters[C].ObjectValue).Value))
         else
           SetRegister(A, GetRegister(B).IsEqual(GetRegister(C)));
 
@@ -14954,6 +14961,13 @@ begin
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := RegisterBoolean(
             FRegisters[B].IntValue <> FRegisters[C].IntValue)
+        else if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[C].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) and
+           (FRegisters[C].ObjectValue is TGocciaStringLiteralValue) then
+          FRegisters[A] := RegisterBoolean(not UTF16StringsEqual(
+            TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value,
+            TGocciaStringLiteralValue(FRegisters[C].ObjectValue).Value))
         else
           SetRegister(A, GetRegister(B).IsNotEqual(GetRegister(C)));
 
@@ -16616,8 +16630,31 @@ begin
       begin
         GlobalName := Template.GetConstantUnchecked(
           DecodeBx(Instruction)).StringValue;
-        DefineGlobalBinding(GlobalName, GetRegister(A), dtVar,
-          not Template.StrictCode);
+        // Top-level var names are instantiated before body execution.
+        // Initializers inside loops can therefore use ordinary assignment
+        // resolution instead of repeating CreateGlobalVarBinding each time.
+        if Assigned(FGlobalScope) and
+           FGlobalScope.ContainsOwnVarBinding(GlobalName) then
+        begin
+          if (FGlobalScope.ThisValue is TGocciaObjectValue) and
+             TGocciaObjectValue(FGlobalScope.ThisValue).HasOwnProperty(
+               GlobalName) then
+          begin
+            if Template.StrictCode then
+              TGocciaObjectValue(FGlobalScope.ThisValue).AssignProperty(
+                GlobalName, GetRegister(A))
+            else
+              TGocciaObjectValue(FGlobalScope.ThisValue).
+                AssignPropertyWithReceiver(GlobalName, GetRegister(A),
+                  FGlobalScope.ThisValue);
+          end
+          else
+            FGlobalScope.AssignBinding(GlobalName, GetRegister(A), 0, 0,
+              not Template.StrictCode);
+        end
+        else
+          DefineGlobalBinding(GlobalName, GetRegister(A), dtVar,
+            not Template.StrictCode);
       end;
 
       OP_DEFINE_GLOBAL_LET_LONG:
