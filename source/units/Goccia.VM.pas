@@ -14917,31 +14917,70 @@ begin
         end;
 
       OP_BAND:
-        SetRegister(A, EvaluateBitwiseAnd(
-          GetRegister(B), GetRegister(C)));
+        if (FRegisters[B].Kind = grkInt) and
+           (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterInt(
+            LongInt(FRegisters[B].IntValue) and
+            LongInt(FRegisters[C].IntValue))
+        else
+          SetRegister(A, EvaluateBitwiseAnd(
+            GetRegister(B), GetRegister(C)));
 
       OP_BOR:
-        SetRegister(A, EvaluateBitwiseOr(
-          GetRegister(B), GetRegister(C)));
+        if (FRegisters[B].Kind = grkInt) and
+           (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterInt(
+            LongInt(FRegisters[B].IntValue) or
+            LongInt(FRegisters[C].IntValue))
+        else
+          SetRegister(A, EvaluateBitwiseOr(
+            GetRegister(B), GetRegister(C)));
 
       OP_BXOR:
-        SetRegister(A, EvaluateBitwiseXor(
-          GetRegister(B), GetRegister(C)));
+        if (FRegisters[B].Kind = grkInt) and
+           (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterInt(
+            LongInt(FRegisters[B].IntValue) xor
+            LongInt(FRegisters[C].IntValue))
+        else
+          SetRegister(A, EvaluateBitwiseXor(
+            GetRegister(B), GetRegister(C)));
 
       OP_SHL:
-        SetRegister(A, EvaluateLeftShift(
-          GetRegister(B), GetRegister(C)));
+        if (FRegisters[B].Kind = grkInt) and
+           (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterInt(LongInt(
+            LongWord(FRegisters[B].IntValue) shl
+            (LongWord(FRegisters[C].IntValue) and 31)))
+        else
+          SetRegister(A, EvaluateLeftShift(
+            GetRegister(B), GetRegister(C)));
 
       OP_SHR:
-        SetRegister(A, EvaluateRightShift(
-          GetRegister(B), GetRegister(C)));
+        if (FRegisters[B].Kind = grkInt) and
+           (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterInt(SarLongint(
+            LongInt(FRegisters[B].IntValue),
+            LongWord(FRegisters[C].IntValue) and 31))
+        else
+          SetRegister(A, EvaluateRightShift(
+            GetRegister(B), GetRegister(C)));
 
       OP_USHR:
-        SetRegister(A, EvaluateUnsignedRightShift(
-          GetRegister(B), GetRegister(C)));
+        if (FRegisters[B].Kind = grkInt) and
+           (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := VMIntResult(Int64(LongWord(
+            FRegisters[B].IntValue) shr
+            (LongWord(FRegisters[C].IntValue) and 31)))
+        else
+          SetRegister(A, EvaluateUnsignedRightShift(
+            GetRegister(B), GetRegister(C)));
 
       OP_BNOT:
-        SetRegister(A, EvaluateBitwiseNot(GetRegister(B)));
+        if FRegisters[B].Kind = grkInt then
+          FRegisters[A] := RegisterInt(not LongInt(FRegisters[B].IntValue))
+        else
+          SetRegister(A, EvaluateBitwiseNot(GetRegister(B)));
 
       OP_EQ:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
