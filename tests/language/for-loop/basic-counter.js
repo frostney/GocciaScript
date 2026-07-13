@@ -79,3 +79,36 @@ test("nested function parameters restore the in operator in initializers", () =>
   expect(arrow()).toBe(true);
   expect(holder.check()).toBe(true);
 });
+
+test("nested [+In] grammar productions restore the in operator in initializers", () => {
+  const scope = { marker: true };
+  let value;
+
+  for (value = true ? "marker" in scope : false; false;) {}
+  expect(value).toBe(true);
+
+  for (value = ["marker" in scope][0]; false;) {}
+  expect(value).toBe(true);
+
+  for (value = { result: "marker" in scope }.result; false;) {}
+  expect(value).toBe(true);
+
+  for (value = `${"marker" in scope}`; false;) {}
+  expect(value).toBe("true");
+
+  for (value = { get ["marker" in scope]() { return "object"; } }[true]; false;) {}
+  expect(value).toBe("object");
+
+  for (value = new (class {
+    get ["marker" in scope]() { return "instance"; }
+  })()[true]; false;) {}
+  expect(value).toBe("instance");
+
+  for (value = class {
+    static get ["marker" in scope]() { return "static"; }
+  }[true]; false;) {}
+  expect(value).toBe("static");
+
+  for (value = false && import("unused", "marker" in scope); false;) {}
+  expect(value).toBe(false);
+});

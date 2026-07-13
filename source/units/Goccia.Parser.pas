@@ -303,7 +303,9 @@ type
     function ObjectLiteral: TGocciaExpression;
     function ArrowFunction(const AIsAsync: Boolean = False): TGocciaExpression;
     function Assignment: TGocciaExpression;
+    function AssignmentAllowIn: TGocciaExpression;
     function AssignmentNoIn: TGocciaExpression;
+    function ExpressionAllowIn: TGocciaExpression;
     function ExpressionNoIn: TGocciaExpression;
     function ClassExpression: TGocciaExpression;
 
@@ -1500,7 +1502,7 @@ begin
     raise TGocciaSyntaxError.Create(
       'Strict mode code must not bind reserved word ''' + AToken.Lexeme + '''',
       AToken.Line, AToken.Column, FFileName, FSourceLines);
-  if (not EffectiveNonStrictModeEnabled) and
+  if FStrictModeSourceActive and
      ((AToken.Lexeme = 'eval') or
       (AToken.Lexeme = IDENTIFIER_ARGUMENTS)) then
     raise TGocciaSyntaxError.Create(
@@ -1579,12 +1581,38 @@ begin
   end;
 end;
 
+function TGocciaParser.ExpressionAllowIn: TGocciaExpression;
+var
+  SavedAllowInExpression: Boolean;
+begin
+  SavedAllowInExpression := FAllowInExpression;
+  FAllowInExpression := True;
+  try
+    Result := Expression;
+  finally
+    FAllowInExpression := SavedAllowInExpression;
+  end;
+end;
+
 function TGocciaParser.AssignmentNoIn: TGocciaExpression;
 var
   SavedAllowInExpression: Boolean;
 begin
   SavedAllowInExpression := FAllowInExpression;
   FAllowInExpression := False;
+  try
+    Result := Assignment;
+  finally
+    FAllowInExpression := SavedAllowInExpression;
+  end;
+end;
+
+function TGocciaParser.AssignmentAllowIn: TGocciaExpression;
+var
+  SavedAllowInExpression: Boolean;
+begin
+  SavedAllowInExpression := FAllowInExpression;
+  FAllowInExpression := True;
   try
     Result := Assignment;
   finally
@@ -1610,7 +1638,7 @@ begin
       Line := Previous.Line;
       Column := Previous.Column;
       Condition := Result;
-      Consequent := Assignment;  // ECMAScript spec: AssignmentExpression, not Expression
+      Consequent := AssignmentAllowIn;
     end
     else
     begin
@@ -1983,6 +2011,8 @@ end;
 
 function ExpressionContainsOptionalChain(
   const AExpr: TGocciaExpression): Boolean; forward;
+function ExpressionIsOptionalChainTag(
+  const AExpr: TGocciaExpression): Boolean; forward;
 
 function TGocciaParser.ParseMemberAccessSegment(
   const AReceiver: TGocciaExpression; const AUsePropertyNameLocation,
@@ -2025,7 +2055,7 @@ begin
         else if Check(gttLeftBracket) and IsOptionalChain then
         begin
           Advance;
-          Argument := Expression;
+          Argument := ExpressionAllowIn;
           Consume(gttRightBracket, 'Expected "]" after computed member expression',
             SSuggestCloseBracketComputedProperty);
           Result := TGocciaMemberExpression.Create(AReceiver, Argument,
@@ -2040,10 +2070,10 @@ begin
             begin
               repeat
                 if Match(gttSpread) then
-                  Argument := TGocciaSpreadExpression.Create(Assignment,
+                  Argument := TGocciaSpreadExpression.Create(AssignmentAllowIn,
                     Previous.Line, Previous.Column)
                 else
-                  Argument := Assignment;
+                  Argument := AssignmentAllowIn;
                 Arguments.Add(Argument);
               until not MatchWithLexicalGoal(gttComma, glgInputElementDiv) or Check(gttRightParen);
             end;
@@ -2093,7 +2123,7 @@ begin
       end;
     gttLeftBracket:
       begin
-        Argument := Expression;
+        Argument := ExpressionAllowIn;
         Consume(gttRightBracket, 'Expected "]" after computed member expression',
           SSuggestCloseBracketComputedProperty);
         Result := TGocciaMemberExpression.Create(AReceiver, Argument,
@@ -2130,9 +2160,10 @@ begin
             begin
               repeat
                 if Match(gttSpread) then
-                  Arg := TGocciaSpreadExpression.Create(Assignment, Previous.Line, Previous.Column)
+                  Arg := TGocciaSpreadExpression.Create(AssignmentAllowIn,
+                    Previous.Line, Previous.Column)
                 else
-                  Arg := Assignment;
+                  Arg := AssignmentAllowIn;
                 Arguments.Add(Arg);
               until not MatchWithLexicalGoal(gttComma, glgInputElementDiv) or Check(gttRightParen);
             end;
@@ -2186,8 +2217,7 @@ begin
       gttTemplate, gttTemplateHead:
         begin
           // ES2026 §13.3.11 Tagged Templates: tag`...`
-          if ExpressionContainsOptionalChain(Result) and
-             not Result.Parenthesized then
+          if ExpressionIsOptionalChainTag(Result) then
             raise TGocciaSyntaxError.Create(
               'Optional chains cannot be used as unparenthesized template tags',
               Peek.Line, Peek.Column, FFileName, FSourceLines);
@@ -2599,7 +2629,7 @@ begin
     if TemplateToken.TokenType in [gttTemplate, gttTemplateTail] then
       Break;
 
-    Expressions.Add(Expression);
+    Expressions.Add(ExpressionAllowIn);
     Consume(gttRightBrace, 'Expected "}" after template expression',
       SSuggestCloseTemplate);
     TemplateToken := ConsumeTemplateContinuation;
@@ -2640,7 +2670,7 @@ begin
       TGocciaStringLiteralValue.Create(CookedSegments[Length(CookedSegments) - 1]),
       TemplateToken.Line, TemplateToken.Column));
 
-    Parts.Add(Expression);
+    Parts.Add(ExpressionAllowIn);
     Consume(gttRightBrace, 'Expected "}" after template expression',
       SSuggestCloseTemplate);
     TemplateToken := ConsumeTemplateContinuation;
@@ -2668,14 +2698,14 @@ var
 begin
   Consume(gttLeftParen, 'Expected "(" after import call phase',
     SSuggestDynamicImportSyntax);
-  Specifier := Assignment;
+  Specifier := AssignmentAllowIn;
   Options := nil;
 
   if MatchWithLexicalGoal(gttComma, glgInputElementDiv) then
   begin
     if not Check(gttRightParen) then
     begin
-      Options := Assignment;
+      Options := AssignmentAllowIn;
       MatchWithLexicalGoal(gttComma, glgInputElementDiv);
     end;
   end;
@@ -2732,6 +2762,40 @@ begin
   Result := False;
 end;
 
+function ExpressionIsOptionalChainTag(
+  const AExpr: TGocciaExpression): Boolean;
+var
+  CallExpr: TGocciaCallExpression;
+  MemberExpr: TGocciaMemberExpression;
+  PrivateExpr: TGocciaPrivateMemberExpression;
+begin
+  if not Assigned(AExpr) then
+    Exit(False);
+
+  if AExpr is TGocciaMemberExpression then
+  begin
+    MemberExpr := TGocciaMemberExpression(AExpr);
+    Exit(MemberExpr.Optional or
+      ExpressionIsOptionalChainTag(MemberExpr.ObjectExpr));
+  end;
+
+  if AExpr is TGocciaPrivateMemberExpression then
+  begin
+    PrivateExpr := TGocciaPrivateMemberExpression(AExpr);
+    Exit(PrivateExpr.Optional or
+      ExpressionIsOptionalChainTag(PrivateExpr.ObjectExpr));
+  end;
+
+  if AExpr is TGocciaCallExpression then
+  begin
+    CallExpr := TGocciaCallExpression(AExpr);
+    Exit(CallExpr.Optional or
+      ExpressionIsOptionalChainTag(CallExpr.Callee));
+  end;
+
+  Result := False;
+end;
+
 function WrapOptionalChainParentheses(
   const AExpr: TGocciaExpression): TGocciaExpression;
 var
@@ -2766,7 +2830,6 @@ var
   AsyncStartLine, AsyncStartColumn: Integer;
   IsGenerator: Boolean;
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
-  SavedAllowInExpression: Boolean;
 begin
   case Peek.TokenType of
     gttTrue:
@@ -2930,9 +2993,10 @@ begin
           begin
             repeat
               if Match(gttSpread) then
-                Args.Add(TGocciaSpreadExpression.Create(Assignment, Previous.Line, Previous.Column))
+                Args.Add(TGocciaSpreadExpression.Create(AssignmentAllowIn,
+                  Previous.Line, Previous.Column))
               else
-                Args.Add(Assignment);
+                Args.Add(AssignmentAllowIn);
             until not MatchWithLexicalGoal(gttComma, glgInputElementDiv) or Check(gttRightParen);
           end;
           Consume(gttRightParen, 'Expected ")" after constructor arguments',
@@ -3086,13 +3150,7 @@ begin
           Result := ArrowFunction
         else
         begin
-          SavedAllowInExpression := FAllowInExpression;
-          FAllowInExpression := True;
-          try
-            Expr := Expression;
-          finally
-            FAllowInExpression := SavedAllowInExpression;
-          end;
+          Expr := ExpressionAllowIn;
           Consume(gttRightParen, 'Expected ")" after expression',
             SSuggestCloseParenExpression);
           Expr.Parenthesized := True;
@@ -3839,12 +3897,13 @@ begin
     else if Match(gttSpread) then
     begin
       // Spread expression: ...array
-      Elements.Add(TGocciaSpreadExpression.Create(Assignment, Previous.Line, Previous.Column));
+      Elements.Add(TGocciaSpreadExpression.Create(AssignmentAllowIn,
+        Previous.Line, Previous.Column));
     end
     else
     begin
       // Regular expression
-      Elements.Add(Assignment);
+      Elements.Add(AssignmentAllowIn);
     end;
 
     if not Match(gttComma) then
@@ -3876,7 +3935,6 @@ var
   IsAsync: Boolean;
   IsGenerator: Boolean;
   CanBeShorthand: Boolean;
-  HasProtoSetter: Boolean;
   MethodFunction: TGocciaFunctionExpression;
   GetterExpression: TGocciaGetterExpression;
   SetterExpression: TGocciaSetterExpression;
@@ -3897,7 +3955,6 @@ begin
   SourceOrderCount := 0;
   SetLength(ComputedPropertiesInOrder, 0);
   SetLength(PropertySourceOrder, 0);
-  HasProtoSetter := False;
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
@@ -3948,7 +4005,8 @@ begin
       // Create a spread expression
       Line := Previous.Line;
       Column := Previous.Column;
-      KeyExpression := TGocciaSpreadExpression.Create(Assignment, Line, Column);
+      KeyExpression := TGocciaSpreadExpression.Create(AssignmentAllowIn,
+        Line, Column);
       ComputedProperties.Add(KeyExpression, nil); // nil value for spread
 
       // Track in source order
@@ -3973,7 +4031,7 @@ begin
     begin
       // Computed property name: [expr]: value
       IsComputed := True;
-      KeyExpression := Assignment;
+      KeyExpression := AssignmentAllowIn;
       Consume(gttRightBracket, 'Expected "]" after computed property name',
         SSuggestCloseBracketComputedPropertyName);
     end
@@ -4106,15 +4164,7 @@ begin
         Consume(gttColon, 'Expected ":" after property key',
           SSuggestAddColonPropertyValue);
         IsColonProperty := True;
-        if (not IsComputed) and (Key = '__proto__') then
-        begin
-          if HasProtoSetter then
-            raise TGocciaSyntaxError.Create(
-              'Duplicate __proto__ fields are not allowed in object literals',
-              MemberStartLine, MemberStartColumn, FFileName, FSourceLines);
-          HasProtoSetter := True;
-        end;
-        Value := Assignment;
+        Value := AssignmentAllowIn;
       end
             else
       begin
@@ -4134,7 +4184,8 @@ begin
         if Match(gttAssign) then
         begin
           // This creates an assignment expression for use in destructuring patterns
-          Value := TGocciaAssignmentExpression.Create(Key, Assignment, Previous.Line, Previous.Column);
+          Value := TGocciaAssignmentExpression.Create(Key, AssignmentAllowIn,
+            Previous.Line, Previous.Column);
         end;
       end;
     end;
@@ -7737,7 +7788,7 @@ begin
         if Check(gttLeftBracket) then
         begin
           Advance;
-          ComputedKeyExpression := Assignment;
+          ComputedKeyExpression := AssignmentAllowIn;
           Consume(gttRightBracket, 'Expected "]" after computed property name',
             SSuggestCloseBracketComputedPropertyName);
           IsComputed := True;
@@ -7763,7 +7814,7 @@ begin
         if Check(gttLeftBracket) then
         begin
           Advance;
-          ComputedKeyExpression := Assignment;
+          ComputedKeyExpression := AssignmentAllowIn;
           Consume(gttRightBracket, 'Expected "]" after computed property name',
             SSuggestCloseBracketComputedPropertyName);
           IsComputed := True;
@@ -7789,7 +7840,7 @@ begin
             Peek.Line, Peek.Column, FFileName, FSourceLines,
             SSuggestPrivateFieldMustFollow);
         Advance;
-        ComputedKeyExpression := Assignment;
+        ComputedKeyExpression := AssignmentAllowIn;
         Consume(gttRightBracket, 'Expected "]" after computed property name',
           SSuggestCloseBracketComputedPropertyName);
         IsComputed := True;
@@ -7818,7 +7869,7 @@ begin
         if Check(gttAssign) then
         begin
           Advance;
-          PropertyValue := Assignment;
+          PropertyValue := AssignmentAllowIn;
         end
         else
           PropertyValue := nil;
@@ -7843,7 +7894,7 @@ begin
 
         Consume(gttAssign, 'Expected "=" in property',
           SSuggestAddPropertyInitializer);
-        PropertyValue := Assignment;
+        PropertyValue := AssignmentAllowIn;
         ConsumeSemicolonOrASI('Expected ";" after property',
           SSuggestAddSemicolon);
 
@@ -8757,7 +8808,8 @@ begin
       // Check for default value
       if Match(gttAssign) then
       begin
-        Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern, Assignment, Pattern.Line, Pattern.Column);
+        Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern,
+          AssignmentAllowIn, Pattern.Line, Pattern.Column);
       end;
 
       Elements.Add(Pattern);
@@ -8809,7 +8861,7 @@ begin
       begin
         // Computed property: [expr]: pattern
         IsComputed := True;
-        KeyExpression := Assignment;
+        KeyExpression := AssignmentAllowIn;
         Key := ''; // Will be computed at runtime
         Consume(gttRightBracket, 'Expected "]" after computed property key',
           SSuggestCloseBracketComputedPropertyKey);
@@ -8846,7 +8898,8 @@ begin
         // Check for default value
         if Match(gttAssign) then
         begin
-          Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern, Assignment, Pattern.Line, Pattern.Column);
+          Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern,
+            AssignmentAllowIn, Pattern.Line, Pattern.Column);
         end;
       end
       else
@@ -8869,7 +8922,8 @@ begin
         // Check for default value in shorthand
         if Match(gttAssign) then
         begin
-          Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern, Assignment, Pattern.Line, Pattern.Column);
+          Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern,
+            AssignmentAllowIn, Pattern.Line, Pattern.Column);
         end;
       end;
 

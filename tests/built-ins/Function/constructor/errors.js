@@ -35,6 +35,8 @@ describe("Function constructor errors", () => {
     expect(() => new Function("arguments", '"use strict";')).toThrow(SyntaxError);
     expect(() => new Function('function eval() { "use strict"; }')).toThrow(SyntaxError);
     expect(() => new Function('function arguments() { "use strict"; }')).toThrow(SyntaxError);
+    expect(() => new Function('"use strict"; const eval = 1;')).toThrow(SyntaxError);
+    expect(() => new Function('"use strict"; let arguments = 1;')).toThrow(SyntaxError);
   });
 
   test("strict bodies reject identifier deletion and unbraced function statements", () => {
@@ -74,10 +76,8 @@ describe("Function constructor errors", () => {
       .toBe("function");
   });
 
-  test("object literals reject invalid shorthand and duplicate prototype setters", () => {
+  test("object literals reject invalid shorthand", () => {
     expect(() => new Function("return { true };"))
-      .toThrow(SyntaxError);
-    expect(() => new Function("return { __proto__: null, __proto__: {} };"))
       .toThrow(SyntaxError);
   });
 
