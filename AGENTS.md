@@ -35,7 +35,7 @@ For ECMAScript or ECMA-402 behavior, use the project TC39 MCP server before fall
   "mcpServers": {
     "tc39": {
       "command": "npx",
-      "args": ["-y", "tc39-mcp@0.6.0"]
+      "args": ["-y", "tc39-mcp@0.6.1"]
     }
   }
 }
