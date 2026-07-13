@@ -8,6 +8,8 @@ const hasTemporalIntl = typeof Temporal !== "undefined" && typeof Intl !== "unde
 describe.runIf(hasTemporalIntl)("Temporal.PlainMonthDay.prototype.toLocaleString", () => {
   test("rejects an ISO calendar that does not match the locale calendar", () => {
     const monthDay = new Temporal.PlainMonthDay(1, 1);
-    expect(() => monthDay.toLocaleString()).toThrow(RangeError);
+    expect(() => monthDay.toLocaleString("en-US-u-ca-gregory")).toThrow(
+      RangeError
+    );
   });
 });
