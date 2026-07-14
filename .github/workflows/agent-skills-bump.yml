@@ -1,0 +1,68 @@
+name: agent skills weekly bump
+
+# Refreshes the lock-managed project skills from their configured upstream
+# repositories and opens a PR when the generated skill tree changes. Repo-native
+# skills that are not present in skills-lock.json are left untouched.
+#
+# Cadence: weekly (Mondays 08:00 UTC). Manual trigger available via
+# workflow_dispatch.
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Refresh lock-managed skills
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npx -y skills@1.5.17 update --project --yes
+
+          # The API-backed updater can retain stale find-skills content while
+          # reporting success. Force a full-depth clone for that known source.
+          npx -y skills@1.5.17 remove find-skills --yes
+          npx -y skills@1.5.17 add vercel-labs/skills \
+            --full-depth \
+            --skill find-skills \
+            --agent codex claude-code \
+            --yes
+
+      - name: Verify project skill inventory
+        run: npx -y skills@1.5.17 list --json > /dev/null
+
+      - id: changed
+        run: |
+          if git diff --quiet -- .agents/skills skills-lock.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Project skills are already current; no PR to open."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update PR
+        if: steps.changed.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          branch: chore/agent-skills-bump
+          commit-message: "chore(skills): sync provisioned skills"
+          title: "chore(skills): sync provisioned skills"
+          body: |
+            Automated refresh of the lock-managed project skills and `skills-lock.json`.
+
+            Repo-native skills are not managed by this workflow. Review upstream
+            instruction changes before merging.
+
+            Cron: weekly, Mondays 08:00 UTC. See `.github/workflows/agent-skills-bump.yml`.
+          labels: automated
