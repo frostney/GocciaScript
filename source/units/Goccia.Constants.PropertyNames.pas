@@ -80,6 +80,7 @@ const
   PROP_IMMUTABLE        = 'immutable';
   PROP_BYTES_PER_ELEMENT = 'BYTES_PER_ELEMENT';
   PROP_FROM             = 'from';
+  PROP_FROM_CHAR_CODE   = 'fromCharCode';
   PROP_OF               = 'of';
   PROP_URL              = 'url';
   PROP_RESOLVE          = 'resolve';

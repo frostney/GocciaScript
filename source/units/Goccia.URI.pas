@@ -274,8 +274,7 @@ end;
 // ES2026 §19.2.6.2 Decode(string, reservedSet)
 function Decode(const AString: string; const AReservedSet: TSysCharSet): string;
 var
-  Buffer: TStringBuffer;
-  I, Len, ByteCount, J, EscapeStart: Integer;
+  I, Len, ByteCount, J, EscapeStart, OutputIndex: Integer;
   B, B2: Byte;
   CodePoint: Integer;
   UTF8Bytes: array[0..3] of Byte;
@@ -285,13 +284,18 @@ begin
   if Len = 0 then
     Exit('');
 
-  Buffer := TStringBuffer.Create(Len);
+  // Decoding cannot produce more bytes than the encoded input. Writing into a
+  // single pre-sized string avoids allocating a TStringBuffer for every call;
+  // this matters for code that decodes many short URI components.
+  SetLength(Result, Len);
   I := 1;
+  OutputIndex := 1;
   while I <= Len do
   begin
     if AString[I] <> '%' then
     begin
-      Buffer.Append(AString[I]);
+      Result[OutputIndex] := AString[I];
+      Inc(OutputIndex);
       Inc(I);
     end
     else
@@ -309,10 +313,16 @@ begin
         if DecodedChar in AReservedSet then
         begin
           // ES2026 §19.2.6.2 step 4b.ii.1: preserve original escape verbatim
-          Buffer.Append(Copy(AString, EscapeStart, 3));
+          Result[OutputIndex] := AString[EscapeStart];
+          Result[OutputIndex + 1] := AString[EscapeStart + 1];
+          Result[OutputIndex + 2] := AString[EscapeStart + 2];
+          Inc(OutputIndex, 3);
         end
         else
-          Buffer.Append(DecodedChar);
+        begin
+          Result[OutputIndex] := DecodedChar;
+          Inc(OutputIndex);
+        end;
       end
       else
       begin
@@ -371,11 +381,14 @@ begin
 
         // Append the decoded UTF-8 bytes directly
         for J := 0 to ByteCount - 1 do
-          Buffer.Append(Chr(UTF8Bytes[J]));
+        begin
+          Result[OutputIndex] := Chr(UTF8Bytes[J]);
+          Inc(OutputIndex);
+        end;
       end;
     end;
   end;
-  Result := Buffer.ToString;
+  SetLength(Result, OutputIndex - 1);
 end;
 
 // ES2026 §19.2.6.2 encodeURI(uriString)

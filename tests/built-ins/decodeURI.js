@@ -56,6 +56,9 @@ describe("decodeURI", () => {
     expect(decodeURI("%C3%A9")).toBe("\u00E9");
     // 3-byte: U+4E2D (中) → %E4%B8%AD
     expect(decodeURI("%E4%B8%AD")).toBe("\u4E2D");
+    // 4-byte: U+1F600 equals its UTF-16 surrogate-pair representation
+    expect(decodeURI("%F0%9F%98%80")).toBe(
+      String.fromCharCode(0xD83D, 0xDE00));
   });
 
   test("preserves complete URIs while decoding unreserved characters", () => {

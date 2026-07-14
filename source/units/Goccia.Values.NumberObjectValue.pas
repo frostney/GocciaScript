@@ -330,6 +330,59 @@ begin
   Result := Sign + Mantissa + 'e' + ExponentSign + IntToStr(DecimalExponent);
 end;
 
+function FormatDoubleToShortestExponential(const AValue: Double): string;
+var
+  DecimalPointIndex, DecimalWidth, Exponent, ExponentIndex: Integer;
+  FirstDigitIndex, LastDigitIndex: Integer;
+  Digits, ExponentSign, Formatted, Mantissa, Sign: string;
+begin
+  Formatted := FormatDouble(AValue);
+  Sign := '';
+  if (Formatted <> '') and (Formatted[1] = '-') then
+  begin
+    Sign := '-';
+    Delete(Formatted, 1, 1);
+  end;
+
+  ExponentIndex := Pos('e', Formatted);
+  if ExponentIndex > 0 then
+    Exit(Sign + Formatted);
+
+  DecimalPointIndex := Pos('.', Formatted);
+  if DecimalPointIndex = 0 then
+    DecimalWidth := Length(Formatted)
+  else
+    DecimalWidth := DecimalPointIndex - 1;
+
+  Digits := Formatted;
+  if DecimalPointIndex > 0 then
+    Delete(Digits, DecimalPointIndex, 1);
+
+  FirstDigitIndex := 1;
+  while (FirstDigitIndex <= Length(Digits)) and
+        (Digits[FirstDigitIndex] = '0') do
+    Inc(FirstDigitIndex);
+  LastDigitIndex := Length(Digits);
+  while (LastDigitIndex > FirstDigitIndex) and
+        (Digits[LastDigitIndex] = '0') do
+    Dec(LastDigitIndex);
+
+  Exponent := DecimalWidth - FirstDigitIndex;
+  Digits := Copy(Digits, FirstDigitIndex,
+    LastDigitIndex - FirstDigitIndex + 1);
+  Mantissa := Digits[1];
+  if Length(Digits) > 1 then
+  begin
+    Mantissa := Mantissa + '.' + Copy(Digits, 2, Length(Digits) - 1);
+  end;
+
+  if Exponent >= 0 then
+    ExponentSign := '+'
+  else
+    ExponentSign := '';
+  Result := Sign + Mantissa + 'e' + ExponentSign + IntToStr(Exponent);
+end;
+
 function GetSharedNumberPrototype: TGocciaObjectValue; inline;
 begin
   if Assigned(CurrentRealm) then
@@ -650,10 +703,8 @@ end;
 function TGocciaNumberObjectValue.NumberToExponential(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Prim: TGocciaNumberLiteralValue;
-  FractionDigits, Exp: Integer;
+  FractionDigits: Integer;
   HasExplicitDigits: Boolean;
-  NumVal, Mantissa: Double;
-  Sign, MantissaStr, ExpSign: string;
 begin
   // Step 1: Let x be ? thisNumberValue(this value)
   Prim := ExtractPrimitive(AThisValue);
@@ -678,51 +729,21 @@ begin
   if HasExplicitDigits and ((FractionDigits < 0) or (FractionDigits > 100)) then
     ThrowRangeError(SErrorToExponentialArgRange, SSuggestNumberRange);
 
-  // Step 6: If x < 0, let s be "-" and let x be -x; otherwise let s be ""
-  NumVal := Prim.Value;
-  Sign := '';
-  if NumVal < 0 then
+  // Step 10.b: With no fractionDigits, use the shortest decimal that round-trips
+  // to x and normalize that representation to exponential notation.
+  if not HasExplicitDigits then
   begin
-    Sign := '-';
-    NumVal := -NumVal;
-  end;
-
-  // Step 7: If x = 0, the mantissa string is "0" (with optional trailing zeros)
-  if NumVal = 0 then
-  begin
-    if FractionDigits < 0 then
-      FractionDigits := 0;
-    if FractionDigits = 0 then
-      MantissaStr := '0'
+    if Prim.Value = 0 then
+      Result := TGocciaStringLiteralValue.Create('0e+0')
     else
-      MantissaStr := '0.' + StringOfChar('0', FractionDigits);
-    Result := TGocciaStringLiteralValue.Create(Sign + MantissaStr + 'e+0');
+      Result := TGocciaStringLiteralValue.Create(
+        FormatDoubleToShortestExponential(Prim.Value));
     Exit;
   end;
 
-  // Step 10: Format mantissa with f fraction digits.
-  if FractionDigits < 0 then
-  begin
-    Exp := Trunc(Math.Floor(Math.Log10(NumVal)));
-    Mantissa := NumVal / Math.Power(10, Exp);
-    MantissaStr := FloatToStrF(Mantissa, ffGeneral, 15, 0, InvariantFormatSettings);
-    if Pos('.', MantissaStr) = 0 then
-      MantissaStr := MantissaStr;
-  end
-  else
-  begin
-    Result := TGocciaStringLiteralValue.Create(FormatDoubleToExponential(
-      Prim.Value, FractionDigits));
-    Exit;
-  end;
-
-  // Step 11: Build the exponent sign and return s + m + "e" + expSign + e
-  if Exp >= 0 then
-    ExpSign := '+'
-  else
-    ExpSign := '';
-
-  Result := TGocciaStringLiteralValue.Create(Sign + MantissaStr + 'e' + ExpSign + IntToStr(Exp));
+  // Steps 10.a-11: Format x with f fraction digits and append its exponent.
+  Result := TGocciaStringLiteralValue.Create(FormatDoubleToExponential(
+    Prim.Value, FractionDigits));
 end;
 
 initialization
