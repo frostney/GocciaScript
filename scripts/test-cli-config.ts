@@ -1479,6 +1479,30 @@ console.log("--modules manifests (JSON, JSON5, TOML, YAML, JavaScript, TypeScrip
   }
 }
 
+console.log("Executable manifests cannot replace an already loaded module record...");
+{
+  const tmp = makeTmp();
+  try {
+    const manifest = join(tmp, "modules.mjs");
+    const entry = join(tmp, "entry.mjs");
+    writeFileSync(
+      manifest,
+      'export default {"./modules.mjs": {content: "export default 17;"}};\n',
+    );
+    writeFileSync(entry, 'import value from "./modules.mjs"; value;\n');
+    const out = runCwd(
+      LOADER,
+      [entry, "--print", "--modules", manifest],
+      tmp,
+      { expectFail: true },
+    );
+    if (out.exitCode === 0 || !out.combined.includes("cannot be replaced after it has been loaded"))
+      throw new Error(`Loaded module replacement should be rejected: ${out.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Virtual module config precedence and inherited manifest origins...");
 {
   const tmp = makeTmp();

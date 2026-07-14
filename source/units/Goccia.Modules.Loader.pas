@@ -90,6 +90,7 @@ type
     function TryGetCachedFailedModuleError(const AResolvedPath,
       ACacheKey: string; out AValue: TGocciaValue): Boolean;
     function HasGlobalModuleRequest(const AModulePath: string): Boolean;
+    function HasModuleStateForAddress(const AAddress: string): Boolean;
     function TryLoadGlobalModule(const AModulePath: string;
       out AModule: TGocciaModule): Boolean;
     function DeferredGraphTouchesEvaluating(const AResolvedPath: string;
@@ -712,6 +713,10 @@ var
   ParsedContentType: TGocciaVirtualModuleContentType;
 begin
   CanonicalAddress := FVirtualModules.CanonicalAddress(AAddress, ABaseAddress);
+  if HasModuleStateForAddress(CanonicalAddress) then
+    raise EInvalidOperation.CreateFmt(
+      'Virtual module "%s" cannot be replaced after it has been loaded.',
+      [CanonicalAddress]);
   if StartsStr('goccia:', CanonicalAddress) and
      HasGlobalModuleRequest(CanonicalAddress) then
     raise EInvalidOperation.CreateFmt(
@@ -830,6 +835,33 @@ function TGocciaModuleLoader.HasGlobalModuleRequest(
 begin
   Result := FGlobalModules.ContainsKey(AModulePath) or
     FGlobalModuleProviders.ContainsKey(AModulePath);
+end;
+
+function TGocciaModuleLoader.HasModuleStateForAddress(
+  const AAddress: string): Boolean;
+const
+  AttributeTypes: array[0..2] of string = ('json', 'text', 'bytes');
+var
+  AttributeType, CacheKey: string;
+begin
+  if FModules.ContainsKey(AAddress) or
+     FModuleSourceValues.ContainsKey(AAddress) or
+     FDeferredModuleNamespaces.ContainsKey(AAddress) or
+     FFailedModuleErrors.ContainsKey(AAddress) or
+     FLoadingModules.ContainsKey(AAddress) then
+    Exit(True);
+
+  for AttributeType in AttributeTypes do
+  begin
+    CacheKey := EncodeImportSpecifierAttribute(AAddress, AttributeType);
+    if FModules.ContainsKey(CacheKey) or
+       FModuleSourceValues.ContainsKey(CacheKey) or
+       FDeferredModuleNamespaces.ContainsKey(CacheKey) or
+       FFailedModuleErrors.ContainsKey(CacheKey) or
+       FLoadingModules.ContainsKey(CacheKey) then
+      Exit(True);
+  end;
+  Result := False;
 end;
 
 function TGocciaModuleLoader.TryLoadGlobalModule(const AModulePath: string;

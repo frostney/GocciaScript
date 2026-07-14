@@ -109,12 +109,23 @@ begin
     ((Length(AValue) >= 2) and (AValue[2] = ':')));
 end;
 
+function FindAddressSuffixStart(const AValue: string): SizeInt;
+var
+  I: Integer;
+begin
+  for I := 1 to Length(AValue) do
+    if AValue[I] in ['?', '#'] then
+      Exit(I);
+  Result := 0;
+end;
+
 function NormalizeVirtualAddress(const AValue: string): string;
 var
-  I, SegmentStart: Integer;
+  I, LeadingSlashCount, ProtectedSegmentCount, SegmentStart: Integer;
+  IsLastSegment: Boolean;
   ResultParts: TStringList;
-  Prefix, Remainder, Segment: string;
-  SchemeEnd: SizeInt;
+  PathPart, Prefix, Remainder, Segment, Suffix: string;
+  SchemeEnd, SuffixStart: SizeInt;
 begin
   Prefix := '';
   Remainder := AValue;
@@ -125,32 +136,62 @@ begin
     Remainder := Copy(AValue, SchemeEnd + 1, MaxInt);
   end;
 
+  SuffixStart := FindAddressSuffixStart(Remainder);
+  if SuffixStart > 0 then
+  begin
+    Suffix := Copy(Remainder, SuffixStart, MaxInt);
+    PathPart := Copy(Remainder, 1, SuffixStart - 1);
+  end
+  else
+  begin
+    Suffix := '';
+    PathPart := Remainder;
+  end;
+
+  LeadingSlashCount := 0;
+  while (LeadingSlashCount < Length(PathPart)) and
+        (PathPart[LeadingSlashCount + 1] = '/') do
+    Inc(LeadingSlashCount);
+  Delete(PathPart, 1, LeadingSlashCount);
+  if LeadingSlashCount >= 2 then
+    ProtectedSegmentCount := 1
+  else
+    ProtectedSegmentCount := 0;
+
   ResultParts := TStringList.Create;
   try
     SegmentStart := 1;
-    for I := 1 to Length(Remainder) + 1 do
+    for I := 1 to Length(PathPart) + 1 do
     begin
-      if (I <= Length(Remainder)) and (Remainder[I] <> '/') then
+      if (I <= Length(PathPart)) and (PathPart[I] <> '/') then
         Continue;
-      Segment := Copy(Remainder, SegmentStart, I - SegmentStart);
+      Segment := Copy(PathPart, SegmentStart, I - SegmentStart);
       SegmentStart := I + 1;
-      if (Segment = '') or (Segment = '.') then
+      IsLastSegment := I > Length(PathPart);
+      if Segment = '.' then
+      begin
+        if IsLastSegment then
+          ResultParts.Add('');
         Continue;
+      end;
       if Segment = '..' then
       begin
-        if ResultParts.Count > 0 then
+        if ResultParts.Count > ProtectedSegmentCount then
           ResultParts.Delete(ResultParts.Count - 1);
+        if IsLastSegment then
+          ResultParts.Add('');
         Continue;
       end;
       ResultParts.Add(Segment);
     end;
-    Result := Prefix;
+    Result := Prefix + StringOfChar('/', LeadingSlashCount);
     for I := 0 to ResultParts.Count - 1 do
     begin
       if I > 0 then
         Result := Result + '/';
       Result := Result + ResultParts[I];
     end;
+    Result := Result + Suffix;
   finally
     ResultParts.Free;
   end;
@@ -160,11 +201,14 @@ function ResolveRelativeVirtualAddress(const AModulePath,
   AImportingAddress: string): string;
 var
   BaseAddress: string;
-  DelimiterPosition: SizeInt;
+  DelimiterPosition, SuffixStart: SizeInt;
 begin
   BaseAddress := AImportingAddress;
   if BaseAddress = '' then
     Exit(AModulePath);
+  SuffixStart := FindAddressSuffixStart(BaseAddress);
+  if SuffixStart > 0 then
+    BaseAddress := Copy(BaseAddress, 1, SuffixStart - 1);
   DelimiterPosition := LastDelimiter('/', BaseAddress);
   if (DelimiterPosition = 0) and HasScheme(BaseAddress) then
     DelimiterPosition := Pos(':', BaseAddress);

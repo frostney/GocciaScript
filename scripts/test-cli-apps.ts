@@ -4345,7 +4345,10 @@ console.log("Loader: dynamic import and ShadowRealm use configured virtual modul
 {
   const source = [
     'import("host:dynamic").then(ns => console.log("dynamic:" + ns.value));',
+    'import { count } from "host:realm-state";',
+    'console.log("parent-state:" + count);',
     'new ShadowRealm().importValue("host:realm", "value").then(value => console.log("realm:" + value));',
+    'new ShadowRealm().importValue("host:realm-state", "count").then(value => console.log("child-state:" + value));',
   ].join("\n");
   const proc = Bun.spawnSync(
     [
@@ -4357,14 +4360,43 @@ console.log("Loader: dynamic import and ShadowRealm use configured virtual modul
       'host:dynamic=export const value = 9;',
       "--module",
       'host:realm=export const value = 13;',
+      "--module",
+      'host:realm-state=import.meta.count = (import.meta.count ?? 0) + 1; export const count = import.meta.count;',
     ],
     { stdin: new TextEncoder().encode(source), stdout: "pipe", stderr: "pipe" },
   );
   if (proc.exitCode !== 0)
     throw new Error(`Dynamic/ShadowRealm virtual modules failed: ${proc.stderr.toString()}`);
   const output = proc.stdout.toString();
-  if (!output.includes("dynamic:9") || !output.includes("realm:13"))
+  if (!output.includes("dynamic:9") || !output.includes("realm:13") ||
+      !output.includes("parent-state:1") || !output.includes("child-state:1"))
     throw new Error(`Dynamic/ShadowRealm virtual modules produced unexpected output: ${output}`);
+}
+
+console.log("Loader: hierarchical virtual module addresses preserve canonical URLs...");
+{
+  const proc = Bun.spawnSync(
+    [
+      LOADER,
+      "-",
+      "--source-type=module",
+      "--print",
+      "--module",
+      'https://example.test/pkg/main?redirect/a/../b=export default import.meta.url + "|" + import.meta.resolve("./dep");',
+    ],
+    {
+      stdin: new TextEncoder().encode(
+        'import value from "https://example.test/pkg/main?redirect/a/../b"; value;',
+      ),
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  if (proc.exitCode !== 0)
+    throw new Error(`Hierarchical virtual address failed: ${proc.stderr.toString()}`);
+  if (!containsLine(proc.stdout.toString(),
+      "https://example.test/pkg/main?redirect/a/../b|https://example.test/pkg/dep"))
+    throw new Error(`Hierarchical virtual address was not preserved: ${proc.stdout.toString()}`);
 }
 
 console.log("Loader: attributed virtual modules reinterpret their stored content...");
@@ -4443,6 +4475,34 @@ console.log("SandboxRunner: virtual modules share the CLI surface and cannot sha
     if (configured.exitCode !== 0 ||
         normalizeLineEndings(configured.stdout.toString()).trim() !== "17")
       throw new Error(`Sandbox virtual module configuration failed: ${configured.stdout.toString()}${configured.stderr.toString()}`);
+
+    const manifest = join(tmp, "modules.mjs");
+    const manifestSource = join(tmp, "module-map.mjs");
+    writeFileSync(
+      manifestSource,
+      'export default {"host:configured": {content: "export default 19;"}};\n',
+    );
+    writeFileSync(
+      manifest,
+      'import modules from "./module-map.mjs"; export default modules;\n',
+    );
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const configuredFromManifest = Bun.spawnSync(
+        [
+          SANDBOXRUNNER,
+          "/main.js",
+          `--seed-config=${seed}`,
+          "--source-type=module",
+          `--mode=${mode}`,
+          "--modules",
+          manifest,
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      if (configuredFromManifest.exitCode !== 0 ||
+          normalizeLineEndings(configuredFromManifest.stdout.toString()).trim() !== "19")
+        throw new Error(`Sandbox executable module manifest ${mode} failed: ${configuredFromManifest.stdout.toString()}${configuredFromManifest.stderr.toString()}`);
+    }
 
     const hostCollision = Bun.spawnSync(
       [

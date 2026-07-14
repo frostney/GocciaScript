@@ -136,8 +136,11 @@ uses
   Goccia.JSON,
   Goccia.JSON.Utils,
   Goccia.JSON5,
+  Goccia.Keywords.Reserved,
+  Goccia.Modules,
   Goccia.Modules.Configuration,
   Goccia.Modules.ContentProvider,
+  Goccia.Modules.Loader,
   Goccia.Profiler,
   Goccia.ScriptLoader.Input,
   Goccia.StackLimit,
@@ -685,6 +688,58 @@ procedure TGocciaCLIApplication.ConfigureCreatedEngine(
 begin
 end;
 
+procedure InjectModulesFromFileSystemModule(const AEngine: TGocciaEngine;
+  const APath: string);
+var
+  DefaultValue: TGocciaValue;
+  ManifestJSON: string;
+  ManifestLoader: TGocciaModuleLoader;
+  ManifestModule: TGocciaModule;
+  Stringifier: TGocciaJSONStringifier;
+begin
+  ManifestLoader := TGocciaModuleLoader.Create(APath);
+  try
+    ManifestLoader.SetContentProvider(
+      TGocciaFileSystemModuleContentProvider.Create, True);
+    ManifestLoader.Preprocessors := AEngine.ModuleLoader.Preprocessors;
+    ManifestLoader.Compatibility := AEngine.ModuleLoader.Compatibility;
+    ManifestLoader.LabelStatementsEnabled :=
+      AEngine.ModuleLoader.LabelStatementsEnabled;
+    ManifestLoader.ForInLoopsEnabled := AEngine.ModuleLoader.ForInLoopsEnabled;
+    ManifestLoader.ExperimentalJSModuleSourceEnabled :=
+      AEngine.ModuleLoader.ExperimentalJSModuleSourceEnabled;
+    ManifestLoader.WarningUnsupportedFeatures :=
+      AEngine.ModuleLoader.WarningUnsupportedFeatures;
+    ManifestLoader.StrictTypesEnabled :=
+      AEngine.ModuleLoader.StrictTypesEnabled;
+    ManifestLoader.EvaluateModuleBody :=
+      AEngine.ModuleLoader.EvaluateModuleBody;
+    ManifestLoader.BindRuntime(AEngine.Interpreter.GlobalScope,
+      AEngine.ThrowError);
+
+    ManifestModule := ManifestLoader.LoadModule(APath, APath);
+    if not ManifestModule.TryGetExportValue(KEYWORD_DEFAULT, DefaultValue) then
+      raise EArgumentException.Create(
+        'Virtual modules manifest module must have a default export.');
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AddTempRoot(DefaultValue);
+    try
+      Stringifier := TGocciaJSONStringifier.Create;
+      try
+        ManifestJSON := Stringifier.Stringify(DefaultValue);
+      finally
+        Stringifier.Free;
+      end;
+      AEngine.InjectModulesFromJSON(ManifestJSON, ManifestModule.Path);
+    finally
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.RemoveTempRoot(DefaultValue);
+    end;
+  finally
+    ManifestLoader.Free;
+  end;
+end;
+
 procedure InjectModulesFromManifestFile(const AEngine: TGocciaEngine;
   const APath: string);
 var
@@ -701,9 +756,16 @@ begin
   begin
     if AEngine.ContentProvider is
        TGocciaUnavailableModuleContentProvider then
+    begin
       AEngine.ModuleLoader.SetContentProvider(
         TGocciaFileSystemModuleContentProvider.Create, True);
-    AEngine.InjectModulesFromModule(APath);
+      AEngine.InjectModulesFromModule(APath);
+    end
+    else if AEngine.ContentProvider is
+       TGocciaFileSystemModuleContentProvider then
+      AEngine.InjectModulesFromModule(APath)
+    else
+      InjectModulesFromFileSystemModule(AEngine, APath);
     Exit;
   end;
 
