@@ -10,6 +10,7 @@ uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.HostEnvironment,
   Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.SharedPrototype,
@@ -22,10 +23,11 @@ type
   private
     FTimeOriginEpochNanoseconds: Int64;
     FTimeOriginMonotonicNanoseconds: Int64;
+    FHostEnvironment: TGocciaHostEnvironment;
 
     function GetTimeOriginMilliseconds: Double; inline;
   public
-    constructor Create;
+    constructor Create(const AHostEnvironment: TGocciaHostEnvironment);
 
     property TimeOriginMilliseconds: Double read GetTimeOriginMilliseconds;
   end;
@@ -42,7 +44,9 @@ type
   private
     class procedure InitializePrototype;
   public
-    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+    constructor Create(const AName: string; const AScope: TGocciaScope;
+      const AThrowError: TGocciaThrowErrorCallback;
+      const AHostEnvironment: TGocciaHostEnvironment);
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
     class function CreateInterfaceObject: TGocciaNativeFunctionValue;
@@ -52,8 +56,6 @@ implementation
 
 uses
   Math,
-
-  TimingUtils,
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -91,16 +93,18 @@ begin
 end;
 
 // High Resolution Time Level 3 §7 The Performance interface
-constructor TGocciaPerformanceValue.Create;
+constructor TGocciaPerformanceValue.Create(
+  const AHostEnvironment: TGocciaHostEnvironment);
 var
   MonotonicBefore, MonotonicAfter: Int64;
   Shared: TGocciaSharedPrototype;
 begin
   inherited Create(nil);
+  FHostEnvironment := AHostEnvironment;
 
-  MonotonicBefore := GetNanoseconds;
-  FTimeOriginEpochNanoseconds := GetEpochNanoseconds;
-  MonotonicAfter := GetNanoseconds;
+  MonotonicBefore := FHostEnvironment.MonotonicNanoseconds;
+  FTimeOriginEpochNanoseconds := FHostEnvironment.EpochNanoseconds;
+  MonotonicAfter := FHostEnvironment.MonotonicNanoseconds;
   FTimeOriginMonotonicNanoseconds := (MonotonicBefore + MonotonicAfter) div 2;
 
   TGocciaPerformance.InitializePrototype;
@@ -125,7 +129,8 @@ var
   ElapsedNanoseconds: Int64;
 begin
   Performance := RequirePerformanceThis(AThisValue);
-  ElapsedNanoseconds := GetNanoseconds - Performance.FTimeOriginMonotonicNanoseconds;
+  ElapsedNanoseconds := Performance.FHostEnvironment.MonotonicNanoseconds -
+    Performance.FTimeOriginMonotonicNanoseconds;
   Result := TGocciaNumberLiteralValue.Create(Max(0.0, ElapsedNanoseconds / 1000000.0));
 end;
 
@@ -229,7 +234,8 @@ end;
 
 // High Resolution Time Level 3 §7 The Performance interface
 constructor TGocciaPerformance.Create(const AName: string; const AScope: TGocciaScope;
-  const AThrowError: TGocciaThrowErrorCallback);
+  const AThrowError: TGocciaThrowErrorCallback;
+  const AHostEnvironment: TGocciaHostEnvironment);
 begin
   FName := AName;
   FScope := AScope;
@@ -238,7 +244,7 @@ begin
   if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
     TGocciaObjectValue.InitializeSharedPrototype;
 
-  FBuiltinObject := TGocciaPerformanceValue.Create;
+  FBuiltinObject := TGocciaPerformanceValue.Create(AHostEnvironment);
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 end;
 

@@ -102,6 +102,16 @@ the public `.gbc` artifact.
 
 See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode executor architecture.
 
+### Reproduce An Execution
+
+Use one fixed JavaScript-visible clock, UTC time zone, and portable random stream in either execution mode:
+
+```bash
+./build/GocciaScriptLoader example.js --deterministic
+```
+
+Timeouts and profiling still use the real monotonic clock. The equivalent config key is `"deterministic": true`; embedders can inject their own clock and RNG providers through the engine host environment.
+
 ### Start the REPL
 
 ```bash

@@ -3146,6 +3146,52 @@ console.log("REPL: repeated tagged template execution (interpreted + bytecode)..
 // GocciaSandboxRunner
 // ============================================================================
 
+console.log("SandboxRunner: deterministic nested engines use stable distinct streams...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "deterministic-seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import { runScript } from "goccia";',
+            "const parentRandom = Math.random();",
+            'const child = runScript("/child.js");',
+            'console.log([parentRandom, child.result].join("|"));',
+          ].join("\n"),
+        },
+        { path: "/child.js", text: "Math.random();" },
+      ],
+    }));
+
+    const expected = "0.8833108082136426|0.6524484863740322";
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      for (let run = 0; run < 2; run++) {
+        const proc = Bun.spawnSync(
+          [
+            SANDBOXRUNNER,
+            "/main.js",
+            `--seed-config=${seed}`,
+            "--source-type=module",
+            "--deterministic",
+            `--mode=${mode}`,
+          ],
+          { stdout: "pipe", stderr: "pipe" },
+        );
+        const output = proc.stdout.toString().trim();
+        if (proc.exitCode !== 0 || output !== expected)
+          throw new Error(
+            `SandboxRunner deterministic ${mode} run ${run + 1} expected ${expected}, got ${output}${proc.stderr.toString()}`,
+          );
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("SandboxRunner: inline seeds, fs, $, runScript, and diffs...");
 {
   const tmp = makeTmp();

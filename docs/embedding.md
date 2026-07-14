@@ -141,6 +141,16 @@ end;
 
 `TimingUtils` provides three clock functions: `GetNanoseconds` and `GetMilliseconds` for monotonic duration timing (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows), and `GetEpochNanoseconds` for wall-clock epoch time (`clock_gettime(CLOCK_REALTIME)` on Unix/macOS, `GetSystemTimeAsFileTime` on Windows).
 
+### Host-Controlled Time And Randomness
+
+Configure the engine-owned host environment before execution and before attaching runtime extensions:
+
+```pascal
+Engine.HostEnvironment.UseDeterministicProfile;
+```
+
+The fixed profile supplies epoch/monotonic time `0`, UTC, and seeded SplitMix64 randomness to JavaScript while leaving `TimingUtils` infrastructure clocks live. Custom hosts can call `Configure` with `IGocciaHostClock` and `IGocciaHostRandom` adapters instead.
+
 ## Engine Lifecycle & Realm Isolation
 
 Every `TGocciaEngine` owns an initial `TGocciaRealm` (`Goccia.Realm.pas`) — the engine's ECMA-262 Realm Record for mutable intrinsic prototype objects (`Array.prototype`, `Object.prototype`, `Map.prototype`, every error prototype, every Temporal prototype, and so on), global state links, the realm `[[TemplateMap]]`, loaded-module host state, and host-defined data. The realm is created in the engine constructor and torn down in the engine destructor; tear-down unpins every prototype and cached template object the realm owns so the GC can collect them before the next engine starts up.

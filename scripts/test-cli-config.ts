@@ -155,6 +155,57 @@ console.log("goccia.json loading...");
   }
 }
 
+// -- deterministic config ------------------------------------------------------
+
+console.log("deterministic config applies before runtime globals attach...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "goccia.json"), '{"deterministic": true}\n');
+    writeFileSync(
+      join(tmp, "test.js"),
+      '[Math.random(), Date.now(), Temporal.Now.instant().epochNanoseconds.toString(), performance.timeOrigin, performance.now()].join("|");\n',
+    );
+    writeFileSync(
+      join(tmp, "test-runner.js"),
+      [
+        'test("deterministic config", () => {',
+        "  expect(Date.now()).toBe(0);",
+        "  expect(Temporal.Now.instant().epochNanoseconds).toBe(0n);",
+        "  expect(performance.timeOrigin).toBe(0);",
+        "  expect(performance.now()).toBe(0);",
+        "});",
+        "",
+      ].join("\n"),
+    );
+
+    const expected = "0.8833108082136426|0|0|0|0";
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const loader = runCwd(
+        LOADER,
+        ["--print", join(tmp, "test.js"), `--mode=${mode}`],
+        tmp,
+      );
+      if (!containsLine(loader.combined, expected))
+        throw new Error(
+          `Loader deterministic config ${mode} expected ${expected}, got: ${loader.combined}`,
+        );
+
+      const testRunner = runCwd(
+        TESTRUNNER,
+        [join(tmp, "test-runner.js"), `--mode=${mode}`, "--no-progress"],
+        tmp,
+      );
+      if (!testRunner.combined.includes("Passed: 1"))
+        throw new Error(
+          `TestRunner deterministic config ${mode} should pass, got: ${testRunner.combined}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 // -- goccia.toml loading --------------------------------------------------------
 
 console.log("goccia.toml loading...");

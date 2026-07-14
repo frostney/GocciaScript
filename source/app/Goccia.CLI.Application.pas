@@ -681,6 +681,8 @@ begin
     begin
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
+      if ResolveFlagOption(FEngineOptions.Deterministic, FileConfig) then
+        Result.HostEnvironment.UseDeterministicProfile;
     end;
     ConfigureCreatedEngine(Result, FileConfig);
     if Assigned(FEngineOptions) then

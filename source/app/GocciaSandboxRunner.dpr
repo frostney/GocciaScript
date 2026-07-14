@@ -25,6 +25,7 @@ uses
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
+  Goccia.HostEnvironment,
   Goccia.InstructionLimit,
   Goccia.JSON,
   Goccia.Modules.Loader,
@@ -57,6 +58,7 @@ type
     FDiffOutput: TStringOption;
     FPrint: TFlagOption;
     FCurrentOutputLines: TStrings;
+    FCurrentHostEnvironment: TGocciaHostEnvironment;
 
     procedure SeedHostPathSpec(const ASpec, ABaseDirectory: string);
     procedure SeedHostPath(const AHostPath, ASandboxPath: string);
@@ -93,7 +95,8 @@ type
     procedure ConfigureSandboxResolver(
       const AResolver: TGocciaSandboxModuleResolver);
     procedure ConfigureEngineForSandbox(const AEngine: TGocciaEngine;
-      const AContext: TGocciaSandboxContext; const AFileName: string);
+      const AContext: TGocciaSandboxContext; const AFileName: string;
+      const AParentHostEnvironment: TGocciaHostEnvironment);
     procedure CaptureConsoleLine(const AMethod, ALine: string);
     function ExecuteSandboxPathInContext(const AContext: TGocciaSandboxContext;
       const AEntryPath: string): TGocciaSandboxRunResult;
@@ -584,7 +587,8 @@ end;
 
 procedure TSandboxRunnerApp.ConfigureEngineForSandbox(
   const AEngine: TGocciaEngine; const AContext: TGocciaSandboxContext;
-  const AFileName: string);
+  const AFileName: string;
+  const AParentHostEnvironment: TGocciaHostEnvironment);
 var
   Runtime: TGocciaRuntimeCore;
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
@@ -598,6 +602,10 @@ begin
     EmptyConfig);
   AEngine.FunctionConstructor.Enabled := ResolveFlagOption(
     EngineOptions.UnsafeFunctionConstructor, EmptyConfig);
+  if Assigned(AParentHostEnvironment) then
+    AEngine.HostEnvironment.ConfigureAsChildOf(AParentHostEnvironment)
+  else if ResolveFlagOption(EngineOptions.Deterministic, EmptyConfig) then
+    AEngine.HostEnvironment.UseDeterministicProfile;
   if ResolveFlagOption(EngineOptions.UnsafeShadowRealm, EmptyConfig) then
     EnableShadowRealm(AEngine);
 
@@ -736,6 +744,7 @@ var
   ScriptResult: TGocciaScriptResult;
   CloneRealm, ExecutionRealm: TGocciaRealm;
   PreviousOutputLines: TStrings;
+  PreviousHostEnvironment: TGocciaHostEnvironment;
 begin
   FillChar(Result, SizeOf(Result), 0);
   Result.Ok := False;
@@ -756,6 +765,7 @@ begin
   Executor := nil;
   CloneRealm := CurrentRealm;
   PreviousOutputLines := FCurrentOutputLines;
+  PreviousHostEnvironment := FCurrentHostEnvironment;
   FCurrentOutputLines := OutputLines;
   try
     ConfigureSandboxResolver(Resolver);
@@ -775,7 +785,9 @@ begin
     Engine := TGocciaEngine.Create(AEntryPath, Source, Resolver, Executor);
     Engine.ModuleLoader.SetContentProvider(Provider, True);
     Provider := nil;
-    ConfigureEngineForSandbox(Engine, AContext, AEntryPath);
+    ConfigureEngineForSandbox(Engine, AContext, AEntryPath,
+      PreviousHostEnvironment);
+    FCurrentHostEnvironment := Engine.HostEnvironment;
 
     try
       StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
@@ -811,6 +823,7 @@ begin
   Executor.Free;
   Resolver.Free;
   Provider.Free;
+  FCurrentHostEnvironment := PreviousHostEnvironment;
   FCurrentOutputLines := PreviousOutputLines;
   OutputLines.Free;
   Source.Free;
