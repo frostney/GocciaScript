@@ -52,6 +52,7 @@ type
     FSeedPaths: TRepeatableOption;
     FSeedConfigFiles: TRepeatableOption;
     FDiff: TFlagOption;
+    FDiffMetadata: TFlagOption;
     FDiffFormat: TStringOption;
     FDiffOutput: TStringOption;
     FPrint: TFlagOption;
@@ -203,6 +204,8 @@ begin
   FSeedConfigFiles := AddRepeatable('seed-config',
     'Import sandbox seed entries from a JSON configuration file');
   FDiff := AddFlag('diff', 'Print sandbox filesystem changes after execution');
+  FDiffMetadata := AddFlag('diff-metadata',
+    'Include timestamp changes in sandbox filesystem diffs');
   FDiffFormat := AddString('diff-format',
     'Diff format: json or unified (default: json)');
   FDiffOutput := AddString('diff-output', 'Write diff output to a host file');
@@ -836,9 +839,9 @@ begin
     begin
       Result.DiffRequested := True;
       if AOptions.DiffFormat = 'unified' then
-        Result.Diff := ChildContext.DiffUnified
+        Result.Diff := ChildContext.DiffUnified(AOptions.DiffMetadata)
       else
-        Result.Diff := ChildContext.DiffJson;
+        Result.Diff := ChildContext.DiffJson(AOptions.DiffMetadata);
     end;
   except
     on E: Exception do
@@ -857,12 +860,13 @@ var
   DiffText: string;
   OutFile: TextFile;
 begin
-  if not FDiff.Present and not FDiffOutput.Present then
+  if not FDiff.Present and not FDiffMetadata.Present and
+     not FDiffOutput.Present then
     Exit;
   if FDiffFormat.ValueOr('json') = 'unified' then
-    DiffText := FContext.DiffUnified
+    DiffText := FContext.DiffUnified(FDiffMetadata.Present)
   else
-    DiffText := FContext.DiffJson;
+    DiffText := FContext.DiffJson(FDiffMetadata.Present);
 
   if FDiffOutput.Present then
   begin
