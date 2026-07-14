@@ -97,6 +97,7 @@ begin
   FVM.LoadModule := AModuleLoader.LoadModule;
   FVM.LoadModuleSource := AModuleLoader.LoadModuleSourceValue;
   FVM.LoadDeferredModule := AModuleLoader.LoadDeferredModuleNamespaceValue;
+  FVM.ResolveModuleURL := AModuleLoader.ResolveModuleURL;
   AModuleLoader.EvaluateModuleBody := EvaluateModuleBody;
 end;
 

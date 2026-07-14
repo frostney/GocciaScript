@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.GarbageCollector,
+  Goccia.Modules,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -14,13 +15,16 @@ type
   TGocciaImportMetaResolveHelper = class(TGCManagedObject)
   private
     FModuleFilePath: string;
+    FResolveModuleURL: TResolveModuleURLCallback;
   public
-    constructor Create(const AModuleFilePath: string);
+    constructor Create(const AModuleFilePath: string;
+      const AResolveModuleURL: TResolveModuleURLCallback);
     function Resolve(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-function GetOrCreateImportMeta(const AFilePath: string): TGocciaObjectValue;
+function GetOrCreateImportMeta(const AFilePath: string;
+  const AResolver: TResolveModuleURLCallback = nil): TGocciaObjectValue;
 function FilePathToUrl(const AFilePath: string): string;
 procedure ClearImportMetaCache;
 
@@ -49,10 +53,25 @@ threadvar
   PinnedObjects: array of TGCManagedObject;
   PinnedCount: Integer;
 
+function HasScheme(const AValue: string): Boolean;
+var
+  ColonPosition, SlashPosition: SizeInt;
+begin
+  ColonPosition := Pos(':', AValue);
+  SlashPosition := Pos('/', AValue);
+  if (ColonPosition = 2) and (Length(AValue) >= 3) and
+     (AValue[3] in ['/', '\']) then
+    Exit(False);
+  Result := (ColonPosition > 1) and
+    ((SlashPosition = 0) or (ColonPosition < SlashPosition));
+end;
+
 function FilePathToUrl(const AFilePath: string): string;
 var
   AbsolutePath: string;
 begin
+  if HasScheme(AFilePath) then
+    Exit(AFilePath);
   AbsolutePath := ExpandFileName(AFilePath);
   {$IFDEF MSWINDOWS}
   AbsolutePath := StringReplace(AbsolutePath, '\', '/', [rfReplaceAll]);
@@ -68,10 +87,13 @@ end;
 
 { TGocciaImportMetaResolveHelper }
 
-constructor TGocciaImportMetaResolveHelper.Create(const AModuleFilePath: string);
+constructor TGocciaImportMetaResolveHelper.Create(
+  const AModuleFilePath: string;
+  const AResolveModuleURL: TResolveModuleURLCallback);
 begin
   inherited Create;
   FModuleFilePath := AModuleFilePath;
+  FResolveModuleURL := AResolveModuleURL;
 end;
 
 // ES2026 §13.3.12.1.1 HostGetImportMetaProperties(moduleRecord)
@@ -85,6 +107,13 @@ begin
     ThrowTypeError(SErrorImportMetaResolveRequiresArg, SSuggestImportMetaUsage);
 
   Specifier := AArgs.GetElement(0).ToStringLiteral.Value;
+
+  if Assigned(FResolveModuleURL) then
+  begin
+    Result := TGocciaStringLiteralValue.Create(
+      FResolveModuleURL(Specifier, FModuleFilePath));
+    Exit;
+  end;
 
   // Absolute specifiers resolve directly; relative ones resolve against the module directory
   if (Length(Specifier) > 0) and ((Specifier[1] = '/') or (Specifier[1] = '\') or
@@ -101,14 +130,22 @@ end;
 { Cache functions }
 
 // ES2026 §13.3.12.1 ImportMeta : import . meta
-function GetOrCreateImportMeta(const AFilePath: string): TGocciaObjectValue;
+function GetOrCreateImportMeta(const AFilePath: string;
+  const AResolver: TResolveModuleURLCallback): TGocciaObjectValue;
 var
   MetaObject: TGocciaObjectValue;
   ResolveHelper: TGocciaImportMetaResolveHelper;
   ResolveFunction: TGocciaValue;
-  CanonicalPath: string;
+  CanonicalPath, ResolveBasePath: string;
+  Resolver: TResolveModuleURLCallback;
 begin
-  CanonicalPath := ExpandFileName(AFilePath);
+  Resolver := AResolver;
+  if Assigned(Resolver) then
+    CanonicalPath := Resolver(AFilePath, AFilePath)
+  else if HasScheme(AFilePath) then
+    CanonicalPath := AFilePath
+  else
+    CanonicalPath := ExpandFileName(AFilePath);
 
   if not Assigned(ImportMetaCache) then
     ImportMetaCache := TOrderedStringMap<TGocciaObjectValue>.Create;
@@ -120,11 +157,20 @@ begin
   MetaObject := TGocciaObjectValue.Create(nil);
 
   // ES2026 §13.3.12.1.1 HostGetImportMetaProperties step: url
-  MetaObject.AssignProperty(PROP_URL,
-    TGocciaStringLiteralValue.Create(FilePathToUrl(CanonicalPath)));
+  if Assigned(Resolver) then
+    MetaObject.AssignProperty(PROP_URL,
+      TGocciaStringLiteralValue.Create(CanonicalPath))
+  else
+    MetaObject.AssignProperty(PROP_URL,
+      TGocciaStringLiteralValue.Create(FilePathToUrl(CanonicalPath)));
 
   // ES2026 §13.3.12.1.1 HostGetImportMetaProperties step: resolve
-  ResolveHelper := TGocciaImportMetaResolveHelper.Create(CanonicalPath);
+  ResolveBasePath := AFilePath;
+  if Assigned(Resolver) and
+     (Copy(CanonicalPath, 1, Length('file:')) <> 'file:') then
+    ResolveBasePath := CanonicalPath;
+  ResolveHelper := TGocciaImportMetaResolveHelper.Create(ResolveBasePath,
+    Resolver);
   ResolveFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
     ResolveHelper.Resolve, PROP_RESOLVE, 1);
   MetaObject.AssignProperty(PROP_RESOLVE, ResolveFunction);

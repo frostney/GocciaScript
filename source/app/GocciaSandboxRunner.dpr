@@ -776,6 +776,8 @@ begin
     Engine.ModuleLoader.SetContentProvider(Provider, True);
     Provider := nil;
     ConfigureEngineForSandbox(Engine, AContext, AEntryPath);
+    ApplyVirtualModulesToEngine(Engine,
+      DiscoverFileConfigPath(AEntryPath));
 
     try
       StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));

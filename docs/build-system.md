@@ -170,7 +170,7 @@ printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
 # Add one-off import-map-style aliases from the CLI
 ./build/GocciaScriptLoader app.js --alias @/=./src/ --alias config=./config/default.js
 
-# The same module-resolution flags are available on GocciaTestRunner, GocciaBenchmarkRunner, and GocciaREPL.
+# The same module-resolution and virtual-module flags are available on the shared CLI hosts.
 ./build/GocciaTestRunner tests --import-map=imports.json --alias @/=./tests/helpers/
 ./build/GocciaBenchmarkRunner benchmarks --import-map=imports.json
 ./build/GocciaREPL --import-map=imports.json

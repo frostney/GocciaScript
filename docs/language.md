@@ -187,6 +187,9 @@ const fn = async () => {
 
 ES module syntax with default, named, and namespace imports/exports. Project code convention prefers named exports for internal modules, but default imports and exports are language-supported. Supported source file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`; `.mjs` entry files default to module source. Structured-data imports are also supported for `.json`, `.json5`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv`, and text-asset imports are supported for `.txt` and `.md`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries source, structured-data, and text-asset extensions in order. Directory imports resolve to `index` files. The CLI tools support WHATWG-style import maps through `--import-map=<file.json>`, `--alias key=value`, and implicit `goccia.json` discovery.
 
+Hosts can supply ordinary ES modules through virtual-module configuration. See
+[Virtual Module Configuration](virtual-modules.md) for the complete reference.
+
 ```javascript
 // Named imports (with or without extension)
 import { add, multiply } from "./math.js";

@@ -20,6 +20,7 @@ type
     LoadModule: TLoadModuleCallback;
     LoadModuleSource: TLoadModuleSourceCallback;
     LoadDeferredModule: TLoadDeferredModuleCallback;
+    ResolveModuleURL: TResolveModuleURLCallback;
     CurrentFilePath: string;
     CoverageEnabled: Boolean;
     StrictTypes: Boolean;

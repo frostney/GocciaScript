@@ -1412,4 +1412,168 @@ console.log("--config works on BenchmarkRunner...");
   }
 }
 
+console.log("Virtual modules in goccia.json...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(
+      join(tmp, "goccia.json"),
+      JSON.stringify({
+        "source-type": "module",
+        modules: {
+          "host:settings": { type: "json", content: { version: 3 } },
+          "host:main": {
+            content:
+              'import settings from "host:settings"; export default settings.version;',
+          },
+        },
+      }),
+    );
+    writeFileSync(
+      join(tmp, "entry.js"),
+      'import value from "host:main"; value;\n',
+    );
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const out = runCwd(
+        LOADER,
+        [join(tmp, "entry.js"), "--print", `--mode=${mode}`],
+        tmp,
+      );
+      if (!containsLine(out.stdout, "3"))
+        throw new Error(`Config virtual module ${mode} expected 3, got: ${out.combined}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("--modules manifests (JSON, JSON5, TOML, YAML, JavaScript, TypeScript)...");
+{
+  const tmp = makeTmp();
+  try {
+    const manifests = new Map<string, string>([
+      ["modules.json", '{"host:manifest":{"content":"export default 23;"}}'],
+      ["modules.json5", '{"host:manifest": {content: "export default 23;"}}'],
+      ["modules.toml", '["host:manifest"]\ncontent = "export default 23;"\n'],
+      ["modules.yaml", '"host:manifest":\n  content: "export default 23;"\n'],
+      ["modules.js", 'export default {"host:manifest": {content: "export default 23;"}};\n'],
+      ["modules.ts", 'export default {"host:manifest": {type: "typescript", content: "export default 23;"}};\n'],
+    ]);
+    writeFileSync(
+      join(tmp, "entry.mjs"),
+      'import value from "host:manifest"; value;\n',
+    );
+    for (const [name, content] of manifests) {
+      const path = join(tmp, name);
+      writeFileSync(path, content);
+      const out = runCwd(
+        LOADER,
+        [join(tmp, "entry.mjs"), "--print", "--modules", path],
+        tmp,
+      );
+      if (!containsLine(out.stdout, "23"))
+        throw new Error(`${name} virtual module manifest expected 23, got: ${out.combined}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Virtual module config precedence and inherited manifest origins...");
+{
+  const tmp = makeTmp();
+  const baseDir = join(tmp, "base");
+  const appDir = join(tmp, "app");
+  try {
+    mkdirSync(baseDir, { recursive: true });
+    mkdirSync(appDir, { recursive: true });
+    writeFileSync(
+      join(tmp, "root.json"),
+      JSON.stringify({
+        modules: {
+          "host:choice": { content: "export default 1;" },
+        },
+      }),
+    );
+    writeFileSync(
+      join(baseDir, "goccia.json"),
+      JSON.stringify({ modules: ["modules.json"] }),
+    );
+    writeFileSync(
+      join(baseDir, "modules.json"),
+      JSON.stringify({
+        "host:inherited": { content: "export default 10;" },
+      }),
+    );
+    writeFileSync(
+      join(appDir, "goccia.json"),
+      JSON.stringify({
+        extends: "../base/goccia.json",
+        module: "host:choice=export default 2;",
+      }),
+    );
+    writeFileSync(
+      join(appDir, "entry.mjs"),
+      'import choice from "host:choice"; import inherited from "host:inherited"; choice + inherited;\n',
+    );
+
+    const perFile = runCwd(
+      LOADER,
+      [join(appDir, "entry.mjs"), "--print", "--config", join(tmp, "root.json")],
+      tmp,
+    );
+    if (!containsLine(perFile.stdout, "12"))
+      throw new Error(`Per-file virtual module config should override root and retain inherited origins: ${perFile.combined}`);
+
+    const cli = runCwd(
+      LOADER,
+      [
+        join(appDir, "entry.mjs"),
+        "--print",
+        "--config",
+        join(tmp, "root.json"),
+        "--module",
+        "host:choice=export default 3;",
+      ],
+      tmp,
+    );
+    if (!containsLine(cli.stdout, "13"))
+      throw new Error(`CLI virtual module config should override per-file and root config: ${cli.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Virtual modules win filesystem collisions with a warning...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(
+      join(tmp, "goccia.json"),
+      JSON.stringify({
+        imports: { "virtual-dep": "./dep.js" },
+        modules: {
+          "./dep.js": { content: "export default 2;" },
+        },
+      }),
+    );
+    writeFileSync(join(tmp, "dep.js"), "export default 1;\n");
+    writeFileSync(
+      join(tmp, "entry.mjs"),
+      'import value from "virtual-dep"; value;\n',
+    );
+    const out = runCwd(
+      LOADER,
+      [join(tmp, "entry.mjs"), "--print"],
+      tmp,
+    );
+    if (!containsLine(out.stdout, "2"))
+      throw new Error(`Virtual module should win filesystem collision: ${out.combined}`);
+    if (!out.stderr.includes("shadows module"))
+      throw new Error(`Virtual/filesystem collision should warn: ${out.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("\nAll test-cli-config.ts tests passed.");

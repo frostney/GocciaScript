@@ -37,6 +37,8 @@ type
     FStrictTypes: TFlagOption;
     FAllowedHosts: TRepeatableOption;
     FInspectDepth: TIntegerOption;
+    FModule: TRepeatableOption;
+    FModules: TRepeatableOption;
   public
     constructor Create;
     destructor Destroy; override;
@@ -60,6 +62,8 @@ type
     property StrictTypes: TFlagOption read FStrictTypes;
     property AllowedHosts: TRepeatableOption read FAllowedHosts;
     property InspectDepth: TIntegerOption read FInspectDepth;
+    property ModuleDefinitions: TRepeatableOption read FModule;
+    property ModuleManifests: TRepeatableOption read FModules;
   end;
 
   TGocciaCoverageFormat = (cfLcov, cfJson);
@@ -110,7 +114,7 @@ function TryApplyCompatibilityFlagArg(const AArg: string;
 implementation
 
 const
-  ENGINE_FIXED_OPTION_COUNT = 15;
+  ENGINE_FIXED_OPTION_COUNT = 17;
 
   SOURCE_COMPATIBILITY_FLAGS: array[TGocciaCompatibility]
     of TGocciaCompatibilityFlagDescriptor = (
@@ -225,6 +229,10 @@ begin
   FAllowedHosts.ConfigName := 'allowed-hosts';
   FInspectDepth := TIntegerOption.Create('inspect-depth',
     'Maximum object inspection depth for console output (default: 5)', 'Engine');
+  FModule := TRepeatableOption.Create('module',
+    'Virtual module definition (name=source or name={descriptor})', 'Engine');
+  FModules := TRepeatableOption.Create('modules',
+    'Path to a virtual modules manifest (repeatable)', 'Engine');
 end;
 
 destructor TGocciaEngineOptions.Destroy;
@@ -248,6 +256,8 @@ begin
   FStrictTypes.Free;
   FAllowedHosts.Free;
   FInspectDepth.Free;
+  FModule.Free;
+  FModules.Free;
   inherited Destroy;
 end;
 
@@ -292,6 +302,10 @@ begin
   Result[Index] := FAllowedHosts;
   Inc(Index);
   Result[Index] := FInspectDepth;
+  Inc(Index);
+  Result[Index] := FModule;
+  Inc(Index);
+  Result[Index] := FModules;
 end;
 
 function TGocciaEngineOptions.CompatibilityFlagOption(

@@ -7,7 +7,7 @@
 
 - **Quick start** — `TGocciaRuntime.Create(...)` creates the runtime layer for file loading and runtime extension installation; apply a runtime profile or install concrete runtime extensions for runtime globals and `goccia:` runtime modules. `TGocciaEngine.Create(...)` remains available for core-language-only embedders and requires an explicit executor (`TGocciaInterpreterExecutor` for tree-walk or `TGocciaBytecodeExecutor` for bytecode VM)
 - **Sandboxing** — Choose runtime extensions and tool-specific runtime APIs explicitly; inject custom globals via `DefineLexicalBinding`; enforce execution limits via timeout or instruction cap
-- **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, and global modules
+- **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, virtual modules, and host modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
 
 GocciaScript is designed to be embedded in FreePascal applications. `TGocciaRuntime` is the embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, and `URL`, plus import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, and `goccia:semver`, usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals or runtime modules.
@@ -347,9 +347,17 @@ end;
 
 `TGocciaEngine` also accepts an injected module loader via its constructor. When no loader is supplied, it creates a default `TGocciaModuleLoader` with the standard resolver but no filesystem content provider. `TGocciaRuntime` installs the filesystem provider when attached; core-language-only embedders that need imports should inject their own provider.
 
-### Global Modules
+### Virtual Modules
 
-Global modules are bare-specifier imports that bypass file resolution entirely. They are checked before the resolver runs:
+Prefer virtual modules when host configuration should be consumed through
+ordinary ES module imports. See
+[Virtual Module Configuration](virtual-modules.md) for the descriptor schema,
+content types, APIs, precedence, and resolution behavior.
+
+### Host Modules
+
+Host modules expose values created programmatically by an embedder. They are
+checked before filesystem resolution:
 
 ```pascal
 uses
@@ -360,18 +368,20 @@ var
 begin
   Module := TGocciaModule.Create('my-lib');
   Module.ExportsTable.Add('version', TGocciaStringLiteralValue.Create('1.0.0'));
-  Engine.RegisterGlobalModule('my-lib', Module);
+  Engine.RegisterHostModule('my-lib', Module);
 end;
 ```
 
-Scripts can then import from the global module by name:
+Scripts can then import from the host module by name:
 
 ```javascript
 import { version } from "my-lib";
 console.log(version);  // "1.0.0"
 ```
 
-This provides the foundation for future built-in module packages that can be coupled to runtime-global configuration.
+`RegisterHostModuleProvider` provides lazy registration. The former
+`RegisterGlobalModule` and `RegisterGlobalModuleProvider` names remain supported
+as compatibility aliases without warnings.
 
 ## Console Output Capture
 
@@ -985,4 +995,5 @@ For CLI tools, use `TGocciaCLIApplication` instead, which adds argument parsing,
 7. Handle exceptions from `Goccia.Error`
 8. Free the runtime when done; it owns and frees the engine only when it created the engine itself, or when you used an ownership-transfer overload such as `TGocciaRuntime.Create(Engine, True)`. `TGocciaRuntime.Create(Engine)` is non-owning by default, so embedders wrapping an existing engine must also free that engine.
 
-For host-provided configuration data, `Runtime.Engine` exposes `InjectGlobalsFromJSON(...)`, `InjectGlobalsFromJSON5(...)`, `InjectGlobalsFromTOML(...)`, `InjectGlobalsFromYAML(...)`, and `InjectGlobalsFromModule(...)`. Strict JSON is core. JSON5, TOML, and YAML injection require the matching runtime extension (`TGocciaJSON5RuntimeExtension`, `TGocciaTOMLRuntimeExtension`, or `TGocciaYAMLRuntimeExtension`); they use the same top-level-object/table contract as JSON object globals. Embedders that intentionally need only the core language can still use `TGocciaEngine` directly.
+For host configuration, prefer virtual modules. Existing global-injection APIs
+remain supported without warnings; core-only embedders can use `TGocciaEngine`.

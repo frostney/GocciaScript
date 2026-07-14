@@ -4304,4 +4304,165 @@ console.log("Loader: goccia.json multifile=true works without --multifile flag..
   }
 }
 
+console.log("Loader: --module virtual modules use the ordinary module pipeline...");
+for (const mode of ["interpreted", "bytecode"] as const) {
+  const source = [
+    'import bytes from "host:asset";',
+    'import source moduleSource from "host:pkg/main";',
+    'import defer * as deferred from "host:deferred";',
+    'import special from "host:with space";',
+    'import { url, resolved } from "host:pkg/main";',
+    'url + "|" + resolved() + "|" + bytes[2] + "|" + deferred.value + "|" + special + "|" + typeof moduleSource;',
+  ].join("\n");
+  const proc = Bun.spawnSync(
+    [
+      LOADER,
+      "-",
+      "--source-type=module",
+      `--mode=${mode}`,
+      "--print",
+      "--experimental-js-module-source",
+      "--module",
+      'host:asset={"type":"bytes","content":"AQID"}',
+      "--module",
+      'host:pkg/dep=export const value = 7;',
+      "--module",
+      'host:pkg/main=export const url = import.meta.url; export const resolved = () => import.meta.resolve("./dep");',
+      "--module",
+      'host:deferred=export const value = 11;',
+      "--module",
+      'host:with space=export default 5;',
+    ],
+    { stdin: new TextEncoder().encode(source), stdout: "pipe", stderr: "pipe" },
+  );
+  if (proc.exitCode !== 0)
+    throw new Error(`--module ${mode} failed: ${proc.stderr.toString()}`);
+  if (!containsLine(proc.stdout.toString(), "host:pkg/main|host:pkg/dep|3|11|5|object"))
+    throw new Error(`--module ${mode} did not preserve module phases, addresses, and bytes: ${proc.stdout.toString()}`);
+}
+
+console.log("Loader: dynamic import and ShadowRealm use configured virtual modules...");
+{
+  const source = [
+    'import("host:dynamic").then(ns => console.log("dynamic:" + ns.value));',
+    'new ShadowRealm().importValue("host:realm", "value").then(value => console.log("realm:" + value));',
+  ].join("\n");
+  const proc = Bun.spawnSync(
+    [
+      LOADER,
+      "-",
+      "--source-type=module",
+      "--unsafe-shadowrealm",
+      "--module",
+      'host:dynamic=export const value = 9;',
+      "--module",
+      'host:realm=export const value = 13;',
+    ],
+    { stdin: new TextEncoder().encode(source), stdout: "pipe", stderr: "pipe" },
+  );
+  if (proc.exitCode !== 0)
+    throw new Error(`Dynamic/ShadowRealm virtual modules failed: ${proc.stderr.toString()}`);
+  const output = proc.stdout.toString();
+  if (!output.includes("dynamic:9") || !output.includes("realm:13"))
+    throw new Error(`Dynamic/ShadowRealm virtual modules produced unexpected output: ${output}`);
+}
+
+console.log("Loader: attributed virtual modules reinterpret their stored content...");
+{
+  const proc = Bun.spawnSync(
+    [
+      LOADER,
+      "-",
+      "--source-type=module",
+      "--print",
+      "--module",
+      "host:source=A",
+    ],
+    {
+      stdin: new TextEncoder().encode(
+        'import bytes from "host:source" with { type: "bytes" }; bytes[0];',
+      ),
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  if (proc.exitCode !== 0)
+    throw new Error(`Attributed virtual module failed: ${proc.stderr.toString()}`);
+  if (!containsLine(proc.stdout.toString(), "65"))
+    throw new Error(`Attributed virtual module should expose source bytes: ${proc.stdout.toString()}`);
+}
+
+console.log("Loader: virtual definitions validate eagerly but JavaScript parses lazily...");
+{
+  const unused = Bun.spawnSync(
+    [LOADER, "-", "--module", "host:unused=!!! not valid JavaScript !!!"],
+    { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
+  );
+  if (unused.exitCode !== 0)
+    throw new Error(`Unused invalid virtual source should not fail startup: ${unused.stderr.toString()}`);
+
+  const invalidBytes = Bun.spawnSync(
+    [LOADER, "-", "--module", 'host:bad={"type":"bytes","content":"%%%"}'],
+    { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
+  );
+  const invalidBytesOutput = invalidBytes.stdout.toString() + invalidBytes.stderr.toString();
+  if (invalidBytes.exitCode === 0 || !invalidBytesOutput.includes("invalid base64"))
+    throw new Error(`Invalid virtual bytes should fail configuration: ${invalidBytesOutput}`);
+
+  const runtimeCollision = Bun.spawnSync(
+    [LOADER, "-", "--module", "goccia:csv=export default 1;"],
+    { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
+  );
+  const collisionOutput = runtimeCollision.stdout.toString() + runtimeCollision.stderr.toString();
+  if (runtimeCollision.exitCode === 0 || !collisionOutput.includes("runtime module"))
+    throw new Error(`Runtime module collision should be a configuration error: ${collisionOutput}`);
+}
+
+console.log("SandboxRunner: virtual modules share the CLI surface and cannot shadow host modules...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [{
+        path: "/main.js",
+        text: 'import value from "host:configured"; console.log(value);',
+      }],
+    }));
+    const configured = Bun.spawnSync(
+      [
+        SANDBOXRUNNER,
+        "/main.js",
+        `--seed-config=${seed}`,
+        "--source-type=module",
+        "--module",
+        "host:configured=export default 17;",
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (configured.exitCode !== 0 ||
+        normalizeLineEndings(configured.stdout.toString()).trim() !== "17")
+      throw new Error(`Sandbox virtual module configuration failed: ${configured.stdout.toString()}${configured.stderr.toString()}`);
+
+    const hostCollision = Bun.spawnSync(
+      [
+        SANDBOXRUNNER,
+        "/main.js",
+        `--seed-config=${seed}`,
+        "--source-type=module",
+        "--module",
+        "fs=export default 1;",
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const hostCollisionOutput =
+      hostCollision.stdout.toString() + hostCollision.stderr.toString();
+    if (hostCollision.exitCode === 0 ||
+        !hostCollisionOutput.includes("host module"))
+      throw new Error(`Host module collision should be a configuration error: ${hostCollisionOutput}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("\nAll test-cli-apps.ts tests passed.");

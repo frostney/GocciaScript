@@ -139,7 +139,7 @@ GocciaScript looks like modern JavaScript — with a few intentional differences
 - **ES modules** — default, named, and namespace imports/exports are supported; project code prefers named exports for clarity.
 - **Strict equality by default** — `===` and `!==` (`==`/`!=` require `--compat-loose-equality`)
 
-The CLI tools share WHATWG-style import map support with `--import-map=<file.json>`, `--alias key=value`, and automatic `goccia.json` discovery for project-level module aliases.
+The CLI tools share WHATWG-style import map support with `--import-map=<file.json>`, `--alias key=value`, and automatic `goccia.json` discovery for project-level module aliases. Host-supplied dependencies should normally be configured as virtual ES modules with `--module`, `--modules`, or a config `modules` object; they participate in the same import pipeline as filesystem modules. Global injection remains supported for compatibility.
 
 Structured data files and text assets can also be imported directly:
 
@@ -226,6 +226,7 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | [Garbage Collector](docs/garbage-collector.md) | Mark-and-sweep GC: architecture, contributor rules, design rationale |
 | [Adding Built-in Types](docs/adding-built-in-types.md) | Step-by-step guide for adding new built-in types |
 | [Embedding the Engine](docs/embedding.md) | Embedding GocciaScript in FreePascal applications |
+| [Virtual Module Configuration](docs/virtual-modules.md) | CLI, config-file, and embedding reference for host-supplied modules |
 | [Testing](docs/testing.md) | Test organization, running tests, coverage, CI |
 | [Test Framework API](docs/testing-api.md) | Assertions, mocks, lifecycle hooks, async patterns |
 | [Benchmarks](docs/benchmarks.md) | Benchmark runner, output formats, writing benchmarks |
