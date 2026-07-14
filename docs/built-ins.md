@@ -693,7 +693,7 @@ The `"fs"` module operates on the sandbox virtual filesystem. It follows a Node.
 | `fs.appendFileSync(path, data)` | Append UTF-8 string data or bytes from `Uint8Array` |
 | `fs.mkdirSync(path, options?)` | Create a directory; `{ recursive: true }` creates parents |
 | `fs.readdirSync(path)` | Return child names |
-| `fs.statSync(path)` | Return `{ path, name, type, size, mtimeMs, isFile(), isDirectory() }` |
+| `fs.statSync(path)` | Return a Stats snapshot with `path`, `name`, `type`, `size`, `atimeMs`, `mtimeMs`, `ctimeMs`, `birthtimeMs`, lazy Date accessors, and type predicates |
 | `fs.existsSync(path)` | Return whether a sandbox path exists |
 | `fs.rmSync(path, options?)` | Delete a file or directory; `{ recursive: true }` removes non-empty directories |
 | `fs.renameSync(from, to)` | Move or rename a sandbox path |
@@ -701,6 +701,19 @@ The `"fs"` module operates on the sandbox virtual filesystem. It follows a Node.
 | `fs.promises` | Promise-returning versions of the same operations |
 
 `readFileSync` returns a `Uint8Array` by default so binary seed entries can round-trip without text coercion.
+
+Stats snapshots expose `atime`, `mtime`, `ctime`, and `birthtime` as lazy Date
+accessors on a realm-owned shared prototype. Each access returns a fresh Date;
+the corresponding `*Ms` number remains part of the original snapshot.
+`isFile()` and `isDirectory()` report the virtual node kind, while
+`isSymbolicLink()` always returns `false` because the sandbox VFS does not
+support symbolic links.
+
+The VFS tracks the four timestamps independently. Reads advance access time;
+writes and truncation advance modification and change time; renames preserve
+access, modification, and birth time while advancing change time and affected
+directory metadata. Birth time is immutable. Copies receive fresh timestamps,
+while VFS forks used for baselines preserve the source timestamps.
 
 Filesystem failures are real JavaScript `Error` objects with Node-shaped
 `code`, `errno`, `path`, `syscall`, and optional `dest` metadata. Synchronous
@@ -741,6 +754,7 @@ const child = runScript("/child.js", {
     { path: "/data.bin", base64: "AQID" },
   ],
   diff: true,
+  diffMetadata: true,
   diffFormat: "json",
 });
 
@@ -748,7 +762,7 @@ console.log(child.stdout);
 console.log(child.diff);
 ```
 
-`seed` accepts one entry or an array. A string entry copies that parent-VFS path to the same child path. `{ from, to }` copies a parent file or directory into a child target path. When a file seed target ends in `/`, the file is copied under that directory with its source name. Inline `{ path, text }` and `{ path, base64 }` entries create child-only files.
+`seed` accepts one entry or an array. A string entry copies that parent-VFS path to the same child path. `{ from, to }` copies a parent file or directory into a child target path. When a file seed target ends in `/`, the file is copied under that directory with its source name. Inline `{ path, text }` and `{ path, base64 }` entries create child-only files. `diffMetadata: true` implies an isolated diff and adds timestamp changes as a separate metadata dimension; ordinary diffs remain content/namespace-only.
 
 The sandbox shell exposes the same child mode:
 
@@ -756,7 +770,7 @@ The sandbox shell exposes the same child mode:
 const out = await $`goccia --sandbox --seed /child.js --seed /lib=/lib --diff /child.js`.text();
 ```
 
-Shell `goccia` supports `--sandbox`, repeatable `--seed <from[=to]>` / `--seed=<from[=to]>`, `--diff`, and `--diff-format json|unified`. Child diffs are appended to command stdout only when `--diff` is present.
+Shell `goccia` supports `--sandbox`, repeatable `--seed <from[=to]>` / `--seed=<from[=to]>`, `--diff`, `--diff-metadata`, and `--diff-format json|unified`. `--diff-metadata` implies a diff. Child diffs are appended to command stdout only when a diff is requested.
 
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 

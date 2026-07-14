@@ -3223,11 +3223,154 @@ console.log("SandboxRunner: inline seeds, fs, $, runScript, and diffs...");
       if (!stdout.includes(expected))
         throw new Error(`SandboxRunner interpreter stdout should include ${JSON.stringify(expected)}, got: ${stdout}`);
     }
-    const changes = JSON.parse(readFileSync(diff, "utf-8")).changes;
+    const defaultDiff = JSON.parse(readFileSync(diff, "utf-8"));
+    const changes = defaultDiff.changes;
+    if ("metadataChanges" in defaultDiff)
+      throw new Error(`SandboxRunner default diff should omit metadataChanges, got ${JSON.stringify(defaultDiff)}`);
     if (!changes.some((c: any) => c.kind === "create" && c.path === "/hello.txt"))
       throw new Error(`SandboxRunner diff should include /hello.txt create, got ${JSON.stringify(changes)}`);
     if (!changes.some((c: any) => c.kind === "create" && c.path === "/child.out"))
       throw new Error(`SandboxRunner diff should include /child.out create, got ${JSON.stringify(changes)}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: fs Stats expose realm-owned lazy Date metadata in every execution mode...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import fs from "fs";',
+            'const intrinsicStat = fs.statSync("/tracked.txt");',
+            'globalThis.Date = class ReplacementDate { constructor() { this.replacement = true; } };',
+            'const intrinsicMtime = intrinsicStat.mtime;',
+            'const intrinsicDateValid = typeof intrinsicMtime.getTime === "function" && !Object.hasOwn(intrinsicMtime, "replacement");',
+            'globalThis.Date = Object.getPrototypeOf(intrinsicMtime).constructor;',
+            'const syncStat = fs.statSync("/tracked.txt");',
+            'const promiseStat = await fs.promises.stat("/tracked.txt");',
+            'const checks = (stat) => {',
+            'const firstAtime = stat.atime;',
+            'const secondAtime = stat.atime;',
+            'return [',
+            '  stat.atime instanceof Date,',
+            '  stat.mtime instanceof Date,',
+            '  stat.ctime instanceof Date,',
+            '  stat.birthtime instanceof Date,',
+            '  stat.atime.getTime() === Math.trunc(stat.atimeMs + 0.5),',
+            '  stat.mtime.getTime() === Math.trunc(stat.mtimeMs + 0.5),',
+            '  stat.ctime.getTime() === Math.trunc(stat.ctimeMs + 0.5),',
+            '  stat.birthtime.getTime() === Math.trunc(stat.birthtimeMs + 0.5),',
+            '  typeof stat.atimeMs === "number",',
+            '  typeof stat.mtimeMs === "number",',
+            '  typeof stat.ctimeMs === "number",',
+            '  typeof stat.birthtimeMs === "number",',
+            '  stat.isFile(),',
+            '  !stat.isDirectory(),',
+            '  !stat.isSymbolicLink(),',
+            '  firstAtime !== secondAtime,',
+            '  !Object.hasOwn(stat, "atime"),',
+            '  !Object.hasOwn(stat, "isFile"),',
+            '];',
+            '};',
+            'const valid = (stat) => checks(stat).every(Boolean);',
+            'if (!valid(syncStat)) console.log("sync-checks:" + checks(syncStat).join(","));',
+            'if (!valid(promiseStat)) console.log("promise-checks:" + checks(promiseStat).join(","));',
+            'console.log("sync-stats:" + valid(syncStat));',
+            'console.log("promise-stats:" + valid(promiseStat));',
+            'console.log("shared-stats-prototype:" + (Object.getPrototypeOf(syncStat) === Object.getPrototypeOf(promiseStat)));',
+            'console.log("intrinsic-stats-date:" + intrinsicDateValid);',
+          ].join("\n"),
+        },
+        { path: "/tracked.txt", text: "tracked" },
+      ],
+    }));
+
+    for (const [label, extraArgs] of [
+      ["interpreter", []],
+      ["bytecode", ["--mode=bytecode"]],
+    ] as const) {
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const stdout = normalizeLineEndings(proc.stdout.toString());
+      if (proc.exitCode !== 0)
+        throw new Error(`SandboxRunner ${label} Stats run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      for (const expected of [
+        "sync-stats:true",
+        "promise-stats:true",
+        "shared-stats-prototype:true",
+        "intrinsic-stats-date:true",
+      ]) {
+        if (!containsLine(`\n${stdout}`, expected))
+          throw new Error(`SandboxRunner ${label} Stats stdout should include ${expected}, got: ${stdout}`);
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: metadata diffing is opt-in and separate from content changes...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    const diff = join(tmp, "diff.json");
+    const unifiedDiff = join(tmp, "diff.patch");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import fs from "fs";',
+            'for (const i of Array.from({ length: 10000 }, (_, index) => index)) { Math.sqrt(i); }',
+            'const text = fs.readFileSync("/tracked.txt", "utf8");',
+            'fs.writeFileSync("/tracked.txt", text);',
+            'fs.mkdirSync("/created");',
+          ].join("\n"),
+        },
+        { path: "/tracked.txt", text: "unchanged" },
+      ],
+    }));
+
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", "--diff-metadata", `--diff-output=${diff}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0)
+      throw new Error(`SandboxRunner metadata diff should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const parsed = JSON.parse(readFileSync(diff, "utf-8"));
+    if (parsed.metadataChanges.some((change: any) => change.path === "/"))
+      throw new Error(`Metadata diff must not expose the implicit root, got ${JSON.stringify(parsed.metadataChanges)}`);
+    if (parsed.changes.some((change: any) => change.path === "/tracked.txt"))
+      throw new Error(`Timestamp-only writes must not become content modifications, got ${JSON.stringify(parsed.changes)}`);
+    const tracked = parsed.metadataChanges.find((change: any) => change.path === "/tracked.txt");
+    if (!tracked)
+      throw new Error(`Metadata diff should include /tracked.txt, got ${JSON.stringify(parsed.metadataChanges)}`);
+    const fields = Object.keys(tracked.changes).sort();
+    if (JSON.stringify(fields) !== JSON.stringify(["atimeMs", "ctimeMs", "mtimeMs"]))
+      throw new Error(`Metadata diff should contain only changed timestamp fields, got ${JSON.stringify(tracked)}`);
+    if ("size" in tracked.changes || "type" in tracked.changes || "birthtimeMs" in tracked.changes)
+      throw new Error(`Metadata diff should not duplicate size/type or change birthtime, got ${JSON.stringify(tracked)}`);
+
+    const unifiedProc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", "--diff-metadata", "--diff-format=unified", `--diff-output=${unifiedDiff}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (unifiedProc.exitCode !== 0)
+      throw new Error(`SandboxRunner unified metadata diff should exit 0, got ${unifiedProc.exitCode}: ${unifiedProc.stderr.toString()}`);
+    const unified = readFileSync(unifiedDiff, "utf-8");
+    if (!unified.includes("@@ sandbox metadata changed /tracked.txt @@") ||
+        unified.includes("@@ sandbox file changed @@") ||
+        unified.includes("@@ sandbox metadata changed / @@"))
+      throw new Error(`Unified metadata diff should keep timestamp-only changes separate, got: ${unified}`);
   } finally {
     clean(tmp);
   }
@@ -3542,15 +3685,19 @@ console.log("SandboxRunner: nested sandbox execution seeds from parent VFS witho
             '  diff: true,',
             '});',
             'const noWrite = runScript("/readonly.js", { sandbox: true, seed: ["/readonly.js"], diff: true, diffFormat: "unified" });',
+            'const metadataOnly = runScript("/metadata.js", { sandbox: true, seed: ["/metadata.js", "/metadata.txt"], diffMetadata: true });',
             'console.log(child.stdout.trim());',
             'console.log(child.diff.includes(\'"path": "/child-only.txt"\'));',
             'console.log(noWrite.diff === "");',
+            'console.log(JSON.parse(metadataOnly.diff).changes.length === 0);',
+            'console.log(JSON.parse(metadataOnly.diff).metadataChanges.some((change) => change.path === "/metadata.txt" && "ctimeMs" in change.changes && "mtimeMs" in change.changes));',
             'console.log(fs.existsSync("/child-only.txt"));',
             'console.log(fs.readFileSync("/parent.txt", "utf8"));',
-            'const shellChild = await $`goccia --sandbox --seed /child.js --seed /parent.txt --seed /parent.txt=/shell-out/ --diff /child.js`.text();',
+            'const shellChild = await $`goccia --sandbox --seed /child.js --seed /parent.txt --seed /parent.txt=/shell-out/ --diff-metadata /child.js`.text();',
             'console.log(shellChild.includes("parent-seed"));',
             'console.log(shellChild.includes("shell-out:parent-seed"));',
             'console.log(shellChild.includes(\'"path": "/child-only.txt"\'));',
+            'console.log(shellChild.includes(\'"metadataChanges"\'));',
             'console.log(fs.existsSync("/child-only.txt"));',
           ].join("\n"),
         },
@@ -3568,6 +3715,16 @@ console.log("SandboxRunner: nested sandbox execution seeds from parent VFS witho
           ].join("\n"),
         },
         { path: "/readonly.js", text: "1;" },
+        {
+          path: "/metadata.js",
+          text: [
+            'import fs from "fs";',
+            'for (const i of Array.from({ length: 10000 }, (_, index) => index)) { Math.sqrt(i); }',
+            'const text = fs.readFileSync("/metadata.txt", "utf8");',
+            'fs.writeFileSync("/metadata.txt", text);',
+          ].join("\n"),
+        },
+        { path: "/metadata.txt", text: "metadata" },
         { path: "/parent.txt", text: "parent-seed" },
       ],
     }));
