@@ -4,33 +4,43 @@ export const BUILTINS: Builtin[] = [
   {
     name: "JSON5",
     snippet: `import { name, retries } from "./goccia.json5";
+
 import { parse as parseJSON5 } from "goccia:json5";
+const text = '{ name: "demo", retries: 3, }';
 const cfg = parseJSON5(text);
 // trailing commas, comments, unquoted keys`,
   },
   {
     name: "TOML",
     snippet: `import { server, features } from "./pkg.toml";
+
 import { parse as parseTOML } from "goccia:toml";
+const text = 'server = "api"\\nfeatures = ["cache"]';
 const cfg = parseTOML(text);`,
   },
   {
     name: "YAML",
     snippet: `import { services } from "./manifest.yaml";
+
 import { parse as parseYAML } from "goccia:yaml";
+const text = 'services:\\n  - api\\n  - worker';
 const data = parseYAML(text);
 // flow + block, anchors, multi-doc`,
   },
   {
     name: "JSONL",
     snippet: `import { "0" as firstEvent } from "./events.jsonl";
+
 import { parse as parseJSONL } from "goccia:jsonl";
+const text = '{"event":"start"}\\n{"event":"stop"}';
 const events = parseJSONL(text);`,
   },
   {
     name: "CSV",
     snippet: `import { "0" as firstRow } from "./data.csv";
+
 import { parse as parseCSV } from "goccia:csv";
+const text = 'name,price\\ncoffee,3.5';
 const rows = parseCSV(text, {
   headers: true,
 });  // → [{ name, price }, …]`,
@@ -38,7 +48,9 @@ const rows = parseCSV(text, {
   {
     name: "TSV",
     snippet: `import { "0" as firstRow } from "./data.tsv";
+
 import { parse as parseTSV } from "goccia:tsv";
+const text = 'name\\tprice\\ncoffee\\t3.5';
 const rows = parseTSV(text, {
   headers: true,
 });  // tab-separated, same shape`,
