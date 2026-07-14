@@ -97,7 +97,8 @@ uses
 
   TimingUtils,
 
-  Goccia.Temporal.TimeZone;
+  Goccia.Temporal.TimeZone,
+  Goccia.Utils;
 
 const
   SPLITMIX64_INCREMENT = QWord($9E3779B97F4A7C15);
@@ -173,7 +174,7 @@ var
 begin
   FState := FState + SPLITMIX64_INCREMENT;
   RandomBits := Int64(Mix(FState) shr 11);
-  Result := RandomBits * RANDOM_DOUBLE_SCALE;
+  Result := Int64ToDouble(RandomBits) * RANDOM_DOUBLE_SCALE;
 end;
 
 function TGocciaSeededHostRandom.Fork(
