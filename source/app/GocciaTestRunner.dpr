@@ -38,6 +38,7 @@ uses
   Goccia.ScriptLoader.Input,
   Goccia.SourcePipeline,
   Goccia.Builtins.TestingLibrary,
+  Goccia.Builtins.Testing.Snapshots,
   Goccia.CLI.JSON.Reporter,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
@@ -50,6 +51,8 @@ uses
 
   Goccia.Threading,
   Goccia.Threading.Init,
+
+  Goccia.TestRunner.SnapshotHost,
 
   FileUtils in 'units/FileUtils.pas';
 
@@ -128,6 +131,9 @@ type
     FOutputFile: TStringOption;
     FTestTimeout: TIntegerOption;
     FDescribeTimeout: TIntegerOption;
+    FUpdateSnapshots: TFlagOption;
+    FUpdateSnapshotsAlias: TFlagOption;
+    function SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
     procedure InitializeRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
     procedure WarmUpRuntime(const AEngine: TGocciaEngine);
@@ -180,6 +186,20 @@ begin
   Result.Timing.TotalTimeNanoseconds := 0;
   Result.Timing.FileName := '';
   Result.ErrorMessage := AErrorMessage;
+end;
+
+function IsContinuousIntegration: Boolean;
+  function EnvironmentFlag(const AName: string): Boolean;
+  var
+    Value: string;
+  begin
+    Value := LowerCase(Trim(GetEnvironmentVariable(AName)));
+    Result := (Value <> '') and (Value <> '0') and (Value <> 'false') and
+      (Value <> 'no');
+  end;
+begin
+  Result := EnvironmentFlag('CI') or
+    EnvironmentFlag('CONTINUOUS_INTEGRATION');
 end;
 
 function CreateDefaultScriptResult: TGocciaObjectValue;
@@ -254,6 +274,21 @@ begin
     'Per-test timeout in ms (0 disables). Marks the test TIMEOUT and continues.');
   FDescribeTimeout := AddInteger('describe-timeout',
     'Per-describe timeout in ms (0 disables). Aborts the suite and continues.');
+  FUpdateSnapshots := AddFlag('update-snapshots',
+    'Create, update, and prune snapshots');
+  FUpdateSnapshots.ShortName := 'u';
+  FUpdateSnapshotsAlias := AddFlag('update',
+    'Alias for --update-snapshots');
+end;
+
+function TTestRunnerApp.SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
+begin
+  if FUpdateSnapshots.Present or FUpdateSnapshotsAlias.Present then
+    Result := sumAll
+  else if IsContinuousIntegration then
+    Result := sumNone
+  else
+    Result := sumNew;
 end;
 
 procedure TTestRunnerApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
@@ -302,6 +337,49 @@ end;
 function TTestRunnerApp.UsageLine: string;
 begin
   Result := '[path...|-] [options]';
+end;
+
+procedure RecordSnapshotFinalizationFailure(
+  var AResult: TAggregatedTestResult; const AMessage: string);
+var
+  FailedTestsValue: TGocciaValue;
+  FailedTests: TGocciaArrayValue;
+  FileIndex, I, OldLength: Integer;
+begin
+  if not Assigned(AResult.TestResult) then
+    Exit;
+  AResult.TestResult.AssignProperty('failed',
+    TGocciaNumberLiteralValue.Create(
+      AResult.TestResult.GetProperty('failed').ToNumberLiteral.Value + 1));
+  AResult.TestResult.AssignProperty('totalRunTests',
+    TGocciaNumberLiteralValue.Create(
+      AResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value +
+      1));
+  FailedTestsValue := AResult.TestResult.GetProperty('failedTests');
+  if FailedTestsValue is TGocciaArrayValue then
+  begin
+    FailedTests := TGocciaArrayValue(FailedTestsValue);
+    FailedTests.Elements.Add(TGocciaStringLiteralValue.Create(AMessage));
+  end;
+
+  FileIndex := High(AResult.FileResults);
+  for I := 0 to High(AResult.FileResults) do
+    if Pos(AResult.FileResults[I].FileName, AMessage) > 0 then
+    begin
+      FileIndex := I;
+      Break;
+    end;
+  if FileIndex >= 0 then
+  begin
+    AResult.FileResults[FileIndex].Failed :=
+      AResult.FileResults[FileIndex].Failed + 1;
+    AResult.FileResults[FileIndex].TotalTests :=
+      AResult.FileResults[FileIndex].TotalTests + 1;
+    AResult.FileResults[FileIndex].ErrorMessage := AMessage;
+    OldLength := Length(AResult.FileResults[FileIndex].FailedTests);
+    SetLength(AResult.FileResults[FileIndex].FailedTests, OldLength + 1);
+    AResult.FileResults[FileIndex].FailedTests[OldLength] := AMessage;
+  end;
 end;
 
 procedure TTestRunnerApp.ExecuteWithPaths(const APaths: TStringList);
@@ -400,6 +478,7 @@ begin
         WriteLn(SysUtils.Format('Running %d files', [Files.Count]));
     end;
 
+    ResetPendingInlineSnapshots;
     BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
     IsParallelRun := (Files.Count > 1) and (GetJobCount(Files.Count) > 1);
     if Files.Count = 1 then
@@ -415,6 +494,13 @@ begin
       AggregatedResult := RunScriptsFromFilesParallel(Files, GetJobCount(Files.Count))
     else
       AggregatedResult := RunScriptsFromFiles(Files);
+    try
+      FlushPendingInlineSnapshots;
+    except
+      on E: Exception do
+        RecordSnapshotFinalizationFailure(AggregatedResult,
+          'Snapshot finalization failed: ' + E.Message);
+    end;
     MainMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
     if IsParallelRun then
       AggregatedResult.MemoryStats := CombineCLIJSONMemoryStats(
@@ -475,7 +561,9 @@ var
   Runtime: TGocciaRuntimeCore;
 begin
   Runtime := AttachRuntime(AEngine);
-  ApplyTestRunnerRuntimeProfile(Runtime);
+  ApplyTestRunnerRuntimeProfile(Runtime,
+    TGocciaTestRunnerSnapshotHost.Create(AEngine.SourcePath),
+    SnapshotUpdateMode);
 end;
 
 procedure TTestRunnerApp.WarmUpRuntime(const AEngine: TGocciaEngine);

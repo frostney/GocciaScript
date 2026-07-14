@@ -11,6 +11,8 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Arguments.Validator,
   Goccia.Builtins.Base,
+  Goccia.Builtins.Testing.SnapshotFormatting,
+  Goccia.Builtins.Testing.Snapshots,
   Goccia.Error,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
@@ -128,6 +130,10 @@ type
     function ToHaveProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToThrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToBeCloseTo(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToMatchSnapshot(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ToMatchInlineSnapshot(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
 
     // Mock matchers
     function ToHaveBeenCalled(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -173,6 +179,8 @@ type
     FFocusNextTest: Boolean;
     FSuppressOutput: Boolean;
     FOnTestFinishedCallbacks: TGocciaArgumentsCollection;
+    FSnapshotState: TGocciaSnapshotState;
+    FSnapshotFormatting: TGocciaSnapshotFormatting;
 
     procedure ConfigureDescribeFunction(const AFunction: TGocciaNativeFunctionValue);
     procedure ConfigureTestFunction(const AFunction: TGocciaNativeFunctionValue);
@@ -222,11 +230,45 @@ type
     procedure EndTest;
     procedure ResetTestStats;
   public
-    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+    constructor Create(const AName: string; const AScope: TGocciaScope;
+      const AThrowError: TGocciaThrowErrorCallback;
+      const ASnapshotHost: IGocciaSnapshotHost = nil;
+      const ASnapshotUpdateMode: TGocciaSnapshotUpdateMode = sumNew;
+      const ASnapshotFormatter: IGocciaSnapshotFormatter = nil);
     destructor Destroy; override;
 
     // Main expect function
     function Expect(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectAnything(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectAny(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectArrayContaining(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectObjectContaining(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectStringContaining(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectStringMatching(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectCloseTo(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectSchemaMatching(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectNotArrayContaining(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectNotObjectContaining(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectNotStringContaining(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectNotStringMatching(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectNotCloseTo(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectNotSchemaMatching(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function AddSnapshotSerializer(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
 
     // Test registration functions (don't execute immediately)
     function Describe(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -290,20 +332,167 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Evaluator,
   Goccia.Evaluator.Comparison,
+  Goccia.Execution.CallSite,
   Goccia.FetchManager,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.RegExp.Runtime,
   Goccia.Timeout,
   Goccia.Utils,
+  Goccia.Values.AsymmetricMatcher,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.Formatting,
+  Goccia.Values.HoleValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
-  Goccia.Values.SetValue;
+  Goccia.Values.SetValue,
+  Goccia.Values.SymbolValue;
+
+function SnapshotTestName(const AAssertions: TGocciaTestAssertions): string;
+begin
+  if AAssertions.FTestStats.CurrentSuiteName <> '' then
+    Result := AAssertions.FTestStats.CurrentSuiteName + ' > ' +
+      AAssertions.FTestStats.CurrentTestName
+  else
+    Result := AAssertions.FTestStats.CurrentTestName;
+end;
+
+function IsSnapshotPropertyShape(const AValue: TGocciaValue): Boolean;
+begin
+  Result := (AValue is TGocciaObjectValue) and
+    (AValue.TypeOf = 'object');
+end;
+
+function MergeSnapshotPropertyShape(const AActual,
+  AProperties: TGocciaValue): TGocciaValue;
+var
+  ActualArray, PropertiesArray, MergedArray: TGocciaArrayValue;
+  ActualObject, PropertiesObject, MergedObject: TGocciaObjectValue;
+  Entry: TPair<string, TGocciaValue>;
+  SymbolEntry: TPair<TGocciaSymbolValue, TGocciaValue>;
+  I: Integer;
+  ActualProperty: TGocciaValue;
+  MergedRoot: TGocciaTempRoot;
+begin
+  if AProperties is TGocciaAsymmetricMatcherValue then
+    Exit(AProperties);
+
+  if (AActual is TGocciaArrayValue) and
+     (AProperties is TGocciaArrayValue) then
+  begin
+    ActualArray := TGocciaArrayValue(AActual);
+    PropertiesArray := TGocciaArrayValue(AProperties);
+    MergedArray := TGocciaArrayValue.Create(nil, ActualArray.Elements.Count);
+    InitializeTempRoot(MergedRoot);
+    AddTempRootIfNeeded(MergedRoot, MergedArray);
+    try
+      for I := 0 to ActualArray.Elements.Count - 1 do
+        MergedArray.Elements.Add(ActualArray.Elements[I]);
+      for I := 0 to PropertiesArray.Elements.Count - 1 do
+      begin
+        if PropertiesArray.Elements[I] = TGocciaHoleValue.HoleValue then
+          Continue;
+        ActualProperty := ActualArray.GetElement(I);
+        MergedArray.SetElement(I, MergeSnapshotPropertyShape(ActualProperty,
+          PropertiesArray.GetElement(I)));
+      end;
+      Result := MergedArray;
+    finally
+      RemoveTempRootIfNeeded(MergedRoot);
+    end;
+    Exit;
+  end;
+
+  if (AActual is TGocciaObjectValue) and (AActual.TypeOf = 'object') and
+     (AProperties is TGocciaObjectValue) and
+     (AProperties.TypeOf = 'object') then
+  begin
+    ActualObject := TGocciaObjectValue(AActual);
+    PropertiesObject := TGocciaObjectValue(AProperties);
+    MergedObject := TGocciaObjectValue.Create;
+    InitializeTempRoot(MergedRoot);
+    AddTempRootIfNeeded(MergedRoot, MergedObject);
+    try
+      for Entry in ActualObject.GetEnumerablePropertyEntries do
+        MergedObject.AssignProperty(Entry.Key, Entry.Value);
+      for SymbolEntry in ActualObject.GetEnumerableSymbolProperties do
+        MergedObject.AssignSymbolProperty(SymbolEntry.Key, SymbolEntry.Value);
+
+      for Entry in PropertiesObject.GetEnumerablePropertyEntries do
+      begin
+        ActualProperty := ActualObject.GetProperty(Entry.Key);
+        MergedObject.AssignProperty(Entry.Key,
+          MergeSnapshotPropertyShape(ActualProperty, Entry.Value));
+      end;
+      Result := MergedObject;
+    finally
+      RemoveTempRootIfNeeded(MergedRoot);
+    end;
+    Exit;
+  end;
+
+  Result := AProperties;
+end;
+
+function StripInlineSnapshotIndentation(const AValue: string): string;
+var
+  Lines: TStringList;
+  I, J, IndentLength: Integer;
+  Normalized, Indentation: string;
+begin
+  Normalized := StringReplace(AValue, #13#10, #10, [rfReplaceAll]);
+  Normalized := StringReplace(Normalized, #13, #10, [rfReplaceAll]);
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Normalized;
+    { TStringList.Text consumes a terminal line break instead of retaining
+      the empty closing line. Top-level inline snapshots end exactly in LF,
+      so restore that structural line before applying Vitest's dedent. }
+    if (Normalized <> '') and (Normalized[Length(Normalized)] = #10) then
+      Lines.Add('');
+    if Lines.Count <= 2 then
+      Exit(Normalized);
+    if (Trim(Lines[0]) <> '') or
+       (Trim(Lines[Lines.Count - 1]) <> '') then
+      Exit(Normalized);
+
+    Indentation := '';
+    for I := 1 to Lines.Count - 2 do
+      if Trim(Lines[I]) <> '' then
+      begin
+        J := 1;
+        while (J <= Length(Lines[I])) and (Lines[I][J] in [' ', #9]) do
+          Inc(J);
+        Indentation := Copy(Lines[I], 1, J - 1);
+        Break;
+      end;
+    if Indentation = '' then
+      Exit(Normalized);
+
+    IndentLength := Length(Indentation);
+    for I := 1 to Lines.Count - 2 do
+      if Lines[I] <> '' then
+      begin
+        if Copy(Lines[I], 1, IndentLength) <> Indentation then
+          Exit(Normalized);
+        Lines[I] := Copy(Lines[I], IndentLength + 1, MaxInt);
+      end;
+    Lines[Lines.Count - 1] := '';
+
+    Result := '';
+    for I := 0 to Lines.Count - 1 do
+    begin
+      if I > 0 then
+        Result := Result + #10;
+      Result := Result + Lines[I];
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
 
 function IsNativeFunctionInstanceOf(const AObj: TGocciaObjectValue;
   const AConstructor: TGocciaNativeFunctionValue): Boolean;
@@ -670,11 +859,17 @@ begin
   DefineProperty('toHaveLength', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToHaveLength, 'toHaveLength', 1), [pfConfigurable, pfWritable]));
   DefineProperty('toHaveProperty', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(ToHaveProperty, 'toHaveProperty', 1), [pfConfigurable, pfWritable]));
+    TGocciaNativeFunctionValue.Create(ToHaveProperty, 'toHaveProperty', 2), [pfConfigurable, pfWritable]));
   DefineProperty('toThrow', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToThrow, 'toThrow', 1), [pfConfigurable, pfWritable]));
   DefineProperty('toBeCloseTo', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToBeCloseTo, 'toBeCloseTo', 2), [pfConfigurable, pfWritable]));
+  DefineProperty('toMatchSnapshot', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToMatchSnapshot, 'toMatchSnapshot', 2),
+    [pfConfigurable, pfWritable]));
+  DefineProperty('toMatchInlineSnapshot', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToMatchInlineSnapshot,
+      'toMatchInlineSnapshot', 3), [pfConfigurable, pfWritable]));
 
   // Mock matchers
   DefineProperty('toHaveBeenCalled', TGocciaPropertyDescriptorData.Create(
@@ -825,7 +1020,7 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toStrictEqual', FTestAssertions.ThrowError);
 
   Expected := AArgs.GetElement(0);
-  IsEqual := IsDeepEqual(FActualValue, Expected);
+  IsEqual := IsStrictDeepEqual(FActualValue, Expected);
 
   if FIsNegated then
     IsEqual := not IsEqual;
@@ -1442,8 +1637,10 @@ end;
 function TGocciaExpectationValue.ToHaveProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   HasProperty: Boolean;
+  PropertyName: string;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toHaveProperty', FTestAssertions.ThrowError);
+  TGocciaArgumentValidator.RequireBetween(AArgs, 1, 2, 'toHaveProperty',
+    FTestAssertions.ThrowError);
 
   if not (FActualValue is TGocciaObjectValue) then
   begin
@@ -1456,7 +1653,12 @@ begin
     Exit;
   end;
 
-  HasProperty := TGocciaObjectValue(FActualValue).HasProperty(AArgs.GetElement(0).ToStringLiteral.Value);
+  PropertyName := AArgs.GetElement(0).ToStringLiteral.Value;
+  HasProperty := TGocciaObjectValue(FActualValue).HasProperty(PropertyName);
+  if HasProperty and (AArgs.Length = 2) then
+    HasProperty := IsDeepEqual(
+      TGocciaObjectValue(FActualValue).GetProperty(PropertyName),
+      AArgs.GetElement(1));
 
   if FIsNegated then
     HasProperty := not HasProperty;
@@ -1735,6 +1937,197 @@ begin
                [FormatForDisplay(FActualValue), FormatForDisplay(Expected), Precision]));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
+end;
+
+function TGocciaExpectationValue.ToMatchSnapshot(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Properties, FormatValue, Arg: TGocciaValue;
+  Hint, Received, FailureMessage: string;
+  HasProperties, PropertyMatched, Passed: Boolean;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if FIsNegated then
+  begin
+    FTestAssertions.ThrowError(
+      'toMatchSnapshot cannot be used with "not"', 0, 0);
+    Exit;
+  end;
+  if not Assigned(FTestAssertions.FSnapshotState) then
+  begin
+    FTestAssertions.ThrowError(
+      'toMatchSnapshot is only available when a snapshot host is installed',
+      0, 0);
+    Exit;
+  end;
+
+  Properties := nil;
+  HasProperties := False;
+  Hint := '';
+  if AArgs.Length > 0 then
+  begin
+    Arg := AArgs.GetElement(0);
+    if IsSnapshotPropertyShape(Arg) or (Arg is TGocciaNullLiteralValue) then
+    begin
+      Properties := Arg;
+      HasProperties := True;
+    end
+    else if Arg is TGocciaStringLiteralValue then
+      Hint := Arg.ToStringLiteral.Value
+  end;
+  if AArgs.Length > 1 then
+  begin
+    Arg := AArgs.GetElement(1);
+    if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) and
+       Arg.ToBooleanLiteral.Value then
+      Hint := Arg.ToStringLiteral.Value;
+  end;
+
+  if HasProperties and (not (FActualValue is TGocciaObjectValue) or
+     (FActualValue.TypeOf <> 'object')) then
+  begin
+    FTestAssertions.ThrowError(
+      'Received value must be an object when the matcher has properties',
+      0, 0);
+    Exit;
+  end;
+  PropertyMatched := not HasProperties or
+    IsSnapshotPartialDeepEqual(FActualValue, Properties);
+  if PropertyMatched and HasProperties then
+    FormatValue := MergeSnapshotPropertyShape(FActualValue, Properties)
+  else
+    FormatValue := FActualValue;
+
+  AddTempRootIfNeeded(FormatValue);
+  try
+    Received := AddSnapshotLineBreaks(
+      FTestAssertions.FSnapshotFormatting.Format(FormatValue));
+  finally
+    RemoveTempRootIfNeeded(FormatValue);
+  end;
+
+  Passed := FTestAssertions.FSnapshotState.MatchExternal(
+    SnapshotTestName(FTestAssertions), Hint, Received, PropertyMatched,
+    FailureMessage);
+  if Passed then
+    FTestAssertions.AssertionPassed('toMatchSnapshot')
+  else
+    FTestAssertions.AssertionFailed('toMatchSnapshot', FailureMessage);
+end;
+
+function TGocciaExpectationValue.ToMatchInlineSnapshot(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Properties, FormatValue, Arg: TGocciaValue;
+  InlineSnapshot, Hint, Received, FailureMessage: string;
+  HasInlineSnapshot, HasProperties, PropertyMatched, Passed: Boolean;
+  SnapshotArgumentIndex: Integer;
+  CallSite: TGocciaCallSite;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if FIsNegated then
+  begin
+    FTestAssertions.ThrowError(
+      'toMatchInlineSnapshot cannot be used with "not"', 0, 0);
+    Exit;
+  end;
+  if not Assigned(FTestAssertions.FSnapshotState) then
+  begin
+    FTestAssertions.ThrowError(
+      'toMatchInlineSnapshot is only available when a snapshot host is installed',
+      0, 0);
+    Exit;
+  end;
+
+  Properties := nil;
+  HasProperties := False;
+  InlineSnapshot := '';
+  Hint := '';
+  HasInlineSnapshot := False;
+  SnapshotArgumentIndex := 0;
+
+  if AArgs.Length > 0 then
+  begin
+    Arg := AArgs.GetElement(0);
+    if IsSnapshotPropertyShape(Arg) or (Arg is TGocciaNullLiteralValue) then
+    begin
+      Properties := Arg;
+      HasProperties := True;
+      SnapshotArgumentIndex := 1;
+    end
+    else if Arg is TGocciaStringLiteralValue then
+    begin
+      InlineSnapshot := StripInlineSnapshotIndentation(
+        Arg.ToStringLiteral.Value);
+      HasInlineSnapshot := True;
+    end
+  end;
+
+  if AArgs.Length > 1 then
+  begin
+    Arg := AArgs.GetElement(1);
+    if (AArgs.GetElement(0) is TGocciaStringLiteralValue) and
+       Arg.ToBooleanLiteral.Value then
+      Hint := Arg.ToStringLiteral.Value
+    else if (Arg is TGocciaStringLiteralValue) and
+            (Arg.ToStringLiteral.Value <> '') then
+    begin
+      InlineSnapshot := StripInlineSnapshotIndentation(
+        Arg.ToStringLiteral.Value);
+      HasInlineSnapshot := True;
+      SnapshotArgumentIndex := 1;
+    end
+    else if Arg.ToBooleanLiteral.Value then
+    begin
+      FTestAssertions.ThrowError(
+        'toMatchInlineSnapshot inline snapshot must be a string', 0, 0);
+      Exit;
+    end;
+  end;
+
+  if AArgs.Length > 2 then
+  begin
+    Arg := AArgs.GetElement(2);
+    if Arg.ToBooleanLiteral.Value then
+      Hint := Arg.ToStringLiteral.Value;
+  end;
+
+  if HasProperties and (not (FActualValue is TGocciaObjectValue) or
+     (FActualValue.TypeOf <> 'object')) then
+  begin
+    FTestAssertions.ThrowError(
+      'Received value must be an object when the matcher has properties',
+      0, 0);
+    Exit;
+  end;
+  PropertyMatched := not HasProperties or
+    IsSnapshotPartialDeepEqual(FActualValue, Properties);
+  if PropertyMatched and HasProperties then
+    FormatValue := MergeSnapshotPropertyShape(FActualValue, Properties)
+  else
+    FormatValue := FActualValue;
+
+  AddTempRootIfNeeded(FormatValue);
+  try
+    Received := AddSnapshotLineBreaks(
+      FTestAssertions.FSnapshotFormatting.Format(FormatValue));
+  finally
+    RemoveTempRootIfNeeded(FormatValue);
+  end;
+
+  FillChar(CallSite, SizeOf(CallSite), 0);
+  CurrentGocciaCallSite(CallSite);
+  Passed := FTestAssertions.FSnapshotState.MatchInline(
+    SnapshotTestName(FTestAssertions), Hint, Received, InlineSnapshot,
+    HasInlineSnapshot, PropertyMatched, CallSite.FilePath,
+    CallSite.Line, CallSite.Column,
+    SnapshotArgumentIndex, FailureMessage);
+  if Passed then
+    FTestAssertions.AssertionPassed('toMatchInlineSnapshot')
+  else
+    FTestAssertions.AssertionFailed('toMatchInlineSnapshot', FailureMessage);
 end;
 
 function TGocciaExpectationValue.ToHaveBeenCalled(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -2371,10 +2764,15 @@ end;
 
 { TGocciaTestAssertions }
 
-constructor TGocciaTestAssertions.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+constructor TGocciaTestAssertions.Create(const AName: string;
+  const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback;
+  const ASnapshotHost: IGocciaSnapshotHost;
+  const ASnapshotUpdateMode: TGocciaSnapshotUpdateMode;
+  const ASnapshotFormatter: IGocciaSnapshotFormatter);
 var
   GlobalObject: TGocciaObjectValue;
   ExpectFunction: TGocciaNativeFunctionValue;
+  ExpectNotObject: TGocciaObjectValue;
   DescribeFunction: TGocciaNativeFunctionValue;
   TestFunction: TGocciaNativeFunctionValue;
   ItFunction: TGocciaNativeFunctionValue;
@@ -2402,17 +2800,58 @@ begin
   FRootSuite := TGocciaTestSuite.Create(nil, '', nil, nil);
   FCurrentRegistrationSuite := FRootSuite;
   FOnTestFinishedCallbacks := TGocciaArgumentsCollection.Create;
+  FSnapshotFormatting := TGocciaSnapshotFormatting.Create(ASnapshotFormatter);
+  if Assigned(ASnapshotHost) then
+    FSnapshotState := TGocciaSnapshotState.Create(ASnapshotHost,
+      ASnapshotUpdateMode)
+  else
+    FSnapshotState := nil;
   ResetTestStats;
 
   if AScope.ThisValue is TGocciaObjectValue then
     GlobalObject := TGocciaObjectValue(AScope.ThisValue)
   else
     GlobalObject := nil;
+  FSnapshotFormatting.CaptureDateIntrinsics(GlobalObject);
 
   // Public testing helpers are global object properties, not lexical bindings.
   // Test262 scripts intentionally declare vars named expect/test/it, and those
   // var globals must be able to shadow the runner helpers.
   ExpectFunction := TGocciaNativeFunctionValue.Create(Expect, 'expect', 1);
+  ExpectFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectAnything, 'anything', 0));
+  ExpectFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectAny, 'any', 1));
+  ExpectFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectArrayContaining, 'arrayContaining', 1));
+  ExpectFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectObjectContaining, 'objectContaining', 1));
+  ExpectFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectStringContaining, 'stringContaining', 1));
+  ExpectFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectStringMatching, 'stringMatching', 1));
+  ExpectFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectCloseTo, 'closeTo', 2));
+  ExpectFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectSchemaMatching, 'schemaMatching', 1));
+  ExpectFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    AddSnapshotSerializer, 'addSnapshotSerializer', 1));
+
+  ExpectNotObject := TGocciaObjectValue.Create;
+  ExpectNotObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectNotArrayContaining, 'arrayContaining', 1));
+  ExpectNotObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectNotObjectContaining, 'objectContaining', 1));
+  ExpectNotObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectNotStringContaining, 'stringContaining', 1));
+  ExpectNotObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectNotStringMatching, 'stringMatching', 1));
+  ExpectNotObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectNotCloseTo, 'closeTo', 2));
+  ExpectNotObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectNotSchemaMatching, 'schemaMatching', 1));
+  ExpectFunction.DefineProperty('not', TGocciaPropertyDescriptorData.Create(
+    ExpectNotObject, [pfConfigurable]));
   RegisterPublicGlobal('expect', ExpectFunction);
 
   // Create describe function with skip/skipIf/runIf properties
@@ -2467,7 +2906,14 @@ begin
 end;
 
 destructor TGocciaTestAssertions.Destroy;
+var
+  I: Integer;
 begin
+  if Assigned(FSnapshotFormatting) then
+    for I := 0 to FSnapshotFormatting.Serializers.Count - 1 do
+      RemoveTempRootIfNeeded(FSnapshotFormatting.Serializers.SerializerAt(I));
+  FSnapshotState.Free;
+  FSnapshotFormatting.Free;
   RemoveCollectionRoots(FOnTestFinishedCallbacks);
   FOnTestFinishedCallbacks.Free;
   FRootSuite.Free;
@@ -2933,6 +3379,8 @@ begin
     if TestCase.IsTodo then
     begin
       FTestStats.CurrentTestIsSkipped := True;
+      if Assigned(FSnapshotState) then
+        FSnapshotState.PreserveTestSnapshots(SnapshotTestName(Self));
       if not FSuppressOutput then
       begin
         if FTestStats.CurrentSuiteName <> '' then
@@ -2946,6 +3394,8 @@ begin
       (AHasFocusedEntries and not IsTestSelected(TestCase, True)) then
     begin
       FTestStats.CurrentTestIsSkipped := True;
+      if Assigned(FSnapshotState) then
+        FSnapshotState.PreserveTestSnapshots(SnapshotTestName(Self));
       if not FSuppressOutput then
       begin
         if FTestStats.CurrentSuiteName <> '' then
@@ -3291,6 +3741,120 @@ begin
   Result := TGocciaExpectationValue.Create(AArgs.GetElement(0), Self);
 end;
 
+function TGocciaTestAssertions.ExpectAnything(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaAnythingMatcherValue.Create;
+end;
+
+function TGocciaTestAssertions.ExpectAny(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaAnyMatcherValue.Create(AArgs.GetElement(0));
+end;
+
+function TGocciaTestAssertions.ExpectArrayContaining(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaArrayContainingMatcherValue.Create(AArgs.GetElement(0));
+end;
+
+function TGocciaTestAssertions.ExpectObjectContaining(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaObjectContainingMatcherValue.Create(AArgs.GetElement(0));
+end;
+
+function TGocciaTestAssertions.ExpectStringContaining(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringContainingMatcherValue.Create(AArgs.GetElement(0));
+end;
+
+function TGocciaTestAssertions.ExpectStringMatching(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringMatchingMatcherValue.Create(AArgs.GetElement(0));
+end;
+
+function TGocciaTestAssertions.ExpectCloseTo(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaCloseToMatcherValue.Create(AArgs.GetElement(0),
+    AArgs.GetElement(1));
+end;
+
+function TGocciaTestAssertions.ExpectSchemaMatching(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaSchemaMatchingMatcherValue.Create(AArgs.GetElement(0));
+end;
+
+function TGocciaTestAssertions.ExpectNotArrayContaining(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaArrayContainingMatcherValue.Create(AArgs.GetElement(0), True);
+end;
+
+function TGocciaTestAssertions.ExpectNotObjectContaining(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaObjectContainingMatcherValue.Create(AArgs.GetElement(0), True);
+end;
+
+function TGocciaTestAssertions.ExpectNotStringContaining(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringContainingMatcherValue.Create(AArgs.GetElement(0), True);
+end;
+
+function TGocciaTestAssertions.ExpectNotStringMatching(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringMatchingMatcherValue.Create(AArgs.GetElement(0), True);
+end;
+
+function TGocciaTestAssertions.ExpectNotCloseTo(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaCloseToMatcherValue.Create(AArgs.GetElement(0),
+    AArgs.GetElement(1), True);
+end;
+
+function TGocciaTestAssertions.ExpectNotSchemaMatching(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaSchemaMatchingMatcherValue.Create(AArgs.GetElement(0), True);
+end;
+
+function TGocciaTestAssertions.AddSnapshotSerializer(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Serializer: TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1,
+    'expect.addSnapshotSerializer', ThrowError);
+  Serializer := AArgs.GetElement(0);
+  FSnapshotFormatting.Serializers.Add(Serializer);
+  AddTempRootIfNeeded(Serializer);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
 function TGocciaTestAssertions.MockFunction(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Impl: TGocciaValue;
@@ -3567,6 +4131,7 @@ var
   Val: TGocciaValue;
   HasFocusedEntries: Boolean;
   ShouldStop: Boolean;
+  SnapshotErrors: TStringList;
 begin
   ResetTestStats;
   StartTime := GetNanoseconds;
@@ -3605,6 +4170,28 @@ begin
     ShouldStop := False;
     ExecuteSuite(FRootSuite, HasFocusedEntries, ExitOnFirstFailure,
       FailedTestDetails, ShouldStop);
+
+    if Assigned(FSnapshotState) then
+    begin
+      SnapshotErrors := TStringList.Create;
+      try
+        try
+          FSnapshotState.Finish(SnapshotErrors, not ShouldStop);
+        except
+          on E: Exception do
+            SnapshotErrors.Add('Snapshot finalization failed: ' + E.Message);
+        end;
+        if SnapshotErrors.Count > 0 then
+        begin
+          Inc(FTestStats.TotalTests);
+          Inc(FTestStats.FailedTests);
+          for I := 0 to SnapshotErrors.Count - 1 do
+            FailedTestDetails.Add(SnapshotErrors[I]);
+        end;
+      finally
+        SnapshotErrors.Free;
+      end;
+    end;
 
     CollectSuiteNames(FRootSuite, SuiteNames);
 

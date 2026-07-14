@@ -2035,6 +2035,405 @@ console.log("Loader: coverage --output=json not corrupted...");
 // GocciaTestRunner
 // ============================================================================
 
+console.log("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + bytecode)...");
+{
+  const tmp = makeTmp();
+  const localEnv = {
+    ...process.env,
+    CI: "",
+    CONTINUOUS_INTEGRATION: "",
+    BUILD_NUMBER: "",
+    RUN_ID: "",
+  };
+  const ciEnv = { ...localEnv, CI: "1" };
+  const run = (args: string[], env = localEnv) => Bun.spawnSync(
+    [resolve(TESTRUNNER), ...args, "--no-progress", "--no-results", "--silent"],
+    { stdout: "pipe", stderr: "pipe", env },
+  );
+
+  try {
+    const external = join(tmp, "external.test.js");
+    const snapshot = join(tmp, "__snapshots__", "external.test.js.snap");
+    const externalSource = [
+      'describe("snapshot parity", () => {',
+      '  test("external values", () => {',
+      '    expect({ z: 1, a: [true, "x"] }).toMatchSnapshot("object");',
+      '  });',
+      '  test("property shape", () => {',
+      '    const key = Symbol("key");',
+      '    expect({ id: 42, name: "Ada", [key]: 1 }).toMatchSnapshot({ id: expect.any(Number), [key]: 2 }, "shape");',
+      '  });',
+      '  test("inherited property shape", () => {',
+      '    const received = Object.create({ inherited: "value" });',
+      '    received.own = 1;',
+      '    expect(received).toMatchSnapshot({ inherited: expect.any(String) });',
+      '  });',
+      '  test("primitive properties argument", () => {',
+      '    expect({ value: 1 }).toMatchSnapshot(42);',
+      '  });',
+      '  test("sparse property shape", () => {',
+      '    expect([undefined]).toMatchSnapshot([,]);',
+      '  });',
+      '  test("callable property shape", () => {',
+      '    const fn = () => {};',
+      '    expect({ fn }).toMatchSnapshot({ fn });',
+      '  });',
+      '  test("function property shape rejection", () => {',
+      '    const fn = () => {};',
+      '    fn.value = 1;',
+      '    expect(() => expect(fn).toMatchSnapshot({ value: 1 })).toThrow("Received value must be an object");',
+      '    expect(() => expect(fn).toMatchInlineSnapshot({ value: 1 }, `ignored`)).toThrow("Received value must be an object");',
+      '  });',
+      '  test("special values", () => {',
+      '    const date = new Date(0);',
+      '    date.toISOString = () => "instance spoofed";',
+      '    Date.prototype.toISOString = () => "prototype spoofed";',
+      '    const coercedInvalid = new Date(0);',
+      '    coercedInvalid.valueOf = () => NaN;',
+      '    Goccia.gc();',
+      '    expect({ boxed: new String("ab"), coercedInvalid, date, invalid: new Date(NaN) }).toMatchSnapshot();',
+      '  });',
+      '  test("custom serializer", () => {',
+      '    expect.addSnapshotSerializer({',
+      '      test(value) { return value && value.kind === "point"; },',
+      '      serialize(value, config, indentation, depth, refs, printer) {',
+      '        if (value.child) {',
+      '          const recursiveConfig = { ...config, plugins: config.plugins.slice(1) };',
+      '          return `Point(${config.plugins.length}; ${printer(value.child, recursiveConfig, indentation, depth, refs)})`;',
+      '        }',
+      '        return `Point(${value.x}, ${value.y})`;',
+      '      },',
+      '    });',
+      '    expect({ kind: "point", x: 2, y: 3 }).toMatchSnapshot("serializer");',
+      '    expect({ kind: "point", child: { kind: "point", x: 9 } }).toMatchSnapshot("serializer recursion");',
+      '  });',
+      '  test("serializer validation is lazy", () => {',
+      '    expect.addSnapshotSerializer(42);',
+      '    expect(true).toBe(true);',
+      '  });',
+      '});',
+      '',
+    ].join("\n");
+    writeFileSync(external, externalSource);
+
+    let proc = run([external]);
+    if (proc.exitCode !== 0)
+      throw new Error(`Snapshot creation failed: ${proc.stdout}${proc.stderr}`);
+    const expectedSnapshot = [
+      '// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html',
+      '',
+      'exports[`snapshot parity > callable property shape 1`] = `',
+      '{',
+      '  "fn": [Function],',
+      '}',
+      '`;',
+      '',
+      'exports[`snapshot parity > custom serializer > serializer 1`] = `Point(2, 3)`;',
+      '',
+      'exports[`snapshot parity > custom serializer > serializer recursion 1`] = `',
+      'Point(8; {',
+      '  "kind": "point",',
+      '  "x": 9,',
+      '})',
+      '`;',
+      '',
+      'exports[`snapshot parity > external values > object 1`] = `',
+      '{',
+      '  "a": [',
+      '    true,',
+      '    "x",',
+      '  ],',
+      '  "z": 1,',
+      '}',
+      '`;',
+      '',
+      'exports[`snapshot parity > inherited property shape 1`] = `',
+      '{',
+      '  "inherited": Any<String>,',
+      '  "own": 1,',
+      '}',
+      '`;',
+      '',
+      'exports[`snapshot parity > primitive properties argument 1`] = `',
+      '{',
+      '  "value": 1,',
+      '}',
+      '`;',
+      '',
+      'exports[`snapshot parity > property shape > shape 1`] = `',
+      '{',
+      '  "id": Any<Number>,',
+      '  "name": "Ada",',
+      '  Symbol(key): 1,',
+      '}',
+      '`;',
+      '',
+      'exports[`snapshot parity > sparse property shape 1`] = `',
+      '[',
+      '  undefined,',
+      ']',
+      '`;',
+      '',
+      'exports[`snapshot parity > special values 1`] = `',
+      '{',
+      '  "boxed": String {',
+      '    "0": "a",',
+      '    "1": "b",',
+      '  },',
+      '  "coercedInvalid": Date { NaN },',
+      '  "date": 1970-01-01T00:00:00.000Z,',
+      '  "invalid": Date { NaN },',
+      '}',
+      '`;',
+      '',
+    ].join("\n");
+    if (readFileSync(snapshot, "utf-8") !== expectedSnapshot)
+      throw new Error(`External snapshot formatting mismatch:\n${readFileSync(snapshot, "utf-8")}`);
+
+    proc = run([external, "--mode=bytecode"]);
+    if (proc.exitCode !== 0)
+      throw new Error(`Bytecode snapshot comparison failed: ${proc.stdout}${proc.stderr}`);
+
+    writeFileSync(external, externalSource.replace('z: 1', 'z: 2'));
+    proc = run([external]);
+    if (proc.exitCode === 0)
+      throw new Error("Snapshot mismatch should fail without update mode");
+    if (!readFileSync(snapshot, "utf-8").includes('"z": 1'))
+      throw new Error("Snapshot mismatch should not write without update mode");
+
+    proc = run([external, "--mode=bytecode", "--update"]);
+    if (proc.exitCode !== 0 || !readFileSync(snapshot, "utf-8").includes('"z": 2'))
+      throw new Error(`Snapshot --update alias failed: ${proc.stdout}${proc.stderr}`);
+
+    const withoutSerializer = externalSource
+      .replace('z: 1', 'z: 2')
+      .split('  test("custom serializer"')[0] + '});\n';
+    writeFileSync(external, withoutSerializer);
+    proc = run([external]);
+    if (proc.exitCode !== 0 || !readFileSync(snapshot, "utf-8").includes('custom serializer'))
+      throw new Error("Local obsolete snapshots should be retained without failing");
+    proc = run([external], ciEnv);
+    if (proc.exitCode === 0)
+      throw new Error("CI should fail on obsolete snapshots");
+    proc = run([external, "-u"]);
+    if (proc.exitCode !== 0 || readFileSync(snapshot, "utf-8").includes('custom serializer'))
+      throw new Error("-u should prune obsolete snapshots");
+
+    const skipped = join(tmp, "skipped.test.js");
+    const skippedSnapshot = join(tmp, "__snapshots__", "skipped.test.js.snap");
+    writeFileSync(skipped, 'test("kept while skipped", () => expect("value").toMatchSnapshot());\n');
+    proc = run([skipped]);
+    if (proc.exitCode !== 0 || !existsSync(skippedSnapshot))
+      throw new Error("Skipped snapshot setup failed");
+    writeFileSync(skipped, 'test.skip("kept while skipped", () => expect("value").toMatchSnapshot());\n');
+    proc = run([skipped, "-u"]);
+    if (proc.exitCode !== 0 || !existsSync(skippedSnapshot) || !readFileSync(skippedSnapshot, "utf-8").includes('kept while skipped'))
+      throw new Error("-u should preserve snapshots belonging to skipped tests");
+
+    const incomplete = join(tmp, "incomplete.test.js");
+    const incompleteSnapshot = join(tmp, "__snapshots__", "incomplete.test.js.snap");
+    writeFileSync(incomplete, [
+      'test("first", () => expect("first").toMatchSnapshot());',
+      'test("second", () => expect("second").toMatchSnapshot());',
+      '',
+    ].join("\n"));
+    proc = run([incomplete]);
+    if (proc.exitCode !== 0 || !readFileSync(incompleteSnapshot, "utf-8").includes('second 1'))
+      throw new Error("Incomplete snapshot setup failed");
+    writeFileSync(incomplete, [
+      'test("first", () => expect({ value: 1 }).toMatchSnapshot({ value: 2 }));',
+      'test("second", () => expect("second").toMatchSnapshot());',
+      '',
+    ].join("\n"));
+    proc = run([incomplete, "-u", "--exit-on-first-failure"]);
+    if (proc.exitCode === 0 || !readFileSync(incompleteSnapshot, "utf-8").includes('second 1'))
+      throw new Error("An incomplete -u run should preserve unchecked snapshots");
+
+    const empty = join(tmp, "empty.test.js");
+    const emptySnapshot = join(tmp, "__snapshots__", "empty.test.js.snap");
+    writeFileSync(empty, 'test("no snapshot", () => expect(true).toBe(true));\n');
+    writeFileSync(emptySnapshot, '// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html\n');
+    proc = run([empty, "-u"]);
+    if (proc.exitCode !== 0 || existsSync(emptySnapshot))
+      throw new Error("-u should delete an existing empty snapshot file");
+
+    const missing = join(tmp, "missing.test.js");
+    const missingSnapshot = join(tmp, "__snapshots__", "missing.test.js.snap");
+    writeFileSync(missing, 'test("missing", () => expect("value").toMatchSnapshot());\n');
+    proc = run([missing], ciEnv);
+    if (proc.exitCode === 0 || existsSync(missingSnapshot))
+      throw new Error("CI should fail missing snapshots without writing them");
+
+    const inline = join(tmp, "inline.test.js");
+    writeFileSync(inline, [
+      'test("scalar inline", () => {',
+      '  expect("hello").toMatchInlineSnapshot();',
+      '});',
+      '',
+      'test("multiline inline", () => {',
+      '  expect({ b: 2, a: 1 }).toMatchInlineSnapshot();',
+      '});',
+      '',
+      'test("property inline", () => {',
+      '  expect({ id: 42, name: "Ada" }).toMatchInlineSnapshot({ id: expect.any(Number) });',
+      '});',
+      '',
+    ].join("\n"));
+    proc = run([inline]);
+    if (proc.exitCode !== 0)
+      throw new Error(`Inline snapshot insertion failed: ${proc.stdout}${proc.stderr}`);
+    const expectedInline = [
+      'test("scalar inline", () => {',
+      '  expect("hello").toMatchInlineSnapshot(`"hello"`);',
+      '});',
+      '',
+      'test("multiline inline", () => {',
+      '  expect({ b: 2, a: 1 }).toMatchInlineSnapshot(`',
+      '    {',
+      '      "a": 1,',
+      '      "b": 2,',
+      '    }',
+      '  `);',
+      '});',
+      '',
+      'test("property inline", () => {',
+      '  expect({ id: 42, name: "Ada" }).toMatchInlineSnapshot({ id: expect.any(Number) }, `',
+      '    {',
+      '      "id": Any<Number>,',
+      '      "name": "Ada",',
+      '    }',
+      '  `);',
+      '});',
+      '',
+    ].join("\n");
+    if (readFileSync(inline, "utf-8") !== expectedInline)
+      throw new Error(`Inline snapshot formatting mismatch:\n${readFileSync(inline, "utf-8")}`);
+    proc = run([inline, "--mode=bytecode"]);
+    if (proc.exitCode !== 0)
+      throw new Error(`Bytecode inline comparison failed: ${proc.stdout}${proc.stderr}`);
+
+    writeFileSync(inline, expectedInline.replace('`"hello"`', '`"wrong"`'));
+    proc = run([inline, "--mode=bytecode", "--update-snapshots"]);
+    if (proc.exitCode !== 0 || readFileSync(inline, "utf-8") !== expectedInline)
+      throw new Error(`Bytecode inline update failed: ${proc.stdout}${proc.stderr}`);
+
+    const bytecodeCreate = join(tmp, "inline-bytecode-create.test.js");
+    writeFileSync(bytecodeCreate, [
+      'test("bytecode creates after matcher text in string", () => expect("toMatchInlineSnapshot();created").toMatchInlineSnapshot());',
+      'test("bytecode creates after method semicolon", () => expect({ method() { const value = 1; return value; } }).toMatchInlineSnapshot());',
+      '',
+    ].join("\n"));
+    proc = run([bytecodeCreate, "--mode=bytecode"]);
+    if (proc.exitCode !== 0 || !readFileSync(bytecodeCreate, "utf-8").includes('toMatchInlineSnapshot(`"toMatchInlineSnapshot();created"`)') || !readFileSync(bytecodeCreate, "utf-8").includes('"method": [Function]'))
+      throw new Error(`Bytecode inline creation failed: ${proc.stdout}${proc.stderr}\n${readFileSync(bytecodeCreate, "utf-8")}`);
+    proc = run([bytecodeCreate, "--mode=bytecode"]);
+    if (proc.exitCode !== 0)
+      throw new Error(`Rewritten bytecode inline snapshots should parse and compare: ${proc.stdout}${proc.stderr}`);
+
+    const helper = join(tmp, "inline-helper.js");
+    const leftEntry = join(tmp, "inline-left.test.js");
+    const rightEntry = join(tmp, "inline-right.test.js");
+    writeFileSync(helper, [
+      'export const matchLeft = () => {',
+      '  expect({ side: "left", nested: [1, 2] }).toMatchInlineSnapshot();',
+      '};',
+      '',
+      'export const matchRight = () => {',
+      '  expect({ side: "right", nested: [3, 4] }).toMatchInlineSnapshot();',
+      '};',
+      '',
+    ].join("\n"));
+    writeFileSync(leftEntry, [
+      'import { matchLeft } from "./inline-helper.js";',
+      'test("left helper", () => matchLeft());',
+      '',
+    ].join("\n"));
+    writeFileSync(rightEntry, [
+      'import { matchRight } from "./inline-helper.js";',
+      'test("right helper", () => matchRight());',
+      '',
+    ].join("\n"));
+    proc = run([leftEntry, rightEntry, "--jobs=2", "--mode=bytecode"]);
+    const helperSource = readFileSync(helper, "utf-8");
+    if (proc.exitCode !== 0 || !helperSource.includes('"side": "left"') || !helperSource.includes('"side": "right"'))
+      throw new Error(`Parallel imported inline snapshot update failed: ${proc.stdout}${proc.stderr}\n${helperSource}`);
+    proc = run([leftEntry, rightEntry, "--jobs=2", "--mode=bytecode"]);
+    if (proc.exitCode !== 0)
+      throw new Error(`Rewritten imported inline snapshots should compare: ${proc.stdout}${proc.stderr}`);
+
+    const conflictingHelper = join(tmp, "inline-conflict-helper.js");
+    const conflictingLeft = join(tmp, "inline-conflict-left.test.js");
+    const conflictingRight = join(tmp, "inline-conflict-right.test.js");
+    const conflictingSource = 'export const match = value => expect(value).toMatchInlineSnapshot();\n';
+    writeFileSync(conflictingHelper, conflictingSource);
+    writeFileSync(conflictingLeft, [
+      'import { match } from "./inline-conflict-helper.js";',
+      'test("left conflict", () => match("left"));',
+      '',
+    ].join("\n"));
+    writeFileSync(conflictingRight, [
+      'import { match } from "./inline-conflict-helper.js";',
+      'test("right conflict", () => match("right"));',
+      '',
+    ].join("\n"));
+    proc = run([conflictingLeft, conflictingRight, "--jobs=2", "--mode=bytecode"]);
+    if (proc.exitCode === 0 || readFileSync(conflictingHelper, "utf-8") !== conflictingSource)
+      throw new Error(`Conflicting shared inline snapshots should fail without writing: ${proc.stdout}${proc.stderr}`);
+
+    const multifileExternal = join(tmp, "snapshot-multi.test.js");
+    writeFileSync(multifileExternal, [
+      'test("part one", () => expect("one").toMatchSnapshot());',
+      '---',
+      'test("part two", () => expect("two").toMatchSnapshot());',
+      '',
+    ].join("\n"));
+    proc = run([multifileExternal, "--multifile", "--jobs=1"]);
+    const multifilePartOneSnapshot = join(tmp, "__snapshots__", "snapshot-multi.test[part1].js.snap");
+    const multifilePartTwoSnapshot = join(tmp, "__snapshots__", "snapshot-multi.test[part2].js.snap");
+    if (proc.exitCode !== 0 || !existsSync(multifilePartOneSnapshot) || !existsSync(multifilePartTwoSnapshot))
+      throw new Error(`Multifile external snapshots failed: ${proc.stdout}${proc.stderr}`);
+
+    const multifileInline = join(tmp, "inline-multi.test.js");
+    writeFileSync(multifileInline, [
+      'test("inline part one", () => expect({ part: "one", nested: [1, 2] }).toMatchInlineSnapshot());',
+      '---',
+      'test("inline part two", () => expect({ part: "two", nested: [3, 4] }).toMatchInlineSnapshot());',
+      '',
+    ].join("\n"));
+    proc = run([multifileInline, "--multifile", "--jobs=2", "--mode=bytecode"]);
+    const multifileInlineSource = readFileSync(multifileInline, "utf-8");
+    if (proc.exitCode !== 0 || !multifileInlineSource.includes('"part": "one"') || !multifileInlineSource.includes('"part": "two"') || !multifileInlineSource.includes("\n---\n"))
+      throw new Error(`Multifile inline snapshots failed: ${proc.stdout}${proc.stderr}\n${multifileInlineSource}`);
+    proc = run([multifileInline, "--multifile", "--jobs=2", "--mode=bytecode"]);
+    if (proc.exitCode !== 0)
+      throw new Error(`Rewritten multifile inline snapshots should compare: ${proc.stdout}${proc.stderr}`);
+
+    const bracketed = join(tmp, "literal.test[part1].js");
+    writeFileSync(bracketed, 'test("literal bracket", () => expect({ value: 1, nested: [2, 3] }).toMatchInlineSnapshot());\n');
+    proc = run([bracketed, "--mode=bytecode"]);
+    if (proc.exitCode !== 0 || !readFileSync(bracketed, "utf-8").includes('"nested": ['))
+      throw new Error(`A real bracketed filename should not be treated as a multifile section: ${proc.stdout}${proc.stderr}`);
+    proc = run([bracketed, "--mode=bytecode"]);
+    if (proc.exitCode !== 0)
+      throw new Error(`A top-level multiline bracketed snapshot should compare on rerun: ${proc.stdout}${proc.stderr}`);
+
+    const stdinExternal = Bun.spawnSync(
+      [resolve(TESTRUNNER), "--no-progress", "--no-results", "--silent"],
+      { stdin: new Blob(['test("stdin", () => expect(1).toMatchSnapshot());\n']), stdout: "pipe", stderr: "pipe", env: localEnv },
+    );
+    if (stdinExternal.exitCode === 0)
+      throw new Error("External snapshots from stdin should fail");
+    const stdinInline = Bun.spawnSync(
+      [resolve(TESTRUNNER), "--mode=bytecode", "--no-progress", "--no-results", "--silent"],
+      { stdin: new Blob(['test("stdin", () => expect(1).toMatchInlineSnapshot(`1`));\n']), stdout: "pipe", stderr: "pipe", env: localEnv },
+    );
+    if (stdinInline.exitCode !== 0)
+      throw new Error(`Existing inline snapshots from stdin should compare: ${stdinInline.stdout}${stdinInline.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("TestRunner: JSON multi-file structure...");
 {
   const tmp = makeTmp();
