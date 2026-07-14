@@ -412,6 +412,7 @@ begin
 
   AllUnitFiles.AddStrings(FindAllFiles('source/units', '.pas'));
   AllUnitFiles.AddStrings(FindAllFiles('source/shared', '.pas'));
+  AllUnitFiles.AddStrings(FindAllFiles('source/app', '.pas'));
 
   for K := 0 to AllUnitFiles.Count - 1 do
   begin

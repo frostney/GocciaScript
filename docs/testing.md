@@ -307,13 +307,16 @@ any write, and the stored value replaces shaped fields with their asymmetric
 matcher descriptions. Snapshot shapes support `expect.anything`, `expect.any`,
 `expect.closeTo`, `expect.arrayContaining`, `expect.objectContaining`,
 `expect.stringContaining`, `expect.stringMatching`, and
-`expect.schemaMatching`, including their supported `expect.not` forms. Snapshot
+`expect.schemaMatching`, plus `expect.toBeOneOf`, `expect.toSatisfy`,
+`expect.toBeFasterThan`, and `expect.toBeSlowerThan`, including their supported
+`expect.not` forms. Snapshot
 assertions themselves do not support `.not`.
 
 Local runs create missing snapshots. Existing mismatches fail until the runner
 is invoked with `-u`, `--update`, or `--update-snapshots`; update mode also
-prunes obsolete entries. Environments with `CI` or `CONTINUOUS_INTEGRATION`
-set to a truthy value do not write snapshots and fail on
+prunes obsolete entries. Environments detected as CI by Vitest's `std-env`
+provider conventions—including GitHub Actions, GitLab, TeamCity, Buildkite,
+CircleCI, `CI`, and `CONTINUOUS_INTEGRATION`—do not write snapshots and fail on
 missing, mismatched, or obsolete entries. External snapshots are unavailable
 for stdin input. Existing inline snapshots can be compared from stdin, but they
 cannot be created or updated there.

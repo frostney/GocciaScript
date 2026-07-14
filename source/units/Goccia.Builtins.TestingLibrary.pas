@@ -255,6 +255,14 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     function ExpectSchemaMatching(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectToBeOneOf(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectToSatisfy(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectToBeFasterThan(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectToBeSlowerThan(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     function ExpectNotArrayContaining(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function ExpectNotObjectContaining(const AArgs: TGocciaArgumentsCollection;
@@ -266,6 +274,14 @@ type
     function ExpectNotCloseTo(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function ExpectNotSchemaMatching(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectNotToBeOneOf(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectNotToSatisfy(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectNotToBeFasterThan(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ExpectNotToBeSlowerThan(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function AddSnapshotSerializer(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -2835,6 +2851,14 @@ begin
   ExpectFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
     ExpectSchemaMatching, 'schemaMatching', 1));
   ExpectFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectToBeOneOf, 'toBeOneOf', 1));
+  ExpectFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectToSatisfy, 'toSatisfy', 2));
+  ExpectFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectToBeFasterThan, 'toBeFasterThan', 2));
+  ExpectFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectToBeSlowerThan, 'toBeSlowerThan', 2));
+  ExpectFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
     AddSnapshotSerializer, 'addSnapshotSerializer', 1));
 
   ExpectNotObject := TGocciaObjectValue.Create;
@@ -2850,6 +2874,14 @@ begin
     ExpectNotCloseTo, 'closeTo', 2));
   ExpectNotObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
     ExpectNotSchemaMatching, 'schemaMatching', 1));
+  ExpectNotObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectNotToBeOneOf, 'toBeOneOf', 1));
+  ExpectNotObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectNotToSatisfy, 'toSatisfy', 2));
+  ExpectNotObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectNotToBeFasterThan, 'toBeFasterThan', 2));
+  ExpectNotObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    ExpectNotToBeSlowerThan, 'toBeSlowerThan', 2));
   ExpectFunction.DefineProperty('not', TGocciaPropertyDescriptorData.Create(
     ExpectNotObject, [pfConfigurable]));
   RegisterPublicGlobal('expect', ExpectFunction);
@@ -3798,6 +3830,36 @@ begin
   Result := TGocciaSchemaMatchingMatcherValue.Create(AArgs.GetElement(0));
 end;
 
+function TGocciaTestAssertions.ExpectToBeOneOf(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaOneOfMatcherValue.Create(AArgs.GetElement(0));
+end;
+
+function TGocciaTestAssertions.ExpectToSatisfy(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaSatisfyMatcherValue.Create(AArgs.GetElement(0));
+end;
+
+function TGocciaTestAssertions.ExpectToBeFasterThan(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaBenchmarkMatcherValue.Create(AArgs.GetElement(0),
+    AArgs.GetElement(1), bcFaster);
+end;
+
+function TGocciaTestAssertions.ExpectToBeSlowerThan(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaBenchmarkMatcherValue.Create(AArgs.GetElement(0),
+    AArgs.GetElement(1), bcSlower);
+end;
+
 function TGocciaTestAssertions.ExpectNotArrayContaining(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
@@ -3839,6 +3901,36 @@ function TGocciaTestAssertions.ExpectNotSchemaMatching(
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaSchemaMatchingMatcherValue.Create(AArgs.GetElement(0), True);
+end;
+
+function TGocciaTestAssertions.ExpectNotToBeOneOf(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaOneOfMatcherValue.Create(AArgs.GetElement(0), True);
+end;
+
+function TGocciaTestAssertions.ExpectNotToSatisfy(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaSatisfyMatcherValue.Create(AArgs.GetElement(0), True);
+end;
+
+function TGocciaTestAssertions.ExpectNotToBeFasterThan(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaBenchmarkMatcherValue.Create(AArgs.GetElement(0),
+    AArgs.GetElement(1), bcFaster, True);
+end;
+
+function TGocciaTestAssertions.ExpectNotToBeSlowerThan(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaBenchmarkMatcherValue.Create(AArgs.GetElement(0),
+    AArgs.GetElement(1), bcSlower, True);
 end;
 
 function TGocciaTestAssertions.AddSnapshotSerializer(

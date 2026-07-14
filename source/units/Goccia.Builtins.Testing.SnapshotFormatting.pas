@@ -840,6 +840,12 @@ begin
   for I := 0 to LengthValue - 1 do
   begin
     Buffer.Append(NextIndentation);
+    if I = ASettings.MaxWidth then
+    begin
+      Buffer.Append('…(' + IntToStr(LengthValue - I) + ')' +
+        ASettings.SpacingOuter);
+      Break;
+    end;
     Buffer.Append(FormatRecursive(AArgumentsObject.GetProperty(IntToStr(I)),
       ASettings, NextIndentation, ADepth + 1, AReferences, False));
     Buffer.Append(',' + ASettings.SpacingInner);
@@ -875,6 +881,11 @@ begin
     begin
       if I > 0 then
         Buffer.Append(', ');
+      if I = ASettings.MaxWidth then
+      begin
+        Buffer.Append('…(' + IntToStr(AArray.Elements.Count - I) + ')');
+        Break;
+      end;
       Element := AArray.Elements[I];
       if not (Element is TGocciaHoleValue) then
         Buffer.Append(FormatRecursive(Element, ASettings, AIndentation,
@@ -889,6 +900,12 @@ begin
   for I := 0 to AArray.Elements.Count - 1 do
   begin
     Buffer.Append(NextIndentation);
+    if I = ASettings.MaxWidth then
+    begin
+      Buffer.Append('…(' + IntToStr(AArray.Elements.Count - I) + ')' +
+        LINE_FEED);
+      Break;
+    end;
     Element := AArray.Elements[I];
     if not (Element is TGocciaHoleValue) then
       Buffer.Append(FormatRecursive(Element, ASettings, NextIndentation,
@@ -911,7 +928,7 @@ var
   CurrentEntry: TPair<string, TGocciaValue>;
   TemporaryEntry: TPair<string, TGocciaValue>;
   DisplayName, Prefix, NextIndentation: string;
-  I, J, UniqueCount: Integer;
+  I, J, UniqueCount, Width: Integer;
   SeenNames: TDictionary<string, Boolean>;
 begin
   Entries := AObject.GetEnumerablePropertyEntries;
@@ -954,22 +971,39 @@ begin
   NextIndentation := AIndentation + ASettings.Indent;
   Buffer := TStringBuffer.Create;
   Buffer.Append(Prefix + '{' + ASettings.SpacingOuter);
+  Width := 0;
   for CurrentEntry in Entries do
   begin
-    Buffer.Append(NextIndentation + QuoteString(CurrentEntry.Key,
+    Buffer.Append(NextIndentation);
+    if Width = ASettings.MaxWidth then
+    begin
+      Buffer.Append('…(' + IntToStr(Length(Entries) + Length(Symbols) -
+        Width) + ')' + ASettings.SpacingOuter);
+      Break;
+    end;
+    Buffer.Append(QuoteString(CurrentEntry.Key,
       ASettings.EscapeString) + ': ');
     Buffer.Append(FormatRecursive(CurrentEntry.Value, ASettings,
       NextIndentation, ADepth + 1, AReferences, False));
     Buffer.Append(',' + ASettings.SpacingInner);
+    Inc(Width);
   end;
-  for I := 0 to High(Symbols) do
-  begin
-    Buffer.Append(NextIndentation +
-      Symbols[I].Key.ToDisplayString.Value + ': ');
-    Buffer.Append(FormatRecursive(Symbols[I].Value, ASettings,
-      NextIndentation, ADepth + 1, AReferences, False));
-    Buffer.Append(',' + ASettings.SpacingInner);
-  end;
+  if Width = Length(Entries) then
+    for I := 0 to High(Symbols) do
+    begin
+      Buffer.Append(NextIndentation);
+      if Width = ASettings.MaxWidth then
+      begin
+        Buffer.Append('…(' + IntToStr(Length(Entries) + Length(Symbols) -
+          Width) + ')' + ASettings.SpacingOuter);
+        Break;
+      end;
+      Buffer.Append(Symbols[I].Key.ToDisplayString.Value + ': ');
+      Buffer.Append(FormatRecursive(Symbols[I].Value, ASettings,
+        NextIndentation, ADepth + 1, AReferences, False));
+      Buffer.Append(',' + ASettings.SpacingInner);
+      Inc(Width);
+    end;
   Buffer.Append(AIndentation + '}');
   Result := Buffer.ToString;
 end;
@@ -981,7 +1015,7 @@ function TGocciaVitestSnapshotFormatterInternal.FormatMap(
   const AReferences: TGocciaSnapshotValueArray): string;
 var
   Buffer: TStringBuffer;
-  Cursor: Integer;
+  Cursor, Width: Integer;
   Key, Value: TGocciaValue;
   NextIndentation: string;
 begin
@@ -991,17 +1025,25 @@ begin
   Buffer := TStringBuffer.Create;
   Buffer.Append('Map {' + ASettings.SpacingOuter);
   Cursor := 0;
+  Width := 0;
   AMap.RetainIterator;
   try
     while AMap.NextEntry(Cursor, Key, Value) do
     begin
       Buffer.Append(NextIndentation);
+      if Width = ASettings.MaxWidth then
+      begin
+        Buffer.Append('…(' + IntToStr(AMap.Count - Width) + ')' +
+          ASettings.SpacingOuter);
+        Break;
+      end;
       Buffer.Append(FormatRecursive(Key, ASettings, NextIndentation,
         ADepth + 1, AReferences, False));
       Buffer.Append(' => ');
       Buffer.Append(FormatRecursive(Value, ASettings, NextIndentation,
         ADepth + 1, AReferences, False));
       Buffer.Append(',' + ASettings.SpacingInner);
+      Inc(Width);
     end;
   finally
     AMap.ReleaseIterator;
@@ -1017,7 +1059,7 @@ function TGocciaVitestSnapshotFormatterInternal.FormatSet(
   const AReferences: TGocciaSnapshotValueArray): string;
 var
   Buffer: TStringBuffer;
-  Cursor: Integer;
+  Cursor, Width: Integer;
   Value: TGocciaValue;
   NextIndentation: string;
 begin
@@ -1027,14 +1069,22 @@ begin
   Buffer := TStringBuffer.Create;
   Buffer.Append('Set {' + ASettings.SpacingOuter);
   Cursor := 0;
+  Width := 0;
   ASet.RetainIterator;
   try
     while ASet.NextItem(Cursor, Value) do
     begin
       Buffer.Append(NextIndentation);
+      if Width = ASettings.MaxWidth then
+      begin
+        Buffer.Append('…(' + IntToStr(ASet.Count - Width) + ')' +
+          ASettings.SpacingOuter);
+        Break;
+      end;
       Buffer.Append(FormatRecursive(Value, ASettings, NextIndentation,
         ADepth + 1, AReferences, False));
       Buffer.Append(',' + ASettings.SpacingInner);
+      Inc(Width);
     end;
   finally
     ASet.ReleaseIterator;
@@ -1104,8 +1154,15 @@ begin
     Buffer.Append(Name + ' {' + ASettings.SpacingOuter);
     for I := 0 to AArray.Length - 1 do
     begin
+      Buffer.Append(NextIndentation);
+      if I = ASettings.MaxWidth then
+      begin
+        Buffer.Append('…(' + IntToStr(AArray.Length - I) + ')' +
+          ASettings.SpacingOuter);
+        Break;
+      end;
       Element := AArray.GetProperty(IntToStr(I));
-      Buffer.Append(NextIndentation + QuoteString(IntToStr(I),
+      Buffer.Append(QuoteString(IntToStr(I),
         ASettings.EscapeString) + ': ');
       Buffer.Append(FormatRecursive(Element, ASettings, NextIndentation,
         ADepth + 1, AReferences, False));
@@ -1123,6 +1180,12 @@ begin
   begin
     Element := AArray.GetProperty(IntToStr(I));
     Buffer.Append(NextIndentation);
+    if I = ASettings.MaxWidth then
+    begin
+      Buffer.Append('…(' + IntToStr(AArray.Length - I) + ')' +
+        ASettings.SpacingOuter);
+      Break;
+    end;
     Buffer.Append(FormatRecursive(Element, ASettings, NextIndentation,
       ADepth + 1, AReferences, False));
     Buffer.Append(',' + ASettings.SpacingInner);
@@ -1148,10 +1211,17 @@ begin
   LastIndex := Min(Length(ABytes), AStart + ACount) - 1;
   for I := Max(0, AStart) to LastIndex do
   begin
+    Buffer.Append(NextIndentation);
+    if (I - Max(0, AStart)) = ASettings.MaxWidth then
+    begin
+      Buffer.Append('…(' + IntToStr(LastIndex - I + 1) + ')' +
+        ASettings.SpacingOuter);
+      Break;
+    end;
     ByteValue := ABytes[I];
     if ByteValue > High(ShortInt) then
       Dec(ByteValue, 256);
-    Buffer.Append(NextIndentation + IntToStr(ByteValue) + ',' +
+    Buffer.Append(IntToStr(ByteValue) + ',' +
       ASettings.SpacingInner);
   end;
   Buffer.Append(AIndentation + ']');

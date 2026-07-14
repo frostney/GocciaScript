@@ -120,6 +120,7 @@ type
     JobCount: Integer;
     MemoryStats: TCLIJSONMemoryStats;
     FileResults: array of TTestFilePerResult;
+    FinalizationError: string;
   end;
 
   TTestRunnerApp = class(TGocciaCLIApplication)
@@ -190,16 +191,40 @@ end;
 
 function IsContinuousIntegration: Boolean;
   function EnvironmentFlag(const AName: string): Boolean;
-  var
-    Value: string;
   begin
-    Value := LowerCase(Trim(GetEnvironmentVariable(AName)));
-    Result := (Value <> '') and (Value <> '0') and (Value <> 'false') and
-      (Value <> 'no');
+    { std-env, which Vitest uses, applies JavaScript truthiness to environment
+      strings. In particular, "0" and "false" are still enabled flags. }
+    Result := GetEnvironmentVariable(AName) <> '';
+  end;
+
+  function AnyProviderEnvironment(const ANames: array of string): Boolean;
+  var
+    I: Integer;
+  begin
+    for I := Low(ANames) to High(ANames) do
+      if EnvironmentFlag(ANames[I]) then
+        Exit(True);
+    Result := False;
   end;
 begin
   Result := EnvironmentFlag('CI') or
-    EnvironmentFlag('CONTINUOUS_INTEGRATION');
+    EnvironmentFlag('CONTINUOUS_INTEGRATION') or
+    AnyProviderEnvironment([
+      'APPVEYOR', 'AWS_APP_ID', 'SYSTEM_TEAMFOUNDATIONCOLLECTIONURI',
+      'INPUT_AZURE_STATIC_WEB_APPS_API_TOKEN', 'AC_APPCIRCLE',
+      'bamboo_planKey', 'BITBUCKET_COMMIT', 'BITRISE_IO',
+      'BUDDY_WORKSPACE_ID', 'BUILDKITE', 'CIRCLECI', 'CIRRUS_CI',
+      'CF_PAGES', 'WORKERS_CI', 'K_SERVICE', 'CLOUD_RUN_JOB',
+      'CODEBUILD_BUILD_ARN', 'CF_BUILD_ID', 'DRONE', 'DRONE_BUILD_EVENT',
+      'DSARI', 'GITHUB_ACTIONS', 'GITLAB_CI', 'CI_MERGE_REQUEST_ID',
+      'GO_PIPELINE_LABEL', 'LAYERCI', 'JENKINS_URL', 'HUDSON_URL', 'MAGNUM',
+      'NETLIFY', 'NEVERCODE', 'RENDER', 'SAILCI', 'SEMAPHORE',
+      'SCREWDRIVER', 'SHIPPABLE', 'TDDIUM', 'STRIDER', 'TEAMCITY_VERSION',
+      'TRAVIS', 'NOW_BUILDER', 'APPCENTER_BUILD_ID', 'STACKBLITZ',
+      'STORMKIT', 'CLEAVR', 'ZEABUR', 'CODESPHERE_APP_ID',
+      'RAILWAY_PROJECT_ID', 'RAILWAY_SERVICE_ID', 'DENO_DEPLOY',
+      'DENO_DEPLOYMENT_ID', 'FIREBASE_APP_HOSTING'
+    ]);
 end;
 
 function CreateDefaultScriptResult: TGocciaObjectValue;
@@ -348,6 +373,7 @@ var
 begin
   if not Assigned(AResult.TestResult) then
     Exit;
+  AResult.FinalizationError := AMessage;
   AResult.TestResult.AssignProperty('failed',
     TGocciaNumberLiteralValue.Create(
       AResult.TestResult.GetProperty('failed').ToNumberLiteral.Value + 1));
@@ -362,7 +388,7 @@ begin
     FailedTests.Elements.Add(TGocciaStringLiteralValue.Create(AMessage));
   end;
 
-  FileIndex := High(AResult.FileResults);
+  FileIndex := -1;
   for I := 0 to High(AResult.FileResults) do
     if Pos(AResult.FileResults[I].FileName, AMessage) > 0 then
     begin
@@ -1455,6 +1481,7 @@ var
   TotalNanoseconds: Int64;
   IsBytecodeMode: Boolean;
   FailedCount, I: Integer;
+  ErrorInfo: TCLIJSONErrorInfo;
   Timing: TCLIJSONTiming;
 begin
   IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
@@ -1481,7 +1508,14 @@ begin
       Lines.Add('  "stderr": "",');
     end;
     Lines.Add('  ' + BuildCLIOutputJSON('') + ',');
-    Lines.Add('  "error": null,');
+    if AResult.FinalizationError = '' then
+      Lines.Add('  "error": null,')
+    else
+    begin
+      ErrorInfo := DefaultCLIJSONErrorInfo;
+      ErrorInfo.Message := AResult.FinalizationError;
+      Lines.Add('  "error": ' + BuildCLIErrorObjectJSON(ErrorInfo) + ',');
+    end;
     Lines.Add(Format('  "mode": "%s",', [IfThen(IsBytecodeMode, 'bytecode', 'interpreted')]));
     Lines.Add(Format('  "jobCount": %d,', [AResult.JobCount]));
     Lines.Add(Format('  "totalFiles": %d,', [Round(AResult.TestResult.GetProperty('totalTests').ToNumberLiteral.Value)]));

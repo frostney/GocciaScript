@@ -123,6 +123,42 @@ type
     property ValidationResult: TGocciaValue read FValidationResult;
   end;
 
+  TGocciaOneOfMatcherValue = class(TGocciaAsymmetricMatcherValue)
+  public
+    constructor Create(const ASample: TGocciaValue;
+      const AInverse: Boolean = False);
+    function AsymmetricMatch(const AOther: TGocciaValue;
+      const AEquality: TGocciaValueEqualityCallback): Boolean; override;
+    function AsymmetricDisplay: string; override;
+    function MatcherName: string; override;
+  end;
+
+  TGocciaSatisfyMatcherValue = class(TGocciaAsymmetricMatcherValue)
+  public
+    constructor Create(const APredicate: TGocciaValue;
+      const AInverse: Boolean = False);
+    function AsymmetricMatch(const AOther: TGocciaValue;
+      const AEquality: TGocciaValueEqualityCallback): Boolean; override;
+    function AsymmetricDisplay: string; override;
+    function MatcherName: string; override;
+  end;
+
+  TGocciaBenchmarkComparison = (bcFaster, bcSlower);
+
+  TGocciaBenchmarkMatcherValue = class(TGocciaAsymmetricMatcherValue)
+  private
+    FComparison: TGocciaBenchmarkComparison;
+    FDelta: Double;
+  public
+    constructor Create(const ASample, AOptions: TGocciaValue;
+      const AComparison: TGocciaBenchmarkComparison;
+      const AInverse: Boolean = False);
+    function AsymmetricMatch(const AOther: TGocciaValue;
+      const AEquality: TGocciaValueEqualityCallback): Boolean; override;
+    function AsymmetricDisplay: string; override;
+    function MatcherName: string; override;
+  end;
+
 implementation
 
 uses
@@ -145,6 +181,7 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.NumberObjectValue,
   Goccia.Values.PromiseValue,
+  Goccia.Values.SetValue,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolObjectValue,
   Goccia.Values.SymbolValue,
@@ -588,7 +625,7 @@ var
   Matches: Boolean;
 begin
   if not TryGetNumberValue(AOther, ActualNumber) then
-    Exit(ApplyInverse(False));
+    Exit(False);
   TryGetNumberValue(Sample, ExpectedNumber);
 
   Matches := (IsInfinite(ActualNumber) and IsInfinite(ExpectedNumber) and
@@ -739,6 +776,186 @@ begin
     FStandard.MarkReferences;
   if Assigned(FValidationResult) then
     FValidationResult.MarkReferences;
+end;
+
+constructor TGocciaOneOfMatcherValue.Create(const ASample: TGocciaValue;
+  const AInverse: Boolean);
+begin
+  inherited Create(ASample, AInverse);
+end;
+
+function TGocciaOneOfMatcherValue.AsymmetricMatch(
+  const AOther: TGocciaValue;
+  const AEquality: TGocciaValueEqualityCallback): Boolean;
+var
+  ArrayValue: TGocciaArrayValue;
+  Cursor: Integer;
+  Item: TGocciaValue;
+  Matches: Boolean;
+begin
+  Matches := False;
+  if not (Sample is TGocciaArrayValue) and
+     not (Sample is TGocciaSetValue) then
+    ThrowTypeError('You must provide an array or set to toBeOneOf');
+  if Sample is TGocciaArrayValue then
+  begin
+    ArrayValue := TGocciaArrayValue(Sample);
+    if ArrayValue.Elements.Count = 0 then
+      Matches := True
+    else
+      for Item in ArrayValue.Elements do
+        if AEquality(Item, AOther) then
+        begin
+          Matches := True;
+          Break;
+        end;
+  end
+  else
+  begin
+    if TGocciaSetValue(Sample).Count = 0 then
+      Matches := True
+    else if TGocciaSetValue(Sample).ContainsValue(AOther) then
+      Matches := True
+    else
+    begin
+      Cursor := 0;
+      while TGocciaSetValue(Sample).NextItem(Cursor, Item) do
+        if AEquality(Item, AOther) then
+        begin
+          Matches := True;
+          Break;
+        end;
+    end;
+  end;
+  Result := ApplyInverse(Matches);
+end;
+
+function TGocciaOneOfMatcherValue.AsymmetricDisplay: string;
+begin
+  Result := MatcherName;
+end;
+
+function TGocciaOneOfMatcherValue.MatcherName: string;
+begin
+  if Inverse then
+    Result := 'NotToBeOneOf'
+  else
+    Result := 'ToBeOneOf';
+end;
+
+constructor TGocciaSatisfyMatcherValue.Create(const APredicate: TGocciaValue;
+  const AInverse: Boolean);
+begin
+  inherited Create(APredicate, AInverse);
+end;
+
+function TGocciaSatisfyMatcherValue.AsymmetricMatch(
+  const AOther: TGocciaValue;
+  const AEquality: TGocciaValueEqualityCallback): Boolean;
+var
+  Arguments: TGocciaArgumentsCollection;
+  MatchResult: TGocciaValue;
+begin
+  if not Sample.IsCallable then
+    ThrowTypeError('toSatisfy expects a predicate function');
+  Arguments := TGocciaArgumentsCollection.Create([AOther]);
+  try
+    MatchResult := DispatchCall(Sample, Arguments,
+      TGocciaUndefinedLiteralValue.UndefinedValue);
+  finally
+    Arguments.Free;
+  end;
+  Result := ApplyInverse(MatchResult.ToBooleanLiteral.Value);
+end;
+
+function TGocciaSatisfyMatcherValue.AsymmetricDisplay: string;
+begin
+  Result := MatcherName;
+end;
+
+function TGocciaSatisfyMatcherValue.MatcherName: string;
+begin
+  if Inverse then
+    Result := 'NotToSatisfy'
+  else
+    Result := 'ToSatisfy';
+end;
+
+function TryGetBenchmarkMean(const AValue: TGocciaValue;
+  out AMean: Double): Boolean;
+var
+  Latency, MeanValue: TGocciaValue;
+begin
+  Result := False;
+  AMean := 0;
+  if not (AValue is TGocciaObjectValue) then
+    Exit;
+  Latency := TGocciaObjectValue(AValue).GetProperty('latency');
+  if not (Latency is TGocciaObjectValue) then
+    Exit;
+  MeanValue := TGocciaObjectValue(Latency).GetProperty('mean');
+  Result := TryGetNumberValue(MeanValue, AMean);
+end;
+
+constructor TGocciaBenchmarkMatcherValue.Create(const ASample,
+  AOptions: TGocciaValue; const AComparison: TGocciaBenchmarkComparison;
+  const AInverse: Boolean);
+var
+  DeltaValue: TGocciaValue;
+begin
+  inherited Create(ASample, AInverse);
+  FComparison := AComparison;
+  FDelta := 0;
+  if AOptions is TGocciaObjectValue then
+  begin
+    DeltaValue := TGocciaObjectValue(AOptions).GetProperty('delta');
+    if not (DeltaValue is TGocciaUndefinedLiteralValue) then
+      FDelta := DeltaValue.ToNumberLiteral.Value;
+  end;
+end;
+
+function TGocciaBenchmarkMatcherValue.AsymmetricMatch(
+  const AOther: TGocciaValue;
+  const AEquality: TGocciaValueEqualityCallback): Boolean;
+var
+  ActualMean, ExpectedMean, Threshold: Double;
+  Matches: Boolean;
+begin
+  if not TryGetBenchmarkMean(AOther, ActualMean) then
+    ThrowTypeError(MatcherName +
+      ' expects the actual value to be a benchmark result.');
+  if not TryGetBenchmarkMean(Sample, ExpectedMean) then
+    ThrowTypeError(MatcherName +
+      ' expects the expected value to be a benchmark result.');
+  if FComparison = bcFaster then
+  begin
+    Threshold := ExpectedMean * (1 - FDelta);
+    Matches := ActualMean < Threshold;
+  end
+  else
+  begin
+    Threshold := ExpectedMean * (1 + FDelta);
+    Matches := ActualMean > Threshold;
+  end;
+  Result := ApplyInverse(Matches);
+end;
+
+function TGocciaBenchmarkMatcherValue.AsymmetricDisplay: string;
+begin
+  Result := MatcherName;
+end;
+
+function TGocciaBenchmarkMatcherValue.MatcherName: string;
+begin
+  if FComparison = bcFaster then
+    if Inverse then
+      Result := 'NotToBeFasterThan'
+    else
+      Result := 'ToBeFasterThan'
+  else if Inverse then
+    Result := 'NotToBeSlowerThan'
+  else
+    Result := 'ToBeSlowerThan';
 end;
 
 end.

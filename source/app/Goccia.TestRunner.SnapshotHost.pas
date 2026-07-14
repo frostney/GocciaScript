@@ -89,10 +89,71 @@ begin
   Result := Trim(NormalizeNewlines(AValue));
 end;
 
+function LineTerminatorLengthAt(const ASource: string;
+  const AIndex: Integer): Integer;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+begin
+  Result := 0;
+  if (AIndex < 1) or (AIndex > Length(ASource)) then
+    Exit;
+  if ASource[AIndex] = #13 then
+  begin
+    Result := 1;
+    if (AIndex < Length(ASource)) and (ASource[AIndex + 1] = #10) then
+      Result := 2;
+    Exit;
+  end;
+  if ASource[AIndex] = #10 then
+    Exit(1);
+  if TryReadUTF8CodePoint(ASource, AIndex, CodePoint, ByteLength) and
+     ((CodePoint = $2028) or (CodePoint = $2029)) then
+    Result := ByteLength;
+end;
+
+procedure SkipECMAScriptWhitespace(const ASource: string;
+  var AIndex: Integer);
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+begin
+  while AIndex <= Length(ASource) do
+  begin
+    if not TryReadUTF8CodePoint(ASource, AIndex, CodePoint,
+       ByteLength) then
+      Exit;
+    if not IsECMAScriptWhitespaceCodePoint(CodePoint) then
+      Exit;
+    Inc(AIndex, ByteLength);
+  end;
+end;
+
+procedure SkipECMAScriptWhitespaceBackward(const ASource: string;
+  var AIndex: Integer);
+var
+  ByteLength, StartIndex: Integer;
+  CodePoint: Cardinal;
+begin
+  while AIndex >= 1 do
+  begin
+    StartIndex := AIndex;
+    while (StartIndex > 1) and
+          ((Ord(ASource[StartIndex]) and $C0) = $80) do
+      Dec(StartIndex);
+    if not TryReadUTF8CodePoint(ASource, StartIndex, CodePoint,
+       ByteLength) or (StartIndex + ByteLength - 1 <> AIndex) or
+       not IsECMAScriptWhitespaceCodePoint(CodePoint) then
+      Exit;
+    AIndex := StartIndex - 1;
+  end;
+end;
+
 function LineColumnToOffset(const ASource: string; const ALine,
   AColumn: Integer): Integer;
 var
-  Column, Index, Line: Integer;
+  ByteLength, Column, Index, Line: Integer;
+  CodePoint: Cardinal;
 begin
   if (ALine < 1) or (AColumn < 1) then
     Exit(0);
@@ -108,10 +169,16 @@ begin
       if (Index <= Length(ASource)) and (ASource[Index] = #10) then
         Inc(Index);
     end
-    else if (ASource[Index] = #10) then
+    else if ASource[Index] = #10 then
     begin
       Inc(Line);
       Inc(Index);
+    end
+    else if TryReadUTF8CodePoint(ASource, Index, CodePoint, ByteLength) and
+            ((CodePoint = $2028) or (CodePoint = $2029)) then
+    begin
+      Inc(Line);
+      Inc(Index, ByteLength);
     end
     else
       Inc(Index);
@@ -123,6 +190,9 @@ begin
   while (Index <= Length(ASource)) and (Column < AColumn) and
         not (ASource[Index] in [#10, #13]) do
   begin
+    if TryReadUTF8CodePoint(ASource, Index, CodePoint, ByteLength) and
+       ((CodePoint = $2028) or (CodePoint = $2029)) then
+      Break;
     Inc(Index);
     Inc(Column);
   end;
@@ -153,7 +223,7 @@ procedure SkipLineComment(const ASource: string; var AIndex: Integer);
 begin
   Inc(AIndex, 2);
   while (AIndex <= Length(ASource)) and
-        not (ASource[AIndex] in [#10, #13]) do
+        (LineTerminatorLengthAt(ASource, AIndex) = 0) do
     Inc(AIndex);
 end;
 
@@ -178,8 +248,7 @@ var
   Index: Integer;
 begin
   Index := AIndex - 1;
-  while (Index >= 1) and (ASource[Index] in [' ', #9, #10, #13]) do
-    Dec(Index);
+  SkipECMAScriptWhitespaceBackward(ASource, Index);
   if Index < 1 then
     Exit(#0);
   Result := ASource[Index];
@@ -200,8 +269,7 @@ begin
     Exit;
 
   Index := AIndex - 1;
-  while (Index >= 1) and (ASource[Index] in [' ', #9, #10, #13]) do
-    Dec(Index);
+  SkipECMAScriptWhitespaceBackward(ASource, Index);
   TokenEnd := Index;
   while (Index >= 1) and
         (ASource[Index] in ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']) do
@@ -315,9 +383,7 @@ var
 begin
   repeat
     PreviousIndex := AIndex;
-    while (AIndex <= Length(ASource)) and
-          (ASource[AIndex] in [' ', #9, #10, #13]) do
-      Inc(AIndex);
+    SkipECMAScriptWhitespace(ASource, AIndex);
     if (AIndex < Length(ASource)) and (ASource[AIndex] = '/') and
        (ASource[AIndex + 1] = '/') then
       SkipLineComment(ASource, AIndex)
@@ -434,11 +500,21 @@ end;
 function SourceLineIndent(const ASource: string;
   const AOffset: Integer): string;
 var
-  Index, LineStart: Integer;
+  Index, LineStart, TerminatorLength: Integer;
 begin
-  LineStart := AOffset;
-  while (LineStart > 1) and not (ASource[LineStart - 1] in [#10, #13]) do
-    Dec(LineStart);
+  LineStart := 1;
+  Index := 1;
+  while (Index < AOffset) and (Index <= Length(ASource)) do
+  begin
+    TerminatorLength := LineTerminatorLengthAt(ASource, Index);
+    if TerminatorLength > 0 then
+    begin
+      Inc(Index, TerminatorLength);
+      LineStart := Index;
+    end
+    else
+      Inc(Index);
+  end;
   Index := LineStart;
   while (Index <= Length(ASource)) and (ASource[Index] in [' ', #9]) do
     Inc(Index);
@@ -531,9 +607,7 @@ var
         if Copy(ASource, ScanIndex, Length(MATCHER_NAME)) = MATCHER_NAME then
         begin
           OpenOffset := ScanIndex + Length(MATCHER_NAME);
-          while (OpenOffset <= Length(ASource)) and
-                (ASource[OpenOffset] in [' ', #9, #10, #13]) do
-            Inc(OpenOffset);
+          SkipTrivia(ASource, OpenOffset);
           if (OpenOffset <= Length(ASource)) and
              (ASource[OpenOffset] = '(') and
              FindCallArgumentRanges(ASource, OpenOffset, Ranges,
@@ -573,9 +647,7 @@ var
         if Copy(ASource, ScanIndex, Length(MATCHER_NAME)) = MATCHER_NAME then
         begin
           OpenOffset := ScanIndex + Length(MATCHER_NAME);
-          while (OpenOffset <= Length(ASource)) and
-                (ASource[OpenOffset] in [' ', #9, #10, #13]) do
-            Inc(OpenOffset);
+          SkipTrivia(ASource, OpenOffset);
           if (OpenOffset <= Length(ASource)) and
              (ASource[OpenOffset] = '(') and
              FindCallArgumentRanges(ASource, OpenOffset, Ranges,
@@ -593,13 +665,22 @@ var
   end;
 
 begin
-  LineStart := Min(Max(AReportedOffset, 1), Length(ASource));
-  while (LineStart > 1) and
-        not (ASource[LineStart - 1] in [#10, #13]) do
-    Dec(LineStart);
+  LineStart := 1;
+  LineEnd := 1;
+  while (LineEnd < AReportedOffset) and (LineEnd <= Length(ASource)) do
+  begin
+    NameEnd := LineTerminatorLengthAt(ASource, LineEnd);
+    if NameEnd > 0 then
+    begin
+      Inc(LineEnd, NameEnd);
+      LineStart := LineEnd;
+    end
+    else
+      Inc(LineEnd);
+  end;
   LineEnd := Min(Max(AReportedOffset, 1), Length(ASource));
   while (LineEnd <= Length(ASource)) and
-        not (ASource[LineEnd] in [#10, #13]) do
+        (LineTerminatorLengthAt(ASource, LineEnd) = 0) do
     Inc(LineEnd);
 
   { Normal interpreter and bytecode locations both identify the containing
@@ -621,9 +702,7 @@ begin
     if ASource[Index] = '(' then
     begin
       NameEnd := Index - 1;
-      while (NameEnd >= 1) and
-            (ASource[NameEnd] in [' ', #9, #10, #13]) do
-        Dec(NameEnd);
+      SkipECMAScriptWhitespaceBackward(ASource, NameEnd);
       if (NameEnd >= Length(MATCHER_NAME)) and
          (Copy(ASource, NameEnd - Length(MATCHER_NAME) + 1,
            Length(MATCHER_NAME)) = MATCHER_NAME) and
@@ -829,7 +908,10 @@ begin
   EnterCriticalSection(InlineSnapshotWriteLock);
   try
     if PendingInlineError <> '' then
-      raise Exception.Create(PendingInlineError);
+    begin
+      FInlineEdits.Clear;
+      Exit;
+    end;
     for Edit in FInlineEdits do
     begin
       Duplicate := False;
@@ -844,9 +926,7 @@ begin
               'Conflicting inline snapshots at %s:%d:%d',
               [Edit.SourcePath, Edit.Line, Edit.Column]);
             PendingInlineEdits.Clear;
-            raise Exception.CreateFmt(
-              'Conflicting inline snapshots at %s:%d:%d',
-              [Edit.SourcePath, Edit.Line, Edit.Column]);
+            Exit;
           end;
           Duplicate := True;
           Break;

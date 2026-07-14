@@ -48,6 +48,8 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     function RecursiveSerialize(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+    function MaxWidthSerialize(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     function MakeSerializer(
       const ASerialize: TGocciaNativeFunctionValue): TGocciaObjectValue;
 
@@ -57,6 +59,7 @@ type
     procedure TestBinaryValuesMatchVitest;
     procedure TestLastAddedSerializerRunsFirst;
     procedure TestSerializerReceivesPrettyFormatArguments;
+    procedure TestSerializerCanLimitRecursiveCollectionWidth;
     procedure TestAsymmetricMatchersUseVitestDisplay;
     procedure TestFormatterCanBeReplaced;
   public
@@ -81,6 +84,8 @@ begin
   Test('Last added serializer runs first', TestLastAddedSerializerRunsFirst);
   Test('Serializer receives pretty-format arguments',
     TestSerializerReceivesPrettyFormatArguments);
+  Test('Serializer can limit recursive collection width',
+    TestSerializerCanLimitRecursiveCollectionWidth);
   Test('Asymmetric matchers use Vitest display',
     TestAsymmetricMatchersUseVitestDisplay);
   Test('Pascal formatter can be replaced', TestFormatterCanBeReplaced);
@@ -165,6 +170,34 @@ begin
       Config.GetProperty('_outputLengthPerDepth')).Elements.Count) +
     ', refs=' + IntToStr(References.Elements.Count) +
     ', nested=' + Printed.ToStringLiteral.Value + ')');
+end;
+
+function TSnapshotFormattingTests.MaxWidthSerialize(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Config: TGocciaObjectValue;
+  Nested, Printed, Printer: TGocciaValue;
+  PrinterArguments: TGocciaArgumentsCollection;
+begin
+  Config := TGocciaObjectValue(AArgs.GetElement(1));
+  Config.AssignProperty('maxWidth', TGocciaNumberLiteralValue.OneValue);
+  Nested := TGocciaObjectValue(AArgs.GetElement(0)).GetProperty('nested');
+  Printer := AArgs.GetElement(5);
+  PrinterArguments := TGocciaArgumentsCollection.Create([
+    Nested,
+    Config,
+    AArgs.GetElement(2),
+    AArgs.GetElement(3),
+    AArgs.GetElement(4)
+  ]);
+  try
+    Printed := DispatchCall(Printer, PrinterArguments,
+      TGocciaUndefinedLiteralValue.UndefinedValue);
+  finally
+    PrinterArguments.Free;
+  end;
+  Result := Printed;
 end;
 
 function TSnapshotFormattingTests.MakeSerializer(
@@ -328,6 +361,71 @@ begin
     'outputDepths=0, refs=0, nested={' + LF +
     '  "x": 1,' + LF +
     '})');
+end;
+
+procedure TSnapshotFormattingTests.TestSerializerCanLimitRecursiveCollectionWidth;
+var
+  MapValue: TGocciaMapValue;
+  Nested: TGocciaArrayValue;
+  ObjectValue, Value: TGocciaObjectValue;
+  SetValue: TGocciaSetValue;
+begin
+  Nested := TGocciaArrayValue.Create;
+  Nested.Elements.Add(TGocciaNumberLiteralValue.OneValue);
+  Nested.Elements.Add(TGocciaNumberLiteralValue.Create(2));
+  Nested.Elements.Add(TGocciaNumberLiteralValue.Create(3));
+  Value := TGocciaObjectValue.Create;
+  Value.CreateDataPropertyOrThrow('nested', Nested);
+  Value.CreateDataPropertyOrThrow('custom',
+    TGocciaBooleanLiteralValue.TrueValue);
+  FFirstSerializer := MakeSerializer(
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(MaxWidthSerialize,
+      'serialize', 6));
+  Expect<Boolean>(FFormatting.Serializers.Add(FFirstSerializer)).ToBe(True);
+  Expect<string>(FFormatting.Format(Value)).ToBe(
+    '[' + LF +
+    '  1,' + LF +
+    '  …(2)' + LF +
+    ']');
+
+  ObjectValue := TGocciaObjectValue.Create;
+  ObjectValue.CreateDataPropertyOrThrow('a',
+    TGocciaNumberLiteralValue.OneValue);
+  ObjectValue.CreateDataPropertyOrThrow('b',
+    TGocciaNumberLiteralValue.Create(2));
+  ObjectValue.CreateDataPropertyOrThrow('c',
+    TGocciaNumberLiteralValue.Create(3));
+  Value.AssignProperty('nested', ObjectValue);
+  Expect<string>(FFormatting.Format(Value)).ToBe(
+    '{' + LF +
+    '  "a": 1,' + LF +
+    '  …(2)' + LF +
+    '}');
+
+  MapValue := TGocciaMapValue.Create;
+  MapValue.SetEntry(TGocciaStringLiteralValue.Create('a'),
+    TGocciaNumberLiteralValue.OneValue);
+  MapValue.SetEntry(TGocciaStringLiteralValue.Create('b'),
+    TGocciaNumberLiteralValue.Create(2));
+  MapValue.SetEntry(TGocciaStringLiteralValue.Create('c'),
+    TGocciaNumberLiteralValue.Create(3));
+  Value.AssignProperty('nested', MapValue);
+  Expect<string>(FFormatting.Format(Value)).ToBe(
+    'Map {' + LF +
+    '  "a" => 1,' + LF +
+    '  …(2)' + LF +
+    '}');
+
+  SetValue := TGocciaSetValue.Create;
+  SetValue.AddItem(TGocciaNumberLiteralValue.OneValue);
+  SetValue.AddItem(TGocciaNumberLiteralValue.Create(2));
+  SetValue.AddItem(TGocciaNumberLiteralValue.Create(3));
+  Value.AssignProperty('nested', SetValue);
+  Expect<string>(FFormatting.Format(Value)).ToBe(
+    'Set {' + LF +
+    '  1,' + LF +
+    '  …(2)' + LF +
+    '}');
 end;
 
 procedure TSnapshotFormattingTests.TestFormatterCanBeReplaced;

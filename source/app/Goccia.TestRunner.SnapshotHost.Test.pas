@@ -31,6 +31,8 @@ type
     procedure TestRewritesSchemaShapeWithArrowRegExp;
     procedure TestRewritesCapturedModuleSource;
     procedure TestResolvesExpressionDebugLocation;
+    procedure TestRewritesAfterUnicodeLineSeparator;
+    procedure TestRewritesWithNonBreakingSpaceBeforeArguments;
   public
     procedure SetupTests; override;
     procedure BeforeEach; override;
@@ -56,6 +58,10 @@ begin
     TestRewritesCapturedModuleSource);
   Test('Resolves bytecode expression-start debug locations',
     TestResolvesExpressionDebugLocation);
+  Test('Rewrites after a Unicode line separator',
+    TestRewritesAfterUnicodeLineSeparator);
+  Test('Rewrites with non-breaking space before matcher arguments',
+    TestRewritesWithNonBreakingSpaceBeforeArguments);
 end;
 
 procedure TSnapshotHostTests.BeforeEach;
@@ -221,7 +227,8 @@ begin
     Source := string(ReadUTF8FileText(SourcePath));
     Expect<Boolean>(Pos('expect.stringMatching(/a[)]/) }, `', Source) > 0)
       .ToBe(True);
-    Expect<Boolean>(Pos('  {' + #10 + '    "value"', Source) > 0).ToBe(True);
+    Expect<Boolean>(Pos('    {' + #10 + '      "value"', Source) > 0)
+      .ToBe(True);
   finally
     HostRef := nil;
   end;
@@ -320,7 +327,7 @@ begin
     Source := string(ReadUTF8FileText(SourcePath));
     Expect<Boolean>(Pos('/}/.test(value)', Source) > 0).ToBe(True);
     Expect<Boolean>(Pos('/[,)]/.test(value)', Source) > 0).ToBe(True);
-    Expect<Boolean>(Pos('}), `' + #10 + '    {', Source) > 0).ToBe(True);
+    Expect<Boolean>(Pos('}) }, `' + #10 + '    {', Source) > 0).ToBe(True);
   finally
     HostRef := nil;
   end;
@@ -383,6 +390,69 @@ begin
     Source := string(ReadUTF8FileText(SourcePath));
     Expect<Boolean>(Pos('toMatchInlineSnapshot(`"new"`)', Source) > 0)
       .ToBe(True);
+  finally
+    HostRef := nil;
+  end;
+end;
+
+procedure TSnapshotHostTests.TestRewritesAfterUnicodeLineSeparator;
+const
+  LINE_SEPARATOR = #$E2#$80#$A8;
+var
+  Edit: TGocciaInlineSnapshotEdit;
+  Host: TGocciaTestRunnerSnapshotHost;
+  HostRef: IGocciaSnapshotHost;
+  Line, Source, SourcePath: string;
+begin
+  Line := 'expect("unicode line").toMatchInlineSnapshot();';
+  Source := 'test("first", () => expect(true).toBe(true));' +
+    LINE_SEPARATOR + Line;
+  SourcePath := FTempDir + PathDelim + 'unicode-line.test.js';
+  WriteSource(SourcePath, Source);
+  Host := TGocciaTestRunnerSnapshotHost.Create(SourcePath);
+  HostRef := Host;
+  try
+    Edit.Line := 2;
+    Edit.Column := MethodCallColumn(Line);
+    Edit.SnapshotArgumentIndex := 0;
+    Edit.Snapshot := '"unicode line"';
+    Host.QueueInlineSnapshot(Edit);
+    Host.FlushInlineSnapshots;
+    FlushPendingInlineSnapshots;
+    Source := string(ReadUTF8FileText(SourcePath));
+    Expect<Boolean>(Pos('toMatchInlineSnapshot(`"unicode line"`)',
+      Source) > 0).ToBe(True);
+  finally
+    HostRef := nil;
+  end;
+end;
+
+procedure TSnapshotHostTests.TestRewritesWithNonBreakingSpaceBeforeArguments;
+const
+  NO_BREAK_SPACE = #$C2#$A0;
+var
+  Edit: TGocciaInlineSnapshotEdit;
+  Host: TGocciaTestRunnerSnapshotHost;
+  HostRef: IGocciaSnapshotHost;
+  Line, Source, SourcePath: string;
+begin
+  Line := 'expect("space").toMatchInlineSnapshot' + NO_BREAK_SPACE + '();';
+  SourcePath := FTempDir + PathDelim + 'unicode-space.test.js';
+  WriteSource(SourcePath, Line + #10);
+  Host := TGocciaTestRunnerSnapshotHost.Create(SourcePath);
+  HostRef := Host;
+  try
+    Edit.Line := 1;
+    Edit.Column := Pos('toMatchInlineSnapshot', Line) +
+      Length('toMatchInlineSnapshot');
+    Edit.SnapshotArgumentIndex := 0;
+    Edit.Snapshot := '"space"';
+    Host.QueueInlineSnapshot(Edit);
+    Host.FlushInlineSnapshots;
+    FlushPendingInlineSnapshots;
+    Source := string(ReadUTF8FileText(SourcePath));
+    Expect<Boolean>(Pos('toMatchInlineSnapshot' + NO_BREAK_SPACE +
+      '(`"space"`)', Source) > 0).ToBe(True);
   finally
     HostRef := nil;
   end;

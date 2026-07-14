@@ -9,6 +9,7 @@ describe("expect.closeTo", () => {
     expect(1).not.toEqual(expect.closeTo(1, Infinity));
     expect(1).not.toEqual(expect.closeTo(1, NaN));
     expect(1).not.toEqual(expect.closeTo(1, 1e100));
+    expect("not a number").not.toEqual(expect.not.closeTo(1));
   });
 
   test("validates sample and precision types", () => {

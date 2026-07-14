@@ -2067,10 +2067,17 @@ console.log("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + byt
     ...process.env,
     CI: "",
     CONTINUOUS_INTEGRATION: "",
+    GITHUB_ACTIONS: "",
+    GITLAB_CI: "",
+    TEAMCITY_VERSION: "",
+    BUILDKITE: "",
+    CIRCLECI: "",
     BUILD_NUMBER: "",
     RUN_ID: "",
   };
   const ciEnv = { ...localEnv, CI: "1" };
+  const stringCiEnv = { ...localEnv, CI: "false" };
+  const teamCityEnv = { ...localEnv, TEAMCITY_VERSION: "2025.1" };
   const run = (args: string[], env = localEnv) => Bun.spawnSync(
     [resolve(TESTRUNNER), ...args, "--no-progress", "--no-results", "--silent"],
     { stdout: "pipe", stderr: "pipe", env },
@@ -2288,6 +2295,15 @@ console.log("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + byt
     proc = run([missing], ciEnv);
     if (proc.exitCode === 0 || existsSync(missingSnapshot))
       throw new Error("CI should fail missing snapshots without writing them");
+    proc = run([missing], teamCityEnv);
+    if (proc.exitCode === 0 || existsSync(missingSnapshot))
+      throw new Error("TeamCity should fail missing snapshots without writing them");
+    proc = run([missing], stringCiEnv);
+    if (proc.exitCode === 0 || existsSync(missingSnapshot))
+      throw new Error("Non-empty CI strings should use JavaScript truthiness");
+    proc = run([missing, "-u"], teamCityEnv);
+    if (proc.exitCode !== 0 || !existsSync(missingSnapshot))
+      throw new Error("Explicit snapshot update should override CI detection");
 
     const inline = join(tmp, "inline.test.js");
     writeFileSync(inline, [
@@ -2336,6 +2352,18 @@ console.log("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + byt
     proc = run([inline, "--mode=bytecode"]);
     if (proc.exitCode !== 0)
       throw new Error(`Bytecode inline comparison failed: ${proc.stdout}${proc.stderr}`);
+
+    const unicodeInline = join(tmp, "inline-unicode.test.js");
+    for (const mode of [[], ["--mode=bytecode"]]) {
+      writeFileSync(unicodeInline,
+        'test("first", () => expect(true).toBe(true));\u2028' +
+        'test("unicode", () => expect("value").toMatchInlineSnapshot\u00a0());');
+      proc = run([unicodeInline, ...mode]);
+      if (proc.exitCode !== 0 ||
+          !readFileSync(unicodeInline, "utf-8").includes(
+            'toMatchInlineSnapshot\u00a0(`"value"`)'))
+        throw new Error(`Unicode inline snapshot update failed: ${proc.stdout}${proc.stderr}`);
+    }
 
     writeFileSync(inline, expectedInline.replace('`"hello"`', '`"wrong"`'));
     proc = run([inline, "--mode=bytecode", "--update-snapshots"]);
@@ -2404,6 +2432,20 @@ console.log("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + byt
     proc = run([conflictingLeft, conflictingRight, "--jobs=2", "--mode=bytecode"]);
     if (proc.exitCode === 0 || readFileSync(conflictingHelper, "utf-8") !== conflictingSource)
       throw new Error(`Conflicting shared inline snapshots should fail without writing: ${proc.stdout}${proc.stderr}`);
+    proc = run([
+      conflictingLeft,
+      conflictingRight,
+      "--jobs=2",
+      "--mode=bytecode",
+      "--output=compact-json",
+    ]);
+    const conflictResult = JSON.parse(proc.stdout.toString());
+    if (proc.exitCode === 0 || conflictResult.failed !== 1 ||
+        conflictResult.totalTests !== 3 ||
+        !conflictResult.error?.message?.includes("Conflicting inline snapshots") ||
+        conflictResult.files.some((file: { failed: number; totalTests: number }) =>
+          file.failed !== 0 || file.totalTests !== 1))
+      throw new Error(`Conflicting snapshots should be one process-level failure: ${proc.stdout}${proc.stderr}`);
 
     const multifileExternal = join(tmp, "snapshot-multi.test.js");
     writeFileSync(multifileExternal, [
