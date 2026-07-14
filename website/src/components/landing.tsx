@@ -500,12 +500,12 @@ console.log("total:", total);`;
       overview: (
         <>
           A recursive-descent parser with precedence climbing for binary
-          operators. Excluded constructs (
+          operators. Recommended defaults reject legacy or coercive constructs (
           <code className={inlineCodeClass}>var</code>,{" "}
           <code className={inlineCodeClass}>==</code>,{" "}
-          <code className={inlineCodeClass}>eval</code>,{" "}
-          <code className={inlineCodeClass}>with</code>) are rejected at parse
-          time, so the runtime never has to think about them.
+          <code className={inlineCodeClass}>with</code>) unless their explicit
+          compatibility flags are enabled. Normal runtimes do not install{" "}
+          <code className={inlineCodeClass}>eval</code>.
         </>
       ),
       docId: "language",
@@ -895,7 +895,7 @@ export function Landing({
                   className="info-term"
                   aria-describedby="ecmascript-tip"
                 >
-                  ECMAScript 2027+
+                  ECMAScript
                   <span
                     id="ecmascript-tip"
                     role="tooltip"
@@ -1084,8 +1084,8 @@ export function Landing({
                 Beyond the language: runtime and sandbox APIs
               </AnchorH3>
               <p className="text-ink-2 mb-4">
-                Everything ECMAScript gives you, plus first-class
-                structured-data formats — direct module imports of{" "}
+                A broad ECMAScript surface, plus first-class structured-data
+                formats — direct module imports of{" "}
                 <code className={inlineCodeClass}>.json</code>,{" "}
                 <code className={inlineCodeClass}>.json5</code>,{" "}
                 <code className={inlineCodeClass}>.toml</code>,{" "}
