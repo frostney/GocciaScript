@@ -34,9 +34,9 @@ describe("non-strict function this binding", () => {
   });
 
   test("method calls box a primitive receiver for non-strict functions", () => {
-    function readThis() {
+    const readThis = function () {
       return this;
-    }
+    };
 
     Boolean.prototype.readThis = readThis;
     Number.prototype.readThis = readThis;

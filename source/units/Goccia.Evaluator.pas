@@ -4486,7 +4486,7 @@ begin
     if AContext.NonStrictMode then
       Exit;
     ThrowTypeError(Format(SErrorCannotAssignReadOnly, [PropertyName]),
-      SSuggestCannotDeleteNonConfigurable);
+      SSuggestReadOnlyProperty);
   end;
 end;
 

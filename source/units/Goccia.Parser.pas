@@ -3082,6 +3082,10 @@ begin
           Parameters[0].IsOptional := False;
           Parameters[0].TypeAnnotation := '';
 
+          if HasUseStrictDirective(ArrowBody) then
+            ValidateParameterEarlyErrors(Parameters, Line, Column, True,
+              True, False, True);
+
           ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, Line, Column);
           ArrowFn.IsAsync := True;
           ArrowFn.SourceText := ExtractSourceRange(Line, Column);
@@ -4610,6 +4614,10 @@ begin
         Body := ParseFunctionBodyBlock(Previous.Line, Previous.Column)
       else
         Body := Assignment;
+      if HasUseStrictDirective(Body) then
+        ValidateParameterEarlyErrors(Parameters, Line, Column, True,
+          ParametersParsedInAwaitContext, ParametersParsedInYieldContext,
+          True);
     finally
       LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
         SavedDirectLabelStart);
@@ -4677,6 +4685,9 @@ begin
         FInAsyncFunction := SavedInAsyncFunction;
         Dec(FFunctionDepth);
       end;
+      if HasUseStrictDirective(ArrowBody) then
+        ValidateParameterEarlyErrors(Parameters, Line, Column, True,
+          False, False, True);
       ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, Line, Column);
       ArrowFn.SourceText := ExtractSourceRange(Line, Column);
       Result := ArrowFn;

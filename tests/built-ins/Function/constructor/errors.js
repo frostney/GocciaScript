@@ -35,6 +35,9 @@ describe("Function constructor errors", () => {
     expect(() => new Function("arguments", '"use strict";')).toThrow(SyntaxError);
     expect(() => new Function('function eval() { "use strict"; }')).toThrow(SyntaxError);
     expect(() => new Function('function arguments() { "use strict"; }')).toThrow(SyntaxError);
+    expect(() => new Function('return (eval) => { "use strict"; };')).toThrow(SyntaxError);
+    expect(() => new Function('return arguments => { "use strict"; };')).toThrow(SyntaxError);
+    expect(() => new Function('return async eval => { "use strict"; };')).toThrow(SyntaxError);
     expect(() => new Function('"use strict"; const eval = 1;')).toThrow(SyntaxError);
     expect(() => new Function('"use strict"; let arguments = 1;')).toThrow(SyntaxError);
   });
