@@ -12,6 +12,7 @@ type
   private
     procedure TestDeterministicProfileUsesFixedHostValues;
     procedure TestHostProvidersCanBeInjected;
+    procedure TestSystemEnvironmentPreservesConsumerTimeZoneFallback;
     procedure TestSeededRandomUsesPortableSequence;
     procedure TestChildStreamsAreDistinctAndRepeatable;
   public
@@ -23,10 +24,24 @@ begin
   Test('deterministic profile uses fixed host values',
     TestDeterministicProfileUsesFixedHostValues);
   Test('host providers can be injected', TestHostProvidersCanBeInjected);
+  Test('system environment preserves consumer time zone fallback',
+    TestSystemEnvironmentPreservesConsumerTimeZoneFallback);
   Test('seeded random uses portable sequence',
     TestSeededRandomUsesPortableSequence);
   Test('child streams are distinct and repeatable',
     TestChildStreamsAreDistinctAndRepeatable);
+end;
+
+procedure TGocciaHostEnvironmentTests.TestSystemEnvironmentPreservesConsumerTimeZoneFallback;
+var
+  Environment: TGocciaHostEnvironment;
+begin
+  Environment := TGocciaHostEnvironment.Create;
+  try
+    Expect<string>(Environment.ResolveTimeZoneIdentifier('UTC')).ToBe('UTC');
+  finally
+    Environment.Free;
+  end;
 end;
 
 procedure TGocciaHostEnvironmentTests.TestHostProvidersCanBeInjected;
@@ -44,6 +59,8 @@ begin
     Expect<Int64>(EnvironmentA.EpochNanoseconds).ToBe(123);
     Expect<Int64>(EnvironmentA.MonotonicNanoseconds).ToBe(456);
     Expect<string>(EnvironmentA.TimeZoneIdentifier).ToBe('Etc/Injected');
+    Expect<string>(EnvironmentA.ResolveTimeZoneIdentifier('UTC')).ToBe(
+      'Etc/Injected');
     Expect<Double>(EnvironmentA.RandomDouble).ToBe(
       EnvironmentB.RandomDouble);
   finally

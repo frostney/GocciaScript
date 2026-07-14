@@ -2012,7 +2012,7 @@ begin
   FHour12 := -1;
   FFractionalSecondDigits := -1;
   if Assigned(FHostEnvironment) then
-    FTimeZone := FHostEnvironment.TimeZoneIdentifier
+    FTimeZone := FHostEnvironment.ResolveTimeZoneIdentifier(DefaultTimeZone)
   else
     FTimeZone := DefaultTimeZone;
 

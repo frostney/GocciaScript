@@ -60,6 +60,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Realm,
+  Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
@@ -89,7 +90,8 @@ end;
 
 function TGocciaPerformanceValue.GetTimeOriginMilliseconds: Double;
 begin
-  Result := FTimeOriginEpochNanoseconds / 1000000.0;
+  Result := Int64ToDouble(FTimeOriginEpochNanoseconds div 1000000) +
+    Int64ToDouble(FTimeOriginEpochNanoseconds mod 1000000) / 1000000.0;
 end;
 
 // High Resolution Time Level 3 §7 The Performance interface
@@ -105,7 +107,9 @@ begin
   MonotonicBefore := FHostEnvironment.MonotonicNanoseconds;
   FTimeOriginEpochNanoseconds := FHostEnvironment.EpochNanoseconds;
   MonotonicAfter := FHostEnvironment.MonotonicNanoseconds;
-  FTimeOriginMonotonicNanoseconds := (MonotonicBefore + MonotonicAfter) div 2;
+  FTimeOriginMonotonicNanoseconds := MonotonicBefore div 2 +
+    MonotonicAfter div 2 +
+    ((MonotonicBefore mod 2) + (MonotonicAfter mod 2)) div 2;
 
   TGocciaPerformance.InitializePrototype;
   Shared := GetPerformanceShared;
@@ -131,7 +135,8 @@ begin
   Performance := RequirePerformanceThis(AThisValue);
   ElapsedNanoseconds := Performance.FHostEnvironment.MonotonicNanoseconds -
     Performance.FTimeOriginMonotonicNanoseconds;
-  Result := TGocciaNumberLiteralValue.Create(Max(0.0, ElapsedNanoseconds / 1000000.0));
+  Result := TGocciaNumberLiteralValue.Create(Max(0.0,
+    Int64ToDouble(ElapsedNanoseconds) / 1000000.0));
 end;
 
 // High Resolution Time Level 3 §7.2 Performance.timeOrigin

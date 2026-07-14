@@ -149,7 +149,7 @@ Configure the engine-owned host environment before execution and before attachin
 Engine.HostEnvironment.UseDeterministicProfile;
 ```
 
-The fixed profile supplies epoch/monotonic time `0`, UTC, and seeded SplitMix64 randomness to JavaScript while leaving `TimingUtils` infrastructure clocks live. Custom hosts can call `Configure` with `IGocciaHostClock` and `IGocciaHostRandom` adapters instead.
+The fixed profile supplies epoch/monotonic time `0`, UTC, and seeded SplitMix64 randomness to JavaScript while leaving `TimingUtils` infrastructure clocks live. See [Host Environment](host-environment.md) for Pascal and JavaScript provider examples.
 
 ## Engine Lifecycle & Realm Isolation
 

@@ -58,10 +58,15 @@ type
   private
     FClock: IGocciaHostClock;
     FRandom: IGocciaHostRandom;
+    FHasTimeZoneOverride: Boolean;
     FNextChildStreamId: QWord;
     FChildLock: TRTLCriticalSection;
+    procedure SetProviders(const AClock: IGocciaHostClock;
+      const ARandom: IGocciaHostRandom;
+      const AHasTimeZoneOverride: Boolean);
     procedure ForkProviders(out AClock: IGocciaHostClock;
-      out ARandom: IGocciaHostRandom);
+      out ARandom: IGocciaHostRandom;
+      out AHasTimeZoneOverride: Boolean);
   public
     const DeterministicEpochNanoseconds: Int64 = 0;
     const DeterministicMonotonicNanoseconds: Int64 = 0;
@@ -81,6 +86,7 @@ type
     function EpochNanoseconds: Int64; inline;
     function MonotonicNanoseconds: Int64; inline;
     function TimeZoneIdentifier: string; inline;
+    function ResolveTimeZoneIdentifier(const AFallback: string): string;
     function RandomDouble: Double; inline;
   end;
 
@@ -190,7 +196,7 @@ begin
   Clock := TGocciaSystemHostClock.Create;
   Seed := QWord(Clock.EpochNanoseconds) xor
     (QWord(Clock.MonotonicNanoseconds) shl 1) xor QWord(PtrUInt(Self));
-  Configure(Clock, TGocciaSeededHostRandom.Create(Seed));
+  SetProviders(Clock, TGocciaSeededHostRandom.Create(Seed), False);
 end;
 
 constructor TGocciaHostEnvironment.Create(const AClock: IGocciaHostClock;
@@ -212,12 +218,20 @@ end;
 procedure TGocciaHostEnvironment.Configure(const AClock: IGocciaHostClock;
   const ARandom: IGocciaHostRandom);
 begin
+  SetProviders(AClock, ARandom, True);
+end;
+
+procedure TGocciaHostEnvironment.SetProviders(const AClock: IGocciaHostClock;
+  const ARandom: IGocciaHostRandom;
+  const AHasTimeZoneOverride: Boolean);
+begin
   if not Assigned(AClock) then
     raise EArgumentNilException.Create('AClock');
   if not Assigned(ARandom) then
     raise EArgumentNilException.Create('ARandom');
   FClock := AClock;
   FRandom := ARandom;
+  FHasTimeZoneOverride := AHasTimeZoneOverride;
   FNextChildStreamId := 0;
 end;
 
@@ -229,13 +243,15 @@ begin
 end;
 
 procedure TGocciaHostEnvironment.ForkProviders(out AClock: IGocciaHostClock;
-  out ARandom: IGocciaHostRandom);
+  out ARandom: IGocciaHostRandom;
+  out AHasTimeZoneOverride: Boolean);
 begin
   EnterCriticalSection(FChildLock);
   try
     Inc(FNextChildStreamId);
     AClock := FClock;
     ARandom := FRandom.Fork(FNextChildStreamId);
+    AHasTimeZoneOverride := FHasTimeZoneOverride;
   finally
     LeaveCriticalSection(FChildLock);
   end;
@@ -244,13 +260,14 @@ end;
 procedure TGocciaHostEnvironment.ConfigureAsChildOf(
   const AParent: TGocciaHostEnvironment);
 var
+  HasTimeZoneOverride: Boolean;
   Clock: IGocciaHostClock;
   Random: IGocciaHostRandom;
 begin
   if not Assigned(AParent) then
     raise EArgumentNilException.Create('AParent');
-  AParent.ForkProviders(Clock, Random);
-  Configure(Clock, Random);
+  AParent.ForkProviders(Clock, Random, HasTimeZoneOverride);
+  SetProviders(Clock, Random, HasTimeZoneOverride);
 end;
 
 function TGocciaHostEnvironment.EpochNanoseconds: Int64;
@@ -266,6 +283,15 @@ end;
 function TGocciaHostEnvironment.TimeZoneIdentifier: string;
 begin
   Result := FClock.TimeZoneIdentifier;
+end;
+
+function TGocciaHostEnvironment.ResolveTimeZoneIdentifier(
+  const AFallback: string): string;
+begin
+  if FHasTimeZoneOverride then
+    Result := FClock.TimeZoneIdentifier
+  else
+    Result := AFallback;
 end;
 
 function TGocciaHostEnvironment.RandomDouble: Double;

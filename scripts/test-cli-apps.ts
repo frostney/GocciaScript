@@ -3,6 +3,7 @@
  * test-cli-apps.ts
  *
  * App-specific features: GocciaScriptLoader (JSON output, --global/--globals,
+ * JavaScript host environments,
  * coverage, source maps), GocciaScriptLoaderBare (core-engine-only stdin/file
  * execution, CLI print, and runtime-global absence), GocciaBundler (compile,
  * roundtrip, stdin, directory, .gbc rejection, source maps),
@@ -1816,6 +1817,70 @@ console.log("Loader: Promise.then drain (bytecode)...");
 }
 
 // -- --global / --globals -------------------------------------------------------
+
+console.log("Loader: --host-environment module controls time, zone, and random streams...");
+{
+  const tmp = makeTmp();
+  try {
+    const providerPath = join(tmp, "host-environment.js");
+    writeFileSync(
+      providerPath,
+      [
+        "let epoch = 1700000000000000000n;",
+        "let monotonic = 0n;",
+        "export const epochNanoseconds = () => { const value = epoch; epoch += 1000000n; return value; };",
+        "export const monotonicNanoseconds = () => { const value = monotonic; monotonic += 1000000n; return value; };",
+        'export const timeZoneIdentifier = () => "Europe/London";',
+        "export const random = (streamId) => streamId === 0n ? 0.25 : 0.75;",
+        "",
+      ].join("\n"),
+    );
+
+    const source = [
+      "const child = new ShadowRealm();",
+      "[",
+      "  Date.now(),",
+      "  Temporal.Now.instant().epochNanoseconds.toString(),",
+      "  Temporal.Now.timeZoneId(),",
+      '  new Intl.DateTimeFormat("en").resolvedOptions().timeZone,',
+      "  Math.random(),",
+      "  child.evaluate(\"Math.random()\"),",
+      "  performance.timeOrigin,",
+      "  performance.now(),",
+      '].join("|");',
+      "",
+    ].join("\n");
+    const expected =
+      "1700000000001|1700000000002000000|Europe/London|Europe/London|0.25|0.75|1700000000000|1.5";
+
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const result = runLoaderJson(source, [
+        `--host-environment=${providerPath}`,
+        "--unsafe-shadowrealm",
+        `--mode=${mode}`,
+      ]);
+      if (result.exitCode !== 0 || result.json.files?.[0]?.result !== expected)
+        throw new Error(
+          `Loader host environment ${mode} expected ${expected}, got ${result.json.files?.[0]?.result}${result.stderr}`,
+        );
+    }
+
+    const conflict = runLoaderJson("0;\n", [
+      `--host-environment=${providerPath}`,
+      "--deterministic",
+    ]);
+    const conflictOutput = JSON.stringify(conflict.json) + conflict.stderr;
+    if (
+      conflict.exitCode === 0 ||
+      !conflictOutput.includes("cannot be combined with --deterministic")
+    )
+      throw new Error(
+        `Loader should reject conflicting host environment options, got: ${conflictOutput}`,
+      );
+  } finally {
+    clean(tmp);
+  }
+}
 
 console.log("Loader: --global option...");
 {

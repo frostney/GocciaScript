@@ -20,6 +20,13 @@ the clock and derive stable, distinct RNG streams. Hosts can instead inject
 `Engine.HostEnvironment`; configuration must happen before execution and
 before runtime extensions such as `performance` attach.
 
+`GocciaScriptLoader --host-environment=<module>` provides the same injection
+seam to JavaScript callers. The module exports callable `epochNanoseconds`,
+`monotonicNanoseconds`, `timeZoneIdentifier`, and `random` providers and is
+evaluated before the loader runtime profile attaches, so `performance` captures
+the injected origin. Default system providers preserve each consumer's prior
+time-zone fallback; an explicitly configured provider overrides it.
+
 This keeps the state per engine rather than global, follows per-engine realm
 isolation, and gives callers one seam for all host-controlled nondeterminism.
 It implements ECMA-262 2026 `Math.random` (§21.3.2.28,
