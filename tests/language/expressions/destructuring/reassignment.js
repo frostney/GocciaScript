@@ -90,3 +90,14 @@ test("object rest assignment creates ordinary objects for primitive sources", ()
   expect(rest instanceof Object).toBe(true);
   expect(Object.keys(rest)).toEqual([]);
 });
+
+test("duplicate __proto__ names remain valid in assignment patterns", () => {
+  const source = { ["__proto__"]: 42 };
+  let first;
+  let second;
+
+  ({ __proto__: first, __proto__: second } = source);
+
+  expect(first).toBe(42);
+  expect(second).toBe(42);
+});

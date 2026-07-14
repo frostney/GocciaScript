@@ -2038,7 +2038,9 @@ var
   IdentExpr: TGocciaIdentifierExpression;
   ObjReg, KeyReg: UInt16;
   PropIdx: UInt16;
-  NilJump, EndJump: Integer;
+  EndJump, JumpIndex: Integer;
+  NullishJumps: TGocciaCompilerJumpArray;
+  NullishJumpCount: Integer;
 
   procedure EmitGlobalDeleteIdentifierResult(const AName: string);
   var
@@ -2141,12 +2143,12 @@ begin
     end;
 
     ObjReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(MemberExpr.ObjectExpr, ObjReg);
+    NullishJumpCount := 0;
+    CompileExpressionWithOptionalChainJumps(ACtx, MemberExpr.ObjectExpr,
+      ObjReg, NullishJumps, NullishJumpCount);
 
     if MemberExpr.Optional then
-      NilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, ObjReg)
-    else
-      NilJump := -1;
+      AddOptionalChainJump(ACtx, NullishJumps, NullishJumpCount, ObjReg);
 
     if MemberExpr.Computed then
     begin
@@ -2169,10 +2171,11 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ObjReg, 0));
     end;
 
-    if NilJump >= 0 then
+    if NullishJumpCount > 0 then
     begin
       EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-      PatchJumpTarget(ACtx, NilJump);
+      for JumpIndex := 0 to NullishJumpCount - 1 do
+        PatchJumpTarget(ACtx, NullishJumps[JumpIndex]);
       EmitInstruction(ACtx, EncodeABC(OP_LOAD_TRUE, ADest, 0, 0));
       PatchJumpTarget(ACtx, EndJump);
     end;
@@ -2455,6 +2458,14 @@ begin
   if LocalIdx >= 0 then
   begin
     Local := ACtx.Scope.GetLocal(LocalIdx);
+    if not Local.IsGlobalBacked then
+    begin
+      // PutValue on an uninitialized lexical binding throws after the RHS has
+      // been evaluated. Probe the destination without disturbing ADest.
+      ErrorReg := ACtx.Scope.AllocateRegister;
+      EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, ErrorReg, Local.Slot));
+      ACtx.Scope.FreeRegister;
+    end;
     if Local.IsConst then
     begin
       if ShouldIgnoreNonStrictImmutableLocalAssignment(ACtx, Local) then
@@ -2716,12 +2727,18 @@ var
   LocalIdx, UpvalIdx: Integer;
   Local: TGocciaCompilerLocal;
   Upvalue: TGocciaCompilerUpvalue;
-  Slot: UInt16;
+  Slot, CheckReg: UInt16;
 begin
   LocalIdx := ACtx.Scope.ResolveLocal(AName);
   if LocalIdx >= 0 then
   begin
     Local := ACtx.Scope.GetLocal(LocalIdx);
+    if AAssignmentMode and not Local.IsGlobalBacked then
+    begin
+      CheckReg := ACtx.Scope.AllocateRegister;
+      EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, CheckReg, Local.Slot));
+      ACtx.Scope.FreeRegister;
+    end;
     if AAssignmentMode and Local.IsConst then
     begin
       if ShouldIgnoreNonStrictImmutableLocalAssignment(ACtx, Local) then
@@ -2936,13 +2953,15 @@ begin
         ATarget.Kind := pdtSuperComputedProperty;
         ACtx.CompileExpression(MemberPat.Expression.PropertyExpression,
           UInt16(ATarget.KeyReg));
-        EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY,
-          UInt16(ATarget.KeyReg), UInt16(ATarget.KeyReg), 0));
+        EmitInstruction(ACtx, EncodeABC(OP_SUPER_BASE, SuperReg, SuperReg,
+          ThisReg));
       end
       else
       begin
         ATarget.Kind := pdtSuperStringProperty;
         ATarget.PropertyName := MemberPat.Expression.PropertyName;
+        EmitInstruction(ACtx, EncodeABC(OP_SUPER_BASE, SuperReg, SuperReg,
+          ThisReg));
         NameIdx := ACtx.Template.AddConstantString(ATarget.PropertyName);
         EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST,
           UInt16(ATarget.KeyReg), NameIdx));
@@ -3006,8 +3025,8 @@ begin
       EmitInstruction(ACtx, EncodeABC(StoreByKeyOpcode(ACtx),
         UInt16(ATarget.ObjectReg), UInt16(ATarget.KeyReg), AValueReg));
     pdtSuperStringProperty, pdtSuperComputedProperty:
-      EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET, UInt16(ATarget.ObjectReg),
-        UInt16(ATarget.KeyReg), AValueReg));
+      EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET_BASE,
+        UInt16(ATarget.ObjectReg), UInt16(ATarget.KeyReg), AValueReg));
   end;
 end;
 
@@ -5074,18 +5093,8 @@ begin
             ValExpr := FinalExpr;
 
           if Assigned(ValExpr) then
-          begin
-            if AExpr.Properties.TryGetValue(Key, FinalExpr) and
-               (FinalExpr = ValExpr) then
-              CompileObjectProperty(ACtx, ADest, Key, ValExpr,
-                Order[I].UsesColonSyntax)
-            else
-            begin
-              ValReg := ACtx.Scope.AllocateRegister;
-              ACtx.CompileExpression(ValExpr, ValReg);
-              ACtx.Scope.FreeRegister;
-            end;
-          end;
+            CompileObjectProperty(ACtx, ADest, Key, ValExpr,
+              Order[I].UsesColonSyntax);
         end;
         pstComputed:
         begin
@@ -5820,8 +5829,7 @@ begin
       end;
 
       Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
-      if ADest <> Slot then
-        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
+      EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, ADest, Slot));
       JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
       LocalType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
       if ACtx.Scope.GetLocal(LocalIdx).IsConst then

@@ -25,8 +25,11 @@ type
 
   // Expressions — virtual Evaluate replaces the `is` dispatch chain in Goccia.Evaluator
   TGocciaExpression = class(TGocciaASTNode)
+  private
+    FParenthesized: Boolean;
   public
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; virtual; abstract;
+    property Parenthesized: Boolean read FParenthesized write FParenthesized;
   end;
 
   // Statements — virtual Execute replaces the `is` dispatch chain in Goccia.Evaluator

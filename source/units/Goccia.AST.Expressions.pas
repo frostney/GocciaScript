@@ -124,12 +124,10 @@ type
   TGocciaIdentifierExpression = class(TGocciaExpression)
   private
     FName: string;
-    FParenthesized: Boolean;
   public
     constructor Create(const AName: string; const ALine, AColumn: Integer);
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Name: string read FName;
-    property Parenthesized: Boolean read FParenthesized write FParenthesized;
   end;
 
   TGocciaBinaryExpression = class(TGocciaExpression)
@@ -1074,7 +1072,6 @@ constructor TGocciaIdentifierExpression.Create(const AName: string;
 begin
   inherited Create(ALine, AColumn);
   FName := AName;
-  FParenthesized := False;
 end;
 
 { TGocciaBinaryExpression }
