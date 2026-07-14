@@ -20,7 +20,7 @@ type
   TGocciaFFIPointerValue = class(TGocciaObjectValue)
   private
     FAddress: Pointer;
-    FLibraryGuard: TGocciaFFILibraryGuard;
+    FLifetimeGuard: TGocciaFFIDependentGuard;
 
     constructor CreatePrototypeHost;
     function GetAddress: Pointer;
@@ -31,7 +31,7 @@ type
     function AddressGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AAddress: Pointer;
-      const ALibraryGuard: TGocciaFFILibraryGuard = nil);
+      const ALifetimeGuard: TGocciaFFIDependentGuard = nil);
     destructor Destroy; override;
 
     function GetProperty(const AName: string): TGocciaValue; override;
@@ -43,7 +43,7 @@ type
     class procedure ExposePrototype(const ATarget: TGocciaObjectValue);
 
     property Address: Pointer read GetAddress;
-    property LibraryGuard: TGocciaFFILibraryGuard read FLibraryGuard;
+    property LifetimeGuard: TGocciaFFIDependentGuard read FLifetimeGuard;
   end;
 
 implementation
@@ -75,7 +75,7 @@ const
   FFI_POINTER_TAG = 'FFIPointer';
 
 constructor TGocciaFFIPointerValue.Create(const AAddress: Pointer;
-  const ALibraryGuard: TGocciaFFILibraryGuard);
+  const ALifetimeGuard: TGocciaFFIDependentGuard);
 var
   Shared: TGocciaSharedPrototype;
 begin
@@ -85,10 +85,10 @@ begin
   Shared := GetFFIPointerShared;
   if Assigned(Shared) then
     FPrototype := Shared.Prototype;
-  if Assigned(ALibraryGuard) then
+  if Assigned(ALifetimeGuard) then
   begin
-    ALibraryGuard.RetainDependent;
-    FLibraryGuard := ALibraryGuard;
+    ALifetimeGuard.RetainDependent;
+    FLifetimeGuard := ALifetimeGuard;
   end;
 end;
 
@@ -99,15 +99,15 @@ end;
 
 destructor TGocciaFFIPointerValue.Destroy;
 begin
-  if Assigned(FLibraryGuard) then
-    FLibraryGuard.ReleaseDependent;
+  if Assigned(FLifetimeGuard) then
+    FLifetimeGuard.ReleaseDependent;
   inherited;
 end;
 
 procedure TGocciaFFIPointerValue.EnsureOpen;
 begin
-  if Assigned(FLibraryGuard) and FLibraryGuard.IsClosed then
-    ThrowTypeError(SErrorFFIPointerLibraryClosed, SSuggestFFIUsage);
+  if Assigned(FLifetimeGuard) and FLifetimeGuard.IsClosed then
+    ThrowTypeError(FLifetimeGuard.ClosedErrorMessage, SSuggestFFIUsage);
 end;
 
 function TGocciaFFIPointerValue.GetAddress: Pointer;

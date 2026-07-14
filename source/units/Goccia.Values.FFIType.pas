@@ -33,7 +33,7 @@ type
 
   TGocciaFFIAggregatePointerGuardEntry = record
     Offset: Integer;
-    LibraryGuard: TGocciaFFILibraryGuard;
+    LifetimeGuard: TGocciaFFIDependentGuard;
   end;
 
   TGocciaFFIAggregatePointerGuards = class
@@ -46,9 +46,9 @@ type
     destructor Destroy; override;
     procedure AddReference;
     procedure ReleaseReference;
-    function GuardAt(const AOffset: Integer): TGocciaFFILibraryGuard;
+    function GuardAt(const AOffset: Integer): TGocciaFFIDependentGuard;
     procedure SetGuard(const AOffset: Integer;
-      const ALibraryGuard: TGocciaFFILibraryGuard);
+      const ALifetimeGuard: TGocciaFFIDependentGuard);
     procedure ClearRange(const AOffset, ASize: Integer);
     procedure CopyRangeFrom(const ASource: TGocciaFFIAggregatePointerGuards;
       const ASourceOffset, ADestinationOffset, ASize: Integer);
@@ -140,8 +140,8 @@ var
   I: Integer;
 begin
   for I := 0 to High(FEntries) do
-    if Assigned(FEntries[I].LibraryGuard) then
-      FEntries[I].LibraryGuard.ReleaseDependent;
+    if Assigned(FEntries[I].LifetimeGuard) then
+      FEntries[I].LifetimeGuard.ReleaseDependent;
   inherited;
 end;
 
@@ -169,28 +169,28 @@ begin
 end;
 
 function TGocciaFFIAggregatePointerGuards.GuardAt(
-  const AOffset: Integer): TGocciaFFILibraryGuard;
+  const AOffset: Integer): TGocciaFFIDependentGuard;
 var
   Index: Integer;
 begin
   Index := FindEntry(AOffset);
   if Index >= 0 then
-    Result := FEntries[Index].LibraryGuard
+    Result := FEntries[Index].LifetimeGuard
   else
     Result := nil;
 end;
 
 procedure TGocciaFFIAggregatePointerGuards.SetGuard(
-  const AOffset: Integer; const ALibraryGuard: TGocciaFFILibraryGuard);
+  const AOffset: Integer; const ALifetimeGuard: TGocciaFFIDependentGuard);
 var
   Index, I: Integer;
 begin
   Index := FindEntry(AOffset);
-  if not Assigned(ALibraryGuard) then
+  if not Assigned(ALifetimeGuard) then
   begin
     if Index < 0 then Exit;
-    if Assigned(FEntries[Index].LibraryGuard) then
-      FEntries[Index].LibraryGuard.ReleaseDependent;
+    if Assigned(FEntries[Index].LifetimeGuard) then
+      FEntries[Index].LifetimeGuard.ReleaseDependent;
     for I := Index to High(FEntries) - 1 do
       FEntries[I] := FEntries[I + 1];
     SetLength(FEntries, Length(FEntries) - 1);
@@ -199,9 +199,9 @@ begin
 
   if Index >= 0 then
   begin
-    if FEntries[Index].LibraryGuard = ALibraryGuard then Exit;
-    if Assigned(FEntries[Index].LibraryGuard) then
-      FEntries[Index].LibraryGuard.ReleaseDependent;
+    if FEntries[Index].LifetimeGuard = ALifetimeGuard then Exit;
+    if Assigned(FEntries[Index].LifetimeGuard) then
+      FEntries[Index].LifetimeGuard.ReleaseDependent;
   end
   else
   begin
@@ -210,8 +210,8 @@ begin
     FEntries[Index].Offset := AOffset;
   end;
 
-  ALibraryGuard.RetainDependent;
-  FEntries[Index].LibraryGuard := ALibraryGuard;
+  ALifetimeGuard.RetainDependent;
+  FEntries[Index].LifetimeGuard := ALifetimeGuard;
 end;
 
 procedure TGocciaFFIAggregatePointerGuards.ClearRange(
@@ -238,7 +238,7 @@ procedure TGocciaFFIAggregatePointerGuards.CopyRangeFrom(
 var
   I, Count, EndOffset: Integer;
   Offsets: array of Integer;
-  Guards: array of TGocciaFFILibraryGuard;
+  Guards: array of TGocciaFFIDependentGuard;
 begin
   if ASize <= 0 then Exit;
   if not Assigned(ASource) then
@@ -258,7 +258,7 @@ begin
       SetLength(Guards, Count + 1);
       Offsets[Count] := ADestinationOffset +
         (ASource.FEntries[I].Offset - ASourceOffset);
-      Guards[Count] := ASource.FEntries[I].LibraryGuard;
+      Guards[Count] := ASource.FEntries[I].LifetimeGuard;
       if Assigned(Guards[Count]) then
         Guards[Count].RetainDependent;
       Inc(Count);
@@ -723,6 +723,14 @@ begin
 
   if AType.Kind = ftkCallback then
   begin
+    if AValue is TGocciaNullLiteralValue then
+    begin
+      RawPointer := 0;
+      Move(RawPointer, Data[AOffset], SizeOf(Pointer));
+      FBuffer.Data := Data;
+      FPointerGuards.SetGuard(AOffset, nil);
+      Exit;
+    end;
     if not (AValue is TGocciaFFICallbackValue) then
       ThrowTypeError(SErrorFFICallbackFieldHandle,
         SSuggestFFIUsage);
@@ -734,7 +742,7 @@ begin
     RawPointer := PtrUInt(CallbackValue.CodePointer);
     Move(RawPointer, Data[AOffset], SizeOf(Pointer));
     FBuffer.Data := Data;
-    FPointerGuards.SetGuard(AOffset, nil);
+    FPointerGuards.SetGuard(AOffset, CallbackValue.LifetimeGuard);
     Exit;
   end;
 
@@ -753,7 +761,7 @@ begin
       begin
         RawPointer := PtrUInt(TGocciaFFIPointerValue(AValue).Address);
         FPointerGuards.SetGuard(AOffset,
-          TGocciaFFIPointerValue(AValue).LibraryGuard);
+          TGocciaFFIPointerValue(AValue).LifetimeGuard);
       end
       else if AValue is TGocciaNullLiteralValue then
       begin

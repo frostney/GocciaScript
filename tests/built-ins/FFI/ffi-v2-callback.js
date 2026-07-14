@@ -126,17 +126,22 @@ describe("FFI.callback", () => {
     });
     const callback = I32Callback.create((value) => value * 3);
 
-    expect(callback.address).not.toBe(0);
-    expect(isNull(callback)).toBe(0);
-    store(callback);
-    Goccia.gc();
-    expect(invokeStored(14)).toBe(42);
-    expect(invokeStored(7)).toBe(21);
+    try {
+      expect(callback.address).not.toBe(0);
+      expect(isNull(callback)).toBe(0);
+      store(callback);
+      Goccia.gc();
+      expect(invokeStored(14)).toBe(42);
+      expect(invokeStored(7)).toBe(21);
 
-    clearStored();
-    callback.close();
-    expect(() => callback.address).toThrow(TypeError);
-    expect(() => isNull(callback)).toThrow(TypeError);
+      clearStored();
+      callback.close();
+      expect(() => callback.address).toThrow(TypeError);
+      expect(() => isNull(callback)).toThrow(TypeError);
+    } finally {
+      clearStored();
+      if (!callback.closed) callback.close();
+    }
   });
 
   test("rejects a closed persistent callback before entering native code", () => {
@@ -154,11 +159,21 @@ describe("FFI.callback", () => {
   test("stores persistent callback pointers in aggregate fields", () => {
     const Holder = FFI.struct({ callback: I32Callback });
     const callback = I32Callback.create((value) => value + 1);
-    const holder = Holder.create({ callback });
+    let holder;
 
-    expect(holder.callback.address).toBe(callback.address);
+    try {
+      holder = Holder.create({ callback });
 
-    callback.close();
+      expect(holder.callback.address).toBe(callback.address);
+
+      callback.close();
+      expect(() => holder.callback.address).toThrow(TypeError);
+    } finally {
+      if (holder) holder.callback = null;
+      holder = null;
+      Goccia.gc();
+      if (!callback.closed) callback.close();
+    }
   });
 
   test("defers a callback exception until native code returns", () => {
@@ -337,12 +352,16 @@ describe("FFI.callback", () => {
       returns: "i32",
     });
     const callback = I32Callback.create((value) => value + 1);
+    let holder;
 
     try {
-      const holder = Holder.create({ callback, value: 41 });
+      holder = Holder.create({ callback, value: 41 });
       expect(() => invoke(holder)).toThrow(TypeError);
     } finally {
-      callback.close();
+      if (holder) holder.callback = null;
+      holder = null;
+      Goccia.gc();
+      if (!callback.closed) callback.close();
     }
   });
 

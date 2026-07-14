@@ -8,7 +8,18 @@ uses
   Dynlibs;
 
 type
-  TGocciaFFILibraryGuard = class
+  TGocciaFFIDependentGuard = class
+  protected
+    function GetIsClosed: Boolean; virtual; abstract;
+  public
+    procedure RetainDependent; virtual; abstract;
+    procedure ReleaseDependent; virtual; abstract;
+    function ClosedErrorMessage: string; virtual; abstract;
+
+    property IsClosed: Boolean read GetIsClosed;
+  end;
+
+  TGocciaFFILibraryGuard = class(TGocciaFFIDependentGuard)
   private
     FHandle: TLibHandle;
     FPath: string;
@@ -17,24 +28,28 @@ type
     FDependentCount: Integer;
 
     procedure Unload;
+  protected
+    function GetIsClosed: Boolean; override;
   public
     constructor Create(const APath: string);
     destructor Destroy; override;
 
-    procedure RetainDependent;
-    procedure ReleaseDependent;
+    procedure RetainDependent; override;
+    procedure ReleaseDependent; override;
     procedure ReleaseOwner;
     function FindSymbol(const AName: string): CodePointer;
+    function ClosedErrorMessage: string; override;
     procedure Close;
 
     property Path: string read FPath;
-    property IsClosed: Boolean read FClosed;
   end;
 
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+
+  Goccia.Error.Messages;
 
 constructor TGocciaFFILibraryGuard.Create(const APath: string);
 begin
@@ -50,6 +65,11 @@ destructor TGocciaFFILibraryGuard.Destroy;
 begin
   Unload;
   inherited;
+end;
+
+function TGocciaFFILibraryGuard.GetIsClosed: Boolean;
+begin
+  Result := FClosed;
 end;
 
 procedure TGocciaFFILibraryGuard.Unload;
@@ -98,6 +118,11 @@ begin
   Result := GetProcAddress(FHandle, AName);
   if not Assigned(Result) then
     raise Exception.Create('Symbol not found: ' + AName + ' in ' + FPath);
+end;
+
+function TGocciaFFILibraryGuard.ClosedErrorMessage: string;
+begin
+  Result := SErrorFFIPointerLibraryClosed;
 end;
 
 procedure TGocciaFFILibraryGuard.Close;

@@ -10,6 +10,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.FFI.ABI,
   Goccia.FFI.CallbackSlots,
+  Goccia.FFI.LibraryGuard,
   Goccia.FFI.Types,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -32,7 +33,10 @@ type
     FCodePointer: CodePointer;
     FClosed: Boolean;
     FPinned: Boolean;
+    FDependentCount: Integer;
+    FLifetimeGuard: TGocciaFFIDependentGuard;
     FPendingException: Exception;
+    procedure ReleaseNativeResources;
     procedure ReleaseNativeSlot;
     function CloseMethod(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -53,6 +57,7 @@ type
     property Descriptor: TGocciaFFITypeDescriptor read FDescriptor;
     property CodePointer: CodePointer read FCodePointer;
     property Closed: Boolean read FClosed;
+    property LifetimeGuard: TGocciaFFIDependentGuard read FLifetimeGuard;
   end;
 
 procedure BeginFFICallContext(var AContext: TGocciaFFICallContext);
@@ -65,7 +70,6 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.FFI.LibraryGuard,
   Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.Error,
@@ -79,8 +83,51 @@ const
   PROP_CLOSE = 'close';
   PROP_CLOSED = 'closed';
 
+type
+  TGocciaFFICallbackLifetimeGuard = class(TGocciaFFIDependentGuard)
+  private
+    FOwner: TGocciaFFICallbackValue;
+  protected
+    function GetIsClosed: Boolean; override;
+  public
+    constructor Create(const AOwner: TGocciaFFICallbackValue);
+    procedure RetainDependent; override;
+    procedure ReleaseDependent; override;
+    function ClosedErrorMessage: string; override;
+  end;
+
 threadvar
   GCurrentFFICallContext: PGocciaFFICallContext;
+
+constructor TGocciaFFICallbackLifetimeGuard.Create(
+  const AOwner: TGocciaFFICallbackValue);
+begin
+  inherited Create;
+  FOwner := AOwner;
+end;
+
+function TGocciaFFICallbackLifetimeGuard.GetIsClosed: Boolean;
+begin
+  Result := not Assigned(FOwner) or FOwner.FClosed;
+end;
+
+procedure TGocciaFFICallbackLifetimeGuard.RetainDependent;
+begin
+  Inc(FOwner.FDependentCount);
+end;
+
+procedure TGocciaFFICallbackLifetimeGuard.ReleaseDependent;
+begin
+  Assert(FOwner.FDependentCount > 0);
+  Dec(FOwner.FDependentCount);
+  if FOwner.FClosed and (FOwner.FDependentCount = 0) then
+    FOwner.ReleaseNativeResources;
+end;
+
+function TGocciaFFICallbackLifetimeGuard.ClosedErrorMessage: string;
+begin
+  Result := SErrorFFICallbackClosed;
+end;
 
 procedure BeginFFICallContext(var AContext: TGocciaFFICallContext);
 begin
@@ -353,6 +400,7 @@ begin
       SSuggestFFIUsage);
   inherited Create(TGocciaObjectValue.SharedObjectPrototype);
   FSlot := -1;
+  FLifetimeGuard := TGocciaFFICallbackLifetimeGuard.Create(Self);
   FDescriptor := ADescriptor;
   FDescriptor.AddReference;
   FCallable := ACallable;
@@ -410,9 +458,8 @@ end;
 
 destructor TGocciaFFICallbackValue.Destroy;
 begin
-  if FSlot >= 0 then ReleaseFFICallbackSlot(FSlot);
-  if FPinned and Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.UnpinObject(Self);
+  ReleaseNativeResources;
+  FLifetimeGuard.Free;
   if Assigned(FPendingException) then
   begin
     FPendingException.Free;
@@ -423,21 +470,27 @@ begin
   inherited;
 end;
 
+procedure TGocciaFFICallbackValue.ReleaseNativeResources;
+begin
+  if FSlot >= 0 then
+  begin
+    ReleaseFFICallbackSlot(FSlot);
+    FSlot := -1;
+  end;
+  if FPinned and Assigned(TGarbageCollector.Instance) then
+  begin
+    TGarbageCollector.Instance.UnpinObject(Self);
+    FPinned := False;
+  end;
+end;
+
 procedure TGocciaFFICallbackValue.ReleaseNativeSlot;
 begin
   if not FClosed then
   begin
     FClosed := True;
-    if FSlot >= 0 then
-    begin
-      ReleaseFFICallbackSlot(FSlot);
-      FSlot := -1;
-    end;
-    if FPinned and Assigned(TGarbageCollector.Instance) then
-    begin
-      TGarbageCollector.Instance.UnpinObject(Self);
-      FPinned := False;
-    end;
+    if FDependentCount = 0 then
+      ReleaseNativeResources;
   end;
 end;
 
@@ -561,6 +614,9 @@ begin
       MirrorCallbackHiddenResultPointer(FSignature.ABI, HiddenResultPointer,
         AState);
     end;
+
+    if FClosed then
+      Exit;
 
     if Assigned(GCurrentFFICallContext) and
        GCurrentFFICallContext^.Failed then
