@@ -3,7 +3,7 @@
   "jetStream": {
     "repository": "https://github.com/WebKit/JetStream",
     "ref": "main",
-    "commit": "3967678fa8ab98d847ab33cf3728dba726fa854b",
+    "commit": "b7babdf323e64e69bd2f6c376189c15825f5c73a",
     "release": "3.0",
     "benchmarks": {
       "hash-map": {
