@@ -36,6 +36,8 @@ These gates are mandatory. Do not skip them because the tagline "looks clear" or
 
 ### Use the grill skill for thoroughness (always when available)
 
+> Maintainer sync-note: this grill contract (the "literally run it / forbidden substitutes" rules) is intentionally duplicated verbatim in `create-issue`, `implement-issue`, and `implement-idea` so each skill stays portable as a standalone file — a shared reference cannot cross skill boundaries. When you edit it, update all three copies together.
+
 Before drafting, the agent **always invokes the grill skill** when it is registered in this environment — not only when something is ambiguous. This is GATE A above. The grill output is folded into the issue body so the result is more thorough than the raw tagline would produce.
 
 **Invoking the grill skill means literally running that skill — not imitating its spirit.** `grill-with-docs` and `grill-me` are separate skills with their own multi-question interrogation loop. To invoke one you **read its `SKILL.md` and execute its procedure**: actually ask the user the grilling questions it generates and wait for the answers, iterating until the loop completes. The following are **NOT** invoking it and are forbidden substitutes:
