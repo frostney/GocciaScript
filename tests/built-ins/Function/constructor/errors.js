@@ -30,6 +30,60 @@ describe("Function constructor errors", () => {
     expect(() => new Function('"use strict"; public = 1;')).toThrow(SyntaxError);
   });
 
+  test("strict bodies reject restricted function and parameter bindings", () => {
+    expect(() => new Function("eval", '"use strict";')).toThrow(SyntaxError);
+    expect(() => new Function("arguments", '"use strict";')).toThrow(SyntaxError);
+    expect(() => new Function('function eval() { "use strict"; }')).toThrow(SyntaxError);
+    expect(() => new Function('function arguments() { "use strict"; }')).toThrow(SyntaxError);
+    expect(() => new Function('return (eval) => { "use strict"; };')).toThrow(SyntaxError);
+    expect(() => new Function('return arguments => { "use strict"; };')).toThrow(SyntaxError);
+    expect(() => new Function('return async eval => { "use strict"; };')).toThrow(SyntaxError);
+    expect(() => new Function('"use strict"; const eval = 1;')).toThrow(SyntaxError);
+    expect(() => new Function('"use strict"; let arguments = 1;')).toThrow(SyntaxError);
+  });
+
+  test("strict bodies reject identifier deletion and unbraced function statements", () => {
+    expect(() => new Function('"use strict"; delete value;')).toThrow(SyntaxError);
+    expect(() => new Function('"use strict"; if (true) function f() {}')).toThrow(SyntaxError);
+    expect(() => new Function("while (false) function f() {}"))
+      .toThrow(SyntaxError);
+    expect(() => new Function("for (;;) function f() {}"))
+      .toThrow(SyntaxError);
+  });
+
+  test("expression grammar rejects ambiguous unparenthesized forms", () => {
+    expect(() => new Function("return null ?? false || true;"))
+      .toThrow(SyntaxError);
+    expect(() => new Function("return true && null ?? false;"))
+      .toThrow(SyntaxError);
+    expect(() => new Function("return -1 ** 2;"))
+      .toThrow(SyntaxError);
+    expect(() => new Function("let value; ([value]) = [1];"))
+      .toThrow(SyntaxError);
+  });
+
+  test("optional chains are rejected in forbidden syntactic positions", () => {
+    expect(() => new Function("const C = function() {}; return new C?.();"))
+      .toThrow(SyntaxError);
+    expect(() => new Function("const tag = () => {}; return tag?.`value`;"))
+      .toThrow(SyntaxError);
+  });
+
+  test("traditional for heads enforce ExpressionNoIn and unique lexical bindings", () => {
+    expect(() => new Function("for (let x = 0 in {}; ; ) {}"))
+      .toThrow(SyntaxError);
+    expect(() => new Function("for (let x = 0, x = 1; ; ) {}"))
+      .toThrow(SyntaxError);
+
+    expect(typeof new Function("for (let x = (0 in {}); ; ) { break; }"))
+      .toBe("function");
+  });
+
+  test("object literals reject invalid shorthand", () => {
+    expect(() => new Function("return { true };"))
+      .toThrow(SyntaxError);
+  });
+
   test("super is rejected inside nested dynamic body containers", () => {
     expect(() => new Function("for (; super.value; ) {}")).toThrow(SyntaxError);
     expect(() => new Function("while (super.value) {}")).toThrow(SyntaxError);

@@ -16,3 +16,13 @@ test("strict strings reject decimal escapes", () => {
     Function('"use strict"; "\\1";');
   }).toThrow(SyntaxError);
 });
+
+test("a later use strict directive rejects earlier decimal-escape directives", () => {
+  expect(() => {
+    Function('"\\145"; "use strict";');
+  }).toThrow(SyntaxError);
+
+  expect(() => {
+    Function('function nested() { "\\8"; "use strict"; }');
+  }).toThrow(SyntaxError);
+});

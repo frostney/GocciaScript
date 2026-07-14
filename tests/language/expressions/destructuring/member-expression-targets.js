@@ -150,3 +150,89 @@ test("object member expression target with default values (computed key)", () =>
   expect(obj.x).toBe(1);
   expect(obj.y).toBe(20);
 });
+
+test("super destructuring prepares computed references before reading values", () => {
+  const order = [];
+
+  class Base {}
+  Object.defineProperty(Base.prototype, "value", {
+    set(value) {
+      order.push(`set:${value}`);
+    },
+  });
+
+  class Derived extends Base {
+    assign(source) {
+      [super[(order.push("key"), "value")]] = source;
+    }
+  }
+
+  const iterable = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          order.push("next");
+          return { value: 42, done: false };
+        },
+        return() {
+          return {};
+        },
+      };
+    },
+  };
+
+  new Derived().assign(iterable);
+  expect(order).toEqual(["key", "next", "set:42"]);
+});
+
+test("destructuring super target captures its base before key coercion", () => {
+  let setter = "";
+  const firstBase = {
+    set value(value) {
+      setter = "first:" + value;
+    },
+  };
+  const secondBase = {
+    set value(value) {
+      setter = "second:" + value;
+    },
+  };
+  const object = {
+    __proto__: firstBase,
+    assign() {
+      const key = {
+        toString() {
+          Object.setPrototypeOf(object, secondBase);
+          return "value";
+        },
+      };
+      [super[key]] = [42];
+    },
+  };
+
+  object.assign();
+  expect(setter).toBe("first:42");
+});
+
+test("destructuring super target resolves its base after key evaluation", () => {
+  let setter = "";
+  const firstBase = {
+    set value(value) {
+      setter = "first:" + value;
+    },
+  };
+  const secondBase = {
+    set value(value) {
+      setter = "second:" + value;
+    },
+  };
+  const object = {
+    __proto__: firstBase,
+    assign() {
+      [super[(Object.setPrototypeOf(object, secondBase), "value")]] = [42];
+    },
+  };
+
+  object.assign();
+  expect(setter).toBe("second:42");
+});

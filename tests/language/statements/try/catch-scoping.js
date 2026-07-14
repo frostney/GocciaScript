@@ -79,6 +79,34 @@ test("catch destructuring defaults observe catch parameter TDZ", () => {
   }).toThrow(ReferenceError);
 });
 
+test("catch parameter and body closures preserve their distinct environments", () => {
+  let parameterClosure;
+  let bodyClosure;
+  let value = "outside";
+
+  try {
+    throw [];
+  } catch ([_ = parameterClosure = () => value]) {
+    bodyClosure = () => value;
+    let value = "inside";
+  }
+
+  expect(parameterClosure()).toBe("outside");
+  expect(bodyClosure()).toBe("inside");
+});
+
+test("catch environments inherit the surrounding this binding", () => {
+  let catchThis;
+
+  try {
+    throw 1;
+  } catch (error) {
+    catchThis = this;
+  }
+
+  expect(catchThis).toBe(globalThis);
+});
+
 test("nested catch parameters with same name", () => {
   let finalResult = "";
   try {
