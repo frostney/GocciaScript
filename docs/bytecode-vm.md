@@ -145,7 +145,7 @@ The `--profile` option on GocciaScriptLoader enables language-level profiling of
 - `--profile=all` — both
 - `--profile-output=path.json` — JSON export
 
-The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Coverage.pas`). Zero overhead when disabled. Opcode counting adds ~1% overhead; function timing adds ~3%.
+The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Coverage.pas`). When profiling is disabled, a predictable boolean guard remains in the dispatch loop. Enabled-mode overhead depends on the workload and profiling mode, so measure it on the corpus being investigated rather than relying on a fixed percentage.
 
 ## Instruction Limit
 
