@@ -993,17 +993,20 @@ begin
     begin
       FuncCount := ACtx.Template.FunctionCount;
 
-      if (not AStmt.IsVar) and
-         (Info.Initializer is TGocciaClassExpression) then
+      if not AStmt.IsVar then
       begin
         InitSlot := ACtx.Scope.AllocateRegister;
         try
-          if TGocciaClassExpression(Info.Initializer).ClassDefinition.Name = '' then
+          if (Info.Initializer is TGocciaClassExpression) and
+             (TGocciaClassExpression(Info.Initializer).ClassDefinition.Name = '') then
             CompileClassExpression(ACtx,
               TGocciaClassExpression(Info.Initializer).ClassDefinition,
               InitSlot, Info.Name)
           else
             ACtx.CompileExpression(Info.Initializer, InitSlot);
+          // Keep the lexical binding in its hole state until the entire
+          // initializer has completed. Initializers that reference or assign
+          // the binding must therefore observe the TDZ.
           EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, InitSlot, 0));
         finally
           ACtx.Scope.FreeRegister;
@@ -3865,9 +3868,13 @@ begin
         // but their registers still hold the body iteration values for the
         // update environment snapshot.
         ACtx.Scope.EndScope(BodyClosedLocals, BodyClosedCount);
-        for I := 0 to BodyClosedCount - 1 do
+        // The update environment becomes the next test/body environment.
+        // Close every per-iteration slot here so an upvalue opened by the
+        // previous update observes this iteration's mutations before the slot
+        // is reused for the next fresh update environment.
+        for I := 0 to PerIterNames.Count - 1 do
           EmitInstruction(ACtx,
-            EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(BodyClosedLocals[I])));
+            EncodeABx(OP_CLOSE_UPVALUE, 0, BodySlots[I]));
 
         // ES2026 §14.7.4.4 step 3.e: create a fresh per-iteration
         // environment for the update expression, distinct from the body
@@ -3891,22 +3898,20 @@ begin
             EncodeABC(OP_MOVE, CarrierSlots[I], UpdateSlots[I], 0));
 
         ACtx.Scope.EndScope(UpdateClosedLocals, UpdateClosedCount);
-        for I := 0 to UpdateClosedCount - 1 do
-          EmitInstruction(ACtx,
-            EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(UpdateClosedLocals[I])));
+        // Keep update-created upvalues open across the jump. The update
+        // environment is also the next test/body environment, and the close
+        // emitted after that body snapshots it before a fresh update scope.
 
         EmitInstruction(ACtx,
           EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
 
         if ExitJump >= 0 then
-        begin
           PatchJumpTarget(ACtx, ExitJump);
-          for I := 0 to BodyClosedCount - 1 do
-            EmitInstruction(ACtx,
-              EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(BodyClosedLocals[I])));
-        end;
 
         PatchJumpList(ACtx, LoopControl.BreakJumps);
+        for I := 0 to PerIterNames.Count - 1 do
+          EmitInstruction(ACtx,
+            EncodeABx(OP_CLOSE_UPVALUE, 0, BodySlots[I]));
       end
       else
       begin

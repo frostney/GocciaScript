@@ -93,6 +93,12 @@ type
     function StringToWellFormed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
+// ES2026 §10.4.3.1 StringGetOwnProperty: length and in-range UTF-16
+// indices are non-configurable own properties of a boxed string reference.
+function IsNonConfigurableStringExoticProperty(
+  const APrimitive: TGocciaStringLiteralValue;
+  const AName: string): Boolean;
+
 
 implementation
 
@@ -123,6 +129,24 @@ uses
   Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToObject;
+
+function IsNonConfigurableStringExoticProperty(
+  const APrimitive: TGocciaStringLiteralValue;
+  const AName: string): Boolean;
+var
+  Index: Integer;
+  StringValue: string;
+begin
+  if AName = PROP_LENGTH then
+    Exit(True);
+
+  Result := False;
+  if not TryStrToInt(AName, Index) or (AName <> IntToStr(Index)) then
+    Exit;
+
+  StringValue := APrimitive.Value;
+  Result := (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue));
+end;
 
 // String.prototype lives in a per-realm slot and is its own method host: the
 // prototype instance (Self in InitializePrototype) backs the native methods.

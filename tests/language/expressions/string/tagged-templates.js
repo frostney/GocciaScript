@@ -135,6 +135,15 @@ describe("tagged templates", () => {
     expect(obj.tag`hello ${1}world`).toBe(">>hello world1");
   });
 
+  test("optional chains nested in tag keys and arguments are allowed", () => {
+    const tag = (strings) => strings[0];
+    const holder = { tag };
+    const selectTag = () => tag;
+
+    expect(holder[null?.missing ?? "tag"]`member`).toBe("member");
+    expect(selectTag(null?.missing)`call`).toBe("call");
+  });
+
   test("method tag calls support large constant pools", () => {
     const obj = {};
     const count = [

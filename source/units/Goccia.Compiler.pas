@@ -717,22 +717,24 @@ begin
           Break;
         end;
 
+      // Function-body lexical declarations are instantiated before any body
+      // statement executes, regardless of whether the body also contains a
+      // hoisted function declaration. This establishes the TDZ for earlier
+      // references and assignments.
+      PredeclaredLexicalStart := FCurrentScope.LocalCount;
+      for I := 0 to Block.Nodes.Count - 1 do
+        PredeclareLexicalLocals(Block.Nodes[I], FCurrentScope);
+      for PredeclaredLexicalIndex := PredeclaredLexicalStart to
+        FCurrentScope.LocalCount - 1 do
+      begin
+        PredeclaredLocal := FCurrentScope.GetLocal(PredeclaredLexicalIndex);
+        if not PredeclaredLocal.IsVar then
+          EmitInstruction(BuildContext, EncodeABC(OP_LOAD_HOLE,
+            PredeclaredLocal.Slot, 0, 0));
+      end;
+
       if HasFunctionDecl then
       begin
-        // Pre-declare lexical locals so function declarations can resolve
-        // upvalue captures for let/const variables declared later in the block
-        PredeclaredLexicalStart := FCurrentScope.LocalCount;
-        for I := 0 to Block.Nodes.Count - 1 do
-          PredeclareLexicalLocals(Block.Nodes[I], FCurrentScope);
-        for PredeclaredLexicalIndex := PredeclaredLexicalStart to
-          FCurrentScope.LocalCount - 1 do
-        begin
-          PredeclaredLocal := FCurrentScope.GetLocal(PredeclaredLexicalIndex);
-          if not PredeclaredLocal.IsVar then
-            EmitInstruction(BuildContext, EncodeABC(OP_LOAD_HOLE,
-              PredeclaredLocal.Slot, 0, 0));
-        end;
-
         // Hoist function declarations: compile initializers before other statements
         for I := 0 to Block.Nodes.Count - 1 do
           if IsHoistedFunctionDeclaration(Block.Nodes[I]) then

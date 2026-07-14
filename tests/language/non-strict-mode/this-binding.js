@@ -33,6 +33,25 @@ describe("non-strict function this binding", () => {
     expect(bound.valueOf()).toBe(5);
   });
 
+  test("method calls box a primitive receiver for non-strict functions", () => {
+    const readThis = function () {
+      return this;
+    };
+
+    Boolean.prototype.readThis = readThis;
+    Number.prototype.readThis = readThis;
+    String.prototype.readThis = readThis;
+    try {
+      expect(true.readThis() instanceof Boolean).toBe(true);
+      expect((42).readThis() instanceof Number).toBe(true);
+      expect("value".readThis() instanceof String).toBe(true);
+    } finally {
+      delete Boolean.prototype.readThis;
+      delete Number.prototype.readThis;
+      delete String.prototype.readThis;
+    }
+  });
+
   test("apply boxes a primitive this to its wrapper object", () => {
     function f() {
       return this;
