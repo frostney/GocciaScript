@@ -1,6 +1,7 @@
 describe("FFI.array", () => {
   const lib = FFI.open("./fixtures/ffi/libfixture" + FFI.suffix);
   const Bytes4 = FFI.array("u8", 4);
+  const LargeByteArray = FFI.array("u8", 8192);
 
   afterAll(() => lib.close());
 
@@ -21,5 +22,15 @@ describe("FFI.array", () => {
 
     output[0] = 8;
     expect(output[0]).toBe(8);
+  });
+
+  test("passes a large by-value array across the native stack boundary", () => {
+    const sum = lib.bind("ffi_v2_sum_large_byte_array", {
+      args: [LargeByteArray],
+      returns: "i32",
+    });
+    const input = LargeByteArray.create({ 0: 1, 4096: 2, 8191: 3 });
+
+    expect(sum(input)).toBe(6);
   });
 });

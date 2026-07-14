@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.FFI.LibraryGuard,
   Goccia.FFI.Types,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ObjectValue,
@@ -30,11 +31,35 @@ type
     property Descriptor: TGocciaFFITypeDescriptor read FDescriptor;
   end;
 
+  TGocciaFFIAggregatePointerGuardEntry = record
+    Offset: Integer;
+    LibraryGuard: TGocciaFFILibraryGuard;
+  end;
+
+  TGocciaFFIAggregatePointerGuards = class
+  private
+    FReferenceCount: Integer;
+    FEntries: array of TGocciaFFIAggregatePointerGuardEntry;
+    function FindEntry(const AOffset: Integer): Integer;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure AddReference;
+    procedure ReleaseReference;
+    function GuardAt(const AOffset: Integer): TGocciaFFILibraryGuard;
+    procedure SetGuard(const AOffset: Integer;
+      const ALibraryGuard: TGocciaFFILibraryGuard);
+    procedure ClearRange(const AOffset, ASize: Integer);
+    procedure CopyRangeFrom(const ASource: TGocciaFFIAggregatePointerGuards;
+      const ASourceOffset, ADestinationOffset, ASize: Integer);
+  end;
+
   TGocciaFFIAggregateValue = class(TGocciaObjectValue)
   private
     FDescriptor: TGocciaFFITypeDescriptor;
     FBuffer: TGocciaArrayBufferValue;
     FByteOffset: Integer;
+    FPointerGuards: TGocciaFFIAggregatePointerGuards;
     function GetElementOrField(const AName: string;
       out AType: TGocciaFFITypeDescriptor; out AOffset: Integer): Boolean;
     function ReadValue(const AType: TGocciaFFITypeDescriptor;
@@ -47,7 +72,8 @@ type
       const AInitializer: TGocciaValue = nil); overload;
     constructor CreateView(const ADescriptor: TGocciaFFITypeDescriptor;
       const ABuffer: TGocciaArrayBufferValue;
-      const AByteOffset: Integer); overload;
+      const AByteOffset: Integer;
+      const APointerGuards: TGocciaFFIAggregatePointerGuards = nil); overload;
     destructor Destroy; override;
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string;
@@ -62,6 +88,8 @@ type
     function DataPointer: Pointer;
     procedure CopyTo(const ADestination: Pointer);
     procedure CopyFrom(const ASource: Pointer);
+    procedure AttachLibraryPointerFields(
+      const ALibraryGuard: TGocciaFFILibraryGuard);
     property Descriptor: TGocciaFFITypeDescriptor read FDescriptor;
     property Buffer: TGocciaArrayBufferValue read FBuffer;
     property ByteOffset: Integer read FByteOffset;
@@ -82,6 +110,7 @@ uses
   Goccia.BinaryData,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -99,6 +128,149 @@ const
   PROP_BUFFER = 'buffer';
   PROP_BYTE_OFFSET = 'byteOffset';
   PROP_LENGTH = 'length';
+
+constructor TGocciaFFIAggregatePointerGuards.Create;
+begin
+  inherited;
+  FReferenceCount := 1;
+end;
+
+destructor TGocciaFFIAggregatePointerGuards.Destroy;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FEntries) do
+    if Assigned(FEntries[I].LibraryGuard) then
+      FEntries[I].LibraryGuard.ReleaseDependent;
+  inherited;
+end;
+
+function TGocciaFFIAggregatePointerGuards.FindEntry(
+  const AOffset: Integer): Integer;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FEntries) do
+    if FEntries[I].Offset = AOffset then
+      Exit(I);
+  Result := -1;
+end;
+
+procedure TGocciaFFIAggregatePointerGuards.AddReference;
+begin
+  Inc(FReferenceCount);
+end;
+
+procedure TGocciaFFIAggregatePointerGuards.ReleaseReference;
+begin
+  Dec(FReferenceCount);
+  if FReferenceCount <= 0 then
+    Free;
+end;
+
+function TGocciaFFIAggregatePointerGuards.GuardAt(
+  const AOffset: Integer): TGocciaFFILibraryGuard;
+var
+  Index: Integer;
+begin
+  Index := FindEntry(AOffset);
+  if Index >= 0 then
+    Result := FEntries[Index].LibraryGuard
+  else
+    Result := nil;
+end;
+
+procedure TGocciaFFIAggregatePointerGuards.SetGuard(
+  const AOffset: Integer; const ALibraryGuard: TGocciaFFILibraryGuard);
+var
+  Index, I: Integer;
+begin
+  Index := FindEntry(AOffset);
+  if not Assigned(ALibraryGuard) then
+  begin
+    if Index < 0 then Exit;
+    if Assigned(FEntries[Index].LibraryGuard) then
+      FEntries[Index].LibraryGuard.ReleaseDependent;
+    for I := Index to High(FEntries) - 1 do
+      FEntries[I] := FEntries[I + 1];
+    SetLength(FEntries, Length(FEntries) - 1);
+    Exit;
+  end;
+
+  if Index >= 0 then
+  begin
+    if FEntries[Index].LibraryGuard = ALibraryGuard then Exit;
+    if Assigned(FEntries[Index].LibraryGuard) then
+      FEntries[Index].LibraryGuard.ReleaseDependent;
+  end
+  else
+  begin
+    Index := Length(FEntries);
+    SetLength(FEntries, Index + 1);
+    FEntries[Index].Offset := AOffset;
+  end;
+
+  ALibraryGuard.RetainDependent;
+  FEntries[Index].LibraryGuard := ALibraryGuard;
+end;
+
+procedure TGocciaFFIAggregatePointerGuards.ClearRange(
+  const AOffset, ASize: Integer);
+var
+  I, EndOffset: Integer;
+begin
+  if ASize <= 0 then Exit;
+  EndOffset := AOffset + ASize;
+  I := 0;
+  while I < Length(FEntries) do
+  begin
+    if (FEntries[I].Offset >= AOffset) and
+       (FEntries[I].Offset < EndOffset) then
+      SetGuard(FEntries[I].Offset, nil)
+    else
+      Inc(I);
+  end;
+end;
+
+procedure TGocciaFFIAggregatePointerGuards.CopyRangeFrom(
+  const ASource: TGocciaFFIAggregatePointerGuards;
+  const ASourceOffset, ADestinationOffset, ASize: Integer);
+var
+  I, Count, EndOffset: Integer;
+  Offsets: array of Integer;
+  Guards: array of TGocciaFFILibraryGuard;
+begin
+  if ASize <= 0 then Exit;
+  if not Assigned(ASource) then
+  begin
+    ClearRange(ADestinationOffset, ASize);
+    Exit;
+  end;
+  if (ASource = Self) and (ASourceOffset = ADestinationOffset) then Exit;
+
+  EndOffset := ASourceOffset + ASize;
+  Count := 0;
+  for I := 0 to High(ASource.FEntries) do
+    if (ASource.FEntries[I].Offset >= ASourceOffset) and
+       (ASource.FEntries[I].Offset < EndOffset) then
+    begin
+      SetLength(Offsets, Count + 1);
+      SetLength(Guards, Count + 1);
+      Offsets[Count] := ADestinationOffset +
+        (ASource.FEntries[I].Offset - ASourceOffset);
+      Guards[Count] := ASource.FEntries[I].LibraryGuard;
+      if Assigned(Guards[Count]) then
+        Guards[Count].RetainDependent;
+      Inc(Count);
+    end;
+
+  ClearRange(ADestinationOffset, ASize);
+  for I := 0 to Count - 1 do
+    SetGuard(Offsets[I], Guards[I]);
+  for I := 0 to Count - 1 do
+    if Assigned(Guards[I]) then
+      Guards[I].ReleaseDependent;
+end;
 
 function TypeKindName(const AKind: TGocciaFFITypeKind): string;
 begin
@@ -393,32 +565,57 @@ end;
 constructor TGocciaFFIAggregateValue.Create(
   const ADescriptor: TGocciaFFITypeDescriptor;
   const AInitializer: TGocciaValue);
+var
+  GarbageCollector: TGarbageCollector;
+  BufferPinned: Boolean;
 begin
   inherited Create(TGocciaObjectValue.SharedObjectPrototype);
   FDescriptor := ADescriptor;
   FDescriptor.AddReference;
   FBuffer := TGocciaArrayBufferValue.Create(FDescriptor.Size);
+  FPointerGuards := TGocciaFFIAggregatePointerGuards.Create;
   FByteOffset := 0;
   if Assigned(AInitializer) and
      not (AInitializer is TGocciaUndefinedLiteralValue) then
-    ApplyInitializer(AInitializer);
+  begin
+    GarbageCollector := TGarbageCollector.Instance;
+    BufferPinned := Assigned(GarbageCollector);
+    if BufferPinned then
+      GarbageCollector.PinObject(FBuffer);
+    try
+      ApplyInitializer(AInitializer);
+    finally
+      if BufferPinned then
+        GarbageCollector.UnpinObject(FBuffer);
+    end;
+  end;
 end;
 
 constructor TGocciaFFIAggregateValue.CreateView(
   const ADescriptor: TGocciaFFITypeDescriptor;
-  const ABuffer: TGocciaArrayBufferValue; const AByteOffset: Integer);
+  const ABuffer: TGocciaArrayBufferValue; const AByteOffset: Integer;
+  const APointerGuards: TGocciaFFIAggregatePointerGuards);
 begin
   inherited Create(TGocciaObjectValue.SharedObjectPrototype);
   FDescriptor := ADescriptor;
   FDescriptor.AddReference;
   FBuffer := ABuffer;
   FByteOffset := AByteOffset;
+  if Assigned(APointerGuards) then
+  begin
+    FPointerGuards := APointerGuards;
+    FPointerGuards.AddReference;
+  end
+  else
+    FPointerGuards := TGocciaFFIAggregatePointerGuards.Create;
   EnsureBackingStore;
 end;
 
 destructor TGocciaFFIAggregateValue.Destroy;
 begin
   FDescriptor.ReleaseReference;
+  if Assigned(FPointerGuards) then
+    FPointerGuards.ReleaseReference;
   inherited;
 end;
 
@@ -459,13 +656,15 @@ var
 begin
   EnsureBackingStore;
   if AType.IsAggregate then
-    Exit(TGocciaFFIAggregateValue.CreateView(AType, FBuffer, AOffset));
+    Exit(TGocciaFFIAggregateValue.CreateView(AType, FBuffer, AOffset,
+      FPointerGuards));
   if AType.Kind = ftkCallback then
   begin
     Data := FBuffer.Data;
     RawPointer := 0;
     Move(Data[AOffset], RawPointer, SizeOf(Pointer));
-    Exit(TGocciaFFIPointerValue.Create(Pointer(RawPointer)));
+    Exit(TGocciaFFIPointerValue.Create(Pointer(RawPointer),
+      FPointerGuards.GuardAt(AOffset)));
   end;
 
   Data := FBuffer.Data;
@@ -482,7 +681,8 @@ begin
     begin
       RawPointer := 0;
       Move(Data[AOffset], RawPointer, SizeOf(Pointer));
-      Result := TGocciaFFIPointerValue.Create(Pointer(RawPointer));
+      Result := TGocciaFFIPointerValue.Create(Pointer(RawPointer),
+        FPointerGuards.GuardAt(AOffset));
     end;
     fftVoid:
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -516,6 +716,8 @@ begin
     SourceData := SourceAggregate.Buffer.Data;
     Move(SourceData[SourceAggregate.ByteOffset], Data[AOffset], AType.Size);
     FBuffer.Data := Data;
+    FPointerGuards.CopyRangeFrom(SourceAggregate.FPointerGuards,
+      SourceAggregate.ByteOffset, AOffset, AType.Size);
     Exit;
   end;
 
@@ -532,6 +734,7 @@ begin
     RawPointer := PtrUInt(CallbackValue.CodePointer);
     Move(RawPointer, Data[AOffset], SizeOf(Pointer));
     FBuffer.Data := Data;
+    FPointerGuards.SetGuard(AOffset, nil);
     Exit;
   end;
 
@@ -547,9 +750,16 @@ begin
     fftPointer, fftCString:
     begin
       if AValue is TGocciaFFIPointerValue then
-        RawPointer := PtrUInt(TGocciaFFIPointerValue(AValue).Address)
+      begin
+        RawPointer := PtrUInt(TGocciaFFIPointerValue(AValue).Address);
+        FPointerGuards.SetGuard(AOffset,
+          TGocciaFFIPointerValue(AValue).LibraryGuard);
+      end
       else if AValue is TGocciaNullLiteralValue then
-        RawPointer := 0
+      begin
+        RawPointer := 0;
+        FPointerGuards.SetGuard(AOffset, nil);
+      end
       else
         ThrowTypeError(SErrorFFIPointerFieldValue,
           SSuggestFFIUsage);
@@ -563,6 +773,8 @@ begin
       NumericElementKind(AType.ScalarType),
       AValue.ToNumberLiteral.Value, True);
   end;
+  if not (AType.ScalarType in [fftPointer, fftCString]) then
+    FPointerGuards.ClearRange(AOffset, AType.Size);
   FBuffer.Data := Data;
 end;
 
@@ -707,6 +919,65 @@ begin
   Data := FBuffer.Data;
   Move(ASource^, Data[FByteOffset], FDescriptor.Size);
   FBuffer.Data := Data;
+  FPointerGuards.ClearRange(FByteOffset, FDescriptor.Size);
+end;
+
+procedure TGocciaFFIAggregateValue.AttachLibraryPointerFields(
+  const ALibraryGuard: TGocciaFFILibraryGuard);
+var
+  Data: TBytes;
+
+  procedure AttachType(const AType: TGocciaFFITypeDescriptor;
+    const AOffset: Integer);
+  var
+    I: Integer;
+    Field: TGocciaFFIFieldDescriptor;
+    RawPointer: PtrUInt;
+  begin
+    if AType.Kind = ftkCallback then
+    begin
+      RawPointer := 0;
+      Move(Data[AOffset], RawPointer, SizeOf(Pointer));
+      if RawPointer <> 0 then
+        FPointerGuards.SetGuard(AOffset, ALibraryGuard)
+      else
+        FPointerGuards.SetGuard(AOffset, nil);
+      Exit;
+    end;
+
+    if AType.IsAggregate then
+    begin
+      case AType.Kind of
+        ftkStruct, ftkUnion:
+          for I := 0 to AType.FieldCount - 1 do
+          begin
+            Field := AType.FieldAt(I);
+            AttachType(Field.TypeDescriptor, AOffset + Field.Offset);
+          end;
+        ftkArray:
+          for I := 0 to AType.ElementCount - 1 do
+            AttachType(AType.ElementType,
+              AOffset + (I * AType.ElementType.Size));
+      end;
+      Exit;
+    end;
+
+    if AType.ScalarType in [fftPointer, fftCString] then
+    begin
+      RawPointer := 0;
+      Move(Data[AOffset], RawPointer, SizeOf(Pointer));
+      if RawPointer <> 0 then
+        FPointerGuards.SetGuard(AOffset, ALibraryGuard)
+      else
+        FPointerGuards.SetGuard(AOffset, nil);
+    end;
+  end;
+
+begin
+  if not Assigned(ALibraryGuard) then Exit;
+  EnsureBackingStore;
+  Data := FBuffer.Data;
+  AttachType(FDescriptor, FByteOffset);
 end;
 
 end.

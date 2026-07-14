@@ -43,6 +43,7 @@ type
     class procedure ExposePrototype(const ATarget: TGocciaObjectValue);
 
     property Address: Pointer read GetAddress;
+    property LibraryGuard: TGocciaFFILibraryGuard read FLibraryGuard;
   end;
 
 implementation

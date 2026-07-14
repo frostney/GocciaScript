@@ -15,6 +15,7 @@ describe("FFI.struct", () => {
   const DoubleUnion = FFI.union({ asDouble: "f64", alternate: "f64" });
   const Float3 = FFI.struct({ first: "f32", second: "f32", third: "f32" });
   const Float1 = FFI.struct({ value: "f32" });
+  const PointerHolder = FFI.struct({ pointer: "pointer" });
 
   afterAll(() => lib.close());
 
@@ -62,6 +63,44 @@ describe("FFI.struct", () => {
     point.buffer.transfer();
 
     expect(() => distanceSquared(point, point)).toThrow(TypeError);
+  });
+
+  test("keeps aggregate backing storage alive while initializer getters run", () => {
+    const Record = FFI.struct({ value: "i32" });
+    const record = Record.create({
+      get value() {
+        Goccia.gc();
+        return 42;
+      },
+    });
+
+    expect(record.value).toBe(42);
+  });
+
+  test("invalidates guarded pointer fields when their library closes", () => {
+    const pointerLibrary = FFI.open("./fixtures/ffi/libfixture" + FFI.suffix);
+    const holder = PointerHolder.create({
+      pointer: pointerLibrary.symbol("get_answer"),
+    });
+
+    pointerLibrary.close();
+    Goccia.gc();
+
+    expect(() => holder.pointer.address).toThrow(TypeError);
+  });
+
+  test("invalidates guarded pointer fields returned in native aggregates", () => {
+    const pointerLibrary = FFI.open("./fixtures/ffi/libfixture" + FFI.suffix);
+    const makeHolder = pointerLibrary.bind("ffi_v2_get_answer_pointer_holder", {
+      args: [],
+      returns: PointerHolder,
+    });
+    const holder = makeHolder();
+
+    pointerLibrary.close();
+    Goccia.gc();
+
+    expect(() => holder.pointer.address).toThrow(TypeError);
   });
 
   test("uses the hidden-return path for a large struct", () => {

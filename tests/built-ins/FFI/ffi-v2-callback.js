@@ -1,6 +1,9 @@
 describe("FFI.callback", () => {
   const lib = FFI.open("./fixtures/ffi/libfixture" + FFI.suffix);
   const I32Callback = FFI.callback({ args: ["i32"], returns: "i32" });
+  const I8Callback = FFI.callback({ args: [], returns: "i8" });
+  const I16Callback = FFI.callback({ args: [], returns: "i16" });
+  const VoidCallback = FFI.callback({ args: [], returns: "void" });
   const CompareI32 = FFI.callback({
     args: ["pointer", "pointer"],
     returns: "i32",
@@ -78,6 +81,30 @@ describe("FFI.callback", () => {
     });
 
     expect(invoke((value) => add(value, 5), 37)).toBe(42);
+  });
+
+  test("sign-extends signed narrow scalar arguments and callback returns", () => {
+    const signedI8 = lib.bind("ffi_v2_signed_i8_to_i32", {
+      args: ["i8"],
+      returns: "i32",
+    });
+    const signedI16 = lib.bind("ffi_v2_signed_i16_to_i32", {
+      args: ["i16"],
+      returns: "i32",
+    });
+    const callI8 = lib.bind("ffi_v2_call_i8_callback", {
+      args: [I8Callback],
+      returns: "i32",
+    });
+    const callI16 = lib.bind("ffi_v2_call_i16_callback", {
+      args: [I16Callback],
+      returns: "i32",
+    });
+
+    expect(signedI8(-1)).toBe(-1);
+    expect(signedI16(-2)).toBe(-2);
+    expect(callI8(() => -3)).toBe(-3);
+    expect(callI16(() => -4)).toBe(-4);
   });
 
   test("keeps a persistent callback callable across native calls", () => {
@@ -159,6 +186,39 @@ describe("FFI.callback", () => {
     expect(caught.message).toBe("callback failed");
     expect(getProgress()).toBe(2);
     expect(callbackCalls).toBe(1);
+  });
+
+  test("keeps the first callback failure when a later callback crosses threads", () => {
+    const invoke = lib.bind("ffi_v2_call_callback_then_foreign_thread", {
+      args: [I32Callback, "i32"],
+      returns: "i32",
+    });
+
+    for (const unused of new Array(70)) {
+      let caught;
+      try {
+        invoke(() => {
+          throw new Error("first failure");
+        }, 1);
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(Error);
+      expect(caught.message).toBe("first failure");
+    }
+  });
+
+  test("rejects pointer returns when a callback closes its library", () => {
+    const pointerLibrary = FFI.open("./fixtures/ffi/libfixture" + FFI.suffix);
+    const callbackThenPointer = pointerLibrary.bind("ffi_v2_callback_then_pointer", {
+      args: [VoidCallback],
+      returns: "pointer",
+    });
+
+    expect(() => callbackThenPointer(() => pointerLibrary.close())).toThrow(
+      TypeError,
+    );
   });
 
   test("passes and returns small and large aggregates through callbacks", () => {

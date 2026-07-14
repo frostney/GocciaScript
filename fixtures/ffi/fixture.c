@@ -32,6 +32,14 @@ int identity_i32(int a) {
   return a;
 }
 
+int32_t ffi_v2_signed_i8_to_i32(int8_t value) {
+  return value;
+}
+
+int32_t ffi_v2_signed_i16_to_i32(int16_t value) {
+  return value;
+}
+
 // -- Void / no-arg ----------------------------------------------------------
 
 static int call_count = 0;
@@ -136,6 +144,9 @@ double mixed8(int a, double b, int c, double d, int e, double f, int g, double h
 // -- FFI v2 callbacks ------------------------------------------------------
 
 typedef int32_t (*ffi_v2_i32_callback)(int32_t value);
+typedef int8_t (*ffi_v2_i8_callback)(void);
+typedef int16_t (*ffi_v2_i16_callback)(void);
+typedef void (*ffi_v2_void_callback)(void);
 typedef int (*ffi_v2_compare_i32_callback)(const void* left, const void* right);
 
 static ffi_v2_i32_callback ffi_v2_stored_i32_callback = NULL;
@@ -143,6 +154,19 @@ static int32_t ffi_v2_callback_progress = 0;
 
 int32_t ffi_v2_call_i32_callback(ffi_v2_i32_callback callback, int32_t value) {
   return callback(value);
+}
+
+int32_t ffi_v2_call_i8_callback(ffi_v2_i8_callback callback) {
+  return callback();
+}
+
+int32_t ffi_v2_call_i16_callback(ffi_v2_i16_callback callback) {
+  return callback();
+}
+
+void* ffi_v2_callback_then_pointer(ffi_v2_void_callback callback) {
+  callback();
+  return (void*)get_answer;
 }
 
 void ffi_v2_sort_i32(
@@ -238,6 +262,14 @@ typedef struct {
   ffi_v2_word payload;
   ffi_v2_point point;
 } ffi_v2_composite;
+
+typedef struct {
+  void* pointer;
+} ffi_v2_pointer_holder;
+
+typedef struct {
+  uint8_t bytes[8192];
+} ffi_v2_large_byte_array;
 
 ffi_v2_point ffi_v2_add_points(ffi_v2_point left, ffi_v2_point right) {
   ffi_v2_point result;
@@ -379,6 +411,16 @@ ffi_v2_composite ffi_v2_transform_composite(ffi_v2_composite value) {
   value.point.x += 30.0;
   value.point.y += 40.0;
   return value;
+}
+
+ffi_v2_pointer_holder ffi_v2_get_answer_pointer_holder(void) {
+  ffi_v2_pointer_holder result;
+  result.pointer = (void*)get_answer;
+  return result;
+}
+
+int32_t ffi_v2_sum_large_byte_array(ffi_v2_large_byte_array value) {
+  return value.bytes[0] + value.bytes[4096] + value.bytes[8191];
 }
 
 int32_t ffi_v2_composite_header_offset(void) {
@@ -574,6 +616,14 @@ int32_t ffi_v2_call_i32_callback_on_foreign_thread(
 #endif
 
   return call.result;
+}
+
+int32_t ffi_v2_call_callback_then_foreign_thread(
+  ffi_v2_i32_callback callback,
+  int32_t value
+) {
+  callback(value);
+  return ffi_v2_call_i32_callback_on_foreign_thread(callback, value + 1);
 }
 
 int32_t ffi_v2_call_callback_holder_on_foreign_thread(

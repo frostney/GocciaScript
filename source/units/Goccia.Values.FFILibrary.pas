@@ -314,13 +314,18 @@ begin
   begin
     Aggregate := TGocciaFFIAggregateValue.Create(AType);
     if AType.Size > 0 then
+    begin
       Aggregate.CopyFrom(@AData[0]);
+      Aggregate.AttachLibraryPointerFields(ALibraryGuard);
+    end;
     Exit(Aggregate);
   end;
   if AType.Kind = ftkCallback then
   begin
     PointerValue := nil;
     Move(AData[0], PointerValue, SizeOf(Pointer));
+    if Assigned(ALibraryGuard) and ALibraryGuard.IsClosed then
+      ThrowTypeError(SErrorFFIPointerLibraryClosed, SSuggestFFIUsage);
     Exit(TGocciaFFIPointerValue.Create(PointerValue, ALibraryGuard));
   end;
   case AType.ScalarType of
@@ -355,6 +360,8 @@ begin
     begin
       PointerValue := nil;
       Move(AData[0], PointerValue, SizeOf(Pointer));
+      if Assigned(ALibraryGuard) and ALibraryGuard.IsClosed then
+        ThrowTypeError(SErrorFFIPointerLibraryClosed, SSuggestFFIUsage);
       Result := TGocciaFFIPointerValue.Create(PointerValue, ALibraryGuard);
     end;
     fftCString:
@@ -400,6 +407,9 @@ begin
       NativeArguments[I] := MarshalFFIValue(
         FSignature.Arguments[I].TypeDescriptor, AArgs.GetElement(I), I,
         TemporaryStrings[I], Callbacks[I], TemporaryCallbacks[I]);
+    if FLibraryGuard.IsClosed then
+      ThrowTypeError(Format(SErrorFFICallLibraryClosed, [FName]),
+        SSuggestFFIUsage);
 
     BeginFFICallContext(CallContext);
     CallContextActive := True;
@@ -426,7 +436,7 @@ begin
   finally
     for I := 0 to High(Callbacks) do
       if TemporaryCallbacks[I] and Assigned(Callbacks[I]) then
-        Callbacks[I].Close;
+        Callbacks[I].CloseForFFICallCleanup;
   end;
 end;
 

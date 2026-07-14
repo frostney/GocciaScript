@@ -576,6 +576,8 @@ type
 procedure FFIInvokeMachine(var AState: TGocciaFFIMachineState); assembler; nostackframe;
 asm
   pushq %rbx
+  pushq %rsi
+  pushq %rdi
   pushq %r12
   movq %rcx, %rbx
 
@@ -606,6 +608,8 @@ asm
 
   addq %r12, %rsp
   popq %r12
+  popq %rdi
+  popq %rsi
   popq %rbx
   ret
 end;
@@ -722,9 +726,27 @@ asm
   movl %eax, %ebx
 
   movl 8(%ebx), %ecx
+{$IFDEF MSWINDOWS}
+  testl %ecx, %ecx
+  je .Lffi_stack_ready
+  movl %ecx, %edx
+.Lffi_probe_page:
+  cmpl $4096, %edx
+  jbe .Lffi_probe_tail
+  subl $4096, %esp
+  testb $0, (%esp)
+  subl $4096, %edx
+  jmp .Lffi_probe_page
+.Lffi_probe_tail:
+  subl %edx, %esp
+  testb $0, (%esp)
+.Lffi_stack_ready:
+{$ELSE}
   subl %ecx, %esp
+{$ENDIF}
   movl 4(%ebx), %esi
   movl %esp, %edi
+  movl 8(%ebx), %ecx
   rep movsb
 
   call *(%ebx)
@@ -794,6 +816,72 @@ begin
       {$ENDIF};
     fpkStack:
       Move(ASource, AStackData[APlacement.StackOffset], ASize);
+  end;
+end;
+
+procedure CopyDarwinARM64ScalarArgumentToPlacement(
+  var AState: TGocciaFFIMachineState; var AStackData: TBytes;
+  const APlacement: TGocciaFFIPlacement;
+  const AType: TGocciaFFITypeDescriptor; const ASource);
+var
+  BooleanValue: Byte;
+  Signed8: ShortInt;
+  Signed16: SmallInt;
+  Signed32: LongInt;
+  Unsigned8: Byte;
+  Unsigned16: Word;
+  Unsigned32: LongWord;
+begin
+  if (APlacement.Kind <> fpkGPR) or
+     (AType.Kind <> ftkScalar) then
+  begin
+    CopyToPlacement(AState, AStackData, APlacement, ASource,
+      APlacement.Size);
+    Exit;
+  end;
+
+  case AType.ScalarType of
+    fftBool:
+    begin
+      Move(ASource, BooleanValue, SizeOf(BooleanValue));
+      if BooleanValue <> 0 then
+        Unsigned32 := 1
+      else
+        Unsigned32 := 0;
+      CopyToPlacement(AState, AStackData, APlacement, Unsigned32,
+        SizeOf(Unsigned32));
+    end;
+    fftI8:
+    begin
+      Move(ASource, Signed8, SizeOf(Signed8));
+      Signed32 := Signed8;
+      CopyToPlacement(AState, AStackData, APlacement, Signed32,
+        SizeOf(Signed32));
+    end;
+    fftI16:
+    begin
+      Move(ASource, Signed16, SizeOf(Signed16));
+      Signed32 := Signed16;
+      CopyToPlacement(AState, AStackData, APlacement, Signed32,
+        SizeOf(Signed32));
+    end;
+    fftU8:
+    begin
+      Move(ASource, Unsigned8, SizeOf(Unsigned8));
+      Unsigned32 := Unsigned8;
+      CopyToPlacement(AState, AStackData, APlacement, Unsigned32,
+        SizeOf(Unsigned32));
+    end;
+    fftU16:
+    begin
+      Move(ASource, Unsigned16, SizeOf(Unsigned16));
+      Unsigned32 := Unsigned16;
+      CopyToPlacement(AState, AStackData, APlacement, Unsigned32,
+        SizeOf(Unsigned32));
+    end;
+  else
+    CopyToPlacement(AState, AStackData, APlacement, ASource,
+      APlacement.Size);
   end;
 end;
 
@@ -872,8 +960,15 @@ begin
       Placement := ArgumentPlan.Placements[J];
       CopySize := Placement.Size;
       if CopySize > 0 then
-        CopyToPlacement(State, StackData, Placement,
-          AArguments[I][Placement.ValueOffset], CopySize);
+      begin
+        if APlan.ABI = fabiDarwinARM64 then
+          CopyDarwinARM64ScalarArgumentToPlacement(State, StackData,
+            Placement, ArgumentPlan.TypeDescriptor,
+            AArguments[I][Placement.ValueOffset])
+        else
+          CopyToPlacement(State, StackData, Placement,
+            AArguments[I][Placement.ValueOffset], CopySize);
+      end;
     end;
   end;
 

@@ -33,6 +33,7 @@ type
     FClosed: Boolean;
     FPinned: Boolean;
     FPendingException: Exception;
+    procedure ReleaseNativeSlot;
     function CloseMethod(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure InvokeFromNative(var AState: TGocciaFFICallbackMachineState);
@@ -42,6 +43,7 @@ type
       const ACallable: TGocciaValue);
     destructor Destroy; override;
     procedure Close;
+    procedure CloseForFFICallCleanup;
     procedure EnsureOpen;
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string;
@@ -136,12 +138,48 @@ begin
 end;
 
 procedure CopyToCallbackPlacement(var AState: TGocciaFFICallbackMachineState;
-  const APlacement: TGocciaFFIPlacement; const ASource: TBytes);
+  const APlacement: TGocciaFFIPlacement; const ASource: TBytes;
+  const AType: TGocciaFFITypeDescriptor; const AABI: TGocciaFFIABI);
+var
+  Signed8: ShortInt;
+  Signed16: SmallInt;
+  Signed32: LongInt;
 begin
   case APlacement.Kind of
     fpkGPR:
-      Move(ASource[APlacement.ValueOffset],
-        AState.RetGPR[APlacement.RegisterIndex], APlacement.Size);
+      begin
+        {$IFDEF CPU64}
+        if (AABI = fabiDarwinARM64) and
+           (AType.Kind = ftkScalar) then
+        begin
+          case AType.ScalarType of
+            fftI8:
+            begin
+              Move(ASource[APlacement.ValueOffset], Signed8,
+                SizeOf(Signed8));
+              Signed32 := Signed8;
+              AState.RetGPR[APlacement.RegisterIndex] := 0;
+              Move(Signed32, AState.RetGPR[APlacement.RegisterIndex],
+                SizeOf(Signed32));
+              Exit;
+            end;
+            fftI16:
+            begin
+              Move(ASource[APlacement.ValueOffset], Signed16,
+                SizeOf(Signed16));
+              Signed32 := Signed16;
+              AState.RetGPR[APlacement.RegisterIndex] := 0;
+              Move(Signed32, AState.RetGPR[APlacement.RegisterIndex],
+                SizeOf(Signed32));
+              Exit;
+            end;
+          end;
+        end;
+        {$ENDIF}
+        AState.RetGPR[APlacement.RegisterIndex] := 0;
+        Move(ASource[APlacement.ValueOffset],
+          AState.RetGPR[APlacement.RegisterIndex], APlacement.Size);
+      end;
     fpkFPR:
       {$IFDEF CPU64}
       Move(ASource[APlacement.ValueOffset],
@@ -385,21 +423,51 @@ begin
   inherited;
 end;
 
-procedure TGocciaFFICallbackValue.Close;
+procedure TGocciaFFICallbackValue.ReleaseNativeSlot;
 begin
-  RaisePendingFailure;
-  if FClosed then Exit;
-  FClosed := True;
+  if not FClosed then
+  begin
+    FClosed := True;
+    if FSlot >= 0 then
+    begin
+      ReleaseFFICallbackSlot(FSlot);
+      FSlot := -1;
+    end;
+    if FPinned and Assigned(TGarbageCollector.Instance) then
+    begin
+      TGarbageCollector.Instance.UnpinObject(Self);
+      FPinned := False;
+    end;
+  end;
+end;
+
+procedure TGocciaFFICallbackValue.Close;
+var
+  PendingException: Exception;
+  ForeignThreadViolation: Boolean;
+begin
+  PendingException := FPendingException;
+  FPendingException := nil;
+  ForeignThreadViolation := (FSlot >= 0) and
+    ConsumeFFICallbackThreadViolation(FSlot);
+  ReleaseNativeSlot;
+  if Assigned(PendingException) then
+    raise PendingException;
+  if ForeignThreadViolation then
+    ThrowTypeError(SErrorFFICallbackForeignThread,
+      SSuggestFFIUsage);
+end;
+
+procedure TGocciaFFICallbackValue.CloseForFFICallCleanup;
+begin
   if FSlot >= 0 then
+    ConsumeFFICallbackThreadViolation(FSlot);
+  if Assigned(FPendingException) then
   begin
-    ReleaseFFICallbackSlot(FSlot);
-    FSlot := -1;
+    FPendingException.Free;
+    FPendingException := nil;
   end;
-  if FPinned and Assigned(TGarbageCollector.Instance) then
-  begin
-    TGarbageCollector.Instance.UnpinObject(Self);
-    FPinned := False;
-  end;
+  ReleaseNativeSlot;
 end;
 
 function TGocciaFFICallbackValue.CloseMethod(
@@ -417,12 +485,12 @@ procedure TGocciaFFICallbackValue.RaisePendingFailure;
 var
   PendingException: Exception;
 begin
-  if (FSlot >= 0) and ConsumeFFICallbackThreadViolation(FSlot) then
-    ThrowTypeError(SErrorFFICallbackForeignThread,
-      SSuggestFFIUsage);
   PendingException := FPendingException;
   FPendingException := nil;
   if Assigned(PendingException) then raise PendingException;
+  if (FSlot >= 0) and ConsumeFFICallbackThreadViolation(FSlot) then
+    ThrowTypeError(SErrorFFICallbackForeignThread,
+      SSuggestFFIUsage);
 end;
 
 procedure TGocciaFFICallbackValue.EnsureOpen;
@@ -535,7 +603,7 @@ begin
       else
         for I := 0 to High(ReturnPlan.Placements) do
           CopyToCallbackPlacement(AState, ReturnPlan.Placements[I],
-            ResultData);
+            ResultData, ReturnPlan.TypeDescriptor, FSignature.ABI);
     finally
       Arguments.Free;
       Arguments := nil;

@@ -34,4 +34,19 @@ describe("FFILibrary.prototype.close", () => {
     expect(() => closedFunction()).toThrow(TypeError);
     expect(() => closedSymbol.address).toThrow(TypeError);
   });
+
+  test("invalidates a bound call when argument coercion closes the library", () => {
+    const lib = FFI.open("./fixtures/ffi/libfixture" + FFI.suffix);
+    const add = lib.bind("add_i32", { args: ["i32", "i32"], returns: "i32" });
+
+    expect(() =>
+      add({
+        valueOf() {
+          lib.close();
+          return 40;
+        },
+      }, 2),
+    ).toThrow(TypeError);
+    expect(lib.closed).toBe(true);
+  });
 });

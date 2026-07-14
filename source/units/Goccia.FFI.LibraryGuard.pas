@@ -63,8 +63,7 @@ end;
 
 procedure TGocciaFFILibraryGuard.RetainDependent;
 begin
-  if FClosed then
-    raise Exception.Create('Cannot retain a dependent from a closed library: ' + FPath);
+  // Logical close invalidates dependents but still defers physical unload.
   Inc(FDependentCount);
 end;
 
