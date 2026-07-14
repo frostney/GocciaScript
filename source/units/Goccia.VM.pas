@@ -37,6 +37,7 @@ uses
 
 type
   TGocciaVM = class;
+  TASCIIStringCodeUnit = 0..127;
 
   TGocciaVMStackRoot = class(TGCManagedObject)
   private
@@ -189,7 +190,7 @@ type
     FTempSavedStateRootCount: Integer;
     FASCIIStringValues: array[0..127] of TGocciaStringLiteralValue;
     function CachedASCIIStringValue(
-      const ACodeUnit: Byte): TGocciaStringLiteralValue;
+      const ACodeUnit: TASCIIStringCodeUnit): TGocciaStringLiteralValue;
     function ConstantToValue(const AConstant: TGocciaBytecodeConstant): TGocciaValue;
     // ES2026 §13.2.8.3 GetTemplateObject — lazy-build helper for bckTemplateObject constants.
     function BuildTemplateObjectConstant(const ATemplate: TGocciaFunctionTemplate;
@@ -6466,7 +6467,7 @@ begin
 end;
 
 function TGocciaVM.CachedASCIIStringValue(
-  const ACodeUnit: Byte): TGocciaStringLiteralValue;
+  const ACodeUnit: TASCIIStringCodeUnit): TGocciaStringLiteralValue;
 begin
   Result := FASCIIStringValues[ACodeUnit];
   if Assigned(Result) then
@@ -11953,7 +11954,8 @@ begin
     begin
       if (Length(StringUnit) = 1) and (Ord(StringUnit[1]) <= 127) then
         SetRegisterFast(ADest,
-          CachedASCIIStringValue(Byte(Ord(StringUnit[1]))))
+          CachedASCIIStringValue(
+            TASCIIStringCodeUnit(Ord(StringUnit[1]))))
       else
         SetRegisterFast(ADest, TGocciaStringLiteralValue.Create(StringUnit));
       Exit;
@@ -13337,6 +13339,7 @@ var
   DoneFlag: Boolean;
   Running: Boolean;
   Template: TGocciaFunctionTemplate;
+  Constant: TGocciaBytecodeConstant;
   ChildTemplate: TGocciaFunctionTemplate;
   LeftValue, RightValue, TargetValue, PropKeyValue, EvalSourceValue: TGocciaValue;
   NumericValue: Double;
@@ -13557,29 +13560,31 @@ begin
           C := WideC or DecodeC(Instruction);
           case TGocciaOpCode(Op) of
       OP_LOAD_CONST:
-        case Template.GetConstantUnchecked(DecodeBx(Instruction)).Kind of
-          // Keep numeric constants in the VM's scalar representation.  The
-          // previous ConstantToValue -> ValueToRegister round trip allocated a
-          // short-lived boxed Number for every execution of the instruction.
-          bckInteger:
-            FRegisters[A] := VMIntResult(
-              Template.GetConstantUnchecked(DecodeBx(Instruction)).IntValue);
-          bckFloat:
-            FRegisters[A] := RegisterFromDouble(
-              Template.GetConstantUnchecked(DecodeBx(Instruction)).FloatValue);
-          // ES2026 §13.2.8.3: template objects are lazily built and cached.
-          bckTemplateObject:
-            FRegisters[A] := ValueToRegister(BuildTemplateObjectConstant(
-              Template, DecodeBx(Instruction)));
-        else
-          FRegisters[A] := ValueToRegister(ConstantToValue(
-            Template.GetConstantUnchecked(DecodeBx(Instruction))));
+        begin
+          Constant := Template.GetConstantUnchecked(DecodeBx(Instruction));
+          case Constant.Kind of
+            // Keep numeric constants in the VM's scalar representation.  The
+            // previous ConstantToValue -> ValueToRegister round trip allocated
+            // a short-lived boxed Number for every execution of the
+            // instruction.
+            bckInteger:
+              FRegisters[A] := VMIntResult(Constant.IntValue);
+            bckFloat:
+              FRegisters[A] := RegisterFromDouble(Constant.FloatValue);
+            // ES2026 §13.2.8.3: template objects are lazily built and cached.
+            bckTemplateObject:
+              FRegisters[A] := ValueToRegister(BuildTemplateObjectConstant(
+                Template, DecodeBx(Instruction)));
+          else
+            FRegisters[A] := ValueToRegister(ConstantToValue(Constant));
+          end;
         end;
 
       OP_LOAD_CHAR:
         if DecodeBx(Instruction) <= 127 then
           FRegisters[A] := RegisterObject(
-            CachedASCIIStringValue(Byte(DecodeBx(Instruction))))
+            CachedASCIIStringValue(
+              TASCIIStringCodeUnit(DecodeBx(Instruction))))
         else
           FRegisters[A] := RegisterObject(TGocciaStringLiteralValue.Create(
             UTF16CodeUnitImmediateToUTF8(DecodeBx(Instruction))));

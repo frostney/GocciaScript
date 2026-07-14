@@ -66,7 +66,7 @@ begin
     Members.Free;
   end;
   RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
-  FromCharCodeValue := FBuiltinObject.GetProperty('fromCharCode');
+  FromCharCodeValue := FBuiltinObject.GetProperty(PROP_FROM_CHAR_CODE);
   if FromCharCodeValue is TGocciaNativeFunctionValue then
     TGocciaNativeFunctionValue(FromCharCodeValue).IntrinsicKind :=
       nikStringFromCharCode;
