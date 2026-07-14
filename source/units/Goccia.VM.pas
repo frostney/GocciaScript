@@ -529,6 +529,7 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ProxyValue,
   Goccia.Values.Shape,
+  Goccia.Values.StringObjectValue,
   Goccia.Values.ToObject,
   Goccia.Values.ToPrimitive,
   Goccia.Values.TypedArrayValue;
@@ -8420,6 +8421,24 @@ begin
     // side effects) before delete yields true, matching the interpreter
     // and ES2026 property-reference evaluation.
     Key := ClassifyPropertyKey(AKeyReg, False);
+    if (AObjReg.Kind = grkObject) and
+       (AObjReg.ObjectValue is TGocciaStringLiteralValue) and
+       (Key.Kind <> pkkSymbol) then
+    begin
+      KeyName := PropertyKeyName(Key);
+      if IsNonConfigurableStringExoticProperty(
+           TGocciaStringLiteralValue(AObjReg.ObjectValue), KeyName) then
+      begin
+        if AThrowOnFailure then
+          ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
+            [KeyName,
+             TGocciaStringLiteralValue(AObjReg.ObjectValue).Value]),
+            SSuggestCannotDeleteNonConfigurable)
+        else
+          FRegisters[ADest] := RegisterBoolean(False);
+        Exit;
+      end;
+    end;
     FRegisters[ADest] := RegisterBoolean(True);
   end;
 end;
@@ -11526,6 +11545,7 @@ var
   SuperObject: TGocciaObjectValue;
   HomeObject: TGocciaObjectValue;
   SuperPrototype: TGocciaValue;
+  KeyValue: TGocciaValue;
   function ResolveCurrentCtorClass: TGocciaClassValue;
   begin
     Result := nil;
@@ -11547,23 +11567,45 @@ var
   function IsSuperConstructorKey: Boolean;
   begin
     Result := AUseSuperConstructor and
-      not (AKey is TGocciaSymbolValue) and
-      (KeyToPropertyName(AKey) = PROP_CONSTRUCTOR);
+      not (KeyValue is TGocciaSymbolValue) and
+      (KeyToPropertyName(KeyValue) = PROP_CONSTRUCTOR);
   end;
   function ReadSuperProperty(const AObject: TGocciaObjectValue): TGocciaValue;
   begin
-    if AKey is TGocciaSymbolValue then
+    if KeyValue is TGocciaSymbolValue then
       Result := AObject.GetSymbolPropertyWithReceiver(
-        TGocciaSymbolValue(AKey), AThisValue)
+        TGocciaSymbolValue(KeyValue), AThisValue)
     else
-      Result := AObject.GetPropertyWithContext(KeyToPropertyName(AKey),
+      Result := AObject.GetPropertyWithContext(KeyToPropertyName(KeyValue),
         AThisValue);
   end;
 begin
-
   HomeObject := nil;
   if Assigned(FCurrentClosure) then
     HomeObject := FCurrentClosure.HomeObject;
+
+  // ES2026 §13.3.7.1 resolves the super reference before downstream
+  // ToPropertyKey coercion. Capture every mutable base source before that
+  // coercion can run user code.
+  SuperPrototype := nil;
+  if Assigned(HomeObject) then
+    SuperPrototype := HomeObject.Prototype
+  else if (ASuperValue is TGocciaObjectValue) and
+          (not (ASuperValue is TGocciaClassValue)) and
+          ASuperValue.IsConstructable and
+          not (AThisValue is TGocciaClassValue) then
+  begin
+    SuperObject := TGocciaObjectValue(ASuperValue);
+    SuperPrototype := SuperObject.GetProperty(PROP_PROTOTYPE);
+  end
+  else if (ASuperValue is TGocciaClassValue) and
+          not (AThisValue is TGocciaClassValue) then
+  begin
+    SuperClass := TGocciaClassValue(ASuperValue);
+    SuperPrototype := SuperClass.Prototype;
+  end;
+
+  KeyValue := ToPropertyKey(AKey);
 
   if IsSuperConstructorKey then
     Exit(TGocciaVMSuperConstructorValue.Create(ResolveSuperConstructor,
@@ -11583,14 +11625,12 @@ begin
 
     if Assigned(HomeObject) then
     begin
-      SuperPrototype := HomeObject.Prototype;
       if SuperPrototype is TGocciaObjectValue then
         Exit(ReadSuperProperty(TGocciaObjectValue(SuperPrototype)));
       ThrowTypeError(SErrorCannotConvertNullOrUndefined,
         SSuggestCheckNullBeforeAccess);
     end;
 
-    SuperPrototype := SuperObject.GetProperty(PROP_PROTOTYPE);
     if SuperPrototype is TGocciaObjectValue then
       Exit(ReadSuperProperty(TGocciaObjectValue(SuperPrototype)));
 
@@ -11602,7 +11642,6 @@ begin
   begin
     if Assigned(HomeObject) then
     begin
-      SuperPrototype := HomeObject.Prototype;
       if SuperPrototype is TGocciaObjectValue then
         Exit(ReadSuperProperty(TGocciaObjectValue(SuperPrototype)));
       ThrowTypeError(SErrorCannotConvertNullOrUndefined,
@@ -11622,15 +11661,14 @@ begin
 
   if Assigned(HomeObject) then
   begin
-    SuperPrototype := HomeObject.Prototype;
     if SuperPrototype is TGocciaObjectValue then
       Exit(ReadSuperProperty(TGocciaObjectValue(SuperPrototype)));
     ThrowTypeError(SErrorCannotConvertNullOrUndefined,
       SSuggestCheckNullBeforeAccess);
   end;
 
-  if Assigned(SuperClass.Prototype) then
-    Exit(ReadSuperProperty(SuperClass.Prototype));
+  if SuperPrototype is TGocciaObjectValue then
+    Exit(ReadSuperProperty(TGocciaObjectValue(SuperPrototype)));
 
   ThrowTypeError(SErrorCannotConvertNullOrUndefined,
     SSuggestCheckNullBeforeAccess);
@@ -11665,17 +11703,19 @@ function TGocciaVM.GetSuperPropertyValueFromBase(const ABaseValue,
   AThisValue, AKey: TGocciaValue): TGocciaValue;
 var
   BaseObject: TGocciaObjectValue;
+  KeyValue: TGocciaValue;
 begin
   if not (ABaseValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorCannotConvertNullOrUndefined,
       SSuggestCheckNullBeforeAccess);
 
   BaseObject := TGocciaObjectValue(ABaseValue);
-  if AKey is TGocciaSymbolValue then
+  KeyValue := ToPropertyKey(AKey);
+  if KeyValue is TGocciaSymbolValue then
     Result := BaseObject.GetSymbolPropertyWithReceiver(
-      TGocciaSymbolValue(AKey), AThisValue)
+      TGocciaSymbolValue(KeyValue), AThisValue)
   else
-    Result := BaseObject.GetPropertyWithContext(KeyToPropertyName(AKey),
+    Result := BaseObject.GetPropertyWithContext(KeyToPropertyName(KeyValue),
       AThisValue);
 end;
 
@@ -14557,22 +14597,34 @@ begin
 
       OP_DELETE_PROP_CONST:
       begin
+        GlobalName := Template.GetConstantUnchecked(
+          DecodeBx(Instruction)).StringValue;
         if FRegisters[A].Kind = grkNull then
           ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull,
-            [Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue]),
+            [GlobalName]),
             SSuggestCheckNullBeforeAccess)
         else if FRegisters[A].Kind = grkUndefined then
           ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
-            [Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue]),
+            [GlobalName]),
             SSuggestCheckNullBeforeAccess)
+        else if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaStringLiteralValue) and
+           IsNonConfigurableStringExoticProperty(
+             TGocciaStringLiteralValue(FRegisters[A].ObjectValue),
+             GlobalName) then
+          ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
+            [GlobalName,
+             TGocciaStringLiteralValue(FRegisters[A].ObjectValue).Value]),
+            SSuggestCannotDeleteNonConfigurable)
         else if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaObjectValue) then
         begin
           if TGocciaObjectValue(FRegisters[A].ObjectValue).DeleteProperty(
-            Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue) then
+            GlobalName) then
             FRegisters[A] := RegisterBoolean(True)
           else
-            ThrowTypeError(Format(SErrorCannotDeletePropertyOf, [Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue, '[object Object]']),
+            ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
+              [GlobalName, '[object Object]']),
               SSuggestCannotDeleteNonConfigurable);
         end
         else
@@ -14590,6 +14642,12 @@ begin
           ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
             [GlobalName]),
             SSuggestCheckNullBeforeAccess)
+        else if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaStringLiteralValue) and
+           IsNonConfigurableStringExoticProperty(
+             TGocciaStringLiteralValue(FRegisters[A].ObjectValue),
+             GlobalName) then
+          FRegisters[A] := RegisterBoolean(False)
         else if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaObjectValue) then
         begin
@@ -15864,12 +15922,19 @@ begin
              (not BytecodeFunction.FClosure.Template.IsAsync) and
              (not BytecodeFunction.FClosure.Template.IsGenerator) then
           begin
+            CallThisRegister := FRegisters[A - 1];
+            if not BytecodeFunction.FStrictThis then
+              CallThisRegister := CoerceNonStrictThisRegister(
+                CallThisRegister,
+                BytecodeClosureGlobalThis(BytecodeFunction.FClosure,
+                  FGlobalThisValue),
+                BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
+                  FRealm));
             if (C and 1) = 0 then
             begin
               SetLength(RegisterArgs, B);
               for I := 0 to B - 1 do
                 RegisterArgs[I] := FRegisters[A + 1 + I];
-              CallThisRegister := FRegisters[A - 1];
               if (C and CALL_FLAG_TAIL) <> 0 then
                 PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
                   InitialFrameStackCount, SavedHandlerCount)
@@ -15890,7 +15955,6 @@ begin
 	              for I := 0 to High(RegisterArgs) do
 	                RegisterArgs[I] := VMValueToRegisterFast(
 	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntToStr(I)));
-              CallThisRegister := FRegisters[A - 1];
               if (C and CALL_FLAG_TAIL) <> 0 then
                 PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
                   InitialFrameStackCount, SavedHandlerCount)

@@ -60,3 +60,18 @@ test("closures in the test expression capture the body per-iteration binding", (
   for (let i = 0; i < 3 && (fns.push(() => i), true); i++) {}
   expect(fns.map(fn => fn())).toEqual([0, 1, 2]);
 });
+
+test("test, body, and update closures observe the specified iteration environments", () => {
+  const closures = [];
+  let iterations = 0;
+
+  for (let value = 0;
+    value = (closures.push(() => value), value + 1);
+    value = (closures.push(() => value), value + 1)) {
+    value = (closures.push(() => value), value + 1);
+    iterations += 1;
+    if (iterations === 3) break;
+  }
+
+  expect(closures.map(fn => fn())).toEqual([2, 2, 5, 5, 5, 8, 8, 8]);
+});

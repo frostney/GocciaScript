@@ -112,6 +112,23 @@ test("delete null?.[computed] returns true without evaluating key", () => {
   expect(called).toBe(false);
 });
 
+test("delete propagates optional short-circuiting through the complete chain", () => {
+  let keyCalls = 0;
+  const key = () => {
+    keyCalls += 1;
+    return "value";
+  };
+
+  expect(delete null?.nested[key()]).toBe(true);
+  expect(delete null?.method().value).toBe(true);
+  expect(keyCalls).toBe(0);
+});
+
+test("strict delete rejects non-configurable primitive string properties", () => {
+  expect(() => { delete "abc".length; }).toThrow(TypeError);
+  expect(() => { delete "abc"[0]; }).toThrow(TypeError);
+});
+
 test("delete non-configurable property with computed key throws TypeError", () => {
   const obj = Object.freeze({ x: 1 });
   const key = "x";

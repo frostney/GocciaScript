@@ -1717,6 +1717,8 @@ constructor TGocciaCatchScope.Create(const AParent: TGocciaScope; const ACatchPa
 begin
   inherited Create(AParent, skBlock, 'CatchBlock');
   FCatchParameter := ACatchParameter;
+  if Assigned(AParent) then
+    ThisValue := AParent.ThisValue;
 end;
 
 function TGocciaCatchScope.TryAssignExistingBinding(const AName: string;

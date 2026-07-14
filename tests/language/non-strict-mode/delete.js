@@ -35,6 +35,12 @@ describe("non-strict delete", () => {
     expect(Object.hasOwn(obj, "value")).toBe(false);
   });
 
+  test("delete primitive string exotic properties returns false", () => {
+    expect(delete "abc".length).toBe(false);
+    expect(delete "abc"[0]).toBe(false);
+    expect(delete "abc"[3]).toBe(true);
+  });
+
   test("delete identifier removes configurable global object properties", () => {
     globalThis.__gocciaConfigurableDelete = 1;
 
