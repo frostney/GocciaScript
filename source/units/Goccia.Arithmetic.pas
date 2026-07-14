@@ -32,6 +32,7 @@ function IsNotLooselyEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
 function IsSameValue(const ALeft, ARight: TGocciaValue): Boolean; inline;
 function IsSameValueZero(const ALeft, ARight: TGocciaValue): Boolean; inline;
 
+function CompareStringValues(const ALeft, ARight: string): Integer; inline;
 function GreaterThan(const ALeft, ARight: TGocciaValue): Boolean; inline;
 function GreaterThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
 function LessThan(const ALeft, ARight: TGocciaValue): Boolean; inline;
@@ -47,6 +48,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
@@ -108,7 +110,14 @@ procedure ToPrimitiveOperands(const ALeft, ARight: TGocciaValue;
   out APrimitiveLeft, APrimitiveRight: TGocciaValue); inline;
 begin
   APrimitiveLeft := ToPrimitive(ALeft);
-  APrimitiveRight := ToPrimitive(ARight);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(APrimitiveLeft);
+  try
+    APrimitiveRight := ToPrimitive(ARight);
+  finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(APrimitiveLeft);
+  end;
 end;
 
 function ToNumericOperand(const AValue: TGocciaValue): TGocciaValue; inline;
@@ -628,8 +637,8 @@ begin
 
   if (ALeft is TGocciaStringLiteralValue) and
      (ARight is TGocciaStringLiteralValue) then
-    Exit(TGocciaStringLiteralValue(ALeft).Value =
-      TGocciaStringLiteralValue(ARight).Value);
+    Exit(UTF16StringsEqual(TGocciaStringLiteralValue(ALeft).Value,
+      TGocciaStringLiteralValue(ARight).Value));
 
   if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue(ALeft).Value.Equal(
@@ -873,6 +882,7 @@ begin
   Result := True;
 end;
 
+// ES2026 §7.2.12 IsLessThan(x, y, LeftFirst), String comparison branch
 function CompareStringValues(const ALeft, ARight: string): Integer; inline;
 var
   LeftByteIndex, RightByteIndex: Integer;

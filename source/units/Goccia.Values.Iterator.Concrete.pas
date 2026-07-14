@@ -321,8 +321,8 @@ end;
 function TGocciaStringIteratorValue.TryReadAndAdvance(
   out AText: string): Boolean;
 var
-  ByteLength: Integer;
-  CodePoint: Cardinal;
+  ByteLength, NextByteLength: Integer;
+  CodePoint, NextCodePoint: Cardinal;
   StrVal: string;
 begin
   Result := False;
@@ -339,7 +339,15 @@ begin
 
   if not TextSemantics.TryReadUTF8CodePointAllowSurrogates(StrVal,
      FIndex + 1, CodePoint, ByteLength) then
+  begin
+    CodePoint := 0;
     ByteLength := 1;
+  end;
+  if (CodePoint >= $D800) and (CodePoint <= $DBFF) and
+     TextSemantics.TryReadUTF8CodePointAllowSurrogates(StrVal,
+       FIndex + ByteLength + 1, NextCodePoint, NextByteLength) and
+     (NextCodePoint >= $DC00) and (NextCodePoint <= $DFFF) then
+    Inc(ByteLength, NextByteLength);
   AText := Copy(StrVal, FIndex + 1, ByteLength);
   Inc(FIndex, ByteLength);
   Result := True;

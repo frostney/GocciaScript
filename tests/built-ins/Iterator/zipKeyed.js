@@ -121,7 +121,16 @@ describe("Iterator.zipKeyed()", () => {
   test("throws TypeError for non-iterable property value", () => {
     expect(() => Iterator.zipKeyed({ x: 42 }).toArray()).toThrow(TypeError);
     expect(() => Iterator.zipKeyed({ x: [1], y: null }).toArray()).toThrow(TypeError);
-    expect(() => Iterator.zipKeyed({ x: undefined }).toArray()).toThrow(TypeError);
+  });
+
+  test("skips enumerable properties whose value is undefined", () => {
+    const result = Iterator.zipKeyed({
+      a: ["A"],
+      omitted: undefined,
+      c: ["C"],
+    }).toArray();
+    expect(result).toEqual([{ a: "A", c: "C" }]);
+    expect("omitted" in result[0]).toBe(false);
   });
 
   test("throws TypeError with no arguments", () => {

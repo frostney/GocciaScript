@@ -29,6 +29,7 @@ uses
   SysUtils,
 
   StringBuffer,
+  TextSemantics,
 
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -50,6 +51,7 @@ end;
 
 constructor TGocciaGlobalString.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
+  FromCharCodeValue: TGocciaValue;
   Members: TGocciaMemberCollection;
 begin
   inherited Create(AName, AScope, AThrowError);
@@ -64,29 +66,78 @@ begin
     Members.Free;
   end;
   RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
+  FromCharCodeValue := FBuiltinObject.GetProperty(PROP_FROM_CHAR_CODE);
+  if FromCharCodeValue is TGocciaNativeFunctionValue then
+    TGocciaNativeFunctionValue(FromCharCodeValue).IntrinsicKind :=
+      nikStringFromCharCode;
 end;
 
 // ES2026 §22.1.2.1 String.fromCharCode(...codeUnits)
 function TGocciaGlobalString.StringFromCharCode(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  ResultStr: string;
-  I, CodeUnit: Integer;
+  Buffer: TStringBuffer;
+  I, CodeUnit, SecondCodeUnit, PendingHighSurrogate, CodePoint: Integer;
+
+  procedure AppendCodeUnit(const ACodeUnit: Integer);
+  begin
+    Buffer.Append(UTF16CodeUnitToUTF8(ACodeUnit));
+  end;
 begin
-  ResultStr := '';
+  // The overwhelmingly common one- and two-unit cases avoid allocating a
+  // growable buffer. The two-unit path also canonicalizes complete surrogate
+  // pairs so raw equality can take its constant-time fast path.
+  if AArgs.Length = 0 then
+    Exit(TGocciaStringLiteralValue.Create(''));
+  if AArgs.Length <= 2 then
+  begin
+    CodeUnit := ToUint16Value(AArgs.GetElement(0));
+    if AArgs.Length = 1 then
+      Exit(TGocciaStringLiteralValue.Create(
+        UTF16CodeUnitToUTF8(CodeUnit)));
+    SecondCodeUnit := ToUint16Value(AArgs.GetElement(1));
+    Exit(TGocciaStringLiteralValue.Create(UTF16CodeUnitPairToUTF8(
+      Cardinal(CodeUnit), Cardinal(SecondCodeUnit))));
+  end;
+
+  Buffer := TStringBuffer.Create(AArgs.Length * 3);
+  PendingHighSurrogate := -1;
   I := 0;
   while I < AArgs.Length do
   begin
     // ES2026 §7.1.10 ToUint16: NaN/±0/±∞ → 0, otherwise truncate mod 2^16.
     CodeUnit := ToUint16Value(AArgs.GetElement(I));
-    if CodeUnit < $80 then
-      ResultStr := ResultStr + Chr(CodeUnit)
-    else if CodeUnit < $800 then
-      ResultStr := ResultStr + Chr($C0 or (CodeUnit shr 6)) + Chr($80 or (CodeUnit and $3F))
+
+    if PendingHighSurrogate >= 0 then
+    begin
+      if (CodeUnit >= $DC00) and (CodeUnit <= $DFFF) then
+      begin
+        // Canonicalize a complete UTF-16 surrogate pair to its UTF-8 code
+        // point. Lone surrogates remain WTF-8 below, preserving JS indexing.
+        CodePoint := $10000 + ((PendingHighSurrogate - $D800) shl 10) +
+          (CodeUnit - $DC00);
+        Buffer.Append(Chr($F0 or (CodePoint shr 18)) +
+          Chr($80 or ((CodePoint shr 12) and $3F)) +
+          Chr($80 or ((CodePoint shr 6) and $3F)) +
+          Chr($80 or (CodePoint and $3F)));
+        PendingHighSurrogate := -1;
+        Inc(I);
+        Continue;
+      end;
+
+      AppendCodeUnit(PendingHighSurrogate);
+      PendingHighSurrogate := -1;
+    end;
+
+    if (CodeUnit >= $D800) and (CodeUnit <= $DBFF) then
+      PendingHighSurrogate := CodeUnit
     else
-      ResultStr := ResultStr + Chr($E0 or (CodeUnit shr 12)) + Chr($80 or ((CodeUnit shr 6) and $3F)) + Chr($80 or (CodeUnit and $3F));
+      AppendCodeUnit(CodeUnit);
     Inc(I);
   end;
-  Result := TGocciaStringLiteralValue.Create(ResultStr);
+
+  if PendingHighSurrogate >= 0 then
+    AppendCodeUnit(PendingHighSurrogate);
+  Result := TGocciaStringLiteralValue.Create(Buffer.ToString);
 end;
 
 // ES2026 §22.1.2.2 String.fromCodePoint(...codePoints)

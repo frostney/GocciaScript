@@ -129,6 +129,10 @@ type
     // stale cache so the caller can fall back to the named lookup.
     function TryGetLexicalValueAt(const AEntryIndex: Integer;
       const AVersion: Cardinal; out AValue: TGocciaValue): Boolean; inline;
+    function HasLexicalBindingAt(const AEntryIndex: Integer;
+      const AVersion: Cardinal): Boolean; inline;
+    function IsGlobalBuiltInObjectBindingAt(const AEntryIndex: Integer;
+      const AVersion: Cardinal): Boolean; inline;
     // Named lookup that reports the own-lexical entry index and map version
     // for inline caching.  AEntryIndex is -1 when the value was resolved
     // through the global this-object, var bindings, or the parent chain —
@@ -1094,10 +1098,17 @@ begin
       end;
     end;
     if not LexicalBinding.Writable then
+    begin
+      // ES2026 SetMutableBinding with S = false silently ignores assignment
+      // to the non-writable global value properties (Infinity, NaN, and
+      // undefined). User-declared const bindings remain errors in every mode.
+      if ANonStrictMode and LexicalBinding.BuiltIn then
+        Exit(True);
       raise TGocciaTypeError.Create(
         Format(SErrorAssignToConstant, [AName]),
         ALine, AColumn, '', nil,
         SSuggestUseLetNotConst);
+    end;
     if StrictActive and (LexicalBinding.TypeHint <> sltUntyped) then
       EnforceStrictType(AValue, LexicalBinding.TypeHint);
     LexicalBinding.Value := AValue;
@@ -1307,6 +1318,25 @@ begin
   end;
   AValue := LexicalBinding.Value;
   Result := True;
+end;
+
+function TGocciaScope.IsGlobalBuiltInObjectBindingAt(
+  const AEntryIndex: Integer; const AVersion: Cardinal): Boolean;
+var
+  LexicalBinding: TLexicalBinding;
+begin
+  Result := (AVersion = FLexicalBindings.EntryVersion) and
+    FLexicalBindings.TryGetValueAtEntry(AEntryIndex, LexicalBinding) and
+    IsGlobalBuiltInObjectBinding(LexicalBinding);
+end;
+
+function TGocciaScope.HasLexicalBindingAt(const AEntryIndex: Integer;
+  const AVersion: Cardinal): Boolean;
+var
+  LexicalBinding: TLexicalBinding;
+begin
+  Result := (AVersion = FLexicalBindings.EntryVersion) and
+    FLexicalBindings.TryGetValueAtEntry(AEntryIndex, LexicalBinding);
 end;
 
 function TGocciaScope.TryGetBindingValueFillCache(const AName: string;

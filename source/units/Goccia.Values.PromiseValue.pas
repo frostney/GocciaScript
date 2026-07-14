@@ -94,6 +94,8 @@ type
 
 function GetPromiseIntrinsicPrototypeForRealm(
   const ARealm: TGocciaRealm): TGocciaObjectValue;
+function PromiseResolveIntrinsic(
+  const AValue: TGocciaValue): TGocciaPromiseValue;
 
 implementation
 
@@ -276,6 +278,44 @@ begin
   Result := GetPromiseDefaultConstructorForRealm(CurrentRealm);
   if not Assigned(Result) and Assigned(GetPromiseShared) then
     Result := GetPromiseShared.Prototype.GetProperty(PROP_CONSTRUCTOR);
+end;
+
+// ES2026 §27.2.4.7.1 PromiseResolve(%Promise%, value).  Keeping this at
+// the Promise value seam gives both executors the same constructor-observation
+// and thenable-assimilation behaviour.
+function PromiseResolveIntrinsic(
+  const AValue: TGocciaValue): TGocciaPromiseValue;
+var
+  ConstructorValue: TGocciaValue;
+  IsRooted: Boolean;
+  ValueConstructor: TGocciaValue;
+begin
+  ConstructorValue := GetPromiseDefaultConstructor;
+  if AValue is TGocciaPromiseValue then
+  begin
+    ValueConstructor := TGocciaPromiseValue(AValue).GetProperty(
+      PROP_CONSTRUCTOR);
+    if IsSameValue(ValueConstructor, ConstructorValue) then
+      Exit(TGocciaPromiseValue(AValue));
+  end;
+
+  Result := TGocciaPromiseValue.Create;
+  IsRooted := Assigned(TGarbageCollector.Instance);
+  if IsRooted then
+    TGarbageCollector.Instance.AddTempRoot(Result);
+  try
+    Result.Resolve(AValue);
+  except
+    if IsRooted then
+    begin
+      TGarbageCollector.Instance.RemoveTempRoot(Result);
+      IsRooted := False;
+    end;
+    Result.Free;
+    raise;
+  end;
+  if IsRooted then
+    TGarbageCollector.Instance.RemoveTempRoot(Result);
 end;
 
 function PromiseSpeciesConstructor(

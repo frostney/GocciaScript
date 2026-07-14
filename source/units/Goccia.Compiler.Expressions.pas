@@ -2015,12 +2015,6 @@ begin
   else
   begin
     Op := TokenTypeToRuntimeOp(AExpr.Operator);
-    if (AExpr.Operator = gttPlus) and
-       not (IsKnownNumeric(LeftType) and IsKnownNumeric(RightType)) then
-    begin
-      EmitInstruction(ACtx, EncodeABx(OP_TO_PRIMITIVE, RegB, RegB));
-      EmitInstruction(ACtx, EncodeABx(OP_TO_PRIMITIVE, RegC, RegC));
-    end;
     if AExpr.Operator = gttIn then
       EmitInstruction(ACtx, EncodeABC(Op, ADest, RegC, RegB))
     else

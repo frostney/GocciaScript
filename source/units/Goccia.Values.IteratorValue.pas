@@ -61,6 +61,7 @@ type
     function DirectNext(out ADone: Boolean): TGocciaValue; virtual;
     function DirectNextValue(const AValue: TGocciaValue; out ADone: Boolean): TGocciaValue; virtual;
     function ReturnValue(const AValue: TGocciaValue): TGocciaObjectValue; virtual;
+    function ReturnValueWithoutValue: TGocciaObjectValue; virtual;
     function ThrowValue(const AValue: TGocciaValue): TGocciaObjectValue; virtual;
     procedure Close; virtual;
     function ToStringTag: string; override;
@@ -614,6 +615,11 @@ function TGocciaIteratorValue.ReturnValue(
 begin
   Close;
   Result := CreateIteratorResult(AValue, True);
+end;
+
+function TGocciaIteratorValue.ReturnValueWithoutValue: TGocciaObjectValue;
+begin
+  Result := ReturnValue(TGocciaUndefinedLiteralValue.UndefinedValue);
 end;
 
 function TGocciaIteratorValue.ThrowValue(
@@ -1804,6 +1810,10 @@ begin
         AllKeys[I]);
       if not Assigned(PropValue) then
         PropValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      // Iterator.zipKeyed omits enumerable properties whose value is
+      // undefined; they do not contribute an iterator or a result key.
+      if PropValue is TGocciaUndefinedLiteralValue then
+        Continue;
       InnerIterator := GetIteratorFlattenable(PropValue, iphRejectPrimitives);
       if InnerIterator = nil then
         ThrowTypeError(Format(SErrorIteratorZipKeyedPropertyNotIterable,

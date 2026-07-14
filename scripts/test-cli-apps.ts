@@ -980,6 +980,31 @@ console.log("Bare Loader: --test262-host child realm globals expose host hooks..
     throw new Error(`Bare --test262-host child global hooks got: ${proc.stdout.toString()}`);
 }
 
+console.log("Bare Loader: cross-realm weak constructors use the newTarget realm prototype...");
+for (const { label, args } of [
+  { label: "interpreted", args: [BARE, "--test262-host", "--compat-function"] },
+  { label: "bytecode", args: [BARE, "--test262-host", "--compat-function", "--mode=bytecode"] },
+]) {
+  const proc = Bun.spawnSync(args, {
+    stdin: new TextEncoder().encode([
+      "const child = Goccia.test262.createRealm();",
+      "child.evalScript('function NewTarget() {} NewTarget.prototype = null; globalThis.NewTarget = NewTarget;');",
+      "const newTarget = child.global.NewTarget;",
+      "const weakRef = Reflect.construct(WeakRef, [{}], newTarget);",
+      "print(Object.getPrototypeOf(weakRef) === child.global.WeakRef.prototype);",
+      "const registry = Reflect.construct(FinalizationRegistry, [() => {}], newTarget);",
+      "print(Object.getPrototypeOf(registry) === child.global.FinalizationRegistry.prototype);",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare ${label} cross-realm weak constructor probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== "true\ntrue")
+    throw new Error(`Bare ${label} cross-realm weak constructor prototype mismatch: ${proc.stdout.toString()}`);
+}
+
 console.log("Bare Loader: bytecode --test262-host eval is direct eval...");
 {
   const proc = Bun.spawnSync([BARE, "--test262-host", "--mode=bytecode"], {

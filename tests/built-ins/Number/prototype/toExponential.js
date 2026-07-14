@@ -9,6 +9,12 @@ describe("Number.prototype.toExponential", () => {
     expect(result).toBe("1e+2");
   });
 
+  test("undefined fraction digits use the shortest exponential representation", () => {
+    expect((123.456).toExponential(undefined)).toBe("1.23456e+2");
+    expect((1.1e-32).toExponential()).toBe("1.1e-32");
+    expect((100).toExponential(undefined)).toBe("1e+2");
+  });
+
   test("NaN returns 'NaN'", () => {
     expect(NaN.toExponential()).toBe("NaN");
   });
