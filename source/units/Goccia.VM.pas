@@ -15171,8 +15171,9 @@ begin
           if (LeftValue is TGocciaStringLiteralValue) and
              (RightValue is TGocciaStringLiteralValue) then
             FRegisters[A] := RegisterBoolean(
-              TGocciaStringLiteralValue(LeftValue).Value <
-              TGocciaStringLiteralValue(RightValue).Value)
+              Goccia.Arithmetic.CompareStringValues(
+                TGocciaStringLiteralValue(LeftValue).Value,
+                TGocciaStringLiteralValue(RightValue).Value) < 0)
           else
             FRegisters[A] := RegisterBoolean(
               Goccia.Arithmetic.LessThan(LeftValue, RightValue));
@@ -15202,8 +15203,9 @@ begin
           if (LeftValue is TGocciaStringLiteralValue) and
              (RightValue is TGocciaStringLiteralValue) then
             FRegisters[A] := RegisterBoolean(
-              TGocciaStringLiteralValue(LeftValue).Value >
-              TGocciaStringLiteralValue(RightValue).Value)
+              Goccia.Arithmetic.CompareStringValues(
+                TGocciaStringLiteralValue(LeftValue).Value,
+                TGocciaStringLiteralValue(RightValue).Value) > 0)
           else
             FRegisters[A] := RegisterBoolean(
               Goccia.Arithmetic.GreaterThan(LeftValue, RightValue));
@@ -15233,8 +15235,9 @@ begin
           if (LeftValue is TGocciaStringLiteralValue) and
              (RightValue is TGocciaStringLiteralValue) then
             FRegisters[A] := RegisterBoolean(
-              TGocciaStringLiteralValue(LeftValue).Value <=
-              TGocciaStringLiteralValue(RightValue).Value)
+              Goccia.Arithmetic.CompareStringValues(
+                TGocciaStringLiteralValue(LeftValue).Value,
+                TGocciaStringLiteralValue(RightValue).Value) <= 0)
           else
             FRegisters[A] := RegisterBoolean(
               Goccia.Arithmetic.LessThanOrEqual(LeftValue, RightValue));
@@ -15264,8 +15267,9 @@ begin
           if (LeftValue is TGocciaStringLiteralValue) and
              (RightValue is TGocciaStringLiteralValue) then
             FRegisters[A] := RegisterBoolean(
-              TGocciaStringLiteralValue(LeftValue).Value >=
-              TGocciaStringLiteralValue(RightValue).Value)
+              Goccia.Arithmetic.CompareStringValues(
+                TGocciaStringLiteralValue(LeftValue).Value,
+                TGocciaStringLiteralValue(RightValue).Value) >= 0)
           else
             FRegisters[A] := RegisterBoolean(
               Goccia.Arithmetic.GreaterThanOrEqual(LeftValue, RightValue));

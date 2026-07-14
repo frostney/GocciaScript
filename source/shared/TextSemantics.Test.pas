@@ -212,6 +212,8 @@ begin
     .ToBe(True);
   Expect<Integer>(UTF16StringHash(UTF8_GRINNING_FACE)).ToBe(
     UTF16StringHash(SurrogatePair));
+  Expect<Boolean>(UTF16StringsEqual('a', 'b')).ToBe(False);
+  Expect<Boolean>(UTF16StringsEqual(#$C3#$A9, #$C3#$A8)).ToBe(False);
   Expect<Boolean>(UTF16StringsEqual(UTF8_GRINNING_FACE,
     UTF8_HIGH_SURROGATE)).ToBe(False);
 end;

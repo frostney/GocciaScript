@@ -32,6 +32,7 @@ function IsNotLooselyEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
 function IsSameValue(const ALeft, ARight: TGocciaValue): Boolean; inline;
 function IsSameValueZero(const ALeft, ARight: TGocciaValue): Boolean; inline;
 
+function CompareStringValues(const ALeft, ARight: string): Integer; inline;
 function GreaterThan(const ALeft, ARight: TGocciaValue): Boolean; inline;
 function GreaterThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
 function LessThan(const ALeft, ARight: TGocciaValue): Boolean; inline;
@@ -881,6 +882,7 @@ begin
   Result := True;
 end;
 
+// ES2026 §7.2.12 IsLessThan(x, y, LeftFirst), String comparison branch
 function CompareStringValues(const ALeft, ARight: string): Integer; inline;
 var
   LeftByteIndex, RightByteIndex: Integer;

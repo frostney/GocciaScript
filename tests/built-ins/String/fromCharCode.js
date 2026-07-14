@@ -54,4 +54,14 @@ describe("String.fromCharCode surrogate-pair identity", () => {
     expect(new Map([["😀", 1]]).get(pair)).toBe(1);
     expect({ ["😀"]: 2 }[pair]).toBe(2);
   });
+
+  test("paired code units retain UTF-16 relational ordering", () => {
+    const supplementary = String.fromCharCode(0xD83D, 0xDE00);
+    const bmp = "\uE000";
+
+    expect(supplementary < bmp).toBe(true);
+    expect(supplementary > bmp).toBe(false);
+    expect(supplementary <= bmp).toBe(true);
+    expect(supplementary >= bmp).toBe(false);
+  });
 });

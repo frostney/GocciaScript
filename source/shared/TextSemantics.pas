@@ -732,7 +732,10 @@ var
 begin
   if ALeft = ARight then
     Exit(True);
-  if StringIsAllAscii(ALeft) or StringIsAllAscii(ARight) then
+  // The only supported alternate encodings of one ECMAScript string are a
+  // four-byte supplementary code point and its two three-byte WTF-8 surrogate
+  // code units. Equal byte lengths therefore make a raw mismatch definitive.
+  if Length(ALeft) = Length(ARight) then
     Exit(False);
 
   LeftByteIndex := 1;
@@ -756,18 +759,20 @@ end;
 {$PUSH}{$R-}{$Q-}
 function UTF16StringHash(const AText: string): Cardinal;
 var
-  ByteIndex, I, PendingLow: Integer;
-  CodeUnit: Cardinal;
+  ByteIndex, PendingLow: Integer;
+  ByteValue, CodeUnit: Cardinal;
 begin
   Result := 5381;
-  if StringIsAllAscii(AText) then
+  ByteIndex := 1;
+  while ByteIndex <= Length(AText) do
   begin
-    for I := 1 to Length(AText) do
-      Result := Result * 33 + Ord(AText[I]);
-    Exit;
+    ByteValue := Ord(AText[ByteIndex]);
+    if ByteValue >= $80 then
+      Break;
+    Result := Result * 33 + ByteValue;
+    Inc(ByteIndex);
   end;
 
-  ByteIndex := 1;
   PendingLow := -1;
   while ReadNextUTF16CodeUnit(AText, ByteIndex, PendingLow, CodeUnit) do
     Result := Result * 33 + CodeUnit;
