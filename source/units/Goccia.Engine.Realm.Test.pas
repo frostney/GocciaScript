@@ -18,6 +18,7 @@ uses
   Goccia.Realm,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.URL,
+  Goccia.Scope,
   Goccia.TestSetup,
   Goccia.Values.NativeFunction,
   Goccia.Values.Primitives;
@@ -60,6 +61,7 @@ type
     procedure TestBytecodeConstructorExecutionContextUsesFunctionValue;
     procedure TestInterpreterRepeatedEngineExecutionGetsFreshTemplateSites;
     procedure TestBytecodeRepeatedEngineExecutionGetsFreshTemplateSites;
+    procedure TestBytecodeGlobalReadCacheRevalidatesLexicalShadow;
   end;
 
 procedure TTestEngineRealm.SetupTests;
@@ -100,6 +102,8 @@ begin
     TestInterpreterRepeatedEngineExecutionGetsFreshTemplateSites);
   Test('Bytecode repeated engine execution gets fresh template sites',
     TestBytecodeRepeatedEngineExecutionGetsFreshTemplateSites);
+  Test('Bytecode global read cache revalidates a later lexical shadow',
+    TestBytecodeGlobalReadCacheRevalidatesLexicalShadow);
 end;
 
 function TTestEngineRealm.RunInline(const ASource: string): TGocciaScriptResult;
@@ -602,6 +606,41 @@ begin
     AssertRepeatedTaggedTemplateExecutionWithExecutor(Executor);
   finally
     Executor.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.TestBytecodeGlobalReadCacheRevalidatesLexicalShadow;
+var
+  Engine: TGocciaEngine;
+  Executor: TGocciaBytecodeExecutor;
+  ResultValue: TGocciaScriptResult;
+  Source: TStringList;
+begin
+  Source := TStringList.Create;
+  Source.Text :=
+    'globalThis.readCachedArray = () => Array;' +
+    'globalThis.readCachedArray();' +
+    'globalThis.readCachedArray();';
+  Executor := TGocciaBytecodeExecutor.Create;
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create('<global-read-cache-shadow>', Source,
+      Executor);
+    Engine.Execute;
+
+    Engine.Interpreter.GlobalScope.PredeclareLexicalBinding('Array', dtLet);
+    Engine.Interpreter.GlobalScope.DefineLexicalBinding('Array',
+      TGocciaStringLiteralValue.Create('lexical Array'), dtLet);
+    Source.Text :=
+      'globalThis.readCachedArray() === "lexical Array";';
+    ResultValue := Engine.Execute;
+
+    Expect<Boolean>(
+      (ResultValue.Result as TGocciaBooleanLiteralValue).Value).ToBe(True);
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
   end;
 end;
 

@@ -16,6 +16,13 @@ test("empty string iterator", () => {
   expect(iter.next().done).toBe(true);
 });
 
+test("iterator combines explicitly encoded surrogate pairs", () => {
+  const pair = String.fromCharCode(0xD83D, 0xDE00);
+  const iter = pair[Symbol.iterator]();
+  expect(iter.next()).toEqual({ value: "😀", done: false });
+  expect(iter.next()).toEqual({ value: undefined, done: true });
+});
+
 test("spread on string produces characters", () => {
   expect([..."hello"]).toEqual(["h", "e", "l", "l", "o"]);
 });
