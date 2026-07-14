@@ -13,6 +13,13 @@ uses
   Goccia.Values.Primitives;
 
 type
+  TGocciaNativeIntrinsicKind = (
+    nikNone,
+    nikDecodeURI,
+    nikDecodeURIComponent,
+    nikStringFromCharCode
+  );
+
   TGocciaNativeFunctionValue = class(TGocciaFunctionBase)
   private
     FFunction: TGocciaNativeFunctionCallback;
@@ -23,6 +30,7 @@ type
     FNotConstructable: Boolean;
     FDirectEvalHost: Boolean;
     FCapturedRoot: TGocciaValue;
+    FIntrinsicKind: TGocciaNativeIntrinsicKind;
   protected
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
@@ -42,6 +50,8 @@ type
     property NotConstructable: Boolean read FNotConstructable write FNotConstructable;
     property DirectEvalHost: Boolean read FDirectEvalHost write FDirectEvalHost;
     property CapturedRoot: TGocciaValue read FCapturedRoot write FCapturedRoot;
+    property IntrinsicKind: TGocciaNativeIntrinsicKind
+      read FIntrinsicKind write FIntrinsicKind;
   end;
 
 

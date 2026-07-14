@@ -187,6 +187,9 @@ type
     FStackRootRegistered: Boolean;
     FTempSavedStateRoots: TGocciaVMSavedStateRootArray;
     FTempSavedStateRootCount: Integer;
+    FASCIIStringValues: array[0..127] of TGocciaStringLiteralValue;
+    function CachedASCIIStringValue(
+      const ACodeUnit: Byte): TGocciaStringLiteralValue;
     function ConstantToValue(const AConstant: TGocciaBytecodeConstant): TGocciaValue;
     // ES2026 §13.2.8.3 GetTemplateObject — lazy-build helper for bckTemplateObject constants.
     function BuildTemplateObjectConstant(const ATemplate: TGocciaFunctionTemplate;
@@ -506,6 +509,7 @@ uses
   Goccia.StackLimit,
   Goccia.Timeout,
   Goccia.Types.Enforcement,
+  Goccia.URI,
   Goccia.Utils,
   Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.Await,
@@ -6449,11 +6453,30 @@ begin
   end;
   for I := 0 to FArgumentPoolCount - 1 do
     FArgumentPool[I].Free;
+  if Assigned(TGarbageCollector.Instance) then
+    for I := Low(FASCIIStringValues) to High(FASCIIStringValues) do
+      if Assigned(FASCIIStringValues[I]) then
+        TGarbageCollector.Instance.UnpinObject(FASCIIStringValues[I]);
   SetLength(FArgumentPool, 0);
   SetLength(FTempSavedStateRoots, 0);
   FHandlerStack.Free;
   SetExceptionMask(FPreviousExceptionMask);
   inherited;
+end;
+
+function TGocciaVM.CachedASCIIStringValue(
+  const ACodeUnit: Byte): TGocciaStringLiteralValue;
+begin
+  Result := FASCIIStringValues[ACodeUnit];
+  if Assigned(Result) then
+    Exit;
+
+  Result := TGocciaStringLiteralValue.Create(Chr(ACodeUnit));
+  if Assigned(TGarbageCollector.Instance) then
+  begin
+    TGarbageCollector.Instance.PinObject(Result);
+    FASCIIStringValues[ACodeUnit] := Result;
+  end;
 end;
 
 procedure TGocciaVM.EnsureStackRootRegistered;
@@ -11888,7 +11911,11 @@ begin
     StringUnit := UTF16CodeUnitAt(StringValue, KeyIndex);
     if StringUnit <> '' then
     begin
-      SetRegister(ADest, TGocciaStringLiteralValue.Create(StringUnit));
+      if (Length(StringUnit) = 1) and (Ord(StringUnit[1]) <= 127) then
+        SetRegisterFast(ADest,
+          CachedASCIIStringValue(Byte(Ord(StringUnit[1]))))
+      else
+        SetRegisterFast(ADest, TGocciaStringLiteralValue.Create(StringUnit));
       Exit;
     end;
   end;
@@ -13490,16 +13517,32 @@ begin
           C := WideC or DecodeC(Instruction);
           case TGocciaOpCode(Op) of
       OP_LOAD_CONST:
-        // ES2026 §13.2.8.3: bckTemplateObject constants are lazily built and cached
-        if Template.GetConstantUnchecked(DecodeBx(Instruction)).Kind = bckTemplateObject then
-          FRegisters[A] := ValueToRegister(BuildTemplateObjectConstant(Template, DecodeBx(Instruction)))
+        case Template.GetConstantUnchecked(DecodeBx(Instruction)).Kind of
+          // Keep numeric constants in the VM's scalar representation.  The
+          // previous ConstantToValue -> ValueToRegister round trip allocated a
+          // short-lived boxed Number for every execution of the instruction.
+          bckInteger:
+            FRegisters[A] := VMIntResult(
+              Template.GetConstantUnchecked(DecodeBx(Instruction)).IntValue);
+          bckFloat:
+            FRegisters[A] := RegisterFromDouble(
+              Template.GetConstantUnchecked(DecodeBx(Instruction)).FloatValue);
+          // ES2026 §13.2.8.3: template objects are lazily built and cached.
+          bckTemplateObject:
+            FRegisters[A] := ValueToRegister(BuildTemplateObjectConstant(
+              Template, DecodeBx(Instruction)));
         else
-          FRegisters[A] := ValueToRegister(
-            ConstantToValue(Template.GetConstantUnchecked(DecodeBx(Instruction))));
+          FRegisters[A] := ValueToRegister(ConstantToValue(
+            Template.GetConstantUnchecked(DecodeBx(Instruction))));
+        end;
 
       OP_LOAD_CHAR:
-        FRegisters[A] := ValueToRegister(TGocciaStringLiteralValue.Create(
-          UTF16CodeUnitImmediateToUTF8(DecodeBx(Instruction))));
+        if DecodeBx(Instruction) <= 127 then
+          FRegisters[A] := RegisterObject(
+            CachedASCIIStringValue(Byte(DecodeBx(Instruction))))
+        else
+          FRegisters[A] := RegisterObject(TGocciaStringLiteralValue.Create(
+            UTF16CodeUnitImmediateToUTF8(DecodeBx(Instruction))));
 
       OP_LOAD_REGEXP:
         FRegisters[A] := ValueToRegister(
@@ -15424,6 +15467,33 @@ begin
             UInt32(InstructionStartIP), Template.StrictCode));
           Continue;
         end;
+        if ((C and CALL_FLAG_SPREAD) = 0) and
+           (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) and
+           (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
+             CreationRealm = CurrentRealm) and
+           (B = 1) and
+           (FRegisters[A + 1].Kind = grkObject) and
+           (FRegisters[A + 1].ObjectValue is TGocciaStringLiteralValue) then
+        begin
+          case TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
+            IntrinsicKind of
+            nikDecodeURI:
+              begin
+                SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+                  DecodeURI(TGocciaStringLiteralValue(
+                    FRegisters[A + 1].ObjectValue).Value)));
+                Continue;
+              end;
+            nikDecodeURIComponent:
+              begin
+                SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+                  DecodeURIComponent(TGocciaStringLiteralValue(
+                    FRegisters[A + 1].ObjectValue).Value)));
+                Continue;
+              end;
+          end;
+        end;
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaBoundFunctionValue) then
         begin
@@ -15611,6 +15681,22 @@ begin
       OP_CALL_METHOD:
       begin
         CheckExecutionTimeout;
+        if ((C and CALL_FLAG_SPREAD) = 0) and (B = 2) and
+           (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) and
+           (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
+             IntrinsicKind = nikStringFromCharCode) and
+           (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
+             CreationRealm = CurrentRealm) and
+           (FRegisters[A + 1].Kind = grkInt) and
+           (FRegisters[A + 2].Kind = grkInt) then
+        begin
+          SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+            UTF16CodeUnitPairToUTF8(
+              Cardinal(FRegisters[A + 1].IntValue and $FFFF),
+              Cardinal(FRegisters[A + 2].IntValue and $FFFF))));
+          Continue;
+        end;
         if (C and 1) = 0 then
         begin
           if (FRegisters[A - 1].Kind = grkObject) and
@@ -16265,13 +16351,35 @@ begin
 
       OP_HAS_GLOBAL:
       begin
-        GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        if HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) then
-          FRegisters[A] := RegisterBoolean(True)
-        else if Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName) then
-          FRegisters[A] := RegisterBoolean(True)
-        else
-          FRegisters[A] := RegisterBoolean(False);
+        if not Assigned(FCurrentDynamicVarScope) and Assigned(FGlobalScope) then
+        begin
+          GlobalReadCache := Template.GlobalReadCacheSlot(
+            DecodeBx(Instruction));
+          if Assigned(GlobalReadCache) and
+             (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
+             (((GlobalReadCache^.ObjectValue = nil) and
+               FGlobalScope.HasLexicalBindingAt(
+                 GlobalReadCache^.EntryIndex, GlobalReadCache^.Version)) or
+              ((FGlobalScope.ThisValue is TGocciaObjectValue) and
+               (GlobalReadCache^.ObjectValue =
+                 Pointer(FGlobalScope.ThisValue)) and
+               VMGlobalObjectBindingCacheStillPrecedes(FGlobalScope,
+                 GlobalReadCache) and
+               VMTryGetCachedGlobalOwnDataProperty(
+                 TGocciaObjectValue(FGlobalScope.ThisValue),
+                 GlobalReadCache^.EntryIndex, GlobalReadCache^.Version,
+                 GlobalBindingValue))) then
+          begin
+            FRegisters[A] := RegisterBoolean(True);
+            Continue;
+          end;
+        end;
+
+        GlobalName := Template.GetConstantUnchecked(
+          DecodeBx(Instruction)).StringValue;
+        FRegisters[A] := RegisterBoolean(
+          HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) or
+          (Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName)));
       end;
 
       OP_DELETE_GLOBAL:

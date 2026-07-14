@@ -48,6 +48,7 @@ function ToWellFormedUTF16(const AText: AnsiString): AnsiString;
 function UTF8CodePointLength(const AText: string): Integer;
 function UTF8CodePointAt(const AText: string; const AIndex: Integer): string;
 function UTF16CodeUnitToUTF8(const ACodeUnit: Cardinal): string;
+function UTF16CodeUnitPairToUTF8(const AFirst, ASecond: Cardinal): string;
 function UTF16CodeUnitLength(const AText: string): Integer;
 function UTF16CodeUnitAt(const AText: string; const AIndex: Integer): string;
 function UTF16StringsEqual(const ALeft, ARight: string): Boolean;
@@ -606,6 +607,21 @@ begin
     Result := Chr($E0 or (ACodeUnit shr 12)) +
       Chr($80 or ((ACodeUnit shr 6) and $3F)) +
       Chr($80 or (ACodeUnit and $3F));
+end;
+
+function UTF16CodeUnitPairToUTF8(const AFirst, ASecond: Cardinal): string;
+var
+  CodePoint: Cardinal;
+begin
+  if (AFirst >= $D800) and (AFirst <= $DBFF) and
+     (ASecond >= $DC00) and (ASecond <= $DFFF) then
+  begin
+    CodePoint := $10000 + ((AFirst - $D800) shl 10) +
+      (ASecond - $DC00);
+    Exit(CodePointToUTF8(CodePoint));
+  end;
+  Result := UTF16CodeUnitToUTF8(AFirst) +
+    UTF16CodeUnitToUTF8(ASecond);
 end;
 
 // Per-thread text memo. The UTF-16 helpers are called repeatedly against

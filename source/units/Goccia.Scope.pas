@@ -129,6 +129,8 @@ type
     // stale cache so the caller can fall back to the named lookup.
     function TryGetLexicalValueAt(const AEntryIndex: Integer;
       const AVersion: Cardinal; out AValue: TGocciaValue): Boolean; inline;
+    function HasLexicalBindingAt(const AEntryIndex: Integer;
+      const AVersion: Cardinal): Boolean; inline;
     function IsGlobalBuiltInObjectBindingAt(const AEntryIndex: Integer;
       const AVersion: Cardinal): Boolean; inline;
     // Named lookup that reports the own-lexical entry index and map version
@@ -1326,6 +1328,15 @@ begin
   Result := (AVersion = FLexicalBindings.EntryVersion) and
     FLexicalBindings.TryGetValueAtEntry(AEntryIndex, LexicalBinding) and
     IsGlobalBuiltInObjectBinding(LexicalBinding);
+end;
+
+function TGocciaScope.HasLexicalBindingAt(const AEntryIndex: Integer;
+  const AVersion: Cardinal): Boolean;
+var
+  LexicalBinding: TLexicalBinding;
+begin
+  Result := (AVersion = FLexicalBindings.EntryVersion) and
+    FLexicalBindings.TryGetValueAtEntry(AEntryIndex, LexicalBinding);
 end;
 
 function TGocciaScope.TryGetBindingValueFillCache(const AName: string;

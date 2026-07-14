@@ -29,6 +29,7 @@ uses
   SysUtils,
 
   StringBuffer,
+  TextSemantics,
 
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -50,6 +51,7 @@ end;
 
 constructor TGocciaGlobalString.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
+  FromCharCodeValue: TGocciaValue;
   Members: TGocciaMemberCollection;
 begin
   inherited Create(AName, AScope, AThrowError);
@@ -64,6 +66,10 @@ begin
     Members.Free;
   end;
   RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
+  FromCharCodeValue := FBuiltinObject.GetProperty('fromCharCode');
+  if FromCharCodeValue is TGocciaNativeFunctionValue then
+    TGocciaNativeFunctionValue(FromCharCodeValue).IntrinsicKind :=
+      nikStringFromCharCode;
 end;
 
 // ES2026 §22.1.2.1 String.fromCharCode(...codeUnits)
@@ -72,21 +78,9 @@ var
   Buffer: TStringBuffer;
   I, CodeUnit, SecondCodeUnit, PendingHighSurrogate, CodePoint: Integer;
 
-  function EncodeCodeUnit(const ACodeUnit: Integer): string;
-  begin
-    if ACodeUnit < $80 then
-      Exit(Chr(ACodeUnit));
-    if ACodeUnit < $800 then
-      Exit(Chr($C0 or (ACodeUnit shr 6)) +
-        Chr($80 or (ACodeUnit and $3F)));
-    Result := Chr($E0 or (ACodeUnit shr 12)) +
-      Chr($80 or ((ACodeUnit shr 6) and $3F)) +
-      Chr($80 or (ACodeUnit and $3F));
-  end;
-
   procedure AppendCodeUnit(const ACodeUnit: Integer);
   begin
-    Buffer.Append(EncodeCodeUnit(ACodeUnit));
+    Buffer.Append(UTF16CodeUnitToUTF8(ACodeUnit));
   end;
 begin
   // The overwhelmingly common one- and two-unit cases avoid allocating a
@@ -98,21 +92,11 @@ begin
   begin
     CodeUnit := ToUint16Value(AArgs.GetElement(0));
     if AArgs.Length = 1 then
-      Exit(TGocciaStringLiteralValue.Create(EncodeCodeUnit(CodeUnit)));
-    SecondCodeUnit := ToUint16Value(AArgs.GetElement(1));
-    if (CodeUnit >= $D800) and (CodeUnit <= $DBFF) and
-       (SecondCodeUnit >= $DC00) and (SecondCodeUnit <= $DFFF) then
-    begin
-      CodePoint := $10000 + ((CodeUnit - $D800) shl 10) +
-        (SecondCodeUnit - $DC00);
       Exit(TGocciaStringLiteralValue.Create(
-        Chr($F0 or (CodePoint shr 18)) +
-        Chr($80 or ((CodePoint shr 12) and $3F)) +
-        Chr($80 or ((CodePoint shr 6) and $3F)) +
-        Chr($80 or (CodePoint and $3F))));
-    end;
-    Exit(TGocciaStringLiteralValue.Create(EncodeCodeUnit(CodeUnit) +
-      EncodeCodeUnit(SecondCodeUnit)));
+        UTF16CodeUnitToUTF8(CodeUnit)));
+    SecondCodeUnit := ToUint16Value(AArgs.GetElement(1));
+    Exit(TGocciaStringLiteralValue.Create(UTF16CodeUnitPairToUTF8(
+      Cardinal(CodeUnit), Cardinal(SecondCodeUnit))));
   end;
 
   Buffer := TStringBuffer.Create(AArgs.Length * 3);
