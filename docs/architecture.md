@@ -37,7 +37,7 @@ Source -> Preprocessors (optional, e.g. JSX) -> Lexer -> Parser -> Compiler -> G
 
 | Layer | Units | Responsibility |
 |-------|-------|----------------|
-| Engine | `Goccia.Engine` | Core language built-ins, language configuration, source text execution, executor dispatch |
+| Engine | `Goccia.Engine`, `Goccia.HostEnvironment` | Core language built-ins, language configuration, host-controlled script time/randomness, source text execution, executor dispatch |
 | Runtime | `Goccia.Runtime`, `Goccia.RuntimeExtensions.*`, `Goccia.RuntimeProfiles.*` | Runtime integration layer, runtime extensions such as console/fetch/data modules/SemVer/testing/benchmarks/FFI, loader/test/benchmark profiles, and file-backed helpers |
 | Executor abstraction | `Goccia.Executor` | Abstract `TGocciaExecutor` base class |
 | Interpreter executor | `Goccia.Executor.Interpreter` (`TGocciaInterpreterExecutor`) | Tree-walk execution via `TGocciaInterpreter` |

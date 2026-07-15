@@ -141,6 +141,11 @@ end;
 
 `TimingUtils` provides three clock functions: `GetNanoseconds` and `GetMilliseconds` for monotonic duration timing (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows), and `GetEpochNanoseconds` for wall-clock epoch time (`clock_gettime(CLOCK_REALTIME)` on Unix/macOS, `GetSystemTimeAsFileTime` on Windows).
 
+### Host-Controlled Time And Randomness
+
+Before attaching runtime extensions, use the engine-owned host environment;
+see [Host Environment](host-environment.md) for deterministic setup and providers.
+
 ## Engine Lifecycle & Realm Isolation
 
 Every `TGocciaEngine` owns an initial `TGocciaRealm` (`Goccia.Realm.pas`) — the engine's ECMA-262 Realm Record for mutable intrinsic prototype objects (`Array.prototype`, `Object.prototype`, `Map.prototype`, every error prototype, every Temporal prototype, and so on), global state links, the realm `[[TemplateMap]]`, loaded-module host state, and host-defined data. The realm is created in the engine constructor and torn down in the engine destructor; tear-down unpins every prototype and cached template object the realm owns so the GC can collect them before the next engine starts up.
@@ -349,10 +354,8 @@ end;
 
 ### Virtual Modules
 
-Prefer virtual modules when host configuration should be consumed through
-ordinary ES module imports. See
-[Virtual Module Configuration](virtual-modules.md) for the descriptor schema,
-content types, APIs, precedence, and resolution behavior.
+Prefer virtual modules for host configuration consumed through ordinary ES imports. See
+[Virtual Module Configuration](virtual-modules.md) for their schema and behavior.
 
 ### Host Modules
 
@@ -379,9 +382,7 @@ import { version } from "my-lib";
 console.log(version);  // "1.0.0"
 ```
 
-`RegisterHostModuleProvider` provides lazy registration. The former
-`RegisterGlobalModule` and `RegisterGlobalModuleProvider` names remain supported
-as compatibility aliases without warnings.
+`RegisterHostModuleProvider` is lazy; former global module names remain supported without warnings.
 
 ## Console Output Capture
 
@@ -995,5 +996,4 @@ For CLI tools, use `TGocciaCLIApplication` instead, which adds argument parsing,
 7. Handle exceptions from `Goccia.Error`
 8. Free the runtime when done; it owns and frees the engine only when it created the engine itself, or when you used an ownership-transfer overload such as `TGocciaRuntime.Create(Engine, True)`. `TGocciaRuntime.Create(Engine)` is non-owning by default, so embedders wrapping an existing engine must also free that engine.
 
-For host configuration, prefer virtual modules. Existing global-injection APIs
-remain supported without warnings; core-only embedders can use `TGocciaEngine`.
+Prefer virtual modules; global injection remains supported without warnings.

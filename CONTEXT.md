@@ -46,6 +46,10 @@ _Avoid_: Mode, preset.
 The aggregate JavaScript-visible capability set installed by a runtime profile or by individual runtime extensions. Use it when discussing what a host exposes overall; use runtime global, runtime extension, or runtime profile when naming the concrete mechanism.
 _Avoid_: Runtime, built-in surface, host surface.
 
+**Host environment**:
+The engine-owned module that supplies JavaScript-observable time, time zone, and randomness. Hosts may inject its clock and RNG adapters; infrastructure timing is not part of the host environment.
+_Avoid_: Runtime surface, global clock, `TimingUtils` when referring to script-visible values.
+
 **Seed baseline**:
 An explicitly imported snapshot used to initialise a sandbox-visible filesystem. Top-level sandbox seeds copy from host paths or inline seed config entries; nested child sandbox seeds copy from the parent virtual filesystem or inline child entries. A seed baseline is not a live mount and does not make the source path ambiently available to running source.
 _Avoid_: Mount, host filesystem access.
@@ -87,6 +91,10 @@ _Avoid_: Polyfill, compatibility flag.
 **Execution mode**:
 The selected way to execute source: interpreter mode or bytecode mode.
 _Avoid_: Runtime, runtime profile.
+
+**Deterministic execution**:
+An engine profile in which JavaScript-observable time is frozen at the Unix epoch, the time zone is UTC, and randomness comes from a fixed portable seed. Infrastructure clocks remain live, and child realms receive distinct reproducible random streams.
+_Avoid_: Deterministic profiling, frozen timeout clock, seeded sandbox filesystem.
 
 **Executor**:
 The implementation object behind an execution mode. GocciaScript has an interpreter executor and a bytecode executor.

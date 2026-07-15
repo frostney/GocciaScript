@@ -155,6 +155,99 @@ console.log("goccia.json loading...");
   }
 }
 
+// -- deterministic config ------------------------------------------------------
+
+console.log("deterministic config applies before runtime globals attach...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "goccia.json"), '{"deterministic": true}\n');
+    writeFileSync(
+      join(tmp, "test.js"),
+      '[Math.random(), Date.now(), Temporal.Now.instant().epochNanoseconds.toString(), performance.timeOrigin, performance.now()].join("|");\n',
+    );
+    writeFileSync(
+      join(tmp, "test-runner.js"),
+      [
+        'test("deterministic config", () => {',
+        "  expect(Date.now()).toBe(0);",
+        "  expect(Temporal.Now.instant().epochNanoseconds).toBe(0n);",
+        "  expect(performance.timeOrigin).toBe(0);",
+        "  expect(performance.now()).toBe(0);",
+        "});",
+        "",
+      ].join("\n"),
+    );
+
+    const expected = "0.8833108082136426|0|0|0|0";
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const loader = runCwd(
+        LOADER,
+        ["--print", join(tmp, "test.js"), `--mode=${mode}`],
+        tmp,
+      );
+      if (!containsLine(loader.combined, expected))
+        throw new Error(
+          `Loader deterministic config ${mode} expected ${expected}, got: ${loader.combined}`,
+        );
+
+      const testRunner = runCwd(
+        TESTRUNNER,
+        [join(tmp, "test-runner.js"), `--mode=${mode}`, "--no-progress"],
+        tmp,
+      );
+      if (!testRunner.combined.includes("Passed: 1"))
+        throw new Error(
+          `TestRunner deterministic config ${mode} should pass, got: ${testRunner.combined}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- host environment config ---------------------------------------------------
+
+console.log("host environment config loads a provider module before runtime globals attach...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(
+      join(tmp, "goccia.json"),
+      '{"host-environment": "./host-environment.js"}\n',
+    );
+    writeFileSync(
+      join(tmp, "host-environment.js"),
+      [
+        "export const epochNanoseconds = () => 123000000n;",
+        "export const monotonicNanoseconds = () => 456000000n;",
+        'export const timeZoneIdentifier = () => "UTC";',
+        "export const random = (streamId) => streamId === 0n ? 0.125 : 0.625;",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(tmp, "test.js"),
+      '[Date.now(), Math.random(), Temporal.Now.timeZoneId(), performance.timeOrigin, performance.now()].join("|");\n',
+    );
+
+    const expected = "123|0.125|UTC|123|0";
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const loader = runCwd(
+        LOADER,
+        ["--print", join(tmp, "test.js"), `--mode=${mode}`],
+        tmp,
+      );
+      if (!containsLine(loader.combined, expected))
+        throw new Error(
+          `Loader host environment config ${mode} expected ${expected}, got: ${loader.combined}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 // -- goccia.toml loading --------------------------------------------------------
 
 console.log("goccia.toml loading...");

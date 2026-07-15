@@ -126,5 +126,5 @@ Programmatically registered host modules use `RegisterHostModule` or
 `RegisterHostModuleProvider`. The historical `RegisterGlobalModule` names
 remain supported as compatibility aliases without warnings.
 
-See [ADR 0093](adr/0093-virtual-modules-use-the-module-loader.md) for the
+See [ADR 0094](adr/0094-virtual-modules-use-the-module-loader.md) for the
 architectural decision that keeps virtual modules inside the ordinary loader.
