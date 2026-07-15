@@ -65,6 +65,10 @@ function FunctionObjectIntrinsicPrototype(
   const AKind: TGocciaFunctionObjectIntrinsicKind;
   const AFunctionPrototype, AObjectPrototype,
   AIteratorPrototype: TGocciaObjectValue): TGocciaObjectValue;
+function FunctionObjectIntrinsicPrototypeFromConstructor(
+  const AKind: TGocciaDynamicFunctionKind;
+  const ANewTarget: TGocciaValue;
+  const AIntrinsicDefault: TGocciaObjectValue): TGocciaObjectValue;
 function GeneratorObjectIntrinsicPrototype(
   const AKind: TGocciaFunctionObjectIntrinsicKind;
   const AFunctionPrototype, AObjectPrototype,
@@ -224,11 +228,14 @@ begin
   RequirePrototype(AFunctionPrototype, '%Function.prototype%');
   RequirePrototype(AConstructorPrototype, '%' + AName + '.prototype%');
 
+  FunctionConstructorValue := AFunctionPrototype.GetProperty(PROP_CONSTRUCTOR);
   Result := TGocciaFunctionConstructorClassValue.Create(AName, nil, AKind);
-  Result.SetConstructorPrototype(AFunctionPrototype);
+  if FunctionConstructorValue is TGocciaObjectValue then
+    Result.SetConstructorPrototype(TGocciaObjectValue(FunctionConstructorValue))
+  else
+    Result.SetConstructorPrototype(AFunctionPrototype);
   Result.ReplacePrototype(AConstructorPrototype);
 
-  FunctionConstructorValue := AFunctionPrototype.GetProperty(PROP_CONSTRUCTOR);
   if FunctionConstructorValue is TGocciaFunctionConstructorClassValue then
   begin
     FunctionConstructor := TGocciaFunctionConstructorClassValue(
@@ -458,6 +465,27 @@ function FunctionObjectIntrinsicPrototype(
 begin
   Result := TGocciaFunctionObjectIntrinsics.Ensure.FunctionPrototypeFor(
     AKind, AFunctionPrototype, AObjectPrototype, AIteratorPrototype);
+end;
+
+function FunctionObjectIntrinsicPrototypeFromConstructor(
+  const AKind: TGocciaDynamicFunctionKind;
+  const ANewTarget: TGocciaValue;
+  const AIntrinsicDefault: TGocciaObjectValue): TGocciaObjectValue;
+begin
+  case AKind of
+    dfkAsync:
+      Result := GetProtoFromConstructorWithIntrinsic(ANewTarget,
+        AIntrinsicDefault, GAsyncFunctionPrototypeSlot);
+    dfkGenerator:
+      Result := GetProtoFromConstructorWithIntrinsic(ANewTarget,
+        AIntrinsicDefault, GGeneratorFunctionPrototypeSlot);
+    dfkAsyncGenerator:
+      Result := GetProtoFromConstructorWithIntrinsic(ANewTarget,
+        AIntrinsicDefault, GAsyncGeneratorFunctionPrototypeSlot);
+  else
+    Result := GetFunctionPrototypeFromConstructor(ANewTarget,
+      AIntrinsicDefault);
+  end;
 end;
 
 function GeneratorObjectIntrinsicPrototype(

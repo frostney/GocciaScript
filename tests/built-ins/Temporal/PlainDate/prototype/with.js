@@ -47,4 +47,17 @@ describe.runIf(isTemporal)("Temporal.PlainDate.prototype.with", () => {
     expect(updated.day).toBe(1);
     expect(() => d.with({ year: 5783 }, { overflow: "reject" })).toThrow(RangeError);
   });
+
+  test("with reads options before validating calendar fields", () => {
+    let overflowRead = false;
+    const options = {
+      get overflow() {
+        overflowRead = true;
+        return "constrain";
+      }
+    };
+    const date = new Temporal.PlainDate(2025, 7, 31);
+    expect(() => date.with({ monthCode: "M08L" }, options)).toThrow(RangeError);
+    expect(overflowRead).toBe(true);
+  });
 });

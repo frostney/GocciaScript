@@ -12,8 +12,7 @@
 
 GocciaScript uses a self-hosted build script written in FreePascal, executed via `instantfpc`. No external build tools (Make, CMake, npm) are required beyond the FreePascal compiler itself.
 
-This file is the authoritative command reference for local builds and CLI
-usage. Root-level files such as `README.md`, `CONTRIBUTING.md`, and
+This file is the authoritative command reference for local builds and CLI usage. Root-level files such as `README.md`, `CONTRIBUTING.md`, and
 `AGENTS.md` link here instead of duplicating the complete command list.
 
 ## Prerequisites
@@ -87,7 +86,7 @@ then diagnose the reported source line only if the same target still fails.
 ```bash
 ./build.pas loader && ./build/GocciaScriptLoader ./example.js
 printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader
-printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner
+printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner --source-type=module
 ```
 
 Both loaders are silent about the script's last evaluated value unless you pass `--print`. For local dev that's fine; for CI scripts and shell pipelines that previously parsed `Result: <value>` from the loader's stdout, pass `--print` and parse the bare value on the line after the timing banner — or switch to `--output=json` and read the `result` field, which is always populated regardless of `--print`.
@@ -171,7 +170,7 @@ printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
 # Add one-off import-map-style aliases from the CLI
 ./build/GocciaScriptLoader app.js --alias @/=./src/ --alias config=./config/default.js
 
-# The same module-resolution flags are available on GocciaTestRunner, GocciaBenchmarkRunner, and GocciaREPL.
+# The same module-resolution and virtual-module flags are available on the shared CLI hosts.
 ./build/GocciaTestRunner tests --import-map=imports.json --alias @/=./tests/helpers/
 ./build/GocciaBenchmarkRunner benchmarks --import-map=imports.json
 ./build/GocciaREPL --import-map=imports.json
@@ -215,7 +214,7 @@ printf '1;\n---\n2;\n---\n3;\n' | ./build/GocciaScriptLoader --multifile
 
 # Run benchmarks via bytecode VM
 ./build/GocciaBenchmarkRunner benchmarks --mode=bytecode
-printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner - --mode=bytecode
+printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner - --source-type=module --mode=bytecode
 ```
 
 ### `--multifile` (split a single input on `---` separators)
@@ -279,6 +278,7 @@ Relative paths are resolved against the current working directory. A missing fil
 {
   "mode": "bytecode",
   "source-type": "module",
+  "warning-unsupported-features": true,
   "compat-asi": true,
   "compat-non-strict-mode": true,
   "compat-arguments-object": true,
@@ -291,6 +291,7 @@ Relative paths are resolved against the current working directory. A missing fil
   "strict-types": true,
   "unsafe-ffi": true,
   "unsafe-shadowrealm": true,
+  "deterministic": true,
   "timeout": 5000,
   "max-memory": 10485760,
   "stack-size": 2900,
@@ -302,8 +303,7 @@ Relative paths are resolved against the current working directory. A missing fil
 }
 ```
 
-Config keys mirror CLI option names (e.g. `--mode` -> `"mode"`, `--max-memory` -> `"max-memory"`). A config value is the value assigned to a config key and the setting it carries: boolean flags use `true`/`false`, and array-valued options like `alias` and `allowed-hosts` use JSON arrays. The `imports` object is handled by the module resolver and coexists with CLI option keys.
-
+Config keys mirror CLI option names (e.g. `--mode` -> `"mode"`, `--max-memory` -> `"max-memory"`). A config value is the value assigned to a config key and the setting it carries: boolean flags use `true`/`false`, and array-valued options like `alias` and `allowed-hosts` use JSON arrays. `warning-unsupported-features` is a parser diagnostic policy flag, not a compatibility flag: it restores warning/recovery behavior for disabled syntax without enabling that syntax's runtime semantics. The `imports` object is handled by the module resolver and coexists with CLI option keys. `--deterministic` (or `"deterministic": true`) freezes JavaScript-visible time at the Unix epoch, uses UTC, and starts a portable seeded random stream; `--host-environment=./provider.js` (or the `"host-environment"` config key) supplies custom providers instead. Timeouts, profiling, and benchmark measurement remain live; see [Host Environment](host-environment.md) for the provider contract.
 **`extends`** — A config file can inherit from a base config using the `extends` key. The path is resolved relative to the config file's directory. Child values override parent values:
 
 ```json
@@ -459,15 +459,15 @@ Nested scripts share the current sandbox filesystem unless child isolation is re
 const child = runScript("/child.js", {
   sandbox: true,
   seed: ["/child.js", { from: "/fixtures", to: "/fixtures" }],
-  diff: true
+  diffMetadata: true
 });
 
-const shellChild = await $`goccia --sandbox --seed /child.js --diff /child.js`.text();
+const shellChild = await $`goccia --sandbox --seed /child.js --diff-metadata /child.js`.text();
 ```
 
-Child seed entries are copied from the parent virtual filesystem, not the host filesystem. Child writes are discarded with the child VFS; request `diff: true` or shell `--diff` to inspect them.
+Child seed entries are copied from the parent virtual filesystem, not the host filesystem. Child writes are discarded with the child VFS; request `diff: true` or shell `--diff` to inspect them. Use nested `diffMetadata: true` or shell `--diff-metadata` to include timestamp changes; either form implies a diff.
 
-Diff output is explicit. `--diff` prints the diff after execution, `--diff-output=<host-path>` writes it to a host file, and `--diff-format=json|unified` selects the format. JSON is the default.
+Diff output is explicit. `--diff` prints the diff after execution, `--diff-output=<host-path>` writes it to a host file, and `--diff-format=json|unified` selects the format. JSON is the default. Metadata is omitted unless `--diff-metadata` is present. In JSON it appears as a separate `metadataChanges` array whose per-path `changes` object contains only changed `atimeMs`, `mtimeMs`, `ctimeMs`, and `birthtimeMs` fields; timestamp-only changes never appear as content modifications.
 
 ## Build Output
 
@@ -612,7 +612,7 @@ GocciaScript/
 
 ### Generated Timezone Data
 
-`source/generated/Generated.TimeZoneData.pas` and `source/generated/Generated.TimeZoneData.res` are produced by `scripts/generate-timezone-data.js`. By default, the generator downloads the latest IANA `tzdata-latest.tar.gz`, compiles it with `zic`, packs the resulting TZif files into a single resource payload, and emits a small Pascal unit that links the resource. Pass a local zoneinfo directory, a local `tzdata` tarball, or an explicit URL to generate from a different source.
+`source/generated/Generated.TimeZoneData.pas` and `source/generated/Generated.TimeZoneData.res` are produced by `scripts/generate-timezone-data.js`. By default, the generator downloads the latest IANA `tzdata-latest.tar.gz`, compiles it with `zic`, packs the resulting TZif files into a single resource payload, and emits a small Pascal unit that links the resource. Pass a local zoneinfo directory, a local `tzdata` tarball, or an explicit URL to generate from a different source. `.github/workflows/timezone-data-bump.yml` resolves the latest immutable IANA release URL on the first day of each month, regenerates both files, and opens an automated PR only when the generated output changes.
 
 The generator requires `zic`, `tar`, and `fpcres`. `fpcres` writes the FreePascal resource consumed by `{$R Generated.TimeZoneData.res}`.
 
@@ -640,16 +640,9 @@ GitHub Actions CI is split into two workflow files:
 
 ### `ci.yml` — Push to main + tags
 
-```text
-build → test (JS + native)   → artifacts (main only)
-      → toml-compliance      →
-      → json5-compliance     →
-      → test262              →
-      → benchmark            →
-      → cli                  →
-```
+Job graph: `build -> test / toml-compliance / json5-compliance / test262 / awfy / jetstream / web-tooling / benchmark / cli -> artifacts/release`.
 
-All matrix strategies use `fail-fast: false`, so one platform failing does not cancel other platforms. The post-build jobs (`test`, `toml-compliance`, `json5-compliance`, `test262`, `benchmark`, `cli`) are independent.
+All matrix strategies use `fail-fast: false`, so one platform failing does not cancel other platforms. The post-build jobs (`test`, `toml-compliance`, `json5-compliance`, `test262`, `awfy`, `jetstream`, `web-tooling`, `benchmark`, `cli`) are independent.
 
 Runs on the full platform matrix:
 
@@ -669,24 +662,25 @@ Runs on the full platform matrix:
 
 **`test262`** (needs build, ubuntu-latest x64 only, **non-blocking**) — Downloads the `gocciascript-x86_64-linux` build, checks out [`tc39/test262`](https://github.com/tc39/test262) at the SHA pinned in `scripts/test262-suite-sha.txt`, runs `bun scripts/run_test262_suite.ts --suite-dir test262-suite --mode=bytecode --jobs=4 --timeout-ms=20000 --output=test262-results.json`, and uploads the report as a 30-day workflow artifact. The run step uses `continue-on-error: true` because the conformance lane is allowed to carry known steady-state failures while the engine closes compatibility gaps. On main, the JSON is also stashed via `actions/cache/save` under `test262-baseline-<sha>` so the PR workflow can compute Δ vs main, and `cd website && bun run publish-test262 ../test262-results.json` publishes the compressed run report plus its UTC daily dashboard pointer to Vercel Blob when `BLOB_READ_WRITE_TOKEN` is configured. Main runs also upload the `test262-profile` artifact and publish matching aggregate/detail profile payloads under the separate `test262-profiles/` Blob namespace for weekly performance review. The one-off `cd website && bun run backfill-test262` command seeds retained artifact reports and reruns expired historical days directly into Blob. The pin is bumped weekly by `.github/workflows/test262-bump.yml`. See [docs/test262.md](test262.md) for the harness and profile report contracts.
 
+**`awfy`** (needs build, ubuntu-latest x64 only) — Downloads the `gocciascript-x86_64-linux` build, installs QuickJS, installs the latest Node Current release via `actions/setup-node` for the Node reference engine, checks out `smarr/are-we-fast-yet` at the SHA pinned in `perf/awfy/manifest.json`, and runs `node scripts/awfy-ci-report.js --awfy-dir awfy-suite/benchmarks/JavaScript --output awfy-report.json`. The report set is `ciReport` from the manifest: all pinned AWFY JavaScript benchmarks under Goccia bytecode, QuickJS, and Node Current, with five interleaved samples per engine. The job uploads `awfy-report` as a 30-day artifact. On main, `cd website && bun run publish-awfy ../awfy-report.json` publishes the compressed report plus its UTC daily pointer to the separate `awfy/` Vercel Blob namespace when `BLOB_READ_WRITE_TOKEN` is configured.
+
+**`jetstream-plan` / `jetstream-workload` / `jetstream`** (needs build, ubuntu-latest x64 only) — Reads the six-workload manifest into a fail-independent matrix, then each workload job downloads the same production Goccia binary, installs QuickJS and Node Current, and sparse-checks out the exact upstream files at the pinned JetStream 3.0 commit. Each shard keeps five interleaved process repetitions per engine and checkpoints its report after every sample; the final job merges all shards into `jetstream-report`, publishes complete or degraded reports on main, then preserves the validation failure as the job result. The compressed report and UTC daily pointer live under the independent `jetstream/` Blob namespace. The website combines retained JetStream and AWFY summaries at `/performance` and fetches only the latest full reports for workload detail.
+
+**`web-tooling-workload` / `web-tooling`** (needs build, ubuntu-latest x64 only) — The workload matrix downloads the `gocciascript-x86_64-linux` build, installs the latest Node Current release as the upstream build runtime, checks out `v8/web-tooling-benchmark` at the SHA pinned in `perf/web-tooling/manifest.json`, and installs upstream dependencies without running postinstall. Each matrix job runs one pinned workload under Goccia bytecode and uploads its report shard. Each workload bundle contains one upstream benchmark module and only its declared `third_party` payloads; the Goccia harness times one direct `fn()` invocation per process sample. The `web-tooling` merge job requires one structurally complete shard for every manifest workload and uploads the normalized all-workload `web-tooling-report` as a 30-day artifact. On main, `cd website && bun run publish-web-tooling ../web-tooling-report.json` publishes the compressed report plus its UTC daily pointer to the separate `web-tooling/` Vercel Blob namespace when `BLOB_READ_WRITE_TOKEN` is configured.
+
 **`benchmark`** (needs build) — Runs all benchmarks on all platforms. On main (ubuntu-latest x64), it additionally emits JSON and validates the report shape. PR comparison no longer reads a cached baseline from here — each PR builds and benchmarks `main` on its own runner ([ADR 0076](adr/0076-same-runner-benchmark-comparison.md)). The main bytecode benchmark lane also captures deterministic VM profile details, uploads the `benchmark-profile` artifact, and publishes aggregate/detail profile payloads under the separate `benchmark-profiles/` Blob namespace when `BLOB_READ_WRITE_TOKEN` is configured.
 
 **`cli`** (needs build) — Downloads pre-built binaries and runs CLI behavior smoke tests on all platforms via Bun: options across all apps, lexer numeric-separator rejection, parser error display, config-file loading, and app-specific features including Sandbox Runner seed baselines. Windows runs additionally assert that the loader binary does not link OpenSSL DLLs (HTTPS must use the platform TLS stack statically).
 
-**`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + cli, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints.
+**`artifacts`** (needs test + toml-compliance + json5-compliance + awfy + jetstream + web-tooling + benchmark + cli, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints.
 
-**`release`** (needs test + toml-compliance + json5-compliance + benchmark + cli, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the `source/app/*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), generates categorized release notes via [git-cliff](https://git-cliff.org/) (`cliff.toml`), and creates a GitHub release using `softprops/action-gh-release`.
+**`release`** (needs test + toml-compliance + json5-compliance + awfy + jetstream + web-tooling + benchmark + cli, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the `source/app/*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), generates categorized release notes via [git-cliff](https://git-cliff.org/) (`cliff.toml`), and creates a GitHub release using `softprops/action-gh-release`.
 
 ### `pr.yml` — Pull requests
 
-```text
-build → test (JS + native)
-      → benchmark → PR comment (comparison)
-      → test262   → PR comment (conformance)
-      → cli
-```
+Job graph: `build -> test / benchmark -> comment / test262 -> comment / awfy -> comment / jetstream -> comment / web-tooling -> comment / cli`.
 
-Runs on **ubuntu-latest x64 only** (single runner, no matrix).
+Runs on **ubuntu-latest x64 only**; workload suites may fan out through matrices on that platform.
 
 **`build`** — Installs FPC, compiles all binaries with `--prod`, stages the `source/app/*.dpr` binaries plus Pascal test executables, and uploads that staged set as `build-pr`.
 
@@ -696,9 +690,15 @@ Runs on **ubuntu-latest x64 only** (single runner, no matrix).
 
 **`test262`** (needs build, **non-blocking**) — Checks out `tc39/test262` at the pinned SHA, runs `bun scripts/run_test262_suite.ts --suite-dir test262-suite --mode=bytecode --jobs=4 --timeout-ms=20000 --output=test262-results.json`, and uploads the JSON report. Failing tests do not fail the job. The downstream `test262-comment` job (`if: always()`) restores the most recent `test262-baseline-` cache entry from main, then `bun scripts/run_test262_suite.ts --comment test262-results.json <baseline>` builds the markdown body and the workflow posts/updates a comment using marker `<!-- test262-results -->`. The comment shows a per-category breakdown (built-ins, harness, intl402, language, staging) with Δ-vs-main columns when a baseline is cached, an "Areas closest to 100%" sub-table, and a collapsible per-test delta list. PR CI does not generate or upload the full-corpus test262 profile artifact.
 
+**`awfy`** (needs build) — Runs the same `ciReport` AWFY set as full CI on the PR x64 build, using Goccia bytecode, QuickJS, and the latest Node Current release with five interleaved samples per engine. It uploads the normalized `awfy-report` JSON artifact. The downstream `awfy-comment` job posts or updates an `AWFY Results` comment with median timings and geomean ratios; min/max/CV and raw samples remain in the artifact.
+
+**`jetstream-plan` / `jetstream-workload` / `jetstream-report`** (needs build + build-main) — Runs each frozen JetStream workload in parallel under the main and PR Goccia bytecode loaders, QuickJS, and Node Current. Engine samples remain interleaved within a workload and each shard keeps five repetitions; the merge job restores manifest order, validates compatible metadata, recomputes geomean ratios, and uploads the normalized report. The downstream `jetstream-comment` job posts or updates a `JetStream 3 Performance Barometer` comment with separate QuickJS and Node.js reference ratios.
+
+**`web-tooling-workload` / `web-tooling-report`** (needs build) — Runs the same direct-invocation workload matrix as full CI on the PR x64 build, using Goccia bytecode only, then validates and merges the shards into the normalized `web-tooling-report` JSON artifact. The downstream `web-tooling-comment` job posts or updates a `Web Tooling Benchmark` comment with per-workload build/execution status and Goccia `runs/s` where available; full stdout/stderr for failures and min/max/CV remain in the artifact.
+
 **`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection), plus `GocciaSandboxRunner` coverage for seed config imports, inline text/base64 files, virtual `fs`, `$`, shared and child-sandbox `runScript` / shell `goccia`, bytecode mode, and diff output.
 
-FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, benchmark, test262, and cli jobs do the same.
+FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, test262, and cli jobs do the same.
 
 ## Changelog
 

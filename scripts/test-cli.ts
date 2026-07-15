@@ -4,7 +4,8 @@
  *
  * Common CLI options tested across all apps: stdin smoke, --help, --unsafe-ffi,
  * --compat-asi, --source-type, .mjs source-type inference, --compat-var, --compat-loose-equality, --compat-non-strict-mode,
- * --compat-for-in-loop, --compat-while-loops, --mode, --timeout, --max-instructions, --max-memory, --stack-size, --log,
+ * --compat-for-in-loop, --compat-while-loops, --warning-unsupported-features,
+ * --mode, --timeout, --max-instructions, --max-memory, --stack-size, --log,
  * example scripts.
  */
 
@@ -66,11 +67,11 @@ console.log("Stdin smoke (TestRunner)...");
 
 console.log("Stdin smoke (BenchmarkRunner)...");
 {
-  const src = `suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n`;
-  const out = await $`echo ${src} | ${BENCHRUNNER} --no-progress 2>&1`.text();
+  const src = `import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n`;
+  const out = await $`echo ${src} | ${BENCHRUNNER} --source-type=module --no-progress 2>&1`.text();
   if (!out.includes("sum")) throw new Error(`BenchmarkRunner stdin expected "sum" benchmark, got: ${out}`);
 
-  const outDash = await $`echo ${src} | ${BENCHRUNNER} - --no-progress 2>&1`.text();
+  const outDash = await $`echo ${src} | ${BENCHRUNNER} - --source-type=module --no-progress 2>&1`.text();
   if (!outDash.includes("sum")) throw new Error(`BenchmarkRunner stdin ("-" arg) expected "sum" benchmark, got: ${outDash}`);
 }
 
@@ -100,6 +101,124 @@ console.log("--help (all 6 apps)...");
 for (const bin of [LOADER, BARE, REPL, TESTRUNNER, BUNDLER, BENCHRUNNER]) {
   const help = await $`${bin} --help 2>&1`.text();
   if (!help.includes("--")) throw new Error(`${bin} --help missing options`);
+  if (!help.includes("--warning-unsupported-features"))
+    throw new Error(`${bin} --help missing --warning-unsupported-features`);
+  if (!help.includes("--deterministic"))
+    throw new Error(`${bin} --help missing --deterministic`);
+}
+
+// -- --deterministic -----------------------------------------------------------
+
+console.log("--deterministic (Loader + Bare, interpreted + bytecode)...");
+{
+  const source = [
+    "Math.random()",
+    "Math.random()",
+    "Date.now()",
+    "new Date().getTime()",
+    "new Date(0).getHours()",
+    "Temporal.Now.instant().epochNanoseconds.toString()",
+    "Temporal.Now.timeZoneId()",
+    "performance.timeOrigin",
+    "performance.now()",
+    'new Intl.DateTimeFormat("en", { year: "numeric" }).format()',
+    'new Intl.DateTimeFormat("en").resolvedOptions().timeZone',
+  ].join(", ");
+  const expected =
+    "0.8833108082136426|0.43152799704850997|0|0|0|0|UTC|0|0|1970|UTC";
+
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    for (let run = 0; run < 2; run++) {
+      const { exitCode, json, stderr } = runLoaderJson(
+        `[${source}].join("|");\n`,
+        ["--deterministic", `--mode=${mode}`],
+      );
+      if (exitCode !== 0)
+        throw new Error(`Loader deterministic ${mode} failed: ${stderr}`);
+      if (json.files?.[0]?.result !== expected)
+        throw new Error(
+          `Loader deterministic ${mode} run ${run + 1} expected ${expected}, got ${json.files?.[0]?.result}`,
+        );
+    }
+
+    const bareSource =
+      '[Math.random(), Math.random(), Date.now(), Temporal.Now.instant().epochNanoseconds.toString(), Temporal.Now.timeZoneId()].join("|");\n';
+    const bare = Bun.spawnSync(
+      [BARE, "-", "--print", "--deterministic", `--mode=${mode}`],
+      {
+        stdin: new TextEncoder().encode(bareSource),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const bareExpected =
+      "0.8833108082136426|0.43152799704850997|0|0|UTC";
+    if (bare.exitCode !== 0 || bare.stdout.toString().trim() !== bareExpected)
+      throw new Error(
+        `Bare deterministic ${mode} expected ${bareExpected}, got ${bare.stdout.toString()}${bare.stderr.toString()}`,
+      );
+  }
+}
+
+console.log("--deterministic child realms use stable distinct streams...");
+for (const mode of ["interpreted", "bytecode"] as const) {
+  const shadow = runLoaderJson(
+    'const child = new ShadowRealm(); [Math.random(), child.evaluate("Math.random()")].join("|");\n',
+    ["--deterministic", "--unsafe-shadowrealm", `--mode=${mode}`],
+  );
+  const shadowExpected = "0.8833108082136426|0.6524484863740322";
+  if (shadow.exitCode !== 0 || shadow.json.files?.[0]?.result !== shadowExpected)
+    throw new Error(
+      `ShadowRealm deterministic ${mode} expected ${shadowExpected}, got ${shadow.json.files?.[0]?.result}${shadow.stderr}`,
+    );
+
+  const bareRealmSource = [
+    "const realm = Goccia.test262.createRealm();",
+    '[Math.random(), realm.evalScript("Math.random()"), realm.evalScript("Goccia.test262.createRealm().evalScript(\\"Math.random()\\")")].join("|");',
+    "",
+  ].join("\n");
+  const bareRealm = Bun.spawnSync(
+    [
+      BARE,
+      "-",
+      "--print",
+      "--test262-host",
+      "--deterministic",
+      `--mode=${mode}`,
+    ],
+    {
+      stdin: new TextEncoder().encode(bareRealmSource),
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const bareRealmExpected =
+    "0.8833108082136426|0.11260056966858045|0.40713339556004036";
+  if (
+    bareRealm.exitCode !== 0 ||
+    bareRealm.stdout.toString().trim() !== bareRealmExpected
+  )
+    throw new Error(
+      `Test262 realm deterministic ${mode} expected ${bareRealmExpected}, got ${bareRealm.stdout.toString()}${bareRealm.stderr.toString()}`,
+    );
+}
+
+console.log("--deterministic keeps timeout clock live...");
+{
+  const proc = Bun.spawnSync(
+    [LOADER, "--deterministic", "--compat-while-loops", "--timeout=20"],
+    {
+      stdin: new TextEncoder().encode("while (true) {}\n"),
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 5_000,
+    },
+  );
+  const output = proc.stdout.toString() + proc.stderr.toString();
+  if (proc.exitCode === 0 || !output.includes("timed out"))
+    throw new Error(
+      `Deterministic timeout should use the real infrastructure clock, got exit ${proc.exitCode}: ${output}`,
+    );
 }
 
 // -- --unsafe-ffi gating --------------------------------------------------------
@@ -207,6 +326,8 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
     if (bareOut.trim() !== "22") throw new Error(`Bare --compat-var --compat-function expected 22, got: ${bareOut}`);
     const bareNoFlag = await $`${BARE} ${bothSrc} 2>&1`.nothrow();
     if (bareNoFlag.exitCode === 0) throw new Error("Bare without compat flags should reject var/function");
+    if (!bareNoFlag.text().includes("SyntaxError"))
+      throw new Error(`Bare without compat flags should report SyntaxError, got: ${bareNoFlag.text()}`);
 
     // Stdin path — the exact shape run_test262_suite.ts uses (source piped
     // into a `-` argument).  Without this, file-path is the only invocation
@@ -230,6 +351,41 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
     const largeGlobalOut = await $`${BARE} --print ${largeGlobalSrc} --mode=bytecode --compat-var --compat-function 2>&1`.text();
     if (largeGlobalOut.trim() !== "10")
       throw new Error(`Bare bytecode large global declarations expected 10, got: ${largeGlobalOut}`);
+
+    const wideNames = Array.from({ length: 260 }, (_, i) => `wideName${i}`);
+    const wideDirectEvalSrc = join(tmp, "wide-direct-eval.js");
+    writeFileSync(
+      wideDirectEvalSrc,
+      [
+        "function readWideLocal() {",
+        ...wideNames.map((name, index) => `  let ${name} = ${index};`),
+        '  return eval("wideName259");',
+        "}",
+        "readWideLocal();",
+        "",
+      ].join("\n"),
+    );
+    const wideDirectEvalOut = await $`${BARE} --print ${wideDirectEvalSrc} --mode=bytecode --compat-function --test262-host 2>&1`.text();
+    if (wideDirectEvalOut.trim() !== "259")
+      throw new Error(`Bare bytecode wide direct eval expected 259, got: ${wideDirectEvalOut}`);
+
+    const wideCapturedBlockSrc = join(tmp, "wide-captured-block.js");
+    writeFileSync(
+      wideCapturedBlockSrc,
+      [
+        "let readWideBlock;",
+        "{",
+        ...wideNames.map((name, index) => `  let ${name} = ${index};`),
+        `  readWideBlock = () => [${wideNames.join(", ")}];`,
+        "}",
+        "const wideValues = readWideBlock();",
+        "wideValues[0] + wideValues[259];",
+        "",
+      ].join("\n"),
+    );
+    const wideCapturedBlockOut = await $`${BARE} --print ${wideCapturedBlockSrc} --mode=bytecode 2>&1`.text();
+    if (wideCapturedBlockOut.trim() !== "259")
+      throw new Error(`Bare bytecode wide captured block expected 259, got: ${wideCapturedBlockOut}`);
 
     const thrownObjectSrc = join(tmp, "throw-test262-object.js");
     writeFileSync(
@@ -260,6 +416,44 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
     const compatAllOut = bareCompatAll.stdout.toString();
     if (bareCompatAll.exitCode === 0 || !compatAllOut.includes("--compat-all"))
       throw new Error(`Bare must reject --compat-all, got exit ${bareCompatAll.exitCode}: ${compatAllOut}`);
+
+    const bareWarningSrc = join(tmp, "warning-unsupported.js");
+    writeFileSync(bareWarningSrc, "while (false) {}\n23;\n");
+    const bareWarningDefault = await $`${BARE} --print ${bareWarningSrc} 2>&1`.nothrow();
+    if (bareWarningDefault.exitCode === 0)
+      throw new Error("Bare without warning flag should reject unsupported while");
+    if (!bareWarningDefault.text().includes("SyntaxError") ||
+        !bareWarningDefault.text().includes("'while' loops are not supported by default"))
+      throw new Error(`Bare without warning flag should report while SyntaxError, got: ${bareWarningDefault.text()}`);
+
+    for (const args of [[] as string[], ["--mode=bytecode"]]) {
+      const bareWarningFile = await $`${BARE} --print ${bareWarningSrc} --warning-unsupported-features ${args} 2>&1`.text();
+      if (!bareWarningFile.includes("Warning: 'while' loops are not supported by default") ||
+          !bareWarningFile.includes("23"))
+        throw new Error(`Bare warning mode file path should warn and print 23, got: ${bareWarningFile}`);
+
+      const bareWarningStdin = await $`cat ${bareWarningSrc} | ${BARE} --print - --warning-unsupported-features ${args} 2>&1`.text();
+      if (!bareWarningStdin.includes("Warning: 'while' loops are not supported by default") ||
+          !bareWarningStdin.includes("23"))
+        throw new Error(`Bare warning mode stdin should warn and print 23, got: ${bareWarningStdin}`);
+    }
+
+    const shadowWarningSrc = join(tmp, "shadow-warning.js");
+    writeFileSync(
+      shadowWarningSrc,
+      [
+        "const realm = new ShadowRealm();",
+        "const fromEvaluate = realm.evaluate('while (false) {} 23;');",
+        "const fromEval = realm.evaluate(\"eval('while (false) {} 24;')\");",
+        "fromEvaluate + fromEval;",
+        "",
+      ].join("\n"),
+    );
+    const shadowWarningProc = await $`${BARE} --print ${shadowWarningSrc} --unsafe-shadowrealm --test262-host --warning-unsupported-features 2>&1`.nothrow();
+    const shadowWarningOut = shadowWarningProc.text();
+    if (shadowWarningProc.exitCode !== 0 ||
+        !shadowWarningOut.replace(/\r/g, "").split("\n").includes("47"))
+      throw new Error(`ShadowRealm child realm should inherit warning-unsupported-features, got: ${shadowWarningOut}`);
 
     const forSrc = join(tmp, "use-for.js");
     writeFileSync(forSrc, "let s = 0;\nfor (let i = 1; i <= 5; i++) { s = s + i; }\ns;\n");
@@ -382,6 +576,10 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
     const moduleWithBytecodeOutput = moduleWithBytecode.text();
     if (moduleWithBytecode.exitCode === 0 || !moduleWithBytecodeOutput.includes("'with' statements are not allowed in strict mode"))
       throw new Error(`Module with should fail as strict code in bytecode mode, got: ${moduleWithBytecodeOutput}`);
+    const moduleWithWarning = await $`${LOADER} ${moduleWithSrc} --source-type=module --compat-non-strict-mode --warning-unsupported-features 2>&1`.nothrow();
+    const moduleWithWarningOutput = moduleWithWarning.text();
+    if (moduleWithWarning.exitCode === 0 || !moduleWithWarningOutput.includes("'with' statements are not allowed in strict mode"))
+      throw new Error(`Module with should remain strict even in warning mode, got: ${moduleWithWarningOutput}`);
 
     const testSrc = join(tmp, "test-nonstrict.js");
     writeFileSync(
@@ -428,8 +626,16 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
 
     const noFlagOut = join(tmp, "no-flag.gbc");
     const bundleNoFlag = await $`${BUNDLER} ${src} --compat-function --output=${noFlagOut} 2>&1`.nothrow();
-    if (bundleNoFlag.exitCode !== 0) throw new Error(`Bundler without --compat-non-strict-mode should skip unsupported with and still compile, got: ${bundleNoFlag.stderr.toString()}`);
-    if (!existsSync(noFlagOut)) throw new Error("Bundler without --compat-non-strict-mode did not write bytecode output");
+    if (bundleNoFlag.exitCode === 0)
+      throw new Error(`Bundler without --compat-non-strict-mode should fail unsupported with by default`);
+    if (!bundleNoFlag.text().includes("SyntaxError") ||
+        !bundleNoFlag.text().includes("'with' statements require --compat-non-strict-mode"))
+      throw new Error(`Bundler without --compat-non-strict-mode should report SyntaxError, got: ${bundleNoFlag.text()}`);
+    if (existsSync(noFlagOut)) throw new Error("Bundler default failure should not write bytecode output");
+
+    const warningOut = join(tmp, "warning-with.gbc");
+    await $`${BUNDLER} ${src} --compat-function --warning-unsupported-features --output=${warningOut}`.quiet();
+    if (!existsSync(warningOut)) throw new Error("Bundler --warning-unsupported-features should preserve warning recovery mode");
   } finally {
     clean(tmp);
   }
@@ -689,6 +895,31 @@ console.log("--max-memory (interpreter recursive expression pressure reclaims)..
   if (exitCode !== 0) throw new Error(`Recursive expression pressure exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
   if (json.files?.[0]?.result !== 46368) throw new Error(`Recursive expression pressure should return 46368, got ${json.files?.[0]?.result}`);
   if ((json.memory?.gc?.collections ?? 0) <= 0) throw new Error(`Recursive expression pressure should report collections, got ${json.memory?.gc?.collections}`);
+}
+
+console.log("--max-memory (bytecode loop pressure reclaims)...");
+{
+  const src = [
+    "let total = 0;",
+    "for (let round = 0; round < 1000; round++) {",
+    "  let junk = Array.from({ length: 500 }, (_, i) => ({ round, i }));",
+    "  total += junk.length;",
+    "  junk = null;",
+    "}",
+    "total;",
+    "",
+  ].join("\n");
+  const { exitCode, json, stderr } = runLoaderJson(src, [
+    "--mode=bytecode",
+    // Keep the pressure threshold below both 32-bit and 64-bit allocation
+    // totals while leaving enough room for the loop's live object graph.
+    "--max-memory=20000000",
+    "--compat-asi",
+    "--compat-traditional-for-loop",
+  ], { timeout: 30_000 });
+  if (exitCode !== 0) throw new Error(`Bytecode loop pressure exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
+  if (json.files?.[0]?.result !== 500000) throw new Error(`Bytecode loop pressure should return 500000, got ${json.files?.[0]?.result}`);
+  if ((json.memory?.gc?.collections ?? 0) <= 0) throw new Error(`Bytecode loop pressure should report collections, got ${json.memory?.gc?.collections}`);
 }
 
 console.log("--max-memory (maxBytes readonly)...");

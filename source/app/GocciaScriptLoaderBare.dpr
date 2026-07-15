@@ -29,6 +29,7 @@ uses
   Goccia.Executor.Interpreter,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.HostEnvironment,
   Goccia.InstructionLimit,
   Goccia.MicrotaskQueue,
   Goccia.Modules,
@@ -65,9 +66,14 @@ type
 
   TBareOptions = record
     Compatibility: TGocciaCompatibilityFlags;
+    LabelStatementsEnabled: Boolean;
+    ForInLoopsEnabled: Boolean;
+    ExperimentalJSModuleSourceEnabled: Boolean;
+    WarningUnsupportedFeatures: Boolean;
     StrictTypes: Boolean;
     UnsafeFunctionConstructor: Boolean;
     UnsafeShadowRealm: Boolean;
+    Deterministic: Boolean;
     Test262Host: Boolean;
     Test262AgentCanSuspend: Boolean;
     Print: Boolean;
@@ -116,7 +122,8 @@ type
     FTest262Host: TBareTest262Host;
     FSource: TStringList;
   public
-    constructor Create(const AOptions: TBareOptions);
+    constructor Create(const AOptions: TBareOptions;
+      const AParentEnvironment: TGocciaHostEnvironment);
     destructor Destroy; override;
     function EvalScript(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -127,15 +134,19 @@ type
   TBareTest262Host = class
   private
     FAgentHost: TBareTest262AgentHost;
+    FHostEnvironment: TGocciaHostEnvironment;
     FOptions: TBareOptions;
     FRealms: TObjectList<TBareTest262Realm>;
   public
     constructor Create(const AOptions: TBareOptions);
     destructor Destroy; override;
+    procedure ConfigureHostEnvironment(
+      const AParent: TGocciaHostEnvironment);
     function CreateAgentObject: TGocciaObjectValue;
     function CreateRealm(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     property AgentHost: TBareTest262AgentHost read FAgentHost;
+    property HostEnvironment: TGocciaHostEnvironment read FHostEnvironment;
   end;
 
   TBareTest262AgentHost = class
@@ -208,7 +219,8 @@ const
   BARE_DEFAULT_MAX_STACK_DEPTH = 10000;
 
 procedure ConfigureEngine(const AEngine: TGocciaEngine;
-  const AExecutor: TGocciaExecutor; const AOptions: TBareOptions); forward;
+  const AExecutor: TGocciaExecutor; const AOptions: TBareOptions;
+  const AParentEnvironment: TGocciaHostEnvironment = nil); forward;
 function CreateExecutorForMode(
   const AMode: TBareExecutionMode): TGocciaExecutor; forward;
 
@@ -328,6 +340,12 @@ begin
     EvalOptions := TGocciaSourcePipeline.DefaultOptions;
     EvalOptions.Preprocessors := FEngine.Preprocessors;
     EvalOptions.Compatibility := FEngine.Compatibility;
+    EvalOptions.LabelStatementsEnabled := FEngine.LabelStatementsEnabled;
+    EvalOptions.ForInLoopsEnabled := FEngine.ForInLoopsEnabled;
+    EvalOptions.ExperimentalJSModuleSourceEnabled :=
+      FEngine.ExperimentalJSModuleSourceEnabled;
+    EvalOptions.WarningUnsupportedFeatures :=
+      FEngine.WarningUnsupportedFeatures;
     EvalOptions.SourceType := stScript;
 
     ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(EvalOptions);
@@ -406,6 +424,12 @@ begin
     ScriptOptions := TGocciaSourcePipeline.DefaultOptions;
     ScriptOptions.Preprocessors := FEngine.Preprocessors;
     ScriptOptions.Compatibility := FEngine.Compatibility;
+    ScriptOptions.LabelStatementsEnabled := FEngine.LabelStatementsEnabled;
+    ScriptOptions.ForInLoopsEnabled := FEngine.ForInLoopsEnabled;
+    ScriptOptions.ExperimentalJSModuleSourceEnabled :=
+      FEngine.ExperimentalJSModuleSourceEnabled;
+    ScriptOptions.WarningUnsupportedFeatures :=
+      FEngine.WarningUnsupportedFeatures;
     ScriptOptions.SourceType := stScript;
 
     ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(ScriptOptions);
@@ -432,7 +456,8 @@ begin
   end;
 end;
 
-constructor TBareTest262Realm.Create(const AOptions: TBareOptions);
+constructor TBareTest262Realm.Create(const AOptions: TBareOptions;
+  const AParentEnvironment: TGocciaHostEnvironment);
 var
   ChildOptions: TBareOptions;
 begin
@@ -443,10 +468,11 @@ begin
   ChildOptions := AOptions;
   ChildOptions.SourceType := stScript;
   ChildOptions.Test262Host := True;
-  ConfigureEngine(FEngine, FExecutor, ChildOptions);
+  ConfigureEngine(FEngine, FExecutor, ChildOptions, AParentEnvironment);
 
   FEvalHost := TBareTest262EvalHost.Create(FEngine);
   FTest262Host := TBareTest262Host.Create(ChildOptions);
+  FTest262Host.ConfigureHostEnvironment(FEngine.HostEnvironment);
   FEngine.RefreshGlobalThis;
   InstallTest262HostGlobals(FEngine, FTest262Host, FEvalHost);
   InstallTest262EvalGlobal(FEngine, FEvalHost);
@@ -497,7 +523,16 @@ destructor TBareTest262Host.Destroy;
 begin
   FAgentHost.Free;
   FRealms.Free;
+  FHostEnvironment.Free;
   inherited;
+end;
+
+procedure TBareTest262Host.ConfigureHostEnvironment(
+  const AParent: TGocciaHostEnvironment);
+begin
+  FreeAndNil(FHostEnvironment);
+  FHostEnvironment := TGocciaHostEnvironment.Create;
+  FHostEnvironment.ConfigureAsChildOf(AParent);
 end;
 
 function TBareTest262Host.CreateAgentObject: TGocciaObjectValue;
@@ -536,7 +571,7 @@ var
   Realm: TBareTest262Realm;
   RealmRecord: TGocciaObjectValue;
 begin
-  Realm := TBareTest262Realm.Create(FOptions);
+  Realm := TBareTest262Realm.Create(FOptions, FHostEnvironment);
   FRealms.Add(Realm);
 
   RealmRecord := TGocciaObjectValue.Create;
@@ -840,7 +875,8 @@ begin
         AgentOptions := FOptions;
         AgentOptions.SourceType := stScript;
         AgentOptions.Test262Host := True;
-        ConfigureEngine(Engine, Executor, AgentOptions);
+        ConfigureEngine(Engine, Executor, AgentOptions,
+          FHost.HostEnvironment);
         EvalHost := TBareTest262EvalHost.Create(Engine);
         try
           InstallTest262HostGlobals(Engine, FHost, EvalHost);
@@ -1197,11 +1233,14 @@ begin
       Descriptor.HelpText]));
   end;
   WriteLn('  --strict-types                Enforce type annotations at runtime');
+  WriteLn('  --warning-unsupported-features');
+  WriteLn('                                Warn and recover for unsupported/default-disabled syntax');
   WriteLn('  --mode=interpreted|bytecode   Execution mode (default: interpreted)');
   WriteLn('  --source-type=script|module   Load entry as script source or module source (.mjs infers module)');
   WriteLn('  --source-name=PATH            Name stdin source as PATH for diagnostics and module resolution');
   WriteLn('  --unsafe-function-constructor Enable dynamic Function constructor');
   WriteLn('  --unsafe-shadowrealm          Enable the ShadowRealm constructor');
+  WriteLn('  --deterministic               Use fixed script-visible time, UTC, and seeded randomness');
   WriteLn('  --test262-host                Expose Goccia.test262 host hooks for test262');
   WriteLn('  --print                       Print the script''s last value (incl. undefined)');
   WriteLn('  --timeout=MS                  Per-file cooperative timeout in milliseconds');
@@ -1322,31 +1361,36 @@ begin
   WriteProfileJSON(TGocciaProfiler.Instance, AOptions.ProfileOutputPath);
 end;
 
-function ParseOptions: TBareOptions;
+procedure ParseOptions(out AOptions: TBareOptions);
 var
   I: Integer;
   Arg: string;
   SourceMetadataPath: string;
 begin
-  Result.Compatibility := [];
-  Result.StrictTypes := False;
-  Result.UnsafeFunctionConstructor := False;
-  Result.UnsafeShadowRealm := False;
-  Result.Test262Host := False;
-  Result.Test262AgentCanSuspend := True;
-  Result.Print := False;
-  Result.Mode := bemInterpreted;
-  Result.SourceType := stScript;
-  Result.SourceTypeExplicit := False;
-  Result.FileName := STDIN_PATH_MARKER;
-  Result.SourceName := '';
-  Result.TimeoutMs := 0;
-  Result.MaxMemoryBytes := 0;
-  Result.MaxInstructions := 0;
-  Result.StackSize := BARE_DEFAULT_MAX_STACK_DEPTH;
-  Result.ProfileModePresent := False;
-  Result.ProfileMode := Goccia.CLI.Options.pmAll;
-  Result.ProfileOutputPath := '';
+  AOptions.Compatibility := [];
+  AOptions.LabelStatementsEnabled := False;
+  AOptions.ForInLoopsEnabled := False;
+  AOptions.ExperimentalJSModuleSourceEnabled := False;
+  AOptions.WarningUnsupportedFeatures := False;
+  AOptions.StrictTypes := False;
+  AOptions.UnsafeFunctionConstructor := False;
+  AOptions.UnsafeShadowRealm := False;
+  AOptions.Deterministic := False;
+  AOptions.Test262Host := False;
+  AOptions.Test262AgentCanSuspend := True;
+  AOptions.Print := False;
+  AOptions.Mode := bemInterpreted;
+  AOptions.SourceType := stScript;
+  AOptions.SourceTypeExplicit := False;
+  AOptions.FileName := STDIN_PATH_MARKER;
+  AOptions.SourceName := '';
+  AOptions.TimeoutMs := 0;
+  AOptions.MaxMemoryBytes := 0;
+  AOptions.MaxInstructions := 0;
+  AOptions.StackSize := BARE_DEFAULT_MAX_STACK_DEPTH;
+  AOptions.ProfileModePresent := False;
+  AOptions.ProfileMode := Goccia.CLI.Options.pmAll;
+  AOptions.ProfileOutputPath := '';
 
   for I := 1 to ParamCount do
   begin
@@ -1356,66 +1400,77 @@ begin
       PrintUsage;
       Halt(0);
     end
-    else if TryApplyCompatibilityFlagArg(Arg, Result.Compatibility) then
+    else if Arg = '--compat-label' then
+      AOptions.LabelStatementsEnabled := True
+    else if Arg = '--compat-for-in-loop' then
+      AOptions.ForInLoopsEnabled := True
+    else if Arg = '--experimental-js-module-source' then
+      AOptions.ExperimentalJSModuleSourceEnabled := True
+    else if TryApplyCompatibilityFlagArg(Arg, AOptions.Compatibility) then
     begin
       { handled by source compatibility flag registry }
     end
+    else if Arg = '--warning-unsupported-features' then
+      AOptions.WarningUnsupportedFeatures := True
     else if Arg = '--strict-types' then
-      Result.StrictTypes := True
+      AOptions.StrictTypes := True
     else if Arg = '--unsafe-function-constructor' then
-      Result.UnsafeFunctionConstructor := True
+      AOptions.UnsafeFunctionConstructor := True
     else if Arg = '--unsafe-shadowrealm' then
-      Result.UnsafeShadowRealm := True
+      AOptions.UnsafeShadowRealm := True
+    else if Arg = '--deterministic' then
+      AOptions.Deterministic := True
     else if Arg = '--test262-host' then
-      Result.Test262Host := True
+      AOptions.Test262Host := True
     else if Arg = '--print' then
-      Result.Print := True
+      AOptions.Print := True
     else if Copy(Arg, 1, Length('--mode=')) = '--mode=' then
-      ParseMode(Copy(Arg, Length('--mode=') + 1, MaxInt), Result)
+      ParseMode(Copy(Arg, Length('--mode=') + 1, MaxInt), AOptions)
     else if Copy(Arg, 1, Length('--source-type=')) = '--source-type=' then
-      ParseSourceType(Copy(Arg, Length('--source-type=') + 1, MaxInt), Result)
+      ParseSourceType(Copy(Arg, Length('--source-type=') + 1, MaxInt),
+        AOptions)
     else if Copy(Arg, 1, Length('--source-name=')) = '--source-name=' then
-      Result.SourceName := Copy(Arg, Length('--source-name=') + 1, MaxInt)
+      AOptions.SourceName := Copy(Arg, Length('--source-name=') + 1, MaxInt)
     else if Copy(Arg, 1, Length('--timeout=')) = '--timeout=' then
-      ParseTimeout(Copy(Arg, Length('--timeout=') + 1, MaxInt), Result)
+      ParseTimeout(Copy(Arg, Length('--timeout=') + 1, MaxInt), AOptions)
     else if Copy(Arg, 1, Length('--max-memory=')) = '--max-memory=' then
-      ParseMaxMemory(Copy(Arg, Length('--max-memory=') + 1, MaxInt), Result)
+      ParseMaxMemory(Copy(Arg, Length('--max-memory=') + 1, MaxInt), AOptions)
     else if Copy(Arg, 1, Length('--max-instructions=')) = '--max-instructions=' then
       ParseMaxInstructions(Copy(Arg, Length('--max-instructions=') + 1, MaxInt),
-        Result)
+        AOptions)
     else if Copy(Arg, 1, Length('--stack-size=')) = '--stack-size=' then
-      ParseStackSize(Copy(Arg, Length('--stack-size=') + 1, MaxInt), Result)
+      ParseStackSize(Copy(Arg, Length('--stack-size=') + 1, MaxInt), AOptions)
     else if Copy(Arg, 1, Length('--profile=')) = '--profile=' then
-      ParseProfileMode(Copy(Arg, Length('--profile=') + 1, MaxInt), Result)
+      ParseProfileMode(Copy(Arg, Length('--profile=') + 1, MaxInt), AOptions)
     else if Copy(Arg, 1, Length('--profile-output=')) = '--profile-output=' then
-      Result.ProfileOutputPath := Copy(Arg, Length('--profile-output=') + 1,
+      AOptions.ProfileOutputPath := Copy(Arg, Length('--profile-output=') + 1,
         MaxInt)
     else if Copy(Arg, 1, 2) = '--' then
       raise Exception.Create('Unknown option: ' + Arg)
-    else if Result.FileName = STDIN_PATH_MARKER then
-      Result.FileName := Arg
+    else if AOptions.FileName = STDIN_PATH_MARKER then
+      AOptions.FileName := Arg
     else
       raise Exception.Create('Unexpected argument: ' + Arg);
   end;
 
-  if (not Result.SourceTypeExplicit) and
-     IsModuleSourceFileName(Result.FileName) then
-    Result.SourceType := stModule;
+  if (not AOptions.SourceTypeExplicit) and
+     IsModuleSourceFileName(AOptions.FileName) then
+    AOptions.SourceType := stModule;
 
-  if Result.ProfileModePresent then
-    Result.Mode := bemBytecode;
+  if AOptions.ProfileModePresent then
+    AOptions.Mode := bemBytecode;
 
-  if (Result.ProfileOutputPath <> '') and not Result.ProfileModePresent then
+  if (AOptions.ProfileOutputPath <> '') and not AOptions.ProfileModePresent then
     raise Exception.Create(
       '--profile-output requires --profile=opcodes|functions|all');
 
-  if Result.Test262Host then
+  if AOptions.Test262Host then
   begin
-    if Result.SourceName <> '' then
-      SourceMetadataPath := Result.SourceName
+    if AOptions.SourceName <> '' then
+      SourceMetadataPath := AOptions.SourceName
     else
-      SourceMetadataPath := Result.FileName;
-    Result.Test262AgentCanSuspend :=
+      SourceMetadataPath := AOptions.FileName;
+    AOptions.Test262AgentCanSuspend :=
       Test262SourceCanSuspendAgent(SourceMetadataPath);
   end;
 end;
@@ -1429,9 +1484,19 @@ begin
 end;
 
 procedure ConfigureEngine(const AEngine: TGocciaEngine;
-  const AExecutor: TGocciaExecutor; const AOptions: TBareOptions);
+  const AExecutor: TGocciaExecutor; const AOptions: TBareOptions;
+  const AParentEnvironment: TGocciaHostEnvironment = nil);
 begin
+  if Assigned(AParentEnvironment) then
+    AEngine.HostEnvironment.ConfigureAsChildOf(AParentEnvironment)
+  else if AOptions.Deterministic then
+    AEngine.HostEnvironment.UseDeterministicProfile;
   AEngine.Compatibility := AOptions.Compatibility;
+  AEngine.LabelStatementsEnabled := AOptions.LabelStatementsEnabled;
+  AEngine.ForInLoopsEnabled := AOptions.ForInLoopsEnabled;
+  AEngine.ExperimentalJSModuleSourceEnabled :=
+    AOptions.ExperimentalJSModuleSourceEnabled;
+  AEngine.WarningUnsupportedFeatures := AOptions.WarningUnsupportedFeatures;
   AEngine.StrictTypes := AOptions.StrictTypes;
   AEngine.SourceType := AOptions.SourceType;
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;
@@ -1523,6 +1588,7 @@ begin
           Engine := TGocciaEngine.Create(DisplayName, Source, Executor);
           try
             ConfigureEngine(Engine, Executor, AOptions);
+            Test262Host.ConfigureHostEnvironment(Engine.HostEnvironment);
             Test262EvalHost := TBareTest262EvalHost.Create(Engine);
             try
 
@@ -1580,7 +1646,7 @@ var
 begin
   Options := Default(TBareOptions);
   try
-    Options := ParseOptions;
+    ParseOptions(Options);
     ExitCode := RunBare(Options);
   except
     on E: TGocciaTimeoutError do

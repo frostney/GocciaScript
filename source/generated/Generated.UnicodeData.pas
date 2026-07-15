@@ -11,8 +11,8 @@ interface
 const
   GeneratedUnicodeDataVersion = '17.0.0';
   GeneratedUnicodeDataResourceName = 'GOCCIA_UCD';
-  GeneratedUnicodeDataEntryCount = 1455;
-  GeneratedUnicodeDataBlobByteCount = 331932;
+  GeneratedUnicodeDataEntryCount = 1753;
+  GeneratedUnicodeDataBlobByteCount = 340228;
 
 {$IFDEF LAKON}
 // Lakon (WASM/WASI) has no Windows-resource embedding; the same

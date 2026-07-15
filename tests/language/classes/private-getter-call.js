@@ -64,6 +64,22 @@ test("private methods can validate and transform values", () => {
   expect(instance.getValue()).toBe(10);
 });
 
+test("new expression callee supports private constructor members", () => {
+  class Factory {
+    #Ctor = class {
+      constructor(value) {
+        this.value = value;
+      }
+    };
+
+    create(value) {
+      return new this.#Ctor(value);
+    }
+  }
+
+  expect(new Factory().create(42).value).toBe(42);
+});
+
 test("private getters can derive values from private fields", () => {
   class TestClass {
     #value = 10;

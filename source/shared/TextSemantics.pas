@@ -48,8 +48,11 @@ function ToWellFormedUTF16(const AText: AnsiString): AnsiString;
 function UTF8CodePointLength(const AText: string): Integer;
 function UTF8CodePointAt(const AText: string; const AIndex: Integer): string;
 function UTF16CodeUnitToUTF8(const ACodeUnit: Cardinal): string;
+function UTF16CodeUnitPairToUTF8(const AFirst, ASecond: Cardinal): string;
 function UTF16CodeUnitLength(const AText: string): Integer;
 function UTF16CodeUnitAt(const AText: string; const AIndex: Integer): string;
+function UTF16StringsEqual(const ALeft, ARight: string): Boolean;
+function UTF16StringHash(const AText: string): Cardinal;
 function TryUTF16CodePointValueAt(const AText: string; const AIndex: Integer;
   out ACodePoint: Cardinal): Boolean;
 function UTF16Substring(const AText: string; const AStart,
@@ -73,6 +76,7 @@ function CreateECMAScriptSourceLines(const AText: string): TStringList;
 function CreateUTF8FileTextLines(const AText: UTF8String): TStringList;
 function NormalizeNewlinesToLF(const AText: string): string;
 function NormalizeUTF8NewlinesToLF(const AText: UTF8String): UTF8String;
+function StringListToSourceText(const ALines: TStrings): string;
 function StringListToLFText(const ALines: TStrings): string;
 
 { Release the per-thread is-ASCII memo. FPC does not auto-finalize managed
@@ -99,6 +103,37 @@ uses
   IntlICU,
 {$ENDIF}
   StringBuffer;
+
+type
+  TSourceTextStringList = class(TStringList)
+  private
+    FSourceText: string;
+    FSourceTextValid: Boolean;
+  protected
+    procedure Changed; override;
+  public
+    procedure SetSourceText(const ASourceText: string);
+    function HasSourceText: Boolean;
+    property SourceText: string read FSourceText;
+  end;
+
+procedure TSourceTextStringList.Changed;
+begin
+  inherited Changed;
+  FSourceText := '';
+  FSourceTextValid := False;
+end;
+
+procedure TSourceTextStringList.SetSourceText(const ASourceText: string);
+begin
+  FSourceText := ASourceText;
+  FSourceTextValid := True;
+end;
+
+function TSourceTextStringList.HasSourceText: Boolean;
+begin
+  Result := FSourceTextValid;
+end;
 
 function RetagUTF8Text(const ABytes: RawByteString): string;
 var
@@ -581,12 +616,29 @@ begin
       Chr($80 or (ACodeUnit and $3F));
 end;
 
-// Per-thread is-ASCII memo. The UTF-16 helpers are called repeatedly against
+function UTF16CodeUnitPairToUTF8(const AFirst, ASecond: Cardinal): string;
+var
+  CodePoint: Cardinal;
+begin
+  if (AFirst >= $D800) and (AFirst <= $DBFF) and
+     (ASecond >= $DC00) and (ASecond <= $DFFF) then
+  begin
+    CodePoint := $10000 + ((AFirst - $D800) shl 10) +
+      (ASecond - $DC00);
+    Exit(CodePointToUTF8(CodePoint));
+  end;
+  Result := UTF16CodeUnitToUTF8(AFirst) +
+    UTF16CodeUnitToUTF8(ASecond);
+end;
+
+// Per-thread text memo. The UTF-16 helpers are called repeatedly against
 // the same subject (charCodeAt loops, replaceAll/split, regex substring
 // extraction). For an all-ASCII (single-byte) string, UTF-16 code-unit index
 // equals byte index, so those operations reduce to plain byte ops. The memo
 // makes the all-ASCII test O(1) across repeated calls; two slots avoid
-// thrashing when a haystack and needle are tested alternately. Pure cache.
+// thrashing when a haystack and needle are tested alternately. Non-ASCII
+// strings also retain their decoded UTF-16 length so length checks do not
+// rescan a large subject on every indexed operation. Pure cache.
 // The slots hold a reference to the keyed string, so its buffer cannot be
 // freed while cached and its pointer cannot alias a different live string —
 // that is what keeps the pointer-identity key sound (do not drop the refs
@@ -597,6 +649,8 @@ threadvar
   GAsciiMemoStr1: string;
   GAsciiMemoVal0: Boolean;
   GAsciiMemoVal1: Boolean;
+  GAsciiMemoUTF16Length0: Integer;
+  GAsciiMemoUTF16Length1: Integer;
   GAsciiMemoNext: Integer;
 
 function StringIsAllAscii(const AText: string): Boolean;
@@ -620,15 +674,117 @@ begin
   begin
     GAsciiMemoStr0 := AText;
     GAsciiMemoVal0 := Result;
+    if Result then
+      GAsciiMemoUTF16Length0 := Length(AText)
+    else
+      GAsciiMemoUTF16Length0 := -1;
     GAsciiMemoNext := 1;
   end
   else
   begin
     GAsciiMemoStr1 := AText;
     GAsciiMemoVal1 := Result;
+    if Result then
+      GAsciiMemoUTF16Length1 := Length(AText)
+    else
+      GAsciiMemoUTF16Length1 := -1;
     GAsciiMemoNext := 0;
   end;
 end;
+
+function ReadNextUTF16CodeUnit(const AText: string; var AByteIndex: Integer;
+  var APendingLowSurrogate: Integer; out ACodeUnit: Cardinal): Boolean;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  Supplementary: Cardinal;
+begin
+  if APendingLowSurrogate >= 0 then
+  begin
+    ACodeUnit := Cardinal(APendingLowSurrogate);
+    APendingLowSurrogate := -1;
+    Exit(True);
+  end;
+
+  if AByteIndex > Length(AText) then
+    Exit(False);
+
+  if TryReadUTF8CodePointAllowSurrogates(AText, AByteIndex, CodePoint,
+     ByteLength) then
+  begin
+    Inc(AByteIndex, ByteLength);
+    if CodePoint <= $FFFF then
+    begin
+      ACodeUnit := CodePoint;
+      Exit(True);
+    end;
+
+    Supplementary := CodePoint - $10000;
+    ACodeUnit := $D800 + (Supplementary shr 10);
+    APendingLowSurrogate := Integer($DC00 + (Supplementary and $3FF));
+    Exit(True);
+  end;
+
+  ACodeUnit := Ord(AText[AByteIndex]);
+  Inc(AByteIndex);
+  Result := True;
+end;
+
+function UTF16StringsEqual(const ALeft, ARight: string): Boolean;
+var
+  LeftByteIndex, RightByteIndex: Integer;
+  LeftPendingLow, RightPendingLow: Integer;
+  LeftUnit, RightUnit: Cardinal;
+  HasLeft, HasRight: Boolean;
+begin
+  if ALeft = ARight then
+    Exit(True);
+  // The only supported alternate encodings of one ECMAScript string are a
+  // four-byte supplementary code point and its two three-byte WTF-8 surrogate
+  // code units. Equal byte lengths therefore make a raw mismatch definitive.
+  if Length(ALeft) = Length(ARight) then
+    Exit(False);
+
+  LeftByteIndex := 1;
+  RightByteIndex := 1;
+  LeftPendingLow := -1;
+  RightPendingLow := -1;
+  repeat
+    HasLeft := ReadNextUTF16CodeUnit(ALeft, LeftByteIndex, LeftPendingLow,
+      LeftUnit);
+    HasRight := ReadNextUTF16CodeUnit(ARight, RightByteIndex,
+      RightPendingLow, RightUnit);
+    if HasLeft <> HasRight then
+      Exit(False);
+    if not HasLeft then
+      Exit(True);
+    if LeftUnit <> RightUnit then
+      Exit(False);
+  until False;
+end;
+
+{$PUSH}{$R-}{$Q-}
+function UTF16StringHash(const AText: string): Cardinal;
+var
+  ByteIndex, PendingLow: Integer;
+  ByteValue, CodeUnit: Cardinal;
+begin
+  Result := 5381;
+  ByteIndex := 1;
+  while ByteIndex <= Length(AText) do
+  begin
+    ByteValue := Ord(AText[ByteIndex]);
+    if ByteValue >= $80 then
+      Break;
+    Result := Result * 33 + ByteValue;
+    Inc(ByteIndex);
+  end;
+
+  PendingLow := -1;
+  while ReadNextUTF16CodeUnit(AText, ByteIndex, PendingLow, CodeUnit) do
+    Result := Result * 33 + CodeUnit;
+end;
+{$POP}
 
 function UTF16CodeUnitLength(const AText: string): Integer;
 var
@@ -638,6 +794,12 @@ var
 begin
   if StringIsAllAscii(AText) then
     Exit(Length(AText));
+  if (Pointer(AText) = Pointer(GAsciiMemoStr0)) and
+    (GAsciiMemoUTF16Length0 >= 0) then
+    Exit(GAsciiMemoUTF16Length0);
+  if (Pointer(AText) = Pointer(GAsciiMemoStr1)) and
+    (GAsciiMemoUTF16Length1 >= 0) then
+    Exit(GAsciiMemoUTF16Length1);
   Result := 0;
   Index := 1;
   while Index <= Length(AText) do
@@ -657,6 +819,10 @@ begin
       Inc(Index);
     end;
   end;
+  if Pointer(AText) = Pointer(GAsciiMemoStr0) then
+    GAsciiMemoUTF16Length0 := Result
+  else if Pointer(AText) = Pointer(GAsciiMemoStr1) then
+    GAsciiMemoUTF16Length1 := Result;
 end;
 
 function UTF16CodeUnitAt(const AText: string; const AIndex: Integer): string;
@@ -1298,7 +1464,7 @@ var
   LineStart: Integer;
   TextIndex: Integer;
 begin
-  Result := TStringList.Create;
+  Result := TSourceTextStringList.Create;
   LineStart := 1;
   TextIndex := 1;
 
@@ -1324,6 +1490,7 @@ begin
   else if (Length(AText) > 0) and ((AText[Length(AText)] = #10) or
     (AText[Length(AText)] = #13)) then
     Result.Add('');
+  TSourceTextStringList(Result).SetSourceText(AText);
 end;
 
 function IsUTF8LineOrParagraphSeparatorAt(const AText: string;
@@ -1342,7 +1509,7 @@ var
   LineStart: Integer;
   TextIndex: Integer;
 begin
-  Result := TStringList.Create;
+  Result := TSourceTextStringList.Create;
   LineStart := 1;
   TextIndex := 1;
 
@@ -1376,6 +1543,7 @@ begin
     IsUTF8LineOrParagraphSeparatorAt(AText,
     Length(AText) - UTF8_LINE_TERMINATOR_BYTE_LENGTH + 1)) then
     Result.Add('');
+  TSourceTextStringList(Result).SetSourceText(AText);
 end;
 
 function CreateUTF8FileTextLines(const AText: UTF8String): TStringList;
@@ -1384,7 +1552,7 @@ var
   LineStart: Integer;
   TextIndex: Integer;
 begin
-  Result := TStringList.Create;
+  Result := TSourceTextStringList.Create;
   LineStart := 1;
   TextIndex := 1;
 
@@ -1415,6 +1583,8 @@ begin
   else if (Length(AText) > 0) and ((AText[Length(AText)] = #10) or
     (AText[Length(AText)] = #13)) then
     Result.Add('');
+  TSourceTextStringList(Result).SetSourceText(
+    RetagUTF8Text(RawByteString(AText)));
 end;
 
 function NormalizeNewlinesToLF(const AText: string): string;
@@ -1436,6 +1606,16 @@ begin
   NormalizedBytes := NormalizeRawNewlinesToLF(RawByteString(AText));
   SetCodePage(NormalizedBytes, CP_UTF8, False);
   Result := UTF8String(NormalizedBytes);
+end;
+
+function StringListToSourceText(const ALines: TStrings): string;
+begin
+  if not Assigned(ALines) then
+    Exit('');
+  if (ALines is TSourceTextStringList) and
+     TSourceTextStringList(ALines).HasSourceText then
+    Exit(TSourceTextStringList(ALines).SourceText);
+  Result := StringListToLFText(ALines);
 end;
 
 function StringListToLFText(const ALines: TStrings): string;
@@ -1467,6 +1647,8 @@ begin
   GAsciiMemoStr1 := '';
   GAsciiMemoVal0 := False;
   GAsciiMemoVal1 := False;
+  GAsciiMemoUTF16Length0 := -1;
+  GAsciiMemoUTF16Length1 := -1;
   GAsciiMemoNext := 0;
 end;
 

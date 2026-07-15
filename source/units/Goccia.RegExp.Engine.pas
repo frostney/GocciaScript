@@ -170,7 +170,7 @@ function ExecuteCompiledRegExp(const AProgram: TRegExpProgram;
 var
   VMResult: TRegExpVMResult;
   IsUnicode: Boolean;
-  I, GroupCount: Integer;
+  I, GroupCount, InputLength: Integer;
   SlotStart, SlotEnd: Integer;
 begin
   AResult.Found := False;
@@ -182,7 +182,8 @@ begin
   SetLength(AResult.NamedGroups, 0);
   ValidateRegExpFlags(AFlags);
   IsUnicode := HasRegExpFlag(AFlags, 'u') or HasRegExpFlag(AFlags, 'v');
-  if AStartIndex > UTF16CodeUnitLength(AInput) then
+  InputLength := RegExpInputCodeUnitLength(AInput);
+  if AStartIndex > InputLength then
     Exit(False);
   if APattern = EMPTY_REGEX then
   begin
@@ -222,7 +223,7 @@ begin
       SlotEnd := VMResult.CaptureSlots[I * 2 + 1];
     end;
     if (SlotStart >= 0) and (SlotEnd >= SlotStart) and
-       (SlotEnd <= UTF16CodeUnitLength(AInput)) then
+       (SlotEnd <= InputLength) then
     begin
       AResult.Groups[I].Matched := True;
       AResult.Groups[I].StartIndex := SlotStart;

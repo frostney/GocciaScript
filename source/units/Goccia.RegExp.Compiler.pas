@@ -100,6 +100,7 @@ type
     function Peek: Char;
     function PeekAt(AOffset: Integer): Char;
     function AtEnd: Boolean;
+    function HasBracedQuantifierAtCurrentPosition: Boolean;
     function Advance: Char;
     function Match(C: Char): Boolean;
     procedure Emit(AInstr: UInt32);
@@ -2732,7 +2733,7 @@ begin
       end;
   else
     begin
-      if FUnicode and CharInSet(C, [']', '}']) then
+      if FUnicode and CharInSet(C, ['{', '}', ']']) then
         raise EConvertError.Create('Invalid regular expression: unexpected token');
       CodePoint := ReadCodePoint;
       EmitCharMatch(CodePoint);
@@ -2953,6 +2954,29 @@ begin
   Result := (C = '*') or (C = '+') or (C = '?') or (C = '{');
 end;
 
+function TRegExpCompiler.HasBracedQuantifierAtCurrentPosition: Boolean;
+var
+  Offset: Integer;
+begin
+  if Peek <> '{' then
+    Exit(False);
+
+  Offset := 1;
+  if not CharInSet(PeekAt(Offset), ['0'..'9']) then
+    Exit(False);
+  while CharInSet(PeekAt(Offset), ['0'..'9']) do
+    Inc(Offset);
+  if PeekAt(Offset) = '}' then
+    Exit(True);
+  if PeekAt(Offset) <> ',' then
+    Exit(False);
+
+  Inc(Offset);
+  while CharInSet(PeekAt(Offset), ['0'..'9']) do
+    Inc(Offset);
+  Result := PeekAt(Offset) = '}';
+end;
+
 procedure TRegExpCompiler.CompileTerm;
 var
   AtomStart: Integer;
@@ -2960,7 +2984,8 @@ var
   IsAssertion: Boolean;
 begin
   C := Peek;
-  if IsQuantifierChar(C) then
+  if CharInSet(C, ['*', '+', '?']) or
+     ((C = '{') and HasBracedQuantifierAtCurrentPosition) then
     raise EConvertError.Create('Invalid regular expression: nothing to repeat');
   IsAssertion := (C = '^') or (C = '$') or
     ((C = '\') and ((PeekAt(1) = 'b') or (PeekAt(1) = 'B')));

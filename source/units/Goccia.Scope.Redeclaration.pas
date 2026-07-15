@@ -36,7 +36,7 @@ end;
 procedure CheckPatternRedeclarations(
   const APattern: TGocciaDestructuringPattern;
   const AScope: TGocciaScope; const ASourcePath: string;
-  const AIsVar: Boolean);
+  const AIsVar: Boolean; const ALine, AColumn: Integer);
 var
   ObjPat: TGocciaObjectDestructuringPattern;
   ArrPat: TGocciaArrayDestructuringPattern;
@@ -52,7 +52,7 @@ begin
         Exit;
       raise TGocciaSyntaxError.Create(
         SysUtils.Format('Identifier ''%s'' has already been declared',
-          [DeclName]), 0, 0, ASourcePath, nil);
+          [DeclName]), ALine, AColumn, ASourcePath, nil);
     end;
     if AIsVar then
     begin
@@ -60,17 +60,18 @@ begin
          not AScope.CanDeclareGlobalVar(DeclName) then
         raise TGocciaTypeError.Create(
           SysUtils.Format('Cannot declare global var ''%s''', [DeclName]),
-          0, 0, ASourcePath, nil);
+          ALine, AColumn, ASourcePath, nil);
     end
     else
-      CheckLexicalRedeclarationName(DeclName, AScope, ASourcePath, 0, 0);
+      CheckLexicalRedeclarationName(DeclName, AScope, ASourcePath, ALine,
+        AColumn);
   end
   else if APattern is TGocciaObjectDestructuringPattern then
   begin
     ObjPat := TGocciaObjectDestructuringPattern(APattern);
     for I := 0 to ObjPat.Properties.Count - 1 do
       CheckPatternRedeclarations(ObjPat.Properties[I].Pattern,
-        AScope, ASourcePath, AIsVar);
+        AScope, ASourcePath, AIsVar, ALine, AColumn);
   end
   else if APattern is TGocciaArrayDestructuringPattern then
   begin
@@ -78,16 +79,16 @@ begin
     for I := 0 to ArrPat.Elements.Count - 1 do
       if Assigned(ArrPat.Elements[I]) then
         CheckPatternRedeclarations(ArrPat.Elements[I],
-          AScope, ASourcePath, AIsVar);
+          AScope, ASourcePath, AIsVar, ALine, AColumn);
   end
   else if APattern is TGocciaAssignmentDestructuringPattern then
     CheckPatternRedeclarations(
       TGocciaAssignmentDestructuringPattern(APattern).Left,
-      AScope, ASourcePath, AIsVar)
+      AScope, ASourcePath, AIsVar, ALine, AColumn)
   else if APattern is TGocciaRestDestructuringPattern then
     CheckPatternRedeclarations(
       TGocciaRestDestructuringPattern(APattern).Argument,
-      AScope, ASourcePath, AIsVar);
+      AScope, ASourcePath, AIsVar, ALine, AColumn);
 end;
 
 procedure CheckTopLevelRedeclarations(const AProgram: TGocciaProgram;
@@ -125,6 +126,13 @@ begin
       VarDecl := TGocciaVariableDeclaration(Stmt);
       for J := 0 to High(VarDecl.Variables) do
       begin
+        if VarDecl.Variables[J].IsPattern or Assigned(VarDecl.Variables[J].Pattern) then
+        begin
+          CheckPatternRedeclarations(VarDecl.Variables[J].Pattern, AScope,
+            ASourcePath, VarDecl.IsVar, Stmt.Line, Stmt.Column);
+          Continue;
+        end;
+
         DeclName := VarDecl.Variables[J].Name;
         if VarDecl.IsVar then
         begin
@@ -165,7 +173,7 @@ begin
     else if Stmt is TGocciaDestructuringDeclaration then
       CheckPatternRedeclarations(
         TGocciaDestructuringDeclaration(Stmt).Pattern, AScope, ASourcePath,
-        TGocciaDestructuringDeclaration(Stmt).IsVar)
+        TGocciaDestructuringDeclaration(Stmt).IsVar, Stmt.Line, Stmt.Column)
     else if Stmt is TGocciaEnumDeclaration then
     begin
       DeclName := TGocciaEnumDeclaration(Stmt).Name;

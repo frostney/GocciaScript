@@ -50,7 +50,7 @@ type
   TGocciaUpvalueDescriptor = record
     Name: string;
     IsLocal: Boolean;
-    Index: UInt8;
+    Index: UInt16;
   end;
 
   TGocciaDirectEvalBindingKind = (
@@ -64,7 +64,7 @@ type
   TGocciaDirectEvalBindingInfo = record
     Name: string;
     Kind: TGocciaDirectEvalBindingKind;
-    Index: UInt8;
+    Index: UInt16;
     IsConst: Boolean;
     IsVarEnvironmentBinding: Boolean;
     IsEvalSyntheticArguments: Boolean;
@@ -83,7 +83,7 @@ type
     TryEnd: UInt32;
     CatchTarget: UInt32;
     FinallyTarget: UInt32;
-    CatchRegister: UInt8;
+    CatchRegister: UInt16;
   end;
 
   TGocciaLocalType = (
@@ -96,11 +96,17 @@ type
   );
 
   // Runtime-only inline cache for OP_GET_GLOBAL sites, indexed by the
-  // instruction's name-constant index.  Scope is a weak pointer compared for
-  // identity only (never dereferenced); Version/EntryIndex validate against
-  // the scope's lexical binding map.  Not serialised to .gbc.
+  // instruction's name-constant index.  Scope/ObjectValue are weak pointers
+  // compared for identity only (never dereferenced).  ObjectValue = nil means
+  // Version/EntryIndex validate against the scope's lexical binding map;
+  // otherwise they validate against that ordinary global object's property
+  // map.  Not serialised to .gbc.
   TGocciaGlobalReadCacheEntry = record
     Scope: Pointer;
+    ObjectValue: Pointer;
+    ObjectBindingKind: Byte;
+    BindingVersion: Cardinal;
+    BindingEntryIndex: Integer;
     Version: Cardinal;
     EntryIndex: Integer;
   end;
@@ -160,15 +166,15 @@ type
     FDirectEvalEnvironmentCount: Integer;
     FExceptionHandlers: array of TGocciaExceptionHandler;
     FExceptionHandlerCount: Integer;
-    FMaxRegisters: UInt8;
-    FParameterCount: UInt8;
-    FFormalParameterCount: UInt8;
-    FUpvalueCount: UInt8;
+    FMaxRegisters: UInt16;
+    FParameterCount: UInt16;
+    FFormalParameterCount: UInt16;
+    FUpvalueCount: UInt16;
     FDebugInfo: TGocciaDebugInfo;
     FLocalTypes: array of TGocciaLocalType;
-    FLocalTypeCount: UInt8;
+    FLocalTypeCount: UInt16;
     FLocalStrictFlags: array of Boolean;
-    FLocalStrictCount: UInt8;
+    FLocalStrictCount: UInt16;
     FIsAsync: Boolean;
     FIsGenerator: Boolean;
     FIsArrow: Boolean;
@@ -176,7 +182,7 @@ type
     FStrictThis: Boolean;
     FStrictCode: Boolean;
     FParameterPreambleSize: UInt16;
-    FTypeCheckPreambleSize: UInt8;
+    FTypeCheckPreambleSize: UInt16;
     FDirectEvalSyntheticArgumentsSlot: Integer;
     FDerivedThisInitializedSlot: Integer;
     FRejectArgumentsInDirectEval: Boolean;
@@ -197,8 +203,8 @@ type
     // first use and the entry arrays grow only to the number of distinct
     // property-name constants actually read. Both tiers share one slot id
     // (they are keyed by the same instruction operand). The instruction's
-    // C operand is a UInt8, so the slot map never exceeds 256 entries.
-    FPropertyReadSlotMap: array of UInt16;
+    // OP_WIDE allows every constant-pool entry to name a cached property read.
+    FPropertyReadSlotMap: array of UInt32;
     FPropertyReadCaches: array of TGocciaPropertyReadCacheEntry;
     FProtoReadCaches: array of TGocciaProtoReadCacheEntry;
     FPropertyReadSlotCount: Integer;
@@ -208,8 +214,9 @@ type
     constructor Create(const AName: string);
     destructor Destroy; override;
 
-    function EmitInstruction(const AInstruction: UInt32): Integer;
-    procedure PatchInstruction(const AIndex: Integer; const AInstruction: UInt32);
+    function EmitInstruction(const AInstruction: UInt64;
+      const AForceWide: Boolean = False): Integer;
+    procedure PatchInstruction(const AIndex: Integer; const AInstruction: UInt64);
     function AddConstantNil: UInt16;
     function AddConstantBoolean(const AValue: Boolean): UInt16;
     function AddConstantInteger(const AValue: Int64): UInt16;
@@ -233,13 +240,13 @@ type
     function ProtoReadCacheSlot(
       const AConstIndex: Integer): PGocciaProtoReadCacheEntry; inline;
     function AddFunction(const AFunction: TGocciaFunctionTemplate): UInt16;
-    procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt8;
+    procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt16;
       const AName: string = '');
     procedure AddDirectEvalEnvironment(const APC: UInt32;
       const ARejectArgumentsReference: Boolean;
       const ABindings: TGocciaDirectEvalBindingArray);
     procedure AddExceptionHandler(const ATryStart, ATryEnd, ACatchTarget,
-      AFinallyTarget: UInt32; const ACatchRegister: UInt8);
+      AFinallyTarget: UInt32; const ACatchRegister: UInt16);
 
     function GetInstruction(const AIndex: Integer): UInt32; inline;
     function GetConstant(const AIndex: Integer): TGocciaBytecodeConstant; inline;
@@ -259,20 +266,20 @@ type
     property ConstantCount: Integer read FConstantCount;
     property FunctionCount: Integer read GetFunctionCount;
     property ExceptionHandlerCount: Integer read FExceptionHandlerCount;
-    property MaxRegisters: UInt8 read FMaxRegisters write FMaxRegisters;
-    property ParameterCount: UInt8 read FParameterCount write FParameterCount;
-    property FormalParameterCount: UInt8 read FFormalParameterCount write FFormalParameterCount;
-    property UpvalueCount: UInt8 read FUpvalueCount;
+    property MaxRegisters: UInt16 read FMaxRegisters write FMaxRegisters;
+    property ParameterCount: UInt16 read FParameterCount write FParameterCount;
+    property FormalParameterCount: UInt16 read FFormalParameterCount write FFormalParameterCount;
+    property UpvalueCount: UInt16 read FUpvalueCount;
     property DirectEvalEnvironmentCount: Integer read FDirectEvalEnvironmentCount;
     property DebugInfo: TGocciaDebugInfo read FDebugInfo write FDebugInfo;
 
-    procedure SetLocalType(const ASlot: UInt8; const AKind: TGocciaLocalType);
-    function GetLocalType(const ASlot: UInt8): TGocciaLocalType;
-    property LocalTypeCount: UInt8 read FLocalTypeCount;
+    procedure SetLocalType(const ASlot: UInt16; const AKind: TGocciaLocalType);
+    function GetLocalType(const ASlot: UInt16): TGocciaLocalType;
+    property LocalTypeCount: UInt16 read FLocalTypeCount;
 
-    procedure SetLocalStrictFlag(const ASlot: UInt8; const AStrict: Boolean);
-    function GetLocalStrictFlag(const ASlot: UInt8): Boolean;
-    property LocalStrictCount: UInt8 read FLocalStrictCount;
+    procedure SetLocalStrictFlag(const ASlot: UInt16; const AStrict: Boolean);
+    function GetLocalStrictFlag(const ASlot: UInt16): Boolean;
+    property LocalStrictCount: UInt16 read FLocalStrictCount;
 
     property IsAsync: Boolean read FIsAsync write FIsAsync;
     property IsGenerator: Boolean read FIsGenerator write FIsGenerator;
@@ -286,7 +293,7 @@ type
     // function itself.
     property HasOwnPrototype: Boolean read FHasOwnPrototype write FHasOwnPrototype;
     property ParameterPreambleSize: UInt16 read FParameterPreambleSize write FParameterPreambleSize;
-    property TypeCheckPreambleSize: UInt8 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
+    property TypeCheckPreambleSize: UInt16 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
     property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
     property DerivedThisInitializedSlot: Integer read FDerivedThisInitializedSlot write FDerivedThisInitializedSlot;
     property RejectArgumentsInDirectEval: Boolean read FRejectArgumentsInDirectEval write FRejectArgumentsInDirectEval;
@@ -300,6 +307,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Bytecode,
   Goccia.GarbageCollector;
 
 var
@@ -377,22 +385,48 @@ begin
 end;
 
 function TGocciaFunctionTemplate.EmitInstruction(
-  const AInstruction: UInt32): Integer;
+  const AInstruction: UInt64; const AForceWide: Boolean): Integer;
+var
+  HighOperands: UInt32;
 begin
+  HighOperands := UInt32(AInstruction shr 32);
+  if AForceWide or (HighOperands <> 0) then
+  begin
+    if FCodeCount >= Length(FCode) then
+      SetLength(FCode, FCodeCount * 2 + 16);
+    FCode[FCodeCount] := UInt32(Ord(OP_WIDE)) or
+      ((HighOperands and $FF) shl 8) or
+      (((HighOperands shr 8) and $FF) shl 16) or
+      (((HighOperands shr 16) and $FF) shl 24);
+    Inc(FCodeCount);
+  end;
   if FCodeCount >= Length(FCode) then
     SetLength(FCode, FCodeCount * 2 + 16);
-  FCode[FCodeCount] := AInstruction;
+  FCode[FCodeCount] := UInt32(AInstruction and $FFFFFFFF);
   Result := FCodeCount;
   Inc(FCodeCount);
 end;
 
 procedure TGocciaFunctionTemplate.PatchInstruction(const AIndex: Integer;
-  const AInstruction: UInt32);
+  const AInstruction: UInt64);
+var
+  HighOperands: UInt32;
 begin
   if (AIndex < 0) or (AIndex >= FCodeCount) then
     raise ERangeError.CreateFmt('PatchInstruction: index %d out of range 0..%d',
       [AIndex, FCodeCount - 1]);
-  FCode[AIndex] := AInstruction;
+  HighOperands := UInt32(AInstruction shr 32);
+  if HighOperands <> 0 then
+  begin
+    if (AIndex = 0) or (DecodeOp(FCode[AIndex - 1]) <> Ord(OP_WIDE)) then
+      raise ERangeError.Create(
+        'PatchInstruction: wide instruction has no prefix slot');
+    FCode[AIndex - 1] := UInt32(Ord(OP_WIDE)) or
+      ((HighOperands and $FF) shl 8) or
+      (((HighOperands shr 8) and $FF) shl 16) or
+      (((HighOperands shr 16) and $FF) shl 24);
+  end;
+  FCode[AIndex] := UInt32(AInstruction and $FFFFFFFF);
 end;
 
 function TGocciaFunctionTemplate.AddConstantNil: UInt16;
@@ -616,26 +650,16 @@ end;
 
 function TGocciaFunctionTemplate.PropertyReadSlot(
   const AConstIndex: Integer): Integer;
-const
-  // OP_GET_PROP_CONST carries the name-constant index in the 8-bit C
-  // operand, so at most 256 constants can ever be property-read names.
-  PROPERTY_READ_SLOT_MAP_LIMIT = 256;
 var
-  MapSize, NewCapacity: Integer;
+  NewCapacity: Integer;
 begin
   // nil-slot contract as GlobalReadCacheSlot: out-of-range constant
   // indices (corrupt or hostile .gbc input) run uncached rather than
   // risking a wild write.
-  if (AConstIndex < 0) or (AConstIndex >= FConstantCount) or
-     (AConstIndex >= PROPERTY_READ_SLOT_MAP_LIMIT) then
+  if (AConstIndex < 0) or (AConstIndex >= FConstantCount) then
     Exit(-1);
   if AConstIndex >= Length(FPropertyReadSlotMap) then
-  begin
-    MapSize := FConstantCount;
-    if MapSize > PROPERTY_READ_SLOT_MAP_LIMIT then
-      MapSize := PROPERTY_READ_SLOT_MAP_LIMIT;
-    SetLength(FPropertyReadSlotMap, MapSize);
-  end;
+    SetLength(FPropertyReadSlotMap, FConstantCount);
   if FPropertyReadSlotMap[AConstIndex] = 0 then
   begin
     // Grow BOTH dense arrays together so a held own-tier pointer stays
@@ -652,7 +676,7 @@ begin
       SetLength(FProtoReadCaches, NewCapacity);
     end;
     Inc(FPropertyReadSlotCount);
-    FPropertyReadSlotMap[AConstIndex] := UInt16(FPropertyReadSlotCount);
+    FPropertyReadSlotMap[AConstIndex] := UInt32(FPropertyReadSlotCount);
   end;
   Result := Integer(FPropertyReadSlotMap[AConstIndex]) - 1;
 end;
@@ -689,10 +713,10 @@ begin
 end;
 
 procedure TGocciaFunctionTemplate.AddUpvalueDescriptor(
-  const AIsLocal: Boolean; const AIndex: UInt8; const AName: string);
+  const AIsLocal: Boolean; const AIndex: UInt16; const AName: string);
 begin
-  if FUpvalueCount >= High(UInt8) then
-    raise Exception.Create('Upvalue descriptor overflow: exceeds 255 entries');
+  if FUpvalueCount >= High(UInt16) then
+    raise Exception.Create('Upvalue descriptor overflow: exceeds 65535 entries');
   if FUpvalueCount >= Length(FUpvalueDescriptors) then
     SetLength(FUpvalueDescriptors, FUpvalueCount * 2 + 4);
   FUpvalueDescriptors[FUpvalueCount].Name := AName;
@@ -724,7 +748,7 @@ end;
 
 procedure TGocciaFunctionTemplate.AddExceptionHandler(
   const ATryStart, ATryEnd, ACatchTarget, AFinallyTarget: UInt32;
-  const ACatchRegister: UInt8);
+  const ACatchRegister: UInt16);
 begin
   if FExceptionHandlerCount >= Length(FExceptionHandlers) then
     SetLength(FExceptionHandlers, FExceptionHandlerCount * 2 + 4);
@@ -840,7 +864,7 @@ begin
   Result := FExceptionHandlers[AIndex];
 end;
 
-procedure TGocciaFunctionTemplate.SetLocalType(const ASlot: UInt8;
+procedure TGocciaFunctionTemplate.SetLocalType(const ASlot: UInt16;
   const AKind: TGocciaLocalType);
 begin
   if ASlot >= Length(FLocalTypes) then
@@ -851,7 +875,7 @@ begin
 end;
 
 function TGocciaFunctionTemplate.GetLocalType(
-  const ASlot: UInt8): TGocciaLocalType;
+  const ASlot: UInt16): TGocciaLocalType;
 begin
   if ASlot < FLocalTypeCount then
     Result := FLocalTypes[ASlot]
@@ -859,7 +883,7 @@ begin
     Result := sltUntyped;
 end;
 
-procedure TGocciaFunctionTemplate.SetLocalStrictFlag(const ASlot: UInt8;
+procedure TGocciaFunctionTemplate.SetLocalStrictFlag(const ASlot: UInt16;
   const AStrict: Boolean);
 begin
   if ASlot >= Length(FLocalStrictFlags) then
@@ -870,7 +894,7 @@ begin
 end;
 
 function TGocciaFunctionTemplate.GetLocalStrictFlag(
-  const ASlot: UInt8): Boolean;
+  const ASlot: UInt16): Boolean;
 begin
   if ASlot < FLocalStrictCount then
     Result := FLocalStrictFlags[ASlot]

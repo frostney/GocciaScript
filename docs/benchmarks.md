@@ -4,13 +4,17 @@
 
 ## Executive Summary
 
-- **`suite`/`bench` API** — `bench(name, { setup?, run, teardown? })` with auto-calibration, warmup, and IQR outlier filtering
-- **Five output formats** — `console` (default), `text`, `csv`, `json`, `compact-json`; configurable via `--format` and `--output`
+- **Module-only benchmark API** — Import `bench`, `group`, `run`, `summary`, and `boxplot` from `"goccia:microbench"`; no benchmark helpers are ambient globals
+- **Distribution-aware reports** — Five output formats report p75/p99/p999 and interquartile bars; scoped `boxplot()` and `summary()` wrappers add charts and uncertainty-aware comparisons, with reproducible statistics in structured output
 - **Profiler-backed runs** — Bytecode benchmark runs can emit opcode/function profiles with `--profile`, including deterministic single-run capture
 - **CI integration** — PR workflow posts benchmark comparison comments with range-overlap classification; main CI retains deterministic profile reports
 - **Environment tuning** — Calibration time, warmup iterations, and measurement rounds configurable via environment variables
+- **Cross-engine AWFY lane** — `scripts/awfy-driver.js` runs pinned AWFY and `perf/probes/` diagnostics under GocciaScript, QuickJS, and Node without mixing them into the benchmark-runner corpus
+- **JetStream 3 reference lane** — `scripts/jetstream-driver.js` runs a frozen, shell-portable subset of the pinned JetStream 3 corpus under the same three engines while preserving upstream workload source
+- **Performance Barometer** — Main-branch AWFY and JetStream reports feed the unified `/performance` dashboard with version-bounded history and visible failed-run gaps
+- **Web Tooling Goccia lane** — `scripts/web-tooling-driver.js` runs every pinned V8 Web Tooling workload under GocciaScript only and publishes retained JSON artifacts
 
-GocciaScript includes a benchmark runner for measuring execution performance. Benchmarks live in the `benchmarks/` directory and use a `suite`/`bench` API.
+GocciaScript includes a benchmark runner for measuring execution performance. Benchmarks live in the `benchmarks/` directory and import the benchmark API from `"goccia:microbench"`.
 
 ## Running Benchmarks
 
@@ -25,8 +29,8 @@ GocciaScript includes a benchmark runner for measuring execution performance. Be
 ./build/GocciaBenchmarkRunner benchmarks/fibonacci.js
 
 # Run a benchmark from stdin
-printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner
-printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner - --mode=bytecode
+printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner --source-type=module
+printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner - --source-type=module --mode=bytecode
 
 # Run benchmarks with 2 parallel workers (default: CPU count)
 ./build/GocciaBenchmarkRunner benchmarks --jobs=2
@@ -52,10 +56,10 @@ The GocciaBenchmarkRunner supports five output formats via the `--format` option
 
 | Format | Description |
 |--------|-------------|
-| `console` (default) | Pretty-printed columnar output with suite headers, variance, setup/teardown times, and summary |
-| `text` | Compact one-line-per-benchmark format with optional `setup=Xms teardown=Xms` suffixes |
-| `csv` | Standard CSV with header row (`file,suite,name,ops_per_sec,variance_percentage,mean_ms,iterations,setup_ms,teardown_ms,error`) |
-| `json` | Structured JSON with the common CLI envelope (`build`, aggregate `output`, `timing`, `memory`, `workers`) and a `files[]` array containing each `fileName`, per-file timing, and nested `benchmarks[]`, including `opsPerSec`, `variancePercentage`, `minOpsPerSec`, `maxOpsPerSec`, `setupMs`, and `teardownMs` |
+| `console` (default) | Pretty-printed output with group headers, throughput, variance, p75/p99/p999, per-benchmark interquartile bars, scoped boxplots, relative summaries, and setup/teardown times |
+| `text` | Compact one-line-per-benchmark output followed by any scoped boxplots and relative summaries |
+| `csv` | Scalar throughput and sample statistics, wrapper-scope identifiers, and derived relative-comparison fields |
+| `json` | Structured JSON with the common CLI envelope and per-benchmark throughput, sample statistics, wrapper scopes, and uncertainty-aware relative comparison data |
 | `compact-json` | Same structured JSON shape, omitting `build`, `memory`, `stdout`, and `stderr` for smaller machine-readable output |
 
 Use `--output=<file>` to write results to a file instead of stdout.
@@ -82,10 +86,10 @@ allocation attribution:
 
 For deterministic CI signals, add `--profile-deterministic`. This skips warmup,
 calibration, and repeated measurement rounds, then runs each registered benchmark
-once through the existing `setup`/`run`/`teardown` path. If `--profile` is not
-provided, it defaults to `--profile=all`. The benchmark report remains
-structurally valid, but throughput fields are placeholders; use the profile JSON
-for deterministic comparisons.
+once through the same setup/measurement/teardown lifecycle used by normal
+benchmark runs. If `--profile` is not provided, it defaults to `--profile=all`.
+The benchmark report remains structurally valid, but throughput fields are
+placeholders; use the profile JSON for deterministic comparisons.
 
 ```bash
 ./build/GocciaBenchmarkRunner benchmarks/numbers.js \
@@ -118,48 +122,96 @@ GOCCIA_BENCH_CALIBRATION_MS=500 GOCCIA_BENCH_ROUNDS=15 ./build/GocciaBenchmarkRu
 
 ## Writing Benchmarks
 
-The `bench()` function takes a name and an options object with `setup`, `run`, and `teardown` fields:
+Import benchmark helpers from `"goccia:microbench"`:
 
 ```javascript
-suite("collections", () => {
-  bench("Set iteration", {
-    setup: () => new Set(Array.from({ length: 50 }, (_, i) => i)),
-    run: (s) => {
-      let sum = 0;
-      s.forEach((v) => { sum = sum + v; });
-    },
-    teardown: (s) => { s.clear(); },
-  });
+import { bench, group, summary, boxplot } from "goccia:microbench";
 
-  bench("simple computation", {
-    run: () => {
-      const result = 1 + 2 + 3;
+group("collections", () => {
+  const setIteration = {
+    *run() {
+      const set = new Set(Array.from({ length: 50 }, (_, i) => i));
+      try {
+        yield () => {
+          let sum = 0;
+          set.forEach((v) => { sum = sum + v; });
+        };
+      } finally {
+        set.clear();
+      }
     },
+  }.run;
+
+  bench("Set iteration", setIteration);
+
+  bench("simple computation", () => {
+    const result = 1 + 2 + 3;
+  });
+});
+
+summary(() => {
+  boxplot(() => {
+    group("numbers", () => {
+      bench("addition", () => 1 + 1);
+    });
   });
 });
 ```
 
 ### API
 
-- **`setup`** (optional): Called once before warmup. Its return value is passed as the first argument to `run` and `teardown`, even when that value is `undefined`.
-- **`run`** (required): The timed benchmark function. Called many times during warmup, calibration, and measurement.
-- **`teardown`** (optional): Called once after all measurement rounds complete. Receives the setup return value.
-- All three phases are independently timed and reported as `setupMs`, `teardownMs`, and the main `opsPerSec`/`meanMs` metrics.
+The primary benchmark form is `bench(name, fn)`, where `fn` is called many times during measurement. Generator callbacks provide setup and teardown without including that setup cost in the measured body:
+
+```javascript
+import { bench, group } from "goccia:microbench";
+
+group("collections", () => {
+  const setIteration = {
+    *run() {
+      const set = new Set(Array.from({ length: 50 }, (_, i) => i));
+      try {
+        yield () => {
+          let sum = 0;
+          set.forEach((v) => { sum = sum + v; });
+        };
+      } finally {
+        set.clear();
+      }
+    },
+  }.run;
+
+  bench("Set iteration", setIteration);
+
+  bench("simple computation", () => {
+    const result = 1 + 2 + 3;
+  });
+});
+```
+
+- Code before the generator's first `yield` is setup.
+- The yielded function is the timed benchmark body.
+- Cleanup that must run during generator close belongs in a `finally` block around the `yield`.
+- Setup and teardown are independently timed and reported as `setupMs`, `teardownMs`, and the main `opsPerSec`/`meanMs` metrics.
+- `summary(fn)` creates a comparison scope. Its measured benchmarks are ordered by median invocation time and compared with the fastest member. The central ratio uses medians; the displayed range divides the competitor's p25/p75 by the fastest member's p75/p25. A range crossing `1.0x` is reported as inconclusive.
+- `boxplot(fn)` creates a visualization scope. Its measured benchmarks share an interquartile chart scale from the fastest observed sample through the slowest p99.
+- Nested `summary()` and `boxplot()` wrappers retain both memberships. Benchmarks outside a wrapper still receive percentile statistics and an individual interquartile bar, but do not participate in that scoped view.
+- Wrapper callbacks may be async; the wrapper waits for the returned promise before closing its reporting scope.
+- `run(opts?)` executes the currently registered benchmarks from script code. `GocciaBenchmarkRunner` also auto-runs registered benchmarks after loading a file, but a script-callable `run()` consumes the pending registry so the runner does not measure the same benchmarks twice.
 
 ### Data flow
 
 ```text
-setup() → [return value] → warmup(run × N) → calibrate(run × N) → measure(run × N × rounds) → teardown()
-   ↓                                                                    ↓                          ↓
- setupMs                                                        opsPerSec, meanMs, variance   teardownMs
+setup before yield → yielded run function → warmup/calibrate → throughput rounds → bounded samples → close generator
+        ↓                         ↓                         ↓                  ↓                 ↓
+     setupMs                iterations          ops/sec, CV, range     percentiles       teardownMs
 ```
 
 ### Guidelines
 
-- Use `setup` to create data structures that the `run` function operates on. This isolates allocation cost from the operation being measured.
-- Use `teardown` for cleanup when the setup creates resources that should be explicitly released.
-- When the benchmark IS the creation (e.g., measuring `Array.from` speed), put everything in `run` with no `setup`.
-- The `run` function can be `async` for benchmarking async/await operations.
+- Use generator setup to create data structures that the yielded benchmark function operates on. This isolates allocation cost from the operation being measured.
+- Put cleanup in a generator `finally` block when setup creates resources that should be explicitly released.
+- When the benchmark IS the creation (e.g., measuring `Array.from` speed), use a plain benchmark function with no setup.
+- The benchmark function can be `async` for benchmarking async/await operations.
 
 ## How the GocciaBenchmarkRunner Works
 
@@ -168,15 +220,16 @@ The `GocciaBenchmarkRunner` program:
 1. Parses CLI inputs (`--format`, `--output`, and the benchmark path or stdin marker).
 2. Scans the provided path for `.js` files.
 3. For each file, creates a `TGocciaEngine`, attaches `TGocciaRuntimeCore`, applies the loader runtime profile, and installs the benchmark runtime extension.
-4. Loads and executes the source so benchmark files register their suites and benchmarks without running measurements from inside the script body.
+4. Loads and executes the source so benchmark files import `"goccia:microbench"` and register groups and benchmarks.
 5. Measures lex, parse, compile (bytecode mode), script execution, and benchmark execution phases separately with nanosecond precision via `TimingUtils.GetNanoseconds`.
-6. `suite()` calls execute immediately, registering `bench()` entries.
-7. After the script finishes, the runner invokes `runBenchmarks()` from Pascal to run each registered benchmark:
-   - **Setup:** Calls the `setup` function once (timed), caches the return value.
-   - **Warmup:** Configurable iterations to stabilize (default 5). The setup return value is passed to each call.
+6. `group()` calls execute immediately, registering nested `bench()` entries.
+7. After the script finishes, the runner auto-runs any benchmarks that were registered but not already consumed by a script-callable `run()`:
+   - **Setup:** Advances generator callbacks to their first `yield` (timed) when a benchmark uses generator-style setup.
+   - **Warmup:** Configurable iterations to stabilize (default 5). The yielded function or plain benchmark function is called for each iteration.
    - **Calibrate:** Scales batch size until it runs for at least the target calibration time (default 200ms). Uses nanosecond-resolution timing via `TimingUtils` (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows).
    - **Measure:** Runs multiple measurement rounds (default 7). GC is disabled during measurement for identical behavior in both interpreter and bytecode modes. Between rounds, `CollectYoung` reclaims measurement garbage efficiently (pre-marks old objects, only traverses new allocations). After all rounds, IQR-based outlier filtering removes noise spikes before computing the coefficient of variation (CV%) and median values.
-   - **Teardown:** Calls the `teardown` function once (timed) after measurement completes.
+   - **Sample:** Individually times at most 10,000 calibrated invocations. This separate pass leaves historical ops/sec and variance semantics unchanged and cannot add more invocations than calibration selected.
+   - **Teardown:** Closes generator callbacks after measurement (timed), running `finally` cleanup when present.
 8. After each file completes, `GC.Collect` runs to reclaim memory between script executions.
 9. Collects all results into a `TBenchmarkReporter`, which renders the chosen output format.
 10. After rendering, checks for failures via `TBenchmarkReporter.HasFailures`. If any benchmark entry has a non-empty `Error` field or zero `OpsPerSec`/`MeanMs`, the process exits with code 1.
@@ -194,9 +247,11 @@ The non-zero exit code ensures CI pipelines fail when benchmarks crash or produc
 
 | Function | Description |
 |----------|-------------|
-| `suite(name, fn)` | Group benchmarks (like `describe` in tests). Executes `fn` immediately. |
-| `bench(name, { setup?, run, teardown? })` | Register a benchmark with optional setup/teardown. `run` is called many times during measurement; `setup` and `teardown` run once each and are independently timed. |
-| `runBenchmarks()` | Execute all registered benchmarks and return results. GocciaBenchmarkRunner calls this automatically after the benchmark file finishes registering suites. |
+| `bench(name, fn)` | Register a benchmark function. `fn` is called many times during measurement; generator callbacks use pre-yield setup, a yielded measured function, and `finally` cleanup on close. |
+| `group(name, fn)` | Group benchmarks (like `describe` in tests). Executes `fn` immediately. |
+| `run(opts?)` | Execute registered benchmarks from script code and return results. Calling `run()` prevents the runner's post-load auto-run from measuring the same registry again. |
+| `summary(fn)` | Register a comparison scope that reports median relative speed, a conservative interquartile ratio range, and inconclusive overlap. |
+| `boxplot(fn)` | Register a visualization scope whose benchmarks share an interquartile chart scale. |
 
 ## Available Benchmarks
 
@@ -215,6 +270,8 @@ The non-zero exit code ensures CI pipelines fail when benchmarks crash or produc
 | `benchmarks/collections.js` | Set add/has/delete/forEach, Map set/get/has/delete/forEach/keys/values |
 | `benchmarks/weak-collections.js` | WeakMap/WeakSet construction, mutation, lookup, non-registered symbol keys/values, upsert methods, and GC smoke cases |
 | `benchmarks/json.js` | JSON.parse, JSON.stringify, roundtrip with nested and mixed data |
+| `benchmarks/csv.js` | CSV parse/stringify named module imports, delimiter options, revivers, and roundtrips |
+| `benchmarks/tsv.js` | TSV parse/stringify named module imports, escaped fields, and roundtrips |
 | `benchmarks/destructuring.js` | Array/object/parameter/callback destructuring, rest, defaults, nesting |
 | `benchmarks/promises.js` | Promise.resolve/reject, then chains, catch/finally, all/race/allSettled/any |
 | `benchmarks/numbers.js` | Integer/float arithmetic, coercion, prototype methods, static methods |
@@ -296,3 +353,272 @@ The PR workflow (`.github/workflows/pr.yml`) builds the PR's base commit (`main`
 - The **overall PR summary** shows per-mode totals on separate lines with average percentage deltas
 - The comparison is **advisory** (comment-only, never merge-blocking)
 - 🟢 marks non-overlapping improvements, 🔴 marks non-overlapping regressions, `~ overlap` marks overlapping ranges, and 🆕 marks new benchmarks absent from the `main` build
+
+## AWFY Cross-Engine Lane
+
+The `benchmarks/` directory is reserved for `GocciaBenchmarkRunner` inputs that
+import `"goccia:microbench"` and register `group()` / `bench()` cases. Cross-engine AWFY and diagnostic
+probes live under `perf/` because they are plain shell-portable scripts driven by
+Node tooling, not benchmark-runner files. This keeps CI's recursive benchmark
+scan from treating diagnostic probes as missing benchmark-runner inputs.
+
+Use `scripts/awfy-driver.js` for #856/#862 investigation:
+
+```bash
+# List pinned AWFY benchmark names and Goccia-owned probes
+node scripts/awfy-driver.js --list
+
+# Run one AWFY benchmark from a local upstream checkout
+node scripts/awfy-driver.js \
+  --awfy-dir /path/to/are-we-fast-yet/benchmarks/JavaScript \
+  --benchmark NBody \
+  --inner-iterations 1 \
+  --repetitions 5 \
+  --engines goccia,qjs,node \
+  --output tmp/awfy-report.json
+
+# Run one diagnostic probe through the same normalized report schema
+node scripts/awfy-driver.js \
+  --probe generic-plus-scalars \
+  --inner-iterations 1000 \
+  --repetitions 1 \
+  --engines goccia,qjs,node \
+  --output tmp/probe-report.json
+```
+
+`perf/awfy/manifest.json` records the upstream AWFY repository, pinned commit,
+JavaScript corpus path, driver version, and diagnostic probe catalog. The driver
+generates per-benchmark portable AWFY bundles from the selected benchmark's
+CommonJS dependency graph instead of using upstream `harness.js` directly. That
+avoids Node-only globals (`require`, `process.argv`, `process.hrtime`,
+`process.stdout`) and prevents one unrelated benchmark parse failure from
+blocking every other benchmark.
+
+### Updating the AWFY Pin
+
+The AWFY corpus SHA is pinned in `perf/awfy/manifest.json`. A weekly workflow
+(`.github/workflows/awfy-bump.yml`) fetches the latest
+`smarr/are-we-fast-yet` `master` SHA, runs `bun scripts/awfy-bump-pin.ts`, and
+opens an automated PR when the manifest changes. The workflow no-ops when the
+pin is already current, matching the test262 and TOML suite bump pattern.
+
+Manual bump:
+
+```bash
+bun scripts/awfy-bump-pin.ts <40-hex-sha>
+```
+
+The normalized report records:
+
+- raw samples for every engine/target/repetition
+- medians, IQR-filtered medians, min/max, coefficient of variation, and
+  geomean pairwise ratios
+- checksum/verification results and cross-engine checksum agreement
+- timeout, crash, OOM, missing-result, and verification-failed outcomes
+- Goccia commit, FPC version, platform, architecture, reference-engine versions,
+  AWFY corpus SHA, and driver version
+
+Pull requests run an AWFY report lane from `.github/workflows/pr.yml`.
+The target set is recorded in `perf/awfy/manifest.json` under `ciReport`: all
+pinned AWFY benchmarks under the production-built PR Goccia bytecode loader, the
+production-built PR `main` baseline loader, QuickJS, and the latest Node Current
+release resolved by `actions/setup-node` at workflow time, with five raw samples
+per engine.
+Sampling is interleaved as target -> repetition -> engine, so every repetition
+runs the selected engines next to each other instead of collecting engine-sized
+batches. The workflow uploads the normalized JSON report and posts an
+`AWFY Results` PR comment with main/PR Goccia medians, the per-target PR-vs-main
+delta, and reference-engine medians; min/max/CV and raw samples stay in the
+`awfy-report` artifact. Diagnostic probes remain available through the same
+driver for focused engine work, but they are not mixed into the PR AWFY summary.
+
+AWFY rows with sub-0.5ms medians are useful for verifying that the benchmark
+runs consistently, but they are timer-floor sensitive. Before using one of those
+rows as evidence for a broad runtime claim, rerun that target with a higher
+`--inner-iterations` value and inspect the artifact's min/max/CV.
+
+Full CI runs the same AWFY report on the ubuntu-latest x64 build. It uploads the
+`awfy-report` artifact on every full CI run. On `main`, when
+`BLOB_READ_WRITE_TOKEN` is configured, the workflow also publishes the compressed
+report JSON to Vercel Blob under the separate `awfy/` namespace. The default
+paths are `awfy/runs/<artifactId>/report.json.gz` and
+`awfy/daily/<YYYY-MM-DD>.json`.
+
+When comparing two Goccia binaries, pass `--goccia-baseline` and
+`--goccia-candidate`; the driver interleaves baseline and candidate samples per
+target and repetition. Runtime claims for #862 should use this interleaved
+shape, not sequential baseline-then-candidate batches.
+
+Profiler-backed runs stay separate from timing. For selected Goccia outliers or
+diagnostic probes, add `--profile=opcodes|functions|all --profile-dir=<dir>` and
+run a dedicated diagnostic pass; do not mix profiled timings into ratio claims.
+
+### Issue Acceptance Criteria
+
+Issue #856 is complete when AWFY JavaScript benchmarks run under GocciaScript
+bytecode, QuickJS, and the latest Node Current release from the same driver;
+reports retain raw samples and derived statistics; verification/checksum results
+agree or fail explicitly; timeout, crash, and OOM are first-class outcomes;
+metadata is sufficient to reproduce the run; and at least one Goccia AWFY outlier
+can be rerun with opcode/function profiles attached.
+
+Issue #862 should use `perf/probes/` as implementation gates for dispatch,
+primitive lowering, call path, string/RegExp cliffs, typed-array call/return
+boxing, and inline-cache shape behavior. AWFY and web-tooling remain
+roadmap-level transfer proof. Allocation reductions are supporting evidence
+only; they do not prove a runtime win without interleaved timing movement and
+profile evidence for the mechanism.
+
+## JetStream 3 Reference Lane
+
+The JetStream lane supplements AWFY with a frozen set of modern, pure-JavaScript
+workloads from [`WebKit/JetStream`](https://github.com/WebKit/JetStream). It is a
+directional reference-engine barometer, not an attempt to reproduce the official
+browser suite or rank runtimes with different goals.
+
+```bash
+# List the frozen workload set
+node scripts/jetstream-driver.js --list
+
+# Run one workload from the pinned upstream checkout
+node scripts/jetstream-driver.js \
+  --jetstream-dir /path/to/JetStream \
+  --benchmark hash-map \
+  --repetitions 1 \
+  --engines goccia,qjs,node \
+  --output tmp/jetstream-report.json
+
+# Run the retained CI report contract
+node scripts/jetstream-ci-report.js \
+  --jetstream-dir /path/to/JetStream \
+  --output tmp/jetstream-report.json
+```
+
+`perf/jetstream/manifest.json` pins JetStream 3.0 commit
+`b7babdf323e64e69bd2f6c376189c15825f5c73a`, driver version, process
+repetitions, and these six workloads: `hash-map`, `ai-astar`, `gaussian-blur`,
+`raytrace-public-class-fields`, `sync-fs`, and `lazy-collections`. The selection
+covers collections, control flow, numeric/array work, public class fields,
+generators, and iterators without requiring Wasm, DOM, workers, a host filesystem,
+or a second copy of the Web Tooling lane. The private-field raytrace variant is
+excluded because it does not complete inside the diagnostic time budget.
+
+### Updating the JetStream Pin
+
+`.github/workflows/jetstream-bump.yml` checks WebKit/JetStream `main` weekly,
+updates the manifest and current pin reference with
+`scripts/jetstream-bump-pin.ts`, and opens an automated PR only when
+the SHA changes. PR CI runs the complete frozen subset before merge.
+
+The driver concatenates the listed upstream files unchanged into one generated
+shell entry per workload. The generic adapter supplies timing, deterministic
+randomness where the manifest requests it, and result serialization. Each suite
+iteration uses JetStream's First/Worst/Average subscore formula; CI deliberately
+uses three suite iterations and five process repetitions. Therefore the result is
+a stable GocciaScript project measurement, not an official full-suite JetStream
+score.
+
+Reports retain raw scores, subscores, medians, IQR/min/max/CV, explicit upstream
+validation availability and outcomes, failure stdout/stderr, corpus and driver
+versions, per-binary Goccia source revisions/FPC, and QuickJS/Node versions.
+Workloads without an upstream `validate()` hook are labeled `execution-only`; the
+adapter does not invent a checksum or claim that validation passed. Timeouts,
+crashes, OOMs, missing results, and verification failures remain structurally
+valid report rows and fail the CI gate after the artifact and main-branch Blob
+pointer have been written. CI runs one workload per parallel shard, preserving
+repetition-to-engine interleaving inside each workload, then validates metadata
+and recomputes geomean ratios in manifest order. Shards checkpoint after every
+sample so an outer cancellation still leaves diagnostic report data.
+
+The public Performance Barometer normalizes both external lanes so `1.00×` means
+aligned performance and values above one mean GocciaScript was proportionally
+slower. AWFY uses `Goccia time / reference time`; JetStream uses
+`reference score / Goccia score`. QuickJS and Node.js stay separate reference
+engines. Main publishes JetStream reports under the independent `jetstream/`
+Blob namespace, and `/performance` combines their history with AWFY. Daily
+pointers carry the normalized timeline summary, so the dashboard reads retained
+history without downloading every full report; only the latest report is fetched
+for the workload-detail tables. Trend lines break when corpus, subset, driver, or
+reference-engine versions change. Failed runs remain visible as gaps; the most
+recent complete point is labeled stale instead of being silently carried forward.
+
+## Web Tooling Goccia Lane
+
+The Web Tooling lane runs the pinned
+[`v8/web-tooling-benchmark`](https://github.com/v8/web-tooling-benchmark)
+corpus under GocciaScript only. Unlike AWFY, this is not a reference-engine
+comparison lane: it is a real-world tooling viability probe for GocciaScript.
+Node is used only as the upstream build tool for Webpack, not as a measured
+engine.
+
+Use `scripts/web-tooling-driver.js` for #857 investigation:
+
+```bash
+# List pinned Web Tooling workload names
+node scripts/web-tooling-driver.js --list
+
+# Run one workload from a local upstream checkout
+node scripts/web-tooling-driver.js \
+  --web-tooling-dir /path/to/web-tooling-benchmark \
+  --workload acorn \
+  --repetitions 1 \
+  --output tmp/web-tooling-report.json
+
+# Run the CI report set, which includes every pinned upstream workload
+node scripts/web-tooling-ci-report.js \
+  --web-tooling-dir /path/to/web-tooling-benchmark \
+  --output tmp/web-tooling-report.json
+```
+
+`perf/web-tooling/manifest.json` records the upstream repository, pinned commit,
+driver version, and the full workload list. The CI report set is intentionally
+all pinned upstream workloads: `acorn`, `babel`, `babel-minify`, `babylon`,
+`buble`, `chai`, `coffeescript`, `espree`, `esprima`, `jshint`, `lebab`,
+`postcss`, `prepack`, `prettier`, `source-map`, `terser`, `typescript`, and
+`uglify-js`.
+
+### Updating the Web Tooling Pin
+
+`.github/workflows/web-tooling-bump.yml` checks
+`v8/web-tooling-benchmark` `master` weekly, updates the manifest with
+`scripts/web-tooling-bump-pin.ts`, and opens an automated PR only when the SHA
+changes. PR CI runs every pinned workload before merge.
+
+The driver prepares upstream's generated Terser/UglifyJS self-bundles, then
+generates one static entry and payload-only `fs.readFile`/`fs.readFileSync` adapter per
+workload. Webpack therefore includes only the selected upstream benchmark
+module, its tooling dependency, and the `third_party` files named by that
+module. The generated entry times one direct call to the module's exported
+`fn()`; process repetitions provide the raw samples, so Benchmark.js and its
+Lodash-based measurement machinery are not part of the measured bundle.
+
+Each bundle runs with `GocciaScriptLoader` in bytecode mode and the broad
+ECMAScript compatibility flag set used for legacy tooling bundles. Every
+workload has a five-minute process ceiling. A workload-specific override can be
+pinned in the manifest only when a future corpus change has a documented reason
+to exceed that shared budget.
+PostCSS also runs with a 25 MB managed-heap ceiling so VM pressure collections
+occur before the hosted runner's process-memory limit.
+A workload build failure, timeout, crash,
+OOM, or missing benchmark result is recorded as data in the JSON report; the CI
+runner itself fails only when it cannot produce a complete report entry for
+every manifest workload.
+
+The normalized report records:
+
+- raw Goccia samples for every workload/repetition
+- median, IQR-filtered median, min/max, and coefficient of variation for
+  reported `runs/s`
+- first-class build-failed, timeout, crash, OOM, and missing-result outcomes
+- Goccia commit, FPC version, platform, architecture, compatibility flags, Web
+  Tooling corpus SHA, direct-invocation harness metadata, and driver version
+
+Pull requests run the same all-workload report on the PR x64 build, with one
+workload per CI matrix job and a final merge step. The workflow uploads the
+normalized `web-tooling-report` JSON artifact and posts a
+`Web Tooling Benchmark` PR comment with per-workload status and Goccia `runs/s`
+where available. Full CI uploads the same artifact on every run. On `main`, when
+`BLOB_READ_WRITE_TOKEN` is configured, the workflow also publishes the compressed
+report JSON to Vercel Blob under the separate `web-tooling/` namespace. The
+default paths are `web-tooling/runs/<artifactId>/report.json.gz` and
+`web-tooling/daily/<YYYY-MM-DD>.json`.

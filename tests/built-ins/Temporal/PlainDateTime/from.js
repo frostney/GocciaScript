@@ -37,6 +37,16 @@ describe.runIf(isTemporal)("Temporal.PlainDateTime.from", () => {
     expect(dt.hour).toBe(0);
   });
 
+  test("from reads calendar without probing calendarId", () => {
+    const fields = { year: 2024, month: 3, day: 15, calendar: "iso8601" };
+    Object.defineProperty(fields, "calendarId", {
+      get() {
+        throw new Error("calendarId must not be read");
+      }
+    });
+    expect(Temporal.PlainDateTime.from(fields).toString()).toBe("2024-03-15T00:00:00");
+  });
+
   test("from() accepts +000000 as year zero", () => {
     const dt = Temporal.PlainDateTime.from("+000000-03-31T00:45");
     expect(dt.year).toBe(0);

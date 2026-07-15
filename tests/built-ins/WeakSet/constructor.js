@@ -129,6 +129,44 @@ test("WeakSet constructor closes iterator on abrupt completion", () => {
   expect(closed).toBe(true);
 });
 
+test("WeakSet constructor does not close iterator when next throws", () => {
+  const sentinel = new Error("next failed");
+  let closed = false;
+  const iterable = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          throw sentinel;
+        },
+        return() {
+          closed = true;
+          return {};
+        },
+      };
+    },
+  };
+
+  try {
+    new WeakSet(iterable);
+    throw new Error("expected WeakSet constructor to throw");
+  } catch (error) {
+    expect(error).toBe(sentinel);
+  }
+  expect(closed).toBe(false);
+});
+
+test("WeakSet constructor observes native iterator @@iterator overrides", () => {
+  const iterator = [][Symbol.iterator]();
+  Object.defineProperty(iterator, Symbol.iterator, {
+    configurable: true,
+    value() {
+      return 1;
+    },
+  });
+
+  expect(() => new WeakSet(iterator)).toThrow(TypeError);
+});
+
 test("WeakSet.prototype.constructor is WeakSet", () => {
   expect(WeakSet.prototype.constructor).toBe(WeakSet);
   expect(new WeakSet().constructor).toBe(WeakSet);

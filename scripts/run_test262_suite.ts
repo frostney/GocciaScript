@@ -122,13 +122,15 @@ function parseTest(source: string): ParsedTest {
   if (open < 0 || close < 0) {
     return { body: source, meta: { flags: [], includes: [], features: [] } };
   }
-  const blockStart = source.indexOf("\n", open) + 1;
-  const yaml = source.slice(blockStart, close).trimEnd();
+  const blockStart = frontmatterContentStart(source, open);
+  const yaml = source.slice(blockStart, close).replace(/\r\n?/g, "\n").trimEnd();
   const cleaned = stripUnreadFields(yaml);
   const parsed = (Bun.YAML.parse(cleaned) || {}) as any;
 
   const before = source.slice(0, open).trimEnd();
-  const after = source.slice(close + FRONTMATTER_CLOSE.length).replace(/^\n+/, "");
+  const after = source
+    .slice(close + FRONTMATTER_CLOSE.length)
+    .replace(/^(?:\r\n|[\r\n])+/, "");
   const body = (before + "\n" + after).replace(/^\n+/, "");
 
   return {
@@ -145,6 +147,13 @@ function parseTest(source: string): ParsedTest {
   };
 }
 
+function frontmatterContentStart(source: string, open: number): number {
+  const afterOpen = open + FRONTMATTER_OPEN.length;
+  if (source.startsWith("\r\n", afterOpen)) return afterOpen + 2;
+  if (source[afterOpen] === "\n" || source[afterOpen] === "\r") return afterOpen + 1;
+  return afterOpen;
+}
+
 // Walk the frontmatter line-by-line; copy through any block whose
 // top-level key is one we care about, drop the rest.  A "block" is a
 // line that starts in column 0 with `<key>:` plus all following lines
@@ -152,7 +161,7 @@ function parseTest(source: string): ParsedTest {
 function stripUnreadFields(yaml: string): string {
   const out: string[] = [];
   let inKept = false;
-  for (const line of yaml.split("\n")) {
+  for (const line of yaml.split(/\r\n|[\n\r]/)) {
     if (line.length === 0 || line.startsWith(" ") || line.startsWith("\t") ||
         line.startsWith("#")) {
       // Continuation of whatever block we're currently in (or comment).
@@ -800,23 +809,41 @@ async function spawnBareWithTimeout(
   const start = performance.now();
   const ac = new AbortController();
   let timedOut = false;
+  let tempSourceDir: string | null = null;
   const timer = setTimeout(() => {
     timedOut = true;
     ac.abort();
   }, wallClockMs);
   try {
-    const proc = Bun.spawn([bare, ...args], {
-      stdin: new Blob([stdin]),
+    const command = [bare, ...args];
+    const spawnOptions: any = {
       stdout: "pipe",
       stderr: "pipe",
       signal: ac.signal,
-    });
+    };
+    if (stdin.includes("\r")) {
+      tempSourceDir = mkdtempSync(join(tmpdir(), "goccia-test262-source."));
+      const sourcePath = join(tempSourceDir, "test.js");
+      writeFileSync(sourcePath, stdin);
+      const stdinArgIndex = command.lastIndexOf("-");
+      if (stdinArgIndex >= 0) {
+        command[stdinArgIndex] = sourcePath;
+      } else {
+        command.push(sourcePath);
+      }
+      spawnOptions.stdin = "ignore";
+    } else {
+      spawnOptions.stdin = new Blob([stdin]);
+    }
+
+    const proc = Bun.spawn(command, spawnOptions);
     const [stdout, stderr] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
     ]);
     await proc.exited;
     clearTimeout(timer);
+    if (tempSourceDir) rmSync(tempSourceDir, { recursive: true, force: true });
     return {
       exitCode: proc.exitCode,
       signalCode: proc.signalCode as NodeJS.Signals | null,
@@ -827,6 +854,7 @@ async function spawnBareWithTimeout(
     };
   } catch (err) {
     clearTimeout(timer);
+    if (tempSourceDir) rmSync(tempSourceDir, { recursive: true, force: true });
     if (ac.signal.aborted) timedOut = true;
     return {
       exitCode: null,

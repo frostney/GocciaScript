@@ -124,12 +124,10 @@ type
   TGocciaIdentifierExpression = class(TGocciaExpression)
   private
     FName: string;
-    FParenthesized: Boolean;
   public
     constructor Create(const AName: string; const ALine, AColumn: Integer);
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Name: string read FName;
-    property Parenthesized: Boolean read FParenthesized write FParenthesized;
   end;
 
   TGocciaBinaryExpression = class(TGocciaExpression)
@@ -1074,7 +1072,6 @@ constructor TGocciaIdentifierExpression.Create(const AName: string;
 begin
   inherited Create(ALine, AColumn);
   FName := AName;
-  FParenthesized := False;
 end;
 
 { TGocciaBinaryExpression }
@@ -2143,7 +2140,7 @@ end;
 
 function ToNumericValue(const AValue: TGocciaValue): TGocciaValue; inline;
 begin
-  Result := ToPrimitive(AValue);
+  Result := ToPrimitive(AValue, tphNumber);
   if not (Result is TGocciaBigIntValue) then
     Result := Result.ToNumberLiteral;
 end;
@@ -2332,7 +2329,8 @@ end;
 // ES2026 §13.3.12.1 ImportMeta : import . meta
 function TGocciaImportMetaExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
-  Result := GetOrCreateImportMeta(AContext.CurrentFilePath);
+  Result := GetOrCreateImportMeta(AContext.CurrentFilePath,
+    AContext.ResolveModuleURL);
 end;
 
 // ES2026 §13.3.12.1 NewTarget : new . target

@@ -50,6 +50,24 @@ describe("Set.prototype.isDisjointFrom", () => {
     expect(hasCalls).toBe(0);
   });
 
+  test("visits members appended by the set-like has callback", () => {
+    const receiver = new Set([1]);
+    const seen = [];
+    const setLike = {
+      size: 2,
+      has(value) {
+        seen.push(value);
+        if (value === 1) receiver.add(2);
+        return false;
+      },
+      keys() {
+        return [].values();
+      },
+    };
+    expect(receiver.isDisjointFrom(setLike)).toBe(true);
+    expect(seen).toEqual([1, 2]);
+  });
+
   test("throws TypeError when called on non-Set", () => {
     const isDisjointFrom = Set.prototype.isDisjointFrom;
     expect(() => isDisjointFrom.call(Set.prototype, new Set())).toThrow(TypeError);

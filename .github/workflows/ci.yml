@@ -587,6 +587,8 @@ jobs:
         run: chmod +x build/*
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          no-cache: true
 
       - name: Read test262 pin
         id: test262-pin
@@ -710,6 +712,401 @@ jobs:
             --markdown ../test262-profile-aggregate.md \
             --details-archive ../test262-profile-details.tar.gz
 
+  awfy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          no-cache: true
+
+      - name: Set up latest Node.js reference
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: current
+          package-manager-cache: false
+
+      - name: Install QuickJS
+        run: bash ./.github/scripts/install-quickjs.sh
+
+      - name: Download build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: gocciascript-x86_64-linux
+          path: build/
+
+      - name: Make binaries executable
+        run: chmod +x build/*
+
+      - name: Read AWFY pin
+        id: awfy-pin
+        run: |
+          sha="$(node -e "const m = require('./perf/awfy/manifest.json'); process.stdout.write(m.awfy.commit)")"
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid AWFY pin in perf/awfy/manifest.json"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout AWFY corpus
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: smarr/are-we-fast-yet
+          ref: ${{ steps.awfy-pin.outputs.sha }}
+          path: awfy-suite
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check AWFY driver helpers
+        run: node scripts/test-awfy-driver.js
+
+      - name: Run AWFY report
+        id: awfy-report
+        continue-on-error: true
+        run: |
+          node scripts/awfy-ci-report.js \
+            --awfy-dir awfy-suite/benchmarks/JavaScript \
+            --output awfy-report.json
+
+      - name: Upload AWFY report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: awfy-report
+          retention-days: 30
+          if-no-files-found: ignore
+          path: awfy-report.json
+
+      - name: Publish AWFY report
+        if: always() && github.ref == 'refs/heads/main' && hashFiles('awfy-report.json') != ''
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          AWFY_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
+        run: |
+          if [ -z "${BLOB_READ_WRITE_TOKEN:-}" ]; then
+            echo "BLOB_READ_WRITE_TOKEN is not configured; skipping AWFY publish."
+            exit 0
+          fi
+          cd website
+          bun install --frozen-lockfile
+          bun run publish-awfy ../awfy-report.json
+
+      - name: Fail when AWFY validation failed
+        if: steps.awfy-report.outcome == 'failure'
+        run: exit 1
+
+  jetstream-plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.workloads.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Check JetStream driver helpers
+        run: node scripts/test-jetstream-driver.js
+
+      - name: Read JetStream workload matrix
+        id: workloads
+        run: |
+          matrix="$(node -e "const m = require('./perf/jetstream/manifest.json'); process.stdout.write(JSON.stringify({ include: m.ciReport.benchmarks.map(workload => ({ workload })) }))")"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  jetstream-workload:
+    name: jetstream-workload (${{ matrix.workload }})
+    needs: [build, jetstream-plan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.jetstream-plan.outputs.matrix) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up latest Node.js reference
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: current
+          package-manager-cache: false
+
+      - name: Install QuickJS
+        run: bash ./.github/scripts/install-quickjs.sh
+
+      - name: Download build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: gocciascript-x86_64-linux
+          path: build/
+
+      - name: Make binaries executable
+        run: chmod +x build/*
+
+      - name: Read JetStream pin
+        id: jetstream-pin
+        run: |
+          sha="$(node -e "const m = require('./perf/jetstream/manifest.json'); process.stdout.write(m.jetStream.commit)")"
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid JetStream pin in perf/jetstream/manifest.json"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout JetStream corpus
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: WebKit/JetStream
+          ref: ${{ steps.jetstream-pin.outputs.sha }}
+          path: jetstream-suite
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /LICENSE
+            /README.md
+            /simple/hash-map.js
+            /SeaMonster/ai-astar.js
+            /SeaMonster/gaussian-blur.js
+            /class-fields/raytrace-public-class-fields.js
+            /generators/sync-file-system.js
+            /generators/lazy-collections.js
+
+      - name: Run JetStream workload report
+        env:
+          WORKLOAD: ${{ matrix.workload }}
+        run: |
+          node scripts/jetstream-ci-report.js \
+            --jetstream-dir jetstream-suite \
+            --benchmark "$WORKLOAD" \
+            --goccia-commit "${{ github.sha }}" \
+            --output "jetstream-report-$WORKLOAD.json"
+
+      - name: Upload JetStream workload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: jetstream-report-${{ matrix.workload }}
+          retention-days: 30
+          if-no-files-found: ignore
+          path: jetstream-report-${{ matrix.workload }}.json
+
+  jetstream:
+    needs: jetstream-workload
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          no-cache: true
+
+      - name: Download JetStream workload reports
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: jetstream-report-*
+          path: jetstream-reports
+          merge-multiple: true
+
+      - name: Merge JetStream report
+        id: jetstream-merge
+        continue-on-error: true
+        run: |
+          node scripts/jetstream-merge-reports.js \
+            --output jetstream-report.json \
+            jetstream-reports/*.json
+
+      - name: Upload JetStream report
+        if: always() && hashFiles('jetstream-report.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: jetstream-report
+          retention-days: 30
+          path: jetstream-report.json
+
+      - name: Publish JetStream report
+        if: always() && github.ref == 'refs/heads/main' && hashFiles('jetstream-report.json') != ''
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          JETSTREAM_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
+        run: |
+          if [ -z "${BLOB_READ_WRITE_TOKEN:-}" ]; then
+            echo "BLOB_READ_WRITE_TOKEN is not configured; skipping JetStream publish."
+            exit 0
+          fi
+          cd website
+          bun install --frozen-lockfile
+          bun run publish-jetstream ../jetstream-report.json
+
+      - name: Fail when JetStream validation failed
+        if: steps.jetstream-merge.outcome == 'failure'
+        run: exit 1
+
+  web-tooling-plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.workloads.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Check Web Tooling driver helpers
+        run: node scripts/test-web-tooling-driver.js
+
+      - name: Read Web Tooling workload matrix
+        id: workloads
+        run: |
+          matrix="$(node -e "const m = require('./perf/web-tooling/manifest.json'); const { workloadTimeoutMs } = require('./scripts/web-tooling-ci-report.js'); process.stdout.write(JSON.stringify({ include: m.ciReport.workloads.map(workload => ({ workload, timeoutMinutes: Math.ceil(workloadTimeoutMs(m.ciReport, workload) / 60000) + 15 })) }))")"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  web-tooling-workload:
+    name: web-tooling-workload (${{ matrix.workload }})
+    needs: [build, web-tooling-plan]
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeoutMinutes }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.web-tooling-plan.outputs.matrix) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up latest Node.js tooling runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: current
+          package-manager-cache: false
+
+      - name: Download build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: gocciascript-x86_64-linux
+          path: build/
+
+      - name: Make binaries executable
+        run: chmod +x build/*
+
+      - name: Read Web Tooling pin
+        id: web-tooling-pin
+        run: |
+          sha="$(node -e "const m = require('./perf/web-tooling/manifest.json'); process.stdout.write(m.webTooling.commit)")"
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid Web Tooling pin in perf/web-tooling/manifest.json"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout Web Tooling corpus
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: v8/web-tooling-benchmark
+          ref: ${{ steps.web-tooling-pin.outputs.sha }}
+          path: web-tooling-suite
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install Web Tooling dependencies
+        working-directory: web-tooling-suite
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Run Web Tooling report
+        env:
+          WORKLOAD: ${{ matrix.workload }}
+        run: |
+          node scripts/web-tooling-ci-report.js \
+            --web-tooling-dir web-tooling-suite \
+            --workload "$WORKLOAD" \
+            --output "web-tooling-report-$WORKLOAD.json"
+
+      - name: Upload Web Tooling workload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: web-tooling-report-${{ matrix.workload }}
+          retention-days: 30
+          if-no-files-found: ignore
+          path: web-tooling-report-${{ matrix.workload }}.json
+
+  web-tooling:
+    needs: web-tooling-workload
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          no-cache: true
+
+      - name: Download Web Tooling workload reports
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: web-tooling-report-*
+          path: web-tooling-reports
+          merge-multiple: true
+
+      - name: Merge Web Tooling report
+        run: |
+          node scripts/web-tooling-merge-reports.js \
+            --output web-tooling-report.json \
+            web-tooling-reports/*.json
+
+      - name: Upload Web Tooling report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: web-tooling-report
+          retention-days: 30
+          path: web-tooling-report.json
+
+      - name: Publish Web Tooling report
+        if: github.ref == 'refs/heads/main' && hashFiles('web-tooling-report.json') != ''
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          WEB_TOOLING_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
+        run: |
+          if [ -z "${BLOB_READ_WRITE_TOKEN:-}" ]; then
+            echo "BLOB_READ_WRITE_TOKEN is not configured; skipping Web Tooling publish."
+            exit 0
+          fi
+          cd website
+          bun install --frozen-lockfile
+          bun run publish-web-tooling ../web-tooling-report.json
+
   benchmark:
     needs: build
     strategy:
@@ -823,6 +1220,8 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && matrix.mode == 'bytecode'
+        with:
+          no-cache: true
 
       - name: Capture deterministic profile baseline
         if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && matrix.mode == 'bytecode'
@@ -956,7 +1355,7 @@ jobs:
           }
 
   artifacts:
-    needs: [test, toml-compliance, json5-compliance, benchmark, cli]
+    needs: [test, toml-compliance, json5-compliance, awfy, jetstream, web-tooling, benchmark, cli]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     strategy:
@@ -991,7 +1390,7 @@ jobs:
           path: release-artifacts/*
 
   nightly:
-    needs: [test, toml-compliance, json5-compliance, benchmark, cli]
+    needs: [test, toml-compliance, json5-compliance, awfy, jetstream, web-tooling, benchmark, cli]
     if: github.ref == 'refs/heads/main'
     concurrency:
       group: nightly-release
@@ -1091,7 +1490,7 @@ jobs:
             gocciascript-nightly-*.tar.gz gocciascript-nightly-*.zip
 
   release:
-    needs: [test, toml-compliance, json5-compliance, benchmark, cli]
+    needs: [test, toml-compliance, json5-compliance, awfy, jetstream, web-tooling, benchmark, cli]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:

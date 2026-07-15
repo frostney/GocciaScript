@@ -39,9 +39,76 @@ test("division in initializer remains division", () => {
   expect(result).toEqual([2, 3, 4]);
 });
 
+test("division does not hide the header semicolon during lookahead", () => {
+  let elapsed = 2;
+  let scale = 2;
+  let result = 0;
+  for (result = elapsed / scale; result < elapsed / scale + 1; result++);
+  expect(result).toBe(2);
+});
+
 test("regex in initializer remains a regex literal", () => {
   let matched = false;
   for (let pattern = /\)/; !matched; matched = true) {
     expect(pattern.test(")")).toBe(true);
   }
+});
+
+test("nested function bodies restore the in operator in initializers", () => {
+  let arrow;
+  let holder;
+
+  for (arrow = () => { return "x" in { x: true }; }; false;) {}
+  for (holder = { check() { return "x" in { x: true }; } }; false;) {}
+
+  expect(arrow()).toBe(true);
+  expect(holder.check()).toBe(true);
+});
+
+test("nested function parameters restore the in operator in initializers", () => {
+  let arrow;
+  let holder;
+
+  for (arrow = (value = "x" in { x: true }) => value; false;) {}
+  for (holder = {
+    check(value = "x" in { x: true }) {
+      return value;
+    },
+  }; false;) {}
+
+  expect(arrow()).toBe(true);
+  expect(holder.check()).toBe(true);
+});
+
+test("nested [+In] grammar productions restore the in operator in initializers", () => {
+  const scope = { marker: true };
+  let value;
+
+  for (value = true ? "marker" in scope : false; false;) {}
+  expect(value).toBe(true);
+
+  for (value = ["marker" in scope][0]; false;) {}
+  expect(value).toBe(true);
+
+  for (value = { result: "marker" in scope }.result; false;) {}
+  expect(value).toBe(true);
+
+  for (value = `${"marker" in scope}`; false;) {}
+  expect(value).toBe("true");
+
+  for (value = { get ["marker" in scope]() { return "object"; } }[true]; false;) {}
+  expect(value).toBe("object");
+
+  for (value = new (class {
+    get ["marker" in scope]() { return "instance"; }
+  })()[true]; false;) {}
+  expect(value).toBe("instance");
+
+  for (value = class {
+    static get ["marker" in scope]() { return "static"; }
+  }[true]; false;) {}
+  expect(value).toBe("static");
+
+  for (value = false && import("unused", "marker" in scope); false;) {}
+  expect(value).toBe(false);
 });

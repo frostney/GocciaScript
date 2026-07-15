@@ -57,6 +57,7 @@ type
     procedure TestAwaitSlashLookaheadStopsAtUnicodeLineTerminators;
     procedure TestNumericSeparatorsNormalize;
     procedure TestTemplateInterpolationTracksLineTerminators;
+    procedure TestTemplateLineContinuationRawNormalizesTerminators;
     procedure TestUnicodeEscapeOverflowRaisesLexerError;
   public
     procedure SetupTests; override;
@@ -89,6 +90,8 @@ begin
     TestAwaitSlashLookaheadStopsAtUnicodeLineTerminators);
   Test('Numeric separators normalize', TestNumericSeparatorsNormalize);
   Test('Template interpolation tracks line terminators', TestTemplateInterpolationTracksLineTerminators);
+  Test('Template line-continuation raw strings normalize line terminators',
+    TestTemplateLineContinuationRawNormalizesTerminators);
   Test('Unicode escape overflow raises lexer error', TestUnicodeEscapeOverflowRaisesLexerError);
 end;
 
@@ -694,6 +697,32 @@ begin
     Expect<TGocciaTokenType>(Tokens[5].TokenType).ToBe(gttConst);
     Expect<Integer>(Tokens[5].Line).ToBe(2);
     Expect<Integer>(Tokens[5].Column).ToBe(9);
+  finally
+    Lexer.Free;
+  end;
+end;
+
+procedure TLexerTests.TestTemplateLineContinuationRawNormalizesTerminators;
+const
+  TEMPLATE_RAW_SEPARATOR = #1;
+  UTF8_LINE_SEPARATOR = #$E2#$80#$A8;
+  UTF8_PARAGRAPH_SEPARATOR = #$E2#$80#$A9;
+var
+  ExpectedRaw: string;
+  Lexer: TGocciaLexer;
+  Token: TGocciaToken;
+begin
+  ExpectedRaw := '\' + #10 + '\' + #10 + '\' + #10 + '\' +
+    UTF8_LINE_SEPARATOR + '\' + UTF8_PARAGRAPH_SEPARATOR;
+  Lexer := TGocciaLexer.Create('`\' + #13 + '\' + #13#10 + '\' + #10 +
+    '\' + UTF8_LINE_SEPARATOR + '\' + UTF8_PARAGRAPH_SEPARATOR + '`',
+    '<test>');
+  try
+    Token := Lexer.ScanNextToken(glgInputElementRegExp);
+    Expect<TGocciaTokenType>(Token.TokenType).ToBe(gttTemplate);
+    Expect<string>(Token.Lexeme).ToBe(TEMPLATE_RAW_SEPARATOR + ExpectedRaw);
+    Token := Lexer.ScanNextToken(glgInputElementRegExp);
+    Expect<TGocciaTokenType>(Token.TokenType).ToBe(gttEOF);
   finally
     Lexer.Free;
   end;

@@ -26,6 +26,18 @@ _Avoid_: Engine, VM.
 An installable host or special-purpose feature added to a runtime, such as console, fetch, data-format globals, testing, benchmarking, or FFI.
 _Avoid_: Core language built-in when the feature belongs to the optional runtime surface.
 
+**Virtual module**:
+An ECMAScript module whose content is supplied explicitly through host configuration instead of loaded from the ambient filesystem. Virtual modules use the same resolution, linking, evaluation, and caching semantics as other modules.
+_Avoid_: Global module, in-memory module when the configuration mechanism is the defining property.
+
+**Host module**:
+An ECMAScript module or module provider registered programmatically by an embedding host. A host module may expose host-created values while participating in the ordinary module lifecycle.
+_Avoid_: Global module, runtime module when the module is registered directly by an embedder.
+
+**Runtime module**:
+An import-only module installed by a runtime extension, such as a `goccia:` data-format module.
+_Avoid_: Runtime global, host module.
+
 **Runtime profile**:
 A named bundle of runtime extensions used by a CLI host or embedding host.
 _Avoid_: Mode, preset.
@@ -34,9 +46,21 @@ _Avoid_: Mode, preset.
 The aggregate JavaScript-visible capability set installed by a runtime profile or by individual runtime extensions. Use it when discussing what a host exposes overall; use runtime global, runtime extension, or runtime profile when naming the concrete mechanism.
 _Avoid_: Runtime, built-in surface, host surface.
 
+**Host environment**:
+The engine-owned module that supplies JavaScript-observable time, time zone, and randomness. Hosts may inject its clock and RNG adapters; infrastructure timing is not part of the host environment.
+_Avoid_: Runtime surface, global clock, `TimingUtils` when referring to script-visible values.
+
 **Seed baseline**:
 An explicitly imported snapshot used to initialise a sandbox-visible filesystem. Top-level sandbox seeds copy from host paths or inline seed config entries; nested child sandbox seeds copy from the parent virtual filesystem or inline child entries. A seed baseline is not a live mount and does not make the source path ambiently available to running source.
 _Avoid_: Mount, host filesystem access.
+
+**Metadata diff**:
+An opt-in sandbox diff dimension that reports timestamp changes independently from content and namespace changes. It compares a path's access, modification, change, and birth timestamps against the seed baseline without turning timestamp-only activity into a content modification.
+_Avoid_: Default diff, content diff.
+
+**Sandbox filesystem error**:
+A JavaScript `Error` reported by a sandbox runtime extension when a virtual filesystem operation fails. It carries a stable error code and operation/path context plus a target-appropriate numeric errno. It is shared by synchronous and promise APIs, and by callback APIs when installed.
+_Avoid_: Raw virtual filesystem exception, host filesystem error.
 
 **WinterTC compatibility**:
 The open product direction of aligning selected runtime globals and host behavior with web-interoperable server runtime standards, especially WinterTC's Minimum Common Web API. It is distinct from Node.js host compatibility, CommonJS support, and `node:` built-ins.
@@ -67,6 +91,10 @@ _Avoid_: Polyfill, compatibility flag.
 **Execution mode**:
 The selected way to execute source: interpreter mode or bytecode mode.
 _Avoid_: Runtime, runtime profile.
+
+**Deterministic execution**:
+An engine profile in which JavaScript-observable time is frozen at the Unix epoch, the time zone is UTC, and randomness comes from a fixed portable seed. Infrastructure clocks remain live, and child realms receive distinct reproducible random streams.
+_Avoid_: Deterministic profiling, frozen timeout clock, seeded sandbox filesystem.
 
 **Executor**:
 The implementation object behind an execution mode. GocciaScript has an interpreter executor and a bytecode executor.
@@ -173,6 +201,22 @@ _Avoid_: Loader profile.
 **Test262 host capability**:
 A JavaScript-visible hook exposed on the `Goccia` namespace only when a CLI host opts into the test262 conformance contract, such as `GocciaScriptLoaderBare --test262-host`. It is not a core language built-in and not part of the normal runtime surface.
 _Avoid_: Runtime global, compatibility flag.
+
+**Performance Barometer**:
+The public, directional view of GocciaScript performance against selected reference engines using retained, versioned benchmark reports. It is a north-star aid, not a product ranking.
+_Avoid_: Leaderboard, competitor comparison.
+
+**Reference engine**:
+An independently developed JavaScript engine or runtime measured beside GocciaScript to provide external scale and trend context. A reference engine is not assumed to share GocciaScript's goals or constraints.
+_Avoid_: Competitor, baseline engine.
+
+**Reference ratio**:
+A dimensionless comparison normalized so `1.00×` means aligned performance and a value above `1.00×` means GocciaScript was proportionally slower. For elapsed-time suites it is Goccia time divided by reference time; for score suites it is reference score divided by Goccia score.
+_Avoid_: Speedup, ranking score.
+
+**North-star trend**:
+The retained direction of compatible reference-ratio measurements over time. A trend line breaks when the corpus, subset, driver, or reference-engine version changes rather than implying continuity across different measurement contracts.
+_Avoid_: Release gate, competitive ranking.
 
 **Bundler**:
 The CLI host that compiles source to `.gbc` artifacts without executing the program.

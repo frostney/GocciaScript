@@ -82,6 +82,7 @@ type
     procedure TestConstPropagationSkipsGlobalBacked;
     procedure TestInferredNumericLocalsUseTypedArithmetic;
     procedure TestAnnotatedParametersUseTypedArithmetic;
+    procedure TestGenericAdditionDefersToPrimitiveToOpcode;
     procedure TestAssignmentClearsStaleNumericHint;
     procedure TestGlobalBackedAssignmentClearsStaleNumericHint;
     procedure TestShortCircuitAssignmentClearsStaleNumericHint;
@@ -127,6 +128,8 @@ begin
   Test('Const propagation skips global-backed bindings', TestConstPropagationSkipsGlobalBacked);
   Test('Inferred numeric locals use typed arithmetic', TestInferredNumericLocalsUseTypedArithmetic);
   Test('Annotated parameters use typed arithmetic', TestAnnotatedParametersUseTypedArithmetic);
+  Test('Generic addition defers ToPrimitive to opcode',
+    TestGenericAdditionDefersToPrimitiveToOpcode);
   Test('Assignment clears stale numeric hint', TestAssignmentClearsStaleNumericHint);
   Test('Global-backed assignment clears stale numeric hint', TestGlobalBackedAssignmentClearsStaleNumericHint);
   Test('Short-circuit assignment clears stale numeric hint', TestShortCircuitAssignmentClearsStaleNumericHint);
@@ -774,6 +777,21 @@ begin
       Expect<Integer>(CountOp(Func, OP_ADD_FLOAT)).ToBe(1);
       Expect<Integer>(CountOp(Func, OP_ADD)).ToBe(0);
     end;
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestGenericAdditionDefersToPrimitiveToOpcode;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let a = {}; let b = {}; a + b;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_TO_PRIMITIVE)).ToBe(0);
   finally
     Module.Free;
   end;

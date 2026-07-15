@@ -9,6 +9,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.SharedPrototype,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
@@ -46,6 +47,8 @@ type
     procedure SweepWeakReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
+    class function GetSharedPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; static;
 
     property Entries: TGocciaWeakMapStorage read FEntries;
   end;
@@ -60,7 +63,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
-  Goccia.Realm,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.IteratorSupport,
@@ -145,6 +147,12 @@ begin
   end;
   if Assigned(Shared) then
     ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
+end;
+
+class function TGocciaWeakMapValue.GetSharedPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  Result := GetSharedPrototypeFromOwnedSlot(ARealm, GWeakMapSharedSlot);
 end;
 
 function TGocciaWeakMapValue.TryGetEntry(const AKey: TGocciaValue;
@@ -232,11 +240,11 @@ begin
 
       WasIteratorRooted := AddRootIfNeeded(Iterator);
       try
-        try
-          NextValue := Iterator.DirectNext(Done);
-          while not Done do
-          begin
-            WasNextRooted := AddRootIfNeeded(NextValue);
+        NextValue := Iterator.DirectNext(Done);
+        while not Done do
+        begin
+          WasNextRooted := AddRootIfNeeded(NextValue);
+          try
             try
               if not (NextValue is TGocciaObjectValue) then
                 ThrowTypeError(SErrorWeakMapConstructorEntryNotObject, SSuggestIteratorProtocol);
@@ -259,15 +267,14 @@ begin
               finally
                 RemoveRootIfNeeded(Key, WasKeyRooted);
               end;
-            finally
-              RemoveRootIfNeeded(NextValue, WasNextRooted);
+            except
+              CloseIteratorPreservingError(Iterator);
+              raise;
             end;
-            NextValue := Iterator.DirectNext(Done);
+          finally
+            RemoveRootIfNeeded(NextValue, WasNextRooted);
           end;
-        except
-          AcquireExceptionObject;
-          CloseIteratorPreservingError(Iterator);
-          raise;
+          NextValue := Iterator.DirectNext(Done);
         end;
       finally
         RemoveRootIfNeeded(Iterator, WasIteratorRooted);

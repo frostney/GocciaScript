@@ -144,6 +144,22 @@ describe("Reflect.construct with native ArrayBuffer constructor", () => {
   });
 });
 
+describe("Reflect.construct with native collection constructors", () => {
+  [Map, Set, WeakMap, WeakSet].forEach((Constructor) => {
+    test(`${Constructor.name} resolves the fallback realm after reading newTarget.prototype`, () => {
+      const revocable = Proxy.revocable(function () {}, {
+        get(target, property) {
+          expect(property).toBe("prototype");
+          revocable.revoke();
+          return null;
+        },
+      });
+
+      expect(() => Reflect.construct(Constructor, [], revocable.proxy)).toThrow(TypeError);
+    });
+  });
+});
+
 describe("Reflect.construct with Proxy forwarding newTarget", () => {
   test("Proxy with no construct trap forwards newTarget to native Error", () => {
     class Custom {}

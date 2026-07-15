@@ -27,6 +27,7 @@ function LocalDateTimeToEpochMillisecondsWithDisambiguation(const AYear, AMonth,
 function StartOfDayToEpochMilliseconds(const AYear, AMonth, ADay: Integer;
   const ATimeZone: string): Int64;
 function FormatOffsetString(const AOffsetSeconds: Integer): string;
+function FormatDateTimeUTCOffsetRounded(const AOffsetSeconds: Integer): string;
 function ParseOffsetString(const AStr: string; out AOffsetSeconds: Integer): Boolean;
 procedure ClearTimeZoneCache;
 
@@ -1972,6 +1973,18 @@ begin
     Result := Sign + Format('%.2d:%.2d', [Hours, Minutes])
   else
     Result := Sign + Format('%.2d:%.2d:%.2d', [Hours, Minutes, Seconds]);
+end;
+
+// TC39 Temporal §11.1.7 FormatDateTimeUTCOffsetRounded.
+function FormatDateTimeUTCOffsetRounded(const AOffsetSeconds: Integer): string;
+var
+  RoundedSeconds: Integer;
+begin
+  if AOffsetSeconds < 0 then
+    RoundedSeconds := -((Abs(AOffsetSeconds) + 30) div 60) * 60
+  else
+    RoundedSeconds := ((AOffsetSeconds + 30) div 60) * 60;
+  Result := FormatOffsetString(RoundedSeconds);
 end;
 
 function ParseOffsetString(const AStr: string; out AOffsetSeconds: Integer): Boolean;

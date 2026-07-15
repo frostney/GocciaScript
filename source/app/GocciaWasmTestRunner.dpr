@@ -256,6 +256,7 @@ var
   Core: TGocciaRuntimeCore;
   FileConfig: TConfigEntryArray;
   EngineOptions: TGocciaEngineOptions;
+  Compatibility: TGocciaCompatibilityFlags;
   TestResult: TGocciaObjectValue;
   GC: TGarbageCollector;
 begin
@@ -279,8 +280,8 @@ begin
         Engine := TGocciaEngine.Create(AFileName, Source, Executor);
         try
           Engine.SourceType := ResolveSourceType(FileConfig, AFileName);
-          Engine.Compatibility :=
-            ResolveCompatibilityFlags(EngineOptions, FileConfig);
+          ResolveCompatibilityFlags(EngineOptions, FileConfig, Compatibility);
+          Engine.Compatibility := Compatibility;
           Engine.StrictTypes :=
             ResolveFlagOption(EngineOptions.StrictTypes, FileConfig);
           Engine.FunctionConstructor.Enabled := ResolveFlagOption(

@@ -255,10 +255,11 @@ type
     FSymbol: TGocciaSymbolValue;
     FIsSymbol: Boolean;
     FAllSettled: Boolean;
-    FAlreadyCalled: Boolean;
+    FAlreadyCalled: TPromiseAlreadyCalledCell;
   public
     constructor Create(const AState: TPromiseKeyedState; const AName: string;
-      const ASymbol: TGocciaSymbolValue; const AIsSymbol, AAllSettled: Boolean);
+      const ASymbol: TGocciaSymbolValue; const AIsSymbol, AAllSettled: Boolean;
+      const AAlreadyCalled: TPromiseAlreadyCalledCell);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure MarkReferences; override;
   end;
@@ -269,11 +270,11 @@ type
     FName: string;
     FSymbol: TGocciaSymbolValue;
     FIsSymbol: Boolean;
-    FAllSettled: Boolean;
-    FAlreadyCalled: Boolean;
+    FAlreadyCalled: TPromiseAlreadyCalledCell;
   public
     constructor Create(const AState: TPromiseKeyedState; const AName: string;
-      const ASymbol: TGocciaSymbolValue; const AIsSymbol, AAllSettled: Boolean);
+      const ASymbol: TGocciaSymbolValue; const AIsSymbol: Boolean;
+      const AAlreadyCalled: TPromiseAlreadyCalledCell);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure MarkReferences; override;
   end;
@@ -430,27 +431,6 @@ begin
   end;
 end;
 
-function PromiseResolveForConstructor(const AConstructor,
-  AValue: TGocciaValue): TGocciaValue;
-var
-  ResolveMethod: TGocciaValue;
-  Args: TGocciaArgumentsCollection;
-begin
-  if not (AConstructor is TGocciaObjectValue) then
-    ThrowTypeError(SErrorValueNotConstructor, SSuggestNotConstructorType);
-
-  ResolveMethod := TGocciaObjectValue(AConstructor).GetProperty(PROP_RESOLVE);
-  if not Assigned(ResolveMethod) or not ResolveMethod.IsCallable then
-    ThrowTypeError(SErrorPromiseResolverNotFunction, SSuggestPromiseResolver);
-
-  Args := TGocciaArgumentsCollection.Create([AValue]);
-  try
-    Result := DispatchCall(ResolveMethod, Args, AConstructor);
-  finally
-    Args.Free;
-  end;
-end;
-
 function GetPromiseResolveMethod(const AConstructor: TGocciaValue): TGocciaValue;
 begin
   if not (AConstructor is TGocciaObjectValue) then
@@ -498,9 +478,7 @@ begin
   if ProtoValue is TGocciaObjectValue then
     Exit(TGocciaObjectValue(ProtoValue));
 
-  FallbackRealm := nil;
-  if ANewTarget is TGocciaFunctionBase then
-    FallbackRealm := TGocciaFunctionBase(ANewTarget).CreationRealm;
+  FallbackRealm := GetFunctionRealm(ANewTarget);
 
   if Assigned(FallbackRealm) then
   begin
@@ -878,18 +856,27 @@ end;
 
 function CreateAllSettledEntry(const AStatus, APropertyName: string;
   const AValue: TGocciaValue): TGocciaObjectValue;
+var
+  EntryRoot: TGocciaTempRoot;
 begin
+  InitializeTempRoot(EntryRoot);
   Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Result.CreateDataPropertyOrThrow('status',
-    TGocciaStringLiteralValue.Create(AStatus));
-  Result.CreateDataPropertyOrThrow(APropertyName, AValue);
+  AddTempRootIfNeeded(EntryRoot, Result);
+  try
+    Result.CreateDataPropertyOrThrow('status',
+      TGocciaStringLiteralValue.Create(AStatus));
+    Result.CreateDataPropertyOrThrow(APropertyName, AValue);
+  finally
+    RemoveTempRootIfNeeded(EntryRoot);
+  end;
 end;
 
 { TPromiseKeyedFulfillHandler }
 
 constructor TPromiseKeyedFulfillHandler.Create(
   const AState: TPromiseKeyedState; const AName: string;
-  const ASymbol: TGocciaSymbolValue; const AIsSymbol, AAllSettled: Boolean);
+  const ASymbol: TGocciaSymbolValue; const AIsSymbol, AAllSettled: Boolean;
+  const AAlreadyCalled: TPromiseAlreadyCalledCell);
 begin
   inherited Create(nil);
   FState := AState;
@@ -897,7 +884,7 @@ begin
   FSymbol := ASymbol;
   FIsSymbol := AIsSymbol;
   FAllSettled := AAllSettled;
-  FAlreadyCalled := False;
+  FAlreadyCalled := AAlreadyCalled;
 end;
 
 function TPromiseKeyedFulfillHandler.Invoke(
@@ -905,17 +892,25 @@ function TPromiseKeyedFulfillHandler.Invoke(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Value: TGocciaValue;
+  ValueRoot: TGocciaTempRoot;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  if FAlreadyCalled then Exit;
-  FAlreadyCalled := True;
+  if Assigned(FAlreadyCalled) and FAlreadyCalled.Called then Exit;
+  if Assigned(FAlreadyCalled) then
+    FAlreadyCalled.Called := True;
   if FState.Settled then Exit;
 
   if FAllSettled then
     Value := CreateAllSettledEntry('fulfilled', PROP_VALUE, AArgs.GetElement(0))
   else
     Value := AArgs.GetElement(0);
-  SetKeyedResultValue(FState.ResultObject, FName, FSymbol, FIsSymbol, Value);
+  InitializeTempRoot(ValueRoot);
+  AddTempRootIfNeeded(ValueRoot, Value);
+  try
+    SetKeyedResultValue(FState.ResultObject, FName, FSymbol, FIsSymbol, Value);
+  finally
+    RemoveTempRootIfNeeded(ValueRoot);
+  end;
   FState.Remaining := FState.Remaining - 1;
 
   if FState.Remaining = 0 then
@@ -931,21 +926,22 @@ begin
   inherited;
   if Assigned(FState) then FState.MarkReferences;
   if Assigned(FSymbol) then FSymbol.MarkReferences;
+  if Assigned(FAlreadyCalled) then FAlreadyCalled.MarkReferences;
 end;
 
 { TPromiseKeyedRejectHandler }
 
 constructor TPromiseKeyedRejectHandler.Create(
   const AState: TPromiseKeyedState; const AName: string;
-  const ASymbol: TGocciaSymbolValue; const AIsSymbol, AAllSettled: Boolean);
+  const ASymbol: TGocciaSymbolValue; const AIsSymbol: Boolean;
+  const AAlreadyCalled: TPromiseAlreadyCalledCell);
 begin
   inherited Create(nil);
   FState := AState;
   FName := AName;
   FSymbol := ASymbol;
   FIsSymbol := AIsSymbol;
-  FAllSettled := AAllSettled;
-  FAlreadyCalled := False;
+  FAlreadyCalled := AAlreadyCalled;
 end;
 
 function TPromiseKeyedRejectHandler.Invoke(
@@ -953,28 +949,29 @@ function TPromiseKeyedRejectHandler.Invoke(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Value: TGocciaValue;
+  ValueRoot: TGocciaTempRoot;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  if FAlreadyCalled then Exit;
-  FAlreadyCalled := True;
+  if Assigned(FAlreadyCalled) and FAlreadyCalled.Called then Exit;
+  if Assigned(FAlreadyCalled) then
+    FAlreadyCalled.Called := True;
   if FState.Settled then Exit;
 
-  if FAllSettled then
-  begin
-    Value := CreateAllSettledEntry('rejected', 'reason', AArgs.GetElement(0));
-    SetKeyedResultValue(FState.ResultObject, FName, FSymbol, FIsSymbol, Value);
-    FState.Remaining := FState.Remaining - 1;
+  Value := CreateAllSettledEntry('rejected', 'reason', AArgs.GetElement(0));
+  InitializeTempRoot(ValueRoot);
+  AddTempRootIfNeeded(ValueRoot, Value);
+  try
+    SetKeyedResultValue(FState.ResultObject, FName, FSymbol, FIsSymbol,
+      Value);
+  finally
+    RemoveTempRootIfNeeded(ValueRoot);
+  end;
+  FState.Remaining := FState.Remaining - 1;
 
-    if FState.Remaining = 0 then
-    begin
-      FState.Settled := True;
-      CallPromiseCapability(FState.Resolve, FState.ResultObject);
-    end;
-  end
-  else
+  if FState.Remaining = 0 then
   begin
     FState.Settled := True;
-    CallPromiseCapability(FState.Reject, AArgs.GetElement(0));
+    CallPromiseCapability(FState.Resolve, FState.ResultObject);
   end;
 end;
 
@@ -984,6 +981,7 @@ begin
   inherited;
   if Assigned(FState) then FState.MarkReferences;
   if Assigned(FSymbol) then FSymbol.MarkReferences;
+  if Assigned(FAlreadyCalled) then FAlreadyCalled.MarkReferences;
 end;
 
 { TGocciaGlobalPromise }
@@ -1366,20 +1364,27 @@ var
   State: TPromiseKeyedState;
   Keys: TPromiseKeyRecordArray;
   Descriptor: TGocciaPropertyDescriptor;
-  PromiseLike: TGocciaValue;
+  PromiseResolve, PromiseLike: TGocciaValue;
+  AlreadyCalled: TPromiseAlreadyCalledCell;
   FulfillHandler: TPromiseKeyedFulfillHandler;
   RejectHandler: TPromiseKeyedRejectHandler;
-  FulfillFn, RejectFn: TGocciaNativeFunctionValue;
-  ResultRoot, StateRoot: TGocciaTempRoot;
+  FulfillFn: TGocciaNativeFunctionValue;
+  RejectFn: TGocciaValue;
+  PromiseResolveRoot, ResultRoot, StateRoot: TGocciaTempRoot;
+  IterationRoots: TGocciaActiveRootFrame;
   I: Integer;
 begin
   Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
+  InitializeTempRoot(PromiseResolveRoot);
   InitializeTempRoot(ResultRoot);
   InitializeTempRoot(StateRoot);
+  IterationRoots.Initialize;
   ResultObject := nil;
   State := nil;
   try
     try
+      PromiseResolve := GetPromiseResolveMethod(AThisValue);
+      AddTempRootIfNeeded(PromiseResolveRoot, PromiseResolve);
       InputValue := AArgs.GetElement(0);
       if not (InputValue is TGocciaObjectValue) then
         Goccia.Values.ErrorHelper.ThrowTypeError(
@@ -1402,17 +1407,31 @@ begin
         CreatePromiseKeyedPlaceholder(ResultObject, Keys[I]);
         State.Remaining := State.Remaining + 1;
 
-        PromiseLike := PromiseResolveForConstructor(AThisValue,
+        PromiseLike := CallPromiseResolveMethod(PromiseResolve, AThisValue,
           GetPromiseKeyedValue(InputObject, Keys[I]));
+        IterationRoots.Add(PromiseLike);
+        AlreadyCalled := TPromiseAlreadyCalledCell.Create(nil);
+        IterationRoots.Add(AlreadyCalled);
         FulfillHandler := TPromiseKeyedFulfillHandler.Create(State,
-          Keys[I].Name, Keys[I].Symbol, Keys[I].IsSymbol, AAllSettled);
-        RejectHandler := TPromiseKeyedRejectHandler.Create(State,
-          Keys[I].Name, Keys[I].Symbol, Keys[I].IsSymbol, AAllSettled);
+          Keys[I].Name, Keys[I].Symbol, Keys[I].IsSymbol, AAllSettled,
+          AlreadyCalled);
+        IterationRoots.Add(FulfillHandler);
         FulfillFn := CreatePromiseElementFunction(FulfillHandler.Invoke,
           FulfillHandler);
-        RejectFn := CreatePromiseElementFunction(RejectHandler.Invoke,
-          RejectHandler);
+        IterationRoots.Add(FulfillFn);
+        if AAllSettled then
+        begin
+          RejectHandler := TPromiseKeyedRejectHandler.Create(State,
+            Keys[I].Name, Keys[I].Symbol, Keys[I].IsSymbol, AlreadyCalled);
+          IterationRoots.Add(RejectHandler);
+          RejectFn := CreatePromiseElementFunction(RejectHandler.Invoke,
+            RejectHandler);
+          IterationRoots.Add(RejectFn);
+        end
+        else
+          RejectFn := Capability.Reject;
         InvokePromiseLikeThen(PromiseLike, FulfillFn, RejectFn);
+        IterationRoots.Clear;
       end;
 
       State.Remaining := State.Remaining - 1;
@@ -1434,6 +1453,8 @@ begin
       end;
     end;
   finally
+    IterationRoots.Clear;
+    RemoveTempRootIfNeeded(PromiseResolveRoot);
     RemoveTempRootIfNeeded(StateRoot);
     RemoveTempRootIfNeeded(ResultRoot);
   end;

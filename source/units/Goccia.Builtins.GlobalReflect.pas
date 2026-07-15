@@ -218,12 +218,14 @@ begin
   if IsSymbolKey then
   begin
     SymbolKey := TGocciaSymbolValue(PropKey);
-    ExistingDescriptor := Obj.GetOwnSymbolPropertyDescriptor(SymbolKey);
+    if not (Obj is TGocciaProxyValue) then
+      ExistingDescriptor := Obj.GetOwnSymbolPropertyDescriptor(SymbolKey);
   end
   else
   begin
     PropertyName := TGocciaStringLiteralValue(PropKey).Value;
-    ExistingDescriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
+    if not (Obj is TGocciaProxyValue) then
+      ExistingDescriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
   end;
 
   // Step 3: Let desc be ? ToPropertyDescriptor(Attributes)

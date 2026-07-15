@@ -1,6 +1,6 @@
-const hasJSON5 = typeof JSON5 !== "undefined";
+import * as JSON5 from "goccia:json5";
 
-describe.runIf(hasJSON5)("JSON5.parse", () => {
+describe("JSON5.parse", () => {
   test("parses comments, trailing commas, and unquoted keys", () => {
     const value = JSON5.parse(`
 {

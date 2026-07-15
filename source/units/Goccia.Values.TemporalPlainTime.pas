@@ -532,7 +532,7 @@ begin
     ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, [AMethodName, 'smallestUnit']), SSuggestTemporalValidUnits);
   if Ord(LargestUnit) > Ord(SmallestUnit) then
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  ValidateRoundingIncrement(RIncrement, SmallestUnit, tuDay);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit);
 
   // Decompose ADiffNs based on largestUnit
   Y := 0; Mo := 0; W := 0; D := 0;
@@ -651,7 +651,7 @@ begin
     SmallestUnit := tuNanosecond;
   end;
 
-  ValidateRoundingIncrement(Increment, SmallestUnit, tuDay);
+  ValidateRoundingIncrement(Increment, SmallestUnit);
 
   TotalNs := TimeToTotalNanoseconds(T);
   Divisor := UnitToNanoseconds(SmallestUnit) * Increment;

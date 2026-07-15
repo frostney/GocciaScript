@@ -321,6 +321,7 @@ begin
   FGlobalScope.LoadModule := LoadModule;
   FGlobalScope.LoadModuleSource := LoadModuleSourceValue;
   FGlobalScope.LoadDeferredModule := LoadDeferredModuleNamespaceValue;
+  FGlobalScope.ResolveModuleURL := FModuleLoader.ResolveModuleURL;
 end;
 
 destructor TGocciaInterpreter.Destroy;
@@ -349,6 +350,7 @@ begin
   Result.LoadModule := LoadModule;
   Result.LoadModuleSource := LoadModuleSourceValue;
   Result.LoadDeferredModule := LoadDeferredModuleNamespaceValue;
+  Result.ResolveModuleURL := FModuleLoader.ResolveModuleURL;
   Result.CurrentFilePath := FFileName;
   Result.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;

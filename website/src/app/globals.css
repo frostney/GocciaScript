@@ -1573,6 +1573,180 @@ p {
   }
 }
 
+/* ---------- performance barometer ---------- */
+.perf-page {
+  --perf-quickjs: var(--amber);
+  --perf-node: #4d7fb8;
+}
+[data-theme="espresso"] .perf-page {
+  --perf-node: #86b5e5;
+}
+.perf-hero h1 {
+  max-width: 9ch;
+}
+.perf-metrics {
+  align-items: stretch;
+}
+.perf-metric {
+  min-height: 220px;
+}
+.perf-metric strong + small {
+  margin-bottom: 0.45rem;
+}
+.perf-metric p,
+.perf-explainer p {
+  margin: auto 0 0;
+  color: var(--ink-2);
+  font-size: 0.88rem;
+}
+.perf-page .compat-range-buttons button {
+  min-height: 44px;
+}
+.perf-chart-shell {
+  overflow-x: auto;
+  padding: 0.65rem;
+  border: 1px solid var(--rule-soft);
+  border-radius: 8px;
+  background: var(--paper-2);
+}
+.perf-chart {
+  display: block;
+  min-width: 720px;
+  width: 100%;
+  height: auto;
+}
+.perf-chart-grid {
+  stroke: color-mix(in oklab, var(--rule) 55%, transparent);
+  stroke-width: 1;
+}
+.perf-chart-parity {
+  stroke: var(--ink-3);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 5;
+}
+.perf-chart-line {
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+}
+.perf-chart-point {
+  stroke: var(--paper-2);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.perf-chart a:focus-visible .perf-chart-point {
+  stroke: var(--accent);
+  stroke-width: 5;
+}
+.perf-chart-failure {
+  fill: none;
+  stroke: #b45f67;
+  stroke-width: 4;
+  vector-effect: non-scaling-stroke;
+}
+.perf-chart a:focus-visible .perf-chart-failure {
+  stroke: var(--accent);
+  stroke-width: 6;
+}
+.perf-chart-label,
+.perf-chart-date {
+  fill: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.perf-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  margin: 0.85rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.perf-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}
+.perf-legend li > span {
+  display: inline-grid;
+  place-items: center;
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 999px;
+}
+.perf-legend .perf-legend-failure {
+  border-radius: 0;
+  color: #b45f67;
+  background: transparent;
+  font-size: 1rem;
+  font-weight: 800;
+}
+.perf-empty-chart {
+  padding: 1rem;
+  border: 1px solid var(--rule-soft);
+  border-radius: 8px;
+  color: var(--ink-2);
+  background: var(--paper-2);
+}
+.perf-data-details {
+  margin-top: 0.75rem;
+  border: 1px solid var(--rule-soft);
+  border-radius: 8px;
+  background: var(--paper-2);
+}
+.perf-data-details summary {
+  min-height: 44px;
+  padding: 0.7rem 1rem;
+  cursor: pointer;
+  font-weight: 650;
+}
+.perf-data-details summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.perf-table-scroll {
+  overflow-x: auto;
+}
+.perf-data-details table,
+.perf-workloads table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+}
+.perf-data-details th,
+.perf-data-details td {
+  padding: 0.65rem 1rem;
+  border-top: 1px solid var(--rule-soft);
+  text-align: left;
+}
+.perf-data-details thead th {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+.perf-workload-grid {
+  display: grid;
+  gap: 1rem;
+}
+.perf-workloads {
+  overflow: hidden;
+}
+.perf-workloads table {
+  min-width: 880px;
+}
+@media (max-width: 620px) {
+  .perf-chart-shell {
+    margin-inline: -0.5rem;
+    border-radius: 6px;
+  }
+  .perf-metric {
+    min-height: 190px;
+  }
+}
+
 .info-term {
   position: relative;
   display: inline-block;

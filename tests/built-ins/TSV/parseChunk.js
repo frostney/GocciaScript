@@ -3,9 +3,9 @@ description: TSV.parseChunk parses tab-separated text incrementally for streamin
 features: [TSV.parseChunk]
 ---*/
 
-const hasTSV = typeof TSV !== "undefined";
+import * as TSV from "goccia:tsv";
 
-describe.runIf(hasTSV)("TSV.parseChunk", () => {
+describe("TSV.parseChunk", () => {
   test("parses a complete chunk with headers", () => {
     const result = TSV.parseChunk("name\tage\nAlice\t30\nBob\t25\n", {});
 
@@ -47,7 +47,7 @@ describe.runIf(hasTSV)("TSV.parseChunk", () => {
   });
 });
 
-describe.runIf(hasTSV)("TSV.parseChunk non-finite offsets", () => {
+describe("TSV.parseChunk non-finite offsets", () => {
   test("Infinity start offset does not crash", () => {
     expect(typeof TSV.parseChunk("a\tb\n1\t2", Infinity)).toBe("object");
   });

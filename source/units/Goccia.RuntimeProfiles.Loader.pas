@@ -12,30 +12,19 @@ procedure ApplyLoaderRuntimeProfile(const ARuntime: TGocciaRuntimeCore);
 implementation
 
 uses
-  Goccia.Builtins.Semver,
-  Goccia.Constants.PropertyNames,
   Goccia.RuntimeExtensions.Console,
   Goccia.RuntimeExtensions.CSV,
   Goccia.RuntimeExtensions.Fetch,
   Goccia.RuntimeExtensions.JSON5,
   Goccia.RuntimeExtensions.JSONL,
   Goccia.RuntimeExtensions.Performance,
+  Goccia.RuntimeExtensions.Semver,
   Goccia.RuntimeExtensions.TextAssets,
   Goccia.RuntimeExtensions.TextEncoding,
   Goccia.RuntimeExtensions.TOML,
   Goccia.RuntimeExtensions.TSV,
   Goccia.RuntimeExtensions.URL,
-  Goccia.RuntimeExtensions.YAML,
-  Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.Primitives;
-
-// Plain factory wrapper so the SemVer namespace can be installed as a lazy
-// property; CreateSemverNamespace returns TGocciaObjectValue, which is not
-// procedural-type-compatible with TGocciaLazyPlainFactory directly.
-function SemverNamespaceFactory: TGocciaValue;
-begin
-  Result := CreateSemverNamespace;
-end;
+  Goccia.RuntimeExtensions.YAML;
 
 procedure ApplyLoaderRuntimeProfile(const ARuntime: TGocciaRuntimeCore);
 begin
@@ -47,17 +36,12 @@ begin
   ARuntime.Install(TGocciaTOMLRuntimeExtension.Create);
   ARuntime.Install(TGocciaTSVRuntimeExtension.Create);
   ARuntime.Install(TGocciaYAMLRuntimeExtension.Create);
+  ARuntime.Install(TGocciaSemverRuntimeExtension.Create);
   ARuntime.Install(TGocciaTextAssetsRuntimeExtension.Create);
   ARuntime.Install(TGocciaPerformanceRuntimeExtension.Create);
   ARuntime.Install(TGocciaTextEncodingRuntimeExtension.Create);
   ARuntime.Install(TGocciaURLRuntimeExtension.Create);
   ARuntime.Install(TGocciaFetchRuntimeExtension.Create);
-  if Assigned(ARuntime.Engine.GocciaGlobal) then
-    // Defer building the SemVer namespace until Goccia.semver is first touched.
-    // Enumerable to match the eager data property it replaces.
-    ARuntime.Engine.DefineLazyObjectProperty(ARuntime.Engine.GocciaGlobal,
-      SEMVER_NAMESPACE_PROPERTY, SemverNamespaceFactory,
-      [pfEnumerable, pfWritable, pfConfigurable]);
 end;
 
 end.

@@ -70,12 +70,6 @@ var
 begin
   GC := TGarbageCollector.Instance;
 
-  if AValue is TGocciaIteratorValue then
-  begin
-    Result := TGocciaIteratorValue(AValue);
-    Exit;
-  end;
-
   IteratorHost := nil;
   IteratorReceiver := AValue;
   if AValue is TGocciaObjectValue then

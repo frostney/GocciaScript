@@ -3,6 +3,7 @@
  * test-cli-apps.ts
  *
  * App-specific features: GocciaScriptLoader (JSON output, --global/--globals,
+ * JavaScript host environments,
  * coverage, source maps), GocciaScriptLoaderBare (core-engine-only stdin/file
  * execution, CLI print, and runtime-global absence), GocciaBundler (compile,
  * roundtrip, stdin, directory, .gbc rejection, source maps),
@@ -21,6 +22,7 @@ import {
   symlinkSync,
 } from "fs";
 import { join, resolve } from "path";
+import { pathToFileURL } from "url";
 import {
   LOADER,
   BARE,
@@ -34,6 +36,16 @@ import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/as
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
+
+const MICROBENCH_MODULE_IMPORT = 'import { bench, group } from "goccia:microbench";';
+
+function microbenchModule(lines: string[]): string {
+  return [MICROBENCH_MODULE_IMPORT, ...lines, ""].join("\n");
+}
+
+function microbenchModuleWithExports(exports: string, lines: string[]): string {
+  return [`import { ${exports} } from "goccia:microbench";`, ...lines, ""].join("\n");
+}
 
 async function withFetchTestServer(
   callback: (baseUrl: string) => void | Promise<void>,
@@ -134,6 +146,13 @@ function assertCommonJsonFile(file: any, label: string, fileName: string, ok = t
   if (typeof file?.timing?.total_ns !== "number") throw new Error(`${label} timing.total_ns should be present`);
   if ("total_ms" in file.timing) throw new Error(`${label} timing should not include millisecond fields`);
   if (ok && file.error !== null) throw new Error(`${label} error should be null`);
+}
+
+function assertPreservesBodyFailure(outputPath: string, label: string): void {
+  const json = JSON.parse(readFileSync(outputPath, "utf-8"));
+  const message = json.files?.[0]?.benchmarks?.[0]?.error;
+  if (typeof message !== "string" || !message.includes("body failure") || message.includes("cleanup failure"))
+    throw new Error(`${label} should preserve body failure, got ${JSON.stringify(message)}`);
 }
 
 // ============================================================================
@@ -962,6 +981,31 @@ console.log("Bare Loader: --test262-host child realm globals expose host hooks..
     throw new Error(`Bare --test262-host child global hooks got: ${proc.stdout.toString()}`);
 }
 
+console.log("Bare Loader: cross-realm weak constructors use the newTarget realm prototype...");
+for (const { label, args } of [
+  { label: "interpreted", args: [BARE, "--test262-host", "--compat-function"] },
+  { label: "bytecode", args: [BARE, "--test262-host", "--compat-function", "--mode=bytecode"] },
+]) {
+  const proc = Bun.spawnSync(args, {
+    stdin: new TextEncoder().encode([
+      "const child = Goccia.test262.createRealm();",
+      "child.evalScript('function NewTarget() {} NewTarget.prototype = null; globalThis.NewTarget = NewTarget;');",
+      "const newTarget = child.global.NewTarget;",
+      "const weakRef = Reflect.construct(WeakRef, [{}], newTarget);",
+      "print(Object.getPrototypeOf(weakRef) === child.global.WeakRef.prototype);",
+      "const registry = Reflect.construct(FinalizationRegistry, [() => {}], newTarget);",
+      "print(Object.getPrototypeOf(registry) === child.global.FinalizationRegistry.prototype);",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare ${label} cross-realm weak constructor probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== "true\ntrue")
+    throw new Error(`Bare ${label} cross-realm weak constructor prototype mismatch: ${proc.stdout.toString()}`);
+}
+
 console.log("Bare Loader: bytecode --test262-host eval is direct eval...");
 {
   const proc = Bun.spawnSync([BARE, "--test262-host", "--mode=bytecode"], {
@@ -993,6 +1037,384 @@ console.log("Bare Loader: bytecode --test262-host eval is direct eval...");
     throw new Error(`Bare bytecode direct eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare bytecode direct eval got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: bytecode --test262-host eval keeps sloppy var declarations in the caller environment...");
+{
+  const proc = Bun.spawnSync([
+    BARE,
+    "--test262-host",
+    "--mode=bytecode",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode([
+      "var y = 42;",
+      "function globalY() { return y; }",
+      "function testY() {",
+      "  const f = eval(",
+      "    'var y = 5;' +",
+      "    'function actY(action) {' +",
+      "    '  switch (action) {' +",
+      "    \"    case 'get': return y;\" +",
+      "    \"    case 'set': y = 2; return;\" +",
+      "    \"    case 'delete': return eval('delete y');\" +",
+      "    '  }' +",
+      "    '}' +",
+      "    'actY;'",
+      "  );",
+      "  print([f('get'), y, globalY()].join(','));",
+      "  y = 8;",
+      "  print([f('get'), y, globalY()].join(','));",
+      "  f('set');",
+      "  print([f('get'), y, globalY()].join(','));",
+      "  print(f('delete'));",
+      "  print([f('get'), y, globalY()].join(','));",
+      "}",
+      "testY();",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const expected = [
+    "5,5,42",
+    "8,8,42",
+    "2,2,42",
+    "true",
+    "42,42,42",
+  ].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode sloppy eval var probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare bytecode sloppy eval var probe got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: bytecode --test262-host eval exposes later sloppy vars to existing closures...");
+{
+  const proc = Bun.spawnSync([
+    BARE,
+    "--test262-host",
+    "--mode=bytecode",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode([
+      "var y = 42;",
+      "function testY() {",
+      "  const before = () => y;",
+      "  eval('var y = 5;');",
+      "  const after = () => y;",
+      "  print([before(), after(), y].join(','));",
+      "  return before;",
+      "}",
+      "const beforeClosure = testY();",
+      "print(beforeClosure());",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const expected = [
+    "5,5,5",
+    "5",
+  ].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode sloppy eval pre-closure probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare bytecode sloppy eval pre-closure probe got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: bytecode --test262-host eval var declarations shadow outer upvalues...");
+{
+  const proc = Bun.spawnSync([
+    BARE,
+    "--test262-host",
+    "--mode=bytecode",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode([
+      "function outerNormal() {",
+      "  var x = 1;",
+      "  function inner() {",
+      "    eval('var x = 2;');",
+      "    return x;",
+      "  }",
+      "  print([inner(), x].join(','));",
+      "}",
+      "function outerArrow() {",
+      "  var x = 1;",
+      "  const inner = () => { eval('var x = 2;'); return x; };",
+      "  print([inner(), x].join(','));",
+      "}",
+      "outerNormal();",
+      "outerArrow();",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const expected = [
+    "2,1",
+    "2,1",
+  ].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode sloppy eval upvalue shadow probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare bytecode sloppy eval upvalue shadow probe got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: bytecode --test262-host eval keeps nested variable environments isolated...");
+{
+  const proc = Bun.spawnSync([
+    BARE,
+    "--test262-host",
+    "--mode=bytecode",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode([
+      "function outer() {",
+      "  eval('var outerOnly = 1;');",
+      "  function inner() {",
+      "    eval('var innerOnly = 2;');",
+      "    return [innerOnly, outerOnly].join(':');",
+      "  }",
+      "  print([inner(), typeof innerOnly, outerOnly].join(','));",
+      "}",
+      "outer();",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const expected = "2:1,undefined,1";
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode nested eval environment probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare bytecode nested eval environment probe got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: bytecode --test262-host eval preserves lexical upvalue precedence...");
+{
+  const proc = Bun.spawnSync([
+    BARE,
+    "--test262-host",
+    "--mode=bytecode",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode([
+      "function lexicalShadow() {",
+      "  eval('var x = \"eval\";');",
+      "  {",
+      "    let x = 'lexical';",
+      "    const read = () => x;",
+      "    print([read(), x].join(','));",
+      "  }",
+      "}",
+      "function writeOuter() {",
+      "  var x = 'outer';",
+      "  function inner() {",
+      "    const set = () => { x = 'set'; };",
+      "    const readDeep = () => () => x;",
+      "    eval('var x = \"eval\";');",
+      "    set();",
+      "    print([readDeep()(), x].join(','));",
+      "  }",
+      "  inner();",
+      "  print(x);",
+      "}",
+      "lexicalShadow();",
+      "writeOuter();",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const expected = [
+    "lexical,lexical",
+    "set,set",
+    "outer",
+  ].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode eval lexical precedence probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare bytecode eval lexical precedence probe got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: bytecode assignment retains its resolved eval environment reference...");
+{
+  const proc = Bun.spawnSync([
+    BARE,
+    "--test262-host",
+    "--mode=bytecode",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode([
+      "function simpleAssignment() {",
+      "  var x = 0;",
+      "  function inner() {",
+      "    x = (eval('var x = 2;'), 1);",
+      "    return x;",
+      "  }",
+      "  print([inner(), x].join(','));",
+      "}",
+      "function compoundAssignment() {",
+      "  var x = 0;",
+      "  function inner() {",
+      "    x += (eval('var x = 2;'), 1);",
+      "    return x;",
+      "  }",
+      "  print([inner(), x].join(','));",
+      "}",
+      "var globalX = 0;",
+      "function globalBackedAssignment() {",
+      "  globalX = (eval('var globalX = 2;'), 1);",
+      "  return globalX;",
+      "}",
+      "simpleAssignment();",
+      "compoundAssignment();",
+      "print([globalBackedAssignment(), globalX].join(','));",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const expected = [
+    "2,1",
+    "2,1",
+    "2,1",
+  ].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode eval assignment reference probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare bytecode eval assignment reference probe got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: --test262-host generator parameter eval uses the parameter var environment...");
+{
+  const source = [
+    "var x = 'outside';",
+    "var declaredBefore, declaredAfter;",
+    "function* declared(",
+    "  _ = declaredBefore = function() { return x; },",
+    "  __ = (eval('var x = \"inside\";'), declaredAfter = function() { return x; })",
+    ") {}",
+    "declared().next();",
+    "print([declaredBefore(), declaredAfter(), x].join(','));",
+    "var expressionBefore, expressionAfter;",
+    "(function*(",
+    "  _ = expressionBefore = function() { return x; },",
+    "  ...[__ = (eval('var x = \"inside\";'), expressionAfter = function() { return x; })]",
+    ") {})().next();",
+    "print([expressionBefore(), expressionAfter(), x].join(','));",
+    "var methodBefore, methodAfter;",
+    "({",
+    "  *method(",
+    "    _ = methodBefore = function() { return x; },",
+    "    ...[__ = (eval('var x = \"inside\";'), methodAfter = function() { return x; })]",
+    "  ) {}",
+    "}).method().next();",
+    "print([methodBefore(), methodAfter(), x].join(','));",
+    "",
+  ].join("\n");
+  const expected = [
+    "inside,inside,outside",
+    "inside,inside,outside",
+    "inside,inside,outside",
+  ].join("\n");
+  for (const mode of [
+    { label: "interpreted", args: [BARE] },
+    { label: "bytecode", args: [BARE, "--mode=bytecode"] },
+  ]) {
+    const proc = Bun.spawnSync([
+      ...mode.args,
+      "--test262-host",
+      "--compat-var",
+      "--compat-function",
+      "--compat-non-strict-mode",
+    ], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode.label} generator parameter eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Bare ${mode.label} generator parameter eval probe got: ${proc.stdout.toString()}`);
+  }
+}
+
+console.log("Bare Loader: --test262-host Annex B eval preserves with-object properties...");
+{
+  const source = [
+    "function checkAnnexBEval() {",
+    "  function g() { return 'outer-g'; }",
+    "  var object = { g: function() { return 'with-g'; } };",
+    "  with (object) {",
+    "    eval('{ function g() { return \"eval-g\"; } }');",
+    "  }",
+    "  print([g(), object.g()].join(','));",
+    "}",
+    "checkAnnexBEval();",
+    "",
+  ].join("\n");
+  for (const mode of [
+    { label: "interpreted", args: [BARE] },
+    { label: "bytecode", args: [BARE, "--mode=bytecode"] },
+  ]) {
+    const proc = Bun.spawnSync([
+      ...mode.args,
+      "--test262-host",
+      "--compat-var",
+      "--compat-function",
+      "--compat-non-strict-mode",
+    ], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode.label} Annex B eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== "eval-g,with-g")
+      throw new Error(`Bare ${mode.label} Annex B eval probe got: ${proc.stdout.toString()}`);
+  }
+}
+
+console.log("Bare Loader: --test262-host eval reports strict delete identifier as SyntaxError...");
+{
+  const source = [
+    "try {",
+    "  eval('\"use strict\"; delete x');",
+    "  print('no error');",
+    "} catch (e) {",
+    "  print(e.name);",
+    "}",
+    "",
+  ].join("\n");
+  for (const mode of [
+    { label: "interpreted", args: [BARE, "--test262-host"] },
+    { label: "bytecode", args: [BARE, "--test262-host", "--mode=bytecode"] },
+  ]) {
+    const proc = Bun.spawnSync(mode.args, {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode.label} strict delete eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== "SyntaxError")
+      throw new Error(`Bare ${mode.label} strict delete eval probe got: ${proc.stdout.toString()}`);
+  }
 }
 
 console.log("Bare Loader: --test262-host eval validates destructuring pattern early errors...");
@@ -1421,6 +1843,70 @@ console.log("Loader: Promise.then drain (bytecode)...");
 }
 
 // -- --global / --globals -------------------------------------------------------
+
+console.log("Loader: --host-environment module controls time, zone, and random streams...");
+{
+  const tmp = makeTmp();
+  try {
+    const providerPath = join(tmp, "host-environment.js");
+    writeFileSync(
+      providerPath,
+      [
+        "let epoch = 1700000000000000000n;",
+        "let monotonic = 0n;",
+        "export const epochNanoseconds = () => { const value = epoch; epoch += 1000000n; return value; };",
+        "export const monotonicNanoseconds = () => { const value = monotonic; monotonic += 1000000n; return value; };",
+        'export const timeZoneIdentifier = () => "Europe/London";',
+        "export const random = (streamId) => streamId === 0n ? 0.25 : 0.75;",
+        "",
+      ].join("\n"),
+    );
+
+    const source = [
+      "const child = new ShadowRealm();",
+      "[",
+      "  Date.now(),",
+      "  Temporal.Now.instant().epochNanoseconds.toString(),",
+      "  Temporal.Now.timeZoneId(),",
+      '  new Intl.DateTimeFormat("en").resolvedOptions().timeZone,',
+      "  Math.random(),",
+      "  child.evaluate(\"Math.random()\"),",
+      "  performance.timeOrigin,",
+      "  performance.now(),",
+      '].join("|");',
+      "",
+    ].join("\n");
+    const expected =
+      "1700000000001|1700000000002000000|Europe/London|Europe/London|0.25|0.75|1700000000000|1.5";
+
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const result = runLoaderJson(source, [
+        `--host-environment=${providerPath}`,
+        "--unsafe-shadowrealm",
+        `--mode=${mode}`,
+      ]);
+      if (result.exitCode !== 0 || result.json.files?.[0]?.result !== expected)
+        throw new Error(
+          `Loader host environment ${mode} expected ${expected}, got ${result.json.files?.[0]?.result}${result.stderr}`,
+        );
+    }
+
+    const conflict = runLoaderJson("0;\n", [
+      `--host-environment=${providerPath}`,
+      "--deterministic",
+    ]);
+    const conflictOutput = JSON.stringify(conflict.json) + conflict.stderr;
+    if (
+      conflict.exitCode === 0 ||
+      !conflictOutput.includes("cannot be combined with --deterministic")
+    )
+      throw new Error(
+        `Loader should reject conflicting host environment options, got: ${conflictOutput}`,
+      );
+  } finally {
+    clean(tmp);
+  }
+}
 
 console.log("Loader: --global option...");
 {
@@ -1963,6 +2449,22 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     await $`${BUNDLER} ${customSrc} --output=${customOut}`.quiet();
     if (!existsSync(customOut)) throw new Error("Custom --output .gbc should exist");
 
+    console.log("Bundler: compatibility arguments object roundtrip...");
+    const argumentsSrc = join(tmp, "arguments.js");
+    const argumentsOut = join(tmp, "arguments.gbc");
+    writeFileSync(
+      argumentsSrc,
+      [
+        "var count = function() { return arguments.length; };",
+        "count(1, 2);",
+        "",
+      ].join("\n"),
+    );
+    await $`${BUNDLER} ${argumentsSrc} --output=${argumentsOut} --compat-var --compat-function --compat-arguments-object`.quiet();
+    const argumentsRoundtrip = await $`${LOADER} --print ${argumentsOut} 2>&1`.text();
+    if (!containsLine(argumentsRoundtrip, "2"))
+      throw new Error(`Arguments-object roundtrip should print 2, got: ${argumentsRoundtrip}`);
+
     console.log("Bundler: repeated NaN constants compile + roundtrip...");
     const nanSrc = join(tmp, "nan-constants.js");
     const nanOut = join(tmp, "nan-constants.gbc");
@@ -2088,13 +2590,17 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
   } as Record<string, string>;
 
   try {
-    const stdinSource = 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n';
+    const stdinSource = microbenchModule([
+      'group("stdin", () => {',
+      '  bench("sum", () => 1 + 1);',
+      "});",
+    ]);
 
     console.log("BenchmarkRunner: file benchmark (interpreted)...");
     const fileOut = join(tmp, "file-interp.json");
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "benchmarks/fibonacci.js", "--no-progress", "--format=json", `--output=${fileOut}`],
+        [resolve(BENCHRUNNER), "benchmarks/fibonacci.js", "--source-type=module", "--no-progress", "--format=json", `--output=${fileOut}`],
         { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
       );
       if (proc.exitCode !== 0) throw new Error(`File benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
@@ -2121,7 +2627,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     const fileBcOut = join(tmp, "file-bc.json");
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "benchmarks/fibonacci.js", "--no-progress", "--format=json", `--output=${fileBcOut}`, "--mode=bytecode"],
+        [resolve(BENCHRUNNER), "benchmarks/fibonacci.js", "--source-type=module", "--no-progress", "--format=json", `--output=${fileBcOut}`, "--mode=bytecode"],
         { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
       );
       if (proc.exitCode !== 0) throw new Error(`Bytecode file benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
@@ -2142,29 +2648,171 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       if (valid.length === 0) throw new Error("Bytecode benchmark JSON should contain at least one valid result");
     }
 
+    console.log("BenchmarkRunner: microbench API is module-only and accepts wrappers...");
+    const moduleOnlyOut = join(tmp, "module-only.json");
+    const moduleOnlyBytecodeOut = join(tmp, "module-only-bytecode.json");
+    const moduleOnlySource = microbenchModuleWithExports(
+      "bench as microBench, group as microGroup, summary, boxplot",
+      [
+        'if (typeof bench !== "undefined") throw new Error("ambient bench should not exist");',
+        'if (typeof group !== "undefined") throw new Error("ambient group should not exist");',
+        'if (typeof suite !== "undefined") throw new Error("ambient suite should not exist");',
+        'if (typeof runBenchmarks !== "undefined") throw new Error("ambient runBenchmarks should not exist");',
+        "summary(() => {",
+        "  boxplot(() => {",
+        '    microGroup("module-only", () => {',
+        '      microBench("sum", () => 1 + 1);',
+        '      microBench("array map", () => [1, 2, 3, 4].map((value) => value + 1));',
+        "    });",
+        "  });",
+        "});",
+        'microBench("outside wrappers", () => 2 + 2);',
+      ],
+    );
+    for (const run of [
+      { output: moduleOnlyOut, modeArguments: [] },
+      { output: moduleOnlyBytecodeOut, modeArguments: ["--mode=bytecode"] },
+    ]) {
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${run.output}`, ...run.modeArguments],
+        {
+          stdin: new TextEncoder().encode(moduleOnlySource),
+          stdout: "pipe",
+          stderr: "pipe",
+          env: benchEnv,
+          timeout: 120_000,
+        },
+      );
+      if (proc.exitCode !== 0) throw new Error(`Module-only microbench API exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+    }
+    for (const outputFile of [moduleOnlyOut, moduleOnlyBytecodeOut]) {
+      const json = JSON.parse(readFileSync(outputFile, "utf-8"));
+      if (json.files?.[0]?.benchmarks?.[0]?.name !== "sum")
+        throw new Error(`Module-only microbench JSON should contain benchmark name "sum", got: ${JSON.stringify(json.files?.[0]?.benchmarks)}`);
+      if (json.totalBenchmarks !== 3)
+        throw new Error(`Module-only microbench JSON should contain totalBenchmarks: 3, got ${json.totalBenchmarks}`);
+      for (const benchmark of json.files[0].benchmarks) {
+        if (!(benchmark.sampleCount > 0 && benchmark.sampleCount <= benchmark.iterations && benchmark.sampleCount <= 10_000))
+          throw new Error(`Benchmark sampleCount should be bounded by calibrated iterations and the fixed cap: ${JSON.stringify(benchmark)}`);
+        if (!(benchmark.minSampleMs <= benchmark.p25Ms &&
+              benchmark.p25Ms <= benchmark.medianMs &&
+              benchmark.medianMs <= benchmark.p75Ms &&
+              benchmark.p75Ms <= benchmark.p99Ms &&
+              benchmark.p99Ms <= benchmark.p999Ms &&
+              benchmark.p999Ms <= benchmark.maxSampleMs))
+          throw new Error(`Benchmark percentiles should be ordered: ${JSON.stringify(benchmark)}`);
+        if (benchmark.name === "outside wrappers") {
+          if (benchmark.summaryScope !== null || benchmark.boxplotScope !== null || benchmark.relative !== null)
+            throw new Error(`Unwrapped benchmark should stay outside scoped views: ${JSON.stringify(benchmark)}`);
+        } else {
+          if (benchmark.summaryScope !== 1 || benchmark.boxplotScope !== 1)
+            throw new Error(`Benchmark wrapper scopes should be retained: ${JSON.stringify(benchmark)}`);
+          if (typeof benchmark.relative?.median !== "number" ||
+              typeof benchmark.relative?.low !== "number" ||
+              typeof benchmark.relative?.high !== "number" ||
+              typeof benchmark.relative?.inconclusive !== "boolean")
+            throw new Error(`Benchmark relative comparison should be structured: ${JSON.stringify(benchmark)}`);
+        }
+      }
+
+      const scopedBenchmarks = json.files[0].benchmarks.filter(
+        (benchmark: Record<string, unknown>) => benchmark.summaryScope === 1,
+      );
+      const baseline = scopedBenchmarks.reduce(
+        (fastest: any, benchmark: any) => benchmark.medianMs < fastest.medianMs ? benchmark : fastest,
+      );
+      if (baseline.relative.median !== 1 || baseline.relative.low !== 1 ||
+          baseline.relative.high !== 1 || baseline.relative.inconclusive !== false)
+        throw new Error(`Summary baseline should compare exactly to itself: ${JSON.stringify(baseline)}`);
+      for (const benchmark of scopedBenchmarks) {
+        if (benchmark === baseline) continue;
+        const { low, high } = benchmark.relative;
+        if (!Number.isFinite(low) || !Number.isFinite(high) || low > high)
+          throw new Error(`Summary relative bounds should be finite and ordered: ${JSON.stringify(benchmark)}`);
+        const expectedInconclusive = low <= 1 && high >= 1;
+        if (benchmark.relative.inconclusive !== expectedInconclusive)
+          throw new Error(`Summary overlap classification should match its range: ${JSON.stringify(benchmark)}`);
+      }
+
+    }
+
+    const consoleProc = Bun.spawnSync(
+      [resolve(BENCHRUNNER), "--source-type=module", "--no-progress"],
+      {
+        stdin: new TextEncoder().encode(moduleOnlySource),
+        stdout: "pipe",
+        stderr: "pipe",
+        env: benchEnv,
+        timeout: 120_000,
+      },
+    );
+    if (consoleProc.exitCode !== 0)
+      throw new Error(`Module-only microbench console exit ${consoleProc.exitCode}: ${consoleProc.stderr.toString()}`);
+    const consoleOutput = consoleProc.stdout.toString();
+    for (const expected of ["p75", "p99", "p999", "boxplot", "summary", "fastest:"])
+      if (!consoleOutput.includes(expected))
+        throw new Error(`Module-only microbench console should contain ${expected}: ${consoleOutput}`);
+
+    console.log("BenchmarkRunner: async summary and boxplot callbacks retain scopes...");
+    const asyncScopeSource = microbenchModuleWithExports(
+      "bench, summary, boxplot",
+      [
+        "await boxplot(async () => {",
+        "  await Promise.resolve();",
+        "  await summary(async () => {",
+        "    await Promise.resolve();",
+        '    bench("async fast", () => 1 + 1);',
+        '    bench("async slow", () => [1, 2, 3, 4].map((value) => value + 1));',
+        "  });",
+        "});",
+      ],
+    );
+    for (const run of [
+      { output: join(tmp, "async-scopes.json"), modeArguments: [] },
+      { output: join(tmp, "async-scopes-bytecode.json"), modeArguments: ["--mode=bytecode"] },
+    ]) {
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${run.output}`, ...run.modeArguments],
+        {
+          stdin: new TextEncoder().encode(asyncScopeSource),
+          stdout: "pipe",
+          stderr: "pipe",
+          env: benchEnv,
+          timeout: 120_000,
+        },
+      );
+      if (proc.exitCode !== 0)
+        throw new Error(`Async microbench scopes exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const benchmarks = JSON.parse(readFileSync(run.output, "utf-8")).files?.[0]?.benchmarks;
+      if (!Array.isArray(benchmarks) || benchmarks.length !== 2 ||
+          benchmarks.some((benchmark: any) => benchmark.summaryScope !== 1 || benchmark.boxplotScope !== 1))
+        throw new Error(`Async microbench callbacks should retain both scopes: ${JSON.stringify(benchmarks)}`);
+    }
+
     console.log("BenchmarkRunner: deterministic profile mode...");
     const profileBench = join(tmp, "profile-deterministic.js");
     const profileOut = join(tmp, "profile.json");
-    writeFileSync(profileBench, [
+    writeFileSync(profileBench, microbenchModule([
       'let count = 0;',
-      'suite("profile", () => {',
-      '  bench("runs once", {',
-      '    setup: () => ({ value: 1 }),',
-      '    run: async (state) => {',
-      '      count = count + await Promise.resolve(state.value);',
-      '    },',
-      '    teardown: () => {',
+      "const profiledBenchmark = {",
+      "  *run() {",
+      "    const state = { value: 1 };",
+      "    yield async () => {",
+      "      count = count + await Promise.resolve(state.value);",
+      "    };",
       '      if (count !== 1) { throw new Error("expected one deterministic run, got " + count); }',
-      '    },',
-      '  });',
-      '});',
-      '',
-    ].join("\n"));
+      "  },",
+      "}.run;",
+      'group("profile", () => {',
+      '  bench("runs once", profiledBenchmark);',
+      "});",
+    ]));
     {
       const proc = Bun.spawnSync(
         [
           resolve(BENCHRUNNER),
           profileBench,
+          "--source-type=module",
           "--profile-deterministic",
           "--profile=all",
           `--profile-output=${profileOut}`,
@@ -2188,6 +2836,42 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       if (!profile.functions.some((fn: Record<string, unknown>) => typeof fn.allocations === "number"))
         throw new Error("Deterministic profile should include function allocation counts");
     }
+    const scriptRunProfileBench = join(tmp, "profile-deterministic-script-run.js");
+    const scriptRunProfileOut = join(tmp, "profile-script-run.json");
+    writeFileSync(scriptRunProfileBench, microbenchModuleWithExports("bench, group, run", [
+      "let count = 0;",
+      'group("profile-script-run", () => {',
+      '  bench("reruns deterministically", () => { count++; });',
+      "});",
+      "run();",
+    ]));
+    {
+      const proc = Bun.spawnSync(
+        [
+          resolve(BENCHRUNNER),
+          scriptRunProfileBench,
+          "--source-type=module",
+          "--profile-deterministic",
+          "--profile=all",
+          `--profile-output=${scriptRunProfileOut}`,
+          "--no-progress",
+          "--format=compact-json",
+        ],
+        { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
+      );
+      if (proc.exitCode !== 0) throw new Error(`Deterministic script-run profile benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const report = JSON.parse(proc.stdout.toString());
+      const bench = report.files?.[0]?.benchmarks?.[0];
+      if (bench?.iterations !== 1)
+        throw new Error(`Deterministic script-run profile report should record one iteration, got ${bench?.iterations}`);
+    }
+    {
+      const profile = JSON.parse(readFileSync(scriptRunProfileOut, "utf-8"));
+      if (!Array.isArray(profile.opcodes) || profile.opcodes.length === 0)
+        throw new Error("Deterministic script-run profile should include opcode counts");
+      if (!Array.isArray(profile.functions) || profile.functions.length === 0)
+        throw new Error("Deterministic script-run profile should include function counts");
+    }
 
     console.log("BenchmarkRunner: file benchmark JSON output...");
     if (!fileJson.includes('"totalBenchmarks":')) throw new Error('JSON should contain totalBenchmarks');
@@ -2196,11 +2880,11 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     const benchA = join(tmp, "bench-a.js");
     const benchB = join(tmp, "bench-b.js");
     const multiBenchOut = join(tmp, "bench-multi.json");
-    writeFileSync(benchA, 'suite("a", () => { bench("one", { run: () => 1 + 1 }); });\n');
-    writeFileSync(benchB, 'suite("b", () => { bench("two", { run: () => 2 + 2 }); });\n');
+    writeFileSync(benchA, microbenchModule(['group("a", () => { bench("one", () => 1 + 1); });']));
+    writeFileSync(benchB, microbenchModule(['group("b", () => { bench("two", () => 2 + 2); });']));
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), benchA, benchB, "--no-progress", "--jobs=2", "--format=json", `--output=${multiBenchOut}`],
+        [resolve(BENCHRUNNER), benchA, benchB, "--source-type=module", "--no-progress", "--jobs=2", "--format=json", `--output=${multiBenchOut}`],
         { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
       );
       if (proc.exitCode !== 0) throw new Error(`Multi-file benchmark JSON exit ${proc.exitCode}: ${proc.stderr.toString()}`);
@@ -2230,7 +2914,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     const compactBenchOut = join(tmp, "bench-compact.json");
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), benchA, benchB, "--no-progress", "--jobs=2", "--format=compact-json", `--output=${compactBenchOut}`],
+        [resolve(BENCHRUNNER), benchA, benchB, "--source-type=module", "--no-progress", "--jobs=2", "--format=compact-json", `--output=${compactBenchOut}`],
         { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
       );
       if (proc.exitCode !== 0) throw new Error(`Benchmark --format=compact-json exit ${proc.exitCode}: ${proc.stderr.toString()}`);
@@ -2259,10 +2943,10 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     console.log("BenchmarkRunner: benchmark failure JSON output...");
     const failBench = join(tmp, "benchmark-fail.js");
     const failOut = join(tmp, "benchmark-fail.json");
-    writeFileSync(failBench, 'suite("fail", () => { bench("boom", { run: () => { throw new Error("boom"); } }); });\n');
+    writeFileSync(failBench, microbenchModule(['group("fail", () => { bench("boom", () => { throw new Error("boom"); }); });']));
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), failBench, "--no-progress", "--format=json", `--output=${failOut}`],
+        [resolve(BENCHRUNNER), failBench, "--source-type=module", "--no-progress", "--format=json", `--output=${failOut}`],
         { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
       );
       if (proc.exitCode === 0) throw new Error("Failing benchmark JSON export should fail");
@@ -2274,17 +2958,63 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       if (file?.ok !== false) throw new Error(`Failing benchmark file should mark ok=false, got ${file?.ok}`);
       if (typeof file?.error?.message !== "string") throw new Error("Failing benchmark file should include shared error object");
     }
+    console.log("BenchmarkRunner: generator cleanup preserves original benchmark failure...");
+    const cleanupFailBench = join(tmp, "benchmark-cleanup-fail.js");
+    const cleanupFailOut = join(tmp, "benchmark-cleanup-fail.json");
+    writeFileSync(cleanupFailBench, microbenchModule([
+      'group("cleanup", () => {',
+      '  bench("body error wins", function* () {',
+      "    try {",
+      '      yield () => { throw new Error("body failure"); };',
+      "    } finally {",
+      '      throw new Error("cleanup failure");',
+      "    }",
+      "  });",
+      "});",
+    ]));
+    {
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), cleanupFailBench, "--source-type=module", "--no-progress", "--format=json", `--output=${cleanupFailOut}`],
+        { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
+      );
+      if (proc.exitCode === 0) throw new Error("Generator cleanup failure preservation benchmark should fail");
+    }
+    {
+      assertPreservesBodyFailure(cleanupFailOut, "Generator cleanup");
+    }
+    console.log("BenchmarkRunner: deterministic generator cleanup preserves original benchmark failure...");
+    const deterministicCleanupFailOut = join(tmp, "benchmark-cleanup-fail-deterministic.json");
+    const deterministicCleanupProfileOut = join(tmp, "benchmark-cleanup-fail-profile.json");
+    {
+      const proc = Bun.spawnSync(
+        [
+          resolve(BENCHRUNNER),
+          cleanupFailBench,
+          "--source-type=module",
+          "--profile-deterministic",
+          "--profile=all",
+          `--profile-output=${deterministicCleanupProfileOut}`,
+          "--no-progress",
+          "--format=json",
+          `--output=${deterministicCleanupFailOut}`,
+        ],
+        { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
+      );
+      if (proc.exitCode === 0) throw new Error("Deterministic generator cleanup failure preservation benchmark should fail");
+    }
+    {
+      assertPreservesBodyFailure(deterministicCleanupFailOut, "Deterministic generator cleanup");
+    }
 
     console.log("BenchmarkRunner: callback timeout is enforced...");
     {
-      const timeoutSource = [
-        'suite("limit", () => {',
-        '  bench("loop", { run: () => { while (true) {} } });',
+      const timeoutSource = microbenchModule([
+        'group("limit", () => {',
+        '  bench("loop", () => { while (true) {} });',
         "});",
-        "",
-      ].join("\n");
+      ]);
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--no-progress", "--timeout=1"],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--timeout=1"],
         {
           stdin: new TextEncoder().encode(timeoutSource),
           stdout: "pipe",
@@ -2300,7 +3030,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     const stdinOutPath = join(tmp, "stdin-interp.json");
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--no-progress", "--format=json", `--output=${stdinOutPath}`],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${stdinOutPath}`],
         {
           stdin: new TextEncoder().encode(stdinSource),
           stdout: "pipe",
@@ -2318,19 +3048,26 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       if (json.totalBenchmarks !== 1) throw new Error(`Stdin JSON should contain totalBenchmarks: 1, got ${json.totalBenchmarks}`);
     }
 
-    console.log("BenchmarkRunner: registered callbacks survive repeated runs...");
+    console.log("BenchmarkRunner: script-callable run avoids auto-run double measurement...");
     const repeatedRunOutPath = join(tmp, "repeated-run.json");
     {
-      const repeatedRunSource = [
-        'suite("twice", () => {',
-        '  bench("sum", { run: () => 1 + 1 });',
+      const repeatedRunSource = microbenchModuleWithExports("bench, group, run", [
+        "let setupCount = 0;",
+        "const failsIfMeasuredTwice = {",
+        "  *run() {",
+        "    setupCount++;",
+        '    if (setupCount > 1) throw new Error("benchmark was measured more than once");',
+        "    yield () => 1 + 1;",
+        "  },",
+        "}.run;",
+        'group("twice", () => {',
+        '  bench("sum", failsIfMeasuredTwice);',
         "});",
-        "runBenchmarks();",
+        "run();",
         "Goccia.gc();",
-        "",
-      ].join("\n");
+      ]);
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--no-progress", "--format=json", `--output=${repeatedRunOutPath}`],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${repeatedRunOutPath}`],
         {
           stdin: new TextEncoder().encode(repeatedRunSource),
           stdout: "pipe",
@@ -2351,7 +3088,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     const stdinBcOutPath = join(tmp, "stdin-bc.json");
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--no-progress", "--format=json", `--output=${stdinBcOutPath}`, "--mode=bytecode"],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${stdinBcOutPath}`, "--mode=bytecode"],
         {
           stdin: new TextEncoder().encode(stdinSource),
           stdout: "pipe",
@@ -2372,21 +3109,18 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     console.log("BenchmarkRunner: async generator bytecode benchmark...");
     const asyncGeneratorBcOutPath = join(tmp, "async-generator-bc.json");
     {
-      const asyncGeneratorSource = [
-        'suite("async generator", () => {',
+      const asyncGeneratorSource = microbenchModule([
+        'group("async generator", () => {',
         "  const source = { async *values() { yield 1; yield 2; } };",
-        '  bench("consume", {',
-        "    run: async () => {",
+        '  bench("consume", async () => {',
         "      let sum = 0;",
         "      for await (const value of source.values()) sum = sum + value;",
         "      return sum;",
-        "    },",
         "  });",
         "});",
-        "",
-      ].join("\n");
+      ]);
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--no-progress", "--format=json", `--output=${asyncGeneratorBcOutPath}`, "--mode=bytecode"],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${asyncGeneratorBcOutPath}`, "--mode=bytecode"],
         {
           stdin: new TextEncoder().encode(asyncGeneratorSource),
           stdout: "pipe",
@@ -2410,7 +3144,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     const emptyBcOutPath = join(tmp, "empty-bc.json");
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--no-progress", "--format=json", `--output=${emptyBcOutPath}`, "--mode=bytecode"],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${emptyBcOutPath}`, "--mode=bytecode"],
         {
           stdin: new TextEncoder().encode("const value = 1;\n"),
           stdout: "pipe",
@@ -2503,6 +3237,52 @@ console.log("REPL: repeated tagged template execution (interpreted + bytecode)..
 // GocciaSandboxRunner
 // ============================================================================
 
+console.log("SandboxRunner: deterministic nested engines use stable distinct streams...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "deterministic-seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import { runScript } from "goccia";',
+            "const parentRandom = Math.random();",
+            'const child = runScript("/child.js");',
+            'console.log([parentRandom, child.result].join("|"));',
+          ].join("\n"),
+        },
+        { path: "/child.js", text: "Math.random();" },
+      ],
+    }));
+
+    const expected = "0.8833108082136426|0.6524484863740322";
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      for (let run = 0; run < 2; run++) {
+        const proc = Bun.spawnSync(
+          [
+            SANDBOXRUNNER,
+            "/main.js",
+            `--seed-config=${seed}`,
+            "--source-type=module",
+            "--deterministic",
+            `--mode=${mode}`,
+          ],
+          { stdout: "pipe", stderr: "pipe" },
+        );
+        const output = proc.stdout.toString().trim();
+        if (proc.exitCode !== 0 || output !== expected)
+          throw new Error(
+            `SandboxRunner deterministic ${mode} run ${run + 1} expected ${expected}, got ${output}${proc.stderr.toString()}`,
+          );
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("SandboxRunner: inline seeds, fs, $, runScript, and diffs...");
 {
   const tmp = makeTmp();
@@ -2580,11 +3360,213 @@ console.log("SandboxRunner: inline seeds, fs, $, runScript, and diffs...");
       if (!stdout.includes(expected))
         throw new Error(`SandboxRunner interpreter stdout should include ${JSON.stringify(expected)}, got: ${stdout}`);
     }
-    const changes = JSON.parse(readFileSync(diff, "utf-8")).changes;
+    const defaultDiff = JSON.parse(readFileSync(diff, "utf-8"));
+    const changes = defaultDiff.changes;
+    if ("metadataChanges" in defaultDiff)
+      throw new Error(`SandboxRunner default diff should omit metadataChanges, got ${JSON.stringify(defaultDiff)}`);
     if (!changes.some((c: any) => c.kind === "create" && c.path === "/hello.txt"))
       throw new Error(`SandboxRunner diff should include /hello.txt create, got ${JSON.stringify(changes)}`);
     if (!changes.some((c: any) => c.kind === "create" && c.path === "/child.out"))
       throw new Error(`SandboxRunner diff should include /child.out create, got ${JSON.stringify(changes)}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: fs Stats expose realm-owned lazy Date metadata in every execution mode...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import fs from "fs";',
+            'const intrinsicStat = fs.statSync("/tracked.txt");',
+            'globalThis.Date = class ReplacementDate { constructor() { this.replacement = true; } };',
+            'const intrinsicMtime = intrinsicStat.mtime;',
+            'const intrinsicDateValid = typeof intrinsicMtime.getTime === "function" && !Object.hasOwn(intrinsicMtime, "replacement");',
+            'globalThis.Date = Object.getPrototypeOf(intrinsicMtime).constructor;',
+            'const syncStat = fs.statSync("/tracked.txt");',
+            'const promiseStat = await fs.promises.stat("/tracked.txt");',
+            'const checks = (stat) => {',
+            'const firstAtime = stat.atime;',
+            'const secondAtime = stat.atime;',
+            'return [',
+            '  stat.atime instanceof Date,',
+            '  stat.mtime instanceof Date,',
+            '  stat.ctime instanceof Date,',
+            '  stat.birthtime instanceof Date,',
+            '  stat.atime.getTime() === Math.trunc(stat.atimeMs + 0.5),',
+            '  stat.mtime.getTime() === Math.trunc(stat.mtimeMs + 0.5),',
+            '  stat.ctime.getTime() === Math.trunc(stat.ctimeMs + 0.5),',
+            '  stat.birthtime.getTime() === Math.trunc(stat.birthtimeMs + 0.5),',
+            '  typeof stat.atimeMs === "number",',
+            '  typeof stat.mtimeMs === "number",',
+            '  typeof stat.ctimeMs === "number",',
+            '  typeof stat.birthtimeMs === "number",',
+            '  stat.isFile(),',
+            '  !stat.isDirectory(),',
+            '  !stat.isSymbolicLink(),',
+            '  firstAtime !== secondAtime,',
+            '  !Object.hasOwn(stat, "atime"),',
+            '  !Object.hasOwn(stat, "isFile"),',
+            '];',
+            '};',
+            'const valid = (stat) => checks(stat).every(Boolean);',
+            'if (!valid(syncStat)) console.log("sync-checks:" + checks(syncStat).join(","));',
+            'if (!valid(promiseStat)) console.log("promise-checks:" + checks(promiseStat).join(","));',
+            'console.log("sync-stats:" + valid(syncStat));',
+            'console.log("promise-stats:" + valid(promiseStat));',
+            'console.log("shared-stats-prototype:" + (Object.getPrototypeOf(syncStat) === Object.getPrototypeOf(promiseStat)));',
+            'console.log("intrinsic-stats-date:" + intrinsicDateValid);',
+          ].join("\n"),
+        },
+        { path: "/tracked.txt", text: "tracked" },
+      ],
+    }));
+
+    for (const [label, extraArgs] of [
+      ["interpreter", []],
+      ["bytecode", ["--mode=bytecode"]],
+    ] as const) {
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const stdout = normalizeLineEndings(proc.stdout.toString());
+      if (proc.exitCode !== 0)
+        throw new Error(`SandboxRunner ${label} Stats run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      for (const expected of [
+        "sync-stats:true",
+        "promise-stats:true",
+        "shared-stats-prototype:true",
+        "intrinsic-stats-date:true",
+      ]) {
+        if (!containsLine(`\n${stdout}`, expected))
+          throw new Error(`SandboxRunner ${label} Stats stdout should include ${expected}, got: ${stdout}`);
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: metadata diffing is opt-in and separate from content changes...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    const diff = join(tmp, "diff.json");
+    const unifiedDiff = join(tmp, "diff.patch");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import fs from "fs";',
+            'for (const i of Array.from({ length: 10000 }, (_, index) => index)) { Math.sqrt(i); }',
+            'const text = fs.readFileSync("/tracked.txt", "utf8");',
+            'fs.writeFileSync("/tracked.txt", text);',
+            'fs.mkdirSync("/created");',
+          ].join("\n"),
+        },
+        { path: "/tracked.txt", text: "unchanged" },
+      ],
+    }));
+
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", "--diff-metadata", `--diff-output=${diff}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0)
+      throw new Error(`SandboxRunner metadata diff should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const parsed = JSON.parse(readFileSync(diff, "utf-8"));
+    if (parsed.metadataChanges.some((change: any) => change.path === "/"))
+      throw new Error(`Metadata diff must not expose the implicit root, got ${JSON.stringify(parsed.metadataChanges)}`);
+    if (parsed.changes.some((change: any) => change.path === "/tracked.txt"))
+      throw new Error(`Timestamp-only writes must not become content modifications, got ${JSON.stringify(parsed.changes)}`);
+    const tracked = parsed.metadataChanges.find((change: any) => change.path === "/tracked.txt");
+    if (!tracked)
+      throw new Error(`Metadata diff should include /tracked.txt, got ${JSON.stringify(parsed.metadataChanges)}`);
+    const fields = Object.keys(tracked.changes).sort();
+    if (JSON.stringify(fields) !== JSON.stringify(["atimeMs", "ctimeMs", "mtimeMs"]))
+      throw new Error(`Metadata diff should contain only changed timestamp fields, got ${JSON.stringify(tracked)}`);
+    if ("size" in tracked.changes || "type" in tracked.changes || "birthtimeMs" in tracked.changes)
+      throw new Error(`Metadata diff should not duplicate size/type or change birthtime, got ${JSON.stringify(tracked)}`);
+
+    const unifiedProc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", "--diff-metadata", "--diff-format=unified", `--diff-output=${unifiedDiff}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (unifiedProc.exitCode !== 0)
+      throw new Error(`SandboxRunner unified metadata diff should exit 0, got ${unifiedProc.exitCode}: ${unifiedProc.stderr.toString()}`);
+    const unified = readFileSync(unifiedDiff, "utf-8");
+    if (!unified.includes("@@ sandbox metadata changed /tracked.txt @@") ||
+        unified.includes("@@ sandbox file changed @@") ||
+        unified.includes("@@ sandbox metadata changed / @@"))
+      throw new Error(`Unified metadata diff should keep timestamp-only changes separate, got: ${unified}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: fs errors are Node-shaped in every execution mode...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import fs from "fs";',
+            'const printError = (label, error) => console.log([',
+            '  label,',
+            '  error instanceof Error,',
+            '  Error.isError(error),',
+            '  error.name,',
+            '  error.code,',
+            '  typeof error.errno === "number" && error.errno < 0,',
+            '  error.syscall,',
+            '  error.path,',
+            '  typeof error.dest,',
+            '  error.message,',
+            '].join("|"));',
+            'try { fs.readFileSync("/missing.txt", "utf8"); }',
+            'catch (error) { printError("sync", error); }',
+            'try { await fs.promises.readFile("/missing.txt", "utf8"); }',
+            'catch (error) { printError("promise", error); }',
+            'try { fs.renameSync("/missing.txt", "/destination.txt"); }',
+            'catch (error) { printError("rename", error); }',
+          ].join("\n"),
+        },
+      ],
+    }));
+
+    const expected = [
+      "sync|true|true|Error|ENOENT|true|readFile|/missing.txt|undefined|ENOENT: no such file or directory, readFile '/missing.txt'",
+      "promise|true|true|Error|ENOENT|true|readFile|/missing.txt|undefined|ENOENT: no such file or directory, readFile '/missing.txt'",
+      "rename|true|true|Error|ENOENT|true|rename|/missing.txt|string|ENOENT: no such file or directory, rename '/missing.txt' -> '/destination.txt'",
+    ];
+    for (const [label, extraArgs] of [
+      ["interpreter", []],
+      ["bytecode", ["--mode=bytecode"]],
+    ] as const) {
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+      if (proc.exitCode !== 0)
+        throw new Error(`SandboxRunner ${label} fs error run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const actual = stdout.split("\n");
+      if (JSON.stringify(actual) !== JSON.stringify(expected))
+        throw new Error(`SandboxRunner ${label} fs errors should be Node-shaped, got: ${stdout}`);
+    }
   } finally {
     clean(tmp);
   }
@@ -2840,15 +3822,19 @@ console.log("SandboxRunner: nested sandbox execution seeds from parent VFS witho
             '  diff: true,',
             '});',
             'const noWrite = runScript("/readonly.js", { sandbox: true, seed: ["/readonly.js"], diff: true, diffFormat: "unified" });',
+            'const metadataOnly = runScript("/metadata.js", { sandbox: true, seed: ["/metadata.js", "/metadata.txt"], diffMetadata: true });',
             'console.log(child.stdout.trim());',
             'console.log(child.diff.includes(\'"path": "/child-only.txt"\'));',
             'console.log(noWrite.diff === "");',
+            'console.log(JSON.parse(metadataOnly.diff).changes.length === 0);',
+            'console.log(JSON.parse(metadataOnly.diff).metadataChanges.some((change) => change.path === "/metadata.txt" && "ctimeMs" in change.changes && "mtimeMs" in change.changes));',
             'console.log(fs.existsSync("/child-only.txt"));',
             'console.log(fs.readFileSync("/parent.txt", "utf8"));',
-            'const shellChild = await $`goccia --sandbox --seed /child.js --seed /parent.txt --seed /parent.txt=/shell-out/ --diff /child.js`.text();',
+            'const shellChild = await $`goccia --sandbox --seed /child.js --seed /parent.txt --seed /parent.txt=/shell-out/ --diff-metadata /child.js`.text();',
             'console.log(shellChild.includes("parent-seed"));',
             'console.log(shellChild.includes("shell-out:parent-seed"));',
             'console.log(shellChild.includes(\'"path": "/child-only.txt"\'));',
+            'console.log(shellChild.includes(\'"metadataChanges"\'));',
             'console.log(fs.existsSync("/child-only.txt"));',
           ].join("\n"),
         },
@@ -2866,6 +3852,16 @@ console.log("SandboxRunner: nested sandbox execution seeds from parent VFS witho
           ].join("\n"),
         },
         { path: "/readonly.js", text: "1;" },
+        {
+          path: "/metadata.js",
+          text: [
+            'import fs from "fs";',
+            'for (const i of Array.from({ length: 10000 }, (_, index) => index)) { Math.sqrt(i); }',
+            'const text = fs.readFileSync("/metadata.txt", "utf8");',
+            'fs.writeFileSync("/metadata.txt", text);',
+          ].join("\n"),
+        },
+        { path: "/metadata.txt", text: "metadata" },
         { path: "/parent.txt", text: "parent-seed" },
       ],
     }));
@@ -3377,11 +4373,11 @@ console.log("BenchmarkRunner: --multifile produces multiple file entries...");
     const file = join(tmp, "bench.js");
     writeFileSync(
       file,
-      'suite("A", () => { bench("a", { run: () => 1 + 1, iterations: 10, warmup: 0, repeats: 1 }); });\n' +
+      microbenchModule(['group("A", () => { bench("a", () => 1 + 1); });']) +
       "---\n" +
-      'suite("B", () => { bench("b", { run: () => 2 + 2, iterations: 10, warmup: 0, repeats: 1 }); });\n',
+      microbenchModule(['group("B", () => { bench("b", () => 2 + 2); });']),
     );
-    const proc = Bun.spawnSync([BENCHRUNNER, "--multifile", "--no-progress", "--format=json", file], {
+    const proc = Bun.spawnSync([BENCHRUNNER, "--multifile", "--source-type=module", "--no-progress", "--format=json", file], {
       stdout: "pipe",
       stderr: "pipe",
       env: benchEnv,
@@ -3415,6 +4411,284 @@ console.log("Loader: goccia.json multifile=true works without --multifile flag..
     const json = JSON.parse(proc.stdout.toString());
     if (json.files?.length !== 2)
       throw new Error(`Loader config-driven multifile should produce 2 entries, got ${json.files?.length}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Loader: --module virtual modules use the ordinary module pipeline...");
+for (const mode of ["interpreted", "bytecode"] as const) {
+  const source = [
+    'import bytes from "host:asset";',
+    'import source moduleSource from "host:pkg/main";',
+    'import defer * as deferred from "host:deferred";',
+    'import special from "host:with space";',
+    'import { url, resolved } from "host:pkg/main";',
+    'url + "|" + resolved() + "|" + bytes[2] + "|" + deferred.value + "|" + special + "|" + typeof moduleSource;',
+  ].join("\n");
+  const proc = Bun.spawnSync(
+    [
+      LOADER,
+      "-",
+      "--source-type=module",
+      `--mode=${mode}`,
+      "--print",
+      "--experimental-js-module-source",
+      "--module",
+      'host:asset={"type":"bytes","content":"AQID"}',
+      "--module",
+      'host:pkg/dep=export const value = 7;',
+      "--module",
+      'host:pkg/main=export const url = import.meta.url; export const resolved = () => import.meta.resolve("./dep");',
+      "--module",
+      'host:deferred=export const value = 11;',
+      "--module",
+      'host:with space=export default 5;',
+    ],
+    { stdin: new TextEncoder().encode(source), stdout: "pipe", stderr: "pipe" },
+  );
+  if (proc.exitCode !== 0)
+    throw new Error(`--module ${mode} failed: ${proc.stderr.toString()}`);
+  if (!containsLine(proc.stdout.toString(), "host:pkg/main|host:pkg/dep|3|11|5|object"))
+    throw new Error(`--module ${mode} did not preserve module phases, addresses, and bytes: ${proc.stdout.toString()}`);
+}
+
+console.log("Loader: dynamic import and ShadowRealm use configured virtual modules...");
+{
+  const source = [
+    'import("host:dynamic").then(ns => console.log("dynamic:" + ns.value));',
+    'import { count } from "host:realm-state";',
+    'console.log("parent-state:" + count);',
+    'new ShadowRealm().importValue("host:realm", "value").then(value => console.log("realm:" + value));',
+    'new ShadowRealm().importValue("host:realm-state", "count").then(value => console.log("child-state:" + value));',
+  ].join("\n");
+  const proc = Bun.spawnSync(
+    [
+      LOADER,
+      "-",
+      "--source-type=module",
+      "--unsafe-shadowrealm",
+      "--module",
+      'host:dynamic=export const value = 9;',
+      "--module",
+      'host:realm=export const value = 13;',
+      "--module",
+      'host:realm-state=import.meta.count = (import.meta.count ?? 0) + 1; export const count = import.meta.count;',
+    ],
+    { stdin: new TextEncoder().encode(source), stdout: "pipe", stderr: "pipe" },
+  );
+  if (proc.exitCode !== 0)
+    throw new Error(`Dynamic/ShadowRealm virtual modules failed: ${proc.stderr.toString()}`);
+  const output = proc.stdout.toString();
+  if (!output.includes("dynamic:9") || !output.includes("realm:13") ||
+      !output.includes("parent-state:1") || !output.includes("child-state:1"))
+    throw new Error(`Dynamic/ShadowRealm virtual modules produced unexpected output: ${output}`);
+}
+
+console.log("Loader: hierarchical virtual module addresses preserve canonical URLs...");
+{
+  const proc = Bun.spawnSync(
+    [
+      LOADER,
+      "-",
+      "--source-type=module",
+      "--print",
+      "--module",
+      'https://example.test/pkg/main?redirect/a/../b=export default import.meta.url + "|" + import.meta.resolve("./dep");',
+    ],
+    {
+      stdin: new TextEncoder().encode(
+        'import value from "https://example.test/pkg/main?redirect/a/../b"; value;',
+      ),
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  if (proc.exitCode !== 0)
+    throw new Error(`Hierarchical virtual address failed: ${proc.stderr.toString()}`);
+  if (!containsLine(proc.stdout.toString(),
+      "https://example.test/pkg/main?redirect/a/../b|https://example.test/pkg/dep"))
+    throw new Error(`Hierarchical virtual address was not preserved: ${proc.stdout.toString()}`);
+}
+
+console.log("Loader: virtual import.meta.resolve uses aliases for bare specifiers...");
+{
+  const tmp = makeTmp();
+  try {
+    const dependency = join(tmp, "dependency.mjs");
+    writeFileSync(dependency, "export default 1;\n");
+    const proc = Bun.spawnSync(
+      [
+        LOADER,
+        "-",
+        "--source-type=module",
+        "--print",
+        "--alias",
+        `dependency=${dependency}`,
+        "--module",
+        'host:resolver=export default import.meta.resolve("dependency");',
+      ],
+      {
+        stdin: new TextEncoder().encode(
+          'import value from "host:resolver"; value;',
+        ),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    if (proc.exitCode !== 0)
+      throw new Error(`Virtual bare resolution failed: ${proc.stderr.toString()}`);
+    if (!containsLine(proc.stdout.toString(), pathToFileURL(dependency).href))
+      throw new Error(`Virtual bare resolution skipped aliases: ${proc.stdout.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Loader: attributed virtual modules reinterpret their stored content...");
+{
+  const proc = Bun.spawnSync(
+    [
+      LOADER,
+      "-",
+      "--source-type=module",
+      "--print",
+      "--module",
+      "host:source=A",
+    ],
+    {
+      stdin: new TextEncoder().encode(
+        'import bytes from "host:source" with { type: "bytes" }; bytes[0];',
+      ),
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  if (proc.exitCode !== 0)
+    throw new Error(`Attributed virtual module failed: ${proc.stderr.toString()}`);
+  if (!containsLine(proc.stdout.toString(), "65"))
+    throw new Error(`Attributed virtual module should expose source bytes: ${proc.stdout.toString()}`);
+}
+
+console.log("Loader: virtual definitions validate eagerly but JavaScript parses lazily...");
+{
+  const unused = Bun.spawnSync(
+    [LOADER, "-", "--module", "host:unused=!!! not valid JavaScript !!!"],
+    { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
+  );
+  if (unused.exitCode !== 0)
+    throw new Error(`Unused invalid virtual source should not fail startup: ${unused.stderr.toString()}`);
+
+  const invalidBytes = Bun.spawnSync(
+    [LOADER, "-", "--module", 'host:bad={"type":"bytes","content":"%%%"}'],
+    { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
+  );
+  const invalidBytesOutput = invalidBytes.stdout.toString() + invalidBytes.stderr.toString();
+  if (invalidBytes.exitCode === 0 || !invalidBytesOutput.includes("invalid base64"))
+    throw new Error(`Invalid virtual bytes should fail configuration: ${invalidBytesOutput}`);
+
+  const runtimeCollision = Bun.spawnSync(
+    [LOADER, "-", "--module", "goccia:csv=export default 1;"],
+    { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
+  );
+  const collisionOutput = runtimeCollision.stdout.toString() + runtimeCollision.stderr.toString();
+  if (runtimeCollision.exitCode === 0 || !collisionOutput.includes("runtime module"))
+    throw new Error(`Runtime module collision should be a configuration error: ${collisionOutput}`);
+}
+
+console.log("SandboxRunner: virtual modules share the CLI surface and cannot shadow host modules...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [{
+        path: "/main.js",
+        text: 'import value from "host:configured"; console.log(value);',
+      }],
+    }));
+    const configured = Bun.spawnSync(
+      [
+        SANDBOXRUNNER,
+        "/main.js",
+        `--seed-config=${seed}`,
+        "--source-type=module",
+        "--module",
+        "host:configured=export default 17;",
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (configured.exitCode !== 0 ||
+        normalizeLineEndings(configured.stdout.toString()).trim() !== "17")
+      throw new Error(`Sandbox virtual module configuration failed: ${configured.stdout.toString()}${configured.stderr.toString()}`);
+
+    const hostConfigDir = join(tmp, "host-config");
+    const sandboxEntry = join(hostConfigDir, "main.js");
+    const isolationSeed = join(tmp, "isolation-seed.json");
+    mkdirSync(hostConfigDir, { recursive: true });
+    writeFileSync(
+      join(hostConfigDir, "goccia.json"),
+      JSON.stringify({ modules: "missing-modules.json" }),
+    );
+    writeFileSync(isolationSeed, JSON.stringify({
+      files: [{ path: sandboxEntry, text: 'console.log("isolated");' }],
+    }));
+    const isolated = Bun.spawnSync(
+      [
+        SANDBOXRUNNER,
+        sandboxEntry,
+        `--seed-config=${isolationSeed}`,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (isolated.exitCode !== 0 ||
+        normalizeLineEndings(isolated.stdout.toString()).trim() !== "isolated")
+      throw new Error(`Sandbox consulted host config for a virtual path: ${isolated.stdout.toString()}${isolated.stderr.toString()}`);
+
+    const manifest = join(tmp, "modules.mjs");
+    const manifestSource = join(tmp, "module-map.mjs");
+    writeFileSync(
+      manifestSource,
+      'export default {"host:configured": {content: "export default 19;"}};\n',
+    );
+    writeFileSync(
+      manifest,
+      'import modules from "./module-map.mjs"; export default modules;\n',
+    );
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const configuredFromManifest = Bun.spawnSync(
+        [
+          SANDBOXRUNNER,
+          "/main.js",
+          `--seed-config=${seed}`,
+          "--source-type=module",
+          `--mode=${mode}`,
+          "--modules",
+          manifest,
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      if (configuredFromManifest.exitCode !== 0 ||
+          normalizeLineEndings(configuredFromManifest.stdout.toString()).trim() !== "19")
+        throw new Error(`Sandbox executable module manifest ${mode} failed: ${configuredFromManifest.stdout.toString()}${configuredFromManifest.stderr.toString()}`);
+    }
+
+    const hostCollision = Bun.spawnSync(
+      [
+        SANDBOXRUNNER,
+        "/main.js",
+        `--seed-config=${seed}`,
+        "--source-type=module",
+        "--module",
+        "fs=export default 1;",
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const hostCollisionOutput =
+      hostCollision.stdout.toString() + hostCollision.stderr.toString();
+    if (hostCollision.exitCode === 0 ||
+        !hostCollisionOutput.includes("host module"))
+      throw new Error(`Host module collision should be a configuration error: ${hostCollisionOutput}`);
   } finally {
     clean(tmp);
   }

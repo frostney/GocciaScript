@@ -119,6 +119,9 @@ type
     procedure AppendOwnPrivateNames(const ANames: TStrings);
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; virtual;
     function NativeInstanceDefaultPrototype: TGocciaObjectValue; virtual;
+    function SupportsRealmIntrinsicPrototypeFallback: Boolean; virtual;
+    function IntrinsicPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; virtual;
     function Instantiate(const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaValue = nil): TGocciaValue; virtual;
     function EstimatedInstancePropertyCapacity: Integer;
@@ -193,27 +196,45 @@ type
 
   TGocciaMapClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function SupportsRealmIntrinsicPrototypeFallback: Boolean; override;
+    function IntrinsicPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; override;
   end;
 
   TGocciaSetClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function SupportsRealmIntrinsicPrototypeFallback: Boolean; override;
+    function IntrinsicPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; override;
   end;
 
   TGocciaWeakMapClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function SupportsRealmIntrinsicPrototypeFallback: Boolean; override;
+    function IntrinsicPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; override;
   end;
 
   TGocciaWeakSetClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function SupportsRealmIntrinsicPrototypeFallback: Boolean; override;
+    function IntrinsicPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; override;
   end;
 
   TGocciaWeakRefClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function SupportsRealmIntrinsicPrototypeFallback: Boolean; override;
+    function IntrinsicPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; override;
     function GetClassLength: Integer; override;
   end;
 
   TGocciaFinalizationRegistryClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function SupportsRealmIntrinsicPrototypeFallback: Boolean; override;
+    function IntrinsicPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; override;
     function GetClassLength: Integer; override;
   end;
 
@@ -308,6 +329,7 @@ type
     property Enabled: Boolean read FEnabled write FEnabled;
     property CompileDynamicFunction: TGocciaCompileDynamicFunction
       read FCompileDynamicFunction write FCompileDynamicFunction;
+    property DynamicKind: TGocciaDynamicFunctionKind read FDynamicKind;
   end;
 
   TGocciaInstanceValue = class(TGocciaObjectValue)
@@ -329,10 +351,24 @@ type
     procedure SetRawPrivateProperty(const AKey: string; const AValue: TGocciaValue);
     function IsInstanceOf(const AClass: TGocciaClassValue): Boolean; inline;
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); virtual;
+    procedure FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); virtual;
     procedure MarkReferences; override;
 
     property ClassValue: TGocciaClassValue read FClass write FClass;
   end;
+
+function ShouldDelayTypedArrayPrototypeLookup(
+  const ANativeClass: TGocciaClassValue;
+  const AArguments: TGocciaArgumentsCollection): Boolean;
+function ShouldDelayNativePrototypeLookup(
+  const ANativeClass: TGocciaClassValue;
+  const AArguments: TGocciaArgumentsCollection): Boolean;
+function ShouldDelayNativeSuperPrototypeLookup(
+  const ANativeSuperConstructor: TGocciaObjectValue): Boolean;
+function GetNativePrototypeFromConstructor(
+  const ANativeClass: TGocciaClassValue;
+  const ANewTarget: TGocciaValue;
+  const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
 
 implementation
 
@@ -349,6 +385,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Intrinsics.FunctionObjects,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.AutoAccessor,
@@ -417,6 +454,46 @@ begin
     ACurrentRealmDefault);
 end;
 
+function ShouldDelayTypedArrayPrototypeLookup(
+  const ANativeClass: TGocciaClassValue;
+  const AArguments: TGocciaArgumentsCollection): Boolean;
+var
+  FirstArg: TGocciaValue;
+begin
+  Result := False;
+  if not (ANativeClass is TGocciaTypedArrayClassValue) or
+     (AArguments = nil) or
+     (AArguments.Length = 0) then
+    Exit;
+
+  FirstArg := AArguments.GetElement(0);
+  Result := not (FirstArg is TGocciaArrayBufferValue) and
+    not (FirstArg is TGocciaSharedArrayBufferValue) and
+    not (FirstArg is TGocciaTypedArrayValue);
+end;
+
+function ShouldDelayNativePrototypeLookup(
+  const ANativeClass: TGocciaClassValue;
+  const AArguments: TGocciaArgumentsCollection): Boolean;
+begin
+  Result := Assigned(ANativeClass) and
+    ((ANativeClass is TGocciaFunctionConstructorClassValue) or
+     ShouldDelayTypedArrayPrototypeLookup(ANativeClass, AArguments) or
+     (ANativeClass is TGocciaArrayBufferClassValue) or
+     (ANativeClass is TGocciaSharedArrayBufferClassValue) or
+     (ANativeClass is TGocciaDataViewClassValue));
+end;
+
+function ShouldDelayNativeSuperPrototypeLookup(
+  const ANativeSuperConstructor: TGocciaObjectValue): Boolean;
+begin
+  Result := Assigned(ANativeSuperConstructor) and
+    (ANativeSuperConstructor <> TGocciaFunctionBase.GetSharedPrototype) and
+    (ANativeSuperConstructor is TGocciaClassValue) and
+    Assigned(TGocciaClassValue(ANativeSuperConstructor).
+      NativeInstanceDefaultPrototype);
+end;
+
 function GetArrayPrototypeFromConstructor(
   const ANewTarget: TGocciaValue;
   const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
@@ -432,9 +509,7 @@ begin
   if ProtoValue is TGocciaObjectValue then
     Exit(TGocciaObjectValue(ProtoValue));
 
-  FallbackRealm := nil;
-  if ANewTarget is TGocciaFunctionBase then
-    FallbackRealm := TGocciaFunctionBase(ANewTarget).CreationRealm;
+  FallbackRealm := GetFunctionRealm(ANewTarget);
 
   Result := GetSharedArrayPrototypeForRealm(FallbackRealm);
   if not Assigned(Result) then
@@ -458,9 +533,7 @@ begin
   if ProtoValue is TGocciaObjectValue then
     Exit(TGocciaObjectValue(ProtoValue));
 
-  FallbackRealm := nil;
-  if ANewTarget is TGocciaFunctionBase then
-    FallbackRealm := TGocciaFunctionBase(ANewTarget).CreationRealm;
+  FallbackRealm := GetFunctionRealm(ANewTarget);
 
   if Assigned(FallbackRealm) then
   begin
@@ -473,6 +546,15 @@ begin
     else if AConstructorName = CONSTRUCTOR_BOOLEAN then
       FallbackPrototype :=
         TGocciaBooleanObjectValue.GetSharedPrototypeForRealm(FallbackRealm)
+    else if AConstructorName = CONSTRUCTOR_ARRAY_BUFFER then
+      FallbackPrototype :=
+        TGocciaArrayBufferValue.GetSharedPrototypeForRealm(FallbackRealm)
+    else if AConstructorName = CONSTRUCTOR_SHARED_ARRAY_BUFFER then
+      FallbackPrototype :=
+        TGocciaSharedArrayBufferValue.GetSharedPrototypeForRealm(FallbackRealm)
+    else if AConstructorName = CONSTRUCTOR_DATA_VIEW then
+      FallbackPrototype :=
+        TGocciaDataViewValue.GetSharedPrototypeForRealm(FallbackRealm)
     else
       FallbackPrototype := nil;
 
@@ -481,6 +563,65 @@ begin
   end;
 
   Result := ACurrentRealmDefault;
+end;
+
+function GetNativePrototypeFromConstructor(
+  const ANativeClass: TGocciaClassValue;
+  const ANewTarget: TGocciaValue;
+  const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
+var
+  FallbackPrototype: TGocciaObjectValue;
+  FallbackRealm: TGocciaRealm;
+  ProtoValue: TGocciaValue;
+begin
+  if ANativeClass.SupportsRealmIntrinsicPrototypeFallback then
+  begin
+    if ANewTarget is TGocciaObjectValue then
+      ProtoValue := TGocciaObjectValue(ANewTarget).GetProperty(PROP_PROTOTYPE)
+    else
+      ProtoValue := nil;
+    if ProtoValue is TGocciaObjectValue then
+      Exit(TGocciaObjectValue(ProtoValue));
+
+    FallbackRealm := GetFunctionRealm(ANewTarget);
+    FallbackPrototype := ANativeClass.IntrinsicPrototypeForRealm(FallbackRealm);
+    if Assigned(FallbackPrototype) then
+      Exit(FallbackPrototype);
+    Exit(ACurrentRealmDefault);
+  end;
+
+  if ANativeClass is TGocciaTypedArrayClassValue then
+    Result := GetTypedArrayPrototypeFromConstructor(
+      TGocciaTypedArrayClassValue(ANativeClass), ANewTarget,
+      ACurrentRealmDefault)
+  else if ANativeClass is TGocciaArrayClassValue then
+    Result := GetArrayPrototypeFromConstructor(ANewTarget,
+      ACurrentRealmDefault)
+  else if ANativeClass is TGocciaStringClassValue then
+    Result := TGocciaStringClassValue(ANativeClass).
+      DefaultPrototypeForNewTarget(ANewTarget, ACurrentRealmDefault)
+  else if ANativeClass is TGocciaNumberClassValue then
+    Result := TGocciaNumberClassValue(ANativeClass).
+      DefaultPrototypeForNewTarget(ANewTarget, ACurrentRealmDefault)
+  else if ANativeClass is TGocciaBooleanClassValue then
+    Result := TGocciaBooleanClassValue(ANativeClass).
+      DefaultPrototypeForNewTarget(ANewTarget, ACurrentRealmDefault)
+  else if ANativeClass is TGocciaFunctionConstructorClassValue then
+    Result := FunctionObjectIntrinsicPrototypeFromConstructor(
+      TGocciaFunctionConstructorClassValue(ANativeClass).DynamicKind,
+      ANewTarget, ACurrentRealmDefault)
+  else if ANativeClass is TGocciaArrayBufferClassValue then
+    Result := DefaultNativePrototypeForNewTarget(ANewTarget,
+      ACurrentRealmDefault, CONSTRUCTOR_ARRAY_BUFFER)
+  else if ANativeClass is TGocciaSharedArrayBufferClassValue then
+    Result := DefaultNativePrototypeForNewTarget(ANewTarget,
+      ACurrentRealmDefault, CONSTRUCTOR_SHARED_ARRAY_BUFFER)
+  else if ANativeClass is TGocciaDataViewClassValue then
+    Result := DefaultNativePrototypeForNewTarget(ANewTarget,
+      ACurrentRealmDefault, CONSTRUCTOR_DATA_VIEW)
+  else
+    Result := GetProtoFromConstructorWithIntrinsic(ANewTarget,
+      ACurrentRealmDefault);
 end;
 
 // SetDefaultPrototype / PatchDefaultPrototype previously cached the
@@ -1355,6 +1496,17 @@ begin
     Result := nil;
 end;
 
+function TGocciaClassValue.IntrinsicPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  Result := nil;
+end;
+
+function TGocciaClassValue.SupportsRealmIntrinsicPrototypeFallback: Boolean;
+begin
+  Result := False;
+end;
+
 procedure TGocciaClassValue.ReplacePrototype(const APrototype: TGocciaObjectValue);
 begin
   FClassPrototype := APrototype;
@@ -1465,7 +1617,9 @@ var
   FinalThis: TGocciaValue;
   ConstructResult: TGocciaValue;
   EffectiveNewTarget: TGocciaValue;
+  PreviousRealm: TGocciaRealm;
   DelayNativePrototypeLookup: Boolean;
+  NativeInstanceInitialized: Boolean;
   NativeInstanceConstructedByNativeSuper: Boolean;
   function IsUndefinedConstructResult(const AValue: TGocciaValue): Boolean;
   begin
@@ -1495,11 +1649,36 @@ begin
   else
     EffectiveNewTarget := Self;
 
+  // ES2026 §20.1.1.1 Object(value): direct Object construction boxes
+  // primitive inputs and returns object inputs unchanged.  Derived Object
+  // subclasses still allocate through NewTarget below.
+  if (FName = CONSTRUCTOR_OBJECT) and (EffectiveNewTarget = Self) and
+     (AArguments.Length > 0) and
+     not (AArguments.GetElement(0) is TGocciaUndefinedLiteralValue) and
+     not (AArguments.GetElement(0) is TGocciaNullLiteralValue) then
+  begin
+    if AArguments.GetElement(0).IsPrimitive then
+    begin
+      PreviousRealm := CurrentRealm;
+      if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+        SetCurrentRealm(FCreationRealm);
+      try
+        Exit(TGocciaObjectValue(AArguments.GetElement(0).Box));
+      finally
+        if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+          SetCurrentRealm(PreviousRealm);
+      end;
+    end;
+    if AArguments.GetElement(0) is TGocciaObjectValue then
+      Exit(TGocciaObjectValue(AArguments.GetElement(0)));
+  end;
+
   NativeClass := nil;
   NativeInstance := nil;
   NativeSuperConstructor := nil;
   NativeIntrinsicPrototype := nil;
   DelayNativePrototypeLookup := False;
+  NativeInstanceInitialized := False;
   NativeInstanceConstructedByNativeSuper := False;
   WalkClass := Self;
   while Assigned(WalkClass) do
@@ -1512,42 +1691,30 @@ begin
     end;
     if Assigned(WalkClass.NativeSuperConstructor) then
     begin
+      if WalkClass.NativeSuperConstructor is TGocciaClassValue then
+      begin
+        NativeClass := TGocciaClassValue(WalkClass.NativeSuperConstructor);
+        NativeIntrinsicPrototype := NativeClass.NativeInstanceDefaultPrototype;
+      end;
       NativeSuperConstructor := WalkClass.NativeSuperConstructor;
       Break;
     end;
     WalkClass := WalkClass.SuperClass;
   end;
 
-  // TypedArray constructors perform observable argument coercion before
-  // AllocateTypedArray reaches GetPrototypeFromConstructor.
-  DelayNativePrototypeLookup := Assigned(NativeClass) and
-    (NativeClass is TGocciaTypedArrayClassValue);
+  // These constructors perform observable validation/coercion before
+  // OrdinaryCreateFromConstructor reaches GetPrototypeFromConstructor. TypedArray
+  // does so only for object sources that are neither ArrayBuffer-backed nor
+  // typed-array-backed.
+  DelayNativePrototypeLookup := ShouldDelayNativePrototypeLookup(NativeClass,
+    AArguments) or ShouldDelayNativeSuperPrototypeLookup(NativeSuperConstructor);
 
   // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget)
   if Assigned(ANewTarget) and not DelayNativePrototypeLookup then
   begin
     if Assigned(NativeClass) then
-    begin
-      if NativeClass is TGocciaTypedArrayClassValue then
-        InstancePrototype := GetTypedArrayPrototypeFromConstructor(
-          TGocciaTypedArrayClassValue(NativeClass), ANewTarget,
-          NativeIntrinsicPrototype)
-      else if NativeClass is TGocciaArrayClassValue then
-        InstancePrototype := GetArrayPrototypeFromConstructor(ANewTarget,
-          NativeIntrinsicPrototype)
-      else if NativeClass is TGocciaStringClassValue then
-        InstancePrototype := TGocciaStringClassValue(NativeClass).
-          DefaultPrototypeForNewTarget(ANewTarget, NativeIntrinsicPrototype)
-      else if NativeClass is TGocciaNumberClassValue then
-        InstancePrototype := TGocciaNumberClassValue(NativeClass).
-          DefaultPrototypeForNewTarget(ANewTarget, NativeIntrinsicPrototype)
-      else if NativeClass is TGocciaBooleanClassValue then
-        InstancePrototype := TGocciaBooleanClassValue(NativeClass).
-          DefaultPrototypeForNewTarget(ANewTarget, NativeIntrinsicPrototype)
-      else
-        InstancePrototype := GetProtoFromConstructorWithIntrinsic(ANewTarget,
-          NativeIntrinsicPrototype);
-    end
+      InstancePrototype := GetNativePrototypeFromConstructor(NativeClass,
+        ANewTarget, NativeIntrinsicPrototype)
     else
       InstancePrototype := GetProtoFromConstructor(ANewTarget);
   end
@@ -1555,12 +1722,25 @@ begin
     InstancePrototype := FClassPrototype;
 
   if Assigned(NativeClass) then
+  begin
     NativeInstance := NativeClass.CreateNativeInstance(AArguments);
+    if DelayNativePrototypeLookup and
+       (NativeInstance is TGocciaInstanceValue) then
+    begin
+      TGarbageCollector.Instance.AddTempRoot(NativeInstance);
+      try
+        TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
+      finally
+        TGarbageCollector.Instance.RemoveTempRoot(NativeInstance);
+      end;
+      NativeInstanceInitialized := True;
+    end;
+  end;
 
-  if Assigned(ANewTarget) and DelayNativePrototypeLookup then
-    InstancePrototype := GetTypedArrayPrototypeFromConstructor(
-      TGocciaTypedArrayClassValue(NativeClass), ANewTarget,
-      NativeIntrinsicPrototype);
+  if Assigned(NativeClass) and Assigned(ANewTarget) and
+     DelayNativePrototypeLookup then
+    InstancePrototype := GetNativePrototypeFromConstructor(NativeClass,
+      ANewTarget, NativeIntrinsicPrototype);
 
   // ES2026 §10.2.2 step 6: Set proto on the instance before constructor runs
   if Assigned(NativeInstance) then
@@ -1575,6 +1755,16 @@ begin
     Instance := TGocciaInstanceValue.Create(Self,
       EstimatedInstancePropertyCapacity);
     Instance.Prototype := InstancePrototype;
+  end;
+
+  if NativeInstanceInitialized and (NativeInstance is TGocciaInstanceValue) then
+  begin
+    TGarbageCollector.Instance.AddTempRoot(Instance);
+    try
+      TGocciaInstanceValue(NativeInstance).FinalizeNativeFromArguments(AArguments);
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(Instance);
+    end;
   end;
 
   ConstructorToCall := FConstructorMethod;
@@ -1632,7 +1822,8 @@ begin
       if Assigned(NativeInstance) then
       begin
         Instance := NativeInstance;
-        Instance.Prototype := InstancePrototype;
+        if Assigned(NativeClass) or not DelayNativePrototypeLookup then
+          Instance.Prototype := InstancePrototype;
         if NativeInstance is TGocciaInstanceValue then
           TGocciaInstanceValue(NativeInstance).ClassValue := Self;
       end;
@@ -1640,7 +1831,8 @@ begin
 
     if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then
       if not NativeInstanceConstructedByNativeSuper then
-        TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
+        if not NativeInstanceInitialized then
+          TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
   end;
 
   Result := Instance;
@@ -2029,7 +2221,18 @@ begin
       Result := Instantiate(AArguments);
   end
   else
-    ThrowTypeError(Format(SErrorClassConstructorRequiresNew, [FName]), SSuggestRequiresNew);
+  begin
+    PreviousRealm := CurrentRealm;
+    if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+      SetCurrentRealm(FCreationRealm);
+    try
+      ThrowTypeError(Format(SErrorClassConstructorRequiresNew, [FName]),
+        SSuggestRequiresNew);
+    finally
+      if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+        SetCurrentRealm(PreviousRealm);
+    end;
+  end;
 end;
 
 { TGocciaArrayClassValue }
@@ -2051,11 +2254,33 @@ begin
   Result := TGocciaMapValue.Create;
 end;
 
+function TGocciaMapClassValue.IntrinsicPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  Result := TGocciaMapValue.GetSharedPrototypeForRealm(ARealm);
+end;
+
+function TGocciaMapClassValue.SupportsRealmIntrinsicPrototypeFallback: Boolean;
+begin
+  Result := True;
+end;
+
 { TGocciaSetClassValue }
 
 function TGocciaSetClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 begin
   Result := TGocciaSetValue.Create;
+end;
+
+function TGocciaSetClassValue.IntrinsicPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  Result := TGocciaSetValue.GetSharedPrototypeForRealm(ARealm);
+end;
+
+function TGocciaSetClassValue.SupportsRealmIntrinsicPrototypeFallback: Boolean;
+begin
+  Result := True;
 end;
 
 { TGocciaWeakMapClassValue }
@@ -2065,6 +2290,17 @@ begin
   Result := TGocciaWeakMapValue.Create;
 end;
 
+function TGocciaWeakMapClassValue.IntrinsicPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  Result := TGocciaWeakMapValue.GetSharedPrototypeForRealm(ARealm);
+end;
+
+function TGocciaWeakMapClassValue.SupportsRealmIntrinsicPrototypeFallback: Boolean;
+begin
+  Result := True;
+end;
+
 { TGocciaWeakSetClassValue }
 
 function TGocciaWeakSetClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
@@ -2072,11 +2308,33 @@ begin
   Result := TGocciaWeakSetValue.Create;
 end;
 
+function TGocciaWeakSetClassValue.IntrinsicPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  Result := TGocciaWeakSetValue.GetSharedPrototypeForRealm(ARealm);
+end;
+
+function TGocciaWeakSetClassValue.SupportsRealmIntrinsicPrototypeFallback: Boolean;
+begin
+  Result := True;
+end;
+
 { TGocciaWeakRefClassValue }
 
 function TGocciaWeakRefClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 begin
   Result := TGocciaWeakRefValue.Create;
+end;
+
+function TGocciaWeakRefClassValue.IntrinsicPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  Result := TGocciaWeakRefValue.GetSharedPrototypeForRealm(ARealm);
+end;
+
+function TGocciaWeakRefClassValue.SupportsRealmIntrinsicPrototypeFallback: Boolean;
+begin
+  Result := True;
 end;
 
 function TGocciaWeakRefClassValue.GetClassLength: Integer;
@@ -2089,6 +2347,17 @@ end;
 function TGocciaFinalizationRegistryClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 begin
   Result := TGocciaFinalizationRegistryValue.Create;
+end;
+
+function TGocciaFinalizationRegistryClassValue.IntrinsicPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  Result := TGocciaFinalizationRegistryValue.GetSharedPrototypeForRealm(ARealm);
+end;
+
+function TGocciaFinalizationRegistryClassValue.SupportsRealmIntrinsicPrototypeFallback: Boolean;
+begin
+  Result := True;
 end;
 
 function TGocciaFinalizationRegistryClassValue.GetClassLength: Integer;
@@ -2282,6 +2551,7 @@ var
   I: Integer;
   PrototypeDescriptor: TGocciaPropertyDescriptor;
   PrototypeValue: TGocciaValue;
+  PreviousRealm: TGocciaRealm;
 begin
   if not FEnabled then
     ThrowTypeError('Dynamic code generation is disabled. ' +
@@ -2309,7 +2579,15 @@ begin
     BodyStr := AArguments.GetElement(AArguments.Length - 1).ToStringLiteral.Value;
   end;
 
-  Result := FCompileDynamicFunction(ParamSources, BodyStr, FDynamicKind);
+  PreviousRealm := CurrentRealm;
+  if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+    SetCurrentRealm(FCreationRealm);
+  try
+    Result := FCompileDynamicFunction(ParamSources, BodyStr, FDynamicKind);
+  finally
+    if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+      SetCurrentRealm(PreviousRealm);
+  end;
   if FDynamicKind in [dfkGenerator, dfkAsyncGenerator] then
   begin
     PrototypeDescriptor := Result.GetOwnPropertyDescriptor(PROP_PROTOTYPE);
@@ -2485,6 +2763,11 @@ end;
 procedure TGocciaInstanceValue.InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
 begin
   // No-op by default; native subclasses override to handle constructor arguments
+end;
+
+procedure TGocciaInstanceValue.FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
+begin
+  // No-op by default; native subclasses override when setup must finish after prototype lookup
 end;
 
 function TGocciaInstanceValue.IsInstanceOf(const AClass: TGocciaClassValue): Boolean; inline;

@@ -90,7 +90,9 @@ type
     function IsLineTerminator: Boolean; inline;
     function IsUnicodeLineTerminator: Boolean; inline;
     function ConsumeLineTerminator: Boolean; inline;
+    function ConsumeLineTerminatorBytes(out ABytes: string): Boolean; inline;
     function AppendLineTerminator(var ASB, ARawSB: TStringBuffer): Boolean; inline;
+    function AppendTemplateLineContinuation(var ARawSB: TStringBuffer): Boolean; inline;
     procedure ConsumeUnicodeLineTerminator; inline;
   public
     constructor Create(const ASource, AFileName: string);
@@ -105,6 +107,7 @@ type
     function ScanNextToken(const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken;
     property ScanTimeNanoseconds: Int64 read FScanTimeNanoseconds;
     property Tokens: TObjectList<TGocciaToken> read FTokens;
+    property Source: string read FSource;
     property SourceLines: TStringList read GetSourceLines;
   end;
 
@@ -462,7 +465,15 @@ begin
 end;
 
 function TGocciaLexer.ConsumeLineTerminator: Boolean; inline;
+var
+  Bytes: string;
 begin
+  Result := ConsumeLineTerminatorBytes(Bytes);
+end;
+
+function TGocciaLexer.ConsumeLineTerminatorBytes(out ABytes: string): Boolean; inline;
+begin
+  ABytes := '';
   if IsAtEnd then
     Exit(False);
 
@@ -474,6 +485,7 @@ begin
           Inc(FCurrent);
         Inc(FLine);
         FColumn := 1;
+        ABytes := #10;
         Result := True;
       end;
     #10:
@@ -481,13 +493,17 @@ begin
         Inc(FCurrent);
         Inc(FLine);
         FColumn := 1;
+        ABytes := #10;
         Result := True;
       end;
     UTF8_LINE_TERMINATOR_LEAD_BYTE:
       begin
         Result := IsUnicodeLineTerminator;
         if Result then
+        begin
+          ABytes := Copy(FSource, FCurrent, UTF8_LINE_TERMINATOR_BYTE_LENGTH);
           ConsumeUnicodeLineTerminator;
+        end;
       end;
   else
     Result := False;
@@ -496,50 +512,24 @@ end;
 
 function TGocciaLexer.AppendLineTerminator(var ASB, ARawSB: TStringBuffer): Boolean; inline;
 var
-  C: Char;
-  I: Integer;
+  Bytes: string;
 begin
-  if IsAtEnd then
-    Exit(False);
+  Result := ConsumeLineTerminatorBytes(Bytes);
+  if not Result then
+    Exit;
+  ASB.Append(Bytes);
+  ARawSB.Append(Bytes);
+end;
 
-  case FSource[FCurrent] of
-    #13:
-      begin
-        Inc(FCurrent);
-        if (not IsAtEnd) and (FSource[FCurrent] = #10) then
-          Inc(FCurrent);
-        Inc(FLine);
-        FColumn := 1;
-        ASB.AppendChar(#10);
-        ARawSB.AppendChar(#10);
-        Result := True;
-      end;
-    #10:
-      begin
-        Inc(FCurrent);
-        Inc(FLine);
-        FColumn := 1;
-        ASB.AppendChar(#10);
-        ARawSB.AppendChar(#10);
-        Result := True;
-      end;
-    UTF8_LINE_TERMINATOR_LEAD_BYTE:
-      begin
-        Result := IsUnicodeLineTerminator;
-        if Result then
-        begin
-          for I := 0 to UTF8_LINE_TERMINATOR_BYTE_LENGTH - 1 do
-          begin
-            C := FSource[FCurrent + I];
-            ASB.AppendChar(C);
-            ARawSB.AppendChar(C);
-          end;
-          ConsumeUnicodeLineTerminator;
-        end;
-      end;
-  else
-    Result := False;
-  end;
+function TGocciaLexer.AppendTemplateLineContinuation(
+  var ARawSB: TStringBuffer): Boolean; inline;
+var
+  Bytes: string;
+begin
+  Result := ConsumeLineTerminatorBytes(Bytes);
+  if not Result then
+    Exit;
+  ARawSB.Append(Bytes);
 end;
 
 // ES2026 §12.2 WhiteSpace :: <TAB> | <VT> | <FF> | <ZWNBSP> | <USP>
@@ -1053,7 +1043,12 @@ begin
       Advance; // consume '\'
       if not IsAtEnd then
       begin
-        case Peek of
+        if IsLineTerminator then
+        begin
+          RawSB.AppendChar('\');
+          AppendTemplateLineContinuation(RawSB);
+        end
+        else case Peek of
           '`':
           begin
             SB.AppendChar('`');

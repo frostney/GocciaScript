@@ -88,3 +88,211 @@ test("Map.prototype.constructor is non-enumerable", () => {
   expect(desc.enumerable).toBe(false);
   expect(desc.configurable).toBe(true);
 });
+
+test("Map constructor rejects primitive iterator objects", () => {
+  const iterable = {
+    [Symbol.iterator]() {
+      return 1;
+    },
+  };
+
+  expect(() => new Map(iterable)).toThrow(TypeError);
+});
+
+test("Map constructor closes iterator when an entry is not an object", () => {
+  let closed = false;
+  const iterable = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return { value: "not an object", done: false };
+        },
+        return() {
+          closed = true;
+          return {};
+        },
+      };
+    },
+  };
+
+  expect(() => new Map(iterable)).toThrow(TypeError);
+  expect(closed).toBe(true);
+});
+
+test("Map constructor closes iterator when entry key getter throws", () => {
+  const sentinel = new Error("key getter");
+  let closed = false;
+  const iterable = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return {
+            value: {
+              get 0() {
+                throw sentinel;
+              },
+            },
+            done: false,
+          };
+        },
+        return() {
+          closed = true;
+          return {};
+        },
+      };
+    },
+  };
+
+  try {
+    new Map(iterable);
+    throw new Error("expected Map constructor to throw");
+  } catch (error) {
+    expect(error).toBe(sentinel);
+  }
+  expect(closed).toBe(true);
+});
+
+test("Map constructor closes iterator when entry value getter throws", () => {
+  const sentinel = new Error("value getter");
+  let closed = false;
+  const iterable = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return {
+            value: {
+              0: "key",
+              get 1() {
+                throw sentinel;
+              },
+            },
+            done: false,
+          };
+        },
+        return() {
+          closed = true;
+          return {};
+        },
+      };
+    },
+  };
+
+  try {
+    new Map(iterable);
+    throw new Error("expected Map constructor to throw");
+  } catch (error) {
+    expect(error).toBe(sentinel);
+  }
+  expect(closed).toBe(true);
+});
+
+test("Map constructor closes iterator when subclass set throws and preserves original error", () => {
+  const sentinel = new Error("set failed");
+  let closed = false;
+  class ThrowingMap extends Map {
+    set() {
+      throw sentinel;
+    }
+  }
+
+  const iterable = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return { value: ["key", "value"], done: false };
+        },
+        return() {
+          closed = true;
+          throw new Error("return failed");
+        },
+      };
+    },
+  };
+
+  try {
+    new ThrowingMap(iterable);
+    throw new Error("expected Map constructor to throw");
+  } catch (error) {
+    expect(error).toBe(sentinel);
+  }
+  expect(closed).toBe(true);
+});
+
+test("Map constructor calls iterator next without arguments", () => {
+  let argumentCount = -1;
+  const iterable = {
+    [Symbol.iterator]() {
+      return {
+        next(...args) {
+          argumentCount = args.length;
+          return { done: true };
+        },
+      };
+    },
+  };
+
+  new Map(iterable);
+  expect(argumentCount).toBe(0);
+});
+
+test("Map constructor does not close iterator when next throws", () => {
+  const sentinel = new Error("next failed");
+  let closed = false;
+  const iterable = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          throw sentinel;
+        },
+        return() {
+          closed = true;
+          return {};
+        },
+      };
+    },
+  };
+
+  try {
+    new Map(iterable);
+    throw new Error("expected Map constructor to throw");
+  } catch (error) {
+    expect(error).toBe(sentinel);
+  }
+  expect(closed).toBe(false);
+});
+
+test("Map constructor preserves primitive receiver for iterable lookup", () => {
+  let receiverType = "";
+  Object.defineProperty(Number.prototype, Symbol.iterator, {
+    configurable: true,
+    value() {
+      "use strict";
+      receiverType = typeof this;
+      return {
+        next() {
+          return { done: true };
+        },
+      };
+    },
+  });
+
+  try {
+    new Map(0);
+  } finally {
+    delete Number.prototype[Symbol.iterator];
+  }
+
+  expect(receiverType).toBe("number");
+});
+
+test("Map constructor observes native iterator @@iterator overrides", () => {
+  const iterator = [][Symbol.iterator]();
+  Object.defineProperty(iterator, Symbol.iterator, {
+    configurable: true,
+    value() {
+      return 1;
+    },
+  });
+
+  expect(() => new Map(iterator)).toThrow(TypeError);
+});

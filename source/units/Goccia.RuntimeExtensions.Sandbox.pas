@@ -5,6 +5,8 @@ unit Goccia.RuntimeExtensions.Sandbox;
 interface
 
 uses
+  SandboxVirtualFileSystem,
+
   Goccia.Arguments.Collection,
   Goccia.Modules,
   Goccia.Runtime,
@@ -18,6 +20,24 @@ type
     FContext: TGocciaSandboxContext;
     FFsModule: TGocciaModule;
     FGocciaModule: TGocciaModule;
+
+    function EnsureStatsPrototype: TGocciaObjectValue;
+    function CreateStatsValue(const AStat: TSandboxFsStat): TGocciaValue;
+    function CreateStatsDate(const AMilliseconds: Double): TGocciaValue;
+    function StatsAtime(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function StatsMtime(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function StatsCtime(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function StatsBirthtime(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function StatsIsFile(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function StatsIsDirectory(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function StatsIsSymbolicLink(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
 
     function SandboxDollar(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -79,32 +99,34 @@ uses
 
   base64,
   SandboxShell,
-  SandboxVirtualFileSystem,
 
   Goccia.JSON,
   Goccia.Keywords.Reserved,
+  Goccia.Realm,
+  Goccia.Sandbox.FileSystemErrors,
+  Goccia.Shims,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction,
   Goccia.Values.NativeFunctionCallback,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
   Goccia.Values.TypedArrayValue;
-
-const
-  MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 
 type
   TGocciaSandboxStatValue = class(TGocciaObjectValue)
   private
     FKind: TSandboxFsNodeKind;
+    FAtimeMs: Double;
+    FMtimeMs: Double;
+    FCtimeMs: Double;
+    FBirthtimeMs: Double;
   public
-    constructor Create(const AStat: TSandboxFsStat);
-    function IsFile(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
-    function IsDirectory(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
+    constructor Create(const APrototype: TGocciaObjectValue;
+      const AStat: TSandboxFsStat);
   end;
 
   TGocciaSandboxShellCommandValue = class(TGocciaObjectValue)
@@ -142,10 +164,8 @@ begin
   AObject.SetProperty(AName, Result);
 end;
 
-function DateTimeToUnixMilliseconds(const AValue: TDateTime): Double;
-begin
-  Result := (AValue - EncodeDate(1970, 1, 1)) * MILLISECONDS_PER_DAY;
-end;
+var
+  GSandboxStatsPrototypeSlot: TGocciaRealmSlotId;
 
 function FulfilledPromise(const AValue: TGocciaValue): TGocciaPromiseValue;
 begin
@@ -478,6 +498,12 @@ begin
     Result.IncludeDiff := True;
     Result.Isolated := True;
   end;
+  if ObjectBooleanProperty(OptionsObject, 'diffMetadata', AMethod) then
+  begin
+    Result.DiffMetadata := True;
+    Result.IncludeDiff := True;
+    Result.Isolated := True;
+  end;
 
   DiffFormat := ObjectStringProperty(OptionsObject, 'diffFormat', AMethod,
     False);
@@ -534,34 +560,24 @@ end;
 
 { TGocciaSandboxStatValue }
 
-constructor TGocciaSandboxStatValue.Create(const AStat: TSandboxFsStat);
+constructor TGocciaSandboxStatValue.Create(const APrototype: TGocciaObjectValue;
+  const AStat: TSandboxFsStat);
 begin
-  inherited Create(TGocciaObjectValue.SharedObjectPrototype, 8);
+  inherited Create(APrototype, 10);
   FKind := AStat.Kind;
+  FAtimeMs := SandboxDateTimeToUnixMilliseconds(AStat.AccessedAt);
+  FMtimeMs := SandboxDateTimeToUnixMilliseconds(AStat.ModifiedAt);
+  FCtimeMs := SandboxDateTimeToUnixMilliseconds(AStat.ChangedAt);
+  FBirthtimeMs := SandboxDateTimeToUnixMilliseconds(AStat.BirthTime);
   SetProperty('path', TGocciaStringLiteralValue.Create(AStat.Path));
   SetProperty('name', TGocciaStringLiteralValue.Create(AStat.Name));
   SetProperty('type', TGocciaStringLiteralValue.Create(
     SandboxFsKindName(AStat.Kind)));
   SetProperty('size', TGocciaNumberLiteralValue.Create(AStat.Size));
-  SetProperty('mtimeMs',
-    TGocciaNumberLiteralValue.Create(DateTimeToUnixMilliseconds(
-      AStat.ModifiedAt)));
-  AddNativeFunction(Self, 'isFile', IsFile, 0);
-  AddNativeFunction(Self, 'isDirectory', IsDirectory, 0);
-end;
-
-function TGocciaSandboxStatValue.IsFile(
-  const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-begin
-  Result := TGocciaBooleanLiteralValue.Create(FKind = nkFile);
-end;
-
-function TGocciaSandboxStatValue.IsDirectory(
-  const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-begin
-  Result := TGocciaBooleanLiteralValue.Create(FKind = nkDirectory);
+  SetProperty('atimeMs', TGocciaNumberLiteralValue.Create(FAtimeMs));
+  SetProperty('mtimeMs', TGocciaNumberLiteralValue.Create(FMtimeMs));
+  SetProperty('ctimeMs', TGocciaNumberLiteralValue.Create(FCtimeMs));
+  SetProperty('birthtimeMs', TGocciaNumberLiteralValue.Create(FBirthtimeMs));
 end;
 
 { TGocciaSandboxShellCommandValue }
@@ -692,6 +708,152 @@ begin
 end;
 
 { TGocciaSandboxRuntimeExtension }
+
+function RequireSandboxStatsReceiver(
+  const AThisValue: TGocciaValue): TGocciaSandboxStatValue;
+begin
+  if not (AThisValue is TGocciaSandboxStatValue) then
+  begin
+    ThrowTypeError('Stats method called on incompatible receiver');
+    Exit(nil);
+  end;
+  Result := TGocciaSandboxStatValue(AThisValue);
+end;
+
+function TGocciaSandboxRuntimeExtension.EnsureStatsPrototype:
+  TGocciaObjectValue;
+var
+  Realm: TGocciaRealm;
+
+  procedure DefineMethod(const AName: string;
+    const ACallback: TGocciaNativeFunctionCallback);
+  var
+    MethodValue: TGocciaNativeFunctionValue;
+  begin
+    MethodValue := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      ACallback, AName, 0);
+    Result.DefineProperty(AName, TGocciaPropertyDescriptorData.Create(
+      MethodValue, [pfWritable, pfConfigurable]));
+  end;
+
+  procedure DefineDateAccessor(const AName: string;
+    const ACallback: TGocciaNativeFunctionCallback);
+  var
+    Getter: TGocciaNativeFunctionValue;
+  begin
+    Getter := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      ACallback, 'get ' + AName, 0);
+    Result.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(
+      Getter, nil, [pfEnumerable, pfConfigurable]));
+  end;
+
+begin
+  Realm := CurrentRealm;
+  if not Assigned(Realm) then
+    raise Exception.Create('Sandbox Stats prototype requires an active realm');
+
+  Result := TGocciaObjectValue(
+    Realm.GetSlot(GSandboxStatsPrototypeSlot));
+  if Assigned(Result) then
+    Exit;
+
+  Result := TGocciaObjectValue.Create(
+    TGocciaObjectValue.GetSharedObjectPrototypeForRealm(Realm), 7);
+  DefineDateAccessor('atime', StatsAtime);
+  DefineDateAccessor('mtime', StatsMtime);
+  DefineDateAccessor('ctime', StatsCtime);
+  DefineDateAccessor('birthtime', StatsBirthtime);
+  DefineMethod('isFile', StatsIsFile);
+  DefineMethod('isDirectory', StatsIsDirectory);
+  DefineMethod('isSymbolicLink', StatsIsSymbolicLink);
+  Realm.SetSlot(GSandboxStatsPrototypeSlot, Result);
+end;
+
+function TGocciaSandboxRuntimeExtension.CreateStatsValue(
+  const AStat: TSandboxFsStat): TGocciaValue;
+begin
+  Result := TGocciaSandboxStatValue.Create(EnsureStatsPrototype, AStat);
+end;
+
+function TGocciaSandboxRuntimeExtension.CreateStatsDate(
+  const AMilliseconds: Double): TGocciaValue;
+var
+  DateConstructor: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  Fraction: Double;
+  RoundedMilliseconds: Double;
+begin
+  DateConstructor := GetDateIntrinsic(Runtime.Engine.Interpreter);
+  Fraction := Frac(AMilliseconds);
+  RoundedMilliseconds := AMilliseconds - Fraction;
+  if Fraction >= 0.5 then
+    RoundedMilliseconds := RoundedMilliseconds + 1
+  else if Fraction < -0.5 then
+    RoundedMilliseconds := RoundedMilliseconds - 1;
+  Args := TGocciaArgumentsCollection.Create([
+    TGocciaNumberLiteralValue.Create(RoundedMilliseconds)]);
+  try
+    Result := ConstructValue(DateConstructor, Args, DateConstructor);
+  finally
+    Args.Free;
+  end;
+end;
+
+function TGocciaSandboxRuntimeExtension.StatsAtime(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := CreateStatsDate(
+    RequireSandboxStatsReceiver(AThisValue).FAtimeMs);
+end;
+
+function TGocciaSandboxRuntimeExtension.StatsMtime(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := CreateStatsDate(
+    RequireSandboxStatsReceiver(AThisValue).FMtimeMs);
+end;
+
+function TGocciaSandboxRuntimeExtension.StatsCtime(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := CreateStatsDate(
+    RequireSandboxStatsReceiver(AThisValue).FCtimeMs);
+end;
+
+function TGocciaSandboxRuntimeExtension.StatsBirthtime(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := CreateStatsDate(
+    RequireSandboxStatsReceiver(AThisValue).FBirthtimeMs);
+end;
+
+function TGocciaSandboxRuntimeExtension.StatsIsFile(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaBooleanLiteralValue.Create(
+    RequireSandboxStatsReceiver(AThisValue).FKind = nkFile);
+end;
+
+function TGocciaSandboxRuntimeExtension.StatsIsDirectory(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaBooleanLiteralValue.Create(
+    RequireSandboxStatsReceiver(AThisValue).FKind = nkDirectory);
+end;
+
+function TGocciaSandboxRuntimeExtension.StatsIsSymbolicLink(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  RequireSandboxStatsReceiver(AThisValue);
+  Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
 
 constructor TGocciaSandboxRuntimeExtension.Create(
   const AContext: TGocciaSandboxContext);
@@ -849,109 +1011,195 @@ var
   Bytes: TBytes;
 begin
   Path := RequireStringArg(AArgs, 0, 'fs.readFileSync');
-  if WantsTextResult(AArgs.GetElement(1)) then
-    Exit(TGocciaStringLiteralValue.Create(FContext.Fs.ReadAllText(Path)));
-  Bytes := FContext.Fs.ReadAllBytes(Path);
-  Result := BytesToUint8Array(Bytes);
+  try
+    if WantsTextResult(AArgs.GetElement(1)) then
+      Exit(TGocciaStringLiteralValue.Create(FContext.Fs.ReadAllText(Path)));
+    Bytes := FContext.Fs.ReadAllBytes(Path);
+    Result := BytesToUint8Array(Bytes);
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'readFile', Path));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsWriteFileSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Bytes: TBytes;
 begin
-  FContext.Fs.WriteAllBytes(RequireStringArg(AArgs, 0, 'fs.writeFileSync'),
-    ValueToBytes(AArgs.GetElement(1), 'fs.writeFileSync'));
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Path := RequireStringArg(AArgs, 0, 'fs.writeFileSync');
+  Bytes := ValueToBytes(AArgs.GetElement(1), 'fs.writeFileSync');
+  try
+    FContext.Fs.WriteAllBytes(Path, Bytes);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'writeFile', Path));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsAppendFileSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
+  Path: string;
   Existing: TBytes;
   Added: TBytes;
   Combined: TBytes;
 begin
+  Path := RequireStringArg(AArgs, 0, 'fs.appendFileSync');
   Existing := nil;
-  if FContext.Fs.Exists(RequireStringArg(AArgs, 0, 'fs.appendFileSync')) then
-    Existing := FContext.Fs.ReadAllBytes(RequireStringArg(AArgs, 0,
-      'fs.appendFileSync'));
-  Added := ValueToBytes(AArgs.GetElement(1), 'fs.appendFileSync');
-  SetLength(Combined, Length(Existing) + Length(Added));
-  if Length(Existing) > 0 then
-    Move(Existing[0], Combined[0], Length(Existing));
-  if Length(Added) > 0 then
-    Move(Added[0], Combined[Length(Existing)], Length(Added));
-  FContext.Fs.WriteAllBytes(RequireStringArg(AArgs, 0, 'fs.appendFileSync'),
-    Combined);
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  try
+    if FContext.Fs.Exists(Path) then
+      Existing := FContext.Fs.ReadAllBytes(Path);
+    Added := ValueToBytes(AArgs.GetElement(1), 'fs.appendFileSync');
+    SetLength(Combined, Length(Existing) + Length(Added));
+    if Length(Existing) > 0 then
+      Move(Existing[0], Combined[0], Length(Existing));
+    if Length(Added) > 0 then
+      Move(Added[0], Combined[Length(Existing)], Length(Added));
+    FContext.Fs.WriteAllBytes(Path, Combined);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'appendFile', Path));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsMkdirSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Recursive: Boolean;
 begin
-  FContext.Fs.MakeDirectory(RequireStringArg(AArgs, 0, 'fs.mkdirSync'),
-    OptionRecursive(AArgs.GetElement(1)));
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Path := RequireStringArg(AArgs, 0, 'fs.mkdirSync');
+  Recursive := OptionRecursive(AArgs.GetElement(1));
+  try
+    FContext.Fs.MakeDirectory(Path, Recursive);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'mkdir', Path));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsReaddirSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
+  Path: string;
   Entries: TSandboxFsStatArray;
   Arr: TGocciaArrayValue;
   I: Integer;
 begin
-  Entries := FContext.Fs.List(RequireStringArg(AArgs, 0, 'fs.readdirSync'));
-  Arr := TGocciaArrayValue.Create(nil, Length(Entries));
-  for I := 0 to High(Entries) do
-    Arr.SetElement(I, TGocciaStringLiteralValue.Create(Entries[I].Name));
-  Result := Arr;
+  Path := RequireStringArg(AArgs, 0, 'fs.readdirSync');
+  try
+    Entries := FContext.Fs.List(Path);
+    Arr := TGocciaArrayValue.Create(nil, Length(Entries));
+    for I := 0 to High(Entries) do
+      Arr.SetElement(I, TGocciaStringLiteralValue.Create(Entries[I].Name));
+    Result := Arr;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'readdir', Path));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsStatSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
 begin
-  Result := TGocciaSandboxStatValue.Create(
-    FContext.Fs.Stat(RequireStringArg(AArgs, 0, 'fs.statSync')));
+  Path := RequireStringArg(AArgs, 0, 'fs.statSync');
+  try
+    Result := CreateStatsValue(FContext.Fs.Stat(Path));
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'stat', Path));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsExistsSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
 begin
-  Result := TGocciaBooleanLiteralValue.Create(
-    FContext.Fs.Exists(RequireStringArg(AArgs, 0, 'fs.existsSync')));
+  Path := RequireStringArg(AArgs, 0, 'fs.existsSync');
+  try
+    Result := TGocciaBooleanLiteralValue.Create(FContext.Fs.Exists(Path));
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'exists', Path));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsRmSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Recursive: Boolean;
 begin
-  FContext.Fs.DeletePath(RequireStringArg(AArgs, 0, 'fs.rmSync'),
-    OptionRecursive(AArgs.GetElement(1)));
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Path := RequireStringArg(AArgs, 0, 'fs.rmSync');
+  Recursive := OptionRecursive(AArgs.GetElement(1));
+  try
+    FContext.Fs.DeletePath(Path, Recursive);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'rm', Path));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsRenameSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Destination: string;
 begin
-  FContext.Fs.MovePath(RequireStringArg(AArgs, 0, 'fs.renameSync'),
-    RequireStringArg(AArgs, 1, 'fs.renameSync'));
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Path := RequireStringArg(AArgs, 0, 'fs.renameSync');
+  Destination := RequireStringArg(AArgs, 1, 'fs.renameSync');
+  try
+    FContext.Fs.MovePath(Path, Destination);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(CreateSandboxFileSystemError(E,
+        'rename', Path, Destination));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsCopyFileSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Destination: string;
 begin
-  FContext.Fs.CopyPath(RequireStringArg(AArgs, 0, 'fs.copyFileSync'),
-    RequireStringArg(AArgs, 1, 'fs.copyFileSync'), False);
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Path := RequireStringArg(AArgs, 0, 'fs.copyFileSync');
+  Destination := RequireStringArg(AArgs, 1, 'fs.copyFileSync');
+  try
+    FContext.Fs.CopyPath(Path, Destination, False);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(CreateSandboxFileSystemError(E,
+        'copyFile', Path, Destination));
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsReadFile(
@@ -1016,5 +1264,9 @@ function TGocciaSandboxRuntimeExtension.FsCopyFile(
 begin
   Result := RunValueAsPromise(FsCopyFileSync, AArgs, AThisValue);
 end;
+
+initialization
+  GSandboxStatsPrototypeSlot :=
+    RegisterRealmSlot('Sandbox.fs.Stats.prototype');
 
 end.

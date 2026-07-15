@@ -16,7 +16,9 @@ See [Language](docs/language.md) for the complete specification of supported fea
 
 ### Built-in Objects
 
-`console`, `Math`, `JSON`, `JSON5`, `TOML`, `YAML`, `JSONL`, `CSV`, `TSV`, `Object`, `Array`, `Number`, `String`, `RegExp`, `Symbol`, `Set`, `Map`, `WeakSet`, `WeakMap`, `Promise`, `Temporal`, `Iterator`, `Proxy`, `Reflect`, `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float16Array`, `Float32Array`, `Float64Array`, `BigInt64Array`, `BigUint64Array`) with ArrayBuffer and SharedArrayBuffer backing, `fetch`, `Headers`, `Response` ([WHATWG Fetch](https://fetch.spec.whatwg.org/) — GET/HEAD only), `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`, `DOMException`).
+`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `RegExp`, `Symbol`, `Set`, `Map`, `WeakSet`, `WeakMap`, `Promise`, `Temporal`, `Iterator`, `Proxy`, `Reflect`, `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float16Array`, `Float32Array`, `Float64Array`, `BigInt64Array`, `BigUint64Array`) with ArrayBuffer and SharedArrayBuffer backing, `fetch`, `Headers`, `Response` ([WHATWG Fetch](https://fetch.spec.whatwg.org/) — GET/HEAD only), `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`, `DOMException`).
+
+Non-standard data-format APIs and SemVer are import-only Goccia runtime modules, not auto-installed globals: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. They expose named exports only; use `import * as CSV from "goccia:csv"` when you want the namespace-object shape. There is no default export.
 
 See [Built-in Objects](docs/built-ins.md) for the complete API reference.
 
@@ -100,6 +102,18 @@ the public `.gbc` artifact.
 
 See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode executor architecture.
 
+### Reproduce An Execution
+
+Use one fixed JavaScript-visible clock, UTC time zone, and portable random stream in either execution mode:
+
+```bash
+./build/GocciaScriptLoader example.js --deterministic
+```
+
+Timeouts and profiling still use the real monotonic clock. The equivalent config key is `"deterministic": true`; embedders can inject their own clock and RNG providers through the engine host environment.
+
+For custom providers, pass a JavaScript module to `--host-environment` or implement the Pascal host interfaces. See [Host Environment](docs/host-environment.md) for both examples and the provider contract.
+
 ### Start the REPL
 
 ```bash
@@ -125,7 +139,7 @@ See [Testing](docs/testing.md) for test organization and [Build System](docs/bui
 ./build/GocciaBenchmarkRunner benchmarks/fibonacci.js
 ```
 
-The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec with variance (CV%) and engine-level timing breakdown (lex/parse/execute). Output formats: `console` (default), `text`, `csv`, `json`, `compact-json` (the same envelope as `json` without `build`, `memory`, `stdout`, or `stderr`). Calibration and measurement parameters are configurable via [environment variables](docs/benchmarks.md#configuring-benchmark-parameters).
+The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec with variance (CV%) and engine-level timing breakdown (lex/parse/execute). Output formats: `console` (default), `text`, `csv`, `json`, `compact-json` (the same envelope as `json` without `build`, `memory`, `stdout`, or `stderr`). Calibration and measurement parameters are configurable via [environment variables](docs/benchmarks.md#configuring-benchmark-parameters). Retained AWFY and JetStream reference measurements are published through the [Performance Barometer](https://gocciascript.dev/performance).
 
 ## Quick Tour
 
@@ -137,7 +151,7 @@ GocciaScript looks like modern JavaScript — with a few intentional differences
 - **ES modules** — default, named, and namespace imports/exports are supported; project code prefers named exports for clarity.
 - **Strict equality by default** — `===` and `!==` (`==`/`!=` require `--compat-loose-equality`)
 
-The CLI tools share WHATWG-style import map support with `--import-map=<file.json>`, `--alias key=value`, and automatic `goccia.json` discovery for project-level module aliases.
+The CLI tools share WHATWG-style import map support with `--import-map=<file.json>`, `--alias key=value`, and automatic `goccia.json` discovery for project-level module aliases. Host-supplied dependencies should normally be configured as virtual ES modules with `--module`, `--modules`, or a config `modules` object; they participate in the same import pipeline as filesystem modules. Global injection remains supported for compatibility.
 
 Structured data files and text assets can also be imported directly:
 
@@ -148,11 +162,19 @@ import { name as appName } from "./config.yaml";
 import { content, metadata } from "./README.md";
 ```
 
-Runtime parsers are available for JSON5, TOML, YAML, JSONL, CSV, and TSV. See [Built-in Objects](docs/built-ins.md) and [Language](docs/language.md) for the full data format reference.
+Runtime parsers are available through named Goccia modules for JSON5, TOML, YAML, JSONL, CSV, and TSV. See [Built-in Objects](docs/built-ins.md) and [Language](docs/language.md) for the full data format reference.
 
-`TOML.parse(sourceText)` parses TOML 1.1.0 configuration data. `YAML.parse(sourceText)` handles common configuration files including block scalars, anchors/aliases, merge keys, and YAML 1.2 tag resolution. See [Language](docs/language.md#modules) and [Architecture Decision Records](docs/adr/) for the full conformance details.
+```javascript
+import * as TOML from "goccia:toml";
+import * as YAML from "goccia:yaml";
 
-JSONL parsing is also available via `JSONL.parse(text)` and `JSONL.parseChunk(text)`, and `.jsonl` files can be imported as structured-data modules.
+TOML.parse(sourceText); // TOML 1.1.0 configuration data
+YAML.parse(sourceText); // block scalars, anchors/aliases, merge keys, YAML 1.2 tags
+```
+
+See [Language](docs/language.md#modules) and [Architecture Decision Records](docs/adr/) for the full conformance details.
+
+JSONL parsing is also available from `goccia:jsonl` via `parse(text)` and `parseChunk(text)`, and `.jsonl` files can still be imported as structured-data modules.
 
 **Async/await** with full Promise support, including top-level `await`:
 
@@ -216,6 +238,8 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | [Garbage Collector](docs/garbage-collector.md) | Mark-and-sweep GC: architecture, contributor rules, design rationale |
 | [Adding Built-in Types](docs/adding-built-in-types.md) | Step-by-step guide for adding new built-in types |
 | [Embedding the Engine](docs/embedding.md) | Embedding GocciaScript in FreePascal applications |
+| [Virtual Module Configuration](docs/virtual-modules.md) | CLI, config-file, and embedding reference for host-supplied modules |
+| [Host Environment](docs/host-environment.md) | Injecting JavaScript-visible clock, time-zone, and random providers |
 | [Testing](docs/testing.md) | Test organization, running tests, coverage, CI |
 | [Test Framework API](docs/testing-api.md) | Assertions, mocks, lifecycle hooks, async patterns |
 | [Benchmarks](docs/benchmarks.md) | Benchmark runner, output formats, writing benchmarks |

@@ -27,3 +27,8 @@ test("String.prototype.trimEnd coerces non-string receivers", () => {
   expect(String.prototype.trimEnd.call(42)).toBe("42");
   expect(String.prototype.trimEnd.call(true)).toBe("true");
 });
+
+test("String.prototype.trimRight aliases trimEnd", () => {
+  expect(String.prototype.trimRight).toBe(String.prototype.trimEnd);
+  expect("  hello  ".trimRight()).toBe("  hello");
+});

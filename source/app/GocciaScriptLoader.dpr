@@ -32,6 +32,7 @@ uses
   Goccia.Error.Detail,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.HostEnvironment.JavaScript,
   Goccia.InstructionLimit,
   Goccia.Profiler,
   Goccia.Profiler.Report,
@@ -102,6 +103,7 @@ type
     FSilent: TFlagOption;
     FPrint: TFlagOption;
     FSourceMap: TStringOption;
+    FHostEnvironmentModule: TStringOption;
     FGlobalFiles: TRepeatableOption;
     FInlineGlobals: TRepeatableOption;
     FLastPaths: TStringList;
@@ -284,6 +286,8 @@ begin
     'Print the script''s last value to stdout (mirrors node -p / bun --print / deno eval -p)');
   FSourceMap := TStringOption(Add(TOptionalStringOption.Create('source-map',
     'Write a .map source map file (optional: explicit path)')));
+  FHostEnvironmentModule := AddString('host-environment',
+    'Configure script-visible time and randomness from a module with named exports');
   FGlobalFiles := AddRepeatable('globals',
     'Inject globals from a JSON/JSON5/TOML/YAML file or a module with named exports');
   FInlineGlobals := AddRepeatable('global',
@@ -294,10 +298,28 @@ procedure TScriptLoaderApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
   const AFileConfig: TConfigEntryArray);
 var
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
+  HostEnvironmentModulePath: string;
   Runtime: TGocciaRuntimeCore;
 begin
-  InitializeRuntime(AEngine);
-  Runtime := GetRuntime(AEngine);
+  Runtime := AttachRuntime(AEngine);
+
+  if FHostEnvironmentModule.FromCommandLine then
+    HostEnvironmentModulePath := FHostEnvironmentModule.Value
+  else if not FindConfigEntry(AFileConfig, 'host-environment',
+    HostEnvironmentModulePath) then
+    HostEnvironmentModulePath := FHostEnvironmentModule.ValueOr('');
+
+  if HostEnvironmentModulePath <> '' then
+  begin
+    if Assigned(EngineOptions) and
+       ResolveFlagOption(EngineOptions.Deterministic, AFileConfig) then
+      raise TParseError.Create(
+        '--host-environment cannot be combined with --deterministic.');
+    ConfigureHostEnvironmentFromModule(AEngine,
+      HostEnvironmentModulePath);
+  end;
+
+  ApplyLoaderRuntimeProfile(Runtime);
   if Assigned(EngineOptions) and
      ResolveFlagOption(EngineOptions.UnsafeFFI, AFileConfig) then
     Runtime.Install(TGocciaFFIRuntimeExtension.Create);
@@ -572,6 +594,7 @@ var
   Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
+  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   PipelineOptions: TGocciaSourcePipelineOptions;
   StartTime, CompileStart, CompileEnd, ExecEnd: Int64;
 begin
@@ -586,33 +609,45 @@ begin
       PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
       PipelineOptions.Preprocessors := Engine.Preprocessors;
       PipelineOptions.Compatibility := Engine.Compatibility;
+      PipelineOptions.LabelStatementsEnabled := Engine.LabelStatementsEnabled;
+      PipelineOptions.ForInLoopsEnabled := Engine.ForInLoopsEnabled;
+      PipelineOptions.ExperimentalJSModuleSourceEnabled :=
+        Engine.ExperimentalJSModuleSourceEnabled;
+      PipelineOptions.WarningUnsupportedFeatures :=
+        Engine.WarningUnsupportedFeatures;
       PipelineOptions.SourceType := Engine.SourceType;
-      SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(ASource, AFileName,
-        PipelineOptions, IsJsonOutput);
+      ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
+        PipelineOptions);
       try
-        Result.Timing.LexTimeNanoseconds :=
-          SourcePipelineResult.LexTimeNanoseconds;
-        Result.Timing.ParseTimeNanoseconds :=
-          SourcePipelineResult.ParseTimeNanoseconds;
-        WriteSourceMapIfEnabled(SourcePipelineResult.SourceMap, AFileName);
-        SourcePipelineResult.RegisterCoverageSource(AFileName);
+        SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(ASource, AFileName,
+          PipelineOptions, IsJsonOutput);
+        try
+          Result.Timing.LexTimeNanoseconds :=
+            SourcePipelineResult.LexTimeNanoseconds;
+          Result.Timing.ParseTimeNanoseconds :=
+            SourcePipelineResult.ParseTimeNanoseconds;
+          WriteSourceMapIfEnabled(SourcePipelineResult.SourceMap, AFileName);
+          SourcePipelineResult.RegisterCoverageSource(AFileName);
 
-        CompileStart := GetNanoseconds;
-        Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
-        CompileEnd := GetNanoseconds;
-        Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;
-      finally
-        SourcePipelineResult.Free;
-      end;
+          CompileStart := GetNanoseconds;
+          Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
+          CompileEnd := GetNanoseconds;
+          Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;
+        finally
+          SourcePipelineResult.Free;
+        end;
 
-      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
-      StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
-      try
-        ApplyModuleGlobalsToEngine(Engine);
-        Result.ResultValue := RunBytecodeModule(Engine, Module, AFileName);
+        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+        StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+        try
+          ApplyModuleGlobalsToEngine(Engine);
+          Result.ResultValue := RunBytecodeModule(Engine, Module, AFileName);
+        finally
+          ClearExecutionTimeout;
+          ClearInstructionLimit;
+        end;
       finally
-        ClearExecutionTimeout;
-        ClearInstructionLimit;
+        ActiveOptionsScope.Free;
       end;
       ExecEnd := GetNanoseconds;
       Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;

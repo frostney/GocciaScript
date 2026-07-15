@@ -48,6 +48,24 @@ describe("Proxy ownKeys trap", () => {
     expect(keys).toEqual(["virtual1", "virtual2"]);
   });
 
+  test("rejects extra keys through nested non-extensible proxy targets", () => {
+    const target = {};
+    Object.preventExtensions(target);
+
+    const inner = new Proxy(target, {
+      isExtensible() {
+        return false;
+      },
+    });
+    const outer = new Proxy(inner, {
+      ownKeys() {
+        return ["x"];
+      },
+    });
+
+    expect(() => Reflect.ownKeys(outer)).toThrow(TypeError);
+  });
+
   test("rejects duplicate symbol entries even when caller filters strings", () => {
     const symbol = Symbol("duplicate");
     const proxy = new Proxy({}, {

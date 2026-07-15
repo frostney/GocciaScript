@@ -1369,6 +1369,7 @@ begin
   Context.OnError := FClosure.OnError;
   Context.LoadModule := FClosure.LoadModule;
   Context.LoadModuleSource := FClosure.LoadModuleSource;
+  Context.ResolveModuleURL := FClosure.ResolveModuleURL;
   Context.CurrentFilePath := FSourceFilePath;
   Context.CoverageEnabled := False;
   // EffectiveStrictTypes walks to the root scope so generator bodies
@@ -1379,6 +1380,7 @@ begin
   ArgumentsObjectEnabled := FClosure.EffectiveArgumentsObjectEnabled;
   Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
   Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
+  Context.HideFunctionSourceText := FHideNestedFunctionSourceText;
   Context.DisposalTracker := nil;
   HasParamExpressions := HasParameterExpressions;
   // EvalRejectNames is only read while evaluating a parameter default, so
@@ -1408,13 +1410,22 @@ begin
       if I < AArguments.Length then
         for J := I to AArguments.Length - 1 do
           TGocciaArrayValue(Value).Elements.Add(AArguments.GetElement(J));
-      CallScope.DefineLexicalBinding(FParameters[I].Name, Value, dtParameter);
+      // ES2026 §10.2.11 step 28: IteratorBindingInitialization applies the
+      // rest binding pattern to the packed argument list.
+      if FParameters[I].IsPattern then
+      begin
+        Context.Scope := CallScope;
+        AssignPattern(FParameters[I].Pattern, Value, Context, True, dtParameter);
+      end
+      else
+        CallScope.DefineLexicalBinding(FParameters[I].Name, Value, dtParameter);
 
       // Mirrors TGocciaFunctionValue.ExecuteBody's IsRest branch: record
       // the type hint on the binding so subsequent reassignments are
       // guarded under --strict-types; skip initial enforcement on the
       // rest array itself.
-      if Context.StrictTypes and (FParameters[I].TypeAnnotation <> '') then
+      if Context.StrictTypes and (FParameters[I].TypeAnnotation <> '') and
+         not FParameters[I].IsPattern then
       begin
         ParamTypeHint := TypeAnnotationToLocalType(FParameters[I].TypeAnnotation);
         if ParamTypeHint <> sltUntyped then
@@ -1603,6 +1614,7 @@ begin
   Context.OnError := FClosure.OnError;
   Context.LoadModule := FClosure.LoadModule;
   Context.LoadModuleSource := FClosure.LoadModuleSource;
+  Context.ResolveModuleURL := FClosure.ResolveModuleURL;
   Context.CurrentFilePath := FSourceFilePath;
   Context.CoverageEnabled := False;
   // EffectiveStrictTypes — see CreateContinuation above.
@@ -1611,6 +1623,7 @@ begin
   ArgumentsObjectEnabled := FClosure.EffectiveArgumentsObjectEnabled;
   Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
   Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
+  Context.HideFunctionSourceText := FHideNestedFunctionSourceText;
   Context.DisposalTracker := nil;
   HasParamExpressions := HasParameterExpressions;
   // EvalRejectNames is only read while evaluating a parameter default, so
@@ -1640,11 +1653,20 @@ begin
       if I < AArguments.Length then
         for J := I to AArguments.Length - 1 do
           TGocciaArrayValue(Value).Elements.Add(AArguments.GetElement(J));
-      CallScope.DefineLexicalBinding(FParameters[I].Name, Value, dtParameter);
+      // ES2026 §10.2.11 step 28: IteratorBindingInitialization applies the
+      // rest binding pattern to the packed argument list.
+      if FParameters[I].IsPattern then
+      begin
+        Context.Scope := CallScope;
+        AssignPattern(FParameters[I].Pattern, Value, Context, True, dtParameter);
+      end
+      else
+        CallScope.DefineLexicalBinding(FParameters[I].Name, Value, dtParameter);
 
       // Mirrors TGocciaFunctionValue.ExecuteBody's IsRest branch: see
       // TGocciaGeneratorFunctionValue.CreateContinuation above.
-      if Context.StrictTypes and (FParameters[I].TypeAnnotation <> '') then
+      if Context.StrictTypes and (FParameters[I].TypeAnnotation <> '') and
+         not FParameters[I].IsPattern then
       begin
         ParamTypeHint := TypeAnnotationToLocalType(FParameters[I].TypeAnnotation);
         if ParamTypeHint <> sltUntyped then

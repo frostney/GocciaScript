@@ -111,25 +111,43 @@ var
   CompiledModule: TGocciaBytecodeModule;
   FileConfig: TConfigEntryArray;
   EffectiveStrictTypes: Boolean;
+  EffectiveWarningUnsupportedFeatures: Boolean;
   EffectiveSourceType: TGocciaSourceType;
   EffectiveCompatibility: TGocciaCompatibilityFlags;
+  EffectiveLabelStatementsEnabled: Boolean;
+  EffectiveForInLoopsEnabled: Boolean;
+  EffectiveExperimentalJSModuleSourceEnabled: Boolean;
   PipelineOptions: TGocciaSourcePipelineOptions;
 begin
   ASourceMap := nil;
   { Resolve source pipeline flags: CLI flag > per-file config >
     root config > default. }
   FileConfig := DiscoverFileConfig(AFileName);
-  EffectiveCompatibility := ResolveCompatibilityFlags(
-    EngineOptions, FileConfig);
+  ResolveCompatibilityFlags(EngineOptions, FileConfig, EffectiveCompatibility);
+  EffectiveLabelStatementsEnabled := ResolveFlagOption(
+    EngineOptions.CompatibilityFlagOption(cfLabel), FileConfig);
+  EffectiveForInLoopsEnabled := ResolveFlagOption(
+    EngineOptions.CompatibilityFlagOption(cfForIn), FileConfig);
+  EffectiveExperimentalJSModuleSourceEnabled := ResolveFlagOption(
+    EngineOptions.CompatibilityFlagOption(cfExperimentalJSModuleSource),
+    FileConfig);
   EffectiveSourceType := ResolveSourceTypeOption(EngineOptions.SourceType,
     FileConfig, AFileName);
   EffectiveStrictTypes := ResolveFlagOption(
     EngineOptions.StrictTypes, FileConfig);
+  EffectiveWarningUnsupportedFeatures := ResolveFlagOption(
+    EngineOptions.WarningUnsupportedFeatures, FileConfig);
 
   CompiledModule := nil;
   PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
   PipelineOptions.Preprocessors := TGocciaEngine.DefaultPreprocessors;
   PipelineOptions.Compatibility := EffectiveCompatibility;
+  PipelineOptions.LabelStatementsEnabled := EffectiveLabelStatementsEnabled;
+  PipelineOptions.ForInLoopsEnabled := EffectiveForInLoopsEnabled;
+  PipelineOptions.ExperimentalJSModuleSourceEnabled :=
+    EffectiveExperimentalJSModuleSourceEnabled;
+  PipelineOptions.WarningUnsupportedFeatures :=
+    EffectiveWarningUnsupportedFeatures;
   PipelineOptions.SourceType := EffectiveSourceType;
   SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(ASource, AFileName,
     PipelineOptions, False);
@@ -139,6 +157,8 @@ begin
       Compiler.StrictTypes := EffectiveStrictTypes;
       Compiler.NonStrictMode := (cfNonStrictMode in EffectiveCompatibility) and
         (EffectiveSourceType = stScript);
+      Compiler.ArgumentsObjectEnabled :=
+        cfArgumentsObject in EffectiveCompatibility;
       CompiledModule := Compiler.Compile(SourcePipelineResult.ProgramNode);
       ASourceMap := SourcePipelineResult.TakeSourceMap;
       Result := CompiledModule;

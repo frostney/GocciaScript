@@ -25,6 +25,7 @@ uses
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
+  Goccia.HostEnvironment,
   Goccia.InstructionLimit,
   Goccia.JSON,
   Goccia.Modules.Loader,
@@ -52,10 +53,12 @@ type
     FSeedPaths: TRepeatableOption;
     FSeedConfigFiles: TRepeatableOption;
     FDiff: TFlagOption;
+    FDiffMetadata: TFlagOption;
     FDiffFormat: TStringOption;
     FDiffOutput: TStringOption;
     FPrint: TFlagOption;
     FCurrentOutputLines: TStrings;
+    FCurrentHostEnvironment: TGocciaHostEnvironment;
 
     procedure SeedHostPathSpec(const ASpec, ABaseDirectory: string);
     procedure SeedHostPath(const AHostPath, ASandboxPath: string);
@@ -92,7 +95,8 @@ type
     procedure ConfigureSandboxResolver(
       const AResolver: TGocciaSandboxModuleResolver);
     procedure ConfigureEngineForSandbox(const AEngine: TGocciaEngine;
-      const AContext: TGocciaSandboxContext; const AFileName: string);
+      const AContext: TGocciaSandboxContext; const AFileName: string;
+      const AParentHostEnvironment: TGocciaHostEnvironment);
     procedure CaptureConsoleLine(const AMethod, ALine: string);
     function ExecuteSandboxPathInContext(const AContext: TGocciaSandboxContext;
       const AEntryPath: string): TGocciaSandboxRunResult;
@@ -106,6 +110,9 @@ type
   protected
     procedure Configure; override;
     function UsageLine: string; override;
+    function ShouldApplyRootConfig(const APaths: TStringList;
+      const AConfigPath: string;
+      const AExplicitConfig: Boolean): Boolean; override;
     procedure Validate; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
   public
@@ -203,6 +210,8 @@ begin
   FSeedConfigFiles := AddRepeatable('seed-config',
     'Import sandbox seed entries from a JSON configuration file');
   FDiff := AddFlag('diff', 'Print sandbox filesystem changes after execution');
+  FDiffMetadata := AddFlag('diff-metadata',
+    'Include timestamp changes in sandbox filesystem diffs');
   FDiffFormat := AddString('diff-format',
     'Diff format: json or unified (default: json)');
   FDiffOutput := AddString('diff-output', 'Write diff output to a host file');
@@ -212,6 +221,12 @@ end;
 function TSandboxRunnerApp.UsageLine: string;
 begin
   Result := '<sandbox-entry-path> [options]';
+end;
+
+function TSandboxRunnerApp.ShouldApplyRootConfig(const APaths: TStringList;
+  const AConfigPath: string; const AExplicitConfig: Boolean): Boolean;
+begin
+  Result := AExplicitConfig;
 end;
 
 procedure TSandboxRunnerApp.Validate;
@@ -581,7 +596,8 @@ end;
 
 procedure TSandboxRunnerApp.ConfigureEngineForSandbox(
   const AEngine: TGocciaEngine; const AContext: TGocciaSandboxContext;
-  const AFileName: string);
+  const AFileName: string;
+  const AParentHostEnvironment: TGocciaHostEnvironment);
 var
   Runtime: TGocciaRuntimeCore;
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
@@ -590,12 +606,15 @@ begin
   EmptyConfig := EmptyConfigEntries;
   AEngine.SourceType := ResolveSourceTypeOption(EngineOptions.SourceType,
     EmptyConfig, AFileName);
-  AEngine.Compatibility := ResolveCompatibilityFlags(EngineOptions,
-    EmptyConfig);
+  ApplyCompatibilityAndWarningFlags(AEngine, EngineOptions, EmptyConfig);
   AEngine.StrictTypes := ResolveFlagOption(EngineOptions.StrictTypes,
     EmptyConfig);
   AEngine.FunctionConstructor.Enabled := ResolveFlagOption(
     EngineOptions.UnsafeFunctionConstructor, EmptyConfig);
+  if Assigned(AParentHostEnvironment) then
+    AEngine.HostEnvironment.ConfigureAsChildOf(AParentHostEnvironment)
+  else if ResolveFlagOption(EngineOptions.Deterministic, EmptyConfig) then
+    AEngine.HostEnvironment.UseDeterministicProfile;
   if ResolveFlagOption(EngineOptions.UnsafeShadowRealm, EmptyConfig) then
     EnableShadowRealm(AEngine);
 
@@ -734,6 +753,7 @@ var
   ScriptResult: TGocciaScriptResult;
   CloneRealm, ExecutionRealm: TGocciaRealm;
   PreviousOutputLines: TStrings;
+  PreviousHostEnvironment: TGocciaHostEnvironment;
 begin
   FillChar(Result, SizeOf(Result), 0);
   Result.Ok := False;
@@ -754,6 +774,7 @@ begin
   Executor := nil;
   CloneRealm := CurrentRealm;
   PreviousOutputLines := FCurrentOutputLines;
+  PreviousHostEnvironment := FCurrentHostEnvironment;
   FCurrentOutputLines := OutputLines;
   try
     ConfigureSandboxResolver(Resolver);
@@ -773,7 +794,10 @@ begin
     Engine := TGocciaEngine.Create(AEntryPath, Source, Resolver, Executor);
     Engine.ModuleLoader.SetContentProvider(Provider, True);
     Provider := nil;
-    ConfigureEngineForSandbox(Engine, AContext, AEntryPath);
+    ConfigureEngineForSandbox(Engine, AContext, AEntryPath,
+      PreviousHostEnvironment);
+    ApplyVirtualModulesToEngine(Engine, '');
+    FCurrentHostEnvironment := Engine.HostEnvironment;
 
     try
       StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
@@ -809,6 +833,7 @@ begin
   Executor.Free;
   Resolver.Free;
   Provider.Free;
+  FCurrentHostEnvironment := PreviousHostEnvironment;
   FCurrentOutputLines := PreviousOutputLines;
   OutputLines.Free;
   Source.Free;
@@ -837,9 +862,9 @@ begin
     begin
       Result.DiffRequested := True;
       if AOptions.DiffFormat = 'unified' then
-        Result.Diff := ChildContext.DiffUnified
+        Result.Diff := ChildContext.DiffUnified(AOptions.DiffMetadata)
       else
-        Result.Diff := ChildContext.DiffJson;
+        Result.Diff := ChildContext.DiffJson(AOptions.DiffMetadata);
     end;
   except
     on E: Exception do
@@ -858,12 +883,13 @@ var
   DiffText: string;
   OutFile: TextFile;
 begin
-  if not FDiff.Present and not FDiffOutput.Present then
+  if not FDiff.Present and not FDiffMetadata.Present and
+     not FDiffOutput.Present then
     Exit;
   if FDiffFormat.ValueOr('json') = 'unified' then
-    DiffText := FContext.DiffUnified
+    DiffText := FContext.DiffUnified(FDiffMetadata.Present)
   else
-    DiffText := FContext.DiffJson;
+    DiffText := FContext.DiffJson(FDiffMetadata.Present);
 
   if FDiffOutput.Present then
   begin

@@ -1,6 +1,6 @@
-const hasJSONL = typeof JSONL !== "undefined";
+import * as JSONL from "goccia:jsonl";
 
-describe.runIf(hasJSONL)("JSONL.parse", () => {
+describe("JSONL.parse", () => {
   test("parses mixed JSON values and ignores blank lines", () => {
     const records = JSONL.parse(
       '{"id":1,"name":"alpha"}\n\n42\n true \n["x","y"]',

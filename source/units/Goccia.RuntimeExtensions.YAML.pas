@@ -10,12 +10,14 @@ uses
   Goccia.Builtins.YAML,
   Goccia.Modules,
   Goccia.Runtime,
+  Goccia.RuntimeExtensions.NamespaceModule,
   Goccia.Values.Primitives;
 
 type
   TGocciaYAMLRuntimeExtension = class(TGocciaRuntimeExtension)
   private
     FBuiltinYAML: TGocciaYAMLBuiltin;
+    FYAMLModule: TGocciaRuntimeNamespaceModuleRegistration;
     function MaterializeYAML: TGocciaValue;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
@@ -25,6 +27,8 @@ type
       out AModule: TGocciaModule): Boolean; override;
     function TryInjectGlobals(const AFormat: string;
       const AContent: UTF8String): Boolean; override;
+    function TryInjectModules(const AFormat: string;
+      const AContent: UTF8String; const ABaseAddress: string): Boolean; override;
   end;
 
 implementation
@@ -35,6 +39,7 @@ uses
   Goccia.Error,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.JSON,
   Goccia.Keywords.Reserved,
   Goccia.Modules.ContentProvider,
   Goccia.Scope,
@@ -46,8 +51,9 @@ procedure TGocciaYAMLRuntimeExtension.Attach(
   const ARuntime: TGocciaRuntimeCore);
 begin
   inherited Attach(ARuntime);
-  // Defer building the YAML namespace until first reflective access.
-  Runtime.Engine.RegisterLazyGlobal('YAML', MaterializeYAML, dtLet);
+  FYAMLModule := TGocciaRuntimeNamespaceModuleRegistration.Create(Runtime,
+    'goccia:yaml',
+    MaterializeYAML);
 end;
 
 function TGocciaYAMLRuntimeExtension.MaterializeYAML: TGocciaValue;
@@ -60,6 +66,8 @@ end;
 
 procedure TGocciaYAMLRuntimeExtension.Detach;
 begin
+  FYAMLModule.Free;
+  FYAMLModule := nil;
   FBuiltinYAML.Free;
   FBuiltinYAML := nil;
   inherited;
@@ -201,6 +209,37 @@ begin
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.RemoveTempRoot(Documents);
     Documents.Free;
+  end;
+end;
+
+function TGocciaYAMLRuntimeExtension.TryInjectModules(
+  const AFormat: string; const AContent: UTF8String;
+  const ABaseAddress: string): Boolean;
+var
+  ParsedValue: TGocciaValue;
+  Parser: TGocciaYAMLParser;
+  Stringifier: TGocciaJSONStringifier;
+begin
+  Result := SameText(AFormat, 'yaml');
+  if not Result then
+    Exit;
+  Parser := TGocciaYAMLParser.Create;
+  try
+    ParsedValue := Parser.Parse(AContent);
+  finally
+    Parser.Free;
+  end;
+  TGarbageCollector.Instance.AddTempRoot(ParsedValue);
+  try
+    Stringifier := TGocciaJSONStringifier.Create;
+    try
+      Runtime.Engine.InjectModulesFromJSON(
+        Stringifier.Stringify(ParsedValue), ABaseAddress);
+    finally
+      Stringifier.Free;
+    end;
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
   end;
 end;
 

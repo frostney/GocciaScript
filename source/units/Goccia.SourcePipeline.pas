@@ -27,6 +27,10 @@ type
   TGocciaSourcePipelineOptions = record
     Preprocessors: TGocciaPreprocessors;
     Compatibility: TGocciaCompatibilityFlags;
+    LabelStatementsEnabled: Boolean;
+    ForInLoopsEnabled: Boolean;
+    ExperimentalJSModuleSourceEnabled: Boolean;
+    WarningUnsupportedFeatures: Boolean;
     SourceType: TGocciaSourceType;
     InheritedStrictMode: Boolean;
   end;
@@ -141,6 +145,7 @@ uses
   TextSemantics,
   TimingUtils,
 
+  Goccia.AST.BindingPatterns,
   Goccia.AST.Statements,
   Goccia.Error,
   Goccia.FileExtensions,
@@ -184,27 +189,36 @@ begin
   end;
 end;
 
-function ParserOptionsForSourcePipeline(
-  const AOptions: TGocciaSourcePipelineOptions): TGocciaParserOptions;
+procedure BuildParserOptionsForSourcePipeline(
+  const AOptions: TGocciaSourcePipelineOptions;
+  out AParserOptions: TGocciaParserOptions);
 begin
-  Result.AutomaticSemicolonInsertion := cfASI in AOptions.Compatibility;
-  Result.VarDeclarationsEnabled := cfVar in AOptions.Compatibility;
-  Result.FunctionDeclarationsEnabled := cfFunction in AOptions.Compatibility;
-  Result.TraditionalForLoopsEnabled := cfTraditionalFor in AOptions.Compatibility;
-  Result.WhileLoopsEnabled := cfWhileLoops in AOptions.Compatibility;
-  Result.LooseEqualityEnabled := cfLooseEquality in AOptions.Compatibility;
-  Result.NonStrictModeEnabled := (cfNonStrictMode in AOptions.Compatibility) and
+  FillChar(AParserOptions, SizeOf(AParserOptions), 0);
+  AParserOptions.AutomaticSemicolonInsertion := cfASI in AOptions.Compatibility;
+  AParserOptions.VarDeclarationsEnabled := cfVar in AOptions.Compatibility;
+  AParserOptions.FunctionDeclarationsEnabled := cfFunction in AOptions.Compatibility;
+  AParserOptions.TraditionalForLoopsEnabled := cfTraditionalFor in AOptions.Compatibility;
+  AParserOptions.WhileLoopsEnabled := cfWhileLoops in AOptions.Compatibility;
+  AParserOptions.LooseEqualityEnabled := cfLooseEquality in AOptions.Compatibility;
+  AParserOptions.NonStrictModeEnabled := (cfNonStrictMode in AOptions.Compatibility) and
     (AOptions.SourceType <> stModule);
-  Result.InheritedStrictMode := AOptions.InheritedStrictMode;
-  Result.ImportMetaAllowed := AOptions.SourceType = stModule;
-  Result.LabelStatementsEnabled := cfLabel in AOptions.Compatibility;
-  Result.ForInLoopsEnabled := cfForIn in AOptions.Compatibility;
+  AParserOptions.InheritedStrictMode := AOptions.InheritedStrictMode;
+  AParserOptions.ModuleSource := AOptions.SourceType = stModule;
+  AParserOptions.ImportMetaAllowed := AOptions.SourceType = stModule;
+  AParserOptions.LabelStatementsEnabled := AOptions.LabelStatementsEnabled or
+    (cfLabel in AOptions.Compatibility);
+  AParserOptions.ForInLoopsEnabled := AOptions.ForInLoopsEnabled or
+    (cfForIn in AOptions.Compatibility);
+  AParserOptions.WarningUnsupportedFeatures := AOptions.WarningUnsupportedFeatures;
 end;
 
 procedure ConfigureParser(const AParser: TGocciaParser;
   const AOptions: TGocciaSourcePipelineOptions);
+var
+  ParserOptions: TGocciaParserOptions;
 begin
-  AParser.ApplyOptions(ParserOptionsForSourcePipeline(AOptions));
+  BuildParserOptionsForSourcePipeline(AOptions, ParserOptions);
+  AParser.ApplyOptions(ParserOptions);
 end;
 
 function HasSingleArrowFunctionProgram(const AProgramNode: TGocciaProgram;
@@ -240,8 +254,8 @@ begin
   else
     Prefix := 'function';
   end;
-  Result := '(' + Prefix + ' anonymous(' + AParametersSource + ') {' + #10 +
-    ABodySource + #10 + '})';
+  Result := '(' + Prefix + ' anonymous(' + AParametersSource + #10 + ') {' +
+    #10 + ABodySource + #10 + '})';
 end;
 
 procedure AddNameOnce(const ANames: TStrings; const AName: string);
@@ -253,17 +267,28 @@ end;
 procedure CollectTopLevelModuleDeclarationNames(const AStmt: TGocciaStatement;
   const AVarNames, ALexicalNames: TStrings);
 var
-  I: Integer;
+  I, J: Integer;
+  Names: TStringList;
   VarDecl: TGocciaVariableDeclaration;
 begin
   if AStmt is TGocciaVariableDeclaration then
   begin
     VarDecl := TGocciaVariableDeclaration(AStmt);
     for I := 0 to High(VarDecl.Variables) do
-      if VarDecl.IsVar then
-        AddNameOnce(AVarNames, VarDecl.Variables[I].Name)
-      else
-        AddNameOnce(ALexicalNames, VarDecl.Variables[I].Name);
+    begin
+      Names := TStringList.Create;
+      Names.CaseSensitive := True;
+      try
+        CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
+        for J := 0 to Names.Count - 1 do
+          if VarDecl.IsVar then
+            AddNameOnce(AVarNames, Names[J])
+          else
+            AddNameOnce(ALexicalNames, Names[J]);
+      finally
+        Names.Free;
+      end;
+    end;
     Exit;
   end;
 
@@ -444,6 +469,10 @@ class function TGocciaSourcePipeline.DefaultOptions: TGocciaSourcePipelineOption
 begin
   Result.Preprocessors := [];
   Result.Compatibility := [];
+  Result.LabelStatementsEnabled := False;
+  Result.ForInLoopsEnabled := False;
+  Result.ExperimentalJSModuleSourceEnabled := False;
+  Result.WarningUnsupportedFeatures := False;
   Result.SourceType := stScript;
   Result.InheritedStrictMode := False;
 end;
@@ -479,7 +508,7 @@ begin
   try
     StartTime := GetNanoseconds;
     if Assigned(ASource) then
-      SourceText := StringListToLFText(ASource)
+      SourceText := StringListToSourceText(ASource)
     else
       SourceText := '';
     OriginalSourceText := SourceText;
@@ -526,14 +555,6 @@ begin
           for I := 0 to Parser.WarningCount - 1 do
           begin
             ParserWarning := Parser.GetWarning(I);
-            if (AOptions.SourceType = stModule) and
-               (ParserWarning.Message =
-                 '''with'' statements require --compat-non-strict-mode') then
-              raise TGocciaSyntaxError.Create(
-                '''with'' statements are not allowed in strict mode',
-                ParserWarning.Line, ParserWarning.Column, AFileName,
-                Lexer.SourceLines);
-
             OrigLine := ParserWarning.Line;
             OrigCol := ParserWarning.Column;
             if Assigned(Result.FSourceMap) then

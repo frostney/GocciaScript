@@ -15,6 +15,14 @@ test("object destructuring init", () => {
   expect(result).toEqual([[0, 10], [1, 9], [2, 8]]);
 });
 
+test("mixed destructuring and simple declarators in init", () => {
+  const result = [];
+  for (let current = { x: 0, y: 2 }, { x, y } = current; x < 3; x++, y++) {
+    result.push([x, y]);
+  }
+  expect(result).toEqual([[0, 2], [1, 3], [2, 4]]);
+});
+
 test("destructuring init creates per-iteration bindings", () => {
   const fns = [];
   for (let [a, b] = [0, 100]; a < 3; a++, b -= 10) fns.push(() => [a, b]);

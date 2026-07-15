@@ -10,6 +10,7 @@ import {
   servers,
 } from "./helpers/config.toml";
 import * as unicodeConfig from "./helpers/unicode-config.toml";
+import { parse as parseTOML } from "goccia:toml";
 
 describe("TOML import", () => {
   test("exports top-level scalar values", () => {
@@ -41,6 +42,6 @@ describe("TOML import", () => {
   });
 
   test("TOML.parse reports malformed TOML syntax", () => {
-    expect(() => TOML.parse('value = 01')).toThrow(SyntaxError);
+    expect(() => parseTOML('value = 01')).toThrow(SyntaxError);
   });
 });

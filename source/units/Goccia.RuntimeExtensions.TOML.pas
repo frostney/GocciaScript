@@ -10,12 +10,14 @@ uses
   Goccia.Builtins.TOML,
   Goccia.Modules,
   Goccia.Runtime,
+  Goccia.RuntimeExtensions.NamespaceModule,
   Goccia.Values.Primitives;
 
 type
   TGocciaTOMLRuntimeExtension = class(TGocciaRuntimeExtension)
   private
     FBuiltinTOML: TGocciaTOMLBuiltin;
+    FTOMLModule: TGocciaRuntimeNamespaceModuleRegistration;
     function MaterializeTOML: TGocciaValue;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
@@ -25,6 +27,8 @@ type
       out AModule: TGocciaModule): Boolean; override;
     function TryInjectGlobals(const AFormat: string;
       const AContent: UTF8String): Boolean; override;
+    function TryInjectModules(const AFormat: string;
+      const AContent: UTF8String; const ABaseAddress: string): Boolean; override;
   end;
 
 implementation
@@ -35,6 +39,7 @@ uses
   Goccia.Error,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.JSON,
   Goccia.Keywords.Reserved,
   Goccia.Modules.ContentProvider,
   Goccia.Scope,
@@ -45,8 +50,9 @@ procedure TGocciaTOMLRuntimeExtension.Attach(
   const ARuntime: TGocciaRuntimeCore);
 begin
   inherited Attach(ARuntime);
-  // Defer building the TOML namespace until first reflective access.
-  Runtime.Engine.RegisterLazyGlobal('TOML', MaterializeTOML, dtLet);
+  FTOMLModule := TGocciaRuntimeNamespaceModuleRegistration.Create(Runtime,
+    'goccia:toml',
+    MaterializeTOML);
 end;
 
 function TGocciaTOMLRuntimeExtension.MaterializeTOML: TGocciaValue;
@@ -59,6 +65,8 @@ end;
 
 procedure TGocciaTOMLRuntimeExtension.Detach;
 begin
+  FTOMLModule.Free;
+  FTOMLModule := nil;
   FBuiltinTOML.Free;
   FBuiltinTOML := nil;
   inherited;
@@ -152,6 +160,37 @@ begin
   TGarbageCollector.Instance.AddTempRoot(ParsedValue);
   try
     Runtime.RegisterGlobalsFromObject(TGocciaObjectValue(ParsedValue), 'TOML');
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+  end;
+end;
+
+function TGocciaTOMLRuntimeExtension.TryInjectModules(
+  const AFormat: string; const AContent: UTF8String;
+  const ABaseAddress: string): Boolean;
+var
+  ParsedValue: TGocciaValue;
+  Parser: TGocciaTOMLParser;
+  Stringifier: TGocciaJSONStringifier;
+begin
+  Result := SameText(AFormat, 'toml');
+  if not Result then
+    Exit;
+  Parser := TGocciaTOMLParser.Create;
+  try
+    ParsedValue := Parser.Parse(AContent);
+  finally
+    Parser.Free;
+  end;
+  TGarbageCollector.Instance.AddTempRoot(ParsedValue);
+  try
+    Stringifier := TGocciaJSONStringifier.Create;
+    try
+      Runtime.Engine.InjectModulesFromJSON(
+        Stringifier.Stringify(ParsedValue), ABaseAddress);
+    finally
+      Stringifier.Free;
+    end;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
   end;

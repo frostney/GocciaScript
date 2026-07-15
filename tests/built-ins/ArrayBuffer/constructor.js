@@ -56,6 +56,24 @@ describe("ArrayBuffer constructor error cases", () => {
   test("throws RangeError for -Infinity", () => {
     expect(() => new ArrayBuffer(-Infinity)).toThrow(RangeError);
   });
+
+  test("subclass validates length before resolving newTarget prototype", () => {
+    const events = [];
+    class Sub extends ArrayBuffer {}
+    class NewTargetBase {}
+    const NewTarget = new Proxy(NewTargetBase, {
+      get(target, property) {
+        if (property === "prototype") {
+          events.push("prototype");
+          throw new Error("prototype");
+        }
+        return target[property];
+      },
+    });
+
+    expect(() => Reflect.construct(Sub, [-1], NewTarget)).toThrow(RangeError);
+    expect(events).toEqual([]);
+  });
 });
 
 describe("ArrayBuffer constructor ToIndex coercion (ES2026 §6.2.4.2)", () => {

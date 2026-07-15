@@ -1,3 +1,4 @@
 {
-  "compat-asi": true
+  "compat-asi": true,
+  "compat-label": true
 }

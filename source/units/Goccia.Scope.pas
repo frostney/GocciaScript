@@ -38,6 +38,7 @@ type
     FLoadModule: TLoadModuleCallback;
     FLoadModuleSource: TLoadModuleSourceCallback;
     FLoadDeferredModule: TLoadDeferredModuleCallback;
+    FResolveModuleURL: TResolveModuleURLCallback;
     FStrictTypes: Boolean;
     FNonStrictMode: Boolean;
     FArgumentsObjectEnabled: Boolean;
@@ -78,6 +79,8 @@ type
     procedure AssignBinding(const AName: string; const AValue: TGocciaValue;
       const ALine: Integer = 0; const AColumn: Integer = 0;
       const ANonStrictMode: Boolean = False); virtual;
+    procedure SetOwnMutableBinding(const AName: string;
+      const AValue: TGocciaValue; const AStrict: Boolean);
     procedure ForceUpdateBinding(const AName: string; const AValue: TGocciaValue);
     procedure MarkGlobalObjectBackedBinding(const AName: string);
     function IsGlobalObjectBackedBinding(const AName: string): Boolean;
@@ -86,6 +89,7 @@ type
     procedure DefineVariableBinding(const AName: string; const AValue: TGocciaValue;
       const AHasInitializer: Boolean; const ACanDelete: Boolean = False);
     function ContainsOwnVarBinding(const AName: string): Boolean;
+    function ContainsVarEnvironmentBinding(const AName: string): Boolean; virtual;
     function HasLexicalDeclaration(const AName: string): Boolean;
     function HasRestrictedGlobalProperty(const AName: string): Boolean;
     function CanDeclareGlobalVar(const AName: string): Boolean;
@@ -126,6 +130,10 @@ type
     // stale cache so the caller can fall back to the named lookup.
     function TryGetLexicalValueAt(const AEntryIndex: Integer;
       const AVersion: Cardinal; out AValue: TGocciaValue): Boolean; inline;
+    function HasLexicalBindingAt(const AEntryIndex: Integer;
+      const AVersion: Cardinal): Boolean; inline;
+    function IsGlobalBuiltInObjectBindingAt(const AEntryIndex: Integer;
+      const AVersion: Cardinal): Boolean; inline;
     // Named lookup that reports the own-lexical entry index and map version
     // for inline caching.  AEntryIndex is -1 when the value was resolved
     // through the global this-object, var bindings, or the parent chain —
@@ -185,6 +193,8 @@ type
       read FLoadModuleSource write FLoadModuleSource;
     property LoadDeferredModule: TLoadDeferredModuleCallback
       read FLoadDeferredModule write FLoadDeferredModule;
+    property ResolveModuleURL: TResolveModuleURLCallback
+      read FResolveModuleURL write FResolveModuleURL;
     { Strict-types enforcement flag.  Inherited from parent at scope
       creation so nested closures observe the same setting as the
       surrounding lexical scope.  For live engine state use
@@ -349,6 +359,7 @@ begin
     FLoadModule := AParent.FLoadModule;
     FLoadModuleSource := AParent.FLoadModuleSource;
     FLoadDeferredModule := AParent.FLoadDeferredModule;
+    FResolveModuleURL := AParent.FResolveModuleURL;
     FStrictTypes := AParent.FStrictTypes;
     FNonStrictMode := AParent.FNonStrictMode;
     FArgumentsObjectEnabled := AParent.FArgumentsObjectEnabled;
@@ -837,6 +848,11 @@ begin
     (Assigned(FGlobalVarNames) and FGlobalVarNames.ContainsKey(AName));
 end;
 
+function TGocciaScope.ContainsVarEnvironmentBinding(const AName: string): Boolean;
+begin
+  Result := ContainsOwnLexicalBinding(AName) or ContainsOwnVarBinding(AName);
+end;
+
 // ES2026 §9.1.1.4.15 HasLexicalDeclaration(N) — global-scope approximation.
 function TGocciaScope.HasLexicalDeclaration(const AName: string): Boolean;
 begin
@@ -998,6 +1014,46 @@ begin
   RaiseUndefinedVariable(AName, ALine, AColumn);
 end;
 
+// ES2026 §9.1.1.1.5 SetMutableBinding(N, V, S)
+procedure TGocciaScope.SetOwnMutableBinding(const AName: string;
+  const AValue: TGocciaValue; const AStrict: Boolean);
+var
+  Binding: TLexicalBinding;
+begin
+  if FLexicalBindings.TryGetValue(AName, Binding) then
+  begin
+    if not Binding.IsAccessible then
+      RaiseBindingNotInitialized(AName, 0, 0);
+    if not Binding.Writable then
+    begin
+      if AStrict then
+        raise TGocciaTypeError.Create(
+          Format(SErrorAssignToConstant, [AName]),
+          0, 0, '', nil, SSuggestUseLetNotConst);
+      Exit;
+    end;
+    if EffectiveStrictTypes and (Binding.TypeHint <> sltUntyped) then
+      EnforceStrictType(AValue, Binding.TypeHint);
+    Binding.Value := AValue;
+    Binding.Initialized := True;
+    FLexicalBindings.AddOrSetValue(AName, Binding);
+    Exit;
+  end;
+
+  if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, Binding) then
+  begin
+    if EffectiveStrictTypes and (Binding.TypeHint <> sltUntyped) then
+      EnforceStrictType(AValue, Binding.TypeHint);
+    Binding.Value := AValue;
+    FVarBindings.AddOrSetValue(AName, Binding);
+    Exit;
+  end;
+
+  if AStrict then
+    RaiseUndefinedVariable(AName, 0, 0);
+  DefineVariableBinding(AName, AValue, True, True);
+end;
+
 function TGocciaScope.TryAssignExistingBinding(const AName: string;
   const AValue: TGocciaValue; const ANonStrictMode: Boolean = False;
   const ALine: Integer = 0; const AColumn: Integer = 0): Boolean;
@@ -1046,10 +1102,17 @@ begin
       end;
     end;
     if not LexicalBinding.Writable then
+    begin
+      // ES2026 SetMutableBinding with S = false silently ignores assignment
+      // to the non-writable global value properties (Infinity, NaN, and
+      // undefined). User-declared const bindings remain errors in every mode.
+      if ANonStrictMode and LexicalBinding.BuiltIn then
+        Exit(True);
       raise TGocciaTypeError.Create(
         Format(SErrorAssignToConstant, [AName]),
         ALine, AColumn, '', nil,
         SSuggestUseLetNotConst);
+    end;
     if StrictActive and (LexicalBinding.TypeHint <> sltUntyped) then
       EnforceStrictType(AValue, LexicalBinding.TypeHint);
     LexicalBinding.Value := AValue;
@@ -1259,6 +1322,25 @@ begin
   end;
   AValue := LexicalBinding.Value;
   Result := True;
+end;
+
+function TGocciaScope.IsGlobalBuiltInObjectBindingAt(
+  const AEntryIndex: Integer; const AVersion: Cardinal): Boolean;
+var
+  LexicalBinding: TLexicalBinding;
+begin
+  Result := (AVersion = FLexicalBindings.EntryVersion) and
+    FLexicalBindings.TryGetValueAtEntry(AEntryIndex, LexicalBinding) and
+    IsGlobalBuiltInObjectBinding(LexicalBinding);
+end;
+
+function TGocciaScope.HasLexicalBindingAt(const AEntryIndex: Integer;
+  const AVersion: Cardinal): Boolean;
+var
+  LexicalBinding: TLexicalBinding;
+begin
+  Result := (AVersion = FLexicalBindings.EntryVersion) and
+    FLexicalBindings.TryGetValueAtEntry(AEntryIndex, LexicalBinding);
 end;
 
 function TGocciaScope.TryGetBindingValueFillCache(const AName: string;
@@ -1639,6 +1721,8 @@ constructor TGocciaCatchScope.Create(const AParent: TGocciaScope; const ACatchPa
 begin
   inherited Create(AParent, skBlock, 'CatchBlock');
   FCatchParameter := ACatchParameter;
+  if Assigned(AParent) then
+    ThisValue := AParent.ThisValue;
 end;
 
 function TGocciaCatchScope.TryAssignExistingBinding(const AName: string;

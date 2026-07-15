@@ -25,6 +25,8 @@ type
     destructor Destroy; override;
 
     procedure AddAlias(const APattern, AReplacement: string);
+    function ApplyAlias(const AModulePath,
+      AImportingFilePath: string): string;
     function GetExtensions: TModuleResolverExtensionArray;
     function HasAlias(const AModulePath: string): Boolean;
     procedure SetExtensions(const AExtensions: array of string);
@@ -147,6 +149,12 @@ end;
 procedure TModuleResolver.AddAlias(const APattern, AReplacement: string);
 begin
   FAliases.AddOrSetValue(APattern, AReplacement);
+end;
+
+function TModuleResolver.ApplyAlias(const AModulePath,
+  AImportingFilePath: string): string;
+begin
+  Result := ApplyAliases(AModulePath, AImportingFilePath);
 end;
 
 function TModuleResolver.GetExtensions: TModuleResolverExtensionArray;

@@ -93,4 +93,69 @@ describe("Uint8Array.prototype.setFromBase64", () => {
     const target = new Uint8Array(5);
     expect(() => target.setFromBase64("SGVsbG8", { lastChunkHandling: "strict" })).toThrow(SyntaxError);
   });
+
+  test("writes decoded bytes before throwing on later invalid data", () => {
+    const target = new Uint8Array([255, 255, 255, 255, 255]);
+    expect(() => target.setFromBase64("MjYyZm.9v")).toThrow(SyntaxError);
+    expect(target[0]).toBe(50);
+    expect(target[1]).toBe(54);
+    expect(target[2]).toBe(50);
+    expect(target[3]).toBe(255);
+    expect(target[4]).toBe(255);
+  });
+
+  test("does not scan trailing garbage after target is full", () => {
+    const target = new Uint8Array(3);
+    const result = target.setFromBase64("aaaa#");
+    expect(result.read).toBe(4);
+    expect(result.written).toBe(3);
+    expect(target[0]).toBe(105);
+    expect(target[1]).toBe(166);
+    expect(target[2]).toBe(154);
+  });
+
+  test("zero-length target ignores malformed input", () => {
+    const target = new Uint8Array(0);
+    const result = target.setFromBase64("#", {
+      lastChunkHandling: "strict"
+    });
+    expect(result.read).toBe(0);
+    expect(result.written).toBe(0);
+  });
+
+  test("throws TypeError when options detach the target before decoding", () => {
+    const buffer = new ArrayBuffer(3);
+    const target = new Uint8Array(buffer);
+    let getterCalls = 0;
+    const options = {};
+    Object.defineProperty(options, "alphabet", {
+      get() {
+        getterCalls += 1;
+        buffer.transfer();
+        return "base64";
+      }
+    });
+
+    expect(() => target.setFromBase64("Zg==", options)).toThrow(TypeError);
+    expect(getterCalls).toBe(1);
+  });
+
+  test("throws TypeError on immutable targets before reading options", () => {
+    const buffer = new ArrayBuffer(3);
+    const seed = new Uint8Array(buffer);
+    seed[0] = 1;
+    const target = new Uint8Array(buffer.transferToImmutable());
+    let getterCalls = 0;
+    const options = {};
+    Object.defineProperty(options, "alphabet", {
+      get() {
+        getterCalls += 1;
+        return "base64";
+      }
+    });
+
+    expect(() => target.setFromBase64("Zg==", options)).toThrow(TypeError);
+    expect(getterCalls).toBe(0);
+    expect(target[0]).toBe(1);
+  });
 });

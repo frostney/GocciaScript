@@ -5,12 +5,12 @@
 
 ## Executive Summary
 
-- **Quick start** — `TGocciaRuntime.Create(...)` creates the runtime layer for file loading and runtime extension installation; apply a runtime profile or install concrete runtime extensions for runtime globals. `TGocciaEngine.Create(...)` remains available for core-language-only embedders and requires an explicit executor (`TGocciaInterpreterExecutor` for tree-walk or `TGocciaBytecodeExecutor` for bytecode VM)
+- **Quick start** — `TGocciaRuntime.Create(...)` creates the runtime layer for file loading and runtime extension installation; apply a runtime profile or install concrete runtime extensions for runtime globals and `goccia:` runtime modules. `TGocciaEngine.Create(...)` remains available for core-language-only embedders and requires an explicit executor (`TGocciaInterpreterExecutor` for tree-walk or `TGocciaBytecodeExecutor` for bytecode VM)
 - **Sandboxing** — Choose runtime extensions and tool-specific runtime APIs explicitly; inject custom globals via `DefineLexicalBinding`; enforce execution limits via timeout or instruction cap
-- **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, and global modules
+- **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, virtual modules, and host modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
 
-GocciaScript is designed to be embedded in FreePascal applications. `TGocciaRuntime` is the embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, `URL`, JSON5, TOML, YAML, CSV/TSV, and SemVer usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals.
+GocciaScript is designed to be embedded in FreePascal applications. `TGocciaRuntime` is the embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, and `URL`, plus import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, and `goccia:semver`, usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals or runtime modules.
 
 ## Quick Start
 
@@ -29,13 +29,13 @@ finally
 end;
 ```
 
-For files, load `app.js` into the `Source` list, pass the real filename to `TGocciaRuntime.Create('app.js', Source)`, and apply the runtime profile or runtime extensions your host needs before executing. Use `TGocciaEngine.RunScript*` only for core-language scripts that do not need runtime file loading or runtime globals.
+For files, load `app.js` into the `Source` list, pass the real filename to `TGocciaRuntime.Create('app.js', Source)`, and apply the runtime profile or runtime extensions your host needs before executing. Use `TGocciaEngine.RunScript*` only for core-language scripts that do not need runtime file loading, runtime globals, or `goccia:` runtime modules.
 
 ## Engine API
 
 ### Class Methods (One-Shot Execution)
 
-These helpers create, execute, and clean up in a single call. The `TGocciaEngine` methods create a core-language-only engine. The `TGocciaRuntime` methods attach the runtime layer for file loading, but they do not apply a runtime profile; install runtime extensions explicitly when scripts need runtime globals such as `console`, `fetch`, `URL`, JSON5, TOML, YAML, CSV/TSV, or SemVer.
+These helpers create, execute, and clean up in a single call. The `TGocciaEngine` methods create a core-language-only engine. The `TGocciaRuntime` methods attach the runtime layer for file loading, but they do not apply a runtime profile; install runtime extensions explicitly when scripts need runtime globals such as `console`, `fetch`, and `URL`, or import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, or `goccia:semver`.
 
 | Method | Description |
 |--------|-------------|
@@ -140,6 +140,11 @@ end;
 `FormatDuration` (from `TimingUtils`) automatically selects the appropriate unit: `ns` for values below 0.5μs, `μs` for values below 0.5ms, `ms` with two decimal places for values up to 10s, and `s` above that.
 
 `TimingUtils` provides three clock functions: `GetNanoseconds` and `GetMilliseconds` for monotonic duration timing (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows), and `GetEpochNanoseconds` for wall-clock epoch time (`clock_gettime(CLOCK_REALTIME)` on Unix/macOS, `GetSystemTimeAsFileTime` on Windows).
+
+### Host-Controlled Time And Randomness
+
+Before attaching runtime extensions, use the engine-owned host environment;
+see [Host Environment](host-environment.md) for deterministic setup and providers.
 
 ## Engine Lifecycle & Realm Isolation
 
@@ -347,9 +352,15 @@ end;
 
 `TGocciaEngine` also accepts an injected module loader via its constructor. When no loader is supplied, it creates a default `TGocciaModuleLoader` with the standard resolver but no filesystem content provider. `TGocciaRuntime` installs the filesystem provider when attached; core-language-only embedders that need imports should inject their own provider.
 
-### Global Modules
+### Virtual Modules
 
-Global modules are bare-specifier imports that bypass file resolution entirely. They are checked before the resolver runs:
+Prefer virtual modules for host configuration consumed through ordinary ES imports. See
+[Virtual Module Configuration](virtual-modules.md) for their schema and behavior.
+
+### Host Modules
+
+Host modules expose values created programmatically by an embedder. They are
+checked before filesystem resolution:
 
 ```pascal
 uses
@@ -360,18 +371,18 @@ var
 begin
   Module := TGocciaModule.Create('my-lib');
   Module.ExportsTable.Add('version', TGocciaStringLiteralValue.Create('1.0.0'));
-  Engine.RegisterGlobalModule('my-lib', Module);
+  Engine.RegisterHostModule('my-lib', Module);
 end;
 ```
 
-Scripts can then import from the global module by name:
+Scripts can then import from the host module by name:
 
 ```javascript
 import { version } from "my-lib";
 console.log(version);  // "1.0.0"
 ```
 
-This provides the foundation for future built-in module packages that can be coupled to runtime-global configuration.
+`RegisterHostModuleProvider` is lazy; former global module names remain supported without warnings.
 
 ## Console Output Capture
 
@@ -445,7 +456,7 @@ The CLI hosts based on `TGocciaCLIApplication` (ScriptLoader, TestRunner, Benchm
 
 ## Built-in Registration
 
-Core language built-ins (Math, Object, Array, JSON, Promise, Temporal, typed arrays, etc.) are registered by `TGocciaEngine`. Runtime globals that are not part of the language core (Console, CSV, JSON5, JSONL, TOML, TSV, YAML, TextEncoder/TextDecoder, URL, fetch, performance, SemVer) are provided by concrete runtime units. Hosts can call `ApplyLoaderRuntimeProfile` for the ordinary CLI runtime surface or install only the extension classes they need for a smaller runtime surface.
+Core language built-ins (Math, Object, Array, JSON, Promise, Temporal, typed arrays, etc.) are registered by `TGocciaEngine`. Runtime globals that are not part of the language core (Console, TextEncoder/TextDecoder, URL, fetch, performance, etc.) and import-only runtime modules (`goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, `goccia:semver`) are provided by concrete runtime units. Hosts can call `ApplyLoaderRuntimeProfile` for the ordinary CLI runtime surface or install only the extension classes they need for a smaller runtime surface. The `goccia:` modules expose named exports only; callers can use namespace imports such as `import * as CSV from "goccia:csv"` when they want namespace-style access.
 
 When you already have an engine, pass it to the runtime constructor:
 
@@ -474,7 +485,7 @@ Runtime extensions are ordinary Pascal classes installed on `TGocciaRuntimeCore`
 
 | Extension/profile | Provides | Notes |
 |------|----------|-------|
-| `ApplyLoaderRuntimeProfile` | ordinary CLI runtime surface: console, data modules, text assets, performance, text encoding, URL/fetch, SemVer, and related runtime globals | Used by ScriptLoader and REPL |
+| `ApplyLoaderRuntimeProfile` | ordinary CLI runtime surface: console, `goccia:` data-format/SemVer modules, text assets, performance, text encoding, URL/fetch, and related runtime globals | Used by ScriptLoader and REPL |
 | `TGocciaTestingLibraryRuntimeExtension` | `describe`, `test`, `expect` | Testing framework; TestRunner installs this through `ApplyTestRunnerRuntimeProfile` |
 | `TGocciaBenchmarkRuntimeExtension` | `suite`, `bench` | Benchmark framework; BenchmarkRunner installs this through `ApplyBenchmarkRunnerRuntimeProfile` |
 | `TGocciaFFIRuntimeExtension` | `FFI.open`, `FFILibrary`, `FFIPointer` | Native shared-library FFI; CLI tools install this for `--unsafe-ffi` or `"unsafe-ffi": true` in config |
@@ -499,7 +510,7 @@ finally
 end;
 ```
 
-Runtime globals can be reduced by installing only a concrete extension, for example `Runtime.Install(TGocciaConsoleRuntimeExtension.Create)`.
+Runtime globals and runtime modules can be reduced by installing only concrete extensions, for example `Runtime.Install(TGocciaConsoleRuntimeExtension.Create)`.
 
 ### Preprocessors and Compatibility
 
@@ -507,6 +518,7 @@ Runtime globals can be reduced by installing only a concrete extension, for exam
 |--------|------|---------|---------|
 | `Preprocessors` | `TGocciaPreprocessors` | `[ppJSX]` | Source transformations before parsing |
 | `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | ECMAScript conformance and legacy-behavior toggles; leave empty for the recommended defaults |
+| `WarningUnsupportedFeatures` | `Boolean` | `False` | Parser diagnostic policy for disabled syntax; `True` restores warning/no-op recovery without enabling compatibility semantics |
 | `SourceType` | `TGocciaSourceType` | `stScript` | Load entry as script source (default) or module source; `.mjs` file names infer `stModule` |
 | `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations (works in both interpreter and bytecode); setter propagates to the active executor and interpreter scope |
 
@@ -525,6 +537,7 @@ try
     cfWhileLoops,
     cfExperimentalJSModuleSource
   ];                                       // Enable selected source-pipeline flags
+  Engine.WarningUnsupportedFeatures := True; // Optional migration mode for disabled syntax diagnostics
   Engine.SourceType := stModule;           // Run entry as module source (top-level this is undefined; import.meta resolves)
   Engine.StrictTypes := True;              // Enforce type annotations in both execution modes
 finally
@@ -977,10 +990,10 @@ For CLI tools, use `TGocciaCLIApplication` instead, which adds argument parsing,
 1. Add `source/units/` and `source/shared/` to your FreePascal unit search path (or use `config.cfg`)
 2. `uses Goccia.Runtime, Goccia.Values.Primitives;`
 3. Create `TGocciaRuntime.Create(...)` for the runtime layer and file loading
-4. Use `Runtime.Engine` for engine-level options such as ASI, source type, and compatibility flags
-5. Choose your runtime surface and runtime globals via runtime profiles or runtime extensions
+4. Use `Runtime.Engine` for engine-level options such as ASI, source type, parser diagnostic policy, and compatibility flags
+5. Choose your runtime surface, runtime globals, and `goccia:` modules via runtime profiles or runtime extensions
 6. Inject custom globals via `Runtime.Engine.Interpreter.GlobalScope.DefineLexicalBinding(...)`
 7. Handle exceptions from `Goccia.Error`
 8. Free the runtime when done; it owns and frees the engine only when it created the engine itself, or when you used an ownership-transfer overload such as `TGocciaRuntime.Create(Engine, True)`. `TGocciaRuntime.Create(Engine)` is non-owning by default, so embedders wrapping an existing engine must also free that engine.
 
-For host-provided configuration data, `Runtime.Engine` exposes `InjectGlobalsFromJSON(...)`, `InjectGlobalsFromJSON5(...)`, `InjectGlobalsFromTOML(...)`, `InjectGlobalsFromYAML(...)`, and `InjectGlobalsFromModule(...)`. Strict JSON is core. JSON5, TOML, and YAML injection require the matching runtime extension (`TGocciaJSON5RuntimeExtension`, `TGocciaTOMLRuntimeExtension`, or `TGocciaYAMLRuntimeExtension`); they use the same top-level-object/table contract as JSON object globals. Embedders that intentionally need only the core language can still use `TGocciaEngine` directly.
+Prefer virtual modules; global injection remains supported without warnings.

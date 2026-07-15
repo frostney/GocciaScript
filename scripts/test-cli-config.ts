@@ -4,7 +4,7 @@
  *
  * Config file loading and per-file config: goccia.json, goccia.toml,
  * goccia.json5, priority, discovery, timeout, stack-size, imports, extends,
- * TestRunner integration, per-file compat flags, multi-directory, CLI override.
+ * TestRunner integration, per-file engine flags, multi-directory, CLI override.
  */
 
 import { $ } from "bun";
@@ -68,6 +68,15 @@ type CompatAcrossAppsCase = {
   benchSource: string;
   benchNeedle: string;
 };
+
+function microbenchScript(lines: string[]): string {
+  return [
+    'import("goccia:microbench").then(({ bench, group }) => {',
+    ...lines.map((line) => `  ${line}`),
+    "});",
+    "",
+  ].join("\n");
+}
 
 async function runCompatAcrossAppsCase(testCase: CompatAcrossAppsCase): Promise<void> {
   const tmp = makeTmp();
@@ -141,6 +150,99 @@ console.log("goccia.json loading...");
     const out = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`goccia.json should enable bytecode, got: ${out}`);
     if (!containsLine(out, "4")) throw new Error(`goccia.json should produce 4 on its own line, got: ${out}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- deterministic config ------------------------------------------------------
+
+console.log("deterministic config applies before runtime globals attach...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "goccia.json"), '{"deterministic": true}\n');
+    writeFileSync(
+      join(tmp, "test.js"),
+      '[Math.random(), Date.now(), Temporal.Now.instant().epochNanoseconds.toString(), performance.timeOrigin, performance.now()].join("|");\n',
+    );
+    writeFileSync(
+      join(tmp, "test-runner.js"),
+      [
+        'test("deterministic config", () => {',
+        "  expect(Date.now()).toBe(0);",
+        "  expect(Temporal.Now.instant().epochNanoseconds).toBe(0n);",
+        "  expect(performance.timeOrigin).toBe(0);",
+        "  expect(performance.now()).toBe(0);",
+        "});",
+        "",
+      ].join("\n"),
+    );
+
+    const expected = "0.8833108082136426|0|0|0|0";
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const loader = runCwd(
+        LOADER,
+        ["--print", join(tmp, "test.js"), `--mode=${mode}`],
+        tmp,
+      );
+      if (!containsLine(loader.combined, expected))
+        throw new Error(
+          `Loader deterministic config ${mode} expected ${expected}, got: ${loader.combined}`,
+        );
+
+      const testRunner = runCwd(
+        TESTRUNNER,
+        [join(tmp, "test-runner.js"), `--mode=${mode}`, "--no-progress"],
+        tmp,
+      );
+      if (!testRunner.combined.includes("Passed: 1"))
+        throw new Error(
+          `TestRunner deterministic config ${mode} should pass, got: ${testRunner.combined}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- host environment config ---------------------------------------------------
+
+console.log("host environment config loads a provider module before runtime globals attach...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(
+      join(tmp, "goccia.json"),
+      '{"host-environment": "./host-environment.js"}\n',
+    );
+    writeFileSync(
+      join(tmp, "host-environment.js"),
+      [
+        "export const epochNanoseconds = () => 123000000n;",
+        "export const monotonicNanoseconds = () => 456000000n;",
+        'export const timeZoneIdentifier = () => "UTC";',
+        "export const random = (streamId) => streamId === 0n ? 0.125 : 0.625;",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(tmp, "test.js"),
+      '[Date.now(), Math.random(), Temporal.Now.timeZoneId(), performance.timeOrigin, performance.now()].join("|");\n',
+    );
+
+    const expected = "123|0.125|UTC|123|0";
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const loader = runCwd(
+        LOADER,
+        ["--print", join(tmp, "test.js"), `--mode=${mode}`],
+        tmp,
+      );
+      if (!containsLine(loader.combined, expected))
+        throw new Error(
+          `Loader host environment config ${mode} expected ${expected}, got: ${loader.combined}`,
+        );
+    }
   } finally {
     clean(tmp);
   }
@@ -421,13 +523,11 @@ console.log("Per-file ASI config across all apps...");
     );
     writeFileSync(
       join(asiDir, "bench.js"),
-      [
-        'suite("asi", () => {',
-        '  bench("sum", {',
-        "    run: () => 1 + 1",
-        "  })",
+      microbenchScript([
+        'group("asi", () => {',
+        '  bench("sum", () => 1 + 1)',
         "})",
-      ].join("\n") + "\n",
+      ]),
     );
 
     // Strict subdirectory (no config)
@@ -520,16 +620,14 @@ console.log("Per-file unsafe-ffi config across runtime apps...");
     );
     writeFileSync(
       join(tmp, "bench.js"),
-      [
-        'suite("unsafe-ffi", () => {',
-        '  bench("global", {',
-        "    run: () => {",
+      microbenchScript([
+        'group("unsafe-ffi", () => {',
+        '  bench("global", () => {',
         '      if (typeof FFI !== "object") throw new Error("FFI missing");',
         "      return FFI.suffix;",
-        "    },",
         "  });",
         "});",
-      ].join("\n") + "\n",
+      ]),
     );
 
     const loaderNoConfig = await $`${LOADER} --print ${join(noConfigDir, "test.js")} 2>&1`.text();
@@ -597,16 +695,14 @@ console.log("Per-file unsafe-ffi config across runtime apps...");
     for (const name of ["a", "b"]) {
       writeFileSync(
         join(parallelBenchDir, `${name}.js`),
-        [
-          `suite("unsafe-ffi-${name}", () => {`,
-          '  bench("global", {',
-          "    run: () => {",
+        microbenchScript([
+          `group("unsafe-ffi-${name}", () => {`,
+          '  bench("global", () => {',
           '      if (typeof FFI !== "object") throw new Error("FFI missing");',
           "      return FFI.suffix;",
-          "    },",
           "  });",
           "});",
-        ].join("\n") + "\n",
+        ]),
       );
     }
     const benchParallel = Bun.spawnSync(
@@ -645,6 +741,23 @@ const nonStrictSource = [
 
 for (const testCase of [
   {
+    name: "warning-unsupported-features",
+    config: '{"warning-unsupported-features": true}\n',
+    loaderSource: "while (false) {}\n42;\n",
+    loaderExpectedLine: "42",
+    testRunnerSource: [
+      "while (false) {}",
+      'test("warning recovery", () => { expect(2 + 2).toBe(4); });',
+    ].join("\n") + "\n",
+    benchSource: microbenchScript([
+      "while (false) {}",
+      'group("warning", () => {',
+      '  bench("recovery", () => 1 + 1);',
+      "});",
+    ]),
+    benchNeedle: "warning",
+  },
+  {
     name: "compat-var",
     config: '{"compat-var": true}\n',
     loaderSource: "var x = 10;\nx;\n",
@@ -657,14 +770,12 @@ for (const testCase of [
       "  });",
       "});",
     ].join("\n") + "\n",
-    benchSource: [
+    benchSource: microbenchScript([
       "var z = 1;",
-      'suite("var", () => {',
-      '  bench("add", {',
-      "    run: () => z + 1,",
-      "  });",
+      'group("var", () => {',
+      '  bench("add", () => z + 1);',
       "});",
-    ].join("\n") + "\n",
+    ]),
     benchNeedle: "var",
   },
   {
@@ -681,17 +792,15 @@ for (const testCase of [
       "  });",
       "});",
     ].join("\n") + "\n",
-    benchSource: [
-      'suite("for", () => {',
-      '  bench("count", {',
-      "    run: () => {",
+    benchSource: microbenchScript([
+      'group("for", () => {',
+      '  bench("count", () => {',
       "      let s = 0;",
       "      for (let i = 0; i < 10; i++) s += i;",
       "      return s;",
-      "    },",
       "  });",
       "});",
-    ].join("\n") + "\n",
+    ]),
     benchNeedle: "for",
   },
   {
@@ -712,10 +821,9 @@ for (const testCase of [
       "  });",
       "});",
     ].join("\n") + "\n",
-    benchSource: [
-      'suite("while", () => {',
-      '  bench("count", {',
-      "    run: () => {",
+    benchSource: microbenchScript([
+      'group("while", () => {',
+      '  bench("count", () => {',
       "      let s = 0;",
       "      let i = 0;",
       "      while (i < 10) {",
@@ -723,10 +831,9 @@ for (const testCase of [
       "        i++;",
       "      }",
       "      return s;",
-      "    },",
       "  });",
       "});",
-    ].join("\n") + "\n",
+    ]),
     benchNeedle: "while",
   },
   {
@@ -735,13 +842,11 @@ for (const testCase of [
     loaderSource: '"1" == 1;\n',
     loaderExpectedLine: "true",
     testRunnerSource: 'test("loose equality", () => { expect("1" == 1).toBe(true); });\n',
-    benchSource: [
-      'suite("loose", () => {',
-      '  bench("eq", {',
-      '    run: () => "1" == 1,',
-      "  });",
+    benchSource: microbenchScript([
+      'group("loose", () => {',
+      '  bench("eq", () => "1" == 1);',
       "});",
-    ].join("\n") + "\n",
+    ]),
     benchNeedle: "loose",
   },
   {
@@ -750,14 +855,12 @@ for (const testCase of [
     loaderSource: nonStrictSource,
     loaderExpectedLine: "7",
     testRunnerSource: nonStrictSource + 'test("nonstrict", () => { expect(f(1, 2)).toBe(7); });\n',
-    benchSource: [
+    benchSource: microbenchScript([
       nonStrictSource,
-      'suite("nonstrict", () => {',
-      '  bench("call", {',
-      "    run: () => f(1, 2),",
-      "  });",
+      'group("nonstrict", () => {',
+      '  bench("call", () => f(1, 2));',
       "});",
-    ].join("\n") + "\n",
+    ]),
     benchNeedle: "nonstrict",
   },
 ]) {
@@ -765,9 +868,9 @@ for (const testCase of [
   await runCompatAcrossAppsCase(testCase);
 }
 
-// -- compat-traditional-for-loop off -> warning, no crash -----------------------
+// -- compat-traditional-for-loop off -> SyntaxError by default ------------------
 
-console.log("compat-traditional-for-loop OFF emits warning and no-ops...");
+console.log("compat-traditional-for-loop OFF errors by default...");
 {
   const tmp = makeTmp();
   try {
@@ -775,21 +878,34 @@ console.log("compat-traditional-for-loop OFF emits warning and no-ops...");
       join(tmp, "no-flag.js"),
       "for (let i = 0; i < 3; i++) { console.log('should not run'); }\n",
     );
-    const stderr = await $`${LOADER} ${join(tmp, "no-flag.js")} 2>&1`.text();
-    if (!stderr.includes("Traditional 'for(;;)' loops are not supported")) {
-      throw new Error(`Loader without flag should emit warning, got: ${stderr}`);
+    const defaultRes = await $`${LOADER} ${join(tmp, "no-flag.js")} 2>&1`.nothrow();
+    const defaultOutput = defaultRes.text();
+    if (defaultRes.exitCode === 0) {
+      throw new Error(`Loader without flag should fail for traditional for-loop`);
     }
-    if (stderr.includes("should not run")) {
-      throw new Error(`Loader without flag should not execute the loop body, got: ${stderr}`);
+    if (!defaultOutput.includes("SyntaxError") ||
+        !defaultOutput.includes("Traditional 'for(;;)' loops are not supported")) {
+      throw new Error(`Loader without flag should emit SyntaxError, got: ${defaultOutput}`);
+    }
+    const warningRes = await $`${LOADER} ${join(tmp, "no-flag.js")} --warning-unsupported-features 2>&1`.nothrow();
+    const warningOutput = warningRes.text();
+    if (warningRes.exitCode !== 0) {
+      throw new Error(`Loader with warning flag should recover, got: ${warningOutput}`);
+    }
+    if (!warningOutput.includes("Warning: Traditional 'for(;;)' loops are not supported")) {
+      throw new Error(`Loader with warning flag should emit warning, got: ${warningOutput}`);
+    }
+    if (warningOutput.includes("should not run")) {
+      throw new Error(`Loader with warning flag should not execute the loop body, got: ${warningOutput}`);
     }
   } finally {
     clean(tmp);
   }
 }
 
-// -- compat-while-loops off -> warning, no crash -------------------------------
+// -- compat-while-loops off -> SyntaxError by default --------------------------
 
-console.log("compat-while-loops OFF emits warning and no-ops...");
+console.log("compat-while-loops OFF errors by default...");
 {
   const tmp = makeTmp();
   try {
@@ -797,12 +913,25 @@ console.log("compat-while-loops OFF emits warning and no-ops...");
       join(tmp, "no-flag.js"),
       "let x = 0;\nwhile (x < 3) { console.log('should not run'); x++; }\n",
     );
-    const stderr = await $`${LOADER} ${join(tmp, "no-flag.js")} 2>&1`.text();
-    if (!stderr.includes("'while' loops are not supported by default")) {
-      throw new Error(`Loader without flag should emit warning, got: ${stderr}`);
+    const defaultRes = await $`${LOADER} ${join(tmp, "no-flag.js")} 2>&1`.nothrow();
+    const defaultOutput = defaultRes.text();
+    if (defaultRes.exitCode === 0) {
+      throw new Error(`Loader without flag should fail for while loop`);
     }
-    if (stderr.includes("should not run")) {
-      throw new Error(`Loader without flag should not execute the loop body, got: ${stderr}`);
+    if (!defaultOutput.includes("SyntaxError") ||
+        !defaultOutput.includes("'while' loops are not supported by default")) {
+      throw new Error(`Loader without flag should emit SyntaxError, got: ${defaultOutput}`);
+    }
+    const warningRes = await $`${LOADER} ${join(tmp, "no-flag.js")} --warning-unsupported-features 2>&1`.nothrow();
+    const warningOutput = warningRes.text();
+    if (warningRes.exitCode !== 0) {
+      throw new Error(`Loader with warning flag should recover, got: ${warningOutput}`);
+    }
+    if (!warningOutput.includes("Warning: 'while' loops are not supported by default")) {
+      throw new Error(`Loader with warning flag should emit warning, got: ${warningOutput}`);
+    }
+    if (warningOutput.includes("should not run")) {
+      throw new Error(`Loader with warning flag should not execute the loop body, got: ${warningOutput}`);
     }
   } finally {
     clean(tmp);
@@ -1349,14 +1478,12 @@ console.log("--config works on BenchmarkRunner...");
     writeFileSync(join(cfgDir, "goccia.toml"), 'compat-asi = true\n');
     writeFileSync(
       join(tmp, "bench.js"),
-      [
+      microbenchScript([
         // No semicolons — proves --config-supplied ASI is in effect.
-        'suite("config-flag", () => {',
-        '  bench("sum", {',
-        "    run: () => 1 + 1",
-        "  })",
+        'group("config-flag", () => {',
+        '  bench("sum", () => 1 + 1)',
         "})",
-      ].join("\n") + "\n",
+      ]),
     );
 
     const proc = Bun.spawnSync(
@@ -1375,6 +1502,221 @@ console.log("--config works on BenchmarkRunner...");
   } finally {
     clean(tmp);
     clean(cfgDir);
+  }
+}
+
+console.log("Virtual modules in goccia.json...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(
+      join(tmp, "goccia.json"),
+      JSON.stringify({
+        "source-type": "module",
+        modules: {
+          "host:settings": { type: "json", content: { version: 3 } },
+          "host:main": {
+            content:
+              'import settings from "host:settings"; export default settings.version;',
+          },
+        },
+      }),
+    );
+    writeFileSync(
+      join(tmp, "entry.js"),
+      'import value from "host:main"; value;\n',
+    );
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const out = runCwd(
+        LOADER,
+        [join(tmp, "entry.js"), "--print", `--mode=${mode}`],
+        tmp,
+      );
+      if (!containsLine(out.stdout, "3"))
+        throw new Error(`Config virtual module ${mode} expected 3, got: ${out.combined}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("--modules manifests (JSON, JSON5, TOML, YAML, JavaScript, TypeScript)...");
+{
+  const tmp = makeTmp();
+  try {
+    const manifests = new Map<string, string>([
+      ["modules.json", '{"host:manifest":{"content":"export default 23;"}}'],
+      ["modules.json5", '{"host:manifest": {content: "export default 23;"}}'],
+      ["modules.toml", '["host:manifest"]\ncontent = "export default 23;"\n'],
+      ["modules.yaml", '"host:manifest":\n  content: "export default 23;"\n'],
+      ["modules.js", 'export default {"host:manifest": {content: "export default 23;"}};\n'],
+      ["modules.ts", 'export default {"host:manifest": {type: "typescript", content: "export default 23;"}};\n'],
+    ]);
+    writeFileSync(
+      join(tmp, "entry.mjs"),
+      'import value from "host:manifest"; value;\n',
+    );
+    for (const [name, content] of manifests) {
+      const path = join(tmp, name);
+      writeFileSync(path, content);
+      const out = runCwd(
+        LOADER,
+        [join(tmp, "entry.mjs"), "--print", "--modules", path],
+        tmp,
+      );
+      if (!containsLine(out.stdout, "23"))
+        throw new Error(`${name} virtual module manifest expected 23, got: ${out.combined}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Executable manifests cannot replace an already loaded module record...");
+{
+  const tmp = makeTmp();
+  try {
+    const manifest = join(tmp, "modules.mjs");
+    const entry = join(tmp, "entry.mjs");
+    writeFileSync(
+      manifest,
+      'export default {"./modules.mjs": {content: "export default 17;"}};\n',
+    );
+    writeFileSync(entry, 'import value from "./modules.mjs"; value;\n');
+    const out = runCwd(
+      LOADER,
+      [entry, "--print", "--modules", manifest],
+      tmp,
+      { expectFail: true },
+    );
+    if (out.exitCode === 0 || !out.combined.includes("cannot be replaced after it has been loaded"))
+      throw new Error(`Loaded module replacement should be rejected: ${out.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Executable manifests inherit effective engine configuration...");
+{
+  const tmp = makeTmp();
+  try {
+    const manifest = join(tmp, "modules.mjs");
+    const entry = join(tmp, "entry.mjs");
+    writeFileSync(
+      join(tmp, "goccia.json"),
+      JSON.stringify({ "compat-function": true }),
+    );
+    writeFileSync(
+      manifest,
+      'function createModules() { return {"host:configured": {content: "export default 29;"}}; } export default createModules();\n',
+    );
+    writeFileSync(entry, 'import value from "host:configured"; value;\n');
+    const out = runCwd(
+      LOADER,
+      [entry, "--print", "--modules", manifest],
+      tmp,
+    );
+    if (!containsLine(out.stdout, "29"))
+      throw new Error(`Executable manifest did not inherit config: ${out.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Virtual module config precedence and inherited manifest origins...");
+{
+  const tmp = makeTmp();
+  const baseDir = join(tmp, "base");
+  const appDir = join(tmp, "app");
+  try {
+    mkdirSync(baseDir, { recursive: true });
+    mkdirSync(appDir, { recursive: true });
+    writeFileSync(
+      join(tmp, "root.json"),
+      JSON.stringify({
+        modules: {
+          "host:choice": { content: "export default 1;" },
+        },
+      }),
+    );
+    writeFileSync(
+      join(baseDir, "goccia.json"),
+      JSON.stringify({ modules: ["modules.json"] }),
+    );
+    writeFileSync(
+      join(baseDir, "modules.json"),
+      JSON.stringify({
+        "host:inherited": { content: "export default 10;" },
+      }),
+    );
+    writeFileSync(
+      join(appDir, "goccia.json"),
+      JSON.stringify({
+        extends: "../base/goccia.json",
+        module: "host:choice=export default 2;",
+      }),
+    );
+    writeFileSync(
+      join(appDir, "entry.mjs"),
+      'import choice from "host:choice"; import inherited from "host:inherited"; choice + inherited;\n',
+    );
+
+    const perFile = runCwd(
+      LOADER,
+      [join(appDir, "entry.mjs"), "--print", "--config", join(tmp, "root.json")],
+      tmp,
+    );
+    if (!containsLine(perFile.stdout, "12"))
+      throw new Error(`Per-file virtual module config should override root and retain inherited origins: ${perFile.combined}`);
+
+    const cli = runCwd(
+      LOADER,
+      [
+        join(appDir, "entry.mjs"),
+        "--print",
+        "--config",
+        join(tmp, "root.json"),
+        "--module",
+        "host:choice=export default 3;",
+      ],
+      tmp,
+    );
+    if (!containsLine(cli.stdout, "13"))
+      throw new Error(`CLI virtual module config should override per-file and root config: ${cli.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Virtual modules win filesystem collisions with a warning...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(
+      join(tmp, "goccia.json"),
+      JSON.stringify({
+        imports: { "virtual-dep": "./dep.js" },
+        modules: {
+          "./dep.js": { content: "export default 2;" },
+        },
+      }),
+    );
+    writeFileSync(join(tmp, "dep.js"), "export default 1;\n");
+    writeFileSync(
+      join(tmp, "entry.mjs"),
+      'import value from "virtual-dep"; value;\n',
+    );
+    const out = runCwd(
+      LOADER,
+      [join(tmp, "entry.mjs"), "--print"],
+      tmp,
+    );
+    if (!containsLine(out.stdout, "2"))
+      throw new Error(`Virtual module should win filesystem collision: ${out.combined}`);
+    if (!out.stderr.includes("shadows module"))
+      throw new Error(`Virtual/filesystem collision should warn: ${out.combined}`);
+  } finally {
+    clean(tmp);
   }
 }
 

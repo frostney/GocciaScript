@@ -6,8 +6,11 @@
  */
 
 import { $ } from "bun";
+import { writeFileSync } from "fs";
+import { join } from "path";
 import { LOADER } from "./test-cli/binaries";
 import { assertSyntaxError, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
+import { clean, mkdtemp } from "./test-cli/tmpdir";
 
 // -- Error display (SyntaxError with caret and suggestion) ----------------------
 
@@ -89,6 +92,69 @@ console.log("Accessor properties are invalid destructuring assignment targets...
   }
 }
 
+// -- Function parameter-list early errors ---------------------------------------
+
+console.log("Function parameter-list early errors...");
+{
+  const cases = [
+    {
+      desc: "async function parameter default containing await",
+      source: "async function f(a = await 1) {}\n",
+      args: ["--compat-function"],
+    },
+    {
+      desc: "async arrow parameter default containing await",
+      source: "const f = async (a = await 1) => a;\n",
+      args: [],
+    },
+    {
+      desc: "async function parameter binding named await",
+      source: "async function f(await) {}\n",
+      args: ["--compat-function"],
+    },
+    {
+      desc: "async arrow rest binding named await",
+      source: "const f = async (...await) => {};\n",
+      args: [],
+    },
+    {
+      desc: "generator function rest binding named yield",
+      source: "function* g(...yield) {}\n",
+      args: ["--compat-function"],
+    },
+    {
+      desc: "arrow duplicate parameter names",
+      source: "const f = (a, a) => a;\n",
+      args: [],
+    },
+    {
+      desc: "object method duplicate parameter names",
+      source: "const obj = { m(a, a) {} };\n",
+      args: [],
+    },
+    {
+      desc: "class method duplicate parameter names",
+      source: "class C { m(a, a) {} }\n",
+      args: [],
+    },
+    {
+      desc: "function duplicate binding with rest parameter",
+      source: "function f(a, ...a) {}\n",
+      args: ["--compat-function"],
+    },
+    {
+      desc: "function duplicate binding with default parameter",
+      source: "function f(a = 0, a) {}\n",
+      args: ["--compat-function"],
+    },
+  ] as const;
+
+  for (const { desc, source, args } of cases) {
+    assertSyntaxError(source, desc, [...args]);
+    assertSyntaxError(source, `${desc} (bytecode)`, [...args, "--mode=bytecode"]);
+  }
+}
+
 // -- Strict-mode legacy octal literal rejection ---------------------------------
 
 console.log("Strict-mode legacy octal literal rejection...");
@@ -140,21 +206,95 @@ console.log("ASI after do...while...");
     throw new Error(`Expected do...while newline ASI output after, got: ${newline.json.output}`);
 }
 
-// -- Unsupported var recovery (ASI and compat-var flags) ------------------------
+// -- Unsupported/default-disabled syntax errors by default ----------------------
 
-console.log("Unsupported var recovery (ASI and compat-var flags)...");
+console.log("Unsupported/default-disabled syntax errors by default...");
 {
-  const sourceBeforeBlockClose = [
-    "if (true) {",
-    "  var skipped = 1",
-    "}",
-    'console.log("after");',
-    "",
-  ].join("\n");
-  const blockCloseRes = runLoaderJson(sourceBeforeBlockClose);
-  if (blockCloseRes.exitCode !== 0) throw new Error(`Unsupported var before } should not consume the block close`);
-  if (blockCloseRes.json.ok !== true) throw new Error(`Unsupported var before } should succeed, got: ${JSON.stringify(blockCloseRes.json)}`);
-  if (normalizeLineEndings(blockCloseRes.json.output) !== "after\n") throw new Error(`Expected output after unsupported var block recovery, got: ${blockCloseRes.json.output}`);
+  const cases = [
+    {
+      desc: "var declaration",
+      source: 'var skipped = 1;\nconsole.log("after");\n',
+      message: "'var' declarations are not supported",
+      expectedWarningOutput: "after\n",
+    },
+    {
+      desc: "function declaration",
+      source: 'function skipped() { return 1; }\nconsole.log("after");\n',
+      message: "'function' declarations are not supported",
+      expectedWarningOutput: "after\n",
+    },
+    {
+      desc: "loose equality",
+      source: "console.log(1 == 1);\n",
+      message: "'==' (loose equality) is not supported",
+      expectedWarningOutput: "undefined\n",
+    },
+    {
+      desc: "loose inequality",
+      source: "console.log(1 != 1);\n",
+      message: "'!=' (loose inequality) is not supported",
+      expectedWarningOutput: "undefined\n",
+    },
+    {
+      desc: "traditional for-loop",
+      source: 'for (let i = 0; i < 1; i++) { console.log("skip"); }\nconsole.log("after");\n',
+      message: "Traditional 'for(;;)' loops are not supported",
+      expectedWarningOutput: "after\n",
+    },
+    {
+      desc: "for-in loop",
+      source: 'for (const key in { a: 1 }) { console.log(key); }\nconsole.log("after");\n',
+      message: "'for...in' loops are not supported",
+      expectedWarningOutput: "after\n",
+    },
+    {
+      desc: "while loop",
+      source: 'while (false) { console.log("skip"); }\nconsole.log("after");\n',
+      message: "'while' loops are not supported",
+      expectedWarningOutput: "after\n",
+    },
+    {
+      desc: "do-while loop",
+      source: 'do { console.log("skip"); } while (false);\nconsole.log("after");\n',
+      message: "'do...while' loops are not supported",
+      expectedWarningOutput: "after\n",
+    },
+    {
+      desc: "with statement",
+      source: 'with ({ value: 1 }) { console.log(value); }\nconsole.log("after");\n',
+      message: "'with' statements require --compat-non-strict-mode",
+      expectedWarningOutput: "after\n",
+    },
+    {
+      desc: "label statement",
+      source: 'label: console.log("skip");\nconsole.log("after");\n',
+      message: "Labeled statements are not supported",
+      expectedWarningOutput: "skip\nafter\n",
+    },
+  ];
+
+  for (const { desc, source, message, expectedWarningOutput } of cases) {
+    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+      const label = modeArgs.length ? `${desc} (bytecode)` : desc;
+      const defaultRes = runLoaderJson(source, modeArgs);
+      if (defaultRes.exitCode === 0)
+        throw new Error(`${label}: unsupported syntax should fail by default`);
+      if (defaultRes.json.ok !== false || defaultRes.json.error?.type !== "SyntaxError")
+        throw new Error(`${label}: expected SyntaxError JSON, got ${JSON.stringify(defaultRes.json.error)}`);
+      if (!String(defaultRes.json.error?.message ?? "").includes(message))
+        throw new Error(`${label}: expected message containing ${message}, got ${defaultRes.json.error?.message}`);
+
+      const warningRes = runLoaderJson(source, ["--warning-unsupported-features", ...modeArgs]);
+      if (warningRes.exitCode !== 0)
+        throw new Error(`${label}: --warning-unsupported-features should recover, got exit ${warningRes.exitCode}`);
+      if (warningRes.json.ok !== true)
+        throw new Error(`${label}: warning recovery should succeed, got ${JSON.stringify(warningRes.json.error)}`);
+      if (normalizeLineEndings(warningRes.json.output) !== expectedWarningOutput)
+        throw new Error(
+          `${label}: expected warning recovery output ${JSON.stringify(expectedWarningOutput)}, got ${JSON.stringify(warningRes.json.output)}`,
+        );
+    }
+  }
 
   const sourceBeforeDeclaration = [
     "var skipped = 1",
@@ -162,33 +302,76 @@ console.log("Unsupported var recovery (ASI and compat-var flags)...");
     "console.log(after);",
     "",
   ].join("\n");
-  const asiRes = runLoaderJson(sourceBeforeDeclaration, ["--compat-asi"]);
-  if (asiRes.exitCode !== 0) throw new Error(`Unsupported var with ASI should preserve the following declaration`);
-  if (asiRes.json.ok !== true) throw new Error(`Unsupported var with ASI should succeed, got: ${JSON.stringify(asiRes.json)}`);
-  if (normalizeLineEndings(asiRes.json.output) !== "2\n") throw new Error(`Expected ASI recovery output 2, got: ${asiRes.json.output}`);
+  const warningAsiRes = runLoaderJson(sourceBeforeDeclaration, ["--warning-unsupported-features", "--compat-asi"]);
+  if (warningAsiRes.exitCode !== 0)
+    throw new Error(`warning recovery with ASI should preserve the following declaration`);
+  if (normalizeLineEndings(warningAsiRes.json.output) !== "2\n")
+    throw new Error(`Expected warning ASI recovery output 2, got: ${warningAsiRes.json.output}`);
 
   const compatVarAsiRes = runLoaderJson(sourceBeforeDeclaration, ["--compat-asi", "--compat-var"]);
-  if (compatVarAsiRes.exitCode !== 0) throw new Error(`compat-var with ASI should parse var without an explicit semicolon`);
-  if (compatVarAsiRes.json.ok !== true) throw new Error(`compat-var with ASI should succeed, got: ${JSON.stringify(compatVarAsiRes.json)}`);
-  if (normalizeLineEndings(compatVarAsiRes.json.output) !== "2\n") throw new Error(`Expected compat-var ASI output 2, got: ${compatVarAsiRes.json.output}`);
+  if (compatVarAsiRes.exitCode !== 0)
+    throw new Error(`compat-var with ASI should parse var without an explicit semicolon`);
+  if (compatVarAsiRes.json.ok !== true)
+    throw new Error(`compat-var with ASI should succeed, got: ${JSON.stringify(compatVarAsiRes.json)}`);
+  if (normalizeLineEndings(compatVarAsiRes.json.output) !== "2\n")
+    throw new Error(`Expected compat-var ASI output 2, got: ${compatVarAsiRes.json.output}`);
 
   const compatVarNoAsiRes = runLoaderJson(sourceBeforeDeclaration, ["--compat-var"]);
-  if (compatVarNoAsiRes.exitCode === 0) throw new Error(`compat-var without ASI should require a semicolon before the following declaration`);
-  if (compatVarNoAsiRes.json.ok !== false) throw new Error(`compat-var without ASI should fail, got: ${JSON.stringify(compatVarNoAsiRes.json)}`);
-  if (compatVarNoAsiRes.json.error?.type !== "SyntaxError") throw new Error(`Expected SyntaxError without ASI, got: ${compatVarNoAsiRes.json.error?.type}`);
+  if (compatVarNoAsiRes.exitCode === 0)
+    throw new Error(`compat-var without ASI should require a semicolon before the following declaration`);
+  if (compatVarNoAsiRes.json.ok !== false)
+    throw new Error(`compat-var without ASI should fail, got: ${JSON.stringify(compatVarNoAsiRes.json)}`);
+  if (compatVarNoAsiRes.json.error?.type !== "SyntaxError")
+    throw new Error(`Expected SyntaxError without ASI, got: ${compatVarNoAsiRes.json.error?.type}`);
 }
 
-// -- Disabled-feature recovery with interpolated template literals --------------
-// Regression: error recovery for a disabled construct must skip a `${ ... }`
-// substitution as part of its template literal. Previously the substitution's
-// closing brace was miscounted as the structural brace that ends the skipped
-// region, and the trailing backtick was then re-scanned as a fresh, unterminated
-// template literal -- surfacing "Unterminated template literal" at EOF instead of
-// the real compat-flag diagnostic. The for, while, and do...while recovery paths
-// all share the SkipBalancedParens/SkipBlock/SkipUntilSemicolon + SkipTemplate-
-// Literal flow, so each is covered here.
+// -- Unsupported syntax in imported modules follows the entry policy ------------
 
-console.log("Disabled-feature recovery with interpolated template literals...");
+console.log("Unsupported syntax in imported modules follows the entry policy...");
+{
+  const tmp = mkdtemp("goccia-parser-mod-");
+  try {
+    const dep = join(tmp, "dep.js");
+    const entry = join(tmp, "entry.js");
+    writeFileSync(dep, 'var dep = 1;\nconsole.log("dep");\n');
+    writeFileSync(entry, 'import "./dep.js";\nconsole.log("entry");\n');
+
+    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+      const label = modeArgs.length ? "module dependency (bytecode)" : "module dependency";
+      const defaultProc = Bun.spawnSync([LOADER, "--source-type=module", ...modeArgs, entry], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const defaultOut = `${defaultProc.stdout.toString()}${defaultProc.stderr.toString()}`;
+      if (defaultProc.exitCode === 0)
+        throw new Error(`${label}: imported unsupported syntax should fail by default`);
+      if (!defaultOut.includes("SyntaxError") || !defaultOut.includes("'var' declarations are not supported"))
+        throw new Error(`${label}: expected imported SyntaxError, got: ${defaultOut}`);
+
+      const warningProc = Bun.spawnSync(
+        [LOADER, "--source-type=module", "--warning-unsupported-features", ...modeArgs, entry],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const warningOut = `${warningProc.stdout.toString()}${warningProc.stderr.toString()}`;
+      if (warningProc.exitCode !== 0)
+        throw new Error(`${label}: warning mode should recover imported unsupported syntax, got: ${warningOut}`);
+      if (!warningOut.includes("dep") || !warningOut.includes("entry"))
+        throw new Error(`${label}: warning mode should execute dependency and entry, got: ${warningOut}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- Disabled-feature diagnostics with interpolated template literals -----------
+// Regression: recovery/error handling for a disabled construct must skip a
+// `${ ... }` substitution as part of its template literal. Previously the
+// substitution's closing brace was miscounted as the structural brace that ends
+// the skipped region, and the trailing backtick was then re-scanned as a fresh,
+// unterminated template literal. Default mode now fails with the unsupported
+// syntax error; warning mode keeps the historical recovery path.
+
+console.log("Disabled-feature diagnostics with interpolated template literals...");
 {
   const recoveryCases = [
     {
@@ -253,27 +436,35 @@ console.log("Disabled-feature recovery with interpolated template literals...");
   for (const { desc, compatFlag, source, expected } of recoveryCases) {
     for (const args of [[] as string[], ["--mode=bytecode"]]) {
       const label = args.length ? `${desc} (bytecode)` : desc;
-      const { exitCode, json } = runLoaderJson(source, args);
-      if (json.ok !== true) {
-        if (json.error?.message === "Unterminated template literal")
+      const defaultRes = runLoaderJson(source, args);
+      if (defaultRes.exitCode === 0)
+        throw new Error(`${label}: disabled syntax should fail by default`);
+      if (defaultRes.json.error?.type !== "SyntaxError")
+        throw new Error(`${label}: expected SyntaxError, got ${JSON.stringify(defaultRes.json.error)}`);
+      if (defaultRes.json.error?.message === "Unterminated template literal")
+        throw new Error(`${label}: regressed to unterminated-template syntax error`);
+
+      const warningRes = runLoaderJson(source, ["--warning-unsupported-features", ...args]);
+      if (warningRes.json.ok !== true) {
+        if (warningRes.json.error?.message === "Unterminated template literal")
           throw new Error(
-            `${label}: regressed -- a disabled construct with a template literal surfaced "Unterminated template literal" instead of recovering`,
+            `${label}: regressed -- warning recovery surfaced "Unterminated template literal"`,
           );
-        throw new Error(`${label}: should recover, got ok=${json.ok} error=${JSON.stringify(json.error)}`);
+        throw new Error(`${label}: warning mode should recover, got ok=${warningRes.json.ok} error=${JSON.stringify(warningRes.json.error)}`);
       }
-      if (exitCode !== 0) throw new Error(`${label}: should exit 0, got ${exitCode}`);
-      if (normalizeLineEndings(json.output) !== expected)
-        throw new Error(`${label}: expected output ${JSON.stringify(expected)}, got ${JSON.stringify(json.output)}`);
+      if (warningRes.exitCode !== 0) throw new Error(`${label}: warning mode should exit 0, got ${warningRes.exitCode}`);
+      if (normalizeLineEndings(warningRes.json.output) !== expected)
+        throw new Error(`${label}: expected output ${JSON.stringify(expected)}, got ${JSON.stringify(warningRes.json.output)}`);
     }
 
-    // The human-readable diagnostic must name the compat flag, not the lexer's
-    // unterminated-template error. Parsing is shared across modes, so check once.
     const diag = Bun.spawnSync([LOADER], {
       stdin: new TextEncoder().encode(source),
       stdout: "pipe",
       stderr: "pipe",
     });
     const diagOut = `${diag.stdout.toString()}${diag.stderr.toString()}`;
+    if (diag.exitCode === 0)
+      throw new Error(`${desc}: default human diagnostic should fail`);
     if (!diagOut.includes(compatFlag))
       throw new Error(`${desc}: expected the diagnostic to reference ${compatFlag}, got: ${diagOut}`);
     if (diagOut.includes("Unterminated template literal"))

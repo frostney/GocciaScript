@@ -39,3 +39,12 @@ test("named function expression name is read-only inside", () => {
   };
   expect(() => f()).toThrow();
 });
+
+test("contextual keyword can name a function expression", () => {
+  const f = function from(value /* optional arguments omitted */) {
+    return value;
+  };
+
+  expect(f(42)).toBe(42);
+  expect(f.name).toBe("from");
+});

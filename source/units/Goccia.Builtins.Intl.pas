@@ -10,6 +10,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.HostEnvironment,
   Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.ObjectValue,
@@ -19,6 +20,7 @@ type
   TGocciaIntlBuiltin = class(TGocciaBuiltin)
   private
     FIntlNamespace: TGocciaObjectValue;
+    FHostEnvironment: TGocciaHostEnvironment;
 
     function GetCanonicalLocales(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SupportedValuesOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -60,6 +62,7 @@ type
   public
     constructor Create(const AName: string; const AScope: TGocciaScope;
       const AThrowError: TGocciaThrowErrorCallback;
+      const AHostEnvironment: TGocciaHostEnvironment;
       const ADefineGlobalBinding: Boolean = True);
 
     property IntlNamespace: TGocciaObjectValue read FIntlNamespace;
@@ -106,11 +109,13 @@ uses
 
 constructor TGocciaIntlBuiltin.Create(const AName: string;
   const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback;
+  const AHostEnvironment: TGocciaHostEnvironment;
   const ADefineGlobalBinding: Boolean = True);
 var
   IntlMembers: array[0..2] of TGocciaMemberDefinition;
 begin
   inherited Create(AName, AScope, AThrowError);
+  FHostEnvironment := AHostEnvironment;
 
   FIntlNamespace := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   TGarbageCollector.Instance.AddTempRoot(FIntlNamespace);
@@ -195,9 +200,7 @@ begin
   if PrototypeValue is TGocciaObjectValue then
     Exit(TGocciaObjectValue(PrototypeValue));
 
-  FallbackRealm := nil;
-  if ANewTarget is TGocciaFunctionBase then
-    FallbackRealm := TGocciaFunctionBase(ANewTarget).CreationRealm;
+  FallbackRealm := GetFunctionRealm(ANewTarget);
 
   Result := IntlConstructorPrototypeFromRealm(FallbackRealm, AConstructorName);
   if Assigned(Result) then
@@ -1153,7 +1156,8 @@ begin
     if not IsUndefinedIntlValue(OptionsArg) then
       Options := ToObject(OptionsArg);
   end;
-  Constructed := TGocciaIntlDateTimeFormatValue.Create(Locale, Options);
+  Constructed := TGocciaIntlDateTimeFormatValue.Create(Locale, Options,
+    FHostEnvironment);
   Result := ChainLegacyIntlConstructor('DateTimeFormat', AThisValue, Constructed);
   if not Assigned(Result) then
     Result := Constructed;

@@ -14,7 +14,7 @@ type
 
   TGocciaBytecodeHandlerEntry = record
     CatchIP: Integer;
-    CatchRegister: UInt8;
+    CatchRegister: UInt16;
     FrameDepth: Integer;
     Kind: TGocciaBytecodeHandlerKind;
   end;
@@ -26,7 +26,7 @@ type
     FEntries: array of TGocciaBytecodeHandlerEntry;
     FCount: Integer;
   public
-    procedure Push(const ACatchIP: Integer; const ACatchRegister: UInt8;
+    procedure Push(const ACatchIP: Integer; const ACatchRegister: UInt16;
       const AFrameDepth: Integer;
       const AKind: TGocciaBytecodeHandlerKind = bhkCatch);
     procedure Pop;
@@ -68,7 +68,7 @@ begin
 end;
 
 procedure TGocciaBytecodeHandlerStack.Push(const ACatchIP: Integer;
-  const ACatchRegister: UInt8; const AFrameDepth: Integer;
+  const ACatchRegister: UInt16; const AFrameDepth: Integer;
   const AKind: TGocciaBytecodeHandlerKind);
 begin
   if FCount >= Length(FEntries) then

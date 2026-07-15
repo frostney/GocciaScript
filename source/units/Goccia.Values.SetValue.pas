@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.SharedPrototype,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
@@ -27,9 +28,8 @@ type
     function SetClear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SetForEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SetValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function SetKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SetEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function SetSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SetSize(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SetUnion(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SetIntersection(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SetDifference(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -48,18 +48,10 @@ type
 
     // Live, insertion-ordered cursor over active members. Seed ACursor with 0.
     function NextItem(var ACursor: Integer; out AValue: TGocciaValue): Boolean;
-    // Like NextItem, but stops at physical slot ALimit (captured via
-    // EntrySlotCount before a set operation that runs user callbacks), so
-    // members appended during a callback are not visited.
-    function NextItemBounded(var ACursor: Integer; ALimit: Integer;
-      out AValue: TGocciaValue): Boolean;
-    function EntrySlotCount: Integer;
     procedure RetainIterator;
     procedure ReleaseIterator;
     function Count: Integer;
 
-    function GetProperty(const AName: string): TGocciaValue; override;
-    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToArray: TGocciaArrayValue;
     function ToStringTag: string; override;
     function BuiltinTagFallback: Boolean; override;
@@ -68,6 +60,8 @@ type
     procedure MarkReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
+    class function GetSharedPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; static;
   end;
 
 implementation
@@ -80,7 +74,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
-  Goccia.Realm,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -120,8 +113,8 @@ end;
 // snapshot because the spec (ES2026 §24.2.4.5) builds its result from a copy of
 // O.[[SetData]] taken before any `has` callback runs, so later mutations of the
 // receiver — including delete-then-readd — do not affect the result. The
-// live-iterating operations (intersection/isSubsetOf/isDisjointFrom) instead use
-// NextItemBounded over the original physical slots.
+// live-iterating operations (intersection/isSubsetOf/isDisjointFrom) instead
+// use NextItem so callback-appended members remain visible.
 function SnapshotSetItems(const ASet: TGocciaSetValue): TArray<TGocciaValue>;
 var
   Cursor, Count: Integer;
@@ -255,8 +248,10 @@ begin
     Members.AddNamedMethod('clear', SetClear, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddNamedMethod('forEach', SetForEach, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddNamedMethod('values', SetValues, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-    Members.AddNamedMethod('keys', SetKeys, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddPropertyAlias(PROP_KEYS, PROP_VALUES,
+      [pfConfigurable, pfWritable]);
     Members.AddNamedMethod('entries', SetEntries, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddAccessor(PROP_SIZE, SetSize, nil, [pfConfigurable]);
     Members.AddNamedMethod('union', SetUnion, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddNamedMethod('intersection', SetIntersection, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddNamedMethod('difference', SetDifference, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -264,11 +259,9 @@ begin
     Members.AddNamedMethod('isSubsetOf', SetIsSubsetOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddNamedMethod('isSupersetOf', SetIsSupersetOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddNamedMethod('isDisjointFrom', SetIsDisjointFrom, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-    Members.AddSymbolMethod(
+    Members.AddSymbolAlias(
       TGocciaSymbolValue.WellKnownIterator,
-      '[Symbol.iterator]',
-      SetSymbolIterator,
-      0,
+      PROP_VALUES,
       [pfConfigurable, pfWritable]);
     Members.AddSymbolDataProperty(
       TGocciaSymbolValue.WellKnownToStringTag,
@@ -295,6 +288,12 @@ begin
     ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
+class function TGocciaSetValue.GetSharedPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  Result := GetSharedPrototypeFromOwnedSlot(ARealm, GSetSharedSlot);
+end;
+
 destructor TGocciaSetValue.Destroy;
 begin
   FStore.Free;
@@ -303,10 +302,27 @@ end;
 
 procedure TGocciaSetValue.InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
 var
-  InitArg: TGocciaValue;
+  InitArg, Adder, Item: TGocciaValue;
   Iterator: TGocciaIteratorValue;
-  Item: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
   Done: Boolean;
+  GC: TGarbageCollector;
+  WasSelfRooted, WasInitRooted, WasAdderRooted, WasIteratorRooted: Boolean;
+  WasItemRooted: Boolean;
+
+  function AddRootIfNeeded(const AValue: TGocciaValue): Boolean;
+  begin
+    Result := Assigned(GC) and Assigned(AValue) and not GC.IsTempRoot(AValue);
+    if Result then
+      GC.AddTempRoot(AValue);
+  end;
+
+  procedure RemoveRootIfNeeded(const AValue: TGocciaValue; const AWasAdded: Boolean);
+  begin
+    if AWasAdded then
+      GC.RemoveTempRoot(AValue);
+  end;
+
 begin
   if AArguments.Length = 0 then
     Exit;
@@ -315,19 +331,52 @@ begin
      (InitArg is TGocciaNullLiteralValue) then
     Exit;
 
-  Iterator := GetIteratorFromValue(InitArg);
-  if not Assigned(Iterator) then
-    ThrowTypeError('Set constructor argument is not iterable');
-
+  GC := TGarbageCollector.Instance;
+  WasSelfRooted := AddRootIfNeeded(Self);
+  WasInitRooted := AddRootIfNeeded(InitArg);
   try
-    repeat
-      Item := Iterator.DirectNext(Done);
-      if not Done then
-        AddItem(Item);
-    until Done;
-  except
-    CloseIteratorPreservingError(Iterator);
-    raise;
+    Adder := GetProperty(PROP_ADD);
+    if not Assigned(Adder) or not Adder.IsCallable then
+      ThrowTypeError(Format(SErrorValueNotFunction, [PROP_ADD]), SSuggestSetThisType);
+
+    WasAdderRooted := AddRootIfNeeded(Adder);
+    try
+      Iterator := GetIteratorFromValue(InitArg);
+      if not Assigned(Iterator) then
+        ThrowTypeError(Format(SErrorMapConstructorNotIterable, [CONSTRUCTOR_SET]), SSuggestNotIterable);
+
+      WasIteratorRooted := AddRootIfNeeded(Iterator);
+      try
+        Item := Iterator.DirectNext(Done);
+        while not Done do
+        begin
+          WasItemRooted := AddRootIfNeeded(Item);
+          try
+            try
+              CallArgs := TGocciaArgumentsCollection.Create([Item]);
+              try
+                InvokeCallable(Adder, CallArgs, Self);
+              finally
+                CallArgs.Free;
+              end;
+            except
+              CloseIteratorPreservingError(Iterator);
+              raise;
+            end;
+          finally
+            RemoveRootIfNeeded(Item, WasItemRooted);
+          end;
+          Item := Iterator.DirectNext(Done);
+        end;
+      finally
+        RemoveRootIfNeeded(Iterator, WasIteratorRooted);
+      end;
+    finally
+      RemoveRootIfNeeded(Adder, WasAdderRooted);
+    end;
+  finally
+    RemoveRootIfNeeded(InitArg, WasInitRooted);
+    RemoveRootIfNeeded(Self, WasSelfRooted);
   end;
 end;
 
@@ -365,19 +414,6 @@ begin
   Result := FStore.NextEntry(ACursor, Key, AValue);
 end;
 
-function TGocciaSetValue.NextItemBounded(var ACursor: Integer; ALimit: Integer;
-  out AValue: TGocciaValue): Boolean;
-var
-  Key: TGocciaValue;
-begin
-  Result := FStore.NextEntryBounded(ACursor, ALimit, Key, AValue);
-end;
-
-function TGocciaSetValue.EntrySlotCount: Integer;
-begin
-  Result := FStore.EntrySlotCount;
-end;
-
 procedure TGocciaSetValue.RetainIterator;
 begin
   FStore.RetainIterator;
@@ -391,19 +427,6 @@ end;
 function TGocciaSetValue.Count: Integer;
 begin
   Result := FStore.Count;
-end;
-
-function TGocciaSetValue.GetProperty(const AName: string): TGocciaValue;
-begin
-  Result := GetPropertyWithContext(AName, Self);
-end;
-
-function TGocciaSetValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
-begin
-  if AName = PROP_SIZE then
-    Result := TGocciaNumberLiteralValue.Create(FStore.Count)
-  else
-    Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
 function TGocciaSetValue.ToArray: TGocciaArrayValue;
@@ -583,17 +606,6 @@ begin
   Result := TGocciaSetIteratorValue.Create(AThisValue, skValues);
 end;
 
-// ES2026 §24.2.3.8 Set.prototype.keys()
-function TGocciaSetValue.SetKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-begin
-  // Step 1: This method is the same function as Set.prototype.values (per spec)
-  // Steps 2-3: If S does not have a [[SetData]] internal slot, throw a TypeError
-  if not (AThisValue is TGocciaSetValue) then
-    ThrowTypeError(SErrorSetKeysNonSet, SSuggestSetThisType);
-  // Step 4: Return CreateSetIterator(S, value)
-  Result := TGocciaSetIteratorValue.Create(AThisValue, skValues);
-end;
-
 // ES2026 §24.2.3.5 Set.prototype.entries()
 function TGocciaSetValue.SetEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
@@ -605,17 +617,17 @@ begin
   Result := TGocciaSetIteratorValue.Create(AThisValue, skEntries);
 end;
 
-// ES2026 §24.2.3.11 Set.prototype[@@iterator]()
-function TGocciaSetValue.SetSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+// ES2026 §24.2.4.14 get Set.prototype.size
+function TGocciaSetValue.SetSize(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  // Step 1: This method is the same function as Set.prototype.values (per spec)
-  // Steps 2-3: If S does not have a [[SetData]] internal slot, throw a TypeError
   if not (AThisValue is TGocciaSetValue) then
-    ThrowTypeError(SErrorSetIteratorNonSet, SSuggestSetThisType);
-  Result := TGocciaSetIteratorValue.Create(AThisValue, skValues);
+    ThrowTypeError(SErrorSetSizeNonSet, SSuggestSetThisType);
+  Result := TGocciaNumberLiteralValue.Create(
+    TGocciaSetValue(AThisValue).FStore.Count);
 end;
 
-// ES2026 §24.2.3.12 Set.prototype.union(other)
+// ES2026 §24.2.4.16 Set.prototype.union(other)
 function TGocciaSetValue.SetUnion(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   ThisSet, ResultSet: TGocciaSetValue;
@@ -640,15 +652,17 @@ begin
   if Assigned(GC) and not WasResultRooted then
     GC.AddTempRoot(ResultSet);
   try
-    Cursor := 0;
-    while ThisSet.NextItem(Cursor, Item) do
-      ResultSet.AddItem(Item);
-    // Step 6: Let keysIter be GetIteratorFromSetLike(otherRec)
+    // Step 4: Acquire the iterator before copying O.[[SetData]]. Getting the
+    // iterator's next method may run user code that mutates O.
     Iterator := GetSetRecordKeysIterator(OtherRecord, 'union');
     WasIteratorRooted := Assigned(GC) and GC.IsTempRoot(Iterator);
     if Assigned(GC) and not WasIteratorRooted then
       GC.AddTempRoot(Iterator);
     try
+      // Step 5: Let resultSetData be a copy of O.[[SetData]].
+      Cursor := 0;
+      while ThisSet.NextItem(Cursor, Item) do
+        ResultSet.AddItem(Item);
       // Step 7: For each element nextValue from keysIter, do
       NextValue := Iterator.DirectNext(Done);
       while not Done do
@@ -672,7 +686,7 @@ begin
   end;
 end;
 
-// ES2026 §24.2.3.7 Set.prototype.intersection(other)
+// ES2026 §24.2.4.9 Set.prototype.intersection(other)
 function TGocciaSetValue.SetIntersection(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   ThisSet, ResultSet: TGocciaSetValue;
@@ -680,7 +694,7 @@ var
   Iterator: TGocciaIteratorValue;
   NextValue, Item: TGocciaValue;
   Done, WasResultRooted, WasIteratorRooted: Boolean;
-  Cursor, Limit: Integer;
+  Cursor: Integer;
   GC: TGarbageCollector;
 begin
   // Step 1: Let O be the this value
@@ -699,16 +713,13 @@ begin
   try
     if ThisSet.Count <= OtherRecord.Size then
     begin
-      // Step 6: For each element e of O.[[SetData]] present when the operation
-      // began. SetRecordHas runs user code that may mutate O; retain the store
-      // so physical slot indices stay stable, and bound iteration to the
-      // original slot count — appended members are not visited, deleted members
-      // are skipped, and a delete-then-readd lands past the bound (§24.2.4.6).
-      Limit := ThisSet.EntrySlotCount;
+      // Step 5: Re-read the live SetData length after each user callback.
+      // Retaining the store preserves physical indices while delete/re-add
+      // appends a new slot that must be visited by this iteration.
       ThisSet.RetainIterator;
       try
         Cursor := 0;
-        while ThisSet.NextItemBounded(Cursor, Limit, Item) do
+        while ThisSet.NextItem(Cursor, Item) do
           // Step 6a: If SetDataHas(otherRec, e) is true, append e
           if SetRecordHas(OtherRecord, Item) then
             ResultSet.AddItem(Item);
@@ -821,7 +832,7 @@ begin
   end;
 end;
 
-// ES2026 §24.2.3.9 Set.prototype.symmetricDifference(other)
+// ES2026 §24.2.4.15 Set.prototype.symmetricDifference(other)
 function TGocciaSetValue.SetSymmetricDifference(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   ThisSet, ResultSet: TGocciaSetValue;
@@ -846,16 +857,17 @@ begin
   if Assigned(GC) and not WasResultRooted then
     GC.AddTempRoot(ResultSet);
   try
-    Cursor := 0;
-    while ThisSet.NextItem(Cursor, Item) do
-      ResultSet.AddItem(Item);
-
-    // Step 7: Let keysIter be GetIteratorFromSetLike(otherRec)
+    // Step 4: Acquire the iterator before copying O.[[SetData]]. Getting the
+    // iterator's next method may run user code that mutates O.
     Iterator := GetSetRecordKeysIterator(OtherRecord, 'symmetricDifference');
     WasIteratorRooted := Assigned(GC) and GC.IsTempRoot(Iterator);
     if Assigned(GC) and not WasIteratorRooted then
       GC.AddTempRoot(Iterator);
     try
+      // Step 5: Let resultSetData be a copy of O.[[SetData]].
+      Cursor := 0;
+      while ThisSet.NextItem(Cursor, Item) do
+        ResultSet.AddItem(Item);
       // Step 8: For each element nextValue from keysIter, do
       NextValue := Iterator.DirectNext(Done);
       while not Done do
@@ -882,13 +894,13 @@ begin
   end;
 end;
 
-// ES2026 §24.2.3.8 Set.prototype.isSubsetOf(other)
+// ES2026 §24.2.4.11 Set.prototype.isSubsetOf(other)
 function TGocciaSetValue.SetIsSubsetOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   ThisSet: TGocciaSetValue;
   OtherRecord: TGocciaSetRecord;
   Item: TGocciaValue;
-  Cursor, Limit: Integer;
+  Cursor: Integer;
   IsSubset: Boolean;
 begin
   // Step 1: Let O be the this value
@@ -907,16 +919,13 @@ begin
   end;
 
   IsSubset := True;
-  // Step 6: For each element e of O.[[SetData]] present when the operation
-  // began. SetRecordHas runs user code that may mutate O; retain the store and
-  // bound iteration to the original slot count so appended members are not
-  // checked, deleted members are skipped, and a delete-then-readd lands past
-  // the bound (§24.2.3.8).
-  Limit := ThisSet.EntrySlotCount;
+  // Steps 5-7: Re-read the live SetData length after each user callback.
+  // Retaining the store preserves physical indices while newly appended
+  // members remain visible to the iteration.
   ThisSet.RetainIterator;
   try
     Cursor := 0;
-    while ThisSet.NextItemBounded(Cursor, Limit, Item) do
+    while ThisSet.NextItem(Cursor, Item) do
       // Step 6a: If SetDataHas(otherRec, e) is false, return false
       if not SetRecordHas(OtherRecord, Item) then
       begin
@@ -988,7 +997,7 @@ begin
   Result := TGocciaBooleanLiteralValue.TrueValue;
 end;
 
-// ES2026 §24.2.3.6 Set.prototype.isDisjointFrom(other)
+// ES2026 §24.2.4.8 Set.prototype.isDisjointFrom(other)
 function TGocciaSetValue.SetIsDisjointFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   ThisSet: TGocciaSetValue;
@@ -996,7 +1005,7 @@ var
   Iterator: TGocciaIteratorValue;
   NextValue, Item: TGocciaValue;
   Done, WasIteratorRooted, IsDisjoint: Boolean;
-  Cursor, Limit: Integer;
+  Cursor: Integer;
   GC: TGarbageCollector;
 begin
   // Step 1: Let O be the this value
@@ -1010,16 +1019,11 @@ begin
   if ThisSet.Count <= OtherRecord.Size then
   begin
     IsDisjoint := True;
-    // Step 5: For each element e of O.[[SetData]] present when the operation
-    // began. SetRecordHas runs user code that may mutate O; retain the store and
-    // bound iteration to the original slot count so appended elements are not
-    // checked, deleted elements are skipped, and a delete-then-readd lands past
-    // the bound (§24.2.3.6).
-    Limit := ThisSet.EntrySlotCount;
+    // Step 5: Re-read the live SetData length after each user callback.
     ThisSet.RetainIterator;
     try
       Cursor := 0;
-      while ThisSet.NextItemBounded(Cursor, Limit, Item) do
+      while ThisSet.NextItem(Cursor, Item) do
         // Step 5a: If SetDataHas(otherRec, e) is true, return false
         if SetRecordHas(OtherRecord, Item) then
         begin

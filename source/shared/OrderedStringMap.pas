@@ -2,7 +2,7 @@
   TOrderedStringMap<TValue> - String-keyed insertion-order-preserving map.
 
   Standalone implementation (does not inherit from TOrderedMap) with
-  static inline DJB2 string hash and native string equality. This avoids
+  static inline DJB2 hashing and ECMAScript UTF-16 string equality. This avoids
   the virtual dispatch overhead of TOrderedMap<TKey, TValue>.HashKey on
   every lookup — critical for property maps, module exports, and other
   hot paths where string-keyed maps dominate.
@@ -126,7 +126,11 @@ type
 
 implementation
 
-{ Hash / Equality — static inline: DJB2 on string characters }
+uses
+  TextSemantics;
+
+{ Hash / Equality — ECMAScript strings compare as UTF-16 code-unit sequences,
+  even when their internal UTF-8/WTF-8 byte encodings differ. }
 
 {$PUSH}{$R-}{$Q-}
 class function TOrderedStringMap<TValue>.NextEntryVersion: Cardinal;
@@ -135,18 +139,14 @@ begin
 end;
 
 class function TOrderedStringMap<TValue>.HashKey(const AKey: string): Cardinal;
-var
-  I: Integer;
 begin
-  Result := 5381;
-  for I := 1 to Length(AKey) do
-    Result := Result * 33 + Ord(AKey[I]);
+  Result := UTF16StringHash(AKey);
 end;
 {$POP}
 
 class function TOrderedStringMap<TValue>.KeysEqual(const A, B: string): Boolean;
 begin
-  Result := A = B;
+  Result := UTF16StringsEqual(A, B);
 end;
 
 function TOrderedStringMap<TValue>.DeletedSlotsNeedCompaction: Boolean;

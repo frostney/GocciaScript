@@ -5,6 +5,7 @@ unit Goccia.SharedPrototype;
 interface
 
 uses
+  Goccia.Realm,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -33,6 +34,9 @@ type
     property Prototype: TGocciaObjectValue read FPrototype;
   end;
 
+function GetSharedPrototypeFromOwnedSlot(const ARealm: TGocciaRealm;
+  const ASlotId: TGocciaRealmOwnedSlotId): TGocciaObjectValue;
+
 implementation
 
 uses
@@ -40,6 +44,19 @@ uses
   Goccia.GarbageCollector,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectPropertyDescriptor;
+
+function GetSharedPrototypeFromOwnedSlot(const ARealm: TGocciaRealm;
+  const ASlotId: TGocciaRealmOwnedSlotId): TGocciaObjectValue;
+var
+  Owned: TObject;
+begin
+  Result := nil;
+  if not Assigned(ARealm) then
+    Exit;
+  Owned := ARealm.GetOwnedSlot(ASlotId);
+  if Owned is TGocciaSharedPrototype then
+    Result := TGocciaSharedPrototype(Owned).Prototype;
+end;
 
 constructor TGocciaSharedPrototype.Create(const AMethodHost: TGocciaValue);
 begin

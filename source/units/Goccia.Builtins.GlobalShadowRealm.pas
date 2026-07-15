@@ -196,10 +196,18 @@ begin
   else
     FExecutor := TGocciaInterpreterExecutor.Create;
   FEngine := TGocciaEngine.Create('<shadow-realm>', FSource, FExecutor);
+  FEngine.HostEnvironment.ConfigureAsChildOf(
+    AParentEngine.HostEnvironment);
   // Inherit the host's language surface so the child realm understands the
   // same syntax the host enabled (e.g. --compat-function), while staying a
   // fresh realm with its own intrinsics and global object.
   FEngine.Compatibility := AParentEngine.Compatibility;
+  FEngine.LabelStatementsEnabled := AParentEngine.LabelStatementsEnabled;
+  FEngine.ForInLoopsEnabled := AParentEngine.ForInLoopsEnabled;
+  FEngine.ExperimentalJSModuleSourceEnabled :=
+    AParentEngine.ExperimentalJSModuleSourceEnabled;
+  FEngine.WarningUnsupportedFeatures :=
+    AParentEngine.WarningUnsupportedFeatures;
   FEngine.Preprocessors := AParentEngine.Preprocessors;
   FEngine.RefreshGlobalThis;
   EnableShadowRealm(FEngine);
@@ -212,6 +220,7 @@ begin
   // (Engine.Compatibility already propagates to the loader; preprocessors and
   // resolver aliases do not, so mirror them here.)
   FEngine.ModuleLoader.SetContentProvider(AParentEngine.ContentProvider, False);
+  FEngine.ModuleLoader.CopyVirtualModulesFrom(AParentEngine.ModuleLoader);
   FEngine.ModuleLoader.Preprocessors := AParentEngine.Preprocessors;
   for AliasPair in AParentEngine.ModuleLoader.Resolver.Aliases do
     FEngine.ModuleLoader.Resolver.AddAlias(AliasPair.Key, AliasPair.Value);
@@ -301,6 +310,11 @@ begin
     Options.SourceType := stScript;
     Options.Preprocessors := FEngine.Preprocessors;
     Options.Compatibility := FEngine.Compatibility;
+    Options.LabelStatementsEnabled := FEngine.LabelStatementsEnabled;
+    Options.ForInLoopsEnabled := FEngine.ForInLoopsEnabled;
+    Options.ExperimentalJSModuleSourceEnabled :=
+      FEngine.ExperimentalJSModuleSourceEnabled;
+    Options.WarningUnsupportedFeatures := FEngine.WarningUnsupportedFeatures;
     OptionsScope := TGocciaSourcePipeline.ActivateOptions(Options);
     try
       RealmScope := FEngine.ActivateRealmExecutionContext;
@@ -512,6 +526,12 @@ begin
       Options.SourceType := stScript;
       Options.Preprocessors := ChildEngine.Preprocessors;
       Options.Compatibility := ChildEngine.Compatibility;
+      Options.LabelStatementsEnabled := ChildEngine.LabelStatementsEnabled;
+      Options.ForInLoopsEnabled := ChildEngine.ForInLoopsEnabled;
+      Options.ExperimentalJSModuleSourceEnabled :=
+        ChildEngine.ExperimentalJSModuleSourceEnabled;
+      Options.WarningUnsupportedFeatures :=
+        ChildEngine.WarningUnsupportedFeatures;
 
       OptionsScope := TGocciaSourcePipeline.ActivateOptions(Options);
       try

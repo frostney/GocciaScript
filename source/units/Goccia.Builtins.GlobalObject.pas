@@ -131,21 +131,6 @@ end;
 function FromPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor): TGocciaObjectValue;
 begin
   Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  if ADescriptor.HasEnumerableField then
-  begin
-    if ADescriptor.Enumerable then
-      Result.CreateDataPropertyOrThrow(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
-    else
-      Result.CreateDataPropertyOrThrow(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
-  end;
-  if ADescriptor.HasConfigurableField then
-  begin
-    if ADescriptor.Configurable then
-      Result.CreateDataPropertyOrThrow(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
-    else
-      Result.CreateDataPropertyOrThrow(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.FalseValue);
-  end;
-
   if ADescriptor is TGocciaPropertyDescriptorData then
   begin
     if ADescriptor.HasValue then
@@ -180,6 +165,21 @@ begin
         Result.CreateDataPropertyOrThrow(PROP_SET,
           TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
+  end;
+
+  if ADescriptor.HasEnumerableField then
+  begin
+    if ADescriptor.Enumerable then
+      Result.CreateDataPropertyOrThrow(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
+    else
+      Result.CreateDataPropertyOrThrow(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
+  end;
+  if ADescriptor.HasConfigurableField then
+  begin
+    if ADescriptor.Configurable then
+      Result.CreateDataPropertyOrThrow(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
+    else
+      Result.CreateDataPropertyOrThrow(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.FalseValue);
   end;
 end;
 
@@ -255,7 +255,7 @@ var
   Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.keys', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.keys', ThrowError);
 
   // Step 1: Let obj be ? ToObject(O)
   Obj := ToObject(AArgs.GetElement(0));
@@ -295,7 +295,7 @@ var
   Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.values', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.values', ThrowError);
 
   // Step 1: Let obj be ? ToObject(O)
   Obj := ToObject(AArgs.GetElement(0));
@@ -336,7 +336,7 @@ var
   Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.entries', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.entries', ThrowError);
 
   // Step 1: Let obj be ? ToObject(O)
   Obj := ToObject(AArgs.GetElement(0));
@@ -546,7 +546,7 @@ var
   PropertyName: string;
   KeyValue: TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.hasOwn', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Object.hasOwn', ThrowError);
 
   // Step 1: Let obj be ? ToObject(O)
   if AArgs.GetElement(0) is TGocciaClassValue then
@@ -617,7 +617,7 @@ var
   PropertyNames: TArray<string>;
   I: Integer;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.getOwnPropertyNames', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.getOwnPropertyNames', ThrowError);
 
   // Step 1: Let obj be ? ToObject(O)
   Obj := ToObject(AArgs.GetElement(0));
@@ -648,7 +648,7 @@ var
   PropertyName: string;
   KeyValue: TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.getOwnPropertyDescriptor', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.getOwnPropertyDescriptor', ThrowError);
 
   // Step 1: Let obj be ? ToObject(O)
   Obj := ToObject(AArgs.GetElement(0));
@@ -759,7 +759,7 @@ var
   SymbolKey: TGocciaSymbolValue;
   KeyValue: TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 3, 'Object.defineProperty', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 3, 'Object.defineProperty', ThrowError);
 
   // Step 1: If Type(O) is not Object, throw a TypeError exception
   if not (AArgs.GetElement(0) is TGocciaObjectValue) then
@@ -781,12 +781,14 @@ begin
   if IsSymbolKey then
   begin
     SymbolKey := TGocciaSymbolValue(KeyValue);
-    ExistingDescriptor := Obj.GetOwnSymbolPropertyDescriptor(SymbolKey);
+    if not (Obj is TGocciaProxyValue) then
+      ExistingDescriptor := Obj.GetOwnSymbolPropertyDescriptor(SymbolKey);
   end
   else
   begin
     PropertyName := TGocciaStringLiteralValue(KeyValue).Value;
-    ExistingDescriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
+    if not (Obj is TGocciaProxyValue) then
+      ExistingDescriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
   end;
 
   // Step 3: Let desc be ? ToPropertyDescriptor(Attributes)
@@ -846,7 +848,7 @@ var
     end;
   end;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.defineProperties', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Object.defineProperties', ThrowError);
 
   if not (AArgs.GetElement(0) is TGocciaObjectValue) then
     ThrowTypeError(SErrorObjectDefinePropertiesCalledOnNonObject, SSuggestObjectArgType);
@@ -956,7 +958,7 @@ var
   Obj: TGocciaValue;
   TypedArray: TGocciaTypedArrayValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.freeze', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.freeze', ThrowError);
 
   Obj := AArgs.GetElement(0);
 
@@ -986,7 +988,7 @@ end;
 // ES2026 §20.1.2.13 Object.isFrozen(O)
 function TGocciaGlobalObject.ObjectIsFrozen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.isFrozen', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.isFrozen', ThrowError);
 
   // Step 1: If Type(O) is not Object, return true
   if not (AArgs.GetElement(0) is TGocciaObjectValue) then
@@ -1109,7 +1111,7 @@ end;
 // ES2026 §20.1.2.20 Object.seal(O)
 function TGocciaGlobalObject.ObjectSeal(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.seal', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.seal', ThrowError);
 
   // Step 1: If Type(O) is not Object, return O
   if not (AArgs.GetElement(0) is TGocciaObjectValue) then
@@ -1127,7 +1129,7 @@ end;
 // ES2026 §20.1.2.15 Object.isSealed(O)
 function TGocciaGlobalObject.ObjectIsSealed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.isSealed', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.isSealed', ThrowError);
 
   // Step 1: If Type(O) is not Object, return true
   if not (AArgs.GetElement(0) is TGocciaObjectValue) then
@@ -1162,7 +1164,7 @@ end;
 // ES2026 §20.1.2.14 Object.isExtensible(O)
 function TGocciaGlobalObject.ObjectIsExtensible(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.isExtensible', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.isExtensible', ThrowError);
 
   // Step 1: If Type(O) is not Object, return false
   if not (AArgs.GetElement(0) is TGocciaObjectValue) then
@@ -1303,7 +1305,7 @@ var
   I: Integer;
   ItemsRoot, IteratorRoot, CallbackRoot, ResultRoot: TGocciaTempRoot;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.groupBy', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Object.groupBy', ThrowError);
 
   Items := AArgs.GetElement(0);
   if not AArgs.GetElement(1).IsCallable then

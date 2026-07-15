@@ -32,10 +32,14 @@ type
     FUnsafeFFI: TFlagOption;
     FUnsafeFunctionConstructor: TFlagOption;
     FUnsafeShadowRealm: TFlagOption;
+    FDeterministic: TFlagOption;
+    FWarningUnsupportedFeatures: TFlagOption;
     FStackSize: TIntegerOption;
     FStrictTypes: TFlagOption;
     FAllowedHosts: TRepeatableOption;
     FInspectDepth: TIntegerOption;
+    FModule: TRepeatableOption;
+    FModules: TRepeatableOption;
   public
     constructor Create;
     destructor Destroy; override;
@@ -54,10 +58,14 @@ type
     property UnsafeFFI: TFlagOption read FUnsafeFFI;
     property UnsafeFunctionConstructor: TFlagOption read FUnsafeFunctionConstructor;
     property UnsafeShadowRealm: TFlagOption read FUnsafeShadowRealm;
+    property Deterministic: TFlagOption read FDeterministic;
+    property WarningUnsupportedFeatures: TFlagOption read FWarningUnsupportedFeatures;
     property StackSize: TIntegerOption read FStackSize;
     property StrictTypes: TFlagOption read FStrictTypes;
     property AllowedHosts: TRepeatableOption read FAllowedHosts;
     property InspectDepth: TIntegerOption read FInspectDepth;
+    property ModuleDefinitions: TRepeatableOption read FModule;
+    property ModuleManifests: TRepeatableOption read FModules;
   end;
 
   TGocciaCoverageFormat = (cfLcov, cfJson);
@@ -99,15 +107,16 @@ type
 
 function CompatibilityFlagDescriptor(
   const AFlag: TGocciaCompatibility): TGocciaCompatibilityFlagDescriptor;
-function ResolveCompatibilityFlags(const AEngineOptions: TGocciaEngineOptions;
-  const AFileConfig: TConfigEntryArray): TGocciaCompatibilityFlags;
+procedure ResolveCompatibilityFlags(const AEngineOptions: TGocciaEngineOptions;
+  const AFileConfig: TConfigEntryArray;
+  out AFlags: TGocciaCompatibilityFlags);
 function TryApplyCompatibilityFlagArg(const AArg: string;
   var AFlags: TGocciaCompatibilityFlags): Boolean;
 
 implementation
 
 const
-  ENGINE_FIXED_OPTION_COUNT = 14;
+  ENGINE_FIXED_OPTION_COUNT = 18;
 
   SOURCE_COMPATIBILITY_FLAGS: array[TGocciaCompatibility]
     of TGocciaCompatibilityFlagDescriptor = (
@@ -147,19 +156,20 @@ begin
   Result := SOURCE_COMPATIBILITY_FLAGS[AFlag];
 end;
 
-function ResolveCompatibilityFlags(const AEngineOptions: TGocciaEngineOptions;
-  const AFileConfig: TConfigEntryArray): TGocciaCompatibilityFlags;
+procedure ResolveCompatibilityFlags(const AEngineOptions: TGocciaEngineOptions;
+  const AFileConfig: TConfigEntryArray;
+  out AFlags: TGocciaCompatibilityFlags);
 var
   Flag: TGocciaCompatibility;
 begin
-  Result := [];
+  AFlags := [];
   if not Assigned(AEngineOptions) then
     Exit;
 
   for Flag := Low(TGocciaCompatibility) to High(TGocciaCompatibility) do
     if ResolveFlagOption(AEngineOptions.CompatibilityFlagOption(Flag),
        AFileConfig) then
-      Include(Result, Flag);
+      Include(AFlags, Flag);
 end;
 
 function TryApplyCompatibilityFlagArg(const AArg: string;
@@ -208,6 +218,12 @@ begin
     'Enable the Function constructor (dynamic code generation)', 'Engine');
   FUnsafeShadowRealm := TFlagOption.Create('unsafe-shadowrealm',
     'Enable the ShadowRealm constructor (dynamic source evaluation)', 'Engine');
+  FDeterministic := TFlagOption.Create('deterministic',
+    'Use fixed script-visible time, UTC, and seeded randomness', 'Engine');
+  FWarningUnsupportedFeatures := TFlagOption.Create(
+    'warning-unsupported-features',
+    'Warn and recover for unsupported/default-disabled syntax instead of failing parsing',
+    'Engine');
   FStackSize := TIntegerOption.Create('stack-size',
     'Maximum call stack depth (0 = no limit)', 'Engine');
   FStrictTypes := TFlagOption.Create('strict-types',
@@ -217,6 +233,10 @@ begin
   FAllowedHosts.ConfigName := 'allowed-hosts';
   FInspectDepth := TIntegerOption.Create('inspect-depth',
     'Maximum object inspection depth for console output (default: 5)', 'Engine');
+  FModule := TRepeatableOption.Create('module',
+    'Virtual module definition (name=source or name={descriptor})', 'Engine');
+  FModules := TRepeatableOption.Create('modules',
+    'Path to a virtual modules manifest (repeatable)', 'Engine');
 end;
 
 destructor TGocciaEngineOptions.Destroy;
@@ -235,10 +255,14 @@ begin
   FUnsafeFFI.Free;
   FUnsafeFunctionConstructor.Free;
   FUnsafeShadowRealm.Free;
+  FDeterministic.Free;
+  FWarningUnsupportedFeatures.Free;
   FStackSize.Free;
   FStrictTypes.Free;
   FAllowedHosts.Free;
   FInspectDepth.Free;
+  FModule.Free;
+  FModules.Free;
   inherited Destroy;
 end;
 
@@ -274,6 +298,10 @@ begin
   Inc(Index);
   Result[Index] := FUnsafeShadowRealm;
   Inc(Index);
+  Result[Index] := FDeterministic;
+  Inc(Index);
+  Result[Index] := FWarningUnsupportedFeatures;
+  Inc(Index);
   Result[Index] := FStackSize;
   Inc(Index);
   Result[Index] := FStrictTypes;
@@ -281,6 +309,10 @@ begin
   Result[Index] := FAllowedHosts;
   Inc(Index);
   Result[Index] := FInspectDepth;
+  Inc(Index);
+  Result[Index] := FModule;
+  Inc(Index);
+  Result[Index] := FModules;
 end;
 
 function TGocciaEngineOptions.CompatibilityFlagOption(

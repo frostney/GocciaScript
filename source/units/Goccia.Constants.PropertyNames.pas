@@ -13,6 +13,9 @@ const
   PROP_MESSAGE      = 'message';
   PROP_CAUSE        = 'cause';
   PROP_CODE         = 'code';
+  PROP_ERRNO        = 'errno';
+  PROP_SYSCALL      = 'syscall';
+  PROP_DEST         = 'dest';
   PROP_STACK        = 'stack';
   PROP_ERRORS       = 'errors';
   PROP_ERROR        = 'error';
@@ -46,6 +49,7 @@ const
   PROP_GOCCIA       = 'Goccia';
   PROP_GLOBAL_THIS  = 'globalThis';
   PROP_SLICE        = 'slice';
+  PROP_SLICE_TO_IMMUTABLE = 'sliceToImmutable';
   PROP_TAG_NAME     = 'tagName';
   PROP_NEXT         = 'next';
   PROP_RETURN       = 'return';
@@ -55,6 +59,7 @@ const
   PROP_CONFIGURABLE = 'configurable';
   PROP_GET          = 'get';
   PROP_SET          = 'set';
+  PROP_ADD          = 'add';
   PROP_INIT         = 'init';
   PROP_KIND         = 'kind';
   PROP_STATIC       = 'static';
@@ -75,6 +80,7 @@ const
   PROP_IMMUTABLE        = 'immutable';
   PROP_BYTES_PER_ELEMENT = 'BYTES_PER_ELEMENT';
   PROP_FROM             = 'from';
+  PROP_FROM_CHAR_CODE   = 'fromCharCode';
   PROP_OF               = 'of';
   PROP_URL              = 'url';
   PROP_RESOLVE          = 'resolve';

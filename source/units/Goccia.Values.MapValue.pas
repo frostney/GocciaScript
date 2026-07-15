@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.SharedPrototype,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
@@ -28,7 +29,7 @@ type
     function MapKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MapValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MapEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function MapSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MapSize(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MapGetOrInsert(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MapGetOrInsertComputed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure InitializePrototype;
@@ -51,8 +52,6 @@ type
     procedure ReleaseIterator;
     function Count: Integer;
 
-    function GetProperty(const AName: string): TGocciaValue; override;
-    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToArray: TGocciaArrayValue;
     function ToStringTag: string; override;
     function BuiltinTagFallback: Boolean; override;
@@ -61,21 +60,26 @@ type
     procedure MarkReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
+    class function GetSharedPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; static;
   end;
 
 implementation
 
 uses
+  SysUtils,
+
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
-  Goccia.Realm,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
+  Goccia.Values.IteratorSupport,
+  Goccia.Values.IteratorValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
@@ -127,13 +131,12 @@ begin
     Members.AddNamedMethod('keys', MapKeys, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddNamedMethod('values', MapValues, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddNamedMethod('entries', MapEntries, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddAccessor(PROP_SIZE, MapSize, nil, [pfConfigurable]);
     Members.AddNamedMethod('getOrInsert', MapGetOrInsert, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddNamedMethod('getOrInsertComputed', MapGetOrInsertComputed, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-    Members.AddSymbolMethod(
+    Members.AddSymbolAlias(
       TGocciaSymbolValue.WellKnownIterator,
-      '[Symbol.iterator]',
-      MapSymbolIterator,
-      0,
+      PROP_ENTRIES,
       [pfConfigurable, pfWritable]);
     Members.AddSymbolDataProperty(
       TGocciaSymbolValue.WellKnownToStringTag,
@@ -160,6 +163,12 @@ begin
     ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
+class function TGocciaMapValue.GetSharedPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  Result := GetSharedPrototypeFromOwnedSlot(ARealm, GMapSharedSlot);
+end;
+
 
 destructor TGocciaMapValue.Destroy;
 begin
@@ -169,33 +178,96 @@ end;
 
 procedure TGocciaMapValue.InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
 var
-  InitArg: TGocciaValue;
-  ArrValue: TGocciaArrayValue;
-  EntryArr: TGocciaArrayValue;
-  EntryObj: TGocciaObjectValue;
-  I: Integer;
+  InitArg, Adder, NextValue, Key, Value: TGocciaValue;
+  Iterator: TGocciaIteratorValue;
+  CallArgs: TGocciaArgumentsCollection;
+  Done: Boolean;
+  GC: TGarbageCollector;
+  WasSelfRooted, WasInitRooted, WasAdderRooted, WasIteratorRooted: Boolean;
+  WasNextRooted, WasKeyRooted, WasValueRooted: Boolean;
+
+  function AddRootIfNeeded(const AValue: TGocciaValue): Boolean;
+  begin
+    Result := Assigned(GC) and Assigned(AValue) and not GC.IsTempRoot(AValue);
+    if Result then
+      GC.AddTempRoot(AValue);
+  end;
+
+  procedure RemoveRootIfNeeded(const AValue: TGocciaValue; const AWasAdded: Boolean);
+  begin
+    if AWasAdded then
+      GC.RemoveTempRoot(AValue);
+  end;
+
 begin
   if AArguments.Length = 0 then
     Exit;
   InitArg := AArguments.GetElement(0);
-  if InitArg is TGocciaArrayValue then
-  begin
-    ArrValue := TGocciaArrayValue(InitArg);
-    for I := 0 to ArrValue.Elements.Count - 1 do
-    begin
-      if Assigned(ArrValue.Elements[I]) and (ArrValue.Elements[I] is TGocciaArrayValue) then
-      begin
-        EntryArr := TGocciaArrayValue(ArrValue.Elements[I]);
-        if EntryArr.Elements.Count >= 2 then
-          SetEntry(EntryArr.Elements[0], EntryArr.Elements[1]);
-      end
-      else if Assigned(ArrValue.Elements[I]) and
-              (ArrValue.Elements[I] is TGocciaObjectValue) then
-      begin
-        EntryObj := TGocciaObjectValue(ArrValue.Elements[I]);
-        SetEntry(EntryObj.GetProperty('0'), EntryObj.GetProperty('1'));
+  if (InitArg is TGocciaUndefinedLiteralValue) or
+     (InitArg is TGocciaNullLiteralValue) then
+    Exit;
+
+  GC := TGarbageCollector.Instance;
+  WasSelfRooted := AddRootIfNeeded(Self);
+  WasInitRooted := AddRootIfNeeded(InitArg);
+  try
+    Adder := GetProperty(PROP_SET);
+    if not Assigned(Adder) or not Adder.IsCallable then
+      ThrowTypeError(Format(SErrorValueNotFunction, [PROP_SET]), SSuggestMapThisType);
+
+    WasAdderRooted := AddRootIfNeeded(Adder);
+    try
+      Iterator := GetIteratorFromValue(InitArg);
+      if not Assigned(Iterator) then
+        ThrowTypeError(Format(SErrorMapConstructorNotIterable, [CONSTRUCTOR_MAP]), SSuggestNotIterable);
+
+      WasIteratorRooted := AddRootIfNeeded(Iterator);
+      try
+        NextValue := Iterator.DirectNext(Done);
+        while not Done do
+        begin
+          WasNextRooted := AddRootIfNeeded(NextValue);
+          try
+            try
+              if not (NextValue is TGocciaObjectValue) then
+                ThrowTypeError(SErrorMapConstructorEntryNotObject, SSuggestIteratorProtocol);
+
+              Key := TGocciaObjectValue(NextValue).GetProperty('0');
+              WasKeyRooted := AddRootIfNeeded(Key);
+              try
+                Value := TGocciaObjectValue(NextValue).GetProperty('1');
+                WasValueRooted := AddRootIfNeeded(Value);
+                try
+                  CallArgs := TGocciaArgumentsCollection.Create([Key, Value]);
+                  try
+                    InvokeCallable(Adder, CallArgs, Self);
+                  finally
+                    CallArgs.Free;
+                  end;
+                finally
+                  RemoveRootIfNeeded(Value, WasValueRooted);
+                end;
+              finally
+                RemoveRootIfNeeded(Key, WasKeyRooted);
+              end;
+            except
+              CloseIteratorPreservingError(Iterator);
+              raise;
+            end;
+          finally
+            RemoveRootIfNeeded(NextValue, WasNextRooted);
+          end;
+          NextValue := Iterator.DirectNext(Done);
+        end;
+      finally
+        RemoveRootIfNeeded(Iterator, WasIteratorRooted);
       end;
+    finally
+      RemoveRootIfNeeded(Adder, WasAdderRooted);
     end;
+  finally
+    RemoveRootIfNeeded(InitArg, WasInitRooted);
+    RemoveRootIfNeeded(Self, WasSelfRooted);
   end;
 end;
 
@@ -247,19 +319,6 @@ end;
 function TGocciaMapValue.Count: Integer;
 begin
   Result := FStore.Count;
-end;
-
-function TGocciaMapValue.GetProperty(const AName: string): TGocciaValue;
-begin
-  Result := GetPropertyWithContext(AName, Self);
-end;
-
-function TGocciaMapValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
-begin
-  if AName = PROP_SIZE then
-    Result := TGocciaNumberLiteralValue.Create(FStore.Count)
-  else
-    Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
 function TGocciaMapValue.ToArray: TGocciaArrayValue;
@@ -496,18 +555,17 @@ begin
   Result := TGocciaMapIteratorValue.Create(AThisValue, mkEntries);
 end;
 
-// ES2026 §24.1.3.12 Map.prototype[@@iterator]()
-function TGocciaMapValue.MapSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+// ES2026 §24.1.3.12 get Map.prototype.size
+function TGocciaMapValue.MapSize(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  // Step 1: Let M be the this value
-  // Steps 2-3: If M does not have a [[MapData]] internal slot, throw a TypeError
   if not (AThisValue is TGocciaMapValue) then
-    ThrowTypeError(SErrorMapIteratorNonMap, SSuggestMapThisType);
-  // Step 4: Return the result of calling Map.prototype.entries()
-  Result := TGocciaMapIteratorValue.Create(AThisValue, mkEntries);
+    ThrowTypeError(SErrorMapSizeNonMap, SSuggestMapThisType);
+  Result := TGocciaNumberLiteralValue.Create(
+    TGocciaMapValue(AThisValue).FStore.Count);
 end;
 
-// TC39 proposal-upsert §1.1 Map.prototype.getOrInsert(key, value)
+// ES2026 §24.1.3.7 Map.prototype.getOrInsert(key, value)
 function TGocciaMapValue.MapGetOrInsert(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   M: TGocciaMapValue;
@@ -521,6 +579,7 @@ begin
     MapKey := AArgs.GetElement(0)
   else
     MapKey := TGocciaUndefinedLiteralValue.UndefinedValue;
+  MapKey := TGocciaOrderedValueMap.CanonicalizeKey(MapKey);
 
   // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
   //   If SameValueZero(p.[[Key]], key) is true, return p.[[Value]]
@@ -538,7 +597,7 @@ begin
   Result := DefaultValue;
 end;
 
-// TC39 proposal-upsert §1.2 Map.prototype.getOrInsertComputed(key, callbackfn)
+// ES2026 §24.1.3.8 Map.prototype.getOrInsertComputed(key, callback)
 function TGocciaMapValue.MapGetOrInsertComputed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   M: TGocciaMapValue;
@@ -562,8 +621,10 @@ begin
     CallbackArg := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not CallbackArg.IsCallable then
     ThrowTypeError(SErrorMapGetOrInsertComputedNotCallable, SSuggestMapCallbackRequired);
+  // Step 4: Set key to CanonicalizeKeyedCollectionKey(key)
+  MapKey := TGocciaOrderedValueMap.CanonicalizeKey(MapKey);
 
-  // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
+  // Step 5: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
   //   If SameValueZero(p.[[Key]], key) is true, return p.[[Value]]
   if M.TryGetValue(MapKey, Existing) then
     Exit(Existing);
@@ -577,17 +638,17 @@ begin
   try
     CallArgs := TGocciaArgumentsCollection.Create([MapKey]);
     try
-      // Step 5: Let value be ? Call(callbackfn, undefined, « key »)
+      // Step 6: Let value be ? Call(callback, undefined, « key »)
       ComputedValue := InvokeCallable(CallbackArg, CallArgs,
         TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       CallArgs.Free;
     end;
 
-    // Step 6: Set key to CanonicalizeKeyedCollectionKey(key)
-    // Step 7: Append Record { [[Key]]: key, [[Value]]: value } to M.[[MapData]]
+    // Steps 7-10: Replace any callback-added value for the canonical key, or
+    // append a new entry when the key is still absent.
     M.SetEntry(MapKey, ComputedValue);
-    // Step 8: Return value
+    // Step 11: Return value
     Result := ComputedValue;
   finally
     RemoveTempRootIfNeeded(CallbackRoot);

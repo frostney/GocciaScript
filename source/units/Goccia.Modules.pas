@@ -28,6 +28,8 @@ type
     AImportingFilePath: string): TGocciaValue of object;
   TLoadDeferredModuleCallback = function(const AModulePath,
     AImportingFilePath: string): TGocciaValue of object;
+  TResolveModuleURLCallback = function(const AModulePath,
+    AImportingFilePath: string): string of object;
 
   TGocciaModuleExportBinding = class
   private
@@ -91,7 +93,7 @@ type
     function GetExportNames: TArray<string>;
     function GetNamespaceObject: TGocciaObjectValue;
     function HasExport(const AExportName: string): Boolean;
-    procedure InvalidateNamespaceObject;
+    procedure InvalidateNamespaceObject(const ADetachModule: Boolean = False);
     function IsAmbiguousExport(const AExportName: string): Boolean;
     procedure MarkExportReferences;
     procedure SetEnvironment(const AEnvironment: TGCManagedObject);
@@ -108,6 +110,7 @@ type
   TGocciaModuleNamespaceObject = class(TGocciaObjectValue)
   private
     FModule: TGocciaModule;
+    procedure DetachModule;
   public
     constructor Create(const AModule: TGocciaModule);
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue;
@@ -679,10 +682,12 @@ begin
   Result := FAmbiguousExports.ContainsKey(AExportName);
 end;
 
-procedure TGocciaModule.InvalidateNamespaceObject;
+procedure TGocciaModule.InvalidateNamespaceObject(const ADetachModule: Boolean);
 begin
   if Assigned(FNamespaceObject) then
   begin
+    if ADetachModule and (FNamespaceObject is TGocciaModuleNamespaceObject) then
+      TGocciaModuleNamespaceObject(FNamespaceObject).DetachModule;
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.RemoveRootObject(FNamespaceObject);
     FNamespaceObject := nil;
@@ -720,7 +725,7 @@ destructor TGocciaModule.Destroy;
 var
   BindingPair: TGocciaModuleExportBindingMap.TKeyValuePair;
 begin
-  InvalidateNamespaceObject;
+  InvalidateNamespaceObject(True);
   SetEnvironment(nil);
   for BindingPair in FExportBindings do
     BindingPair.Value.Free;
@@ -741,6 +746,11 @@ begin
     TGocciaPropertyDescriptorData.Create(
       TGocciaStringLiteralValue.Create('Module'), []));
   FExtensible := False;
+end;
+
+procedure TGocciaModuleNamespaceObject.DetachModule;
+begin
+  FModule := nil;
 end;
 
 procedure TGocciaModuleNamespaceObject.AssignProperty(const AName: string;
@@ -898,7 +908,8 @@ procedure TGocciaModuleNamespaceObject.MarkReferences;
 begin
   if GCMarked then Exit;
   inherited;
-  FModule.MarkExportReferences;
+  if Assigned(FModule) then
+    FModule.MarkExportReferences;
 end;
 
 procedure TGocciaModuleNamespaceObject.PreventExtensions;
