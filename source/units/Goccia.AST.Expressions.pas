@@ -2329,7 +2329,8 @@ end;
 // ES2026 §13.3.12.1 ImportMeta : import . meta
 function TGocciaImportMetaExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
-  Result := GetOrCreateImportMeta(AContext.CurrentFilePath);
+  Result := GetOrCreateImportMeta(AContext.CurrentFilePath,
+    AContext.ResolveModuleURL);
 end;
 
 // ES2026 §13.3.12.1 NewTarget : new . target

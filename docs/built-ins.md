@@ -22,7 +22,7 @@ Core language built-ins (Math, Object, Array, Number, JSON, Symbol, Set, Map, We
 
 Runtime globals (Console, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response) are registered by the loader runtime profile and runtime extension classes under `source/units/Goccia.RuntimeExtensions.*.pas`. The same runtime profile also installs named-export-only Goccia modules for non-standard data-format APIs and SemVer: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. CLI hosts such as `GocciaScriptLoader` and `GocciaREPL` call `ApplyLoaderRuntimeProfile`; `GocciaTestRunner` applies the loader runtime profile plus `TGocciaTestingLibraryRuntimeExtension`; `GocciaBenchmarkRunner` applies the loader runtime profile plus `TGocciaBenchmarkRuntimeExtension`. `GocciaScriptLoaderBare` does not attach a runtime and exposes only a CLI-local `print(...args)` helper by default; the test262 conformance runner may opt into private test262 host capabilities with `--test262-host`.
 
-`GocciaSandboxRunner` applies the loader runtime profile and then installs `TGocciaSandboxRuntimeExtension`. That extension registers sandbox capabilities as import-only global modules named `"fs"` and `"goccia"`; it does not create global `fs`, `$`, or `runScript` bindings.
+`GocciaSandboxRunner` applies the loader runtime profile and then installs `TGocciaSandboxRuntimeExtension`. That extension registers sandbox capabilities as import-only runtime modules named `"fs"` and `"goccia"`; it does not create global `fs`, `$`, or `runScript` bindings.
 
 FFI is not part of the loader runtime profile. CLI tools install `TGocciaFFIRuntimeExtension` when `--unsafe-ffi` is passed or `"unsafe-ffi": true` is set in config.
 

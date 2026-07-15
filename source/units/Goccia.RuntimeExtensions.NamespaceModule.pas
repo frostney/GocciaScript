@@ -47,13 +47,13 @@ begin
   FRuntime := ARuntime;
   FModuleName := AModuleName;
   FFactory := AFactory;
-  FRuntime.Engine.RegisterGlobalModuleProvider(FModuleName, LoadModule);
+  FRuntime.Engine.RegisterHostModuleProvider(FModuleName, LoadModule);
 end;
 
 destructor TGocciaRuntimeNamespaceModuleRegistration.Destroy;
 begin
   if Assigned(FRuntime) and Assigned(FRuntime.Engine) then
-    FRuntime.Engine.UnregisterGlobalModuleProvider(FModuleName);
+    FRuntime.Engine.UnregisterHostModuleProvider(FModuleName);
   if Assigned(FNamespaceObject) and Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.RemoveRootObject(FNamespaceObject);
   FModule.Free;

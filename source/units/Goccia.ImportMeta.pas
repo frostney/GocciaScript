@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.GarbageCollector,
+  Goccia.Modules,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -14,13 +15,16 @@ type
   TGocciaImportMetaResolveHelper = class(TGCManagedObject)
   private
     FModuleFilePath: string;
+    FResolveModuleURL: TResolveModuleURLCallback;
   public
-    constructor Create(const AModuleFilePath: string);
+    constructor Create(const AModuleFilePath: string;
+      const AResolveModuleURL: TResolveModuleURLCallback);
     function Resolve(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-function GetOrCreateImportMeta(const AFilePath: string): TGocciaObjectValue;
+function GetOrCreateImportMeta(const AFilePath: string;
+  const AResolver: TResolveModuleURLCallback = nil): TGocciaObjectValue;
 function FilePathToUrl(const AFilePath: string): string;
 procedure ClearImportMetaCache;
 
@@ -34,25 +38,128 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Realm,
   Goccia.ThreadCleanupRegistry,
   Goccia.URI,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
 
 const
-  PINNED_OBJECTS_PER_MODULE = 3;
   PINNED_GROWTH_MULTIPLIER = 2;
   PINNED_INITIAL_CAPACITY = 8;
 
+type
+  TGocciaImportMetaCache = class
+  private
+    FObjects: TOrderedStringMap<TGocciaObjectValue>;
+    FPinnedObjects: array of TGCManagedObject;
+    FPinnedCount: Integer;
+    procedure Pin(const AObject: TGCManagedObject);
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure Add(const ACanonicalPath: string;
+      const AMetaObject: TGocciaObjectValue;
+      const AResolveHelper: TGocciaImportMetaResolveHelper;
+      const AResolveFunction: TGocciaValue);
+    function TryGetValue(const ACanonicalPath: string;
+      out AMetaObject: TGocciaObjectValue): Boolean;
+  end;
+
 threadvar
-  ImportMetaCache: TOrderedStringMap<TGocciaObjectValue>;
-  PinnedObjects: array of TGCManagedObject;
-  PinnedCount: Integer;
+  FallbackImportMetaCache: TGocciaImportMetaCache;
+
+var
+  GImportMetaCacheSlot: TGocciaRealmOwnedSlotId;
+
+constructor TGocciaImportMetaCache.Create;
+begin
+  inherited Create;
+  FObjects := TOrderedStringMap<TGocciaObjectValue>.Create;
+end;
+
+destructor TGocciaImportMetaCache.Destroy;
+var
+  I: Integer;
+begin
+  if Assigned(TGarbageCollector.Instance) then
+    for I := 0 to FPinnedCount - 1 do
+      TGarbageCollector.Instance.UnpinObject(FPinnedObjects[I]);
+  FPinnedObjects := nil;
+  FObjects.Free;
+  inherited;
+end;
+
+procedure TGocciaImportMetaCache.Pin(const AObject: TGCManagedObject);
+begin
+  if not Assigned(AObject) or not Assigned(TGarbageCollector.Instance) then
+    Exit;
+  TGarbageCollector.Instance.PinObject(AObject);
+  if FPinnedCount >= Length(FPinnedObjects) then
+    SetLength(FPinnedObjects,
+      FPinnedCount * PINNED_GROWTH_MULTIPLIER + PINNED_INITIAL_CAPACITY);
+  FPinnedObjects[FPinnedCount] := AObject;
+  Inc(FPinnedCount);
+end;
+
+procedure TGocciaImportMetaCache.Add(const ACanonicalPath: string;
+  const AMetaObject: TGocciaObjectValue;
+  const AResolveHelper: TGocciaImportMetaResolveHelper;
+  const AResolveFunction: TGocciaValue);
+begin
+  FObjects.Add(ACanonicalPath, AMetaObject);
+  Pin(AMetaObject);
+  Pin(AResolveHelper);
+  Pin(TGCManagedObject(AResolveFunction));
+end;
+
+function TGocciaImportMetaCache.TryGetValue(const ACanonicalPath: string;
+  out AMetaObject: TGocciaObjectValue): Boolean;
+begin
+  Result := FObjects.TryGetValue(ACanonicalPath, AMetaObject);
+end;
+
+function GetImportMetaCache: TGocciaImportMetaCache;
+var
+  Realm: TGocciaRealm;
+begin
+  Realm := CurrentRealm;
+  if Assigned(Realm) then
+  begin
+    Result := TGocciaImportMetaCache(
+      Realm.GetOwnedSlot(GImportMetaCacheSlot));
+    if not Assigned(Result) then
+    begin
+      Result := TGocciaImportMetaCache.Create;
+      Realm.SetOwnedSlot(GImportMetaCacheSlot, Result);
+    end;
+    Exit;
+  end;
+
+  if not Assigned(FallbackImportMetaCache) then
+    FallbackImportMetaCache := TGocciaImportMetaCache.Create;
+  Result := FallbackImportMetaCache;
+end;
+
+function HasScheme(const AValue: string): Boolean;
+var
+  ColonPosition, SlashPosition: SizeInt;
+begin
+  ColonPosition := Pos(':', AValue);
+  SlashPosition := Pos('/', AValue);
+  if (ColonPosition = 2) and (Length(AValue) >= 3) and
+     (AValue[3] in ['/', '\']) then
+    Exit(False);
+  Result := (ColonPosition > 1) and
+    ((SlashPosition = 0) or (ColonPosition < SlashPosition));
+end;
 
 function FilePathToUrl(const AFilePath: string): string;
 var
   AbsolutePath: string;
 begin
+  if HasScheme(AFilePath) then
+    Exit(AFilePath);
   AbsolutePath := ExpandFileName(AFilePath);
   {$IFDEF MSWINDOWS}
   AbsolutePath := StringReplace(AbsolutePath, '\', '/', [rfReplaceAll]);
@@ -68,10 +175,13 @@ end;
 
 { TGocciaImportMetaResolveHelper }
 
-constructor TGocciaImportMetaResolveHelper.Create(const AModuleFilePath: string);
+constructor TGocciaImportMetaResolveHelper.Create(
+  const AModuleFilePath: string;
+  const AResolveModuleURL: TResolveModuleURLCallback);
 begin
   inherited Create;
   FModuleFilePath := AModuleFilePath;
+  FResolveModuleURL := AResolveModuleURL;
 end;
 
 // ES2026 §13.3.12.1.1 HostGetImportMetaProperties(moduleRecord)
@@ -85,6 +195,13 @@ begin
     ThrowTypeError(SErrorImportMetaResolveRequiresArg, SSuggestImportMetaUsage);
 
   Specifier := AArgs.GetElement(0).ToStringLiteral.Value;
+
+  if Assigned(FResolveModuleURL) then
+  begin
+    Result := TGocciaStringLiteralValue.Create(
+      FResolveModuleURL(Specifier, FModuleFilePath));
+    Exit;
+  end;
 
   // Absolute specifiers resolve directly; relative ones resolve against the module directory
   if (Length(Specifier) > 0) and ((Specifier[1] = '/') or (Specifier[1] = '\') or
@@ -101,75 +218,67 @@ end;
 { Cache functions }
 
 // ES2026 §13.3.12.1 ImportMeta : import . meta
-function GetOrCreateImportMeta(const AFilePath: string): TGocciaObjectValue;
+function GetOrCreateImportMeta(const AFilePath: string;
+  const AResolver: TResolveModuleURLCallback): TGocciaObjectValue;
 var
+  Cache: TGocciaImportMetaCache;
   MetaObject: TGocciaObjectValue;
   ResolveHelper: TGocciaImportMetaResolveHelper;
   ResolveFunction: TGocciaValue;
-  CanonicalPath: string;
+  CanonicalPath, ResolveBasePath: string;
+  Resolver: TResolveModuleURLCallback;
 begin
-  CanonicalPath := ExpandFileName(AFilePath);
+  Resolver := AResolver;
+  if Assigned(Resolver) then
+    CanonicalPath := Resolver(AFilePath, AFilePath)
+  else if HasScheme(AFilePath) then
+    CanonicalPath := AFilePath
+  else
+    CanonicalPath := ExpandFileName(AFilePath);
 
-  if not Assigned(ImportMetaCache) then
-    ImportMetaCache := TOrderedStringMap<TGocciaObjectValue>.Create;
-
-  if ImportMetaCache.TryGetValue(CanonicalPath, Result) then
+  Cache := GetImportMetaCache;
+  if Cache.TryGetValue(CanonicalPath, Result) then
     Exit;
 
   // ES2026 §13.3.12.1 step 4a: OrdinaryObjectCreate(null)
   MetaObject := TGocciaObjectValue.Create(nil);
 
   // ES2026 §13.3.12.1.1 HostGetImportMetaProperties step: url
-  MetaObject.AssignProperty(PROP_URL,
-    TGocciaStringLiteralValue.Create(FilePathToUrl(CanonicalPath)));
+  if Assigned(Resolver) then
+    MetaObject.AssignProperty(PROP_URL,
+      TGocciaStringLiteralValue.Create(CanonicalPath))
+  else
+    MetaObject.AssignProperty(PROP_URL,
+      TGocciaStringLiteralValue.Create(FilePathToUrl(CanonicalPath)));
 
   // ES2026 §13.3.12.1.1 HostGetImportMetaProperties step: resolve
-  ResolveHelper := TGocciaImportMetaResolveHelper.Create(CanonicalPath);
+  ResolveBasePath := AFilePath;
+  if Assigned(Resolver) and
+     (Copy(CanonicalPath, 1, Length('file:')) <> 'file:') then
+    ResolveBasePath := CanonicalPath;
+  ResolveHelper := TGocciaImportMetaResolveHelper.Create(ResolveBasePath,
+    Resolver);
   ResolveFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
     ResolveHelper.Resolve, PROP_RESOLVE, 1);
   MetaObject.AssignProperty(PROP_RESOLVE, ResolveFunction);
 
-  // Pin the meta object and its dependencies so the GC does not collect them
-  if Assigned(TGarbageCollector.Instance) then
-  begin
-    TGarbageCollector.Instance.PinObject(MetaObject);
-    TGarbageCollector.Instance.PinObject(ResolveHelper);
-    TGarbageCollector.Instance.PinObject(TGCManagedObject(ResolveFunction));
-
-    if PinnedCount + PINNED_OBJECTS_PER_MODULE > Length(PinnedObjects) then
-      SetLength(PinnedObjects, PinnedCount * PINNED_GROWTH_MULTIPLIER + PINNED_INITIAL_CAPACITY);
-    PinnedObjects[PinnedCount] := MetaObject;
-    PinnedObjects[PinnedCount + 1] := ResolveHelper;
-    PinnedObjects[PinnedCount + 2] := TGCManagedObject(ResolveFunction);
-    Inc(PinnedCount, PINNED_OBJECTS_PER_MODULE);
-  end;
-
   // ES2026 §13.3.12.1 step 4e: cache on module record
-  ImportMetaCache.Add(CanonicalPath, MetaObject);
+  Cache.Add(CanonicalPath, MetaObject, ResolveHelper, ResolveFunction);
   Result := MetaObject;
 end;
 
 procedure ClearImportMetaCache;
-var
-  I: Integer;
 begin
-  if Assigned(ImportMetaCache) then
-  begin
-    if Assigned(TGarbageCollector.Instance) then
-      for I := 0 to PinnedCount - 1 do
-        TGarbageCollector.Instance.UnpinObject(PinnedObjects[I]);
-    SetLength(PinnedObjects, 0);
-    PinnedCount := 0;
-    FreeAndNil(ImportMetaCache);
-  end;
+  FreeAndNil(FallbackImportMetaCache);
 end;
 
 initialization
+  GImportMetaCacheSlot := RegisterRealmOwnedSlot('ImportMeta.cache');
   // FPC does not auto-finalize managed threadvars at thread exit. Register the
-  // cache clear so the registry drain releases this thread's copy on whichever
-  // thread tears down: a worker via ShutdownThreadRuntime, the main thread via
-  // Goccia.ThreadCleanupRegistry's finalization. (ClearImportMetaCache is also
-  // called directly from the engine's own teardown in Goccia.Engine.)
+  // fallback cache clear so the registry drain releases this thread's copy.
+  // Normal engine execution stores import.meta state on the active realm and
+  // tears it down with that realm; the fallback exists for host calls without
+  // an active execution context.
   RegisterThreadvarCleanup(@ClearImportMetaCache);
 
 end.

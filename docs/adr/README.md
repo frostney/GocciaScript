@@ -103,3 +103,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0091 — Unified performance barometer with a frozen JetStream subset](0091-unified-performance-barometer.md)
 - [0092 — Convert sandbox filesystem failures at the runtime seam](0092-sandbox-filesystem-error-contract.md)
 - [0093 — Engine-owned host environment](0093-engine-owned-host-environment.md)
+- [0094 — Virtual modules use the ordinary module loader](0094-virtual-modules-use-the-module-loader.md)
