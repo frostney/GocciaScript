@@ -77,7 +77,7 @@ Pointer arguments accept `FFIPointer`, `ArrayBuffer`, `SharedArrayBuffer`, `Type
 
 ## Callbacks
 
-`FFI.callback({ args, returns })` declares the ABI signature native code uses to call JavaScript. Passing a JavaScript callable directly to a callback-typed argument creates a call-scoped callback that is pinned for the native call and closed when that call returns. Use `CallbackType.create(callable)` when native code must retain the function pointer across calls; the returned persistent handle exposes `address`, `closed`, and an idempotent `close()` method. Native code must stop retaining the pointer before the handle is closed.
+`FFI.callback({ args, returns })` declares the ABI signature native code uses to call JavaScript. Passing a JavaScript callable directly to a callback-typed argument creates a call-scoped callback that is pinned for the native call and closed when that call returns. Call-scoped callbacks are non-escapable: native code must not retain or invoke their pointers after the native call returns. Use `CallbackType.create(callable)` when native code must retain the function pointer across calls; the returned persistent handle exposes `address`, `closed`, and an idempotent `close()` method. Native code must stop retaining the pointer before the handle is closed.
 
 ```javascript
 const Compare = FFI.callback({

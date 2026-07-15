@@ -23,15 +23,17 @@ bitfields, custom alignment, and non-native calling conventions.
 Native callback entry points come from a bounded table of statically compiled
 stubs for each supported target. Passing a JavaScript callable to a
 callback-typed argument creates a call-scoped callback that is closed when the
-native call returns. Calling `CallbackType.create(callable)` creates a
-persistent callback handle that remains pinned until its idempotent `close()`
-method is called. Callbacks may re-enter GocciaScript only on the runtime thread
-that created them. A foreign-thread invocation returns the ABI's zero value and
-latches a `TypeError` for the owning call. A JavaScript exception follows the
-same native-boundary rule: the first exception is retained, later callbacks in
-that native call return zero without invoking JavaScript, and the original
-exception is rethrown after native code returns. No Pascal exception may unwind
-through a native callback frame.
+native call returns. These call-scoped callbacks are non-escapable: native code
+must not retain or invoke their pointers after that native call returns. Calling
+`CallbackType.create(callable)` creates a persistent callback handle that
+remains pinned until its idempotent `close()` method is called. Callbacks may
+re-enter GocciaScript only on the runtime thread that created them. A
+foreign-thread invocation returns the ABI's zero value and latches a `TypeError`
+for the owning call. A JavaScript exception follows the same native-boundary
+rule: the first exception is retained, later callbacks in that native call
+return zero without invoking JavaScript, and the original exception is rethrown
+after native code returns. No Pascal exception may unwind through a native
+callback frame.
 
 Dynamic-library lifetime uses a shared guard retained by the library object,
 bound functions, and symbol pointers. `library.close()` is a logical close: it
