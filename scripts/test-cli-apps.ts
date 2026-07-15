@@ -18,11 +18,12 @@ import {
   readFileSync,
   existsSync,
   mkdirSync,
+  realpathSync,
   chmodSync,
   symlinkSync,
 } from "fs";
 import { join, resolve } from "path";
-import { pathToFileURL } from "url";
+import { fileURLToPath } from "url";
 import {
   LOADER,
   BARE,
@@ -521,6 +522,19 @@ console.log("Bare Loader: stdin dash path...");
   });
   if (proc.exitCode !== 0) throw new Error(`Bare stdin dash exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "42") throw new Error(`Bare stdin dash expected 42, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: quoted source names survive argv parsing...");
+{
+  const sourceName = 'quoted "source".js';
+  const proc = Bun.spawnSync([BARE, `--source-name=${sourceName}`], {
+    stdin: new TextEncoder().encode("const = ;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const output = proc.stdout.toString() + proc.stderr.toString();
+  if (proc.exitCode === 0 || !output.includes(sourceName))
+    throw new Error(`Bare quoted source name was not preserved: ${output}`);
 }
 
 console.log("Bare Loader: input file...");
@@ -4448,7 +4462,9 @@ for (const mode of ["interpreted", "bytecode"] as const) {
     { stdin: new TextEncoder().encode(source), stdout: "pipe", stderr: "pipe" },
   );
   if (proc.exitCode !== 0)
-    throw new Error(`--module ${mode} failed: ${proc.stderr.toString()}`);
+    throw new Error(
+      `--module ${mode} exited ${proc.exitCode}: ${proc.stdout.toString()}${proc.stderr.toString()}`,
+    );
   if (!containsLine(proc.stdout.toString(), "host:pkg/main|host:pkg/dep|3|11|5|object"))
     throw new Error(`--module ${mode} did not preserve module phases, addresses, and bytes: ${proc.stdout.toString()}`);
 }
@@ -4538,8 +4554,18 @@ console.log("Loader: virtual import.meta.resolve uses aliases for bare specifier
     );
     if (proc.exitCode !== 0)
       throw new Error(`Virtual bare resolution failed: ${proc.stderr.toString()}`);
-    if (!containsLine(proc.stdout.toString(), pathToFileURL(dependency).href))
-      throw new Error(`Virtual bare resolution skipped aliases: ${proc.stdout.toString()}`);
+    const resolvedURL = normalizeLineEndings(proc.stdout.toString())
+      .split("\n")
+      .find((line) => line.startsWith("file:"));
+    const normalizePath = (path: string) => {
+      const canonical = realpathSync(path);
+      return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+    };
+    if (resolvedURL === undefined ||
+        normalizePath(fileURLToPath(resolvedURL)) !== normalizePath(dependency))
+      throw new Error(
+        `Virtual bare resolution skipped aliases: expected ${dependency}, got ${resolvedURL ?? "no URL"}`,
+      );
   } finally {
     clean(tmp);
   }
