@@ -577,6 +577,13 @@ all pinned upstream workloads: `acorn`, `babel`, `babel-minify`, `babylon`,
 `postcss`, `prepack`, `prettier`, `source-map`, `terser`, `typescript`, and
 `uglify-js`.
 
+### Updating the Web Tooling Pin
+
+`.github/workflows/web-tooling-bump.yml` checks
+`v8/web-tooling-benchmark` `master` weekly, updates the manifest with
+`scripts/web-tooling-bump-pin.ts`, and opens an automated PR only when the SHA
+changes. PR CI runs every pinned workload before merge.
+
 The driver prepares upstream's generated Terser/UglifyJS self-bundles, then
 generates one static entry and payload-only `fs.readFile`/`fs.readFileSync` adapter per
 workload. Webpack therefore includes only the selected upstream benchmark
