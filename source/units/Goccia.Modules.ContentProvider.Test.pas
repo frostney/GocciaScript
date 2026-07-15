@@ -15,6 +15,7 @@ uses
   Goccia.Bytecode.Module,
   Goccia.Constants.PropertyNames,
   Goccia.Engine,
+  Goccia.Executor,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
   Goccia.Interpreter,
@@ -73,6 +74,8 @@ type
     function CreateTempDirectory: string;
     procedure DeleteDirectoryTree(const APath: string);
     procedure WriteTextFile(const APath, AText: string);
+    procedure AssertEngineModuleManifestDefaultsToEntryPath(
+      const AExecutor: TGocciaExecutor);
 
     procedure TestEngineLoadsInMemoryModuleWithCustomProvider;
     procedure TestEngineRetriesModuleAfterFailedLoad;
@@ -392,11 +395,11 @@ begin
   end;
 end;
 
-procedure TModuleContentProviderTests.TestEngineModuleManifestDefaultsToEntryPath;
+procedure TModuleContentProviderTests.AssertEngineModuleManifestDefaultsToEntryPath(
+  const AExecutor: TGocciaExecutor);
 var
   Engine: TGocciaEngine;
   EntryPath: string;
-  Executor: TGocciaInterpreterExecutor;
   ScriptResult: TGocciaScriptResult;
   Source: TStringList;
   TempDirectory: string;
@@ -404,11 +407,10 @@ begin
   TempDirectory := CreateTempDirectory;
   EntryPath := IncludeTrailingPathDelimiter(TempDirectory) + 'entry.mjs';
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
   try
     Source.Text := 'import value from "./virtual.mjs";' + LineEnding +
       'value;';
-    Engine := TGocciaEngine.Create(EntryPath, Source, Executor);
+    Engine := TGocciaEngine.Create(EntryPath, Source, AExecutor);
     try
       Engine.InjectModulesFromJSON(
         '{"./virtual.mjs":{"content":"export default 42;"}}');
@@ -420,8 +422,26 @@ begin
       Engine.Free;
     end;
   finally
-    Executor.Free;
     Source.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestEngineModuleManifestDefaultsToEntryPath;
+var
+  Executor: TGocciaExecutor;
+begin
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    AssertEngineModuleManifestDefaultsToEntryPath(Executor);
+  finally
+    Executor.Free;
+  end;
+
+  Executor := TGocciaBytecodeExecutor.Create;
+  try
+    AssertEngineModuleManifestDefaultsToEntryPath(Executor);
+  finally
+    Executor.Free;
   end;
 end;
 
