@@ -196,6 +196,8 @@ begin
   else
     FExecutor := TGocciaInterpreterExecutor.Create;
   FEngine := TGocciaEngine.Create('<shadow-realm>', FSource, FExecutor);
+  FEngine.HostEnvironment.ConfigureAsChildOf(
+    AParentEngine.HostEnvironment);
   // Inherit the host's language surface so the child realm understands the
   // same syntax the host enabled (e.g. --compat-function), while staying a
   // fresh realm with its own intrinsics and global object.

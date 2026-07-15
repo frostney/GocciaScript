@@ -102,6 +102,18 @@ the public `.gbc` artifact.
 
 See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode executor architecture.
 
+### Reproduce An Execution
+
+Use one fixed JavaScript-visible clock, UTC time zone, and portable random stream in either execution mode:
+
+```bash
+./build/GocciaScriptLoader example.js --deterministic
+```
+
+Timeouts and profiling still use the real monotonic clock. The equivalent config key is `"deterministic": true`; embedders can inject their own clock and RNG providers through the engine host environment.
+
+For custom providers, pass a JavaScript module to `--host-environment` or implement the Pascal host interfaces. See [Host Environment](docs/host-environment.md) for both examples and the provider contract.
+
 ### Start the REPL
 
 ```bash
@@ -226,6 +238,7 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | [Garbage Collector](docs/garbage-collector.md) | Mark-and-sweep GC: architecture, contributor rules, design rationale |
 | [Adding Built-in Types](docs/adding-built-in-types.md) | Step-by-step guide for adding new built-in types |
 | [Embedding the Engine](docs/embedding.md) | Embedding GocciaScript in FreePascal applications |
+| [Host Environment](docs/host-environment.md) | Injecting JavaScript-visible clock, time-zone, and random providers |
 | [Testing](docs/testing.md) | Test organization, running tests, coverage, CI |
 | [Test Framework API](docs/testing-api.md) | Assertions, mocks, lifecycle hooks, async patterns |
 | [Benchmarks](docs/benchmarks.md) | Benchmark runner, output formats, writing benchmarks |

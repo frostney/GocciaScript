@@ -32,6 +32,7 @@ uses
   Goccia.Error.Detail,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.HostEnvironment.JavaScript,
   Goccia.InstructionLimit,
   Goccia.Profiler,
   Goccia.Profiler.Report,
@@ -101,6 +102,7 @@ type
     FSilent: TFlagOption;
     FPrint: TFlagOption;
     FSourceMap: TStringOption;
+    FHostEnvironmentModule: TStringOption;
     FGlobalFiles: TRepeatableOption;
     FInlineGlobals: TRepeatableOption;
     FLastPaths: TStringList;
@@ -283,6 +285,8 @@ begin
     'Print the script''s last value to stdout (mirrors node -p / bun --print / deno eval -p)');
   FSourceMap := TStringOption(Add(TOptionalStringOption.Create('source-map',
     'Write a .map source map file (optional: explicit path)')));
+  FHostEnvironmentModule := AddString('host-environment',
+    'Configure script-visible time and randomness from a module with named exports');
   FGlobalFiles := AddRepeatable('globals',
     'Inject globals from a JSON/JSON5/TOML/YAML file or a module with named exports');
   FInlineGlobals := AddRepeatable('global',
@@ -293,10 +297,28 @@ procedure TScriptLoaderApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
   const AFileConfig: TConfigEntryArray);
 var
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
+  HostEnvironmentModulePath: string;
   Runtime: TGocciaRuntimeCore;
 begin
-  InitializeRuntime(AEngine);
-  Runtime := GetRuntime(AEngine);
+  Runtime := AttachRuntime(AEngine);
+
+  if FHostEnvironmentModule.FromCommandLine then
+    HostEnvironmentModulePath := FHostEnvironmentModule.Value
+  else if not FindConfigEntry(AFileConfig, 'host-environment',
+    HostEnvironmentModulePath) then
+    HostEnvironmentModulePath := FHostEnvironmentModule.ValueOr('');
+
+  if HostEnvironmentModulePath <> '' then
+  begin
+    if Assigned(EngineOptions) and
+       ResolveFlagOption(EngineOptions.Deterministic, AFileConfig) then
+      raise TParseError.Create(
+        '--host-environment cannot be combined with --deterministic.');
+    ConfigureHostEnvironmentFromModule(AEngine,
+      HostEnvironmentModulePath);
+  end;
+
+  ApplyLoaderRuntimeProfile(Runtime);
   if Assigned(EngineOptions) and
      ResolveFlagOption(EngineOptions.UnsafeFFI, AFileConfig) then
     Runtime.Install(TGocciaFFIRuntimeExtension.Create);

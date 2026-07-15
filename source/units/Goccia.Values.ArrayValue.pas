@@ -223,16 +223,6 @@ type
 function CollectSparseIndicesInRange(const AObj: TGocciaObjectValue;
   const AStartInclusive, AEndExclusive: Int64): TArray<Int64>; forward;
 
-// Int64 -> Double widening conversion.  In FPC Delphi mode, an explicit
-// `Double(int64Var)` is a bit-pattern type cast (yielding a denormal for
-// small integers), and `int64Var + 0.0` may evaluate at Single precision.
-// Assigning to a Double-typed variable is the only form FPC compiles as a
-// proper widening; passing it as a parameter then preserves precision.
-function Int64ToDouble(const AValue: Int64): Double; inline;
-begin
-  Result := AValue;
-end;
-
 function GetArrayCallbackThisArg(const AArgs: TGocciaArgumentsCollection): TGocciaValue; inline;
 begin
   if AArgs.Length > 1 then

@@ -103,6 +103,122 @@ for (const bin of [LOADER, BARE, REPL, TESTRUNNER, BUNDLER, BENCHRUNNER]) {
   if (!help.includes("--")) throw new Error(`${bin} --help missing options`);
   if (!help.includes("--warning-unsupported-features"))
     throw new Error(`${bin} --help missing --warning-unsupported-features`);
+  if (!help.includes("--deterministic"))
+    throw new Error(`${bin} --help missing --deterministic`);
+}
+
+// -- --deterministic -----------------------------------------------------------
+
+console.log("--deterministic (Loader + Bare, interpreted + bytecode)...");
+{
+  const source = [
+    "Math.random()",
+    "Math.random()",
+    "Date.now()",
+    "new Date().getTime()",
+    "new Date(0).getHours()",
+    "Temporal.Now.instant().epochNanoseconds.toString()",
+    "Temporal.Now.timeZoneId()",
+    "performance.timeOrigin",
+    "performance.now()",
+    'new Intl.DateTimeFormat("en", { year: "numeric" }).format()',
+    'new Intl.DateTimeFormat("en").resolvedOptions().timeZone',
+  ].join(", ");
+  const expected =
+    "0.8833108082136426|0.43152799704850997|0|0|0|0|UTC|0|0|1970|UTC";
+
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    for (let run = 0; run < 2; run++) {
+      const { exitCode, json, stderr } = runLoaderJson(
+        `[${source}].join("|");\n`,
+        ["--deterministic", `--mode=${mode}`],
+      );
+      if (exitCode !== 0)
+        throw new Error(`Loader deterministic ${mode} failed: ${stderr}`);
+      if (json.files?.[0]?.result !== expected)
+        throw new Error(
+          `Loader deterministic ${mode} run ${run + 1} expected ${expected}, got ${json.files?.[0]?.result}`,
+        );
+    }
+
+    const bareSource =
+      '[Math.random(), Math.random(), Date.now(), Temporal.Now.instant().epochNanoseconds.toString(), Temporal.Now.timeZoneId()].join("|");\n';
+    const bare = Bun.spawnSync(
+      [BARE, "-", "--print", "--deterministic", `--mode=${mode}`],
+      {
+        stdin: new TextEncoder().encode(bareSource),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const bareExpected =
+      "0.8833108082136426|0.43152799704850997|0|0|UTC";
+    if (bare.exitCode !== 0 || bare.stdout.toString().trim() !== bareExpected)
+      throw new Error(
+        `Bare deterministic ${mode} expected ${bareExpected}, got ${bare.stdout.toString()}${bare.stderr.toString()}`,
+      );
+  }
+}
+
+console.log("--deterministic child realms use stable distinct streams...");
+for (const mode of ["interpreted", "bytecode"] as const) {
+  const shadow = runLoaderJson(
+    'const child = new ShadowRealm(); [Math.random(), child.evaluate("Math.random()")].join("|");\n',
+    ["--deterministic", "--unsafe-shadowrealm", `--mode=${mode}`],
+  );
+  const shadowExpected = "0.8833108082136426|0.6524484863740322";
+  if (shadow.exitCode !== 0 || shadow.json.files?.[0]?.result !== shadowExpected)
+    throw new Error(
+      `ShadowRealm deterministic ${mode} expected ${shadowExpected}, got ${shadow.json.files?.[0]?.result}${shadow.stderr}`,
+    );
+
+  const bareRealmSource = [
+    "const realm = Goccia.test262.createRealm();",
+    '[Math.random(), realm.evalScript("Math.random()"), realm.evalScript("Goccia.test262.createRealm().evalScript(\\"Math.random()\\")")].join("|");',
+    "",
+  ].join("\n");
+  const bareRealm = Bun.spawnSync(
+    [
+      BARE,
+      "-",
+      "--print",
+      "--test262-host",
+      "--deterministic",
+      `--mode=${mode}`,
+    ],
+    {
+      stdin: new TextEncoder().encode(bareRealmSource),
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const bareRealmExpected =
+    "0.8833108082136426|0.11260056966858045|0.40713339556004036";
+  if (
+    bareRealm.exitCode !== 0 ||
+    bareRealm.stdout.toString().trim() !== bareRealmExpected
+  )
+    throw new Error(
+      `Test262 realm deterministic ${mode} expected ${bareRealmExpected}, got ${bareRealm.stdout.toString()}${bareRealm.stderr.toString()}`,
+    );
+}
+
+console.log("--deterministic keeps timeout clock live...");
+{
+  const proc = Bun.spawnSync(
+    [LOADER, "--deterministic", "--compat-while-loops", "--timeout=20"],
+    {
+      stdin: new TextEncoder().encode("while (true) {}\n"),
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 5_000,
+    },
+  );
+  const output = proc.stdout.toString() + proc.stderr.toString();
+  if (proc.exitCode === 0 || !output.includes("timed out"))
+    throw new Error(
+      `Deterministic timeout should use the real infrastructure clock, got exit ${proc.exitCode}: ${output}`,
+    );
 }
 
 // -- --unsafe-ffi gating --------------------------------------------------------

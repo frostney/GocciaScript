@@ -41,6 +41,7 @@ uses
   Goccia.Evaluator.Context,
   Goccia.ExecutionContext,
   Goccia.Executor,
+  Goccia.HostEnvironment,
   Goccia.Interpreter,
   Goccia.JSON,
   Goccia.Keywords.Reserved,
@@ -146,6 +147,7 @@ type
     FExtensions: TGocciaEngineExtensionList;
     FRetainedModules: TObjectList;
     FLazyThunks: TObjectList;
+    FHostEnvironment: TGocciaHostEnvironment;
 
     // Core language built-in objects
     FBuiltinMath: TGocciaMath;
@@ -291,6 +293,7 @@ type
     property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
     property ModuleResolver: TGocciaModuleResolver read GetModuleResolver;
     property ModuleLoader: TGocciaModuleLoader read FModuleLoader;
+    property HostEnvironment: TGocciaHostEnvironment read FHostEnvironment;
     property SourcePath: string read FSourcePath;
     property FunctionConstructor: TGocciaFunctionConstructorClassValue read FFunctionConstructor;
     property ObjectConstructor: TGocciaClassValue read FObjectConstructor;
@@ -660,6 +663,7 @@ begin
   // execution-context stack makes it current after the global environment is
   // available, before any built-in construction performs lazy intrinsic lookup.
   FRealm := TGocciaRealm.Create(AFileName);
+  FHostEnvironment := TGocciaHostEnvironment.Create;
 
   FPreprocessors := DefaultPreprocessors;
   FCompatibility := DefaultCompatibility;
@@ -746,6 +750,7 @@ begin
     FBuiltinProxy.Free;
     FBuiltinReflect.Free;
     FBuiltinDisposableStack.Free;
+    FHostEnvironment.Free;
     ClearImportMetaCache;
     FLastSourceMap.Free;
     FInjectedGlobals.Free;
@@ -788,7 +793,8 @@ begin
   Scope := FInterpreter.GlobalScope;
 
   // Core language built-ins: always registered.
-  FBuiltinMath := TGocciaMath.Create('Math', Scope, ThrowError);
+  FBuiltinMath := TGocciaMath.Create('Math', Scope, ThrowError,
+    FHostEnvironment);
   FBuiltinGlobalObject := TGocciaGlobalObject.Create(CONSTRUCTOR_OBJECT, Scope, ThrowError);
   FBuiltinGlobalArray := TGocciaGlobalArray.Create(CONSTRUCTOR_ARRAY, Scope, ThrowError);
   FBuiltinGlobalNumber := TGocciaGlobalNumber.Create(CONSTRUCTOR_NUMBER, Scope, ThrowError);
@@ -846,7 +852,7 @@ function TGocciaEngine.MaterializeTemporalGlobal: TGocciaValue;
 begin
   if not Assigned(FBuiltinTemporal) then
     FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal',
-      FInterpreter.GlobalScope, ThrowError, False);
+      FInterpreter.GlobalScope, ThrowError, FHostEnvironment, False);
   Result := FBuiltinTemporal.TemporalNamespace;
 end;
 
@@ -855,7 +861,7 @@ begin
   if not Assigned(FBuiltinIntl) then
   begin
     FBuiltinIntl := TGocciaIntlBuiltin.Create('Intl', FInterpreter.GlobalScope,
-      ThrowError, False);
+      ThrowError, FHostEnvironment, False);
     // Capture the intrinsic %Intl.NumberFormat% / %Intl.DateTimeFormat% into
     // hidden global bindings the locale shims use. ECMA-402 toLocaleString
     // constructs the intrinsic, not the global, so Number/Date toLocaleString

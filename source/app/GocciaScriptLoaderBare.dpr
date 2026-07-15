@@ -29,6 +29,7 @@ uses
   Goccia.Executor.Interpreter,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.HostEnvironment,
   Goccia.InstructionLimit,
   Goccia.MicrotaskQueue,
   Goccia.Modules,
@@ -72,6 +73,7 @@ type
     StrictTypes: Boolean;
     UnsafeFunctionConstructor: Boolean;
     UnsafeShadowRealm: Boolean;
+    Deterministic: Boolean;
     Test262Host: Boolean;
     Test262AgentCanSuspend: Boolean;
     Print: Boolean;
@@ -120,7 +122,8 @@ type
     FTest262Host: TBareTest262Host;
     FSource: TStringList;
   public
-    constructor Create(const AOptions: TBareOptions);
+    constructor Create(const AOptions: TBareOptions;
+      const AParentEnvironment: TGocciaHostEnvironment);
     destructor Destroy; override;
     function EvalScript(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -131,15 +134,19 @@ type
   TBareTest262Host = class
   private
     FAgentHost: TBareTest262AgentHost;
+    FHostEnvironment: TGocciaHostEnvironment;
     FOptions: TBareOptions;
     FRealms: TObjectList<TBareTest262Realm>;
   public
     constructor Create(const AOptions: TBareOptions);
     destructor Destroy; override;
+    procedure ConfigureHostEnvironment(
+      const AParent: TGocciaHostEnvironment);
     function CreateAgentObject: TGocciaObjectValue;
     function CreateRealm(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     property AgentHost: TBareTest262AgentHost read FAgentHost;
+    property HostEnvironment: TGocciaHostEnvironment read FHostEnvironment;
   end;
 
   TBareTest262AgentHost = class
@@ -212,7 +219,8 @@ const
   BARE_DEFAULT_MAX_STACK_DEPTH = 10000;
 
 procedure ConfigureEngine(const AEngine: TGocciaEngine;
-  const AExecutor: TGocciaExecutor; const AOptions: TBareOptions); forward;
+  const AExecutor: TGocciaExecutor; const AOptions: TBareOptions;
+  const AParentEnvironment: TGocciaHostEnvironment = nil); forward;
 function CreateExecutorForMode(
   const AMode: TBareExecutionMode): TGocciaExecutor; forward;
 
@@ -448,7 +456,8 @@ begin
   end;
 end;
 
-constructor TBareTest262Realm.Create(const AOptions: TBareOptions);
+constructor TBareTest262Realm.Create(const AOptions: TBareOptions;
+  const AParentEnvironment: TGocciaHostEnvironment);
 var
   ChildOptions: TBareOptions;
 begin
@@ -459,10 +468,11 @@ begin
   ChildOptions := AOptions;
   ChildOptions.SourceType := stScript;
   ChildOptions.Test262Host := True;
-  ConfigureEngine(FEngine, FExecutor, ChildOptions);
+  ConfigureEngine(FEngine, FExecutor, ChildOptions, AParentEnvironment);
 
   FEvalHost := TBareTest262EvalHost.Create(FEngine);
   FTest262Host := TBareTest262Host.Create(ChildOptions);
+  FTest262Host.ConfigureHostEnvironment(FEngine.HostEnvironment);
   FEngine.RefreshGlobalThis;
   InstallTest262HostGlobals(FEngine, FTest262Host, FEvalHost);
   InstallTest262EvalGlobal(FEngine, FEvalHost);
@@ -513,7 +523,16 @@ destructor TBareTest262Host.Destroy;
 begin
   FAgentHost.Free;
   FRealms.Free;
+  FHostEnvironment.Free;
   inherited;
+end;
+
+procedure TBareTest262Host.ConfigureHostEnvironment(
+  const AParent: TGocciaHostEnvironment);
+begin
+  FreeAndNil(FHostEnvironment);
+  FHostEnvironment := TGocciaHostEnvironment.Create;
+  FHostEnvironment.ConfigureAsChildOf(AParent);
 end;
 
 function TBareTest262Host.CreateAgentObject: TGocciaObjectValue;
@@ -552,7 +571,7 @@ var
   Realm: TBareTest262Realm;
   RealmRecord: TGocciaObjectValue;
 begin
-  Realm := TBareTest262Realm.Create(FOptions);
+  Realm := TBareTest262Realm.Create(FOptions, FHostEnvironment);
   FRealms.Add(Realm);
 
   RealmRecord := TGocciaObjectValue.Create;
@@ -856,7 +875,8 @@ begin
         AgentOptions := FOptions;
         AgentOptions.SourceType := stScript;
         AgentOptions.Test262Host := True;
-        ConfigureEngine(Engine, Executor, AgentOptions);
+        ConfigureEngine(Engine, Executor, AgentOptions,
+          FHost.HostEnvironment);
         EvalHost := TBareTest262EvalHost.Create(Engine);
         try
           InstallTest262HostGlobals(Engine, FHost, EvalHost);
@@ -1220,6 +1240,7 @@ begin
   WriteLn('  --source-name=PATH            Name stdin source as PATH for diagnostics and module resolution');
   WriteLn('  --unsafe-function-constructor Enable dynamic Function constructor');
   WriteLn('  --unsafe-shadowrealm          Enable the ShadowRealm constructor');
+  WriteLn('  --deterministic               Use fixed script-visible time, UTC, and seeded randomness');
   WriteLn('  --test262-host                Expose Goccia.test262 host hooks for test262');
   WriteLn('  --print                       Print the script''s last value (incl. undefined)');
   WriteLn('  --timeout=MS                  Per-file cooperative timeout in milliseconds');
@@ -1354,6 +1375,7 @@ begin
   AOptions.StrictTypes := False;
   AOptions.UnsafeFunctionConstructor := False;
   AOptions.UnsafeShadowRealm := False;
+  AOptions.Deterministic := False;
   AOptions.Test262Host := False;
   AOptions.Test262AgentCanSuspend := True;
   AOptions.Print := False;
@@ -1396,6 +1418,8 @@ begin
       AOptions.UnsafeFunctionConstructor := True
     else if Arg = '--unsafe-shadowrealm' then
       AOptions.UnsafeShadowRealm := True
+    else if Arg = '--deterministic' then
+      AOptions.Deterministic := True
     else if Arg = '--test262-host' then
       AOptions.Test262Host := True
     else if Arg = '--print' then
@@ -1460,8 +1484,13 @@ begin
 end;
 
 procedure ConfigureEngine(const AEngine: TGocciaEngine;
-  const AExecutor: TGocciaExecutor; const AOptions: TBareOptions);
+  const AExecutor: TGocciaExecutor; const AOptions: TBareOptions;
+  const AParentEnvironment: TGocciaHostEnvironment = nil);
 begin
+  if Assigned(AParentEnvironment) then
+    AEngine.HostEnvironment.ConfigureAsChildOf(AParentEnvironment)
+  else if AOptions.Deterministic then
+    AEngine.HostEnvironment.UseDeterministicProfile;
   AEngine.Compatibility := AOptions.Compatibility;
   AEngine.LabelStatementsEnabled := AOptions.LabelStatementsEnabled;
   AEngine.ForInLoopsEnabled := AOptions.ForInLoopsEnabled;
@@ -1559,6 +1588,7 @@ begin
           Engine := TGocciaEngine.Create(DisplayName, Source, Executor);
           try
             ConfigureEngine(Engine, Executor, AOptions);
+            Test262Host.ConfigureHostEnvironment(Engine.HostEnvironment);
             Test262EvalHost := TBareTest262EvalHost.Create(Engine);
             try
 
