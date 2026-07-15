@@ -8,6 +8,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.HostEnvironment,
   Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.ObjectValue,
@@ -15,6 +16,8 @@ uses
 
 type
   TGocciaMath = class(TGocciaBuiltin)
+  private
+    FHostEnvironment: TGocciaHostEnvironment;
   published
     function MathAbs(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MathFloor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -56,7 +59,9 @@ type
     function MathSumPrecise(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
   public
-    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+    constructor Create(const AName: string; const AScope: TGocciaScope;
+      const AThrowError: TGocciaThrowErrorCallback;
+      const AHostEnvironment: TGocciaHostEnvironment);
   end;
 
 implementation
@@ -420,11 +425,14 @@ end;
 
 { TGocciaMath }
 
-constructor TGocciaMath.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+constructor TGocciaMath.Create(const AName: string; const AScope: TGocciaScope;
+  const AThrowError: TGocciaThrowErrorCallback;
+  const AHostEnvironment: TGocciaHostEnvironment);
 var
   Members: TGocciaMemberCollection;
 begin
   inherited Create(AName, AScope, AThrowError);
+  FHostEnvironment := AHostEnvironment;
 
   // Constants: non-writable, non-enumerable, non-configurable
   FBuiltinObject.RegisterConstant('PI', TGocciaNumberLiteralValue.Create(Pi));
@@ -810,7 +818,7 @@ function TGocciaMath.MathRandom(const AArgs: TGocciaArgumentsCollection; const A
 begin
   // Step 1: Return a Number value with positive sign, ≥ +0𝔽 and < 1𝔽,
   // chosen randomly with approximately uniform distribution.
-  Result := TGocciaNumberLiteralValue.Create(Random);
+  Result := TGocciaNumberLiteralValue.Create(FHostEnvironment.RandomDouble);
 end;
 
 // Math.clamp ( x, lower, upper ) — ES2026 Stage 3 proposal

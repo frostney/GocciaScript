@@ -8,6 +8,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.HostEnvironment,
   Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.ObjectValue,
@@ -17,6 +18,7 @@ type
   TGocciaTemporalBuiltin = class(TGocciaBuiltin)
   private
     FTemporalNamespace: TGocciaObjectValue;
+    FHostEnvironment: TGocciaHostEnvironment;
 
     // Duration constructor + statics
     function DurationConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -80,6 +82,7 @@ type
   public
     constructor Create(const AName: string; const AScope: TGocciaScope;
       const AThrowError: TGocciaThrowErrorCallback;
+      const AHostEnvironment: TGocciaHostEnvironment;
       const ADefineGlobalBinding: Boolean = True);
 
     property TemporalNamespace: TGocciaObjectValue read FTemporalNamespace;
@@ -92,7 +95,6 @@ uses
   SysUtils,
 
   BigInteger,
-  TimingUtils,
 
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -128,11 +130,13 @@ const
 
 constructor TGocciaTemporalBuiltin.Create(const AName: string;
   const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback;
+  const AHostEnvironment: TGocciaHostEnvironment;
   const ADefineGlobalBinding: Boolean = True);
 var
   TemporalMembers: array[0..0] of TGocciaMemberDefinition;
 begin
   inherited Create(AName, AScope, AThrowError);
+  FHostEnvironment := AHostEnvironment;
 
   FTemporalNamespace := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   TGarbageCollector.Instance.AddTempRoot(FTemporalNamespace);
@@ -287,10 +291,10 @@ begin
 end;
 
 function TemporalNowTimeZoneFromArgument(const AArg: TGocciaValue;
-  const AMethod: string): string;
+  const AMethod, ADefaultTimeZone: string): string;
 begin
   if (AArg = nil) or (AArg is TGocciaUndefinedLiteralValue) then
-    Exit(GetSystemTimeZoneId);
+    Exit(ADefaultTimeZone);
 
   if not (AArg is TGocciaStringLiteralValue) then
     ThrowTypeError(AMethod + ' timeZone must be a string',
@@ -2205,7 +2209,7 @@ function TGocciaTemporalBuiltin.NowInstant(const AArgs: TGocciaArgumentsCollecti
 var
   EpochNs: Int64;
 begin
-  EpochNs := GetEpochNanoseconds;
+  EpochNs := FHostEnvironment.EpochNanoseconds;
   Result := TGocciaTemporalInstantValue.Create(EpochNs div 1000000, Integer(EpochNs mod 1000000));
 end;
 
@@ -2215,9 +2219,9 @@ var
   TZ: string;
   Y, M, D, H, Mi, S, Ms, Us, Ns: Integer;
 begin
-  EpochNs := GetEpochNanoseconds;
+  EpochNs := FHostEnvironment.EpochNanoseconds;
   TZ := TemporalNowTimeZoneFromArgument(AArgs.GetElement(0),
-    'Temporal.Now.plainDateISO');
+    'Temporal.Now.plainDateISO', FHostEnvironment.TimeZoneIdentifier);
   GetLocalFieldsFromEpoch(EpochNs div 1000000, Integer(EpochNs mod 1000000),
     TZ, Y, M, D, H, Mi, S, Ms, Us, Ns);
   Result := TGocciaTemporalPlainDateValue.Create(Y, M, D);
@@ -2229,9 +2233,9 @@ var
   TZ: string;
   Y, M, D, H, Mi, S, Ms, Us, Ns: Integer;
 begin
-  EpochNs := GetEpochNanoseconds;
+  EpochNs := FHostEnvironment.EpochNanoseconds;
   TZ := TemporalNowTimeZoneFromArgument(AArgs.GetElement(0),
-    'Temporal.Now.plainTimeISO');
+    'Temporal.Now.plainTimeISO', FHostEnvironment.TimeZoneIdentifier);
   GetLocalFieldsFromEpoch(EpochNs div 1000000, Integer(EpochNs mod 1000000),
     TZ, Y, M, D, H, Mi, S, Ms, Us, Ns);
   Result := TGocciaTemporalPlainTimeValue.Create(H, Mi, S, Ms, Us, Ns);
@@ -2243,9 +2247,9 @@ var
   TZ: string;
   Y, Mo, D, H, Mi, S, Ms, Us, Ns: Integer;
 begin
-  EpochNs := GetEpochNanoseconds;
+  EpochNs := FHostEnvironment.EpochNanoseconds;
   TZ := TemporalNowTimeZoneFromArgument(AArgs.GetElement(0),
-    'Temporal.Now.plainDateTimeISO');
+    'Temporal.Now.plainDateTimeISO', FHostEnvironment.TimeZoneIdentifier);
   GetLocalFieldsFromEpoch(EpochNs div 1000000, Integer(EpochNs mod 1000000),
     TZ, Y, Mo, D, H, Mi, S, Ms, Us, Ns);
   Result := TGocciaTemporalPlainDateTimeValue.Create(Y, Mo, D, H, Mi, S, Ms,
@@ -2256,7 +2260,8 @@ end;
 function TGocciaTemporalBuiltin.NowTimeZoneId(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaStringLiteralValue.Create(GetSystemTimeZoneId);
+  Result := TGocciaStringLiteralValue.Create(
+    FHostEnvironment.TimeZoneIdentifier);
 end;
 
 // TC39 Temporal §2.2.2 Temporal.Now.zonedDateTimeISO([timeZone])
@@ -2266,9 +2271,9 @@ var
   EpochNs: Int64;
   TZ: string;
 begin
-  EpochNs := GetEpochNanoseconds;
+  EpochNs := FHostEnvironment.EpochNanoseconds;
   TZ := TemporalNowTimeZoneFromArgument(AArgs.GetElement(0),
-    'Temporal.Now.zonedDateTimeISO');
+    'Temporal.Now.zonedDateTimeISO', FHostEnvironment.TimeZoneIdentifier);
 
   Result := TGocciaTemporalZonedDateTimeValue.Create(
     EpochNs div 1000000, Integer(EpochNs mod 1000000), TZ);
