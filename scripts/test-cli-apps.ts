@@ -4416,6 +4416,8 @@ console.log("Loader: goccia.json multifile=true works without --multifile flag..
   }
 }
 
+// Keep inline JSON descriptor arguments whitespace-bearing. Bun otherwise
+// leaves them unquoted on Windows, so FPC ParamStr consumes the JSON quotes.
 console.log("Loader: --module virtual modules use the ordinary module pipeline...");
 for (const mode of ["interpreted", "bytecode"] as const) {
   const source = [
@@ -4435,7 +4437,7 @@ for (const mode of ["interpreted", "bytecode"] as const) {
       "--print",
       "--experimental-js-module-source",
       "--module",
-      'host:asset={"type":"bytes","content":"AQID"}',
+      'host:asset={ "type":"bytes","content":"AQID"}',
       "--module",
       'host:pkg/dep=export const value = 7;',
       "--module",
@@ -4582,7 +4584,7 @@ console.log("Loader: virtual definitions validate eagerly but JavaScript parses 
     throw new Error(`Unused invalid virtual source should not fail startup: ${unused.stderr.toString()}`);
 
   const invalidBytes = Bun.spawnSync(
-    [LOADER, "-", "--module", 'host:bad={"type":"bytes","content":"%%%"}'],
+    [LOADER, "-", "--module", 'host:bad={ "type":"bytes","content":"%%%"}'],
     { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
   );
   const invalidBytesOutput = invalidBytes.stdout.toString() + invalidBytes.stderr.toString();
