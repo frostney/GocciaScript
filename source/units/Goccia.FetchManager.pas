@@ -4,8 +4,12 @@ unit Goccia.FetchManager;
 
 interface
 
+// Interface dependencies are TYPES ONLY (HTTPTypes carries
+// THTTPHeaders); the socket-backed client stays behind the LAKON
+// gate in the implementation.
+
 uses
-  HTTPClient,
+  HTTPTypes,
 
   Goccia.Values.PromiseValue;
 
@@ -32,22 +36,37 @@ procedure DiscardFetchCompletions;
 
 implementation
 
+// The DEFAULT WORKER BACKEND (TThread + HTTPClient + polling Sleep)
+// is gated on platforms with real threads and sockets; the Lakon
+// WASM lane compiles only the abstract manager and the drain/wait
+// helpers — Initialize leaves Instance nil there, so fetch() is
+// unavailable until a WASI backend exists (the host-integration
+// slice). Everything the shared helpers need stays outside the gate.
+
 uses
+  {$IFNDEF LAKON}
   Classes,
   Generics.Collections,
   SyncObjs,
+
+  HTTPClient,
+
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.HeadersValue,
+  Goccia.Values.ResponseValue,
+  {$ENDIF}
   SysUtils,
 
   Goccia.Builtins.Atomics,
   Goccia.GarbageCollector,
-  Goccia.MicrotaskQueue,
-  Goccia.Values.ErrorHelper,
-  Goccia.Values.HeadersValue,
-  Goccia.Values.ResponseValue;
+  Goccia.MicrotaskQueue;
 
 const
-  FETCH_WORKER_STACK_SIZE = 8 * 1024 * 1024;
   FETCH_POLL_INTERVAL_MS = 1;
+
+{$IFNDEF LAKON}
+const
+  FETCH_WORKER_STACK_SIZE = 8 * 1024 * 1024;
   MAX_FETCH_WORKERS = 16;
   FETCH_WORKER_LIMIT_ERROR = 'fetch worker limit exceeded';
 
@@ -139,8 +158,12 @@ type
     procedure DiscardPending; override;
   end;
 
+{$ENDIF}
+
 threadvar
-  FetchManagerThreadInstance: TGocciaFetchManagerImpl;
+  FetchManagerThreadInstance: TGocciaFetchManager;
+
+{$IFNDEF LAKON}
 
 { TGocciaFetchCompletion }
 
@@ -343,6 +366,8 @@ begin
   end;
 end;
 
+{$ENDIF}
+
 { TGocciaFetchManager }
 
 class function TGocciaFetchManager.Instance: TGocciaFetchManager;
@@ -352,14 +377,18 @@ end;
 
 class procedure TGocciaFetchManager.Initialize;
 begin
+  {$IFNDEF LAKON}
   if not Assigned(FetchManagerThreadInstance) then
     FetchManagerThreadInstance := TGocciaFetchManagerImpl.Create;
+  {$ENDIF}
 end;
 
 class procedure TGocciaFetchManager.Shutdown;
 begin
   FreeAndNil(FetchManagerThreadInstance);
 end;
+
+{$IFNDEF LAKON}
 
 { TGocciaFetchManagerImpl }
 
@@ -573,6 +602,7 @@ begin
   OldState.Abandon;
   OldState.Release;
 end;
+{$ENDIF}
 
 procedure DrainMicrotasksAndFetchCompletions;
 var

@@ -49,6 +49,7 @@ uses
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Threading,
+  Goccia.Threading.Flags,
   Goccia.Threading.Init,
   Goccia.Timeout,
   Goccia.Values.Error,

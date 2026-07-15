@@ -38,7 +38,7 @@ implementation
 uses
   SysUtils,
 
-  HTTPClient,
+  HTTPTypes,
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,

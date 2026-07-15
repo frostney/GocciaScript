@@ -41,7 +41,7 @@ uses
   SysUtils,
 
   Goccia.Coverage,
-  Goccia.Threading;
+  Goccia.Threading.Flags;
 
 procedure PrintPipelineWarnings(const AFileName: string;
   const APipelineResult: TGocciaSourcePipelineResult;

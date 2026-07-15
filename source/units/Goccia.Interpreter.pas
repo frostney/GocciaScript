@@ -298,6 +298,14 @@ begin
   FSourceLines := ASourceLines;
   FRealm := CurrentRealm;
   FGlobalScope := TGocciaGlobalScope.Create;
+  // Seed the error channel at the root: every scope created under the
+  // global scope inherits OnError at construction, so closures whose
+  // lexical chain was built before any EvaluateStatements propagation
+  // (class bodies, static methods) can still throw structured errors.
+  // Without this, those paths called a NIL method pointer — natively an
+  // access violation that happened to be swallowed as a generic error,
+  // under WASM an uncatchable call_indirect trap.
+  FGlobalScope.OnError := ThrowError;
   if Assigned(AModuleLoader) then
   begin
     FModuleLoader := AModuleLoader;

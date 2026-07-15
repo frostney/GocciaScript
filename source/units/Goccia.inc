@@ -7,9 +7,18 @@
 {$ENDIF}
 
 { Intl embeds a minimal CLDR subset so locale canonicalization and
-  formatting work even when system ICU is unavailable. }
+  formatting work even when system ICU is unavailable. Under LAKON
+  the embedded-resource loader (TResourceStream / MAKEINTRESOURCE)
+  has no platform yet, so the define stays off and CLDRData's
+  not-available branch compiles instead (every TryGet* answers
+  False) — the same defer-with-gate shape as the rung-1 ICU guards.
+  Embedding the 1.19 MB blob as a generated Pascal constant (the
+  UnicodeData pattern) waits for an Intl consumer and a data-region
+  bump on the Lakon side. }
 {$IFNDEF GOCCIA_INTL_NO_EMBEDDED_CLDR}
+{$IFNDEF LAKON}
 {$DEFINE GOCCIA_INTL_EMBEDDED_CLDR}
+{$ENDIF}
 {$ENDIF}
 
 { RegExp embeds Unicode Character Database property tables so

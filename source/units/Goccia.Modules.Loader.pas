@@ -444,6 +444,9 @@ destructor TGocciaModuleLoader.Destroy;
 var
   NamespacePair: TOrderedStringMap<TGocciaValue>.TKeyValuePair;
   SourceValuePair: TOrderedStringMap<TGocciaValue>.TKeyValuePair;
+  ModulePair: TOrderedStringMap<TGocciaModule>.TKeyValuePair;
+  OwnedModules: TGocciaModuleList;
+  I: Integer;
 begin
   if Assigned(TGarbageCollector.Instance) then
   begin
@@ -453,6 +456,24 @@ begin
     for SourceValuePair in FModuleSourceValues do
       if Assigned(SourceValuePair.Value) then
         TGarbageCollector.Instance.RemoveRootObject(SourceValuePair.Value);
+  end;
+  { The loader owns every module it cached. Freeing them retracts the
+    GC roots each module registered (its environment scope and
+    namespace object) — leaving those registered dangles them into
+    the process-global collector after the engine dies, and the next
+    engine's collection marks freed memory (the sequential-runner
+    crash). A module can sit under several cache keys (resolved path
+    + attribute-encoded keys), so collect distinct instances first. }
+  OwnedModules := TGocciaModuleList.Create;
+  try
+    for ModulePair in FModules do
+      if Assigned(ModulePair.Value) and
+         (OwnedModules.IndexOf(ModulePair.Value) < 0) then
+        OwnedModules.Add(ModulePair.Value);
+    for I := 0 to OwnedModules.Count - 1 do
+      OwnedModules[I].Free;
+  finally
+    OwnedModules.Free;
   end;
   FDeferredModuleNamespaces.Free;
   FEvaluatingModules.Free;

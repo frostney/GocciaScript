@@ -5931,9 +5931,11 @@ var
   ResumePhase: TGocciaGeneratorForLoopPhase;
   HasResumeState: Boolean;
   HasPerIterationValues: Boolean;
+  LoopRoots: TGocciaActiveRootFrame;
 begin
   LoopValue := UndefinedCompletionValue;
   Result := TGocciaControlFlow.Normal(LoopValue);
+  LoopRoots.Initialize;
 
   IsLexical := False;
   PerIterNames := nil;
@@ -5991,6 +5993,7 @@ begin
     begin
       HeaderScope := ForState.HeaderScope;
       HeaderContext.Scope := HeaderScope;
+      LoopRoots.Add(HeaderScope);
     end;
     ResumePhase := ForState.Phase;
     if (ResumePhase in [gflpTest, gflpBody]) and IsLexical then
@@ -6017,6 +6020,13 @@ begin
         begin
           HeaderScope := AContext.Scope.CreateChild(skBlock, 'ForHeader');
           HeaderContext.Scope := HeaderScope;
+          { The header scope is NOT part of the body's scope chain
+            (per-iteration scopes chain to the enclosing scope), so
+            without an explicit root an explicit Goccia.gc() in the
+            body collects it — and the next iteration start reads
+            its bindings (a use-after-free the native heap masked;
+            the WASM lane's immediate block reuse made it loud). }
+          LoopRoots.Add(HeaderScope);
         end;
 
         if Assigned(Continuation) then
@@ -6069,7 +6079,16 @@ begin
               end;
               HasPerIterationValues := True;
             end;
+            { Reset the loop's root frame for this iteration: the
+              header scope stays rooted, the fresh iteration scope
+              joins it (the condition evaluates in IterScope before
+              any body-level active-scope push), and the previous
+              iteration's Iter/Update scopes drop out. }
+            LoopRoots.Clear;
+            if Assigned(HeaderScope) then
+              LoopRoots.Add(HeaderScope);
             IterScope := AContext.Scope.CreateChild(skBlock, 'ForIter');
+            LoopRoots.Add(IterScope);
             IterContext := AContext;
             IterContext.Scope := IterScope;
             for I := 0 to PerIterNames.Count - 1 do
@@ -6158,6 +6177,9 @@ begin
           if IsLexical then
           begin
             UpdateScope := AContext.Scope.CreateChild(skBlock, 'ForUpdate');
+            { Rooted like IterScope — the update expression runs in
+              this scope with no other strong reference to it. }
+            LoopRoots.Add(UpdateScope);
             UpdateContext := AContext;
             UpdateContext.Scope := UpdateScope;
             for I := 0 to PerIterNames.Count - 1 do
@@ -6232,6 +6254,7 @@ begin
       end;
     end;
   finally
+    LoopRoots.Clear;
     if Assigned(PerIterNames) then
       PerIterNames.Free;
   end;

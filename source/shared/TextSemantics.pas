@@ -93,8 +93,15 @@ implementation
 uses
   Math,
 
+{$IFNDEF LAKON}
+  { fpwidestring installs FPC's unicode string manager; IntlICU is
+    the optional ICU fast path for case mapping. Lakon's WASM lane
+    has native UTF-16 strings and no dynamic libraries — the pure
+    Pascal fallbacks below (UnicodeCaseMapFallbackUTF8 and friends)
+    carry the semantics there. }
   fpwidestring,
   IntlICU,
+{$ENDIF}
   StringBuffer;
 
 type
@@ -1131,6 +1138,12 @@ var
   TextUnits: TUTF16CodeUnitArray;
   TextLength: Integer;
 begin
+{$IFNDEF LAKON}
+  { Byte-wise fast path: FPC's string here is single-byte, so byte
+    index == code-unit index. Lakon's string is UTF-16 (2-byte code
+    units), so CompareByte's byte count would halve the compared
+    span — the generic code-unit path below is the correct one
+    there. }
   if StringIsAllAscii(AText) and StringIsAllAscii(ASearch) then
   begin
     // Single-byte text: byte index == UTF-16 code-unit index (mirrors UTF16IndexOf).
@@ -1146,6 +1159,7 @@ begin
         Exit(I);
     Exit(-1);
   end;
+{$ENDIF}
 
   TextUnits := BuildUTF16CodeUnitArray(AText);
   SearchUnits := BuildUTF16CodeUnitArray(ASearch);
@@ -1238,15 +1252,19 @@ end;
 
 function UnicodeLowerCaseUTF8(const AText: string): string;
 begin
+{$IFNDEF LAKON}
   if IsWellFormedUTF16(AText) and TryICULowerCase('', AText, Result) then
     Exit;
+{$ENDIF}
   Result := UnicodeCaseMapFallbackUTF8(AText, False);
 end;
 
 function UnicodeUpperCaseUTF8(const AText: string): string;
 begin
+{$IFNDEF LAKON}
   if IsWellFormedUTF16(AText) and TryICUUpperCase('', AText, Result) then
     Exit;
+{$ENDIF}
   Result := UnicodeCaseMapFallbackUTF8(AText, True);
 end;
 

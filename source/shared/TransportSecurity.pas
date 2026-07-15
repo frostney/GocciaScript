@@ -8,14 +8,26 @@ unit TransportSecurity;
 interface
 
 uses
-  SysUtils,
+  SysUtils
+{$IFNDEF LAKON}
   {$IFDEF UNIX}
-  Sockets
+  , Sockets
   {$ENDIF}
   {$IFDEF MSWINDOWS}
-  WinSock2
+  , WinSock2
   {$ENDIF}
+{$ENDIF}
   ;
+
+{$IFDEF LAKON}
+type
+  // Lakon's WASM lane has no sockets (its capability contract stops
+  // at stdio/argv), so no platform socket unit exists to import; the
+  // alias keeps TTransportSecurityConnection and the signatures below
+  // compiling for consumers that only need the TYPES at compile time
+  // (HTTPClient's unit closure). The bodies raise if ever reached.
+  TSocket = Integer;
+{$ENDIF}
 
 type
   TTransportSecurityConnection = record
@@ -36,6 +48,43 @@ function TransportSecurityWrite(var AConnection: TTransportSecurityConnection;
   const ABuffer: Pointer; const ALength: Integer): Integer;
 
 implementation
+
+{$IFDEF LAKON}
+
+type
+  ETransportSecurityError = class(Exception);
+
+const
+  NO_TLS_ERROR = 'TLS transport is not available on this platform';
+
+procedure StartTransportSecurity(var AConnection: TTransportSecurityConnection;
+  const ASocket: TSocket; const AHost: string);
+begin
+  AConnection.Active := False;
+  AConnection.Backend := 0;
+  AConnection.Socket := ASocket;
+  AConnection.BackendData := nil;
+  raise ETransportSecurityError.Create(NO_TLS_ERROR);
+end;
+
+procedure CloseTransportSecurity(var AConnection: TTransportSecurityConnection);
+begin
+  AConnection.Active := False;
+end;
+
+function TransportSecurityRead(var AConnection: TTransportSecurityConnection;
+  var ABuffer: array of Byte; const ALength: Integer): Integer;
+begin
+  Result := -1;
+end;
+
+function TransportSecurityWrite(var AConnection: TTransportSecurityConnection;
+  const ABuffer: Pointer; const ALength: Integer): Integer;
+begin
+  Result := -1;
+end;
+
+{$ELSE}
 
 uses
   {$IFDEF UNIX}
@@ -1190,5 +1239,7 @@ begin
     Result := 0;
   end;
 end;
+
+{$ENDIF}
 
 end.

@@ -52,7 +52,9 @@ const
   UCD_RANGE_SIZE = 8;
   CASE_FOLDING_ENTRY_KEY = 'CaseFolding/Simple';
   NON_UNICODE_UPPERCASE_ENTRY_KEY = 'CaseMapping/RegExpNonUnicodeUppercase';
+{$IFNDEF LAKON}
   UCD_RCDATA_RESOURCE_TYPE = MAKEINTRESOURCE(10);
+{$ENDIF}
   UCD_MAGIC: TEmbeddedResourceMagic =
     (Ord('G'), Ord('O'), Ord('C'), Ord('C'), Ord('I'), Ord('A'), Ord('U'), Ord('C'));
 
@@ -174,6 +176,20 @@ var
   CaseFoldPairsCache: TLazyPublishedCache<TCodePointPairArray>;
   NonUnicodeUppercasePairsCache: TLazyPublishedCache<TCodePointPairArray>;
 
+{$IFDEF LAKON}
+function LoadUCDResource(const AKey: string; out ABuffer: TBytes): Boolean;
+var
+  I: Integer;
+begin
+  { Lakon has no Windows-resource loader; Generated.UnicodeData ships
+    the identical GOCCIA_UCD container as a Pascal typed constant
+    (see Generated.UnicodeData.Blob.inc). }
+  SetLength(ABuffer, Length(GeneratedUnicodeDataResourceBlob));
+  for I := 0 to High(GeneratedUnicodeDataResourceBlob) do
+    ABuffer[I] := GeneratedUnicodeDataResourceBlob[I];
+  Result := True;
+end;
+{$ELSE}
 function LoadUCDResource(const AKey: string; out ABuffer: TBytes): Boolean;
 var
   Stream: TResourceStream;
@@ -201,6 +217,7 @@ begin
     Stream.Free;
   end;
 end;
+{$ENDIF}
 
 function TryReadEmbeddedResource(out ABuffer: TBytes): Boolean;
 begin
