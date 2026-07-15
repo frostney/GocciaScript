@@ -859,8 +859,9 @@ export function Test262Dashboard({ data }: { data: Test262DashboardData }) {
           <p className="section-kicker">ECMAScript compatibility</p>
           <h1>test262 dashboard</h1>
           <p>
-            Generated at website build time from main-branch test262 reports.
-            The timeline keeps the latest available result for each day.
+            Loaded from published main-branch test262 reports in Vercel Blob and
+            cached for 15 minutes. The timeline keeps the latest available
+            result for each day.
           </p>
         </div>
         <div className="compat-hero-actions">

@@ -66,6 +66,7 @@ commit_parsers = [
   { message = "^Normalize ", group = "🐛 Fixed" },
   { message = "^Preserve ", group = "🐛 Fixed" },
   { message = "^Unify newline", group = "🐛 Fixed" },
+  { message = "^Complete .*test262 conformance", group = "🐛 Fixed" },
 
   { message = "^Improve ", group = "✨ Improved" },
   { message = "^Include ", group = "✨ Improved" },

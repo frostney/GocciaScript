@@ -46,6 +46,12 @@ A general rule before the specifics: if you find yourself working *harder* on a 
 **Tell:** the next change is larger than the rejected one; you are adding a new framework or harness after the user objected to direction; the work feels like a lurch rather than a narrower repair.
 **Rebalance:** pause acceleration. Restate the broken contract, name the smallest corrective change, check existing decisions, and continue only within that boundary. After correction, increase precision, not force.
 
+## Structure → over-building (bikeshedding instead of shipping)
+
+**Over-steer:** treating "invest in the right structure" as license to build *more* structure than the problem needs — perfecting the architecture, stacking layers, abstractions, and configuration around a slice that does not yet work end-to-end, or bikeshedding names and boundaries while nothing actually ships. The same failure wears a second mask once you adopt the walking-skeleton habit: standing up deploy pipelines, environments, and infrastructure ceremony *before* there is a real path worth running through them.
+**Tell:** you have re-architected more than you have made work; there is no correct end-to-end path running yet but you are polishing the scaffolding; the debate is about the shape of the structure rather than about getting a real input to produce a real output. Or: you have an elaborately deployed shell with rich CI but no real behavior through it — and you are quietly treating "it deployed" or "the skeleton ran" as *done*.
+**Rebalance:** get a correct end-to-end path working first — the thinnest real slice that runs — then invest in the structure around it. Keep the skeleton thin and calibrated to stakes: prove the path, don't pre-build infrastructure, and remember the skeleton is the *first increment, not the finish*. Structure (and pipeline) earns its keep by making the *next* change cheaper on code that already works; built ahead of a working path it is speculation. Resisting the quick fix means fixing at the *right layer*, not building the *biggest* structure — the smallest change at the right layer still wins.
+
 ## The meta-guard
 
 When two principles genuinely conflict and the guards above do not settle it, ask the one question that always applies: **which choice leaves the next change easier?** That is the governor. It is also why none of these principles is absolute — they all serve maintainability, and when one of them stops serving it, that one yields.

@@ -503,6 +503,13 @@ generators, and iterators without requiring Wasm, DOM, workers, a host filesyste
 or a second copy of the Web Tooling lane. The private-field raytrace variant is
 excluded because it does not complete inside the diagnostic time budget.
 
+### Updating the JetStream Pin
+
+`.github/workflows/jetstream-bump.yml` checks WebKit/JetStream `main` weekly,
+updates the manifest and current pin reference with
+`scripts/jetstream-bump-pin.ts`, and opens an automated PR only when
+the SHA changes. PR CI runs the complete frozen subset before merge.
+
 The driver concatenates the listed upstream files unchanged into one generated
 shell entry per workload. The generic adapter supplies timing, deterministic
 randomness where the manifest requests it, and result serialization. Each suite
