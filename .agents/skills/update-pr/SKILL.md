@@ -1,8 +1,9 @@
 ---
 name: update-pr
 description: >-
-  Commits relevant local changes, merges origin/main when the branch is behind,
-  pushes to the current PR branch, and refreshes PR title/body when stale. Use
+  Commits relevant local changes, merges the remote default branch when the
+  branch is behind, pushes to the current PR branch, and refreshes PR title/body
+  when stale. Use
   when the user runs /update-pr or asks to update a pull request with the latest
   commits.
 license: Unlicense OR MIT
@@ -24,18 +25,19 @@ This workflow is explicit permission to commit relevant changes and push to the 
 
 ### Steps
 
-1. Inspect repository state:
+1. Inspect repository state and resolve the base branch (never hardcode `main`):
    - `git status --short --branch`
    - `git diff`
    - `git diff --staged`
    - `git log --oneline -5`
-2. If the current branch is `main`, stop and ask for the intended PR branch.
+   - `BASE_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')`
+2. If the current branch is the base branch, stop and ask for the intended PR branch.
 3. Confirm an open PR exists: `gh pr view`. If none, ask whether to run `/create-pr` instead.
-4. If the branch is behind `origin/main`, merge baseline:
+4. If the branch is behind `origin/$BASE_BRANCH`, merge baseline:
 
    ```bash
-   git fetch origin main
-   git merge origin/main --no-edit
+   git fetch origin "$BASE_BRANCH"
+   git merge "origin/$BASE_BRANCH" --no-edit
    ```
 
    Resolve conflicts and commit the merge if needed before continuing.
