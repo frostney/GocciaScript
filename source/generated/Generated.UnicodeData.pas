@@ -14,10 +14,20 @@ const
   GeneratedUnicodeDataEntryCount = 1753;
   GeneratedUnicodeDataBlobByteCount = 340228;
 
+{$IFDEF LAKON}
+// Lakon (WASM/WASI) has no Windows-resource embedding; the same
+// GOCCIA_UCD container ships as a Pascal typed constant instead
+// (a linear-memory data segment). Byte-identical to the RCDATA
+// payload of Generated.UnicodeData.res.
+{$I Generated.UnicodeData.Blob.inc}
+{$ENDIF}
+
 implementation
 
 {$IFDEF GOCCIA_REGEXP_EMBEDDED_UCD}
+{$IFNDEF LAKON}
 {$R Generated.UnicodeData.res}
+{$ENDIF}
 {$ENDIF}
 
 end.

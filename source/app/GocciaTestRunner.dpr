@@ -50,6 +50,7 @@ uses
   Goccia.Values.Primitives,
 
   Goccia.Threading,
+  Goccia.Threading.Flags,
   Goccia.Threading.Init,
 
   Goccia.TestRunner.SnapshotHost,

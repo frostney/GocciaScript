@@ -46,7 +46,9 @@ type
     constructor Create;
     destructor Destroy; override;
 
+{$IFNDEF LAKON}
     function Parse(const AText: UTF8String): TGocciaArrayValue; overload;
+{$ENDIF}
     function Parse(const AText: string): TGocciaArrayValue; overload;
     function Parse(const ABytes: TBytes): TGocciaArrayValue; overload;
     function ParseChunk(const AText: string; const AStart: Integer = 0;
@@ -198,10 +200,12 @@ begin
   end;
 end;
 
+{$IFNDEF LAKON}
 function TGocciaJSONLParser.Parse(const AText: UTF8String): TGocciaArrayValue;
 begin
   Result := Parse(RetagUTF8Text(RawByteString(AText)));
 end;
+{$ENDIF}
 
 function TGocciaJSONLParser.Parse(const AText: string): TGocciaArrayValue;
 var

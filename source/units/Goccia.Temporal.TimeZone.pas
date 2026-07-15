@@ -33,6 +33,105 @@ procedure ClearTimeZoneCache;
 
 implementation
 
+{$IFDEF LAKON}
+
+{ Lakon's WASM lane has neither the platform tzdata readers (BaseUnix
+  symlinks, the TResourceStream blob, Windows ICU) nor a system
+  timezone to discover, so under LAKON this unit is a FIXED-UTC
+  fallback: 'UTC' is the only known identifier, every offset is zero,
+  and local wall-clock arithmetic IS epoch arithmetic. Named-timezone
+  behavior (and its tests) stays out of the lane by design.
+  FormatOffsetString/ParseOffsetString are pure string logic shared
+  with the full implementation. }
+
+uses
+  SysUtils,
+
+  Goccia.Temporal.Utils;
+
+const
+  UTC_TIMEZONE_ID = 'UTC';
+  MINUTES_PER_HOUR = 60;
+  SECONDS_PER_MINUTE = 60;
+  MILLISECONDS_PER_SECOND = 1000;
+  MILLISECONDS_PER_MINUTE = SECONDS_PER_MINUTE * MILLISECONDS_PER_SECOND;
+  MILLISECONDS_PER_HOUR = MINUTES_PER_HOUR * MILLISECONDS_PER_MINUTE;
+  MILLISECONDS_PER_DAY = 24 * MILLISECONDS_PER_HOUR;
+
+function GetSystemTimeZoneId: string;
+begin
+  Result := UTC_TIMEZONE_ID;
+end;
+
+function IsValidTimeZone(const ATimeZone: string): Boolean;
+begin
+  Result := SameText(ATimeZone, UTC_TIMEZONE_ID);
+end;
+
+function IsSupportedCanonicalTimeZoneIdentifier(const ATimeZone: string): Boolean;
+begin
+  Result := ATimeZone = UTC_TIMEZONE_ID;
+end;
+
+function GetAvailablePrimaryTimeZoneIdentifiers: TTemporalTimeZoneIdentifierArray;
+begin
+  SetLength(Result, 1);
+  Result[0] := UTC_TIMEZONE_ID;
+end;
+
+function TryCanonicalizeTimeZoneIdentifierCase(const ATimeZone: string;
+  out ACanonicalTimeZone: string): Boolean;
+begin
+  Result := SameText(ATimeZone, UTC_TIMEZONE_ID);
+  if Result then
+    ACanonicalTimeZone := UTC_TIMEZONE_ID
+  else
+    ACanonicalTimeZone := '';
+end;
+
+function TimeZoneIdentifiersEqual(const ALeft, ARight: string): Boolean;
+begin
+  Result := SameText(ALeft, ARight);
+end;
+
+function GetUtcOffsetSeconds(const ATimeZone: string; const AEpochSeconds: Int64): Integer;
+begin
+  Result := 0;
+end;
+
+function TryGetTimeZoneTransitionMilliseconds(const ATimeZone: string;
+  const AEpochMilliseconds: Int64; const ASubMillisecondNanoseconds: Integer;
+  const ANext: Boolean; out ATransitionEpochMilliseconds: Int64): Boolean;
+begin
+  ATransitionEpochMilliseconds := 0;
+  Result := False;
+end;
+
+function LocalDateTimeToEpochMilliseconds(const AYear, AMonth, ADay, AHour,
+  AMinute, ASecond, AMillisecond: Integer; const ATimeZone: string): Int64;
+begin
+  Result := DateToEpochDays(AYear, AMonth, ADay) * MILLISECONDS_PER_DAY +
+    AHour * MILLISECONDS_PER_HOUR + AMinute * MILLISECONDS_PER_MINUTE +
+    ASecond * MILLISECONDS_PER_SECOND + AMillisecond;
+end;
+
+function LocalDateTimeToEpochMillisecondsWithDisambiguation(const AYear, AMonth,
+  ADay, AHour, AMinute, ASecond, AMillisecond: Integer; const ATimeZone: string;
+  const ADisambiguation: TTemporalTimeZoneDisambiguation): Int64;
+begin
+  { UTC has no transitions, so disambiguation never applies. }
+  Result := LocalDateTimeToEpochMilliseconds(AYear, AMonth, ADay, AHour,
+    AMinute, ASecond, AMillisecond, ATimeZone);
+end;
+
+function StartOfDayToEpochMilliseconds(const AYear, AMonth, ADay: Integer;
+  const ATimeZone: string): Int64;
+begin
+  Result := DateToEpochDays(AYear, AMonth, ADay) * MILLISECONDS_PER_DAY;
+end;
+
+{$ELSE}
+
 uses
   SysUtils,
   Goccia.Temporal.Utils,
@@ -1853,6 +1952,8 @@ begin
     ADay, 0, 0, 0, 0, ATimeZone, ttzdCompatible);
 end;
 
+{$ENDIF}
+
 function FormatOffsetString(const AOffsetSeconds: Integer): string;
 var
   AbsOffset, Hours, Minutes, Seconds: Integer;
@@ -1977,6 +2078,15 @@ begin
   Result := True;
 end;
 
+{$IFDEF LAKON}
+
+procedure ClearTimeZoneCache;
+begin
+  { The fixed-UTC fallback caches nothing. }
+end;
+
+{$ELSE}
+
 procedure ClearTimeZoneCache;
 begin
   SetLength(CachedTimeZones, 0);
@@ -2009,5 +2119,7 @@ finalization
   {$IFDEF MSWINDOWS}
   DoneCriticalSection(WindowsICUInitLock);
   {$ENDIF}
+
+{$ENDIF}
 
 end.

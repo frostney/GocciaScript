@@ -10,26 +10,18 @@ unit HTTPClient;
 interface
 
 uses
-  SysUtils;
+  SysUtils,
+
+  HTTPTypes;
 
 type
-  THTTPHeader = record
-    Name: string;
-    Value: string;
-  end;
-
-  THTTPHeaders = array of THTTPHeader;
-
-  THTTPResponse = record
-    StatusCode: Integer;
-    StatusText: string;
-    Headers: THTTPHeaders;
-    Body: TBytes;
-    FinalURL: string;
-    Redirected: Boolean;
-  end;
-
-  EHTTPError = class(Exception);
+  // Re-exported wire types — the definitions moved to HTTPTypes so
+  // socket-free layers can import them without this unit's platform
+  // closure; existing consumers keep naming them through here.
+  THTTPHeader = HTTPTypes.THTTPHeader;
+  THTTPHeaders = HTTPTypes.THTTPHeaders;
+  THTTPResponse = HTTPTypes.THTTPResponse;
+  EHTTPError = HTTPTypes.EHTTPError;
 
 function HTTPGet(const AURL: string;
   const AHeaders: THTTPHeaders): THTTPResponse;

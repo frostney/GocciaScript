@@ -36,25 +36,31 @@ type
     function Parse(const AText: string; const ADelimiter: Char = ',';
       const AHeaders: Boolean = True;
       const ASkipEmptyLines: Boolean = False): TGocciaArrayValue; overload;
+{$IFNDEF LAKON}
     function Parse(const AText: UTF8String; const ADelimiter: Char = ',';
       const AHeaders: Boolean = True;
       const ASkipEmptyLines: Boolean = False): TGocciaArrayValue; overload;
+{$ENDIF}
     function ParseChunk(const AText: string; const ADelimiter: Char;
       const AHeaders: Boolean; const ASkipEmptyLines: Boolean;
       const AStart: Integer = 0;
       const AEnd: Integer = -1): TGocciaCSVChunkParseResult; overload;
+{$IFNDEF LAKON}
     function ParseChunk(const AText: UTF8String; const ADelimiter: Char;
       const AHeaders: Boolean; const ASkipEmptyLines: Boolean;
       const AStart: Integer = 0;
       const AEnd: Integer = -1): TGocciaCSVChunkParseResult; overload;
+{$ENDIF}
     function ParseWithFieldInfo(const AText: string;
       const ADelimiter: Char = ','; const AHeaders: Boolean = True;
       const ASkipEmptyLines: Boolean = False):
       TArray<TArray<TGocciaCSVFieldInfo>>; overload;
+{$IFNDEF LAKON}
     function ParseWithFieldInfo(const AText: UTF8String;
       const ADelimiter: Char = ','; const AHeaders: Boolean = True;
       const ASkipEmptyLines: Boolean = False):
       TArray<TArray<TGocciaCSVFieldInfo>>; overload;
+{$ENDIF}
   end;
 
   TGocciaCSVStringifier = class
@@ -295,6 +301,7 @@ begin
   end;
 end;
 
+{$IFNDEF LAKON}
 function TGocciaCSVParser.Parse(const AText: UTF8String;
   const ADelimiter: Char; const AHeaders: Boolean;
   const ASkipEmptyLines: Boolean): TGocciaArrayValue;
@@ -302,6 +309,7 @@ begin
   Result := Parse(RetagUTF8Text(RawByteString(AText)), ADelimiter, AHeaders,
     ASkipEmptyLines);
 end;
+{$ENDIF}
 
 function TGocciaCSVParser.ParseWithFieldInfo(const AText: string;
   const ADelimiter: Char; const AHeaders: Boolean;
@@ -347,6 +355,7 @@ begin
   SetLength(Result, Count);
 end;
 
+{$IFNDEF LAKON}
 function TGocciaCSVParser.ParseWithFieldInfo(const AText: UTF8String;
   const ADelimiter: Char; const AHeaders: Boolean;
   const ASkipEmptyLines: Boolean): TArray<TArray<TGocciaCSVFieldInfo>>;
@@ -354,6 +363,7 @@ begin
   Result := ParseWithFieldInfo(RetagUTF8Text(RawByteString(AText)),
     ADelimiter, AHeaders, ASkipEmptyLines);
 end;
+{$ENDIF}
 
 function TGocciaCSVParser.ParseChunk(const AText: string;
   const ADelimiter: Char; const AHeaders: Boolean;
@@ -454,6 +464,7 @@ begin
   Result.Read := EffectiveEnd;
 end;
 
+{$IFNDEF LAKON}
 function TGocciaCSVParser.ParseChunk(const AText: UTF8String;
   const ADelimiter: Char; const AHeaders: Boolean;
   const ASkipEmptyLines: Boolean; const AStart: Integer;
@@ -462,6 +473,7 @@ begin
   Result := ParseChunk(RetagUTF8Text(RawByteString(AText)), ADelimiter,
     AHeaders, ASkipEmptyLines, AStart, AEnd);
 end;
+{$ENDIF}
 
 class function TGocciaCSVStringifier.EscapeField(const AValue: string;
   const ADelimiter: Char): string;

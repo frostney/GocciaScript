@@ -22,11 +22,28 @@ type
 procedure WriteUTF8File(const APath: string; const AText: UTF8String);
 var
   Stream: TFileStream;
+{$IFDEF LAKON}
+  Buffer: TBytes;
+  Index: Integer;
+{$ENDIF}
 begin
   Stream := TFileStream.Create(APath, fmCreate);
   try
     if Length(AText) > 0 then
+{$IFDEF LAKON}
+    begin
+      // Lakon's UTF8String aliases the one string type (bytes ride
+      // one per code unit), and Pointer(S) is the string BLOCK, not
+      // the payload — copy the low bytes out explicitly (the
+      // Goccia.Modules.Configuration.Test pattern).
+      SetLength(Buffer, Length(AText));
+      for Index := 1 to Length(AText) do
+        Buffer[Index - 1] := Ord(AText[Index]) and $FF;
+      Stream.WriteBuffer(Buffer[0], Length(Buffer));
+    end;
+{$ELSE}
       Stream.WriteBuffer(Pointer(AText)^, Length(AText));
+{$ENDIF}
   finally
     Stream.Free;
   end;

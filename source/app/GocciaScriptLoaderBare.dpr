@@ -10,6 +10,7 @@ uses
   SyncObjs,
   SysUtils,
 
+  CLI.Parser,
   TextSemantics,
 
   Goccia.Arguments.Collection,
@@ -1363,6 +1364,7 @@ end;
 
 procedure ParseOptions(out AOptions: TBareOptions);
 var
+  Arguments: TCommandLineArguments;
   I: Integer;
   Arg: string;
   SourceMetadataPath: string;
@@ -1392,9 +1394,10 @@ begin
   AOptions.ProfileMode := Goccia.CLI.Options.pmAll;
   AOptions.ProfileOutputPath := '';
 
-  for I := 1 to ParamCount do
+  Arguments := GetCommandLineArguments;
+  for I := 0 to High(Arguments) do
   begin
-    Arg := ParamStr(I);
+    Arg := Arguments[I];
     if Arg = '--help' then
     begin
       PrintUsage;

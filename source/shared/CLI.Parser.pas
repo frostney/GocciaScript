@@ -9,17 +9,32 @@ uses
 
   CLI.Options;
 
+type
+  TCommandLineArguments = array of string;
+
 { Parses command-line arguments against the given option definitions.
   Returns a TStringList of positional (non-option) arguments; the caller
   owns the returned list.  Raises TParseError for unknown options. }
 function ParseArguments(const AArgs: array of string;
   const AOptions: TOptionArray): TStringList;
+function GetCommandLineArguments: TCommandLineArguments;
 function ParseCommandLine(const AOptions: TOptionArray): TStringList;
 
 implementation
 
 uses
-  SysUtils;
+  SysUtils
+  {$IFDEF WINDOWS},
+  Windows{$ENDIF};
+
+{$IFDEF WINDOWS}
+type
+  PWideCharPointer = ^PWideChar;
+
+function CommandLineToArgvW(ACommandLine: PWideChar;
+  AArgumentCount: PInteger): PWideCharPointer; stdcall;
+  external 'shell32' name 'CommandLineToArgvW';
+{$ENDIF}
 
 const
   LONG_FLAG_PREFIX = '--';
@@ -133,15 +148,51 @@ begin
   end;
 end;
 
-function ParseCommandLine(const AOptions: TOptionArray): TStringList;
+function GetCommandLineArguments: TCommandLineArguments;
+{$IFDEF WINDOWS}
 var
-  Args: array of string;
+  ArgumentCount, I: Integer;
+  ArgumentList, ArgumentPointer: PWideCharPointer;
+  ArgumentUTF8: RawByteString;
+begin
+  ArgumentList := CommandLineToArgvW(GetCommandLineW, @ArgumentCount);
+  if not Assigned(ArgumentList) then
+    RaiseLastOSError;
+  try
+    if ArgumentCount <= 1 then
+      Exit;
+
+    SetLength(Result, ArgumentCount - 1);
+    ArgumentPointer := ArgumentList;
+    Inc(ArgumentPointer);
+    for I := 0 to High(Result) do
+    begin
+      ArgumentUTF8 := RawByteString(UTF8Encode(
+        UnicodeString(ArgumentPointer^)));
+      SetCodePage(ArgumentUTF8, CP_UTF8, False);
+      Result[I] := string(ArgumentUTF8);
+      Inc(ArgumentPointer);
+    end;
+  finally
+    LocalFree(HLOCAL(ArgumentList));
+  end;
+end;
+{$ELSE}
+var
   I: Integer;
 begin
-  SetLength(Args, ParamCount);
-  for I := 0 to High(Args) do
-    Args[I] := ParamStr(I + 1);
-  Result := ParseArguments(Args, AOptions);
+  SetLength(Result, ParamCount);
+  for I := 0 to High(Result) do
+    Result[I] := ParamStr(I + 1);
+end;
+{$ENDIF}
+
+function ParseCommandLine(const AOptions: TOptionArray): TStringList;
+var
+  Arguments: TCommandLineArguments;
+begin
+  Arguments := GetCommandLineArguments;
+  Result := ParseArguments(Arguments, AOptions);
 end;
 
 end.

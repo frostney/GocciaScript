@@ -116,6 +116,13 @@ begin
     finally
       YAMLParser.Free;
     end;
+    // Root the parsed tree for the module-building window below:
+    // nothing else references it yet, and TGocciaModule.Create (and
+    // the exports-table churn) can trigger a collection that would
+    // otherwise sweep it mid-use — then the manual Free below became
+    // a double destroy.
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AddTempRoot(Documents);
 
     if Documents.Elements.Count = 0 then
       raise TGocciaRuntimeError.Create(
@@ -153,6 +160,8 @@ begin
       end;
     end;
   finally
+    if Assigned(Documents) and Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Documents);
     Documents.Free;
     Content.Free;
   end;
@@ -175,6 +184,10 @@ begin
   finally
     YAMLParser.Free;
   end;
+  // Same rooting rule as TryLoadModule: the tree is unreferenced
+  // until registration completes.
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Documents);
 
   try
     if Documents.Elements.Count <> 1 then
@@ -193,6 +206,8 @@ begin
       TGarbageCollector.Instance.RemoveTempRoot(ParsedDocument);
     end;
   finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Documents);
     Documents.Free;
   end;
 end;

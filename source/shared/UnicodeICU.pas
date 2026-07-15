@@ -16,6 +16,23 @@ function TryICUGetUnicodePropertyRanges(const AProperty, AValue: string;
 
 implementation
 
+{$IFDEF LAKON}
+
+{ Lakon's WASM lane has no dynamic libraries, so the ICU uset fast
+  path can never load there; the embedded UCD tables
+  (Goccia.RegExp.UnicodeData) carry Unicode property classification
+  alone. Keeping the unit (rather than IFDEF-ing the import out of
+  every consumer) preserves TUnicodePropertyRangeArray, the shared
+  range type. }
+function TryICUGetUnicodePropertyRanges(const AProperty, AValue: string;
+  out ARanges: TUnicodePropertyRangeArray): Boolean;
+begin
+  Result := False;
+  SetLength(ARanges, 0);
+end;
+
+{$ELSE}
+
 uses
   ICU;
 
@@ -162,5 +179,7 @@ initialization
 
 finalization
   DoneCriticalSection(InitLock);
+
+{$ENDIF}
 
 end.

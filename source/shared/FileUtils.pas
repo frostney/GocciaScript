@@ -29,6 +29,21 @@ function ReadFileBytes(const APath: string): TBytes;
 
 implementation
 
+{$IFDEF LAKON}
+
+{ Lakon's one string type carries UTF-8 bytes one per char (the
+  byte-ride discipline) and its WASI path lane passes those bytes
+  through raw — a byte-ride path IS already canonical, so the
+  conversion pair collapses to identity. Decoding here would make
+  the existence probes look up a DIFFERENT on-disk name than the
+  writers created. }
+function UTF8PathToUnicodeString(const APath: string): UnicodeString;
+begin
+  Result := APath;
+end;
+
+{$ELSE}
+
 function UTF8PathToUnicodeString(const APath: string): UnicodeString;
 var
   Bytes: RawByteString;
@@ -38,6 +53,18 @@ begin
   Result := UTF8Decode(UTF8String(Bytes));
 end;
 
+{$ENDIF}
+
+{$IFDEF LAKON}
+
+function UnicodeStringToUTF8Path(const APath: UnicodeString): string;
+begin
+  { The identity twin — see UTF8PathToUnicodeString above. }
+  Result := APath;
+end;
+
+{$ELSE}
+
 function UnicodeStringToUTF8Path(const APath: UnicodeString): string;
 var
   Bytes: RawByteString;
@@ -46,6 +73,8 @@ begin
   SetCodePage(Bytes, CP_UTF8, False);
   Result := string(Bytes);
 end;
+
+{$ENDIF}
 
 function ExpandUTF8FileName(const APath: string): string;
 begin
@@ -127,9 +156,54 @@ begin
 end;
 
 function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList;
+var
+  // A named array rather than the bracket-constructor argument:
+  // context-typed constructor arguments refuse OVERLOAD resolution
+  // under Lakon (its documented minimal-overload boundary), and the
+  // explicit form is identical native code.
+  Extensions: array[0..0] of string;
 begin
-  Result := FindAllFiles(ADirectory, [AFileExtension]);
+  Extensions[0] := AFileExtension;
+  Result := FindAllFiles(ADirectory, Extensions);
 end;
+
+{$IFDEF LAKON}
+
+// The Lakon/WASI file lane is real since rung 5 (read-only) and
+// rung 6 (the write lane): the readers mirror the native shapes
+// over a TBytes buffer. Lakon's strings ride bytes one per code
+// unit, so the byte-to-text conversion is a plain widening copy
+// (UTF8String aliases string there); share flags stay ignored on
+// the single-process lane.
+
+function ReadFileBytes(const APath: string): TBytes;
+var
+  Stream: TFileStream;
+begin
+  Stream := TFileStream.Create(APath, fmOpenRead);
+  try
+    SetLength(Result, Stream.Size);
+    if Length(Result) > 0 then
+      Stream.ReadBuffer(Result[0], Length(Result));
+  finally
+    Stream.Free;
+  end;
+end;
+
+function ReadUTF8FileText(const APath: string): UTF8String;
+var
+  Bytes: TBytes;
+  Text: string;
+  Index: Integer;
+begin
+  Bytes := ReadFileBytes(APath);
+  SetLength(Text, Length(Bytes));
+  for Index := 1 to Length(Bytes) do
+    Text[Index] := Chr(Bytes[Index - 1]);
+  Result := Text;
+end;
+
+{$ELSE}
 
 function ReadUTF8FileText(const APath: string): UTF8String;
 var
@@ -162,5 +236,7 @@ begin
     Stream.Free;
   end;
 end;
+
+{$ENDIF}
 
 end.
