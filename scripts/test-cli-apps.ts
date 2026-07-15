@@ -37,25 +37,6 @@ import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
 
-function spawnPascalSync(
-  command: string[],
-  options: Parameters<typeof Bun.spawnSync>[1],
-) {
-  if (process.platform !== "win32") return Bun.spawnSync(command, options);
-
-  // FPC's Windows ParamStr parser preserves a literal quote as "" rather
-  // than with the C-runtime backslash escaping emitted by libuv. Supply the
-  // complete command line verbatim so JSON and JavaScript arguments survive.
-  const quotedCommand = command.map((argument) => {
-    if (!/[\s"']/.test(argument)) return argument;
-    return `"${argument.replaceAll('"', '""')}"`;
-  });
-  return Bun.spawnSync(quotedCommand, {
-    ...options,
-    windowsVerbatimArguments: true,
-  });
-}
-
 const MICROBENCH_MODULE_IMPORT = 'import { bench, group } from "goccia:microbench";';
 
 function microbenchModule(lines: string[]): string {
@@ -4445,7 +4426,7 @@ for (const mode of ["interpreted", "bytecode"] as const) {
     'import { url, resolved } from "host:pkg/main";',
     'url + "|" + resolved() + "|" + bytes[2] + "|" + deferred.value + "|" + special + "|" + typeof moduleSource;',
   ].join("\n");
-  const proc = spawnPascalSync(
+  const proc = Bun.spawnSync(
     [
       LOADER,
       "-",
@@ -4454,11 +4435,11 @@ for (const mode of ["interpreted", "bytecode"] as const) {
       "--print",
       "--experimental-js-module-source",
       "--module",
-      'host:asset={"type":"bytes","content":"AQID"}',
+      "host:asset={type:'bytes',content:'AQID'}",
       "--module",
       'host:pkg/dep=export const value = 7;',
       "--module",
-      'host:pkg/main=export const url = import.meta.url; export const resolved = () => import.meta.resolve("./dep");',
+      'host:pkg/main=export const url = import.meta.url; export const resolved = () => import.meta.resolve(`./dep`);',
       "--module",
       'host:deferred=export const value = 11;',
       "--module",
@@ -4483,7 +4464,7 @@ console.log("Loader: dynamic import and ShadowRealm use configured virtual modul
     'new ShadowRealm().importValue("host:realm", "value").then(value => console.log("realm:" + value));',
     'new ShadowRealm().importValue("host:realm-state", "count").then(value => console.log("child-state:" + value));',
   ].join("\n");
-  const proc = spawnPascalSync(
+  const proc = Bun.spawnSync(
     [
       LOADER,
       "-",
@@ -4508,14 +4489,14 @@ console.log("Loader: dynamic import and ShadowRealm use configured virtual modul
 
 console.log("Loader: hierarchical virtual module addresses preserve canonical URLs...");
 {
-  const proc = spawnPascalSync(
+  const proc = Bun.spawnSync(
     [
       LOADER,
       "-",
       "--source-type=module",
       "--print",
       "--module",
-      'https://example.test/pkg/main?redirect/a/../b=export default import.meta.url + "|" + import.meta.resolve("./dep");',
+      'https://example.test/pkg/main?redirect/a/../b=export default import.meta.url + `|` + import.meta.resolve(`./dep`);',
     ],
     {
       stdin: new TextEncoder().encode(
@@ -4538,7 +4519,7 @@ console.log("Loader: virtual import.meta.resolve uses aliases for bare specifier
   try {
     const dependency = join(tmp, "dependency.mjs");
     writeFileSync(dependency, "export default 1;\n");
-    const proc = spawnPascalSync(
+    const proc = Bun.spawnSync(
       [
         LOADER,
         "-",
@@ -4547,7 +4528,7 @@ console.log("Loader: virtual import.meta.resolve uses aliases for bare specifier
         "--alias",
         `dependency=${dependency}`,
         "--module",
-        'host:resolver=export default import.meta.resolve("dependency");',
+        'host:resolver=export default import.meta.resolve(`dependency`);',
       ],
       {
         stdin: new TextEncoder().encode(
@@ -4568,7 +4549,7 @@ console.log("Loader: virtual import.meta.resolve uses aliases for bare specifier
 
 console.log("Loader: attributed virtual modules reinterpret their stored content...");
 {
-  const proc = spawnPascalSync(
+  const proc = Bun.spawnSync(
     [
       LOADER,
       "-",
@@ -4593,22 +4574,22 @@ console.log("Loader: attributed virtual modules reinterpret their stored content
 
 console.log("Loader: virtual definitions validate eagerly but JavaScript parses lazily...");
 {
-  const unused = spawnPascalSync(
+  const unused = Bun.spawnSync(
     [LOADER, "-", "--module", "host:unused=!!! not valid JavaScript !!!"],
     { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
   );
   if (unused.exitCode !== 0)
     throw new Error(`Unused invalid virtual source should not fail startup: ${unused.stderr.toString()}`);
 
-  const invalidBytes = spawnPascalSync(
-    [LOADER, "-", "--module", 'host:bad={"type":"bytes","content":"%%%"}'],
+  const invalidBytes = Bun.spawnSync(
+    [LOADER, "-", "--module", "host:bad={type:'bytes',content:'%%%'}"],
     { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
   );
   const invalidBytesOutput = invalidBytes.stdout.toString() + invalidBytes.stderr.toString();
   if (invalidBytes.exitCode === 0 || !invalidBytesOutput.includes("invalid base64"))
     throw new Error(`Invalid virtual bytes should fail configuration: ${invalidBytesOutput}`);
 
-  const runtimeCollision = spawnPascalSync(
+  const runtimeCollision = Bun.spawnSync(
     [LOADER, "-", "--module", "goccia:csv=export default 1;"],
     { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
   );
@@ -4628,7 +4609,7 @@ console.log("SandboxRunner: virtual modules share the CLI surface and cannot sha
         text: 'import value from "host:configured"; console.log(value);',
       }],
     }));
-    const configured = spawnPascalSync(
+    const configured = Bun.spawnSync(
       [
         SANDBOXRUNNER,
         "/main.js",
@@ -4654,7 +4635,7 @@ console.log("SandboxRunner: virtual modules share the CLI surface and cannot sha
     writeFileSync(isolationSeed, JSON.stringify({
       files: [{ path: sandboxEntry, text: 'console.log("isolated");' }],
     }));
-    const isolated = spawnPascalSync(
+    const isolated = Bun.spawnSync(
       [
         SANDBOXRUNNER,
         sandboxEntry,
@@ -4677,7 +4658,7 @@ console.log("SandboxRunner: virtual modules share the CLI surface and cannot sha
       'import modules from "./module-map.mjs"; export default modules;\n',
     );
     for (const mode of ["interpreted", "bytecode"] as const) {
-      const configuredFromManifest = spawnPascalSync(
+      const configuredFromManifest = Bun.spawnSync(
         [
           SANDBOXRUNNER,
           "/main.js",
@@ -4694,7 +4675,7 @@ console.log("SandboxRunner: virtual modules share the CLI surface and cannot sha
         throw new Error(`Sandbox executable module manifest ${mode} failed: ${configuredFromManifest.stdout.toString()}${configuredFromManifest.stderr.toString()}`);
     }
 
-    const hostCollision = spawnPascalSync(
+    const hostCollision = Bun.spawnSync(
       [
         SANDBOXRUNNER,
         "/main.js",

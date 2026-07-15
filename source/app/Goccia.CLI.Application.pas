@@ -969,7 +969,10 @@ procedure InjectInlineModuleDefinition(const AEngine: TGocciaEngine;
   const ADefinition, ABaseAddress: string);
 var
   Address, Content: string;
+  JSON5Parser: TGocciaJSON5Parser;
+  ParsedValue: TGocciaValue;
   Separator: SizeInt;
+  Stringifier: TGocciaJSONStringifier;
 begin
   Separator := Pos('=', ADefinition);
   if Separator <= 1 then
@@ -979,8 +982,30 @@ begin
   Address := Copy(ADefinition, 1, Separator - 1);
   Content := Copy(ADefinition, Separator + 1, MaxInt);
   if (Content <> '') and (Content[1] = '{') then
-    AEngine.InjectModulesFromJSON('{"' + EscapeJSONString(Address) + '":' +
-      Content + '}', ABaseAddress)
+  begin
+    ParsedValue := nil;
+    JSON5Parser := TGocciaJSON5Parser.Create;
+    try
+      ParsedValue := JSON5Parser.Parse('{"' + EscapeJSONString(Address) +
+        '":' + Content + '}');
+    finally
+      JSON5Parser.Free;
+    end;
+    if Assigned(TGarbageCollector.Instance) and Assigned(ParsedValue) then
+      TGarbageCollector.Instance.AddTempRoot(ParsedValue);
+    try
+      Stringifier := TGocciaJSONStringifier.Create;
+      try
+        AEngine.InjectModulesFromJSON(Stringifier.Stringify(ParsedValue),
+          ABaseAddress);
+      finally
+        Stringifier.Free;
+      end;
+    finally
+      if Assigned(TGarbageCollector.Instance) and Assigned(ParsedValue) then
+        TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+    end;
+  end
   else
     AEngine.InjectModule(Address, Content, 'javascript', ABaseAddress);
 end;

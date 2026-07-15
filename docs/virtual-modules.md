@@ -48,6 +48,14 @@ Use `--module` for an inline definition:
   --module='host:data={"type":"json","content":{"answer":42}}'
 ```
 
+Inline descriptors accept JSON5 syntax. On Windows, where FPC 3.2.2 removes
+double quotes while parsing the process command line, use single-quoted JSON5
+strings inside the argument:
+
+```powershell
+.\build\GocciaScriptLoader.exe app.mjs --module="host:data={type:'json',content:{answer:42}}"
+```
+
 Use repeatable `--modules` options for bulk manifests:
 
 ```bash
