@@ -27,6 +27,8 @@ type
       out AModule: TGocciaModule): Boolean; override;
     function TryInjectGlobals(const AFormat: string;
       const AContent: UTF8String): Boolean; override;
+    function TryInjectModules(const AFormat: string;
+      const AContent: UTF8String; const ABaseAddress: string): Boolean; override;
   end;
 
 implementation
@@ -37,6 +39,7 @@ uses
   Goccia.Error,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.JSON,
   Goccia.Keywords.Reserved,
   Goccia.Modules.ContentProvider,
   Goccia.Scope,
@@ -157,6 +160,37 @@ begin
   TGarbageCollector.Instance.AddTempRoot(ParsedValue);
   try
     Runtime.RegisterGlobalsFromObject(TGocciaObjectValue(ParsedValue), 'TOML');
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+  end;
+end;
+
+function TGocciaTOMLRuntimeExtension.TryInjectModules(
+  const AFormat: string; const AContent: UTF8String;
+  const ABaseAddress: string): Boolean;
+var
+  ParsedValue: TGocciaValue;
+  Parser: TGocciaTOMLParser;
+  Stringifier: TGocciaJSONStringifier;
+begin
+  Result := SameText(AFormat, 'toml');
+  if not Result then
+    Exit;
+  Parser := TGocciaTOMLParser.Create;
+  try
+    ParsedValue := Parser.Parse(AContent);
+  finally
+    Parser.Free;
+  end;
+  TGarbageCollector.Instance.AddTempRoot(ParsedValue);
+  try
+    Stringifier := TGocciaJSONStringifier.Create;
+    try
+      Runtime.Engine.InjectModulesFromJSON(
+        Stringifier.Stringify(ParsedValue), ABaseAddress);
+    finally
+      Stringifier.Free;
+    end;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
   end;

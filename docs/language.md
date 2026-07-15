@@ -187,6 +187,9 @@ const fn = async () => {
 
 ES module syntax with default, named, and namespace imports/exports. Project code convention prefers named exports for internal modules, but default imports and exports are language-supported. Supported source file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`; `.mjs` entry files default to module source. Structured-data imports are also supported for `.json`, `.json5`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv`, and text-asset imports are supported for `.txt` and `.md`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries source, structured-data, and text-asset extensions in order. Directory imports resolve to `index` files. The CLI tools support WHATWG-style import maps through `--import-map=<file.json>`, `--alias key=value`, and implicit `goccia.json` discovery.
 
+Hosts can supply ordinary ES modules through virtual-module configuration. See
+[Virtual Module Configuration](virtual-modules.md) for the complete reference.
+
 ```javascript
 // Named imports (with or without extension)
 import { add, multiply } from "./math.js";
@@ -271,8 +274,8 @@ Side-effect imports (`import "module";`) are supported and evaluate the dependen
 
 `import.meta` (ES2026 §13.3.12) is supported and provides per-module metadata. The `import.meta` object has a null prototype and is identity-stable — the same object is returned on every access within the same module. Two host-defined properties are available:
 
-- **`import.meta.url`** — a `file://` URL string for the current module's absolute path (e.g., `file:///Users/me/project/src/main.js`).
-- **`import.meta.resolve(specifier)`** — a synchronous function that resolves a module specifier relative to the current module's directory and returns the resolved `file://` URL string. Throws `TypeError` if called without arguments.
+- **`import.meta.url`** — the current module's canonical address. Filesystem modules use a `file://` URL for the absolute path (e.g., `file:///Users/me/project/src/main.js`); virtual modules preserve configured addresses such as `host:config`.
+- **`import.meta.resolve(specifier)`** — a synchronous function that resolves a module specifier relative to the current module through the ordinary module loader. Filesystem targets return `file://` URLs, while virtual targets preserve their canonical configured addresses. Throws `TypeError` if called without arguments.
 
 ```javascript
 // Access the current module's URL

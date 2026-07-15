@@ -340,7 +340,7 @@ expect.addSnapshotSerializer({
 Native embedders can replace snapshot text formatting through
 `IGocciaSnapshotFormatter` and persistence/source editing through
 `IGocciaSnapshotHost`. See
-[ADR 0094](adr/0094-host-injected-snapshot-testing.md) for the boundary.
+[ADR 0095](adr/0095-host-injected-snapshot-testing.md) for the boundary.
 
 **Official YAML Suite**
 

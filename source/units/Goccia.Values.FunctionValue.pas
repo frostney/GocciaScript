@@ -572,6 +572,7 @@ begin
   AContext.OnError := FClosure.OnError;
   AContext.LoadModule := FClosure.LoadModule;
   AContext.LoadModuleSource := FClosure.LoadModuleSource;
+  AContext.ResolveModuleURL := FClosure.ResolveModuleURL;
   AContext.CurrentFilePath := FSourceFilePath;
   AContext.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;

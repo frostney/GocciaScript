@@ -36,6 +36,7 @@ type
     FOwnedOptions: TOptionBaseList;
     FAllOptions: TOptionArray;
     FSourceRegistry: TGocciaSourceRegistry;
+    FRootConfigPath: string;
     procedure BuildAllOptions;
     procedure InitializeSingletons;
     procedure ShutdownSingletons;
@@ -66,6 +67,9 @@ type
       config is found.  Thread-safe: does not mutate shared state. }
     function DiscoverFileConfig(
       const AFileName: string): TConfigEntryArray;
+    function DiscoverFileConfigPath(const AFileName: string): string;
+    procedure ApplyVirtualModulesToEngine(const AEngine: TGocciaEngine;
+      const AFileConfigPath: string);
     function AnyFileConfigEnablesFlag(const AFiles: TStrings;
       const AFlag: TFlagOption): Boolean;
     function CreateEngine(const AFileName: string;
@@ -130,8 +134,13 @@ uses
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.JSON,
+  Goccia.JSON.Utils,
   Goccia.JSON5,
+  Goccia.Keywords.Reserved,
+  Goccia.Modules,
   Goccia.Modules.Configuration,
+  Goccia.Modules.ContentProvider,
+  Goccia.Modules.Loader,
   Goccia.Profiler,
   Goccia.ScriptLoader.Input,
   Goccia.StackLimit,
@@ -141,11 +150,18 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.Formatting,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.Values.Primitives,
+  Goccia.YAML;
 
 const
   CONFIG_BASE_NAME = 'goccia';
   CONFIG_EXTENSIONS: array[0..2] of string = (EXT_TOML, EXT_JSON5, EXT_JSON);
+
+function IsAbsoluteFilePath(const APath: string): Boolean;
+begin
+  Result := (APath <> '') and ((APath[1] = PathDelim) or
+    ((Length(APath) >= 2) and (APath[2] = ':')));
+end;
 
 { ── Config file bridge parsers ─────────────────────────────── }
 
@@ -342,6 +358,7 @@ begin
   FLog := nil;
   FMultifile := nil;
   FConfig := nil;
+  FRootConfigPath := '';
   // Created eagerly on the main thread so worker threads that read
   // through SourceRegistry.Load never race on first-access creation.
   FSourceRegistry := TGocciaSourceRegistry.Create;
@@ -456,19 +473,28 @@ end;
 function TGocciaCLIApplication.DiscoverFileConfig(
   const AFileName: string): TConfigEntryArray;
 var
-  StartDir, ConfigPath: string;
+  ConfigPath: string;
 begin
   SetLength(Result, 0);
+  ConfigPath := DiscoverFileConfigPath(AFileName);
+  if ConfigPath <> '' then
+    Result := ParseConfigFile(ConfigPath);
+end;
+
+function TGocciaCLIApplication.DiscoverFileConfigPath(
+  const AFileName: string): string;
+var
+  StartDir: string;
+begin
+  Result := '';
   if AFileName = '' then
     Exit;
   EnsureConfigParsersRegistered;
   StartDir := ExtractFilePath(ExpandFileName(AFileName));
   if StartDir = '' then
     StartDir := GetCurrentDir;
-  ConfigPath := DiscoverConfigFile(StartDir,
+  Result := DiscoverConfigFile(StartDir,
     [CONFIG_BASE_NAME], CONFIG_EXTENSIONS);
-  if ConfigPath <> '' then
-    Result := ParseConfigFile(ConfigPath);
 end;
 
 function TGocciaCLIApplication.AnyFileConfigEnablesFlag(
@@ -662,6 +688,356 @@ procedure TGocciaCLIApplication.ConfigureCreatedEngine(
 begin
 end;
 
+procedure InjectModulesFromFileSystemModule(const AEngine: TGocciaEngine;
+  const APath: string);
+var
+  DefaultValue: TGocciaValue;
+  ManifestJSON: string;
+  ManifestLoader: TGocciaModuleLoader;
+  ManifestModule: TGocciaModule;
+  Stringifier: TGocciaJSONStringifier;
+begin
+  ManifestLoader := TGocciaModuleLoader.Create(APath);
+  try
+    ManifestLoader.SetContentProvider(
+      TGocciaFileSystemModuleContentProvider.Create, True);
+    ManifestLoader.Preprocessors := AEngine.ModuleLoader.Preprocessors;
+    ManifestLoader.Compatibility := AEngine.ModuleLoader.Compatibility;
+    ManifestLoader.LabelStatementsEnabled :=
+      AEngine.ModuleLoader.LabelStatementsEnabled;
+    ManifestLoader.ForInLoopsEnabled := AEngine.ModuleLoader.ForInLoopsEnabled;
+    ManifestLoader.ExperimentalJSModuleSourceEnabled :=
+      AEngine.ModuleLoader.ExperimentalJSModuleSourceEnabled;
+    ManifestLoader.WarningUnsupportedFeatures :=
+      AEngine.ModuleLoader.WarningUnsupportedFeatures;
+    ManifestLoader.StrictTypesEnabled :=
+      AEngine.ModuleLoader.StrictTypesEnabled;
+    ManifestLoader.EvaluateModuleBody :=
+      AEngine.ModuleLoader.EvaluateModuleBody;
+    ManifestLoader.BindRuntime(AEngine.Interpreter.GlobalScope,
+      AEngine.ThrowError);
+
+    ManifestModule := ManifestLoader.LoadModule(APath, APath);
+    if not ManifestModule.TryGetExportValue(KEYWORD_DEFAULT, DefaultValue) then
+      raise EArgumentException.Create(
+        'Virtual modules manifest module must have a default export.');
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AddTempRoot(DefaultValue);
+    try
+      Stringifier := TGocciaJSONStringifier.Create;
+      try
+        ManifestJSON := Stringifier.Stringify(DefaultValue);
+      finally
+        Stringifier.Free;
+      end;
+      AEngine.InjectModulesFromJSON(ManifestJSON, ManifestModule.Path);
+    finally
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.RemoveTempRoot(DefaultValue);
+    end;
+  finally
+    ManifestLoader.Free;
+  end;
+end;
+
+procedure InjectModulesFromManifestFile(const AEngine: TGocciaEngine;
+  const APath: string);
+var
+  Content, Extension: string;
+  JSON5Parser: TGocciaJSON5Parser;
+  ParsedValue: TGocciaValue;
+  Stringifier: TGocciaJSONStringifier;
+  TOMLParser: TGocciaTOMLParser;
+  YAMLParser: TGocciaYAMLParser;
+begin
+  Extension := LowerCase(ExtractFileExt(APath));
+  if (Extension = '.js') or (Extension = '.mjs') or
+     (Extension = '.ts') then
+  begin
+    if AEngine.ContentProvider is
+       TGocciaUnavailableModuleContentProvider then
+    begin
+      AEngine.ModuleLoader.SetContentProvider(
+        TGocciaFileSystemModuleContentProvider.Create, True);
+      AEngine.InjectModulesFromModule(APath);
+    end
+    else if AEngine.ContentProvider is
+       TGocciaFileSystemModuleContentProvider then
+      AEngine.InjectModulesFromModule(APath)
+    else
+      InjectModulesFromFileSystemModule(AEngine, APath);
+    Exit;
+  end;
+
+  Content := ReadUTF8FileText(APath);
+  if Extension = EXT_JSON then
+  begin
+    AEngine.InjectModulesFromJSON(Content, APath);
+    Exit;
+  end;
+
+  ParsedValue := nil;
+  if Extension = EXT_JSON5 then
+  begin
+    JSON5Parser := TGocciaJSON5Parser.Create;
+    try
+      ParsedValue := JSON5Parser.Parse(Content);
+    finally
+      JSON5Parser.Free;
+    end;
+  end
+  else if Extension = EXT_TOML then
+  begin
+    TOMLParser := TGocciaTOMLParser.Create;
+    try
+      ParsedValue := TOMLParser.Parse(Content);
+    finally
+      TOMLParser.Free;
+    end;
+  end
+  else if (Extension = '.yaml') or (Extension = '.yml') then
+  begin
+    YAMLParser := TGocciaYAMLParser.Create;
+    try
+      ParsedValue := YAMLParser.Parse(UTF8String(Content));
+    finally
+      YAMLParser.Free;
+    end;
+  end
+  else
+    raise Exception.CreateFmt(
+      'Unsupported virtual modules manifest format: %s', [APath]);
+
+  if Assigned(TGarbageCollector.Instance) and Assigned(ParsedValue) then
+    TGarbageCollector.Instance.AddTempRoot(ParsedValue);
+  try
+    Stringifier := TGocciaJSONStringifier.Create;
+    try
+      AEngine.InjectModulesFromJSON(Stringifier.Stringify(ParsedValue), APath);
+    finally
+      Stringifier.Free;
+    end;
+  finally
+    if Assigned(TGarbageCollector.Instance) and Assigned(ParsedValue) then
+      TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+  end;
+end;
+
+procedure InjectInlineModuleDefinition(const AEngine: TGocciaEngine;
+  const ADefinition, ABaseAddress: string); forward;
+
+procedure InjectModulesFromConfigFile(const AEngine: TGocciaEngine;
+  const APath: string; const ADepth: Integer = 0);
+var
+  Content, Extension, ExtendsPath, ItemPath: string;
+  I: Integer;
+  ArrayValue: TGocciaArrayValue;
+  ModulesValue, ParsedValue: TGocciaValue;
+  ObjectValue: TGocciaObjectValue;
+  JSONParser: TGocciaJSONParser;
+  JSON5Parser: TGocciaJSON5Parser;
+  TOMLParser: TGocciaTOMLParser;
+  Stringifier: TGocciaJSONStringifier;
+begin
+  if (APath = '') or not FileExists(APath) then
+    Exit;
+  if ADepth > 32 then
+    raise Exception.Create(
+      'Circular or too-deeply-nested extends in virtual module config: ' +
+      APath);
+  Content := ReadUTF8FileText(APath);
+  Extension := LowerCase(ExtractFileExt(APath));
+  ParsedValue := nil;
+  if Extension = EXT_JSON then
+  begin
+    JSONParser := TGocciaJSONParser.Create;
+    try
+      ParsedValue := JSONParser.Parse(Content);
+    finally
+      JSONParser.Free;
+    end;
+  end
+  else if Extension = EXT_JSON5 then
+  begin
+    JSON5Parser := TGocciaJSON5Parser.Create;
+    try
+      ParsedValue := JSON5Parser.Parse(Content);
+    finally
+      JSON5Parser.Free;
+    end;
+  end
+  else if Extension = EXT_TOML then
+  begin
+    TOMLParser := TGocciaTOMLParser.Create;
+    try
+      ParsedValue := TOMLParser.Parse(Content);
+    finally
+      TOMLParser.Free;
+    end;
+  end;
+
+  if not (ParsedValue is TGocciaObjectValue) then
+    Exit;
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(ParsedValue);
+  try
+    ObjectValue := TGocciaObjectValue(ParsedValue);
+    if ObjectValue.HasOwnProperty('extends') and
+       (ObjectValue.GetProperty('extends') is TGocciaStringLiteralValue) then
+    begin
+      ExtendsPath := TGocciaStringLiteralValue(
+        ObjectValue.GetProperty('extends')).Value;
+      if not IsAbsoluteFilePath(ExtendsPath) then
+        ExtendsPath := ExpandFileName(
+          IncludeTrailingPathDelimiter(ExtractFilePath(APath)) + ExtendsPath);
+      InjectModulesFromConfigFile(AEngine, ExtendsPath, ADepth + 1);
+    end;
+
+    if ObjectValue.HasOwnProperty('modules') then
+    begin
+      ModulesValue := ObjectValue.GetProperty('modules');
+      if ModulesValue is TGocciaStringLiteralValue then
+      begin
+        ItemPath := TGocciaStringLiteralValue(ModulesValue).Value;
+        if not IsAbsoluteFilePath(ItemPath) then
+          ItemPath := ExpandFileName(
+            IncludeTrailingPathDelimiter(ExtractFilePath(APath)) + ItemPath);
+        InjectModulesFromManifestFile(AEngine, ItemPath);
+      end
+      else if ModulesValue is TGocciaArrayValue then
+      begin
+        ArrayValue := TGocciaArrayValue(ModulesValue);
+        for I := 0 to ArrayValue.GetLength - 1 do
+        begin
+          ModulesValue := ArrayValue.GetElement(I);
+          if not (ModulesValue is TGocciaStringLiteralValue) then
+            raise EArgumentException.Create(
+              'Config modules manifest paths must be strings.');
+          ItemPath := TGocciaStringLiteralValue(ModulesValue).Value;
+          if not IsAbsoluteFilePath(ItemPath) then
+            ItemPath := ExpandFileName(
+              IncludeTrailingPathDelimiter(ExtractFilePath(APath)) +
+              ItemPath);
+          InjectModulesFromManifestFile(AEngine, ItemPath);
+        end;
+      end
+      else if ModulesValue is TGocciaObjectValue then
+      begin
+        Stringifier := TGocciaJSONStringifier.Create;
+        try
+          AEngine.InjectModulesFromJSON(Stringifier.Stringify(ModulesValue),
+            APath);
+        finally
+          Stringifier.Free;
+        end;
+      end
+      else
+        raise EArgumentException.Create(
+          'Config modules must be a descriptor object, path, or path array.');
+    end;
+
+    if ObjectValue.HasOwnProperty('module') then
+    begin
+      ModulesValue := ObjectValue.GetProperty('module');
+      if ModulesValue is TGocciaStringLiteralValue then
+        InjectInlineModuleDefinition(AEngine,
+          TGocciaStringLiteralValue(ModulesValue).Value, APath)
+      else if ModulesValue is TGocciaArrayValue then
+      begin
+        ArrayValue := TGocciaArrayValue(ModulesValue);
+        for I := 0 to ArrayValue.GetLength - 1 do
+        begin
+          ModulesValue := ArrayValue.GetElement(I);
+          if not (ModulesValue is TGocciaStringLiteralValue) then
+            raise EArgumentException.Create(
+              'Config module definitions must be strings.');
+          InjectInlineModuleDefinition(AEngine,
+            TGocciaStringLiteralValue(ModulesValue).Value, APath);
+        end;
+      end
+      else
+        raise EArgumentException.Create(
+          'Config module must be a definition string or string array.');
+    end;
+  finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+  end;
+end;
+
+procedure InjectInlineModuleDefinition(const AEngine: TGocciaEngine;
+  const ADefinition, ABaseAddress: string);
+var
+  Address, Content: string;
+  Separator: SizeInt;
+begin
+  Separator := Pos('=', ADefinition);
+  if Separator <= 1 then
+    raise Exception.CreateFmt(
+      'Invalid --module value "%s"; expected name=source or name={descriptor}.',
+      [ADefinition]);
+  Address := Copy(ADefinition, 1, Separator - 1);
+  Content := Copy(ADefinition, Separator + 1, MaxInt);
+  if (Content <> '') and (Content[1] = '{') then
+    AEngine.InjectModulesFromJSON('{"' + EscapeJSONString(Address) + '":' +
+      Content + '}', ABaseAddress)
+  else
+    AEngine.InjectModule(Address, Content, 'javascript', ABaseAddress);
+end;
+
+procedure ApplyConfiguredVirtualModules(const AEngine: TGocciaEngine;
+  const AEngineOptions: TGocciaEngineOptions; const ARootConfigPath,
+  AFileConfigPath: string);
+var
+  ManifestPath: string;
+
+  procedure ApplyManifests;
+  var
+    ManifestIndex: Integer;
+  begin
+    for ManifestIndex := 0 to
+      AEngineOptions.ModuleManifests.Values.Count - 1 do
+    begin
+      ManifestPath :=
+        AEngineOptions.ModuleManifests.Values[ManifestIndex];
+      if not IsAbsoluteFilePath(ManifestPath) then
+        ManifestPath := ExpandFileName(ManifestPath);
+      InjectModulesFromManifestFile(AEngine, ManifestPath);
+    end;
+  end;
+
+  procedure ApplyDefinitions;
+  var
+    DefinitionIndex: Integer;
+  begin
+    for DefinitionIndex := 0 to
+      AEngineOptions.ModuleDefinitions.Values.Count - 1 do
+      InjectInlineModuleDefinition(AEngine,
+        AEngineOptions.ModuleDefinitions.Values[DefinitionIndex],
+        GetCurrentDir);
+  end;
+begin
+  InjectModulesFromConfigFile(AEngine, ARootConfigPath);
+
+  if (AFileConfigPath <> '') and
+     (ExpandFileName(AFileConfigPath) <> ExpandFileName(ARootConfigPath)) then
+    InjectModulesFromConfigFile(AEngine, AFileConfigPath);
+
+  if not Assigned(AEngineOptions) then
+    Exit;
+  if AEngineOptions.ModuleManifests.FromCommandLine then
+    ApplyManifests;
+  if AEngineOptions.ModuleDefinitions.FromCommandLine then
+    ApplyDefinitions;
+end;
+
+procedure TGocciaCLIApplication.ApplyVirtualModulesToEngine(
+  const AEngine: TGocciaEngine; const AFileConfigPath: string);
+begin
+  ApplyConfiguredVirtualModules(AEngine, FEngineOptions, FRootConfigPath,
+    AFileConfigPath);
+end;
+
 function TGocciaCLIApplication.ShouldApplyRootConfig(
   const APaths: TStringList; const AConfigPath: string;
   const AExplicitConfig: Boolean): Boolean;
@@ -673,10 +1049,15 @@ function TGocciaCLIApplication.CreateEngine(const AFileName: string;
   const ASource: TStringList; const AExecutor: TGocciaExecutor): TGocciaEngine;
 var
   FileConfig: TConfigEntryArray;
+  FileConfigPath: string;
 begin
   Result := TGocciaEngine.Create(AFileName, ASource, AExecutor);
   try
-    FileConfig := DiscoverFileConfig(AFileName);
+    FileConfigPath := DiscoverFileConfigPath(AFileName);
+    if FileConfigPath <> '' then
+      FileConfig := ParseConfigFile(FileConfigPath)
+    else
+      SetLength(FileConfig, 0);
     if Assigned(FEngineOptions) then
     begin
       ConfigureModuleResolver(Result.Resolver, AFileName,
@@ -687,6 +1068,7 @@ begin
     ConfigureCreatedEngine(Result, FileConfig);
     if Assigned(FEngineOptions) then
       ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig, AFileName);
+    ApplyVirtualModulesToEngine(Result, FileConfigPath);
     if AExecutor is TGocciaBytecodeExecutor then
       TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel :=
         Result.SourceType = Goccia.Engine.stScript;
@@ -1093,7 +1475,12 @@ begin
     end;
     if (ConfigPath <> '') and
        ShouldApplyRootConfig(Paths, ConfigPath, FConfig.Present) then
+    begin
+      FRootConfigPath := ConfigPath;
       ApplyConfigFile(ConfigPath, FAllOptions);
+    end
+    else
+      FRootConfigPath := '';
 
     Validate;
 

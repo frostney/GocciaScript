@@ -153,6 +153,7 @@ type
     FLoadModule: TLoadModuleCallback;
     FLoadModuleSource: TLoadModuleSourceCallback;
     FLoadDeferredModule: TLoadDeferredModuleCallback;
+    FResolveModuleURL: TResolveModuleURLCallback;
     FCurrentClosure: TGocciaBytecodeClosure;
     FHandlerStack: TGocciaBytecodeHandlerStack;
     FFrameDepth: Integer;
@@ -462,6 +463,8 @@ type
       read FLoadModuleSource write FLoadModuleSource;
     property LoadDeferredModule: TLoadDeferredModuleCallback
       read FLoadDeferredModule write FLoadDeferredModule;
+    property ResolveModuleURL: TResolveModuleURLCallback
+      read FResolveModuleURL write FResolveModuleURL;
     property CurrentRuntimeModule: TGocciaModule
       read FCurrentRuntimeModule write FCurrentRuntimeModule;
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
@@ -9215,6 +9218,7 @@ begin
       EvalContext.OnError := ThrowError;
       EvalContext.LoadModule := FLoadModule;
       EvalContext.LoadModuleSource := FLoadModuleSource;
+      EvalContext.ResolveModuleURL := FResolveModuleURL;
       EvalContext.CurrentFilePath := FCurrentModuleSourcePath;
       EvalContext.CoverageEnabled := FCoverageEnabled;
       EvalContext.StrictTypes := False;
@@ -12846,6 +12850,7 @@ begin
           EvalContext.OnError := ThrowError;
           EvalContext.LoadModule := FLoadModule;
           EvalContext.LoadModuleSource := FLoadModuleSource;
+          EvalContext.ResolveModuleURL := FResolveModuleURL;
           EvalContext.CurrentFilePath := SourceName;
           EvalContext.CoverageEnabled := FCoverageEnabled;
           EvalContext.StrictTypes := False;
@@ -16577,9 +16582,11 @@ begin
       // ES2026 §13.3.12.1 — import.meta binds lexically to the defining module
       OP_IMPORT_META:
         if Assigned(Template.DebugInfo) and (Template.DebugInfo.SourceFile <> '') then
-          SetRegister(A, GetOrCreateImportMeta(Template.DebugInfo.SourceFile))
+          SetRegister(A, GetOrCreateImportMeta(Template.DebugInfo.SourceFile,
+            FResolveModuleURL))
         else
-          SetRegister(A, GetOrCreateImportMeta(FCurrentModuleSourcePath));
+          SetRegister(A, GetOrCreateImportMeta(FCurrentModuleSourcePath,
+            FResolveModuleURL));
 
       // ES2026 §13.3.12.1 — new.target reads the current frame's newTarget
       OP_NEW_TARGET:
