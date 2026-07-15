@@ -1,0 +1,78 @@
+name: timezone data monthly bump
+
+# Resolves the latest IANA tzdata release, regenerates the embedded timezone
+# resource from its immutable release URL, and opens a PR when data changes.
+#
+# Cadence: monthly (first day, 08:30 UTC). Manual trigger available via
+# workflow_dispatch.
+
+on:
+  schedule:
+    - cron: '30 8 1 * *'
+  workflow_dispatch:
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Install generator dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install fpc tzdata -qq > /dev/null
+
+      - id: latest
+        name: Resolve latest IANA release
+        run: |
+          version=$(curl --fail --silent --show-error \
+            https://data.iana.org/time-zones/tzdb/version)
+          if ! [[ "$version" =~ ^[0-9]{4}[a-z]$ ]]; then
+            echo "::error::Invalid IANA tzdata version: $version"
+            exit 1
+          fi
+
+          url="https://data.iana.org/time-zones/releases/tzdata${version}.tar.gz"
+          curl --fail --silent --show-error --head "$url" > /dev/null
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Regenerate timezone data
+        env:
+          TZDATA_URL: ${{ steps.latest.outputs.url }}
+        run: node scripts/generate-timezone-data.js "$TZDATA_URL"
+
+      - id: changed
+        run: |
+          if git diff --quiet -- \
+            source/generated/Generated.TimeZoneData.pas \
+            source/generated/Generated.TimeZoneData.res; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Timezone data is already at ${{ steps.latest.outputs.version }}; no PR to open."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update PR
+        if: steps.changed.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          branch: chore/timezone-data-bump
+          commit-message: "chore(timezone): bump data to ${{ steps.latest.outputs.version }}"
+          title: "chore(timezone): bump data to ${{ steps.latest.outputs.version }}"
+          body: |
+            Automated regeneration of the embedded timezone resource from the
+            official IANA tzdata `${{ steps.latest.outputs.version }}` release.
+
+            CI will rebuild the resource consumers and run the Temporal coverage.
+            Review upstream rule changes before merging.
+
+            Cron: monthly, first day at 08:30 UTC. See `.github/workflows/timezone-data-bump.yml`.
+          labels: automated

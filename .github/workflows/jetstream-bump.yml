@@ -1,0 +1,68 @@
+name: JetStream weekly bump
+
+# Pulls the latest WebKit/JetStream main SHA, updates the frozen corpus pin and
+# its current-reference documentation, and opens a PR. Merge once the complete
+# JetStream report remains acceptable.
+#
+# Cadence: weekly (Mondays 08:30 UTC). Manual trigger available via
+# workflow_dispatch.
+
+on:
+  schedule:
+    - cron: '30 8 * * 1'
+  workflow_dispatch:
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      - id: latest
+        run: |
+          sha=$(gh api repos/WebKit/JetStream/commits/main --jq .sha)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short=${sha:0:8}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update JetStream pin
+        env:
+          JETSTREAM_SHA: ${{ steps.latest.outputs.sha }}
+        run: |
+          bun scripts/jetstream-bump-pin.ts "$JETSTREAM_SHA"
+
+      - id: changed
+        run: |
+          if git diff --quiet -- perf/jetstream/manifest.json docs/benchmarks.md; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "JetStream is already pinned to ${{ steps.latest.outputs.short }}; no PR to open."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update PR
+        if: steps.changed.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          branch: chore/jetstream-bump
+          commit-message: "chore(jetstream): bump pin to ${{ steps.latest.outputs.short }}"
+          title: "chore(jetstream): bump pin to ${{ steps.latest.outputs.short }}"
+          body: |
+            Automated bump of the JetStream corpus SHA to `${{ steps.latest.outputs.sha }}`.
+
+            CI will run every frozen JetStream workload and publish the
+            cross-engine report. Review workload-source changes and the new
+            corpus-version boundary before merging.
+
+            Cron: weekly, Mondays 08:30 UTC. See `.github/workflows/jetstream-bump.yml`.
+          labels: |
+            performance
+            automated

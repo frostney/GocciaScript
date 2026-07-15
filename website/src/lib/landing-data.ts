@@ -3,45 +3,63 @@ export type Builtin = { name: string; snippet: string };
 export const BUILTINS: Builtin[] = [
   {
     name: "JSON5",
-    snippet: `import cfg from "./goccia.json5";
-const cfg2 = JSON5.parse(text);
+    snippet: `import { name, retries } from "./goccia.json5";
+
+import { parse as parseJSON5 } from "goccia:json5";
+const text = '{ name: "demo", retries: 3, }';
+const cfg = parseJSON5(text);
 // trailing commas, comments, unquoted keys`,
   },
   {
     name: "TOML",
-    snippet: `import cfg from "./pkg.toml";
-const t = TOML.parse(text);
-// t.server.port, t.features.sandbox`,
+    snippet: `import { server, features } from "./pkg.toml";
+
+import { parse as parseTOML } from "goccia:toml";
+const text = 'server = "api"\\nfeatures = ["cache"]';
+const cfg = parseTOML(text);`,
   },
   {
     name: "YAML",
-    snippet: `import data from "./manifest.yaml";
-const y = YAML.parse(text);
+    snippet: `import { services } from "./manifest.yaml";
+
+import { parse as parseYAML } from "goccia:yaml";
+const text = 'services:\\n  - api\\n  - worker';
+const data = parseYAML(text);
 // flow + block, anchors, multi-doc`,
   },
   {
     name: "JSONL",
-    snippet: `import rows from "./events.jsonl";
-const list = JSONL.parse(text);
-// → array of objects, one per line`,
+    snippet: `import { "0" as firstEvent } from "./events.jsonl";
+
+import { parse as parseJSONL } from "goccia:jsonl";
+const text = '{"event":"start"}\\n{"event":"stop"}';
+const events = parseJSONL(text);`,
   },
   {
     name: "CSV",
-    snippet: `const rows = CSV.parse(text, {
+    snippet: `import { "0" as firstRow } from "./data.csv";
+
+import { parse as parseCSV } from "goccia:csv";
+const text = 'name,price\\ncoffee,3.5';
+const rows = parseCSV(text, {
   headers: true,
 });  // → [{ name, price }, …]`,
   },
   {
     name: "TSV",
-    snippet: `const rows = TSV.parse(text, {
+    snippet: `import { "0" as firstRow } from "./data.tsv";
+
+import { parse as parseTSV } from "goccia:tsv";
+const text = 'name\\tprice\\ncoffee\\t3.5';
+const rows = parseTSV(text, {
   headers: true,
 });  // tab-separated, same shape`,
   },
   {
     name: ".md",
-    snippet: `import readme from "./README.md";
-// → raw markdown text (string)
-console.log(readme.length);`,
+    snippet: `import { content, metadata } from "./README.md";
+// content is raw markdown text
+console.log(content.length, metadata.fileName);`,
   },
   {
     name: "fetch",
@@ -69,16 +87,16 @@ console.error("oops");`,
   },
   {
     name: "SemVer",
-    snippet: `Goccia.semver.inc("1.2.3", "minor");
-Goccia.semver.satisfies("1.3.0", "^1.0.0");
-Goccia.semver.valid("v1.2.3");`,
+    snippet: `import * as semver from "goccia:semver";
+semver.inc("1.2.3", "minor");
+semver.satisfies("1.3.0", "^1.0.0");`,
   },
   {
     name: "Import Maps",
     snippet: `// goccia.json
 { "imports": { "@app/": "./src/" } }
 
-import config from "@app/config.json";`,
+import { apiUrl } from "@app/config.json";`,
   },
   {
     name: "test / expect",
@@ -142,7 +160,8 @@ const { x, y, z } = vector;
   {
     name: "Function()",
     why: "dynamic-eval class of foot-guns",
-    snippet: `// Not available — sandbox-first runtime.
+    snippet: `// Disabled by default; unsafe opt-in only.
+// --unsafe-function-constructor
 import handler from "./handler.js";
 // Use real modules, not stringly code.`,
   },
@@ -162,7 +181,7 @@ export const FEATURES: { icon: FeatureIcon; title: string; body: string }[] = [
   {
     icon: "drop",
     title: "Modern by default",
-    body: "ECMAScript 2027+ forms first — let/const, arrow functions, classes, modules, async/await.",
+    body: "Modern ECMAScript forms first — let/const, arrow functions, classes, modules, async/await.",
   },
   {
     icon: "shield",
