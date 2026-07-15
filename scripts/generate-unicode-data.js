@@ -28,6 +28,7 @@ const UCD_FILES = [
   "PropList.txt",
   "DerivedCoreProperties.txt",
   "extracted/DerivedBinaryProperties.txt",
+  "DerivedNormalizationProps.txt",
   "PropertyValueAliases.txt",
   "PropertyAliases.txt",
   "emoji/emoji-data.txt",
@@ -94,10 +95,19 @@ function emojiVersionForUnicodeVersion(unicodeVersion) {
 }
 
 async function downloadEmojiFile(unicodeVersion, filePath) {
-  const emojiVersion = emojiVersionForUnicodeVersion(unicodeVersion);
-  const url = `${UCD_BASE_URL}/emoji/${emojiVersion}/${filePath}`;
   console.log(`  Downloading emoji/${filePath}...`);
-  return downloadText(url);
+  const versionedUrl = `${UCD_BASE_URL}/${unicodeVersion}/emoji/${filePath}`;
+  try {
+    return await downloadText(versionedUrl);
+  } catch (versionedError) {
+    const emojiVersion = emojiVersionForUnicodeVersion(unicodeVersion);
+    const legacyUrl = `${UCD_BASE_URL}/emoji/${emojiVersion}/${filePath}`;
+    try {
+      return await downloadText(legacyUrl);
+    } catch {
+      throw versionedError;
+    }
+  }
 }
 
 function parseRange(rangePart) {
@@ -630,6 +640,7 @@ function buildResourceFromEntries(allEntries) {
 
 function parseScriptExtensions(text, scriptData, scAliases) {
   const properties = new Map();
+  const explicitRanges = [];
 
   const shortToDataKey = new Map();
   if (scAliases) {
@@ -640,24 +651,30 @@ function parseScriptExtensions(text, scriptData, scAliases) {
     }
   }
 
+  const parsedLines = [];
   forEachUCDLine(text, 2, (parts) => {
     const range = parseRange(parts[0]);
     const scripts = parts[1].split(/\s+/);
-
-    for (const script of scripts) {
-      if (!properties.has(script)) {
-        let baseRanges = scriptData.get(script);
-        if (!baseRanges) {
-          const dataKey = shortToDataKey.get(script);
-          if (dataKey) {
-            baseRanges = scriptData.get(dataKey);
-          }
-        }
-        properties.set(script, baseRanges ? [...baseRanges] : []);
-      }
-      properties.get(script).push(range);
-    }
+    parsedLines.push({ range, scripts });
+    explicitRanges.push(range);
   });
+
+  const mergedExplicitRanges = mergeRanges(explicitRanges);
+  for (const [script, ranges] of scriptData) {
+    properties.set(script, subtractRanges(ranges, mergedExplicitRanges));
+  }
+
+  for (const { range, scripts } of parsedLines) {
+    for (const script of scripts) {
+      const dataKey = scriptData.has(script)
+        ? script
+        : shortToDataKey.get(script);
+      if (!dataKey) {
+        throw new Error(`Unknown Script_Extensions value: ${script}`);
+      }
+      properties.get(dataKey).push(range);
+    }
+  }
 
   for (const [key, ranges] of properties) {
     properties.set(key, mergeRanges(ranges));
@@ -682,6 +699,7 @@ async function main() {
     propListText,
     derivedCoreText,
     derivedBinaryText,
+    derivedNormalizationText,
     pvAliasesText,
     pAliasesText,
     emojiText,
@@ -722,13 +740,25 @@ async function main() {
   const propListData = parseUCDRangeFile(propListText);
   const derivedCoreData = parseUCDRangeFile(derivedCoreText);
   const derivedBinaryData = parseUCDRangeFile(derivedBinaryText);
+  const derivedNormalizationData = parseUCDRangeFile(derivedNormalizationText);
+  const changesWhenNFKCCasefolded =
+    derivedNormalizationData.get("Changes_When_NFKC_Casefolded");
+  if (!changesWhenNFKCCasefolded) {
+    throw new Error(
+      "DerivedNormalizationProps.txt is missing Changes_When_NFKC_Casefolded",
+    );
+  }
   const emojiData = parseUCDRangeFile(emojiText);
   const caseFoldingPairs = parseCaseFolding(caseFoldingText);
   const nonUnicodeUppercasePairs = parseRegExpNonUnicodeUppercase(unicodeDataText);
   const stringProperties = collectEmojiStringProperties(emojiSequenceTexts);
 
   const binaryProperties = new Map([
-    ...propListData, ...derivedCoreData, ...derivedBinaryData, ...emojiData,
+    ...propListData,
+    ...derivedCoreData,
+    ...derivedBinaryData,
+    ["Changes_When_NFKC_Casefolded", changesWhenNFKCCasefolded],
+    ...emojiData,
   ]);
 
   console.log("Building property tables...");

@@ -7,7 +7,7 @@
 - **Language-level profiling** — Operates inside the VM dispatch loop, providing data external profilers cannot see
 - **Three modes** — `--profile=opcodes` (histogram + pair frequency + scalar hit rate), `--profile=functions` (per-function timing + allocations), `--profile=all` (both)
 - **Export formats** — JSON (`--profile-output=path.json`) and collapsed flame graph (`--profile-format=flamegraph`)
-- **Near-zero overhead** — Boolean guard on dispatch loop; ~1% for opcode counting, ~3% for function timing
+- **Disabled-path cost** — A predictable boolean guard remains in the dispatch loop; measure enabled-mode overhead on the workload being profiled
 - **Corpus profile review** — Main CI publishes aggregate and detailed test262
   profile reports for trend review; see [test262 profile report contract](test262.md#profile-report-contract)
 

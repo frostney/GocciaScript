@@ -37,6 +37,7 @@ uses
 
 type
   TGocciaVM = class;
+  TASCIIStringCodeUnit = 0..127;
 
   TGocciaVMStackRoot = class(TGCManagedObject)
   private
@@ -187,6 +188,9 @@ type
     FStackRootRegistered: Boolean;
     FTempSavedStateRoots: TGocciaVMSavedStateRootArray;
     FTempSavedStateRootCount: Integer;
+    FASCIIStringValues: array[0..127] of TGocciaStringLiteralValue;
+    function CachedASCIIStringValue(
+      const ACodeUnit: TASCIIStringCodeUnit): TGocciaStringLiteralValue;
     function ConstantToValue(const AConstant: TGocciaBytecodeConstant): TGocciaValue;
     // ES2026 §13.2.8.3 GetTemplateObject — lazy-build helper for bckTemplateObject constants.
     function BuildTemplateObjectConstant(const ATemplate: TGocciaFunctionTemplate;
@@ -280,7 +284,6 @@ type
       const AExclusionKeys: TGocciaArrayValue): TGocciaObjectValue;
     function ForInEntriesArray(const AValue: TGocciaValue): TGocciaArrayValue;
     function TryForInEntryKey(const AEntry: TGocciaValue; out AKey: string): Boolean;
-    function PromiseConstructorIntrinsic: TGocciaValue;
     function PromiseResolveIntrinsic(const AValue: TGocciaValue): TGocciaPromiseValue;
     function GetIteratorValue(const AIterable: TGocciaValue;
       const ATryAsync: Boolean): TGocciaValue;
@@ -507,6 +510,7 @@ uses
   Goccia.StackLimit,
   Goccia.Timeout,
   Goccia.Types.Enforcement,
+  Goccia.URI,
   Goccia.Utils,
   Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.Await,
@@ -1587,6 +1591,83 @@ begin
     AValue := TGocciaPropertyDescriptorData(Descriptor).Value
   else
     AValue := nil;
+end;
+
+function VMTrySetOwnWritableDataProperty(const AObject: TGocciaObjectValue;
+  const AName: string; const AValue: TGocciaValue): Boolean; inline;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  // This is the ordinary-object own writable-data branch of
+  // OrdinarySetWithOwnDescriptor with Receiver = O.  Exact class checks keep
+  // exotic/overridden assignment semantics on the virtual fallback, while
+  // exact descriptor checks keep lazy properties on their materializing path.
+  Result := Assigned(AObject) and
+    (AObject.ClassType = TGocciaObjectValue) and
+    AObject.Properties.TryGetValue(AName, Descriptor) and
+    (Descriptor.ClassType = TGocciaPropertyDescriptorData) and
+    Descriptor.Writable;
+  if Result then
+    TGocciaPropertyDescriptorData(Descriptor).Value := AValue;
+end;
+
+function VMTryGetCachedGlobalOwnDataProperty(
+  const AObject: TGocciaObjectValue; const AEntryIndex: Integer;
+  const AVersion: Cardinal; out AValue: TGocciaValue): Boolean; inline;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  // The exact object/descriptor checks exclude every exotic lookup override
+  // and lazy data descriptors.  EntryVersion changes when deletion, clear, or
+  // compaction could invalidate an entry index; value updates and unrelated
+  // additions leave the cached index valid and the live descriptor is re-read.
+  Result := Assigned(AObject) and
+    (AObject.ClassType = TGocciaObjectValue) and
+    (AObject.Properties.EntryVersion = AVersion) and
+    AObject.Properties.TryGetValueAtEntry(AEntryIndex, Descriptor) and
+    (Descriptor.ClassType = TGocciaPropertyDescriptorData);
+  if Result then
+    AValue := TGocciaPropertyDescriptorData(Descriptor).Value
+  else
+    AValue := nil;
+end;
+
+function VMTryGetGlobalOwnDataPropertyFillCache(
+  const AObject: TGocciaObjectValue; const AName: string;
+  out AEntryIndex: Integer; out AVersion: Cardinal): Boolean; inline;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  AEntryIndex := -1;
+  AVersion := 0;
+  Result := Assigned(AObject) and
+    (AObject.ClassType = TGocciaObjectValue) and
+    AObject.Properties.TryGetEntryIndex(AName, AEntryIndex) and
+    AObject.Properties.TryGetValueAtEntry(AEntryIndex, Descriptor) and
+    (Descriptor.ClassType = TGocciaPropertyDescriptorData);
+  if Result then
+    AVersion := AObject.Properties.EntryVersion;
+end;
+
+const
+  GLOBAL_READ_OBJECT_BINDING_NONE = 0;
+  GLOBAL_READ_OBJECT_BINDING_VAR = 1;
+  GLOBAL_READ_OBJECT_BINDING_BUILTIN = 2;
+
+function VMGlobalObjectBindingCacheStillPrecedes(
+  const AScope: TGocciaScope; const ACache: PGocciaGlobalReadCacheEntry): Boolean; inline;
+begin
+  case ACache^.ObjectBindingKind of
+    GLOBAL_READ_OBJECT_BINDING_VAR:
+      // Registered global var names cannot legally gain a same-name global
+      // lexical declaration; global declaration instantiation rejects it.
+      Result := True;
+    GLOBAL_READ_OBJECT_BINDING_BUILTIN:
+      Result := AScope.IsGlobalBuiltInObjectBindingAt(
+        ACache^.BindingEntryIndex, ACache^.BindingVersion);
+  else
+    Result := False;
+  end;
 end;
 
 function VMValueToRegisterFast(const AValue: TGocciaValue): TGocciaRegister; inline;
@@ -3636,7 +3717,16 @@ var
   RejectFunction: TGocciaNativeFunctionValue;
   ValueWrapper: TGocciaPromiseValue;
 begin
-  ValueWrapper := TGocciaPromiseValue(PromiseResolve(AValue));
+  try
+    ValueWrapper := TGocciaPromiseValue(PromiseResolve(AValue));
+  except
+    // ES2026 §27.1.5.4 step 6: an abrupt PromiseResolve closes a
+    // non-complete sync iterator when this continuation owns rejection
+    // cleanup.  The caller converts the preserved exception into rejection.
+    if ACloseOnRejection and not ADone then
+      CloseIteratorAfterRejectedValue;
+    raise;
+  end;
 
   FulfillHandler := TGocciaVMAsyncFromSyncFulfillValue.Create(ADone);
   FulfillFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
@@ -3841,7 +3931,11 @@ begin
 
     if FIteratorValue is TGocciaIteratorValue then
     begin
-      IteratorResult := TGocciaIteratorValue(FIteratorValue).ReturnValue(Value);
+      if Assigned(AArgs) and (AArgs.Length > 0) then
+        IteratorResult := TGocciaIteratorValue(FIteratorValue).ReturnValue(Value)
+      else
+        IteratorResult := TGocciaIteratorValue(FIteratorValue)
+          .ReturnValueWithoutValue;
       DoneValue := IteratorResult.GetProperty(PROP_DONE);
       Done := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
       Value := IteratorResult.GetProperty(PROP_VALUE);
@@ -3863,7 +3957,10 @@ begin
     if not ReturnMethod.IsCallable then
       ThrowTypeError('Iterator return is not callable');
 
-    CallArgs := TGocciaArgumentsCollection.Create([Value]);
+    if Assigned(AArgs) and (AArgs.Length > 0) then
+      CallArgs := TGocciaArgumentsCollection.Create([Value])
+    else
+      CallArgs := TGocciaArgumentsCollection.Create;
     try
       IteratorResult := InvokeCallable(ReturnMethod, CallArgs, FIteratorValue);
     finally
@@ -6358,11 +6455,30 @@ begin
   end;
   for I := 0 to FArgumentPoolCount - 1 do
     FArgumentPool[I].Free;
+  if Assigned(TGarbageCollector.Instance) then
+    for I := Low(FASCIIStringValues) to High(FASCIIStringValues) do
+      if Assigned(FASCIIStringValues[I]) then
+        TGarbageCollector.Instance.UnpinObject(FASCIIStringValues[I]);
   SetLength(FArgumentPool, 0);
   SetLength(FTempSavedStateRoots, 0);
   FHandlerStack.Free;
   SetExceptionMask(FPreviousExceptionMask);
   inherited;
+end;
+
+function TGocciaVM.CachedASCIIStringValue(
+  const ACodeUnit: TASCIIStringCodeUnit): TGocciaStringLiteralValue;
+begin
+  Result := FASCIIStringValues[ACodeUnit];
+  if Assigned(Result) then
+    Exit;
+
+  Result := TGocciaStringLiteralValue.Create(Chr(ACodeUnit));
+  if Assigned(TGarbageCollector.Instance) then
+  begin
+    TGarbageCollector.Instance.PinObject(Result);
+    FASCIIStringValues[ACodeUnit] := Result;
+  end;
 end;
 
 procedure TGocciaVM.EnsureStackRootRegistered;
@@ -8932,46 +9048,10 @@ begin
   Result := Assigned(Descriptor) and Descriptor.Enumerable;
 end;
 
-function TGocciaVM.PromiseConstructorIntrinsic: TGocciaValue;
-begin
-  Result := nil;
-  if Assigned(FGlobalScope) and FGlobalScope.Contains(CONSTRUCTOR_PROMISE) then
-    Result := FGlobalScope.GetValue(CONSTRUCTOR_PROMISE);
-  if not Assigned(Result) then
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
 function TGocciaVM.PromiseResolveIntrinsic(
   const AValue: TGocciaValue): TGocciaPromiseValue;
-var
-  ConstructorValue, ValueConstructor: TGocciaValue;
-  IsRooted: Boolean;
 begin
-  ConstructorValue := PromiseConstructorIntrinsic;
-  if AValue is TGocciaPromiseValue then
-  begin
-    ValueConstructor := TGocciaPromiseValue(AValue).GetProperty(PROP_CONSTRUCTOR);
-    if IsSameValue(ValueConstructor, ConstructorValue) then
-      Exit(TGocciaPromiseValue(AValue));
-  end;
-
-  Result := TGocciaPromiseValue.Create;
-  IsRooted := Assigned(TGarbageCollector.Instance);
-  if IsRooted then
-    TGarbageCollector.Instance.AddTempRoot(Result);
-  try
-    Result.Resolve(AValue);
-  except
-    if IsRooted then
-    begin
-      TGarbageCollector.Instance.RemoveTempRoot(Result);
-      IsRooted := False;
-    end;
-    Result.Free;
-    raise;
-  end;
-  if IsRooted then
-    TGarbageCollector.Instance.RemoveTempRoot(Result);
+  Result := Goccia.Values.PromiseValue.PromiseResolveIntrinsic(AValue);
 end;
 
 function TGocciaVM.GetIteratorValue(const AIterable: TGocciaValue;
@@ -11861,7 +11941,7 @@ var
   PropertyValue: TGocciaValue;
   Boxed: TGocciaObjectValue;
   PropertyName: string;
-  StringValue: string;
+  StringUnit, StringValue: string;
   KeyIndex: Integer;
 begin
   if (AReceiverReg.Kind = grkObject) and
@@ -11869,10 +11949,15 @@ begin
      TryGetArrayIndexRegister(AKeyReg, KeyIndex) then
   begin
     StringValue := TGocciaStringLiteralValue(AReceiverReg.ObjectValue).Value;
-    if (KeyIndex >= 0) and (KeyIndex < UTF16CodeUnitLength(StringValue)) then
+    StringUnit := UTF16CodeUnitAt(StringValue, KeyIndex);
+    if StringUnit <> '' then
     begin
-      SetRegister(ADest, TGocciaStringLiteralValue.Create(
-        UTF16CodeUnitAt(StringValue, KeyIndex)));
+      if (Length(StringUnit) = 1) and (Ord(StringUnit[1]) <= 127) then
+        SetRegisterFast(ADest,
+          CachedASCIIStringValue(
+            TASCIIStringCodeUnit(Ord(StringUnit[1]))))
+      else
+        SetRegisterFast(ADest, TGocciaStringLiteralValue.Create(StringUnit));
       Exit;
     end;
   end;
@@ -13235,6 +13320,8 @@ var
   I: Integer;
   GlobalName: string;
   GlobalBindingValue: TGocciaValue;
+  GlobalBindingEntryIndex: Integer;
+  GlobalBindingVersion: Cardinal;
   GlobalReadCache: PGocciaGlobalReadCacheEntry;
   DebugLine, DebugColumn: Integer;
   PropertyReadCache: PGocciaPropertyReadCacheEntry;
@@ -13252,6 +13339,7 @@ var
   DoneFlag: Boolean;
   Running: Boolean;
   Template: TGocciaFunctionTemplate;
+  Constant: TGocciaBytecodeConstant;
   ChildTemplate: TGocciaFunctionTemplate;
   LeftValue, RightValue, TargetValue, PropKeyValue, EvalSourceValue: TGocciaValue;
   NumericValue: Double;
@@ -13472,16 +13560,34 @@ begin
           C := WideC or DecodeC(Instruction);
           case TGocciaOpCode(Op) of
       OP_LOAD_CONST:
-        // ES2026 §13.2.8.3: bckTemplateObject constants are lazily built and cached
-        if Template.GetConstantUnchecked(DecodeBx(Instruction)).Kind = bckTemplateObject then
-          FRegisters[A] := ValueToRegister(BuildTemplateObjectConstant(Template, DecodeBx(Instruction)))
-        else
-          FRegisters[A] := ValueToRegister(
-            ConstantToValue(Template.GetConstantUnchecked(DecodeBx(Instruction))));
+        begin
+          Constant := Template.GetConstantUnchecked(DecodeBx(Instruction));
+          case Constant.Kind of
+            // Keep numeric constants in the VM's scalar representation.  The
+            // previous ConstantToValue -> ValueToRegister round trip allocated
+            // a short-lived boxed Number for every execution of the
+            // instruction.
+            bckInteger:
+              FRegisters[A] := VMIntResult(Constant.IntValue);
+            bckFloat:
+              FRegisters[A] := RegisterFromDouble(Constant.FloatValue);
+            // ES2026 §13.2.8.3: template objects are lazily built and cached.
+            bckTemplateObject:
+              FRegisters[A] := ValueToRegister(BuildTemplateObjectConstant(
+                Template, DecodeBx(Instruction)));
+          else
+            FRegisters[A] := ValueToRegister(ConstantToValue(Constant));
+          end;
+        end;
 
       OP_LOAD_CHAR:
-        FRegisters[A] := ValueToRegister(TGocciaStringLiteralValue.Create(
-          UTF16CodeUnitImmediateToUTF8(DecodeBx(Instruction))));
+        if DecodeBx(Instruction) <= 127 then
+          FRegisters[A] := RegisterObject(
+            CachedASCIIStringValue(
+              TASCIIStringCodeUnit(DecodeBx(Instruction))))
+        else
+          FRegisters[A] := RegisterObject(TGocciaStringLiteralValue.Create(
+            UTF16CodeUnitImmediateToUTF8(DecodeBx(Instruction))));
 
       OP_LOAD_REGEXP:
         FRegisters[A] := ValueToRegister(
@@ -14996,36 +15102,82 @@ begin
         end;
 
       OP_BAND:
-        SetRegister(A, EvaluateBitwiseAnd(
-          GetRegister(B), GetRegister(C)));
+        if (FRegisters[B].Kind = grkInt) and
+           (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterInt(
+            LongInt(FRegisters[B].IntValue) and
+            LongInt(FRegisters[C].IntValue))
+        else
+          SetRegister(A, EvaluateBitwiseAnd(
+            GetRegister(B), GetRegister(C)));
 
       OP_BOR:
-        SetRegister(A, EvaluateBitwiseOr(
-          GetRegister(B), GetRegister(C)));
+        if (FRegisters[B].Kind = grkInt) and
+           (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterInt(
+            LongInt(FRegisters[B].IntValue) or
+            LongInt(FRegisters[C].IntValue))
+        else
+          SetRegister(A, EvaluateBitwiseOr(
+            GetRegister(B), GetRegister(C)));
 
       OP_BXOR:
-        SetRegister(A, EvaluateBitwiseXor(
-          GetRegister(B), GetRegister(C)));
+        if (FRegisters[B].Kind = grkInt) and
+           (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterInt(
+            LongInt(FRegisters[B].IntValue) xor
+            LongInt(FRegisters[C].IntValue))
+        else
+          SetRegister(A, EvaluateBitwiseXor(
+            GetRegister(B), GetRegister(C)));
 
       OP_SHL:
-        SetRegister(A, EvaluateLeftShift(
-          GetRegister(B), GetRegister(C)));
+        if (FRegisters[B].Kind = grkInt) and
+           (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterInt(LongInt(
+            LongWord(FRegisters[B].IntValue) shl
+            (LongWord(FRegisters[C].IntValue) and 31)))
+        else
+          SetRegister(A, EvaluateLeftShift(
+            GetRegister(B), GetRegister(C)));
 
       OP_SHR:
-        SetRegister(A, EvaluateRightShift(
-          GetRegister(B), GetRegister(C)));
+        if (FRegisters[B].Kind = grkInt) and
+           (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterInt(SarLongint(
+            LongInt(FRegisters[B].IntValue),
+            LongWord(FRegisters[C].IntValue) and 31))
+        else
+          SetRegister(A, EvaluateRightShift(
+            GetRegister(B), GetRegister(C)));
 
       OP_USHR:
-        SetRegister(A, EvaluateUnsignedRightShift(
-          GetRegister(B), GetRegister(C)));
+        if (FRegisters[B].Kind = grkInt) and
+           (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := VMIntResult(Int64(LongWord(
+            FRegisters[B].IntValue) shr
+            (LongWord(FRegisters[C].IntValue) and 31)))
+        else
+          SetRegister(A, EvaluateUnsignedRightShift(
+            GetRegister(B), GetRegister(C)));
 
       OP_BNOT:
-        SetRegister(A, EvaluateBitwiseNot(GetRegister(B)));
+        if FRegisters[B].Kind = grkInt then
+          FRegisters[A] := RegisterInt(not LongInt(FRegisters[B].IntValue))
+        else
+          SetRegister(A, EvaluateBitwiseNot(GetRegister(B)));
 
       OP_EQ:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := RegisterBoolean(
             FRegisters[B].IntValue = FRegisters[C].IntValue)
+        else if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[C].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) and
+           (FRegisters[C].ObjectValue is TGocciaStringLiteralValue) then
+          FRegisters[A] := RegisterBoolean(UTF16StringsEqual(
+            TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value,
+            TGocciaStringLiteralValue(FRegisters[C].ObjectValue).Value))
         else
           SetRegister(A, GetRegister(B).IsEqual(GetRegister(C)));
 
@@ -15033,6 +15185,13 @@ begin
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := RegisterBoolean(
             FRegisters[B].IntValue <> FRegisters[C].IntValue)
+        else if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[C].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) and
+           (FRegisters[C].ObjectValue is TGocciaStringLiteralValue) then
+          FRegisters[A] := RegisterBoolean(not UTF16StringsEqual(
+            TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value,
+            TGocciaStringLiteralValue(FRegisters[C].ObjectValue).Value))
         else
           SetRegister(A, GetRegister(B).IsNotEqual(GetRegister(C)));
 
@@ -15075,8 +15234,9 @@ begin
           if (LeftValue is TGocciaStringLiteralValue) and
              (RightValue is TGocciaStringLiteralValue) then
             FRegisters[A] := RegisterBoolean(
-              TGocciaStringLiteralValue(LeftValue).Value <
-              TGocciaStringLiteralValue(RightValue).Value)
+              Goccia.Arithmetic.CompareStringValues(
+                TGocciaStringLiteralValue(LeftValue).Value,
+                TGocciaStringLiteralValue(RightValue).Value) < 0)
           else
             FRegisters[A] := RegisterBoolean(
               Goccia.Arithmetic.LessThan(LeftValue, RightValue));
@@ -15106,8 +15266,9 @@ begin
           if (LeftValue is TGocciaStringLiteralValue) and
              (RightValue is TGocciaStringLiteralValue) then
             FRegisters[A] := RegisterBoolean(
-              TGocciaStringLiteralValue(LeftValue).Value >
-              TGocciaStringLiteralValue(RightValue).Value)
+              Goccia.Arithmetic.CompareStringValues(
+                TGocciaStringLiteralValue(LeftValue).Value,
+                TGocciaStringLiteralValue(RightValue).Value) > 0)
           else
             FRegisters[A] := RegisterBoolean(
               Goccia.Arithmetic.GreaterThan(LeftValue, RightValue));
@@ -15137,8 +15298,9 @@ begin
           if (LeftValue is TGocciaStringLiteralValue) and
              (RightValue is TGocciaStringLiteralValue) then
             FRegisters[A] := RegisterBoolean(
-              TGocciaStringLiteralValue(LeftValue).Value <=
-              TGocciaStringLiteralValue(RightValue).Value)
+              Goccia.Arithmetic.CompareStringValues(
+                TGocciaStringLiteralValue(LeftValue).Value,
+                TGocciaStringLiteralValue(RightValue).Value) <= 0)
           else
             FRegisters[A] := RegisterBoolean(
               Goccia.Arithmetic.LessThanOrEqual(LeftValue, RightValue));
@@ -15168,8 +15330,9 @@ begin
           if (LeftValue is TGocciaStringLiteralValue) and
              (RightValue is TGocciaStringLiteralValue) then
             FRegisters[A] := RegisterBoolean(
-              TGocciaStringLiteralValue(LeftValue).Value >=
-              TGocciaStringLiteralValue(RightValue).Value)
+              Goccia.Arithmetic.CompareStringValues(
+                TGocciaStringLiteralValue(LeftValue).Value,
+                TGocciaStringLiteralValue(RightValue).Value) >= 0)
           else
             FRegisters[A] := RegisterBoolean(
               Goccia.Arithmetic.GreaterThanOrEqual(LeftValue, RightValue));
@@ -15371,6 +15534,33 @@ begin
             UInt32(InstructionStartIP), Template.StrictCode));
           Continue;
         end;
+        if ((C and CALL_FLAG_SPREAD) = 0) and
+           (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) and
+           (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
+             CreationRealm = CurrentRealm) and
+           (B = 1) and
+           (FRegisters[A + 1].Kind = grkObject) and
+           (FRegisters[A + 1].ObjectValue is TGocciaStringLiteralValue) then
+        begin
+          case TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
+            IntrinsicKind of
+            nikDecodeURI:
+              begin
+                SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+                  DecodeURI(TGocciaStringLiteralValue(
+                    FRegisters[A + 1].ObjectValue).Value)));
+                Continue;
+              end;
+            nikDecodeURIComponent:
+              begin
+                SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+                  DecodeURIComponent(TGocciaStringLiteralValue(
+                    FRegisters[A + 1].ObjectValue).Value)));
+                Continue;
+              end;
+          end;
+        end;
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaBoundFunctionValue) then
         begin
@@ -15558,6 +15748,22 @@ begin
       OP_CALL_METHOD:
       begin
         CheckExecutionTimeout;
+        if ((C and CALL_FLAG_SPREAD) = 0) and (B = 2) and
+           (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) and
+           (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
+             IntrinsicKind = nikStringFromCharCode) and
+           (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
+             CreationRealm = CurrentRealm) and
+           (FRegisters[A + 1].Kind = grkInt) and
+           (FRegisters[A + 2].Kind = grkInt) then
+        begin
+          SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+            UTF16CodeUnitPairToUTF8(
+              Cardinal(FRegisters[A + 1].IntValue and $FFFF),
+              Cardinal(FRegisters[A + 2].IntValue and $FFFF))));
+          Continue;
+        end;
         if (C and 1) = 0 then
         begin
           if (FRegisters[A - 1].Kind = grkObject) and
@@ -16075,28 +16281,72 @@ begin
         end
         else
         begin
-          // Hot shape: per-site inline cache keyed by the name-constant
-          // index, validated against (scope identity, binding-map version).
-          // A nil slot (out-of-range constant index in corrupt bytecode)
-          // degrades to the uncached single-lookup read.  A miss leaves
-          // Scope untouched: EntryIndex = -1 alone guarantees the next
-          // validation fails.
+          // Per-site inline cache keyed by the name-constant index.  It serves
+          // either an own lexical-map entry or an ordinary global object's own
+          // plain-data entry.  Both modes re-read the live value by a
+          // version-validated entry index; exotic objects, accessors, lazy
+          // descriptors, and dynamic scopes remain on the named lookup path.
           GlobalReadCache := Template.GlobalReadCacheSlot(DecodeBx(Instruction));
           if Assigned(GlobalReadCache) and
              (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
+             (GlobalReadCache^.ObjectValue = nil) and
              FGlobalScope.TryGetLexicalValueAt(GlobalReadCache^.EntryIndex,
                GlobalReadCache^.Version, GlobalBindingValue) then
+            FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
+          else if Assigned(GlobalReadCache) and
+             (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
+             (FGlobalScope.ThisValue is TGocciaObjectValue) and
+             (GlobalReadCache^.ObjectValue =
+               Pointer(FGlobalScope.ThisValue)) and
+             VMGlobalObjectBindingCacheStillPrecedes(FGlobalScope,
+               GlobalReadCache) and
+             VMTryGetCachedGlobalOwnDataProperty(
+               TGocciaObjectValue(FGlobalScope.ThisValue),
+               GlobalReadCache^.EntryIndex, GlobalReadCache^.Version,
+               GlobalBindingValue) then
             FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
           else
           begin
             GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
             if Assigned(GlobalReadCache) then
             begin
+              GlobalReadCache^.Scope := nil;
+              GlobalReadCache^.ObjectValue := nil;
+              GlobalReadCache^.ObjectBindingKind :=
+                GLOBAL_READ_OBJECT_BINDING_NONE;
               if FGlobalScope.TryGetBindingValueFillCache(GlobalName,
                 GlobalReadCache^.EntryIndex, GlobalReadCache^.Version,
                 GlobalBindingValue) then
               begin
-                if GlobalReadCache^.EntryIndex >= 0 then
+                GlobalBindingEntryIndex := GlobalReadCache^.EntryIndex;
+                GlobalBindingVersion := GlobalReadCache^.Version;
+                if (FGlobalScope.ThisValue is TGocciaObjectValue) and
+                   ((not FGlobalScope.ContainsOwnLexicalBinding(GlobalName) and
+                     FGlobalScope.ContainsOwnVarBinding(GlobalName)) or
+                    (FGlobalScope.IsBuiltInBinding(GlobalName) and
+                     FGlobalScope.IsGlobalObjectBackedBinding(GlobalName))) and
+                   VMTryGetGlobalOwnDataPropertyFillCache(
+                     TGocciaObjectValue(FGlobalScope.ThisValue), GlobalName,
+                     GlobalReadCache^.EntryIndex,
+                     GlobalReadCache^.Version) then
+                begin
+                  GlobalReadCache^.Scope := Pointer(FGlobalScope);
+                  GlobalReadCache^.ObjectValue :=
+                    Pointer(FGlobalScope.ThisValue);
+                  if FGlobalScope.ContainsOwnVarBinding(GlobalName) then
+                    GlobalReadCache^.ObjectBindingKind :=
+                      GLOBAL_READ_OBJECT_BINDING_VAR
+                  else
+                  begin
+                    GlobalReadCache^.ObjectBindingKind :=
+                      GLOBAL_READ_OBJECT_BINDING_BUILTIN;
+                    GlobalReadCache^.BindingEntryIndex :=
+                      GlobalBindingEntryIndex;
+                    GlobalReadCache^.BindingVersion :=
+                      GlobalBindingVersion;
+                  end;
+                end
+                else if GlobalReadCache^.EntryIndex >= 0 then
                   GlobalReadCache^.Scope := Pointer(FGlobalScope);
                 FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue);
               end
@@ -16146,8 +16396,15 @@ begin
             RegisterToValue(FRegisters[A]), 0, 0, True)
         else if Assigned(FGlobalScope) then
         begin
+          GlobalBindingValue := RegisterToValue(FRegisters[A]);
+          if FGlobalScope.ContainsOwnVarBinding(GlobalName) and
+             (FGlobalScope.ThisValue is TGocciaObjectValue) and
+             VMTrySetOwnWritableDataProperty(
+               TGocciaObjectValue(FGlobalScope.ThisValue), GlobalName,
+               GlobalBindingValue) then
+            Continue;
           if (not FGlobalScope.TryAssignExistingBinding(GlobalName,
-            RegisterToValue(FRegisters[A]), True)) and
+            GlobalBindingValue, True)) and
              (FGlobalScope.ThisValue is TGocciaObjectValue) then
           begin
             if ((GlobalName = PROP_GOCCIA) or (GlobalName = PROP_GLOBAL_THIS)) and
@@ -16160,20 +16417,42 @@ begin
                 '', nil, SSuggestUseLetNotConst);
             end;
             TGocciaObjectValue(FGlobalScope.ThisValue).AssignPropertyWithReceiver(
-              GlobalName, RegisterToValue(FRegisters[A]), FGlobalScope.ThisValue);
+              GlobalName, GlobalBindingValue, FGlobalScope.ThisValue);
           end;
         end;
       end;
 
       OP_HAS_GLOBAL:
       begin
-        GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        if HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) then
-          FRegisters[A] := RegisterBoolean(True)
-        else if Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName) then
-          FRegisters[A] := RegisterBoolean(True)
-        else
-          FRegisters[A] := RegisterBoolean(False);
+        if not Assigned(FCurrentDynamicVarScope) and Assigned(FGlobalScope) then
+        begin
+          GlobalReadCache := Template.GlobalReadCacheSlot(
+            DecodeBx(Instruction));
+          if Assigned(GlobalReadCache) and
+             (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
+             (((GlobalReadCache^.ObjectValue = nil) and
+               FGlobalScope.HasLexicalBindingAt(
+                 GlobalReadCache^.EntryIndex, GlobalReadCache^.Version)) or
+              ((FGlobalScope.ThisValue is TGocciaObjectValue) and
+               (GlobalReadCache^.ObjectValue =
+                 Pointer(FGlobalScope.ThisValue)) and
+               VMGlobalObjectBindingCacheStillPrecedes(FGlobalScope,
+                 GlobalReadCache) and
+               VMTryGetCachedGlobalOwnDataProperty(
+                 TGocciaObjectValue(FGlobalScope.ThisValue),
+                 GlobalReadCache^.EntryIndex, GlobalReadCache^.Version,
+                 GlobalBindingValue))) then
+          begin
+            FRegisters[A] := RegisterBoolean(True);
+            Continue;
+          end;
+        end;
+
+        GlobalName := Template.GetConstantUnchecked(
+          DecodeBx(Instruction)).StringValue;
+        FRegisters[A] := RegisterBoolean(
+          HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) or
+          (Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName)));
       end;
 
       OP_DELETE_GLOBAL:
@@ -16701,8 +16980,37 @@ begin
       begin
         GlobalName := Template.GetConstantUnchecked(
           DecodeBx(Instruction)).StringValue;
-        DefineGlobalBinding(GlobalName, GetRegister(A), dtVar,
-          not Template.StrictCode);
+        GlobalBindingValue := GetRegister(A);
+        // Top-level var names are instantiated before body execution.
+        // Initializers inside loops can therefore use ordinary assignment
+        // resolution instead of repeating CreateGlobalVarBinding each time.
+        if Assigned(FGlobalScope) and
+           FGlobalScope.ContainsOwnVarBinding(GlobalName) then
+        begin
+          if (FGlobalScope.ThisValue is TGocciaObjectValue) and
+             VMTrySetOwnWritableDataProperty(
+               TGocciaObjectValue(FGlobalScope.ThisValue), GlobalName,
+               GlobalBindingValue) then
+            Continue
+          else if (FGlobalScope.ThisValue is TGocciaObjectValue) and
+             TGocciaObjectValue(FGlobalScope.ThisValue).HasOwnProperty(
+               GlobalName) then
+          begin
+            if Template.StrictCode then
+              TGocciaObjectValue(FGlobalScope.ThisValue).AssignProperty(
+                GlobalName, GlobalBindingValue)
+            else
+              TGocciaObjectValue(FGlobalScope.ThisValue).
+                AssignPropertyWithReceiver(GlobalName, GlobalBindingValue,
+                  FGlobalScope.ThisValue);
+          end
+          else
+            FGlobalScope.AssignBinding(GlobalName, GlobalBindingValue, 0, 0,
+              not Template.StrictCode);
+        end
+        else
+          DefineGlobalBinding(GlobalName, GlobalBindingValue, dtVar,
+            not Template.StrictCode);
       end;
 
       OP_DEFINE_GLOBAL_LET_LONG:

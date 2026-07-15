@@ -20,7 +20,7 @@ See [Language](docs/language.md) for the complete specification of supported fea
 
 Non-standard data-format APIs and SemVer are import-only Goccia runtime modules, not auto-installed globals: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. They expose named exports only; use `import * as CSV from "goccia:csv"` when you want the namespace-object shape. There is no default export.
 
-Native FFI is an explicit unsafe runtime opt-in (`--unsafe-ffi` or the matching configuration key). It provides native-layout structures, unions, fixed-length arrays, callbacks, and guarded library lifetimes through GocciaScript's custom bidirectional ABI machinery. See the [FFI reference](docs/built-ins-ffi.md) and [ADR 0093](docs/adr/0093-custom-bidirectional-ffi-abi-engine.md).
+Native FFI is an explicit unsafe runtime opt-in (`--unsafe-ffi` or the matching configuration key). It provides native-layout structures, unions, fixed-length arrays, callbacks, and guarded library lifetimes through GocciaScript's custom bidirectional ABI machinery. See the [FFI reference](docs/built-ins-ffi.md) and [ADR 0094](docs/adr/0094-custom-bidirectional-ffi-abi-engine.md).
 
 See [Built-in Objects](docs/built-ins.md) for the complete API reference.
 
@@ -103,6 +103,18 @@ the public `.gbc` artifact.
 ```
 
 See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode executor architecture.
+
+### Reproduce An Execution
+
+Use one fixed JavaScript-visible clock, UTC time zone, and portable random stream in either execution mode:
+
+```bash
+./build/GocciaScriptLoader example.js --deterministic
+```
+
+Timeouts and profiling still use the real monotonic clock. The equivalent config key is `"deterministic": true`; embedders can inject their own clock and RNG providers through the engine host environment.
+
+For custom providers, pass a JavaScript module to `--host-environment` or implement the Pascal host interfaces. See [Host Environment](docs/host-environment.md) for both examples and the provider contract.
 
 ### Start the REPL
 
@@ -229,6 +241,7 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | [Garbage Collector](docs/garbage-collector.md) | Mark-and-sweep GC: architecture, contributor rules, design rationale |
 | [Adding Built-in Types](docs/adding-built-in-types.md) | Step-by-step guide for adding new built-in types |
 | [Embedding the Engine](docs/embedding.md) | Embedding GocciaScript in FreePascal applications |
+| [Host Environment](docs/host-environment.md) | Injecting JavaScript-visible clock, time-zone, and random providers |
 | [Testing](docs/testing.md) | Test organization, running tests, coverage, CI |
 | [Test Framework API](docs/testing-api.md) | Assertions, mocks, lifecycle hooks, async patterns |
 | [Benchmarks](docs/benchmarks.md) | Benchmark runner, output formats, writing benchmarks |

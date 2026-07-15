@@ -1230,7 +1230,7 @@ end;
     I: Integer;
     Value: TGocciaValue;
     ResolvedObjectBinding: TGocciaObjectValue;
-    ResolvedScopeBinding: TGocciaScope;
+    ResolvedScopeBinding, VarScope: TGocciaScope;
     HasRealStrictInit: Boolean;
     AnnotationType, TypeHint: TGocciaLocalType;
     Continuation: TGocciaGeneratorContinuation;
@@ -1280,8 +1280,13 @@ end;
       if IsVar and Variables[I].HasInitializer then
       begin
         if not AContext.InEvalCode then
-          AContext.Scope.DefineVariableBinding(Variables[I].Name,
-            TGocciaUndefinedLiteralValue.UndefinedValue, False);
+        begin
+          VarScope := AContext.Scope.FindFunctionOrModuleScope;
+          if not Assigned(VarScope) or
+             not VarScope.ContainsOwnVarBinding(Variables[I].Name) then
+            AContext.Scope.DefineVariableBinding(Variables[I].Name,
+              TGocciaUndefinedLiteralValue.UndefinedValue, False);
+        end;
         AContext.Scope.ResolveAssignmentTarget(Variables[I].Name,
           ResolvedObjectBinding, ResolvedScopeBinding);
       end;

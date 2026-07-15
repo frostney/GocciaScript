@@ -39,6 +39,7 @@ type
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function DirectNextValue(const AValue: TGocciaValue; out ADone: Boolean): TGocciaValue; override;
     function ReturnValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
+    function ReturnValueWithoutValue: TGocciaObjectValue; override;
     function ThrowValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
     procedure Close; override;
     function BuiltinTagFallback: Boolean; override;
@@ -394,6 +395,12 @@ function TGocciaGenericIteratorValue.ReturnValue(
   const AValue: TGocciaValue): TGocciaObjectValue;
 begin
   Result := ReturnInternal(AValue, True);
+end;
+
+function TGocciaGenericIteratorValue.ReturnValueWithoutValue:
+  TGocciaObjectValue;
+begin
+  Result := ReturnInternal(nil, False);
 end;
 
 function TGocciaGenericIteratorValue.ThrowValue(

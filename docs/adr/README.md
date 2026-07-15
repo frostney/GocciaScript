@@ -102,4 +102,5 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0090 — Web Tooling Goccia benchmark lane](0090-web-tooling-goccia-benchmark-lane.md)
 - [0091 — Unified performance barometer with a frozen JetStream subset](0091-unified-performance-barometer.md)
 - [0092 — Convert sandbox filesystem failures at the runtime seam](0092-sandbox-filesystem-error-contract.md)
-- [0093 — Custom bidirectional FFI ABI engine](0093-custom-bidirectional-ffi-abi-engine.md)
+- [0093 — Engine-owned host environment](0093-engine-owned-host-environment.md)
+- [0094 — Custom bidirectional FFI ABI engine](0094-custom-bidirectional-ffi-abi-engine.md)

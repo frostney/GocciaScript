@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.SharedPrototype,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
@@ -31,6 +32,8 @@ type
     procedure SweepWeakReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
+    class function GetSharedPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue;
 
     property Target: TGocciaValue read FTarget;
   end;
@@ -42,7 +45,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
-  Goccia.Realm,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
@@ -116,6 +118,12 @@ begin
   end;
   if Assigned(Shared) then
     ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
+end;
+
+class function TGocciaWeakRefValue.GetSharedPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  Result := GetSharedPrototypeFromOwnedSlot(ARealm, GWeakRefSharedSlot);
 end;
 
 function TGocciaWeakRefValue.ToStringTag: string;

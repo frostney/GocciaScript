@@ -291,6 +291,7 @@ Relative paths are resolved against the current working directory. A missing fil
   "strict-types": true,
   "unsafe-ffi": true,
   "unsafe-shadowrealm": true,
+  "deterministic": true,
   "timeout": 5000,
   "max-memory": 10485760,
   "stack-size": 2900,
@@ -302,8 +303,7 @@ Relative paths are resolved against the current working directory. A missing fil
 }
 ```
 
-Config keys mirror CLI option names (e.g. `--mode` -> `"mode"`, `--max-memory` -> `"max-memory"`). A config value is the value assigned to a config key and the setting it carries: boolean flags use `true`/`false`, and array-valued options like `alias` and `allowed-hosts` use JSON arrays. `warning-unsupported-features` is a parser diagnostic policy flag, not a compatibility flag: it restores warning/recovery behavior for disabled syntax without enabling that syntax's runtime semantics. The `imports` object is handled by the module resolver and coexists with CLI option keys.
-
+Config keys mirror CLI option names (e.g. `--mode` -> `"mode"`, `--max-memory` -> `"max-memory"`). A config value is the value assigned to a config key and the setting it carries: boolean flags use `true`/`false`, and array-valued options like `alias` and `allowed-hosts` use JSON arrays. `warning-unsupported-features` is a parser diagnostic policy flag, not a compatibility flag: it restores warning/recovery behavior for disabled syntax without enabling that syntax's runtime semantics. The `imports` object is handled by the module resolver and coexists with CLI option keys. `--deterministic` (or `"deterministic": true`) freezes JavaScript-visible time at the Unix epoch, uses UTC, and starts a portable seeded random stream; `--host-environment=./provider.js` (or the `"host-environment"` config key) supplies custom providers instead. Timeouts, profiling, and benchmark measurement remain live; see [Host Environment](host-environment.md) for the provider contract.
 **`extends`** — A config file can inherit from a base config using the `extends` key. The path is resolved relative to the config file's directory. Child values override parent values:
 
 ```json
@@ -612,7 +612,7 @@ GocciaScript/
 
 ### Generated Timezone Data
 
-`source/generated/Generated.TimeZoneData.pas` and `source/generated/Generated.TimeZoneData.res` are produced by `scripts/generate-timezone-data.js`. By default, the generator downloads the latest IANA `tzdata-latest.tar.gz`, compiles it with `zic`, packs the resulting TZif files into a single resource payload, and emits a small Pascal unit that links the resource. Pass a local zoneinfo directory, a local `tzdata` tarball, or an explicit URL to generate from a different source.
+`source/generated/Generated.TimeZoneData.pas` and `source/generated/Generated.TimeZoneData.res` are produced by `scripts/generate-timezone-data.js`. By default, the generator downloads the latest IANA `tzdata-latest.tar.gz`, compiles it with `zic`, packs the resulting TZif files into a single resource payload, and emits a small Pascal unit that links the resource. Pass a local zoneinfo directory, a local `tzdata` tarball, or an explicit URL to generate from a different source. `.github/workflows/timezone-data-bump.yml` resolves the latest immutable IANA release URL on the first day of each month, regenerates both files, and opens an automated PR only when the generated output changes.
 
 The generator requires `zic`, `tar`, and `fpcres`. `fpcres` writes the FreePascal resource consumed by `{$R Generated.TimeZoneData.res}`.
 

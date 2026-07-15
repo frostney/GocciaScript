@@ -24,6 +24,7 @@ type
     procedure TestSignedZeroKeysCollapse;
     procedure TestEqualNumberInstancesCollapse;
     procedure TestEqualStringInstancesCollapse;
+    procedure TestEquivalentUTF16StringEncodingsCollapse;
     procedure TestEqualBigIntInstancesCollapse;
     procedure TestLookupWithDistinctEqualInstance;
 
@@ -57,6 +58,8 @@ begin
   Test('-0 and +0 collapse to one entry', TestSignedZeroKeysCollapse);
   Test('Equal number instances collapse', TestEqualNumberInstancesCollapse);
   Test('Equal string instances collapse', TestEqualStringInstancesCollapse);
+  Test('Equivalent UTF-16 string encodings collapse',
+    TestEquivalentUTF16StringEncodingsCollapse);
   Test('Equal BigInt instances collapse', TestEqualBigIntInstancesCollapse);
   Test('Lookup succeeds with a distinct equal instance', TestLookupWithDistinctEqualInstance);
   Test('Number 1 and string "1" are distinct keys', TestNumberAndStringAreDistinct);
@@ -142,6 +145,26 @@ begin
     Store.SetEntry(Str('ab'), Str('a'));
     Store.SetEntry(Str('a' + 'b'), Str('b'));
     Expect<Integer>(Store.Count).ToBe(1);
+  finally
+    Store.Free;
+  end;
+end;
+
+procedure TOrderedValueMapTests.TestEquivalentUTF16StringEncodingsCollapse;
+const
+  UTF8_GRINNING_FACE = #$F0#$9F#$98#$80;
+  UTF8_SURROGATE_PAIR = #$ED#$A0#$BD#$ED#$B8#$80;
+var
+  Store: TGocciaOrderedValueMap;
+  V: TGocciaValue;
+begin
+  Store := TGocciaOrderedValueMap.Create;
+  try
+    Store.SetEntry(Str(UTF8_GRINNING_FACE), Str('first'));
+    Store.SetEntry(Str(UTF8_SURROGATE_PAIR), Str('second'));
+    Expect<Integer>(Store.Count).ToBe(1);
+    Expect<Boolean>(Store.TryGetValue(Str(UTF8_GRINNING_FACE), V)).ToBe(True);
+    Expect<string>(TGocciaStringLiteralValue(V).Value).ToBe('second');
   finally
     Store.Free;
   end;

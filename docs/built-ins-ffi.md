@@ -111,4 +111,4 @@ Callbacks may enter JavaScript only on the runtime thread that created them. A f
 ## Related Documentation
 
 - [Built-in Objects](built-ins.md) — index of core and runtime built-ins
-- [ADR 0093](adr/0093-custom-bidirectional-ffi-abi-engine.md) — custom bidirectional ABI architecture and trade-offs
+- [ADR 0094](adr/0094-custom-bidirectional-ffi-abi-engine.md) — custom bidirectional ABI architecture and trade-offs

@@ -32,6 +32,7 @@ type
     FUnsafeFFI: TFlagOption;
     FUnsafeFunctionConstructor: TFlagOption;
     FUnsafeShadowRealm: TFlagOption;
+    FDeterministic: TFlagOption;
     FWarningUnsupportedFeatures: TFlagOption;
     FStackSize: TIntegerOption;
     FStrictTypes: TFlagOption;
@@ -55,6 +56,7 @@ type
     property UnsafeFFI: TFlagOption read FUnsafeFFI;
     property UnsafeFunctionConstructor: TFlagOption read FUnsafeFunctionConstructor;
     property UnsafeShadowRealm: TFlagOption read FUnsafeShadowRealm;
+    property Deterministic: TFlagOption read FDeterministic;
     property WarningUnsupportedFeatures: TFlagOption read FWarningUnsupportedFeatures;
     property StackSize: TIntegerOption read FStackSize;
     property StrictTypes: TFlagOption read FStrictTypes;
@@ -110,7 +112,7 @@ function TryApplyCompatibilityFlagArg(const AArg: string;
 implementation
 
 const
-  ENGINE_FIXED_OPTION_COUNT = 15;
+  ENGINE_FIXED_OPTION_COUNT = 16;
 
   SOURCE_COMPATIBILITY_FLAGS: array[TGocciaCompatibility]
     of TGocciaCompatibilityFlagDescriptor = (
@@ -212,6 +214,8 @@ begin
     'Enable the Function constructor (dynamic code generation)', 'Engine');
   FUnsafeShadowRealm := TFlagOption.Create('unsafe-shadowrealm',
     'Enable the ShadowRealm constructor (dynamic source evaluation)', 'Engine');
+  FDeterministic := TFlagOption.Create('deterministic',
+    'Use fixed script-visible time, UTC, and seeded randomness', 'Engine');
   FWarningUnsupportedFeatures := TFlagOption.Create(
     'warning-unsupported-features',
     'Warn and recover for unsupported/default-disabled syntax instead of failing parsing',
@@ -243,6 +247,7 @@ begin
   FUnsafeFFI.Free;
   FUnsafeFunctionConstructor.Free;
   FUnsafeShadowRealm.Free;
+  FDeterministic.Free;
   FWarningUnsupportedFeatures.Free;
   FStackSize.Free;
   FStrictTypes.Free;
@@ -282,6 +287,8 @@ begin
   Result[Index] := FUnsafeFunctionConstructor;
   Inc(Index);
   Result[Index] := FUnsafeShadowRealm;
+  Inc(Index);
+  Result[Index] := FDeterministic;
   Inc(Index);
   Result[Index] := FWarningUnsupportedFeatures;
   Inc(Index);

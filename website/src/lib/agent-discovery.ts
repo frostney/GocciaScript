@@ -174,9 +174,9 @@ Prefer modern JavaScript forms that GocciaScript supports by default. Compatibil
 - Use \`let\` and \`const\`, not \`var\` unless \`compatVar\` is enabled.
 - Use arrow functions, method shorthand, async methods, and class methods; the \`function\` keyword requires \`compatFunction\`.
 - Use \`===\` and \`!==\`, not \`==\` or \`!=\`.
-- Use \`for...of\`, \`for await...of\`, array methods, and iterators; traditional \`for\`, \`while\`, and \`do...while\` loops are excluded.
-- Do not use \`eval\`, \`Function()\`, \`arguments\`, or \`with\`.
-- Use named ES module imports/exports for internal examples. Default imports/exports are supported when a module exposes a primary value; side-effect-only imports and wildcard re-exports are not supported.
+- Use \`for...of\`, \`for await...of\`, array methods, and iterators by default; traditional \`for\`, \`while\`, and \`do...while\` loops require compatibility flags.
+- Avoid dynamic code and scope-changing forms. Normal runtimes do not install \`eval\`; \`Function()\` requires \`--unsafe-function-constructor\`; \`arguments\` and \`with\` require compatibility flags.
+- Prefer named ES module imports/exports for internal examples. Default imports/exports, side-effect-only imports, and wildcard re-exports are also supported.
 
 ## Limits
 

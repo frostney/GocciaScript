@@ -225,6 +225,8 @@ var
   AggregateErrorConstructorFunc: TGocciaNativeFunctionValue;
   SuppressedErrorConstructorFunc: TGocciaNativeFunctionValue;
   DOMExceptionConstructorFunc: TGocciaNativeFunctionValue;
+  DecodeURIComponentFunc: TGocciaNativeFunctionValue;
+  DecodeURIFunc: TGocciaNativeFunctionValue;
   ErrorStaticMembers: TArray<TGocciaMemberDefinition>;
   ErrorProtoMembers: TArray<TGocciaMemberDefinition>;
   StackGetterFunc: TGocciaNativeFunctionValue;
@@ -386,17 +388,20 @@ begin
     TGocciaNativeFunctionValue.CreateWithoutPrototype(
       EncodeURICallback, 'encodeURI', 1), dtConst, True);
 
-  AScope.DefineLexicalBinding('decodeURI',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      DecodeURICallback, 'decodeURI', 1), dtConst, True);
+  DecodeURIFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    DecodeURICallback, 'decodeURI', 1);
+  DecodeURIFunc.IntrinsicKind := nikDecodeURI;
+  AScope.DefineLexicalBinding('decodeURI', DecodeURIFunc, dtConst, True);
 
   AScope.DefineLexicalBinding('encodeURIComponent',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(
       EncodeURIComponentCallback, 'encodeURIComponent', 1), dtConst, True);
 
-  AScope.DefineLexicalBinding('decodeURIComponent',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      DecodeURIComponentCallback, 'decodeURIComponent', 1), dtConst, True);
+  DecodeURIComponentFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    DecodeURIComponentCallback, 'decodeURIComponent', 1);
+  DecodeURIComponentFunc.IntrinsicKind := nikDecodeURIComponent;
+  AScope.DefineLexicalBinding('decodeURIComponent', DecodeURIComponentFunc,
+    dtConst, True);
 end;
 
 procedure TGocciaGlobals.RegisterUtilityRuntimeGlobals;
