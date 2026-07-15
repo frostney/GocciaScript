@@ -391,10 +391,10 @@ begin
   FileIndex := -1;
   for I := 0 to High(AResult.FileResults) do
     if Pos(AResult.FileResults[I].FileName, AMessage) > 0 then
-    begin
-      FileIndex := I;
-      Break;
-    end;
+      if (FileIndex < 0) or
+         (Length(AResult.FileResults[I].FileName) >
+          Length(AResult.FileResults[FileIndex].FileName)) then
+        FileIndex := I;
   if FileIndex >= 0 then
   begin
     AResult.FileResults[FileIndex].Failed :=
@@ -505,21 +505,27 @@ begin
     end;
 
     ResetPendingInlineSnapshots;
-    BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
-    IsParallelRun := (Files.Count > 1) and (GetJobCount(Files.Count) > 1);
-    if Files.Count = 1 then
-    begin
-      if (not FNoProgress.Present) and (not IsJsonOutput) then
-        WriteLn('[1/1] ', Files[0]);
-      { Stdin is always a single source — the callee takes ownership of
-        StdinSource and frees it like a disk-loaded TStringList. }
-      AggregatedResult := RunScriptFromFile(Files[0], StdinSource);
-      StdinSource := nil;
-    end
-    else if IsParallelRun then
-      AggregatedResult := RunScriptsFromFilesParallel(Files, GetJobCount(Files.Count))
-    else
-      AggregatedResult := RunScriptsFromFiles(Files);
+    try
+      BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
+      IsParallelRun := (Files.Count > 1) and (GetJobCount(Files.Count) > 1);
+      if Files.Count = 1 then
+      begin
+        if (not FNoProgress.Present) and (not IsJsonOutput) then
+          WriteLn('[1/1] ', Files[0]);
+        { Stdin is always a single source — the callee takes ownership of
+          StdinSource and frees it like a disk-loaded TStringList. }
+        AggregatedResult := RunScriptFromFile(Files[0], StdinSource);
+        StdinSource := nil;
+      end
+      else if IsParallelRun then
+        AggregatedResult := RunScriptsFromFilesParallel(Files,
+          GetJobCount(Files.Count))
+      else
+        AggregatedResult := RunScriptsFromFiles(Files);
+    except
+      DiscardPendingInlineSnapshots;
+      raise;
+    end;
     try
       FlushPendingInlineSnapshots;
     except

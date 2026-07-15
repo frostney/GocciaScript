@@ -873,46 +873,27 @@ begin
     Prefix := DisplayName + ' ';
   if AArray.Elements.Count = 0 then
     Exit(Prefix + '[]');
-  if ASettings.Min then
-  begin
-    Buffer := TStringBuffer.Create;
-    Buffer.Append(Prefix + '[');
-    for I := 0 to AArray.Elements.Count - 1 do
-    begin
-      if I > 0 then
-        Buffer.Append(', ');
-      if I = ASettings.MaxWidth then
-      begin
-        Buffer.Append('…(' + IntToStr(AArray.Elements.Count - I) + ')');
-        Break;
-      end;
-      Element := AArray.Elements[I];
-      if not (Element is TGocciaHoleValue) then
-        Buffer.Append(FormatRecursive(Element, ASettings, AIndentation,
-          ADepth + 1, AReferences, False));
-    end;
-    Buffer.Append(']');
-    Exit(Buffer.ToString);
-  end;
   NextIndentation := AIndentation + ASettings.Indent;
   Buffer := TStringBuffer.Create;
-  Buffer.Append(Prefix + '[' + LINE_FEED);
+  Buffer.Append(Prefix + '[' + ASettings.SpacingOuter);
   for I := 0 to AArray.Elements.Count - 1 do
   begin
     Buffer.Append(NextIndentation);
     if I = ASettings.MaxWidth then
     begin
-      Buffer.Append('…(' + IntToStr(AArray.Elements.Count - I) + ')' +
-        LINE_FEED);
+      Buffer.Append('…(' + IntToStr(AArray.Elements.Count - I) + ')');
       Break;
     end;
     Element := AArray.Elements[I];
     if not (Element is TGocciaHoleValue) then
       Buffer.Append(FormatRecursive(Element, ASettings, NextIndentation,
         ADepth + 1, AReferences, False));
-    Buffer.Append(',' + LINE_FEED);
+    if I < AArray.Elements.Count - 1 then
+      Buffer.Append(',' + ASettings.SpacingInner)
+    else if not ASettings.Min then
+      Buffer.Append(',');
   end;
-  Buffer.Append(AIndentation + ']');
+  Buffer.Append(ASettings.SpacingOuter + AIndentation + ']');
   Result := Buffer.ToString;
 end;
 

@@ -16,6 +16,7 @@ type
     FSourcePath: string;
     FBackingSourcePath: string;
     FSnapshotPath: string;
+    FInlineSnapshotGeneration: QWord;
     FInlineEdits: TList<TGocciaInlineSnapshotEdit>;
 
     procedure WriteUTF8Text(const APath: string; const AContent: UTF8String);
@@ -38,6 +39,7 @@ type
   Engines only enqueue edits; the runner applies the combined descending edit
   set after every engine has finished reading the original source. }
 procedure ResetPendingInlineSnapshots;
+procedure DiscardPendingInlineSnapshots;
 procedure FlushPendingInlineSnapshots;
 
 implementation
@@ -63,6 +65,8 @@ var
   InlineSnapshotWriteLock: TRTLCriticalSection;
   PendingInlineEdits: TList<TGocciaInlineSnapshotEdit>;
   PendingInlineError: string;
+  PendingInlineGeneration: QWord;
+  PendingInlineOpen: Boolean;
 
 procedure WriteUTF8TextFile(const APath: string; const AContent: UTF8String);
 var
@@ -822,6 +826,12 @@ begin
     FBackingSourcePath := MultifileOriginalPath(ASourcePath);
   FSnapshotPath := IncludeTrailingPathDelimiter(ExtractFileDir(ASourcePath)) +
     '__snapshots__' + PathDelim + ExtractFileName(ASourcePath) + '.snap';
+  EnterCriticalSection(InlineSnapshotWriteLock);
+  try
+    FInlineSnapshotGeneration := PendingInlineGeneration;
+  finally
+    LeaveCriticalSection(InlineSnapshotWriteLock);
+  end;
   FInlineEdits := TList<TGocciaInlineSnapshotEdit>.Create;
 end;
 
@@ -907,6 +917,15 @@ begin
 
   EnterCriticalSection(InlineSnapshotWriteLock);
   try
+    { A watchdog-abandoned worker can resume after the runner has finalized
+      this run. Discard its host-local edits instead of allowing them to enter
+      a closed or newer run's process-wide queue. }
+    if (not PendingInlineOpen) or
+       (FInlineSnapshotGeneration <> PendingInlineGeneration) then
+    begin
+      FInlineEdits.Clear;
+      Exit;
+    end;
     if PendingInlineError <> '' then
     begin
       FInlineEdits.Clear;
@@ -944,6 +963,20 @@ procedure ResetPendingInlineSnapshots;
 begin
   EnterCriticalSection(InlineSnapshotWriteLock);
   try
+    Inc(PendingInlineGeneration);
+    PendingInlineOpen := True;
+    PendingInlineEdits.Clear;
+    PendingInlineError := '';
+  finally
+    LeaveCriticalSection(InlineSnapshotWriteLock);
+  end;
+end;
+
+procedure DiscardPendingInlineSnapshots;
+begin
+  EnterCriticalSection(InlineSnapshotWriteLock);
+  try
+    PendingInlineOpen := False;
     PendingInlineEdits.Clear;
     PendingInlineError := '';
   finally
@@ -958,6 +991,7 @@ var
 begin
   EnterCriticalSection(InlineSnapshotWriteLock);
   try
+    PendingInlineOpen := False;
     if PendingInlineError <> '' then
       raise Exception.Create(PendingInlineError);
     if PendingInlineEdits.Count = 0 then
@@ -991,6 +1025,8 @@ end;
 initialization
   InitCriticalSection(InlineSnapshotWriteLock);
   PendingInlineEdits := TList<TGocciaInlineSnapshotEdit>.Create;
+  PendingInlineGeneration := 0;
+  PendingInlineOpen := False;
 
 finalization
   PendingInlineEdits.Free;

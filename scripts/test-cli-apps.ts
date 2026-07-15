@@ -2063,24 +2063,72 @@ console.log("Loader: coverage --output=json not corrupted...");
 console.log("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + bytecode)...");
 {
   const tmp = makeTmp();
-  const localEnv = {
-    ...process.env,
-    CI: "",
-    CONTINUOUS_INTEGRATION: "",
-    GITHUB_ACTIONS: "",
-    GITLAB_CI: "",
-    TEAMCITY_VERSION: "",
-    BUILDKITE: "",
-    CIRCLECI: "",
-    BUILD_NUMBER: "",
-    RUN_ID: "",
-  };
+  const localEnv = { ...process.env };
+  // Keep this list aligned with GocciaTestRunner.IsContinuousIntegration.
+  for (const name of [
+    "CI",
+    "CONTINUOUS_INTEGRATION",
+    "APPVEYOR",
+    "AWS_APP_ID",
+    "SYSTEM_TEAMFOUNDATIONCOLLECTIONURI",
+    "INPUT_AZURE_STATIC_WEB_APPS_API_TOKEN",
+    "AC_APPCIRCLE",
+    "bamboo_planKey",
+    "BITBUCKET_COMMIT",
+    "BITRISE_IO",
+    "BUDDY_WORKSPACE_ID",
+    "BUILDKITE",
+    "CIRCLECI",
+    "CIRRUS_CI",
+    "CF_PAGES",
+    "WORKERS_CI",
+    "K_SERVICE",
+    "CLOUD_RUN_JOB",
+    "CODEBUILD_BUILD_ARN",
+    "CF_BUILD_ID",
+    "DRONE",
+    "DRONE_BUILD_EVENT",
+    "DSARI",
+    "GITHUB_ACTIONS",
+    "GITLAB_CI",
+    "CI_MERGE_REQUEST_ID",
+    "GO_PIPELINE_LABEL",
+    "LAYERCI",
+    "JENKINS_URL",
+    "HUDSON_URL",
+    "MAGNUM",
+    "NETLIFY",
+    "NEVERCODE",
+    "RENDER",
+    "SAILCI",
+    "SEMAPHORE",
+    "SCREWDRIVER",
+    "SHIPPABLE",
+    "TDDIUM",
+    "STRIDER",
+    "TEAMCITY_VERSION",
+    "TRAVIS",
+    "NOW_BUILDER",
+    "APPCENTER_BUILD_ID",
+    "STACKBLITZ",
+    "STORMKIT",
+    "CLEAVR",
+    "ZEABUR",
+    "CODESPHERE_APP_ID",
+    "RAILWAY_PROJECT_ID",
+    "RAILWAY_SERVICE_ID",
+    "DENO_DEPLOY",
+    "DENO_DEPLOYMENT_ID",
+    "FIREBASE_APP_HOSTING",
+  ]) {
+    delete localEnv[name];
+  }
   const ciEnv = { ...localEnv, CI: "1" };
   const stringCiEnv = { ...localEnv, CI: "false" };
   const teamCityEnv = { ...localEnv, TEAMCITY_VERSION: "2025.1" };
-  const run = (args: string[], env = localEnv) => Bun.spawnSync(
+  const run = (args: string[], env = localEnv, cwd?: string) => Bun.spawnSync(
     [resolve(TESTRUNNER), ...args, "--no-progress", "--no-results", "--silent"],
-    { stdout: "pipe", stderr: "pipe", env },
+    { stdout: "pipe", stderr: "pipe", env, cwd },
   );
 
   try {
@@ -2446,6 +2494,41 @@ console.log("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + byt
         conflictResult.files.some((file: { failed: number; totalTests: number }) =>
           file.failed !== 0 || file.totalTests !== 1))
       throw new Error(`Conflicting snapshots should be one process-level failure: ${proc.stdout}${proc.stderr}`);
+
+    const attributionDir = join(tmp, "snapshot-attribution");
+    mkdirSync(join(attributionDir, "dir"), { recursive: true });
+    writeFileSync(join(attributionDir, "foo.js"), 'test("shallow", () => expect(true).toBe(true));\n');
+    writeFileSync(join(attributionDir, "dir", "foo.js"), conflictingSource);
+    writeFileSync(join(attributionDir, "left.test.js"), [
+      'import { match } from "./dir/foo.js";',
+      'test("left", () => match("left"));',
+      '',
+    ].join("\n"));
+    writeFileSync(join(attributionDir, "right.test.js"), [
+      'import { match } from "./dir/foo.js";',
+      'test("right", () => match("right"));',
+      '',
+    ].join("\n"));
+    proc = run([
+      "foo.js",
+      "dir/foo.js",
+      "left.test.js",
+      "right.test.js",
+      "--jobs=4",
+      "--mode=bytecode",
+      "--output=compact-json",
+    ], localEnv, attributionDir);
+    const attributionResult = JSON.parse(proc.stdout.toString());
+    const shallowResult = attributionResult.files.find(
+      (file: { fileName: string }) => file.fileName === "foo.js",
+    );
+    const nestedResult = attributionResult.files.find(
+      (file: { fileName: string }) => file.fileName === "dir/foo.js",
+    );
+    if (proc.exitCode === 0 || shallowResult?.failed !== 0 ||
+        nestedResult?.failed !== 1 ||
+        !nestedResult.error?.message?.includes("Conflicting inline snapshots"))
+      throw new Error(`Snapshot errors should prefer the longest matching path: ${proc.stdout}${proc.stderr}`);
 
     const multifileExternal = join(tmp, "snapshot-multi.test.js");
     writeFileSync(multifileExternal, [

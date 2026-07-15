@@ -33,6 +33,7 @@ type
     procedure TestResolvesExpressionDebugLocation;
     procedure TestRewritesAfterUnicodeLineSeparator;
     procedure TestRewritesWithNonBreakingSpaceBeforeArguments;
+    procedure TestRejectsLateFlushFromPreviousRun;
   public
     procedure SetupTests; override;
     procedure BeforeEach; override;
@@ -62,6 +63,8 @@ begin
     TestRewritesAfterUnicodeLineSeparator);
   Test('Rewrites with non-breaking space before matcher arguments',
     TestRewritesWithNonBreakingSpaceBeforeArguments);
+  Test('Rejects a late inline flush from the previous run',
+    TestRejectsLateFlushFromPreviousRun);
 end;
 
 procedure TSnapshotHostTests.BeforeEach;
@@ -455,6 +458,56 @@ begin
       '(`"space"`)', Source) > 0).ToBe(True);
   finally
     HostRef := nil;
+  end;
+end;
+
+procedure TSnapshotHostTests.TestRejectsLateFlushFromPreviousRun;
+var
+  ClosedHost: TGocciaTestRunnerSnapshotHost;
+  Edit: TGocciaInlineSnapshotEdit;
+  NewHost, OldHost: TGocciaTestRunnerSnapshotHost;
+  ClosedHostRef, NewHostRef, OldHostRef: IGocciaSnapshotHost;
+  Source, SourcePath: string;
+begin
+  SourcePath := FTempDir + PathDelim + 'late-flush.test.js';
+  Source := 'expect("value").toMatchInlineSnapshot();';
+  WriteSource(SourcePath, Source + #10);
+  OldHost := TGocciaTestRunnerSnapshotHost.Create(SourcePath);
+  OldHostRef := OldHost;
+  try
+    Edit.Line := 1;
+    Edit.Column := MethodCallColumn(Source);
+    Edit.SnapshotArgumentIndex := 0;
+    Edit.Snapshot := '"old"';
+    OldHost.QueueInlineSnapshot(Edit);
+
+    ClosedHost := TGocciaTestRunnerSnapshotHost.Create(SourcePath);
+    ClosedHostRef := ClosedHost;
+    Edit.Snapshot := '"closed"';
+    ClosedHost.QueueInlineSnapshot(Edit);
+    FlushPendingInlineSnapshots;
+    ClosedHost.FlushInlineSnapshots;
+    ResetPendingInlineSnapshots;
+
+    NewHost := TGocciaTestRunnerSnapshotHost.Create(SourcePath);
+    NewHostRef := NewHost;
+    try
+      Edit.Snapshot := '"new"';
+      NewHost.QueueInlineSnapshot(Edit);
+      NewHost.FlushInlineSnapshots;
+      OldHost.FlushInlineSnapshots;
+      FlushPendingInlineSnapshots;
+      Source := string(ReadUTF8FileText(SourcePath));
+      Expect<Boolean>(Pos('toMatchInlineSnapshot(`"new"`)', Source) > 0)
+        .ToBe(True);
+      Expect<Boolean>(Pos('`"old"`', Source) = 0).ToBe(True);
+      Expect<Boolean>(Pos('`"closed"`', Source) = 0).ToBe(True);
+    finally
+      NewHostRef := nil;
+    end;
+  finally
+    ClosedHostRef := nil;
+    OldHostRef := nil;
   end;
 end;
 

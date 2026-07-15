@@ -314,12 +314,13 @@ assertions themselves do not support `.not`.
 
 Local runs create missing snapshots. Existing mismatches fail until the runner
 is invoked with `-u`, `--update`, or `--update-snapshots`; update mode also
-prunes obsolete entries. Environments detected as CI by Vitest's `std-env`
-provider conventions—including GitHub Actions, GitLab, TeamCity, Buildkite,
-CircleCI, `CI`, and `CONTINUOUS_INTEGRATION`—do not write snapshots and fail on
-missing, mismatched, or obsolete entries. External snapshots are unavailable
-for stdin input. Existing inline snapshots can be compared from stdin, but they
-cannot be created or updated there.
+prunes obsolete entries. Unless an explicit update flag is supplied,
+environments detected as CI by Vitest's `std-env` provider conventions—including
+GitHub Actions, GitLab, TeamCity, Buildkite, CircleCI, `CI`, and
+`CONTINUOUS_INTEGRATION`—do not write snapshots and fail on missing, mismatched,
+or obsolete entries. External snapshots are unavailable for stdin input.
+Existing inline snapshots can be compared from stdin, but they cannot be
+created or updated there.
 
 Register a Vitest/pretty-format-compatible serializer when a test value needs a
 domain-specific representation. The most recently registered serializer runs

@@ -50,6 +50,8 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     function MaxWidthSerialize(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+    function ArraySpacingSerialize(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     function MakeSerializer(
       const ASerialize: TGocciaNativeFunctionValue): TGocciaObjectValue;
 
@@ -60,6 +62,7 @@ type
     procedure TestLastAddedSerializerRunsFirst;
     procedure TestSerializerReceivesPrettyFormatArguments;
     procedure TestSerializerCanLimitRecursiveCollectionWidth;
+    procedure TestSerializerControlsRecursiveArraySpacing;
     procedure TestAsymmetricMatchersUseVitestDisplay;
     procedure TestFormatterCanBeReplaced;
   public
@@ -86,6 +89,8 @@ begin
     TestSerializerReceivesPrettyFormatArguments);
   Test('Serializer can limit recursive collection width',
     TestSerializerCanLimitRecursiveCollectionWidth);
+  Test('Serializer controls recursive array spacing',
+    TestSerializerControlsRecursiveArraySpacing);
   Test('Asymmetric matchers use Vitest display',
     TestAsymmetricMatchersUseVitestDisplay);
   Test('Pascal formatter can be replaced', TestFormatterCanBeReplaced);
@@ -183,6 +188,42 @@ begin
   Config := TGocciaObjectValue(AArgs.GetElement(1));
   Config.AssignProperty('maxWidth', TGocciaNumberLiteralValue.OneValue);
   Nested := TGocciaObjectValue(AArgs.GetElement(0)).GetProperty('nested');
+  Printer := AArgs.GetElement(5);
+  PrinterArguments := TGocciaArgumentsCollection.Create([
+    Nested,
+    Config,
+    AArgs.GetElement(2),
+    AArgs.GetElement(3),
+    AArgs.GetElement(4)
+  ]);
+  try
+    Printed := DispatchCall(Printer, PrinterArguments,
+      TGocciaUndefinedLiteralValue.UndefinedValue);
+  finally
+    PrinterArguments.Free;
+  end;
+  Result := Printed;
+end;
+
+function TSnapshotFormattingTests.ArraySpacingSerialize(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Config: TGocciaObjectValue;
+  Nested, Printed, Printer: TGocciaValue;
+  PrinterArguments: TGocciaArgumentsCollection;
+  Value: TGocciaObjectValue;
+begin
+  Config := TGocciaObjectValue(AArgs.GetElement(1));
+  Value := TGocciaObjectValue(AArgs.GetElement(0));
+  Config.AssignProperty('min', Value.GetProperty('min'));
+  if Value.GetProperty('min').ToBooleanLiteral.Value then
+    Config.AssignProperty('indent', TGocciaStringLiteralValue.Create(''))
+  else
+    Config.AssignProperty('indent', TGocciaStringLiteralValue.Create('  '));
+  Config.AssignProperty('spacingInner', TGocciaStringLiteralValue.Create('|'));
+  Config.AssignProperty('spacingOuter', TGocciaStringLiteralValue.Create('<>'));
+  Nested := Value.GetProperty('nested');
   Printer := AArgs.GetElement(5);
   PrinterArguments := TGocciaArgumentsCollection.Create([
     Nested,
@@ -426,6 +467,29 @@ begin
     '  1,' + LF +
     '  …(2)' + LF +
     '}');
+end;
+
+procedure TSnapshotFormattingTests.TestSerializerControlsRecursiveArraySpacing;
+var
+  Nested: TGocciaArrayValue;
+  Value: TGocciaObjectValue;
+begin
+  Nested := TGocciaArrayValue.Create;
+  Nested.Elements.Add(TGocciaNumberLiteralValue.OneValue);
+  Nested.Elements.Add(TGocciaNumberLiteralValue.Create(2));
+  Value := TGocciaObjectValue.Create;
+  Value.CreateDataPropertyOrThrow('nested', Nested);
+  Value.CreateDataPropertyOrThrow('custom',
+    TGocciaBooleanLiteralValue.TrueValue);
+  Value.CreateDataPropertyOrThrow('min',
+    TGocciaBooleanLiteralValue.TrueValue);
+  FFirstSerializer := MakeSerializer(
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(ArraySpacingSerialize,
+      'serialize', 6));
+  Expect<Boolean>(FFormatting.Serializers.Add(FFirstSerializer)).ToBe(True);
+  Expect<string>(FFormatting.Format(Value)).ToBe('[<>1,|2<>]');
+  Value.AssignProperty('min', TGocciaBooleanLiteralValue.FalseValue);
+  Expect<string>(FFormatting.Format(Value)).ToBe('[<>  1,|  2,<>]');
 end;
 
 procedure TSnapshotFormattingTests.TestFormatterCanBeReplaced;

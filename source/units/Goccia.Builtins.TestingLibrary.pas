@@ -403,7 +403,7 @@ begin
     PropertiesArray := TGocciaArrayValue(AProperties);
     MergedArray := TGocciaArrayValue.Create(nil, ActualArray.Elements.Count);
     InitializeTempRoot(MergedRoot);
-    AddTempRootIfNeeded(MergedRoot, MergedArray);
+    Goccia.GarbageCollector.AddTempRootIfNeeded(MergedRoot, MergedArray);
     try
       for I := 0 to ActualArray.Elements.Count - 1 do
         MergedArray.Elements.Add(ActualArray.Elements[I]);
@@ -417,7 +417,7 @@ begin
       end;
       Result := MergedArray;
     finally
-      RemoveTempRootIfNeeded(MergedRoot);
+      Goccia.GarbageCollector.RemoveTempRootIfNeeded(MergedRoot);
     end;
     Exit;
   end;
@@ -430,7 +430,7 @@ begin
     PropertiesObject := TGocciaObjectValue(AProperties);
     MergedObject := TGocciaObjectValue.Create;
     InitializeTempRoot(MergedRoot);
-    AddTempRootIfNeeded(MergedRoot, MergedObject);
+    Goccia.GarbageCollector.AddTempRootIfNeeded(MergedRoot, MergedObject);
     try
       for Entry in ActualObject.GetEnumerablePropertyEntries do
         MergedObject.AssignProperty(Entry.Key, Entry.Value);
@@ -445,7 +445,7 @@ begin
       end;
       Result := MergedObject;
     finally
-      RemoveTempRootIfNeeded(MergedRoot);
+      Goccia.GarbageCollector.RemoveTempRootIfNeeded(MergedRoot);
     end;
     Exit;
   end;
