@@ -220,6 +220,7 @@ begin
   // (Engine.Compatibility already propagates to the loader; preprocessors and
   // resolver aliases do not, so mirror them here.)
   FEngine.ModuleLoader.SetContentProvider(AParentEngine.ContentProvider, False);
+  FEngine.ModuleLoader.CopyVirtualModulesFrom(AParentEngine.ModuleLoader);
   FEngine.ModuleLoader.Preprocessors := AParentEngine.Preprocessors;
   for AliasPair in AParentEngine.ModuleLoader.Resolver.Aliases do
     FEngine.ModuleLoader.Resolver.AddAlias(AliasPair.Key, AliasPair.Value);

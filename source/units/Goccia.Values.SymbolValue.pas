@@ -94,7 +94,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Realm,
-  Goccia.Threading,
+  Goccia.Threading.Flags,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,

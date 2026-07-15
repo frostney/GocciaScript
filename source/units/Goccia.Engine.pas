@@ -116,6 +116,12 @@ type
     function InjectGlobalsFromTOML(
       const ATOMLString: UTF8String): Boolean; virtual;
     function InjectGlobalsFromYAML(const AYamlString: string): Boolean; virtual;
+    function InjectModulesFromJSON5(const AJSON5String: UTF8String;
+      const ABaseAddress: string): Boolean; virtual;
+    function InjectModulesFromTOML(const ATOMLString: UTF8String;
+      const ABaseAddress: string): Boolean; virtual;
+    function InjectModulesFromYAML(const AYAMLString: UTF8String;
+      const ABaseAddress: string): Boolean; virtual;
   end;
 
   TGocciaEngineExtensionClass = class of TGocciaEngineExtension;
@@ -145,8 +151,12 @@ type
     FExecutor: TGocciaExecutor;
     FSourceLines: TStringList;
     FExtensions: TGocciaEngineExtensionList;
-    FRetainedModules: TObjectList;
-    FLazyThunks: TObjectList;
+    // Qualified: Generics.Collections' TObjectList<T> shadows the
+    // classic Contnrs form for unqualified references under lakon's
+    // stricter later-unit-wins rule; the qualification is a no-op
+    // for FPC.
+    FRetainedModules: Contnrs.TObjectList;
+    FLazyThunks: Contnrs.TObjectList;
     FHostEnvironment: TGocciaHostEnvironment;
 
     // Core language built-in objects
@@ -224,6 +234,8 @@ type
     function CompileDynamicFunction(const AParamsSources: array of string;
       const ABodySource: string;
       const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
+    procedure InjectModulesFromValue(const AValue: TGocciaValue;
+      const ABaseAddress, AProvenance: string);
   public
     { Callers always provide an explicit executor — no implicit interpreter
       fallback. Pair an executor with the engine that owns it; the engine
@@ -271,11 +283,27 @@ type
     procedure InjectGlobalsFromTOML(const ATOMLString: UTF8String);
     procedure InjectGlobalsFromYAML(const AYamlString: string);
     procedure InjectGlobalsFromModule(const APath: string);
+    procedure InjectModule(const AName, AContent: string;
+      const AType: string = ''; const ABaseAddress: string = '');
+    procedure InjectModulesFromJSON(const AJSONString: UTF8String;
+      const ABaseAddress: string = '');
+    procedure InjectModulesFromJSON5(const AJSON5String: UTF8String;
+      const ABaseAddress: string = '');
+    procedure InjectModulesFromTOML(const ATOMLString: UTF8String;
+      const ABaseAddress: string = '');
+    procedure InjectModulesFromYAML(const AYAMLString: UTF8String;
+      const ABaseAddress: string = '');
+    procedure InjectModulesFromModule(const APath: string);
     procedure ClearTransientCaches;
     procedure RegisterGlobalModule(const AName: string; const AModule: TGocciaModule);
     procedure RegisterGlobalModuleProvider(const AName: string;
       const AProvider: TGocciaGlobalModuleProvider);
     procedure UnregisterGlobalModuleProvider(const AName: string);
+    procedure RegisterHostModule(const AName: string;
+      const AModule: TGocciaModule);
+    procedure RegisterHostModuleProvider(const AName: string;
+      const AProvider: TGocciaGlobalModuleProvider);
+    procedure UnregisterHostModuleProvider(const AName: string);
     procedure RefreshGlobalThis;
     procedure SuspendRealmExecutionContext;
     function ActivateRealmExecutionContext: TGocciaExecutionContextScope;
@@ -361,7 +389,6 @@ uses
   Goccia.Scope.Redeclaration,
   Goccia.Shims,
   Goccia.Spec,
-  Goccia.Threading,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
@@ -413,6 +440,24 @@ end;
 
 function TGocciaEngineExtension.InjectGlobalsFromYAML(
   const AYamlString: string): Boolean;
+begin
+  Result := False;
+end;
+
+function TGocciaEngineExtension.InjectModulesFromJSON5(
+  const AJSON5String: UTF8String; const ABaseAddress: string): Boolean;
+begin
+  Result := False;
+end;
+
+function TGocciaEngineExtension.InjectModulesFromTOML(
+  const ATOMLString: UTF8String; const ABaseAddress: string): Boolean;
+begin
+  Result := False;
+end;
+
+function TGocciaEngineExtension.InjectModulesFromYAML(
+  const AYAMLString: UTF8String; const ABaseAddress: string): Boolean;
 begin
   Result := False;
 end;
@@ -553,6 +598,149 @@ begin
   for ExportName in ExportNames do
     if Module.TryGetExportValue(ExportName, ExportValue) then
       RegisterGlobal(ExportName, ExportValue);
+end;
+
+procedure TGocciaEngine.InjectModule(const AName, AContent: string;
+  const AType: string; const ABaseAddress: string);
+var
+  BaseAddress: string;
+begin
+  BaseAddress := ABaseAddress;
+  if BaseAddress = '' then
+    BaseAddress := FSourcePath;
+  FModuleLoader.InjectModule(AName, AContent, AType, BaseAddress,
+    'embedding API');
+end;
+
+procedure TGocciaEngine.InjectModulesFromValue(const AValue: TGocciaValue;
+  const ABaseAddress, AProvenance: string);
+var
+  Address, BaseAddress, Content, ContentType: string;
+  ContentValue, DescriptorValue, TypeValue: TGocciaValue;
+  Descriptor: TGocciaObjectValue;
+  Stringifier: TGocciaJSONStringifier;
+begin
+  BaseAddress := ABaseAddress;
+  if BaseAddress = '' then
+    BaseAddress := FSourcePath;
+  if (AValue is TGocciaArrayValue) or
+     not (AValue is TGocciaObjectValue) then
+    raise EArgumentException.Create(
+      'Virtual modules manifest must be a top-level object.');
+
+  for Address in TGocciaObjectValue(AValue).GetOwnPropertyKeys do
+  begin
+    DescriptorValue := TGocciaObjectValue(AValue).GetProperty(Address);
+    if (DescriptorValue is TGocciaArrayValue) or
+       not (DescriptorValue is TGocciaObjectValue) then
+      raise EArgumentException.CreateFmt(
+        'Virtual module "%s" must be an object descriptor.', [Address]);
+    Descriptor := TGocciaObjectValue(DescriptorValue);
+    if not Descriptor.HasOwnProperty('content') then
+      raise EArgumentException.CreateFmt(
+        'Virtual module "%s" is missing its content field.', [Address]);
+
+    ContentType := '';
+    if Descriptor.HasOwnProperty('type') then
+    begin
+      TypeValue := Descriptor.GetProperty('type');
+      if not (TypeValue is TGocciaStringLiteralValue) then
+        raise EArgumentException.CreateFmt(
+          'Virtual module "%s" type must be a string.', [Address]);
+      ContentType := TGocciaStringLiteralValue(TypeValue).Value;
+    end;
+
+    ContentValue := Descriptor.GetProperty('content');
+    if SameText(ContentType, 'json') then
+    begin
+      Stringifier := TGocciaJSONStringifier.Create;
+      try
+        Content := Stringifier.Stringify(ContentValue);
+      finally
+        Stringifier.Free;
+      end;
+    end
+    else
+    begin
+      if not (ContentValue is TGocciaStringLiteralValue) then
+        raise EArgumentException.CreateFmt(
+          'Virtual module "%s" content must be a string for type "%s".',
+          [Address, ContentType]);
+      Content := TGocciaStringLiteralValue(ContentValue).Value;
+    end;
+    FModuleLoader.InjectModule(Address, Content, ContentType, BaseAddress,
+      AProvenance);
+  end;
+end;
+
+procedure TGocciaEngine.InjectModulesFromJSON(const AJSONString: UTF8String;
+  const ABaseAddress: string);
+var
+  Parser: TGocciaJSONParser;
+  ParsedValue: TGocciaValue;
+begin
+  Parser := TGocciaJSONParser.Create;
+  try
+    ParsedValue := Parser.Parse(AJSONString);
+  finally
+    Parser.Free;
+  end;
+  if Assigned(TGarbageCollector.Instance) and Assigned(ParsedValue) then
+    TGarbageCollector.Instance.AddTempRoot(ParsedValue);
+  try
+    InjectModulesFromValue(ParsedValue, ABaseAddress, 'JSON manifest');
+  finally
+    if Assigned(TGarbageCollector.Instance) and Assigned(ParsedValue) then
+      TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+  end;
+end;
+
+procedure TGocciaEngine.InjectModulesFromJSON5(
+  const AJSON5String: UTF8String; const ABaseAddress: string);
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+    if FExtensions[I].InjectModulesFromJSON5(AJSON5String,
+       ABaseAddress) then
+      Exit;
+  ThrowError('JSON5 virtual modules require a runtime extension.', 0, 0);
+end;
+
+procedure TGocciaEngine.InjectModulesFromTOML(const ATOMLString: UTF8String;
+  const ABaseAddress: string);
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+    if FExtensions[I].InjectModulesFromTOML(ATOMLString,
+       ABaseAddress) then
+      Exit;
+  ThrowError('TOML virtual modules require a runtime extension.', 0, 0);
+end;
+
+procedure TGocciaEngine.InjectModulesFromYAML(const AYAMLString: UTF8String;
+  const ABaseAddress: string);
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+    if FExtensions[I].InjectModulesFromYAML(AYAMLString,
+       ABaseAddress) then
+      Exit;
+  ThrowError('YAML virtual modules require a runtime extension.', 0, 0);
+end;
+
+procedure TGocciaEngine.InjectModulesFromModule(const APath: string);
+var
+  DefaultValue: TGocciaValue;
+  Module: TGocciaModule;
+begin
+  Module := FModuleLoader.LoadModule(APath, FSourcePath);
+  if not Module.TryGetExportValue(KEYWORD_DEFAULT, DefaultValue) then
+    raise EArgumentException.Create(
+      'Virtual modules manifest module must have a default export.');
+  InjectModulesFromValue(DefaultValue, Module.Path, Module.Path);
 end;
 
 procedure TGocciaEngine.ClearTransientCaches;
@@ -701,7 +889,7 @@ begin
   FInjectedGlobals := TStringList.Create;
   // Owns the lazy materializers (shims, runtime namespaces) whose factory
   // closures back lazy global properties; freed in the destructor.
-  FLazyThunks := TObjectList.Create(True);
+  FLazyThunks := Contnrs.TObjectList.Create(True);
   RegisterDefaultShimNames(FShims);
   PinSingletons;
   RegisterBuiltIns;
@@ -711,7 +899,7 @@ begin
   // caller chose interpreter mode, bind the bootstrapped interpreter into
   // it now so its tree-walk methods can dispatch.  The bytecode executor
   // does not need this hook.
-  FRetainedModules := TObjectList.Create(True);
+  FRetainedModules := Contnrs.TObjectList.Create(True);
 
   if FExecutor is TGocciaInterpreterExecutor then
     TGocciaInterpreterExecutor(FExecutor).Interpreter := FInterpreter;
@@ -2075,7 +2263,17 @@ end;
 
 procedure TGocciaEngine.RegisterGlobalModule(const AName: string; const AModule: TGocciaModule);
 begin
+  if FModuleLoader.VirtualModules.Contains(AName) then
+    raise EInvalidOperation.CreateFmt(
+      'Host module "%s" conflicts with a configured virtual module.',
+      [AName]);
   FInterpreter.GlobalModules.AddOrSetValue(AName, AModule);
+end;
+
+procedure TGocciaEngine.RegisterHostModule(const AName: string;
+  const AModule: TGocciaModule);
+begin
+  RegisterGlobalModule(AName, AModule);
 end;
 
 procedure TGocciaEngine.RegisterGlobalModuleProvider(const AName: string;
@@ -2084,9 +2282,20 @@ begin
   FModuleLoader.RegisterGlobalModuleProvider(AName, AProvider);
 end;
 
+procedure TGocciaEngine.RegisterHostModuleProvider(const AName: string;
+  const AProvider: TGocciaGlobalModuleProvider);
+begin
+  RegisterGlobalModuleProvider(AName, AProvider);
+end;
+
 procedure TGocciaEngine.UnregisterGlobalModuleProvider(const AName: string);
 begin
   FModuleLoader.UnregisterGlobalModuleProvider(AName);
+end;
+
+procedure TGocciaEngine.UnregisterHostModuleProvider(const AName: string);
+begin
+  UnregisterGlobalModuleProvider(AName);
 end;
 
 function TGocciaEngine.Execute: TGocciaScriptResult;

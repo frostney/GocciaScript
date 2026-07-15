@@ -447,6 +447,20 @@ begin
   WriteLn('GocciaTestRunner built successfully');
 end;
 
+procedure BuildWasmTestRunner;
+var
+  Output: string;
+begin
+  WriteLn('Building GocciaWasmTestRunner...');
+  if not RunCommand('fpc', FPCArgs('source/app/GocciaWasmTestRunner.dpr',
+      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('wasmtestrunner'))),
+      Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaWasmTestRunner build failed',
+      'wasmtestrunner');
+  WriteLn(Output);
+  WriteLn('GocciaWasmTestRunner built successfully');
+end;
+
 procedure BuildFFIFixture;
 var
   Output: string;
@@ -534,6 +548,8 @@ begin
     BuildTestRunner;
     BuildFFIFixture;
   end
+  else if ATrigger = 'wasmtestrunner' then
+    BuildWasmTestRunner
   else if ATrigger = 'benchmarkrunner' then
     BuildBenchmarkRunner
   else if ATrigger = 'bundler' then
@@ -590,6 +606,7 @@ begin
     BuildTriggers.Add('loaderbare');
     BuildTriggers.Add('sandboxrunner');
     BuildTriggers.Add('testrunner');
+    BuildTriggers.Add('wasmtestrunner');
     BuildTriggers.Add('benchmarkrunner');
     BuildTriggers.Add('bundler');
     BuildTriggers.Add('repl');

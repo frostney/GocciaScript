@@ -1369,6 +1369,7 @@ begin
   Context.OnError := FClosure.OnError;
   Context.LoadModule := FClosure.LoadModule;
   Context.LoadModuleSource := FClosure.LoadModuleSource;
+  Context.ResolveModuleURL := FClosure.ResolveModuleURL;
   Context.CurrentFilePath := FSourceFilePath;
   Context.CoverageEnabled := False;
   // EffectiveStrictTypes walks to the root scope so generator bodies
@@ -1613,6 +1614,7 @@ begin
   Context.OnError := FClosure.OnError;
   Context.LoadModule := FClosure.LoadModule;
   Context.LoadModuleSource := FClosure.LoadModuleSource;
+  Context.ResolveModuleURL := FClosure.ResolveModuleURL;
   Context.CurrentFilePath := FSourceFilePath;
   Context.CoverageEnabled := False;
   // EffectiveStrictTypes — see CreateContinuation above.

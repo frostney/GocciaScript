@@ -28,6 +28,8 @@ type
     AImportingFilePath: string): TGocciaValue of object;
   TLoadDeferredModuleCallback = function(const AModulePath,
     AImportingFilePath: string): TGocciaValue of object;
+  TResolveModuleURLCallback = function(const AModulePath,
+    AImportingFilePath: string): string of object;
 
   TGocciaModuleExportBinding = class
   private

@@ -19,6 +19,7 @@ uses
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Resolver,
+  Goccia.Modules.Virtual,
   Goccia.Scope,
   Goccia.SourcePipeline,
   Goccia.Values.Primitives,
@@ -59,6 +60,8 @@ type
     FLoadingModules: TOrderedStringMap<Boolean>;
     FModules: TOrderedStringMap<TGocciaModule>;
     FModuleSourceValues: TOrderedStringMap<TGocciaValue>;
+    FVirtualModules: TGocciaVirtualModuleRegistry;
+    FWarnedVirtualCollisions: TOrderedStringMap<Boolean>;
     FOnError: TGocciaThrowErrorCallback;
     FOwnsContentProvider: Boolean;
     FOwnsResolver: Boolean;
@@ -75,12 +78,19 @@ type
       ACacheKey: string): TGocciaModule;
     function ResolveModuleRequestWithAttribute(const AModulePath,
       AAttributeType, AImportingFilePath: string): string;
+    function LoadResolvedContent(
+      const AResolvedPath: string): TGocciaModuleContent;
+    function LoadResolvedContentBytes(const AResolvedPath: string): TBytes;
+    function TryGetResolvedLastModified(const AResolvedPath: string;
+      out ALastModified: TDateTime): Boolean;
+    function IsJavaScriptModuleResource(const AResolvedPath: string): Boolean;
     procedure RecordFailedModuleError(const ACacheKey: string;
       const AValue: TGocciaValue; const ALastModified: TDateTime);
     procedure ClearFailedModuleError(const ACacheKey: string);
     function TryGetCachedFailedModuleError(const AResolvedPath,
       ACacheKey: string; out AValue: TGocciaValue): Boolean;
     function HasGlobalModuleRequest(const AModulePath: string): Boolean;
+    function HasModuleStateForAddress(const AAddress: string): Boolean;
     function TryLoadGlobalModule(const AModulePath: string;
       out AModule: TGocciaModule): Boolean;
     function DeferredGraphTouchesEvaluating(const AResolvedPath: string;
@@ -132,6 +142,14 @@ type
     function LoadDeferredModuleNamespaceValueForEvaluation(
       const AModulePath, AImportingFilePath: string;
       const ARequestedModules: TGocciaModuleList): TGocciaValue;
+    procedure InjectModule(const AAddress, AContent: string;
+      const AContentType: string = ''; const ABaseAddress: string = '';
+      const AProvenance: string = '');
+    procedure CopyVirtualModulesFrom(const ASource: TGocciaModuleLoader);
+    function ResolveModuleAddress(const AModulePath,
+      AImportingFilePath: string): string;
+    function ResolveModuleURL(const AModulePath,
+      AImportingFilePath: string): string;
     procedure RegisterModule(const AResolvedPath: string;
       const AModule: TGocciaModule);
     procedure RegisterGlobalModuleProvider(const AModulePath: string;
@@ -179,6 +197,8 @@ type
     property Resolver: TGocciaModuleResolver read FResolver;
     property RuntimeModuleLoader: TGocciaRuntimeModuleLoader
       read FRuntimeModuleLoader write FRuntimeModuleLoader;
+    property VirtualModules: TGocciaVirtualModuleRegistry
+      read FVirtualModules;
   end;
 
 implementation
@@ -195,6 +215,7 @@ uses
   Goccia.Evaluator,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.ImportMeta,
   Goccia.JSON,
   Goccia.Keywords.Reserved,
   Goccia.Realm,
@@ -389,6 +410,8 @@ begin
   FFailedModuleErrorModifiedTimes := TOrderedStringMap<TDateTime>.Create;
   FModules := TOrderedStringMap<TGocciaModule>.Create;
   FModuleSourceValues := TOrderedStringMap<TGocciaValue>.Create;
+  FVirtualModules := TGocciaVirtualModuleRegistry.Create;
+  FWarnedVirtualCollisions := TOrderedStringMap<Boolean>.Create;
   FLoadingModules := TOrderedStringMap<Boolean>.Create;
   FGlobalModules := TOrderedStringMap<TGocciaModule>.Create;
   FGlobalModuleProviders := TOrderedStringMap<TGocciaGlobalModuleProvider>.Create;
@@ -421,6 +444,9 @@ destructor TGocciaModuleLoader.Destroy;
 var
   NamespacePair: TOrderedStringMap<TGocciaValue>.TKeyValuePair;
   SourceValuePair: TOrderedStringMap<TGocciaValue>.TKeyValuePair;
+  ModulePair: TOrderedStringMap<TGocciaModule>.TKeyValuePair;
+  OwnedModules: TGocciaModuleList;
+  I: Integer;
 begin
   if Assigned(TGarbageCollector.Instance) then
   begin
@@ -431,12 +457,32 @@ begin
       if Assigned(SourceValuePair.Value) then
         TGarbageCollector.Instance.RemoveRootObject(SourceValuePair.Value);
   end;
+  { The loader owns every module it cached. Freeing them retracts the
+    GC roots each module registered (its environment scope and
+    namespace object) — leaving those registered dangles them into
+    the process-global collector after the engine dies, and the next
+    engine's collection marks freed memory (the sequential-runner
+    crash). A module can sit under several cache keys (resolved path
+    + attribute-encoded keys), so collect distinct instances first. }
+  OwnedModules := TGocciaModuleList.Create;
+  try
+    for ModulePair in FModules do
+      if Assigned(ModulePair.Value) and
+         (OwnedModules.IndexOf(ModulePair.Value) < 0) then
+        OwnedModules.Add(ModulePair.Value);
+    for I := 0 to OwnedModules.Count - 1 do
+      OwnedModules[I].Free;
+  finally
+    OwnedModules.Free;
+  end;
   FDeferredModuleNamespaces.Free;
   FEvaluatingModules.Free;
   FFailedModuleErrors.Free;
   FFailedModuleErrorModifiedTimes.Free;
   FModules.Free;
   FModuleSourceValues.Free;
+  FVirtualModules.Free;
+  FWarnedVirtualCollisions.Free;
   FLoadingModules.Free;
   FGlobalModuleProviders.Free;
   FGlobalModules.Free;
@@ -591,14 +637,187 @@ begin
   if (AAttributeType = '') and HasGlobalModuleRequest(AModulePath) then
     Exit(AModulePath);
 
-  if Assigned(FResolver) then
-    Result := FResolver.Resolve(AModulePath, AImportingFilePath)
-  else
-    raise EGocciaModuleNotFound.CreateFmt(
-      'No module resolver configured and cannot resolve "%s"', [AModulePath]);
+  Result := ResolveModuleAddress(AModulePath, AImportingFilePath);
 
   if AAttributeType <> '' then
     Result := EncodeImportSpecifierAttribute(Result, AAttributeType);
+end;
+
+function TGocciaModuleLoader.ResolveModuleAddress(const AModulePath,
+  AImportingFilePath: string): string;
+var
+  AliasCandidate, FileSystemAddress: string;
+
+  procedure WarnOnCollision(const AVirtualAddress: string);
+  begin
+    if not Assigned(FResolver) or
+       FWarnedVirtualCollisions.ContainsKey(AVirtualAddress) then
+      Exit;
+    try
+      FileSystemAddress := FResolver.Resolve(AModulePath,
+        AImportingFilePath);
+      WriteLn(StdErr, Format(
+        'Warning: virtual module "%s" shadows module "%s".',
+        [AVirtualAddress, FileSystemAddress]));
+      FWarnedVirtualCollisions.Add(AVirtualAddress, True);
+    except
+      on Exception do;
+    end;
+  end;
+
+begin
+  if FVirtualModules.Resolve(AModulePath, AImportingFilePath, Result) then
+  begin
+    WarnOnCollision(Result);
+    Exit;
+  end;
+
+  if Assigned(FResolver) then
+  begin
+    AliasCandidate := FResolver.ApplyAlias(AModulePath, AImportingFilePath);
+    if (AliasCandidate <> AModulePath) and
+       FVirtualModules.Resolve(AliasCandidate, AImportingFilePath, Result) then
+    begin
+      WarnOnCollision(Result);
+      Exit;
+    end;
+    Result := FResolver.Resolve(AModulePath, AImportingFilePath);
+    Exit;
+  end;
+  raise EGocciaModuleNotFound.CreateFmt(
+    'No module resolver configured and cannot resolve "%s"', [AModulePath]);
+end;
+
+function TGocciaModuleLoader.LoadResolvedContent(
+  const AResolvedPath: string): TGocciaModuleContent;
+begin
+  if FVirtualModules.Contains(AResolvedPath) then
+    Exit(FVirtualModules.LoadContent(AResolvedPath));
+  Result := FContentProvider.LoadContent(AResolvedPath);
+end;
+
+function TGocciaModuleLoader.LoadResolvedContentBytes(
+  const AResolvedPath: string): TBytes;
+begin
+  if FVirtualModules.Contains(AResolvedPath) then
+    Exit(FVirtualModules.LoadContentBytes(AResolvedPath));
+  Result := FContentProvider.LoadContentBytes(AResolvedPath);
+end;
+
+function TGocciaModuleLoader.TryGetResolvedLastModified(
+  const AResolvedPath: string; out ALastModified: TDateTime): Boolean;
+begin
+  if FVirtualModules.Contains(AResolvedPath) then
+  begin
+    ALastModified := 0;
+    Exit(False);
+  end;
+  Result := FContentProvider.TryGetLastModified(AResolvedPath, ALastModified);
+end;
+
+function TGocciaModuleLoader.IsJavaScriptModuleResource(
+  const AResolvedPath: string): Boolean;
+var
+  ContentType: TGocciaVirtualModuleContentType;
+begin
+  if FVirtualModules.GetContentType(AResolvedPath, ContentType) then
+    Exit(ContentType = vmctJavaScript);
+  Result := IsScriptExtension(ExtractFileExt(AResolvedPath));
+end;
+
+procedure TGocciaModuleLoader.InjectModule(const AAddress, AContent: string;
+  const AContentType: string; const ABaseAddress: string;
+  const AProvenance: string);
+var
+  CanonicalAddress: string;
+  ConflictingModule: TGocciaModule;
+  ParsedContentType: TGocciaVirtualModuleContentType;
+begin
+  CanonicalAddress := FVirtualModules.CanonicalAddress(AAddress, ABaseAddress);
+  if HasModuleStateForAddress(CanonicalAddress) then
+    raise EInvalidOperation.CreateFmt(
+      'Virtual module "%s" cannot be replaced after it has been loaded.',
+      [CanonicalAddress]);
+  if StartsStr('goccia:', CanonicalAddress) and
+     HasGlobalModuleRequest(CanonicalAddress) then
+    raise EInvalidOperation.CreateFmt(
+      'Virtual module "%s" conflicts with a registered runtime module.',
+      [CanonicalAddress]);
+  if HasGlobalModuleRequest(CanonicalAddress) then
+    raise EInvalidOperation.CreateFmt(
+      'Virtual module "%s" conflicts with a registered host module.',
+      [CanonicalAddress]);
+  ConflictingModule := nil;
+  if StartsStr('goccia:', CanonicalAddress) and
+     Assigned(FRuntimeModuleLoader) and
+     FRuntimeModuleLoader(CanonicalAddress, ConflictingModule) then
+  begin
+    ConflictingModule.Free;
+    raise EInvalidOperation.CreateFmt(
+      'Virtual module "%s" conflicts with a registered runtime module.',
+      [CanonicalAddress]);
+  end;
+  if not ParseVirtualModuleContentType(AContentType, ParsedContentType) then
+    raise EArgumentException.CreateFmt(
+      'Unsupported virtual module content type "%s".', [AContentType]);
+  FVirtualModules.AddText(AAddress, ABaseAddress, ParsedContentType,
+    AContent, AProvenance);
+end;
+
+procedure TGocciaModuleLoader.CopyVirtualModulesFrom(
+  const ASource: TGocciaModuleLoader);
+begin
+  if Assigned(ASource) then
+    FVirtualModules.CopyFrom(ASource.VirtualModules);
+end;
+
+function TGocciaModuleLoader.ResolveModuleURL(const AModulePath,
+  AImportingFilePath: string): string;
+var
+  AliasCandidate, BaseDirectory, ResolvedAddress,
+    VirtualCandidate: string;
+begin
+  if AModulePath = AImportingFilePath then
+  begin
+    if FVirtualModules.Contains(AModulePath) then
+      Exit(AModulePath);
+    if Assigned(FContentProvider) and FContentProvider.Exists(AModulePath) then
+      Exit(FilePathToUrl(ExpandFileName(AModulePath)));
+  end;
+
+  if FVirtualModules.Resolve(AModulePath, AImportingFilePath,
+     VirtualCandidate) then
+    Exit(VirtualCandidate);
+  if FVirtualModules.Contains(AImportingFilePath) and
+     IsRelativeSpecifier(AModulePath) then
+    Exit(VirtualCandidate);
+  if Assigned(FResolver) then
+  begin
+    AliasCandidate := FResolver.ApplyAlias(AModulePath, AImportingFilePath);
+    if (AliasCandidate <> AModulePath) and
+       FVirtualModules.Resolve(AliasCandidate, AImportingFilePath,
+       VirtualCandidate) then
+      Exit(VirtualCandidate);
+  end;
+
+  try
+    ResolvedAddress := ResolveModuleAddress(AModulePath, AImportingFilePath);
+    Exit(FilePathToUrl(ResolvedAddress));
+  except
+    on E: Exception do;
+  end;
+
+  if (AModulePath <> '') and
+     ((AModulePath[1] = '/') or (AModulePath[1] = '\') or
+     ((Length(AModulePath) >= 2) and (AModulePath[2] = ':'))) then
+    ResolvedAddress := ExpandFileName(AModulePath)
+  else
+  begin
+    BaseDirectory := ExtractFilePath(ExpandFileName(AImportingFilePath));
+    ResolvedAddress := ExpandFileName(
+      IncludeTrailingPathDelimiter(BaseDirectory) + AModulePath);
+  end;
+  Result := FilePathToUrl(ResolvedAddress);
 end;
 
 procedure TGocciaModuleLoader.RecordFailedModuleError(const ACacheKey: string;
@@ -625,7 +844,7 @@ begin
     Exit;
 
   if FFailedModuleErrorModifiedTimes.TryGetValue(ACacheKey, FailedModified) and
-     FContentProvider.TryGetLastModified(AResolvedPath, CurrentModified) and
+     TryGetResolvedLastModified(AResolvedPath, CurrentModified) and
      (CurrentModified > FailedModified) then
   begin
     ClearFailedModuleError(ACacheKey);
@@ -638,6 +857,33 @@ function TGocciaModuleLoader.HasGlobalModuleRequest(
 begin
   Result := FGlobalModules.ContainsKey(AModulePath) or
     FGlobalModuleProviders.ContainsKey(AModulePath);
+end;
+
+function TGocciaModuleLoader.HasModuleStateForAddress(
+  const AAddress: string): Boolean;
+const
+  AttributeTypes: array[0..2] of string = ('json', 'text', 'bytes');
+var
+  AttributeType, CacheKey: string;
+begin
+  if FModules.ContainsKey(AAddress) or
+     FModuleSourceValues.ContainsKey(AAddress) or
+     FDeferredModuleNamespaces.ContainsKey(AAddress) or
+     FFailedModuleErrors.ContainsKey(AAddress) or
+     FLoadingModules.ContainsKey(AAddress) then
+    Exit(True);
+
+  for AttributeType in AttributeTypes do
+  begin
+    CacheKey := EncodeImportSpecifierAttribute(AAddress, AttributeType);
+    if FModules.ContainsKey(CacheKey) or
+       FModuleSourceValues.ContainsKey(CacheKey) or
+       FDeferredModuleNamespaces.ContainsKey(CacheKey) or
+       FFailedModuleErrors.ContainsKey(CacheKey) or
+       FLoadingModules.ContainsKey(CacheKey) then
+      Exit(True);
+  end;
+  Result := False;
 end;
 
 function TGocciaModuleLoader.TryLoadGlobalModule(const AModulePath: string;
@@ -804,6 +1050,7 @@ var
   SourceModule: TGocciaModule;
   Stmt: TGocciaStatement;
   Value: TGocciaValue;
+  VirtualContentType: TGocciaVirtualModuleContentType;
   LoadSucceeded: Boolean;
   Name: string;
   Names: TStringList;
@@ -1277,13 +1524,8 @@ begin
     Exit;
 
   try
-    if Assigned(FResolver) then
-      ResolvedPath := FResolver.Resolve(RequestedModulePath,
-        ImportingFilePath)
-    else
-      raise EGocciaModuleNotFound.CreateFmt(
-        'No module resolver configured and cannot resolve "%s"',
-        [RequestedModulePath]);
+    ResolvedPath := ResolveModuleAddress(RequestedModulePath,
+      ImportingFilePath);
   except
     on E: TGocciaRuntimeError do
       raise;
@@ -1335,6 +1577,28 @@ begin
     Exit;
   end;
 
+  if (AttributeType = '') and
+     FVirtualModules.GetContentType(ResolvedPath, VirtualContentType) then
+  begin
+    case VirtualContentType of
+      vmctJSON:
+        begin
+          Result := LoadJSONModule(ResolvedPath, CacheKey);
+          Exit;
+        end;
+      vmctText:
+        begin
+          Result := LoadTextModule(ResolvedPath, CacheKey, False);
+          Exit;
+        end;
+      vmctBytes:
+        begin
+          Result := LoadBytesModule(ResolvedPath, CacheKey);
+          Exit;
+        end;
+    end;
+  end;
+
   if LowerCase(ExtractFileExt(ResolvedPath)) = EXT_JSON then
   begin
     Result := LoadJSONModule(ResolvedPath, CacheKey);
@@ -1365,7 +1629,7 @@ begin
     end;
   end;
 
-  Content := FContentProvider.LoadContent(ResolvedPath);
+  Content := LoadResolvedContent(ResolvedPath);
   try
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
@@ -1416,6 +1680,7 @@ begin
           Context.LoadModule := LoadModule;
           Context.LoadModuleSource := LoadModuleSourceValue;
           Context.LoadDeferredModule := LoadDeferredModuleNamespaceValue;
+          Context.ResolveModuleURL := ResolveModuleURL;
           Context.CurrentFilePath := ResolvedPath;
           Context.CurrentModule := Module;
           Context.CoverageEnabled := False;
@@ -1516,6 +1781,7 @@ var
   RequestedModulePath: string;
   ResolvedPath: string;
   SourceValue: TGocciaValue;
+  VirtualContentType: TGocciaVirtualModuleContentType;
 begin
   DecodeImportSpecifierAttribute(AModulePath, RequestedModulePath,
     AttributeType);
@@ -1548,13 +1814,8 @@ begin
   end;
 
   try
-    if Assigned(FResolver) then
-      ResolvedPath := FResolver.Resolve(RequestedModulePath,
-        AImportingFilePath)
-    else
-      raise EGocciaModuleNotFound.CreateFmt(
-        'No module resolver configured and cannot resolve "%s"',
-        [RequestedModulePath]);
+    ResolvedPath := ResolveModuleAddress(RequestedModulePath,
+      AImportingFilePath);
   except
     on E: TGocciaRuntimeError do
       raise;
@@ -1569,7 +1830,11 @@ begin
     Exit(SourceValue);
 
   if (AttributeType <> '') or
-     (not IsScriptExtension(ExtractFileExt(ResolvedPath))) then
+     ((not FVirtualModules.GetContentType(ResolvedPath,
+       VirtualContentType)) and
+      (not IsScriptExtension(ExtractFileExt(ResolvedPath)))) or
+     (FVirtualModules.GetContentType(ResolvedPath, VirtualContentType) and
+      (VirtualContentType <> vmctJavaScript)) then
     raise TGocciaSyntaxError.Create(
       Format('Module source is not available for "%s"', [ResolvedPath]),
       0, 0, AImportingFilePath, nil);
@@ -1580,7 +1845,7 @@ begin
       'JavaScript ModuleSource objects require --experimental-js-module-source',
       0, 0, AImportingFilePath, nil);
 
-  Content := FContentProvider.LoadContent(ResolvedPath);
+  Content := LoadResolvedContent(ResolvedPath);
   try
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
@@ -1658,10 +1923,10 @@ begin
   if AttributeType <> '' then
     Exit(False);
 
-  if not IsScriptExtension(ExtractFileExt(PhysicalPath)) then
+  if not IsJavaScriptModuleResource(PhysicalPath) then
     Exit(False);
 
-  Content := FContentProvider.LoadContent(PhysicalPath);
+  Content := LoadResolvedContent(PhysicalPath);
   try
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
@@ -1740,10 +2005,10 @@ begin
   if AttributeType <> '' then
     Exit;
 
-  if not IsScriptExtension(ExtractFileExt(PhysicalPath)) then
+  if not IsJavaScriptModuleResource(PhysicalPath) then
     Exit;
 
-  Content := FContentProvider.LoadContent(PhysicalPath);
+  Content := LoadResolvedContent(PhysicalPath);
   try
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
@@ -1834,10 +2099,10 @@ begin
   if AttributeType <> '' then
     Exit;
 
-  if not IsScriptExtension(ExtractFileExt(PhysicalPath)) then
+  if not IsJavaScriptModuleResource(PhysicalPath) then
     Exit;
 
-  Content := FContentProvider.LoadContent(PhysicalPath);
+  Content := LoadResolvedContent(PhysicalPath);
   try
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
@@ -1918,12 +2183,11 @@ begin
   begin
     try
       if Assigned(FResolver) then
-        ResolvedPath := FResolver.Resolve(RequestedModulePath,
+        ResolvedPath := ResolveModuleAddress(RequestedModulePath,
           AImportingFilePath)
       else
-        raise EGocciaModuleNotFound.CreateFmt(
-          'No module resolver configured and cannot resolve "%s"',
-          [RequestedModulePath]);
+        ResolvedPath := ResolveModuleAddress(RequestedModulePath,
+          AImportingFilePath);
     except
       on E: TGocciaRuntimeError do
         raise;
@@ -1971,7 +2235,7 @@ var
   ReloadCacheKey: string;
   ReloadedModule: TGocciaModule;
 begin
-  if not FContentProvider.TryGetLastModified(AModule.Path, CurrentModified) then
+  if not TryGetResolvedLastModified(AModule.Path, CurrentModified) then
     Exit;
 
   if CurrentModified > AModule.LastModified then
@@ -2006,6 +2270,10 @@ procedure TGocciaModuleLoader.RegisterGlobalModuleProvider(
 begin
   if not Assigned(AProvider) then
     raise Exception.Create('Global module provider cannot be nil.');
+  if FVirtualModules.Contains(AModulePath) then
+    raise EInvalidOperation.CreateFmt(
+      'Host module "%s" conflicts with a configured virtual module.',
+      [AModulePath]);
   FGlobalModules.Remove(AModulePath);
   FGlobalModuleProviders.AddOrSetValue(AModulePath, AProvider);
 end;
@@ -2029,7 +2297,7 @@ var
   JSONParser: TGocciaJSONParser;
   LoadSucceeded: Boolean;
 begin
-  Content := FContentProvider.LoadContent(AResolvedPath);
+  Content := LoadResolvedContent(AResolvedPath);
   try
     JSONParser := TGocciaJSONParser.Create;
     try
@@ -2093,7 +2361,7 @@ var
   NormalizedText: UTF8String;
   TextValue: TGocciaValue;
 begin
-  Content := FContentProvider.LoadContent(AResolvedPath);
+  Content := LoadResolvedContent(AResolvedPath);
   try
     NormalizedText := NormalizeUTF8NewlinesToLF(Content.Text);
     TextValue := TGocciaStringLiteralValue.FromUTF8(NormalizedText);
@@ -2152,8 +2420,8 @@ var
   Module: TGocciaModule;
   TypedArray: TGocciaTypedArrayValue;
 begin
-  Bytes := FContentProvider.LoadContentBytes(AResolvedPath);
-  if not FContentProvider.TryGetLastModified(AResolvedPath, LastModified) then
+  Bytes := LoadResolvedContentBytes(AResolvedPath);
+  if not TryGetResolvedLastModified(AResolvedPath, LastModified) then
     LastModified := 0;
 
   Buffer := TGocciaArrayBufferValue.CreateImmutableFromBytes(Bytes);

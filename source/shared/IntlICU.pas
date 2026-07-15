@@ -99,6 +99,247 @@ function TryICULowerCase(const ALocale, AStr: string; out AResult: string): Bool
 
 implementation
 
+{$IFDEF LAKON}
+
+{ Lakon's WASM lane has no dynamic libraries, so libicu can never
+  load there (the same fact UnicodeICU pins); every probe answers
+  False and Intl falls back to its portable tables. Keeping the unit
+  (rather than IFDEF-ing the import out of every Goccia.Values.Intl*
+  consumer) preserves the one shared surface. }
+
+function IntlICUAvailable: Boolean;
+begin
+  Result := False;
+end;
+
+function TryICUCanonicalizeLocale(const ATag: string; out ACanonical: string): Boolean;
+begin
+  ACanonical := '';
+  Result := False;
+end;
+
+function TryICUGetAvailableLocales(out ALocales: IntlTypes.TStringArray): Boolean;
+begin
+  SetLength(ALocales, 0);
+  Result := False;
+end;
+
+function TryICUMaximizeLocale(const ATag: string; out AMaximized: string): Boolean;
+begin
+  AMaximized := '';
+  Result := False;
+end;
+
+function TryICUMinimizeLocale(const ATag: string; out AMinimized: string): Boolean;
+begin
+  AMinimized := '';
+  Result := False;
+end;
+
+function TryICUGetLocaleCalendars(const ALocale: string;
+  out ACalendars: IntlTypes.TStringArray): Boolean;
+begin
+  SetLength(ACalendars, 0);
+  Result := False;
+end;
+
+function TryICUGetLocaleCollations(const ALocale: string;
+  out ACollations: IntlTypes.TStringArray): Boolean;
+begin
+  SetLength(ACollations, 0);
+  Result := False;
+end;
+
+function TryICUCompareStrings(const ALocale: string; const AStr1, AStr2: UnicodeString;
+  ASensitivity: TIntlCollatorSensitivity; AIgnorePunctuation, ANumeric: Boolean;
+  const ACaseFirst: string; out AResult: Integer): Boolean;
+begin
+  AResult := 0;
+  Result := False;
+end;
+
+function TryICUFormatNumber(const ALocale: string; AValue: Double;
+  const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
+begin
+  AFormatted := '';
+  Result := False;
+end;
+
+function TryICUFormatNumberDecimal(const ALocale, AValue: string;
+  const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
+begin
+  AFormatted := '';
+  Result := False;
+end;
+
+function TryICUFormatNumberToParts(const ALocale: string; AValue: Double;
+  const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+begin
+  SetLength(AParts, 0);
+  Result := False;
+end;
+
+function TryICUFormatNumberDecimalToParts(const ALocale, AValue: string;
+  const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+begin
+  SetLength(AParts, 0);
+  Result := False;
+end;
+
+function TryICUFormatNumberRange(const ALocale: string; AStartValue, AEndValue: Double;
+  const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
+begin
+  AFormatted := '';
+  Result := False;
+end;
+
+function TryICUFormatNumberRangeToParts(const ALocale: string; AStartValue, AEndValue: Double;
+  const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+begin
+  SetLength(AParts, 0);
+  Result := False;
+end;
+
+function TryICUFormatNumberDecimalRange(const ALocale, AStartValue, AEndValue: string;
+  const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
+begin
+  AFormatted := '';
+  Result := False;
+end;
+
+function TryICUFormatNumberDecimalRangeToParts(const ALocale, AStartValue, AEndValue: string;
+  const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+begin
+  SetLength(AParts, 0);
+  Result := False;
+end;
+
+function TryICUFormatDateTime(const ALocale: string; AMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
+begin
+  AFormatted := '';
+  Result := False;
+end;
+
+function TryICUFormatDateTimeToParts(const ALocale: string; AMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+begin
+  SetLength(AParts, 0);
+  Result := False;
+end;
+
+function TryICUFormatDateTimeRange(const ALocale: string; AStartMillis, AEndMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
+begin
+  AFormatted := '';
+  Result := False;
+end;
+
+function TryICUFormatDateTimeRangeToParts(const ALocale: string; AStartMillis, AEndMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+begin
+  SetLength(AParts, 0);
+  Result := False;
+end;
+
+function TryICUSelectPlural(const ALocale: string; AValue: Double;
+  APluralType: TIntlPluralType; out ACategory: string): Boolean;
+begin
+  ACategory := '';
+  Result := False;
+end;
+
+function TryICUGetDisplayName(const ALocale, ACode: string;
+  ADisplayType: TIntlDisplayNameType; AStyle: TIntlDisplayNameStyle;
+  out AName: string): Boolean;
+begin
+  AName := '';
+  Result := False;
+end;
+
+function TryICUCreateBreakIterator(const ALocale: string;
+  AGranularity: TIntlSegmenterGranularity; const AText: UnicodeString;
+  out AIterator: TIntlBreakIterator): Boolean;
+begin
+  AIterator := Default(TIntlBreakIterator);
+  Result := False;
+end;
+
+function TryICUBreakIteratorNext(var AIterator: TIntlBreakIterator;
+  out APosition: Integer): Boolean;
+begin
+  APosition := 0;
+  Result := False;
+end;
+
+function TryICUBreakIteratorGetRuleStatus(var AIterator: TIntlBreakIterator): Integer;
+begin
+  Result := 0;
+end;
+
+procedure ICUBreakIteratorClose(var AIterator: TIntlBreakIterator);
+begin
+  { no-op }
+end;
+
+function TryICUFormatList(const ALocale: string; const AItems: IntlTypes.TStringArray;
+  AListType: TIntlListFormatType; AListStyle: TIntlListFormatStyle;
+  out AFormatted: string): Boolean;
+begin
+  AFormatted := '';
+  Result := False;
+end;
+
+function TryICUFormatListToParts(const ALocale: string; const AItems: IntlTypes.TStringArray;
+  AListType: TIntlListFormatType; AListStyle: TIntlListFormatStyle;
+  out AParts: TIntlFormatPartArray): Boolean;
+begin
+  SetLength(AParts, 0);
+  Result := False;
+end;
+
+function TryICUFormatRelativeTime(const ALocale: string; AValue: Double;
+  AUnit: TIntlRelativeTimeUnit; ANumeric: TIntlRelativeTimeNumeric;
+  AStyle: TIntlRelativeTimeStyle; out AFormatted: string): Boolean;
+begin
+  AFormatted := '';
+  Result := False;
+end;
+
+function TryICUFormatRelativeTimeToParts(const ALocale: string; AValue: Double;
+  AUnit: TIntlRelativeTimeUnit; ANumeric: TIntlRelativeTimeNumeric;
+  AStyle: TIntlRelativeTimeStyle; out AParts: TIntlFormatPartArray): Boolean;
+begin
+  SetLength(AParts, 0);
+  Result := False;
+end;
+
+function TryICUGetDefaultLocale(out ALocale: string): Boolean;
+begin
+  ALocale := '';
+  Result := False;
+end;
+
+function TryICUNormalize(const AForm, AStr: string; out AResult: string): Boolean;
+begin
+  AResult := '';
+  Result := False;
+end;
+
+function TryICUUpperCase(const ALocale, AStr: string; out AResult: string): Boolean;
+begin
+  AResult := '';
+  Result := False;
+end;
+
+function TryICULowerCase(const ALocale, AStr: string; out AResult: string): Boolean;
+begin
+  AResult := '';
+  Result := False;
+end;
+
+{$ELSE}
+
 uses
   Math,
   SysUtils,
@@ -4093,5 +4334,7 @@ initialization
 
 finalization
   DoneCriticalSection(IntlInitLock);
+
+{$ENDIF}
 
 end.

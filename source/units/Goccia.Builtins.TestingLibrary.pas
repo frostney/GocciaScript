@@ -261,8 +261,11 @@ type
     // Test execution
     function RunTests(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
-    // Exposed for native Pascal unit tests
-    property CurrentTestHasFailures: Boolean read FTestStats.CurrentTestHasFailures;
+    // Exposed for native Pascal unit tests. A plain getter rather
+    // than a dotted field-path accessor (read FTestStats.X) so the
+    // declaration stays inside lakon's supported property surface.
+    function GetCurrentTestHasFailures: Boolean;
+    property CurrentTestHasFailures: Boolean read GetCurrentTestHasFailures;
     property SuppressOutput: Boolean read FSuppressOutput write FSuppressOutput;
     procedure ResetCurrentTestState;
   end;
@@ -3255,6 +3258,11 @@ begin
     Inc(FTestStats.FailedTests)
   else
     Inc(FTestStats.PassedTests);
+end;
+
+function TGocciaTestAssertions.GetCurrentTestHasFailures: Boolean;
+begin
+  Result := FTestStats.CurrentTestHasFailures;
 end;
 
 procedure TGocciaTestAssertions.ResetCurrentTestState;

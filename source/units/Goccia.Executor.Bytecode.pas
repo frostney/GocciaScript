@@ -97,6 +97,7 @@ begin
   FVM.LoadModule := AModuleLoader.LoadModule;
   FVM.LoadModuleSource := AModuleLoader.LoadModuleSourceValue;
   FVM.LoadDeferredModule := AModuleLoader.LoadDeferredModuleNamespaceValue;
+  FVM.ResolveModuleURL := AModuleLoader.ResolveModuleURL;
   AModuleLoader.EvaluateModuleBody := EvaluateModuleBody;
 end;
 
@@ -110,7 +111,11 @@ var
   SavedGlobalScope: TGocciaScope;
   SavedRealm: TGocciaRealm;
   SavedGlobalBackedTopLevel: Boolean;
+  SavedLoadDeferredModule: TLoadDeferredModuleCallback;
+  SavedLoadModule: TLoadModuleCallback;
+  SavedLoadModuleSource: TLoadModuleSourceCallback;
   SavedRuntimeModule: TGocciaModule;
+  SavedResolveModuleURL: TResolveModuleURLCallback;
   Options: TGocciaCompilerOptimizationOptions;
 begin
   AProgramConsumed := False;
@@ -137,9 +142,17 @@ begin
   SavedGlobalScope := FVM.GlobalScope;
   SavedRealm := FVM.Realm;
   SavedGlobalBackedTopLevel := FVM.GlobalBackedTopLevel;
+  SavedLoadModule := FVM.LoadModule;
+  SavedLoadModuleSource := FVM.LoadModuleSource;
+  SavedLoadDeferredModule := FVM.LoadDeferredModule;
+  SavedResolveModuleURL := FVM.ResolveModuleURL;
   SavedRuntimeModule := FVM.CurrentRuntimeModule;
   FVM.GlobalScope := AContext.Scope;
   FVM.GlobalBackedTopLevel := False;
+  FVM.LoadModule := AContext.LoadModule;
+  FVM.LoadModuleSource := AContext.LoadModuleSource;
+  FVM.LoadDeferredModule := AContext.LoadDeferredModule;
+  FVM.ResolveModuleURL := AContext.ResolveModuleURL;
   FVM.CurrentRuntimeModule := AContext.CurrentModule;
   try
     if Assigned(AContext.Realm) then
@@ -152,6 +165,10 @@ begin
     FVM.GlobalScope := SavedGlobalScope;
     FVM.Realm := SavedRealm;
     FVM.GlobalBackedTopLevel := SavedGlobalBackedTopLevel;
+    FVM.LoadModule := SavedLoadModule;
+    FVM.LoadModuleSource := SavedLoadModuleSource;
+    FVM.LoadDeferredModule := SavedLoadDeferredModule;
+    FVM.ResolveModuleURL := SavedResolveModuleURL;
     FVM.CurrentRuntimeModule := SavedRuntimeModule;
   end;
 end;

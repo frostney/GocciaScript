@@ -38,6 +38,7 @@ type
     FLoadModule: TLoadModuleCallback;
     FLoadModuleSource: TLoadModuleSourceCallback;
     FLoadDeferredModule: TLoadDeferredModuleCallback;
+    FResolveModuleURL: TResolveModuleURLCallback;
     FStrictTypes: Boolean;
     FNonStrictMode: Boolean;
     FArgumentsObjectEnabled: Boolean;
@@ -192,6 +193,8 @@ type
       read FLoadModuleSource write FLoadModuleSource;
     property LoadDeferredModule: TLoadDeferredModuleCallback
       read FLoadDeferredModule write FLoadDeferredModule;
+    property ResolveModuleURL: TResolveModuleURLCallback
+      read FResolveModuleURL write FResolveModuleURL;
     { Strict-types enforcement flag.  Inherited from parent at scope
       creation so nested closures observe the same setting as the
       surrounding lexical scope.  For live engine state use
@@ -356,6 +359,7 @@ begin
     FLoadModule := AParent.FLoadModule;
     FLoadModuleSource := AParent.FLoadModuleSource;
     FLoadDeferredModule := AParent.FLoadDeferredModule;
+    FResolveModuleURL := AParent.FResolveModuleURL;
     FStrictTypes := AParent.FStrictTypes;
     FNonStrictMode := AParent.FNonStrictMode;
     FArgumentsObjectEnabled := AParent.FArgumentsObjectEnabled;

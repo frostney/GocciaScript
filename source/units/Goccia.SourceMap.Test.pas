@@ -73,11 +73,28 @@ procedure TSourceMapTests.WriteRawFile(const APath: string;
   const ABytes: RawByteString);
 var
   Stream: TFileStream;
+{$IFDEF LAKON}
+  Buffer: TBytes;
+  Index: Integer;
+{$ENDIF}
 begin
   Stream := TFileStream.Create(APath, fmCreate);
   try
     if Length(ABytes) > 0 then
+{$IFDEF LAKON}
+    begin
+      // Lakon's RawByteString aliases the one string type (bytes
+      // ride one per code unit), and Pointer(S) is the string BLOCK,
+      // not the payload — copy the low bytes out explicitly (the
+      // Goccia.Modules.Configuration.Test pattern).
+      SetLength(Buffer, Length(ABytes));
+      for Index := 1 to Length(ABytes) do
+        Buffer[Index - 1] := Ord(ABytes[Index]) and $FF;
+      Stream.WriteBuffer(Buffer[0], Length(Buffer));
+    end;
+{$ELSE}
       Stream.WriteBuffer(Pointer(ABytes)^, Length(ABytes));
+{$ENDIF}
   finally
     Stream.Free;
   end;

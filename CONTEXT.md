@@ -26,6 +26,18 @@ _Avoid_: Engine, VM.
 An installable host or special-purpose feature added to a runtime, such as console, fetch, data-format globals, testing, benchmarking, or FFI.
 _Avoid_: Core language built-in when the feature belongs to the optional runtime surface.
 
+**Virtual module**:
+An ECMAScript module whose content is supplied explicitly through host configuration instead of loaded from the ambient filesystem. Virtual modules use the same resolution, linking, evaluation, and caching semantics as other modules.
+_Avoid_: Global module, in-memory module when the configuration mechanism is the defining property.
+
+**Host module**:
+An ECMAScript module or module provider registered programmatically by an embedding host. A host module may expose host-created values while participating in the ordinary module lifecycle.
+_Avoid_: Global module, runtime module when the module is registered directly by an embedder.
+
+**Runtime module**:
+An import-only module installed by a runtime extension, such as a `goccia:` data-format module.
+_Avoid_: Runtime global, host module.
+
 **Runtime profile**:
 A named bundle of runtime extensions used by a CLI host or embedding host.
 _Avoid_: Mode, preset.

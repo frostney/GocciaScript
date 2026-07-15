@@ -64,7 +64,7 @@ uses
   Goccia.ObjectModel,
   Goccia.Realm,
   Goccia.ThreadCleanupRegistry,
-  Goccia.Threading,
+  Goccia.Threading.Flags,
   Goccia.Utils,
   Goccia.Values.BigIntObjectValue,
   Goccia.Values.ErrorHelper,
