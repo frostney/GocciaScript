@@ -2,6 +2,76 @@
 
 All notable changes to GocciaScript are documented in this file.
 
+## [0.9.0] - 2026-07-15
+
+### ⚡ Performance
+
+- perf(vm): reduce dispatch loop overhead (#949)
+
+### 🌐 Website
+
+- docs: sync release preparation source truth (#969)
+- feat(benchmarks): add JetStream performance barometer (#956)
+- feat(benchmarks): add web tooling benchmark lane (#946)
+- feat(benchmarks): add AWFY cross-engine driver (#938)
+
+### 🏗️ Internal
+
+- ci(web-tooling): automate weekly pin bumps (#977)
+- ci(jetstream): automate weekly pin bumps (#976)
+- ci(timezone): automate monthly data bumps (#975)
+- chore(skills): sync provisioned skills and automate updates (#970)
+- chore(timezone): bump data to 2026c (#971)
+- chore(jetstream): bump pinned corpus (#972)
+- chore(toml-test): bump pin to 9eef1b95 (#962)
+- chore(tc39-mcp): bump pin to v0.6.1 (#963)
+- chore(test262): bump pin to d1d583db (#961)
+- test(cli): make GC pressure check architecture-independent (#959)
+- docs(perf): record call argument overhead investigation (#954)
+- test(math): allow portable hyperbolic approximations (#952)
+- ci(awfy): compare PR AWFY against main (#950)
+- chore(tc39-mcp): bump pin to v0.6.0 (#942)
+- chore(test262): bump pin to 64ff467c (#941)
+- docs(annex-b): record deferred support policy (#924)
+
+### 🐛 Fixed
+
+- fix(built-ins): close remaining test262 gaps (#966)
+- fix(language): complete core semantics tail (#964)
+- fix(temporal): complete test262 conformance (#958)
+- fix(collections): complete test262 conformance (#955)
+- fix(test262): make eval and disposable behavior spec-compliant (#944)
+- fix(math): close Math gaps and follow-up regressions (#947)
+- fix(function): close core Function conformance gaps (#940)
+- fix(runtime): improve real-world library compatibility (#939)
+- fix(parser): error on unsupported default syntax (#936)
+- fix(map): align collection constructor iteration (#935)
+- fix(proxy): close Proxy conformance gaps (#931)
+- fix(typedarray): close buffer conformance gaps (#934)
+- fix(iterator): complete iterator helper conformance (#932)
+- fix(reflect): close remaining test262 conformance gaps (#933)
+- fix(class): close class super private conformance gaps (#930)
+- fix(string): complete String test262 conformance (#929)
+- fix(generators): align generator prototype methods (#928)
+- Complete Array test262 conformance (#926)
+- fix(regexp): close remaining test262 gaps (#927)
+- fix(built-ins): complete Number BigInt Boolean test262 conformance (#925)
+- fix(test262): close promise, module-source, and bytecode gaps (#923)
+- fix(error): complete error built-ins conformance (#922)
+- fix(object): close built-ins Object test262 gaps (#919)
+- fix(runtime): dispatch callable values through ES Call (#921)
+- fix(json): reach full JSON test262 conformance (#920)
+- fix(test262): classify engine timeouts distinctly (#918)
+- fix(test262): surface thrown object messages (#917)
+
+### 🚀 Added
+
+- feat(sandbox): track filesystem timestamps (#965)
+- feat(sandbox): add Node.js-shaped filesystem errors (#960)
+- feat(benchmarks): report percentile distributions (#953)
+- feat(runtime): add goccia runtime modules (#943)
+- feat(benchmarks): add module microbench API (#945)
+
 ## [0.8.1] - 2026-07-01
 
 ### ⚡ Performance
