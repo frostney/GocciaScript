@@ -1064,9 +1064,9 @@ begin
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
     end;
     ConfigureCreatedEngine(Result, FileConfig);
-    ApplyVirtualModulesToEngine(Result, FileConfigPath);
     if Assigned(FEngineOptions) then
       ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig, AFileName);
+    ApplyVirtualModulesToEngine(Result, FileConfigPath);
     if AExecutor is TGocciaBytecodeExecutor then
       TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel :=
         Result.SourceType = Goccia.Engine.stScript;

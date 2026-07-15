@@ -21,6 +21,7 @@ import {
   symlinkSync,
 } from "fs";
 import { join, resolve } from "path";
+import { pathToFileURL } from "url";
 import {
   LOADER,
   BARE,
@@ -4399,6 +4400,40 @@ console.log("Loader: hierarchical virtual module addresses preserve canonical UR
     throw new Error(`Hierarchical virtual address was not preserved: ${proc.stdout.toString()}`);
 }
 
+console.log("Loader: virtual import.meta.resolve uses aliases for bare specifiers...");
+{
+  const tmp = makeTmp();
+  try {
+    const dependency = join(tmp, "dependency.mjs");
+    writeFileSync(dependency, "export default 1;\n");
+    const proc = Bun.spawnSync(
+      [
+        LOADER,
+        "-",
+        "--source-type=module",
+        "--print",
+        "--alias",
+        `dependency=${dependency}`,
+        "--module",
+        'host:resolver=export default import.meta.resolve("dependency");',
+      ],
+      {
+        stdin: new TextEncoder().encode(
+          'import value from "host:resolver"; value;',
+        ),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    if (proc.exitCode !== 0)
+      throw new Error(`Virtual bare resolution failed: ${proc.stderr.toString()}`);
+    if (!containsLine(proc.stdout.toString(), pathToFileURL(dependency).href))
+      throw new Error(`Virtual bare resolution skipped aliases: ${proc.stdout.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Loader: attributed virtual modules reinterpret their stored content...");
 {
   const proc = Bun.spawnSync(
@@ -4475,6 +4510,29 @@ console.log("SandboxRunner: virtual modules share the CLI surface and cannot sha
     if (configured.exitCode !== 0 ||
         normalizeLineEndings(configured.stdout.toString()).trim() !== "17")
       throw new Error(`Sandbox virtual module configuration failed: ${configured.stdout.toString()}${configured.stderr.toString()}`);
+
+    const hostConfigDir = join(tmp, "host-config");
+    const sandboxEntry = join(hostConfigDir, "main.js");
+    const isolationSeed = join(tmp, "isolation-seed.json");
+    mkdirSync(hostConfigDir, { recursive: true });
+    writeFileSync(
+      join(hostConfigDir, "goccia.json"),
+      JSON.stringify({ modules: "missing-modules.json" }),
+    );
+    writeFileSync(isolationSeed, JSON.stringify({
+      files: [{ path: sandboxEntry, text: 'console.log("isolated");' }],
+    }));
+    const isolated = Bun.spawnSync(
+      [
+        SANDBOXRUNNER,
+        sandboxEntry,
+        `--seed-config=${isolationSeed}`,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (isolated.exitCode !== 0 ||
+        normalizeLineEndings(isolated.stdout.toString()).trim() !== "isolated")
+      throw new Error(`Sandbox consulted host config for a virtual path: ${isolated.stdout.toString()}${isolated.stderr.toString()}`);
 
     const manifest = join(tmp, "modules.mjs");
     const manifestSource = join(tmp, "module-map.mjs");

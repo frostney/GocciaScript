@@ -8,7 +8,8 @@ global binding.
 Virtual modules use the ordinary module loader. Static and dynamic imports,
 import attributes, Import Bytes, source and defer phases, relative imports,
 `import.meta`, module caching, the interpreter, and the bytecode VM all follow
-the same paths as filesystem modules.
+the same paths as filesystem modules where the module kind and enabled flags
+support them.
 
 ## Definition Schema
 
@@ -121,7 +122,7 @@ Engine.InjectModulesFromJSON(
 the core engine; the other formats require their matching runtime extensions.
 `InjectModulesFromModule` loads a JavaScript or TypeScript default-exported map.
 
-Programmatically created modules use `RegisterHostModule` or
+Programmatically registered host modules use `RegisterHostModule` or
 `RegisterHostModuleProvider`. The historical `RegisterGlobalModule` names
 remain supported as compatibility aliases without warnings.
 

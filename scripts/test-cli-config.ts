@@ -1503,6 +1503,33 @@ console.log("Executable manifests cannot replace an already loaded module record
   }
 }
 
+console.log("Executable manifests inherit effective engine configuration...");
+{
+  const tmp = makeTmp();
+  try {
+    const manifest = join(tmp, "modules.mjs");
+    const entry = join(tmp, "entry.mjs");
+    writeFileSync(
+      join(tmp, "goccia.json"),
+      JSON.stringify({ "compat-function": true }),
+    );
+    writeFileSync(
+      manifest,
+      'function createModules() { return {"host:configured": {content: "export default 29;"}}; } export default createModules();\n',
+    );
+    writeFileSync(entry, 'import value from "host:configured"; value;\n');
+    const out = runCwd(
+      LOADER,
+      [entry, "--print", "--modules", manifest],
+      tmp,
+    );
+    if (!containsLine(out.stdout, "29"))
+      throw new Error(`Executable manifest did not inherit config: ${out.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Virtual module config precedence and inherited manifest origins...");
 {
   const tmp = makeTmp();

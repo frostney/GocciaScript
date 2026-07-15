@@ -86,6 +86,7 @@ type
     procedure TestModuleLoaderContentProviderSelfAssignment;
     procedure TestModuleLoaderRejectsRebindingAcrossRuntimes;
     procedure TestBytecodeExecutorUsesInjectedContentProvider;
+    procedure TestEngineModuleManifestDefaultsToEntryPath;
   protected
     procedure BeforeAll; override;
     procedure AfterAll; override;
@@ -183,6 +184,8 @@ begin
     TestModuleLoaderRejectsRebindingAcrossRuntimes);
   Test('Bytecode executor uses injected content provider',
     TestBytecodeExecutorUsesInjectedContentProvider);
+  Test('Engine module manifest defaults relative addresses to the entry path',
+    TestEngineModuleManifestDefaultsToEntryPath);
 end;
 
 procedure TModuleContentProviderTests.BeforeAll;
@@ -386,6 +389,39 @@ begin
   finally
     Source.Free;
     Provider.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestEngineModuleManifestDefaultsToEntryPath;
+var
+  Engine: TGocciaEngine;
+  EntryPath: string;
+  Executor: TGocciaInterpreterExecutor;
+  ScriptResult: TGocciaScriptResult;
+  Source: TStringList;
+  TempDirectory: string;
+begin
+  TempDirectory := CreateTempDirectory;
+  EntryPath := IncludeTrailingPathDelimiter(TempDirectory) + 'entry.mjs';
+  Source := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    Source.Text := 'import value from "./virtual.mjs";' + LineEnding +
+      'value;';
+    Engine := TGocciaEngine.Create(EntryPath, Source, Executor);
+    try
+      Engine.InjectModulesFromJSON(
+        '{"./virtual.mjs":{"content":"export default 42;"}}');
+      ScriptResult := Engine.Execute;
+      Expect<Boolean>(ScriptResult.Result is TGocciaNumberLiteralValue).ToBe(True);
+      Expect<Double>(TGocciaNumberLiteralValue(ScriptResult.Result).Value)
+        .ToBe(42);
+    finally
+      Engine.Free;
+    end;
+  finally
+    Executor.Free;
+    Source.Free;
   end;
 end;
 

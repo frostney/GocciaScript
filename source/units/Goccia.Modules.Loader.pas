@@ -767,7 +767,8 @@ begin
   if FVirtualModules.Resolve(AModulePath, AImportingFilePath,
      VirtualCandidate) then
     Exit(VirtualCandidate);
-  if FVirtualModules.Contains(AImportingFilePath) then
+  if FVirtualModules.Contains(AImportingFilePath) and
+     IsRelativeSpecifier(AModulePath) then
     Exit(VirtualCandidate);
   if Assigned(FResolver) then
   begin

@@ -76,6 +76,7 @@ type
 
 function ParseVirtualModuleContentType(const AType: string;
   out AContentType: TGocciaVirtualModuleContentType): Boolean;
+function IsRelativeSpecifier(const AValue: string): Boolean;
 function VirtualModuleContentTypeName(
   const AContentType: TGocciaVirtualModuleContentType): string;
 

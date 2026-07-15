@@ -107,6 +107,9 @@ type
   protected
     procedure Configure; override;
     function UsageLine: string; override;
+    function ShouldApplyRootConfig(const APaths: TStringList;
+      const AConfigPath: string;
+      const AExplicitConfig: Boolean): Boolean; override;
     procedure Validate; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
   public
@@ -215,6 +218,12 @@ end;
 function TSandboxRunnerApp.UsageLine: string;
 begin
   Result := '<sandbox-entry-path> [options]';
+end;
+
+function TSandboxRunnerApp.ShouldApplyRootConfig(const APaths: TStringList;
+  const AConfigPath: string; const AExplicitConfig: Boolean): Boolean;
+begin
+  Result := AExplicitConfig;
 end;
 
 procedure TSandboxRunnerApp.Validate;
@@ -776,8 +785,7 @@ begin
     Engine.ModuleLoader.SetContentProvider(Provider, True);
     Provider := nil;
     ConfigureEngineForSandbox(Engine, AContext, AEntryPath);
-    ApplyVirtualModulesToEngine(Engine,
-      DiscoverFileConfigPath(AEntryPath));
+    ApplyVirtualModulesToEngine(Engine, '');
 
     try
       StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));

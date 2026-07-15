@@ -609,11 +609,14 @@ end;
 procedure TGocciaEngine.InjectModulesFromValue(const AValue: TGocciaValue;
   const ABaseAddress, AProvenance: string);
 var
-  Address, Content, ContentType: string;
+  Address, BaseAddress, Content, ContentType: string;
   ContentValue, DescriptorValue, TypeValue: TGocciaValue;
   Descriptor: TGocciaObjectValue;
   Stringifier: TGocciaJSONStringifier;
 begin
+  BaseAddress := ABaseAddress;
+  if BaseAddress = '' then
+    BaseAddress := FSourcePath;
   if (AValue is TGocciaArrayValue) or
      not (AValue is TGocciaObjectValue) then
     raise EArgumentException.Create(
@@ -659,7 +662,7 @@ begin
           [Address, ContentType]);
       Content := TGocciaStringLiteralValue(ContentValue).Value;
     end;
-    FModuleLoader.InjectModule(Address, Content, ContentType, ABaseAddress,
+    FModuleLoader.InjectModule(Address, Content, ContentType, BaseAddress,
       AProvenance);
   end;
 end;
