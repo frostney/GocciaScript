@@ -503,6 +503,13 @@ generators, and iterators without requiring Wasm, DOM, workers, a host filesyste
 or a second copy of the Web Tooling lane. The private-field raytrace variant is
 excluded because it does not complete inside the diagnostic time budget.
 
+### Updating the JetStream Pin
+
+`.github/workflows/jetstream-bump.yml` checks WebKit/JetStream `main` weekly,
+updates the manifest and current pin reference with
+`scripts/jetstream-bump-pin.ts`, and opens an automated PR only when
+the SHA changes. PR CI runs the complete frozen subset before merge.
+
 The driver concatenates the listed upstream files unchanged into one generated
 shell entry per workload. The generic adapter supplies timing, deterministic
 randomness where the manifest requests it, and result serialization. Each suite
@@ -569,6 +576,13 @@ all pinned upstream workloads: `acorn`, `babel`, `babel-minify`, `babylon`,
 `buble`, `chai`, `coffeescript`, `espree`, `esprima`, `jshint`, `lebab`,
 `postcss`, `prepack`, `prettier`, `source-map`, `terser`, `typescript`, and
 `uglify-js`.
+
+### Updating the Web Tooling Pin
+
+`.github/workflows/web-tooling-bump.yml` checks
+`v8/web-tooling-benchmark` `master` weekly, updates the manifest with
+`scripts/web-tooling-bump-pin.ts`, and opens an automated PR only when the SHA
+changes. PR CI runs every pinned workload before merge.
 
 The driver prepares upstream's generated Terser/UglifyJS self-bundles, then
 generates one static entry and payload-only `fs.readFile`/`fs.readFileSync` adapter per

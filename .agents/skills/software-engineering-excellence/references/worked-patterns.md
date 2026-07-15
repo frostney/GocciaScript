@@ -32,6 +32,21 @@ Concrete, stack-agnostic illustrations of each principle — what it looks like 
 **Present:** A proposed fix is rejected. The engineer's next move is not another proposal but a return to the code — reading the constraints properly, mapping the real option space — and only then bringing back a grounded recommendation. Separately, when asked "does this change mean the other one isn't needed?", the engineer *answers the question* and waits, rather than taking it as an instruction to start reverting things.
 **Absent:** A rejection triggers a burst of four alternatives in four minutes, each one only dodging the previous objection without understanding the problem, each worse than the last. Or: a clarifying question is misread as a command, and the engineer closes work and rebuilds on the strength of something the human only *asked about*.
 
+## Structure over the quick fix
+
+**Present:** A bug surfaces as a wrong value at the UI. Rather than clamp it where it shows, the engineer traces it to a shared calculation two layers down, finds the same wrong assumption feeding three other call sites, and fixes it at that layer — so the reported symptom and two latent ones disappear together and the structure is sounder than before. The change is small; it just lands at the *right layer*.
+**Absent:** The value is clamped at the display, the ticket closed, and the same fault keeps re-emerging elsewhere — each patched locally, each leaving the codebase a little more irregular, until no one can say where the real calculation lives. Nothing was ever obviously broken enough to stop for; the bar simply drifted down one accepted patch at a time.
+
+## Investigation: evidence over story
+
+**Present:** Asked whether another engine supports a feature, the engineer reads that engine's parser gates, default config, and tests rather than its marketing — and reports that the feature exists but is flagged off by default and untested, a materially different answer than "supported." The recommendation comes after that record and traces to it.
+**Absent:** The engineer repeats the other project's README claim as fact, or leads with a recommendation and back-fills evidence that flatters it — and when corrected, flips the conclusion without re-reading the source, so the second answer is no better grounded than the first.
+
+## Prove it end-to-end first (the walking skeleton)
+
+**Present:** A new service starts as the thinnest path that runs all the way through — a request in, through every real layer, a trivial response out — deployed to a live-like environment on day one. The auth boundary, the data layer, and the deploy pipeline are all present but nearly empty. Every later feature lands on something that already runs and ships, and the integration mismatches surface early as small notes instead of late rewrites.
+**Absent:** Each layer is built to completion in isolation — a polished data model, then a full service layer, then the API — and only wired together near the end. The first real end-to-end run happens late, under deadline, and exposes a mismatch between layers everyone thought was finished; the deploy path, untouched until then, fails in its own ways at the worst possible moment.
+
 ## The thread through all of them
 
 In every "absent" case above, the engineer made a silent call it was not entitled to make: that the title was the spec, that a near-copy was fine, that "works once" was done, that a workaround was a fix, that a surface should exist, that a question was a command. In every "present" case, reality was consulted first and uncertainty was surfaced rather than improvised. That is the whole skill in one line: **work to the defined bar, and when the bar is not defined for your situation, surface the question instead of inventing the answer.**
