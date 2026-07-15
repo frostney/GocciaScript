@@ -18,11 +18,12 @@ import {
   readFileSync,
   existsSync,
   mkdirSync,
+  realpathSync,
   chmodSync,
   symlinkSync,
 } from "fs";
 import { join, resolve } from "path";
-import { pathToFileURL } from "url";
+import { fileURLToPath } from "url";
 import {
   LOADER,
   BARE,
@@ -4540,8 +4541,18 @@ console.log("Loader: virtual import.meta.resolve uses aliases for bare specifier
     );
     if (proc.exitCode !== 0)
       throw new Error(`Virtual bare resolution failed: ${proc.stderr.toString()}`);
-    if (!containsLine(proc.stdout.toString(), pathToFileURL(dependency).href))
-      throw new Error(`Virtual bare resolution skipped aliases: ${proc.stdout.toString()}`);
+    const resolvedURL = normalizeLineEndings(proc.stdout.toString())
+      .split("\n")
+      .find((line) => line.startsWith("file:"));
+    const normalizePath = (path: string) => {
+      const canonical = realpathSync(path);
+      return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+    };
+    if (resolvedURL === undefined ||
+        normalizePath(fileURLToPath(resolvedURL)) !== normalizePath(dependency))
+      throw new Error(
+        `Virtual bare resolution skipped aliases: expected ${dependency}, got ${resolvedURL ?? "no URL"}`,
+      );
   } finally {
     clean(tmp);
   }
