@@ -524,6 +524,19 @@ console.log("Bare Loader: stdin dash path...");
   if (proc.stdout.toString().trim() !== "42") throw new Error(`Bare stdin dash expected 42, got: ${proc.stdout.toString()}`);
 }
 
+console.log("Bare Loader: quoted source names survive argv parsing...");
+{
+  const sourceName = 'quoted "source".js';
+  const proc = Bun.spawnSync([BARE, `--source-name=${sourceName}`], {
+    stdin: new TextEncoder().encode("const = ;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const output = proc.stdout.toString() + proc.stderr.toString();
+  if (proc.exitCode === 0 || !output.includes(sourceName))
+    throw new Error(`Bare quoted source name was not preserved: ${output}`);
+}
+
 console.log("Bare Loader: input file...");
 {
   const tmp = makeTmp();
@@ -4436,11 +4449,11 @@ for (const mode of ["interpreted", "bytecode"] as const) {
       "--print",
       "--experimental-js-module-source",
       "--module",
-      "host:asset={type:'bytes',content:'AQID'}",
+      'host:asset={"type":"bytes","content":"AQID"}',
       "--module",
       'host:pkg/dep=export const value = 7;',
       "--module",
-      'host:pkg/main=export const url = import.meta.url; export const resolved = () => import.meta.resolve(`./dep`);',
+      'host:pkg/main=export const url = import.meta.url; export const resolved = () => import.meta.resolve("./dep");',
       "--module",
       'host:deferred=export const value = 11;',
       "--module",
@@ -4497,7 +4510,7 @@ console.log("Loader: hierarchical virtual module addresses preserve canonical UR
       "--source-type=module",
       "--print",
       "--module",
-      'https://example.test/pkg/main?redirect/a/../b=export default import.meta.url + `|` + import.meta.resolve(`./dep`);',
+      'https://example.test/pkg/main?redirect/a/../b=export default import.meta.url + "|" + import.meta.resolve("./dep");',
     ],
     {
       stdin: new TextEncoder().encode(
@@ -4529,7 +4542,7 @@ console.log("Loader: virtual import.meta.resolve uses aliases for bare specifier
         "--alias",
         `dependency=${dependency}`,
         "--module",
-        'host:resolver=export default import.meta.resolve(`dependency`);',
+        'host:resolver=export default import.meta.resolve("dependency");',
       ],
       {
         stdin: new TextEncoder().encode(
@@ -4593,7 +4606,7 @@ console.log("Loader: virtual definitions validate eagerly but JavaScript parses 
     throw new Error(`Unused invalid virtual source should not fail startup: ${unused.stderr.toString()}`);
 
   const invalidBytes = Bun.spawnSync(
-    [LOADER, "-", "--module", "host:bad={type:'bytes',content:'%%%'}"],
+    [LOADER, "-", "--module", 'host:bad={"type":"bytes","content":"%%%"}'],
     { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
   );
   const invalidBytesOutput = invalidBytes.stdout.toString() + invalidBytes.stderr.toString();
