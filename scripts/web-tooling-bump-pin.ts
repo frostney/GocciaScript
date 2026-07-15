@@ -42,9 +42,10 @@ function main(argv: string[]): number {
     return 1;
   }
 
-  const oldSha = (
-    manifest as { webTooling?: { commit?: unknown } }
-  ).webTooling?.commit;
+  const oldSha =
+    manifest && typeof manifest === "object"
+      ? (manifest as { webTooling?: { commit?: unknown } }).webTooling?.commit
+      : undefined;
   if (typeof oldSha !== "string" || !SHA_RE.test(oldSha)) {
     console.error(
       `${manifestPath}: expected webTooling.commit to be one 40-hex SHA`,
