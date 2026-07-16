@@ -1,7 +1,9 @@
 /*---
 description: yield in traditional for-loop condition resumes mid-test
-features: [compat-traditional-for-loop, generators]
+features: [compat-traditional-for-loop, generators, Goccia.gc]
 ---*/
+
+const hasGoccia = typeof Goccia !== "undefined";
 
 test("yield in condition emits one value per iteration", () => {
   const obj = {
@@ -55,6 +57,22 @@ test("closure captured before yield in condition pins active iteration binding",
   const g = obj.gen();
   expect(g.next().value).toBe("condition");
   expect(g.next().value).toBe(0);
+  expect(g.next().value).toBe("condition");
+  expect(g.next().done).toBe(true);
+});
+
+test.runIf(hasGoccia)("condition resume roots the active iteration scope across explicit GC", () => {
+  const obj = {
+    *gen() {
+      for (let i = 42; (yield "condition", Goccia.gc(), i < 43); i++) {
+        yield i;
+      }
+    },
+  };
+
+  const g = obj.gen();
+  expect(g.next().value).toBe("condition");
+  expect(g.next().value).toBe(42);
   expect(g.next().value).toBe("condition");
   expect(g.next().done).toBe(true);
 });

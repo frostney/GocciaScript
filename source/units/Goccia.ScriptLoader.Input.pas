@@ -64,10 +64,12 @@ function IsMultifileSectionName(const AName: string): Boolean;
     MultifileOriginalPath('/abs/foo.jsx')        = '/abs/foo.jsx'
 }
 function MultifileOriginalPath(const AName: string): string;
+function MultifilePartIndex(const AName: string): Integer;
 
 implementation
 
 uses
+  StrUtils,
   SysUtils;
 
 const
@@ -228,6 +230,21 @@ begin
     Exit(AName);
   Extension := ExtractFileExt(AName);
   Result := Copy(AName, 1, OpenPos - 1) + Extension;
+end;
+
+function MultifilePartIndex(const AName: string): Integer;
+var
+  ClosePos, OpenPos: Integer;
+begin
+  OpenPos := FindSectionMarker(AName);
+  if OpenPos = 0 then
+    Exit(0);
+  ClosePos := PosEx(PART_INFIX_CLOSE, AName,
+    OpenPos + Length(PART_INFIX_OPEN));
+  if ClosePos = 0 then
+    Exit(0);
+  Result := StrToIntDef(Copy(AName, OpenPos + Length(PART_INFIX_OPEN),
+    ClosePos - OpenPos - Length(PART_INFIX_OPEN)), 0);
 end;
 
 end.

@@ -105,3 +105,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0093 — Engine-owned host environment](0093-engine-owned-host-environment.md)
 - [0094 — Virtual modules use the ordinary module loader](0094-virtual-modules-use-the-module-loader.md)
 - [0095 — Custom bidirectional FFI ABI engine](0095-custom-bidirectional-ffi-abi-engine.md)
+- [0096 — Keep snapshot persistence behind a test-host adapter](0096-host-injected-snapshot-testing.md)

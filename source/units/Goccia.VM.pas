@@ -503,6 +503,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Evaluator,
   Goccia.Evaluator.Decorators,
+  Goccia.Execution.CallSite,
   Goccia.ImportMeta,
   Goccia.InstructionLimit,
   Goccia.MicrotaskQueue,
@@ -13374,6 +13375,7 @@ var
   PreviousRealm: TGocciaRealm;
   ExecutionRealm: TGocciaRealm;
   RealmSwitched: Boolean;
+  PreviousCallSite: TGocciaCallSite;
 
   procedure CurrentInstructionDebugLocation(out ALine, AColumn: Integer);
   begin
@@ -13383,6 +13385,19 @@ var
       Exit;
     ALine := Template.DebugInfo.GetLineForPC(InstructionStartIP);
     AColumn := Template.DebugInfo.GetColumnForPC(InstructionStartIP);
+  end;
+
+  procedure EnterCurrentInstructionCallSite(
+    out APrevious: TGocciaCallSite);
+  var
+    SourcePath: string;
+  begin
+    CurrentInstructionDebugLocation(DebugLine, DebugColumn);
+    if Assigned(Template) and Assigned(Template.DebugInfo) then
+      SourcePath := Template.DebugInfo.SourceFile
+    else
+      SourcePath := '';
+    EnterGocciaCallSite(SourcePath, DebugLine, DebugColumn, APrevious);
   end;
 
 begin
@@ -15743,8 +15758,19 @@ begin
           else
             for I := 0 to B - 1 do
               CallArgs.Add(GetRegister(A + 1 + I));
-          SetRegister(A, InvokeFunctionValue(
-            GetRegister(A), CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue));
+          if GetRegister(A) is TGocciaNativeFunctionValue then
+          begin
+            EnterCurrentInstructionCallSite(PreviousCallSite);
+            try
+              SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
+                TGocciaUndefinedLiteralValue.UndefinedValue));
+            finally
+              LeaveGocciaCallSite(PreviousCallSite);
+            end;
+          end
+          else
+            SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
+              TGocciaUndefinedLiteralValue.UndefinedValue));
         finally
           ReleaseArguments(CallArgs);
         end;
@@ -15994,7 +16020,19 @@ begin
           else
             for I := 0 to B - 1 do
               CallArgs.Add(GetRegister(A + 1 + I));
-          SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs, GetRegister(A - 1)));
+          if GetRegister(A) is TGocciaNativeFunctionValue then
+          begin
+            EnterCurrentInstructionCallSite(PreviousCallSite);
+            try
+              SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
+                GetRegister(A - 1)));
+            finally
+              LeaveGocciaCallSite(PreviousCallSite);
+            end;
+          end
+          else
+            SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
+              GetRegister(A - 1)));
         finally
           ReleaseArguments(CallArgs);
         end;
