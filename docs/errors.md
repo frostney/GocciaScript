@@ -133,8 +133,8 @@ Every error object has the following properties:
 
 The Sandbox Runner's `fs` module converts virtual filesystem failures into
 real JavaScript `Error` objects. Synchronous methods throw the error and
-`fs.promises` methods reject with the same shape. Callback methods use this
-same error contract when the callback API is installed.
+`fs.promises` methods reject with the same shape. Callback methods pass the
+same error as their only callback argument.
 
 In addition to the standard error properties, sandbox filesystem errors have:
 

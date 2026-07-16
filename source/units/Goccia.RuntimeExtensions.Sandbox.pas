@@ -5,6 +5,8 @@ unit Goccia.RuntimeExtensions.Sandbox;
 interface
 
 uses
+  SysUtils,
+
   SandboxVirtualFileSystem,
 
   Goccia.Arguments.Collection,
@@ -39,6 +41,24 @@ type
     function StatsIsSymbolicLink(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
 
+    function ReadFileValue(const APath: string;
+      const ATextResult: Boolean): TGocciaValue;
+    function WriteFileValue(const APath: string;
+      const AData: TBytes): TGocciaValue;
+    function AppendFileValue(const APath: string;
+      const AData: TBytes): TGocciaValue;
+    function MkdirValue(const APath: string; const ARecursive,
+      AReturnFirstCreatedPath: Boolean): TGocciaValue;
+    function ReaddirValue(const APath: string): TGocciaValue;
+    function StatValue(const APath: string): TGocciaValue;
+    function ExistsValue(const APath: string): TGocciaValue;
+    function RmValue(const APath: string;
+      const ARecursive: Boolean): TGocciaValue;
+    function RenameValue(const APath,
+      ADestination: string): TGocciaValue;
+    function CopyFileValue(const APath,
+      ADestination: string): TGocciaValue;
+
     function SandboxDollar(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function RunScript(const AArgs: TGocciaArgumentsCollection;
@@ -64,7 +84,6 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     function FsCopyFileSync(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
-
     function FsReadFile(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function FsWriteFile(const AArgs: TGocciaArgumentsCollection;
@@ -77,11 +96,32 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     function FsStat(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+    function FsExists(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     function FsRm(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function FsRename(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function FsCopyFile(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+
+    function FsPromisesReadFile(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function FsPromisesWriteFile(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function FsPromisesAppendFile(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function FsPromisesMkdir(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function FsPromisesReaddir(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function FsPromisesStat(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function FsPromisesRm(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function FsPromisesRename(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function FsPromisesCopyFile(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
 
     function CreateFsNamespace: TGocciaObjectValue;
@@ -95,13 +135,14 @@ type
 implementation
 
 uses
-  SysUtils,
-
   base64,
   SandboxShell,
 
+  Goccia.Constants.ErrorNames,
+  Goccia.GarbageCollector,
   Goccia.JSON,
   Goccia.Keywords.Reserved,
+  Goccia.MicrotaskQueue,
   Goccia.Realm,
   Goccia.Sandbox.FileSystemErrors,
   Goccia.Shims,
@@ -117,6 +158,52 @@ uses
   Goccia.Values.TypedArrayValue;
 
 type
+  TGocciaSandboxFsOperation = (
+    sfoReadFile,
+    sfoWriteFile,
+    sfoAppendFile,
+    sfoMkdir,
+    sfoReaddir,
+    sfoStat,
+    sfoExists,
+    sfoRm,
+    sfoRename,
+    sfoCopyFile
+  );
+
+  TGocciaSandboxFsCompletion = (
+    sfcErrorOnly,
+    sfcValue,
+    sfcMkdir,
+    sfcExists
+  );
+
+  TGocciaSandboxFsJob = class(TGocciaMicrotaskJob)
+  private
+    FExtension: TGocciaSandboxRuntimeExtension;
+    FOperation: TGocciaSandboxFsOperation;
+    FPath: string;
+    FDestination: string;
+    FData: TBytes;
+    FTextResult: Boolean;
+    FRecursive: Boolean;
+    FCompletion: TGocciaSandboxFsCompletion;
+    FCallback: TGocciaValue;
+    FPromise: TGocciaPromiseValue;
+    procedure CompleteFailure(const AError: TGocciaValue);
+    procedure CompleteSuccess(const AValue: TGocciaValue);
+  public
+    constructor Create(const AExtension: TGocciaSandboxRuntimeExtension;
+      const AOperation: TGocciaSandboxFsOperation; const APath,
+      ADestination: string; const AData: TBytes; const ATextResult,
+      ARecursive: Boolean;
+      const ACompletion: TGocciaSandboxFsCompletion;
+      const ACallback: TGocciaValue; const APromise: TGocciaPromiseValue);
+    procedure Execute; override;
+    procedure CaptureRoots(
+      const AContainer: TGocciaObjectValue); override;
+  end;
+
   TGocciaSandboxStatValue = class(TGocciaObjectValue)
   private
     FKind: TSandboxFsNodeKind;
@@ -177,6 +264,157 @@ function RejectedPromise(const AValue: TGocciaValue): TGocciaPromiseValue;
 begin
   Result := TGocciaPromiseValue.Create;
   Result.Reject(AValue);
+end;
+
+{ TGocciaSandboxFsJob }
+
+constructor TGocciaSandboxFsJob.Create(
+  const AExtension: TGocciaSandboxRuntimeExtension;
+  const AOperation: TGocciaSandboxFsOperation; const APath,
+  ADestination: string; const AData: TBytes; const ATextResult,
+  ARecursive: Boolean;
+  const ACompletion: TGocciaSandboxFsCompletion;
+  const ACallback: TGocciaValue; const APromise: TGocciaPromiseValue);
+begin
+  inherited Create;
+  FExtension := AExtension;
+  FOperation := AOperation;
+  FPath := APath;
+  FDestination := ADestination;
+  FData := Copy(AData);
+  FTextResult := ATextResult;
+  FRecursive := ARecursive;
+  FCompletion := ACompletion;
+  FCallback := ACallback;
+  FPromise := APromise;
+end;
+
+procedure TGocciaSandboxFsJob.CompleteFailure(const AError: TGocciaValue);
+var
+  CallbackArgs: TGocciaArgumentsCollection;
+  ErrorRoot: TGocciaTempRoot;
+begin
+  InitializeTempRoot(ErrorRoot);
+  try
+    AddTempRootIfNeeded(ErrorRoot, AError);
+    if Assigned(FPromise) then
+    begin
+      FPromise.Reject(AError);
+      Exit;
+    end;
+
+    if FCompletion = sfcExists then
+      CallbackArgs := TGocciaArgumentsCollection.Create([
+        TGocciaBooleanLiteralValue.FalseValue])
+    else
+      CallbackArgs := TGocciaArgumentsCollection.Create([AError]);
+    try
+      InvokeCallable(FCallback, CallbackArgs,
+        TGocciaUndefinedLiteralValue.UndefinedValue);
+    finally
+      CallbackArgs.Free;
+    end;
+  finally
+    RemoveTempRootIfNeeded(ErrorRoot);
+  end;
+end;
+
+procedure TGocciaSandboxFsJob.CompleteSuccess(const AValue: TGocciaValue);
+var
+  CallbackArgs: TGocciaArgumentsCollection;
+  ValueRoot: TGocciaTempRoot;
+begin
+  InitializeTempRoot(ValueRoot);
+  try
+    AddTempRootIfNeeded(ValueRoot, AValue);
+    if Assigned(FPromise) then
+    begin
+      FPromise.Resolve(AValue);
+      Exit;
+    end;
+
+    case FCompletion of
+      sfcErrorOnly:
+        CallbackArgs := TGocciaArgumentsCollection.Create([
+          TGocciaNullLiteralValue.NullValue]);
+      sfcValue:
+        CallbackArgs := TGocciaArgumentsCollection.Create([
+          TGocciaNullLiteralValue.NullValue, AValue]);
+      sfcMkdir:
+        if FRecursive then
+          CallbackArgs := TGocciaArgumentsCollection.Create([
+            TGocciaNullLiteralValue.NullValue, AValue])
+        else
+          CallbackArgs := TGocciaArgumentsCollection.Create([
+            TGocciaNullLiteralValue.NullValue]);
+      sfcExists:
+        CallbackArgs := TGocciaArgumentsCollection.Create([AValue]);
+    else
+      CallbackArgs := TGocciaArgumentsCollection.Create([
+        TGocciaNullLiteralValue.NullValue]);
+    end;
+    try
+      InvokeCallable(FCallback, CallbackArgs,
+        TGocciaUndefinedLiteralValue.UndefinedValue);
+    finally
+      CallbackArgs.Free;
+    end;
+  finally
+    RemoveTempRootIfNeeded(ValueRoot);
+  end;
+end;
+
+procedure TGocciaSandboxFsJob.Execute;
+var
+  Value: TGocciaValue;
+begin
+  try
+    case FOperation of
+      sfoReadFile:
+        Value := FExtension.ReadFileValue(FPath, FTextResult);
+      sfoWriteFile:
+        Value := FExtension.WriteFileValue(FPath, FData);
+      sfoAppendFile:
+        Value := FExtension.AppendFileValue(FPath, FData);
+      sfoMkdir:
+        Value := FExtension.MkdirValue(FPath, FRecursive, True);
+      sfoReaddir:
+        Value := FExtension.ReaddirValue(FPath);
+      sfoStat:
+        Value := FExtension.StatValue(FPath);
+      sfoExists:
+        Value := FExtension.ExistsValue(FPath);
+      sfoRm:
+        Value := FExtension.RmValue(FPath, FRecursive);
+      sfoRename:
+        Value := FExtension.RenameValue(FPath, FDestination);
+      sfoCopyFile:
+        Value := FExtension.CopyFileValue(FPath, FDestination);
+    else
+      raise Exception.Create('Unsupported filesystem operation');
+    end;
+  except
+    on E: TGocciaThrowValue do
+    begin
+      CompleteFailure(E.Value);
+      Exit;
+    end;
+    on E: Exception do
+    begin
+      CompleteFailure(CreateErrorObject(ERROR_NAME, E.Message));
+      Exit;
+    end;
+  end;
+  CompleteSuccess(Value);
+end;
+
+procedure TGocciaSandboxFsJob.CaptureRoots(
+  const AContainer: TGocciaObjectValue);
+begin
+  if Assigned(FCallback) then
+    AContainer.SetProperty('callback', FCallback);
+  if Assigned(FPromise) then
+    AContainer.SetProperty('promise', FPromise);
 end;
 
 function RequireStringArg(const AArgs: TGocciaArgumentsCollection;
@@ -270,18 +508,177 @@ begin
   Result := nil;
 end;
 
-function RunValueAsPromise(const ACallback: TGocciaNativeFunctionCallback;
-  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue):
-  TGocciaValue;
+function IsMissingValue(const AValue: TGocciaValue): Boolean;
 begin
-  try
-    Result := FulfilledPromise(ACallback(AArgs, AThisValue));
-  except
-    on E: TGocciaThrowValue do
-      Result := RejectedPromise(E.Value);
-    on E: Exception do
-      Result := RejectedPromise(TGocciaStringLiteralValue.Create(E.Message));
+  Result := (not Assigned(AValue)) or
+    (AValue is TGocciaUndefinedLiteralValue) or
+    (AValue is TGocciaNullLiteralValue);
+end;
+
+function RequireAsyncPath(const AArgs: TGocciaArgumentsCollection;
+  const AIndex: Integer; const AMethod: string): string;
+var
+  Value: TGocciaValue;
+begin
+  Value := AArgs.GetElement(AIndex);
+  if not (Value is TGocciaStringLiteralValue) then
+    ThrowTypeError(AMethod + ' requires a path string');
+  Result := TGocciaStringLiteralValue(Value).Value;
+end;
+
+function RequireAsyncData(const AArgs: TGocciaArgumentsCollection;
+  const AIndex: Integer; const AMethod: string): TBytes;
+begin
+  Result := ValueToBytes(AArgs.GetElement(AIndex), AMethod);
+end;
+
+function RequireFsCallback(const AArgs: TGocciaArgumentsCollection;
+  const AIndex: Integer; const AMethod: string): TGocciaValue;
+begin
+  Result := AArgs.GetElement(AIndex);
+  if not Assigned(Result) or not Result.IsCallable then
+    ThrowTypeError(AMethod + ' requires a callback function');
+end;
+
+procedure ValidateArgumentCount(const AArgs: TGocciaArgumentsCollection;
+  const AMaximum: Integer; const AMethod: string);
+begin
+  if AArgs.Length > AMaximum then
+    ThrowTypeError(AMethod + ' received unsupported arguments');
+end;
+
+procedure ValidateNoOptions(const AValue: TGocciaValue;
+  const AMethod: string);
+begin
+  if not IsMissingValue(AValue) then
+    ThrowTypeError(AMethod + ' options are not supported');
+end;
+
+function ParseReadOptions(const AValue: TGocciaValue;
+  const AMethod: string): Boolean;
+var
+  EncodingValue: TGocciaValue;
+  Encoding: string;
+begin
+  Result := False;
+  if IsMissingValue(AValue) then
+    Exit;
+  if AValue is TGocciaStringLiteralValue then
+  begin
+    Encoding := LowerCase(TGocciaStringLiteralValue(AValue).Value);
+    if (Encoding <> 'utf8') and (Encoding <> 'utf-8') then
+      ThrowTypeError(AMethod + ' only supports utf8 encoding');
+    Result := True;
+    Exit;
   end;
+  if not (AValue is TGocciaObjectValue) then
+    ThrowTypeError(AMethod + ' options must be an encoding string or object');
+
+  EncodingValue := TGocciaObjectValue(AValue).GetProperty('encoding');
+  if not IsMissingValue(EncodingValue) then
+  begin
+    if not (EncodingValue is TGocciaStringLiteralValue) then
+      ThrowTypeError(AMethod + ' option "encoding" must be a string');
+    Encoding := LowerCase(TGocciaStringLiteralValue(EncodingValue).Value);
+    if (Encoding <> 'utf8') and (Encoding <> 'utf-8') then
+      ThrowTypeError(AMethod + ' only supports utf8 encoding');
+    Result := True;
+  end;
+  if not IsMissingValue(TGocciaObjectValue(AValue).GetProperty('flag')) or
+     not IsMissingValue(TGocciaObjectValue(AValue).GetProperty('signal')) then
+    ThrowTypeError(AMethod + ' received unsupported options');
+end;
+
+function ValidateRecursiveOptions(const AValue: TGocciaValue;
+  const AMethod: string): Boolean;
+var
+  RecursiveValue: TGocciaValue;
+  ForceValue: TGocciaValue;
+begin
+  if IsMissingValue(AValue) then
+    Exit(False);
+  if AValue is TGocciaBooleanLiteralValue then
+    Exit(TGocciaBooleanLiteralValue(AValue).Value);
+  if not (AValue is TGocciaObjectValue) then
+    ThrowTypeError(AMethod + ' options must be a boolean or object');
+
+  RecursiveValue := TGocciaObjectValue(AValue).GetProperty('recursive');
+  if IsMissingValue(RecursiveValue) then
+    Result := False
+  else
+  begin
+    if not (RecursiveValue is TGocciaBooleanLiteralValue) then
+      ThrowTypeError(AMethod + ' option "recursive" must be a boolean');
+    Result := TGocciaBooleanLiteralValue(RecursiveValue).Value;
+  end;
+  if not IsMissingValue(TGocciaObjectValue(AValue).GetProperty('mode')) then
+    ThrowTypeError(AMethod + ' received unsupported options');
+  ForceValue := TGocciaObjectValue(AValue).GetProperty('force');
+  if not IsMissingValue(ForceValue) then
+  begin
+    if not (ForceValue is TGocciaBooleanLiteralValue) then
+      ThrowTypeError(AMethod + ' option "force" must be a boolean');
+    if TGocciaBooleanLiteralValue(ForceValue).Value then
+      ThrowTypeError(AMethod + ' received unsupported options');
+  end;
+end;
+
+procedure ValidateCopyMode(const AValue: TGocciaValue;
+  const AMethod: string);
+begin
+  if IsMissingValue(AValue) then
+    Exit;
+  if not (AValue is TGocciaNumberLiteralValue) or
+     (TGocciaNumberLiteralValue(AValue).Value <> 0) then
+    ThrowTypeError(AMethod + ' only supports copy mode 0');
+end;
+
+function EnqueueFsCallback(
+  const AExtension: TGocciaSandboxRuntimeExtension;
+  const AOperation: TGocciaSandboxFsOperation; const APath,
+  ADestination: string; const AData: TBytes; const ATextResult,
+  ARecursive: Boolean;
+  const ACompletion: TGocciaSandboxFsCompletion;
+  const ACallback: TGocciaValue): TGocciaValue;
+var
+  Queue: TGocciaMicrotaskQueue;
+begin
+  Queue := TGocciaMicrotaskQueue.Instance;
+  if not Assigned(Queue) then
+    raise Exception.Create('Filesystem callbacks require a microtask queue');
+  Queue.EnqueueJob(TGocciaSandboxFsJob.Create(AExtension, AOperation,
+    APath, ADestination, AData, ATextResult, ARecursive, ACompletion,
+    ACallback, nil));
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function EnqueueFsPromise(
+  const AExtension: TGocciaSandboxRuntimeExtension;
+  const AOperation: TGocciaSandboxFsOperation; const APath,
+  ADestination: string; const AData: TBytes; const ATextResult,
+  ARecursive: Boolean;
+  const ACompletion: TGocciaSandboxFsCompletion;
+  const AMethod: string): TGocciaValue;
+var
+  Queue: TGocciaMicrotaskQueue;
+  Promise: TGocciaPromiseValue;
+  PromiseRoot: TGocciaTempRoot;
+begin
+  Queue := TGocciaMicrotaskQueue.Instance;
+  if not Assigned(Queue) then
+    raise Exception.Create(AMethod + ' requires a microtask queue');
+
+  Promise := TGocciaPromiseValue.Create;
+  InitializeTempRoot(PromiseRoot);
+  try
+    AddTempRootIfNeeded(PromiseRoot, Promise);
+    Queue.EnqueueJob(TGocciaSandboxFsJob.Create(AExtension, AOperation,
+      APath, ADestination, AData, ATextResult, ARecursive, ACompletion,
+      nil, Promise));
+  finally
+    RemoveTempRootIfNeeded(PromiseRoot);
+  end;
+  Result := Promise;
 end;
 
 procedure AppendRunSeed(var AOptions: TGocciaSandboxRunOptions;
@@ -874,6 +1271,17 @@ begin
 
   FFsModule := TGocciaModule.Create('fs');
   FFsModule.AddExportValue(KEYWORD_DEFAULT, FsNamespace);
+  FFsModule.AddExportValue('readFile', FsNamespace.GetProperty('readFile'));
+  FFsModule.AddExportValue('writeFile', FsNamespace.GetProperty('writeFile'));
+  FFsModule.AddExportValue('appendFile',
+    FsNamespace.GetProperty('appendFile'));
+  FFsModule.AddExportValue('mkdir', FsNamespace.GetProperty('mkdir'));
+  FFsModule.AddExportValue('readdir', FsNamespace.GetProperty('readdir'));
+  FFsModule.AddExportValue('stat', FsNamespace.GetProperty('stat'));
+  FFsModule.AddExportValue('exists', FsNamespace.GetProperty('exists'));
+  FFsModule.AddExportValue('rm', FsNamespace.GetProperty('rm'));
+  FFsModule.AddExportValue('rename', FsNamespace.GetProperty('rename'));
+  FFsModule.AddExportValue('copyFile', FsNamespace.GetProperty('copyFile'));
   FFsModule.AddExportValue('readFileSync',
     FsNamespace.GetProperty('readFileSync'));
   FFsModule.AddExportValue('writeFileSync',
@@ -921,7 +1329,7 @@ var
   Promises: TGocciaObjectValue;
 begin
   Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype,
-    16);
+    28);
   AddNativeFunction(Result, 'readFileSync', FsReadFileSync, 2);
   AddNativeFunction(Result, 'writeFileSync', FsWriteFileSync, 2);
   AddNativeFunction(Result, 'appendFileSync', FsAppendFileSync, 2);
@@ -933,17 +1341,28 @@ begin
   AddNativeFunction(Result, 'renameSync', FsRenameSync, 2);
   AddNativeFunction(Result, 'copyFileSync', FsCopyFileSync, 2);
 
+  AddNativeFunction(Result, 'readFile', FsReadFile, 3);
+  AddNativeFunction(Result, 'writeFile', FsWriteFile, 4);
+  AddNativeFunction(Result, 'appendFile', FsAppendFile, 4);
+  AddNativeFunction(Result, 'mkdir', FsMkdir, 3);
+  AddNativeFunction(Result, 'readdir', FsReaddir, 3);
+  AddNativeFunction(Result, 'stat', FsStat, 1);
+  AddNativeFunction(Result, 'exists', FsExists, 2);
+  AddNativeFunction(Result, 'rm', FsRm, 3);
+  AddNativeFunction(Result, 'rename', FsRename, 3);
+  AddNativeFunction(Result, 'copyFile', FsCopyFile, 4);
+
   Promises := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype,
     12);
-  AddNativeFunction(Promises, 'readFile', FsReadFile, 2);
-  AddNativeFunction(Promises, 'writeFile', FsWriteFile, 2);
-  AddNativeFunction(Promises, 'appendFile', FsAppendFile, 2);
-  AddNativeFunction(Promises, 'mkdir', FsMkdir, 2);
-  AddNativeFunction(Promises, 'readdir', FsReaddir, 1);
-  AddNativeFunction(Promises, 'stat', FsStat, 1);
-  AddNativeFunction(Promises, 'rm', FsRm, 2);
-  AddNativeFunction(Promises, 'rename', FsRename, 2);
-  AddNativeFunction(Promises, 'copyFile', FsCopyFile, 2);
+  AddNativeFunction(Promises, 'readFile', FsPromisesReadFile, 2);
+  AddNativeFunction(Promises, 'writeFile', FsPromisesWriteFile, 2);
+  AddNativeFunction(Promises, 'appendFile', FsPromisesAppendFile, 2);
+  AddNativeFunction(Promises, 'mkdir', FsPromisesMkdir, 2);
+  AddNativeFunction(Promises, 'readdir', FsPromisesReaddir, 1);
+  AddNativeFunction(Promises, 'stat', FsPromisesStat, 1);
+  AddNativeFunction(Promises, 'rm', FsPromisesRm, 2);
+  AddNativeFunction(Promises, 'rename', FsPromisesRename, 2);
+  AddNativeFunction(Promises, 'copyFile', FsPromisesCopyFile, 2);
   Result.SetProperty('promises', Promises);
 end;
 
@@ -1008,19 +1427,9 @@ function TGocciaSandboxRuntimeExtension.FsReadFileSync(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Path: string;
-  Bytes: TBytes;
 begin
   Path := RequireStringArg(AArgs, 0, 'fs.readFileSync');
-  try
-    if WantsTextResult(AArgs.GetElement(1)) then
-      Exit(TGocciaStringLiteralValue.Create(FContext.Fs.ReadAllText(Path)));
-    Bytes := FContext.Fs.ReadAllBytes(Path);
-    Result := BytesToUint8Array(Bytes);
-  except
-    on E: ESandboxFsError do
-      raise TGocciaThrowValue.Create(
-        CreateSandboxFileSystemError(E, 'readFile', Path));
-  end;
+  Result := ReadFileValue(Path, WantsTextResult(AArgs.GetElement(1)));
 end;
 
 function TGocciaSandboxRuntimeExtension.FsWriteFileSync(
@@ -1032,14 +1441,7 @@ var
 begin
   Path := RequireStringArg(AArgs, 0, 'fs.writeFileSync');
   Bytes := ValueToBytes(AArgs.GetElement(1), 'fs.writeFileSync');
-  try
-    FContext.Fs.WriteAllBytes(Path, Bytes);
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  except
-    on E: ESandboxFsError do
-      raise TGocciaThrowValue.Create(
-        CreateSandboxFileSystemError(E, 'writeFile', Path));
-  end;
+  Result := WriteFileValue(Path, Bytes);
 end;
 
 function TGocciaSandboxRuntimeExtension.FsAppendFileSync(
@@ -1047,28 +1449,11 @@ function TGocciaSandboxRuntimeExtension.FsAppendFileSync(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Path: string;
-  Existing: TBytes;
-  Added: TBytes;
-  Combined: TBytes;
+  Bytes: TBytes;
 begin
   Path := RequireStringArg(AArgs, 0, 'fs.appendFileSync');
-  Existing := nil;
-  try
-    if FContext.Fs.Exists(Path) then
-      Existing := FContext.Fs.ReadAllBytes(Path);
-    Added := ValueToBytes(AArgs.GetElement(1), 'fs.appendFileSync');
-    SetLength(Combined, Length(Existing) + Length(Added));
-    if Length(Existing) > 0 then
-      Move(Existing[0], Combined[0], Length(Existing));
-    if Length(Added) > 0 then
-      Move(Added[0], Combined[Length(Existing)], Length(Added));
-    FContext.Fs.WriteAllBytes(Path, Combined);
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  except
-    on E: ESandboxFsError do
-      raise TGocciaThrowValue.Create(
-        CreateSandboxFileSystemError(E, 'appendFile', Path));
-  end;
+  Bytes := ValueToBytes(AArgs.GetElement(1), 'fs.appendFileSync');
+  Result := AppendFileValue(Path, Bytes);
 end;
 
 function TGocciaSandboxRuntimeExtension.FsMkdirSync(
@@ -1080,14 +1465,7 @@ var
 begin
   Path := RequireStringArg(AArgs, 0, 'fs.mkdirSync');
   Recursive := OptionRecursive(AArgs.GetElement(1));
-  try
-    FContext.Fs.MakeDirectory(Path, Recursive);
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  except
-    on E: ESandboxFsError do
-      raise TGocciaThrowValue.Create(
-        CreateSandboxFileSystemError(E, 'mkdir', Path));
-  end;
+  Result := MkdirValue(Path, Recursive, False);
 end;
 
 function TGocciaSandboxRuntimeExtension.FsReaddirSync(
@@ -1095,22 +1473,9 @@ function TGocciaSandboxRuntimeExtension.FsReaddirSync(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Path: string;
-  Entries: TSandboxFsStatArray;
-  Arr: TGocciaArrayValue;
-  I: Integer;
 begin
   Path := RequireStringArg(AArgs, 0, 'fs.readdirSync');
-  try
-    Entries := FContext.Fs.List(Path);
-    Arr := TGocciaArrayValue.Create(nil, Length(Entries));
-    for I := 0 to High(Entries) do
-      Arr.SetElement(I, TGocciaStringLiteralValue.Create(Entries[I].Name));
-    Result := Arr;
-  except
-    on E: ESandboxFsError do
-      raise TGocciaThrowValue.Create(
-        CreateSandboxFileSystemError(E, 'readdir', Path));
-  end;
+  Result := ReaddirValue(Path);
 end;
 
 function TGocciaSandboxRuntimeExtension.FsStatSync(
@@ -1120,13 +1485,7 @@ var
   Path: string;
 begin
   Path := RequireStringArg(AArgs, 0, 'fs.statSync');
-  try
-    Result := CreateStatsValue(FContext.Fs.Stat(Path));
-  except
-    on E: ESandboxFsError do
-      raise TGocciaThrowValue.Create(
-        CreateSandboxFileSystemError(E, 'stat', Path));
-  end;
+  Result := StatValue(Path);
 end;
 
 function TGocciaSandboxRuntimeExtension.FsExistsSync(
@@ -1136,13 +1495,7 @@ var
   Path: string;
 begin
   Path := RequireStringArg(AArgs, 0, 'fs.existsSync');
-  try
-    Result := TGocciaBooleanLiteralValue.Create(FContext.Fs.Exists(Path));
-  except
-    on E: ESandboxFsError do
-      raise TGocciaThrowValue.Create(
-        CreateSandboxFileSystemError(E, 'exists', Path));
-  end;
+  Result := ExistsValue(Path);
 end;
 
 function TGocciaSandboxRuntimeExtension.FsRmSync(
@@ -1154,14 +1507,7 @@ var
 begin
   Path := RequireStringArg(AArgs, 0, 'fs.rmSync');
   Recursive := OptionRecursive(AArgs.GetElement(1));
-  try
-    FContext.Fs.DeletePath(Path, Recursive);
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  except
-    on E: ESandboxFsError do
-      raise TGocciaThrowValue.Create(
-        CreateSandboxFileSystemError(E, 'rm', Path));
-  end;
+  Result := RmValue(Path, Recursive);
 end;
 
 function TGocciaSandboxRuntimeExtension.FsRenameSync(
@@ -1173,14 +1519,7 @@ var
 begin
   Path := RequireStringArg(AArgs, 0, 'fs.renameSync');
   Destination := RequireStringArg(AArgs, 1, 'fs.renameSync');
-  try
-    FContext.Fs.MovePath(Path, Destination);
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  except
-    on E: ESandboxFsError do
-      raise TGocciaThrowValue.Create(CreateSandboxFileSystemError(E,
-        'rename', Path, Destination));
-  end;
+  Result := RenameValue(Path, Destination);
 end;
 
 function TGocciaSandboxRuntimeExtension.FsCopyFileSync(
@@ -1192,77 +1531,507 @@ var
 begin
   Path := RequireStringArg(AArgs, 0, 'fs.copyFileSync');
   Destination := RequireStringArg(AArgs, 1, 'fs.copyFileSync');
+  Result := CopyFileValue(Path, Destination);
+end;
+
+function TGocciaSandboxRuntimeExtension.ReadFileValue(const APath: string;
+  const ATextResult: Boolean): TGocciaValue;
+begin
   try
-    FContext.Fs.CopyPath(Path, Destination, False);
+    if ATextResult then
+      Exit(TGocciaStringLiteralValue.Create(FContext.Fs.ReadAllText(APath)));
+    Result := BytesToUint8Array(FContext.Fs.ReadAllBytes(APath));
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'readFile', APath));
+  end;
+end;
+
+function TGocciaSandboxRuntimeExtension.WriteFileValue(const APath: string;
+  const AData: TBytes): TGocciaValue;
+begin
+  try
+    FContext.Fs.WriteAllBytes(APath, AData);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'writeFile', APath));
+  end;
+end;
+
+function TGocciaSandboxRuntimeExtension.AppendFileValue(const APath: string;
+  const AData: TBytes): TGocciaValue;
+var
+  Existing: TBytes;
+  Combined: TBytes;
+begin
+  Existing := nil;
+  try
+    if FContext.Fs.Exists(APath) then
+      Existing := FContext.Fs.ReadAllBytes(APath);
+    SetLength(Combined, Length(Existing) + Length(AData));
+    if Length(Existing) > 0 then
+      Move(Existing[0], Combined[0], Length(Existing));
+    if Length(AData) > 0 then
+      Move(AData[0], Combined[Length(Existing)], Length(AData));
+    FContext.Fs.WriteAllBytes(APath, Combined);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'appendFile', APath));
+  end;
+end;
+
+function TGocciaSandboxRuntimeExtension.MkdirValue(const APath: string;
+  const ARecursive, AReturnFirstCreatedPath: Boolean): TGocciaValue;
+var
+  FirstCreatedPath: string;
+begin
+  try
+    FirstCreatedPath := FContext.Fs.MakeDirectoryWithResult(APath, ARecursive);
+    if AReturnFirstCreatedPath and ARecursive and
+       (FirstCreatedPath <> '') then
+      Result := TGocciaStringLiteralValue.Create(FirstCreatedPath)
+    else
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'mkdir', APath));
+  end;
+end;
+
+function TGocciaSandboxRuntimeExtension.ReaddirValue(
+  const APath: string): TGocciaValue;
+var
+  Entries: TSandboxFsStatArray;
+  Arr: TGocciaArrayValue;
+  I: Integer;
+begin
+  try
+    Entries := FContext.Fs.List(APath);
+    Arr := TGocciaArrayValue.Create(nil, Length(Entries));
+    for I := 0 to High(Entries) do
+      Arr.SetElement(I, TGocciaStringLiteralValue.Create(Entries[I].Name));
+    Result := Arr;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'readdir', APath));
+  end;
+end;
+
+function TGocciaSandboxRuntimeExtension.StatValue(
+  const APath: string): TGocciaValue;
+begin
+  try
+    Result := CreateStatsValue(FContext.Fs.Stat(APath));
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'stat', APath));
+  end;
+end;
+
+function TGocciaSandboxRuntimeExtension.ExistsValue(
+  const APath: string): TGocciaValue;
+begin
+  try
+    Result := TGocciaBooleanLiteralValue.Create(FContext.Fs.Exists(APath));
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'exists', APath));
+  end;
+end;
+
+function TGocciaSandboxRuntimeExtension.RmValue(const APath: string;
+  const ARecursive: Boolean): TGocciaValue;
+begin
+  try
+    FContext.Fs.DeletePath(APath, ARecursive);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'rm', APath));
+  end;
+end;
+
+function TGocciaSandboxRuntimeExtension.RenameValue(const APath,
+  ADestination: string): TGocciaValue;
+begin
+  try
+    FContext.Fs.MovePath(APath, ADestination);
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   except
     on E: ESandboxFsError do
       raise TGocciaThrowValue.Create(CreateSandboxFileSystemError(E,
-        'copyFile', Path, Destination));
+        'rename', APath, ADestination));
+  end;
+end;
+
+function TGocciaSandboxRuntimeExtension.CopyFileValue(const APath,
+  ADestination: string): TGocciaValue;
+begin
+  try
+    FContext.Fs.CopyPath(APath, ADestination, False);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(CreateSandboxFileSystemError(E,
+        'copyFile', APath, ADestination));
   end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsReadFile(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  OptionsValue: TGocciaValue;
+  Callback: TGocciaValue;
+  TextResult: Boolean;
 begin
-  Result := RunValueAsPromise(FsReadFileSync, AArgs, AThisValue);
+  ValidateArgumentCount(AArgs, 3, 'fs.readFile');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.readFile');
+  if AArgs.Length >= 3 then
+  begin
+    OptionsValue := AArgs.GetElement(1);
+    Callback := RequireFsCallback(AArgs, 2, 'fs.readFile');
+  end
+  else
+  begin
+    OptionsValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Callback := RequireFsCallback(AArgs, 1, 'fs.readFile');
+  end;
+  TextResult := ParseReadOptions(OptionsValue, 'fs.readFile');
+  Result := EnqueueFsCallback(Self, sfoReadFile, Path, '', nil,
+    TextResult, False, sfcValue, Callback);
 end;
 
 function TGocciaSandboxRuntimeExtension.FsWriteFile(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Data: TBytes;
+  Callback: TGocciaValue;
 begin
-  Result := RunValueAsPromise(FsWriteFileSync, AArgs, AThisValue);
+  ValidateArgumentCount(AArgs, 4, 'fs.writeFile');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.writeFile');
+  Data := RequireAsyncData(AArgs, 1, 'fs.writeFile');
+  if AArgs.Length >= 4 then
+  begin
+    ValidateNoOptions(AArgs.GetElement(2), 'fs.writeFile');
+    Callback := RequireFsCallback(AArgs, 3, 'fs.writeFile');
+  end
+  else
+    Callback := RequireFsCallback(AArgs, 2, 'fs.writeFile');
+  Result := EnqueueFsCallback(Self, sfoWriteFile, Path, '', Data,
+    False, False, sfcErrorOnly, Callback);
 end;
 
 function TGocciaSandboxRuntimeExtension.FsAppendFile(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Data: TBytes;
+  Callback: TGocciaValue;
 begin
-  Result := RunValueAsPromise(FsAppendFileSync, AArgs, AThisValue);
+  ValidateArgumentCount(AArgs, 4, 'fs.appendFile');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.appendFile');
+  Data := RequireAsyncData(AArgs, 1, 'fs.appendFile');
+  if AArgs.Length >= 4 then
+  begin
+    ValidateNoOptions(AArgs.GetElement(2), 'fs.appendFile');
+    Callback := RequireFsCallback(AArgs, 3, 'fs.appendFile');
+  end
+  else
+    Callback := RequireFsCallback(AArgs, 2, 'fs.appendFile');
+  Result := EnqueueFsCallback(Self, sfoAppendFile, Path, '', Data,
+    False, False, sfcErrorOnly, Callback);
 end;
 
 function TGocciaSandboxRuntimeExtension.FsMkdir(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  OptionsValue: TGocciaValue;
+  Callback: TGocciaValue;
+  Recursive: Boolean;
 begin
-  Result := RunValueAsPromise(FsMkdirSync, AArgs, AThisValue);
+  ValidateArgumentCount(AArgs, 3, 'fs.mkdir');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.mkdir');
+  if AArgs.Length >= 3 then
+  begin
+    OptionsValue := AArgs.GetElement(1);
+    Callback := RequireFsCallback(AArgs, 2, 'fs.mkdir');
+  end
+  else
+  begin
+    OptionsValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Callback := RequireFsCallback(AArgs, 1, 'fs.mkdir');
+  end;
+  Recursive := ValidateRecursiveOptions(OptionsValue, 'fs.mkdir');
+  Result := EnqueueFsCallback(Self, sfoMkdir, Path, '', nil, False,
+    Recursive, sfcMkdir, Callback);
 end;
 
 function TGocciaSandboxRuntimeExtension.FsReaddir(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Callback: TGocciaValue;
 begin
-  Result := RunValueAsPromise(FsReaddirSync, AArgs, AThisValue);
+  ValidateArgumentCount(AArgs, 3, 'fs.readdir');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.readdir');
+  if AArgs.Length >= 3 then
+  begin
+    ValidateNoOptions(AArgs.GetElement(1), 'fs.readdir');
+    Callback := RequireFsCallback(AArgs, 2, 'fs.readdir');
+  end
+  else
+    Callback := RequireFsCallback(AArgs, 1, 'fs.readdir');
+  Result := EnqueueFsCallback(Self, sfoReaddir, Path, '', nil, False,
+    False, sfcValue, Callback);
 end;
 
 function TGocciaSandboxRuntimeExtension.FsStat(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Callback: TGocciaValue;
 begin
-  Result := RunValueAsPromise(FsStatSync, AArgs, AThisValue);
+  ValidateArgumentCount(AArgs, 3, 'fs.stat');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.stat');
+  if AArgs.Length >= 3 then
+  begin
+    ValidateNoOptions(AArgs.GetElement(1), 'fs.stat');
+    Callback := RequireFsCallback(AArgs, 2, 'fs.stat');
+  end
+  else
+    Callback := RequireFsCallback(AArgs, 1, 'fs.stat');
+  Result := EnqueueFsCallback(Self, sfoStat, Path, '', nil, False,
+    False, sfcValue, Callback);
+end;
+
+function TGocciaSandboxRuntimeExtension.FsExists(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Callback: TGocciaValue;
+begin
+  ValidateArgumentCount(AArgs, 2, 'fs.exists');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.exists');
+  Callback := RequireFsCallback(AArgs, 1, 'fs.exists');
+  Result := EnqueueFsCallback(Self, sfoExists, Path, '', nil, False,
+    False, sfcExists, Callback);
 end;
 
 function TGocciaSandboxRuntimeExtension.FsRm(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  OptionsValue: TGocciaValue;
+  Callback: TGocciaValue;
+  Recursive: Boolean;
 begin
-  Result := RunValueAsPromise(FsRmSync, AArgs, AThisValue);
+  ValidateArgumentCount(AArgs, 3, 'fs.rm');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.rm');
+  if AArgs.Length >= 3 then
+  begin
+    OptionsValue := AArgs.GetElement(1);
+    Callback := RequireFsCallback(AArgs, 2, 'fs.rm');
+  end
+  else
+  begin
+    OptionsValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Callback := RequireFsCallback(AArgs, 1, 'fs.rm');
+  end;
+  Recursive := ValidateRecursiveOptions(OptionsValue, 'fs.rm');
+  Result := EnqueueFsCallback(Self, sfoRm, Path, '', nil, False,
+    Recursive, sfcErrorOnly, Callback);
 end;
 
 function TGocciaSandboxRuntimeExtension.FsRename(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Destination: string;
+  Callback: TGocciaValue;
 begin
-  Result := RunValueAsPromise(FsRenameSync, AArgs, AThisValue);
+  ValidateArgumentCount(AArgs, 3, 'fs.rename');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.rename');
+  Destination := RequireAsyncPath(AArgs, 1, 'fs.rename');
+  Callback := RequireFsCallback(AArgs, 2, 'fs.rename');
+  Result := EnqueueFsCallback(Self, sfoRename, Path, Destination, nil,
+    False, False, sfcErrorOnly, Callback);
 end;
 
 function TGocciaSandboxRuntimeExtension.FsCopyFile(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Destination: string;
+  Callback: TGocciaValue;
 begin
-  Result := RunValueAsPromise(FsCopyFileSync, AArgs, AThisValue);
+  ValidateArgumentCount(AArgs, 4, 'fs.copyFile');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.copyFile');
+  Destination := RequireAsyncPath(AArgs, 1, 'fs.copyFile');
+  if AArgs.Length >= 4 then
+  begin
+    ValidateCopyMode(AArgs.GetElement(2), 'fs.copyFile');
+    Callback := RequireFsCallback(AArgs, 3, 'fs.copyFile');
+  end
+  else
+    Callback := RequireFsCallback(AArgs, 2, 'fs.copyFile');
+  Result := EnqueueFsCallback(Self, sfoCopyFile, Path, Destination, nil,
+    False, False, sfcErrorOnly, Callback);
+end;
+
+function TGocciaSandboxRuntimeExtension.FsPromisesReadFile(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  OptionsValue: TGocciaValue;
+  TextResult: Boolean;
+begin
+  ValidateArgumentCount(AArgs, 2, 'fs.promises.readFile');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.readFile');
+  OptionsValue := AArgs.GetElement(1);
+  TextResult := ParseReadOptions(OptionsValue, 'fs.promises.readFile');
+  Result := EnqueueFsPromise(Self, sfoReadFile, Path, '', nil,
+    TextResult, False, sfcValue, 'fs.promises.readFile');
+end;
+
+function TGocciaSandboxRuntimeExtension.FsPromisesWriteFile(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Data: TBytes;
+begin
+  ValidateArgumentCount(AArgs, 3, 'fs.promises.writeFile');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.writeFile');
+  Data := RequireAsyncData(AArgs, 1, 'fs.promises.writeFile');
+  ValidateNoOptions(AArgs.GetElement(2), 'fs.promises.writeFile');
+  Result := EnqueueFsPromise(Self, sfoWriteFile, Path, '', Data,
+    False, False, sfcErrorOnly, 'fs.promises.writeFile');
+end;
+
+function TGocciaSandboxRuntimeExtension.FsPromisesAppendFile(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Data: TBytes;
+begin
+  ValidateArgumentCount(AArgs, 3, 'fs.promises.appendFile');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.appendFile');
+  Data := RequireAsyncData(AArgs, 1, 'fs.promises.appendFile');
+  ValidateNoOptions(AArgs.GetElement(2), 'fs.promises.appendFile');
+  Result := EnqueueFsPromise(Self, sfoAppendFile, Path, '', Data,
+    False, False, sfcErrorOnly, 'fs.promises.appendFile');
+end;
+
+function TGocciaSandboxRuntimeExtension.FsPromisesMkdir(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  OptionsValue: TGocciaValue;
+  Recursive: Boolean;
+begin
+  ValidateArgumentCount(AArgs, 2, 'fs.promises.mkdir');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.mkdir');
+  OptionsValue := AArgs.GetElement(1);
+  Recursive := ValidateRecursiveOptions(OptionsValue, 'fs.promises.mkdir');
+  Result := EnqueueFsPromise(Self, sfoMkdir, Path, '', nil, False,
+    Recursive, sfcMkdir, 'fs.promises.mkdir');
+end;
+
+function TGocciaSandboxRuntimeExtension.FsPromisesReaddir(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+begin
+  ValidateArgumentCount(AArgs, 2, 'fs.promises.readdir');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.readdir');
+  ValidateNoOptions(AArgs.GetElement(1), 'fs.promises.readdir');
+  Result := EnqueueFsPromise(Self, sfoReaddir, Path, '', nil, False,
+    False, sfcValue, 'fs.promises.readdir');
+end;
+
+function TGocciaSandboxRuntimeExtension.FsPromisesStat(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+begin
+  ValidateArgumentCount(AArgs, 2, 'fs.promises.stat');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.stat');
+  ValidateNoOptions(AArgs.GetElement(1), 'fs.promises.stat');
+  Result := EnqueueFsPromise(Self, sfoStat, Path, '', nil, False,
+    False, sfcValue, 'fs.promises.stat');
+end;
+
+function TGocciaSandboxRuntimeExtension.FsPromisesRm(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  OptionsValue: TGocciaValue;
+  Recursive: Boolean;
+begin
+  ValidateArgumentCount(AArgs, 2, 'fs.promises.rm');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.rm');
+  OptionsValue := AArgs.GetElement(1);
+  Recursive := ValidateRecursiveOptions(OptionsValue, 'fs.promises.rm');
+  Result := EnqueueFsPromise(Self, sfoRm, Path, '', nil, False,
+    Recursive, sfcErrorOnly, 'fs.promises.rm');
+end;
+
+function TGocciaSandboxRuntimeExtension.FsPromisesRename(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Destination: string;
+begin
+  ValidateArgumentCount(AArgs, 2, 'fs.promises.rename');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.rename');
+  Destination := RequireAsyncPath(AArgs, 1, 'fs.promises.rename');
+  Result := EnqueueFsPromise(Self, sfoRename, Path, Destination, nil,
+    False, False, sfcErrorOnly, 'fs.promises.rename');
+end;
+
+function TGocciaSandboxRuntimeExtension.FsPromisesCopyFile(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Path: string;
+  Destination: string;
+begin
+  ValidateArgumentCount(AArgs, 3, 'fs.promises.copyFile');
+  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.copyFile');
+  Destination := RequireAsyncPath(AArgs, 1, 'fs.promises.copyFile');
+  ValidateCopyMode(AArgs.GetElement(2), 'fs.promises.copyFile');
+  Result := EnqueueFsPromise(Self, sfoCopyFile, Path, Destination, nil,
+    False, False, sfcErrorOnly, 'fs.promises.copyFile');
 end;
 
 initialization

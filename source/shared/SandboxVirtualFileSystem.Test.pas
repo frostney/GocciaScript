@@ -38,6 +38,7 @@ type
     procedure TestForkDoesNotReadClock;
     procedure TestSnapshotReadsDoNotAdvanceAccessTime;
     procedure TestDirectoryEntryChangesUpdateParentMetadata;
+    procedure TestRecursiveMkdirReportsFirstCreatedPath;
     procedure TestDefaultClockUsesUnixEpoch;
   end;
 
@@ -58,6 +59,8 @@ begin
     TestSnapshotReadsDoNotAdvanceAccessTime);
   Test('Directory entry changes update parent metadata',
     TestDirectoryEntryChangesUpdateParentMetadata);
+  Test('Recursive mkdir reports its first created path',
+    TestRecursiveMkdirReportsFirstCreatedPath);
   Test('Default clock tracks the Unix epoch', TestDefaultClockUsesUnixEpoch);
 end;
 
@@ -226,6 +229,15 @@ begin
   RootStat := FFs.Stat('/');
   ExpectTime(RootStat.ModifiedAt, TimeAt(20));
   ExpectTime(RootStat.ChangedAt, TimeAt(20));
+end;
+
+procedure TTestSandboxVirtualFileSystem.TestRecursiveMkdirReportsFirstCreatedPath;
+begin
+  FFs.MakeDirectory('/existing');
+  Expect<string>(FFs.MakeDirectoryWithResult(
+    '/existing/first/second', True)).ToBe('/existing/first');
+  Expect<string>(FFs.MakeDirectoryWithResult(
+    '/existing/first/second', True)).ToBe('');
 end;
 
 procedure TTestSandboxVirtualFileSystem.TestDefaultClockUsesUnixEpoch;
