@@ -865,6 +865,7 @@ export function Test262Dashboard({ data }: { data: Test262DashboardData }) {
           </p>
         </div>
         <div className="compat-hero-actions">
+          <a href="/compatibility.md">Markdown summary</a>
           <a href={latest.jsonUrl}>JSON result</a>
           <a href={latest.runUrl}>GitHub run</a>
         </div>
@@ -872,7 +873,7 @@ export function Test262Dashboard({ data }: { data: Test262DashboardData }) {
 
       <section className="compat-metrics" aria-label="Latest test262 summary">
         <Metric
-          label="Latest pass rate"
+          label="Overall corpus pass rate"
           value={percent(totalRate)}
           detail={`${fmt(latest.summary.passed)} / ${fmt(
             latest.summary.totalRun,

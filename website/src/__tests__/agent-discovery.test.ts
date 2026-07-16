@@ -5,6 +5,7 @@ import { GET } from "@/app/.well-known/api-catalog/route";
 import { buildMcpServerCardResponse } from "@/app/.well-known/mcp/server-card.json/route";
 import { GET as getOAuthAuthorizationServer } from "@/app/.well-known/oauth-authorization-server/route";
 import { GET as getOAuthProtectedResource } from "@/app/.well-known/oauth-protected-resource/route";
+import { GET as getLlmsTxt } from "@/app/llms.txt/route";
 import {
   AGENT_DISCOVERY_LINK_HEADER,
   AGENT_SKILLS_INDEX_PATH,
@@ -13,10 +14,13 @@ import {
   buildApiCatalog,
   buildGocciaApiSkillMd,
   buildJwks,
+  buildLlmsTxt,
   buildMcpServerCard,
   buildOAuthAuthorizationServerMetadata,
   buildOAuthProtectedResourceMetadata,
+  COMPATIBILITY_MARKDOWN_PATH,
   GOCCIA_API_SKILL_PATH,
+  LLMS_TEXT_PATH,
   MCP_SERVER_CARD_PATH,
   OAUTH_PROTECTED_RESOURCE_PATH,
   sha256Digest,
@@ -41,7 +45,22 @@ describe("agent discovery", () => {
     expect(link?.value).toContain(
       `<${AGENT_SKILLS_INDEX_PATH}>; rel="agent-skills"`,
     );
+    expect(link?.value).toContain(
+      `<${LLMS_TEXT_PATH}>; rel="alternate"; type="text/plain"`,
+    );
     expect(link?.value).toContain(`</docs>; rel="service-doc"`);
+  });
+
+  test("compatibility page advertises its Markdown alternate", async () => {
+    const headers = await nextConfig.headers?.();
+    const compatibility = headers?.find(
+      (entry) => entry.source === "/compatibility",
+    );
+    const link = compatibility?.headers.find((header) => header.key === "Link");
+
+    expect(link?.value).toBe(
+      `<${COMPATIBILITY_MARKDOWN_PATH}>; rel="alternate"; type="text/markdown"`,
+    );
   });
 
   test("api catalog lists public API endpoints and documentation", () => {
@@ -57,6 +76,11 @@ describe("agent discovery", () => {
     expect(catalog.linkset[0]["service-doc"]).toEqual([
       { href: "https://example.test/docs", type: "text/html" },
       { href: "https://example.test/docs/testing-api", type: "text/html" },
+      { href: "https://example.test/compatibility", type: "text/html" },
+      {
+        href: "https://example.test/compatibility.md",
+        type: "text/markdown",
+      },
     ]);
   });
 
@@ -191,8 +215,28 @@ describe("agent discovery", () => {
     const skill = await response.text();
     expect(skill).toBe(buildGocciaApiSkillMd("https://example.test"));
     expect(skill).toContain("Homepage: https://example.test/");
+    expect(skill).toContain(
+      "Concise live compatibility summary: https://example.test/compatibility.md",
+    );
     expect(skill).toContain("capped at 8192 bytes (8 KiB)");
     expect(skill).toContain("`function` keyword requires `compatFunction`");
+  });
+
+  test("llms.txt points to canonical human and machine-readable sources", async () => {
+    const response = getLlmsTxt(new Request("https://example.test/llms.txt"));
+
+    expect(response.headers.get("content-type")).toBe(
+      "text/plain; charset=utf-8",
+    );
+    const body = await response.text();
+    expect(body).toBe(buildLlmsTxt("https://example.test"));
+    expect(body).toContain(
+      "Live ECMAScript compatibility dashboard: https://example.test/compatibility",
+    );
+    expect(body).toContain(
+      "Concise live compatibility summary: https://example.test/compatibility.md",
+    );
+    expect(body).not.toMatch(/\b\d{2,3}\.\d%\b/);
   });
 
   test("mcp server card route returns release-shaped server info", async () => {
