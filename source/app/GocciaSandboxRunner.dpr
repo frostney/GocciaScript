@@ -604,6 +604,7 @@ var
   EmptyConfig: TConfigEntryArray;
 begin
   EmptyConfig := EmptyConfigEntries;
+  ConfigureCapabilityAudit(AEngine);
   AEngine.SourceType := ResolveSourceTypeOption(EngineOptions.SourceType,
     EmptyConfig, AFileName);
   ApplyCompatibilityAndWarningFlags(AEngine, EngineOptions, EmptyConfig);

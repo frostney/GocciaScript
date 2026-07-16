@@ -241,6 +241,8 @@ begin
     FunctionConstructor := TGocciaFunctionConstructorClassValue(
       FunctionConstructorValue);
     Result.Enabled := FunctionConstructor.Enabled;
+    Result.CapabilityAuditEmitter :=
+      FunctionConstructor.CapabilityAuditEmitter;
     Result.CompileDynamicFunction := FunctionConstructor.CompileDynamicFunction;
   end;
 end;

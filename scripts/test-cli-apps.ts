@@ -120,6 +120,13 @@ function assertValidSourceMap(path: string): void {
   if (typeof map.mappings !== "string" || map.mappings.length === 0) throw new Error("Source map should have non-empty mappings");
 }
 
+function readJsonLines(path: string): any[] {
+  return readFileSync(path, "utf-8")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
 function assertCommonJsonReport(json: any, label: string, expectedFileCount: number): void {
   if (json.fileName !== undefined) throw new Error(`${label} top-level fileName should be omitted`);
   if (typeof json.build?.version !== "string") throw new Error(`${label} build.version should be present`);
@@ -1854,6 +1861,98 @@ console.log("Loader: Promise.then drain (bytecode)...");
   if (proc.exitCode !== 0) throw new Error(`Loader Promise drain bytecode exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (!proc.stdout.toString().includes("then-42"))
     throw new Error(`Loader Promise drain bytecode expected then-42, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Loader: --audit-log records capability decisions with source locations...");
+{
+  const tmp = makeTmp();
+  try {
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const audit = join(tmp, `capabilities-${mode}.jsonl`);
+      const proc = Bun.spawnSync(
+        [
+          LOADER,
+          `--mode=${mode}`,
+          "--unsafe-ffi",
+          "--unsafe-shadowrealm",
+          `--audit-log=${audit}`,
+        ],
+        {
+          stdin: new TextEncoder().encode([
+            'try { Function("return 1")(); } catch (e) {}',
+            'try { FFI.open("./missing"); } catch (e) {}',
+            'new ShadowRealm().evaluate("new ShadowRealm(); 1");',
+            "",
+          ].join("\n")),
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      if (proc.exitCode !== 0)
+        throw new Error(`Loader audit ${mode} exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const events = readJsonLines(audit);
+      const expected = [
+        ["function.constructor", "deny", "Function", "<stdin>", 1],
+        ["ffi.open", "allow", "./missing", "<stdin>", 2],
+        ["shadow-realm.construct", "allow", "ShadowRealm", "<stdin>", 3],
+        ["shadow-realm.construct", "allow", "ShadowRealm", "<shadow-realm-eval>", 1],
+      ];
+      if (events.length !== expected.length)
+        throw new Error(`Loader audit ${mode} expected ${expected.length} events, got ${JSON.stringify(events)}`);
+      expected.forEach(([kind, decision, subject, file, line], index) => {
+        const event = events[index];
+        if (event.schemaVersion !== 1 ||
+            event.kind !== kind ||
+            event.decision !== decision ||
+            event.subject !== subject ||
+            event.source?.file !== file ||
+            event.source?.line !== line ||
+            typeof event.source?.column !== "number")
+          throw new Error(`Loader audit ${mode} event ${index} mismatch: ${JSON.stringify(event)}`);
+      });
+
+      const allowAudit = join(tmp, `function-allow-${mode}.jsonl`);
+      const allow = Bun.spawnSync(
+        [
+          LOADER,
+          `--mode=${mode}`,
+          "--unsafe-function-constructor",
+          `--audit-log=${allowAudit}`,
+        ],
+        {
+          stdin: new TextEncoder().encode('Function("return 1")();\n'),
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      if (allow.exitCode !== 0)
+        throw new Error(`Loader Function audit ${mode} exited ${allow.exitCode}: ${allow.stderr.toString()}`);
+      const allowEvents = readJsonLines(allowAudit);
+      if (allowEvents.length !== 1 ||
+          allowEvents[0].kind !== "function.constructor" ||
+          allowEvents[0].decision !== "allow" ||
+          allowEvents[0].source?.line !== 1)
+        throw new Error(`Loader Function allow audit ${mode} mismatch: ${JSON.stringify(allowEvents)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Loader: --audit-log fails closed when the output cannot be opened...");
+{
+  const tmp = makeTmp();
+  try {
+    const proc = Bun.spawnSync([LOADER, `--audit-log=${tmp}`], {
+      stdin: new TextEncoder().encode("1;\n"),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode === 0)
+      throw new Error("Loader audit log open failure should be fatal");
+  } finally {
+    clean(tmp);
+  }
 }
 
 // -- --global / --globals -------------------------------------------------------
@@ -4482,6 +4581,55 @@ console.log("SandboxRunner: seed config imports host paths relative to the confi
   }
 }
 
+console.log("SandboxRunner: --audit-log reports root escapes without changing clamped access...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "audit-seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import fs from "fs";',
+            'console.log(fs.readFileSync("../../secret.txt", "utf8"));',
+          ].join("\n"),
+        },
+        { path: "/secret.txt", text: "inside-jail" },
+      ],
+    }));
+
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const audit = join(tmp, `sandbox-audit-${mode}.jsonl`);
+      const proc = Bun.spawnSync(
+        [
+          SANDBOXRUNNER,
+          "/main.js",
+          `--seed-config=${seed}`,
+          "--source-type=module",
+          `--mode=${mode}`,
+          `--audit-log=${audit}`,
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      if (proc.exitCode !== 0)
+        throw new Error(`Sandbox audit ${mode} exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+      if (!containsLine(`\n${proc.stdout.toString()}`, "inside-jail"))
+        throw new Error(`Sandbox audit ${mode} changed clamped access: ${proc.stdout.toString()}`);
+      const events = readJsonLines(audit);
+      if (events.length !== 1 ||
+          events[0].kind !== "sandbox.fs.path" ||
+          events[0].decision !== "deny" ||
+          events[0].subject !== "../../secret.txt" ||
+          events[0].source?.file !== "/main.js" ||
+          events[0].source?.line !== 2)
+        throw new Error(`Sandbox audit ${mode} mismatch: ${JSON.stringify(events)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("SandboxRunner: seed directory rejects nested host symlink (no leak)...");
 {
   const tmp = makeTmp();
@@ -4662,9 +4810,21 @@ console.log("SandboxRunner: Windows directory junction seed is rejected (no leak
 
 console.log("Loader: --allowed-host blocks unlisted host...");
 {
-  const res = await $`echo 'fetch("http://blocked.test");' | ${LOADER} --allowed-host=example.com 2>&1`.nothrow();
-  if (res.exitCode === 0) throw new Error("Fetch to unlisted host should fail");
-  if (!res.text().includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.text()}`);
+  const tmp = makeTmp();
+  try {
+    const audit = join(tmp, "blocked-fetch-audit.jsonl");
+    const res = await $`echo 'fetch("http://blocked.test");' | ${LOADER} --allowed-host=example.com --audit-log=${audit} 2>&1`.nothrow();
+    if (res.exitCode === 0) throw new Error("Fetch to unlisted host should fail");
+    if (!res.text().includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.text()}`);
+    const events = readJsonLines(audit);
+    if (events.length !== 1 ||
+        events[0].kind !== "fetch.host" ||
+        events[0].decision !== "deny" ||
+        events[0].subject !== "http://blocked.test")
+      throw new Error(`Blocked fetch audit event mismatch: ${JSON.stringify(events)}`);
+  } finally {
+    clean(tmp);
+  }
 }
 
 console.log("Loader: no --allowed-host blocks all fetch...");
@@ -4684,14 +4844,27 @@ console.log("Loader: --allowed-host multiple hosts...");
 
 console.log("Loader: local fetch smoke with --allowed-host...");
 await withFetchTestServer(async (baseUrl) => {
-  const { exitCode, json, stderr } = await runLoaderJsonAsync(
-    `const response = await fetch("${baseUrl}/", { method: "HEAD" });\nresponse.status;\n`,
-    ["--compat-asi", "--allowed-host=127.0.0.1"],
-    { timeout: 10_000 },
-  );
-  if (exitCode !== 0) throw new Error(`Local fetch should exit 0, got ${exitCode}: ${stderr}`);
-  if (json.ok !== true) throw new Error(`Local fetch JSON ok should be true, got ${json.ok}`);
-  if (json.files?.[0]?.result !== 200) throw new Error(`Local fetch status should be 200, got ${json.files?.[0]?.result}`);
+  const tmp = makeTmp();
+  const audit = join(tmp, "fetch-audit.jsonl");
+  try {
+    const { exitCode, json, stderr } = await runLoaderJsonAsync(
+      `const response = await fetch("${baseUrl}/", { method: "HEAD" });\nresponse.status;\n`,
+      ["--compat-asi", "--allowed-host=127.0.0.1", `--audit-log=${audit}`],
+      { timeout: 10_000 },
+    );
+    if (exitCode !== 0) throw new Error(`Local fetch should exit 0, got ${exitCode}: ${stderr}`);
+    if (json.ok !== true) throw new Error(`Local fetch JSON ok should be true, got ${json.ok}`);
+    if (json.files?.[0]?.result !== 200) throw new Error(`Local fetch status should be 200, got ${json.files?.[0]?.result}`);
+    const events = readJsonLines(audit);
+    if (events.length !== 2 ||
+        events[0].kind !== "fetch.host" ||
+        events[0].decision !== "allow" ||
+        events[1].kind !== "fetch.dispatch" ||
+        events[1].decision !== "allow")
+      throw new Error(`Local fetch audit events mismatch: ${JSON.stringify(events)}`);
+  } finally {
+    clean(tmp);
+  }
 });
 
 // ============================================================================

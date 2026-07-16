@@ -12,6 +12,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.AST.Expressions,
   Goccia.AST.Node,
+  Goccia.CapabilityAudit,
   Goccia.Constants,
   Goccia.Realm,
   Goccia.Values.FunctionBase,
@@ -315,6 +316,7 @@ type
   TGocciaFunctionConstructorClassValue = class(TGocciaClassValue)
   private
     FEnabled: Boolean;
+    FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
     FCompileDynamicFunction: TGocciaCompileDynamicFunction;
     FDynamicKind: TGocciaDynamicFunctionKind;
     function BuildFunction(const AArguments: TGocciaArgumentsCollection): TGocciaFunctionBase;
@@ -327,6 +329,8 @@ type
     function GetClassLength: Integer; override;
 
     property Enabled: Boolean read FEnabled write FEnabled;
+    property CapabilityAuditEmitter: TGocciaCapabilityAuditEmitter
+      read FCapabilityAuditEmitter write FCapabilityAuditEmitter;
     property CompileDynamicFunction: TGocciaCompileDynamicFunction
       read FCompileDynamicFunction write FCompileDynamicFunction;
     property DynamicKind: TGocciaDynamicFunctionKind read FDynamicKind;
@@ -2539,6 +2543,7 @@ constructor TGocciaFunctionConstructorClassValue.Create(const AName: string;
 begin
   inherited Create(AName, ASuperClass);
   FEnabled := False;
+  FCapabilityAuditEmitter := nil;
   FCompileDynamicFunction := nil;
   FDynamicKind := ADynamicKind;
 end;
@@ -2554,8 +2559,17 @@ var
   PreviousRealm: TGocciaRealm;
 begin
   if not FEnabled then
+  begin
+    if Assigned(FCapabilityAuditEmitter) then
+      FCapabilityAuditEmitter(gckFunctionConstructor, gcdDeny, Name,
+        'dynamic code generation is disabled');
     ThrowTypeError('Dynamic code generation is disabled. ' +
       'Pass --unsafe-function-constructor to enable the Function constructor');
+  end;
+
+  if Assigned(FCapabilityAuditEmitter) then
+    FCapabilityAuditEmitter(gckFunctionConstructor, gcdAllow, Name,
+      'dynamic code generation is enabled');
 
   if not Assigned(FCompileDynamicFunction) then
     ThrowTypeError('Function constructor is not available in this environment');

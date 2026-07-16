@@ -20,7 +20,10 @@ type
     FContext: TGocciaSandboxContext;
     FFsModule: TGocciaModule;
     FGocciaModule: TGocciaModule;
+    FPreviousRootClampCallback: TSandboxRootClampCallback;
 
+    procedure HandleRootClamp(const APath, ABase,
+      ACanonicalPath: string);
     function EnsureStatsPrototype: TGocciaObjectValue;
     function CreateStatsValue(const AStat: TSandboxFsStat): TGocciaValue;
     function CreateStatsDate(const AMilliseconds: Double): TGocciaValue;
@@ -100,6 +103,7 @@ uses
   base64,
   SandboxShell,
 
+  Goccia.CapabilityAudit,
   Goccia.JSON,
   Goccia.Keywords.Reserved,
   Goccia.Realm,
@@ -862,6 +866,15 @@ begin
   FContext := AContext;
 end;
 
+procedure TGocciaSandboxRuntimeExtension.HandleRootClamp(
+  const APath, ABase, ACanonicalPath: string);
+begin
+  if Assigned(Runtime) and Assigned(Runtime.Engine) then
+    Runtime.Engine.EmitCapabilityAudit(gckSandboxFileSystem, gcdDeny,
+      APath, Format('path from %s escaped the sandbox root and was clamped to %s',
+        [ABase, ACanonicalPath]));
+end;
+
 procedure TGocciaSandboxRuntimeExtension.Attach(
   const ARuntime: TGocciaRuntimeCore);
 var
@@ -869,6 +882,8 @@ var
   GocciaNamespace: TGocciaObjectValue;
 begin
   inherited Attach(ARuntime);
+  FPreviousRootClampCallback := FContext.Fs.RootClampCallback;
+  FContext.Fs.RootClampCallback := HandleRootClamp;
   FsNamespace := CreateFsNamespace;
   GocciaNamespace := CreateGocciaNamespace;
 
@@ -904,6 +919,8 @@ end;
 
 procedure TGocciaSandboxRuntimeExtension.Detach;
 begin
+  FContext.Fs.RootClampCallback := FPreviousRootClampCallback;
+  FPreviousRootClampCallback := nil;
   if Assigned(Runtime) and Assigned(Runtime.Engine) then
   begin
     Runtime.Engine.ModuleLoader.GlobalModules.Remove('goccia');

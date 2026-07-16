@@ -38,6 +38,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.AST.Node,
   Goccia.AST.Statements,
+  Goccia.CapabilityAudit,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
@@ -198,6 +199,7 @@ begin
   FEngine := TGocciaEngine.Create('<shadow-realm>', FSource, FExecutor);
   FEngine.HostEnvironment.ConfigureAsChildOf(
     AParentEngine.HostEnvironment);
+  FEngine.ConfigureCapabilityAuditAsChildOf(AParentEngine);
   // Inherit the host's language surface so the child realm understands the
   // same syntax the host enabled (e.g. --compat-function), while staying a
   // fresh realm with its own intrinsics and global object.
@@ -458,6 +460,9 @@ begin
   // `new`; a non-hole `this` means a [[Call]] without new — throw a TypeError.
   if not (AThisValue is TGocciaHoleValue) then
     ThrowTypeError('Constructor ShadowRealm requires ''new''');
+
+  FEngine.EmitCapabilityAudit(gckShadowRealm, gcdAllow, 'ShadowRealm',
+    'ShadowRealm capability is enabled');
 
   // Steps 2-9: a fresh realm with its own global object and intrinsics.
   Child := TGocciaShadowRealmChildRealm.Create(FEngine);

@@ -12,6 +12,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
+  Goccia.CapabilityAudit,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
   Goccia.Values.Primitives;
@@ -20,12 +21,14 @@ type
   TGocciaGlobalFetch = class(TGocciaBuiltin)
   private
     FAllowedHosts: TStringList;
+    FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
     function FetchCallback(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure ValidateHost(const AURLStr: string);
   public
     constructor Create(const AName: string; const AScope: TGocciaScope;
-      const AThrowError: TGocciaThrowErrorCallback);
+      const AThrowError: TGocciaThrowErrorCallback;
+      const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter);
     destructor Destroy; override;
 
     procedure SetAllowedHosts(const AHosts: TStrings);
@@ -100,10 +103,12 @@ end;
 
 constructor TGocciaGlobalFetch.Create(const AName: string;
   const AScope: TGocciaScope;
-  const AThrowError: TGocciaThrowErrorCallback);
+  const AThrowError: TGocciaThrowErrorCallback;
+  const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter);
 begin
   inherited Create(AName, AScope, AThrowError);
 
+  FCapabilityAuditEmitter := ACapabilityAuditEmitter;
   FAllowedHosts := TStringList.Create;
   FAllowedHosts.CaseSensitive := False;
 
@@ -131,13 +136,27 @@ procedure TGocciaGlobalFetch.ValidateHost(const AURLStr: string);
 var
   Host: string;
 begin
-  if FAllowedHosts.Count = 0 then
-    ThrowTypeError(SErrorFetchNoAllowedHosts, SSuggestFetchAllowedHosts);
-
   Host := ExtractHostFromURL(AURLStr);
+  if FAllowedHosts.Count = 0 then
+  begin
+    if Assigned(FCapabilityAuditEmitter) then
+      FCapabilityAuditEmitter(gckFetchHost, gcdDeny, AURLStr,
+        'no fetch hosts are allowed');
+    ThrowTypeError(SErrorFetchNoAllowedHosts, SSuggestFetchAllowedHosts);
+  end;
+
   if FAllowedHosts.IndexOf(Host) < 0 then
+  begin
+    if Assigned(FCapabilityAuditEmitter) then
+      FCapabilityAuditEmitter(gckFetchHost, gcdDeny, AURLStr,
+        'host is not in the allowed hosts list');
     ThrowTypeError(Format(SErrorFetchHostNotAllowed, [Host]),
       SSuggestFetchAllowedHosts);
+  end;
+
+  if Assigned(FCapabilityAuditEmitter) then
+    FCapabilityAuditEmitter(gckFetchHost, gcdAllow, AURLStr,
+      'host is in the allowed hosts list');
 end;
 
 function TGocciaGlobalFetch.FetchCallback(
@@ -218,9 +237,12 @@ begin
 
   // Perform the request
   Promise := TGocciaPromiseValue.Create;
+  if not Assigned(TGocciaFetchManager.Instance) then
+    TGocciaFetchManager.Initialize;
+  if Assigned(FCapabilityAuditEmitter) then
+    FCapabilityAuditEmitter(gckFetchDispatch, gcdAllow, URLStr,
+      'fetch dispatch is allowed');
   try
-    if not Assigned(TGocciaFetchManager.Instance) then
-      TGocciaFetchManager.Initialize;
     TGocciaFetchManager.Instance.StartFetch(URLStr, Method, RequestHeaders,
       Promise);
   except
