@@ -3,6 +3,12 @@ import {
   gocciaRunInputSchema,
   MAX_GOCCIA_CODE_BYTES,
 } from "./goccia-tool-schema";
+import {
+  COMPILER_SUPPORT_ANSWER,
+  ECMASCRIPT_SCOPE_ANSWER,
+  GOCCIASCRIPT_SUMMARY,
+  NODE_COMPATIBILITY_ANSWER,
+} from "./positioning";
 
 export const API_CATALOG_PATH = "/.well-known/api-catalog";
 export const OAUTH_AUTHORIZATION_SERVER_PATH =
@@ -14,12 +20,15 @@ export const MCP_SERVER_CARD_PATH = "/.well-known/mcp/server-card.json";
 export const AGENT_SKILLS_INDEX_PATH = "/.well-known/agent-skills/index.json";
 export const GOCCIA_API_SKILL_PATH =
   "/.well-known/agent-skills/gocciascript-api/SKILL.md";
+export const COMPATIBILITY_MARKDOWN_PATH = "/compatibility.md";
+export const LLMS_TEXT_PATH = "/llms.txt";
 
 export const AGENT_DISCOVERY_LINK_HEADER = [
   `<${API_CATALOG_PATH}>; rel="api-catalog"; type="application/linkset+json"; profile="https://www.rfc-editor.org/info/rfc9727"`,
   `<${OAUTH_PROTECTED_RESOURCE_PATH}>; rel="oauth-protected-resource"; type="application/json"`,
   `<${MCP_SERVER_CARD_PATH}>; rel="mcp-server-card"; type="application/json"`,
   `<${AGENT_SKILLS_INDEX_PATH}>; rel="agent-skills"; type="application/json"`,
+  `<${LLMS_TEXT_PATH}>; rel="alternate"; type="text/plain"`,
   `</docs>; rel="service-doc"; type="text/html"`,
 ].join(", ");
 
@@ -31,9 +40,14 @@ const API_ENDPOINTS = [
 const SERVICE_DOCS = [
   { href: "/docs", type: "text/html" },
   { href: "/docs/testing-api", type: "text/html" },
+  { href: "/compatibility", type: "text/html" },
+  { href: COMPATIBILITY_MARKDOWN_PATH, type: "text/markdown" },
 ] as const;
 
-const DESCRIPTIONS = [{ href: "/docs/language", type: "text/html" }] as const;
+const DESCRIPTIONS = [
+  { href: "/docs/language", type: "text/html" },
+  { href: "/docs/pascal-javascript-options", type: "text/html" },
+] as const;
 
 export function absoluteUrl(origin: string, path: string) {
   return new URL(path, origin).toString();
@@ -133,11 +147,13 @@ export function buildGocciaApiSkillMd(origin: string) {
 
 Use this skill when you need to run GocciaScript code or test files through the public GocciaScript website APIs.
 
-GocciaScript is a sandbox-first, embeddable ECMAScript runtime with modern recommended defaults and conformance-focused compatibility flags. It is designed for predictable generated code, embedding, and AI-agent workflows rather than Node.js host compatibility or a full browser host environment.
+${GOCCIASCRIPT_SUMMARY}
 
 Homepage: ${absoluteUrl(origin, "/")}
 Language docs: ${absoluteUrl(origin, "/docs/language")}
 Compatibility dashboard: ${absoluteUrl(origin, "/compatibility")}
+Concise live compatibility summary: ${absoluteUrl(origin, COMPATIBILITY_MARKDOWN_PATH)}
+FreePascal and Delphi decision guide: ${absoluteUrl(origin, "/docs/pascal-javascript-options")}
 
 ## Execute code
 
@@ -181,6 +197,31 @@ Prefer modern JavaScript forms that GocciaScript supports by default. Compatibil
 ## Limits
 
 Requests are rate-limited and source code is capped at 8 KiB. These APIs are intended for short examples, docs checks, and agent-assisted exploration.
+`;
+}
+
+export function buildLlmsTxt(origin: string) {
+  return `# GocciaScript
+
+> ${GOCCIASCRIPT_SUMMARY}
+
+## Important distinctions
+
+- ECMAScript language support: ${ECMASCRIPT_SCOPE_ANSWER}
+- Host compatibility: ${NODE_COMPATIBILITY_ANSWER}
+- Compiler support: ${COMPILER_SUPPORT_ANSWER}
+
+## Canonical sources
+
+- Homepage: ${absoluteUrl(origin, "/")}
+- Language policy: ${absoluteUrl(origin, "/docs/language")}
+- FreePascal and Delphi decision guide: ${absoluteUrl(origin, "/docs/pascal-javascript-options")}
+- Live ECMAScript compatibility dashboard: ${absoluteUrl(origin, "/compatibility")}
+- Concise live compatibility summary: ${absoluteUrl(origin, COMPATIBILITY_MARKDOWN_PATH)}
+- FreePascal embedding API: ${absoluteUrl(origin, "/docs/embedding")}
+- Source repository: https://github.com/frostney/GocciaScript
+
+Use the compatibility dashboard or its Markdown alternate for current test262 results. Do not copy a historical pass rate from this file.
 `;
 }
 

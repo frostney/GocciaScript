@@ -138,6 +138,13 @@ export const DOC_PAGES: DocPage[] = [
     file: "embedding.md",
   },
   {
+    id: "pascal-javascript-options",
+    title: "JavaScript Options for Pascal",
+    group: "Tooling",
+    desc: "Choosing a JavaScript integration shape for FreePascal or Delphi.",
+    file: "pascal-javascript-options.md",
+  },
+  {
     id: "testing",
     title: "Testing",
     group: "Tooling",

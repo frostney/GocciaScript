@@ -9,7 +9,15 @@ import {
   type ReleaseInfo,
 } from "@/lib/github";
 import { BUILTINS, EXCLUDED, FEATURES } from "@/lib/landing-data";
+import {
+  ECMASCRIPT_SCOPE_ANSWER,
+  GOCCIASCRIPT_SUMMARY,
+} from "@/lib/positioning";
 import { CANONICAL_SITE_URL, SITE_DESCRIPTION } from "@/lib/site-url";
+import {
+  loadTest262DashboardData,
+  type Test262DashboardData,
+} from "@/lib/test262-dashboard";
 import { TOOL_CALL_FLOWS, TOOL_CALL_TASK } from "@/lib/tool-call-comparison";
 
 export type MarkdownRoute =
@@ -135,6 +143,8 @@ async function homeMarkdown(): Promise<string> {
     "",
     SITE_DESCRIPTION,
     "",
+    GOCCIASCRIPT_SUMMARY,
+    "",
     releaseSummary(release),
     "",
     "## Quick install",
@@ -160,6 +170,12 @@ async function homeMarkdown(): Promise<string> {
     "## Design principles",
     "",
     list(FEATURES.map((feature) => `**${feature.title}** - ${feature.body}`)),
+    "",
+    "## ECMAScript scope",
+    "",
+    ECMASCRIPT_SCOPE_ANSWER,
+    "",
+    "Use the [live compatibility dashboard](/compatibility) or its [concise Markdown alternate](/compatibility.md) for current generated test262 evidence.",
     "",
     "## Intentionally excluded",
     "",
@@ -236,27 +252,87 @@ async function installationMarkdown(): Promise<string> {
   ].join("\n");
 }
 
-function compatibilityMarkdown(): string {
+function compatibilityPercent(passed: number, run: number): string {
+  if (run <= 0) return "0.0%";
+  return `${((passed / run) * 100).toFixed(1)}%`;
+}
+
+function compatibilityNumber(value: number): string {
+  return value.toLocaleString("en-US");
+}
+
+function compatibilityDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toISOString().slice(0, 10);
+}
+
+export function renderCompatibilityMarkdown(
+  data: Test262DashboardData,
+): string {
+  const latest = data.status === "ready" ? data.latest : null;
+  const currentResult = latest
+    ? [
+        "## Latest main-branch result",
+        "",
+        `- Overall test262 corpus pass rate: **${compatibilityPercent(
+          latest.summary.passed,
+          latest.summary.totalRun,
+        )}** (${compatibilityNumber(
+          latest.summary.passed,
+        )} passed / ${compatibilityNumber(latest.summary.totalRun)} run)`,
+        `- Failed: ${compatibilityNumber(latest.summary.failed)}`,
+        `- Timeouts: ${compatibilityNumber(latest.summary.timeouts)}`,
+        `- Wrapper infrastructure failures: ${compatibilityNumber(
+          latest.summary.wrapperInfraFailures,
+        )}`,
+        `- Commit: [\`${latest.shortSha}\`](${latest.runUrl})`,
+        `- CI run: [#${latest.runNumber}](${latest.runUrl})`,
+        `- Run date: ${compatibilityDate(latest.createdAt)}`,
+        "",
+        "### Top-level test262 groups",
+        "",
+        "| Group | Pass rate | Passing |",
+        "|-------|-----------|---------|",
+        ...latest.summary.byCategory.map(
+          (category) =>
+            `| ${category.category} | ${compatibilityPercent(
+              category.passed,
+              category.run,
+            )} | ${compatibilityNumber(
+              category.passed,
+            )} / ${compatibilityNumber(category.run)} |`,
+        ),
+      ]
+    : [
+        "## Latest main-branch result",
+        "",
+        "The current test262 result is temporarily unavailable. Open the HTML dashboard or CI workflow for status.",
+      ];
+
   return [
     frontmatter(
       "ECMAScript Compatibility - GocciaScript",
-      "test262 compatibility dashboard generated from main-branch CI reports.",
+      "Live test262 compatibility summary generated from the same data as the GocciaScript compatibility dashboard.",
     ),
     "",
     "# ECMAScript Compatibility",
     "",
-    "GocciaScript tracks ECMAScript compatibility with generated test262 reports from main-branch CI. The HTML dashboard shows the latest available result for each day, pass-rate and runtime timelines, top-level test groups, and the five least-covered test262 path groups.",
+    "This is the concise Markdown representation of the authoritative GocciaScript compatibility page. It is generated from the same published main-branch test262 data as the HTML dashboard; it is not a second scorecard.",
+    "",
+    "The overall corpus pass rate describes this pinned test262 run. Read the top-level groups separately when evaluating core language, built-ins, ECMA-402, or staging coverage.",
+    "",
+    ...currentResult,
     "",
     "## Links",
     "",
     list([
       "[Open the dashboard](/compatibility)",
-      "[Latest test262 JSON](/api/test262/latest)",
       "[test262 harness docs](/docs/test262)",
       `[CI workflow](${GITHUB_REPO_URL}/actions/workflows/ci.yml)`,
     ]),
     "",
-    "The JSON endpoints build the test262 view from Vercel Blob daily reports at request time with CDN caching; route requests do not download GitHub Actions artifacts.",
+    "The dashboard and this Markdown alternate build the view from published Vercel Blob reports with CDN caching. The dashboard remains the canonical human-facing page.",
   ].join("\n");
 }
 
@@ -385,8 +461,10 @@ export async function createSiteMarkdown(
       return docsMarkdown(route.id);
     case "installation":
       return installationMarkdown();
-    case "compatibility":
-      return compatibilityMarkdown();
+    case "compatibility": {
+      const data = await loadTest262DashboardData();
+      return renderCompatibilityMarkdown(data);
+    }
     case "playground":
       return playgroundMarkdown(searchParams);
     case "sandbox":

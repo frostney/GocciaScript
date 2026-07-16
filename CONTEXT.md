@@ -7,7 +7,7 @@ GocciaScript is a FreePascal implementation of ECMAScript with sandbox-first rec
 ### Project And Layers
 
 **GocciaScript**:
-A JavaScript-family language runtime and toolchain focused on safer ECMAScript defaults for embedding and agent execution, while keeping conformance and host customization explicit.
+A FreePascal-native ECMAScript runtime and toolchain focused on safer recommended defaults for embedding and agent execution, while keeping conformance and host customization explicit.
 _Avoid_: JS engine when the recommended defaults or host-tooling shape matters.
 
 **Recommended defaults**:

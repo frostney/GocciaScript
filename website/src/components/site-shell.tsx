@@ -44,6 +44,7 @@ const TABS: { id: Tab; label: string; href: string }[] = [
   { id: "home", label: "Home", href: "/" },
   { id: "install", label: "Installation", href: "/installation" },
   { id: "docs", label: "Docs", href: "/docs" },
+  { id: "compatibility", label: "Compatibility", href: "/compatibility" },
   { id: "performance", label: "Performance", href: "/performance" },
   { id: "playground", label: "Playground", href: "/playground" },
   { id: "sandbox", label: "Sandbox", href: "/sandbox" },

@@ -4,11 +4,13 @@
 
 A drop of JavaScript — A sandbox-first ECMAScript runtime implemented in FreePascal
 
-It's based on the thought "What if we implement ECMAScript today, but make the recommended defaults modern, explicit, and sandbox-first". Error-prone, redundant, or high-risk legacy forms are off by default, while the engine and runtime can opt into the compatibility behavior needed for ECMAScript conformance and legacy code. See [Language](docs/language.md) for the full rationale.
+GocciaScript is a FreePascal-native, embeddable ECMAScript runtime, not a separate JavaScript-like language. Its recommended profile disables selected legacy or high-risk forms by default, while compatibility flags enable many of those standard forms for conformance and legacy code.
+
+Keep four compatibility questions separate: the ECMAScript language surface, the recommended default profile, the host environment, and the Pascal compiler. GocciaScript tracks core language behavior with generated test262 reports; it is intentionally not a Node.js/npm or browser host, and FreePascal is the supported compiler today while Delphi compiler support remains untested. See [Language](docs/language.md) for the policy and the live [ECMAScript compatibility dashboard](https://www.gocciascript.dev/compatibility) for current evidence.
 
 ## Features
 
-GocciaScript implements modern ECMAScript: `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules, decorators, and TypeScript-style type annotations. Features that are error-prone, redundant, or security risks (`var`, `function` keyword, `==`/`!=`, `eval`, labels, traditional loops, `for...in`) are excluded by default; selected legacy forms are available through explicit conformance-focused compatibility flags.
+GocciaScript implements a broad core ECMAScript surface: `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules, decorators, and TypeScript-style type annotations. Features that are error-prone, redundant, or security risks (`var`, `function` keyword, `==`/`!=`, `eval`, labels, traditional loops, `for...in`) are excluded from the recommended defaults; selected legacy forms are available through explicit conformance-focused compatibility flags.
 
 Core ECMAScript compatibility is now a release-track objective. The default language remains curated and sandbox-first, but test262 runs on every PR and main commit so conformance work can be measured from generated reports instead of hand-maintained status claims. Annex B's browser-only legacy surface is not a pre-1.0 target; see [ADR 0085](docs/adr/0085-defer-annex-b-before-1-0.md).
 
@@ -228,6 +230,7 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | [Tutorial](docs/tutorial.md) | Your first GocciaScript program — a guided walkthrough for newcomers |
 | [Language](docs/language.md) | ECMAScript support, recommended defaults, compatibility flags, and rationale |
 | [Language Tables](docs/language-tables.md) | Quick-reference: ECMAScript feature matrix and TC39 proposal status |
+| [JavaScript Options for Pascal](docs/pascal-javascript-options.md) | Choosing an integration shape for FreePascal or Delphi without conflating language, host, and compiler support |
 | [Built-in Objects](docs/built-ins.md) | Available built-ins and API reference |
 | [FFI Built-ins](docs/built-ins-ffi.md) | Native libraries, aggregate types, callbacks, lifetimes, and safety limits |
 | [Temporal Built-ins](docs/built-ins-temporal.md) | Temporal API: dates, times, durations, time zones |
