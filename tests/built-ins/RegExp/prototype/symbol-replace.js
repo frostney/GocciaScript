@@ -124,3 +124,52 @@ test("Symbol.replace retains custom exec results until replacement processing", 
     "groups",
   ]);
 });
+
+test("Symbol.replace preserves retained results when groups aliases a later match", () => {
+  let calls = 0;
+  const protocol = {
+    flags: "g",
+    lastIndex: 0,
+    pending: null,
+    exec(input) {
+      calls++;
+      if (calls === 1) {
+        this.pending = {
+          get length() {
+            return {
+              valueOf() {
+                Goccia.gc();
+                return 1;
+              },
+            };
+          },
+          0: "b",
+          index: 1,
+          groups: undefined,
+        };
+        this.lastIndex = 1;
+        return {
+          0: "a",
+          index: 0,
+          length: 1,
+          get groups() {
+            const result = protocol.pending;
+            protocol.pending = null;
+            return result;
+          },
+        };
+      }
+      if (calls === 2) {
+        this.lastIndex = 2;
+        return this.pending;
+      }
+      return null;
+    },
+  };
+
+  expect(RegExp.prototype[Symbol.replace].call(
+    protocol,
+    "ab",
+    "x",
+  )).toBe("xx");
+});

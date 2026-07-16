@@ -1364,8 +1364,8 @@ var
   NamedCapturesValue, ReplaceValue, ReplacementValue: TGocciaValue;
   CaptureMatched, FunctionalReplace, Global, IsUnicode: Boolean;
   Match: TGocciaRegExpExecutionResult;
-  NamedCapturesObject, NamedCapturesRoot, RegexValue,
-  RetainedObject: TGocciaObjectValue;
+  NamedCapturesObject, RegexValue, RetainedObject: TGocciaObjectValue;
+  NamedCapturesRoot: TGocciaTempRoot;
   Results: TRegExpExecutionResults;
 begin
   RegexValue := RequireRegExpObjectReceiver(AThisValue,
@@ -1444,12 +1444,10 @@ begin
       end;
 
       NamedCapturesValue := Results[I].NamedCapturesValue;
-      NamedCapturesRoot := nil;
+      InitializeTempRoot(NamedCapturesRoot);
       if NamedCapturesValue is TGocciaObjectValue then
-      begin
-        NamedCapturesRoot := TGocciaObjectValue(NamedCapturesValue);
-        TGarbageCollector.Instance.AddTempRoot(NamedCapturesRoot);
-      end;
+        AddTempRootIfNeeded(NamedCapturesRoot,
+          TGocciaObjectValue(NamedCapturesValue));
       try
         if FunctionalReplace then
         begin
@@ -1480,8 +1478,7 @@ begin
             Matched, Input, Position, Captures, NamedCapturesObject);
         end;
       finally
-        if Assigned(NamedCapturesRoot) then
-          TGarbageCollector.Instance.RemoveTempRoot(NamedCapturesRoot);
+        RemoveTempRootIfNeeded(NamedCapturesRoot);
       end;
 
       if Position >= NextSourcePosition then
