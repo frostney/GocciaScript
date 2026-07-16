@@ -29,3 +29,9 @@ test("has throws TypeError when receiver is not a WeakMap", () => {
   expect(() => has.call({}, {})).toThrow(TypeError);
   expect(() => has.call(WeakMap.prototype, {})).toThrow(TypeError);
 });
+
+test("has is not constructable", () => {
+  expect(() =>
+    Reflect.construct(class {}, [], WeakMap.prototype.has)
+  ).toThrow(TypeError);
+});

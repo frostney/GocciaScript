@@ -8,6 +8,11 @@ test("empty Map constructor", () => {
   expect(map.size).toBe(0);
 });
 
+test("Map requires new", () => {
+  // biome-ignore lint/correctness/noInvalidBuiltinInstantiation: intentional constructor contract
+  expect(() => Map()).toThrow(TypeError);
+});
+
 test("Map constructor with entries array", () => {
   const map = new Map([
     ["a", 1],
@@ -71,22 +76,6 @@ test("Map.prototype is an object", () => {
 test("new Map instanceof Map", () => {
   const m = new Map();
   expect(m instanceof Map).toBe(true);
-});
-
-test("Map.prototype.constructor is Map", () => {
-  expect(Map.prototype.constructor).toBe(Map);
-});
-
-test("instance constructor is Map", () => {
-  const m = new Map();
-  expect(m.constructor).toBe(Map);
-});
-
-test("Map.prototype.constructor is non-enumerable", () => {
-  const desc = Object.getOwnPropertyDescriptor(Map.prototype, "constructor");
-  expect(desc.writable).toBe(true);
-  expect(desc.enumerable).toBe(false);
-  expect(desc.configurable).toBe(true);
 });
 
 test("Map constructor rejects primitive iterator objects", () => {

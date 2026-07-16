@@ -81,10 +81,6 @@ describe("pattern matching expressions", () => {
     expect(1 as number is 1).toBe(true);
   });
 
-  test("type assertions require a type before is", () => {
-    expect(() => new Function("const value = 1; return value as is 1;")).toThrow();
-  });
-
   test("array and object patterns match nested values", () => {
     const value = { point: [2, 4, 6] };
     let sum = 0;

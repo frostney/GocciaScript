@@ -31,4 +31,8 @@ describe.runIf(isTemporal)("Temporal.PlainDateTime.prototype.add", () => {
     expect(result.hour).toBe(12);
     expect(result.minute).toBe(34);
   });
+
+  test("rejects invalid duration strings", () => {
+    expect(() => new Temporal.PlainDateTime(2024, 1, 1).add("not-a-duration")).toThrow(RangeError);
+  });
 });

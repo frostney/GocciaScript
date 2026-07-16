@@ -53,4 +53,10 @@ describe.runIf(hasGoccia)("WeakMap.prototype.getOrInsertComputed", () => {
     expect(() => getOrInsertComputed.call({}, {}, () => 1)).toThrow(TypeError);
     expect(() => getOrInsertComputed.call(WeakMap.prototype, {}, () => 1)).toThrow(TypeError);
   });
+
+  test("is not constructable", () => {
+    expect(() =>
+      Reflect.construct(class {}, [], WeakMap.prototype.getOrInsertComputed)
+    ).toThrow(TypeError);
+  });
 });

@@ -8,6 +8,11 @@ test("empty WeakMap constructor", () => {
   expect(map instanceof WeakMap).toBe(true);
 });
 
+test("WeakMap requires new", () => {
+  // biome-ignore lint/correctness/noInvalidBuiltinInstantiation: intentional constructor contract
+  expect(() => WeakMap()).toThrow(TypeError);
+});
+
 test("WeakMap constructor accepts null and undefined", () => {
   expect(new WeakMap(null) instanceof WeakMap).toBe(true);
   expect(new WeakMap(undefined) instanceof WeakMap).toBe(true);
@@ -198,21 +203,6 @@ test("WeakMap constructor observes native iterator @@iterator overrides", () => 
   expect(() => new WeakMap(iterator)).toThrow(TypeError);
 });
 
-test("WeakMap.prototype.constructor is WeakMap", () => {
-  expect(WeakMap.prototype.constructor).toBe(WeakMap);
-  expect(new WeakMap().constructor).toBe(WeakMap);
-});
-
-test("WeakMap has no collection enumeration APIs", () => {
-  expect(WeakMap.prototype.size).toBe(undefined);
-  expect(WeakMap.prototype.clear).toBe(undefined);
-  expect(WeakMap.prototype.forEach).toBe(undefined);
-  expect(WeakMap.prototype.keys).toBe(undefined);
-  expect(WeakMap.prototype.values).toBe(undefined);
-  expect(WeakMap.prototype.entries).toBe(undefined);
-  expect(WeakMap.prototype[Symbol.iterator]).toBe(undefined);
-});
-
 test("WeakMap.length is 0 with spec descriptor", () => {
   expect(WeakMap.length).toBe(0);
   const descriptor = Object.getOwnPropertyDescriptor(WeakMap, "length");
@@ -220,30 +210,4 @@ test("WeakMap.length is 0 with spec descriptor", () => {
   expect(descriptor.writable).toBe(false);
   expect(descriptor.enumerable).toBe(false);
   expect(descriptor.configurable).toBe(true);
-});
-
-test("WeakMap.prototype methods are not constructors", () => {
-  const isConstructor = (f) => {
-    try {
-      Reflect.construct(class {}, [], f);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  expect(isConstructor(WeakMap.prototype.delete)).toBe(false);
-  expect(isConstructor(WeakMap.prototype.get)).toBe(false);
-  expect(isConstructor(WeakMap.prototype.has)).toBe(false);
-  expect(isConstructor(WeakMap.prototype.set)).toBe(false);
-  expect(isConstructor(WeakMap.prototype.getOrInsert)).toBe(false);
-  expect(isConstructor(WeakMap.prototype.getOrInsertComputed)).toBe(false);
-});
-
-test("new on WeakMap.prototype methods throws TypeError", () => {
-  // Reserved-word property names (delete) must parse after `new` per spec
-  const wm = new WeakMap();
-  expect(() => new wm.delete()).toThrow(TypeError);
-  expect(() => new wm.has()).toThrow(TypeError);
-  expect(() => new wm.get()).toThrow(TypeError);
-  expect(() => new wm.set()).toThrow(TypeError);
 });

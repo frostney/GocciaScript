@@ -20,7 +20,7 @@ import {
   BUNDLER,
   BENCHRUNNER,
 } from "./test-cli/binaries";
-import { containsLine, runLoaderJson } from "./test-cli/assertions";
+import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { mkdtemp, clean } from "./test-cli/tmpdir";
 
 // -- Stdin smoke (Loader interpreted + bytecode) --------------------------------
@@ -951,18 +951,204 @@ console.log("--stack-size (bytecode trampoline)...");
   if (!out.includes("20000")) throw new Error(`Trampoline should reach 20000, got: ${out}`);
 }
 
+// -- Console observable behavior (Loader, interpreted + bytecode) ---------------
+
+console.log("Console observable behavior...");
+{
+  const source = [
+    'console.assert(true, "hidden");',
+    'console.assert(false, "failed", 7);',
+    'console.log("log", 1);',
+    'console.warn("warn");',
+    'console.error("error");',
+    'console.info("info");',
+    'console.debug("debug");',
+    "console.dir({ value: 1 });",
+    "console.count();",
+    "console.count();",
+    "console.countReset();",
+    "console.count();",
+    "let coercions = 0;",
+    'console.count({ toString() { coercions++; return "coerced"; } });',
+    'console.log("coercions", coercions);',
+    'console.group("outer");',
+    'console.log("inside");',
+    'console.group("inner");',
+    'console.trace("trace");',
+    "console.table([1, 2]);",
+    "console.groupEnd();",
+    'console.error("outer");',
+    "console.groupEnd();",
+    "console.groupEnd();",
+    'console.log("after");',
+    "",
+  ].join("\n");
+  const expectedOutput = [
+    "Assertion failed: failed 7",
+    "log 1",
+    "Warning: warn",
+    "Error: error",
+    "Info: info",
+    "Debug: debug",
+    "{ value: 1 }",
+    "default: 1",
+    "default: 2",
+    "default: 1",
+    "coerced: 1",
+    "coercions 1",
+    "outer",
+    "  inside",
+    "  inner",
+    "    Trace: trace",
+    "    [ 1, 2 ]",
+    "  Error: outer",
+    "after",
+  ];
+  const expectedStdout = [
+    "log 1",
+    "info",
+    "debug",
+    "{ value: 1 }",
+    "default: 1",
+    "default: 2",
+    "default: 1",
+    "coerced: 1",
+    "coercions 1",
+    "outer",
+    "  inside",
+    "  inner",
+    "    [ 1, 2 ]",
+    "after",
+    "",
+  ].join("\n");
+  const expectedStderr = [
+    "Assertion failed: failed 7",
+    "warn",
+    "error",
+    "    trace",
+    "  outer",
+    "",
+  ].join("\n");
+
+  for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+    const label = modeArgs.length ? "bytecode" : "interpreted";
+    const { exitCode, json, stderr } = runLoaderJson(source, modeArgs);
+    if (exitCode !== 0)
+      throw new Error(`Console behavior ${label} failed: ${JSON.stringify(json.error)}${stderr}`);
+    if (JSON.stringify(json.output) !== JSON.stringify(expectedOutput))
+      throw new Error(
+        `Console behavior ${label} output mismatch: expected ${JSON.stringify(expectedOutput)}, got ${JSON.stringify(json.output)}`,
+      );
+    if (normalizeLineEndings(json.stdout) !== expectedStdout)
+      throw new Error(
+        `Console behavior ${label} stdout mismatch: expected ${JSON.stringify(expectedStdout)}, got ${JSON.stringify(json.stdout)}`,
+      );
+    if (normalizeLineEndings(json.stderr) !== expectedStderr)
+      throw new Error(
+        `Console behavior ${label} stderr mismatch: expected ${JSON.stringify(expectedStderr)}, got ${JSON.stringify(json.stderr)}`,
+      );
+  }
+}
+
+console.log("Console timer lifecycle...");
+{
+  const source = [
+    'console.timeEnd("missing");',
+    'console.timeLog("missing-log");',
+    "let coercions = 0;",
+    'const label = { toString() { coercions++; return "timer"; } };',
+    "console.time(label);",
+    "console.timeLog(label);",
+    "console.timeEnd(label);",
+    "console.timeEnd(label);",
+    'console.log("timer-label-coercions", coercions);',
+    "console.time();",
+    "console.timeEnd();",
+    "console.timeEnd();",
+    "",
+  ].join("\n");
+
+  for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+    const label = modeArgs.length ? "bytecode" : "interpreted";
+    const { exitCode, json, stderr } = runLoaderJson(source, modeArgs);
+    if (exitCode !== 0)
+      throw new Error(`Console timers ${label} failed: ${JSON.stringify(json.error)}${stderr}`);
+    if (!Array.isArray(json.output) || json.output.length !== 8)
+      throw new Error(`Console timers ${label} should emit 8 lines, got ${JSON.stringify(json.output)}`);
+
+    const [missingEnd, missingLog, timeLog, timeEnd, removedEnd, coercions, defaultEnd, removedDefault] =
+      json.output as string[];
+    if (missingEnd !== "Timer 'missing' does not exist")
+      throw new Error(`Console timers ${label} missing timeEnd output mismatch: ${missingEnd}`);
+    if (missingLog !== "Timer 'missing-log' does not exist")
+      throw new Error(`Console timers ${label} missing timeLog output mismatch: ${missingLog}`);
+    if (!/^timer: \d+(?:\.\d{1,3})?ms$/.test(timeLog))
+      throw new Error(`Console timers ${label} timeLog output mismatch: ${timeLog}`);
+    if (!/^timer: \d+(?:\.\d{1,3})?ms$/.test(timeEnd))
+      throw new Error(`Console timers ${label} timeEnd output mismatch: ${timeEnd}`);
+    if (removedEnd !== "Timer 'timer' does not exist")
+      throw new Error(`Console timers ${label} should remove an ended timer, got: ${removedEnd}`);
+    if (coercions !== "timer-label-coercions 4")
+      throw new Error(`Console timers ${label} should coerce each timer label once, got: ${coercions}`);
+    if (!/^default: \d+(?:\.\d{1,3})?ms$/.test(defaultEnd))
+      throw new Error(`Console timers ${label} default timer output mismatch: ${defaultEnd}`);
+    if (removedDefault !== "Timer 'default' does not exist")
+      throw new Error(`Console timers ${label} should remove the default timer, got: ${removedDefault}`);
+    if (normalizeLineEndings(json.stderr) !== "")
+      throw new Error(`Console timers ${label} should route output to stdout, got stderr: ${json.stderr}`);
+  }
+}
+
 // -- --log option (Loader) ------------------------------------------------------
 
 console.log("--log option...");
 {
   const tmp = mkdtemp("goccia-log-");
   try {
-    const logPath = join(tmp, "output.log");
-    await $`echo "console.log('hello-log'); console.warn('hello-warn');" | ${LOADER} --log=${logPath}`.quiet();
-    if (!existsSync(logPath)) throw new Error(`Log file should exist at ${logPath}`);
-    const content = readFileSync(logPath, "utf-8");
-    if (!content.includes("[log]")) throw new Error(`Log file should contain [log]`);
-    if (!content.includes("[warn]")) throw new Error(`Log file should contain [warn]`);
+    const source = [
+      'console.log("log");',
+      'console.warn("warn");',
+      'console.error("error");',
+      'console.info("info");',
+      'console.debug("debug");',
+      "console.dir({ value: 1 });",
+      'console.assert(false, "assert");',
+      'console.count("count");',
+      'console.group("group");',
+      'console.trace("trace");',
+      "console.table([1, 2]);",
+      "console.groupEnd();",
+      'console.timeEnd("missing");',
+      "",
+    ].join("\n");
+    const methods = [
+      "log",
+      "warn",
+      "error",
+      "info",
+      "debug",
+      "dir",
+      "assert",
+      "count",
+      "group",
+      "trace",
+      "table",
+      "timeEnd",
+    ];
+
+    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+      const label = modeArgs.length ? "bytecode" : "interpreted";
+      const logPath = join(tmp, `${label}.log`);
+      const { exitCode, json, stderr } = runLoaderJson(source, [`--log=${logPath}`, ...modeArgs]);
+      if (exitCode !== 0)
+        throw new Error(`Log file ${label} run failed: ${JSON.stringify(json.error)}${stderr}`);
+      if (!existsSync(logPath)) throw new Error(`Log file should exist at ${logPath}`);
+      const content = readFileSync(logPath, "utf-8");
+      for (const method of methods) {
+        if (!content.includes(`[${method}]`))
+          throw new Error(`Log file ${label} should contain [${method}], got: ${content}`);
+      }
+    }
   } finally {
     clean(tmp);
   }

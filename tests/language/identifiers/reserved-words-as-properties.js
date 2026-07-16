@@ -68,7 +68,6 @@ test("reserved words in object patterns require explicit binding names", () => {
   );
 
   expect(readKeywordProperty()).toBe(1);
-  expect(() => new Function("const { if } = { if: 1 };")).toThrow(SyntaxError);
 });
 
 test("reserved words as object property names with bracket notation", () => {

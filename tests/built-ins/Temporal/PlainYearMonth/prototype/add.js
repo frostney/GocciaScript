@@ -33,4 +33,8 @@ describe.runIf(isTemporal)("Temporal.PlainYearMonth.prototype.add", () => {
     expect(() => ym.add({ days: 1 })).toThrow(RangeError);
     expect(() => ym.add({ weeks: 1 })).toThrow(RangeError);
   });
+
+  test("rejects invalid duration strings", () => {
+    expect(() => new Temporal.PlainYearMonth(2024, 6).add("not-a-duration")).toThrow(RangeError);
+  });
 });

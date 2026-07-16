@@ -1358,10 +1358,7 @@ begin
   end;
 
   if not TryGetLocaleTimeZones(L.FRegion, TimeZones) then
-  begin
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Exit;
-  end;
+    SetLength(TimeZones, 0);
 
   Result := CreateStringArray(TimeZones);
 end;

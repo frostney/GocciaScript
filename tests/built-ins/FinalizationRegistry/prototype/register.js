@@ -66,3 +66,9 @@ test("register throws TypeError when receiver is not a FinalizationRegistry", ()
   expect(() => register.call({}, {}, "held")).toThrow(TypeError);
   expect(() => register.call(FinalizationRegistry.prototype, {}, "held")).toThrow(TypeError);
 });
+
+test("register is not constructable", () => {
+  expect(() =>
+    Reflect.construct(class {}, [], FinalizationRegistry.prototype.register)
+  ).toThrow(TypeError);
+});

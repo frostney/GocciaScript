@@ -31,3 +31,9 @@ test("delete throws TypeError when receiver is not a WeakSet", () => {
   expect(() => del.call({}, {})).toThrow(TypeError);
   expect(() => del.call(WeakSet.prototype, {})).toThrow(TypeError);
 });
+
+test("delete is not constructable", () => {
+  expect(() =>
+    Reflect.construct(class {}, [], WeakSet.prototype.delete)
+  ).toThrow(TypeError);
+});

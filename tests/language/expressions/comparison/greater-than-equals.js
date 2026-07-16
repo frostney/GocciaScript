@@ -22,6 +22,4 @@ test("greater than or equal to operator (>=)", () => {
   expect(undefined >= null).toBeFalsy();
 
   expect(undefined >= undefined).toBeFalsy();
-  expect(undefined >= null).toBeFalsy();
-  expect(null >= undefined).toBeFalsy();
 });

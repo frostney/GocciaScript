@@ -3,13 +3,18 @@ description: Math.random function works correctly
 features: [Math.random]
 ---*/
 
-test("Math.random", () => {
-  const random1 = Math.random();
-  const random2 = Math.random();
+describe("Math.random", () => {
+  test("returns numbers in the half-open interval from zero to one", () => {
+    Array.from({ length: 32 }).forEach(() => {
+      const value = Math.random();
+      expect(typeof value).toBe("number");
+      expect(value).toBeGreaterThanOrEqual(0);
+      expect(value).toBeLessThan(1);
+    });
+  });
 
-  expect(random1).toBeGreaterThanOrEqual(0);
-  expect(random1).toBeLessThan(1);
-  expect(random2).toBeGreaterThanOrEqual(0);
-  expect(random2).toBeLessThan(1);
-  expect(random1).not.toBe(random2); // Very unlikely to be equal
+  test("has the correct name and length", () => {
+    expect(Math.random.name).toBe("random");
+    expect(Math.random.length).toBe(0);
+  });
 });

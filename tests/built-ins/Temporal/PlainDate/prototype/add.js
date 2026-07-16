@@ -55,4 +55,8 @@ describe.runIf(isTemporal)("Temporal.PlainDate.prototype.add", () => {
     expect(result.monthCode).toBe("M01");
     expect(result.day).toBe(1);
   });
+
+  test("rejects invalid duration strings", () => {
+    expect(() => new Temporal.PlainDate(2024, 1, 1).add("not-a-duration")).toThrow(RangeError);
+  });
 });

@@ -21,3 +21,9 @@ test("deref throws TypeError when receiver is not a WeakRef", () => {
   expect(() => deref.call({})).toThrow(TypeError);
   expect(() => deref.call(WeakRef.prototype)).toThrow(TypeError);
 });
+
+test("deref is not constructable", () => {
+  expect(() =>
+    Reflect.construct(class {}, [], WeakRef.prototype.deref)
+  ).toThrow(TypeError);
+});

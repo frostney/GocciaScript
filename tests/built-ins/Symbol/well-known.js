@@ -67,4 +67,13 @@ describe("Well-known Symbols", () => {
     expect(Symbol.search).toBe(Symbol.search);
     expect(Symbol.split).toBe(Symbol.split);
   });
+
+  test("Symbol.toPrimitive returns itself through its own toPrimitive method", () => {
+    expect(Symbol.toPrimitive[Symbol.toPrimitive]()).toBe(Symbol.toPrimitive);
+  });
+
+  test("Symbol.unscopables is distinct from other well-known symbols", () => {
+    expect(typeof Symbol.unscopables).toBe("symbol");
+    expect(Symbol.unscopables).not.toBe(Symbol.iterator);
+  });
 });

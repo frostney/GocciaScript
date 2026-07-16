@@ -17,10 +17,6 @@ describe("pattern matching integrations", () => {
     expect(() => x).toThrow(ReferenceError);
   });
 
-  test("pattern-filtered for-of requires of after the pattern", () => {
-    expect(() => new Function("for (const item is _ items) {}")).toThrow();
-  });
-
   test("generator for-of resumes with pattern bindings after body yield", () => {
     const obj = {
       *values() {

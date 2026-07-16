@@ -12,4 +12,8 @@ describe.runIf(isTemporal)("Temporal.PlainTime.prototype.subtract", () => {
     expect(result.hour).toBe(8);
     expect(result.minute).toBe(15);
   });
+
+  test("rejects invalid duration strings", () => {
+    expect(() => new Temporal.PlainTime(12).subtract("not-a-duration")).toThrow(RangeError);
+  });
 });

@@ -130,3 +130,34 @@ test("onRejected returning a value fulfills the chain", () => {
     expect(v).toBe("recovered");
   });
 });
+
+test("species capability executor can recover from undefined resolving functions", () => {
+  class CallsExecutorWithUndefinedFirst {
+    constructor(executor) {
+      executor(undefined, undefined);
+      executor(() => {}, () => {});
+    }
+  }
+
+  const promise = Promise.resolve(1);
+  promise.constructor = { [Symbol.species]: CallsExecutorWithUndefinedFirst };
+  expect(promise.then()).toBeInstanceOf(CallsExecutorWithUndefinedFirst);
+});
+
+test("species capability executor rejects partially captured resolving functions", () => {
+  for (const firstCall of [
+    (executor) => executor(undefined, () => {}),
+    (executor) => executor(() => {}, undefined),
+  ]) {
+    class CallsExecutorPartially {
+      constructor(executor) {
+        firstCall(executor);
+        executor(() => {}, () => {});
+      }
+    }
+
+    const promise = Promise.resolve(1);
+    promise.constructor = { [Symbol.species]: CallsExecutorPartially };
+    expect(() => promise.then()).toThrow(TypeError);
+  }
+});

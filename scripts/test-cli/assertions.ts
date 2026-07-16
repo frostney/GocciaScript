@@ -55,11 +55,18 @@ export function assertSyntaxError(
   extraArgs?: string[],
 ): void {
   const { exitCode, json } = runLoaderJson(source, extraArgs);
-  if (exitCode === 0)
-    throw new Error(`${desc} should fail, but exited 0`);
+  if (exitCode !== 1)
+    throw new Error(`${desc} should exit 1, but exited ${exitCode}`);
   if (json.ok !== false || json.error?.type !== "SyntaxError")
     throw new Error(
       `${desc} should be SyntaxError, got ok=${json.ok} type=${json.error?.type}`,
+    );
+  if (
+    typeof json.error.line !== "number" ||
+    typeof json.error.column !== "number"
+  )
+    throw new Error(
+      `${desc} should include numeric line and column, got line=${json.error.line} column=${json.error.column}`,
     );
 }
 

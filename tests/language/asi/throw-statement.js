@@ -19,11 +19,6 @@ describe("ASI throw statement", () => {
     expect(caught.message).toBe("bad type")
   });
 
-  // Note: throw + newline + expression is a parse-time syntax error
-  // ("Illegal newline after throw") per ES2026 section 12.10.1.
-  // This cannot be tested via expect().toThrow() because the parser
-  // rejects it before runtime. Verified via CLI smoke test instead.
-
   test("throw before closing brace", () => {
     expect(() => { throw new Error("brace") }).toThrow(Error);
   });

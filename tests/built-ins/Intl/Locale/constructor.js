@@ -48,6 +48,12 @@ describe.runIf(isIntl && typeof Intl.Locale !== "undefined")("Intl.Locale constr
     expect(locale.toString()).toBe("en-u-kf-lower-kn-false");
   });
 
+  test("constructor language and region options update the canonical locale", () => {
+    const locale = new Intl.Locale("en", { language: "ar", region: "EG" });
+    expect(locale.toString()).toBe("ar-EG");
+    expect(locale.baseName).toBe("ar-EG");
+  });
+
   test("numeric Unicode extension canonicalizes true to a keyword", () => {
     const locale = new Intl.Locale("en-u-kn-true");
     expect(locale.numeric).toBe(true);

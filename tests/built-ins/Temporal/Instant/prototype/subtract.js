@@ -37,4 +37,8 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.subtract", () => {
       instant.subtract(new Temporal.Duration(0, 0, 1));
     }).toThrow(RangeError);
   });
+
+  test("rejects invalid duration strings", () => {
+    expect(() => Temporal.Instant.fromEpochMilliseconds(0).subtract("not-a-duration")).toThrow(RangeError);
+  });
 });

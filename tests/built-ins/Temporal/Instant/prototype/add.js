@@ -44,4 +44,8 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.add", () => {
       instant.add(new Temporal.Duration(0, 1));
     }).toThrow(RangeError);
   });
+
+  test("rejects invalid duration strings", () => {
+    expect(() => Temporal.Instant.fromEpochMilliseconds(0).add("not-a-duration")).toThrow(RangeError);
+  });
 });

@@ -39,3 +39,9 @@ test("add throws TypeError when receiver is not a WeakSet", () => {
   expect(() => add.call({}, {})).toThrow(TypeError);
   expect(() => add.call(WeakSet.prototype, {})).toThrow(TypeError);
 });
+
+test("add is not constructable", () => {
+  expect(() =>
+    Reflect.construct(class {}, [], WeakSet.prototype.add)
+  ).toThrow(TypeError);
+});

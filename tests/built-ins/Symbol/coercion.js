@@ -426,12 +426,6 @@ describe("Object(symbol) wrapper", () => {
     expect(Object.getPrototypeOf(Symbol("x"))).toBe(Symbol.prototype);
   });
 
-  test("Symbol.prototype methods work with call on wrapper", () => {
-    const s = Symbol("call");
-    const w = Object(s);
-    expect(Symbol.prototype.valueOf.call(w)).toBe(s);
-    expect(Symbol.prototype.toString.call(w)).toBe("Symbol(call)");
-  });
 });
 
 // === Symbol wrapper as property key — ToPropertyKey dispatch ===

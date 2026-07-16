@@ -8,6 +8,8 @@
 - **Valid code → `tests/`; rejected code → `scripts/test-cli-*.ts`** — JavaScript tests assert valid code runs and returns the right result; parser/lexer **rejection** (SyntaxError, caret, error envelope) belongs in `scripts/test-cli-parser.ts` / `test-cli-lexer.ts`, because with no `eval`/`Function` a parse error cannot be asserted from inside a JS test
 - **Built-in test framework** — `describe`/`test`/`expect` with async support, mock functions, lifecycle hooks, and Vitest-compatible matchers
 - **One method per file** — Each test file focuses on a single method; edge cases are co-located with happy-path tests
+- **Cover the contract, not only the example** — Include boundaries, invalid inputs and receivers, coercion/order, state transitions, descriptors, and both execution modes when those perspectives apply
+- **Structure is checked in CI** — Run `bun run scripts/check-test-structure.ts` before submitting test-suite organization changes
 - **Run with**: `./build.pas testrunner`, `./build/GocciaTestRunner tests`, and `./build/GocciaTestRunner tests --mode=bytecode`
 
 GocciaScript uses three testing layers in priority order:
@@ -39,33 +41,31 @@ Keep suite titles, test names, and failure messages aligned with the layer under
 tests/
 ├── built-ins/              # Built-in object tests
 │   ├── Array/              # Array constructor and prototype methods
-│   │   ├── array-creation.js
-│   │   ├── array-modification.js
+│   │   ├── constructor.js
 │   │   ├── from.js         # Array.from
 │   │   ├── of.js           # Array.of
 │   │   └── prototype/
 │   │       ├── map.js, filter.js, reduce.js, forEach.js
 │   │       ├── find.js, findIndex.js, indexOf.js, lastIndexOf.js
-│   │       ├── sort.js, splice.js, shift-unshift.js, fill.js, at.js
-│   │       ├── includes.js, concat.js, reverse.js
+│   │       ├── sort.js, splice.js, shift.js, unshift.js
+│   │       ├── fill.js, at.js, includes.js, concat.js, reverse.js
 │   │       └── ...
 │   ├── ArrayBuffer/        # ArrayBuffer constructor, static/prototype methods
 │   │   ├── constructor.js, isView.js, toString-tag.js
 │   │   └── prototype/
 │   │       └── slice.js
-│   ├── constructors/       # Built-in constructor validation
-│   │   └── require-new.js  # Verifies constructors require `new`
 │   ├── Error/
 │   ├── JSON/
 │   ├── Map/
 │   ├── Math/
 │   ├── Number/             # Number methods and constants
 │   │   ├── parseInt.js, parseFloat.js, isNaN.js, isFinite.js, isInteger.js
-│   │   └── constants.js    # MAX_SAFE_INTEGER, EPSILON, isSafeInteger, etc.
+│   │   ├── isSafeInteger.js, epsilon.js, maxSafeInteger.js
+│   │   └── maxValue.js, minValue.js, nan.js
 │   ├── Object/             # Object static and prototype methods
 │   │   ├── keys.js, values.js, entries.js, assign.js, create.js, is.js
 │   │   ├── defineProperty.js, defineProperties.js, getOwnPropertyDescriptor.js
-│   │   ├── freeze.js       # Object.freeze, Object.isFrozen
+│   │   ├── freeze.js, isFrozen.js
 │   │   ├── getPrototypeOf.js, setPrototypeOf.js
 │   │   ├── fromEntries.js, groupBy.js
 │   │   ├── prototype/      # Object.prototype instance methods
@@ -75,7 +75,7 @@ tests/
 │   ├── Promise/             # Promise constructor, static methods, microtask ordering
 │   │   ├── constructor.js, resolve.js, reject.js
 │   │   ├── all.js, all-settled.js, race.js, any.js
-│   │   ├── microtask-ordering.js, thenable-adoption.js, error-cases.js
+│   │   ├── microtask-ordering.js, thenable-adoption.js
 │   │   └── prototype/
 │   │       ├── then.js, catch.js, finally.js
 │   ├── Set/
@@ -123,6 +123,11 @@ tests/
     │   └── unsupported-features/    # Warning-mode recovery tests for disabled compatibility syntax
     └── unary-operators.js
 ```
+
+Constructor requirements belong with the constructor they constrain. For
+example, the `Map()`-without-`new` rejection belongs in
+`tests/built-ins/Map/constructor.js`, not in a shared
+`tests/built-ins/constructors/require-new.js` file.
 
 ### File Naming and Layout Conventions
 
@@ -203,6 +208,65 @@ test("JSON.stringify preserves round-trip precision for large fractional doubles
   // ...
 });
 ```
+
+**6. Cross-surface files are narrow exceptions** — A file may span several
+methods only when the behavior itself is one indivisible cross-surface
+contract, not merely because the methods are related or share an
+implementation. Examples include a proposal-version absence contract such as
+`Temporal/removed-methods.js`, or a constructor-family invariant such as
+`Error/error-prototype-constructor.js`. A shared receiver-branding matrix such
+as `Date/prototype/receiver-branding.js` is also appropriate when it verifies
+the same internal-slot requirement across methods without duplicating that
+matrix in every method file.
+
+These exceptions must be:
+
+- named after the single contract rather than `methods.js`, `misc.js`, or
+  `error-cases.js`;
+- explicitly allowlisted in `scripts/check-test-structure.ts` with a concrete
+  reason;
+- kept small enough that a failure still identifies the contract that broke.
+
+Shared setup or table data is not by itself a reason to combine operations.
+Prefer a helper imported by focused files when several operations need the same
+fixtures.
+
+### Coverage Perspectives
+
+A passing happy-path example proves only that one route works. For every method
+or operation, inspect its public contract and implementation branches, then add
+the perspectives that can change its observable result:
+
+- ordinary behavior, including more than one representative input where the
+  operation has distinct modes;
+- boundaries and sentinels such as empty input, zero and signed zero, `NaN`,
+  infinities, minimum/maximum values, and first/last valid indexes;
+- invalid arguments and incompatible receivers, including the exact error type;
+- argument coercion, throwing coercions, and observable evaluation order;
+- repeated calls and state transitions for mutable or stateful APIs;
+- property metadata and descriptors for exposed built-in properties;
+- independent expected values for encoders/decoders and getters/setters rather
+  than round trips that can let two matching defects cancel out;
+- interpreter and bytecode parity, which the full JavaScript suite gate
+  verifies.
+
+Not every bullet applies to every operation. Each added test must protect an
+observable contract or a meaningful implementation branch; do not add
+combinatorial duplicates merely to satisfy a checklist.
+
+### Structural Check
+
+Run the test-suite structure check after adding or reorganizing JavaScript
+tests:
+
+```bash
+bun run scripts/check-test-structure.ts
+```
+
+The check rejects catch-all filenames, known multi-operation files, reliably
+detectable prototype-method suites outside `prototype/`, and parser-rejection
+assertions hidden behind `Function(...)` or `eval(...)`. Dynamic-code rejection
+tests are allowed only where the dynamic-code API itself is under test.
 
 ### Cross-Platform Newline Rules for Data Format Parsers
 

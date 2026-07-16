@@ -33,21 +33,3 @@ test("WeakRef.length is 1 with spec descriptor", () => {
   expect(descriptor.enumerable).toBe(false);
   expect(descriptor.configurable).toBe(true);
 });
-
-test("WeakRef.prototype.constructor is WeakRef", () => {
-  expect(WeakRef.prototype.constructor).toBe(WeakRef);
-  expect(new WeakRef({}).constructor).toBe(WeakRef);
-});
-
-test("WeakRef.prototype methods are not constructors", () => {
-  const isConstructor = (fn) => {
-    try {
-      new fn();
-      return true;
-    } catch (_) {
-      return false;
-    }
-  };
-
-  expect(isConstructor(WeakRef.prototype.deref)).toBe(false);
-});

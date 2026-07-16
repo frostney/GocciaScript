@@ -12,6 +12,15 @@ import { LOADER } from "./test-cli/binaries";
 import { assertSyntaxError, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { clean, mkdtemp } from "./test-cli/tmpdir";
 
+function assertSyntaxErrorInBothModes(
+  source: string,
+  desc: string,
+  args: readonly string[] = [],
+): void {
+  assertSyntaxError(source, desc, [...args]);
+  assertSyntaxError(source, `${desc} (bytecode)`, [...args, "--mode=bytecode"]);
+}
+
 // -- Error display (SyntaxError with caret and suggestion) ----------------------
 
 console.log("Error display (SyntaxError with caret and suggestion)...");
@@ -153,6 +162,304 @@ console.log("Function parameter-list early errors...");
     assertSyntaxError(source, desc, [...args]);
     assertSyntaxError(source, `${desc} (bytecode)`, [...args, "--mode=bytecode"]);
   }
+}
+
+// -- Migrated language early-error coverage ------------------------------------
+
+console.log("Language early errors use the CLI parser...");
+{
+  const cases = [
+    {
+      desc: "await without an operand in an async arrow body",
+      source: "const fn = async () => { await; };\n",
+      args: [],
+    },
+    {
+      desc: "await in an async function expression parameter default",
+      source: "const fn = async function(value = await 1) {};\n",
+      args: ["--compat-function"],
+    },
+    {
+      desc: "await in an async object method parameter default",
+      source: "const value = { async method(value = await 1) {} };\n",
+      args: [],
+    },
+    {
+      desc: "await in an async class method parameter default",
+      source: "class Value { async method(value = await 1) {} }\n",
+      args: [],
+    },
+    {
+      desc: "reserved word used as an object-pattern binding",
+      source: "const { if } = { if: 1 };\n",
+      args: [],
+    },
+    {
+      desc: "unicode escape with an invalid identifier-start character",
+      source: "const \\u0031 = 7;\n",
+      args: [],
+    },
+    {
+      desc: "escaped reserved word in a declaration binding",
+      source: "const \\u0069f = 7;\n",
+      args: [],
+    },
+    {
+      desc: "escaped reserved word in an identifier reference",
+      source: "const read = () => \\u0069f;\n",
+      args: [],
+    },
+    {
+      desc: "escaped reserved word in an arrow parameter",
+      source: "const read = (\\u0069f) => 1;\n",
+      args: [],
+    },
+    {
+      desc: "escaped reserved word in a class binding",
+      source: "class \\u0069f {}\n",
+      args: [],
+    },
+    {
+      desc: "escaped new in new.target",
+      source: "const read = () => n\\u0065w.target;\n",
+      args: [],
+    },
+    {
+      desc: "escaped target in new.target",
+      source: "const read = function() { return new.\\u0074arget; };\n",
+      args: ["--compat-function"],
+    },
+    {
+      desc: "escaped of in for-of",
+      source: "for (let value o\\u0066 [1]) {}\n",
+      args: [],
+    },
+    {
+      desc: "escaped in in for-in",
+      source: "for (let value i\\u006e [1]) {}\n",
+      args: ["--compat-for-in-loop"],
+    },
+    {
+      desc: "escaped get in an object accessor",
+      source: "const value = ({ g\\u0065t property() { return 1; } });\n",
+      args: [],
+    },
+    {
+      desc: "escaped reserved word in a function-expression binding",
+      source: "const value = function \\u0069f() {};\n",
+      args: ["--compat-function"],
+    },
+    {
+      desc: "escaped reserved word in a generator-expression binding",
+      source: "const value = function* \\u0069f() {};\n",
+      args: ["--compat-function"],
+    },
+    {
+      desc: "escaped reserved word in a class-expression binding",
+      source: "const value = class \\u0069f {};\n",
+      args: [],
+    },
+    {
+      desc: "unicode escape with an invalid identifier-continuation character",
+      source: "const a\\u0020 = 7;\n",
+      args: [],
+    },
+    {
+      desc: "unicode escape with an invalid property identifier character",
+      source: "const value = { a: 1 }; value.\\u0020;\n",
+      args: [],
+    },
+    {
+      desc: "continue to a non-iteration label",
+      source: "block: { continue block; }\n",
+      args: ["--compat-label"],
+    },
+    {
+      desc: "label targeting a lexical declaration",
+      source: "label: let value = 1;\n",
+      args: ["--compat-label", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "label targeting a class declaration",
+      source: "label: class Value {}\n",
+      args: ["--compat-label", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "break crossing an arrow-function boundary",
+      source: "outer: while (true) { const fn = () => { break outer; }; }\n",
+      args: ["--compat-label", "--compat-while-loops"],
+    },
+    {
+      desc: "same-line labeled lexical binding pattern",
+      source: "label: let [value] = [1];\n",
+      args: ["--compat-label", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "newline before a labeled lexical binding pattern",
+      source: "if (false) { label: let\n[value] = [1]; }\n",
+      args: ["--compat-label", "--compat-non-strict-mode", "--compat-asi"],
+    },
+    {
+      desc: "strict let identifier expression",
+      source: '"use strict"; let + 1;\n',
+      args: ["--compat-non-strict-mode"],
+    },
+    {
+      desc: "strict labeled let identifier expression",
+      source: '"use strict"; if (false) { label: let\nvalue = 1; }\n',
+      args: ["--compat-label", "--compat-non-strict-mode", "--compat-asi"],
+    },
+    {
+      desc: "strict let identifier expression in a function",
+      source: 'const fn = function() { "use strict"; let + 1; };\n',
+      args: ["--compat-function", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "strict let identifier expression in an arrow",
+      source: 'const fn = () => { "use strict"; let + 1; };\n',
+      args: ["--compat-non-strict-mode"],
+    },
+    {
+      desc: "let identifier expression in a class method",
+      source: "class Value { method() { let + 1; } }\n",
+      args: ["--compat-non-strict-mode"],
+    },
+    {
+      desc: "let identifier expression in a static class method",
+      source: "class Value { static method() { let + 1; } }\n",
+      args: ["--compat-non-strict-mode"],
+    },
+    {
+      desc: "let identifier expression in a class getter",
+      source: "class Value { get property() { let + 1; } }\n",
+      args: ["--compat-non-strict-mode"],
+    },
+    {
+      desc: "let identifier expression in a class setter",
+      source: "class Value { set property(value) { let + 1; } }\n",
+      args: ["--compat-non-strict-mode"],
+    },
+    {
+      desc: "let identifier expression in a static block",
+      source: "class Value { static { let + 1; } }\n",
+      args: ["--compat-non-strict-mode"],
+    },
+    {
+      desc: "let identifier expression in a class field initializer",
+      source: "class Value { property = let + 1; }\n",
+      args: ["--compat-non-strict-mode"],
+    },
+    {
+      desc: "type assertion without a type before is",
+      source: "const value = 1; value as is 1;\n",
+      args: [],
+    },
+    {
+      desc: "pattern-filtered for-of without of",
+      source: "for (const item is _ items) {}\n",
+      args: [],
+    },
+    {
+      desc: "catch annotation without a type",
+      source: "try { throw 1; } catch (error:) {}\n",
+      args: [],
+    },
+    {
+      desc: "strict function parameter named arguments",
+      source: '"use strict"; function echo(arguments) { return arguments; }\n',
+      args: ["--compat-function"],
+    },
+    {
+      desc: "strict string decimal escape",
+      source: '"use strict"; "\\1";\n',
+      args: ["--compat-non-strict-mode"],
+    },
+    {
+      desc: "decimal escape before a later use strict directive",
+      source: '"\\145"; "use strict";\n',
+      args: ["--compat-non-strict-mode"],
+    },
+    {
+      desc: "decimal escape before a later use strict directive in a nested function",
+      source: 'function nested() { "\\8"; "use strict"; }\n',
+      args: ["--compat-function", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "newline after throw",
+      source: 'throw\nnew Error("unreachable");\n',
+      args: ["--compat-asi"],
+    },
+  ] as const;
+
+  for (const { source, desc, args } of cases)
+    assertSyntaxErrorInBothModes(source, desc, args);
+}
+
+// -- Annex B labelled-function early errors -----------------------------------
+
+console.log("Annex B labelled-function early errors...");
+{
+  const baseArgs = ["--compat-label", "--compat-function", "--compat-non-strict-mode"] as const;
+  const cases = [
+    {
+      desc: "strict direct labelled function",
+      source: '"use strict"; label: function value() {}\n',
+      args: baseArgs,
+    },
+    {
+      desc: "strict nested labelled function",
+      source: '"use strict"; outer: inner: function value() {}\n',
+      args: baseArgs,
+    },
+    {
+      desc: "labelled function as an if consequent",
+      source: "if (true) label: function value() {}\n",
+      args: baseArgs,
+    },
+    {
+      desc: "labelled function as an else consequent",
+      source: "if (false) {} else label: function value() {}\n",
+      args: baseArgs,
+    },
+    {
+      desc: "labelled function as a with body",
+      source: "with ({}) label: function value() {}\n",
+      args: baseArgs,
+    },
+    {
+      desc: "labelled function as a while body",
+      source: "while (false) label: function value() {}\n",
+      args: [...baseArgs, "--compat-while-loops"],
+    },
+    {
+      desc: "labelled function as a do-while body",
+      source: "do label: function value() {} while (false);\n",
+      args: [...baseArgs, "--compat-while-loops"],
+    },
+    {
+      desc: "labelled function as a traditional for body",
+      source: "for (let index = 0; index < 0; index++) label: function value() {}\n",
+      args: [...baseArgs, "--compat-traditional-for-loop"],
+    },
+    {
+      desc: "labelled function as a for-in body with a declaration",
+      source: "for (const key in {}) label: function value() {}\n",
+      args: [...baseArgs, "--compat-for-in-loop"],
+    },
+    {
+      desc: "labelled function as a for-in body with an assignment",
+      source: "let key; for (key in {}) label: function value() {}\n",
+      args: [...baseArgs, "--compat-for-in-loop"],
+    },
+    {
+      desc: "labelled function as a for-of body",
+      source: "for (const value of []) label: function nested() {}\n",
+      args: baseArgs,
+    },
+  ] as const;
+
+  for (const { source, desc, args } of cases)
+    assertSyntaxErrorInBothModes(source, desc, args);
 }
 
 // -- Strict-mode legacy octal literal rejection ---------------------------------

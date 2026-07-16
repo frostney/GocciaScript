@@ -184,3 +184,55 @@ test("Promise.allSettled element functions ignore repeated calls", () => {
 
   expect(callCount).toBe(1);
 });
+
+test("Promise.allSettled rejects non-iterable arguments", async () => {
+  for (const value of [42, null, undefined]) {
+    try {
+      await Promise.allSettled(value);
+      throw new Error("Expected rejection");
+    } catch (error) {
+      expect(error).toBeInstanceOf(TypeError);
+    }
+  }
+});
+
+test("Promise.allSettled skips IteratorClose when an iterator result accessor throws", async () => {
+  for (const property of ["done", "value"]) {
+    let returnCalled = 0;
+    const sentinel = new Error(property + "-boom");
+    const iterable = {
+      [Symbol.iterator]() {
+        return {
+          next() {
+            if (property === "done") {
+              return {
+                get done() {
+                  throw sentinel;
+                },
+                value: 1,
+              };
+            }
+            return {
+              done: false,
+              get value() {
+                throw sentinel;
+              },
+            };
+          },
+          return() {
+            returnCalled++;
+            return { done: true };
+          },
+        };
+      },
+    };
+
+    try {
+      await Promise.allSettled(iterable);
+      throw new Error("Expected rejection");
+    } catch (error) {
+      expect(error).toBe(sentinel);
+      expect(returnCalled).toBe(0);
+    }
+  }
+});
