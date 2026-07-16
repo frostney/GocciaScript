@@ -14,7 +14,7 @@ Every event has schema version `1` and these fields:
   "schemaVersion": 1,
   "kind": "fetch.host",
   "decision": "deny",
-  "subject": "https://blocked.example/path",
+  "subject": "blocked.example",
   "reason": "host is not in the allowed hosts list",
   "source": {
     "file": "app.js",
@@ -40,6 +40,9 @@ The current event kinds are:
 | `function.constructor` | Dynamic Function construction was allowed or denied |
 | `shadow-realm.construct` | An installed ShadowRealm constructor was invoked |
 | `sandbox.fs.path` | A sandbox path attempted to cross above the virtual root |
+
+`fetch.host` subjects contain only the checked host. URL user information,
+paths, and query parameters are not included in host-authorization events.
 
 Disabled `FFI` and `ShadowRealm` remain absent globals. Auditing does not
 install throwing stubs or alter feature detection. Their use events therefore

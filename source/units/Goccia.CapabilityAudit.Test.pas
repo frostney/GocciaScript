@@ -46,6 +46,7 @@ type
     procedure TestSerializesMissingCoordinatesAsNull;
     procedure TestSinkFailurePropagates;
     procedure TestSandboxPromiseCannotCatchSinkFailure;
+    procedure TestVMAsyncIteratorCannotCatchSinkFailure;
     procedure TestFailedRuntimeInstallRestoresRootClampCallback;
     procedure TestSandboxDetachRestoresExistingModules;
   public
@@ -61,6 +62,8 @@ begin
   Test('Sink failures propagate to the host', TestSinkFailurePropagates);
   Test('Sandbox promises cannot catch sink failures',
     TestSandboxPromiseCannotCatchSinkFailure);
+  Test('VM async iterators cannot catch sink failures',
+    TestVMAsyncIteratorCannotCatchSinkFailure);
   Test('Failed runtime installation restores the root clamp callback',
     TestFailedRuntimeInstallRestoresRootClampCallback);
   Test('Sandbox detach restores existing runtime modules',
@@ -224,6 +227,49 @@ procedure TCapabilityAuditTests.TestSandboxPromiseCannotCatchSinkFailure;
 begin
   RunWithExecutor(TGocciaInterpreterExecutor.Create);
   RunWithExecutor(TGocciaBytecodeExecutor.Create);
+end;
+
+procedure TCapabilityAuditTests.TestVMAsyncIteratorCannotCatchSinkFailure;
+var
+  Source: TStringList;
+  Executor: TGocciaBytecodeExecutor;
+  Engine: TGocciaEngine;
+  Raised: Boolean;
+begin
+  Source := TStringList.Create;
+  Source.Text := 'const iterable = {' + LineEnding +
+    '  [Symbol.iterator]: () => ({' + LineEnding +
+    '    next: () => {' + LineEnding +
+    '      Function("return 1");' + LineEnding +
+    '      return { done: true };' + LineEnding +
+    '    },' + LineEnding +
+    '  }),' + LineEnding +
+    '};' + LineEnding +
+    'try {' + LineEnding +
+    '  for await (const value of iterable) {}' + LineEnding +
+    '} catch (e) {}';
+  Executor := TGocciaBytecodeExecutor.Create;
+  Engine := TGocciaEngine.Create('/audit-async-iterator-test.js', Source,
+    Executor);
+  try
+    Engine.SourceType := stModule;
+    Engine.CapabilityAuditSink := FailingSink;
+    FSinkInvocationCount := 0;
+
+    Raised := False;
+    try
+      Engine.Execute;
+    except
+      on E: EGocciaCapabilityAuditDeliveryError do
+        Raised := True;
+    end;
+    Expect<Integer>(FSinkInvocationCount).ToBe(1);
+    Expect<Boolean>(Raised).ToBe(True);
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
 end;
 
 procedure TCapabilityAuditTests.TestFailedRuntimeInstallRestoresRootClampCallback;

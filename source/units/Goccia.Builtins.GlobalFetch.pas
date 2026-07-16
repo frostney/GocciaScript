@@ -140,7 +140,7 @@ begin
   if FAllowedHosts.Count = 0 then
   begin
     if Assigned(FCapabilityAuditEmitter) then
-      FCapabilityAuditEmitter(gckFetchHost, gcdDeny, AURLStr,
+      FCapabilityAuditEmitter(gckFetchHost, gcdDeny, Host,
         'no fetch hosts are allowed');
     ThrowTypeError(SErrorFetchNoAllowedHosts, SSuggestFetchAllowedHosts);
   end;
@@ -148,14 +148,14 @@ begin
   if FAllowedHosts.IndexOf(Host) < 0 then
   begin
     if Assigned(FCapabilityAuditEmitter) then
-      FCapabilityAuditEmitter(gckFetchHost, gcdDeny, AURLStr,
+      FCapabilityAuditEmitter(gckFetchHost, gcdDeny, Host,
         'host is not in the allowed hosts list');
     ThrowTypeError(Format(SErrorFetchHostNotAllowed, [Host]),
       SSuggestFetchAllowedHosts);
   end;
 
   if Assigned(FCapabilityAuditEmitter) then
-    FCapabilityAuditEmitter(gckFetchHost, gcdAllow, AURLStr,
+    FCapabilityAuditEmitter(gckFetchHost, gcdAllow, Host,
       'host is in the allowed hosts list');
 end;
 

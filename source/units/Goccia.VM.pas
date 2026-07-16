@@ -489,6 +489,7 @@ uses
   Goccia.AST.Node,
   Goccia.AST.Statements,
   Goccia.CallStack,
+  Goccia.CapabilityAudit,
   Goccia.Constants,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
@@ -3910,6 +3911,8 @@ begin
       raise;
     on E: TGocciaInstructionLimitError do
       raise;
+    on E: EGocciaCapabilityAuditDeliveryError do
+      raise;
     on E: Exception do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
   end;
@@ -3996,6 +3999,8 @@ begin
     on E: TGocciaTimeoutError do
       raise;
     on E: TGocciaInstructionLimitError do
+      raise;
+    on E: EGocciaCapabilityAuditDeliveryError do
       raise;
     on E: Exception do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
@@ -4093,6 +4098,8 @@ begin
     on E: TGocciaTimeoutError do
       raise;
     on E: TGocciaInstructionLimitError do
+      raise;
+    on E: EGocciaCapabilityAuditDeliveryError do
       raise;
     on E: Exception do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
@@ -5012,6 +5019,8 @@ begin
     on E: TGocciaTimeoutError do
       raise;
     on E: TGocciaInstructionLimitError do
+      raise;
+    on E: EGocciaCapabilityAuditDeliveryError do
       raise;
     on E: Exception do
       FPromise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
@@ -16669,6 +16678,8 @@ begin
               raise;
             on E: TGocciaInstructionLimitError do
               raise;
+            on E: EGocciaCapabilityAuditDeliveryError do
+              raise;
             on E: Exception do
               DynImportPromise.Reject(
                 CreateErrorObject(ERROR_NAME, E.Message));
@@ -16740,6 +16751,8 @@ begin
             on E: TGocciaTimeoutError do
               raise;
             on E: TGocciaInstructionLimitError do
+              raise;
+            on E: EGocciaCapabilityAuditDeliveryError do
               raise;
             on E: Exception do
               DynImportPromise.Reject(
@@ -16863,6 +16876,8 @@ begin
             on E: TGocciaTimeoutError do
               raise;
             on E: TGocciaInstructionLimitError do
+              raise;
+            on E: EGocciaCapabilityAuditDeliveryError do
               raise;
             on E: Exception do
             begin

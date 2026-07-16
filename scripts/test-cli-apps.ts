@@ -4842,14 +4842,16 @@ console.log("Loader: --allowed-host blocks unlisted host...");
   const tmp = makeTmp();
   try {
     const audit = join(tmp, "blocked-fetch-audit.jsonl");
-    const res = await $`echo 'fetch("http://blocked.test");' | ${LOADER} --allowed-host=example.com --audit-log=${audit} 2>&1`.nothrow();
+    const res = await $`echo 'fetch("http://user:password@blocked.test/private?token=secret");' | ${LOADER} --allowed-host=example.com --audit-log=${audit} 2>&1`.nothrow();
     if (res.exitCode === 0) throw new Error("Fetch to unlisted host should fail");
     if (!res.text().includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.text()}`);
     const events = readJsonLines(audit);
     if (events.length !== 1 ||
         events[0].kind !== "fetch.host" ||
         events[0].decision !== "deny" ||
-        events[0].subject !== "http://blocked.test")
+        events[0].subject !== "blocked.test" ||
+        JSON.stringify(events).includes("password") ||
+        JSON.stringify(events).includes("token=secret"))
       throw new Error(`Blocked fetch audit event mismatch: ${JSON.stringify(events)}`);
   } finally {
     clean(tmp);
@@ -4888,6 +4890,7 @@ await withFetchTestServer(async (baseUrl) => {
     if (events.length !== 2 ||
         events[0].kind !== "fetch.host" ||
         events[0].decision !== "allow" ||
+        events[0].subject !== "127.0.0.1" ||
         events[1].kind !== "fetch.dispatch" ||
         events[1].decision !== "allow")
       throw new Error(`Local fetch audit events mismatch: ${JSON.stringify(events)}`);
