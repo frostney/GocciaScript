@@ -715,8 +715,11 @@ write/append/remove/rename/copy call `(null)`; recursive `mkdir` calls
 `(null, firstCreatedPath)`; and `exists` calls `(boolean)`. Failures pass only
 the filesystem `Error`. Unsupported Node-only paths and options such as file
 descriptors, URLs, AbortSignals, `Dirent`, bigint Stats, non-default copy
-modes, and alternate encodings throw synchronously. `readFile` supports UTF-8
-text options, while `mkdir` and `rm` support the existing `recursive` option.
+modes, and alternate encodings are outside the supported subset. Callback
+methods throw a `TypeError` synchronously; Promise methods return a rejected
+Promise.
+`readFile` supports UTF-8 text options, while `mkdir` and `rm` support the
+existing object-shaped `recursive` option.
 
 Stats snapshots expose `atime`, `mtime`, `ctime`, and `birthtime` as lazy Date
 accessors on a realm-owned shared prototype. Each access returns a fresh Date;

@@ -266,6 +266,16 @@ begin
   Result.Reject(AValue);
 end;
 
+function RejectedPromiseFromException(
+  const AException: Exception): TGocciaPromiseValue;
+begin
+  if AException is TGocciaThrowValue then
+    Result := RejectedPromise(TGocciaThrowValue(AException).Value)
+  else
+    Result := RejectedPromise(
+      CreateErrorObject(ERROR_NAME, AException.Message));
+end;
+
 { TGocciaSandboxFsJob }
 
 constructor TGocciaSandboxFsJob.Create(
@@ -597,10 +607,8 @@ var
 begin
   if IsMissingValue(AValue) then
     Exit(False);
-  if AValue is TGocciaBooleanLiteralValue then
-    Exit(TGocciaBooleanLiteralValue(AValue).Value);
   if not (AValue is TGocciaObjectValue) then
-    ThrowTypeError(AMethod + ' options must be a boolean or object');
+    ThrowTypeError(AMethod + ' options must be an object');
 
   RecursiveValue := TGocciaObjectValue(AValue).GetProperty('recursive');
   if IsMissingValue(RecursiveValue) then
@@ -1355,14 +1363,14 @@ begin
   Promises := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype,
     12);
   AddNativeFunction(Promises, 'readFile', FsPromisesReadFile, 2);
-  AddNativeFunction(Promises, 'writeFile', FsPromisesWriteFile, 2);
-  AddNativeFunction(Promises, 'appendFile', FsPromisesAppendFile, 2);
+  AddNativeFunction(Promises, 'writeFile', FsPromisesWriteFile, 3);
+  AddNativeFunction(Promises, 'appendFile', FsPromisesAppendFile, 3);
   AddNativeFunction(Promises, 'mkdir', FsPromisesMkdir, 2);
-  AddNativeFunction(Promises, 'readdir', FsPromisesReaddir, 1);
+  AddNativeFunction(Promises, 'readdir', FsPromisesReaddir, 2);
   AddNativeFunction(Promises, 'stat', FsPromisesStat, 1);
   AddNativeFunction(Promises, 'rm', FsPromisesRm, 2);
   AddNativeFunction(Promises, 'rename', FsPromisesRename, 2);
-  AddNativeFunction(Promises, 'copyFile', FsPromisesCopyFile, 2);
+  AddNativeFunction(Promises, 'copyFile', FsPromisesCopyFile, 3);
   Result.SetProperty('promises', Promises);
 end;
 
@@ -1909,12 +1917,17 @@ var
   OptionsValue: TGocciaValue;
   TextResult: Boolean;
 begin
-  ValidateArgumentCount(AArgs, 2, 'fs.promises.readFile');
-  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.readFile');
-  OptionsValue := AArgs.GetElement(1);
-  TextResult := ParseReadOptions(OptionsValue, 'fs.promises.readFile');
-  Result := EnqueueFsPromise(Self, sfoReadFile, Path, '', nil,
-    TextResult, False, sfcValue, 'fs.promises.readFile');
+  try
+    ValidateArgumentCount(AArgs, 2, 'fs.promises.readFile');
+    Path := RequireAsyncPath(AArgs, 0, 'fs.promises.readFile');
+    OptionsValue := AArgs.GetElement(1);
+    TextResult := ParseReadOptions(OptionsValue, 'fs.promises.readFile');
+    Result := EnqueueFsPromise(Self, sfoReadFile, Path, '', nil,
+      TextResult, False, sfcValue, 'fs.promises.readFile');
+  except
+    on E: Exception do
+      Result := RejectedPromiseFromException(E);
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsPromisesWriteFile(
@@ -1924,12 +1937,17 @@ var
   Path: string;
   Data: TBytes;
 begin
-  ValidateArgumentCount(AArgs, 3, 'fs.promises.writeFile');
-  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.writeFile');
-  Data := RequireAsyncData(AArgs, 1, 'fs.promises.writeFile');
-  ValidateNoOptions(AArgs.GetElement(2), 'fs.promises.writeFile');
-  Result := EnqueueFsPromise(Self, sfoWriteFile, Path, '', Data,
-    False, False, sfcErrorOnly, 'fs.promises.writeFile');
+  try
+    ValidateArgumentCount(AArgs, 3, 'fs.promises.writeFile');
+    Path := RequireAsyncPath(AArgs, 0, 'fs.promises.writeFile');
+    Data := RequireAsyncData(AArgs, 1, 'fs.promises.writeFile');
+    ValidateNoOptions(AArgs.GetElement(2), 'fs.promises.writeFile');
+    Result := EnqueueFsPromise(Self, sfoWriteFile, Path, '', Data,
+      False, False, sfcErrorOnly, 'fs.promises.writeFile');
+  except
+    on E: Exception do
+      Result := RejectedPromiseFromException(E);
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsPromisesAppendFile(
@@ -1939,12 +1957,17 @@ var
   Path: string;
   Data: TBytes;
 begin
-  ValidateArgumentCount(AArgs, 3, 'fs.promises.appendFile');
-  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.appendFile');
-  Data := RequireAsyncData(AArgs, 1, 'fs.promises.appendFile');
-  ValidateNoOptions(AArgs.GetElement(2), 'fs.promises.appendFile');
-  Result := EnqueueFsPromise(Self, sfoAppendFile, Path, '', Data,
-    False, False, sfcErrorOnly, 'fs.promises.appendFile');
+  try
+    ValidateArgumentCount(AArgs, 3, 'fs.promises.appendFile');
+    Path := RequireAsyncPath(AArgs, 0, 'fs.promises.appendFile');
+    Data := RequireAsyncData(AArgs, 1, 'fs.promises.appendFile');
+    ValidateNoOptions(AArgs.GetElement(2), 'fs.promises.appendFile');
+    Result := EnqueueFsPromise(Self, sfoAppendFile, Path, '', Data,
+      False, False, sfcErrorOnly, 'fs.promises.appendFile');
+  except
+    on E: Exception do
+      Result := RejectedPromiseFromException(E);
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsPromisesMkdir(
@@ -1955,12 +1978,17 @@ var
   OptionsValue: TGocciaValue;
   Recursive: Boolean;
 begin
-  ValidateArgumentCount(AArgs, 2, 'fs.promises.mkdir');
-  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.mkdir');
-  OptionsValue := AArgs.GetElement(1);
-  Recursive := ValidateRecursiveOptions(OptionsValue, 'fs.promises.mkdir');
-  Result := EnqueueFsPromise(Self, sfoMkdir, Path, '', nil, False,
-    Recursive, sfcMkdir, 'fs.promises.mkdir');
+  try
+    ValidateArgumentCount(AArgs, 2, 'fs.promises.mkdir');
+    Path := RequireAsyncPath(AArgs, 0, 'fs.promises.mkdir');
+    OptionsValue := AArgs.GetElement(1);
+    Recursive := ValidateRecursiveOptions(OptionsValue, 'fs.promises.mkdir');
+    Result := EnqueueFsPromise(Self, sfoMkdir, Path, '', nil, False,
+      Recursive, sfcMkdir, 'fs.promises.mkdir');
+  except
+    on E: Exception do
+      Result := RejectedPromiseFromException(E);
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsPromisesReaddir(
@@ -1969,11 +1997,16 @@ function TGocciaSandboxRuntimeExtension.FsPromisesReaddir(
 var
   Path: string;
 begin
-  ValidateArgumentCount(AArgs, 2, 'fs.promises.readdir');
-  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.readdir');
-  ValidateNoOptions(AArgs.GetElement(1), 'fs.promises.readdir');
-  Result := EnqueueFsPromise(Self, sfoReaddir, Path, '', nil, False,
-    False, sfcValue, 'fs.promises.readdir');
+  try
+    ValidateArgumentCount(AArgs, 2, 'fs.promises.readdir');
+    Path := RequireAsyncPath(AArgs, 0, 'fs.promises.readdir');
+    ValidateNoOptions(AArgs.GetElement(1), 'fs.promises.readdir');
+    Result := EnqueueFsPromise(Self, sfoReaddir, Path, '', nil, False,
+      False, sfcValue, 'fs.promises.readdir');
+  except
+    on E: Exception do
+      Result := RejectedPromiseFromException(E);
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsPromisesStat(
@@ -1982,11 +2015,16 @@ function TGocciaSandboxRuntimeExtension.FsPromisesStat(
 var
   Path: string;
 begin
-  ValidateArgumentCount(AArgs, 2, 'fs.promises.stat');
-  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.stat');
-  ValidateNoOptions(AArgs.GetElement(1), 'fs.promises.stat');
-  Result := EnqueueFsPromise(Self, sfoStat, Path, '', nil, False,
-    False, sfcValue, 'fs.promises.stat');
+  try
+    ValidateArgumentCount(AArgs, 2, 'fs.promises.stat');
+    Path := RequireAsyncPath(AArgs, 0, 'fs.promises.stat');
+    ValidateNoOptions(AArgs.GetElement(1), 'fs.promises.stat');
+    Result := EnqueueFsPromise(Self, sfoStat, Path, '', nil, False,
+      False, sfcValue, 'fs.promises.stat');
+  except
+    on E: Exception do
+      Result := RejectedPromiseFromException(E);
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsPromisesRm(
@@ -1997,12 +2035,17 @@ var
   OptionsValue: TGocciaValue;
   Recursive: Boolean;
 begin
-  ValidateArgumentCount(AArgs, 2, 'fs.promises.rm');
-  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.rm');
-  OptionsValue := AArgs.GetElement(1);
-  Recursive := ValidateRecursiveOptions(OptionsValue, 'fs.promises.rm');
-  Result := EnqueueFsPromise(Self, sfoRm, Path, '', nil, False,
-    Recursive, sfcErrorOnly, 'fs.promises.rm');
+  try
+    ValidateArgumentCount(AArgs, 2, 'fs.promises.rm');
+    Path := RequireAsyncPath(AArgs, 0, 'fs.promises.rm');
+    OptionsValue := AArgs.GetElement(1);
+    Recursive := ValidateRecursiveOptions(OptionsValue, 'fs.promises.rm');
+    Result := EnqueueFsPromise(Self, sfoRm, Path, '', nil, False,
+      Recursive, sfcErrorOnly, 'fs.promises.rm');
+  except
+    on E: Exception do
+      Result := RejectedPromiseFromException(E);
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsPromisesRename(
@@ -2012,11 +2055,16 @@ var
   Path: string;
   Destination: string;
 begin
-  ValidateArgumentCount(AArgs, 2, 'fs.promises.rename');
-  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.rename');
-  Destination := RequireAsyncPath(AArgs, 1, 'fs.promises.rename');
-  Result := EnqueueFsPromise(Self, sfoRename, Path, Destination, nil,
-    False, False, sfcErrorOnly, 'fs.promises.rename');
+  try
+    ValidateArgumentCount(AArgs, 2, 'fs.promises.rename');
+    Path := RequireAsyncPath(AArgs, 0, 'fs.promises.rename');
+    Destination := RequireAsyncPath(AArgs, 1, 'fs.promises.rename');
+    Result := EnqueueFsPromise(Self, sfoRename, Path, Destination, nil,
+      False, False, sfcErrorOnly, 'fs.promises.rename');
+  except
+    on E: Exception do
+      Result := RejectedPromiseFromException(E);
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsPromisesCopyFile(
@@ -2026,12 +2074,17 @@ var
   Path: string;
   Destination: string;
 begin
-  ValidateArgumentCount(AArgs, 3, 'fs.promises.copyFile');
-  Path := RequireAsyncPath(AArgs, 0, 'fs.promises.copyFile');
-  Destination := RequireAsyncPath(AArgs, 1, 'fs.promises.copyFile');
-  ValidateCopyMode(AArgs.GetElement(2), 'fs.promises.copyFile');
-  Result := EnqueueFsPromise(Self, sfoCopyFile, Path, Destination, nil,
-    False, False, sfcErrorOnly, 'fs.promises.copyFile');
+  try
+    ValidateArgumentCount(AArgs, 3, 'fs.promises.copyFile');
+    Path := RequireAsyncPath(AArgs, 0, 'fs.promises.copyFile');
+    Destination := RequireAsyncPath(AArgs, 1, 'fs.promises.copyFile');
+    ValidateCopyMode(AArgs.GetElement(2), 'fs.promises.copyFile');
+    Result := EnqueueFsPromise(Self, sfoCopyFile, Path, Destination, nil,
+      False, False, sfcErrorOnly, 'fs.promises.copyFile');
+  except
+    on E: Exception do
+      Result := RejectedPromiseFromException(E);
+  end;
 end;
 
 initialization
