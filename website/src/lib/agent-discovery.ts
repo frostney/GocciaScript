@@ -44,10 +44,7 @@ const SERVICE_DOCS = [
   { href: COMPATIBILITY_MARKDOWN_PATH, type: "text/markdown" },
 ] as const;
 
-const DESCRIPTIONS = [
-  { href: "/docs/language", type: "text/html" },
-  { href: "/docs/pascal-javascript-options", type: "text/html" },
-] as const;
+const DESCRIPTIONS = [{ href: "/docs/language", type: "text/html" }] as const;
 
 export function absoluteUrl(origin: string, path: string) {
   return new URL(path, origin).toString();
@@ -153,7 +150,6 @@ Homepage: ${absoluteUrl(origin, "/")}
 Language docs: ${absoluteUrl(origin, "/docs/language")}
 Compatibility dashboard: ${absoluteUrl(origin, "/compatibility")}
 Concise live compatibility summary: ${absoluteUrl(origin, COMPATIBILITY_MARKDOWN_PATH)}
-FreePascal and Delphi decision guide: ${absoluteUrl(origin, "/docs/pascal-javascript-options")}
 
 ## Execute code
 
@@ -215,7 +211,6 @@ export function buildLlmsTxt(origin: string) {
 
 - Homepage: ${absoluteUrl(origin, "/")}
 - Language policy: ${absoluteUrl(origin, "/docs/language")}
-- FreePascal and Delphi decision guide: ${absoluteUrl(origin, "/docs/pascal-javascript-options")}
 - Live ECMAScript compatibility dashboard: ${absoluteUrl(origin, "/compatibility")}
 - Concise live compatibility summary: ${absoluteUrl(origin, COMPATIBILITY_MARKDOWN_PATH)}
 - FreePascal embedding API: ${absoluteUrl(origin, "/docs/embedding")}

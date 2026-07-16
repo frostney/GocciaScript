@@ -1,8 +1,8 @@
 export const GOCCIASCRIPT_SUMMARY =
-  "GocciaScript is a FreePascal-native, embeddable ECMAScript runtime, not a separate JavaScript-like language. Its recommended profile disables selected legacy or high-risk forms by default, while compatibility flags enable many of those standard forms for conformance and legacy code.";
+  "GocciaScript is a sandbox-first ECMAScript runtime with explicit host-controlled capabilities, designed for embedding portable JavaScript in applications. It is implemented in FreePascal, uses safer recommended defaults, and tracks language compatibility through generated test262 reports.";
 
 export const GOCCIASCRIPT_META_DESCRIPTION =
-  "FreePascal-native, embeddable ECMAScript runtime with sandbox-first recommended defaults, compatibility flags, and test262-tracked core language support.";
+  "Sandbox-first ECMAScript runtime with explicit host-controlled capabilities, portable application embedding, and test262-tracked language compatibility.";
 
 export const ECMASCRIPT_SCOPE_QUESTION =
   "Does GocciaScript implement only a subset of JavaScript?";

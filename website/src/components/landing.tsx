@@ -794,7 +794,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "What is GocciaScript for?",
     answer:
-      "It is built for embedding scripts in desktop applications and for running generated code from AI agents with less ambient authority than a general-purpose host runtime. Embedding currently targets FreePascal hosts, with more host paths intended to grow over time.",
+      "It is built for applications that need JavaScript with an explicit, host-defined capability surface, including desktop scripting, automation, plugins, sandboxed workflows, and agent execution. Embedding currently targets FreePascal hosts, with more host paths intended to grow over time.",
   },
   {
     question: ECMASCRIPT_SCOPE_QUESTION,
@@ -890,7 +890,7 @@ export function Landing({
                 Java<span className="script">Script</span>.
               </h1>
               <p className="hero-lede">
-                A FreePascal-native, embeddable{" "}
+                A sandbox-first{" "}
                 <a
                   href="https://tc39.es/ecma262/"
                   target="_blank"
@@ -909,8 +909,8 @@ export function Landing({
                     conformance with generated test262 reports.
                   </span>
                 </a>
-                runtime with sandbox-first recommended defaults and generated
-                test262 reporting.
+                runtime with explicit host-controlled capabilities, designed for
+                embedding portable JavaScript in applications.
               </p>
               <div className="hero-cta-row">
                 <Link

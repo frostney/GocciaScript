@@ -4,9 +4,9 @@
 
 A drop of JavaScript — A sandbox-first ECMAScript runtime implemented in FreePascal
 
-GocciaScript is a FreePascal-native, embeddable ECMAScript runtime, not a separate JavaScript-like language. Its recommended profile disables selected legacy or high-risk forms by default, while compatibility flags enable many of those standard forms for conformance and legacy code.
+GocciaScript is a sandbox-first ECMAScript runtime with explicit host-controlled capabilities, designed for embedding portable JavaScript in applications. It is implemented in FreePascal, uses safer recommended defaults, and tracks language compatibility through generated test262 reports.
 
-Keep four compatibility questions separate: the ECMAScript language surface, the recommended default profile, the host environment, and the Pascal compiler. GocciaScript tracks core language behavior with generated test262 reports; it is intentionally not a Node.js/npm or browser host, and FreePascal is the supported compiler today while Delphi compiler support remains untested. See [Language](docs/language.md) for the policy and the live [ECMAScript compatibility dashboard](https://www.gocciascript.dev/compatibility) for current evidence.
+The host chooses the runtime surface: globals, modules, filesystem and network capabilities, execution limits, and application-specific APIs. The recommended language profile is product policy rather than the engine's language ceiling; compatibility flags enable many standard legacy forms for conformance and existing code. See [Language](docs/language.md) for the policy and the live [ECMAScript compatibility dashboard](https://www.gocciascript.dev/compatibility) for current evidence.
 
 ## Features
 
@@ -230,7 +230,6 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | [Tutorial](docs/tutorial.md) | Your first GocciaScript program — a guided walkthrough for newcomers |
 | [Language](docs/language.md) | ECMAScript support, recommended defaults, compatibility flags, and rationale |
 | [Language Tables](docs/language-tables.md) | Quick-reference: ECMAScript feature matrix and TC39 proposal status |
-| [JavaScript Options for Pascal](docs/pascal-javascript-options.md) | Choosing an integration shape for FreePascal or Delphi without conflating language, host, and compiler support |
 | [Built-in Objects](docs/built-ins.md) | Available built-ins and API reference |
 | [FFI Built-ins](docs/built-ins-ffi.md) | Native libraries, aggregate types, callbacks, lifetimes, and safety limits |
 | [Temporal Built-ins](docs/built-ins-temporal.md) | Temporal API: dates, times, durations, time zones |

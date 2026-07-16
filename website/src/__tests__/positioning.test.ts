@@ -7,12 +7,13 @@ import {
 } from "@/lib/positioning";
 
 describe("GocciaScript positioning", () => {
-  test("keeps the canonical summary explicit about runtime and profile", () => {
+  test("keeps the canonical summary centered on the runtime purpose", () => {
+    expect(GOCCIASCRIPT_SUMMARY).toContain("sandbox-first ECMAScript runtime");
+    expect(GOCCIASCRIPT_SUMMARY).toContain("host-controlled capabilities");
     expect(GOCCIASCRIPT_SUMMARY).toContain(
-      "FreePascal-native, embeddable ECMAScript runtime",
+      "embedding portable JavaScript in applications",
     );
-    expect(GOCCIASCRIPT_SUMMARY).toContain("recommended profile");
-    expect(GOCCIASCRIPT_SUMMARY).toContain("compatibility flags");
+    expect(GOCCIASCRIPT_SUMMARY).not.toContain("generated code");
   });
 
   test("structured data reuses the visible positioning FAQ", () => {
