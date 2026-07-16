@@ -6,7 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
-  Goccia.FFI.DynamicLibrary,
+  Goccia.FFI.LibraryGuard,
   Goccia.ObjectModel,
   Goccia.SharedPrototype,
   Goccia.Values.ObjectValue,
@@ -15,8 +15,9 @@ uses
 type
   TGocciaFFILibraryValue = class(TGocciaObjectValue)
   private
-    FHandle: TGocciaFFILibraryHandle;
+    FLibraryGuard: TGocciaFFILibraryGuard;
 
+    constructor CreatePrototypeHost;
     procedure InitializePrototype;
   published
     function Bind(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -25,7 +26,7 @@ type
     function PathGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ClosedGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
-    constructor Create(const AHandle: TGocciaFFILibraryHandle);
+    constructor Create(const ALibraryGuard: TGocciaFFILibraryGuard);
     destructor Destroy; override;
 
     function GetProperty(const AName: string): TGocciaValue; override;
@@ -35,7 +36,7 @@ type
 
     class procedure ExposePrototype(const ATarget: TGocciaObjectValue);
 
-    property Handle: TGocciaFFILibraryHandle read FHandle;
+    property LibraryGuard: TGocciaFFILibraryGuard read FLibraryGuard;
   end;
 
 implementation
@@ -45,7 +46,9 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.FFI.ABI,
   Goccia.FFI.Call,
+  Goccia.FFI.CallbackSlots,
   Goccia.FFI.Types,
   Goccia.GarbageCollector,
   Goccia.Realm,
@@ -53,7 +56,9 @@ uses
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FFICallback,
   Goccia.Values.FFIPointer,
+  Goccia.Values.FFIType,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SharedArrayBufferValue,
@@ -78,385 +83,360 @@ const
   PROP_FFI_CLOSED = 'closed';
 
 // ==========================================================================
-// TGocciaFFIBoundFunction — captures a symbol + signature for callbacks
+// TGocciaFFIBoundFunctionValue — captures a symbol + signature
 // ==========================================================================
 
 type
-  TGocciaFFIBoundFunction = class
+  TGocciaFFIBoundFunctionValue = class(TGocciaNativeFunctionValue)
   private
     FSymbol: CodePointer;
-    FSignature: TGocciaFFISignature;
+    FSignature: TGocciaFFICompiledSignature;
     FName: string;
-  published
-    function Call(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    FLibraryGuard: TGocciaFFILibraryGuard;
+
+    function Invoke(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
   public
-    constructor Create(const ASymbol: CodePointer; const ASignature: TGocciaFFISignature; const AName: string);
+    constructor Create(const ASymbol: CodePointer;
+      const ASignature: TGocciaFFICompiledSignature; const AName: string;
+      const ALibraryGuard: TGocciaFFILibraryGuard);
+    destructor Destroy; override;
   end;
 
-constructor TGocciaFFIBoundFunction.Create(const ASymbol: CodePointer; const ASignature: TGocciaFFISignature; const AName: string);
+constructor TGocciaFFIBoundFunctionValue.Create(const ASymbol: CodePointer;
+  const ASignature: TGocciaFFICompiledSignature; const AName: string;
+  const ALibraryGuard: TGocciaFFILibraryGuard);
 begin
+  inherited CreateWithoutPrototype(Invoke, AName, ASignature.ArgumentCount);
   FSymbol := ASymbol;
   FSignature := ASignature;
   FName := AName;
+  ALibraryGuard.RetainDependent;
+  FLibraryGuard := ALibraryGuard;
 end;
 
-function TGocciaFFIBoundFunction.Call(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  IntArgs: array of PtrInt;
-  SingleArgs: array of Single;
-  DoubleArgs: array of Double;
-  TempStrings: array of AnsiString;
-  I, TempCount: Integer;
-  ArgValue: TGocciaValue;
-  NumValue: TGocciaNumberLiteralValue;
-  CallResult: TGocciaFFIResult;
-  State: TGocciaFFICallState;
-  {$IFDEF CPU64}
-  GprIdx, FprIdx: Integer;
-  {$ENDIF}
-  {$IFDEF CPUI386}
-  StackOffset: Integer;
-  IntVal: LongInt;
-  DoubleVal: Double;
-  {$ENDIF}
+destructor TGocciaFFIBoundFunctionValue.Destroy;
 begin
-  // Validate arg count
-  if AArgs.Length < FSignature.ArgCount then
-    ThrowTypeError(Format(SErrorFFIFuncArgCount,
-      [FName, FSignature.ArgCount, AArgs.Length]),
-      SSuggestFFIUsage);
+  FSignature.Free;
+  if Assigned(FLibraryGuard) then
+    FLibraryGuard.ReleaseDependent;
+  inherited;
+end;
 
-  // Marshal arguments into native arrays
-  SetLength(IntArgs, 0);
-  SetLength(SingleArgs, 0);
-  SetLength(DoubleArgs, 0);
-  TempCount := 0;
+function PointerFromFFIValue(const AValue: TGocciaValue;
+  const AArgumentIndex: Integer): Pointer;
+begin
+  if AValue is TGocciaFFIPointerValue then
+    Result := TGocciaFFIPointerValue(AValue).Address
+  else if AValue is TGocciaFFICallbackValue then
+  begin
+    TGocciaFFICallbackValue(AValue).EnsureOpen;
+    Result := Pointer(TGocciaFFICallbackValue(AValue).CodePointer);
+  end
+  else if AValue is TGocciaArrayBufferValue then
+  begin
+    if Length(TGocciaArrayBufferValue(AValue).Data) = 0 then
+      Result := nil
+    else
+      Result := @TGocciaArrayBufferValue(AValue).Data[0];
+  end
+  else if AValue is TGocciaSharedArrayBufferValue then
+  begin
+    if Length(TGocciaSharedArrayBufferValue(AValue).Data) = 0 then
+      Result := nil
+    else
+      Result := @TGocciaSharedArrayBufferValue(AValue).Data[0];
+  end
+  else if AValue is TGocciaTypedArrayValue then
+  begin
+    if Length(TGocciaTypedArrayValue(AValue).BufferData) = 0 then
+      Result := nil
+    else
+      Result := @TGocciaTypedArrayValue(AValue).BufferData[
+        TGocciaTypedArrayValue(AValue).ByteOffset];
+  end
+  else if AValue is TGocciaFFIAggregateValue then
+    Result := TGocciaFFIAggregateValue(AValue).DataPointer
+  else if AValue is TGocciaNullLiteralValue then
+    Result := nil
+  else
+    ThrowTypeError(Format(SErrorFFIArgMustBeBufferOrNull,
+      [AArgumentIndex]), SSuggestFFIUsage);
+end;
 
-  case FSignature.ArgClass of
-    facInteger:
+function MarshalFFIValue(const AType: TGocciaFFITypeDescriptor;
+  const AValue: TGocciaValue; const AArgumentIndex: Integer;
+  var ATemporaryString: AnsiString;
+  out ACallback: TGocciaFFICallbackValue;
+  out ATemporaryCallback: Boolean): TBytes;
+var
+  Aggregate: TGocciaFFIAggregateValue;
+  BufferData: TBytes;
+  PointerValue: Pointer;
+  Signed8: ShortInt;
+  Unsigned8: Byte;
+  Signed16: SmallInt;
+  Unsigned16: Word;
+  Signed32: LongInt;
+  Unsigned32: LongWord;
+  Signed64: Int64;
+  Unsigned64: QWord;
+  Float32: Single;
+  Float64: Double;
+begin
+  ACallback := nil;
+  ATemporaryCallback := False;
+  SetLength(Result, AType.Size);
+  if Length(Result) > 0 then
+    FillChar(Result[0], Length(Result), 0);
+  if AType.IsAggregate then
+  begin
+    if not (AValue is TGocciaFFIAggregateValue) then
+      ThrowTypeError(SErrorFFIAggregateArgumentValue,
+        SSuggestFFIUsage);
+    Aggregate := TGocciaFFIAggregateValue(AValue);
+    if Aggregate.Descriptor <> AType then
+      ThrowTypeError(SErrorFFIAggregateArgumentType,
+        SSuggestFFIUsage);
+    Aggregate.EnsureBackingStore;
+    BufferData := Aggregate.Buffer.Data;
+    if AType.Size > 0 then
+      Move(BufferData[Aggregate.ByteOffset], Result[0], AType.Size);
+    Exit;
+  end;
+  if AType.Kind = ftkCallback then
+  begin
+    if AValue is TGocciaFFICallbackValue then
+      ACallback := TGocciaFFICallbackValue(AValue)
+    else if Assigned(AValue) and AValue.IsCallable then
     begin
-      SetLength(IntArgs, FSignature.ArgCount);
-      SetLength(TempStrings, FSignature.ArgCount);
-      for I := 0 to FSignature.ArgCount - 1 do
-      begin
-        ArgValue := AArgs.GetElement(I);
-        case FSignature.ArgTypes[I] of
-          fftBool:
-            if ArgValue.ToBooleanLiteral.Value then
-              IntArgs[I] := 1
-            else
-              IntArgs[I] := 0;
-          fftI8, fftI16, fftI32:
-          begin
-            NumValue := ArgValue.ToNumberLiteral;
-            IntArgs[I] := PtrInt(ToInt32Value(NumValue));
-          end;
-          fftI64:
-          begin
-            NumValue := ArgValue.ToNumberLiteral;
-            IntArgs[I] := PtrInt(ToInt64Value(NumValue));
-          end;
-          fftU8, fftU16, fftU32:
-          begin
-            NumValue := ArgValue.ToNumberLiteral;
-            IntArgs[I] := PtrInt(PtrUInt(ToUint32Value(NumValue)));
-          end;
-          fftU64:
-          begin
-            NumValue := ArgValue.ToNumberLiteral;
-            IntArgs[I] := PtrInt(QWord(ToInt64Value(NumValue)));
-          end;
-          fftPointer:
-          begin
-            if ArgValue is TGocciaFFIPointerValue then
-              IntArgs[I] := PtrInt(TGocciaFFIPointerValue(ArgValue).Address)
-            else if ArgValue is TGocciaArrayBufferValue then
-            begin
-              if Length(TGocciaArrayBufferValue(ArgValue).Data) = 0 then
-                IntArgs[I] := 0
-              else
-                IntArgs[I] := PtrInt(@TGocciaArrayBufferValue(ArgValue).Data[0]);
-            end
-            else if ArgValue is TGocciaSharedArrayBufferValue then
-            begin
-              if Length(TGocciaSharedArrayBufferValue(ArgValue).Data) = 0 then
-                IntArgs[I] := 0
-              else
-                IntArgs[I] := PtrInt(@TGocciaSharedArrayBufferValue(ArgValue).Data[0]);
-            end
-            else if ArgValue is TGocciaTypedArrayValue then
-            begin
-              if Length(TGocciaTypedArrayValue(ArgValue).BufferData) = 0 then
-                IntArgs[I] := 0
-              else
-                IntArgs[I] := PtrInt(@TGocciaTypedArrayValue(ArgValue).BufferData[
-                  TGocciaTypedArrayValue(ArgValue).ByteOffset]);
-            end
-            else if ArgValue is TGocciaNullLiteralValue then
-              IntArgs[I] := 0
-            else
-              ThrowTypeError(Format(SErrorFFIArgMustBeBufferOrNull, [I]),
-                SSuggestFFIUsage);
-          end;
-          fftCString:
-          begin
-            TempStrings[TempCount] := AnsiString(ArgValue.ToStringLiteral.Value);
-            IntArgs[I] := PtrInt(PAnsiChar(TempStrings[TempCount]));
-            Inc(TempCount);
-          end;
-        end;
-      end;
-    end;
-    facSingle:
-    begin
-      SetLength(SingleArgs, FSignature.ArgCount);
-      for I := 0 to FSignature.ArgCount - 1 do
-      begin
-        NumValue := AArgs.GetElement(I).ToNumberLiteral;
-        SingleArgs[I] := NumValue.Value;
-      end;
-    end;
-    facDouble:
-    begin
-      SetLength(DoubleArgs, FSignature.ArgCount);
-      for I := 0 to FSignature.ArgCount - 1 do
-      begin
-        NumValue := AArgs.GetElement(I).ToNumberLiteral;
-        DoubleArgs[I] := NumValue.Value;
-      end;
-    end;
-    facMixed:
-    begin
-      {$IFDEF CPU64}
-      // Fill TGocciaFFICallState with separate GPR/FPR counters and
-      // call the assembly trampoline directly
-      FillChar(State, SizeOf(State), 0);
-      State.FuncPtr := FSymbol;
-      GprIdx := 0;
-      FprIdx := 0;
-      SetLength(TempStrings, FSignature.ArgCount);
-      for I := 0 to FSignature.ArgCount - 1 do
-      begin
-        ArgValue := AArgs.GetElement(I);
-        if FFITypeToArgClass(FSignature.ArgTypes[I]) = facDouble then
-        begin
-          NumValue := ArgValue.ToNumberLiteral;
-          {$IFDEF MSWINDOWS}
-          // Win64: positional — double goes in both Gpr[I] and Fpr[I]
-          State.Fpr[I] := NumValue.Value;
-          Move(State.Fpr[I], State.Gpr[I], SizeOf(Double));
-          {$ELSE}
-          // System V / AArch64: separate counter
-          State.Fpr[FprIdx] := NumValue.Value;
-          Inc(FprIdx);
-          {$ENDIF}
-        end
-        else
-        begin
-          // Integer-class argument
-          case FSignature.ArgTypes[I] of
-            fftBool:
-              if ArgValue.ToBooleanLiteral.Value then
-                {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := 1
-              else
-                {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := 0;
-            fftI8, fftI16, fftI32:
-            begin
-              NumValue := ArgValue.ToNumberLiteral;
-              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(ToInt32Value(NumValue));
-            end;
-            fftI64:
-            begin
-              NumValue := ArgValue.ToNumberLiteral;
-              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(ToInt64Value(NumValue));
-            end;
-            fftU8, fftU16, fftU32:
-            begin
-              NumValue := ArgValue.ToNumberLiteral;
-              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(PtrUInt(ToUint32Value(NumValue)));
-            end;
-            fftU64:
-            begin
-              NumValue := ArgValue.ToNumberLiteral;
-              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(QWord(ToInt64Value(NumValue)));
-            end;
-            fftPointer:
-            begin
-              if ArgValue is TGocciaFFIPointerValue then
-                {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(TGocciaFFIPointerValue(ArgValue).Address)
-              else if ArgValue is TGocciaArrayBufferValue then
-              begin
-                if Length(TGocciaArrayBufferValue(ArgValue).Data) = 0 then
-                  {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := 0
-                else
-                  {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(@TGocciaArrayBufferValue(ArgValue).Data[0]);
-              end
-              else if ArgValue is TGocciaSharedArrayBufferValue then
-              begin
-                if Length(TGocciaSharedArrayBufferValue(ArgValue).Data) = 0 then
-                  {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := 0
-                else
-                  {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(@TGocciaSharedArrayBufferValue(ArgValue).Data[0]);
-              end
-              else if ArgValue is TGocciaTypedArrayValue then
-              begin
-                if Length(TGocciaTypedArrayValue(ArgValue).BufferData) = 0 then
-                  {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := 0
-                else
-                  {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(@TGocciaTypedArrayValue(ArgValue).BufferData[
-                    TGocciaTypedArrayValue(ArgValue).ByteOffset]);
-              end
-              else if ArgValue is TGocciaNullLiteralValue then
-                {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := 0
-              else
-                ThrowTypeError(Format(SErrorFFIArgMustBeBufferOrNull, [I]),
-                SSuggestFFIUsage);
-            end;
-            fftCString:
-            begin
-              TempStrings[TempCount] := AnsiString(ArgValue.ToStringLiteral.Value);
-              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(PAnsiChar(TempStrings[TempCount]));
-              Inc(TempCount);
-            end;
-          end;
-          {$IFNDEF MSWINDOWS}
-          Inc(GprIdx);
-          {$ENDIF}
-        end;
-      end;
-      State.GprCount := GprIdx;
-      State.FprCount := FprIdx;
-      FFITrampolineCall(State);
-      CallResult.AsInt := State.RetInt;
-      CallResult.AsDouble := State.RetFloat;
-      {$ENDIF}
-      {$IFDEF CPUI386}
-      // i386 cdecl: pre-pack all args into StackBuf in left-to-right order.
-      // The trampoline copies this buffer to ESP and calls.
-      FillChar(State, SizeOf(State), 0);
-      State.FuncPtr := FSymbol;
-      State.ReturnIsFloat := FSignature.ReturnClass in [frcSingle, frcDouble];
-      StackOffset := 0;
-      SetLength(TempStrings, FSignature.ArgCount);
-      for I := 0 to FSignature.ArgCount - 1 do
-      begin
-        ArgValue := AArgs.GetElement(I);
-        if FFITypeToArgClass(FSignature.ArgTypes[I]) = facDouble then
-        begin
-          DoubleVal := ArgValue.ToNumberLiteral.Value;
-          Move(DoubleVal, State.StackBuf[StackOffset], 8);
-          Inc(StackOffset, 8);
-        end
-        else
-        begin
-          case FSignature.ArgTypes[I] of
-            fftBool:
-              if ArgValue.ToBooleanLiteral.Value then
-                IntVal := 1
-              else
-                IntVal := 0;
-            fftI8, fftI16, fftI32:
-              IntVal := ToInt32Value(ArgValue);
-            fftU8, fftU16, fftU32:
-              IntVal := LongInt(ToUint32Value(ArgValue));
-            fftPointer:
-            begin
-              if ArgValue is TGocciaFFIPointerValue then
-                IntVal := LongInt(TGocciaFFIPointerValue(ArgValue).Address)
-              else if ArgValue is TGocciaArrayBufferValue then
-              begin
-                if Length(TGocciaArrayBufferValue(ArgValue).Data) = 0 then
-                  IntVal := 0
-                else
-                  IntVal := LongInt(@TGocciaArrayBufferValue(ArgValue).Data[0]);
-              end
-              else if ArgValue is TGocciaSharedArrayBufferValue then
-              begin
-                if Length(TGocciaSharedArrayBufferValue(ArgValue).Data) = 0 then
-                  IntVal := 0
-                else
-                  IntVal := LongInt(@TGocciaSharedArrayBufferValue(ArgValue).Data[0]);
-              end
-              else if ArgValue is TGocciaTypedArrayValue then
-              begin
-                if Length(TGocciaTypedArrayValue(ArgValue).BufferData) = 0 then
-                  IntVal := 0
-                else
-                  IntVal := LongInt(@TGocciaTypedArrayValue(ArgValue).BufferData[
-                    TGocciaTypedArrayValue(ArgValue).ByteOffset]);
-              end
-              else if ArgValue is TGocciaNullLiteralValue then
-                IntVal := 0
-              else
-                ThrowTypeError(Format(SErrorFFIArgMustBeBufferOrNull, [I]),
-                SSuggestFFIUsage);
-            end;
-            fftCString:
-            begin
-              TempStrings[TempCount] := AnsiString(ArgValue.ToStringLiteral.Value);
-              IntVal := LongInt(PAnsiChar(TempStrings[TempCount]));
-              Inc(TempCount);
-            end;
-          else
-            IntVal := ToInt32Value(ArgValue);
-          end;
-          Move(IntVal, State.StackBuf[StackOffset], 4);
-          Inc(StackOffset, 4);
-        end;
-      end;
-      State.StackSize := StackOffset;
-      FFITrampolineCall(State);
-      CallResult.AsInt := State.RetInt;
-      CallResult.AsDouble := State.RetFloat;
-      {$ENDIF}
-    end;
+      ACallback := TGocciaFFICallbackValue.Create(AType, AValue);
+      ATemporaryCallback := True;
+    end
+    else
+      ThrowTypeError(SErrorFFICallbackArgumentValue,
+        SSuggestFFIUsage);
+    if ACallback.Descriptor <> AType then
+      ThrowTypeError(SErrorFFICallbackArgumentType,
+        SSuggestFFIUsage);
+    ACallback.EnsureOpen;
+    PointerValue := Pointer(ACallback.CodePointer);
+    Move(PointerValue, Result[0], SizeOf(Pointer));
+    Exit;
   end;
 
-  // Dispatch the homogeneous call (mixed already dispatched above via trampoline)
-  if FSignature.ArgClass <> facMixed then
-    FFIDispatchCall(FSymbol, FSignature.ArgCount, FSignature.ArgClass,
-      FSignature.ReturnClass, IntArgs, SingleArgs, DoubleArgs, CallResult);
+  case AType.ScalarType of
+    fftVoid:
+      ThrowTypeError(SErrorFFIVoidNotValidArg, SSuggestFFIUsage);
+    fftBool:
+      if AValue.ToBooleanLiteral.Value then Result[0] := 1;
+    fftI8:
+    begin
+      Signed8 := ShortInt(ToInt32Value(AValue));
+      Move(Signed8, Result[0], SizeOf(Signed8));
+    end;
+    fftU8:
+    begin
+      Unsigned8 := Byte(ToUint32Value(AValue));
+      Move(Unsigned8, Result[0], SizeOf(Unsigned8));
+    end;
+    fftI16:
+    begin
+      Signed16 := SmallInt(ToInt32Value(AValue));
+      Move(Signed16, Result[0], SizeOf(Signed16));
+    end;
+    fftU16:
+    begin
+      Unsigned16 := Word(ToUint32Value(AValue));
+      Move(Unsigned16, Result[0], SizeOf(Unsigned16));
+    end;
+    fftI32:
+    begin
+      Signed32 := ToInt32Value(AValue);
+      Move(Signed32, Result[0], SizeOf(Signed32));
+    end;
+    fftU32:
+    begin
+      Unsigned32 := ToUint32Value(AValue);
+      Move(Unsigned32, Result[0], SizeOf(Unsigned32));
+    end;
+    fftI64:
+    begin
+      Signed64 := ToInt64Value(AValue);
+      Move(Signed64, Result[0], SizeOf(Signed64));
+    end;
+    fftU64:
+    begin
+      Unsigned64 := QWord(ToInt64Value(AValue));
+      Move(Unsigned64, Result[0], SizeOf(Unsigned64));
+    end;
+    fftF32:
+    begin
+      Float32 := AValue.ToNumberLiteral.Value;
+      Move(Float32, Result[0], SizeOf(Float32));
+    end;
+    fftF64:
+    begin
+      Float64 := AValue.ToNumberLiteral.Value;
+      Move(Float64, Result[0], SizeOf(Float64));
+    end;
+    fftPointer:
+    begin
+      PointerValue := PointerFromFFIValue(AValue, AArgumentIndex);
+      Move(PointerValue, Result[0], SizeOf(Pointer));
+    end;
+    fftCString:
+    begin
+      ATemporaryString := AnsiString(AValue.ToStringLiteral.Value);
+      PointerValue := PAnsiChar(ATemporaryString);
+      Move(PointerValue, Result[0], SizeOf(Pointer));
+    end;
+  end;
+end;
 
-  // Unmarshal return value
-  case FSignature.ReturnType of
+function UnmarshalFFIValue(const AType: TGocciaFFITypeDescriptor;
+  const AData: TBytes; const ALibraryGuard: TGocciaFFILibraryGuard): TGocciaValue;
+var
+  Aggregate: TGocciaFFIAggregateValue;
+  PointerValue: Pointer;
+  Signed8: ShortInt;
+  Unsigned8: Byte;
+  Signed16: SmallInt;
+  Unsigned16: Word;
+  Signed32: LongInt;
+  Unsigned32: LongWord;
+  Signed64: Int64;
+  Unsigned64: QWord;
+  Float32: Single;
+  Float64: Double;
+begin
+  if AType.IsAggregate then
+  begin
+    Aggregate := TGocciaFFIAggregateValue.Create(AType);
+    if AType.Size > 0 then
+    begin
+      Aggregate.CopyFrom(@AData[0]);
+      Aggregate.AttachLibraryPointerFields(ALibraryGuard);
+    end;
+    Exit(Aggregate);
+  end;
+  if AType.Kind = ftkCallback then
+  begin
+    PointerValue := nil;
+    Move(AData[0], PointerValue, SizeOf(Pointer));
+    if Assigned(ALibraryGuard) and ALibraryGuard.IsClosed then
+      ThrowTypeError(SErrorFFIPointerLibraryClosed, SSuggestFFIUsage);
+    Exit(TGocciaFFIPointerValue.Create(PointerValue, ALibraryGuard));
+  end;
+  case AType.ScalarType of
     fftVoid:
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     fftBool:
-      if CallResult.AsInt <> 0 then
+      if AData[0] <> 0 then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue;
     fftI8:
-      Result := TGocciaNumberLiteralValue.Create(ShortInt(CallResult.AsInt));
-    fftI16:
-      Result := TGocciaNumberLiteralValue.Create(SmallInt(CallResult.AsInt));
-    fftI32:
-      Result := TGocciaNumberLiteralValue.Create(LongInt(CallResult.AsInt));
-    fftI64:
-      Result := TGocciaNumberLiteralValue.Create(Int64(CallResult.AsInt));
+    begin Move(AData[0], Signed8, SizeOf(Signed8)); Result := TGocciaNumberLiteralValue.Create(Signed8); end;
     fftU8:
-      Result := TGocciaNumberLiteralValue.Create(Byte(CallResult.AsInt));
+    begin Move(AData[0], Unsigned8, SizeOf(Unsigned8)); Result := TGocciaNumberLiteralValue.Create(Unsigned8); end;
+    fftI16:
+    begin Move(AData[0], Signed16, SizeOf(Signed16)); Result := TGocciaNumberLiteralValue.Create(Signed16); end;
     fftU16:
-      Result := TGocciaNumberLiteralValue.Create(Word(CallResult.AsInt));
+    begin Move(AData[0], Unsigned16, SizeOf(Unsigned16)); Result := TGocciaNumberLiteralValue.Create(Unsigned16); end;
+    fftI32:
+    begin Move(AData[0], Signed32, SizeOf(Signed32)); Result := TGocciaNumberLiteralValue.Create(Signed32); end;
     fftU32:
-      Result := TGocciaNumberLiteralValue.Create(LongWord(CallResult.AsInt));
+    begin Move(AData[0], Unsigned32, SizeOf(Unsigned32)); Result := TGocciaNumberLiteralValue.Create(Unsigned32); end;
+    fftI64:
+    begin Move(AData[0], Signed64, SizeOf(Signed64)); Result := TGocciaNumberLiteralValue.Create(Signed64); end;
     fftU64:
-      Result := TGocciaNumberLiteralValue.Create(QWord(CallResult.AsInt));
+    begin Move(AData[0], Unsigned64, SizeOf(Unsigned64)); Result := TGocciaNumberLiteralValue.Create(Unsigned64); end;
     fftF32:
-      Result := TGocciaNumberLiteralValue.Create(CallResult.AsSingle);
+    begin Move(AData[0], Float32, SizeOf(Float32)); Result := TGocciaNumberLiteralValue.Create(Float32); end;
     fftF64:
-      Result := TGocciaNumberLiteralValue.Create(CallResult.AsDouble);
+    begin Move(AData[0], Float64, SizeOf(Float64)); Result := TGocciaNumberLiteralValue.Create(Float64); end;
     fftPointer:
-      Result := TGocciaFFIPointerValue.Create(Pointer(CallResult.AsInt));
+    begin
+      PointerValue := nil;
+      Move(AData[0], PointerValue, SizeOf(Pointer));
+      if Assigned(ALibraryGuard) and ALibraryGuard.IsClosed then
+        ThrowTypeError(SErrorFFIPointerLibraryClosed, SSuggestFFIUsage);
+      Result := TGocciaFFIPointerValue.Create(PointerValue, ALibraryGuard);
+    end;
     fftCString:
     begin
-      if CallResult.AsInt = 0 then
-        Result := TGocciaNullLiteralValue.NullValue
+      PointerValue := nil;
+      Move(AData[0], PointerValue, SizeOf(Pointer));
+      if Assigned(PointerValue) then
+        Result := TGocciaStringLiteralValue.Create(string(PAnsiChar(PointerValue)))
       else
-        Result := TGocciaStringLiteralValue.Create(string(PAnsiChar(CallResult.AsInt)));
+        Result := TGocciaNullLiteralValue.NullValue;
     end;
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+end;
+
+function TGocciaFFIBoundFunctionValue.Invoke(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  NativeArguments: array of TBytes;
+  NativeResult: TBytes;
+  TemporaryStrings: array of AnsiString;
+  Callbacks: array of TGocciaFFICallbackValue;
+  TemporaryCallbacks: array of Boolean;
+  CallContext: TGocciaFFICallContext;
+  CallContextActive: Boolean;
+  I: Integer;
+begin
+  if FLibraryGuard.IsClosed then
+    ThrowTypeError(Format(SErrorFFICallLibraryClosed, [FName]),
+      SSuggestFFIUsage);
+  if AArgs.Length < FSignature.ArgumentCount then
+    ThrowTypeError(Format(SErrorFFIFuncArgCount,
+      [FName, FSignature.ArgumentCount, AArgs.Length]), SSuggestFFIUsage);
+
+  SetLength(NativeArguments, FSignature.ArgumentCount);
+  SetLength(TemporaryStrings, FSignature.ArgumentCount);
+  SetLength(Callbacks, FSignature.ArgumentCount);
+  SetLength(TemporaryCallbacks, FSignature.ArgumentCount);
+  try
+    for I := 0 to FSignature.ArgumentCount - 1 do
+      NativeArguments[I] := MarshalFFIValue(
+        FSignature.Arguments[I].TypeDescriptor, AArgs.GetElement(I), I,
+        TemporaryStrings[I], Callbacks[I], TemporaryCallbacks[I]);
+    if FLibraryGuard.IsClosed then
+      ThrowTypeError(Format(SErrorFFICallLibraryClosed, [FName]),
+        SSuggestFFIUsage);
+
+    BeginFFICallContext(CallContext);
+    CallContextActive := True;
+    try
+      try
+        FFIInvokeCompiled(FSymbol, FSignature, NativeArguments, NativeResult);
+      finally
+        try
+          FinishFFICallContext(CallContext);
+        finally
+          CallContextActive := False;
+        end;
+      end;
+      if ConsumeFFICallbackThreadViolationsForCurrentThread then
+        ThrowTypeError(SErrorFFICallbackForeignThread,
+          SSuggestFFIUsage);
+      for I := 0 to High(Callbacks) do
+        if Assigned(Callbacks[I]) then Callbacks[I].EnsureOpen;
+      Result := UnmarshalFFIValue(FSignature.ReturnPlan.TypeDescriptor,
+        NativeResult, FLibraryGuard);
+    finally
+      if CallContextActive then CancelFFICallContext(CallContext);
+    end;
+  finally
+    for I := 0 to High(Callbacks) do
+      if TemporaryCallbacks[I] and Assigned(Callbacks[I]) then
+        Callbacks[I].CloseForFFICallCleanup;
   end;
 end;
 
@@ -464,42 +444,56 @@ end;
 // TGocciaFFILibraryValue
 // ==========================================================================
 
-constructor TGocciaFFILibraryValue.Create(const AHandle: TGocciaFFILibraryHandle);
+constructor TGocciaFFILibraryValue.Create(
+  const ALibraryGuard: TGocciaFFILibraryGuard);
 var
   Shared: TGocciaSharedPrototype;
 begin
   inherited Create;
-  FHandle := AHandle;
   InitializePrototype;
   Shared := GetFFILibraryShared;
   if Assigned(Shared) then
     FPrototype := Shared.Prototype;
+  FLibraryGuard := ALibraryGuard;
+end;
+
+constructor TGocciaFFILibraryValue.CreatePrototypeHost;
+begin
+  inherited Create;
 end;
 
 destructor TGocciaFFILibraryValue.Destroy;
 begin
-  FHandle.Free;
+  if Assigned(FLibraryGuard) then
+    FLibraryGuard.ReleaseOwner;
   inherited;
 end;
 
 procedure TGocciaFFILibraryValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  MethodHost: TGocciaFFILibraryValue;
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetFFILibraryShared) then Exit;
 
-  Shared := TGocciaSharedPrototype.Create(Self);
+  MethodHost := TGocciaFFILibraryValue.CreatePrototypeHost;
+  Shared := TGocciaSharedPrototype.Create(MethodHost);
   CurrentRealm.SetOwnedSlot(GFFILibrarySharedSlot, Shared);
   Members := TGocciaMemberCollection.Create;
   try
-    Members.AddNamedMethod('bind', Bind, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-    Members.AddNamedMethod('symbol', Symbol, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-    Members.AddNamedMethod('close', Close, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-    Members.AddAccessor(PROP_FFI_PATH, PathGetter, nil, [pfConfigurable]);
-    Members.AddAccessor(PROP_FFI_CLOSED, ClosedGetter, nil, [pfConfigurable]);
+    Members.AddNamedMethod('bind', MethodHost.Bind, 2, gmkPrototypeMethod,
+      [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('symbol', MethodHost.Symbol, 1,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('close', MethodHost.Close, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddAccessor(PROP_FFI_PATH, MethodHost.PathGetter, nil,
+      [pfConfigurable]);
+    Members.AddAccessor(PROP_FFI_CLOSED, MethodHost.ClosedGetter, nil,
+      [pfConfigurable]);
     Members.AddSymbolDataProperty(
       TGocciaSymbolValue.WellKnownToStringTag,
       TGocciaStringLiteralValue.Create(FFI_LIBRARY_TAG),
@@ -524,10 +518,10 @@ end;
 function TGocciaFFILibraryValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 begin
   if AName = PROP_FFI_PATH then
-    Result := TGocciaStringLiteralValue.Create(FHandle.Path)
+    Result := TGocciaStringLiteralValue.Create(FLibraryGuard.Path)
   else if AName = PROP_FFI_CLOSED then
   begin
-    if FHandle.IsClosed then
+    if FLibraryGuard.IsClosed then
       Result := TGocciaBooleanLiteralValue.TrueValue
     else
       Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -549,15 +543,16 @@ end;
 
 // -- Prototype methods ------------------------------------------------------
 
-function ParseSignatureFromArgs(const AArgs: TGocciaArgumentsCollection; const AFuncName: string): TGocciaFFISignature;
+function ParseSignatureFromArgs(const AArgs: TGocciaArgumentsCollection;
+  const AFuncName: string): TGocciaFFICompiledSignature;
 var
   SigObj: TGocciaObjectValue;
   ArgsField, ReturnsField: TGocciaValue;
   ArgsArray: TGocciaArrayValue;
-  ReturnStr: string;
-  I: Integer;
-  TypeName: string;
-  ValidationError: string;
+  ArgumentTypes: array of TGocciaFFITypeDescriptor;
+  ReturnType: TGocciaFFITypeDescriptor;
+  I, J: Integer;
+  HasF32, HasOtherArgumentType: Boolean;
 begin
   if AArgs.Length < 2 then
     ThrowTypeError(SErrorFFIBindRequiresNameAndSig, SSuggestFFIUsage);
@@ -566,79 +561,90 @@ begin
     ThrowTypeError(SErrorFFIBindSigObject, SSuggestFFIUsage);
 
   SigObj := TGocciaObjectValue(AArgs.GetElement(1));
-
-  // Parse args array
-  ArgsField := SigObj.GetProperty('args');
-  if ArgsField is TGocciaArrayValue then
-  begin
-    ArgsArray := TGocciaArrayValue(ArgsField);
-    Result.ArgCount := ArgsArray.Elements.Count;
-    SetLength(Result.ArgTypes, Result.ArgCount);
-    for I := 0 to Result.ArgCount - 1 do
+  ReturnType := nil;
+  try
+    ArgsField := SigObj.GetProperty('args');
+    if ArgsField is TGocciaArrayValue then
     begin
-      TypeName := ArgsArray.Elements[I].ToStringLiteral.Value;
-      Result.ArgTypes[I] := ParseFFIType(TypeName);
-      if (Result.ArgTypes[I] = fftVoid) and (TypeName <> FFI_TYPE_VOID) then
-        ThrowTypeError(Format(SErrorFFIUnknownType, [TypeName]), SSuggestFFIUsage);
-      if Result.ArgTypes[I] = fftVoid then
-        ThrowTypeError(SErrorFFIVoidNotValidArg, SSuggestFFIUsage);
+      ArgsArray := TGocciaArrayValue(ArgsField);
+      if ArgsArray.Elements.Count > MAX_FFI_ARGS then
+        ThrowTypeError(Format(SErrorFFIMaxArguments, [MAX_FFI_ARGS]),
+          SSuggestFFIUsage);
+      SetLength(ArgumentTypes, ArgsArray.Elements.Count);
+      for I := 0 to ArgsArray.Elements.Count - 1 do
+        ArgumentTypes[I] := ParseFFITypeDescriptorValue(
+          ArgsArray.Elements[I], False);
+      HasF32 := False;
+      HasOtherArgumentType := False;
+      for I := 0 to High(ArgumentTypes) do
+        if (ArgumentTypes[I].Kind = ftkScalar) and
+           (ArgumentTypes[I].ScalarType = fftF32) then
+          HasF32 := True
+        else
+          HasOtherArgumentType := True;
+      if HasF32 and HasOtherArgumentType then
+        ThrowTypeError(SErrorFFIMixedF32Arguments, SSuggestFFIUsage);
+    end
+    else if (ArgsField = nil) or
+            (ArgsField is TGocciaUndefinedLiteralValue) then
+      SetLength(ArgumentTypes, 0)
+    else
+      ThrowTypeError(SErrorFFISigArgsMustBeArray, SSuggestFFIUsage);
+
+    ReturnsField := SigObj.GetProperty('returns');
+    if (ReturnsField = nil) or
+       (ReturnsField is TGocciaUndefinedLiteralValue) then
+      ReturnType := TGocciaFFITypeDescriptor.CreateScalar(fftVoid)
+    else
+      ReturnType := ParseFFITypeDescriptorValue(ReturnsField, True);
+    try
+      Result := TGocciaFFICompiledSignature.Create(CurrentFFIABI,
+        ArgumentTypes, ReturnType);
+    except
+      on E: EArgumentOutOfRangeException do
+        ThrowRangeError(SErrorFFICallLayoutLimit, SSuggestFFIUsage);
+      on E: EArgumentException do
+        ThrowTypeError(SErrorFFIInvalidCompiledSignature,
+          SSuggestFFIUsage);
     end;
-  end
-  else if (ArgsField = nil) or (ArgsField is TGocciaUndefinedLiteralValue) then
-  begin
-    Result.ArgCount := 0;
-    SetLength(Result.ArgTypes, 0);
-  end
-  else
-    ThrowTypeError(SErrorFFISigArgsMustBeArray, SSuggestFFIUsage);
-
-  // Parse return type
-  ReturnsField := SigObj.GetProperty('returns');
-  if ReturnsField is TGocciaStringLiteralValue then
-  begin
-    ReturnStr := TGocciaStringLiteralValue(ReturnsField).Value;
-    Result.ReturnType := ParseFFIType(ReturnStr);
-    if (Result.ReturnType = fftVoid) and (ReturnStr <> FFI_TYPE_VOID) then
-      ThrowTypeError(Format(SErrorFFIUnknownReturnType, [ReturnStr]), SSuggestFFIUsage);
-  end
-  else if (ReturnsField = nil) or (ReturnsField is TGocciaUndefinedLiteralValue) then
-    Result.ReturnType := fftVoid
-  else
-    ThrowTypeError(SErrorFFISigReturnsMustBeString, SSuggestFFIUsage);
-
-  // Validate
-  ValidationError := ValidateSignature(Result);
-  if ValidationError <> '' then
-    ThrowTypeError(ValidationError, SSuggestFFIUsage);
+  finally
+    if Assigned(ReturnType) then ReturnType.ReleaseReference;
+    for J := 0 to High(ArgumentTypes) do
+      if Assigned(ArgumentTypes[J]) then
+        ArgumentTypes[J].ReleaseReference;
+  end;
 end;
 
 function TGocciaFFILibraryValue.Bind(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Lib: TGocciaFFILibraryValue;
   FuncName: string;
-  Sig: TGocciaFFISignature;
+  Sig: TGocciaFFICompiledSignature;
   SymbolPtr: CodePointer;
-  BoundFunc: TGocciaFFIBoundFunction;
 begin
   if not (AThisValue is TGocciaFFILibraryValue) then
     ThrowTypeError(SErrorFFIBindRequiresLibrary, SSuggestFFILibraryOpen);
   Lib := TGocciaFFILibraryValue(AThisValue);
 
-  if Lib.FHandle.IsClosed then
+  if Lib.FLibraryGuard.IsClosed then
     ThrowTypeError(SErrorFFIBindLibraryClosed, SSuggestFFILibraryOpen);
 
   FuncName := AArgs.GetElement(0).ToStringLiteral.Value;
   Sig := ParseSignatureFromArgs(AArgs, FuncName);
 
   try
-    SymbolPtr := Lib.FHandle.FindSymbol(FuncName);
+    try
+      SymbolPtr := Lib.FLibraryGuard.FindSymbol(FuncName);
+    except
+      on E: Exception do
+        ThrowTypeError(E.Message, SSuggestFFIUsage);
+    end;
+    Result := TGocciaFFIBoundFunctionValue.Create(SymbolPtr, Sig, FuncName,
+      Lib.FLibraryGuard);
   except
-    on E: Exception do
-      ThrowTypeError(E.Message, SSuggestFFIUsage);
+    Sig.Free;
+    raise;
   end;
-  BoundFunc := TGocciaFFIBoundFunction.Create(SymbolPtr, Sig, FuncName);
-  Result := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    BoundFunc.Call, FuncName, Sig.ArgCount);
 end;
 
 function TGocciaFFILibraryValue.Symbol(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -651,7 +657,7 @@ begin
     ThrowTypeError(SErrorFFISymbolRequiresLibrary, SSuggestFFILibraryOpen);
   Lib := TGocciaFFILibraryValue(AThisValue);
 
-  if Lib.FHandle.IsClosed then
+  if Lib.FLibraryGuard.IsClosed then
     ThrowTypeError(SErrorFFISymbolLibraryClosed, SSuggestFFILibraryOpen);
 
   if AArgs.Length < 1 then
@@ -659,12 +665,13 @@ begin
 
   SymName := AArgs.GetElement(0).ToStringLiteral.Value;
   try
-    SymPtr := Lib.FHandle.FindSymbol(SymName);
+    SymPtr := Lib.FLibraryGuard.FindSymbol(SymName);
   except
     on E: Exception do
       ThrowTypeError(E.Message, SSuggestFFIUsage);
   end;
-  Result := TGocciaFFIPointerValue.Create(Pointer(SymPtr));
+  Result := TGocciaFFIPointerValue.Create(Pointer(SymPtr),
+    Lib.FLibraryGuard);
 end;
 
 function TGocciaFFILibraryValue.Close(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -674,7 +681,7 @@ begin
   if not (AThisValue is TGocciaFFILibraryValue) then
     ThrowTypeError(SErrorFFICloseRequiresLibrary, SSuggestFFILibraryOpen);
   Lib := TGocciaFFILibraryValue(AThisValue);
-  Lib.FHandle.Close;
+  Lib.FLibraryGuard.Close;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -683,14 +690,14 @@ begin
   if not (AThisValue is TGocciaFFILibraryValue) then
     ThrowTypeError(SErrorFFIPathRequiresLibrary, SSuggestFFILibraryOpen);
   Result := TGocciaStringLiteralValue.Create(
-    TGocciaFFILibraryValue(AThisValue).FHandle.Path);
+    TGocciaFFILibraryValue(AThisValue).FLibraryGuard.Path);
 end;
 
 function TGocciaFFILibraryValue.ClosedGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaFFILibraryValue) then
     ThrowTypeError(SErrorFFIClosedRequiresLibrary, SSuggestFFILibraryOpen);
-  if TGocciaFFILibraryValue(AThisValue).FHandle.IsClosed then
+  if TGocciaFFILibraryValue(AThisValue).FLibraryGuard.IsClosed then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;

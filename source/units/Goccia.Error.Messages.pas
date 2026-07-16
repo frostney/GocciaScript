@@ -372,12 +372,55 @@ resourcestring
   SErrorFFISigReturnsMustBeString = 'signature returns must be a type string';
   SErrorFFIBindRequiresLibrary = 'bind requires an FFILibrary';
   SErrorFFIBindLibraryClosed = 'Cannot bind from a closed library';
+  SErrorFFICallLibraryClosed = 'Cannot call FFI function %s from a closed library';
   SErrorFFISymbolRequiresLibrary = 'symbol requires an FFILibrary';
   SErrorFFISymbolLibraryClosed = 'Cannot look up symbol in a closed library';
   SErrorFFISymbolRequiresName = 'symbol requires a symbol name';
   SErrorFFICloseRequiresLibrary = 'close requires an FFILibrary';
   SErrorFFIPathRequiresLibrary = 'FFILibrary.path requires an FFILibrary';
   SErrorFFIClosedRequiresLibrary = 'FFILibrary.closed requires an FFILibrary';
+  SErrorFFIStructRequiresDefinition = 'FFI.struct requires a field definition object';
+  SErrorFFIUnionRequiresDefinition = 'FFI.union requires a field definition object';
+  SErrorFFIArrayRequiresTypeAndLength = 'FFI.array requires an element type and length';
+  SErrorFFICallbackRequiresDefinition = 'FFI.callback requires a signature definition object';
+  SErrorFFITypeDescriptorExpected = 'FFI type must be a type name or FFI type descriptor';
+  SErrorFFIVoidReturnOnly = 'void is only valid as an FFI return type';
+  SErrorFFI64BitType32Bit = 'i64/u64 FFI types are not supported on 32-bit platforms';
+  SErrorFFIAggregateDefinitionObject = 'FFI aggregate definition must be an object';
+  SErrorFFIAggregateDefinitionEmpty = 'FFI aggregate definition must contain at least one field';
+  SErrorFFIAggregateFieldReserved = 'FFI aggregate field name is reserved: %s';
+  SErrorFFIArrayLengthPositive = 'FFI array length must be a positive integer';
+  SErrorFFICallbackDefinitionObject = 'FFI callback definition must be an object';
+  SErrorFFIMaxCallbackArguments = 'FFI supports a maximum of %d callback arguments';
+  SErrorFFICallbackArgsArray = 'FFI callback args must be an array';
+  SErrorFFICallbackCreateCallable = 'FFI callback creation requires a callable value';
+  SErrorFFITypeCannotCreateValue = 'Only aggregate and callback FFI types can create values';
+  SErrorFFIAggregateFieldValue = 'FFI aggregate field requires a matching aggregate value';
+  SErrorFFIAggregateFieldType = 'FFI aggregate field type does not match';
+  SErrorFFICallbackFieldHandle = 'FFI callback fields require a persistent callback handle';
+  SErrorFFICallbackFieldType = 'FFI callback field type does not match';
+  SErrorFFIPointerFieldValue = 'FFI pointer field requires an FFIPointer or null';
+  SErrorFFIVoidAggregateStorage = 'void cannot be stored in an FFI aggregate';
+  SErrorFFIAggregateInitializer = 'FFI aggregate initializer must be an object or array';
+  SErrorFFIAggregateArgumentValue = 'FFI aggregate argument requires a matching aggregate value';
+  SErrorFFIAggregateArgumentType = 'FFI aggregate argument type does not match signature';
+  SErrorFFICallbackArgumentValue = 'FFI callback argument requires a callable value or callback handle';
+  SErrorFFICallbackArgumentType = 'FFI callback argument type does not match signature';
+  SErrorFFIMaxArguments = 'FFI supports a maximum of %d arguments';
+  SErrorFFIMixedF32Arguments = 'f32 arguments cannot be mixed with other types. Use f64 instead, or keep all arguments f32';
+  SErrorFFICallbackAggregateReturn = 'FFI callback returned the wrong aggregate type';
+  SErrorFFICallbackHandleReturn = 'FFI callback return requires an FFICallback handle';
+  SErrorFFICallbackReturnType = 'FFI callback return type does not match signature';
+  SErrorFFICallbackPointerReturn = 'FFI callback pointer return requires FFIPointer or null';
+  SErrorFFICallbackCStringReturn = 'FFI callback cannot return cstring';
+  SErrorFFICallbackRequiresCallable = 'FFICallback requires a callback type and callable value';
+  SErrorFFICallbackCloseReceiver = 'FFICallback.close requires an FFICallback';
+  SErrorFFICallbackForeignThread = 'FFI callback was invoked from a foreign runtime thread';
+  SErrorFFICallbackClosed = 'Cannot use a closed FFI callback';
+  SErrorFFICallbackSlotLimit = 'FFI supports a maximum of %d active callbacks per process';
+  SErrorFFIAggregateBackingStore = 'FFI aggregate backing ArrayBuffer is detached or out of bounds';
+  SErrorFFICallLayoutLimit = 'FFI signature exceeds the native call layout limit';
+  SErrorFFIInvalidCompiledSignature = 'FFI signature is not valid for the current platform ABI';
 
   // URLSearchParams errors
   SErrorURLSearchParamsNotSequence = 'Failed to construct URLSearchParams: The provided value cannot be converted to a sequence';
@@ -631,6 +674,7 @@ resourcestring
 
   // FFIPointer errors
   SErrorFFIPointerRequiresFFIPointer = 'FFIPointer.%s requires an FFIPointer';
+  SErrorFFIPointerLibraryClosed = 'Cannot use an FFI pointer from a closed library';
 
   // Performance errors
   SErrorPerformanceIncompatibleReceiver = 'Method Performance called on incompatible receiver';

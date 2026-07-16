@@ -15,7 +15,16 @@ unit Goccia.FFI.Call;
 interface
 
 uses
+  SysUtils,
+
+  Goccia.FFI.ABI,
   Goccia.FFI.Types;
+
+procedure FFIInvokeCompiled(
+  const AFunc: CodePointer;
+  const APlan: TGocciaFFICompiledSignature;
+  const AArguments: array of TBytes;
+  out AResult: TBytes);
 
 procedure FFIDispatchCall(
   const AFunc: CodePointer;
@@ -528,5 +537,475 @@ begin
       end;
   end;
 end;
+
+// ===========================================================================
+// Generalized descriptor-driven call frame
+// ===========================================================================
+
+type
+  {$IFDEF CPU64}
+  {$PUSH}{$PACKRECORDS 8}
+  TGocciaFFIMachineState = record
+    FuncPtr: CodePointer;             //   0
+    GPR: array[0..7] of QWord;        //   8
+    FPR: array[0..7] of QWord;        //  72
+    StackData: Pointer;               // 136
+    StackSize: PtrUInt;               // 144
+    HiddenResult: Pointer;            // 152
+    RetGPR: array[0..1] of QWord;     // 160
+    RetFPR: array[0..3] of QWord;     // 176
+  end;
+  {$POP}
+  {$ELSE}
+  {$PUSH}{$PACKRECORDS 4}
+  TGocciaFFIMachineState = record
+    FuncPtr: CodePointer;             //  0
+    StackData: Pointer;               //  4
+    StackSize: LongWord;              //  8
+    RetGPR: array[0..1] of LongWord;  // 12
+    RetFPR: QWord;                    // 20
+    ReturnFloatSize: LongWord;        // 28
+  end;
+  {$POP}
+  {$ENDIF}
+
+{$IFDEF CPU64}
+{$IFDEF CPUX86_64}
+{$ASMMODE ATT}
+{$IFDEF MSWINDOWS}
+procedure FFIInvokeMachine(var AState: TGocciaFFIMachineState); assembler; nostackframe;
+asm
+  pushq %rbx
+  pushq %rsi
+  pushq %rdi
+  pushq %r12
+  movq %rcx, %rbx
+
+  movq 144(%rbx), %r12
+  addq $40, %r12
+  subq %r12, %rsp
+
+  movq 136(%rbx), %rsi
+  leaq 32(%rsp), %rdi
+  movq 144(%rbx), %rcx
+  rep movsb
+
+  movq 0(%rbx), %r11
+  movq 8(%rbx), %rcx
+  movq 16(%rbx), %rdx
+  movq 24(%rbx), %r8
+  movq 32(%rbx), %r9
+  movq 72(%rbx), %xmm0
+  movq 80(%rbx), %xmm1
+  movq 88(%rbx), %xmm2
+  movq 96(%rbx), %xmm3
+  call *%r11
+
+  movq %rax, 160(%rbx)
+  movq %rdx, 168(%rbx)
+  movq %xmm0, 176(%rbx)
+  movq %xmm1, 184(%rbx)
+
+  addq %r12, %rsp
+  popq %r12
+  popq %rdi
+  popq %rsi
+  popq %rbx
+  ret
+end;
+{$ELSE}
+procedure FFIInvokeMachine(var AState: TGocciaFFIMachineState); assembler; nostackframe;
+asm
+  pushq %rbx
+  pushq %r12
+  movq %rdi, %rbx
+
+  movq 144(%rbx), %r12
+  addq $8, %r12
+  subq %r12, %rsp
+
+  movq 136(%rbx), %rsi
+  movq %rsp, %rdi
+  movq 144(%rbx), %rcx
+  rep movsb
+
+  movq 0(%rbx), %r11
+  movq 72(%rbx), %xmm0
+  movq 80(%rbx), %xmm1
+  movq 88(%rbx), %xmm2
+  movq 96(%rbx), %xmm3
+  movq 104(%rbx), %xmm4
+  movq 112(%rbx), %xmm5
+  movq 120(%rbx), %xmm6
+  movq 128(%rbx), %xmm7
+  movq 8(%rbx), %rdi
+  movq 16(%rbx), %rsi
+  movq 24(%rbx), %rdx
+  movq 32(%rbx), %rcx
+  movq 40(%rbx), %r8
+  movq 48(%rbx), %r9
+  movb $8, %al
+  call *%r11
+
+  movq %rax, 160(%rbx)
+  movq %rdx, 168(%rbx)
+  movq %xmm0, 176(%rbx)
+  movq %xmm1, 184(%rbx)
+
+  addq %r12, %rsp
+  popq %r12
+  popq %rbx
+  ret
+end;
+{$ENDIF}
+{$ENDIF}
+
+{$IFDEF CPUAARCH64}
+procedure FFIInvokeMachine(var AState: TGocciaFFIMachineState); assembler; nostackframe;
+asm
+  sub sp, sp, #32
+  stp x19, x20, [sp]
+  str x30, [sp, #16]
+  mov x19, x0
+
+  ldr x20, [x19, #144]
+  sub sp, sp, x20
+  ldr x9, [x19, #136]
+  mov x10, sp
+  mov x11, x20
+.Lffi_copy_stack:
+  cbz x11, .Lffi_stack_ready
+  ldr x12, [x9], #8
+  str x12, [x10], #8
+  sub x11, x11, #8
+  b .Lffi_copy_stack
+.Lffi_stack_ready:
+  ldr x16, [x19, #0]
+  ldr x8, [x19, #152]
+  ldr d0, [x19, #72]
+  ldr d1, [x19, #80]
+  ldr d2, [x19, #88]
+  ldr d3, [x19, #96]
+  ldr d4, [x19, #104]
+  ldr d5, [x19, #112]
+  ldr d6, [x19, #120]
+  ldr d7, [x19, #128]
+  ldr x0, [x19, #8]
+  ldr x1, [x19, #16]
+  ldr x2, [x19, #24]
+  ldr x3, [x19, #32]
+  ldr x4, [x19, #40]
+  ldr x5, [x19, #48]
+  ldr x6, [x19, #56]
+  ldr x7, [x19, #64]
+  blr x16
+
+  str x0, [x19, #160]
+  str x1, [x19, #168]
+  str d0, [x19, #176]
+  str d1, [x19, #184]
+  str d2, [x19, #192]
+  str d3, [x19, #200]
+
+  add sp, sp, x20
+  ldr x30, [sp, #16]
+  ldp x19, x20, [sp]
+  add sp, sp, #32
+  ret
+end;
+{$ENDIF}
+{$ENDIF CPU64}
+
+{$IFDEF CPUI386}
+{$ASMMODE ATT}
+procedure FFIInvokeMachine(var AState: TGocciaFFIMachineState); assembler; nostackframe;
+asm
+  pushl %ebx
+  pushl %esi
+  pushl %edi
+  movl %eax, %ebx
+
+  movl 8(%ebx), %ecx
+{$IFDEF MSWINDOWS}
+  testl %ecx, %ecx
+  je .Lffi_stack_ready
+  movl %ecx, %edx
+.Lffi_probe_page:
+  cmpl $4096, %edx
+  jbe .Lffi_probe_tail
+  subl $4096, %esp
+  testb $0, (%esp)
+  subl $4096, %edx
+  jmp .Lffi_probe_page
+.Lffi_probe_tail:
+  subl %edx, %esp
+  testb $0, (%esp)
+.Lffi_stack_ready:
+{$ELSE}
+  subl %ecx, %esp
+{$ENDIF}
+  movl 4(%ebx), %esi
+  movl %esp, %edi
+  movl 8(%ebx), %ecx
+  rep movsb
+
+  call *(%ebx)
+  movl %eax, 12(%ebx)
+  movl %edx, 16(%ebx)
+  cmpl $4, 28(%ebx)
+  je .Lffi_store_single
+  cmpl $8, 28(%ebx)
+  je .Lffi_store_double
+  jmp .Lffi_return_stored
+.Lffi_store_single:
+  fstps 20(%ebx)
+  jmp .Lffi_return_stored
+.Lffi_store_double:
+  fstpl 20(%ebx)
+.Lffi_return_stored:
+  movl 8(%ebx), %ecx
+  addl %ecx, %esp
+  popl %edi
+  popl %esi
+  popl %ebx
+  ret
+end;
+{$ENDIF}
+
+procedure ValidateMachineStateLayout;
+var
+  State: TGocciaFFIMachineState;
+  Base: PtrUInt;
+begin
+  Base := PtrUInt(@State);
+  {$IFDEF CPU64}
+  if (PtrUInt(@State.GPR[0]) - Base <> 8) or
+     (PtrUInt(@State.FPR[0]) - Base <> 72) or
+     (PtrUInt(@State.StackData) - Base <> 136) or
+     (PtrUInt(@State.StackSize) - Base <> 144) or
+     (PtrUInt(@State.HiddenResult) - Base <> 152) or
+     (PtrUInt(@State.RetGPR[0]) - Base <> 160) or
+     (PtrUInt(@State.RetFPR[0]) - Base <> 176) then
+    raise EInvalidOpException.Create('FFI 64-bit machine-state layout mismatch');
+  {$ELSE}
+  if (PtrUInt(@State.StackData) - Base <> 4) or
+     (PtrUInt(@State.StackSize) - Base <> 8) or
+     (PtrUInt(@State.RetGPR[0]) - Base <> 12) or
+     (PtrUInt(@State.RetFPR) - Base <> 20) or
+     (PtrUInt(@State.ReturnFloatSize) - Base <> 28) then
+    raise EInvalidOpException.Create('FFI i386 machine-state layout mismatch');
+  {$ENDIF}
+end;
+
+procedure CopyToPlacement(var AState: TGocciaFFIMachineState;
+  var AStackData: TBytes; const APlacement: TGocciaFFIPlacement;
+  const ASource; const ASize: Integer);
+begin
+  case APlacement.Kind of
+    fpkGPR:
+      {$IFDEF CPU64}
+      Move(ASource, AState.GPR[APlacement.RegisterIndex], ASize)
+      {$ELSE}
+      raise EInvalidOpException.Create('i386 arguments cannot use GPR placements')
+      {$ENDIF};
+    fpkFPR:
+      {$IFDEF CPU64}
+      Move(ASource, AState.FPR[APlacement.RegisterIndex], ASize)
+      {$ELSE}
+      raise EInvalidOpException.Create('i386 arguments cannot use FPR placements')
+      {$ENDIF};
+    fpkStack:
+      Move(ASource, AStackData[APlacement.StackOffset], ASize);
+  end;
+end;
+
+procedure CopyDarwinARM64ScalarArgumentToPlacement(
+  var AState: TGocciaFFIMachineState; var AStackData: TBytes;
+  const APlacement: TGocciaFFIPlacement;
+  const AType: TGocciaFFITypeDescriptor; const ASource);
+var
+  BooleanValue: Byte;
+  Signed8: ShortInt;
+  Signed16: SmallInt;
+  Signed32: LongInt;
+  Unsigned8: Byte;
+  Unsigned16: Word;
+  Unsigned32: LongWord;
+begin
+  if (APlacement.Kind <> fpkGPR) or
+     (AType.Kind <> ftkScalar) then
+  begin
+    CopyToPlacement(AState, AStackData, APlacement, ASource,
+      APlacement.Size);
+    Exit;
+  end;
+
+  case AType.ScalarType of
+    fftBool:
+    begin
+      Move(ASource, BooleanValue, SizeOf(BooleanValue));
+      if BooleanValue <> 0 then
+        Unsigned32 := 1
+      else
+        Unsigned32 := 0;
+      CopyToPlacement(AState, AStackData, APlacement, Unsigned32,
+        SizeOf(Unsigned32));
+    end;
+    fftI8:
+    begin
+      Move(ASource, Signed8, SizeOf(Signed8));
+      Signed32 := Signed8;
+      CopyToPlacement(AState, AStackData, APlacement, Signed32,
+        SizeOf(Signed32));
+    end;
+    fftI16:
+    begin
+      Move(ASource, Signed16, SizeOf(Signed16));
+      Signed32 := Signed16;
+      CopyToPlacement(AState, AStackData, APlacement, Signed32,
+        SizeOf(Signed32));
+    end;
+    fftU8:
+    begin
+      Move(ASource, Unsigned8, SizeOf(Unsigned8));
+      Unsigned32 := Unsigned8;
+      CopyToPlacement(AState, AStackData, APlacement, Unsigned32,
+        SizeOf(Unsigned32));
+    end;
+    fftU16:
+    begin
+      Move(ASource, Unsigned16, SizeOf(Unsigned16));
+      Unsigned32 := Unsigned16;
+      CopyToPlacement(AState, AStackData, APlacement, Unsigned32,
+        SizeOf(Unsigned32));
+    end;
+  else
+    CopyToPlacement(AState, AStackData, APlacement, ASource,
+      APlacement.Size);
+  end;
+end;
+
+procedure FFIInvokeCompiled(const AFunc: CodePointer;
+  const APlan: TGocciaFFICompiledSignature;
+  const AArguments: array of TBytes; out AResult: TBytes);
+var
+  State: TGocciaFFIMachineState;
+  StackData, ScratchData, PointerBytes: TBytes;
+  ArgumentPlan: TGocciaFFIArgumentPlan;
+  ReturnPlan: TGocciaFFIReturnPlan;
+  Placement: TGocciaFFIPlacement;
+  IndirectPointer: Pointer;
+  I, J, CopySize: Integer;
+begin
+  if Length(AArguments) <> APlan.ArgumentCount then
+    raise EArgumentException.Create('FFI native argument count does not match plan');
+  FillChar(State, SizeOf(State), 0);
+  State.FuncPtr := AFunc;
+  SetLength(StackData, APlan.StackSize);
+  if Length(StackData) > 0 then
+    FillChar(StackData[0], Length(StackData), 0);
+  SetLength(ScratchData, APlan.ScratchSize);
+  if Length(ScratchData) > 0 then
+    FillChar(ScratchData[0], Length(ScratchData), 0);
+  SetLength(PointerBytes, SizeOf(Pointer));
+
+  ReturnPlan := APlan.ReturnPlan;
+  SetLength(AResult, ReturnPlan.TypeDescriptor.Size);
+  if Length(AResult) > 0 then
+    FillChar(AResult[0], Length(AResult), 0);
+  if ReturnPlan.UsesHiddenPointer then
+  begin
+    if Length(AResult) = 0 then
+      raise EInvalidOpException.Create('FFI hidden return has no storage');
+    case APlan.ABI of
+      fabiSysVX64, fabiWin64:
+        {$IFDEF CPU64}
+        State.GPR[0] := QWord(PtrUInt(@AResult[0]))
+        {$ELSE}
+        raise EInvalidOpException.Create('64-bit FFI plan on i386')
+        {$ENDIF};
+      fabiAAPCS64, fabiDarwinARM64:
+        {$IFDEF CPU64}
+        State.HiddenResult := @AResult[0]
+        {$ELSE}
+        raise EInvalidOpException.Create('ARM64 FFI plan on i386')
+        {$ENDIF};
+      fabiI386Win:
+      begin
+        IndirectPointer := @AResult[0];
+        Move(IndirectPointer, StackData[0], SizeOf(Pointer));
+      end;
+    end;
+  end;
+
+  for I := 0 to APlan.ArgumentCount - 1 do
+  begin
+    ArgumentPlan := APlan.Arguments[I];
+    if Length(AArguments[I]) < ArgumentPlan.TypeDescriptor.Size then
+      raise EArgumentException.Create('FFI native argument buffer is too small');
+    if ArgumentPlan.Indirect then
+    begin
+      if ArgumentPlan.TypeDescriptor.Size > 0 then
+        Move(AArguments[I][0], ScratchData[ArgumentPlan.IndirectCopyOffset],
+          ArgumentPlan.TypeDescriptor.Size);
+      IndirectPointer := @ScratchData[ArgumentPlan.IndirectCopyOffset];
+      Move(IndirectPointer, PointerBytes[0], SizeOf(Pointer));
+      Placement := ArgumentPlan.Placements[0];
+      CopyToPlacement(State, StackData, Placement, PointerBytes[0],
+        SizeOf(Pointer));
+      Continue;
+    end;
+    for J := 0 to High(ArgumentPlan.Placements) do
+    begin
+      Placement := ArgumentPlan.Placements[J];
+      CopySize := Placement.Size;
+      if CopySize > 0 then
+      begin
+        if APlan.ABI = fabiDarwinARM64 then
+          CopyDarwinARM64ScalarArgumentToPlacement(State, StackData,
+            Placement, ArgumentPlan.TypeDescriptor,
+            AArguments[I][Placement.ValueOffset])
+        else
+          CopyToPlacement(State, StackData, Placement,
+            AArguments[I][Placement.ValueOffset], CopySize);
+      end;
+    end;
+  end;
+
+  if Length(StackData) > 0 then
+    State.StackData := @StackData[0]
+  else
+    State.StackData := nil;
+  State.StackSize := Length(StackData);
+  {$IFDEF CPUI386}
+  if (Length(ReturnPlan.Placements) > 0) and
+     (ReturnPlan.Placements[0].Kind = fpkFPR) then
+    State.ReturnFloatSize := ReturnPlan.Placements[0].Size;
+  {$ENDIF}
+  FFIInvokeMachine(State);
+
+  if ReturnPlan.UsesHiddenPointer then Exit;
+  for I := 0 to High(ReturnPlan.Placements) do
+  begin
+    Placement := ReturnPlan.Placements[I];
+    case Placement.Kind of
+      fpkGPR:
+        Move(State.RetGPR[Placement.RegisterIndex],
+          AResult[Placement.ValueOffset], Placement.Size);
+      fpkFPR:
+        {$IFDEF CPU64}
+        Move(State.RetFPR[Placement.RegisterIndex],
+          AResult[Placement.ValueOffset], Placement.Size)
+        {$ELSE}
+        Move(State.RetFPR, AResult[Placement.ValueOffset], Placement.Size)
+        {$ENDIF};
+      fpkStack:
+        raise EInvalidOpException.Create('FFI return cannot use stack placement');
+    end;
+  end;
+end;
+
+initialization
+  ValidateMachineStateLayout;
 
 end.
