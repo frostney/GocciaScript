@@ -87,3 +87,7 @@ test("Symbol.match does not coerce lastIndex after non-empty custom exec matches
 
   expect(regex[Symbol.match]("")).toEqual(["a non-empty string"]);
 });
+
+test("Symbol.match returns only matched strings for native global results", () => {
+  expect(/(a)/dg[Symbol.match]("aba")).toEqual(["a", "a"]);
+});

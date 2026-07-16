@@ -68,3 +68,59 @@ test("Symbol.replace uses ToLength when advancing lastIndex after empty global m
     "set-lastIndex:1",
   ]);
 });
+
+test("Symbol.replace retains custom exec results until replacement processing", () => {
+  const log = [];
+  let calls = 0;
+  const match = {
+    get length() {
+      log.push("length");
+      return 2;
+    },
+    get 0() {
+      log.push("match");
+      return "b";
+    },
+    get 1() {
+      log.push("capture");
+      return "b";
+    },
+    get index() {
+      log.push("index");
+      return 1;
+    },
+    get groups() {
+      log.push("groups");
+      return undefined;
+    },
+  };
+  const protocol = {
+    flags: "g",
+    lastIndex: 0,
+    exec() {
+      calls++;
+      log.push("exec:" + calls);
+      if (calls === 1) {
+        this.lastIndex = 2;
+        return match;
+      }
+      return null;
+    },
+  };
+
+  expect(RegExp.prototype[Symbol.replace].call(
+    protocol,
+    "abc",
+    (matched, capture) => matched + capture,
+  )).toBe("abbc");
+  expect(log).toEqual([
+    "exec:1",
+    "match",
+    "exec:2",
+    "length",
+    "match",
+    "index",
+    "capture",
+    "groups",
+  ]);
+});
