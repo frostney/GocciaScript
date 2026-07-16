@@ -16,6 +16,10 @@ type
   TGocciaGlobalFFI = class(TGocciaBuiltin)
   published
     function FFIOpen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function FFIStruct(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function FFIUnion(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function FFIArray(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function FFICallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FFINullptrGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FFISuffixGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
@@ -35,6 +39,7 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FFILibrary,
   Goccia.Values.FFIPointer,
+  Goccia.Values.FFIType,
   Goccia.Values.ObjectPropertyDescriptor;
 
 threadvar
@@ -65,6 +70,10 @@ begin
   Members := TGocciaMemberCollection.Create;
   try
     Members.AddNamedMethod(PROP_OPEN, FFIOpen, 1, gmkStaticMethod);
+    Members.AddNamedMethod('struct', FFIStruct, 1, gmkStaticMethod);
+    Members.AddNamedMethod('union', FFIUnion, 1, gmkStaticMethod);
+    Members.AddNamedMethod('array', FFIArray, 2, gmkStaticMethod);
+    Members.AddNamedMethod('callback', FFICallback, 1, gmkStaticMethod);
     Members.AddAccessor(PROP_NULLPTR, FFINullptrGetter, nil, [pfConfigurable], gmkStaticGetter);
     Members.AddAccessor(PROP_SUFFIX, FFISuffixGetter, nil, [pfConfigurable], gmkStaticGetter);
     FStaticMembers := Members.ToDefinitions;
@@ -74,6 +83,42 @@ begin
   RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtConst, True);
+end;
+
+function TGocciaGlobalFFI.FFIStruct(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AArgs.Length < 1 then
+    ThrowTypeError(SErrorFFIStructRequiresDefinition,
+      SSuggestFFIUsage);
+  Result := CreateFFIStructType(AArgs.GetElement(0));
+end;
+
+function TGocciaGlobalFFI.FFIUnion(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AArgs.Length < 1 then
+    ThrowTypeError(SErrorFFIUnionRequiresDefinition,
+      SSuggestFFIUsage);
+  Result := CreateFFIUnionType(AArgs.GetElement(0));
+end;
+
+function TGocciaGlobalFFI.FFIArray(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AArgs.Length < 2 then
+    ThrowTypeError(SErrorFFIArrayRequiresTypeAndLength,
+      SSuggestFFIUsage);
+  Result := CreateFFIArrayType(AArgs.GetElement(0), AArgs.GetElement(1));
+end;
+
+function TGocciaGlobalFFI.FFICallback(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AArgs.Length < 1 then
+    ThrowTypeError(SErrorFFICallbackRequiresDefinition,
+      SSuggestFFIUsage);
+  Result := CreateFFICallbackType(AArgs.GetElement(0));
 end;
 
 function TGocciaGlobalFFI.FFIOpen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -96,7 +141,7 @@ begin
   try
     Result := TGocciaFFILibraryValue.Create(Handle);
   except
-    Handle.Free;
+    Handle.ReleaseOwner;
     raise;
   end;
 end;
