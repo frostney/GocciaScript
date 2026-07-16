@@ -346,7 +346,7 @@ p {
   align-items: center;
 }
 
-/* Mobile hamburger button — hidden by default, shown ≤ 760px. */
+/* Collapsed navigation button — hidden while the full tab bar fits. */
 .nav-hamburger {
   display: none;
   margin-left: auto;
@@ -370,7 +370,7 @@ p {
   border-color: var(--rule);
 }
 
-@media (max-width: 760px) {
+@media (max-width: 1400px) {
   .nav-hamburger {
     display: inline-flex;
   }

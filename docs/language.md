@@ -5,7 +5,7 @@
 
 ## Executive Summary
 
-- **Recommended defaults** — Modern, explicit ECMAScript: `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules
+- **Recommended defaults** — Modern, explicit ECMAScript: `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules; this profile is product policy rather than the engine's language ceiling
 - **Conformance objective** — Core ECMAScript compatibility is a release-track objective, measured by generated test262 reports; Annex B's browser-only legacy surface is deferred until any future Web API/browser-compatibility profile
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
 - **Excluded by design** — Runtime `eval` outside private conformance host hooks
@@ -14,7 +14,7 @@
 - **Conformance-only host hooks** — `GocciaScriptLoaderBare --test262-host` exposes private test262 hooks (`eval`, `evalScript`, `createRealm`) without making them part of the public runtime surface
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
-GocciaScript implements ECMAScript with curated recommended defaults. This document details what's supported by default, what lives behind compatibility flags, what is shimmed for legacy conformance, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
+GocciaScript implements ECMAScript with curated recommended defaults. Calling it merely a JavaScript-like subset is misleading: the engine's implemented language capability, its recommended profile, and its host APIs are separate dimensions. This document details what's supported by default, what lives behind compatibility flags, what is shimmed for legacy conformance, and the rationale for each decision. For current generated evidence, use the live [ECMAScript compatibility dashboard](https://www.gocciascript.dev/compatibility); for quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
 
 ## Guiding Principle
 

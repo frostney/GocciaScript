@@ -41,6 +41,15 @@ import {
   FEATURES,
   type FeatureIcon,
 } from "@/lib/landing-data";
+import {
+  COMPILER_SUPPORT_ANSWER,
+  COMPILER_SUPPORT_QUESTION,
+  ECMASCRIPT_SCOPE_ANSWER,
+  ECMASCRIPT_SCOPE_QUESTION,
+  GOCCIASCRIPT_SUMMARY,
+  NODE_COMPATIBILITY_ANSWER,
+  NODE_COMPATIBILITY_QUESTION,
+} from "@/lib/positioning";
 
 const FEATURE_ICONS: Record<
   FeatureIcon,
@@ -780,25 +789,20 @@ const inlineCodeClass = "font-mono bg-paper-2 px-[0.3em] py-[0.05em] rounded";
 const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "What is GocciaScript?",
-    answer:
-      "GocciaScript is a sandbox-first ECMAScript runtime and toolchain implemented from scratch in Object Pascal. It runs JavaScript-family source through an interpreter or bytecode VM with host-controlled runtime capabilities.",
+    answer: GOCCIASCRIPT_SUMMARY,
   },
   {
     question: "What is GocciaScript for?",
     answer:
-      "It is built for embedding scripts in desktop applications and for running generated code from AI agents with less ambient authority than a general-purpose host runtime. Embedding currently targets FreePascal hosts, with more host paths intended to grow over time.",
+      "It is built for applications that need JavaScript with an explicit, host-defined capability surface, including desktop scripting, automation, plugins, sandboxed workflows, and agent execution. Embedding currently targets FreePascal hosts, with more host paths intended to grow over time.",
   },
   {
-    question: "Is GocciaScript Node-compatible?",
-    answer: (
-      <>
-        No. GocciaScript is intentionally not a Node.js host environment: no
-        CommonJS, no <code className={inlineCodeClass}>node:</code> built-ins,
-        no npm-style package resolution, and no Node globals such as{" "}
-        <code className={inlineCodeClass}>process</code> or{" "}
-        <code className={inlineCodeClass}>Buffer</code>.
-      </>
-    ),
+    question: ECMASCRIPT_SCOPE_QUESTION,
+    answer: ECMASCRIPT_SCOPE_ANSWER,
+  },
+  {
+    question: NODE_COMPATIBILITY_QUESTION,
+    answer: NODE_COMPATIBILITY_ANSWER,
   },
   {
     question: "Is GocciaScript a browser runtime?",
@@ -806,9 +810,8 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
       "No. It implements selected web-standard APIs where they fit the sandboxed runtime and embeddable-platform goals, but it does not provide a DOM, Web Workers, storage APIs, or a full browser event loop.",
   },
   {
-    question: "What is GocciaScript written in?",
-    answer:
-      "The engine and command-line tools are written in Object Pascal. FreePascal is the supported toolchain today; Delphi support should be possible, but is untested at the moment.",
+    question: COMPILER_SUPPORT_QUESTION,
+    answer: COMPILER_SUPPORT_ANSWER,
   },
   {
     question: "Is GocciaScript production-ready?",
@@ -817,7 +820,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
         GocciaScript is still pre-1.0, so APIs and compatibility behavior can
         change between releases. Its current{" "}
         <Link href="/compatibility" className="link-button">
-          test262 conformance
+          test262 results
         </Link>{" "}
         already makes it suitable for serious experiments and bounded production
         embedding where the supported surface matches your needs.
@@ -905,9 +908,9 @@ export function Landing({
                     GocciaScript uses modern recommended defaults while tracking
                     conformance with generated test262 reports.
                   </span>
-                </a>
-                runtime implemented from scratch for tinkerers, embedding and AI
-                agents.
+                </a>{" "}
+                runtime with explicit host-controlled capabilities, designed for
+                embedding portable JavaScript in applications.
               </p>
               <div className="hero-cta-row">
                 <Link
@@ -964,11 +967,14 @@ export function Landing({
           <div className="section-head">
             <div className="section-kicker">Design principles</div>
             <AnchorH2 id="design-principles" className="hd-no-wrap">
-              Modern JavaScript,{" "}
-              <span className="wave-under">without the quirks.</span>
+              Broad ECMAScript,{" "}
+              <span className="wave-under">with safer defaults.</span>
             </AnchorH2>
             <p>
-              What remains is a small, predictable language with a{" "}
+              The engine&apos;s language capability is broader than its
+              recommended profile. Selected legacy and high-risk forms stay off
+              by default, while compatibility flags enable many standard forms
+              for conformance and existing code. The result ships in a{" "}
               <button
                 type="button"
                 className="info-term info-term-button"

@@ -13,6 +13,15 @@ const nextConfig: NextConfig = {
           },
         ],
       },
+      {
+        source: "/compatibility",
+        headers: [
+          {
+            key: "Link",
+            value: '</compatibility.md>; rel="alternate"; type="text/markdown"',
+          },
+        ],
+      },
     ];
   },
   outputFileTracingIncludes: {

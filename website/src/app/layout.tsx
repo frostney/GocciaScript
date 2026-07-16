@@ -55,6 +55,8 @@ export const metadata: Metadata = {
     "bytecode",
     "embeddable",
     "FreePascal",
+    "Delphi",
+    "JavaScript engine",
   ],
   authors: [{ name: "Johannes Stein" }],
   creator: "Johannes Stein",
