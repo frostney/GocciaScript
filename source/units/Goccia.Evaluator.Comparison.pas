@@ -8,13 +8,17 @@ uses
   Goccia.Values.Primitives;
 
 function IsDeepEqual(const AActual, AExpected: TGocciaValue): Boolean;
+function IsStrictDeepEqual(const AActual, AExpected: TGocciaValue): Boolean;
 function IsPartialDeepEqual(const AActual, AExpected: TGocciaValue): Boolean;
+function IsSnapshotPartialDeepEqual(const AActual,
+  AExpected: TGocciaValue): Boolean;
 
 implementation
 
 uses
   Goccia.Arithmetic,
   Goccia.Values.ArrayValue,
+  Goccia.Values.AsymmetricMatcher,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
@@ -67,12 +71,15 @@ begin
 end;
 
 function IsDeepEqualInternal(const AActual, AExpected: TGocciaValue;
-  var AComparedPairs: TComparedValuePairArray): Boolean; forward;
+  var AComparedPairs: TComparedValuePairArray;
+  const AStrict: Boolean): Boolean; forward;
 function IsPartialDeepEqualInternal(const AActual, AExpected: TGocciaValue;
-  var AComparedPairs: TComparedValuePairArray): Boolean; forward;
+  var AComparedPairs: TComparedValuePairArray;
+  const AIncludeInherited: Boolean): Boolean; forward;
 
 function IsDeepEqualInternal(const AActual, AExpected: TGocciaValue;
-  var AComparedPairs: TComparedValuePairArray): Boolean;
+  var AComparedPairs: TComparedValuePairArray;
+  const AStrict: Boolean): Boolean;
 var
   ActualObj, ExpectedObj: TGocciaObjectValue;
   ActualArr, ExpectedArr: TGocciaArrayValue;
@@ -82,21 +89,62 @@ var
   CursorA, CursorB: Integer;
   LeftKey, LeftValue, RightKey, RightValue: TGocciaValue;
 begin
-  // Base case: strict equality (handles primitives and same object references)
-  if IsStrictEqual(AActual, AExpected) then
+  // Vitest/Jest asymmetric matchers participate in every equality-based
+  // assertion. When both operands are matchers, compare their stored matcher
+  // state instead of invoking either matcher against the other.
+  if (AActual is TGocciaAsymmetricMatcherValue) and
+     (AExpected is TGocciaAsymmetricMatcherValue) then
+  begin
+    if AStrict then
+      Result := TGocciaAsymmetricMatcherValue(AActual).IsEquivalentTo(
+        TGocciaAsymmetricMatcherValue(AExpected), IsStrictDeepEqual)
+    else
+      Result := TGocciaAsymmetricMatcherValue(AActual).IsEquivalentTo(
+        TGocciaAsymmetricMatcherValue(AExpected), IsDeepEqual);
+    Exit;
+  end;
+
+  if (AActual is TGocciaAsymmetricMatcherValue) xor
+     (AExpected is TGocciaAsymmetricMatcherValue) then
+  begin
+    if AActual is TGocciaAsymmetricMatcherValue then
+    begin
+      if AStrict then
+        Result := TGocciaAsymmetricMatcherValue(AActual).AsymmetricMatch(
+          AExpected, IsStrictDeepEqual)
+      else
+        Result := TGocciaAsymmetricMatcherValue(AActual).AsymmetricMatch(
+          AExpected, IsDeepEqual);
+    end
+    else if AStrict then
+      Result := TGocciaAsymmetricMatcherValue(AExpected).AsymmetricMatch(
+        AActual, IsStrictDeepEqual)
+    else
+      Result := TGocciaAsymmetricMatcherValue(AExpected).AsymmetricMatch(
+        AActual, IsDeepEqual);
+    Exit;
+  end;
+
+  // Vitest's equality testers use Object.is for primitive leaves. This keeps
+  // NaN equal to NaN and distinguishes +0 from -0 while still accepting the
+  // same object reference.
+  if IsSameValue(AActual, AExpected) then
   begin
     Result := True;
+    Exit;
+  end;
+
+  // Distinct callable values are never deeply equal. Treating functions as
+  // empty objects would also make different schema validators compare equal.
+  if AActual.IsCallable or AExpected.IsCallable then
+  begin
+    Result := False;
     Exit;
   end;
 
   // Type mismatch — allow TGocciaObjectValue/TGocciaInstanceValue interop
   if AActual.TypeName <> AExpected.TypeName then
   begin
-    if AActual.IsCallable or AExpected.IsCallable then
-    begin
-      Result := False;
-      Exit;
-    end;
     if not ((AActual is TGocciaObjectValue) and (AExpected is TGocciaObjectValue)) then
     begin
       Result := False;
@@ -125,15 +173,39 @@ begin
          (ExpectedArr.Elements[I] = TGocciaHoleValue.HoleValue) then
         Continue; // Both are holes, they're equal
 
-      if (ActualArr.Elements[I] = TGocciaHoleValue.HoleValue) or
-         (ExpectedArr.Elements[I] = TGocciaHoleValue.HoleValue) then
+      { Vitest's loose equality treats an array hole like undefined. Its
+        strict-equality matcher is the surface that preserves sparseness. }
+      if (ActualArr.Elements[I] = TGocciaHoleValue.HoleValue) and
+         AStrict then
       begin
-        Result := False; // One is hole, other isn't
+        Result := False;
         Exit;
       end;
-
-      if not IsDeepEqualInternal(ActualArr.Elements[I], ExpectedArr.Elements[I],
-        AComparedPairs) then
+      if (ExpectedArr.Elements[I] = TGocciaHoleValue.HoleValue) and
+         AStrict then
+      begin
+        Result := False;
+        Exit;
+      end;
+      if (ActualArr.Elements[I] = TGocciaHoleValue.HoleValue) and
+         not IsDeepEqualInternal(TGocciaUndefinedLiteralValue.UndefinedValue,
+           ExpectedArr.Elements[I], AComparedPairs, AStrict) then
+      begin
+        Result := False;
+        Exit;
+      end;
+      if (ExpectedArr.Elements[I] = TGocciaHoleValue.HoleValue) and
+         not IsDeepEqualInternal(ActualArr.Elements[I],
+           TGocciaUndefinedLiteralValue.UndefinedValue,
+           AComparedPairs, AStrict) then
+      begin
+        Result := False;
+        Exit;
+      end;
+      if (ActualArr.Elements[I] <> TGocciaHoleValue.HoleValue) and
+         (ExpectedArr.Elements[I] <> TGocciaHoleValue.HoleValue) and
+         not IsDeepEqualInternal(ActualArr.Elements[I], ExpectedArr.Elements[I],
+           AComparedPairs, AStrict) then
       begin
         Result := False;
         Exit;
@@ -173,7 +245,8 @@ begin
           Result := False;
           Exit;
         end;
-        if not IsDeepEqualInternal(LeftValue, RightValue, AComparedPairs) then
+        if not IsDeepEqualInternal(LeftValue, RightValue, AComparedPairs,
+          AStrict) then
         begin
           Result := False;
           Exit;
@@ -216,12 +289,14 @@ begin
           Result := False;
           Exit;
         end;
-        if not IsDeepEqualInternal(LeftKey, RightKey, AComparedPairs) then
+        if not IsDeepEqualInternal(LeftKey, RightKey, AComparedPairs,
+          AStrict) then
         begin
           Result := False;
           Exit;
         end;
-        if not IsDeepEqualInternal(LeftValue, RightValue, AComparedPairs) then
+        if not IsDeepEqualInternal(LeftValue, RightValue, AComparedPairs,
+          AStrict) then
         begin
           Result := False;
           Exit;
@@ -272,7 +347,7 @@ begin
 
       // Recursively compare property values
       if not IsDeepEqualInternal(ActualObj.GetProperty(Key),
-        ExpectedObj.GetProperty(Key), AComparedPairs) then
+        ExpectedObj.GetProperty(Key), AComparedPairs, AStrict) then
       begin
         Result := False;
         Exit;
@@ -291,11 +366,19 @@ function IsDeepEqual(const AActual, AExpected: TGocciaValue): Boolean;
 var
   ComparedPairs: TComparedValuePairArray;
 begin
-  Result := IsDeepEqualInternal(AActual, AExpected, ComparedPairs);
+  Result := IsDeepEqualInternal(AActual, AExpected, ComparedPairs, False);
+end;
+
+function IsStrictDeepEqual(const AActual, AExpected: TGocciaValue): Boolean;
+var
+  ComparedPairs: TComparedValuePairArray;
+begin
+  Result := IsDeepEqualInternal(AActual, AExpected, ComparedPairs, True);
 end;
 
 function IsPartialDeepEqualInternal(const AActual, AExpected: TGocciaValue;
-  var AComparedPairs: TComparedValuePairArray): Boolean;
+  var AComparedPairs: TComparedValuePairArray;
+  const AIncludeInherited: Boolean): Boolean;
 var
   ActualObj, ExpectedObj: TGocciaObjectValue;
   DeepComparedPairs: TComparedValuePairArray;
@@ -304,11 +387,16 @@ var
   Key: string;
 begin
   CopyComparedPairs(AComparedPairs, DeepComparedPairs);
-  if IsDeepEqualInternal(AActual, AExpected, DeepComparedPairs) then
+  if IsDeepEqualInternal(AActual, AExpected, DeepComparedPairs, False) then
   begin
     Result := True;
     Exit;
   end;
+
+  { Vitest's object-subset semantics do not make arrays partial: an array
+    property shape must describe every element. }
+  if (AActual is TGocciaArrayValue) or (AExpected is TGocciaArrayValue) then
+    Exit(False);
 
   if (AActual is TGocciaObjectValue) and (AExpected is TGocciaObjectValue) then
   begin
@@ -325,14 +413,16 @@ begin
     for I := 0 to High(ExpectedKeys) do
     begin
       Key := ExpectedKeys[I];
-      if not ActualObj.HasOwnProperty(Key) then
+      if (AIncludeInherited and not ActualObj.HasProperty(Key)) or
+         (not AIncludeInherited and not ActualObj.HasOwnProperty(Key)) then
       begin
         Result := False;
         Exit;
       end;
 
       if not IsPartialDeepEqualInternal(ActualObj.GetProperty(Key),
-        ExpectedObj.GetProperty(Key), AComparedPairs) then
+        ExpectedObj.GetProperty(Key), AComparedPairs,
+        AIncludeInherited) then
       begin
         Result := False;
         Exit;
@@ -350,7 +440,17 @@ function IsPartialDeepEqual(const AActual, AExpected: TGocciaValue): Boolean;
 var
   ComparedPairs: TComparedValuePairArray;
 begin
-  Result := IsPartialDeepEqualInternal(AActual, AExpected, ComparedPairs);
+  Result := IsPartialDeepEqualInternal(AActual, AExpected, ComparedPairs,
+    False);
+end;
+
+function IsSnapshotPartialDeepEqual(const AActual,
+  AExpected: TGocciaValue): Boolean;
+var
+  ComparedPairs: TComparedValuePairArray;
+begin
+  Result := IsPartialDeepEqualInternal(AActual, AExpected, ComparedPairs,
+    True);
 end;
 
 end.
