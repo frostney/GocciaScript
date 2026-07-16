@@ -8,6 +8,29 @@ uses
   Goccia.RegExp.Engine,
   Goccia.Values.Primitives;
 
+type
+  TGocciaRegExpExecutionResultKind = (rerkNative, rerkCustom);
+
+  TGocciaRegExpExecutionResult = record
+  private
+    FKind: TGocciaRegExpExecutionResultKind;
+    FNativeMatch: TGocciaRegExpMatchResult;
+    FCustomMatch: TGocciaValue;
+    function CustomProperty(const AName: string): TGocciaValue;
+  public
+    class function FromNative(const AMatch: TGocciaRegExpMatchResult):
+      TGocciaRegExpExecutionResult; static;
+    class function FromCustom(
+      const AMatch: TGocciaValue): TGocciaRegExpExecutionResult; static;
+    function MatchedText: string;
+    function MatchIndex(const AInputLength: Integer): Integer;
+    function CaptureCount: Integer;
+    function CaptureText(const AIndex: Integer;
+      out AMatched: Boolean): string;
+    function NamedCapturesValue: TGocciaValue;
+    function RetainedObject: TGocciaValue;
+  end;
+
 function GetRegExpPrototype: TGocciaValue;
 function GetRegExpBuiltinExec: TGocciaValue;
 procedure SetRegExpPrototype(const APrototype: TGocciaValue);
@@ -25,6 +48,8 @@ function GetRegExpInternalSource(const AValue: TGocciaValue): string;
 function GetRegExpInternalFlags(const AValue: TGocciaValue): string;
 function MatchRegExpObjectOnce(const AValue: TGocciaValue; const AInput: string;
   out AMatchArray: TGocciaValue): Boolean;
+function MatchRegExpObjectOnceResult(const AValue: TGocciaValue;
+  const AInput: string; out AMatch: TGocciaRegExpExecutionResult): Boolean;
 function MatchRegExpBuiltinObjectOnce(const AValue: TGocciaValue;
   const AInput: string; out AMatchArray: TGocciaValue): Boolean;
 function MatchRegExpObject(const AValue: TGocciaValue; const AInput: string;
@@ -61,7 +86,8 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToObject;
 
 type
   TGocciaRegExpProgramData = class
@@ -149,6 +175,16 @@ end;
 
 function CreateRegExpObjectFromProgram(const APattern, AFlags: string;
   const ACompiledProgram: TRegExpProgram): TGocciaValue; forward;
+function MatchRegExpNativeObject(const AValue: TGocciaValue;
+  const AInput: string; const AStartIndex: Integer;
+  const ARequireStart, AUpdateLastIndex: Boolean;
+  out AMatchResult: TGocciaRegExpMatchResult; out AMatchIndex, AMatchEnd,
+  ANextIndex: Integer): Boolean; forward;
+function MatchRegExpObjectResult(const AValue: TGocciaValue;
+  const AInput: string; const AStartIndex: Integer;
+  const ARequireStart, AUpdateLastIndex: Boolean;
+  out AMatch: TGocciaRegExpExecutionResult; out AMatchIndex, AMatchEnd,
+  ANextIndex: Integer; const AUseCustomExec: Boolean = True): Boolean; forward;
 
 function GetRegExpProgramData(const AValue: TGocciaValue): TGocciaRegExpProgramData;
 begin
@@ -313,13 +349,44 @@ begin
 end;
 
 // ES2026 §22.2.7.3 BuildMatchArray
+function BuildNamedGroupsValue(
+  const AMatchResult: TGocciaRegExpMatchResult): TGocciaValue;
+var
+  GroupsObject: TGocciaObjectValue;
+  GroupIndex: Integer;
+  I: Integer;
+begin
+  if Length(AMatchResult.NamedGroups) = 0 then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+
+  GroupsObject := TGocciaObjectValue.Create(nil);
+  // ES2026: Two-pass approach for duplicate named capture groups.
+  // Pass 1: Initialize all unique names to undefined.
+  for I := 0 to High(AMatchResult.NamedGroups) do
+    GroupsObject.AssignProperty(AMatchResult.NamedGroups[I].Name,
+      TGocciaUndefinedLiteralValue.UndefinedValue);
+  // Pass 2: Overwrite with matched values. For duplicate names, only the
+  // participating group's value is set — non-participating duplicates are
+  // skipped, preserving the correct value regardless of iteration order.
+  for I := 0 to High(AMatchResult.NamedGroups) do
+  begin
+    GroupIndex := AMatchResult.NamedGroups[I].Index;
+    if (GroupIndex <= High(AMatchResult.Groups)) and
+       AMatchResult.Groups[GroupIndex].Matched then
+      GroupsObject.AssignProperty(AMatchResult.NamedGroups[I].Name,
+        TGocciaStringLiteralValue.Create(
+          AMatchResult.Groups[GroupIndex].Value));
+  end;
+  Result := GroupsObject;
+end;
+
 function BuildMatchArray(const AInput: string;
   const AMatchResult: TGocciaRegExpMatchResult): TGocciaObjectValue;
 var
   IndicesArray: TGocciaArrayValue;
   IndicesGroupsObject: TGocciaObjectValue;
   MatchArray: TGocciaArrayValue;
-  GroupsObject: TGocciaObjectValue;
+  GroupsValue: TGocciaValue;
   GroupIndex: Integer;
   I: Integer;
 
@@ -344,31 +411,8 @@ begin
     TGocciaNumberLiteralValue.Create(AMatchResult.MatchIndex));
   MatchArray.CreateDataPropertyOrThrow(PROP_INPUT,
     TGocciaStringLiteralValue.Create(AInput));
-  if Length(AMatchResult.NamedGroups) > 0 then
-  begin
-    GroupsObject := TGocciaObjectValue.Create(nil);
-    // ES2025: Two-pass approach for duplicate named capture groups.
-    // Pass 1: Initialize all unique names to undefined.
-    for I := 0 to High(AMatchResult.NamedGroups) do
-      GroupsObject.AssignProperty(AMatchResult.NamedGroups[I].Name,
-        TGocciaUndefinedLiteralValue.UndefinedValue);
-    // Pass 2: Overwrite with matched values. For duplicate names, only the
-    // participating group's value is set — non-participating duplicates are
-    // skipped, preserving the correct value regardless of iteration order.
-    for I := 0 to High(AMatchResult.NamedGroups) do
-    begin
-      GroupIndex := AMatchResult.NamedGroups[I].Index;
-      if (GroupIndex <= High(AMatchResult.Groups)) and
-         AMatchResult.Groups[GroupIndex].Matched then
-        GroupsObject.AssignProperty(AMatchResult.NamedGroups[I].Name,
-          TGocciaStringLiteralValue.Create(
-            AMatchResult.Groups[GroupIndex].Value));
-    end;
-    MatchArray.CreateDataPropertyOrThrow(PROP_GROUPS, GroupsObject);
-  end
-  else
-    MatchArray.CreateDataPropertyOrThrow(PROP_GROUPS,
-      TGocciaUndefinedLiteralValue.UndefinedValue);
+  GroupsValue := BuildNamedGroupsValue(AMatchResult);
+  MatchArray.CreateDataPropertyOrThrow(PROP_GROUPS, GroupsValue);
 
   if AMatchResult.HasIndices then
   begin
@@ -409,6 +453,103 @@ begin
   end;
 
   Result := MatchArray;
+end;
+
+class function TGocciaRegExpExecutionResult.FromNative(
+  const AMatch: TGocciaRegExpMatchResult): TGocciaRegExpExecutionResult;
+begin
+  Result.FKind := rerkNative;
+  Result.FNativeMatch := AMatch;
+  Result.FCustomMatch := nil;
+end;
+
+class function TGocciaRegExpExecutionResult.FromCustom(
+  const AMatch: TGocciaValue): TGocciaRegExpExecutionResult;
+begin
+  Result.FKind := rerkCustom;
+  Result.FCustomMatch := AMatch;
+end;
+
+function TGocciaRegExpExecutionResult.CustomProperty(
+  const AName: string): TGocciaValue;
+begin
+  Result := TGocciaObjectValue(FCustomMatch).GetProperty(AName);
+  if not Assigned(Result) then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaRegExpExecutionResult.MatchedText: string;
+begin
+  if FKind = rerkCustom then
+    Exit(CustomProperty('0').ToStringLiteral.Value);
+  Result := FNativeMatch.Groups[0].Value;
+end;
+
+function TGocciaRegExpExecutionResult.MatchIndex(
+  const AInputLength: Integer): Integer;
+begin
+  if FKind = rerkCustom then
+    Exit(GetClampedIndexValue(CustomProperty(PROP_INDEX), AInputLength));
+  if FNativeMatch.MatchIndex <= 0 then
+    Exit(0);
+  if FNativeMatch.MatchIndex >= AInputLength then
+    Exit(AInputLength);
+  Result := FNativeMatch.MatchIndex;
+end;
+
+function TGocciaRegExpExecutionResult.CaptureCount: Integer;
+begin
+  if FKind = rerkCustom then
+  begin
+    Result := LengthOfArrayLike(TGocciaObjectValue(FCustomMatch));
+    if Result > 1 then
+      Dec(Result)
+    else
+      Result := 0;
+    Exit;
+  end;
+
+  Result := Length(FNativeMatch.Groups) - 1;
+  if Result < 0 then
+    Result := 0;
+end;
+
+function TGocciaRegExpExecutionResult.CaptureText(const AIndex: Integer;
+  out AMatched: Boolean): string;
+var
+  Value: TGocciaValue;
+begin
+  if FKind = rerkCustom then
+  begin
+    Value := CustomProperty(IntToStr(AIndex));
+    AMatched := not (Value is TGocciaUndefinedLiteralValue);
+    if AMatched then
+      Exit(Value.ToStringLiteral.Value);
+    Exit('');
+  end;
+
+  if (AIndex <= 0) or (AIndex > High(FNativeMatch.Groups)) or
+     not FNativeMatch.Groups[AIndex].Matched then
+  begin
+    AMatched := False;
+    Exit('');
+  end;
+  AMatched := True;
+  Result := FNativeMatch.Groups[AIndex].Value;
+end;
+
+function TGocciaRegExpExecutionResult.NamedCapturesValue: TGocciaValue;
+begin
+  if FKind = rerkCustom then
+    Exit(CustomProperty(PROP_GROUPS));
+  Result := BuildNamedGroupsValue(FNativeMatch);
+end;
+
+function TGocciaRegExpExecutionResult.RetainedObject: TGocciaValue;
+begin
+  if FKind = rerkCustom then
+    Exit(FCustomMatch);
+  Result := nil;
 end;
 
 function IsRegExpInstance(const AValue: TGocciaValue): Boolean;
@@ -531,14 +672,12 @@ end;
 function MatchRegExpObjectOnce(const AValue: TGocciaValue; const AInput: string;
   out AMatchArray: TGocciaValue): Boolean;
 var
-  Obj: TGocciaObjectValue;
   Flags: string;
   StartIndex, MatchIndex, MatchEnd, NextIndex: Integer;
   InputLength: Integer;
   LastIndex: Double;
   HandledCustomExec: Boolean;
 begin
-  Obj := TGocciaObjectValue(AValue);
   if not IsRegExpInstance(AValue) then
   begin
     Result := MatchRegExpObject(AValue, AInput, 0, False, False, AMatchArray,
@@ -570,7 +709,55 @@ begin
     StartIndex := 0;
   Result := MatchRegExpObject(AValue, AInput, StartIndex,
     HasRegExpFlag(Flags, 'y'), True, AMatchArray, MatchIndex,
-    MatchEnd, NextIndex);
+    MatchEnd, NextIndex, False);
+end;
+
+function MatchRegExpObjectOnceResult(const AValue: TGocciaValue;
+  const AInput: string; out AMatch: TGocciaRegExpExecutionResult): Boolean;
+var
+  CustomMatch: TGocciaValue;
+  Flags: string;
+  StartIndex, MatchIndex, MatchEnd, NextIndex: Integer;
+  InputLength: Integer;
+  LastIndex: Double;
+  HandledCustomExec: Boolean;
+begin
+  if not IsRegExpInstance(AValue) then
+  begin
+    Result := MatchRegExpObjectResult(AValue, AInput, 0, False, False, AMatch,
+      MatchIndex, MatchEnd, NextIndex);
+    Exit;
+  end;
+
+  Result := TryRunRegExpCustomExec(AValue, AInput, CustomMatch, MatchIndex,
+    MatchEnd, NextIndex, HandledCustomExec);
+  if HandledCustomExec then
+  begin
+    if Result then
+      AMatch := TGocciaRegExpExecutionResult.FromCustom(CustomMatch);
+    Exit;
+  end;
+
+  Flags := GetRegExpInternalFlags(AValue);
+  LastIndex := GetRegExpLastIndexLength(AValue);
+  if HasRegExpFlag(Flags, 'g') or HasRegExpFlag(Flags, 'y') then
+  begin
+    InputLength := RegExpInputCodeUnitLength(AInput);
+    if LastIndex > InputLength then
+    begin
+      if InputLength < MaxInt then
+        StartIndex := InputLength + 1
+      else
+        StartIndex := MaxInt;
+    end
+    else
+      StartIndex := Trunc(LastIndex);
+  end
+  else
+    StartIndex := 0;
+  Result := MatchRegExpObjectResult(AValue, AInput, StartIndex,
+    HasRegExpFlag(Flags, 'y'), True, AMatch, MatchIndex,
+    MatchEnd, NextIndex, False);
 end;
 
 function MatchRegExpBuiltinObjectOnce(const AValue: TGocciaValue;
@@ -612,13 +799,9 @@ function MatchRegExpObject(const AValue: TGocciaValue; const AInput: string;
   out AMatchArray: TGocciaValue; out AMatchIndex, AMatchEnd,
   ANextIndex: Integer; const AUseCustomExec: Boolean): Boolean;
 var
-  Obj: TGocciaObjectValue;
   HandledCustomExec: Boolean;
   MatchResult: TGocciaRegExpMatchResult;
-  ProgramData: TGocciaRegExpProgramData;
-  ShouldUpdate: Boolean;
 begin
-  Obj := TGocciaObjectValue(AValue);
   if AUseCustomExec then
   begin
     Result := TryRunRegExpCustomExec(AValue, AInput, AMatchArray,
@@ -627,9 +810,58 @@ begin
       Exit;
   end;
 
+  Result := MatchRegExpNativeObject(AValue, AInput, AStartIndex,
+    ARequireStart, AUpdateLastIndex, MatchResult, AMatchIndex, AMatchEnd,
+    ANextIndex);
+  if Result then
+    AMatchArray := BuildMatchArray(AInput, MatchResult)
+  else
+    AMatchArray := nil;
+end;
+
+function MatchRegExpObjectResult(const AValue: TGocciaValue;
+  const AInput: string; const AStartIndex: Integer;
+  const ARequireStart, AUpdateLastIndex: Boolean;
+  out AMatch: TGocciaRegExpExecutionResult; out AMatchIndex, AMatchEnd,
+  ANextIndex: Integer; const AUseCustomExec: Boolean): Boolean;
+var
+  CustomMatch: TGocciaValue;
+  HandledCustomExec: Boolean;
+  MatchResult: TGocciaRegExpMatchResult;
+begin
+  if AUseCustomExec then
+  begin
+    Result := TryRunRegExpCustomExec(AValue, AInput, CustomMatch,
+      AMatchIndex, AMatchEnd, ANextIndex, HandledCustomExec);
+    if HandledCustomExec then
+    begin
+      if Result then
+        AMatch := TGocciaRegExpExecutionResult.FromCustom(CustomMatch);
+      Exit;
+    end;
+  end;
+
+  Result := MatchRegExpNativeObject(AValue, AInput, AStartIndex,
+    ARequireStart, AUpdateLastIndex, MatchResult, AMatchIndex, AMatchEnd,
+    ANextIndex);
+  if Result then
+    AMatch := TGocciaRegExpExecutionResult.FromNative(MatchResult);
+end;
+
+function MatchRegExpNativeObject(const AValue: TGocciaValue;
+  const AInput: string; const AStartIndex: Integer;
+  const ARequireStart, AUpdateLastIndex: Boolean;
+  out AMatchResult: TGocciaRegExpMatchResult; out AMatchIndex, AMatchEnd,
+  ANextIndex: Integer): Boolean;
+var
+  Obj: TGocciaObjectValue;
+  ProgramData: TGocciaRegExpProgramData;
+  ShouldUpdate: Boolean;
+begin
   if not IsRegExpInstance(AValue) then
     ThrowTypeError(SErrorRegExpExecNonRegExp);
 
+  Obj := TGocciaObjectValue(AValue);
   try
     if Obj.RegExpData is TGocciaRegExpProgramData then
     begin
@@ -641,7 +873,7 @@ begin
         AInput,
         AStartIndex,
         ARequireStart,
-        MatchResult);
+        AMatchResult);
     end
     else
       Result := ExecuteRegExp(
@@ -650,7 +882,7 @@ begin
         AInput,
         AStartIndex,
         ARequireStart,
-        MatchResult);
+        AMatchResult);
   except
     on E: ERegExpRuntimeError do
       ThrowError(E.Message);
@@ -664,17 +896,15 @@ begin
   begin
     if ShouldUpdate then
       Obj.SetProperty(PROP_LAST_INDEX, TGocciaNumberLiteralValue.Create(0));
-    AMatchArray := nil;
     AMatchIndex := -1;
     AMatchEnd := -1;
     ANextIndex := -1;
     Exit(False);
   end;
 
-  AMatchIndex := MatchResult.MatchIndex;
-  AMatchEnd := MatchResult.MatchEnd;
-  ANextIndex := MatchResult.NextIndex;
-  AMatchArray := BuildMatchArray(AInput, MatchResult);
+  AMatchIndex := AMatchResult.MatchIndex;
+  AMatchEnd := AMatchResult.MatchEnd;
+  ANextIndex := AMatchResult.NextIndex;
   if ShouldUpdate then
     Obj.SetProperty(PROP_LAST_INDEX, TGocciaNumberLiteralValue.Create(AMatchEnd));
 end;

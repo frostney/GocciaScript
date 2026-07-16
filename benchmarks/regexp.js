@@ -60,6 +60,13 @@ group("String integration with RegExp", () => {
     };
   } }).setup);
 
+  bench("match() with many global results", ({ *setup() {
+    const input = (() => "foo ".repeat(256))();
+    yield () => {
+      const matches = input.match(/foo/g);
+    };
+  } }).setup);
+
   bench("matchAll() with capture groups", ({ *setup() {
     const input = (() => "foo1 foo2 foo3")();
     yield () => {
@@ -72,6 +79,13 @@ group("String integration with RegExp", () => {
 
   bench("replace() with global regex", ({ *setup() {
     const input = (() => "foo bar foo baz foo")();
+    yield () => {
+      const replaced = input.replace(/foo/g, "qux");
+    };
+  } }).setup);
+
+  bench("replace() with many global results", ({ *setup() {
+    const input = (() => "foo ".repeat(256))();
     yield () => {
       const replaced = input.replace(/foo/g, "qux");
     };
