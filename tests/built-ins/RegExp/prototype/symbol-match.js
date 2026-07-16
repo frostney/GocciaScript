@@ -88,6 +88,22 @@ test("Symbol.match does not coerce lastIndex after non-empty custom exec matches
   expect(regex[Symbol.match]("")).toEqual(["a non-empty string"]);
 });
 
+test("Symbol.match stringifies a missing custom result match as undefined", () => {
+  let calls = 0;
+  const protocol = {
+    flags: "g",
+    lastIndex: 0,
+    exec() {
+      if (calls++ === 0) {
+        return {};
+      }
+      return null;
+    },
+  };
+
+  expect(RegExp.prototype[Symbol.match].call(protocol, "")).toEqual(["undefined"]);
+});
+
 test("Symbol.match returns only matched strings for native global results", () => {
   expect(/(a)/dg[Symbol.match]("aba")).toEqual(["a", "a"]);
 });

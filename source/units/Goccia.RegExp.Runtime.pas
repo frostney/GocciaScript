@@ -16,6 +16,7 @@ type
     FKind: TGocciaRegExpExecutionResultKind;
     FNativeMatch: TGocciaRegExpMatchResult;
     FCustomMatch: TGocciaValue;
+    function CustomProperty(const AName: string): TGocciaValue;
   public
     class function FromNative(const AMatch: TGocciaRegExpMatchResult):
       TGocciaRegExpExecutionResult; static;
@@ -469,11 +470,18 @@ begin
   Result.FCustomMatch := AMatch;
 end;
 
+function TGocciaRegExpExecutionResult.CustomProperty(
+  const AName: string): TGocciaValue;
+begin
+  Result := TGocciaObjectValue(FCustomMatch).GetProperty(AName);
+  if not Assigned(Result) then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
 function TGocciaRegExpExecutionResult.MatchedText: string;
 begin
   if FKind = rerkCustom then
-    Exit(TGocciaObjectValue(FCustomMatch).GetProperty('0')
-      .ToStringLiteral.Value);
+    Exit(CustomProperty('0').ToStringLiteral.Value);
   Result := FNativeMatch.Groups[0].Value;
 end;
 
@@ -481,9 +489,7 @@ function TGocciaRegExpExecutionResult.MatchIndex(
   const AInputLength: Integer): Integer;
 begin
   if FKind = rerkCustom then
-    Exit(GetClampedIndexValue(
-      TGocciaObjectValue(FCustomMatch).GetProperty(PROP_INDEX),
-      AInputLength));
+    Exit(GetClampedIndexValue(CustomProperty(PROP_INDEX), AInputLength));
   if FNativeMatch.MatchIndex <= 0 then
     Exit(0);
   if FNativeMatch.MatchIndex >= AInputLength then
@@ -515,7 +521,7 @@ var
 begin
   if FKind = rerkCustom then
   begin
-    Value := TGocciaObjectValue(FCustomMatch).GetProperty(IntToStr(AIndex));
+    Value := CustomProperty(IntToStr(AIndex));
     AMatched := not (Value is TGocciaUndefinedLiteralValue);
     if AMatched then
       Exit(Value.ToStringLiteral.Value);
@@ -535,7 +541,7 @@ end;
 function TGocciaRegExpExecutionResult.NamedCapturesValue: TGocciaValue;
 begin
   if FKind = rerkCustom then
-    Exit(TGocciaObjectValue(FCustomMatch).GetProperty(PROP_GROUPS));
+    Exit(CustomProperty(PROP_GROUPS));
   Result := BuildNamedGroupsValue(FNativeMatch);
 end;
 

@@ -125,6 +125,27 @@ test("Symbol.replace retains custom exec results until replacement processing", 
   ]);
 });
 
+test("Symbol.replace normalizes missing custom result properties to undefined", () => {
+  let replacerArgs;
+  const protocol = {
+    flags: "",
+    lastIndex: 0,
+    exec() {
+      return { 0: "a", length: 2 };
+    },
+  };
+
+  expect(RegExp.prototype[Symbol.replace].call(
+    protocol,
+    "a",
+    (...args) => {
+      replacerArgs = args;
+      return "x";
+    },
+  )).toBe("x");
+  expect(replacerArgs).toEqual(["a", undefined, 0, "a"]);
+});
+
 test("Symbol.replace preserves retained results when groups aliases a later match", () => {
   let calls = 0;
   const protocol = {
