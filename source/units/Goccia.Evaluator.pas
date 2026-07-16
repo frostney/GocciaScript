@@ -6211,6 +6211,14 @@ begin
               if IterBinding.TypeHint <> sltUntyped then
                 UpdateScope.SetOwnBindingTypeHint(Name, IterBinding.TypeHint);
             end;
+            { Binding transfer is complete, so the previous iteration scope is
+              no longer an active loop root. Reachable closures retain it
+              through their closure scope; the loop itself now needs only the
+              header and active update scope. }
+            LoopRoots.Clear;
+            if Assigned(HeaderScope) then
+              LoopRoots.Add(HeaderScope);
+            LoopRoots.Add(UpdateScope);
           end;
 
           if Assigned(ForState) then
