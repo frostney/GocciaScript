@@ -897,6 +897,23 @@ console.log("--max-memory (interpreter recursive expression pressure reclaims)..
   if ((json.memory?.gc?.collections ?? 0) <= 0) throw new Error(`Recursive expression pressure should report collections, got ${json.memory?.gc?.collections}`);
 }
 
+console.log("--max-memory (interpreter lexical for-loop roots stay bounded)...");
+{
+  const src = [
+    "for (let i = 0; i < 5000; i++) {",
+    "  if (i % 100 === 0) Goccia.gc();",
+    "}",
+    '"completed";',
+    "",
+  ].join("\n");
+  const { exitCode, json, stderr } = runLoaderJson(src, [
+    "--max-memory=300000",
+    "--compat-traditional-for-loop",
+  ], { timeout: 30_000 });
+  if (exitCode !== 0) throw new Error(`Interpreter lexical for-loop exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
+  if (json.files?.[0]?.result !== "completed") throw new Error(`Interpreter lexical for-loop should complete, got ${json.files?.[0]?.result}`);
+}
+
 console.log("--max-memory (bytecode loop pressure reclaims)...");
 {
   const src = [
