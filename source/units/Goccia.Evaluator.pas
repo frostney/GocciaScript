@@ -6014,11 +6014,13 @@ begin
     if (ResumePhase in [gflpTest, gflpBody]) and IsLexical then
     begin
       IterScope := ForState.IterScope;
+      LoopRoots.Add(IterScope);
       IterContext.Scope := IterScope;
     end
     else if (ResumePhase = gflpUpdate) and IsLexical then
     begin
       UpdateScope := ForState.UpdateScope;
+      LoopRoots.Add(UpdateScope);
       UpdateContext.Scope := UpdateScope;
     end
     else

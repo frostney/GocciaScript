@@ -1,7 +1,9 @@
 /*---
 description: yield in traditional for-loop body preserves loop state across resumes
-features: [compat-traditional-for-loop, generators]
+features: [compat-traditional-for-loop, generators, Goccia.gc]
 ---*/
+
+const hasGoccia = typeof Goccia !== "undefined";
 
 const factory = {
   basic() {
@@ -182,5 +184,22 @@ test("const binding in init yields per iteration", () => {
   expect(g.next().value).toBe(10);
   expect(g.next().value).toBe(20);
   expect(g.next().value).toBe(30);
+  expect(g.next().done).toBe(true);
+});
+
+test.runIf(hasGoccia)("body resume roots the active iteration scope across explicit GC", () => {
+  const obj = {
+    *gen() {
+      for (let i = 42; i < 43; i++) {
+        yield "body";
+        Goccia.gc();
+        yield i;
+      }
+    },
+  };
+
+  const g = obj.gen();
+  expect(g.next().value).toBe("body");
+  expect(g.next().value).toBe(42);
   expect(g.next().done).toBe(true);
 });

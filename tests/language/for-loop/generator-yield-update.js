@@ -1,7 +1,9 @@
 /*---
 description: yield in traditional for-loop update resumes mid-update
-features: [compat-traditional-for-loop, generators]
+features: [compat-traditional-for-loop, generators, Goccia.gc]
 ---*/
+
+const hasGoccia = typeof Goccia !== "undefined";
 
 test("yield in update yields current value before increment", () => {
   const obj = {
@@ -38,5 +40,17 @@ test("update preserves header value across resumes", () => {
   expect(g.next().value).toBe(2);
   expect(g.next().value).toBe(3);
   expect(g.next().value).toBe(4);
+  expect(g.next().done).toBe(true);
+});
+
+test.runIf(hasGoccia)("update resume roots the active update scope across explicit GC", () => {
+  const obj = {
+    *gen() {
+      for (let i = 42; i < 43; i = (yield "update", Goccia.gc(), i + 1)) {}
+    },
+  };
+
+  const g = obj.gen();
+  expect(g.next().value).toBe("update");
   expect(g.next().done).toBe(true);
 });
