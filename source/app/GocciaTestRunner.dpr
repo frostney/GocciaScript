@@ -365,12 +365,20 @@ begin
   Result := '[path...|-] [options]';
 end;
 
+function NormalizeSnapshotAttributionPath(const APath: string): string;
+begin
+  { File results preserve CLI spelling while snapshot errors contain expanded
+    native paths. Normalize copies only; emitted paths stay unchanged. }
+  Result := StringReplace(APath, PathDelim, '/', [rfReplaceAll]);
+end;
+
 procedure RecordSnapshotFinalizationFailure(
   var AResult: TAggregatedTestResult; const AMessage: string);
 var
   FailedTestsValue: TGocciaValue;
   FailedTests: TGocciaArrayValue;
   FileIndex, I, OldLength: Integer;
+  NormalizedFileName, NormalizedMessage: string;
 begin
   if not Assigned(AResult.TestResult) then
     Exit;
@@ -390,12 +398,17 @@ begin
   end;
 
   FileIndex := -1;
+  NormalizedMessage := NormalizeSnapshotAttributionPath(AMessage);
   for I := 0 to High(AResult.FileResults) do
-    if Pos(AResult.FileResults[I].FileName, AMessage) > 0 then
+  begin
+    NormalizedFileName := NormalizeSnapshotAttributionPath(
+      AResult.FileResults[I].FileName);
+    if Pos(NormalizedFileName, NormalizedMessage) > 0 then
       if (FileIndex < 0) or
          (Length(AResult.FileResults[I].FileName) >
           Length(AResult.FileResults[FileIndex].FileName)) then
         FileIndex := I;
+  end;
   if FileIndex >= 0 then
   begin
     AResult.FileResults[FileIndex].Failed :=
