@@ -29,3 +29,9 @@ test("has throws TypeError when receiver is not a WeakSet", () => {
   expect(() => has.call({}, {})).toThrow(TypeError);
   expect(() => has.call(WeakSet.prototype, {})).toThrow(TypeError);
 });
+
+test("has is not constructable", () => {
+  expect(() =>
+    Reflect.construct(class {}, [], WeakSet.prototype.has)
+  ).toThrow(TypeError);
+});

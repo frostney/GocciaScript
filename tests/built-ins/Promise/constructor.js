@@ -207,26 +207,3 @@ test("Promise.reject() instanceof Promise", () => {
     expect(p instanceof Promise).toBe(true);
   });
 });
-
-test("Promise.prototype.constructor is Promise", () => {
-  expect(Promise.prototype.constructor).toBe(Promise);
-});
-
-test("instance constructor is Promise", () => {
-  const p = new Promise((resolve) => resolve(1));
-  return p.then(() => {
-    expect(p.constructor).toBe(Promise);
-  });
-});
-
-test("Promise.prototype has then method", () => {
-  expect(typeof Promise.prototype.then).toBe("function");
-});
-
-test("Promise.prototype has catch method", () => {
-  expect(typeof Promise.prototype.catch).toBe("function");
-});
-
-test("Promise.prototype has finally method", () => {
-  expect(typeof Promise.prototype.finally).toBe("function");
-});

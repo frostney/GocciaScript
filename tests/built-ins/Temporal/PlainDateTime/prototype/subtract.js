@@ -12,4 +12,8 @@ describe.runIf(isTemporal)("Temporal.PlainDateTime.prototype.subtract", () => {
     expect(result.month).toBe(2);
     expect(result.day).toBe(29);
   });
+
+  test("rejects invalid duration strings", () => {
+    expect(() => new Temporal.PlainDateTime(2024, 1, 1).subtract("not-a-duration")).toThrow(RangeError);
+  });
 });

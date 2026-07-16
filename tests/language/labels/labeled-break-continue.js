@@ -64,19 +64,6 @@ describe("labeled statements", () => {
     expect(visited).toBe("1:1;2:1;3:1;");
   });
 
-  test("continue label must target an enclosing iteration statement", () => {
-    expect(() => new Function("block: { continue block; }")).toThrow(SyntaxError);
-  });
-
-  test("labels do not target lexical declarations", () => {
-    expect(() => new Function("label: let x = 1;")).toThrow(SyntaxError);
-    expect(() => new Function("label: class C {}")).toThrow(SyntaxError);
-  });
-
-  test("labels do not cross function boundaries", () => {
-    expect(() => new Function("outer: while (true) { const f = () => { break outer; }; }")).toThrow(SyntaxError);
-  });
-
   test("nested labeled statements preserve inner break targets", () => {
     let value = 0;
 

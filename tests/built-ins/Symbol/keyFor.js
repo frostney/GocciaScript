@@ -25,3 +25,7 @@ test("Symbol.keyFor throws TypeError for non-symbol values", () => {
 test("Symbol.keyFor throws TypeError with no arguments", () => {
   expect(() => { Symbol.keyFor(); }).toThrow(TypeError);
 });
+
+test("Symbol.keyFor is not constructable", () => {
+  expect(() => new Symbol.keyFor(Symbol("key"))).toThrow(TypeError);
+});

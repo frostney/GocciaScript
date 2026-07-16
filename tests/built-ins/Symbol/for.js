@@ -56,3 +56,7 @@ test("Symbol.for key coercion uses object toString", () => {
 test("Symbol.for rejects symbol keys", () => {
   expect(() => Symbol.for(Symbol("key"))).toThrow(TypeError);
 });
+
+test("Symbol.for is not constructable", () => {
+  expect(() => new Symbol.for("key")).toThrow(TypeError);
+});

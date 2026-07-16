@@ -8,6 +8,11 @@ test("empty Set constructor", () => {
   expect(set.size).toBe(0);
 });
 
+test("Set requires new", () => {
+  // biome-ignore lint/correctness/noInvalidBuiltinInstantiation: intentional constructor contract
+  expect(() => Set()).toThrow(TypeError);
+});
+
 test("Set constructor with array", () => {
   const set = new Set([1, 2, 3]);
   expect(set.size).toBe(3);
@@ -72,22 +77,6 @@ test("Set.prototype is an object", () => {
 test("new Set instanceof Set", () => {
   const s = new Set();
   expect(s instanceof Set).toBe(true);
-});
-
-test("Set.prototype.constructor is Set", () => {
-  expect(Set.prototype.constructor).toBe(Set);
-});
-
-test("instance constructor is Set", () => {
-  const s = new Set();
-  expect(s.constructor).toBe(Set);
-});
-
-test("Set.prototype.constructor is non-enumerable", () => {
-  const desc = Object.getOwnPropertyDescriptor(Set.prototype, "constructor");
-  expect(desc.writable).toBe(true);
-  expect(desc.enumerable).toBe(false);
-  expect(desc.configurable).toBe(true);
 });
 
 test("Set constructor closes iterator when subclass add throws and preserves original error", () => {

@@ -1,6 +1,6 @@
 /*---
-description: Math.min and Math.max methods work correctly
-features: [Math.min, Math.max]
+description: Math.min
+features: [Math.min]
 ---*/
 
 test("Math.min", () => {

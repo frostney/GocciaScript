@@ -5,8 +5,10 @@ features: [DataView]
 
 describe("DataView.prototype.getInt8", () => {
   test("reads one signed byte", () => {
-    const view = new DataView(new ArrayBuffer(1));
-    view.setUint8(0, 255);
+    const buffer = new ArrayBuffer(3);
+    const bytes = new Uint8Array(buffer);
+    bytes[1] = 255;
+    const view = new DataView(buffer, 1, 1);
     expect(view.getInt8(0)).toBe(-1);
   });
 
@@ -17,5 +19,18 @@ describe("DataView.prototype.getInt8", () => {
 
     expect(() => view.getInt8(Math.pow(2, 53) - 1)).toThrow(TypeError);
     expect(() => view.getInt8(Math.pow(2, 53))).toThrow(RangeError);
+  });
+
+  test("rejects incompatible receivers before converting the index", () => {
+    let converted = false;
+    const index = {
+      valueOf() {
+        converted = true;
+        return 0;
+      },
+    };
+
+    expect(() => DataView.prototype.getInt8.call({}, index)).toThrow(TypeError);
+    expect(converted).toBe(false);
   });
 });

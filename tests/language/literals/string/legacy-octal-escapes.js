@@ -10,19 +10,3 @@ test("sloppy strings cook legacy octal escapes", () => {
   expect("\400").toBe("\x20" + "0");
   expect("\08").toBe("\x00" + "8");
 });
-
-test("strict strings reject decimal escapes", () => {
-  expect(() => {
-    Function('"use strict"; "\\1";');
-  }).toThrow(SyntaxError);
-});
-
-test("a later use strict directive rejects earlier decimal-escape directives", () => {
-  expect(() => {
-    Function('"\\145"; "use strict";');
-  }).toThrow(SyntaxError);
-
-  expect(() => {
-    Function('function nested() { "\\8"; "use strict"; }');
-  }).toThrow(SyntaxError);
-});

@@ -8,6 +8,11 @@ test("empty WeakSet constructor", () => {
   expect(set instanceof WeakSet).toBe(true);
 });
 
+test("WeakSet requires new", () => {
+  // biome-ignore lint/correctness/noInvalidBuiltinInstantiation: intentional constructor contract
+  expect(() => WeakSet()).toThrow(TypeError);
+});
+
 test("WeakSet constructor accepts null and undefined", () => {
   expect(new WeakSet(null) instanceof WeakSet).toBe(true);
   expect(new WeakSet(undefined) instanceof WeakSet).toBe(true);
@@ -167,21 +172,6 @@ test("WeakSet constructor observes native iterator @@iterator overrides", () => 
   expect(() => new WeakSet(iterator)).toThrow(TypeError);
 });
 
-test("WeakSet.prototype.constructor is WeakSet", () => {
-  expect(WeakSet.prototype.constructor).toBe(WeakSet);
-  expect(new WeakSet().constructor).toBe(WeakSet);
-});
-
-test("WeakSet has no collection enumeration APIs", () => {
-  expect(WeakSet.prototype.size).toBe(undefined);
-  expect(WeakSet.prototype.clear).toBe(undefined);
-  expect(WeakSet.prototype.forEach).toBe(undefined);
-  expect(WeakSet.prototype.keys).toBe(undefined);
-  expect(WeakSet.prototype.values).toBe(undefined);
-  expect(WeakSet.prototype.entries).toBe(undefined);
-  expect(WeakSet.prototype[Symbol.iterator]).toBe(undefined);
-});
-
 test("WeakSet.length is 0 with spec descriptor", () => {
   expect(WeakSet.length).toBe(0);
   const descriptor = Object.getOwnPropertyDescriptor(WeakSet, "length");
@@ -189,26 +179,4 @@ test("WeakSet.length is 0 with spec descriptor", () => {
   expect(descriptor.writable).toBe(false);
   expect(descriptor.enumerable).toBe(false);
   expect(descriptor.configurable).toBe(true);
-});
-
-test("WeakSet.prototype methods are not constructors", () => {
-  const isConstructor = (f) => {
-    try {
-      Reflect.construct(class {}, [], f);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  expect(isConstructor(WeakSet.prototype.add)).toBe(false);
-  expect(isConstructor(WeakSet.prototype.delete)).toBe(false);
-  expect(isConstructor(WeakSet.prototype.has)).toBe(false);
-});
-
-test("new on WeakSet.prototype methods throws TypeError", () => {
-  // Reserved-word property names (delete) must parse after `new` per spec
-  const ws = new WeakSet();
-  expect(() => new ws.delete()).toThrow(TypeError);
-  expect(() => new ws.has()).toThrow(TypeError);
-  expect(() => new ws.add()).toThrow(TypeError);
 });

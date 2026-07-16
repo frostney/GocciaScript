@@ -5,9 +5,11 @@ features: [DataView]
 
 describe("DataView.prototype.getUint8", () => {
   test("reads one unsigned byte", () => {
-    const view = new DataView(new ArrayBuffer(2));
-    view.setUint8(0, 255);
-    view.setUint8(1, 1);
+    const buffer = new ArrayBuffer(2);
+    const bytes = new Uint8Array(buffer);
+    bytes[0] = 255;
+    bytes[1] = 1;
+    const view = new DataView(buffer);
     expect(view.getUint8(0)).toBe(255);
     expect(view.getUint8(1)).toBe(1);
   });

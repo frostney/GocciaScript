@@ -13,3 +13,8 @@ test("Math.cos", () => {
   expect(Math.cos(Infinity)).toBeNaN();
   expect(Math.cos(-Infinity)).toBeNaN();
 });
+
+test("Math.cos coerces its argument", () => {
+  expect(Math.cos("0")).toBe(1);
+  expect(() => Math.cos(1n)).toThrow(TypeError);
+});

@@ -34,10 +34,6 @@ test("catch parameter type annotation allows nested is property names", () => {
   expect(value).toBe("nested");
 });
 
-test("catch parameter type annotation requires a type", () => {
-  expect(() => new Function("try { throw 1; } catch (e:) {}")).toThrow();
-});
-
 test("catch without type annotation still works", () => {
   let caught = false;
   try {

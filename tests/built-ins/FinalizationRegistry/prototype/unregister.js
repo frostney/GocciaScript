@@ -55,3 +55,9 @@ test("unregister throws TypeError when receiver is not a FinalizationRegistry", 
   expect(() => unregister.call({}, {})).toThrow(TypeError);
   expect(() => unregister.call(FinalizationRegistry.prototype, {})).toThrow(TypeError);
 });
+
+test("unregister is not constructable", () => {
+  expect(() =>
+    Reflect.construct(class {}, [], FinalizationRegistry.prototype.unregister)
+  ).toThrow(TypeError);
+});

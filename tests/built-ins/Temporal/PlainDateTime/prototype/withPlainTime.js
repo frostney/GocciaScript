@@ -20,3 +20,7 @@ describe.runIf(isTemporal)("Temporal.PlainDateTime.prototype.withPlainTime", () 
     expect(result.toString()).toBe("2024-03-15T12:34:56.987654321");
   });
 });
+
+test.runIf(isTemporal)("rejects invalid time strings", () => {
+  expect(() => new Temporal.PlainDateTime(2024, 1, 1).withPlainTime("not-a-time")).toThrow(RangeError);
+});

@@ -39,3 +39,9 @@ test("set throws TypeError when receiver is not a WeakMap", () => {
   expect(() => set.call({}, {}, 1)).toThrow(TypeError);
   expect(() => set.call(WeakMap.prototype, {}, 1)).toThrow(TypeError);
 });
+
+test("set is not constructable", () => {
+  expect(() =>
+    Reflect.construct(class {}, [], WeakMap.prototype.set)
+  ).toThrow(TypeError);
+});

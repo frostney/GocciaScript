@@ -102,6 +102,14 @@ const
   DOUBLE_MIN_SUBNORMAL_EXPONENT = -1074;
   DOUBLE_MAX_EXPONENT = 1023;
   DOUBLE_INTEGRAL_LIMIT = 4503599627370496.0; // 2^52
+  MATH_E = 2.718281828459045;
+  MATH_LN2 = 0.6931471805599453;
+  MATH_LN10 = 2.302585092994046;
+  MATH_LOG2E = 1.4426950408889634;
+  MATH_LOG10E = 0.4342944819032518;
+  MATH_PI = 3.141592653589793;
+  MATH_SQRT1_2 = 0.7071067811865476;
+  MATH_SQRT2 = 1.4142135623730951;
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
@@ -435,14 +443,14 @@ begin
   FHostEnvironment := AHostEnvironment;
 
   // Constants: non-writable, non-enumerable, non-configurable
-  FBuiltinObject.RegisterConstant('PI', TGocciaNumberLiteralValue.Create(Pi));
-  FBuiltinObject.RegisterConstant('E', TGocciaNumberLiteralValue.Create(Exp(1)));
-  FBuiltinObject.RegisterConstant('LN2', TGocciaNumberLiteralValue.Create(Ln(2)));
-  FBuiltinObject.RegisterConstant('LN10', TGocciaNumberLiteralValue.Create(Ln(10)));
-  FBuiltinObject.RegisterConstant('SQRT2', TGocciaNumberLiteralValue.Create(Sqrt(2)));
-  FBuiltinObject.RegisterConstant('LOG2E', TGocciaNumberLiteralValue.Create(1 / Ln(2)));
-  FBuiltinObject.RegisterConstant('LOG10E', TGocciaNumberLiteralValue.Create(1 / Ln(10)));
-  FBuiltinObject.RegisterConstant('SQRT1_2', TGocciaNumberLiteralValue.Create(Sqrt(0.5)));
+  FBuiltinObject.RegisterConstant('PI', TGocciaNumberLiteralValue.Create(MATH_PI));
+  FBuiltinObject.RegisterConstant('E', TGocciaNumberLiteralValue.Create(MATH_E));
+  FBuiltinObject.RegisterConstant('LN2', TGocciaNumberLiteralValue.Create(MATH_LN2));
+  FBuiltinObject.RegisterConstant('LN10', TGocciaNumberLiteralValue.Create(MATH_LN10));
+  FBuiltinObject.RegisterConstant('SQRT2', TGocciaNumberLiteralValue.Create(MATH_SQRT2));
+  FBuiltinObject.RegisterConstant('LOG2E', TGocciaNumberLiteralValue.Create(MATH_LOG2E));
+  FBuiltinObject.RegisterConstant('LOG10E', TGocciaNumberLiteralValue.Create(MATH_LOG10E));
+  FBuiltinObject.RegisterConstant('SQRT1_2', TGocciaNumberLiteralValue.Create(MATH_SQRT1_2));
 
   Members := TGocciaMemberCollection.Create;
   try

@@ -7,9 +7,16 @@ test("Math.sqrt", () => {
   expect(Math.sqrt(4)).toBe(2);
   expect(Math.sqrt(9)).toBe(3);
   expect(Math.sqrt(16)).toBe(4);
-  expect(Math.sqrt(0)).toBeCloseTo(0);
+  expect(Math.sqrt(0)).toBe(0);
+  expect(Object.is(Math.sqrt(-0), -0)).toBe(true);
   expect(Math.sqrt(2)).toBeCloseTo(1.414, 3);
   expect(Math.sqrt(Infinity)).toBe(Infinity);
+  expect(Math.sqrt(-Infinity)).toBeNaN();
   expect(Math.sqrt(-1)).toBeNaN();
-  expect(Math.sqrt(NaN)).toBeNaN(); // NaN should return NaN
+  expect(Math.sqrt(NaN)).toBeNaN();
+});
+
+test("Math.sqrt coerces its argument", () => {
+  expect(Math.sqrt("9")).toBe(3);
+  expect(() => Math.sqrt(1n)).toThrow(TypeError);
 });

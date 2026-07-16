@@ -12,4 +12,8 @@ describe.runIf(isTemporal)("Temporal.PlainYearMonth.prototype.subtract", () => {
     expect(sub.year).toBe(2023);
     expect(sub.month).toBe(11);
   });
+
+  test("rejects invalid duration strings", () => {
+    expect(() => new Temporal.PlainYearMonth(2024, 6).subtract("not-a-duration")).toThrow(RangeError);
+  });
 });

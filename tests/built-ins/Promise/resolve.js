@@ -127,3 +127,45 @@ test("Promise.resolve fulfills with the original object when then is not callabl
     expect(resolved.ok).toBe(true);
   });
 });
+
+test("Promise capability executor throws when called twice with resolving functions", () => {
+  class CallsExecutorTwice {
+    constructor(executor) {
+      const resolve = () => {};
+      const reject = () => {};
+      executor(resolve, reject);
+      executor(resolve, reject);
+    }
+  }
+
+  expect(() => Promise.resolve.call(CallsExecutorTwice, 1)).toThrow(TypeError);
+});
+
+test("Promise capability executor can recover from undefined resolving functions", () => {
+  class CallsExecutorWithUndefinedFirst {
+    constructor(executor) {
+      executor(undefined, undefined);
+      executor(() => {}, () => {});
+    }
+  }
+
+  expect(Promise.resolve.call(CallsExecutorWithUndefinedFirst, 1)).toBeInstanceOf(
+    CallsExecutorWithUndefinedFirst,
+  );
+});
+
+test("Promise capability executor rejects partially captured resolving functions", () => {
+  for (const firstCall of [
+    (executor) => executor(undefined, () => {}),
+    (executor) => executor(() => {}, undefined),
+  ]) {
+    class CallsExecutorPartially {
+      constructor(executor) {
+        firstCall(executor);
+        executor(() => {}, () => {});
+      }
+    }
+
+    expect(() => Promise.resolve.call(CallsExecutorPartially, 1)).toThrow(TypeError);
+  }
+});

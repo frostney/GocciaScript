@@ -29,4 +29,8 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.add", () => {
     const two = Temporal.Duration.from({ microseconds: 1_000_000 });
     expect(() => one.add(two)).toThrow(RangeError);
   });
+
+  test("rejects invalid duration strings", () => {
+    expect(() => new Temporal.Duration(0, 0, 0, 1).add("not-a-duration")).toThrow(RangeError);
+  });
 });

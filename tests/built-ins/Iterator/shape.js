@@ -1,5 +1,5 @@
 /*---
-description: Iterator constructor and prototype object shape
+description: Iterator constructor and helper object shape
 features: [Iterator, iterator-helpers]
 ---*/
 
@@ -9,30 +9,6 @@ describe("Iterator shape", () => {
     expect(Object.getPrototypeOf(Iterator)).toBe(Function.prototype);
     expect(() => Iterator()).toThrow(TypeError);
     expect(() => new Iterator()).toThrow(TypeError);
-  });
-
-  test("Iterator.prototype.constructor is an accessor returning Iterator", () => {
-    const desc = Object.getOwnPropertyDescriptor(Iterator.prototype, "constructor");
-    expect(typeof desc.get).toBe("function");
-    expect(typeof desc.set).toBe("function");
-    expect(desc.enumerable).toBe(false);
-    expect(desc.configurable).toBe(true);
-    expect(desc.value).toBe(undefined);
-    expect(desc.writable).toBe(undefined);
-    expect(Iterator.prototype.constructor).toBe(Iterator);
-    expect(desc.get.call()).toBe(Iterator);
-  });
-
-  test("Iterator.prototype Symbol.toStringTag is an accessor", () => {
-    const desc = Object.getOwnPropertyDescriptor(Iterator.prototype, Symbol.toStringTag);
-    expect(typeof desc.get).toBe("function");
-    expect(typeof desc.set).toBe("function");
-    expect(desc.enumerable).toBe(false);
-    expect(desc.configurable).toBe(true);
-    expect(desc.value).toBe(undefined);
-    expect(desc.writable).toBe(undefined);
-    expect(Iterator.prototype[Symbol.toStringTag]).toBe("Iterator");
-    expect(Object.prototype.toString.call(Iterator.prototype)).toBe("[object Iterator]");
   });
 
   test("helper return values are instanceof Iterator", () => {

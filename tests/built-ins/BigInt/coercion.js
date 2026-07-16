@@ -70,6 +70,56 @@ test("Object() boxed BigInt in arithmetic", () => {
   expect(Object(2n) * 3n === 6n).toBe(true);
 });
 
+test("boxed BigInt respects an explicit null prototype", () => {
+  const boxed = Object(7n);
+
+  Object.setPrototypeOf(boxed, null);
+
+  expect(Object.getPrototypeOf(boxed)).toBeNull();
+  expect(boxed.valueOf).toBeUndefined();
+  expect(boxed.toString).toBeUndefined();
+});
+
+test("boxed BigInt ordinary ToPrimitive observes prototype accessors once", () => {
+  const bigIntValueOf = BigInt.prototype.valueOf;
+  const originalToString = Object.getOwnPropertyDescriptor(BigInt.prototype, "toString");
+  const originalValueOf = Object.getOwnPropertyDescriptor(BigInt.prototype, "valueOf");
+  let toStringGets = 0;
+  let valueOfGets = 0;
+  let valueOfCalls = 0;
+  const valueOfFunction = {
+    valueOfReplacement() {
+      valueOfCalls++;
+      return bigIntValueOf.call(this) * 2n;
+    },
+  }.valueOfReplacement;
+
+  try {
+    Object.defineProperty(BigInt.prototype, "toString", {
+      configurable: true,
+      get() {
+        toStringGets++;
+        return undefined;
+      },
+    });
+    Object.defineProperty(BigInt.prototype, "valueOf", {
+      configurable: true,
+      get() {
+        valueOfGets++;
+        return valueOfFunction;
+      },
+    });
+
+    expect("".concat(Object(1n))).toBe("2");
+    expect(toStringGets).toBe(1);
+    expect(valueOfGets).toBe(1);
+    expect(valueOfCalls).toBe(1);
+  } finally {
+    Object.defineProperty(BigInt.prototype, "toString", originalToString);
+    Object.defineProperty(BigInt.prototype, "valueOf", originalValueOf);
+  }
+});
+
 describe("BigInt from large integral doubles is exact", () => {
   test("values beyond 17 significant decimal digits convert without rounding drift", () => {
     expect(BigInt(9007199254740991475711)).toBe(9007199254740990951424n);

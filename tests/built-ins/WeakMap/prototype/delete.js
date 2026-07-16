@@ -32,3 +32,9 @@ test("delete throws TypeError when receiver is not a WeakMap", () => {
   expect(() => del.call({}, {})).toThrow(TypeError);
   expect(() => del.call(WeakMap.prototype, {})).toThrow(TypeError);
 });
+
+test("delete is not constructable", () => {
+  expect(() =>
+    Reflect.construct(class {}, [], WeakMap.prototype.delete)
+  ).toThrow(TypeError);
+});

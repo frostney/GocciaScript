@@ -18,4 +18,15 @@ describe.runIf(isTemporal)("Temporal.PlainTime.prototype.add", () => {
     const result = t.add(new Temporal.Duration(0, 0, 0, 0, 2));
     expect(result.hour).toBe(1);
   });
+
+  test("hours beyond Int32 wrap correctly into the clock", () => {
+    const time = Temporal.PlainTime.from({ hour: 0 }).add({
+      hours: 3000000001,
+    });
+    expect(time.hour).toBe(1);
+  });
+
+  test("rejects invalid duration strings", () => {
+    expect(() => new Temporal.PlainTime(12).add("not-a-duration")).toThrow(RangeError);
+  });
 });

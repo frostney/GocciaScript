@@ -61,3 +61,55 @@ test("Promise.any AggregateError preserves error order", () => {
     expect(e.errors).toEqual(["a", "b", "c"]);
   });
 });
+
+test("Promise.any rejects non-iterable arguments with TypeError", async () => {
+  for (const value of [42, null, undefined]) {
+    try {
+      await Promise.any(value);
+      throw new Error("Expected rejection");
+    } catch (error) {
+      expect(error).toBeInstanceOf(TypeError);
+    }
+  }
+});
+
+test("Promise.any skips IteratorClose when an iterator result accessor throws", async () => {
+  for (const property of ["done", "value"]) {
+    let returnCalled = 0;
+    const sentinel = new Error(property + "-boom");
+    const iterable = {
+      [Symbol.iterator]() {
+        return {
+          next() {
+            if (property === "done") {
+              return {
+                get done() {
+                  throw sentinel;
+                },
+                value: 1,
+              };
+            }
+            return {
+              done: false,
+              get value() {
+                throw sentinel;
+              },
+            };
+          },
+          return() {
+            returnCalled++;
+            return { done: true };
+          },
+        };
+      },
+    };
+
+    try {
+      await Promise.any(iterable);
+      throw new Error("Expected rejection");
+    } catch (error) {
+      expect(error).toBe(sentinel);
+      expect(returnCalled).toBe(0);
+    }
+  }
+});

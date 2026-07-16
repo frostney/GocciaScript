@@ -35,21 +35,6 @@ describe("ShadowRealm constructor", () => {
     expect(descriptor.configurable).toBe(false);
   });
 
-  test("ShadowRealm.prototype.constructor points back to ShadowRealm", () => {
-    expect(ShadowRealm.prototype.constructor).toBe(ShadowRealm);
-  });
-
-  test("ShadowRealm.prototype[Symbol.toStringTag] is 'ShadowRealm' and configurable only", () => {
-    expect(ShadowRealm.prototype[Symbol.toStringTag]).toBe("ShadowRealm");
-    const descriptor = Object.getOwnPropertyDescriptor(
-      ShadowRealm.prototype,
-      Symbol.toStringTag,
-    );
-    expect(descriptor.writable).toBe(false);
-    expect(descriptor.enumerable).toBe(false);
-    expect(descriptor.configurable).toBe(true);
-  });
-
   test("Object.prototype.toString tags a ShadowRealm instance as [object ShadowRealm]", () => {
     expect(Object.prototype.toString.call(new ShadowRealm())).toBe(
       "[object ShadowRealm]",

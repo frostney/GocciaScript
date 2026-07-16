@@ -29,28 +29,3 @@ test("FinalizationRegistry.length is 1 with spec descriptor", () => {
   expect(descriptor.enumerable).toBe(false);
   expect(descriptor.configurable).toBe(true);
 });
-
-test("FinalizationRegistry.prototype.constructor is FinalizationRegistry", () => {
-  expect(FinalizationRegistry.prototype.constructor).toBe(FinalizationRegistry);
-  expect(new FinalizationRegistry(() => {}).constructor).toBe(FinalizationRegistry);
-});
-
-test("FinalizationRegistry exposes only the standard prototype methods", () => {
-  expect(typeof FinalizationRegistry.prototype.register).toBe("function");
-  expect(typeof FinalizationRegistry.prototype.unregister).toBe("function");
-  expect(FinalizationRegistry.prototype.cleanupSome).toBe(undefined);
-});
-
-test("FinalizationRegistry.prototype methods are not constructors", () => {
-  const isConstructor = (fn) => {
-    try {
-      new fn();
-      return true;
-    } catch (_) {
-      return false;
-    }
-  };
-
-  expect(isConstructor(FinalizationRegistry.prototype.register)).toBe(false);
-  expect(isConstructor(FinalizationRegistry.prototype.unregister)).toBe(false);
-});

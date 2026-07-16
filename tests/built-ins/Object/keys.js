@@ -25,6 +25,14 @@ test("Object.keys with string returns character indices", () => {
   expect(Object.keys("a")).toEqual(["0"]);
 });
 
+test("Object.keys omits symbol-keyed properties", () => {
+  const symbol = Symbol("hidden");
+  const object = { visible: true, [symbol]: "secret" };
+
+  expect(Object.keys(object)).toEqual(["visible"]);
+  expect(Object.getOwnPropertySymbols(object)).toEqual([symbol]);
+});
+
 test("Object.keys throws for null", () => {
   expect(() => Object.keys(null)).toThrow(TypeError);
 });

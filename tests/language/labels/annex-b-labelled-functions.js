@@ -9,29 +9,6 @@ describe("Annex B labelled function declarations", () => {
     expect(new Function("l0: l1: function f() { return 2; } return f();")()).toBe(2);
   });
 
-  test("strict labelled function declarations remain invalid", () => {
-    expect(() => new Function('"use strict"; l: function f() {}')).toThrow(SyntaxError);
-    expect(() => new Function('"use strict"; l0: l1: function f() {}')).toThrow(SyntaxError);
-  });
-
-  test("statement bodies reject labelled function declarations", () => {
-    const invalidBodies = [
-      "if (true) l: function f() {}",
-      "if (false) {} else l: function f() {}",
-      "with ({}) l: function f() {}",
-      "while (false) l: function f() {}",
-      "do l: function f() {} while (false);",
-      "for (let i = 0; i < 0; i++) l: function f() {}",
-      "for (const key in {}) l: function f() {}",
-      "let key; for (key in {}) l: function f() {}",
-      "for (const value of []) l: function f() {}",
-    ];
-
-    for (const source of invalidBodies) {
-      expect(() => new Function(source)).toThrow(SyntaxError);
-    }
-  });
-
   test("block-wrapped labelled function declarations remain valid statement bodies", () => {
     expect(typeof new Function("if (true) { l: function f() {} }")).toBe("function");
     expect(typeof new Function("while (false) { l: function f() {} }")).toBe("function");

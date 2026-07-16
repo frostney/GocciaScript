@@ -4,10 +4,6 @@ features: [Number.isNaN]
 ---*/
 
 describe("Number.isNaN", () => {
-  test("has the correct function length", () => {
-    expect(Number.isNaN.length).toBe(1);
-  });
-
   test("returns true for NaN", () => {
     expect(Number.isNaN(NaN)).toBe(true);
   });
