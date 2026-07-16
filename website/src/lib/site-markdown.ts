@@ -286,7 +286,7 @@ export function renderCompatibilityMarkdown(
         `- Wrapper infrastructure failures: ${compatibilityNumber(
           latest.summary.wrapperInfraFailures,
         )}`,
-        `- Commit: [\`${latest.shortSha}\`](${latest.runUrl})`,
+        `- Commit: \`${latest.shortSha}\``,
         `- CI run: [#${latest.runNumber}](${latest.runUrl})`,
         `- Run date: ${compatibilityDate(latest.createdAt)}`,
         "",

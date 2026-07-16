@@ -170,7 +170,10 @@ describe("createSiteMarkdown", () => {
       "Overall test262 corpus pass rate: **99.0%** (99 passed / 100 run)",
     );
     expect(markdown).toContain("| language | 100.0% | 50 / 50 |");
-    expect(markdown).toContain("`0466e9bc`");
+    expect(markdown).toContain("- Commit: `0466e9bc`");
+    expect(markdown).toContain(
+      "- CI run: [#829](https://github.com/frostney/GocciaScript/actions/runs/100)",
+    );
     expect(markdown).not.toContain("/api/test262/latest");
   });
 });

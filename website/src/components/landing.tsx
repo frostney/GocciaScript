@@ -908,7 +908,7 @@ export function Landing({
                     GocciaScript uses modern recommended defaults while tracking
                     conformance with generated test262 reports.
                   </span>
-                </a>
+                </a>{" "}
                 runtime with explicit host-controlled capabilities, designed for
                 embedding portable JavaScript in applications.
               </p>
