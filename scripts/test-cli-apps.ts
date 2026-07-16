@@ -1880,6 +1880,8 @@ console.log("Loader: --audit-log records capability decisions with source locati
         {
           stdin: new TextEncoder().encode([
             'try { Function("return 1")(); } catch (e) {}',
+            'const holder = { ctor: Function };',
+            'try { holder.ctor("return 1")(); } catch (e) {}',
             'try { FFI.open("./missing"); } catch (e) {}',
             'new ShadowRealm().evaluate("new ShadowRealm(); 1");',
             "",
@@ -1893,8 +1895,9 @@ console.log("Loader: --audit-log records capability decisions with source locati
       const events = readJsonLines(audit);
       const expected = [
         ["function.constructor", "deny", "Function", "<stdin>", 1],
-        ["ffi.open", "allow", "./missing", "<stdin>", 2],
-        ["shadow-realm.construct", "allow", "ShadowRealm", "<stdin>", 3],
+        ["function.constructor", "deny", "Function", "<stdin>", 3],
+        ["ffi.open", "allow", "./missing", "<stdin>", 4],
+        ["shadow-realm.construct", "allow", "ShadowRealm", "<stdin>", 5],
         ["shadow-realm.construct", "allow", "ShadowRealm", "<shadow-realm-eval>", 1],
       ];
       if (events.length !== expected.length)
@@ -1950,6 +1953,32 @@ console.log("Loader: --audit-log fails closed when the output cannot be opened..
     });
     if (proc.exitCode === 0)
       throw new Error("Loader audit log open failure should be fatal");
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Loader: --log and --audit-log reject the same output path...");
+{
+  const tmp = makeTmp();
+  try {
+    const shared = join(tmp, "combined.log");
+    const alias = `${tmp}/./combined.log`;
+    const proc = Bun.spawnSync(
+      [LOADER, `--log=${shared}`, `--audit-log=${alias}`],
+      {
+        stdin: new TextEncoder().encode('console.log("hello");\n'),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    if (proc.exitCode === 0)
+      throw new Error("Loader should reject colliding log output paths");
+    const diagnostic = proc.stdout.toString() + proc.stderr.toString();
+    if (!diagnostic.includes("must write to different files"))
+      throw new Error(`Loader collision error mismatch: ${diagnostic}`);
+    if (existsSync(shared))
+      throw new Error("Loader should validate colliding paths before opening either file");
   } finally {
     clean(tmp);
   }

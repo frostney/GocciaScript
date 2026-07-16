@@ -74,9 +74,11 @@ Engine.CapabilityAuditSink := HandleCapabilityAudit;
 Install the sink before executing source or attaching runtime capabilities.
 ShadowRealm child engines inherit the parent engine's sink.
 
-Sink exceptions propagate and stop execution. Hosts must treat delivery as
-part of the security contract: serialize concurrent calls when engines run on
-multiple threads, and do not swallow storage or transport failures.
+Sink exceptions propagate as `EGocciaCapabilityAuditDeliveryError` and stop
+execution. Script-level `try`/`catch` and promise rejection handlers cannot
+intercept delivery failures. Hosts must treat delivery as part of the security
+contract: serialize concurrent calls when engines run on multiple threads, and
+do not swallow storage or transport failures.
 
 ## CLI
 
@@ -91,4 +93,6 @@ All `TGocciaCLIApplication`-based hosts accept:
 
 The file is created before execution. Failure to open it or write an event is
 fatal. Writes are serialized, so batch hosts may safely combine events from
-`--jobs=N` workers into one JSONL stream.
+`--jobs=N` workers into one JSONL stream. `--log` and `--audit-log` must name
+different files; the CLI rejects equivalent expanded paths before opening
+either output.

@@ -16023,7 +16023,10 @@ begin
           else
             for I := 0 to B - 1 do
               CallArgs.Add(GetRegister(A + 1 + I));
-          if GetRegister(A) is TGocciaNativeFunctionValue then
+          if (GetRegister(A) is TGocciaNativeFunctionValue) or
+             (GetRegister(A) is TGocciaFunctionConstructorClassValue) or
+             (GetRegister(A) is TGocciaBoundFunctionValue) or
+             (GetRegister(A) is TGocciaProxyValue) then
           begin
             EnterCurrentInstructionCallSite(PreviousCallSite);
             try

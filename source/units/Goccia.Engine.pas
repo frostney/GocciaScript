@@ -1712,7 +1712,15 @@ begin
     AuditEvent.Source.Column := 0;
   end;
 
-  FCapabilityAuditSink(AuditEvent);
+  try
+    FCapabilityAuditSink(AuditEvent);
+  except
+    on E: EGocciaCapabilityAuditDeliveryError do
+      raise;
+    on E: Exception do
+      raise EGocciaCapabilityAuditDeliveryError.Create(
+        'capability audit delivery failed: ' + E.Message);
+  end;
 end;
 
 procedure TGocciaEngine.ConfigureCapabilityAuditAsChildOf(

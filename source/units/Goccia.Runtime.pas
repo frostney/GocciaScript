@@ -352,9 +352,11 @@ begin
     FEngine.RefreshGlobalThis;
   except
     if Added then
-    begin
       FExtensions.Extract(AExtension);
+    try
       AExtension.Detach;
+    except
+      // Preserve the attachment or refresh failure that triggered cleanup.
     end;
     AExtension.Free;
     raise;

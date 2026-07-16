@@ -19,8 +19,13 @@ type
   private
     FContext: TGocciaSandboxContext;
     FFsModule: TGocciaModule;
+    FFsModuleRegistered: Boolean;
     FGocciaModule: TGocciaModule;
+    FGocciaModuleRegistered: Boolean;
+    FPreviousFsModule: TGocciaModule;
+    FPreviousGocciaModule: TGocciaModule;
     FPreviousRootClampCallback: TSandboxRootClampCallback;
+    FRootClampInstalled: Boolean;
 
     procedure HandleRootClamp(const APath, ABase,
       ACanonicalPath: string);
@@ -283,6 +288,8 @@ begin
   except
     on E: TGocciaThrowValue do
       Result := RejectedPromise(E.Value);
+    on E: EGocciaCapabilityAuditDeliveryError do
+      raise;
     on E: Exception do
       Result := RejectedPromise(TGocciaStringLiteralValue.Create(E.Message));
   end;
@@ -648,6 +655,8 @@ begin
   except
     on E: TGocciaThrowValue do
       Result := RejectedPromise(E.Value);
+    on E: EGocciaCapabilityAuditDeliveryError do
+      raise;
     on E: Exception do
       Result := RejectedPromise(TGocciaStringLiteralValue.Create(E.Message));
   end;
@@ -666,6 +675,8 @@ begin
   except
     on E: TGocciaThrowValue do
       Result := RejectedPromise(E.Value);
+    on E: EGocciaCapabilityAuditDeliveryError do
+      raise;
     on E: Exception do
       Result := RejectedPromise(TGocciaStringLiteralValue.Create(E.Message));
   end;
@@ -690,6 +701,8 @@ begin
   except
     on E: TGocciaThrowValue do
       Result := RejectedPromise(E.Value);
+    on E: EGocciaCapabilityAuditDeliveryError do
+      raise;
     on E: Exception do
       Result := RejectedPromise(TGocciaStringLiteralValue.Create(E.Message));
   end;
@@ -882,8 +895,6 @@ var
   GocciaNamespace: TGocciaObjectValue;
 begin
   inherited Attach(ARuntime);
-  FPreviousRootClampCallback := FContext.Fs.RootClampCallback;
-  FContext.Fs.RootClampCallback := HandleRootClamp;
   FsNamespace := CreateFsNamespace;
   GocciaNamespace := CreateGocciaNamespace;
 
@@ -907,24 +918,57 @@ begin
   FFsModule.AddExportValue('copyFileSync',
     FsNamespace.GetProperty('copyFileSync'));
   FFsModule.AddExportValue('promises', FsNamespace.GetProperty('promises'));
+  if not Runtime.Engine.ModuleLoader.GlobalModules.TryGetValue(
+    'fs', FPreviousFsModule) then
+    FPreviousFsModule := nil;
   Runtime.Engine.ModuleLoader.GlobalModules.Add('fs', FFsModule);
+  FFsModuleRegistered := True;
 
   FGocciaModule := TGocciaModule.Create('goccia');
   FGocciaModule.AddExportValue(KEYWORD_DEFAULT, GocciaNamespace);
   FGocciaModule.AddExportValue('$', GocciaNamespace.GetProperty('$'));
   FGocciaModule.AddExportValue('runScript',
     GocciaNamespace.GetProperty('runScript'));
+  if not Runtime.Engine.ModuleLoader.GlobalModules.TryGetValue(
+    'goccia', FPreviousGocciaModule) then
+    FPreviousGocciaModule := nil;
   Runtime.Engine.ModuleLoader.GlobalModules.Add('goccia', FGocciaModule);
+  FGocciaModuleRegistered := True;
+
+  FPreviousRootClampCallback := FContext.Fs.RootClampCallback;
+  FContext.Fs.RootClampCallback := HandleRootClamp;
+  FRootClampInstalled := True;
 end;
 
 procedure TGocciaSandboxRuntimeExtension.Detach;
 begin
-  FContext.Fs.RootClampCallback := FPreviousRootClampCallback;
-  FPreviousRootClampCallback := nil;
+  if FRootClampInstalled then
+  begin
+    FContext.Fs.RootClampCallback := FPreviousRootClampCallback;
+    FPreviousRootClampCallback := nil;
+    FRootClampInstalled := False;
+  end;
   if Assigned(Runtime) and Assigned(Runtime.Engine) then
   begin
-    Runtime.Engine.ModuleLoader.GlobalModules.Remove('goccia');
-    Runtime.Engine.ModuleLoader.GlobalModules.Remove('fs');
+    if FGocciaModuleRegistered then
+    begin
+      if Assigned(FPreviousGocciaModule) then
+        Runtime.Engine.ModuleLoader.GlobalModules.Add(
+          'goccia', FPreviousGocciaModule)
+      else
+        Runtime.Engine.ModuleLoader.GlobalModules.Remove('goccia');
+      FPreviousGocciaModule := nil;
+      FGocciaModuleRegistered := False;
+    end;
+    if FFsModuleRegistered then
+    begin
+      if Assigned(FPreviousFsModule) then
+        Runtime.Engine.ModuleLoader.GlobalModules.Add('fs', FPreviousFsModule)
+      else
+        Runtime.Engine.ModuleLoader.GlobalModules.Remove('fs');
+      FPreviousFsModule := nil;
+      FFsModuleRegistered := False;
+    end;
   end;
   FGocciaModule.Free;
   FGocciaModule := nil;

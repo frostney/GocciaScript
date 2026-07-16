@@ -193,6 +193,7 @@ uses
   Goccia.AST.BindingPatterns,
   Goccia.Bytecode.Chunk,
   Goccia.CallStack,
+  Goccia.CapabilityAudit,
   Goccia.Constants,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
@@ -7637,6 +7638,8 @@ var
         raise;
       on E: TGocciaInstructionLimitError do
         raise;
+      on E: EGocciaCapabilityAuditDeliveryError do
+        raise;
       on E: Exception do
       begin
         Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -7700,6 +7703,8 @@ begin
       on E: TGocciaTimeoutError do
         raise;
       on E: TGocciaInstructionLimitError do
+        raise;
+      on E: EGocciaCapabilityAuditDeliveryError do
         raise;
       on E: Exception do
       begin

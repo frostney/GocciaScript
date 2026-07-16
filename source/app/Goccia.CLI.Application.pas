@@ -49,6 +49,7 @@ type
     procedure CloseLogFile;
     procedure OpenAuditLog;
     procedure CloseAuditLog;
+    procedure ValidateOutputPaths;
     procedure HandleCapabilityAudit(
       const AEvent: TGocciaCapabilityAuditEvent);
   protected
@@ -1181,6 +1182,25 @@ begin
   end;
 end;
 
+procedure TGocciaCLIApplication.ValidateOutputPaths;
+var
+  LogPath: string;
+  AuditPath: string;
+begin
+  if not FLog.Present or not FAuditLog.Present then
+    Exit;
+
+  LogPath := ExpandFileName(FLog.Value);
+  AuditPath := ExpandFileName(FAuditLog.Value);
+  {$IF DEFINED(DARWIN) OR DEFINED(WINDOWS)}
+  if SameText(LogPath, AuditPath) then
+  {$ELSE}
+  if LogPath = AuditPath then
+  {$ENDIF}
+    raise Exception.Create(
+      '--log and --audit-log must write to different files');
+end;
+
 procedure TGocciaCLIApplication.Validate;
 begin
   // Override point for subclasses
@@ -1552,6 +1572,7 @@ begin
       FRootConfigPath := '';
 
     Validate;
+    ValidateOutputPaths;
 
     if FLog.Present then
       OpenLogFile;

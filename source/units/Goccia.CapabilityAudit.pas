@@ -4,7 +4,12 @@ unit Goccia.CapabilityAudit;
 
 interface
 
+uses
+  SysUtils;
+
 type
+  EGocciaCapabilityAuditDeliveryError = class(Exception);
+
   TGocciaCapabilityKind = (
     gckFetchHost,
     gckFetchDispatch,
@@ -49,8 +54,6 @@ function CapabilityDecisionName(
 implementation
 
 uses
-  SysUtils,
-
   Goccia.JSON.Utils;
 
 function CapabilityKindName(const AKind: TGocciaCapabilityKind): string;

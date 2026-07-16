@@ -16,6 +16,7 @@ uses
   Goccia.Application,
   Goccia.Builtins.Console,
   Goccia.Builtins.GlobalShadowRealm,
+  Goccia.CapabilityAudit,
   Goccia.CLI.Application,
   Goccia.CLI.Options,
   Goccia.Engine,
@@ -818,6 +819,8 @@ begin
       ClearInstructionLimit;
     end;
   except
+    on E: EGocciaCapabilityAuditDeliveryError do
+      raise;
     on E: TGocciaError do
       Result.ErrorMessage := E.GetDetailedMessage(False);
     on E: TGocciaThrowValue do
@@ -868,6 +871,8 @@ begin
         Result.Diff := ChildContext.DiffJson(AOptions.DiffMetadata);
     end;
   except
+    on E: EGocciaCapabilityAuditDeliveryError do
+      raise;
     on E: Exception do
     begin
       Result.Ok := False;
