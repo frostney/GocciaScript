@@ -207,6 +207,7 @@ uses
   Goccia.Evaluator.Decorators,
   Goccia.Evaluator.PatternMatching,
   Goccia.Evaluator.TypeOperations,
+  Goccia.Execution.CallSite,
   Goccia.GarbageCollector,
   Goccia.Generator.Continuation,
   Goccia.InstructionLimit,
@@ -4069,6 +4070,7 @@ var
   CurrentCtorClass: TGocciaClassValue;
   Roots: TGocciaActiveRootFrame;
   DirectEvalResult: TGocciaValue;
+  PreviousCallSite: TGocciaCallSite;
   function TryGetParenthesizedMemberReference(
     const AExpression: TGocciaExpression;
     out AMemberExpression: TGocciaMemberExpression): Boolean;
@@ -4391,7 +4393,20 @@ begin
       if Assigned(TGocciaCallStack.Instance) then
         CheckStackDepth(TGocciaCallStack.Instance.Count);
       if Assigned(Callee) and Callee.IsCallable then
-        Result := DispatchCall(Callee, Arguments, ThisValue)
+      begin
+        if Callee is TGocciaNativeFunctionValue then
+        begin
+          EnterGocciaCallSite(AContext.CurrentFilePath,
+            ACallExpression.Line, ACallExpression.Column, PreviousCallSite);
+          try
+            Result := DispatchCall(Callee, Arguments, ThisValue);
+          finally
+            LeaveGocciaCallSite(PreviousCallSite);
+          end;
+        end
+        else
+          Result := DispatchCall(Callee, Arguments, ThisValue);
+      end
       else
       begin
         MemberExpr := nil;
@@ -5999,11 +6014,13 @@ begin
     if (ResumePhase in [gflpTest, gflpBody]) and IsLexical then
     begin
       IterScope := ForState.IterScope;
+      LoopRoots.Add(IterScope);
       IterContext.Scope := IterScope;
     end
     else if (ResumePhase = gflpUpdate) and IsLexical then
     begin
       UpdateScope := ForState.UpdateScope;
+      LoopRoots.Add(UpdateScope);
       UpdateContext.Scope := UpdateScope;
     end
     else

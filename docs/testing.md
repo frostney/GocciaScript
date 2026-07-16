@@ -270,6 +270,8 @@ Both execution modes must pass. Test subtrees that require opt-in parser or runt
 | `--exit-on-first-failure` | Stop on first test failure |
 | `--silent` | Suppress all console output from test scripts |
 | `--jobs=N` / `-j N` | Number of parallel worker threads (default: CPU count) |
+| `--update-snapshots` / `-u` | Create, update, and prune snapshots |
+| `--update` | Vitest-compatible alias for `--update-snapshots` |
 
 ```bash
 # CI-friendly: no progress, stop on first failure
@@ -281,6 +283,64 @@ Both execution modes must pass. Test subtrees that require opt-in parser or runt
 # Run tests with 4 parallel workers; --jobs=1 forces sequential execution
 ./build/GocciaTestRunner tests --jobs=4
 ```
+
+### Snapshot Testing
+
+`toMatchSnapshot()` writes external snapshots to
+`__snapshots__/<test-file>.snap`. `toMatchInlineSnapshot()` inserts or updates
+the snapshot in the test source. Both use Vitest-compatible formatting and are
+available in interpreter and bytecode modes.
+
+```javascript
+test("user", () => {
+  const user = { id: 42, name: "Ada" };
+
+  expect(user).toMatchSnapshot("public user");
+  expect(user).toMatchInlineSnapshot({
+    id: expect.any(Number),
+  });
+});
+```
+
+The first object argument is a snapshot property shape. Matching happens before
+any write, and the stored value replaces shaped fields with their asymmetric
+matcher descriptions. Snapshot shapes support `expect.anything`, `expect.any`,
+`expect.closeTo`, `expect.arrayContaining`, `expect.objectContaining`,
+`expect.stringContaining`, `expect.stringMatching`, and
+`expect.schemaMatching`, plus `expect.toBeOneOf`, `expect.toSatisfy`,
+`expect.toBeFasterThan`, and `expect.toBeSlowerThan`, including their supported
+`expect.not` forms. Snapshot
+assertions themselves do not support `.not`.
+
+Local runs create missing snapshots. Existing mismatches fail until the runner
+is invoked with `-u`, `--update`, or `--update-snapshots`; update mode also
+prunes obsolete entries. Unless an explicit update flag is supplied,
+environments detected as CI by Vitest's `std-env` provider conventions—including
+GitHub Actions, GitLab, TeamCity, Buildkite, CircleCI, `CI`, and
+`CONTINUOUS_INTEGRATION`—do not write snapshots and fail on missing, mismatched,
+or obsolete entries. External snapshots are unavailable for stdin input.
+Existing inline snapshots can be compared from stdin, but they cannot be
+created or updated there.
+
+Register a Vitest/pretty-format-compatible serializer when a test value needs a
+domain-specific representation. The most recently registered serializer runs
+first and must provide `test` plus either `serialize` or legacy `print`:
+
+```javascript
+expect.addSnapshotSerializer({
+  test(value) {
+    return value?.kind === "point";
+  },
+  serialize(value) {
+    return `Point(${value.x}, ${value.y})`;
+  },
+});
+```
+
+Native embedders can replace snapshot text formatting through
+`IGocciaSnapshotFormatter` and persistence/source editing through
+`IGocciaSnapshotHost`. See
+[ADR 0096](adr/0096-host-injected-snapshot-testing.md) for the boundary.
 
 **Official YAML Suite**
 
@@ -392,7 +452,8 @@ The `GocciaTestRunner` program:
 2. For each file, creates a fresh `TGocciaEngine`, applies source type from CLI/config or `.mjs` inference, attaches `TGocciaRuntimeCore`, applies the test-runner runtime profile, and installs the FFI runtime extension when `--unsafe-ffi` or the file's `goccia.json` enables it.
 3. Loads the source and appends a `runTests()` call.
 4. Executes the script — `describe`/`test` blocks register themselves during execution. Nested `describe` blocks are supported; suite names are composed with ` > ` separators (e.g., `"Outer > Inner"`). Skip state is inherited by nested describes.
-5. `runTests()` executes all registered tests and collects results.
+5. `runTests()` executes all registered tests, reconciles snapshots through the
+   installed host, and collects results.
 6. When running multiple files, `GC.Collect` runs after each file to reclaim memory between script executions.
 7. Aggregates pass/fail/skip counts across all files.
 8. Prints a summary with total statistics.
@@ -407,6 +468,7 @@ The CLI behaviour tests are standalone bun scripts under `scripts/test-cli-*.ts`
 |------|----------------|
 | GocciaTestRunner JSON output | `--output=<file>` writes valid JSON with `mode`, `totalFiles` fields to a file; `--output=json` emits the same envelope to stdout and suppresses the human-readable summary; `--output=compact-json` emits the same stdout envelope without `build`, `memory`, `stdout`, or `stderr` |
 | GocciaTestRunner coverage | `--coverage` prints summary; `--coverage-format=lcov` and `--coverage-format=json` write valid output files; branch coverage includes `BRDA`/`BRF` entries |
+| GocciaTestRunner snapshots | External and inline creation, comparison and update in both execution modes; exact Vitest formatting; local/CI obsolete behavior; update aliases; stdin restrictions |
 | GocciaScriptLoader JSON output | `--output=json` envelope includes aggregate `ok`, `output`, `stdout`, `stderr`, `build`, `timing`, `memory`, `workers`, and per-input `files[]` entries with `fileName` and `result`; `--output=compact-json` emits the same envelope without `build`, `memory`, `stdout`, or `stderr` (the normalized `output` array and structured `error` are preserved) |
 | GocciaBenchmarkRunner JSON output | `--format=json` writes the same JSON envelope as the loader and test runner; `--format=compact-json` emits the same envelope without `build`, `memory`, `stdout`, or `stderr` at the top level or per-file |
 | GocciaScriptLoader error display | Syntax errors show source context, caret, and suggestions |

@@ -132,6 +132,8 @@ GocciaScript has 11,000+ JavaScript unit tests covering language features, built
 ./build/GocciaTestRunner tests --mode=bytecode
 ```
 
+The test runner supports Vitest-compatible external and inline snapshots,
+property shapes, asymmetric matchers, custom serializers, and `-u` updates.
 See [Testing](docs/testing.md) for test organization and [Build System](docs/build-system.md#compile-and-test) for runner options.
 
 ### Run Benchmarks

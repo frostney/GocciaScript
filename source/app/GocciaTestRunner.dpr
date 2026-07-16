@@ -38,6 +38,7 @@ uses
   Goccia.ScriptLoader.Input,
   Goccia.SourcePipeline,
   Goccia.Builtins.TestingLibrary,
+  Goccia.Builtins.Testing.Snapshots,
   Goccia.CLI.JSON.Reporter,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
@@ -51,6 +52,8 @@ uses
   Goccia.Threading,
   Goccia.Threading.Flags,
   Goccia.Threading.Init,
+
+  Goccia.TestRunner.SnapshotHost,
 
   FileUtils in 'units/FileUtils.pas';
 
@@ -118,6 +121,7 @@ type
     JobCount: Integer;
     MemoryStats: TCLIJSONMemoryStats;
     FileResults: array of TTestFilePerResult;
+    FinalizationError: string;
   end;
 
   TTestRunnerApp = class(TGocciaCLIApplication)
@@ -129,6 +133,9 @@ type
     FOutputFile: TStringOption;
     FTestTimeout: TIntegerOption;
     FDescribeTimeout: TIntegerOption;
+    FUpdateSnapshots: TFlagOption;
+    FUpdateSnapshotsAlias: TFlagOption;
+    function SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
     procedure InitializeRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
     procedure WarmUpRuntime(const AEngine: TGocciaEngine);
@@ -181,6 +188,44 @@ begin
   Result.Timing.TotalTimeNanoseconds := 0;
   Result.Timing.FileName := '';
   Result.ErrorMessage := AErrorMessage;
+end;
+
+function IsContinuousIntegration: Boolean;
+  function EnvironmentFlag(const AName: string): Boolean;
+  begin
+    { std-env, which Vitest uses, applies JavaScript truthiness to environment
+      strings. In particular, "0" and "false" are still enabled flags. }
+    Result := GetEnvironmentVariable(AName) <> '';
+  end;
+
+  function AnyProviderEnvironment(const ANames: array of string): Boolean;
+  var
+    I: Integer;
+  begin
+    for I := Low(ANames) to High(ANames) do
+      if EnvironmentFlag(ANames[I]) then
+        Exit(True);
+    Result := False;
+  end;
+begin
+  Result := EnvironmentFlag('CI') or
+    EnvironmentFlag('CONTINUOUS_INTEGRATION') or
+    AnyProviderEnvironment([
+      'APPVEYOR', 'AWS_APP_ID', 'SYSTEM_TEAMFOUNDATIONCOLLECTIONURI',
+      'INPUT_AZURE_STATIC_WEB_APPS_API_TOKEN', 'AC_APPCIRCLE',
+      'bamboo_planKey', 'BITBUCKET_COMMIT', 'BITRISE_IO',
+      'BUDDY_WORKSPACE_ID', 'BUILDKITE', 'CIRCLECI', 'CIRRUS_CI',
+      'CF_PAGES', 'WORKERS_CI', 'K_SERVICE', 'CLOUD_RUN_JOB',
+      'CODEBUILD_BUILD_ARN', 'CF_BUILD_ID', 'DRONE', 'DRONE_BUILD_EVENT',
+      'DSARI', 'GITHUB_ACTIONS', 'GITLAB_CI', 'CI_MERGE_REQUEST_ID',
+      'GO_PIPELINE_LABEL', 'LAYERCI', 'JENKINS_URL', 'HUDSON_URL', 'MAGNUM',
+      'NETLIFY', 'NEVERCODE', 'RENDER', 'SAILCI', 'SEMAPHORE',
+      'SCREWDRIVER', 'SHIPPABLE', 'TDDIUM', 'STRIDER', 'TEAMCITY_VERSION',
+      'TRAVIS', 'NOW_BUILDER', 'APPCENTER_BUILD_ID', 'STACKBLITZ',
+      'STORMKIT', 'CLEAVR', 'ZEABUR', 'CODESPHERE_APP_ID',
+      'RAILWAY_PROJECT_ID', 'RAILWAY_SERVICE_ID', 'DENO_DEPLOY',
+      'DENO_DEPLOYMENT_ID', 'FIREBASE_APP_HOSTING'
+    ]);
 end;
 
 function CreateDefaultScriptResult: TGocciaObjectValue;
@@ -255,6 +300,21 @@ begin
     'Per-test timeout in ms (0 disables). Marks the test TIMEOUT and continues.');
   FDescribeTimeout := AddInteger('describe-timeout',
     'Per-describe timeout in ms (0 disables). Aborts the suite and continues.');
+  FUpdateSnapshots := AddFlag('update-snapshots',
+    'Create, update, and prune snapshots');
+  FUpdateSnapshots.ShortName := 'u';
+  FUpdateSnapshotsAlias := AddFlag('update',
+    'Alias for --update-snapshots');
+end;
+
+function TTestRunnerApp.SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
+begin
+  if FUpdateSnapshots.Present or FUpdateSnapshotsAlias.Present then
+    Result := sumAll
+  else if IsContinuousIntegration then
+    Result := sumNone
+  else
+    Result := sumNew;
 end;
 
 procedure TTestRunnerApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
@@ -303,6 +363,63 @@ end;
 function TTestRunnerApp.UsageLine: string;
 begin
   Result := '[path...|-] [options]';
+end;
+
+function NormalizeSnapshotAttributionPath(const APath: string): string;
+begin
+  { File results preserve CLI spelling while snapshot errors contain expanded
+    native paths. Normalize copies only; emitted paths stay unchanged. }
+  Result := StringReplace(APath, PathDelim, '/', [rfReplaceAll]);
+end;
+
+procedure RecordSnapshotFinalizationFailure(
+  var AResult: TAggregatedTestResult; const AMessage: string);
+var
+  FailedTestsValue: TGocciaValue;
+  FailedTests: TGocciaArrayValue;
+  FileIndex, I, OldLength: Integer;
+  NormalizedFileName, NormalizedMessage: string;
+begin
+  if not Assigned(AResult.TestResult) then
+    Exit;
+  AResult.FinalizationError := AMessage;
+  AResult.TestResult.AssignProperty('failed',
+    TGocciaNumberLiteralValue.Create(
+      AResult.TestResult.GetProperty('failed').ToNumberLiteral.Value + 1));
+  AResult.TestResult.AssignProperty('totalRunTests',
+    TGocciaNumberLiteralValue.Create(
+      AResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value +
+      1));
+  FailedTestsValue := AResult.TestResult.GetProperty('failedTests');
+  if FailedTestsValue is TGocciaArrayValue then
+  begin
+    FailedTests := TGocciaArrayValue(FailedTestsValue);
+    FailedTests.Elements.Add(TGocciaStringLiteralValue.Create(AMessage));
+  end;
+
+  FileIndex := -1;
+  NormalizedMessage := NormalizeSnapshotAttributionPath(AMessage);
+  for I := 0 to High(AResult.FileResults) do
+  begin
+    NormalizedFileName := NormalizeSnapshotAttributionPath(
+      AResult.FileResults[I].FileName);
+    if Pos(NormalizedFileName, NormalizedMessage) > 0 then
+      if (FileIndex < 0) or
+         (Length(AResult.FileResults[I].FileName) >
+          Length(AResult.FileResults[FileIndex].FileName)) then
+        FileIndex := I;
+  end;
+  if FileIndex >= 0 then
+  begin
+    AResult.FileResults[FileIndex].Failed :=
+      AResult.FileResults[FileIndex].Failed + 1;
+    AResult.FileResults[FileIndex].TotalTests :=
+      AResult.FileResults[FileIndex].TotalTests + 1;
+    AResult.FileResults[FileIndex].ErrorMessage := AMessage;
+    OldLength := Length(AResult.FileResults[FileIndex].FailedTests);
+    SetLength(AResult.FileResults[FileIndex].FailedTests, OldLength + 1);
+    AResult.FileResults[FileIndex].FailedTests[OldLength] := AMessage;
+  end;
 end;
 
 procedure TTestRunnerApp.ExecuteWithPaths(const APaths: TStringList);
@@ -401,21 +518,35 @@ begin
         WriteLn(SysUtils.Format('Running %d files', [Files.Count]));
     end;
 
-    BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
-    IsParallelRun := (Files.Count > 1) and (GetJobCount(Files.Count) > 1);
-    if Files.Count = 1 then
-    begin
-      if (not FNoProgress.Present) and (not IsJsonOutput) then
-        WriteLn('[1/1] ', Files[0]);
-      { Stdin is always a single source — the callee takes ownership of
-        StdinSource and frees it like a disk-loaded TStringList. }
-      AggregatedResult := RunScriptFromFile(Files[0], StdinSource);
-      StdinSource := nil;
-    end
-    else if IsParallelRun then
-      AggregatedResult := RunScriptsFromFilesParallel(Files, GetJobCount(Files.Count))
-    else
-      AggregatedResult := RunScriptsFromFiles(Files);
+    ResetPendingInlineSnapshots;
+    try
+      BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
+      IsParallelRun := (Files.Count > 1) and (GetJobCount(Files.Count) > 1);
+      if Files.Count = 1 then
+      begin
+        if (not FNoProgress.Present) and (not IsJsonOutput) then
+          WriteLn('[1/1] ', Files[0]);
+        { Stdin is always a single source — the callee takes ownership of
+          StdinSource and frees it like a disk-loaded TStringList. }
+        AggregatedResult := RunScriptFromFile(Files[0], StdinSource);
+        StdinSource := nil;
+      end
+      else if IsParallelRun then
+        AggregatedResult := RunScriptsFromFilesParallel(Files,
+          GetJobCount(Files.Count))
+      else
+        AggregatedResult := RunScriptsFromFiles(Files);
+    except
+      DiscardPendingInlineSnapshots;
+      raise;
+    end;
+    try
+      FlushPendingInlineSnapshots;
+    except
+      on E: Exception do
+        RecordSnapshotFinalizationFailure(AggregatedResult,
+          'Snapshot finalization failed: ' + E.Message);
+    end;
     MainMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
     if IsParallelRun then
       AggregatedResult.MemoryStats := CombineCLIJSONMemoryStats(
@@ -476,7 +607,9 @@ var
   Runtime: TGocciaRuntimeCore;
 begin
   Runtime := AttachRuntime(AEngine);
-  ApplyTestRunnerRuntimeProfile(Runtime);
+  ApplyTestRunnerRuntimeProfile(Runtime,
+    TGocciaTestRunnerSnapshotHost.Create(AEngine.SourcePath),
+    SnapshotUpdateMode);
 end;
 
 procedure TTestRunnerApp.WarmUpRuntime(const AEngine: TGocciaEngine);
@@ -1368,6 +1501,7 @@ var
   TotalNanoseconds: Int64;
   IsBytecodeMode: Boolean;
   FailedCount, I: Integer;
+  ErrorInfo: TCLIJSONErrorInfo;
   Timing: TCLIJSONTiming;
 begin
   IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
@@ -1394,7 +1528,14 @@ begin
       Lines.Add('  "stderr": "",');
     end;
     Lines.Add('  ' + BuildCLIOutputJSON('') + ',');
-    Lines.Add('  "error": null,');
+    if AResult.FinalizationError = '' then
+      Lines.Add('  "error": null,')
+    else
+    begin
+      ErrorInfo := DefaultCLIJSONErrorInfo;
+      ErrorInfo.Message := AResult.FinalizationError;
+      Lines.Add('  "error": ' + BuildCLIErrorObjectJSON(ErrorInfo) + ',');
+    end;
     Lines.Add(Format('  "mode": "%s",', [IfThen(IsBytecodeMode, 'bytecode', 'interpreted')]));
     Lines.Add(Format('  "jobCount": %d,', [AResult.JobCount]));
     Lines.Add(Format('  "totalFiles": %d,', [Round(AResult.TestResult.GetProperty('totalTests').ToNumberLiteral.Value)]));
