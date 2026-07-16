@@ -1035,6 +1035,10 @@ console.log("Console observable behavior...");
     const { exitCode, json, stderr } = runLoaderJson(source, modeArgs);
     if (exitCode !== 0)
       throw new Error(`Console behavior ${label} failed: ${JSON.stringify(json.error)}${stderr}`);
+    if (stderr !== "")
+      throw new Error(
+        `Console behavior ${label} leaked process stderr: ${JSON.stringify(stderr)}`,
+      );
     if (JSON.stringify(json.output) !== JSON.stringify(expectedOutput))
       throw new Error(
         `Console behavior ${label} output mismatch: expected ${JSON.stringify(expectedOutput)}, got ${JSON.stringify(json.output)}`,
@@ -1073,6 +1077,10 @@ console.log("Console timer lifecycle...");
     const { exitCode, json, stderr } = runLoaderJson(source, modeArgs);
     if (exitCode !== 0)
       throw new Error(`Console timers ${label} failed: ${JSON.stringify(json.error)}${stderr}`);
+    if (stderr !== "")
+      throw new Error(
+        `Console timers ${label} leaked process stderr: ${JSON.stringify(stderr)}`,
+      );
     if (!Array.isArray(json.output) || json.output.length !== 8)
       throw new Error(`Console timers ${label} should emit 8 lines, got ${JSON.stringify(json.output)}`);
 
