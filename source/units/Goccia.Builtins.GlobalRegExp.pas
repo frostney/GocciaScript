@@ -1264,7 +1264,7 @@ function TGocciaGlobalRegExp.RegExpSymbolMatch(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Flags, Input, MatchString: string;
-  RegexValue: TGocciaObjectValue;
+  RegexValue, RetainedObject: TGocciaObjectValue;
   Match: TGocciaRegExpExecutionResult;
   MatchValue: TGocciaValue;
   ResultArray: TGocciaArrayValue;
@@ -1306,7 +1306,15 @@ begin
         Exit;
       end;
 
-      MatchString := Match.MatchedText;
+      RetainedObject := TGocciaObjectValue(Match.RetainedObject);
+      if Assigned(RetainedObject) then
+        TGarbageCollector.Instance.AddTempRoot(RetainedObject);
+      try
+        MatchString := Match.MatchedText;
+      finally
+        if Assigned(RetainedObject) then
+          TGarbageCollector.Instance.RemoveTempRoot(RetainedObject);
+      end;
       ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(MatchString));
       if MatchString = '' then
         AdvanceProtocolLastIndexAfterEmptyMatch(RegexValue, Input, IsUnicode);

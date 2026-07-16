@@ -104,6 +104,27 @@ test("Symbol.match stringifies a missing custom result match as undefined", () =
   expect(RegExp.prototype[Symbol.match].call(protocol, "")).toEqual(["undefined"]);
 });
 
+test("Symbol.match retains custom results while reading matched text", () => {
+  let calls = 0;
+  const protocol = {
+    flags: "g",
+    lastIndex: 0,
+    exec() {
+      if (calls++ > 0) {
+        return null;
+      }
+      return {
+        get 0() {
+          Goccia.gc();
+          return "a";
+        },
+      };
+    },
+  };
+
+  expect(RegExp.prototype[Symbol.match].call(protocol, "")).toEqual(["a"]);
+});
+
 test("Symbol.match returns only matched strings for native global results", () => {
-  expect(/(a)/dg[Symbol.match]("aba")).toEqual(["a", "a"]);
+  expect(/a(b)/dg[Symbol.match]("abxab")).toEqual(["ab", "ab"]);
 });
