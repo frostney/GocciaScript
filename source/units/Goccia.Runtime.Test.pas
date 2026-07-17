@@ -8,7 +8,9 @@ uses
 
   TestingPascalLibrary,
 
+  Goccia.Constants.PropertyNames,
   Goccia.Engine,
+  Goccia.Error.Messages,
   Goccia.Executor.Interpreter,
   Goccia.ModuleResolver,
   Goccia.Modules,
@@ -19,8 +21,12 @@ uses
   Goccia.RuntimeExtensions.Console,
   Goccia.RuntimeExtensions.JSON5,
   Goccia.TestSetup,
+  Goccia.Values.Error,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
+
+const
+  ROLLBACK_PROBE_NAME = 'resolverRollbackProbe';
 
 type
   TCustomRuntimeModuleResolver = class(TGocciaModuleResolver)
@@ -30,8 +36,11 @@ type
   end;
 
   TRollbackModuleRuntimeExtension = class(TGocciaRuntimeExtension)
+  private
+    FPreviousProbeValue: TGocciaValue;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
+    procedure Detach; override;
     procedure AddModuleExtensions(const AExtensions: TStrings); override;
   end;
 
@@ -71,9 +80,19 @@ procedure TRollbackModuleRuntimeExtension.Attach(
   const ARuntime: TGocciaRuntimeCore);
 begin
   inherited;
-  ARuntime.Engine.RegisterGlobal('resolverRollbackProbe',
+  FPreviousProbeValue := ARuntime.Engine.Interpreter.GlobalScope.GetValue(
+    ROLLBACK_PROBE_NAME);
+  ARuntime.Engine.RegisterGlobal(ROLLBACK_PROBE_NAME,
     TGocciaUndefinedLiteralValue.UndefinedValue);
   TGocciaObjectValue(ARuntime.Engine.Realm.GlobalObject).PreventExtensions;
+end;
+
+procedure TRollbackModuleRuntimeExtension.Detach;
+begin
+  if Assigned(Runtime) then
+    Runtime.Engine.RegisterGlobal(ROLLBACK_PROBE_NAME, FPreviousProbeValue);
+  FPreviousProbeValue := nil;
+  inherited;
 end;
 
 procedure TRollbackModuleRuntimeExtension.AddModuleExtensions(
@@ -333,12 +352,14 @@ end;
 
 procedure TRuntimeTests.TestRuntimeInstallRollsBackResolverExtensions;
 var
-  ContainsRollbackExtension: Boolean;
+  BaselineExtensions: TModuleResolverExtensionArray;
   Engine: TGocciaEngine;
   Executor: TGocciaInterpreterExecutor;
-  Extension: string;
   Extensions: TModuleResolverExtensionArray;
-  Raised: Boolean;
+  I: Integer;
+  ProbeValue: TGocciaValue;
+  RaisedMessage: string;
+  RaisedExpectedException: Boolean;
   Runtime: TGocciaRuntime;
   Source: TStringList;
 begin
@@ -348,25 +369,39 @@ begin
     Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
     Runtime := nil;
     try
+      Engine.RegisterGlobal(ROLLBACK_PROBE_NAME,
+        TGocciaBooleanLiteralValue.TrueValue);
       Engine.Resolver.SetExtensions(['.custom']);
       Runtime := TGocciaRuntime.Create(Engine);
+      BaselineExtensions := Engine.Resolver.GetExtensions;
 
-      Raised := False;
+      RaisedExpectedException := False;
+      RaisedMessage := '';
       try
         Runtime.Install(TRollbackModuleRuntimeExtension.Create);
       except
-        on E: Exception do
-          Raised := True;
+        on E: TGocciaThrowValue do
+        begin
+          RaisedExpectedException := True;
+          if E.Value is TGocciaObjectValue then
+            RaisedMessage := TGocciaObjectValue(E.Value)
+              .GetProperty(PROP_MESSAGE).ToStringLiteral.Value;
+        end;
       end;
-      Expect<Boolean>(Raised).ToBe(True);
+      Expect<Boolean>(RaisedExpectedException).ToBe(True);
+      Expect<string>(RaisedMessage).ToBe(Format(
+        SErrorCannotAddPropertyNotExtensible, [ROLLBACK_PROBE_NAME]));
 
       Extensions := Engine.Resolver.GetExtensions;
-      ContainsRollbackExtension := False;
-      for Extension in Extensions do
-        if Extension = '.rollback-test' then
-          ContainsRollbackExtension := True;
-      Expect<Boolean>(ContainsRollbackExtension).ToBe(False);
-      Expect<string>(Extensions[0]).ToBe('.custom');
+      Expect<Integer>(Length(Extensions)).ToBe(Length(BaselineExtensions));
+      for I := 0 to High(Extensions) do
+        Expect<string>(Extensions[I]).ToBe(BaselineExtensions[I]);
+      Expect<Boolean>(not Assigned(Runtime.FindRuntimeExtension(
+        TRollbackModuleRuntimeExtension))).ToBe(True);
+      ProbeValue := Engine.Interpreter.GlobalScope.GetValue(
+        ROLLBACK_PROBE_NAME);
+      Expect<Boolean>(ProbeValue =
+        TGocciaBooleanLiteralValue.TrueValue).ToBe(True);
     finally
       Runtime.Free;
       Engine.Free;
