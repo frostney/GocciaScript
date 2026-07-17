@@ -698,9 +698,30 @@ The `"fs"` module operates on the sandbox virtual filesystem. It follows a Node.
 | `fs.rmSync(path, options?)` | Delete a file or directory; `{ recursive: true }` removes non-empty directories |
 | `fs.renameSync(from, to)` | Move or rename a sandbox path |
 | `fs.copyFileSync(from, to)` | Copy a file |
-| `fs.promises` | Promise-returning versions of the same operations |
+| `fs.readFile`, `fs.writeFile`, `fs.appendFile`, `fs.mkdir`, `fs.readdir`, `fs.stat`, `fs.rm`, `fs.rename`, `fs.copyFile` | Node-shaped callback forms, available on the default namespace and as named exports |
+| `fs.exists(path, callback)` | Deprecated Node-shaped boolean-only callback form; it never passes an error argument |
+| `fs.promises` | Promise-returning versions of the same operations except `exists` |
 
 `readFileSync` returns a `Uint8Array` by default so binary seed entries can round-trip without text coercion.
+
+Callback methods require a callable trailing callback and return `undefined`.
+Filesystem work and callback delivery are deferred through the engine's
+microtask job queue. Promise methods use the same deferred operation path and
+return a pending Promise. This preserves asynchronous sandbox behavior, but it
+does not reproduce Node's libuv event-loop phase ordering.
+
+On success, `readFile`, `readdir`, and `stat` call `(null, value)`;
+write/append/remove/rename/copy call `(null)`; recursive `mkdir` calls
+`(null, firstCreatedPath)`; and `exists` calls `(boolean)`. Callback methods
+other than `exists` pass a filesystem `Error` as their only failure argument;
+`exists` converts filesystem failures to `false`. Unsupported Node-only paths
+and options such as file descriptors, URLs, AbortSignals, `Dirent`, bigint
+Stats, non-default copy modes, and alternate encodings are outside the
+supported subset. Callback methods throw a `TypeError` synchronously; Promise
+methods return a rejected Promise.
+
+`readFile` supports UTF-8 text options, while `mkdir` and `rm` support the
+existing object-shaped `recursive` option.
 
 Stats snapshots expose `atime`, `mtime`, `ctime`, and `birthtime` as lazy Date
 accessors on a realm-owned shared prototype. Each access returns a fresh Date;
@@ -717,7 +738,8 @@ while VFS forks used for baselines preserve the source timestamps.
 
 Filesystem failures are real JavaScript `Error` objects with Node-shaped
 `code`, `errno`, `path`, `syscall`, and optional `dest` metadata. Synchronous
-methods throw them and promise methods reject with the same shape. See
+methods throw them, callback methods pass them as their only argument, and
+promise methods reject with the same shape. See
 [Sandbox filesystem errors](errors.md#sandbox-filesystem-errors) for the full
 mapping and message format.
 

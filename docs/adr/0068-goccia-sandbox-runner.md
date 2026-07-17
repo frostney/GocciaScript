@@ -35,7 +35,7 @@ Seed paths are import baselines, not mounts. A seeded host directory is copied i
 
 The runner installs sandbox capabilities as import-only modules:
 
-- `"fs"` exposes a Node.js-shaped synchronous API plus `fs.promises`, backed by the sandbox filesystem.
+- `"fs"` exposes Node.js-shaped synchronous, callback, and `fs.promises` APIs, backed by the sandbox filesystem.
 - `"goccia"` exposes `$` and `runScript`.
 
 No global `fs`, `$`, or `runScript` bindings are added. This keeps capability use visible at the import site and avoids changing the ordinary loader runtime surface.
@@ -63,5 +63,11 @@ Seed configuration is intentionally JSON-only for the sandbox population format.
 Diffs are consumer-facing artifacts rather than write-back behavior. Tools that want to materialize sandbox changes must consume the diff and choose how to apply it.
 
 The `"fs"` module is Node.js-shaped but not Node.js-compatible in full. It is a sandbox filesystem API with a familiar naming scheme; unsupported Node-specific features should remain absent unless they map cleanly to the virtual filesystem.
+
+Callback and Promise filesystem operations enqueue a GC-rooted executable job
+in the engine microtask queue. The operation itself runs when that job is
+drained, so the virtual filesystem does not mutate before the asynchronous API
+returns. This is a sandbox scheduling approximation, not an implementation of
+Node's libuv filesystem phase ordering.
 
 Nested execution shares filesystem state by design. This makes `runScript` and shell `goccia` useful for orchestrating sandboxed workflows, while still avoiding any host mount semantics.

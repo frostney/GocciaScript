@@ -138,6 +138,8 @@ type
 
     procedure MakeDirectory(const APath: string;
       const ARecursive: Boolean = False);
+    function MakeDirectoryWithResult(const APath: string;
+      const ARecursive: Boolean = False): string;
     procedure DeletePath(const APath: string;
       const ARecursive: Boolean = False);
     procedure MovePath(const ASource, ADestination: string);
@@ -642,6 +644,12 @@ end;
 
 procedure TSandboxVirtualFileSystem.MakeDirectory(const APath: string;
   const ARecursive: Boolean);
+begin
+  MakeDirectoryWithResult(APath, ARecursive);
+end;
+
+function TSandboxVirtualFileSystem.MakeDirectoryWithResult(
+  const APath: string; const ARecursive: Boolean): string;
 var
   Canonical: string;
   Segments: TStringArray;
@@ -650,6 +658,7 @@ var
   Index: Integer;
   Time: TDateTime;
 begin
+  Result := '';
   Canonical := Normalize(APath);
   if Canonical = PathSeparator then
   begin
@@ -676,6 +685,8 @@ begin
       Next := TSandboxFsNode.Create(Segments[Index], nkDirectory, Time);
       Current.AttachChild(Next, Time);
       Inc(FNodeCount);
+      if Result = '' then
+        Result := Next.FullPath;
     end
     else if (Index = High(Segments)) and not ARecursive then
       raise ESandboxFsExists.CreateFmt('%s: already exists', [Canonical]);
