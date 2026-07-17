@@ -155,7 +155,8 @@ uses
   Goccia.Values.NativeFunctionCallback,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
-  Goccia.Values.TypedArrayValue;
+  Goccia.Values.TypedArrayValue,
+  Goccia.VM.Exception;
 
 type
   TGocciaSandboxFsOperation = (
@@ -269,7 +270,9 @@ end;
 function RejectedPromiseFromException(
   const AException: Exception): TGocciaPromiseValue;
 begin
-  if AException is TGocciaThrowValue then
+  if AException is EGocciaBytecodeThrow then
+    Result := RejectedPromise(EGocciaBytecodeThrow(AException).ThrownValue)
+  else if AException is TGocciaThrowValue then
     Result := RejectedPromise(TGocciaThrowValue(AException).Value)
   else
     Result := RejectedPromise(

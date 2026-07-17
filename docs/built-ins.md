@@ -712,12 +712,14 @@ does not reproduce Node's libuv event-loop phase ordering.
 
 On success, `readFile`, `readdir`, and `stat` call `(null, value)`;
 write/append/remove/rename/copy call `(null)`; recursive `mkdir` calls
-`(null, firstCreatedPath)`; and `exists` calls `(boolean)`. Failures pass only
-the filesystem `Error`. Unsupported Node-only paths and options such as file
-descriptors, URLs, AbortSignals, `Dirent`, bigint Stats, non-default copy
-modes, and alternate encodings are outside the supported subset. Callback
-methods throw a `TypeError` synchronously; Promise methods return a rejected
-Promise.
+`(null, firstCreatedPath)`; and `exists` calls `(boolean)`. Callback methods
+other than `exists` pass a filesystem `Error` as their only failure argument;
+`exists` converts filesystem failures to `false`. Unsupported Node-only paths
+and options such as file descriptors, URLs, AbortSignals, `Dirent`, bigint
+Stats, non-default copy modes, and alternate encodings are outside the
+supported subset. Callback methods throw a `TypeError` synchronously; Promise
+methods return a rejected Promise.
+
 `readFile` supports UTF-8 text options, while `mkdir` and `rm` support the
 existing object-shaped `recursive` option.
 

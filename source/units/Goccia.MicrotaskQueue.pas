@@ -302,11 +302,13 @@ var
   Roots: TGocciaObjectValue;
   RootsRoot: TGocciaTempRoot;
   HandlerRoot: TGocciaTempRoot;
+  JobOwnedByQueue: Boolean;
 begin
-  Roots := TGocciaObjectValue.Create(nil);
   InitializeTempRoot(RootsRoot);
   InitializeTempRoot(HandlerRoot);
+  JobOwnedByQueue := False;
   try
+    Roots := TGocciaObjectValue.Create(nil);
     AddTempRootIfNeeded(RootsRoot, Roots);
     AJob.CaptureRoots(Roots);
     Handler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
@@ -320,14 +322,16 @@ begin
     Task.ReactionType := prtFulfill;
     try
       Enqueue(Task);
+      JobOwnedByQueue := True;
     except
       FJobs.Remove(Handler);
-      AJob.Free;
       raise;
     end;
   finally
     RemoveTempRootIfNeeded(HandlerRoot);
     RemoveTempRootIfNeeded(RootsRoot);
+    if not JobOwnedByQueue then
+      AJob.Free;
   end;
 end;
 
