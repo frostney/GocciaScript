@@ -3903,6 +3903,182 @@ console.log("REPL: repeated tagged template execution (interpreted + bytecode)..
 // GocciaSandboxRunner
 // ============================================================================
 
+console.log("SandboxRunner: fs callback APIs and promises defer filesystem work...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import fs, { exists, readFile, writeFile } from "fs";',
+            'writeFile("/callback.txt", "callback", (error) => {',
+            '  if (error) { console.log("callback-error:" + error.code); return; }',
+            '  readFile("/callback.txt", "utf8", (readError, text) => {',
+            '    if (readError) { console.log("read-error:" + readError.code); return; }',
+            '    console.log("callback:" + text);',
+            '  });',
+            '});',
+            'Goccia.gc();',
+            'console.log("callback-immediate:" + fs.existsSync("/callback.txt"));',
+            'const promiseWrite = fs.promises.writeFile("/promise.txt", "promise");',
+            'promiseWrite.then(() => exists("/promise.txt", (present) => {',
+            '  console.log("exists:" + present);',
+            '}));',
+            'Goccia.gc();',
+            'console.log("promise-immediate:" + fs.existsSync("/promise.txt"));',
+          ].join("\n"),
+        },
+      ],
+    }));
+
+    const expected = [
+      "callback-immediate:false",
+      "promise-immediate:false",
+      "callback:callback",
+      "exists:true",
+    ].join("\n");
+    for (const [label, extraArgs] of [
+      ["interpreter", []],
+      ["bytecode", ["--mode=bytecode"]],
+    ] as const) {
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+      if (proc.exitCode !== 0)
+        throw new Error(`SandboxRunner ${label} fs callback run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      if (stdout !== expected)
+        throw new Error(`SandboxRunner ${label} fs callback output should be ${JSON.stringify(expected)}, got: ${stdout}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: fs callback overloads use Node-shaped results...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import fs, { appendFile, copyFile, exists, mkdir, readFile, readdir, rename, rm, stat } from "fs";',
+            'const capture = (start) => new Promise((resolve) => start((...args) => resolve(args)));',
+            'console.log("lengths:" + [fs.readFile.length, fs.writeFile.length, fs.appendFile.length, fs.mkdir.length, fs.readdir.length, fs.stat.length, fs.rm.length, fs.rename.length, fs.copyFile.length, fs.exists.length].join(","));',
+            'console.log("promise-lengths:" + [fs.promises.readFile.length, fs.promises.writeFile.length, fs.promises.appendFile.length, fs.promises.mkdir.length, fs.promises.readdir.length, fs.promises.stat.length, fs.promises.rm.length, fs.promises.rename.length, fs.promises.copyFile.length].join(","));',
+            'console.log("promises-exists:" + typeof fs.promises.exists);',
+            'try { readFile("/source.txt", "utf8"); }',
+            'catch (error) { console.log("missing-callback:" + error.name); }',
+            'try { readFile("/source.txt", "latin1", () => {}); }',
+            'catch (error) { console.log("unsupported-encoding:" + error.name); }',
+            'try { mkdir("/bad-mkdir", true, () => {}); }',
+            'catch (error) { console.log("mkdir-boolean-options:" + error.name); }',
+            'try { rm("/source.txt", true, () => {}); }',
+            'catch (error) { console.log("rm-boolean-options:" + error.name); }',
+            'const invalidPathPromise = fs.promises.readFile(123);',
+            'console.log("promise-validation-return:" + (invalidPathPromise instanceof Promise));',
+            'try { await invalidPathPromise; }',
+            'catch (error) { console.log("promise-validation-reject:" + error.name); }',
+            'const invalidCopyPromise = fs.promises.copyFile("/source.txt", "/bad-copy.txt", 1);',
+            'console.log("copy-mode-return:" + (invalidCopyPromise instanceof Promise));',
+            'try { await invalidCopyPromise; }',
+            'catch (error) { console.log("unsupported-copy-mode:" + error.name); }',
+            'const invalidRmPromise = fs.promises.rm("/source.txt", true);',
+            'console.log("promise-rm-boolean-return:" + (invalidRmPromise instanceof Promise));',
+            'try { await invalidRmPromise; }',
+            'catch (error) { console.log("promise-rm-boolean-reject:" + error.name); }',
+            'const thrownReason = { source: "encoding-getter" };',
+            'const getterPromise = fs.promises.readFile("/source.txt", { get encoding() { throw thrownReason; } });',
+            'try { await getterPromise; }',
+            'catch (error) { console.log("promise-getter-reason:" + (error === thrownReason)); }',
+            'fs.mkdirSync("/existing");',
+            'const appendArgs = await capture((callback) => appendFile("/source.txt", "!", callback));',
+            'console.log("append-shape:" + (appendArgs.length === 1 && appendArgs[0] === null));',
+            'const readOptions = { encoding: "utf8" };',
+            'const readPromise = capture((callback) => readFile("/source.txt", readOptions, callback));',
+            'readOptions.encoding = "latin1";',
+            'const readArgs = await readPromise;',
+            'console.log("read-shape:" + (readArgs.length === 2 && readArgs[0] === null && readArgs[1] === "source!"));',
+            'const mkdirOptions = { recursive: true };',
+            'const mkdirPromise = capture((callback) => mkdir("/existing/first/second", mkdirOptions, callback));',
+            'mkdirOptions.recursive = false;',
+            'const mkdirArgs = await mkdirPromise;',
+            'console.log("mkdir-shape:" + (mkdirArgs.length === 2 && mkdirArgs[0] === null && mkdirArgs[1] === "/existing/first"));',
+            'const readdirArgs = await capture((callback) => readdir("/existing/first", callback));',
+            'console.log("readdir-shape:" + (readdirArgs.length === 2 && readdirArgs[0] === null && readdirArgs[1][0] === "second"));',
+            'const statArgs = await capture((callback) => stat("/source.txt", callback));',
+            'console.log("stat-shape:" + (statArgs.length === 2 && statArgs[0] === null && statArgs[1].isFile()));',
+            'const copyArgs = await capture((callback) => copyFile("/source.txt", "/copy.txt", 0, callback));',
+            'console.log("copy-shape:" + (copyArgs.length === 1 && copyArgs[0] === null));',
+            'const renameArgs = await capture((callback) => rename("/copy.txt", "/renamed.txt", callback));',
+            'console.log("rename-shape:" + (renameArgs.length === 1 && renameArgs[0] === null));',
+            'const rmArgs = await capture((callback) => rm("/renamed.txt", callback));',
+            'console.log("rm-shape:" + (rmArgs.length === 1 && rmArgs[0] === null));',
+            'const errorArgs = await capture((callback) => readFile("/missing.txt", "utf8", callback));',
+            'console.log("error-shape:" + (errorArgs.length === 1 && errorArgs[0] instanceof Error && errorArgs[0].code === "ENOENT"));',
+            'const existsArgs = await capture((callback) => exists("/missing.txt", callback));',
+            'console.log("exists-shape:" + (existsArgs.length === 1 && existsArgs[0] === false));',
+            'const promiseMkdirPath = await fs.promises.mkdir("/promise/child", { recursive: true });',
+            'console.log("promise-mkdir:" + promiseMkdirPath);',
+          ].join("\n"),
+        },
+        { path: "/source.txt", text: "source" },
+      ],
+    }));
+
+    const expected = [
+      "lengths:3,4,4,3,3,1,3,3,4,2",
+      "promise-lengths:2,3,3,2,2,1,2,2,3",
+      "promises-exists:undefined",
+      "missing-callback:TypeError",
+      "unsupported-encoding:TypeError",
+      "mkdir-boolean-options:TypeError",
+      "rm-boolean-options:TypeError",
+      "promise-validation-return:true",
+      "promise-validation-reject:TypeError",
+      "copy-mode-return:true",
+      "unsupported-copy-mode:TypeError",
+      "promise-rm-boolean-return:true",
+      "promise-rm-boolean-reject:TypeError",
+      "promise-getter-reason:true",
+      "append-shape:true",
+      "read-shape:true",
+      "mkdir-shape:true",
+      "readdir-shape:true",
+      "stat-shape:true",
+      "copy-shape:true",
+      "rename-shape:true",
+      "rm-shape:true",
+      "error-shape:true",
+      "exists-shape:true",
+      "promise-mkdir:/promise",
+    ].join("\n");
+    for (const [label, extraArgs] of [
+      ["interpreter", []],
+      ["bytecode", ["--mode=bytecode"]],
+    ] as const) {
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+      if (proc.exitCode !== 0)
+        throw new Error(`SandboxRunner ${label} fs callback shape run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      if (stdout !== expected)
+        throw new Error(`SandboxRunner ${label} fs callback shapes should be ${JSON.stringify(expected)}, got: ${stdout}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("SandboxRunner: deterministic nested engines use stable distinct streams...");
 {
   const tmp = makeTmp();

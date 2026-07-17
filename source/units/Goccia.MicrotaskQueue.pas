@@ -7,10 +7,20 @@ interface
 uses
   Generics.Collections,
 
+  Goccia.Arguments.Collection,
+  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
   TPromiseReactionType = (prtFulfill, prtReject, prtThenableResolve);
+
+  TGocciaMicrotaskJob = class
+  public
+    procedure Execute; virtual; abstract;
+    function Run(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure CaptureRoots(const AContainer: TGocciaObjectValue); virtual;
+  end;
 
   TGocciaMicrotask = record
     Handler: TGocciaValue;
@@ -23,6 +33,7 @@ type
   private
     FQueue: TList<TGocciaMicrotask>;
     FFinalizationQueue: TList<TGocciaMicrotask>;
+    FJobs: TDictionary<TGocciaValue, TGocciaMicrotaskJob>;
     FHead: Integer;
     FFinalizationHead: Integer;
     procedure AddQueuedRoots(const AMicrotask: TGocciaMicrotask);
@@ -39,6 +50,7 @@ type
     destructor Destroy; override;
 
     procedure Enqueue(const AMicrotask: TGocciaMicrotask);
+    procedure EnqueueJob(const AJob: TGocciaMicrotaskJob);
     procedure EnqueueFinalizationCleanup(const AMicrotask: TGocciaMicrotask);
     function DrainOneJob: Boolean;
     procedure DrainQueue;
@@ -51,7 +63,6 @@ implementation
 uses
   SysUtils,
 
-  Goccia.Arguments.Collection,
   Goccia.Builtins.Atomics,
   Goccia.CapabilityAudit,
   Goccia.Constants.ErrorNames,
@@ -63,7 +74,6 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,
   Goccia.VM.Exception;
 
@@ -84,6 +94,20 @@ type
     procedure RejectException(const AException: Exception);
     procedure MarkReferences; override;
   end;
+
+{ TGocciaMicrotaskJob }
+
+function TGocciaMicrotaskJob.Run(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Execute;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TGocciaMicrotaskJob.CaptureRoots(
+  const AContainer: TGocciaObjectValue);
+begin
+end;
 
 constructor TThenableResolvingFunctions.Create(
   const APromise: TGocciaPromiseValue);
@@ -254,12 +278,15 @@ constructor TGocciaMicrotaskQueue.Create;
 begin
   FQueue := TList<TGocciaMicrotask>.Create;
   FFinalizationQueue := TList<TGocciaMicrotask>.Create;
+  FJobs := TDictionary<TGocciaValue, TGocciaMicrotaskJob>.Create;
   FHead := 0;
   FFinalizationHead := 0;
 end;
 
 destructor TGocciaMicrotaskQueue.Destroy;
 begin
+  ClearQueue;
+  FJobs.Free;
   FFinalizationQueue.Free;
   FQueue.Free;
   inherited;
@@ -269,6 +296,46 @@ procedure TGocciaMicrotaskQueue.Enqueue(const AMicrotask: TGocciaMicrotask);
 begin
   AddQueuedRoots(AMicrotask);
   FQueue.Add(AMicrotask);
+end;
+
+procedure TGocciaMicrotaskQueue.EnqueueJob(const AJob: TGocciaMicrotaskJob);
+var
+  Task: TGocciaMicrotask;
+  Handler: TGocciaNativeFunctionValue;
+  Roots: TGocciaObjectValue;
+  RootsRoot: TGocciaTempRoot;
+  HandlerRoot: TGocciaTempRoot;
+  JobOwnedByQueue: Boolean;
+begin
+  InitializeTempRoot(RootsRoot);
+  InitializeTempRoot(HandlerRoot);
+  JobOwnedByQueue := False;
+  try
+    Roots := TGocciaObjectValue.Create(nil);
+    AddTempRootIfNeeded(RootsRoot, Roots);
+    AJob.CaptureRoots(Roots);
+    Handler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      AJob.Run, '', 0);
+    AddTempRootIfNeeded(HandlerRoot, Handler);
+    Handler.CapturedRoot := Roots;
+    FJobs.Add(Handler, AJob);
+    Task.Handler := Handler;
+    Task.ResultPromise := nil;
+    Task.Value := nil;
+    Task.ReactionType := prtFulfill;
+    try
+      Enqueue(Task);
+      JobOwnedByQueue := True;
+    except
+      FJobs.Remove(Handler);
+      raise;
+    end;
+  finally
+    RemoveTempRootIfNeeded(HandlerRoot);
+    RemoveTempRootIfNeeded(RootsRoot);
+    if not JobOwnedByQueue then
+      AJob.Free;
+  end;
 end;
 
 procedure TGocciaMicrotaskQueue.EnqueueFinalizationCleanup(
@@ -298,16 +365,24 @@ procedure TGocciaMicrotaskQueue.RemoveQueuedRoots(
   const AMicrotask: TGocciaMicrotask);
 var
   GC: TGarbageCollector;
+  Job: TGocciaMicrotaskJob;
 begin
   GC := TGarbageCollector.Instance;
-  if not Assigned(GC) then
-    Exit;
-  if Assigned(AMicrotask.Handler) then
-    GC.RemoveQueuedRoot(AMicrotask.Handler);
-  if Assigned(AMicrotask.Value) then
-    GC.RemoveQueuedRoot(AMicrotask.Value);
-  if Assigned(AMicrotask.ResultPromise) then
-    GC.RemoveQueuedRoot(AMicrotask.ResultPromise);
+  if Assigned(GC) then
+  begin
+    if Assigned(AMicrotask.Handler) then
+      GC.RemoveQueuedRoot(AMicrotask.Handler);
+    if Assigned(AMicrotask.Value) then
+      GC.RemoveQueuedRoot(AMicrotask.Value);
+    if Assigned(AMicrotask.ResultPromise) then
+      GC.RemoveQueuedRoot(AMicrotask.ResultPromise);
+  end;
+  if Assigned(AMicrotask.Handler) and
+     FJobs.TryGetValue(AMicrotask.Handler, Job) then
+  begin
+    FJobs.Remove(AMicrotask.Handler);
+    Job.Free;
+  end;
 end;
 
 procedure TGocciaMicrotaskQueue.ExecuteTask(
