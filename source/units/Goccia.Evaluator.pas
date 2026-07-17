@@ -193,6 +193,7 @@ uses
   Goccia.AST.BindingPatterns,
   Goccia.Bytecode.Chunk,
   Goccia.CallStack,
+  Goccia.CapabilityAudit,
   Goccia.Constants,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
@@ -4394,7 +4395,10 @@ begin
         CheckStackDepth(TGocciaCallStack.Instance.Count);
       if Assigned(Callee) and Callee.IsCallable then
       begin
-        if Callee is TGocciaNativeFunctionValue then
+        if (Callee is TGocciaNativeFunctionValue) or
+           (Callee is TGocciaFunctionConstructorClassValue) or
+           (Callee is TGocciaBoundFunctionValue) or
+           (Callee is TGocciaProxyValue) then
         begin
           EnterGocciaCallSite(AContext.CurrentFilePath,
             ACallExpression.Line, ACallExpression.Column, PreviousCallSite);
@@ -7642,6 +7646,8 @@ var
         raise;
       on E: TGocciaInstructionLimitError do
         raise;
+      on E: EGocciaCapabilityAuditDeliveryError do
+        raise;
       on E: Exception do
       begin
         Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -7705,6 +7711,8 @@ begin
       on E: TGocciaTimeoutError do
         raise;
       on E: TGocciaInstructionLimitError do
+        raise;
+      on E: EGocciaCapabilityAuditDeliveryError do
         raise;
       on E: Exception do
       begin
@@ -8427,6 +8435,7 @@ var
   ReceiverPrototype: TGocciaObjectValue;
   ReceiverInstance: TGocciaObjectValue;
   Roots: TGocciaActiveRootFrame;
+  PreviousCallSite: TGocciaCallSite;
 begin
   Roots.Initialize;
   CheckExecutionTimeout;
@@ -8474,15 +8483,27 @@ begin
         CheckStackDepth(TGocciaCallStack.Instance.Count);
       if Callee is TGocciaProxyValue then
       begin
-        Result := TGocciaProxyValue(Callee).ConstructTrap(Arguments);
+        EnterGocciaCallSite(AContext.CurrentFilePath,
+          ANewExpression.Line, ANewExpression.Column, PreviousCallSite);
+        try
+          Result := TGocciaProxyValue(Callee).ConstructTrap(Arguments);
+        finally
+          LeaveGocciaCallSite(PreviousCallSite);
+        end
       end
       else if Callee is TGocciaClassValue then
       begin
-        if ShouldUseNativeClassInstantiation(TGocciaClassValue(Callee)) then
-          Result := TGocciaClassValue(Callee).Instantiate(Arguments)
-        else
-          Result := InstantiateClass(TGocciaClassValue(Callee), Arguments,
-            AContext);
+        EnterGocciaCallSite(AContext.CurrentFilePath,
+          ANewExpression.Line, ANewExpression.Column, PreviousCallSite);
+        try
+          if ShouldUseNativeClassInstantiation(TGocciaClassValue(Callee)) then
+            Result := TGocciaClassValue(Callee).Instantiate(Arguments)
+          else
+            Result := InstantiateClass(TGocciaClassValue(Callee), Arguments,
+              AContext);
+        finally
+          LeaveGocciaCallSite(PreviousCallSite);
+        end;
       end
       else if Callee is TGocciaNativeFunctionValue then
       begin
@@ -8492,8 +8513,14 @@ begin
               [TGocciaNativeFunctionValue(Callee).Name]),
             Format('''%s'' is not a constructor',
               [TGocciaNativeFunctionValue(Callee).Name]));
-        Result := TGocciaNativeFunctionValue(Callee).Construct(Arguments,
-          Callee);
+        EnterGocciaCallSite(AContext.CurrentFilePath,
+          ANewExpression.Line, ANewExpression.Column, PreviousCallSite);
+        try
+          Result := TGocciaNativeFunctionValue(Callee).Construct(Arguments,
+            Callee);
+        finally
+          LeaveGocciaCallSite(PreviousCallSite);
+        end;
       end
       else if Callee is TGocciaFunctionBase then
       begin
@@ -8529,11 +8556,17 @@ begin
           // InvokeConstructableWithReceiver merges bound args, dispatches to
           // the underlying target, and applies the spec return rules
           // (explicit Object return wins; otherwise the receiver).
-          Result := InvokeConstructableWithReceiver(FunctionCallee, Arguments,
-            ReceiverInstance, AContext);
+          EnterGocciaCallSite(AContext.CurrentFilePath,
+            ANewExpression.Line, ANewExpression.Column, PreviousCallSite);
+          try
+            Result := InvokeConstructableWithReceiver(FunctionCallee, Arguments,
+              ReceiverInstance, AContext);
+          finally
+            LeaveGocciaCallSite(PreviousCallSite);
+          end;
         finally
           TGarbageCollector.Instance.RemoveTempRoot(ReceiverInstance);
-        end;
+        end
       end
       else
       begin

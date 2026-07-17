@@ -489,6 +489,7 @@ uses
   Goccia.AST.Node,
   Goccia.AST.Statements,
   Goccia.CallStack,
+  Goccia.CapabilityAudit,
   Goccia.Constants,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
@@ -3910,6 +3911,8 @@ begin
       raise;
     on E: TGocciaInstructionLimitError do
       raise;
+    on E: EGocciaCapabilityAuditDeliveryError do
+      raise;
     on E: Exception do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
   end;
@@ -3996,6 +3999,8 @@ begin
     on E: TGocciaTimeoutError do
       raise;
     on E: TGocciaInstructionLimitError do
+      raise;
+    on E: EGocciaCapabilityAuditDeliveryError do
       raise;
     on E: Exception do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
@@ -4093,6 +4098,8 @@ begin
     on E: TGocciaTimeoutError do
       raise;
     on E: TGocciaInstructionLimitError do
+      raise;
+    on E: EGocciaCapabilityAuditDeliveryError do
       raise;
     on E: Exception do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
@@ -5012,6 +5019,8 @@ begin
     on E: TGocciaTimeoutError do
       raise;
     on E: TGocciaInstructionLimitError do
+      raise;
+    on E: EGocciaCapabilityAuditDeliveryError do
       raise;
     on E: Exception do
       FPromise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
@@ -15758,7 +15767,10 @@ begin
           else
             for I := 0 to B - 1 do
               CallArgs.Add(GetRegister(A + 1 + I));
-          if GetRegister(A) is TGocciaNativeFunctionValue then
+          if (GetRegister(A) is TGocciaNativeFunctionValue) or
+             (GetRegister(A) is TGocciaFunctionConstructorClassValue) or
+             (GetRegister(A) is TGocciaBoundFunctionValue) or
+             (GetRegister(A) is TGocciaProxyValue) then
           begin
             EnterCurrentInstructionCallSite(PreviousCallSite);
             try
@@ -16020,7 +16032,10 @@ begin
           else
             for I := 0 to B - 1 do
               CallArgs.Add(GetRegister(A + 1 + I));
-          if GetRegister(A) is TGocciaNativeFunctionValue then
+          if (GetRegister(A) is TGocciaNativeFunctionValue) or
+             (GetRegister(A) is TGocciaFunctionConstructorClassValue) or
+             (GetRegister(A) is TGocciaBoundFunctionValue) or
+             (GetRegister(A) is TGocciaProxyValue) then
           begin
             EnterCurrentInstructionCallSite(PreviousCallSite);
             try
@@ -16055,7 +16070,12 @@ begin
           try
             for I := 0 to C - 1 do
               CallArgs.Add(GetRegister(B + 1 + I));
-            SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
+            EnterCurrentInstructionCallSite(PreviousCallSite);
+            try
+              SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
+            finally
+              LeaveGocciaCallSite(PreviousCallSite);
+            end;
           finally
             ReleaseArguments(CallArgs);
           end;
@@ -16081,7 +16101,12 @@ begin
           try
             for I := 0 to SpreadArray.Elements.Count - 1 do
               CallArgs.Add(SpreadArray.GetProperty(IntToStr(I)));
-            SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
+            EnterCurrentInstructionCallSite(PreviousCallSite);
+            try
+              SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
+            finally
+              LeaveGocciaCallSite(PreviousCallSite);
+            end;
           finally
             ReleaseArguments(CallArgs);
           end;
@@ -16653,6 +16678,8 @@ begin
               raise;
             on E: TGocciaInstructionLimitError do
               raise;
+            on E: EGocciaCapabilityAuditDeliveryError do
+              raise;
             on E: Exception do
               DynImportPromise.Reject(
                 CreateErrorObject(ERROR_NAME, E.Message));
@@ -16724,6 +16751,8 @@ begin
             on E: TGocciaTimeoutError do
               raise;
             on E: TGocciaInstructionLimitError do
+              raise;
+            on E: EGocciaCapabilityAuditDeliveryError do
               raise;
             on E: Exception do
               DynImportPromise.Reject(
@@ -16847,6 +16876,8 @@ begin
             on E: TGocciaTimeoutError do
               raise;
             on E: TGocciaInstructionLimitError do
+              raise;
+            on E: EGocciaCapabilityAuditDeliveryError do
               raise;
             on E: Exception do
             begin

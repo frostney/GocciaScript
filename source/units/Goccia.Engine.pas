@@ -36,6 +36,7 @@ uses
   Goccia.Builtins.JSON,
   Goccia.Builtins.Math,
   Goccia.Builtins.Temporal,
+  Goccia.CapabilityAudit,
   Goccia.Constants,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
@@ -158,6 +159,7 @@ type
     FRetainedModules: Contnrs.TObjectList;
     FLazyThunks: Contnrs.TObjectList;
     FHostEnvironment: TGocciaHostEnvironment;
+    FCapabilityAuditSink: TGocciaCapabilityAuditSink;
 
     // Core language built-in objects
     FBuiltinMath: TGocciaMath;
@@ -270,6 +272,11 @@ type
 
     procedure AddAlias(const APattern, AReplacement: string);
     procedure SetAllowedFetchHosts(const AHosts: TStrings);
+    procedure EmitCapabilityAudit(const AKind: TGocciaCapabilityKind;
+      const ADecision: TGocciaCapabilityDecision;
+      const ASubject, AReason: string);
+    procedure ConfigureCapabilityAuditAsChildOf(
+      const AParent: TGocciaEngine);
     procedure InjectGlobal(const AKey: string; const AValue: TGocciaValue);
     procedure RegisterGlobal(const AName: string; const AValue: TGocciaValue);
     procedure RegisterLazyGlobal(const AName: string;
@@ -322,6 +329,8 @@ type
     property ModuleResolver: TGocciaModuleResolver read GetModuleResolver;
     property ModuleLoader: TGocciaModuleLoader read FModuleLoader;
     property HostEnvironment: TGocciaHostEnvironment read FHostEnvironment;
+    property CapabilityAuditSink: TGocciaCapabilityAuditSink
+      read FCapabilityAuditSink write FCapabilityAuditSink;
     property SourcePath: string read FSourcePath;
     property FunctionConstructor: TGocciaFunctionConstructorClassValue read FFunctionConstructor;
     property ObjectConstructor: TGocciaClassValue read FObjectConstructor;
@@ -378,6 +387,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
   Goccia.Error,
+  Goccia.Execution.CallSite,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
   Goccia.FileExtensions,
@@ -907,7 +917,10 @@ begin
   FExecutor.Initialize(FInterpreter.GlobalScope, FModuleLoader, AFileName);
 
   if Assigned(FFunctionConstructor) then
+  begin
     FFunctionConstructor.CompileDynamicFunction := CompileDynamicFunction;
+    FFunctionConstructor.CapabilityAuditEmitter := EmitCapabilityAudit;
+  end;
 end;
 
 destructor TGocciaEngine.Destroy;
@@ -1669,6 +1682,54 @@ var
 begin
   for I := 0 to FExtensions.Count - 1 do
     FExtensions[I].SetAllowedFetchHosts(AHosts);
+end;
+
+procedure TGocciaEngine.EmitCapabilityAudit(
+  const AKind: TGocciaCapabilityKind;
+  const ADecision: TGocciaCapabilityDecision;
+  const ASubject, AReason: string);
+var
+  AuditEvent: TGocciaCapabilityAuditEvent;
+  CallSite: TGocciaCallSite;
+begin
+  if not Assigned(FCapabilityAuditSink) then
+    Exit;
+
+  AuditEvent.Kind := AKind;
+  AuditEvent.Decision := ADecision;
+  AuditEvent.Subject := ASubject;
+  AuditEvent.Reason := AReason;
+  if CurrentGocciaCallSite(CallSite) then
+  begin
+    AuditEvent.Source.FilePath := CallSite.FilePath;
+    AuditEvent.Source.Line := CallSite.Line;
+    AuditEvent.Source.Column := CallSite.Column;
+  end
+  else
+  begin
+    AuditEvent.Source.FilePath := FSourcePath;
+    AuditEvent.Source.Line := 0;
+    AuditEvent.Source.Column := 0;
+  end;
+
+  try
+    FCapabilityAuditSink(AuditEvent);
+  except
+    on E: EGocciaCapabilityAuditDeliveryError do
+      raise;
+    on E: Exception do
+      raise EGocciaCapabilityAuditDeliveryError.Create(
+        'capability audit delivery failed: ' + E.Message);
+  end;
+end;
+
+procedure TGocciaEngine.ConfigureCapabilityAuditAsChildOf(
+  const AParent: TGocciaEngine);
+begin
+  if Assigned(AParent) then
+    FCapabilityAuditSink := AParent.FCapabilityAuditSink
+  else
+    FCapabilityAuditSink := nil;
 end;
 
 procedure TGocciaEngine.WaitForRuntimeIdle;

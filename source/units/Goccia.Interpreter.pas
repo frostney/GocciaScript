@@ -109,6 +109,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.AST.Statements,
+  Goccia.CapabilityAudit,
   Goccia.Constants.ErrorNames,
   Goccia.Coverage,
   Goccia.GarbageCollector,
@@ -239,6 +240,8 @@ begin
     except
       on E: EGocciaAsyncAwaitSuspend do
         AttachAwait(E);
+      on E: EGocciaCapabilityAuditDeliveryError do
+        raise;
       on E: Exception do
         RejectWithException(E);
     end;

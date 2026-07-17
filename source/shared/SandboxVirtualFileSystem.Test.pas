@@ -26,8 +26,14 @@ type
   private
     FClock: TDeterministicSandboxClock;
     FFs: TSandboxVirtualFileSystem;
+    FClampCount: Integer;
+    FLastClampPath: string;
+    FLastClampBase: string;
+    FLastCanonicalPath: string;
     function TimeAt(const AMillisecond: Integer): TDateTime;
     procedure ExpectTime(const AActual, AExpected: TDateTime);
+    procedure HandleRootClamp(const APath, ABase,
+      ACanonicalPath: string);
   public
     procedure SetupTests; override;
     procedure BeforeEach; override;
@@ -40,6 +46,7 @@ type
     procedure TestDirectoryEntryChangesUpdateParentMetadata;
     procedure TestRecursiveMkdirReportsFirstCreatedPath;
     procedure TestDefaultClockUsesUnixEpoch;
+    procedure TestRootClampCallback;
   end;
 
 function TDeterministicSandboxClock.Now: TDateTime;
@@ -62,6 +69,8 @@ begin
   Test('Recursive mkdir reports its first created path',
     TestRecursiveMkdirReportsFirstCreatedPath);
   Test('Default clock tracks the Unix epoch', TestDefaultClockUsesUnixEpoch);
+  Test('Root clamp callback reports one attempted escape',
+    TestRootClampCallback);
 end;
 
 procedure TTestSandboxVirtualFileSystem.BeforeEach;
@@ -69,6 +78,10 @@ begin
   FClock := TDeterministicSandboxClock.Create;
   FClock.Value := TimeAt(0);
   FFs := TSandboxVirtualFileSystem.Create(0, FClock);
+  FClampCount := 0;
+  FLastClampPath := '';
+  FLastClampBase := '';
+  FLastCanonicalPath := '';
 end;
 
 procedure TTestSandboxVirtualFileSystem.AfterEach;
@@ -88,6 +101,15 @@ procedure TTestSandboxVirtualFileSystem.ExpectTime(const AActual,
   AExpected: TDateTime);
 begin
   Expect<Boolean>(AActual = AExpected).ToBe(True);
+end;
+
+procedure TTestSandboxVirtualFileSystem.HandleRootClamp(
+  const APath, ABase, ACanonicalPath: string);
+begin
+  Inc(FClampCount);
+  FLastClampPath := APath;
+  FLastClampBase := ABase;
+  FLastCanonicalPath := ACanonicalPath;
 end;
 
 procedure TTestSandboxVirtualFileSystem.TestTracksIndependentFileTimestamps;
@@ -259,6 +281,21 @@ begin
 
   Expect<Boolean>((ActualMilliseconds >= BeforeMilliseconds - 1) and
     (ActualMilliseconds <= AfterMilliseconds + 1)).ToBe(True);
+end;
+
+procedure TTestSandboxVirtualFileSystem.TestRootClampCallback;
+begin
+  FFs.RootClampCallback := HandleRootClamp;
+
+  Expect<string>(FFs.Normalize('/work/..')).ToBe('/');
+  Expect<Integer>(FClampCount).ToBe(0);
+
+  Expect<string>(FFs.Normalize('../../secret.txt', '/work')).ToBe(
+    '/secret.txt');
+  Expect<Integer>(FClampCount).ToBe(1);
+  Expect<string>(FLastClampPath).ToBe('../../secret.txt');
+  Expect<string>(FLastClampBase).ToBe('/work');
+  Expect<string>(FLastCanonicalPath).ToBe('/secret.txt');
 end;
 
 begin

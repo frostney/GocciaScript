@@ -26,7 +26,8 @@ procedure TGocciaFFIRuntimeExtension.Attach(const ARuntime: TGocciaRuntimeCore);
 begin
   inherited Attach(ARuntime);
   FBuiltinFFI := TGocciaGlobalFFI.Create(CONSTRUCTOR_FFI,
-    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError);
+    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
+    Runtime.Engine.EmitCapabilityAudit);
   Runtime.RegisterRuntimeGlobalName('FFI');
 end;
 

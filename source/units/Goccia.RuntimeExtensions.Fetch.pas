@@ -56,7 +56,8 @@ begin
   inherited Attach(ARuntime);
   TGocciaFetchManager.Initialize;
   FBuiltinFetch := TGocciaGlobalFetch.Create('Fetch',
-    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError);
+    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
+    Runtime.Engine.EmitCapabilityAudit);
 
   if not Assigned(Runtime.Engine.ObjectConstructor) then
     Exit;

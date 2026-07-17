@@ -50,6 +50,14 @@ _Avoid_: Runtime, built-in surface, host surface.
 The engine-owned module that supplies JavaScript-observable time, time zone, and randomness. Hosts may inject its clock and RNG adapters; infrastructure timing is not part of the host environment.
 _Avoid_: Runtime surface, global clock, `TimingUtils` when referring to script-visible values.
 
+**Capability audit event**:
+A versioned structured host event emitted when source reaches a capability boundary. It records the capability kind, allow-or-deny decision, subject, reason, and active source location. The decision describes capability policy, not the eventual success of the requested operation.
+_Avoid_: Console log, operation result, security policy callback.
+
+**Capability audit sink**:
+The engine-owned host callback that receives capability audit events synchronously. Sink failures propagate and stop execution; CLI hosts provide a thread-safe JSONL sink through `--audit-log`.
+_Avoid_: Runtime extension, script-visible logger, best-effort telemetry.
+
 **Seed baseline**:
 An explicitly imported snapshot used to initialise a sandbox-visible filesystem. Top-level sandbox seeds copy from host paths or inline seed config entries; nested child sandbox seeds copy from the parent virtual filesystem or inline child entries. A seed baseline is not a live mount and does not make the source path ambiently available to running source.
 _Avoid_: Mount, host filesystem access.

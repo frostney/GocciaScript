@@ -16,6 +16,7 @@ uses
   Goccia.Application,
   Goccia.Builtins.Console,
   Goccia.Builtins.GlobalShadowRealm,
+  Goccia.CapabilityAudit,
   Goccia.CLI.Application,
   Goccia.CLI.Options,
   Goccia.Engine,
@@ -604,6 +605,7 @@ var
   EmptyConfig: TConfigEntryArray;
 begin
   EmptyConfig := EmptyConfigEntries;
+  ConfigureCapabilityAudit(AEngine);
   AEngine.SourceType := ResolveSourceTypeOption(EngineOptions.SourceType,
     EmptyConfig, AFileName);
   ApplyCompatibilityAndWarningFlags(AEngine, EngineOptions, EmptyConfig);
@@ -777,66 +779,71 @@ begin
   PreviousHostEnvironment := FCurrentHostEnvironment;
   FCurrentOutputLines := OutputLines;
   try
-    ConfigureSandboxResolver(Resolver);
-
-    if EngineOptions.Mode.Matches(emBytecode) then
-    begin
-      BytecodeExecutor := TGocciaBytecodeExecutor.Create;
-      BytecodeExecutor.GlobalBackedTopLevel := True;
-      Executor := BytecodeExecutor;
-    end
-    else
-    begin
-      InterpreterExecutor := TGocciaInterpreterExecutor.Create;
-      Executor := InterpreterExecutor;
-    end;
-
-    Engine := TGocciaEngine.Create(AEntryPath, Source, Resolver, Executor);
-    Engine.ModuleLoader.SetContentProvider(Provider, True);
-    Provider := nil;
-    ConfigureEngineForSandbox(Engine, AContext, AEntryPath,
-      PreviousHostEnvironment);
-    ApplyVirtualModulesToEngine(Engine, '');
-    FCurrentHostEnvironment := Engine.HostEnvironment;
-
     try
-      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
-      StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
-      ScriptResult := Engine.Execute;
-      ExecutionRealm := CurrentRealm;
-      try
-        SetCurrentRealm(CloneRealm);
-        Result.ResultValue := CloneResultValue(ScriptResult.Result);
-      finally
-        SetCurrentRealm(ExecutionRealm);
-      end;
-      Result.Ok := True;
-      Result.ExitCode := 0;
-    finally
-      ClearExecutionTimeout;
-      ClearInstructionLimit;
-    end;
-  except
-    on E: TGocciaError do
-      Result.ErrorMessage := E.GetDetailedMessage(False);
-    on E: TGocciaThrowValue do
-      Result.ErrorMessage := FormatThrowDetail(E.Value, AEntryPath, Source,
-        False, E.Suggestion);
-    on E: Exception do
-      Result.ErrorMessage := E.Message;
-  end;
+      ConfigureSandboxResolver(Resolver);
 
-  Result.Output := OutputLines.Text;
-  if Result.ErrorMessage <> '' then
-    Result.ErrorOutput := Result.ErrorMessage + LineEnding;
-  Engine.Free;
-  Executor.Free;
-  Resolver.Free;
-  Provider.Free;
-  FCurrentHostEnvironment := PreviousHostEnvironment;
-  FCurrentOutputLines := PreviousOutputLines;
-  OutputLines.Free;
-  Source.Free;
+      if EngineOptions.Mode.Matches(emBytecode) then
+      begin
+        BytecodeExecutor := TGocciaBytecodeExecutor.Create;
+        BytecodeExecutor.GlobalBackedTopLevel := True;
+        Executor := BytecodeExecutor;
+      end
+      else
+      begin
+        InterpreterExecutor := TGocciaInterpreterExecutor.Create;
+        Executor := InterpreterExecutor;
+      end;
+
+      Engine := TGocciaEngine.Create(AEntryPath, Source, Resolver, Executor);
+      Engine.ModuleLoader.SetContentProvider(Provider, True);
+      Provider := nil;
+      ConfigureEngineForSandbox(Engine, AContext, AEntryPath,
+        PreviousHostEnvironment);
+      ApplyVirtualModulesToEngine(Engine, '');
+      FCurrentHostEnvironment := Engine.HostEnvironment;
+
+      try
+        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+        StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+        ScriptResult := Engine.Execute;
+        ExecutionRealm := CurrentRealm;
+        try
+          SetCurrentRealm(CloneRealm);
+          Result.ResultValue := CloneResultValue(ScriptResult.Result);
+        finally
+          SetCurrentRealm(ExecutionRealm);
+        end;
+        Result.Ok := True;
+        Result.ExitCode := 0;
+      finally
+        ClearExecutionTimeout;
+        ClearInstructionLimit;
+      end;
+    except
+      on E: EGocciaCapabilityAuditDeliveryError do
+        raise;
+      on E: TGocciaError do
+        Result.ErrorMessage := E.GetDetailedMessage(False);
+      on E: TGocciaThrowValue do
+        Result.ErrorMessage := FormatThrowDetail(E.Value, AEntryPath, Source,
+          False, E.Suggestion);
+      on E: Exception do
+        Result.ErrorMessage := E.Message;
+    end;
+
+    Result.Output := OutputLines.Text;
+    if Result.ErrorMessage <> '' then
+      Result.ErrorOutput := Result.ErrorMessage + LineEnding;
+  finally
+    Engine.Free;
+    Executor.Free;
+    Resolver.Free;
+    Provider.Free;
+    FCurrentHostEnvironment := PreviousHostEnvironment;
+    FCurrentOutputLines := PreviousOutputLines;
+    OutputLines.Free;
+    Source.Free;
+  end;
 end;
 
 function TSandboxRunnerApp.ExecuteSandboxPath(
@@ -853,29 +860,34 @@ begin
   Result.ExitCode := 1;
   ChildContext := TGocciaSandboxContext.Create;
   try
-    ChildContext.RunScriptCallback := ExecuteSandboxPath;
-    SeedNestedContext(AContext, ChildContext, AOptions);
-    ChildContext.CaptureBaseline;
-    Result := ExecuteSandboxPathInContext(ChildContext,
-      ChildContext.Fs.Normalize(AEntryPath));
-    if AOptions.IncludeDiff then
-    begin
-      Result.DiffRequested := True;
-      if AOptions.DiffFormat = 'unified' then
-        Result.Diff := ChildContext.DiffUnified(AOptions.DiffMetadata)
-      else
-        Result.Diff := ChildContext.DiffJson(AOptions.DiffMetadata);
+    try
+      ChildContext.RunScriptCallback := ExecuteSandboxPath;
+      SeedNestedContext(AContext, ChildContext, AOptions);
+      ChildContext.CaptureBaseline;
+      Result := ExecuteSandboxPathInContext(ChildContext,
+        ChildContext.Fs.Normalize(AEntryPath));
+      if AOptions.IncludeDiff then
+      begin
+        Result.DiffRequested := True;
+        if AOptions.DiffFormat = 'unified' then
+          Result.Diff := ChildContext.DiffUnified(AOptions.DiffMetadata)
+        else
+          Result.Diff := ChildContext.DiffJson(AOptions.DiffMetadata);
+      end;
+    except
+      on E: EGocciaCapabilityAuditDeliveryError do
+        raise;
+      on E: Exception do
+      begin
+        Result.Ok := False;
+        Result.ExitCode := 1;
+        Result.ErrorMessage := E.Message;
+        Result.ErrorOutput := E.Message + LineEnding;
+      end;
     end;
-  except
-    on E: Exception do
-    begin
-      Result.Ok := False;
-      Result.ExitCode := 1;
-      Result.ErrorMessage := E.Message;
-      Result.ErrorOutput := E.Message + LineEnding;
-    end;
+  finally
+    ChildContext.Free;
   end;
-  ChildContext.Free;
 end;
 
 procedure TSandboxRunnerApp.WriteDiffIfRequested;

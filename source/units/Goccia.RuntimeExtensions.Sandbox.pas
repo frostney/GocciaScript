@@ -21,8 +21,16 @@ type
   private
     FContext: TGocciaSandboxContext;
     FFsModule: TGocciaModule;
+    FFsModuleRegistered: Boolean;
     FGocciaModule: TGocciaModule;
+    FGocciaModuleRegistered: Boolean;
+    FPreviousFsModule: TGocciaModule;
+    FPreviousGocciaModule: TGocciaModule;
+    FPreviousRootClampCallback: TSandboxRootClampCallback;
+    FRootClampInstalled: Boolean;
 
+    procedure HandleRootClamp(const APath, ABase,
+      ACanonicalPath: string);
     function EnsureStatsPrototype: TGocciaObjectValue;
     function CreateStatsValue(const AStat: TSandboxFsStat): TGocciaValue;
     function CreateStatsDate(const AMilliseconds: Double): TGocciaValue;
@@ -138,6 +146,7 @@ uses
   base64,
   SandboxShell,
 
+  Goccia.CapabilityAudit,
   Goccia.Constants.ErrorNames,
   Goccia.GarbageCollector,
   Goccia.JSON,
@@ -270,7 +279,9 @@ end;
 function RejectedPromiseFromException(
   const AException: Exception): TGocciaPromiseValue;
 begin
-  if AException is EGocciaBytecodeThrow then
+  if AException is EGocciaCapabilityAuditDeliveryError then
+    raise AException
+  else if AException is EGocciaBytecodeThrow then
     Result := RejectedPromise(EGocciaBytecodeThrow(AException).ThrownValue)
   else if AException is TGocciaThrowValue then
     Result := RejectedPromise(TGocciaThrowValue(AException).Value)
@@ -412,6 +423,8 @@ begin
       CompleteFailure(E.Value);
       Exit;
     end;
+    on E: EGocciaCapabilityAuditDeliveryError do
+      raise;
     on E: Exception do
     begin
       CompleteFailure(CreateErrorObject(ERROR_NAME, E.Message));
@@ -1052,6 +1065,8 @@ begin
   except
     on E: TGocciaThrowValue do
       Result := RejectedPromise(E.Value);
+    on E: EGocciaCapabilityAuditDeliveryError do
+      raise;
     on E: Exception do
       Result := RejectedPromise(TGocciaStringLiteralValue.Create(E.Message));
   end;
@@ -1070,6 +1085,8 @@ begin
   except
     on E: TGocciaThrowValue do
       Result := RejectedPromise(E.Value);
+    on E: EGocciaCapabilityAuditDeliveryError do
+      raise;
     on E: Exception do
       Result := RejectedPromise(TGocciaStringLiteralValue.Create(E.Message));
   end;
@@ -1094,6 +1111,8 @@ begin
   except
     on E: TGocciaThrowValue do
       Result := RejectedPromise(E.Value);
+    on E: EGocciaCapabilityAuditDeliveryError do
+      raise;
     on E: Exception do
       Result := RejectedPromise(TGocciaStringLiteralValue.Create(E.Message));
   end;
@@ -1270,6 +1289,15 @@ begin
   FContext := AContext;
 end;
 
+procedure TGocciaSandboxRuntimeExtension.HandleRootClamp(
+  const APath, ABase, ACanonicalPath: string);
+begin
+  if Assigned(Runtime) and Assigned(Runtime.Engine) then
+    Runtime.Engine.EmitCapabilityAudit(gckSandboxFileSystem, gcdDeny,
+      APath, Format('path from %s escaped the sandbox root and was clamped to %s',
+        [ABase, ACanonicalPath]));
+end;
+
 procedure TGocciaSandboxRuntimeExtension.Attach(
   const ARuntime: TGocciaRuntimeCore);
 var
@@ -1311,22 +1339,57 @@ begin
   FFsModule.AddExportValue('copyFileSync',
     FsNamespace.GetProperty('copyFileSync'));
   FFsModule.AddExportValue('promises', FsNamespace.GetProperty('promises'));
+  if not Runtime.Engine.ModuleLoader.GlobalModules.TryGetValue(
+    'fs', FPreviousFsModule) then
+    FPreviousFsModule := nil;
   Runtime.Engine.ModuleLoader.GlobalModules.Add('fs', FFsModule);
+  FFsModuleRegistered := True;
 
   FGocciaModule := TGocciaModule.Create('goccia');
   FGocciaModule.AddExportValue(KEYWORD_DEFAULT, GocciaNamespace);
   FGocciaModule.AddExportValue('$', GocciaNamespace.GetProperty('$'));
   FGocciaModule.AddExportValue('runScript',
     GocciaNamespace.GetProperty('runScript'));
+  if not Runtime.Engine.ModuleLoader.GlobalModules.TryGetValue(
+    'goccia', FPreviousGocciaModule) then
+    FPreviousGocciaModule := nil;
   Runtime.Engine.ModuleLoader.GlobalModules.Add('goccia', FGocciaModule);
+  FGocciaModuleRegistered := True;
+
+  FPreviousRootClampCallback := FContext.Fs.RootClampCallback;
+  FContext.Fs.RootClampCallback := HandleRootClamp;
+  FRootClampInstalled := True;
 end;
 
 procedure TGocciaSandboxRuntimeExtension.Detach;
 begin
+  if FRootClampInstalled then
+  begin
+    FContext.Fs.RootClampCallback := FPreviousRootClampCallback;
+    FPreviousRootClampCallback := nil;
+    FRootClampInstalled := False;
+  end;
   if Assigned(Runtime) and Assigned(Runtime.Engine) then
   begin
-    Runtime.Engine.ModuleLoader.GlobalModules.Remove('goccia');
-    Runtime.Engine.ModuleLoader.GlobalModules.Remove('fs');
+    if FGocciaModuleRegistered then
+    begin
+      if Assigned(FPreviousGocciaModule) then
+        Runtime.Engine.ModuleLoader.GlobalModules.Add(
+          'goccia', FPreviousGocciaModule)
+      else
+        Runtime.Engine.ModuleLoader.GlobalModules.Remove('goccia');
+      FPreviousGocciaModule := nil;
+      FGocciaModuleRegistered := False;
+    end;
+    if FFsModuleRegistered then
+    begin
+      if Assigned(FPreviousFsModule) then
+        Runtime.Engine.ModuleLoader.GlobalModules.Add('fs', FPreviousFsModule)
+      else
+        Runtime.Engine.ModuleLoader.GlobalModules.Remove('fs');
+      FPreviousFsModule := nil;
+      FFsModuleRegistered := False;
+    end;
   end;
   FGocciaModule.Free;
   FGocciaModule := nil;

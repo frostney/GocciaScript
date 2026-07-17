@@ -92,6 +92,9 @@ type
 
   TSandboxFsFile = class;
 
+  TSandboxRootClampCallback = procedure(const APath, ABase,
+    ACanonicalPath: string) of object;
+
   TSandboxVirtualFileSystem = class
   private
     FRoot: TSandboxFsNode;
@@ -99,6 +102,7 @@ type
     FUsedBytes: Int64;
     FNodeCount: Integer;
     FClock: TSandboxFsClock;
+    FRootClampCallback: TSandboxRootClampCallback;
     constructor CreateFork(const ASource: TSandboxVirtualFileSystem);
     function CurrentTime: TDateTime;
     function LookupNode(const ACanonicalPath: string): TSandboxFsNode;
@@ -168,6 +172,8 @@ type
     property QuotaBytes: Int64 read FQuotaBytes write FQuotaBytes;
     property UsedBytes: Int64 read FUsedBytes;
     property NodeCount: Integer read FNodeCount;
+    property RootClampCallback: TSandboxRootClampCallback
+      read FRootClampCallback write FRootClampCallback;
   end;
 
   TSandboxFsFile = class
@@ -418,6 +424,7 @@ var
   Segment: string;
   Start: Integer;
   Index: Integer;
+  ClampedAtRoot: Boolean;
 
   procedure PushSegment(const AValue: string);
   begin
@@ -426,7 +433,9 @@ var
     if AValue = '..' then
     begin
       if Segments.Count > 0 then
-        Segments.Delete(Segments.Count - 1);
+        Segments.Delete(Segments.Count - 1)
+      else
+        ClampedAtRoot := True;
       { at root, '..' clamps - the jail has no upstairs }
       Exit;
     end;
@@ -434,6 +443,7 @@ var
   end;
 
 begin
+  ClampedAtRoot := False;
   Path := NormalizeSandboxPathSeparators(APath);
   Base := NormalizeSandboxPathSeparators(ABase);
   if (Pos(#0, Path) > 0) or (Pos(#0, Base) > 0) then
@@ -462,6 +472,8 @@ begin
       Result := Result + PathSeparator + Segments[Index];
     if Result = '' then
       Result := PathSeparator;
+    if ClampedAtRoot and Assigned(FRootClampCallback) then
+      FRootClampCallback(APath, ABase, Result);
   finally
     Segments.Free;
   end;

@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
+  Goccia.CapabilityAudit,
   Goccia.Error.ThrowErrorCallback,
   Goccia.ObjectModel,
   Goccia.Scope,
@@ -14,6 +15,8 @@ uses
 
 type
   TGocciaGlobalFFI = class(TGocciaBuiltin)
+  private
+    FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
   published
     function FFIOpen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FFIStruct(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -23,7 +26,9 @@ type
     function FFINullptrGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FFISuffixGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
-    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+    constructor Create(const AName: string; const AScope: TGocciaScope;
+      const AThrowError: TGocciaThrowErrorCallback;
+      const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter);
   end;
 
 implementation
@@ -61,11 +66,15 @@ const
   {$ENDIF}
   {$ENDIF}
 
-constructor TGocciaGlobalFFI.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+constructor TGocciaGlobalFFI.Create(const AName: string;
+  const AScope: TGocciaScope;
+  const AThrowError: TGocciaThrowErrorCallback;
+  const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter);
 var
   Members: TGocciaMemberCollection;
 begin
   inherited Create(AName, AScope, AThrowError);
+  FCapabilityAuditEmitter := ACapabilityAuditEmitter;
 
   Members := TGocciaMemberCollection.Create;
   try
@@ -130,6 +139,9 @@ begin
     ThrowTypeError(SErrorFFIOpenRequiresPath, SSuggestFFILibraryOpen);
 
   LibPath := AArgs.GetElement(0).ToStringLiteral.Value;
+  if Assigned(FCapabilityAuditEmitter) then
+    FCapabilityAuditEmitter(gckFFIOpen, gcdAllow, LibPath,
+      'FFI capability is enabled');
 
   try
     Handle := TGocciaFFILibraryHandle.Create(LibPath);

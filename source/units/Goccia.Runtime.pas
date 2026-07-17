@@ -354,7 +354,16 @@ begin
     if Added then
     begin
       FExtensions.Extract(AExtension);
+      try
+        RefreshModuleExtensions;
+      except
+        // Preserve the attachment or refresh failure that triggered cleanup.
+      end;
+    end;
+    try
       AExtension.Detach;
+    except
+      // Preserve the attachment or refresh failure that triggered cleanup.
     end;
     AExtension.Free;
     raise;

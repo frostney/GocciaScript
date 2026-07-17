@@ -247,6 +247,7 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | [Embedding the Engine](docs/embedding.md) | Embedding GocciaScript in FreePascal applications |
 | [Virtual Module Configuration](docs/virtual-modules.md) | CLI, config-file, and embedding reference for host-supplied modules |
 | [Host Environment](docs/host-environment.md) | Injecting JavaScript-visible clock, time-zone, and random providers |
+| [Capability Audit Events](docs/capability-audit.md) | Structured host capability decisions, embedding sink, and CLI JSONL output |
 | [Testing](docs/testing.md) | Test organization, running tests, coverage, CI |
 | [Test Framework API](docs/testing-api.md) | Assertions, mocks, lifecycle hooks, async patterns |
 | [Benchmarks](docs/benchmarks.md) | Benchmark runner, output formats, writing benchmarks |

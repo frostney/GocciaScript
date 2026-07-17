@@ -64,6 +64,7 @@ uses
   SysUtils,
 
   Goccia.Builtins.Atomics,
+  Goccia.CapabilityAudit,
   Goccia.Constants.ErrorNames,
   Goccia.Error,
   Goccia.GarbageCollector,
@@ -236,6 +237,8 @@ begin
         on E: TGocciaTimeoutError do
           raise;
         on E: TGocciaInstructionLimitError do
+          raise;
+        on E: EGocciaCapabilityAuditDeliveryError do
           raise;
         on E: Exception do
           ResolvingFunctions.RejectException(E);
@@ -458,6 +461,8 @@ begin
         on E: TGocciaTimeoutError do
           raise;
         on E: TGocciaInstructionLimitError do
+          raise;
+        on E: EGocciaCapabilityAuditDeliveryError do
           raise;
         on E: TGocciaTypeError do
           if Assigned(Promise) or Assigned(Capability) then

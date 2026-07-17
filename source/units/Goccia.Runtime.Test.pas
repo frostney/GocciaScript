@@ -8,23 +8,40 @@ uses
 
   TestingPascalLibrary,
 
+  Goccia.Constants.PropertyNames,
   Goccia.Engine,
+  Goccia.Error.Messages,
   Goccia.Executor.Interpreter,
   Goccia.ModuleResolver,
   Goccia.Modules,
   Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
+  Goccia.Realm,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
   Goccia.RuntimeExtensions.JSON5,
   Goccia.TestSetup,
+  Goccia.Values.Error,
+  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
+
+const
+  ROLLBACK_PROBE_NAME = 'resolverRollbackProbe';
 
 type
   TCustomRuntimeModuleResolver = class(TGocciaModuleResolver)
   public
     function Resolve(const AModulePath,
       AImportingFilePath: string): string; override;
+  end;
+
+  TRollbackModuleRuntimeExtension = class(TGocciaRuntimeExtension)
+  private
+    FPreviousProbeValue: TGocciaValue;
+  public
+    procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
+    procedure Detach; override;
+    procedure AddModuleExtensions(const AExtensions: TStrings); override;
   end;
 
   TRuntimeTests = class(TTestSuite)
@@ -42,6 +59,7 @@ type
     procedure TestGlobalModuleProviderUnregisterClearsLoadedModule;
     procedure TestRuntimeConstructorAcceptsExistingEngine;
     procedure TestRuntimeInstallIsIdempotent;
+    procedure TestRuntimeInstallRollsBackResolverExtensions;
     procedure TestRuntimePreservesResolverExtensions;
     procedure TestRuntimeModuleLoaderFallsBackToPreviousLoader;
     procedure TestRuntimeRunScriptFromFileLoadsFile;
@@ -58,6 +76,31 @@ begin
   Result := inherited Resolve(AModulePath, AImportingFilePath);
 end;
 
+procedure TRollbackModuleRuntimeExtension.Attach(
+  const ARuntime: TGocciaRuntimeCore);
+begin
+  inherited;
+  FPreviousProbeValue := ARuntime.Engine.Interpreter.GlobalScope.GetValue(
+    ROLLBACK_PROBE_NAME);
+  ARuntime.Engine.RegisterGlobal(ROLLBACK_PROBE_NAME,
+    TGocciaUndefinedLiteralValue.UndefinedValue);
+  TGocciaObjectValue(ARuntime.Engine.Realm.GlobalObject).PreventExtensions;
+end;
+
+procedure TRollbackModuleRuntimeExtension.Detach;
+begin
+  if Assigned(Runtime) then
+    Runtime.Engine.RegisterGlobal(ROLLBACK_PROBE_NAME, FPreviousProbeValue);
+  FPreviousProbeValue := nil;
+  inherited;
+end;
+
+procedure TRollbackModuleRuntimeExtension.AddModuleExtensions(
+  const AExtensions: TStrings);
+begin
+  AExtensions.Add('.rollback-test');
+end;
+
 procedure TRuntimeTests.SetupTests;
 begin
   Test('Engine rejects nil extension',
@@ -70,6 +113,8 @@ begin
     TestRuntimeConstructorAcceptsExistingEngine);
   Test('Runtime extension install is idempotent',
     TestRuntimeInstallIsIdempotent);
+  Test('Runtime extension install rolls back resolver extensions',
+    TestRuntimeInstallRollsBackResolverExtensions);
   Test('Runtime preserves resolver extensions',
     TestRuntimePreservesResolverExtensions);
   Test('Runtime module loader falls back to previous loader',
@@ -295,6 +340,68 @@ begin
       SecondExtension := Runtime.Install(TGocciaConsoleRuntimeExtension.Create);
 
       Expect<Boolean>(FirstExtension = SecondExtension).ToBe(True);
+    finally
+      Runtime.Free;
+      Engine.Free;
+      Source.Free;
+    end;
+  finally
+    Executor.Free;
+  end;
+end;
+
+procedure TRuntimeTests.TestRuntimeInstallRollsBackResolverExtensions;
+var
+  BaselineExtensions: TModuleResolverExtensionArray;
+  Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
+  Extensions: TModuleResolverExtensionArray;
+  I: Integer;
+  ProbeValue: TGocciaValue;
+  RaisedMessage: string;
+  RaisedExpectedException: Boolean;
+  Runtime: TGocciaRuntime;
+  Source: TStringList;
+begin
+  Source := CreateEmptySource;
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
+    Runtime := nil;
+    try
+      Engine.RegisterGlobal(ROLLBACK_PROBE_NAME,
+        TGocciaBooleanLiteralValue.TrueValue);
+      Engine.Resolver.SetExtensions(['.custom']);
+      Runtime := TGocciaRuntime.Create(Engine);
+      BaselineExtensions := Engine.Resolver.GetExtensions;
+
+      RaisedExpectedException := False;
+      RaisedMessage := '';
+      try
+        Runtime.Install(TRollbackModuleRuntimeExtension.Create);
+      except
+        on E: TGocciaThrowValue do
+        begin
+          RaisedExpectedException := True;
+          if E.Value is TGocciaObjectValue then
+            RaisedMessage := TGocciaObjectValue(E.Value)
+              .GetProperty(PROP_MESSAGE).ToStringLiteral.Value;
+        end;
+      end;
+      Expect<Boolean>(RaisedExpectedException).ToBe(True);
+      Expect<string>(RaisedMessage).ToBe(Format(
+        SErrorCannotAddPropertyNotExtensible, [ROLLBACK_PROBE_NAME]));
+
+      Extensions := Engine.Resolver.GetExtensions;
+      Expect<Integer>(Length(Extensions)).ToBe(Length(BaselineExtensions));
+      for I := 0 to High(Extensions) do
+        Expect<string>(Extensions[I]).ToBe(BaselineExtensions[I]);
+      Expect<Boolean>(not Assigned(Runtime.FindRuntimeExtension(
+        TRollbackModuleRuntimeExtension))).ToBe(True);
+      ProbeValue := Engine.Interpreter.GlobalScope.GetValue(
+        ROLLBACK_PROBE_NAME);
+      Expect<Boolean>(ProbeValue =
+        TGocciaBooleanLiteralValue.TrueValue).ToBe(True);
     finally
       Runtime.Free;
       Engine.Free;

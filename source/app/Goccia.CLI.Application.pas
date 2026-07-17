@@ -13,6 +13,7 @@ uses
 
   Goccia.Application,
   Goccia.Builtins.GlobalShadowRealm,
+  Goccia.CapabilityAudit,
   Goccia.CLI.Options,
   Goccia.Engine,
   Goccia.Executor,
@@ -25,11 +26,15 @@ type
     FHelp: TFlagOption;
     FJobs: TIntegerOption;
     FLog: TStringOption;
+    FAuditLog: TStringOption;
     FMultifile: TFlagOption;
     FConfig: TStringOption;
     FLogFileHandle: TextFile;
     FLogLock: TRTLCriticalSection;
     FLogFileOpen: Boolean;
+    FAuditLogStream: TFileStream;
+    FAuditLogLock: TRTLCriticalSection;
+    FAuditLogOpen: Boolean;
     FEngineOptions: TGocciaEngineOptions;
     FCoverageOptions: TGocciaCoverageOptions;
     FProfilerOptions: TGocciaProfilerOptions;
@@ -42,6 +47,11 @@ type
     procedure ShutdownSingletons;
     procedure OpenLogFile;
     procedure CloseLogFile;
+    procedure OpenAuditLog;
+    procedure CloseAuditLog;
+    procedure ValidateOutputPaths;
+    procedure HandleCapabilityAudit(
+      const AEvent: TGocciaCapabilityAuditEvent);
   protected
     procedure Configure; virtual; abstract;
     function UsageLine: string; virtual; abstract;
@@ -59,6 +69,7 @@ type
     function Add(const AOption: TOptionBase): TOptionBase;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); virtual;
+    procedure ConfigureCapabilityAudit(const AEngine: TGocciaEngine);
     function ShouldApplyRootConfig(const APaths: TStringList;
       const AConfigPath: string; const AExplicitConfig: Boolean): Boolean; virtual;
     procedure HandleConsoleLog(const AMethod, ALine: string);
@@ -356,6 +367,7 @@ begin
   FHelp := nil;
   FJobs := nil;
   FLog := nil;
+  FAuditLog := nil;
   FMultifile := nil;
   FConfig := nil;
   FRootConfigPath := '';
@@ -363,10 +375,13 @@ begin
   // through SourceRegistry.Load never race on first-access creation.
   FSourceRegistry := TGocciaSourceRegistry.Create;
   FLogFileOpen := False;
+  FAuditLogStream := nil;
+  FAuditLogOpen := False;
 end;
 
 destructor TGocciaCLIApplication.Destroy;
 begin
+  CloseAuditLog;
   CloseLogFile;
   FOwnedOptions.Free;
   FEngineOptions.Free;
@@ -375,6 +390,7 @@ begin
   FHelp.Free;
   FJobs.Free;
   FLog.Free;
+  FAuditLog.Free;
   FMultifile.Free;
   FConfig.Free;
   FSourceRegistry.Free;
@@ -686,6 +702,13 @@ end;
 procedure TGocciaCLIApplication.ConfigureCreatedEngine(
   const AEngine: TGocciaEngine; const AFileConfig: TConfigEntryArray);
 begin
+end;
+
+procedure TGocciaCLIApplication.ConfigureCapabilityAudit(
+  const AEngine: TGocciaEngine);
+begin
+  if FAuditLogOpen then
+    AEngine.CapabilityAuditSink := HandleCapabilityAudit;
 end;
 
 procedure InjectModulesFromFileSystemModule(const AEngine: TGocciaEngine;
@@ -1053,6 +1076,7 @@ var
 begin
   Result := TGocciaEngine.Create(AFileName, ASource, AExecutor);
   try
+    ConfigureCapabilityAudit(Result);
     FileConfigPath := DiscoverFileConfigPath(AFileName);
     if FileConfigPath <> '' then
       FileConfig := ParseConfigFile(FileConfigPath)
@@ -1113,6 +1137,68 @@ begin
     FLogFileOpen := False;
     DoneCriticalSection(FLogLock);
   end;
+end;
+
+procedure TGocciaCLIApplication.HandleCapabilityAudit(
+  const AEvent: TGocciaCapabilityAuditEvent);
+var
+  Line: RawByteString;
+begin
+  Line := RawByteString(UTF8Encode(AEvent.ToJSON + LineEnding));
+  EnterCriticalSection(FAuditLogLock);
+  try
+    if Length(Line) > 0 then
+      FAuditLogStream.WriteBuffer(Line[1], Length(Line));
+  finally
+    LeaveCriticalSection(FAuditLogLock);
+  end;
+end;
+
+procedure TGocciaCLIApplication.OpenAuditLog;
+begin
+  if FAuditLogOpen then
+    Exit;
+  InitCriticalSection(FAuditLogLock);
+  try
+    FAuditLogStream := TFileStream.Create(FAuditLog.Value, fmCreate);
+    FAuditLogOpen := True;
+  except
+    FAuditLogStream.Free;
+    FAuditLogStream := nil;
+    DoneCriticalSection(FAuditLogLock);
+    raise;
+  end;
+end;
+
+procedure TGocciaCLIApplication.CloseAuditLog;
+begin
+  if not FAuditLogOpen then
+    Exit;
+  try
+    FreeAndNil(FAuditLogStream);
+  finally
+    FAuditLogOpen := False;
+    DoneCriticalSection(FAuditLogLock);
+  end;
+end;
+
+procedure TGocciaCLIApplication.ValidateOutputPaths;
+var
+  LogPath: string;
+  AuditPath: string;
+begin
+  if not FLog.Present or not FAuditLog.Present then
+    Exit;
+
+  LogPath := ExpandFileName(FLog.Value);
+  AuditPath := ExpandFileName(FAuditLog.Value);
+  {$IF DEFINED(DARWIN) OR DEFINED(WINDOWS)}
+  if SameText(LogPath, AuditPath) then
+  {$ELSE}
+  if LogPath = AuditPath then
+  {$ENDIF}
+    raise Exception.Create(
+      '--log and --audit-log must write to different files');
 end;
 
 procedure TGocciaCLIApplication.Validate;
@@ -1420,6 +1506,8 @@ begin
   FJobs.ShortName := 'j';
 
   FLog := TStringOption.Create('log', 'Write console output to a log file');
+  FAuditLog := TStringOption.Create('audit-log',
+    'Write capability audit events as JSON Lines');
 
   FMultifile := TFlagOption.Create('multifile',
     'Split each input (file or stdin) on "---" lines and run each ' +
@@ -1429,11 +1517,12 @@ begin
     'Path to a config file or a directory containing one (skips auto-discovery)');
 
   BuildAllOptions;
-  // Append --jobs, --log, --multifile and --config after BuildAllOptions so
+  // Append common application options after BuildAllOptions so
   // they appear in help
-  SetLength(FAllOptions, Length(FAllOptions) + 4);
-  FAllOptions[High(FAllOptions) - 3] := FJobs;
-  FAllOptions[High(FAllOptions) - 2] := FLog;
+  SetLength(FAllOptions, Length(FAllOptions) + 5);
+  FAllOptions[High(FAllOptions) - 4] := FJobs;
+  FAllOptions[High(FAllOptions) - 3] := FLog;
+  FAllOptions[High(FAllOptions) - 2] := FAuditLog;
   FAllOptions[High(FAllOptions) - 1] := FMultifile;
   FAllOptions[High(FAllOptions)] := FConfig;
 
@@ -1483,9 +1572,12 @@ begin
       FRootConfigPath := '';
 
     Validate;
+    ValidateOutputPaths;
 
     if FLog.Present then
       OpenLogFile;
+    if FAuditLog.Present then
+      OpenAuditLog;
 
     InitializeSingletons;
     try
@@ -1493,6 +1585,7 @@ begin
       AfterExecute;
     finally
       ShutdownSingletons;
+      CloseAuditLog;
       CloseLogFile;
     end;
   finally
