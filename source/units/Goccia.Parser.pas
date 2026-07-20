@@ -10,6 +10,7 @@ uses
 
   HashMap,
   OrderedStringMap,
+  UnicodeStringList,
 
   Goccia.AST.Expressions,
   Goccia.AST.Node,
@@ -59,7 +60,7 @@ type
 
   TGocciaPrivateClassContext = class
   private
-    FDeclaredNames: TStringList;
+    FDeclaredNames: TUnicodeStringList;
     FReferences: array of TGocciaPrivateNameReference;
     function DeclarationNameOf(const AEntry: string): string;
     function DeclarationKindOf(const AEntry: string): TGocciaPrivateNameDeclarationKind;
@@ -101,8 +102,8 @@ type
     FFunctionDepth: Integer;
     FHasTopLevelAwait: Boolean;
     FPrivateClassContexts: TObjectList<TGocciaPrivateClassContext>;
-    FActiveLabels: TStringList;
-    FActiveIterationLabels: TStringList;
+    FActiveLabels: TUnicodeStringList;
+    FActiveIterationLabels: TUnicodeStringList;
     FDirectLabelStart: Integer;
     FSkipPrivateNameValidation: Integer;
     FAutomaticSemicolonInsertion: Boolean;
@@ -142,8 +143,12 @@ type
     procedure RecordPrivateNameReference(const AName: string; const ALine, AColumn: Integer);
     function CurrentPrivateClassContext: TGocciaPrivateClassContext;
     function HasVisiblePrivateNameDeclaration(const AName: string): Boolean;
-    procedure EnterFunctionLabelScope(out ASavedActiveLabels, ASavedActiveIterationLabels: TStringList; out ASavedDirectLabelStart: Integer);
-    procedure LeaveFunctionLabelScope(const ASavedActiveLabels, ASavedActiveIterationLabels: TStringList; const ASavedDirectLabelStart: Integer);
+    procedure EnterFunctionLabelScope(out ASavedActiveLabels,
+      ASavedActiveIterationLabels: TUnicodeStringList;
+      out ASavedDirectLabelStart: Integer);
+    procedure LeaveFunctionLabelScope(const ASavedActiveLabels,
+      ASavedActiveIterationLabels: TUnicodeStringList;
+      const ASavedDirectLabelStart: Integer);
     procedure EnsureToken(const AIndex: Integer;
       const ALexicalGoal: TGocciaLexicalGoal);
     function SourceSpanAtPosition(const ALine,
@@ -409,10 +414,7 @@ uses
 constructor TGocciaPrivateClassContext.Create;
 begin
   inherited Create;
-  FDeclaredNames := TStringList.Create;
-  FDeclaredNames.CaseSensitive := True;
-  FDeclaredNames.Sorted := True;
-  FDeclaredNames.Duplicates := dupIgnore;
+  FDeclaredNames := TUnicodeStringList.Create;
 end;
 
 destructor TGocciaPrivateClassContext.Destroy;
@@ -532,10 +534,8 @@ begin
   FFunctionDepth := 0;
   FHasTopLevelAwait := False;
   FPrivateClassContexts := TObjectList<TGocciaPrivateClassContext>.Create(True);
-  FActiveLabels := TStringList.Create;
-  FActiveLabels.CaseSensitive := True;
-  FActiveIterationLabels := TStringList.Create;
-  FActiveIterationLabels.CaseSensitive := True;
+  FActiveLabels := TUnicodeStringList.Create;
+  FActiveIterationLabels := TUnicodeStringList.Create;
   FDirectLabelStart := -1;
   FAllowInExpression := True;
 end;
@@ -554,10 +554,8 @@ begin
   FFunctionDepth := 0;
   FHasTopLevelAwait := False;
   FPrivateClassContexts := TObjectList<TGocciaPrivateClassContext>.Create(True);
-  FActiveLabels := TStringList.Create;
-  FActiveLabels.CaseSensitive := True;
-  FActiveIterationLabels := TStringList.Create;
-  FActiveIterationLabels.CaseSensitive := True;
+  FActiveLabels := TUnicodeStringList.Create;
+  FActiveIterationLabels := TUnicodeStringList.Create;
   FDirectLabelStart := -1;
   FAllowInExpression := True;
 end;
@@ -737,21 +735,21 @@ begin
 end;
 
 procedure TGocciaParser.EnterFunctionLabelScope(out ASavedActiveLabels,
-  ASavedActiveIterationLabels: TStringList; out ASavedDirectLabelStart: Integer);
+  ASavedActiveIterationLabels: TUnicodeStringList;
+  out ASavedDirectLabelStart: Integer);
 begin
   ASavedActiveLabels := FActiveLabels;
   ASavedActiveIterationLabels := FActiveIterationLabels;
   ASavedDirectLabelStart := FDirectLabelStart;
 
-  FActiveLabels := TStringList.Create;
-  FActiveLabels.CaseSensitive := True;
-  FActiveIterationLabels := TStringList.Create;
-  FActiveIterationLabels.CaseSensitive := True;
+  FActiveLabels := TUnicodeStringList.Create;
+  FActiveIterationLabels := TUnicodeStringList.Create;
   FDirectLabelStart := -1;
 end;
 
 procedure TGocciaParser.LeaveFunctionLabelScope(const ASavedActiveLabels,
-  ASavedActiveIterationLabels: TStringList; const ASavedDirectLabelStart: Integer);
+  ASavedActiveIterationLabels: TUnicodeStringList;
+  const ASavedDirectLabelStart: Integer);
 begin
   FActiveIterationLabels.Free;
   FActiveLabels.Free;
@@ -4082,7 +4080,7 @@ end;
 function TGocciaParser.ParseGetterExpression: TGocciaGetterExpression;
 var
   Line, Column: Integer;
-  SavedActiveLabels, SavedActiveIterationLabels: TStringList;
+  SavedActiveLabels, SavedActiveIterationLabels: TUnicodeStringList;
   SavedDirectLabelStart: Integer;
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
 begin
@@ -4124,7 +4122,7 @@ var
   Body: TGocciaBlockStatement;
   SetterIsStrict: Boolean;
   Line, Column: Integer;
-  SavedActiveLabels, SavedActiveIterationLabels: TStringList;
+  SavedActiveLabels, SavedActiveIterationLabels: TUnicodeStringList;
   SavedDirectLabelStart: Integer;
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
 begin
@@ -4182,7 +4180,7 @@ var
   Parameters: TGocciaParameterArray;
   Body: TGocciaASTNode;
   FunctionIsStrict: Boolean;
-  SavedActiveLabels, SavedActiveIterationLabels: TStringList;
+  SavedActiveLabels, SavedActiveIterationLabels: TUnicodeStringList;
   SavedDirectLabelStart: Integer;
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
 begin
@@ -4301,7 +4299,7 @@ var
   Line, Column: Integer;
   ArrowFn: TGocciaArrowFunctionExpression;
   FnReturnType: string;
-  SavedActiveLabels, SavedActiveIterationLabels: TStringList;
+  SavedActiveLabels, SavedActiveIterationLabels: TUnicodeStringList;
   SavedDirectLabelStart: Integer;
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
   ParametersParsedInAwaitContext: Boolean;
@@ -4373,7 +4371,7 @@ var
   ArrowBody: TGocciaASTNode;
   ArrowFn: TGocciaArrowFunctionExpression;
   OperatorToken: TGocciaToken;
-  SavedActiveLabels, SavedActiveIterationLabels: TStringList;
+  SavedActiveLabels, SavedActiveIterationLabels: TUnicodeStringList;
   SavedDirectLabelStart: Integer;
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
 begin
@@ -5944,7 +5942,7 @@ var
   VarCount: Integer;
   DeclLine, DeclColumn: Integer;
   I, J: Integer;
-  BindingNames, VariableBindingNames: TStringList;
+  BindingNames, VariableBindingNames: TUnicodeStringList;
 begin
   InitStmt := nil;
   CondExpr := nil;
@@ -6023,11 +6021,9 @@ begin
 
     if not IsVarKeyword then
     begin
-      BindingNames := TStringList.Create;
-      VariableBindingNames := TStringList.Create;
+      BindingNames := TUnicodeStringList.Create;
+      VariableBindingNames := TUnicodeStringList.Create;
       try
-        BindingNames.CaseSensitive := True;
-        VariableBindingNames.CaseSensitive := True;
         for I := 0 to High(Variables) do
         begin
           VariableBindingNames.Clear;
@@ -6418,7 +6414,7 @@ var
   Statements: TObjectList<TGocciaASTNode>;
   Stmt: TGocciaStatement;
   MethodGenericParams, MethodReturnType: string;
-  SavedActiveLabels, SavedActiveIterationLabels: TStringList;
+  SavedActiveLabels, SavedActiveIterationLabels: TUnicodeStringList;
   SavedDirectLabelStart: Integer;
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
 begin

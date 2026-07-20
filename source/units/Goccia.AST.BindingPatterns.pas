@@ -5,8 +5,9 @@ unit Goccia.AST.BindingPatterns;
 interface
 
 uses
-  Classes,
   Generics.Collections,
+
+  UnicodeStringList,
 
   Goccia.AST.Expressions,
   Goccia.AST.Node,
@@ -19,11 +20,12 @@ type
   );
 
 procedure CollectPatternBindingNames(const APattern: TGocciaDestructuringPattern;
-  const ANames: TStrings; const AUnique: Boolean = False);
+  const ANames: TUnicodeStringList; const AUnique: Boolean = False);
 procedure CollectVariableInfoBindingNames(const AInfo: TGocciaVariableInfo;
-  const ANames: TStrings; const AUnique: Boolean = False);
+  const ANames: TUnicodeStringList; const AUnique: Boolean = False);
 procedure CollectVariableDeclarationBindingNames(
-  const ADeclaration: TGocciaVariableDeclaration; const ANames: TStrings;
+  const ADeclaration: TGocciaVariableDeclaration;
+  const ANames: TUnicodeStringList;
   const AUnique: Boolean = False);
 function ParameterListBindsName(const AParameters: TGocciaParameterArray;
   const AName: string): Boolean;
@@ -35,18 +37,21 @@ function ParameterListContainsExpressionClass(
   const AParameters: TGocciaParameterArray;
   const AExpressionClass: TClass): Boolean;
 procedure CollectVarBindingNamesFromNode(const ANode: TGocciaASTNode;
-  const ANames: TStrings;
+  const ANames: TUnicodeStringList;
   const AMode: TGocciaVarBindingNameCollectionMode = vbnStandard);
 procedure CollectVarBindingNamesFromStatements(
-  const AStatements: TObjectList<TGocciaStatement>; const ANames: TStrings;
+  const AStatements: TObjectList<TGocciaStatement>;
+  const ANames: TUnicodeStringList;
   const AMode: TGocciaVarBindingNameCollectionMode = vbnStandard);
 procedure CollectVarBindingNamesFromNodes(
-  const ANodes: TObjectList<TGocciaASTNode>; const ANames: TStrings;
+  const ANodes: TObjectList<TGocciaASTNode>;
+  const ANames: TUnicodeStringList;
   const AMode: TGocciaVarBindingNameCollectionMode = vbnStandard);
 
 implementation
 
-procedure AddBindingName(const ANames: TStrings; const AName: string;
+procedure AddBindingName(const ANames: TUnicodeStringList;
+  const AName: string;
   const AUnique: Boolean);
 begin
   if AName = '' then
@@ -56,7 +61,7 @@ begin
 end;
 
 procedure CollectPatternBindingNames(const APattern: TGocciaDestructuringPattern;
-  const ANames: TStrings; const AUnique: Boolean = False);
+  const ANames: TUnicodeStringList; const AUnique: Boolean = False);
 var
   ObjPat: TGocciaObjectDestructuringPattern;
   ArrPat: TGocciaArrayDestructuringPattern;
@@ -89,7 +94,7 @@ begin
 end;
 
 procedure CollectVariableInfoBindingNames(const AInfo: TGocciaVariableInfo;
-  const ANames: TStrings; const AUnique: Boolean = False);
+  const ANames: TUnicodeStringList; const AUnique: Boolean = False);
 begin
   if AInfo.IsPattern or Assigned(AInfo.Pattern) then
     CollectPatternBindingNames(AInfo.Pattern, ANames, AUnique)
@@ -98,7 +103,8 @@ begin
 end;
 
 procedure CollectVariableDeclarationBindingNames(
-  const ADeclaration: TGocciaVariableDeclaration; const ANames: TStrings;
+  const ADeclaration: TGocciaVariableDeclaration;
+  const ANames: TUnicodeStringList;
   const AUnique: Boolean = False);
 var
   I: Integer;
@@ -112,15 +118,14 @@ function ParameterListBindsName(const AParameters: TGocciaParameterArray;
   const AName: string): Boolean;
 var
   I: Integer;
-  Names: TStringList;
+  Names: TUnicodeStringList;
 begin
   for I := 0 to High(AParameters) do
   begin
     if AParameters[I].IsPattern then
     begin
-      Names := TStringList.Create;
+      Names := TUnicodeStringList.Create;
       try
-        Names.CaseSensitive := True;
         CollectPatternBindingNames(AParameters[I].Pattern, Names, True);
         if Names.IndexOf(AName) >= 0 then
           Exit(True);
@@ -139,7 +144,7 @@ function ParameterListHasDuplicateBindingNames(
   const AParameters: TGocciaParameterArray): Boolean;
 var
   I, J: Integer;
-  Names, PatternNames: TStringList;
+  Names, PatternNames: TUnicodeStringList;
 
   function AddBindingName(const AName: string): Boolean;
   begin
@@ -151,11 +156,9 @@ var
     Result := False;
   end;
 begin
-  Names := TStringList.Create;
-  PatternNames := TStringList.Create;
+  Names := TUnicodeStringList.Create;
+  PatternNames := TUnicodeStringList.Create;
   try
-    Names.CaseSensitive := True;
-    PatternNames.CaseSensitive := True;
     for I := 0 to High(AParameters) do
     begin
       if AParameters[I].IsPattern then
@@ -505,7 +508,7 @@ begin
 end;
 
 procedure CollectVarBindingNamesFromNodeInternal(const ANode: TGocciaASTNode;
-  const ANames: TStrings;
+  const ANames: TUnicodeStringList;
   const AMode: TGocciaVarBindingNameCollectionMode;
   const AAtVarScopedLevel: Boolean);
 var
@@ -655,14 +658,15 @@ begin
 end;
 
 procedure CollectVarBindingNamesFromNode(const ANode: TGocciaASTNode;
-  const ANames: TStrings;
+  const ANames: TUnicodeStringList;
   const AMode: TGocciaVarBindingNameCollectionMode = vbnStandard);
 begin
   CollectVarBindingNamesFromNodeInternal(ANode, ANames, AMode, True);
 end;
 
 procedure CollectVarBindingNamesFromStatements(
-  const AStatements: TObjectList<TGocciaStatement>; const ANames: TStrings;
+  const AStatements: TObjectList<TGocciaStatement>;
+  const ANames: TUnicodeStringList;
   const AMode: TGocciaVarBindingNameCollectionMode = vbnStandard);
 var
   I: Integer;
@@ -675,7 +679,8 @@ begin
 end;
 
 procedure CollectVarBindingNamesFromNodes(
-  const ANodes: TObjectList<TGocciaASTNode>; const ANames: TStrings;
+  const ANodes: TObjectList<TGocciaASTNode>;
+  const ANames: TUnicodeStringList;
   const AMode: TGocciaVarBindingNameCollectionMode = vbnStandard);
 var
   I: Integer;

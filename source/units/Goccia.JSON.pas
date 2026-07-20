@@ -11,6 +11,7 @@ uses
 
   JSONParser,
   StringBuffer,
+  UnicodeStringList,
 
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
@@ -24,7 +25,7 @@ type
   private
     FElements: TObjectList<TGocciaJSONParseRecord>;
     FEntries: TObjectList<TGocciaJSONParseRecord>;
-    FEntryKeys: TStringList;
+    FEntryKeys: TUnicodeStringList;
     FSourceText: string;
     FValue: TGocciaValue;
   public
@@ -47,7 +48,7 @@ type
       const ACapabilities: TJSONParserCapabilities); overload;
     function Parse(const AText: string): TGocciaValue; virtual;
     procedure ParseWithSources(const AText: string;
-      out AValue: TGocciaValue; const ASourceTexts: TStringList);
+      out AValue: TGocciaValue; const ASourceTexts: TUnicodeStringList);
     procedure ParseWithRecord(const AText: string;
       out AValue: TGocciaValue; out AParseRecord: TGocciaJSONParseRecord);
   end;
@@ -81,7 +82,7 @@ type
     constructor Create(const AMode: TJSONStringifyMode); overload;
     function Stringify(const AValue: TGocciaValue; const AGap: string = '';
       const APreferredQuoteChar: Char = #0;
-      const APropertyList: TStringList = nil;
+      const APropertyList: TUnicodeStringList = nil;
       const AApplyToJSON: Boolean = True): string;
   end;
 
@@ -111,11 +112,11 @@ type
   private
     FCollectRecords: Boolean;
     FCollectSources: Boolean;
-    FKeyStack: TStringList;
+    FKeyStack: TUnicodeStringList;
     FRecordStack: TList<TGocciaJSONParseRecord>;
     FResult: TGocciaValue;
     FRootRecord: TGocciaJSONParseRecord;
-    FSourceTexts: TStringList;
+    FSourceTexts: TUnicodeStringList;
     FStack: TList<TGocciaValue>;
     FValueStartPosition: Integer;
     procedure RecordSourceText;
@@ -144,7 +145,7 @@ type
     function ReleaseRootRecord: TGocciaJSONParseRecord;
     property CollectRecords: Boolean read FCollectRecords write FCollectRecords;
     property CollectSources: Boolean read FCollectSources write FCollectSources;
-    property SourceTexts: TStringList read FSourceTexts;
+    property SourceTexts: TUnicodeStringList read FSourceTexts;
   end;
 
 const
@@ -254,7 +255,7 @@ begin
   FSourceText := ASourceText;
   FElements := TObjectList<TGocciaJSONParseRecord>.Create(True);
   FEntries := TObjectList<TGocciaJSONParseRecord>.Create(True);
-  FEntryKeys := TStringList.Create;
+  FEntryKeys := TUnicodeStringList.Create;
 end;
 
 destructor TGocciaJSONParseRecord.Destroy;
@@ -333,7 +334,7 @@ begin
 end;
 
 procedure TGocciaJSONParser.ParseWithSources(const AText: string;
-  out AValue: TGocciaValue; const ASourceTexts: TStringList);
+  out AValue: TGocciaValue; const ASourceTexts: TUnicodeStringList);
 var
   Visitor: TGocciaJSONVisitor;
 begin
@@ -342,7 +343,7 @@ begin
     Visitor.CollectSources := True;
     try
       AValue := Visitor.Parse(AText);
-      ASourceTexts.Assign(Visitor.SourceTexts);
+      ASourceTexts.AddRange(Visitor.SourceTexts);
     except
       on E: EJSONParseError do
         raise EGocciaJSONParseError.Create(E.Message);
@@ -385,8 +386,8 @@ begin
   inherited Create(ACapabilities);
   FStack := TList<TGocciaValue>.Create;
   FRecordStack := TList<TGocciaJSONParseRecord>.Create;
-  FKeyStack := TStringList.Create;
-  FSourceTexts := TStringList.Create;
+  FKeyStack := TUnicodeStringList.Create;
+  FSourceTexts := TUnicodeStringList.Create;
   FResult := nil;
   FRootRecord := nil;
   FCollectRecords := False;
@@ -605,7 +606,8 @@ end;
 
 function TGocciaJSONStringifier.Stringify(const AValue: TGocciaValue;
   const AGap: string; const APreferredQuoteChar: Char;
-  const APropertyList: TStringList; const AApplyToJSON: Boolean): string;
+  const APropertyList: TUnicodeStringList;
+  const AApplyToJSON: Boolean): string;
 var
   I: Integer;
   PreviousApplyToJSON: Boolean;

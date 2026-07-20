@@ -8,6 +8,8 @@ uses
   Classes,
   Generics.Collections,
 
+  UnicodeStringList,
+
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
@@ -555,10 +557,10 @@ var
   I: Integer;
   Item: string;
   Len: Integer;
-  PropertyList: TStringList;
+  PropertyList: TUnicodeStringList;
   Seen: TDictionary<string, Boolean>;
 begin
-  PropertyList := TStringList.Create;
+  PropertyList := TUnicodeStringList.Create;
   Seen := TDictionary<string, Boolean>.Create;
   try
     Len := LengthOfArrayLike(AAllowList);

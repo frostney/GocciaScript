@@ -189,6 +189,7 @@ uses
   OrderedStringMap,
   StringBuffer,
   TextSemantics,
+  UnicodeStringList,
 
   Goccia.Arithmetic,
   Goccia.AST.BindingPatterns,
@@ -667,7 +668,7 @@ function EvaluateExpressionWithLoopHeadTDZ(
   const ABindingPattern: TGocciaDestructuringPattern;
   const AHasLexicalDeclaration: Boolean): TGocciaValue;
 var
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I: Integer;
   TDZScope: TGocciaScope;
   TDZContext: TGocciaEvaluationContext;
@@ -676,9 +677,8 @@ begin
   if not AHasLexicalDeclaration then
     Exit(EvaluateExpression(AExpression, AContext));
 
-  Names := TStringList.Create;
+  Names := TUnicodeStringList.Create;
   try
-    Names.CaseSensitive := True;
     if Assigned(ABindingPattern) then
       CollectPatternBindingNames(ABindingPattern, Names, True)
     else if ABindingName <> '' then
@@ -842,11 +842,10 @@ procedure HoistVarDeclarations(const AStatements: TObjectList<TGocciaStatement>;
   const AScope: TGocciaScope;
   const AContext: TGocciaEvaluationContext);
 var
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I: Integer;
 begin
-  Names := TStringList.Create;
-  Names.CaseSensitive := True;
+  Names := TUnicodeStringList.Create;
   try
     CollectVarBindingNamesFromStatements(AStatements, Names,
       VarBindingNameCollectionMode(AContext.NonStrictMode,
@@ -862,11 +861,10 @@ procedure HoistVarDeclarations(const ANodes: TObjectList<TGocciaASTNode>;
   const AScope: TGocciaScope;
   const AContext: TGocciaEvaluationContext);
 var
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I: Integer;
 begin
-  Names := TStringList.Create;
-  Names.CaseSensitive := True;
+  Names := TUnicodeStringList.Create;
   try
     CollectVarBindingNamesFromNodes(ANodes, Names,
       VarBindingNameCollectionMode(AContext.NonStrictMode,
@@ -918,7 +916,7 @@ var
   ImportDecl: TGocciaImportDeclaration;
   ImportPair: TStringStringMap.TKeyValuePair;
   UsingDecl: TGocciaUsingDeclaration;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I, J: Integer;
 begin
   if ANode is TGocciaVariableDeclaration then
@@ -928,8 +926,7 @@ begin
       Exit;
     for I := 0 to High(VarDecl.Variables) do
     begin
-      Names := TStringList.Create;
-      Names.CaseSensitive := True;
+      Names := TUnicodeStringList.Create;
       try
         CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
         for J := 0 to Names.Count - 1 do
@@ -948,8 +945,7 @@ begin
       Exit;
     for I := 0 to High(VarDecl.Variables) do
     begin
-      Names := TStringList.Create;
-      Names.CaseSensitive := True;
+      Names := TUnicodeStringList.Create;
       try
         CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
         for J := 0 to Names.Count - 1 do
@@ -976,8 +972,7 @@ begin
     DestructDecl := TGocciaDestructuringDeclaration(ANode);
     if DestructDecl.IsVar then
       Exit;
-    Names := TStringList.Create;
-    Names.CaseSensitive := True;
+    Names := TUnicodeStringList.Create;
     try
       CollectPatternBindingNames(DestructDecl.Pattern, Names, True);
       for I := 0 to Names.Count - 1 do
@@ -993,8 +988,7 @@ begin
     DestructDecl := TGocciaExportDestructuringDeclaration(ANode).Declaration;
     if DestructDecl.IsVar then
       Exit;
-    Names := TStringList.Create;
-    Names.CaseSensitive := True;
+    Names := TUnicodeStringList.Create;
     try
       CollectPatternBindingNames(DestructDecl.Pattern, Names, True);
       for I := 0 to Names.Count - 1 do
@@ -1211,7 +1205,8 @@ begin
   AContext.Scope.DefineVariableBinding(Name, Value, True);
 end;
 
-procedure AddUniqueEvalName(const ANames: TStringList; const AName: string);
+procedure AddUniqueEvalName(const ANames: TUnicodeStringList;
+  const AName: string);
 begin
   if (AName <> '') and (ANames.IndexOf(AName) < 0) then
     ANames.Add(AName);
@@ -1244,11 +1239,11 @@ begin
 end;
 
 procedure CollectTopLevelEvalLexicalNames(const ANodes: TObjectList<TGocciaStatement>;
-  const ANames: TStringList);
+  const ANames: TUnicodeStringList);
 var
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I, J, K: Integer;
 begin
   for I := 0 to ANodes.Count - 1 do
@@ -1260,9 +1255,8 @@ begin
         Continue;
       for J := 0 to High(VarDecl.Variables) do
       begin
-        Names := TStringList.Create;
+        Names := TUnicodeStringList.Create;
         try
-          Names.CaseSensitive := True;
           CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
           for K := 0 to Names.Count - 1 do
             AddUniqueEvalName(ANames, Names[K]);
@@ -1278,9 +1272,8 @@ begin
         Continue;
       for J := 0 to High(VarDecl.Variables) do
       begin
-        Names := TStringList.Create;
+        Names := TUnicodeStringList.Create;
         try
-          Names.CaseSensitive := True;
           CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
           for K := 0 to Names.Count - 1 do
             AddUniqueEvalName(ANames, Names[K]);
@@ -1294,9 +1287,8 @@ begin
       DestructDecl := TGocciaDestructuringDeclaration(ANodes[I]);
       if DestructDecl.IsVar then
         Continue;
-      Names := TStringList.Create;
+      Names := TUnicodeStringList.Create;
       try
-        Names.CaseSensitive := True;
         CollectPatternBindingNames(DestructDecl.Pattern, Names, True);
         for J := 0 to Names.Count - 1 do
           AddUniqueEvalName(ANames, Names[J]);
@@ -1320,7 +1312,7 @@ procedure PredeclareTopLevelEvalLexicalBindings(
 var
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I, J, K: Integer;
 begin
   for I := 0 to ANodes.Count - 1 do
@@ -1332,9 +1324,8 @@ begin
         Continue;
       for J := 0 to High(VarDecl.Variables) do
       begin
-        Names := TStringList.Create;
+        Names := TUnicodeStringList.Create;
         try
-          Names.CaseSensitive := True;
           CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
           for K := 0 to Names.Count - 1 do
             PredeclareBlockLexicalName(AScope, Names[K],
@@ -1352,9 +1343,8 @@ begin
         Continue;
       for J := 0 to High(VarDecl.Variables) do
       begin
-        Names := TStringList.Create;
+        Names := TUnicodeStringList.Create;
         try
-          Names.CaseSensitive := True;
           CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
           for K := 0 to Names.Count - 1 do
             PredeclareBlockLexicalName(AScope, Names[K],
@@ -1370,9 +1360,8 @@ begin
       DestructDecl := TGocciaDestructuringDeclaration(ANodes[I]);
       if DestructDecl.IsVar then
         Continue;
-      Names := TStringList.Create;
+      Names := TUnicodeStringList.Create;
       try
-        Names.CaseSensitive := True;
         CollectPatternBindingNames(DestructDecl.Pattern, Names, True);
         for J := 0 to Names.Count - 1 do
           PredeclareBlockLexicalName(AScope, Names[J],
@@ -2356,7 +2345,7 @@ end;
 procedure ValidateStrictFunctionExpression(
   const AFunction: TGocciaFunctionExpression);
 var
-  BindingNames, PatternNames: TStringList;
+  BindingNames, PatternNames: TUnicodeStringList;
   I, J: Integer;
   procedure AddStrictParameterName(const AName: string);
   begin
@@ -2374,11 +2363,9 @@ begin
     Exit;
   RejectStrictEvalAssignmentName(AFunction.Name, AFunction.Line,
     AFunction.Column);
-  BindingNames := TStringList.Create;
-  PatternNames := TStringList.Create;
+  BindingNames := TUnicodeStringList.Create;
+  PatternNames := TUnicodeStringList.Create;
   try
-    BindingNames.CaseSensitive := True;
-    PatternNames.CaseSensitive := True;
     for I := 0 to High(AFunction.Parameters) do
     begin
       if AFunction.Parameters[I].IsPattern then
@@ -2855,10 +2842,10 @@ procedure EvalDeclarationInstantiation(const AProgram: TGocciaProgram;
   const ARejectArgumentsVarDeclaration: Boolean;
   const ARejectVarDeclarationNames: TGocciaEvalRejectNameArray);
 var
-  VarNames: TStringList;
-  LexNames: TStringList;
-  DeclaredFunctionNames: TStringList;
-  DeclaredVarNames: TStringList;
+  VarNames: TUnicodeStringList;
+  LexNames: TUnicodeStringList;
+  DeclaredFunctionNames: TUnicodeStringList;
+  DeclaredVarNames: TUnicodeStringList;
   FunctionDeclarations: TObjectList<TGocciaFunctionDeclaration>;
   FunctionsToInitialize: TObjectList<TGocciaFunctionDeclaration>;
   ScopeCursor: TGocciaScope;
@@ -2890,17 +2877,13 @@ var
       SSuggestAlreadyDeclared);
   end;
 begin
-  VarNames := TStringList.Create;
-  LexNames := TStringList.Create;
-  DeclaredFunctionNames := TStringList.Create;
-  DeclaredVarNames := TStringList.Create;
+  VarNames := TUnicodeStringList.Create;
+  LexNames := TUnicodeStringList.Create;
+  DeclaredFunctionNames := TUnicodeStringList.Create;
+  DeclaredVarNames := TUnicodeStringList.Create;
   FunctionDeclarations := TObjectList<TGocciaFunctionDeclaration>.Create(False);
   FunctionsToInitialize := TObjectList<TGocciaFunctionDeclaration>.Create(False);
   try
-    VarNames.CaseSensitive := True;
-    LexNames.CaseSensitive := True;
-    DeclaredFunctionNames.CaseSensitive := True;
-    DeclaredVarNames.CaseSensitive := True;
 
     CollectVarBindingNamesFromStatements(AProgram.Body, VarNames,
       VarBindingNameCollectionMode(not AStrictEval,
@@ -5945,7 +5928,7 @@ var
   HeaderScope, IterScope, UpdateScope: TGocciaScope;
   HeaderContext, IterContext, UpdateContext: TGocciaEvaluationContext;
   IsLexical: Boolean;
-  PerIterNames: TStringList;
+  PerIterNames: TUnicodeStringList;
   PrevValues: array of TGocciaValue;
   CondValue: TGocciaValue;
   LoopValue: TGocciaValue;
@@ -5987,7 +5970,7 @@ begin
         DeclarationType := dtConst
       else
         DeclarationType := dtLet;
-      PerIterNames := TStringList.Create;
+      PerIterNames := TUnicodeStringList.Create;
       CollectVariableDeclarationBindingNames(VarDecl, PerIterNames, True);
     end
     else if (AForStatement.Init is TGocciaDestructuringDeclaration)
@@ -5999,7 +5982,7 @@ begin
         DeclarationType := dtConst
       else
         DeclarationType := dtLet;
-      PerIterNames := TStringList.Create;
+      PerIterNames := TUnicodeStringList.Create;
       CollectPatternBindingNames(DestructDecl.Pattern, PerIterNames, True);
     end;
   end;
@@ -7520,7 +7503,7 @@ function ExecuteCatchBlock(const ATryStatement: TGocciaTryStatement; const AErro
 var
   CatchScope: TGocciaScope;
   CatchContext, MatchContext: TGocciaEvaluationContext;
-  PatternNames: TStringList;
+  PatternNames: TUnicodeStringList;
   I: Integer;
   GC: TGarbageCollector;
 begin
@@ -7560,8 +7543,7 @@ begin
     try
       CatchContext := AContext;
       CatchContext.Scope := CatchScope;
-      PatternNames := TStringList.Create;
-      PatternNames.CaseSensitive := True;
+      PatternNames := TUnicodeStringList.Create;
       try
         CollectPatternBindingNames(ATryStatement.CatchBindingPattern,
           PatternNames, True);

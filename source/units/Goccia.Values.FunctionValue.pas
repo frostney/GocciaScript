@@ -109,6 +109,8 @@ uses
   Classes,
   SysUtils,
 
+  UnicodeStringList,
+
   Goccia.AST.BindingPatterns,
   Goccia.AST.Statements,
   Goccia.Bytecode.Chunk,
@@ -463,11 +465,10 @@ procedure TGocciaFunctionValue.PredeclareParameterBindings(
   const ACallScope: TGocciaScope);
 var
   I, J: Integer;
-  Names: TStringList;
+  Names: TUnicodeStringList;
 begin
-  Names := TStringList.Create;
+  Names := TUnicodeStringList.Create;
   try
-    Names.CaseSensitive := True;
     for I := 0 to High(FParameters) do
     begin
       Names.Clear;
@@ -488,7 +489,7 @@ end;
 function TGocciaFunctionValue.BuildParameterEvalVarDeclarationRejectNames(
   const AIncludeArgumentsObject: Boolean): TGocciaEvalRejectNameArray;
 var
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I, J: Integer;
   procedure AddName(const AName: string);
   begin
@@ -496,9 +497,8 @@ var
       Names.Add(AName);
   end;
 begin
-  Names := TStringList.Create;
+  Names := TUnicodeStringList.Create;
   try
-    Names.CaseSensitive := True;
     if AIncludeArgumentsObject then
       AddName(IDENTIFIER_ARGUMENTS);
     for I := 0 to High(FParameters) do

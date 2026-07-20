@@ -205,6 +205,7 @@ implementation
 
 uses
   TextSemantics,
+  UnicodeStringList,
 
   Goccia.Arguments.Collection,
   Goccia.AST.BindingPatterns,
@@ -1051,7 +1052,7 @@ var
   Value: TGocciaValue;
   VirtualContentType: TGocciaVirtualModuleContentType;
   LoadSucceeded: Boolean;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   DeferredBody: TGocciaDeferredModuleBody;
   DeferredHandler: TGocciaNativeFunctionValue;
 
@@ -1391,9 +1392,8 @@ var
         else if Stmt is TGocciaExportVariableDeclaration then
         begin
           ExportVarDecl := TGocciaExportVariableDeclaration(Stmt);
-          Names := TStringList.Create;
+          Names := TUnicodeStringList.Create;
           try
-            Names.CaseSensitive := True;
             CollectVariableDeclarationBindingNames(
               ExportVarDecl.Declaration, Names, True);
             for Name in Names do
@@ -1406,9 +1406,8 @@ var
         begin
           ExportDestructuringDecl :=
             TGocciaExportDestructuringDeclaration(Stmt);
-          Names := TStringList.Create;
+          Names := TUnicodeStringList.Create;
           try
-            Names.CaseSensitive := True;
             CollectPatternBindingNames(
               ExportDestructuringDecl.Declaration.Pattern, Names, True);
             for Name in Names do

@@ -146,6 +146,8 @@ uses
   Math,
   SysUtils,
 
+  UnicodeStringList,
+
   Goccia.AST.BindingPatterns,
   Goccia.Bytecode.Debug,
   Goccia.Compiler.ConstantFolding,
@@ -1659,14 +1661,14 @@ begin
     (Copy(AName, 1, 19) <> '__accessor_computed');
 end;
 
-function DirectEvalBindingNameSeen(const ANames: TStringList;
+function DirectEvalBindingNameSeen(const ANames: TUnicodeStringList;
   const AName: string): Boolean;
 begin
   Result := ANames.IndexOf(AName) >= 0;
 end;
 
 procedure AddDirectEvalBinding(var ABindings: TGocciaDirectEvalBindingArray;
-  const ANames: TStringList; const AName: string;
+  const ANames: TUnicodeStringList; const AName: string;
   const AKind: TGocciaDirectEvalBindingKind; const AIndex: UInt16;
   const AIsConst: Boolean; const AIsVarEnvironmentBinding: Boolean = False;
   const AIsEvalSyntheticArguments: Boolean = False);
@@ -1778,16 +1780,15 @@ procedure CaptureDirectEvalEnvironment(const ACtx: TGocciaCompilationContext;
   const APC: UInt32);
 var
   Bindings: TGocciaDirectEvalBindingArray;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   ScopeCursor: TGocciaCompilerScope;
   Local: TGocciaCompilerLocal;
   UV: TGocciaCompilerUpvalue;
   LocalIdx, UpvalueIdx: Integer;
   IsEvalSensitiveArguments: Boolean;
 begin
-  Names := TStringList.Create;
+  Names := TUnicodeStringList.Create;
   try
-    Names.CaseSensitive := True;
     for LocalIdx := ACtx.Scope.LocalCount - 1 downto 0 do
     begin
       Local := ACtx.Scope.GetLocal(LocalIdx);
@@ -2699,11 +2700,10 @@ end;
 procedure CollectDestructuringBindings(const APattern: TGocciaDestructuringPattern;
   const AScope: TGocciaCompilerScope; const AIsConst: Boolean);
 var
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I, LocalIdx: Integer;
 begin
-  Names := TStringList.Create;
-  Names.CaseSensitive := True;
+  Names := TUnicodeStringList.Create;
   try
     CollectPatternBindingNames(APattern, Names);
     for I := 0 to Names.Count - 1 do

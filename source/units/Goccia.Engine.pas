@@ -380,6 +380,7 @@ uses
 
   TextSemantics,
   TimingUtils,
+  UnicodeStringList,
 
   Goccia.CallStack,
   Goccia.Constants.ConstructorNames,
@@ -1817,7 +1818,7 @@ var
   ExportName: string;
   I: Integer;
   Name: string;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   ReExportDecl: TGocciaReExportDeclaration;
   SourceModule: TGocciaModule;
   Stmt: TGocciaStatement;
@@ -1995,9 +1996,8 @@ begin
     else if Stmt is TGocciaExportVariableDeclaration then
     begin
       ExportVarDecl := TGocciaExportVariableDeclaration(Stmt);
-      Names := TStringList.Create;
+      Names := TUnicodeStringList.Create;
       try
-        Names.CaseSensitive := True;
         for VarInfo in ExportVarDecl.Declaration.Variables do
           CollectVariableInfoBindingNames(VarInfo, Names, True);
         for VarName in Names do
@@ -2009,9 +2009,8 @@ begin
     else if Stmt is TGocciaExportDestructuringDeclaration then
     begin
       ExportDestructuringDecl := TGocciaExportDestructuringDeclaration(Stmt);
-      Names := TStringList.Create;
+      Names := TUnicodeStringList.Create;
       try
-        Names.CaseSensitive := True;
         CollectPatternBindingNames(ExportDestructuringDecl.Declaration.Pattern,
           Names, True);
         for Name in Names do

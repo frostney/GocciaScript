@@ -8,6 +8,8 @@ uses
   Classes,
   Generics.Collections,
 
+  UnicodeStringList,
+
   Goccia.Arguments.Collection,
   Goccia.Arguments.Validator,
   Goccia.Builtins.Base,
@@ -26,7 +28,7 @@ type
     FParser: TGocciaJSON5Parser;
     FReplacerTraversalStack: TList<TGocciaObjectValue>;
     FReviverSourceIndex: Integer;
-    FReviverSourceTexts: TStringList;
+    FReviverSourceTexts: TUnicodeStringList;
     FStringifier: TGocciaJSONStringifier;
 
     function ApplyReviver(const AHolder: TGocciaValue; const AKey: string;
@@ -466,13 +468,13 @@ function TGocciaJSON5Builtin.StringifyWithAllowList(const AValue: TGocciaValue;
 var
   I: Integer;
   Key: string;
-  Keys: TStringList;
+  Keys: TUnicodeStringList;
   Len: Integer;
   Seen: TDictionary<string, Boolean>;
 begin
   // Upstream json5 reference: the property list is extracted and de-duplicated
   // once, before serialization, so a wrapper's toString runs once per element.
-  Keys := TStringList.Create;
+  Keys := TUnicodeStringList.Create;
   Seen := TDictionary<string, Boolean>.Create;
   try
     Len := LengthOfArrayLike(AAllowList);
@@ -499,10 +501,10 @@ function TGocciaJSON5Builtin.JSON5Parse(
 var
   HasReviver: Boolean;
   PreviousSourceIndex: Integer;
-  PreviousSourceTexts: TStringList;
+  PreviousSourceTexts: TUnicodeStringList;
   Reviver: TGocciaValue;
   Root: TGocciaObjectValue;
-  SourceTexts: TStringList;
+  SourceTexts: TUnicodeStringList;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'JSON5.parse', ThrowError);
 
@@ -514,7 +516,7 @@ begin
   if HasReviver then
   begin
     Reviver := AArgs.GetElement(1);
-    SourceTexts := TStringList.Create;
+    SourceTexts := TUnicodeStringList.Create;
     try
       try
         FParser.ParseWithSources(
