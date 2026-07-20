@@ -16,4 +16,9 @@ describe("Math.asinh", () => {
     expect(Math.asinh(-Infinity)).toBe(-Infinity);
     expect(Math.asinh(NaN)).toBeNaN();
   });
+
+  test("retains precision for small inputs", () => {
+    expect(Math.asinh(1e-20)).toBe(1e-20);
+    expect(Math.asinh(-1e-20)).toBe(-1e-20);
+  });
 });

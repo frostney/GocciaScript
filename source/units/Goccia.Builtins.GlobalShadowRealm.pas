@@ -34,6 +34,7 @@ uses
   Math,
 
   OrderedStringMap,
+  TextSemantics,
 
   Goccia.Arguments.Collection,
   Goccia.AST.Node,
@@ -305,9 +306,8 @@ begin
   SourceText := TGocciaStringLiteralValue(SourceValue).Value;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  SourceList := TStringList.Create;
+  SourceList := CreateECMAScriptSourceLines(SourceText);
   try
-    SourceList.Text := SourceText;
     Options := TGocciaSourcePipeline.DefaultOptions;
     Options.SourceType := stScript;
     Options.Preprocessors := FEngine.Preprocessors;
@@ -524,9 +524,8 @@ begin
     EarlyErrorThrew := False;
     EarlyErrorMessage := '';
 
-    SourceList := TStringList.Create;
+    SourceList := CreateECMAScriptSourceLines(SourceText);
     try
-      SourceList.Text := SourceText;
       Options := TGocciaSourcePipeline.DefaultOptions;
       Options.SourceType := stScript;
       Options.Preprocessors := ChildEngine.Preprocessors;

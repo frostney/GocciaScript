@@ -188,6 +188,7 @@ uses
 
   OrderedStringMap,
   StringBuffer,
+  TextSemantics,
 
   Goccia.Arithmetic,
   Goccia.AST.BindingPatterns,
@@ -3989,9 +3990,8 @@ begin
 
   SourceText := TGocciaStringLiteralValue(SourceValue).Value;
   DeclaredPrivateNames := nil;
-  EvalSource := TStringList.Create;
+  EvalSource := CreateECMAScriptSourceLines(SourceText);
   try
-    EvalSource.Text := SourceText;
     EvalOptions := TGocciaSourcePipeline.CurrentOptionsOrDefault;
     EvalOptions.SourceType := stScript;
     CallerStrict := not AContext.NonStrictMode;

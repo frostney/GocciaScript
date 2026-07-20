@@ -953,16 +953,31 @@ end;
 
 // TC39 Template Literal Revision — process an escape sequence in template
 // context. On valid escapes, appends the resolved value to ASB. On invalid
-// \u or \x escapes, sets ASegmentValid to False and does not append to ASB.
+// escape sequences, sets ASegmentValid to False and does not append to ASB.
 procedure TGocciaLexer.ProcessTemplateEscapeSequence(var ASB: TStringBuffer;
   var ASegmentValid: Boolean);
 begin
   case Peek of
+    'b': begin ASB.AppendChar(#8); Advance; end;
+    'f': begin ASB.AppendChar(#12); Advance; end;
     'n': begin ASB.AppendChar(#10); Advance; end;
     'r': begin ASB.AppendChar(#13); Advance; end;
     't': begin ASB.AppendChar(#9); Advance; end;
+    'v': begin ASB.AppendChar(#11); Advance; end;
     '\': begin ASB.AppendChar('\'); Advance; end;
-    '0': begin ASB.AppendChar(#0); Advance; end;
+    '0':
+    begin
+      if CharInSet(PeekNext, ['0'..'9']) then
+        ASegmentValid := False
+      else
+        ASB.AppendChar(#0);
+      Advance;
+    end;
+    '1'..'9':
+    begin
+      ASegmentValid := False;
+      Advance;
+    end;
     'u':
     begin
       Advance;

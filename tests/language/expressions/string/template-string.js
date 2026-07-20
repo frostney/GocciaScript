@@ -39,8 +39,13 @@ test("escaped dollar without brace is literal dollar", () => {
   expect(`price: \$5`).toBe("price: $5");
 });
 
+test("single-character template escapes are cooked correctly", () => {
+  expect(`\b`).toBe("\b");
+  expect(`\f`).toBe("\f");
+  expect(`\v`).toBe("\v");
+});
+
 test("triple backslash before dollar-brace is literal backslash plus literal dollar-brace", () => {
   const x = 42;
   expect(`\\\${x}`).toBe("\\${x}");
 });
-

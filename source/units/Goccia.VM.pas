@@ -12717,9 +12717,8 @@ begin
     SourceName := FCurrentModuleSourcePath
   else
     SourceName := '<bytecode-direct-eval>';
-  EvalSource := TStringList.Create;
+  EvalSource := CreateECMAScriptSourceLines(SourceText);
   try
-    EvalSource.Text := SourceText;
     EvalOptions := TGocciaSourcePipeline.CurrentOptionsOrDefault;
     EvalOptions.SourceType := stScript;
     EvalOptions.InheritedStrictMode := ACallerStrict;

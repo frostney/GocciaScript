@@ -50,6 +50,17 @@ begin
   SetLength(FStaticMembers, 0);
 end;
 
+function ASCIIRadixDigitValue(const ACharacter: Char): Integer;
+begin
+  case ACharacter of
+    '0'..'9': Result := Ord(ACharacter) - Ord('0');
+    'A'..'Z': Result := Ord(ACharacter) - Ord('A') + 10;
+    'a'..'z': Result := Ord(ACharacter) - Ord('a') + 10;
+  else
+    Result := -1;
+  end;
+end;
+
 constructor TGocciaGlobalNumber.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
   Members: TGocciaMemberCollection;
@@ -87,11 +98,9 @@ var
   InputStr: string;
   Radix: Integer;
   RadixNum: Double;
-  I, StartPos: Integer;
-  C: Char;
+  DigitValue, I, StartPos: Integer;
   Sign: Integer;
   ResultValue: Double;
-  ValidChars: string;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Number.parseInt', ThrowError);
   TGocciaArgumentValidator.RequireAtMost(AArgs, 2, 'Number.parseInt', ThrowError);
@@ -159,21 +168,17 @@ begin
 
   StartPos := I;
 
-  // Step 9: Build the set of valid digit characters for the given radix
-  ValidChars := '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  ValidChars := Copy(ValidChars, 1, Radix);
-
   ResultValue := 0;
 
   // Step 10: Parse digits — let Z be the longest prefix of S that consists
   //          of characters in the valid digit set for radix R
   while I <= Length(InputStr) do
   begin
-    C := UpCase(InputStr[I]);
-    if Pos(C, ValidChars) = 0 then
+    DigitValue := ASCIIRadixDigitValue(InputStr[I]);
+    if (DigitValue < 0) or (DigitValue >= Radix) then
       Break;
 
-    ResultValue := ResultValue * Radix + (Pos(C, ValidChars) - 1);
+    ResultValue := ResultValue * Radix + DigitValue;
     Inc(I);
   end;
 

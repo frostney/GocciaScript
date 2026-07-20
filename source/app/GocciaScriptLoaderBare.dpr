@@ -336,9 +336,8 @@ begin
     Exit(SourceValue);
 
   SourceText := TGocciaStringLiteralValue(SourceValue).Value;
-  EvalSource := TStringList.Create;
+  EvalSource := CreateECMAScriptSourceLines(SourceText);
   try
-    EvalSource.Text := SourceText;
     EvalOptions := TGocciaSourcePipeline.DefaultOptions;
     EvalOptions.Preprocessors := FEngine.Preprocessors;
     EvalOptions.Compatibility := FEngine.Compatibility;
@@ -420,9 +419,8 @@ begin
     Exit(SourceValue);
 
   SourceText := TGocciaStringLiteralValue(SourceValue).Value;
-  ScriptSource := TStringList.Create;
+  ScriptSource := CreateECMAScriptSourceLines(SourceText);
   try
-    ScriptSource.Text := SourceText;
     ScriptOptions := TGocciaSourcePipeline.DefaultOptions;
     ScriptOptions.Preprocessors := FEngine.Preprocessors;
     ScriptOptions.Compatibility := FEngine.Compatibility;
@@ -866,10 +864,10 @@ begin
   InitThreadRuntime(False, FOptions.MaxMemoryBytes);
   StartExecutionTimeout(FOptions.TimeoutMs);
   StartInstructionLimit(FOptions.MaxInstructions);
-  Source := TStringList.Create;
+  Source := CreateECMAScriptSourceLines(
+    ReadUTF8FileText(ExpandFileName('scripts' + PathDelim +
+      'test262_harness' + PathDelim + '$262.js')) + sLineBreak + FSourceText);
   try
-    Source.Text := ReadUTF8FileText(ExpandFileName('scripts' + PathDelim +
-      'test262_harness' + PathDelim + '$262.js')) + sLineBreak + FSourceText;
     Executor := CreateExecutorForMode(FOptions.Mode);
     try
       Engine := TGocciaEngine.Create('<test262-agent>', Source, Executor);

@@ -179,6 +179,118 @@ begin
     Result := Ln(AValue + Sqrt(AValue - 1.0) * Sqrt(AValue + 1.0));
 end;
 
+function TanhApprox(const AValue: Double): Double; forward;
+
+function AsinhApprox(const AValue: Double): Double;
+var
+  AbsValue, Addend, Compensation, Inner, NextResult, Term, X2: Double;
+  N: Integer;
+begin
+  if AValue = 0 then
+    Exit(AValue);
+  AbsValue := Abs(AValue);
+  if AbsValue < 0.5 then
+  begin
+    Result := AValue;
+    Term := AValue;
+    X2 := AValue * AValue;
+    Compensation := 0.0;
+    for N := 1 to 80 do
+    begin
+      Term := -Term * X2 * Sqr(2 * N - 1) /
+        ((2 * N) * (2 * N + 1));
+      Addend := Term - Compensation;
+      NextResult := Result + Addend;
+      Compensation := (NextResult - Result) - Addend;
+      Result := NextResult;
+      if Abs(Addend) <= Abs(Result) * 1.0E-17 then
+        Break;
+    end;
+    Exit;
+  end;
+  if AbsValue > 1.0E154 then
+    Inner := Ln(AbsValue) + Ln(2.0)
+  else
+    Inner := ArcSinh(AbsValue);
+  if AValue < 0 then
+    Result := -Inner
+  else
+    Result := Inner;
+end;
+
+function AtanhApprox(const AValue: Double): Double;
+var
+  AbsValue, Addend, Compensation, NextResult, TanhValue, X2, Term: Double;
+  Denominator: Integer;
+begin
+  if AValue = 0 then
+    Exit(AValue);
+  AbsValue := Abs(AValue);
+  if AbsValue < 0.5 then
+  begin
+    Result := AValue;
+    Term := AValue;
+    X2 := AValue * AValue;
+    Compensation := 0.0;
+    Denominator := 3;
+    while Denominator <= 161 do
+    begin
+      Term := Term * X2;
+      Addend := Term / Denominator - Compensation;
+      NextResult := Result + Addend;
+      Compensation := (NextResult - Result) - Addend;
+      Result := NextResult;
+      if Abs(Addend) <= Abs(Result) * 1.0E-17 then
+        Break;
+      Inc(Denominator, 2);
+    end;
+    TanhValue := TanhApprox(Result);
+    Result := Result + (AValue - TanhValue) /
+      (1.0 - TanhValue * TanhValue);
+    Exit;
+  end;
+  Result := ArcTanh(AValue);
+end;
+
+function TanhApprox(const AValue: Double): Double;
+var
+  E: Double;
+begin
+  if AValue = 0 then
+    Exit(AValue);
+  if AValue > 20 then
+    Exit(1.0);
+  if AValue < -20 then
+    Exit(-1.0);
+  if Abs(AValue) < 0.5 then
+  begin
+    E := Expm1Approx(2.0 * AValue);
+    Exit(E / (E + 2.0));
+  end;
+  Result := Tanh(AValue);
+end;
+
+function SinhApprox(const AValue: Double): Double;
+var
+  Term, X2: Double;
+  N: Integer;
+begin
+  if AValue = 0 then
+    Exit(AValue);
+  if Abs(AValue) >= 0.5 then
+    Exit(Sinh(AValue));
+  Result := AValue;
+  Term := AValue;
+  X2 := AValue * AValue;
+  for N := 1 to 24 do
+  begin
+    Term := Term * X2 / ((2 * N) * (2 * N + 1));
+    Result := Result + Term;
+    if Abs(Term) <= Abs(Result) * 1.0E-17 then
+      Break;
+  end;
+end;
+
 function DecomposeFiniteDouble(const AValue: Double; out AMantissa: TBigInteger;
   out AExponent: Integer): Boolean;
 var
@@ -950,7 +1062,7 @@ begin
   else if NumberArg.Value = 0 then
     Result := NumberArg
   else
-    Result := TGocciaNumberLiteralValue.Create(Sinh(NumberArg.Value));
+    Result := TGocciaNumberLiteralValue.Create(SinhApprox(NumberArg.Value));
 end;
 
 // §21.3.2.34 Math.tanh ( x )
@@ -970,7 +1082,7 @@ begin
   else if NumberArg.Value = 0 then
     Result := NumberArg
   else
-    Result := TGocciaNumberLiteralValue.Create(Tanh(NumberArg.Value));
+    Result := TGocciaNumberLiteralValue.Create(TanhApprox(NumberArg.Value));
 end;
 
 // §21.3.2.3 Math.acosh ( x )
@@ -1011,7 +1123,7 @@ begin
   else if NumberArg.Value = 0 then
     Result := NumberArg
   else
-    Result := TGocciaNumberLiteralValue.Create(ArcSinh(NumberArg.Value));
+    Result := TGocciaNumberLiteralValue.Create(AsinhApprox(NumberArg.Value));
 end;
 
 // §21.3.2.7 Math.atanh ( x )
@@ -1040,7 +1152,7 @@ begin
   else if NumberArg.Value = 0 then
     Result := NumberArg
   else
-    Result := TGocciaNumberLiteralValue.Create(ArcTanh(NumberArg.Value));
+    Result := TGocciaNumberLiteralValue.Create(AtanhApprox(NumberArg.Value));
 end;
 
 // §21.3.2.15 Math.expm1 ( x )

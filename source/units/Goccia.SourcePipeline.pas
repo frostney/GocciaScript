@@ -663,9 +663,9 @@ var
   PipelineResult: TGocciaSourcePipelineResult;
   Source: TStringList;
 begin
-  Source := TStringList.Create;
+  Source := CreateECMAScriptSourceLines(
+    DynamicFunctionWrapperSource(AParametersSource, '', AKind));
   try
-    Source.Text := DynamicFunctionWrapperSource(AParametersSource, '', AKind);
     PipelineResult := Parse(Source, AFileName, AOptions);
     try
       Result := Assigned(PipelineResult.ProgramNode) and
@@ -694,9 +694,9 @@ var
 begin
   Result.IsValid := False;
   Result.HasUseStrictDirective := False;
-  Source := TStringList.Create;
+  Source := CreateECMAScriptSourceLines(
+    DynamicFunctionWrapperSource('', ABodySource, AKind));
   try
-    Source.Text := DynamicFunctionWrapperSource('', ABodySource, AKind);
     PipelineResult := Parse(Source, AFileName, AOptions);
     try
       FunctionExpression := nil;

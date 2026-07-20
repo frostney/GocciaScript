@@ -16,4 +16,9 @@ describe("Math.tanh", () => {
     expect(Math.tanh(-Infinity)).toBe(-1);
     expect(Math.tanh(NaN)).toBeNaN();
   });
+
+  test("retains precision for small inputs", () => {
+    expect(Math.tanh(1e-20)).toBe(1e-20);
+    expect(Math.tanh(-1e-20)).toBe(-1e-20);
+  });
 });
