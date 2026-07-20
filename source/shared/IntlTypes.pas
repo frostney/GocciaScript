@@ -114,7 +114,7 @@ type
 
   TIntlBreakIterator = record
     Handle: Pointer;
-    Text: UnicodeString;
+    Text: string;
   end;
 
   TIntlSegment = record

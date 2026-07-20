@@ -39,6 +39,8 @@ implementation
 uses
   SysUtils,
 
+  TextEncoding,
+
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -62,9 +64,10 @@ begin
   SetLength(FPrototypeMembers, 0);
 end;
 
-function GetTextEncoderShared: TGocciaSharedPrototype; inline;
+function GetTextEncoderShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTextEncoderSharedSlot))
   else
     Result := nil;
@@ -73,61 +76,9 @@ end;
 const
   ENCODING_UTF8 = 'utf-8';
 
-  // UTF-8 encoding of U+FFFD REPLACEMENT CHARACTER (EF BF BD).
-  REPLACEMENT_BYTE0 = $EF;
-  REPLACEMENT_BYTE1 = $BF;
-  REPLACEMENT_BYTE2 = $BD;
-
-// Convert an FPC string (stored as UTF-8) to a raw byte array of UTF-8 octets,
-// normalising lone surrogate code points (U+D800-U+DFFF) to U+FFFD per the
-// WHATWG USVString requirement (Encoding §8.3.2 encode).
-//
-// Surrogates appear as the three-byte sequence ED A0-BF 80-BF in CESU-8/WTF-8
-// style storage.  Since U+FFFD also encodes to exactly 3 bytes (EF BF BD),
-// the replacement can be done in-place without resizing the output buffer.
 function StringToUTF8Bytes(const AStr: string): TBytes;
-var
-  U8: UTF8String;
-  Len, I: Integer;
-  B: Byte;
 begin
-  U8 := UTF8String(AStr);
-  Len := Length(U8);
-  SetLength(Result, Len);
-  if Len > 0 then
-    Move(U8[1], Result[0], Len);
-
-  // Scan for 3-byte sequences in the surrogate range (ED A0 xx .. ED BF xx)
-  // and replace each with the U+FFFD replacement character (EF BF BD).
-  I := 0;
-  while I < Len do
-  begin
-    B := Result[I];
-    if B and $80 = 0 then
-      // ASCII — 1 byte
-      Inc(I)
-    else if (B and $E0 = $C0) and (I + 1 < Len) then
-      // 2-byte sequence
-      Inc(I, 2)
-    else if (B and $F0 = $E0) and (I + 2 < Len) then
-    begin
-      // 3-byte sequence — check for surrogate range (ED A0-BF continuation)
-      if (B = $ED) and (Result[I + 1] >= $A0) then
-      begin
-        // Lone surrogate: replace in-place with U+FFFD.
-        Result[I]     := REPLACEMENT_BYTE0;
-        Result[I + 1] := REPLACEMENT_BYTE1;
-        Result[I + 2] := REPLACEMENT_BYTE2;
-      end;
-      Inc(I, 3);
-    end
-    else if (B and $F8 = $F0) and (I + 3 < Len) then
-      // 4-byte sequence
-      Inc(I, 4)
-    else
-      // Invalid leading byte — step one byte to avoid infinite loop.
-      Inc(I);
-  end;
+  Result := EncodeUTF8WithReplacement(AStr);
 end;
 
 // Return the byte-length of the UTF-8 sequence that starts with AByte.
@@ -164,8 +115,8 @@ var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetTextEncoderShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetTextEncoderShared <> nil) then Exit;
 
   // Rebuild member definitions per realm: callbacks bind to Self (the
   // bootstrap instance pinned by Shared), and TGocciaSharedPrototype.Destroy

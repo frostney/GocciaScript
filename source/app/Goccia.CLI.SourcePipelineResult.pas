@@ -102,7 +102,7 @@ end;
 procedure TGocciaCLISourcePipelineResult.RegisterCoverageSource(
   const AFileName: string);
 begin
-  if not Assigned(TGocciaCoverageTracker.Instance) then
+  if (TGocciaCoverageTracker.Instance = nil) then
     Exit;
   if not TGocciaCoverageTracker.Instance.Enabled then
     Exit;

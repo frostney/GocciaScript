@@ -51,7 +51,6 @@ uses
   LazyPublishedCache;
 
 const
-  CLDR_RCDATA_RESOURCE_TYPE = MAKEINTRESOURCE(10);
   CLDR_DATA_MAGIC: TEmbeddedResourceMagic =
     (Ord('G'), Ord('O'), Ord('C'), Ord('C'), Ord('I'), Ord('A'), Ord('C'), Ord('L'));
 
@@ -67,8 +66,7 @@ begin
   SetLength(ABuffer, 0);
   Stream := nil;
   try
-    Stream := TResourceStream.Create(HInstance, AKey,
-      CLDR_RCDATA_RESOURCE_TYPE);
+    Stream := TResourceStream.Create(HInstance, AKey, RCDATAResourceType);
     if Stream.Size > High(Integer) then
     begin
       Stream.Free;

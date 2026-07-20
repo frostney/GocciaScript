@@ -143,9 +143,10 @@ type
 implementation
 
 uses
-  base64,
   SandboxShell,
+  TextEncoding,
 
+  Goccia.Base64,
   Goccia.CapabilityAudit,
   Goccia.Constants.ErrorNames,
   Goccia.GarbageCollector,
@@ -514,9 +515,7 @@ begin
   if AValue is TGocciaStringLiteralValue then
   begin
     Text := TGocciaStringLiteralValue(AValue).Value;
-    SetLength(Result, Length(Text));
-    if Length(Text) > 0 then
-      Move(Text[1], Result[0], Length(Text));
+    Result := EncodeUTF8WithReplacement(Text);
     Exit;
   end;
 
@@ -717,13 +716,9 @@ begin
 end;
 
 function DecodeBase64Bytes(const AText: string): TBytes;
-var
-  Decoded: string;
 begin
-  Decoded := DecodeStringBase64(AText);
-  SetLength(Result, Length(Decoded));
-  if Length(Decoded) > 0 then
-    Move(Decoded[1], Result[0], Length(Decoded));
+  if not TryDecodeBase64Standard(AText, Result) then
+    raise EConvertError.Create('Invalid base64 data');
 end;
 
 function HasDefinedProperty(const AObject: TGocciaObjectValue;
@@ -1103,7 +1098,7 @@ begin
     EnsureExecuted;
     Parser := TGocciaJSONParser.Create;
     try
-      Parsed := Parser.Parse(UTF8String(FResult.Output));
+      Parsed := Parser.Parse(FResult.Output);
     finally
       Parser.Free;
     end;

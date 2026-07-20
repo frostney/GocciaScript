@@ -146,9 +146,10 @@ type
     Millisecond: Integer;
   end;
 
-function GetIntlDateTimeFormatShared: TGocciaSharedPrototype; inline;
+function GetIntlDateTimeFormatShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlDateTimeFormatSharedSlot))
   else
     Result := nil;
@@ -1703,7 +1704,7 @@ end;
 
 function DateTimeFormatLocaleArgumentToLocale(const AArg: TGocciaValue): string;
 var
-  RequestedLocales: TStringArray;
+  RequestedLocales: IntlTypes.TStringArray;
 begin
   RequestedLocales := CanonicalizeLocaleListFromValue(AArg);
   Result := ResolveRequestedLocale(RequestedLocales);
@@ -2063,7 +2064,7 @@ begin
   FResolvedOptions.TimeZoneName := FTimeZoneName;
 
   InitializePrototype;
-  if Assigned(GetIntlDateTimeFormatShared) then
+  if (GetIntlDateTimeFormatShared <> nil) then
     FPrototype := GetIntlDateTimeFormatShared.Prototype;
 end;
 
@@ -2151,8 +2152,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetIntlDateTimeFormatShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetIntlDateTimeFormatShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlDateTimeFormatSharedSlot, Shared);

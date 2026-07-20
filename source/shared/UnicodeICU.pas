@@ -34,6 +34,7 @@ end;
 {$ELSE}
 
 uses
+  CriticalSections,
   ICU;
 
 const
@@ -62,7 +63,7 @@ var
   FnClose: TUsetClose;
   LoadAttempted: Boolean;
   LoadSucceeded: Boolean;
-  InitLock: TRTLCriticalSection;
+  InitLock: TGocciaCriticalSection;
 
 function LoadSymbol(const AName: string; out APtr: Pointer): Boolean;
 begin
@@ -74,7 +75,7 @@ function TryLoadFunctions: Boolean;
 var
   S: Pointer;
 begin
-  EnterCriticalSection(InitLock);
+  CriticalSectionEnter(InitLock);
   try
     if LoadAttempted then
     begin
@@ -106,7 +107,7 @@ begin
     LoadSucceeded := True;
     Result := True;
   finally
-    LeaveCriticalSection(InitLock);
+    CriticalSectionLeave(InitLock);
   end;
 end;
 
@@ -115,7 +116,7 @@ function TryICUGetUnicodePropertyRanges(const AProperty, AValue: string;
 var
   USet: Pointer;
   Status: TICUErrorCode;
-  PropW, ValueW: UnicodeString;
+  PropW, ValueW: string;
   ItemCount, I, StringLen, RangeCount: LongInt;
   RangeStart, RangeEnd: TUChar32;
 begin
@@ -131,8 +132,8 @@ begin
 
   try
     Status := 0;
-    PropW := UnicodeString(AProperty);
-    ValueW := UnicodeString(AValue);
+    PropW := string(AProperty);
+    ValueW := string(AValue);
 
     if AValue = '' then
       FnApplyPropertyAlias(USet, PWideChar(PropW), Length(PropW), nil, 0, Status)
@@ -173,12 +174,12 @@ begin
 end;
 
 initialization
-  InitCriticalSection(InitLock);
+  CriticalSectionInit(InitLock);
   LoadAttempted := False;
   LoadSucceeded := False;
 
 finalization
-  DoneCriticalSection(InitLock);
+  CriticalSectionDone(InitLock);
 
 {$ENDIF}
 

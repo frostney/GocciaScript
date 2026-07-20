@@ -29,9 +29,10 @@ function CompileConditionWithPatternBindings(const ACtx: TGocciaCompilationConte
 implementation
 
 uses
-  Classes,
   Generics.Collections,
   SysUtils,
+
+  UnicodeStringList,
 
   Goccia.Compiler.Scope,
   Goccia.Constants.PropertyNames,
@@ -67,14 +68,15 @@ begin
     EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
 end;
 
-procedure AddPatternBindingName(const ANames: TStringList; const AName: string);
+procedure AddPatternBindingName(const ANames: TUnicodeStringList;
+  const AName: string);
 begin
   if ANames.IndexOf(AName) < 0 then
     ANames.Add(AName);
 end;
 
 procedure CollectPatternBindingNames(const APattern: TGocciaMatchPattern;
-  const ANames: TStringList);
+  const ANames: TUnicodeStringList);
 var
   I: Integer;
 begin
@@ -127,7 +129,8 @@ begin
 end;
 
 procedure BeginTentativeBindings(const ACtx: TGocciaCompilationContext;
-  const ANames: TStringList; const ASnapshotRegs, ABindingSlots: TList<UInt16>;
+  const ANames: TUnicodeStringList;
+  const ASnapshotRegs, ABindingSlots: TList<UInt16>;
   const ACapturedSlots: TList<Boolean>);
 var
   I, LocalIdx: Integer;
@@ -489,14 +492,13 @@ procedure CompileOrPatternTest(const ACtx: TGocciaCompilationContext;
 var
   I, EndJump: Integer;
   SuccessJumps: TList<Integer>;
-  BindingNames: TStringList;
+  BindingNames: TUnicodeStringList;
   SnapshotRegs, BindingSlots: TList<UInt16>;
   CapturedSlots: TList<Boolean>;
 begin
   SuccessJumps := TList<Integer>.Create;
-  BindingNames := TStringList.Create;
+  BindingNames := TUnicodeStringList.Create;
   try
-    BindingNames.CaseSensitive := True;
     CollectPatternBindingNames(APattern, BindingNames);
     for I := 0 to APattern.Patterns.Count - 1 do
     begin

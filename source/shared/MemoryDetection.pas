@@ -23,7 +23,7 @@ function libc_sysconf(Name: Integer): Int64; cdecl; external 'c' name 'sysconf';
 // (DWORDLONG) that report correctly on all systems.
 {$IFDEF MSWINDOWS}
 type
-  DWORDLONG = QWord;
+  DWORDLONG = UInt64;
   TMemoryStatusEx = record
     dwLength: LongWord;
     dwMemoryLoad: LongWord;

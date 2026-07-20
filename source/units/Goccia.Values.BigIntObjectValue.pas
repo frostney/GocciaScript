@@ -62,7 +62,7 @@ end;
 
 procedure TGocciaBigIntObjectValue.InitializePrototype;
 begin
-  if Assigned(CurrentRealm) and not Assigned(TGocciaBigIntValue.SharedPrototype) then
+  if (CurrentRealm <> nil) and (TGocciaBigIntValue.SharedPrototype = nil) then
     TGocciaBigIntValue.BigIntZero.InitializePrototype;
 end;
 
@@ -73,7 +73,7 @@ end;
 
 class function TGocciaBigIntObjectValue.GetSharedPrototype: TGocciaObjectValue;
 begin
-  if not Assigned(TGocciaBigIntValue.SharedPrototype) then
+  if TGocciaBigIntValue.SharedPrototype = nil then
     TGocciaBigIntValue.BigIntZero.InitializePrototype;
   Result := TGocciaObjectValue(TGocciaBigIntValue.SharedPrototype);
 end;

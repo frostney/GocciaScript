@@ -4,6 +4,9 @@ unit Goccia.Token;
 
 interface
 
+uses
+  Goccia.SourceSpan;
+
 type
   TGocciaTokenType = (
     // Literals
@@ -37,38 +40,81 @@ type
     gttEOF
   );
 
+  TGocciaTemplateTokenValue = record
+    Cooked: string;
+    Raw: string;
+    CookedValid: Boolean;
+  end;
+
   TGocciaToken = class
   private
     FType: TGocciaTokenType;
     FLexeme: string;
-    FLine: Integer;
-    FColumn: Integer;
-    FEndColumn: Integer;
+    FSpan: TGocciaSourceSpan;
     FContainsEscape: Boolean;
+    FTemplateValue: TGocciaTemplateTokenValue;
+    function GetLine: Integer;
+    function GetColumn: Integer;
+    function GetEndColumn: Integer;
   public
     constructor Create(const AType: TGocciaTokenType; const ALexeme: string;
-      const ALine, AColumn, AEndColumn: Integer;
+      const ACoordinates: IGocciaSourceCoordinates;
+      const AStartOffset, AEndOffset: Integer;
       const AContainsEscape: Boolean = False);
+    constructor CreateTemplate(const AType: TGocciaTokenType;
+      const ACooked, ARaw: string; const ACookedValid: Boolean;
+      const ACoordinates: IGocciaSourceCoordinates;
+      const AStartOffset, AEndOffset: Integer);
     property TokenType: TGocciaTokenType read FType;
     property Lexeme: string read FLexeme;
-    property Line: Integer read FLine;
-    property Column: Integer read FColumn;
-    property EndColumn: Integer read FEndColumn;
+    property Line: Integer read GetLine;
+    property Column: Integer read GetColumn;
+    property EndColumn: Integer read GetEndColumn;
+    property Span: TGocciaSourceSpan read FSpan;
     property ContainsEscape: Boolean read FContainsEscape;
+    property TemplateValue: TGocciaTemplateTokenValue read FTemplateValue;
   end;
 
 implementation
 
 constructor TGocciaToken.Create(const AType: TGocciaTokenType; const ALexeme: string;
-  const ALine, AColumn, AEndColumn: Integer;
+  const ACoordinates: IGocciaSourceCoordinates;
+  const AStartOffset, AEndOffset: Integer;
   const AContainsEscape: Boolean);
 begin
   FType := AType;
   FLexeme := ALexeme;
-  FLine := ALine;
-  FColumn := AColumn;
-  FEndColumn := AEndColumn;
+  FSpan := TGocciaSourceSpan.InSource(ACoordinates, AStartOffset, AEndOffset);
   FContainsEscape := AContainsEscape;
+end;
+
+constructor TGocciaToken.CreateTemplate(const AType: TGocciaTokenType;
+  const ACooked, ARaw: string; const ACookedValid: Boolean;
+  const ACoordinates: IGocciaSourceCoordinates;
+  const AStartOffset, AEndOffset: Integer);
+begin
+  FType := AType;
+  FLexeme := '';
+  FSpan := TGocciaSourceSpan.InSource(ACoordinates, AStartOffset, AEndOffset);
+  FContainsEscape := False;
+  FTemplateValue.Cooked := ACooked;
+  FTemplateValue.Raw := ARaw;
+  FTemplateValue.CookedValid := ACookedValid;
+end;
+
+function TGocciaToken.GetLine: Integer;
+begin
+  Result := FSpan.EndLine;
+end;
+
+function TGocciaToken.GetColumn: Integer;
+begin
+  Result := FSpan.StartColumn;
+end;
+
+function TGocciaToken.GetEndColumn: Integer;
+begin
+  Result := FSpan.EndColumn;
 end;
 
 end.

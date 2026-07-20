@@ -57,7 +57,7 @@ uses
   Goccia.Values.Primitives,
   Goccia.VM.Exception,
 
-  FileUtils in 'units/FileUtils.pas';
+  FileUtils;
 
 type
   TScriptLoaderConsoleCapture = class
@@ -1002,7 +1002,7 @@ begin
     BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
     Pool := TGocciaThreadPool.Create(JobCount);
     try
-      if Assigned(TGarbageCollector.Instance) then
+      if (TGarbageCollector.Instance <> nil) then
         Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
       Pool.RunAll(AFiles, ScriptWorkerProc, @Results[0]);
       WorkerMemoryStats := Pool.MemoryStats;
@@ -1134,7 +1134,7 @@ begin
 
   Pool := TGocciaThreadPool.Create(AJobCount);
   try
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
     Pool.RunAll(AFiles, ScriptWorkerProc);
 
@@ -1375,7 +1375,7 @@ var
 begin
   if (CoverageOptions.Enabled.Present or CoverageOptions.Format.Present or
       CoverageOptions.OutputPath.Present) and
-     Assigned(TGocciaCoverageTracker.Instance) then
+     (TGocciaCoverageTracker.Instance <> nil) then
   begin
     if not IsJsonOutput then
     begin
@@ -1406,7 +1406,7 @@ begin
   end;
 
   if (ProfileOpcodes or ProfileFunctions) and
-     Assigned(TGocciaProfiler.Instance) then
+     (TGocciaProfiler.Instance <> nil) then
   begin
     if not IsJsonOutput then
     begin

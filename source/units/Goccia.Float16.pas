@@ -11,14 +11,13 @@ function Float16ToDouble(const AValue: Word): Double;
 implementation
 
 uses
-  Math;
+  NumberBits;
 
 const
   FLOAT16_SIGN_BIT          = Word($8000);
   FLOAT16_EXPONENT_MASK     = Word($7C00);
   FLOAT16_MANTISSA_MASK     = Word($03FF);
   FLOAT16_INFINITY          = Word($7C00);
-  FLOAT16_NAN               = Word($7E00);
   FLOAT16_MANTISSA_BITS     = 10;
   FLOAT16_EXPONENT_BIAS     = 15;
   FLOAT16_MAX_EXPONENT      = 15;
@@ -26,22 +25,21 @@ const
 
   FLOAT64_EXPONENT_BIAS     = 1023;
   FLOAT64_MANTISSA_BITS     = 52;
-  FLOAT64_EXPONENT_MASK     = Int64($7FF0000000000000);
-  FLOAT64_MANTISSA_MASK     = Int64($000FFFFFFFFFFFFF);
-  FLOAT64_SIGN_BIT          = Int64($8000000000000000);
+  FLOAT64_MANTISSA_MASK     = UInt64($000FFFFFFFFFFFFF);
 
   MANTISSA_SHIFT            = FLOAT64_MANTISSA_BITS - FLOAT16_MANTISSA_BITS; // 42
 
 // ES2026 §25.1.2.12 SetValueInBuffer — Float16 serialization
 function DoubleToFloat16(const AValue: Double): Word;
 var
-  Bits: Int64 absolute AValue;
+  Bits: UInt64;
   Sign: Word;
   Exponent: Integer;
-  Mantissa: Int64;
+  Mantissa: UInt64;
   ShiftAmount: Integer;
-  RoundBit, StickyBits: Int64;
+  RoundBit, StickyBits: UInt64;
 begin
+  Bits := DoubleToBits(AValue);
   Sign := Word((Bits shr 48) and $8000);
   Exponent := Integer((Bits shr FLOAT64_MANTISSA_BITS) and $7FF) - FLOAT64_EXPONENT_BIAS;
   Mantissa := Bits and FLOAT64_MANTISSA_MASK;
@@ -50,7 +48,7 @@ begin
   if Exponent = (FLOAT64_EXPONENT_BIAS + 1) then
   begin
     if Mantissa <> 0 then
-      Result := Sign or FLOAT16_NAN
+      Result := CANONICAL_FLOAT16_NAN_BITS
     else
       Result := Sign or FLOAT16_INFINITY;
     Exit;
@@ -58,7 +56,7 @@ begin
 
   // Add implicit leading 1 for normalized doubles
   if Exponent > -FLOAT64_EXPONENT_BIAS then
-    Mantissa := Mantissa or (Int64(1) shl FLOAT64_MANTISSA_BITS)
+    Mantissa := Mantissa or (UInt64(1) shl FLOAT64_MANTISSA_BITS)
   else
   begin
     // Subnormal double — renormalize
@@ -90,7 +88,7 @@ begin
     // Extract round bit and sticky bits, then shift
     RoundBit := (Mantissa shr (ShiftAmount - 1)) and 1;
     if ShiftAmount > 1 then
-      StickyBits := Mantissa and ((Int64(1) shl (ShiftAmount - 1)) - 1)
+      StickyBits := Mantissa and ((UInt64(1) shl (ShiftAmount - 1)) - 1)
     else
       StickyBits := 0;
     Mantissa := Mantissa shr ShiftAmount;
@@ -105,7 +103,7 @@ begin
 
   // Normal float16
   RoundBit := (Mantissa shr (MANTISSA_SHIFT - 1)) and 1;
-  StickyBits := Mantissa and ((Int64(1) shl (MANTISSA_SHIFT - 1)) - 1);
+  StickyBits := Mantissa and ((UInt64(1) shl (MANTISSA_SHIFT - 1)) - 1);
   Mantissa := Mantissa shr MANTISSA_SHIFT;
 
   // Remove implicit leading 1
@@ -133,55 +131,50 @@ end;
 // ES2026 §25.1.2.11 GetValueFromBuffer — Float16 deserialization
 function Float16ToDouble(const AValue: Word): Double;
 var
-  Sign: Integer;
+  SignBits: UInt64;
   Exponent: Integer;
   Mantissa: Integer;
+  LeadingBit: Integer;
+  DoubleExponent: Integer;
+  DoubleMantissa: UInt64;
+  Bits: UInt64;
 begin
-  Sign := (AValue shr 15) and 1;
+  SignBits := UInt64(AValue and FLOAT16_SIGN_BIT) shl 48;
   Exponent := (AValue shr FLOAT16_MANTISSA_BITS) and $1F;
   Mantissa := AValue and Integer(FLOAT16_MANTISSA_MASK);
 
   if Exponent = 31 then
   begin
-    // Infinity or NaN
     if Mantissa = 0 then
-    begin
-      if Sign = 1 then
-        Result := NegInfinity
-      else
-        Result := Infinity;
-    end
+      Result := BitsToDouble(SignBits or UInt64($7FF0000000000000))
     else
-      Result := NaN;
+      Result := BitsToDouble(CANONICAL_FLOAT64_NAN_BITS);
     Exit;
   end;
 
   if Exponent = 0 then
   begin
     if Mantissa = 0 then
-    begin
-      // ±0
-      if Sign = 1 then
-        Result := -0.0
-      else
-        Result := 0.0;
-    end
+      Result := BitsToDouble(SignBits)
     else
     begin
-      // Subnormal: value = (-1)^sign * 2^(-14) * (mantissa / 1024)
-      Result := Mantissa / 1024.0;
-      Result := Result * Power(2, -14);
-      if Sign = 1 then
-        Result := -Result;
+      LeadingBit := 9;
+      while (Mantissa and (1 shl LeadingBit)) = 0 do
+        Dec(LeadingBit);
+      DoubleExponent := LeadingBit - 24 + FLOAT64_EXPONENT_BIAS;
+      DoubleMantissa := UInt64(Mantissa - (1 shl LeadingBit))
+        shl (FLOAT64_MANTISSA_BITS - LeadingBit);
+      Bits := SignBits or (UInt64(DoubleExponent) shl FLOAT64_MANTISSA_BITS)
+        or DoubleMantissa;
+      Result := BitsToDouble(Bits);
     end;
     Exit;
   end;
 
-  // Normal: value = (-1)^sign * 2^(exponent - 15) * (1 + mantissa / 1024)
-  Result := 1.0 + Mantissa / 1024.0;
-  Result := Result * Power(2, Exponent - FLOAT16_EXPONENT_BIAS);
-  if Sign = 1 then
-    Result := -Result;
+  DoubleExponent := Exponent - FLOAT16_EXPONENT_BIAS + FLOAT64_EXPONENT_BIAS;
+  Bits := SignBits or (UInt64(DoubleExponent) shl FLOAT64_MANTISSA_BITS)
+    or (UInt64(Mantissa) shl MANTISSA_SHIFT);
+  Result := BitsToDouble(Bits);
 end;
 
 end.

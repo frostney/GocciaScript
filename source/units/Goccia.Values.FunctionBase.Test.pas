@@ -215,5 +215,5 @@ end;
 
 begin
   TestRunnerProgram.AddSuite(TTestFunctionBase.Create('Function Base'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
 end.

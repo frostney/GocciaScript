@@ -7,12 +7,15 @@ interface
 uses
   Goccia.Bytecode.Chunk;
 
-function TypesAreCompatible(const AProduced, AExpected: TGocciaLocalType): Boolean; inline;
-function IsKnownNumeric(const AType: TGocciaLocalType): Boolean; inline;
+function TypesAreCompatible(const AProduced, AExpected: TGocciaLocalType): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
+function IsKnownNumeric(const AType: TGocciaLocalType): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 
-function TypesAreCompatible(const AProduced, AExpected: TGocciaLocalType): Boolean; inline;
+function TypesAreCompatible(const AProduced, AExpected: TGocciaLocalType): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if AProduced = sltUntyped then
     Exit(False);
@@ -23,7 +26,8 @@ begin
   Result := False;
 end;
 
-function IsKnownNumeric(const AType: TGocciaLocalType): Boolean; inline;
+function IsKnownNumeric(const AType: TGocciaLocalType): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := AType in [sltInteger, sltFloat];
 end;

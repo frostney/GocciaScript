@@ -26,9 +26,9 @@ type
     function TryLoadModule(const AResolvedPath: string;
       out AModule: TGocciaModule): Boolean; override;
     function TryInjectGlobals(const AFormat: string;
-      const AContent: UTF8String): Boolean; override;
+      const AContent: string): Boolean; override;
     function TryInjectModules(const AFormat: string;
-      const AContent: UTF8String; const ABaseAddress: string): Boolean; override;
+      const AContent: string; const ABaseAddress: string): Boolean; override;
   end;
 
 implementation
@@ -121,7 +121,7 @@ begin
     // the exports-table churn) can trigger a collection that would
     // otherwise sweep it mid-use — then the manual Free below became
     // a double destroy.
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.AddTempRoot(Documents);
 
     if Documents.Elements.Count = 0 then
@@ -160,7 +160,7 @@ begin
       end;
     end;
   finally
-    if Assigned(Documents) and Assigned(TGarbageCollector.Instance) then
+    if Assigned(Documents) and (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(Documents);
     Documents.Free;
     Content.Free;
@@ -168,7 +168,7 @@ begin
 end;
 
 function TGocciaYAMLRuntimeExtension.TryInjectGlobals(
-  const AFormat: string; const AContent: UTF8String): Boolean;
+  const AFormat: string; const AContent: string): Boolean;
 var
   Documents: TGocciaArrayValue;
   ParsedDocument: TGocciaValue;
@@ -186,7 +186,7 @@ begin
   end;
   // Same rooting rule as TryLoadModule: the tree is unreferenced
   // until registration completes.
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(Documents);
 
   try
@@ -206,14 +206,14 @@ begin
       TGarbageCollector.Instance.RemoveTempRoot(ParsedDocument);
     end;
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(Documents);
     Documents.Free;
   end;
 end;
 
 function TGocciaYAMLRuntimeExtension.TryInjectModules(
-  const AFormat: string; const AContent: UTF8String;
+  const AFormat: string; const AContent: string;
   const ABaseAddress: string): Boolean;
 var
   ParsedValue: TGocciaValue;

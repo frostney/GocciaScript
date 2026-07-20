@@ -188,6 +188,8 @@ uses
 
   OrderedStringMap,
   StringBuffer,
+  TextSemantics,
+  UnicodeStringList,
 
   Goccia.Arithmetic,
   Goccia.AST.BindingPatterns,
@@ -256,7 +258,8 @@ function CollectDeclaredPrivateNames(
   const AContext: TGocciaEvaluationContext): TStringList; forward;
 
 function ShouldUseNativeClassInstantiation(
-  const AClassValue: TGocciaClassValue): Boolean; inline;
+  const AClassValue: TGocciaClassValue): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AClassValue is TGocciaTypedArrayClassValue) or
     (AClassValue is TGocciaTypedArrayIntrinsicClassValue);
@@ -334,7 +337,8 @@ type
   TClassCallableEvalEntries = array of TClassCallableEvalEntry;
 
 function FunctionIntrinsicKind(const AIsAsync,
-  AIsGenerator: Boolean): TGocciaFunctionObjectIntrinsicKind; inline;
+  AIsGenerator: Boolean): TGocciaFunctionObjectIntrinsicKind;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   if AIsAsync and AIsGenerator then
     Result := foikAsyncGenerator
@@ -453,9 +457,10 @@ begin
   end;
 end;
 
-procedure EnsureObjectPrototypeInitialized; inline;
+procedure EnsureObjectPrototypeInitialized;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+  if TGocciaObjectValue.SharedObjectPrototype = nil then
     TGocciaObjectValue.InitializeSharedPrototype;
 end;
 
@@ -592,7 +597,7 @@ begin
     Exit;
 
   SourceObject := ToObject(ASource);
-  SourceRooted := Assigned(TGarbageCollector.Instance) and
+  SourceRooted := (TGarbageCollector.Instance <> nil) and
     not (ASource is TGocciaObjectValue);
   if SourceRooted then
     TGarbageCollector.Instance.AddTempRoot(SourceObject);
@@ -632,20 +637,23 @@ begin
   end;
 end;
 
-function UndefinedCompletionValue: TGocciaValue; inline;
+function UndefinedCompletionValue: TGocciaValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 procedure UpdateValueFromCompletion(const ACompletion: TGocciaControlFlow;
-  var AValue: TGocciaValue); inline;
+  var AValue: TGocciaValue);
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Assigned(ACompletion.Value) then
     AValue := ACompletion.Value;
 end;
 
 function NormalCompletionFromAbrupt(const ACompletion: TGocciaControlFlow;
-  const AValue: TGocciaValue): TGocciaControlFlow; inline;
+  const AValue: TGocciaValue): TGocciaControlFlow;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   UpdatedCompletion: TGocciaControlFlow;
 begin
@@ -660,7 +668,7 @@ function EvaluateExpressionWithLoopHeadTDZ(
   const ABindingPattern: TGocciaDestructuringPattern;
   const AHasLexicalDeclaration: Boolean): TGocciaValue;
 var
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I: Integer;
   TDZScope: TGocciaScope;
   TDZContext: TGocciaEvaluationContext;
@@ -669,9 +677,8 @@ begin
   if not AHasLexicalDeclaration then
     Exit(EvaluateExpression(AExpression, AContext));
 
-  Names := TStringList.Create;
+  Names := TUnicodeStringList.Create;
   try
-    Names.CaseSensitive := True;
     if Assigned(ABindingPattern) then
       CollectPatternBindingNames(ABindingPattern, Names, True)
     else if ABindingName <> '' then
@@ -686,7 +693,7 @@ begin
 
     TDZContext := AContext;
     TDZContext.Scope := TDZScope;
-    ScopeRooted := Assigned(TGarbageCollector.Instance);
+    ScopeRooted := (TGarbageCollector.Instance <> nil);
     if ScopeRooted then
       TGarbageCollector.Instance.AddTempRoot(TDZScope);
     try
@@ -765,7 +772,8 @@ begin
 end;
 
 procedure AddValueRoot(var ARoots: TGocciaActiveRootFrame;
-  const AValue: TGocciaValue); inline;
+  const AValue: TGocciaValue);
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Assigned(AValue) then
     ARoots.Add(AValue);
@@ -780,7 +788,8 @@ begin
     AddValueRoot(ARoots, AArguments.GetElement(I));
 end;
 
-procedure CollectInterpreterMemoryPressure(const AProtect: TGocciaValue); inline;
+procedure CollectInterpreterMemoryPressure(const AProtect: TGocciaValue);
+{$IFDEF FPC}inline;{$ENDIF}
 var
   GC: TGarbageCollector;
 begin
@@ -789,7 +798,8 @@ begin
     GC.CollectForMemoryPressure(AProtect);
 end;
 
-procedure QueueInterpreterResultHandoff(const AValue: TGocciaValue); inline;
+procedure QueueInterpreterResultHandoff(const AValue: TGocciaValue);
+{$IFDEF FPC}inline;{$ENDIF}
 var
   GC: TGarbageCollector;
 begin
@@ -798,7 +808,8 @@ begin
     GC.AddQueuedRoot(AValue);
 end;
 
-procedure ClearInterpreterResultHandoff(const AValue: TGocciaValue); inline;
+procedure ClearInterpreterResultHandoff(const AValue: TGocciaValue);
+{$IFDEF FPC}inline;{$ENDIF}
 var
   GC: TGarbageCollector;
 begin
@@ -831,11 +842,10 @@ procedure HoistVarDeclarations(const AStatements: TObjectList<TGocciaStatement>;
   const AScope: TGocciaScope;
   const AContext: TGocciaEvaluationContext);
 var
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I: Integer;
 begin
-  Names := TStringList.Create;
-  Names.CaseSensitive := True;
+  Names := TUnicodeStringList.Create;
   try
     CollectVarBindingNamesFromStatements(AStatements, Names,
       VarBindingNameCollectionMode(AContext.NonStrictMode,
@@ -851,11 +861,10 @@ procedure HoistVarDeclarations(const ANodes: TObjectList<TGocciaASTNode>;
   const AScope: TGocciaScope;
   const AContext: TGocciaEvaluationContext);
 var
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I: Integer;
 begin
-  Names := TStringList.Create;
-  Names.CaseSensitive := True;
+  Names := TUnicodeStringList.Create;
   try
     CollectVarBindingNamesFromNodes(ANodes, Names,
       VarBindingNameCollectionMode(AContext.NonStrictMode,
@@ -907,7 +916,7 @@ var
   ImportDecl: TGocciaImportDeclaration;
   ImportPair: TStringStringMap.TKeyValuePair;
   UsingDecl: TGocciaUsingDeclaration;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I, J: Integer;
 begin
   if ANode is TGocciaVariableDeclaration then
@@ -917,8 +926,7 @@ begin
       Exit;
     for I := 0 to High(VarDecl.Variables) do
     begin
-      Names := TStringList.Create;
-      Names.CaseSensitive := True;
+      Names := TUnicodeStringList.Create;
       try
         CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
         for J := 0 to Names.Count - 1 do
@@ -937,8 +945,7 @@ begin
       Exit;
     for I := 0 to High(VarDecl.Variables) do
     begin
-      Names := TStringList.Create;
-      Names.CaseSensitive := True;
+      Names := TUnicodeStringList.Create;
       try
         CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
         for J := 0 to Names.Count - 1 do
@@ -965,8 +972,7 @@ begin
     DestructDecl := TGocciaDestructuringDeclaration(ANode);
     if DestructDecl.IsVar then
       Exit;
-    Names := TStringList.Create;
-    Names.CaseSensitive := True;
+    Names := TUnicodeStringList.Create;
     try
       CollectPatternBindingNames(DestructDecl.Pattern, Names, True);
       for I := 0 to Names.Count - 1 do
@@ -982,8 +988,7 @@ begin
     DestructDecl := TGocciaExportDestructuringDeclaration(ANode).Declaration;
     if DestructDecl.IsVar then
       Exit;
-    Names := TStringList.Create;
-    Names.CaseSensitive := True;
+    Names := TUnicodeStringList.Create;
     try
       CollectPatternBindingNames(DestructDecl.Pattern, Names, True);
       for I := 0 to Names.Count - 1 do
@@ -1118,7 +1123,7 @@ begin
     Exit;
 
   Value := FuncExpr.Evaluate(AContext);
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(Value);
   try
     if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
@@ -1143,7 +1148,7 @@ begin
         TargetScope.DefineVariableBinding(Name, Value, True);
     end;
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(Value);
   end;
 end;
@@ -1200,7 +1205,8 @@ begin
   AContext.Scope.DefineVariableBinding(Name, Value, True);
 end;
 
-procedure AddUniqueEvalName(const ANames: TStringList; const AName: string);
+procedure AddUniqueEvalName(const ANames: TUnicodeStringList;
+  const AName: string);
 begin
   if (AName <> '') and (ANames.IndexOf(AName) < 0) then
     ANames.Add(AName);
@@ -1233,11 +1239,11 @@ begin
 end;
 
 procedure CollectTopLevelEvalLexicalNames(const ANodes: TObjectList<TGocciaStatement>;
-  const ANames: TStringList);
+  const ANames: TUnicodeStringList);
 var
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I, J, K: Integer;
 begin
   for I := 0 to ANodes.Count - 1 do
@@ -1249,9 +1255,8 @@ begin
         Continue;
       for J := 0 to High(VarDecl.Variables) do
       begin
-        Names := TStringList.Create;
+        Names := TUnicodeStringList.Create;
         try
-          Names.CaseSensitive := True;
           CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
           for K := 0 to Names.Count - 1 do
             AddUniqueEvalName(ANames, Names[K]);
@@ -1267,9 +1272,8 @@ begin
         Continue;
       for J := 0 to High(VarDecl.Variables) do
       begin
-        Names := TStringList.Create;
+        Names := TUnicodeStringList.Create;
         try
-          Names.CaseSensitive := True;
           CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
           for K := 0 to Names.Count - 1 do
             AddUniqueEvalName(ANames, Names[K]);
@@ -1283,9 +1287,8 @@ begin
       DestructDecl := TGocciaDestructuringDeclaration(ANodes[I]);
       if DestructDecl.IsVar then
         Continue;
-      Names := TStringList.Create;
+      Names := TUnicodeStringList.Create;
       try
-        Names.CaseSensitive := True;
         CollectPatternBindingNames(DestructDecl.Pattern, Names, True);
         for J := 0 to Names.Count - 1 do
           AddUniqueEvalName(ANames, Names[J]);
@@ -1309,7 +1312,7 @@ procedure PredeclareTopLevelEvalLexicalBindings(
 var
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I, J, K: Integer;
 begin
   for I := 0 to ANodes.Count - 1 do
@@ -1321,9 +1324,8 @@ begin
         Continue;
       for J := 0 to High(VarDecl.Variables) do
       begin
-        Names := TStringList.Create;
+        Names := TUnicodeStringList.Create;
         try
-          Names.CaseSensitive := True;
           CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
           for K := 0 to Names.Count - 1 do
             PredeclareBlockLexicalName(AScope, Names[K],
@@ -1341,9 +1343,8 @@ begin
         Continue;
       for J := 0 to High(VarDecl.Variables) do
       begin
-        Names := TStringList.Create;
+        Names := TUnicodeStringList.Create;
         try
-          Names.CaseSensitive := True;
           CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
           for K := 0 to Names.Count - 1 do
             PredeclareBlockLexicalName(AScope, Names[K],
@@ -1359,9 +1360,8 @@ begin
       DestructDecl := TGocciaDestructuringDeclaration(ANodes[I]);
       if DestructDecl.IsVar then
         Continue;
-      Names := TStringList.Create;
+      Names := TUnicodeStringList.Create;
       try
-        Names.CaseSensitive := True;
         CollectPatternBindingNames(DestructDecl.Pattern, Names, True);
         for J := 0 to Names.Count - 1 do
           PredeclareBlockLexicalName(AScope, Names[J],
@@ -2345,7 +2345,7 @@ end;
 procedure ValidateStrictFunctionExpression(
   const AFunction: TGocciaFunctionExpression);
 var
-  BindingNames, PatternNames: TStringList;
+  BindingNames, PatternNames: TUnicodeStringList;
   I, J: Integer;
   procedure AddStrictParameterName(const AName: string);
   begin
@@ -2363,11 +2363,9 @@ begin
     Exit;
   RejectStrictEvalAssignmentName(AFunction.Name, AFunction.Line,
     AFunction.Column);
-  BindingNames := TStringList.Create;
-  PatternNames := TStringList.Create;
+  BindingNames := TUnicodeStringList.Create;
+  PatternNames := TUnicodeStringList.Create;
   try
-    BindingNames.CaseSensitive := True;
-    PatternNames.CaseSensitive := True;
     for I := 0 to High(AFunction.Parameters) do
     begin
       if AFunction.Parameters[I].IsPattern then
@@ -2844,10 +2842,10 @@ procedure EvalDeclarationInstantiation(const AProgram: TGocciaProgram;
   const ARejectArgumentsVarDeclaration: Boolean;
   const ARejectVarDeclarationNames: TGocciaEvalRejectNameArray);
 var
-  VarNames: TStringList;
-  LexNames: TStringList;
-  DeclaredFunctionNames: TStringList;
-  DeclaredVarNames: TStringList;
+  VarNames: TUnicodeStringList;
+  LexNames: TUnicodeStringList;
+  DeclaredFunctionNames: TUnicodeStringList;
+  DeclaredVarNames: TUnicodeStringList;
   FunctionDeclarations: TObjectList<TGocciaFunctionDeclaration>;
   FunctionsToInitialize: TObjectList<TGocciaFunctionDeclaration>;
   ScopeCursor: TGocciaScope;
@@ -2879,17 +2877,13 @@ var
       SSuggestAlreadyDeclared);
   end;
 begin
-  VarNames := TStringList.Create;
-  LexNames := TStringList.Create;
-  DeclaredFunctionNames := TStringList.Create;
-  DeclaredVarNames := TStringList.Create;
+  VarNames := TUnicodeStringList.Create;
+  LexNames := TUnicodeStringList.Create;
+  DeclaredFunctionNames := TUnicodeStringList.Create;
+  DeclaredVarNames := TUnicodeStringList.Create;
   FunctionDeclarations := TObjectList<TGocciaFunctionDeclaration>.Create(False);
   FunctionsToInitialize := TObjectList<TGocciaFunctionDeclaration>.Create(False);
   try
-    VarNames.CaseSensitive := True;
-    LexNames.CaseSensitive := True;
-    DeclaredFunctionNames.CaseSensitive := True;
-    DeclaredVarNames.CaseSensitive := True;
 
     CollectVarBindingNamesFromStatements(AProgram.Body, VarNames,
       VarBindingNameCollectionMode(not AStrictEval,
@@ -2968,7 +2962,7 @@ begin
       FuncDecl := FunctionsToInitialize[I];
       Name := FuncDecl.Name;
       FunctionValue := FuncDecl.FunctionExpression.Evaluate(FunctionContext);
-      if Assigned(TGarbageCollector.Instance) then
+      if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.AddTempRoot(FunctionValue);
       try
         if (FunctionValue is TGocciaFunctionValue) and
@@ -2982,7 +2976,7 @@ begin
         else
           AVarScope.DefineVariableBinding(Name, FunctionValue, True, True);
       finally
-        if Assigned(TGarbageCollector.Instance) then
+        if (TGarbageCollector.Instance <> nil) then
           TGarbageCollector.Instance.RemoveTempRoot(FunctionValue);
       end;
     end;
@@ -3331,7 +3325,7 @@ begin
     CollectInterpreterMemoryPressure(Result);
     Exit;
   end;
-  if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+  if AContext.CoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) then
     TGocciaCoverageTracker.Instance.RecordLineHit(
       AContext.CurrentFilePath, AExpression.Line);
   Result := AExpression.Evaluate(AContext);
@@ -3342,7 +3336,7 @@ end;
 
 function EvaluateStatement(const AStatement: TGocciaStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 begin
-  if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+  if AContext.CoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) then
     TGocciaCoverageTracker.Instance.RecordLineHit(
       AContext.CurrentFilePath, AStatement.Line);
   ActivateCompatBlockFunctionDeclaration(AStatement, AContext);
@@ -3410,7 +3404,7 @@ begin
     Left := EvaluateExpression(ABinaryExpression.Left, AContext);
     if not Left.ToBooleanLiteral.Value then
     begin
-      if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+      if AContext.CoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) then
         TGocciaCoverageTracker.Instance.RecordBranchHit(
           AContext.CurrentFilePath, ABinaryExpression.Line,
           ABinaryExpression.Column, 0);
@@ -3418,7 +3412,7 @@ begin
     end
     else
     begin
-      if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+      if AContext.CoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) then
         TGocciaCoverageTracker.Instance.RecordBranchHit(
           AContext.CurrentFilePath, ABinaryExpression.Line,
           ABinaryExpression.Column, 1);
@@ -3433,7 +3427,7 @@ begin
     Left := EvaluateExpression(ABinaryExpression.Left, AContext);
     if Left.ToBooleanLiteral.Value then
     begin
-      if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+      if AContext.CoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) then
         TGocciaCoverageTracker.Instance.RecordBranchHit(
           AContext.CurrentFilePath, ABinaryExpression.Line,
           ABinaryExpression.Column, 0);
@@ -3441,7 +3435,7 @@ begin
     end
     else
     begin
-      if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+      if AContext.CoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) then
         TGocciaCoverageTracker.Instance.RecordBranchHit(
           AContext.CurrentFilePath, ABinaryExpression.Line,
           ABinaryExpression.Column, 1);
@@ -3457,7 +3451,7 @@ begin
     // Return right operand only if left is null or undefined
     if (Left is TGocciaNullLiteralValue) or (Left is TGocciaUndefinedLiteralValue) then
     begin
-      if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+      if AContext.CoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) then
         TGocciaCoverageTracker.Instance.RecordBranchHit(
           AContext.CurrentFilePath, ABinaryExpression.Line,
           ABinaryExpression.Column, 0);
@@ -3466,7 +3460,7 @@ begin
     end
     else
     begin
-      if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+      if AContext.CoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) then
         TGocciaCoverageTracker.Instance.RecordBranchHit(
           AContext.CurrentFilePath, ABinaryExpression.Line,
           ABinaryExpression.Column, 1);
@@ -3489,14 +3483,14 @@ begin
   // For all other operators, evaluate both operands.  Generators can suspend
   // while evaluating the right operand; keep the left value so resuming does
   // not replay left-side side effects.
-  if not Assigned(CurrentGeneratorContinuation) or
+  if (CurrentGeneratorContinuation = nil) or
      not CurrentGeneratorContinuation.TakeExpressionValue(ABinaryExpression, Left) then
     Left := EvaluateExpression(ABinaryExpression.Left, AContext);
   AddValueRoot(Roots, Left);
   try
     Right := EvaluateExpression(ABinaryExpression.Right, AContext);
     AddValueRoot(Roots, Right);
-    if Assigned(CurrentGeneratorContinuation) then
+    if CurrentGeneratorContinuation <> nil then
       CurrentGeneratorContinuation.ClearExpressionValue(ABinaryExpression);
 
     case ABinaryExpression.Operator of
@@ -3559,7 +3553,7 @@ begin
   except
     on E: EGocciaGeneratorYield do
     begin
-      if Assigned(CurrentGeneratorContinuation) then
+      if CurrentGeneratorContinuation <> nil then
         CurrentGeneratorContinuation.SaveExpressionValue(ABinaryExpression, Left);
       Roots.Clear;
       raise;
@@ -3739,7 +3733,7 @@ var
     try
       Result := AReceiver;
 
-      if Assigned(ClassConstructor.NativeInstanceDefaultPrototype) then
+      if ClassConstructor.NativeInstanceDefaultPrototype <> nil then
       begin
         NativeInstance := ClassConstructor.CreateNativeInstance(AArguments);
         if not Assigned(NativeInstance) then
@@ -3887,8 +3881,8 @@ begin
       Assigned(TGocciaMethodCallScope(CallerFunctionScope).SuperClass));
   Result := Assigned(CallerFunctionScope) and
     (CallerFunctionScope.CustomLabel = 'BytecodeDirectEval') and
-    Assigned(CallerFunctionScope.FindSuperConstructor) and
-    Assigned(CallerFunctionScope.FindNewTarget);
+    (CallerFunctionScope.FindSuperConstructor <> nil) and
+    (CallerFunctionScope.FindNewTarget <> nil);
 end;
 
 function DirectEvalRejectsArgumentsReference(
@@ -3979,9 +3973,8 @@ begin
 
   SourceText := TGocciaStringLiteralValue(SourceValue).Value;
   DeclaredPrivateNames := nil;
-  EvalSource := TStringList.Create;
+  EvalSource := CreateECMAScriptSourceLines(SourceText);
   try
-    EvalSource.Text := SourceText;
     EvalOptions := TGocciaSourcePipeline.CurrentOptionsOrDefault;
     EvalOptions.SourceType := stScript;
     CallerStrict := not AContext.NonStrictMode;
@@ -4007,7 +4000,7 @@ begin
         EvalScope := AContext.Scope.CreateChild(skBlock,
           'InterpreterDirectEval');
       EvalScope.ThisValue := AContext.Scope.ThisValue;
-      if Assigned(TGarbageCollector.Instance) then
+      if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.AddTempRoot(EvalScope);
       try
         EvalContext := AContext;
@@ -4027,7 +4020,7 @@ begin
         CallerFunctionScope := FindDirectEvalCallerFunctionScope(AContext.Scope);
         AllowNewTarget := Assigned(CallerFunctionScope);
         AllowSuperProperty := Assigned(CallerFunctionScope) and
-          Assigned(CallerFunctionScope.FindSuperClass);
+          (CallerFunctionScope.FindSuperClass <> nil);
         AllowSuperCall := DirectEvalAllowsSuperCall(AContext.Scope);
         AResult := EvaluateEvalProgram(PipelineResult.ProgramNode,
           EvalContext, VarScope, EvalScope, StrictEval,
@@ -4036,7 +4029,7 @@ begin
           AllowSuperProperty, AllowSuperCall,
           DirectEvalRejectsArgumentsReference(AContext.Scope));
       finally
-        if Assigned(TGarbageCollector.Instance) then
+        if (TGarbageCollector.Instance <> nil) then
           TGarbageCollector.Instance.RemoveTempRoot(EvalScope);
       end;
     finally
@@ -4385,13 +4378,13 @@ begin
       Exit;
     end;
 
-    if Assigned(TGocciaCallStack.Instance) then
+    if (TGocciaCallStack.Instance <> nil) then
     begin
       TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
         ACallExpression.Line, ACallExpression.Column);
     end;
     try
-      if Assigned(TGocciaCallStack.Instance) then
+      if (TGocciaCallStack.Instance <> nil) then
         CheckStackDepth(TGocciaCallStack.Instance.Count);
       if Assigned(Callee) and Callee.IsCallable then
       begin
@@ -4444,7 +4437,7 @@ begin
             SSuggestNotFunctionType);
       end;
     finally
-      if Assigned(TGocciaCallStack.Instance) then
+      if (TGocciaCallStack.Instance <> nil) then
         TGocciaCallStack.Instance.Pop;
     end;
     AddValueRoot(Roots, Result);
@@ -4774,7 +4767,7 @@ begin
       else if Obj is TGocciaSymbolValue then
       begin
         // Symbol primitive: look up symbol-keyed members on Symbol.prototype
-        if Assigned(TGocciaSymbolValue.SharedPrototype) then
+        if TGocciaSymbolValue.SharedPrototype <> nil then
         begin
           Result := TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype)
             .GetSymbolPropertyWithReceiver(TGocciaSymbolValue(PropertyKey), Obj);
@@ -4984,7 +4977,7 @@ var
   IsProtoSetter: Boolean;
 begin
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
 
   try
@@ -5193,7 +5186,7 @@ begin
 
   Result := Obj;
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
 end;
@@ -5266,7 +5259,8 @@ end;
 // ES2026 §27.7.5.3 Await(value)
 function EvaluateAwait(const AAwaitExpression: TGocciaAwaitExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
-  if AsyncAwaitSuspensionEnabled and Assigned(CurrentGeneratorContinuation) then
+  if AsyncAwaitSuspensionEnabled and
+     (CurrentGeneratorContinuation <> nil) then
     Exit(EvaluateGeneratorAwait(AAwaitExpression, AContext));
 
   Result := AwaitValue(EvaluateExpression(AAwaitExpression.Operand, AContext));
@@ -5431,7 +5425,7 @@ begin
   else
     DeclarationType := dtLet;
 
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
     if not HasSavedLoopState then
@@ -5630,7 +5624,7 @@ begin
     ClearSavedLoopState;
     Result := TGocciaControlFlow.Normal(LoopValue);
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
 end;
@@ -5789,7 +5783,7 @@ begin
   else
     DeclarationType := dtLet;
 
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(EntriesArray);
   try
     while True do
@@ -5922,7 +5916,7 @@ begin
       Continuation.ClearLoopState(AForInStatement);
     Result := TGocciaControlFlow.Normal(LoopValue);
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(EntriesArray);
   end;
 end;
@@ -5934,7 +5928,7 @@ var
   HeaderScope, IterScope, UpdateScope: TGocciaScope;
   HeaderContext, IterContext, UpdateContext: TGocciaEvaluationContext;
   IsLexical: Boolean;
-  PerIterNames: TStringList;
+  PerIterNames: TUnicodeStringList;
   PrevValues: array of TGocciaValue;
   CondValue: TGocciaValue;
   LoopValue: TGocciaValue;
@@ -5976,7 +5970,7 @@ begin
         DeclarationType := dtConst
       else
         DeclarationType := dtLet;
-      PerIterNames := TStringList.Create;
+      PerIterNames := TUnicodeStringList.Create;
       CollectVariableDeclarationBindingNames(VarDecl, PerIterNames, True);
     end
     else if (AForStatement.Init is TGocciaDestructuringDeclaration)
@@ -5988,7 +5982,7 @@ begin
         DeclarationType := dtConst
       else
         DeclarationType := dtLet;
-      PerIterNames := TStringList.Create;
+      PerIterNames := TUnicodeStringList.Create;
       CollectPatternBindingNames(DestructDecl.Pattern, PerIterNames, True);
     end;
   end;
@@ -6622,7 +6616,7 @@ begin
           SSuggestAsyncIteratorProtocol);
     end;
 
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.AddTempRoot(IteratorObj);
     try
       EmptyArgs := TGocciaArgumentsCollection.Create;
@@ -6809,7 +6803,7 @@ begin
         EmptyArgs.Free;
       end;
     finally
-      if Assigned(TGarbageCollector.Instance) then
+      if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.RemoveTempRoot(IteratorObj);
     end;
   end
@@ -6826,7 +6820,7 @@ begin
           SSuggestIteratorProtocol);
     end;
 
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.AddTempRoot(Iterator);
     try
       if not HasSavedLoopState then
@@ -6995,7 +6989,7 @@ begin
       if Assigned(Continuation) then
         Continuation.ClearLoopState(AForAwaitOfStatement);
     finally
-      if Assigned(TGarbageCollector.Instance) then
+      if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.RemoveTempRoot(Iterator);
     end;
   end;
@@ -7475,7 +7469,7 @@ begin
     AContext, BodyContext, PatternHandled);
   if not PatternHandled then
     BodyContext := AContext;
-  if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+  if AContext.CoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) then
   begin
     if ConditionResult then
       TGocciaCoverageTracker.Instance.RecordBranchHit(
@@ -7509,7 +7503,7 @@ function ExecuteCatchBlock(const ATryStatement: TGocciaTryStatement; const AErro
 var
   CatchScope: TGocciaScope;
   CatchContext, MatchContext: TGocciaEvaluationContext;
-  PatternNames: TStringList;
+  PatternNames: TUnicodeStringList;
   I: Integer;
   GC: TGarbageCollector;
 begin
@@ -7549,8 +7543,7 @@ begin
     try
       CatchContext := AContext;
       CatchContext.Scope := CatchScope;
-      PatternNames := TStringList.Create;
-      PatternNames.CaseSensitive := True;
+      PatternNames := TUnicodeStringList.Create;
       try
         CollectPatternBindingNames(ATryStatement.CatchBindingPattern,
           PatternNames, True);
@@ -7735,9 +7728,9 @@ begin
   if Assigned(ATryStatement.FinallyBlock) then
   begin
     SaveTryState(gtpFinally);
-    if HasUnhandledThrow and Assigned(TGarbageCollector.Instance) then
+    if HasUnhandledThrow and (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.AddTempRoot(ThrownValue);
-    if HasGeneratorReturn and Assigned(TGarbageCollector.Instance) then
+    if HasGeneratorReturn and (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.AddTempRoot(GeneratorReturnValue);
     try
       try
@@ -7760,9 +7753,9 @@ begin
         end;
       end;
     finally
-      if HasUnhandledThrow and Assigned(TGarbageCollector.Instance) then
+      if HasUnhandledThrow and (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.RemoveTempRoot(ThrownValue);
-      if HasGeneratorReturn and Assigned(TGarbageCollector.Instance) then
+      if HasGeneratorReturn and (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.RemoveTempRoot(GeneratorReturnValue);
     end;
   end;
@@ -8211,7 +8204,7 @@ begin
           if Goccia.Arithmetic.IsStrictEqual(Discriminant, CaseTest) then
           begin
             Matched := True;
-            if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+            if AContext.CoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) then
               TGocciaCoverageTracker.Instance.RecordBranchHit(
                 AContext.CurrentFilePath, ASwitchStatement.Line,
                 ASwitchStatement.Column, I);
@@ -8249,7 +8242,7 @@ begin
 
       if not Matched and not Done and (DefaultIndex >= 0) then
       begin
-        if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+        if AContext.CoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
             AContext.CurrentFilePath, ASwitchStatement.Line,
             ASwitchStatement.Column, DefaultIndex);
@@ -8342,7 +8335,7 @@ begin
     PrototypeObj := TGocciaObjectValue(PrototypeValue)
   else
   begin
-    if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+    if TGocciaObjectValue.SharedObjectPrototype = nil then
       TGocciaObjectValue.InitializeSharedPrototype;
     PrototypeObj := TGocciaObjectValue.SharedObjectPrototype;
   end;
@@ -8473,13 +8466,13 @@ begin
     else
       CalleeName := '';
 
-    if Assigned(TGocciaCallStack.Instance) then
+    if (TGocciaCallStack.Instance <> nil) then
     begin
       TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
         ANewExpression.Line, ANewExpression.Column);
     end;
     try
-      if Assigned(TGocciaCallStack.Instance) then
+      if (TGocciaCallStack.Instance <> nil) then
         CheckStackDepth(TGocciaCallStack.Instance.Count);
       if Callee is TGocciaProxyValue then
       begin
@@ -8546,7 +8539,7 @@ begin
           ReceiverPrototype := TGocciaObjectValue(PrototypeValue)
         else
         begin
-          if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+          if TGocciaObjectValue.SharedObjectPrototype = nil then
             TGocciaObjectValue.InitializeSharedPrototype;
           ReceiverPrototype := TGocciaObjectValue.SharedObjectPrototype;
         end;
@@ -8584,7 +8577,7 @@ begin
               [Callee.TypeName]));
       end;
     finally
-      if Assigned(TGocciaCallStack.Instance) then
+      if (TGocciaCallStack.Instance <> nil) then
         TGocciaCallStack.Instance.Pop;
     end;
     AddValueRoot(Roots, Result);
@@ -8897,6 +8890,9 @@ var
   var
     Entries: TClassCallableEvalEntries;
     Entry: TClassCallableEvalEntry;
+    MethodPair: TGocciaClassMethodMap.TKeyValuePair;
+    GetterPair: TGocciaGetterExpressionMap.TKeyValuePair;
+    SetterPair: TGocciaSetterExpressionMap.TKeyValuePair;
     Order, K: Integer;
   begin
     SetLength(ResolvedComputedElementKeys, Length(AClassDef.FElements));
@@ -10023,7 +10019,7 @@ function BytecodePrivateBrandKeyForLookup(const APrivateLookupName: string;
   const AAccessClass: TGocciaClassValue): string;
 var
   Body: string;
-  DelimiterPos: SizeInt;
+  DelimiterPos: NativeInt;
   BrandToken: string;
 begin
   Result := '';
@@ -11328,13 +11324,13 @@ begin
     else
       CalleeName := '';
 
-    if Assigned(TGocciaCallStack.Instance) then
+    if (TGocciaCallStack.Instance <> nil) then
     begin
       TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
         ATaggedTemplateExpression.Line, ATaggedTemplateExpression.Column);
     end;
     try
-      if Assigned(TGocciaCallStack.Instance) then
+      if (TGocciaCallStack.Instance <> nil) then
         CheckStackDepth(TGocciaCallStack.Instance.Count);
       if Assigned(Callee) and Callee.IsCallable then
         Result := DispatchCall(Callee, Arguments, ThisValue)
@@ -11343,7 +11339,7 @@ begin
           Format(SErrorValueNotFunction, [Callee.TypeName]),
           SSuggestTaggedTemplateCallable);
     finally
-      if Assigned(TGocciaCallStack.Instance) then
+      if (TGocciaCallStack.Instance <> nil) then
         TGocciaCallStack.Instance.Pop;
     end;
   finally
@@ -12141,7 +12137,7 @@ begin
             begin
               if ShouldCloseIterator then
               begin
-                AcquireExceptionObject;
+                PreserveCurrentExceptionAcrossNestedHandler;
                 CloseIteratorPreservingError(Iterator);
               end;
               raise;
@@ -12150,7 +12146,7 @@ begin
             begin
               if ShouldCloseIterator then
               begin
-                AcquireExceptionObject;
+                PreserveCurrentExceptionAcrossNestedHandler;
                 CloseIteratorPreservingError(Iterator);
               end;
               raise;
@@ -12348,7 +12344,7 @@ begin
           begin
             if ShouldCloseIterator then
             begin
-              AcquireExceptionObject;
+              PreserveCurrentExceptionAcrossNestedHandler;
               CloseIteratorPreservingError(Iterator);
             end;
             raise;
@@ -12357,7 +12353,7 @@ begin
           begin
             if ShouldCloseIterator then
             begin
-              AcquireExceptionObject;
+              PreserveCurrentExceptionAcrossNestedHandler;
               CloseIteratorPreservingError(Iterator);
             end;
             raise;
@@ -12422,7 +12418,7 @@ begin
           begin
             if ShouldCloseIterator then
             begin
-              AcquireExceptionObject;
+              PreserveCurrentExceptionAcrossNestedHandler;
               CloseIteratorPreservingError(Iterator);
             end;
             raise;
@@ -12431,7 +12427,7 @@ begin
           begin
             if ShouldCloseIterator then
             begin
-              AcquireExceptionObject;
+              PreserveCurrentExceptionAcrossNestedHandler;
               CloseIteratorPreservingError(Iterator);
             end;
             raise;

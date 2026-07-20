@@ -94,6 +94,8 @@ uses
   Math,
   SysUtils,
 
+  NumericText,
+  TextEncoding,
   TimingUtils,
 
   Goccia.CSV,
@@ -149,8 +151,7 @@ function FormatSampleTime(const AMilliseconds: Double): string;
 var
   FormatSettings: TFormatSettings;
 begin
-  FormatSettings := DefaultFormatSettings;
-  FormatSettings.DecimalSeparator := '.';
+  FormatSettings := CreateInvariantFormatSettings;
   if AMilliseconds < 0.001 then
     Result := SysUtils.Format('%.2f ns', [AMilliseconds * 1000000],
       FormatSettings)
@@ -626,8 +627,7 @@ var
   Inconclusive: Boolean;
   CSVFormatSettings: TFormatSettings;
 begin
-  CSVFormatSettings := DefaultFormatSettings;
-  CSVFormatSettings.DecimalSeparator := '.';
+  CSVFormatSettings := CreateInvariantFormatSettings;
   FOutput.Add(JoinCSVFields(BENCHMARK_CSV_HEADER));
 
   for F := 0 to FFileCount - 1 do
@@ -726,8 +726,7 @@ begin
   TotalBenchmarks := 0;
   TotalDurationNanoseconds := 0;
   FilesJSON := '';
-  JSONFormatSettings := DefaultFormatSettings;
-  JSONFormatSettings.DecimalSeparator := '.';
+  JSONFormatSettings := CreateInvariantFormatSettings;
 
   for F := 0 to FFileCount - 1 do
   begin
@@ -899,11 +898,11 @@ end;
 
 procedure TBenchmarkReporter.WriteToStream(const AStream: TStream);
 var
-  S: string;
+  Bytes: TBytes;
 begin
-  S := FOutput.Text;
-  if Length(S) > 0 then
-    AStream.WriteBuffer(S[1], Length(S));
+  Bytes := EncodeUTF8WithReplacement(FOutput.Text);
+  if Length(Bytes) > 0 then
+    AStream.WriteBuffer(Bytes[0], Length(Bytes));
 end;
 
 procedure TBenchmarkReporter.WriteToFile(const AFileName: string);

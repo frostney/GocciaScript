@@ -89,9 +89,10 @@ uses
 var
   GIntlLocaleSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetIntlLocaleShared: TGocciaSharedPrototype; inline;
+function GetIntlLocaleShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlLocaleSharedSlot))
   else
     Result := nil;
@@ -273,7 +274,7 @@ begin
   Result := True;
 end;
 
-function JoinSubtags(const AValues: IntlTypes.TStringArray): string;
+function JoinSubtags(const AValues: array of string): string;
 var
   Index: Integer;
 begin
@@ -983,7 +984,7 @@ begin
   FFirstDayOfWeekPresent := False;
   ParseTag(ATag, AOptions);
   InitializePrototype;
-  if Assigned(GetIntlLocaleShared) then
+  if (GetIntlLocaleShared <> nil) then
     FPrototype := GetIntlLocaleShared.Prototype;
 end;
 
@@ -1032,8 +1033,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetIntlLocaleShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetIntlLocaleShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlLocaleSharedSlot, Shared);

@@ -54,9 +54,10 @@ uses
 var
   GIntlListFormatSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetIntlListFormatShared: TGocciaSharedPrototype; inline;
+function GetIntlListFormatShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlListFormatSharedSlot))
   else
     Result := nil;
@@ -110,7 +111,7 @@ begin
   ThrowRangeError(Format(SErrorIntlInvalidOption, [Result, AName]));
 end;
 
-function ExtractStringArray(const AValue: TGocciaValue): TStringArray;
+function ExtractStringArray(const AValue: TGocciaValue): IntlTypes.TStringArray;
 var
   Iterator: TGocciaIteratorValue;
   Item: TGocciaValue;
@@ -165,7 +166,7 @@ begin
   Result := StringReplace(Tmp, '{1}', ARight, []);
 end;
 
-function FormatListWithCLDR(const AItems: TStringArray; const ALocale: string;
+function FormatListWithCLDR(const AItems: IntlTypes.TStringArray; const ALocale: string;
   AType: TIntlListFormatType; AStyle: TIntlListFormatStyle): string;
 var
   Pattern: TIntlListPattern;
@@ -292,7 +293,7 @@ begin
   AppendListPart(Result, 'literal', Literal);
 end;
 
-function FormatListPartsWithCLDR(const AItems: TStringArray; const ALocale: string;
+function FormatListPartsWithCLDR(const AItems: IntlTypes.TStringArray; const ALocale: string;
   AType: TIntlListFormatType; AStyle: TIntlListFormatStyle): TIntlFormatPartArray;
 var
   Pattern: TIntlListPattern;
@@ -381,7 +382,7 @@ begin
   end;
 
   InitializePrototype;
-  if Assigned(GetIntlListFormatShared) then
+  if (GetIntlListFormatShared <> nil) then
     FPrototype := GetIntlListFormatShared.Prototype;
 end;
 
@@ -396,8 +397,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetIntlListFormatShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetIntlListFormatShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlListFormatSharedSlot, Shared);
@@ -437,7 +438,7 @@ end;
 function TGocciaIntlListFormatValue.IntlListFormatFormat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   LF: TGocciaIntlListFormatValue;
-  Items: TStringArray;
+  Items: IntlTypes.TStringArray;
   Formatted: string;
 begin
   LF := AsListFormat(AThisValue, 'Intl.ListFormat.prototype.format');
@@ -455,7 +456,7 @@ end;
 function TGocciaIntlListFormatValue.IntlListFormatFormatToParts(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   LF: TGocciaIntlListFormatValue;
-  Items: TStringArray;
+  Items: IntlTypes.TStringArray;
   Parts: TIntlFormatPartArray;
 begin
   LF := AsListFormat(AThisValue, 'Intl.ListFormat.prototype.formatToParts');

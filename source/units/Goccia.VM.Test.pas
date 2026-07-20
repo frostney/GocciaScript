@@ -395,7 +395,7 @@ end;
 
 begin
   TestRunnerProgram.AddSuite(TTestGocciaVM.Create('Goccia VM'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
 
   ExitCode := TestResultToExitCode;
 end.

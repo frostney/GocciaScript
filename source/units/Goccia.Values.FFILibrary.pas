@@ -50,6 +50,7 @@ uses
   Goccia.FFI.Call,
   Goccia.FFI.CallbackSlots,
   Goccia.FFI.Types,
+  Goccia.FFI.UTF8String,
   Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Utils,
@@ -68,9 +69,10 @@ uses
 var
   GFFILibrarySharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetFFILibraryShared: TGocciaSharedPrototype; inline;
+function GetFFILibraryShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GFFILibrarySharedSlot))
   else
     Result := nil;
@@ -89,7 +91,7 @@ const
 type
   TGocciaFFIBoundFunctionValue = class(TGocciaNativeFunctionValue)
   private
-    FSymbol: CodePointer;
+    FSymbol: Pointer;
     FSignature: TGocciaFFICompiledSignature;
     FName: string;
     FLibraryGuard: TGocciaFFILibraryGuard;
@@ -97,13 +99,13 @@ type
     function Invoke(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
   public
-    constructor Create(const ASymbol: CodePointer;
+    constructor Create(const ASymbol: Pointer;
       const ASignature: TGocciaFFICompiledSignature; const AName: string;
       const ALibraryGuard: TGocciaFFILibraryGuard);
     destructor Destroy; override;
   end;
 
-constructor TGocciaFFIBoundFunctionValue.Create(const ASymbol: CodePointer;
+constructor TGocciaFFIBoundFunctionValue.Create(const ASymbol: Pointer;
   const ASignature: TGocciaFFICompiledSignature; const AName: string;
   const ALibraryGuard: TGocciaFFILibraryGuard);
 begin
@@ -131,7 +133,7 @@ begin
   else if AValue is TGocciaFFICallbackValue then
   begin
     TGocciaFFICallbackValue(AValue).EnsureOpen;
-    Result := Pointer(TGocciaFFICallbackValue(AValue).CodePointer);
+    Result := Pointer(TGocciaFFICallbackValue(AValue).Pointer);
   end
   else if AValue is TGocciaArrayBufferValue then
   begin
@@ -166,7 +168,7 @@ end;
 
 function MarshalFFIValue(const AType: TGocciaFFITypeDescriptor;
   const AValue: TGocciaValue; const AArgumentIndex: Integer;
-  var ATemporaryString: AnsiString;
+  var ATemporaryString: TBytes;
   out ACallback: TGocciaFFICallbackValue;
   out ATemporaryCallback: Boolean): TBytes;
 var
@@ -180,7 +182,7 @@ var
   Signed32: LongInt;
   Unsigned32: LongWord;
   Signed64: Int64;
-  Unsigned64: QWord;
+  Unsigned64: UInt64;
   Float32: Single;
   Float64: Double;
 begin
@@ -220,7 +222,7 @@ begin
       ThrowTypeError(SErrorFFICallbackArgumentType,
         SSuggestFFIUsage);
     ACallback.EnsureOpen;
-    PointerValue := Pointer(ACallback.CodePointer);
+    PointerValue := Pointer(ACallback.Pointer);
     Move(PointerValue, Result[0], SizeOf(Pointer));
     Exit;
   end;
@@ -267,7 +269,7 @@ begin
     end;
     fftU64:
     begin
-      Unsigned64 := QWord(ToInt64Value(AValue));
+      Unsigned64 := UInt64(ToInt64Value(AValue));
       Move(Unsigned64, Result[0], SizeOf(Unsigned64));
     end;
     fftF32:
@@ -285,10 +287,12 @@ begin
       PointerValue := PointerFromFFIValue(AValue, AArgumentIndex);
       Move(PointerValue, Result[0], SizeOf(Pointer));
     end;
-    fftCString:
+    fftUTF8String:
     begin
-      ATemporaryString := AnsiString(AValue.ToStringLiteral.Value);
-      PointerValue := PAnsiChar(ATemporaryString);
+      if not TryEncodeFFIUTF8String(AValue.ToStringLiteral.Value,
+         ATemporaryString) then
+        ThrowTypeError(SErrorFFIUTF8StringArgument, SSuggestFFIUsage);
+      PointerValue := @ATemporaryString[0];
       Move(PointerValue, Result[0], SizeOf(Pointer));
     end;
   end;
@@ -306,9 +310,10 @@ var
   Signed32: LongInt;
   Unsigned32: LongWord;
   Signed64: Int64;
-  Unsigned64: QWord;
+  Unsigned64: UInt64;
   Float32: Single;
   Float64: Double;
+  Text: string;
 begin
   if AType.IsAggregate then
   begin
@@ -364,12 +369,16 @@ begin
         ThrowTypeError(SErrorFFIPointerLibraryClosed, SSuggestFFIUsage);
       Result := TGocciaFFIPointerValue.Create(PointerValue, ALibraryGuard);
     end;
-    fftCString:
+    fftUTF8String:
     begin
       PointerValue := nil;
       Move(AData[0], PointerValue, SizeOf(Pointer));
       if Assigned(PointerValue) then
-        Result := TGocciaStringLiteralValue.Create(string(PAnsiChar(PointerValue)))
+      begin
+        if not TryDecodeFFIUTF8String(PAnsiChar(PointerValue), Text) then
+          ThrowTypeError(SErrorFFIUTF8StringResult, SSuggestFFIUsage);
+        Result := TGocciaStringLiteralValue.Create(Text);
+      end
       else
         Result := TGocciaNullLiteralValue.NullValue;
     end;
@@ -384,7 +393,7 @@ function TGocciaFFIBoundFunctionValue.Invoke(
 var
   NativeArguments: array of TBytes;
   NativeResult: TBytes;
-  TemporaryStrings: array of AnsiString;
+  TemporaryStrings: array of TBytes;
   Callbacks: array of TGocciaFFICallbackValue;
   TemporaryCallbacks: array of Boolean;
   CallContext: TGocciaFFICallContext;
@@ -476,8 +485,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetFFILibraryShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetFFILibraryShared <> nil) then Exit;
 
   MethodHost := TGocciaFFILibraryValue.CreatePrototypeHost;
   Shared := TGocciaSharedPrototype.Create(MethodHost);
@@ -620,7 +629,7 @@ var
   Lib: TGocciaFFILibraryValue;
   FuncName: string;
   Sig: TGocciaFFICompiledSignature;
-  SymbolPtr: CodePointer;
+  SymbolPtr: Pointer;
 begin
   if not (AThisValue is TGocciaFFILibraryValue) then
     ThrowTypeError(SErrorFFIBindRequiresLibrary, SSuggestFFILibraryOpen);
@@ -651,7 +660,7 @@ function TGocciaFFILibraryValue.Symbol(const AArgs: TGocciaArgumentsCollection; 
 var
   Lib: TGocciaFFILibraryValue;
   SymName: string;
-  SymPtr: CodePointer;
+  SymPtr: Pointer;
 begin
   if not (AThisValue is TGocciaFFILibraryValue) then
     ThrowTypeError(SErrorFFISymbolRequiresLibrary, SSuggestFFILibraryOpen);

@@ -7,11 +7,12 @@ uses
   Classes,
   Generics.Collections,
   StrUtils,
-  SyncObjs,
   SysUtils,
 
   CLI.Parser,
+  CriticalSections,
   TextSemantics,
+  TimingUtils,
 
   Goccia.Arguments.Collection,
   Goccia.AST.Node,
@@ -154,7 +155,7 @@ type
   private
     FBroadcastGeneration: Integer;
     FBroadcastValue: TGocciaValue;
-    FLock: TRTLCriticalSection;
+    FLock: TGocciaCriticalSection;
     FOptions: TBareOptions;
     FReports: TStringList;
     FShuttingDown: Boolean;
@@ -200,7 +201,7 @@ type
   TBareTest262ModuleContentProvider = class(TGocciaFileSystemModuleContentProvider)
   private
     function BuildHarnessPrelude(const APath: string;
-      const ASource: UTF8String): UTF8String;
+      const ASource: string): string;
     function FindSuiteRoot(const APath: string): string;
     function HarnessFilePath(const ASuiteRoot, AName: string): string;
     function ShouldPrependHarness(const APath: string): Boolean;
@@ -335,9 +336,8 @@ begin
     Exit(SourceValue);
 
   SourceText := TGocciaStringLiteralValue(SourceValue).Value;
-  EvalSource := TStringList.Create;
+  EvalSource := CreateECMAScriptSourceLines(SourceText);
   try
-    EvalSource.Text := SourceText;
     EvalOptions := TGocciaSourcePipeline.DefaultOptions;
     EvalOptions.Preprocessors := FEngine.Preprocessors;
     EvalOptions.Compatibility := FEngine.Compatibility;
@@ -367,7 +367,7 @@ begin
             EvalScope := FEngine.Interpreter.GlobalScope.CreateChild(skBlock,
               'Test262Eval');
           EvalScope.ThisValue := FEngine.Interpreter.GlobalScope.ThisValue;
-          if Assigned(TGarbageCollector.Instance) then
+          if (TGarbageCollector.Instance <> nil) then
             TGarbageCollector.Instance.AddTempRoot(EvalScope);
           try
             EvalContext := FEngine.Interpreter.CreateEvaluationContext;
@@ -382,7 +382,7 @@ begin
               EvalContext, VarScope, EvalScope, StrictEval, False, nil, False,
               False, False);
           finally
-            if Assigned(TGarbageCollector.Instance) then
+            if (TGarbageCollector.Instance <> nil) then
               TGarbageCollector.Instance.RemoveTempRoot(EvalScope);
           end;
         finally
@@ -419,9 +419,8 @@ begin
     Exit(SourceValue);
 
   SourceText := TGocciaStringLiteralValue(SourceValue).Value;
-  ScriptSource := TStringList.Create;
+  ScriptSource := CreateECMAScriptSourceLines(SourceText);
   try
-    ScriptSource.Text := SourceText;
     ScriptOptions := TGocciaSourcePipeline.DefaultOptions;
     ScriptOptions.Preprocessors := FEngine.Preprocessors;
     ScriptOptions.Compatibility := FEngine.Compatibility;
@@ -597,33 +596,33 @@ begin
   FBroadcastGeneration := 0;
   FBroadcastValue := nil;
   FShuttingDown := False;
-  InitCriticalSection(FLock);
+  CriticalSectionInit(FLock);
 end;
 
 destructor TBareTest262AgentHost.Destroy;
 var
   Worker: TBareTest262AgentThread;
 begin
-  EnterCriticalSection(FLock);
+  CriticalSectionEnter(FLock);
   try
     FShuttingDown := True;
   finally
-    LeaveCriticalSection(FLock);
+    CriticalSectionLeave(FLock);
   end;
 
   for Worker in FWorkers do
     Worker.WaitFor;
 
-  EnterCriticalSection(FLock);
+  CriticalSectionEnter(FLock);
   try
-    if Assigned(FBroadcastValue) and Assigned(TGarbageCollector.Instance) then
+    if Assigned(FBroadcastValue) and (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveQueuedRoot(FBroadcastValue);
     FBroadcastValue := nil;
   finally
-    LeaveCriticalSection(FLock);
+    CriticalSectionLeave(FLock);
   end;
   FWorkers.Free;
-  DoneCriticalSection(FLock);
+  CriticalSectionDone(FLock);
   FReports.Free;
   inherited;
 end;
@@ -649,16 +648,16 @@ begin
   else
     Value := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  EnterCriticalSection(FLock);
+  CriticalSectionEnter(FLock);
   try
-    if Assigned(FBroadcastValue) and Assigned(TGarbageCollector.Instance) then
+    if Assigned(FBroadcastValue) and (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveQueuedRoot(FBroadcastValue);
     FBroadcastValue := Value;
-    if Assigned(FBroadcastValue) and Assigned(TGarbageCollector.Instance) then
+    if Assigned(FBroadcastValue) and (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.AddQueuedRoot(FBroadcastValue);
     Inc(FBroadcastGeneration);
   finally
-    LeaveCriticalSection(FLock);
+    CriticalSectionLeave(FLock);
   end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -671,14 +670,14 @@ var
   ReportText: string;
 begin
   PumpCurrentThreadWork;
-  EnterCriticalSection(FLock);
+  CriticalSectionEnter(FLock);
   try
     if FReports.Count = 0 then
       Exit(TGocciaNullLiteralValue.NullValue);
     ReportText := FReports[0];
     FReports.Delete(0);
   finally
-    LeaveCriticalSection(FLock);
+    CriticalSectionLeave(FLock);
   end;
   Result := TGocciaStringLiteralValue.Create(ReportText);
 end;
@@ -695,7 +694,7 @@ function TBareTest262AgentHost.MonotonicNow(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(GetTickCount64);
+  Result := TGocciaNumberLiteralValue.Create(GetMilliseconds);
 end;
 
 function TBareTest262AgentHost.ReceiveBroadcast(
@@ -712,7 +711,7 @@ begin
   Callback := AArgs.GetElement(0);
   BroadcastValue := nil;
   repeat
-    EnterCriticalSection(FLock);
+    CriticalSectionEnter(FLock);
     try
       if FShuttingDown then
         Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -722,7 +721,7 @@ begin
         Break;
       end;
     finally
-      LeaveCriticalSection(FLock);
+      CriticalSectionLeave(FLock);
     end;
 
     PumpCurrentThreadWork;
@@ -751,11 +750,11 @@ begin
   else
     ReportText := TGocciaUndefinedLiteralValue.UndefinedValue.ToStringLiteral.Value;
 
-  EnterCriticalSection(FLock);
+  CriticalSectionEnter(FLock);
   try
     FReports.Add(ReportText);
   finally
-    LeaveCriticalSection(FLock);
+    CriticalSectionLeave(FLock);
   end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -765,9 +764,9 @@ function TBareTest262AgentHost.SleepAgent(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Deadline: QWord;
+  Deadline: Int64;
   Milliseconds: Int64;
-  NowMilliseconds: QWord;
+  NowMilliseconds: Int64;
   Remaining: Int64;
 begin
   if AArgs.Length = 0 then
@@ -777,12 +776,12 @@ begin
   if Milliseconds < 0 then
     Milliseconds := 0;
 
-  Deadline := GetTickCount64 + QWord(Milliseconds);
+  Deadline := GetMilliseconds + Milliseconds;
   repeat
     PumpCurrentThreadWork;
     CheckInstructionLimit;
     CheckExecutionTimeout;
-    NowMilliseconds := GetTickCount64;
+    NowMilliseconds := GetMilliseconds;
     if NowMilliseconds >= Deadline then
       Break;
     Remaining := Int64(Deadline - NowMilliseconds);
@@ -807,7 +806,7 @@ begin
     ThrowTypeError('$262.agent.start source must be a string');
 
   SourceText := TGocciaStringLiteralValue(AArgs.GetElement(0)).Value;
-  EnterCriticalSection(FLock);
+  CriticalSectionEnter(FLock);
   try
     if FShuttingDown then
       Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -815,7 +814,7 @@ begin
     FWorkers.Add(Worker);
     Worker.Start;
   finally
-    LeaveCriticalSection(FLock);
+    CriticalSectionLeave(FLock);
   end;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -865,10 +864,10 @@ begin
   InitThreadRuntime(False, FOptions.MaxMemoryBytes);
   StartExecutionTimeout(FOptions.TimeoutMs);
   StartInstructionLimit(FOptions.MaxInstructions);
-  Source := TStringList.Create;
+  Source := CreateECMAScriptSourceLines(
+    ReadUTF8FileText(ExpandFileName('scripts' + PathDelim +
+      'test262_harness' + PathDelim + '$262.js')) + sLineBreak + FSourceText);
   try
-    Source.Text := ReadUTF8FileText(ExpandFileName('scripts' + PathDelim +
-      'test262_harness' + PathDelim + '$262.js')) + LineEnding + FSourceText;
     Executor := CreateExecutorForMode(FOptions.Mode);
     try
       Engine := TGocciaEngine.Create('<test262-agent>', Source, Executor);
@@ -924,10 +923,9 @@ end;
 
 procedure AddTest262InlineList(const AItems: TStrings; const AValue: string);
 var
-  I: Integer;
+  DelimiterPos: Integer;
   Item: string;
   ListText: string;
-  Parts: TStringArray;
 begin
   ListText := Trim(AValue);
   if ListText = '' then
@@ -936,26 +934,37 @@ begin
   if (ListText[1] = '[') then
   begin
     Delete(ListText, 1, 1);
-    I := Pos(']', ListText);
-    if I > 0 then
-      ListText := Copy(ListText, 1, I - 1);
+    DelimiterPos := Pos(']', ListText);
+    if DelimiterPos > 0 then
+      ListText := Copy(ListText, 1, DelimiterPos - 1);
   end;
 
-  Parts := ListText.Split([',']);
-  for Item in Parts do
+  repeat
+    DelimiterPos := Pos(',', ListText);
+    if DelimiterPos > 0 then
+    begin
+      Item := Copy(ListText, 1, DelimiterPos - 1);
+      Delete(ListText, 1, DelimiterPos);
+    end
+    else
+    begin
+      Item := ListText;
+      ListText := '';
+    end;
     AddTest262ListItem(AItems, Item);
+  until DelimiterPos = 0;
 end;
 
-procedure ReadTest262Frontmatter(const ASource: UTF8String;
+procedure ReadTest262Frontmatter(const ASource: string;
   const AIncludes: TStrings; out ARaw: Boolean);
 var
   Block: string;
-  ClosePos: SizeInt;
-  ColonPos: SizeInt;
+  ClosePos: NativeInt;
+  ColonPos: NativeInt;
   Key: string;
   Line: string;
   Lines: TStringList;
-  OpenPos: SizeInt;
+  OpenPos: NativeInt;
   Trimmed: string;
   Value: string;
   InFlags: Boolean;
@@ -1023,14 +1032,14 @@ end;
 function Test262SourceCanSuspendAgent(const APath: string): Boolean;
 var
   Block: string;
-  ClosePos: SizeInt;
-  ColonPos: SizeInt;
+  ClosePos: NativeInt;
+  ColonPos: NativeInt;
   InFlags: Boolean;
   Key: string;
   Line: string;
   Lines: TStringList;
-  OpenPos: SizeInt;
-  Source: UTF8String;
+  OpenPos: NativeInt;
+  Source: string;
   Trimmed: string;
   Value: string;
 begin
@@ -1157,7 +1166,7 @@ begin
 end;
 
 function TBareTest262ModuleContentProvider.BuildHarnessPrelude(
-  const APath: string; const ASource: UTF8String): UTF8String;
+  const APath: string; const ASource: string): string;
 var
   I: Integer;
   IncludeName: string;
@@ -1183,12 +1192,12 @@ begin
     begin
       IncludeName := Includes[I];
       if Result <> '' then
-        Result := Result + LineEnding;
+        Result := Result + sLineBreak;
       Result := Result + ReadUTF8FileText(
         HarnessFilePath(SuiteRoot, IncludeName));
     end;
     if Result <> '' then
-      Result := Result + LineEnding + ReadUTF8FileText(
+      Result := Result + sLineBreak + ReadUTF8FileText(
         HarnessFilePath(SuiteRoot, 'goccia-global-shim.js'));
   finally
     Includes.Free;
@@ -1198,7 +1207,7 @@ end;
 function TBareTest262ModuleContentProvider.LoadContent(
   const APath: string): TGocciaModuleContent;
 var
-  HarnessPrelude: UTF8String;
+  HarnessPrelude: string;
   OriginalContent: TGocciaModuleContent;
 begin
   OriginalContent := inherited LoadContent(APath);
@@ -1210,7 +1219,7 @@ begin
     if HarnessPrelude = '' then
       Exit(OriginalContent);
 
-    Result := TGocciaModuleContent.Create(HarnessPrelude + LineEnding +
+    Result := TGocciaModuleContent.Create(HarnessPrelude + sLineBreak +
       OriginalContent.Text, OriginalContent.LastModified);
   except
     OriginalContent.Free;
@@ -1356,7 +1365,7 @@ procedure WriteProfilerReport(const AOptions: TBareOptions);
 begin
   if (not AOptions.ProfileModePresent) or
      (AOptions.ProfileOutputPath = '') or
-     (not Assigned(TGocciaProfiler.Instance)) then
+     ((TGocciaProfiler.Instance = nil)) then
     Exit;
 
   WriteProfileJSON(TGocciaProfiler.Instance, AOptions.ProfileOutputPath);
@@ -1483,7 +1492,7 @@ begin
   if IsStdinPath(AFileName) then
     Result := ReadSourceFromText(Input)
   else
-    Result := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+    Result := CreateFileTextLines(ReadUTF8FileText(AFileName));
 end;
 
 procedure ConfigureEngine(const AEngine: TGocciaEngine;
@@ -1607,13 +1616,13 @@ begin
               except
                 on E: EGocciaBytecodeThrow do
                 begin
-                  WriteLn(StdErr, FormatThrowDetail(E.ThrownValue,
+                  WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue,
                     DisplayName, Source, IsColorTerminal));
                   Result := 1;
                 end;
                 on E: TGocciaThrowValue do
                 begin
-                  WriteLn(StdErr, FormatThrowDetail(E.Value, DisplayName,
+                  WriteLn(ErrOutput, FormatThrowDetail(E.Value, DisplayName,
                     Source, IsColorTerminal, E.Suggestion));
                   Result := 1;
                 end;
@@ -1637,7 +1646,7 @@ begin
     try
       WriteProfilerReport(AOptions);
     finally
-      if Assigned(TGocciaProfiler.Instance) then
+      if (TGocciaProfiler.Instance <> nil) then
         TGocciaProfiler.Shutdown;
       Source.Free;
     end;
@@ -1656,23 +1665,23 @@ begin
     begin
       if Options.Test262Host then
       begin
-        WriteLn(StdErr, TEST262_TIMEOUT_MARKER, ':', E.DurationMs);
+        WriteLn(ErrOutput, TEST262_TIMEOUT_MARKER, ':', E.DurationMs);
         ExitCode := TEST262_TIMEOUT_EXIT_CODE;
       end
       else
       begin
-        WriteLn(StdErr, 'Error: ', E.Message);
+        WriteLn(ErrOutput, 'Error: ', E.Message);
         ExitCode := 1;
       end;
     end;
     on E: TGocciaError do
     begin
-      WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
+      WriteLn(ErrOutput, E.GetDetailedMessage(IsColorTerminal));
       ExitCode := 1;
     end;
     on E: Exception do
     begin
-      WriteLn(StdErr, 'Error: ', E.Message);
+      WriteLn(ErrOutput, 'Error: ', E.Message);
       ExitCode := 1;
     end;
   end;

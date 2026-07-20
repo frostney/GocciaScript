@@ -59,6 +59,7 @@ type
     procedure TestTemplateInterpolationTracksLineTerminators;
     procedure TestTemplateLineContinuationRawNormalizesTerminators;
     procedure TestUnicodeEscapeOverflowRaisesLexerError;
+    procedure TestTokenSpansUseUTF16CodeUnitOffsets;
   public
     procedure SetupTests; override;
   end;
@@ -93,6 +94,29 @@ begin
   Test('Template line-continuation raw strings normalize line terminators',
     TestTemplateLineContinuationRawNormalizesTerminators);
   Test('Unicode escape overflow raises lexer error', TestUnicodeEscapeOverflowRaisesLexerError);
+  Test('Token spans use zero-based half-open UTF-16 code-unit offsets',
+    TestTokenSpansUseUTF16CodeUnitOffsets);
+end;
+
+procedure TLexerTests.TestTokenSpansUseUTF16CodeUnitOffsets;
+var
+  Lexer: TGocciaLexer;
+  Tokens: TObjectList<TGocciaToken>;
+begin
+  Lexer := TGocciaLexer.Create('"' + #$D83D#$DE00 + '";', '<test>');
+  try
+    ScanAllTokens(Lexer, glgInputElementRegExp);
+    Tokens := Lexer.Tokens;
+    Expect<Integer>(Tokens[0].Span.StartOffset).ToBe(0);
+    Expect<Integer>(Tokens[0].Span.EndOffset).ToBe(4);
+    Expect<Integer>(Tokens[0].Span.Length).ToBe(4);
+    Expect<Integer>(Tokens[1].Span.StartOffset).ToBe(4);
+    Expect<Integer>(Tokens[1].Span.EndOffset).ToBe(5);
+    Expect<Integer>(Tokens[2].Span.StartOffset).ToBe(5);
+    Expect<Integer>(Tokens[2].Span.EndOffset).ToBe(5);
+  finally
+    Lexer.Free;
+  end;
 end;
 
 procedure TLexerTests.ScanAllTokens(const ALexer: TGocciaLexer;
@@ -156,7 +180,7 @@ var
   Lexer: TGocciaLexer;
   Token: TGocciaToken;
 begin
-  Lexer := TGocciaLexer.Create('#!/usr/bin/env goccia' + LineEnding +
+  Lexer := TGocciaLexer.Create('#!/usr/bin/env goccia' + sLineBreak +
     'const value = 1;', '<test>');
   try
     Token := Lexer.ScanNextToken(glgInputElementDiv);
@@ -268,39 +292,39 @@ procedure TLexerTests.TestIgnoresLeadingHashbang;
 const
   CRLF = #13#10;
   // ES2026 §12.3 Line Terminators — UTF-8 encoding of LS and PS
-  UTF8_LINE_SEPARATOR = #$E2#$80#$A8;
-  UTF8_PARAGRAPH_SEPARATOR = #$E2#$80#$A9;
+  UNICODE_LINE_SEPARATOR = #$2028;
+  UNICODE_PARAGRAPH_SEPARATOR = #$2029;
 begin
   AssertIgnoresLeadingHashbang(sLineBreak);
   AssertIgnoresLeadingHashbang(CRLF);
   AssertIgnoresLeadingHashbang(#13);
-  AssertIgnoresLeadingHashbang(UTF8_LINE_SEPARATOR);
-  AssertIgnoresLeadingHashbang(UTF8_PARAGRAPH_SEPARATOR);
+  AssertIgnoresLeadingHashbang(UNICODE_LINE_SEPARATOR);
+  AssertIgnoresLeadingHashbang(UNICODE_PARAGRAPH_SEPARATOR);
 end;
 
 procedure TLexerTests.TestPreservesLineNumbersAfterHashbang;
 const
   CRLF = #13#10;
   // ES2026 §12.3 Line Terminators — UTF-8 encoding of LS and PS
-  UTF8_LINE_SEPARATOR = #$E2#$80#$A8;
-  UTF8_PARAGRAPH_SEPARATOR = #$E2#$80#$A9;
+  UNICODE_LINE_SEPARATOR = #$2028;
+  UNICODE_PARAGRAPH_SEPARATOR = #$2029;
 begin
   AssertPreservesLineNumbersAfterHashbang(sLineBreak);
   AssertPreservesLineNumbersAfterHashbang(CRLF);
   AssertPreservesLineNumbersAfterHashbang(#13);
-  AssertPreservesLineNumbersAfterHashbang(UTF8_LINE_SEPARATOR);
-  AssertPreservesLineNumbersAfterHashbang(UTF8_PARAGRAPH_SEPARATOR);
+  AssertPreservesLineNumbersAfterHashbang(UNICODE_LINE_SEPARATOR);
+  AssertPreservesLineNumbersAfterHashbang(UNICODE_PARAGRAPH_SEPARATOR);
 end;
 
 procedure TLexerTests.TestCommentTerminatedByUnicodeLineTerminators;
 const
   // ES2026 §12.3 Line Terminators — UTF-8 encoding of LS and PS
-  UTF8_LINE_SEPARATOR = #$E2#$80#$A8;
-  UTF8_PARAGRAPH_SEPARATOR = #$E2#$80#$A9;
+  UNICODE_LINE_SEPARATOR = #$2028;
+  UNICODE_PARAGRAPH_SEPARATOR = #$2029;
 begin
   AssertCommentTerminatedBy(#13);
-  AssertCommentTerminatedBy(UTF8_LINE_SEPARATOR);
-  AssertCommentTerminatedBy(UTF8_PARAGRAPH_SEPARATOR);
+  AssertCommentTerminatedBy(UNICODE_LINE_SEPARATOR);
+  AssertCommentTerminatedBy(UNICODE_PARAGRAPH_SEPARATOR);
 end;
 
 procedure TLexerTests.TestTokenizesKeywordTokens;
@@ -370,15 +394,15 @@ end;
 
 procedure TLexerTests.TestUnicodeIdentifierStartAndPartCodePoints;
 const
-  UTF8_GREEK_SMALL_LETTER_PI = #$CF#$80;
-  UTF8_ROCKET = #$F0#$9F#$9A#$80;
-  UTF8_ZERO_WIDTH_NON_JOINER = #$E2#$80#$8C;
+  UNICODE_GREEK_SMALL_LETTER_PI = #$03C0;
+  UNICODE_ROCKET = #$D83D#$DE80;
+  UNICODE_ZERO_WIDTH_NON_JOINER = #$200C;
 begin
-  AssertTokenizesIdentifier(UTF8_GREEK_SMALL_LETTER_PI,
-    UTF8_GREEK_SMALL_LETTER_PI);
-  AssertTokenizesIdentifier('\u03C0', UTF8_GREEK_SMALL_LETTER_PI);
-  AssertTokenizesIdentifier('a\u200C', 'a' + UTF8_ZERO_WIDTH_NON_JOINER);
-  AssertTokenizesIdentifier(UTF8_ROCKET, UTF8_ROCKET);
+  AssertTokenizesIdentifier(UNICODE_GREEK_SMALL_LETTER_PI,
+    UNICODE_GREEK_SMALL_LETTER_PI);
+  AssertTokenizesIdentifier('\u03C0', UNICODE_GREEK_SMALL_LETTER_PI);
+  AssertTokenizesIdentifier('a\u200C', 'a' + UNICODE_ZERO_WIDTH_NON_JOINER);
+  AssertTokenizesIdentifier(UNICODE_ROCKET, UNICODE_ROCKET);
 end;
 
 procedure TLexerTests.TestEscapedIdentifiersUseECMAScriptIdentifierRules;
@@ -421,19 +445,19 @@ end;
 
 procedure TLexerTests.TestECMAScriptUnicodeWhitespaceCodePoints;
 const
-  UTF8_OGHAM_SPACE = #$E1#$9A#$80;
-  UTF8_EM_SPACE = #$E2#$80#$83;
-  UTF8_NARROW_NO_BREAK_SPACE = #$E2#$80#$AF;
-  UTF8_MEDIUM_MATHEMATICAL_SPACE = #$E2#$81#$9F;
-  UTF8_IDEOGRAPHIC_SPACE = #$E3#$80#$80;
-  UTF8_ZERO_WIDTH_NO_BREAK_SPACE = #$EF#$BB#$BF;
+  UNICODE_OGHAM_SPACE = #$1680;
+  UNICODE_EM_SPACE = #$2003;
+  UNICODE_NARROW_NO_BREAK_SPACE = #$202F;
+  UNICODE_MEDIUM_MATHEMATICAL_SPACE = #$205F;
+  UNICODE_IDEOGRAPHIC_SPACE = #$3000;
+  UNICODE_ZERO_WIDTH_NO_BREAK_SPACE = #$FEFF;
   WhitespaceSamples: array[0..5] of string = (
-    UTF8_OGHAM_SPACE,
-    UTF8_EM_SPACE,
-    UTF8_NARROW_NO_BREAK_SPACE,
-    UTF8_MEDIUM_MATHEMATICAL_SPACE,
-    UTF8_IDEOGRAPHIC_SPACE,
-    UTF8_ZERO_WIDTH_NO_BREAK_SPACE
+    UNICODE_OGHAM_SPACE,
+    UNICODE_EM_SPACE,
+    UNICODE_NARROW_NO_BREAK_SPACE,
+    UNICODE_MEDIUM_MATHEMATICAL_SPACE,
+    UNICODE_IDEOGRAPHIC_SPACE,
+    UNICODE_ZERO_WIDTH_NO_BREAK_SPACE
   );
 var
   I: Integer;
@@ -490,13 +514,13 @@ end;
 
 procedure TLexerTests.TestUnicodeLineTerminatorsInBlockComment;
 const
-  UTF8_LINE_SEPARATOR = #$E2#$80#$A8;
-  UTF8_PARAGRAPH_SEPARATOR = #$E2#$80#$A9;
+  UNICODE_LINE_SEPARATOR = #$2028;
+  UNICODE_PARAGRAPH_SEPARATOR = #$2029;
 var
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
 begin
-  Lexer := TGocciaLexer.Create('/* a' + UTF8_LINE_SEPARATOR + 'b */const x = 1;', '<test>');
+  Lexer := TGocciaLexer.Create('/* a' + UNICODE_LINE_SEPARATOR + 'b */const x = 1;', '<test>');
   try
     ScanAllTokens(Lexer, glgInputElementRegExp);
     Tokens := Lexer.Tokens;
@@ -506,7 +530,7 @@ begin
     Lexer.Free;
   end;
 
-  Lexer := TGocciaLexer.Create('/* a' + UTF8_PARAGRAPH_SEPARATOR + 'b */const x = 1;', '<test>');
+  Lexer := TGocciaLexer.Create('/* a' + UNICODE_PARAGRAPH_SEPARATOR + 'b */const x = 1;', '<test>');
   try
     ScanAllTokens(Lexer, glgInputElementRegExp);
     Tokens := Lexer.Tokens;
@@ -519,15 +543,15 @@ end;
 
 procedure TLexerTests.TestUnicodeLineTerminatorsBetweenTokens;
 const
-  UTF8_LINE_SEPARATOR = #$E2#$80#$A8;
-  UTF8_PARAGRAPH_SEPARATOR = #$E2#$80#$A9;
+  UNICODE_LINE_SEPARATOR = #$2028;
+  UNICODE_PARAGRAPH_SEPARATOR = #$2029;
 var
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
 begin
   Lexer := TGocciaLexer.Create(
-    'var' + UTF8_LINE_SEPARATOR + 'x' + UTF8_PARAGRAPH_SEPARATOR +
-    '=' + UTF8_LINE_SEPARATOR + '1' + UTF8_PARAGRAPH_SEPARATOR + ';',
+    'var' + UNICODE_LINE_SEPARATOR + 'x' + UNICODE_PARAGRAPH_SEPARATOR +
+    '=' + UNICODE_LINE_SEPARATOR + '1' + UNICODE_PARAGRAPH_SEPARATOR + ';',
     '<test>');
   try
     ScanAllTokens(Lexer, glgInputElementRegExp);
@@ -617,14 +641,14 @@ end;
 
 procedure TLexerTests.TestAwaitSlashLookaheadStopsAtUnicodeLineTerminators;
 const
-  UTF8_LINE_SEPARATOR = #$E2#$80#$A8;
-  UTF8_PARAGRAPH_SEPARATOR = #$E2#$80#$A9;
+  UNICODE_LINE_SEPARATOR = #$2028;
+  UNICODE_PARAGRAPH_SEPARATOR = #$2029;
 var
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
 begin
   Lexer := TGocciaLexer.Create(
-    'const half = (await) => await/' + UTF8_LINE_SEPARATOR + '/2/;',
+    'const half = (await) => await/' + UNICODE_LINE_SEPARATOR + '/2/;',
     '<test>');
   try
     ScanGoalSequence(Lexer, [
@@ -641,7 +665,7 @@ begin
   end;
 
   Lexer := TGocciaLexer.Create(
-    'const half = (await) => await/' + UTF8_PARAGRAPH_SEPARATOR + '/2/;',
+    'const half = (await) => await/' + UNICODE_PARAGRAPH_SEPARATOR + '/2/;',
     '<test>');
   try
     ScanGoalSequence(Lexer, [
@@ -704,23 +728,24 @@ end;
 
 procedure TLexerTests.TestTemplateLineContinuationRawNormalizesTerminators;
 const
-  TEMPLATE_RAW_SEPARATOR = #1;
-  UTF8_LINE_SEPARATOR = #$E2#$80#$A8;
-  UTF8_PARAGRAPH_SEPARATOR = #$E2#$80#$A9;
+  UNICODE_LINE_SEPARATOR = #$2028;
+  UNICODE_PARAGRAPH_SEPARATOR = #$2029;
 var
   ExpectedRaw: string;
   Lexer: TGocciaLexer;
   Token: TGocciaToken;
 begin
   ExpectedRaw := '\' + #10 + '\' + #10 + '\' + #10 + '\' +
-    UTF8_LINE_SEPARATOR + '\' + UTF8_PARAGRAPH_SEPARATOR;
+    UNICODE_LINE_SEPARATOR + '\' + UNICODE_PARAGRAPH_SEPARATOR;
   Lexer := TGocciaLexer.Create('`\' + #13 + '\' + #13#10 + '\' + #10 +
-    '\' + UTF8_LINE_SEPARATOR + '\' + UTF8_PARAGRAPH_SEPARATOR + '`',
+    '\' + UNICODE_LINE_SEPARATOR + '\' + UNICODE_PARAGRAPH_SEPARATOR + '`',
     '<test>');
   try
     Token := Lexer.ScanNextToken(glgInputElementRegExp);
     Expect<TGocciaTokenType>(Token.TokenType).ToBe(gttTemplate);
-    Expect<string>(Token.Lexeme).ToBe(TEMPLATE_RAW_SEPARATOR + ExpectedRaw);
+    Expect<string>(Token.TemplateValue.Cooked).ToBe('');
+    Expect<string>(Token.TemplateValue.Raw).ToBe(ExpectedRaw);
+    Expect<Boolean>(Token.TemplateValue.CookedValid).ToBe(True);
     Token := Lexer.ScanNextToken(glgInputElementRegExp);
     Expect<TGocciaTokenType>(Token.TokenType).ToBe(gttEOF);
   finally
@@ -760,7 +785,7 @@ begin
   TGarbageCollector.Initialize;
   try
     TestRunnerProgram.AddSuite(TLexerTests.Create('Lexer'));
-    TestRunnerProgram.Run;
+    RunGocciaTests;
     ExitCode := TestResultToExitCode;
   finally
     TGarbageCollector.Shutdown;

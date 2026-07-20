@@ -5,6 +5,8 @@ unit Goccia.Temporal.Calendar;
 interface
 
 uses
+  CriticalSections,
+
   Goccia.Temporal.Utils;
 
 type
@@ -69,7 +71,8 @@ uses
   Math,
   SysUtils,
 
-  ICU;
+  ICU,
+  TextEncoding;
 
 const
   ICU_SUCCESS = 0;
@@ -305,7 +308,7 @@ var
   CalendarICU: TTemporalCalendarICU;
   CalendarICULoadAttempted: Boolean;
   CalendarICUAvailable: Boolean;
-  CalendarICULock: TRTLCriticalSection;
+  CalendarICULock: TGocciaCriticalSection;
 
 threadvar
   LunisolarPartsCache: array[0..LUNISOLAR_CACHE_SIZE - 1] of TLunisolarPartsCacheEntry;
@@ -318,7 +321,8 @@ threadvar
   DangiLunisolarYearOffsetValid: Boolean;
   DangiLunisolarYearOffset: Integer;
 
-function ICUSucceeded(const AStatus: TICUErrorCode): Boolean; inline;
+function ICUSucceeded(const AStatus: TICUErrorCode): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := AStatus <= ICU_SUCCESS;
 end;
@@ -367,7 +371,7 @@ end;
 
 function TryGetCalendarICU(out AICU: TTemporalCalendarICU): Boolean;
 begin
-  EnterCriticalSection(CalendarICULock);
+  CriticalSectionEnter(CalendarICULock);
   try
     if not CalendarICULoadAttempted then
     begin
@@ -378,12 +382,14 @@ begin
     AICU := CalendarICU;
     Result := CalendarICUAvailable;
   finally
-    LeaveCriticalSection(CalendarICULock);
+    CriticalSectionLeave(CalendarICULock);
   end;
 end;
 
-function CalendarLocale(const ACalendarId: string): AnsiString;
+function TryCalendarLocale(const ACalendarId: string;
+  out ALocaleBytes: TBytes): Boolean;
 var
+  ErrorOffset: Integer;
   ICUCalendarId: string;
 begin
   if ACalendarId = 'gregory' then
@@ -392,7 +398,8 @@ begin
     ICUCalendarId := 'ethiopic-amete-alem'
   else
     ICUCalendarId := ACalendarId;
-  Result := AnsiString('en_US@calendar=' + ICUCalendarId);
+  Result := TryEncodeUTF8NullTerminated(
+    'en_US@calendar=' + ICUCalendarId, ALocaleBytes, ErrorOffset);
 end;
 
 function CalendarDateBefore(const AY, AM, AD, ABY, ABM, ABD: Integer): Boolean;
@@ -943,17 +950,20 @@ begin
     Result := '';
 end;
 
-function IsLunisolarCalendar(const ACalendarId: string): Boolean; inline;
+function IsLunisolarCalendar(const ACalendarId: string): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (ACalendarId = 'chinese') or (ACalendarId = 'dangi');
 end;
 
-function IsUnsupportedTemporalCalendarConversion(const ACalendarId: string): Boolean; inline;
+function IsUnsupportedTemporalCalendarConversion(const ACalendarId: string): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (ACalendarId = 'islamic') or (ACalendarId = 'islamic-rgsa');
 end;
 
-function LunisolarCalendarCode(const ACalendarId: string): Integer; inline;
+function LunisolarCalendarCode(const ACalendarId: string): Integer;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if ACalendarId = 'chinese' then
     Result := 1
@@ -964,7 +974,8 @@ begin
 end;
 
 function LunisolarCacheIndex(const ACalendarCode, AYear, AMonth,
-  ADay: Integer): Integer; inline;
+  ADay: Integer): Integer;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   Hash: Int64;
 begin
@@ -976,7 +987,8 @@ begin
 end;
 
 function LunisolarDateToISOIndex(const ACalendarCode, AYear, AMonth,
-  ADay: Integer; const AMatchMonthCode, AIsLeapMonth: Boolean): Integer; inline;
+  ADay: Integer; const AMatchMonthCode, AIsLeapMonth: Boolean): Integer;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   LeapCode: Integer;
 begin
@@ -2378,17 +2390,18 @@ end;
 function TryOpenCalendar(const AICU: TTemporalCalendarICU; const ACalendarId: string;
   out ACalendar: TICUCalendar): Boolean;
 var
-  ZoneId: UnicodeString;
-  Locale: AnsiString;
+  ZoneId: string;
+  LocaleBytes: TBytes;
   Status: TICUErrorCode;
 begin
   Result := False;
   ACalendar := nil;
-  ZoneId := UnicodeString('UTC');
-  Locale := CalendarLocale(ACalendarId);
+  ZoneId := string('UTC');
+  if not TryCalendarLocale(ACalendarId, LocaleBytes) then
+    Exit;
   Status := ICU_SUCCESS;
   ACalendar := AICU.OpenCalendar(PWideChar(ZoneId), Length(ZoneId),
-    PAnsiChar(Locale), ICU_CAL_DEFAULT, Status);
+    PAnsiChar(@LocaleBytes[0]), ICU_CAL_DEFAULT, Status);
   Result := ICUSucceeded(Status) and Assigned(ACalendar);
   if Result and Assigned(AICU.SetGregorianChange) and
      ((ACalendarId = 'gregory') or (ACalendarId = 'buddhist') or
@@ -3406,12 +3419,12 @@ begin
 end;
 
 initialization
-  InitCriticalSection(CalendarICULock);
+  CriticalSectionInit(CalendarICULock);
   CalendarICULoadAttempted := False;
   CalendarICUAvailable := False;
 
 finalization
   CloseCachedTemporalCalendars;
-  DoneCriticalSection(CalendarICULock);
+  CriticalSectionDone(CalendarICULock);
 
 end.

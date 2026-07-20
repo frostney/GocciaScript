@@ -19,7 +19,7 @@ type
     procedure TestEscapesUnitSeparator;
     procedure TestShortEscapes;
     procedure TestCombinedSpecialChars;
-    procedure TestPreservesMultibyteUTF8;
+    procedure TestPreservesUnicodeCharacters;
     procedure TestQuoteJSONStringWraps;
     procedure TestPlainASCIIPassthrough;
   public
@@ -35,7 +35,8 @@ begin
   Test('Escapes unit separator (#31) as \u001f', TestEscapesUnitSeparator);
   Test('Uses short escapes for \b \t \n \f \r', TestShortEscapes);
   Test('Handles multiple special chars in one string', TestCombinedSpecialChars);
-  Test('Preserves non-control multibyte UTF-8 characters', TestPreservesMultibyteUTF8);
+  Test('Preserves non-control Unicode characters',
+    TestPreservesUnicodeCharacters);
   Test('QuoteJSONString wraps escaped result in double quotes', TestQuoteJSONStringWraps);
   Test('Plain ASCII passes through unchanged', TestPlainASCIIPassthrough);
 end;
@@ -88,19 +89,17 @@ begin
   Expect<string>(EscapeJSONString(#9 + '/' + #31)).ToBe('\t' + '/' + '\u001f');
 end;
 
-// Non-ASCII characters above U+001F must pass through unescaped.
-// U+00E9 (e-acute) is the two-byte UTF-8 sequence #$C3#$A9.
-// U+1F600 (grinning face emoji) is a four-byte UTF-8 sequence.
-procedure TJSONUtilsTests.TestPreservesMultibyteUTF8;
+// Non-ASCII UTF-16 code units above U+001F must pass through unescaped.
+procedure TJSONUtilsTests.TestPreservesUnicodeCharacters;
 var
   EAcute: string;
   Grinning: string;
 begin
-  EAcute := #$C3#$A9; // UTF-8 for U+00E9 (e with acute accent)
+  EAcute := #$00E9;
   Expect<string>(EscapeJSONString(EAcute)).ToBe(EAcute);
   Expect<string>(EscapeJSONString('caf' + EAcute)).ToBe('caf' + EAcute);
 
-  Grinning := #$F0#$9F#$98#$80; // UTF-8 for U+1F600 (grinning face emoji)
+  Grinning := #$D83D#$DE00;
   Expect<string>(EscapeJSONString(Grinning)).ToBe(Grinning);
   Expect<string>(EscapeJSONString('face' + Grinning)).ToBe('face' + Grinning);
 end;

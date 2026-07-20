@@ -4,12 +4,25 @@ unit Goccia.TestSetup;
 
 interface
 
+procedure RunGocciaTests;
+
 implementation
 
 uses
-  Math;
+  TestingPascalLibrary,
 
-initialization
-  SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
+  Goccia.FloatingPoint;
+
+procedure RunGocciaTests;
+var
+  FloatingPointState: TGocciaFloatingPointState;
+begin
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  try
+    TestRunnerProgram.Run;
+  finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
+  end;
+end;
 
 end.

@@ -7,6 +7,7 @@ uses
   SysUtils,
 
   TestingPascalLibrary,
+  TextEncoding,
   TextSemantics;
 
 type
@@ -16,12 +17,13 @@ type
     procedure TestUnicodeCaseMapping;
     procedure TestUTF8WellFormedChecks;
     procedure TestUTF16WellFormedChecks;
-    procedure TestUTF8CodePointIndexing;
+    procedure TestUTF16CodePointIndexing;
     procedure TestUTF16CodeUnitIndexing;
+    procedure TestUTF16StringRepetition;
     procedure TestUTF16StringIdentity;
     procedure TestReplacementPatternExpansion;
     procedure TestECMAScriptSourceLinesSplitUnicodeLineTerminators;
-    procedure TestTextLineHelpersPreserveUTF8;
+    procedure TestTextLineHelpersPreserveUnicode;
     procedure TestSourceTextFallsBackAfterMutation;
   public
     procedure SetupTests; override;
@@ -31,34 +33,36 @@ procedure TTextSemanticsTests.SetupTests;
 begin
   Test('TrimECMAScriptWhitespace removes Unicode whitespace',
     TestTrimECMAScriptWhitespace);
-  Test('Unicode case mapping handles non-ASCII UTF-8',
+  Test('Unicode case mapping handles non-ASCII text',
     TestUnicodeCaseMapping);
-  Test('UTF-8 well-formed helpers reject invalid sequences',
+  Test('UTF-8 decoder rejects invalid byte sequences',
     TestUTF8WellFormedChecks);
   Test('UTF-16 well-formed helpers follow surrogate pairing',
     TestUTF16WellFormedChecks);
-  Test('UTF-8 code point helpers index multibyte characters',
-    TestUTF8CodePointIndexing);
+  Test('Code point helpers index UTF-16 text',
+    TestUTF16CodePointIndexing);
   Test('UTF-16 code unit helpers count astral characters as surrogate pairs',
     TestUTF16CodeUnitIndexing);
-  Test('UTF-16 string identity ignores internal byte representation',
+  Test('UTF-16 string repetition preserves exact code units',
+    TestUTF16StringRepetition);
+  Test('UTF-16 string identity compares canonical code units',
     TestUTF16StringIdentity);
   Test('Replacement pattern expansion follows GetSubstitution tokens',
     TestReplacementPatternExpansion);
   Test('ECMAScript source lines split Unicode line terminators',
     TestECMAScriptSourceLinesSplitUnicodeLineTerminators);
-  Test('Text line helpers preserve UTF-8 bytes',
-    TestTextLineHelpersPreserveUTF8);
+  Test('Text line helpers preserve Unicode text',
+    TestTextLineHelpersPreserveUnicode);
   Test('Preserved source text falls back after line-list mutation',
     TestSourceTextFallsBackAfterMutation);
 end;
 
 procedure TTextSemanticsTests.TestTrimECMAScriptWhitespace;
 const
-  NO_BREAK_SPACE = #$C2#$A0;
-  EN_QUAD = #$E2#$80#$80;
-  OGHAM_SPACE_MARK = #$E1#$9A#$80;
-  BYTE_ORDER_MARK = #$EF#$BB#$BF;
+  NO_BREAK_SPACE = #$00A0;
+  EN_QUAD = #$2000;
+  OGHAM_SPACE_MARK = #$1680;
+  BYTE_ORDER_MARK = #$FEFF;
 var
   Text: string;
 begin
@@ -73,149 +77,191 @@ end;
 
 procedure TTextSemanticsTests.TestUnicodeCaseMapping;
 const
-  UPPER_TEXT = #$C3#$89 + #$C3#$96 + #$CE#$A3;
-  LOWER_TEXT = #$C3#$A9 + #$C3#$B6 + #$CF#$82;
-  NONCHARACTER = #$EF#$B7#$90;
-  UTF8_HIGH_SURROGATE = #$ED#$A0#$80;
+  UPPER_TEXT = #$00C9 + #$00D6 + #$03A3;
+  LOWER_TEXT = #$00E9 + #$00F6 + #$03C2;
+  NONCHARACTER = #$FDD0;
+  HIGH_SURROGATE = #$D800;
 begin
-  Expect<string>(UnicodeLowerCaseUTF8(UPPER_TEXT)).ToBe(LOWER_TEXT);
-  Expect<string>(UnicodeUpperCaseUTF8(LOWER_TEXT)).ToBe(UPPER_TEXT);
-  Expect<string>(UnicodeLowerCaseUTF8(#$C4#$B0)).ToBe('i' + #$CC#$87);
-  Expect<string>(UnicodeLowerCaseUTF8('A' + #$CE#$A3)).ToBe(
-    'a' + #$CF#$82);
-  Expect<string>(UnicodeUpperCaseUTF8('a' + NONCHARACTER + #$C3#$9F)).ToBe(
+  Expect<string>(ECMAScriptDefaultLowerCase(UPPER_TEXT)).ToBe(LOWER_TEXT);
+  Expect<string>(ECMAScriptDefaultUpperCase(LOWER_TEXT)).ToBe(UPPER_TEXT);
+  Expect<string>(ECMAScriptDefaultLowerCase(#$0130)).ToBe('i' + #$0307);
+  Expect<string>(ECMAScriptDefaultLowerCase('A' + #$03A3)).ToBe(
+    'a' + #$03C2);
+  Expect<string>(ECMAScriptDefaultUpperCase(
+    'a' + NONCHARACTER + #$00DF)).ToBe(
     'A' + NONCHARACTER + 'SS');
-  Expect<string>(UnicodeLowerCaseUTF8('A' + NONCHARACTER + #$C4#$B0)).ToBe(
-    'a' + NONCHARACTER + 'i' + #$CC#$87);
-  Expect<string>(UnicodeLowerCaseUTF8('A' + UTF8_HIGH_SURROGATE)).ToBe(
-    'a' + UTF8_HIGH_SURROGATE);
-  Expect<string>(UnicodeUpperCaseUTF8('a' + UTF8_HIGH_SURROGATE)).ToBe(
-    'A' + UTF8_HIGH_SURROGATE);
+  Expect<string>(ECMAScriptDefaultLowerCase(
+    'A' + NONCHARACTER + #$0130)).ToBe(
+    'a' + NONCHARACTER + 'i' + #$0307);
+  Expect<string>(ECMAScriptDefaultLowerCase(
+    'A' + HIGH_SURROGATE)).ToBe(
+    'a' + HIGH_SURROGATE);
+  Expect<string>(ECMAScriptDefaultUpperCase(
+    'a' + HIGH_SURROGATE)).ToBe(
+    'A' + HIGH_SURROGATE);
+  Expect<string>(ECMAScriptDefaultUpperCase(#$D801#$DC28)).ToBe(
+    #$D801#$DC00);
+  Expect<string>(ECMAScriptDefaultLowerCase(#$D801#$DC00)).ToBe(
+    #$D801#$DC28);
+  Expect<string>(ECMAScriptDefaultUpperCase(#$FB03)).ToBe('FFI');
+  Expect<string>(ECMAScriptDefaultLowerCase('A' + #$03A3 + #$0301)).ToBe(
+    'a' + #$03C2 + #$0301);
+  Expect<string>(ECMAScriptDefaultLowerCase(
+    'A' + #$03A3 + #$0301 + 'B')).ToBe(
+    'a' + #$03C3 + #$0301 + 'b');
 end;
 
 procedure TTextSemanticsTests.TestUTF8WellFormedChecks;
-const
-  GRINNING_FACE = #$F0#$9F#$98#$80;
-  OVERLONG_NULL = #$C0#$80;
-  SURROGATE_CODE_POINT = #$ED#$A0#$80;
+var
+  Bytes: TBytes;
+  ErrorOffset: Integer;
+  Text: string;
 begin
-  Expect<Boolean>(IsWellFormedUTF8('ok' + GRINNING_FACE)).ToBe(True);
-  Expect<Boolean>(IsWellFormedUTF8(OVERLONG_NULL)).ToBe(False);
-  Expect<Boolean>(IsWellFormedUTF8(SURROGATE_CODE_POINT)).ToBe(False);
-  Expect<string>(ToWellFormedUTF8('a' + OVERLONG_NULL + 'b')).ToBe(
-    'a' + UTF8_REPLACEMENT_CHARACTER + UTF8_REPLACEMENT_CHARACTER + 'b');
-  Expect<string>(ToWellFormedUTF8(#$E2 + 'AB')).ToBe(
-    UTF8_REPLACEMENT_CHARACTER + 'AB');
-  Expect<string>(ToWellFormedUTF8(#$E2#$80 + 'A')).ToBe(
-    UTF8_REPLACEMENT_CHARACTER + 'A');
+  Expect<Boolean>(TryDecodeUTF8(TBytes.Create($F0, $9F, $98, $80), Text,
+    ErrorOffset))
+    .ToBe(True);
+  Expect<Integer>(ErrorOffset).ToBe(-1);
+  Expect<string>(Text).ToBe(#$D83D#$DE00);
+  Expect<Boolean>(TryDecodeUTF8(TBytes.Create(Ord('a'), $C0, $80), Text,
+    ErrorOffset)).ToBe(False);
+  Expect<Integer>(ErrorOffset).ToBe(1);
+  Expect<Boolean>(TryDecodeUTF8(TBytes.Create($ED, $A0, $80), Text,
+    ErrorOffset))
+    .ToBe(False);
+  Expect<Integer>(ErrorOffset).ToBe(0);
+  Expect<Boolean>(TryEncodeUTF8('a' + #$D800, Bytes, ErrorOffset))
+    .ToBe(False);
+  Expect<Integer>(ErrorOffset).ToBe(1);
+  Expect<string>(DecodeUTF8WithReplacement(
+    TBytes.Create(Ord('a'), $C0, $80, Ord('b')))).ToBe(
+    'a' + #$FFFD + #$FFFD + 'b');
+  Expect<string>(DecodeUTF8WithReplacement(
+    TBytes.Create($E2, Ord('A'), Ord('B')))).ToBe(#$FFFD + 'AB');
+  Expect<string>(DecodeUTF8WithReplacement(
+    TBytes.Create($E2, $80, Ord('A')))).ToBe(#$FFFD + 'A');
 end;
 
 procedure TTextSemanticsTests.TestUTF16WellFormedChecks;
 const
-  UTF8_HIGH_SURROGATE = #$ED#$A0#$BD;
-  UTF8_LOW_SURROGATE = #$ED#$B2#$A9;
-  UTF8_PILE_OF_POO = #$F0#$9F#$92#$A9;
+  HIGH_SURROGATE = #$D83D;
+  LOW_SURROGATE = #$DCA9;
+  PILE_OF_POO = #$D83D#$DCA9;
 begin
-  Expect<Boolean>(IsWellFormedUTF16('a' + UTF8_HIGH_SURROGATE +
-    UTF8_LOW_SURROGATE + 'd')).ToBe(True);
-  Expect<Boolean>(IsWellFormedUTF16(UTF8_PILE_OF_POO)).ToBe(True);
-  Expect<Boolean>(IsWellFormedUTF16(UTF8_HIGH_SURROGATE)).ToBe(False);
-  Expect<Boolean>(IsWellFormedUTF16(UTF8_LOW_SURROGATE)).ToBe(False);
-  Expect<Boolean>(IsWellFormedUTF16(UTF8_HIGH_SURROGATE +
-    UTF8_HIGH_SURROGATE)).ToBe(False);
-  Expect<string>(ToWellFormedUTF16('a' + UTF8_HIGH_SURROGATE +
-    UTF8_LOW_SURROGATE + 'd')).ToBe(
-    'a' + UTF8_HIGH_SURROGATE + UTF8_LOW_SURROGATE + 'd');
-  Expect<string>(ToWellFormedUTF16('a' + UTF8_HIGH_SURROGATE + 'd')).ToBe(
-    'a' + UTF8_REPLACEMENT_CHARACTER + 'd');
-  Expect<string>(ToWellFormedUTF16(UTF8_LOW_SURROGATE +
-    UTF8_HIGH_SURROGATE)).ToBe(
-    UTF8_REPLACEMENT_CHARACTER + UTF8_REPLACEMENT_CHARACTER);
+  Expect<Boolean>(IsWellFormedUTF16('a' + HIGH_SURROGATE +
+    LOW_SURROGATE + 'd')).ToBe(True);
+  Expect<Boolean>(IsWellFormedUTF16(PILE_OF_POO)).ToBe(True);
+  Expect<Boolean>(IsWellFormedUTF16(HIGH_SURROGATE)).ToBe(False);
+  Expect<Boolean>(IsWellFormedUTF16(LOW_SURROGATE)).ToBe(False);
+  Expect<Boolean>(IsWellFormedUTF16(HIGH_SURROGATE +
+    HIGH_SURROGATE)).ToBe(False);
+  Expect<string>(ToWellFormedUTF16('a' + HIGH_SURROGATE +
+    LOW_SURROGATE + 'd')).ToBe('a' + PILE_OF_POO + 'd');
+  Expect<string>(ToWellFormedUTF16('a' + HIGH_SURROGATE + 'd')).ToBe(
+    'a' + UNICODE_REPLACEMENT_CHARACTER + 'd');
+  Expect<string>(ToWellFormedUTF16(LOW_SURROGATE +
+    HIGH_SURROGATE)).ToBe(
+    UNICODE_REPLACEMENT_CHARACTER + UNICODE_REPLACEMENT_CHARACTER);
 end;
 
-procedure TTextSemanticsTests.TestUTF8CodePointIndexing;
+procedure TTextSemanticsTests.TestUTF16CodePointIndexing;
 const
-  UTF8_LINE_SEPARATOR = #$E2#$80#$A8;
-  UTF8_PARAGRAPH_SEPARATOR = #$E2#$80#$A9;
-  UTF8_NONCHARACTER = #$EF#$BF#$BF;
-  UTF8_HIGH_SURROGATE = #$ED#$A0#$80;
+  LINE_SEPARATOR = #$2028;
+  PARAGRAPH_SEPARATOR = #$2029;
+  NONCHARACTER = #$FFFF;
+  HIGH_SURROGATE = #$D800;
 var
   Text: string;
 begin
-  Text := 'a' + UTF8_LINE_SEPARATOR + UTF8_PARAGRAPH_SEPARATOR +
-    UTF8_NONCHARACTER + 'b';
-  Expect<Integer>(UTF8CodePointLength(Text)).ToBe(5);
-  Expect<string>(UTF8CodePointAt(Text, 0)).ToBe('a');
-  Expect<string>(UTF8CodePointAt(Text, 1)).ToBe(UTF8_LINE_SEPARATOR);
-  Expect<string>(UTF8CodePointAt(Text, 2)).ToBe(UTF8_PARAGRAPH_SEPARATOR);
-  Expect<string>(UTF8CodePointAt(Text, 3)).ToBe(UTF8_NONCHARACTER);
-  Expect<string>(UTF8CodePointAt(Text, 4)).ToBe('b');
-  Expect<string>(UTF8CodePointAt(Text, 5)).ToBe('');
-  Expect<Integer>(UTF8CodePointLength(UTF8_HIGH_SURROGATE)).ToBe(1);
-  Text := 'a' + UTF8_HIGH_SURROGATE + 'b';
-  Expect<Integer>(UTF8CodePointLength(Text)).ToBe(3);
-  Expect<string>(UTF8CodePointAt(Text, 0)).ToBe('a');
-  Expect<string>(UTF8CodePointAt(Text, 2)).ToBe('b');
+  Text := 'a' + LINE_SEPARATOR + PARAGRAPH_SEPARATOR + NONCHARACTER + 'b';
+  Expect<Integer>(UnicodeCodePointLength(Text)).ToBe(5);
+  Expect<string>(UnicodeCodePointAt(Text, 0)).ToBe('a');
+  Expect<string>(UnicodeCodePointAt(Text, 1)).ToBe(LINE_SEPARATOR);
+  Expect<string>(UnicodeCodePointAt(Text, 2)).ToBe(PARAGRAPH_SEPARATOR);
+  Expect<string>(UnicodeCodePointAt(Text, 3)).ToBe(NONCHARACTER);
+  Expect<string>(UnicodeCodePointAt(Text, 4)).ToBe('b');
+  Expect<string>(UnicodeCodePointAt(Text, 5)).ToBe('');
+  Expect<Integer>(UnicodeCodePointLength(HIGH_SURROGATE)).ToBe(1);
+  Text := 'a' + HIGH_SURROGATE + 'b';
+  Expect<Integer>(UnicodeCodePointLength(Text)).ToBe(3);
+  Expect<string>(UnicodeCodePointAt(Text, 0)).ToBe('a');
+  Expect<string>(UnicodeCodePointAt(Text, 2)).ToBe('b');
 end;
 
 procedure TTextSemanticsTests.TestUTF16CodeUnitIndexing;
 const
-  UTF8_LINE_SEPARATOR = #$E2#$80#$A8;
-  UTF8_GRINNING_FACE = #$F0#$9F#$98#$80;
-  UTF8_HIGH_SURROGATE = #$ED#$A0#$80;
+  LINE_SEPARATOR = #$2028;
+  GRINNING_FACE = #$D83D#$DE00;
+  HIGH_SURROGATE = #$D800;
 var
   CodePoint: Cardinal;
   Text1, Text2: string;
 begin
-  Expect<Integer>(UTF16CodeUnitLength('a' + UTF8_LINE_SEPARATOR + 'b')).ToBe(3);
-  Expect<string>(UTF16CodeUnitAt('a' + UTF8_LINE_SEPARATOR + 'b', 1)).ToBe(
-    UTF8_LINE_SEPARATOR);
-  Expect<Integer>(UTF16CodeUnitLength('a' + UTF8_GRINNING_FACE + 'b')).ToBe(4);
-  Expect<string>(UTF16CodeUnitAt('a' + UTF8_GRINNING_FACE + 'b', 4)).ToBe('');
-  Expect<Boolean>(TryUTF16CodePointValueAt(UTF8_GRINNING_FACE, 0, CodePoint))
+  Expect<Integer>(UTF16CodeUnitLength('a' + LINE_SEPARATOR + 'b')).ToBe(3);
+  Expect<string>(UTF16CodeUnitAt('a' + LINE_SEPARATOR + 'b', 1)).ToBe(
+    LINE_SEPARATOR);
+  Expect<Integer>(UTF16CodeUnitLength('a' + GRINNING_FACE + 'b')).ToBe(4);
+  Expect<string>(UTF16CodeUnitAt('a' + GRINNING_FACE + 'b', 4)).ToBe('');
+  Expect<Boolean>(TryUTF16CodePointValueAt(GRINNING_FACE, 0, CodePoint))
     .ToBe(True);
   Expect<Integer>(CodePoint).ToBe($1F600);
-  Expect<Boolean>(TryUTF16CodePointValueAt(UTF8_GRINNING_FACE, 1, CodePoint))
+  Expect<Boolean>(TryUTF16CodePointValueAt(GRINNING_FACE, 1, CodePoint))
     .ToBe(True);
   Expect<Integer>(CodePoint).ToBe($DE00);
-  Expect<Integer>(UTF16CodeUnitLength(UTF8_HIGH_SURROGATE)).ToBe(1);
-  Expect<string>(UTF16CodeUnitAt(UTF8_HIGH_SURROGATE, 0)).ToBe(
-    UTF8_HIGH_SURROGATE);
-  Expect<Boolean>(TryUTF16CodePointValueAt(UTF8_HIGH_SURROGATE, 0, CodePoint))
+  Expect<Integer>(UTF16CodeUnitLength(HIGH_SURROGATE)).ToBe(1);
+  Expect<string>(UTF16CodeUnitAt(HIGH_SURROGATE, 0)).ToBe(HIGH_SURROGATE);
+  Expect<Boolean>(TryUTF16CodePointValueAt(HIGH_SURROGATE, 0, CodePoint))
     .ToBe(True);
   Expect<Integer>(CodePoint).ToBe($D800);
-  Expect<string>(UTF16Substring('a' + UTF8_GRINNING_FACE + 'b', 1, 2)).ToBe(
-    UTF8_GRINNING_FACE);
-  Expect<string>(UTF16Substring('a' + UTF8_GRINNING_FACE + 'b', 1, 1)).ToBe(
-    #$ED#$A0#$BD);
-  Expect<Integer>(UTF16IndexOf('a' + UTF8_GRINNING_FACE + 'b',
-    UTF8_GRINNING_FACE)).ToBe(1);
-  Expect<Integer>(UTF16LastIndexOf(UTF8_GRINNING_FACE + 'a' +
-    UTF8_GRINNING_FACE, UTF8_GRINNING_FACE, 4)).ToBe(3);
-  Text1 := 'a' + UTF8_GRINNING_FACE + 'b';
-  Text2 := UTF8_LINE_SEPARATOR + UTF8_GRINNING_FACE;
+  Expect<string>(UTF16Substring('a' + GRINNING_FACE + 'b', 1, 2)).ToBe(
+    GRINNING_FACE);
+  Expect<string>(UTF16Substring('a' + GRINNING_FACE + 'b', 1, 1)).ToBe(
+    #$D83D);
+  Expect<Integer>(UTF16IndexOf('a' + GRINNING_FACE + 'b',
+    GRINNING_FACE)).ToBe(1);
+  Expect<Integer>(UTF16LastIndexOf(GRINNING_FACE + 'a' +
+    GRINNING_FACE, GRINNING_FACE, 4)).ToBe(3);
+  Text1 := 'a' + GRINNING_FACE + 'b';
+  Text2 := LINE_SEPARATOR + GRINNING_FACE;
   Expect<Integer>(UTF16CodeUnitLength(Text1)).ToBe(4);
   Expect<Integer>(UTF16CodeUnitLength(Text2)).ToBe(3);
   Expect<Integer>(UTF16CodeUnitLength(Text1)).ToBe(4);
 end;
 
+procedure TTextSemanticsTests.TestUTF16StringRepetition;
+var
+  Text: string;
+begin
+  Text := RepeatUTF16String(UTF16CodeUnitPairToString($D83D, $DE00), 2);
+  Expect<Integer>(Length(Text)).ToBe(4);
+  Expect<Integer>(Ord(Text[1])).ToBe($D83D);
+  Expect<Integer>(Ord(Text[2])).ToBe($DE00);
+  Expect<Integer>(Ord(Text[3])).ToBe($D83D);
+  Expect<Integer>(Ord(Text[4])).ToBe($DE00);
+
+  Text := RepeatUTF16String(UTF16CodeUnitToString($03B1), 3);
+  Expect<Integer>(Length(Text)).ToBe(3);
+  Expect<Integer>(Ord(Text[1])).ToBe($03B1);
+  Expect<Integer>(Ord(Text[2])).ToBe($03B1);
+  Expect<Integer>(Ord(Text[3])).ToBe($03B1);
+end;
+
 procedure TTextSemanticsTests.TestUTF16StringIdentity;
 const
-  UTF8_GRINNING_FACE = #$F0#$9F#$98#$80;
-  UTF8_HIGH_SURROGATE = #$ED#$A0#$BD;
-  UTF8_LOW_SURROGATE = #$ED#$B8#$80;
+  GRINNING_FACE = #$D83D#$DE00;
+  HIGH_SURROGATE = #$D83D;
+  LOW_SURROGATE = #$DE00;
 var
   SurrogatePair: string;
 begin
-  SurrogatePair := UTF8_HIGH_SURROGATE + UTF8_LOW_SURROGATE;
-  Expect<Boolean>(UTF16StringsEqual(UTF8_GRINNING_FACE, SurrogatePair))
+  SurrogatePair := HIGH_SURROGATE + LOW_SURROGATE;
+  Expect<Boolean>(UTF16StringsEqual(GRINNING_FACE, SurrogatePair))
     .ToBe(True);
-  Expect<Integer>(UTF16StringHash(UTF8_GRINNING_FACE)).ToBe(
+  Expect<Integer>(UTF16StringHash(GRINNING_FACE)).ToBe(
     UTF16StringHash(SurrogatePair));
   Expect<Boolean>(UTF16StringsEqual('a', 'b')).ToBe(False);
-  Expect<Boolean>(UTF16StringsEqual(#$C3#$A9, #$C3#$A8)).ToBe(False);
-  Expect<Boolean>(UTF16StringsEqual(UTF8_GRINNING_FACE,
-    UTF8_HIGH_SURROGATE)).ToBe(False);
+  Expect<Boolean>(UTF16StringsEqual(#$00E9, #$00E8)).ToBe(False);
+  Expect<Boolean>(UTF16StringsEqual(GRINNING_FACE,
+    HIGH_SURROGATE)).ToBe(False);
 end;
 
 procedure TTextSemanticsTests.TestReplacementPatternExpansion;
@@ -242,13 +288,13 @@ end;
 
 procedure TTextSemanticsTests.TestECMAScriptSourceLinesSplitUnicodeLineTerminators;
 const
-  UTF8_LINE_SEPARATOR = #$E2#$80#$A8;
-  UTF8_PARAGRAPH_SEPARATOR = #$E2#$80#$A9;
+  LINE_SEPARATOR = #$2028;
+  PARAGRAPH_SEPARATOR = #$2029;
 var
   Lines: TStringList;
 begin
   Lines := CreateECMAScriptSourceLines(
-    'var' + UTF8_LINE_SEPARATOR + 'x' + UTF8_PARAGRAPH_SEPARATOR + '= 1;');
+    'var' + LINE_SEPARATOR + 'x' + PARAGRAPH_SEPARATOR + '= 1;');
   try
     Expect<Integer>(Lines.Count).ToBe(3);
     Expect<string>(Lines[0]).ToBe('var');
@@ -259,22 +305,22 @@ begin
   end;
 end;
 
-procedure TTextSemanticsTests.TestTextLineHelpersPreserveUTF8;
+procedure TTextSemanticsTests.TestTextLineHelpersPreserveUnicode;
 const
-  UTF8_WORD_BYTES = 'na' + #$C3#$AF + 've';
+  UNICODE_WORD = 'na' + #$00EF + 've';
 var
   I: Integer;
   Lines: TStringList;
   Text: string;
 begin
-  Lines := CreateUTF8StringList('first' + #13#10 + UTF8_WORD_BYTES + #13);
+  Lines := CreateTextLines('first' + #13#10 + UNICODE_WORD + #13);
   try
     Text := StringListToLFText(Lines);
     Expect<Integer>(Length(Text)).ToBe(
-      Length('first' + #10 + UTF8_WORD_BYTES + #10));
+      Length('first' + #10 + UNICODE_WORD + #10));
     for I := 1 to Length(Text) do
       Expect<Integer>(Ord(Text[I])).ToBe(
-        Ord(('first' + #10 + UTF8_WORD_BYTES + #10)[I]));
+        Ord(('first' + #10 + UNICODE_WORD + #10)[I]));
   finally
     Lines.Free;
   end;

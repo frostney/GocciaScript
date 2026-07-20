@@ -130,7 +130,7 @@ begin
       AContext.Scope.EffectiveArgumentsObjectEnabled;
     Options := Compiler.OptimizationOptions;
     Options.PreserveCoverageShape :=
-      Assigned(TGocciaCoverageTracker.Instance) and
+      (TGocciaCoverageTracker.Instance <> nil) and
       TGocciaCoverageTracker.Instance.Enabled;
     Compiler.OptimizationOptions := Options;
     BytecodeModule := Compiler.Compile(AProgram);
@@ -219,7 +219,7 @@ begin
     Compiler.ArgumentsObjectEnabled := FArgumentsObjectEnabled;
     Options := Compiler.OptimizationOptions;
     Options.PreserveCoverageShape :=
-      Assigned(TGocciaCoverageTracker.Instance) and
+      (TGocciaCoverageTracker.Instance <> nil) and
       TGocciaCoverageTracker.Instance.Enabled;
     Compiler.OptimizationOptions := Options;
     Result := Compiler.Compile(AProgram);
@@ -237,12 +237,12 @@ begin
   GC := TGarbageCollector.Instance;
   WasEnabled := GC.Enabled;
   GC.Enabled := False;
-  FVM.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
+  FVM.CoverageEnabled := (TGocciaCoverageTracker.Instance <> nil)
     and TGocciaCoverageTracker.Instance.Enabled;
-  FVM.ProfilingOpcodes := Assigned(TGocciaProfiler.Instance)
+  FVM.ProfilingOpcodes := (TGocciaProfiler.Instance <> nil)
     and TGocciaProfiler.Instance.Enabled
     and (pmOpcodes in TGocciaProfiler.Instance.Mode);
-  FVM.ProfilingFunctions := Assigned(TGocciaProfiler.Instance)
+  FVM.ProfilingFunctions := (TGocciaProfiler.Instance <> nil)
     and TGocciaProfiler.Instance.Enabled
     and (pmFunctions in TGocciaProfiler.Instance.Mode);
   FVM.GlobalBackedTopLevel := FGlobalBackedTopLevel;

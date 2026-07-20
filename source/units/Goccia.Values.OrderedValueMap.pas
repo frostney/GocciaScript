@@ -47,7 +47,8 @@ type
     // keys()/values()/entries()/forEach observe +0. SameValueZero already
     // treats -0 and +0 as equal for lookup, so callers only need this for the
     // value that gets stored.
-    class function CanonicalizeKey(const AKey: TGocciaValue): TGocciaValue; static; inline;
+    class function CanonicalizeKey(const AKey: TGocciaValue): TGocciaValue; static;
+    {$IFDEF FPC}inline;{$ENDIF}
 
     // Insert or in-place update (keeping the original insertion position),
     // canonicalizing the key first.
@@ -64,11 +65,14 @@ type
     // entries appended during iteration are visited and deleted (tombstoned)
     // entries are skipped, matching the spec [[MapData]] iteration model.
     function NextEntry(var ACursor: Integer;
-      out AKey, AValue: TGocciaValue): Boolean; inline;
+      out AKey, AValue: TGocciaValue): Boolean;
+      {$IFDEF FPC}inline;{$ENDIF}
 
     // Bracket a live iteration so compaction cannot renumber entries mid-walk.
-    procedure RetainIterator; inline;
-    procedure ReleaseIterator; inline;
+    procedure RetainIterator;
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure ReleaseIterator;
+    {$IFDEF FPC}inline;{$ENDIF}
 
     property ActiveIterators: Integer read FActiveIterators;
   end;
@@ -77,6 +81,7 @@ implementation
 
 uses
   BigInteger,
+  NumberBits,
   TextSemantics,
 
   Goccia.Arithmetic,
@@ -93,12 +98,15 @@ const
   HASH_ZERO      = Cardinal($165667B1);
   HASH_NAN       = Cardinal($D6E8FEB8);
 
-{$PUSH}{$R-}{$Q-}
+{$IFDEF FPC}
+  {$PUSH}
+{$ENDIF}
+{$R-}{$Q-}
 function TGocciaOrderedValueMap.HashKey(const AKey: TGocciaValue): Cardinal;
 var
   Num: TGocciaNumberLiteralValue;
   D: Double;
-  Bits: QWord;
+  Bits: UInt64;
   S: string;
   I: Integer;
 begin
@@ -114,8 +122,8 @@ begin
     D := Num.Value;
     if D = 0 then
       Exit(HASH_ZERO);
-    Bits := PQWord(@D)^;
-    Bits := (Bits xor (Bits shr 4)) * QWord(11400714819323198485);
+    Bits := DoubleToBits(D);
+    Bits := (Bits xor (Bits shr 4)) * UInt64(11400714819323198485);
     Exit(Cardinal(Bits xor (Bits shr 32)));
   end;
 
@@ -151,11 +159,15 @@ begin
   // Objects, functions, symbols: SameValueZero is reference identity, so hash
   // the pointer. The GC never relocates objects, so the pointer is stable for
   // the entry's lifetime.
-  Bits := QWord(PtrUInt(AKey));
-  Bits := (Bits xor (Bits shr 4)) * QWord(11400714819323198485);
+  Bits := UInt64(NativeUInt(AKey));
+  Bits := (Bits xor (Bits shr 4)) * UInt64(11400714819323198485);
   Result := Cardinal(Bits xor (Bits shr 32));
 end;
-{$POP}
+{$IFDEF FPC}
+  {$POP}
+{$ELSE}
+  {$IFNDEF PRODUCTION}{$R+}{$Q+}{$ENDIF}
+{$ENDIF}
 
 function TGocciaOrderedValueMap.KeysEqual(const A, B: TGocciaValue): Boolean;
 begin

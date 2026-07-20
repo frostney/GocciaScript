@@ -7,6 +7,8 @@ interface
 uses
   Generics.Collections,
 
+  CriticalSections,
+
   Goccia.Builtins.Testing.Snapshots;
 
 type
@@ -16,10 +18,10 @@ type
     FSourcePath: string;
     FBackingSourcePath: string;
     FSnapshotPath: string;
-    FInlineSnapshotGeneration: QWord;
+    FInlineSnapshotGeneration: UInt64;
     FInlineEdits: TList<TGocciaInlineSnapshotEdit>;
 
-    procedure WriteUTF8Text(const APath: string; const AContent: UTF8String);
+    procedure WriteUTF8Text(const APath: string; const AContent: string);
   public
     constructor Create(const ASourcePath: string);
     destructor Destroy; override;
@@ -50,6 +52,7 @@ uses
   Math,
   SysUtils,
 
+  TextEncoding,
   TextSemantics,
 
   Goccia.ScriptLoader.Input,
@@ -62,21 +65,23 @@ type
   end;
 
 var
-  InlineSnapshotWriteLock: TRTLCriticalSection;
+  InlineSnapshotWriteLock: TGocciaCriticalSection;
   PendingInlineEdits: TList<TGocciaInlineSnapshotEdit>;
   PendingInlineError: string;
-  PendingInlineGeneration: QWord;
+  PendingInlineGeneration: UInt64;
   PendingInlineOpen: Boolean;
 
-procedure WriteUTF8TextFile(const APath: string; const AContent: UTF8String);
+procedure WriteUTF8TextFile(const APath: string; const AContent: string);
 var
+  Bytes: TBytes;
   Stream: TFileStream;
 begin
   ForceDirectories(ExtractFileDir(APath));
+  Bytes := EncodeUTF8WithReplacement(AContent);
   Stream := TFileStream.Create(APath, fmCreate);
   try
-    if Length(AContent) > 0 then
-      Stream.WriteBuffer(AContent[1], Length(AContent));
+    if Length(Bytes) > 0 then
+      Stream.WriteBuffer(Bytes[0], Length(Bytes));
   finally
     Stream.Free;
   end;
@@ -111,7 +116,7 @@ begin
   end;
   if ASource[AIndex] = #10 then
     Exit(1);
-  if TryReadUTF8CodePoint(ASource, AIndex, CodePoint, ByteLength) and
+  if TryReadCodePointAt(ASource, AIndex, CodePoint, ByteLength) and
      ((CodePoint = $2028) or (CodePoint = $2029)) then
     Result := ByteLength;
 end;
@@ -124,7 +129,7 @@ var
 begin
   while AIndex <= Length(ASource) do
   begin
-    if not TryReadUTF8CodePoint(ASource, AIndex, CodePoint,
+    if not TryReadCodePointAt(ASource, AIndex, CodePoint,
        ByteLength) then
       Exit;
     if not IsECMAScriptWhitespaceCodePoint(CodePoint) then
@@ -145,7 +150,7 @@ begin
     while (StartIndex > 1) and
           ((Ord(ASource[StartIndex]) and $C0) = $80) do
       Dec(StartIndex);
-    if not TryReadUTF8CodePoint(ASource, StartIndex, CodePoint,
+    if not TryReadCodePointAt(ASource, StartIndex, CodePoint,
        ByteLength) or (StartIndex + ByteLength - 1 <> AIndex) or
        not IsECMAScriptWhitespaceCodePoint(CodePoint) then
       Exit;
@@ -178,7 +183,7 @@ begin
       Inc(Line);
       Inc(Index);
     end
-    else if TryReadUTF8CodePoint(ASource, Index, CodePoint, ByteLength) and
+    else if TryReadCodePointAt(ASource, Index, CodePoint, ByteLength) and
             ((CodePoint = $2028) or (CodePoint = $2029)) then
     begin
       Inc(Line);
@@ -194,7 +199,7 @@ begin
   while (Index <= Length(ASource)) and (Column < AColumn) and
         not (ASource[Index] in [#10, #13]) do
   begin
-    if TryReadUTF8CodePoint(ASource, Index, CodePoint, ByteLength) and
+    if TryReadCodePointAt(ASource, Index, CodePoint, ByteLength) and
        ((CodePoint = $2028) or (CodePoint = $2029)) then
       Break;
     Inc(Index);
@@ -763,7 +768,8 @@ begin
       [AEdit.SnapshotArgumentIndex, AEdit.Line, AEdit.Column]);
 end;
 
-function CompareInlineEdits(constref ALeft,
+function CompareInlineEdits(
+  {$IFDEF FPC}constref{$ELSE}const{$ENDIF} ALeft,
   ARight: TGocciaInlineSnapshotEdit): Integer;
 begin
   Result := CompareText(ALeft.SourcePath, ARight.SourcePath);
@@ -786,7 +792,7 @@ begin
     Exit;
   PartIndex := MultifilePartIndex(ASectionPath);
   BackingPath := MultifileOriginalPath(ASectionPath);
-  Lines := CreateUTF8FileTextLines(ReadUTF8FileText(BackingPath));
+  Lines := CreateFileTextLines(ReadUTF8FileText(BackingPath));
   try
     PartCount := 0;
     SegmentStart := 0;
@@ -826,11 +832,11 @@ begin
     FBackingSourcePath := MultifileOriginalPath(ASourcePath);
   FSnapshotPath := IncludeTrailingPathDelimiter(ExtractFileDir(ASourcePath)) +
     '__snapshots__' + PathDelim + ExtractFileName(ASourcePath) + '.snap';
-  EnterCriticalSection(InlineSnapshotWriteLock);
+  CriticalSectionEnter(InlineSnapshotWriteLock);
   try
     FInlineSnapshotGeneration := PendingInlineGeneration;
   finally
-    LeaveCriticalSection(InlineSnapshotWriteLock);
+    CriticalSectionLeave(InlineSnapshotWriteLock);
   end;
   FInlineEdits := TList<TGocciaInlineSnapshotEdit>.Create;
 end;
@@ -851,13 +857,13 @@ function TGocciaTestRunnerSnapshotHost.ReadSnapshotFile(
 begin
   Result := FileExists(FSnapshotPath);
   if Result then
-    AContent := string(ReadUTF8FileText(FSnapshotPath))
+    AContent := ReadUTF8FileText(FSnapshotPath)
   else
     AContent := '';
 end;
 
 procedure TGocciaTestRunnerSnapshotHost.WriteUTF8Text(const APath: string;
-  const AContent: UTF8String);
+  const AContent: string);
 begin
   WriteUTF8TextFile(APath, AContent);
 end;
@@ -865,7 +871,7 @@ end;
 procedure TGocciaTestRunnerSnapshotHost.WriteSnapshotFile(
   const AContent: string);
 begin
-  WriteUTF8Text(FSnapshotPath, UTF8String(AContent));
+  WriteUTF8Text(FSnapshotPath, string(AContent));
 end;
 
 procedure TGocciaTestRunnerSnapshotHost.DeleteSnapshotFile;
@@ -915,7 +921,7 @@ begin
   if not HasPersistentSource then
     raise Exception.Create('Inline snapshots require a persistent source file');
 
-  EnterCriticalSection(InlineSnapshotWriteLock);
+  CriticalSectionEnter(InlineSnapshotWriteLock);
   try
     { A watchdog-abandoned worker can resume after the runner has finalized
       this run. Discard its host-local edits instead of allowing them to enter
@@ -955,32 +961,32 @@ begin
     end;
     FInlineEdits.Clear;
   finally
-    LeaveCriticalSection(InlineSnapshotWriteLock);
+    CriticalSectionLeave(InlineSnapshotWriteLock);
   end;
 end;
 
 procedure ResetPendingInlineSnapshots;
 begin
-  EnterCriticalSection(InlineSnapshotWriteLock);
+  CriticalSectionEnter(InlineSnapshotWriteLock);
   try
     Inc(PendingInlineGeneration);
     PendingInlineOpen := True;
     PendingInlineEdits.Clear;
     PendingInlineError := '';
   finally
-    LeaveCriticalSection(InlineSnapshotWriteLock);
+    CriticalSectionLeave(InlineSnapshotWriteLock);
   end;
 end;
 
 procedure DiscardPendingInlineSnapshots;
 begin
-  EnterCriticalSection(InlineSnapshotWriteLock);
+  CriticalSectionEnter(InlineSnapshotWriteLock);
   try
     PendingInlineOpen := False;
     PendingInlineEdits.Clear;
     PendingInlineError := '';
   finally
-    LeaveCriticalSection(InlineSnapshotWriteLock);
+    CriticalSectionLeave(InlineSnapshotWriteLock);
   end;
 end;
 
@@ -989,7 +995,7 @@ var
   Edit: TGocciaInlineSnapshotEdit;
   CurrentPath, Source: string;
 begin
-  EnterCriticalSection(InlineSnapshotWriteLock);
+  CriticalSectionEnter(InlineSnapshotWriteLock);
   try
     PendingInlineOpen := False;
     if PendingInlineError <> '' then
@@ -1004,32 +1010,32 @@ begin
       if Edit.SourcePath <> CurrentPath then
       begin
         if CurrentPath <> '' then
-          WriteUTF8TextFile(CurrentPath, UTF8String(Source));
+          WriteUTF8TextFile(CurrentPath, string(Source));
         CurrentPath := Edit.SourcePath;
         if not FileExists(CurrentPath) then
           raise Exception.Create('Inline snapshot source does not exist: ' +
             CurrentPath);
-        Source := string(ReadUTF8FileText(CurrentPath));
+        Source := ReadUTF8FileText(CurrentPath);
       end;
       Source := ApplyInlineEdit(Source, Edit);
     end;
     if CurrentPath <> '' then
-      WriteUTF8TextFile(CurrentPath, UTF8String(Source));
+      WriteUTF8TextFile(CurrentPath, string(Source));
   finally
     PendingInlineEdits.Clear;
     PendingInlineError := '';
-    LeaveCriticalSection(InlineSnapshotWriteLock);
+    CriticalSectionLeave(InlineSnapshotWriteLock);
   end;
 end;
 
 initialization
-  InitCriticalSection(InlineSnapshotWriteLock);
+  CriticalSectionInit(InlineSnapshotWriteLock);
   PendingInlineEdits := TList<TGocciaInlineSnapshotEdit>.Create;
   PendingInlineGeneration := 0;
   PendingInlineOpen := False;
 
 finalization
   PendingInlineEdits.Free;
-  DoneCriticalSection(InlineSnapshotWriteLock);
+  CriticalSectionDone(InlineSnapshotWriteLock);
 
 end.

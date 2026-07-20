@@ -118,9 +118,10 @@ uses
 var
   GTemporalPlainDateTimeSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetTemporalPlainDateTimeShared: TGocciaSharedPrototype; inline;
+function GetTemporalPlainDateTimeShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTemporalPlainDateTimeSharedSlot))
   else
     Result := nil;
@@ -234,7 +235,8 @@ begin
       Copy(Result, SecondPos + 2, Length(Result) - SecondPos - 1);
 end;
 
-procedure ConstrainPlainDateTimeLeapSecond(var ASecond: Integer); inline;
+procedure ConstrainPlainDateTimeLeapSecond(var ASecond: Integer);
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if ASecond = 60 then
     ASecond := 59;
@@ -591,7 +593,7 @@ begin
   if FCalendarId = '' then
     ThrowRangeError('Unknown calendar: ' + ACalendarId, SSuggestTemporalDateRange);
   InitializePrototype;
-  if Assigned(GetTemporalPlainDateTimeShared) then
+  if (GetTemporalPlainDateTimeShared <> nil) then
     FPrototype := GetTemporalPlainDateTimeShared.Prototype;
 end;
 
@@ -601,8 +603,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetTemporalPlainDateTimeShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetTemporalPlainDateTimeShared <> nil) then Exit;
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GTemporalPlainDateTimeSharedSlot, Shared);
   Members := TGocciaMemberCollection.Create;

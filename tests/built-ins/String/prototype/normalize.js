@@ -24,6 +24,20 @@ describe("String.prototype.normalize", () => {
     expect("\u212B".normalize("NFKC")).toBe("\u00C5");
   });
 
+  test("recursively decomposes and canonically orders combining marks", () => {
+    expect("\u01FA".normalize("NFD")).toBe("A\u030A\u0301");
+    expect("q\u0307\u0323".normalize("NFD")).toBe("q\u0323\u0307");
+  });
+
+  test("normalizes Hangul algorithmically", () => {
+    expect("\uAC01".normalize("NFD")).toBe("\u1100\u1161\u11A8");
+    expect("\u1100\u1161\u11A8".normalize("NFC")).toBe("\uAC01");
+  });
+
+  test("preserves unpaired UTF-16 surrogates", () => {
+    expect("\uD800a\uDC00".normalize("NFKC")).toBe("\uD800a\uDC00");
+  });
+
   test("throws RangeError for invalid form", () => {
     expect(() => "abc".normalize("INVALID")).toThrow(RangeError);
   });

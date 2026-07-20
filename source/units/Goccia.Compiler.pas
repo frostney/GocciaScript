@@ -75,6 +75,7 @@ uses
   SysUtils,
 
   OrderedStringMap,
+  UnicodeStringList,
 
   Goccia.AST.BindingPatterns,
   Goccia.Bytecode,
@@ -441,10 +442,9 @@ procedure PredeclareVarDeclLocals(const AVarDecl: TGocciaVariableDeclaration;
   const AScope: TGocciaCompilerScope);
 var
   I: Integer;
-  Names: TStringList;
+  Names: TUnicodeStringList;
 begin
-  Names := TStringList.Create;
-  Names.CaseSensitive := True;
+  Names := TUnicodeStringList.Create;
   try
     CollectVariableDeclarationBindingNames(AVarDecl, Names, True);
     for I := 0 to Names.Count - 1 do
@@ -576,7 +576,7 @@ var
   ExportVarDecl: TGocciaExportVariableDeclaration;
   I: Integer;
   Name: string;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   Stmt: TGocciaStatement;
 begin
   for I := 0 to AStatements.Count - 1 do
@@ -596,9 +596,8 @@ begin
     else if Stmt is TGocciaExportVariableDeclaration then
     begin
       ExportVarDecl := TGocciaExportVariableDeclaration(Stmt);
-      Names := TStringList.Create;
+      Names := TUnicodeStringList.Create;
       try
-        Names.CaseSensitive := True;
         CollectVariableDeclarationBindingNames(ExportVarDecl.Declaration,
           Names, True);
         for Name in Names do
@@ -610,9 +609,8 @@ begin
     else if Stmt is TGocciaExportDestructuringDeclaration then
     begin
       ExportDestructuringDecl := TGocciaExportDestructuringDeclaration(Stmt);
-      Names := TStringList.Create;
+      Names := TUnicodeStringList.Create;
       try
-        Names.CaseSensitive := True;
         CollectPatternBindingNames(ExportDestructuringDecl.Declaration.Pattern,
           Names, True);
         for Name in Names do
@@ -821,7 +819,7 @@ var
   WithStmt: TGocciaWithStatement;
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I, J: Integer;
 begin
   if ANode is TGocciaVariableDeclaration then
@@ -832,8 +830,7 @@ begin
         if not (ASkipUninitializedVars and
            (not VarDecl.Variables[I].HasInitializer)) then
         begin
-          Names := TStringList.Create;
-          Names.CaseSensitive := True;
+          Names := TUnicodeStringList.Create;
           try
             CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
             for J := 0 to Names.Count - 1 do
@@ -857,8 +854,7 @@ begin
         if not (ASkipUninitializedVars and
            (not VarDecl.Variables[I].HasInitializer)) then
         begin
-          Names := TStringList.Create;
-          Names.CaseSensitive := True;
+          Names := TUnicodeStringList.Create;
           try
             CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
             for J := 0 to Names.Count - 1 do
@@ -985,14 +981,15 @@ begin
       AIncludeNonStrictBlockFunctionVarBindings, True, ASkipUninitializedVars);
 end;
 
-procedure AddUniqueVarName(const ANames: TStringList; const AName: string);
+procedure AddUniqueVarName(const ANames: TUnicodeStringList;
+  const AName: string);
 begin
   if (AName <> '') and (ANames.IndexOf(AName) < 0) then
     ANames.Add(AName);
 end;
 
 procedure CollectUninitializedVarDeclarations(const ANode: TGocciaASTNode;
-  const ANames: TStringList);
+  const ANames: TUnicodeStringList);
 var
   Block: TGocciaBlockStatement;
   DoWhileStmt: TGocciaDoWhileStatement;
@@ -1090,7 +1087,7 @@ end;
 
 procedure EmitHoistedGlobalVarDeclarationsForNames(
   const ACtx: TGocciaCompilationContext;
-  const ANames: TStringList);
+  const ANames: TUnicodeStringList);
 var
   I: Integer;
   NameIdx: UInt16;
@@ -1108,11 +1105,10 @@ procedure EmitUninitializedTopLevelGlobalVarDeclarations(
   const AStatements: TObjectList<TGocciaStatement>);
 var
   I: Integer;
-  Names: TStringList;
+  Names: TUnicodeStringList;
 begin
-  Names := TStringList.Create;
+  Names := TUnicodeStringList.Create;
   try
-    Names.CaseSensitive := True;
     for I := 0 to AStatements.Count - 1 do
       CollectUninitializedVarDeclarations(AStatements[I], Names);
     EmitHoistedGlobalVarDeclarationsForNames(ACtx, Names);

@@ -16,4 +16,9 @@ describe("Math.sinh", () => {
     expect(Math.sinh(-Infinity)).toBe(-Infinity);
     expect(Math.sinh(NaN)).toBeNaN();
   });
+
+  test("retains precision for small inputs", () => {
+    expect(Math.sinh(1e-20)).toBe(1e-20);
+    expect(Math.sinh(-1e-20)).toBe(-1e-20);
+  });
 });

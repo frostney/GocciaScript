@@ -34,6 +34,11 @@ describe("Number.parseInt", () => {
     expect(Number.parseInt("10px")).toBe(10);
   });
 
+  test("accepts only ASCII radix digits", () => {
+    expect(Number.parseInt("1\u0131", 36)).toBe(1);
+    expect(Number.isNaN(Number.parseInt("\u0131", 36))).toBe(true);
+  });
+
   test("returns NaN for non-parseable strings", () => {
     expect(Number.isNaN(Number.parseInt("abc"))).toBe(true);
     expect(Number.isNaN(Number.parseInt(""))).toBe(true);

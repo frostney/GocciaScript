@@ -85,7 +85,8 @@ function CoerceToISOInstant(const AStr: string; out ADate: TTemporalDateRecord;
 function CoerceToISOYearMonth(const AStr: string; out AYear, AMonth: Integer): Boolean;
 function CoerceToISOMonthDay(const AStr: string; out AMonth, ADay: Integer): Boolean;
 
-function CompareIntegers(const A, B: Integer): Integer; inline;
+function CompareIntegers(const A, B: Integer): Integer;
+{$IFDEF FPC}inline;{$ENDIF}
 function CompareDates(const AYear1, AMonth1, ADay1, AYear2, AMonth2, ADay2: Integer): Integer;
 function CompareTimes(const AHour1, AMinute1, ASecond1, AMs1, AUs1, ANs1,
   AHour2, AMinute2, ASecond2, AMs2, AUs2, ANs2: Integer): Integer;

@@ -27,11 +27,11 @@ type
     FContentType: TGocciaVirtualModuleContentType;
     FLoaded: Boolean;
     FProvenance: string;
-    FText: UTF8String;
+    FText: string;
   public
     constructor Create(const AAddress: string;
       const AContentType: TGocciaVirtualModuleContentType;
-      const AText: UTF8String; const ABytes: TBytes;
+      const AText: string; const ABytes: TBytes;
       const AProvenance: string);
     function Clone: TGocciaVirtualModuleDefinition;
 
@@ -40,7 +40,7 @@ type
     property ContentType: TGocciaVirtualModuleContentType read FContentType;
     property Loaded: Boolean read FLoaded write FLoaded;
     property Provenance: string read FProvenance;
-    property Text: UTF8String read FText;
+    property Text: string read FText;
   end;
 
   TGocciaVirtualModuleRegistry = class
@@ -55,11 +55,11 @@ type
 
     procedure Add(const AAddress, ABaseAddress: string;
       const AContentType: TGocciaVirtualModuleContentType;
-      const AText: UTF8String; const ABytes: TBytes;
+      const AText: string; const ABytes: TBytes;
       const AProvenance: string);
     procedure AddText(const AAddress, ABaseAddress: string;
       const AContentType: TGocciaVirtualModuleContentType;
-      const AContent: UTF8String; const AProvenance: string = '');
+      const AContent: string; const AProvenance: string = '');
     function CanonicalAddress(const AAddress,
       ABaseAddress: string): string;
     procedure CopyFrom(const ASource: TGocciaVirtualModuleRegistry);
@@ -83,7 +83,7 @@ function VirtualModuleContentTypeName(
 implementation
 
 uses
-  base64;
+  Goccia.Base64;
 
 function IsRelativeSpecifier(const AValue: string): Boolean;
 begin
@@ -93,7 +93,7 @@ end;
 
 function HasScheme(const AValue: string): Boolean;
 var
-  ColonPosition, SlashPosition: SizeInt;
+  ColonPosition, SlashPosition: NativeInt;
 begin
   ColonPosition := Pos(':', AValue);
   SlashPosition := Pos('/', AValue);
@@ -110,7 +110,7 @@ begin
     ((Length(AValue) >= 2) and (AValue[2] = ':')));
 end;
 
-function FindAddressSuffixStart(const AValue: string): SizeInt;
+function FindAddressSuffixStart(const AValue: string): NativeInt;
 var
   I: Integer;
 begin
@@ -126,7 +126,7 @@ var
   IsLastSegment: Boolean;
   ResultParts: TStringList;
   PathPart, Prefix, Remainder, Segment, Suffix: string;
-  SchemeEnd, SuffixStart: SizeInt;
+  SchemeEnd, SuffixStart: NativeInt;
 begin
   Prefix := '';
   Remainder := AValue;
@@ -202,7 +202,7 @@ function ResolveRelativeVirtualAddress(const AModulePath,
   AImportingAddress: string): string;
 var
   BaseAddress: string;
-  DelimiterPosition, SuffixStart: SizeInt;
+  DelimiterPosition, SuffixStart: NativeInt;
 begin
   BaseAddress := AImportingAddress;
   if BaseAddress = '' then
@@ -247,7 +247,7 @@ end;
 
 constructor TGocciaVirtualModuleDefinition.Create(const AAddress: string;
   const AContentType: TGocciaVirtualModuleContentType;
-  const AText: UTF8String; const ABytes: TBytes;
+  const AText: string; const ABytes: TBytes;
   const AProvenance: string);
 begin
   inherited Create;
@@ -317,7 +317,7 @@ end;
 
 procedure TGocciaVirtualModuleRegistry.Add(const AAddress,
   ABaseAddress: string; const AContentType: TGocciaVirtualModuleContentType;
-  const AText: UTF8String; const ABytes: TBytes;
+  const AText: string; const ABytes: TBytes;
   const AProvenance: string);
 var
   CanonicalAddress: string;
@@ -342,23 +342,16 @@ end;
 
 procedure TGocciaVirtualModuleRegistry.AddText(const AAddress,
   ABaseAddress: string; const AContentType: TGocciaVirtualModuleContentType;
-  const AContent: UTF8String; const AProvenance: string);
+  const AContent: string; const AProvenance: string);
 var
   Bytes: TBytes;
-  Decoded: string;
 begin
   SetLength(Bytes, 0);
   if AContentType = vmctBytes then
   begin
-    try
-      Decoded := DecodeStringBase64(AContent, True);
-      Bytes := BytesOf(Decoded);
-    except
-      on E: Exception do
-        raise EConvertError.CreateFmt(
-          'Virtual module "%s" contains invalid base64: %s',
-          [AAddress, E.Message]);
-    end;
+    if not TryDecodeBase64Standard(AContent, Bytes) then
+      raise EConvertError.CreateFmt(
+        'Virtual module "%s" contains invalid base64.', [AAddress]);
   end;
   Add(AAddress, ABaseAddress, AContentType, AContent, Bytes, AProvenance);
 end;

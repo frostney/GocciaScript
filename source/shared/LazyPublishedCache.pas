@@ -4,6 +4,9 @@ unit LazyPublishedCache;
 
 interface
 
+uses
+  CriticalSections;
+
 type
   { Lazy one-shot load plus barrier-correct lock-free publication of an
     immutable value of any type T.
@@ -16,8 +19,8 @@ type
     enters the critical section.
 
     The Loaded flag is published LAST. The cold path writes Data and Available
-    first, issues a WriteBarrier, then sets Loaded := True; the warm path reads
-    Loaded and, on a hit, issues a matching ReadBarrier before reading
+    first, issues a WriteMemoryBarrier, then sets Loaded := True; the warm path
+    reads Loaded and, on a hit, issues a matching ReadMemoryBarrier before reading
     Available/Data. A reader that observes Loaded = True therefore also observes
     the fully written immutable value on weakly-ordered targets (e.g. AArch64,
     where FPC lowers the barriers to dmb ishld/ishst); on strongly-ordered
@@ -42,7 +45,7 @@ type
     Data: T;
     Loaded: Boolean;
     Available: Boolean;
-    Lock: TRTLCriticalSection;
+    Lock: TGocciaCriticalSection;
     { Prepare the lock. Call once from the owning unit's initialization. }
     procedure Init;
     { Release the lock. Call once from the owning unit's finalization. }
@@ -56,14 +59,14 @@ implementation
 
 procedure TLazyPublishedCache<T>.Init;
 begin
-  InitCriticalSection(Lock);
+  CriticalSectionInit(Lock);
   Loaded := False;
   Available := False;
 end;
 
 procedure TLazyPublishedCache<T>.Done;
 begin
-  DoneCriticalSection(Lock);
+  CriticalSectionDone(Lock);
 end;
 
 function TLazyPublishedCache<T>.Ensure(const AKey: string;
@@ -71,12 +74,12 @@ function TLazyPublishedCache<T>.Ensure(const AKey: string;
 begin
   if Loaded then
   begin
-    ReadBarrier;
+    ReadMemoryBarrier;
     Result := Available;
     Exit;
   end;
 
-  EnterCriticalSection(Lock);
+  CriticalSectionEnter(Lock);
   try
     if Loaded then
     begin
@@ -92,11 +95,11 @@ begin
     // empty value rather than a stale partial one.
     if not Available then
       Data := Default(T);
-    WriteBarrier;
+    WriteMemoryBarrier;
     Loaded := True;
     Result := Available;
   finally
-    LeaveCriticalSection(Lock);
+    CriticalSectionLeave(Lock);
   end;
 end;
 

@@ -107,6 +107,8 @@ function BuildCLIScriptErrorJSON(const AFileName, AOutputText, AStdoutText,
 implementation
 
 uses
+  StrUtils,
+
   StringBuffer,
 
   Goccia.Constants.PropertyNames,
@@ -299,7 +301,7 @@ begin
   Buffer.Append(',"available":');
   Buffer.Append(IntToStr(AAvailable));
   Buffer.Append(',"parallel":');
-  Buffer.Append(BoolToStr(AUsed > 1, 'true', 'false'));
+  Buffer.Append(StrUtils.IfThen(AUsed > 1, 'true', 'false'));
   Buffer.Append('}');
   Result := Buffer.ToString;
 end;
@@ -317,7 +319,7 @@ begin
   Buffer.Append('"fileName":');
   Buffer.Append(QuoteJSONString(AFileName));
   Buffer.Append(',"ok":');
-  Buffer.Append(BoolToStr(AOk, 'true', 'false'));
+  Buffer.Append(StrUtils.IfThen(AOk, 'true', 'false'));
   if not ACompact then
   begin
     Buffer.Append(',"stdout":');
@@ -364,7 +366,7 @@ begin
     Buffer.Append(',');
   end;
   Buffer.Append('"ok":');
-  Buffer.Append(BoolToStr(AOk, 'true', 'false'));
+  Buffer.Append(StrUtils.IfThen(AOk, 'true', 'false'));
   if not ACompact then
   begin
     Buffer.Append(',"stdout":');

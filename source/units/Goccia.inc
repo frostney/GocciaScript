@@ -8,7 +8,7 @@
 
 { Intl embeds a minimal CLDR subset so locale canonicalization and
   formatting work even when system ICU is unavailable. Under LAKON
-  the embedded-resource loader (TResourceStream / MAKEINTRESOURCE)
+  the embedded-resource loader (TResourceStream)
   has no platform yet, so the define stays off and CLDRData's
   not-available branch compiles instead (every TryGet* answers
   False) — the same defer-with-gate shape as the rung-1 ICU guards.

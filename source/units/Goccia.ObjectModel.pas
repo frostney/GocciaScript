@@ -46,7 +46,7 @@ type
 
   TGocciaMemberCollection = class
   private
-    FMembers: array of TGocciaMemberDefinition;
+    FMembers: TArray<TGocciaMemberDefinition>;
     procedure AddDefinition(const ADefinition: TGocciaMemberDefinition);
   public
     procedure AddMethod(const ACallback: TGocciaNativeFunctionCallback;
@@ -435,7 +435,11 @@ var
   PropKind: TTypeKind;
   PropObject: TObject;
 begin
+  {$IFDEF FPC}
   PropType := APropInfo^.PropType;
+  {$ELSE}
+  PropType := APropInfo^.PropType^;
+  {$ENDIF}
   PropKind := PropType^.Kind;
 
   case PropKind of
@@ -443,7 +447,12 @@ begin
       Result := TGocciaNumberLiteralValue.Create(GetInt64Prop(ATarget, APropInfo));
     tkFloat:
       Result := TGocciaNumberLiteralValue.Create(GetFloatProp(ATarget, APropInfo));
-    tkAString, tkLString, tkSString, tkWString, tkUString:
+    {$IFDEF FPC}
+    tkAString, tkSString,
+    {$ELSE}
+    tkString,
+    {$ENDIF}
+    tkLString, tkWString, tkUString:
       Result := TGocciaStringLiteralValue.Create(GetStrProp(ATarget, APropInfo));
     tkEnumeration:
       if SameText(String(PropType^.Name), 'Boolean') then

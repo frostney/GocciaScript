@@ -89,9 +89,10 @@ uses
 var
   GMapSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetMapShared: TGocciaSharedPrototype; inline;
+function GetMapShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GMapSharedSlot))
   else
     Result := nil;
@@ -115,8 +116,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetMapShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetMapShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GMapSharedSlot, Shared);

@@ -343,6 +343,15 @@ describe("tagged templates", () => {
     expect(raw).toBe("\\xG1");
   });
 
+  test("legacy octal and non-octal decimal escapes set cooked to undefined", () => {
+    const tag = (strings) => strings;
+    expect(tag`\01`[0]).toBe(undefined);
+    expect(tag`\01`.raw[0]).toBe("\\01");
+    expect(tag`\1`[0]).toBe(undefined);
+    expect(tag`\8`[0]).toBe(undefined);
+    expect(tag`\9`[0]).toBe(undefined);
+  });
+
   test("malformed \\u{ sets cooked to undefined", () => {
     let cooked;
     let raw;

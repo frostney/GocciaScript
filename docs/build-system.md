@@ -21,6 +21,8 @@ See [Prerequisites](../README.md#prerequisites) in the README for FPC installati
 
 - **instantfpc** — Comes bundled with FreePascal. Used to run `build.pas` as a script.
 
+Delphi 12 contributors build the Win32 and Win64 native application matrix from `source/app/GocciaScript.Delphi.groupproj`; see [Delphi Validation](contributing/delphi.md) for the complete IDE workflow and validation contract.
+
 ## Build Commands
 
 ### Build Modes
@@ -524,8 +526,9 @@ Common compiler settings live in `source/shared/Shared.inc`, which is included b
 `Shared.inc` provides:
 
 ```pascal
-{$mode delphi}                    // Delphi-compatible syntax
-{$H+}                              // Long strings (`string` = `AnsiString`) by default
+{$IFDEF FPC}
+  {$mode delphiunicode} {$H+}      // Delphi syntax and UTF-16 `string`
+{$ENDIF}
 {$IFNDEF PRODUCTION}
   {$overflowchecks on}            // Runtime arithmetic overflow detection
   {$rangechecks on}               // Runtime array bounds checking
@@ -533,14 +536,7 @@ Common compiler settings live in `source/shared/Shared.inc`, which is included b
 {$modeswitch advancedrecords}     // Records with methods
 ```
 
-Under the current project settings, FreePascal behaves like this:
-
-- `string` is an `AnsiString` alias, not `UnicodeString`.
-- `UTF8String` is also an `AnsiString`, but tagged with code page `CP_UTF8` (`65001`).
-- `UnicodeString` remains the explicit UTF-16 string type.
-- `Char` is a single-byte `AnsiChar`, so `Length`, `Copy`, indexing, and similar operations on `string`/`UTF8String` count bytes, not Unicode code points.
-
-That distinction matters for parser and file-loading code: a plain `string` temporary does not preserve “this text is UTF-8” on its own. If raw UTF-8 file text needs to survive byte-for-byte until parsing, keep it in `UTF8String` (or retag it explicitly) until the parser consumes it.
+Under the current project settings, `string` and `Char` are UTF-16 under both FreePascal and Delphi. `Length`, `Copy`, indexing, source spans, and ordinary ECMAScript String operations therefore count UTF-16 code units. Encoded data uses `TBytes` and the explicit adapters in `TextEncoding.pas`.
 
 Overflow and range checks are enabled in development mode for safety. In production builds, the `-dPRODUCTION` define disables these checks for maximum performance.
 
@@ -629,6 +625,8 @@ Intl embeds this generated CLDR resource by default through `source/units/Goccia
 ### Generated Unicode Data
 
 `source/generated/Generated.UnicodeData.pas` and `source/generated/Generated.UnicodeData.res` are produced by `scripts/generate-unicode-data.js`. By default, the generator downloads Unicode Character Database (UCD) files for a given Unicode version, packs General_Category, Script, Script_Extensions, and binary property range tables into a single resource payload, and emits a small Pascal unit that links the resource.
+
+`source/generated/Generated.UnicodeCaseData.pas` and `source/generated/Generated.UnicodeNormalizationData.pas` are produced by their namesake scripts. They keep ECMAScript default casing and normalization semantics identical across FPC and Delphi without making ICU or an operating-system locale service a runtime dependency.
 
 The generator requires `fpcres`. `fpcres` writes the FreePascal resource consumed by `{$R Generated.UnicodeData.res}`.
 

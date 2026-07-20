@@ -30,7 +30,7 @@ type
     FCallable: TGocciaValue;
     FCloseFunction: TGocciaValue;
     FSlot: Integer;
-    FCodePointer: CodePointer;
+    FCodePointer: Pointer;
     FClosed: Boolean;
     FPinned: Boolean;
     FDependentCount: Integer;
@@ -55,7 +55,7 @@ type
     function ToStringTag: string; override;
     procedure MarkReferences; override;
     property Descriptor: TGocciaFFITypeDescriptor read FDescriptor;
-    property CodePointer: CodePointer read FCodePointer;
+    property Pointer: Pointer read FCodePointer;
     property Closed: Boolean read FClosed;
     property LifetimeGuard: TGocciaFFIDependentGuard read FLifetimeGuard;
   end;
@@ -70,6 +70,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.FFI.UTF8String,
   Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.Error,
@@ -165,14 +166,14 @@ procedure CopyFromCallbackPlacement(
 begin
   case APlacement.Kind of
     fpkGPR:
-      {$IFDEF CPU64}
+      {$IF defined(GOCCIA_CPU_64)}
       Move(AState.GPR[APlacement.RegisterIndex],
         ADestination[ADestinationOffset], APlacement.Size)
       {$ELSE}
       raise EInvalidOpException.Create('i386 callback argument has GPR placement')
       {$ENDIF};
     fpkFPR:
-      {$IFDEF CPU64}
+      {$IF defined(GOCCIA_CPU_64)}
       Move(AState.FPR[APlacement.RegisterIndex],
         ADestination[ADestinationOffset], APlacement.Size)
       {$ELSE}
@@ -195,7 +196,7 @@ begin
   case APlacement.Kind of
     fpkGPR:
       begin
-        {$IFDEF CPU64}
+        {$IF defined(GOCCIA_CPU_64)}
         if (AABI = fabiDarwinARM64) and
            (AType.Kind = ftkScalar) then
         begin
@@ -228,7 +229,7 @@ begin
           AState.RetGPR[APlacement.RegisterIndex], APlacement.Size);
       end;
     fpkFPR:
-      {$IFDEF CPU64}
+      {$IF defined(GOCCIA_CPU_64)}
       Move(ASource[APlacement.ValueOffset],
         AState.RetFPR[APlacement.RegisterIndex], APlacement.Size)
       {$ELSE}
@@ -255,9 +256,10 @@ var
   Signed32: LongInt;
   Unsigned32: LongWord;
   Signed64: Int64;
-  Unsigned64: QWord;
+  Unsigned64: UInt64;
   Float32: Single;
   Float64: Double;
+  Text: string;
 begin
   if AType.IsAggregate then
   begin
@@ -292,12 +294,16 @@ begin
       Move(AData[0], PointerValue, SizeOf(Pointer));
       Result := TGocciaFFIPointerValue.Create(PointerValue);
     end;
-    fftCString:
+    fftUTF8String:
     begin
       PointerValue := nil;
       Move(AData[0], PointerValue, SizeOf(Pointer));
       if Assigned(PointerValue) then
-        Result := TGocciaStringLiteralValue.Create(string(PAnsiChar(PointerValue)))
+      begin
+        if not TryDecodeFFIUTF8String(PAnsiChar(PointerValue), Text) then
+          ThrowTypeError(SErrorFFIUTF8StringResult, SSuggestFFIUsage);
+        Result := TGocciaStringLiteralValue.Create(Text);
+      end
       else
         Result := TGocciaNullLiteralValue.NullValue;
     end;
@@ -313,7 +319,7 @@ var
   BufferData: TBytes;
   PointerValue: Pointer;
   IntegerValue: Int64;
-  UnsignedValue: QWord;
+  UnsignedValue: UInt64;
   Float32: Single;
   Float64: Double;
 begin
@@ -339,7 +345,7 @@ begin
     if TGocciaFFICallbackValue(AValue).Descriptor <> AType then
       ThrowTypeError(SErrorFFICallbackReturnType, SSuggestFFIUsage);
     TGocciaFFICallbackValue(AValue).EnsureOpen;
-    PointerValue := TGocciaFFICallbackValue(AValue).CodePointer;
+    PointerValue := TGocciaFFICallbackValue(AValue).Pointer;
     Move(PointerValue, Result[0], SizeOf(Pointer));
     Exit;
   end;
@@ -362,7 +368,7 @@ begin
     fftI64:
     begin IntegerValue := ToInt64Value(AValue); Move(IntegerValue, Result[0], 8); end;
     fftU64:
-    begin UnsignedValue := QWord(ToInt64Value(AValue)); Move(UnsignedValue, Result[0], 8); end;
+    begin UnsignedValue := UInt64(ToInt64Value(AValue)); Move(UnsignedValue, Result[0], 8); end;
     fftF32:
     begin Float32 := AValue.ToNumberLiteral.Value; Move(Float32, Result[0], 4); end;
     fftF64:
@@ -378,8 +384,8 @@ begin
           SSuggestFFIUsage);
       Move(PointerValue, Result[0], SizeOf(Pointer));
     end;
-    fftCString:
-      ThrowTypeError(SErrorFFICallbackCStringReturn, SSuggestFFIUsage);
+    fftUTF8String:
+      ThrowTypeError(SErrorFFICallbackUTF8StringReturn, SSuggestFFIUsage);
   end;
 end;
 
@@ -389,8 +395,8 @@ constructor TGocciaFFICallbackValue.Create(
 var
   ArgumentTypes: array of TGocciaFFITypeDescriptor;
   HiddenResultLocation: TGocciaFFIHiddenResultLocation;
-  HiddenResultSize: PtrUInt;
-  ReturnFloatSize: PtrUInt;
+  HiddenResultSize: NativeUInt;
+  ReturnFloatSize: NativeUInt;
   I: Integer;
   CloseFunction: TGocciaNativeFunctionValue;
 begin
@@ -432,7 +438,7 @@ begin
         HiddenResultLocation := fhrStack0;
     end;
   end;
-  {$IFNDEF CPU64}
+  {$IF not (defined(GOCCIA_CPU_64))}
   if (Length(FSignature.ReturnPlan.Placements) > 0) and
      (FSignature.ReturnPlan.Placements[0].Kind = fpkFPR) then
     ReturnFloatSize := FSignature.ReturnPlan.Placements[0].Size;
@@ -445,7 +451,7 @@ begin
       ThrowRangeError(Format(SErrorFFICallbackSlotLimit,
         [MAX_FFI_CALLBACK_SLOTS]), SSuggestFFIUsage);
   end;
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
   begin
     TGarbageCollector.Instance.PinObject(Self);
     FPinned := True;
@@ -477,7 +483,7 @@ begin
     ReleaseFFICallbackSlot(FSlot);
     FSlot := -1;
   end;
-  if FPinned and Assigned(TGarbageCollector.Instance) then
+  if FPinned and (TGarbageCollector.Instance <> nil) then
   begin
     TGarbageCollector.Instance.UnpinObject(Self);
     FPinned := False;
@@ -560,11 +566,11 @@ begin
   Result := nil;
   case AABI of
     fabiSysVX64, fabiWin64:
-      {$IFDEF CPU64}
-      Result := Pointer(PtrUInt(AState.GPR[0]))
+      {$IF defined(GOCCIA_CPU_64)}
+      Result := Pointer(NativeUInt(AState.GPR[0]))
       {$ENDIF};
     fabiAAPCS64, fabiDarwinARM64:
-      {$IFDEF CPU64}
+      {$IF defined(GOCCIA_CPU_64)}
       Result := AState.HiddenResult
       {$ENDIF};
     fabiI386Win:
@@ -578,7 +584,7 @@ procedure MirrorCallbackHiddenResultPointer(
   var AState: TGocciaFFICallbackMachineState);
 begin
   if AABI in [fabiSysVX64, fabiWin64, fabiI386Win] then
-    AState.RetGPR[0] := PtrUInt(APointer);
+    AState.RetGPR[0] := NativeUInt(APointer);
 end;
 
 procedure TGocciaFFICallbackValue.InvokeFromNative(
@@ -589,7 +595,7 @@ var
   ArgumentData, ResultData: TBytes;
   PointerData: TBytes;
   Arguments: TGocciaArgumentsCollection;
-  HiddenResultPointer, ArgumentPointer: Pointer;
+  HiddenResultPointer, ArgumentPointer: System.Pointer;
   ResultValue: TGocciaValue;
   I, J: Integer;
 begin
@@ -597,7 +603,7 @@ begin
   HiddenResultPointer := nil;
   try
     ReturnPlan := FSignature.ReturnPlan;
-    {$IFNDEF CPU64}
+    {$IF not (defined(GOCCIA_CPU_64))}
     if (Length(ReturnPlan.Placements) > 0) and
        (ReturnPlan.Placements[0].Kind = fpkFPR) then
       AState.ReturnFloatSize := ReturnPlan.Placements[0].Size;
@@ -700,7 +706,7 @@ begin
   else if AName = PROP_FFI_ADDRESS then
   begin
     EnsureOpen;
-    Result := TGocciaNumberLiteralValue.Create(PtrUInt(FCodePointer));
+    Result := TGocciaNumberLiteralValue.Create(NativeUInt(FCodePointer));
   end
   else
     Result := inherited GetPropertyWithContext(AName, AThisContext);

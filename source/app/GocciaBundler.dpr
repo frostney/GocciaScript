@@ -30,7 +30,7 @@ uses
   Goccia.Threading.Flags,
   Goccia.Threading.Init,
 
-  FileUtils in 'units/FileUtils.pas';
+  FileUtils;
 
 type
   TBundlerApp = class(TGocciaCLIApplication)
@@ -331,7 +331,7 @@ begin
 
   Pool := TGocciaThreadPool.Create(AJobCount);
   try
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
     Pool.RunAll(AFiles, EmitWorkerProc);
 

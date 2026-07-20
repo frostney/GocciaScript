@@ -109,6 +109,8 @@ uses
   Classes,
   SysUtils,
 
+  UnicodeStringList,
+
   Goccia.AST.BindingPatterns,
   Goccia.AST.Statements,
   Goccia.Bytecode.Chunk,
@@ -463,11 +465,10 @@ procedure TGocciaFunctionValue.PredeclareParameterBindings(
   const ACallScope: TGocciaScope);
 var
   I, J: Integer;
-  Names: TStringList;
+  Names: TUnicodeStringList;
 begin
-  Names := TStringList.Create;
+  Names := TUnicodeStringList.Create;
   try
-    Names.CaseSensitive := True;
     for I := 0 to High(FParameters) do
     begin
       Names.Clear;
@@ -488,7 +489,7 @@ end;
 function TGocciaFunctionValue.BuildParameterEvalVarDeclarationRejectNames(
   const AIncludeArgumentsObject: Boolean): TGocciaEvalRejectNameArray;
 var
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I, J: Integer;
   procedure AddName(const AName: string);
   begin
@@ -496,9 +497,8 @@ var
       Names.Add(AName);
   end;
 begin
-  Names := TStringList.Create;
+  Names := TUnicodeStringList.Create;
   try
-    Names.CaseSensitive := True;
     if AIncludeArgumentsObject then
       AddName(IDENTIFIER_ARGUMENTS);
     for I := 0 to High(FParameters) do
@@ -574,7 +574,7 @@ begin
   AContext.LoadModuleSource := FClosure.LoadModuleSource;
   AContext.ResolveModuleURL := FClosure.ResolveModuleURL;
   AContext.CurrentFilePath := FSourceFilePath;
-  AContext.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
+  AContext.CoverageEnabled := (TGocciaCoverageTracker.Instance <> nil)
     and TGocciaCoverageTracker.Instance.Enabled;
   AContext.StrictTypes := FClosure.EffectiveStrictTypes;
   CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
@@ -882,8 +882,7 @@ begin
     if FIsExpressionBody and (FBodyStatements.Count = 1) then
     begin
       SyntheticReturn := TGocciaReturnStatement.Create(
-        TGocciaExpression(FBodyStatements[0]), FBodyStatements[0].Line,
-        FBodyStatements[0].Column);
+        TGocciaExpression(FBodyStatements[0]), FBodyStatements[0].Span);
       AsyncBodyStatements.Add(SyntheticReturn);
     end
     else

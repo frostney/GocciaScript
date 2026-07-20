@@ -23,7 +23,7 @@ type
     function MaterializeCSV: TGocciaValue;
   protected
     function MatchesModulePath(const AResolvedPath: string): Boolean; override;
-    function ParseModuleRecords(const AContent: UTF8String;
+    function ParseModuleRecords(const AContent: string;
       const AResolvedPath: string): TGocciaArrayValue; override;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
@@ -78,7 +78,7 @@ begin
 end;
 
 function TGocciaCSVRuntimeExtension.ParseModuleRecords(
-  const AContent: UTF8String; const AResolvedPath: string): TGocciaArrayValue;
+  const AContent: string; const AResolvedPath: string): TGocciaArrayValue;
 var
   CSVParser: TGocciaCSVParser;
 begin

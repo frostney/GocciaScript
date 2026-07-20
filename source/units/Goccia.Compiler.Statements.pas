@@ -111,6 +111,7 @@ uses
   SysUtils,
 
   OrderedStringMap,
+  UnicodeStringList,
 
   Goccia.AST.BindingPatterns,
   Goccia.Bytecode,
@@ -676,7 +677,7 @@ procedure PrepareLexicalDeclarationLocals(
 var
   I, J, LocalIdx: Integer;
   Info: TGocciaVariableInfo;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   Slot: UInt16;
 begin
   if AStmt.IsVar then
@@ -687,8 +688,7 @@ begin
     Info := AStmt.Variables[I];
     if Info.IsPattern or Assigned(Info.Pattern) then
     begin
-      Names := TStringList.Create;
-      Names.CaseSensitive := True;
+      Names := TUnicodeStringList.Create;
       try
         CollectPatternBindingNames(Info.Pattern, Names, True);
         for J := 0 to Names.Count - 1 do
@@ -1452,13 +1452,12 @@ procedure PredeclareBlockVariableLocals(const ACtx: TGocciaCompilationContext;
   const AEmitInitializers: Boolean = True);
 var
   I, J, LocalIdx: Integer;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   Slot: UInt16;
 begin
   for I := 0 to High(AVarDecl.Variables) do
   begin
-    Names := TStringList.Create;
-    Names.CaseSensitive := True;
+    Names := TUnicodeStringList.Create;
     try
       CollectVariableInfoBindingNames(AVarDecl.Variables[I], Names, True);
       for J := 0 to Names.Count - 1 do
@@ -1485,11 +1484,10 @@ procedure PredeclareBlockPatternLocals(const ACtx: TGocciaCompilationContext;
   const AEmitInitializers: Boolean = True);
 var
   I, LocalIdx: Integer;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   Slot: UInt16;
 begin
-  Names := TStringList.Create;
-  Names.CaseSensitive := True;
+  Names := TUnicodeStringList.Create;
   try
     CollectPatternBindingNames(APattern, Names, True);
     for I := 0 to Names.Count - 1 do
@@ -1612,10 +1610,9 @@ procedure EmitBlockPatternHoleInitializers(const ACtx: TGocciaCompilationContext
   const APattern: TGocciaDestructuringPattern);
 var
   I: Integer;
-  Names: TStringList;
+  Names: TUnicodeStringList;
 begin
-  Names := TStringList.Create;
-  Names.CaseSensitive := True;
+  Names := TUnicodeStringList.Create;
   try
     CollectPatternBindingNames(APattern, Names, True);
     for I := 0 to Names.Count - 1 do
@@ -1629,7 +1626,7 @@ procedure EmitBlockLexicalHoleInitializers(const ANode: TGocciaASTNode;
   const ACtx: TGocciaCompilationContext);
 var
   I, J: Integer;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   VarDecl: TGocciaVariableDeclaration;
   UsingDecl: TGocciaUsingDeclaration;
 begin
@@ -1640,8 +1637,7 @@ begin
       Exit;
     for I := 0 to High(VarDecl.Variables) do
     begin
-      Names := TStringList.Create;
-      Names.CaseSensitive := True;
+      Names := TUnicodeStringList.Create;
       try
         CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
         for J := 0 to Names.Count - 1 do
@@ -1658,8 +1654,7 @@ begin
       Exit;
     for I := 0 to High(VarDecl.Variables) do
     begin
-      Names := TStringList.Create;
-      Names.CaseSensitive := True;
+      Names := TUnicodeStringList.Create;
       try
         CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
         for J := 0 to Names.Count - 1 do
@@ -2577,7 +2572,7 @@ procedure CompileExpressionWithLoopHeadTDZ(
   const ABindingPattern: TGocciaDestructuringPattern;
   const AHasLexicalDeclaration: Boolean);
 var
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I: Integer;
   Slot: UInt16;
   ClosedLocals: TArray<UInt16>;
@@ -2589,9 +2584,8 @@ begin
     Exit;
   end;
 
-  Names := TStringList.Create;
+  Names := TUnicodeStringList.Create;
   try
-    Names.CaseSensitive := True;
     if Assigned(ABindingPattern) then
       CollectPatternBindingNames(ABindingPattern, Names, True)
     else if ABindingName <> '' then
@@ -3361,14 +3355,13 @@ end;
 function PatternAssignsIdentifier(const APattern: TGocciaDestructuringPattern;
   const AName: string): Boolean;
 var
-  Names: TStringList;
+  Names: TUnicodeStringList;
 begin
   Result := False;
   if not Assigned(APattern) then
     Exit;
 
-  Names := TStringList.Create;
-  Names.CaseSensitive := True;
+  Names := TUnicodeStringList.Create;
   try
     CollectPatternBindingNames(APattern, Names);
     Result := Names.IndexOf(AName) >= 0;
@@ -3719,7 +3712,7 @@ var
   LoopControl: TLoopControlState;
   HasLexicalInit: Boolean;
   UseSharedLexicalFor: Boolean;
-  PerIterNames: TStringList;
+  PerIterNames: TUnicodeStringList;
   PerIterIsConst: Boolean;
   OuterSlots, CarrierSlots, BodySlots, UpdateSlots: array of UInt16;
   OuterLocalIdxs: array of Integer;
@@ -3752,7 +3745,7 @@ begin
       HasLexicalInit := True;
       VarDecl := TGocciaVariableDeclaration(AStmt.Init);
       PerIterIsConst := VarDecl.IsConst;
-      PerIterNames := TStringList.Create;
+      PerIterNames := TUnicodeStringList.Create;
       CollectVariableDeclarationBindingNames(VarDecl, PerIterNames, True);
     end
     else if (AStmt.Init is TGocciaDestructuringDeclaration)
@@ -3761,7 +3754,7 @@ begin
       HasLexicalInit := True;
       DestructDecl := TGocciaDestructuringDeclaration(AStmt.Init);
       PerIterIsConst := DestructDecl.IsConst;
-      PerIterNames := TStringList.Create;
+      PerIterNames := TUnicodeStringList.Create;
       CollectPatternBindingNames(DestructDecl.Pattern, PerIterNames, True);
     end
     else if HasUsingInit then
@@ -3769,7 +3762,7 @@ begin
       HasLexicalInit := True;
       PerIterIsConst := True;
       UsingDecl := TGocciaUsingDeclaration(AStmt.Init);
-      PerIterNames := TStringList.Create;
+      PerIterNames := TUnicodeStringList.Create;
       for I := 0 to High(UsingDecl.Variables) do
         PerIterNames.Add(UsingDecl.Variables[I].Name);
     end;
@@ -4315,14 +4308,13 @@ var
   I, J: Integer;
   VarInfo: TGocciaVariableInfo;
   LocalIdx: Integer;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   Reg: UInt16;
   NameIdx: UInt16;
 begin
   CompileVariableDeclaration(ACtx, AStmt.Declaration);
 
-  Names := TStringList.Create;
-  Names.CaseSensitive := True;
+  Names := TUnicodeStringList.Create;
   try
     for I := 0 to Length(AStmt.Declaration.Variables) - 1 do
     begin
@@ -4352,14 +4344,13 @@ var
   LocalIdx: Integer;
   Name: string;
   NameIdx: UInt16;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   Reg: UInt16;
 begin
   CompileDestructuringDeclaration(ACtx, AStmt.Declaration);
 
-  Names := TStringList.Create;
+  Names := TUnicodeStringList.Create;
   try
-    Names.CaseSensitive := True;
     CollectPatternBindingNames(AStmt.Declaration.Pattern, Names, True);
     for Name in Names do
     begin
@@ -5657,7 +5648,7 @@ begin
   end;
 
   SortClassCallableSourceEntries(Entries);
-  ClassKeyPrefix := IntToHex(PtrUInt(AClassDef), SizeOf(PtrUInt) * 2);
+  ClassKeyPrefix := IntToHex(NativeUInt(AClassDef), SizeOf(NativeUInt) * 2);
   for I := 0 to High(Entries) do
   begin
     Entry := Entries[I];
@@ -6905,11 +6896,10 @@ end;
 procedure CollectDestructuringVarBindings(const APattern: TGocciaDestructuringPattern;
   const AScope: TGocciaCompilerScope);
 var
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I: Integer;
 begin
-  Names := TStringList.Create;
-  Names.CaseSensitive := True;
+  Names := TUnicodeStringList.Create;
   try
     CollectPatternBindingNames(APattern, Names);
     for I := 0 to Names.Count - 1 do

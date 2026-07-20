@@ -25,6 +25,7 @@ uses
   SysUtils,
 
   BaseMap,
+  NumericText,
   StringBuffer,
   TimingUtils,
 
@@ -337,8 +338,7 @@ var
   Output: TStringList;
   InvariantFormat: TFormatSettings;
 begin
-  InvariantFormat := DefaultFormatSettings;
-  InvariantFormat.DecimalSeparator := '.';
+  InvariantFormat := CreateInvariantFormatSettings;
   Buf := TStringBuffer.Create(8192);
   Buf.Append('{');
 

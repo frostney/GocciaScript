@@ -1,0 +1,24 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Condition="'$(Base)'!=''">
+    <DCC_ConsoleTarget>true</DCC_ConsoleTarget>
+    <DCC_UnitSearchPath>..\units;..\generated;..\shared;.;..\..\souffle;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+    <DCC_IncludePath>..\units;..\shared;..\..\souffle;$(DCC_IncludePath)</DCC_IncludePath>
+    <DCC_ExeOutput>..\..\build\delphi\$(Platform)\$(Config)</DCC_ExeOutput>
+    <DCC_DcuOutput>..\..\build\delphi\$(Platform)\$(Config)\dcu\$(ProjectName)</DCC_DcuOutput>
+    <DCC_StackSize>16384,8388608</DCC_StackSize>
+    <DCC_Namespace>System;Winapi;System.Win;Xml;Data;Datasnap;Web;Soap;$(DCC_Namespace)</DCC_Namespace>
+    <VerInfo_Locale>1033</VerInfo_Locale>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Cfg_1)'!=''">
+    <DCC_Define>PRODUCTION;RELEASE;$(DCC_Define)</DCC_Define>
+    <DCC_Optimize>true</DCC_Optimize>
+    <DCC_DebugInformation>0</DCC_DebugInformation>
+    <DCC_LocalDebugSymbols>false</DCC_LocalDebugSymbols>
+    <DCC_SymbolReferenceInfo>0</DCC_SymbolReferenceInfo>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Cfg_2)'!=''">
+    <DCC_Define>DEBUG;$(DCC_Define)</DCC_Define>
+    <DCC_Optimize>false</DCC_Optimize>
+    <DCC_GenerateStackFrames>true</DCC_GenerateStackFrames>
+  </PropertyGroup>
+</Project>

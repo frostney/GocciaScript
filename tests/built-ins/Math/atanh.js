@@ -22,4 +22,9 @@ describe("Math.atanh", () => {
     expect(Math.atanh(0)).toBe(0);
     expect(Object.is(Math.atanh(-0), -0)).toBe(true);
   });
+
+  test("retains precision for small inputs", () => {
+    expect(Math.atanh(1e-20)).toBe(1e-20);
+    expect(Math.atanh(-1e-20)).toBe(-1e-20);
+  });
 });

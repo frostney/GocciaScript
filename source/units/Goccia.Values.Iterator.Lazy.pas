@@ -148,7 +148,7 @@ begin
     try
       MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
     except
-      AcquireExceptionObject;
+      PreserveCurrentExceptionAcrossNestedHandler;
       CloseIteratorPreservingError(FSourceIterator);
       raise;
     end;
@@ -181,7 +181,7 @@ begin
     try
       Result := InvokeIteratorCallback(FCallback, Value, FIndex);
     except
-      AcquireExceptionObject;
+      PreserveCurrentExceptionAcrossNestedHandler;
       CloseIteratorPreservingError(FSourceIterator);
       raise;
     end;
@@ -240,7 +240,7 @@ begin
       try
         PredicateValue := InvokeIteratorCallback(FCallback, Value, FIndex);
       except
-        AcquireExceptionObject;
+        PreserveCurrentExceptionAcrossNestedHandler;
         CloseIteratorPreservingError(FSourceIterator);
         raise;
       end;
@@ -280,7 +280,7 @@ begin
       try
         PredicateValue := InvokeIteratorCallback(FCallback, Value, FIndex);
       except
-        AcquireExceptionObject;
+        PreserveCurrentExceptionAcrossNestedHandler;
         CloseIteratorPreservingError(FSourceIterator);
         raise;
       end;
@@ -587,7 +587,7 @@ begin
     try
       InnerResult := FInnerIterator.AdvanceNext;
     except
-      AcquireExceptionObject;
+      PreserveCurrentExceptionAcrossNestedHandler;
       CloseIteratorPreservingError(FSourceIterator);
       raise;
     end;
@@ -620,7 +620,7 @@ begin
       try
         MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
       except
-        AcquireExceptionObject;
+        PreserveCurrentExceptionAcrossNestedHandler;
         CloseIteratorPreservingError(FSourceIterator);
         if Assigned(FInnerIterator) then
           CloseIteratorPreservingError(FInnerIterator);
@@ -634,7 +634,7 @@ begin
           FInnerIterator := ResolveIterator(MappedValue);
           InnerResult := FInnerIterator.AdvanceNext;
         except
-          AcquireExceptionObject;
+          PreserveCurrentExceptionAcrossNestedHandler;
           CloseIteratorPreservingError(FSourceIterator);
           raise;
         end;
@@ -670,7 +670,7 @@ begin
     try
       InnerValue := FInnerIterator.DirectNext(InnerDone);
     except
-      AcquireExceptionObject;
+      PreserveCurrentExceptionAcrossNestedHandler;
       CloseIteratorPreservingError(FSourceIterator);
       raise;
     end;
@@ -697,7 +697,7 @@ begin
       try
         MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
       except
-        AcquireExceptionObject;
+        PreserveCurrentExceptionAcrossNestedHandler;
         CloseIteratorPreservingError(FSourceIterator);
         if Assigned(FInnerIterator) then
           CloseIteratorPreservingError(FInnerIterator);
@@ -711,7 +711,7 @@ begin
           FInnerIterator := ResolveIterator(MappedValue);
           InnerValue := FInnerIterator.DirectNext(InnerDone);
         except
-          AcquireExceptionObject;
+          PreserveCurrentExceptionAcrossNestedHandler;
           CloseIteratorPreservingError(FSourceIterator);
           raise;
         end;

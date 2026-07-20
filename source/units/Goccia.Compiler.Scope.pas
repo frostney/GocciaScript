@@ -15,6 +15,7 @@ uses
 
 type
   TGocciaCompilerVariableKind = (cvkLocal, cvkUpvalue, cvkGlobal);
+  TGocciaCompilerExportNameArray = array of string;
 
   TGocciaCompilerLocal = record
     Name: string;
@@ -38,7 +39,7 @@ type
     ImportPhase: TGocciaImportCallPhase;
     ImportModulePath: string;
     ImportExportName: string;
-    ExportNames: array of string;
+    ExportNames: TGocciaCompilerExportNameArray;
     ExportNameCount: Integer;
   end;
 
@@ -58,7 +59,7 @@ type
     ImportPhase: TGocciaImportCallPhase;
     ImportModulePath: string;
     ImportExportName: string;
-    ExportNames: array of string;
+    ExportNames: TGocciaCompilerExportNameArray;
     ExportNameCount: Integer;
   end;
 

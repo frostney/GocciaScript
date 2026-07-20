@@ -533,7 +533,7 @@ end;
 begin
   TestRunnerProgram.AddSuite(TSnapshotFormattingTests.Create(
     'Snapshot Formatting'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
 
   ExitCode := TestResultToExitCode;
 end.

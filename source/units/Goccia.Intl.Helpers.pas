@@ -351,7 +351,7 @@ end;
 
 function IntlFallbackSymbol: TGocciaSymbolValue;
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
   begin
     Result := TGocciaSymbolValue(CurrentRealm.GetSlot(GIntlFallbackSymbolSlot));
     if Assigned(Result) then

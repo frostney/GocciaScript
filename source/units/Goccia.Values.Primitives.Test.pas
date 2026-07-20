@@ -18,7 +18,7 @@ type
     procedure TestStringValueContent;
     procedure TestStringValueEmpty;
     procedure TestStringValueNumber;
-    procedure TestStringValueFromUTF8;
+    procedure TestStringValuePreservesUnicode;
     procedure TestNumberValue;
     procedure TestNumberValueNaN;
     procedure TestNumberValueInfinity;
@@ -37,7 +37,7 @@ begin
   Test('String value with content', TestStringValueContent);
   Test('String value with empty content', TestStringValueEmpty);
   Test('String value with number content', TestStringValueNumber);
-  Test('String value from UTF-8 text', TestStringValueFromUTF8);
+  Test('String value preserves Unicode text', TestStringValuePreservesUnicode);
   Test('Number value', TestNumberValue);
   Test('NaN value', TestNumberValueNaN);
   Test('Infinity value', TestNumberValueInfinity);
@@ -92,15 +92,14 @@ begin
   Expect<string>(Value.TypeName).ToBe('string');
 end;
 
-procedure TTestPrimitives.TestStringValueFromUTF8;
+procedure TTestPrimitives.TestStringValuePreservesUnicode;
 var
-  UTF8Bytes: RawByteString;
   Value: TGocciaStringLiteralValue;
 begin
-  UTF8Bytes := 'Caf' + #$C3#$A9 + ' d' + #$C3#$A9 + 'j' + #$C3#$A0 + ' vu';
-  SetCodePage(UTF8Bytes, CP_UTF8, False);
-  Value := TGocciaStringLiteralValue.FromUTF8(UTF8String(UTF8Bytes));
-  Expect<string>(Value.ToStringLiteral.Value).ToBe('Café déjà vu');
+  Value := TGocciaStringLiteralValue.Create(
+    'Caf' + #$00E9 + ' d' + #$00E9 + 'j' + #$00E0 + ' vu');
+  Expect<string>(Value.ToStringLiteral.Value).ToBe(
+    'Caf' + #$00E9 + ' d' + #$00E9 + 'j' + #$00E0 + ' vu');
   Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(True);
   Expect<string>(Value.TypeName).ToBe('string');
 end;
@@ -206,7 +205,7 @@ end;
 
 begin
   TestRunnerProgram.AddSuite(TTestPrimitives.Create('Primitives'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
 
   ExitCode := TestResultToExitCode;
 end.

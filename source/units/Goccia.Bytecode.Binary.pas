@@ -17,6 +17,7 @@ type
     procedure WriteUInt8(const AValue: UInt8);
     procedure WriteUInt16(const AValue: UInt16);
     procedure WriteUInt32(const AValue: UInt32);
+    procedure WriteUInt64(const AValue: UInt64);
     procedure WriteInt64(const AValue: Int64);
     procedure WriteDouble(const AValue: Double);
     procedure WriteString(const AValue: string);
@@ -33,6 +34,7 @@ type
     function ReadUInt8: UInt8;
     function ReadUInt16: UInt16;
     function ReadUInt32: UInt32;
+    function ReadUInt64: UInt64;
     function ReadInt64: Int64;
     function ReadDouble: Double;
     function ReadString: string;
@@ -52,7 +54,7 @@ implementation
 uses
   SysUtils,
 
-  TextSemantics,
+  NumberBits,
 
   Goccia.Bytecode,
   Goccia.Bytecode.Debug;
@@ -70,47 +72,56 @@ end;
 
 procedure TGocciaBytecodeWriter.WriteUInt16(const AValue: UInt16);
 var
-  LE: UInt16;
+  Bytes: array[0..1] of Byte;
 begin
-  LE := NtoLE(AValue);
-  FStream.WriteBuffer(LE, SizeOf(UInt16));
+  Bytes[0] := Byte(AValue);
+  Bytes[1] := Byte(AValue shr 8);
+  FStream.WriteBuffer(Bytes[0], SizeOf(Bytes));
 end;
 
 procedure TGocciaBytecodeWriter.WriteUInt32(const AValue: UInt32);
 var
-  LE: UInt32;
+  Bytes: array[0..3] of Byte;
 begin
-  LE := NtoLE(AValue);
-  FStream.WriteBuffer(LE, SizeOf(UInt32));
+  Bytes[0] := Byte(AValue);
+  Bytes[1] := Byte(AValue shr 8);
+  Bytes[2] := Byte(AValue shr 16);
+  Bytes[3] := Byte(AValue shr 24);
+  FStream.WriteBuffer(Bytes[0], SizeOf(Bytes));
+end;
+
+procedure TGocciaBytecodeWriter.WriteUInt64(const AValue: UInt64);
+var
+  Bytes: array[0..7] of Byte;
+  I: Integer;
+begin
+  for I := 0 to High(Bytes) do
+    Bytes[I] := Byte(AValue shr (I * 8));
+  FStream.WriteBuffer(Bytes[0], SizeOf(Bytes));
 end;
 
 procedure TGocciaBytecodeWriter.WriteInt64(const AValue: Int64);
 var
-  LE: Int64;
+  Bits: UInt64;
 begin
-  LE := NtoLE(AValue);
-  FStream.WriteBuffer(LE, SizeOf(Int64));
+  Move(AValue, Bits, SizeOf(Bits));
+  WriteUInt64(Bits);
 end;
 
 procedure TGocciaBytecodeWriter.WriteDouble(const AValue: Double);
-var
-  Bits: Int64;
 begin
-  Move(AValue, Bits, SizeOf(Double));
-  Bits := NtoLE(Bits);
-  FStream.WriteBuffer(Bits, SizeOf(Int64));
+  WriteUInt64(DoubleToBits(AValue));
 end;
 
 procedure TGocciaBytecodeWriter.WriteString(const AValue: string);
 var
+  I: Integer;
   Len: UInt32;
-  UTF8Str: UTF8String;
 begin
-  UTF8Str := UTF8String(AValue);
-  Len := Length(UTF8Str);
+  Len := Length(AValue);
   WriteUInt32(Len);
-  if Len > 0 then
-    FStream.WriteBuffer(UTF8Str[1], Len);
+  for I := 1 to Len do
+    WriteUInt16(Ord(AValue[I]));
 end;
 
 procedure TGocciaBytecodeWriter.WriteBoolean(const AValue: Boolean);
@@ -310,43 +321,59 @@ begin
 end;
 
 function TGocciaBytecodeReader.ReadUInt16: UInt16;
+var
+  Bytes: array[0..1] of Byte;
 begin
-  FStream.ReadBuffer(Result, SizeOf(UInt16));
-  Result := LEtoN(Result);
+  FStream.ReadBuffer(Bytes[0], SizeOf(Bytes));
+  Result := UInt16(Bytes[0]) or (UInt16(Bytes[1]) shl 8);
 end;
 
 function TGocciaBytecodeReader.ReadUInt32: UInt32;
+var
+  Bytes: array[0..3] of Byte;
 begin
-  FStream.ReadBuffer(Result, SizeOf(UInt32));
-  Result := LEtoN(Result);
+  FStream.ReadBuffer(Bytes[0], SizeOf(Bytes));
+  Result := UInt32(Bytes[0]) or
+    (UInt32(Bytes[1]) shl 8) or
+    (UInt32(Bytes[2]) shl 16) or
+    (UInt32(Bytes[3]) shl 24);
+end;
+
+function TGocciaBytecodeReader.ReadUInt64: UInt64;
+var
+  Bytes: array[0..7] of Byte;
+  I: Integer;
+begin
+  FStream.ReadBuffer(Bytes[0], SizeOf(Bytes));
+  Result := 0;
+  for I := 0 to High(Bytes) do
+    Result := Result or (UInt64(Bytes[I]) shl (I * 8));
 end;
 
 function TGocciaBytecodeReader.ReadInt64: Int64;
+var
+  Bits: UInt64;
 begin
-  FStream.ReadBuffer(Result, SizeOf(Int64));
-  Result := LEtoN(Result);
+  Bits := ReadUInt64;
+  Move(Bits, Result, SizeOf(Result));
 end;
 
 function TGocciaBytecodeReader.ReadDouble: Double;
-var
-  Bits: Int64;
 begin
-  FStream.ReadBuffer(Bits, SizeOf(Int64));
-  Bits := LEtoN(Bits);
-  Move(Bits, Result, SizeOf(Double));
+  Result := BitsToDouble(ReadUInt64);
 end;
 
 function TGocciaBytecodeReader.ReadString: string;
 var
+  I: Integer;
   Len: UInt32;
-  UTF8Str: UTF8String;
 begin
   Len := ReadUInt32;
   if Len = 0 then
     Exit('');
-  SetLength(UTF8Str, Len);
-  FStream.ReadBuffer(UTF8Str[1], Len);
-  Result := RetagUTF8Text(RawByteString(UTF8Str));
+  SetLength(Result, Len);
+  for I := 1 to Len do
+    Result[I] := Char(ReadUInt16);
 end;
 
 function TGocciaBytecodeReader.ReadBoolean: Boolean;

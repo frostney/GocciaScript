@@ -75,7 +75,7 @@ begin
   I := 1;
   while I <= Length(APattern) do
   begin
-    if TryReadUTF8CodePointAllowSurrogates(APattern, I, CodePoint,
+    if TryReadCodePointAtAllowSurrogates(APattern, I, CodePoint,
        ByteLength) then
     begin
       case CodePoint of

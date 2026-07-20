@@ -96,9 +96,10 @@ type
 var
   GSetSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetSetShared: TGocciaSharedPrototype; inline;
+function GetSetShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GSetSharedSlot))
   else
     Result := nil;
@@ -235,8 +236,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetSetShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetSetShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GSetSharedSlot, Shared);

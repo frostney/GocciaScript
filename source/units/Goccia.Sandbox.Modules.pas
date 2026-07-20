@@ -126,7 +126,7 @@ begin
     raise EStreamError.Create('No sandbox filesystem configured.');
 
   Stat := FFs.Stat(APath);
-  Result := TGocciaModuleContent.Create(UTF8String(FFs.ReadAllText(APath)),
+  Result := TGocciaModuleContent.Create(string(FFs.ReadAllText(APath)),
     Stat.ModifiedAt);
 end;
 

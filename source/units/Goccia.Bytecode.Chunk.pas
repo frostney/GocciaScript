@@ -7,6 +7,7 @@ interface
 uses
   Generics.Collections,
 
+  CriticalSections,
   OrderedStringMap,
 
   Goccia.Bytecode.Debug;
@@ -234,11 +235,14 @@ type
     function GetRegExpProgramCache(const ASlot: Integer): TObject;
     procedure SetRegExpProgramCache(const ASlot: Integer; const AValue: TObject);
     function GlobalReadCacheSlot(
-      const AConstIndex: Integer): PGocciaGlobalReadCacheEntry; inline;
+      const AConstIndex: Integer): PGocciaGlobalReadCacheEntry;
+      {$IFDEF FPC}inline;{$ENDIF}
     function PropertyReadCacheSlot(
-      const AConstIndex: Integer): PGocciaPropertyReadCacheEntry; inline;
+      const AConstIndex: Integer): PGocciaPropertyReadCacheEntry;
+      {$IFDEF FPC}inline;{$ENDIF}
     function ProtoReadCacheSlot(
-      const AConstIndex: Integer): PGocciaProtoReadCacheEntry; inline;
+      const AConstIndex: Integer): PGocciaProtoReadCacheEntry;
+      {$IFDEF FPC}inline;{$ENDIF}
     function AddFunction(const AFunction: TGocciaFunctionTemplate): UInt16;
     procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt16;
       const AName: string = '');
@@ -248,12 +252,17 @@ type
     procedure AddExceptionHandler(const ATryStart, ATryEnd, ACatchTarget,
       AFinallyTarget: UInt32; const ACatchRegister: UInt16);
 
-    function GetInstruction(const AIndex: Integer): UInt32; inline;
-    function GetConstant(const AIndex: Integer): TGocciaBytecodeConstant; inline;
+    function GetInstruction(const AIndex: Integer): UInt32;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetConstant(const AIndex: Integer): TGocciaBytecodeConstant;
+    {$IFDEF FPC}inline;{$ENDIF}
     function GetFunction(const AIndex: Integer): TGocciaFunctionTemplate;
-    function GetInstructionUnchecked(const AIndex: Integer): UInt32; inline;
-    function GetConstantUnchecked(const AIndex: Integer): TGocciaBytecodeConstant; inline;
-    function GetFunctionUnchecked(const AIndex: Integer): TGocciaFunctionTemplate; inline;
+    function GetInstructionUnchecked(const AIndex: Integer): UInt32;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetConstantUnchecked(const AIndex: Integer): TGocciaBytecodeConstant;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetFunctionUnchecked(const AIndex: Integer): TGocciaFunctionTemplate;
+    {$IFDEF FPC}inline;{$ENDIF}
     function GetUpvalueDescriptor(const AIndex: Integer): TGocciaUpvalueDescriptor;
     function GetDirectEvalEnvironment(
       const AIndex: Integer): TGocciaDirectEvalEnvironment;
@@ -307,29 +316,32 @@ implementation
 uses
   SysUtils,
 
+  NumberBits,
+
   Goccia.Bytecode,
   Goccia.GarbageCollector;
 
 var
-  GTemplateSiteIdLock: TRTLCriticalSection;
+  GTemplateSiteIdLock: TGocciaCriticalSection;
   GNextTemplateSiteId: UInt64;
 
 function AllocateTemplateSiteId: UInt64;
 begin
-  EnterCriticalSection(GTemplateSiteIdLock);
+  CriticalSectionEnter(GTemplateSiteIdLock);
   try
     Inc(GNextTemplateSiteId);
     Result := GNextTemplateSiteId;
   finally
-    LeaveCriticalSection(GTemplateSiteIdLock);
+    CriticalSectionLeave(GTemplateSiteIdLock);
   end;
 end;
 
-function FloatBitsAreNaN(const AValue: Double): Boolean; inline;
+function FloatBitsAreNaN(const AValue: Double): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 var
   Bits: UInt64;
 begin
-  Move(AValue, Bits, SizeOf(Double));
+  Bits := DoubleToBits(AValue);
   Result := ((Bits and $7FF0000000000000) = $7FF0000000000000) and
             ((Bits and $000FFFFFFFFFFFFF) <> 0);
 end;
@@ -371,7 +383,7 @@ var
 begin
   // Unpin any template objects that were built and cached during VM execution.
   // Guard against the GC already having been shut down.
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     for I := 0 to FTemplateObjectCacheCount - 1 do
       if Assigned(FTemplateObjectCaches[I]) then
         TGarbageCollector.Instance.UnpinObject(
@@ -903,10 +915,10 @@ begin
 end;
 
 initialization
-  InitCriticalSection(GTemplateSiteIdLock);
+  CriticalSectionInit(GTemplateSiteIdLock);
   GNextTemplateSiteId := 0;
 
 finalization
-  DoneCriticalSection(GTemplateSiteIdLock);
+  CriticalSectionDone(GTemplateSiteIdLock);
 
 end.

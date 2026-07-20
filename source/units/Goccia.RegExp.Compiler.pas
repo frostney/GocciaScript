@@ -52,6 +52,7 @@ uses
   Math,
   SysUtils,
 
+  TextEncoding,
   TextSemantics,
   UnicodeICU,
 
@@ -83,10 +84,10 @@ type
   private
     FPattern: string;
     FPos: Integer;
-    FCode: array of UInt32;
+    FCode: TRegExpCodeArray;
     FCodeLen: Integer;
-    FCharClasses: array of TRegExpCharClass;
-    FStringSets: array of TRegExpStringSet;
+    FCharClasses: TRegExpCharClassArray;
+    FStringSets: TRegExpStringSetArray;
     FCaptureCount: Integer;
     FNamedGroups: TGocciaRegExpNamedGroups;
     FAltStack: array of Integer;
@@ -247,7 +248,7 @@ var
   LowSurrogate: Cardinal;
   LowSurrogateByteLength: Integer;
 begin
-  if not TryReadUTF8CodePointAllowSurrogates(AText, AIndex, CodePoint,
+  if not TryReadCodePointAtAllowSurrogates(AText, AIndex, CodePoint,
      ByteLength) then
   begin
     Result := Ord(AText[AIndex]);
@@ -257,7 +258,7 @@ begin
 
   Inc(AIndex, ByteLength);
   if (CodePoint >= $D800) and (CodePoint <= $DBFF) and
-     TryReadUTF8CodePointAllowSurrogates(AText, AIndex, LowSurrogate,
+     TryReadCodePointAtAllowSurrogates(AText, AIndex, LowSurrogate,
        LowSurrogateByteLength) and
      (LowSurrogate >= $DC00) and (LowSurrogate <= $DFFF) then
   begin
@@ -302,7 +303,7 @@ begin
       CodePoint := ReadRegExpGroupNameLiteralCodePoint(ARawName, I);
 
     ValidateRegExpGroupNameCodePoint(CodePoint, AtStart);
-    Result := Result + CodePointToUTF8(CodePoint);
+    Result := Result + TextEncoding.CodePointToUTF16(CodePoint);
     AtStart := False;
   end;
 end;
@@ -817,7 +818,8 @@ begin
 end;
 
 procedure IncludeStartCheckLatin1(var ACheck: TRegExpStartCheck;
-  ACodePoint: Cardinal); inline;
+  ACodePoint: Cardinal);
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   ACheck.Latin1Bits[ACodePoint shr 5] :=
     ACheck.Latin1Bits[ACodePoint shr 5] or (UInt32(1) shl (ACodePoint and 31));
@@ -1920,7 +1922,7 @@ begin
 
   if FPos <= Length(FPattern) then
   begin
-    if TryReadUTF8CodePointAllowSurrogates(FPattern, FPos, CodePoint,
+    if TryReadCodePointAtAllowSurrogates(FPattern, FPos, CodePoint,
        ByteLen) and (ByteLen > 1) then
     begin
       Inc(FPos, ByteLen);
@@ -2949,7 +2951,8 @@ begin
   end;
 end;
 
-function IsQuantifierChar(C: Char): Boolean; inline;
+function IsQuantifierChar(C: Char): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (C = '*') or (C = '+') or (C = '?') or (C = '{');
 end;

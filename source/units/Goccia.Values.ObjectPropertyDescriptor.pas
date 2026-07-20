@@ -26,15 +26,24 @@ type
   private
     FFlags: TPropertyFlags;
     FFields: TPropertyDescriptorFields;
-    function GetEnumerable: Boolean; inline;
-    function GetConfigurable: Boolean; inline;
-    function GetWritable: Boolean; inline;
-    function GetHasEnumerableField: Boolean; inline;
-    function GetHasConfigurableField: Boolean; inline;
-    function GetHasWritableField: Boolean; inline;
-    function GetHasValue: Boolean; inline;
-    function GetHasGet: Boolean; inline;
-    function GetHasSet: Boolean; inline;
+    function GetEnumerable: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetConfigurable: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetWritable: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetHasEnumerableField: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetHasConfigurableField: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetHasWritableField: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetHasValue: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetHasGet: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetHasSet: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
   public
     constructor Create(const AFlags: TPropertyFlags;
       const AFields: TPropertyDescriptorFields);
@@ -95,7 +104,8 @@ type
     FGetter: TGocciaValue;
     FSetter: TGocciaValue;
 
-    function GetWritable: Boolean; inline;
+    function GetWritable: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
   public
     constructor Create(const AGetter: TGocciaValue; const ASetter: TGocciaValue; const AFlags: TPropertyFlags);
     constructor CreatePartial(const AGetter: TGocciaValue;

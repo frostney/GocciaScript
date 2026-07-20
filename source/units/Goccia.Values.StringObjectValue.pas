@@ -104,13 +104,13 @@ implementation
 
 uses
   Math,
-  StrUtils,
   SysUtils,
 
   IntlICU,
   IntlLocaleResolver,
   IntlTypes,
   TextSemantics,
+  UnicodeNormalization,
 
   Goccia.Arithmetic,
   Goccia.Constants.ConstructorNames,
@@ -156,9 +156,10 @@ end;
 var
   GStringPrototypeSlot: TGocciaRealmSlotId;
 
-function GetSharedStringPrototype: TGocciaObjectValue; inline;
+function GetSharedStringPrototype: TGocciaObjectValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GStringPrototypeSlot))
   else
     Result := nil;
@@ -867,8 +868,8 @@ var
   Members: TGocciaMemberCollection;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetSharedStringPrototype) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetSharedStringPrototype <> nil) then Exit;
 
   // Self is both the String.prototype object (held in the realm slot below) and
   // the method host the native methods bind to, so the realm slot already keeps
@@ -931,7 +932,7 @@ end;
 
 class function TGocciaStringObjectValue.GetSharedPrototype: TGocciaObjectValue;
 begin
-  if not Assigned(GetSharedStringPrototype) then
+  if (GetSharedStringPrototype = nil) then
     TGocciaStringObjectValue.Create(TGocciaStringLiteralValue.Create(''));
   Result := GetSharedStringPrototype;
 end;
@@ -1004,7 +1005,7 @@ begin
   end;
 
   Character := UTF16CodeUnitAt(StringValue, Index);
-  if TryReadUTF8CodePointAllowSurrogates(Character, 1, CodePoint,
+  if TryReadCodePointAtAllowSurrogates(Character, 1, CodePoint,
     ByteLength) then
     Result := TGocciaNumberLiteralValue.Create(CodePoint)
   else if Character <> '' then
@@ -1025,7 +1026,8 @@ begin
   // Step 3: Let cpList be StringToCodePoints(S)
   // Step 4: Let cuList be the result of toUppercase(cpList)
   // Step 5: Return CodePointsToString(cuList)
-  Result := TGocciaStringLiteralValue.Create(UnicodeUpperCaseUTF8(StringValue));
+  Result := TGocciaStringLiteralValue.Create(
+    ECMAScriptDefaultUpperCase(StringValue));
 end;
 
 // ES2026 §22.1.3.28 String.prototype.toLowerCase()
@@ -1040,7 +1042,8 @@ begin
   // Step 3: Let cpList be StringToCodePoints(S)
   // Step 4: Let cuList be the result of toLowercase(cpList)
   // Step 5: Return CodePointsToString(cuList)
-  Result := TGocciaStringLiteralValue.Create(UnicodeLowerCaseUTF8(StringValue));
+  Result := TGocciaStringLiteralValue.Create(
+    ECMAScriptDefaultLowerCase(StringValue));
 end;
 
 // ES2026 §22.1.3.27 String.prototype.toLocaleUpperCase([ reserved1 [ , reserved2 ]])
@@ -2221,7 +2224,8 @@ begin
   // Step 5: If n = 0, return ""
   // Step 6: Return S repeated n times
   Count := Trunc(CountValue.Value);
-  Result := TGocciaStringLiteralValue.Create(DupeString(StringValue, Count));
+  Result := TGocciaStringLiteralValue.Create(
+    RepeatUTF16String(StringValue, Count));
 end;
 
 // ES2026 §22.1.3.15 String.prototype.padStart(maxLength [, fillString])
@@ -2264,7 +2268,7 @@ begin
   // Repeat arithmetically instead of re-measuring the growing padding each
   // iteration (which was O(PadNeeded^2) in code-unit re-scans plus concat).
   PadUnitLength := UTF16CodeUnitLength(PadString);
-  Padding := DupeString(PadString,
+  Padding := RepeatUTF16String(PadString,
     (PadNeeded + PadUnitLength - 1) div PadUnitLength);
   Padding := UTF16Substring(Padding, 0, PadNeeded);
 
@@ -2311,7 +2315,7 @@ begin
   // Repeat arithmetically instead of re-measuring the growing padding each
   // iteration (which was O(PadNeeded^2) in code-unit re-scans plus concat).
   PadUnitLength := UTF16CodeUnitLength(PadString);
-  Padding := DupeString(PadString,
+  Padding := RepeatUTF16String(PadString,
     (PadNeeded + PadUnitLength - 1) div PadUnitLength);
   Padding := UTF16Substring(Padding, 0, PadNeeded);
 
@@ -2449,7 +2453,8 @@ end;
 // ES2026 §22.1.3.13 String.prototype.normalize([form])
 function TGocciaStringObjectValue.StringNormalize(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  StringValue, Form, NormalizedValue: string;
+  StringValue, Form: string;
+  NormalizationForm: TUnicodeNormalizationForm;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
@@ -2466,10 +2471,16 @@ begin
     ThrowRangeError(SErrorInvalidNormalizationForm, SSuggestNormalizationForm);
 
   // Step 5: Return the Unicode Normalization Form f of S
-  if TryICUNormalize(Form, StringValue, NormalizedValue) then
-    Result := TGocciaStringLiteralValue.Create(NormalizedValue)
+  if Form = 'NFC' then
+    NormalizationForm := unfNFC
+  else if Form = 'NFD' then
+    NormalizationForm := unfNFD
+  else if Form = 'NFKC' then
+    NormalizationForm := unfNFKC
   else
-    Result := TGocciaStringLiteralValue.Create(StringValue);
+    NormalizationForm := unfNFKD;
+  Result := TGocciaStringLiteralValue.Create(
+    NormalizeUnicode(StringValue, NormalizationForm));
 end;
 
 // ES2026 §22.1.3.8 String.prototype.isWellFormed()

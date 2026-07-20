@@ -203,8 +203,120 @@ _Avoid_: Slow mode, deoptimized object.
 ### Source And Tools
 
 **Source text**:
-The textual contents of GocciaScript code, independent of whether it came from a file, stdin, or an embedding host.
+The UTF-16 textual contents of GocciaScript code, independent of whether it came from a file, stdin, or an embedding host. Source text is ECMAScript text, not encoded file bytes.
 _Avoid_: Source file when referring to in-memory contents.
+
+**Source file bytes**:
+The encoded bytes of a source file before decoding into source text.
+_Avoid_: Source text, UTF-8 string.
+
+**ECMAScript text**:
+Text represented as UTF-16 code units according to ECMAScript string semantics, including the ability to preserve lone surrogate code units. Source text, identifiers, property keys, and runtime string values are ECMAScript text.
+_Avoid_: UTF-8 string, byte string.
+
+**Canonical text representation**:
+The single in-memory form of ECMAScript text, preserving every UTF-16 code unit including lone surrogates.
+_Avoid_: Internal UTF-8 representation, byte-backed string, text mode.
+
+**ECMAScript semantic boundary**:
+A text operation whose behavior is defined by ECMA-262 or ECMA-402. Its indexing, lone-surrogate handling, normalization, casing, encoding, parsing, and error behavior follow the applicable specification; host encoding policy applies only where the specification delegates the choice to the host.
+_Avoid_: Generic Unicode behavior, platform string behavior, host text policy.
+
+**Encoded text bytes**:
+A byte sequence in a named external encoding, such as UTF-8, before decoding into ECMAScript text or after encoding it for output. Encoded text bytes exist only at host, file, network, serialization, or binary-data boundaries and are not a kind of in-memory string.
+_Avoid_: String, UTF-8 string, source text, ECMAScript text.
+
+**Strict UTF-8 input**:
+Encoded text bytes that must decode as well-formed UTF-8 before entering the source pipeline or a structured-text parser. Invalid input is rejected rather than repaired.
+_Avoid_: Best-effort text, replacement decoding.
+
+**Replacement decoding**:
+UTF-8 decoding that substitutes U+FFFD for malformed byte sequences because the governing API contract explicitly requires recovery, as with a non-fatal `TextDecoder`.
+_Avoid_: Default file decoding, strict UTF-8 input.
+
+**Text API**:
+A host-facing or internal API whose text parameters and results are ECMAScript text rather than encoded bytes.
+_Avoid_: UTF8String overload, encoded text API.
+
+**Encoded-text API**:
+An API whose parameters or results are encoded text bytes and whose contract identifies the encoding operation.
+_Avoid_: String overload, implicit encoding adapter.
+
+**FFI UTF-8 string**:
+A NUL-terminated native `char*` whose payload is well-formed UTF-8 and contains no embedded NUL. It is distinct from ECMAScript text and from an arbitrary byte pointer.
+_Avoid_: cstring, ANSI string, native string.
+
+**Text buffer**:
+A mutable builder whose elements and length are UTF-16 code units.
+_Avoid_: Byte buffer, AnsiString buffer.
+
+**Byte buffer**:
+A mutable builder for encoded or binary data whose elements and length are bytes.
+_Avoid_: Text buffer, byte string.
+
+**Delphi parity**:
+The supported-compiler state in which every shipped executable compiles and runs across the declared Delphi target matrix and the complete applicable local test inventory passes with the expected semantics.
+_Avoid_: Delphi compatibility, representative Delphi smoke test, core-engine-only support.
+
+**Delphi project group**:
+A repository-owned set of IDE project definitions that builds the shipped executable inventory under Delphi.
+_Avoid_: Opening individual DPR files as the supported build, compliance harness group.
+
+**Compliance runner**:
+An internal native application that coordinates execution of a prepared, pinned external conformance suite, verifies the suite revision, isolates individual cases, and emits human-readable and machine-readable results. A compliance runner is not a shipped runtime tool or a single-input decoder harness.
+_Avoid_: Test runner, compliance harness, suite downloader.
+
+**Host path**:
+A Unicode path interpreted by the host operating system or embedding filesystem rather than by ECMAScript.
+_Avoid_: Encoded text bytes, source text, UTF-8 path.
+
+**Source span**:
+A zero-based half-open range of UTF-16 code-unit offsets within source text. Token and AST locations use source spans as their canonical coordinates; line and column values are derived at reporting boundaries. Source maps expose zero-based UTF-16 columns as required by ECMA-426, while user-facing errors and stack traces expose one-based line and column values.
+_Avoid_: Byte range, character range, independently tracked line and column.
+
+**Source character**:
+A Unicode code point consumed by the ECMAScript lexical grammar from source text. A valid UTF-16 surrogate pair contributes one source character while an unpaired surrogate contributes one source character of width one code unit; source spans continue to count the underlying code units.
+_Avoid_: Pascal `Char`, byte, grapheme, source span.
+
+**RegExp index**:
+A zero-based UTF-16 code-unit offset used by RegExp capture slots, match indices, `lastIndex`, replacement operations, and `d`-flag index pairs. Unicode-aware matching may consume a valid surrogate pair as one code point, but externally observable RegExp indices always remain code-unit offsets.
+_Avoid_: Byte index, code-point index, character index.
+
+**String index**:
+A zero-based UTF-16 code-unit offset into an ECMAScript String. Ordinary indexed String operations use string indices; only operations explicitly defined in terms of Unicode code points combine valid surrogate pairs.
+_Avoid_: Byte index, grapheme index, implicit Pascal string index.
+
+**Template token value**:
+The semantic payload of a template token: exact raw text, cooked text, and whether the cooked value is valid. Invalid escapes in tagged templates retain their raw value while making the cooked value unavailable.
+_Avoid_: Packed template string, separator character, decoded template text.
+
+**Embedded resource artifact**:
+A committed binary resource container generated by a pinned update workflow and consumed unchanged by supported native compilers.
+_Avoid_: Delphi-generated resource copy, string resource buffer, runtime-generated resource.
+
+**Numeric text conversion**:
+The conversion between exact decimal text and ECMAScript binary64 Number values, including ties-to-even parsing and shortest-roundtrip formatting.
+_Avoid_: `FloatToStr`, `StrToFloat`, presentation formatting, locale formatting.
+
+**Native number arithmetic**:
+Ordinary binary64 arithmetic over ECMAScript Number values, including NaN, infinities, signed zero, rounding, overflow, and underflow.
+_Avoid_: Shadow arithmetic backend, custom IEEE-754 engine, manual special-value arithmetic.
+
+**ECMAScript numeric guard**:
+An explicit special-case step required by an ECMA-262 numerical algorithm before or after native number arithmetic. It applies consistently across compilers even when a particular compiler's routine happens to produce the same result.
+_Avoid_: Compiler workaround, NaN subsystem, defensive arithmetic branch.
+
+**Numeric compatibility adapter**:
+A narrowly scoped, probe-backed bridge to platform numerical functionality used when the supported Pascal RTL routines cannot implement one ECMAScript operation across the target matrix. It supplies that operation without replacing native number arithmetic.
+_Avoid_: Arithmetic backend, speculative workaround, compiler-specific number mode.
+
+**Number remainder**:
+The exact ECMA-262 `Number::remainder` operation over two binary64 Number values, including its NaN, infinity, signed-zero, normal, and subnormal results. It is distinct from BigInt remainder and from similarly named host-language or RTL operations.
+_Avoid_: Modulo, `Math.FMod`, floating-point `mod`, BigInt remainder.
+
+**Floating-point execution scope**:
+A bounded execution context that establishes ECMAScript-compatible floating-point rounding and exception behavior while preserving the host's inherited state.
+_Avoid_: Custom Win32 arithmetic backend, permanent process FPU mutation, blanket forced-store wrapper.
 
 **Preprocessor**:
 A source-to-source transformation applied before the source pipeline lexes and parses source text. JSX is the current preprocessor.

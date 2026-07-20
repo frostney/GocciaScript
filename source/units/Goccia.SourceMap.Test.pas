@@ -6,6 +6,7 @@ uses
   Classes,
   SysUtils,
 
+  FileUtils,
   TestingPascalLibrary,
   TextSemantics,
 
@@ -17,7 +18,7 @@ uses
 type
   TSourceMapTests = class(TTestSuite)
   private
-    procedure WriteRawFile(const APath: string; const ABytes: RawByteString);
+    procedure WriteFixtureFile(const APath, AText: string);
     procedure TestVersionIsThree;
     procedure TestAddSource;
     procedure TestAddSourceDeduplicates;
@@ -69,35 +70,9 @@ begin
   Test('Clone preserves translation', TestClonePreservesTranslation);
 end;
 
-procedure TSourceMapTests.WriteRawFile(const APath: string;
-  const ABytes: RawByteString);
-var
-  Stream: TFileStream;
-{$IFDEF LAKON}
-  Buffer: TBytes;
-  Index: Integer;
-{$ENDIF}
+procedure TSourceMapTests.WriteFixtureFile(const APath, AText: string);
 begin
-  Stream := TFileStream.Create(APath, fmCreate);
-  try
-    if Length(ABytes) > 0 then
-{$IFDEF LAKON}
-    begin
-      // Lakon's RawByteString aliases the one string type (bytes
-      // ride one per code unit), and Pointer(S) is the string BLOCK,
-      // not the payload — copy the low bytes out explicitly (the
-      // Goccia.Modules.Configuration.Test pattern).
-      SetLength(Buffer, Length(ABytes));
-      for Index := 1 to Length(ABytes) do
-        Buffer[Index - 1] := Ord(ABytes[Index]) and $FF;
-      Stream.WriteBuffer(Buffer[0], Length(Buffer));
-    end;
-{$ELSE}
-      Stream.WriteBuffer(Pointer(ABytes)^, Length(ABytes));
-{$ENDIF}
-  finally
-    Stream.Free;
-  end;
+  FileUtils.WriteUTF8FileText(APath, AText);
 end;
 
 procedure TSourceMapTests.TestVersionIsThree;
@@ -381,10 +356,11 @@ end;
 
 procedure TSourceMapTests.TestCreateFromFilePreservesUTF8;
 const
-  SOURCE_BYTES = 'caf' + #$C3#$A9 + '.js';
-  NAME_BYTES = 'd' + #$C3#$A9 + 'j' + #$C3#$A0;
-  JSON_BYTES = '{"version":3,"file":"out.js","sources":["' +
-    SOURCE_BYTES + '"],"names":["' + NAME_BYTES + '"],"mappings":"AAAAA"}';
+  SOURCE_NAME = 'caf' + #$00E9 + '.js';
+  MAPPING_NAME = 'd' + #$00E9 + 'j' + #$00E0;
+  JSON_TEXT = '{"version":3,"file":"out.js","sources":["' +
+    SOURCE_NAME + '"],"names":["' + MAPPING_NAME +
+    '"],"mappings":"AAAAA"}';
 var
   Consumer: TGocciaSourceMapConsumer;
   FilePath: string;
@@ -394,14 +370,14 @@ var
   SrcLine: Integer;
 begin
   FilePath := GetTempFileName(GetTempDir(False), 'gsm');
-  WriteRawFile(FilePath, JSON_BYTES);
+  WriteFixtureFile(FilePath, JSON_TEXT);
   try
     Consumer := TGocciaSourceMapConsumer.CreateFromFile(FilePath);
     try
       Expect<Boolean>(Consumer.TranslateWithName(1, 0, SourceFile,
         SrcLine, SrcCol, Name)).ToBe(True);
-      Expect<string>(SourceFile).ToBe(RetagUTF8Text(SOURCE_BYTES));
-      Expect<string>(Name).ToBe(RetagUTF8Text(NAME_BYTES));
+      Expect<string>(SourceFile).ToBe(SOURCE_NAME);
+      Expect<string>(Name).ToBe(MAPPING_NAME);
     finally
       Consumer.Free;
     end;
@@ -562,7 +538,7 @@ begin
   TGarbageCollector.Initialize;
   try
     TestRunnerProgram.AddSuite(TSourceMapTests.Create('SourceMap'));
-    TestRunnerProgram.Run;
+    RunGocciaTests;
     ExitCode := TestResultToExitCode;
   finally
     TGarbageCollector.Shutdown;

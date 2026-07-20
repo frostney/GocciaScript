@@ -50,9 +50,10 @@ var
   GBooleanPrototypeSlot: TGocciaRealmSlotId;
   GBooleanMethodHostSlot: TGocciaRealmSlotId;
 
-function GetSharedBooleanPrototype: TGocciaObjectValue; inline;
+function GetSharedBooleanPrototype: TGocciaObjectValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GBooleanPrototypeSlot))
   else
     Result := nil;
@@ -90,8 +91,8 @@ var
   SharedPrototype: TGocciaObjectValue;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetSharedBooleanPrototype) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetSharedBooleanPrototype <> nil) then Exit;
 
   SharedPrototype := Self;
   SharedPrototype.Prototype := TGocciaObjectValue.SharedObjectPrototype;
@@ -122,7 +123,7 @@ end;
 
 class function TGocciaBooleanObjectValue.GetSharedPrototype: TGocciaObjectValue;
 begin
-  if not Assigned(GetSharedBooleanPrototype) then
+  if (GetSharedBooleanPrototype = nil) then
     TGocciaBooleanObjectValue.Create(TGocciaBooleanLiteralValue.FalseValue);
   Result := GetSharedBooleanPrototype;
 end;

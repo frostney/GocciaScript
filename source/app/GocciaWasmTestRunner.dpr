@@ -271,7 +271,7 @@ begin
   EngineOptions := nil;
   try
     try
-      Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+      Source := CreateFileTextLines(ReadUTF8FileText(AFileName));
       FileConfig := DiscoverFileConfig(AFileName);
       EngineOptions := TGocciaEngineOptions.Create;
 

@@ -68,16 +68,22 @@ type
 
     procedure ResetCounts;
 
-    procedure RecordOpcode(const AOp: UInt8); inline;
-    procedure RecordScalarHit; inline;
-    procedure RecordScalarMiss; inline;
-    procedure RecordAllocation; inline;
+    procedure RecordOpcode(const AOp: UInt8);
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure RecordScalarHit;
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure RecordScalarMiss;
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure RecordAllocation;
+    {$IFDEF FPC}inline;{$ENDIF}
     // Shape system saturation events (cold paths; see Goccia.Values.Shape):
     // an object layout hitting the transition depth limit, and a realm
     // shape table reaching capacity. Both degrade caching silently, so the
     // profiler is the diagnostic surface for them.
-    procedure RecordShapeDepthLimit; inline;
-    procedure RecordShapeTableSaturation; inline;
+    procedure RecordShapeDepthLimit;
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure RecordShapeTableSaturation;
+    {$IFDEF FPC}inline;{$ENDIF}
 
     function RegisterTemplate(const AName, ASourceFile: string;
       const ALine: Integer): Integer;
@@ -86,9 +92,12 @@ type
     procedure PopFunction(const AProfileIndex: Integer;
       const ATimestamp: Int64);
 
-    function GetOpcodeCount(const AOp: UInt8): Int64; inline;
-    function GetOpcodePairCount(const APrev, ACur: UInt8): Int64; inline;
-    function GetFunctionProfile(const AIndex: Integer): TGocciaFunctionProfile; inline;
+    function GetOpcodeCount(const AOp: UInt8): Int64;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetOpcodePairCount(const APrev, ACur: UInt8): Int64;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetFunctionProfile(const AIndex: Integer): TGocciaFunctionProfile;
+    {$IFDEF FPC}inline;{$ENDIF}
 
     property Mode: TGocciaProfileMode read FMode write FMode;
     property Enabled: Boolean read FEnabled write FEnabled;

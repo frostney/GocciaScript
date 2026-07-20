@@ -113,7 +113,7 @@ var
   Stomp: array of TGocciaObjectValue;
   FpcStomp: array of Pointer;
   FpcStompCount: Integer;
-  HostSize: PtrUInt;
+  HostSize: NativeUInt;
 begin
   // Each cycle builds a fresh engine/realm and rebuilds every unit's prototype
   // members bound to that realm's own host, then tears the realm down (RunScript
@@ -179,7 +179,7 @@ begin
   PinPrimitiveSingletons;
   try
     TestRunnerProgram.AddSuite(TRealmReuseTests.Create('SharedPrototypeRealmReuse'));
-    TestRunnerProgram.Run;
+    RunGocciaTests;
   finally
     TGarbageCollector.Shutdown;
   end;

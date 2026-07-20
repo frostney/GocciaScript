@@ -53,8 +53,10 @@ const
   LOW_SURROGATE_END = $DFFF;
 
 type
+  TRegExpInputUnits = array of Cardinal;
+
   TRegExpInput = record
-    Units: array of Cardinal;
+    Units: TRegExpInputUnits;
     Length: Integer;
   end;
 
@@ -86,13 +88,15 @@ begin
   AMemo.Count := 0;
 end;
 
-procedure MemoEnsureAllocated(var AMemo: TMemoTable); inline;
+procedure MemoEnsureAllocated(var AMemo: TMemoTable);
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if Length(AMemo.Entries) = 0 then
     SetLength(AMemo.Entries, MEMO_INITIAL_CAPACITY);
 end;
 
-function MemoHash(APC, APos, ACapacity: Integer): Integer; inline;
+function MemoHash(APC, APos, ACapacity: Integer): Integer;
+{$IFDEF FPC}inline;{$ENDIF}
 var
   H: Cardinal;
 begin
@@ -201,7 +205,8 @@ begin
 end;
 
 function CharClassContains(const AClass: TRegExpCharClass;
-  ACodePoint: Cardinal): Boolean; inline;
+  ACodePoint: Cardinal): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   Hi: Integer;
   Index: Integer;
@@ -247,7 +252,8 @@ begin
   Result := False;
 end;
 
-function IsBasicWordChar(ACodePoint: Cardinal): Boolean; inline;
+function IsBasicWordChar(ACodePoint: Cardinal): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ((ACodePoint >= Ord('a')) and (ACodePoint <= Ord('z'))) or
             ((ACodePoint >= Ord('A')) and (ACodePoint <= Ord('Z'))) or
@@ -256,7 +262,8 @@ begin
 end;
 
 function IsWordChar(ACodePoint: Cardinal; AUnicodeAware,
-  AIgnoreCase: Boolean): Boolean; inline;
+  AIgnoreCase: Boolean): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   if IsBasicWordChar(ACodePoint) then
     Exit(True);
@@ -266,26 +273,30 @@ begin
     AUnicodeAware, AIgnoreCase));
 end;
 
-function IsLineTerminator(ACodePoint: Cardinal): Boolean; inline;
+function IsLineTerminator(ACodePoint: Cardinal): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (ACodePoint = $0A) or (ACodePoint = $0D) or
             (ACodePoint = $2028) or (ACodePoint = $2029);
 end;
 
-function IsHighSurrogate(ACodeUnit: Cardinal): Boolean; inline;
+function IsHighSurrogate(ACodeUnit: Cardinal): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (ACodeUnit >= HIGH_SURROGATE_START) and
     (ACodeUnit <= HIGH_SURROGATE_END);
 end;
 
-function IsLowSurrogate(ACodeUnit: Cardinal): Boolean; inline;
+function IsLowSurrogate(ACodeUnit: Cardinal): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (ACodeUnit >= LOW_SURROGATE_START) and
     (ACodeUnit <= LOW_SURROGATE_END);
 end;
 
 function SurrogatePairToCodePoint(const AHighSurrogate,
-  ALowSurrogate: Cardinal): Cardinal; inline;
+  ALowSurrogate: Cardinal): Cardinal;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := $10000 + ((AHighSurrogate - HIGH_SURROGATE_START) shl 10) +
     (ALowSurrogate - LOW_SURROGATE_START);
@@ -310,7 +321,7 @@ begin
       Inc(Count);
       Inc(Index);
     end
-    else if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
+    else if TryReadCodePointAtAllowSurrogates(AText, Index, CodePoint,
       ByteLength) then
     begin
       if CodePoint <= $FFFF then
@@ -346,7 +357,8 @@ end;
 
 function ReadInputCodePoint(const AInput: TRegExpInput; APos: Integer;
   const AUnicode: Boolean; out ACodePoint: Cardinal;
-  out AWidth: Integer): Boolean; inline;
+  out AWidth: Integer): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   CodeUnit: Cardinal;
 begin
@@ -459,7 +471,8 @@ begin
 end;
 
 function StartCheckMatchesLatin1Unit(const ACheck: TRegExpStartCheck;
-  ACodeUnit: Cardinal): Boolean; inline;
+  ACodeUnit: Cardinal): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (ACodeUnit <= $FF) and
     ((ACheck.Latin1Bits[ACodeUnit shr 5] and
@@ -1305,12 +1318,13 @@ end;
 // registry's finalization) — no thread retains a residual.
 threadvar
   GRegExpInputMemoStr: string;
-  GRegExpInputMemoUnits: array of Cardinal;
+  GRegExpInputMemoUnits: TRegExpInputUnits;
   GRegExpInputMemoLength: Integer;
   GRegExpInputMemoValid: Boolean;
 
 function TryGetRegExpInputMemo(const AInput: string;
-  out ADecodedInput: TRegExpInput): Boolean; inline;
+  out ADecodedInput: TRegExpInput): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := GRegExpInputMemoValid and
     (Pointer(AInput) = Pointer(GRegExpInputMemoStr));
@@ -1322,7 +1336,8 @@ begin
 end;
 
 procedure GetRegExpInput(const AInput: string;
-  out ADecodedInput: TRegExpInput); inline;
+  out ADecodedInput: TRegExpInput);
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   if TryGetRegExpInputMemo(AInput, ADecodedInput) then
     Exit;

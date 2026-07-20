@@ -12,9 +12,12 @@ type
 
 procedure StartInstructionLimit(const AMaxInstructions: Int64);
 procedure ClearInstructionLimit;
-procedure IncrementInstructionCounter; inline;
-procedure CheckInstructionLimit; inline;
-procedure PollInstructionLimit; inline;
+procedure IncrementInstructionCounter;
+{$IFDEF FPC}inline;{$ENDIF}
+procedure CheckInstructionLimit;
+{$IFDEF FPC}inline;{$ENDIF}
+procedure PollInstructionLimit;
+{$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 
@@ -34,20 +37,23 @@ begin
   GInstructionCount := 0;
 end;
 
-procedure IncrementInstructionCounter; inline;
+procedure IncrementInstructionCounter;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if GMaxInstructions > 0 then
     Inc(GInstructionCount);
 end;
 
-procedure CheckInstructionLimit; inline;
+procedure CheckInstructionLimit;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if (GMaxInstructions > 0) and (GInstructionCount >= GMaxInstructions) then
     raise TGocciaInstructionLimitError.CreateFmt(
       'Execution exceeded instruction limit of %d', [GMaxInstructions]);
 end;
 
-procedure PollInstructionLimit; inline;
+procedure PollInstructionLimit;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if GMaxInstructions > 0 then
   begin

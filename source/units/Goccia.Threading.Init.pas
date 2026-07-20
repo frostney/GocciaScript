@@ -72,7 +72,7 @@ begin
       Executor.Free;
     end;
     // Clean up the throwaway objects.
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.Collect;
   finally
     Source.Free;

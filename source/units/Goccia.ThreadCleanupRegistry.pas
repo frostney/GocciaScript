@@ -49,6 +49,9 @@ function IsThreadvarCleanupRegistered(const AProc: TGocciaThreadvarCleanupProc):
 
 implementation
 
+uses
+  SysUtils;
+
 const
   CLEANUPS_INITIAL_CAPACITY = 8;
 
@@ -82,20 +85,28 @@ begin
     GCleanups[I]();
 end;
 
+function CleanupProceduresEqual(const ALeft; const ARight): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
+begin
+  Result := CompareMem(@ALeft, @ARight, SizeOf(TGocciaThreadvarCleanupProc));
+end;
+
 function IsThreadvarCleanupRegistered(const AProc: TGocciaThreadvarCleanupProc): Boolean;
 var
   I: Integer;
 begin
   // Compare the stored code pointers byte-for-byte. A direct `=` (or a Pointer
   // cast) on a parameterless procedural variable makes FPC *call* it instead of
-  // reading its address; passing the procvars to CompareByte's untyped const
-  // params takes their addresses, so this reads the code pointers without
+  // reading its address. CleanupProceduresEqual's untyped const parameters
+  // take their addresses, so the comparison reads the code pointers without
   // invoking them.
   for I := 0 to GCleanupCount - 1 do
-    if CompareByte(GCleanups[I], AProc, SizeOf(TGocciaThreadvarCleanupProc)) = 0 then
+    if CleanupProceduresEqual(GCleanups[I], AProc) then
       Exit(True);
   Result := False;
 end;
+
+initialization
 
 finalization
   RunThreadvarCleanups;

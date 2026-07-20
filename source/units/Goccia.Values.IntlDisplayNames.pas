@@ -52,9 +52,10 @@ uses
 var
   GIntlDisplayNamesSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetIntlDisplayNamesShared: TGocciaSharedPrototype; inline;
+function GetIntlDisplayNamesShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlDisplayNamesSharedSlot))
   else
     Result := nil;
@@ -317,7 +318,7 @@ begin
     'languageDisplay', FLanguageDisplay, ['dialect', 'standard']);
 
   InitializePrototype;
-  if Assigned(GetIntlDisplayNamesShared) then
+  if (GetIntlDisplayNamesShared <> nil) then
     FPrototype := GetIntlDisplayNamesShared.Prototype;
 end;
 
@@ -332,8 +333,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetIntlDisplayNamesShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetIntlDisplayNamesShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlDisplayNamesSharedSlot, Shared);

@@ -46,9 +46,6 @@ type
     constructor Create;
     destructor Destroy; override;
 
-{$IFNDEF LAKON}
-    function Parse(const AText: UTF8String): TGocciaArrayValue; overload;
-{$ENDIF}
     function Parse(const AText: string): TGocciaArrayValue; overload;
     function Parse(const ABytes: TBytes): TGocciaArrayValue; overload;
     function ParseChunk(const AText: string; const AStart: Integer = 0;
@@ -63,6 +60,7 @@ uses
   StrUtils,
 
   BOM,
+  TextEncoding,
   TextSemantics;
 
 constructor TGocciaJSONLParser.Create;
@@ -171,16 +169,16 @@ end;
 class function TGocciaJSONLParser.SliceBytesToString(const ABytes: TBytes;
   const AStart, AEnd: Integer): string;
 var
-  RawBytes: RawByteString;
+  Bytes: TBytes;
   ByteLength: Integer;
 begin
   ByteLength := AEnd - AStart;
   if ByteLength <= 0 then
     Exit('');
 
-  SetLength(RawBytes, ByteLength);
-  Move(ABytes[AStart], RawBytes[1], ByteLength);
-  Result := RetagUTF8Text(RawBytes);
+  SetLength(Bytes, ByteLength);
+  Move(ABytes[AStart], Bytes[0], ByteLength);
+  Result := DecodeUTF8WithReplacement(Bytes);
 end;
 
 function TGocciaJSONLParser.TryParseLine(const ALineText: string;
@@ -199,13 +197,6 @@ begin
     end;
   end;
 end;
-
-{$IFNDEF LAKON}
-function TGocciaJSONLParser.Parse(const AText: UTF8String): TGocciaArrayValue;
-begin
-  Result := Parse(RetagUTF8Text(RawByteString(AText)));
-end;
-{$ENDIF}
 
 function TGocciaJSONLParser.Parse(const AText: string): TGocciaArrayValue;
 var

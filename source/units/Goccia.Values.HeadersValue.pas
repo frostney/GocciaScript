@@ -86,9 +86,10 @@ uses
 var
   GHeadersSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetHeadersShared: TGocciaSharedPrototype; inline;
+function GetHeadersShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GHeadersSharedSlot))
   else
     Result := nil;
@@ -121,8 +122,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetHeadersShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetHeadersShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GHeadersSharedSlot, Shared);

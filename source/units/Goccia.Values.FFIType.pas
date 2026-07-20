@@ -333,7 +333,7 @@ begin
   if (ScalarType = fftVoid) and not AAllowVoid then
     ThrowTypeError(SErrorFFIVoidReturnOnly,
       SSuggestFFIUsage);
-  {$IFNDEF CPU64}
+  {$IF not (defined(GOCCIA_CPU_64))}
   if ScalarType in [fftI64, fftU64] then
     ThrowTypeError(SErrorFFI64BitType32Bit, SSuggestFFIUsage);
   {$ENDIF}
@@ -652,7 +652,7 @@ function TGocciaFFIAggregateValue.ReadValue(
   const AOffset: Integer): TGocciaValue;
 var
   Data: TBytes;
-  RawPointer: PtrUInt;
+  RawPointer: NativeUInt;
 begin
   EnsureBackingStore;
   if AType.IsAggregate then
@@ -677,7 +677,7 @@ begin
     fftI64, fftU64:
       Result := TGocciaNumberLiteralValue.Create(ReadBinaryBigIntElement(Data,
         AOffset, NumericElementKind(AType.ScalarType), True));
-    fftPointer, fftCString:
+    fftPointer, fftUTF8String:
     begin
       RawPointer := 0;
       Move(Data[AOffset], RawPointer, SizeOf(Pointer));
@@ -699,7 +699,7 @@ var
   Data, SourceData: TBytes;
   SourceAggregate: TGocciaFFIAggregateValue;
   CallbackValue: TGocciaFFICallbackValue;
-  RawPointer: PtrUInt;
+  RawPointer: NativeUInt;
 begin
   EnsureBackingStore;
   Data := FBuffer.Data;
@@ -739,7 +739,7 @@ begin
       ThrowTypeError(SErrorFFICallbackFieldType,
         SSuggestFFIUsage);
     CallbackValue.EnsureOpen;
-    RawPointer := PtrUInt(CallbackValue.CodePointer);
+    RawPointer := NativeUInt(CallbackValue.Pointer);
     Move(RawPointer, Data[AOffset], SizeOf(Pointer));
     FBuffer.Data := Data;
     FPointerGuards.SetGuard(AOffset, CallbackValue.LifetimeGuard);
@@ -755,11 +755,11 @@ begin
     fftI64, fftU64:
       WriteBinaryBigIntElement(Data, AOffset,
         ToInt64Value(AValue), True);
-    fftPointer, fftCString:
+    fftPointer, fftUTF8String:
     begin
       if AValue is TGocciaFFIPointerValue then
       begin
-        RawPointer := PtrUInt(TGocciaFFIPointerValue(AValue).Address);
+        RawPointer := NativeUInt(TGocciaFFIPointerValue(AValue).Address);
         FPointerGuards.SetGuard(AOffset,
           TGocciaFFIPointerValue(AValue).LifetimeGuard);
       end
@@ -781,7 +781,7 @@ begin
       NumericElementKind(AType.ScalarType),
       AValue.ToNumberLiteral.Value, True);
   end;
-  if not (AType.ScalarType in [fftPointer, fftCString]) then
+  if not (AType.ScalarType in [fftPointer, fftUTF8String]) then
     FPointerGuards.ClearRange(AOffset, AType.Size);
   FBuffer.Data := Data;
 end;
@@ -940,7 +940,7 @@ var
   var
     I: Integer;
     Field: TGocciaFFIFieldDescriptor;
-    RawPointer: PtrUInt;
+    RawPointer: NativeUInt;
   begin
     if AType.Kind = ftkCallback then
     begin
@@ -970,7 +970,7 @@ var
       Exit;
     end;
 
-    if AType.ScalarType in [fftPointer, fftCString] then
+    if AType.ScalarType in [fftPointer, fftUTF8String] then
     begin
       RawPointer := 0;
       Move(Data[AOffset], RawPointer, SizeOf(Pointer));

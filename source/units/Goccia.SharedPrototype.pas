@@ -64,7 +64,7 @@ begin
   FPrototype := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   FMethodHost := AMethodHost;
 
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
   begin
     TGarbageCollector.Instance.PinObject(FPrototype);
     if Assigned(FMethodHost) then
@@ -78,7 +78,7 @@ begin
   // counterpart to the pinning done in Create.  The realm calls .Free on us
   // when it's torn down (we live in a TGocciaRealm owned slot), so this is
   // where the unpinning has to happen.
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
   begin
     if Assigned(FPrototype) then
       TGarbageCollector.Instance.UnpinObject(FPrototype);

@@ -11,17 +11,18 @@ uses
 
 function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList; overload;
 function FindAllFiles(const ADirectory: string; const AFileExtensions: array of string): TStringList; overload;
-function ExpandUTF8FileName(const APath: string): string;
-function UTF8DirectoryExists(const APath: string): Boolean;
-function UTF8FileExists(const APath: string): Boolean;
+function ExpandHostFileName(const APath: string): string;
+function HostDirectoryExists(const APath: string): Boolean;
+function HostFileExists(const APath: string): Boolean;
 
 { True when APath itself is a symbolic link (UNIX) or a reparse
   point / junction (Windows). Does not follow the link. }
 function HostPathIsSymlink(const APath: string): Boolean;
 
-{ Read an entire file as raw bytes and tag the result as UTF-8.
-  No BOM stripping or newline normalization is performed. }
-function ReadUTF8FileText(const APath: string): UTF8String;
+{ Read an entire file as strict UTF-8 source text. No BOM stripping or
+  newline normalization is performed. Invalid UTF-8 raises EConvertError. }
+function ReadUTF8FileText(const APath: string): string;
+procedure WriteUTF8FileText(const APath, AText: string);
 
 { Read an entire file as raw bytes, preserving every byte exactly
   (NUL bytes, non-UTF-8 sequences, and original newlines). }
@@ -29,75 +30,35 @@ function ReadFileBytes(const APath: string): TBytes;
 
 implementation
 
-{$IFDEF LAKON}
+uses
+  TextEncoding;
 
-{ Lakon's one string type carries UTF-8 bytes one per char (the
-  byte-ride discipline) and its WASI path lane passes those bytes
-  through raw — a byte-ride path IS already canonical, so the
-  conversion pair collapses to identity. Decoding here would make
-  the existence probes look up a DIFFERENT on-disk name than the
-  writers created. }
-function UTF8PathToUnicodeString(const APath: string): UnicodeString;
+function ExpandHostFileName(const APath: string): string;
 begin
-  Result := APath;
+  Result := ExpandFileName(APath);
 end;
 
-{$ELSE}
-
-function UTF8PathToUnicodeString(const APath: string): UnicodeString;
-var
-  Bytes: RawByteString;
+function HostDirectoryExists(const APath: string): Boolean;
 begin
-  Bytes := RawByteString(APath);
-  SetCodePage(Bytes, CP_UTF8, False);
-  Result := UTF8Decode(UTF8String(Bytes));
+  Result := DirectoryExists(APath);
 end;
 
-{$ENDIF}
-
-{$IFDEF LAKON}
-
-function UnicodeStringToUTF8Path(const APath: UnicodeString): string;
+function HostFileExists(const APath: string): Boolean;
 begin
-  { The identity twin — see UTF8PathToUnicodeString above. }
-  Result := APath;
-end;
-
-{$ELSE}
-
-function UnicodeStringToUTF8Path(const APath: UnicodeString): string;
-var
-  Bytes: RawByteString;
-begin
-  Bytes := RawByteString(UTF8Encode(APath));
-  SetCodePage(Bytes, CP_UTF8, False);
-  Result := string(Bytes);
-end;
-
-{$ENDIF}
-
-function ExpandUTF8FileName(const APath: string): string;
-begin
-  Result := UnicodeStringToUTF8Path(ExpandFileName(
-    UTF8PathToUnicodeString(APath)));
-end;
-
-function UTF8DirectoryExists(const APath: string): Boolean;
-begin
-  Result := DirectoryExists(UTF8PathToUnicodeString(APath));
-end;
-
-function UTF8FileExists(const APath: string): Boolean;
-begin
-  Result := FileExists(UTF8PathToUnicodeString(APath));
+  Result := FileExists(APath);
 end;
 
 function HostPathIsSymlink(const APath: string): Boolean;
 {$IFDEF UNIX}
 var
   Info: Stat;
+  ErrorOffset: Integer;
+  PathBytes: TBytes;
 begin
-  Result := (fpLStat(APath, Info) = 0) and fpS_ISLNK(Info.st_mode);
+  if not TryEncodeUTF8NullTerminated(APath, PathBytes, ErrorOffset) then
+    Exit(False);
+  Result := (fpLStat(PAnsiChar(@PathBytes[0]), Info) = 0) and
+    fpS_ISLNK(Info.st_mode);
 end;
 {$ELSE}
 var
@@ -169,12 +130,7 @@ end;
 
 {$IFDEF LAKON}
 
-// The Lakon/WASI file lane is real since rung 5 (read-only) and
-// rung 6 (the write lane): the readers mirror the native shapes
-// over a TBytes buffer. Lakon's strings ride bytes one per code
-// unit, so the byte-to-text conversion is a plain widening copy
-// (UTF8String aliases string there); share flags stay ignored on
-// the single-process lane.
+// The Lakon/WASI file lane ignores share flags on its single-process lane.
 
 function ReadFileBytes(const APath: string): TBytes;
 var
@@ -190,37 +146,28 @@ begin
   end;
 end;
 
-function ReadUTF8FileText(const APath: string): UTF8String;
+function ReadUTF8FileText(const APath: string): string;
 var
   Bytes: TBytes;
-  Text: string;
-  Index: Integer;
+  ErrorOffset: Integer;
 begin
   Bytes := ReadFileBytes(APath);
-  SetLength(Text, Length(Bytes));
-  for Index := 1 to Length(Bytes) do
-    Text[Index] := Chr(Bytes[Index - 1]);
-  Result := Text;
+  if not TryDecodeUTF8(Bytes, Result, ErrorOffset) then
+    raise EConvertError.CreateFmt('Invalid UTF-8 at byte %d in file "%s"',
+      [ErrorOffset, APath]);
 end;
 
 {$ELSE}
 
-function ReadUTF8FileText(const APath: string): UTF8String;
+function ReadUTF8FileText(const APath: string): string;
 var
-  SourceText: RawByteString;
-  Stream: TFileStream;
+  Bytes: TBytes;
+  ErrorOffset: Integer;
 begin
-  Stream := TFileStream.Create(APath, fmOpenRead or fmShareDenyWrite);
-  try
-    SetLength(SourceText, Stream.Size);
-    if Length(SourceText) > 0 then
-      Stream.ReadBuffer(Pointer(SourceText)^, Length(SourceText));
-  finally
-    Stream.Free;
-  end;
-
-  SetCodePage(SourceText, CP_UTF8, False);
-  Result := UTF8String(SourceText);
+  Bytes := ReadFileBytes(APath);
+  if not TryDecodeUTF8(Bytes, Result, ErrorOffset) then
+    raise EConvertError.CreateFmt('Invalid UTF-8 at byte %d in file "%s"',
+      [ErrorOffset, APath]);
 end;
 
 function ReadFileBytes(const APath: string): TBytes;
@@ -238,5 +185,24 @@ begin
 end;
 
 {$ENDIF}
+
+procedure WriteUTF8FileText(const APath, AText: string);
+var
+  Bytes: TBytes;
+  ErrorOffset: Integer;
+  Stream: TFileStream;
+begin
+  if not TryEncodeUTF8(AText, Bytes, ErrorOffset) then
+    raise EConvertError.CreateFmt(
+      'Cannot encode lone UTF-16 surrogate at code-unit %d in file "%s"',
+      [ErrorOffset, APath]);
+  Stream := TFileStream.Create(APath, fmCreate);
+  try
+    if Length(Bytes) > 0 then
+      Stream.WriteBuffer(Bytes[0], Length(Bytes));
+  finally
+    Stream.Free;
+  end;
+end;
 
 end.

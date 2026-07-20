@@ -17,7 +17,8 @@ type
     {$IFDEF UNIX}
     procedure SetRawMode;
     procedure RestoreTerminal;
-    function ReadChar: Char;
+    function ReadByte(out AByte: Byte): Boolean;
+    function ReadCharacter(out ACharacter: string): Boolean;
     procedure RedrawLine(const APrompt, ABuffer: string; ACursorPos: Integer);
     function ReadLineRaw(const APrompt: string; out ALine: string): TLineReadResult;
     {$ENDIF}
@@ -33,6 +34,7 @@ implementation
 uses
   SysUtils
   {$IFDEF UNIX},
+  TextEncoding,
   BaseUnix,
   termio
   {$ENDIF};
@@ -65,16 +67,51 @@ begin
     TCSetAttr(0, TCSAFLUSH, OriginalTermios);
 end;
 
-function TLineEditor.ReadChar: Char;
+function TLineEditor.ReadByte(out AByte: Byte): Boolean;
 var
-  C: Char;
   BytesRead: TSSize;
 begin
-  BytesRead := fpRead(0, C, 1);
-  if BytesRead <= 0 then
-    Result := #4
+  AByte := 0;
+  BytesRead := fpRead(0, AByte, 1);
+  Result := BytesRead = 1;
+end;
+
+function TLineEditor.ReadCharacter(out ACharacter: string): Boolean;
+var
+  Bytes: TBytes;
+  ByteValue: Byte;
+  ExpectedLength, I: Integer;
+begin
+  ACharacter := '';
+  if not ReadByte(ByteValue) then
+    Exit(False);
+
+  if ByteValue < $80 then
+  begin
+    ACharacter := Char(ByteValue);
+    Exit(True);
+  end;
+
+  if (ByteValue >= $C2) and (ByteValue <= $DF) then
+    ExpectedLength := 2
+  else if (ByteValue >= $E0) and (ByteValue <= $EF) then
+    ExpectedLength := 3
+  else if (ByteValue >= $F0) and (ByteValue <= $F4) then
+    ExpectedLength := 4
   else
-    Result := C;
+    ExpectedLength := 1;
+
+  SetLength(Bytes, ExpectedLength);
+  Bytes[0] := ByteValue;
+  I := 1;
+  while (I < ExpectedLength) and ReadByte(ByteValue) do
+  begin
+    Bytes[I] := ByteValue;
+    Inc(I);
+  end;
+  SetLength(Bytes, I);
+  ACharacter := DecodeUTF8WithReplacement(Bytes);
+  Result := True;
 end;
 
 procedure TLineEditor.RedrawLine(const APrompt, ABuffer: string; ACursorPos: Integer);
@@ -93,9 +130,31 @@ end;
 function TLineEditor.ReadLineRaw(const APrompt: string; out ALine: string): TLineReadResult;
 var
   Buffer: string;
-  CursorPos: Integer;
-  SavedLine: string;
+  Character, SavedLine: string;
   C: Char;
+  CursorPos, DeleteLength: Integer;
+
+  function PreviousCharacterLength: Integer;
+  begin
+    Result := 1;
+    if (CursorPos >= 2) and
+       (Ord(Buffer[CursorPos]) >= $DC00) and
+       (Ord(Buffer[CursorPos]) <= $DFFF) and
+       (Ord(Buffer[CursorPos - 1]) >= $D800) and
+       (Ord(Buffer[CursorPos - 1]) <= $DBFF) then
+      Result := 2;
+  end;
+
+  function NextCharacterLength: Integer;
+  begin
+    Result := 1;
+    if (CursorPos + 2 <= Length(Buffer)) and
+       (Ord(Buffer[CursorPos + 1]) >= $D800) and
+       (Ord(Buffer[CursorPos + 1]) <= $DBFF) and
+       (Ord(Buffer[CursorPos + 2]) >= $DC00) and
+       (Ord(Buffer[CursorPos + 2]) <= $DFFF) then
+      Result := 2;
+  end;
 begin
   Result := lrLine;
   Buffer := '';
@@ -108,7 +167,18 @@ begin
   try
     while True do
     begin
-      C := ReadChar;
+      if not ReadCharacter(Character) then
+      begin
+        WriteLn;
+        ALine := Buffer;
+        if Buffer = '' then
+          Result := lrExit;
+        Exit;
+      end;
+      if Length(Character) = 1 then
+        C := Character[1]
+      else
+        C := #0;
       case C of
         #10, #13:
         begin
@@ -140,18 +210,19 @@ begin
         begin
           if CursorPos > 0 then
           begin
-            System.Delete(Buffer, CursorPos, 1);
-            Dec(CursorPos);
+            DeleteLength := PreviousCharacterLength;
+            System.Delete(Buffer, CursorPos - DeleteLength + 1, DeleteLength);
+            Dec(CursorPos, DeleteLength);
             RedrawLine(APrompt, Buffer, CursorPos);
           end;
         end;
 
         #27:
         begin
-          C := ReadChar;
-          if C = '[' then
+          if ReadCharacter(Character) and (Character = '[') and
+             ReadCharacter(Character) and (Length(Character) = 1) then
           begin
-            C := ReadChar;
+            C := Character[1];
             case C of
               'A':
               begin
@@ -182,7 +253,7 @@ begin
               begin
                 if CursorPos < Length(Buffer) then
                 begin
-                  Inc(CursorPos);
+                  Inc(CursorPos, NextCharacterLength);
                   Write(#27'[C');
                 end;
               end;
@@ -190,7 +261,7 @@ begin
               begin
                 if CursorPos > 0 then
                 begin
-                  Dec(CursorPos);
+                  Dec(CursorPos, PreviousCharacterLength);
                   Write(#27'[D');
                 end;
               end;
@@ -206,10 +277,10 @@ begin
               end;
               '3':
               begin
-                C := ReadChar;
-                if (C = '~') and (CursorPos < Length(Buffer)) then
+                if ReadCharacter(Character) and (Character = '~') and
+                   (CursorPos < Length(Buffer)) then
                 begin
-                  System.Delete(Buffer, CursorPos + 1, 1);
+                  System.Delete(Buffer, CursorPos + 1, NextCharacterLength);
                   RedrawLine(APrompt, Buffer, CursorPos);
                 end;
               end;
@@ -248,18 +319,18 @@ begin
           RedrawLine(APrompt, Buffer, CursorPos);
         end;
       else
-        if C >= ' ' then
+        if (Length(Character) > 1) or (C >= ' ') then
         begin
           if CursorPos = Length(Buffer) then
           begin
-            Buffer := Buffer + C;
-            Inc(CursorPos);
-            Write(C);
+            Buffer := Buffer + Character;
+            Inc(CursorPos, Length(Character));
+            Write(Character);
           end
           else
           begin
-            System.Insert(C, Buffer, CursorPos + 1);
-            Inc(CursorPos);
+            System.Insert(Character, Buffer, CursorPos + 1);
+            Inc(CursorPos, Length(Character));
             RedrawLine(APrompt, Buffer, CursorPos);
           end;
         end;

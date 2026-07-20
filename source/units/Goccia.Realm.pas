@@ -37,11 +37,13 @@ interface
 uses
   Classes,
 
+  CriticalSections,
+
   Goccia.GarbageCollector;
 
 type
   TGocciaRealmHostFinalize = procedure(const AHostDefined: TObject) of object;
-  TGocciaRealmIdentity = type QWord;
+  TGocciaRealmIdentity = type UInt64;
   TGocciaRealmSlotId = type Integer;
   TGocciaRealmOwnedSlotId = type Integer;
 
@@ -112,7 +114,8 @@ function RegisterRealmOwnedSlot(const AName: string): TGocciaRealmOwnedSlotId;
 // engine is initialized.  Production code paths that rely on intrinsics
 // (value constructors, ExposePrototype, InitializePrototype, ...) require a
 // realm to be present.
-function CurrentRealm: TGocciaRealm; inline;
+function CurrentRealm: TGocciaRealm;
+{$IFDEF FPC}inline;{$ENDIF}
 
 // Set by TGocciaEngine.Initialize and TGocciaEngine.ResetRealm.  Tests and
 // other host code generally should not call this directly.
@@ -147,46 +150,47 @@ var
   GOwnedSlotCount: Integer;
   GOwnedSlotNames: array of string;
   GRealmIdentityCounter: TGocciaRealmIdentity;
-  GSlotLock: TRTLCriticalSection;
+  GSlotLock: TGocciaCriticalSection;
 
 function NextRealmIdentity: TGocciaRealmIdentity;
 begin
-  EnterCriticalSection(GSlotLock);
+  CriticalSectionEnter(GSlotLock);
   try
     Inc(GRealmIdentityCounter);
     Result := GRealmIdentityCounter;
   finally
-    LeaveCriticalSection(GSlotLock);
+    CriticalSectionLeave(GSlotLock);
   end;
 end;
 
 function RegisterRealmSlot(const AName: string): TGocciaRealmSlotId;
 begin
-  EnterCriticalSection(GSlotLock);
+  CriticalSectionEnter(GSlotLock);
   try
     Result := GSlotCount;
     Inc(GSlotCount);
     SetLength(GSlotNames, GSlotCount);
     GSlotNames[Result] := AName;
   finally
-    LeaveCriticalSection(GSlotLock);
+    CriticalSectionLeave(GSlotLock);
   end;
 end;
 
 function RegisterRealmOwnedSlot(const AName: string): TGocciaRealmOwnedSlotId;
 begin
-  EnterCriticalSection(GSlotLock);
+  CriticalSectionEnter(GSlotLock);
   try
     Result := GOwnedSlotCount;
     Inc(GOwnedSlotCount);
     SetLength(GOwnedSlotNames, GOwnedSlotCount);
     GOwnedSlotNames[Result] := AName;
   finally
-    LeaveCriticalSection(GSlotLock);
+    CriticalSectionLeave(GSlotLock);
   end;
 end;
 
 function CurrentRealm: TGocciaRealm;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := GCurrentRealm;
 end;
@@ -297,7 +301,7 @@ begin
 
   // Unpin everything this realm asked the GC to keep alive.  After this the
   // GC is free to collect the prototype graph from this realm.
-  if Assigned(TGarbageCollector.Instance) then
+  if TGarbageCollector.Instance <> nil then
   begin
     for I := 0 to FPinnedCount - 1 do
       TGarbageCollector.Instance.UnpinObject(FPinned[I]);
@@ -358,7 +362,7 @@ begin
     SetLength(FSlots, ASlotId + 1);
 
   FSlots[ASlotId] := AValue;
-  if Assigned(AValue) and Assigned(TGarbageCollector.Instance) then
+  if Assigned(AValue) and (TGarbageCollector.Instance <> nil) then
   begin
     TGarbageCollector.Instance.PinObject(AValue);
     RememberPin(AValue);
@@ -423,7 +427,7 @@ begin
   else
     FTemplateMap.AddObject(AKey, AValue);
 
-  if Assigned(AValue) and Assigned(TGarbageCollector.Instance) then
+  if Assigned(AValue) and (TGarbageCollector.Instance <> nil) then
   begin
     TGarbageCollector.Instance.PinObject(AValue);
     RememberPin(AValue);
@@ -431,7 +435,7 @@ begin
 end;
 
 initialization
-  InitCriticalSection(GSlotLock);
+  CriticalSectionInit(GSlotLock);
   GSlotCount := 0;
   GOwnedSlotCount := 0;
   GRealmIdentityCounter := 0;
@@ -439,6 +443,6 @@ initialization
 finalization
   SetLength(GCurrentFunctionContextStack, 0);
   GCurrentFunctionContextStackCount := 0;
-  DoneCriticalSection(GSlotLock);
+  CriticalSectionDone(GSlotLock);
 
 end.

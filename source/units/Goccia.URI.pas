@@ -68,76 +68,31 @@ const
     ':', '@', '!', '$', '&', '''', '(', ')', '*', '+', ',', ';', '='
   ];
 
-  UNICODE_REPLACEMENT_CHARACTER = $FFFD;
-
-{ Returns True if the byte at AIndex is a valid UTF-8 continuation byte (10xxxxxx). }
-function IsContinuationByte(const AString: string; const AIndex, ALength: Integer): Boolean; inline;
-begin
-  Result := (AIndex <= ALength) and ((Ord(AString[AIndex]) and $C0) = $80);
-end;
-
-{ Decode a single UTF-8 code point starting at position AIndex.
-  Advances AIndex past the decoded sequence. Returns the Unicode code point.
-  Returns -1 for lone surrogates (U+D800..U+DFFF) which are invalid. }
-function NextUTF8CodePoint(const AString: string; var AIndex: Integer): Integer;
+{ Read one UTF-16 code point and advance past its code units. Lone surrogates
+  are returned unchanged so Encode can raise the required URIError. }
+function NextCodePoint(const AString: string; var AIndex: Integer): Integer;
 var
-  B: Byte;
-  Len: Integer;
+  FirstCodeUnit, SecondCodeUnit: Integer;
 begin
-  Len := Length(AString);
-  B := Ord(AString[AIndex]);
-  if B < $80 then
+  FirstCodeUnit := Ord(AString[AIndex]);
+  Inc(AIndex);
+  if (FirstCodeUnit >= $D800) and (FirstCodeUnit <= $DBFF) and
+     (AIndex <= Length(AString)) then
   begin
-    Result := B;
-    Inc(AIndex);
-  end
-  else if (B and $E0) = $C0 then
-  begin
-    Inc(AIndex);
-    if not IsContinuationByte(AString, AIndex, Len) then
-      Exit(UNICODE_REPLACEMENT_CHARACTER);
-    Result := ((B and $1F) shl 6) or (Ord(AString[AIndex]) and $3F);
-    Inc(AIndex);
-  end
-  else if (B and $F0) = $E0 then
-  begin
-    Inc(AIndex);
-    if not IsContinuationByte(AString, AIndex, Len) then
-      Exit(UNICODE_REPLACEMENT_CHARACTER);
-    Result := (B and $0F) shl 12;
-    Result := Result or ((Ord(AString[AIndex]) and $3F) shl 6);
-    Inc(AIndex);
-    if not IsContinuationByte(AString, AIndex, Len) then
-      Exit(UNICODE_REPLACEMENT_CHARACTER);
-    Result := Result or (Ord(AString[AIndex]) and $3F);
-    Inc(AIndex);
-  end
-  else if (B and $F8) = $F0 then
-  begin
-    Inc(AIndex);
-    if not IsContinuationByte(AString, AIndex, Len) then
-      Exit(UNICODE_REPLACEMENT_CHARACTER);
-    Result := (B and $07) shl 18;
-    Result := Result or ((Ord(AString[AIndex]) and $3F) shl 12);
-    Inc(AIndex);
-    if not IsContinuationByte(AString, AIndex, Len) then
-      Exit(UNICODE_REPLACEMENT_CHARACTER);
-    Result := Result or ((Ord(AString[AIndex]) and $3F) shl 6);
-    Inc(AIndex);
-    if not IsContinuationByte(AString, AIndex, Len) then
-      Exit(UNICODE_REPLACEMENT_CHARACTER);
-    Result := Result or (Ord(AString[AIndex]) and $3F);
-    Inc(AIndex);
-  end
-  else
-  begin
-    Result := UNICODE_REPLACEMENT_CHARACTER;
-    Inc(AIndex);
+    SecondCodeUnit := Ord(AString[AIndex]);
+    if (SecondCodeUnit >= $DC00) and (SecondCodeUnit <= $DFFF) then
+    begin
+      Inc(AIndex);
+      Exit($10000 + ((FirstCodeUnit - $D800) shl 10) +
+        (SecondCodeUnit - $DC00));
+    end;
   end;
+  Result := FirstCodeUnit;
 end;
 
 { Percent-encode a single byte as %XX (uppercase hex). }
-function PercentEncodeByte(const AByte: Byte): string; inline;
+function PercentEncodeByte(const AByte: Byte): string;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := '%' + HEX_DIGITS[(AByte shr 4) + 1] + HEX_DIGITS[(AByte and $0F) + 1];
 end;
@@ -168,28 +123,17 @@ begin
 end;
 
 { Returns True if ACodePoint is a UTF-16 surrogate (U+D800..U+DFFF). }
-function IsSurrogate(const ACodePoint: Integer): Boolean; inline;
+function IsSurrogate(const ACodePoint: Integer): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (ACodePoint >= $D800) and (ACodePoint <= $DFFF);
-end;
-
-{ Returns True if ACodePoint is a high surrogate (U+D800..U+DBFF). }
-function IsHighSurrogate(const ACodePoint: Integer): Boolean; inline;
-begin
-  Result := (ACodePoint >= $D800) and (ACodePoint <= $DBFF);
-end;
-
-{ Returns True if ACodePoint is a low surrogate (U+DC00..U+DFFF). }
-function IsLowSurrogate(const ACodePoint: Integer): Boolean; inline;
-begin
-  Result := (ACodePoint >= $DC00) and (ACodePoint <= $DFFF);
 end;
 
 // ES2026 §19.2.6.1 Encode(string, unescapedSet)
 function Encode(const AString: string; const AUnescapedSet: TSysCharSet): string;
 var
   Buffer: TStringBuffer;
-  I, Len, CodePoint, NextCP: Integer;
+  I, Len, CodePoint: Integer;
 begin
   Len := Length(AString);
   if Len = 0 then
@@ -199,7 +143,7 @@ begin
   I := 1;
   while I <= Len do
   begin
-    CodePoint := NextUTF8CodePoint(AString, I);
+    CodePoint := NextCodePoint(AString, I);
 
     // ES2026 §19.2.6.1 step 4c: if the code point is in unescapedSet, pass it through
     if (CodePoint < 128) and (Chr(CodePoint) in AUnescapedSet) then
@@ -208,29 +152,7 @@ begin
     begin
       // ES2026 §19.2.6.1 step 4d: lone surrogates throw URIError
       if IsSurrogate(CodePoint) then
-      begin
-        // Check for surrogate pair — FPC stores UTF-8 internally, but the
-        // JavaScript string model is UTF-16. A code point in the surrogate
-        // range that appears in our internal UTF-8 string means a lone
-        // surrogate in the JS source. Supplementary code points (>= U+10000)
-        // are already decoded as full code points by NextUTF8CodePoint, so
-        // they never appear here.
-        if IsHighSurrogate(CodePoint) and (I <= Len) then
-        begin
-          NextCP := NextUTF8CodePoint(AString, I);
-          if IsLowSurrogate(NextCP) then
-          begin
-            // Surrogate pair — combine to supplementary code point
-            CodePoint := $10000 + ((CodePoint - $D800) shl 10) + (NextCP - $DC00);
-            AppendPercentEncodedCodePoint(Buffer, CodePoint);
-            Continue;
-          end
-          else
-            ThrowURIError(SErrorURIMalformed, SSuggestURIEncoding);
-        end
-        else
-          ThrowURIError(SErrorURIMalformed, SSuggestURIEncoding);
-      end;
+        ThrowURIError(SErrorURIMalformed, SSuggestURIEncoding);
 
       // ES2026 §19.2.6.1 step 4d.vi: percent-encode UTF-8 octets
       AppendPercentEncodedCodePoint(Buffer, CodePoint);
@@ -240,13 +162,15 @@ begin
 end;
 
 { Returns True if C is an ASCII hex digit. }
-function IsASCIIHexDigit(const C: Char): Boolean; inline;
+function IsASCIIHexDigit(const C: Char): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (C in ['0'..'9', 'A'..'F', 'a'..'f']);
 end;
 
 { Parse a hex digit character to its numeric value. }
-function HexVal(const C: Char): Byte; inline;
+function HexVal(const C: Char): Byte;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   case C of
     '0'..'9': Result := Ord(C) - Ord('0');
@@ -362,7 +286,7 @@ begin
                           ((UTF8Bytes[2] and $3F) shl 6) or
                            (UTF8Bytes[3] and $3F);
         else
-          CodePoint := UNICODE_REPLACEMENT_CHARACTER;
+          CodePoint := $FFFD;
         end;
 
         // Lone surrogates are invalid
@@ -379,11 +303,18 @@ begin
         if CodePoint > $10FFFF then
           ThrowURIError(SErrorURIMalformed, SSuggestURIEncoding);
 
-        // Append the decoded UTF-8 bytes directly
-        for J := 0 to ByteCount - 1 do
+        if CodePoint <= $FFFF then
         begin
-          Result[OutputIndex] := Chr(UTF8Bytes[J]);
+          Result[OutputIndex] := Char(CodePoint);
           Inc(OutputIndex);
+        end
+        else
+        begin
+          Result[OutputIndex] := Char(
+            $D800 + ((CodePoint - $10000) shr 10));
+          Result[OutputIndex + 1] := Char(
+            $DC00 + ((CodePoint - $10000) and $3FF));
+          Inc(OutputIndex, 2);
         end;
       end;
     end;

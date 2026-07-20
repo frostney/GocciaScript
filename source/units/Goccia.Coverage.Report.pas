@@ -151,7 +151,7 @@ begin
   else
   begin
     if not FileExists(AFilePath) then Exit;
-    SourceLines := CreateUTF8FileTextLines(ReadUTF8FileText(AFilePath));
+    SourceLines := CreateFileTextLines(ReadUTF8FileText(AFilePath));
     OwnsSource := True;
   end;
 
@@ -225,7 +225,7 @@ begin
       try
         if FileExists(FileCov.FileName) then
         begin
-          SourceLines := CreateUTF8FileTextLines(ReadUTF8FileText(FileCov.FileName));
+          SourceLines := CreateFileTextLines(ReadUTF8FileText(FileCov.FileName));
           if SourceLines.Count > 0 then
           begin
             SetLength(ExecutableFlags, SourceLines.Count);
@@ -384,7 +384,7 @@ begin
     try
       if FileExists(FileCov.FileName) then
       begin
-        SourceLines := CreateUTF8FileTextLines(ReadUTF8FileText(FileCov.FileName));
+        SourceLines := CreateFileTextLines(ReadUTF8FileText(FileCov.FileName));
         if SourceLines.Count > 0 then
         begin
           SetLength(ExecutableFlags, SourceLines.Count);

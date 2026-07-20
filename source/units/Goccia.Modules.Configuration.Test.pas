@@ -6,6 +6,7 @@ uses
   Classes,
   SysUtils,
 
+  FileUtils,
   TestingPascalLibrary,
   TextSemantics,
 
@@ -20,7 +21,7 @@ type
 
     function CreateTempDirectory: string;
     procedure DeleteDirectoryTree(const APath: string);
-    procedure WriteRawFile(const APath: string; const ABytes: RawByteString);
+    procedure WriteFixtureFile(const APath, AText: string);
     procedure WriteTextFile(const APath, AText: string);
 
     procedure TestConfigureModuleResolverLoadsExplicitImportMap;
@@ -102,48 +103,16 @@ begin
 end;
 
 procedure TModuleConfigurationTests.WriteTextFile(const APath, AText: string);
-var
-  Source: TStringList;
 begin
   ForceDirectories(ExtractFileDir(APath));
-  Source := TStringList.Create;
-  try
-    Source.Text := AText;
-    Source.SaveToFile(APath);
-  finally
-    Source.Free;
-  end;
+  FileUtils.WriteUTF8FileText(APath, AText);
 end;
 
-procedure TModuleConfigurationTests.WriteRawFile(const APath: string;
-  const ABytes: RawByteString);
-var
-  Stream: TFileStream;
-{$IFDEF LAKON}
-  Buffer: TBytes;
-  Index: Integer;
-{$ENDIF}
+procedure TModuleConfigurationTests.WriteFixtureFile(const APath,
+  AText: string);
 begin
   ForceDirectories(ExtractFileDir(APath));
-  Stream := TFileStream.Create(APath, fmCreate);
-  try
-    if Length(ABytes) > 0 then
-{$IFDEF LAKON}
-    begin
-      // Lakon's RawByteString aliases the one string type (bytes
-      // ride one per code unit), and Pointer(S) is the string BLOCK,
-      // not the payload — copy the low bytes out explicitly.
-      SetLength(Buffer, Length(ABytes));
-      for Index := 1 to Length(ABytes) do
-        Buffer[Index - 1] := Ord(ABytes[Index]) and $FF;
-      Stream.WriteBuffer(Buffer[0], Length(Buffer));
-    end;
-{$ELSE}
-      Stream.WriteBuffer(Pointer(ABytes)^, Length(ABytes));
-{$ENDIF}
-  finally
-    Stream.Free;
-  end;
+  FileUtils.WriteUTF8FileText(APath, AText);
 end;
 
 procedure TModuleConfigurationTests.TestConfigureModuleResolverLoadsExplicitImportMap;
@@ -162,10 +131,10 @@ begin
   WriteTextFile(IncludeTrailingPathDelimiter(ProjectDirectory) + 'vendor' +
     PathDelim + 'lodash' + PathDelim + 'index.js', 'export const value = 1;');
   WriteTextFile(ImportMapPath,
-    '{' + LineEnding +
-    '  "imports": {' + LineEnding +
-    '    "lodash": "./vendor/lodash/index.js"' + LineEnding +
-    '  }' + LineEnding +
+    '{' + sLineBreak +
+    '  "imports": {' + sLineBreak +
+    '    "lodash": "./vendor/lodash/index.js"' + sLineBreak +
+    '  }' + sLineBreak +
     '}');
 
   InlineAliases := TStringList.Create;
@@ -185,10 +154,10 @@ end;
 
 procedure TModuleConfigurationTests.TestConfigureModuleResolverPreservesUTF8ImportMap;
 const
-  SPECIFIER_BYTES = 'caf' + #$C3#$A9;
-  TARGET_FILE_BYTES = 'd' + #$C3#$A9 + 'j' + #$C3#$A0 + '.js';
-  IMPORT_MAP_BYTES = '{"imports":{"' + SPECIFIER_BYTES + '":"./src/' +
-    TARGET_FILE_BYTES + '"}}';
+  SPECIFIER = 'caf' + #$00E9;
+  TARGET_FILE = 'd' + #$00E9 + 'j' + #$00E0 + '.js';
+  IMPORT_MAP = '{"imports":{"' + SPECIFIER + '":"./src/' +
+    TARGET_FILE + '"}}';
 var
   EntryPath: string;
   ExpectedPath: string;
@@ -204,17 +173,17 @@ begin
   ImportMapPath := IncludeTrailingPathDelimiter(ProjectDirectory) +
     'imports.json';
   ExpectedPath := IncludeTrailingPathDelimiter(ProjectDirectory) + 'src' +
-    PathDelim + RetagUTF8Text(TARGET_FILE_BYTES);
+    PathDelim + TARGET_FILE;
 
-  WriteTextFile(EntryPath, 'import { value } from "caf' + #$C3#$A9 + '";');
+  WriteTextFile(EntryPath, 'import { value } from "' + SPECIFIER + '";');
   WriteTextFile(ExpectedPath, 'export const value = 1;');
-  WriteRawFile(ImportMapPath, IMPORT_MAP_BYTES);
+  WriteFixtureFile(ImportMapPath, IMPORT_MAP);
 
   InlineAliases := TStringList.Create;
   Resolver := TGocciaModuleResolver.Create(ProjectDirectory);
   try
     ConfigureModuleResolver(Resolver, EntryPath, ImportMapPath, InlineAliases);
-    ResolvedPath := Resolver.Resolve(RetagUTF8Text(SPECIFIER_BYTES), EntryPath);
+    ResolvedPath := Resolver.Resolve(SPECIFIER, EntryPath);
   finally
     InlineAliases.Free;
     Resolver.Free;
@@ -239,10 +208,10 @@ begin
     'export const add = (a, b) => a + b;');
   WriteTextFile(IncludeTrailingPathDelimiter(ProjectDirectory) +
     'goccia.json',
-    '{' + LineEnding +
-    '  "imports": {' + LineEnding +
-    '    "@/": "./src/"' + LineEnding +
-    '  }' + LineEnding +
+    '{' + sLineBreak +
+    '  "imports": {' + sLineBreak +
+    '    "@/": "./src/"' + sLineBreak +
+    '  }' + sLineBreak +
     '}');
 
   Resolver := TGocciaModuleResolver.Create(ProjectDirectory);
@@ -274,10 +243,10 @@ begin
   WriteTextFile(IncludeTrailingPathDelimiter(ProjectDirectory) + 'config' +
     PathDelim + 'override.js', 'export const value = "override";');
   WriteTextFile(IncludeTrailingPathDelimiter(ProjectDirectory) + 'imports.json',
-    '{' + LineEnding +
-    '  "imports": {' + LineEnding +
-    '    "config": "./config/default.js"' + LineEnding +
-    '  }' + LineEnding +
+    '{' + sLineBreak +
+    '  "imports": {' + sLineBreak +
+    '    "config": "./config/default.js"' + sLineBreak +
+    '  }' + sLineBreak +
     '}');
 
   InlineAliases := TStringList.Create;
@@ -313,17 +282,17 @@ begin
   WriteTextFile(IncludeTrailingPathDelimiter(ProjectDirectory) + 'config' +
     PathDelim + 'discovered.js', 'export const value = "discovered";');
   WriteTextFile(IncludeTrailingPathDelimiter(ProjectDirectory) + 'imports.json',
-    '{' + LineEnding +
-    '  "imports": {' + LineEnding +
-    '    "config": "./config/explicit.js"' + LineEnding +
-    '  }' + LineEnding +
+    '{' + sLineBreak +
+    '  "imports": {' + sLineBreak +
+    '    "config": "./config/explicit.js"' + sLineBreak +
+    '  }' + sLineBreak +
     '}');
   WriteTextFile(IncludeTrailingPathDelimiter(ProjectDirectory) +
     'goccia.json',
-    '{' + LineEnding +
-    '  "imports": {' + LineEnding +
-    '    "config": "./config/discovered.js"' + LineEnding +
-    '  }' + LineEnding +
+    '{' + sLineBreak +
+    '  "imports": {' + sLineBreak +
+    '    "config": "./config/discovered.js"' + sLineBreak +
+    '  }' + sLineBreak +
     '}');
 
   InlineAliases := TStringList.Create;
@@ -345,7 +314,7 @@ end;
 begin
   TestRunnerProgram.AddSuite(TModuleConfigurationTests.Create(
     'Module Configuration'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
 
   ExitCode := TestResultToExitCode;
 end.

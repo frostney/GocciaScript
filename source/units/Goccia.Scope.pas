@@ -129,11 +129,14 @@ type
     // binding map's entry version.  TDZ still raises.  Returns False on any
     // stale cache so the caller can fall back to the named lookup.
     function TryGetLexicalValueAt(const AEntryIndex: Integer;
-      const AVersion: Cardinal; out AValue: TGocciaValue): Boolean; inline;
+      const AVersion: Cardinal; out AValue: TGocciaValue): Boolean;
+      {$IFDEF FPC}inline;{$ENDIF}
     function HasLexicalBindingAt(const AEntryIndex: Integer;
-      const AVersion: Cardinal): Boolean; inline;
+      const AVersion: Cardinal): Boolean;
+      {$IFDEF FPC}inline;{$ENDIF}
     function IsGlobalBuiltInObjectBindingAt(const AEntryIndex: Integer;
-      const AVersion: Cardinal): Boolean; inline;
+      const AVersion: Cardinal): Boolean;
+      {$IFDEF FPC}inline;{$ENDIF}
     // Named lookup that reports the own-lexical entry index and map version
     // for inline caching.  AEntryIndex is -1 when the value was resolved
     // through the global this-object, var bindings, or the parent chain —
@@ -156,7 +159,8 @@ type
       const AColumn: Integer = 0); virtual;
     procedure ResolveAssignmentTarget(const AName: string;
       out AObjectBinding: TGocciaObjectValue; out AScopeBinding: TGocciaScope); virtual;
-    function ContainsOwnLexicalBinding(const AName: string): Boolean; inline;
+    function ContainsOwnLexicalBinding(const AName: string): Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
     function IsBuiltInBinding(const AName: string): Boolean;
     function Contains(const AName: string): Boolean; virtual;
     function GetOwnBindingNames: TGocciaStringArray; virtual;
@@ -367,7 +371,7 @@ begin
       AParent.FRejectArgumentsReferenceInDirectEval;
   end;
 
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.RegisterObject(Self);
 end;
 
@@ -1463,7 +1467,7 @@ begin
   AScopeBinding := Self;
 end;
 
-function TGocciaScope.ContainsOwnLexicalBinding(const AName: string): Boolean; inline;
+function TGocciaScope.ContainsOwnLexicalBinding(const AName: string): Boolean;
 begin
   Result := FLexicalBindings.ContainsKey(AName);
 end;
@@ -1484,15 +1488,30 @@ begin
     (Assigned(FParent) and FParent.Contains(AName));
 end;
 
+function BindingNamesToArray(
+  const ABindings: TGocciaScopeBindingMap): TGocciaStringArray;
+var
+  BindingPair: TGocciaScopeBindingMap.TKeyValuePair;
+  Index: Integer;
+begin
+  SetLength(Result, ABindings.Count);
+  Index := 0;
+  for BindingPair in ABindings do
+  begin
+    Result[Index] := BindingPair.Key;
+    Inc(Index);
+  end;
+end;
+
 function TGocciaScope.GetOwnBindingNames: TGocciaStringArray;
 begin
-  Result := FLexicalBindings.Keys;
+  Result := BindingNamesToArray(FLexicalBindings);
 end;
 
 function TGocciaScope.GetOwnVarBindingNames: TGocciaStringArray;
 begin
   if Assigned(FVarBindings) then
-    Result := FVarBindings.Keys
+    Result := BindingNamesToArray(FVarBindings)
   else
     SetLength(Result, 0);
 end;

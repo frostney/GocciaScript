@@ -4,6 +4,9 @@ unit Goccia.HostEnvironment;
 
 interface
 
+uses
+  CriticalSections;
+
 type
   IGocciaHostClock = interface
     function EpochNanoseconds: Int64;
@@ -15,7 +18,7 @@ type
 
   IGocciaHostRandom = interface
     function NextDouble: Double;
-    function Fork(const AStreamId: QWord): IGocciaHostRandom;
+    function Fork(const AStreamId: UInt64): IGocciaHostRandom;
   end;
 
   TGocciaSystemHostClock = class(TInterfacedObject, IGocciaHostClock)
@@ -41,14 +44,14 @@ type
 
   TGocciaSeededHostRandom = class(TInterfacedObject, IGocciaHostRandom)
   private
-    FSeed: QWord;
-    FState: QWord;
-    class function Mix(const AValue: QWord): QWord; static;
+    FSeed: UInt64;
+    FState: UInt64;
+    class function Mix(const AValue: UInt64): UInt64; static;
   public
-    constructor Create(const ASeed: QWord);
+    constructor Create(const ASeed: UInt64);
 
     function NextDouble: Double;
-    function Fork(const AStreamId: QWord): IGocciaHostRandom;
+    function Fork(const AStreamId: UInt64): IGocciaHostRandom;
   end;
 
   { Engine-owned host-controlled sources of JavaScript-observable time and
@@ -59,8 +62,8 @@ type
     FClock: IGocciaHostClock;
     FRandom: IGocciaHostRandom;
     FHasTimeZoneOverride: Boolean;
-    FNextChildStreamId: QWord;
-    FChildLock: TRTLCriticalSection;
+    FNextChildStreamId: UInt64;
+    FChildLock: TGocciaCriticalSection;
     procedure SetProviders(const AClock: IGocciaHostClock;
       const ARandom: IGocciaHostRandom;
       const AHasTimeZoneOverride: Boolean);
@@ -71,7 +74,7 @@ type
     const DeterministicEpochNanoseconds: Int64 = 0;
     const DeterministicMonotonicNanoseconds: Int64 = 0;
     const DeterministicTimeZone = 'UTC';
-    const DeterministicSeed: QWord = 0;
+    const DeterministicSeed: UInt64 = 0;
 
     constructor Create; overload;
     constructor Create(const AClock: IGocciaHostClock;
@@ -83,11 +86,15 @@ type
     procedure UseDeterministicProfile;
     procedure ConfigureAsChildOf(const AParent: TGocciaHostEnvironment);
 
-    function EpochNanoseconds: Int64; inline;
-    function MonotonicNanoseconds: Int64; inline;
-    function TimeZoneIdentifier: string; inline;
+    function EpochNanoseconds: Int64;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function MonotonicNanoseconds: Int64;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function TimeZoneIdentifier: string;
+    {$IFDEF FPC}inline;{$ENDIF}
     function ResolveTimeZoneIdentifier(const AFallback: string): string;
-    function RandomDouble: Double; inline;
+    function RandomDouble: Double;
+    {$IFDEF FPC}inline;{$ENDIF}
   end;
 
 implementation
@@ -101,9 +108,9 @@ uses
   Goccia.Utils;
 
 const
-  SPLITMIX64_INCREMENT = QWord($9E3779B97F4A7C15);
-  SPLITMIX64_MULTIPLIER_1 = QWord($BF58476D1CE4E5B9);
-  SPLITMIX64_MULTIPLIER_2 = QWord($94D049BB133111EB);
+  SPLITMIX64_INCREMENT = UInt64($9E3779B97F4A7C15);
+  SPLITMIX64_MULTIPLIER_1 = UInt64($BF58476D1CE4E5B9);
+  SPLITMIX64_MULTIPLIER_2 = UInt64($94D049BB133111EB);
   RANDOM_DOUBLE_SCALE: Double = 1.0 / 9007199254740992.0;
 
 { TGocciaSystemHostClock }
@@ -151,16 +158,18 @@ end;
 
 { TGocciaSeededHostRandom }
 
-constructor TGocciaSeededHostRandom.Create(const ASeed: QWord);
+constructor TGocciaSeededHostRandom.Create(const ASeed: UInt64);
 begin
   inherited Create;
   FSeed := ASeed;
   FState := ASeed;
 end;
 
-{$PUSH}
+{$IFDEF FPC}
+  {$PUSH}
+{$ENDIF}
 {$OVERFLOWCHECKS OFF}
-class function TGocciaSeededHostRandom.Mix(const AValue: QWord): QWord;
+class function TGocciaSeededHostRandom.Mix(const AValue: UInt64): UInt64;
 begin
   Result := AValue;
   Result := (Result xor (Result shr 30)) * SPLITMIX64_MULTIPLIER_1;
@@ -178,25 +187,29 @@ begin
 end;
 
 function TGocciaSeededHostRandom.Fork(
-  const AStreamId: QWord): IGocciaHostRandom;
+  const AStreamId: UInt64): IGocciaHostRandom;
 begin
   Result := TGocciaSeededHostRandom.Create(
     Mix(FSeed xor (AStreamId * SPLITMIX64_INCREMENT)));
 end;
-{$POP}
+{$IFDEF FPC}
+  {$POP}
+{$ELSE}
+  {$IFNDEF PRODUCTION}{$OVERFLOWCHECKS ON}{$ENDIF}
+{$ENDIF}
 
 { TGocciaHostEnvironment }
 
 constructor TGocciaHostEnvironment.Create;
 var
   Clock: IGocciaHostClock;
-  Seed: QWord;
+  Seed: UInt64;
 begin
   inherited Create;
-  InitCriticalSection(FChildLock);
+  CriticalSectionInit(FChildLock);
   Clock := TGocciaSystemHostClock.Create;
-  Seed := QWord(Clock.EpochNanoseconds) xor
-    (QWord(Clock.MonotonicNanoseconds) shl 1) xor QWord(PtrUInt(Self));
+  Seed := UInt64(Clock.EpochNanoseconds) xor
+    (UInt64(Clock.MonotonicNanoseconds) shl 1) xor UInt64(NativeUInt(Self));
   SetProviders(Clock, TGocciaSeededHostRandom.Create(Seed), False);
 end;
 
@@ -204,7 +217,7 @@ constructor TGocciaHostEnvironment.Create(const AClock: IGocciaHostClock;
   const ARandom: IGocciaHostRandom);
 begin
   inherited Create;
-  InitCriticalSection(FChildLock);
+  CriticalSectionInit(FChildLock);
   Configure(AClock, ARandom);
 end;
 
@@ -212,7 +225,7 @@ destructor TGocciaHostEnvironment.Destroy;
 begin
   FRandom := nil;
   FClock := nil;
-  DoneCriticalSection(FChildLock);
+  CriticalSectionDone(FChildLock);
   inherited Destroy;
 end;
 
@@ -247,14 +260,14 @@ procedure TGocciaHostEnvironment.ForkProviders(out AClock: IGocciaHostClock;
   out ARandom: IGocciaHostRandom;
   out AHasTimeZoneOverride: Boolean);
 begin
-  EnterCriticalSection(FChildLock);
+  CriticalSectionEnter(FChildLock);
   try
     Inc(FNextChildStreamId);
     AClock := FClock;
     ARandom := FRandom.Fork(FNextChildStreamId);
     AHasTimeZoneOverride := FHasTimeZoneOverride;
   finally
-    LeaveCriticalSection(FChildLock);
+    CriticalSectionLeave(FChildLock);
   end;
 end;
 

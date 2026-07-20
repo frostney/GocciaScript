@@ -86,6 +86,19 @@ const char* greeting(void) {
   return "hello from C";
 }
 
+// UTF-8 bytes for "h\u00e9llo \U0001f600". Hex escapes avoid depending on the
+// fixture source file's execution character set.
+const char* greeting_unicode(void) {
+  return "h\xC3\xA9llo \xF0\x9F\x98\x80";
+}
+
+// A UTF-8 encoding of a lone UTF-16 high surrogate, which is never valid
+// Unicode scalar value data.
+const char* invalid_utf8(void) {
+  static const char value[] = { (char)0xED, (char)0xA0, (char)0x80, '\0' };
+  return value;
+}
+
 // -- Pointers ---------------------------------------------------------------
 
 int is_null(void* p) {

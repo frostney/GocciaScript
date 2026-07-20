@@ -71,7 +71,7 @@ begin
   Index := 1;
   while Index <= Length(AValue) do
   begin
-    if TryReadUTF8CodePointAllowSurrogates(AValue, Index, CodePoint,
+    if TryReadCodePointAtAllowSurrogates(AValue, Index, CodePoint,
       ByteLength) then
     begin
       AppendJSONEscapedCodePoint(Buffer, CodePoint,

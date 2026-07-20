@@ -42,12 +42,12 @@ begin
     Args := TGocciaArgumentsCollection.Create;
     try
       AResult := TGocciaFunctionBase(Method).Call(Args, AThisValue);
-      if Assigned(TGarbageCollector.Instance) then
+      if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.AddTempRoot(AResult);
       try
         Result := AResult.IsPrimitive;
       finally
-        if Assigned(TGarbageCollector.Instance) then
+        if (TGarbageCollector.Instance <> nil) then
           TGarbageCollector.Instance.RemoveTempRoot(AResult);
       end;
     finally
@@ -61,12 +61,13 @@ threadvar
   GHintNumber: TGocciaStringLiteralValue;
   GHintDefault: TGocciaStringLiteralValue;
 
-procedure EnsureHintValue(var ASlot: TGocciaStringLiteralValue; const AValue: string); inline;
+procedure EnsureHintValue(var ASlot: TGocciaStringLiteralValue; const AValue: string);
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if not Assigned(ASlot) then
   begin
     ASlot := TGocciaStringLiteralValue.Create(AValue);
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.PinObject(ASlot);
   end;
 end;
@@ -114,7 +115,7 @@ begin
       finally
         Args.Free;
       end;
-      if Assigned(TGarbageCollector.Instance) then
+      if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.AddTempRoot(Result);
       try
         // Step 2.b.ii: If result is not an Object, return result.
@@ -123,7 +124,7 @@ begin
         // Step 2.b.iii: Throw a TypeError exception.
         ThrowTypeError(SErrorToPrimitiveReturnedObject, SSuggestToPrimitiveReturnPrimitive);
       finally
-        if Assigned(TGarbageCollector.Instance) then
+        if (TGarbageCollector.Instance <> nil) then
           TGarbageCollector.Instance.RemoveTempRoot(Result);
       end;
     end;

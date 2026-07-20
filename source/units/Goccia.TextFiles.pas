@@ -7,7 +7,7 @@ interface
 uses
   SysUtils;
 
-function ReadUTF8FileText(const APath: string): UTF8String;
+function ReadUTF8FileText(const APath: string): string;
 function ReadFileBytes(const APath: string): TBytes;
 
 implementation
@@ -15,7 +15,7 @@ implementation
 uses
   FileUtils;
 
-function ReadUTF8FileText(const APath: string): UTF8String;
+function ReadUTF8FileText(const APath: string): string;
 begin
   Result := FileUtils.ReadUTF8FileText(APath);
 end;

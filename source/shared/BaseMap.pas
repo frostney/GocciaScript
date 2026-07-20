@@ -46,9 +46,11 @@ type
       FMap: TBaseMap<TKey, TValue>;
       FIterState: Integer;
       FCurrent: TKeyValuePair;
-      function GetCurrent: TKeyValuePair; inline;
+      function GetCurrent: TKeyValuePair;
+      {$IFDEF FPC}inline;{$ENDIF}
     public
-      function MoveNext: Boolean; inline;
+      function MoveNext: Boolean;
+      {$IFDEF FPC}inline;{$ENDIF}
       property Current: TKeyValuePair read GetCurrent;
     end;
 
@@ -71,7 +73,8 @@ type
     function Remove(const AKey: TKey): Boolean; virtual; abstract;
     procedure Clear; virtual; abstract;
 
-    function GetEnumerator: TEnumerator; inline;
+    function GetEnumerator: TEnumerator;
+    {$IFDEF FPC}inline;{$ENDIF}
     function ToArray: TKeyValueArray;
     procedure ForEach(ACallback: TForEachCallback);
     function Keys: TKeyArray;

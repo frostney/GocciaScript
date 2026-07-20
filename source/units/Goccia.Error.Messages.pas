@@ -412,7 +412,9 @@ resourcestring
   SErrorFFICallbackHandleReturn = 'FFI callback return requires an FFICallback handle';
   SErrorFFICallbackReturnType = 'FFI callback return type does not match signature';
   SErrorFFICallbackPointerReturn = 'FFI callback pointer return requires FFIPointer or null';
-  SErrorFFICallbackCStringReturn = 'FFI callback cannot return cstring';
+  SErrorFFICallbackUTF8StringReturn = 'FFI callback cannot return utf8string';
+  SErrorFFIUTF8StringArgument = 'FFI utf8string argument must be well-formed UTF-16 without embedded NUL';
+  SErrorFFIUTF8StringResult = 'FFI utf8string result contains invalid UTF-8';
   SErrorFFICallbackRequiresCallable = 'FFICallback requires a callback type and callable value';
   SErrorFFICallbackCloseReceiver = 'FFICallback.close requires an FFICallback';
   SErrorFFICallbackForeignThread = 'FFI callback was invoked from a foreign runtime thread';

@@ -78,9 +78,10 @@ uses
 var
   GTemporalPlainMonthDaySharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetTemporalPlainMonthDayShared: TGocciaSharedPrototype; inline;
+function GetTemporalPlainMonthDayShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTemporalPlainMonthDaySharedSlot))
   else
     Result := nil;
@@ -541,8 +542,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetTemporalPlainMonthDayShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetTemporalPlainMonthDayShared <> nil) then Exit;
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GTemporalPlainMonthDaySharedSlot, Shared);
   Members := TGocciaMemberCollection.Create;

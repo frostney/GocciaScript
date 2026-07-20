@@ -219,13 +219,13 @@ function TGocciaMockFunctionValue.CreateResultEntry(const AResultType: string;
   const AValue: TGocciaValue): TGocciaObjectValue;
 begin
   Result := TGocciaObjectValue.Create;
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(Result);
   try
     Result.AssignProperty(PROP_TYPE, TGocciaStringLiteralValue.Create(AResultType));
     Result.AssignProperty(PROP_VALUE, AValue);
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(Result);
   end;
 end;
@@ -262,7 +262,7 @@ var
   LastCall: TGocciaValue;
 begin
   Result := TGocciaObjectValue.Create;
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(Result);
   try
     Result.AssignProperty(PROP_CALLS, BuildCallsArray);
@@ -276,7 +276,7 @@ begin
       LastCall := TGocciaUndefinedLiteralValue.UndefinedValue;
     Result.AssignProperty(PROP_LAST_CALL, LastCall);
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(Result);
   end;
 end;

@@ -30,6 +30,14 @@ function assertBinaryContains(buffer: Buffer, marker: string, label: string): vo
   }
 }
 
+function assertBinaryContainsResourceName(buffer: Buffer, resourceName: string, label: string): void {
+  const asciiName = Buffer.from(resourceName, "ascii");
+  const utf16LEName = Buffer.from(resourceName, "utf16le");
+  if (buffer.indexOf(asciiName) < 0 && buffer.indexOf(utf16LEName) < 0) {
+    throw new Error(`${LOADER} is missing ${label} resource name ${resourceName}`);
+  }
+}
+
 function assertLoaderReturnsTrue(source: string, label: string, extraArgs: string[] = []): void {
   const { exitCode, json, stderr } = runLoaderJson(source, extraArgs);
   if (exitCode !== 0) {
@@ -47,7 +55,10 @@ console.log("Embedded resource payload markers...");
   const loaderBytes = readFileSync(LOADER);
   for (const resource of embeddedResources) {
     assertBinaryContains(loaderBytes, resource.magic, `${resource.label} payload`);
-    assertBinaryContains(loaderBytes, resource.resourceName, `${resource.label} resource name`);
+    // PE resource directory names are UTF-16LE; ELF and Mach-O builds retain
+    // an ASCII copy. Accept the native representation while still requiring
+    // the exact resource name.
+    assertBinaryContainsResourceName(loaderBytes, resource.resourceName, resource.label);
   }
 }
 

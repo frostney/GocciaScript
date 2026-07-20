@@ -8,6 +8,8 @@ uses
   Classes,
   Generics.Collections,
 
+  UnicodeStringList,
+
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
@@ -338,7 +340,7 @@ begin
 
   // Step 3: Parse jsonString as a JSON text. Throw SyntaxError if invalid.
   try
-    Parsed := FParser.Parse(UTF8String(JSONString));
+    Parsed := FParser.Parse(JSONString);
   except
     on E: Exception do
       ThrowSyntaxError(Format(SErrorJSONRawJSONInvalid, [E.Message]), SSuggestJSONFormat);
@@ -555,10 +557,10 @@ var
   I: Integer;
   Item: string;
   Len: Integer;
-  PropertyList: TStringList;
+  PropertyList: TUnicodeStringList;
   Seen: TDictionary<string, Boolean>;
 begin
-  PropertyList := TStringList.Create;
+  PropertyList := TUnicodeStringList.Create;
   Seen := TDictionary<string, Boolean>.Create;
   try
     Len := LengthOfArrayLike(AAllowList);

@@ -116,13 +116,7 @@ type
     destructor Destroy; override;
 
     function Parse(const AText: string): TGocciaValue; overload;
-{$IFNDEF LAKON}
-    function Parse(const AText: UTF8String): TGocciaValue; overload;
-{$ENDIF}
     function ParseDocuments(const AText: string): TGocciaArrayValue; overload;
-{$IFNDEF LAKON}
-    function ParseDocuments(const AText: UTF8String): TGocciaArrayValue; overload;
-{$ENDIF}
   end;
 
 implementation
@@ -131,9 +125,11 @@ uses
   Classes,
   Math,
 
-  base64,
+  NumericText,
+  TextEncoding,
   TextSemantics,
 
+  Goccia.Base64,
   Goccia.Constants.PropertyNames,
   Goccia.Temporal.Utils;
 
@@ -946,12 +942,6 @@ begin
   Result := False;
 end;
 
-function YAMLFormatSettings: TFormatSettings;
-begin
-  Result := DefaultFormatSettings;
-  Result.DecimalSeparator := '.';
-end;
-
 function TryParseYAMLFloat(const AText: string; out AValue: Double): Boolean;
 var
   ExponentText, FractionalText, IntegerText, Lowered, MantissaText, Sanitized,
@@ -1040,7 +1030,8 @@ begin
       Exit(False);
   end;
 
-  Result := TryStrToFloat(Sanitized, AValue, YAMLFormatSettings);
+  AValue := DecimalTextToNumber(Sanitized);
+  Result := not IsNan(AValue);
 end;
 
 function IsHexDigitChar(const AChar: Char): Boolean;
@@ -1053,7 +1044,7 @@ var
   CodePoint: Cardinal;
   DigitCount, I, J: Integer;
   HexDigits: string;
-  ParsedCodePoint: QWord;
+  ParsedCodePoint: UInt64;
 begin
   Result := '';
   I := 1;
@@ -1088,13 +1079,13 @@ begin
         #9:
           Result := Result + #9;
         'N':
-          Result := Result + TextSemantics.CodePointToUTF8($85);
+          Result := Result + TextEncoding.CodePointToUTF16($85);
         '_':
-          Result := Result + TextSemantics.CodePointToUTF8($A0);
+          Result := Result + TextEncoding.CodePointToUTF16($A0);
         'L':
-          Result := Result + TextSemantics.CodePointToUTF8($2028);
+          Result := Result + TextEncoding.CodePointToUTF16($2028);
         'P':
-          Result := Result + TextSemantics.CodePointToUTF8($2029);
+          Result := Result + TextEncoding.CodePointToUTF16($2029);
         'x', 'u', 'U':
           begin
             case AText[I] of
@@ -1112,12 +1103,12 @@ begin
             for J := 1 to Length(HexDigits) do
               if not IsHexDigitChar(HexDigits[J]) then
                 raise EGocciaYAMLParseError.Create('Invalid Unicode escape in double-quoted scalar.');
-            if not TryStrToQWord('$' + HexDigits, ParsedCodePoint) then
+            if not TryTextToUInt64('$' + HexDigits, ParsedCodePoint) then
               raise EGocciaYAMLParseError.Create('Invalid Unicode escape in double-quoted scalar.');
             CodePoint := ParsedCodePoint;
             if CodePoint > $10FFFF then
               raise EGocciaYAMLParseError.Create('Invalid Unicode code point in double-quoted scalar.');
-            Result := Result + TextSemantics.CodePointToUTF8(CodePoint);
+            Result := Result + TextEncoding.CodePointToUTF16(CodePoint);
             Inc(I, Length(HexDigits));
           end;
         #10, #13:
@@ -1251,7 +1242,7 @@ var
 
 begin
   Result := TStringList.Create;
-  Source := CreateUTF8StringList(AText);
+  Source := CreateTextLines(AText);
   CurrentDocument := TStringList.Create;
   try
     DocumentOpen := False;
@@ -1341,7 +1332,7 @@ var
   LineText: string;
   Source: TStringList;
 begin
-  Source := CreateUTF8StringList(AText);
+  Source := CreateTextLines(AText);
   try
     InBlockScalar := False;
     BlockScalarIndent := 0;
@@ -1434,26 +1425,6 @@ var
   TimeRec: TTemporalTimeRecord;
 begin
   Result := TryParseISODate(AText, DateRec) or TryParseISODateTime(AText, DateRec, TimeRec);
-end;
-
-function IsValidBase64Text(const AText: string): Boolean;
-var
-  EqualsIndex, I: Integer;
-begin
-  if (AText = '') or ((Length(AText) mod 4) <> 0) then
-    Exit(False);
-
-  EqualsIndex := Pos('=', AText);
-  if EqualsIndex > 0 then
-    for I := EqualsIndex to Length(AText) do
-      if AText[I] <> '=' then
-        Exit(False);
-
-  for I := 1 to Length(AText) do
-    if not (AText[I] in ['A'..'Z', 'a'..'z', '0'..'9', '+', '/', '=']) then
-      Exit(False);
-
-  Result := True;
 end;
 
 function EscapeCompositeKeyString(const AText: string): string;
@@ -1874,6 +1845,8 @@ end;
 function TGocciaYAMLParser.ApplyTag(const ATagName: string; const AValue: TGocciaValue;
   const ALineNumber: Integer): TGocciaValue;
 var
+  DecodedBytes: TBytes;
+  I: Integer;
   ScalarText: string;
   NumericValue: Double;
 begin
@@ -1962,16 +1935,13 @@ begin
   if SameText(ATagName, TAG_STANDARD_BINARY) then
   begin
     ScalarText := RemoveAllWhitespace(ScalarText);
-    if not IsValidBase64Text(ScalarText) then
+    if (ScalarText = '') or ((Length(ScalarText) mod 4) <> 0) or
+       not TryDecodeBase64Standard(ScalarText, DecodedBytes) then
       RaiseParseError('The !!binary tag requires valid base64 content.',
         ALineNumber);
-    try
-      ScalarText := DecodeStringBase64(ScalarText);
-    except
-      on E: Exception do
-        RaiseParseError('The !!binary tag requires valid base64 content.',
-          ALineNumber);
-    end;
+    SetLength(ScalarText, Length(DecodedBytes));
+    for I := 0 to High(DecodedBytes) do
+      ScalarText[I + 1] := Char(DecodedBytes[I]);
     Exit(TGocciaYAMLTaggedValue.Create(ATagName,
       TGocciaStringLiteralValue.Create(ScalarText)));
   end;
@@ -2062,7 +2032,7 @@ var
   Source: TStringList;
 begin
   Reset;
-  Source := CreateUTF8StringList(AText);
+  Source := CreateTextLines(AText);
   try
     SeenContent := False;
     for I := 0 to Source.Count - 1 do
@@ -2161,13 +2131,6 @@ begin
   end;
 end;
 
-{$IFNDEF LAKON}
-function TGocciaYAMLParser.Parse(const AText: UTF8String): TGocciaValue;
-begin
-  Result := Parse(RetagUTF8Text(RawByteString(AText)));
-end;
-{$ENDIF}
-
 function TGocciaYAMLParser.ParseDocuments(const AText: string): TGocciaArrayValue;
 var
   DocumentIndex: Integer;
@@ -2182,14 +2145,6 @@ begin
     DocumentText.Free;
   end;
 end;
-
-{$IFNDEF LAKON}
-function TGocciaYAMLParser.ParseDocuments(
-  const AText: UTF8String): TGocciaArrayValue;
-begin
-  Result := ParseDocuments(RetagUTF8Text(RawByteString(AText)));
-end;
-{$ENDIF}
 
 function TGocciaYAMLParser.ParseNode(const AIndent: Integer): TGocciaValue;
 var
@@ -2269,7 +2224,7 @@ begin
     begin
       if not CurrentLine.IsIgnorable and (CurrentLine.Indent <= AParentIndent) then
         Break;
-      Lines.AddObject(CurrentLine.RawText, TObject(PtrInt(CurrentLine.Number)));
+      Lines.AddObject(CurrentLine.RawText, TObject(NativeInt(CurrentLine.Number)));
       Inc(FIndex);
     end;
 
@@ -2304,7 +2259,7 @@ begin
         I := CountIndentation(Content);
         if I < ContentIndent then
           RaiseParseError('Block scalar content must be indented.',
-            PtrInt(Lines.Objects[LineIndex]));
+            NativeInt(Lines.Objects[LineIndex]));
         Content := Copy(Content, ContentIndent + 1, MaxInt);
       end;
 

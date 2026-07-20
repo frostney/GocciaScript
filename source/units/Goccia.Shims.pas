@@ -1027,7 +1027,7 @@ begin
   PipelineOptions.Compatibility := [cfFunction];
   PipelineOptions.SourceType := stModule;
   ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(
-    UTF8String(AShim.Source), AShim.FileName, PipelineOptions);
+    string(AShim.Source), AShim.FileName, PipelineOptions);
   try
     ProgramNode := ModuleParseResult.TakeProgramNode;
     try

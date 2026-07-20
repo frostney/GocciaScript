@@ -202,7 +202,7 @@ begin
       if Assigned(ARestPattern) then
       begin
         RestArray := TGocciaArrayValue.Create;
-        RestArrayRooted := Assigned(TGarbageCollector.Instance);
+        RestArrayRooted := (TGarbageCollector.Instance <> nil);
         if RestArrayRooted then
           TGarbageCollector.Instance.AddTempRoot(RestArray);
         try

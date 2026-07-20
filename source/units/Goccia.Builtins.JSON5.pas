@@ -8,6 +8,8 @@ uses
   Classes,
   Generics.Collections,
 
+  UnicodeStringList,
+
   Goccia.Arguments.Collection,
   Goccia.Arguments.Validator,
   Goccia.Builtins.Base,
@@ -26,7 +28,7 @@ type
     FParser: TGocciaJSON5Parser;
     FReplacerTraversalStack: TList<TGocciaObjectValue>;
     FReviverSourceIndex: Integer;
-    FReviverSourceTexts: TStringList;
+    FReviverSourceTexts: TUnicodeStringList;
     FStringifier: TGocciaJSONStringifier;
 
     function ApplyReviver(const AHolder: TGocciaValue; const AKey: string;
@@ -92,26 +94,28 @@ begin
   SetLength(FStaticMembers, 0);
 end;
 
-function UTF8CopyByCharacters(const AText: string;
+function CopyByCodePoints(const AText: string;
   const AMaxChars: Integer): string;
 var
-  ByteIndex: Integer;
+  CodeUnitIndex: Integer;
   CharacterCount: Integer;
   SequenceLength: Integer;
 begin
   if AMaxChars <= 0 then
     Exit('');
 
-  ByteIndex := 1;
+  CodeUnitIndex := 1;
   CharacterCount := 0;
-  while (ByteIndex <= Length(AText)) and (CharacterCount < AMaxChars) do
+  while (CodeUnitIndex <= Length(AText)) and
+        (CharacterCount < AMaxChars) do
   begin
-    SequenceLength := TextSemantics.UTF8SequenceLengthFromLeadByte(AText[ByteIndex]);
-    Inc(ByteIndex, SequenceLength);
+    SequenceLength := TextSemantics.CodePointSequenceLengthAt(
+      AText, CodeUnitIndex);
+    Inc(CodeUnitIndex, SequenceLength);
     Inc(CharacterCount);
   end;
 
-  Result := Copy(AText, 1, ByteIndex - 1);
+  Result := Copy(AText, 1, CodeUnitIndex - 1);
 end;
 
 constructor TGocciaJSON5Builtin.Create(const AName: string;
@@ -399,7 +403,7 @@ begin
   else if SpaceValue is TGocciaStringLiteralValue then
   begin
     Result := SpaceValue.ToStringLiteral.Value;
-    Result := UTF8CopyByCharacters(Result, 10);
+    Result := CopyByCodePoints(Result, 10);
   end;
 end;
 
@@ -464,13 +468,13 @@ function TGocciaJSON5Builtin.StringifyWithAllowList(const AValue: TGocciaValue;
 var
   I: Integer;
   Key: string;
-  Keys: TStringList;
+  Keys: TUnicodeStringList;
   Len: Integer;
   Seen: TDictionary<string, Boolean>;
 begin
   // Upstream json5 reference: the property list is extracted and de-duplicated
   // once, before serialization, so a wrapper's toString runs once per element.
-  Keys := TStringList.Create;
+  Keys := TUnicodeStringList.Create;
   Seen := TDictionary<string, Boolean>.Create;
   try
     Len := LengthOfArrayLike(AAllowList);
@@ -497,10 +501,10 @@ function TGocciaJSON5Builtin.JSON5Parse(
 var
   HasReviver: Boolean;
   PreviousSourceIndex: Integer;
-  PreviousSourceTexts: TStringList;
+  PreviousSourceTexts: TUnicodeStringList;
   Reviver: TGocciaValue;
   Root: TGocciaObjectValue;
-  SourceTexts: TStringList;
+  SourceTexts: TUnicodeStringList;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'JSON5.parse', ThrowError);
 
@@ -512,7 +516,7 @@ begin
   if HasReviver then
   begin
     Reviver := AArgs.GetElement(1);
-    SourceTexts := TStringList.Create;
+    SourceTexts := TUnicodeStringList.Create;
     try
       try
         FParser.ParseWithSources(

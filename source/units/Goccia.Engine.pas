@@ -113,15 +113,15 @@ type
     procedure DiscardPending; virtual;
     procedure SetAllowedFetchHosts(const AHosts: TStrings); virtual;
     function InjectGlobalsFromJSON5(
-      const AJSON5String: UTF8String): Boolean; virtual;
+      const AJSON5String: string): Boolean; virtual;
     function InjectGlobalsFromTOML(
-      const ATOMLString: UTF8String): Boolean; virtual;
+      const ATOMLString: string): Boolean; virtual;
     function InjectGlobalsFromYAML(const AYamlString: string): Boolean; virtual;
-    function InjectModulesFromJSON5(const AJSON5String: UTF8String;
+    function InjectModulesFromJSON5(const AJSON5String: string;
       const ABaseAddress: string): Boolean; virtual;
-    function InjectModulesFromTOML(const ATOMLString: UTF8String;
+    function InjectModulesFromTOML(const ATOMLString: string;
       const ABaseAddress: string): Boolean; virtual;
-    function InjectModulesFromYAML(const AYAMLString: UTF8String;
+    function InjectModulesFromYAML(const AYAMLString: string;
       const ABaseAddress: string): Boolean; virtual;
   end;
 
@@ -187,7 +187,6 @@ type
     FObjectConstructor: TGocciaClassValue;
     FFunctionConstructor: TGocciaFunctionConstructorClassValue;
     FTypedArrayIntrinsic: TGocciaClassValue;
-    FPreviousExceptionMask: TFPUExceptionMask;
     FSuppressWarnings: Boolean;
     FLastTiming: TGocciaScriptResult;
     FLastSourceMap: TGocciaSourceMap;
@@ -286,19 +285,19 @@ type
       const AName: string; const AFactory: TGocciaLazyPlainFactory;
       const AFlags: TPropertyFlags);
     procedure InjectGlobalsFromJSON(const AJsonString: string);
-    procedure InjectGlobalsFromJSON5(const AJSON5String: UTF8String);
-    procedure InjectGlobalsFromTOML(const ATOMLString: UTF8String);
+    procedure InjectGlobalsFromJSON5(const AJSON5String: string);
+    procedure InjectGlobalsFromTOML(const ATOMLString: string);
     procedure InjectGlobalsFromYAML(const AYamlString: string);
     procedure InjectGlobalsFromModule(const APath: string);
     procedure InjectModule(const AName, AContent: string;
       const AType: string = ''; const ABaseAddress: string = '');
-    procedure InjectModulesFromJSON(const AJSONString: UTF8String;
+    procedure InjectModulesFromJSON(const AJSONString: string;
       const ABaseAddress: string = '');
-    procedure InjectModulesFromJSON5(const AJSON5String: UTF8String;
+    procedure InjectModulesFromJSON5(const AJSON5String: string;
       const ABaseAddress: string = '');
-    procedure InjectModulesFromTOML(const ATOMLString: UTF8String;
+    procedure InjectModulesFromTOML(const ATOMLString: string;
       const ABaseAddress: string = '');
-    procedure InjectModulesFromYAML(const AYAMLString: UTF8String;
+    procedure InjectModulesFromYAML(const AYAMLString: string;
       const ABaseAddress: string = '');
     procedure InjectModulesFromModule(const APath: string);
     procedure ClearTransientCaches;
@@ -381,6 +380,7 @@ uses
 
   TextSemantics,
   TimingUtils,
+  UnicodeStringList,
 
   Goccia.CallStack,
   Goccia.Constants.ConstructorNames,
@@ -391,6 +391,7 @@ uses
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
   Goccia.FileExtensions,
+  Goccia.FloatingPoint,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
   Goccia.Keywords.Contextual,
@@ -437,13 +438,13 @@ begin
 end;
 
 function TGocciaEngineExtension.InjectGlobalsFromJSON5(
-  const AJSON5String: UTF8String): Boolean;
+  const AJSON5String: string): Boolean;
 begin
   Result := False;
 end;
 
 function TGocciaEngineExtension.InjectGlobalsFromTOML(
-  const ATOMLString: UTF8String): Boolean;
+  const ATOMLString: string): Boolean;
 begin
   Result := False;
 end;
@@ -455,19 +456,19 @@ begin
 end;
 
 function TGocciaEngineExtension.InjectModulesFromJSON5(
-  const AJSON5String: UTF8String; const ABaseAddress: string): Boolean;
+  const AJSON5String: string; const ABaseAddress: string): Boolean;
 begin
   Result := False;
 end;
 
 function TGocciaEngineExtension.InjectModulesFromTOML(
-  const ATOMLString: UTF8String; const ABaseAddress: string): Boolean;
+  const ATOMLString: string; const ABaseAddress: string): Boolean;
 begin
   Result := False;
 end;
 
 function TGocciaEngineExtension.InjectModulesFromYAML(
-  const AYAMLString: UTF8String; const ABaseAddress: string): Boolean;
+  const AYAMLString: string; const ABaseAddress: string): Boolean;
 begin
   Result := False;
 end;
@@ -565,7 +566,7 @@ begin
 end;
 
 procedure TGocciaEngine.InjectGlobalsFromJSON5(
-  const AJSON5String: UTF8String);
+  const AJSON5String: string);
 var
   I: Integer;
 begin
@@ -576,7 +577,7 @@ begin
 end;
 
 procedure TGocciaEngine.InjectGlobalsFromTOML(
-  const ATOMLString: UTF8String);
+  const ATOMLString: string);
 var
   I: Integer;
 begin
@@ -683,7 +684,7 @@ begin
   end;
 end;
 
-procedure TGocciaEngine.InjectModulesFromJSON(const AJSONString: UTF8String;
+procedure TGocciaEngine.InjectModulesFromJSON(const AJSONString: string;
   const ABaseAddress: string);
 var
   Parser: TGocciaJSONParser;
@@ -695,18 +696,18 @@ begin
   finally
     Parser.Free;
   end;
-  if Assigned(TGarbageCollector.Instance) and Assigned(ParsedValue) then
+  if (TGarbageCollector.Instance <> nil) and Assigned(ParsedValue) then
     TGarbageCollector.Instance.AddTempRoot(ParsedValue);
   try
     InjectModulesFromValue(ParsedValue, ABaseAddress, 'JSON manifest');
   finally
-    if Assigned(TGarbageCollector.Instance) and Assigned(ParsedValue) then
+    if (TGarbageCollector.Instance <> nil) and Assigned(ParsedValue) then
       TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
   end;
 end;
 
 procedure TGocciaEngine.InjectModulesFromJSON5(
-  const AJSON5String: UTF8String; const ABaseAddress: string);
+  const AJSON5String: string; const ABaseAddress: string);
 var
   I: Integer;
 begin
@@ -717,7 +718,7 @@ begin
   ThrowError('JSON5 virtual modules require a runtime extension.', 0, 0);
 end;
 
-procedure TGocciaEngine.InjectModulesFromTOML(const ATOMLString: UTF8String;
+procedure TGocciaEngine.InjectModulesFromTOML(const ATOMLString: string;
   const ABaseAddress: string);
 var
   I: Integer;
@@ -729,7 +730,7 @@ begin
   ThrowError('TOML virtual modules require a runtime extension.', 0, 0);
 end;
 
-procedure TGocciaEngine.InjectModulesFromYAML(const AYAMLString: UTF8String;
+procedure TGocciaEngine.InjectModulesFromYAML(const AYAMLString: string;
   const ABaseAddress: string);
 var
   I: Integer;
@@ -841,8 +842,6 @@ procedure TGocciaEngine.Initialize(const AFileName: string;
   const ASourceLines: TStringList; const AModuleLoader: TGocciaModuleLoader;
   const AOwnsModuleLoader: Boolean);
 begin
-  FPreviousExceptionMask := GetExceptionMask;
-  SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
   FSourcePath := AFileName;
   FSourceLines := ASourceLines;
   FModuleLoader := AModuleLoader;
@@ -925,9 +924,8 @@ end;
 
 destructor TGocciaEngine.Destroy;
 begin
-  try
-    if Assigned(TGarbageCollector.Instance) and Assigned(FInterpreter) then
-      TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
+  if (TGarbageCollector.Instance <> nil) and Assigned(FInterpreter) then
+    TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
 
     FRetainedModules.Free;
     FLazyThunks.Free;
@@ -971,9 +969,6 @@ begin
       FRealmExecutionContext := nil;
       FRealm.Free;
       FRealm := nil;
-    end;
-  finally
-    SetExceptionMask(FPreviousExceptionMask);
   end;
   inherited;
 end;
@@ -1221,7 +1216,7 @@ begin
   TypeDef.AddSpeciesGetter := False;
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, ObjectConstructor);
   FObjectConstructor := ObjectConstructor;
-  if Assigned(GetErrorProto) and not Assigned(GetErrorProto.Prototype) then
+  if (GetErrorProto <> nil) and (GetErrorProto.Prototype = nil) then
     GetErrorProto.Prototype := ObjectConstructor.Prototype;
 
   TypeDef.ConstructorName := CONSTRUCTOR_ARRAY;
@@ -1374,7 +1369,7 @@ begin
   RegisterTypedArrayConstructor(CONSTRUCTOR_BIGUINT64_ARRAY, takBigUint64, ObjectConstructor);
 
   // Wire %TypedArray%.prototype to the shared prototype (which has all methods)
-  if Assigned(TGocciaTypedArrayValue.GetSharedPrototypeObject) then
+  if TGocciaTypedArrayValue.GetSharedPrototypeObject <> nil then
   begin
     FTypedArrayIntrinsic.ReplacePrototype(TGocciaTypedArrayValue.GetSharedPrototypeObject);
     // §23.2.3: %TypedArray%.prototype.constructor = %TypedArray%
@@ -1457,7 +1452,7 @@ begin
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst, True);
 
   // ES2026 §20.4.3: Symbol.prototype's [[Prototype]] is %Object.prototype%
-  if Assigned(TGocciaSymbolValue.SharedPrototype) then
+  if TGocciaSymbolValue.SharedPrototype <> nil then
     TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype).Prototype := ObjectConstructor.Prototype;
 
   RegisterGocciaScriptGlobal;
@@ -1541,7 +1536,7 @@ begin
     GlobalThisObj := TGocciaObjectValue.Create;
 
   if (not Assigned(GlobalThisObj.Prototype)) and
-     Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+     (TGocciaObjectValue.SharedObjectPrototype <> nil) then
     GlobalThisObj.Prototype := TGocciaObjectValue.SharedObjectPrototype;
 
   for Name in Scope.GetOwnBindingNames do
@@ -1773,26 +1768,32 @@ function TGocciaEngine.CompileModule(
 var
   SavedArgumentsObjectEnabled: Boolean;
   SavedNonStrictMode: Boolean;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
-  if (FSourceType = stModule) and (FExecutor is TGocciaBytecodeExecutor) then
-  begin
-    SavedArgumentsObjectEnabled :=
-      TGocciaBytecodeExecutor(FExecutor).ArgumentsObjectEnabled;
-    SavedNonStrictMode := TGocciaBytecodeExecutor(FExecutor).NonStrictMode;
-    TGocciaBytecodeExecutor(FExecutor).ArgumentsObjectEnabled :=
-      cfArgumentsObject in FCompatibility;
-    TGocciaBytecodeExecutor(FExecutor).NonStrictMode := False;
-    try
-      Result := FExecutor.CompileModule(AProgram);
-    finally
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  try
+    if (FSourceType = stModule) and (FExecutor is TGocciaBytecodeExecutor) then
+    begin
+      SavedArgumentsObjectEnabled :=
+        TGocciaBytecodeExecutor(FExecutor).ArgumentsObjectEnabled;
+      SavedNonStrictMode := TGocciaBytecodeExecutor(FExecutor).NonStrictMode;
       TGocciaBytecodeExecutor(FExecutor).ArgumentsObjectEnabled :=
-        SavedArgumentsObjectEnabled;
-      TGocciaBytecodeExecutor(FExecutor).NonStrictMode := SavedNonStrictMode;
-    end;
-  end
-  else
-    Result := FExecutor.CompileModule(AProgram);
-  FRetainedModules.Add(Result);
+        cfArgumentsObject in FCompatibility;
+      TGocciaBytecodeExecutor(FExecutor).NonStrictMode := False;
+      try
+        Result := FExecutor.CompileModule(AProgram);
+      finally
+        TGocciaBytecodeExecutor(FExecutor).ArgumentsObjectEnabled :=
+          SavedArgumentsObjectEnabled;
+        TGocciaBytecodeExecutor(FExecutor).NonStrictMode := SavedNonStrictMode;
+      end;
+    end
+    else
+      Result := FExecutor.CompileModule(AProgram);
+    FRetainedModules.Add(Result);
+  finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
+  end;
 end;
 
 procedure TGocciaEngine.RetainModule(const AModule: TGocciaCompiledModule);
@@ -1812,14 +1813,12 @@ var
   ExportDestructuringDecl: TGocciaExportDestructuringDeclaration;
   ExportEnumDecl: TGocciaExportEnumDeclaration;
   ExportFuncDecl: TGocciaExportFunctionDeclaration;
-  ImportDecl: TGocciaImportDeclaration;
-  ImportPair: TStringStringMap.TKeyValuePair;
   ExportPair: TStringStringMap.TKeyValuePair;
   ExportVarDecl: TGocciaExportVariableDeclaration;
   ExportName: string;
   I: Integer;
   Name: string;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   ReExportDecl: TGocciaReExportDeclaration;
   SourceModule: TGocciaModule;
   Stmt: TGocciaStatement;
@@ -1876,6 +1875,8 @@ var
 
   function IsImportedLocalName(const ALocalName: string): Boolean;
   var
+    ImportDecl: TGocciaImportDeclaration;
+    ImportPair: TStringStringMap.TKeyValuePair;
     J: Integer;
   begin
     Result := False;
@@ -1897,6 +1898,8 @@ var
   function TryAddImportedLocalExport(const ALocalName,
     AExportName: string): Boolean;
   var
+    ImportDecl: TGocciaImportDeclaration;
+    ImportPair: TStringStringMap.TKeyValuePair;
     J: Integer;
   begin
     Result := False;
@@ -1993,9 +1996,8 @@ begin
     else if Stmt is TGocciaExportVariableDeclaration then
     begin
       ExportVarDecl := TGocciaExportVariableDeclaration(Stmt);
-      Names := TStringList.Create;
+      Names := TUnicodeStringList.Create;
       try
-        Names.CaseSensitive := True;
         for VarInfo in ExportVarDecl.Declaration.Variables do
           CollectVariableInfoBindingNames(VarInfo, Names, True);
         for VarName in Names do
@@ -2007,9 +2009,8 @@ begin
     else if Stmt is TGocciaExportDestructuringDeclaration then
     begin
       ExportDestructuringDecl := TGocciaExportDestructuringDeclaration(Stmt);
-      Names := TStringList.Create;
+      Names := TUnicodeStringList.Create;
       try
-        Names.CaseSensitive := True;
         CollectPatternBindingNames(ExportDestructuringDecl.Declaration.Pattern,
           Names, True);
         for Name in Names do
@@ -2258,16 +2259,22 @@ function TGocciaEngine.RunModule(
   const AModule: TGocciaCompiledModule): TGocciaValue;
 var
   GC: TGarbageCollector;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
-  Result := FExecutor.RunCompiledModule(AModule);
-  GC := TGarbageCollector.Instance;
-  if Assigned(Result) and Assigned(GC) then
-    GC.AddTempRoot(Result);
+  EnterGocciaFloatingPointScope(FloatingPointState);
   try
-    WaitForRuntimeIdle;
-  finally
+    Result := FExecutor.RunCompiledModule(AModule);
+    GC := TGarbageCollector.Instance;
     if Assigned(Result) and Assigned(GC) then
-      GC.RemoveTempRoot(Result);
+      GC.AddTempRoot(Result);
+    try
+      WaitForRuntimeIdle;
+    finally
+      if Assigned(Result) and Assigned(GC) then
+        GC.RemoveTempRoot(Result);
+    end;
+  finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
 end;
 
@@ -2276,16 +2283,22 @@ function TGocciaEngine.RunModuleInScope(
   const AScope: TGocciaScope): TGocciaValue;
 var
   GC: TGarbageCollector;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
-  Result := FExecutor.RunCompiledModuleInScope(AModule, AScope);
-  GC := TGarbageCollector.Instance;
-  if Assigned(Result) and Assigned(GC) then
-    GC.AddTempRoot(Result);
+  EnterGocciaFloatingPointScope(FloatingPointState);
   try
-    WaitForRuntimeIdle;
-  finally
+    Result := FExecutor.RunCompiledModuleInScope(AModule, AScope);
+    GC := TGarbageCollector.Instance;
     if Assigned(Result) and Assigned(GC) then
-      GC.RemoveTempRoot(Result);
+      GC.AddTempRoot(Result);
+    try
+      WaitForRuntimeIdle;
+    finally
+      if Assigned(Result) and Assigned(GC) then
+        GC.RemoveTempRoot(Result);
+    end;
+  finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
 end;
 
@@ -2375,7 +2388,10 @@ var
   EntryPromise: TGocciaPromiseValue;
   SavedVMGlobalScope: TGocciaScope;
   GC: TGarbageCollector;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  try
   FillChar(FLastTiming, SizeOf(FLastTiming), 0);
   FLastTiming.FileName := FSourcePath;
   StartTime := GetNanoseconds;
@@ -2397,7 +2413,7 @@ begin
     FLastTiming.ParseTimeNanoseconds := PipelineResult.ParseTimeNanoseconds;
     PrintSourcePipelineWarnings(PipelineResult);
 
-    if Assigned(TGocciaCoverageTracker.Instance) and
+    if (TGocciaCoverageTracker.Instance <> nil) and
        TGocciaCoverageTracker.Instance.Enabled then
     begin
       TGocciaCoverageTracker.Instance.RegisterSourceFile(
@@ -2561,7 +2577,7 @@ begin
       FLastTiming.TotalTimeNanoseconds := ExecEnd - StartTime;
     finally
       ActiveOptionsScope.Free;
-      if Assigned(TGocciaMicrotaskQueue.Instance) then
+      if (TGocciaMicrotaskQueue.Instance <> nil) then
         TGocciaMicrotaskQueue.Instance.ClearQueue;
       DiscardRuntimePending;
     end;
@@ -2577,6 +2593,9 @@ begin
   end;
 
   Result := FLastTiming;
+  finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
+  end;
 end;
 
 function TGocciaEngine.TakeLastSourceMap: TGocciaSourceMap;
@@ -2588,16 +2607,22 @@ end;
 function TGocciaEngine.ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
 var
   GC: TGarbageCollector;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
-  Result := FExecutor.ExecuteProgram(AProgram);
-  GC := TGarbageCollector.Instance;
-  if Assigned(Result) and Assigned(GC) then
-    GC.AddTempRoot(Result);
+  EnterGocciaFloatingPointScope(FloatingPointState);
   try
-    WaitForRuntimeIdle;
-  finally
+    Result := FExecutor.ExecuteProgram(AProgram);
+    GC := TGarbageCollector.Instance;
     if Assigned(Result) and Assigned(GC) then
-      GC.RemoveTempRoot(Result);
+      GC.AddTempRoot(Result);
+    try
+      WaitForRuntimeIdle;
+    finally
+      if Assigned(Result) and Assigned(GC) then
+        GC.RemoveTempRoot(Result);
+    end;
+  finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
 end;
 
@@ -2606,7 +2631,7 @@ class function TGocciaEngine.RunScript(const ASource: string;
 var
   SourceList: TStringList;
 begin
-  SourceList := CreateUTF8StringList(ASource);
+  SourceList := CreateTextLines(ASource);
   try
     Result := RunScriptFromStringList(SourceList, AFileName);
   finally

@@ -78,6 +78,8 @@ type
 implementation
 
 uses
+  TextEncoding,
+
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -94,9 +96,10 @@ uses
 var
   GResponseSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetResponseShared: TGocciaSharedPrototype; inline;
+function GetResponseShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GResponseSharedSlot))
   else
     Result := nil;
@@ -141,8 +144,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetResponseShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetResponseShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GResponseSharedSlot, Shared);
@@ -297,7 +300,7 @@ function TGocciaResponseValue.ResponseText(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   R: TGocciaResponseValue;
-  U8: UTF8String;
+  BodyText: string;
   P: TGocciaPromiseValue;
 begin
   if not (AThisValue is TGocciaResponseValue) then
@@ -312,12 +315,8 @@ begin
   end;
   R.FBodyUsed := True;
 
-  // Decode body as UTF-8
-  SetLength(U8, Length(R.FBody));
-  if Length(R.FBody) > 0 then
-    Move(R.FBody[0], U8[1], Length(R.FBody));
-
-  P.Resolve(TGocciaStringLiteralValue.Create(string(U8)));
+  BodyText := DecodeUTF8WithReplacement(R.FBody);
+  P.Resolve(TGocciaStringLiteralValue.Create(BodyText));
   Result := P;
 end;
 
@@ -326,7 +325,7 @@ function TGocciaResponseValue.ResponseJSON(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   R: TGocciaResponseValue;
-  U8: UTF8String;
+  BodyText: string;
   Parser: TGocciaJSONParser;
   Parsed: TGocciaValue;
   P: TGocciaPromiseValue;
@@ -343,14 +342,12 @@ begin
   end;
   R.FBodyUsed := True;
 
-  SetLength(U8, Length(R.FBody));
-  if Length(R.FBody) > 0 then
-    Move(R.FBody[0], U8[1], Length(R.FBody));
+  BodyText := DecodeUTF8WithReplacement(R.FBody);
 
   Parser := TGocciaJSONParser.Create;
   try
     try
-      Parsed := Parser.Parse(U8);
+      Parsed := Parser.Parse(BodyText);
       P.Resolve(Parsed);
     except
       on E: Exception do
@@ -399,7 +396,6 @@ procedure TGocciaResponseValue.InitializeNativeFromArguments(
 var
   BodyArg, InitArg, PropVal: TGocciaValue;
   InitObj, HeadersObj: TGocciaObjectValue;
-  U8: UTF8String;
   PropNames: TArray<string>;
   I, StatusVal: Integer;
 begin
@@ -410,10 +406,7 @@ begin
   if not ((BodyArg is TGocciaUndefinedLiteralValue) or
           (BodyArg is TGocciaNullLiteralValue)) then
   begin
-    U8 := UTF8String(BodyArg.ToStringLiteral.Value);
-    SetLength(FBody, Length(U8));
-    if Length(U8) > 0 then
-      Move(U8[1], FBody[0], Length(U8));
+    FBody := EncodeUTF8WithReplacement(BodyArg.ToStringLiteral.Value);
   end;
 
   // Argument 1: init dictionary { status, statusText, headers }

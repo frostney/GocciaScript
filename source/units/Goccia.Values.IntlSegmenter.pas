@@ -54,7 +54,7 @@ type
     FLocale: string;
     FGranularity: string;
     FOriginalText: string;
-    FText: UnicodeString;
+    FText: string;
     FSegments: array of TIntlSegment;
     FIndex: Integer;
 
@@ -106,25 +106,28 @@ begin
   SetLength(FSegmentIteratorPrototypeMembers, 0);
 end;
 
-function GetIntlSegmenterShared: TGocciaSharedPrototype; inline;
+function GetIntlSegmenterShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlSegmenterSharedSlot))
   else
     Result := nil;
 end;
 
-function GetIntlSegmentsShared: TGocciaSharedPrototype; inline;
+function GetIntlSegmentsShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlSegmentsSharedSlot))
   else
     Result := nil;
 end;
 
-function GetIntlSegmentIteratorShared: TGocciaSharedPrototype; inline;
+function GetIntlSegmentIteratorShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlSegmentIteratorSharedSlot))
   else
     Result := nil;
@@ -220,7 +223,7 @@ begin
   end;
 
   InitializePrototype;
-  if Assigned(GetIntlSegmenterShared) then
+  if (GetIntlSegmenterShared <> nil) then
     FPrototype := GetIntlSegmenterShared.Prototype;
 end;
 
@@ -234,8 +237,8 @@ var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetIntlSegmenterShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetIntlSegmenterShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlSegmenterSharedSlot, Shared);
@@ -308,7 +311,7 @@ begin
   FGranularity := AGranularity;
   FText := AText;
   InitializePrototype;
-  if Assigned(GetIntlSegmentsShared) then
+  if (GetIntlSegmentsShared <> nil) then
     FPrototype := GetIntlSegmentsShared.Prototype;
 end;
 
@@ -322,8 +325,8 @@ var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetIntlSegmentsShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetIntlSegmentsShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlSegmentsSharedSlot, Shared);
@@ -399,11 +402,11 @@ begin
   FLocale := ALocale;
   FGranularity := AGranularity;
   FOriginalText := AText;
-  FText := UnicodeString(AText);
+  FText := string(AText);
   FIndex := 0;
   BuildSegments;
   InitializePrototype;
-  if Assigned(GetIntlSegmentIteratorShared) then
+  if (GetIntlSegmentIteratorShared <> nil) then
     FPrototype := GetIntlSegmentIteratorShared.Prototype;
 end;
 
@@ -463,25 +466,25 @@ end;
 
 procedure TGocciaIntlSegmentIteratorValue.BuildSegmentsFallback;
 var
-  Utf8Text: string;
+  Text: string;
   Idx, SeqLen, Utf16Index: Integer;
   CodePoint: Cardinal;
   Seg: TIntlSegment;
   SegStart: Integer;
   C: Char;
 begin
-  Utf8Text := FOriginalText;
+  Text := FOriginalText;
 
   if FGranularity = 'grapheme' then
   begin
     // Split into individual code points via UTF-8 iteration
     Idx := 1;
     Utf16Index := 0;
-    while Idx <= Length(Utf8Text) do
+    while Idx <= Length(Text) do
     begin
-      if TryReadUTF8CodePoint(Utf8Text, Idx, CodePoint, SeqLen) then
+      if TryReadCodePointAt(Text, Idx, CodePoint, SeqLen) then
       begin
-        Seg.Segment := Copy(Utf8Text, Idx, SeqLen);
+        Seg.Segment := Copy(Text, Idx, SeqLen);
         Seg.Index := Utf16Index;
         Seg.IsWordLike := False;
         SetLength(FSegments, Length(FSegments) + 1);
@@ -501,26 +504,26 @@ begin
     // Split on word boundaries (whitespace/punctuation)
     Idx := 1;
     Utf16Index := 0;
-    while Idx <= Length(Utf8Text) do
+    while Idx <= Length(Text) do
     begin
       SegStart := Idx;
-      C := Utf8Text[Idx];
+      C := Text[Idx];
 
       if IsWordBoundaryChar(C) then
       begin
         // Non-word segment: consume consecutive boundary chars
-        while (Idx <= Length(Utf8Text)) and IsWordBoundaryChar(Utf8Text[Idx]) do
+        while (Idx <= Length(Text)) and IsWordBoundaryChar(Text[Idx]) do
           Inc(Idx);
-        Seg.Segment := Copy(Utf8Text, SegStart, Idx - SegStart);
+        Seg.Segment := Copy(Text, SegStart, Idx - SegStart);
         Seg.Index := Utf16Index;
         Seg.IsWordLike := False;
       end
       else
       begin
         // Word segment: consume until boundary
-        while (Idx <= Length(Utf8Text)) and not IsWordBoundaryChar(Utf8Text[Idx]) do
+        while (Idx <= Length(Text)) and not IsWordBoundaryChar(Text[Idx]) do
           Inc(Idx);
-        Seg.Segment := Copy(Utf8Text, SegStart, Idx - SegStart);
+        Seg.Segment := Copy(Text, SegStart, Idx - SegStart);
         Seg.Index := Utf16Index;
         Seg.IsWordLike := True;
       end;
@@ -536,18 +539,18 @@ begin
     SegStart := 1;
     Idx := 1;
     Utf16Index := 0;
-    while Idx <= Length(Utf8Text) do
+    while Idx <= Length(Text) do
     begin
-      if IsSentenceEndChar(Utf8Text[Idx]) then
+      if IsSentenceEndChar(Text[Idx]) then
       begin
         // Consume trailing whitespace after sentence end
         Inc(Idx);
-        while (Idx <= Length(Utf8Text)) and
-              ((Utf8Text[Idx] = ' ') or (Utf8Text[Idx] = #10) or
-               (Utf8Text[Idx] = #13) or (Utf8Text[Idx] = #9)) do
+        while (Idx <= Length(Text)) and
+              ((Text[Idx] = ' ') or (Text[Idx] = #10) or
+               (Text[Idx] = #13) or (Text[Idx] = #9)) do
           Inc(Idx);
 
-        Seg.Segment := Copy(Utf8Text, SegStart, Idx - SegStart);
+        Seg.Segment := Copy(Text, SegStart, Idx - SegStart);
         Seg.Index := Utf16Index;
         Seg.IsWordLike := False;
         SetLength(FSegments, Length(FSegments) + 1);
@@ -560,9 +563,9 @@ begin
     end;
 
     // Remaining text as final segment
-    if SegStart <= Length(Utf8Text) then
+    if SegStart <= Length(Text) then
     begin
-      Seg.Segment := Copy(Utf8Text, SegStart, Length(Utf8Text) - SegStart + 1);
+      Seg.Segment := Copy(Text, SegStart, Length(Text) - SegStart + 1);
       Seg.Index := Utf16Index;
       Seg.IsWordLike := False;
       SetLength(FSegments, Length(FSegments) + 1);
@@ -572,10 +575,10 @@ begin
   else
   begin
     // Unknown granularity: single segment
-    if Length(Utf8Text) > 0 then
+    if Length(Text) > 0 then
     begin
       SetLength(FSegments, 1);
-      FSegments[0].Segment := Utf8Text;
+      FSegments[0].Segment := Text;
       FSegments[0].Index := 0;
       FSegments[0].IsWordLike := False;
     end;
@@ -592,8 +595,8 @@ var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetIntlSegmentIteratorShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetIntlSegmentIteratorShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlSegmentIteratorSharedSlot, Shared);

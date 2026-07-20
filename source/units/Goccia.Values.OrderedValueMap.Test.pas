@@ -24,7 +24,7 @@ type
     procedure TestSignedZeroKeysCollapse;
     procedure TestEqualNumberInstancesCollapse;
     procedure TestEqualStringInstancesCollapse;
-    procedure TestEquivalentUTF16StringEncodingsCollapse;
+    procedure TestEqualSurrogatePairStringInstancesCollapse;
     procedure TestEqualBigIntInstancesCollapse;
     procedure TestLookupWithDistinctEqualInstance;
 
@@ -58,8 +58,8 @@ begin
   Test('-0 and +0 collapse to one entry', TestSignedZeroKeysCollapse);
   Test('Equal number instances collapse', TestEqualNumberInstancesCollapse);
   Test('Equal string instances collapse', TestEqualStringInstancesCollapse);
-  Test('Equivalent UTF-16 string encodings collapse',
-    TestEquivalentUTF16StringEncodingsCollapse);
+  Test('Equal surrogate-pair string instances collapse',
+    TestEqualSurrogatePairStringInstancesCollapse);
   Test('Equal BigInt instances collapse', TestEqualBigIntInstancesCollapse);
   Test('Lookup succeeds with a distinct equal instance', TestLookupWithDistinctEqualInstance);
   Test('Number 1 and string "1" are distinct keys', TestNumberAndStringAreDistinct);
@@ -75,12 +75,14 @@ begin
   Test('RetainIterator/ReleaseIterator track active count', TestIteratorRetainReleaseCounter);
 end;
 
-function Num(const AValue: Double): TGocciaValue; inline;
+function Num(const AValue: Double): TGocciaValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := TGocciaNumberLiteralValue.Create(AValue);
 end;
 
-function Str(const AValue: string): TGocciaValue; inline;
+function Str(const AValue: string): TGocciaValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := TGocciaStringLiteralValue.Create(AValue);
 end;
@@ -150,20 +152,19 @@ begin
   end;
 end;
 
-procedure TOrderedValueMapTests.TestEquivalentUTF16StringEncodingsCollapse;
+procedure TOrderedValueMapTests.TestEqualSurrogatePairStringInstancesCollapse;
 const
-  UTF8_GRINNING_FACE = #$F0#$9F#$98#$80;
-  UTF8_SURROGATE_PAIR = #$ED#$A0#$BD#$ED#$B8#$80;
+  GRINNING_FACE = #$D83D#$DE00;
 var
   Store: TGocciaOrderedValueMap;
   V: TGocciaValue;
 begin
   Store := TGocciaOrderedValueMap.Create;
   try
-    Store.SetEntry(Str(UTF8_GRINNING_FACE), Str('first'));
-    Store.SetEntry(Str(UTF8_SURROGATE_PAIR), Str('second'));
+    Store.SetEntry(Str(GRINNING_FACE), Str('first'));
+    Store.SetEntry(Str(#$D83D + #$DE00), Str('second'));
     Expect<Integer>(Store.Count).ToBe(1);
-    Expect<Boolean>(Store.TryGetValue(Str(UTF8_GRINNING_FACE), V)).ToBe(True);
+    Expect<Boolean>(Store.TryGetValue(Str(GRINNING_FACE), V)).ToBe(True);
     Expect<string>(TGocciaStringLiteralValue(V).Value).ToBe('second');
   finally
     Store.Free;
@@ -415,7 +416,7 @@ end;
 
 begin
   TestRunnerProgram.AddSuite(TOrderedValueMapTests.Create('OrderedValueMap'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
 
   ExitCode := TestResultToExitCode;
 end.

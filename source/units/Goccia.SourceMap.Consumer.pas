@@ -87,10 +87,10 @@ end;
 
 constructor TGocciaSourceMapConsumer.CreateFromFile(const APath: string);
 var
-  SourceText: UTF8String;
+  SourceText: string;
 begin
   SourceText := ReadUTF8FileText(APath);
-  CreateFromJSON(RetagUTF8Text(RawByteString(SourceText)));
+  CreateFromJSON(SourceText);
 end;
 
 destructor TGocciaSourceMapConsumer.Destroy;
@@ -140,7 +140,7 @@ var
 begin
   Parser := TGocciaJSONParser.Create;
   try
-    Root := Parser.Parse(UTF8String(AJSON));
+    Root := Parser.Parse(string(AJSON));
   finally
     Parser.Free;
   end;

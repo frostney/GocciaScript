@@ -10,12 +10,13 @@ type
     Value: string;
   end;
   TBcp47ExtensionArray = array of TBcp47Extension;
+  TBcp47VariantArray = array of string;
 
   TBcp47Tag = record
     Language: string;
     Script: string;
     Region: string;
-    Variants: array of string;
+    Variants: TBcp47VariantArray;
     Extensions: TBcp47ExtensionArray;
     PrivateUse: string;
     IsValid: Boolean;
@@ -35,7 +36,7 @@ uses
   IntlTypes;
 
 type
-  TSubtags = array of string;
+  TSubtags = TBcp47VariantArray;
 
 function SplitByHyphen(const AStr: string): TSubtags;
 var

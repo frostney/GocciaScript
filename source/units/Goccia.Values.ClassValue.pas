@@ -71,10 +71,14 @@ type
     FNameDeleted: Boolean;
     FLengthDeleted: Boolean;
     FSourceText: string;
-    function GetPropertyGetter(const AName: string): TGocciaFunctionBase; inline;
-    function GetPropertySetter(const AName: string): TGocciaFunctionBase; inline;
-    function GetStaticPropertyGetter(const AName: string): TGocciaFunctionBase; inline;
-    function GetStaticPropertySetter(const AName: string): TGocciaFunctionBase; inline;
+    function GetPropertyGetter(const AName: string): TGocciaFunctionBase;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetPropertySetter(const AName: string): TGocciaFunctionBase;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetStaticPropertyGetter(const AName: string): TGocciaFunctionBase;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetStaticPropertySetter(const AName: string): TGocciaFunctionBase;
+    {$IFDEF FPC}inline;{$ENDIF}
     function GetPrivatePropertyGetter(const AName: string): TGocciaFunctionBase;
     function GetPrivatePropertySetter(const AName: string): TGocciaFunctionBase;
   public
@@ -353,7 +357,8 @@ type
     procedure SetPrivateProperty(const AName: string; const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue; const AThrowIfExists: Boolean = False);
     function TryGetRawPrivateProperty(const AKey: string; out AValue: TGocciaValue): Boolean;
     procedure SetRawPrivateProperty(const AKey: string; const AValue: TGocciaValue);
-    function IsInstanceOf(const AClass: TGocciaClassValue): Boolean; inline;
+    function IsInstanceOf(const AClass: TGocciaClassValue): Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); virtual;
     procedure FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); virtual;
     procedure MarkReferences; override;
@@ -494,8 +499,8 @@ begin
   Result := Assigned(ANativeSuperConstructor) and
     (ANativeSuperConstructor <> TGocciaFunctionBase.GetSharedPrototype) and
     (ANativeSuperConstructor is TGocciaClassValue) and
-    Assigned(TGocciaClassValue(ANativeSuperConstructor).
-      NativeInstanceDefaultPrototype);
+    (TGocciaClassValue(ANativeSuperConstructor).
+      NativeInstanceDefaultPrototype <> nil);
 end;
 
 function GetArrayPrototypeFromConstructor(
@@ -713,12 +718,12 @@ begin
   inherited Create;
   FName := AName;
   FCreationRealm := CurrentRealm;
-  FPrivateBrandToken := IntToHex(PtrUInt(Self), SizeOf(Pointer) * 2);
+  FPrivateBrandToken := IntToHex(NativeUInt(Self), SizeOf(Pointer) * 2);
   FSuperClass := ASuperClass;
   // Set [[Prototype]]: superclass for derived, Function.prototype for base classes
   if Assigned(FSuperClass) then
     FPrototype := FSuperClass
-  else if Assigned(TGocciaFunctionBase.GetSharedPrototype) then
+  else if TGocciaFunctionBase.GetSharedPrototype <> nil then
     FPrototype := TGocciaFunctionBase.GetSharedPrototype;
   FGetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
   FSetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
@@ -744,7 +749,7 @@ begin
   FLengthDeleted := False;
   if Assigned(FSuperClass) then
     FClassPrototype.Prototype := FSuperClass.Prototype
-  else if Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+  else if TGocciaObjectValue.SharedObjectPrototype <> nil then
     FClassPrototype.Prototype := TGocciaObjectValue.SharedObjectPrototype;
 
   // .name is synthesized in GetOwnPropertyDescriptor (like .prototype)
@@ -2784,7 +2789,7 @@ begin
   // No-op by default; native subclasses override when setup must finish after prototype lookup
 end;
 
-function TGocciaInstanceValue.IsInstanceOf(const AClass: TGocciaClassValue): Boolean; inline;
+function TGocciaInstanceValue.IsInstanceOf(const AClass: TGocciaClassValue): Boolean;
 var
   CurrentClass: TGocciaClassValue;
 begin

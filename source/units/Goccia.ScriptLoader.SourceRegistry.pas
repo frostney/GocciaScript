@@ -7,7 +7,7 @@
     - For names that have been Register()'d (stdin, multifile sections),
       Load returns a fresh clone of the in-memory source.
     - For other names, Load delegates to
-      CreateUTF8FileTextLines(ReadUTF8FileText(AName)) — i.e. reads the
+      CreateFileTextLines(ReadUTF8FileText(AName)) — i.e. reads the
       file from disk.
 
   This unifies the source text loading path so consumers never branch on the
@@ -54,7 +54,7 @@ type
     function IsRegistered(const AName: string): Boolean;
 
     { Single canonical source loader.  Memory hits return a fresh clone;
-      misses delegate to CreateUTF8FileTextLines(ReadUTF8FileText(AName)).
+      misses delegate to CreateFileTextLines(ReadUTF8FileText(AName)).
       Always returns a caller-owned TStringList. }
     function Load(const AName: string): TStringList;
   end;
@@ -112,7 +112,7 @@ begin
   if FRegistered.TryGetValue(AName, Registered) then
     Result := CloneSource(Registered)
   else
-    Result := CreateUTF8FileTextLines(ReadUTF8FileText(AName));
+    Result := CreateFileTextLines(ReadUTF8FileText(AName));
 end;
 
 end.

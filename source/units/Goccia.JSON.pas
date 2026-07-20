@@ -11,6 +11,7 @@ uses
 
   JSONParser,
   StringBuffer,
+  UnicodeStringList,
 
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
@@ -24,7 +25,7 @@ type
   private
     FElements: TObjectList<TGocciaJSONParseRecord>;
     FEntries: TObjectList<TGocciaJSONParseRecord>;
-    FEntryKeys: TStringList;
+    FEntryKeys: TUnicodeStringList;
     FSourceText: string;
     FValue: TGocciaValue;
   public
@@ -45,10 +46,10 @@ type
     constructor Create; overload;
     constructor Create(
       const ACapabilities: TJSONParserCapabilities); overload;
-    function Parse(const AText: UTF8String): TGocciaValue; virtual;
-    procedure ParseWithSources(const AText: UTF8String;
-      out AValue: TGocciaValue; const ASourceTexts: TStringList);
-    procedure ParseWithRecord(const AText: UTF8String;
+    function Parse(const AText: string): TGocciaValue; virtual;
+    procedure ParseWithSources(const AText: string;
+      out AValue: TGocciaValue; const ASourceTexts: TUnicodeStringList);
+    procedure ParseWithRecord(const AText: string;
       out AValue: TGocciaValue; out AParseRecord: TGocciaJSONParseRecord);
   end;
 
@@ -81,15 +82,13 @@ type
     constructor Create(const AMode: TJSONStringifyMode); overload;
     function Stringify(const AValue: TGocciaValue; const AGap: string = '';
       const APreferredQuoteChar: Char = #0;
-      const APropertyList: TStringList = nil;
+      const APropertyList: TUnicodeStringList = nil;
       const AApplyToJSON: Boolean = True): string;
   end;
 
 implementation
 
 uses
-  StrUtils,
-
   TextSemantics,
 
   Goccia.Arguments.Collection,
@@ -113,11 +112,11 @@ type
   private
     FCollectRecords: Boolean;
     FCollectSources: Boolean;
-    FKeyStack: TStringList;
+    FKeyStack: TUnicodeStringList;
     FRecordStack: TList<TGocciaJSONParseRecord>;
     FResult: TGocciaValue;
     FRootRecord: TGocciaJSONParseRecord;
-    FSourceTexts: TStringList;
+    FSourceTexts: TUnicodeStringList;
     FStack: TList<TGocciaValue>;
     FValueStartPosition: Integer;
     procedure RecordSourceText;
@@ -138,39 +137,39 @@ type
     procedure EmitValueAndRecord(const AValue: TGocciaValue;
       const ARecord: TGocciaJSONParseRecord);
   public
-    constructor Create;
+    constructor Create; overload;
     constructor Create(
-      const ACapabilities: TJSONParserCapabilities);
+      const ACapabilities: TJSONParserCapabilities); overload;
     destructor Destroy; override;
-    function Parse(const AText: UTF8String): TGocciaValue;
+    function Parse(const AText: string): TGocciaValue;
     function ReleaseRootRecord: TGocciaJSONParseRecord;
     property CollectRecords: Boolean read FCollectRecords write FCollectRecords;
     property CollectSources: Boolean read FCollectSources write FCollectSources;
-    property SourceTexts: TStringList read FSourceTexts;
+    property SourceTexts: TUnicodeStringList read FSourceTexts;
   end;
 
 const
-  JSON5_NO_BREAK_SPACE = #$C2#$A0;
-  JSON5_OGHAM_SPACE_MARK = #$E1#$9A#$80;
-  JSON5_EN_QUAD = #$E2#$80#$80;
-  JSON5_EM_QUAD = #$E2#$80#$81;
-  JSON5_EN_SPACE = #$E2#$80#$82;
-  JSON5_EM_SPACE = #$E2#$80#$83;
-  JSON5_THREE_PER_EM_SPACE = #$E2#$80#$84;
-  JSON5_FOUR_PER_EM_SPACE = #$E2#$80#$85;
-  JSON5_SIX_PER_EM_SPACE = #$E2#$80#$86;
-  JSON5_FIGURE_SPACE = #$E2#$80#$87;
-  JSON5_PUNCTUATION_SPACE = #$E2#$80#$88;
-  JSON5_THIN_SPACE = #$E2#$80#$89;
-  JSON5_HAIR_SPACE = #$E2#$80#$8A;
-  JSON5_ZERO_WIDTH_NON_JOINER = #$E2#$80#$8C;
-  JSON5_ZERO_WIDTH_JOINER = #$E2#$80#$8D;
-  JSON5_LINE_SEPARATOR = #$E2#$80#$A8;
-  JSON5_PARAGRAPH_SEPARATOR = #$E2#$80#$A9;
-  JSON5_NARROW_NO_BREAK_SPACE = #$E2#$80#$AF;
-  JSON5_MEDIUM_MATHEMATICAL_SPACE = #$E2#$81#$9F;
-  JSON5_IDEOGRAPHIC_SPACE = #$E3#$80#$80;
-  JSON5_BYTE_ORDER_MARK = #$EF#$BB#$BF;
+  JSON5_NO_BREAK_SPACE = #$00A0;
+  JSON5_OGHAM_SPACE_MARK = #$1680;
+  JSON5_EN_QUAD = #$2000;
+  JSON5_EM_QUAD = #$2001;
+  JSON5_EN_SPACE = #$2002;
+  JSON5_EM_SPACE = #$2003;
+  JSON5_THREE_PER_EM_SPACE = #$2004;
+  JSON5_FOUR_PER_EM_SPACE = #$2005;
+  JSON5_SIX_PER_EM_SPACE = #$2006;
+  JSON5_FIGURE_SPACE = #$2007;
+  JSON5_PUNCTUATION_SPACE = #$2008;
+  JSON5_THIN_SPACE = #$2009;
+  JSON5_HAIR_SPACE = #$200A;
+  JSON5_ZERO_WIDTH_NON_JOINER = #$200C;
+  JSON5_ZERO_WIDTH_JOINER = #$200D;
+  JSON5_LINE_SEPARATOR = #$2028;
+  JSON5_PARAGRAPH_SEPARATOR = #$2029;
+  JSON5_NARROW_NO_BREAK_SPACE = #$202F;
+  JSON5_MEDIUM_MATHEMATICAL_SPACE = #$205F;
+  JSON5_IDEOGRAPHIC_SPACE = #$3000;
+  JSON5_BYTE_ORDER_MARK = #$FEFF;
 
 function IsJSON5WhitespaceCodePoint(const ACodePoint: Cardinal): Boolean;
 begin
@@ -190,26 +189,20 @@ begin
   Result := False;
 end;
 
-function TryReadUTF8Sequence(const AText: string; var AIndex: Integer;
-  out ASequence: UTF8String): Boolean;
+function TryReadCodePointSequence(const AText: string; var AIndex: Integer;
+  out ASequence: string): Boolean;
 var
-  I: Integer;
   SequenceLength: Integer;
 begin
   ASequence := '';
   if (AIndex < 1) or (AIndex > Length(AText)) then
     Exit(False);
 
-  SequenceLength := TextSemantics.UTF8SequenceLengthFromLeadByte(AText[AIndex]);
+  SequenceLength := TextSemantics.CodePointSequenceLengthAt(AText, AIndex);
   if AIndex + SequenceLength - 1 > Length(AText) then
     Exit(False);
 
   ASequence := Copy(AText, AIndex, SequenceLength);
-  if SequenceLength > 1 then
-    for I := 2 to SequenceLength do
-      if (Ord(ASequence[I]) and $C0) <> $80 then
-        Exit(False);
-
   Inc(AIndex, SequenceLength);
   Result := True;
 end;
@@ -217,57 +210,11 @@ end;
 function TryDecodeIdentifierCodePoint(const AText: string;
   out ACodePoint: Cardinal): Boolean;
 var
-  Byte1, Byte2, Byte3, Byte4: Byte;
+  CodeUnitLength: Integer;
 begin
-  Result := False;
-  ACodePoint := 0;
-  if AText = '' then
-    Exit;
-
-  case Length(AText) of
-    1:
-      begin
-        ACodePoint := Ord(AText[1]);
-        Exit(True);
-      end;
-    2:
-      begin
-        Byte1 := Ord(AText[1]);
-        Byte2 := Ord(AText[2]);
-        if ((Byte1 and $E0) <> $C0) or ((Byte2 and $C0) <> $80) then
-          Exit;
-        ACodePoint := Cardinal(Byte1 and $1F) shl 6 or Cardinal(Byte2 and $3F);
-        Exit(True);
-      end;
-    3:
-      begin
-        Byte1 := Ord(AText[1]);
-        Byte2 := Ord(AText[2]);
-        Byte3 := Ord(AText[3]);
-        if ((Byte1 and $F0) <> $E0) or ((Byte2 and $C0) <> $80) or
-          ((Byte3 and $C0) <> $80) then
-          Exit;
-        ACodePoint := Cardinal(Byte1 and $0F) shl 12 or
-          Cardinal(Byte2 and $3F) shl 6 or
-          Cardinal(Byte3 and $3F);
-        Exit(True);
-      end;
-    4:
-      begin
-        Byte1 := Ord(AText[1]);
-        Byte2 := Ord(AText[2]);
-        Byte3 := Ord(AText[3]);
-        Byte4 := Ord(AText[4]);
-        if ((Byte1 and $F8) <> $F0) or ((Byte2 and $C0) <> $80) or
-          ((Byte3 and $C0) <> $80) or ((Byte4 and $C0) <> $80) then
-          Exit;
-        ACodePoint := Cardinal(Byte1 and $07) shl 18 or
-          Cardinal(Byte2 and $3F) shl 12 or
-          Cardinal(Byte3 and $3F) shl 6 or
-          Cardinal(Byte4 and $3F);
-        Exit(True);
-      end;
-  end;
+  Result := TextSemantics.TryReadCodePointAt(
+    AText, 1, ACodePoint, CodeUnitLength) and
+    (CodeUnitLength = Length(AText));
 end;
 
 // ES2026 §25.5.2.5 SerializeJSONProperty — step 8.a: ToString(value)
@@ -308,7 +255,7 @@ begin
   FSourceText := ASourceText;
   FElements := TObjectList<TGocciaJSONParseRecord>.Create(True);
   FEntries := TObjectList<TGocciaJSONParseRecord>.Create(True);
-  FEntryKeys := TStringList.Create;
+  FEntryKeys := TUnicodeStringList.Create;
 end;
 
 destructor TGocciaJSONParseRecord.Destroy;
@@ -369,7 +316,7 @@ begin
   FCapabilities := ACapabilities;
 end;
 
-function TGocciaJSONParser.Parse(const AText: UTF8String): TGocciaValue;
+function TGocciaJSONParser.Parse(const AText: string): TGocciaValue;
 var
   Visitor: TGocciaJSONVisitor;
 begin
@@ -386,8 +333,8 @@ begin
   end;
 end;
 
-procedure TGocciaJSONParser.ParseWithSources(const AText: UTF8String;
-  out AValue: TGocciaValue; const ASourceTexts: TStringList);
+procedure TGocciaJSONParser.ParseWithSources(const AText: string;
+  out AValue: TGocciaValue; const ASourceTexts: TUnicodeStringList);
 var
   Visitor: TGocciaJSONVisitor;
 begin
@@ -396,7 +343,7 @@ begin
     Visitor.CollectSources := True;
     try
       AValue := Visitor.Parse(AText);
-      ASourceTexts.Assign(Visitor.SourceTexts);
+      ASourceTexts.AddRange(Visitor.SourceTexts);
     except
       on E: EJSONParseError do
         raise EGocciaJSONParseError.Create(E.Message);
@@ -406,7 +353,7 @@ begin
   end;
 end;
 
-procedure TGocciaJSONParser.ParseWithRecord(const AText: UTF8String;
+procedure TGocciaJSONParser.ParseWithRecord(const AText: string;
   out AValue: TGocciaValue; out AParseRecord: TGocciaJSONParseRecord);
 var
   Visitor: TGocciaJSONVisitor;
@@ -439,8 +386,8 @@ begin
   inherited Create(ACapabilities);
   FStack := TList<TGocciaValue>.Create;
   FRecordStack := TList<TGocciaJSONParseRecord>.Create;
-  FKeyStack := TStringList.Create;
-  FSourceTexts := TStringList.Create;
+  FKeyStack := TUnicodeStringList.Create;
+  FSourceTexts := TUnicodeStringList.Create;
   FResult := nil;
   FRootRecord := nil;
   FCollectRecords := False;
@@ -462,7 +409,7 @@ begin
   inherited;
 end;
 
-function TGocciaJSONVisitor.Parse(const AText: UTF8String): TGocciaValue;
+function TGocciaJSONVisitor.Parse(const AText: string): TGocciaValue;
 begin
   DoParse(AText);
   Result := FResult;
@@ -659,7 +606,8 @@ end;
 
 function TGocciaJSONStringifier.Stringify(const AValue: TGocciaValue;
   const AGap: string; const APreferredQuoteChar: Char;
-  const APropertyList: TStringList; const AApplyToJSON: Boolean): string;
+  const APropertyList: TUnicodeStringList;
+  const AApplyToJSON: Boolean): string;
 var
   I: Integer;
   PreviousApplyToJSON: Boolean;
@@ -724,11 +672,9 @@ end;
 function TGocciaJSONStringifier.MakeIndent(const ALevel: Integer): string;
 begin
   // ES2026 §25.5.4.5/§25.5.4.6: the indent at depth ALevel is FGap repeated
-  // ALevel times. DupeString builds it in a single O(ALevel) pass; the previous
-  // accumulator concatenation copied the growing result each step, making this
-  // O(ALevel^2) per call and O(depth^3) over a nested chain. DupeString returns
-  // '' for ALevel <= 0 and for an empty FGap, so no explicit guard is needed.
-  Result := DupeString(FGap, ALevel);
+  // ALevel times. The shared helper keeps ECMAScript text as UTF-16 instead of
+  // crossing FPC's precompiled StrUtils AnsiString boundary on Windows.
+  Result := RepeatUTF16String(FGap, ALevel);
 end;
 
 // ES2026 §25.5.2.2 SerializeJSONProperty ( state, key, holder )
@@ -826,19 +772,19 @@ end;
 function TGocciaJSONStringifier.IsJSON5IdentifierKey(const AKey: string): Boolean;
 var
   I: Integer;
-  Sequence: UTF8String;
+  Sequence: string;
 begin
   if AKey = '' then
     Exit(False);
 
   I := 1;
-  if not TryReadUTF8Sequence(AKey, I, Sequence) or
+  if not TryReadCodePointSequence(AKey, I, Sequence) or
     not IsIdentifierStartText(Sequence) then
     Exit(False);
 
   while I <= Length(AKey) do
   begin
-    if not TryReadUTF8Sequence(AKey, I, Sequence) or
+    if not TryReadCodePointSequence(AKey, I, Sequence) or
       not IsIdentifierContinueText(Sequence) then
       Exit(False);
   end;
@@ -882,16 +828,16 @@ begin
     while I <= Length(AStr) do
     begin
       Ch := AStr[I];
-      if Copy(AStr, I, 3) = #$E2#$80#$A8 then
+      if Ch = #$2028 then
       begin
         SB.Append('\u2028');
-        Inc(I, 3);
+        Inc(I);
         Continue;
       end;
-      if Copy(AStr, I, 3) = #$E2#$80#$A9 then
+      if Ch = #$2029 then
       begin
         SB.Append('\u2029');
-        Inc(I, 3);
+        Inc(I);
         Continue;
       end;
 

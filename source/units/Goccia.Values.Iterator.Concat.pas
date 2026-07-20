@@ -170,7 +170,7 @@ begin
       try
         InnerResult := FCurrentIterator.AdvanceNext;
       except
-        AcquireExceptionObject;
+        PreserveCurrentExceptionAcrossNestedHandler;
         CloseIteratorPreservingError(FCurrentIterator);
         FCurrentIterator := nil;
         FDone := True;
@@ -216,7 +216,7 @@ begin
       try
         InnerValue := FCurrentIterator.DirectNext(InnerDone);
       except
-        AcquireExceptionObject;
+        PreserveCurrentExceptionAcrossNestedHandler;
         CloseIteratorPreservingError(FCurrentIterator);
         FCurrentIterator := nil;
         FDone := True;

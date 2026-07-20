@@ -46,7 +46,7 @@ The Foreign Function Interface calls native shared libraries. It is available on
 
 ## Type Descriptors and Aggregate Values
 
-Supported scalar types are `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `pointer`, `cstring`, `bool`, and `void` (return only). `i64`/`u64` are not available on i386.
+Supported scalar types are `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `pointer`, `utf8string`, `bool`, and `void` (return only). `i64`/`u64` are not available on i386.
 
 `FFI.struct`, `FFI.union`, and `FFI.array` return compositional type descriptors. Descriptors expose `kind`, `size`, and `alignment`; array descriptors also expose `length`. Calling `descriptor.create(initializer)` returns an aggregate value backed by an `ArrayBuffer`. Structure and union fields use property access, arrays use numeric indices, and nested aggregate reads return views sharing the root buffer. Aggregate values expose `buffer`, `byteOffset`, and `size` (plus `length` for arrays). Detaching that buffer invalidates the root value and all nested views.
 
@@ -98,7 +98,7 @@ registerComparator(persistent);
 persistent.close();
 ```
 
-Callbacks may enter JavaScript only on the runtime thread that created them. A foreign-thread invocation returns the callback ABI's zero value and raises `TypeError` after the enclosing native call returns. If JavaScript throws, native code receives the zero value; later callbacks in that native call are suppressed, and the original exception is rethrown after native code returns. No Pascal or JavaScript exception unwinds through a native callback frame. Callback `cstring` returns are rejected because their storage lifetime cannot be guaranteed.
+Callbacks may enter JavaScript only on the runtime thread that created them. A foreign-thread invocation returns the callback ABI's zero value and raises `TypeError` after the enclosing native call returns. If JavaScript throws, native code receives the zero value; later callbacks in that native call are suppressed, and the original exception is rethrown after native code returns. No Pascal or JavaScript exception unwinds through a native callback frame. Callback `utf8string` returns are rejected because their storage lifetime cannot be guaranteed.
 
 ## Limits
 

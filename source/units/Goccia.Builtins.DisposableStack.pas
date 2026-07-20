@@ -781,7 +781,7 @@ begin
 
   FDisposableStackPrototype := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   FAsyncDisposableStackPrototype := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
   begin
     CurrentRealm.SetSlot(GDisposableStackPrototypeSlot,
       TGocciaObjectValue(FDisposableStackPrototype));

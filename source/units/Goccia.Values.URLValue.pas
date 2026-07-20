@@ -154,9 +154,10 @@ begin
   SetLength(FPrototypeMembers, 0);
 end;
 
-function GetURLShared: TGocciaSharedPrototype; inline;
+function GetURLShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GURLSharedSlot))
   else
     Result := nil;
@@ -191,8 +192,8 @@ var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetURLShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetURLShared <> nil) then Exit;
 
   // Rebuild member definitions per realm: callbacks bind to Self (the
   // bootstrap instance pinned by Shared), and TGocciaSharedPrototype.Destroy

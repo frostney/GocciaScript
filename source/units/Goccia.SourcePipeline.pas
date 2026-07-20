@@ -8,6 +8,8 @@ uses
   Classes,
   Generics.Collections,
 
+  UnicodeStringList,
+
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.Constants,
@@ -118,7 +120,7 @@ type
     class function Parse(const ASource: TStringList; const AFileName: string;
       const AOptions: TGocciaSourcePipelineOptions;
       const ADeclaredPrivateNames: TStrings = nil): TGocciaSourcePipelineResult; static;
-    class function ParseModuleSource(const ASource: UTF8String;
+    class function ParseModuleSource(const ASource: string;
       const AFileName: string;
       const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineModuleResult; static;
     class function ParseExpression(const AExpressionText,
@@ -160,9 +162,9 @@ threadvar
   // audit, #892).
   GActiveSourcePipelineOptionsScope: TGocciaSourcePipelineOptionsScope;
 
-function SourceTextToLines(const ASource: UTF8String): TStringList;
+function SourceTextToLines(const ASource: string): TStringList;
 begin
-  Result := CreateUTF8FileTextLines(NormalizeUTF8NewlinesToLF(ASource));
+  Result := CreateFileTextLines(NormalizeNewlinesToLF(ASource));
 end;
 
 function CloneStringList(const ASource: TStrings): TStringList;
@@ -258,17 +260,18 @@ begin
     #10 + ABodySource + #10 + '})';
 end;
 
-procedure AddNameOnce(const ANames: TStrings; const AName: string);
+procedure AddNameOnce(const ANames: TUnicodeStringList;
+  const AName: string);
 begin
   if (AName <> '') and (ANames.IndexOf(AName) < 0) then
     ANames.Add(AName);
 end;
 
 procedure CollectTopLevelModuleDeclarationNames(const AStmt: TGocciaStatement;
-  const AVarNames, ALexicalNames: TStrings);
+  const AVarNames, ALexicalNames: TUnicodeStringList);
 var
   I, J: Integer;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   VarDecl: TGocciaVariableDeclaration;
 begin
   if AStmt is TGocciaVariableDeclaration then
@@ -276,8 +279,7 @@ begin
     VarDecl := TGocciaVariableDeclaration(AStmt);
     for I := 0 to High(VarDecl.Variables) do
     begin
-      Names := TStringList.Create;
-      Names.CaseSensitive := True;
+      Names := TUnicodeStringList.Create;
       try
         CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
         for J := 0 to Names.Count - 1 do
@@ -327,19 +329,17 @@ procedure ValidateModuleEarlyErrors(const AProgram: TGocciaProgram;
   const AFileName: string; const ASourceLines: TStringList);
 var
   I: Integer;
-  LexicalNames: TStringList;
+  LexicalNames: TUnicodeStringList;
   Stmt: TGocciaStatement;
   VarName: string;
-  VarNames: TStringList;
+  VarNames: TUnicodeStringList;
 begin
   if not Assigned(AProgram) then
     Exit;
 
-  VarNames := TStringList.Create;
-  LexicalNames := TStringList.Create;
+  VarNames := TUnicodeStringList.Create;
+  LexicalNames := TUnicodeStringList.Create;
   try
-    VarNames.CaseSensitive := True;
-    LexicalNames.CaseSensitive := True;
     for I := 0 to AProgram.Body.Count - 1 do
     begin
       Stmt := AProgram.Body[I];
@@ -584,7 +584,7 @@ begin
   end;
 end;
 
-class function TGocciaSourcePipeline.ParseModuleSource(const ASource: UTF8String;
+class function TGocciaSourcePipeline.ParseModuleSource(const ASource: string;
   const AFileName: string;
   const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineModuleResult;
 var
@@ -663,9 +663,9 @@ var
   PipelineResult: TGocciaSourcePipelineResult;
   Source: TStringList;
 begin
-  Source := TStringList.Create;
+  Source := CreateECMAScriptSourceLines(
+    DynamicFunctionWrapperSource(AParametersSource, '', AKind));
   try
-    Source.Text := DynamicFunctionWrapperSource(AParametersSource, '', AKind);
     PipelineResult := Parse(Source, AFileName, AOptions);
     try
       Result := Assigned(PipelineResult.ProgramNode) and
@@ -694,9 +694,9 @@ var
 begin
   Result.IsValid := False;
   Result.HasUseStrictDirective := False;
-  Source := TStringList.Create;
+  Source := CreateECMAScriptSourceLines(
+    DynamicFunctionWrapperSource('', ABodySource, AKind));
   try
-    Source.Text := DynamicFunctionWrapperSource('', ABodySource, AKind);
     PipelineResult := Parse(Source, AFileName, AOptions);
     try
       FunctionExpression := nil;

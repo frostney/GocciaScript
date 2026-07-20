@@ -63,9 +63,10 @@ var
   GFFIPointerSharedSlot: TGocciaRealmOwnedSlotId;
   GFFINullPointerSlot: TGocciaRealmSlotId;
 
-function GetFFIPointerShared: TGocciaSharedPrototype; inline;
+function GetFFIPointerShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GFFIPointerSharedSlot))
   else
     Result := nil;
@@ -123,8 +124,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetFFIPointerShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetFFIPointerShared <> nil) then Exit;
 
   MethodHost := TGocciaFFIPointerValue.CreatePrototypeHost;
   Shared := TGocciaSharedPrototype.Create(MethodHost);
@@ -150,7 +151,7 @@ class function TGocciaFFIPointerValue.NullPointer: TGocciaFFIPointerValue;
 var
   Cached: TGCManagedObject;
 begin
-  if not Assigned(CurrentRealm) then
+  if (CurrentRealm = nil) then
   begin
     Result := nil;
     Exit;
@@ -188,13 +189,13 @@ function TGocciaFFIPointerValue.GetPropertyWithContext(const AName: string; cons
 begin
   if AName = PROP_IS_NULL then
   begin
-    if Assigned(GetAddress) then
+    if (GetAddress <> nil) then
       Result := TGocciaBooleanLiteralValue.FalseValue
     else
       Result := TGocciaBooleanLiteralValue.TrueValue;
   end
   else if AName = PROP_FFI_ADDRESS then
-    Result := TGocciaNumberLiteralValue.Create(PtrUInt(GetAddress))
+    Result := TGocciaNumberLiteralValue.Create(NativeUInt(GetAddress))
   else
     Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
@@ -216,7 +217,7 @@ function TGocciaFFIPointerValue.IsNullGetter(const AArgs: TGocciaArgumentsCollec
 begin
   if not (AThisValue is TGocciaFFIPointerValue) then
     ThrowTypeError(Format(SErrorFFIPointerRequiresFFIPointer, [PROP_IS_NULL]), SSuggestFFIUsage);
-  if Assigned(TGocciaFFIPointerValue(AThisValue).GetAddress) then
+  if TGocciaFFIPointerValue(AThisValue).GetAddress <> nil then
     Result := TGocciaBooleanLiteralValue.FalseValue
   else
     Result := TGocciaBooleanLiteralValue.TrueValue;
@@ -227,7 +228,7 @@ begin
   if not (AThisValue is TGocciaFFIPointerValue) then
     ThrowTypeError(Format(SErrorFFIPointerRequiresFFIPointer, [PROP_FFI_ADDRESS]), SSuggestFFIUsage);
   Result := TGocciaNumberLiteralValue.Create(
-    PtrUInt(TGocciaFFIPointerValue(AThisValue).GetAddress));
+    NativeUInt(TGocciaFFIPointerValue(AThisValue).GetAddress));
 end;
 
 initialization

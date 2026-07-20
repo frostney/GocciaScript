@@ -29,6 +29,7 @@ uses
   SysUtils,
 
   StringBuffer,
+  TextEncoding,
   TextSemantics,
 
   Goccia.Constants.PropertyNames,
@@ -80,7 +81,7 @@ var
 
   procedure AppendCodeUnit(const ACodeUnit: Integer);
   begin
-    Buffer.Append(UTF16CodeUnitToUTF8(ACodeUnit));
+    Buffer.Append(UTF16CodeUnitToString(ACodeUnit));
   end;
 begin
   // The overwhelmingly common one- and two-unit cases avoid allocating a
@@ -93,9 +94,9 @@ begin
     CodeUnit := ToUint16Value(AArgs.GetElement(0));
     if AArgs.Length = 1 then
       Exit(TGocciaStringLiteralValue.Create(
-        UTF16CodeUnitToUTF8(CodeUnit)));
+        UTF16CodeUnitToString(CodeUnit)));
     SecondCodeUnit := ToUint16Value(AArgs.GetElement(1));
-    Exit(TGocciaStringLiteralValue.Create(UTF16CodeUnitPairToUTF8(
+    Exit(TGocciaStringLiteralValue.Create(UTF16CodeUnitPairToString(
       Cardinal(CodeUnit), Cardinal(SecondCodeUnit))));
   end;
 
@@ -168,26 +169,7 @@ begin
     if RawValue <> CodePoint then
       ThrowRangeError(Format(SErrorNotValidCodePoint, [FormatDouble(RawValue)]), SSuggestCodePointRange);
 
-    if CodePoint < $80 then
-      SB.AppendChar(AnsiChar(CodePoint))
-    else if CodePoint < $800 then
-    begin
-      SB.AppendChar(AnsiChar($C0 or (CodePoint shr 6)));
-      SB.AppendChar(AnsiChar($80 or (CodePoint and $3F)));
-    end
-    else if CodePoint < $10000 then
-    begin
-      SB.AppendChar(AnsiChar($E0 or (CodePoint shr 12)));
-      SB.AppendChar(AnsiChar($80 or ((CodePoint shr 6) and $3F)));
-      SB.AppendChar(AnsiChar($80 or (CodePoint and $3F)));
-    end
-    else
-    begin
-      SB.AppendChar(AnsiChar($F0 or (CodePoint shr 18)));
-      SB.AppendChar(AnsiChar($80 or ((CodePoint shr 12) and $3F)));
-      SB.AppendChar(AnsiChar($80 or ((CodePoint shr 6) and $3F)));
-      SB.AppendChar(AnsiChar($80 or (CodePoint and $3F)));
-    end;
+    SB.Append(TextEncoding.CodePointToUTF16(CodePoint));
     Inc(I);
   end;
   Result := TGocciaStringLiteralValue.Create(SB.ToString);

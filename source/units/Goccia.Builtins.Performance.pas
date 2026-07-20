@@ -25,7 +25,8 @@ type
     FTimeOriginMonotonicNanoseconds: Int64;
     FHostEnvironment: TGocciaHostEnvironment;
 
-    function GetTimeOriginMilliseconds: Double; inline;
+    function GetTimeOriginMilliseconds: Double;
+    {$IFDEF FPC}inline;{$ENDIF}
   public
     constructor Create(const AHostEnvironment: TGocciaHostEnvironment);
 
@@ -71,9 +72,10 @@ var
 threadvar
   FPrototypeMethodHost: TGocciaPerformancePrototypeHost;
 
-function GetPerformanceShared: TGocciaSharedPrototype; inline;
+function GetPerformanceShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GPerformanceSharedSlot))
   else
     Result := nil;
@@ -170,8 +172,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetPerformanceShared) then
+  if (CurrentRealm = nil) then Exit;
+  if (GetPerformanceShared <> nil) then
     Exit;
 
   // Rebuild member definitions per realm: callbacks bind to FPrototypeMethodHost
@@ -246,7 +248,7 @@ begin
   FScope := AScope;
   FThrowError := AThrowError;
 
-  if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+  if TGocciaObjectValue.SharedObjectPrototype = nil then
     TGocciaObjectValue.InitializeSharedPrototype;
 
   FBuiltinObject := TGocciaPerformanceValue.Create(AHostEnvironment);

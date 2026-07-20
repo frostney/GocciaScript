@@ -32,7 +32,7 @@ type
   end;
 
 const
-{$IFDEF WINDOWS}
+{$IFDEF MSWINDOWS}
   EXPECTED_ERRNO_EBUSY = -4082;
   EXPECTED_ERRNO_EEXIST = -4075;
   EXPECTED_ERRNO_EINVAL = -4071;
@@ -212,6 +212,6 @@ end;
 begin
   TestRunnerProgram.AddSuite(
     TSandboxFileSystemErrorTests.Create('SandboxFileSystemErrors'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
   ExitCode := TestResultToExitCode;
 end.

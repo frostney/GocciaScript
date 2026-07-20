@@ -4,22 +4,9 @@ unit ICU;
 
 interface
 
-{$IFNDEF LAKON}
 uses
-  DynLibs;
-{$ENDIF}
-
-{$IFDEF LAKON}
-type
-  { Lakon's WASM lane has no dynamic libraries (the UnicodeICU
-    pattern): the loader below stays constant-False, and this local
-    handle type stands in for DynLibs.TLibHandle so the shared
-    interface keeps its shape. }
-  TLibHandle = PtrInt;
-
-const
-  NilHandle = TLibHandle(0);
-{$ENDIF}
+  CriticalSections,
+  DynamicLibraries;
 
 function TryGetICULibraryHandle(out AHandle: TLibHandle): Boolean;
 function ICULibraryAvailable: Boolean;
@@ -66,7 +53,7 @@ var
   LibraryHandle: TLibHandle;
   LoadAttempted: Boolean;
   LoadSucceeded: Boolean;
-  InitLock: TRTLCriticalSection;
+  InitLock: TGocciaCriticalSection;
   {$IFDEF LINUX}
   UCHandle: TLibHandle;
   ICUVersionSuffix: string;
@@ -102,7 +89,7 @@ begin
   // than rely on FindFirst wildcard semantics (which differ across platforms), so
   // the helper behaves identically everywhere it is tested.
   Result := 0;
-  if FindFirst(IncludeTrailingPathDelimiter(ADir) + AllFilesMask,
+  if FindFirst(IncludeTrailingPathDelimiter(ADir) + '*',
       faAnyFile, SearchRec) = 0 then
     try
       repeat
@@ -247,7 +234,7 @@ function TryGetICULibraryHandle(out AHandle: TLibHandle): Boolean;
 var
   LoadedHandle: TLibHandle;
 begin
-  EnterCriticalSection(InitLock);
+  CriticalSectionEnter(InitLock);
   try
     if not LoadAttempted then
     begin
@@ -277,7 +264,7 @@ begin
     AHandle := LibraryHandle;
     Result := LoadSucceeded;
   finally
-    LeaveCriticalSection(InitLock);
+    CriticalSectionLeave(InitLock);
   end;
 end;
 
@@ -299,28 +286,28 @@ begin
   if not TryGetICULibraryHandle(Handle) then
     Exit;
   {$IFNDEF LAKON}
-  Result := GetProcAddress(Handle, AName);
+  Result := GetProcedureAddress(Handle, AName);
   {$ENDIF}
   {$IFDEF LINUX}
   if (Result = nil) and (ICUVersionSuffix <> '') then
   begin
     VersionedName := AName + ICUVersionSuffix;
-    Result := GetProcAddress(Handle, VersionedName);
+    Result := GetProcedureAddress(Handle, VersionedName);
   end;
   if (Result = nil) and (UCHandle <> NilHandle) then
   begin
-    Result := GetProcAddress(UCHandle, AName);
+    Result := GetProcedureAddress(UCHandle, AName);
     if (Result = nil) and (ICUVersionSuffix <> '') then
     begin
       VersionedName := AName + ICUVersionSuffix;
-      Result := GetProcAddress(UCHandle, VersionedName);
+      Result := GetProcedureAddress(UCHandle, VersionedName);
     end;
   end;
   {$ENDIF}
 end;
 
 initialization
-  InitCriticalSection(InitLock);
+  CriticalSectionInit(InitLock);
   LibraryHandle := NilHandle;
   LoadAttempted := False;
   LoadSucceeded := False;
@@ -330,7 +317,7 @@ initialization
   {$ENDIF}
 
 finalization
-  DoneCriticalSection(InitLock);
+  CriticalSectionDone(InitLock);
   {$IFNDEF LAKON}
   if LibraryHandle <> NilHandle then
     UnloadLibrary(LibraryHandle);

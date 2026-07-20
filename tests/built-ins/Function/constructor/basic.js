@@ -44,4 +44,10 @@ describe("Function constructor", () => {
     const f = new Function("a", "const x = a * 2; return x + 1");
     expect(f(10)).toBe(21);
   });
+
+  test("dynamic source preserves lone surrogate code units", () => {
+    const surrogate = String.fromCharCode(0xD800);
+    const body = "return /" + surrogate + "/.source.charCodeAt(0)";
+    expect(Function(body)()).toBe(0xD800);
+  });
 });

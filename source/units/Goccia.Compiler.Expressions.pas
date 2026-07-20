@@ -11,7 +11,8 @@ uses
   Goccia.Bytecode,
   Goccia.Bytecode.Chunk,
   Goccia.Compiler.Context,
-  Goccia.Compiler.Scope;
+  Goccia.Compiler.Scope,
+  Goccia.SourceSpan;
 
 procedure CompileLiteral(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaLiteralExpression; const ADest: UInt16);
@@ -144,6 +145,8 @@ uses
   Generics.Collections,
   Math,
   SysUtils,
+
+  UnicodeStringList,
 
   Goccia.AST.BindingPatterns,
   Goccia.Bytecode.Debug,
@@ -413,7 +416,8 @@ begin
 end;
 
 function ChildBodyIsStrictCode(const ACtx: TGocciaCompilationContext;
-  const ABody: TGocciaASTNode): Boolean; inline;
+  const ABody: TGocciaASTNode): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (not ACtx.NonStrictMode) or
     (Assigned(ACtx.Template) and ACtx.Template.StrictCode) or
@@ -490,7 +494,8 @@ end;
 
 function ShouldIgnoreNonStrictImmutableLocalAssignment(
   const ACtx: TGocciaCompilationContext;
-  const ALocal: TGocciaCompilerLocal): Boolean; inline;
+  const ALocal: TGocciaCompilerLocal): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ACtx.NonStrictMode and ALocal.IsConst and
     ALocal.IsNonStrictImmutable;
@@ -498,7 +503,8 @@ end;
 
 function ShouldIgnoreNonStrictImmutableUpvalueAssignment(
   const ACtx: TGocciaCompilationContext;
-  const AUpvalue: TGocciaCompilerUpvalue): Boolean; inline;
+  const AUpvalue: TGocciaCompilerUpvalue): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ACtx.NonStrictMode and AUpvalue.IsConst and
     AUpvalue.IsNonStrictImmutable;
@@ -911,7 +917,8 @@ begin
     UInt16(ATarget.ObjectReg), UInt16(ATarget.KeyReg)));
   EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
   PatchJumpTarget(ACtx, MissJump);
-  Ident := TGocciaIdentifierExpression.Create(ATarget.PropertyName, 0, 0);
+  Ident := TGocciaIdentifierExpression.Create(ATarget.PropertyName,
+    TGocciaSourceSpan.Empty);
   try
     CompileIdentifierAccessNoWith(ACtx, Ident, ADest, False);
   finally
@@ -925,7 +932,8 @@ procedure EmitLoadBindingByName(const ACtx: TGocciaCompilationContext;
 var
   Ident: TGocciaIdentifierExpression;
 begin
-  Ident := TGocciaIdentifierExpression.Create(AName, 0, 0);
+  Ident := TGocciaIdentifierExpression.Create(AName,
+    TGocciaSourceSpan.Empty);
   try
     CompileIdentifierAccess(ACtx, Ident, ADest, ASafe);
   finally
@@ -1653,14 +1661,14 @@ begin
     (Copy(AName, 1, 19) <> '__accessor_computed');
 end;
 
-function DirectEvalBindingNameSeen(const ANames: TStringList;
+function DirectEvalBindingNameSeen(const ANames: TUnicodeStringList;
   const AName: string): Boolean;
 begin
   Result := ANames.IndexOf(AName) >= 0;
 end;
 
 procedure AddDirectEvalBinding(var ABindings: TGocciaDirectEvalBindingArray;
-  const ANames: TStringList; const AName: string;
+  const ANames: TUnicodeStringList; const AName: string;
   const AKind: TGocciaDirectEvalBindingKind; const AIndex: UInt16;
   const AIsConst: Boolean; const AIsVarEnvironmentBinding: Boolean = False;
   const AIsEvalSyntheticArguments: Boolean = False);
@@ -1772,16 +1780,15 @@ procedure CaptureDirectEvalEnvironment(const ACtx: TGocciaCompilationContext;
   const APC: UInt32);
 var
   Bindings: TGocciaDirectEvalBindingArray;
-  Names: TStringList;
+  Names: TUnicodeStringList;
   ScopeCursor: TGocciaCompilerScope;
   Local: TGocciaCompilerLocal;
   UV: TGocciaCompilerUpvalue;
   LocalIdx, UpvalueIdx: Integer;
   IsEvalSensitiveArguments: Boolean;
 begin
-  Names := TStringList.Create;
+  Names := TUnicodeStringList.Create;
   try
-    Names.CaseSensitive := True;
     for LocalIdx := ACtx.Scope.LocalCount - 1 downto 0 do
     begin
       Local := ACtx.Scope.GetLocal(LocalIdx);
@@ -2693,11 +2700,10 @@ end;
 procedure CollectDestructuringBindings(const APattern: TGocciaDestructuringPattern;
   const AScope: TGocciaCompilerScope; const AIsConst: Boolean);
 var
-  Names: TStringList;
+  Names: TUnicodeStringList;
   I, LocalIdx: Integer;
 begin
-  Names := TStringList.Create;
-  Names.CaseSensitive := True;
+  Names := TUnicodeStringList.Create;
   try
     CollectPatternBindingNames(APattern, Names);
     for I := 0 to Names.Count - 1 do

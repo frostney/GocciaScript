@@ -7,6 +7,7 @@ uses
   Math,
   SysUtils,
 
+  NumberBits,
   NumericText,
   TestingPascalLibrary;
 
@@ -15,9 +16,12 @@ type
   private
     procedure TestWhitespaceAndEmpty;
     procedure TestSignedInfinity;
+    procedure TestUInt64Parsing;
     procedure TestNonDecimalIntegerLiterals;
     procedure TestNonDecimalRejections;
     procedure TestDecimalLiterals;
+    procedure TestDecimalRoundingBoundaries;
+    procedure TestShortestNumberFormatting;
     procedure TestSignedZero;
     procedure TestInvalidInput;
   public
@@ -25,21 +29,13 @@ type
   end;
 
 function IsNegativeZero(const AValue: Double): Boolean;
-var
-  Value: Double;
-  Bits: Int64 absolute Value;
 begin
-  Value := AValue;
-  Result := (Value = 0.0) and (Bits < 0);
+  Result := NumberBits.IsNegativeZero(AValue);
 end;
 
 function IsPositiveZero(const AValue: Double): Boolean;
-var
-  Value: Double;
-  Bits: Int64 absolute Value;
 begin
-  Value := AValue;
-  Result := (Value = 0.0) and (Bits >= 0);
+  Result := (AValue = 0.0) and not NumberBits.IsNegativeZero(AValue);
 end;
 
 procedure TNumericTextTests.SetupTests;
@@ -48,16 +44,32 @@ begin
     TestWhitespaceAndEmpty);
   Test('signed Infinity converts; abbreviations do not',
     TestSignedInfinity);
+  Test('unsigned 64-bit parsing uses the native RTL',
+    TestUInt64Parsing);
   Test('hex, binary, and octal literals convert in either letter case',
     TestNonDecimalIntegerLiterals);
   Test('non-decimal literals reject signs, empty digits, and bad radix digits',
     TestNonDecimalRejections);
   Test('decimal literals convert and overflow to signed Infinity',
     TestDecimalLiterals);
+  Test('decimal conversion rounds binary64 boundaries ties-to-even',
+    TestDecimalRoundingBoundaries);
+  Test('number formatting emits ECMAScript shortest decimals',
+    TestShortestNumberFormatting);
   Test('negative-zero strings preserve -0',
     TestSignedZero);
   Test('inputs that are not StringNumericLiterals convert to NaN',
     TestInvalidInput);
+end;
+
+procedure TNumericTextTests.TestUInt64Parsing;
+var
+  Value: UInt64;
+begin
+  Expect<Boolean>(TryTextToUInt64('$FFFFFFFFFFFFFFFF', Value)).ToBe(True);
+  Expect<UInt64>(Value).ToBe(High(UInt64));
+  Expect<Boolean>(TryTextToUInt64('$10000000000000000', Value)).ToBe(False);
+  Expect<Boolean>(TryTextToUInt64('$not-hex', Value)).ToBe(False);
 end;
 
 procedure TNumericTextTests.TestWhitespaceAndEmpty;
@@ -109,6 +121,54 @@ begin
   Expect<Double>(StringToNumber('+.5')).ToBe(0.5);
   Expect<Boolean>(StringToNumber('1e400') = Infinity).ToBe(True);
   Expect<Boolean>(StringToNumber('-1e400') = NegInfinity).ToBe(True);
+end;
+
+procedure TNumericTextTests.TestDecimalRoundingBoundaries;
+begin
+  Expect<UInt64>(DoubleToBits(DecimalTextToNumber('0.1'))).ToBe(
+    UInt64($3FB999999999999A));
+  Expect<UInt64>(DoubleToBits(DecimalTextToNumber(
+    '0.30000000000000004'))).ToBe(UInt64($3FD3333333333334));
+  Expect<UInt64>(DoubleToBits(DecimalTextToNumber('0.30e-143'))).ToBe(
+    UInt64($2222BB017A5BA7D4));
+  Expect<UInt64>(DoubleToBits(DecimalTextToNumber(
+    '9007199254740993'))).ToBe(UInt64($4340000000000000));
+  Expect<UInt64>(DoubleToBits(DecimalTextToNumber(
+    '2.4703282292062327e-324'))).ToBe(UInt64($0000000000000000));
+  Expect<UInt64>(DoubleToBits(DecimalTextToNumber(
+    '2.4703282292062328e-324'))).ToBe(UInt64($0000000000000001));
+  Expect<UInt64>(DoubleToBits(DecimalTextToNumber(
+    '4.9406564584124654e-324'))).ToBe(UInt64($0000000000000001));
+  Expect<UInt64>(DoubleToBits(DecimalTextToNumber(
+    '2.2250738585072011e-308'))).ToBe(UInt64($000FFFFFFFFFFFFF));
+  Expect<UInt64>(DoubleToBits(DecimalTextToNumber(
+    '2.2250738585072014e-308'))).ToBe(UInt64($0010000000000000));
+  Expect<UInt64>(DoubleToBits(DecimalTextToNumber(
+    '1.7976931348623157e308'))).ToBe(UInt64($7FEFFFFFFFFFFFFF));
+  Expect<UInt64>(DoubleToBits(DecimalTextToNumber(
+    '1.7976931348623158e308'))).ToBe(UInt64($7FEFFFFFFFFFFFFF));
+  Expect<UInt64>(DoubleToBits(DecimalTextToNumber(
+    '1.7976931348623159e308'))).ToBe(UInt64($7FF0000000000000));
+end;
+
+procedure TNumericTextTests.TestShortestNumberFormatting;
+begin
+  Expect<string>(NumberToString(BitsToDouble(
+    UInt64($0000000000000001)))).ToBe('5e-324');
+  Expect<string>(NumberToString(BitsToDouble(
+    UInt64($000FFFFFFFFFFFFF)))).ToBe('2.225073858507201e-308');
+  Expect<string>(NumberToString(BitsToDouble(
+    UInt64($0010000000000000)))).ToBe('2.2250738585072014e-308');
+  Expect<string>(NumberToString(BitsToDouble(
+    UInt64($3FB999999999999A)))).ToBe('0.1');
+  Expect<string>(NumberToString(BitsToDouble(
+    UInt64($3FD3333333333334)))).ToBe('0.30000000000000004');
+  Expect<string>(NumberToString(BitsToDouble(
+    UInt64($4340000000000000)))).ToBe('9007199254740992');
+  Expect<string>(NumberToString(BitsToDouble(
+    UInt64($7FEFFFFFFFFFFFFF)))).ToBe('1.7976931348623157e+308');
+  Expect<string>(NumberToString(BitsToDouble(
+    UInt64($8000000000000000)))).ToBe('0');
 end;
 
 procedure TNumericTextTests.TestSignedZero;

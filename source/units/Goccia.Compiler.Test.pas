@@ -8,6 +8,7 @@ uses
   Math,
   SysUtils,
 
+  NumberBits,
   TestingPascalLibrary,
   TextSemantics,
 
@@ -26,6 +27,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.SourceSpan,
   Goccia.TestSetup,
   Goccia.Token,
   Goccia.Values.Primitives;
@@ -63,6 +65,8 @@ type
     function NegativeZero: Double;
 
     procedure TestCompileLiteral;
+    procedure TestASTSpansUseUTF16CodeUnitOffsets;
+    procedure TestSourceCoordinatesCoverECMAScriptLineTerminators;
     procedure TestSingleCodeUnitStringLiteralsUseImmediateOpcode;
     procedure TestCompileRegExpLiteral;
     procedure TestCompileArithmetic;
@@ -108,6 +112,10 @@ type
 procedure TTestCompiler.SetupTests;
 begin
   Test('Compile literal', TestCompileLiteral);
+  Test('AST spans use canonical UTF-16 code-unit offsets',
+    TestASTSpansUseUTF16CodeUnitOffsets);
+  Test('Source coordinates cover ECMAScript line terminators',
+    TestSourceCoordinatesCoverECMAScriptLineTerminators);
   Test('Single-code-unit string literals use immediate opcode',
     TestSingleCodeUnitStringLiteralsUseImmediateOpcode);
   Test('Compile RegExp literal', TestCompileRegExpLiteral);
@@ -150,6 +158,69 @@ begin
   Test('Switch exit jumps close upvalues', TestSwitchExitJumpsCloseUpvalues);
 end;
 
+procedure TTestCompiler.TestASTSpansUseUTF16CodeUnitOffsets;
+var
+  Lexer: TGocciaLexer;
+  Parser: TGocciaParser;
+  ProgramNode: TGocciaProgram;
+  Source, FirstStatement: string;
+begin
+  FirstStatement := 'const x = "' + #$D83D#$DE00 + '";';
+  Source := FirstStatement + #10 + 'x;';
+  Lexer := TGocciaLexer.Create(Source, '<test>');
+  Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', Lexer.SourceLines);
+  try
+    ProgramNode := Parser.Parse;
+    try
+      Expect<Integer>(ProgramNode.Body[0].Span.StartOffset).ToBe(0);
+      Expect<Integer>(ProgramNode.Body[1].Span.StartOffset).ToBe(
+        Length(FirstStatement) + 1);
+      Expect<Integer>(ProgramNode.Body[1].Line).ToBe(2);
+      Expect<Integer>(ProgramNode.Body[1].Column).ToBe(1);
+      Expect<Integer>(ProgramNode.Span.StartOffset).ToBe(0);
+      Expect<Integer>(ProgramNode.Span.EndOffset).ToBe(Length(Source));
+    finally
+      ProgramNode.Free;
+    end;
+  finally
+    Parser.Free;
+    Lexer.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestSourceCoordinatesCoverECMAScriptLineTerminators;
+var
+  Column, Line: Integer;
+  Coordinates: IGocciaSourceCoordinates;
+  Span: TGocciaSourceSpan;
+begin
+  Coordinates := TGocciaSourceCoordinates.Create(
+    'a'#13#10'b'#$2028'c'#$2029'd'#10'e'#13'f');
+
+  Coordinates.PositionAtOffset(3, Line, Column);
+  Expect<Integer>(Line).ToBe(2);
+  Expect<Integer>(Column).ToBe(1);
+  Coordinates.PositionAtOffset(5, Line, Column);
+  Expect<Integer>(Line).ToBe(3);
+  Expect<Integer>(Column).ToBe(1);
+  Coordinates.PositionAtOffset(7, Line, Column);
+  Expect<Integer>(Line).ToBe(4);
+  Expect<Integer>(Column).ToBe(1);
+  Coordinates.PositionAtOffset(9, Line, Column);
+  Expect<Integer>(Line).ToBe(5);
+  Expect<Integer>(Column).ToBe(1);
+  Coordinates.PositionAtOffset(11, Line, Column);
+  Expect<Integer>(Line).ToBe(6);
+  Expect<Integer>(Column).ToBe(1);
+
+  Expect<Integer>(Coordinates.OffsetAtPosition(3, 1)).ToBe(5);
+  Span := TGocciaSourceSpan.InSource(Coordinates, 3, 6);
+  Expect<Integer>(Span.StartLine).ToBe(2);
+  Expect<Integer>(Span.StartColumn).ToBe(1);
+  Expect<Integer>(Span.EndLine).ToBe(3);
+  Expect<Integer>(Span.EndColumn).ToBe(1);
+end;
+
 function TTestCompiler.CompileSource(
   const ASource: string; const AStrictTypes: Boolean;
   const APreserveCoverageShape: Boolean;
@@ -166,7 +237,7 @@ var
   Options: TGocciaCompilerOptimizationOptions;
 begin
   Lexer := TGocciaLexer.Create(ASource, '<test>');
-  SourceLines := CreateUTF8StringList(ASource);
+  SourceLines := CreateTextLines(ASource);
   Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
   ProgramNode := Parser.Parse;
 
@@ -313,15 +384,15 @@ function TTestCompiler.HasFloatConstantBits(
 var
   I: Integer;
   Constant: TGocciaBytecodeConstant;
-  ExpectedBits, ActualBits: Int64;
+  ExpectedBits, ActualBits: UInt64;
 begin
-  Move(AExpected, ExpectedBits, SizeOf(Double));
+  ExpectedBits := DoubleToBits(AExpected);
   for I := 0 to ATemplate.ConstantCount - 1 do
   begin
     Constant := ATemplate.GetConstant(I);
     if Constant.Kind = bckFloat then
     begin
-      Move(Constant.FloatValue, ActualBits, SizeOf(Double));
+      ActualBits := DoubleToBits(Constant.FloatValue);
       if ActualBits = ExpectedBits then
         Exit(True);
     end;
@@ -519,7 +590,6 @@ var
   Stream: TMemoryStream;
   Writer: TGocciaBytecodeWriter;
   Bytes: PByte;
-  VersionLE: UInt16;
 begin
   Module := CompileSource('const x = 42;');
   Stream := TMemoryStream.Create;
@@ -538,8 +608,8 @@ begin
     Expect<Byte>(Bytes[3]).ToBe(0);
 
     // Format version at offset 4 must be little-endian
-    Move(Bytes[4], VersionLE, 2);
-    Expect<UInt16>(VersionLE).ToBe(NtoLE(GOCCIA_FORMAT_VERSION));
+    Expect<Byte>(Bytes[4]).ToBe(Byte(GOCCIA_FORMAT_VERSION));
+    Expect<Byte>(Bytes[5]).ToBe(Byte(GOCCIA_FORMAT_VERSION shr 8));
   finally
     Stream.Free;
     Module.Free;
@@ -552,7 +622,7 @@ var
   TempFile: string;
   I: Integer;
   OrigConst, LoadConst: TGocciaBytecodeConstant;
-  OrigBits, LoadBits: Int64;
+  OrigBits, LoadBits: UInt64;
 begin
   Original := CompileSource(
     'const a = 42;' +
@@ -582,9 +652,9 @@ begin
             Expect<Int64>(LoadConst.IntValue).ToBe(OrigConst.IntValue);
           bckFloat:
           begin
-            Move(OrigConst.FloatValue, OrigBits, SizeOf(Double));
-            Move(LoadConst.FloatValue, LoadBits, SizeOf(Double));
-            Expect<Int64>(LoadBits).ToBe(OrigBits);
+            OrigBits := DoubleToBits(OrigConst.FloatValue);
+            LoadBits := DoubleToBits(LoadConst.FloatValue);
+            Expect<UInt64>(LoadBits).ToBe(OrigBits);
           end;
           bckString:
             Expect<string>(LoadConst.StringValue).ToBe(OrigConst.StringValue);
@@ -919,10 +989,10 @@ var
   Module: TGocciaBytecodeModule;
 begin
   Module := CompileSource(
-    'let a = 1;' + LineEnding +
-    'const set = () => { a = "x"; };' + LineEnding +
-    'set();' + LineEnding +
-    'const b = a + 1;' + LineEnding +
+    'let a = 1;' + sLineBreak +
+    'const set = () => { a = "x"; };' + sLineBreak +
+    'set();' + sLineBreak +
+    'const b = a + 1;' + sLineBreak +
     'b;',
     False, False, False, False, False, False);
   try
@@ -1117,7 +1187,7 @@ begin
   TGarbageCollector.Initialize;
   try
     TestRunnerProgram.AddSuite(TTestCompiler.Create('GocciaScript Compiler'));
-    TestRunnerProgram.Run;
+    RunGocciaTests;
 
     ExitCode := TestResultToExitCode;
   finally
