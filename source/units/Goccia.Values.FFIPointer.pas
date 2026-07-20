@@ -63,8 +63,7 @@ var
   GFFIPointerSharedSlot: TGocciaRealmOwnedSlotId;
   GFFINullPointerSlot: TGocciaRealmSlotId;
 
-function GetFFIPointerShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetFFIPointerShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GFFIPointerSharedSlot))

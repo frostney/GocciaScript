@@ -36,8 +36,7 @@ type
     PreserveCoverageShape: Boolean;
   end;
 
-function DefaultCompilerOptimizationOptions: TGocciaCompilerOptimizationOptions;
-{$IFDEF FPC}inline;{$ENDIF}
+function DefaultCompilerOptimizationOptions: TGocciaCompilerOptimizationOptions; {$IFDEF FPC}inline;{$ENDIF}
 
 function UnknownCompileTimeValue: TGocciaCompileTimeValue;
 function UndefinedCompileTimeValue: TGocciaCompileTimeValue;
@@ -50,19 +49,15 @@ function BigIntCompileTimeValue(const AValue: TBigInteger): TGocciaCompileTimeVa
 function TryCompileTimeValueFromLiteral(const AValue: TGocciaValue;
   out AConstant: TGocciaCompileTimeValue): Boolean;
 function CompileTimeValueToBoolean(const AValue: TGocciaCompileTimeValue): Boolean;
-function CompileTimeValueIsNullish(const AValue: TGocciaCompileTimeValue): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function CompileTimeValueIsNullish(const AValue: TGocciaCompileTimeValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 function CompileTimeValueToLocalType(
-  const AValue: TGocciaCompileTimeValue): TGocciaLocalType;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AValue: TGocciaCompileTimeValue): TGocciaLocalType; {$IFDEF FPC}inline;{$ENDIF}
 function CompileTimeValueToString(const AValue: TGocciaCompileTimeValue): string;
 function TryCompileTimeValueToNumber(const AValue: TGocciaCompileTimeValue;
   out ANumber: Double): Boolean;
 function CompileTimeValueIsNumber(const AValue: TGocciaCompileTimeValue;
-  const ANumber: Double): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
-function CompileTimeNumberIsNegativeZero(const AValue: Double): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+  const ANumber: Double): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+function CompileTimeNumberIsNegativeZero(const AValue: Double): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 
@@ -75,8 +70,7 @@ uses
   Goccia.Constants,
   Goccia.Values.BigIntValue;
 
-function DefaultCompilerOptimizationOptions: TGocciaCompilerOptimizationOptions;
-{$IFDEF FPC}inline;{$ENDIF}
+function DefaultCompilerOptimizationOptions: TGocciaCompilerOptimizationOptions; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result.EnableConstantFolding := True;
   Result.EnableConstPropagation := True;
@@ -163,8 +157,7 @@ begin
   end;
 end;
 
-function CompileTimeNumberIsNegativeZero(const AValue: Double): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function CompileTimeNumberIsNegativeZero(const AValue: Double): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := NumberBits.IsNegativeZero(AValue);
 end;
@@ -190,15 +183,13 @@ begin
 end;
 
 function CompileTimeValueIsNullish(
-  const AValue: TGocciaCompileTimeValue): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AValue: TGocciaCompileTimeValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := AValue.Kind in [ctvkUndefined, ctvkNull];
 end;
 
 function CompileTimeValueToLocalType(
-  const AValue: TGocciaCompileTimeValue): TGocciaLocalType;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AValue: TGocciaCompileTimeValue): TGocciaLocalType; {$IFDEF FPC}inline;{$ENDIF}
 begin
   case AValue.Kind of
     ctvkBoolean:
@@ -277,8 +268,7 @@ begin
 end;
 
 function CompileTimeValueIsNumber(const AValue: TGocciaCompileTimeValue;
-  const ANumber: Double): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ANumber: Double): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AValue.Kind = ctvkNumber) and (not IsNaN(AValue.NumberValue)) and
     (AValue.NumberValue = ANumber);

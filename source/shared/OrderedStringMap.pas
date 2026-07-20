@@ -39,11 +39,9 @@ type
       FEntryCount: Integer;
       FIndex: Integer;
       FCurrent: TBaseMap<string, TValue>.TKeyValuePair;
-      function GetCurrent: TBaseMap<string, TValue>.TKeyValuePair;
-      {$IFDEF FPC}inline;{$ENDIF}
+      function GetCurrent: TBaseMap<string, TValue>.TKeyValuePair; {$IFDEF FPC}inline;{$ENDIF}
     public
-      function MoveNext: Boolean;
-      {$IFDEF FPC}inline;{$ENDIF}
+      function MoveNext: Boolean; {$IFDEF FPC}inline;{$ENDIF}
       property Current: TBaseMap<string, TValue>.TKeyValuePair read GetCurrent;
     end;
 
@@ -71,16 +69,12 @@ type
     // still receive unique stamps; a stamp recorded against one map instance
     // can therefore never validate against a different instance that happens
     // to reuse the same address.
-    class function NextEntryVersion: Cardinal; static;
-    {$IFDEF FPC}inline;{$ENDIF}
+    class function NextEntryVersion: Cardinal; static; {$IFDEF FPC}inline;{$ENDIF}
 
-    class function HashKey(const AKey: string): Cardinal; static;
-    {$IFDEF FPC}inline;{$ENDIF}
-    class function KeysEqual(const A, B: string): Boolean; static;
-    {$IFDEF FPC}inline;{$ENDIF}
+    class function HashKey(const AKey: string): Cardinal; static; {$IFDEF FPC}inline;{$ENDIF}
+    class function KeysEqual(const A, B: string): Boolean; static; {$IFDEF FPC}inline;{$ENDIF}
 
-    function DeletedSlotsNeedCompaction: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function DeletedSlotsNeedCompaction: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function FindBucket(const AKey: string; AHash: Cardinal;
       out ABucketIdx: Integer): Boolean;
     procedure Grow;
@@ -105,8 +99,7 @@ type
     function Remove(const AKey: string): Boolean; override;
     procedure Clear; override;
 
-    function GetEnumerator: TEnumerator;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function GetEnumerator: TEnumerator; {$IFDEF FPC}inline;{$ENDIF}
     // Random-access lookup by active-entry position: O(AIndex), since it scans
     // active entries from the start. For sequential iteration use the enumerator
     // (`for Pair in Map do`); driving EntryAt from a `for I := 0 to Count - 1`
@@ -115,15 +108,13 @@ type
 
     // Non-virtual live-entry count for hot validation paths (the Count
     // property dispatches through TBaseMap's virtual GetCount).
-    function CountFast: Integer;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function CountFast: Integer; {$IFDEF FPC}inline;{$ENDIF}
     // Entry-index access for version-validated inline caches: look up an
     // entry index once, then re-read its value directly while EntryVersion
     // is unchanged.
     function TryGetEntryIndex(const AKey: string; out AIndex: Integer): Boolean;
     function TryGetValueAtEntry(const AIndex: Integer;
-      out AValue: TValue): Boolean;
-      {$IFDEF FPC}inline;{$ENDIF}
+      out AValue: TValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function KeyAtEntry(const AIndex: Integer): string;
 
     property Capacity: Integer read FBucketCount;

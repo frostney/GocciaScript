@@ -62,8 +62,7 @@ var
 const
   FRENCH_COMPACT_PLURAL_MANY_THRESHOLD = 1000000;
 
-function GetIntlPluralRulesShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetIntlPluralRulesShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlPluralRulesSharedSlot))

@@ -810,8 +810,7 @@ begin
 end;
 
 function IsECMAScriptWhiteSpaceOrLineTerminator(
-  const ACodePoint: Cardinal): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ACodePoint: Cardinal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   case ACodePoint of
     // ES2026 §12.2 White Space
@@ -846,8 +845,7 @@ begin
 end;
 
 function EncodeControlEscapeForRegExpEscape(const ACodePoint: Cardinal;
-  out AEscaped: string): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  out AEscaped: string): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := True;
   case ACodePoint of

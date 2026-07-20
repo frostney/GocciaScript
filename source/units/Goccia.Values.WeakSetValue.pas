@@ -70,8 +70,7 @@ uses
 var
   GWeakSetSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetWeakSetShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetWeakSetShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GWeakSetSharedSlot))

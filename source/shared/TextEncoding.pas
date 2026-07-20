@@ -42,8 +42,7 @@ begin
     Char($DC00 + (Supplementary and $3FF));
 end;
 
-function IsContinuationByte(const AByte: Byte): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsContinuationByte(const AByte: Byte): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AByte and $C0) = $80;
 end;
@@ -204,14 +203,12 @@ begin
   Result := Buffer.ToString;
 end;
 
-function IsHighSurrogate(const AChar: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsHighSurrogate(const AChar: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (Ord(AChar) >= $D800) and (Ord(AChar) <= $DBFF);
 end;
 
-function IsLowSurrogate(const AChar: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsLowSurrogate(const AChar: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (Ord(AChar) >= $DC00) and (Ord(AChar) <= $DFFF);
 end;

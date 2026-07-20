@@ -250,8 +250,7 @@ begin
   Result := False;
 end;
 
-function NaturalSortCode(const ACharacter: Char): Integer;
-{$IFDEF FPC}inline;{$ENDIF}
+function NaturalSortCode(const ACharacter: Char): Integer; {$IFDEF FPC}inline;{$ENDIF}
 var
   CharacterCode: Integer;
 begin

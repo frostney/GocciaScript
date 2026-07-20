@@ -64,8 +64,7 @@ begin
   SetLength(FPrototypeMembers, 0);
 end;
 
-function GetTextEncoderShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetTextEncoderShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTextEncoderSharedSlot))

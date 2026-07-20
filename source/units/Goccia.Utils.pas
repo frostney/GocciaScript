@@ -10,23 +10,19 @@ uses
 
 // Int64 -> Double widening that avoids FPC Delphi-mode bit-pattern casts and
 // Single-precision expression promotion on some targets.
-function Int64ToDouble(const AValue: Int64): Double;
-{$IFDEF FPC}inline;{$ENDIF}
+function Int64ToDouble(const AValue: Int64): Double; {$IFDEF FPC}inline;{$ENDIF}
 
 // ES2026 §7.1.6 ToIntegerOrInfinity — extract integer arg with default.
 // Returns Trunc(ToNumber(AArgs[AIndex])) or ADefault if index out of range.
-function ToIntegerFromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer = 0; const ADefault: Integer = 0): Integer;
-{$IFDEF FPC}inline;{$ENDIF}
+function ToIntegerFromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer = 0; const ADefault: Integer = 0): Integer; {$IFDEF FPC}inline;{$ENDIF}
 
 // Value-level variant of ToIntegerFromArgs: ES2026 §7.1.6 ToIntegerOrInfinity
 // saturated to Integer.  NaN → 0, ±∞ and out-of-range doubles → ±MaxInt.
-function ToIntegerValue(const AValue: TGocciaValue): Integer;
-{$IFDEF FPC}inline;{$ENDIF}
+function ToIntegerValue(const AValue: TGocciaValue): Integer; {$IFDEF FPC}inline;{$ENDIF}
 
 // ES2026 §7.1.22 ToLength saturated to Integer: NaN and values ≤ 0 → 0,
 // values ≥ MaxInt (incl. +∞) → MaxInt, else truncate.
-function ToLengthValue(const AValue: TGocciaValue): Integer;
-{$IFDEF FPC}inline;{$ENDIF}
+function ToLengthValue(const AValue: TGocciaValue): Integer; {$IFDEF FPC}inline;{$ENDIF}
 
 // Temporal §13.21 ToIntegerWithTruncation: throws RangeError for NaN/±∞
 // (also matches ECMA-402 §9.2.15 DefaultNumberOption's rejection of
@@ -47,8 +43,7 @@ function ToIntegerWithTruncation64Value(const AValue: TGocciaValue): Int64;
 // treats NaN as 0, matching ToIntegerOrInfinity's behaviour for the inputs
 // these methods accept (no Infinity propagation needed — callers clamp by
 // length anyway).
-function ToInteger64FromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer = 0; const ADefault: Int64 = 0): Int64;
-{$IFDEF FPC}inline;{$ENDIF}
+function ToInteger64FromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer = 0; const ADefault: Int64 = 0): Int64; {$IFDEF FPC}inline;{$ENDIF}
 
 // ES2026 §7.1.7 ToInt32(argument)
 //   1. Let number be ? ToNumber(argument).
@@ -63,33 +58,27 @@ function ToInteger64FromArgs(const AArgs: TGocciaArgumentsCollection; const AInd
 // `(undefined & undefined)` evaluate to ~ -2^63 on Linux x86_64 CI while
 // passing 0 on macOS arm64 — see test262 language/expressions/bitwise-*
 // /S11.10.*_A3_T1.4.js for the regression cluster this fixes.
-function ToInt32Value(const AValue: TGocciaValue): Int32;
-{$IFDEF FPC}inline;{$ENDIF}
+function ToInt32Value(const AValue: TGocciaValue): Int32; {$IFDEF FPC}inline;{$ENDIF}
 
 // ES2026 §7.1.8 ToUint32(argument)
-function ToUint32Value(const AValue: TGocciaValue): Cardinal;
-{$IFDEF FPC}inline;{$ENDIF}
+function ToUint32Value(const AValue: TGocciaValue): Cardinal; {$IFDEF FPC}inline;{$ENDIF}
 
 // JS Number → Int64 for host/FFI marshaling: NaN/±∞ → 0, saturates at the
 // Int64 limits, otherwise truncates toward zero.
-function ToInt64Value(const AValue: TGocciaValue): Int64;
-{$IFDEF FPC}inline;{$ENDIF}
+function ToInt64Value(const AValue: TGocciaValue): Int64; {$IFDEF FPC}inline;{$ENDIF}
 
 // ES2026 §7.1.10 ToUint16(argument)
 // NaN, ±0, ±∞ → 0; otherwise truncate and reduce modulo 2^16.
-function ToUint16Value(const AValue: TGocciaValue): Word;
-{$IFDEF FPC}inline;{$ENDIF}
+function ToUint16Value(const AValue: TGocciaValue): Word; {$IFDEF FPC}inline;{$ENDIF}
 
 // ES2026 relative index normalization (used by slice, splice, at, with, copyWithin, fill, etc.)
 // If ARelative < 0, returns max(ALength + ARelative, 0); else min(ARelative, ALength).
-function NormalizeRelativeIndex(const ARelative, ALength: Integer): Integer;
-{$IFDEF FPC}inline;{$ENDIF}
+function NormalizeRelativeIndex(const ARelative, ALength: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 
 // ES2026 §7.3.14 Call(F, V, argumentsList) — safely invoke any callable value.
 // Dispatches through TGocciaFunctionBase.Call or TGocciaClassValue.Call based on runtime type.
 function InvokeCallable(const ACallable: TGocciaValue; const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AThisValue: TGocciaValue): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 

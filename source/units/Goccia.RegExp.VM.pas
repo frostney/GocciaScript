@@ -88,15 +88,13 @@ begin
   AMemo.Count := 0;
 end;
 
-procedure MemoEnsureAllocated(var AMemo: TMemoTable);
-{$IFDEF FPC}inline;{$ENDIF}
+procedure MemoEnsureAllocated(var AMemo: TMemoTable); {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Length(AMemo.Entries) = 0 then
     SetLength(AMemo.Entries, MEMO_INITIAL_CAPACITY);
 end;
 
-function MemoHash(APC, APos, ACapacity: Integer): Integer;
-{$IFDEF FPC}inline;{$ENDIF}
+function MemoHash(APC, APos, ACapacity: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 var
   H: Cardinal;
 begin
@@ -205,8 +203,7 @@ begin
 end;
 
 function CharClassContains(const AClass: TRegExpCharClass;
-  ACodePoint: Cardinal): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  ACodePoint: Cardinal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
   Hi: Integer;
   Index: Integer;
@@ -252,8 +249,7 @@ begin
   Result := False;
 end;
 
-function IsBasicWordChar(ACodePoint: Cardinal): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsBasicWordChar(ACodePoint: Cardinal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ((ACodePoint >= Ord('a')) and (ACodePoint <= Ord('z'))) or
             ((ACodePoint >= Ord('A')) and (ACodePoint <= Ord('Z'))) or
@@ -262,8 +258,7 @@ begin
 end;
 
 function IsWordChar(ACodePoint: Cardinal; AUnicodeAware,
-  AIgnoreCase: Boolean): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  AIgnoreCase: Boolean): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if IsBasicWordChar(ACodePoint) then
     Exit(True);
@@ -273,30 +268,26 @@ begin
     AUnicodeAware, AIgnoreCase));
 end;
 
-function IsLineTerminator(ACodePoint: Cardinal): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsLineTerminator(ACodePoint: Cardinal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (ACodePoint = $0A) or (ACodePoint = $0D) or
             (ACodePoint = $2028) or (ACodePoint = $2029);
 end;
 
-function IsHighSurrogate(ACodeUnit: Cardinal): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsHighSurrogate(ACodeUnit: Cardinal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (ACodeUnit >= HIGH_SURROGATE_START) and
     (ACodeUnit <= HIGH_SURROGATE_END);
 end;
 
-function IsLowSurrogate(ACodeUnit: Cardinal): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsLowSurrogate(ACodeUnit: Cardinal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (ACodeUnit >= LOW_SURROGATE_START) and
     (ACodeUnit <= LOW_SURROGATE_END);
 end;
 
 function SurrogatePairToCodePoint(const AHighSurrogate,
-  ALowSurrogate: Cardinal): Cardinal;
-  {$IFDEF FPC}inline;{$ENDIF}
+  ALowSurrogate: Cardinal): Cardinal; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := $10000 + ((AHighSurrogate - HIGH_SURROGATE_START) shl 10) +
     (ALowSurrogate - LOW_SURROGATE_START);
@@ -357,8 +348,7 @@ end;
 
 function ReadInputCodePoint(const AInput: TRegExpInput; APos: Integer;
   const AUnicode: Boolean; out ACodePoint: Cardinal;
-  out AWidth: Integer): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  out AWidth: Integer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
   CodeUnit: Cardinal;
 begin
@@ -471,8 +461,7 @@ begin
 end;
 
 function StartCheckMatchesLatin1Unit(const ACheck: TRegExpStartCheck;
-  ACodeUnit: Cardinal): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  ACodeUnit: Cardinal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (ACodeUnit <= $FF) and
     ((ACheck.Latin1Bits[ACodeUnit shr 5] and
@@ -1323,8 +1312,7 @@ threadvar
   GRegExpInputMemoValid: Boolean;
 
 function TryGetRegExpInputMemo(const AInput: string;
-  out ADecodedInput: TRegExpInput): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  out ADecodedInput: TRegExpInput): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := GRegExpInputMemoValid and
     (Pointer(AInput) = Pointer(GRegExpInputMemoStr));
@@ -1336,8 +1324,7 @@ begin
 end;
 
 procedure GetRegExpInput(const AInput: string;
-  out ADecodedInput: TRegExpInput);
-  {$IFDEF FPC}inline;{$ENDIF}
+  out ADecodedInput: TRegExpInput); {$IFDEF FPC}inline;{$ENDIF}
 begin
   if TryGetRegExpInputMemo(AInput, ADecodedInput) then
     Exit;

@@ -129,14 +129,11 @@ type
     // binding map's entry version.  TDZ still raises.  Returns False on any
     // stale cache so the caller can fall back to the named lookup.
     function TryGetLexicalValueAt(const AEntryIndex: Integer;
-      const AVersion: Cardinal; out AValue: TGocciaValue): Boolean;
-      {$IFDEF FPC}inline;{$ENDIF}
+      const AVersion: Cardinal; out AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function HasLexicalBindingAt(const AEntryIndex: Integer;
-      const AVersion: Cardinal): Boolean;
-      {$IFDEF FPC}inline;{$ENDIF}
+      const AVersion: Cardinal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function IsGlobalBuiltInObjectBindingAt(const AEntryIndex: Integer;
-      const AVersion: Cardinal): Boolean;
-      {$IFDEF FPC}inline;{$ENDIF}
+      const AVersion: Cardinal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     // Named lookup that reports the own-lexical entry index and map version
     // for inline caching.  AEntryIndex is -1 when the value was resolved
     // through the global this-object, var bindings, or the parent chain —
@@ -159,8 +156,7 @@ type
       const AColumn: Integer = 0); virtual;
     procedure ResolveAssignmentTarget(const AName: string;
       out AObjectBinding: TGocciaObjectValue; out AScopeBinding: TGocciaScope); virtual;
-    function ContainsOwnLexicalBinding(const AName: string): Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function ContainsOwnLexicalBinding(const AName: string): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function IsBuiltInBinding(const AName: string): Boolean;
     function Contains(const AName: string): Boolean; virtual;
     function GetOwnBindingNames: TGocciaStringArray; virtual;

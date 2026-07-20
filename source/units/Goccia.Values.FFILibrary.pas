@@ -69,8 +69,7 @@ uses
 var
   GFFILibrarySharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetFFILibraryShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetFFILibraryShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GFFILibrarySharedSlot))

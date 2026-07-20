@@ -133,8 +133,7 @@ var
   GIteratorConstructorSlot: TGocciaRealmSlotId;
   GIteratorMethodHostSlot: TGocciaRealmSlotId;
 
-function GetSharedIteratorPrototype: TGocciaObjectValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetSharedIteratorPrototype: TGocciaObjectValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GIteratorPrototypeSlot))
@@ -142,8 +141,7 @@ begin
     Result := nil;
 end;
 
-function GetSharedIteratorConstructor: TGocciaObjectValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetSharedIteratorConstructor: TGocciaObjectValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GIteratorConstructorSlot))
@@ -151,8 +149,7 @@ begin
     Result := nil;
 end;
 
-function GetSharedIteratorHelperPrototype: TGocciaObjectValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetSharedIteratorHelperPrototype: TGocciaObjectValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GIteratorHelperPrototypeSlot))
@@ -160,8 +157,7 @@ begin
     Result := nil;
 end;
 
-function GetSharedWrapForValidIteratorPrototype: TGocciaObjectValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetSharedWrapForValidIteratorPrototype: TGocciaObjectValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(
@@ -173,8 +169,7 @@ end;
 // The per-realm method host (Self from InitializePrototype) that the helper,
 // constructor, and static methods bind to.  Populated by InitializePrototype,
 // which every entry point calls via EnsurePrototypeInitialized first. #892
-function GetIteratorMethodHost: TGocciaIteratorValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetIteratorMethodHost: TGocciaIteratorValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaIteratorValue(CurrentRealm.GetSlot(GIteratorMethodHostSlot))

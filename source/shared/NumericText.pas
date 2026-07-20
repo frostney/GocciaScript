@@ -200,20 +200,17 @@ begin
   Result := 1;
 end;
 
-function RyuPowerOfFiveBits(const AExponent: Integer): Integer;
-{$IFDEF FPC}inline;{$ENDIF}
+function RyuPowerOfFiveBits(const AExponent: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (UInt32(AExponent) * UInt32(1217359) shr 19) + 1;
 end;
 
-function RyuLog10PowerOfTwo(const AExponent: Integer): UInt32;
-{$IFDEF FPC}inline;{$ENDIF}
+function RyuLog10PowerOfTwo(const AExponent: Integer): UInt32; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := UInt32(AExponent) * UInt32(78913) shr 18;
 end;
 
-function RyuLog10PowerOfFive(const AExponent: Integer): UInt32;
-{$IFDEF FPC}inline;{$ENDIF}
+function RyuLog10PowerOfFive(const AExponent: Integer): UInt32; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := UInt32(AExponent) * UInt32(732923) shr 20;
 end;
@@ -253,8 +250,7 @@ begin
 end;
 
 function RyuShiftRight128(const ALow, AHigh: UInt64;
-  const ADistance: Integer): UInt64;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ADistance: Integer): UInt64; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := AHigh shl (64 - ADistance) or ALow shr ADistance;
 end;
@@ -366,15 +362,13 @@ begin
 end;
 
 function RyuIsMultipleOfPowerOfFive(const AValue: UInt64;
-  const APower: UInt32): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const APower: UInt32): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := RyuPowerOfFiveFactor(AValue) >= APower;
 end;
 
 function RyuIsMultipleOfPowerOfTwo(const AValue: UInt64;
-  const APower: UInt32): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const APower: UInt32): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AValue and ((UInt64(1) shl APower) - 1)) = 0;
 end;
@@ -671,8 +665,7 @@ begin
     Decimal.Exponent, Negative, Result);
 end;
 
-function SignedZero(const ANegative: Boolean): Double;
-{$IFDEF FPC}inline;{$ENDIF}
+function SignedZero(const ANegative: Boolean): Double; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if ANegative then
     Result := BitsToDouble(UInt64(1) shl 63)
@@ -680,8 +673,7 @@ begin
     Result := 0.0;
 end;
 
-function SignedInfinity(const ANegative: Boolean): Double;
-{$IFDEF FPC}inline;{$ENDIF}
+function SignedInfinity(const ANegative: Boolean): Double; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if ANegative then
     Result := BitsToDouble(UInt64($FFF0000000000000))
@@ -793,8 +785,7 @@ begin
   Result := True;
 end;
 
-function PowerOfFive(const AExponent: Integer): TBigInteger;
-{$IFDEF FPC}inline;{$ENDIF}
+function PowerOfFive(const AExponent: Integer): TBigInteger; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := TBigInteger.FromInt64(5).Power(
     TBigInteger.FromInt64(AExponent));

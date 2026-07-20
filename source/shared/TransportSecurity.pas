@@ -125,8 +125,7 @@ begin
 end;
 
 function SocketSend(const ASock: TSocket; const ABuffer: Pointer;
-  const ALength: Integer): Integer;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ALength: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 begin
   {$IFDEF UNIX}
   Result := fpSend(ASock, ABuffer, ALength, 0);
@@ -137,8 +136,7 @@ begin
 end;
 
 function SocketReceive(const ASock: TSocket; const ABuffer: Pointer;
-  const ALength: Integer): Integer;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ALength: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 begin
   {$IFDEF UNIX}
   Result := fpRecv(ASock, ABuffer, ALength, 0);

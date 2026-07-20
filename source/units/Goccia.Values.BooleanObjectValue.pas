@@ -50,8 +50,7 @@ var
   GBooleanPrototypeSlot: TGocciaRealmSlotId;
   GBooleanMethodHostSlot: TGocciaRealmSlotId;
 
-function GetSharedBooleanPrototype: TGocciaObjectValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetSharedBooleanPrototype: TGocciaObjectValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GBooleanPrototypeSlot))

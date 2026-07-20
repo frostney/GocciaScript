@@ -100,8 +100,7 @@ type
     procedure MarkReferences; override;
   end;
 
-function GetIntlNumberFormatShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetIntlNumberFormatShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlNumberFormatSharedSlot))
@@ -268,8 +267,7 @@ begin
   Result := (SubtagLength >= 3) and (SubtagLength <= 8);
 end;
 
-function IsAsciiAlpha(const C: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsAsciiAlpha(const C: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (C in ['A'..'Z']) or (C in ['a'..'z']);
 end;

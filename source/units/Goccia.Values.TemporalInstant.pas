@@ -69,16 +69,14 @@ uses
 var
   GTemporalInstantSharedSlot: TGocciaRealmOwnedSlotId;
 
-function InstantEpochSecond(const AEpochMilliseconds: Int64): Int64;
-{$IFDEF FPC}inline;{$ENDIF}
+function InstantEpochSecond(const AEpochMilliseconds: Int64): Int64; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := AEpochMilliseconds div 1000;
   if (AEpochMilliseconds < 0) and (AEpochMilliseconds mod 1000 <> 0) then
     Dec(Result);
 end;
 
-function GetTemporalInstantShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetTemporalInstantShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTemporalInstantSharedSlot))
@@ -119,8 +117,7 @@ begin
   Result := AValue.ToInt64;
 end;
 
-function InstantIsASCIIDigit(const AChar: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function InstantIsASCIIDigit(const AChar: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AChar >= '0') and (AChar <= '9');
 end;

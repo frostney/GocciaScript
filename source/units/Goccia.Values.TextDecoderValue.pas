@@ -67,8 +67,7 @@ uses
 var
   GTextDecoderSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetTextDecoderShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetTextDecoderShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTextDecoderSharedSlot))

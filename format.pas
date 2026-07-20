@@ -928,6 +928,31 @@ begin
 end;
 
 { ═══════════════════════════════════════════════════════════════════════════
+  Auto-Fix: Inline Compiler Directive Placement
+  ═══════════════════════════════════════════════════════════════════════════ }
+
+function FixInlineDirectivePlacement(const ALines: TStringList): Boolean;
+const
+  InlineDirective = '{$IFDEF FPC}inline;{$ENDIF}';
+var
+  I: Integer;
+begin
+  Result := False;
+  I := 1;
+  while I < ALines.Count do
+  begin
+    if Trim(ALines[I]) = InlineDirective then
+    begin
+      ALines[I - 1] := TrimRight(ALines[I - 1]) + ' ' + InlineDirective;
+      ALines.Delete(I);
+      Result := True;
+    end
+    else
+      Inc(I);
+  end;
+end;
+
+{ ═══════════════════════════════════════════════════════════════════════════
   File Processing
   ═══════════════════════════════════════════════════════════════════════════ }
 
@@ -944,6 +969,7 @@ begin
     FormatUsesInLines(Lines, ResultLines);
     FixFuncNames(ResultLines);
     FixParamNames(ResultLines);
+    FixInlineDirectivePlacement(ResultLines);
     FixStraySpaces(ResultLines);
 
     if ResultLines.Text <> Lines.Text then

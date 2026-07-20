@@ -206,45 +206,32 @@ type
     procedure EnsureRegisterCapacity(const ACount: Integer);
     procedure EnsureLocalCapacity(const ACount: Integer);
     function GetLocalCell(const AIndex: Integer): TGocciaBytecodeCell;
-    function GetLocalRegister(const AIndex: Integer): TGocciaRegister;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function GetRegister(const AIndex: Integer): TGocciaValue;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function GetRegisterFast(const AIndex: Integer): TGocciaValue;
-    {$IFDEF FPC}inline;{$ENDIF}
-    procedure SetRegister(const AIndex: Integer; const AValue: TGocciaValue);
-    {$IFDEF FPC}inline;{$ENDIF}
-    procedure SetRegisterFast(const AIndex: Integer; const AValue: TGocciaValue);
-    {$IFDEF FPC}inline;{$ENDIF}
-    procedure SetRegisterRaw(const AIndex: Integer; const AValue: TGocciaRegister);
-    {$IFDEF FPC}inline;{$ENDIF}
+    function GetLocalRegister(const AIndex: Integer): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+    function GetRegister(const AIndex: Integer): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
+    function GetRegisterFast(const AIndex: Integer): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
+    procedure SetRegister(const AIndex: Integer; const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
+    procedure SetRegisterFast(const AIndex: Integer; const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
+    procedure SetRegisterRaw(const AIndex: Integer; const AValue: TGocciaRegister); {$IFDEF FPC}inline;{$ENDIF}
     procedure InstallFunctionPrototype(const AFunction: TGocciaObjectValue;
       const AKind: TGocciaFunctionObjectIntrinsicKind);
-    function GetLocal(const AIndex: Integer): TGocciaValue;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function GetLocalFast(const AIndex: Integer): TGocciaValue;
-    {$IFDEF FPC}inline;{$ENDIF}
-    procedure SetLocal(const AIndex: Integer; const AValue: TGocciaValue);
-    {$IFDEF FPC}inline;{$ENDIF}
-    procedure SetLocalFast(const AIndex: Integer; const AValue: TGocciaValue);
-    {$IFDEF FPC}inline;{$ENDIF}
-    procedure SetLocalRaw(const AIndex: Integer; const AValue: TGocciaRegister);
-    {$IFDEF FPC}inline;{$ENDIF}
+    function GetLocal(const AIndex: Integer): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
+    function GetLocalFast(const AIndex: Integer): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
+    procedure SetLocal(const AIndex: Integer; const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
+    procedure SetLocalFast(const AIndex: Integer; const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
+    procedure SetLocalRaw(const AIndex: Integer; const AValue: TGocciaRegister); {$IFDEF FPC}inline;{$ENDIF}
     function MatchesNullishKind(const AValue: TGocciaValue; const AKind: UInt8): Boolean;
     function TryGetArrayIndex(const AKey: TGocciaValue; out AIndex: Integer): Boolean;
     function TryGetArrayIndexRegister(const AKey: TGocciaRegister;
       out AIndex: Integer): Boolean;
     function KeyToPropertyName(const AKey: TGocciaValue): string;
     function KeyToPropertyNameRegister(const AKey: TGocciaRegister): string;
-    function TryResolveObjectKey(const AKeyReg: TGocciaRegister; out AResolved: TGocciaValue): Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function TryResolveObjectKey(const AKeyReg: TGocciaRegister; out AResolved: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     // Shared computed-property-access cores. AProbeArrayIndex preserves the
     // historical per-receiver cascades: array/string receivers probe for an
     // array index, class/object receivers do not.
     function ClassifyPropertyKey(const AKeyReg: TGocciaRegister;
       const AProbeArrayIndex: Boolean): TGocciaPropertyKey;
-    function PropertyKeyName(const AKey: TGocciaPropertyKey): string;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function PropertyKeyName(const AKey: TGocciaPropertyKey): string; {$IFDEF FPC}inline;{$ENDIF}
     // Register parameters are passed BY VALUE deliberately: callers pass
     // FRegisters[..] slots, and ClassifyPropertyKey can run user code
     // (ToPropertyKey -> toString) that grows and reallocates the register
@@ -638,8 +625,7 @@ type
   end;
 
 function BytecodeFunctionIntrinsicKind(const ATemplate: TGocciaFunctionTemplate):
-  TGocciaFunctionObjectIntrinsicKind;
-  {$IFDEF FPC}inline;{$ENDIF}
+  TGocciaFunctionObjectIntrinsicKind; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Assigned(ATemplate) and ATemplate.IsAsync and ATemplate.IsGenerator then
     Result := foikAsyncGenerator
@@ -653,8 +639,7 @@ end;
 
 function DirectEvalBindingIsNonStrictImmutable(
   const ABinding: TGocciaDirectEvalBindingInfo;
-  const ATemplate: TGocciaFunctionTemplate): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ATemplate: TGocciaFunctionTemplate): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ABinding.IsConst and
     (ABinding.IsEvalSyntheticArguments or
@@ -662,8 +647,7 @@ begin
       (ATemplate.Name <> '') and (ABinding.Name = ATemplate.Name)));
 end;
 
-procedure EnsureVMObjectPrototypeInitialized;
-{$IFDEF FPC}inline;{$ENDIF}
+procedure EnsureVMObjectPrototypeInitialized; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if TGocciaObjectValue.SharedObjectPrototype = nil then
     TGocciaObjectValue.InitializeSharedPrototype;
@@ -1561,8 +1545,7 @@ begin
 end;
 
 function VMIsPrototypeInChain(const AObj: TGocciaObjectValue;
-  const ATargetProto: TGocciaObjectValue): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ATargetProto: TGocciaObjectValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
   CurrentProto: TGocciaObjectValue;
 begin
@@ -1577,8 +1560,7 @@ begin
 end;
 
 function VMHasSymbolPropertyInChain(const AObject: TGocciaObjectValue;
-  const ASymbol: TGocciaSymbolValue): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ASymbol: TGocciaSymbolValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
   Current: TGocciaObjectValue;
 begin
@@ -1593,8 +1575,7 @@ begin
 end;
 
 function VMGetOwnDataDescriptorValue(const AObject: TGocciaObjectValue;
-  const AName: string; out AValue: TGocciaValue): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AName: string; out AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
@@ -1613,8 +1594,7 @@ begin
 end;
 
 function VMTrySetOwnWritableDataProperty(const AObject: TGocciaObjectValue;
-  const AName: string; const AValue: TGocciaValue): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AName: string; const AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
@@ -1633,8 +1613,7 @@ end;
 
 function VMTryGetCachedGlobalOwnDataProperty(
   const AObject: TGocciaObjectValue; const AEntryIndex: Integer;
-  const AVersion: Cardinal; out AValue: TGocciaValue): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AVersion: Cardinal; out AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
@@ -1655,8 +1634,7 @@ end;
 
 function VMTryGetGlobalOwnDataPropertyFillCache(
   const AObject: TGocciaObjectValue; const AName: string;
-  out AEntryIndex: Integer; out AVersion: Cardinal): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  out AEntryIndex: Integer; out AVersion: Cardinal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
@@ -1677,8 +1655,7 @@ const
   GLOBAL_READ_OBJECT_BINDING_BUILTIN = 2;
 
 function VMGlobalObjectBindingCacheStillPrecedes(
-  const AScope: TGocciaScope; const ACache: PGocciaGlobalReadCacheEntry): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AScope: TGocciaScope; const ACache: PGocciaGlobalReadCacheEntry): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   case ACache^.ObjectBindingKind of
     GLOBAL_READ_OBJECT_BINDING_VAR:
@@ -1693,8 +1670,7 @@ begin
   end;
 end;
 
-function VMValueToRegisterFast(const AValue: TGocciaValue): TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
+function VMValueToRegisterFast(const AValue: TGocciaValue): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 var
   NumberValue: Double;
 begin
@@ -1734,8 +1710,7 @@ end;
 // so the OP_GET_PROP_CONST inline cache may serve them without going
 // through their virtual GetProperty path. Exact-class checks exclude every
 // subclass with overridden lookup semantics (proxies, exotic objects).
-function VMPropertyReadCacheableReceiver(const AObject: TObject): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function VMPropertyReadCacheableReceiver(const AObject: TObject): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AObject.ClassType = TGocciaObjectValue) or
     (AObject.ClassType = TGocciaVMLiteralObjectValue) or
@@ -1753,8 +1728,7 @@ end;
 // (TOrderedStringMap.Add on an existing key).
 function VMTryGetCachedOwnDataProperty(const AObject: TGocciaObjectValue;
   const ACache: PGocciaPropertyReadCacheEntry;
-  out AValue: TGocciaValue): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  out AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
@@ -1841,8 +1815,7 @@ end;
 // prefix shape's covered entries stay valid as the holder map grows, and
 // the descriptor is re-read by entry index on every hit.
 function VMHolderShapeMatches(const AObject: TGocciaObjectValue;
-  const ACachedShape: Pointer): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ACachedShape: Pointer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := Pointer(
     TGocciaShapedPropertyMap(AObject.Properties).EnsureShape) = ACachedShape;
@@ -1853,8 +1826,7 @@ end;
 // EnsureShape keeps returning the same prefix pointer, so pointer equality
 // alone cannot prove a name is still absent.
 function VMAbsenceShapeMatches(const AObject: TGocciaObjectValue;
-  const ACachedShape: Pointer): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ACachedShape: Pointer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
   Map: TGocciaShapedPropertyMap;
   LevelShape: TGocciaShape;
@@ -1985,8 +1957,7 @@ end;
 
 function VMFillProtoReadCache(const AReceiver: TGocciaObjectValue;
   const AName: string; const ACache: PGocciaProtoReadCacheEntry;
-  out AValue: TGocciaValue): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  out AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := VMFillProtoReadCacheCore(AReceiver, AName, ACache, AValue);
   // Every decline advances the streak so sites that can never use this
@@ -1999,8 +1970,7 @@ begin
 end;
 
 function VMGetOwnDataDescriptorRegister(const AObject: TGocciaObjectValue;
-  const AName: string; out AValue: TGocciaRegister): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AName: string; out AValue: TGocciaRegister): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
   Value: TGocciaValue;
 begin
@@ -2015,8 +1985,7 @@ begin
 end;
 
 function VMSetOwnWritableDataDescriptorValue(const AObject: TGocciaObjectValue;
-  const AName: string; const AValue: TGocciaValue): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AName: string; const AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
@@ -2036,8 +2005,7 @@ end;
 
 // ES2026 §7.3.6 CreateDataPropertyOrThrow(O, P, V)
 procedure DefineDataPropertyOnObject(const ATarget: TGocciaObjectValue;
-  const AName: string; const AValue: TGocciaValue);
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AName: string; const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (ATarget is TGocciaVMLiteralObjectValue) and
      TGocciaVMLiteralObjectValue(ATarget)
@@ -2049,8 +2017,7 @@ end;
 
 // ES2026 §7.3.6 CreateDataPropertyOrThrow(O, P, V) — symbol variant
 procedure DefineSymbolDataPropertyOnObject(const ATarget: TGocciaObjectValue;
-  const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
 begin
   ATarget.CreateDataPropertyOrThrow(ASymbol, AValue);
 end;
@@ -2230,8 +2197,7 @@ begin
   end;
 end;
 
-function VMNumberValue(const AValue: Double): TGocciaNumberLiteralValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function VMNumberValue(const AValue: Double): TGocciaNumberLiteralValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Math.IsNaN(AValue) then
     Exit(TGocciaNumberLiteralValue.NaNValue);
@@ -2252,8 +2218,7 @@ begin
   Result := TGocciaNumberLiteralValue.Create(AValue);
 end;
 
-function VMNumberRegister(const AValue: Double): TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
+function VMNumberRegister(const AValue: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Math.IsNaN(AValue) or Math.IsInfinite(AValue) then
     Exit(RegisterObject(VMNumberValue(AValue)));
@@ -2269,14 +2234,12 @@ begin
   Result := RegisterFloat(AValue);
 end;
 
-function VMModuloRegister(const ALeft, ARight: Double): TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
+function VMModuloRegister(const ALeft, ARight: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := VMNumberRegister(NumberRemainder(ALeft, ARight));
 end;
 
-function VMPowerRegister(const ALeft, ARight: Double): TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
+function VMPowerRegister(const ALeft, ARight: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := VMNumberRegister(NumberExponentiation(ALeft, ARight));
 end;
@@ -2286,8 +2249,7 @@ end;
 // Delegates to Goccia.Types.Enforcement.EnforceStrictType so the interpreter
 // and bytecode VM share a single enforcement implementation.
 procedure VMStrictTypeCheckRegisterValue(const AValue: TGocciaValue;
-  const AExpected: TGocciaLocalType);
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AExpected: TGocciaLocalType); {$IFDEF FPC}inline;{$ENDIF}
 begin
   EnforceStrictType(AValue, AExpected);
 end;
@@ -2297,8 +2259,7 @@ end;
 // NaN, Infinity, negative zero, or fractional results.
 // Uses implicit Double assignment (not Int64 * 1.0) to avoid AArch64 FPC 3.2.2
 // codegen bug where Int64 * 1.0 produces wrong results near LongInt boundaries.
-function VMIntResult(const AValue: Int64): TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
+function VMIntResult(const AValue: Int64): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 var
   FloatValue: Double;
 begin
@@ -2312,8 +2273,7 @@ begin
 end;
 
 function VMRegisterToStringFast(
-  const AValue: TGocciaRegister): TGocciaStringLiteralValue;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AValue: TGocciaRegister): TGocciaStringLiteralValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   case AValue.Kind of
     grkUndefined:
@@ -2344,8 +2304,7 @@ begin
 end;
 
 function VMGlobalConstructor(const AScope: TGocciaScope;
-  const AName: string): TGocciaValue;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AName: string): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
 var
   RootScope: TGocciaScope;
 begin
@@ -2359,21 +2318,18 @@ begin
     Result := nil;
 end;
 
-function VMGlobalObjectConstructor(const AScope: TGocciaScope): TGocciaValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function VMGlobalObjectConstructor(const AScope: TGocciaScope): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := VMGlobalConstructor(AScope, CONSTRUCTOR_OBJECT);
 end;
 
-function VMGlobalFunctionConstructor(const AScope: TGocciaScope): TGocciaValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function VMGlobalFunctionConstructor(const AScope: TGocciaScope): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := VMGlobalConstructor(AScope, CONSTRUCTOR_FUNCTION);
 end;
 
 function VMBuiltinConstructorMatchValue(const AMatcher, ASubject: TGocciaValue;
-  const AScope: TGocciaScope; out AMatches: Boolean): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AScope: TGocciaScope; out AMatches: Boolean): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
   ObjectConstructor, ArrayConstructor, StringConstructor, NumberConstructor,
     BooleanConstructor, FunctionConstructor, BigIntConstructor,
@@ -2440,8 +2396,7 @@ begin
 end;
 
 function VMInstanceOfValue(const ALeft, ARight,
-  AObjectConstructor, AFunctionConstructor: TGocciaValue): TGocciaValue;
-  {$IFDEF FPC}inline;{$ENDIF}
+  AObjectConstructor, AFunctionConstructor: TGocciaValue): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   // Keep bytecode in lockstep with interpreter semantics for ES2026
   // §13.10.2, including @@hasInstance and non-callable target errors.
@@ -7902,8 +7857,7 @@ begin
 end;
 
 function RegisterMatchesNullishKind(const AValue: TGocciaRegister;
-  const AKind: UInt8): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AKind: UInt8): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   case AKind of
     GOCCIA_NULLISH_MATCH_ANY:
@@ -9735,15 +9689,13 @@ begin
 end;
 
 function HasDynamicVarBinding(const AScope: TGocciaScope;
-  const AName: string): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AName: string): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := Assigned(FindDynamicVarBindingScope(AScope, AName));
 end;
 
 function HasOwnDynamicVarBinding(const AScope: TGocciaScope;
-  const AName: string): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AName: string): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := Assigned(AScope) and
     (AScope.ContainsOwnVarBinding(AName) or

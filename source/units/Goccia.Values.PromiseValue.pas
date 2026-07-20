@@ -122,8 +122,7 @@ var
   GPromiseDefaultConstructorSlot: TGocciaRealmSlotId;
 
 function GetPromiseSharedForRealm(
-  const ARealm: TGocciaRealm): TGocciaSharedPrototype;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ARealm: TGocciaRealm): TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Assigned(ARealm) then
     Result := TGocciaSharedPrototype(ARealm.GetOwnedSlot(GPromiseSharedSlot))
@@ -131,15 +130,13 @@ begin
     Result := nil;
 end;
 
-function GetPromiseShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetPromiseShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := GetPromiseSharedForRealm(CurrentRealm);
 end;
 
 function GetPromiseDefaultConstructorForRealm(
-  const ARealm: TGocciaRealm): TGocciaValue;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ARealm: TGocciaRealm): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Assigned(ARealm) then
     Result := TGocciaValue(ARealm.GetSlot(GPromiseDefaultConstructorSlot))
@@ -148,8 +145,7 @@ begin
 end;
 
 procedure SetPromiseDefaultConstructorForRealm(const ARealm: TGocciaRealm;
-  const AConstructor: TGocciaValue);
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AConstructor: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Assigned(ARealm) then
     ARealm.SetSlot(GPromiseDefaultConstructorSlot, AConstructor);

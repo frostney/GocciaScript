@@ -156,8 +156,7 @@ end;
 var
   GStringPrototypeSlot: TGocciaRealmSlotId;
 
-function GetSharedStringPrototype: TGocciaObjectValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetSharedStringPrototype: TGocciaObjectValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GStringPrototypeSlot))

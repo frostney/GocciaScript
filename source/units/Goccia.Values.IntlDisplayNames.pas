@@ -52,8 +52,7 @@ uses
 var
   GIntlDisplayNamesSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetIntlDisplayNamesShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetIntlDisplayNamesShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlDisplayNamesSharedSlot))

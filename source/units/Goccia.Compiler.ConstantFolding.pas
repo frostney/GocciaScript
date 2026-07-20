@@ -17,18 +17,15 @@ function TryEmitConstantExpression(const ACtx: TGocciaCompilationContext;
 procedure EmitCompileTimeValue(const ACtx: TGocciaCompilationContext;
   const AValue: TGocciaCompileTimeValue; const ADest: UInt16);
 function CompileTimeValueToBoolean(
-  const AValue: TGocciaCompileTimeValue): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AValue: TGocciaCompileTimeValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 function CompileTimeValueIsNullish(
-  const AValue: TGocciaCompileTimeValue): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AValue: TGocciaCompileTimeValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
 function TryFoldBinary(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaBinaryExpression; const ADest: UInt16): Boolean;
 function TryFoldUnary(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaUnaryExpression; const ADest: UInt16): Boolean;
-function IsNegativeZeroFloat(const AValue: Double): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsNegativeZeroFloat(const AValue: Double): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 
@@ -54,21 +51,18 @@ uses
   Goccia.Values.Primitives;
 
 function CompileTimeValueToBoolean(
-  const AValue: TGocciaCompileTimeValue): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AValue: TGocciaCompileTimeValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := Goccia.Compiler.ConstantValue.CompileTimeValueToBoolean(AValue);
 end;
 
 function CompileTimeValueIsNullish(
-  const AValue: TGocciaCompileTimeValue): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AValue: TGocciaCompileTimeValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := Goccia.Compiler.ConstantValue.CompileTimeValueIsNullish(AValue);
 end;
 
-function IsNegativeZeroFloat(const AValue: Double): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsNegativeZeroFloat(const AValue: Double): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := IsNegativeZero(AValue);
 end;

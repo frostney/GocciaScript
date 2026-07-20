@@ -32,8 +32,7 @@ type
     DataLength: Integer;
   end;
 
-function RCDATAResourceType: TEmbeddedResourceType;
-{$IFDEF FPC}inline;{$ENDIF}
+function RCDATAResourceType: TEmbeddedResourceType; {$IFDEF FPC}inline;{$ENDIF}
 function HasBytesAvailable(const ABuffer: TBytes; const AOffset, ALength: Integer): Boolean;
 function TryUInt32ToInteger(const AValue: UInt32; out AInteger: Integer): Boolean;
 function ReadUInt32LE(const ABuffer: TBytes; const AOffset: Integer): UInt32;

@@ -38,6 +38,12 @@ Which sets:
 
 Overflow and range checks are **enabled** — correctness is prioritized over raw performance.
 
+Keep compiler-conditional routine directives on the declaration's final line:
+
+```pascal
+function NormalizeValue(const AValue: Double): Double; {$IFDEF FPC}inline;{$ENDIF}
+```
+
 ### Naming Conventions
 
 | Element | Convention | Example |

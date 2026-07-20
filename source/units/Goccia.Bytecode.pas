@@ -419,31 +419,20 @@ type
     OP_CONSTRUCT_SPREAD = 226
   );
 
-function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt16): UInt64;
-{$IFDEF FPC}inline;{$ENDIF}
-function EncodeABx(const AOp: TGocciaOpCode; const A: UInt16; const ABx: UInt16): UInt64;
-{$IFDEF FPC}inline;{$ENDIF}
+function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt16): UInt64; {$IFDEF FPC}inline;{$ENDIF}
+function EncodeABx(const AOp: TGocciaOpCode; const A: UInt16; const ABx: UInt16): UInt64; {$IFDEF FPC}inline;{$ENDIF}
 function EncodeAsBx(const AOp: TGocciaOpCode; const A: UInt16;
-  const AAsBx: Int16): UInt64;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AAsBx: Int16): UInt64; {$IFDEF FPC}inline;{$ENDIF}
 function EncodeAx(const AOp: TGocciaOpCode;
-  const AAx: Int32): UInt64;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AAx: Int32): UInt64; {$IFDEF FPC}inline;{$ENDIF}
 
-function DecodeOp(const AInstruction: UInt32): UInt8;
-{$IFDEF FPC}inline;{$ENDIF}
-function DecodeA(const AInstruction: UInt32): UInt8;
-{$IFDEF FPC}inline;{$ENDIF}
-function DecodeB(const AInstruction: UInt32): UInt8;
-{$IFDEF FPC}inline;{$ENDIF}
-function DecodeC(const AInstruction: UInt32): UInt8;
-{$IFDEF FPC}inline;{$ENDIF}
-function DecodeBx(const AInstruction: UInt32): UInt16;
-{$IFDEF FPC}inline;{$ENDIF}
-function DecodesBx(const AInstruction: UInt32): Int16;
-{$IFDEF FPC}inline;{$ENDIF}
-function DecodeAx(const AInstruction: UInt32): Int32;
-{$IFDEF FPC}inline;{$ENDIF}
+function DecodeOp(const AInstruction: UInt32): UInt8; {$IFDEF FPC}inline;{$ENDIF}
+function DecodeA(const AInstruction: UInt32): UInt8; {$IFDEF FPC}inline;{$ENDIF}
+function DecodeB(const AInstruction: UInt32): UInt8; {$IFDEF FPC}inline;{$ENDIF}
+function DecodeC(const AInstruction: UInt32): UInt8; {$IFDEF FPC}inline;{$ENDIF}
+function DecodeBx(const AInstruction: UInt32): UInt16; {$IFDEF FPC}inline;{$ENDIF}
+function DecodesBx(const AInstruction: UInt32): Int16; {$IFDEF FPC}inline;{$ENDIF}
+function DecodeAx(const AInstruction: UInt32): Int32; {$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 

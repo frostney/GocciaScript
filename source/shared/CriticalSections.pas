@@ -20,24 +20,15 @@ type
   end;
   {$ENDIF}
 
-procedure CriticalSectionInit(var ASection: TGocciaCriticalSection);
-{$IFDEF FPC}inline;{$ENDIF}
-procedure CriticalSectionDone(var ASection: TGocciaCriticalSection);
-{$IFDEF FPC}inline;{$ENDIF}
-procedure CriticalSectionEnter(var ASection: TGocciaCriticalSection);
-{$IFDEF FPC}inline;{$ENDIF}
-procedure CriticalSectionLeave(var ASection: TGocciaCriticalSection);
-{$IFDEF FPC}inline;{$ENDIF}
-function GetGocciaThreadId: TThreadID;
-{$IFDEF FPC}inline;{$ENDIF}
-function AtomicIncrementInt32(var AValue: Integer): Integer;
-{$IFDEF FPC}inline;{$ENDIF}
-function AtomicDecrementInt32(var AValue: Integer): Integer;
-{$IFDEF FPC}inline;{$ENDIF}
-procedure ReadMemoryBarrier;
-{$IFDEF FPC}inline;{$ENDIF}
-procedure WriteMemoryBarrier;
-{$IFDEF FPC}inline;{$ENDIF}
+procedure CriticalSectionInit(var ASection: TGocciaCriticalSection); {$IFDEF FPC}inline;{$ENDIF}
+procedure CriticalSectionDone(var ASection: TGocciaCriticalSection); {$IFDEF FPC}inline;{$ENDIF}
+procedure CriticalSectionEnter(var ASection: TGocciaCriticalSection); {$IFDEF FPC}inline;{$ENDIF}
+procedure CriticalSectionLeave(var ASection: TGocciaCriticalSection); {$IFDEF FPC}inline;{$ENDIF}
+function GetGocciaThreadId: TThreadID; {$IFDEF FPC}inline;{$ENDIF}
+function AtomicIncrementInt32(var AValue: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
+function AtomicDecrementInt32(var AValue: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
+procedure ReadMemoryBarrier; {$IFDEF FPC}inline;{$ENDIF}
+procedure WriteMemoryBarrier; {$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 

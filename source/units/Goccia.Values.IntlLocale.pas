@@ -89,8 +89,7 @@ uses
 var
   GIntlLocaleSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetIntlLocaleShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetIntlLocaleShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlLocaleSharedSlot))

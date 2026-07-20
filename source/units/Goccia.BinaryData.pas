@@ -17,10 +17,8 @@ type
   );
 
 function BinaryBytesPerElement(const AKind: TGocciaBinaryElementKind): Integer;
-function BinaryIsFloatElement(const AKind: TGocciaBinaryElementKind): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
-function BinaryIsBigIntElement(const AKind: TGocciaBinaryElementKind): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function BinaryIsFloatElement(const AKind: TGocciaBinaryElementKind): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+function BinaryIsBigIntElement(const AKind: TGocciaBinaryElementKind): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
 function ReadBinaryNumberElement(const AData: TBytes; const AOffset: Integer;
   const AKind: TGocciaBinaryElementKind; const ALittleEndian: Boolean): Double;
@@ -43,14 +41,12 @@ uses
   Goccia.Float16,
   Goccia.NumberConversion;
 
-function UInt64BitsToInt64(const AValue: UInt64): Int64;
-{$IFDEF FPC}inline;{$ENDIF}
+function UInt64BitsToInt64(const AValue: UInt64): Int64; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Move(AValue, Result, SizeOf(Result));
 end;
 
-function Int64ToUInt64Bits(const AValue: Int64): UInt64;
-{$IFDEF FPC}inline;{$ENDIF}
+function Int64ToUInt64Bits(const AValue: Int64): UInt64; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Move(AValue, Result, SizeOf(Result));
 end;
