@@ -26,7 +26,7 @@ import {
   sha256Digest,
   versionFromReleaseTag,
 } from "@/lib/agent-discovery";
-import nextConfig from "../../next.config";
+import nextConfig from "../../next.config.mjs";
 
 describe("agent discovery", () => {
   test("homepage advertises agent-useful Link relations", async () => {

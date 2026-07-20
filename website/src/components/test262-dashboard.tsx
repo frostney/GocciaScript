@@ -1,5 +1,9 @@
 "use client";
 
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from "@astryxdesign/core/SegmentedControl";
 import { type CSSProperties, useMemo, useRef, useState } from "react";
 import type {
   Test262CategorySummary,
@@ -701,19 +705,21 @@ function TimelineRangeControl({
           {fmt(visiblePoints.length)} of {fmt(totalPoints)} daily points
         </small>
       </div>
-      <fieldset className="compat-range-buttons">
-        <legend>Timeline range</legend>
+      <SegmentedControl
+        className="compat-range-buttons"
+        label="Timeline range"
+        value={value}
+        onChange={(next) => onChange(next as TimelineRange)}
+        size="sm"
+      >
         {TIMELINE_RANGES.map((option) => (
-          <button
+          <SegmentedControlItem
             key={option.value}
-            type="button"
-            aria-pressed={value === option.value}
-            onClick={() => onChange(option.value)}
-          >
-            {option.label}
-          </button>
+            value={option.value}
+            label={option.label}
+          />
         ))}
-      </fieldset>
+      </SegmentedControl>
     </section>
   );
 }

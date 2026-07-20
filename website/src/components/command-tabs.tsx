@@ -1,14 +1,11 @@
 "use client";
 
+import { CodeBlock } from "@astryxdesign/core/CodeBlock";
+import { Tab, TabList } from "@astryxdesign/core/TabList";
 import { type ComponentType, useEffect, useState } from "react";
-import {
-  HighlightedGeneric,
-  HighlightedShell,
-} from "@/components/highlighted-code";
 import {
   AppleIcon,
   BunIcon,
-  CopyIcon,
   DenoIcon,
   LinuxIcon,
   NpmIcon,
@@ -156,50 +153,14 @@ export function CopyableCommand({
   command: string;
   language?: "shell" | "ts";
 }) {
-  const [copyTick, setCopyTick] = useState(0);
-  const copy = async () => {
-    let ok = false;
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(command);
-        ok = true;
-      }
-    } catch {}
-    if (ok) setCopyTick((t) => t + 1);
-  };
-  useEffect(() => {
-    if (copyTick === 0) return;
-    const id = setTimeout(() => setCopyTick(0), 1500);
-    return () => clearTimeout(id);
-  }, [copyTick]);
-  const copied = copyTick > 0;
   return (
-    <div className="install-block">
-      <button
-        type="button"
-        className="install-block-copy"
-        onClick={copy}
-        title="Copy"
-        aria-label="Copy command"
-      >
-        {copied ? (
-          <span key={copyTick} className="copied-flash">
-            copied
-          </span>
-        ) : (
-          <CopyIcon size={14} />
-        )}
-      </button>
-      <pre className="install-block-pre">
-        <code>
-          {language === "shell" ? (
-            <HighlightedShell code={command} />
-          ) : (
-            <HighlightedGeneric code={command} language={language} />
-          )}
-        </code>
-      </pre>
-    </div>
+    <CodeBlock
+      code={command}
+      language={language === "shell" ? "bash" : language}
+      hasCopyButton
+      width="100%"
+      size="sm"
+    />
   );
 }
 
@@ -268,27 +229,24 @@ export function CommandTabs({
 
   return (
     <div className="cmd-tabs-wrap">
-      <div className="cmd-tabs" role="tablist">
+      <TabList
+        className="cmd-tabs"
+        value={active}
+        onChange={select}
+        size="md"
+        hasDivider
+      >
         {tabs.map((t) => {
-          const selected = active === t.key;
           return (
-            <button
+            <Tab
               key={t.key}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              tabIndex={selected ? 0 : -1}
-              className="cmd-tab"
-              data-key={t.key}
-              data-active={selected}
-              onClick={() => select(t.key)}
-            >
-              {t.Icon && <t.Icon size={16} />}
-              <span>{t.label}</span>
-            </button>
+              value={t.key}
+              label={t.label}
+              icon={t.Icon ? <t.Icon size={16} /> : undefined}
+            />
           );
         })}
-      </div>
+      </TabList>
       <div role="tabpanel">
         <CopyableCommand command={commands[active] ?? ""} language="shell" />
       </div>

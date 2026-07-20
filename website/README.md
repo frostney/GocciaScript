@@ -1,6 +1,6 @@
 # GocciaScript website
 
-The marketing/docs site for GocciaScript — a Next.js 16 app under `website/`. Markdown content for the docs section is synced from `../docs/` at build time via `scripts/sync-docs.mjs`.
+The marketing/docs site for GocciaScript — a Next.js 16 app under `website/`. Fumadocs reads `../README.md` and `../docs/**/*.md` directly, while Astryx provides the shared shell and generic controls. The warm-paper GocciaScript theme remains project-owned.
 
 Bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
@@ -9,20 +9,15 @@ Bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/
 First, run the development server:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+bun install --frozen-lockfile
+bun run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `src/app/page.tsx`. The page auto-updates as you edit the file.
+Edit route UI under `src/app/` and `src/components/`. Edit documentation in the repository root; `source.config.ts` defines the collection and generated routes update automatically.
 
-Fonts (Instrument Serif + IBM Plex Sans) are loaded directly in `src/app/layout.tsx` via `<link>` from Google Fonts; the OG image generator (`src/app/opengraph-image.tsx`) fetches the same `.ttf` files at build time.
+Fonts (Instrument Serif, IBM Plex Sans, and JetBrains Mono) are loaded through `next/font` in `src/app/layout.tsx`; the OG image generator (`src/app/opengraph-image.tsx`) embeds the matching display and body fonts.
 
 ## Learn More
 

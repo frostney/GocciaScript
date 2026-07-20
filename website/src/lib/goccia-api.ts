@@ -215,7 +215,11 @@ function resolveBinaryPath(
       config.kind === "execute"
         ? entry.binaries.loader
         : entry.binaries.testRunner;
-    const abs = path.join(process.cwd(), "vendor", rel);
+    const abs = path.join(
+      /* turbopackIgnore: true */ process.cwd(),
+      "vendor",
+      rel,
+    );
     if (existsSync(/* turbopackIgnore: true */ abs)) {
       return {
         ok: true,
@@ -335,8 +339,8 @@ async function prepareInvocation(
   const dir = await mkdtemp(
     path.join(/* turbopackIgnore: true */ tmpdir(), "goccia-test-api-"),
   );
-  const testFile = path.join(dir, "inline-test.js");
-  const resultFile = path.join(dir, "results.json");
+  const testFile = path.join(/* turbopackIgnore: true */ dir, "inline-test.js");
+  const resultFile = path.join(/* turbopackIgnore: true */ dir, "results.json");
   await writeFile(/* turbopackIgnore: true */ testFile, code, "utf8");
 
   // Build the test-runner arg list defensively: each flag is gated against
