@@ -85,7 +85,7 @@ implementation
 
 uses
   Math,
-{$IFDEF FPC}
+{$IF DEFINED(FPC) AND DEFINED(UNIX)}
   cwstring,
 {$ENDIF}
   Generated.UnicodeCaseData,
