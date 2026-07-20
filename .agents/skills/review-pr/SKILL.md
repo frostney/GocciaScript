@@ -1,11 +1,8 @@
 ---
 name: review-pr
 description: >-
-  Resolves outstanding review comments on the current pull request by replying
-  in-thread and pushing fixes in any GitHub repository, without leaving new
-  top-level PR or issue comments. Prefers the /resolve-reviews skill when it is
-  available and falls back to a standalone workflow otherwise. Use when the
-  user runs /review-pr.
+  Resolves current pull-request review threads in place, validates and pushes
+  fixes, and avoids new top-level comments. Use when the user runs /review-pr.
 license: Unlicense OR MIT
 compatibility: >-
   Requires the GitHub CLI (gh) authenticated to the target repository and
@@ -36,15 +33,12 @@ To check availability, look for a skill or command named `resolve-reviews` (e.g.
 - Run relevant verification before committing fixes.
 - Avoid commands that create top-level comments: `gh pr comment`, REST issue-comment endpoints, or any review body not tied to an existing thread.
 
-### Active context declaration
+### Review checkpoint
 
-Do not declare the active context at invocation time. First confirm the PR, read the diff/review threads, identify the files and project area involved, and discover any matching project, stack, domain, or review-resolution skills. Then, before editing code to address comments, briefly state the context and skills that are now active, for example:
-
-```text
-Active context before review fixes: AGENTS.md, project-area/AGENTS.md, project-area/CONTEXT.md, docs/adr/0003-..., react-stack, convex, resolve-reviews. No matching <domain> skill found.
-```
-
-This is a gate: actively search for relevant context files and skills before the declaration. If the declaration is missing any discovered context or skill, load it before continuing.
+Before editing, read the PR, unresolved threads, affected code, and applicable
+project instructions. Give one concise phase update naming any material context
+that changes how the review will be resolved; do not list irrelevant files or
+narrate an internal checklist.
 
 ### Steps
 
@@ -65,7 +59,7 @@ This is a gate: actively search for relevant context files and skills before the
    Resolve conflicts and commit the merge before addressing reviews.
 
 3. List unresolved review threads and inline comments. Read the PR diff and changed-file context closely enough to identify the affected project area, related docs, and any applicable local skills.
-4. **Declare active context before fixing.** State the active context/skills discovered in steps 1–3, including any applicable project, stack, domain, docs, ADR, and `resolve-reviews` skills. If the declaration reveals a relevant missing skill or context file, load it before continuing.
+4. **Give the review checkpoint before fixing.** If it reveals missing material context, load that context before editing.
 5. Address each unresolved thread in code where it requires a code change.
 6. When a thread needs acknowledgement, clarification, or a follow-up question, reply **inline on the originating thread** — never via a new top-level comment.
 7. Run relevant verification: typecheck, lint, tests, and targeted UI checks (visual, accessibility, responsive, theme) for user-facing changes.
