@@ -818,8 +818,7 @@ begin
 end;
 
 procedure IncludeStartCheckLatin1(var ACheck: TRegExpStartCheck;
-  ACodePoint: Cardinal);
-  {$IFDEF FPC}inline;{$ENDIF}
+  ACodePoint: Cardinal); {$IFDEF FPC}inline;{$ENDIF}
 begin
   ACheck.Latin1Bits[ACodePoint shr 5] :=
     ACheck.Latin1Bits[ACodePoint shr 5] or (UInt32(1) shl (ACodePoint and 31));
@@ -2951,8 +2950,7 @@ begin
   end;
 end;
 
-function IsQuantifierChar(C: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsQuantifierChar(C: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (C = '*') or (C = '+') or (C = '?') or (C = '{');
 end;

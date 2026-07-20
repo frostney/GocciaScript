@@ -67,8 +67,7 @@ uses
 var
   GFinalizationRegistrySharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetFinalizationRegistryShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetFinalizationRegistryShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GFinalizationRegistrySharedSlot))

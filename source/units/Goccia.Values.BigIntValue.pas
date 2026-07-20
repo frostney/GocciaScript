@@ -136,8 +136,7 @@ begin
   SetLength(FPrototypeMembers, 0);
 end;
 
-function GetSharedBigIntPrimitivePrototype: TGocciaObjectValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetSharedBigIntPrimitivePrototype: TGocciaObjectValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GBigIntPrimitivePrototypeSlot))

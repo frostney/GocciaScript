@@ -85,8 +85,7 @@ begin
     GCleanups[I]();
 end;
 
-function CleanupProceduresEqual(const ALeft; const ARight): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function CleanupProceduresEqual(const ALeft; const ARight): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := CompareMem(@ALeft, @ARight, SizeOf(TGocciaThreadvarCleanupProc));
 end;

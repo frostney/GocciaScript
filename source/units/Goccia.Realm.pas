@@ -114,8 +114,7 @@ function RegisterRealmOwnedSlot(const AName: string): TGocciaRealmOwnedSlotId;
 // engine is initialized.  Production code paths that rely on intrinsics
 // (value constructors, ExposePrototype, InitializePrototype, ...) require a
 // realm to be present.
-function CurrentRealm: TGocciaRealm;
-{$IFDEF FPC}inline;{$ENDIF}
+function CurrentRealm: TGocciaRealm; {$IFDEF FPC}inline;{$ENDIF}
 
 // Set by TGocciaEngine.Initialize and TGocciaEngine.ResetRealm.  Tests and
 // other host code generally should not call this directly.
@@ -189,8 +188,7 @@ begin
   end;
 end;
 
-function CurrentRealm: TGocciaRealm;
-{$IFDEF FPC}inline;{$ENDIF}
+function CurrentRealm: TGocciaRealm; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := GCurrentRealm;
 end;

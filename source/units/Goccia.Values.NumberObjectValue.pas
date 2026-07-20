@@ -383,8 +383,7 @@ begin
   Result := Sign + Mantissa + 'e' + ExponentSign + IntToStr(Exponent);
 end;
 
-function GetSharedNumberPrototype: TGocciaObjectValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetSharedNumberPrototype: TGocciaObjectValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GNumberPrototypeSlot))

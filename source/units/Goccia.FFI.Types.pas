@@ -63,15 +63,12 @@ type
       const AReturnType: TGocciaFFITypeDescriptor): TGocciaFFITypeDescriptor;
     procedure AddReference;
     procedure ReleaseReference;
-    function IsAggregate: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function IsAggregate: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function ContainsUnion: Boolean;
     function FieldIndex(const AName: string): Integer;
-    function FieldCount: Integer;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function FieldCount: Integer; {$IFDEF FPC}inline;{$ENDIF}
     function FieldAt(const AIndex: Integer): TGocciaFFIFieldDescriptor;
-    function CallbackArgumentCount: Integer;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function CallbackArgumentCount: Integer; {$IFDEF FPC}inline;{$ENDIF}
     function CallbackArgumentAt(
       const AIndex: Integer): TGocciaFFITypeDescriptor;
     property Kind: TGocciaFFITypeKind read FKind;

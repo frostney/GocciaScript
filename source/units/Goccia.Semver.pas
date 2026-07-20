@@ -178,27 +178,23 @@ begin
   Result.RTL := False;
 end;
 
-function IsDigit(const AChar: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsDigit(const AChar: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AChar >= '0') and (AChar <= '9');
 end;
 
-function IsAlpha(const AChar: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsAlpha(const AChar: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ((AChar >= 'a') and (AChar <= 'z')) or
     ((AChar >= 'A') and (AChar <= 'Z'));
 end;
 
-function IsAlphaNumericDash(const AChar: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsAlphaNumericDash(const AChar: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := IsDigit(AChar) or IsAlpha(AChar) or (AChar = '-');
 end;
 
-function IsWhitespace(const AChar: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsWhitespace(const AChar: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AChar = ' ') or (AChar = #9) or (AChar = #10) or
     (AChar = #13);

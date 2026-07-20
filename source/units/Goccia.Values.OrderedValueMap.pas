@@ -47,8 +47,7 @@ type
     // keys()/values()/entries()/forEach observe +0. SameValueZero already
     // treats -0 and +0 as equal for lookup, so callers only need this for the
     // value that gets stored.
-    class function CanonicalizeKey(const AKey: TGocciaValue): TGocciaValue; static;
-    {$IFDEF FPC}inline;{$ENDIF}
+    class function CanonicalizeKey(const AKey: TGocciaValue): TGocciaValue; static; {$IFDEF FPC}inline;{$ENDIF}
 
     // Insert or in-place update (keeping the original insertion position),
     // canonicalizing the key first.
@@ -65,14 +64,11 @@ type
     // entries appended during iteration are visited and deleted (tombstoned)
     // entries are skipped, matching the spec [[MapData]] iteration model.
     function NextEntry(var ACursor: Integer;
-      out AKey, AValue: TGocciaValue): Boolean;
-      {$IFDEF FPC}inline;{$ENDIF}
+      out AKey, AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
     // Bracket a live iteration so compaction cannot renumber entries mid-walk.
-    procedure RetainIterator;
-    {$IFDEF FPC}inline;{$ENDIF}
-    procedure ReleaseIterator;
-    {$IFDEF FPC}inline;{$ENDIF}
+    procedure RetainIterator; {$IFDEF FPC}inline;{$ENDIF}
+    procedure ReleaseIterator; {$IFDEF FPC}inline;{$ENDIF}
 
     property ActiveIterators: Integer read FActiveIterators;
   end;

@@ -43,21 +43,15 @@ type
     FFileName: string;
     FJSXDepth: Integer;
 
-    function Peek: Char;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function PeekAt(const AOffset: Integer): Char;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function IsAtEnd: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
-    procedure AdvanceInput;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function CurrentChar: Char;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function Peek: Char; {$IFDEF FPC}inline;{$ENDIF}
+    function PeekAt(const AOffset: Integer): Char; {$IFDEF FPC}inline;{$ENDIF}
+    function IsAtEnd: Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    procedure AdvanceInput; {$IFDEF FPC}inline;{$ENDIF}
+    function CurrentChar: Char; {$IFDEF FPC}inline;{$ENDIF}
 
     procedure Emit(const AText: string);
     procedure EmitMapped(const AText: string; const ASourceLine, ASourceColumn: Integer);
-    procedure EmitChar(const AChar: Char);
-    {$IFDEF FPC}inline;{$ENDIF}
+    procedure EmitChar(const AChar: Char); {$IFDEF FPC}inline;{$ENDIF}
     procedure EmitNewline;
     procedure AddIdentityMapping;
 
@@ -73,10 +67,8 @@ type
 
     function IsJSXContext: Boolean;
     function IsJSXStart: Boolean;
-    function IsIdentifierStart(const AChar: Char): Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function IsIdentifierPart(const AChar: Char): Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function IsIdentifierStart(const AChar: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    function IsIdentifierPart(const AChar: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
     procedure TransformJSXElement;
     function ReadJSXTagName: string;

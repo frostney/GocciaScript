@@ -113,8 +113,7 @@ var
 threadvar
   GNextSymbolId: Integer;
 
-function GetSharedSymbolPrototype: TGocciaObjectValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetSharedSymbolPrototype: TGocciaObjectValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GSymbolPrototypeSlot))

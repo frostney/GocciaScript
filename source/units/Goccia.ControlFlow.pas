@@ -20,24 +20,16 @@ type
     FBits: NativeUInt;
     FTargetLabel: string;
     FReturnHasExpression: Boolean;
-    function GetKind: TGocciaControlFlowKind;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function GetValue: TGocciaValue;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function GetKind: TGocciaControlFlowKind; {$IFDEF FPC}inline;{$ENDIF}
+    function GetValue: TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
   public
-    class function Normal(const AValue: TGocciaValue): TGocciaControlFlow; static;
-    {$IFDEF FPC}inline;{$ENDIF}
+    class function Normal(const AValue: TGocciaValue): TGocciaControlFlow; static; {$IFDEF FPC}inline;{$ENDIF}
     class function Return(const AValue: TGocciaValue;
-      const AHasExpression: Boolean): TGocciaControlFlow; static;
-      {$IFDEF FPC}inline;{$ENDIF}
-    class function Empty: TGocciaControlFlow; static;
-    {$IFDEF FPC}inline;{$ENDIF}
-    class function Break(const ATargetLabel: string = ''; const AValue: TGocciaValue = nil): TGocciaControlFlow; static;
-    {$IFDEF FPC}inline;{$ENDIF}
-    class function Continue(const ATargetLabel: string = ''; const AValue: TGocciaValue = nil): TGocciaControlFlow; static;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function UpdateEmpty(const AValue: TGocciaValue): TGocciaControlFlow;
-    {$IFDEF FPC}inline;{$ENDIF}
+      const AHasExpression: Boolean): TGocciaControlFlow; static; {$IFDEF FPC}inline;{$ENDIF}
+    class function Empty: TGocciaControlFlow; static; {$IFDEF FPC}inline;{$ENDIF}
+    class function Break(const ATargetLabel: string = ''; const AValue: TGocciaValue = nil): TGocciaControlFlow; static; {$IFDEF FPC}inline;{$ENDIF}
+    class function Continue(const ATargetLabel: string = ''; const AValue: TGocciaValue = nil): TGocciaControlFlow; static; {$IFDEF FPC}inline;{$ENDIF}
+    function UpdateEmpty(const AValue: TGocciaValue): TGocciaControlFlow; {$IFDEF FPC}inline;{$ENDIF}
     property Kind: TGocciaControlFlowKind read GetKind;
     property Value: TGocciaValue read GetValue;
     property TargetLabel: string read FTargetLabel;

@@ -281,8 +281,7 @@ end;
 // ---------------------------------------------------------------------------
 
 function SocketSend(const ASock: TSocket; const ABuf: Pointer;
-  const ALen: Integer): Integer;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ALen: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 begin
   {$IFDEF UNIX}
   Result := fpSend(ASock, ABuf, ALen, 0);
@@ -293,8 +292,7 @@ begin
 end;
 
 function SocketRecv(const ASock: TSocket; const ABuf: Pointer;
-  const ALen: Integer): Integer;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ALen: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 begin
   {$IFDEF UNIX}
   Result := fpRecv(ASock, ABuf, ALen, 0);
@@ -304,8 +302,7 @@ begin
   {$ENDIF}
 end;
 
-procedure SocketClose(const ASock: TSocket);
-{$IFDEF FPC}inline;{$ENDIF}
+procedure SocketClose(const ASock: TSocket); {$IFDEF FPC}inline;{$ENDIF}
 begin
   {$IFDEF UNIX}
   CloseSocket(ASock);

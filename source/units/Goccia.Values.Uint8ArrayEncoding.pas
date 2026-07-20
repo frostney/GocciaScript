@@ -97,8 +97,7 @@ begin
   TablesInitialized := True;
 end;
 
-function IsAsciiWhitespace(const ACh: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsAsciiWhitespace(const ACh: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (ACh = #9) or (ACh = #10) or (ACh = #12) or (ACh = #13) or (ACh = ' ');
 end;
@@ -188,8 +187,7 @@ end;
 
 { ---- Hex helpers ---- }
 
-function HexCharToNibble(const ACh: Char): Integer;
-{$IFDEF FPC}inline;{$ENDIF}
+function HexCharToNibble(const ACh: Char): Integer; {$IFDEF FPC}inline;{$ENDIF}
 begin
   case ACh of
     '0'..'9': Result := Ord(ACh) - Ord('0');

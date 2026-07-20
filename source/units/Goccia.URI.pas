@@ -91,8 +91,7 @@ begin
 end;
 
 { Percent-encode a single byte as %XX (uppercase hex). }
-function PercentEncodeByte(const AByte: Byte): string;
-{$IFDEF FPC}inline;{$ENDIF}
+function PercentEncodeByte(const AByte: Byte): string; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := '%' + HEX_DIGITS[(AByte shr 4) + 1] + HEX_DIGITS[(AByte and $0F) + 1];
 end;
@@ -123,8 +122,7 @@ begin
 end;
 
 { Returns True if ACodePoint is a UTF-16 surrogate (U+D800..U+DFFF). }
-function IsSurrogate(const ACodePoint: Integer): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsSurrogate(const ACodePoint: Integer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (ACodePoint >= $D800) and (ACodePoint <= $DFFF);
 end;
@@ -162,15 +160,13 @@ begin
 end;
 
 { Returns True if C is an ASCII hex digit. }
-function IsASCIIHexDigit(const C: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsASCIIHexDigit(const C: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (C in ['0'..'9', 'A'..'F', 'a'..'f']);
 end;
 
 { Parse a hex digit character to its numeric value. }
-function HexVal(const C: Char): Byte;
-{$IFDEF FPC}inline;{$ENDIF}
+function HexVal(const C: Char): Byte; {$IFDEF FPC}inline;{$ENDIF}
 begin
   case C of
     '0'..'9': Result := Ord(C) - Ord('0');

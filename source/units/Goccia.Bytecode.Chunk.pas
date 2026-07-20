@@ -235,14 +235,11 @@ type
     function GetRegExpProgramCache(const ASlot: Integer): TObject;
     procedure SetRegExpProgramCache(const ASlot: Integer; const AValue: TObject);
     function GlobalReadCacheSlot(
-      const AConstIndex: Integer): PGocciaGlobalReadCacheEntry;
-      {$IFDEF FPC}inline;{$ENDIF}
+      const AConstIndex: Integer): PGocciaGlobalReadCacheEntry; {$IFDEF FPC}inline;{$ENDIF}
     function PropertyReadCacheSlot(
-      const AConstIndex: Integer): PGocciaPropertyReadCacheEntry;
-      {$IFDEF FPC}inline;{$ENDIF}
+      const AConstIndex: Integer): PGocciaPropertyReadCacheEntry; {$IFDEF FPC}inline;{$ENDIF}
     function ProtoReadCacheSlot(
-      const AConstIndex: Integer): PGocciaProtoReadCacheEntry;
-      {$IFDEF FPC}inline;{$ENDIF}
+      const AConstIndex: Integer): PGocciaProtoReadCacheEntry; {$IFDEF FPC}inline;{$ENDIF}
     function AddFunction(const AFunction: TGocciaFunctionTemplate): UInt16;
     procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt16;
       const AName: string = '');
@@ -252,17 +249,12 @@ type
     procedure AddExceptionHandler(const ATryStart, ATryEnd, ACatchTarget,
       AFinallyTarget: UInt32; const ACatchRegister: UInt16);
 
-    function GetInstruction(const AIndex: Integer): UInt32;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function GetConstant(const AIndex: Integer): TGocciaBytecodeConstant;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function GetInstruction(const AIndex: Integer): UInt32; {$IFDEF FPC}inline;{$ENDIF}
+    function GetConstant(const AIndex: Integer): TGocciaBytecodeConstant; {$IFDEF FPC}inline;{$ENDIF}
     function GetFunction(const AIndex: Integer): TGocciaFunctionTemplate;
-    function GetInstructionUnchecked(const AIndex: Integer): UInt32;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function GetConstantUnchecked(const AIndex: Integer): TGocciaBytecodeConstant;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function GetFunctionUnchecked(const AIndex: Integer): TGocciaFunctionTemplate;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function GetInstructionUnchecked(const AIndex: Integer): UInt32; {$IFDEF FPC}inline;{$ENDIF}
+    function GetConstantUnchecked(const AIndex: Integer): TGocciaBytecodeConstant; {$IFDEF FPC}inline;{$ENDIF}
+    function GetFunctionUnchecked(const AIndex: Integer): TGocciaFunctionTemplate; {$IFDEF FPC}inline;{$ENDIF}
     function GetUpvalueDescriptor(const AIndex: Integer): TGocciaUpvalueDescriptor;
     function GetDirectEvalEnvironment(
       const AIndex: Integer): TGocciaDirectEvalEnvironment;
@@ -336,8 +328,7 @@ begin
   end;
 end;
 
-function FloatBitsAreNaN(const AValue: Double): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function FloatBitsAreNaN(const AValue: Double): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
   Bits: UInt64;
 begin

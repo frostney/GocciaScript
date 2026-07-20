@@ -262,14 +262,12 @@ begin
   GFunctionConstructRedirectHook := AHook;
 end;
 
-function IsRegisteredProxyValue(const AValue: TGocciaValue): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsRegisteredProxyValue(const AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := Assigned(GProxyPredicate) and GProxyPredicate(AValue);
 end;
 
-function GetSharedFunctionPrototype: TGocciaFunctionSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetSharedFunctionPrototype: TGocciaFunctionSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaFunctionSharedPrototype(CurrentRealm.GetSlot(GFunctionPrototypeSlot))
@@ -474,8 +472,7 @@ begin
   end;
 end;
 
-function IsCallableForHasInstance(const AValue: TGocciaValue): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsCallableForHasInstance(const AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := AValue.IsCallable;
 end;

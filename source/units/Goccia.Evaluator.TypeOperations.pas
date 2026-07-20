@@ -12,8 +12,7 @@ uses
 type
   TIsObjectInstanceOfClassFunction = function(const AObj: TGocciaObjectValue; const AClassValue: TGocciaClassValue): Boolean;
 
-function EvaluateTypeof(const AOperand: TGocciaValue): TGocciaValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function EvaluateTypeof(const AOperand: TGocciaValue): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
 function EvaluateInstanceof(const ALeft, ARight: TGocciaValue; const AIsObjectInstanceOfClass: TIsObjectInstanceOfClassFunction): TGocciaValue;
 function EvaluateInOperator(const ALeft, ARight: TGocciaValue): TGocciaValue;
 

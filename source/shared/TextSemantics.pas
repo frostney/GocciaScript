@@ -33,8 +33,7 @@ function TryReadCodePointAt(const AText: string; const AIndex: Integer;
 function TryReadCodePointAtAllowSurrogates(const AText: string;
   const AIndex: Integer; out ACodePoint: Cardinal;
   out AByteLength: Integer): Boolean;
-function IsUnicodeSurrogateCodePoint(const ACodePoint: Cardinal): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsUnicodeSurrogateCodePoint(const ACodePoint: Cardinal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 function IsECMAScriptWhitespaceCodePoint(const ACodePoint: Cardinal): Boolean;
 function TrimECMAScriptWhitespace(const AText: string): string;
 function TrimECMAScriptWhitespaceStart(const AText: string): string;
@@ -124,14 +123,12 @@ begin
   Result := FSourceTextValid;
 end;
 
-function IsHighSurrogateCodeUnit(const ACodeUnit: Cardinal): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsHighSurrogateCodeUnit(const ACodeUnit: Cardinal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (ACodeUnit >= $D800) and (ACodeUnit <= $DBFF);
 end;
 
-function IsLowSurrogateCodeUnit(const ACodeUnit: Cardinal): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsLowSurrogateCodeUnit(const ACodeUnit: Cardinal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (ACodeUnit >= $DC00) and (ACodeUnit <= $DFFF);
 end;

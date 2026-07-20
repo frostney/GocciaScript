@@ -93,8 +93,7 @@ uses
 var
   GArrayBufferSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetArrayBufferShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetArrayBufferShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GArrayBufferSharedSlot))

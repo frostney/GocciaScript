@@ -53,8 +53,7 @@ uses
 var
   GWeakRefSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetWeakRefShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetWeakRefShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GWeakRefSharedSlot))

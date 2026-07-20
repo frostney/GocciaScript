@@ -33,8 +33,7 @@ type
     procedure InitializePrototype;
     procedure SyncBufferData;
     function IsDetachedBuffer: Boolean;
-    function IsAutoLength: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function IsAutoLength: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function IsViewOutOfBounds: Boolean;
     function GetViewByteLength: Integer;
     function GetBufferByteLength: Integer;
@@ -109,8 +108,7 @@ uses
 var
   GDataViewSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetDataViewShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetDataViewShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GDataViewSharedSlot))

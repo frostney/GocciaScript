@@ -17,10 +17,8 @@ type
     FSample: TGocciaValue;
     FInverse: Boolean;
   protected
-    function ApplyInverse(const AResult: Boolean): Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
-    procedure SetSample(const AValue: TGocciaValue);
-    {$IFDEF FPC}inline;{$ENDIF}
+    function ApplyInverse(const AResult: Boolean): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    procedure SetSample(const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
   public
     constructor Create(const ASample: TGocciaValue;
       const AInverse: Boolean = False);

@@ -73,8 +73,7 @@ type
     function ParseObjectKey: string;
     function PeekCodePointSequence: string;
     function ReadCodePointSequence: string;
-    function Supports(const ACapability: TJSONParserCapability): Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function Supports(const ACapability: TJSONParserCapability): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function TryMatchAdditionalWhitespace(out AByteLength: Integer): Boolean;
     function TryMatchLineTerminator(out AByteLength: Integer): Boolean;
     function TryParseAdditionalLiteral(const AIsNegative: Boolean): Boolean;
@@ -83,13 +82,10 @@ type
 
     procedure SkipWhitespace;
 
-    function PeekChar: Char;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function ReadChar: Char;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function PeekChar: Char; {$IFDEF FPC}inline;{$ENDIF}
+    function ReadChar: Char; {$IFDEF FPC}inline;{$ENDIF}
     function ExpectChar(const AExpected: Char): Boolean;
-    function IsAtEnd: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function IsAtEnd: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     procedure RaiseParseError(const AMessage: string);
   protected
     function ParseString(const AQuote: Char): string; overload;

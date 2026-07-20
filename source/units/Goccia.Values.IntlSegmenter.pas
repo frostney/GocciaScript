@@ -106,8 +106,7 @@ begin
   SetLength(FSegmentIteratorPrototypeMembers, 0);
 end;
 
-function GetIntlSegmenterShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetIntlSegmenterShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlSegmenterSharedSlot))
@@ -115,8 +114,7 @@ begin
     Result := nil;
 end;
 
-function GetIntlSegmentsShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetIntlSegmentsShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlSegmentsSharedSlot))
@@ -124,8 +122,7 @@ begin
     Result := nil;
 end;
 
-function GetIntlSegmentIteratorShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetIntlSegmentIteratorShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlSegmentIteratorSharedSlot))

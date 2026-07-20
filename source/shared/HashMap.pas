@@ -37,11 +37,9 @@ type
       FCapacity: Integer;
       FIndex: Integer;
       FCurrent: TBaseMap<TKey, TValue>.TKeyValuePair;
-      function GetCurrent: TBaseMap<TKey, TValue>.TKeyValuePair;
-      {$IFDEF FPC}inline;{$ENDIF}
+      function GetCurrent: TBaseMap<TKey, TValue>.TKeyValuePair; {$IFDEF FPC}inline;{$ENDIF}
     public
-      function MoveNext: Boolean;
-      {$IFDEF FPC}inline;{$ENDIF}
+      function MoveNext: Boolean; {$IFDEF FPC}inline;{$ENDIF}
       property Current: TBaseMap<TKey, TValue>.TKeyValuePair read GetCurrent;
     end;
 
@@ -54,13 +52,10 @@ type
     FCount: Integer;
     FCapacity: Integer;
 
-    class function HashKey(const AKey: TKey): Cardinal; static;
-    {$IFDEF FPC}inline;{$ENDIF}
-    class function KeysEqual(const A, B: TKey): Boolean; static;
-    {$IFDEF FPC}inline;{$ENDIF}
+    class function HashKey(const AKey: TKey): Cardinal; static; {$IFDEF FPC}inline;{$ENDIF}
+    class function KeysEqual(const A, B: TKey): Boolean; static; {$IFDEF FPC}inline;{$ENDIF}
 
-    function FindSlot(const AKey: TKey; AHash: Cardinal): Integer;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function FindSlot(const AKey: TKey; AHash: Cardinal): Integer; {$IFDEF FPC}inline;{$ENDIF}
     procedure Grow;
     procedure Reinsert(const ASlot: TSlot);
 
@@ -82,8 +77,7 @@ type
     function Remove(const AKey: TKey): Boolean; override;
     procedure Clear; override;
 
-    function GetEnumerator: TEnumerator;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function GetEnumerator: TEnumerator; {$IFDEF FPC}inline;{$ENDIF}
 
     property Capacity: Integer read FCapacity;
   end;

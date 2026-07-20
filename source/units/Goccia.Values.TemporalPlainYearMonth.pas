@@ -82,8 +82,7 @@ uses
 var
   GTemporalPlainYearMonthSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetTemporalPlainYearMonthShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetTemporalPlainYearMonthShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTemporalPlainYearMonthSharedSlot))

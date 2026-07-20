@@ -873,8 +873,7 @@ begin
   Result := True;
 end;
 
-function BytePointer(const ABytes: TBytes): PAnsiChar;
-{$IFDEF FPC}inline;{$ENDIF}
+function BytePointer(const ABytes: TBytes): PAnsiChar; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Length(ABytes) = 0 then
     Result := nil
@@ -2211,8 +2210,7 @@ begin
     Result := ScaledInt / Scale;
 end;
 
-function CanonicalizeICUNumberFormatInput(AValue: Double): Double;
-{$IFDEF FPC}inline;{$ENDIF}
+function CanonicalizeICUNumberFormatInput(AValue: Double): Double; {$IFDEF FPC}inline;{$ENDIF}
 var
   Bits: UInt64;
 begin

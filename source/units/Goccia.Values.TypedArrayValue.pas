@@ -87,10 +87,8 @@ type
     procedure MarkReferences; override;
 
     class function BytesPerElement(const AKind: TGocciaTypedArrayKind): Integer;
-    class function IsFloatKind(const AKind: TGocciaTypedArrayKind): Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
-    class function IsBigIntKind(const AKind: TGocciaTypedArrayKind): Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+    class function IsFloatKind(const AKind: TGocciaTypedArrayKind): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    class function IsBigIntKind(const AKind: TGocciaTypedArrayKind): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     class function KindName(const AKind: TGocciaTypedArrayKind): string;
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
     class procedure SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
@@ -246,8 +244,7 @@ type
     procedure MarkReferences; override;
   end;
 
-function GetTypedArrayShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetTypedArrayShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTypedArraySharedSlot))
@@ -255,8 +252,7 @@ begin
     Result := nil;
 end;
 
-function GetUint8Prototype: TGocciaObjectValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetUint8Prototype: TGocciaObjectValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GUint8PrototypeSlot))

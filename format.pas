@@ -928,6 +928,203 @@ begin
 end;
 
 { ═══════════════════════════════════════════════════════════════════════════
+  Auto-Fix: Inline Compiler Directive Placement
+  ═══════════════════════════════════════════════════════════════════════════ }
+
+const
+  CanonicalInlineDirective = '{$IFDEF FPC}inline;{$ENDIF}';
+  CompactInlineDirective = '{$IFDEFFPC}INLINE;{$ENDIF}';
+
+function IsAfterLineComment(const ALine: string;
+  const AColumn: Integer): Boolean;
+var
+  I: Integer;
+  InString, InBlockComment: Boolean;
+begin
+  Result := False;
+  I := 1;
+  InString := False;
+  InBlockComment := False;
+  while (I < AColumn) and (I <= Length(ALine)) do
+  begin
+    if InString then
+    begin
+      if ALine[I] = '''' then
+      begin
+        if (I < Length(ALine)) and (ALine[I + 1] = '''') then
+          Inc(I)
+        else
+          InString := False;
+      end;
+    end
+    else if InBlockComment then
+    begin
+      if ALine[I] = '}' then
+        InBlockComment := False;
+    end
+    else if ALine[I] = '''' then
+      InString := True
+    else if ALine[I] = '{' then
+      InBlockComment := True
+    else if (ALine[I] = '/') and (I < Length(ALine)) and
+      (ALine[I + 1] = '/') then
+      Exit(True);
+    Inc(I);
+  end;
+end;
+
+function IsInlineDirectivePrefix(const AText: string): Boolean;
+begin
+  Result := (Length(AText) <= Length(CompactInlineDirective)) and
+    SameText(AText, Copy(CompactInlineDirective, 1, Length(AText)));
+end;
+
+function TryFindInlineDirectiveSequence(const ALines: TStringList;
+  const AStartLine: Integer; out AStartColumn, AEndLine,
+  AEndColumn: Integer): Boolean;
+var
+  Column, LineIndex, CharacterIndex: Integer;
+  Candidate: string;
+begin
+  Result := False;
+  for Column := 1 to Length(ALines[AStartLine]) do
+  begin
+    if ALines[AStartLine][Column] <> '{' then
+      Continue;
+    if IsAfterLineComment(ALines[AStartLine], Column) then
+      Continue;
+
+    Candidate := '';
+    LineIndex := AStartLine;
+    CharacterIndex := Column;
+    while LineIndex < ALines.Count do
+    begin
+      while CharacterIndex <= Length(ALines[LineIndex]) do
+      begin
+        if ALines[LineIndex][CharacterIndex] > ' ' then
+        begin
+          Candidate := Candidate +
+            UpCase(ALines[LineIndex][CharacterIndex]);
+          if not IsInlineDirectivePrefix(Candidate) then
+            Break;
+          if SameText(Candidate, CompactInlineDirective) then
+          begin
+            AStartColumn := Column;
+            AEndLine := LineIndex;
+            AEndColumn := CharacterIndex;
+            Exit(True);
+          end;
+        end;
+        Inc(CharacterIndex);
+      end;
+      if not IsInlineDirectivePrefix(Candidate) then
+        Break;
+      Inc(LineIndex);
+      CharacterIndex := 1;
+    end;
+  end;
+end;
+
+function FindRoutineDeclarationEnd(const ALines: TStringList;
+  const AStartLine: Integer): Integer;
+var
+  LineIndex, CharacterIndex, ParenthesisDepth: Integer;
+  StrippedLine: string;
+  InBlock: Boolean;
+begin
+  Result := -1;
+  ParenthesisDepth := 0;
+  InBlock := False;
+  for LineIndex := AStartLine to ALines.Count - 1 do
+  begin
+    StrippedLine := StripCodeLine(ALines[LineIndex], InBlock);
+    for CharacterIndex := 1 to Length(StrippedLine) do
+    begin
+      case StrippedLine[CharacterIndex] of
+        '(': Inc(ParenthesisDepth);
+        ')': Dec(ParenthesisDepth);
+        ';':
+          if ParenthesisDepth = 0 then
+            Exit(LineIndex);
+      end;
+    end;
+  end;
+end;
+
+function IsRoutineDeclarationEnd(const ALines: TStringList;
+  const ALine: Integer): Boolean;
+var
+  StartLine: Integer;
+begin
+  Result := False;
+  for StartLine := ALine downto 0 do
+    if IsFuncDeclStart(ALines[StartLine]) then
+    begin
+      Result := FindRoutineDeclarationEnd(ALines, StartLine) = ALine;
+      Exit;
+    end;
+end;
+
+function FixInlineDirectivePlacement(const ALines: TStringList): Boolean;
+var
+  I, StartColumn, EndLine, EndColumn, DeleteLine, DeclarationLine: Integer;
+  Prefix, Suffix, FormattedLine: string;
+begin
+  Result := False;
+  I := 0;
+  while I < ALines.Count do
+  begin
+    if not TryFindInlineDirectiveSequence(ALines, I, StartColumn, EndLine,
+      EndColumn) then
+    begin
+      Inc(I);
+      Continue;
+    end;
+
+    Prefix := TrimRight(Copy(ALines[I], 1, StartColumn - 1));
+    Suffix := TrimRight(Copy(ALines[EndLine], EndColumn + 1,
+      Length(ALines[EndLine])));
+    if Prefix = '' then
+    begin
+      DeclarationLine := I - 1;
+      while (DeclarationLine >= 0) and
+        (Trim(ALines[DeclarationLine]) = '') do
+        Dec(DeclarationLine);
+      if (DeclarationLine < 0) or
+        not IsRoutineDeclarationEnd(ALines, DeclarationLine) then
+      begin
+        Inc(I);
+        Continue;
+      end;
+
+      ALines[DeclarationLine] := TrimRight(ALines[DeclarationLine]) + ' ' +
+        CanonicalInlineDirective + Suffix;
+      for DeleteLine := EndLine downto DeclarationLine + 1 do
+        ALines.Delete(DeleteLine);
+      Result := True;
+      I := DeclarationLine + 1;
+    end
+    else
+    begin
+      if not IsRoutineDeclarationEnd(ALines, I) then
+      begin
+        Inc(I);
+        Continue;
+      end;
+
+      FormattedLine := Prefix + ' ' + CanonicalInlineDirective + Suffix;
+      if (ALines[I] <> FormattedLine) or (EndLine <> I) then
+        Result := True;
+      ALines[I] := FormattedLine;
+      if EndLine > I then
+        for DeleteLine := EndLine downto I + 1 do
+          ALines.Delete(DeleteLine);
+      Inc(I);
+    end;
+  end;
+end;
+
+{ ═══════════════════════════════════════════════════════════════════════════
   File Processing
   ═══════════════════════════════════════════════════════════════════════════ }
 
@@ -944,6 +1141,7 @@ begin
     FormatUsesInLines(Lines, ResultLines);
     FixFuncNames(ResultLines);
     FixParamNames(ResultLines);
+    FixInlineDirectivePlacement(ResultLines);
     FixStraySpaces(ResultLines);
 
     if ResultLines.Text <> Lines.Text then

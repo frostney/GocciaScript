@@ -9,16 +9,11 @@ const
   CANONICAL_FLOAT32_NAN_BITS: UInt32 = $7FC00000;
   CANONICAL_FLOAT64_NAN_BITS: UInt64 = $7FF8000000000000;
 
-function DoubleToBits(const AValue: Double): UInt64;
-{$IFDEF FPC}inline;{$ENDIF}
-function BitsToDouble(const ABits: UInt64): Double;
-{$IFDEF FPC}inline;{$ENDIF}
-function SingleToBits(const AValue: Single): UInt32;
-{$IFDEF FPC}inline;{$ENDIF}
-function BitsToSingle(const ABits: UInt32): Single;
-{$IFDEF FPC}inline;{$ENDIF}
-function IsNegativeZero(const AValue: Double): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function DoubleToBits(const AValue: Double): UInt64; {$IFDEF FPC}inline;{$ENDIF}
+function BitsToDouble(const ABits: UInt64): Double; {$IFDEF FPC}inline;{$ENDIF}
+function SingleToBits(const AValue: Single): UInt32; {$IFDEF FPC}inline;{$ENDIF}
+function BitsToSingle(const ABits: UInt32): Single; {$IFDEF FPC}inline;{$ENDIF}
+function IsNegativeZero(const AValue: Double): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 

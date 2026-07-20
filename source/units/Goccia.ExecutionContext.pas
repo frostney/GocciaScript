@@ -47,10 +47,8 @@ function CreateExecutionContext(const ARealm: TGocciaRealm;
   const AScriptOrModule: TObject = nil;
   const AFunctionValue: TGocciaValue = nil): TGocciaExecutionContext;
 
-function RunningExecutionContext: TGocciaExecutionContext;
-{$IFDEF FPC}inline;{$ENDIF}
-function HasRunningExecutionContext: Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function RunningExecutionContext: TGocciaExecutionContext; {$IFDEF FPC}inline;{$ENDIF}
+function HasRunningExecutionContext: Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 

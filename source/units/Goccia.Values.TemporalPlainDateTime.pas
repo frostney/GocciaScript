@@ -118,8 +118,7 @@ uses
 var
   GTemporalPlainDateTimeSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetTemporalPlainDateTimeShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetTemporalPlainDateTimeShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTemporalPlainDateTimeSharedSlot))
@@ -235,8 +234,7 @@ begin
       Copy(Result, SecondPos + 2, Length(Result) - SecondPos - 1);
 end;
 
-procedure ConstrainPlainDateTimeLeapSecond(var ASecond: Integer);
-{$IFDEF FPC}inline;{$ENDIF}
+procedure ConstrainPlainDateTimeLeapSecond(var ASecond: Integer); {$IFDEF FPC}inline;{$ENDIF}
 begin
   if ASecond = 60 then
     ASecond := 59;

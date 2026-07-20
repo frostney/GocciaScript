@@ -117,8 +117,7 @@ const
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
 
-function IsFiniteIntegral(const AValue: Double): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsFiniteIntegral(const AValue: Double): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (not IsNan(AValue)) and (not IsInfinite(AValue)) and
     ((Abs(AValue) >= DOUBLE_INTEGRAL_LIMIT) or (Frac(AValue) = 0));
