@@ -152,7 +152,7 @@ begin
   Dec(GSharedSymbolRegistryRefs);
   if (GSharedSymbolRegistryRefs <= 0) and Assigned(GSharedSymbolRegistry) then
   begin
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       for Pair in GSharedSymbolRegistry do
         TGarbageCollector.Instance.UnpinObject(Pair.Value);
     GSharedSymbolRegistry.Free;
@@ -224,7 +224,7 @@ begin
     { Steps 4-5: Create new symbol, append to GlobalSymbolRegistry }
     Symbol := TGocciaSymbolValue.Create(Key);
     Symbol.Registered := True;
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.PinObject(Symbol);
     FGlobalRegistry.Add(Key, Symbol);
     { Step 6: Return newSymbol }

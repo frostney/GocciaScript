@@ -9,7 +9,8 @@ uses
   Goccia.Values.Primitives;
 
 // ES2026 §7.3.6 CreateDataPropertyOrThrow(O, P, V) for array indices.
-procedure ArrayCreateDataProperty(const AObject: TGocciaObjectValue; const AIndex: Integer; const AValue: TGocciaValue); inline;
+procedure ArrayCreateDataProperty(const AObject: TGocciaObjectValue; const AIndex: Integer; const AValue: TGocciaValue);
+{$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 

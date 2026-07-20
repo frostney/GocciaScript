@@ -69,9 +69,10 @@ type
     procedure MarkReferences; override;
   end;
 
-function GetIntlCollatorShared: TGocciaSharedPrototype; inline;
+function GetIntlCollatorShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlCollatorSharedSlot))
   else
     Result := nil;
@@ -418,7 +419,7 @@ begin
     FICULocale := AddUnicodeLocaleExtensionKeyword(FICULocale, 'co', FCollation);
 
   InitializePrototype;
-  if Assigned(GetIntlCollatorShared) then
+  if (GetIntlCollatorShared <> nil) then
     FPrototype := GetIntlCollatorShared.Prototype;
 end;
 
@@ -441,8 +442,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetIntlCollatorShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetIntlCollatorShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlCollatorSharedSlot, Shared);
@@ -494,19 +495,19 @@ function TGocciaIntlCollatorValue.IntlCollatorCompare(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   C: TGocciaIntlCollatorValue;
-  Str1, Str2: UnicodeString;
+  Str1, Str2: string;
 begin
   C := AsCollator(AThisValue, 'Intl.Collator.prototype.compare');
   // Per ECMA-402, missing arguments are ToString-coerced (undefined -> "undefined").
-  Str1 := UnicodeString(AArgs.GetElement(0).ToStringLiteral.Value);
-  Str2 := UnicodeString(AArgs.GetElement(1).ToStringLiteral.Value);
+  Str1 := string(AArgs.GetElement(0).ToStringLiteral.Value);
+  Str2 := string(AArgs.GetElement(1).ToStringLiteral.Value);
 
   Result := TGocciaNumberLiteralValue.Create(C.CompareStrings(string(Str1), string(Str2)));
 end;
 
 function TGocciaIntlCollatorValue.CompareStrings(const AString1, AString2: string): Integer;
 begin
-  if TryICUCompareStrings(FICULocale, UnicodeString(AString1), UnicodeString(AString2),
+  if TryICUCompareStrings(FICULocale, string(AString1), string(AString2),
     SensitivityStringToEnum(FSensitivity), FIgnorePunctuation, FNumeric,
     FCaseFirst, Result) then
     Exit;

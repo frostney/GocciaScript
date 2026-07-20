@@ -121,9 +121,10 @@ uses
 var
   GTemporalZonedDateTimeSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetTemporalZonedDateTimeShared: TGocciaSharedPrototype; inline;
+function GetTemporalZonedDateTimeShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTemporalZonedDateTimeSharedSlot))
   else
     Result := nil;
@@ -181,7 +182,8 @@ function FormatOffsetString(const AOffsetSeconds: Integer): string; forward;
 procedure SplitEpochNanoseconds(const AEpochNanoseconds: TBigInteger;
   out AEpochMilliseconds: Int64; out ASubMillisecondNanoseconds: Integer); forward;
 
-function EpochMillisecondsToSeconds(const AEpochMilliseconds: Int64): Int64; inline;
+function EpochMillisecondsToSeconds(const AEpochMilliseconds: Int64): Int64;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := AEpochMilliseconds div MILLISECONDS_PER_SECOND;
   if (AEpochMilliseconds < 0) and
@@ -189,7 +191,8 @@ begin
     Dec(Result);
 end;
 
-function IsUndefinedValue(const AValue: TGocciaValue): Boolean; inline;
+function IsUndefinedValue(const AValue: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AValue = nil) or (AValue is TGocciaUndefinedLiteralValue);
 end;
@@ -199,7 +202,8 @@ var
   I: Integer;
   LeftChar, RightChar: Char;
 
-  function UpperASCII(const AChar: Char): Char; inline;
+  function UpperASCII(const AChar: Char): Char;
+  {$IFDEF FPC}inline;{$ENDIF}
   begin
     if (AChar >= 'a') and (AChar <= 'z') then
       Result := Chr(Ord(AChar) - Ord('a') + Ord('A'))
@@ -330,7 +334,8 @@ begin
   end;
 end;
 
-function IsASCIIDigit(const AChar: Char): Boolean; inline;
+function IsASCIIDigit(const AChar: Char): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AChar >= '0') and (AChar <= '9');
 end;
@@ -1067,7 +1072,8 @@ begin
     TryParseISODateTimeWithOffset(Normalized, DateRec, TimeRec, OffsetSeconds, TimeZone);
 end;
 
-function ClampTemporalInteger(const AValue, AMin, AMax: Integer): Integer; inline;
+function ClampTemporalInteger(const AValue, AMin, AMax: Integer): Integer;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if AValue < AMin then
     Result := AMin
@@ -1078,7 +1084,8 @@ begin
 end;
 
 procedure ConstrainTemporalTimeFields(var AHour, AMinute, ASecond,
-  AMillisecond, AMicrosecond, ANanosecond: Integer); inline;
+  AMillisecond, AMicrosecond, ANanosecond: Integer);
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   AHour := ClampTemporalInteger(AHour, 0, 23);
   AMinute := ClampTemporalInteger(AMinute, 0, 59);
@@ -1752,7 +1759,8 @@ var
   Whole, FractionNs: TBigInteger;
   Y, Mo, W, Da, H, Mi, S, Ms, Us, Ns: TBigInteger;
 
-  function IsDigit(const AChar: Char): Boolean; inline;
+  function IsDigit(const AChar: Char): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
   begin
     Result := (AChar >= '0') and (AChar <= '9');
   end;
@@ -2017,8 +2025,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetTemporalZonedDateTimeShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetTemporalZonedDateTimeShared <> nil) then Exit;
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GTemporalZonedDateTimeSharedSlot, Shared);
   Members := TGocciaMemberCollection.Create;

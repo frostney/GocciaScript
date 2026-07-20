@@ -99,7 +99,7 @@ begin
         GC.RemoveTempRoot(FResources[I].DisposeArgument);
     end;
   end;
-  inherited;
+  inherited Destroy;
 end;
 
 // TC39 Explicit Resource Management §3.5 AddDisposableResource(disposeCapability, V, hint [, method])
@@ -163,9 +163,11 @@ function CreateSuppressedErrorObject(const AError, ASuppressed: TGocciaValue;
   const AMessage: string): TGocciaValue;
 var
   ErrorObj: TGocciaObjectValue;
+  SuppressedErrorProto: TGocciaObjectValue;
 begin
-  if Assigned(GetSuppressedErrorProto) then
-    ErrorObj := TGocciaObjectValue.Create(GetSuppressedErrorProto)
+  SuppressedErrorProto := GetSuppressedErrorProto;
+  if Assigned(SuppressedErrorProto) then
+    ErrorObj := TGocciaObjectValue.Create(SuppressedErrorProto)
   else
     ErrorObj := TGocciaObjectValue.Create(GetErrorProto);
   ErrorObj.HasErrorData := True;
@@ -190,7 +192,7 @@ begin
   ErrorObj.DefineProperty(PROP_SUPPRESSED,
     TGocciaPropertyDescriptorData.Create(ASuppressed, [pfConfigurable, pfWritable]));
 
-  if Assigned(TGocciaCallStack.Instance) then
+  if (TGocciaCallStack.Instance <> nil) then
     ErrorObj.AssignProperty(PROP_STACK,
       TGocciaStringLiteralValue.Create(
         TGocciaCallStack.Instance.CaptureStackTrace(SUPPRESSED_ERROR_NAME, AMessage)));

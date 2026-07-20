@@ -94,6 +94,7 @@ function IteratorResultDone(const AIterResult: TGocciaObjectValue): Boolean;
 function IteratorResultValue(const AIterResult: TGocciaObjectValue): TGocciaValue;
 function InvokeIteratorCallback(const ACallback: TGocciaValue; const AValue: TGocciaValue; const AIndex: Integer): TGocciaValue;
 procedure CloseIteratorPreservingError(const AIterator: TGocciaIteratorValue);
+procedure PreserveCurrentExceptionAcrossNestedHandler;
 
 implementation
 
@@ -132,33 +133,37 @@ var
   GIteratorConstructorSlot: TGocciaRealmSlotId;
   GIteratorMethodHostSlot: TGocciaRealmSlotId;
 
-function GetSharedIteratorPrototype: TGocciaObjectValue; inline;
+function GetSharedIteratorPrototype: TGocciaObjectValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GIteratorPrototypeSlot))
   else
     Result := nil;
 end;
 
-function GetSharedIteratorConstructor: TGocciaObjectValue; inline;
+function GetSharedIteratorConstructor: TGocciaObjectValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GIteratorConstructorSlot))
   else
     Result := nil;
 end;
 
-function GetSharedIteratorHelperPrototype: TGocciaObjectValue; inline;
+function GetSharedIteratorHelperPrototype: TGocciaObjectValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GIteratorHelperPrototypeSlot))
   else
     Result := nil;
 end;
 
-function GetSharedWrapForValidIteratorPrototype: TGocciaObjectValue; inline;
+function GetSharedWrapForValidIteratorPrototype: TGocciaObjectValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(
       GWrapForValidIteratorPrototypeSlot))
   else
@@ -168,9 +173,10 @@ end;
 // The per-realm method host (Self from InitializePrototype) that the helper,
 // constructor, and static methods bind to.  Populated by InitializePrototype,
 // which every entry point calls via EnsurePrototypeInitialized first. #892
-function GetIteratorMethodHost: TGocciaIteratorValue; inline;
+function GetIteratorMethodHost: TGocciaIteratorValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaIteratorValue(CurrentRealm.GetSlot(GIteratorMethodHostSlot))
   else
     Result := nil;
@@ -189,9 +195,9 @@ var
   Members: TGocciaMemberCollection;
   Prototype: TGocciaObjectValue;
 begin
-  if not Assigned(CurrentRealm) then
+  if (CurrentRealm = nil) then
     Exit;
-  if Assigned(GetSharedWrapForValidIteratorPrototype) then
+  if (GetSharedWrapForValidIteratorPrototype <> nil) then
     Exit;
 
   TGocciaIteratorValue.EnsurePrototypeInitialized;
@@ -306,12 +312,12 @@ begin
 
   Iterator := CreateRootedGenericIterator(AThisValue,
     TGocciaUndefinedLiteralValue.UndefinedValue);
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
     CloseIteratorPreservingError(Iterator);
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
 end;
@@ -401,14 +407,23 @@ begin
   end;
 end;
 
+procedure PreserveCurrentExceptionAcrossNestedHandler;
+begin
+{$IFDEF FPC}
+  { FPC may release the active exception when the nested cleanup handler
+    swallows a second exception. Retain it until the caller's bare raise. }
+  AcquireExceptionObject;
+{$ENDIF}
+end;
+
 procedure EnsureIteratorHelperPrototypeInitialized;
 var
   Members: TGocciaMemberCollection;
   HelperPrototype: TGocciaObjectValue;
 begin
-  if not Assigned(CurrentRealm) then
+  if (CurrentRealm = nil) then
     Exit;
-  if Assigned(GetSharedIteratorHelperPrototype) then
+  if (GetSharedIteratorHelperPrototype <> nil) then
     Exit;
 
   TGocciaIteratorValue.EnsurePrototypeInitialized;
@@ -641,7 +656,7 @@ end;
 
 class procedure TGocciaIteratorValue.EnsurePrototypeInitialized;
 begin
-  if Assigned(GetSharedIteratorPrototype) then Exit;
+  if (GetSharedIteratorPrototype <> nil) then Exit;
   TGocciaIteratorValue.Create;
 end;
 
@@ -657,7 +672,7 @@ class function TGocciaIteratorValue.EnsureConcreteIteratorPrototype(
 var
   IteratorPrototype: TGocciaObjectValue;
 begin
-  if not Assigned(CurrentRealm) then
+  if (CurrentRealm = nil) then
     Exit(nil);
 
   Result := TGocciaObjectValue(CurrentRealm.GetSlot(ASlotId));
@@ -685,8 +700,8 @@ var
   SharedPrototype: TGocciaObjectValue;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetSharedIteratorPrototype) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetSharedIteratorPrototype <> nil) then Exit;
 
   SharedPrototype := TGocciaObjectValue.Create(
     TGocciaObjectValue.SharedObjectPrototype);
@@ -740,13 +755,13 @@ var
 begin
   EnsurePrototypeInitialized;
 
-  if Assigned(GetSharedIteratorConstructor) then
+  if (GetSharedIteratorConstructor <> nil) then
     Exit(GetSharedIteratorConstructor);
 
   IteratorConstructor := TGocciaNativeFunctionValue.Create(
     GetIteratorMethodHost.IteratorConstructorCall, CONSTRUCTOR_ITERATOR, 0);
   IteratorConstructor.ConstructCallback := GetIteratorMethodHost.IteratorConstruct;
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     CurrentRealm.SetSlot(GIteratorConstructorSlot, IteratorConstructor);
 
   Result := IteratorConstructor;
@@ -1624,7 +1639,7 @@ begin
       try
         Item := OuterIterator.DirectNext(OuterDone);
       except
-        AcquireExceptionObject;
+        PreserveCurrentExceptionAcrossNestedHandler;
         for J := Acquired - 1 downto 0 do
         begin
           CloseIteratorPreservingError(Iterators[J]);
@@ -1638,7 +1653,7 @@ begin
       try
         InnerIterator := GetIteratorFlattenable(Item, iphRejectPrimitives);
       except
-        AcquireExceptionObject;
+        PreserveCurrentExceptionAcrossNestedHandler;
         for J := Acquired - 1 downto 0 do
         begin
           CloseIteratorPreservingError(Iterators[J]);
@@ -1829,7 +1844,7 @@ begin
     SetLength(Iterators, Count);
   except
     // Close and unroot already-acquired iterators before re-raising
-    AcquireExceptionObject;
+    PreserveCurrentExceptionAcrossNestedHandler;
     for J := Acquired - 1 downto 0 do
     begin
       CloseIteratorPreservingError(Iterators[J]);

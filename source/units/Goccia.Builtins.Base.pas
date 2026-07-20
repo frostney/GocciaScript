@@ -34,7 +34,7 @@ constructor TGocciaBuiltin.Create(const AName: string; const AScope: TGocciaScop
 begin
   FName := AName;
   FScope := AScope;
-  if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+  if TGocciaObjectValue.SharedObjectPrototype = nil then
     TGocciaObjectValue.InitializeSharedPrototype;
   FBuiltinObject := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   FThrowError := AThrowError;
@@ -43,7 +43,7 @@ end;
 destructor TGocciaBuiltin.Destroy;
 begin
   // FBuiltinObject is GC-managed when GC is active; only free manually otherwise
-  if not Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance = nil) then
     FBuiltinObject.Free;
   inherited;
 end;

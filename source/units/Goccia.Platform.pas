@@ -32,11 +32,11 @@ const
   BUILD_OS = 'unknown';
   {$ENDIF}
 
-  {$IF DEFINED(CPUX86_64)}
+  {$IF defined(GOCCIA_CPU_X86_64)}
   BUILD_ARCH = 'x86_64';
-  {$ELSEIF DEFINED(CPUAARCH64)}
+  {$ELSEIF defined(GOCCIA_CPU_AARCH64)}
   BUILD_ARCH = 'aarch64';
-  {$ELSEIF DEFINED(CPUI386)}
+  {$ELSEIF defined(GOCCIA_CPU_X86)}
   BUILD_ARCH = 'x86';
   {$ELSEIF DEFINED(CPUARM)}
   BUILD_ARCH = 'arm';

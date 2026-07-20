@@ -35,9 +35,9 @@ type
     function TryLoadModule(const AResolvedPath: string;
       out AModule: TGocciaModule): Boolean; virtual;
     function TryInjectGlobals(const AFormat: string;
-      const AContent: UTF8String): Boolean; virtual;
+      const AContent: string): Boolean; virtual;
     function TryInjectModules(const AFormat: string;
-      const AContent: UTF8String; const ABaseAddress: string): Boolean; virtual;
+      const AContent: string; const ABaseAddress: string): Boolean; virtual;
     procedure ApplyHostRestrictions(const AAllowedHosts: TStrings); virtual;
     procedure WaitForIdle; virtual;
     procedure DiscardPending; virtual;
@@ -58,9 +58,9 @@ type
     function LoadRuntimeModule(const AResolvedPath: string;
       out AModule: TGocciaModule): Boolean;
     function InjectGlobals(const AFormat: string;
-      const AContent: UTF8String): Boolean;
+      const AContent: string): Boolean;
     function InjectModules(const AFormat: string;
-      const AContent: UTF8String; const ABaseAddress: string): Boolean;
+      const AContent: string; const ABaseAddress: string): Boolean;
   public
     constructor Create(const AEngine: TGocciaEngine);
     destructor Destroy; override;
@@ -80,15 +80,15 @@ type
     procedure DiscardPending; override;
     procedure SetAllowedFetchHosts(const AHosts: TStrings); override;
     function InjectGlobalsFromJSON5(
-      const AJSON5String: UTF8String): Boolean; override;
+      const AJSON5String: string): Boolean; override;
     function InjectGlobalsFromTOML(
-      const ATOMLString: UTF8String): Boolean; override;
+      const ATOMLString: string): Boolean; override;
     function InjectGlobalsFromYAML(const AYamlString: string): Boolean; override;
-    function InjectModulesFromJSON5(const AJSON5String: UTF8String;
+    function InjectModulesFromJSON5(const AJSON5String: string;
       const ABaseAddress: string): Boolean; override;
-    function InjectModulesFromTOML(const ATOMLString: UTF8String;
+    function InjectModulesFromTOML(const ATOMLString: string;
       const ABaseAddress: string): Boolean; override;
-    function InjectModulesFromYAML(const AYAMLString: UTF8String;
+    function InjectModulesFromYAML(const AYAMLString: string;
       const ABaseAddress: string): Boolean; override;
 
     property Engine: TGocciaEngine read FEngine;
@@ -207,13 +207,13 @@ begin
 end;
 
 function TGocciaRuntimeExtension.TryInjectGlobals(const AFormat: string;
-  const AContent: UTF8String): Boolean;
+  const AContent: string): Boolean;
 begin
   Result := False;
 end;
 
 function TGocciaRuntimeExtension.TryInjectModules(const AFormat: string;
-  const AContent: UTF8String; const ABaseAddress: string): Boolean;
+  const AContent: string; const ABaseAddress: string): Boolean;
 begin
   Result := False;
 end;
@@ -433,7 +433,7 @@ begin
 end;
 
 function TGocciaRuntimeCore.InjectGlobals(const AFormat: string;
-  const AContent: UTF8String): Boolean;
+  const AContent: string): Boolean;
 var
   I: Integer;
 begin
@@ -444,7 +444,7 @@ begin
 end;
 
 function TGocciaRuntimeCore.InjectModules(const AFormat: string;
-  const AContent: UTF8String; const ABaseAddress: string): Boolean;
+  const AContent: string; const ABaseAddress: string): Boolean;
 var
   I: Integer;
 begin
@@ -480,13 +480,13 @@ begin
 end;
 
 function TGocciaRuntimeCore.InjectGlobalsFromJSON5(
-  const AJSON5String: UTF8String): Boolean;
+  const AJSON5String: string): Boolean;
 begin
   Result := InjectGlobals('json5', AJSON5String);
 end;
 
 function TGocciaRuntimeCore.InjectGlobalsFromTOML(
-  const ATOMLString: UTF8String): Boolean;
+  const ATOMLString: string): Boolean;
 begin
   Result := InjectGlobals('toml', ATOMLString);
 end;
@@ -498,19 +498,19 @@ begin
 end;
 
 function TGocciaRuntimeCore.InjectModulesFromJSON5(
-  const AJSON5String: UTF8String; const ABaseAddress: string): Boolean;
+  const AJSON5String: string; const ABaseAddress: string): Boolean;
 begin
   Result := InjectModules('json5', AJSON5String, ABaseAddress);
 end;
 
 function TGocciaRuntimeCore.InjectModulesFromTOML(
-  const ATOMLString: UTF8String; const ABaseAddress: string): Boolean;
+  const ATOMLString: string; const ABaseAddress: string): Boolean;
 begin
   Result := InjectModules('toml', ATOMLString, ABaseAddress);
 end;
 
 function TGocciaRuntimeCore.InjectModulesFromYAML(
-  const AYAMLString: UTF8String; const ABaseAddress: string): Boolean;
+  const AYAMLString: string; const ABaseAddress: string): Boolean;
 begin
   Result := InjectModules('yaml', AYAMLString, ABaseAddress);
 end;
@@ -624,7 +624,7 @@ class function TGocciaRuntime.RunScript(const ASource: string;
 var
   SourceList: TStringList;
 begin
-  SourceList := CreateUTF8StringList(ASource);
+  SourceList := CreateTextLines(ASource);
   try
     Result := RunScriptFromStringList(SourceList, AFileName);
   finally
@@ -637,7 +637,7 @@ class function TGocciaRuntime.RunScriptFromFile(
 var
   Source: TStringList;
 begin
-  Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+  Source := CreateFileTextLines(ReadUTF8FileText(AFileName));
   try
     Result := RunScriptFromStringList(Source, AFileName);
   finally

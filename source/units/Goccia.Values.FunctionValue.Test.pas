@@ -19,6 +19,7 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.Scope,
+  Goccia.SourceSpan,
   Goccia.TestSetup,
   Goccia.Token,
   Goccia.Values.Error,
@@ -67,7 +68,7 @@ type
     I: Integer;
   begin
     Statements := TObjectList<TGocciaASTNode>.Create;
-    Statements.Add(TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, 0, 0));
+    Statements.Add(TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, TGocciaSourceSpan.Empty));
 
     SetLength(ParamArray, AParameters.Count);
     for I := 0 to AParameters.Count - 1 do
@@ -185,12 +186,12 @@ type
     Statements := TObjectList<TGocciaASTNode>.Create;
     Statements.Add(TGocciaReturnStatement.Create(
       TGocciaBinaryExpression.Create(
-        TGocciaIdentifierExpression.Create('a', 0, 0),
+        TGocciaIdentifierExpression.Create('a', TGocciaSourceSpan.Empty),
         gttPlus,
-        TGocciaIdentifierExpression.Create('b', 0, 0),
-        0, 0
+        TGocciaIdentifierExpression.Create('b', TGocciaSourceSpan.Empty),
+        TGocciaSourceSpan.Empty
       ),
-      0, 0
+      TGocciaSourceSpan.Empty
     ));
 
     SetLength(ParamArray, Parameters.Count);
@@ -272,8 +273,8 @@ type
     // Test returning a number
     Statements := TObjectList<TGocciaASTNode>.Create;
     Statements.Add(TGocciaReturnStatement.Create(
-      TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(1), 0, 0),
-      0, 0
+      TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(1), TGocciaSourceSpan.Empty),
+      TGocciaSourceSpan.Empty
     ));
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
@@ -291,8 +292,8 @@ type
     // Test returning a string
     Statements := TObjectList<TGocciaASTNode>.Create;
     Statements.Add(TGocciaReturnStatement.Create(
-      TGocciaLiteralExpression.Create(TGocciaStringLiteralValue.Create('hello'), 0, 0),
-      0, 0
+      TGocciaLiteralExpression.Create(TGocciaStringLiteralValue.Create('hello'), TGocciaSourceSpan.Empty),
+      TGocciaSourceSpan.Empty
     ));
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
@@ -310,8 +311,8 @@ type
     // Test returning a boolean
     Statements := TObjectList<TGocciaASTNode>.Create;
     Statements.Add(TGocciaReturnStatement.Create(
-      TGocciaLiteralExpression.Create(TGocciaBooleanLiteralValue.Create(True), 0, 0),
-      0, 0
+      TGocciaLiteralExpression.Create(TGocciaBooleanLiteralValue.Create(True), TGocciaSourceSpan.Empty),
+      TGocciaSourceSpan.Empty
     ));
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
@@ -329,8 +330,8 @@ type
     // Test returning undefined
     Statements := TObjectList<TGocciaASTNode>.Create;
     Statements.Add(TGocciaReturnStatement.Create(
-      TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, 0, 0),
-      0, 0
+      TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, TGocciaSourceSpan.Empty),
+      TGocciaSourceSpan.Empty
     ));
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
@@ -366,8 +367,8 @@ type
 
     Statements := TObjectList<TGocciaASTNode>.Create;
     Statements.Add(TGocciaReturnStatement.Create(
-      TGocciaIdentifierExpression.Create('x', 0, 0),
-      0, 0
+      TGocciaIdentifierExpression.Create('x', TGocciaSourceSpan.Empty),
+      TGocciaSourceSpan.Empty
     ));
 
     SetLength(ParamArray, Parameters.Count);
@@ -413,12 +414,12 @@ type
     Statements := TObjectList<TGocciaASTNode>.Create;
     Statements.Add(TGocciaReturnStatement.Create(
       TGocciaBinaryExpression.Create(
-        TGocciaIdentifierExpression.Create('x', 0, 0),
+        TGocciaIdentifierExpression.Create('x', TGocciaSourceSpan.Empty),
         gttPlus,
-        TGocciaIdentifierExpression.Create('x', 0, 0),
-        0, 0
+        TGocciaIdentifierExpression.Create('x', TGocciaSourceSpan.Empty),
+        TGocciaSourceSpan.Empty
       ),
-      0, 0
+      TGocciaSourceSpan.Empty
     ));
 
     SetLength(ParamArray, Parameters.Count);
@@ -463,16 +464,16 @@ type
     Statements.Add(TGocciaReturnStatement.Create(
       TGocciaBinaryExpression.Create(
         TGocciaBinaryExpression.Create(
-          TGocciaIdentifierExpression.Create('x', 0, 0),
+          TGocciaIdentifierExpression.Create('x', TGocciaSourceSpan.Empty),
           gttPlus,
-          TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(1), 0, 0),
-          0, 0
+          TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(1), TGocciaSourceSpan.Empty),
+          TGocciaSourceSpan.Empty
         ),
         gttPlus,
-        TGocciaIdentifierExpression.Create('y', 0, 0),
-        0, 0
+        TGocciaIdentifierExpression.Create('y', TGocciaSourceSpan.Empty),
+        TGocciaSourceSpan.Empty
       ),
-      0, 0
+      TGocciaSourceSpan.Empty
     ));
 
     SetLength(ParamArray, Parameters.Count);
@@ -522,20 +523,20 @@ type
       TGocciaBinaryExpression.Create(
         TGocciaBinaryExpression.Create(
           TGocciaBinaryExpression.Create(
-            TGocciaIdentifierExpression.Create('a', 0, 0),
+            TGocciaIdentifierExpression.Create('a', TGocciaSourceSpan.Empty),
             gttPlus,
-            TGocciaIdentifierExpression.Create('b', 0, 0),
-            0, 0
+            TGocciaIdentifierExpression.Create('b', TGocciaSourceSpan.Empty),
+            TGocciaSourceSpan.Empty
           ),
           gttPlus,
-          TGocciaIdentifierExpression.Create('x', 0, 0),
-          0, 0
+          TGocciaIdentifierExpression.Create('x', TGocciaSourceSpan.Empty),
+          TGocciaSourceSpan.Empty
         ),
         gttPlus,
-        TGocciaIdentifierExpression.Create('y', 0, 0),
-        0, 0
+        TGocciaIdentifierExpression.Create('y', TGocciaSourceSpan.Empty),
+        TGocciaSourceSpan.Empty
       ),
-      0, 0
+      TGocciaSourceSpan.Empty
     ));
 
     SetLength(ParamArray, Parameters.Count);
@@ -572,7 +573,7 @@ type
     Statements := TObjectList<TGocciaASTNode>.Create;
     Scope := TGocciaGlobalScope.Create;
 
-    Statements.Add(TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(1), 0, 0));
+    Statements.Add(TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(1), TGocciaSourceSpan.Empty));
 
     Context.Scope := Scope;
     LastValue := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -598,10 +599,10 @@ type
     Scope := TGocciaGlobalScope.Create;
 
     Statements.Add(TGocciaBinaryExpression.Create(
-      TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(1), 0, 0),
+      TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(1), TGocciaSourceSpan.Empty),
       gttPlus,
-      TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(2), 0, 0),
-      0, 0
+      TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(2), TGocciaSourceSpan.Empty),
+      TGocciaSourceSpan.Empty
     ));
 
     Context.Scope := Scope;
@@ -718,7 +719,7 @@ begin
   TestRunnerProgram.AddSuite(TTestBlockValue.Create('Block Value'));
   TestRunnerProgram.AddSuite(TTestFunctionValue.Create('Function Value'));
   TestRunnerProgram.AddSuite(TTestMethodValue.Create('Method Value'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
 
   ExitCode := TestResultToExitCode;
 end.

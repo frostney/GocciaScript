@@ -11,7 +11,8 @@ uses
   Goccia.Bytecode,
   Goccia.Bytecode.Chunk,
   Goccia.Compiler.Context,
-  Goccia.Compiler.Scope;
+  Goccia.Compiler.Scope,
+  Goccia.SourceSpan;
 
 procedure CompileLiteral(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaLiteralExpression; const ADest: UInt16);
@@ -413,7 +414,8 @@ begin
 end;
 
 function ChildBodyIsStrictCode(const ACtx: TGocciaCompilationContext;
-  const ABody: TGocciaASTNode): Boolean; inline;
+  const ABody: TGocciaASTNode): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (not ACtx.NonStrictMode) or
     (Assigned(ACtx.Template) and ACtx.Template.StrictCode) or
@@ -490,7 +492,8 @@ end;
 
 function ShouldIgnoreNonStrictImmutableLocalAssignment(
   const ACtx: TGocciaCompilationContext;
-  const ALocal: TGocciaCompilerLocal): Boolean; inline;
+  const ALocal: TGocciaCompilerLocal): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ACtx.NonStrictMode and ALocal.IsConst and
     ALocal.IsNonStrictImmutable;
@@ -498,7 +501,8 @@ end;
 
 function ShouldIgnoreNonStrictImmutableUpvalueAssignment(
   const ACtx: TGocciaCompilationContext;
-  const AUpvalue: TGocciaCompilerUpvalue): Boolean; inline;
+  const AUpvalue: TGocciaCompilerUpvalue): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ACtx.NonStrictMode and AUpvalue.IsConst and
     AUpvalue.IsNonStrictImmutable;
@@ -911,7 +915,8 @@ begin
     UInt16(ATarget.ObjectReg), UInt16(ATarget.KeyReg)));
   EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
   PatchJumpTarget(ACtx, MissJump);
-  Ident := TGocciaIdentifierExpression.Create(ATarget.PropertyName, 0, 0);
+  Ident := TGocciaIdentifierExpression.Create(ATarget.PropertyName,
+    TGocciaSourceSpan.Empty);
   try
     CompileIdentifierAccessNoWith(ACtx, Ident, ADest, False);
   finally
@@ -925,7 +930,8 @@ procedure EmitLoadBindingByName(const ACtx: TGocciaCompilationContext;
 var
   Ident: TGocciaIdentifierExpression;
 begin
-  Ident := TGocciaIdentifierExpression.Create(AName, 0, 0);
+  Ident := TGocciaIdentifierExpression.Create(AName,
+    TGocciaSourceSpan.Empty);
   try
     CompileIdentifierAccess(ACtx, Ident, ADest, ASafe);
   finally

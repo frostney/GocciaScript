@@ -132,14 +132,14 @@ end;
 procedure TSandboxShell.OutLine(var AResult: TExecResult;
   const ALine: string);
 begin
-  AResult.Output := AResult.Output + ALine + LineEnding;
+  AResult.Output := AResult.Output + ALine + sLineBreak;
 end;
 
 procedure TSandboxShell.ErrLine(var AResult: TExecResult;
   const ACommand: string; const AMessage: string);
 begin
   AResult.ErrorOutput := AResult.ErrorOutput + ACommand + ': ' +
-    AMessage + LineEnding;
+    AMessage + sLineBreak;
 end;
 
 procedure TSandboxShell.UsageError(var AResult: TExecResult;
@@ -642,7 +642,7 @@ begin
   end;
   AResult.Output := AResult.Output + Text;
   if Pos('n', Flags) = 0 then
-    AResult.Output := AResult.Output + LineEnding;
+    AResult.Output := AResult.Output + sLineBreak;
 end;
 
 procedure TSandboxShell.CmdRm(const AArgs: TStringArray;

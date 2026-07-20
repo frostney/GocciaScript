@@ -75,9 +75,10 @@ uses
 var
   GWeakMapSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetWeakMapShared: TGocciaSharedPrototype; inline;
+function GetWeakMapShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GWeakMapSharedSlot))
   else
     Result := nil;
@@ -97,7 +98,7 @@ end;
 
 destructor TGocciaWeakMapValue.Destroy;
 begin
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.UnregisterWeakContainer(Self);
   FEntries.Free;
   inherited;
@@ -109,8 +110,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetWeakMapShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetWeakMapShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GWeakMapSharedSlot, Shared);
@@ -167,7 +168,7 @@ begin
   // passes only for code that uses weak collections; a never-populated WeakMap
   // (e.g. the pinned prototype host) stays unregistered. Registration lasts
   // until destruction, so a later-emptied map stays registered.
-  if (FEntries.Count = 0) and Assigned(TGarbageCollector.Instance) then
+  if (FEntries.Count = 0) and (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.RegisterWeakContainer(Self);
   FEntries.AddOrSetValue(AKey, AValue);
 end;

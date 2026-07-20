@@ -17,19 +17,27 @@ type
   // Normal case — Normal(value) is just the raw pointer, no bit manipulation.
   TGocciaControlFlow = record
   private
-    FBits: PtrUInt;
+    FBits: NativeUInt;
     FTargetLabel: string;
     FReturnHasExpression: Boolean;
-    function GetKind: TGocciaControlFlowKind; inline;
-    function GetValue: TGocciaValue; inline;
+    function GetKind: TGocciaControlFlowKind;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetValue: TGocciaValue;
+    {$IFDEF FPC}inline;{$ENDIF}
   public
-    class function Normal(const AValue: TGocciaValue): TGocciaControlFlow; static; inline;
+    class function Normal(const AValue: TGocciaValue): TGocciaControlFlow; static;
+    {$IFDEF FPC}inline;{$ENDIF}
     class function Return(const AValue: TGocciaValue;
-      const AHasExpression: Boolean): TGocciaControlFlow; static; inline;
-    class function Empty: TGocciaControlFlow; static; inline;
-    class function Break(const ATargetLabel: string = ''; const AValue: TGocciaValue = nil): TGocciaControlFlow; static; inline;
-    class function Continue(const ATargetLabel: string = ''; const AValue: TGocciaValue = nil): TGocciaControlFlow; static; inline;
-    function UpdateEmpty(const AValue: TGocciaValue): TGocciaControlFlow; inline;
+      const AHasExpression: Boolean): TGocciaControlFlow; static;
+      {$IFDEF FPC}inline;{$ENDIF}
+    class function Empty: TGocciaControlFlow; static;
+    {$IFDEF FPC}inline;{$ENDIF}
+    class function Break(const ATargetLabel: string = ''; const AValue: TGocciaValue = nil): TGocciaControlFlow; static;
+    {$IFDEF FPC}inline;{$ENDIF}
+    class function Continue(const ATargetLabel: string = ''; const AValue: TGocciaValue = nil): TGocciaControlFlow; static;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function UpdateEmpty(const AValue: TGocciaValue): TGocciaControlFlow;
+    {$IFDEF FPC}inline;{$ENDIF}
     property Kind: TGocciaControlFlowKind read GetKind;
     property Value: TGocciaValue read GetValue;
     property TargetLabel: string read FTargetLabel;
@@ -45,12 +53,12 @@ end;
 
 function TGocciaControlFlow.GetValue: TGocciaValue;
 begin
-  Result := TGocciaValue(FBits and not PtrUInt(3));
+  Result := TGocciaValue(FBits and not NativeUInt(3));
 end;
 
 class function TGocciaControlFlow.Normal(const AValue: TGocciaValue): TGocciaControlFlow;
 begin
-  Result.FBits := PtrUInt(AValue);
+  Result.FBits := NativeUInt(AValue);
   Result.FTargetLabel := '';
   Result.FReturnHasExpression := False;
 end;
@@ -58,7 +66,7 @@ end;
 class function TGocciaControlFlow.Return(const AValue: TGocciaValue;
   const AHasExpression: Boolean): TGocciaControlFlow;
 begin
-  Result.FBits := PtrUInt(AValue) or 1;
+  Result.FBits := NativeUInt(AValue) or 1;
   Result.FTargetLabel := '';
   Result.FReturnHasExpression := AHasExpression;
 end;
@@ -73,7 +81,7 @@ end;
 class function TGocciaControlFlow.Break(
   const ATargetLabel: string; const AValue: TGocciaValue): TGocciaControlFlow;
 begin
-  Result.FBits := PtrUInt(AValue) or 2;
+  Result.FBits := NativeUInt(AValue) or 2;
   Result.FTargetLabel := ATargetLabel;
   Result.FReturnHasExpression := False;
 end;
@@ -81,7 +89,7 @@ end;
 class function TGocciaControlFlow.Continue(
   const ATargetLabel: string; const AValue: TGocciaValue): TGocciaControlFlow;
 begin
-  Result.FBits := PtrUInt(AValue) or 3;
+  Result.FBits := NativeUInt(AValue) or 3;
   Result.FTargetLabel := ATargetLabel;
   Result.FReturnHasExpression := False;
 end;
@@ -95,7 +103,7 @@ begin
     Exit;
   end;
 
-  Result.FBits := PtrUInt(AValue) or (FBits and 3);
+  Result.FBits := NativeUInt(AValue) or (FBits and 3);
   Result.FTargetLabel := FTargetLabel;
 end;
 

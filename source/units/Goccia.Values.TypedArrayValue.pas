@@ -87,8 +87,10 @@ type
     procedure MarkReferences; override;
 
     class function BytesPerElement(const AKind: TGocciaTypedArrayKind): Integer;
-    class function IsFloatKind(const AKind: TGocciaTypedArrayKind): Boolean; inline;
-    class function IsBigIntKind(const AKind: TGocciaTypedArrayKind): Boolean; inline;
+    class function IsFloatKind(const AKind: TGocciaTypedArrayKind): Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    class function IsBigIntKind(const AKind: TGocciaTypedArrayKind): Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
     class function KindName(const AKind: TGocciaTypedArrayKind): string;
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
     class procedure SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
@@ -244,17 +246,19 @@ type
     procedure MarkReferences; override;
   end;
 
-function GetTypedArrayShared: TGocciaSharedPrototype; inline;
+function GetTypedArrayShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTypedArraySharedSlot))
   else
     Result := nil;
 end;
 
-function GetUint8Prototype: TGocciaObjectValue; inline;
+function GetUint8Prototype: TGocciaObjectValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GUint8PrototypeSlot))
   else
     Result := nil;
@@ -533,7 +537,7 @@ begin
     TYPED_ARRAY_LITTLE_ENDIAN);
 end;
 
-function BigIntFromQWord(const AValue: QWord): TBigInteger;
+function BigIntFromQWord(const AValue: UInt64): TBigInteger;
 var
   Lo, Hi: Int64;
 begin
@@ -661,7 +665,7 @@ begin
   begin
     Raw := ReadBigIntElement(AIndex);
     if FKind = takBigUint64 then
-      Result := TGocciaBigIntValue.Create(BigIntFromQWord(QWord(Raw)))
+      Result := TGocciaBigIntValue.Create(BigIntFromQWord(UInt64(Raw)))
     else
       Result := TGocciaBigIntValue.Create(TBigInteger.FromInt64(Raw));
   end
@@ -864,8 +868,8 @@ var
   Shared: TGocciaSharedPrototype;
   ValuesMethod: TGocciaValue;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetTypedArrayShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetTypedArrayShared <> nil) then Exit;
 
   // Rebuild member definitions per realm: callbacks bind to Self (the
   // bootstrap instance pinned by Shared), and TGocciaSharedPrototype.Destroy
@@ -983,7 +987,7 @@ end;
 
 class procedure TGocciaTypedArrayValue.SetUint8Prototype(const APrototype: TGocciaObjectValue);
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     CurrentRealm.SetSlot(GUint8PrototypeSlot, APrototype);
 end;
 
@@ -1314,7 +1318,7 @@ function DefaultTypedArrayConstructor(const AKind: TGocciaTypedArrayKind): TGocc
 var
   GlobalScope: TGocciaScope;
 begin
-  if Assigned(CurrentRealm) and (CurrentRealm.GlobalEnv is TGocciaScope) then
+  if (CurrentRealm <> nil) and (CurrentRealm.GlobalEnv is TGocciaScope) then
   begin
     GlobalScope := TGocciaScope(CurrentRealm.GlobalEnv);
     if GlobalScope.TryGetBindingValue(TGocciaTypedArrayValue.KindName(AKind), Result) and
@@ -1983,7 +1987,7 @@ var
   function BigIntValueFromRaw(const ARaw: Int64): TGocciaBigIntValue;
   begin
     if TA.FKind = takBigUint64 then
-      Result := TGocciaBigIntValue.Create(BigIntFromQWord(QWord(ARaw)))
+      Result := TGocciaBigIntValue.Create(BigIntFromQWord(UInt64(ARaw)))
     else
       Result := TGocciaBigIntValue.Create(TBigInteger.FromInt64(ARaw));
   end;
@@ -2050,9 +2054,9 @@ var
 
     if TA.FKind = takBigUint64 then
     begin
-      if QWord(ALeft) < QWord(ARight) then
+      if UInt64(ALeft) < UInt64(ARight) then
         Exit(-1);
-      if QWord(ALeft) > QWord(ARight) then
+      if UInt64(ALeft) > UInt64(ARight) then
         Exit(1);
     end
     else
@@ -2570,7 +2574,7 @@ begin
       if CallResult.ToBooleanLiteral.Value then
       begin
         Kept.Add(Element);
-        if Assigned(TGarbageCollector.Instance) then
+        if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.AddTempRoot(Element);
       end;
     end;
@@ -2586,7 +2590,7 @@ begin
       NewTA.WriteValueToElement(I, Kept[I]);
     Result := NewTA;
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       for I := 0 to Kept.Count - 1 do
         TGarbageCollector.Instance.RemoveTempRoot(Kept[I]);
     Kept.Free;
@@ -3173,7 +3177,7 @@ begin
               IterResult := Iterator.AdvanceNext;
             end;
           except
-            AcquireExceptionObject;
+            PreserveCurrentExceptionAcrossNestedHandler;
             CloseIteratorPreservingError(Iterator);
             raise;
           end;
@@ -3334,7 +3338,7 @@ begin
               IterResult := Iterator.AdvanceNext;
             end;
           except
-            AcquireExceptionObject;
+            PreserveCurrentExceptionAcrossNestedHandler;
             CloseIteratorPreservingError(Iterator);
             raise;
           end;

@@ -148,7 +148,7 @@ end;
 
 begin
   TestRunnerProgram.AddSuite(TModuleResolverTests.Create('ModuleResolver'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
 
   ExitCode := TestResultToExitCode;
 end.

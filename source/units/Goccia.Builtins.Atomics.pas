@@ -1,10 +1,12 @@
 unit Goccia.Builtins.Atomics;
 
-{$mode Delphi}
+{$I Goccia.inc}
 
 interface
 
 uses
+  CriticalSections,
+
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
@@ -69,6 +71,7 @@ uses
   SysUtils,
 
   BigInteger,
+  TimingUtils,
 
   Goccia.BinaryData,
   Goccia.Constants.ConstructorNames,
@@ -101,7 +104,7 @@ type
     FAsync: Boolean;
     FBuffer: TGocciaSharedArrayBufferValue;
     FByteOffset: Integer;
-    FDeadlineMilliseconds: QWord;
+    FDeadlineMilliseconds: UInt64;
     FEvent: TEvent;
     FHasDeadline: Boolean;
     FInList: Boolean;
@@ -114,13 +117,13 @@ type
     constructor Create(AOwner: TGocciaAtomics;
       ABuffer: TGocciaSharedArrayBufferValue; AByteOffset: Integer;
       AAsync: Boolean; APromise: TGocciaPromiseValue;
-      ADeadlineMilliseconds: QWord = 0; AHasDeadline: Boolean = False);
+      ADeadlineMilliseconds: UInt64 = 0; AHasDeadline: Boolean = False);
     destructor Destroy; override;
 
     property Async: Boolean read FAsync;
     property Buffer: TGocciaSharedArrayBufferValue read FBuffer;
     property ByteOffset: Integer read FByteOffset;
-    property DeadlineMilliseconds: QWord read FDeadlineMilliseconds;
+    property DeadlineMilliseconds: UInt64 read FDeadlineMilliseconds;
     property Event: TEvent read FEvent;
     property HasDeadline: Boolean read FHasDeadline;
     property InList: Boolean read FInList write FInList;
@@ -132,7 +135,7 @@ type
   end;
 
 var
-  GAtomicsLock: TRTLCriticalSection;
+  GAtomicsLock: TGocciaCriticalSection;
   GAtomicsWaiters: TObjectList<TAtomicsWaiter>;
 
 threadvar
@@ -161,12 +164,12 @@ end;
 
 constructor TAtomicsWaiter.Create(AOwner: TGocciaAtomics;
   ABuffer: TGocciaSharedArrayBufferValue; AByteOffset: Integer; AAsync: Boolean;
-  APromise: TGocciaPromiseValue; ADeadlineMilliseconds: QWord;
+  APromise: TGocciaPromiseValue; ADeadlineMilliseconds: UInt64;
   AHasDeadline: Boolean);
 begin
   inherited Create;
   FOwner := AOwner;
-  FOwnerThreadId := GetCurrentThreadId;
+  FOwnerThreadId := GetGocciaThreadId;
   FAsync := AAsync;
   FBuffer := ABuffer;
   FByteOffset := AByteOffset;
@@ -638,7 +641,7 @@ begin
   ValidateAtomicAccess(AArgs, AMethodName, False, True, TypedArray, Buffer, Index,
     ByteOffset);
 
-  EnterCriticalSection(GAtomicsLock);
+  CriticalSectionEnter(GAtomicsLock);
   try
     if IsBigIntKind(TypedArray.Kind) then
     begin
@@ -660,7 +663,7 @@ begin
       Result := TGocciaNumberLiteralValue.Create(OldNumber);
     end;
   finally
-    LeaveCriticalSection(GAtomicsLock);
+    CriticalSectionLeave(GAtomicsLock);
   end;
 end;
 
@@ -699,14 +702,14 @@ var
   Waiters: TObjectList<TAtomicsWaiter>;
 begin
   Result := False;
-  EnterCriticalSection(GAtomicsLock);
+  CriticalSectionEnter(GAtomicsLock);
   try
     Waiters := GetAtomicsWaiters;
     for I := 0 to Waiters.Count - 1 do
       if Waiters[I].Async and (Waiters[I].Promise = APromise) then
         Exit(True);
   finally
-    LeaveCriticalSection(GAtomicsLock);
+    CriticalSectionLeave(GAtomicsLock);
   end;
 end;
 
@@ -714,7 +717,7 @@ function PumpAtomicsWaitAsyncCompletions: Integer;
 var
   DueWaiters: TList<TAtomicsWaiter>;
   I: Integer;
-  NowMilliseconds: QWord;
+  NowMilliseconds: UInt64;
   OwnerThreadId: TThreadID;
   Waiter: TAtomicsWaiter;
   Waiters: TObjectList<TAtomicsWaiter>;
@@ -722,9 +725,9 @@ begin
   Result := 0;
   DueWaiters := TList<TAtomicsWaiter>.Create;
   try
-    NowMilliseconds := GetTickCount64;
-    OwnerThreadId := GetCurrentThreadId;
-    EnterCriticalSection(GAtomicsLock);
+    NowMilliseconds := UInt64(GetMilliseconds);
+    OwnerThreadId := GetGocciaThreadId;
+    CriticalSectionEnter(GAtomicsLock);
     try
       Waiters := GetAtomicsWaiters;
       I := 0;
@@ -745,7 +748,7 @@ begin
           Inc(I);
       end;
     finally
-      LeaveCriticalSection(GAtomicsLock);
+      CriticalSectionLeave(GAtomicsLock);
     end;
 
     for Waiter in DueWaiters do
@@ -766,14 +769,14 @@ var
   Waiters: TObjectList<TAtomicsWaiter>;
 begin
   Result := False;
-  EnterCriticalSection(GAtomicsLock);
+  CriticalSectionEnter(GAtomicsLock);
   try
     Waiters := GetAtomicsWaiters;
     for I := 0 to Waiters.Count - 1 do
-      if Waiters[I].Async and (Waiters[I].OwnerThreadId = GetCurrentThreadId) then
+      if Waiters[I].Async and (Waiters[I].OwnerThreadId = GetGocciaThreadId) then
         Exit(True);
   finally
-    LeaveCriticalSection(GAtomicsLock);
+    CriticalSectionLeave(GAtomicsLock);
   end;
 end;
 
@@ -802,8 +805,8 @@ end;
 function WaitForSynchronousWaiter(AWaiter: TAtomicsWaiter;
   ATimeoutMilliseconds: Int64): string;
 var
-  Deadline: QWord;
-  NowMilliseconds: QWord;
+  Deadline: UInt64;
+  NowMilliseconds: UInt64;
   Remaining: Int64;
   Slice: LongWord;
   WaitResult: TWaitResult;
@@ -811,7 +814,7 @@ begin
   Result := ATOMICS_WAIT_TIMED_OUT;
   Deadline := 0;
   if ATimeoutMilliseconds >= 0 then
-    Deadline := GetTickCount64 + QWord(ATimeoutMilliseconds);
+    Deadline := UInt64(GetMilliseconds) + UInt64(ATimeoutMilliseconds);
 
   repeat
     CheckInstructionLimit;
@@ -821,7 +824,7 @@ begin
       Slice := 50
     else
     begin
-      NowMilliseconds := GetTickCount64;
+      NowMilliseconds := UInt64(GetMilliseconds);
       if NowMilliseconds >= Deadline then
         Break;
       Remaining := Int64(Deadline - NowMilliseconds);
@@ -849,7 +852,7 @@ begin
 
   CancelledWaiters := TList<TAtomicsWaiter>.Create;
   try
-    EnterCriticalSection(GAtomicsLock);
+    CriticalSectionEnter(GAtomicsLock);
     try
       Waiters := GetAtomicsWaiters;
       I := 0;
@@ -866,7 +869,7 @@ begin
           Inc(I);
       end;
     finally
-      LeaveCriticalSection(GAtomicsLock);
+      CriticalSectionLeave(GAtomicsLock);
     end;
 
     for Waiter in CancelledWaiters do
@@ -882,14 +885,14 @@ var
   Waiters: TObjectList<TAtomicsWaiter>;
 begin
   Waiters := nil;
-  EnterCriticalSection(GAtomicsLock);
+  CriticalSectionEnter(GAtomicsLock);
   try
     if not Assigned(GAtomicsWaiters) then
       Exit;
     Waiters := GAtomicsWaiters;
     GAtomicsWaiters := nil;
   finally
-    LeaveCriticalSection(GAtomicsLock);
+    CriticalSectionLeave(GAtomicsLock);
   end;
 
   while Assigned(Waiters) and (Waiters.Count > 0) do
@@ -913,7 +916,7 @@ begin
   // Registered with Goccia.ThreadCleanupRegistry, so the drain runs this on
   // worker exit AND again at main-thread finalization — by which point this
   // unit's own finalization has already run ShutdownAtomicsWaiters (nil-ing
-  // GAtomicsWaiters) and DoneCriticalSection'd GAtomicsLock. Bail out before
+  // GAtomicsWaiters) and CriticalSectionDone'd GAtomicsLock. Bail out before
   // touching the now-destroyed lock when the list is already gone.
   //
   // This pre-lock read of the shared GAtomicsWaiters is deliberately unlocked.
@@ -928,8 +931,8 @@ begin
     Exit;
   RemovedWaiters := TList<TAtomicsWaiter>.Create;
   try
-    CurrentThreadId := GetCurrentThreadId;
-    EnterCriticalSection(GAtomicsLock);
+    CurrentThreadId := GetGocciaThreadId;
+    CriticalSectionEnter(GAtomicsLock);
     try
       if not Assigned(GAtomicsWaiters) then
         Exit;
@@ -949,7 +952,7 @@ begin
           Inc(I);
       end;
     finally
-      LeaveCriticalSection(GAtomicsLock);
+      CriticalSectionLeave(GAtomicsLock);
     end;
 
     for Waiter in RemovedWaiters do
@@ -1047,7 +1050,7 @@ begin
   ValidateAtomicAccess(AArgs, 'compareExchange', False, True, TypedArray, Buffer,
     Index, ByteOffset);
 
-  EnterCriticalSection(GAtomicsLock);
+  CriticalSectionEnter(GAtomicsLock);
   try
     if IsBigIntKind(TypedArray.Kind) then
     begin
@@ -1072,7 +1075,7 @@ begin
       Result := TGocciaNumberLiteralValue.Create(OldNumber);
     end;
   finally
-    LeaveCriticalSection(GAtomicsLock);
+    CriticalSectionLeave(GAtomicsLock);
   end;
 end;
 
@@ -1103,7 +1106,7 @@ begin
   ValidateAtomicAccess(AArgs, 'load', False, False, TypedArray, Buffer, Index,
     ByteOffset);
 
-  EnterCriticalSection(GAtomicsLock);
+  CriticalSectionEnter(GAtomicsLock);
   try
     if IsBigIntKind(TypedArray.Kind) then
       Result := BigIntValueFromRaw(TypedArray.Kind,
@@ -1112,7 +1115,7 @@ begin
       Result := TGocciaNumberLiteralValue.Create(ReadNumberElement(TypedArray,
         ByteOffset));
   finally
-    LeaveCriticalSection(GAtomicsLock);
+    CriticalSectionLeave(GAtomicsLock);
   end;
 end;
 
@@ -1140,7 +1143,7 @@ begin
   NotifiedCount := 0;
   ResolveWaiters := TList<TAtomicsWaiter>.Create;
   try
-    EnterCriticalSection(GAtomicsLock);
+    CriticalSectionEnter(GAtomicsLock);
     try
       Waiters := GetAtomicsWaiters;
       WaiterIndex := 0;
@@ -1156,7 +1159,7 @@ begin
           begin
             Waiter.Ready := True;
             Waiter.ResultText := ATOMICS_WAIT_OK;
-            if Waiter.OwnerThreadId = GetCurrentThreadId then
+            if Waiter.OwnerThreadId = GetGocciaThreadId then
             begin
               Waiter.InList := False;
               Waiters.Delete(WaiterIndex);
@@ -1176,7 +1179,7 @@ begin
           Inc(WaiterIndex);
       end;
     finally
-      LeaveCriticalSection(GAtomicsLock);
+      CriticalSectionLeave(GAtomicsLock);
     end;
 
     for Waiter in ResolveWaiters do
@@ -1234,7 +1237,7 @@ begin
   ValidateAtomicAccess(AArgs, 'store', False, True, TypedArray, Buffer, Index,
     ByteOffset);
 
-  EnterCriticalSection(GAtomicsLock);
+  CriticalSectionEnter(GAtomicsLock);
   try
     if IsBigIntKind(TypedArray.Kind) then
     begin
@@ -1253,7 +1256,7 @@ begin
       Result := TGocciaNumberLiteralValue.Create(NewNumber);
     end;
   finally
-    LeaveCriticalSection(GAtomicsLock);
+    CriticalSectionLeave(GAtomicsLock);
   end;
 end;
 
@@ -1287,7 +1290,7 @@ begin
       GetArgumentOrUndefined(AArgs, 2));
   TimeoutMilliseconds := ToTimeoutMilliseconds(GetArgumentOrUndefined(AArgs, 3));
 
-  EnterCriticalSection(GAtomicsLock);
+  CriticalSectionEnter(GAtomicsLock);
   try
     if TypedArray.Kind = takBigInt64 then
       WaitValueMatches := ReadBigIntRawElement(TypedArray, ByteOffset) =
@@ -1308,16 +1311,16 @@ begin
     Waiter := TAtomicsWaiter.Create(Self, Buffer, ByteOffset, False, nil);
     AddWaiter(Waiter);
   finally
-    LeaveCriticalSection(GAtomicsLock);
+    CriticalSectionLeave(GAtomicsLock);
   end;
 
   try
     WaitResult := WaitForSynchronousWaiter(Waiter, TimeoutMilliseconds);
-    EnterCriticalSection(GAtomicsLock);
+    CriticalSectionEnter(GAtomicsLock);
     try
       RemoveWaiter(Waiter);
     finally
-      LeaveCriticalSection(GAtomicsLock);
+      CriticalSectionLeave(GAtomicsLock);
     end;
     Result := TGocciaStringLiteralValue.Create(WaitResult);
   finally
@@ -1330,7 +1333,7 @@ function TGocciaAtomics.AtomicsWaitAsync(const AArgs: TGocciaArgumentsCollection
 var
   Buffer: TGocciaSharedArrayBufferValue;
   ByteOffset: Integer;
-  DeadlineMilliseconds: QWord;
+  DeadlineMilliseconds: UInt64;
   ExpectedBigIntRaw: Int64;
   ExpectedNumber: Double;
   HasDeadline: Boolean;
@@ -1351,7 +1354,7 @@ begin
       GetArgumentOrUndefined(AArgs, 2));
   TimeoutMilliseconds := ToTimeoutMilliseconds(GetArgumentOrUndefined(AArgs, 3));
 
-  EnterCriticalSection(GAtomicsLock);
+  CriticalSectionEnter(GAtomicsLock);
   try
     if TypedArray.Kind = takBigInt64 then
       WaitValueMatches := ReadBigIntRawElement(TypedArray, ByteOffset) =
@@ -1370,7 +1373,7 @@ begin
 
     HasDeadline := TimeoutMilliseconds >= 0;
     if HasDeadline then
-      DeadlineMilliseconds := GetTickCount64 + QWord(TimeoutMilliseconds)
+      DeadlineMilliseconds := UInt64(GetMilliseconds) + UInt64(TimeoutMilliseconds)
     else
       DeadlineMilliseconds := 0;
 
@@ -1380,7 +1383,7 @@ begin
     AddWaiter(Waiter);
     Result := CreateWaitAsyncResult(True, Promise);
   finally
-    LeaveCriticalSection(GAtomicsLock);
+    CriticalSectionLeave(GAtomicsLock);
   end;
 end;
 
@@ -1391,7 +1394,7 @@ begin
 end;
 
 initialization
-  InitCriticalSection(GAtomicsLock);
+  CriticalSectionInit(GAtomicsLock);
   // Worker threads release their own Atomics waiters via the registry drain in
   // ShutdownThreadRuntime. ShutdownAtomicsWaitersForCurrentThread removes only
   // the calling thread's entries from the shared GAtomicsWaiters list; the
@@ -1401,6 +1404,6 @@ initialization
 
 finalization
   ShutdownAtomicsWaiters;
-  DoneCriticalSection(GAtomicsLock);
+  CriticalSectionDone(GAtomicsLock);
 
 end.

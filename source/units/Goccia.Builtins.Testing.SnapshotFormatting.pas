@@ -274,7 +274,7 @@ begin
   begin
     if AEscapeString and ((AValue[I] = '"') or (AValue[I] = '\')) then
       Buffer.AppendChar('\');
-    Buffer.AppendChar(AnsiChar(AValue[I]));
+    Buffer.AppendChar(AValue[I]);
   end;
   Buffer.AppendChar('"');
   Result := Buffer.ToString;
@@ -290,7 +290,7 @@ begin
   begin
     if Pos(AValue[I], '$()*+.?[\]^{|}') > 0 then
       Buffer.AppendChar('\');
-    Buffer.AppendChar(AnsiChar(AValue[I]));
+    Buffer.AppendChar(AValue[I]);
   end;
   Result := Buffer.ToString;
 end;
@@ -450,7 +450,7 @@ procedure TGocciaVitestSnapshotFormatter.CaptureDateIntrinsics(
 var
   ConstructorValue, PrototypeValue: TGocciaValue;
 begin
-  if FDateToISOStringRooted and Assigned(TGarbageCollector.Instance) then
+  if FDateToISOStringRooted and (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.RemoveTempRoot(FDateToISOString);
   FDateToISOString := nil;
   FDateToISOStringRooted := False;
@@ -465,7 +465,7 @@ begin
     Exit;
   FDateToISOString := TGocciaObjectValue(PrototypeValue).GetProperty(
     'toISOString');
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
   begin
     if Assigned(FDateToISOString) and
        not TGarbageCollector.Instance.IsTempRoot(FDateToISOString) then
@@ -478,7 +478,7 @@ end;
 
 destructor TGocciaVitestSnapshotFormatter.Destroy;
 begin
-  if FDateToISOStringRooted and Assigned(TGarbageCollector.Instance) then
+  if FDateToISOStringRooted and (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.RemoveTempRoot(FDateToISOString);
   inherited;
 end;
@@ -510,7 +510,7 @@ begin
   begin
     FBuiltinSerializers[I] := CreateBuiltinSerializer;
     FBuiltinSerializerRooted[I] := False;
-    if Assigned(TGarbageCollector.Instance) and
+    if (TGarbageCollector.Instance <> nil) and
        not TGarbageCollector.Instance.IsTempRoot(FBuiltinSerializers[I]) then
     begin
       TGarbageCollector.Instance.AddTempRoot(FBuiltinSerializers[I]);
@@ -523,7 +523,7 @@ destructor TGocciaVitestSnapshotFormatterInternal.Destroy;
 var
   I: Integer;
 begin
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     for I := 0 to High(FBuiltinSerializers) do
       if FBuiltinSerializerRooted[I] then
         TGarbageCollector.Instance.RemoveTempRoot(FBuiltinSerializers[I]);

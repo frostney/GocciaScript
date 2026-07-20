@@ -118,6 +118,6 @@ end;
 begin
   TestRunnerProgram.AddSuite(
     TMicrotaskQueueTests.Create('MicrotaskQueue'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
   ExitCode := TestResultToExitCode;
 end.

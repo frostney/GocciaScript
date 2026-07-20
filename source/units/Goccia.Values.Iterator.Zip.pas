@@ -294,7 +294,7 @@ begin
           InnerResult := FIterators[I].AdvanceNext;
           InnerDone := IteratorResultDone(InnerResult);
         except
-          AcquireExceptionObject;
+          PreserveCurrentExceptionAcrossNestedHandler;
           CloseAllIterators(True, I);
           FDone := True;
           raise;
@@ -313,7 +313,7 @@ begin
       try
         InnerValue := FIterators[I].DirectNext(InnerDone);
       except
-        AcquireExceptionObject;
+        PreserveCurrentExceptionAcrossNestedHandler;
         CloseAllIterators(True, I);
         FDone := True;
         raise;
@@ -549,7 +549,7 @@ begin
           InnerResult := FIterators[I].AdvanceNext;
           InnerDone := IteratorResultDone(InnerResult);
         except
-          AcquireExceptionObject;
+          PreserveCurrentExceptionAcrossNestedHandler;
           CloseAllIterators(True, I);
           FDone := True;
           raise;
@@ -568,7 +568,7 @@ begin
       try
         InnerValue := FIterators[I].DirectNext(InnerDone);
       except
-        AcquireExceptionObject;
+        PreserveCurrentExceptionAcrossNestedHandler;
         CloseAllIterators(True, I);
         FDone := True;
         raise;

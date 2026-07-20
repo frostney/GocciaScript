@@ -45,11 +45,11 @@ begin
   if AFileName = '' then
     Exit(GetCurrentDir);
 
-  ExpandedFileName := ExpandUTF8FileName(AFileName);
-  if UTF8DirectoryExists(ExpandedFileName) then
+  ExpandedFileName := ExpandHostFileName(AFileName);
+  if HostDirectoryExists(ExpandedFileName) then
     Exit(ExpandedFileName);
 
-  if UTF8FileExists(ExpandedFileName) or (ExtractFilePath(AFileName) <> '') then
+  if HostFileExists(ExpandedFileName) or (ExtractFilePath(AFileName) <> '') then
     Exit(ExtractFilePath(ExpandedFileName));
 
   Result := GetCurrentDir;
@@ -67,7 +67,7 @@ begin
     Exit;
 
   if AExplicitImportMapPath <> '' then
-    ImportMapPath := ExpandUTF8FileName(AExplicitImportMapPath)
+    ImportMapPath := ExpandHostFileName(AExplicitImportMapPath)
   else
     ImportMapPath := TGocciaModuleResolver.DiscoverProjectConfig(
       ResolveEntryBaseDirectory(AEntryFileName));

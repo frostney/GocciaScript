@@ -506,7 +506,7 @@ begin
               // Step 5e-v: CreateDataPropertyOrThrow(A, ToString(k), mappedValue)
               CreateDataPropertyRooted(K, KValue);
             except
-              AcquireExceptionObject;
+              PreserveCurrentExceptionAcrossNestedHandler;
               CloseIteratorPreservingError(Iterator);
               raise;
             end;

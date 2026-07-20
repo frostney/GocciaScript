@@ -17,8 +17,10 @@ type
     FSample: TGocciaValue;
     FInverse: Boolean;
   protected
-    function ApplyInverse(const AResult: Boolean): Boolean; inline;
-    procedure SetSample(const AValue: TGocciaValue); inline;
+    function ApplyInverse(const AResult: Boolean): Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure SetSample(const AValue: TGocciaValue);
+    {$IFDEF FPC}inline;{$ENDIF}
   public
     constructor Create(const ASample: TGocciaValue;
       const AInverse: Boolean = False);
@@ -166,6 +168,8 @@ uses
   Math,
   SysUtils,
 
+  NumberBits,
+
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
@@ -189,15 +193,6 @@ uses
 
 const
   DEFAULT_CLOSE_TO_PRECISION = 2;
-
-function NumberIsNegativeZero(const AValue: Double): Boolean; inline;
-var
-  Value: Double;
-  Bits: Int64 absolute Value;
-begin
-  Value := AValue;
-  Result := (Value = 0) and (Bits < 0);
-end;
 
 function TryGetStringValue(const AValue: TGocciaValue;
   out AText: string): Boolean;
@@ -630,11 +625,11 @@ begin
 
   Matches := (IsInfinite(ActualNumber) and IsInfinite(ExpectedNumber) and
     (Sign(ActualNumber) = Sign(ExpectedNumber)));
-  if not Matches then
+  if IsNan(ActualNumber) or IsNan(ExpectedNumber) or IsNan(FPrecision) then
+    Matches := False
+  else if not Matches then
   begin
-    if IsNan(FPrecision) then
-      Tolerance := NaN
-    else if IsInfinite(FPrecision) then
+    if IsInfinite(FPrecision) then
     begin
       if FPrecision > 0 then
         Tolerance := 0
@@ -662,7 +657,10 @@ begin
       else
         Tolerance := Power(10, -FPrecision) / 2;
     end;
-    Matches := Abs(ExpectedNumber - ActualNumber) < Tolerance;
+    if IsInfinite(Tolerance) then
+      Matches := True
+    else
+      Matches := Abs(ExpectedNumber - ActualNumber) < Tolerance;
   end;
   Result := ApplyInverse(Matches);
 end;
@@ -691,8 +689,8 @@ begin
   if IsNan(FPrecision) or IsNan(OtherPrecision) then
     Exit(IsNan(FPrecision) and IsNan(OtherPrecision));
   if (FPrecision = 0) and (OtherPrecision = 0) then
-    Exit(NumberIsNegativeZero(FPrecision) =
-      NumberIsNegativeZero(OtherPrecision));
+    Exit(NumberBits.IsNegativeZero(FPrecision) =
+      NumberBits.IsNegativeZero(OtherPrecision));
   Result := FPrecision = OtherPrecision;
 end;
 

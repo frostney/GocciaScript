@@ -28,7 +28,7 @@ uses
   Goccia.Values.Primitives;
 
 const
-{$IFDEF WINDOWS}
+{$IFDEF MSWINDOWS}
   ERRNO_EBUSY = -4082;
   ERRNO_EEXIST = -4075;
   ERRNO_EINVAL = -4071;

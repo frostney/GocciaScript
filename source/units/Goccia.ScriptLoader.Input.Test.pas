@@ -7,6 +7,7 @@ uses
   Generics.Collections,
   SysUtils,
 
+  FileUtils,
   TestingPascalLibrary,
 
   Goccia.GarbageCollector,
@@ -74,17 +75,11 @@ var
   TempFileName: string;
   InputFile: Text;
   Source: TStringList;
-  RawSource: TFileStream;
   Text: string;
 begin
   TempFileName := GetTempFileName;
   Text := 'const x = 2 + 2;' + sLineBreak + 'x;';
-  RawSource := TFileStream.Create(TempFileName, fmCreate);
-  try
-    RawSource.WriteBuffer(Pointer(Text)^, Length(Text));
-  finally
-    RawSource.Free;
-  end;
+  FileUtils.WriteUTF8FileText(TempFileName, Text);
 
   AssignFile(InputFile, TempFileName);
   Reset(InputFile);
@@ -366,7 +361,7 @@ begin
   TGarbageCollector.Initialize;
   try
     TestRunnerProgram.AddSuite(TScriptLoaderInputTests.Create('ScriptLoader Input'));
-    TestRunnerProgram.Run;
+    RunGocciaTests;
     ExitCode := TestResultToExitCode;
   finally
     TGarbageCollector.Shutdown;

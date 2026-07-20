@@ -214,6 +214,7 @@ function NormalizeSandboxPathSeparators(const APath: string): string;
 implementation
 
 uses
+  TextEncoding,
   TimingUtils;
 
 const
@@ -404,7 +405,7 @@ begin
     Result := EncodeDate(1970, 1, 1) + WholeDays +
       (SecondsOfDayValue / (24 * 60 * 60)) +
       (NanosecondRemainderValue /
-        (MillisecondsPerDay * 1000000));
+        (MillisecondsPerDay * 1000000.0));
   end;
 end;
 
@@ -1022,14 +1023,10 @@ end;
 
 function TSandboxVirtualFileSystem.ReadAllText(const APath: string): string;
 var
-  Node: TSandboxFsNode;
+  Bytes: TBytes;
 begin
-  Result := '';
-  Node := RequireFile(APath);
-  Node.FAccessedAt := CurrentTime;
-  SetLength(Result, Node.FSize);
-  if Node.FSize > 0 then
-    System.Move(Node.FData[0], Result[1], Node.FSize);
+  Bytes := ReadAllBytes(APath);
+  Result := DecodeUTF8WithReplacement(Bytes);
 end;
 
 function TSandboxVirtualFileSystem.SnapshotList(
@@ -1060,13 +1057,10 @@ end;
 function TSandboxVirtualFileSystem.SnapshotReadAllText(
   const APath: string): string;
 var
-  Node: TSandboxFsNode;
+  Bytes: TBytes;
 begin
-  Result := '';
-  Node := RequireFile(APath);
-  SetLength(Result, Node.FSize);
-  if Node.FSize > 0 then
-    System.Move(Node.FData[0], Result[1], Node.FSize);
+  Bytes := SnapshotReadAllBytes(APath);
+  Result := DecodeUTF8WithReplacement(Bytes);
 end;
 
 function TSandboxVirtualFileSystem.Open(const APath: string;
@@ -1224,19 +1218,23 @@ end;
 function TSandboxFsFile.ReadText(const ACount: Integer): string;
 var
   Actual: Integer;
+  Bytes: TBytes;
 begin
-  Result := '';
-  SetLength(Result, ACount);
   if ACount <= 0 then
     Exit('');
-  Actual := Read(Result[1], ACount);
-  SetLength(Result, Actual);
+  SetLength(Bytes, ACount);
+  Actual := Read(Bytes[0], ACount);
+  SetLength(Bytes, Actual);
+  Result := DecodeUTF8WithReplacement(Bytes);
 end;
 
 procedure TSandboxFsFile.WriteText(const AText: string);
+var
+  Bytes: TBytes;
 begin
-  if Length(AText) > 0 then
-    Write(AText[1], Length(AText));
+  Bytes := EncodeUTF8WithReplacement(AText);
+  if Length(Bytes) > 0 then
+    Write(Bytes[0], Length(Bytes));
 end;
 
 end.

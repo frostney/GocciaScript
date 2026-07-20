@@ -12,6 +12,12 @@ describe("String.fromCodePoint", () => {
     expect(String.fromCodePoint.apply(null, [65, 66, 67])).toBe("ABC");
   });
 
+  test("apply encodes BMP and astral code points as UTF-16", () => {
+    expect(String.fromCodePoint.apply(null, [0x20ac, 0x1f600, 0xd800])).toBe(
+      "\u20ac\ud83d\ude00\ud800",
+    );
+  });
+
   test("apply falls back for non-number elements", () => {
     let converted = false;
     const codePoint = {

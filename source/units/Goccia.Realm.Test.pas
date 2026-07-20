@@ -548,7 +548,7 @@ begin
   TGarbageCollector.Initialize;
   try
     TestRunnerProgram.AddSuite(TTestRealm.Create('Realm'));
-    TestRunnerProgram.Run;
+    RunGocciaTests;
   finally
     TGarbageCollector.Shutdown;
   end;

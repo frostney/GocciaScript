@@ -29,8 +29,8 @@ uses
   Goccia.Values.Primitives;
 
 const
-  STREAM_HASH_INCREMENT = QWord($9E3779B97F4A7C15);
-  STREAM_HASH_MULTIPLIER = QWord($BF58476D1CE4E5B9);
+  STREAM_HASH_INCREMENT = UInt64($9E3779B97F4A7C15);
+  STREAM_HASH_MULTIPLIER = UInt64($BF58476D1CE4E5B9);
 
 type
   TGocciaJavaScriptHostClock = class(TInterfacedObject, IGocciaHostClock)
@@ -53,18 +53,18 @@ type
   TGocciaJavaScriptHostRandom = class(TInterfacedObject, IGocciaHostRandom)
   private
     FProvider: TGocciaValue;
-    FStreamId: QWord;
+    FStreamId: UInt64;
     FCallingProvider: Boolean;
     class function DeriveStreamId(const AParentStreamId,
-      AChildStreamId: QWord): QWord; static;
+      AChildStreamId: UInt64): UInt64; static;
   public
     constructor Create(const AProvider: TGocciaValue;
-      const AStreamId: QWord);
+      const AStreamId: UInt64);
     function NextDouble: Double;
-    function Fork(const AStreamId: QWord): IGocciaHostRandom;
+    function Fork(const AStreamId: UInt64): IGocciaHostRandom;
   end;
 
-function BigIntegerFromQWord(const AValue: QWord): TBigInteger;
+function BigIntegerFromQWord(const AValue: UInt64): TBigInteger;
 var
   HighBits, LowBits: Int64;
 begin
@@ -187,23 +187,29 @@ end;
 { TGocciaJavaScriptHostRandom }
 
 constructor TGocciaJavaScriptHostRandom.Create(const AProvider: TGocciaValue;
-  const AStreamId: QWord);
+  const AStreamId: UInt64);
 begin
   inherited Create;
   FProvider := AProvider;
   FStreamId := AStreamId;
 end;
 
-{$PUSH}
+{$IFDEF FPC}
+  {$PUSH}
+{$ENDIF}
 {$OVERFLOWCHECKS OFF}
 class function TGocciaJavaScriptHostRandom.DeriveStreamId(
-  const AParentStreamId, AChildStreamId: QWord): QWord;
+  const AParentStreamId, AChildStreamId: UInt64): UInt64;
 begin
   Result := (AParentStreamId xor STREAM_HASH_INCREMENT) + AChildStreamId;
   Result := (Result xor (Result shr 30)) * STREAM_HASH_MULTIPLIER;
   Result := Result xor (Result shr 27);
 end;
-{$POP}
+{$IFDEF FPC}
+  {$POP}
+{$ELSE}
+  {$IFNDEF PRODUCTION}{$OVERFLOWCHECKS ON}{$ENDIF}
+{$ENDIF}
 
 function TGocciaJavaScriptHostRandom.NextDouble: Double;
 var
@@ -234,7 +240,7 @@ begin
 end;
 
 function TGocciaJavaScriptHostRandom.Fork(
-  const AStreamId: QWord): IGocciaHostRandom;
+  const AStreamId: UInt64): IGocciaHostRandom;
 begin
   Result := TGocciaJavaScriptHostRandom.Create(FProvider,
     DeriveStreamId(FStreamId, AStreamId));

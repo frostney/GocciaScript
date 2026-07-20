@@ -52,9 +52,6 @@ const
   UCD_RANGE_SIZE = 8;
   CASE_FOLDING_ENTRY_KEY = 'CaseFolding/Simple';
   NON_UNICODE_UPPERCASE_ENTRY_KEY = 'CaseMapping/RegExpNonUnicodeUppercase';
-{$IFNDEF LAKON}
-  UCD_RCDATA_RESOURCE_TYPE = MAKEINTRESOURCE(10);
-{$ENDIF}
   UCD_MAGIC: TEmbeddedResourceMagic =
     (Ord('G'), Ord('O'), Ord('C'), Ord('C'), Ord('I'), Ord('A'), Ord('U'), Ord('C'));
 
@@ -199,7 +196,7 @@ begin
   SetLength(ABuffer, 0);
   Stream := nil;
   try
-    Stream := TResourceStream.Create(HInstance, AKey, UCD_RCDATA_RESOURCE_TYPE);
+    Stream := TResourceStream.Create(HInstance, AKey, RCDATAResourceType);
     if Stream.Size > High(Integer) then
     begin
       Stream.Free;

@@ -26,16 +26,18 @@ type
     Size: Integer;
   end;
 
+  TGocciaFFIPlacementArray = array of TGocciaFFIPlacement;
+
   TGocciaFFIArgumentPlan = record
     TypeDescriptor: TGocciaFFITypeDescriptor;
-    Placements: array of TGocciaFFIPlacement;
+    Placements: TGocciaFFIPlacementArray;
     Indirect: Boolean;
     IndirectCopyOffset: Integer;
   end;
 
   TGocciaFFIReturnPlan = record
     TypeDescriptor: TGocciaFFITypeDescriptor;
-    Placements: array of TGocciaFFIPlacement;
+    Placements: TGocciaFFIPlacementArray;
     UsesHiddenPointer: Boolean;
   end;
 
@@ -80,15 +82,15 @@ type
 
 function CurrentFFIABI: TGocciaFFIABI;
 begin
-  {$IF defined(CPUX86_64) and defined(MSWINDOWS)}
+  {$IF (defined(GOCCIA_CPU_X86_64)) and defined(MSWINDOWS)}
   Result := fabiWin64;
-  {$ELSEIF defined(CPUX86_64)}
+  {$ELSEIF (defined(GOCCIA_CPU_X86_64))}
   Result := fabiSysVX64;
-  {$ELSEIF defined(CPUAARCH64) and defined(DARWIN)}
+  {$ELSEIF (defined(GOCCIA_CPU_AARCH64)) and defined(DARWIN)}
   Result := fabiDarwinARM64;
-  {$ELSEIF defined(CPUAARCH64)}
+  {$ELSEIF (defined(GOCCIA_CPU_AARCH64))}
   Result := fabiAAPCS64;
-  {$ELSEIF defined(CPUI386) and defined(MSWINDOWS)}
+  {$ELSEIF (defined(GOCCIA_CPU_X86)) and defined(MSWINDOWS)}
   Result := fabiI386Win;
   {$ELSE}
   {$ERROR Unsupported FFI ABI target}
@@ -116,7 +118,7 @@ begin
     Result := 8;
 end;
 
-procedure AppendPlacement(var APlacements: TArray<TGocciaFFIPlacement>;
+procedure AppendPlacement(var APlacements: TGocciaFFIPlacementArray;
   const AKind: TGocciaFFIPlacementKind; const ARegisterIndex,
   AStackOffset, AValueOffset, ASize: Integer);
 var

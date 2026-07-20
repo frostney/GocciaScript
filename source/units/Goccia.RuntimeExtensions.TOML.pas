@@ -26,9 +26,9 @@ type
     function TryLoadModule(const AResolvedPath: string;
       out AModule: TGocciaModule): Boolean; override;
     function TryInjectGlobals(const AFormat: string;
-      const AContent: UTF8String): Boolean; override;
+      const AContent: string): Boolean; override;
     function TryInjectModules(const AFormat: string;
-      const AContent: UTF8String; const ABaseAddress: string): Boolean; override;
+      const AContent: string; const ABaseAddress: string): Boolean; override;
   end;
 
 implementation
@@ -138,7 +138,7 @@ begin
 end;
 
 function TGocciaTOMLRuntimeExtension.TryInjectGlobals(
-  const AFormat: string; const AContent: UTF8String): Boolean;
+  const AFormat: string; const AContent: string): Boolean;
 var
   ParsedValue: TGocciaValue;
   TOMLParser: TGocciaTOMLParser;
@@ -166,7 +166,7 @@ begin
 end;
 
 function TGocciaTOMLRuntimeExtension.TryInjectModules(
-  const AFormat: string; const AContent: UTF8String;
+  const AFormat: string; const AContent: string;
   const ABaseAddress: string): Boolean;
 var
   ParsedValue: TGocciaValue;

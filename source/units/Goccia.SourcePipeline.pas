@@ -118,7 +118,7 @@ type
     class function Parse(const ASource: TStringList; const AFileName: string;
       const AOptions: TGocciaSourcePipelineOptions;
       const ADeclaredPrivateNames: TStrings = nil): TGocciaSourcePipelineResult; static;
-    class function ParseModuleSource(const ASource: UTF8String;
+    class function ParseModuleSource(const ASource: string;
       const AFileName: string;
       const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineModuleResult; static;
     class function ParseExpression(const AExpressionText,
@@ -160,9 +160,9 @@ threadvar
   // audit, #892).
   GActiveSourcePipelineOptionsScope: TGocciaSourcePipelineOptionsScope;
 
-function SourceTextToLines(const ASource: UTF8String): TStringList;
+function SourceTextToLines(const ASource: string): TStringList;
 begin
-  Result := CreateUTF8FileTextLines(NormalizeUTF8NewlinesToLF(ASource));
+  Result := CreateFileTextLines(NormalizeNewlinesToLF(ASource));
 end;
 
 function CloneStringList(const ASource: TStrings): TStringList;
@@ -584,7 +584,7 @@ begin
   end;
 end;
 
-class function TGocciaSourcePipeline.ParseModuleSource(const ASource: UTF8String;
+class function TGocciaSourcePipeline.ParseModuleSource(const ASource: string;
   const AFileName: string;
   const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineModuleResult;
 var

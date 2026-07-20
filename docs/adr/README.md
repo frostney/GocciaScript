@@ -107,3 +107,6 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0095 — Custom bidirectional FFI ABI engine](0095-custom-bidirectional-ffi-abi-engine.md)
 - [0096 — Keep snapshot persistence behind a test-host adapter](0096-host-injected-snapshot-testing.md)
 - [0097 — Engine-owned capability audit seam](0097-engine-owned-capability-audit-seam.md)
+- [0098 — Portable exact numeric text conversion](0098-portable-exact-numeric-text-conversion.md)
+- [0099 — Canonical UTF-16 text with explicit encoded-byte boundaries](0099-canonical-utf16-text-boundaries.md)
+- [0100 — Native binary64 execution with narrow semantic operations](0100-native-binary64-execution.md)

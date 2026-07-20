@@ -5,6 +5,7 @@ unit IntlICU;
 interface
 
 uses
+  CriticalSections,
   IntlTypes;
 
 type
@@ -21,7 +22,7 @@ function TryICUGetLocaleCalendars(const ALocale: string;
 function TryICUGetLocaleCollations(const ALocale: string;
   out ACollations: IntlTypes.TStringArray): Boolean;
 
-function TryICUCompareStrings(const ALocale: string; const AStr1, AStr2: UnicodeString;
+function TryICUCompareStrings(const ALocale: string; const AStr1, AStr2: string;
   ASensitivity: TIntlCollatorSensitivity; AIgnorePunctuation, ANumeric: Boolean;
   const ACaseFirst: string; out AResult: Integer): Boolean;
 
@@ -70,7 +71,7 @@ function TryICUGetDisplayName(const ALocale, ACode: string;
   out AName: string): Boolean;
 
 function TryICUCreateBreakIterator(const ALocale: string;
-  AGranularity: TIntlSegmenterGranularity; const AText: UnicodeString;
+  AGranularity: TIntlSegmenterGranularity; const AText: string;
   out AIterator: TIntlBreakIterator): Boolean;
 function TryICUBreakIteratorNext(var AIterator: TIntlBreakIterator;
   out APosition: Integer): Boolean;
@@ -101,11 +102,10 @@ implementation
 
 {$IFDEF LAKON}
 
-{ Lakon's WASM lane has no dynamic libraries, so libicu can never
-  load there (the same fact UnicodeICU pins); every probe answers
-  False and Intl falls back to its portable tables. Keeping the unit
-  (rather than IFDEF-ing the import out of every Goccia.Values.Intl*
-  consumer) preserves the one shared surface. }
+{ Lakon's WASM lane has no dynamic libraries, so every probe answers False
+  and Intl falls back to its portable tables. Keeping the unit (rather than
+  IFDEF-ing the import out of every Goccia.Values.Intl* consumer) preserves
+  the one shared surface. }
 
 function IntlICUAvailable: Boolean;
 begin
@@ -150,7 +150,7 @@ begin
   Result := False;
 end;
 
-function TryICUCompareStrings(const ALocale: string; const AStr1, AStr2: UnicodeString;
+function TryICUCompareStrings(const ALocale: string; const AStr1, AStr2: string;
   ASensitivity: TIntlCollatorSensitivity; AIgnorePunctuation, ANumeric: Boolean;
   const ACaseFirst: string; out AResult: Integer): Boolean;
 begin
@@ -228,6 +228,36 @@ begin
   Result := False;
 end;
 
+function TryICUOpenDateTimeFormatter(const ALocale: string;
+  const AOptions: TIntlDateTimeFormatOptions;
+  out AFormatter: TIntlDateTimeFormatter): Boolean;
+begin
+  AFormatter := nil;
+  Result := False;
+end;
+
+procedure ICUCloseDateTimeFormatter(var AFormatter: TIntlDateTimeFormatter);
+begin
+  AFormatter := nil;
+end;
+
+function TryICUFormatDateTimeWithFormatter(
+  const AFormatter: TIntlDateTimeFormatter; AMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
+begin
+  AFormatted := '';
+  Result := False;
+end;
+
+function TryICUFormatDateTimeToPartsWithFormatter(
+  const AFormatter: TIntlDateTimeFormatter; AMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions;
+  out AParts: TIntlFormatPartArray): Boolean;
+begin
+  SetLength(AParts, 0);
+  Result := False;
+end;
+
 function TryICUFormatDateTimeRange(const ALocale: string; AStartMillis, AEndMillis: Double;
   const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
 begin
@@ -258,7 +288,7 @@ begin
 end;
 
 function TryICUCreateBreakIterator(const ALocale: string;
-  AGranularity: TIntlSegmenterGranularity; const AText: UnicodeString;
+  AGranularity: TIntlSegmenterGranularity; const AText: string;
   out AIterator: TIntlBreakIterator): Boolean;
 begin
   AIterator := Default(TIntlBreakIterator);
@@ -344,8 +374,10 @@ uses
   Math,
   SysUtils,
 
-  DynLibs,
-  ICU;
+  DynamicLibraries,
+  ICU,
+  NumericText,
+  TextEncoding;
 
 const
   ICU_SUCCESS = 0;
@@ -815,11 +847,58 @@ var
   IntlFunctions: TIntlICUFunctions;
   IntlLoadAttempted: Boolean;
   IntlLoadSucceeded: Boolean;
-  IntlInitLock: TRTLCriticalSection;
+  IntlInitLock: TGocciaCriticalSection;
 
 function ICUSucceeded(const AStatus: TICUErrorCode): Boolean;
 begin
   Result := AStatus <= ICU_SUCCESS;
+end;
+
+function TryEncodeASCIIBytes(const AText: string;
+  out ABytes: TBytes): Boolean;
+var
+  I: Integer;
+begin
+  SetLength(ABytes, Length(AText) + 1);
+  for I := 1 to Length(AText) do
+  begin
+    if Ord(AText[I]) > $7F then
+    begin
+      SetLength(ABytes, 0);
+      Exit(False);
+    end;
+    ABytes[I - 1] := Byte(Ord(AText[I]));
+  end;
+  ABytes[Length(AText)] := 0;
+  Result := True;
+end;
+
+function BytePointer(const ABytes: TBytes): PAnsiChar;
+{$IFDEF FPC}inline;{$ENDIF}
+begin
+  if Length(ABytes) = 0 then
+    Result := nil
+  else
+    Result := PAnsiChar(@ABytes[0]);
+end;
+
+function DecodeASCIIBytes(const ABytes: PAnsiChar;
+  const ALength: Integer): string;
+var
+  I: Integer;
+begin
+  if (not Assigned(ABytes)) or (ALength <= 0) then
+    Exit('');
+  SetLength(Result, ALength);
+  for I := 0 to ALength - 1 do
+    Result[I + 1] := Char(Ord(ABytes[I]));
+end;
+
+function DecodeASCIIZ(const ABytes: PAnsiChar): string;
+begin
+  if not Assigned(ABytes) then
+    Exit('');
+  Result := DecodeASCIIBytes(ABytes, StrLen(ABytes));
 end;
 
 function ResolveSymbol(const AHandle: TLibHandle; const AName: string): Pointer;
@@ -1100,7 +1179,7 @@ begin
     Result := IntlLoadSucceeded;
     Exit;
   end;
-  EnterCriticalSection(IntlInitLock);
+  CriticalSectionEnter(IntlInitLock);
   try
     if not IntlLoadAttempted then
     begin
@@ -1110,7 +1189,7 @@ begin
     end;
     Result := IntlLoadSucceeded;
   finally
-    LeaveCriticalSection(IntlInitLock);
+    CriticalSectionLeave(IntlInitLock);
   end;
 end;
 
@@ -1121,7 +1200,7 @@ end;
 
 function UnicodeToString(const ABuf: array of WideChar; ALen: Integer): string;
 var
-  U: UnicodeString;
+  U: string;
 begin
   if ALen <= 0 then
   begin
@@ -1135,7 +1214,7 @@ end;
 
 function UnicodePointerToString(AChars: PUChar; ALen: Integer): string;
 var
-  U: UnicodeString;
+  U: string;
 begin
   if (ALen <= 0) or not Assigned(AChars) then
   begin
@@ -1348,7 +1427,7 @@ begin
     end;
 end;
 
-function BuildPartsFromFieldSpans(const AFormatted: UnicodeString;
+function BuildPartsFromFieldSpans(const AFormatted: string;
   const ASpans: TICUFieldSpanArray; AFieldCategory, ARangeSpanCategory: Integer;
   AMapper: TICUFieldTypeMapper; out AParts: TIntlFormatPartArray): Boolean;
 var
@@ -1396,7 +1475,7 @@ begin
   Result := True;
 end;
 
-function BuildRelativeTimePartsFromFieldSpans(const AFormatted: UnicodeString;
+function BuildRelativeTimePartsFromFieldSpans(const AFormatted: string;
   const ASpans: TICUFieldSpanArray; const AUnitIdentifier: string;
   out AParts: TIntlFormatPartArray): Boolean;
 var
@@ -1539,7 +1618,7 @@ var
   Status: TICUErrorCode;
   Len, Category, Field, StartIndex, EndIndex: LongInt;
   UText: PUChar;
-  UFormatted: UnicodeString;
+  UFormatted: string;
   Position: Pointer;
   Spans: TICUFieldSpanArray;
 begin
@@ -1563,7 +1642,7 @@ begin
     Exit;
 
   AFormatted := UnicodePointerToString(UText, Len);
-  UFormatted := UnicodeString(AFormatted);
+  UFormatted := string(AFormatted);
   SetLength(Spans, 0);
 
   Status := ICU_SUCCESS;
@@ -1606,7 +1685,7 @@ var
   LocaleId: array[0..LOCALE_ID_CAPACITY - 1] of AnsiChar;
   TagBuf: array[0..LOCALE_ID_CAPACITY - 1] of AnsiChar;
   ParsedLen, ResultLen: LongInt;
-  TagAnsi: AnsiString;
+  TagBytes: TBytes;
 begin
   Result := False;
   ACanonical := '';
@@ -1614,12 +1693,13 @@ begin
   if not EnsureLoaded then
     Exit;
 
-  TagAnsi := AnsiString(ATag);
+  if not TryEncodeASCIIBytes(ATag, TagBytes) then
+    Exit;
   FillChar(LocaleId, SizeOf(LocaleId), 0);
   Status := ICU_SUCCESS;
   ParsedLen := 0;
 
-  IntlFunctions.UlocForLanguageTag(PAnsiChar(TagAnsi), @LocaleId[0],
+  IntlFunctions.UlocForLanguageTag(BytePointer(TagBytes), @LocaleId[0],
     LOCALE_ID_CAPACITY, ParsedLen, Status);
   if not ICUSucceeded(Status) then
     Exit;
@@ -1631,7 +1711,7 @@ begin
   if not ICUSucceeded(Status) or (ResultLen <= 0) then
     Exit;
 
-  ACanonical := string(PAnsiChar(@TagBuf[0]));
+  ACanonical := DecodeASCIIZ(@TagBuf[0]);
   Result := ACanonical <> '';
 end;
 
@@ -1655,7 +1735,7 @@ begin
   begin
     LocalePtr := IntlFunctions.UlocGetAvailable(I);
     if Assigned(LocalePtr) then
-      ALocales[I] := string(LocalePtr)
+      ALocales[I] := DecodeASCIIZ(LocalePtr)
     else
       ALocales[I] := '';
   end;
@@ -1669,7 +1749,7 @@ var
   LocaleId, MaxId: array[0..LOCALE_ID_CAPACITY - 1] of AnsiChar;
   TagBuf: array[0..LOCALE_ID_CAPACITY - 1] of AnsiChar;
   ParsedLen, ResultLen: LongInt;
-  TagAnsi: AnsiString;
+  TagBytes: TBytes;
 begin
   Result := False;
   AMaximized := '';
@@ -1677,12 +1757,13 @@ begin
   if not EnsureLoaded then
     Exit;
 
-  TagAnsi := AnsiString(ATag);
+  if not TryEncodeASCIIBytes(ATag, TagBytes) then
+    Exit;
   FillChar(LocaleId, SizeOf(LocaleId), 0);
   Status := ICU_SUCCESS;
   ParsedLen := 0;
 
-  IntlFunctions.UlocForLanguageTag(PAnsiChar(TagAnsi), @LocaleId[0],
+  IntlFunctions.UlocForLanguageTag(BytePointer(TagBytes), @LocaleId[0],
     LOCALE_ID_CAPACITY, ParsedLen, Status);
   if not ICUSucceeded(Status) then
     Exit;
@@ -1701,7 +1782,7 @@ begin
   if not ICUSucceeded(Status) or (ResultLen <= 0) then
     Exit;
 
-  AMaximized := string(PAnsiChar(@TagBuf[0]));
+  AMaximized := DecodeASCIIZ(@TagBuf[0]);
   Result := True;
 end;
 
@@ -1711,7 +1792,7 @@ var
   LocaleId, MinId: array[0..LOCALE_ID_CAPACITY - 1] of AnsiChar;
   TagBuf: array[0..LOCALE_ID_CAPACITY - 1] of AnsiChar;
   ParsedLen, ResultLen: LongInt;
-  TagAnsi: AnsiString;
+  TagBytes: TBytes;
 begin
   Result := False;
   AMinimized := '';
@@ -1719,12 +1800,13 @@ begin
   if not EnsureLoaded then
     Exit;
 
-  TagAnsi := AnsiString(ATag);
+  if not TryEncodeASCIIBytes(ATag, TagBytes) then
+    Exit;
   FillChar(LocaleId, SizeOf(LocaleId), 0);
   Status := ICU_SUCCESS;
   ParsedLen := 0;
 
-  IntlFunctions.UlocForLanguageTag(PAnsiChar(TagAnsi), @LocaleId[0],
+  IntlFunctions.UlocForLanguageTag(BytePointer(TagBytes), @LocaleId[0],
     LOCALE_ID_CAPACITY, ParsedLen, Status);
   if not ICUSucceeded(Status) then
     Exit;
@@ -1743,7 +1825,7 @@ begin
   if not ICUSucceeded(Status) or (ResultLen <= 0) then
     Exit;
 
-  AMinimized := string(PAnsiChar(@TagBuf[0]));
+  AMinimized := DecodeASCIIZ(@TagBuf[0]);
   Result := True;
 end;
 
@@ -1753,7 +1835,6 @@ var
   Status: TICUErrorCode;
   ValueLength, Count: LongInt;
   ValuePtr: PAnsiChar;
-  ValueAnsi: AnsiString;
 begin
   Result := False;
   SetLength(AValues, 0);
@@ -1775,8 +1856,7 @@ begin
 
       Inc(Count);
       SetLength(AValues, Count);
-      SetString(ValueAnsi, ValuePtr, ValueLength);
-      AValues[Count - 1] := string(ValueAnsi);
+      AValues[Count - 1] := DecodeASCIIBytes(ValuePtr, ValueLength);
     until False;
   finally
     IntlFunctions.UenumClose(AEnumeration);
@@ -1789,7 +1869,7 @@ function TryICUGetLocaleCalendars(const ALocale: string;
   out ACalendars: IntlTypes.TStringArray): Boolean;
 var
   Status: TICUErrorCode;
-  KeyAnsi, LocaleAnsi: AnsiString;
+  KeyBytes, LocaleBytes: TBytes;
   Enumeration: Pointer;
 begin
   Result := False;
@@ -1799,11 +1879,12 @@ begin
      (not Assigned(IntlFunctions.UcalGetKeywordValuesForLocale)) then
     Exit;
 
-  KeyAnsi := AnsiString('calendar');
-  LocaleAnsi := AnsiString(ALocale);
+  if not TryEncodeASCIIBytes('calendar', KeyBytes) or
+     not TryEncodeASCIIBytes(ALocale, LocaleBytes) then
+    Exit;
   Status := ICU_SUCCESS;
   Enumeration := IntlFunctions.UcalGetKeywordValuesForLocale(
-    PAnsiChar(KeyAnsi), PAnsiChar(LocaleAnsi), True, Status);
+    BytePointer(KeyBytes), BytePointer(LocaleBytes), True, Status);
   if not ICUSucceeded(Status) or not Assigned(Enumeration) then
     Exit;
 
@@ -1814,7 +1895,7 @@ function TryICUGetLocaleCollations(const ALocale: string;
   out ACollations: IntlTypes.TStringArray): Boolean;
 var
   Status: TICUErrorCode;
-  KeyAnsi, LocaleAnsi: AnsiString;
+  KeyBytes, LocaleBytes: TBytes;
   Enumeration: Pointer;
 begin
   Result := False;
@@ -1824,18 +1905,19 @@ begin
      (not Assigned(IntlFunctions.UcolGetKeywordValuesForLocale)) then
     Exit;
 
-  KeyAnsi := AnsiString('collation');
-  LocaleAnsi := AnsiString(ALocale);
+  if not TryEncodeASCIIBytes('collation', KeyBytes) or
+     not TryEncodeASCIIBytes(ALocale, LocaleBytes) then
+    Exit;
   Status := ICU_SUCCESS;
   Enumeration := IntlFunctions.UcolGetKeywordValuesForLocale(
-    PAnsiChar(KeyAnsi), PAnsiChar(LocaleAnsi), True, Status);
+    BytePointer(KeyBytes), BytePointer(LocaleBytes), True, Status);
   if not ICUSucceeded(Status) or not Assigned(Enumeration) then
     Exit;
 
   Result := TryICUEnumerationToArray(Enumeration, ACollations);
 end;
 
-function TryICUCompareStrings(const ALocale: string; const AStr1, AStr2: UnicodeString;
+function TryICUCompareStrings(const ALocale: string; const AStr1, AStr2: string;
   ASensitivity: TIntlCollatorSensitivity; AIgnorePunctuation, ANumeric: Boolean;
   const ACaseFirst: string; out AResult: Integer): Boolean;
 var
@@ -1843,7 +1925,7 @@ var
   Collator: Pointer;
   CollResult: TICUCollationResult;
   Strength: LongInt;
-  LocaleAnsi: AnsiString;
+  LocaleBytes: TBytes;
 begin
   Result := False;
   AResult := 0;
@@ -1851,9 +1933,10 @@ begin
   if not EnsureLoaded then
     Exit;
 
-  LocaleAnsi := AnsiString(ALocale);
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) then
+    Exit;
   Status := ICU_SUCCESS;
-  Collator := IntlFunctions.UcolOpen(PAnsiChar(LocaleAnsi), Status);
+  Collator := IntlFunctions.UcolOpen(BytePointer(LocaleBytes), Status);
   if not ICUSucceeded(Status) or not Assigned(Collator) then
     Exit;
 
@@ -1975,14 +2058,14 @@ end;
 procedure ApplySignificantDigitsPattern(AFormatter: Pointer;
   AMinSig, AMaxSig: Integer);
 var
-  Pattern: UnicodeString;
+  Pattern: string;
   Status: TICUErrorCode;
 begin
   if not Assigned(IntlFunctions.UnumApplyPattern) then
     Exit;
   if AMinSig < 1 then AMinSig := 1;
   if AMaxSig < AMinSig then AMaxSig := AMinSig;
-  Pattern := UnicodeString(StringOfChar('@', AMinSig) +
+  Pattern := string(StringOfChar('@', AMinSig) +
     StringOfChar('#', AMaxSig - AMinSig));
   Status := ICU_SUCCESS;
   IntlFunctions.UnumApplyPattern(AFormatter, False,
@@ -1993,7 +2076,7 @@ procedure ConfigureNumberFormatter(AFormatter: Pointer;
   const AOptions: TIntlNumberFormatOptions);
 var
   MinSig, MaxSig: Integer;
-  CurrencyUnicode: UnicodeString;
+  CurrencyUnicode: string;
   Status: TICUErrorCode;
 begin
   if not Assigned(IntlFunctions.UnumSetAttribute) then
@@ -2002,7 +2085,7 @@ begin
   if (AOptions.Style = insCurrency) and (AOptions.Currency <> '') and
      Assigned(IntlFunctions.UnumSetTextAttribute) then
   begin
-    CurrencyUnicode := UnicodeString(AOptions.Currency);
+    CurrencyUnicode := string(AOptions.Currency);
     Status := ICU_SUCCESS;
     IntlFunctions.UnumSetTextAttribute(AFormatter, UNUM_CURRENCY_CODE,
       PWideChar(CurrencyUnicode), Length(CurrencyUnicode), Status);
@@ -2128,9 +2211,10 @@ begin
     Result := ScaledInt / Scale;
 end;
 
-function CanonicalizeICUNumberFormatInput(AValue: Double): Double; inline;
+function CanonicalizeICUNumberFormatInput(AValue: Double): Double;
+{$IFDEF FPC}inline;{$ENDIF}
 var
-  Bits: QWord;
+  Bits: UInt64;
 begin
   if not IsNan(AValue) then
     Exit(AValue);
@@ -2138,7 +2222,7 @@ begin
   // ECMA-402 models NaN as the unsigned abstract value not-a-number.
   // ICU formats a negative NaN payload as "-NaN" on Linux, so normalize
   // the payload before crossing the ICU boundary.
-  Bits := QWord($7FF8000000000000);
+  Bits := UInt64($7FF8000000000000);
   Move(Bits, Result, SizeOf(Result));
 end;
 
@@ -2358,8 +2442,7 @@ function TryParseInvariantDouble(const AValue: string; out ANumber: Double): Boo
 var
   FormatSettings: TFormatSettings;
 begin
-  FormatSettings := DefaultFormatSettings;
-  FormatSettings.DecimalSeparator := '.';
+  FormatSettings := CreateInvariantFormatSettings;
   Result := TryStrToFloat(AValue, ANumber, FormatSettings);
 end;
 
@@ -2407,8 +2490,8 @@ function TryICUFormatNumberSkeleton(const ALocale: string; AValue: Double;
 var
   Status: TICUErrorCode;
   Formatter, FormatResult: Pointer;
-  Skeleton: UnicodeString;
-  LocaleAnsi: AnsiString;
+  Skeleton: string;
+  LocaleBytes: TBytes;
   Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
   ResultLen: LongInt;
 begin
@@ -2424,11 +2507,12 @@ begin
      not Assigned(IntlFunctions.UnumfCloseResult) then
     Exit;
 
-  Skeleton := UnicodeString(BuildNumberSkeleton(AOptions));
-  LocaleAnsi := AnsiString(ALocale);
+  Skeleton := string(BuildNumberSkeleton(AOptions));
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) then
+    Exit;
   Status := ICU_SUCCESS;
   Formatter := IntlFunctions.UnumfOpenForSkeletonAndLocale(PWideChar(Skeleton),
-    Length(Skeleton), PAnsiChar(LocaleAnsi), Status);
+    Length(Skeleton), BytePointer(LocaleBytes), Status);
   if not ICUSucceeded(Status) or not Assigned(Formatter) then
     Exit;
 
@@ -2465,8 +2549,8 @@ function TryICUFormatNumberDecimalSkeleton(const ALocale, AValue: string;
 var
   Status: TICUErrorCode;
   Formatter, FormatResult: Pointer;
-  Skeleton: UnicodeString;
-  LocaleAnsi, ValueAnsi: AnsiString;
+  Skeleton: string;
+  LocaleBytes, ValueBytes: TBytes;
   Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
   ResultLen: LongInt;
 begin
@@ -2482,12 +2566,13 @@ begin
      not Assigned(IntlFunctions.UnumfCloseResult) then
     Exit;
 
-  Skeleton := UnicodeString(BuildNumberSkeleton(AOptions));
-  LocaleAnsi := AnsiString(ALocale);
-  ValueAnsi := AnsiString(AValue);
+  Skeleton := string(BuildNumberSkeleton(AOptions));
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) or
+     not TryEncodeASCIIBytes(AValue, ValueBytes) then
+    Exit;
   Status := ICU_SUCCESS;
   Formatter := IntlFunctions.UnumfOpenForSkeletonAndLocale(PWideChar(Skeleton),
-    Length(Skeleton), PAnsiChar(LocaleAnsi), Status);
+    Length(Skeleton), BytePointer(LocaleBytes), Status);
   if not ICUSucceeded(Status) or not Assigned(Formatter) then
     Exit;
 
@@ -2498,8 +2583,8 @@ begin
       Exit;
     try
       Status := ICU_SUCCESS;
-      IntlFunctions.UnumfFormatDecimal(Formatter, PAnsiChar(ValueAnsi),
-        Length(ValueAnsi), FormatResult, Status);
+      IntlFunctions.UnumfFormatDecimal(Formatter, BytePointer(ValueBytes),
+        Length(ValueBytes) - 1, FormatResult, Status);
       if not ICUSucceeded(Status) then
         Exit;
 
@@ -2527,7 +2612,7 @@ var
   Formatter: Pointer;
   Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
   ResultLen: LongInt;
-  LocaleAnsi: AnsiString;
+  LocaleBytes: TBytes;
   ICUStyle: LongInt;
   FormattedValue: Double;
 begin
@@ -2537,12 +2622,13 @@ begin
   if not EnsureLoaded then
     Exit;
 
-  LocaleAnsi := AnsiString(ALocale);
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) then
+    Exit;
   ICUStyle := NumberStyleToICU(AOptions.Style);
 
   Status := ICU_SUCCESS;
   Formatter := IntlFunctions.UnumOpen(ICUStyle, nil, 0,
-    PAnsiChar(LocaleAnsi), nil, Status);
+    BytePointer(LocaleBytes), nil, Status);
   if not ICUSucceeded(Status) or not Assigned(Formatter) then
     Exit;
 
@@ -2595,8 +2681,8 @@ function TryICUFormatNumberToPartsSkeleton(const ALocale: string; AValue: Double
 var
   Status: TICUErrorCode;
   Formatter, FormatResult, FormattedValue: Pointer;
-  Skeleton: UnicodeString;
-  LocaleAnsi: AnsiString;
+  Skeleton: string;
+  LocaleBytes: TBytes;
   Formatted: string;
 begin
   Result := False;
@@ -2611,11 +2697,12 @@ begin
      not Assigned(IntlFunctions.UnumfCloseResult) then
     Exit;
 
-  Skeleton := UnicodeString(BuildNumberSkeleton(AOptions));
-  LocaleAnsi := AnsiString(ALocale);
+  Skeleton := string(BuildNumberSkeleton(AOptions));
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) then
+    Exit;
   Status := ICU_SUCCESS;
   Formatter := IntlFunctions.UnumfOpenForSkeletonAndLocale(PWideChar(Skeleton),
-    Length(Skeleton), PAnsiChar(LocaleAnsi), Status);
+    Length(Skeleton), BytePointer(LocaleBytes), Status);
   if not ICUSucceeded(Status) or not Assigned(Formatter) then
     Exit;
 
@@ -2650,8 +2737,8 @@ function TryICUFormatNumberDecimalToPartsSkeleton(const ALocale, AValue: string;
 var
   Status: TICUErrorCode;
   Formatter, FormatResult, FormattedValue: Pointer;
-  Skeleton: UnicodeString;
-  LocaleAnsi, ValueAnsi: AnsiString;
+  Skeleton: string;
+  LocaleBytes, ValueBytes: TBytes;
   Formatted: string;
 begin
   Result := False;
@@ -2666,12 +2753,13 @@ begin
      not Assigned(IntlFunctions.UnumfCloseResult) then
     Exit;
 
-  Skeleton := UnicodeString(BuildNumberSkeleton(AOptions));
-  LocaleAnsi := AnsiString(ALocale);
-  ValueAnsi := AnsiString(AValue);
+  Skeleton := string(BuildNumberSkeleton(AOptions));
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) or
+     not TryEncodeASCIIBytes(AValue, ValueBytes) then
+    Exit;
   Status := ICU_SUCCESS;
   Formatter := IntlFunctions.UnumfOpenForSkeletonAndLocale(PWideChar(Skeleton),
-    Length(Skeleton), PAnsiChar(LocaleAnsi), Status);
+    Length(Skeleton), BytePointer(LocaleBytes), Status);
   if not ICUSucceeded(Status) or not Assigned(Formatter) then
     Exit;
 
@@ -2682,8 +2770,8 @@ begin
       Exit;
     try
       Status := ICU_SUCCESS;
-      IntlFunctions.UnumfFormatDecimal(Formatter, PAnsiChar(ValueAnsi),
-        Length(ValueAnsi), FormatResult, Status);
+      IntlFunctions.UnumfFormatDecimal(Formatter, BytePointer(ValueBytes),
+        Length(ValueBytes) - 1, FormatResult, Status);
       if not ICUSucceeded(Status) then
         Exit;
 
@@ -2709,11 +2797,11 @@ var
   Formatter, Iterator: Pointer;
   Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
   ResultLen: LongInt;
-  LocaleAnsi: AnsiString;
+  LocaleBytes: TBytes;
   ICUStyle: LongInt;
   FormattedValue: Double;
   Spans: TICUFieldSpanArray;
-  UFormatted: UnicodeString;
+  UFormatted: string;
 begin
   Result := False;
   SetLength(AParts, 0);
@@ -2724,12 +2812,13 @@ begin
      not Assigned(IntlFunctions.UfieldpositerNext) then
     Exit;
 
-  LocaleAnsi := AnsiString(ALocale);
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) then
+    Exit;
   ICUStyle := NumberStyleToICU(AOptions.Style);
 
   Status := ICU_SUCCESS;
   Formatter := IntlFunctions.UnumOpen(ICUStyle, nil, 0,
-    PAnsiChar(LocaleAnsi), nil, Status);
+    BytePointer(LocaleBytes), nil, Status);
   if not ICUSucceeded(Status) or not Assigned(Formatter) then
     Exit;
 
@@ -2749,7 +2838,7 @@ begin
       if not ICUSucceeded(Status) or (ResultLen <= 0) then
         Exit;
 
-      UFormatted := UnicodeString(UnicodeToString(Buffer, ResultLen));
+      UFormatted := string(UnicodeToString(Buffer, ResultLen));
       SetLength(Spans, 0);
       CollectIteratorFieldSpans(Iterator, UFIELD_CATEGORY_NUMBER, Spans);
       Result := BuildPartsFromFieldSpans(UFormatted, Spans,
@@ -2795,8 +2884,8 @@ function TryICUFormatNumberRangeInternal(const ALocale: string;
   AWantParts: Boolean): Boolean;
 var
   Status: TICUErrorCode;
-  Skeleton: UnicodeString;
-  LocaleAnsi, StartAnsi, EndAnsi: AnsiString;
+  Skeleton: string;
+  LocaleBytes, StartBytes, EndBytes: TBytes;
   Formatter, RangeResult, FormattedValue: Pointer;
   StartNumber, EndNumber: Double;
 begin
@@ -2816,12 +2905,14 @@ begin
   if (not AUseDecimal) and not Assigned(IntlFunctions.UnumrfFormatDoubleRange) then
     Exit;
 
-  Skeleton := UnicodeString(BuildNumberSkeleton(AOptions));
-  LocaleAnsi := AnsiString(ALocale);
+  Skeleton := string(BuildNumberSkeleton(AOptions));
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) then
+    Exit;
   Status := ICU_SUCCESS;
   Formatter := IntlFunctions.UnumrfOpenForSkeletonWithCollapseAndIdentityFallback(
     PWideChar(Skeleton), Length(Skeleton), UNUM_RANGE_COLLAPSE_AUTO,
-    UNUM_IDENTITY_FALLBACK_APPROXIMATELY, PAnsiChar(LocaleAnsi), nil, Status);
+    UNUM_IDENTITY_FALLBACK_APPROXIMATELY, BytePointer(LocaleBytes), nil,
+    Status);
   if not ICUSucceeded(Status) or not Assigned(Formatter) then
     Exit;
 
@@ -2834,10 +2925,12 @@ begin
       Status := ICU_SUCCESS;
       if AUseDecimal then
       begin
-        StartAnsi := AnsiString(AStartDecimal);
-        EndAnsi := AnsiString(AEndDecimal);
-        IntlFunctions.UnumrfFormatDecimalRange(Formatter, PAnsiChar(StartAnsi),
-          Length(StartAnsi), PAnsiChar(EndAnsi), Length(EndAnsi),
+        if not TryEncodeASCIIBytes(AStartDecimal, StartBytes) or
+           not TryEncodeASCIIBytes(AEndDecimal, EndBytes) then
+          Exit;
+        IntlFunctions.UnumrfFormatDecimalRange(Formatter,
+          BytePointer(StartBytes), Length(StartBytes) - 1,
+          BytePointer(EndBytes), Length(EndBytes) - 1,
           RangeResult, Status);
       end
       else
@@ -3023,24 +3116,6 @@ begin
     Result := 'yMd';
 end;
 
-function UTF8FromCodePoint(const ACodePoint: Cardinal): string;
-begin
-  if ACodePoint <= $7F then
-    Result := Chr(ACodePoint)
-  else if ACodePoint <= $7FF then
-    Result := Chr($C0 or (ACodePoint shr 6)) +
-      Chr($80 or (ACodePoint and $3F))
-  else if ACodePoint <= $FFFF then
-    Result := Chr($E0 or (ACodePoint shr 12)) +
-      Chr($80 or ((ACodePoint shr 6) and $3F)) +
-      Chr($80 or (ACodePoint and $3F))
-  else
-    Result := Chr($F0 or (ACodePoint shr 18)) +
-      Chr($80 or ((ACodePoint shr 12) and $3F)) +
-      Chr($80 or ((ACodePoint shr 6) and $3F)) +
-      Chr($80 or (ACodePoint and $3F));
-end;
-
 function DateTimeZeroDigit(const ANumberingSystem: string): string;
 var
   CodePoint: Cardinal;
@@ -3124,7 +3199,7 @@ begin
   else if ANumberingSystem = 'wara' then CodePoint := $118E0
   else if ANumberingSystem = 'wcho' then CodePoint := $1E2F0
   else CodePoint := $30;
-  Result := UTF8FromCodePoint(CodePoint);
+  Result := TextEncoding.CodePointToUTF16(CodePoint);
 end;
 
 function PadTwoDigitHourFormatted(const AFormatted: string;
@@ -3145,7 +3220,7 @@ begin
   if ColonPos = Length(ZeroDigit) + 1 then
     Result := ZeroDigit + AFormatted;
   if AOptions.NumberingSystem = 'hanidec' then
-    Result := StringReplace(Result, UTF8FromCodePoint($202F), ' ',
+    Result := StringReplace(Result, TextEncoding.CodePointToUTF16($202F), ' ',
       [rfReplaceAll]);
 end;
 
@@ -3166,7 +3241,7 @@ begin
       AParts[I].Value := ZeroDigit + AParts[I].Value;
     if AOptions.NumberingSystem = 'hanidec' then
       AParts[I].Value := StringReplace(AParts[I].Value,
-        UTF8FromCodePoint($202F), ' ', [rfReplaceAll]);
+        TextEncoding.CodePointToUTF16($202F), ' ', [rfReplaceAll]);
   end;
 end;
 
@@ -3288,12 +3363,12 @@ begin
 end;
 
 function TryICUGetBestDateTimePattern(const ALocale, ASkeleton: string;
-  out APattern: UnicodeString): Boolean;
+  out APattern: string): Boolean;
 var
   Status: TICUErrorCode;
   PatternGenerator: Pointer;
-  LocaleAnsi: AnsiString;
-  SkeletonUnicode: UnicodeString;
+  LocaleBytes: TBytes;
+  SkeletonUnicode: string;
   Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
   ResultLen: LongInt;
 begin
@@ -3305,13 +3380,15 @@ begin
      not Assigned(IntlFunctions.UdatpgGetBestPattern) then
     Exit;
 
-  LocaleAnsi := AnsiString(ALocale);
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) then
+    Exit;
   Status := ICU_SUCCESS;
-  PatternGenerator := IntlFunctions.UdatpgOpen(PAnsiChar(LocaleAnsi), Status);
+  PatternGenerator := IntlFunctions.UdatpgOpen(BytePointer(LocaleBytes),
+    Status);
   if not ICUSucceeded(Status) or not Assigned(PatternGenerator) then
     Exit;
   try
-    SkeletonUnicode := UnicodeString(ASkeleton);
+    SkeletonUnicode := string(ASkeleton);
     FillChar(Buffer, SizeOf(Buffer), 0);
     Status := ICU_SUCCESS;
     ResultLen := IntlFunctions.UdatpgGetBestPattern(PatternGenerator,
@@ -3320,7 +3397,7 @@ begin
     if not ICUSucceeded(Status) or (ResultLen <= 0) or
        (ResultLen > FORMAT_BUFFER_CAPACITY) then
       Exit;
-    APattern := UnicodeString(UnicodeToString(Buffer, ResultLen));
+    APattern := string(UnicodeToString(Buffer, ResultLen));
     Result := APattern <> '';
   finally
     IntlFunctions.UdatpgClose(PatternGenerator);
@@ -3332,10 +3409,10 @@ function OpenDateFormatter(const ALocale: string;
 var
   Status: TICUErrorCode;
   EffectiveLocale: string;
-  LocaleAnsi: AnsiString;
+  LocaleBytes: TBytes;
   ICUTimeStyle, ICUDateStyle: LongInt;
-  Pattern: UnicodeString;
-  TzUnicode: UnicodeString;
+  Pattern: string;
+  TzUnicode: string;
   TzPtr: PUChar;
   TzLen: LongInt;
 begin
@@ -3343,11 +3420,12 @@ begin
   AFormatter := nil;
 
   EffectiveLocale := ApplyDateTimeLocaleOptions(ALocale, AOptions);
-  LocaleAnsi := AnsiString(EffectiveLocale);
+  if not TryEncodeASCIIBytes(EffectiveLocale, LocaleBytes) then
+    Exit;
 
   if AOptions.TimeZone <> '' then
   begin
-    TzUnicode := UnicodeString(AOptions.TimeZone);
+    TzUnicode := string(AOptions.TimeZone);
     TzPtr := PWideChar(TzUnicode);
     TzLen := Length(TzUnicode);
   end
@@ -3382,7 +3460,7 @@ begin
 
   Status := ICU_SUCCESS;
   AFormatter := IntlFunctions.UdatOpen(ICUTimeStyle, ICUDateStyle,
-    PAnsiChar(LocaleAnsi), TzPtr, TzLen, PWideChar(Pattern),
+    BytePointer(LocaleBytes), TzPtr, TzLen, PWideChar(Pattern),
     Length(Pattern), Status);
   Result := ICUSucceeded(Status) and Assigned(AFormatter);
 end;
@@ -3443,7 +3521,7 @@ var
   Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
   ResultLen: LongInt;
   Spans: TICUFieldSpanArray;
-  UFormatted: UnicodeString;
+  UFormatted: string;
 begin
   Result := False;
   SetLength(AParts, 0);
@@ -3467,7 +3545,7 @@ begin
     if not ICUSucceeded(Status) or (ResultLen <= 0) then
       Exit;
 
-    UFormatted := UnicodeString(UnicodeToString(Buffer, ResultLen));
+    UFormatted := string(UnicodeToString(Buffer, ResultLen));
     SetLength(Spans, 0);
     CollectIteratorFieldSpans(Iterator, UFIELD_CATEGORY_DATE, Spans);
     Result := BuildPartsFromFieldSpans(UFormatted, Spans,
@@ -3520,8 +3598,8 @@ function OpenDateIntervalFormatter(const ALocale: string;
 var
   Status: TICUErrorCode;
   EffectiveLocale: string;
-  LocaleAnsi: AnsiString;
-  SkeletonUnicode, TzUnicode: UnicodeString;
+  LocaleBytes: TBytes;
+  SkeletonUnicode, TzUnicode: string;
   TzPtr: PUChar;
   TzLen: LongInt;
 begin
@@ -3534,7 +3612,7 @@ begin
 
   if AOptions.TimeZone <> '' then
   begin
-    TzUnicode := UnicodeString(AOptions.TimeZone);
+    TzUnicode := string(AOptions.TimeZone);
     TzPtr := PWideChar(TzUnicode);
     TzLen := Length(TzUnicode);
   end
@@ -3545,10 +3623,11 @@ begin
   end;
 
   EffectiveLocale := ApplyDateTimeLocaleOptions(ALocale, AOptions);
-  LocaleAnsi := AnsiString(EffectiveLocale);
-  SkeletonUnicode := UnicodeString(BuildDateTimeSkeleton(AOptions));
+  if not TryEncodeASCIIBytes(EffectiveLocale, LocaleBytes) then
+    Exit;
+  SkeletonUnicode := string(BuildDateTimeSkeleton(AOptions));
   Status := ICU_SUCCESS;
-  AFormatter := IntlFunctions.UdtitvfmtOpen(PAnsiChar(LocaleAnsi),
+  AFormatter := IntlFunctions.UdtitvfmtOpen(BytePointer(LocaleBytes),
     PWideChar(SkeletonUnicode), Length(SkeletonUnicode), TzPtr, TzLen, Status);
   Result := ICUSucceeded(Status) and Assigned(AFormatter);
 end;
@@ -3638,7 +3717,7 @@ var
   Rules: Pointer;
   Buffer: array[0..63] of WideChar;
   ResultLen: LongInt;
-  LocaleAnsi: AnsiString;
+  LocaleBytes: TBytes;
   ICUType: LongInt;
 begin
   Result := False;
@@ -3652,7 +3731,8 @@ begin
      not Assigned(IntlFunctions.UplrulesSelect) then
     Exit;
 
-  LocaleAnsi := AnsiString(ALocale);
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) then
+    Exit;
   case APluralType of
     iptCardinal: ICUType := UPLURAL_TYPE_CARDINAL;
     iptOrdinal: ICUType := UPLURAL_TYPE_ORDINAL;
@@ -3661,7 +3741,8 @@ begin
   end;
 
   Status := ICU_SUCCESS;
-  Rules := IntlFunctions.UplrulesOpenForType(PAnsiChar(LocaleAnsi), ICUType, Status);
+  Rules := IntlFunctions.UplrulesOpenForType(BytePointer(LocaleBytes),
+    ICUType, Status);
   if not ICUSucceeded(Status) or not Assigned(Rules) then
     Exit;
 
@@ -3687,9 +3768,9 @@ var
   Status: TICUErrorCode;
   Buffer: array[0..DISPLAY_BUFFER_CAPACITY - 1] of WideChar;
   ResultLen: LongInt;
-  LocaleAnsi, CodeAnsi, LocaleIdAnsi: AnsiString;
+  LocaleBytes, CodeBytes: TBytes;
   DisplayFn: TUlocGetDisplayName;
-  CurrencyCode: UnicodeString;
+  CurrencyCode: string;
   CurrencyName: PUChar;
   IsChoiceFormat: ByteBool;
   LocaleId: string;
@@ -3701,8 +3782,9 @@ begin
   if not EnsureLoaded then
     Exit;
 
-  LocaleAnsi := AnsiString(ALocale);
-  CodeAnsi := AnsiString(ACode);
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) or
+     not TryEncodeASCIIBytes(ACode, CodeBytes) then
+    Exit;
   LocaleId := '';
 
   if ADisplayType = idntCurrency then
@@ -3712,12 +3794,13 @@ begin
     else
       CurrencyNameStyle := UCURR_LONG_NAME;
     end;
-    CurrencyCode := UnicodeString(UpperCase(ACode));
+    CurrencyCode := string(UpperCase(ACode));
     Status := ICU_SUCCESS;
     ResultLen := 0;
     IsChoiceFormat := False;
     CurrencyName := IntlFunctions.UcurrGetName(PWideChar(CurrencyCode),
-      PAnsiChar(LocaleAnsi), CurrencyNameStyle, @IsChoiceFormat, @ResultLen, Status);
+      BytePointer(LocaleBytes), CurrencyNameStyle, @IsChoiceFormat,
+      @ResultLen, Status);
     if not ICUSucceeded(Status) or not Assigned(CurrencyName) or (ResultLen <= 0) then
       Exit;
 
@@ -3746,13 +3829,13 @@ begin
 
   if LocaleId <> '' then
   begin
-    LocaleIdAnsi := AnsiString(LocaleId);
-    CodeAnsi := LocaleIdAnsi;
+    if not TryEncodeASCIIBytes(LocaleId, CodeBytes) then
+      Exit;
   end;
 
   FillChar(Buffer, SizeOf(Buffer), 0);
   Status := ICU_SUCCESS;
-  ResultLen := DisplayFn(PAnsiChar(CodeAnsi), PAnsiChar(LocaleAnsi),
+  ResultLen := DisplayFn(BytePointer(CodeBytes), BytePointer(LocaleBytes),
     @Buffer[0], DISPLAY_BUFFER_CAPACITY, Status);
   if not ICUSucceeded(Status) or (ResultLen <= 0) then
     Exit;
@@ -3773,11 +3856,11 @@ begin
 end;
 
 function TryICUCreateBreakIterator(const ALocale: string;
-  AGranularity: TIntlSegmenterGranularity; const AText: UnicodeString;
+  AGranularity: TIntlSegmenterGranularity; const AText: string;
   out AIterator: TIntlBreakIterator): Boolean;
 var
   Status: TICUErrorCode;
-  LocaleAnsi: AnsiString;
+  LocaleBytes: TBytes;
 begin
   Result := False;
   AIterator.Handle := nil;
@@ -3789,12 +3872,13 @@ begin
   if not Assigned(IntlFunctions.UbrkOpen) then
     Exit;
 
-  LocaleAnsi := AnsiString(ALocale);
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) then
+    Exit;
   Status := ICU_SUCCESS;
 
   AIterator.Handle := IntlFunctions.UbrkOpen(
     SegmenterGranularityToICU(AGranularity),
-    PAnsiChar(LocaleAnsi),
+    BytePointer(LocaleBytes),
     PWideChar(AText), Length(AText), Status);
 
   Result := ICUSucceeded(Status) and Assigned(AIterator.Handle);
@@ -3869,8 +3953,8 @@ var
   Listfmt: Pointer;
   Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
   ResultLen: LongInt;
-  LocaleAnsi: AnsiString;
-  UStrings: array of UnicodeString;
+  LocaleBytes: TBytes;
+  UStrings: array of string;
   UPtrs: array of PUChar;
   ULens: array of LongInt;
   I: Integer;
@@ -3886,9 +3970,10 @@ begin
      not Assigned(IntlFunctions.UlistfmtFormat) then
     Exit;
 
-  LocaleAnsi := AnsiString(ALocale);
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) then
+    Exit;
   Status := ICU_SUCCESS;
-  Listfmt := IntlFunctions.UlistfmtOpenForType(PAnsiChar(LocaleAnsi),
+  Listfmt := IntlFunctions.UlistfmtOpenForType(BytePointer(LocaleBytes),
     ListTypeToICU(AListType), ListStyleToICU(AListStyle), Status);
   if not ICUSucceeded(Status) or not Assigned(Listfmt) then
     Exit;
@@ -3899,7 +3984,7 @@ begin
     SetLength(ULens, Length(AItems));
     for I := 0 to High(AItems) do
     begin
-      UStrings[I] := UnicodeString(AItems[I]);
+      UStrings[I] := string(AItems[I]);
       UPtrs[I] := PWideChar(UStrings[I]);
       ULens[I] := Length(UStrings[I]);
     end;
@@ -3932,8 +4017,8 @@ function TryICUFormatListToParts(const ALocale: string;
 var
   Status: TICUErrorCode;
   Listfmt, ListResult, FormattedValue: Pointer;
-  LocaleAnsi: AnsiString;
-  UStrings: array of UnicodeString;
+  LocaleBytes: TBytes;
+  UStrings: array of string;
   UPtrs: array of PUChar;
   ULens: array of LongInt;
   I: Integer;
@@ -3953,9 +4038,10 @@ begin
      not Assigned(IntlFunctions.UlistfmtResultAsValue) then
     Exit;
 
-  LocaleAnsi := AnsiString(ALocale);
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) then
+    Exit;
   Status := ICU_SUCCESS;
-  Listfmt := IntlFunctions.UlistfmtOpenForType(PAnsiChar(LocaleAnsi),
+  Listfmt := IntlFunctions.UlistfmtOpenForType(BytePointer(LocaleBytes),
     ListTypeToICU(AListType), ListStyleToICU(AListStyle), Status);
   if not ICUSucceeded(Status) or not Assigned(Listfmt) then
     Exit;
@@ -3966,7 +4052,7 @@ begin
     SetLength(ULens, Length(AItems));
     for I := 0 to High(AItems) do
     begin
-      UStrings[I] := UnicodeString(AItems[I]);
+      UStrings[I] := string(AItems[I]);
       UPtrs[I] := PWideChar(UStrings[I]);
       ULens[I] := Length(UStrings[I]);
     end;
@@ -4041,7 +4127,7 @@ var
   Reldatefmt: Pointer;
   Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
   ResultLen: LongInt;
-  LocaleAnsi: AnsiString;
+  LocaleBytes: TBytes;
 begin
   Result := False;
   AFormatted := '';
@@ -4057,9 +4143,10 @@ begin
   if (ANumeric = irtnAuto) and not Assigned(IntlFunctions.UreldatefmtFormat) then
     Exit;
 
-  LocaleAnsi := AnsiString(ALocale);
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) then
+    Exit;
   Status := ICU_SUCCESS;
-  Reldatefmt := IntlFunctions.UreldatefmtOpen(PAnsiChar(LocaleAnsi),
+  Reldatefmt := IntlFunctions.UreldatefmtOpen(BytePointer(LocaleBytes),
     nil, RelativeTimeStyleToICU(AStyle), 0, Status);
   if not ICUSucceeded(Status) or not Assigned(Reldatefmt) then
     Exit;
@@ -4091,7 +4178,7 @@ function TryICUFormatRelativeTimeToParts(const ALocale: string; AValue: Double;
 var
   Status: TICUErrorCode;
   Reldatefmt, RelativeResult, FormattedValue: Pointer;
-  LocaleAnsi: AnsiString;
+  LocaleBytes: TBytes;
   Formatted: string;
   Spans: TICUFieldSpanArray;
 begin
@@ -4112,9 +4199,10 @@ begin
   if (ANumeric = irtnAuto) and not Assigned(IntlFunctions.UreldatefmtFormatToResult) then
     Exit;
 
-  LocaleAnsi := AnsiString(ALocale);
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) then
+    Exit;
   Status := ICU_SUCCESS;
-  Reldatefmt := IntlFunctions.UreldatefmtOpen(PAnsiChar(LocaleAnsi),
+  Reldatefmt := IntlFunctions.UreldatefmtOpen(BytePointer(LocaleBytes),
     nil, RelativeTimeStyleToICU(AStyle), 0, Status);
   if not ICUSucceeded(Status) or not Assigned(Reldatefmt) then
     Exit;
@@ -4143,7 +4231,7 @@ begin
       if not FormattedValueToFieldSpans(FormattedValue, Formatted, Spans) then
         Exit;
 
-      Result := BuildRelativeTimePartsFromFieldSpans(UnicodeString(Formatted),
+      Result := BuildRelativeTimePartsFromFieldSpans(string(Formatted),
         Spans, RelativeTimeUnitToPartUnit(AUnit), AParts);
     finally
       IntlFunctions.UreldatefmtCloseResult(RelativeResult);
@@ -4182,7 +4270,7 @@ begin
   if not ICUSucceeded(Status) or (ResultLen <= 0) then
     Exit;
 
-  ALocale := string(PAnsiChar(@TagBuf[0]));
+  ALocale := DecodeASCIIZ(@TagBuf[0]);
   Result := ALocale <> '';
 end;
 
@@ -4191,7 +4279,7 @@ var
   Getter: TUnorm2GetInstance;
   Normalizer: Pointer;
   Status: TICUErrorCode;
-  Source, Normalized: UnicodeString;
+  Source, Normalized: string;
   Buffer: array of WideChar;
   Capacity, ResultLen: LongInt;
 begin
@@ -4222,7 +4310,7 @@ begin
   if not ICUSucceeded(Status) or not Assigned(Normalizer) then
     Exit;
 
-  Source := UnicodeString(AStr);
+  Source := string(AStr);
   Capacity := Max(Length(Source) * 4 + 8, 8);
   repeat
     SetLength(Buffer, Capacity);
@@ -4254,11 +4342,10 @@ function TryICUCaseMapUTF8(const ALocale, AStr: string;
 var
   Status: TICUErrorCode;
   CaseMap: TUCaseMap;
-  DestBuf: array of AnsiChar;
+  DestBytes, LocaleBytes, SourceBytes: TBytes;
   DestCapacity: LongInt;
+  ErrorOffset: Integer;
   ResultLen: LongInt;
-  LocaleAnsi, SrcAnsi: AnsiString;
-  ResultUtf8: UTF8String;
 begin
   Result := False;
   AResult := AStr;
@@ -4270,21 +4357,22 @@ begin
      not Assigned(IntlFunctions.UcasemapClose) or not Assigned(AMap) then
     Exit;
 
-  LocaleAnsi := AnsiString(ALocale);
-  SrcAnsi := AnsiString(UTF8Encode(UnicodeString(AStr)));
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) or
+     not TryEncodeUTF8(AStr, SourceBytes, ErrorOffset) then
+    Exit;
 
   Status := ICU_SUCCESS;
-  CaseMap := IntlFunctions.UcasemapOpen(PAnsiChar(LocaleAnsi), 0, Status);
+  CaseMap := IntlFunctions.UcasemapOpen(BytePointer(LocaleBytes), 0, Status);
   if not ICUSucceeded(Status) or not Assigned(CaseMap) then
     Exit;
 
   try
-    DestCapacity := Max(Length(SrcAnsi) * 4 + 8, 8);
+    DestCapacity := Max(Length(SourceBytes) * 4 + 8, 8);
     repeat
-      SetLength(DestBuf, DestCapacity);
+      SetLength(DestBytes, DestCapacity);
       Status := ICU_SUCCESS;
-      ResultLen := AMap(CaseMap, @DestBuf[0], DestCapacity,
-        PAnsiChar(SrcAnsi), Length(SrcAnsi), Status);
+      ResultLen := AMap(CaseMap, BytePointer(DestBytes), DestCapacity,
+        BytePointer(SourceBytes), Length(SourceBytes), Status);
       if (Status = ICU_BUFFER_OVERFLOW) or (ResultLen > DestCapacity) then
         DestCapacity := Max(ResultLen, DestCapacity * 2)
       else
@@ -4294,10 +4382,9 @@ begin
     if not ICUSucceeded(Status) or (ResultLen < 0) then
       Exit;
 
-    SetLength(ResultUtf8, ResultLen);
-    if ResultLen > 0 then
-      Move(DestBuf[0], ResultUtf8[1], ResultLen);
-    AResult := string(UTF8Decode(ResultUtf8));
+    SetLength(DestBytes, ResultLen);
+    if not TryDecodeUTF8(DestBytes, AResult, ErrorOffset) then
+      Exit;
     Result := True;
   finally
     IntlFunctions.UcasemapClose(CaseMap);
@@ -4327,13 +4414,13 @@ begin
 end;
 
 initialization
-  InitCriticalSection(IntlInitLock);
+  CriticalSectionInit(IntlInitLock);
   IntlLoadAttempted := False;
   IntlLoadSucceeded := False;
   FillChar(IntlFunctions, SizeOf(IntlFunctions), 0);
 
 finalization
-  DoneCriticalSection(IntlInitLock);
+  CriticalSectionDone(IntlInitLock);
 
 {$ENDIF}
 

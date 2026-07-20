@@ -16,7 +16,7 @@ uses
   DateUtils
   {$IFDEF UNIX},
   ctypes{$ENDIF}
-  {$IFDEF WINDOWS},
+  {$IFDEF MSWINDOWS},
   Windows{$ENDIF};
 
 {$IFDEF UNIX}
@@ -37,7 +37,7 @@ type
 function clock_gettime(clk_id: cint; tp: Pointer): cint; cdecl; external 'c';
 {$ENDIF}
 
-{$IFDEF WINDOWS}
+{$IFDEF MSWINDOWS}
 var
   QPCFrequency: Int64;
 {$ENDIF}
@@ -51,7 +51,7 @@ begin
   Result := Int64(ts.tv_sec) * 1000000000 + Int64(ts.tv_nsec);
 end;
 {$ELSE}
-{$IFDEF WINDOWS}
+{$IFDEF MSWINDOWS}
 var
   Counter, Whole, Remainder: Int64;
 begin
@@ -81,7 +81,7 @@ begin
   Result := Int64(ts.tv_sec) * 1000000000 + Int64(ts.tv_nsec);
 end;
 {$ELSE}
-{$IFDEF WINDOWS}
+{$IFDEF MSWINDOWS}
 var
   FT: TFileTime;
   Ticks: Int64;
@@ -111,12 +111,12 @@ begin
   else if Ms >= 0.5 then
     Result := SysUtils.Format('%.2fms', [Ms])
   else if Us >= 0.5 then
-    Result := SysUtils.Format('%.2f' + #$C2#$B5 + 's', [Us])
+    Result := SysUtils.Format('%.2f' + #$00B5 + 's', [Us])
   else
     Result := SysUtils.Format('%dns', [ANanoseconds]);
 end;
 
-{$IFDEF WINDOWS}
+{$IFDEF MSWINDOWS}
 initialization
   QueryPerformanceFrequency(QPCFrequency);
 {$ENDIF}

@@ -10,6 +10,7 @@ uses
 
   CLI.ConfigFile,
   CLI.Options,
+  CriticalSections,
 
   Goccia.Application,
   Goccia.Builtins.GlobalShadowRealm,
@@ -30,10 +31,10 @@ type
     FMultifile: TFlagOption;
     FConfig: TStringOption;
     FLogFileHandle: TextFile;
-    FLogLock: TRTLCriticalSection;
+    FLogLock: TGocciaCriticalSection;
     FLogFileOpen: Boolean;
     FAuditLogStream: TFileStream;
-    FAuditLogLock: TRTLCriticalSection;
+    FAuditLogLock: TGocciaCriticalSection;
     FAuditLogOpen: Boolean;
     FEngineOptions: TGocciaEngineOptions;
     FCoverageOptions: TGocciaCoverageOptions;
@@ -93,7 +94,7 @@ type
     function MultifileEnabled: Boolean;
     { Single canonical source text loader.  All runners and workers should
       load source text through this method instead of calling
-      CreateUTF8FileTextLines(ReadUTF8FileText(...)) directly.
+      CreateFileTextLines(ReadUTF8FileText(...)) directly.
       Returns a caller-owned TStringList — registered virtual sections
       return a fresh clone, unregistered names read from disk. }
     function SourceRegistry: TGocciaSourceRegistry;
@@ -138,6 +139,7 @@ uses
   Math,
 
   CLI.Parser,
+  TextEncoding,
   TextSemantics,
 
   Goccia.CLI.Help,
@@ -246,8 +248,12 @@ begin
             ElementValue := TGocciaNumberLiteralValue(Value)
               .ToStringLiteral.Value
           else if Value is TGocciaBooleanLiteralValue then
-            ElementValue := BoolToStr(
-              TGocciaBooleanLiteralValue(Value).Value, 'true', 'false')
+          begin
+            if TGocciaBooleanLiteralValue(Value).Value then
+              ElementValue := 'true'
+            else
+              ElementValue := 'false';
+          end
           else
             Continue;
           if Count >= Length(Result) then
@@ -272,13 +278,13 @@ begin
   Parser := TGocciaJSON5Parser.Create;
   try
     Parsed := Parser.Parse(AContent);
-    if Assigned(TGarbageCollector.Instance) and Assigned(Parsed) then
+    if (TGarbageCollector.Instance <> nil) and Assigned(Parsed) then
       TGarbageCollector.Instance.AddTempRoot(Parsed);
     try
       if Parsed is TGocciaObjectValue then
         Result := ExtractObjectEntries(TGocciaObjectValue(Parsed));
     finally
-      if Assigned(TGarbageCollector.Instance) and Assigned(Parsed) then
+      if (TGarbageCollector.Instance <> nil) and Assigned(Parsed) then
         TGarbageCollector.Instance.RemoveTempRoot(Parsed);
     end;
   finally
@@ -295,13 +301,13 @@ begin
   Parser := TGocciaTOMLParser.Create;
   try
     Parsed := Parser.Parse(AContent);
-    if Assigned(TGarbageCollector.Instance) and Assigned(Parsed) then
+    if (TGarbageCollector.Instance <> nil) and Assigned(Parsed) then
       TGarbageCollector.Instance.AddTempRoot(Parsed);
     try
       if Assigned(Parsed) then
         Result := ExtractObjectEntries(Parsed);
     finally
-      if Assigned(TGarbageCollector.Instance) and Assigned(Parsed) then
+      if (TGarbageCollector.Instance <> nil) and Assigned(Parsed) then
         TGarbageCollector.Instance.RemoveTempRoot(Parsed);
     end;
   finally
@@ -567,7 +573,7 @@ begin
       Exit(Goccia.Engine.stModule);
     if NormalizedValue = 'script' then
       Exit(Goccia.Engine.stScript);
-    WriteLn(StdErr, Format(
+    WriteLn(ErrOutput, Format(
       'Warning: invalid per-file config value for "source-type": %s '
       + '(valid: script, module). Falling back to file extension default.',
       [ValueStr]));
@@ -744,7 +750,7 @@ begin
     if not ManifestModule.TryGetExportValue(KEYWORD_DEFAULT, DefaultValue) then
       raise EArgumentException.Create(
         'Virtual modules manifest module must have a default export.');
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.AddTempRoot(DefaultValue);
     try
       Stringifier := TGocciaJSONStringifier.Create;
@@ -755,7 +761,7 @@ begin
       end;
       AEngine.InjectModulesFromJSON(ManifestJSON, ManifestModule.Path);
     finally
-      if Assigned(TGarbageCollector.Instance) then
+      if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.RemoveTempRoot(DefaultValue);
     end;
   finally
@@ -822,7 +828,7 @@ begin
   begin
     YAMLParser := TGocciaYAMLParser.Create;
     try
-      ParsedValue := YAMLParser.Parse(UTF8String(Content));
+      ParsedValue := YAMLParser.Parse(string(Content));
     finally
       YAMLParser.Free;
     end;
@@ -831,7 +837,7 @@ begin
     raise Exception.CreateFmt(
       'Unsupported virtual modules manifest format: %s', [APath]);
 
-  if Assigned(TGarbageCollector.Instance) and Assigned(ParsedValue) then
+  if (TGarbageCollector.Instance <> nil) and Assigned(ParsedValue) then
     TGarbageCollector.Instance.AddTempRoot(ParsedValue);
   try
     Stringifier := TGocciaJSONStringifier.Create;
@@ -841,7 +847,7 @@ begin
       Stringifier.Free;
     end;
   finally
-    if Assigned(TGarbageCollector.Instance) and Assigned(ParsedValue) then
+    if (TGarbageCollector.Instance <> nil) and Assigned(ParsedValue) then
       TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
   end;
 end;
@@ -901,7 +907,7 @@ begin
 
   if not (ParsedValue is TGocciaObjectValue) then
     Exit;
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(ParsedValue);
   try
     ObjectValue := TGocciaObjectValue(ParsedValue);
@@ -983,7 +989,7 @@ begin
           'Config module must be a definition string or string array.');
     end;
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
   end;
 end;
@@ -992,7 +998,7 @@ procedure InjectInlineModuleDefinition(const AEngine: TGocciaEngine;
   const ADefinition, ABaseAddress: string);
 var
   Address, Content: string;
-  Separator: SizeInt;
+  Separator: NativeInt;
 begin
   Separator := Pos('=', ADefinition);
   if Separator <= 1 then
@@ -1104,11 +1110,11 @@ end;
 
 procedure TGocciaCLIApplication.HandleConsoleLog(const AMethod, ALine: string);
 begin
-  EnterCriticalSection(FLogLock);
+  CriticalSectionEnter(FLogLock);
   try
     WriteLn(FLogFileHandle, '[' + AMethod + '] ' + ALine);
   finally
-    LeaveCriticalSection(FLogLock);
+    CriticalSectionLeave(FLogLock);
   end;
 end;
 
@@ -1116,13 +1122,13 @@ procedure TGocciaCLIApplication.OpenLogFile;
 begin
   if FLogFileOpen then
     Exit;
-  InitCriticalSection(FLogLock);
+  CriticalSectionInit(FLogLock);
   try
     AssignFile(FLogFileHandle, FLog.Value);
     Rewrite(FLogFileHandle);
     FLogFileOpen := True;
   except
-    DoneCriticalSection(FLogLock);
+    CriticalSectionDone(FLogLock);
     raise;
   end;
 end;
@@ -1135,22 +1141,22 @@ begin
     CloseFile(FLogFileHandle);
   finally
     FLogFileOpen := False;
-    DoneCriticalSection(FLogLock);
+    CriticalSectionDone(FLogLock);
   end;
 end;
 
 procedure TGocciaCLIApplication.HandleCapabilityAudit(
   const AEvent: TGocciaCapabilityAuditEvent);
 var
-  Line: RawByteString;
+  Line: TBytes;
 begin
-  Line := RawByteString(UTF8Encode(AEvent.ToJSON + LineEnding));
-  EnterCriticalSection(FAuditLogLock);
+  Line := EncodeUTF8WithReplacement(AEvent.ToJSON + sLineBreak);
+  CriticalSectionEnter(FAuditLogLock);
   try
     if Length(Line) > 0 then
-      FAuditLogStream.WriteBuffer(Line[1], Length(Line));
+      FAuditLogStream.WriteBuffer(Line[0], Length(Line));
   finally
-    LeaveCriticalSection(FAuditLogLock);
+    CriticalSectionLeave(FAuditLogLock);
   end;
 end;
 
@@ -1158,14 +1164,14 @@ procedure TGocciaCLIApplication.OpenAuditLog;
 begin
   if FAuditLogOpen then
     Exit;
-  InitCriticalSection(FAuditLogLock);
+  CriticalSectionInit(FAuditLogLock);
   try
     FAuditLogStream := TFileStream.Create(FAuditLog.Value, fmCreate);
     FAuditLogOpen := True;
   except
     FAuditLogStream.Free;
     FAuditLogStream := nil;
-    DoneCriticalSection(FAuditLogLock);
+    CriticalSectionDone(FAuditLogLock);
     raise;
   end;
 end;
@@ -1178,7 +1184,7 @@ begin
     FreeAndNil(FAuditLogStream);
   finally
     FAuditLogOpen := False;
-    DoneCriticalSection(FAuditLogLock);
+    CriticalSectionDone(FAuditLogLock);
   end;
 end;
 
@@ -1192,7 +1198,7 @@ begin
 
   LogPath := ExpandFileName(FLog.Value);
   AuditPath := ExpandFileName(FAuditLog.Value);
-  {$IF DEFINED(DARWIN) OR DEFINED(WINDOWS)}
+  {$IF DEFINED(DARWIN) OR DEFINED(MSWINDOWS)}
   if SameText(LogPath, AuditPath) then
   {$ELSE}
   if LogPath = AuditPath then
@@ -1223,7 +1229,7 @@ end;
 
 procedure ShutdownCoverageIfEnabled(const AOptions: TGocciaCoverageOptions);
 begin
-  if Assigned(TGocciaCoverageTracker.Instance) then
+  if (TGocciaCoverageTracker.Instance <> nil) then
     TGocciaCoverageTracker.Shutdown;
 end;
 
@@ -1248,7 +1254,7 @@ end;
 
 procedure ShutdownProfilerIfEnabled(const AOptions: TGocciaProfilerOptions);
 begin
-  if Assigned(TGocciaProfiler.Instance) then
+  if (TGocciaProfiler.Instance <> nil) then
     TGocciaProfiler.Shutdown;
 end;
 
@@ -1317,7 +1323,7 @@ function TGocciaCLIApplication.ExpandMultifileFiles(
 var
   I, PartIndex: Integer;
   FileName, Extension, SectionName: string;
-  RawSource: UTF8String;
+  RawSource: string;
   FullSource: TStringList;
   Sections: TObjectList<TStringList>;
   Section: TStringList;
@@ -1350,7 +1356,7 @@ begin
         Continue;
       end;
 
-      FullSource := CreateUTF8FileTextLines(RawSource);
+      FullSource := CreateFileTextLines(RawSource);
       Sections := nil;
       try
         // Only treat as multifile when the input actually contains the
@@ -1378,7 +1384,7 @@ begin
         PartIndex := 0;
         while Sections.Count > 0 do
         begin
-          Section := Sections.ExtractIndex(0);
+          Section := Sections.Extract(Sections[0]);
           Inc(PartIndex);
           SectionName := BuildMultifileSectionName(FileName, PartIndex);
           SourceRegistry.Register(SectionName, Section);
@@ -1439,7 +1445,7 @@ begin
       PartIndex := 0;
       while Sections.Count > 0 do
       begin
-        Section := Sections.ExtractIndex(0);
+        Section := Sections.Extract(Sections[0]);
         Inc(PartIndex);
         SectionName := BuildMultifileSectionName(STDIN_FILE_NAME,
           PartIndex);

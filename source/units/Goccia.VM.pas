@@ -178,7 +178,6 @@ type
     FCoverageEnabled: Boolean;
     FProfilingOpcodes: Boolean;
     FProfilingFunctions: Boolean;
-    FPreviousExceptionMask: TFPUExceptionMask;
     FArgumentPool: TGocciaArgumentsPoolArray;
     FArgumentPoolCount: Integer;
     FLastClosureThisValue: TGocciaRegister;
@@ -207,32 +206,45 @@ type
     procedure EnsureRegisterCapacity(const ACount: Integer);
     procedure EnsureLocalCapacity(const ACount: Integer);
     function GetLocalCell(const AIndex: Integer): TGocciaBytecodeCell;
-    function GetLocalRegister(const AIndex: Integer): TGocciaRegister; inline;
-    function GetRegister(const AIndex: Integer): TGocciaValue; inline;
-    function GetRegisterFast(const AIndex: Integer): TGocciaValue; inline;
-    procedure SetRegister(const AIndex: Integer; const AValue: TGocciaValue); inline;
-    procedure SetRegisterFast(const AIndex: Integer; const AValue: TGocciaValue); inline;
-    procedure SetRegisterRaw(const AIndex: Integer; const AValue: TGocciaRegister); inline;
+    function GetLocalRegister(const AIndex: Integer): TGocciaRegister;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetRegister(const AIndex: Integer): TGocciaValue;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetRegisterFast(const AIndex: Integer): TGocciaValue;
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure SetRegister(const AIndex: Integer; const AValue: TGocciaValue);
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure SetRegisterFast(const AIndex: Integer; const AValue: TGocciaValue);
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure SetRegisterRaw(const AIndex: Integer; const AValue: TGocciaRegister);
+    {$IFDEF FPC}inline;{$ENDIF}
     procedure InstallFunctionPrototype(const AFunction: TGocciaObjectValue;
       const AKind: TGocciaFunctionObjectIntrinsicKind);
-    function GetLocal(const AIndex: Integer): TGocciaValue; inline;
-    function GetLocalFast(const AIndex: Integer): TGocciaValue; inline;
-    procedure SetLocal(const AIndex: Integer; const AValue: TGocciaValue); inline;
-    procedure SetLocalFast(const AIndex: Integer; const AValue: TGocciaValue); inline;
-    procedure SetLocalRaw(const AIndex: Integer; const AValue: TGocciaRegister); inline;
+    function GetLocal(const AIndex: Integer): TGocciaValue;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetLocalFast(const AIndex: Integer): TGocciaValue;
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure SetLocal(const AIndex: Integer; const AValue: TGocciaValue);
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure SetLocalFast(const AIndex: Integer; const AValue: TGocciaValue);
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure SetLocalRaw(const AIndex: Integer; const AValue: TGocciaRegister);
+    {$IFDEF FPC}inline;{$ENDIF}
     function MatchesNullishKind(const AValue: TGocciaValue; const AKind: UInt8): Boolean;
     function TryGetArrayIndex(const AKey: TGocciaValue; out AIndex: Integer): Boolean;
     function TryGetArrayIndexRegister(const AKey: TGocciaRegister;
       out AIndex: Integer): Boolean;
     function KeyToPropertyName(const AKey: TGocciaValue): string;
     function KeyToPropertyNameRegister(const AKey: TGocciaRegister): string;
-    function TryResolveObjectKey(const AKeyReg: TGocciaRegister; out AResolved: TGocciaValue): Boolean; inline;
+    function TryResolveObjectKey(const AKeyReg: TGocciaRegister; out AResolved: TGocciaValue): Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
     // Shared computed-property-access cores. AProbeArrayIndex preserves the
     // historical per-receiver cascades: array/string receivers probe for an
     // array index, class/object receivers do not.
     function ClassifyPropertyKey(const AKeyReg: TGocciaRegister;
       const AProbeArrayIndex: Boolean): TGocciaPropertyKey;
-    function PropertyKeyName(const AKey: TGocciaPropertyKey): string; inline;
+    function PropertyKeyName(const AKey: TGocciaPropertyKey): string;
+    {$IFDEF FPC}inline;{$ENDIF}
     // Register parameters are passed BY VALUE deliberately: callers pass
     // FRegisters[..] slots, and ClassifyPropertyKey can run user code
     // (ToPropertyKey -> toString) that grows and reallocates the register
@@ -481,6 +493,7 @@ uses
   SysUtils,
 
   BigInteger,
+  NumberBits,
   OrderedStringMap,
   TextSemantics,
   TimingUtils,
@@ -508,6 +521,9 @@ uses
   Goccia.ImportMeta,
   Goccia.InstructionLimit,
   Goccia.MicrotaskQueue,
+  Goccia.NumberConversion,
+  Goccia.NumberExponentiation,
+  Goccia.NumberRemainder,
   Goccia.PatternMatching,
   Goccia.Profiler,
   Goccia.RegExp.Runtime,
@@ -622,7 +638,8 @@ type
   end;
 
 function BytecodeFunctionIntrinsicKind(const ATemplate: TGocciaFunctionTemplate):
-  TGocciaFunctionObjectIntrinsicKind; inline;
+  TGocciaFunctionObjectIntrinsicKind;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Assigned(ATemplate) and ATemplate.IsAsync and ATemplate.IsGenerator then
     Result := foikAsyncGenerator
@@ -636,7 +653,8 @@ end;
 
 function DirectEvalBindingIsNonStrictImmutable(
   const ABinding: TGocciaDirectEvalBindingInfo;
-  const ATemplate: TGocciaFunctionTemplate): Boolean; inline;
+  const ATemplate: TGocciaFunctionTemplate): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ABinding.IsConst and
     (ABinding.IsEvalSyntheticArguments or
@@ -644,9 +662,10 @@ begin
       (ATemplate.Name <> '') and (ABinding.Name = ATemplate.Name)));
 end;
 
-procedure EnsureVMObjectPrototypeInitialized; inline;
+procedure EnsureVMObjectPrototypeInitialized;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+  if TGocciaObjectValue.SharedObjectPrototype = nil then
     TGocciaObjectValue.InitializeSharedPrototype;
 end;
 
@@ -765,17 +784,9 @@ function BytecodePrivateTokenForKey(const AKey,
 function BytecodePrivateReceiverBrandToken(
   const AObject: TGocciaValue): string; forward;
 
-function UTF16CodeUnitImmediateToUTF8(const ACodeUnit: UInt16): string;
+function UTF16CodeUnitImmediateToString(const ACodeUnit: UInt16): string;
 begin
-  if ACodeUnit <= $7F then
-    Result := Chr(ACodeUnit)
-  else if ACodeUnit <= $7FF then
-    Result := Chr($C0 or (ACodeUnit shr 6)) +
-      Chr($80 or (ACodeUnit and $3F))
-  else
-    Result := Chr($E0 or (ACodeUnit shr 12)) +
-      Chr($80 or ((ACodeUnit shr 6) and $3F)) +
-      Chr($80 or (ACodeUnit and $3F));
+  Result := Char(ACodeUnit);
 end;
 
 { TGocciaVMDirectEvalScope }
@@ -1550,7 +1561,8 @@ begin
 end;
 
 function VMIsPrototypeInChain(const AObj: TGocciaObjectValue;
-  const ATargetProto: TGocciaObjectValue): Boolean; inline;
+  const ATargetProto: TGocciaObjectValue): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   CurrentProto: TGocciaObjectValue;
 begin
@@ -1565,7 +1577,8 @@ begin
 end;
 
 function VMHasSymbolPropertyInChain(const AObject: TGocciaObjectValue;
-  const ASymbol: TGocciaSymbolValue): Boolean; inline;
+  const ASymbol: TGocciaSymbolValue): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   Current: TGocciaObjectValue;
 begin
@@ -1580,7 +1593,8 @@ begin
 end;
 
 function VMGetOwnDataDescriptorValue(const AObject: TGocciaObjectValue;
-  const AName: string; out AValue: TGocciaValue): Boolean; inline;
+  const AName: string; out AValue: TGocciaValue): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
@@ -1599,7 +1613,8 @@ begin
 end;
 
 function VMTrySetOwnWritableDataProperty(const AObject: TGocciaObjectValue;
-  const AName: string; const AValue: TGocciaValue): Boolean; inline;
+  const AName: string; const AValue: TGocciaValue): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
@@ -1618,7 +1633,8 @@ end;
 
 function VMTryGetCachedGlobalOwnDataProperty(
   const AObject: TGocciaObjectValue; const AEntryIndex: Integer;
-  const AVersion: Cardinal; out AValue: TGocciaValue): Boolean; inline;
+  const AVersion: Cardinal; out AValue: TGocciaValue): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
@@ -1639,7 +1655,8 @@ end;
 
 function VMTryGetGlobalOwnDataPropertyFillCache(
   const AObject: TGocciaObjectValue; const AName: string;
-  out AEntryIndex: Integer; out AVersion: Cardinal): Boolean; inline;
+  out AEntryIndex: Integer; out AVersion: Cardinal): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
@@ -1660,7 +1677,8 @@ const
   GLOBAL_READ_OBJECT_BINDING_BUILTIN = 2;
 
 function VMGlobalObjectBindingCacheStillPrecedes(
-  const AScope: TGocciaScope; const ACache: PGocciaGlobalReadCacheEntry): Boolean; inline;
+  const AScope: TGocciaScope; const ACache: PGocciaGlobalReadCacheEntry): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   case ACache^.ObjectBindingKind of
     GLOBAL_READ_OBJECT_BINDING_VAR:
@@ -1675,10 +1693,10 @@ begin
   end;
 end;
 
-function VMValueToRegisterFast(const AValue: TGocciaValue): TGocciaRegister; inline;
+function VMValueToRegisterFast(const AValue: TGocciaValue): TGocciaRegister;
+{$IFDEF FPC}inline;{$ENDIF}
 var
   NumberValue: Double;
-  Bits: Int64 absolute NumberValue;
 begin
   if not Assigned(AValue) or (AValue is TGocciaUndefinedLiteralValue) then
     Exit(RegisterUndefined);
@@ -1695,7 +1713,7 @@ begin
     NumberValue := TGocciaNumberLiteralValue(AValue).Value;
     if NumberValue = 0.0 then
     begin
-      if Bits < 0 then
+      if NumberBits.IsNegativeZero(NumberValue) then
         Exit(RegisterObject(AValue));
       Exit(RegisterInt(0));
     end;
@@ -1716,7 +1734,8 @@ end;
 // so the OP_GET_PROP_CONST inline cache may serve them without going
 // through their virtual GetProperty path. Exact-class checks exclude every
 // subclass with overridden lookup semantics (proxies, exotic objects).
-function VMPropertyReadCacheableReceiver(const AObject: TObject): Boolean; inline;
+function VMPropertyReadCacheableReceiver(const AObject: TObject): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AObject.ClassType = TGocciaObjectValue) or
     (AObject.ClassType = TGocciaVMLiteralObjectValue) or
@@ -1734,7 +1753,8 @@ end;
 // (TOrderedStringMap.Add on an existing key).
 function VMTryGetCachedOwnDataProperty(const AObject: TGocciaObjectValue;
   const ACache: PGocciaPropertyReadCacheEntry;
-  out AValue: TGocciaValue): Boolean; inline;
+  out AValue: TGocciaValue): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
@@ -1821,7 +1841,8 @@ end;
 // prefix shape's covered entries stay valid as the holder map grows, and
 // the descriptor is re-read by entry index on every hit.
 function VMHolderShapeMatches(const AObject: TGocciaObjectValue;
-  const ACachedShape: Pointer): Boolean; inline;
+  const ACachedShape: Pointer): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := Pointer(
     TGocciaShapedPropertyMap(AObject.Properties).EnsureShape) = ACachedShape;
@@ -1832,7 +1853,8 @@ end;
 // EnsureShape keeps returning the same prefix pointer, so pointer equality
 // alone cannot prove a name is still absent.
 function VMAbsenceShapeMatches(const AObject: TGocciaObjectValue;
-  const ACachedShape: Pointer): Boolean; inline;
+  const ACachedShape: Pointer): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   Map: TGocciaShapedPropertyMap;
   LevelShape: TGocciaShape;
@@ -1963,7 +1985,8 @@ end;
 
 function VMFillProtoReadCache(const AReceiver: TGocciaObjectValue;
   const AName: string; const ACache: PGocciaProtoReadCacheEntry;
-  out AValue: TGocciaValue): Boolean; inline;
+  out AValue: TGocciaValue): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := VMFillProtoReadCacheCore(AReceiver, AName, ACache, AValue);
   // Every decline advances the streak so sites that can never use this
@@ -1976,7 +1999,8 @@ begin
 end;
 
 function VMGetOwnDataDescriptorRegister(const AObject: TGocciaObjectValue;
-  const AName: string; out AValue: TGocciaRegister): Boolean; inline;
+  const AName: string; out AValue: TGocciaRegister): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   Value: TGocciaValue;
 begin
@@ -1991,7 +2015,8 @@ begin
 end;
 
 function VMSetOwnWritableDataDescriptorValue(const AObject: TGocciaObjectValue;
-  const AName: string; const AValue: TGocciaValue): Boolean; inline;
+  const AName: string; const AValue: TGocciaValue): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
@@ -2011,7 +2036,8 @@ end;
 
 // ES2026 §7.3.6 CreateDataPropertyOrThrow(O, P, V)
 procedure DefineDataPropertyOnObject(const ATarget: TGocciaObjectValue;
-  const AName: string; const AValue: TGocciaValue); inline;
+  const AName: string; const AValue: TGocciaValue);
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (ATarget is TGocciaVMLiteralObjectValue) and
      TGocciaVMLiteralObjectValue(ATarget)
@@ -2023,7 +2049,8 @@ end;
 
 // ES2026 §7.3.6 CreateDataPropertyOrThrow(O, P, V) — symbol variant
 procedure DefineSymbolDataPropertyOnObject(const ATarget: TGocciaObjectValue;
-  const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue); inline;
+  const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   ATarget.CreateDataPropertyOrThrow(ASymbol, AValue);
 end;
@@ -2164,7 +2191,7 @@ begin
     Exit;
 
   SourceObject := ToObject(ASource);
-  SourceRooted := Assigned(TGarbageCollector.Instance) and
+  SourceRooted := (TGarbageCollector.Instance <> nil) and
     not (ASource is TGocciaObjectValue);
   if SourceRooted then
     TGarbageCollector.Instance.AddTempRoot(SourceObject);
@@ -2203,9 +2230,8 @@ begin
   end;
 end;
 
-function VMNumberValue(const AValue: Double): TGocciaNumberLiteralValue; inline;
-var
-  Bits: Int64 absolute AValue;
+function VMNumberValue(const AValue: Double): TGocciaNumberLiteralValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if Math.IsNaN(AValue) then
     Exit(TGocciaNumberLiteralValue.NaNValue);
@@ -2217,7 +2243,7 @@ begin
   end;
   if AValue = 0.0 then
   begin
-    if Bits < 0 then
+    if NumberBits.IsNegativeZero(AValue) then
       Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
     Exit(TGocciaNumberLiteralValue.ZeroValue);
   end;
@@ -2226,15 +2252,14 @@ begin
   Result := TGocciaNumberLiteralValue.Create(AValue);
 end;
 
-function VMNumberRegister(const AValue: Double): TGocciaRegister; inline;
-var
-  Bits: Int64 absolute AValue;
+function VMNumberRegister(const AValue: Double): TGocciaRegister;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if Math.IsNaN(AValue) or Math.IsInfinite(AValue) then
     Exit(RegisterObject(VMNumberValue(AValue)));
   if AValue = 0.0 then
   begin
-    if Bits < 0 then
+    if NumberBits.IsNegativeZero(AValue) then
       Exit(RegisterObject(TGocciaNumberLiteralValue.NegativeZeroValue));
     Exit(RegisterInt(0));
   end;
@@ -2244,121 +2269,16 @@ begin
   Result := RegisterFloat(AValue);
 end;
 
-function VMModuloRegister(const ALeft, ARight: Double): TGocciaRegister; inline;
-var
-  RemainderValue: Double;
-  LeftBits: Int64 absolute ALeft;
+function VMModuloRegister(const ALeft, ARight: Double): TGocciaRegister;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Math.IsNaN(ALeft) or Math.IsNaN(ARight) or Math.IsInfinite(ALeft) or
-     (ARight = 0.0) then
-    Exit(RegisterObject(TGocciaNumberLiteralValue.NaNValue));
-
-  if Math.IsInfinite(ARight) then
-  begin
-    if (ALeft = 0.0) and (LeftBits < 0) then
-      Exit(RegisterObject(TGocciaNumberLiteralValue.NegativeZeroValue));
-    Exit(VMNumberRegister(ALeft));
-  end;
-
-  RemainderValue := FMod(ALeft, ARight);
-  if (RemainderValue = 0.0) and ((ALeft < 0.0) or
-     ((ALeft = 0.0) and (LeftBits < 0))) then
-    Exit(RegisterObject(TGocciaNumberLiteralValue.NegativeZeroValue));
-  Result := VMNumberRegister(RemainderValue);
+  Result := VMNumberRegister(NumberRemainder(ALeft, ARight));
 end;
 
-function VMIsNegativeZero(const AValue: Double): Boolean; inline;
-var
-  Bits: Int64 absolute AValue;
+function VMPowerRegister(const ALeft, ARight: Double): TGocciaRegister;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  Result := (AValue = 0.0) and (Bits < 0);
-end;
-
-function VMIsOddIntegralNumber(const AValue: Double): Boolean; inline;
-begin
-  Result := not Math.IsNaN(AValue) and not Math.IsInfinite(AValue) and
-    (Frac(AValue) = 0.0) and (Frac(AValue / 2.0) <> 0.0);
-end;
-
-function VMPowerRegister(const ALeft, ARight: Double): TGocciaRegister; inline;
-var
-  OldMask: TFPUExceptionMask;
-begin
-  if Math.IsNaN(ARight) then
-    Exit(RegisterObject(TGocciaNumberLiteralValue.NaNValue));
-  if ARight = 0.0 then
-    Exit(RegisterInt(1));
-  if Math.IsNaN(ALeft) then
-    Exit(RegisterObject(TGocciaNumberLiteralValue.NaNValue));
-
-  // ES2026 §6.1.6.1.3 Number::exponentiate(base, exponent)
-  // steps 4-7: scalar VM fast path must preserve infinity and zero signs.
-  if Math.IsInfinite(ALeft) and (ALeft > 0.0) then
-  begin
-    if ARight > 0.0 then
-      Exit(RegisterObject(TGocciaNumberLiteralValue.InfinityValue));
-    Exit(RegisterInt(0));
-  end;
-
-  if Math.IsInfinite(ALeft) and (ALeft < 0.0) then
-  begin
-    if ARight > 0.0 then
-    begin
-      if VMIsOddIntegralNumber(ARight) then
-        Exit(RegisterObject(TGocciaNumberLiteralValue.NegativeInfinityValue));
-      Exit(RegisterObject(TGocciaNumberLiteralValue.InfinityValue));
-    end;
-    if VMIsOddIntegralNumber(ARight) then
-      Exit(RegisterObject(TGocciaNumberLiteralValue.NegativeZeroValue));
-    Exit(RegisterInt(0));
-  end;
-
-  if ALeft = 0.0 then
-  begin
-    if not VMIsNegativeZero(ALeft) then
-    begin
-      if ARight > 0.0 then
-        Exit(RegisterInt(0));
-      Exit(RegisterObject(TGocciaNumberLiteralValue.InfinityValue));
-    end;
-
-    if ARight > 0.0 then
-    begin
-      if VMIsOddIntegralNumber(ARight) then
-        Exit(RegisterObject(TGocciaNumberLiteralValue.NegativeZeroValue));
-      Exit(RegisterInt(0));
-    end;
-    if VMIsOddIntegralNumber(ARight) then
-      Exit(RegisterObject(TGocciaNumberLiteralValue.NegativeInfinityValue));
-    Exit(RegisterObject(TGocciaNumberLiteralValue.InfinityValue));
-  end;
-
-  if Math.IsInfinite(ARight) then
-  begin
-    if Abs(ALeft) > 1.0 then
-    begin
-      if ARight > 0.0 then
-        Exit(RegisterObject(TGocciaNumberLiteralValue.InfinityValue));
-      Exit(RegisterInt(0));
-    end;
-    if Abs(ALeft) = 1.0 then
-      Exit(RegisterObject(TGocciaNumberLiteralValue.NaNValue));
-    if ARight > 0.0 then
-      Exit(RegisterInt(0));
-    Exit(RegisterObject(TGocciaNumberLiteralValue.InfinityValue));
-  end;
-
-  if (ALeft < 0.0) and (Frac(ARight) <> 0.0) then
-    Exit(RegisterObject(TGocciaNumberLiteralValue.NaNValue));
-
-  OldMask := GetExceptionMask;
-  SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow,
-    exUnderflow, exPrecision]);
-  try
-    Result := VMNumberRegister(Power(ALeft, ARight));
-  finally
-    SetExceptionMask(OldMask);
-  end;
+  Result := VMNumberRegister(NumberExponentiation(ALeft, ARight));
 end;
 
 
@@ -2366,7 +2286,8 @@ end;
 // Delegates to Goccia.Types.Enforcement.EnforceStrictType so the interpreter
 // and bytecode VM share a single enforcement implementation.
 procedure VMStrictTypeCheckRegisterValue(const AValue: TGocciaValue;
-  const AExpected: TGocciaLocalType); inline;
+  const AExpected: TGocciaLocalType);
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   EnforceStrictType(AValue, AExpected);
 end;
@@ -2376,7 +2297,8 @@ end;
 // NaN, Infinity, negative zero, or fractional results.
 // Uses implicit Double assignment (not Int64 * 1.0) to avoid AArch64 FPC 3.2.2
 // codegen bug where Int64 * 1.0 produces wrong results near LongInt boundaries.
-function VMIntResult(const AValue: Int64): TGocciaRegister; inline;
+function VMIntResult(const AValue: Int64): TGocciaRegister;
+{$IFDEF FPC}inline;{$ENDIF}
 var
   FloatValue: Double;
 begin
@@ -2390,7 +2312,8 @@ begin
 end;
 
 function VMRegisterToStringFast(
-  const AValue: TGocciaRegister): TGocciaStringLiteralValue; inline;
+  const AValue: TGocciaRegister): TGocciaStringLiteralValue;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   case AValue.Kind of
     grkUndefined:
@@ -2421,7 +2344,8 @@ begin
 end;
 
 function VMGlobalConstructor(const AScope: TGocciaScope;
-  const AName: string): TGocciaValue; inline;
+  const AName: string): TGocciaValue;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   RootScope: TGocciaScope;
 begin
@@ -2435,18 +2359,21 @@ begin
     Result := nil;
 end;
 
-function VMGlobalObjectConstructor(const AScope: TGocciaScope): TGocciaValue; inline;
+function VMGlobalObjectConstructor(const AScope: TGocciaScope): TGocciaValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := VMGlobalConstructor(AScope, CONSTRUCTOR_OBJECT);
 end;
 
-function VMGlobalFunctionConstructor(const AScope: TGocciaScope): TGocciaValue; inline;
+function VMGlobalFunctionConstructor(const AScope: TGocciaScope): TGocciaValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := VMGlobalConstructor(AScope, CONSTRUCTOR_FUNCTION);
 end;
 
 function VMBuiltinConstructorMatchValue(const AMatcher, ASubject: TGocciaValue;
-  const AScope: TGocciaScope; out AMatches: Boolean): Boolean; inline;
+  const AScope: TGocciaScope; out AMatches: Boolean): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   ObjectConstructor, ArrayConstructor, StringConstructor, NumberConstructor,
     BooleanConstructor, FunctionConstructor, BigIntConstructor,
@@ -2513,7 +2440,8 @@ begin
 end;
 
 function VMInstanceOfValue(const ALeft, ARight,
-  AObjectConstructor, AFunctionConstructor: TGocciaValue): TGocciaValue; inline;
+  AObjectConstructor, AFunctionConstructor: TGocciaValue): TGocciaValue;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   // Keep bytecode in lockstep with interpreter semantics for ES2026
   // §13.10.2, including @@hasInstance and non-callable target errors.
@@ -2923,7 +2851,7 @@ begin
   FVM := AVM;
   inherited Create;
   GCIndex := -1;
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.RegisterObject(Self);
 end;
 
@@ -3407,11 +3335,10 @@ begin
 end;
 
 procedure TGocciaVMDecoratorSession.MarkReferences;
-var
-  Initializers: TArray<TGocciaValue>;
-  Initializer: TGocciaValue;
-
   procedure MarkCollector(const ACollector: TGocciaInitializerCollector);
+  var
+    Initializers: TArray<TGocciaValue>;
+    Initializer: TGocciaValue;
   begin
     if not Assigned(ACollector) then
       Exit;
@@ -3827,7 +3754,7 @@ var
   Promise: TGocciaPromiseValue;
 begin
   Promise := TGocciaPromiseValue.Create;
-  IsRooted := Assigned(TGarbageCollector.Instance);
+  IsRooted := (TGarbageCollector.Instance <> nil);
   if IsRooted then
     TGarbageCollector.Instance.AddTempRoot(Promise);
   try
@@ -4129,7 +4056,7 @@ var
   IsRooted: Boolean;
 begin
   Result := TGocciaPromiseValue.Create;
-  IsRooted := Assigned(TGarbageCollector.Instance);
+  IsRooted := (TGarbageCollector.Instance <> nil);
   if IsRooted then
     TGarbageCollector.Instance.AddTempRoot(Result);
   try
@@ -5380,7 +5307,7 @@ var
   UnwrappedValue: TGocciaValue;
   Value: TGocciaValue;
 begin
-  IsRooted := Assigned(TGarbageCollector.Instance);
+  IsRooted := (TGarbageCollector.Instance <> nil);
   if IsRooted then
     TGarbageCollector.Instance.AddTempRoot(ARequest.Promise);
   try
@@ -6332,7 +6259,7 @@ begin
     Exit(AThisValue);
   end;
 
-  if Assigned(SuperClass.NativeInstanceDefaultPrototype) then
+  if SuperClass.NativeInstanceDefaultPrototype <> nil then
   begin
     NewThis := SuperClass.CreateNativeInstance(AArguments);
     if not (NewThis is TGocciaObjectValue) then
@@ -6416,8 +6343,6 @@ const
   INITIAL_STACK_SIZE = 4096;
 begin
   inherited Create;
-  FPreviousExceptionMask := GetExceptionMask;
-  SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
   FHandlerStack := TGocciaBytecodeHandlerStack.Create;
   // Teach the shared call stack how to materialise the template-pointer frames
   // that SetupNewFrame pushes on the hot path. This is class-level, so it is
@@ -6456,7 +6381,7 @@ destructor TGocciaVM.Destroy;
 var
   I: Integer;
 begin
-  if Assigned(TGarbageCollector.Instance) and Assigned(FStackRoot) and
+  if (TGarbageCollector.Instance <> nil) and Assigned(FStackRoot) and
      FStackRootRegistered then
     TGarbageCollector.Instance.RemoveRootObject(FStackRoot);
   FStackRoot.Free;
@@ -6468,14 +6393,13 @@ begin
   end;
   for I := 0 to FArgumentPoolCount - 1 do
     FArgumentPool[I].Free;
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     for I := Low(FASCIIStringValues) to High(FASCIIStringValues) do
       if Assigned(FASCIIStringValues[I]) then
         TGarbageCollector.Instance.UnpinObject(FASCIIStringValues[I]);
   SetLength(FArgumentPool, 0);
   SetLength(FTempSavedStateRoots, 0);
   FHandlerStack.Free;
-  SetExceptionMask(FPreviousExceptionMask);
   inherited;
 end;
 
@@ -6487,7 +6411,7 @@ begin
     Exit;
 
   Result := TGocciaStringLiteralValue.Create(Chr(ACodeUnit));
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
   begin
     TGarbageCollector.Instance.PinObject(Result);
     FASCIIStringValues[ACodeUnit] := Result;
@@ -7978,7 +7902,8 @@ begin
 end;
 
 function RegisterMatchesNullishKind(const AValue: TGocciaRegister;
-  const AKind: UInt8): Boolean; inline;
+  const AKind: UInt8): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   case AKind of
     GOCCIA_NULLISH_MATCH_ANY:
@@ -8725,7 +8650,6 @@ begin
         // IteratorNext/IteratorStepValue mark the iterator record done before
         // propagating these failures, so the outer binding/destructuring
         // algorithm must not call IteratorClose for this path.
-        AcquireExceptionObject;
         raise;
       end;
       Exit;
@@ -8803,7 +8727,6 @@ begin
         // IteratorNext/IteratorStepValue mark the iterator record done before
         // propagating these failures, so the outer binding/destructuring
         // algorithm must not call IteratorClose for this path.
-        AcquireExceptionObject;
         raise;
       end;
       Exit;
@@ -8877,10 +8800,10 @@ begin
   end;
 
   AArray := TGocciaArrayValue.Create;
-  ArrayRooted := Assigned(TGarbageCollector.Instance);
+  ArrayRooted := (TGarbageCollector.Instance <> nil);
   if ArrayRooted then
     TGarbageCollector.Instance.AddTempRoot(AArray);
-  IteratorRooted := Assigned(TGarbageCollector.Instance) and (IteratorValue <> AIterable);
+  IteratorRooted := (TGarbageCollector.Instance <> nil) and (IteratorValue <> AIterable);
   if IteratorRooted then
     TGarbageCollector.Instance.AddTempRoot(IteratorValue);
   try
@@ -8896,7 +8819,6 @@ begin
         until DoneFlag;
       except
         // If IteratorStep/IteratorNext itself throws, do not call return().
-        AcquireExceptionObject;
         raise;
       end;
       Exit(True);
@@ -8933,7 +8855,6 @@ begin
       until DoneFlag;
     except
       // If IteratorStep/IteratorNext itself throws, do not call return().
-      AcquireExceptionObject;
       raise;
     end;
     Result := True;
@@ -9277,13 +9198,13 @@ begin
         Format('''%s'' is not a constructor',
           [TGocciaNativeFunctionValue(AConstructor).Name]));
     ConstructorName := TGocciaNativeFunctionValue(AConstructor).Name;
-    if Assigned(TGocciaCallStack.Instance) then
+    if (TGocciaCallStack.Instance <> nil) then
       TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
     try
       Result := TGocciaNativeFunctionValue(AConstructor).Construct(
         AArguments, EffectiveNewTarget);
     finally
-      if Assigned(TGocciaCallStack.Instance) then
+      if (TGocciaCallStack.Instance <> nil) then
         TGocciaCallStack.Instance.Pop;
     end;
     Exit;
@@ -9332,7 +9253,7 @@ begin
     ReceiverInstance := TGocciaObjectValue.Create(ReceiverPrototype);
     TGarbageCollector.Instance.AddTempRoot(ReceiverInstance);
     try
-      if Assigned(TGocciaCallStack.Instance) then
+      if (TGocciaCallStack.Instance <> nil) then
         TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
       try
         // InvokeConstructableWithReceiver merges bound args, dispatches to
@@ -9341,7 +9262,7 @@ begin
         Result := InvokeConstructableWithReceiver(AConstructor, AArguments,
           ReceiverInstance, EffectiveNewTarget);
       finally
-        if Assigned(TGocciaCallStack.Instance) then
+        if (TGocciaCallStack.Instance <> nil) then
           TGocciaCallStack.Instance.Pop;
       end;
     finally
@@ -9814,13 +9735,15 @@ begin
 end;
 
 function HasDynamicVarBinding(const AScope: TGocciaScope;
-  const AName: string): Boolean; inline;
+  const AName: string): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := Assigned(FindDynamicVarBindingScope(AScope, AName));
 end;
 
 function HasOwnDynamicVarBinding(const AScope: TGocciaScope;
-  const AName: string): Boolean; inline;
+  const AName: string): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := Assigned(AScope) and
     (AScope.ContainsOwnVarBinding(AName) or
@@ -9928,7 +9851,7 @@ function BytecodePrivateTokenForKey(const AKey,
   AFallbackPrivateBrandToken: string): string;
 var
   KeyBody: string;
-  DelimiterPos: SizeInt;
+  DelimiterPos: NativeInt;
 begin
   Result := AFallbackPrivateBrandToken;
   if IsBytecodePrivateBrandKey(AKey) then
@@ -9952,7 +9875,7 @@ end;
 function BytecodePrivateSourceName(const AName: string): string;
 var
   Body: string;
-  DelimiterPos: SizeInt;
+  DelimiterPos: NativeInt;
 begin
   Result := AName;
   if IsBytecodePrivateKey(Result) then
@@ -10442,7 +10365,7 @@ begin
   if not Assigned(AClassValue) then
     Exit;
 
-  if Assigned(AClassValue.NativeInstanceDefaultPrototype) then
+  if AClassValue.NativeInstanceDefaultPrototype <> nil then
   begin
     TargetInstance := AClassValue.CreateNativeInstance(AArguments);
     if not (TargetInstance is TGocciaObjectValue) then
@@ -10597,7 +10520,7 @@ begin
   if not Assigned(AClassValue) then
     Exit;
 
-  if Assigned(AClassValue.NativeInstanceDefaultPrototype) then
+  if AClassValue.NativeInstanceDefaultPrototype <> nil then
   begin
     BoxedArgs := MaterializeArguments(AArguments);
     try
@@ -11987,7 +11910,7 @@ begin
   if PropKeyValue is TGocciaSymbolValue then
   begin
     if (ReceiverValue is TGocciaSymbolValue) and
-       Assigned(TGocciaSymbolValue.SharedPrototype) then
+       (TGocciaSymbolValue.SharedPrototype <> nil) then
       SetRegister(ADest, TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype)
         .GetSymbolPropertyWithReceiver(
           TGocciaSymbolValue(PropKeyValue), ReceiverValue))
@@ -12835,7 +12758,7 @@ begin
       CallerScope.ThisValue := DirectEvalLexicalThisValue(Self,
         UseGlobalVarEnvironment, ATemplate, EnvIndex);
 
-      if Assigned(TGarbageCollector.Instance) then
+      if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.AddTempRoot(CallerScope);
       try
         if StrictEval then
@@ -12850,7 +12773,7 @@ begin
           VarScope := CallerScope;
         ActiveScope.ThisValue := CallerScope.ThisValue;
         ActiveScope.NonStrictMode := not StrictEval;
-        if Assigned(TGarbageCollector.Instance) then
+        if (TGarbageCollector.Instance <> nil) then
           TGarbageCollector.Instance.AddTempRoot(ActiveScope);
         try
           EvalContext := Default(TGocciaEvaluationContext);
@@ -12919,11 +12842,11 @@ begin
             ExecutionContext.Free;
           end;
         finally
-          if Assigned(TGarbageCollector.Instance) then
+          if (TGarbageCollector.Instance <> nil) then
             TGarbageCollector.Instance.RemoveTempRoot(ActiveScope);
         end;
       finally
-        if Assigned(TGarbageCollector.Instance) then
+        if (TGarbageCollector.Instance <> nil) then
           TGarbageCollector.Instance.RemoveTempRoot(CallerScope);
       end;
     finally
@@ -13052,7 +12975,7 @@ begin
   if FProfilingFunctions and Assigned(ATemplate) and
      (ATemplate.ProfileIndex >= 0) then
     TGocciaProfiler.Instance.PopFunction(ATemplate.ProfileIndex, GetNanoseconds);
-  if Assigned(TGocciaCallStack.Instance) then
+  if (TGocciaCallStack.Instance <> nil) then
     TGocciaCallStack.Instance.Pop;
   if FCurrentExecutionContextPushed then
   begin
@@ -13171,7 +13094,7 @@ begin
   // call performs no per-call stack-trace string work. The resolver registered
   // in the constructor reproduces ATemplate.Name and ExecutionSourcePath at
   // capture time, keeping Error.stack output byte-identical.
-  if Assigned(TGocciaCallStack.Instance) then
+  if (TGocciaCallStack.Instance <> nil) then
     if Assigned(ATemplate.DebugInfo) and (ATemplate.DebugInfo.SourceFile <> '') then
       TGocciaCallStack.Instance.PushTemplate(Pointer(ATemplate), '')
     else
@@ -13185,13 +13108,13 @@ begin
   if ATemplate.IsArrow and Assigned(AClosure) then
     FCurrentNewTarget := AClosure.NewTarget;
 
-  if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and
+  if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
      Assigned(ATemplate.DebugInfo) and (ATemplate.DebugInfo.LineMapCount > 0) then
     TGocciaCoverageTracker.Instance.RecordLineHit(
       ATemplate.DebugInfo.SourceFile,
       ATemplate.DebugInfo.GetLineMapEntry(0).Line);
 
-  if FProfilingFunctions and Assigned(TGocciaProfiler.Instance) then
+  if FProfilingFunctions and (TGocciaProfiler.Instance <> nil) then
   begin
     if ATemplate.ProfileIndex < 0 then
     begin
@@ -13569,7 +13492,7 @@ begin
             Inc(Frame.IP);
           end;
 
-          if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and
+          if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
              Assigned(Template.DebugInfo) then
           begin
             CovLine := Template.DebugInfo.GetLineForPC(InstructionStartIP);
@@ -13616,7 +13539,7 @@ begin
               TASCIIStringCodeUnit(DecodeBx(Instruction))))
         else
           FRegisters[A] := RegisterObject(TGocciaStringLiteralValue.Create(
-            UTF16CodeUnitImmediateToUTF8(DecodeBx(Instruction))));
+            UTF16CodeUnitImmediateToString(DecodeBx(Instruction))));
 
       OP_LOAD_REGEXP:
         FRegisters[A] := ValueToRegister(
@@ -13858,7 +13781,7 @@ begin
       OP_JUMP_IF_TRUE:
         if RegisterToBoolean(FRegisters[A]) then
         begin
-          if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
+          if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
               Template.DebugInfo.SourceFile,
               Template.DebugInfo.GetLineForPC(InstructionStartIP),
@@ -13868,7 +13791,7 @@ begin
           if JumpOffset < 0 then
             CheckExecutionTimeout;
         end
-        else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
+        else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
             Template.DebugInfo.SourceFile,
             Template.DebugInfo.GetLineForPC(InstructionStartIP),
@@ -13877,7 +13800,7 @@ begin
       OP_JUMP_IF_FALSE:
         if not RegisterToBoolean(FRegisters[A]) then
         begin
-          if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
+          if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
               Template.DebugInfo.SourceFile,
               Template.DebugInfo.GetLineForPC(InstructionStartIP),
@@ -13887,7 +13810,7 @@ begin
           if JumpOffset < 0 then
             CheckExecutionTimeout;
         end
-        else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
+        else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
             Template.DebugInfo.SourceFile,
             Template.DebugInfo.GetLineForPC(InstructionStartIP),
@@ -13896,14 +13819,14 @@ begin
       OP_JUMP_IF_NULLISH:
         if RegisterMatchesNullishKind(FRegisters[A], B) then
         begin
-          if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
+          if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
               Template.DebugInfo.SourceFile,
               Template.DebugInfo.GetLineForPC(InstructionStartIP),
               Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
           Inc(Frame.IP, C);
         end
-        else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
+        else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
             Template.DebugInfo.SourceFile,
             Template.DebugInfo.GetLineForPC(InstructionStartIP),
@@ -13912,14 +13835,14 @@ begin
       OP_JUMP_IF_NOT_NULLISH:
         if not RegisterMatchesNullishKind(FRegisters[A], B) then
         begin
-          if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
+          if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
               Template.DebugInfo.SourceFile,
               Template.DebugInfo.GetLineForPC(InstructionStartIP),
               Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
           Inc(Frame.IP, C);
         end
-        else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
+        else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
             Template.DebugInfo.SourceFile,
             Template.DebugInfo.GetLineForPC(InstructionStartIP),
@@ -14125,7 +14048,7 @@ begin
 
       OP_NEW_OBJECT:
       begin
-        if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+        if TGocciaObjectValue.SharedObjectPrototype = nil then
           TGocciaObjectValue.InitializeSharedPrototype;
         FRegisters[A] := RegisterObject(TGocciaVMLiteralObjectValue.Create(
           TGocciaObjectValue.SharedObjectPrototype,
@@ -15173,9 +15096,9 @@ begin
       OP_SHR:
         if (FRegisters[B].Kind = grkInt) and
            (FRegisters[C].Kind = grkInt) then
-          FRegisters[A] := RegisterInt(SarLongint(
+          FRegisters[A] := RegisterInt(SignedRightShiftInt32(
             LongInt(FRegisters[B].IntValue),
-            LongWord(FRegisters[C].IntValue) and 31))
+            LongWord(FRegisters[C].IntValue)))
         else
           SetRegister(A, EvaluateRightShift(
             GetRegister(B), GetRegister(C)));
@@ -15802,7 +15725,7 @@ begin
            (FRegisters[A + 2].Kind = grkInt) then
         begin
           SetRegisterFast(A, TGocciaStringLiteralValue.Create(
-            UTF16CodeUnitPairToUTF8(
+            UTF16CodeUnitPairToString(
               Cardinal(FRegisters[A + 1].IntValue and $FFFF),
               Cardinal(FRegisters[A + 2].IntValue and $FFFF))));
           Continue;
@@ -16624,7 +16547,7 @@ begin
       OP_DYNAMIC_IMPORT:
       begin
         DynImportPromise := TGocciaPromiseValue.Create;
-        if Assigned(TGarbageCollector.Instance) then
+        if (TGarbageCollector.Instance <> nil) then
           TGarbageCollector.Instance.AddTempRoot(DynImportPromise);
         try
           try
@@ -16637,7 +16560,7 @@ begin
               tphString).ToStringLiteral.Value;
             case C of
               Ord(icpEvaluation):
-                if Assigned(TGocciaMicrotaskQueue.Instance) then
+                if (TGocciaMicrotaskQueue.Instance <> nil) then
                 begin
                   DynImportTask.Handler := TGocciaVMDynamicImportStartValue.Create(
                     Self, DynImportPromise, SpecifierString, GlobalName);
@@ -16686,7 +16609,7 @@ begin
           end;
           SetRegister(A, DynImportPromise);
         finally
-          if Assigned(TGarbageCollector.Instance) then
+          if (TGarbageCollector.Instance <> nil) then
             TGarbageCollector.Instance.RemoveTempRoot(DynImportPromise);
         end;
       end;
@@ -16697,7 +16620,7 @@ begin
       OP_DYNAMIC_IMPORT_DEFER_OPTIONS:
       begin
         DynImportPromise := TGocciaPromiseValue.Create;
-        if Assigned(TGarbageCollector.Instance) then
+        if (TGarbageCollector.Instance <> nil) then
           TGarbageCollector.Instance.AddTempRoot(DynImportPromise);
         try
           try
@@ -16714,7 +16637,7 @@ begin
               SpecifierString, AttributeType);
             case TGocciaOpCode(Op) of
               OP_DYNAMIC_IMPORT_OPTIONS:
-                if Assigned(TGocciaMicrotaskQueue.Instance) then
+                if (TGocciaMicrotaskQueue.Instance <> nil) then
                 begin
                   DynImportTask.Handler := TGocciaVMDynamicImportStartValue.Create(
                     Self, DynImportPromise, SpecifierString, GlobalName);
@@ -16760,7 +16683,7 @@ begin
           end;
           SetRegister(A, DynImportPromise);
         finally
-          if Assigned(TGarbageCollector.Instance) then
+          if (TGarbageCollector.Instance <> nil) then
             TGarbageCollector.Instance.RemoveTempRoot(DynImportPromise);
         end;
       end;
@@ -17198,7 +17121,7 @@ begin
         end;
         if FMemoryPressureCheckCountdown = 0 then
         begin
-          if Assigned(TGarbageCollector.Instance) then
+          if (TGarbageCollector.Instance <> nil) then
             TGarbageCollector.Instance.CollectForMemoryPressure(nil);
           FMemoryPressureCheckCountdown := MEMORY_PRESSURE_CHECK_INTERVAL;
         end

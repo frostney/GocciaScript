@@ -24,10 +24,10 @@ implementation
 
 uses
   SysUtils
-  {$IFDEF WINDOWS},
+  {$IFDEF MSWINDOWS},
   Windows{$ENDIF};
 
-{$IFDEF WINDOWS}
+{$IFDEF MSWINDOWS}
 type
   PWideCharPointer = ^PWideChar;
 
@@ -149,11 +149,10 @@ begin
 end;
 
 function GetCommandLineArguments: TCommandLineArguments;
-{$IFDEF WINDOWS}
+{$IFDEF MSWINDOWS}
 var
   ArgumentCount, I: Integer;
   ArgumentList, ArgumentPointer: PWideCharPointer;
-  ArgumentUTF8: RawByteString;
 begin
   ArgumentList := CommandLineToArgvW(GetCommandLineW, @ArgumentCount);
   if not Assigned(ArgumentList) then
@@ -167,10 +166,7 @@ begin
     Inc(ArgumentPointer);
     for I := 0 to High(Result) do
     begin
-      ArgumentUTF8 := RawByteString(UTF8Encode(
-        UnicodeString(ArgumentPointer^)));
-      SetCodePage(ArgumentUTF8, CP_UTF8, False);
-      Result[I] := string(ArgumentUTF8);
+      Result[I] := string(string(ArgumentPointer^));
       Inc(ArgumentPointer);
     end;
   finally

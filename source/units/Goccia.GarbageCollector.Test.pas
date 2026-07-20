@@ -105,7 +105,7 @@ begin
   TGarbageCollector.Initialize;
   try
     TestRunnerProgram.AddSuite(TTestGarbageCollector.Create('GarbageCollector'));
-    TestRunnerProgram.Run;
+    RunGocciaTests;
   finally
     TGarbageCollector.Shutdown;
   end;

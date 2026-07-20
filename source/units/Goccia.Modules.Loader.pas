@@ -448,7 +448,7 @@ var
   OwnedModules: TGocciaModuleList;
   I: Integer;
 begin
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
   begin
     for NamespacePair in FDeferredModuleNamespaces do
       if Assigned(NamespacePair.Value) then
@@ -656,7 +656,7 @@ var
     try
       FileSystemAddress := FResolver.Resolve(AModulePath,
         AImportingFilePath);
-      WriteLn(StdErr, Format(
+      WriteLn(ErrOutput, Format(
         'Warning: virtual module "%s" shadows module "%s".',
         [AVirtualAddress, FileSystemAddress]));
       FWarnedVirtualCollisions.Add(AVirtualAddress, True);
@@ -1024,7 +1024,6 @@ var
   ExportDefaultDecl: TGocciaExportDefaultDeclaration;
   ExportDestructuringDecl: TGocciaExportDestructuringDeclaration;
   ExportFuncDecl: TGocciaExportFunctionDeclaration;
-  ExportPair: TStringStringMap.TKeyValuePair;
   ExportName: string;
   ExportVarDecl: TGocciaExportVariableDeclaration;
   AttributeType: string;
@@ -1052,7 +1051,6 @@ var
   Value: TGocciaValue;
   VirtualContentType: TGocciaVirtualModuleContentType;
   LoadSucceeded: Boolean;
-  Name: string;
   Names: TStringList;
   DeferredBody: TGocciaDeferredModuleBody;
   DeferredHandler: TGocciaNativeFunctionValue;
@@ -1310,7 +1308,9 @@ var
 
   procedure RegisterStaticModuleExports(const ARegisterIndirectExports: Boolean);
   var
+    ExportPair: TStringStringMap.TKeyValuePair;
     J: Integer;
+    Name: string;
 
     procedure AddStarExportForwardings(const ASourceModule: TGocciaModule);
     var
@@ -1808,7 +1808,7 @@ begin
       Exit(SourceValue);
     SourceValue := TGocciaModuleSourceValue.Create(RequestedModulePath, '');
     FModuleSourceValues.Add(RequestedModulePath, SourceValue);
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.AddRootObject(SourceValue);
     Exit(SourceValue);
   end;
@@ -1872,7 +1872,7 @@ begin
       SourceValue := TGocciaModuleSourceValue.Create(ResolvedPath,
         Content.Text);
       FModuleSourceValues.Add(CacheKey, SourceValue);
-      if Assigned(TGarbageCollector.Instance) then
+      if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.AddRootObject(SourceValue);
       Result := SourceValue;
     finally
@@ -2224,7 +2224,7 @@ begin
   Result := TGocciaDeferredModuleNamespaceObject.Create(DeferredModulePath,
     AImportingFilePath, LoadModule);
   FDeferredModuleNamespaces.Add(CacheKey, Result);
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddRootObject(Result);
 end;
 
@@ -2314,7 +2314,7 @@ begin
       JSONParser.Free;
     end;
 
-    if Assigned(TGarbageCollector.Instance) and Assigned(ParsedValue) then
+    if (TGarbageCollector.Instance <> nil) and Assigned(ParsedValue) then
       TGarbageCollector.Instance.AddTempRoot(ParsedValue);
     try
       Module := TGocciaModule.Create(AResolvedPath);
@@ -2343,7 +2343,7 @@ begin
           Module.Free;
       end;
     finally
-      if Assigned(TGarbageCollector.Instance) and Assigned(ParsedValue) then
+      if (TGarbageCollector.Instance <> nil) and Assigned(ParsedValue) then
         TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
     end;
   finally
@@ -2358,13 +2358,13 @@ var
   LoadSucceeded: Boolean;
   Metadata: TGocciaObjectValue;
   Module: TGocciaModule;
-  NormalizedText: UTF8String;
+  NormalizedText: string;
   TextValue: TGocciaValue;
 begin
   Content := LoadResolvedContent(AResolvedPath);
   try
-    NormalizedText := NormalizeUTF8NewlinesToLF(Content.Text);
-    TextValue := TGocciaStringLiteralValue.FromUTF8(NormalizedText);
+    NormalizedText := NormalizeNewlinesToLF(Content.Text);
+    TextValue := TGocciaStringLiteralValue.Create(NormalizedText);
 
     Metadata := nil;
     if not ADefaultOnly then
@@ -2379,7 +2379,7 @@ begin
       Metadata.SetProperty(PROP_EXTENSION,
         TGocciaStringLiteralValue.Create(ExtractFileExt(AResolvedPath)));
       Metadata.SetProperty(PROP_BYTE_LENGTH,
-        TGocciaNumberLiteralValue.Create(Length(Content.Text)));
+        TGocciaNumberLiteralValue.Create(Content.ByteLength));
       Metadata.Freeze;
     end;
 
@@ -2428,7 +2428,7 @@ begin
   TypedArray := TGocciaTypedArrayValue.Create(takUint8, Buffer);
 
   // Root the view (which marks its backing buffer) until the module owns it.
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(TypedArray);
   try
     Module := TGocciaModule.Create(AResolvedPath);
@@ -2445,7 +2445,7 @@ begin
         Module.Free;
     end;
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(TypedArray);
   end;
 end;

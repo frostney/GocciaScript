@@ -5657,7 +5657,7 @@ begin
   end;
 
   SortClassCallableSourceEntries(Entries);
-  ClassKeyPrefix := IntToHex(PtrUInt(AClassDef), SizeOf(PtrUInt) * 2);
+  ClassKeyPrefix := IntToHex(NativeUInt(AClassDef), SizeOf(NativeUInt) * 2);
   for I := 0 to High(Entries) do
   begin
     Entry := Entries[I];

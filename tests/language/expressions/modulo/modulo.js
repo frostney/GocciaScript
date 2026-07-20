@@ -16,6 +16,13 @@ describe("modulo operator", () => {
     expect(7.5 % 2.5).toBe(0);
   });
 
+  test("large quotients retain the exact binary64 remainder", () => {
+    expect(1e308 % 3).toBe(2);
+
+    const remainder = (numerator, denominator) => numerator % denominator;
+    expect(remainder(1e308, 3)).toBe(2);
+  });
+
   test("negative operands", () => {
     expect(-10 % 3).toBe(-1);
     expect(10 % -3).toBe(1);

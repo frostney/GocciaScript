@@ -72,10 +72,10 @@ type
     FCurrentTable: TGocciaTOMLNode;
     FIndex: Integer;
     FRoot: TGocciaTOMLNode;
-    FText: UTF8String;
+    FText: string;
 
     procedure Advance(const ACount: Integer = 1);
-    procedure AppendCodePointUTF8(var ATarget: UTF8String;
+    procedure AppendCodePoint(var ATarget: string;
       const ACodePoint: Cardinal);
     procedure AssignValue(const ATargetTable: TGocciaTOMLNode;
       const APath: TArray<string>; const AValue: TGocciaValue;
@@ -110,7 +110,7 @@ type
     function PeekChar(const AOffset: Integer = 0): Char;
     procedure RaiseParseError(const AMessage: string);
     procedure RequireNotSealed(const ANode: TGocciaTOMLNode; const AKey: string);
-    procedure Reset(const AText: UTF8String);
+    procedure Reset(const AText: string);
     procedure SkipBlankLinesAndComments;
     procedure PrepareInput;
     procedure SkipWhitespace(const AAllowNewlines: Boolean);
@@ -143,14 +143,16 @@ type
     function ValidateDigitsWithSeparators(const AText, AAllowedDigits: string;
       const AAllowEmpty: Boolean): Boolean;
   public
-    function ParseDocument(const AText: UTF8String): TGocciaTOMLNode;
-    function Parse(const AText: UTF8String): TGocciaObjectValue;
+    function ParseDocument(const AText: string): TGocciaTOMLNode;
+    function Parse(const AText: string): TGocciaObjectValue;
   end;
 
 implementation
 
 uses
-  Math;
+  Math,
+
+  NumericText;
 
 function IsSpaceOrTab(const AChar: Char): Boolean;
 begin
@@ -165,12 +167,6 @@ end;
 function IsControlCharacter(const AChar: Char): Boolean;
 begin
   Result := (Ord(AChar) < 32) or (Ord(AChar) = 127);
-end;
-
-function TOMLFormatSettings: TFormatSettings;
-begin
-  Result := DefaultFormatSettings;
-  Result.DecimalSeparator := '.';
 end;
 
 function IsDigit(const AChar: Char): Boolean;
@@ -302,14 +298,17 @@ function CanonicalizeIntegerToken(const AToken: string): string;
 var
   C: Char;
   Digits: string;
-  Value64: QWord;
+  Value64: UInt64;
 begin
   if (Copy(AToken, 1, 2) = '0x') or (Copy(AToken, 1, 2) = '0o') or
      (Copy(AToken, 1, 2) = '0b') then
   begin
     Digits := StripUnderscores(Copy(AToken, 3, MaxInt));
     if Copy(AToken, 1, 2) = '0x' then
-      Value64 := StrToQWord('$' + Digits)
+    begin
+      if not TryTextToUInt64('$' + Digits, Value64) then
+        raise EConvertError.CreateFmt('Invalid integer value: %s', [AToken]);
+    end
     else
     begin
       Value64 := 0;
@@ -429,7 +428,7 @@ end;
 
 { TGocciaTOMLParser }
 
-procedure TGocciaTOMLParser.Reset(const AText: UTF8String);
+procedure TGocciaTOMLParser.Reset(const AText: string);
 begin
   FText := AText;
   FIndex := 1;
@@ -441,23 +440,23 @@ end;
 
 procedure TGocciaTOMLParser.PrepareInput;
 var
-  B: Byte;
+  CodeUnit: Word;
   I: Integer;
 begin
-  if (Length(FText) >= 3) and (Byte(FText[1]) = $EF) and
-     (Byte(FText[2]) = $BB) and (Byte(FText[3]) = $BF) then
-    FIndex := 4;
+  if (Length(FText) > 0) and (FText[1] = #$FEFF) then
+    FIndex := 2;
 
   for I := 1 to Length(FText) do
   begin
-    B := Byte(FText[I]);
-    if ((B < 32) and (B <> 9) and (B <> 10) and (B <> 13)) or (B = 127) then
+    CodeUnit := Ord(FText[I]);
+    if ((CodeUnit < 32) and (CodeUnit <> 9) and (CodeUnit <> 10) and
+       (CodeUnit <> 13)) or (CodeUnit = 127) then
       RaiseParseError('Input contains a forbidden control character (U+' +
-        IntToHex(B, 4) + ').');
+        IntToHex(CodeUnit, 4) + ').');
   end;
 end;
 
-function TGocciaTOMLParser.Parse(const AText: UTF8String): TGocciaObjectValue;
+function TGocciaTOMLParser.Parse(const AText: string): TGocciaObjectValue;
 var
   RootNode: TGocciaTOMLNode;
 begin
@@ -469,7 +468,7 @@ begin
   end;
 end;
 
-function TGocciaTOMLParser.ParseDocument(const AText: UTF8String): TGocciaTOMLNode;
+function TGocciaTOMLParser.ParseDocument(const AText: string): TGocciaTOMLNode;
 begin
   Reset(AText);
   try
@@ -622,7 +621,7 @@ function TGocciaTOMLParser.ParseHexCodePoint(const ADigits: Integer): Cardinal;
 var
   C: Char;
   HexText: string;
-  Value64: QWord;
+  Value64: UInt64;
 begin
   if not HasChars(ADigits) then
     RaiseParseError('Incomplete Unicode escape sequence.');
@@ -631,35 +630,32 @@ begin
     if not IsHexDigit(C) then
       RaiseParseError('Invalid Unicode escape sequence.');
   Advance(ADigits);
-  Value64 := StrToQWord('$' + HexText);
+  if not TryTextToUInt64('$' + HexText, Value64) then
+    RaiseParseError('Invalid Unicode escape sequence.');
   if (Value64 > $10FFFF) or ((Value64 >= $D800) and (Value64 <= $DFFF)) then
     RaiseParseError('Unicode escape must be a Unicode scalar value.');
   Result := Cardinal(Value64);
 end;
 
-procedure TGocciaTOMLParser.AppendCodePointUTF8(var ATarget: UTF8String;
+procedure TGocciaTOMLParser.AppendCodePoint(var ATarget: string;
   const ACodePoint: Cardinal);
+var
+  Supplementary: Cardinal;
 begin
-  if ACodePoint <= $7F then
-    ATarget := ATarget + Chr(ACodePoint)
-  else if ACodePoint <= $7FF then
-    ATarget := ATarget + Chr($C0 or (ACodePoint shr 6)) +
-      Chr($80 or (ACodePoint and $3F))
-  else if ACodePoint <= $FFFF then
-    ATarget := ATarget + Chr($E0 or (ACodePoint shr 12)) +
-      Chr($80 or ((ACodePoint shr 6) and $3F)) +
-      Chr($80 or (ACodePoint and $3F))
+  if ACodePoint <= $FFFF then
+    ATarget := ATarget + Char(ACodePoint)
   else
-    ATarget := ATarget + Chr($F0 or (ACodePoint shr 18)) +
-      Chr($80 or ((ACodePoint shr 12) and $3F)) +
-      Chr($80 or ((ACodePoint shr 6) and $3F)) +
-      Chr($80 or (ACodePoint and $3F));
+  begin
+    Supplementary := ACodePoint - $10000;
+    ATarget := ATarget + Char($D800 + (Supplementary shr 10)) +
+      Char($DC00 + (Supplementary and $3FF));
+  end;
 end;
 
 function TGocciaTOMLParser.ParseBasicString(const AMultiline,
   AIsKey: Boolean): string;
 var
-  Buffer: UTF8String;
+  Buffer: string;
   QuoteRun, StartIndex: Integer;
 begin
   Buffer := '';
@@ -755,17 +751,17 @@ begin
         'x':
           begin
             Advance;
-            AppendCodePointUTF8(Buffer, ParseHexCodePoint(2));
+            AppendCodePoint(Buffer, ParseHexCodePoint(2));
           end;
         'u':
           begin
             Advance;
-            AppendCodePointUTF8(Buffer, ParseHexCodePoint(4));
+            AppendCodePoint(Buffer, ParseHexCodePoint(4));
           end;
         'U':
           begin
             Advance;
-            AppendCodePointUTF8(Buffer, ParseHexCodePoint(8));
+            AppendCodePoint(Buffer, ParseHexCodePoint(8));
           end;
       else
         RaiseParseError('Invalid escape sequence in TOML basic string.');
@@ -797,7 +793,7 @@ end;
 function TGocciaTOMLParser.ParseLiteralString(const AMultiline,
   AIsKey: Boolean): string;
 var
-  Buffer: UTF8String;
+  Buffer: string;
   QuoteRun: Integer;
 begin
   Buffer := '';
@@ -1416,7 +1412,7 @@ function TGocciaTOMLParser.TryParseHexInteger(const AToken: string;
   out AValue: Double): Boolean;
 var
   Digits: string;
-  Value64: QWord;
+  Value64: UInt64;
 begin
   Result := False;
   if Copy(AToken, 1, 2) <> '0x' then
@@ -1425,11 +1421,11 @@ begin
   if not ValidateDigitsWithSeparators(Digits, '0123456789abcdefABCDEF', False) then
     Exit(False);
   Digits := StripUnderscores(Digits);
-  if not TryStrToQWord('$' + Digits, Value64) then
+  if not TryTextToUInt64('$' + Digits, Value64) then
     Exit(False);
-  if Value64 > QWord(High(Int64)) then
+  if Value64 > UInt64(High(Int64)) then
     Exit(False);
-  AValue := Value64;
+  AValue := Int64(Value64);
   Result := True;
 end;
 
@@ -1438,7 +1434,7 @@ function TGocciaTOMLParser.TryParseOctalInteger(const AToken: string;
 var
   C: Char;
   Digits: string;
-  Value64: QWord;
+  Value64: UInt64;
 begin
   Result := False;
   if Copy(AToken, 1, 2) <> '0o' then
@@ -1449,9 +1445,9 @@ begin
   Value64 := 0;
   for C in Digits do
     Value64 := (Value64 * 8) + Ord(C) - Ord('0');
-  if Value64 > QWord(High(Int64)) then
+  if Value64 > UInt64(High(Int64)) then
     Exit(False);
-  AValue := Value64;
+  AValue := Int64(Value64);
   Result := True;
 end;
 
@@ -1460,7 +1456,7 @@ function TGocciaTOMLParser.TryParseBinaryInteger(const AToken: string;
 var
   C: Char;
   Digits: string;
-  Value64: QWord;
+  Value64: UInt64;
 begin
   Result := False;
   if Copy(AToken, 1, 2) <> '0b' then
@@ -1471,9 +1467,9 @@ begin
   Value64 := 0;
   for C in Digits do
     Value64 := (Value64 * 2) + Ord(C) - Ord('0');
-  if Value64 > QWord(High(Int64)) then
+  if Value64 > UInt64(High(Int64)) then
     Exit(False);
-  AValue := Value64;
+  AValue := Int64(Value64);
   Result := True;
 end;
 
@@ -1569,7 +1565,8 @@ begin
   else
     NumberText := SignPart + NumberText;
 
-  Result := TryStrToFloat(NumberText, AValue, TOMLFormatSettings);
+  AValue := DecimalTextToNumber(NumberText);
+  Result := not IsNan(AValue);
 end;
 
 function TGocciaTOMLParser.TryParseNumber(const AToken: string;

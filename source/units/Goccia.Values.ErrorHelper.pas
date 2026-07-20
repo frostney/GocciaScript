@@ -93,7 +93,7 @@ begin
   Result.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AName));
   Result.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(AMessage));
 
-  if Assigned(TGocciaCallStack.Instance) then
+  if (TGocciaCallStack.Instance <> nil) then
     Result.ErrorStack :=
       TGocciaCallStack.Instance.CaptureStackTrace(AName, AMessage, ASkipTop);
 end;
@@ -177,7 +177,7 @@ begin
   ErrorObj := CreateErrorObject(DATA_CLONE_ERROR_NAME, AMessage);
   ErrorObj.HasErrorData := False;
   ErrorObj.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(25));
-  if Assigned(GetDOMExceptionProto) then
+  if (GetDOMExceptionProto <> nil) then
     ErrorObj.Prototype := GetDOMExceptionProto;
   raise TGocciaThrowValue.Create(ErrorObj);
 end;
@@ -189,7 +189,7 @@ begin
   ErrorObj := CreateErrorObject(DATA_CLONE_ERROR_NAME, AMessage);
   ErrorObj.HasErrorData := False;
   ErrorObj.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(25));
-  if Assigned(GetDOMExceptionProto) then
+  if (GetDOMExceptionProto <> nil) then
     ErrorObj.Prototype := GetDOMExceptionProto;
   raise TGocciaThrowValue.Create(ErrorObj, ASuggestion);
 end;
@@ -201,7 +201,7 @@ begin
   ErrorObj := CreateErrorObject(INVALID_CHARACTER_ERROR_NAME, AMessage);
   ErrorObj.HasErrorData := False;
   ErrorObj.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(5));
-  if Assigned(GetDOMExceptionProto) then
+  if (GetDOMExceptionProto <> nil) then
     ErrorObj.Prototype := GetDOMExceptionProto;
   raise TGocciaThrowValue.Create(ErrorObj);
 end;

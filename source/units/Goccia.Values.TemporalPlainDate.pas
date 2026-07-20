@@ -107,9 +107,10 @@ begin
   SetLength(FPrototypeMembers, 0);
 end;
 
-function GetTemporalPlainDateShared: TGocciaSharedPrototype; inline;
+function GetTemporalPlainDateShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTemporalPlainDateSharedSlot))
   else
     Result := nil;
@@ -338,7 +339,7 @@ begin
   if FCalendarId = '' then
     ThrowRangeError('Unknown calendar: ' + ACalendarId, SSuggestTemporalDateRange);
   InitializePrototype;
-  if Assigned(GetTemporalPlainDateShared) then
+  if (GetTemporalPlainDateShared <> nil) then
     FPrototype := GetTemporalPlainDateShared.Prototype;
 end;
 
@@ -347,8 +348,8 @@ var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetTemporalPlainDateShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetTemporalPlainDateShared <> nil) then Exit;
 
   // Rebuild member definitions per realm: callbacks bind to Self (the
   // bootstrap instance pinned by Shared), and TGocciaSharedPrototype.Destroy

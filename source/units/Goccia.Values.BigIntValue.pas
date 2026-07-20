@@ -136,9 +136,10 @@ begin
   SetLength(FPrototypeMembers, 0);
 end;
 
-function GetSharedBigIntPrimitivePrototype: TGocciaObjectValue; inline;
+function GetSharedBigIntPrimitivePrototype: TGocciaObjectValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GBigIntPrimitivePrototypeSlot))
   else
     Result := nil;
@@ -173,7 +174,7 @@ begin
   begin
     Assert(not GIsWorkerThread, 'BigIntZero: must be initialised on main thread');
     FZeroValue := TGocciaBigIntValue.Create(TBigInteger.Zero);
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.PinObject(FZeroValue);
   end;
   Result := FZeroValue;
@@ -185,7 +186,7 @@ begin
   begin
     Assert(not GIsWorkerThread, 'BigIntOne: must be initialised on main thread');
     FOneValue := TGocciaBigIntValue.Create(TBigInteger.One);
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.PinObject(FOneValue);
   end;
   Result := FOneValue;
@@ -196,8 +197,8 @@ var
   Members: TGocciaMemberCollection;
   Proto: TGocciaObjectValue;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetSharedBigIntPrimitivePrototype) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetSharedBigIntPrimitivePrototype <> nil) then Exit;
 
   Proto := TGocciaObjectValue.Create;
   CurrentRealm.SetSlot(GBigIntPrimitivePrototypeSlot, Proto);
@@ -207,7 +208,7 @@ begin
     // Self is BigIntZero (0n), the process-wide singleton method host the cached
     // member callbacks bind to. It is already pinned for the process lifetime by
     // BigIntZero; re-pin defensively so the binding stays valid for the cache.
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.PinObject(Self);
 
     Members := TGocciaMemberCollection.Create;

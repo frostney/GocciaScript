@@ -48,7 +48,7 @@ var
   Content: TGocciaModuleContent;
   LoadSucceeded: Boolean;
   Metadata: TGocciaObjectValue;
-  NormalizedText: UTF8String;
+  NormalizedText: string;
   TextValue: TGocciaValue;
 begin
   AModule := nil;
@@ -59,7 +59,7 @@ begin
   Content := Runtime.Engine.ModuleLoader.ContentProvider.LoadContent(
     AResolvedPath);
   try
-    NormalizedText := NormalizeUTF8NewlinesToLF(Content.Text);
+    NormalizedText := NormalizeNewlinesToLF(Content.Text);
     Metadata := TGocciaObjectValue.Create(
       TGocciaObjectValue.SharedObjectPrototype, 5);
     Metadata.SetProperty(PROP_KIND,
@@ -71,9 +71,9 @@ begin
     Metadata.SetProperty(PROP_EXTENSION,
       TGocciaStringLiteralValue.Create(ExtractFileExt(AResolvedPath)));
     Metadata.SetProperty(PROP_BYTE_LENGTH,
-      TGocciaNumberLiteralValue.Create(Length(Content.Text)));
+      TGocciaNumberLiteralValue.Create(Content.ByteLength));
     Metadata.Freeze;
-    TextValue := TGocciaStringLiteralValue.FromUTF8(NormalizedText);
+    TextValue := TGocciaStringLiteralValue.Create(NormalizedText);
 
     AModule := TGocciaModule.Create(AResolvedPath);
     AModule.LastModified := Content.LastModified;

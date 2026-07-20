@@ -17,15 +17,18 @@ function TryEmitConstantExpression(const ACtx: TGocciaCompilationContext;
 procedure EmitCompileTimeValue(const ACtx: TGocciaCompilationContext;
   const AValue: TGocciaCompileTimeValue; const ADest: UInt16);
 function CompileTimeValueToBoolean(
-  const AValue: TGocciaCompileTimeValue): Boolean; inline;
+  const AValue: TGocciaCompileTimeValue): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 function CompileTimeValueIsNullish(
-  const AValue: TGocciaCompileTimeValue): Boolean; inline;
+  const AValue: TGocciaCompileTimeValue): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 
 function TryFoldBinary(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaBinaryExpression; const ADest: UInt16): Boolean;
 function TryFoldUnary(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaUnaryExpression; const ADest: UInt16): Boolean;
-function IsNegativeZeroFloat(const AValue: Double): Boolean; inline;
+function IsNegativeZeroFloat(const AValue: Double): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 
@@ -34,6 +37,7 @@ uses
   SysUtils,
 
   BigInteger,
+  NumberBits,
   TextSemantics,
 
   Goccia.Bytecode,
@@ -42,42 +46,31 @@ uses
   Goccia.Compiler.TypeRules,
   Goccia.Constants,
   Goccia.Constants.TypeNames,
+  Goccia.NumberConversion,
+  Goccia.NumberExponentiation,
+  Goccia.NumberRemainder,
   Goccia.Token,
   Goccia.Values.BigIntValue,
   Goccia.Values.Primitives;
 
 function CompileTimeValueToBoolean(
-  const AValue: TGocciaCompileTimeValue): Boolean; inline;
+  const AValue: TGocciaCompileTimeValue): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := Goccia.Compiler.ConstantValue.CompileTimeValueToBoolean(AValue);
 end;
 
 function CompileTimeValueIsNullish(
-  const AValue: TGocciaCompileTimeValue): Boolean; inline;
+  const AValue: TGocciaCompileTimeValue): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := Goccia.Compiler.ConstantValue.CompileTimeValueIsNullish(AValue);
 end;
 
-function IsNegativeZeroFloat(const AValue: Double): Boolean; inline;
+function IsNegativeZeroFloat(const AValue: Double): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  Result := CompileTimeNumberIsNegativeZero(AValue);
-end;
-
-function NegativeZeroFloat: Double; inline;
-begin
-  Result := 0.0;
-  Result := Result * -1.0;
-end;
-
-function IsOddIntegralNumber(const AValue: Double): Boolean; inline;
-begin
-  Result := not IsNaN(AValue) and not IsInfinite(AValue) and
-    (Frac(AValue) = 0.0) and (Frac(AValue / 2.0) <> 0.0);
-end;
-
-function NumberWithFloatingPointMask(const AValue: Double): Double; inline;
-begin
-  Result := AValue;
+  Result := IsNegativeZero(AValue);
 end;
 
 procedure EmitFoldedNumber(const ACtx: TGocciaCompilationContext;
@@ -125,188 +118,44 @@ begin
   end;
 end;
 
-function ToUint32Number(const ANumber: Double): Cardinal;
-const
-  UINT32_MODULUS = QWord(High(Cardinal)) + 1;
-var
-  IntegerPart: Double;
-begin
-  if IsNaN(ANumber) or IsInfinite(ANumber) or (ANumber = 0.0) then
-    Exit(0);
-
-  IntegerPart := Int(ANumber);
-  IntegerPart := IntegerPart - Floor(IntegerPart / UINT32_MODULUS) *
-    UINT32_MODULUS;
-
-  if IntegerPart >= UINT32_MODULUS then
-    Exit(0);
-
-  Result := Cardinal(Trunc(IntegerPart));
-end;
-
-function ToInt32Number(const ANumber: Double): Int32;
-begin
-  Result := Int32(ToUint32Number(ANumber));
-end;
-
-function FoldedModuloValue(const ALeft, ARight: Double): Double;
-var
-  Quotient: Double;
-begin
-  if IsNaN(ALeft) or IsNaN(ARight) or IsInfinite(ALeft) or
-     (ARight = 0.0) then
-    Exit(NaN);
-
-  if IsInfinite(ARight) then
-    Exit(ALeft);
-
-  Quotient := ALeft / ARight;
-  Result := ALeft - ARight * Trunc(Quotient);
-
-  if (Result = 0.0) and ((ALeft < 0.0) or IsNegativeZeroFloat(ALeft)) then
-    Result := NegativeZeroFloat;
-end;
-
-function FoldedPowerValue(const ALeft, ARight: Double): Double;
-var
-  OldMask: TFPUExceptionMask;
-begin
-  if IsNaN(ARight) then
-    Exit(NaN);
-  if ARight = 0.0 then
-    Exit(1.0);
-  if IsNaN(ALeft) then
-    Exit(NaN);
-
-  if IsInfinite(ALeft) and (ALeft > 0.0) then
-  begin
-    if ARight > 0.0 then
-      Exit(Infinity);
-    Exit(0.0);
-  end;
-
-  if IsInfinite(ALeft) and (ALeft < 0.0) then
-  begin
-    if ARight > 0.0 then
-    begin
-      if IsOddIntegralNumber(ARight) then
-        Exit(NegInfinity);
-      Exit(Infinity);
-    end;
-    if IsOddIntegralNumber(ARight) then
-      Exit(NegativeZeroFloat);
-    Exit(0.0);
-  end;
-
-  if ALeft = 0.0 then
-  begin
-    if not IsNegativeZeroFloat(ALeft) then
-    begin
-      if ARight > 0.0 then
-        Exit(0.0);
-      Exit(Infinity);
-    end;
-
-    if ARight > 0.0 then
-    begin
-      if IsOddIntegralNumber(ARight) then
-        Exit(NegativeZeroFloat);
-      Exit(0.0);
-    end;
-    if IsOddIntegralNumber(ARight) then
-      Exit(NegInfinity);
-    Exit(Infinity);
-  end;
-
-  if IsInfinite(ARight) then
-  begin
-    if Abs(ALeft) > 1.0 then
-    begin
-      if ARight > 0.0 then
-        Exit(Infinity);
-      Exit(0.0);
-    end;
-    if Abs(ALeft) = 1.0 then
-      Exit(NaN);
-    if ARight > 0.0 then
-      Exit(0.0);
-    Exit(Infinity);
-  end;
-
-  if (ALeft < 0.0) and (Frac(ARight) <> 0.0) then
-    Exit(NaN);
-
-  OldMask := GetExceptionMask;
-  SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow,
-    exUnderflow, exPrecision]);
-  try
-    Result := NumberWithFloatingPointMask(Power(ALeft, ARight));
-  finally
-    SetExceptionMask(OldMask);
-  end;
-end;
-
-function FoldedDivisionValue(const ALeft, ARight: Double): Double;
-var
-  OldMask: TFPUExceptionMask;
-begin
-  OldMask := GetExceptionMask;
-  SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow,
-    exUnderflow, exPrecision]);
-  try
-    Result := NumberWithFloatingPointMask(ALeft / ARight);
-  finally
-    SetExceptionMask(OldMask);
-  end;
-end;
-
 function FoldedNumericBinary(const AOp: TGocciaTokenType;
   const ALeft, ARight: Double; out AValue: TGocciaCompileTimeValue): Boolean;
-var
-  OldMask: TFPUExceptionMask;
 begin
-  OldMask := GetExceptionMask;
-  SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow,
-    exUnderflow, exPrecision]);
-  try
-    Result := True;
-    case AOp of
-      gttPlus:
-        AValue := NumberCompileTimeValue(ALeft + ARight);
-      gttMinus:
-        AValue := NumberCompileTimeValue(ALeft - ARight);
-      gttStar:
-        AValue := NumberCompileTimeValue(ALeft * ARight);
-      gttSlash:
-        AValue := NumberCompileTimeValue(FoldedDivisionValue(ALeft, ARight));
-      gttPercent:
-        AValue := NumberCompileTimeValue(FoldedModuloValue(ALeft, ARight));
-      gttPower:
-        AValue := NumberCompileTimeValue(FoldedPowerValue(ALeft, ARight));
-      gttBitwiseAnd:
-        AValue := NumberCompileTimeValue(ToInt32Number(ALeft) and
-          ToInt32Number(ARight));
-      gttBitwiseOr:
-        AValue := NumberCompileTimeValue(ToInt32Number(ALeft) or
-          ToInt32Number(ARight));
-      gttBitwiseXor:
-        AValue := NumberCompileTimeValue(ToInt32Number(ALeft) xor
-          ToInt32Number(ARight));
-      gttLeftShift:
-        AValue := NumberCompileTimeValue(ToInt32Number(ALeft) shl
-          (ToUint32Number(ARight) and 31));
-      gttRightShift:
-        AValue := NumberCompileTimeValue(SarLongint(ToInt32Number(ALeft),
-          ToUint32Number(ARight) and 31));
-      gttUnsignedRightShift:
-        AValue := NumberCompileTimeValue(ToUint32Number(ALeft) shr
-          (ToUint32Number(ARight) and 31));
-    else
-      AValue := UnknownCompileTimeValue;
-      Result := False;
-    end;
-  finally
-    SetExceptionMask(OldMask);
+  Result := True;
+  case AOp of
+    gttPlus:
+      AValue := NumberCompileTimeValue(ALeft + ARight);
+    gttMinus:
+      AValue := NumberCompileTimeValue(ALeft - ARight);
+    gttStar:
+      AValue := NumberCompileTimeValue(ALeft * ARight);
+    gttSlash:
+      AValue := NumberCompileTimeValue(ALeft / ARight);
+    gttPercent:
+      AValue := NumberCompileTimeValue(NumberRemainder(ALeft, ARight));
+    gttPower:
+      AValue := NumberCompileTimeValue(NumberExponentiation(ALeft, ARight));
+    gttBitwiseAnd:
+      AValue := NumberCompileTimeValue(NumberToInt32(ALeft) and
+        NumberToInt32(ARight));
+    gttBitwiseOr:
+      AValue := NumberCompileTimeValue(NumberToInt32(ALeft) or
+        NumberToInt32(ARight));
+    gttBitwiseXor:
+      AValue := NumberCompileTimeValue(NumberToInt32(ALeft) xor
+        NumberToInt32(ARight));
+    gttLeftShift:
+      AValue := NumberCompileTimeValue(NumberToInt32(ALeft) shl
+        (NumberToUint32(ARight) and 31));
+    gttRightShift:
+      AValue := NumberCompileTimeValue(SignedRightShiftInt32(
+        NumberToInt32(ALeft), NumberToUint32(ARight)));
+    gttUnsignedRightShift:
+      AValue := NumberCompileTimeValue(NumberToUint32(ALeft) shr
+        (NumberToUint32(ARight) and 31));
+  else
+    AValue := UnknownCompileTimeValue;
+    Result := False;
   end;
 end;
 
@@ -395,7 +244,7 @@ begin
   if AByteIndex > Length(AText) then
     Exit(False);
 
-  if TryReadUTF8CodePointAllowSurrogates(AText, AByteIndex, CodePoint,
+  if TryReadCodePointAtAllowSurrogates(AText, AByteIndex, CodePoint,
      ByteLength) then
   begin
     Inc(AByteIndex, ByteLength);
@@ -662,7 +511,7 @@ begin
       begin
         if not TryCompileTimeValueToNumber(Operand, NumberValue) then
           Exit(False);
-        AValue := NumberCompileTimeValue(not ToInt32Number(NumberValue));
+        AValue := NumberCompileTimeValue(not NumberToInt32(NumberValue));
       end;
   else
     Result := False;

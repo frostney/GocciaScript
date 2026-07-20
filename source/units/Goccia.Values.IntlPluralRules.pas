@@ -62,9 +62,10 @@ var
 const
   FRENCH_COMPACT_PLURAL_MANY_THRESHOLD = 1000000;
 
-function GetIntlPluralRulesShared: TGocciaSharedPrototype; inline;
+function GetIntlPluralRulesShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlPluralRulesSharedSlot))
   else
     Result := nil;
@@ -294,7 +295,7 @@ begin
   end;
 
   InitializePrototype;
-  if Assigned(GetIntlPluralRulesShared) then
+  if (GetIntlPluralRulesShared <> nil) then
     FPrototype := GetIntlPluralRulesShared.Prototype;
 end;
 
@@ -309,8 +310,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetIntlPluralRulesShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetIntlPluralRulesShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlPluralRulesSharedSlot, Shared);

@@ -37,6 +37,7 @@ uses
   {$IFDEF MSWINDOWS}
   WinSock2,
   {$ENDIF}
+  TextEncoding,
   TransportSecurity;
 
 const
@@ -60,7 +61,7 @@ type
     ai_family: LongInt;
     ai_socktype: LongInt;
     ai_protocol: LongInt;
-    ai_addrlen: PtrUInt;
+    ai_addrlen: NativeUInt;
     ai_canonname: PAnsiChar;
     ai_addr: PSockAddr;
     ai_next: PAddrInfo;
@@ -68,9 +69,9 @@ type
 
 function Getaddrinfo(ANodeName, AServName: PAnsiChar;
   AHints: PAddrInfo; out ARes: PAddrInfo): LongInt; stdcall;
-  external WINSOCK2_DLL name 'getaddrinfo';
+  external 'ws2_32.dll' name 'getaddrinfo';
 procedure Freeaddrinfo(AI: PAddrInfo); stdcall;
-  external WINSOCK2_DLL name 'freeaddrinfo';
+  external 'ws2_32.dll' name 'freeaddrinfo';
 
 var
   GWinSockInitialized: Boolean = False;
@@ -213,7 +214,8 @@ end;
 function ConnectSocket(const AHost: string; const APort: Integer): TSocket;
 var
   Hints, Res, Cur: PAddrInfo;
-  PortStr: AnsiString;
+  HostBytes, PortBytes: TBytes;
+  ErrorOffset: Integer;
   Sock: TSocket;
 begin
   EnsureWinSockInit;
@@ -225,10 +227,17 @@ begin
     Hints^.ai_family := AF_INET;
     Hints^.ai_socktype := SOCK_STREAM;
     Hints^.ai_protocol := IPPROTO_TCP;
-    PortStr := AnsiString(IntToStr(APort));
+    if not TryEncodeASCIINullTerminated(AHost, HostBytes,
+      ErrorOffset) then
+      raise EHTTPError.CreateFmt(
+        'HTTP host contains a non-ASCII code unit at offset %d',
+        [ErrorOffset]);
+    if not TryEncodeASCIINullTerminated(IntToStr(APort), PortBytes,
+      ErrorOffset) then
+      raise EHTTPError.Create('HTTP port could not be encoded as ASCII');
     Res := nil;
 
-    if Getaddrinfo(PAnsiChar(AnsiString(AHost)), PAnsiChar(PortStr),
+    if Getaddrinfo(PAnsiChar(@HostBytes[0]), PAnsiChar(@PortBytes[0]),
                    Hints, Res) <> 0 then
       raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
   finally
@@ -248,7 +257,8 @@ begin
         Continue;
       end;
 
-      if WinSock2.connect(Sock, Cur^.ai_addr, Cur^.ai_addrlen) = 0 then
+      if WinSock2.connect(Sock, Cur^.ai_addr^,
+        Integer(Cur^.ai_addrlen)) = 0 then
         Break;
 
       WinSock2.closesocket(Sock);
@@ -271,7 +281,8 @@ end;
 // ---------------------------------------------------------------------------
 
 function SocketSend(const ASock: TSocket; const ABuf: Pointer;
-  const ALen: Integer): Integer; inline;
+  const ALen: Integer): Integer;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   {$IFDEF UNIX}
   Result := fpSend(ASock, ABuf, ALen, 0);
@@ -282,7 +293,8 @@ begin
 end;
 
 function SocketRecv(const ASock: TSocket; const ABuf: Pointer;
-  const ALen: Integer): Integer; inline;
+  const ALen: Integer): Integer;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   {$IFDEF UNIX}
   Result := fpRecv(ASock, ABuf, ALen, 0);
@@ -292,7 +304,8 @@ begin
   {$ENDIF}
 end;
 
-procedure SocketClose(const ASock: TSocket); inline;
+procedure SocketClose(const ASock: TSocket);
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   {$IFDEF UNIX}
   CloseSocket(ASock);
@@ -308,7 +321,7 @@ end;
 
 procedure SendAll(const ASock: TSocket;
   var ATransport: TTransportSecurityConnection;
-  const AData: AnsiString);
+  const AData: TBytes);
 var
   Sent, Total, Len, N: Integer;
 begin
@@ -318,13 +331,74 @@ begin
   begin
     Len := Total - Sent;
     if ATransport.Active then
-      N := TransportSecurityWrite(ATransport, @AData[Sent + 1], Len)
+      N := TransportSecurityWrite(ATransport, @AData[Sent], Len)
     else
-      N := SocketSend(ASock, @AData[Sent + 1], Len);
+      N := SocketSend(ASock, @AData[Sent], Len);
     if N <= 0 then
       raise EHTTPError.Create('Send failed');
     Inc(Sent, N);
   end;
+end;
+
+procedure AppendBytes(var ADestination: TBytes; const ASource: Pointer;
+  const ALength: Integer);
+var
+  DestinationLength: Integer;
+begin
+  if ALength <= 0 then
+    Exit;
+  DestinationLength := Length(ADestination);
+  SetLength(ADestination, DestinationLength + ALength);
+  Move(ASource^, ADestination[DestinationLength], ALength);
+end;
+
+function FindCRLF(const ABytes: TBytes): Integer;
+var
+  I: Integer;
+begin
+  for I := 0 to Length(ABytes) - 2 do
+    if (ABytes[I] = 13) and (ABytes[I + 1] = 10) then
+      Exit(I);
+  Result := -1;
+end;
+
+function FindHeaderTerminator(const ABytes: TBytes): Integer;
+var
+  I: Integer;
+begin
+  for I := 0 to Length(ABytes) - 4 do
+    if (ABytes[I] = 13) and (ABytes[I + 1] = 10) and
+       (ABytes[I + 2] = 13) and (ABytes[I + 3] = 10) then
+      Exit(I);
+  Result := -1;
+end;
+
+function IsomorphicDecode(const ABytes: TBytes; const AOffset,
+  ALength: Integer): string;
+var
+  I: Integer;
+begin
+  if ALength <= 0 then
+    Exit('');
+  SetLength(Result, ALength);
+  for I := 0 to ALength - 1 do
+    Result[I + 1] := Char(ABytes[AOffset + I]);
+end;
+
+procedure RemoveLeadingBytes(var ABytes: TBytes; const ACount: Integer);
+var
+  Remaining: Integer;
+begin
+  if ACount <= 0 then
+    Exit;
+  if ACount >= Length(ABytes) then
+  begin
+    SetLength(ABytes, 0);
+    Exit;
+  end;
+  Remaining := Length(ABytes) - ACount;
+  Move(ABytes[ACount], ABytes[0], Remaining);
+  SetLength(ABytes, Remaining);
 end;
 
 function RecvBytes(const ASock: TSocket;
@@ -370,7 +444,7 @@ function ReadResponse(const ASock: TSocket;
   const AIsHead: Boolean): TRawHTTPResponse;
 var
   Buf: array[0..RECV_BUF_SIZE - 1] of Byte;
-  RawHeader: AnsiString;
+  RawHeader: TBytes;
   N, HeaderEnd, I, J, ContentLen, ChunkSize: Integer;
   Line, HeaderBlock: string;
   Lines: array of string;
@@ -378,7 +452,7 @@ var
   TransferEncoding: string;
   BodyBytes: TBytes;
   BodyLen: Integer;
-  ChunkBuf: AnsiString;
+  ChunkBuf: TBytes;
   Done: Boolean;
   Remaining: Integer;
 begin
@@ -388,24 +462,24 @@ begin
   SetLength(Result.Body, 0);
 
   // Read until we find the end of headers (CRLFCRLF)
-  RawHeader := '';
-  HeaderEnd := 0;
+  SetLength(RawHeader, 0);
+  HeaderEnd := -1;
   repeat
     N := RecvBytes(ASock, ATransport, Buf, RECV_BUF_SIZE);
     if N <= 0 then Break;
-    RawHeader := RawHeader + Copy(PAnsiChar(@Buf[0]), 1, N);
-    HeaderEnd := Pos(CRLF + CRLF, string(RawHeader));
-  until HeaderEnd > 0;
+    AppendBytes(RawHeader, @Buf[0], N);
+    HeaderEnd := FindHeaderTerminator(RawHeader);
+  until HeaderEnd >= 0;
 
-  if HeaderEnd = 0 then
+  if HeaderEnd < 0 then
     raise EHTTPError.Create('Invalid HTTP response: no header terminator');
 
   // Split headers from any body bytes already received
-  HeaderBlock := Copy(string(RawHeader), 1, HeaderEnd - 1);
-  I := HeaderEnd + 4; // skip CRLFCRLF
-  if I <= Length(RawHeader) then
+  HeaderBlock := IsomorphicDecode(RawHeader, 0, HeaderEnd);
+  I := HeaderEnd + 4;
+  if I < Length(RawHeader) then
   begin
-    SetLength(BodyBytes, Length(RawHeader) - I + 1);
+    SetLength(BodyBytes, Length(RawHeader) - I);
     Move(RawHeader[I], BodyBytes[0], Length(BodyBytes));
   end
   else
@@ -482,23 +556,23 @@ begin
   if Pos('chunked', TransferEncoding) > 0 then
   begin
     // Chunked transfer encoding
-    ChunkBuf := AnsiString(BodyBytes);
+    ChunkBuf := Copy(BodyBytes, 0, Length(BodyBytes));
     SetLength(Result.Body, 0);
     Done := False;
 
     while not Done do
     begin
-      while Pos(CRLF, string(ChunkBuf)) = 0 do
+      while FindCRLF(ChunkBuf) < 0 do
       begin
         N := RecvBytes(ASock, ATransport, Buf, RECV_BUF_SIZE);
         if N <= 0 then begin Done := True; Break; end;
-        ChunkBuf := ChunkBuf + Copy(PAnsiChar(@Buf[0]), 1, N);
+        AppendBytes(ChunkBuf, @Buf[0], N);
       end;
       if Done then Break;
 
-      I := Pos(CRLF, string(ChunkBuf));
-      Line := Copy(string(ChunkBuf), 1, I - 1);
-      Delete(ChunkBuf, 1, I + 1);
+      I := FindCRLF(ChunkBuf);
+      Line := IsomorphicDecode(ChunkBuf, 0, I);
+      RemoveLeadingBytes(ChunkBuf, I + 2);
 
       J := Pos(';', Line);
       if J > 0 then
@@ -511,13 +585,13 @@ begin
       begin
         N := RecvBytes(ASock, ATransport, Buf, RECV_BUF_SIZE);
         if N <= 0 then begin Done := True; Break; end;
-        ChunkBuf := ChunkBuf + Copy(PAnsiChar(@Buf[0]), 1, N);
+        AppendBytes(ChunkBuf, @Buf[0], N);
       end;
 
       BodyLen := Length(Result.Body);
       SetLength(Result.Body, BodyLen + ChunkSize);
-      Move(ChunkBuf[1], Result.Body[BodyLen], ChunkSize);
-      Delete(ChunkBuf, 1, ChunkSize + 2);
+      Move(ChunkBuf[0], Result.Body[BodyLen], ChunkSize);
+      RemoveLeadingBytes(ChunkBuf, ChunkSize + 2);
     end;
   end
   else
@@ -581,7 +655,8 @@ var
   Parsed: THTTPParsedURL;
   Sock: TSocket;
   Transport: TTransportSecurityConnection;
-  Request: AnsiString;
+  Request: TBytes;
+  RequestText: string;
   Raw: TRawHTTPResponse;
   I, Redirects: Integer;
   CurrentURL, Location, HostHeader: string;
@@ -612,9 +687,9 @@ begin
         else
           HostHeader := Parsed.Host + ':' + IntToStr(Parsed.Port);
 
-        Request := AnsiString(Method + ' ' + Parsed.Path + ' HTTP/1.1' + CRLF);
-        Request := Request + AnsiString('Host: ' + HostHeader + CRLF);
-        Request := Request + AnsiString('Connection: close' + CRLF);
+        RequestText := Method + ' ' + Parsed.Path + ' HTTP/1.1' + CRLF;
+        RequestText := RequestText + 'Host: ' + HostHeader + CRLF;
+        RequestText := RequestText + 'Connection: close' + CRLF;
 
         // Check if user provided User-Agent
         HasUserAgent := False;
@@ -623,16 +698,18 @@ begin
             HasUserAgent := True;
 
         if not HasUserAgent then
-          Request := Request + AnsiString('User-Agent: GocciaScript/1.0' + CRLF);
+          RequestText := RequestText + 'User-Agent: GocciaScript/1.0' + CRLF;
 
         // Add custom headers (skip Host since we already set it)
         for I := 0 to High(AHeaders) do
         begin
           if LowerCase(AHeaders[I].Name) = 'host' then Continue;
-          Request := Request + AnsiString(AHeaders[I].Name + ': ' + AHeaders[I].Value + CRLF);
+          RequestText := RequestText + AHeaders[I].Name + ': ' +
+            AHeaders[I].Value + CRLF;
         end;
 
-        Request := Request + AnsiString(CRLF);
+        RequestText := RequestText + CRLF;
+        Request := EncodeUTF8WithReplacement(RequestText);
 
         SendAll(Sock, Transport, Request);
         Raw := ReadResponse(Sock, Transport, IsHead);

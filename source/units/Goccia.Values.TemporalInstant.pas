@@ -69,16 +69,18 @@ uses
 var
   GTemporalInstantSharedSlot: TGocciaRealmOwnedSlotId;
 
-function InstantEpochSecond(const AEpochMilliseconds: Int64): Int64; inline;
+function InstantEpochSecond(const AEpochMilliseconds: Int64): Int64;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := AEpochMilliseconds div 1000;
   if (AEpochMilliseconds < 0) and (AEpochMilliseconds mod 1000 <> 0) then
     Dec(Result);
 end;
 
-function GetTemporalInstantShared: TGocciaSharedPrototype; inline;
+function GetTemporalInstantShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTemporalInstantSharedSlot))
   else
     Result := nil;
@@ -117,7 +119,8 @@ begin
   Result := AValue.ToInt64;
 end;
 
-function InstantIsASCIIDigit(const AChar: Char): Boolean; inline;
+function InstantIsASCIIDigit(const AChar: Char): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AChar >= '0') and (AChar <= '9');
 end;
@@ -1045,8 +1048,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetTemporalInstantShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetTemporalInstantShared <> nil) then Exit;
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GTemporalInstantSharedSlot, Shared);
   Members := TGocciaMemberCollection.Create;

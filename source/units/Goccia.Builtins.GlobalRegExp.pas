@@ -304,7 +304,7 @@ begin
   TargetEnd := AStart + ACount;
   while (Index <= Length(AText)) and (CodeUnitIndex < TargetEnd) do
   begin
-    if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
+    if TryReadCodePointAtAllowSurrogates(AText, Index, CodePoint,
       ByteLength) then
     begin
       if CodePoint <= $FFFF then
@@ -581,7 +581,7 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   FRegExpPrototype := TGocciaObjectValue.Create(AObjectPrototype);
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.PinObject(FRegExpPrototype);
 
   Members := TGocciaMemberCollection.Create;
@@ -635,7 +635,7 @@ begin
   end;
   RegisterMemberDefinitions(FRegExpPrototype, PrototypeMembers);
 
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     CurrentRealm.SetSlot(GRegExpPrototypeSlot, FRegExpPrototype);
   SetRegExpPrototype(FRegExpPrototype);
   SetRegExpBuiltinExec(FRegExpPrototype.GetProperty(PROP_EXEC));
@@ -810,7 +810,8 @@ begin
 end;
 
 function IsECMAScriptWhiteSpaceOrLineTerminator(
-  const ACodePoint: Cardinal): Boolean; inline;
+  const ACodePoint: Cardinal): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   case ACodePoint of
     // ES2026 §12.2 White Space
@@ -822,51 +823,6 @@ begin
       Result := True;
   else
     Result := False;
-  end;
-end;
-
-function DecodeUTF8CodePoint(const AStr: string; const AIndex: Integer;
-  out ACodePoint: Cardinal): Integer;
-var
-  B1: Byte;
-begin
-  B1 := Ord(AStr[AIndex]);
-
-  // Single byte (ASCII)
-  if B1 < $80 then
-  begin
-    ACodePoint := B1;
-    Result := 1;
-  end
-  // 2-byte sequence
-  else if ((B1 and $E0) = $C0) and (AIndex + 1 <= Length(AStr)) then
-  begin
-    ACodePoint := ((B1 and $1F) shl 6) or
-                  (Ord(AStr[AIndex + 1]) and $3F);
-    Result := 2;
-  end
-  // 3-byte sequence
-  else if ((B1 and $F0) = $E0) and (AIndex + 2 <= Length(AStr)) then
-  begin
-    ACodePoint := ((B1 and $0F) shl 12) or
-                  ((Ord(AStr[AIndex + 1]) and $3F) shl 6) or
-                  (Ord(AStr[AIndex + 2]) and $3F);
-    Result := 3;
-  end
-  // 4-byte sequence
-  else if ((B1 and $F8) = $F0) and (AIndex + 3 <= Length(AStr)) then
-  begin
-    ACodePoint := ((B1 and $07) shl 18) or
-                  ((Ord(AStr[AIndex + 1]) and $3F) shl 12) or
-                  ((Ord(AStr[AIndex + 2]) and $3F) shl 6) or
-                  (Ord(AStr[AIndex + 3]) and $3F);
-    Result := 4;
-  end
-  else
-  begin
-    // Invalid or incomplete sequence — treat as single byte
-    ACodePoint := B1;
-    Result := 1;
   end;
 end;
 
@@ -890,7 +846,8 @@ begin
 end;
 
 function EncodeControlEscapeForRegExpEscape(const ACodePoint: Cardinal;
-  out AEscaped: string): Boolean; inline;
+  out AEscaped: string): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := True;
   case ACodePoint of
@@ -921,7 +878,7 @@ const
 var
   Arg: TGocciaValue;
   Input, Escaped, EscapedCodePoint: string;
-  I, ByteLen: Integer;
+  I, CodeUnitLength: Integer;
   CodePoint: Cardinal;
   IsFirst: Boolean;
 begin
@@ -940,8 +897,8 @@ begin
 
   while I <= Length(Input) do
   begin
-    if not TryReadUTF8CodePointAllowSurrogates(Input, I, CodePoint, ByteLen) then
-      ByteLen := DecodeUTF8CodePoint(Input, I, CodePoint);
+    TryReadCodePointAtAllowSurrogates(Input, I, CodePoint,
+      CodeUnitLength);
 
     // TC39 RegExp Escaping §1.1 step 4a: first code point is digit or letter
     if IsFirst and (CodePoint < $80) and
@@ -949,7 +906,7 @@ begin
     begin
       Escaped := Escaped + EncodeForRegExpEscape(CodePoint);
       IsFirst := False;
-      Inc(I, ByteLen);
+      Inc(I, CodeUnitLength);
       Continue;
     end;
 
@@ -959,14 +916,14 @@ begin
     if EncodeControlEscapeForRegExpEscape(CodePoint, EscapedCodePoint) then
     begin
       Escaped := Escaped + EscapedCodePoint;
-      Inc(I, ByteLen);
+      Inc(I, CodeUnitLength);
       Continue;
     end;
 
     if (CodePoint >= $D800) and (CodePoint <= $DFFF) then
     begin
       Escaped := Escaped + EncodeForRegExpEscape(CodePoint);
-      Inc(I, ByteLen);
+      Inc(I, CodeUnitLength);
       Continue;
     end;
 
@@ -974,7 +931,7 @@ begin
     if (CodePoint < $80) and CharInSet(Chr(CodePoint), SYNTAX_CHARACTERS) then
     begin
       Escaped := Escaped + '\' + Chr(CodePoint);
-      Inc(I, ByteLen);
+      Inc(I, CodeUnitLength);
       Continue;
     end;
 
@@ -983,7 +940,7 @@ begin
        CharInSet(Chr(CodePoint), CLASS_SET_RESERVED_PUNCTUATORS) then
     begin
       Escaped := Escaped + EncodeForRegExpEscape(CodePoint);
-      Inc(I, ByteLen);
+      Inc(I, CodeUnitLength);
       Continue;
     end;
 
@@ -991,13 +948,13 @@ begin
     if IsECMAScriptWhiteSpaceOrLineTerminator(CodePoint) then
     begin
       Escaped := Escaped + EncodeForRegExpEscape(CodePoint);
-      Inc(I, ByteLen);
+      Inc(I, CodeUnitLength);
       Continue;
     end;
 
     // TC39 RegExp Escaping §1.1 step 4e: pass through
-    Escaped := Escaped + Copy(Input, I, ByteLen);
-    Inc(I, ByteLen);
+    Escaped := Escaped + Copy(Input, I, CodeUnitLength);
+    Inc(I, CodeUnitLength);
   end;
 
   Result := TGocciaStringLiteralValue.Create(Escaped);

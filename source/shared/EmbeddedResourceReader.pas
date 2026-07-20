@@ -8,6 +8,12 @@ uses
   SysUtils;
 
 type
+  {$IFDEF FPC}
+  TEmbeddedResourceType = PAnsiChar;
+  {$ELSE}
+  TEmbeddedResourceType = PChar;
+  {$ENDIF}
+
   TEmbeddedResourceMagic = array[0..7] of Byte;
 
   TEmbeddedResourceContainer = record
@@ -26,6 +32,8 @@ type
     DataLength: Integer;
   end;
 
+function RCDATAResourceType: TEmbeddedResourceType;
+{$IFDEF FPC}inline;{$ENDIF}
 function HasBytesAvailable(const ABuffer: TBytes; const AOffset, ALength: Integer): Boolean;
 function TryUInt32ToInteger(const AValue: UInt32; out AInteger: Integer): Boolean;
 function ReadUInt32LE(const ABuffer: TBytes; const AOffset: Integer): UInt32;
@@ -54,6 +62,9 @@ function TryCopyEmbeddedResourceEntryData(const ABuffer: TBytes;
 
 implementation
 
+uses
+  TextEncoding;
+
 const
   EMBEDDED_RESOURCE_MAGIC_LENGTH = 8;
   EMBEDDED_RESOURCE_HEADER_FIELD_SIZE = 4;
@@ -62,6 +73,11 @@ const
     EMBEDDED_RESOURCE_HEADER_FIELD_COUNT * EMBEDDED_RESOURCE_HEADER_FIELD_SIZE;
   EMBEDDED_RESOURCE_ENTRY_SIZE = 16;
   EMBEDDED_RESOURCE_FORMAT_VERSION = 1;
+
+function RCDATAResourceType: TEmbeddedResourceType;
+begin
+  Result := TEmbeddedResourceType(NativeUInt(10));
+end;
 
 function HasBytesAvailable(const ABuffer: TBytes; const AOffset, ALength: Integer): Boolean;
 begin
@@ -95,10 +111,13 @@ end;
 
 function CopyStringFromBytes(const ABuffer: TBytes; const AOffset,
   ALength: Integer): string;
+var
+  Bytes: TBytes;
 begin
-  SetLength(Result, ALength);
+  SetLength(Bytes, ALength);
   if ALength > 0 then
-    Move(ABuffer[AOffset], Result[1], ALength);
+    Move(ABuffer[AOffset], Bytes[0], ALength);
+  Result := DecodeUTF8WithReplacement(Bytes);
 end;
 
 function HasEmbeddedResourceMagic(const ABuffer: TBytes;

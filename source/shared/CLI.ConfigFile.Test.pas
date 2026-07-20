@@ -8,6 +8,7 @@ uses
 
   CLI.ConfigFile,
   CLI.Options,
+  FileUtils,
   TestingPascalLibrary,
   TextSemantics;
 
@@ -18,7 +19,7 @@ type
 
     function CreateTempDirectory: string;
     procedure DeleteDirectoryTree(const APath: string);
-    procedure WriteRawFile(const APath: string; const ABytes: RawByteString);
+    procedure WriteFixtureFile(const APath, AText: string);
     procedure WriteTextFile(const APath, AText: string);
 
     { ParseJSONConfig (built-in) }
@@ -187,48 +188,15 @@ begin
 end;
 
 procedure TConfigFileTests.WriteTextFile(const APath, AText: string);
-var
-  Lines: TStringList;
 begin
   ForceDirectories(ExtractFileDir(APath));
-  Lines := TStringList.Create;
-  try
-    Lines.Text := AText;
-    Lines.SaveToFile(APath);
-  finally
-    Lines.Free;
-  end;
+  FileUtils.WriteUTF8FileText(APath, AText);
 end;
 
-procedure TConfigFileTests.WriteRawFile(const APath: string;
-  const ABytes: RawByteString);
-var
-  Stream: TFileStream;
-{$IFDEF LAKON}
-  Buffer: TBytes;
-  Index: Integer;
-{$ENDIF}
+procedure TConfigFileTests.WriteFixtureFile(const APath, AText: string);
 begin
   ForceDirectories(ExtractFileDir(APath));
-  Stream := TFileStream.Create(APath, fmCreate);
-  try
-    if Length(ABytes) > 0 then
-{$IFDEF LAKON}
-    begin
-      // Lakon's RawByteString aliases the one string type (bytes
-      // ride one per code unit), and Pointer(S) is the string BLOCK,
-      // not the payload — copy the low bytes out explicitly.
-      SetLength(Buffer, Length(ABytes));
-      for Index := 1 to Length(ABytes) do
-        Buffer[Index - 1] := Ord(ABytes[Index]) and $FF;
-      Stream.WriteBuffer(Buffer[0], Length(Buffer));
-    end;
-{$ELSE}
-      Stream.WriteBuffer(Pointer(ABytes)^, Length(ABytes));
-{$ENDIF}
-  finally
-    Stream.Free;
-  end;
+  FileUtils.WriteUTF8FileText(APath, AText);
 end;
 
 { ── JSON parsing tests ─────────────────────────────────────── }
@@ -605,8 +573,8 @@ end;
 
 procedure TConfigFileTests.TestApplyConfigFileJSONPreservesUTF8;
 const
-  JSON_BYTES = '{"mode":"Jos' + #$C3#$A9 + '","alias":["caf' + #$C3#$A9 +
-    '=./d' + #$C3#$A9 + 'j' + #$C3#$A0 + '.js"]}';
+  JSON_TEXT = '{"mode":"Jos' + #$00E9 + '","alias":["caf' + #$00E9 +
+    '=./d' + #$00E9 + 'j' + #$00E0 + '.js"]}';
 var
   Alias: TRepeatableOption;
   Dir, Path: string;
@@ -615,7 +583,7 @@ var
 begin
   Dir := CreateTempDirectory;
   Path := IncludeTrailingPathDelimiter(Dir) + 'config.json';
-  WriteRawFile(Path, JSON_BYTES);
+  WriteFixtureFile(Path, JSON_TEXT);
 
   Alias := TRepeatableOption.Create('alias', 'Alias');
   Mode := TStringOption.Create('mode', 'Mode');
@@ -626,10 +594,10 @@ begin
 
     ApplyConfigFile(Path, Options);
 
-    Expect<string>(Mode.Value).ToBe(RetagUTF8Text('Jos' + #$C3#$A9));
+    Expect<string>(Mode.Value).ToBe('Jos' + #$00E9);
     Expect<Integer>(Alias.Values.Count).ToBe(1);
-    Expect<string>(Alias.Values[0]).ToBe(RetagUTF8Text('caf' + #$C3#$A9 +
-      '=./d' + #$C3#$A9 + 'j' + #$C3#$A0 + '.js'));
+    Expect<string>(Alias.Values[0]).ToBe('caf' + #$00E9 +
+      '=./d' + #$00E9 + 'j' + #$00E0 + '.js');
   finally
     Alias.Free;
     Mode.Free;

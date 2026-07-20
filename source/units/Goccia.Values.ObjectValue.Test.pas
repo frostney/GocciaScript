@@ -235,7 +235,7 @@ end;
 
 begin
   TestRunnerProgram.AddSuite(TTestObjectValue.Create('Object Value'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
 
   ExitCode := TestResultToExitCode;
 end.

@@ -19,7 +19,7 @@ function IsStructuredGlobalsFile(const APath: string): Boolean;
 function IsJSON5GlobalsFile(const APath: string): Boolean;
 function IsTOMLGlobalsFile(const APath: string): Boolean;
 function IsYAMLGlobalsFile(const APath: string): Boolean;
-function ReadFileText(const APath: string): UTF8String;
+function ReadFileText(const APath: string): string;
 
 implementation
 
@@ -79,7 +79,7 @@ begin
   Result := IsYAMLExtension(ExtractFileExt(APath));
 end;
 
-function ReadFileText(const APath: string): UTF8String;
+function ReadFileText(const APath: string): string;
 begin
   Result := ReadUTF8FileText(APath);
 end;

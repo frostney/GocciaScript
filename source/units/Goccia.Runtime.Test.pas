@@ -6,6 +6,7 @@ uses
   Classes,
   SysUtils,
 
+  FileUtils,
   TestingPascalLibrary,
 
   Goccia.Constants.PropertyNames,
@@ -494,33 +495,10 @@ end;
 procedure TRuntimeTests.TestRuntimeRunScriptFromFileLoadsFile;
 var
   ScriptResult: TGocciaScriptResult;
-  SourceBytes: UTF8String;
-  Stream: TFileStream;
   TempFileName: string;
-{$IFDEF LAKON}
-  Buffer: TBytes;
-  Index: Integer;
-{$ENDIF}
 begin
-  SourceBytes := '21 * 2;';
   TempFileName := GetTempFileName(GetTempDir(False), 'goc');
-
-  Stream := TFileStream.Create(TempFileName, fmCreate);
-  try
-{$IFDEF LAKON}
-    // Lakon's UTF8String aliases the one string type and Pointer(S)
-    // is the string BLOCK, not the payload — copy the low bytes out
-    // explicitly (the Goccia.Modules.Configuration.Test pattern).
-    SetLength(Buffer, Length(SourceBytes));
-    for Index := 1 to Length(SourceBytes) do
-      Buffer[Index - 1] := Ord(SourceBytes[Index]) and $FF;
-    Stream.WriteBuffer(Buffer[0], Length(Buffer));
-{$ELSE}
-    Stream.WriteBuffer(Pointer(SourceBytes)^, Length(SourceBytes));
-{$ENDIF}
-  finally
-    Stream.Free;
-  end;
+  WriteUTF8FileText(TempFileName, '21 * 2;');
 
   try
     ScriptResult := TGocciaRuntime.RunScriptFromFile(TempFileName);
@@ -532,6 +510,6 @@ end;
 
 begin
   TestRunnerProgram.AddSuite(TRuntimeTests.Create('Runtime'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
   ExitCode := TestResultToExitCode;
 end.

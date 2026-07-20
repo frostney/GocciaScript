@@ -91,14 +91,15 @@ uses
   BaseUnix,
   {$IFNDEF DARWIN}
   ctypes,
-  DynLibs,
+  DynamicLibraries,
   OpenSSL,
   {$ENDIF}
   {$ENDIF}
   {$IFDEF MSWINDOWS}
   Windows,
   {$ENDIF}
-  Math;
+  Math,
+  TextEncoding;
 
 const
   TSB_NONE = 0;
@@ -113,8 +114,19 @@ const
 type
   ETransportSecurityError = class(Exception);
 
+function EncodeTLSHostName(const AHost: string): TBytes;
+var
+  ErrorOffset: Integer;
+begin
+  if not TryEncodeASCIINullTerminated(AHost, Result, ErrorOffset) then
+    raise ETransportSecurityError.CreateFmt(
+      'TLS host name contains a non-ASCII code unit at offset %d',
+      [ErrorOffset]);
+end;
+
 function SocketSend(const ASock: TSocket; const ABuffer: Pointer;
-  const ALength: Integer): Integer; inline;
+  const ALength: Integer): Integer;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   {$IFDEF UNIX}
   Result := fpSend(ASock, ABuffer, ALength, 0);
@@ -125,7 +137,8 @@ begin
 end;
 
 function SocketReceive(const ASock: TSocket; const ABuffer: Pointer;
-  const ALength: Integer): Integer; inline;
+  const ALength: Integer): Integer;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   {$IFDEF UNIX}
   Result := fpRecv(ASock, ABuffer, ALength, 0);
@@ -144,7 +157,7 @@ begin
   Sent := 0;
   while Sent < ALength do
   begin
-    Written := SocketSend(ASocket, Pointer(PtrUInt(ABuffer) + PtrUInt(Sent)),
+    Written := SocketSend(ASocket, Pointer(NativeUInt(ABuffer) + NativeUInt(Sent)),
       ALength - Sent);
     if Written <= 0 then
       raise ETransportSecurityError.Create(TLS_WRITE_ERROR);
@@ -182,9 +195,9 @@ type
   end;
 
   TSecureTransportReadFunc = function(AConnection: SSLConnectionRef;
-    AData: Pointer; var ADataLength: PtrUInt): OSStatus; cdecl;
+    AData: Pointer; var ADataLength: NativeUInt): OSStatus; cdecl;
   TSecureTransportWriteFunc = function(AConnection: SSLConnectionRef;
-    AData: Pointer; var ADataLength: PtrUInt): OSStatus; cdecl;
+    AData: Pointer; var ADataLength: NativeUInt): OSStatus; cdecl;
 
 function SSLCreateContext(AAllocator: CFAllocatorRef;
   AProtocolSide: SSLProtocolSide;
@@ -198,7 +211,7 @@ function SSLSetConnection(AContext: SSLContextRef;
   AConnection: SSLConnectionRef): OSStatus; cdecl;
   external name 'SSLSetConnection';
 function SSLSetPeerDomainName(AContext: SSLContextRef; APeerName: PAnsiChar;
-  APeerNameLength: PtrUInt): OSStatus; cdecl;
+  APeerNameLength: NativeUInt): OSStatus; cdecl;
   external name 'SSLSetPeerDomainName';
 function SSLSetProtocolVersionMin(AContext: SSLContextRef;
   AVersion: SSLProtocol): OSStatus; cdecl;
@@ -206,20 +219,20 @@ function SSLSetProtocolVersionMin(AContext: SSLContextRef;
 function SSLHandshake(AContext: SSLContextRef): OSStatus; cdecl;
   external name 'SSLHandshake';
 function SSLRead(AContext: SSLContextRef; AData: Pointer;
-  ADataLength: PtrUInt; var AProcessed: PtrUInt): OSStatus; cdecl;
+  ADataLength: NativeUInt; var AProcessed: NativeUInt): OSStatus; cdecl;
   external name 'SSLRead';
 function SSLWrite(AContext: SSLContextRef; AData: Pointer;
-  ADataLength: PtrUInt; var AProcessed: PtrUInt): OSStatus; cdecl;
+  ADataLength: NativeUInt; var AProcessed: NativeUInt): OSStatus; cdecl;
   external name 'SSLWrite';
 function SSLClose(AContext: SSLContextRef): OSStatus; cdecl;
   external name 'SSLClose';
 procedure CFRelease(ARef: Pointer); cdecl; external name 'CFRelease';
 
 function SecureTransportSocketRead(AConnection: SSLConnectionRef;
-  AData: Pointer; var ADataLength: PtrUInt): OSStatus; cdecl;
+  AData: Pointer; var ADataLength: NativeUInt): OSStatus; cdecl;
 var
   Data: TSecureTransportData;
-  RequestedLength: PtrUInt;
+  RequestedLength: NativeUInt;
   ReadCount: Integer;
 begin
   Data := TSecureTransportData(AConnection);
@@ -228,7 +241,7 @@ begin
   if ReadCount > 0 then
   begin
     ADataLength := ReadCount;
-    if PtrUInt(ReadCount) = RequestedLength then
+    if NativeUInt(ReadCount) = RequestedLength then
       Result := ERR_SEC_SUCCESS
     else
       Result := ERR_SSL_WOULD_BLOCK;
@@ -246,10 +259,10 @@ begin
 end;
 
 function SecureTransportSocketWrite(AConnection: SSLConnectionRef;
-  AData: Pointer; var ADataLength: PtrUInt): OSStatus; cdecl;
+  AData: Pointer; var ADataLength: NativeUInt): OSStatus; cdecl;
 var
   Data: TSecureTransportData;
-  RequestedLength: PtrUInt;
+  RequestedLength: NativeUInt;
   Written: Integer;
 begin
   Data := TSecureTransportData(AConnection);
@@ -258,7 +271,7 @@ begin
   if Written > 0 then
   begin
     ADataLength := Written;
-    if PtrUInt(Written) = RequestedLength then
+    if NativeUInt(Written) = RequestedLength then
       Result := ERR_SEC_SUCCESS
     else
       Result := ERR_SSL_WOULD_BLOCK;
@@ -274,7 +287,7 @@ procedure StartSecureTransport(var AConnection: TTransportSecurityConnection;
   const AHost: string);
 var
   Data: TSecureTransportData;
-  HostName: AnsiString;
+  HostName: TBytes;
   Status: OSStatus;
 begin
   Data := TSecureTransportData.Create;
@@ -296,9 +309,9 @@ begin
     if Status <> ERR_SEC_SUCCESS then
       raise ETransportSecurityError.Create('Failed to bind SecureTransport socket');
 
-    HostName := AnsiString(AHost);
-    Status := SSLSetPeerDomainName(Data.Context, PAnsiChar(HostName),
-      Length(HostName));
+    HostName := EncodeTLSHostName(AHost);
+    Status := SSLSetPeerDomainName(Data.Context, PAnsiChar(@HostName[0]),
+      Length(HostName) - 1);
     if Status <> ERR_SEC_SUCCESS then
       raise ETransportSecurityError.Create('Failed to set TLS server name');
 
@@ -344,7 +357,7 @@ function ReadSecureTransport(var AConnection: TTransportSecurityConnection;
   var ABuffer: array of Byte; const ALength: Integer): Integer;
 var
   Data: TSecureTransportData;
-  Processed: PtrUInt;
+  Processed: NativeUInt;
   Status: OSStatus;
 begin
   Data := TSecureTransportData(AConnection.BackendData);
@@ -362,7 +375,7 @@ function WriteSecureTransport(var AConnection: TTransportSecurityConnection;
   const ABuffer: Pointer; const ALength: Integer): Integer;
 var
   Data: TSecureTransportData;
-  Processed: PtrUInt;
+  Processed: NativeUInt;
   Status: OSStatus;
 begin
   Data := TSecureTransportData(AConnection.BackendData);
@@ -454,7 +467,7 @@ procedure ConfigureOpenSSLVerification(const AContext: PSSL_CTX;
 var
   SetDefaultVerifyPaths: TSSLSetDefaultVerifyPaths;
   SetHostName: TSSLSetHostName;
-  HostName: AnsiString;
+  HostName: TBytes;
 begin
   SetDefaultVerifyPaths := TSSLSetDefaultVerifyPaths(GetProcedureAddress(
     SSLLibHandle, 'SSL_CTX_set_default_verify_paths'));
@@ -463,12 +476,12 @@ begin
 
   SslCtxSetVerify(AContext, SSL_VERIFY_PEER, TSSLCTXVerifyCallback(nil));
 
-  HostName := AnsiString(AHost);
+  HostName := EncodeTLSHostName(AHost);
   SetHostName := TSSLSetHostName(GetProcedureAddress(SSLLibHandle,
     'SSL_set1_host'));
   if not Assigned(SetHostName) then
     raise ETransportSecurityError.Create('OpenSSL library does not provide SSL_set1_host; hostname verification unavailable');
-  if SetHostName(ASSL, PAnsiChar(HostName)) <> 1 then
+  if SetHostName(ASSL, PAnsiChar(@HostName[0])) <> 1 then
     raise ETransportSecurityError.Create('Failed to configure OpenSSL host verification');
 end;
 
@@ -499,6 +512,7 @@ procedure StartOpenSSL(var AConnection: TTransportSecurityConnection;
   const AHost: string);
 var
   Data: TOpenSSLData;
+  HostName: TBytes;
 begin
   if not IsSSLloaded then
   begin
@@ -519,8 +533,9 @@ begin
 
     ConfigureOpenSSLVerification(Data.Context, Data.SSL, AHost);
 
+    HostName := EncodeTLSHostName(AHost);
     SslCtrl(Data.SSL, SSL_CTRL_SET_TLSEXT_HOSTNAME,
-      TLSEXT_NAMETYPE_host_name, PAnsiChar(AnsiString(AHost)));
+      TLSEXT_NAMETYPE_host_name, PAnsiChar(@HostName[0]));
 
     SslSetFd(Data.SSL, AConnection.Socket);
     if SslConnect(Data.SSL) <= 0 then
@@ -625,7 +640,7 @@ type
   SECURITY_STATUS = LongInt;
   SECURITY_INTEGER = Int64;
   PSecurityInteger = ^SECURITY_INTEGER;
-  ULONG_PTR = PtrUInt;
+  ULONG_PTR = NativeUInt;
 
   PSecHandle = ^TSecHandle;
   TSecHandle = record
@@ -1105,7 +1120,7 @@ begin
     TotalLength := Data.StreamSizes.cbHeader + ChunkLength +
       Data.StreamSizes.cbTrailer;
     SetLength(Message, TotalLength);
-    Move(Pointer(PtrUInt(ABuffer) + PtrUInt(PlainOffset))^,
+    Move(Pointer(NativeUInt(ABuffer) + NativeUInt(PlainOffset))^,
       Message[Data.StreamSizes.cbHeader], ChunkLength);
 
     FillChar(Buffers, SizeOf(Buffers), 0);

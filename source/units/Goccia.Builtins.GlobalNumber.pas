@@ -32,10 +32,12 @@ uses
   Math,
   SysUtils,
 
+  NumericText,
   TextSemantics,
 
   Goccia.Arguments.Validator,
   Goccia.Constants.NumericLimits,
+  Goccia.NumberConversion,
   Goccia.ThreadCleanupRegistry,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor;
@@ -108,21 +110,7 @@ begin
   if AArgs.Length > 1 then
   begin
     RadixNum := AArgs.GetElement(1).ToNumberLiteral.Value;
-    if Math.IsNaN(RadixNum) or Math.IsInfinite(RadixNum) then
-      Radix := 0
-    else
-    begin
-      if RadixNum < 0 then
-        RadixNum := -Floor(Abs(RadixNum))
-      else
-        RadixNum := Floor(RadixNum);
-      RadixNum := FMod(RadixNum, 4294967296.0);
-      if RadixNum < 0 then
-        RadixNum := RadixNum + 4294967296.0;
-      if RadixNum >= 2147483648.0 then
-        RadixNum := RadixNum - 4294967296.0;
-      Radix := Trunc(RadixNum);
-    end;
+    Radix := NumberToInt32(RadixNum);
   end
   else
     Radix := 0;
@@ -203,14 +191,10 @@ end;
 // ES2026 §21.1.2.12 Number.parseFloat(string)
 function TGocciaGlobalNumber.NumberParseFloat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  InputStr: string;
-  I, ExpSign, ExpValue: Integer;
-  C: Char;
+  InputStr, NumberText: string;
+  I, ValidEnd: Integer;
   Sign: Integer;
-  IntegerPart, FractionalPart: Double;
-  FractionDivisor: Double;
-  HasDigits, HasExpDigits: Boolean;
-  Mantissa: Double;
+  HasDigits, HasExponentDigits: Boolean;
 begin
   if AArgs.Length = 0 then
   begin
@@ -227,7 +211,8 @@ begin
     Exit;
   end;
 
-  // Step 3: Parse trimmedString as a StrDecimalLiteral
+  // Step 3: find the longest prefix that is a StrDecimalLiteral. NumericText
+  // then owns the exact decimal MV -> binary64 rounding for that prefix.
   I := 1;
   Sign := 1;
   HasDigits := False;
@@ -253,42 +238,21 @@ begin
     Exit;
   end;
 
-  IntegerPart := 0;
-
   // Step 3c: Parse DecimalDigits (integer part)
-  while I <= Length(InputStr) do
+  while (I <= Length(InputStr)) and (InputStr[I] in ['0'..'9']) do
   begin
-    C := InputStr[I];
-    if (C >= '0') and (C <= '9') then
-    begin
-      IntegerPart := IntegerPart * 10 + (Ord(C) - Ord('0'));
-      HasDigits := True;
-      Inc(I);
-    end
-    else
-      Break;
+    HasDigits := True;
+    Inc(I);
   end;
-
-  FractionalPart := 0;
-  FractionDivisor := 1;
 
   // Step 3d: Parse optional '.' DecimalDigits (fractional part)
   if (I <= Length(InputStr)) and (InputStr[I] = '.') then
   begin
     Inc(I);
-
-    while I <= Length(InputStr) do
+    while (I <= Length(InputStr)) and (InputStr[I] in ['0'..'9']) do
     begin
-      C := InputStr[I];
-      if (C >= '0') and (C <= '9') then
-      begin
-        FractionDivisor := FractionDivisor * 10;
-        FractionalPart := FractionalPart * 10 + (Ord(C) - Ord('0'));
-        HasDigits := True;
-        Inc(I);
-      end
-      else
-        Break;
+      HasDigits := True;
+      Inc(I);
     end;
   end;
 
@@ -299,7 +263,7 @@ begin
     Exit;
   end;
 
-  Mantissa := IntegerPart + (FractionalPart / FractionDivisor);
+  ValidEnd := I - 1;
 
   // Step 3e: Parse optional ExponentPart (ES2026 StrUnsignedDecimalLiteral). The
   // exponent must be present in its entirety (e/E, optional sign, at least one
@@ -308,46 +272,24 @@ begin
   if (I <= Length(InputStr)) and ((InputStr[I] = 'e') or (InputStr[I] = 'E')) then
   begin
     Inc(I);
-    ExpSign := 1;
     if (I <= Length(InputStr)) and (InputStr[I] = '-') then
-    begin
-      ExpSign := -1;
-      Inc(I);
-    end
+      Inc(I)
     else if (I <= Length(InputStr)) and (InputStr[I] = '+') then
       Inc(I);
-    ExpValue := 0;
-    HasExpDigits := False;
-    while I <= Length(InputStr) do
+    HasExponentDigits := False;
+    while (I <= Length(InputStr)) and (InputStr[I] in ['0'..'9']) do
     begin
-      C := InputStr[I];
-      if (C >= '0') and (C <= '9') then
-      begin
-        ExpValue := ExpValue * 10 + (Ord(C) - Ord('0'));
-        HasExpDigits := True;
-        Inc(I);
-      end
-      else
-        Break;
+      HasExponentDigits := True;
+      Inc(I);
     end;
-    if HasExpDigits then
-    begin
-      // Apply exponent. Multiply for positive, divide for negative — divide
-      // gives more accurate IEEE 754 results than multiplying by 10^-N
-      // (e.g. 0.1 / 10 lands exactly on the closest double to 0.01,
-      // whereas 0.1 * 0.1 yields 0.010000000000000002).
-      if ExpSign > 0 then
-        Mantissa := Mantissa * IntPower(10.0, ExpValue)
-      else if ExpValue > 0 then
-        Mantissa := Mantissa / IntPower(10.0, ExpValue);
-    end;
-    // If HasExpDigits is False the exponent indicator was a stray `e` —
-    // ES2026 §21.1.2.13.1 returns the longest valid prefix, which is the
-    // mantissa alone. Mantissa already holds it; nothing else to do.
+    if HasExponentDigits then
+      ValidEnd := I - 1;
   end;
 
   // Step 5: Return the MV of the longest valid prefix of trimmedString
-  Result := TGocciaNumberLiteralValue.Create(Sign * Mantissa);
+  NumberText := Copy(InputStr, 1, ValidEnd);
+  Result := TGocciaNumberLiteralValue.Create(
+    DecimalTextToNumber(NumberText));
 end;
 
 // ES2026 §21.1.2.2 Number.isFinite(number)

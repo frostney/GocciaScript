@@ -646,6 +646,6 @@ end;
 
 begin
   TestRunnerProgram.AddSuite(TTestEngineRealm.Create('Engine Realm'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
   ExitCode := TestResultToExitCode;
 end.

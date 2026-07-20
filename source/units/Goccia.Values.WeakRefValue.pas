@@ -53,9 +53,10 @@ uses
 var
   GWeakRefSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetWeakRefShared: TGocciaSharedPrototype; inline;
+function GetWeakRefShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GWeakRefSharedSlot))
   else
     Result := nil;
@@ -75,7 +76,7 @@ end;
 
 destructor TGocciaWeakRefValue.Destroy;
 begin
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.UnregisterWeakContainer(Self);
   inherited;
 end;
@@ -86,8 +87,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetWeakRefShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetWeakRefShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GWeakRefSharedSlot, Shared);
@@ -144,7 +145,7 @@ begin
   RequireCanBeHeldWeakly(FTarget, CONSTRUCTOR_WEAK_REF);
   // A live WeakRef holds a weak target the GC must clear when it dies, so
   // count it as a weak container (the prototype host has no target).
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
   begin
     TGarbageCollector.Instance.AddKeptObject(FTarget);
     TGarbageCollector.Instance.RegisterWeakContainer(Self);
@@ -175,7 +176,7 @@ begin
   WeakRef := TGocciaWeakRefValue(AThisValue);
   if Assigned(WeakRef.FTarget) then
   begin
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.AddKeptObject(WeakRef.FTarget);
     Exit(WeakRef.FTarget);
   end;

@@ -54,7 +54,7 @@ destructor TGocciaRuntimeNamespaceModuleRegistration.Destroy;
 begin
   if Assigned(FRuntime) and Assigned(FRuntime.Engine) then
     FRuntime.Engine.UnregisterHostModuleProvider(FModuleName);
-  if Assigned(FNamespaceObject) and Assigned(TGarbageCollector.Instance) then
+  if Assigned(FNamespaceObject) and (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.RemoveRootObject(FNamespaceObject);
   FModule.Free;
   inherited;
@@ -76,7 +76,7 @@ begin
       [FModuleName]);
 
   FNamespaceObject := TGocciaObjectValue(NamespaceValue);
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddRootObject(FNamespaceObject);
 
   Module := TGocciaModule.Create(FModuleName);
@@ -91,7 +91,7 @@ begin
     if Assigned(Module) then
     begin
       Module.Free;
-      if Assigned(TGarbageCollector.Instance) then
+      if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.RemoveRootObject(FNamespaceObject);
       FNamespaceObject := nil;
     end;

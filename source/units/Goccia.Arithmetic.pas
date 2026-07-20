@@ -25,18 +25,29 @@ function EvaluateBitwiseNot(const AOperand: TGocciaValue): TGocciaValue;
 function CompoundOperations(const ACurrentValue, ANewValue: TGocciaValue;
   const AOperator: TGocciaTokenType): TGocciaValue;
 
-function IsStrictEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
-function IsNotStrictEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
-function IsLooselyEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
-function IsNotLooselyEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
-function IsSameValue(const ALeft, ARight: TGocciaValue): Boolean; inline;
-function IsSameValueZero(const ALeft, ARight: TGocciaValue): Boolean; inline;
+function IsStrictEqual(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
+function IsNotStrictEqual(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
+function IsLooselyEqual(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
+function IsNotLooselyEqual(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
+function IsSameValue(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
+function IsSameValueZero(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 
-function CompareStringValues(const ALeft, ARight: string): Integer; inline;
-function GreaterThan(const ALeft, ARight: TGocciaValue): Boolean; inline;
-function GreaterThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
-function LessThan(const ALeft, ARight: TGocciaValue): Boolean; inline;
-function LessThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
+function CompareStringValues(const ALeft, ARight: string): Integer;
+{$IFDEF FPC}inline;{$ENDIF}
+function GreaterThan(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
+function GreaterThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
+function LessThan(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
+function LessThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 
@@ -44,11 +55,15 @@ uses
   Math,
 
   BigInteger,
+  NumberBits,
   TextSemantics,
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.NumberConversion,
+  Goccia.NumberExponentiation,
+  Goccia.NumberRemainder,
   Goccia.Utils,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
@@ -68,9 +83,30 @@ type
     nekSameValueZero
   );
 
-function NumberValue(const AValue: Double): TGocciaNumberLiteralValue; inline;
-var
-  Bits: Int64 absolute AValue;
+{$Q-}
+function NativeAdd(const ALeft, ARight: Double): Double;
+begin
+  Result := ALeft + ARight;
+end;
+
+function NativeSubtract(const ALeft, ARight: Double): Double;
+begin
+  Result := ALeft - ARight;
+end;
+
+function NativeMultiply(const ALeft, ARight: Double): Double;
+begin
+  Result := ALeft * ARight;
+end;
+
+function NativeDivide(const ALeft, ARight: Double): Double;
+begin
+  Result := ALeft / ARight;
+end;
+{$IFDEF PRODUCTION}{$Q-}{$ELSE}{$Q+}{$ENDIF}
+
+function NumberValue(const AValue: Double): TGocciaNumberLiteralValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if Math.IsNaN(AValue) then
     Exit(TGocciaNumberLiteralValue.NaNValue);
@@ -82,7 +118,7 @@ begin
   end;
   if AValue = 0.0 then
   begin
-    if Bits < 0 then
+    if IsNegativeZero(AValue) then
       Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
     Exit(TGocciaNumberLiteralValue.ZeroValue);
   end;
@@ -91,7 +127,8 @@ begin
   Result := TGocciaNumberLiteralValue.Create(AValue);
 end;
 
-function InfinityWithSign(const APositive: Boolean): TGocciaNumberLiteralValue; inline;
+function InfinityWithSign(const APositive: Boolean): TGocciaNumberLiteralValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if APositive then
     Result := TGocciaNumberLiteralValue.InfinityValue
@@ -100,27 +137,30 @@ begin
 end;
 
 // ES2026 §6.1.6.2 BigInt mixed-type arithmetic errors
-procedure CheckBigIntMixedTypes(const ALeft, ARight: TGocciaValue); inline;
+procedure CheckBigIntMixedTypes(const ALeft, ARight: TGocciaValue);
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if (ALeft is TGocciaBigIntValue) xor (ARight is TGocciaBigIntValue) then
     ThrowTypeError(SErrorBigIntMixedTypes, SSuggestBigIntNoMixedArithmetic);
 end;
 
 procedure ToPrimitiveOperands(const ALeft, ARight: TGocciaValue;
-  out APrimitiveLeft, APrimitiveRight: TGocciaValue); inline;
+  out APrimitiveLeft, APrimitiveRight: TGocciaValue);
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   APrimitiveLeft := ToPrimitive(ALeft);
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(APrimitiveLeft);
   try
     APrimitiveRight := ToPrimitive(ARight);
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(APrimitiveLeft);
   end;
 end;
 
-function ToNumericOperand(const AValue: TGocciaValue): TGocciaValue; inline;
+function ToNumericOperand(const AValue: TGocciaValue): TGocciaValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ToPrimitive(AValue, tphNumber);
   if Result is TGocciaSymbolValue then
@@ -131,23 +171,13 @@ begin
 end;
 
 function ToNumberPair(const ALeft, ARight: TGocciaValue;
-  out ALeftNum, ARightNum: TGocciaNumberLiteralValue): Boolean; inline;
+  out ALeftNum, ARightNum: TGocciaNumberLiteralValue): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   CheckBigIntMixedTypes(ALeft, ARight);
   ALeftNum := TGocciaNumberLiteralValue(ALeft);
   ARightNum := TGocciaNumberLiteralValue(ARight);
   Result := not (ALeftNum.IsNaN or ARightNum.IsNaN);
-end;
-
-function IsActualZero(const ANum: TGocciaNumberLiteralValue): Boolean; inline;
-begin
-  Result := (ANum.Value = 0) and not ANum.IsNaN and not ANum.IsInfinite;
-end;
-
-function IsOddIntegralNumber(const ANum: TGocciaNumberLiteralValue): Boolean; inline;
-begin
-  Result := not ANum.IsNaN and not ANum.IsInfinite and
-    (Frac(ANum.Value) = 0.0) and (Frac(ANum.Value / 2.0) <> 0.0);
 end;
 
 // ES2026 §13.15.3 ApplyStringOrNumericBinaryOperator(lval, opText, rval)
@@ -192,7 +222,7 @@ begin
     Exit(InfinityWithSign(RightNum.IsInfinity));
   end;
 
-  Result := NumberValue(LeftNum.Value + RightNum.Value);
+  Result := NumberValue(NativeAdd(LeftNum.Value, RightNum.Value));
 end;
 
 function EvaluateSubtraction(const ALeft, ARight: TGocciaValue): TGocciaValue;
@@ -225,7 +255,7 @@ begin
     Exit(InfinityWithSign(not RightNum.IsInfinity));
   end;
 
-  Result := NumberValue(LeftNum.Value - RightNum.Value);
+  Result := NumberValue(NativeSubtract(LeftNum.Value, RightNum.Value));
 end;
 
 function EvaluateMultiplication(const ALeft, ARight: TGocciaValue): TGocciaValue;
@@ -261,7 +291,7 @@ begin
     Exit(InfinityWithSign(SameSign));
   end;
 
-  Result := NumberValue(LeftNum.Value * RightNum.Value);
+  Result := NumberValue(NativeMultiply(LeftNum.Value, RightNum.Value));
 end;
 
 function EvaluateDivision(const ALeft, ARight: TGocciaValue): TGocciaValue;
@@ -320,14 +350,13 @@ begin
     Exit(TGocciaNumberLiteralValue.NegativeInfinityValue);
   end;
 
-  Result := NumberValue(LeftNum.Value / RightNum.Value);
+  Result := NumberValue(NativeDivide(LeftNum.Value, RightNum.Value));
 end;
 
 function EvaluateModulo(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
   NumericLeft, NumericRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
-  RemainderValue: Double;
 begin
   NumericLeft := ToNumericOperand(ALeft);
   NumericRight := ToNumericOperand(ARight);
@@ -342,26 +371,8 @@ begin
         TGocciaBigIntValue(NumericRight).Value)));
   end;
 
-  if not ToNumberPair(NumericLeft, NumericRight, LeftNum, RightNum) then
-    Exit(TGocciaNumberLiteralValue.NaNValue);
-
-  if LeftNum.IsInfinite then
-    Exit(TGocciaNumberLiteralValue.NaNValue);
-  if RightNum.IsInfinite then
-  begin
-    if LeftNum.IsNegativeZero then
-      Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
-    Exit(NumberValue(LeftNum.Value));
-  end;
-  if RightNum.Value = 0 then
-    Exit(TGocciaNumberLiteralValue.NaNValue);
-
-  RemainderValue := LeftNum.Value -
-    RightNum.Value * Trunc(LeftNum.Value / RightNum.Value);
-  if (RemainderValue = 0) and
-     ((LeftNum.Value < 0) or LeftNum.IsNegativeZero) then
-    Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
-  Result := NumberValue(RemainderValue);
+  ToNumberPair(NumericLeft, NumericRight, LeftNum, RightNum);
+  Result := NumberValue(NumberRemainder(LeftNum.Value, RightNum.Value));
 end;
 
 function EvaluateExponentiation(const ALeft, ARight: TGocciaValue): TGocciaValue;
@@ -383,75 +394,7 @@ begin
   end;
 
   ToNumberPair(NumericLeft, NumericRight, LeftNum, RightNum);
-
-  if RightNum.IsNaN then
-    Exit(TGocciaNumberLiteralValue.NaNValue);
-  if IsActualZero(RightNum) then
-    Exit(TGocciaNumberLiteralValue.OneValue);
-  if LeftNum.IsNaN then
-    Exit(TGocciaNumberLiteralValue.NaNValue);
-
-  // ES2026 §6.1.6.1.3 Number::exponentiate(base, exponent)
-  // steps 4-7: infinities and signed zero have observable signs.
-  if LeftNum.IsInfinity then
-  begin
-    if RightNum.Value > 0 then
-      Exit(TGocciaNumberLiteralValue.InfinityValue);
-    Exit(TGocciaNumberLiteralValue.ZeroValue);
-  end;
-
-  if LeftNum.IsNegativeInfinity then
-  begin
-    if RightNum.Value > 0 then
-    begin
-      if IsOddIntegralNumber(RightNum) then
-        Exit(TGocciaNumberLiteralValue.NegativeInfinityValue);
-      Exit(TGocciaNumberLiteralValue.InfinityValue);
-    end;
-    if IsOddIntegralNumber(RightNum) then
-      Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
-    Exit(TGocciaNumberLiteralValue.ZeroValue);
-  end;
-
-  if IsActualZero(LeftNum) then
-  begin
-    if not LeftNum.IsNegativeZero then
-    begin
-      if RightNum.Value > 0 then
-        Exit(TGocciaNumberLiteralValue.ZeroValue);
-      Exit(TGocciaNumberLiteralValue.InfinityValue);
-    end;
-
-    if RightNum.Value > 0 then
-    begin
-      if IsOddIntegralNumber(RightNum) then
-        Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
-      Exit(TGocciaNumberLiteralValue.ZeroValue);
-    end;
-    if IsOddIntegralNumber(RightNum) then
-      Exit(TGocciaNumberLiteralValue.NegativeInfinityValue);
-    Exit(TGocciaNumberLiteralValue.InfinityValue);
-  end;
-
-  if RightNum.IsInfinite then
-  begin
-    if Abs(LeftNum.Value) > 1 then
-    begin
-      if RightNum.IsInfinity then
-        Exit(TGocciaNumberLiteralValue.InfinityValue);
-      Exit(TGocciaNumberLiteralValue.ZeroValue);
-    end;
-    if Abs(LeftNum.Value) = 1 then
-      Exit(TGocciaNumberLiteralValue.NaNValue);
-    if RightNum.IsInfinity then
-      Exit(TGocciaNumberLiteralValue.ZeroValue);
-    Exit(TGocciaNumberLiteralValue.InfinityValue);
-  end;
-
-  if (LeftNum.Value < 0) and (Frac(RightNum.Value) <> 0.0) then
-    Exit(TGocciaNumberLiteralValue.NaNValue);
-
-  Result := NumberValue(Power(LeftNum.Value, RightNum.Value));
+  Result := NumberValue(NumberExponentiation(LeftNum.Value, RightNum.Value));
 end;
 
 function EvaluateBitwiseAnd(const ALeft, ARight: TGocciaValue): TGocciaValue;
@@ -525,7 +468,8 @@ begin
         TGocciaBigIntValue(NumericRight).Value.ToInt64)));
   CheckBigIntMixedTypes(NumericLeft, NumericRight);
   Result := NumberValue(
-    SarLongint(ToInt32Value(NumericLeft), ToUint32Value(NumericRight) and 31));
+    SignedRightShiftInt32(ToInt32Value(NumericLeft),
+      ToUint32Value(NumericRight)));
 end;
 
 // ES2026 §6.1.6.2.11 BigInt::unsignedRightShift
@@ -588,7 +532,8 @@ begin
 end;
 
 function NumberValuesEqual(const ALeft, ARight: TGocciaNumberLiteralValue;
-  const AKind: TGocciaNumberEqualityKind): Boolean; inline;
+  const AKind: TGocciaNumberEqualityKind): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   if ALeft.IsNaN or ARight.IsNaN then
   begin
@@ -615,7 +560,8 @@ begin
 end;
 
 function ValuesEqual(const ALeft, ARight: TGocciaValue;
-  const ANumberKind: TGocciaNumberEqualityKind): Boolean; inline;
+  const ANumberKind: TGocciaNumberEqualityKind): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (ALeft is TGocciaUndefinedLiteralValue) and
      (ARight is TGocciaUndefinedLiteralValue) then
@@ -648,23 +594,27 @@ begin
 end;
 
 // ES2026 §7.2.14 IsStrictlyEqual(x, y)
-function IsStrictEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
+function IsStrictEqual(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ValuesEqual(ALeft, ARight, nekStrict);
 end;
 
-function IsNotStrictEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
+function IsNotStrictEqual(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := not IsStrictEqual(ALeft, ARight);
 end;
 
-function IsNullOrUndefined(const AValue: TGocciaValue): Boolean; inline;
+function IsNullOrUndefined(const AValue: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AValue is TGocciaNullLiteralValue) or
     (AValue is TGocciaUndefinedLiteralValue);
 end;
 
-function IsLooseObjectComparablePrimitive(const AValue: TGocciaValue): Boolean; inline;
+function IsLooseObjectComparablePrimitive(const AValue: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AValue is TGocciaStringLiteralValue) or
     (AValue is TGocciaNumberLiteralValue) or
@@ -676,13 +626,15 @@ function CompareBigIntAndNumber(const ABigInt: TGocciaBigIntValue;
   const ANumber: TGocciaNumberLiteralValue): Integer; forward;
 
 function BigIntNumberLooselyEqual(const ABigInt: TGocciaBigIntValue;
-  const ANumber: TGocciaNumberLiteralValue): Boolean; inline;
+  const ANumber: TGocciaNumberLiteralValue): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := CompareBigIntAndNumber(ABigInt, ANumber) = RELATION_EQUAL;
 end;
 
 // ES2026 §7.2.13 IsLooselyEqual(x, y)
-function IsLooselyEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
+function IsLooselyEqual(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 var
   StringBigInt: TBigInteger;
 begin
@@ -748,24 +700,28 @@ begin
   Result := False;
 end;
 
-function IsNotLooselyEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
+function IsNotLooselyEqual(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := not IsLooselyEqual(ALeft, ARight);
 end;
 
 // ES2026 §7.2.10 SameValue(x, y)
-function IsSameValue(const ALeft, ARight: TGocciaValue): Boolean; inline;
+function IsSameValue(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ValuesEqual(ALeft, ARight, nekSameValue);
 end;
 
 // ES2026 §7.2.11 SameValueZero(x, y)
-function IsSameValueZero(const ALeft, ARight: TGocciaValue): Boolean; inline;
+function IsSameValueZero(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ValuesEqual(ALeft, ARight, nekSameValueZero);
 end;
 
-function NormalizeRelation(const ACompare: Integer): Integer; inline;
+function NormalizeRelation(const ACompare: Integer): Integer;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if ACompare < 0 then
     Exit(RELATION_LESS);
@@ -774,7 +730,8 @@ begin
   Result := RELATION_EQUAL;
 end;
 
-function CompareNumberValues(const ALeftNum, ARightNum: TGocciaNumberLiteralValue): Integer; inline;
+function CompareNumberValues(const ALeftNum, ARightNum: TGocciaNumberLiteralValue): Integer;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if ALeftNum.IsNaN or ARightNum.IsNaN then
     Exit(RELATION_UNORDERED);
@@ -805,7 +762,8 @@ end;
 
 // ES2026 §7.2.14 IsLessThan(x, y, LeftFirst)
 function CompareBigIntAndNumber(const ABigInt: TGocciaBigIntValue;
-  const ANumber: TGocciaNumberLiteralValue): Integer; inline;
+  const ANumber: TGocciaNumberLiteralValue): Integer;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   NumVal, FloorVal: Double;
   NumAsBigInt: TBigInteger;
@@ -861,7 +819,7 @@ begin
   if AByteIndex > Length(AText) then
     Exit(False);
 
-  if TryReadUTF8CodePointAllowSurrogates(AText, AByteIndex, CodePoint,
+  if TryReadCodePointAtAllowSurrogates(AText, AByteIndex, CodePoint,
      ByteLength) then
   begin
     Inc(AByteIndex, ByteLength);
@@ -883,7 +841,8 @@ begin
 end;
 
 // ES2026 §7.2.12 IsLessThan(x, y, LeftFirst), String comparison branch
-function CompareStringValues(const ALeft, ARight: string): Integer; inline;
+function CompareStringValues(const ALeft, ARight: string): Integer;
+{$IFDEF FPC}inline;{$ENDIF}
 var
   LeftByteIndex, RightByteIndex: Integer;
   LeftPendingLow, RightPendingLow: Integer;
@@ -915,7 +874,8 @@ begin
 end;
 
 function CompareBigIntAndString(const ABigInt: TGocciaBigIntValue;
-  const AString: TGocciaStringLiteralValue): Integer; inline;
+  const AString: TGocciaStringLiteralValue): Integer;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   StringBigInt: TBigInteger;
 begin
@@ -924,7 +884,8 @@ begin
   Result := NormalizeRelation(ABigInt.Value.Compare(StringBigInt));
 end;
 
-function ToRelationalNumeric(const AValue: TGocciaValue): TGocciaValue; inline;
+function ToRelationalNumeric(const AValue: TGocciaValue): TGocciaValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if AValue is TGocciaBigIntValue then
     Exit(AValue);
@@ -933,7 +894,8 @@ begin
   Result := AValue.ToNumberLiteral;
 end;
 
-function CompareRelationalValues(const ALeft, ARight: TGocciaValue): Integer; inline;
+function CompareRelationalValues(const ALeft, ARight: TGocciaValue): Integer;
+{$IFDEF FPC}inline;{$ENDIF}
 var
   PrimLeft, PrimRight: TGocciaValue;
   NumericLeft, NumericRight: TGocciaValue;
@@ -997,17 +959,20 @@ begin
     TGocciaNumberLiteralValue(NumericRight));
 end;
 
-function LessThan(const ALeft, ARight: TGocciaValue): Boolean; inline;
+function LessThan(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := CompareRelationalValues(ALeft, ARight) = RELATION_LESS;
 end;
 
-function GreaterThan(const ALeft, ARight: TGocciaValue): Boolean; inline;
+function GreaterThan(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := CompareRelationalValues(ALeft, ARight) = RELATION_GREATER;
 end;
 
-function LessThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
+function LessThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 var
   Cmp: Integer;
 begin
@@ -1015,7 +980,8 @@ begin
   Result := (Cmp = RELATION_LESS) or (Cmp = RELATION_EQUAL);
 end;
 
-function GreaterThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
+function GreaterThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 var
   Cmp: Integer;
 begin

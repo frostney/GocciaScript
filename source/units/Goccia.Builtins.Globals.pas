@@ -135,7 +135,7 @@ var
 
 function GetErrorProto: TGocciaObjectValue;
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GErrorProtoSlot))
   else
     Result := nil;
@@ -143,7 +143,7 @@ end;
 
 function GetEvalErrorProto: TGocciaObjectValue;
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GEvalErrorProtoSlot))
   else
     Result := nil;
@@ -151,7 +151,7 @@ end;
 
 function GetTypeErrorProto: TGocciaObjectValue;
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GTypeErrorProtoSlot))
   else
     Result := nil;
@@ -159,7 +159,7 @@ end;
 
 function GetReferenceErrorProto: TGocciaObjectValue;
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GReferenceErrorProtoSlot))
   else
     Result := nil;
@@ -167,7 +167,7 @@ end;
 
 function GetRangeErrorProto: TGocciaObjectValue;
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GRangeErrorProtoSlot))
   else
     Result := nil;
@@ -175,7 +175,7 @@ end;
 
 function GetSyntaxErrorProto: TGocciaObjectValue;
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GSyntaxErrorProtoSlot))
   else
     Result := nil;
@@ -183,7 +183,7 @@ end;
 
 function GetURIErrorProto: TGocciaObjectValue;
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GURIErrorProtoSlot))
   else
     Result := nil;
@@ -191,7 +191,7 @@ end;
 
 function GetAggregateErrorProto: TGocciaObjectValue;
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GAggregateErrorProtoSlot))
   else
     Result := nil;
@@ -199,7 +199,7 @@ end;
 
 function GetSuppressedErrorProto: TGocciaObjectValue;
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GSuppressedErrorProtoSlot))
   else
     Result := nil;
@@ -207,7 +207,7 @@ end;
 
 function GetDOMExceptionProto: TGocciaObjectValue;
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GDOMExceptionProtoSlot))
   else
     Result := nil;
@@ -299,7 +299,7 @@ begin
   // ErrorHelper / DisposalTracker / other readers see exactly the prototypes
   // owned by this engine.  When the engine is freed its realm is freed,
   // unpinning these objects in lockstep.
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
   begin
     CurrentRealm.SetSlot(GErrorProtoSlot, FErrorProto);
     CurrentRealm.SetSlot(GEvalErrorProtoSlot, FEvalErrorProto);
@@ -460,7 +460,7 @@ begin
       TGocciaPropertyDescriptorData.Create(MessageValue, [pfConfigurable, pfWritable]));
   end;
 
-  if Assigned(TGocciaCallStack.Instance) then
+  if (TGocciaCallStack.Instance <> nil) then
     Result.ErrorStack :=
       TGocciaCallStack.Instance.CaptureStackTrace(AName, MessageText, 1);
 
@@ -641,7 +641,7 @@ begin
   AddTempRootIfNeeded(ResultRoot, Result);
   try
     Result.HasErrorData := True;
-    if Assigned(TGocciaCallStack.Instance) then
+    if (TGocciaCallStack.Instance <> nil) then
       Result.ErrorStack :=
         TGocciaCallStack.Instance.CaptureStackTrace(AGGREGATE_ERROR_NAME,
           Message, 1);
@@ -674,7 +674,7 @@ begin
         ErrorsArray.Elements.Add(Item);
       end;
     except
-      AcquireExceptionObject;
+      PreserveCurrentExceptionAcrossNestedHandler;
       CloseIteratorPreservingError(Iterator);
       raise;
     end;
@@ -722,7 +722,7 @@ begin
 
   Result := TGocciaObjectValue.Create(AProto);
   Result.HasErrorData := True;
-  if Assigned(TGocciaCallStack.Instance) then
+  if (TGocciaCallStack.Instance <> nil) then
     Result.ErrorStack :=
       TGocciaCallStack.Instance.CaptureStackTrace(SUPPRESSED_ERROR_NAME,
         Message, 1);
@@ -1006,7 +1006,7 @@ begin
   Len := Length(ABuf.Data);
   Result := TGocciaArrayBufferValue.Create(Len);
   AMemory.Add(ABuf, Result);
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(Result);
 
   if Len > 0 then
@@ -1021,7 +1021,7 @@ begin
   Len := Length(ABuf.Data);
   Result := TGocciaSharedArrayBufferValue.Create(Len);
   AMemory.Add(ABuf, Result);
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(Result);
 
   if Len > 0 then
@@ -1075,8 +1075,7 @@ end;
 function TGocciaGlobals.StructuredCloneCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Memory: THashMap<TGocciaValue, TGocciaValue>;
-  MemoryValues: array of TGocciaValue;
-  I: Integer;
+  MemoryEntry: THashMap<TGocciaValue, TGocciaValue>.TKeyValuePair;
 begin
   if AArgs.Length = 0 then
     ThrowTypeError(SErrorStructuredCloneArgRequired, SSuggestObjectArgType);
@@ -1085,12 +1084,9 @@ begin
   try
     Result := StructuredCloneValue(AArgs.GetElement(0), Memory);
   finally
-    if Assigned(TGarbageCollector.Instance) then
-    begin
-      MemoryValues := Memory.Values;
-      for I := 0 to Length(MemoryValues) - 1 do
-        TGarbageCollector.Instance.RemoveTempRoot(MemoryValues[I]);
-    end;
+    if (TGarbageCollector.Instance <> nil) then
+      for MemoryEntry in Memory do
+        TGarbageCollector.Instance.RemoveTempRoot(MemoryEntry.Value);
     Memory.Free;
   end;
 end;

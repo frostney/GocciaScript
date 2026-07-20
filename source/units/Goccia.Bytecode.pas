@@ -155,7 +155,11 @@ const
   //               OP_CLOSE_UPVALUE stores its local slot in Bx, and
   //               OP_CONSTRUCT_SPREAD carries its argument-array register
   //               without the old 7-bit flag packing.
-  GOCCIA_FORMAT_VERSION = 72;
+  //   v72 -> v73: serialized strings changed from UTF-8 bytes to raw
+  //               little-endian UTF-16 code units so bytecode constants
+  //               preserve every ECMAScript string value, including lone
+  //               surrogates.
+  GOCCIA_FORMAT_VERSION = 73;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -415,18 +419,31 @@ type
     OP_CONSTRUCT_SPREAD = 226
   );
 
-function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt16): UInt64; inline;
-function EncodeABx(const AOp: TGocciaOpCode; const A: UInt16; const ABx: UInt16): UInt64; inline;
-function EncodeAsBx(const AOp: TGocciaOpCode; const A: UInt16; const AAsBx: Int16): UInt64; inline;
-function EncodeAx(const AOp: TGocciaOpCode; const AAx: Int32): UInt64; inline;
+function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt16): UInt64;
+{$IFDEF FPC}inline;{$ENDIF}
+function EncodeABx(const AOp: TGocciaOpCode; const A: UInt16; const ABx: UInt16): UInt64;
+{$IFDEF FPC}inline;{$ENDIF}
+function EncodeAsBx(const AOp: TGocciaOpCode; const A: UInt16;
+  const AAsBx: Int16): UInt64;
+  {$IFDEF FPC}inline;{$ENDIF}
+function EncodeAx(const AOp: TGocciaOpCode;
+  const AAx: Int32): UInt64;
+  {$IFDEF FPC}inline;{$ENDIF}
 
-function DecodeOp(const AInstruction: UInt32): UInt8; inline;
-function DecodeA(const AInstruction: UInt32): UInt8; inline;
-function DecodeB(const AInstruction: UInt32): UInt8; inline;
-function DecodeC(const AInstruction: UInt32): UInt8; inline;
-function DecodeBx(const AInstruction: UInt32): UInt16; inline;
-function DecodesBx(const AInstruction: UInt32): Int16; inline;
-function DecodeAx(const AInstruction: UInt32): Int32; inline;
+function DecodeOp(const AInstruction: UInt32): UInt8;
+{$IFDEF FPC}inline;{$ENDIF}
+function DecodeA(const AInstruction: UInt32): UInt8;
+{$IFDEF FPC}inline;{$ENDIF}
+function DecodeB(const AInstruction: UInt32): UInt8;
+{$IFDEF FPC}inline;{$ENDIF}
+function DecodeC(const AInstruction: UInt32): UInt8;
+{$IFDEF FPC}inline;{$ENDIF}
+function DecodeBx(const AInstruction: UInt32): UInt16;
+{$IFDEF FPC}inline;{$ENDIF}
+function DecodesBx(const AInstruction: UInt32): Int16;
+{$IFDEF FPC}inline;{$ENDIF}
+function DecodeAx(const AInstruction: UInt32): Int32;
+{$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 

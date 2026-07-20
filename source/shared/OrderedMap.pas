@@ -44,9 +44,11 @@ type
       FEntryCount: Integer;
       FIndex: Integer;
       FCurrent: TBaseMap<TKey, TValue>.TKeyValuePair;
-      function GetCurrent: TBaseMap<TKey, TValue>.TKeyValuePair; inline;
+      function GetCurrent: TBaseMap<TKey, TValue>.TKeyValuePair;
+      {$IFDEF FPC}inline;{$ENDIF}
     public
-      function MoveNext: Boolean; inline;
+      function MoveNext: Boolean;
+      {$IFDEF FPC}inline;{$ENDIF}
       property Current: TBaseMap<TKey, TValue>.TKeyValuePair read GetCurrent;
     end;
 
@@ -96,7 +98,8 @@ type
     function Remove(const AKey: TKey): Boolean; override;
     procedure Clear; override;
 
-    function GetEnumerator: TEnumerator; inline;
+    function GetEnumerator: TEnumerator;
+    {$IFDEF FPC}inline;{$ENDIF}
     // Random-access lookup by active-entry position: O(AIndex), since it scans
     // active entries from the start. For sequential iteration use the enumerator
     // (`for Pair in Map do`); driving EntryAt from a `for I := 0 to Count - 1`
@@ -121,18 +124,21 @@ implementation
 
 { Hash / Equality — default: DJB2 over raw key bytes }
 
-{$PUSH}{$R-}{$Q-}
+{$IFDEF FPC}
+  {$PUSH}
+{$ENDIF}
+{$R-}{$Q-}
 function TOrderedMap<TKey, TValue>.HashKey(const AKey: TKey): Cardinal;
 var
   P: PByte;
   I: Integer;
   V4: Cardinal;
-  V8: QWord;
+  V8: UInt64;
 begin
-  if SizeOf(TKey) = SizeOf(QWord) then
+  if SizeOf(TKey) = SizeOf(UInt64) then
   begin
     Move(AKey, V8, 8);
-    V8 := (V8 xor (V8 shr 4)) * QWord(11400714819323198485);
+    V8 := (V8 xor (V8 shr 4)) * UInt64(11400714819323198485);
     Result := Cardinal(V8 xor (V8 shr 32));
   end
   else if SizeOf(TKey) = SizeOf(Cardinal) then
@@ -149,14 +155,29 @@ begin
       Result := Result * 33 + P[I];
   end;
 end;
-{$POP}
+{$IFDEF FPC}
+  {$POP}
+{$ELSE}
+  {$IFNDEF PRODUCTION}{$R+}{$Q+}{$ENDIF}
+{$ENDIF}
 
 function TOrderedMap<TKey, TValue>.KeysEqual(const A, B: TKey): Boolean;
+var
+  A4, B4: Cardinal;
+  A8, B8: UInt64;
 begin
-  if SizeOf(TKey) = SizeOf(QWord) then
-    Result := PQWord(@A)^ = PQWord(@B)^
+  if SizeOf(TKey) = SizeOf(UInt64) then
+  begin
+    Move(A, A8, SizeOf(A8));
+    Move(B, B8, SizeOf(B8));
+    Result := A8 = B8;
+  end
   else if SizeOf(TKey) = SizeOf(Cardinal) then
-    Result := PCardinal(@A)^ = PCardinal(@B)^
+  begin
+    Move(A, A4, SizeOf(A4));
+    Move(B, B4, SizeOf(B4));
+    Result := A4 = B4;
+  end
   else
     Result := CompareMem(@A, @B, SizeOf(TKey));
 end;

@@ -194,10 +194,10 @@ procedure TCapabilityAuditTests.TestSandboxPromiseCannotCatchSinkFailure;
     Raised: Boolean;
   begin
     Source := TStringList.Create;
-    Source.Text := 'import fs from "fs";' + LineEnding +
-      'try {' + LineEnding +
+    Source.Text := 'import fs from "fs";' + sLineBreak +
+      'try {' + sLineBreak +
       '  await fs.promises.readFile("../../missing.txt", "utf8");' +
-      LineEnding +
+      sLineBreak +
       '} catch (e) {}';
     Engine := TGocciaEngine.Create('/audit-promise-test.js', Source, AExecutor);
     Context := TGocciaSandboxContext.Create;
@@ -237,16 +237,16 @@ var
   Raised: Boolean;
 begin
   Source := TStringList.Create;
-  Source.Text := 'const iterable = {' + LineEnding +
-    '  [Symbol.iterator]: () => ({' + LineEnding +
-    '    next: () => {' + LineEnding +
-    '      Function("return 1");' + LineEnding +
-    '      return { done: true };' + LineEnding +
-    '    },' + LineEnding +
-    '  }),' + LineEnding +
-    '};' + LineEnding +
-    'try {' + LineEnding +
-    '  for await (const value of iterable) {}' + LineEnding +
+  Source.Text := 'const iterable = {' + sLineBreak +
+    '  [Symbol.iterator]: () => ({' + sLineBreak +
+    '    next: () => {' + sLineBreak +
+    '      Function("return 1");' + sLineBreak +
+    '      return { done: true };' + sLineBreak +
+    '    },' + sLineBreak +
+    '  }),' + sLineBreak +
+    '};' + sLineBreak +
+    'try {' + sLineBreak +
+    '  for await (const value of iterable) {}' + sLineBreak +
     '} catch (e) {}';
   Executor := TGocciaBytecodeExecutor.Create;
   Engine := TGocciaEngine.Create('/audit-async-iterator-test.js', Source,
@@ -358,6 +358,6 @@ end;
 begin
   TestRunnerProgram.AddSuite(
     TCapabilityAuditTests.Create('Capability Audit'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
   ExitCode := TestResultToExitCode;
 end.

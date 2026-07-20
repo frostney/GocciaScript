@@ -5,6 +5,8 @@ unit Goccia.RegExp.&Program;
 interface
 
 type
+  TRegExpCodeArray = array of UInt32;
+
   TGocciaRegExpNamedGroup = record
     Name: string;
     Index: Integer;
@@ -31,6 +33,8 @@ type
     PageFirstRange: array of Integer;
   end;
 
+  TRegExpCharClassArray = array of TRegExpCharClass;
+
   TRegExpStringSet = record
     CharClassIndex: Integer;
     Strings: TRegExpStringSequenceArray;
@@ -51,8 +55,8 @@ type
   end;
 
   TRegExpProgram = record
-    Code: array of UInt32;
-    CharClasses: array of TRegExpCharClass;
+    Code: TRegExpCodeArray;
+    CharClasses: TRegExpCharClassArray;
     CaptureCount: Integer;
     FullUnicode: Boolean;
     StartCheck: TRegExpStartCheck;

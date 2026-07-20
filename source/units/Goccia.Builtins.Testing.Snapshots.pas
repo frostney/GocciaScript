@@ -250,7 +250,8 @@ begin
   Result := False;
 end;
 
-function NaturalSortCode(const ACharacter: Char): Integer; inline;
+function NaturalSortCode(const ACharacter: Char): Integer;
+{$IFDEF FPC}inline;{$ENDIF}
 var
   CharacterCode: Integer;
 begin
@@ -274,7 +275,8 @@ begin
   Result := CharacterCode - 63;
 end;
 
-function NaturalCompareText(constref ALeft, ARight: string): Integer;
+function NaturalCompareText(
+  {$IFDEF FPC}constref{$ELSE}const{$ENDIF} ALeft, ARight: string): Integer;
 var
   LeftIndex, RightIndex: Integer;
   LeftStart, RightStart, LeftSignificant, RightSignificant: Integer;
@@ -529,8 +531,8 @@ begin
     Exit(True);
 
   if AHasSnapshot then
-    AFailureMessage := 'Snapshot `' + AKey + '` mismatched' + LineEnding +
-      'Expected: ' + RemoveSnapshotLineBreaks(AExpected) + LineEnding +
+    AFailureMessage := 'Snapshot `' + AKey + '` mismatched' + sLineBreak +
+      'Expected: ' + RemoveSnapshotLineBreaks(AExpected) + sLineBreak +
       'Received: ' + RemoveSnapshotLineBreaks(AReceived)
   else
     AFailureMessage := 'Snapshot `' + AKey + '` is missing';

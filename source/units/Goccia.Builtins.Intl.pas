@@ -255,7 +255,7 @@ begin
   Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
 end;
 
-procedure AppendCanonicalLocale(var ALocales: TStringArray; var ACount: Integer;
+procedure AppendCanonicalLocale(var ALocales: IntlTypes.TStringArray; var ACount: Integer;
   const AValue: TGocciaValue);
 var
   Tag, Canonical: string;
@@ -368,7 +368,7 @@ end;
 function TGocciaIntlBuiltin.GetCanonicalLocales(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Canonical: TStringArray;
+  Canonical: IntlTypes.TStringArray;
   ResultArr: TGocciaArrayValue;
   I: Integer;
 begin
@@ -387,7 +387,7 @@ function TGocciaIntlBuiltin.SupportedValuesOf(const AArgs: TGocciaArgumentsColle
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Key: string;
-  Collations: TStringArray;
+  Collations: IntlTypes.TStringArray;
   TimeZones: TTemporalTimeZoneIdentifierArray;
   ResultArr: TGocciaArrayValue;
   I: Integer;
@@ -432,7 +432,7 @@ var
     );
   var
     Locale, Collation: string;
-    LocaleCollations: TStringArray;
+    LocaleCollations: IntlTypes.TStringArray;
   begin
     Result := False;
     for Locale in ProbeLocales do
@@ -935,8 +935,8 @@ end;
 function TGocciaIntlBuiltin.SupportedLocalesOfFn(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Canonical: TStringArray;
-  Supported: TStringArray;
+  Canonical: IntlTypes.TStringArray;
+  Supported: IntlTypes.TStringArray;
   ResultArr: TGocciaArrayValue;
   I: Integer;
 begin
@@ -1013,7 +1013,7 @@ end;
 function CollatorLocaleArgumentToLocale(const AArg: TGocciaValue): string;
 var
   Tag, Canonical, FirstUnicodeExtensionValue: string;
-  RequestedLocales: TStringArray;
+  RequestedLocales: IntlTypes.TStringArray;
   FirstUnicodeExtension, SecondUnicodeExtension, I: Integer;
   LowerTag, Tail: string;
 begin
@@ -1145,7 +1145,7 @@ var
   Constructed: TGocciaValue;
   OptionsArg: TGocciaValue;
   Options: TGocciaObjectValue;
-  RequestedLocales: TStringArray;
+  RequestedLocales: IntlTypes.TStringArray;
 begin
   RequestedLocales := CanonicalizeLocaleListFromValue(AArgs.GetElement(0));
   Locale := ResolveRequestedLocale(RequestedLocales);
@@ -1194,7 +1194,7 @@ var
   Locale: string;
   Options: TGocciaObjectValue;
   OptionsArg: TGocciaValue;
-  RequestedLocales: TStringArray;
+  RequestedLocales: IntlTypes.TStringArray;
 begin
   RequireIntlConstructCall(AThisValue, 'PluralRules');
   RequestedLocales := CanonicalizeLocaleListFromValue(AArgs.GetElement(0));
@@ -1240,7 +1240,7 @@ var
   Locale: string;
   Options: TGocciaObjectValue;
   OptionsArg: TGocciaValue;
-  RequestedLocales: TStringArray;
+  RequestedLocales: IntlTypes.TStringArray;
 begin
   RequireIntlConstructCall(AThisValue, 'RelativeTimeFormat');
   RequestedLocales := CanonicalizeLocaleListFromValue(AArgs.GetElement(0));
@@ -1285,7 +1285,7 @@ function TGocciaIntlBuiltin.ListFormatConstructorFn(const AArgs: TGocciaArgument
 var
   Locale: string;
   Options: TGocciaObjectValue;
-  RequestedLocales: TStringArray;
+  RequestedLocales: IntlTypes.TStringArray;
 begin
   RequireIntlConstructCall(AThisValue, 'ListFormat');
 
@@ -1332,7 +1332,7 @@ function TGocciaIntlBuiltin.DisplayNamesConstructorFn(const AArgs: TGocciaArgume
 var
   Locale: string;
   Options: TGocciaObjectValue;
-  RequestedLocales: TStringArray;
+  RequestedLocales: IntlTypes.TStringArray;
 begin
   RequireIntlConstructCall(AThisValue, 'DisplayNames');
   RequestedLocales := CanonicalizeLocaleListFromValue(AArgs.GetElement(0));
@@ -1378,7 +1378,7 @@ var
   Locale: string;
   Options: TGocciaObjectValue;
   OptionsArg: TGocciaValue;
-  RequestedLocales: TStringArray;
+  RequestedLocales: IntlTypes.TStringArray;
 begin
   RequireIntlConstructCall(AThisValue, 'Segmenter');
   RequestedLocales := CanonicalizeLocaleListFromValue(AArgs.GetElement(0));

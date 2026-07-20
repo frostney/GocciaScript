@@ -1,0 +1,50 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <ProjectGuid>{974953C4-E521-48D5-9CF5-123563D3C028}</ProjectGuid>
+  </PropertyGroup>
+  <ItemGroup>
+    <Projects Include="GocciaREPL.dproj"><Dependencies/></Projects>
+    <Projects Include="GocciaScriptLoader.dproj"><Dependencies/></Projects>
+    <Projects Include="GocciaScriptLoaderBare.dproj"><Dependencies/></Projects>
+    <Projects Include="GocciaSandboxRunner.dproj"><Dependencies/></Projects>
+    <Projects Include="GocciaTestRunner.dproj"><Dependencies/></Projects>
+    <Projects Include="GocciaBenchmarkRunner.dproj"><Dependencies/></Projects>
+    <Projects Include="GocciaBundler.dproj"><Dependencies/></Projects>
+  </ItemGroup>
+  <ProjectExtensions>
+    <Borland.Personality>Default.Personality.12</Borland.Personality>
+    <Borland.ProjectType/>
+    <BorlandProject><Default.Personality/></BorlandProject>
+  </ProjectExtensions>
+  <Target Name="GocciaREPL"><MSBuild Projects="GocciaREPL.dproj" Targets=""/></Target>
+  <Target Name="GocciaREPL:Clean"><MSBuild Projects="GocciaREPL.dproj" Targets="Clean"/></Target>
+  <Target Name="GocciaREPL:Make"><MSBuild Projects="GocciaREPL.dproj" Targets="Make"/></Target>
+  <Target Name="GocciaScriptLoader"><MSBuild Projects="GocciaScriptLoader.dproj" Targets=""/></Target>
+  <Target Name="GocciaScriptLoader:Clean"><MSBuild Projects="GocciaScriptLoader.dproj" Targets="Clean"/></Target>
+  <Target Name="GocciaScriptLoader:Make"><MSBuild Projects="GocciaScriptLoader.dproj" Targets="Make"/></Target>
+  <Target Name="GocciaScriptLoaderBare"><MSBuild Projects="GocciaScriptLoaderBare.dproj" Targets=""/></Target>
+  <Target Name="GocciaScriptLoaderBare:Clean"><MSBuild Projects="GocciaScriptLoaderBare.dproj" Targets="Clean"/></Target>
+  <Target Name="GocciaScriptLoaderBare:Make"><MSBuild Projects="GocciaScriptLoaderBare.dproj" Targets="Make"/></Target>
+  <Target Name="GocciaSandboxRunner"><MSBuild Projects="GocciaSandboxRunner.dproj" Targets=""/></Target>
+  <Target Name="GocciaSandboxRunner:Clean"><MSBuild Projects="GocciaSandboxRunner.dproj" Targets="Clean"/></Target>
+  <Target Name="GocciaSandboxRunner:Make"><MSBuild Projects="GocciaSandboxRunner.dproj" Targets="Make"/></Target>
+  <Target Name="GocciaTestRunner"><MSBuild Projects="GocciaTestRunner.dproj" Targets=""/></Target>
+  <Target Name="GocciaTestRunner:Clean"><MSBuild Projects="GocciaTestRunner.dproj" Targets="Clean"/></Target>
+  <Target Name="GocciaTestRunner:Make"><MSBuild Projects="GocciaTestRunner.dproj" Targets="Make"/></Target>
+  <Target Name="GocciaBenchmarkRunner"><MSBuild Projects="GocciaBenchmarkRunner.dproj" Targets=""/></Target>
+  <Target Name="GocciaBenchmarkRunner:Clean"><MSBuild Projects="GocciaBenchmarkRunner.dproj" Targets="Clean"/></Target>
+  <Target Name="GocciaBenchmarkRunner:Make"><MSBuild Projects="GocciaBenchmarkRunner.dproj" Targets="Make"/></Target>
+  <Target Name="GocciaBundler"><MSBuild Projects="GocciaBundler.dproj" Targets=""/></Target>
+  <Target Name="GocciaBundler:Clean"><MSBuild Projects="GocciaBundler.dproj" Targets="Clean"/></Target>
+  <Target Name="GocciaBundler:Make"><MSBuild Projects="GocciaBundler.dproj" Targets="Make"/></Target>
+  <Target Name="Build">
+    <CallTarget Targets="GocciaREPL;GocciaScriptLoader;GocciaScriptLoaderBare;GocciaSandboxRunner;GocciaTestRunner;GocciaBenchmarkRunner;GocciaBundler"/>
+  </Target>
+  <Target Name="Clean">
+    <CallTarget Targets="GocciaREPL:Clean;GocciaScriptLoader:Clean;GocciaScriptLoaderBare:Clean;GocciaSandboxRunner:Clean;GocciaTestRunner:Clean;GocciaBenchmarkRunner:Clean;GocciaBundler:Clean"/>
+  </Target>
+  <Target Name="Make">
+    <CallTarget Targets="GocciaREPL:Make;GocciaScriptLoader:Make;GocciaScriptLoaderBare:Make;GocciaSandboxRunner:Make;GocciaTestRunner:Make;GocciaBenchmarkRunner:Make;GocciaBundler:Make"/>
+  </Target>
+  <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>

@@ -7,6 +7,7 @@ uses
   Classes,
   SysUtils,
 
+  CriticalSections,
   TimingUtils,
 
   Goccia.Application,
@@ -52,7 +53,7 @@ uses
   Goccia.Threading.Flags,
   Goccia.Threading.Init,
 
-  FileUtils in 'units/FileUtils.pas';
+  FileUtils;
 
 type
   TReportSpec = record
@@ -66,16 +67,16 @@ type
   end;
 
 var
-  BenchmarkProgressLock: TRTLCriticalSection;
+  BenchmarkProgressLock: TGocciaCriticalSection;
 
 class procedure TBenchmarkProgress.WriteLine(const AMessage: string);
 begin
-  EnterCriticalSection(BenchmarkProgressLock);
+  CriticalSectionEnter(BenchmarkProgressLock);
   try
     WriteLn(AMessage);
     Flush(Output);
   finally
-    LeaveCriticalSection(BenchmarkProgressLock);
+    CriticalSectionLeave(BenchmarkProgressLock);
   end;
 end;
 
@@ -346,7 +347,7 @@ begin
       on E: Exception do
       begin
         if not GIsWorkerThread then
-          WriteLn(StdErr, 'Error loading benchmark file: ', E.Message);
+          WriteLn(ErrOutput, 'Error loading benchmark file: ', E.Message);
         MakeErrorFileResult(AFileName, E.Message, AReporter);
         Exit;
       end;
@@ -398,13 +399,13 @@ begin
       on E: TGocciaError do
       begin
         if not GIsWorkerThread then
-          WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
+          WriteLn(ErrOutput, E.GetDetailedMessage(IsColorTerminal));
         MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
       end;
       on E: TGocciaThrowValue do
       begin
         if not GIsWorkerThread then
-          WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, Source, IsColorTerminal, E.Suggestion));
+          WriteLn(ErrOutput, FormatThrowDetail(E.Value, AFileName, Source, IsColorTerminal, E.Suggestion));
         MakeErrorFileResult(AFileName,
           FormatThrowDetail(E.Value, AFileName, Source, False, E.Suggestion), AReporter);
       end;
@@ -412,7 +413,7 @@ begin
         MakeErrorFileResult(AFileName, E.Message, AReporter);
     end;
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.Collect;
     Source.Free;
   end;
@@ -444,7 +445,7 @@ begin
       on E: Exception do
       begin
         if not GIsWorkerThread then
-          WriteLn(StdErr, 'Error loading benchmark file: ', E.Message);
+          WriteLn(ErrOutput, 'Error loading benchmark file: ', E.Message);
         MakeErrorFileResult(AFileName, E.Message, AReporter);
         Exit;
       end;
@@ -492,7 +493,7 @@ begin
               RunBytecodeBenchmarkModule(Engine, Module, AFileName);
               ExecEnd := GetNanoseconds;
               if FProfileDeterministic.Present and
-                 Assigned(TGocciaProfiler.Instance) then
+                 (TGocciaProfiler.Instance <> nil) then
                 TGocciaProfiler.Instance.ResetCounts;
 
               FileResult.FileName := AFileName;
@@ -534,20 +535,20 @@ begin
       on E: TGocciaError do
       begin
         if not GIsWorkerThread then
-          WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
+          WriteLn(ErrOutput, E.GetDetailedMessage(IsColorTerminal));
         MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
       end;
       on E: TGocciaThrowValue do
       begin
         if not GIsWorkerThread then
-          WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, Source, IsColorTerminal, E.Suggestion));
+          WriteLn(ErrOutput, FormatThrowDetail(E.Value, AFileName, Source, IsColorTerminal, E.Suggestion));
         MakeErrorFileResult(AFileName,
           FormatThrowDetail(E.Value, AFileName, Source, False, E.Suggestion), AReporter);
       end;
       on E: EGocciaBytecodeThrow do
       begin
         if not GIsWorkerThread then
-          WriteLn(StdErr, FormatThrowDetail(E.ThrownValue, AFileName, Source, IsColorTerminal));
+          WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue, AFileName, Source, IsColorTerminal));
         MakeErrorFileResult(AFileName,
           FormatThrowDetail(E.ThrownValue, AFileName, Source, False), AReporter);
       end;
@@ -556,7 +557,7 @@ begin
     end;
   finally
     SourcePipelineResult.Free;
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.Collect;
     Source.Free;
   end;
@@ -635,13 +636,13 @@ begin
     on E: TGocciaError do
     begin
       if not GIsWorkerThread then
-        WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
+        WriteLn(ErrOutput, E.GetDetailedMessage(IsColorTerminal));
       MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
     end;
     on E: TGocciaThrowValue do
     begin
       if not GIsWorkerThread then
-        WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, ASource, IsColorTerminal, E.Suggestion));
+        WriteLn(ErrOutput, FormatThrowDetail(E.Value, AFileName, ASource, IsColorTerminal, E.Suggestion));
       MakeErrorFileResult(AFileName,
         FormatThrowDetail(E.Value, AFileName, ASource, False, E.Suggestion), AReporter);
     end;
@@ -708,7 +709,7 @@ begin
             RunBytecodeBenchmarkModule(Engine, Module, AFileName);
             ExecEnd := GetNanoseconds;
             if FProfileDeterministic.Present and
-               Assigned(TGocciaProfiler.Instance) then
+               (TGocciaProfiler.Instance <> nil) then
               TGocciaProfiler.Instance.ResetCounts;
 
             FileResult.FileName := AFileName;
@@ -750,20 +751,20 @@ begin
     on E: TGocciaError do
     begin
       if not GIsWorkerThread then
-        WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
+        WriteLn(ErrOutput, E.GetDetailedMessage(IsColorTerminal));
       MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
     end;
     on E: TGocciaThrowValue do
     begin
       if not GIsWorkerThread then
-        WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, ASource, IsColorTerminal, E.Suggestion));
+        WriteLn(ErrOutput, FormatThrowDetail(E.Value, AFileName, ASource, IsColorTerminal, E.Suggestion));
       MakeErrorFileResult(AFileName,
         FormatThrowDetail(E.Value, AFileName, ASource, False, E.Suggestion), AReporter);
     end;
     on E: EGocciaBytecodeThrow do
     begin
       if not GIsWorkerThread then
-        WriteLn(StdErr, FormatThrowDetail(E.ThrownValue, AFileName, ASource, IsColorTerminal));
+        WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue, AFileName, ASource, IsColorTerminal));
       MakeErrorFileResult(AFileName,
         FormatThrowDetail(E.ThrownValue, AFileName, ASource, False), AReporter);
     end;
@@ -807,7 +808,7 @@ begin
   else
     Mode := emInterpreted;
 
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.Enabled := True;
 
   WorkerReporter := TBenchmarkReporter.Create;
@@ -865,7 +866,7 @@ begin
           // Match the per-file GC pass in CollectBenchmarkFile* so
           // GC-managed objects from one stdin section don't accumulate
           // across the next one.
-          if Assigned(TGarbageCollector.Instance) then
+          if (TGarbageCollector.Instance <> nil) then
             TGarbageCollector.Instance.Collect;
         end;
       finally
@@ -936,7 +937,7 @@ begin
           RawFiles.Add(APaths[P])
         else
         begin
-          WriteLn(StdErr, 'Error: Path not found: ', APaths[P]);
+          WriteLn(ErrOutput, 'Error: Path not found: ', APaths[P]);
           ExitCode := 1;
           Exit;
         end;
@@ -977,7 +978,7 @@ begin
 
       Pool := TGocciaThreadPool.Create(JobCount);
       try
-        if Assigned(TGarbageCollector.Instance) then
+        if (TGarbageCollector.Instance <> nil) then
           Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
         FWorkerProgressEnabled := AShowProgress;
         try
@@ -1111,7 +1112,7 @@ begin
   end;
 
   if (ProfileOpcodes or ProfileFunctions) and
-     Assigned(TGocciaProfiler.Instance) then
+     (TGocciaProfiler.Instance <> nil) then
   begin
     if FCanPrintProfile then
     begin
@@ -1235,7 +1236,7 @@ begin
     FCanPrintProfile := False;
   if HasStructuredStdout and HasReadableStdout then
   begin
-    WriteLn(StdErr, 'Error: Cannot write structured and human-readable formats both to stdout. Provide an --output file for one of them.');
+    WriteLn(ErrOutput, 'Error: Cannot write structured and human-readable formats both to stdout. Provide an --output file for one of them.');
     ExitCode := 1;
     Exit;
   end;
@@ -1262,7 +1263,7 @@ begin
     for I := 0 to APaths.Count - 1 do
       if IsStdinPath(APaths[I]) then
       begin
-        WriteLn(StdErr,
+        WriteLn(ErrOutput,
           'Error: stdin is supported only as the sole input.');
         ExitCode := 1;
         Exit;
@@ -1274,11 +1275,11 @@ end;
 var
   RunResult: Integer;
 begin
-  InitCriticalSection(BenchmarkProgressLock);
+  CriticalSectionInit(BenchmarkProgressLock);
   try
     RunResult := TGocciaApplication.RunApplication(TBenchmarkRunnerApp, 'GocciaBenchmarkRunner');
   finally
-    DoneCriticalSection(BenchmarkProgressLock);
+    CriticalSectionDone(BenchmarkProgressLock);
   end;
   if RunResult <> 0 then
     ExitCode := RunResult;

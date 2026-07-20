@@ -205,7 +205,7 @@ end;
 
 begin
   TestRunnerProgram.AddSuite(TSourceRegistryTests.Create('ScriptLoader SourceRegistry'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
 
   ExitCode := TestResultToExitCode;
 end.

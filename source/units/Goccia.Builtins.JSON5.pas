@@ -92,26 +92,28 @@ begin
   SetLength(FStaticMembers, 0);
 end;
 
-function UTF8CopyByCharacters(const AText: string;
+function CopyByCodePoints(const AText: string;
   const AMaxChars: Integer): string;
 var
-  ByteIndex: Integer;
+  CodeUnitIndex: Integer;
   CharacterCount: Integer;
   SequenceLength: Integer;
 begin
   if AMaxChars <= 0 then
     Exit('');
 
-  ByteIndex := 1;
+  CodeUnitIndex := 1;
   CharacterCount := 0;
-  while (ByteIndex <= Length(AText)) and (CharacterCount < AMaxChars) do
+  while (CodeUnitIndex <= Length(AText)) and
+        (CharacterCount < AMaxChars) do
   begin
-    SequenceLength := TextSemantics.UTF8SequenceLengthFromLeadByte(AText[ByteIndex]);
-    Inc(ByteIndex, SequenceLength);
+    SequenceLength := TextSemantics.CodePointSequenceLengthAt(
+      AText, CodeUnitIndex);
+    Inc(CodeUnitIndex, SequenceLength);
     Inc(CharacterCount);
   end;
 
-  Result := Copy(AText, 1, ByteIndex - 1);
+  Result := Copy(AText, 1, CodeUnitIndex - 1);
 end;
 
 constructor TGocciaJSON5Builtin.Create(const AName: string;
@@ -399,7 +401,7 @@ begin
   else if SpaceValue is TGocciaStringLiteralValue then
   begin
     Result := SpaceValue.ToStringLiteral.Value;
-    Result := UTF8CopyByCharacters(Result, 10);
+    Result := CopyByCodePoints(Result, 10);
   end;
 end;
 

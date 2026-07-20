@@ -16,6 +16,7 @@ uses
   Goccia.Error.ThrowErrorCallback,
   Goccia.RegExp.Runtime,
   Goccia.Scope,
+  Goccia.SourceSpan,
   Goccia.TestSetup,
   Goccia.Values.ArrayValue,
   Goccia.Values.FunctionBase,
@@ -1796,7 +1797,7 @@ var
   ParamArray: TGocciaParameterArray;
 begin
   Statements := TObjectList<TGocciaASTNode>.Create;
-  Statements.Add(TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, 0, 0));
+  Statements.Add(TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, TGocciaSourceSpan.Empty));
   SetLength(ParamArray, 0);
   Result := TGocciaFunctionValue.Create(ParamArray, Statements, FScope, 'noop');
 end;
@@ -4422,7 +4423,7 @@ begin
   TestRunnerProgram.AddSuite(TTestMockAndSpyAPIs.Create('Test Assertions - Mock and Spy APIs'));
   TestRunnerProgram.AddSuite(TTestOnTestFinished.Create('Test Assertions - onTestFinished'));
   TestRunnerProgram.AddSuite(TTestResolvesAndRejects.Create('Test Assertions - Resolves and Rejects'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
 
   ExitCode := TestResultToExitCode;
 end.

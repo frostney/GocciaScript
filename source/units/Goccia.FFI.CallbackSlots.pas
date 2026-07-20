@@ -5,26 +5,40 @@ unit Goccia.FFI.CallbackSlots;
 interface
 
 type
-  {$IFDEF CPU64}
-  {$PUSH}{$PACKRECORDS 8}
+  {$IF defined(GOCCIA_CPU_64)}
+  {$IFDEF FPC}
+    {$PUSH}{$PACKRECORDS 8}
+  {$ELSE}
+    {$ALIGN 8}
+  {$ENDIF}
   TGocciaFFICallbackMachineState = record
-    GPR: array[0..7] of QWord;        //   0
-    FPR: array[0..7] of QWord;        //  64
+    GPR: array[0..7] of UInt64;        //   0
+    FPR: array[0..7] of UInt64;        //  64
     StackData: Pointer;               // 128
     HiddenResult: Pointer;            // 136
-    RetGPR: array[0..1] of QWord;     // 144
-    RetFPR: array[0..3] of QWord;     // 160
+    RetGPR: array[0..1] of UInt64;     // 144
+    RetFPR: array[0..3] of UInt64;     // 160
   end;
-  {$POP}
+  {$IFDEF FPC}
+    {$POP}
+  {$ENDIF}
   {$ELSE}
-  {$PUSH}{$PACKRECORDS 4}
+  {$IFDEF FPC}
+    {$PUSH}{$PACKRECORDS 4}
+  {$ELSE}
+    {$ALIGN 4}
+  {$ENDIF}
   TGocciaFFICallbackMachineState = record
     StackData: Pointer;               //  0
     RetGPR: array[0..1] of LongWord;  //  4
-    RetFPR: QWord;                    // 12
+    RetFPR: UInt64;                    // 12
     ReturnFloatSize: LongWord;        // 20
   end;
-  {$POP}
+  {$IFDEF FPC}
+    {$POP}
+  {$ELSE}
+    {$ALIGN 8}
+  {$ENDIF}
   {$ENDIF}
 
   TGocciaFFICallbackDispatchHook = procedure(const AContext: Pointer;
@@ -44,9 +58,9 @@ procedure SetFFICallbackDispatchHook(
   const AHook: TGocciaFFICallbackDispatchHook);
 function AllocateFFICallbackSlot(const AContext: Pointer;
   const AHiddenResultLocation: TGocciaFFIHiddenResultLocation;
-  const AHiddenResultSize: PtrUInt;
+  const AHiddenResultSize: NativeUInt;
   const AReturnFloatSize: LongWord;
-  out ACodePointer: CodePointer): Integer;
+  out ACodePointer: Pointer): Integer;
 procedure ReleaseFFICallbackSlot(const ASlot: Integer);
 function ConsumeFFICallbackThreadViolation(const ASlot: Integer): Boolean;
 function ConsumeFFICallbackThreadViolationsForCurrentThread: Boolean;
@@ -54,7 +68,9 @@ function ConsumeFFICallbackThreadViolationsForCurrentThread: Boolean;
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+
+  CriticalSections;
 
 type
   TGocciaFFICallbackSlot = record
@@ -63,23 +79,28 @@ type
     Context: Pointer;
     ForeignThreadViolation: Boolean;
     HiddenResultLocation: TGocciaFFIHiddenResultLocation;
-    HiddenResultSize: PtrUInt;
+    HiddenResultSize: NativeUInt;
     ReturnFloatSize: LongWord;
   end;
 
 var
   GCallbackSlots: array[0..MAX_FFI_CALLBACK_SLOTS - 1] of TGocciaFFICallbackSlot;
-  GCallbackSlotLock: TRTLCriticalSection;
+  GCallbackSlotLock: TGocciaCriticalSection;
   GDispatchHook: TGocciaFFICallbackDispatchHook;
 
-procedure FFICallbackDispatchPascal(const ASlot: PtrUInt;
+{$IFDEF FPC}
+procedure FFICallbackDispatchPascal(const ASlot: NativeUInt;
   const AState: Pointer); cdecl; public name 'goccia_ffi_callback_dispatch';
+{$ELSE}
+procedure FFICallbackDispatchPascal(const ASlot: NativeUInt;
+  const AState: Pointer); cdecl;
+{$ENDIF}
 var
   Context: Pointer;
   ForeignThread: Boolean;
   HiddenResultLocation: TGocciaFFIHiddenResultLocation;
-  HiddenResultSize: PtrUInt;
-  {$IFNDEF CPU64}
+  HiddenResultSize: NativeUInt;
+  {$IF not (defined(GOCCIA_CPU_64))}
   ReturnFloatSize: LongWord;
   {$ENDIF}
   Hook: TGocciaFFICallbackDispatchHook;
@@ -90,21 +111,21 @@ begin
   ForeignThread := False;
   HiddenResultLocation := fhrNone;
   HiddenResultSize := 0;
-  {$IFNDEF CPU64}
+  {$IF not (defined(GOCCIA_CPU_64))}
   ReturnFloatSize := 0;
   {$ENDIF}
   Hook := nil;
-  EnterCriticalSection(GCallbackSlotLock);
+  CriticalSectionEnter(GCallbackSlotLock);
   try
     if not GCallbackSlots[ASlot].Active then Exit;
-    if GCallbackSlots[ASlot].OwnerThreadId <> GetCurrentThreadId then
+    if GCallbackSlots[ASlot].OwnerThreadId <> GetGocciaThreadId then
     begin
       GCallbackSlots[ASlot].ForeignThreadViolation := True;
       ForeignThread := True;
       HiddenResultLocation :=
         GCallbackSlots[ASlot].HiddenResultLocation;
       HiddenResultSize := GCallbackSlots[ASlot].HiddenResultSize;
-      {$IFNDEF CPU64}
+      {$IF not (defined(GOCCIA_CPU_64))}
       ReturnFloatSize := GCallbackSlots[ASlot].ReturnFloatSize;
       {$ENDIF}
     end;
@@ -114,23 +135,23 @@ begin
       Hook := GDispatchHook;
     end;
   finally
-    LeaveCriticalSection(GCallbackSlotLock);
+    CriticalSectionLeave(GCallbackSlotLock);
   end;
   if ForeignThread then
   begin
-    {$IFNDEF CPU64}
+    {$IF not (defined(GOCCIA_CPU_64))}
     TGocciaFFICallbackMachineState(AState^).ReturnFloatSize :=
       ReturnFloatSize;
     {$ENDIF}
     ResultPointer := nil;
     case HiddenResultLocation of
-      {$IFDEF CPU64}
+      {$IF defined(GOCCIA_CPU_64)}
       fhrGPR0:
       begin
-        ResultPointer := Pointer(PtrUInt(
+        ResultPointer := Pointer(NativeUInt(
           TGocciaFFICallbackMachineState(AState^).GPR[0]));
         TGocciaFFICallbackMachineState(AState^).RetGPR[0] :=
-          QWord(PtrUInt(ResultPointer));
+          UInt64(NativeUInt(ResultPointer));
       end;
       fhrDedicated:
         ResultPointer :=
@@ -142,7 +163,7 @@ begin
           Move(TGocciaFFICallbackMachineState(AState^).StackData^,
             ResultPointer, SizeOf(Pointer));
         TGocciaFFICallbackMachineState(AState^).RetGPR[0] :=
-          LongWord(PtrUInt(ResultPointer));
+          LongWord(NativeUInt(ResultPointer));
       end;
       {$ENDIF}
     end;
@@ -154,7 +175,7 @@ begin
     Hook(Context, TGocciaFFICallbackMachineState(AState^));
 end;
 
-{$IFDEF CPUAARCH64}
+{$IF (defined(GOCCIA_CPU_AARCH64))}
 procedure FFICallbackCommon; assembler; nostackframe;
   public name 'goccia_ffi_callback_common';
 asm
@@ -262,297 +283,308 @@ procedure FFICallbackSlot62; assembler; nostackframe; asm mov x16, #62; b FFICal
 procedure FFICallbackSlot63; assembler; nostackframe; asm mov x16, #63; b FFICallbackCommon end;
 {$ENDIF}
 
-{$IFDEF CPUX86_64}
-{$ASMMODE ATT}
+{$IF (defined(GOCCIA_CPU_X86_64))}
+{$IFDEF FPC}
+{$ENDIF}
 {$IFDEF MSWINDOWS}
 // The Win64 caller owns the first 32 stack bytes as shadow space. Keep that
 // area available to the Pascal dispatch call and point StackData past the
 // callback's return address and original shadow space.
-procedure FFICallbackCommon; assembler; nostackframe;
+procedure FFICallbackCommon; assembler;
+{$IFDEF FPC}
+  nostackframe;
   public name 'goccia_ffi_callback_common';
+{$ENDIF}
 asm
-  pushq %rbx
-  subq $224, %rsp
-  leaq 32(%rsp), %rbx
+  push rbx
+  sub rsp, 224
+  lea rbx, [rsp + 32]
 
-  movq %rcx, 0(%rbx)
-  movq %rdx, 8(%rbx)
-  movq %r8, 16(%rbx)
-  movq %r9, 24(%rbx)
-  movq $0, 32(%rbx)
-  movq $0, 40(%rbx)
-  movq $0, 48(%rbx)
-  movq $0, 56(%rbx)
-  movq %xmm0, 64(%rbx)
-  movq %xmm1, 72(%rbx)
-  movq %xmm2, 80(%rbx)
-  movq %xmm3, 88(%rbx)
-  movq $0, 96(%rbx)
-  movq $0, 104(%rbx)
-  movq $0, 112(%rbx)
-  movq $0, 120(%rbx)
-  leaq 272(%rsp), %rax
-  movq %rax, 128(%rbx)
-  movq $0, 136(%rbx)
-  movq $0, 144(%rbx)
-  movq $0, 152(%rbx)
-  movq $0, 160(%rbx)
-  movq $0, 168(%rbx)
-  movq $0, 176(%rbx)
-  movq $0, 184(%rbx)
+  mov [rbx], rcx
+  mov [rbx + 8], rdx
+  mov [rbx + 16], r8
+  mov [rbx + 24], r9
+  mov qword ptr [rbx + 32], 0
+  mov qword ptr [rbx + 40], 0
+  mov qword ptr [rbx + 48], 0
+  mov qword ptr [rbx + 56], 0
+  movq [rbx + 64], xmm0
+  movq [rbx + 72], xmm1
+  movq [rbx + 80], xmm2
+  movq [rbx + 88], xmm3
+  mov qword ptr [rbx + 96], 0
+  mov qword ptr [rbx + 104], 0
+  mov qword ptr [rbx + 112], 0
+  mov qword ptr [rbx + 120], 0
+  lea rax, [rsp + 272]
+  mov [rbx + 128], rax
+  mov qword ptr [rbx + 136], 0
+  mov qword ptr [rbx + 144], 0
+  mov qword ptr [rbx + 152], 0
+  mov qword ptr [rbx + 160], 0
+  mov qword ptr [rbx + 168], 0
+  mov qword ptr [rbx + 176], 0
+  mov qword ptr [rbx + 184], 0
 
-  movq %r10, %rcx
-  movq %rbx, %rdx
+  mov rcx, r10
+  mov rdx, rbx
   call FFICallbackDispatchPascal
 
-  movq 144(%rbx), %rax
-  movq 152(%rbx), %rdx
-  movq 160(%rbx), %xmm0
-  movq 168(%rbx), %xmm1
-  movq 176(%rbx), %xmm2
-  movq 184(%rbx), %xmm3
-  addq $224, %rsp
-  popq %rbx
+  mov rax, [rbx + 144]
+  mov rdx, [rbx + 152]
+  movq xmm0, [rbx + 160]
+  movq xmm1, [rbx + 168]
+  movq xmm2, [rbx + 176]
+  movq xmm3, [rbx + 184]
+  add rsp, 224
+  pop rbx
   ret
 end;
 {$ELSE}
 // SysV enters with the return address at RSP. The 208-byte local frame keeps
 // the dispatch call aligned while leaving the original stack arguments at
 // State.StackData.
-procedure FFICallbackCommon; assembler; nostackframe;
+procedure FFICallbackCommon; assembler;
+{$IFDEF FPC}
+  nostackframe;
   public name 'goccia_ffi_callback_common';
+{$ENDIF}
 asm
-  pushq %rbx
-  subq $208, %rsp
-  movq %rsp, %rbx
+  push rbx
+  sub rsp, 208
+  mov rbx, rsp
 
-  movq %rdi, 0(%rbx)
-  movq %rsi, 8(%rbx)
-  movq %rdx, 16(%rbx)
-  movq %rcx, 24(%rbx)
-  movq %r8, 32(%rbx)
-  movq %r9, 40(%rbx)
-  movq $0, 48(%rbx)
-  movq $0, 56(%rbx)
-  movq %xmm0, 64(%rbx)
-  movq %xmm1, 72(%rbx)
-  movq %xmm2, 80(%rbx)
-  movq %xmm3, 88(%rbx)
-  movq %xmm4, 96(%rbx)
-  movq %xmm5, 104(%rbx)
-  movq %xmm6, 112(%rbx)
-  movq %xmm7, 120(%rbx)
-  leaq 224(%rsp), %rax
-  movq %rax, 128(%rbx)
-  movq $0, 136(%rbx)
-  movq $0, 144(%rbx)
-  movq $0, 152(%rbx)
-  movq $0, 160(%rbx)
-  movq $0, 168(%rbx)
-  movq $0, 176(%rbx)
-  movq $0, 184(%rbx)
+  mov [rbx], rdi
+  mov [rbx + 8], rsi
+  mov [rbx + 16], rdx
+  mov [rbx + 24], rcx
+  mov [rbx + 32], r8
+  mov [rbx + 40], r9
+  mov qword ptr [rbx + 48], 0
+  mov qword ptr [rbx + 56], 0
+  movq [rbx + 64], xmm0
+  movq [rbx + 72], xmm1
+  movq [rbx + 80], xmm2
+  movq [rbx + 88], xmm3
+  movq [rbx + 96], xmm4
+  movq [rbx + 104], xmm5
+  movq [rbx + 112], xmm6
+  movq [rbx + 120], xmm7
+  lea rax, [rsp + 224]
+  mov [rbx + 128], rax
+  mov qword ptr [rbx + 136], 0
+  mov qword ptr [rbx + 144], 0
+  mov qword ptr [rbx + 152], 0
+  mov qword ptr [rbx + 160], 0
+  mov qword ptr [rbx + 168], 0
+  mov qword ptr [rbx + 176], 0
+  mov qword ptr [rbx + 184], 0
 
-  movq %r10, %rdi
-  movq %rbx, %rsi
+  mov rdi, r10
+  mov rsi, rbx
   call FFICallbackDispatchPascal
 
-  movq 144(%rbx), %rax
-  movq 152(%rbx), %rdx
-  movq 160(%rbx), %xmm0
-  movq 168(%rbx), %xmm1
-  movq 176(%rbx), %xmm2
-  movq 184(%rbx), %xmm3
-  addq $208, %rsp
-  popq %rbx
+  mov rax, [rbx + 144]
+  mov rdx, [rbx + 152]
+  movq xmm0, [rbx + 160]
+  movq xmm1, [rbx + 168]
+  movq xmm2, [rbx + 176]
+  movq xmm3, [rbx + 184]
+  add rsp, 208
+  pop rbx
   ret
 end;
 {$ENDIF}
 
-procedure FFICallbackSlot0; assembler; nostackframe; asm movq $0, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot1; assembler; nostackframe; asm movq $1, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot2; assembler; nostackframe; asm movq $2, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot3; assembler; nostackframe; asm movq $3, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot4; assembler; nostackframe; asm movq $4, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot5; assembler; nostackframe; asm movq $5, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot6; assembler; nostackframe; asm movq $6, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot7; assembler; nostackframe; asm movq $7, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot8; assembler; nostackframe; asm movq $8, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot9; assembler; nostackframe; asm movq $9, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot10; assembler; nostackframe; asm movq $10, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot11; assembler; nostackframe; asm movq $11, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot12; assembler; nostackframe; asm movq $12, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot13; assembler; nostackframe; asm movq $13, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot14; assembler; nostackframe; asm movq $14, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot15; assembler; nostackframe; asm movq $15, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot16; assembler; nostackframe; asm movq $16, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot17; assembler; nostackframe; asm movq $17, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot18; assembler; nostackframe; asm movq $18, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot19; assembler; nostackframe; asm movq $19, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot20; assembler; nostackframe; asm movq $20, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot21; assembler; nostackframe; asm movq $21, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot22; assembler; nostackframe; asm movq $22, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot23; assembler; nostackframe; asm movq $23, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot24; assembler; nostackframe; asm movq $24, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot25; assembler; nostackframe; asm movq $25, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot26; assembler; nostackframe; asm movq $26, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot27; assembler; nostackframe; asm movq $27, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot28; assembler; nostackframe; asm movq $28, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot29; assembler; nostackframe; asm movq $29, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot30; assembler; nostackframe; asm movq $30, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot31; assembler; nostackframe; asm movq $31, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot32; assembler; nostackframe; asm movq $32, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot33; assembler; nostackframe; asm movq $33, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot34; assembler; nostackframe; asm movq $34, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot35; assembler; nostackframe; asm movq $35, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot36; assembler; nostackframe; asm movq $36, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot37; assembler; nostackframe; asm movq $37, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot38; assembler; nostackframe; asm movq $38, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot39; assembler; nostackframe; asm movq $39, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot40; assembler; nostackframe; asm movq $40, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot41; assembler; nostackframe; asm movq $41, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot42; assembler; nostackframe; asm movq $42, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot43; assembler; nostackframe; asm movq $43, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot44; assembler; nostackframe; asm movq $44, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot45; assembler; nostackframe; asm movq $45, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot46; assembler; nostackframe; asm movq $46, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot47; assembler; nostackframe; asm movq $47, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot48; assembler; nostackframe; asm movq $48, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot49; assembler; nostackframe; asm movq $49, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot50; assembler; nostackframe; asm movq $50, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot51; assembler; nostackframe; asm movq $51, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot52; assembler; nostackframe; asm movq $52, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot53; assembler; nostackframe; asm movq $53, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot54; assembler; nostackframe; asm movq $54, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot55; assembler; nostackframe; asm movq $55, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot56; assembler; nostackframe; asm movq $56, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot57; assembler; nostackframe; asm movq $57, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot58; assembler; nostackframe; asm movq $58, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot59; assembler; nostackframe; asm movq $59, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot60; assembler; nostackframe; asm movq $60, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot61; assembler; nostackframe; asm movq $61, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot62; assembler; nostackframe; asm movq $62, %r10; jmp FFICallbackCommon end;
-procedure FFICallbackSlot63; assembler; nostackframe; asm movq $63, %r10; jmp FFICallbackCommon end;
+procedure FFICallbackSlot0; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 0; jmp FFICallbackCommon end;
+procedure FFICallbackSlot1; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 1; jmp FFICallbackCommon end;
+procedure FFICallbackSlot2; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 2; jmp FFICallbackCommon end;
+procedure FFICallbackSlot3; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 3; jmp FFICallbackCommon end;
+procedure FFICallbackSlot4; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 4; jmp FFICallbackCommon end;
+procedure FFICallbackSlot5; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 5; jmp FFICallbackCommon end;
+procedure FFICallbackSlot6; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 6; jmp FFICallbackCommon end;
+procedure FFICallbackSlot7; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 7; jmp FFICallbackCommon end;
+procedure FFICallbackSlot8; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 8; jmp FFICallbackCommon end;
+procedure FFICallbackSlot9; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 9; jmp FFICallbackCommon end;
+procedure FFICallbackSlot10; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 10; jmp FFICallbackCommon end;
+procedure FFICallbackSlot11; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 11; jmp FFICallbackCommon end;
+procedure FFICallbackSlot12; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 12; jmp FFICallbackCommon end;
+procedure FFICallbackSlot13; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 13; jmp FFICallbackCommon end;
+procedure FFICallbackSlot14; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 14; jmp FFICallbackCommon end;
+procedure FFICallbackSlot15; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 15; jmp FFICallbackCommon end;
+procedure FFICallbackSlot16; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 16; jmp FFICallbackCommon end;
+procedure FFICallbackSlot17; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 17; jmp FFICallbackCommon end;
+procedure FFICallbackSlot18; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 18; jmp FFICallbackCommon end;
+procedure FFICallbackSlot19; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 19; jmp FFICallbackCommon end;
+procedure FFICallbackSlot20; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 20; jmp FFICallbackCommon end;
+procedure FFICallbackSlot21; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 21; jmp FFICallbackCommon end;
+procedure FFICallbackSlot22; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 22; jmp FFICallbackCommon end;
+procedure FFICallbackSlot23; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 23; jmp FFICallbackCommon end;
+procedure FFICallbackSlot24; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 24; jmp FFICallbackCommon end;
+procedure FFICallbackSlot25; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 25; jmp FFICallbackCommon end;
+procedure FFICallbackSlot26; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 26; jmp FFICallbackCommon end;
+procedure FFICallbackSlot27; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 27; jmp FFICallbackCommon end;
+procedure FFICallbackSlot28; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 28; jmp FFICallbackCommon end;
+procedure FFICallbackSlot29; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 29; jmp FFICallbackCommon end;
+procedure FFICallbackSlot30; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 30; jmp FFICallbackCommon end;
+procedure FFICallbackSlot31; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 31; jmp FFICallbackCommon end;
+procedure FFICallbackSlot32; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 32; jmp FFICallbackCommon end;
+procedure FFICallbackSlot33; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 33; jmp FFICallbackCommon end;
+procedure FFICallbackSlot34; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 34; jmp FFICallbackCommon end;
+procedure FFICallbackSlot35; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 35; jmp FFICallbackCommon end;
+procedure FFICallbackSlot36; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 36; jmp FFICallbackCommon end;
+procedure FFICallbackSlot37; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 37; jmp FFICallbackCommon end;
+procedure FFICallbackSlot38; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 38; jmp FFICallbackCommon end;
+procedure FFICallbackSlot39; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 39; jmp FFICallbackCommon end;
+procedure FFICallbackSlot40; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 40; jmp FFICallbackCommon end;
+procedure FFICallbackSlot41; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 41; jmp FFICallbackCommon end;
+procedure FFICallbackSlot42; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 42; jmp FFICallbackCommon end;
+procedure FFICallbackSlot43; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 43; jmp FFICallbackCommon end;
+procedure FFICallbackSlot44; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 44; jmp FFICallbackCommon end;
+procedure FFICallbackSlot45; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 45; jmp FFICallbackCommon end;
+procedure FFICallbackSlot46; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 46; jmp FFICallbackCommon end;
+procedure FFICallbackSlot47; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 47; jmp FFICallbackCommon end;
+procedure FFICallbackSlot48; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 48; jmp FFICallbackCommon end;
+procedure FFICallbackSlot49; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 49; jmp FFICallbackCommon end;
+procedure FFICallbackSlot50; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 50; jmp FFICallbackCommon end;
+procedure FFICallbackSlot51; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 51; jmp FFICallbackCommon end;
+procedure FFICallbackSlot52; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 52; jmp FFICallbackCommon end;
+procedure FFICallbackSlot53; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 53; jmp FFICallbackCommon end;
+procedure FFICallbackSlot54; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 54; jmp FFICallbackCommon end;
+procedure FFICallbackSlot55; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 55; jmp FFICallbackCommon end;
+procedure FFICallbackSlot56; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 56; jmp FFICallbackCommon end;
+procedure FFICallbackSlot57; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 57; jmp FFICallbackCommon end;
+procedure FFICallbackSlot58; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 58; jmp FFICallbackCommon end;
+procedure FFICallbackSlot59; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 59; jmp FFICallbackCommon end;
+procedure FFICallbackSlot60; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 60; jmp FFICallbackCommon end;
+procedure FFICallbackSlot61; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 61; jmp FFICallbackCommon end;
+procedure FFICallbackSlot62; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 62; jmp FFICallbackCommon end;
+procedure FFICallbackSlot63; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov r10, 63; jmp FFICallbackCommon end;
 {$ENDIF}
 
-{$IFDEF CPUI386}
-{$ASMMODE ATT}
+{$IF (defined(GOCCIA_CPU_X86))}
+{$IFDEF FPC}
+{$ENDIF}
 // Preserve the original callback stack separately from the aligned Pascal
 // dispatch stack: all i386 cdecl arguments, including a hidden result pointer,
 // remain addressable through State.StackData.
-procedure FFICallbackCommon; assembler; nostackframe;
+procedure FFICallbackCommon; assembler;
+{$IFDEF FPC}
+  nostackframe;
   public name 'goccia_ffi_callback_common';
+{$ENDIF}
 asm
-  pushl %ebx
-  pushl %esi
-  pushl %edi
-  movl %esp, %edi
-  movl %ecx, %esi
-  andl $-16, %esp
-  subl $24, %esp
-  movl %esp, %ebx
+  push ebx
+  push esi
+  push edi
+  mov edi, esp
+  mov esi, ecx
+  and esp, -16
+  sub esp, 24
+  mov ebx, esp
 
-  leal 16(%edi), %eax
-  movl %eax, 0(%ebx)
-  movl $0, 4(%ebx)
-  movl $0, 8(%ebx)
-  movl $0, 12(%ebx)
-  movl $0, 16(%ebx)
-  movl $0, 20(%ebx)
+  lea eax, [edi + 16]
+  mov [ebx], eax
+  mov dword ptr [ebx + 4], 0
+  mov dword ptr [ebx + 8], 0
+  mov dword ptr [ebx + 12], 0
+  mov dword ptr [ebx + 16], 0
+  mov dword ptr [ebx + 20], 0
 
-  pushl %ebx
-  pushl %esi
+  push ebx
+  push esi
   call FFICallbackDispatchPascal
-  addl $8, %esp
+  add esp, 8
 
-  movl 4(%ebx), %eax
-  movl 8(%ebx), %edx
-  cmpl $4, 20(%ebx)
-  je .Lffi_callback_return_single
-  cmpl $8, 20(%ebx)
-  je .Lffi_callback_return_double
-  jmp .Lffi_callback_return_ready
-.Lffi_callback_return_single:
-  flds 12(%ebx)
-  jmp .Lffi_callback_return_ready
-.Lffi_callback_return_double:
-  fldl 12(%ebx)
-.Lffi_callback_return_ready:
-  movl %edi, %esp
-  popl %edi
-  popl %esi
-  popl %ebx
+  mov eax, [ebx + 4]
+  mov edx, [ebx + 8]
+  cmp dword ptr [ebx + 20], 4
+  je @@return_single
+  cmp dword ptr [ebx + 20], 8
+  je @@return_double
+  jmp @@return_ready
+@@return_single:
+  fld dword ptr [ebx + 12]
+  jmp @@return_ready
+@@return_double:
+  fld qword ptr [ebx + 12]
+@@return_ready:
+  mov esp, edi
+  pop edi
+  pop esi
+  pop ebx
   ret
 end;
 
-procedure FFICallbackSlot0; assembler; nostackframe; asm movl $0, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot1; assembler; nostackframe; asm movl $1, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot2; assembler; nostackframe; asm movl $2, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot3; assembler; nostackframe; asm movl $3, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot4; assembler; nostackframe; asm movl $4, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot5; assembler; nostackframe; asm movl $5, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot6; assembler; nostackframe; asm movl $6, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot7; assembler; nostackframe; asm movl $7, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot8; assembler; nostackframe; asm movl $8, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot9; assembler; nostackframe; asm movl $9, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot10; assembler; nostackframe; asm movl $10, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot11; assembler; nostackframe; asm movl $11, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot12; assembler; nostackframe; asm movl $12, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot13; assembler; nostackframe; asm movl $13, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot14; assembler; nostackframe; asm movl $14, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot15; assembler; nostackframe; asm movl $15, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot16; assembler; nostackframe; asm movl $16, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot17; assembler; nostackframe; asm movl $17, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot18; assembler; nostackframe; asm movl $18, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot19; assembler; nostackframe; asm movl $19, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot20; assembler; nostackframe; asm movl $20, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot21; assembler; nostackframe; asm movl $21, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot22; assembler; nostackframe; asm movl $22, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot23; assembler; nostackframe; asm movl $23, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot24; assembler; nostackframe; asm movl $24, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot25; assembler; nostackframe; asm movl $25, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot26; assembler; nostackframe; asm movl $26, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot27; assembler; nostackframe; asm movl $27, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot28; assembler; nostackframe; asm movl $28, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot29; assembler; nostackframe; asm movl $29, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot30; assembler; nostackframe; asm movl $30, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot31; assembler; nostackframe; asm movl $31, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot32; assembler; nostackframe; asm movl $32, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot33; assembler; nostackframe; asm movl $33, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot34; assembler; nostackframe; asm movl $34, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot35; assembler; nostackframe; asm movl $35, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot36; assembler; nostackframe; asm movl $36, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot37; assembler; nostackframe; asm movl $37, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot38; assembler; nostackframe; asm movl $38, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot39; assembler; nostackframe; asm movl $39, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot40; assembler; nostackframe; asm movl $40, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot41; assembler; nostackframe; asm movl $41, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot42; assembler; nostackframe; asm movl $42, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot43; assembler; nostackframe; asm movl $43, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot44; assembler; nostackframe; asm movl $44, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot45; assembler; nostackframe; asm movl $45, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot46; assembler; nostackframe; asm movl $46, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot47; assembler; nostackframe; asm movl $47, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot48; assembler; nostackframe; asm movl $48, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot49; assembler; nostackframe; asm movl $49, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot50; assembler; nostackframe; asm movl $50, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot51; assembler; nostackframe; asm movl $51, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot52; assembler; nostackframe; asm movl $52, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot53; assembler; nostackframe; asm movl $53, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot54; assembler; nostackframe; asm movl $54, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot55; assembler; nostackframe; asm movl $55, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot56; assembler; nostackframe; asm movl $56, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot57; assembler; nostackframe; asm movl $57, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot58; assembler; nostackframe; asm movl $58, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot59; assembler; nostackframe; asm movl $59, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot60; assembler; nostackframe; asm movl $60, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot61; assembler; nostackframe; asm movl $61, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot62; assembler; nostackframe; asm movl $62, %ecx; jmp FFICallbackCommon end;
-procedure FFICallbackSlot63; assembler; nostackframe; asm movl $63, %ecx; jmp FFICallbackCommon end;
+procedure FFICallbackSlot0; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 0; jmp FFICallbackCommon end;
+procedure FFICallbackSlot1; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 1; jmp FFICallbackCommon end;
+procedure FFICallbackSlot2; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 2; jmp FFICallbackCommon end;
+procedure FFICallbackSlot3; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 3; jmp FFICallbackCommon end;
+procedure FFICallbackSlot4; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 4; jmp FFICallbackCommon end;
+procedure FFICallbackSlot5; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 5; jmp FFICallbackCommon end;
+procedure FFICallbackSlot6; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 6; jmp FFICallbackCommon end;
+procedure FFICallbackSlot7; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 7; jmp FFICallbackCommon end;
+procedure FFICallbackSlot8; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 8; jmp FFICallbackCommon end;
+procedure FFICallbackSlot9; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 9; jmp FFICallbackCommon end;
+procedure FFICallbackSlot10; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 10; jmp FFICallbackCommon end;
+procedure FFICallbackSlot11; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 11; jmp FFICallbackCommon end;
+procedure FFICallbackSlot12; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 12; jmp FFICallbackCommon end;
+procedure FFICallbackSlot13; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 13; jmp FFICallbackCommon end;
+procedure FFICallbackSlot14; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 14; jmp FFICallbackCommon end;
+procedure FFICallbackSlot15; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 15; jmp FFICallbackCommon end;
+procedure FFICallbackSlot16; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 16; jmp FFICallbackCommon end;
+procedure FFICallbackSlot17; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 17; jmp FFICallbackCommon end;
+procedure FFICallbackSlot18; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 18; jmp FFICallbackCommon end;
+procedure FFICallbackSlot19; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 19; jmp FFICallbackCommon end;
+procedure FFICallbackSlot20; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 20; jmp FFICallbackCommon end;
+procedure FFICallbackSlot21; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 21; jmp FFICallbackCommon end;
+procedure FFICallbackSlot22; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 22; jmp FFICallbackCommon end;
+procedure FFICallbackSlot23; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 23; jmp FFICallbackCommon end;
+procedure FFICallbackSlot24; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 24; jmp FFICallbackCommon end;
+procedure FFICallbackSlot25; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 25; jmp FFICallbackCommon end;
+procedure FFICallbackSlot26; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 26; jmp FFICallbackCommon end;
+procedure FFICallbackSlot27; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 27; jmp FFICallbackCommon end;
+procedure FFICallbackSlot28; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 28; jmp FFICallbackCommon end;
+procedure FFICallbackSlot29; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 29; jmp FFICallbackCommon end;
+procedure FFICallbackSlot30; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 30; jmp FFICallbackCommon end;
+procedure FFICallbackSlot31; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 31; jmp FFICallbackCommon end;
+procedure FFICallbackSlot32; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 32; jmp FFICallbackCommon end;
+procedure FFICallbackSlot33; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 33; jmp FFICallbackCommon end;
+procedure FFICallbackSlot34; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 34; jmp FFICallbackCommon end;
+procedure FFICallbackSlot35; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 35; jmp FFICallbackCommon end;
+procedure FFICallbackSlot36; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 36; jmp FFICallbackCommon end;
+procedure FFICallbackSlot37; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 37; jmp FFICallbackCommon end;
+procedure FFICallbackSlot38; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 38; jmp FFICallbackCommon end;
+procedure FFICallbackSlot39; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 39; jmp FFICallbackCommon end;
+procedure FFICallbackSlot40; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 40; jmp FFICallbackCommon end;
+procedure FFICallbackSlot41; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 41; jmp FFICallbackCommon end;
+procedure FFICallbackSlot42; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 42; jmp FFICallbackCommon end;
+procedure FFICallbackSlot43; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 43; jmp FFICallbackCommon end;
+procedure FFICallbackSlot44; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 44; jmp FFICallbackCommon end;
+procedure FFICallbackSlot45; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 45; jmp FFICallbackCommon end;
+procedure FFICallbackSlot46; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 46; jmp FFICallbackCommon end;
+procedure FFICallbackSlot47; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 47; jmp FFICallbackCommon end;
+procedure FFICallbackSlot48; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 48; jmp FFICallbackCommon end;
+procedure FFICallbackSlot49; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 49; jmp FFICallbackCommon end;
+procedure FFICallbackSlot50; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 50; jmp FFICallbackCommon end;
+procedure FFICallbackSlot51; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 51; jmp FFICallbackCommon end;
+procedure FFICallbackSlot52; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 52; jmp FFICallbackCommon end;
+procedure FFICallbackSlot53; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 53; jmp FFICallbackCommon end;
+procedure FFICallbackSlot54; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 54; jmp FFICallbackCommon end;
+procedure FFICallbackSlot55; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 55; jmp FFICallbackCommon end;
+procedure FFICallbackSlot56; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 56; jmp FFICallbackCommon end;
+procedure FFICallbackSlot57; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 57; jmp FFICallbackCommon end;
+procedure FFICallbackSlot58; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 58; jmp FFICallbackCommon end;
+procedure FFICallbackSlot59; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 59; jmp FFICallbackCommon end;
+procedure FFICallbackSlot60; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 60; jmp FFICallbackCommon end;
+procedure FFICallbackSlot61; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 61; jmp FFICallbackCommon end;
+procedure FFICallbackSlot62; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 62; jmp FFICallbackCommon end;
+procedure FFICallbackSlot63; assembler; {$IFDEF FPC}nostackframe;{$ENDIF} asm mov ecx, 63; jmp FFICallbackCommon end;
 {$ENDIF}
 
-function CodePointerForSlot(const ASlot: Integer): CodePointer;
+function CodePointerForSlot(const ASlot: Integer): Pointer;
 begin
-  {$IF defined(CPUAARCH64) or defined(CPUX86_64) or defined(CPUI386)}
+  {$IF defined(GOCCIA_CPU_FFI_SUPPORTED)}
   case ASlot of
     0: Result := @FFICallbackSlot0;
     1: Result := @FFICallbackSlot1;
@@ -627,9 +659,9 @@ end;
 procedure ValidateCallbackSlotTable;
 var
   I, J: Integer;
-  Code: CodePointer;
+  Code: Pointer;
 begin
-  {$IF defined(CPUAARCH64) or defined(CPUX86_64) or defined(CPUI386)}
+  {$IF defined(GOCCIA_CPU_FFI_SUPPORTED)}
   if Assigned(CodePointerForSlot(MAX_FFI_CALLBACK_SLOTS)) then
     raise EInvalidOpException.Create('FFI callback slot table exceeds limit');
   for I := 0 to MAX_FFI_CALLBACK_SLOTS - 1 do
@@ -648,24 +680,24 @@ end;
 procedure SetFFICallbackDispatchHook(
   const AHook: TGocciaFFICallbackDispatchHook);
 begin
-  EnterCriticalSection(GCallbackSlotLock);
+  CriticalSectionEnter(GCallbackSlotLock);
   try
     GDispatchHook := AHook;
   finally
-    LeaveCriticalSection(GCallbackSlotLock);
+    CriticalSectionLeave(GCallbackSlotLock);
   end;
 end;
 
 function HiddenResultLocationSupported(
   const ALocation: TGocciaFFIHiddenResultLocation): Boolean;
 begin
-  {$IFDEF CPUAARCH64}
+  {$IF (defined(GOCCIA_CPU_AARCH64))}
   Result := ALocation in [fhrNone, fhrDedicated];
   {$ELSE}
-  {$IFDEF CPUX86_64}
+  {$IF (defined(GOCCIA_CPU_X86_64))}
   Result := ALocation in [fhrNone, fhrGPR0];
   {$ELSE}
-  {$IFDEF CPUI386}
+  {$IF (defined(GOCCIA_CPU_X86))}
   Result := ALocation in [fhrNone, fhrStack0];
   {$ELSE}
   Result := ALocation = fhrNone;
@@ -676,9 +708,9 @@ end;
 
 function AllocateFFICallbackSlot(const AContext: Pointer;
   const AHiddenResultLocation: TGocciaFFIHiddenResultLocation;
-  const AHiddenResultSize: PtrUInt;
+  const AHiddenResultSize: NativeUInt;
   const AReturnFloatSize: LongWord;
-  out ACodePointer: CodePointer): Integer;
+  out ACodePointer: Pointer): Integer;
 begin
   ACodePointer := nil;
   if not HiddenResultLocationSupported(AHiddenResultLocation) then
@@ -693,18 +725,18 @@ begin
   if not (AReturnFloatSize in [0, 4, 8]) then
     raise EArgumentException.Create(
       'FFI callback float return size must be 0, 4, or 8');
-  {$IFDEF CPU64}
+  {$IF defined(GOCCIA_CPU_64)}
   if AReturnFloatSize <> 0 then
     raise EArgumentException.Create(
       'FFI callback float return metadata is only valid on i386');
   {$ENDIF}
-  EnterCriticalSection(GCallbackSlotLock);
+  CriticalSectionEnter(GCallbackSlotLock);
   try
     for Result := 0 to MAX_FFI_CALLBACK_SLOTS - 1 do
       if not GCallbackSlots[Result].Active then
       begin
         GCallbackSlots[Result].Active := True;
-        GCallbackSlots[Result].OwnerThreadId := GetCurrentThreadId;
+        GCallbackSlots[Result].OwnerThreadId := GetGocciaThreadId;
         GCallbackSlots[Result].Context := AContext;
         GCallbackSlots[Result].ForeignThreadViolation := False;
         GCallbackSlots[Result].HiddenResultLocation :=
@@ -721,7 +753,7 @@ begin
         Exit;
       end;
   finally
-    LeaveCriticalSection(GCallbackSlotLock);
+    CriticalSectionLeave(GCallbackSlotLock);
   end;
   raise EOutOfMemory.Create('No FFI callback slots are available');
 end;
@@ -729,7 +761,7 @@ end;
 procedure ReleaseFFICallbackSlot(const ASlot: Integer);
 begin
   if (ASlot < 0) or (ASlot >= MAX_FFI_CALLBACK_SLOTS) then Exit;
-  EnterCriticalSection(GCallbackSlotLock);
+  CriticalSectionEnter(GCallbackSlotLock);
   try
     GCallbackSlots[ASlot].Active := False;
     GCallbackSlots[ASlot].Context := nil;
@@ -737,7 +769,7 @@ begin
     GCallbackSlots[ASlot].HiddenResultSize := 0;
     GCallbackSlots[ASlot].ReturnFloatSize := 0;
   finally
-    LeaveCriticalSection(GCallbackSlotLock);
+    CriticalSectionLeave(GCallbackSlotLock);
   end;
 end;
 
@@ -745,12 +777,12 @@ function ConsumeFFICallbackThreadViolation(const ASlot: Integer): Boolean;
 begin
   Result := False;
   if (ASlot < 0) or (ASlot >= MAX_FFI_CALLBACK_SLOTS) then Exit;
-  EnterCriticalSection(GCallbackSlotLock);
+  CriticalSectionEnter(GCallbackSlotLock);
   try
     Result := GCallbackSlots[ASlot].ForeignThreadViolation;
     GCallbackSlots[ASlot].ForeignThreadViolation := False;
   finally
-    LeaveCriticalSection(GCallbackSlotLock);
+    CriticalSectionLeave(GCallbackSlotLock);
   end;
 end;
 
@@ -760,8 +792,8 @@ var
   OwnerThreadId: TThreadID;
 begin
   Result := False;
-  OwnerThreadId := GetCurrentThreadId;
-  EnterCriticalSection(GCallbackSlotLock);
+  OwnerThreadId := GetGocciaThreadId;
+  CriticalSectionEnter(GCallbackSlotLock);
   try
     for I := 0 to MAX_FFI_CALLBACK_SLOTS - 1 do
       if GCallbackSlots[I].Active and
@@ -772,37 +804,37 @@ begin
         Result := True;
       end;
   finally
-    LeaveCriticalSection(GCallbackSlotLock);
+    CriticalSectionLeave(GCallbackSlotLock);
   end;
 end;
 
 procedure ValidateCallbackStateLayout;
 var
   State: TGocciaFFICallbackMachineState;
-  Base: PtrUInt;
+  Base: NativeUInt;
 begin
-  Base := PtrUInt(@State);
-  {$IFDEF CPU64}
-  if (PtrUInt(@State.FPR[0]) - Base <> 64) or
-     (PtrUInt(@State.StackData) - Base <> 128) or
-     (PtrUInt(@State.HiddenResult) - Base <> 136) or
-     (PtrUInt(@State.RetGPR[0]) - Base <> 144) or
-     (PtrUInt(@State.RetFPR[0]) - Base <> 160) then
+  Base := NativeUInt(@State);
+  {$IF defined(GOCCIA_CPU_64)}
+  if (NativeUInt(@State.FPR[0]) - Base <> 64) or
+     (NativeUInt(@State.StackData) - Base <> 128) or
+     (NativeUInt(@State.HiddenResult) - Base <> 136) or
+     (NativeUInt(@State.RetGPR[0]) - Base <> 144) or
+     (NativeUInt(@State.RetFPR[0]) - Base <> 160) then
     raise EInvalidOpException.Create('FFI callback-state layout mismatch');
   {$ELSE}
-  if (PtrUInt(@State.RetGPR[0]) - Base <> 4) or
-     (PtrUInt(@State.RetFPR) - Base <> 12) or
-     (PtrUInt(@State.ReturnFloatSize) - Base <> 20) then
+  if (NativeUInt(@State.RetGPR[0]) - Base <> 4) or
+     (NativeUInt(@State.RetFPR) - Base <> 12) or
+     (NativeUInt(@State.ReturnFloatSize) - Base <> 20) then
     raise EInvalidOpException.Create('FFI callback-state layout mismatch');
   {$ENDIF}
 end;
 
 initialization
-  InitCriticalSection(GCallbackSlotLock);
+  CriticalSectionInit(GCallbackSlotLock);
   ValidateCallbackStateLayout;
   ValidateCallbackSlotTable;
 
 finalization
-  DoneCriticalSection(GCallbackSlotLock);
+  CriticalSectionDone(GCallbackSlotLock);
 
 end.

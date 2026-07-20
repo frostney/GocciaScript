@@ -56,9 +56,10 @@ uses
 var
   GIntlRelativeTimeFormatSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetIntlRelativeTimeFormatShared: TGocciaSharedPrototype; inline;
+function GetIntlRelativeTimeFormatShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlRelativeTimeFormatSharedSlot))
   else
     Result := nil;
@@ -760,7 +761,7 @@ begin
   end;
 
   InitializePrototype;
-  if Assigned(GetIntlRelativeTimeFormatShared) then
+  if (GetIntlRelativeTimeFormatShared <> nil) then
     FPrototype := GetIntlRelativeTimeFormatShared.Prototype;
 end;
 
@@ -775,8 +776,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetIntlRelativeTimeFormatShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetIntlRelativeTimeFormatShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlRelativeTimeFormatSharedSlot, Shared);

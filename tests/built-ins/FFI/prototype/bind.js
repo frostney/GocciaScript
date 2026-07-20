@@ -53,16 +53,38 @@ describe("FFILibrary.prototype.bind", () => {
     expect(result).toBe(4);
   });
 
-  test("binds and calls a cstring function", () => {
-    const strlen = lib.bind("string_length", { args: ["cstring"], returns: "i32" });
+  test("binds and calls a utf8string function", () => {
+    const strlen = lib.bind("string_length", { args: ["utf8string"], returns: "i32" });
     expect(strlen("hello")).toBe(5);
     expect(strlen("")).toBe(0);
     expect(strlen("GocciaScript")).toBe(12);
+    expect(strlen("h\u00e9\u{1F600}")).toBe(7);
   });
 
-  test("binds and calls a function returning cstring", () => {
-    const greet = lib.bind("greeting", { args: [], returns: "cstring" });
+  test("binds and calls a function returning utf8string", () => {
+    const greet = lib.bind("greeting", { args: [], returns: "utf8string" });
     expect(greet()).toBe("hello from C");
+
+    const greetUnicode = lib.bind("greeting_unicode", {
+      args: [],
+      returns: "utf8string",
+    });
+    expect(greetUnicode()).toBe("h\u00e9llo \u{1F600}");
+  });
+
+  test("rejects JavaScript strings that cannot be represented as utf8string", () => {
+    const strlen = lib.bind("string_length", { args: ["utf8string"], returns: "i32" });
+    expect(() => strlen("\uD800")).toThrow(TypeError);
+    expect(() => strlen("before\0after")).toThrow(TypeError);
+  });
+
+  test("rejects malformed UTF-8 returned by native code", () => {
+    const invalid = lib.bind("invalid_utf8", { args: [], returns: "utf8string" });
+    expect(() => invalid()).toThrow(TypeError);
+  });
+
+  test("does not accept the removed cstring descriptor", () => {
+    expect(() => lib.bind("string_length", { args: ["cstring"], returns: "i32" })).toThrow(TypeError);
   });
 
   test("binds and calls a 6-arg integer function", () => {

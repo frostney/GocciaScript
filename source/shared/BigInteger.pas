@@ -19,7 +19,8 @@ type
     class procedure DivModMagnitudes(const AA, AB: TLimbArray;
       out AQuotient, ARemainder: TLimbArray); static;
   public
-    class function Zero: TBigInteger; static; inline;
+    class function Zero: TBigInteger; static;
+    {$IFDEF FPC}inline;{$ENDIF}
     class function One: TBigInteger; static;
     class function NegativeOne: TBigInteger; static;
     class function FromInt64(const AValue: Int64): TBigInteger; static;
@@ -29,9 +30,12 @@ type
     class function FromBinaryString(const AValue: string): TBigInteger; static;
     class function FromOctalString(const AValue: string): TBigInteger; static;
 
-    function IsZero: Boolean; inline;
-    function IsNegative: Boolean; inline;
-    function IsPositive: Boolean; inline;
+    function IsZero: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function IsNegative: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function IsPositive: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
     function IsOne: Boolean;
     function IsMinusOne: Boolean;
     function BitLength: Integer;
@@ -70,11 +74,13 @@ implementation
 
 uses
   Math,
-  SysUtils;
+  SysUtils,
+
+  NumberBits;
 
 const
   LIMB_BITS = 32;
-  LIMB_BASE: QWord = QWord(1) shl LIMB_BITS;
+  LIMB_BASE: UInt64 = UInt64(1) shl LIMB_BITS;
 
 { --- Internal helpers --- }
 
@@ -115,7 +121,7 @@ end;
 class function TBigInteger.AddMagnitudes(const AA, AB: TLimbArray): TLimbArray;
 var
   MaxLen, I: Integer;
-  Carry, Sum: QWord;
+  Carry, Sum: UInt64;
   LA, LB: Cardinal;
 begin
   MaxLen := Length(AA);
@@ -127,7 +133,7 @@ begin
   begin
     if I < Length(AA) then LA := AA[I] else LA := 0;
     if I < Length(AB) then LB := AB[I] else LB := 0;
-    Sum := QWord(LA) + QWord(LB) + Carry;
+    Sum := UInt64(LA) + UInt64(LB) + Carry;
     Result[I] := Cardinal(Sum);
     Carry := Sum shr LIMB_BITS;
   end;
@@ -173,9 +179,9 @@ class procedure TBigInteger.DivModMagnitudes(const AA, AB: TLimbArray;
 var
   N, M, I, J, Len: Integer;
   U, V: TLimbArray;
-  QHat, RHat, P: QWord;
+  QHat, RHat, P: UInt64;
   D, VNMinus1, VNMinus2: Cardinal;
-  Carry: QWord;
+  Carry: UInt64;
   T: Int64;
 begin
   N := Length(AB);
@@ -191,9 +197,9 @@ begin
     Carry := 0;
     for I := High(AA) downto 0 do
     begin
-      Carry := (Carry shl LIMB_BITS) + QWord(AA[I]);
-      AQuotient[I] := Cardinal(Carry div QWord(AB[0]));
-      Carry := Carry mod QWord(AB[0]);
+      Carry := (Carry shl LIMB_BITS) + UInt64(AA[I]);
+      AQuotient[I] := Cardinal(Carry div UInt64(AB[0]));
+      Carry := Carry mod UInt64(AB[0]);
     end;
     Len := Length(AQuotient);
     while (Len > 0) and (AQuotient[Len - 1] = 0) do Dec(Len);
@@ -211,14 +217,14 @@ begin
   // Knuth Algorithm D
   // D1: Normalize
   D := 0;
-  while (QWord(AB[N - 1]) shl (D + 1)) < LIMB_BASE do
+  while (UInt64(AB[N - 1]) shl (D + 1)) < LIMB_BASE do
     Inc(D);
 
   SetLength(V, N);
   Carry := 0;
   for I := 0 to N - 1 do
   begin
-    Carry := Carry + (QWord(AB[I]) shl D);
+    Carry := Carry + (UInt64(AB[I]) shl D);
     V[I] := Cardinal(Carry);
     Carry := Carry shr LIMB_BITS;
   end;
@@ -227,7 +233,7 @@ begin
   Carry := 0;
   for I := 0 to High(AA) do
   begin
-    Carry := Carry + (QWord(AA[I]) shl D);
+    Carry := Carry + (UInt64(AA[I]) shl D);
     U[I] := Cardinal(Carry);
     Carry := Carry shr LIMB_BITS;
   end;
@@ -241,13 +247,13 @@ begin
   for J := M downto 0 do
   begin
     // D3: Calculate QHat
-    QHat := (QWord(U[J + N]) shl LIMB_BITS + QWord(U[J + N - 1])) div QWord(VNMinus1);
-    RHat := (QWord(U[J + N]) shl LIMB_BITS + QWord(U[J + N - 1])) mod QWord(VNMinus1);
+    QHat := (UInt64(U[J + N]) shl LIMB_BITS + UInt64(U[J + N - 1])) div UInt64(VNMinus1);
+    RHat := (UInt64(U[J + N]) shl LIMB_BITS + UInt64(U[J + N - 1])) mod UInt64(VNMinus1);
 
-    while (QHat >= LIMB_BASE) or (QHat * QWord(VNMinus2) > LIMB_BASE * RHat + QWord(U[J + N - 2])) do
+    while (QHat >= LIMB_BASE) or (QHat * UInt64(VNMinus2) > LIMB_BASE * RHat + UInt64(U[J + N - 2])) do
     begin
       Dec(QHat);
-      RHat := RHat + QWord(VNMinus1);
+      RHat := RHat + UInt64(VNMinus1);
       if RHat >= LIMB_BASE then
         Break;
     end;
@@ -256,7 +262,7 @@ begin
     Carry := 0;
     for I := 0 to N - 1 do
     begin
-      P := QHat * QWord(V[I]);
+      P := QHat * UInt64(V[I]);
       T := Int64(U[I + J]) - Int64(Cardinal(P)) - Int64(Carry);
       U[I + J] := Cardinal(T);
       Carry := (P shr LIMB_BITS);
@@ -275,11 +281,11 @@ begin
       Carry := 0;
       for I := 0 to N - 1 do
       begin
-        Carry := Carry + QWord(U[I + J]) + QWord(V[I]);
+        Carry := Carry + UInt64(U[I + J]) + UInt64(V[I]);
         U[I + J] := Cardinal(Carry);
         Carry := Carry shr LIMB_BITS;
       end;
-      U[J + N] := Cardinal(QWord(U[J + N]) + Carry);
+      U[J + N] := Cardinal(UInt64(U[J + N]) + Carry);
     end;
   end;
 
@@ -290,9 +296,9 @@ begin
     Carry := 0;
     for I := N - 1 downto 0 do
     begin
-      Carry := (Carry shl LIMB_BITS) + QWord(U[I]);
+      Carry := (Carry shl LIMB_BITS) + UInt64(U[I]);
       ARemainder[I] := Cardinal(Carry shr D);
-      Carry := Carry and (QWord(1) shl D - 1);
+      Carry := Carry and (UInt64(1) shl D - 1);
     end;
   end
   else
@@ -333,18 +339,18 @@ end;
 
 class function TBigInteger.FromInt64(const AValue: Int64): TBigInteger;
 var
-  Mag: QWord;
+  Mag: UInt64;
 begin
   if AValue = 0 then
     Exit(Zero);
 
   Result.FNegative := AValue < 0;
   if AValue = Low(Int64) then
-    Mag := QWord(High(Int64)) + 1
+    Mag := UInt64(High(Int64)) + 1
   else if AValue < 0 then
-    Mag := QWord(-AValue)
+    Mag := UInt64(-AValue)
   else
-    Mag := QWord(AValue);
+    Mag := UInt64(AValue);
 
   if Mag <= High(Cardinal) then
   begin
@@ -363,7 +369,7 @@ end;
 
 class function TBigInteger.FromDouble(const AValue: Double): TBigInteger;
 var
-  Bits, Mantissa: QWord;
+  Bits, Mantissa: UInt64;
   Exponent: Integer;
 begin
   if IsNaN(AValue) or IsInfinite(AValue) then
@@ -384,8 +390,8 @@ begin
   // Decompose the IEEE 754 bits directly: decimal-string round-trips (Str,
   // FormatFloat) emit at most ~17 significant digits and silently round the
   // rest, corrupting values like 9007199254740991475711 → ...992000000.
-  Bits := PQWord(@AValue)^;
-  Mantissa := (Bits and QWord($000FFFFFFFFFFFFF)) or QWord($0010000000000000);
+  Bits := DoubleToBits(AValue);
+  Mantissa := (Bits and UInt64($000FFFFFFFFFFFFF)) or UInt64($0010000000000000);
   Exponent := Integer((Bits shr 52) and $7FF) - 1075;
   // |AValue| > 2^53 implies a normal double with Exponent > 0 here.
   Result := FromInt64(Int64(Mantissa)).ShiftLeft(Exponent);
@@ -398,7 +404,7 @@ var
   I, StartIndex: Integer;
   Ch: Char;
   Digit: Cardinal;
-  Carry: QWord;
+  Carry: UInt64;
   J: Integer;
 begin
   if Length(AValue) = 0 then
@@ -430,7 +436,7 @@ begin
     Carry := Digit;
     for J := 0 to High(Result.FLimbs) do
     begin
-      Carry := Carry + QWord(Result.FLimbs[J]) * 10;
+      Carry := Carry + UInt64(Result.FLimbs[J]) * 10;
       Result.FLimbs[J] := Cardinal(Carry);
       Carry := Carry shr LIMB_BITS;
     end;
@@ -608,7 +614,7 @@ function TBigInteger.ToDouble: Double;
 var
   BitLen, Shift: Integer;
   TopLimb: Cardinal;
-  Mag64, Mantissa: QWord;
+  Mag64, Mantissa: UInt64;
   Shifted: TBigInteger;
   RoundBit, Sticky: Boolean;
 begin
@@ -626,11 +632,14 @@ begin
 
   if BitLen <= 63 then
   begin
-    // Fits a QWord; the hardware QWord → Double conversion rounds correctly.
-    Mag64 := QWord(FLimbs[0]);
+    // The magnitude is known to fit Int64. Narrow it explicitly before the
+    // floating conversion: Delphi Win32's UInt64 -> Double helper returns an
+    // incorrect value for some small magnitudes, while Int64 -> Double uses
+    // the native x87 conversion and rounds correctly.
+    Mag64 := UInt64(FLimbs[0]);
     if Length(FLimbs) > 1 then
-      Mag64 := Mag64 or (QWord(FLimbs[1]) shl LIMB_BITS);
-    Result := Mag64;
+      Mag64 := Mag64 or (UInt64(FLimbs[1]) shl LIMB_BITS);
+    Result := Int64(Mag64);
   end
   else
   begin
@@ -640,13 +649,14 @@ begin
     // rounds at every step and can drift several ulp.
     Shift := BitLen - 54;
     Shifted := AbsValue.ShiftRight(Shift);
-    Mag64 := QWord(Shifted.ToInt64);
+    Mag64 := UInt64(Shifted.ToInt64);
     RoundBit := (Mag64 and 1) = 1;
     Mantissa := Mag64 shr 1;
     Sticky := not AbsValue.Equal(Shifted.ShiftLeft(Shift));
     if RoundBit and (Sticky or ((Mantissa and 1) = 1)) then
       Inc(Mantissa);
-    Result := Ldexp(Mantissa, Shift + 1);
+    // Mantissa contains at most 53 bits and therefore also fits Int64.
+    Result := Ldexp(Int64(Mantissa), Shift + 1);
   end;
 
   if FNegative then
@@ -655,14 +665,14 @@ end;
 
 function TBigInteger.ToInt64: Int64;
 var
-  Mag: QWord;
+  Mag: UInt64;
 begin
   if IsZero then
     Exit(0);
   {$Q-}{$R-}
-  Mag := QWord(FLimbs[0]);
+  Mag := UInt64(FLimbs[0]);
   if Length(FLimbs) > 1 then
-    Mag := Mag or (QWord(FLimbs[1]) shl LIMB_BITS);
+    Mag := Mag or (UInt64(FLimbs[1]) shl LIMB_BITS);
   if FNegative then
     Result := -Int64(Mag)
   else
@@ -678,7 +688,7 @@ end;
 function TBigInteger.ToRadixString(const ARadix: Integer): string;
 var
   Temp: TLimbArray;
-  Carry, Remainder: QWord;
+  Carry, Remainder: UInt64;
   I, Len: Integer;
   Digits: string;
   Digit: Integer;
@@ -710,9 +720,9 @@ begin
     Remainder := 0;
     for I := Len - 1 downto 0 do
     begin
-      Carry := (Remainder shl LIMB_BITS) + QWord(Temp[I]);
-      Temp[I] := Cardinal(Carry div QWord(ARadix));
-      Remainder := Carry mod QWord(ARadix);
+      Carry := (Remainder shl LIMB_BITS) + UInt64(Temp[I]);
+      Temp[I] := Cardinal(Carry div UInt64(ARadix));
+      Remainder := Carry mod UInt64(ARadix);
     end;
 
     Digit := Integer(Remainder);
@@ -789,8 +799,8 @@ end;
 function TBigInteger.Multiply(const AOther: TBigInteger): TBigInteger;
 var
   I, J: Integer;
-  Carry: QWord;
-  Prod: QWord;
+  Carry: UInt64;
+  Prod: UInt64;
 begin
   if IsZero or AOther.IsZero then
     Exit(Zero);
@@ -805,8 +815,8 @@ begin
     Carry := 0;
     for J := 0 to High(AOther.FLimbs) do
     begin
-      Prod := QWord(FLimbs[I]) * QWord(AOther.FLimbs[J]) +
-              QWord(Result.FLimbs[I + J]) + Carry;
+      Prod := UInt64(FLimbs[I]) * UInt64(AOther.FLimbs[J]) +
+              UInt64(Result.FLimbs[I + J]) + Carry;
       Result.FLimbs[I + J] := Cardinal(Prod);
       Carry := Prod shr LIMB_BITS;
     end;
@@ -889,7 +899,7 @@ end;
 function ToTwosComplement(const ABI: TBigInteger; const ALen: Integer): TLimbArray;
 var
   I: Integer;
-  Carry: QWord;
+  Carry: UInt64;
 begin
   SetLength(Result, ALen);
   for I := 0 to ALen - 1 do
@@ -910,7 +920,7 @@ begin
     Carry := 1;
     for I := 0 to ALen - 1 do
     begin
-      Carry := Carry + QWord(Result[I]);
+      Carry := Carry + UInt64(Result[I]);
       Result[I] := Cardinal(Carry);
       Carry := Carry shr LIMB_BITS;
     end;
@@ -922,7 +932,7 @@ function FromTwosComplement(const ALimbs: TLimbArray; const ANegative: Boolean):
 var
   Temp: TLimbArray;
   I, Len: Integer;
-  Carry: QWord;
+  Carry: UInt64;
 begin
   if ANegative then
   begin
@@ -935,7 +945,7 @@ begin
     Carry := 1;
     for I := 0 to High(Temp) do
     begin
-      Carry := Carry + QWord(Temp[I]);
+      Carry := Carry + UInt64(Temp[I]);
       Temp[I] := Cardinal(Carry);
       Carry := Carry shr LIMB_BITS;
     end;

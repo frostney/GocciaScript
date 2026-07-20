@@ -17,8 +17,10 @@ type
   );
 
 function BinaryBytesPerElement(const AKind: TGocciaBinaryElementKind): Integer;
-function BinaryIsFloatElement(const AKind: TGocciaBinaryElementKind): Boolean; inline;
-function BinaryIsBigIntElement(const AKind: TGocciaBinaryElementKind): Boolean; inline;
+function BinaryIsFloatElement(const AKind: TGocciaBinaryElementKind): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
+function BinaryIsBigIntElement(const AKind: TGocciaBinaryElementKind): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 
 function ReadBinaryNumberElement(const AData: TBytes; const AOffset: Integer;
   const AKind: TGocciaBinaryElementKind; const ALittleEndian: Boolean): Double;
@@ -36,13 +38,22 @@ implementation
 uses
   Math,
 
-  BigInteger,
+  NumberBits,
 
   Goccia.Float16,
-  Goccia.Values.Primitives;
+  Goccia.NumberConversion;
 
-const
-  MAX_SAFE_DOUBLE_INTEGER = 9007199254740992.0;
+function UInt64BitsToInt64(const AValue: UInt64): Int64;
+{$IFDEF FPC}inline;{$ENDIF}
+begin
+  Move(AValue, Result, SizeOf(Result));
+end;
+
+function Int64ToUInt64Bits(const AValue: Int64): UInt64;
+{$IFDEF FPC}inline;{$ENDIF}
+begin
+  Move(AValue, Result, SizeOf(Result));
+end;
 
 function BinaryBytesPerElement(const AKind: TGocciaBinaryElementKind): Integer;
 begin
@@ -71,7 +82,7 @@ begin
 end;
 
 function ReadUnsignedRaw(const AData: TBytes; const AOffset, ASize: Integer;
-  const ALittleEndian: Boolean): QWord;
+  const ALittleEndian: Boolean): UInt64;
 var
   I: Integer;
 begin
@@ -79,17 +90,17 @@ begin
   if ALittleEndian then
   begin
     for I := ASize - 1 downto 0 do
-      Result := (Result shl 8) or QWord(AData[AOffset + I]);
+      Result := (Result shl 8) or UInt64(AData[AOffset + I]);
   end
   else
   begin
     for I := 0 to ASize - 1 do
-      Result := (Result shl 8) or QWord(AData[AOffset + I]);
+      Result := (Result shl 8) or UInt64(AData[AOffset + I]);
   end;
 end;
 
 procedure WriteUnsignedRaw(var AData: TBytes; const AOffset, ASize: Integer;
-  const AValue: QWord; const ALittleEndian: Boolean);
+  const AValue: UInt64; const ALittleEndian: Boolean);
 var
   I: Integer;
 begin
@@ -105,16 +116,16 @@ begin
   end;
 end;
 
-function SignExtendRaw(const AValue: QWord; const ABits: Integer): Int64;
+function SignExtendRaw(const AValue: UInt64; const ABits: Integer): Int64;
 var
-  SignBit: QWord;
+  SignBit: UInt64;
 begin
   if ABits = 64 then
-    Exit(Int64(AValue));
+    Exit(UInt64BitsToInt64(AValue));
 
-  SignBit := QWord(1) shl (ABits - 1);
+  SignBit := UInt64(1) shl (ABits - 1);
   if (AValue and SignBit) <> 0 then
-    Result := Int64(AValue) - Int64(QWord(1) shl ABits)
+    Result := Int64(AValue) - Int64(UInt64(1) shl ABits)
   else
     Result := Int64(AValue);
 end;
@@ -133,97 +144,13 @@ begin
   end;
 end;
 
-function IntegralNumberDecimalString(const AValue: Double): string;
-var
-  DecimalDigits, DotPos, EPos, Exponent, I: Integer;
-  Digits, ExponentText, Mantissa, NumberText: string;
-  IsNegative: Boolean;
-begin
-  NumberText := FormatDouble(AValue);
-  IsNegative := (Length(NumberText) > 0) and (NumberText[1] = '-');
-  if IsNegative then
-    Delete(NumberText, 1, 1);
-
-  EPos := Pos('e', LowerCase(NumberText));
-  if EPos = 0 then
-  begin
-    DotPos := Pos('.', NumberText);
-    if DotPos > 0 then
-      Result := Copy(NumberText, 1, DotPos - 1)
-    else
-      Result := NumberText;
-  end
-  else
-  begin
-    Mantissa := Copy(NumberText, 1, EPos - 1);
-    ExponentText := Copy(NumberText, EPos + 1, Length(NumberText) - EPos);
-    if (Length(ExponentText) > 0) and (ExponentText[1] = '+') then
-      Delete(ExponentText, 1, 1);
-    Exponent := StrToInt(ExponentText);
-
-    DotPos := Pos('.', Mantissa);
-    if DotPos > 0 then
-    begin
-      DecimalDigits := Length(Mantissa) - DotPos;
-      Delete(Mantissa, DotPos, 1);
-    end
-    else
-      DecimalDigits := 0;
-
-    Digits := Mantissa;
-    if Exponent >= DecimalDigits then
-      Result := Digits + StringOfChar('0', Exponent - DecimalDigits)
-    else
-    begin
-      Result := Copy(Digits, 1, Length(Digits) - (DecimalDigits - Exponent));
-      if Result = '' then
-        Result := '0';
-    end;
-  end;
-
-  I := 1;
-  while (I < Length(Result)) and (Result[I] = '0') do
-    Inc(I);
-  if I > 1 then
-    Delete(Result, 1, I - 1);
-
-  if IsNegative and (Result <> '0') then
-    Result := '-' + Result;
-end;
-
-function IntegralNumberToBigInteger(const AValue: Double): TBigInteger;
-begin
-  if (AValue >= -MAX_SAFE_DOUBLE_INTEGER) and
-     (AValue <= MAX_SAFE_DOUBLE_INTEGER) then
-    Exit(TBigInteger.FromInt64(Trunc(AValue)));
-
-  Result := TBigInteger.FromDecimalString(IntegralNumberDecimalString(AValue));
-end;
-
-function TruncatedIntegerBits(const AValue: Double;
-  const ABits: Integer): QWord;
-var
-  IntegerValue: TBigInteger;
-begin
-  if Math.IsNan(AValue) or Math.IsInfinite(AValue) or (AValue = 0.0) then
-    Exit(0);
-
-  if not (ABits in [8, 16, 32]) then
-    Exit(0);
-
-  IntegerValue := IntegralNumberToBigInteger(AValue);
-  Result := QWord(IntegerValue.AsUintN(ABits).ToInt64);
-end;
-
 function ReadBinaryNumberElement(const AData: TBytes; const AOffset: Integer;
   const AKind: TGocciaBinaryElementKind; const ALittleEndian: Boolean): Double;
 var
-  Raw: QWord;
+  Raw: UInt64;
   RawWord: Word;
   RawLongWord: LongWord;
-  RawQWord: QWord;
-  Float32Value: Single;
-  Float64Value: Double;
+  RawUInt64: UInt64;
 begin
   case AKind of
     bekInt8, bekInt16, bekInt32:
@@ -235,7 +162,10 @@ begin
     begin
       Raw := ReadUnsignedRaw(AData, AOffset, BinaryBytesPerElement(AKind),
         ALittleEndian);
-      Result := Raw;
+      // Number element kinds are at most 32 bits. Narrow before converting to
+      // Double because Delphi Win32 mis-converts UInt64 values even when their
+      // high 32 bits are zero.
+      Result := UInt32(Raw);
     end;
     bekFloat16:
     begin
@@ -245,14 +175,12 @@ begin
     bekFloat32:
     begin
       RawLongWord := LongWord(ReadUnsignedRaw(AData, AOffset, 4, ALittleEndian));
-      Move(RawLongWord, Float32Value, 4);
-      Result := Float32Value;
+      Result := BitsToSingle(RawLongWord);
     end;
     bekFloat64:
     begin
-      RawQWord := ReadUnsignedRaw(AData, AOffset, 8, ALittleEndian);
-      Move(RawQWord, Float64Value, 8);
-      Result := Float64Value;
+      RawUInt64 := ReadUnsignedRaw(AData, AOffset, 8, ALittleEndian);
+      Result := BitsToDouble(RawUInt64);
     end;
   else
     Result := 0;
@@ -263,27 +191,18 @@ procedure WriteBinaryNumberElement(var AData: TBytes; const AOffset: Integer;
   const AKind: TGocciaBinaryElementKind; const AValue: Double;
   const ALittleEndian: Boolean);
 var
-  Clamped: Integer;
   Float32Value: Single;
   RawWord: Word;
   RawLongWord: LongWord;
-  RawQWord: QWord;
-  Float64Value: Double;
+  RawUInt64: UInt64;
 begin
   case AKind of
     bekUint8Clamped:
-    begin
-      if Math.IsNan(AValue) or (AValue <= 0) then
-        Clamped := 0
-      else if AValue >= 255 then
-        Clamped := 255
-      else
-        Clamped := Round(AValue);
-      WriteUnsignedRaw(AData, AOffset, 1, QWord(Clamped), ALittleEndian);
-    end;
+      WriteUnsignedRaw(AData, AOffset, 1, NumberToUint8Clamp(AValue),
+        ALittleEndian);
     bekInt8, bekUint8, bekInt16, bekUint16, bekInt32, bekUint32:
       WriteUnsignedRaw(AData, AOffset, BinaryBytesPerElement(AKind),
-        TruncatedIntegerBits(AValue, IntegerBitsForKind(AKind)), ALittleEndian);
+        NumberToUint32(AValue), ALittleEndian);
     bekFloat16:
     begin
       RawWord := DoubleToFloat16(AValue);
@@ -291,15 +210,20 @@ begin
     end;
     bekFloat32:
     begin
-      Float32Value := AValue;
-      Move(Float32Value, RawLongWord, 4);
+      Float32Value := NumberToFloat32(AValue);
+      if Math.IsNan(Float32Value) then
+        RawLongWord := CANONICAL_FLOAT32_NAN_BITS
+      else
+        RawLongWord := SingleToBits(Float32Value);
       WriteUnsignedRaw(AData, AOffset, 4, RawLongWord, ALittleEndian);
     end;
     bekFloat64:
     begin
-      Float64Value := AValue;
-      Move(Float64Value, RawQWord, 8);
-      WriteUnsignedRaw(AData, AOffset, 8, RawQWord, ALittleEndian);
+      if Math.IsNan(AValue) then
+        RawUInt64 := CANONICAL_FLOAT64_NAN_BITS
+      else
+        RawUInt64 := DoubleToBits(AValue);
+      WriteUnsignedRaw(AData, AOffset, 8, RawUInt64, ALittleEndian);
     end;
   end;
 end;
@@ -307,14 +231,14 @@ end;
 function ReadBinaryBigIntElement(const AData: TBytes; const AOffset: Integer;
   const AKind: TGocciaBinaryElementKind; const ALittleEndian: Boolean): Int64;
 begin
-  Result := Int64(ReadUnsignedRaw(AData, AOffset, BinaryBytesPerElement(AKind),
-    ALittleEndian));
+  Result := UInt64BitsToInt64(ReadUnsignedRaw(AData, AOffset,
+    BinaryBytesPerElement(AKind), ALittleEndian));
 end;
 
 procedure WriteBinaryBigIntElement(var AData: TBytes; const AOffset: Integer;
   const AValue: Int64; const ALittleEndian: Boolean);
 begin
-  WriteUnsignedRaw(AData, AOffset, 8, QWord(AValue), ALittleEndian);
+  WriteUnsignedRaw(AData, AOffset, 8, Int64ToUInt64Bits(AValue), ALittleEndian);
 end;
 
 end.

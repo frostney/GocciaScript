@@ -10,19 +10,23 @@ uses
 
 // Int64 -> Double widening that avoids FPC Delphi-mode bit-pattern casts and
 // Single-precision expression promotion on some targets.
-function Int64ToDouble(const AValue: Int64): Double; inline;
+function Int64ToDouble(const AValue: Int64): Double;
+{$IFDEF FPC}inline;{$ENDIF}
 
 // ES2026 §7.1.6 ToIntegerOrInfinity — extract integer arg with default.
 // Returns Trunc(ToNumber(AArgs[AIndex])) or ADefault if index out of range.
-function ToIntegerFromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer = 0; const ADefault: Integer = 0): Integer; inline;
+function ToIntegerFromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer = 0; const ADefault: Integer = 0): Integer;
+{$IFDEF FPC}inline;{$ENDIF}
 
 // Value-level variant of ToIntegerFromArgs: ES2026 §7.1.6 ToIntegerOrInfinity
 // saturated to Integer.  NaN → 0, ±∞ and out-of-range doubles → ±MaxInt.
-function ToIntegerValue(const AValue: TGocciaValue): Integer; inline;
+function ToIntegerValue(const AValue: TGocciaValue): Integer;
+{$IFDEF FPC}inline;{$ENDIF}
 
 // ES2026 §7.1.22 ToLength saturated to Integer: NaN and values ≤ 0 → 0,
 // values ≥ MaxInt (incl. +∞) → MaxInt, else truncate.
-function ToLengthValue(const AValue: TGocciaValue): Integer; inline;
+function ToLengthValue(const AValue: TGocciaValue): Integer;
+{$IFDEF FPC}inline;{$ENDIF}
 
 // Temporal §13.21 ToIntegerWithTruncation: throws RangeError for NaN/±∞
 // (also matches ECMA-402 §9.2.15 DefaultNumberOption's rejection of
@@ -43,9 +47,10 @@ function ToIntegerWithTruncation64Value(const AValue: TGocciaValue): Int64;
 // treats NaN as 0, matching ToIntegerOrInfinity's behaviour for the inputs
 // these methods accept (no Infinity propagation needed — callers clamp by
 // length anyway).
-function ToInteger64FromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer = 0; const ADefault: Int64 = 0): Int64; inline;
+function ToInteger64FromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer = 0; const ADefault: Int64 = 0): Int64;
+{$IFDEF FPC}inline;{$ENDIF}
 
-// ES2026 §7.1.6 ToInt32(argument)
+// ES2026 §7.1.7 ToInt32(argument)
 //   1. Let number be ? ToNumber(argument).
 //   2. If number is NaN, +0, -0, +∞, or -∞, return +0.
 //   3. Let int be sign(number) × floor(abs(number)).
@@ -58,27 +63,33 @@ function ToInteger64FromArgs(const AArgs: TGocciaArgumentsCollection; const AInd
 // `(undefined & undefined)` evaluate to ~ -2^63 on Linux x86_64 CI while
 // passing 0 on macOS arm64 — see test262 language/expressions/bitwise-*
 // /S11.10.*_A3_T1.4.js for the regression cluster this fixes.
-function ToInt32Value(const AValue: TGocciaValue): Int32; inline;
+function ToInt32Value(const AValue: TGocciaValue): Int32;
+{$IFDEF FPC}inline;{$ENDIF}
 
-// ES2026 §7.1.7 ToUint32(argument)
-function ToUint32Value(const AValue: TGocciaValue): Cardinal; inline;
+// ES2026 §7.1.8 ToUint32(argument)
+function ToUint32Value(const AValue: TGocciaValue): Cardinal;
+{$IFDEF FPC}inline;{$ENDIF}
 
 // JS Number → Int64 for host/FFI marshaling: NaN/±∞ → 0, saturates at the
 // Int64 limits, otherwise truncates toward zero.
-function ToInt64Value(const AValue: TGocciaValue): Int64; inline;
+function ToInt64Value(const AValue: TGocciaValue): Int64;
+{$IFDEF FPC}inline;{$ENDIF}
 
 // ES2026 §7.1.10 ToUint16(argument)
 // NaN, ±0, ±∞ → 0; otherwise truncate and reduce modulo 2^16.
-function ToUint16Value(const AValue: TGocciaValue): Word; inline;
+function ToUint16Value(const AValue: TGocciaValue): Word;
+{$IFDEF FPC}inline;{$ENDIF}
 
 // ES2026 relative index normalization (used by slice, splice, at, with, copyWithin, fill, etc.)
 // If ARelative < 0, returns max(ALength + ARelative, 0); else min(ARelative, ALength).
-function NormalizeRelativeIndex(const ARelative, ALength: Integer): Integer; inline;
+function NormalizeRelativeIndex(const ARelative, ALength: Integer): Integer;
+{$IFDEF FPC}inline;{$ENDIF}
 
 // ES2026 §7.3.14 Call(F, V, argumentsList) — safely invoke any callable value.
 // Dispatches through TGocciaFunctionBase.Call or TGocciaClassValue.Call based on runtime type.
 function InvokeCallable(const ACallable: TGocciaValue; const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue; inline;
+  const AThisValue: TGocciaValue): TGocciaValue;
+  {$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 
@@ -90,6 +101,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.NumberConversion,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase;
@@ -209,49 +221,27 @@ begin
 end;
 
 function ToUint32Value(const AValue: TGocciaValue): Cardinal;
-const
-  UINT32_MODULUS = QWord(High(Cardinal)) + 1;
 var
   NumberValue: TGocciaNumberLiteralValue;
-  IntegerPart: Double;
 begin
   NumberValue := AValue.ToNumberLiteral;
-  if NumberValue.IsNaN or NumberValue.IsInfinity or
-     NumberValue.IsNegativeInfinity or (NumberValue.Value = 0) then
-    Exit(0);
-
-  IntegerPart := Int(NumberValue.Value);
-  IntegerPart := IntegerPart - Floor(IntegerPart / UINT32_MODULUS) *
-    UINT32_MODULUS;
-
-  if IntegerPart >= UINT32_MODULUS then
-    Exit(0);
-
-  Result := Cardinal(Trunc(IntegerPart));
+  Result := NumberToUint32(NumberValue.Value);
 end;
 
 function ToInt32Value(const AValue: TGocciaValue): Int32;
-const
-  INT32_MODULUS = QWord(High(Cardinal)) + 1;          // 2^32
-  INT32_HALF_MODULUS = QWord(High(Cardinal)) + 1 - QWord(2147483648); // 2^31, but we use the comparison directly below
 var
-  AsUint: Cardinal;
+  NumberValue: TGocciaNumberLiteralValue;
 begin
-  // Reuse ToUint32Value (already NaN/Infinity-safe) and reinterpret the
-  // resulting 32-bit pattern as a signed two's-complement Int32 — the
-  // last spec step of ToInt32 is exactly "if int32bit ≥ 2^31, subtract
-  // 2^32".  Casting Cardinal → Int32 in FPC performs that reinterpretation
-  // directly without any FP path that could trip Trunc(NaN).
-  AsUint := ToUint32Value(AValue);
-  Result := Int32(AsUint);
+  NumberValue := AValue.ToNumberLiteral;
+  Result := NumberToInt32(NumberValue.Value);
 end;
 
 function ToUint16Value(const AValue: TGocciaValue): Word;
+var
+  NumberValue: TGocciaNumberLiteralValue;
 begin
-  // ToUint16 differs from ToUint32 only in the modulus (2^16 vs 2^32), and
-  // 2^16 divides 2^32, so the low 16 bits of the ToUint32 result are exactly
-  // the ToUint16 result.  Reuses the NaN/Infinity-safe path above.
-  Result := Word(ToUint32Value(AValue));
+  NumberValue := AValue.ToNumberLiteral;
+  Result := NumberToUint16(NumberValue.Value);
 end;
 
 function NormalizeRelativeIndex(const ARelative, ALength: Integer): Integer;

@@ -47,6 +47,8 @@ implementation
 uses
   SysUtils,
 
+  CriticalSections,
+
   Goccia.Temporal.Utils;
 
 const
@@ -134,6 +136,10 @@ end;
 
 uses
   SysUtils,
+
+  CriticalSections,
+  TextEncoding,
+
   Goccia.Temporal.Utils,
   Goccia.Temporal.TimeZoneData,
   Goccia.ThreadCleanupRegistry,
@@ -143,7 +149,7 @@ uses
   BaseUnix,
   {$ENDIF}
   {$IFDEF MSWINDOWS}
-  DynLibs,
+  DynamicLibraries,
   ICU,
   {$ENDIF}
   Classes;
@@ -613,7 +619,7 @@ var
   WindowsICU: TWindowsICU;
   WindowsICULoadAttempted: Boolean;
   WindowsICUAvailable: Boolean;
-  WindowsICUInitLock: TRTLCriticalSection;
+  WindowsICUInitLock: TGocciaCriticalSection;
 
 function ICUSucceeded(const AStatus: TICUErrorCode): Boolean;
 begin
@@ -665,7 +671,7 @@ var
   Handle: TLibHandle;
   LoadedICU: TWindowsICU;
 begin
-  EnterCriticalSection(WindowsICUInitLock);
+  CriticalSectionEnter(WindowsICUInitLock);
   try
     if not WindowsICULoadAttempted then
     begin
@@ -679,14 +685,14 @@ begin
     AICU := WindowsICU;
     Result := WindowsICUAvailable;
   finally
-    LeaveCriticalSection(WindowsICUInitLock);
+    CriticalSectionLeave(WindowsICUInitLock);
   end;
 end;
 
 function UnicodeBufferToString(const ABuffer: array of WideChar;
   const ALength: Integer): string;
 var
-  Value: UnicodeString;
+  Value: string;
 begin
   SetLength(Value, ALength);
   if ALength > 0 then
@@ -697,7 +703,7 @@ end;
 function TryCanonicalizeWindowsICUTimeZone(const AICU: TWindowsICU;
   const ATimeZone: string; out ACanonicalTimeZone: string): Boolean;
 var
-  InputId: UnicodeString;
+  InputId: string;
   Buffer: array[0..ICU_TIMEZONE_ID_CAPACITY - 1] of WideChar;
   Status: TICUErrorCode;
   IsSystemId: ByteBool;
@@ -705,7 +711,7 @@ var
 begin
   Result := False;
   ACanonicalTimeZone := '';
-  InputId := UnicodeString(ATimeZone);
+  InputId := string(ATimeZone);
   FillChar(Buffer, SizeOf(Buffer), 0);
   Status := ICU_SUCCESS;
   IsSystemId := False;
@@ -723,12 +729,12 @@ end;
 function TryOpenWindowsICUCalendar(const AICU: TWindowsICU;
   const ATimeZone: string; out ACalendar: TICUCalendar): Boolean;
 var
-  ZoneId: UnicodeString;
+  ZoneId: string;
   Status: TICUErrorCode;
 begin
   Result := False;
   ACalendar := nil;
-  ZoneId := UnicodeString(ATimeZone);
+  ZoneId := string(ATimeZone);
   Status := ICU_SUCCESS;
   ACalendar := AICU.OpenCalendar(PWideChar(ZoneId), Length(ZoneId), nil,
     ICU_CAL_GREGORIAN, Status);
@@ -1222,6 +1228,8 @@ function TimeZoneFilesEqual(const ALeft, ARight: string): Boolean;
 {$IFDEF UNIX}
 var
   LeftPath, RightPath: string;
+  ErrorOffset: Integer;
+  LeftPathBytes, RightPathBytes: TBytes;
   LeftStat, RightStat: TStat;
 {$ENDIF}
 begin
@@ -1230,8 +1238,12 @@ begin
   if not TryGetKnownTimeZonePath(ALeft, LeftPath) or
      not TryGetKnownTimeZonePath(ARight, RightPath) then
     Exit;
-  if (fpStat(PChar(LeftPath), LeftStat) <> 0) or
-     (fpStat(PChar(RightPath), RightStat) <> 0) then
+  if not TryEncodeUTF8NullTerminated(LeftPath, LeftPathBytes, ErrorOffset) or
+     not TryEncodeUTF8NullTerminated(RightPath, RightPathBytes,
+       ErrorOffset) then
+    Exit;
+  if (fpStat(PAnsiChar(@LeftPathBytes[0]), LeftStat) <> 0) or
+     (fpStat(PAnsiChar(@RightPathBytes[0]), RightStat) <> 0) then
     Exit;
   Result := (LeftStat.st_dev = RightStat.st_dev) and
     (LeftStat.st_ino = RightStat.st_ino);
@@ -2110,14 +2122,14 @@ initialization
   // (Goccia.ThreadCleanupRegistry's finalization).
   RegisterThreadvarCleanup(@ClearTimeZoneCache);
   {$IFDEF MSWINDOWS}
-  InitCriticalSection(WindowsICUInitLock);
+  CriticalSectionInit(WindowsICUInitLock);
   {$ENDIF}
 
 finalization
   // The timezone cache threadvars are released via Goccia.ThreadCleanupRegistry
   // (registered above); only the Windows ICU init lock is torn down here.
   {$IFDEF MSWINDOWS}
-  DoneCriticalSection(WindowsICUInitLock);
+  CriticalSectionDone(WindowsICUInitLock);
   {$ENDIF}
 
 {$ENDIF}

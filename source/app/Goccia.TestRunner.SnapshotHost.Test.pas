@@ -3,10 +3,10 @@ program Goccia.TestRunner.SnapshotHost.Test;
 {$I Goccia.inc}
 
 uses
-  Classes,
   StrUtils,
   SysUtils,
 
+  FileUtils,
   TestingPascalLibrary,
 
   Goccia.Builtins.Testing.Snapshots,
@@ -104,18 +104,8 @@ begin
 end;
 
 procedure TSnapshotHostTests.WriteSource(const APath, ASource: string);
-var
-  Stream: TFileStream;
-  Content: UTF8String;
 begin
-  Content := UTF8String(ASource);
-  Stream := TFileStream.Create(APath, fmCreate);
-  try
-    if Length(Content) > 0 then
-      Stream.WriteBuffer(Content[1], Length(Content));
-  finally
-    Stream.Free;
-  end;
+  WriteUTF8FileText(APath, ASource);
 end;
 
 function TSnapshotHostTests.MethodCallColumn(const ALine: string): Integer;
@@ -139,7 +129,7 @@ begin
     SnapshotPath := FTempDir + PathDelim + '__snapshots__' + PathDelim +
       'example.test.js.snap';
     Expect<Boolean>(FileExists(SnapshotPath)).ToBe(True);
-    Expect<string>(string(ReadUTF8FileText(SnapshotPath))).ToBe(
+    Expect<string>(ReadUTF8FileText(SnapshotPath)).ToBe(
       '// snapshot' + #10);
   finally
     HostRef := nil;
@@ -167,7 +157,7 @@ begin
     Host.QueueInlineSnapshot(Edit);
     Host.FlushInlineSnapshots;
     FlushPendingInlineSnapshots;
-    Source := string(ReadUTF8FileText(SourcePath));
+    Source := ReadUTF8FileText(SourcePath);
     Expect<Boolean>(Pos('toMatchInlineSnapshot(`"hello"`)', Source) > 0)
       .ToBe(True);
   finally
@@ -196,7 +186,7 @@ begin
     Host.QueueInlineSnapshot(Edit);
     Host.FlushInlineSnapshots;
     FlushPendingInlineSnapshots;
-    Source := string(ReadUTF8FileText(SourcePath));
+    Source := ReadUTF8FileText(SourcePath);
     Expect<Boolean>(Pos('toMatchInlineSnapshot(`"new"`)', Source) > 0)
       .ToBe(True);
     Expect<Boolean>(Pos('"old"', Source) = 0).ToBe(True);
@@ -227,7 +217,7 @@ begin
     Host.QueueInlineSnapshot(Edit);
     Host.FlushInlineSnapshots;
     FlushPendingInlineSnapshots;
-    Source := string(ReadUTF8FileText(SourcePath));
+    Source := ReadUTF8FileText(SourcePath);
     Expect<Boolean>(Pos('expect.stringMatching(/a[)]/) }, `', Source) > 0)
       .ToBe(True);
     Expect<Boolean>(Pos('    {' + #10 + '      "value"', Source) > 0)
@@ -264,7 +254,7 @@ begin
     Host.QueueInlineSnapshot(SecondEdit);
     Host.FlushInlineSnapshots;
     FlushPendingInlineSnapshots;
-    Source := string(ReadUTF8FileText(SourcePath));
+    Source := ReadUTF8FileText(SourcePath);
     Expect<Boolean>(Pos('toMatchInlineSnapshot(`"left"`)', Source) > 0)
       .ToBe(True);
     Expect<Boolean>(Pos('toMatchInlineSnapshot(`"right"`)', Source) > 0)
@@ -295,7 +285,7 @@ begin
     Host.QueueInlineSnapshot(Edit);
     Host.FlushInlineSnapshots;
     FlushPendingInlineSnapshots;
-    Source := string(ReadUTF8FileText(SourcePath));
+    Source := ReadUTF8FileText(SourcePath);
     Expect<Boolean>(Pos('toMatchInlineSnapshot(`"new"`)', Source) > 0)
       .ToBe(True);
   finally
@@ -327,7 +317,7 @@ begin
     Host.QueueInlineSnapshot(Edit);
     Host.FlushInlineSnapshots;
     FlushPendingInlineSnapshots;
-    Source := string(ReadUTF8FileText(SourcePath));
+    Source := ReadUTF8FileText(SourcePath);
     Expect<Boolean>(Pos('/}/.test(value)', Source) > 0).ToBe(True);
     Expect<Boolean>(Pos('/[,)]/.test(value)', Source) > 0).ToBe(True);
     Expect<Boolean>(Pos('}) }, `' + #10 + '    {', Source) > 0).ToBe(True);
@@ -359,10 +349,10 @@ begin
     Host.QueueInlineSnapshot(Edit);
     Host.FlushInlineSnapshots;
     FlushPendingInlineSnapshots;
-    HelperSource := string(ReadUTF8FileText(HelperPath));
+    HelperSource := ReadUTF8FileText(HelperPath);
     Expect<Boolean>(Pos('toMatchInlineSnapshot(`"helper"`)',
       HelperSource) > 0).ToBe(True);
-    Expect<string>(string(ReadUTF8FileText(EntryPath))).ToBe(
+    Expect<string>(ReadUTF8FileText(EntryPath)).ToBe(
       'import "./helper.js";' + #10);
   finally
     HostRef := nil;
@@ -390,7 +380,7 @@ begin
     Host.QueueInlineSnapshot(Edit);
     Host.FlushInlineSnapshots;
     FlushPendingInlineSnapshots;
-    Source := string(ReadUTF8FileText(SourcePath));
+    Source := ReadUTF8FileText(SourcePath);
     Expect<Boolean>(Pos('toMatchInlineSnapshot(`"new"`)', Source) > 0)
       .ToBe(True);
   finally
@@ -400,7 +390,7 @@ end;
 
 procedure TSnapshotHostTests.TestRewritesAfterUnicodeLineSeparator;
 const
-  LINE_SEPARATOR = #$E2#$80#$A8;
+  LINE_SEPARATOR = #$2028;
 var
   Edit: TGocciaInlineSnapshotEdit;
   Host: TGocciaTestRunnerSnapshotHost;
@@ -422,7 +412,7 @@ begin
     Host.QueueInlineSnapshot(Edit);
     Host.FlushInlineSnapshots;
     FlushPendingInlineSnapshots;
-    Source := string(ReadUTF8FileText(SourcePath));
+    Source := ReadUTF8FileText(SourcePath);
     Expect<Boolean>(Pos('toMatchInlineSnapshot(`"unicode line"`)',
       Source) > 0).ToBe(True);
   finally
@@ -432,7 +422,7 @@ end;
 
 procedure TSnapshotHostTests.TestRewritesWithNonBreakingSpaceBeforeArguments;
 const
-  NO_BREAK_SPACE = #$C2#$A0;
+  NO_BREAK_SPACE = #$00A0;
 var
   Edit: TGocciaInlineSnapshotEdit;
   Host: TGocciaTestRunnerSnapshotHost;
@@ -453,7 +443,7 @@ begin
     Host.QueueInlineSnapshot(Edit);
     Host.FlushInlineSnapshots;
     FlushPendingInlineSnapshots;
-    Source := string(ReadUTF8FileText(SourcePath));
+    Source := ReadUTF8FileText(SourcePath);
     Expect<Boolean>(Pos('toMatchInlineSnapshot' + NO_BREAK_SPACE +
       '(`"space"`)', Source) > 0).ToBe(True);
   finally
@@ -497,7 +487,7 @@ begin
       NewHost.FlushInlineSnapshots;
       OldHost.FlushInlineSnapshots;
       FlushPendingInlineSnapshots;
-      Source := string(ReadUTF8FileText(SourcePath));
+      Source := ReadUTF8FileText(SourcePath);
       Expect<Boolean>(Pos('toMatchInlineSnapshot(`"new"`)', Source) > 0)
         .ToBe(True);
       Expect<Boolean>(Pos('`"old"`', Source) = 0).ToBe(True);

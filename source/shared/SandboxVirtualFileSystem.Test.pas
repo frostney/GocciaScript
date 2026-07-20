@@ -301,7 +301,7 @@ end;
 begin
   TestRunnerProgram.AddSuite(
     TTestSandboxVirtualFileSystem.Create('SandboxVirtualFileSystem'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
 
   ExitCode := TestResultToExitCode;
 end.

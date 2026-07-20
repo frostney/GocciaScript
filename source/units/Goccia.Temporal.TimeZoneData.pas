@@ -26,7 +26,6 @@ uses
   LazyPublishedCache;
 
 const
-  TIME_ZONE_RCDATA_RESOURCE_TYPE = MAKEINTRESOURCE(10);
   TIME_ZONE_DATA_MAGIC: TEmbeddedResourceMagic =
     (Ord('G'), Ord('O'), Ord('C'), Ord('C'), Ord('I'), Ord('A'), Ord('T'), Ord('Z'));
 
@@ -42,8 +41,7 @@ begin
   SetLength(ABuffer, 0);
   Stream := nil;
   try
-    Stream := TResourceStream.Create(HInstance, AKey,
-      TIME_ZONE_RCDATA_RESOURCE_TYPE);
+    Stream := TResourceStream.Create(HInstance, AKey, RCDATAResourceType);
     if Stream.Size > High(Integer) then
     begin
       Stream.Free;

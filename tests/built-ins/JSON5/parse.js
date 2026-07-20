@@ -23,6 +23,7 @@ describe("JSON5.parse", () => {
     const value = JSON5.parse(`
 {
   hex: 0xdecaf,
+  largeHex: 0x20000000000001,
   leadingDot: .5,
   trailingDot: 5.,
   positive: +1,
@@ -34,6 +35,7 @@ describe("JSON5.parse", () => {
 `);
 
     expect(value.hex).toBe(0xdecaf);
+    expect(value.largeHex).toBe(9007199254740992);
     expect(value.leadingDot).toBe(0.5);
     expect(value.trailingDot).toBe(5);
     expect(value.positive).toBe(1);

@@ -353,6 +353,7 @@ uses
   Goccia.Evaluator.Comparison,
   Goccia.Execution.CallSite,
   Goccia.FetchManager,
+  Goccia.FloatingPoint,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.RegExp.Runtime,
@@ -559,13 +560,13 @@ end;
 
 procedure AddTempRootIfNeeded(const AValue: TGocciaValue);
 begin
-  if Assigned(TGarbageCollector.Instance) and Assigned(AValue) then
+  if (TGarbageCollector.Instance <> nil) and Assigned(AValue) then
     TGarbageCollector.Instance.AddTempRoot(AValue);
 end;
 
 procedure RemoveTempRootIfNeeded(const AValue: TGocciaValue);
 begin
-  if Assigned(TGarbageCollector.Instance) and Assigned(AValue) then
+  if (TGarbageCollector.Instance <> nil) and Assigned(AValue) then
     TGarbageCollector.Instance.RemoveTempRoot(AValue);
 end;
 
@@ -1887,7 +1888,7 @@ end;
 function TGocciaExpectationValue.ToBeCloseTo(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Expected: TGocciaValue;
-  Precision: Integer;
+  Precision: Double;
   ActualNum, ExpectedNum, Diff, Tolerance: Double;
   IsClose: Boolean;
   ActualTempNum, ExpectedTempNum: TGocciaNumberLiteralValue;
@@ -1898,9 +1899,11 @@ begin
 
   // Default precision to 2 decimal places if not specified
   if AArgs.Length >= 2 then
-    Precision := ToIntegerFromArgs(AArgs, 1)
+    Precision := AArgs.GetElement(1).ToNumberLiteral.Value
   else
     Precision := 2;
+  if Math.IsNaN(Precision) then
+    Precision := 0;
 
   ActualNum := FActualValue.ToNumberLiteral.Value;
   ExpectedNum := Expected.ToNumberLiteral.Value;
@@ -1926,10 +1929,24 @@ begin
       IsClose := False
     else
     begin
-      // Calculate tolerance based on precision (0.5 * 10^(-precision))
-      Tolerance := 0.5 * Math.Power(10, -Precision);
+      if Math.IsInfinite(Precision) then
+      begin
+        if Precision > 0 then
+          Tolerance := 0
+        else
+          Tolerance := Math.Infinity;
+      end
+      else if Precision > 308 then
+        Tolerance := 0
+      else if Precision < -308 then
+        Tolerance := Math.Infinity
+      else
+        Tolerance := 0.5 * Math.Power(10, -Precision);
       Diff := Abs(ActualNum - ExpectedNum);
-      IsClose := Diff < Tolerance;
+      if Math.IsInfinite(Tolerance) then
+        IsClose := True
+      else
+        IsClose := Diff < Tolerance;
     end;
   finally
     ActualTempNum.Free;
@@ -1948,12 +1965,14 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeCloseTo',
-        Format('Expected %s not to be close to %s (precision: %d)',
-               [FormatForDisplay(FActualValue), FormatForDisplay(Expected), Precision]))
+        Format('Expected %s not to be close to %s (precision: %s)',
+               [FormatForDisplay(FActualValue), FormatForDisplay(Expected),
+                FormatDouble(Precision)]))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeCloseTo',
-        Format('Expected %s to be close to %s (precision: %d)',
-               [FormatForDisplay(FActualValue), FormatForDisplay(Expected), Precision]));
+        Format('Expected %s to be close to %s (precision: %s)',
+               [FormatForDisplay(FActualValue), FormatForDisplay(Expected),
+                FormatDouble(Precision)]));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -2709,7 +2728,7 @@ function TGocciaExpectationValue.GetResolves(const AArgs: TGocciaArgumentsCollec
 var
   Promise: TGocciaPromiseValue;
 begin
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(FActualValue);
   try
     if not (FActualValue is TGocciaPromiseValue) then
@@ -2738,7 +2757,7 @@ begin
       Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
     end;
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(FActualValue);
   end;
 end;
@@ -2747,7 +2766,7 @@ function TGocciaExpectationValue.GetRejects(const AArgs: TGocciaArgumentsCollect
 var
   Promise: TGocciaPromiseValue;
 begin
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(FActualValue);
   try
     if not (FActualValue is TGocciaPromiseValue) then
@@ -2776,7 +2795,7 @@ begin
       Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
     end;
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(FActualValue);
   end;
 end;
@@ -3518,7 +3537,7 @@ begin
               begin
                 if E.Scope = tsTest then
                 begin
-                  if Assigned(TGocciaMicrotaskQueue.Instance) then
+                  if (TGocciaMicrotaskQueue.Instance <> nil) then
                     TGocciaMicrotaskQueue.Instance.ClearQueue;
                   DiscardFetchCompletions;
                   AssertionFailed('test execution',
@@ -3538,7 +3557,7 @@ begin
               end;
               on E: Exception do
               begin
-                if Assigned(TGocciaMicrotaskQueue.Instance) then
+                if (TGocciaMicrotaskQueue.Instance <> nil) then
                   TGocciaMicrotaskQueue.Instance.ClearQueue;
                 DiscardFetchCompletions;
                 if E is TGocciaError then
@@ -3688,7 +3707,7 @@ begin
         try
           CallbackResult := TGocciaFunctionBase(Callback).Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
-          if Assigned(TGarbageCollector.Instance) then
+          if (TGarbageCollector.Instance <> nil) then
             TGarbageCollector.Instance.AddTempRoot(CallbackResult);
           try
             if CallbackResult is TGocciaPromiseValue then
@@ -3703,7 +3722,7 @@ begin
             else
               DrainMicrotasksAndFetchCompletions;
           finally
-            if Assigned(TGarbageCollector.Instance) then
+            if (TGarbageCollector.Instance <> nil) then
               TGarbageCollector.Instance.RemoveTempRoot(CallbackResult);
           end;
         except
@@ -4221,8 +4240,8 @@ var
   I: Integer;
   StartTime: Int64;
   ResultObj: TGocciaObjectValue;
-  ExitOnFirstFailure: Boolean = False;
-  ShowTestResults: Boolean = True;
+  ExitOnFirstFailure: Boolean;
+  ShowTestResults: Boolean;
   Summary: string;
   FailedTestDetails: TStringList;
   FailedTestDetailsArray: TGocciaArrayValue;
@@ -4232,9 +4251,14 @@ var
   HasFocusedEntries: Boolean;
   ShouldStop: Boolean;
   SnapshotErrors: TStringList;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
-  ResetTestStats;
-  StartTime := GetNanoseconds;
+  ExitOnFirstFailure := False;
+  ShowTestResults := True;
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  try
+    ResetTestStats;
+    StartTime := GetNanoseconds;
 
   if AArgs.Length > 0 then
   begin
@@ -4259,9 +4283,9 @@ begin
     end;
   end;
 
-  FailedTestDetails := TStringList.Create;
-  SuiteNames := TStringList.Create;
-  try
+    FailedTestDetails := TStringList.Create;
+    SuiteNames := TStringList.Create;
+    try
     ClearNestedRegistrations(FRootSuite);
     FCurrentRegistrationSuite := FRootSuite;
     BuildNestedRegistrations(FRootSuite, FailedTestDetails);
@@ -4368,9 +4392,12 @@ begin
     end;
 
     Result := ResultObj;
+    finally
+      FailedTestDetails.Free;
+      SuiteNames.Free;
+    end;
   finally
-    FailedTestDetails.Free;
-    SuiteNames.Free;
+    LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
 end;
 

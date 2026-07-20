@@ -98,8 +98,10 @@ const
     KEYWORD_STATIC
   );
 
-function IsReservedKeyword(const AName: string): Boolean; inline;
-function IsStrictModeReservedKeyword(const AName: string): Boolean; inline;
+function IsReservedKeyword(const AName: string): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
+function IsStrictModeReservedKeyword(const AName: string): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 

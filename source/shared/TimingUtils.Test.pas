@@ -119,7 +119,7 @@ var
 begin
   // 1500 ns = 1.5 us => microsecond range
   S := FormatDuration(1500);
-  Expect<Boolean>(Pos(#$C2#$B5 + 's', S) > 0).ToBe(True);
+  Expect<Boolean>(Pos(#$00B5 + 's', S) > 0).ToBe(True);
 end;
 
 procedure TTimingUtilsTests.TestFormatDurationMilliseconds;
@@ -139,7 +139,7 @@ begin
   S := FormatDuration(Int64(15000000000));
   Expect<Boolean>(Pos('s', S) > 0).ToBe(True);
   Expect<Boolean>(Pos('ms', S) = 0).ToBe(True);
-  Expect<Boolean>(Pos(#$C2#$B5, S) = 0).ToBe(True);
+  Expect<Boolean>(Pos(#$00B5, S) = 0).ToBe(True);
 end;
 
 procedure TTimingUtilsTests.TestFormatDurationBelowMicrosecondThreshold;
@@ -154,7 +154,7 @@ var
 begin
   // 500 ns => Us = 0.5, exactly at threshold => microsecond format
   S := FormatDuration(500);
-  Expect<Boolean>(Pos(#$C2#$B5 + 's', S) > 0).ToBe(True);
+  Expect<Boolean>(Pos(#$00B5 + 's', S) > 0).ToBe(True);
 end;
 
 procedure TTimingUtilsTests.TestFormatDurationBelowMillisecondThreshold;
@@ -163,7 +163,7 @@ var
 begin
   // 499_999 ns => Ms = 0.499999, below 0.5 => stays in microsecond format
   S := FormatDuration(499999);
-  Expect<Boolean>(Pos(#$C2#$B5 + 's', S) > 0).ToBe(True);
+  Expect<Boolean>(Pos(#$00B5 + 's', S) > 0).ToBe(True);
   Expect<Boolean>(Pos('ms', S) = 0).ToBe(True);
 end;
 
@@ -192,7 +192,7 @@ begin
   // 10_000_000_000 ns => S = 10.0 => seconds format
   S := FormatDuration(Int64(10000000000));
   Expect<Boolean>(Pos('ms', S) = 0).ToBe(True);
-  Expect<Boolean>(Pos(#$C2#$B5, S) = 0).ToBe(True);
+  Expect<Boolean>(Pos(#$00B5, S) = 0).ToBe(True);
   Expect<Boolean>(Pos('s', S) > 0).ToBe(True);
 end;
 

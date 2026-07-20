@@ -338,7 +338,7 @@ begin
             EvalScope := FEngine.Interpreter.GlobalScope.CreateChild(
               skBlock, 'ShadowRealmEvalFn');
           EvalScope.ThisValue := FEngine.Interpreter.GlobalScope.ThisValue;
-          if Assigned(TGarbageCollector.Instance) then
+          if (TGarbageCollector.Instance <> nil) then
             TGarbageCollector.Instance.AddTempRoot(EvalScope);
           try
             EvalContext := FEngine.Interpreter.CreateEvaluationContext;
@@ -353,7 +353,7 @@ begin
               EvalContext, VarScope, EvalScope, StrictEval, False, nil,
               False, False, False);
           finally
-            if Assigned(TGarbageCollector.Instance) then
+            if (TGarbageCollector.Instance <> nil) then
               TGarbageCollector.Instance.RemoveTempRoot(EvalScope);
           end;
         finally
@@ -400,13 +400,13 @@ begin
   // this realm's intrinsics (Object.prototype, Function.prototype).
   RealmScope := FEngine.ActivateRealmExecutionContext;
   try
-    if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+    if TGocciaObjectValue.SharedObjectPrototype = nil then
       TGocciaObjectValue.InitializeSharedPrototype;
     ObjectProto := TGocciaObjectValue.SharedObjectPrototype;
 
     // ShadowRealm.prototype (TC39 ShadowRealm §3.3); [[Prototype]] is Object.prototype.
     FPrototype := TGocciaObjectValue.Create(ObjectProto);
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.PinObject(FPrototype);
 
     Members := TGocciaMemberCollection.Create;
@@ -572,7 +572,7 @@ begin
               EvalScope := ChildEngine.Interpreter.GlobalScope.CreateChild(
                 skBlock, 'ShadowRealmEval');
             EvalScope.ThisValue := ChildEngine.Interpreter.GlobalScope.ThisValue;
-            if Assigned(TGarbageCollector.Instance) then
+            if (TGarbageCollector.Instance <> nil) then
               TGarbageCollector.Instance.AddTempRoot(EvalScope);
             try
               EvalContext := ChildEngine.Interpreter.CreateEvaluationContext;
@@ -623,7 +623,7 @@ begin
                 on E: TGocciaError do Threw := True;
               end;
             finally
-              if Assigned(TGarbageCollector.Instance) then
+              if (TGarbageCollector.Instance <> nil) then
                 TGarbageCollector.Instance.RemoveTempRoot(EvalScope);
             end;
           finally

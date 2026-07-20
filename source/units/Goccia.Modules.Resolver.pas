@@ -82,9 +82,9 @@ function TGocciaModuleResolver.NormalizeImportMapPath(const APath,
   ABaseDirectory: string): string;
 begin
   if IsAbsoluteImportMapPath(APath) then
-    Result := ExpandUTF8FileName(APath)
+    Result := ExpandHostFileName(APath)
   else if IsRelativeImportMapPath(APath) then
-    Result := ExpandUTF8FileName(ABaseDirectory + APath)
+    Result := ExpandHostFileName(ABaseDirectory + APath)
   else
     Result := APath;
 
@@ -92,7 +92,7 @@ begin
     Result := IncludeTrailingPathDelimiter(Result);
 end;
 
-function ReadImportMapText(const APath: string): UTF8String;
+function ReadImportMapText(const APath: string): string;
 begin
   Result := ReadUTF8FileText(APath);
 end;
@@ -109,11 +109,11 @@ var
   CandidatePath, CurrentDirectory, ParentDirectory: string;
 begin
   if AStartDirectory <> '' then
-    CurrentDirectory := ExpandUTF8FileName(AStartDirectory)
+    CurrentDirectory := ExpandHostFileName(AStartDirectory)
   else
     CurrentDirectory := GetCurrentDir;
 
-  if not UTF8DirectoryExists(CurrentDirectory) then
+  if not HostDirectoryExists(CurrentDirectory) then
     CurrentDirectory := ExtractFilePath(CurrentDirectory);
 
   CurrentDirectory := ExcludeTrailingPathDelimiter(CurrentDirectory);
@@ -124,7 +124,7 @@ begin
   begin
     CandidatePath := IncludeTrailingPathDelimiter(CurrentDirectory) +
       PROJECT_CONFIG_FILE_NAME;
-    if UTF8FileExists(CandidatePath) then
+    if HostFileExists(CandidatePath) then
       Exit(CandidatePath);
 
     ParentDirectory := ExtractFileDir(CurrentDirectory);
@@ -145,8 +145,8 @@ var
   ParsedValue, ImportsValue, Value: TGocciaValue;
   ImportsObject, ImportMapObject: TGocciaObjectValue;
 begin
-  ImportMapPath := ExpandUTF8FileName(APath);
-  if not UTF8FileExists(ImportMapPath) then
+  ImportMapPath := ExpandHostFileName(APath);
+  if not HostFileExists(ImportMapPath) then
     raise Exception.Create('Import map not found: ' + ImportMapPath);
 
   Parser := TGocciaJSONParser.Create;
@@ -159,7 +159,7 @@ begin
   if not (ParsedValue is TGocciaObjectValue) then
     raise Exception.Create('Import map must be a top-level JSON object.');
 
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(ParsedValue);
   try
     ImportMapObject := TGocciaObjectValue(ParsedValue);
@@ -201,7 +201,7 @@ begin
       AddAlias(NormalizedKey, NormalizedValue);
     end;
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
   end;
 end;

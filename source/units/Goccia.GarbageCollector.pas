@@ -7,6 +7,7 @@ interface
 uses
   Generics.Collections,
 
+  CriticalSections,
   HashMap,
   MemoryDetection;
 
@@ -15,11 +16,12 @@ type
   private
     FGCMark: Cardinal;
     FGCIndex: Integer;
-    function GetGCMarked: Boolean; inline;
-    procedure SetGCMarked(const AValue: Boolean); inline;
+    function GetGCMarked: Boolean;
+    procedure SetGCMarked(const AValue: Boolean);
   public
     procedure BeforeDestruction; override;
-    class procedure AdvanceMark; static; inline;
+    class procedure AdvanceMark; static;
+    {$IFDEF FPC}inline;{$ENDIF}
     procedure MarkReferences; virtual;
     function TraceWeakReferences: Boolean; virtual;
     procedure SweepWeakReferences; virtual;
@@ -44,7 +46,8 @@ type
   private
     FCount: Integer;
   public
-    procedure Initialize; inline;
+    procedure Initialize;
+    {$IFDEF FPC}inline;{$ENDIF}
     procedure Add(const AObject: TGCManagedObject);
     procedure Clear;
   end;
@@ -87,7 +90,8 @@ type
     {$ENDIF}
 
     function GetManagedObjectCount: Integer;
-    function GetWatermark: Integer; inline;
+    function GetWatermark: Integer;
+    {$IFDEF FPC}inline;{$ENDIF}
     procedure ClearActiveRootEntries(const AObject: TGCManagedObject);
   protected
     procedure MarkRoots; virtual;
@@ -95,7 +99,8 @@ type
     procedure SweepWeakReferences;
     procedure SweepObjects;
   public
-    class function Instance: TGarbageCollector; inline;
+    class function Instance: TGarbageCollector;
+    {$IFDEF FPC}inline;{$ENDIF}
     class procedure Initialize;
     class procedure Shutdown;
 
@@ -182,7 +187,8 @@ const
   MEMORY_PRESSURE_COLLECTION_MAX_RESERVE = 1024 * 1024;
 
 function DetectDefaultMaxBytes: Int64;
-procedure InitializeTempRoot(var ARoot: TGocciaTempRoot); inline;
+procedure InitializeTempRoot(var ARoot: TGocciaTempRoot);
+{$IFDEF FPC}inline;{$ENDIF}
 procedure AddTempRootIfNeeded(var ARoot: TGocciaTempRoot;
   const AObject: TGCManagedObject);
 procedure RemoveTempRootIfNeeded(var ARoot: TGocciaTempRoot);
@@ -219,7 +225,7 @@ end;
 
 var
   GCCurrentMark: Cardinal;
-  GCCollectLock: TRTLCriticalSection;
+  GCCollectLock: TGocciaCriticalSection;
 
 threadvar
   GCThreadInstance: TGarbageCollector;
@@ -696,7 +702,7 @@ var
   MarkNs, SweepNs, TotalNs: Int64;
   {$ENDIF}
 begin
-  EnterCriticalSection(GCCollectLock);
+  CriticalSectionEnter(GCCollectLock);
   try
     if FCollecting then Exit;
     FCollecting := True;
@@ -754,7 +760,7 @@ begin
       FCollecting := False;
     end;
   finally
-    LeaveCriticalSection(GCCollectLock);
+    CriticalSectionLeave(GCCollectLock);
   end;
 end;
 
@@ -829,7 +835,7 @@ var
   Obj: TGCManagedObject;
   EffectiveWatermark: Integer;
 begin
-  EnterCriticalSection(GCCollectLock);
+  CriticalSectionEnter(GCCollectLock);
   try
     if FCollecting then Exit;
     FCollecting := True;
@@ -887,7 +893,7 @@ begin
       FCollecting := False;
     end;
   finally
-    LeaveCriticalSection(GCCollectLock);
+    CriticalSectionLeave(GCCollectLock);
   end;
 end;
 
@@ -932,10 +938,10 @@ begin
 end;
 
 initialization
-  InitCriticalSection(GCCollectLock);
+  CriticalSectionInit(GCCollectLock);
   GCCurrentMark := 1;
 
 finalization
-  DoneCriticalSection(GCCollectLock);
+  CriticalSectionDone(GCCollectLock);
 
 end.

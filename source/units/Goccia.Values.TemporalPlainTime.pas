@@ -82,9 +82,10 @@ uses
 var
   GTemporalPlainTimeSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetTemporalPlainTimeShared: TGocciaSharedPrototype; inline;
+function GetTemporalPlainTimeShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTemporalPlainTimeSharedSlot))
   else
     Result := nil;
@@ -262,8 +263,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetTemporalPlainTimeShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetTemporalPlainTimeShared <> nil) then Exit;
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GTemporalPlainTimeSharedSlot, Shared);
   Members := TGocciaMemberCollection.Create;

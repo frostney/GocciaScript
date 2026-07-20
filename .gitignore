@@ -9,23 +9,12 @@ source/units/Goccia.Version.Generated.inc
 tmp/
 
 # Build files
-build/compiled/
-build/*.exe
-build/GocciaJSON5Check
-build/GocciaTOMLCheck
-build/main
-build/GocciaREPL
-build/GocciaScriptLoader
-build/GocciaScriptLoaderBare
-build/GocciaSandboxRunner
-build/GocciaTestRunner
-build/GocciaBenchmarkRunner
-build/GocciaBundler
-build/*.Test
-build/ppas.sh
-build/ppas.bat
-build/link*.res
-build/linkfiles*.res
+build/
+
+# Delphi IDE state and generated project resources
+source/app/*.dproj.local
+source/app/*.res
+source/app/__history/
 
 # Mac OS files
 .DS_Store
@@ -41,6 +30,8 @@ tests-wasm/*.wasm
 fixtures/ffi/*.dylib
 fixtures/ffi/*.so
 fixtures/ffi/*.dll
+fixtures/ffi/*.lib
+fixtures/ffi/*.pdb
 
 # Claude Code agent runtime state
 .claude/scheduled_tasks.lock

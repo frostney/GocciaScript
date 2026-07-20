@@ -15,7 +15,7 @@ type
     fftU8, fftU16, fftU32, fftU64,
     fftF32, fftF64,
     fftPointer,
-    fftCString
+    fftUTF8String
   );
 
   TGocciaFFITypeKind = (
@@ -63,12 +63,15 @@ type
       const AReturnType: TGocciaFFITypeDescriptor): TGocciaFFITypeDescriptor;
     procedure AddReference;
     procedure ReleaseReference;
-    function IsAggregate: Boolean; inline;
+    function IsAggregate: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
     function ContainsUnion: Boolean;
     function FieldIndex(const AName: string): Integer;
-    function FieldCount: Integer; inline;
+    function FieldCount: Integer;
+    {$IFDEF FPC}inline;{$ENDIF}
     function FieldAt(const AIndex: Integer): TGocciaFFIFieldDescriptor;
-    function CallbackArgumentCount: Integer; inline;
+    function CallbackArgumentCount: Integer;
+    {$IFDEF FPC}inline;{$ENDIF}
     function CallbackArgumentAt(
       const AIndex: Integer): TGocciaFFITypeDescriptor;
     property Kind: TGocciaFFITypeKind read FKind;
@@ -86,7 +89,7 @@ type
 
   TGocciaFFISlot = record
     case Integer of
-      0: (AsInt: PtrInt);
+      0: (AsInt: NativeInt);
       1: (AsSingle: Single);
       2: (AsDouble: Double);
   end;
@@ -102,29 +105,10 @@ type
 
   TGocciaFFIResult = record
     case Integer of
-      0: (AsInt: PtrInt);
+      0: (AsInt: NativeInt);
       1: (AsSingle: Single);
       2: (AsDouble: Double);
   end;
-
-  // Call state record for the assembly trampolines (64-bit only).
-  // Pascal fills the arrays; the asm stub loads them into registers and calls.
-  // Layout must have deterministic offsets — see constants below.
-  {$PUSH}{$PACKRECORDS 8}
-  TGocciaFFICallState = record
-    FuncPtr:  CodePointer;              // 64-bit offset   0 | 32-bit offset   0
-    GprCount: Integer;                  // 64-bit offset   8 | 32-bit offset   4
-    FprCount: Integer;                  // 64-bit offset  12 | 32-bit offset   8
-    Gpr:      array[0..7] of PtrInt;    // 64-bit offset  16 | 32-bit offset  12
-    Fpr:      array[0..7] of Double;    // 64-bit offset  80 | 32-bit offset  48
-    RetInt:   PtrInt;                   // 64-bit offset 144 | 32-bit offset 112
-    RetFloat: Double;                   // 64-bit offset 152 | 32-bit offset 120
-    // i386 trampoline: pre-packed stack args (max 8 args x 8 bytes + padding)
-    StackBuf:      array[0..79] of Byte; // 32-bit offset 128
-    StackSize:     Integer;              // 32-bit offset 208
-    ReturnIsFloat: Boolean;              // 32-bit offset 212
-  end;
-  {$POP}
 
 const
   MAX_FFI_ARGS = 8;
@@ -145,7 +129,7 @@ const
   FFI_TYPE_F32     = 'f32';
   FFI_TYPE_F64     = 'f64';
   FFI_TYPE_POINTER = 'pointer';
-  FFI_TYPE_CSTRING = 'cstring';
+  FFI_TYPE_UTF8STRING = 'utf8string';
 
 function ParseFFIType(const AName: string): TGocciaFFIType;
 function FFITypeName(const AType: TGocciaFFIType): string;
@@ -169,7 +153,7 @@ begin
       Result := 4;
     fftI64, fftU64, fftF64:
       Result := 8;
-    fftPointer, fftCString:
+    fftPointer, fftUTF8String:
       Result := SizeOf(Pointer);
   else
     Result := 0;
@@ -462,7 +446,7 @@ begin
   else if AName = FFI_TYPE_F32 then Result := fftF32
   else if AName = FFI_TYPE_F64 then Result := fftF64
   else if AName = FFI_TYPE_POINTER then Result := fftPointer
-  else if AName = FFI_TYPE_CSTRING then Result := fftCString
+  else if AName = FFI_TYPE_UTF8STRING then Result := fftUTF8String
   else
     Result := fftVoid;
 end;
@@ -483,7 +467,7 @@ begin
     fftF32: Result := FFI_TYPE_F32;
     fftF64: Result := FFI_TYPE_F64;
     fftPointer: Result := FFI_TYPE_POINTER;
-    fftCString: Result := FFI_TYPE_CSTRING;
+    fftUTF8String: Result := FFI_TYPE_UTF8STRING;
   else
     Result := FFI_TYPE_VOID;
   end;
@@ -525,7 +509,7 @@ begin
     Exit;
   end;
 
-  {$IFNDEF CPU64}
+  {$IF not (defined(GOCCIA_CPU_64))}
   for I := 0 to ASignature.ArgCount - 1 do
     if ASignature.ArgTypes[I] in [fftI64, fftU64] then
     begin

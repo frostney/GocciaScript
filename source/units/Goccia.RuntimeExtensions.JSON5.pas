@@ -26,9 +26,9 @@ type
     function TryLoadModule(const AResolvedPath: string;
       out AModule: TGocciaModule): Boolean; override;
     function TryInjectGlobals(const AFormat: string;
-      const AContent: UTF8String): Boolean; override;
+      const AContent: string): Boolean; override;
     function TryInjectModules(const AFormat: string;
-      const AContent: UTF8String; const ABaseAddress: string): Boolean; override;
+      const AContent: string; const ABaseAddress: string): Boolean; override;
   end;
 
 implementation
@@ -139,7 +139,7 @@ begin
 end;
 
 function TGocciaJSON5RuntimeExtension.TryInjectGlobals(
-  const AFormat: string; const AContent: UTF8String): Boolean;
+  const AFormat: string; const AContent: string): Boolean;
 var
   JSON5Parser: TGocciaJSON5Parser;
   ParsedValue: TGocciaValue;
@@ -167,7 +167,7 @@ begin
 end;
 
 function TGocciaJSON5RuntimeExtension.TryInjectModules(
-  const AFormat: string; const AContent: UTF8String;
+  const AFormat: string; const AContent: string;
   const ABaseAddress: string): Boolean;
 var
   JSON5Parser: TGocciaJSON5Parser;

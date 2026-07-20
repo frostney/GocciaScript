@@ -172,7 +172,7 @@ end;
 
 begin
   TestRunnerProgram.AddSuite(TTestOrderedStringMap.Create('OrderedStringMap'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
 
   ExitCode := TestResultToExitCode;
 end.

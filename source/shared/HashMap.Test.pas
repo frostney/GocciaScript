@@ -64,7 +64,7 @@ type
     { ForEach }
     procedure TestForEachVisitsAllEntries;
 
-    { QWord keys (exercises 8-byte hash branch) }
+    { UInt64 keys (exercises 8-byte hash branch) }
     procedure TestQWordKeys;
 
     { Stress }
@@ -133,8 +133,8 @@ begin
   { ForEach }
   Test('ForEach visits all entries', TestForEachVisitsAllEntries);
 
-  { QWord keys }
-  Test('QWord keys use 8-byte hash branch', TestQWordKeys);
+  { UInt64 keys }
+  Test('UInt64 keys use 8-byte hash branch', TestQWordKeys);
 
   { Stress }
   Test('Stress: add many, remove half, verify remaining', TestStressAddRemoveVerify);
@@ -757,19 +757,19 @@ begin
   end;
 end;
 
-{ ── QWord keys ───────────────────────────────────────────────────── }
+{ ── UInt64 keys ───────────────────────────────────────────────────── }
 
 procedure THashMapTests.TestQWordKeys;
 var
-  Map: THashMap<QWord, string>;
+  Map: THashMap<UInt64, string>;
   V: string;
-  K1, K2, K3: QWord;
+  K1, K2, K3: UInt64;
 begin
-  Map := THashMap<QWord, string>.Create;
+  Map := THashMap<UInt64, string>.Create;
   try
-    K1 := QWord(1) shl 40;
-    K2 := QWord(1) shl 40 + 1;
-    K3 := QWord(High(Cardinal)) + 1;
+    K1 := UInt64(1) shl 40;
+    K2 := UInt64(1) shl 40 + 1;
+    K3 := UInt64(High(Cardinal)) + 1;
     Map.Add(K1, 'a');
     Map.Add(K2, 'b');
     Map.Add(K3, 'c');

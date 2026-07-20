@@ -91,9 +91,10 @@ uses
 var
   GIntlDurationFormatSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetIntlDurationFormatShared: TGocciaSharedPrototype; inline;
+function GetIntlDurationFormatShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlDurationFormatSharedSlot))
   else
     Result := nil;
@@ -113,7 +114,7 @@ end;
 
 function DurationFormatLocaleArgumentToLocale(const AArg: TGocciaValue): string;
 var
-  RequestedLocales: TStringArray;
+  RequestedLocales: IntlTypes.TStringArray;
 begin
   RequestedLocales := CanonicalizeLocaleListFromValue(AArg);
   Result := ResolveRequestedLocale(RequestedLocales);
@@ -748,7 +749,7 @@ begin
   ResolveDurationNumberingSystem(Self);
 
   InitializePrototype;
-  if Assigned(GetIntlDurationFormatShared) then
+  if (GetIntlDurationFormatShared <> nil) then
     FPrototype := GetIntlDurationFormatShared.Prototype;
 end;
 
@@ -1302,8 +1303,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetIntlDurationFormatShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetIntlDurationFormatShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlDurationFormatSharedSlot, Shared);

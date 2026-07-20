@@ -433,7 +433,12 @@ Unlike the YAML script, this harness compares both parse/fail behavior and the o
 
 The TOML runner exits non-zero when any case fails or times out, so it is safe to use directly in CI. When `--harness` is omitted it compiles `scripts/GocciaTOMLCheck.dpr` automatically; CI uses a prebuilt harness from the matrix build artifacts instead.
 
-The harness and any file-backed parser regression must read source text as UTF-8 bytes first and only then hand it to the parser. In this codebase, `{$mode delphi}` + `{$H+}` means plain `string` is an `AnsiString` alias with the default/system code page, while `UTF8String` is the explicit `AnsiString(CP_UTF8)` variant. That means a plain `string` temporary is not a “Unicode string that happens to contain UTF-8”; it is a separate ansistring type that may retag or transcode the bytes. On Windows this commonly shows up as mojibake such as `José -> JosÃ©` or Unicode TOML keys no longer matching. Keep raw file-backed TOML text as `UTF8String` until `TGocciaTOMLParser.Parse(...)` / `ParseDocument(...)` receives it.
+The harness and any file-backed parser regression must read source text as
+UTF-8 bytes first and decode it strictly before handing UTF-16 text to the
+parser. Do not place encoded bytes in a Pascal string or rely on compiler code
+pages. The shared `TextEncoding` and `FileUtils` boundaries keep behavior
+identical on Windows and non-Windows hosts and prevent mojibake such as
+`José -> JosÃ©`.
 
 **Official JSON5 Suite**
 

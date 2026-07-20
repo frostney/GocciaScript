@@ -259,7 +259,7 @@ begin
 
   // Step 1: Let obj be ? ToObject(O)
   Obj := ToObject(AArgs.GetElement(0));
-  if Assigned(TGarbageCollector.Instance) and
+  if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
   try
@@ -280,7 +280,7 @@ begin
 
     Result := Keys;
   finally
-    if Assigned(TGarbageCollector.Instance) and
+    if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
@@ -299,7 +299,7 @@ begin
 
   // Step 1: Let obj be ? ToObject(O)
   Obj := ToObject(AArgs.GetElement(0));
-  if Assigned(TGarbageCollector.Instance) and
+  if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
   try
@@ -320,7 +320,7 @@ begin
 
     Result := Values;
   finally
-    if Assigned(TGarbageCollector.Instance) and
+    if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
@@ -340,7 +340,7 @@ begin
 
   // Step 1: Let obj be ? ToObject(O)
   Obj := ToObject(AArgs.GetElement(0));
-  if Assigned(TGarbageCollector.Instance) and
+  if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
   try
@@ -366,7 +366,7 @@ begin
 
     Result := Entries;
   finally
-    if Assigned(TGarbageCollector.Instance) and
+    if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
@@ -581,7 +581,7 @@ begin
   end;
 
   Obj := ToObject(AArgs.GetElement(0));
-  if Assigned(TGarbageCollector.Instance) and
+  if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
   try
@@ -603,7 +603,7 @@ begin
         Result := TGocciaBooleanLiteralValue.FalseValue;
     end;
   finally
-    if Assigned(TGarbageCollector.Instance) and
+    if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
@@ -621,7 +621,7 @@ begin
 
   // Step 1: Let obj be ? ToObject(O)
   Obj := ToObject(AArgs.GetElement(0));
-  if Assigned(TGarbageCollector.Instance) and
+  if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
   try
@@ -634,7 +634,7 @@ begin
 
     Result := Names;
   finally
-    if Assigned(TGarbageCollector.Instance) and
+    if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
@@ -652,7 +652,7 @@ begin
 
   // Step 1: Let obj be ? ToObject(O)
   Obj := ToObject(AArgs.GetElement(0));
-  if Assigned(TGarbageCollector.Instance) and
+  if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
   try
@@ -669,7 +669,7 @@ begin
     else
       Result := FromPropertyDescriptor(Descriptor);
   finally
-    if Assigned(TGarbageCollector.Instance) and
+    if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
@@ -690,7 +690,7 @@ begin
 
   // Step 1: Let obj be ? ToObject(O)
   Obj := ToObject(AArgs.GetElement(0));
-  if Assigned(TGarbageCollector.Instance) and
+  if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
   try
@@ -741,7 +741,7 @@ begin
     // Step 5: Return descriptors
     Result := Descriptors;
   finally
-    if Assigned(TGarbageCollector.Instance) and
+    if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
@@ -933,7 +933,7 @@ begin
 
   // Step 1: Let obj be ? ToObject(O)
   Obj := ToObject(AArgs.GetElement(0));
-  if Assigned(TGarbageCollector.Instance) and
+  if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
   try
@@ -946,7 +946,7 @@ begin
 
     Result := Arr;
   finally
-    if Assigned(TGarbageCollector.Instance) and
+    if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
@@ -1015,7 +1015,7 @@ begin
   else
     Arg := TGocciaUndefinedLiteralValue.UndefinedValue;
   Obj := ToObject(Arg);
-  if Assigned(TGarbageCollector.Instance) and
+  if (TGarbageCollector.Instance <> nil) and
      not (Arg is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
   try
@@ -1032,7 +1032,7 @@ begin
     else
       Result := TGocciaNullLiteralValue.NullValue;
   finally
-    if Assigned(TGarbageCollector.Instance) and
+    if (TGarbageCollector.Instance <> nil) and
        not (Arg is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;

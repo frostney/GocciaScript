@@ -80,7 +80,8 @@ type
   public
     constructor Create(const AValue: Boolean);
 
-    class function FromBoolean(const AValue: Boolean): TGocciaBooleanLiteralValue; static; inline;
+    class function FromBoolean(const AValue: Boolean): TGocciaBooleanLiteralValue; static;
+    {$IFDEF FPC}inline;{$ENDIF}
     class function TrueValue: TGocciaBooleanLiteralValue;
     class function FalseValue: TGocciaBooleanLiteralValue;
 
@@ -100,11 +101,16 @@ type
   private
     FValue: Double;
 
-    function GetIsNaN: Boolean; inline;
-    function GetIsNegativeZero: Boolean; inline;
-    function GetIsInfinity: Boolean; inline;
-    function GetIsNegativeInfinity: Boolean; inline;
-    function GetIsInfinite: Boolean; inline;
+    function GetIsNaN: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetIsNegativeZero: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetIsInfinity: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetIsNegativeInfinity: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function GetIsInfinite: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
 
     class var FZeroValue: TGocciaNumberLiteralValue;
     class var FOneValue: TGocciaNumberLiteralValue;
@@ -146,7 +152,6 @@ type
     FValue: string;
   public
     constructor Create(const AValue: string);
-    class function FromUTF8(const AValue: UTF8String): TGocciaStringLiteralValue;
 
     function IsPrimitive: Boolean; override;
     function TypeName: string; override;
@@ -172,6 +177,7 @@ implementation
 uses
   Math,
 
+  NumberBits,
   NumericText,
   TextSemantics,
 
@@ -185,187 +191,15 @@ uses
   Goccia.Timeout,
   Goccia.Values.ErrorHelper;
 
-const
-  MAX_SAFE_INTEGER_VALUE = 9007199254740991.0;
-
 function InvariantFormatSettings: TFormatSettings;
 begin
-  Result := DefaultFormatSettings;
-  Result.DecimalSeparator := '.';
+  Result := CreateInvariantFormatSettings;
 end;
 
 // ES2026 §6.1.6.1.20 Number::toString(x)
 function FormatDouble(AValue: Double): string;
-
-  procedure FormatES(const AMantissa: string; AK, AN: Integer; ANeg: Boolean;
-    out AResult: string);
-  begin
-    // Step 7: k <= n <= 21 — integer with trailing zeros
-    if (AK <= AN) and (AN <= 21) then
-      AResult := AMantissa + StringOfChar('0', AN - AK)
-    // Step 8: 0 < n <= 21 (and n < k) — decimal within digits
-    else if (0 < AN) and (AN <= 21) then
-      AResult := Copy(AMantissa, 1, AN) + '.' + Copy(AMantissa, AN + 1, AK - AN)
-    // Step 9: -6 < n <= 0 — leading zeros after "0."
-    else if (AN > -6) and (AN <= 0) then
-      AResult := '0.' + StringOfChar('0', -AN) + AMantissa
-    // Steps 10-11: scientific notation
-    else if AK = 1 then
-    begin
-      if AN - 1 > 0 then
-        AResult := AMantissa + 'e+' + IntToStr(AN - 1)
-      else
-        AResult := AMantissa + 'e-' + IntToStr(1 - AN);
-    end
-    else
-    begin
-      if AN - 1 > 0 then
-        AResult := AMantissa[1] + '.' + Copy(AMantissa, 2, AK - 1) + 'e+' + IntToStr(AN - 1)
-      else
-        AResult := AMantissa[1] + '.' + Copy(AMantissa, 2, AK - 1) + 'e-' + IntToStr(1 - AN);
-    end;
-
-    if ANeg then
-      AResult := '-' + AResult;
-  end;
-
-var
-  IsNeg: Boolean;
-  SciStr, Mantissa, TestStr: string;
-{$IFDEF LAKON}
-  // Lakon retired ShortString (LK-RETIRED R3); its one string type is
-  // managed UTF-16, and its Str/Val are the FPC-exact flt_core port,
-  // so the fixed buffer degrades to a plain string with identical
-  // bytes (the leading-space strip and Val round-trip are unchanged).
-  Buf: string;
-{$ELSE}
-  Buf: ShortString;
-{$ENDIF}
-  Exp, N, K, I, W, EPos, D, Code: Integer;
-  Parsed: Double;
-  FS: TFormatSettings;
 begin
-  if IsNan(AValue) then
-    Exit('NaN');
-  if IsInfinite(AValue) then
-  begin
-    if AValue > 0 then
-      Exit('Infinity')
-    else
-      Exit('-Infinity');
-  end;
-
-  if AValue = 0 then
-    Exit('0');
-
-  IsNeg := AValue < 0;
-  if IsNeg then
-    AValue := -AValue;
-
-  // Fast path: safe integers (all digits exact, n <= 16 <= 21)
-  if (Frac(AValue) = 0) and (AValue <= MAX_SAFE_INTEGER_VALUE) then
-  begin
-    Str(AValue:0:0, Result);
-    if IsNeg then
-      Result := '-' + Result;
-    Exit;
-  end;
-
-  FS := DefaultFormatSettings;
-  FS.DecimalSeparator := '.';
-
-  // Probe k=1 (single significant digit). Str(V:9) always outputs at
-  // least 2 significant digits ("d.dE+ddd"), so we round the 2-digit
-  // mantissa to 1 digit and check round-trip. This handles cases like
-  // Number.MIN_VALUE whose shortest representation is "5e-324".
-  Str(AValue:9, SciStr);
-  SciStr := Trim(SciStr);
-  EPos := Pos('E', SciStr);
-  Exp := StrToInt(Copy(SciStr, EPos + 1, Length(SciStr) - EPos));
-
-  D := Ord(SciStr[1]) - Ord('0');
-  if SciStr[3] >= '5' then
-    Inc(D);
-  if D >= 10 then
-  begin
-    D := 1;
-    Inc(Exp);
-  end;
-
-  TestStr := IntToStr(D) + 'E' + IntToStr(Exp);
-  if TryStrToFloat(TestStr, Parsed, FS) and (Parsed = AValue) then
-  begin
-    N := Exp + 1;
-    FormatES(IntToStr(D), 1, N, IsNeg, Result);
-    Exit;
-  end;
-
-  // General case: find the shortest round-tripping representation by scanning
-  // precision upward and taking the FIRST width that parses back exactly.
-  // Str(V:W) emits scientific notation with (W - 7) significant digits (doubles
-  // always have a 3-digit decimal exponent); W=9 gives the minimum (2 sig
-  // digits), W=24 the maximum (17, which always round-trips).
-  //
-  // This scan must stay first-hit-from-the-bottom; it must NOT be replaced with
-  // a binary search or any probe-skipping scheme. FPC Str is not correctly
-  // rounded at every width, so the "parses back exactly" predicate is not
-  // monotonic in W. The first hit is still the shortest and spec-correct, but a
-  // binary search can converge above it and emit a non-shortest string,
-  // violating "k as small as possible" in ES2026 Number::toString. See
-  // docs/adr/0080-formatdouble-first-hit-precision-scan.md.
-  //
-  // Each probe reads Str into a fixed ShortString and parses with the
-  // locale-free Val instead of Trim + TryStrToFloat. Val selects the same width
-  // here (verified byte-for-byte over 74.9M doubles) while avoiding both the
-  // per-iteration heap allocation and the TFormatSettings scan; this is ~1.4x
-  // faster end-to-end on float-stringify-heavy workloads (see ADR 0080).
-  for W := 9 to 24 do
-  begin
-    Str(AValue:W, Buf);
-
-    // Str right-justifies within width W; AValue is positive here, so the only
-    // padding is leading spaces. Strip them in place (no heap allocation) before
-    // parsing: this keeps the round-trip test independent of how Val treats
-    // leading blanks, and leaves Buf ready for the mantissa extraction on a hit.
-    if (Length(Buf) > 0) and (Buf[1] = ' ') then
-    begin
-      I := 2;
-      while (I <= Length(Buf)) and (Buf[I] = ' ') do
-        Inc(I);
-      Delete(Buf, 1, I - 1);
-    end;
-
-    Val(Buf, Parsed, Code);
-    if (Code = 0) and (Parsed = AValue) then
-    begin
-      SciStr := Buf;
-      EPos := Pos('E', SciStr);
-      Mantissa := Copy(SciStr, 1, EPos - 1);
-      Exp := StrToInt(Copy(SciStr, EPos + 1, Length(SciStr) - EPos));
-      N := Exp + 1;
-
-      // Remove decimal point from mantissa
-      I := Pos('.', Mantissa);
-      if I > 0 then
-        Delete(Mantissa, I, 1);
-
-      // Strip trailing zeros
-      I := Length(Mantissa);
-      while (I > 1) and (Mantissa[I] = '0') do
-        Dec(I);
-      SetLength(Mantissa, I);
-      K := Length(Mantissa);
-
-      FormatES(Mantissa, K, N, IsNeg, Result);
-      Exit;
-    end;
-  end;
-
-  // Fallback (unreachable for valid finite doubles — 17 sig digits always
-  // suffice). Use FloatToStr as a safety net.
-  Result := FloatToStr(AValue, FS);
-  if IsNeg then
-    Result := '-' + Result;
+  Result := NumberToString(AValue);
 end;
 
 { TGocciaValue }
@@ -393,7 +227,7 @@ begin
       end;
     end;
   end;
-  if GProfilingAllocations and Assigned(TGocciaProfiler.Instance) then
+  if GProfilingAllocations and (TGocciaProfiler.Instance <> nil) then
     TGocciaProfiler.Instance.RecordAllocation;
   CheckExecutionTimeout;
   CheckInstructionLimit;
@@ -440,7 +274,7 @@ end;
 
 procedure PinPrimitiveSingletons;
 begin
-  if not Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance = nil) then
     Exit;
 
   TGarbageCollector.Instance.PinObject(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -582,7 +416,8 @@ begin
 end;
 
 class function TGocciaBooleanLiteralValue.FromBoolean(
-  const AValue: Boolean): TGocciaBooleanLiteralValue; inline;
+  const AValue: Boolean): TGocciaBooleanLiteralValue;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   if AValue then
     Result := TrueValue
@@ -648,12 +483,8 @@ begin
 end;
 
 function TGocciaNumberLiteralValue.GetIsNegativeZero: Boolean;
-var
-  V: Double;
-  Bits: Int64 absolute V;
 begin
-  V := FValue;
-  Result := (V = ZERO_VALUE) and (Bits < 0);
+  Result := NumberBits.IsNegativeZero(FValue);
 end;
 
 function TGocciaNumberLiteralValue.GetIsInfinity: Boolean;
@@ -805,15 +636,6 @@ end;
 constructor TGocciaStringLiteralValue.Create(const AValue: string);
 begin
   FValue := AValue;
-end;
-
-class function TGocciaStringLiteralValue.FromUTF8(
-  const AValue: UTF8String): TGocciaStringLiteralValue;
-var
-  UTF8Bytes: RawByteString;
-begin
-  UTF8Bytes := AValue;
-  Result := TGocciaStringLiteralValue.Create(RetagUTF8Text(UTF8Bytes));
 end;
 
 function TGocciaStringLiteralValue.TypeName: string;

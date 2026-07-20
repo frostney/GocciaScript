@@ -19,11 +19,16 @@ type
     // Helper methods for reducing duplication
     function ValidateArrayMethodCall(const AMethodName: string; const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue; const ARequiresCallback: Boolean = True): TGocciaValue;
-    function IsArrayHole(const AElement: TGocciaValue): Boolean; inline;
+    function IsArrayHole(const AElement: TGocciaValue): Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
 
-    procedure ThrowError(const AMessage: string; const AArgs: array of const); overload; inline;
-    procedure ThrowError(const AMessage: string); overload; inline;
-    procedure ThrowError(const AMessage: string; const AArgs: array of const; const ASuggestion: string); overload; inline;
+    procedure ThrowError(const AMessage: string; const AArgs: array of const); overload;
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure ThrowError(const AMessage: string); overload;
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure ThrowError(const AMessage: string; const AArgs: array of const;
+      const ASuggestion: string); overload;
+      {$IFDEF FPC}inline;{$ENDIF}
   protected
     FElements: TGocciaValueList;
     FLength: Int64;
@@ -107,7 +112,8 @@ type
     function GetLengthProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-  function DefaultCompare(constref A, B: TGocciaValue): Integer;
+  function DefaultCompare(
+    {$IFDEF FPC}constref{$ELSE}const{$ENDIF} A, B: TGocciaValue): Integer;
   function GetSharedArrayPrototypeForRealm(const ARealm: TGocciaRealm): TGocciaObjectValue;
 
 implementation
@@ -154,9 +160,10 @@ var
   GArrayPrototypeSlot: TGocciaRealmSlotId;
   GArrayMethodHostSlot: TGocciaRealmSlotId;
 
-function GetSharedArrayPrototype: TGocciaObjectValue; inline;
+function GetSharedArrayPrototype: TGocciaObjectValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GArrayPrototypeSlot))
   else
     Result := nil;
@@ -223,7 +230,8 @@ type
 function CollectSparseIndicesInRange(const AObj: TGocciaObjectValue;
   const AStartInclusive, AEndExclusive: Int64): TArray<Int64>; forward;
 
-function GetArrayCallbackThisArg(const AArgs: TGocciaArgumentsCollection): TGocciaValue; inline;
+function GetArrayCallbackThisArg(const AArgs: TGocciaArgumentsCollection): TGocciaValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   if AArgs.Length > 1 then
     Result := AArgs.GetElement(1)
@@ -234,7 +242,8 @@ end;
 function InvokeArrayCallback(const ACallback: TGocciaValue;
   const ATypedCallback: TGocciaFunctionBase;
   const ACallArgs: TGocciaArgumentsCollection;
-  const AThisArg: TGocciaValue): TGocciaValue; inline;
+  const AThisArg: TGocciaValue): TGocciaValue;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   PreviousContinuation: TGocciaGeneratorContinuation;
   CallbackRoot, ThisRoot: TGocciaTempRoot;
@@ -488,7 +497,8 @@ begin
     Obj.AssignProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(ANewLen));
 end;
 
-function DefaultCompare(constref A, B: TGocciaValue): Integer;
+function DefaultCompare(
+  {$IFDEF FPC}constref{$ELSE}const{$ENDIF} A, B: TGocciaValue): Integer;
 var
   StrA, StrB: string;
 begin
@@ -563,7 +573,8 @@ begin
     (AIndex <= Int64(ACurrentCount) + MAX_DENSE_EXTENSION_GAP);
 end;
 
-function CompareInt64(constref A, B: Int64): Integer;
+function CompareInt64(
+  {$IFDEF FPC}constref{$ELSE}const{$ENDIF} A, B: Int64): Integer;
 begin
   if A < B then Result := -1
   else if A > B then Result := 1
@@ -1127,8 +1138,8 @@ begin
   // creating BigInt singletons before SetCurrentRealm runs on the engine).
   // Skip prototype init: the constructor will run again once the realm is
   // installed and there's something to bind to.
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetSharedArrayPrototype) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetSharedArrayPrototype <> nil) then Exit;
 
   SharedPrototype := Self;
   CurrentRealm.SetSlot(GArrayPrototypeSlot, SharedPrototype);

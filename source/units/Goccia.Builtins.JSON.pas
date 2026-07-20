@@ -338,7 +338,7 @@ begin
 
   // Step 3: Parse jsonString as a JSON text. Throw SyntaxError if invalid.
   try
-    Parsed := FParser.Parse(UTF8String(JSONString));
+    Parsed := FParser.Parse(JSONString);
   except
     on E: Exception do
       ThrowSyntaxError(Format(SErrorJSONRawJSONInvalid, [E.Message]), SSuggestJSONFormat);

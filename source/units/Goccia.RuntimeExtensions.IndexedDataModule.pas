@@ -13,7 +13,7 @@ type
   TGocciaIndexedDataModuleRuntimeExtension = class(TGocciaRuntimeExtension)
   protected
     function MatchesModulePath(const AResolvedPath: string): Boolean; virtual; abstract;
-    function ParseModuleRecords(const AContent: UTF8String;
+    function ParseModuleRecords(const AContent: string;
       const AResolvedPath: string): TGocciaArrayValue; virtual; abstract;
   public
     function TryLoadModule(const AResolvedPath: string;

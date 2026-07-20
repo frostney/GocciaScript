@@ -70,7 +70,7 @@ begin
   Members := TGocciaMemberCollection.Create;
   ToStringTag := TGocciaStringLiteralValue.Create(AEnum.Name);
   try
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.AddTempRoot(ToStringTag);
     try
       Members.AddSymbolMethod(
@@ -81,7 +81,7 @@ begin
         ToStringTag, []);
       RegisterMemberDefinitions(AEnum, Members.ToDefinitions);
     finally
-      if Assigned(TGarbageCollector.Instance) then
+      if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.RemoveTempRoot(ToStringTag);
     end;
   finally

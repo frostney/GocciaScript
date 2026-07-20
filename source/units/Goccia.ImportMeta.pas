@@ -82,7 +82,7 @@ destructor TGocciaImportMetaCache.Destroy;
 var
   I: Integer;
 begin
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     for I := 0 to FPinnedCount - 1 do
       TGarbageCollector.Instance.UnpinObject(FPinnedObjects[I]);
   FPinnedObjects := nil;
@@ -92,7 +92,7 @@ end;
 
 procedure TGocciaImportMetaCache.Pin(const AObject: TGCManagedObject);
 begin
-  if not Assigned(AObject) or not Assigned(TGarbageCollector.Instance) then
+  if not Assigned(AObject) or (TGarbageCollector.Instance = nil) then
     Exit;
   TGarbageCollector.Instance.PinObject(AObject);
   if FPinnedCount >= Length(FPinnedObjects) then
@@ -143,7 +143,7 @@ end;
 
 function HasScheme(const AValue: string): Boolean;
 var
-  ColonPosition, SlashPosition: SizeInt;
+  ColonPosition, SlashPosition: NativeInt;
 begin
   ColonPosition := Pos(':', AValue);
   SlashPosition := Pos('/', AValue);

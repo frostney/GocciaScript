@@ -31,4 +31,13 @@ describe("Number.parseFloat", () => {
     expect(Number.parseFloat("-Infinity")).toBe(-Infinity);
     expect(Number.parseFloat("  Infinity  ")).toBe(Infinity);
   });
+
+  test("rounds the longest decimal prefix directly to binary64", () => {
+    expect(Number.parseFloat("0.30000000000000004tail")).toBe(0.1 + 0.2);
+    expect(Number.parseFloat("9007199254740993tail")).toBe(9007199254740992);
+    expect(Number.parseFloat("2.4703282292062327e-324tail")).toBe(0);
+    expect(Number.parseFloat("2.4703282292062328e-324tail")).toBe(Number.MIN_VALUE);
+    expect(Number.parseFloat("1.7976931348623158e308tail")).toBe(Number.MAX_VALUE);
+    expect(Number.parseFloat("1.7976931348623159e308tail")).toBe(Infinity);
+  });
 });

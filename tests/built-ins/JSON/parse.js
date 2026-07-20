@@ -11,6 +11,15 @@ test("JSON.parse basic values", () => {
   expect(JSON.parse("null")).toBeNull();
 });
 
+test("JSON.parse rounds decimal numbers directly to binary64", () => {
+  expect(JSON.parse("0.30000000000000004")).toBe(0.1 + 0.2);
+  expect(JSON.parse("9007199254740993")).toBe(9007199254740992);
+  expect(JSON.parse("2.4703282292062327e-324")).toBe(0);
+  expect(JSON.parse("2.4703282292062328e-324")).toBe(Number.MIN_VALUE);
+  expect(JSON.parse("1.7976931348623158e308")).toBe(Number.MAX_VALUE);
+  expect(JSON.parse("1.7976931348623159e308")).toBe(Infinity);
+});
+
 test("JSON.parse has the spec function length", () => {
   expect(JSON.parse.length).toBe(2);
   const descriptor = Object.getOwnPropertyDescriptor(JSON.parse, "length");

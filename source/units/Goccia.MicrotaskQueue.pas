@@ -536,7 +536,7 @@ begin
     finally
       RemoveQueuedRoots(Task);
       PumpAtomicsWaitAsyncCompletions;
-      if Assigned(TGarbageCollector.Instance) then
+      if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.ClearKeptObjects;
     end;
     CompactQueueIfEmpty;
@@ -554,7 +554,7 @@ begin
     finally
       RemoveQueuedRoots(Task);
       PumpAtomicsWaitAsyncCompletions;
-      if Assigned(TGarbageCollector.Instance) then
+      if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.ClearKeptObjects;
     end;
     CompactFinalizationQueueIfEmpty;
@@ -595,7 +595,7 @@ begin
       finally
         RemoveQueuedRoots(Task);
         PumpAtomicsWaitAsyncCompletions;
-        if Assigned(TGarbageCollector.Instance) then
+        if (TGarbageCollector.Instance <> nil) then
           TGarbageCollector.Instance.ClearKeptObjects;
       end;
     end;
@@ -612,7 +612,7 @@ begin
       finally
         RemoveQueuedRoots(Task);
         PumpAtomicsWaitAsyncCompletions;
-        if Assigned(TGarbageCollector.Instance) then
+        if (TGarbageCollector.Instance <> nil) then
           TGarbageCollector.Instance.ClearKeptObjects;
       end;
       CompactFinalizationQueueIfEmpty;

@@ -15,7 +15,8 @@ const
   ANSI_RESET = #27'[0m';
 
 function IsColorTerminal: Boolean;
-function Colorize(const AText, AColor: string; const AUseColor: Boolean): string; inline;
+function Colorize(const AText, AColor: string; const AUseColor: Boolean): string;
+{$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 

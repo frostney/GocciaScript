@@ -68,8 +68,8 @@ const
   DOUBLE_EXPONENT_BIAS = 1023;
   DOUBLE_EXPONENT_BITS_MASK = $7FF;
   DOUBLE_FRACTION_BITS = 52;
-  DOUBLE_FRACTION_BITS_MASK: QWord = $000FFFFFFFFFFFFF;
-  DOUBLE_HIDDEN_BIT: QWord = $0010000000000000;
+  DOUBLE_FRACTION_BITS_MASK: UInt64 = $000FFFFFFFFFFFFF;
+  DOUBLE_HIDDEN_BIT: UInt64 = $0010000000000000;
   DECIMAL_EXPONENT_FIXED_THRESHOLD = -6;
   DECIMAL_RADIX = 10;
 
@@ -123,8 +123,8 @@ procedure PositiveDoubleToBinaryRational(const AValue: Double;
   out ANumerator, ADenominator: TBigInteger);
 var
   BinaryExponent: Integer;
-  Bits, Mantissa: QWord;
-  ExponentBits: QWord;
+  Bits, Mantissa: UInt64;
+  ExponentBits: UInt64;
 begin
   Move(AValue, Bits, SizeOf(Bits));
   ExponentBits := (Bits shr DOUBLE_FRACTION_BITS) and DOUBLE_EXPONENT_BITS_MASK;
@@ -383,9 +383,10 @@ begin
   Result := Sign + Mantissa + 'e' + ExponentSign + IntToStr(Exponent);
 end;
 
-function GetSharedNumberPrototype: TGocciaObjectValue; inline;
+function GetSharedNumberPrototype: TGocciaObjectValue;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GNumberPrototypeSlot))
   else
     Result := nil;
@@ -431,8 +432,8 @@ var
   SharedPrototype: TGocciaObjectValue;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetSharedNumberPrototype) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetSharedNumberPrototype <> nil) then Exit;
 
   SharedPrototype := Self;
   SharedPrototype.Prototype := TGocciaObjectValue.SharedObjectPrototype;
@@ -456,7 +457,7 @@ end;
 
 class function TGocciaNumberObjectValue.GetSharedPrototype: TGocciaObjectValue;
 begin
-  if not Assigned(GetSharedNumberPrototype) then
+  if (GetSharedNumberPrototype = nil) then
     TGocciaNumberObjectValue.Create(TGocciaNumberLiteralValue.ZeroValue);
   Result := GetSharedNumberPrototype;
 end;

@@ -89,6 +89,7 @@ uses
 
   FileUtils,
   JSONParser,
+  NumericText,
   TextSemantics;
 
 { ── Parser registry ────────────────────────────────────────── }
@@ -129,7 +130,10 @@ begin
   LowerExt := LowerCase(AExtension);
   for I := 0 to High(GParserRegistry) do
     if GParserRegistry[I].Extension = LowerExt then
-      Exit(GParserRegistry[I].Parser);
+    begin
+      Result := GParserRegistry[I].Parser;
+      Exit;
+    end;
   Result := nil;
 end;
 
@@ -181,11 +185,19 @@ end;
 procedure TConfigJSONParser.OnBoolean(const AValue: Boolean);
 begin
   if FDepth = 1 then
-    AddEntry(BoolToStr(AValue, 'true', 'false'));
+  begin
+    if AValue then
+      AddEntry('true')
+    else
+      AddEntry('false');
+  end;
   if FInTopArray and (FDepth = 2) then
   begin
     FArrayHadElements := True;
-    AddEntry(BoolToStr(AValue, 'true', 'false'));
+    if AValue then
+      AddEntry('true')
+    else
+      AddEntry('false');
   end;
 end;
 
@@ -215,8 +227,7 @@ procedure TConfigJSONParser.OnFloat(const AValue: Double);
 var
   FormatSettings: TFormatSettings;
 begin
-  FormatSettings := DefaultFormatSettings;
-  FormatSettings.DecimalSeparator := '.';
+  FormatSettings := CreateInvariantFormatSettings;
   if FDepth = 1 then
     AddEntry(FloatToStr(AValue, FormatSettings))
   else if FInTopArray and (FDepth = 2) then
@@ -366,11 +377,8 @@ end;
 { ── Load and parse a config file ───────────────────────────── }
 
 function ReadFileContent(const APath: string): string;
-var
-  Content: UTF8String;
 begin
-  Content := ReadUTF8FileText(APath);
-  Result := RetagUTF8Text(RawByteString(Content));
+  Result := ReadUTF8FileText(APath);
 end;
 
 function ResolveParser(const AExtension: string): TConfigParseFunc;

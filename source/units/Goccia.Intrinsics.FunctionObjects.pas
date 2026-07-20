@@ -125,7 +125,7 @@ end;
 
 class function TGocciaFunctionObjectIntrinsics.Ensure: TGocciaFunctionObjectIntrinsics;
 begin
-  if not Assigned(CurrentRealm) then
+  if (CurrentRealm = nil) then
     raise Exception.Create('Function object intrinsics require an active realm');
 
   Result := TGocciaFunctionObjectIntrinsics(

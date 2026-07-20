@@ -237,7 +237,7 @@ begin
 
   // Perform the request
   Promise := TGocciaPromiseValue.Create;
-  if not Assigned(TGocciaFetchManager.Instance) then
+  if (TGocciaFetchManager.Instance = nil) then
     TGocciaFetchManager.Initialize;
   if Assigned(FCapabilityAuditEmitter) then
     FCapabilityAuditEmitter(gckFetchDispatch, gcdAllow, URLStr,

@@ -4,6 +4,7 @@ program Goccia.Threading.Test;
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
+  CriticalSections,
   Classes,
   SysUtils,
 
@@ -39,7 +40,7 @@ type
 var
   GWorkerCallCount: Integer;
   GWorkerFileNames: array of string;
-  GWorkerLock: TRTLCriticalSection;
+  GWorkerLock: TGocciaCriticalSection;
 
 procedure ResetWorkerState;
 begin
@@ -50,7 +51,7 @@ end;
 { Sentinel cleanup callbacks for the ThreadCleanupRegistry tests. Registrations
   persist for the process (the registry has no unregister), and a registered
   callback fires on every thread that drains the registry — including worker
-  threads concurrently — so the counters use InterlockedIncrement and each test
+  threads concurrently — so the counters use atomic increments and each test
   resets its own counter before measuring a delta. }
 var
   GSentinelCount: Integer;
@@ -58,17 +59,17 @@ var
 
 procedure SentinelCleanup;
 begin
-  InterlockedIncrement(GSentinelCount);
+  AtomicIncrementInt32(GSentinelCount);
 end;
 
 procedure SentinelCleanupSecond;
 begin
-  InterlockedIncrement(GSentinelCount);
+  AtomicIncrementInt32(GSentinelCount);
 end;
 
 procedure SentinelWorkerCleanup;
 begin
-  InterlockedIncrement(GSentinelWorkerCount);
+  AtomicIncrementInt32(GSentinelWorkerCount);
 end;
 
 type
@@ -87,13 +88,13 @@ procedure TTestWorkerHost.CountingWorker(const AFileName: string;
 begin
   AConsoleOutput := '';
   AErrorMessage := '';
-  EnterCriticalSection(GWorkerLock);
+  CriticalSectionEnter(GWorkerLock);
   try
     Inc(GWorkerCallCount);
     SetLength(GWorkerFileNames, Length(GWorkerFileNames) + 1);
     GWorkerFileNames[High(GWorkerFileNames)] := AFileName;
   finally
-    LeaveCriticalSection(GWorkerLock);
+    CriticalSectionLeave(GWorkerLock);
   end;
 end;
 
@@ -474,7 +475,7 @@ begin
   // worker threads only encounter already-built singletons.
   TGarbageCollector.Initialize;
   PinPrimitiveSingletons;
-  InitCriticalSection(GWorkerLock);
+  CriticalSectionInit(GWorkerLock);
   // Register the cleanup sentinels once here, before any worker thread is
   // spawned, honouring RegisterThreadvarCleanup's write-once-at-init contract.
   // The nil registration must be ignored (a nil callback would crash the drain).
@@ -484,9 +485,9 @@ begin
   RegisterThreadvarCleanup(@SentinelWorkerCleanup);
   try
     TestRunnerProgram.AddSuite(TTestThreading.Create('Threading'));
-    TestRunnerProgram.Run;
+    RunGocciaTests;
   finally
-    DoneCriticalSection(GWorkerLock);
+    CriticalSectionDone(GWorkerLock);
     TGarbageCollector.Shutdown;
   end;
 

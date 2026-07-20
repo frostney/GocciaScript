@@ -7,6 +7,7 @@ uses
   SysUtils,
 
   JSONParser,
+  NumericText,
   TestingPascalLibrary;
 
 type
@@ -29,7 +30,7 @@ type
     constructor Create(
       const ACapabilities: TJSONParserCapabilities); overload; override;
     destructor Destroy; override;
-    procedure Parse(const AText: UTF8String);
+    procedure Parse(const AText: string);
     property Events: TStringList read FEvents;
   end;
 
@@ -119,7 +120,7 @@ begin
   inherited Destroy;
 end;
 
-procedure TRecordingJSONParser.Parse(const AText: UTF8String);
+procedure TRecordingJSONParser.Parse(const AText: string);
 begin
   FEvents.Clear;
   DoParse(AText);
@@ -152,8 +153,7 @@ procedure TRecordingJSONParser.OnFloat(const AValue: Double);
 var
   Fmt: TFormatSettings;
 begin
-  Fmt := DefaultFormatSettings;
-  Fmt.DecimalSeparator := '.';
+  Fmt := CreateInvariantFormatSettings;
   FEvents.Add('float:' + FloatToStr(AValue, Fmt));
 end;
 
@@ -514,7 +514,7 @@ begin
     P.Parse('"\uD83D\uDE00"');
     Expect<Integer>(P.Events.Count).ToBe(1);
     // U+1F600 in UTF-8 is F0 9F 98 80
-    Expected := #$F0#$9F#$98#$80;
+    Expected := #$D83D#$DE00;
     Expect<string>(P.Events[0]).ToBe('string:' + Expected);
   finally
     P.Free;

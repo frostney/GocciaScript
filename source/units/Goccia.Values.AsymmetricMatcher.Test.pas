@@ -103,7 +103,7 @@ end;
 begin
   TestRunnerProgram.AddSuite(TTestAsymmetricMatchers.Create(
     'Asymmetric matcher values'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
 
   ExitCode := TestResultToExitCode;
 end.

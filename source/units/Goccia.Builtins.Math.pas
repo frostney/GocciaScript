@@ -71,6 +71,7 @@ uses
   SysUtils,
 
   BigInteger,
+  NumberBits,
 
   Goccia.Arguments.Converter,
   Goccia.Arguments.Validator,
@@ -79,6 +80,8 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Float16,
   Goccia.GarbageCollector,
+  Goccia.NumberConversion,
+  Goccia.NumberExponentiation,
   Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
@@ -92,10 +95,10 @@ uses
   Goccia.Values.SymbolValue;
 
 const
-  DOUBLE_SIGN_MASK = QWord($8000000000000000);
-  DOUBLE_EXP_MASK  = QWord($7FF0000000000000);
-  DOUBLE_FRAC_MASK = QWord($000FFFFFFFFFFFFF);
-  DOUBLE_HIDDEN_BIT = QWord($0010000000000000);
+  DOUBLE_SIGN_MASK = UInt64(1) shl 63;
+  DOUBLE_EXP_MASK  = UInt64($7FF0000000000000);
+  DOUBLE_FRAC_MASK = UInt64($000FFFFFFFFFFFFF);
+  DOUBLE_HIDDEN_BIT = UInt64($0010000000000000);
   DOUBLE_EXP_BIAS = 1023;
   DOUBLE_FRAC_BITS = 52;
   DOUBLE_MIN_NORMAL_EXPONENT = -1022;
@@ -114,20 +117,8 @@ const
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
 
-{$IFDEF DARWIN}
-function LibMSinh(const AValue: Double): Double; cdecl; external name 'sinh';
-function LibMTanh(const AValue: Double): Double; cdecl; external name 'tanh';
-function LibMAsinh(const AValue: Double): Double; cdecl; external name 'asinh';
-function LibMAtanh(const AValue: Double): Double; cdecl; external name 'atanh';
-{$ENDIF}
-{$IFDEF LINUX}
-function LibMSinh(const AValue: Double): Double; cdecl; external 'm' name 'sinh';
-function LibMTanh(const AValue: Double): Double; cdecl; external 'm' name 'tanh';
-function LibMAsinh(const AValue: Double): Double; cdecl; external 'm' name 'asinh';
-function LibMAtanh(const AValue: Double): Double; cdecl; external 'm' name 'atanh';
-{$ENDIF}
-
-function IsFiniteIntegral(const AValue: Double): Boolean; inline;
+function IsFiniteIntegral(const AValue: Double): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (not IsNan(AValue)) and (not IsInfinite(AValue)) and
     ((Abs(AValue) >= DOUBLE_INTEGRAL_LIMIT) or (Frac(AValue) = 0));
@@ -168,21 +159,6 @@ begin
   end;
 end;
 
-function Log1pApprox(const AValue: Double): Double;
-var
-  X2, X3, X4, X5, X6: Double;
-begin
-  if Abs(AValue) >= 1.0E-3 then
-    Exit(Ln(1.0 + AValue));
-  X2 := AValue * AValue;
-  X3 := X2 * AValue;
-  X4 := X3 * AValue;
-  X5 := X4 * AValue;
-  X6 := X5 * AValue;
-  Result := AValue - X2 / 2.0 + X3 / 3.0 - X4 / 4.0 +
-    X5 / 5.0 - X6 / 6.0;
-end;
-
 function AcoshApprox(const AValue: Double): Double;
 var
   Delta: Double;
@@ -203,138 +179,13 @@ begin
     Result := Ln(AValue + Sqrt(AValue - 1.0) * Sqrt(AValue + 1.0));
 end;
 
-function AsinhApprox(const AValue: Double): Double;
-var
-  AbsValue, Inner, Term, X2: Double;
-  N: Integer;
-begin
-  {$IFDEF DARWIN}
-  Exit(LibMAsinh(AValue));
-  {$ENDIF}
-  {$IFDEF LINUX}
-  Exit(LibMAsinh(AValue));
-  {$ENDIF}
-
-  if AValue = 0 then
-    Exit(AValue);
-  AbsValue := Abs(AValue);
-  if AbsValue < 0.5 then
-  begin
-    Result := AValue;
-    Term := AValue;
-    X2 := AValue * AValue;
-    for N := 1 to 80 do
-    begin
-      Term := -Term * X2 * Sqr(2 * N - 1) / ((2 * N) * (2 * N + 1));
-      Result := Result + Term;
-      if Abs(Term) <= Abs(Result) * 1.0E-17 then
-        Break;
-    end;
-    Exit;
-  end;
-  if AbsValue > 1.0E154 then
-    Inner := Ln(AbsValue) + Ln(2.0)
-  else
-    Inner := ArcSinh(AbsValue);
-  if AValue < 0 then
-    Result := -Inner
-  else
-    Result := Inner;
-end;
-
-function AtanhApprox(const AValue: Double): Double;
-var
-  X2, Term: Double;
-  Denominator: Integer;
-begin
-  {$IFDEF DARWIN}
-  Exit(LibMAtanh(AValue));
-  {$ENDIF}
-  {$IFDEF LINUX}
-  Exit(LibMAtanh(AValue));
-  {$ENDIF}
-
-  if AValue = 0 then
-    Exit(AValue);
-  if Abs(AValue) < 0.5 then
-  begin
-    Result := AValue;
-    Term := AValue;
-    X2 := AValue * AValue;
-    Denominator := 3;
-    while Denominator <= 161 do
-    begin
-      Term := Term * X2;
-      Result := Result + Term / Denominator;
-      if Abs(Term / Denominator) <= Abs(Result) * 1.0E-17 then
-        Break;
-      Inc(Denominator, 2);
-    end;
-    Exit;
-  end;
-  Result := ArcTanh(AValue);
-end;
-
-function TanhApprox(const AValue: Double): Double;
-var
-  E: Double;
-begin
-  {$IFDEF DARWIN}
-  Exit(LibMTanh(AValue));
-  {$ENDIF}
-  {$IFDEF LINUX}
-  Exit(LibMTanh(AValue));
-  {$ENDIF}
-
-  if AValue = 0 then
-    Exit(AValue);
-  if AValue > 20 then
-    Exit(1.0);
-  if AValue < -20 then
-    Exit(-1.0);
-  if Abs(AValue) < 0.25 then
-  begin
-    E := Expm1Approx(2.0 * AValue);
-    Exit(E / (E + 2.0));
-  end;
-  Result := Tanh(AValue);
-end;
-
-function SinhApprox(const AValue: Double): Double;
-var
-  Term, X2: Double;
-  N: Integer;
-begin
-  {$IFDEF DARWIN}
-  Exit(LibMSinh(AValue));
-  {$ENDIF}
-  {$IFDEF LINUX}
-  Exit(LibMSinh(AValue));
-  {$ENDIF}
-
-  if AValue = 0 then
-    Exit(AValue);
-  if Abs(AValue) >= 0.125 then
-    Exit(Sinh(AValue));
-  Result := AValue;
-  Term := AValue;
-  X2 := AValue * AValue;
-  for N := 1 to 24 do
-  begin
-    Term := Term * X2 / ((2 * N) * (2 * N + 1));
-    Result := Result + Term;
-    if Abs(Term) <= Abs(Result) * 1.0E-17 then
-      Break;
-  end;
-end;
-
 function DecomposeFiniteDouble(const AValue: Double; out AMantissa: TBigInteger;
   out AExponent: Integer): Boolean;
 var
-  Bits, Fraction: QWord;
+  Bits, Fraction: UInt64;
   RawExponent: Integer;
 begin
-  Bits := PQWord(@AValue)^;
+  Bits := DoubleToBits(AValue);
   Fraction := Bits and DOUBLE_FRAC_MASK;
   RawExponent := Integer((Bits and DOUBLE_EXP_MASK) shr DOUBLE_FRAC_BITS);
   if RawExponent = 0 then
@@ -684,118 +535,15 @@ begin
   end;
 end;
 
-// §21.3.2.26 Math.pow ( base, exponent ) — calls Number::exponentiate (§6.1.6.1.3)
+// ES2026 §21.3.2.27 Math.pow(base, exponent)
 function TGocciaMath.MathPow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Base, Exponent: TGocciaNumberLiteralValue;
-  B, E, AbsB: Double;
-  IntPart: Double;
-  ExpIsOddInteger: Boolean;
 begin
   Base := TGocciaArgumentConverter.GetNumber(AArgs, 0);
   Exponent := TGocciaArgumentConverter.GetNumber(AArgs, 1);
-  B := Base.Value;
-  E := Exponent.Value;
-
-  // ES2026 §6.1.6.1.3 Number::exponentiate(base, exponent)
-  // 1. If exponent is NaN, return NaN.
-  if Exponent.IsNaN then
-    Exit(TGocciaNumberLiteralValue.NaNValue);
-  // 2. If exponent is either +0 or -0, return 1.
-  if E = 0 then
-    Exit(TGocciaNumberLiteralValue.Create(1));
-  // 3. If base is NaN, return NaN.
-  if Base.IsNaN then
-    Exit(TGocciaNumberLiteralValue.NaNValue);
-
-  // Pre-compute "exponent is an odd integer" for sign-of-zero / sign-of-Infinity cases.
-  // Doubles above 2^53 round each integer position to even precision, so
-  // "odd integer" can only be detected up to that magnitude — guard against
-  // huge values to avoid Int64 overflow in Round() on values like 1.8e308.
-  ExpIsOddInteger := (not Exponent.IsInfinite)
-    and (Frac(E) = 0)
-    and (Abs(E) < 9007199254740992.0) // 2^53
-    and (Round(E) <> Round(E / 2) * 2);
-
-  // 4. If base is +∞, return +∞ if exponent > 0 else +0.
-  if Base.IsInfinity then
-  begin
-    if E > 0 then
-      Exit(TGocciaNumberLiteralValue.InfinityValue);
-    Exit(TGocciaNumberLiteralValue.Create(0));
-  end;
-  // 5. If base is -∞:
-  //    a. If exponent > 0: -∞ if odd-integer else +∞.
-  //    b. If exponent < 0: -0 if odd-integer else +0.
-  if Base.IsNegativeInfinity then
-  begin
-    if E > 0 then
-    begin
-      if ExpIsOddInteger then
-        Exit(TGocciaNumberLiteralValue.NegativeInfinityValue);
-      Exit(TGocciaNumberLiteralValue.InfinityValue);
-    end;
-    if ExpIsOddInteger then
-      Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
-    Exit(TGocciaNumberLiteralValue.Create(0));
-  end;
-  // 6. If base is +0, return +0 if exponent > 0 else +∞.
-  // 7. If base is -0:
-  //    a. If exponent > 0: -0 if odd-integer else +0.
-  //    b. If exponent < 0: -∞ if odd-integer else +∞.
-  if B = 0 then
-  begin
-    if Base.IsNegativeZero then
-    begin
-      if E > 0 then
-      begin
-        if ExpIsOddInteger then
-          Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
-        Exit(TGocciaNumberLiteralValue.Create(0));
-      end;
-      if ExpIsOddInteger then
-        Exit(TGocciaNumberLiteralValue.NegativeInfinityValue);
-      Exit(TGocciaNumberLiteralValue.InfinityValue);
-    end;
-    if E > 0 then
-      Exit(TGocciaNumberLiteralValue.Create(0));
-    Exit(TGocciaNumberLiteralValue.InfinityValue);
-  end;
-  // 8. (Assert base is finite, base ≠ 0.) — ensured by the cases above.
-  // 9. If exponent is +∞:
-  //    a. abs(base) > 1 → +∞.
-  //    b. abs(base) = 1 → NaN.
-  //    c. abs(base) < 1 → +0.
-  if Exponent.IsInfinity then
-  begin
-    AbsB := Abs(B);
-    if AbsB > 1 then
-      Exit(TGocciaNumberLiteralValue.InfinityValue);
-    if AbsB = 1 then
-      Exit(TGocciaNumberLiteralValue.NaNValue);
-    Exit(TGocciaNumberLiteralValue.Create(0));
-  end;
-  // 10. If exponent is -∞:
-  //     a. abs(base) > 1 → +0.
-  //     b. abs(base) = 1 → NaN.
-  //     c. abs(base) < 1 → +∞.
-  if Exponent.IsNegativeInfinity then
-  begin
-    AbsB := Abs(B);
-    if AbsB > 1 then
-      Exit(TGocciaNumberLiteralValue.Create(0));
-    if AbsB = 1 then
-      Exit(TGocciaNumberLiteralValue.NaNValue);
-    Exit(TGocciaNumberLiteralValue.InfinityValue);
-  end;
-  // 11. (base, exponent both finite & base ≠ 0.)
-  // 12. If base < 0 and exponent is not an integer, return NaN.
-  if (B < 0) and (Frac(E) <> 0) then
-    Exit(TGocciaNumberLiteralValue.NaNValue);
-  // 13. Implementation-defined approximation. FreePascal's Power handles the
-  //     non-special cases via exp/ln; the special cases above are covered.
-  IntPart := Power(B, E);
-  Result := TGocciaNumberLiteralValue.Create(IntPart);
+  Result := TGocciaNumberLiteralValue.Create(
+    NumberExponentiation(Base.Value, Exponent.Value));
 end;
 
 // §21.3.2.32 Math.sqrt ( x )
@@ -932,6 +680,8 @@ begin
     Result := TGocciaNumberLiteralValue.ZeroValue
   else if NumberLiteral.IsInfinity then
     Result := TGocciaNumberLiteralValue.InfinityValue
+  else if NumberLiteral.Value = 0 then
+    Result := TGocciaNumberLiteralValue.OneValue
   else
     Result := TGocciaNumberLiteralValue.Create(Exp(NumberLiteral.Value));
 end;
@@ -992,6 +742,8 @@ begin
     Result := TGocciaNumberLiteralValue.NaNValue
   else if NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then
     Result := TGocciaNumberLiteralValue.NaNValue
+  else if NumberArg.Value = 0 then
+    Result := NumberArg
   else
     Result := TGocciaNumberLiteralValue.Create(Sin(NumberArg.Value));
 end;
@@ -1024,6 +776,8 @@ begin
     Result := TGocciaNumberLiteralValue.NaNValue
   else if NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then
     Result := TGocciaNumberLiteralValue.NaNValue
+  else if NumberArg.Value = 0 then
+    Result := NumberArg
   else
     Result := TGocciaNumberLiteralValue.Create(Tan(NumberArg.Value));
 end;
@@ -1196,7 +950,7 @@ begin
   else if NumberArg.Value = 0 then
     Result := NumberArg
   else
-    Result := TGocciaNumberLiteralValue.Create(SinhApprox(NumberArg.Value));
+    Result := TGocciaNumberLiteralValue.Create(Sinh(NumberArg.Value));
 end;
 
 // §21.3.2.34 Math.tanh ( x )
@@ -1216,7 +970,7 @@ begin
   else if NumberArg.Value = 0 then
     Result := NumberArg
   else
-    Result := TGocciaNumberLiteralValue.Create(TanhApprox(NumberArg.Value));
+    Result := TGocciaNumberLiteralValue.Create(Tanh(NumberArg.Value));
 end;
 
 // §21.3.2.3 Math.acosh ( x )
@@ -1254,8 +1008,10 @@ begin
     Result := TGocciaNumberLiteralValue.InfinityValue
   else if NumberArg.IsNegativeInfinity then
     Result := TGocciaNumberLiteralValue.NegativeInfinityValue
+  else if NumberArg.Value = 0 then
+    Result := NumberArg
   else
-    Result := TGocciaNumberLiteralValue.Create(AsinhApprox(NumberArg.Value));
+    Result := TGocciaNumberLiteralValue.Create(ArcSinh(NumberArg.Value));
 end;
 
 // §21.3.2.7 Math.atanh ( x )
@@ -1284,7 +1040,7 @@ begin
   else if NumberArg.Value = 0 then
     Result := NumberArg
   else
-    Result := TGocciaNumberLiteralValue.Create(AtanhApprox(NumberArg.Value));
+    Result := TGocciaNumberLiteralValue.Create(ArcTanh(NumberArg.Value));
 end;
 
 // §21.3.2.15 Math.expm1 ( x )
@@ -1307,7 +1063,7 @@ begin
     Result := TGocciaNumberLiteralValue.Create(Expm1Approx(NumberArg.Value));
 end;
 
-// ES2026 §21.3.2.17 Math.f16round ( x )
+// ES2026 §21.3.2.18 Math.f16round(x)
 function TGocciaMath.MathF16round(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
@@ -1328,11 +1084,10 @@ begin
     Result := TGocciaNumberLiteralValue.Create(Float16ToDouble(DoubleToFloat16(NumberArg.Value)));
 end;
 
-// §21.3.2.17 Math.fround ( x )
+// ES2026 §21.3.2.17 Math.fround(x)
 function TGocciaMath.MathFround(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
-  SingleVal: Single;
 begin
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -1347,10 +1102,8 @@ begin
     Result := NumberArg
   // Step 3: Return the result of rounding n to the nearest float32 value.
   else
-  begin
-    SingleVal := NumberArg.Value;
-    Result := TGocciaNumberLiteralValue.Create(SingleVal);
-  end;
+    Result := TGocciaNumberLiteralValue.Create(
+      NumberToFloat32(NumberArg.Value));
 end;
 
 // §21.3.2.18 Math.hypot ( ...args )
@@ -1432,7 +1185,7 @@ begin
   else if NumberArg.Value = 0 then
     Result := NumberArg
   else
-    Result := TGocciaNumberLiteralValue.Create(Log1pApprox(NumberArg.Value));
+    Result := TGocciaNumberLiteralValue.Create(LnXP1(NumberArg.Value));
 end;
 
 // §21.3.2.23 Math.log2 ( x )

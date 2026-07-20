@@ -262,14 +262,16 @@ begin
   GFunctionConstructRedirectHook := AHook;
 end;
 
-function IsRegisteredProxyValue(const AValue: TGocciaValue): Boolean; inline;
+function IsRegisteredProxyValue(const AValue: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := Assigned(GProxyPredicate) and GProxyPredicate(AValue);
 end;
 
-function GetSharedFunctionPrototype: TGocciaFunctionSharedPrototype; inline;
+function GetSharedFunctionPrototype: TGocciaFunctionSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaFunctionSharedPrototype(CurrentRealm.GetSlot(GFunctionPrototypeSlot))
   else
     Result := nil;
@@ -295,7 +297,7 @@ begin
     if Assigned(Result) then
       Exit;
 
-    if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+    if TGocciaObjectValue.SharedObjectPrototype = nil then
       TGocciaObjectValue.InitializeSharedPrototype;
     Result := TGocciaObjectValue.SharedObjectPrototype;
   end;
@@ -360,7 +362,7 @@ var
   Shared: TGocciaFunctionSharedPrototype;
   Thrower: TGocciaNativeFunctionValue;
 begin
-  if not Assigned(CurrentRealm) then
+  if (CurrentRealm = nil) then
     Exit(nil);
 
   Result := TGocciaFunctionBase(CurrentRealm.GetSlot(GThrowTypeErrorSlot));
@@ -472,7 +474,8 @@ begin
   end;
 end;
 
-function IsCallableForHasInstance(const AValue: TGocciaValue): Boolean; inline;
+function IsCallableForHasInstance(const AValue: TGocciaValue): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := AValue.IsCallable;
 end;
@@ -656,7 +659,7 @@ begin
   FHasOwnNameProperty := True;
 
   Shared := GetSharedFunctionPrototype;
-  if not Assigned(Shared) and Assigned(CurrentRealm) then
+  if not Assigned(Shared) and (CurrentRealm <> nil) then
   begin
     // Constructor pins via realm slot internally - see SetSlot.
     Shared := TGocciaFunctionSharedPrototype.Create;
@@ -986,7 +989,7 @@ var
   Shared: TGocciaFunctionSharedPrototype;
 begin
   Shared := GetSharedFunctionPrototype;
-  if not Assigned(Shared) and Assigned(CurrentRealm) then
+  if not Assigned(Shared) and (CurrentRealm <> nil) then
     Shared := TGocciaFunctionSharedPrototype.Create;
   if Assigned(Shared) then
     Shared.Prototype := AParent;
@@ -1009,7 +1012,7 @@ begin
   // TGocciaFunctionBase.Create, which expects to find the prototype already
   // installed.  On exception we reset the slot to nil so a later Create can
   // try again cleanly.
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     CurrentRealm.SetSlot(GFunctionPrototypeSlot, Self);
   try
     DefineProperty(PROP_LENGTH, TGocciaPropertyDescriptorData.Create(
@@ -1033,7 +1036,7 @@ begin
       []);
     RegisterMemberDefinitions(Self, Members);
   except
-    if Assigned(CurrentRealm) and (CurrentRealm.GetSlot(GFunctionPrototypeSlot) = Self) then
+    if (CurrentRealm <> nil) and (CurrentRealm.GetSlot(GFunctionPrototypeSlot) = Self) then
       CurrentRealm.SetSlot(GFunctionPrototypeSlot, nil);
     raise;
   end;
@@ -1128,25 +1131,13 @@ begin
       ThrowRangeError(Format(SErrorNotValidCodePoint, [FormatDouble(RawValue)]),
         SSuggestCodePointRange);
 
-    if CodePoint < $80 then
-      SB.AppendChar(AnsiChar(CodePoint))
-    else if CodePoint < $800 then
-    begin
-      SB.AppendChar(AnsiChar($C0 or (CodePoint shr 6)));
-      SB.AppendChar(AnsiChar($80 or (CodePoint and $3F)));
-    end
-    else if CodePoint < $10000 then
-    begin
-      SB.AppendChar(AnsiChar($E0 or (CodePoint shr 12)));
-      SB.AppendChar(AnsiChar($80 or ((CodePoint shr 6) and $3F)));
-      SB.AppendChar(AnsiChar($80 or (CodePoint and $3F)));
-    end
+    if CodePoint <= $FFFF then
+      SB.AppendChar(Char(CodePoint))
     else
     begin
-      SB.AppendChar(AnsiChar($F0 or (CodePoint shr 18)));
-      SB.AppendChar(AnsiChar($80 or ((CodePoint shr 12) and $3F)));
-      SB.AppendChar(AnsiChar($80 or ((CodePoint shr 6) and $3F)));
-      SB.AppendChar(AnsiChar($80 or (CodePoint and $3F)));
+      Dec(CodePoint, $10000);
+      SB.AppendChar(Char($D800 + (CodePoint shr 10)));
+      SB.AppendChar(Char($DC00 + (CodePoint and $3FF)));
     end;
   end;
 

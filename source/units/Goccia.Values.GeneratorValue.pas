@@ -233,7 +233,7 @@ begin
   if ShouldSwitchRealm then
     SetCurrentRealm(ARealm);
   try
-    if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+    if TGocciaObjectValue.SharedObjectPrototype = nil then
       TGocciaObjectValue.InitializeSharedPrototype;
     IteratorPrototype := nil;
     if AKind = foikGenerator then
@@ -287,7 +287,7 @@ var
   GlobalScope: TGocciaScope;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  if not Assigned(CurrentRealm) or
+  if (CurrentRealm = nil) or
      not (CurrentRealm.GlobalEnv is TGocciaScope) then
     Exit;
 
@@ -313,7 +313,7 @@ begin
   end;
 
   Result := TGocciaPromiseValue.Create;
-  IsRooted := Assigned(TGarbageCollector.Instance);
+  IsRooted := (TGarbageCollector.Instance <> nil);
   if IsRooted then
     TGarbageCollector.Instance.AddTempRoot(Result);
   try
@@ -343,7 +343,7 @@ end;
 
 function GeneratorPrototypeMethodHost: TGocciaGeneratorPrototypeMethodHost;
 begin
-  if not Assigned(CurrentRealm) then
+  if (CurrentRealm = nil) then
     raise Exception.Create('Generator prototype methods require an active realm');
   Result := TGocciaGeneratorPrototypeMethodHost(
     CurrentRealm.GetOwnedSlot(GGeneratorPrototypeMethodHostSlot));
@@ -355,7 +355,7 @@ end;
 
 function AsyncGeneratorPrototypeMethodHost: TGocciaAsyncGeneratorPrototypeMethodHost;
 begin
-  if not Assigned(CurrentRealm) then
+  if (CurrentRealm = nil) then
     raise Exception.Create('AsyncGenerator prototype methods require an active realm');
   Result := TGocciaAsyncGeneratorPrototypeMethodHost(
     CurrentRealm.GetOwnedSlot(GAsyncGeneratorPrototypeMethodHostSlot));

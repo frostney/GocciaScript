@@ -149,14 +149,14 @@ type
   TGocciaModuleSourceValue = class(TGocciaObjectValue)
   private
     FPath: string;
-    FSourceText: UTF8String;
+    FSourceText: string;
   public
     class function SharedPrototype: TGocciaObjectValue; static;
     class function SharedModuleSourcePrototype: TGocciaObjectValue; static;
-    constructor Create(const APath: string; const ASourceText: UTF8String);
+    constructor Create(const APath: string; const ASourceText: string);
     function ToStringTag: string; override;
     property Path: string read FPath;
-    property SourceText: UTF8String read FSourceText;
+    property SourceText: string read FSourceText;
   end;
 
   TGocciaDeferredModuleNamespaceObject = class(TGocciaObjectValue)
@@ -334,12 +334,12 @@ begin
   if FEnvironment = AEnvironment then
     Exit;
 
-  if Assigned(FEnvironment) and Assigned(TGarbageCollector.Instance) then
+  if Assigned(FEnvironment) and (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.RemoveRootObject(FEnvironment);
 
   FEnvironment := AEnvironment;
 
-  if Assigned(FEnvironment) and Assigned(TGarbageCollector.Instance) then
+  if Assigned(FEnvironment) and (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddRootObject(FEnvironment);
 end;
 
@@ -665,7 +665,7 @@ begin
   if not Assigned(FNamespaceObject) then
   begin
     FNamespaceObject := TGocciaModuleNamespaceObject.Create(Self);
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.AddRootObject(FNamespaceObject);
   end;
   Result := FNamespaceObject;
@@ -688,7 +688,7 @@ begin
   begin
     if ADetachModule and (FNamespaceObject is TGocciaModuleNamespaceObject) then
       TGocciaModuleNamespaceObject(FNamespaceObject).DetachModule;
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveRootObject(FNamespaceObject);
     FNamespaceObject := nil;
   end;
@@ -967,7 +967,7 @@ end;
 
 class function TGocciaModuleSourceValue.SharedPrototype: TGocciaObjectValue;
 begin
-  if not Assigned(CurrentRealm) then
+  if (CurrentRealm = nil) then
     Exit(nil);
 
   Result := TGocciaObjectValue(CurrentRealm.GetSlot(GModuleSourcePrototypeSlot));
@@ -982,7 +982,7 @@ end;
 class function TGocciaModuleSourceValue.SharedModuleSourcePrototype:
   TGocciaObjectValue;
 begin
-  if not Assigned(CurrentRealm) then
+  if (CurrentRealm = nil) then
     Exit(nil);
 
   Result := TGocciaObjectValue(CurrentRealm.GetSlot(GJSModuleSourcePrototypeSlot));
@@ -994,7 +994,7 @@ begin
 end;
 
 constructor TGocciaModuleSourceValue.Create(const APath: string;
-  const ASourceText: UTF8String);
+  const ASourceText: string);
 begin
   inherited Create(SharedModuleSourcePrototype);
   FPath := APath;
@@ -1301,7 +1301,7 @@ end;
 function DecodeImportSpecifierAttribute(const AEncodedModulePath: string;
   out AModulePath, AAttributeType: string): Boolean;
 var
-  SeparatorIndex: SizeInt;
+  SeparatorIndex: NativeInt;
 begin
   SeparatorIndex := Pos(IMPORT_ATTRIBUTE_SEPARATOR, AEncodedModulePath);
   Result := SeparatorIndex > 0;

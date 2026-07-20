@@ -52,7 +52,8 @@ type
   end;
 
 function EmitInstruction(const ACtx: TGocciaCompilationContext;
-  const AInstruction: UInt64; const AForceWide: Boolean = False): Integer; inline;
+  const AInstruction: UInt64; const AForceWide: Boolean = False): Integer;
+  {$IFDEF FPC}inline;{$ENDIF}
 procedure EmitLoadStringLiteral(const ACtx: TGocciaCompilationContext;
   const ADest: UInt16; const AValue: string);
 procedure EmitLineMapping(const ACtx: TGocciaCompilationContext;
@@ -70,9 +71,11 @@ function TokenTypeToRuntimeOp(
 function CompoundOpToRuntimeOp(
   const ATokenType: TGocciaTokenType): TGocciaOpCode;
 function IsShortCircuitAssignment(
-  const ATokenType: TGocciaTokenType): Boolean; inline;
+  const ATokenType: TGocciaTokenType): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 function ShortCircuitJumpOp(
-  const ATokenType: TGocciaTokenType): TGocciaOpCode; inline;
+  const ATokenType: TGocciaTokenType): TGocciaOpCode;
+  {$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 

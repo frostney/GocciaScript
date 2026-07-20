@@ -129,6 +129,7 @@ implementation
 
 uses
   Math,
+  StrUtils,
   SysUtils,
 
   Goccia.Constants.PropertyNames,
@@ -299,7 +300,7 @@ begin
   FLastRunMode := brmStandard;
   FOwnsLastRunRoot := False;
 
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
   begin
     TGarbageCollector.Instance.AddRootObject(FNamespaceObject);
     FOwnsNamespaceRoot := True;
@@ -341,9 +342,9 @@ destructor TGocciaBenchmark.Destroy;
 begin
   ClearLastRunResult;
   UnrootRegisteredBenchmarks;
-  if FOwnsNamespaceRoot and Assigned(TGarbageCollector.Instance) then
+  if FOwnsNamespaceRoot and (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.RemoveRootObject(FNamespaceObject);
-  if not Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance = nil) then
     FNamespaceObject.Free;
   FRegisteredSuites.Free;
   FRegisteredBenchmarks.Free;
@@ -374,7 +375,7 @@ end;
 
 procedure TGocciaBenchmark.ClearLastRunResult;
 begin
-  if FOwnsLastRunRoot and Assigned(TGarbageCollector.Instance) then
+  if FOwnsLastRunRoot and (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.RemoveRootObject(FLastRunResult);
   FOwnsLastRunRoot := False;
   FHasCompletedRun := False;
@@ -389,7 +390,7 @@ begin
   FLastRunResult := AResult;
   FHasCompletedRun := Assigned(AResult);
   FLastRunMode := AMode;
-  if FHasCompletedRun and Assigned(TGarbageCollector.Instance) then
+  if FHasCompletedRun and (TGarbageCollector.Instance <> nil) then
   begin
     TGarbageCollector.Instance.AddRootObject(AResult);
     FOwnsLastRunRoot := True;
@@ -570,7 +571,7 @@ begin
 
   BenchCase := TBenchmarkCase.Create(BenchName, RunFn, FCurrentSuiteName,
     FCurrentSummaryScope, FCurrentBoxplotScope, GeneratorFn);
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
   begin
     if Assigned(RunFn) and not TGarbageCollector.Instance.IsTempRoot(RunFn) then
     begin
@@ -599,7 +600,7 @@ begin
 
   while True do
   begin
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.CollectIfNeeded(ARunFunction);
     StartNanoseconds := GetNanoseconds;
     I := 0;
@@ -810,7 +811,7 @@ begin
         {$IFDEF GC_DEBUG}
         WriteLn(Format('[BENCH] %s > %s: pre-measurement GC.Enabled=%s, objects=%d, allocs=%d',
           [ABenchCase.SuiteName, ABenchCase.Name,
-           BoolToStr(GC.Enabled, 'True', 'False'), GC.ManagedObjectCount, GC.Watermark]));
+           StrUtils.IfThen(GC.Enabled, 'True', 'False'), GC.ManagedObjectCount, GC.Watermark]));
         {$ENDIF}
         GC.Collect;
         MeasurementWatermark := GC.Watermark;
@@ -1060,7 +1061,7 @@ begin
       except
         on E: Exception do
         begin
-          if Assigned(TGocciaMicrotaskQueue.Instance) then
+          if (TGocciaMicrotaskQueue.Instance <> nil) then
             TGocciaMicrotaskQueue.Instance.ClearQueue;
           DiscardFetchCompletions;
 
@@ -1158,7 +1159,7 @@ begin
       except
         on E: Exception do
         begin
-          if Assigned(TGocciaMicrotaskQueue.Instance) then
+          if (TGocciaMicrotaskQueue.Instance <> nil) then
             TGocciaMicrotaskQueue.Instance.ClearQueue;
           DiscardFetchCompletions;
 

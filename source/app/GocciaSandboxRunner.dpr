@@ -6,7 +6,6 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
   SysUtils,
-  base64,
 
   CLI.ConfigFile,
   CLI.Options,
@@ -14,6 +13,7 @@ uses
   TextSemantics,
 
   Goccia.Application,
+  Goccia.Base64,
   Goccia.Builtins.Console,
   Goccia.Builtins.GlobalShadowRealm,
   Goccia.CapabilityAudit,
@@ -255,13 +255,9 @@ begin
 end;
 
 function TSandboxRunnerApp.DecodeBase64Bytes(const AText: string): TBytes;
-var
-  Decoded: string;
 begin
-  Decoded := DecodeStringBase64(AText);
-  SetLength(Result, Length(Decoded));
-  if Length(Decoded) > 0 then
-    Move(Decoded[1], Result[0], Length(Decoded));
+  if not TryDecodeBase64Standard(AText, Result) then
+    raise EConvertError.Create('Invalid base64 data');
 end;
 
 function TSandboxRunnerApp.JsonHasProperty(const AObject: TGocciaObjectValue;
@@ -767,8 +763,7 @@ begin
     Exit;
   end;
 
-  Source := CreateUTF8FileTextLines(
-    UTF8String(AContext.Fs.ReadAllText(AEntryPath)));
+  Source := CreateFileTextLines(AContext.Fs.ReadAllText(AEntryPath));
   OutputLines := TStringList.Create;
   Resolver := TGocciaSandboxModuleResolver.Create(AContext.Fs, '/');
   Provider := TGocciaSandboxModuleContentProvider.Create(AContext.Fs);
@@ -833,7 +828,7 @@ begin
 
     Result.Output := OutputLines.Text;
     if Result.ErrorMessage <> '' then
-      Result.ErrorOutput := Result.ErrorMessage + LineEnding;
+      Result.ErrorOutput := Result.ErrorMessage + sLineBreak;
   finally
     Engine.Free;
     Executor.Free;
@@ -882,7 +877,7 @@ begin
         Result.Ok := False;
         Result.ExitCode := 1;
         Result.ErrorMessage := E.Message;
-        Result.ErrorOutput := E.Message + LineEnding;
+        Result.ErrorOutput := E.Message + sLineBreak;
       end;
     end;
   finally
@@ -924,7 +919,7 @@ var
 begin
   if APaths.Count <> 1 then
   begin
-    WriteLn(StdErr, 'Error: expected one sandbox entry path.');
+    WriteLn(ErrOutput, 'Error: expected one sandbox entry path.');
     ExitCode := 1;
     Exit;
   end;
@@ -940,7 +935,7 @@ begin
   if RunResult.Output <> '' then
     Write(RunResult.Output);
   if RunResult.ErrorOutput <> '' then
-    Write(StdErr, RunResult.ErrorOutput);
+    Write(ErrOutput, RunResult.ErrorOutput);
   if FPrint.Present and Assigned(RunResult.ResultValue) and
      not (RunResult.ResultValue is TGocciaUndefinedLiteralValue) then
     WriteLn(RunResult.ResultValue.ToStringLiteral.Value);

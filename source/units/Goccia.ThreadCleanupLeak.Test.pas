@@ -179,7 +179,7 @@ begin
   PinPrimitiveSingletons;
   try
     TestRunnerProgram.AddSuite(TLeakTests.Create('ThreadCleanupLeak'));
-    TestRunnerProgram.Run;
+    RunGocciaTests;
   finally
     TGarbageCollector.Shutdown;
   end;

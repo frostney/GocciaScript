@@ -345,7 +345,7 @@ var
   Promise: TGocciaPromiseValue;
 begin
   Promise := TGocciaPromiseValue.Create;
-  IsRooted := Assigned(TGarbageCollector.Instance);
+  IsRooted := (TGarbageCollector.Instance <> nil);
   if IsRooted then
     TGarbageCollector.Instance.AddTempRoot(Promise);
   try
@@ -375,7 +375,7 @@ var
   Value: TGocciaValue;
 begin
   Promise := TGocciaPromiseValue.Create;
-  IsRooted := Assigned(TGarbageCollector.Instance);
+  IsRooted := (TGarbageCollector.Instance <> nil);
   if IsRooted then
     TGarbageCollector.Instance.AddTempRoot(Promise);
   try
@@ -391,7 +391,7 @@ begin
         // observable and may abruptly complete before awaiting the wrapper.
         UnwrappedValue := AwaitValue(PromiseResolveIntrinsic(Value));
       except
-        AcquireExceptionObject;
+        PreserveCurrentExceptionAcrossNestedHandler;
         if ACloseOnRejection and not Done then
         begin
           CloseIteratorPreservingError(FIterator);

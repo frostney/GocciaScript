@@ -67,9 +67,10 @@ uses
 var
   GFinalizationRegistrySharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetFinalizationRegistryShared: TGocciaSharedPrototype; inline;
+function GetFinalizationRegistryShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GFinalizationRegistrySharedSlot))
   else
     Result := nil;
@@ -91,7 +92,7 @@ end;
 
 destructor TGocciaFinalizationRegistryValue.Destroy;
 begin
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.UnregisterWeakContainer(Self);
   FCells.Free;
   inherited;
@@ -103,8 +104,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetFinalizationRegistryShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetFinalizationRegistryShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GFinalizationRegistrySharedSlot, Shared);
@@ -183,7 +184,7 @@ procedure TGocciaFinalizationRegistryValue.EnqueueCleanup(
 var
   Task: TGocciaMicrotask;
 begin
-  if not Assigned(TGocciaMicrotaskQueue.Instance) then
+  if (TGocciaMicrotaskQueue.Instance = nil) then
     Exit;
   Task.Handler := FCleanupCallback;
   Task.ResultPromise := nil;
@@ -250,10 +251,10 @@ begin
   end;
 
   // Count this registry as a live weak container on its first cell.
-  if (Registry.FCells.Count = 0) and Assigned(TGarbageCollector.Instance) then
+  if (Registry.FCells.Count = 0) and (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.RegisterWeakContainer(Registry);
   Registry.FCells.Add(Cell);
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddKeptObject(Target);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;

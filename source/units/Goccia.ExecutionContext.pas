@@ -47,8 +47,10 @@ function CreateExecutionContext(const ARealm: TGocciaRealm;
   const AScriptOrModule: TObject = nil;
   const AFunctionValue: TGocciaValue = nil): TGocciaExecutionContext;
 
-function RunningExecutionContext: TGocciaExecutionContext; inline;
-function HasRunningExecutionContext: Boolean; inline;
+function RunningExecutionContext: TGocciaExecutionContext;
+{$IFDEF FPC}inline;{$ENDIF}
+function HasRunningExecutionContext: Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 
@@ -216,6 +218,8 @@ begin
   TGocciaExecutionContextStack.Pop;
   FPopped := True;
 end;
+
+initialization
 
 finalization
   SetLength(GExecutionContextStack, 0);

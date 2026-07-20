@@ -574,7 +574,7 @@ begin
   AContext.LoadModuleSource := FClosure.LoadModuleSource;
   AContext.ResolveModuleURL := FClosure.ResolveModuleURL;
   AContext.CurrentFilePath := FSourceFilePath;
-  AContext.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
+  AContext.CoverageEnabled := (TGocciaCoverageTracker.Instance <> nil)
     and TGocciaCoverageTracker.Instance.Enabled;
   AContext.StrictTypes := FClosure.EffectiveStrictTypes;
   CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
@@ -882,8 +882,7 @@ begin
     if FIsExpressionBody and (FBodyStatements.Count = 1) then
     begin
       SyntheticReturn := TGocciaReturnStatement.Create(
-        TGocciaExpression(FBodyStatements[0]), FBodyStatements[0].Line,
-        FBodyStatements[0].Column);
+        TGocciaExpression(FBodyStatements[0]), FBodyStatements[0].Span);
       AsyncBodyStatements.Add(SyntheticReturn);
     end
     else

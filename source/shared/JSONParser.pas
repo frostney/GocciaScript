@@ -51,7 +51,7 @@ type
     FCapabilities: TJSONParserCapabilities;
     FLength: Integer;
     FPosition: Integer;
-    FText: UTF8String;
+    FText: string;
 
     class function HexDigitValue(const AChar: Char): Integer; static;
     class function IsASCIIDigit(const AChar: Char): Boolean; static;
@@ -71,9 +71,10 @@ type
     function ParseIdentifierEscape(const AIsStart: Boolean): string;
     function ParseIdentifierName: string;
     function ParseObjectKey: string;
-    function PeekUTF8Sequence: UTF8String;
-    function ReadUTF8Sequence: UTF8String;
-    function Supports(const ACapability: TJSONParserCapability): Boolean; inline;
+    function PeekCodePointSequence: string;
+    function ReadCodePointSequence: string;
+    function Supports(const ACapability: TJSONParserCapability): Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
     function TryMatchAdditionalWhitespace(out AByteLength: Integer): Boolean;
     function TryMatchLineTerminator(out AByteLength: Integer): Boolean;
     function TryParseAdditionalLiteral(const AIsNegative: Boolean): Boolean;
@@ -82,17 +83,20 @@ type
 
     procedure SkipWhitespace;
 
-    function PeekChar: Char; inline;
-    function ReadChar: Char; inline;
+    function PeekChar: Char;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function ReadChar: Char;
+    {$IFDEF FPC}inline;{$ENDIF}
     function ExpectChar(const AExpected: Char): Boolean;
-    function IsAtEnd: Boolean; inline;
+    function IsAtEnd: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
     procedure RaiseParseError(const AMessage: string);
   protected
     function ParseString(const AQuote: Char): string; overload;
     function ParseString: string; overload;
     function ParseUnicodeEscape: string; virtual;
 
-    procedure DoParse(const AText: UTF8String);
+    procedure DoParse(const AText: string);
     procedure DoParseArray;
     procedure DoParseNumber;
     procedure DoParseObject;
@@ -111,7 +115,7 @@ type
     procedure OnValueStart; virtual;
 
     property CurrentPosition: Integer read FPosition;
-    property SourceTextData: UTF8String read FText;
+    property SourceTextData: string read FText;
   public
     constructor Create; overload; virtual;
     constructor Create(
@@ -121,30 +125,32 @@ type
 implementation
 
 uses
+  NumericText,
+  TextEncoding,
   TextSemantics;
 
 const
-  JSON5_NO_BREAK_SPACE = #$C2#$A0;
-  JSON5_OGHAM_SPACE_MARK = #$E1#$9A#$80;
-  JSON5_EN_QUAD = #$E2#$80#$80;
-  JSON5_EM_QUAD = #$E2#$80#$81;
-  JSON5_EN_SPACE = #$E2#$80#$82;
-  JSON5_EM_SPACE = #$E2#$80#$83;
-  JSON5_THREE_PER_EM_SPACE = #$E2#$80#$84;
-  JSON5_FOUR_PER_EM_SPACE = #$E2#$80#$85;
-  JSON5_SIX_PER_EM_SPACE = #$E2#$80#$86;
-  JSON5_FIGURE_SPACE = #$E2#$80#$87;
-  JSON5_PUNCTUATION_SPACE = #$E2#$80#$88;
-  JSON5_THIN_SPACE = #$E2#$80#$89;
-  JSON5_HAIR_SPACE = #$E2#$80#$8A;
-  JSON5_LINE_SEPARATOR = #$E2#$80#$A8;
-  JSON5_PARAGRAPH_SEPARATOR = #$E2#$80#$A9;
-  JSON5_NARROW_NO_BREAK_SPACE = #$E2#$80#$AF;
-  JSON5_MEDIUM_MATHEMATICAL_SPACE = #$E2#$81#$9F;
-  JSON5_IDEOGRAPHIC_SPACE = #$E3#$80#$80;
-  JSON5_BYTE_ORDER_MARK = #$EF#$BB#$BF;
-  JSON5_ZERO_WIDTH_NON_JOINER = #$E2#$80#$8C;
-  JSON5_ZERO_WIDTH_JOINER = #$E2#$80#$8D;
+  JSON5_NO_BREAK_SPACE = #$00A0;
+  JSON5_OGHAM_SPACE_MARK = #$1680;
+  JSON5_EN_QUAD = #$2000;
+  JSON5_EM_QUAD = #$2001;
+  JSON5_EN_SPACE = #$2002;
+  JSON5_EM_SPACE = #$2003;
+  JSON5_THREE_PER_EM_SPACE = #$2004;
+  JSON5_FOUR_PER_EM_SPACE = #$2005;
+  JSON5_SIX_PER_EM_SPACE = #$2006;
+  JSON5_FIGURE_SPACE = #$2007;
+  JSON5_PUNCTUATION_SPACE = #$2008;
+  JSON5_THIN_SPACE = #$2009;
+  JSON5_HAIR_SPACE = #$200A;
+  JSON5_LINE_SEPARATOR = #$2028;
+  JSON5_PARAGRAPH_SEPARATOR = #$2029;
+  JSON5_NARROW_NO_BREAK_SPACE = #$202F;
+  JSON5_MEDIUM_MATHEMATICAL_SPACE = #$205F;
+  JSON5_IDEOGRAPHIC_SPACE = #$3000;
+  JSON5_BYTE_ORDER_MARK = #$FEFF;
+  JSON5_ZERO_WIDTH_NON_JOINER = #$200C;
+  JSON5_ZERO_WIDTH_JOINER = #$200D;
 
 constructor TAbstractJSONParser.Create;
 begin
@@ -206,7 +212,7 @@ class function TAbstractJSONParser.TryDecodeIdentifierCodePoint(
 var
   ByteLength: Integer;
 begin
-  Result := TryReadUTF8CodePoint(AText, 1, ACodePoint, ByteLength) and
+  Result := TryReadCodePointAt(AText, 1, ACodePoint, ByteLength) and
     (ByteLength = Length(AText));
 end;
 
@@ -248,7 +254,7 @@ begin
   Result := ACapability in FCapabilities;
 end;
 
-procedure TAbstractJSONParser.DoParse(const AText: UTF8String);
+procedure TAbstractJSONParser.DoParse(const AText: string);
 begin
   FText := AText;
   FPosition := 1;
@@ -263,31 +269,25 @@ begin
     RaiseParseError('Unexpected character after JSON value');
 end;
 
-function TAbstractJSONParser.PeekUTF8Sequence: UTF8String;
+function TAbstractJSONParser.PeekCodePointSequence: string;
 var
-  I: Integer;
   SequenceLength: Integer;
 begin
   Result := '';
   if IsAtEnd then
     Exit;
 
-  SequenceLength := TextSemantics.UTF8SequenceLengthFromLeadByte(PeekChar);
+  SequenceLength := TextSemantics.CodePointSequenceLengthAt(
+    FText, FPosition);
   if (SequenceLength = 0) or (FPosition + SequenceLength - 1 > FLength) then
     Exit;
 
   Result := Copy(FText, FPosition, SequenceLength);
-  if SequenceLength = 1 then
-    Exit;
-
-  for I := 2 to SequenceLength do
-    if (Ord(Result[I]) and $C0) <> $80 then
-      Exit('');
 end;
 
-function TAbstractJSONParser.ReadUTF8Sequence: UTF8String;
+function TAbstractJSONParser.ReadCodePointSequence: string;
 begin
-  Result := PeekUTF8Sequence;
+  Result := PeekCodePointSequence;
   if Result <> '' then
     Inc(FPosition, Length(Result));
 end;
@@ -472,6 +472,7 @@ end;
 function TAbstractJSONParser.TryParseHexNumber(const ASignText: string): Boolean;
 var
   DigitCount: Integer;
+  Digits: string;
   Value: Double;
 begin
   Result := False;
@@ -484,17 +485,18 @@ begin
   if IsAtEnd or not IsASCIIHexDigit(PeekChar) then
     RaiseParseError('Invalid number format');
 
-  Value := 0;
+  Digits := '';
   DigitCount := 0;
   while not IsAtEnd and IsASCIIHexDigit(PeekChar) do
   begin
-    Value := (Value * 16) + HexDigitValue(ReadChar);
+    Digits := Digits + ReadChar;
     Inc(DigitCount);
   end;
 
   if DigitCount = 0 then
     RaiseParseError('Invalid number format');
 
+  Value := StringToNumber('0x' + Digits);
   if ASignText = '-' then
     Value := -Value;
   OnFloat(Value);
@@ -506,7 +508,6 @@ var
   Code: Integer;
   DecimalPointSeen: Boolean;
   ExponentSeen: Boolean;
-  FloatFormat: TFormatSettings;
   FloatValue: Double;
   IntegerValue: Int64;
   NumStr: string;
@@ -593,9 +594,7 @@ begin
     Exit;
   end;
 
-  FloatFormat := DefaultFormatSettings;
-  FloatFormat.DecimalSeparator := '.';
-  FloatValue := StrToFloat(NumStr, FloatFormat);
+  FloatValue := DecimalTextToNumber(NumStr);
   OnFloat(FloatValue);
 end;
 
@@ -635,10 +634,10 @@ end;
 
 function TAbstractJSONParser.ParseIdentifierName: string;
 var
-  Bytes: RawByteString;
-  Sequence: UTF8String;
+  Text: string;
+  Sequence: string;
 begin
-  Bytes := '';
+  Text := '';
 
   if IsAtEnd then
     RaiseParseError('Unexpected end of JSON input');
@@ -646,16 +645,16 @@ begin
   if PeekChar = '\' then
   begin
     ReadChar;
-    Bytes := RawByteString(ParseIdentifierEscape(True));
+    Text := ParseIdentifierEscape(True);
   end
   else if IsASCIIIdentifierStartByte(PeekChar) then
-    Bytes := Bytes + ReadChar
+    Text := Text + ReadChar
   else
   begin
-    Sequence := PeekUTF8Sequence;
+    Sequence := PeekCodePointSequence;
     if not IsIdentifierStartText(Sequence) then
       RaiseParseError('Expected string key in object');
-    Bytes := Bytes + RawByteString(ReadUTF8Sequence);
+    Text := Text + ReadCodePointSequence;
   end;
 
   while not IsAtEnd do
@@ -663,20 +662,20 @@ begin
     if PeekChar = '\' then
     begin
       ReadChar;
-      Bytes := Bytes + RawByteString(ParseIdentifierEscape(False));
+      Text := Text + ParseIdentifierEscape(False);
     end
     else if IsASCIIIdentifierContinueByte(PeekChar) then
-      Bytes := Bytes + ReadChar
+      Text := Text + ReadChar
     else
     begin
-      Sequence := PeekUTF8Sequence;
+      Sequence := PeekCodePointSequence;
       if not IsIdentifierContinueText(Sequence) then
         Break;
-      Bytes := Bytes + RawByteString(ReadUTF8Sequence);
+      Text := Text + ReadCodePointSequence;
     end;
   end;
 
-  Result := TextSemantics.RetagUTF8Text(Bytes);
+  Result := Text;
 end;
 
 function TAbstractJSONParser.ParseString: string;
@@ -699,18 +698,18 @@ end;
 
 function TAbstractJSONParser.ParseString(const AQuote: Char): string;
 var
-  Bytes: RawByteString;
+  Text: string;
   Ch: Char;
 begin
   ExpectChar(AQuote);
-  Bytes := '';
+  Text := '';
 
   while not IsAtEnd do
   begin
     Ch := ReadChar;
     if Ch = AQuote then
     begin
-      Result := TextSemantics.RetagUTF8Text(Bytes);
+      Result := Text;
       Exit;
     end;
 
@@ -725,36 +724,36 @@ begin
       Ch := ReadChar;
       case Ch of
         '"':
-          Bytes := Bytes + '"';
+          Text := Text + '"';
         '''':
           if Supports(jpcAllowExtendedStringEscapes) or (AQuote = '''') then
-            Bytes := Bytes + ''''
+            Text := Text + ''''
           else
             RaiseParseError('Invalid escape character: \' + Ch);
         '\':
-          Bytes := Bytes + '\';
+          Text := Text + '\';
         '/':
-          Bytes := Bytes + '/';
+          Text := Text + '/';
         'b':
-          Bytes := Bytes + #8;
+          Text := Text + #8;
         'f':
-          Bytes := Bytes + #12;
+          Text := Text + #12;
         'n':
-          Bytes := Bytes + #10;
+          Text := Text + #10;
         'r':
-          Bytes := Bytes + #13;
+          Text := Text + #13;
         't':
-          Bytes := Bytes + #9;
+          Text := Text + #9;
         'u':
-          Bytes := Bytes + RawByteString(ParseUnicodeEscape);
+          Text := Text + ParseUnicodeEscape;
         'v':
           if Supports(jpcAllowExtendedStringEscapes) then
-            Bytes := Bytes + #11
+            Text := Text + #11
           else
             RaiseParseError('Invalid escape character: \' + Ch);
         'x':
           if Supports(jpcAllowExtendedStringEscapes) then
-            Bytes := Bytes + RawByteString(ParseHexEscape(2))
+            Text := Text + ParseHexEscape(2)
           else
             RaiseParseError('Invalid escape character: \' + Ch);
         '0':
@@ -763,7 +762,7 @@ begin
             begin
               if not IsAtEnd and IsASCIIDigit(PeekChar) then
                 RaiseParseError('Invalid escape character: \' + PeekChar);
-              Bytes := Bytes + #0;
+              Text := Text + #0;
             end
             else
               RaiseParseError('Invalid escape character: \' + Ch);
@@ -775,7 +774,7 @@ begin
             RaiseParseError('Invalid escape character: \' + Ch);
       else
         if Supports(jpcAllowExtendedStringEscapes) then
-          Bytes := Bytes + Ch
+          Text := Text + Ch
         else
           RaiseParseError('Invalid escape character: \' + Ch);
       end;
@@ -785,7 +784,7 @@ begin
     else if Ord(Ch) < 32 then
       RaiseParseError('Unescaped control character in string')
     else
-      Bytes := Bytes + Ch;
+      Text := Text + Ch;
   end;
 
   RaiseParseError('Unterminated string');
@@ -808,7 +807,7 @@ begin
     CodePoint := (CodePoint shl 4) or Cardinal(Value);
   end;
 
-  Result := TextSemantics.CodePointToUTF8(CodePoint);
+  Result := TextEncoding.CodePointToUTF16(CodePoint);
 end;
 
 function TAbstractJSONParser.ParseUnicodeEscape: string;
@@ -868,7 +867,7 @@ begin
     end;
   end;
 
-  Result := TextSemantics.CodePointToUTF8(CodePoint);
+  Result := TextEncoding.CodePointToUTF16(CodePoint);
 end;
 
 function TAbstractJSONParser.MatchSequence(const ASequence: string): Boolean;

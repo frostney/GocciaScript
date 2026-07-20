@@ -122,7 +122,8 @@ var
   GPromiseDefaultConstructorSlot: TGocciaRealmSlotId;
 
 function GetPromiseSharedForRealm(
-  const ARealm: TGocciaRealm): TGocciaSharedPrototype; inline;
+  const ARealm: TGocciaRealm): TGocciaSharedPrototype;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Assigned(ARealm) then
     Result := TGocciaSharedPrototype(ARealm.GetOwnedSlot(GPromiseSharedSlot))
@@ -130,13 +131,15 @@ begin
     Result := nil;
 end;
 
-function GetPromiseShared: TGocciaSharedPrototype; inline;
+function GetPromiseShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := GetPromiseSharedForRealm(CurrentRealm);
 end;
 
 function GetPromiseDefaultConstructorForRealm(
-  const ARealm: TGocciaRealm): TGocciaValue; inline;
+  const ARealm: TGocciaRealm): TGocciaValue;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Assigned(ARealm) then
     Result := TGocciaValue(ARealm.GetSlot(GPromiseDefaultConstructorSlot))
@@ -145,7 +148,8 @@ begin
 end;
 
 procedure SetPromiseDefaultConstructorForRealm(const ARealm: TGocciaRealm;
-  const AConstructor: TGocciaValue); inline;
+  const AConstructor: TGocciaValue);
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Assigned(ARealm) then
     ARealm.SetSlot(GPromiseDefaultConstructorSlot, AConstructor);
@@ -276,7 +280,7 @@ end;
 function GetPromiseDefaultConstructor: TGocciaValue;
 begin
   Result := GetPromiseDefaultConstructorForRealm(CurrentRealm);
-  if not Assigned(Result) and Assigned(GetPromiseShared) then
+  if not Assigned(Result) and (GetPromiseShared <> nil) then
     Result := GetPromiseShared.Prototype.GetProperty(PROP_CONSTRUCTOR);
 end;
 
@@ -300,7 +304,7 @@ begin
   end;
 
   Result := TGocciaPromiseValue.Create;
-  IsRooted := Assigned(TGarbageCollector.Instance);
+  IsRooted := (TGarbageCollector.Instance <> nil);
   if IsRooted then
     TGarbageCollector.Instance.AddTempRoot(Result);
   try
@@ -553,12 +557,12 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetPromiseShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetPromiseShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GPromiseSharedSlot, Shared);
-  if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+  if TGocciaObjectValue.SharedObjectPrototype = nil then
     TGocciaObjectValue.InitializeSharedPrototype;
   Shared.Prototype.Prototype := TGocciaObjectValue.SharedObjectPrototype;
   Members := TGocciaMemberCollection.Create;

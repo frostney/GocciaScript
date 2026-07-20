@@ -120,7 +120,9 @@ implementation
 uses
   DateUtils,
   Generics.Defaults,
-  TypInfo;
+  TypInfo,
+
+  NumericText;
 
 var
   CurrentDescribeSuite: TTestSuite;
@@ -150,8 +152,7 @@ begin
       Result := '"' + PString(P)^ + '"';
     tkFloat:
       begin
-        FS := DefaultFormatSettings;
-        FS.DecimalSeparator := '.';
+        FS := CreateInvariantFormatSettings;
         Result := FloatToStr(PDouble(P)^, FS);
       end;
     tkInteger:

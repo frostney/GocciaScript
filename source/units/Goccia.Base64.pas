@@ -11,6 +11,8 @@ uses
   SysUtils;
 
 function EncodeBase64Standard(const AData: TBytes): string;
+function TryDecodeBase64Standard(const AText: string;
+  out AData: TBytes): Boolean;
 
 implementation
 
@@ -70,6 +72,98 @@ begin
       Result[Pos + 3] := BASE64_PAD_CHAR;
     end;
   end;
+end;
+
+function Base64Value(const AChar: Char): Integer;
+begin
+  case AChar of
+    'A'..'Z': Result := Ord(AChar) - Ord('A');
+    'a'..'z': Result := Ord(AChar) - Ord('a') + 26;
+    '0'..'9': Result := Ord(AChar) - Ord('0') + 52;
+    '+': Result := 62;
+    '/': Result := 63;
+  else
+    Result := -1;
+  end;
+end;
+
+// RFC 4648 section 4 standard Base64 decoding. The final padding is optional,
+// matching the existing configuration-file behaviour, but padding may only
+// appear at the end of a complete four-character group.
+function TryDecodeBase64Standard(const AText: string;
+  out AData: TBytes): Boolean;
+var
+  InputLength, OutputLength, Padding, Remainder: Integer;
+  InputIndex, OutputIndex, I: Integer;
+  V0, V1, V2, V3: Integer;
+begin
+  SetLength(AData, 0);
+  InputLength := Length(AText);
+  if InputLength = 0 then
+    Exit(True);
+
+  Remainder := InputLength mod 4;
+  if Remainder = 1 then
+    Exit(False);
+
+  Padding := 0;
+  if AText[InputLength] = BASE64_PAD_CHAR then
+  begin
+    Padding := 1;
+    if (InputLength > 1) and
+       (AText[InputLength - 1] = BASE64_PAD_CHAR) then
+      Padding := 2;
+  end;
+  if (Padding > 0) and (Remainder <> 0) then
+    Exit(False);
+
+  for I := 1 to InputLength - Padding do
+    if Base64Value(AText[I]) < 0 then
+      Exit(False);
+  for I := InputLength - Padding + 1 to InputLength do
+    if AText[I] <> BASE64_PAD_CHAR then
+      Exit(False);
+
+  OutputLength := (InputLength div 4) * 3 - Padding;
+  if (Padding = 0) and (Remainder > 0) then
+    Inc(OutputLength, Remainder - 1);
+  SetLength(AData, OutputLength);
+
+  InputIndex := 1;
+  OutputIndex := 0;
+  while InputIndex <= InputLength do
+  begin
+    V0 := Base64Value(AText[InputIndex]);
+    V1 := Base64Value(AText[InputIndex + 1]);
+    if (InputIndex + 2 <= InputLength) and
+       (AText[InputIndex + 2] <> BASE64_PAD_CHAR) then
+      V2 := Base64Value(AText[InputIndex + 2])
+    else
+      V2 := 0;
+    if (InputIndex + 3 <= InputLength) and
+       (AText[InputIndex + 3] <> BASE64_PAD_CHAR) then
+      V3 := Base64Value(AText[InputIndex + 3])
+    else
+      V3 := 0;
+
+    if OutputIndex < OutputLength then
+    begin
+      AData[OutputIndex] := Byte((V0 shl 2) or (V1 shr 4));
+      Inc(OutputIndex);
+    end;
+    if OutputIndex < OutputLength then
+    begin
+      AData[OutputIndex] := Byte((V1 shl 4) or (V2 shr 2));
+      Inc(OutputIndex);
+    end;
+    if OutputIndex < OutputLength then
+    begin
+      AData[OutputIndex] := Byte((V2 shl 6) or V3);
+      Inc(OutputIndex);
+    end;
+    Inc(InputIndex, 4);
+  end;
+  Result := True;
 end;
 
 end.

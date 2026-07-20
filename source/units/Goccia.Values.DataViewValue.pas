@@ -33,7 +33,8 @@ type
     procedure InitializePrototype;
     procedure SyncBufferData;
     function IsDetachedBuffer: Boolean;
-    function IsAutoLength: Boolean; inline;
+    function IsAutoLength: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
     function IsViewOutOfBounds: Boolean;
     function GetViewByteLength: Integer;
     function GetBufferByteLength: Integer;
@@ -108,9 +109,10 @@ uses
 var
   GDataViewSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetDataViewShared: TGocciaSharedPrototype; inline;
+function GetDataViewShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GDataViewSharedSlot))
   else
     Result := nil;
@@ -152,7 +154,7 @@ begin
   Result := Trunc(IntegerIndex);
 end;
 
-function BigIntFromQWord(const AValue: QWord): TBigInteger;
+function BigIntFromQWord(const AValue: UInt64): TBigInteger;
 var
   LowPart, HighPart: Int64;
 begin
@@ -260,8 +262,8 @@ var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetDataViewShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetDataViewShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GDataViewSharedSlot, Shared);
@@ -490,7 +492,7 @@ begin
     RawBigInt := ReadBinaryBigIntElement(FBufferData, BufferIndex, AKind,
       IsLittleEndian);
     if AKind = bekBigUint64 then
-      Result := TGocciaBigIntValue.Create(BigIntFromQWord(QWord(RawBigInt)))
+      Result := TGocciaBigIntValue.Create(BigIntFromQWord(UInt64(RawBigInt)))
     else
       Result := TGocciaBigIntValue.Create(TBigInteger.FromInt64(RawBigInt));
   end

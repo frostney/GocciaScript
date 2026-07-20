@@ -292,7 +292,7 @@ begin
   if not ParseShellRunOptions(AArgs, EntryPath, Options, Error) then
   begin
     AResult.ErrorOutput := AResult.ErrorOutput +
-      'goccia: ' + Error + LineEnding;
+      'goccia: ' + Error + sLineBreak;
     AResult.ExitCode := 2;
     Exit;
   end;
@@ -300,7 +300,7 @@ begin
   if not Assigned(FRunScriptCallback) then
   begin
     AResult.ErrorOutput := AResult.ErrorOutput +
-      'goccia: nested script execution is not configured' + LineEnding;
+      'goccia: nested script execution is not configured' + sLineBreak;
     AResult.ExitCode := 127;
     Exit;
   end;
@@ -314,7 +314,7 @@ begin
   begin
     if RunResult.ErrorMessage <> '' then
       AResult.ErrorOutput := AResult.ErrorOutput + 'goccia: ' +
-        RunResult.ErrorMessage + LineEnding;
+        RunResult.ErrorMessage + sLineBreak;
     AResult.ExitCode := RunResult.ExitCode;
   end;
 end;
@@ -390,8 +390,7 @@ function TimestampMillisecondsText(const AValue: TDateTime): string;
 var
   FormatSettings: TFormatSettings;
 begin
-  FormatSettings := DefaultFormatSettings;
-  FormatSettings.DecimalSeparator := '.';
+  FormatSettings := InvariantFormatSettings;
   Result := FloatToStr(SandboxDateTimeToUnixMilliseconds(AValue),
     FormatSettings);
 end;
@@ -449,9 +448,9 @@ var
     if AOldValue = ANewValue then
       Exit;
     Changes := Changes + '-' + AName + ': ' +
-      TimestampMillisecondsText(AOldValue) + LineEnding;
+      TimestampMillisecondsText(AOldValue) + sLineBreak;
     Changes := Changes + '+' + AName + ': ' +
-      TimestampMillisecondsText(ANewValue) + LineEnding;
+      TimestampMillisecondsText(ANewValue) + sLineBreak;
   end;
 
 begin
@@ -466,7 +465,7 @@ begin
     ACurrentStat.BirthTime);
   if Changes <> '' then
     AResult := AResult + '@@ sandbox metadata changed ' + APath + ' @@' +
-      LineEnding + Changes;
+      sLineBreak + Changes;
 end;
 
 function TGocciaSandboxContext.DiffJson(
@@ -598,13 +597,13 @@ begin
          BytesEqual(FBaseline.SnapshotReadAllBytes(Path),
            FFs.SnapshotReadAllBytes(Path)) then
         Continue;
-      Result := Result + '--- ' + Path + LineEnding;
-      Result := Result + '+++ ' + Path + LineEnding;
-      Result := Result + '@@ sandbox file changed @@' + LineEnding;
+      Result := Result + '--- ' + Path + sLineBreak;
+      Result := Result + '+++ ' + Path + sLineBreak;
+      Result := Result + '@@ sandbox file changed @@' + sLineBreak;
       if Assigned(FBaseline) and FBaseline.IsFile(Path) then
         Result := Result + '-' + FBaseline.SnapshotReadAllText(Path) +
-          LineEnding;
-      Result := Result + '+' + FFs.SnapshotReadAllText(Path) + LineEnding;
+          sLineBreak;
+      Result := Result + '+' + FFs.SnapshotReadAllText(Path) + sLineBreak;
     end;
 
     for I := 0 to BaselinePaths.Count - 1 do
@@ -612,11 +611,11 @@ begin
       Path := BaselinePaths[I];
       if (Path = '/') or (not FBaseline.IsFile(Path)) or FFs.Exists(Path) then
         Continue;
-      Result := Result + '--- ' + Path + LineEnding;
-      Result := Result + '+++ ' + Path + LineEnding;
-      Result := Result + '@@ sandbox file deleted @@' + LineEnding;
+      Result := Result + '--- ' + Path + sLineBreak;
+      Result := Result + '+++ ' + Path + sLineBreak;
+      Result := Result + '@@ sandbox file deleted @@' + sLineBreak;
       Result := Result + '-' + FBaseline.SnapshotReadAllText(Path) +
-        LineEnding;
+        sLineBreak;
     end;
 
     if AIncludeMetadata and Assigned(FBaseline) then

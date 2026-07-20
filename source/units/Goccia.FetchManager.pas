@@ -9,6 +9,7 @@ interface
 // gate in the implementation.
 
 uses
+  CriticalSections,
   HTTPTypes,
 
   Goccia.Values.PromiseValue;
@@ -82,7 +83,7 @@ type
 
   TGocciaFetchLimiter = class
   private
-    FLock: TRTLCriticalSection;
+    FLock: TGocciaCriticalSection;
     FActiveWorkers: Integer;
     FRefCount: Integer;
   public
@@ -97,7 +98,7 @@ type
 
   TGocciaFetchState = class
   private
-    FLock: TRTLCriticalSection;
+    FLock: TGocciaCriticalSection;
     FCompletions: TList<TGocciaFetchCompletion>;
     FAcceptCompletions: Boolean;
     FRefCount: Integer;
@@ -180,48 +181,48 @@ end;
 constructor TGocciaFetchLimiter.Create;
 begin
   inherited Create;
-  InitCriticalSection(FLock);
+  CriticalSectionInit(FLock);
   FActiveWorkers := 0;
   FRefCount := 1;
 end;
 
 destructor TGocciaFetchLimiter.Destroy;
 begin
-  DoneCriticalSection(FLock);
+  CriticalSectionDone(FLock);
   inherited;
 end;
 
 procedure TGocciaFetchLimiter.AddRef;
 begin
-  InterlockedIncrement(FRefCount);
+  AtomicIncrementInt32(FRefCount);
 end;
 
 procedure TGocciaFetchLimiter.Release;
 begin
-  if InterlockedDecrement(FRefCount) = 0 then
+  if AtomicDecrementInt32(FRefCount) = 0 then
     Free;
 end;
 
 function TGocciaFetchLimiter.TryAcquireWorker: Boolean;
 begin
-  EnterCriticalSection(FLock);
+  CriticalSectionEnter(FLock);
   try
     Result := FActiveWorkers < MAX_FETCH_WORKERS;
     if Result then
       Inc(FActiveWorkers);
   finally
-    LeaveCriticalSection(FLock);
+    CriticalSectionLeave(FLock);
   end;
 end;
 
 procedure TGocciaFetchLimiter.ReleaseWorker;
 begin
-  EnterCriticalSection(FLock);
+  CriticalSectionEnter(FLock);
   try
     if FActiveWorkers > 0 then
       Dec(FActiveWorkers);
   finally
-    LeaveCriticalSection(FLock);
+    CriticalSectionLeave(FLock);
   end;
 end;
 
@@ -230,7 +231,7 @@ end;
 constructor TGocciaFetchState.Create;
 begin
   inherited Create;
-  InitCriticalSection(FLock);
+  CriticalSectionInit(FLock);
   FCompletions := TList<TGocciaFetchCompletion>.Create;
   FAcceptCompletions := True;
   FRefCount := 1;
@@ -240,31 +241,31 @@ destructor TGocciaFetchState.Destroy;
 begin
   ClearCompletions;
   FCompletions.Free;
-  DoneCriticalSection(FLock);
+  CriticalSectionDone(FLock);
   inherited;
 end;
 
 procedure TGocciaFetchState.AddRef;
 begin
-  InterlockedIncrement(FRefCount);
+  AtomicIncrementInt32(FRefCount);
 end;
 
 procedure TGocciaFetchState.Release;
 begin
-  if InterlockedDecrement(FRefCount) = 0 then
+  if AtomicDecrementInt32(FRefCount) = 0 then
     Free;
 end;
 
 function TGocciaFetchState.PostCompletion(
   const ACompletion: TGocciaFetchCompletion): Boolean;
 begin
-  EnterCriticalSection(FLock);
+  CriticalSectionEnter(FLock);
   try
     Result := FAcceptCompletions;
     if Result then
       FCompletions.Add(ACompletion);
   finally
-    LeaveCriticalSection(FLock);
+    CriticalSectionLeave(FLock);
   end;
 end;
 
@@ -272,7 +273,7 @@ function TGocciaFetchState.PopCompletion(
   out ACompletion: TGocciaFetchCompletion): Boolean;
 begin
   ACompletion := nil;
-  EnterCriticalSection(FLock);
+  CriticalSectionEnter(FLock);
   try
     Result := FCompletions.Count > 0;
     if Result then
@@ -281,7 +282,7 @@ begin
       FCompletions.Delete(0);
     end;
   finally
-    LeaveCriticalSection(FLock);
+    CriticalSectionLeave(FLock);
   end;
 end;
 
@@ -289,23 +290,23 @@ procedure TGocciaFetchState.ClearCompletions;
 var
   I: Integer;
 begin
-  EnterCriticalSection(FLock);
+  CriticalSectionEnter(FLock);
   try
     for I := 0 to FCompletions.Count - 1 do
       FCompletions[I].Free;
     FCompletions.Clear;
   finally
-    LeaveCriticalSection(FLock);
+    CriticalSectionLeave(FLock);
   end;
 end;
 
 procedure TGocciaFetchState.Abandon;
 begin
-  EnterCriticalSection(FLock);
+  CriticalSectionEnter(FLock);
   try
     FAcceptCompletions := False;
   finally
-    LeaveCriticalSection(FLock);
+    CriticalSectionLeave(FLock);
   end;
   ClearCompletions;
 end;
@@ -439,7 +440,7 @@ begin
       Pending.RequestID, AURL, AMethod, AHeaders);
     LimitAcquired := False;
 
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
     begin
       TGarbageCollector.Instance.AddTempRoot(APromise);
       Rooted := True;
@@ -452,7 +453,7 @@ begin
   except
     if Added then
       FPending.Delete(FPending.Count - 1);
-    if Rooted and Assigned(TGarbageCollector.Instance) then
+    if Rooted and (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(APromise);
     Worker.Free;
     if LimitAcquired then
@@ -517,10 +518,10 @@ begin
       Pending.Promise.Reject(CreateErrorObject('TypeError',
         ACompletion.ErrorMessage));
 
-    if Assigned(TGocciaMicrotaskQueue.Instance) then
+    if (TGocciaMicrotaskQueue.Instance <> nil) then
       TGocciaMicrotaskQueue.Instance.DrainQueue;
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(Pending.Promise);
   end;
 end;
@@ -586,7 +587,7 @@ begin
   for I := 0 to FPending.Count - 1 do
   begin
     Pending := FPending[I];
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(Pending.Promise);
   end;
   FPending.Clear;

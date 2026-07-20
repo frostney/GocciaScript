@@ -141,7 +141,7 @@ var
 
 function AddTempRootIfNeeded(const AValue: TGocciaValue): Boolean;
 begin
-  Result := Assigned(TGarbageCollector.Instance) and Assigned(AValue) and
+  Result := (TGarbageCollector.Instance <> nil) and Assigned(AValue) and
     not TGarbageCollector.Instance.IsTempRoot(AValue);
   if Result then
     TGarbageCollector.Instance.AddTempRoot(AValue);
@@ -337,14 +337,14 @@ begin
     Exit;
   end;
 
-  if not TextSemantics.TryReadUTF8CodePointAllowSurrogates(StrVal,
+  if not TextSemantics.TryReadCodePointAtAllowSurrogates(StrVal,
      FIndex + 1, CodePoint, ByteLength) then
   begin
     CodePoint := 0;
     ByteLength := 1;
   end;
   if (CodePoint >= $D800) and (CodePoint <= $DBFF) and
-     TextSemantics.TryReadUTF8CodePointAllowSurrogates(StrVal,
+     TextSemantics.TryReadCodePointAtAllowSurrogates(StrVal,
        FIndex + ByteLength + 1, NextCodePoint, NextByteLength) and
      (NextCodePoint >= $DC00) and (NextCodePoint <= $DFFF) then
     Inc(ByteLength, NextByteLength);

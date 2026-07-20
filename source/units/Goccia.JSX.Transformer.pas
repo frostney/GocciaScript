@@ -43,15 +43,21 @@ type
     FFileName: string;
     FJSXDepth: Integer;
 
-    function Peek: Char; inline;
-    function PeekAt(const AOffset: Integer): Char; inline;
-    function IsAtEnd: Boolean; inline;
-    procedure AdvanceInput; inline;
-    function CurrentChar: Char; inline;
+    function Peek: Char;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function PeekAt(const AOffset: Integer): Char;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function IsAtEnd: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure AdvanceInput;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function CurrentChar: Char;
+    {$IFDEF FPC}inline;{$ENDIF}
 
     procedure Emit(const AText: string);
     procedure EmitMapped(const AText: string; const ASourceLine, ASourceColumn: Integer);
-    procedure EmitChar(const AChar: Char); inline;
+    procedure EmitChar(const AChar: Char);
+    {$IFDEF FPC}inline;{$ENDIF}
     procedure EmitNewline;
     procedure AddIdentityMapping;
 
@@ -67,8 +73,10 @@ type
 
     function IsJSXContext: Boolean;
     function IsJSXStart: Boolean;
-    function IsIdentifierStart(const AChar: Char): Boolean; inline;
-    function IsIdentifierPart(const AChar: Char): Boolean; inline;
+    function IsIdentifierStart(const AChar: Char): Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function IsIdentifierPart(const AChar: Char): Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
 
     procedure TransformJSXElement;
     function ReadJSXTagName: string;
@@ -638,7 +646,7 @@ begin
   if not HasNewline then
     Exit(AText);
 
-  Lines := CreateUTF8StringList(AText);
+  Lines := CreateTextLines(AText);
   try
     SB := TStringBuffer.Create;
     First := True;

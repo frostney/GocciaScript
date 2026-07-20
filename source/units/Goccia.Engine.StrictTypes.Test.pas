@@ -254,6 +254,6 @@ end;
 begin
   TestRunnerProgram.AddSuite(TEngineStrictTypesTests.Create(
     'Engine StrictTypes'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
   ExitCode := TestResultToExitCode;
 end.

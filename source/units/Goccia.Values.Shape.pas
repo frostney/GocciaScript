@@ -99,7 +99,8 @@ type
     FOwnerRealmIdentity: TGocciaRealmIdentity;
     FShape: TGocciaShape;
     FShapeEntryCount: Integer;
-    function OwnerRealmIsCurrent: Boolean; inline;
+    function OwnerRealmIsCurrent: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
   public
     constructor Create; overload;
     constructor Create(AInitialCapacity: Integer); overload;
@@ -123,7 +124,8 @@ type
 
 // Process-wide immutable sentinel compared by identity only; never part of
 // any realm's transition tree.
-function DictionaryShapeSentinel: TGocciaShape; inline;
+function DictionaryShapeSentinel: TGocciaShape;
+{$IFDEF FPC}inline;{$ENDIF}
 
 // The current realm's shape table, created on first use through the
 // realm-owned slot. nil when no realm is current (engine bootstrap edges);
@@ -140,6 +142,7 @@ var
   GDictionaryShape: TGocciaShape;
 
 function DictionaryShapeSentinel: TGocciaShape;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := GDictionaryShape;
 end;
@@ -148,7 +151,7 @@ function CurrentRealmShapeTable: TGocciaShapeTable;
 var
   Stored: TObject;
 begin
-  if not Assigned(CurrentRealm) then
+  if (CurrentRealm = nil) then
     Exit(nil);
   Stored := CurrentRealm.GetOwnedSlot(GShapeTableSlot);
   if not Assigned(Stored) then

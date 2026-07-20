@@ -7,8 +7,10 @@ uses
   Generics.Collections,
   SysUtils,
 
+  FileUtils,
   OrderedStringMap,
   TestingPascalLibrary,
+  TextEncoding,
   TextSemantics,
 
   Goccia.AST.Node,
@@ -217,7 +219,7 @@ var
 begin
   Lexer := TGocciaLexer.Create(ASource, AFileName);
   try
-    SourceLines := CreateUTF8StringList(ASource);
+    SourceLines := CreateTextLines(ASource);
     try
       Parser := TGocciaParser.CreateFromLexer(Lexer, AFileName, SourceLines);
       try
@@ -269,31 +271,15 @@ begin
 end;
 
 procedure TModuleContentProviderTests.WriteTextFile(const APath, AText: string);
-var
-  Source: TStringList;
 begin
   ForceDirectories(ExtractFileDir(APath));
-  Source := TStringList.Create;
-  try
-    Source.Text := AText;
-    Source.SaveToFile(APath);
-  finally
-    Source.Free;
-  end;
+  FileUtils.WriteUTF8FileText(APath, AText);
 end;
 
-procedure WriteUTF8File(const APath: string; const AText: UTF8String);
-var
-  Stream: TFileStream;
+procedure WriteUTF8File(const APath, AText: string);
 begin
   ForceDirectories(ExtractFileDir(APath));
-  Stream := TFileStream.Create(APath, fmCreate);
-  try
-    if Length(AText) > 0 then
-      Stream.WriteBuffer(Pointer(AText)^, Length(AText));
-  finally
-    Stream.Free;
-  end;
+  FileUtils.WriteUTF8FileText(APath, AText);
 end;
 
 procedure TModuleContentProviderTests.TestEngineLoadsInMemoryModuleWithCustomProvider;
@@ -317,7 +303,7 @@ begin
   Executor := TGocciaInterpreterExecutor.Create;
   try
     Provider.AddModule(MODULE_PATH, 'export const value = 42;');
-    Source.Text := 'import { value } from "' + MODULE_PATH + '";' + LineEnding +
+    Source.Text := 'import { value } from "' + MODULE_PATH + '";' + sLineBreak +
       'value;';
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
@@ -365,7 +351,7 @@ begin
 
   Source := TStringList.Create;
   try
-    Source.Text := 'import { value } from "./dep.js";' + LineEnding + 'value;';
+    Source.Text := 'import { value } from "./dep.js";' + sLineBreak + 'value;';
 
     Executor := TGocciaBytecodeExecutor.Create;
     try
@@ -373,7 +359,7 @@ begin
         TGocciaModuleLoader.Create(EntryPath, nil, Provider), Executor);
       try
         ProgramNode := CreateProgram(
-          'import { value } from "./dep.js";' + LineEnding + 'value;',
+          'import { value } from "./dep.js";' + sLineBreak + 'value;',
           EntryPath);
         try
           ResultValue := Engine.ExecuteProgram(ProgramNode);
@@ -408,7 +394,7 @@ begin
   EntryPath := IncludeTrailingPathDelimiter(TempDirectory) + 'entry.mjs';
   Source := TStringList.Create;
   try
-    Source.Text := 'import value from "./virtual.mjs";' + LineEnding +
+    Source.Text := 'import value from "./virtual.mjs";' + sLineBreak +
       'value;';
     Engine := TGocciaEngine.Create(EntryPath, Source, AExecutor);
     try
@@ -466,7 +452,7 @@ begin
   Executor := TGocciaInterpreterExecutor.Create;
   try
     Provider.AddModule(MODULE_PATH, 'export const value = ;');
-    Source.Text := 'import { value } from "' + MODULE_PATH + '";' + LineEnding +
+    Source.Text := 'import { value } from "' + MODULE_PATH + '";' + sLineBreak +
       'value;';
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
@@ -523,11 +509,11 @@ begin
   Executor := TGocciaInterpreterExecutor.Create;
   try
     Provider.AddModule(MODULE_PATH,
-      '{"id":1}' + LineEnding +
-      '{invalid}' + LineEnding +
+      '{"id":1}' + sLineBreak +
+      '{invalid}' + sLineBreak +
       '42');
     Source.Text := 'import { "0" as firstRecord } from "' + MODULE_PATH + '";' +
-      LineEnding + 'firstRecord;';
+      sLineBreak + 'firstRecord;';
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
@@ -592,7 +578,7 @@ begin
   Executor := TGocciaInterpreterExecutor.Create;
   try
     Provider.AddModule(MODULE_PATH, 'value = 01');
-    Source.Text := 'import { value } from "' + MODULE_PATH + '";' + LineEnding +
+    Source.Text := 'import { value } from "' + MODULE_PATH + '";' + sLineBreak +
       'value;';
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
@@ -639,22 +625,22 @@ end;
 
 procedure TModuleContentProviderTests.TestFileSystemContentProviderPreservesUTF8JSONLText;
 var
-  CityValue: UTF8String;
+  CityValue: string;
   Content: TGocciaModuleContent;
   ContentProvider: TGocciaFileSystemModuleContentProvider;
-  MessageValue: UTF8String;
-  NameValue: UTF8String;
+  MessageValue: string;
+  NameValue: string;
   Parser: TGocciaJSONLParser;
   Records: TGocciaArrayValue;
   TempDirectory: string;
   JSONLPath: string;
-  JSONLText: UTF8String;
+  JSONLText: string;
 begin
   TempDirectory := CreateTempDirectory;
   JSONLPath := IncludeTrailingPathDelimiter(TempDirectory) + 'unicode.jsonl';
-  NameValue := 'Jos' + #$C3#$A9;
-  CityValue := 'Z' + #$C3#$BC + 'rich';
-  MessageValue := 'Caf' + #$C3#$A9 + ' d' + #$C3#$A9 + 'j' + #$C3#$A0 + ' vu';
+  NameValue := 'Jos' + #$00E9;
+  CityValue := 'Z' + #$00FC + 'rich';
+  MessageValue := 'Caf' + #$00E9 + ' d' + #$00E9 + 'j' + #$00E0 + ' vu';
   JSONLText :=
     '{"name":"' + NameValue + '","city":"' + CityValue + '"}' + #10 +
     '"' + MessageValue + '"' + #10;
@@ -664,6 +650,8 @@ begin
   try
     Content := ContentProvider.LoadContent(JSONLPath);
     try
+      Expect<Integer>(Content.ByteLength).ToBe(
+        Length(EncodeUTF8WithReplacement(JSONLText)));
       Parser := TGocciaJSONLParser.Create;
       try
         Records := Parser.Parse(Content.Text);
@@ -692,23 +680,23 @@ end;
 
 procedure TModuleContentProviderTests.TestFileSystemContentProviderPreservesUTF8TOMLText;
 var
-  CityValue: UTF8String;
+  CityValue: string;
   Content: TGocciaModuleContent;
   ContentProvider: TGocciaFileSystemModuleContentProvider;
-  NameValue: UTF8String;
+  NameValue: string;
   Obj: TGocciaObjectValue;
   ParsedValue: TGocciaValue;
   Parser: TGocciaTOMLParser;
-  QuotedKey: UTF8String;
+  QuotedKey: string;
   TempDirectory: string;
   TomlPath: string;
-  TomlText: UTF8String;
+  TomlText: string;
 begin
   TempDirectory := CreateTempDirectory;
   TomlPath := IncludeTrailingPathDelimiter(TempDirectory) + 'unicode.toml';
-  NameValue := 'Jos' + #$C3#$A9;
-  QuotedKey := 'd' + #$C3#$A9 + 'j' + #$C3#$A0;
-  CityValue := 'Z' + #$C3#$BC + 'rich';
+  NameValue := 'Jos' + #$00E9;
+  QuotedKey := 'd' + #$00E9 + 'j' + #$00E0;
+  CityValue := 'Z' + #$00FC + 'rich';
   TomlText :=
     'name = "' + NameValue + '"' + #10 +
     '"' + QuotedKey + '" = "vu"' + #10 +
@@ -745,23 +733,23 @@ end;
 
 procedure TModuleContentProviderTests.TestFileSystemContentProviderPreservesUTF8YAMLText;
 var
-  CityValue: UTF8String;
+  CityValue: string;
   Content: TGocciaModuleContent;
   ContentProvider: TGocciaFileSystemModuleContentProvider;
   Documents: TGocciaArrayValue;
-  NameValue: UTF8String;
+  NameValue: string;
   Obj: TGocciaObjectValue;
   Parser: TGocciaYAMLParser;
-  QuotedKey: UTF8String;
+  QuotedKey: string;
   TempDirectory: string;
   YAMLPath: string;
-  YAMLText: UTF8String;
+  YAMLText: string;
 begin
   TempDirectory := CreateTempDirectory;
   YAMLPath := IncludeTrailingPathDelimiter(TempDirectory) + 'unicode.yaml';
-  NameValue := 'Jos' + #$C3#$A9;
-  QuotedKey := 'd' + #$C3#$A9 + 'j' + #$C3#$A0;
-  CityValue := 'Z' + #$C3#$BC + 'rich';
+  NameValue := 'Jos' + #$00E9;
+  QuotedKey := 'd' + #$00E9 + 'j' + #$00E0;
+  CityValue := 'Z' + #$00FC + 'rich';
   YAMLText :=
     'name: ' + NameValue + #10 +
     '"' + QuotedKey + '": vu' + #10 +
@@ -803,7 +791,7 @@ end;
 
 procedure TModuleContentProviderTests.TestEngineLoadsUTF8TextAssetModule;
 var
-  ContentValue: UTF8String;
+  ContentValue: string;
   Engine: TGocciaEngine;
   Executor: TGocciaInterpreterExecutor;
   MetadataValue: TGocciaObjectValue;
@@ -816,14 +804,14 @@ var
 begin
   TempDirectory := CreateTempDirectory;
   TextAssetPath := IncludeTrailingPathDelimiter(TempDirectory) + 'note.txt';
-  ContentValue := 'Caf' + #$C3#$A9 + ' asset' + #10 + 'Second line';
+  ContentValue := 'Caf' + #$00E9 + ' asset' + #10 + 'Second line';
   WriteUTF8File(TextAssetPath, ContentValue);
 
   Source := TStringList.Create;
   Executor := TGocciaInterpreterExecutor.Create;
   try
     Source.Text :=
-      'import { content, metadata } from "./note.txt";' + LineEnding +
+      'import { content, metadata } from "./note.txt";' + sLineBreak +
       '({ content, metadata });';
 
     Engine := TGocciaEngine.Create(
@@ -854,7 +842,8 @@ begin
     Expect<string>(MetadataValue.GetProperty(PROP_EXTENSION)
       .ToStringLiteral.Value).ToBe('.txt');
     Expect<Double>(MetadataValue.GetProperty(PROP_BYTE_LENGTH)
-      .ToNumberLiteral.Value).ToBe(Length(ContentValue));
+      .ToNumberLiteral.Value).ToBe(
+        Length(EncodeUTF8WithReplacement(ContentValue)));
   finally
     Source.Free;
     Executor.Free;
@@ -865,7 +854,7 @@ procedure TModuleContentProviderTests.TestEngineNormalizesCRLFTextAssetModulesTo
 var
   Engine: TGocciaEngine;
   Executor: TGocciaInterpreterExecutor;
-  RawContent: UTF8String;
+  RawContent: string;
   Runtime: TGocciaRuntime;
   ScriptResult: TGocciaScriptResult;
   Source: TStringList;
@@ -881,7 +870,7 @@ begin
   Executor := TGocciaInterpreterExecutor.Create;
   try
     Source.Text :=
-      'import { content } from "./crlf-note.txt";' + LineEnding +
+      'import { content } from "./crlf-note.txt";' + sLineBreak +
       'content;';
 
     Engine := TGocciaEngine.Create(
@@ -992,6 +981,6 @@ end;
 begin
   TestRunnerProgram.AddSuite(
     TModuleContentProviderTests.Create('Module Content Provider'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
   ExitCode := TestResultToExitCode;
 end.

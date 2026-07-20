@@ -484,7 +484,7 @@ end;
 
 class procedure TGocciaObjectValue.SetSharedObjectPrototype(const AValue: TGocciaObjectValue);
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     CurrentRealm.SetSlot(GObjectPrototypeSlot, AValue);
 end;
 
@@ -549,7 +549,7 @@ begin
     Exit(TGocciaStringLiteralValue.Create('[object Null]'));
 
   Obj := ObjectPrototypeToObject(AThisValue);
-  if Assigned(TGarbageCollector.Instance) and not (AThisValue is TGocciaObjectValue) then
+  if (TGarbageCollector.Instance <> nil) and not (AThisValue is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
   try
     if IsArrayObject(Obj) then
@@ -572,7 +572,7 @@ begin
     if Assigned(SymbolTag) and (SymbolTag is TGocciaStringLiteralValue) then
       Tag := TGocciaStringLiteralValue(SymbolTag).Value;
   finally
-    if Assigned(TGarbageCollector.Instance) and not (AThisValue is TGocciaObjectValue) then
+    if (TGarbageCollector.Instance <> nil) and not (AThisValue is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
 
@@ -596,7 +596,7 @@ begin
 
   // Step 2: Let O be ? ToObject(this value)
   Obj := ObjectPrototypeToObject(AThisValue);
-  if Assigned(TGarbageCollector.Instance) and not (AThisValue is TGocciaObjectValue) then
+  if (TGarbageCollector.Instance <> nil) and not (AThisValue is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
   try
     // Step 3: Return ? HasOwnProperty(O, P)
@@ -610,7 +610,7 @@ begin
     else
       Result := TGocciaBooleanLiteralValue.FalseValue;
   finally
-    if Assigned(TGarbageCollector.Instance) and not (AThisValue is TGocciaObjectValue) then
+    if (TGarbageCollector.Instance <> nil) and not (AThisValue is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
 end;
@@ -662,7 +662,7 @@ begin
 
   // Step 2: Let O be ? ToObject(this value)
   Obj := ObjectPrototypeToObject(AThisValue);
-  if Assigned(TGarbageCollector.Instance) and not (AThisValue is TGocciaObjectValue) then
+  if (TGarbageCollector.Instance <> nil) and not (AThisValue is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
   try
     if KeyValue is TGocciaSymbolValue then
@@ -679,7 +679,7 @@ begin
     else
       Result := TGocciaBooleanLiteralValue.FalseValue;
   finally
-    if Assigned(TGarbageCollector.Instance) and not (AThisValue is TGocciaObjectValue) then
+    if (TGarbageCollector.Instance <> nil) and not (AThisValue is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
 end;
@@ -694,7 +694,7 @@ begin
   // Step 1: Let O be the this value
   // Step 2: Return ? Invoke(O, "toString")
   Obj := ObjectPrototypeToObject(AThisValue);
-  if Assigned(TGarbageCollector.Instance) and not (AThisValue is TGocciaObjectValue) then
+  if (TGarbageCollector.Instance <> nil) and not (AThisValue is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
   try
     ToStringMethod := Obj.GetPropertyWithContext(PROP_TO_STRING, AThisValue);
@@ -708,7 +708,7 @@ begin
       CallArgs.Free;
     end;
   finally
-    if Assigned(TGarbageCollector.Instance) and not (AThisValue is TGocciaObjectValue) then
+    if (TGarbageCollector.Instance <> nil) and not (AThisValue is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
 end;
@@ -729,8 +729,8 @@ var
 begin
   // No realm yet - very early bootstrap path.  Subsequent constructor runs
   // under an assigned realm will retry.
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetSharedObjectPrototype) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetSharedObjectPrototype <> nil) then Exit;
 
   MethodHost := TGocciaObjectValue.Create;
   SharedPrototype := TGocciaObjectValue.Create;
@@ -764,16 +764,14 @@ end;
 destructor TGocciaObjectValue.Destroy;
 var
   Pair: TGocciaPropertyMap.TKeyValuePair;
-  SymValues: array of TGocciaPropertyDescriptor;
-  I: Integer;
+  SymPair: TSymbolDescriptorMap.TKeyValuePair;
 begin
   for Pair in FProperties do
     Pair.Value.Free;
   FProperties.Free;
 
-  SymValues := FSymbolDescriptors.Values;
-  for I := 0 to Length(SymValues) - 1 do
-    SymValues[I].Free;
+  for SymPair in FSymbolDescriptors do
+    SymPair.Value.Free;
   FSymbolDescriptors.Free;
 
   FSymbolInsertionOrder.Free;

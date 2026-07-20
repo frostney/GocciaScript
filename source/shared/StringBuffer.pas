@@ -10,16 +10,22 @@ const
 type
   TStringBuffer = record
   private
-    FData: AnsiString;
+    FData: string;
     FLen: Integer;
     FCap: Integer;
-    function GetLength: Integer; inline;
+    function GetLength: Integer;
+    {$IFDEF FPC}inline;{$ENDIF}
   public
-    class function Create(const ACapacity: Integer = DEFAULT_CAPACITY): TStringBuffer; static; inline;
-    procedure Append(const S: AnsiString); inline;
-    procedure AppendChar(const C: AnsiChar); inline;
-    procedure Clear; inline;
-    function ToString: AnsiString; inline;
+    class function Create(const ACapacity: Integer = DEFAULT_CAPACITY): TStringBuffer; static;
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure Append(const S: string);
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure AppendChar(const C: Char);
+    {$IFDEF FPC}inline;{$ENDIF}
+    procedure Clear;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function ToString: string;
+    {$IFDEF FPC}inline;{$ENDIF}
     property Length: Integer read GetLength;
   end;
 
@@ -35,7 +41,7 @@ begin
   SetLength(Result.FData, Result.FCap);
 end;
 
-procedure TStringBuffer.AppendChar(const C: AnsiChar);
+procedure TStringBuffer.AppendChar(const C: Char);
 begin
   if FLen + 1 > FCap then
   begin
@@ -46,7 +52,7 @@ begin
   FData[FLen] := C;
 end;
 
-procedure TStringBuffer.Append(const S: AnsiString);
+procedure TStringBuffer.Append(const S: string);
 var
   SLen, NewCap: Integer;
 begin
@@ -59,7 +65,7 @@ begin
     FCap := NewCap;
     SetLength(FData, FCap);
   end;
-  Move(S[1], FData[FLen + 1], SLen);
+  Move(S[1], FData[FLen + 1], SLen * SizeOf(Char));
   Inc(FLen, SLen);
 end;
 
@@ -68,7 +74,7 @@ begin
   FLen := 0;
 end;
 
-function TStringBuffer.ToString: AnsiString;
+function TStringBuffer.ToString: string;
 begin
   Result := Copy(FData, 1, FLen);
 end;

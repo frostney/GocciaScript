@@ -67,6 +67,7 @@ uses
 
   IntlICU,
   IntlLocaleResolver,
+  TextEncoding,
 
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
@@ -99,9 +100,10 @@ type
     procedure MarkReferences; override;
   end;
 
-function GetIntlNumberFormatShared: TGocciaSharedPrototype; inline;
+function GetIntlNumberFormatShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlNumberFormatSharedSlot))
   else
     Result := nil;
@@ -266,7 +268,8 @@ begin
   Result := (SubtagLength >= 3) and (SubtagLength <= 8);
 end;
 
-function IsAsciiAlpha(const C: Char): Boolean; inline;
+function IsAsciiAlpha(const C: Char): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (C in ['A'..'Z']) or (C in ['a'..'z']);
 end;
@@ -301,24 +304,6 @@ begin
   for I := 1 to Length(AValue) do
     if not IsAsciiAlpha(AValue[I]) then
       Exit(False);
-end;
-
-function UTF8FromCodePoint(const ACodePoint: Cardinal): string;
-begin
-  if ACodePoint <= $7F then
-    Result := Chr(ACodePoint)
-  else if ACodePoint <= $7FF then
-    Result := Chr($C0 or (ACodePoint shr 6)) +
-      Chr($80 or (ACodePoint and $3F))
-  else if ACodePoint <= $FFFF then
-    Result := Chr($E0 or (ACodePoint shr 12)) +
-      Chr($80 or ((ACodePoint shr 6) and $3F)) +
-      Chr($80 or (ACodePoint and $3F))
-  else
-    Result := Chr($F0 or (ACodePoint shr 18)) +
-      Chr($80 or ((ACodePoint shr 12) and $3F)) +
-      Chr($80 or ((ACodePoint shr 6) and $3F)) +
-      Chr($80 or (ACodePoint and $3F));
 end;
 
 function TryGetSimpleNumberingSystemZero(const AValue: string;
@@ -426,9 +411,9 @@ begin
   if (ADigit < 0) or (ADigit > 9) then
     Exit(IntToStr(ADigit));
   if ANumberingSystem = 'hanidec' then
-    Exit(UTF8FromCodePoint(HanidecDigits[ADigit]));
+    Exit(TextEncoding.CodePointToUTF16(HanidecDigits[ADigit]));
   if TryGetSimpleNumberingSystemZero(ANumberingSystem, CodePoint) then
-    Exit(UTF8FromCodePoint(CodePoint + Cardinal(ADigit)));
+    Exit(TextEncoding.CodePointToUTF16(CodePoint + Cardinal(ADigit)));
   Result := IntToStr(ADigit);
 end;
 
@@ -724,11 +709,11 @@ begin
       begin
         CurrDigits := 2;
         if AOptions.Currency = 'USD' then CurrSymbol := '$'
-        else if AOptions.Currency = 'EUR' then CurrSymbol := #$E2#$82#$AC
-        else if AOptions.Currency = 'GBP' then CurrSymbol := #$C2#$A3
+        else if AOptions.Currency = 'EUR' then CurrSymbol := #$20AC
+        else if AOptions.Currency = 'GBP' then CurrSymbol := #$00A3
         else if (AOptions.Currency = 'JPY') or (AOptions.Currency = 'CNY') then
         begin
-          CurrSymbol := #$C2#$A5;
+          CurrSymbol := #$00A5;
           CurrDigits := 0;
         end
         else
@@ -763,8 +748,7 @@ begin
   if MaxFrac < MinFrac then MaxFrac := MinFrac;
 
   FormatSpec := '0.' + StringOfChar('0', MaxFrac);
-  InvariantFS := DefaultFormatSettings;
-  InvariantFS.DecimalSeparator := '.';
+  InvariantFS := InvariantFormatSettings;
   RawStr := FormatFloat(FormatSpec, AbsValue, InvariantFS);
 
   DotPos := Pos('.', RawStr);
@@ -886,11 +870,11 @@ begin
       begin
         CurrDigits := 2;
         if AOptions.Currency = 'USD' then CurrSymbol := '$'
-        else if AOptions.Currency = 'EUR' then CurrSymbol := #$E2#$82#$AC
-        else if AOptions.Currency = 'GBP' then CurrSymbol := #$C2#$A3
+        else if AOptions.Currency = 'EUR' then CurrSymbol := #$20AC
+        else if AOptions.Currency = 'GBP' then CurrSymbol := #$00A3
         else if (AOptions.Currency = 'JPY') or (AOptions.Currency = 'CNY') then
         begin
-          CurrSymbol := #$C2#$A5;
+          CurrSymbol := #$00A5;
           CurrDigits := 0;
         end
         else
@@ -1393,7 +1377,7 @@ var
   K, Len: Integer;
   ObjectRoot: TGocciaTempRoot;
   FoundLocale: Boolean;
-  RequestedLocales: TStringArray;
+  RequestedLocales: IntlTypes.TStringArray;
 
   function CanonicalizeNumberFormatLocaleTag(const ARawTag: string): string;
   begin
@@ -1768,7 +1752,7 @@ begin
   FResolvedOptions.NumberingSystem := FNumberingSystem;
 
   InitializePrototype;
-  if Assigned(GetIntlNumberFormatShared) then
+  if (GetIntlNumberFormatShared <> nil) then
     FPrototype := GetIntlNumberFormatShared.Prototype;
 end;
 
@@ -1799,8 +1783,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetIntlNumberFormatShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetIntlNumberFormatShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlNumberFormatSharedSlot, Shared);

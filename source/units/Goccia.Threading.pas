@@ -27,6 +27,8 @@ uses
   Classes,
   SyncObjs,
 
+  CriticalSections,
+
   Goccia.CLI.JSON.Reporter,
   Goccia.Threading.Flags;
 
@@ -63,7 +65,7 @@ type
   private
     FItems: TGocciaWorkItemArray;
     FNextIndex: Integer;
-    FLock: TRTLCriticalSection;
+    FLock: TGocciaCriticalSection;
   public
     constructor Create(const AItems: TGocciaWorkItemArray);
     destructor Destroy; override;
@@ -247,12 +249,12 @@ begin
   inherited Create;
   FItems := AItems;
   FNextIndex := 0;
-  InitCriticalSection(FLock);
+  CriticalSectionInit(FLock);
 end;
 
 destructor TGocciaWorkQueue.Destroy;
 begin
-  DoneCriticalSection(FLock);
+  CriticalSectionDone(FLock);
   inherited;
 end;
 
@@ -260,7 +262,7 @@ function TGocciaWorkQueue.TryDequeue(out AItem: TGocciaWorkItem): Boolean;
 var
   Idx: Integer;
 begin
-  EnterCriticalSection(FLock);
+  CriticalSectionEnter(FLock);
   try
     if FNextIndex < Length(FItems) then
     begin
@@ -272,7 +274,7 @@ begin
     else
       Result := False;
   finally
-    LeaveCriticalSection(FLock);
+    CriticalSectionLeave(FLock);
   end;
 end;
 
@@ -484,7 +486,7 @@ begin
                 StalledFiles[StalledCount].ErrorMessage := Format(
                   'TIMEOUT (worker stalled in native code, no progress for %dms)',
                   [AWatchdogMs]);
-                WriteLn(StdErr, 'Warning: worker #', I,
+                WriteLn(ErrOutput, 'Warning: worker #', I,
                   ' stalled in native code on file: ', AFiles[J],
                   ' (no progress for ', AWatchdogMs,
                   'ms). Abandoning worker; remaining files continue.');
@@ -499,7 +501,7 @@ begin
                 StalledFiles[StalledCount].ErrorMessage := Format(
                   'TIMEOUT (worker stalled, no current file index, no progress for %dms)',
                   [AWatchdogMs]);
-                WriteLn(StdErr, 'Warning: worker #', I,
+                WriteLn(ErrOutput, 'Warning: worker #', I,
                   ' stalled with no current file index (no progress for ',
                   AWatchdogMs, 'ms). Abandoning worker.');
               end;
@@ -531,7 +533,7 @@ begin
         FWorkers[I].WaitFor;
 
     if AnyAbandoned then
-      WriteLn(StdErr, 'Warning: ', StalledCount,
+      WriteLn(ErrOutput, 'Warning: ', StalledCount,
         ' worker(s) abandoned. Leaking their queue/state; ',
         'they will be reclaimed on process exit.');
 
@@ -590,7 +592,7 @@ begin
 
     // Check for unhandled exceptions in the worker thread
     if Assigned(FWorkers[I].FatalException) then
-      WriteLn(StdErr, 'Worker thread ', I, ' fatal: ',
+      WriteLn(ErrOutput, 'Worker thread ', I, ' fatal: ',
         Exception(FWorkers[I].FatalException).Message);
 
     for J := 0 to FWorkers[I].ResultCount - 1 do

@@ -332,7 +332,7 @@ begin
   if Assigned(FModuleLoader) and (not FOwnsModuleLoader) then
     FModuleLoader.EvaluateModuleBody := nil;
 
-  if not Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance = nil) then
     FGlobalScope.Free;
   if FOwnsModuleLoader then
     FModuleLoader.Free;
@@ -355,7 +355,7 @@ begin
   Result.LoadDeferredModule := LoadDeferredModuleNamespaceValue;
   Result.ResolveModuleURL := FModuleLoader.ResolveModuleURL;
   Result.CurrentFilePath := FFileName;
-  Result.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
+  Result.CoverageEnabled := (TGocciaCoverageTracker.Instance <> nil)
     and TGocciaCoverageTracker.Instance.Enabled;
   Result.StrictTypes := FStrictTypesEnabled;
   Result.NonStrictMode := FNonStrictModeEnabled;

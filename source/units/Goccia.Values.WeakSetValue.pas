@@ -70,9 +70,10 @@ uses
 var
   GWeakSetSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetWeakSetShared: TGocciaSharedPrototype; inline;
+function GetWeakSetShared: TGocciaSharedPrototype;
+{$IFDEF FPC}inline;{$ENDIF}
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GWeakSetSharedSlot))
   else
     Result := nil;
@@ -92,7 +93,7 @@ end;
 
 destructor TGocciaWeakSetValue.Destroy;
 begin
-  if Assigned(TGarbageCollector.Instance) then
+  if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.UnregisterWeakContainer(Self);
   FItems.Free;
   inherited;
@@ -104,8 +105,8 @@ var
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetWeakSetShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetWeakSetShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GWeakSetSharedSlot, Shared);
@@ -155,7 +156,7 @@ end;
 procedure TGocciaWeakSetValue.AddItem(const AValue: TGocciaValue);
 begin
   // Count this set as a live weak container on its first item (see WeakMap).
-  if (FItems.Count = 0) and Assigned(TGarbageCollector.Instance) then
+  if (FItems.Count = 0) and (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.RegisterWeakContainer(Self);
   FItems.AddOrSetValue(AValue, True);
 end;

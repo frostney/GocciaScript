@@ -79,7 +79,7 @@ begin
     if AValue is TGocciaPromiseValue then
     begin
       Promise := TGocciaPromiseValue(AValue);
-      if Assigned(TGarbageCollector.Instance) then
+      if (TGarbageCollector.Instance <> nil) then
       begin
         TGarbageCollector.Instance.AddTempRoot(Promise);
         PromiseRooted := True;
@@ -88,7 +88,7 @@ begin
     else
     begin
       Promise := TGocciaPromiseValue.Create;
-      if Assigned(TGarbageCollector.Instance) then
+      if (TGarbageCollector.Instance <> nil) then
       begin
         TGarbageCollector.Instance.AddTempRoot(Promise);
         PromiseRooted := True;
@@ -133,7 +133,7 @@ begin
     else
       ThrowTypeError(SErrorAwaitPromiseUnsettled, SSuggestAwaitMicrotaskDrain);
   finally
-    if PromiseRooted and Assigned(TGarbageCollector.Instance) then
+    if PromiseRooted and (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveTempRoot(Promise);
   end;
 end;

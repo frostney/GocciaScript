@@ -143,7 +143,7 @@ end;
 
 function GetRegExpPrototype: TGocciaValue;
 begin
-  if Assigned(CurrentRealm) and
+  if (CurrentRealm <> nil) and
      CurrentRealm.HasSlot(GRegExpRuntimePrototypeSlot) then
     Exit(TGocciaValue(CurrentRealm.GetSlot(GRegExpRuntimePrototypeSlot)));
   Result := GRegExpPrototype;
@@ -151,7 +151,7 @@ end;
 
 function GetRegExpBuiltinExec: TGocciaValue;
 begin
-  if Assigned(CurrentRealm) and
+  if (CurrentRealm <> nil) and
      CurrentRealm.HasSlot(GRegExpRuntimeBuiltinExecSlot) then
     Exit(TGocciaValue(CurrentRealm.GetSlot(GRegExpRuntimeBuiltinExecSlot)));
   Result := GRegExpBuiltinExec;
@@ -160,7 +160,7 @@ end;
 procedure SetRegExpPrototype(const APrototype: TGocciaValue);
 begin
   GRegExpPrototype := TGocciaObjectValue(APrototype);
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     CurrentRealm.SetSlot(GRegExpRuntimePrototypeSlot,
       TGocciaObjectValue(APrototype));
 end;
@@ -168,7 +168,7 @@ end;
 procedure SetRegExpBuiltinExec(const AExec: TGocciaValue);
 begin
   GRegExpBuiltinExec := AExec;
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     CurrentRealm.SetSlot(GRegExpRuntimeBuiltinExecSlot,
       TGCManagedObject(AExec));
 end;

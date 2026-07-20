@@ -11,6 +11,7 @@ uses
 
   StringBuffer,
 
+  Goccia.SourceSpan,
   Goccia.Token;
 
 type
@@ -36,6 +37,7 @@ type
   TGocciaLexer = class
   private
     FSource: string;
+    FSourceCoordinates: IGocciaSourceCoordinates;
     FTokens: TObjectList<TGocciaToken>;
     FCurrent: Integer;
     FLine: Integer;
@@ -49,13 +51,18 @@ type
     FScanTimeNanoseconds: Int64;
     function GetSourceLines: TStringList;
 
-    function IsAtEnd: Boolean; inline;
-    function Advance: Char; inline;
-    function Peek: Char; inline;
-    function PeekNext: Char; inline;
-    function Match(const AExpected: Char): Boolean; inline;
-    function IsSourceIdentifierStartCodePoint(ACodePoint: Cardinal): Boolean; inline;
-    function IsSourceIdentifierPartCodePoint(ACodePoint: Cardinal): Boolean; inline;
+    function IsAtEnd: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function Advance: Char;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function Peek: Char;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function PeekNext: Char;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function Match(const AExpected: Char): Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function IsSourceIdentifierStartCodePoint(ACodePoint: Cardinal): Boolean;
+    function IsSourceIdentifierPartCodePoint(ACodePoint: Cardinal): Boolean;
     function IsValidEscapedIdentifierText(const AText: string;
       const AAtStart: Boolean): Boolean;
     function TryReadIdentifierCodePoint(out ACodePoint: Cardinal;
@@ -63,6 +70,8 @@ type
     procedure AddToken(const ATokenType: TGocciaTokenType); overload;
     procedure AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string;
       const AContainsEscape: Boolean = False); overload;
+    procedure AddTemplateToken(const ATokenType: TGocciaTokenType;
+      const ACooked, ARaw: string; const ACookedValid: Boolean);
     procedure ScanToken(const ALexicalGoal: TGocciaLexicalGoal);
     procedure ScanString;
     procedure ScanTemplateStart;
@@ -86,14 +95,19 @@ type
     procedure SkipComment;
     procedure SkipBlockComment;
     procedure SkipUntilLineTerminator;
-    function ConsumeWhitespaceCodePoint: Boolean; inline;
-    function IsLineTerminator: Boolean; inline;
-    function IsUnicodeLineTerminator: Boolean; inline;
-    function ConsumeLineTerminator: Boolean; inline;
-    function ConsumeLineTerminatorBytes(out ABytes: string): Boolean; inline;
-    function AppendLineTerminator(var ASB, ARawSB: TStringBuffer): Boolean; inline;
-    function AppendTemplateLineContinuation(var ARawSB: TStringBuffer): Boolean; inline;
-    procedure ConsumeUnicodeLineTerminator; inline;
+    function ConsumeWhitespaceCodePoint: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function IsLineTerminator: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function IsUnicodeLineTerminator: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function ConsumeLineTerminator: Boolean;
+    {$IFDEF FPC}inline;{$ENDIF}
+    function ConsumeLineTerminatorBytes(out ABytes: string): Boolean;
+    function AppendLineTerminator(var ASB, ARawSB: TStringBuffer): Boolean;
+    function AppendTemplateLineContinuation(var ARawSB: TStringBuffer): Boolean;
+    procedure ConsumeUnicodeLineTerminator;
+    {$IFDEF FPC}inline;{$ENDIF}
   public
     constructor Create(const ASource, AFileName: string);
     destructor Destroy; override;
@@ -114,6 +128,8 @@ type
 implementation
 
 uses
+  NumericText,
+  TextEncoding,
   TextSemantics,
   TimingUtils,
 
@@ -124,12 +140,9 @@ uses
   Goccia.Keywords.Reserved;
 
 const
-  // ES2026 §12.3 Line Terminators — UTF-8 byte components for LS (U+2028) and PS (U+2029)
-  UTF8_LINE_TERMINATOR_LEAD_BYTE = #$E2;
-  UTF8_LINE_TERMINATOR_CONTINUATION_BYTE = #$80;
-  UTF8_LINE_SEPARATOR_FINAL_BYTE = #$A8;
-  UTF8_PARAGRAPH_SEPARATOR_FINAL_BYTE = #$A9;
-  UTF8_LINE_TERMINATOR_BYTE_LENGTH = 3;
+  // ES2026 §12.3 Line Terminators.
+  LINE_SEPARATOR = Char($2028);
+  PARAGRAPH_SEPARATOR = Char($2029);
   LINE_FEED_CODE_POINT = $000A;
   CARRIAGE_RETURN_CODE_POINT = $000D;
   LINE_SEPARATOR_CODE_POINT = $2028;
@@ -239,7 +252,7 @@ end;
 function TryParseUnicodeCodePointHex(const AValue: string;
   out ACodePoint: Cardinal): Boolean;
 var
-  CodePointValue: QWord;
+  CodePointValue: UInt64;
   SignificantHex: string;
   StartIndex: Integer;
 begin
@@ -255,13 +268,14 @@ begin
   if Length(SignificantHex) > 6 then
     Exit(False);
 
-  Result := TryStrToQWord('$' + SignificantHex, CodePointValue) and
+  Result := TryTextToUInt64('$' + SignificantHex, CodePointValue) and
     (CodePointValue <= MAX_UNICODE_CODE_POINT);
   if Result then
     ACodePoint := Cardinal(CodePointValue);
 end;
 
-function TryKeywordToken(const AText: string; out ATokenType: TGocciaTokenType): Boolean; inline;
+function TryKeywordToken(const AText: string; out ATokenType: TGocciaTokenType): Boolean;
+{$IFDEF FPC}inline;{$ENDIF}
 var
   Len: Integer;
   Range: TKeywordTokenLengthRange;
@@ -289,6 +303,7 @@ end;
 constructor TGocciaLexer.Create(const ASource, AFileName: string);
 begin
   FSource := ASource;
+  FSourceCoordinates := TGocciaSourceCoordinates.Create(ASource);
   FFileName := AFileName;
   FTokens := TObjectList<TGocciaToken>.Create(True);
   FSourceLines := nil;
@@ -375,19 +390,19 @@ begin
   Result := FSourceLines;
 end;
 
-function TGocciaLexer.IsAtEnd: Boolean; inline;
+function TGocciaLexer.IsAtEnd: Boolean;
 begin
   Result := FCurrent > Length(FSource);
 end;
 
-function TGocciaLexer.Advance: Char; inline;
+function TGocciaLexer.Advance: Char;
 begin
   Result := FSource[FCurrent];
   Inc(FCurrent);
   Inc(FColumn);
 end;
 
-function TGocciaLexer.Peek: Char; inline;
+function TGocciaLexer.Peek: Char;
 begin
   if IsAtEnd then
     Result := #0
@@ -395,7 +410,7 @@ begin
     Result := FSource[FCurrent];
 end;
 
-function TGocciaLexer.PeekNext: Char; inline;
+function TGocciaLexer.PeekNext: Char;
 begin
   if FCurrent + 1 > Length(FSource) then
     Result := #0
@@ -403,7 +418,7 @@ begin
     Result := FSource[FCurrent + 1];
 end;
 
-function TGocciaLexer.Match(const AExpected: Char): Boolean; inline;
+function TGocciaLexer.Match(const AExpected: Char): Boolean;
 begin
   if IsAtEnd then
   begin
@@ -430,12 +445,19 @@ end;
 procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string;
   const AContainsEscape: Boolean);
 begin
-  FTokens.Add(TGocciaToken.Create(ATokenType, ALiteral, FLine, FStartColumn,
-    FColumn - 1, AContainsEscape));
+  FTokens.Add(TGocciaToken.Create(ATokenType, ALiteral, FSourceCoordinates,
+    FStart - 1, FCurrent - 1, AContainsEscape));
+end;
+
+procedure TGocciaLexer.AddTemplateToken(const ATokenType: TGocciaTokenType;
+  const ACooked, ARaw: string; const ACookedValid: Boolean);
+begin
+  FTokens.Add(TGocciaToken.CreateTemplate(ATokenType, ACooked, ARaw,
+    ACookedValid, FSourceCoordinates, FStart - 1, FCurrent - 1));
 end;
 
 // ES2026 §12.3 LineTerminator :: <LF> | <CR> | <LS> | <PS>
-function TGocciaLexer.IsLineTerminator: Boolean; inline;
+function TGocciaLexer.IsLineTerminator: Boolean;
 begin
   if IsAtEnd then
     Exit(False);
@@ -447,31 +469,28 @@ begin
   end;
 end;
 
-// ES2026 §12.3 LS (U+2028) = UTF-8 E2 80 A8, PS (U+2029) = UTF-8 E2 80 A9
-function TGocciaLexer.IsUnicodeLineTerminator: Boolean; inline;
+// ES2026 §12.3 LS (U+2028) and PS (U+2029).
+function TGocciaLexer.IsUnicodeLineTerminator: Boolean;
 begin
-  Result := (FSource[FCurrent] = UTF8_LINE_TERMINATOR_LEAD_BYTE) and
-            (FCurrent + 2 <= Length(FSource)) and
-            (FSource[FCurrent + 1] = UTF8_LINE_TERMINATOR_CONTINUATION_BYTE) and
-            ((FSource[FCurrent + 2] = UTF8_LINE_SEPARATOR_FINAL_BYTE) or
-             (FSource[FCurrent + 2] = UTF8_PARAGRAPH_SEPARATOR_FINAL_BYTE));
+  Result := (FSource[FCurrent] = LINE_SEPARATOR) or
+    (FSource[FCurrent] = PARAGRAPH_SEPARATOR);
 end;
 
-procedure TGocciaLexer.ConsumeUnicodeLineTerminator; inline;
+procedure TGocciaLexer.ConsumeUnicodeLineTerminator;
 begin
-  Inc(FCurrent, UTF8_LINE_TERMINATOR_BYTE_LENGTH);
+  Inc(FCurrent);
   Inc(FLine);
   FColumn := 1;
 end;
 
-function TGocciaLexer.ConsumeLineTerminator: Boolean; inline;
+function TGocciaLexer.ConsumeLineTerminator: Boolean;
 var
   Bytes: string;
 begin
   Result := ConsumeLineTerminatorBytes(Bytes);
 end;
 
-function TGocciaLexer.ConsumeLineTerminatorBytes(out ABytes: string): Boolean; inline;
+function TGocciaLexer.ConsumeLineTerminatorBytes(out ABytes: string): Boolean;
 begin
   ABytes := '';
   if IsAtEnd then
@@ -496,12 +515,13 @@ begin
         ABytes := #10;
         Result := True;
       end;
-    UTF8_LINE_TERMINATOR_LEAD_BYTE:
+    LINE_SEPARATOR,
+    PARAGRAPH_SEPARATOR:
       begin
         Result := IsUnicodeLineTerminator;
         if Result then
         begin
-          ABytes := Copy(FSource, FCurrent, UTF8_LINE_TERMINATOR_BYTE_LENGTH);
+          ABytes := FSource[FCurrent];
           ConsumeUnicodeLineTerminator;
         end;
       end;
@@ -510,7 +530,7 @@ begin
   end;
 end;
 
-function TGocciaLexer.AppendLineTerminator(var ASB, ARawSB: TStringBuffer): Boolean; inline;
+function TGocciaLexer.AppendLineTerminator(var ASB, ARawSB: TStringBuffer): Boolean;
 var
   Bytes: string;
 begin
@@ -522,7 +542,8 @@ begin
 end;
 
 function TGocciaLexer.AppendTemplateLineContinuation(
-  var ARawSB: TStringBuffer): Boolean; inline;
+  var ARawSB: TStringBuffer): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 var
   Bytes: string;
 begin
@@ -533,7 +554,7 @@ begin
 end;
 
 // ES2026 §12.2 WhiteSpace :: <TAB> | <VT> | <FF> | <ZWNBSP> | <USP>
-function TGocciaLexer.ConsumeWhitespaceCodePoint: Boolean; inline;
+function TGocciaLexer.ConsumeWhitespaceCodePoint: Boolean;
 var
   ByteLength: Integer;
   CodePoint: Cardinal;
@@ -541,7 +562,7 @@ begin
   Result := False;
   if IsAtEnd then
     Exit;
-  if not TryReadUTF8CodePoint(FSource, FCurrent, CodePoint, ByteLength) then
+  if not TryReadCodePointAt(FSource, FCurrent, CodePoint, ByteLength) then
     Exit;
   if not IsECMAScriptWhitespaceCodePoint(CodePoint) then
     Exit;
@@ -592,8 +613,8 @@ begin
   while not IsAtEnd do
   begin
     C := FSource[FCurrent];
-    if (C = #10) or (C = #13) or
-       ((C = UTF8_LINE_TERMINATOR_LEAD_BYTE) and IsUnicodeLineTerminator) then
+    if (C = #10) or (C = #13) or (C = LINE_SEPARATOR) or
+       (C = PARAGRAPH_SEPARATOR) then
       Break;
     Inc(FCurrent);
     Inc(FColumn);
@@ -641,8 +662,8 @@ begin
         Exit;
       end;
     end
-    else if (C = #13) or (C = #10) or
-            ((C = UTF8_LINE_TERMINATOR_LEAD_BYTE) and IsUnicodeLineTerminator) then
+    else if (C = #13) or (C = #10) or (C = LINE_SEPARATOR) or
+            (C = PARAGRAPH_SEPARATOR) then
       ConsumeLineTerminator
     else
     begin
@@ -733,7 +754,7 @@ begin
   if CodePoint > MAX_UNICODE_CODE_POINT then
     raise TGocciaLexerError.Create('Invalid unicode code point', FLine, FColumn, FFileName, GetSourceLines,
       SSuggestUnicodeCodePointRange);
-  Result := TextSemantics.CodePointToUTF8(CodePoint);
+  Result := TextEncoding.CodePointToUTF16(CodePoint);
 end;
 
 function TGocciaLexer.ScanHexEscape: string;
@@ -758,7 +779,7 @@ begin
       SSuggestHexEscapeFormat);
 
   CodePoint := StrToInt('$' + HexStr);
-  Result := TextSemantics.CodePointToUTF8(CodePoint);
+  Result := TextEncoding.CodePointToUTF16(CodePoint);
 end;
 
 procedure TGocciaLexer.ProcessEscapeSequence(var ASB: TStringBuffer);
@@ -802,7 +823,7 @@ begin
           OctalValue := OctalValue * 8 + Ord(Peek) - Ord('0');
           Advance;
         end;
-        ASB.Append(TextSemantics.CodePointToUTF8(OctalValue));
+        ASB.Append(TextEncoding.CodePointToUTF16(OctalValue));
       end;
     'u': begin Advance; ASB.Append(ScanUnicodeEscape); end;
     'x': begin Advance; ASB.Append(ScanHexEscape); end;
@@ -900,7 +921,7 @@ begin
 
   if CodePoint > MAX_UNICODE_CODE_POINT then
     Exit(False);
-  ASB.Append(TextSemantics.CodePointToUTF8(CodePoint));
+  ASB.Append(TextEncoding.CodePointToUTF16(CodePoint));
   Result := True;
 end;
 
@@ -926,7 +947,7 @@ begin
     Exit(False);
 
   CodePoint := StrToInt('$' + HexStr);
-  ASB.Append(TextSemantics.CodePointToUTF8(CodePoint));
+  ASB.Append(TextEncoding.CodePointToUTF16(CodePoint));
   Result := True;
 end;
 
@@ -1016,26 +1037,22 @@ end;
 // parser in the main token stream.
 procedure TGocciaLexer.ScanTemplateSpan(const AContinuationTokenType,
   AEndTokenType: TGocciaTokenType);
-const
-  TEMPLATE_RAW_SEPARATOR = #1;
-  TEMPLATE_INVALID_ESCAPE_SEPARATOR = #2;
 var
   SB: TStringBuffer;
   RawSB: TStringBuffer;
   C: Char;
   RawStart, J: Integer;
-  SegmentValid, HasInvalidEscape: Boolean;
-  Separator: Char;
+  SegmentValid: Boolean;
 begin
   SB := TStringBuffer.Create;
   RawSB := TStringBuffer.Create;
-  HasInvalidEscape := False;
   SegmentValid := True;
   while (Peek <> '`') and not IsAtEnd do
   begin
     C := Peek;
     // ES2026 §12.9.6: CR/CRLF normalize to LF; LS/PS preserve their bytes.
-    if ((C = #13) or (C = #10) or (C = UTF8_LINE_TERMINATOR_LEAD_BYTE)) and
+    if ((C = #13) or (C = #10) or (C = LINE_SEPARATOR) or
+        (C = PARAGRAPH_SEPARATOR)) and
        AppendLineTerminator(SB, RawSB) then
       Continue
     else if C = '\' then
@@ -1070,8 +1087,6 @@ begin
             RawSB.AppendChar('\');
             RawStart := FCurrent;
             ProcessTemplateEscapeSequence(SB, SegmentValid);
-            if not SegmentValid then
-              HasInvalidEscape := True;
             // Copy the raw source text consumed by the escape sequence
             for J := RawStart to FCurrent - 1 do
               RawSB.AppendChar(FSource[J]);
@@ -1083,11 +1098,8 @@ begin
     begin
       Advance; // consume $
       Advance; // consume {
-      if HasInvalidEscape then
-        Separator := TEMPLATE_INVALID_ESCAPE_SEPARATOR
-      else
-        Separator := TEMPLATE_RAW_SEPARATOR;
-      AddToken(AContinuationTokenType, SB.ToString + Separator + RawSB.ToString);
+      AddTemplateToken(AContinuationTokenType, SB.ToString, RawSB.ToString,
+        SegmentValid);
       Exit;
     end
     else
@@ -1103,13 +1115,8 @@ begin
       FFileName, GetSourceLines, SSuggestCloseTemplate);
 
   Advance; // Closing backtick
-  // TC39 Template Literal Revision: use #2 separator when the template contains
-  // invalid escape sequences, signalling the parser to re-cook from raw.
-  if HasInvalidEscape then
-    Separator := TEMPLATE_INVALID_ESCAPE_SEPARATOR
-  else
-    Separator := TEMPLATE_RAW_SEPARATOR;
-  AddToken(AEndTokenType, SB.ToString + Separator + RawSB.ToString);
+  AddTemplateToken(AEndTokenType, SB.ToString, RawSB.ToString,
+    SegmentValid);
 end;
 
 procedure TGocciaLexer.ScanRegexLiteral;
@@ -1201,7 +1208,7 @@ var
   IsDecimal: Boolean;
   Lexeme: string;
 
-  procedure ConsumeDigitsWithSeparators(const AValidDigits: TSysCharSet); inline;
+  procedure ConsumeDigitsWithSeparators(const AValidDigits: TSysCharSet);
   var
     Digit: Char;
   begin
@@ -1375,7 +1382,7 @@ begin
     Exit(True);
   end;
 
-  Result := TryReadUTF8CodePoint(FSource, FCurrent, ACodePoint, AByteLength);
+  Result := TryReadCodePointAt(FSource, FCurrent, ACodePoint, AByteLength);
   if Result then
     AText := Copy(FSource, FCurrent, AByteLength);
 end;
@@ -1389,7 +1396,7 @@ begin
   if AText = '' then
     Exit(False);
 
-  if not TryReadUTF8CodePoint(AText, 1, CodePoint, ByteLength) or
+  if not TryReadCodePointAt(AText, 1, CodePoint, ByteLength) or
      (ByteLength <> Length(AText)) then
     Exit(False);
 
@@ -1448,7 +1455,8 @@ begin
 end;
 
 function LexicalGoalAllowsRegularExpression(
-  const ALexicalGoal: TGocciaLexicalGoal): Boolean; inline;
+  const ALexicalGoal: TGocciaLexicalGoal): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ALexicalGoal in [
     glgInputElementRegExp,
@@ -1458,7 +1466,8 @@ begin
 end;
 
 function LexicalGoalRequiresTemplateContinuation(
-  const ALexicalGoal: TGocciaLexicalGoal): Boolean; inline;
+  const ALexicalGoal: TGocciaLexicalGoal): Boolean;
+  {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ALexicalGoal = glgInputElementTemplateTail;
 end;
@@ -1698,7 +1707,8 @@ begin
     if IsAtEnd then
     begin
       FEOFEmitted := True;
-      FTokens.Add(TGocciaToken.Create(gttEOF, '', FLine, FColumn, FColumn));
+      FTokens.Add(TGocciaToken.Create(gttEOF, '', FSourceCoordinates,
+        Length(FSource), Length(FSource)));
       Exit(FTokens[FTokens.Count - 1]);
     end;
 

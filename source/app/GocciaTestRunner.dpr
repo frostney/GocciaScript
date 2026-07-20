@@ -55,7 +55,7 @@ uses
 
   Goccia.TestRunner.SnapshotHost,
 
-  FileUtils in 'units/FileUtils.pas';
+  FileUtils;
 
 const
   { Default per-file execution timeout in milliseconds. Applied when the
@@ -446,7 +446,7 @@ begin
     for I := 0 to APaths.Count - 1 do
       if IsStdinPath(APaths[I]) then
       begin
-        WriteLn(StdErr,
+        WriteLn(ErrOutput,
           'Error: stdin is supported only as the sole input.');
         ExitCode := 1;
         Exit;
@@ -493,7 +493,7 @@ begin
             RawFiles.Add(APaths[I])
           else
           begin
-            WriteLn(StdErr, 'Error: Path not found: ', APaths[I]);
+            WriteLn(ErrOutput, 'Error: Path not found: ', APaths[I]);
             ExitCode := 1;
             Exit;
           end;
@@ -557,7 +557,7 @@ begin
 
     if (CoverageOptions.Enabled.Present or CoverageOptions.Format.Present or
         CoverageOptions.OutputPath.Present) and
-       Assigned(TGocciaCoverageTracker.Instance) then
+       (TGocciaCoverageTracker.Instance <> nil) then
     begin
       { Coverage summary writes to stdout; suppress in JSON-to-stdout mode so
         the JSON envelope remains the only stdout payload. The
@@ -840,7 +840,7 @@ begin
     end;
 
     Source.Add(Format('runTests({ exitOnFirstFailure: %s, showTestResults: false });',
-      [BoolToStr(FExitOnFirst.Present, 'true', 'false')]));
+      [StrUtils.IfThen(FExitOnFirst.Present, 'true', 'false')]));
 
     try
       Executor := TGocciaBytecodeExecutor.Create;
@@ -1022,9 +1022,9 @@ begin
     on E: Exception do
     begin
       if E is TGocciaError then
-        WriteLn(StdErr, TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+        WriteLn(ErrOutput, TGocciaError(E).GetDetailedMessage(IsColorTerminal))
       else
-        WriteLn(StdErr, 'Fatal error: ', E.Message);
+        WriteLn(ErrOutput, 'Fatal error: ', E.Message);
       { Synthesize a one-failed-file TestResult so PrintTestResults still
         emits JSON for the file and the sequential aggregator does not
         drop the slot at its `if FileResult.TestResult = nil then
@@ -1311,7 +1311,7 @@ begin
   try
     Pool.CancelOnError := FExitOnFirst.Present;
     Pool.EnableCoverage := CoverageOptions.Enabled.Present;
-    if Assigned(TGarbageCollector.Instance) then
+    if (TGarbageCollector.Instance <> nil) then
       Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
     // Per-worker-idle watchdog: the pool cancels if any single worker
     // sits on one file longer than this window.  2× the per-file timeout
@@ -1329,7 +1329,7 @@ begin
       WatchdogMs := 0;
     Pool.RunAll(AFiles, TestWorkerProc, @WorkerData[0], WatchdogMs);
     WorkerMemoryStats := Pool.MemoryStats;
-    if Pool.EnableCoverage and Assigned(TGocciaCoverageTracker.Instance) then
+    if Pool.EnableCoverage and (TGocciaCoverageTracker.Instance <> nil) then
       Pool.MergeCoverageInto(TGocciaCoverageTracker.Instance);
 
     { Cross-reference Pool.Results with WorkerData. Two silent-drop
@@ -1439,7 +1439,7 @@ begin
       Source := @WorkerData[I];
 
     if Source^.ErrorMessage <> '' then
-      WriteLn(StdErr, Source^.ErrorMessage);
+      WriteLn(ErrOutput, Source^.ErrorMessage);
 
     PassedCount := PassedCount + Source^.Passed;
     FailedCount := FailedCount + Source^.Failed;
@@ -1521,7 +1521,7 @@ begin
     Lines.Add('{');
     if not ACompact then
       Lines.Add('  ' + BuildCLIBuildJSON + ',');
-    Lines.Add(Format('  "ok": %s,', [BoolToStr(FailedCount = 0, 'true', 'false')]));
+    Lines.Add(Format('  "ok": %s,', [StrUtils.IfThen(FailedCount = 0, 'true', 'false')]));
     if not ACompact then
     begin
       Lines.Add('  "stdout": "",');

@@ -10,17 +10,20 @@ uses
 
   Goccia.ControlFlow,
   Goccia.Evaluator.Context,
+  Goccia.SourceSpan,
   Goccia.Values.Primitives;
 
 type
   TGocciaASTNode = class
   private
-    FLine: Integer;
-    FColumn: Integer;
+    FSpan: TGocciaSourceSpan;
+    function GetLine: Integer;
+    function GetColumn: Integer;
   public
-    constructor Create(const ALine, AColumn: Integer);
-    property Line: Integer read FLine;
-    property Column: Integer read FColumn;
+    constructor Create(const ASpan: TGocciaSourceSpan);
+    property Span: TGocciaSourceSpan read FSpan;
+    property Line: Integer read GetLine;
+    property Column: Integer read GetColumn;
   end;
 
   // Expressions — virtual Evaluate replaces the `is` dispatch chain in Goccia.Evaluator
@@ -90,10 +93,19 @@ begin
             (Pos('\u', ASourceText) > 0);
 end;
 
-constructor TGocciaASTNode.Create(const ALine, AColumn: Integer);
+constructor TGocciaASTNode.Create(const ASpan: TGocciaSourceSpan);
 begin
-  FLine := ALine;
-  FColumn := AColumn;
+  FSpan := ASpan;
+end;
+
+function TGocciaASTNode.GetLine: Integer;
+begin
+  Result := FSpan.StartLine;
+end;
+
+function TGocciaASTNode.GetColumn: Integer;
+begin
+  Result := FSpan.StartColumn;
 end;
 
 { TGocciaStatement }
@@ -136,7 +148,10 @@ end;
 
 constructor TGocciaProgram.Create(const ABody: TObjectList<TGocciaStatement>);
 begin
-  inherited Create(0, 0);
+  if ABody.Count > 0 then
+    inherited Create(ABody[0].Span.Cover(ABody[ABody.Count - 1].Span))
+  else
+    inherited Create(TGocciaSourceSpan.Empty);
   FBody := ABody;
 end;
 

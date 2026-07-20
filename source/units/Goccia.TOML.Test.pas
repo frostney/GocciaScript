@@ -16,8 +16,8 @@ type
     function GetChildOrFail(const AParent: TGocciaTOMLNode;
       const AKey: string): TGocciaTOMLNode;
     procedure TestParseDocumentNormalizesCRLFInMultilineStrings;
-    procedure TestParseDocumentPreservesUTF8EscapeSequences;
-    procedure TestParseDocumentPreservesUTF8KeysAndValues;
+    procedure TestParseDocumentPreservesUnicodeEscapeSequences;
+    procedure TestParseDocumentPreservesUnicodeKeysAndValues;
     procedure TestParseDocumentTracksScalarKinds;
     procedure TestParseDocumentTracksArrayElementKinds;
   public
@@ -32,10 +32,10 @@ begin
     TestParseDocumentTracksArrayElementKinds);
   Test('ParseDocument normalizes CRLF in multiline strings',
     TestParseDocumentNormalizesCRLFInMultilineStrings);
-  Test('ParseDocument preserves UTF-8 escape sequences',
-    TestParseDocumentPreservesUTF8EscapeSequences);
-  Test('ParseDocument preserves UTF-8 keys and values',
-    TestParseDocumentPreservesUTF8KeysAndValues);
+  Test('ParseDocument preserves Unicode escape sequences',
+    TestParseDocumentPreservesUnicodeEscapeSequences);
+  Test('ParseDocument preserves Unicode keys and values',
+    TestParseDocumentPreservesUnicodeKeysAndValues);
 end;
 
 function TTOMLParserTests.GetChildOrFail(const AParent: TGocciaTOMLNode;
@@ -57,10 +57,10 @@ begin
   Parser := TGocciaTOMLParser.Create;
   try
     Root := Parser.ParseDocument(
-      'title = "goccia"' + LineEnding +
-      'count = 42' + LineEnding +
-      'ratio = 3.5' + LineEnding +
-      'release = 2026-04-04 12:30:45Z' + LineEnding);
+      'title = "goccia"' + sLineBreak +
+      'count = 42' + sLineBreak +
+      'ratio = 3.5' + sLineBreak +
+      'release = 2026-04-04 12:30:45Z' + sLineBreak);
     try
       TitleNode := GetChildOrFail(Root, 'title');
       CountNode := GetChildOrFail(Root, 'count');
@@ -96,7 +96,7 @@ begin
   Parser := TGocciaTOMLParser.Create;
   try
     Root := Parser.ParseDocument(
-      'items = [1, 1.5, 07:32, { nested = true }]' + LineEnding);
+      'items = [1, 1.5, 07:32, { nested = true }]' + sLineBreak);
     try
       ItemsNode := GetChildOrFail(Root, 'items');
       Expect<Integer>(Ord(ItemsNode.Kind)).ToBe(Ord(tnkArray));
@@ -156,20 +156,20 @@ begin
   end;
 end;
 
-procedure TTOMLParserTests.TestParseDocumentPreservesUTF8KeysAndValues;
+procedure TTOMLParserTests.TestParseDocumentPreservesUnicodeKeysAndValues;
 var
-  NameKey: UTF8String;
+  NameKey: string;
   NameNode: TGocciaTOMLNode;
-  NameValue: UTF8String;
+  NameValue: string;
   Parser: TGocciaTOMLParser;
-  QuotedKey: UTF8String;
+  QuotedKey: string;
   QuotedNode: TGocciaTOMLNode;
   Root: TGocciaTOMLNode;
-  SourceText: UTF8String;
+  SourceText: string;
 begin
   NameKey := 'name';
-  NameValue := 'Jos' + #$C3#$A9;
-  QuotedKey := 'd' + #$C3#$A9 + 'j' + #$C3#$A0;
+  NameValue := 'Jos' + #$00E9;
+  QuotedKey := 'd' + #$00E9 + 'j' + #$00E0;
   SourceText :=
     NameKey + ' = "' + NameValue + '"' + #10 +
     '"' + QuotedKey + '" = "vu"' + #10;
@@ -191,7 +191,7 @@ begin
   end;
 end;
 
-procedure TTOMLParserTests.TestParseDocumentPreservesUTF8EscapeSequences;
+procedure TTOMLParserTests.TestParseDocumentPreservesUnicodeEscapeSequences;
 var
   AstralNode: TGocciaTOMLNode;
   DeltaNode: TGocciaTOMLNode;
@@ -207,12 +207,12 @@ begin
       'astral = "\U00010AF1"' + #10);
     try
       DeltaNode := GetChildOrFail(Root, 'delta');
-      EscapedKeyNode := GetChildOrFail(Root, 'caf' + #$C3#$A9);
+      EscapedKeyNode := GetChildOrFail(Root, 'caf' + #$00E9);
       AstralNode := GetChildOrFail(Root, 'astral');
 
-      Expect<string>(DeltaNode.CanonicalValue).ToBe(#$CE#$B4);
+      Expect<string>(DeltaNode.CanonicalValue).ToBe(#$03B4);
       Expect<string>(EscapedKeyNode.CanonicalValue).ToBe('ok');
-      Expect<string>(AstralNode.CanonicalValue).ToBe(#$F0#$90#$AB#$B1);
+      Expect<string>(AstralNode.CanonicalValue).ToBe(#$D802#$DEF1);
     finally
       Root.Free;
     end;
@@ -223,6 +223,6 @@ end;
 
 begin
   TestRunnerProgram.AddSuite(TTOMLParserTests.Create('TOML Parser'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
   ExitCode := TestResultToExitCode;
 end.

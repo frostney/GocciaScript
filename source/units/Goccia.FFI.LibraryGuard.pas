@@ -5,7 +5,7 @@ unit Goccia.FFI.LibraryGuard;
 interface
 
 uses
-  Dynlibs;
+  DynamicLibraries;
 
 type
   TGocciaFFIDependentGuard = class
@@ -37,7 +37,7 @@ type
     procedure RetainDependent; override;
     procedure ReleaseDependent; override;
     procedure ReleaseOwner;
-    function FindSymbol(const AName: string): CodePointer;
+    function FindSymbol(const AName: string): Pointer;
     function ClosedErrorMessage: string; override;
     procedure Close;
 
@@ -111,11 +111,11 @@ begin
     Free;
 end;
 
-function TGocciaFFILibraryGuard.FindSymbol(const AName: string): CodePointer;
+function TGocciaFFILibraryGuard.FindSymbol(const AName: string): Pointer;
 begin
   if FClosed then
     raise Exception.Create('Cannot look up symbol in closed library: ' + FPath);
-  Result := GetProcAddress(FHandle, AName);
+  Result := GetProcedureAddress(FHandle, AName);
   if not Assigned(Result) then
     raise Exception.Create('Symbol not found: ' + AName + ' in ' + FPath);
 end;
