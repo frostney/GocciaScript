@@ -3,17 +3,17 @@ program JSONParser.Test;
 {$I Shared.inc}
 
 uses
-  Classes,
   SysUtils,
 
   JSONParser,
   NumericText,
-  TestingPascalLibrary;
+  TestingPascalLibrary,
+  UnicodeStringList;
 
 type
   TRecordingJSONParser = class(TAbstractJSONParser)
   private
-    FEvents: TStringList;
+    FEvents: TUnicodeStringList;
   protected
     procedure OnNull; override;
     procedure OnBoolean(const AValue: Boolean); override;
@@ -31,7 +31,7 @@ type
       const ACapabilities: TJSONParserCapabilities); overload; override;
     destructor Destroy; override;
     procedure Parse(const AText: string);
-    property Events: TStringList read FEvents;
+    property Events: TUnicodeStringList read FEvents;
   end;
 
   TJSONParserTests = class(TTestSuite)
@@ -104,14 +104,14 @@ type
 constructor TRecordingJSONParser.Create;
 begin
   inherited Create;
-  FEvents := TStringList.Create;
+  FEvents := TUnicodeStringList.Create;
 end;
 
 constructor TRecordingJSONParser.Create(
   const ACapabilities: TJSONParserCapabilities);
 begin
   inherited Create(ACapabilities);
-  FEvents := TStringList.Create;
+  FEvents := TUnicodeStringList.Create;
 end;
 
 destructor TRecordingJSONParser.Destroy;
