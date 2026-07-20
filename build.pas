@@ -1,4 +1,4 @@
-#!/usr/bin/env instantfpc
+#!/usr/bin/env -S instantfpc -Fu./source/shared
 
 {$mode delphi}
 {$H+}
