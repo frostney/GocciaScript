@@ -1,21 +1,10 @@
 ---
 name: project-structure
 description: >-
-  Language-agnostic repo structure conventions used across the user's projects
-  in any language — the user-facing README.md structure (name, logo,
-  description, install, usage, optional background, contribution, references),
-  the docs/ template (application, architecture, code-style,
-  quick-start, tooling, deployment), the AGENTS.md template with a Hard
-  Constraints section (symlinked to CLAUDE.md), nested area AGENTS.md for
-  multi-area repos, optional CONTRIBUTING.md, the canonical VISION.md,
-  DEFINITION_OF_READY.md, and DEFINITION_OF_DONE.md governance files, the
-  pre-commit hook contract
-  with Lefthook as the default and explicit alternatives, scripts directory in
-  the project's own language, co-located tests, the .agents/skills folder
-  symlinked to .claude/skills, and changelog generation with git-cliff.
-  Stack-specific tools (test runners, linters, generators) live in the
-  matching stack skill. Use when scaffolding or restructuring any repo,
-  writing AGENTS.md or docs, or laying out folders.
+  Applies the user's language-agnostic repository layout, documentation,
+  governance, hook, test, agent-file, and changelog conventions. Use when
+  scaffolding or restructuring a repo, writing AGENTS.md or docs, or laying out
+  folders.
 license: Unlicense OR MIT
 ---
 

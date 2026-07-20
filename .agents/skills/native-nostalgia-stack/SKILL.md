@@ -1,16 +1,9 @@
 ---
 name: native-nostalgia-stack
 description: >-
-  Defines the user's FreePascal toolchain — FPC as the compiler in Delphi mode
-  by default, the contract every project's build system must satisfy, the
-  contract every project's formatter / linter must satisfy, Lefthook
-  pre-commit, and co-located unit tests. Implementation of the build system
-  and the formatter is the project's choice (Pascal program, Makefile, shell
-  script, etc.) as long as the contract holds. Implementation specifics for
-  any individual project (engine rules, spec compliance, runtime
-  configuration, etc.) belong in that project's own AGENTS.md and docs.
-  Use when scaffolding or working in a FreePascal project that follows this
-  toolchain.
+  Applies the user's FreePascal toolchain and its build, formatting, hook, and
+  test contracts while leaving project-specific mechanics local. Use when
+  scaffolding or working in a FreePascal project that follows this toolchain.
 license: Unlicense OR MIT
 compatibility: >-
   Assumes a FreePascal project compiled with FPC in Delphi mode, with Lefthook

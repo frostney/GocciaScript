@@ -1,12 +1,9 @@
 ---
 name: git-workflow
 description: >-
-  Default git workflow for the user's repositories: feature branches off the
-  remote default branch, merge (never rebase) to take baseline updates, plain
-  pushes (no --force or --force-with-lease), always-new commits (no amend), and
-  squash-merge for all pull requests. Use when running any git action —
-  branching, syncing, conflict resolution, committing, pushing, or merging — on
-  the user's repos.
+  Applies the user's git defaults: branch from the remote default, merge rather
+  than rebase, never amend or force-push, and squash-merge pull requests. Use
+  when branching, syncing, committing, pushing, or merging in the user's repos.
 license: Unlicense OR MIT
 compatibility: >-
   Requires git; pull-request operations also require the GitHub CLI (gh) and

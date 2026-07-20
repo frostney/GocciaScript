@@ -1,9 +1,8 @@
 ---
 name: create-pr
 description: >-
-  Commits relevant local changes, pushes a focused branch, and opens a draft
-  pull request on the current GitHub repository using the project's PR template
-  (single or multi-template). Use when the user runs /create-pr.
+  Commits relevant changes, pushes a focused branch, and opens a templated draft
+  pull request. Use when the user runs /create-pr.
 license: Unlicense OR MIT
 compatibility: >-
   Requires git and the GitHub CLI (gh) authenticated to the target repository,
@@ -23,13 +22,13 @@ Explicit permission to commit relevant changes, push the branch, and open a draf
    - `git diff`
    - `git diff --staged`
    - `git log --oneline -5`
-2. If there is nothing to commit, stop.
-3. Resolve the base branch from the remote default (do not hardcode `main`):
+2. Resolve the base branch from the remote default (do not hardcode `main`):
 
    ```bash
    BASE_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')
    ```
 
+3. Resolve whether there is work to publish. If there are no relevant working-tree changes and no commits ahead of `origin/$BASE_BRANCH`, stop. If changes are already committed, continue without creating an empty commit.
 4. If the current branch is the base branch, create a focused branch first. Use the issue number or a change summary; ask when ambiguous.
 5. Stage only relevant files. Exclude secrets and unrelated local changes.
 6. Commit with a concise Conventional Commit message passed via HEREDOC:
