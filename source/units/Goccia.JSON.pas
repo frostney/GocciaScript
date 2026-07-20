@@ -88,8 +88,6 @@ type
 implementation
 
 uses
-  StrUtils,
-
   TextSemantics,
 
   Goccia.Arguments.Collection,
@@ -672,11 +670,9 @@ end;
 function TGocciaJSONStringifier.MakeIndent(const ALevel: Integer): string;
 begin
   // ES2026 §25.5.4.5/§25.5.4.6: the indent at depth ALevel is FGap repeated
-  // ALevel times. DupeString builds it in a single O(ALevel) pass; the previous
-  // accumulator concatenation copied the growing result each step, making this
-  // O(ALevel^2) per call and O(depth^3) over a nested chain. DupeString returns
-  // '' for ALevel <= 0 and for an empty FGap, so no explicit guard is needed.
-  Result := DupeString(FGap, ALevel);
+  // ALevel times. The shared helper keeps ECMAScript text as UTF-16 instead of
+  // crossing FPC's precompiled StrUtils AnsiString boundary on Windows.
+  Result := RepeatUTF16String(FGap, ALevel);
 end;
 
 // ES2026 §25.5.2.2 SerializeJSONProperty ( state, key, holder )

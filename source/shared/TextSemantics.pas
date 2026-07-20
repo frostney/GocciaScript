@@ -53,6 +53,8 @@ function TryUTF16CodePointValueAt(const AText: string; const AIndex: Integer;
   out ACodePoint: Cardinal): Boolean;
 function UTF16Substring(const AText: string; const AStart,
   ACount: Integer): string;
+function RepeatUTF16String(const AText: string;
+  const ACount: Integer): string;
 function UTF16IndexOf(const AText, ASearch: string;
   const AStart: Integer = 0): Integer;
 function UTF16LastIndexOf(const AText, ASearch: string;
@@ -448,6 +450,23 @@ begin
   StartIndex := Max(0, Min(AStart, Length(AText)));
   Count := Max(0, Min(ACount, Length(AText) - StartIndex));
   Result := Copy(AText, StartIndex + 1, Count);
+end;
+
+function RepeatUTF16String(const AText: string;
+  const ACount: Integer): string;
+var
+  Buffer: TStringBuffer;
+  I: Integer;
+begin
+  if (AText = '') or (ACount <= 0) then
+    Exit('');
+  if ACount = 1 then
+    Exit(AText);
+
+  Buffer := TStringBuffer.Create(Length(AText) * ACount);
+  for I := 1 to ACount do
+    Buffer.Append(AText);
+  Result := Buffer.ToString;
 end;
 
 function UTF16IndexOf(const AText, ASearch: string;

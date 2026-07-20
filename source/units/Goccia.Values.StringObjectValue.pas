@@ -104,7 +104,6 @@ implementation
 
 uses
   Math,
-  StrUtils,
   SysUtils,
 
   IntlICU,
@@ -2225,7 +2224,8 @@ begin
   // Step 5: If n = 0, return ""
   // Step 6: Return S repeated n times
   Count := Trunc(CountValue.Value);
-  Result := TGocciaStringLiteralValue.Create(DupeString(StringValue, Count));
+  Result := TGocciaStringLiteralValue.Create(
+    RepeatUTF16String(StringValue, Count));
 end;
 
 // ES2026 §22.1.3.15 String.prototype.padStart(maxLength [, fillString])
@@ -2268,7 +2268,7 @@ begin
   // Repeat arithmetically instead of re-measuring the growing padding each
   // iteration (which was O(PadNeeded^2) in code-unit re-scans plus concat).
   PadUnitLength := UTF16CodeUnitLength(PadString);
-  Padding := DupeString(PadString,
+  Padding := RepeatUTF16String(PadString,
     (PadNeeded + PadUnitLength - 1) div PadUnitLength);
   Padding := UTF16Substring(Padding, 0, PadNeeded);
 
@@ -2315,7 +2315,7 @@ begin
   // Repeat arithmetically instead of re-measuring the growing padding each
   // iteration (which was O(PadNeeded^2) in code-unit re-scans plus concat).
   PadUnitLength := UTF16CodeUnitLength(PadString);
-  Padding := DupeString(PadString,
+  Padding := RepeatUTF16String(PadString,
     (PadNeeded + PadUnitLength - 1) div PadUnitLength);
   Padding := UTF16Substring(Padding, 0, PadNeeded);
 

@@ -19,6 +19,7 @@ type
     procedure TestUTF16WellFormedChecks;
     procedure TestUTF16CodePointIndexing;
     procedure TestUTF16CodeUnitIndexing;
+    procedure TestUTF16StringRepetition;
     procedure TestUTF16StringIdentity;
     procedure TestReplacementPatternExpansion;
     procedure TestECMAScriptSourceLinesSplitUnicodeLineTerminators;
@@ -42,6 +43,8 @@ begin
     TestUTF16CodePointIndexing);
   Test('UTF-16 code unit helpers count astral characters as surrogate pairs',
     TestUTF16CodeUnitIndexing);
+  Test('UTF-16 string repetition preserves exact code units',
+    TestUTF16StringRepetition);
   Test('UTF-16 string identity compares canonical code units',
     TestUTF16StringIdentity);
   Test('Replacement pattern expansion follows GetSubstitution tokens',
@@ -222,6 +225,24 @@ begin
   Expect<Integer>(UTF16CodeUnitLength(Text1)).ToBe(4);
   Expect<Integer>(UTF16CodeUnitLength(Text2)).ToBe(3);
   Expect<Integer>(UTF16CodeUnitLength(Text1)).ToBe(4);
+end;
+
+procedure TTextSemanticsTests.TestUTF16StringRepetition;
+var
+  Text: string;
+begin
+  Text := RepeatUTF16String(UTF16CodeUnitPairToString($D83D, $DE00), 2);
+  Expect<Integer>(Length(Text)).ToBe(4);
+  Expect<Integer>(Ord(Text[1])).ToBe($D83D);
+  Expect<Integer>(Ord(Text[2])).ToBe($DE00);
+  Expect<Integer>(Ord(Text[3])).ToBe($D83D);
+  Expect<Integer>(Ord(Text[4])).ToBe($DE00);
+
+  Text := RepeatUTF16String(UTF16CodeUnitToString($03B1), 3);
+  Expect<Integer>(Length(Text)).ToBe(3);
+  Expect<Integer>(Ord(Text[1])).ToBe($03B1);
+  Expect<Integer>(Ord(Text[2])).ToBe($03B1);
+  Expect<Integer>(Ord(Text[3])).ToBe($03B1);
 end;
 
 procedure TTextSemanticsTests.TestUTF16StringIdentity;
