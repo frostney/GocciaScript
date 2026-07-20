@@ -37,6 +37,18 @@ console.log("Stdin smoke (bytecode)...");
   if (!containsLine(out, "4")) throw new Error(`Expected 4 on its own line, got: ${out}`);
 }
 
+console.log("REPL stdin decodes UTF-8...");
+{
+  const repl = Bun.spawnSync([REPL], {
+    stdin: new TextEncoder().encode('"😀".length;\n'),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const output = repl.stdout.toString() + repl.stderr.toString();
+  if (repl.exitCode !== 0 || !containsLine(output, "2"))
+    throw new Error(`REPL UTF-8 stdin expected UTF-16 length 2, got: ${output}`);
+}
+
 console.log("Bytecode top-level lexical TDZ...");
 for (const [label, source] of [
   ["let", "let x = x;\n"],
