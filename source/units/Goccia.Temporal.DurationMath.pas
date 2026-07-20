@@ -29,14 +29,12 @@ const
   MAX_EPOCH_NANOSECONDS_DECIMAL = '8640000000000000000000';
   MAX_TIME_DURATION_DECIMAL = '9007199254740991999999999';
 
-function BigInt(const AValue: Int64): TBigInteger;
-{$IFDEF FPC}inline;{$ENDIF}
+function BigInt(const AValue: Int64): TBigInteger; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := TBigInteger.FromInt64(AValue);
 end;
 
-function BigIntFromDecimal(const AValue: string): TBigInteger;
-{$IFDEF FPC}inline;{$ENDIF}
+function BigIntFromDecimal(const AValue: string): TBigInteger; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := TBigInteger.FromDecimalString(AValue);
 end;

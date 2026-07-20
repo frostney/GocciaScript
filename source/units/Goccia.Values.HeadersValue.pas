@@ -86,8 +86,7 @@ uses
 var
   GHeadersSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetHeadersShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetHeadersShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GHeadersSharedSlot))

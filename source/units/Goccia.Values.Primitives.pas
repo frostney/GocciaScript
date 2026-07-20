@@ -80,8 +80,7 @@ type
   public
     constructor Create(const AValue: Boolean);
 
-    class function FromBoolean(const AValue: Boolean): TGocciaBooleanLiteralValue; static;
-    {$IFDEF FPC}inline;{$ENDIF}
+    class function FromBoolean(const AValue: Boolean): TGocciaBooleanLiteralValue; static; {$IFDEF FPC}inline;{$ENDIF}
     class function TrueValue: TGocciaBooleanLiteralValue;
     class function FalseValue: TGocciaBooleanLiteralValue;
 
@@ -101,16 +100,11 @@ type
   private
     FValue: Double;
 
-    function GetIsNaN: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function GetIsNegativeZero: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function GetIsInfinity: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function GetIsNegativeInfinity: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function GetIsInfinite: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function GetIsNaN: Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    function GetIsNegativeZero: Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    function GetIsInfinity: Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    function GetIsNegativeInfinity: Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    function GetIsInfinite: Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
     class var FZeroValue: TGocciaNumberLiteralValue;
     class var FOneValue: TGocciaNumberLiteralValue;
@@ -416,8 +410,7 @@ begin
 end;
 
 class function TGocciaBooleanLiteralValue.FromBoolean(
-  const AValue: Boolean): TGocciaBooleanLiteralValue;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AValue: Boolean): TGocciaBooleanLiteralValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if AValue then
     Result := TrueValue

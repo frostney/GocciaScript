@@ -36,78 +36,57 @@ type
   PGocciaRegister = ^TGocciaRegister;
   TGocciaRegisterArray = array of TGocciaRegister;
 
-function RegisterUndefined: TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
-function RegisterNull: TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
-function RegisterHole: TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
-function RegisterBoolean(const AValue: Boolean): TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
-function RegisterInt(const AValue: Int64): TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
-function RegisterFloat(const AValue: Double): TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
-function RegisterFromDouble(const AValue: Double): TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
-function RegisterObject(const AValue: TGocciaValue): TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
-function ValueToRegister(const AValue: TGocciaValue): TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
-function RegisterToValue(const ARegister: TGocciaRegister): TGocciaValue;
-{$IFDEF FPC}inline;{$ENDIF}
-function RegisterToDouble(const ARegister: TGocciaRegister): Double;
-{$IFDEF FPC}inline;{$ENDIF}
-function RegisterToBoolean(const ARegister: TGocciaRegister): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
-function RegisterIsNumericScalar(const ARegister: TGocciaRegister): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
-procedure MarkRegisterReferences(const ARegister: TGocciaRegister);
-{$IFDEF FPC}inline;{$ENDIF}
+function RegisterUndefined: TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+function RegisterNull: TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+function RegisterHole: TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+function RegisterBoolean(const AValue: Boolean): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+function RegisterInt(const AValue: Int64): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+function RegisterFloat(const AValue: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+function RegisterFromDouble(const AValue: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+function RegisterObject(const AValue: TGocciaValue): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+function ValueToRegister(const AValue: TGocciaValue): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+function RegisterToValue(const ARegister: TGocciaRegister): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
+function RegisterToDouble(const ARegister: TGocciaRegister): Double; {$IFDEF FPC}inline;{$ENDIF}
+function RegisterToBoolean(const ARegister: TGocciaRegister): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+function RegisterIsNumericScalar(const ARegister: TGocciaRegister): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+procedure MarkRegisterReferences(const ARegister: TGocciaRegister); {$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 
-function RegisterUndefined: TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
+function RegisterUndefined: TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result.Kind := grkUndefined;
 end;
 
-function RegisterNull: TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
+function RegisterNull: TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result.Kind := grkNull;
 end;
 
-function RegisterHole: TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
+function RegisterHole: TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result.Kind := grkHole;
 end;
 
-function RegisterBoolean(const AValue: Boolean): TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
+function RegisterBoolean(const AValue: Boolean): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result.Kind := grkBoolean;
   Result.BoolValue := AValue;
 end;
 
-function RegisterInt(const AValue: Int64): TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
+function RegisterInt(const AValue: Int64): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result.Kind := grkInt;
   Result.IntValue := AValue;
 end;
 
-function RegisterFloat(const AValue: Double): TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
+function RegisterFloat(const AValue: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result.Kind := grkFloat;
   Result.FloatValue := AValue;
 end;
 
-function RegisterFromDouble(const AValue: Double): TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
+function RegisterFromDouble(const AValue: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 begin
   // Build a register directly from a raw Double without ever allocating a heap
   // TGocciaNumberLiteralValue. Mirrors the number branch of VMValueToRegisterFast:
@@ -129,15 +108,13 @@ begin
   Result := RegisterFloat(AValue);
 end;
 
-function RegisterObject(const AValue: TGocciaValue): TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
+function RegisterObject(const AValue: TGocciaValue): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result.Kind := grkObject;
   Result.ObjectValue := AValue;
 end;
 
-function ValueToRegister(const AValue: TGocciaValue): TGocciaRegister;
-{$IFDEF FPC}inline;{$ENDIF}
+function ValueToRegister(const AValue: TGocciaValue): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if not Assigned(AValue) or (AValue is TGocciaUndefinedLiteralValue) then
     Exit(RegisterUndefined);
@@ -161,8 +138,7 @@ begin
   Result := RegisterObject(AValue);
 end;
 
-function RegisterToValue(const ARegister: TGocciaRegister): TGocciaValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function RegisterToValue(const ARegister: TGocciaRegister): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   case ARegister.Kind of
     grkUndefined:
@@ -195,8 +171,7 @@ begin
   end;
 end;
 
-function RegisterToDouble(const ARegister: TGocciaRegister): Double;
-{$IFDEF FPC}inline;{$ENDIF}
+function RegisterToDouble(const ARegister: TGocciaRegister): Double; {$IFDEF FPC}inline;{$ENDIF}
 begin
   case ARegister.Kind of
     grkInt:
@@ -208,8 +183,7 @@ begin
   end;
 end;
 
-function RegisterToBoolean(const ARegister: TGocciaRegister): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function RegisterToBoolean(const ARegister: TGocciaRegister): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   case ARegister.Kind of
     grkUndefined, grkNull, grkHole:
@@ -227,14 +201,12 @@ begin
   end;
 end;
 
-function RegisterIsNumericScalar(const ARegister: TGocciaRegister): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function RegisterIsNumericScalar(const ARegister: TGocciaRegister): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ARegister.Kind in [grkInt, grkFloat];
 end;
 
-procedure MarkRegisterReferences(const ARegister: TGocciaRegister);
-{$IFDEF FPC}inline;{$ENDIF}
+procedure MarkRegisterReferences(const ARegister: TGocciaRegister); {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (ARegister.Kind = grkObject) and Assigned(ARegister.ObjectValue) then
     ARegister.ObjectValue.MarkReferences;

@@ -75,39 +75,33 @@ uses
 // Character helpers
 // ---------------------------------------------------------------------------
 
-function IsASCIIAlpha(const C: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsASCIIAlpha(const C: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (C in ['A'..'Z', 'a'..'z']);
 end;
 
-function IsASCIIDigit(const C: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsASCIIDigit(const C: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (C in ['0'..'9']);
 end;
 
-function IsASCIIAlphanumeric(const C: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsASCIIAlphanumeric(const C: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (C in ['A'..'Z', 'a'..'z', '0'..'9']);
 end;
 
-function IsASCIIHexDigit(const C: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsASCIIHexDigit(const C: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (C in ['0'..'9', 'A'..'F', 'a'..'f']);
 end;
 
-function IsASCIIWhitespace(const C: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsASCIIWhitespace(const C: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   // ASCII tab, LF, CR, space
   Result := (C = #9) or (C = #10) or (C = #13) or (C = ' ');
 end;
 
-function ASCIILower(const C: Char): Char;
-{$IFDEF FPC}inline;{$ENDIF}
+function ASCIILower(const C: Char): Char; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if C in ['A'..'Z'] then
     Result := Chr(Ord(C) + 32)
@@ -125,8 +119,7 @@ begin
       Result[I] := Chr(Ord(Result[I]) + 32);
 end;
 
-function HexVal(const C: Char): Byte;
-{$IFDEF FPC}inline;{$ENDIF}
+function HexVal(const C: Char): Byte; {$IFDEF FPC}inline;{$ENDIF}
 begin
   case C of
     '0'..'9': Result := Ord(C) - Ord('0');
@@ -145,8 +138,7 @@ const
   HEX_DIGITS = '0123456789ABCDEF';
 
 // §1.3.1 percent-encode after encoding
-function PercentEncode(const AByte: Byte): string;
-{$IFDEF FPC}inline;{$ENDIF}
+function PercentEncode(const AByte: Byte): string; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := '%' + HEX_DIGITS[(AByte shr 4) + 1] + HEX_DIGITS[(AByte and $0F) + 1];
 end;
@@ -179,46 +171,40 @@ end;
 // WHATWG URL Standard §4.1 Percent-encode sets
 
 // C0 percent-encode set: U+0000–U+001F and > U+007E
-function InC0PercentEncodeSet(const B: Byte): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function InC0PercentEncodeSet(const B: Byte): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (B < $21) or (B > $7E);
 end;
 
 // Fragment percent-encode set: C0 + {space U+0020, " U+0022, < U+003C, > U+003E, ` U+0060}
-function InFragmentPercentEncodeSet(const B: Byte): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function InFragmentPercentEncodeSet(const B: Byte): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := InC0PercentEncodeSet(B) or
             (B = $20) or (B = $22) or (B = $3C) or (B = $3E) or (B = $60);
 end;
 
 // Query percent-encode set: C0 + {space, ", #, <, >}
-function InQueryPercentEncodeSet(const B: Byte): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function InQueryPercentEncodeSet(const B: Byte): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := InC0PercentEncodeSet(B) or
             (B = $20) or (B = $22) or (B = $23) or (B = $3C) or (B = $3E);
 end;
 
 // Special-query percent-encode set: query + {'}
-function InSpecialQueryPercentEncodeSet(const B: Byte): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function InSpecialQueryPercentEncodeSet(const B: Byte): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := InQueryPercentEncodeSet(B) or (B = $27);
 end;
 
 // Path percent-encode set: query + {?, `, {, }}
-function InPathPercentEncodeSet(const B: Byte): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function InPathPercentEncodeSet(const B: Byte): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := InQueryPercentEncodeSet(B) or
             (B = $3F) or (B = $60) or (B = $7B) or (B = $7D);
 end;
 
 // Userinfo percent-encode set: path + {/, :, ;, =, @, [, \, ], ^, |}
-function InUserinfoPercentEncodeSet(const B: Byte): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function InUserinfoPercentEncodeSet(const B: Byte): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := InPathPercentEncodeSet(B) or
             (B = $2F) or (B = $3A) or (B = $3B) or (B = $3D) or
@@ -227,8 +213,7 @@ begin
 end;
 
 // application/x-www-form-urlencoded percent-encode set (for form data)
-function InFormPercentEncodeSet(const B: Byte): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function InFormPercentEncodeSet(const B: Byte): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   // Everything except: * - . 0-9 A-Z _ a-z
   Result := not (

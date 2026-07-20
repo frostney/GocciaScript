@@ -71,14 +71,10 @@ type
     FNameDeleted: Boolean;
     FLengthDeleted: Boolean;
     FSourceText: string;
-    function GetPropertyGetter(const AName: string): TGocciaFunctionBase;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function GetPropertySetter(const AName: string): TGocciaFunctionBase;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function GetStaticPropertyGetter(const AName: string): TGocciaFunctionBase;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function GetStaticPropertySetter(const AName: string): TGocciaFunctionBase;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function GetPropertyGetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
+    function GetPropertySetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
+    function GetStaticPropertyGetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
+    function GetStaticPropertySetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
     function GetPrivatePropertyGetter(const AName: string): TGocciaFunctionBase;
     function GetPrivatePropertySetter(const AName: string): TGocciaFunctionBase;
   public
@@ -357,8 +353,7 @@ type
     procedure SetPrivateProperty(const AName: string; const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue; const AThrowIfExists: Boolean = False);
     function TryGetRawPrivateProperty(const AKey: string; out AValue: TGocciaValue): Boolean;
     procedure SetRawPrivateProperty(const AKey: string; const AValue: TGocciaValue);
-    function IsInstanceOf(const AClass: TGocciaClassValue): Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function IsInstanceOf(const AClass: TGocciaClassValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); virtual;
     procedure FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); virtual;
     procedure MarkReferences; override;

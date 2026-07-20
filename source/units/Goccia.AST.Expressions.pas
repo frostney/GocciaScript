@@ -935,8 +935,7 @@ begin
   end;
 end;
 
-function IsNullishAssignmentValue(const AValue: TGocciaValue): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsNullishAssignmentValue(const AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := not Assigned(AValue) or
             (AValue is TGocciaUndefinedLiteralValue) or
@@ -966,8 +965,7 @@ begin
     TGocciaClassValue(Result).SetInferredName(AName);
 end;
 
-function NormalizeAssignmentValue(const AValue: TGocciaValue): TGocciaValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function NormalizeAssignmentValue(const AValue: TGocciaValue): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Assigned(AValue) then
     Result := AValue
@@ -2142,8 +2140,7 @@ begin
     Operator, AContext.OnError, Line, Column, AContext.NonStrictMode);
 end;
 
-function ToNumericValue(const AValue: TGocciaValue): TGocciaValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function ToNumericValue(const AValue: TGocciaValue): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ToPrimitive(AValue, tphNumber);
   if not (Result is TGocciaBigIntValue) then

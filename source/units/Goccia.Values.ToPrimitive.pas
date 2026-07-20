@@ -61,8 +61,7 @@ threadvar
   GHintNumber: TGocciaStringLiteralValue;
   GHintDefault: TGocciaStringLiteralValue;
 
-procedure EnsureHintValue(var ASlot: TGocciaStringLiteralValue; const AValue: string);
-{$IFDEF FPC}inline;{$ENDIF}
+procedure EnsureHintValue(var ASlot: TGocciaStringLiteralValue; const AValue: string); {$IFDEF FPC}inline;{$ENDIF}
 begin
   if not Assigned(ASlot) then
   begin

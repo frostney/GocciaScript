@@ -154,8 +154,7 @@ begin
   SetLength(FPrototypeMembers, 0);
 end;
 
-function GetURLShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetURLShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GURLSharedSlot))

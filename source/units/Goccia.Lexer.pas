@@ -51,16 +51,11 @@ type
     FScanTimeNanoseconds: Int64;
     function GetSourceLines: TStringList;
 
-    function IsAtEnd: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function Advance: Char;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function Peek: Char;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function PeekNext: Char;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function Match(const AExpected: Char): Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function IsAtEnd: Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    function Advance: Char; {$IFDEF FPC}inline;{$ENDIF}
+    function Peek: Char; {$IFDEF FPC}inline;{$ENDIF}
+    function PeekNext: Char; {$IFDEF FPC}inline;{$ENDIF}
+    function Match(const AExpected: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function IsSourceIdentifierStartCodePoint(ACodePoint: Cardinal): Boolean;
     function IsSourceIdentifierPartCodePoint(ACodePoint: Cardinal): Boolean;
     function IsValidEscapedIdentifierText(const AText: string;
@@ -95,19 +90,14 @@ type
     procedure SkipComment;
     procedure SkipBlockComment;
     procedure SkipUntilLineTerminator;
-    function ConsumeWhitespaceCodePoint: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function IsLineTerminator: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function IsUnicodeLineTerminator: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function ConsumeLineTerminator: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function ConsumeWhitespaceCodePoint: Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    function IsLineTerminator: Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    function IsUnicodeLineTerminator: Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    function ConsumeLineTerminator: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function ConsumeLineTerminatorBytes(out ABytes: string): Boolean;
     function AppendLineTerminator(var ASB, ARawSB: TStringBuffer): Boolean;
     function AppendTemplateLineContinuation(var ARawSB: TStringBuffer): Boolean;
-    procedure ConsumeUnicodeLineTerminator;
-    {$IFDEF FPC}inline;{$ENDIF}
+    procedure ConsumeUnicodeLineTerminator; {$IFDEF FPC}inline;{$ENDIF}
   public
     constructor Create(const ASource, AFileName: string);
     destructor Destroy; override;
@@ -274,8 +264,7 @@ begin
     ACodePoint := Cardinal(CodePointValue);
 end;
 
-function TryKeywordToken(const AText: string; out ATokenType: TGocciaTokenType): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function TryKeywordToken(const AText: string; out ATokenType: TGocciaTokenType): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
   Len: Integer;
   Range: TKeywordTokenLengthRange;
@@ -542,8 +531,7 @@ begin
 end;
 
 function TGocciaLexer.AppendTemplateLineContinuation(
-  var ARawSB: TStringBuffer): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  var ARawSB: TStringBuffer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
   Bytes: string;
 begin
@@ -1470,8 +1458,7 @@ begin
 end;
 
 function LexicalGoalAllowsRegularExpression(
-  const ALexicalGoal: TGocciaLexicalGoal): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ALexicalGoal: TGocciaLexicalGoal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ALexicalGoal in [
     glgInputElementRegExp,
@@ -1481,8 +1468,7 @@ begin
 end;
 
 function LexicalGoalRequiresTemplateContinuation(
-  const ALexicalGoal: TGocciaLexicalGoal): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ALexicalGoal: TGocciaLexicalGoal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ALexicalGoal = glgInputElementTemplateTail;
 end;

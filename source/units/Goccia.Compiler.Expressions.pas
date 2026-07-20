@@ -416,8 +416,7 @@ begin
 end;
 
 function ChildBodyIsStrictCode(const ACtx: TGocciaCompilationContext;
-  const ABody: TGocciaASTNode): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ABody: TGocciaASTNode): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (not ACtx.NonStrictMode) or
     (Assigned(ACtx.Template) and ACtx.Template.StrictCode) or
@@ -494,8 +493,7 @@ end;
 
 function ShouldIgnoreNonStrictImmutableLocalAssignment(
   const ACtx: TGocciaCompilationContext;
-  const ALocal: TGocciaCompilerLocal): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const ALocal: TGocciaCompilerLocal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ACtx.NonStrictMode and ALocal.IsConst and
     ALocal.IsNonStrictImmutable;
@@ -503,8 +501,7 @@ end;
 
 function ShouldIgnoreNonStrictImmutableUpvalueAssignment(
   const ACtx: TGocciaCompilationContext;
-  const AUpvalue: TGocciaCompilerUpvalue): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AUpvalue: TGocciaCompilerUpvalue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ACtx.NonStrictMode and AUpvalue.IsConst and
     AUpvalue.IsNonStrictImmutable;

@@ -122,8 +122,7 @@ uses
 var
   GURLSearchParamsSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetURLSearchParamsShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetURLSearchParamsShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GURLSearchParamsSharedSlot))

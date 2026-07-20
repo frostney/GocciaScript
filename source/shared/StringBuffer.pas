@@ -13,19 +13,13 @@ type
     FData: UnicodeString;
     FLen: Integer;
     FCap: Integer;
-    function GetLength: Integer;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function GetLength: Integer; {$IFDEF FPC}inline;{$ENDIF}
   public
-    class function Create(const ACapacity: Integer = DEFAULT_CAPACITY): TStringBuffer; static;
-    {$IFDEF FPC}inline;{$ENDIF}
-    procedure Append(const S: UnicodeString);
-    {$IFDEF FPC}inline;{$ENDIF}
-    procedure AppendChar(const C: WideChar);
-    {$IFDEF FPC}inline;{$ENDIF}
-    procedure Clear;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function ToString: UnicodeString;
-    {$IFDEF FPC}inline;{$ENDIF}
+    class function Create(const ACapacity: Integer = DEFAULT_CAPACITY): TStringBuffer; static; {$IFDEF FPC}inline;{$ENDIF}
+    procedure Append(const S: UnicodeString); {$IFDEF FPC}inline;{$ENDIF}
+    procedure AppendChar(const C: WideChar); {$IFDEF FPC}inline;{$ENDIF}
+    procedure Clear; {$IFDEF FPC}inline;{$ENDIF}
+    function ToString: UnicodeString; {$IFDEF FPC}inline;{$ENDIF}
     property Length: Integer read GetLength;
   end;
 

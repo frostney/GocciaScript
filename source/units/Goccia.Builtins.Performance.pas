@@ -25,8 +25,7 @@ type
     FTimeOriginMonotonicNanoseconds: Int64;
     FHostEnvironment: TGocciaHostEnvironment;
 
-    function GetTimeOriginMilliseconds: Double;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function GetTimeOriginMilliseconds: Double; {$IFDEF FPC}inline;{$ENDIF}
   public
     constructor Create(const AHostEnvironment: TGocciaHostEnvironment);
 
@@ -72,8 +71,7 @@ var
 threadvar
   FPrototypeMethodHost: TGocciaPerformancePrototypeHost;
 
-function GetPerformanceShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetPerformanceShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GPerformanceSharedSlot))

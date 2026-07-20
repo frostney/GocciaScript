@@ -321,8 +321,7 @@ threadvar
   DangiLunisolarYearOffsetValid: Boolean;
   DangiLunisolarYearOffset: Integer;
 
-function ICUSucceeded(const AStatus: TICUErrorCode): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function ICUSucceeded(const AStatus: TICUErrorCode): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := AStatus <= ICU_SUCCESS;
 end;
@@ -950,20 +949,17 @@ begin
     Result := '';
 end;
 
-function IsLunisolarCalendar(const ACalendarId: string): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsLunisolarCalendar(const ACalendarId: string): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (ACalendarId = 'chinese') or (ACalendarId = 'dangi');
 end;
 
-function IsUnsupportedTemporalCalendarConversion(const ACalendarId: string): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsUnsupportedTemporalCalendarConversion(const ACalendarId: string): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (ACalendarId = 'islamic') or (ACalendarId = 'islamic-rgsa');
 end;
 
-function LunisolarCalendarCode(const ACalendarId: string): Integer;
-{$IFDEF FPC}inline;{$ENDIF}
+function LunisolarCalendarCode(const ACalendarId: string): Integer; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if ACalendarId = 'chinese' then
     Result := 1
@@ -974,8 +970,7 @@ begin
 end;
 
 function LunisolarCacheIndex(const ACalendarCode, AYear, AMonth,
-  ADay: Integer): Integer;
-  {$IFDEF FPC}inline;{$ENDIF}
+  ADay: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 var
   Hash: Int64;
 begin
@@ -987,8 +982,7 @@ begin
 end;
 
 function LunisolarDateToISOIndex(const ACalendarCode, AYear, AMonth,
-  ADay: Integer; const AMatchMonthCode, AIsLeapMonth: Boolean): Integer;
-  {$IFDEF FPC}inline;{$ENDIF}
+  ADay: Integer; const AMatchMonthCode, AIsLeapMonth: Boolean): Integer; {$IFDEF FPC}inline;{$ENDIF}
 var
   LeapCode: Integer;
 begin

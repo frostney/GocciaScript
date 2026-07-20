@@ -20,8 +20,7 @@ type
     procedure SetGCMarked(const AValue: Boolean);
   public
     procedure BeforeDestruction; override;
-    class procedure AdvanceMark; static;
-    {$IFDEF FPC}inline;{$ENDIF}
+    class procedure AdvanceMark; static; {$IFDEF FPC}inline;{$ENDIF}
     procedure MarkReferences; virtual;
     function TraceWeakReferences: Boolean; virtual;
     procedure SweepWeakReferences; virtual;
@@ -46,8 +45,7 @@ type
   private
     FCount: Integer;
   public
-    procedure Initialize;
-    {$IFDEF FPC}inline;{$ENDIF}
+    procedure Initialize; {$IFDEF FPC}inline;{$ENDIF}
     procedure Add(const AObject: TGCManagedObject);
     procedure Clear;
   end;
@@ -90,8 +88,7 @@ type
     {$ENDIF}
 
     function GetManagedObjectCount: Integer;
-    function GetWatermark: Integer;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function GetWatermark: Integer; {$IFDEF FPC}inline;{$ENDIF}
     procedure ClearActiveRootEntries(const AObject: TGCManagedObject);
   protected
     procedure MarkRoots; virtual;
@@ -99,8 +96,7 @@ type
     procedure SweepWeakReferences;
     procedure SweepObjects;
   public
-    class function Instance: TGarbageCollector;
-    {$IFDEF FPC}inline;{$ENDIF}
+    class function Instance: TGarbageCollector; {$IFDEF FPC}inline;{$ENDIF}
     class procedure Initialize;
     class procedure Shutdown;
 
@@ -187,8 +183,7 @@ const
   MEMORY_PRESSURE_COLLECTION_MAX_RESERVE = 1024 * 1024;
 
 function DetectDefaultMaxBytes: Int64;
-procedure InitializeTempRoot(var ARoot: TGocciaTempRoot);
-{$IFDEF FPC}inline;{$ENDIF}
+procedure InitializeTempRoot(var ARoot: TGocciaTempRoot); {$IFDEF FPC}inline;{$ENDIF}
 procedure AddTempRootIfNeeded(var ARoot: TGocciaTempRoot;
   const AObject: TGCManagedObject);
 procedure RemoveTempRootIfNeeded(var ARoot: TGocciaTempRoot);

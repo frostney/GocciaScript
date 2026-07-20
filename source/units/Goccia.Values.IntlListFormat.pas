@@ -54,8 +54,7 @@ uses
 var
   GIntlListFormatSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetIntlListFormatShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetIntlListFormatShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GIntlListFormatSharedSlot))

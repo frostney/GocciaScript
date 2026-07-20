@@ -38,8 +38,7 @@ type
     constructor Create(const AFileName: string; const AExecutableLines: Integer);
     destructor Destroy; override;
 
-    procedure RecordLineHit(const ALine: Integer);
-    {$IFDEF FPC}inline;{$ENDIF}
+    procedure RecordLineHit(const ALine: Integer); {$IFDEF FPC}inline;{$ENDIF}
     procedure RecordBranchHit(const ALine, AColumn, ABranchIndex: Integer);
     procedure EnsureBranchExists(const ALine, AColumn, ABranchIndex: Integer);
 
@@ -52,8 +51,7 @@ type
     property FileName: string read FFileName;
     property ExecutableLines: Integer read FExecutableLines;
     property Branches: TGocciaCoverageBranchList read FBranches;
-    function GetLineHitCount(const ALine: Integer): Integer;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function GetLineHitCount(const ALine: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
   end;
 
   TGocciaCoverageFileMap = TOrderedStringMap<TGocciaFileCoverage>;
@@ -81,8 +79,7 @@ type
     procedure RegisterSourceMap(const AFilePath: string;
       const ASourceMap: TGocciaSourceMap);
     procedure RecordLineHit(const AFilePath: string;
-      const ALine: Integer);
-      {$IFDEF FPC}inline;{$ENDIF}
+      const ALine: Integer); {$IFDEF FPC}inline;{$ENDIF}
     procedure RecordBranchHit(const AFilePath: string;
       const ALine, AColumn, ABranchIndex: Integer);
 

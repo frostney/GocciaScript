@@ -24,8 +24,7 @@ type
 
     // Collection operations
     function GetLength: Integer; virtual;
-    function IsEmpty: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function IsEmpty: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     procedure Add(const AValue: TGocciaValue);
     procedure Clear;
     procedure EnsureCapacity(const ACapacity: Integer);

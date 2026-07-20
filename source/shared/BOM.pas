@@ -16,14 +16,11 @@ const
   UTF8_BOM_BYTE_2 = $BB;
   UTF8_BOM_BYTE_3 = $BF;
 
-function HasByteOrderMark(const AText: string): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function HasByteOrderMark(const AText: string): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 function HasUTF8BOMBytes(const ABytes: TBytes;
-  const AStart, AEnd: Integer): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AStart, AEnd: Integer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 function SkipByteOrderMark(const AText: string;
-  const AStart: Integer): Integer;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AStart: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 

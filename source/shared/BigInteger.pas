@@ -19,8 +19,7 @@ type
     class procedure DivModMagnitudes(const AA, AB: TLimbArray;
       out AQuotient, ARemainder: TLimbArray); static;
   public
-    class function Zero: TBigInteger; static;
-    {$IFDEF FPC}inline;{$ENDIF}
+    class function Zero: TBigInteger; static; {$IFDEF FPC}inline;{$ENDIF}
     class function One: TBigInteger; static;
     class function NegativeOne: TBigInteger; static;
     class function FromInt64(const AValue: Int64): TBigInteger; static;
@@ -30,12 +29,9 @@ type
     class function FromBinaryString(const AValue: string): TBigInteger; static;
     class function FromOctalString(const AValue: string): TBigInteger; static;
 
-    function IsZero: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function IsNegative: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function IsPositive: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function IsZero: Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    function IsNegative: Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    function IsPositive: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function IsOne: Boolean;
     function IsMinusOne: Boolean;
     function BitLength: Integer;

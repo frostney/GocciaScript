@@ -75,14 +75,12 @@ begin
   Test('RetainIterator/ReleaseIterator track active count', TestIteratorRetainReleaseCounter);
 end;
 
-function Num(const AValue: Double): TGocciaValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function Num(const AValue: Double): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := TGocciaNumberLiteralValue.Create(AValue);
 end;
 
-function Str(const AValue: string): TGocciaValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function Str(const AValue: string): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := TGocciaStringLiteralValue.Create(AValue);
 end;

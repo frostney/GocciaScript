@@ -19,16 +19,12 @@ type
     // Helper methods for reducing duplication
     function ValidateArrayMethodCall(const AMethodName: string; const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue; const ARequiresCallback: Boolean = True): TGocciaValue;
-    function IsArrayHole(const AElement: TGocciaValue): Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function IsArrayHole(const AElement: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
-    procedure ThrowError(const AMessage: string; const AArgs: array of const); overload;
-    {$IFDEF FPC}inline;{$ENDIF}
-    procedure ThrowError(const AMessage: string); overload;
-    {$IFDEF FPC}inline;{$ENDIF}
+    procedure ThrowError(const AMessage: string; const AArgs: array of const); overload; {$IFDEF FPC}inline;{$ENDIF}
+    procedure ThrowError(const AMessage: string); overload; {$IFDEF FPC}inline;{$ENDIF}
     procedure ThrowError(const AMessage: string; const AArgs: array of const;
-      const ASuggestion: string); overload;
-      {$IFDEF FPC}inline;{$ENDIF}
+      const ASuggestion: string); overload; {$IFDEF FPC}inline;{$ENDIF}
   protected
     FElements: TGocciaValueList;
     FLength: Int64;
@@ -160,8 +156,7 @@ var
   GArrayPrototypeSlot: TGocciaRealmSlotId;
   GArrayMethodHostSlot: TGocciaRealmSlotId;
 
-function GetSharedArrayPrototype: TGocciaObjectValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetSharedArrayPrototype: TGocciaObjectValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GArrayPrototypeSlot))
@@ -230,8 +225,7 @@ type
 function CollectSparseIndicesInRange(const AObj: TGocciaObjectValue;
   const AStartInclusive, AEndExclusive: Int64): TArray<Int64>; forward;
 
-function GetArrayCallbackThisArg(const AArgs: TGocciaArgumentsCollection): TGocciaValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetArrayCallbackThisArg(const AArgs: TGocciaArgumentsCollection): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if AArgs.Length > 1 then
     Result := AArgs.GetElement(1)
@@ -242,8 +236,7 @@ end;
 function InvokeArrayCallback(const ACallback: TGocciaValue;
   const ATypedCallback: TGocciaFunctionBase;
   const ACallArgs: TGocciaArgumentsCollection;
-  const AThisArg: TGocciaValue): TGocciaValue;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AThisArg: TGocciaValue): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
 var
   PreviousContinuation: TGocciaGeneratorContinuation;
   CallbackRoot, ThisRoot: TGocciaTempRoot;

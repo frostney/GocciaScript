@@ -154,38 +154,27 @@ type
     function SourceSpanAtPosition(const ALine,
       AColumn: Integer): TGocciaSourceSpan;
 
-    function IsAtEnd: Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function Peek: TGocciaToken;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function IsAtEnd: Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    function Peek: TGocciaToken; {$IFDEF FPC}inline;{$ENDIF}
     function PeekWithLexicalGoal(
-      const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken;
-      {$IFDEF FPC}inline;{$ENDIF}
-    function Previous: TGocciaToken;
-    {$IFDEF FPC}inline;{$ENDIF}
+      const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken; {$IFDEF FPC}inline;{$ENDIF}
+    function Previous: TGocciaToken; {$IFDEF FPC}inline;{$ENDIF}
     function Advance: TGocciaToken;
     function AdvanceWithLexicalGoal(
       const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken;
-    function Check(const ATokenType: TGocciaTokenType): Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function Check(const ATokenType: TGocciaTokenType): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function CheckWithLexicalGoal(const ATokenType: TGocciaTokenType;
-      const ALexicalGoal: TGocciaLexicalGoal): Boolean;
-      {$IFDEF FPC}inline;{$ENDIF}
-    function CheckNext(const ATokenType: TGocciaTokenType): Boolean;
-    {$IFDEF FPC}inline;{$ENDIF}
+      const ALexicalGoal: TGocciaLexicalGoal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    function CheckNext(const ATokenType: TGocciaTokenType): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function CheckNextWithLexicalGoal(const ATokenType: TGocciaTokenType;
-      const ALexicalGoal: TGocciaLexicalGoal): Boolean;
-      {$IFDEF FPC}inline;{$ENDIF}
+      const ALexicalGoal: TGocciaLexicalGoal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function CheckNextIdentifierBindingWithLexicalGoal(
-      const ALexicalGoal: TGocciaLexicalGoal): Boolean;
-      {$IFDEF FPC}inline;{$ENDIF}
+      const ALexicalGoal: TGocciaLexicalGoal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function IsAwaitOperandStart: Boolean;
     function Match(const ATokenTypes: array of TGocciaTokenType): Boolean; overload;
-    function Match(const ATokenType: TGocciaTokenType): Boolean; overload;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function Match(const ATokenType: TGocciaTokenType): Boolean; overload; {$IFDEF FPC}inline;{$ENDIF}
     function MatchWithLexicalGoal(const ATokenType: TGocciaTokenType;
-      const ALexicalGoal: TGocciaLexicalGoal): Boolean;
-      {$IFDEF FPC}inline;{$ENDIF}
+      const ALexicalGoal: TGocciaLexicalGoal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function Consume(const ATokenType: TGocciaTokenType; const AMessage: string): TGocciaToken; overload;
     function Consume(const ATokenType: TGocciaTokenType; const AMessage, ASuggestion: string): TGocciaToken; overload;
     procedure ConsumeSemicolonOrASI(const AMessage, ASuggestion: string);
@@ -230,8 +219,7 @@ type
     function MatchContextualKeyword(const AKeyword: string): Boolean;
     function MatchContextualKeywordWithLexicalGoal(const AKeyword: string;
       const ALexicalGoal: TGocciaLexicalGoal): Boolean;
-    function DefaultLexicalGoal: TGocciaLexicalGoal;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function DefaultLexicalGoal: TGocciaLexicalGoal; {$IFDEF FPC}inline;{$ENDIF}
 
     // Expression parsing (private)
     function Conditional: TGocciaExpression;
@@ -381,8 +369,7 @@ type
     function ParseExpressionUnchecked: TGocciaExpression;
     function Expression: TGocciaExpression;
     function AtEnd: Boolean;
-    function GetWarning(const AIndex: Integer): TGocciaParserWarning;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function GetWarning(const AIndex: Integer): TGocciaParserWarning; {$IFDEF FPC}inline;{$ENDIF}
     procedure ApplyOptions(const AOptions: TGocciaParserOptions);
     function Options: TGocciaParserOptions;
     property WarningCount: Integer read FWarningCount;

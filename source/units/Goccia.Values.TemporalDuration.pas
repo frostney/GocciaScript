@@ -177,8 +177,7 @@ type
     HasAny: Boolean;
   end;
 
-function GetTemporalDurationShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetTemporalDurationShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTemporalDurationSharedSlot))
@@ -329,8 +328,7 @@ begin
     Result := NumberToBigInteger(AValue.ToNumberLiteral.Value);
 end;
 
-function BigIntUnit(const AValue: Int64): TBigInteger;
-{$IFDEF FPC}inline;{$ENDIF}
+function BigIntUnit(const AValue: Int64): TBigInteger; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := TBigInteger.FromInt64(AValue);
 end;
@@ -404,8 +402,7 @@ begin
     .Add(D.FWeeksBig.Multiply(BigIntUnit(7)).Multiply(BigIntUnit(NANOSECONDS_PER_DAY)));
 end;
 
-function IsDurationDigit(const AChar: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsDurationDigit(const AChar: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AChar >= '0') and (AChar <= '9');
 end;
@@ -1310,28 +1307,24 @@ begin
   Result := tuNanosecond;
 end;
 
-function IsDurationCalendarUnit(const AUnit: TTemporalUnit): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsDurationCalendarUnit(const AUnit: TTemporalUnit): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := AUnit in [tuYear, tuMonth, tuWeek];
 end;
 
-function DurationHasCalendarUnits(const D: TGocciaTemporalDurationValue): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function DurationHasCalendarUnits(const D: TGocciaTemporalDurationValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (not D.FYearsBig.IsZero) or
             (not D.FMonthsBig.IsZero) or
             (not D.FWeeksBig.IsZero);
 end;
 
-function DurationHasDateUnits(const D: TGocciaTemporalDurationValue): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function DurationHasDateUnits(const D: TGocciaTemporalDurationValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := DurationHasCalendarUnits(D) or (not D.FDaysBig.IsZero);
 end;
 
-function DurationFieldsIdentical(const AOne, ATwo: TGocciaTemporalDurationValue): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function DurationFieldsIdentical(const AOne, ATwo: TGocciaTemporalDurationValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AOne.FYearsBig.Compare(ATwo.FYearsBig) = 0) and
             (AOne.FMonthsBig.Compare(ATwo.FMonthsBig) = 0) and
@@ -1345,8 +1338,7 @@ begin
             (AOne.FNanosecondsBig.Compare(ATwo.FNanosecondsBig) = 0);
 end;
 
-function IsDurationDateUnit(const AUnit: TTemporalUnit): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsDurationDateUnit(const AUnit: TTemporalUnit): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := AUnit in [tuYear, tuMonth, tuWeek, tuDay];
 end;
@@ -2295,8 +2287,7 @@ begin
   end;
 end;
 
-function DurationIsUndefinedValue(const AValue: TGocciaValue): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function DurationIsUndefinedValue(const AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AValue = nil) or (AValue is TGocciaUndefinedLiteralValue);
 end;
@@ -2306,8 +2297,7 @@ var
   I: Integer;
   L, R: Char;
 
-  function UpperASCII(const AChar: Char): Char;
-  {$IFDEF FPC}inline;{$ENDIF}
+  function UpperASCII(const AChar: Char): Char; {$IFDEF FPC}inline;{$ENDIF}
   begin
     if (AChar >= 'a') and (AChar <= 'z') then
       Result := Chr(Ord(AChar) - Ord('a') + Ord('A'))

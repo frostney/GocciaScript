@@ -13,15 +13,13 @@ uses
 
   NumberBits;
 
-function IsOddIntegralNumber(const AValue: Double): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsOddIntegralNumber(const AValue: Double): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := not IsNan(AValue) and not IsInfinite(AValue) and
     (Frac(AValue) = 0.0) and (Frac(AValue / 2.0) <> 0.0);
 end;
 
-function CanonicalNaN: Double;
-{$IFDEF FPC}inline;{$ENDIF}
+function CanonicalNaN: Double; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := BitsToDouble(CANONICAL_FLOAT64_NAN_BITS);
 end;

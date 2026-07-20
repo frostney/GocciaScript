@@ -44,11 +44,9 @@ type
       FEntryCount: Integer;
       FIndex: Integer;
       FCurrent: TBaseMap<TKey, TValue>.TKeyValuePair;
-      function GetCurrent: TBaseMap<TKey, TValue>.TKeyValuePair;
-      {$IFDEF FPC}inline;{$ENDIF}
+      function GetCurrent: TBaseMap<TKey, TValue>.TKeyValuePair; {$IFDEF FPC}inline;{$ENDIF}
     public
-      function MoveNext: Boolean;
-      {$IFDEF FPC}inline;{$ENDIF}
+      function MoveNext: Boolean; {$IFDEF FPC}inline;{$ENDIF}
       property Current: TBaseMap<TKey, TValue>.TKeyValuePair read GetCurrent;
     end;
 
@@ -98,8 +96,7 @@ type
     function Remove(const AKey: TKey): Boolean; override;
     procedure Clear; override;
 
-    function GetEnumerator: TEnumerator;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function GetEnumerator: TEnumerator; {$IFDEF FPC}inline;{$ENDIF}
     // Random-access lookup by active-entry position: O(AIndex), since it scans
     // active entries from the start. For sequential iteration use the enumerator
     // (`for Pair in Map do`); driving EntryAt from a `for I := 0 to Count - 1`

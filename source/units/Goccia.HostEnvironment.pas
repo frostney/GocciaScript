@@ -86,15 +86,11 @@ type
     procedure UseDeterministicProfile;
     procedure ConfigureAsChildOf(const AParent: TGocciaHostEnvironment);
 
-    function EpochNanoseconds: Int64;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function MonotonicNanoseconds: Int64;
-    {$IFDEF FPC}inline;{$ENDIF}
-    function TimeZoneIdentifier: string;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function EpochNanoseconds: Int64; {$IFDEF FPC}inline;{$ENDIF}
+    function MonotonicNanoseconds: Int64; {$IFDEF FPC}inline;{$ENDIF}
+    function TimeZoneIdentifier: string; {$IFDEF FPC}inline;{$ENDIF}
     function ResolveTimeZoneIdentifier(const AFallback: string): string;
-    function RandomDouble: Double;
-    {$IFDEF FPC}inline;{$ENDIF}
+    function RandomDouble: Double; {$IFDEF FPC}inline;{$ENDIF}
   end;
 
 implementation

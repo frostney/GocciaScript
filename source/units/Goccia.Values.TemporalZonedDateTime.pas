@@ -121,8 +121,7 @@ uses
 var
   GTemporalZonedDateTimeSharedSlot: TGocciaRealmOwnedSlotId;
 
-function GetTemporalZonedDateTimeShared: TGocciaSharedPrototype;
-{$IFDEF FPC}inline;{$ENDIF}
+function GetTemporalZonedDateTimeShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTemporalZonedDateTimeSharedSlot))
@@ -182,8 +181,7 @@ function FormatOffsetString(const AOffsetSeconds: Integer): string; forward;
 procedure SplitEpochNanoseconds(const AEpochNanoseconds: TBigInteger;
   out AEpochMilliseconds: Int64; out ASubMillisecondNanoseconds: Integer); forward;
 
-function EpochMillisecondsToSeconds(const AEpochMilliseconds: Int64): Int64;
-{$IFDEF FPC}inline;{$ENDIF}
+function EpochMillisecondsToSeconds(const AEpochMilliseconds: Int64): Int64; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := AEpochMilliseconds div MILLISECONDS_PER_SECOND;
   if (AEpochMilliseconds < 0) and
@@ -191,8 +189,7 @@ begin
     Dec(Result);
 end;
 
-function IsUndefinedValue(const AValue: TGocciaValue): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsUndefinedValue(const AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AValue = nil) or (AValue is TGocciaUndefinedLiteralValue);
 end;
@@ -202,8 +199,7 @@ var
   I: Integer;
   LeftChar, RightChar: Char;
 
-  function UpperASCII(const AChar: Char): Char;
-  {$IFDEF FPC}inline;{$ENDIF}
+  function UpperASCII(const AChar: Char): Char; {$IFDEF FPC}inline;{$ENDIF}
   begin
     if (AChar >= 'a') and (AChar <= 'z') then
       Result := Chr(Ord(AChar) - Ord('a') + Ord('A'))
@@ -334,8 +330,7 @@ begin
   end;
 end;
 
-function IsASCIIDigit(const AChar: Char): Boolean;
-{$IFDEF FPC}inline;{$ENDIF}
+function IsASCIIDigit(const AChar: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AChar >= '0') and (AChar <= '9');
 end;
@@ -1072,8 +1067,7 @@ begin
     TryParseISODateTimeWithOffset(Normalized, DateRec, TimeRec, OffsetSeconds, TimeZone);
 end;
 
-function ClampTemporalInteger(const AValue, AMin, AMax: Integer): Integer;
-{$IFDEF FPC}inline;{$ENDIF}
+function ClampTemporalInteger(const AValue, AMin, AMax: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if AValue < AMin then
     Result := AMin
@@ -1084,8 +1078,7 @@ begin
 end;
 
 procedure ConstrainTemporalTimeFields(var AHour, AMinute, ASecond,
-  AMillisecond, AMicrosecond, ANanosecond: Integer);
-  {$IFDEF FPC}inline;{$ENDIF}
+  AMillisecond, AMicrosecond, ANanosecond: Integer); {$IFDEF FPC}inline;{$ENDIF}
 begin
   AHour := ClampTemporalInteger(AHour, 0, 23);
   AMinute := ClampTemporalInteger(AMinute, 0, 59);
@@ -1759,8 +1752,7 @@ var
   Whole, FractionNs: TBigInteger;
   Y, Mo, W, Da, H, Mi, S, Ms, Us, Ns: TBigInteger;
 
-  function IsDigit(const AChar: Char): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  function IsDigit(const AChar: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
   begin
     Result := (AChar >= '0') and (AChar <= '9');
   end;

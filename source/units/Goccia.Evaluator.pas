@@ -258,8 +258,7 @@ function CollectDeclaredPrivateNames(
   const AContext: TGocciaEvaluationContext): TStringList; forward;
 
 function ShouldUseNativeClassInstantiation(
-  const AClassValue: TGocciaClassValue): Boolean;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AClassValue: TGocciaClassValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AClassValue is TGocciaTypedArrayClassValue) or
     (AClassValue is TGocciaTypedArrayIntrinsicClassValue);
@@ -337,8 +336,7 @@ type
   TClassCallableEvalEntries = array of TClassCallableEvalEntry;
 
 function FunctionIntrinsicKind(const AIsAsync,
-  AIsGenerator: Boolean): TGocciaFunctionObjectIntrinsicKind;
-  {$IFDEF FPC}inline;{$ENDIF}
+  AIsGenerator: Boolean): TGocciaFunctionObjectIntrinsicKind; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if AIsAsync and AIsGenerator then
     Result := foikAsyncGenerator
@@ -457,8 +455,7 @@ begin
   end;
 end;
 
-procedure EnsureObjectPrototypeInitialized;
-{$IFDEF FPC}inline;{$ENDIF}
+procedure EnsureObjectPrototypeInitialized; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if TGocciaObjectValue.SharedObjectPrototype = nil then
     TGocciaObjectValue.InitializeSharedPrototype;
@@ -637,23 +634,20 @@ begin
   end;
 end;
 
-function UndefinedCompletionValue: TGocciaValue;
-{$IFDEF FPC}inline;{$ENDIF}
+function UndefinedCompletionValue: TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 procedure UpdateValueFromCompletion(const ACompletion: TGocciaControlFlow;
-  var AValue: TGocciaValue);
-  {$IFDEF FPC}inline;{$ENDIF}
+  var AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Assigned(ACompletion.Value) then
     AValue := ACompletion.Value;
 end;
 
 function NormalCompletionFromAbrupt(const ACompletion: TGocciaControlFlow;
-  const AValue: TGocciaValue): TGocciaControlFlow;
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AValue: TGocciaValue): TGocciaControlFlow; {$IFDEF FPC}inline;{$ENDIF}
 var
   UpdatedCompletion: TGocciaControlFlow;
 begin
@@ -772,8 +766,7 @@ begin
 end;
 
 procedure AddValueRoot(var ARoots: TGocciaActiveRootFrame;
-  const AValue: TGocciaValue);
-  {$IFDEF FPC}inline;{$ENDIF}
+  const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Assigned(AValue) then
     ARoots.Add(AValue);
@@ -788,8 +781,7 @@ begin
     AddValueRoot(ARoots, AArguments.GetElement(I));
 end;
 
-procedure CollectInterpreterMemoryPressure(const AProtect: TGocciaValue);
-{$IFDEF FPC}inline;{$ENDIF}
+procedure CollectInterpreterMemoryPressure(const AProtect: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
 var
   GC: TGarbageCollector;
 begin
@@ -798,8 +790,7 @@ begin
     GC.CollectForMemoryPressure(AProtect);
 end;
 
-procedure QueueInterpreterResultHandoff(const AValue: TGocciaValue);
-{$IFDEF FPC}inline;{$ENDIF}
+procedure QueueInterpreterResultHandoff(const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
 var
   GC: TGarbageCollector;
 begin
@@ -808,8 +799,7 @@ begin
     GC.AddQueuedRoot(AValue);
 end;
 
-procedure ClearInterpreterResultHandoff(const AValue: TGocciaValue);
-{$IFDEF FPC}inline;{$ENDIF}
+procedure ClearInterpreterResultHandoff(const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
 var
   GC: TGarbageCollector;
 begin
