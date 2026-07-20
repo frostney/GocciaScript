@@ -135,6 +135,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Detail,
   Goccia.FetchManager,
+  Goccia.FloatingPoint,
   Goccia.MicrotaskQueue,
   Goccia.Values.ArrayValue,
   Goccia.Values.Await,
@@ -1207,6 +1208,7 @@ function TGocciaBenchmark.RunForHost(
 var
   EmptyArgs: TGocciaArgumentsCollection;
   RequestedMode: TBenchmarkRunMode;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
   if ADeterministicProfile then
     RequestedMode := brmDeterministicProfile
@@ -1217,16 +1219,21 @@ begin
      (FLastRunMode = RequestedMode) then
     Exit(FLastRunResult);
 
-  EmptyArgs := TGocciaArgumentsCollection.Create;
+  EnterGocciaFloatingPointScope(FloatingPointState);
   try
-    if ADeterministicProfile then
-      Result := RunDeterministicProfile(EmptyArgs,
-        TGocciaUndefinedLiteralValue.UndefinedValue)
-    else
-      Result := RunBenchmarks(EmptyArgs,
-        TGocciaUndefinedLiteralValue.UndefinedValue);
+    EmptyArgs := TGocciaArgumentsCollection.Create;
+    try
+      if ADeterministicProfile then
+        Result := RunDeterministicProfile(EmptyArgs,
+          TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        Result := RunBenchmarks(EmptyArgs,
+          TGocciaUndefinedLiteralValue.UndefinedValue);
+    finally
+      EmptyArgs.Free;
+    end;
   finally
-    EmptyArgs.Free;
+    LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
 end;
 

@@ -3329,6 +3329,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
         '    microGroup("module-only", () => {',
         '      microBench("sum", () => 1 + 1);',
         '      microBench("array map", () => [1, 2, 3, 4].map((value) => value + 1));',
+        '      microBench("special numbers", () => Number.isNaN(NaN) && Number.isFinite(Infinity));',
         "    });",
         "  });",
         "});",
@@ -3355,8 +3356,8 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       const json = JSON.parse(readFileSync(outputFile, "utf-8"));
       if (json.files?.[0]?.benchmarks?.[0]?.name !== "sum")
         throw new Error(`Module-only microbench JSON should contain benchmark name "sum", got: ${JSON.stringify(json.files?.[0]?.benchmarks)}`);
-      if (json.totalBenchmarks !== 3)
-        throw new Error(`Module-only microbench JSON should contain totalBenchmarks: 3, got ${json.totalBenchmarks}`);
+      if (json.totalBenchmarks !== 4)
+        throw new Error(`Module-only microbench JSON should contain totalBenchmarks: 4, got ${json.totalBenchmarks}`);
       for (const benchmark of json.files[0].benchmarks) {
         if (!(benchmark.sampleCount > 0 && benchmark.sampleCount <= benchmark.iterations && benchmark.sampleCount <= 10_000))
           throw new Error(`Benchmark sampleCount should be bounded by calibrated iterations and the fixed cap: ${JSON.stringify(benchmark)}`);
