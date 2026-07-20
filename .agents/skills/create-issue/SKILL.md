@@ -1,13 +1,9 @@
 ---
 name: create-issue
 description: >-
-  Creates a well-structured GitHub issue from a tagline or short description in
-  any repository, investigating for duplicates, reading VISION.md when present,
-  and invoking the grill skill (grill-with-docs / grill-me) as a mandatory gate
-  before drafting, using the project's issue template and label conventions, and
-  capturing UI/UX context (screenshots, design references, accessibility,
-  responsive, theme) when the change is user-facing. Use when the user runs
-  /create-issue or asks to file a GitHub issue.
+  Investigates and creates a project-aligned GitHub issue from a tagline or short
+  description, using the repository's template, evidence, and labels. Use when
+  the user runs /create-issue or asks to file a GitHub issue.
 license: Unlicense OR MIT
 compatibility: >-
   Requires the GitHub CLI (gh) authenticated to the target repository and
@@ -20,58 +16,28 @@ compatibility: >-
 
 Create a GitHub issue in the current repository from the user's tagline or short description.
 
-### Non-negotiable gates (do not skip, do not rationalize)
+### Non-negotiable gates
 
-These gates are mandatory. Do not skip them because the tagline "looks clear" or because creating an issue feels like a quick task.
-
-1. **GATE A — Grill before drafting.** When a grill skill is registered, you **must** invoke it (step 4) before drafting the issue body. Do not draft without it.
-2. **GATE B — Investigate before drafting.** You **must** complete the investigation in step 3 (search for duplicates, read the implementation area) before drafting. Do not draft from the tagline alone.
-
-**Forbidden rationalizations** — if you catch yourself writing any of these, stop and follow the gate instead:
-
-- ❌ "The tagline is clear enough, I'll just draft it." → No. Grill and investigate first; a sharper issue comes from the questions you haven't asked yet.
-- ❌ "Grill isn't necessary for a simple issue." → No. If it's registered, run it.
-- ❌ "I treated `grill-with-docs` as 'answer with doc-grounding' instead of actually running the grilling loop." → No. Invoking grill means **executing the grill skill itself** — its real, interactive question loop — not answering in a doc-grounded style, not paraphrasing what it would ask. Load the skill and run it.
-- ❌ "I'll ask a couple of clarifying questions of my own; that's basically grilling." → No. That is not the grill skill. Run the actual `grill-with-docs` / `grill-me` skill.
-
-### Use the grill skill for thoroughness (always when available)
-
-> Maintainer sync-note: this grill contract (the "literally run it / forbidden substitutes" rules) is intentionally duplicated verbatim in `create-issue`, `implement-issue`, and `implement-idea` so each skill stays portable as a standalone file — a shared reference cannot cross skill boundaries. When you edit it, update all three copies together.
-
-Before drafting, the agent **always invokes the grill skill** when it is registered in this environment — not only when something is ambiguous. This is GATE A above. The grill output is folded into the issue body so the result is more thorough than the raw tagline would produce.
-
-**Invoking the grill skill means literally running that skill — not imitating its spirit.** `grill-with-docs` and `grill-me` are separate skills with their own multi-question interrogation loop. To invoke one you **read its `SKILL.md` and execute its procedure**: actually ask the user the grilling questions it generates and wait for the answers, iterating until the loop completes. The following are **NOT** invoking it and are forbidden substitutes:
-
-- Treating the mention of `grill-with-docs` as a style instruction — "answer with doc-grounding," "be thorough," "cite the docs" — and then proceeding. ❌
-- Summarizing or paraphrasing the questions grilling *would* ask instead of asking them. ❌
-- Asking one or two clarifying questions of your own and calling that grilling. ❌
-- Skipping it because you believe you already understand the tagline. ❌
-
-If you cannot run the grill skill, do not silently downgrade it to "doc-grounded answering" — say explicitly that no grill skill was found (see discovery hint) and proceed on the input as given.
-
-- **`/grill-with-docs` is preferred.** Use `/grill-me` only when `/grill-with-docs` is not registered.
-- Discovery hint: look for a skill or command named `grill-with-docs` or `grill-me` (e.g. `~/.cursor/skills/grill-with-docs/`, `~/.cursor/skills/grill-me/`, `.cursor/skills/...`, `.agents/skills/...`).
-- If neither is registered, state explicitly that no grill skill was found, then proceed with the workflow on the input as given.
-
-When this workflow invokes an external grill skill, treat it as a nested issue-shaping dependency: obey that skill's procedure exactly, do not implement product code during the grill sub-session unless that skill explicitly requires documentation/context updates, then return to this workflow and draft the issue.
+1. **Investigate before drafting.** Search for duplicates and related work, read
+   the affected implementation area, and check project vision and instructions.
+2. **Run the grill skill when registered.** Use `grill-with-docs`, falling back
+   to `grill-me`, and complete its actual user-question loop before drafting.
+   Ad-hoc questions or a doc-grounded summary are not substitutes. If neither
+   skill is registered, note that once and continue.
 
 ### Automatic mode
 
 Automatic mode is opt-in. It is active only when the user's original `/create-issue` prompt includes the standalone word `automatic` or explicitly asks for automatic mode.
 
-In automatic mode, do **not** skip template discovery, duplicate investigation, `VISION.md` review, grill, active context declaration, or issue drafting. Auto-select the issue template, labels, title, and final issue body based on the project context, then create the issue without pausing for user review. State the choices you made and why they fit the project context.
+In automatic mode, do **not** skip template discovery, duplicate investigation, `VISION.md` review, grilling, the drafting checkpoint, or issue drafting. Auto-select the issue template, labels, title, and final issue body from project context, then create the issue without pausing for user review.
 
 If the issue would be contrary to `VISION.md`, appears duplicate, needs missing facts that cannot be inferred from the project, or has materially risky scope, automatic mode does not apply: stop and ask the user for clarification.
 
-### Active context declaration
+### Drafting checkpoint
 
-Do not declare the active context at invocation time. First resolve the issue template, investigate duplicates/related code, read project/area context, discover matching skills, and run the grill skill when available. Then, immediately before drafting the issue, briefly state the context and skills that are now active, for example:
-
-```text
-Active context before drafting: AGENTS.md, project-area/AGENTS.md, project-area/CONTEXT.md, docs/adr/0003-..., react-stack, convex, grill-with-docs. No matching <domain> skill found.
-```
-
-This is a gate immediately before drafting: actively search for relevant project, stack, domain, and grill context before the declaration. If the declaration is missing any discovered context, load it before continuing. A context note before grill does not satisfy this gate; the active context must be restated with the issue draft.
+After investigation and grilling, give one concise phase update naming the
+material project constraints or findings that shape the draft. Do not narrate an
+internal compliance checklist or list context that did not affect the result.
 
 ### Steps
 
@@ -81,13 +47,13 @@ This is a gate immediately before drafting: actively search for relevant project
    - Prefer `.github/ISSUE_TEMPLATE/` when multiple templates are discovered; pick the one matching the issue type (bug, feature, chore, etc.).
    - Fall back to `.github/ISSUE_TEMPLATE/default.md` or `.github/ISSUE_TEMPLATE.md` when discovered.
    - Absence protocol: after the template search finds no issue template, state that no project issue template was found and use a minimal structure: Summary, Reproduction (bugs), Current vs Expected, Scope, Related.
-3. **Investigate before drafting (GATE B):**
+3. **Investigate before drafting:**
    - Search for `VISION.md` at the repository root and in relevant product/docs areas. Read every discovered vision document and use it to shape the issue scope, non-goals, and acceptance criteria. If the tagline asks for behavior contrary to the stated product or technical vision, call out the conflict explicitly and ask the user whether to revise the issue, override the vision for this work, or abandon the issue before drafting or creating it.
    - Search code, docs, tests, and existing open/closed issues for duplicates and related work.
    - Read the implementation area the issue touches. Do not draft from the tagline alone.
    - If the tagline cannot become a concrete issue without guessing, stop and ask.
-4. **Run the grill skill (GATE A).** When `grill-with-docs` / `grill-me` is registered, **read that skill and execute its actual question loop now** on the tagline plus your investigation findings — ask the questions, wait for answers, iterate to completion — then fold its output into the issue body. Provide the grill skill with the project, stack, domain, docs, ADR, and investigation context discovered in steps 2–3. Do not substitute a "doc-grounded" answer or your own ad-hoc questions for the skill. Do not implement product code during the grill sub-session unless the grill skill explicitly requires documentation/context updates. If no grill skill is registered, say so explicitly and continue.
-5. **Declare active context, then draft the issue.** Before drafting, state the active context/skills discovered and used in steps 2–4, including any applicable project, vision, stack, domain, docs, ADR, and grill skills. If the declaration reveals a relevant missing skill or context file, load it before continuing. A good issue typically includes:
+4. **Run the grill gate.** Give the grill skill the tagline plus the material project and investigation context, complete its loop, and fold the result into the issue. Do not implement product code during grilling unless that skill explicitly requires a context update.
+5. **Give the drafting checkpoint, then draft the issue.** A good issue typically includes:
    - A specific, plain-language title with no area prefix (use labels for area/type).
    - A short problem summary.
    - For bugs: reproduction command or minimal code/UI sample; current vs expected behavior.
