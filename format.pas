@@ -935,19 +935,42 @@ const
   CanonicalInlineDirective = '{$IFDEF FPC}inline;{$ENDIF}';
   CompactInlineDirective = '{$IFDEFFPC}INLINE;{$ENDIF}';
 
-function CompactDirectiveText(const AText: string): string;
+function IsAfterLineComment(const ALine: string;
+  const AColumn: Integer): Boolean;
 var
-  I, OutputIndex: Integer;
+  I: Integer;
+  InString, InBlockComment: Boolean;
 begin
-  SetLength(Result, Length(AText));
-  OutputIndex := 0;
-  for I := 1 to Length(AText) do
-    if AText[I] > ' ' then
+  Result := False;
+  I := 1;
+  InString := False;
+  InBlockComment := False;
+  while (I < AColumn) and (I <= Length(ALine)) do
+  begin
+    if InString then
     begin
-      Inc(OutputIndex);
-      Result[OutputIndex] := UpCase(AText[I]);
-    end;
-  SetLength(Result, OutputIndex);
+      if ALine[I] = '''' then
+      begin
+        if (I < Length(ALine)) and (ALine[I + 1] = '''') then
+          Inc(I)
+        else
+          InString := False;
+      end;
+    end
+    else if InBlockComment then
+    begin
+      if ALine[I] = '}' then
+        InBlockComment := False;
+    end
+    else if ALine[I] = '''' then
+      InString := True
+    else if ALine[I] = '{' then
+      InBlockComment := True
+    else if (ALine[I] = '/') and (I < Length(ALine)) and
+      (ALine[I + 1] = '/') then
+      Exit(True);
+    Inc(I);
+  end;
 end;
 
 function IsInlineDirectivePrefix(const AText: string): Boolean;
@@ -957,9 +980,10 @@ begin
 end;
 
 function TryFindInlineDirectiveSequence(const ALines: TStringList;
-  const AStartLine: Integer; out AStartColumn, AEndLine: Integer): Boolean;
+  const AStartLine: Integer; out AStartColumn, AEndLine,
+  AEndColumn: Integer): Boolean;
 var
-  Column: Integer;
+  Column, LineIndex, CharacterIndex: Integer;
   Candidate: string;
 begin
   Result := False;
@@ -967,26 +991,36 @@ begin
   begin
     if ALines[AStartLine][Column] <> '{' then
       Continue;
-
-    Candidate := CompactDirectiveText(Copy(ALines[AStartLine], Column,
-      Length(ALines[AStartLine])));
-    if not IsInlineDirectivePrefix(Candidate) then
+    if IsAfterLineComment(ALines[AStartLine], Column) then
       Continue;
 
-    AEndLine := AStartLine;
-    while not SameText(Candidate, CompactInlineDirective) and
-      (AEndLine + 1 < ALines.Count) do
+    Candidate := '';
+    LineIndex := AStartLine;
+    CharacterIndex := Column;
+    while LineIndex < ALines.Count do
     begin
-      Inc(AEndLine);
-      Candidate := Candidate + CompactDirectiveText(ALines[AEndLine]);
+      while CharacterIndex <= Length(ALines[LineIndex]) do
+      begin
+        if ALines[LineIndex][CharacterIndex] > ' ' then
+        begin
+          Candidate := Candidate +
+            UpCase(ALines[LineIndex][CharacterIndex]);
+          if not IsInlineDirectivePrefix(Candidate) then
+            Break;
+          if SameText(Candidate, CompactInlineDirective) then
+          begin
+            AStartColumn := Column;
+            AEndLine := LineIndex;
+            AEndColumn := CharacterIndex;
+            Exit(True);
+          end;
+        end;
+        Inc(CharacterIndex);
+      end;
       if not IsInlineDirectivePrefix(Candidate) then
         Break;
-    end;
-
-    if SameText(Candidate, CompactInlineDirective) then
-    begin
-      AStartColumn := Column;
-      Exit(True);
+      Inc(LineIndex);
+      CharacterIndex := 1;
     end;
   end;
 end;
@@ -1033,20 +1067,23 @@ end;
 
 function FixInlineDirectivePlacement(const ALines: TStringList): Boolean;
 var
-  I, StartColumn, EndLine, DeleteLine, DeclarationLine: Integer;
-  Prefix, FormattedLine: string;
+  I, StartColumn, EndLine, EndColumn, DeleteLine, DeclarationLine: Integer;
+  Prefix, Suffix, FormattedLine: string;
 begin
   Result := False;
   I := 0;
   while I < ALines.Count do
   begin
-    if not TryFindInlineDirectiveSequence(ALines, I, StartColumn, EndLine) then
+    if not TryFindInlineDirectiveSequence(ALines, I, StartColumn, EndLine,
+      EndColumn) then
     begin
       Inc(I);
       Continue;
     end;
 
     Prefix := TrimRight(Copy(ALines[I], 1, StartColumn - 1));
+    Suffix := TrimRight(Copy(ALines[EndLine], EndColumn + 1,
+      Length(ALines[EndLine])));
     if Prefix = '' then
     begin
       DeclarationLine := I - 1;
@@ -1061,7 +1098,7 @@ begin
       end;
 
       ALines[DeclarationLine] := TrimRight(ALines[DeclarationLine]) + ' ' +
-        CanonicalInlineDirective;
+        CanonicalInlineDirective + Suffix;
       for DeleteLine := EndLine downto DeclarationLine + 1 do
         ALines.Delete(DeleteLine);
       Result := True;
@@ -1075,7 +1112,7 @@ begin
         Continue;
       end;
 
-      FormattedLine := Prefix + ' ' + CanonicalInlineDirective;
+      FormattedLine := Prefix + ' ' + CanonicalInlineDirective + Suffix;
       if (ALines[I] <> FormattedLine) or (EndLine <> I) then
         Result := True;
       ALines[I] := FormattedLine;
