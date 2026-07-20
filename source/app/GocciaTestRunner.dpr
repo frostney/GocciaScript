@@ -9,6 +9,7 @@ uses
   SysUtils,
 
   TimingUtils,
+  TextSemantics,
 
   Goccia.Arguments.Collection,
   Goccia.Application,
@@ -810,6 +811,7 @@ var
   ResultValueRooted: Boolean;
   LexStart, CompileStart, CompileEnd, ExecEnd: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
+  SourceText: string;
 begin
   ScriptResult := CreateDefaultScriptResult;
   ResultValue := nil;
@@ -839,8 +841,14 @@ begin
       end;
     end;
 
-    Source.Add(Format('runTests({ exitOnFirstFailure: %s, showTestResults: false });',
-      [StrUtils.IfThen(FExitOnFirst.Present, 'true', 'false')]));
+    SourceText := StringListToSourceText(Source);
+    if Source.Count > 0 then
+      SourceText := SourceText + #10;
+    SourceText := SourceText + Format(
+      'runTests({ exitOnFirstFailure: %s, showTestResults: false });',
+      [StrUtils.IfThen(FExitOnFirst.Present, 'true', 'false')]);
+    Source.Free;
+    Source := CreateECMAScriptSourceLines(SourceText);
 
     try
       Executor := TGocciaBytecodeExecutor.Create;

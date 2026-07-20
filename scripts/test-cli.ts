@@ -45,7 +45,10 @@ console.log("REPL stdin decodes UTF-8...");
     stderr: "pipe",
   });
   const output = repl.stdout.toString() + repl.stderr.toString();
-  if (repl.exitCode !== 0 || !containsLine(output, "2"))
+  const hasExpectedResult = normalizeLineEndings(output)
+    .split("\n")
+    .some((line) => line === "2" || line === "> 2");
+  if (repl.exitCode !== 0 || !hasExpectedResult)
     throw new Error(`REPL UTF-8 stdin expected UTF-16 length 2, got: ${output}`);
 }
 
