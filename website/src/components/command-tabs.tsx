@@ -1,7 +1,10 @@
 "use client";
 
 import { CodeBlock } from "@astryxdesign/core/CodeBlock";
-import { Tab, TabList } from "@astryxdesign/core/TabList";
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from "@astryxdesign/core/SegmentedControl";
 import { type ComponentType, useEffect, useState } from "react";
 import {
   AppleIcon,
@@ -186,6 +189,11 @@ export function CommandTabs({
   initialKey?: string;
 }) {
   const [active, setActive] = useState<string>(tabs[0]?.key ?? "");
+  const commandSet = tabs.some((tab) => tab.key === "macos")
+    ? "os"
+    : tabs.some((tab) => tab.key === "npm")
+      ? "package-manager"
+      : "generic";
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -228,17 +236,17 @@ export function CommandTabs({
   };
 
   return (
-    <div className="cmd-tabs-wrap">
-      <TabList
+    <div className="cmd-tabs-wrap" data-command-set={commandSet}>
+      <SegmentedControl
         className="cmd-tabs"
         value={active}
         onChange={select}
+        label="Command platform"
         size="md"
-        hasDivider
       >
         {tabs.map((t) => {
           return (
-            <Tab
+            <SegmentedControlItem
               key={t.key}
               value={t.key}
               label={t.label}
@@ -246,7 +254,7 @@ export function CommandTabs({
             />
           );
         })}
-      </TabList>
+      </SegmentedControl>
       <div role="tabpanel">
         <CopyableCommand command={commands[active] ?? ""} language="shell" />
       </div>

@@ -85,7 +85,9 @@ export function docsMdxComponents(page: DocsPage) {
     code({ children, className }: ComponentProps<"code">) {
       return <Code className={className}>{children}</Code>;
     },
-    img({ src, alt = "", ...props }: ComponentProps<"img">) {
+    img({ src, alt = "", className, ...props }: ComponentProps<"img">) {
+      const isRepositoryLogo =
+        page.path === "README.md" && alt === "GocciaScript logo";
       const resolvedSrc =
         typeof src === "string"
           ? src === "./logo.png"
@@ -94,8 +96,22 @@ export function docsMdxComponents(page: DocsPage) {
           : (src as { src?: string } | undefined)?.src;
       // Repository docs can contain arbitrary image sizes, so a semantic img
       // is the honest rendering primitive here; authors still own alt text.
-      // biome-ignore lint/performance/noImgElement: repository Markdown has no fixed dimensions
-      return <img src={resolvedSrc} alt={alt} loading="lazy" {...props} />;
+      return (
+        // biome-ignore lint/performance/noImgElement: repository Markdown has no fixed dimensions
+        <img
+          src={resolvedSrc}
+          alt={alt}
+          className={[
+            "docs-markdown-image",
+            isRepositoryLogo ? "docs-logo-image" : undefined,
+            className,
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          loading="lazy"
+          {...props}
+        />
+      );
     },
     pre({ children }: ComponentProps<"pre">) {
       const { code, language } = codeDetails(children);

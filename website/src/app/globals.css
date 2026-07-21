@@ -645,8 +645,8 @@ p {
   align-items: center;
   gap: 0.85rem;
 }
-/* Astryx owns tab and code-block presentation; these wrappers only keep the
-   reusable command picker constrained inside narrow route layouts. */
+/* Astryx owns the control behavior. This project-owned frame makes the
+   selector and its code result read as one warm-paper installation surface. */
 .cmd-tabs-wrap {
   display: flex;
   flex-direction: column;
@@ -654,7 +654,28 @@ p {
   max-width: 100%;
 }
 .cmd-tabs {
+  width: fit-content;
   max-width: 100%;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  background: var(--paper-2);
+  border: 1px solid var(--rule-soft);
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+}
+.cmd-tabs [role="radio"][aria-checked="true"] {
+  color: var(--ink);
+  background: var(--paper);
+  font-weight: 600;
+}
+.cmd-tabs [role="radio"] svg {
+  flex-shrink: 0;
+}
+.cmd-tabs-wrap[data-command-set="os"] .cmd-tabs [role="radio"] {
+  min-width: 6rem;
+}
+.cmd-tabs-wrap [role="tabpanel"] .astryx-codeblock {
+  border-start-start-radius: 0;
 }
 
 .install-meta {
@@ -906,7 +927,7 @@ p {
 }
 
 /* ---------- sections / cards ---------- */
-.section {
+.content-section {
   padding: clamp(3rem, 6vw, 5rem) 0;
   position: relative;
 }
@@ -2004,6 +2025,16 @@ a.info-term {
   max-width: 72ch;
   font-size: 1rem;
   line-height: 1.7;
+}
+.docs-markdown-image {
+  display: block;
+  width: auto;
+  max-width: min(180px, 100%);
+  height: auto;
+  margin-block: 0.5rem;
+}
+.docs-logo-image {
+  margin-block: -1rem;
 }
 .docs-main h1 {
   font-size: clamp(2.5rem, 4vw, 3.5rem);

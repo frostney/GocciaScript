@@ -962,7 +962,7 @@ export function Landing({
         </div>
       </section>
 
-      <section className="section">
+      <section className="content-section">
         <div className="container">
           <div className="section-head">
             <div className="section-kicker">Design principles</div>
@@ -1011,7 +1011,7 @@ export function Landing({
         </div>
       </section>
 
-      <section className="section pt-0">
+      <section className="content-section pt-0">
         <div className="container">
           <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-8">
             <div>
@@ -1144,7 +1144,7 @@ export function Landing({
         </div>
       </section>
 
-      <section className="section pt-0">
+      <section className="content-section pt-0">
         <div className="container">
           <div className="section-head">
             <div className="section-kicker">FAQ</div>
@@ -1165,7 +1165,7 @@ export function Landing({
         </div>
       </section>
 
-      <section className="section border-y border-rule-soft bg-[color-mix(in_oklab,var(--paper-2)_65%,transparent)]">
+      <section className="content-section border-y border-rule-soft bg-[color-mix(in_oklab,var(--paper-2)_65%,transparent)]">
         <div className="container">
           <div className="section-head">
             <div className="section-kicker">Compiler pipeline</div>

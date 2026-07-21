@@ -9,9 +9,9 @@
     "publish-web-tooling": "bun scripts/publish-web-tooling-report.ts",
     "backfill-test262": "bun scripts/backfill-test262-dashboard.ts",
     "prebuild": "bun scripts/fetch-binaries.ts",
-    "dev": "NODE_OPTIONS=--experimental-require-module next dev",
-    "build": "NODE_OPTIONS=--experimental-require-module next build",
-    "start": "next start",
+    "dev": "bun --bun next dev",
+    "build": "bun --bun next build",
+    "start": "bun --bun next start",
     "lint": "biome check",
     "format": "biome format --write",
     "test": "bun test"
