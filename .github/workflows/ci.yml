@@ -1355,6 +1355,19 @@ jobs:
       - name: Check benchmark comparison logic
         run: bun run scripts/test-benchmark-compare.ts
 
+      - name: Check pinned es-toolkit compatibility probes
+        if: matrix.target == 'x86_64-linux'
+        run: python3 scripts/run_es_toolkit_validation.py --output=es-toolkit-validation.json
+
+      - name: Upload es-toolkit validation report
+        if: always() && matrix.target == 'x86_64-linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: es-toolkit-validation
+          retention-days: 7
+          if-no-files-found: ignore
+          path: es-toolkit-validation.json
+
       - name: Check Windows TLS dependencies
         if: runner.os == 'Windows'
         shell: pwsh
