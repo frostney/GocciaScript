@@ -2,6 +2,43 @@
 
 All notable changes to GocciaScript are documented in this file.
 
+## [0.10.0] - 2026-07-21
+
+### ⚡ Performance
+
+- perf(bytecode): specialize proven numeric recursion (#994)
+- perf(regexp): avoid discarded match arrays (#981)
+
+### 🌐 Website
+
+- docs(release): sync source truth and generated data (#995)
+- refactor(website): adopt Fumadocs and Astryx (#992)
+- feat(website): clarify ECMAScript compatibility positioning (#982)
+
+### 🏗️ Internal
+
+- chore(skills): sync provisioned skills (#996)
+- chore(skills): sync provisioned skills (#990)
+- chore(test262): bump pin to 9e61c128 (#988)
+- test(suite): deepen coverage and enforce structure (#983)
+
+### 🐛 Fixed
+
+- fix(format): keep inline directives on declarations (#991)
+- fix(evaluator): bound lexical for-loop roots (#984)
+- fix(cli): preserve quoted arguments on Windows (#979)
+
+### 🚀 Added
+
+- feat(delphi): support Win32 and Win64 builds (#989)
+- feat(engine): add capability audit events (#985)
+- feat(sandbox): add Node-style fs callbacks (#987)
+- feat(testing): add Vitest-compatible snapshots (#973)
+- feat(ffi): add bidirectional ABI engine (#967)
+- Wasm support (#957)
+- feat(modules): add configurable virtual modules (#974)
+- feat(engine): add deterministic and custom host environments (#968)
+
 ## [0.9.0] - 2026-07-15
 
 ### ⚡ Performance
