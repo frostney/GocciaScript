@@ -258,7 +258,7 @@ A `const` global providing engine metadata and Goccia-owned utility APIs:
 | `commit` | `string` | Short git commit hash (e.g., `"a1b2c3d"`) |
 | `build` | `object` | Compile-time platform information (see below) |
 | `spec` | `object` | ES specification features implemented by GocciaScript, keyed by year (e.g., `"2015"`, `"2025"`). Each year maps to an array of `{ name, link }` entries. |
-| `proposal` | `object` | TC39 proposals implemented by GocciaScript, keyed by stage (e.g., `"stage-3"`, `"stage-1"`). Each stage maps to an array of `{ name, link }` entries. |
+| `proposal` | `object` | Selected TC39 proposals implemented by GocciaScript, keyed by stage (e.g., `"stage-3"`, `"stage-1"`). Each represented stage maps to an array of `{ name, link }` entries; use the language tables for the complete implemented proposal surface. |
 | `runtimeGlobals` | `string[]` | Names of runtime globals installed by the active runtime profile or runtime extensions. Empty in core-language-only engines. Import-only `goccia:` modules are not listed as globals. |
 | `shims` | `string[]` | Names of registered ECMAScript shims installed by the engine |
 | `gc` | `function` | Trigger manual garbage collection. Returns `undefined`. Also exposes read-only `gc.bytesAllocated` (approximate GC heap size in bytes) and `gc.maxBytes` (active ceiling; defaults to half of physical memory capped at 8 GB on 64-bit or 700 MB on 32-bit, overridable via `--max-memory`). Allocations exceeding the ceiling throw a `RangeError`. |

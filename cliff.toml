@@ -49,6 +49,7 @@ commit_parsers = [
 
   { message = "^Website: ", group = "🌐 Website" },
 
+  { message = "^Wasm support", group = "🚀 Added" },
   { message = "^Add ", group = "🚀 Added" },
   { message = "^Implement ", group = "🚀 Added" },
   { message = "^Support ", group = "🚀 Added" },

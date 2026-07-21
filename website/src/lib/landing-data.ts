@@ -196,6 +196,6 @@ export const FEATURES: { icon: FeatureIcon; title: string; body: string }[] = [
   {
     icon: "clock",
     title: "A modern standard library, batteries included",
-    body: "Temporal for dates, and direct module imports of JSON, TOML, YAML, CSV, JSONL and Markdown.",
+    body: "Temporal for dates, and direct module imports of JSON, JSON5, TOML, YAML, CSV, TSV, JSONL and Markdown.",
   },
 ];

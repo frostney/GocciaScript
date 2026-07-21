@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "postinstall": "fumadocs-mdx",
     "publish-test262": "bun scripts/publish-test262-results.ts",
     "publish-awfy": "bun scripts/publish-awfy-report.ts",
     "publish-jetstream": "bun scripts/publish-jetstream-report.ts",
