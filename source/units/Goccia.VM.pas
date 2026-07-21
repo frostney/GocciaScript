@@ -13238,6 +13238,7 @@ var
   CustomMatcherValue, MatchResultValue: TGocciaValue;
   MatchHintObject: TGocciaObjectValue;
   BuiltinConstructorMatch: Boolean;
+  NumericComparisonResult: Boolean;
   RegisterArgs: TGocciaRegisterArray;
   CallThisRegister: TGocciaRegister;
   CallGlobalThisValue: TGocciaValue;
@@ -13767,6 +13768,38 @@ begin
             Template.DebugInfo.GetLineForPC(InstructionStartIP),
             Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
 
+      OP_JUMP_IF_NUM_NOT_LTE_IMM:
+        begin
+          if FRegisters[A].Kind = grkInt then
+            NumericComparisonResult := FRegisters[A].IntValue <= Int16(B)
+          else if FRegisters[A].Kind = grkFloat then
+            NumericComparisonResult := FRegisters[A].FloatValue <= Int16(B)
+          else
+            raise Exception.Create(
+              'Invalid non-numeric source for OP_JUMP_IF_NUM_NOT_LTE_IMM');
+          if not NumericComparisonResult then
+          begin
+            if FCoverageEnabled and
+               (TGocciaCoverageTracker.Instance <> nil) and
+               Assigned(Template.DebugInfo) then
+              TGocciaCoverageTracker.Instance.RecordBranchHit(
+                Template.DebugInfo.SourceFile,
+                Template.DebugInfo.GetLineForPC(InstructionStartIP),
+                Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
+            JumpOffset := Int16(C);
+            Inc(Frame.IP, JumpOffset);
+            if JumpOffset < 0 then
+              CheckExecutionTimeout;
+          end
+          else if FCoverageEnabled and
+                  (TGocciaCoverageTracker.Instance <> nil) and
+                  Assigned(Template.DebugInfo) then
+            TGocciaCoverageTracker.Instance.RecordBranchHit(
+              Template.DebugInfo.SourceFile,
+              Template.DebugInfo.GetLineForPC(InstructionStartIP),
+              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
+        end;
+
       OP_JUMP_IF_NULLISH:
         if RegisterMatchesNullishKind(FRegisters[A], B) then
         begin
@@ -13833,6 +13866,15 @@ begin
       OP_SUB_FLOAT:
         FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) -
           RegisterToDouble(FRegisters[C]));
+
+      OP_SUB_NUM_IMM:
+        if FRegisters[B].Kind = grkInt then
+          FRegisters[A] := VMIntResult(FRegisters[B].IntValue - Int16(C))
+        else if FRegisters[B].Kind = grkFloat then
+          FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue - Int16(C))
+        else
+          raise Exception.Create(
+            'Invalid non-numeric source for OP_SUB_NUM_IMM');
 
       OP_MUL_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then

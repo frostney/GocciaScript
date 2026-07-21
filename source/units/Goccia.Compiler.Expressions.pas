@@ -213,6 +213,43 @@ begin
     Result := InferLocalType(AExpr);
 end;
 
+function HasExactNumberProof(const AScope: TGocciaCompilerScope;
+  const AExpr: TGocciaExpression): Boolean;
+var
+  LocalIndex: Integer;
+begin
+  if IsKnownNumeric(ExpressionType(AScope, AExpr)) then
+    Exit(True);
+  if AExpr is TGocciaIdentifierExpression then
+  begin
+    LocalIndex := AScope.ResolveLocal(
+      TGocciaIdentifierExpression(AExpr).Name);
+    if LocalIndex >= 0 then
+      Exit(AScope.GetLocal(LocalIndex).IsCallProvenNumeric);
+  end;
+  Result := False;
+end;
+
+function TrySignedInt16NumberLiteral(const AExpr: TGocciaExpression;
+  out AImmediate: Int16): Boolean;
+var
+  NumberValue: Double;
+begin
+  Result := False;
+  if not (AExpr is TGocciaLiteralExpression) or
+     not (TGocciaLiteralExpression(AExpr).Value is
+       TGocciaNumberLiteralValue) then
+    Exit;
+  NumberValue := TGocciaNumberLiteralValue(
+    TGocciaLiteralExpression(AExpr).Value).Value;
+  if IsNan(NumberValue) or IsInfinite(NumberValue) or
+     (NumberValue <> Trunc(NumberValue)) or
+     (NumberValue < Low(Int16)) or (NumberValue > High(Int16)) then
+    Exit;
+  AImmediate := Int16(Trunc(NumberValue));
+  Result := True;
+end;
+
 function IsAnonymousFunctionNameExpression(
   const AExpr: TGocciaExpression): Boolean;
 begin
@@ -1954,6 +1991,7 @@ var
   JumpIdx, JumpIdx2: Integer;
   LeftType, RightType: TGocciaLocalType;
   PrivateExpr: TGocciaPrivateMemberExpression;
+  Immediate: Int16;
 begin
   if TryFoldBinary(ACtx, AExpr, ADest) then
     Exit;
@@ -1997,6 +2035,18 @@ begin
       ACtx.Scope, PrivateExpr.PrivateName))));
     EmitInstruction(ACtx, EncodeABC(OP_HAS_PROPERTY, ADest, RegB, RegC));
     ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    Exit;
+  end;
+
+  if (AExpr.Operator = gttMinus) and
+     HasExactNumberProof(ACtx.Scope, AExpr.Left) and
+     TrySignedInt16NumberLiteral(AExpr.Right, Immediate) then
+  begin
+    RegB := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(AExpr.Left, RegB);
+    EmitInstruction(ACtx, EncodeABC(OP_SUB_NUM_IMM, ADest, RegB,
+      UInt16(Immediate)));
     ACtx.Scope.FreeRegister;
     Exit;
   end;
@@ -3626,6 +3676,8 @@ var
   RestReg: Integer;
   I: Integer;
   OldDerivedGuard: Boolean;
+  NumericParameterMask: UInt64;
+  NumericLocalIndex: Integer;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
@@ -3661,6 +3713,16 @@ begin
     else
       ChildScope.DeclareLocal(AExpr.Parameters[I].Name, False);
   end;
+  if Assigned(ACtx.NumericParameterProofs) and
+     ACtx.NumericParameterProofs.TryGetValue(AExpr,
+       NumericParameterMask) then
+    for I := 0 to High(AExpr.Parameters) do
+      if (NumericParameterMask and (UInt64(1) shl I)) <> 0 then
+      begin
+        NumericLocalIndex := ChildScope.ResolveLocal(AExpr.Parameters[I].Name);
+        if NumericLocalIndex >= 0 then
+          ChildScope.SetLocalCallProvenNumeric(NumericLocalIndex, True);
+      end;
   for I := 0 to High(AExpr.Parameters) do
     if AExpr.Parameters[I].IsPattern and Assigned(AExpr.Parameters[I].Pattern) then
       CollectDestructuringBindings(AExpr.Parameters[I].Pattern, ChildScope);
@@ -4640,7 +4702,31 @@ procedure CompileConditional(const ACtx: TGocciaCompilationContext;
 var
   ElseJump, EndJump: Integer;
   ConditionReg: UInt16;
+  ConditionBinary: TGocciaBinaryExpression;
+  Immediate: Int16;
 begin
+  if AExpr.Condition is TGocciaBinaryExpression then
+  begin
+    ConditionBinary := TGocciaBinaryExpression(AExpr.Condition);
+    if (ConditionBinary.Operator = gttLessEqual) and
+       HasExactNumberProof(ACtx.Scope, ConditionBinary.Left) and
+       TrySignedInt16NumberLiteral(ConditionBinary.Right, Immediate) then
+    begin
+      ConditionReg := ACtx.Scope.AllocateRegister;
+      ACtx.CompileExpression(ConditionBinary.Left, ConditionReg);
+      ElseJump := EmitInstruction(ACtx,
+        EncodeABC(OP_JUMP_IF_NUM_NOT_LTE_IMM, ConditionReg,
+          UInt16(Immediate), 0), True);
+      ACtx.Scope.FreeRegister;
+      ACtx.CompileExpression(AExpr.Consequent, ADest);
+      EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      PatchJumpTarget(ACtx, ElseJump);
+      ACtx.CompileExpression(AExpr.Alternate, ADest);
+      PatchJumpTarget(ACtx, EndJump);
+      Exit;
+    end;
+  end;
+
   ConditionReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AExpr.Condition, ConditionReg);
   ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ConditionReg);

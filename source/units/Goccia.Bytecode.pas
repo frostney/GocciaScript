@@ -159,7 +159,9 @@ const
   //               little-endian UTF-16 code units so bytecode constants
   //               preserve every ECMAScript string value, including lone
   //               surrogates.
-  GOCCIA_FORMAT_VERSION = 73;
+  //   v73 -> v74: added numeric immediate superinstructions for proven
+  //               Number subtraction and less-than-or-equal branches.
+  GOCCIA_FORMAT_VERSION = 74;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -416,7 +418,12 @@ type
     // the following instruction's A/B/C operands; the base word keeps the
     // ordinary compact encoding.
     OP_WIDE          = 225,
-    OP_CONSTRUCT_SPREAD = 226
+    OP_CONSTRUCT_SPREAD = 226,
+    // A = destination, B = proven Number source, C = signed Int16 immediate.
+    OP_SUB_NUM_IMM   = 227,
+    // A = proven Number source, B = signed Int16 immediate,
+    // C = signed Int16 forward jump offset when A <= B is false.
+    OP_JUMP_IF_NUM_NOT_LTE_IMM = 228
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt16): UInt64; {$IFDEF FPC}inline;{$ENDIF}

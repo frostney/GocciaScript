@@ -5,6 +5,7 @@ unit Goccia.Compiler.Context;
 interface
 
 uses
+  Generics.Collections,
   SysUtils,
 
   HashMap,
@@ -29,12 +30,14 @@ type
   TSetNonStrictModeProc = procedure(const AEnabled: Boolean) of object;
 
   TFormalParameterCountMap = THashMap<TGocciaFunctionTemplate, Integer>;
+  TNumericParameterProofMap = TDictionary<TGocciaExpression, UInt64>;
 
   TGocciaCompilationContext = record
     Template: TGocciaFunctionTemplate;
     Scope: TGocciaCompilerScope;
     SourcePath: string;
     FormalParameterCounts: TFormalParameterCountMap;
+    NumericParameterProofs: TNumericParameterProofMap;
     GlobalBackedTopLevel: Boolean;
     PreinitializedTopLevelFunctions: Boolean;
     StrictTypes: Boolean;
@@ -183,6 +186,24 @@ begin
       raise Exception.Create('Nullish jump offset exceeds 16-bit range');
     ACtx.Template.PatchInstruction(AIndex,
       EncodeABC(TGocciaOpCode(Op), A, B, UInt16(Offset)));
+  end
+  else if TGocciaOpCode(Op) = OP_JUMP_IF_NUM_NOT_LTE_IMM then
+  begin
+    A := DecodeA(Instruction);
+    B := DecodeB(Instruction);
+    if (AIndex > 0) and
+       (DecodeOp(ACtx.Template.GetInstruction(AIndex - 1)) = Ord(OP_WIDE)) then
+    begin
+      A := A or (UInt16(DecodeA(
+        ACtx.Template.GetInstruction(AIndex - 1))) shl 8);
+      B := B or (UInt16(DecodeB(
+        ACtx.Template.GetInstruction(AIndex - 1))) shl 8);
+    end;
+    if (Offset < Low(Int16)) or (Offset > High(Int16)) then
+      raise Exception.Create('Numeric immediate jump offset exceeds 16-bit range');
+    ACtx.Template.PatchInstruction(AIndex,
+      EncodeABC(OP_JUMP_IF_NUM_NOT_LTE_IMM, A, B,
+        UInt16(Int16(Offset))));
   end
   else
   begin
