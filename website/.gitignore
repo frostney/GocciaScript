@@ -12,13 +12,15 @@
 
 # testing
 /coverage
+/output/
+/.playwright-cli/
 
 # next.js
 /.next/
 /out/
 
-# docs synced from ../docs at build time (single source of truth lives there)
-/content/docs/
+# Fumadocs' generated source adapter (the Markdown itself stays in the repo root)
+/.source/
 
 # test262 dashboard snapshot synced from CI artifacts at build time
 /content/test262/

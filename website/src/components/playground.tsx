@@ -1,5 +1,12 @@
 "use client";
 
+import { Button } from "@astryxdesign/core/Button";
+import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
+import { IconButton } from "@astryxdesign/core/IconButton";
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from "@astryxdesign/core/SegmentedControl";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { AnimatedOutput } from "@/components/animated-output";
@@ -1031,100 +1038,74 @@ export function Playground({
     <div className="pg-shell pg-full">
       <div className="pg-toolbar">
         <div className="pg-toolbar-icons">
-          <button
-            type="button"
+          <IconButton
             className="pg-icon-button"
             data-active={examplesOpen}
-            aria-label={examplesOpen ? "Hide examples" : "Show examples"}
+            label={examplesOpen ? "Hide examples" : "Show examples"}
+            icon={<SidebarIcon size={16} />}
+            variant="ghost"
+            size="sm"
             aria-expanded={examplesOpen}
             onClick={() => setExamplesOpen((open) => !open)}
-          >
-            <SidebarIcon size={16} />
-          </button>
-          <button
-            type="button"
+          />
+          <IconButton
             className="pg-icon-button"
-            aria-label="Create blank code"
-            title="Create blank code"
+            label="Create blank code"
+            icon={<FilePlusIcon size={16} />}
+            variant="ghost"
+            size="sm"
+            tooltip="Create blank code"
             onClick={createBlank}
-          >
-            <FilePlusIcon size={16} />
-          </button>
-          <button
-            type="button"
+          />
+          <IconButton
             className="pg-icon-button"
-            aria-label="Create blank test file"
-            title="Create blank test file"
+            label="Create blank test file"
+            icon={<FileTestIcon size={16} />}
+            variant="ghost"
+            size="sm"
+            tooltip="Create blank test file"
             onClick={createBlankTest}
-          >
-            <FileTestIcon size={16} />
-          </button>
+          />
         </div>
 
-        <fieldset
+        <SegmentedControl
           className="pg-segmented"
-          data-active={backend}
           id={backendId}
-          aria-label="Execution mode"
+          label="Execution mode"
+          value={backend}
+          onChange={(value) => setBackend(value as Backend)}
+          size="sm"
         >
-          <span className="pg-segmented-indicator" aria-hidden="true" />
-          <button
-            type="button"
-            aria-pressed={backend === "interpreted"}
-            onClick={() => setBackend("interpreted")}
-          >
-            Interpreter
-          </button>
-          <button
-            type="button"
-            aria-pressed={backend === "bytecode"}
-            onClick={() => setBackend("bytecode")}
-          >
-            Bytecode
-          </button>
-        </fieldset>
+          <SegmentedControlItem value="interpreted" label="Interpreter" />
+          <SegmentedControlItem value="bytecode" label="Bytecode" />
+        </SegmentedControl>
 
-        <fieldset className="pg-flags" aria-label="Compilation flags">
-          <span className="pg-toolbar-label">Flags</span>
-          <label
+        <fieldset className="pg-flags">
+          <legend className="pg-toolbar-label">Flags</legend>
+          <CheckboxInput
             className="pg-flag-toggle"
-            htmlFor={asiId}
-            title="Automatic semicolon insertion (--asi)"
-          >
-            <input
-              id={asiId}
-              type="checkbox"
-              checked={asi}
-              onChange={(e) => setAsi(e.target.checked)}
-            />
-            <span>ASI</span>
-          </label>
-          <label
+            id={asiId}
+            label="ASI"
+            value={asi}
+            onChange={setAsi}
+            size="sm"
+          />
+          <CheckboxInput
             className="pg-flag-toggle"
-            htmlFor={compatVarId}
-            title="Enable var declarations (--compat-var)"
-          >
-            <input
-              id={compatVarId}
-              type="checkbox"
-              checked={compatVar}
-              onChange={(e) => setCompatVar(e.target.checked)}
-            />
-            <span>var</span>
-          </label>
-          <label
+            id={compatVarId}
+            label="var"
+            value={compatVar}
+            onChange={setCompatVar}
+            size="sm"
+          />
+          <CheckboxInput
             className="pg-flag-toggle"
-            htmlFor={compatFunctionId}
-            title="Enable function declarations and expressions (--compat-function)"
-          >
-            <input
-              id={compatFunctionId}
-              type="checkbox"
-              checked={compatFunction}
-              onChange={(e) => setCompatFunction(e.target.checked)}
-            />
-            <span>function</span>
-          </label>
+            id={compatFunctionId}
+            label="function"
+            value={compatFunction}
+            onChange={setCompatFunction}
+            size="sm"
+          />
         </fieldset>
 
         {/* The dropdown enumerates whatever `vendor/manifest.json` advertised
@@ -1152,22 +1133,24 @@ export function Playground({
         </select>
 
         <div className="ml-auto flex items-center gap-2">
-          <button
-            type="button"
+          <Button
             className="pg-share"
             onClick={reportIssue}
-            title="Open a GitHub issue with a link to this playground"
-          >
-            <GithubIcon size={14} />
-            <span>Report issue</span>
-          </button>
-          <button
-            type="button"
+            label="Report issue"
+            icon={<GithubIcon size={14} />}
+            tooltip="Open a GitHub issue with a link to this playground"
+            variant="secondary"
+            size="sm"
+          />
+          <Button
             className="pg-share"
             onClick={share}
-            title="Copy a sharable URL of the current code"
+            label={shareTick > 0 ? "Link copied" : "Share"}
+            icon={<CopyIcon size={14} />}
+            tooltip="Copy a sharable URL of the current code"
+            variant="secondary"
+            size="sm"
           >
-            <CopyIcon size={14} />
             {shareTick > 0 ? (
               <span key={shareTick} className="copied-flash">
                 link copied
@@ -1175,20 +1158,24 @@ export function Playground({
             ) : (
               <span>Share</span>
             )}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
             className="pg-run"
-            disabled={running}
+            isDisabled={running}
             onClick={run}
-            title={`Run · ${runShortcut.long}`}
+            label={running ? "Running" : "Run"}
+            icon={<RunIcon size={14} />}
+            tooltip={`Run · ${runShortcut.long}`}
+            variant="primary"
+            size="sm"
+            endContent={
+              <span className="pg-run-kbd" aria-hidden="true">
+                {runShortcut.short}
+              </span>
+            }
           >
-            <RunIcon size={14} />
             <span>{running ? "Running…" : "Run"}</span>
-            <span className="pg-run-kbd" aria-hidden="true">
-              {runShortcut.short}
-            </span>
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -1204,12 +1191,12 @@ export function Playground({
           </div>
           <div className="pg-example-list">
             {EXAMPLES.filter((e) => e.id !== "blank").map((e) => (
-              <button
+              <Button
                 key={e.id}
-                type="button"
                 className="pg-example-button"
                 data-active={e.id === exId}
                 tabIndex={examplesOpen ? 0 : -1}
+                label={e.label}
                 onClick={() => selectExample(e.id)}
                 onFocus={() => setHoveredExampleId(e.id)}
                 onMouseEnter={() => setHoveredExampleId(e.id)}
@@ -1218,7 +1205,7 @@ export function Playground({
               >
                 <span>{e.label}</span>
                 <small>{e.desc}</small>
-              </button>
+              </Button>
             ))}
           </div>
           {(() => {

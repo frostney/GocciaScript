@@ -1,11 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ImageResponse } from "next/og";
-import {
-  CANONICAL_SITE_URL,
-  SITE_DESCRIPTION,
-  SITE_TITLE,
-} from "@/lib/site-url";
+import { CANONICAL_SITE_URL, SITE_TITLE } from "@/lib/site-url";
 
 export const alt = SITE_TITLE;
 export const size = { width: 1200, height: 630 };
@@ -83,7 +79,7 @@ export default async function OpenGraphImage() {
         </div>
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 36 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 40 }}>
         <div
           style={{
             display: "flex",
@@ -124,15 +120,22 @@ export default async function OpenGraphImage() {
         <div
           style={{
             display: "flex",
+            flexDirection: "column",
             fontFamily: "IBM Plex Sans",
-            fontSize: 32,
+            fontSize: 40,
             fontWeight: 600,
-            lineHeight: 1.35,
-            color: "#4d4330",
-            maxWidth: 980,
+            lineHeight: 1.2,
+            color: "#3a3021",
+            maxWidth: 1000,
+            gap: 8,
           }}
         >
-          {SITE_DESCRIPTION}
+          <span style={{ display: "flex" }}>
+            Sandbox-first ECMAScript runtime.
+          </span>
+          <span style={{ display: "flex", color: "#5f523b" }}>
+            Portable. Embeddable. Host-controlled.
+          </span>
         </div>
       </div>
 
@@ -142,10 +145,10 @@ export default async function OpenGraphImage() {
           justifyContent: "flex-end",
           alignItems: "center",
           fontFamily: "IBM Plex Sans",
-          fontSize: 24,
+          fontSize: 28,
           fontWeight: 600,
           color: "#7a6b4f",
-          borderTop: "1px solid #c9b98e",
+          borderTop: "2px solid #b9a779",
           paddingTop: 24,
         }}
       >

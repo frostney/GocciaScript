@@ -17,13 +17,19 @@ let cached: VendorManifest | null = null;
  *  is missing — local dev without `prebuild` shouldn't 500. */
 export function getVendorManifest(): VendorManifest {
   if (cached) return cached;
-  const file = path.join(process.cwd(), "vendor", "manifest.json");
-  if (!existsSync(file)) {
+  const file = path.join(
+    /* turbopackIgnore: true */ process.cwd(),
+    "vendor",
+    "manifest.json",
+  );
+  if (!existsSync(/* turbopackIgnore: true */ file)) {
     cached = EMPTY_MANIFEST;
     return cached;
   }
   try {
-    cached = normalizeManifest(JSON.parse(readFileSync(file, "utf8")));
+    cached = normalizeManifest(
+      JSON.parse(readFileSync(/* turbopackIgnore: true */ file, "utf8")),
+    );
   } catch {
     cached = EMPTY_MANIFEST;
   }

@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+
+export { AGENT_DISCOVERY_LINK_HEADER } from "./agent-discovery-header.mjs";
+
 import {
   gocciaRunInputSchema,
   MAX_GOCCIA_CODE_BYTES,
@@ -22,15 +25,6 @@ export const GOCCIA_API_SKILL_PATH =
   "/.well-known/agent-skills/gocciascript-api/SKILL.md";
 export const COMPATIBILITY_MARKDOWN_PATH = "/compatibility.md";
 export const LLMS_TEXT_PATH = "/llms.txt";
-
-export const AGENT_DISCOVERY_LINK_HEADER = [
-  `<${API_CATALOG_PATH}>; rel="api-catalog"; type="application/linkset+json"; profile="https://www.rfc-editor.org/info/rfc9727"`,
-  `<${OAUTH_PROTECTED_RESOURCE_PATH}>; rel="oauth-protected-resource"; type="application/json"`,
-  `<${MCP_SERVER_CARD_PATH}>; rel="mcp-server-card"; type="application/json"`,
-  `<${AGENT_SKILLS_INDEX_PATH}>; rel="agent-skills"; type="application/json"`,
-  `<${LLMS_TEXT_PATH}>; rel="alternate"; type="text/plain"`,
-  `</docs>; rel="service-doc"; type="text/html"`,
-].join(", ");
 
 const API_ENDPOINTS = [
   { href: "/api/execute", type: "application/json" },
