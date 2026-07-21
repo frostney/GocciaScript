@@ -177,7 +177,8 @@ end;
 
 class function TAbstractJSONParser.IsASCIIDigit(const AChar: Char): Boolean;
 begin
-  Result := AChar in ['0'..'9'];
+  // FPC 3.2.2 lowers WideChar set membership through an ANSI conversion.
+  Result := (AChar >= '0') and (AChar <= '9');
 end;
 
 class function TAbstractJSONParser.IsASCIIHexDigit(const AChar: Char): Boolean;
@@ -515,7 +516,8 @@ begin
   DecimalPointSeen := False;
   ExponentSeen := False;
 
-  if PeekChar in ['-', '+'] then
+  // Keep ASCII WideChar checks direct for the same reason as IsASCIIDigit.
+  if (PeekChar = '-') or (PeekChar = '+') then
   begin
     SignText := ReadChar;
     if (SignText = '+') and not Supports(jpcAllowLeadingPlusSign) then
@@ -547,7 +549,7 @@ begin
     if not IsAtEnd and IsASCIIDigit(PeekChar) then
       RaiseParseError('Invalid number format');
   end
-  else if not IsAtEnd and (PeekChar in ['1'..'9']) then
+  else if not IsAtEnd and (PeekChar >= '1') and (PeekChar <= '9') then
   begin
     while not IsAtEnd and IsASCIIDigit(PeekChar) do
       NumStr := NumStr + ReadChar;
@@ -569,11 +571,11 @@ begin
         NumStr := NumStr + ReadChar;
   end;
 
-  if not IsAtEnd and (PeekChar in ['e', 'E']) then
+  if not IsAtEnd and ((PeekChar = 'e') or (PeekChar = 'E')) then
   begin
     ExponentSeen := True;
     NumStr := NumStr + ReadChar;
-    if not IsAtEnd and (PeekChar in ['+', '-']) then
+    if not IsAtEnd and ((PeekChar = '+') or (PeekChar = '-')) then
       NumStr := NumStr + ReadChar;
     if IsAtEnd or not IsASCIIDigit(PeekChar) then
       RaiseParseError('Invalid number format in exponent');
