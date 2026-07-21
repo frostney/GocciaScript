@@ -1646,14 +1646,13 @@ a.info-term {
   gap: 1rem;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
-.feature {
-  padding: 1.5rem;
-  background: var(--paper-2);
-  border: 1px solid var(--rule-soft);
-  border-radius: 14px;
-  position: relative;
+.paper-card {
+  --color-border-emphasized: var(--rule-soft);
 }
-.feature .ficon {
+.feature-card {
+  --radius-container: 14px;
+}
+.feature-card .ficon {
   width: 38px;
   height: 38px;
   display: grid;
@@ -1661,43 +1660,21 @@ a.info-term {
   border-radius: 10px;
   background: var(--paper-3);
   border: 1px solid var(--rule-soft);
-  margin-bottom: 1rem;
   color: var(--accent);
-}
-.feature h4 {
-  margin-bottom: 0.4rem;
-  color: var(--ink);
-}
-.feature p {
-  color: var(--ink-2);
-  font-size: 0.95rem;
-  margin: 0;
 }
 
-.faq-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 0.85rem;
+.faq-list {
+  --radius-container: 8px;
 }
-.faq-item {
-  border: 1px solid var(--rule-soft);
-  border-radius: 8px;
-  background: var(--paper-2);
-  padding: 1rem 1.1rem;
+.faq-list .astryx-collapsible + .astryx-collapsible {
+  border-top: 1px solid var(--rule-soft);
 }
-.faq-item summary {
-  cursor: pointer;
-  color: var(--ink);
-  font-weight: 700;
-  list-style-position: outside;
+.faq-list .astryx-collapsible > button {
+  min-height: 3.25rem;
+  padding: 0.85rem 1rem;
 }
-.faq-item summary::marker {
-  color: var(--accent);
-}
-.faq-item p {
-  margin: 0.75rem 0 0;
-  color: var(--ink-2);
-  font-size: 0.95rem;
+.faq-list .astryx-collapsible > button + div {
+  padding: 0 1rem 1rem;
 }
 
 /* decorative drop */
@@ -2735,43 +2712,6 @@ a.info-term {
   user-select: none;
 }
 
-/* Code block with a left-side line-number gutter. Used by the
-   Compiler Pipeline panels, EXCLUDED snippets, and any other static
-   code on the landing page so all rendered samples have one look. */
-.numbered-code {
-  display: flex;
-  background: var(--paper);
-  border: 1px solid var(--rule-soft);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.numbered-code-gutter {
-  margin: 0;
-  padding: 0.85rem 0.5rem 0.85rem 0.7rem;
-  background: color-mix(in oklab, var(--paper-2) 70%, var(--paper-3));
-  border-right: 1px solid var(--rule-soft);
-  color: var(--ink-3);
-  font-family: var(--mono);
-  font-size: 0.82rem;
-  line-height: 1.5;
-  text-align: right;
-  user-select: none;
-  white-space: pre;
-  min-width: 2.5ch;
-}
-.numbered-code-body {
-  margin: 0;
-  padding: 0.85rem 1rem;
-  flex: 1;
-  min-width: 0;
-  overflow-x: auto;
-  font-family: var(--mono);
-  font-size: 0.82rem;
-  line-height: 1.5;
-}
-.numbered-code-body code {
-  white-space: pre;
-}
 .pg-log-line {
   padding: 0.12rem 0;
   border-bottom: 1px dashed transparent;
