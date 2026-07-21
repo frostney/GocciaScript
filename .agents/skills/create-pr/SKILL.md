@@ -42,6 +42,8 @@ Explicit permission to commit relevant changes, push the branch, and open a draf
    - Read `.github/pull_request_template.md`, or pick the matching template under `.github/PULL_REQUEST_TEMPLATE/` when multiple templates are discovered.
    - Absence protocol: after the template search finds no PR template, state that no project PR template was found and use a minimal structure: Summary, Testing, Linked issues.
    - Fill the template faithfully and preserve its structure.
+   - When the PR closes issues, put each closing keyword on its own line
+     (`Closes #N`); never comma-separate multiple closing keywords on one line.
 9. Open as a **draft** via GraphQL first:
 
    ```bash
