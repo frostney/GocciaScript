@@ -3,6 +3,7 @@ program Goccia.VM.Test;
 {$I Goccia.inc}
 
 uses
+  Math,
   SysUtils,
 
   TestingPascalLibrary,
@@ -29,6 +30,8 @@ type
     procedure TestExecuteLiteralLoads;
     procedure TestExecuteConstString;
     procedure TestExecuteComparisons;
+    procedure TestExecuteSubtractNumberImmediate;
+    procedure TestExecuteNumberImmediateBranch;
     procedure TestExecuteArrayOps;
     procedure TestExecuteArrayPop;
     procedure TestExecuteObjectOps;
@@ -69,6 +72,8 @@ begin
   Test('Execute literal loads', TestExecuteLiteralLoads);
   Test('Execute constant string', TestExecuteConstString);
   Test('Execute comparisons', TestExecuteComparisons);
+  Test('Execute Number subtract immediate', TestExecuteSubtractNumberImmediate);
+  Test('Execute Number immediate branch', TestExecuteNumberImmediateBranch);
   Test('Execute array ops', TestExecuteArrayOps);
   Test('Execute array pop', TestExecuteArrayPop);
   Test('Execute object ops', TestExecuteObjectOps);
@@ -192,6 +197,70 @@ begin
 
     ResultValue := VM.ExecuteFunction(Template);
     Expect<Boolean>(ResultValue.ToBooleanLiteral.Value).ToBe(True);
+  finally
+    VM.Free;
+    Template.Free;
+  end;
+end;
+
+procedure TTestGocciaVM.TestExecuteSubtractNumberImmediate;
+var
+  Template: TGocciaFunctionTemplate;
+  VM: TGocciaVM;
+  ResultValue: TGocciaValue;
+  FloatIndex: UInt16;
+begin
+  Template := TGocciaFunctionTemplate.Create('subtract-number-immediate');
+  VM := TGocciaVM.Create;
+  try
+    Template.MaxRegisters := 2;
+    Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 0, 7));
+    Template.EmitInstruction(EncodeABC(OP_SUB_NUM_IMM, 1, 0,
+      UInt16(Int16(-2))));
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 1, 0, 0));
+    ResultValue := VM.ExecuteFunction(Template);
+    Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(9);
+
+    FloatIndex := Template.AddConstantFloat(7.5);
+    Template.PatchInstruction(0, EncodeABx(OP_LOAD_CONST, 0, FloatIndex));
+    ResultValue := VM.ExecuteFunction(Template);
+    Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(9.5);
+  finally
+    VM.Free;
+    Template.Free;
+  end;
+end;
+
+procedure TTestGocciaVM.TestExecuteNumberImmediateBranch;
+var
+  Template: TGocciaFunctionTemplate;
+  VM: TGocciaVM;
+  ResultValue: TGocciaValue;
+  NaNIndex: UInt16;
+begin
+  Template := TGocciaFunctionTemplate.Create('number-immediate-branch');
+  VM := TGocciaVM.Create;
+  try
+    Template.MaxRegisters := 2;
+    Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 0, 2));
+    Template.EmitInstruction(EncodeABC(OP_JUMP_IF_NUM_NOT_LTE_IMM,
+      0, UInt16(Int16(1)), UInt16(Int16(2))), True);
+    Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 1, 99));
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 1, 0, 0));
+    Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 1, 7));
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 1, 0, 0));
+
+    ResultValue := VM.ExecuteFunction(Template);
+    Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(7);
+
+    Template.PatchInstruction(0, EncodeAsBx(OP_LOAD_INT, 0, 1));
+    ResultValue := VM.ExecuteFunction(Template);
+    Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(99);
+
+    NaNIndex := Template.AddConstantFloat(NaN);
+    Template.PatchInstruction(0, EncodeABx(OP_LOAD_CONST, 0, NaNIndex));
+    ResultValue := VM.ExecuteFunction(Template);
+    Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(7);
   finally
     VM.Free;
     Template.Free;

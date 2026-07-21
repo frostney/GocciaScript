@@ -25,6 +25,7 @@ type
     FCurrentScope: TGocciaCompilerScope;
     FSourcePath: string;
     FFormalParameterCounts: TFormalParameterCountMap;
+    FNumericParameterProofs: TNumericParameterProofMap;
     FGlobalBackedTopLevel: Boolean;
     FAsyncTopLevel: Boolean;
     FPreinitializedTopLevelFunctions: Boolean;
@@ -82,6 +83,7 @@ uses
   Goccia.Bytecode.Debug,
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.Expressions,
+  Goccia.Compiler.NumericProof,
   Goccia.Compiler.PatternMatching,
   Goccia.Compiler.Statements,
   Goccia.Keywords.Reserved,
@@ -94,6 +96,7 @@ begin
   inherited Create;
   FSourcePath := ASourcePath;
   FFormalParameterCounts := TFormalParameterCountMap.Create;
+  FNumericParameterProofs := TNumericParameterProofMap.Create;
   FTemplateDerivedConstructorThisGuards :=
     TDictionary<TGocciaFunctionTemplate, Boolean>.Create;
   FDerivedConstructorThisGuard := False;
@@ -106,6 +109,7 @@ end;
 
 destructor TGocciaCompiler.Destroy;
 begin
+  FNumericParameterProofs.Free;
   FTemplateDerivedConstructorThisGuards.Free;
   FFormalParameterCounts.Free;
   inherited;
@@ -117,6 +121,7 @@ begin
   Result.Scope := FCurrentScope;
   Result.SourcePath := FSourcePath;
   Result.FormalParameterCounts := FFormalParameterCounts;
+  Result.NumericParameterProofs := FNumericParameterProofs;
   Result.GlobalBackedTopLevel := FGlobalBackedTopLevel and
     (FCurrentTemplate = FTopLevelTemplate);
   Result.PreinitializedTopLevelFunctions := FPreinitializedTopLevelFunctions and
@@ -701,6 +706,8 @@ begin
     begin
       Block := TGocciaBlockStatement(ABody);
 
+      DiscoverClosedCallNumericProof(Block, FNumericParameterProofs);
+
       // Hoist var declarations to function scope
       for I := 0 to Block.Nodes.Count - 1 do
         HoistVarLocals(Block.Nodes[I], FCurrentScope,
@@ -1184,6 +1191,7 @@ var
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
   PredeclaredLocal: TGocciaCompilerLocal;
 begin
+  FNumericParameterProofs.Clear;
   FModule := TGocciaBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
   FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
   FTopLevelTemplate := FCurrentTemplate;

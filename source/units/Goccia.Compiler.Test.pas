@@ -73,6 +73,7 @@ type
     procedure TestCompileVariable;
     procedure TestCompileFunction;
     procedure TestBinaryRoundTrip;
+    procedure TestBinaryRoundTripClosedNumericSelfCall;
     procedure TestBinaryRoundTripUpvalueNames;
     procedure TestBinaryLittleEndian;
     procedure TestBinaryRoundTripConstants;
@@ -86,6 +87,10 @@ type
     procedure TestConstPropagationSkipsGlobalBacked;
     procedure TestInferredNumericLocalsUseTypedArithmetic;
     procedure TestAnnotatedParametersUseTypedArithmetic;
+    procedure TestClosedNumericFibonacciUsesSuperinstructions;
+    procedure TestClosedNumericScalarSelfCallArityLimit;
+    procedure TestMixedOrEscapedCallsCancelNumericProof;
+    procedure TestKnownNumericLocalUsesSubtractImmediate;
     procedure TestGenericAdditionDefersToPrimitiveToOpcode;
     procedure TestAssignmentClearsStaleNumericHint;
     procedure TestGlobalBackedAssignmentClearsStaleNumericHint;
@@ -123,6 +128,8 @@ begin
   Test('Compile variable', TestCompileVariable);
   Test('Compile function', TestCompileFunction);
   Test('Binary round-trip', TestBinaryRoundTrip);
+  Test('Binary round-trip closed numeric self-call',
+    TestBinaryRoundTripClosedNumericSelfCall);
   Test('Binary round-trip upvalue names', TestBinaryRoundTripUpvalueNames);
   Test('Binary little-endian format', TestBinaryLittleEndian);
   Test('Binary round-trip constants', TestBinaryRoundTripConstants);
@@ -136,6 +143,14 @@ begin
   Test('Const propagation skips global-backed bindings', TestConstPropagationSkipsGlobalBacked);
   Test('Inferred numeric locals use typed arithmetic', TestInferredNumericLocalsUseTypedArithmetic);
   Test('Annotated parameters use typed arithmetic', TestAnnotatedParametersUseTypedArithmetic);
+  Test('Closed numeric Fibonacci uses superinstructions',
+    TestClosedNumericFibonacciUsesSuperinstructions);
+  Test('Closed numeric scalar self-call supports only small arities',
+    TestClosedNumericScalarSelfCallArityLimit);
+  Test('Mixed or escaped calls cancel numeric proof',
+    TestMixedOrEscapedCallsCancelNumericProof);
+  Test('Known numeric local uses subtract immediate',
+    TestKnownNumericLocalUsesSubtractImmediate);
   Test('Generic addition defers ToPrimitive to opcode',
     TestGenericAdditionDefersToPrimitiveToOpcode);
   Test('Assignment clears stale numeric hint', TestAssignmentClearsStaleNumericHint);
@@ -312,6 +327,7 @@ begin
     CountOp(ATemplate, OP_MUL_FLOAT) +
     CountOp(ATemplate, OP_DIV_FLOAT) +
     CountOp(ATemplate, OP_MOD_FLOAT);
+  Result := Result + CountOp(ATemplate, OP_SUB_NUM_IMM);
 end;
 
 function TTestCompiler.HasLoadInt(const ATemplate: TGocciaFunctionTemplate;
@@ -540,6 +556,36 @@ begin
       Expect<Integer>(Loaded.TopLevel.CodeCount).ToBe(Original.TopLevel.CodeCount);
       Expect<Integer>(Loaded.TopLevel.ConstantCount).ToBe(Original.TopLevel.ConstantCount);
       Expect<Integer>(Loaded.TopLevel.FunctionCount).ToBe(Original.TopLevel.FunctionCount);
+    finally
+      Loaded.Free;
+    end;
+  finally
+    Original.Free;
+    DeleteFile(TempFile);
+  end;
+end;
+
+procedure TTestCompiler.TestBinaryRoundTripClosedNumericSelfCall;
+var
+  Original, Loaded: TGocciaBytecodeModule;
+  LoadedFunction: TGocciaFunctionTemplate;
+  TempFile: string;
+begin
+  Original := CompileSource(
+    'const run = () => {' +
+    '  const fib = (n) => n <= 1 ? n : fib(n - 1) + fib(n - 2);' +
+    '  fib(10);' +
+    '}; run();', False, False, False, False, False, False);
+  TempFile := GetTempFileName + '.gbc';
+  try
+    SaveModuleToFile(Original, TempFile);
+    Loaded := LoadModuleFromFile(TempFile);
+    try
+      LoadedFunction := FindFunctionWithOp(Loaded.TopLevel,
+        OP_CALL_SELF_NUM);
+      Expect<Boolean>(Assigned(LoadedFunction)).ToBe(True);
+      if Assigned(LoadedFunction) then
+        Expect<Integer>(CountOp(LoadedFunction, OP_CALL_SELF_NUM)).ToBe(2);
     finally
       Loaded.Free;
     end;
@@ -847,6 +893,151 @@ begin
       Expect<Integer>(CountOp(Func, OP_ADD_FLOAT)).ToBe(1);
       Expect<Integer>(CountOp(Func, OP_ADD)).ToBe(0);
     end;
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestClosedNumericFibonacciUsesSuperinstructions;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const run = () => {' +
+    '  const fib = (n) => n <= 1 ? n : fib(n - 1) + fib(n - 2);' +
+    '  fib(20);' +
+    '}; run();', False, False, False, False, False, False);
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_SUB_NUM_IMM);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_SUB_NUM_IMM)).ToBe(2);
+      Expect<Integer>(CountOp(Func, OP_JUMP_IF_NUM_NOT_LTE_IMM)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_SUB)).ToBe(0);
+      Expect<Integer>(CountOp(Func, OP_LTE)).ToBe(0);
+      Expect<Integer>(CountOp(Func, OP_ADD)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_CALL_SELF_NUM)).ToBe(2);
+      Expect<Integer>(CountOp(Func, OP_GET_UPVALUE)).ToBe(0);
+      Expect<Integer>(CountOp(Func, OP_CALL)).ToBe(0);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestClosedNumericScalarSelfCallArityLimit;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const run = () => {' +
+    '  const sum = (n, acc) => n <= 0 ? acc : sum(n - 1, acc + 1) + 0;' +
+    '  sum(5, 2);' +
+    '}; run();', False, False, False, False, False, False);
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_CALL_SELF_NUM);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      Expect<Integer>(CountOp(Func, OP_CALL_SELF_NUM)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource(
+    'const run = () => {' +
+    '  const sum = (n, a, b) => n <= 0 ? a + b :' +
+    '    sum(n - 1, a + 1, b + 2) + 0;' +
+    '  sum(5, 2, 3);' +
+    '}; run();', False, False, False, False, False, False);
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_CALL_SELF_NUM);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      Expect<Integer>(CountOp(Func, OP_CALL_SELF_NUM)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource(
+    'const run = () => {' +
+    '  const wide = (n, a, b, c) => n <= 0 ? a + b + c :' +
+    '    wide(n - 1, a + 1, b + 2, c + 3) + 0;' +
+    '  wide(5, 2, 3, 4);' +
+    '}; run();', False, False, False, False, False, False);
+  try
+    Expect<Boolean>(FindFunctionWithOp(Module.TopLevel,
+      OP_CALL_SELF_NUM) = nil).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestMixedOrEscapedCallsCancelNumericProof;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'const mixed = () => {' +
+    '  const fib = (n) => n <= 1 ? n : fib(n - 1) + fib(n - 2);' +
+    '  fib(20); fib("20");' +
+    '}; mixed();', False, False, False, False, False, False);
+  try
+    Expect<Boolean>(FindFunctionWithOp(Module.TopLevel,
+      OP_SUB_NUM_IMM) = nil).ToBe(True);
+    Expect<Boolean>(FindFunctionWithOp(Module.TopLevel,
+      OP_JUMP_IF_NUM_NOT_LTE_IMM) = nil).ToBe(True);
+    Expect<Boolean>(FindFunctionWithOp(Module.TopLevel,
+      OP_CALL_SELF_NUM) = nil).ToBe(True);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource(
+    'const wrongArity = () => {' +
+    '  const down = (a, b) => a <= 1 ? a : down(a - 1, b - 1);' +
+    '  down(20);' +
+    '}; wrongArity();', False, False, False, False, False, False);
+  try
+    Expect<Boolean>(FindFunctionWithOp(Module.TopLevel,
+      OP_SUB_NUM_IMM) = nil).ToBe(True);
+    Expect<Boolean>(FindFunctionWithOp(Module.TopLevel,
+      OP_JUMP_IF_NUM_NOT_LTE_IMM) = nil).ToBe(True);
+    Expect<Boolean>(FindFunctionWithOp(Module.TopLevel,
+      OP_CALL_SELF_NUM) = nil).ToBe(True);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource(
+    'const escaped = (sink) => {' +
+    '  const fib = (n) => n <= 1 ? n : fib(n - 1) + fib(n - 2);' +
+    '  sink(fib); fib(20);' +
+    '}; escaped(() => {});', False, False, False, False, False, False);
+  try
+    Expect<Boolean>(FindFunctionWithOp(Module.TopLevel,
+      OP_SUB_NUM_IMM) = nil).ToBe(True);
+    Expect<Boolean>(FindFunctionWithOp(Module.TopLevel,
+      OP_JUMP_IF_NUM_NOT_LTE_IMM) = nil).ToBe(True);
+    Expect<Boolean>(FindFunctionWithOp(Module.TopLevel,
+      OP_CALL_SELF_NUM) = nil).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestKnownNumericLocalUsesSubtractImmediate;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('let i = 2; i - 1;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_FLOAT)).ToBe(0);
   finally
     Module.Free;
   end;

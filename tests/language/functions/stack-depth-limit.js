@@ -97,3 +97,19 @@ test("error has stack trace", () => {
   expect(caught.stack).toBeDefined();
   expect(caught.stack.includes("deep")).toBe(true);
 });
+
+test("closed numeric scalar recursion preserves the stack limit and trace", () => {
+  const run = () => {
+    const numeric = (n) => numeric(n - 1) + 0;
+    return numeric(1);
+  };
+  let caught;
+  try {
+    run();
+  } catch (e) {
+    caught = e;
+  }
+  expect(caught instanceof RangeError).toBe(true);
+  expect(caught.message).toBe("Maximum call stack size exceeded");
+  expect(caught.stack.includes("numeric")).toBe(true);
+});

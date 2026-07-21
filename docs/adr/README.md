@@ -110,3 +110,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0098 — Portable exact numeric text conversion](0098-portable-exact-numeric-text-conversion.md)
 - [0099 — Canonical UTF-16 text with explicit encoded-byte boundaries](0099-canonical-utf16-text-boundaries.md)
 - [0100 — Native binary64 execution with narrow semantic operations](0100-native-binary64-execution.md)
+- [0101 — Closed numeric scalar self-call frames](0101-closed-numeric-scalar-self-call-frames.md)

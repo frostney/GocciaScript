@@ -159,7 +159,11 @@ const
   //               little-endian UTF-16 code units so bytecode constants
   //               preserve every ECMAScript string value, including lone
   //               surrogates.
-  GOCCIA_FORMAT_VERSION = 73;
+  //   v73 -> v74: added numeric immediate superinstructions for proven
+  //               Number subtraction and less-than-or-equal branches.
+  //   v74 -> v75: added a direct scalar-frame self-call opcode for functions
+  //               accepted by the closed-world numeric-call proof.
+  GOCCIA_FORMAT_VERSION = 75;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -416,7 +420,16 @@ type
     // the following instruction's A/B/C operands; the base word keeps the
     // ordinary compact encoding.
     OP_WIDE          = 225,
-    OP_CONSTRUCT_SPREAD = 226
+    OP_CONSTRUCT_SPREAD = 226,
+    // A = destination, B = proven Number source, C = signed Int16 immediate.
+    OP_SUB_NUM_IMM   = 227,
+    // A = proven Number source, B = signed Int16 immediate,
+    // C = signed Int16 forward jump offset when A <= B is false.
+    OP_JUMP_IF_NUM_NOT_LTE_IMM = 228,
+    // A = destination, B = first contiguous argument register,
+    // C = argument count (1..3). Valid only in a compiler-proven closed-world
+    // numeric self-recursive template.
+    OP_CALL_SELF_NUM = 229
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt16): UInt64; {$IFDEF FPC}inline;{$ENDIF}

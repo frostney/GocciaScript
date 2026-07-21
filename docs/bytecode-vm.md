@@ -39,6 +39,7 @@ Public bytecode artifacts use the `.gbc` extension.
 | VM execution | `Goccia.VM.pas` |
 | Frames / closures / upvalues | `Goccia.VM.CallFrame.pas`, `Goccia.VM.Closure.pas`, `Goccia.VM.Upvalue.pas` |
 | Bytecode executor | `Goccia.Executor.Bytecode.pas` (`TGocciaBytecodeExecutor`) |
+| Numeric proof / lowering | `Goccia.Compiler.NumericProof.pas`, `Goccia.Compiler.Expressions.pas` |
 | Opcode name lookup | `Goccia.Bytecode.OpCodeNames.pas` |
 | Profiler | `Goccia.Profiler.pas`, `Goccia.Profiler.Report.pas` |
 
@@ -116,7 +117,9 @@ Recent VM cleanup and optimization work has focused on reducing per-instruction 
 - pre-size argument collections for calls and construction
 - hold call arguments in a stack-disciplined arena window (`FArgumentStack` with a base+count window, mirroring the register and local-cell stacks) instead of a per-call dynamic array, so an ordinary call performs no argument-array allocation; frame save/restore and native re-entry store `(base, count)` rather than copying
 - defer stack-trace frames on the hot call path: push the function-template pointer rather than copying its name/source strings, and materialise them only when a trace is captured (see [ADR 0074](adr/0074-deferred-bytecode-call-stack-frames.md))
+- execute compiler-proven closed-world numeric self-calls through `OP_CALL_SELF_NUM`: recursive calls with one to three scalar arguments use a compact register frame while sharing the generic entry frame's closure, lexical environment, local-cell and argument windows, realm, and execution context (see [ADR 0101](adr/0101-closed-numeric-scalar-self-call-frames.md))
 - use unchecked template access in the dispatch loop where bounds are already guaranteed
+- fuse `Number - Int16` as `OP_SUB_NUM_IMM` and conditional `Number <= Int16` as `OP_JUMP_IF_NUM_NOT_LTE_IMM` only when the compiler proves the source is an ECMAScript Number; these instructions remove literal-load and branch dispatches rather than merely replacing a generic arithmetic dispatch
 - keep fast register access limited to proven hot/simple paths; local-slot and complex property paths should only move to fast access when they stay correct and measurably improve throughput
 - the register, local-cell, and argument window fills are GC-safety/correctness critical (the GC marks the whole live window): they are deliberately retained rather than trimmed
 
@@ -135,6 +138,18 @@ Cached pointers (scope, shape) are compared for identity only and never derefere
 Computed property access (`OP_ARRAY_GET`/`OP_ARRAY_SET`, `OP_GET_INDEX`/`OP_SET_INDEX`, `OP_DEL_INDEX`) shares one key-classification and receiver-dispatch implementation (`ClassifyPropertyKey` plus the `ExecGet/ExecSet/ExecDeleteComputedProperty` cores in `Goccia.VM.pas`); per-opcode semantic differences are explicit `TGocciaComputedAccessOptions`, not divergent copies. A non-BigInt `TGocciaTypedArrayValue` receiver at an array-index key takes an unboxed element fast path (`TryReadIndexedScalar`/`TryWriteIndexedScalar`): reads move the element straight into a register scalar and numeric-scalar writes store it directly, so neither allocates the heap `TGocciaNumberLiteralValue` or index-name string the generic object branch would. BigInt kinds, non-index keys, and non-scalar write values fall through to the boxed path; an out-of-range or detached **read** does too (yielding `undefined`). A non-BigInt scalar **write**, however, keeps its integer-indexed exotic semantics in place even for an out-of-range index or immutable backing buffer — the store is skipped and reported as successful, never boxed. All value semantics are preserved, including the observable `ToNumber` ordering of integer-indexed `[[Set]]`.
 
 The current optimization target is reducing bytecode-mode suite time further without diverging interpreter and bytecode semantics.
+
+Numeric call-derived proof is deliberately closed-world. It applies only to a
+simple, const-bound local arrow with no escape, optional call, default/rest/
+destructured parameter, mixed argument, or unsupported use. Every external
+direct call must supply exactly one numeric literal per parameter, and the
+expression body must establish a Number result recursively. The proof marks
+parameters for the two numeric immediate superinstructions; for one to three
+parameters it also emits `OP_CALL_SELF_NUM` at non-tail direct self-call sites.
+The scalar frame performs no speculative type conversion or deoptimization:
+unsupported shapes retain ordinary `OP_CALL`, and tail calls retain the generic
+proper-tail-call path. The optimization does not turn the function into a
+generally typed function or change generic `+` semantics.
 
 ## Profiling
 
