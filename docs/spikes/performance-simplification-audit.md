@@ -21,6 +21,8 @@ Point-in-time deep audit of duplication, QuickJS gap levers, and ADR validity
 - On current main CI, Goccia is ~16.6× AWFY / ~27.3× JetStream behind QuickJS;
   that gap is the evidence that several older “local win / local reject”
   assumptions were looking at the wrong baseline.
+- Pick-up briefs: [handover-performance-quickjs-gap.md](handover-performance-quickjs-gap.md),
+  [handover-adr-assumption-revalidation.md](handover-adr-assumption-revalidation.md).
 
 ## Assumption validity (the actual ADR question)
 
