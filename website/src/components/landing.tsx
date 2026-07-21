@@ -806,7 +806,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "What is GocciaScript for?",
     answer:
-      "It is built for applications that need JavaScript with an explicit, host-defined capability surface, including desktop scripting, automation, plugins, sandboxed workflows, and agent execution. Embedding currently targets FreePascal hosts, with more host paths intended to grow over time.",
+      "It is built for applications that need JavaScript with an explicit, host-defined capability surface, including desktop scripting, automation, plugins, sandboxed workflows, and agent execution. The embedding API and guide target FreePascal hosts; Delphi 12 supports the shipped Win32 and Win64 applications.",
   },
   {
     question: ECMASCRIPT_SCOPE_QUESTION,
@@ -986,24 +986,8 @@ export function Landing({
               The engine&apos;s language capability is broader than its
               recommended profile. Selected legacy and high-risk forms stay off
               by default, while compatibility flags enable many standard forms
-              for conformance and existing code. The result ships in a{" "}
-              <button
-                type="button"
-                className="info-term info-term-button"
-                aria-describedby="portable-runtime-tip"
-              >
-                portable runtime under 10MB
-                <span
-                  id="portable-runtime-tip"
-                  role="tooltip"
-                  className="info-tooltip"
-                >
-                  The exact binary size depends on the target platform. The
-                  runtime binary does not explicitly require any external
-                  dependencies to be loaded.
-                </span>
-              </button>
-              .
+              for conformance and existing code. The result ships as a compact,
+              portable native runtime.
             </p>
           </div>
           <div className="feature-grid">

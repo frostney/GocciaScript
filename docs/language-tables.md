@@ -61,12 +61,12 @@
 | `Object.groupBy`, `Map.groupBy` | ES2024 | Supported |
 | `Promise.withResolvers` | ES2024 | Supported |
 | `String.prototype.isWellFormed`, `toWellFormed` | ES2024 | Supported |
-| `Object.getOwnPropertyDescriptors` | ES2024 | Supported |
+| `Object.getOwnPropertyDescriptors` | ES2017 | Supported |
 | Set methods (`union`, `intersection`, `difference`, etc.) | ES2025 | Supported |
 | `Promise.try` | ES2025 | Supported |
 | Iterator Helpers (`map`, `filter`, `take`, `drop`, etc.) | ES2025 | Supported |
 | `Float16Array`, `Math.f16round` | ES2025 | Supported |
-| Resizable `ArrayBuffer` (`resize`, `transfer`, `transferToFixedLength`) | ES2025 | Supported |
+| Resizable `ArrayBuffer` (`resize`, `transfer`, `transferToFixedLength`) | ES2024 | Supported |
 | `import.meta` | ES2020 | Supported |
 | `new.target` | ES2015 | Supported |
 | Dynamic `import()` | ES2020 | Supported |
@@ -119,7 +119,7 @@ APIs from WHATWG and W3C specifications — not part of ECMA-262, but widely exp
 
 ## Runtime Extensions
 
-GocciaScript provides a `Goccia` global object with engine metadata and runtime APIs beyond the ECMAScript specification, including `spec` (implemented ES features by year) and `proposal` (implemented TC39 proposals by stage). See [Built-in Objects — Goccia object](built-ins.md#global-constants-functions-and-error-constructors-gocciabuiltinsglobalspas) for the full property reference.
+GocciaScript provides a `Goccia` global object with engine metadata and runtime APIs beyond the ECMAScript specification, including `spec` (implemented ES features by year) and `proposal` (a selected inventory of implemented TC39 proposals by stage). See [Built-in Objects — Goccia object](built-ins.md#global-constants-functions-and-error-constructors-gocciabuiltinsglobalspas) for the full property reference.
 
 ## Related documents
 

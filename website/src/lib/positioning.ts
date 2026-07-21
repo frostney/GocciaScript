@@ -1,5 +1,5 @@
 export const GOCCIASCRIPT_SUMMARY =
-  "GocciaScript is a sandbox-first ECMAScript runtime with explicit host-controlled capabilities, designed for embedding portable JavaScript in applications. It is implemented in FreePascal, uses safer recommended defaults, and tracks language compatibility through generated test262 reports.";
+  "GocciaScript is a sandbox-first ECMAScript runtime with explicit host-controlled capabilities, designed for embedding portable JavaScript in applications. It is implemented in Pascal, with FreePascal as its cross-platform toolchain and Delphi 12 support for the shipped Win32 and Win64 applications. It uses safer recommended defaults and tracks language compatibility through generated test262 reports.";
 
 export const GOCCIASCRIPT_META_DESCRIPTION =
   "Sandbox-first ECMAScript runtime with explicit host-controlled capabilities, portable application embedding, and test262-tracked language compatibility.";
@@ -19,7 +19,7 @@ export const COMPILER_SUPPORT_QUESTION =
   "Does GocciaScript support FreePascal and Delphi?";
 
 export const COMPILER_SUPPORT_ANSWER =
-  "FreePascal is the supported compiler and embedding toolchain today. The source uses Delphi-compatible language mode, but compiling and embedding GocciaScript with the Delphi compiler is currently untested.";
+  "FreePascal is the cross-platform build and documented embedding toolchain. Delphi 12 Community Edition supports the complete shipped Win32 and Win64 application matrix, with shared semantics across both compilers.";
 
 export const POSITIONING_FAQS = [
   {
