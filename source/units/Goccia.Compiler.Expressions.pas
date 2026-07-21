@@ -3676,7 +3676,7 @@ var
   RestReg: Integer;
   I: Integer;
   OldDerivedGuard: Boolean;
-  NumericParameterMask: UInt64;
+  NumericProof: TClosedNumericCallProof;
   NumericLocalIndex: Integer;
 begin
   OldTemplate := ACtx.Template;
@@ -3715,14 +3715,18 @@ begin
   end;
   if Assigned(ACtx.NumericParameterProofs) and
      ACtx.NumericParameterProofs.TryGetValue(AExpr,
-       NumericParameterMask) then
+       NumericProof) then
+  begin
+    if Length(AExpr.Parameters) <= 3 then
+      ChildTemplate.ClosedNumericSelfName := NumericProof.FunctionName;
     for I := 0 to High(AExpr.Parameters) do
-      if (NumericParameterMask and (UInt64(1) shl I)) <> 0 then
+      if (NumericProof.ParameterMask and (UInt64(1) shl I)) <> 0 then
       begin
         NumericLocalIndex := ChildScope.ResolveLocal(AExpr.Parameters[I].Name);
         if NumericLocalIndex >= 0 then
           ChildScope.SetLocalCallProvenNumeric(NumericLocalIndex, True);
       end;
+  end;
   for I := 0 to High(AExpr.Parameters) do
     if AExpr.Parameters[I].IsPattern and Assigned(AExpr.Parameters[I].Pattern) then
       CollectDestructuringBindings(AExpr.Parameters[I].Pattern, ChildScope);
@@ -4250,7 +4254,7 @@ procedure CompileCall(const ACtx: TGocciaCompilationContext;
   const ATail: Boolean = False);
 var
   ArgCount, I: Integer;
-  BaseReg, ObjReg, ArgsReg, SuperReg, KeyReg: UInt16;
+  BaseReg, ObjReg, ArgsReg, SuperReg, KeyReg, FirstArgReg: UInt16;
   ThisLocalIdx: Integer;
   ThisUpvalIdx: Integer;
   ThisLocal: TGocciaCompilerLocal;
@@ -4263,13 +4267,37 @@ var
   IgnoredJumpCount: Integer;
   MethodTailFlag: UInt16;
 begin
-  if TryCompileOptionalChainCall(ACtx, AExpr, ADest) then
-    Exit;
-
   ArgCount := AExpr.Arguments.Count;
   if ArgCount > High(UInt16) then
     raise Exception.Create('Compiler error: too many arguments (>65535)');
   UseSpread := HasSpreadArgument(AExpr);
+
+  // A closed-world numeric proof establishes both the callee identity and the
+  // Number type of every recursive argument. Emit the scalar-frame ABI before
+  // generic callee resolution so the hot path does not load or dispatch the
+  // closure at all. Tail calls retain the generic proper-tail-call machinery.
+  if not ATail and not AExpr.Optional and not UseSpread and
+     (ArgCount >= 1) and (ArgCount <= 3) and
+     (ACtx.Template.ClosedNumericSelfName <> '') and
+     (AExpr.Callee is TGocciaIdentifierExpression) and
+     (TGocciaIdentifierExpression(AExpr.Callee).Name =
+       ACtx.Template.ClosedNumericSelfName) then
+  begin
+    FirstArgReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(AExpr.Arguments[0], FirstArgReg);
+    for I := 1 to ArgCount - 1 do
+      ACtx.CompileExpression(AExpr.Arguments[I],
+        ACtx.Scope.AllocateRegister);
+    EmitInstruction(ACtx, EncodeABC(OP_CALL_SELF_NUM, ADest, FirstArgReg,
+      UInt16(ArgCount)));
+    for I := 0 to ArgCount - 1 do
+      ACtx.Scope.FreeRegister;
+    Exit;
+  end;
+
+  if TryCompileOptionalChainCall(ACtx, AExpr, ADest) then
+    Exit;
+
   CallNilJump := -1;
   IgnoredJumpCount := 0;
   // ES2026 §15.10.2: an optional call cannot be in tail position here because

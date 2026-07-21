@@ -30,7 +30,12 @@ type
   TSetNonStrictModeProc = procedure(const AEnabled: Boolean) of object;
 
   TFormalParameterCountMap = THashMap<TGocciaFunctionTemplate, Integer>;
-  TNumericParameterProofMap = TDictionary<TGocciaExpression, UInt64>;
+  TClosedNumericCallProof = record
+    ParameterMask: UInt64;
+    FunctionName: string;
+  end;
+  TNumericParameterProofMap = TDictionary<TGocciaExpression,
+    TClosedNumericCallProof>;
 
   TGocciaCompilationContext = record
     Template: TGocciaFunctionTemplate;

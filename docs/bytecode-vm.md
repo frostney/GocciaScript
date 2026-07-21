@@ -117,6 +117,7 @@ Recent VM cleanup and optimization work has focused on reducing per-instruction 
 - pre-size argument collections for calls and construction
 - hold call arguments in a stack-disciplined arena window (`FArgumentStack` with a base+count window, mirroring the register and local-cell stacks) instead of a per-call dynamic array, so an ordinary call performs no argument-array allocation; frame save/restore and native re-entry store `(base, count)` rather than copying
 - defer stack-trace frames on the hot call path: push the function-template pointer rather than copying its name/source strings, and materialise them only when a trace is captured (see [ADR 0074](adr/0074-deferred-bytecode-call-stack-frames.md))
+- execute compiler-proven closed-world numeric self-calls through `OP_CALL_SELF_NUM`: recursive calls with one to three scalar arguments use a compact register frame while sharing the generic entry frame's closure, lexical environment, local-cell and argument windows, realm, and execution context (see [ADR 0101](adr/0101-closed-numeric-scalar-self-call-frames.md))
 - use unchecked template access in the dispatch loop where bounds are already guaranteed
 - fuse `Number - Int16` as `OP_SUB_NUM_IMM` and conditional `Number <= Int16` as `OP_JUMP_IF_NUM_NOT_LTE_IMM` only when the compiler proves the source is an ECMAScript Number; these instructions remove literal-load and branch dispatches rather than merely replacing a generic arithmetic dispatch
 - keep fast register access limited to proven hot/simple paths; local-slot and complex property paths should only move to fast access when they stay correct and measurably improve throughput
@@ -143,9 +144,12 @@ simple, const-bound local arrow with no escape, optional call, default/rest/
 destructured parameter, mixed argument, or unsupported use. Every external
 direct call must supply exactly one numeric literal per parameter, and the
 expression body must establish a Number result recursively. The proof marks
-parameters for the two numeric immediate superinstructions only; it does not
-turn the function into a generally typed function or affect generic `+`
-semantics.
+parameters for the two numeric immediate superinstructions; for one to three
+parameters it also emits `OP_CALL_SELF_NUM` at non-tail direct self-call sites.
+The scalar frame performs no speculative type conversion or deoptimization:
+unsupported shapes retain ordinary `OP_CALL`, and tail calls retain the generic
+proper-tail-call path. The optimization does not turn the function into a
+generally typed function or change generic `+` semantics.
 
 ## Profiling
 

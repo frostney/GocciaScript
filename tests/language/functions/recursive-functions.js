@@ -52,3 +52,35 @@ test("multi-argument tail recursion reuses the argument window correctly", () =>
 
   expect(sum(1000, 0)).toBe(500500); // 1+2+...+1000
 });
+
+test("closed numeric self-recursion preserves one to three scalar arguments", () => {
+  const fibonacciResult = () => {
+    const fibonacci = (n) => n <= 1
+      ? n
+      : fibonacci(n - 1) + fibonacci(n - 2);
+    return fibonacci(10);
+  };
+  const twoArgumentResult = () => {
+    const addSteps = (n, total) => n <= 0
+      ? total
+      : addSteps(n - 1, total + 1) + 0;
+    return addSteps(5, 2);
+  };
+  const threeArgumentResult = () => {
+    const addPairs = (n, left, right) => n <= 0
+      ? left + right
+      : addPairs(n - 1, left + 1, right + 2) + 0;
+    return addPairs(4, 2, 3);
+  };
+  const fractionalResult = () => {
+    const count = (n, total) => n <= 0
+      ? total
+      : count(n - 1, total + 0.5) + 0;
+    return count(2.5, 1);
+  };
+
+  expect(fibonacciResult()).toBe(55);
+  expect(twoArgumentResult()).toBe(7);
+  expect(threeArgumentResult()).toBe(17);
+  expect(fractionalResult()).toBe(2.5);
+});

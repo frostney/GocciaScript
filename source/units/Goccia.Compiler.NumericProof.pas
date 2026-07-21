@@ -293,6 +293,7 @@ var
   Arrow: TGocciaArrowFunctionExpression;
   FunctionName: string;
   Mask: UInt64;
+  Proof: TClosedNumericCallProof;
 begin
   if not Assigned(AProofs) or (ABlock.Nodes.Count < 2) or
      not (ABlock.Nodes[0] is TGocciaVariableDeclaration) then
@@ -334,7 +335,9 @@ begin
     Mask := High(UInt64)
   else
     Mask := (UInt64(1) shl Length(Arrow.Parameters)) - 1;
-  AProofs.AddOrSetValue(Arrow, Mask);
+  Proof.ParameterMask := Mask;
+  Proof.FunctionName := FunctionName;
+  AProofs.AddOrSetValue(Arrow, Proof);
 end;
 
 end.

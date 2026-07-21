@@ -126,6 +126,17 @@ type
   );
   TGocciaComputedAccessOptions = set of TGocciaComputedAccessOption;
 
+  // Minimal saved state for a compiler-proven numeric self-call. These frames
+  // share the closure, lexical environment, local-cell window, argument
+  // window, realm, and execution context of their generic entry frame.
+  TGocciaClosedNumericFrame = record
+    IP: Integer;
+    ReturnRegister: UInt16;
+    RegisterBase: Integer;
+    PrevCovLine: UInt32;
+    ProfileEntryTimestamp: Int64;
+  end;
+
   TGocciaVM = class
   private
     FRegisterStack: TGocciaRegisterArray;
@@ -165,6 +176,8 @@ type
     FMemoryPressureCheckCountdown: Integer;
     FFrameStack: array of TGocciaVMCallFrame;
     FFrameStackCount: Integer;
+    FClosedNumericFrameStack: array of TGocciaClosedNumericFrame;
+    FClosedNumericFrameStackCount: Integer;
     FCurrentExecutionContextPushed: Boolean;
     FCurrentModuleSourcePath: string;
     FCurrentRuntimeModule: TGocciaModule;
@@ -404,6 +417,17 @@ type
       out APrevCovLine: UInt32; out AProfileTimestamp: Int64): Integer;
     procedure TeardownCurrentFrame(const ATemplate: TGocciaFunctionTemplate;
       const AProfileTimestamp: Int64; const ATargetHandlerCount: Integer);
+    procedure PushClosedNumericFrame(const AResultRegister, AArgumentBase,
+      AArgumentCount: UInt16; var AFrame: TGocciaVMCallFrame;
+      const ATemplate: TGocciaFunctionTemplate; var APrevCovLine: UInt32;
+      var AProfileTimestamp: Int64; var AInitializedRegisterTop: Integer);
+    function PopClosedNumericFrame(var AFrame: TGocciaVMCallFrame;
+      const ATemplate: TGocciaFunctionTemplate; var APrevCovLine: UInt32;
+      var AProfileTimestamp: Int64): Integer;
+    procedure UnwindClosedNumericFrames(const ATargetCount: Integer;
+      var AFrame: TGocciaVMCallFrame;
+      const ATemplate: TGocciaFunctionTemplate; var APrevCovLine: UInt32;
+      var AProfileTimestamp: Int64);
     procedure PrepareTailCallFrameReuse(const ATemplate: TGocciaFunctionTemplate;
       const AProfileTimestamp: Int64; const AInitialFrameStackCount,
       ASavedHandlerCount: Integer);
@@ -417,7 +441,8 @@ type
       var AFrame: TGocciaVMCallFrame; out ATemplate: TGocciaFunctionTemplate;
       out APrevCovLine: UInt32; out AProfileTimestamp: Int64);
     procedure HandleExceptionUnwind(const AErrorValue: TGocciaValue;
-      const AInitialFrameStackCount, ASavedHandlerCount: Integer;
+      const AInitialFrameStackCount, AInitialClosedNumericFrameCount,
+      ASavedHandlerCount: Integer;
       var AFrame: TGocciaVMCallFrame; var ATemplate: TGocciaFunctionTemplate;
       var APrevCovLine: UInt32; var AProfileTimestamp: Int64);
     procedure ExecuteGeneratorParameterPreamble(const AGenerator: TObject);
@@ -6328,6 +6353,8 @@ begin
   FArgCount := 0;
   SetLength(FFrameStack, 64);
   FFrameStackCount := 0;
+  SetLength(FClosedNumericFrameStack, 64);
+  FClosedNumericFrameStackCount := 0;
   FStackRoot := TGocciaVMStackRoot.Create(Self);
   EnsureStackRootRegistered;
 end;
@@ -12938,6 +12965,142 @@ begin
   Dec(FFrameDepth);
 end;
 
+procedure TGocciaVM.PushClosedNumericFrame(const AResultRegister,
+  AArgumentBase, AArgumentCount: UInt16; var AFrame: TGocciaVMCallFrame;
+  const ATemplate: TGocciaFunctionTemplate; var APrevCovLine: UInt32;
+  var AProfileTimestamp: Int64; var AInitializedRegisterTop: Integer);
+var
+  Arguments: array[0..2] of TGocciaRegister;
+  I: Integer;
+  NewBase, Required, ClearStart: Integer;
+begin
+  if (AArgumentCount < 1) or (AArgumentCount > 3) or
+     (AArgumentCount <> ATemplate.ParameterCount) then
+    raise Exception.Create('Invalid OP_CALL_SELF_NUM argument contract');
+
+  // Capture before growing the arena: SetLength may relocate FRegisterStack.
+  for I := 0 to AArgumentCount - 1 do
+  begin
+    Arguments[I] := FRegisters[AArgumentBase + I];
+    if not RegisterIsNumericScalar(Arguments[I]) then
+      raise Exception.Create('Invalid non-numeric OP_CALL_SELF_NUM argument');
+  end;
+
+  CheckStackDepth(FFrameDepth + 1);
+  if FClosedNumericFrameStackCount >= Length(FClosedNumericFrameStack) then
+    SetLength(FClosedNumericFrameStack,
+      FClosedNumericFrameStackCount * 2 + 8);
+  FClosedNumericFrameStack[FClosedNumericFrameStackCount].IP := AFrame.IP;
+  FClosedNumericFrameStack[FClosedNumericFrameStackCount].ReturnRegister :=
+    AResultRegister;
+  FClosedNumericFrameStack[FClosedNumericFrameStackCount].RegisterBase :=
+    FRegisterBase;
+  FClosedNumericFrameStack[FClosedNumericFrameStackCount].PrevCovLine :=
+    APrevCovLine;
+  FClosedNumericFrameStack[FClosedNumericFrameStackCount].
+    ProfileEntryTimestamp := AProfileTimestamp;
+  Inc(FClosedNumericFrameStackCount);
+
+  NewBase := FRegisterBase + FRegisterCount;
+  Required := NewBase + FRegisterCount;
+  if Required > Length(FRegisterStack) then
+    SetLength(FRegisterStack, Required * 2);
+  if Required > AInitializedRegisterTop then
+  begin
+    ClearStart := Max(NewBase, AInitializedRegisterTop);
+    if Required > ClearStart then
+      FillChar(FRegisterStack[ClearStart],
+        (Required - ClearStart) * SizeOf(TGocciaRegister), 0);
+    AInitializedRegisterTop := Required;
+  end;
+  FRegisterBase := NewBase;
+  FRegisters := @FRegisterStack[FRegisterBase];
+  // Each depth is cleared on first use in this outer invocation. The proof
+  // then admits only scalar-number expressions, numeric predicates, and direct
+  // self-calls, so sibling reuse can contain only non-reference scalars or
+  // undefined and no stale object pointer can reach the GC.
+  FRegisters[0] := RegisterUndefined;
+  for I := 0 to AArgumentCount - 1 do
+    FRegisters[I + 1] := Arguments[I];
+  AFrame.IP := 0;
+
+  Inc(FFrameDepth);
+  if (TGocciaCallStack.Instance <> nil) then
+    if Assigned(ATemplate.DebugInfo) and
+       (ATemplate.DebugInfo.SourceFile <> '') then
+      TGocciaCallStack.Instance.PushTemplate(Pointer(ATemplate), '')
+    else
+      TGocciaCallStack.Instance.PushTemplate(Pointer(ATemplate),
+        FCurrentModuleSourcePath);
+
+  if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
+     Assigned(ATemplate.DebugInfo) and
+     (ATemplate.DebugInfo.LineMapCount > 0) then
+    TGocciaCoverageTracker.Instance.RecordLineHit(
+      ATemplate.DebugInfo.SourceFile,
+      ATemplate.DebugInfo.GetLineMapEntry(0).Line);
+
+  if FProfilingFunctions and (TGocciaProfiler.Instance <> nil) then
+  begin
+    if ATemplate.ProfileIndex < 0 then
+    begin
+      if Assigned(ATemplate.DebugInfo) and
+         (ATemplate.DebugInfo.LineMapCount > 0) then
+        ATemplate.ProfileIndex := TGocciaProfiler.Instance.RegisterTemplate(
+          ATemplate.Name, ATemplate.DebugInfo.SourceFile,
+          ATemplate.DebugInfo.GetLineMapEntry(0).Line)
+      else
+        ATemplate.ProfileIndex := TGocciaProfiler.Instance.RegisterTemplate(
+          ATemplate.Name, '', 0);
+    end;
+    AProfileTimestamp := GetNanoseconds;
+    TGocciaProfiler.Instance.PushFunction(ATemplate.ProfileIndex,
+      AProfileTimestamp);
+  end;
+
+  if FCoverageEnabled and Assigned(ATemplate.DebugInfo) and
+     (ATemplate.DebugInfo.LineMapCount > 0) then
+    APrevCovLine := ATemplate.DebugInfo.GetLineMapEntry(0).Line
+  else
+    APrevCovLine := 0;
+end;
+
+function TGocciaVM.PopClosedNumericFrame(var AFrame: TGocciaVMCallFrame;
+  const ATemplate: TGocciaFunctionTemplate; var APrevCovLine: UInt32;
+  var AProfileTimestamp: Int64): Integer;
+begin
+  if FProfilingFunctions and Assigned(ATemplate) and
+     (ATemplate.ProfileIndex >= 0) then
+    TGocciaProfiler.Instance.PopFunction(ATemplate.ProfileIndex,
+      GetNanoseconds);
+  if (TGocciaCallStack.Instance <> nil) then
+    TGocciaCallStack.Instance.Pop;
+  Dec(FFrameDepth);
+
+  Dec(FClosedNumericFrameStackCount);
+  AFrame.IP := FClosedNumericFrameStack[
+    FClosedNumericFrameStackCount].IP;
+  FRegisterBase := FClosedNumericFrameStack[
+    FClosedNumericFrameStackCount].RegisterBase;
+  FRegisters := @FRegisterStack[FRegisterBase];
+  APrevCovLine := FClosedNumericFrameStack[
+    FClosedNumericFrameStackCount].PrevCovLine;
+  AProfileTimestamp := FClosedNumericFrameStack[
+    FClosedNumericFrameStackCount].ProfileEntryTimestamp;
+  Result := FClosedNumericFrameStack[
+    FClosedNumericFrameStackCount].ReturnRegister;
+end;
+
+procedure TGocciaVM.UnwindClosedNumericFrames(const ATargetCount: Integer;
+  var AFrame: TGocciaVMCallFrame;
+  const ATemplate: TGocciaFunctionTemplate; var APrevCovLine: UInt32;
+  var AProfileTimestamp: Int64);
+begin
+  while FClosedNumericFrameStackCount > ATargetCount do
+    PopClosedNumericFrame(AFrame, ATemplate, APrevCovLine,
+      AProfileTimestamp);
+end;
+
 // ES2026 §15.10.3 PrepareForTailCall.  Discards the current frame's resources so
 // the impending SetupNewFrame reuses this frame instead of stacking a new one.
 // The caller's saved frame slot (or the outermost return path) is left intact,
@@ -13109,7 +13272,8 @@ begin
 end;
 
 procedure TGocciaVM.HandleExceptionUnwind(const AErrorValue: TGocciaValue;
-  const AInitialFrameStackCount, ASavedHandlerCount: Integer;
+  const AInitialFrameStackCount, AInitialClosedNumericFrameCount,
+  ASavedHandlerCount: Integer;
   var AFrame: TGocciaVMCallFrame; var ATemplate: TGocciaFunctionTemplate;
   var APrevCovLine: UInt32; var AProfileTimestamp: Int64);
 var
@@ -13117,6 +13281,10 @@ var
   TargetHandlerCount: Integer;
   IsGeneratorReturnCompletion: Boolean;
 begin
+  // Proven numeric frames contain no handlers. Restore their generic entry
+  // frame before searching the ordinary handler stack.
+  UnwindClosedNumericFrames(AInitialClosedNumericFrameCount, AFrame,
+    ATemplate, APrevCovLine, AProfileTimestamp);
   IsGeneratorReturnCompletion := Assigned(GActiveBytecodeGenerator) and
     Assigned(GActiveBytecodeGenerator.FReturnSentinel) and
     (AErrorValue = GActiveBytecodeGenerator.FReturnSentinel);
@@ -13194,6 +13362,7 @@ var
   SavedExecutionContextPushed: Boolean;
   SavedHandlerCount: Integer;
   InitialFrameStackCount: Integer;
+  InitialClosedNumericFrameCount: Integer;
   ReturnValue: TGocciaRegister;
   ResultReg: Integer;
   TargetHandlerCount: Integer;
@@ -13260,6 +13429,7 @@ var
   ExecutionRealm: TGocciaRealm;
   RealmSwitched: Boolean;
   PreviousCallSite: TGocciaCallSite;
+  ClosedNumericInitializedRegisterTop: Integer;
 
   procedure CurrentInstructionDebugLocation(out ALine, AColumn: Integer);
   begin
@@ -13308,6 +13478,7 @@ begin
   SavedExecutionContextPushed := FCurrentExecutionContextPushed;
   SavedHandlerCount := FHandlerStack.Count;
   InitialFrameStackCount := FFrameStackCount;
+  InitialClosedNumericFrameCount := FClosedNumericFrameStackCount;
   FLastClosureThisValue := AThisValue;
   PushSavedStateRoot(SavedClosure, SavedNewTarget, SavedArgumentBase,
     SavedArgCount);
@@ -13318,6 +13489,7 @@ begin
     SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
       AArg0, AArg1, AArg2, AUseFixedArgs, APushExecutionContext,
       Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+    ClosedNumericInitializedRegisterTop := FRegisterBase + FRegisterCount;
     if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
       FGlobalScope := AClosure.GlobalScope;
     if Assigned(FPendingNewTarget) then
@@ -13349,7 +13521,8 @@ begin
           bgrkThrow:
             HandleExceptionUnwind(
               RegisterToValue(GActiveBytecodeGenerator.FResumeValue),
-              InitialFrameStackCount, SavedHandlerCount,
+              InitialFrameStackCount, InitialClosedNumericFrameCount,
+              SavedHandlerCount,
               Frame, Template, PrevCovLine, ProfileEntryTimestamp);
           bgrkReturn:
             begin
@@ -13367,14 +13540,16 @@ begin
                   on E: EGocciaBytecodeThrow do
                   begin
                     HandleExceptionUnwind(E.ThrownValue,
-                      InitialFrameStackCount, SavedHandlerCount,
+                      InitialFrameStackCount, InitialClosedNumericFrameCount,
+                      SavedHandlerCount,
                       Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     ReturnAwaitAbrupt := True;
                   end;
                   on E: TGocciaThrowValue do
                   begin
                     HandleExceptionUnwind(E.Value,
-                      InitialFrameStackCount, SavedHandlerCount,
+                      InitialFrameStackCount, InitialClosedNumericFrameCount,
+                      SavedHandlerCount,
                       Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     ReturnAwaitAbrupt := True;
                   end;
@@ -13402,7 +13577,8 @@ begin
                 if not Assigned(GActiveBytecodeGenerator.FReturnSentinel) then
                   GActiveBytecodeGenerator.FReturnSentinel := TGocciaObjectValue.Create;
                 HandleExceptionUnwind(GActiveBytecodeGenerator.FReturnSentinel,
-                  InitialFrameStackCount, SavedHandlerCount,
+                  InitialFrameStackCount, InitialClosedNumericFrameCount,
+                  SavedHandlerCount,
                   Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               end;
             end;
@@ -15456,6 +15632,14 @@ begin
         SetRegister(A, BytecodeFunction);
       end;
 
+      OP_CALL_SELF_NUM:
+      begin
+        CheckExecutionTimeout;
+        PushClosedNumericFrame(A, B, C, Frame, Template, PrevCovLine,
+          ProfileEntryTimestamp, ClosedNumericInitializedRegisterTop);
+        Continue;
+      end;
+
       OP_CALL:
       begin
         CheckExecutionTimeout;
@@ -17096,6 +17280,14 @@ begin
         if Assigned(GActiveBytecodeGenerator) and
            (GActiveBytecodeGenerator.FClosure = AClosure) then
           GActiveBytecodeGenerator.FReturnRequiresAwait := B <> 0;
+        if FClosedNumericFrameStackCount >
+           InitialClosedNumericFrameCount then
+        begin
+          ResultReg := PopClosedNumericFrame(Frame, Template, PrevCovLine,
+            ProfileEntryTimestamp);
+          SetRegisterRaw(ResultReg, ReturnValue);
+          Continue;
+        end;
         // Outermost frame: let the finally block handle teardown
         if FFrameStackCount <= InitialFrameStackCount then
         begin
@@ -17124,31 +17316,37 @@ begin
       except
         on E: EGocciaBytecodeThrow do
           HandleExceptionUnwind(E.ThrownValue,
-            InitialFrameStackCount, SavedHandlerCount,
+            InitialFrameStackCount, InitialClosedNumericFrameCount,
+            SavedHandlerCount,
             Frame, Template, PrevCovLine, ProfileEntryTimestamp);
         on E: TGocciaThrowValue do
           HandleExceptionUnwind(E.Value,
-            InitialFrameStackCount, SavedHandlerCount,
+            InitialFrameStackCount, InitialClosedNumericFrameCount,
+            SavedHandlerCount,
             Frame, Template, PrevCovLine, ProfileEntryTimestamp);
         on E: TGocciaTypeError do
           HandleExceptionUnwind(
             CreateErrorObject(TYPE_ERROR_NAME, E.Message),
-            InitialFrameStackCount, SavedHandlerCount,
+            InitialFrameStackCount, InitialClosedNumericFrameCount,
+            SavedHandlerCount,
             Frame, Template, PrevCovLine, ProfileEntryTimestamp);
         on E: TGocciaReferenceError do
           HandleExceptionUnwind(
             CreateErrorObject(REFERENCE_ERROR_NAME, E.Message),
-            InitialFrameStackCount, SavedHandlerCount,
+            InitialFrameStackCount, InitialClosedNumericFrameCount,
+            SavedHandlerCount,
             Frame, Template, PrevCovLine, ProfileEntryTimestamp);
         on E: TGocciaSyntaxError do
           HandleExceptionUnwind(
             CreateErrorObject(SYNTAX_ERROR_NAME, E.Message),
-            InitialFrameStackCount, SavedHandlerCount,
+            InitialFrameStackCount, InitialClosedNumericFrameCount,
+            SavedHandlerCount,
             Frame, Template, PrevCovLine, ProfileEntryTimestamp);
         on E: TGocciaRuntimeError do
           HandleExceptionUnwind(
             CreateErrorObject(ERROR_NAME, E.Message),
-            InitialFrameStackCount, SavedHandlerCount,
+            InitialFrameStackCount, InitialClosedNumericFrameCount,
+            SavedHandlerCount,
             Frame, Template, PrevCovLine, ProfileEntryTimestamp);
       end;
     end;
@@ -17156,6 +17354,8 @@ begin
   finally
     Dec(FNativeExecutionDepth);
     try
+      UnwindClosedNumericFrames(InitialClosedNumericFrameCount, Frame,
+        Template, PrevCovLine, ProfileEntryTimestamp);
       // Unwind any remaining trampoline frames (exception escape path)
       while FFrameStackCount > InitialFrameStackCount do
       begin

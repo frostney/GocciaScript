@@ -189,6 +189,10 @@ type
     FRejectArgumentsInDirectEval: Boolean;
     FProfileIndex: Integer;
     FSourceText: string;
+    // Compile-time-only marker for the closed-world numeric proof. The emitted
+    // direct self-call opcode carries the runtime contract, so this name is not
+    // part of the serialized bytecode format.
+    FClosedNumericSelfName: string;
     FTemplateSiteId: UInt64;
     FStringConstantIndex: TOrderedStringMap<UInt16>;
     // Runtime-only cache for bckTemplateObject constants.  Indexed by the slot
@@ -300,6 +304,8 @@ type
     property RejectArgumentsInDirectEval: Boolean read FRejectArgumentsInDirectEval write FRejectArgumentsInDirectEval;
     property ProfileIndex: Integer read FProfileIndex write FProfileIndex;
     property SourceText: string read FSourceText write FSourceText;
+    property ClosedNumericSelfName: string read FClosedNumericSelfName
+      write FClosedNumericSelfName;
     property TemplateSiteId: UInt64 read FTemplateSiteId;
   end;
 
