@@ -43,3 +43,25 @@ A correction is not a cue to flip the conclusion or soften the tone — reversin
 ## The thread through all of it
 
 Investigation goes wrong the moment the story replaces the source: the README stands in for the code, the positioning stands in for the implementation, the recommendation arrives before the evidence, or the correction flips the answer without re-reading. Consult reality first — the source, the run, the spec — record it plainly, and only then say what should be done.
+
+## Intermittent failures and the debugging bar
+
+An intermittent defect is fixed only when the mechanism is pinned by observed
+evidence — a reproduction, a discriminating instrument, or the raw failure
+artifact. Guards, retries, timeout bumps, and quarantines are instrumentation
+or mitigation, never the fix; they may ship, but only alongside a tracked
+record of the still-unpinned cause.
+
+Debug from the complete raw artifact — the full log, the actual run — never
+from a summary, a paraphrase, or a truncated slice; each hides exactly the
+detail that discriminates between hypotheses. And a negative stress result
+rules a mechanism out only when the stressor provably aligns the suspect
+window; an unaligned non-reproduction is absence of evidence, not evidence of
+absence.
+
+After three disproven hypotheses or failed fix attempts on the same defect,
+stop and bring in an independent second opinion, handing over an evidence
+brief: the symptom, the raw artifacts, and each hypothesis with how it was
+killed. Three quick kills in an hour is healthy progress; the trigger exists
+for the third dead end, when the next guess would otherwise come from an
+emptying well.
