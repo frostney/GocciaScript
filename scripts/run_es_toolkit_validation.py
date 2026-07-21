@@ -32,6 +32,7 @@ def parse_args() -> argparse.Namespace:
   )
   parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
   parser.add_argument("--package-dir", type=Path, help="Use an already extracted es-toolkit npm package directory.")
+  parser.add_argument("--tarball-cache", type=Path, help="Use or populate a verified es-toolkit npm tarball cache.")
   parser.add_argument("--goccia", type=Path, default=Path("build/GocciaScriptLoader"))
   parser.add_argument("--output", type=Path, help="Write the normalized JSON report to this path.")
   parser.add_argument("--timeout-seconds", type=int, default=30)
@@ -63,21 +64,29 @@ def extract_verified_package(data: bytes, destination: Path) -> Path:
         raise ValueError(f"unsafe path in es-toolkit package: {member.name}")
       if not (member.isfile() or member.isdir()):
         raise ValueError(f"unsupported archive entry in es-toolkit package: {member.name}")
-    archive.extractall(destination)
+    archive.extractall(destination, filter="data")
   return destination / "package"
 
 
 def prepare_package(
-  manifest: dict[str, Any], package_dir: Path | None
+  manifest: dict[str, Any], package_dir: Path | None, tarball_cache: Path | None
 ) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
+  if package_dir is not None and tarball_cache is not None:
+    raise ValueError("--package-dir and --tarball-cache cannot be used together")
   if package_dir is not None:
     root = package_dir.resolve()
     temporary = None
   else:
     temporary = tempfile.TemporaryDirectory(prefix="goccia-es-toolkit-")
-    with urllib.request.urlopen(manifest["upstream"]["tarball"], timeout=30) as response:
-      data = response.read()
+    if tarball_cache is not None and tarball_cache.is_file():
+      data = tarball_cache.read_bytes()
+    else:
+      with urllib.request.urlopen(manifest["upstream"]["tarball"], timeout=30) as response:
+        data = response.read()
     verify_integrity(data, manifest["upstream"]["integrity"])
+    if tarball_cache is not None and not tarball_cache.exists():
+      tarball_cache.parent.mkdir(parents=True, exist_ok=True)
+      tarball_cache.write_bytes(data)
     root = extract_verified_package(data, Path(temporary.name))
 
   package_metadata = json.loads((root / "package.json").read_text(encoding="utf-8"))
@@ -359,7 +368,7 @@ def main() -> int:
   if args.timeout_seconds < 1:
     raise ValueError("--timeout-seconds must be positive")
   manifest = load_manifest(args.manifest)
-  package_root, temporary_package = prepare_package(manifest, args.package_dir)
+  package_root, temporary_package = prepare_package(manifest, args.package_dir, args.tarball_cache)
   try:
     with tempfile.TemporaryDirectory(prefix="goccia-es-toolkit-importmap-") as import_map_directory:
       import_map = write_import_map(manifest, package_root, Path(import_map_directory))

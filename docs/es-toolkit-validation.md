@@ -44,8 +44,13 @@ Pass `--package-dir=/path/to/package` to use an already extracted es-toolkit npm
 package. The runner still checks the package name and version against the
 manifest.
 
+Pass `--tarball-cache=/path/to/es-toolkit.tgz` to reuse the pinned archive. The
+runner verifies the cached bytes against the manifest before extraction and
+populates a missing cache only after a successful integrity check.
+
 PR CI runs the lane in the Linux `cli` job and retains the normalized JSON
-report. Main CI does the same on the x86-64 Linux leg.
+report. Main CI does the same on the x86-64 Linux leg. Both workflows share a
+cache key derived from the pinned integrity value.
 
 ## Classification contract
 
