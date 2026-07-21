@@ -258,7 +258,8 @@ Split into two tracks so simplification does not wait on representation research
 
 1. Shared `GetIterator` sync core + shared `ToIndex` helper
 2. Single register conversion helper (resolve `-0` once)
-3. Docs: list VM→evaluator edges; fix FPU masking narrative to ADR 0100
+3. Docs: list VM→evaluator edges; FPU masking narrative already aligned to
+   ADR 0100 in `embedding.md` (same change as this spike)
 4. Neutral home for decorator helpers; dedupe compiler `InferredExpressionType`
 
 ### Track B — multi-× performance (vision-gated)
