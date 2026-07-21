@@ -1190,10 +1190,12 @@ var
     end;
   end;
 
-  procedure EvaluateRequestedModulesInSourceOrder;
+  procedure LinkAndEvaluateRequestedModulesInSourceOrder;
   var
     ImportDecl: TGocciaImportDeclaration;
+    ImportPair: TStringStringMap.TKeyValuePair;
     J: Integer;
+    NamespaceObject: TGocciaValue;
     RequestedModule: TGocciaModule;
   begin
     for J := 0 to ProgramNode.Body.Count - 1 do
@@ -1213,6 +1215,20 @@ var
                  FEvaluatingModules.ContainsKey(RequestedModule.Path) then
                 Module.AsyncCycleRoot := RequestedModule;
               RequestedModules.Add(RequestedModule);
+              for ImportPair in ImportDecl.Imports do
+                ModuleScope.CreateImportBinding(ImportPair.Key,
+                  RequestedModule, ImportPair.Value);
+              if ImportDecl.NamespaceName <> '' then
+              begin
+                NamespaceObject := RequestedModule.GetNamespaceObject;
+                if ModuleScope.ContainsOwnLexicalBinding(
+                   ImportDecl.NamespaceName) then
+                  ModuleScope.ForceUpdateBinding(ImportDecl.NamespaceName,
+                    NamespaceObject)
+                else
+                  ModuleScope.DefineLexicalBinding(ImportDecl.NamespaceName,
+                    NamespaceObject, dtConst);
+              end;
             end;
           end;
           icpDefer:
@@ -1694,7 +1710,7 @@ begin
             HoistVarDeclarations(ProgramNode.Body, ModuleScope, Context);
           Context.ModuleEnvironmentInitialized := True;
           RegisterStaticModuleExports(False);
-          EvaluateRequestedModulesInSourceOrder;
+          LinkAndEvaluateRequestedModulesInSourceOrder;
           RegisterStaticModuleExports(True);
           DrainRequestedModuleEvaluationPromises;
 

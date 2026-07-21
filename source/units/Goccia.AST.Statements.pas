@@ -1605,8 +1605,9 @@ end;
       AttributeType), AContext.CurrentFilePath);
     for ImportPair in Imports do
     begin
-      if Module.TryGetExportValue(ImportPair.Value, Value) then
-        BindImportValue(ImportPair.Key, Value)
+      if Module.CanResolveExport(ImportPair.Value) then
+        AContext.Scope.CreateImportBinding(ImportPair.Key, Module,
+          ImportPair.Value)
       else
       begin
         AContext.OnError(Format('Module "%s" has no export named "%s"',

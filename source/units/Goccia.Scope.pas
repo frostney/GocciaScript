@@ -28,6 +28,7 @@ type
   TGocciaScope = class(TGCManagedObject)
   private
     FLexicalBindings: TGocciaScopeBindingMap;
+    FImportBindings: TGocciaModuleImportBindingMap;
     FVarBindings: TGocciaScopeBindingMap;
     FGlobalVarNames: TDictionary<string, Boolean>;
     FParent: TGocciaScope;
@@ -59,6 +60,8 @@ type
       const ALine, AColumn: Integer);
     procedure RaiseUndefinedVariable(const AName: string;
       const ALine, AColumn: Integer);
+    procedure ResolveImportBindingValue(const AName: string;
+      var ABinding: TLexicalBinding);
   protected
     function GetThisValue: TGocciaValue; virtual;
     function GetOwningClass: TGocciaValue; virtual;
@@ -76,6 +79,9 @@ type
     // New Define/Assign pattern
     procedure PredeclareLexicalBinding(const AName: string; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
     procedure DefineLexicalBinding(const AName: string; const AValue: TGocciaValue; const ADeclarationType: TGocciaDeclarationType; const ABuiltIn: Boolean = False; const ALine: Integer = 0; const AColumn: Integer = 0);
+    procedure CreateImportBinding(const AName: string;
+      const ATargetModule: TGocciaModule;
+      const ATargetExportName: string);
     procedure AssignBinding(const AName: string; const AValue: TGocciaValue;
       const ALine: Integer = 0; const AColumn: Integer = 0;
       const ANonStrictMode: Boolean = False); virtual;
@@ -372,7 +378,15 @@ begin
 end;
 
 destructor TGocciaScope.Destroy;
+var
+  ImportBindingPair: TGocciaModuleImportBindingMap.TKeyValuePair;
 begin
+  if Assigned(FImportBindings) then
+  begin
+    for ImportBindingPair in FImportBindings do
+      ImportBindingPair.Value.Free;
+    FImportBindings.Free;
+  end;
   if Assigned(FLexicalBindings) then
     FLexicalBindings.Free;
   if Assigned(FVarBindings) then
@@ -384,6 +398,42 @@ begin
     FThisValue := nil;
 
   inherited;
+end;
+
+// ES2026 §9.1.1.5.5 CreateImportBinding(envRec, N, M, N2)
+procedure TGocciaScope.CreateImportBinding(const AName: string;
+  const ATargetModule: TGocciaModule;
+  const ATargetExportName: string);
+var
+  ExistingImportBinding: TGocciaModuleImportBinding;
+  LexicalBinding: TLexicalBinding;
+begin
+  if not Assigned(FImportBindings) then
+    FImportBindings := TGocciaModuleImportBindingMap.Create;
+
+  if FImportBindings.TryGetValue(AName, ExistingImportBinding) then
+  begin
+    if ExistingImportBinding.Matches(ATargetModule, ATargetExportName) then
+      Exit;
+    ExistingImportBinding.Free;
+  end;
+
+  if not FLexicalBindings.TryGetValue(AName, LexicalBinding) then
+  begin
+    PredeclareLexicalBinding(AName, dtConst);
+    FLexicalBindings.TryGetValue(AName, LexicalBinding);
+  end;
+
+  LexicalBinding.Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+  LexicalBinding.DeclarationType := dtConst;
+  LexicalBinding.Initialized := True;
+  LexicalBinding.BuiltIn := False;
+  LexicalBinding.GlobalObjectBacked := False;
+  LexicalBinding.CanDelete := False;
+  LexicalBinding.TypeHint := sltUntyped;
+  FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
+  FImportBindings.AddOrSetValue(AName,
+    TGocciaModuleImportBinding.Create(ATargetModule, ATargetExportName));
 end;
 
 function TGocciaScope.CreateChild(const AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; const ACapacity: Integer = 0): TGocciaScope;
@@ -1184,6 +1234,19 @@ begin
   Result := GetBinding(AName).Value;
 end;
 
+// ES2026 §9.1.1.5.1 Module Environment Records GetBindingValue(N, S)
+procedure TGocciaScope.ResolveImportBindingValue(const AName: string;
+  var ABinding: TLexicalBinding);
+var
+  ImportBinding: TGocciaModuleImportBinding;
+begin
+  if not Assigned(FImportBindings) or
+     not FImportBindings.TryGetValue(AName, ImportBinding) then
+    Exit;
+  if not ImportBinding.TryGetValue(ABinding.Value) then
+    RaiseUndefinedVariable(AName, 0, 0);
+end;
+
 function TGocciaScope.TryGetBinding(const AName: string;
   out ABinding: TLexicalBinding; const ALine: Integer = 0;
   const AColumn: Integer = 0): Boolean;
@@ -1201,6 +1264,7 @@ begin
       ABinding := Default(TLexicalBinding);
       Exit(False);
     end;
+    ResolveImportBindingValue(AName, ABinding);
     Exit(True);
   end;
   Result := TryGetBindingSkipLexical(AName, ABinding, ALine, AColumn);
@@ -1213,6 +1277,7 @@ begin
   begin
     if not ABinding.IsAccessible then
       RaiseBindingNotInitialized(AName, 0, 0);
+    ResolveImportBindingValue(AName, ABinding);
     Exit(True);
   end;
   if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, ABinding) then
@@ -1320,6 +1385,8 @@ begin
     AValue := nil;
     Exit(False);
   end;
+  ResolveImportBindingValue(
+    FLexicalBindings.KeyAtEntry(AEntryIndex), LexicalBinding);
   AValue := LexicalBinding.Value;
   Result := True;
 end;
@@ -1368,6 +1435,7 @@ begin
       AValue := nil;
       Exit(False);
     end;
+    ResolveImportBindingValue(AName, LexicalBinding);
     AValue := LexicalBinding.Value;
     Exit(True);
   end;
@@ -1516,6 +1584,7 @@ end;
 
 procedure TGocciaScope.MarkReferences;
 var
+  ImportBindingPair: TGocciaModuleImportBindingMap.TKeyValuePair;
   Pair: TGocciaScopeBindingMap.TKeyValuePair;
 begin
   if GCMarked then Exit;
@@ -1530,6 +1599,10 @@ begin
   for Pair in FLexicalBindings do
     if Assigned(Pair.Value.Value) then
       Pair.Value.Value.MarkReferences;
+
+  if Assigned(FImportBindings) then
+    for ImportBindingPair in FImportBindings do
+      ImportBindingPair.Value.MarkReferences;
 
   if Assigned(FVarBindings) then
     for Pair in FVarBindings do
