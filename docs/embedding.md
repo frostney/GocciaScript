@@ -8,7 +8,7 @@
 - **Quick start** — `TGocciaRuntime.Create(...)` creates the runtime layer for file loading and runtime extension installation; apply a runtime profile or install concrete runtime extensions for runtime globals and `goccia:` runtime modules. `TGocciaEngine.Create(...)` remains available for core-language-only embedders and requires an explicit executor (`TGocciaInterpreterExecutor` for tree-walk or `TGocciaBytecodeExecutor` for bytecode VM)
 - **Sandboxing** — Choose runtime extensions and tool-specific runtime APIs explicitly; inject custom globals via `DefineLexicalBinding`; enforce execution limits via timeout or instruction cap
 - **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, virtual modules, and host modules
-- **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
+- **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics only around engine execute scopes
 
 GocciaScript is designed to be embedded in FreePascal applications. `TGocciaRuntime` is the embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, and `URL`, plus import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, and `goccia:semver`, usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals or runtime modules.
 
@@ -883,7 +883,7 @@ The CLI tools expose all three limits as options; see [Build System — Run Comm
 
 FPU exceptions — divide-by-zero, overflow, underflow, invalid operation, denormalized operand, and precision loss — are hardware signals raised by the floating-point unit when an operation produces a special result. By default, FreePascal leaves some of these unmasked, which causes runtime exceptions on operations like `0.0 / 0.0` instead of returning `NaN`.
 
-Both `TGocciaEngine` and `TGocciaVM` mask all FPU exceptions on creation (via `SetExceptionMask`) to enable IEEE 754 semantics (`NaN`, `Infinity`, `-0`). The previous mask is saved in the constructor and **restored in the destructor**, so the host application's FPU state is not permanently altered. This is transparent for one-shot execution (`RunScript`), but embedders creating long-lived engine instances should be aware that FPU exceptions are suppressed while the engine exists. If the host application depends on FPU exception handlers for its own error handling, those handlers will not fire while a `TGocciaEngine` or `TGocciaVM` instance is alive.
+GocciaScript masks those exceptions only for the duration of engine execute scopes via `EnterGocciaFloatingPointScope` / `LeaveGocciaFloatingPointScope` in `Goccia.FloatingPoint` (see [ADR 0100](adr/0100-native-binary64-execution.md)). Each enter saves the host mask, rounding mode, and precision mode; the matching leave restores them. Engine and VM construction do **not** install a lifetime mask, so a long-lived `TGocciaEngine` does not suppress host FPU exceptions between `Execute` calls. Host code that runs *inside* an active execute scope (for example a native callback invoked from script) still sees Goccia's masked IEEE 754 environment (`NaN`, `Infinity`, `-0`).
 
 ## Microtask Queue (Promises)
 
