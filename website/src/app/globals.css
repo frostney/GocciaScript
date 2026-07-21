@@ -2,7 +2,10 @@
    GocciaScript — warm paper aesthetic
    ============================================================ */
 
+@layer theme, base, astryx-base, astryx-theme, components, utilities;
 @import "tailwindcss";
+@import "@astryxdesign/core/reset.css";
+@import "@astryxdesign/core/astryx.css";
 
 @custom-variant dark (&:where(
     [data-theme="espresso"],
@@ -75,6 +78,33 @@
     0 2px 0 rgba(42, 36, 25, 0.05), 0 6px 20px -6px rgba(42, 36, 25, 0.18);
   --shadow-lg:
     0 4px 0 rgba(42, 36, 25, 0.04), 0 24px 48px -20px rgba(42, 36, 25, 0.3);
+
+  /* Astryx semantic tokens mapped onto the GocciaScript identity. */
+  --color-accent: var(--accent);
+  --color-accent-muted: color-mix(in oklab, var(--accent) 16%, transparent);
+  --color-on-accent: var(--accent-ink);
+  --color-background-body: var(--paper);
+  --color-background-surface: var(--paper);
+  --color-background-card: var(--paper-2);
+  --color-background-popover: var(--paper);
+  --color-background-muted: var(--paper-2);
+  --color-overlay-hover: color-mix(in oklab, var(--ink) 7%, transparent);
+  --color-overlay-pressed: color-mix(in oklab, var(--ink) 12%, transparent);
+  --color-text-primary: var(--ink);
+  --color-text-secondary: var(--ink-2);
+  --color-text-disabled: var(--ink-3);
+  --color-text-accent: var(--accent);
+  --color-icon-primary: var(--ink);
+  --color-icon-secondary: var(--ink-2);
+  --color-icon-accent: var(--accent);
+  --color-border: var(--rule-soft);
+  --color-border-emphasized: var(--rule);
+  --color-shadow: color-mix(in oklab, var(--ink) 18%, transparent);
+  --font-family-body: var(--body);
+  --font-family-heading: var(--display);
+  --font-family-code: var(--mono);
+  --radius-element: 6px;
+  --radius-container: 12px;
 }
 
 /* Dark theme — "late night espresso" */
@@ -296,233 +326,71 @@ p {
   flex-direction: column;
 }
 
+/* Astryx owns the generic shell behavior; these selectors only carry the
+   project-specific wordmark and paper treatment. */
+.site-top-nav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  width: 100%;
+  padding-inline: clamp(1.25rem, 3vw, 2.5rem);
+  background: color-mix(in oklab, var(--paper) 90%, transparent);
+  backdrop-filter: blur(10px) saturate(1.15);
+}
+.astryx-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 1.5rem;
+  letter-spacing: -0.015em;
+  white-space: nowrap;
+}
+.astryx-brand img {
+  filter: drop-shadow(0 2px 4px rgba(42, 36, 25, 0.15));
+}
+.astryx-brand em {
+  color: var(--accent);
+  font-style: italic;
+}
+.astryx-desktop-nav,
+.astryx-desktop-actions,
+.astryx-nav-actions,
+.astryx-stars {
+  display: inline-flex;
+  align-items: center;
+}
+.astryx-nav-actions {
+  gap: 0.35rem;
+}
+.astryx-stars {
+  gap: 0.2rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+@media (max-width: 767px) {
+  .site-top-nav {
+    padding-inline: 0.75rem;
+  }
+  .astryx-desktop-nav,
+  .astryx-desktop-actions {
+    display: none;
+  }
+  .astryx-brand {
+    font-size: 1.3rem;
+  }
+  .astryx-brand img {
+    width: 30px;
+    height: 30px;
+  }
+}
+
 .container {
   width: 100%;
   max-width: 1280px;
   margin: 0 auto;
   padding: 0 clamp(1.25rem, 3vw, 2.5rem);
-}
-
-/* ---------- navbar ---------- */
-.nav {
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  backdrop-filter: blur(8px) saturate(1.2);
-  background: color-mix(in oklab, var(--paper) 78%, transparent);
-  border-bottom: 1px solid var(--rule-soft);
-}
-.nav-inner {
-  display: flex;
-  align-items: center;
-  gap: 2rem;
-  padding: 0.9rem 0;
-}
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  font-family: var(--display);
-  font-size: 1.55rem;
-  color: var(--ink);
-  text-decoration: none;
-  letter-spacing: -0.015em;
-}
-.brand img {
-  width: 36px;
-  height: 36px;
-  object-fit: contain;
-  filter: drop-shadow(0 2px 4px rgba(42, 36, 25, 0.15));
-}
-.brand em {
-  font-style: italic;
-  color: var(--accent);
-}
-.nav-links {
-  position: relative;
-  display: flex;
-  gap: 0.35rem;
-  margin-left: auto;
-  align-items: center;
-}
-
-/* Collapsed navigation button — hidden while the full tab bar fits. */
-.nav-hamburger {
-  display: none;
-  margin-left: auto;
-  width: 38px;
-  height: 38px;
-  border-radius: 8px;
-  background: transparent;
-  border: 1px solid var(--rule-soft);
-  color: var(--ink-2);
-  cursor: pointer;
-  align-items: center;
-  justify-content: center;
-  transition:
-    background 0.15s,
-    color 0.15s,
-    border-color 0.15s;
-}
-.nav-hamburger:hover {
-  color: var(--ink);
-  background: var(--paper-2);
-  border-color: var(--rule);
-}
-
-@media (max-width: 1400px) {
-  .nav-hamburger {
-    display: inline-flex;
-  }
-  .nav-links {
-    display: none;
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    margin-left: 0;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0.3rem;
-    padding: 0.85rem clamp(1.25rem, 3vw, 2.5rem) 1.1rem;
-    background: color-mix(in oklab, var(--paper) 96%, transparent);
-    backdrop-filter: blur(8px) saturate(1.2);
-    border-bottom: 1px solid var(--rule-soft);
-    box-shadow: var(--shadow);
-  }
-  .nav-links[data-open="true"] {
-    display: flex;
-    animation: routeIn 0.22s ease-out both;
-  }
-  .nav-indicator {
-    display: none;
-  }
-  .nav-link {
-    width: 100%;
-    text-align: left;
-    padding: 0.7rem 0.95rem;
-    border-radius: 8px;
-  }
-  .nav-link[data-active="true"] {
-    background: var(--paper-2);
-    border-color: var(--rule-soft);
-  }
-  .nav-cta {
-    margin-left: 0;
-    margin-top: 0.4rem;
-    justify-content: center;
-  }
-}
-.nav-indicator {
-  position: absolute;
-  top: 0;
-  left: 0;
-  background: var(--paper-2);
-  border: 1px solid var(--rule-soft);
-  border-radius: 8px;
-  pointer-events: none;
-  z-index: 0;
-  transition:
-    transform 0.32s cubic-bezier(0.22, 1, 0.36, 1),
-    width 0.32s cubic-bezier(0.22, 1, 0.36, 1),
-    height 0.32s cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: transform, width;
-}
-@media (prefers-reduced-motion: reduce) {
-  .nav-indicator {
-    transition: none;
-  }
-}
-.nav-link {
-  position: relative;
-  z-index: 1;
-  font-family: var(--body);
-  font-size: 0.92rem;
-  font-weight: 500;
-  padding: 0.5rem 0.9rem;
-  border-radius: 8px;
-  color: var(--ink-2);
-  cursor: pointer;
-  border: 1px solid transparent;
-  background: transparent;
-  transition: color 0.15s;
-  font-feature-settings: "ss01";
-}
-.nav-link:hover {
-  color: var(--ink);
-  text-decoration: none;
-}
-.nav-link[data-active="true"] {
-  color: var(--ink);
-}
-.nav-cta {
-  margin-left: 0.5rem;
-  padding: 0.55rem 1rem;
-  border-radius: 8px;
-  background: var(--ink);
-  color: var(--paper);
-  font-weight: 600;
-  font-size: 0.9rem;
-  border: 1px solid var(--ink);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  transition: transform 0.12s;
-}
-.nav-cta:hover {
-  text-decoration: none;
-  transform: translateY(-1px);
-}
-
-/* Theme toggle button — sits immediately after the brand on every viewport. */
-.nav-mode {
-  margin-left: 0.5rem;
-  flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--ink-2);
-  border: 1px solid var(--rule-soft);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition:
-    background 0.15s,
-    color 0.15s,
-    border-color 0.15s;
-}
-.nav-mode:hover {
-  background: var(--paper-2);
-  color: var(--ink);
-  border-color: var(--rule);
-}
-
-/* GitHub stars chip baked into the CTA */
-.nav-cta-github {
-  padding-right: 0.6rem;
-  gap: 0.55rem;
-}
-.nav-stars {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.15rem 0.5rem;
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--paper) 18%, transparent);
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--paper);
-}
-.nav-stars svg {
-  color: #f0b57a;
-}
-[data-theme="espresso"] .nav-stars svg {
-  color: #8a4a13;
 }
 
 /* ---------- hero ---------- */
@@ -535,6 +403,9 @@ p {
   grid-template-columns: 1fr;
   gap: 3rem;
   align-items: center;
+}
+.hero-grid > * {
+  min-width: 0;
 }
 @media (min-width: 960px) {
   .hero-grid {
@@ -774,82 +645,37 @@ p {
   align-items: center;
   gap: 0.85rem;
 }
-/* Generic tabbed command picker — used for both the OS picker
-   (Quick install card) and the package-manager picker (npm / Bun /
-   pnpm sections). sli.dev / vite.dev style. Each tab gets its brand
-   color via `[data-active="true"][data-key="<k>"]` selectors so we
-   don't need a per-key class.  Inactive tabs render in muted ink so
-   the selection is unambiguous. */
+/* Astryx owns the control behavior. This project-owned frame makes the
+   selector and its code result read as one warm-paper installation surface. */
 .cmd-tabs-wrap {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
 }
 .cmd-tabs {
-  display: flex;
+  width: fit-content;
+  max-width: 100%;
   gap: 0.25rem;
   padding: 0.25rem;
   background: var(--paper-2);
   border: 1px solid var(--rule-soft);
-  border-bottom: none;
+  border-bottom: 0;
   border-radius: 12px 12px 0 0;
-  width: fit-content;
-  max-width: 100%;
-  flex-wrap: wrap;
 }
-.cmd-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 0.85rem;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  font-family: var(--body);
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: var(--ink-3);
-  cursor: pointer;
-  transition:
-    background 0.15s,
-    color 0.15s,
-    border-color 0.15s;
-}
-.cmd-tab:hover {
-  color: var(--ink-2);
-  background: color-mix(in oklab, var(--ink) 5%, transparent);
-}
-.cmd-tab[data-active="true"] {
+.cmd-tabs [role="radio"][aria-checked="true"] {
+  color: var(--ink);
   background: var(--paper);
-  border-color: var(--rule-soft);
-  color: var(--ink);
+  font-weight: 600;
 }
-/* Brand color for the icon in the active tab. Inactive tabs keep
-   the muted text color so the icon visually dims with the label.
-   Same pattern works for both PM (npm/bun/pnpm) and OS
-   (macos/linux/windows) pickers — the [data-key] attribute selector
-   doesn't care about the tab's domain. */
-.cmd-tab[data-active="true"][data-key="npm"] svg {
-  color: #cb3837;
-}
-.cmd-tab[data-active="true"][data-key="bun"] svg {
-  color: #f7a8b8;
-}
-.cmd-tab[data-active="true"][data-key="pnpm"] svg {
-  color: #f9ad00;
-}
-.cmd-tab[data-active="true"][data-key="macos"] svg,
-.cmd-tab[data-active="true"][data-key="linux"] svg,
-.cmd-tab[data-active="true"][data-key="windows"] svg {
-  color: var(--ink);
-}
-.cmd-tab svg {
+.cmd-tabs [role="radio"] svg {
   flex-shrink: 0;
 }
-/* The CopyableCommand inside the panel sits flush against the tab bar
-   above it — drop the top-left radius so they form one continuous
-   surface, with the active tab visually "extruded" from the panel. */
-.cmd-tabs-wrap .install-block {
-  border-radius: 0 12px 12px 12px;
+.cmd-tabs-wrap[data-command-set="os"] .cmd-tabs [role="radio"] {
+  min-width: 6rem;
+}
+.cmd-tabs-wrap [role="tabpanel"] .astryx-codeblock {
+  border-start-start-radius: 0;
 }
 
 .install-meta {
@@ -1101,7 +927,7 @@ p {
 }
 
 /* ---------- sections / cards ---------- */
-.section {
+.content-section {
   padding: clamp(3rem, 6vw, 5rem) 0;
   position: relative;
 }
@@ -1820,14 +1646,13 @@ a.info-term {
   gap: 1rem;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
-.feature {
-  padding: 1.5rem;
-  background: var(--paper-2);
-  border: 1px solid var(--rule-soft);
-  border-radius: 14px;
-  position: relative;
+.paper-card {
+  --color-border-emphasized: var(--rule-soft);
 }
-.feature .ficon {
+.feature-card {
+  --radius-container: 14px;
+}
+.feature-card .ficon {
   width: 38px;
   height: 38px;
   display: grid;
@@ -1835,43 +1660,21 @@ a.info-term {
   border-radius: 10px;
   background: var(--paper-3);
   border: 1px solid var(--rule-soft);
-  margin-bottom: 1rem;
   color: var(--accent);
-}
-.feature h4 {
-  margin-bottom: 0.4rem;
-  color: var(--ink);
-}
-.feature p {
-  color: var(--ink-2);
-  font-size: 0.95rem;
-  margin: 0;
 }
 
-.faq-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 0.85rem;
+.faq-list {
+  --radius-container: 8px;
 }
-.faq-item {
-  border: 1px solid var(--rule-soft);
-  border-radius: 8px;
-  background: var(--paper-2);
-  padding: 1rem 1.1rem;
+.faq-list .astryx-collapsible + .astryx-collapsible {
+  border-top: 1px solid var(--rule-soft);
 }
-.faq-item summary {
-  cursor: pointer;
-  color: var(--ink);
-  font-weight: 700;
-  list-style-position: outside;
+.faq-list .astryx-collapsible > button {
+  min-height: 3.25rem;
+  padding: 0.85rem 1rem;
 }
-.faq-item summary::marker {
-  color: var(--accent);
-}
-.faq-item p {
-  margin: 0.75rem 0 0;
-  color: var(--ink-2);
-  font-size: 0.95rem;
+.faq-list .astryx-collapsible > button + div {
+  padding: 0 1rem 1rem;
 }
 
 /* decorative drop */
@@ -2034,16 +1837,67 @@ a.info-term {
 }
 
 /* ---------- docs ---------- */
+.docs-route {
+  padding-block: 2.5rem 4rem;
+}
 .docs-shell {
   display: grid;
   grid-template-columns: 1fr;
   gap: 2rem;
-  padding: 2.5rem 0 4rem;
+  padding: 0;
 }
 @media (min-width: 900px) {
   .docs-shell {
-    grid-template-columns: 240px 1fr;
-    gap: 3rem;
+    grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+    gap: clamp(2rem, 4vw, 3.5rem);
+  }
+}
+@media (min-width: 1180px) {
+  .docs-shell-astryx {
+    grid-template-columns: minmax(220px, 260px) minmax(0, 1fr) 210px;
+  }
+}
+
+.docs-mobile-nav {
+  display: none;
+}
+.docs-outline {
+  position: sticky;
+  top: 5.5rem;
+  align-self: start;
+  max-height: calc(100vh - 7rem);
+  overflow-y: auto;
+}
+.docs-side-astryx {
+  padding-right: 0;
+}
+.docs-prose {
+  min-width: 0;
+}
+@media (max-width: 1179px) {
+  .docs-outline {
+    display: none;
+  }
+}
+@media (max-width: 899px) {
+  .docs-side-astryx {
+    display: none;
+  }
+  .docs-mobile-nav {
+    display: block;
+    margin-bottom: 1.5rem;
+    border: 1px solid var(--rule-soft);
+    border-radius: 10px;
+    background: var(--paper-2);
+  }
+  .docs-mobile-nav summary {
+    cursor: pointer;
+    padding: 0.8rem 1rem;
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .docs-mobile-nav > :not(summary) {
+    border-top: 1px solid var(--rule-soft);
   }
 }
 
@@ -2148,6 +2002,16 @@ a.info-term {
   max-width: 72ch;
   font-size: 1rem;
   line-height: 1.7;
+}
+.docs-markdown-image {
+  display: block;
+  width: auto;
+  max-width: min(180px, 100%);
+  height: auto;
+  margin-block: 0.5rem;
+}
+.docs-logo-image {
+  margin-block: -1rem;
 }
 .docs-main h1 {
   font-size: clamp(2.5rem, 4vw, 3.5rem);
@@ -2848,43 +2712,6 @@ a.info-term {
   user-select: none;
 }
 
-/* Code block with a left-side line-number gutter. Used by the
-   Compiler Pipeline panels, EXCLUDED snippets, and any other static
-   code on the landing page so all rendered samples have one look. */
-.numbered-code {
-  display: flex;
-  background: var(--paper);
-  border: 1px solid var(--rule-soft);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.numbered-code-gutter {
-  margin: 0;
-  padding: 0.85rem 0.5rem 0.85rem 0.7rem;
-  background: color-mix(in oklab, var(--paper-2) 70%, var(--paper-3));
-  border-right: 1px solid var(--rule-soft);
-  color: var(--ink-3);
-  font-family: var(--mono);
-  font-size: 0.82rem;
-  line-height: 1.5;
-  text-align: right;
-  user-select: none;
-  white-space: pre;
-  min-width: 2.5ch;
-}
-.numbered-code-body {
-  margin: 0;
-  padding: 0.85rem 1rem;
-  flex: 1;
-  min-width: 0;
-  overflow-x: auto;
-  font-family: var(--mono);
-  font-size: 0.82rem;
-  line-height: 1.5;
-}
-.numbered-code-body code {
-  white-space: pre;
-}
 .pg-log-line {
   padding: 0.12rem 0;
   border-bottom: 1px dashed transparent;

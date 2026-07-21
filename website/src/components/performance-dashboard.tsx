@@ -1,5 +1,9 @@
 "use client";
 
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from "@astryxdesign/core/SegmentedControl";
 import { useMemo, useState } from "react";
 import type {
   PerformanceDashboardData,
@@ -461,19 +465,21 @@ export function PerformanceDashboard({
             versions change.
           </small>
         </div>
-        <fieldset className="compat-range-buttons">
-          <legend>Choose timeline range</legend>
+        <SegmentedControl
+          className="compat-range-buttons"
+          label="Choose timeline range"
+          value={range}
+          onChange={(value) => setRange(value as TimelineRange)}
+          size="sm"
+        >
           {RANGE_OPTIONS.map((option) => (
-            <button
+            <SegmentedControlItem
               key={option.value}
-              type="button"
-              aria-pressed={range === option.value}
-              onClick={() => setRange(option.value)}
-            >
-              {option.label}
-            </button>
+              value={option.value}
+              label={option.label}
+            />
           ))}
-        </fieldset>
+        </SegmentedControl>
       </section>
 
       {(["awfy", "jetstream"] as const).map((suite) => {

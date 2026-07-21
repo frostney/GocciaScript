@@ -1,5 +1,8 @@
-import { readDocSource } from "@/lib/doc-source";
-import { DOC_PAGES, type DocPage } from "@/lib/docs-data";
+import {
+  docsPageDescription,
+  docsPageTitle,
+  docsSource,
+} from "@/lib/docs-source";
 import { EXAMPLES, type Example } from "@/lib/examples";
 import {
   fetchLatestRelease,
@@ -70,8 +73,8 @@ function releaseSummary(release: ReleaseInfo | null): string {
   return `Latest release: [${release.tagName}](${release.htmlUrl})${published}.${prestable}`;
 }
 
-function docPageForId(id: string): DocPage | undefined {
-  return DOC_PAGES.find((page) => page.id === id);
+function docPageForId(id: string) {
+  return docsSource.getPage(id === "readme" ? undefined : [id]);
 }
 
 function pickExample(
@@ -112,23 +115,18 @@ export function resolveMarkdownRoute(
 async function docsMarkdown(id: string): Promise<string | null> {
   const page = docPageForId(id);
   if (!page) return null;
-
-  const source = await readDocSource(id);
-  if (source !== null) return source;
+  const markdown = await page.data.getText("processed");
+  if (markdown) return markdown;
 
   return [
     frontmatter(
-      `${page.title} - Docs - GocciaScript`,
-      page.desc ?? "Reference documentation for GocciaScript.",
+      `${docsPageTitle(page)} - Docs - GocciaScript`,
+      docsPageDescription(page),
     ),
     "",
-    `# ${page.title}`,
+    `# ${docsPageTitle(page)}`,
     "",
-    page.desc ?? "Reference documentation for GocciaScript.",
-    "",
-    `The markdown source file for this page was not found at \`content/docs/${page.file}\`.`,
-    "",
-    "Run `bun run sync-docs` from the website directory to sync the docs source.",
+    docsPageDescription(page),
   ].join("\n");
 }
 

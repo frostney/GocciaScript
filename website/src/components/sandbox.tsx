@@ -1,5 +1,7 @@
 "use client";
 
+import { Button } from "@astryxdesign/core/Button";
+import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { AnchorH2 } from "@/components/anchor-heading";
 import { AnimatedOutput } from "@/components/animated-output";
@@ -63,15 +65,14 @@ function ToolCallComparison() {
   return (
     <>
       <div className="tcc-toggle">
-        <label htmlFor={payloadToggleId} className="tcc-toggle-label">
-          <input
-            id={payloadToggleId}
-            type="checkbox"
-            checked={showPayload}
-            onChange={(e) => setShowPayload(e.target.checked)}
-          />
-          <span>Show Responses API request body</span>
-        </label>
+        <CheckboxInput
+          id={payloadToggleId}
+          className="tcc-toggle-label"
+          label="Show Responses API request body"
+          value={showPayload}
+          onChange={setShowPayload}
+          size="sm"
+        />
         <span className="tcc-toggle-note">
           Each step expands to the request body for that turn — instructions,
           tool definitions, prior function calls, and function-call outputs.
@@ -825,19 +826,21 @@ export function Sandbox() {
               </p>
             </div>
             <div className="flex gap-2">
-              <button
-                type="button"
+              <Button
                 className="pg-run"
                 onClick={execute}
-                disabled={running}
-                title={`Run · ${runShortcut.long}`}
-              >
-                <RunIcon size={14} />
-                <span>{running ? "Running…" : "Run"}</span>
-                <span className="pg-run-kbd" aria-hidden="true">
-                  {runShortcut.short}
-                </span>
-              </button>
+                isDisabled={running}
+                label={running ? "Running" : "Run"}
+                icon={<RunIcon size={14} />}
+                tooltip={`Run · ${runShortcut.long}`}
+                variant="primary"
+                size="sm"
+                endContent={
+                  <span className="pg-run-kbd" aria-hidden="true">
+                    {runShortcut.short}
+                  </span>
+                }
+              />
             </div>
           </div>
 

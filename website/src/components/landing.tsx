@@ -1,5 +1,11 @@
 "use client";
 
+import { Card } from "@astryxdesign/core/Card";
+import { CodeBlock } from "@astryxdesign/core/CodeBlock";
+import { Collapsible, CollapsibleGroup } from "@astryxdesign/core/Collapsible";
+import { Heading } from "@astryxdesign/core/Heading";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import Link from "next/link";
 import {
   Fragment,
@@ -13,10 +19,7 @@ import { AnchorH2, AnchorH3 } from "@/components/anchor-heading";
 import { AnimatedOutput } from "@/components/animated-output";
 import { useRunShortcut } from "@/components/command-tabs";
 import { ConsolePanel } from "@/components/console-panel";
-import {
-  HighlightedCode,
-  HighlightedGeneric,
-} from "@/components/highlighted-code";
+import { HighlightedCode } from "@/components/highlighted-code";
 import {
   ArrowIcon,
   BookIcon,
@@ -29,7 +32,6 @@ import {
   ShieldIcon,
 } from "@/components/icons";
 import { LatestVersion } from "@/components/latest-version";
-import { NumberedCode } from "@/components/numbered-code";
 import { QuickInstall } from "@/components/quick-install";
 import type { OutputLine } from "@/lib/examples";
 import { formatError } from "@/lib/format-error";
@@ -591,9 +593,15 @@ console.log("total:", total);`;
           {active === 0 && (
             <div className="arch-artifact-box">
               <div className="arch-artifact-head">example.js</div>
-              <NumberedCode lineCount={SOURCE.split("\n").length}>
-                <HighlightedCode code={SOURCE} />
-              </NumberedCode>
+              <CodeBlock
+                code={SOURCE}
+                language="javascript"
+                hasLanguageLabel={false}
+                hasLineNumbers
+                hasCopyButton={false}
+                size="sm"
+                width="100%"
+              />
             </div>
           )}
 
@@ -710,12 +718,16 @@ console.log("total:", total);`;
                   id={panelJsonId}
                   aria-labelledby={tabJsonId}
                 >
-                  <NumberedCode
+                  <CodeBlock
                     className="arch-detail-anim"
-                    lineCount={RESULT.split("\n").length}
-                  >
-                    <HighlightedGeneric code={RESULT} language="json" />
-                  </NumberedCode>
+                    code={RESULT}
+                    language="json"
+                    hasLanguageLabel={false}
+                    hasLineNumbers
+                    hasCopyButton={false}
+                    size="sm"
+                    width="100%"
+                  />
                 </div>
               )}
             </div>
@@ -962,7 +974,7 @@ export function Landing({
         </div>
       </section>
 
-      <section className="section">
+      <section className="content-section">
         <div className="container">
           <div className="section-head">
             <div className="section-kicker">Design principles</div>
@@ -998,20 +1010,30 @@ export function Landing({
             {FEATURES.map((f) => {
               const I = FEATURE_ICONS[f.icon];
               return (
-                <div key={f.title} className="feature">
-                  <div className="ficon">
-                    <I size={20} />
-                  </div>
-                  <h4>{f.title}</h4>
-                  <p>{f.body}</p>
-                </div>
+                <Card
+                  key={f.title}
+                  className="paper-card feature-card"
+                  padding={6}
+                >
+                  <VStack gap={4}>
+                    <div className="ficon">
+                      <I size={20} />
+                    </div>
+                    <VStack gap={1}>
+                      <Heading level={4}>{f.title}</Heading>
+                      <Text as="p" type="supporting" display="block">
+                        {f.body}
+                      </Text>
+                    </VStack>
+                  </VStack>
+                </Card>
               );
             })}
           </div>
         </div>
       </section>
 
-      <section className="section pt-0">
+      <section className="content-section pt-0">
         <div className="container">
           <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-8">
             <div>
@@ -1144,7 +1166,7 @@ export function Landing({
         </div>
       </section>
 
-      <section className="section pt-0">
+      <section className="content-section pt-0">
         <div className="container">
           <div className="section-head">
             <div className="section-kicker">FAQ</div>
@@ -1154,18 +1176,25 @@ export function Landing({
               embedding the runtime.
             </p>
           </div>
-          <div className="faq-grid">
-            {FAQ_ITEMS.map((item) => (
-              <details key={item.question} className="faq-item">
-                <summary>{item.question}</summary>
-                <p>{item.answer}</p>
-              </details>
-            ))}
-          </div>
+          <Card className="paper-card faq-list" padding={0}>
+            <CollapsibleGroup type="multiple" hasDividers density="balanced">
+              {FAQ_ITEMS.map((item) => (
+                <Collapsible
+                  key={item.question}
+                  trigger={item.question}
+                  value={item.question}
+                >
+                  <Text as="div" type="supporting" display="block">
+                    {item.answer}
+                  </Text>
+                </Collapsible>
+              ))}
+            </CollapsibleGroup>
+          </Card>
         </div>
       </section>
 
-      <section className="section border-y border-rule-soft bg-[color-mix(in_oklab,var(--paper-2)_65%,transparent)]">
+      <section className="content-section border-y border-rule-soft bg-[color-mix(in_oklab,var(--paper-2)_65%,transparent)]">
         <div className="container">
           <div className="section-head">
             <div className="section-kicker">Compiler pipeline</div>

@@ -1,27 +1,36 @@
 import { describe, expect, test } from "bun:test";
-import fs from "node:fs";
-import { fileURLToPath } from "node:url";
 import { buildSitemap, getDocLastModified } from "@/app/sitemap";
-import { DOC_PAGES } from "@/lib/docs-data";
+import { docsSource } from "@/lib/docs-source";
+
+describe("Fumadocs repository source", () => {
+  test("derives the established routes from repository Markdown paths", () => {
+    expect(docsSource.getPage(undefined)?.path).toBe("README.md");
+    expect(docsSource.getPage(["language"])?.path).toBe("docs/language.md");
+    expect(docsSource.getPage(["contributing-workflow"])?.path).toBe(
+      "docs/contributing/workflow.md",
+    );
+    expect(docsSource.getPage(["adr"])?.path).toBe("docs/adr/README.md");
+  });
+});
 
 describe("sitemap", () => {
-  test("uses a build date for app pages and file mtimes for doc pages", () => {
+  test("publishes each app and repository-backed docs route once", () => {
     const appLastModified = new Date("2026-06-17T00:00:00.000Z");
     const entries = buildSitemap("https://example.test///", appLastModified);
+    const urls = entries.map((entry) => entry.url);
     const home = entries.find((entry) => entry.url === "https://example.test/");
-    const languagePage = DOC_PAGES.find((page) => page.id === "language");
+    const docs = entries.find(
+      (entry) => entry.url === "https://example.test/docs",
+    );
+    const languagePage = docsSource.getPage(["language"]);
     if (!languagePage) throw new Error("missing language doc page");
-
-    const languageEntry = entries.find(
+    const language = entries.find(
       (entry) => entry.url === "https://example.test/docs/language",
     );
-    const languageSource = fileURLToPath(
-      new URL(`../../../docs/${languagePage.file}`, import.meta.url),
-    );
-    const languageMtime = fs.statSync(languageSource).mtime;
 
+    expect(new Set(urls).size).toBe(urls.length);
     expect(home?.lastModified).toEqual(appLastModified);
-    expect(languageEntry?.lastModified).toEqual(languageMtime);
-    expect(getDocLastModified(languagePage)).toEqual(languageMtime);
+    expect(docs?.priority).toBe(0.8);
+    expect(language?.lastModified).toEqual(getDocLastModified(languagePage));
   });
 });
