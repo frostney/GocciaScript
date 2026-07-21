@@ -5,25 +5,58 @@ Point-in-time deep audit of duplication, QuickJS gap levers, and ADR validity
 
 ## Executive Summary
 
-- On current main CI, Goccia bytecode is about **16.6×** slower than QuickJS on
-  AWFY geomean and about **27.3×** on the frozen JetStream subset — a structural
-  gap, not a 10–20% tuning problem.
-- The dominant runtime tax is the **dual value model**: unboxed
-  `TGocciaRegister` scalars inside the VM, heap `TGocciaValue` objects everywhere
-  else (property slots, native/host calls, strings-as-objects). Caching boxed
-  values does not close that gap ([ADR 0081](../adr/0081-reject-value-caches-for-allocation-reduction.md)).
-- Dual interpreter + bytecode control flow is **intentional and should stay**;
-  the high-value simplification work is shared semantic leaves (`GetIterator`,
-  `ToIndex`, register conversion helpers) and honest docs about remaining
-  VM→evaluator coupling.
-- Most performance ADRs still hold. Supersession chains are healthy
-  (0001→0016→0100; 0065→0066; 0080→0098). Stale surfaces are mostly docs
-  (`embedding.md` FPU lifetime masking) and ADR pin SHAs (0091), not abandoned
-  code paths.
-- Multi-× paths toward QuickJS require **representation and boundary** work
-  (compact property storage, fewer register↔heap crossings, proof-backed call
-  ABIs), gated by interleaved AWFY/JetStream transfer — not broader read PICs,
-  string interning, or value caches.
+- The useful ADR question is not “does source still match the decision text?”
+  It is whether the **assumption behind the decision** still names the right
+  counterfactual for closing a multi-× QuickJS gap.
+- Three performance ADRs need assumption re-framing (not automatic reversal):
+  **0081** (caches ≠ boxing diagnosis), **0088** (read-IC expansion ≠ remaining
+  object cliff), and the **implicit 0020/0014 substrate** (shared heap
+  `TGocciaValue` can still compete with tagged-value engines).
+- Rejection ADRs that measured a *specific tactic* still hold as tactic bans:
+  string *interning* (0013), value *caches* (0081), that *read-PIC design*
+  (0088), that *fixed-arity collection design* (0089). What must not be
+  generalized from them is “strings / properties / calls / boxing are solved.”
+- Methodology ADRs (0076, 0087, 0091) and recent numeric ADRs (0100, 0101) do
+  **not** need assumption re-validation for the QuickJS goal.
+- On current main CI, Goccia is ~16.6× AWFY / ~27.3× JetStream behind QuickJS;
+  that gap is the evidence that several older “local win / local reject”
+  assumptions were looking at the wrong baseline.
+
+## Assumption validity (the actual ADR question)
+
+ADRs are append-only history. “Re-validate” here means: decide whether the
+*premise* still justifies treating the decision as a ceiling on future work.
+
+### Must re-frame — premise aimed at the wrong counterfactual
+
+| ADR | Stated / implied assumption | Why it is the wrong lens for QuickJS | What still stands |
+| --- | --- | --- | --- |
+| **0081** reject value caches | “Short-lived boxed `TGocciaValue`s are cheap under FPC+GC; cutting alloc *count* via caches does not move runtime.” | Measured **Goccia-with-cache vs Goccia-without-cache**. Correct for that. The QuickJS counterfactual is **no box at the boundary**. 0081 falsified a remedy, not the diagnosis that `RegisterToValue` / boxed slots are the structural tax. Reading 0081 as “boxing is not the bottleneck” is the wrong assumption. | Keep rejecting content/range caches. Re-open *representation* work (unboxed slots, arenas without per-box lookup) — 0081 already points there once, but the project culture treated the ADR as a broader “stop worrying about boxes.” |
+| **0088** reject broader read PIC | “Property probes are far behind QuickJS ⇒ expanding read-side IC is the lever for object-heavy AWFY.” | After shape-lite, **lookup miss/hash was not what AWFY still paid**. Read-PIC transferred to a polymorphic *probe* (+9.9%) and not to Richards/Bounce/Storage. The wrong assumption was the *class* of fix (more IC state), not the transfer gate. | Keep the transfer gate. Do **not** treat “property access is done.” The open premise is storage/layout (inline slots, write path, boxing on define/set), which 0088 never tested as the primary hypothesis. |
+| **0020 + 0014** (implicit) | Unified heap hierarchy + bytecode/interpreter feature parity are compatible with a competitive bytecode runtime. | These ADRs decided *correctness/architecture consolidation*, not speed. The unspoken performance assumption — “one `TGocciaValue` substrate can approach QuickJS” — is exactly what the barometer now challenges. Parity of *semantics* does not require parity of *representation* forever. | Keep semantic parity. Re-validate whether bytecode may grow a denser value/object layout that the interpreter does not share, or whether both modes must move together. That is vision-level; the ADRs never measured it. |
+
+### Re-validate the *experiment design*, not the rejection
+
+| ADR | Flawed assumption in what was tried | Decision still OK? |
+| --- | --- | --- |
+| **0089** defer fixed-arity | Candidate “eliminated” collection cost by allocating a *new* fixed-arity collection per call — worse than the pool it claimed to beat. | **Yes.** Defer that design. The ADR already leaves open pooled inline storage and a true arity-specific ABI; those assumptions were never tested. 0101 re-validated a *different* call assumption (scalar self-frame) successfully on a probe. |
+| **0065 / 0066** shape-lite | Shapes as **IC identity** (key sequence → entry index) are enough to close object-heavy gaps. | **Design still right for what it is.** Assumption to re-validate: whether shapes should become **layouts** (fixed slots, unboxed fields). 0088 already showed more IC identity does not move AWFY. |
+
+### Do not re-validate — assumption still matches the goal
+
+| ADR | Why the premise is still right |
+| --- | --- |
+| **0013** reject string *interning* | Premise is “hash+lookup beats FPC COW alloc for dictionary intern.” Still true for that tactic. Does **not** forbid short-string tags / arenas / `grkString` — and must not be read as “strings are fine” (Json is ~24× behind QuickJS). |
+| **0005** register VM | Fewer instructions / less shuffle vs stack — still the right VM shape; QuickJS is not an argument to go stack. |
+| **0074** deferred call-stack frames | Premise: Error.stack needs ordering; pointer push is enough. Still holds. |
+| **0087 / 0076 / 0091** measurement | Interleaved same-runner transfer is how you avoid false ADR premises. Keep. |
+| **0100 / 0101** | Native binary64 + proof-backed scalar self-calls; premises narrow and freshly measured. 0101 already admits AWFY Sieve non-transfer — no hidden wrong assumption. |
+| **0002** singletons | Tiny fixed set is free; widening failed under 0081. Holds. |
+
+### One-line answer
+
+**Yes — re-validate assumptions on 0081, 0088, and the implicit 0020/0014 substrate.**  
+Not because those ADR *decisions* were careless, but because they answered “does this local tactic beat current Goccia?” while the QuickJS goal needs “does our value/object *model* pay a tax no IC or cache can remove?” Most other performance ADRs do not need that re-validation.
 
 ## Scope and method
 
