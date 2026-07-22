@@ -1355,10 +1355,14 @@ jobs:
       - name: Check benchmark comparison logic
         run: bun run scripts/test-benchmark-compare.ts
 
+      - name: Check es-toolkit validation runner
+        if: matrix.target == 'x86_64-linux'
+        run: bun run scripts/test-es-toolkit-validation.ts
+
       - name: Compute pinned es-toolkit cache key
         if: matrix.target == 'x86_64-linux'
         id: es-toolkit-cache-key
-        run: echo "key=es-toolkit-$(python3 -c 'import hashlib, json; integrity = json.load(open("scripts/es_toolkit_harness/manifest.json"))["upstream"]["integrity"]; print(hashlib.sha256(integrity.encode()).hexdigest())')" >> "$GITHUB_OUTPUT"
+        run: echo "key=$(bun run scripts/run_es_toolkit_validation.ts --print-cache-key)" >> "$GITHUB_OUTPUT"
 
       - name: Restore pinned es-toolkit tarball
         if: matrix.target == 'x86_64-linux'
@@ -1369,7 +1373,7 @@ jobs:
 
       - name: Check pinned es-toolkit compatibility probes
         if: matrix.target == 'x86_64-linux'
-        run: python3 scripts/run_es_toolkit_validation.py --tarball-cache=.cache/es-toolkit/es-toolkit.tgz --output=es-toolkit-validation.json
+        run: bun run scripts/run_es_toolkit_validation.ts --tarball-cache=.cache/es-toolkit/es-toolkit.tgz --output=es-toolkit-validation.json
 
       - name: Upload es-toolkit validation report
         if: always() && matrix.target == 'x86_64-linux'

@@ -36,7 +36,7 @@ durable surface merely to increase the probe count.
 
 ```bash
 ./build.pas loader
-python3 scripts/run_es_toolkit_validation.py \
+bun run scripts/run_es_toolkit_validation.ts \
   --output=tmp/es-toolkit-validation.json
 ```
 

@@ -778,9 +778,12 @@ jobs:
       - name: Check benchmark comparison logic
         run: bun run scripts/test-benchmark-compare.ts
 
+      - name: Check es-toolkit validation runner
+        run: bun run scripts/test-es-toolkit-validation.ts
+
       - name: Compute pinned es-toolkit cache key
         id: es-toolkit-cache-key
-        run: echo "key=es-toolkit-$(python3 -c 'import hashlib, json; integrity = json.load(open("scripts/es_toolkit_harness/manifest.json"))["upstream"]["integrity"]; print(hashlib.sha256(integrity.encode()).hexdigest())')" >> "$GITHUB_OUTPUT"
+        run: echo "key=$(bun run scripts/run_es_toolkit_validation.ts --print-cache-key)" >> "$GITHUB_OUTPUT"
 
       - name: Restore pinned es-toolkit tarball
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -789,7 +792,7 @@ jobs:
           key: ${{ steps.es-toolkit-cache-key.outputs.key }}
 
       - name: Check pinned es-toolkit compatibility probes
-        run: python3 scripts/run_es_toolkit_validation.py --tarball-cache=.cache/es-toolkit/es-toolkit.tgz --output=es-toolkit-validation.json
+        run: bun run scripts/run_es_toolkit_validation.ts --tarball-cache=.cache/es-toolkit/es-toolkit.tgz --output=es-toolkit-validation.json
 
       - name: Upload es-toolkit validation report
         if: always()
