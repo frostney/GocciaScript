@@ -55,6 +55,7 @@ type
     procedure TestParseStringBackslashEscape;
     procedure TestParseStringForwardSlashEscape;
     procedure TestParseStringQuoteEscape;
+    procedure TestParseStringUnicodeText;
     procedure TestParseStringUnicodeEscape;
     procedure TestParseStringSurrogatePair;
     procedure TestParseEmptyString;
@@ -71,6 +72,7 @@ type
     // Error cases: strict mode
     procedure TestErrorEmptyInput;
     procedure TestErrorTrailingGarbage;
+    procedure TestErrorUnescapedControlCharacter;
     procedure TestErrorUnterminatedString;
     procedure TestErrorUnterminatedObject;
     procedure TestErrorUnterminatedArray;
@@ -205,6 +207,7 @@ begin
   Test('Parse string with backslash escape', TestParseStringBackslashEscape);
   Test('Parse string with forward slash escape', TestParseStringForwardSlashEscape);
   Test('Parse string with quote escape', TestParseStringQuoteEscape);
+  Test('Parse unescaped Unicode string text', TestParseStringUnicodeText);
   Test('Parse string with unicode escape \u0041', TestParseStringUnicodeEscape);
   Test('Parse string with surrogate pair', TestParseStringSurrogatePair);
   Test('Parse empty string', TestParseEmptyString);
@@ -221,6 +224,7 @@ begin
   // Error cases: strict mode
   Test('Error on empty input', TestErrorEmptyInput);
   Test('Error on trailing garbage', TestErrorTrailingGarbage);
+  Test('Error on unescaped control character', TestErrorUnescapedControlCharacter);
   Test('Error on unterminated string', TestErrorUnterminatedString);
   Test('Error on unterminated object', TestErrorUnterminatedObject);
   Test('Error on unterminated array', TestErrorUnterminatedArray);
@@ -490,6 +494,22 @@ begin
   end;
 end;
 
+procedure TJSONParserTests.TestParseStringUnicodeText;
+var
+  Expected: string;
+  P: TRecordingJSONParser;
+begin
+  Expected := #$03BB#$D83D#$DE00;
+  P := TRecordingJSONParser.Create;
+  try
+    P.Parse('"' + Expected + '"');
+    Expect<Integer>(P.Events.Count).ToBe(1);
+    Expect<string>(P.Events[0]).ToBe('string:' + Expected);
+  finally
+    P.Free;
+  end;
+end;
+
 procedure TJSONParserTests.TestParseStringUnicodeEscape;
 var
   P: TRecordingJSONParser;
@@ -701,6 +721,26 @@ begin
     Raised := False;
     try
       P.Parse('42 extra');
+    except
+      on E: EJSONParseError do
+        Raised := True;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+  finally
+    P.Free;
+  end;
+end;
+
+procedure TJSONParserTests.TestErrorUnescapedControlCharacter;
+var
+  P: TRecordingJSONParser;
+  Raised: Boolean;
+begin
+  P := TRecordingJSONParser.Create;
+  try
+    Raised := False;
+    try
+      P.Parse('"a' + #1 + 'b"');
     except
       on E: EJSONParseError do
         Raised := True;
