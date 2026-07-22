@@ -76,6 +76,17 @@ try {
     headers: { location: "https://example.com/es-toolkit.tgz" },
   })) as typeof fetch;
   await assertRejects(() => downloadTarball(approvedUrl), /must use https:\/\/registry\.npmjs\.org/);
+
+  let redirectRequests = 0;
+  globalThis.fetch = (async () => {
+    redirectRequests++;
+    return new Response(null, {
+      status: 302,
+      headers: { location: approvedUrl },
+    });
+  }) as typeof fetch;
+  await assertRejects(() => downloadTarball(approvedUrl), /exceeded 10 redirects/);
+  assert(redirectRequests === 11, "redirect limit must stop after 11 requests");
 } finally {
   globalThis.fetch = originalFetch;
 }
@@ -138,6 +149,29 @@ const divergentRuns = {
 const classification = classifySemanticProbe(probe, divergentRuns)[0];
 assert(classification === "bytecode-divergence", "different mode outcomes must be bytecode divergence");
 assert(matchesKnownBytecodeDivergence(probe, classification, divergentRuns), "exact known divergence must match");
+const missingMarkerRuns = {
+  ...passingRuns,
+  bytecode: {
+    ...passingRuns.bytecode,
+    marker: null,
+    markerError: "expected one marker, found 0",
+  },
+};
+assert(
+  classifySemanticProbe(probe, missingMarkerRuns)[0] === "bytecode-divergence",
+  "a marker from only one mode must be bytecode divergence",
+);
+const mismatchedMarkerRuns = {
+  ...passingRuns,
+  bytecode: {
+    ...passingRuns.bytecode,
+    marker: { id: "different-probe", status: "pass" },
+  },
+};
+assert(
+  classifySemanticProbe(probe, mismatchedMarkerRuns)[0] === "harness-failure",
+  "mismatched marker ids must be harness failures",
+);
 const timedOutRuns = {
   ...passingRuns,
   interpreted: {
