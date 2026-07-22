@@ -14,6 +14,7 @@ import sys
 import tarfile
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ DEFAULT_MANIFEST = HARNESS_DIRECTORY / "manifest.json"
 RESULT_MARKER = "GocciaEsToolkitResult:"
 ENVIRONMENT_MARKER = "GocciaEsToolkitEnvironment:"
 MODES = ("interpreted", "bytecode")
+NPM_REGISTRY_HOST = "registry.npmjs.org"
 
 
 def parse_args() -> argparse.Namespace:
@@ -44,6 +46,25 @@ def load_manifest(path: Path) -> dict[str, Any]:
   if manifest.get("schemaVersion") != 1:
     raise ValueError("es-toolkit manifest schemaVersion must be 1")
   return manifest
+
+
+def validate_tarball_url(url: str) -> None:
+  parsed = urllib.parse.urlsplit(url)
+  if parsed.scheme != "https" or parsed.hostname != NPM_REGISTRY_HOST:
+    raise ValueError(f"es-toolkit tarball URL must use https://{NPM_REGISTRY_HOST}")
+
+
+class NpmRegistryRedirectHandler(urllib.request.HTTPRedirectHandler):
+  def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+    validate_tarball_url(new_url)
+    return super().redirect_request(request, file_pointer, code, message, headers, new_url)
+
+
+def download_tarball(url: str) -> bytes:
+  validate_tarball_url(url)
+  opener = urllib.request.build_opener(NpmRegistryRedirectHandler())
+  with opener.open(url, timeout=30) as response:
+    return response.read()
 
 
 def verify_integrity(data: bytes, integrity: str) -> None:
@@ -81,8 +102,7 @@ def prepare_package(
     if tarball_cache is not None and tarball_cache.is_file():
       data = tarball_cache.read_bytes()
     else:
-      with urllib.request.urlopen(manifest["upstream"]["tarball"], timeout=30) as response:
-        data = response.read()
+      data = download_tarball(manifest["upstream"]["tarball"])
     verify_integrity(data, manifest["upstream"]["integrity"])
     if tarball_cache is not None and not tarball_cache.exists():
       tarball_cache.parent.mkdir(parents=True, exist_ok=True)
