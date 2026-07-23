@@ -11,12 +11,13 @@ import {
   isPreStable,
   type ReleaseInfo,
 } from "@/lib/github";
+import { QUICK_INSTALL_COMMANDS } from "@/lib/install-commands";
 import { BUILTINS, EXCLUDED, FEATURES } from "@/lib/landing-data";
 import {
   ECMASCRIPT_SCOPE_ANSWER,
   GOCCIASCRIPT_SUMMARY,
 } from "@/lib/positioning";
-import { CANONICAL_SITE_URL, SITE_DESCRIPTION } from "@/lib/site-url";
+import { SITE_DESCRIPTION } from "@/lib/site-url";
 import {
   loadTest262DashboardData,
   type Test262DashboardData,
@@ -147,13 +148,17 @@ async function homeMarkdown(): Promise<string> {
     "",
     "## Quick install",
     "",
-    "macOS / Linux:",
+    "macOS (Homebrew):",
     "",
-    fence(`curl -fsSL ${CANONICAL_SITE_URL}/install | sh`, "sh"),
+    fence(QUICK_INSTALL_COMMANDS.macos, "sh"),
+    "",
+    "Linux:",
+    "",
+    fence(QUICK_INSTALL_COMMANDS.linux, "sh"),
     "",
     "Windows PowerShell:",
     "",
-    fence(`irm ${CANONICAL_SITE_URL}/install.ps1 | iex`, "powershell"),
+    fence(QUICK_INSTALL_COMMANDS.windows, "powershell"),
     "",
     "## Start here",
     "",
@@ -201,7 +206,7 @@ async function installationMarkdown(): Promise<string> {
   return [
     frontmatter(
       "Installation - GocciaScript",
-      "Install GocciaScript with a one-line installer, prebuilt binaries, or a source build.",
+      "Install GocciaScript with Homebrew, a one-line installer, prebuilt binaries, or a source build.",
     ),
     "",
     "# Installation",
@@ -212,13 +217,17 @@ async function installationMarkdown(): Promise<string> {
     "",
     "## Quick install",
     "",
-    "macOS / Linux:",
+    "macOS (Homebrew):",
     "",
-    fence(`curl -fsSL ${CANONICAL_SITE_URL}/install | sh`, "sh"),
+    fence(QUICK_INSTALL_COMMANDS.macos, "sh"),
+    "",
+    "Linux:",
+    "",
+    fence(QUICK_INSTALL_COMMANDS.linux, "sh"),
     "",
     "Windows PowerShell:",
     "",
-    fence(`irm ${CANONICAL_SITE_URL}/install.ps1 | iex`, "powershell"),
+    fence(QUICK_INSTALL_COMMANDS.windows, "powershell"),
     "",
     "You can inspect the install scripts directly at `/install` and `/install.ps1`.",
     "",

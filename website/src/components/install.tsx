@@ -21,27 +21,9 @@ import {
   type ReleaseInfo,
 } from "@/lib/github";
 
-/** Once the runtime is mature enough to publish through native package
- *  managers and the JS package managers, flip this to `true` to reveal
- *  three sections in the methods list:
- *    - Native package manager (Homebrew / apt / Scoop)
- *    - Run without installing  (npx / bunx / pnpm dlx / yarn dlx / deno run)
- *    - JavaScript package managers (npm / Bun / pnpm / Yarn / Deno)
- *  The data + JSX for each is preserved below behind this gate. */
-const SHOW_PACKAGE_MANAGER_SECTIONS = false;
-
-/** Native package-manager commands per OS. APT and Homebrew are
- *  intentionally absent — the runtime isn't mature enough to publish
- *  through `brew` or `apt` repositories yet (no signed Debian repo
- *  yet, no Homebrew tap repo yet). Reintroduce both when the
- *  publishing pipeline lands; the docs in `packaging/{apt,homebrew}/`
- *  describe what each entry should be. */
-const SYSTEM_PM_COMMANDS = {
-  macos: "# Homebrew tap is coming once the runtime stabilises.",
-  linux: "# APT repository is coming once the runtime stabilises.",
-  windows:
-    "scoop bucket add frostney https://github.com/frostney/scoop-bucket\nscoop install gocciascript",
-} as const;
+/** Once GocciaScript ships through JavaScript package managers, flip this
+ *  to `true` to reveal the npx-style and global package-manager sections. */
+const SHOW_JAVASCRIPT_PACKAGE_MANAGER_SECTIONS = false;
 
 /** Pre-built binary download instructions per OS.
  *
@@ -255,46 +237,40 @@ export function Install({
           >
             <AnchorH2 id="quick">Quick install — one-liner</AnchorH2>
             <p>
-              The fastest path: fetch the right binary for your platform and
-              drop it on your <code>$PATH</code>. We&apos;ve preselected your
-              detected OS — pick a different tab if needed.
+              The fastest supported path for your platform. Homebrew installs
+              the latest release on macOS; the Linux and Windows installers
+              fetch the matching binary. We&apos;ve preselected your detected OS
+              — pick a different tab if needed.
             </p>
             <QuickInstall />
             <p className="install-method-aux">
+              Inspect the{" "}
               <a
                 href="/install"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="install-link"
               >
-                View install script
+                Unix installer
               </a>{" "}
-              before piping it into your shell.
+              or{" "}
+              <a
+                href="/install.ps1"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="install-link"
+              >
+                Windows installer
+              </a>{" "}
+              before running either script.
             </p>
           </section>
 
-          {/* The three package-manager-flavoured sections below are
-              gated behind SHOW_PACKAGE_MANAGER_SECTIONS — hidden until
-              the runtime ships through `brew` / `apt` / `npm` for real.
-              The data and JSX are preserved so unhiding is a one-flag
-              flip, not a re-build. */}
-          {SHOW_PACKAGE_MANAGER_SECTIONS && (
+          {/* The JavaScript package-manager sections below stay hidden until
+              those packages exist. The data and JSX are preserved so
+              unhiding is a one-flag flip, not a re-build. */}
+          {SHOW_JAVASCRIPT_PACKAGE_MANAGER_SECTIONS && (
             <>
-              {/* Native package managers — one consolidated method, OS-tabbed. */}
-              <section id="package-manager" className="install-method">
-                <AnchorH2 id="package-manager">Native package manager</AnchorH2>
-                <p>
-                  Through your system&apos;s package manager — Homebrew on
-                  macOS, apt on Debian/Ubuntu, Scoop on Windows. Stays on the
-                  latest stable.
-                </p>
-                <CommandTabs
-                  tabs={OS_TABS}
-                  storageKey="goccia.install.os"
-                  commands={SYSTEM_PM_COMMANDS}
-                />
-              </section>
-
               {/* Run without installing — JS-package-manager tabbed. */}
               <section id="npx" className="install-method">
                 <AnchorH2 id="npx">Run without installing</AnchorH2>

@@ -356,20 +356,67 @@ p {
 }
 .astryx-desktop-nav,
 .astryx-desktop-actions,
-.astryx-nav-actions,
-.astryx-stars {
+.astryx-nav-actions {
   display: inline-flex;
   align-items: center;
+}
+.astryx-desktop-nav {
+  gap: 0.5rem;
 }
 .astryx-nav-actions {
   gap: 0.35rem;
 }
-.astryx-stars {
-  gap: 0.2rem;
+.nav-cta {
+  padding: 0.55rem 1rem;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 600;
+  font-size: 0.9rem;
+  border: 1px solid var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  transition: transform 0.12s;
+}
+.nav-cta:hover {
+  color: var(--paper);
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+.nav-cta-github {
+  padding-right: 0.6rem;
+  gap: 0.55rem;
+}
+.nav-stars {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--paper) 18%, transparent);
   font-family: var(--mono);
   font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--paper);
 }
-@media (max-width: 767px) {
+.nav-stars svg {
+  color: #f0b57a;
+}
+[data-theme="espresso"] .nav-stars svg {
+  color: #8a4a13;
+}
+@media (min-width: 1025px) and (max-width: 1150px) {
+  .site-top-nav {
+    padding-inline: 1rem;
+  }
+  .astryx-desktop-nav {
+    gap: 0.35rem;
+  }
+}
+@media (max-width: 1024px) {
   .site-top-nav {
     padding-inline: 0.75rem;
   }
@@ -377,6 +424,8 @@ p {
   .astryx-desktop-actions {
     display: none;
   }
+}
+@media (max-width: 767px) {
   .astryx-brand {
     font-size: 1.3rem;
   }

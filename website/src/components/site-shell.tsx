@@ -1,7 +1,6 @@
 "use client";
 
 import { AppShell } from "@astryxdesign/core/AppShell";
-import { Button } from "@astryxdesign/core/Button";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { LinkProvider } from "@astryxdesign/core/Link";
 import { MobileNav } from "@astryxdesign/core/MobileNav";
@@ -105,7 +104,7 @@ export function SiteShell({
           height="auto"
           variant="section"
           contentPadding={0}
-          mobileNav={{ content: mobileNavigation, breakpoint: "md" }}
+          mobileNav={{ content: mobileNavigation, breakpoint: "lg" }}
           topNav={
             <TopNav
               className="site-top-nav"
@@ -156,23 +155,25 @@ export function SiteShell({
                     }}
                   />
                   <div className="astryx-desktop-actions">
-                    <Button
-                      as="a"
+                    <a
+                      className="nav-cta nav-cta-github"
                       href={GITHUB_REPO_URL}
                       target="_blank"
                       rel="noopener noreferrer"
-                      label="GitHub"
-                      icon={<GithubIcon size={14} />}
-                      endContent={
-                        typeof stars === "number" ? (
-                          <span className="astryx-stars">
-                            <StarIcon size={13} /> {formatStars(stars)}
-                          </span>
-                        ) : undefined
-                      }
-                      variant="secondary"
-                      size="sm"
-                    />
+                    >
+                      <GithubIcon size={14} />
+                      <span>GitHub</span>
+                      {typeof stars === "number" && (
+                        <span
+                          className="nav-stars"
+                          role="img"
+                          aria-label={`${stars} GitHub stars`}
+                        >
+                          <StarIcon size={14} />
+                          <span>{formatStars(stars)}</span>
+                        </span>
+                      )}
+                    </a>
                   </div>
                 </div>
               }
