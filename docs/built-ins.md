@@ -408,7 +408,7 @@ All built-in iterators (Array, String, Map, Set) share a common `Iterator.protot
 | `iter.some(callback)` | Test if any value matches |
 | `iter.every(callback)` | Test if all values match |
 | `iter.find(callback)` | Find first matching value |
-| `iter.includes(searchElement, skippedElements?)` | Consume the iterator until a value matches by SameValueZero, optionally ignoring a non-negative integral Number of leading values |
+| `iter.includes(searchElement, skippedElements?)` | Consume the iterator until a value matches by SameValueZero, optionally ignoring an integral Number from zero through `Number.MAX_SAFE_INTEGER`, or positive `Infinity`, without coercion |
 
 **Lazy helpers:** `map`, `filter`, `take`, `drop`, and `flatMap` return new lazy iterators that advance the source on-demand — they do not eagerly consume the underlying iterator. Consuming methods (`forEach`, `reduce`, `toArray`, `some`, `every`, `find`, `includes`) do consume the iterator. `includes` closes the source when it finds a match, but leaves a normally exhausted source closed by exhaustion alone.
 
