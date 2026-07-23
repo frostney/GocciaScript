@@ -17,6 +17,8 @@ import {
 } from "./helpers/live-bindings-re-export.js";
 import * as liveNamespace from "./helpers/live-bindings-star-re-export.js";
 import { observedCycleRead } from "./helpers/live-bindings-cycle-a.js";
+import { observedLinkedCycle } from
+  "../../../../fixtures/modules/live-bindings-link-parent.js";
 
 describe("transitive module live bindings", () => {
   test("two-hop imports remain initialized in hoisted functions", () => {
@@ -54,5 +56,9 @@ describe("transitive module live bindings", () => {
 
   test("cyclic imports preserve the temporal dead zone", () => {
     expect(observedCycleRead).toBe("ReferenceError");
+  });
+
+  test("cyclic dependencies evaluate after parent imports are linked", () => {
+    expect(observedLinkedCycle).toBe("linked:linked");
   });
 });
