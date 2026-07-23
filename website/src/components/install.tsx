@@ -6,6 +6,7 @@ import { AnchorH2 } from "@/components/anchor-heading";
 import {
   type ArchKey,
   CommandTabs,
+  CopyableCommand,
   detectArch,
   OS_TABS,
   type OsKey,
@@ -20,6 +21,7 @@ import {
   isPreStable,
   type ReleaseInfo,
 } from "@/lib/github";
+import { HOMEBREW_INSTALL_COMMAND } from "@/lib/install-commands";
 
 /** Once GocciaScript ships through JavaScript package managers, flip this
  *  to `true` to reveal the npx-style and global package-manager sections. */
@@ -237,10 +239,9 @@ export function Install({
           >
             <AnchorH2 id="quick">Quick install — one-liner</AnchorH2>
             <p>
-              The fastest supported path for your platform. Homebrew installs
-              the latest release on macOS; the Linux and Windows installers
-              fetch the matching binary. We&apos;ve preselected your detected OS
-              — pick a different tab if needed.
+              The fastest path: fetch the right binary for your platform and
+              drop it on your <code>$PATH</code>. We&apos;ve preselected your
+              detected OS — pick a different tab if needed.
             </p>
             <QuickInstall />
             <p className="install-method-aux">
@@ -264,6 +265,23 @@ export function Install({
               </a>{" "}
               before running either script.
             </p>
+          </section>
+
+          <section id="homebrew" className="install-method">
+            <AnchorH2 id="homebrew">Homebrew</AnchorH2>
+            <p>
+              On macOS, install the latest release from the maintained{" "}
+              <a
+                href="https://github.com/frostney/homebrew-tap"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                frostney/homebrew-tap
+              </a>
+              . Homebrew places the GocciaScript tools on your{" "}
+              <code>$PATH</code> and handles upgrades.
+            </p>
+            <CopyableCommand command={HOMEBREW_INSTALL_COMMAND} />
           </section>
 
           {/* The JavaScript package-manager sections below stay hidden until
