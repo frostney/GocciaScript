@@ -88,6 +88,7 @@ resourcestring
   SErrorIteratorSomeNonIterator = 'Iterator.prototype.some called on non-iterator';
   SErrorIteratorEveryNonIterator = 'Iterator.prototype.every called on non-iterator';
   SErrorIteratorFindNonIterator = 'Iterator.prototype.find called on non-iterator';
+  SErrorIteratorIncludesNonIterator = 'Iterator.prototype.includes called on non-iterator';
 
   // Iterator helper errors — argument validation
   SErrorIteratorMapCallable = 'Iterator.prototype.map requires a callable argument';
@@ -98,6 +99,9 @@ resourcestring
   SErrorIteratorSomeCallable = 'Iterator.prototype.some requires a callable argument';
   SErrorIteratorEveryCallable = 'Iterator.prototype.every requires a callable argument';
   SErrorIteratorFindCallable = 'Iterator.prototype.find requires a callable argument';
+  SErrorIteratorIncludesSkippedElementsNumber = 'Iterator.prototype.includes skippedElements must be an integral Number';
+  SErrorIteratorIncludesSkippedElementsNegative = 'Iterator.prototype.includes skippedElements must not be negative';
+  SErrorIteratorIncludesSkippedElementsTooLarge = 'Iterator.prototype.includes skippedElements must not exceed Number.MAX_SAFE_INTEGER';
   SErrorIteratorTakeRequiresArg = 'Iterator.prototype.take requires an argument';
   SErrorIteratorDropRequiresArg = 'Iterator.prototype.drop requires an argument';
   SErrorIteratorTakeNonNegative = 'Iterator.prototype.take argument must be non-negative';

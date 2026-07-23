@@ -218,9 +218,10 @@ const
   // ---------------------------------------------------------------------------
   // TC39 Stage 3
   // ---------------------------------------------------------------------------
-  STAGE3_PROPOSALS: array[0..2] of TGocciaFeatureEntry = (
+  STAGE3_PROPOSALS: array[0..3] of TGocciaFeatureEntry = (
     (Name: 'Decorators';            Link: 'https://github.com/tc39/proposal-decorators'),
     (Name: 'Decorator Metadata';    Link: 'https://github.com/tc39/proposal-decorator-metadata'),
+    (Name: 'Iterator Includes';     Link: 'https://github.com/tc39/proposal-iterator-includes'),
     (Name: 'Joint Iteration';       Link: 'https://github.com/tc39/proposal-joint-iteration')
   );
 

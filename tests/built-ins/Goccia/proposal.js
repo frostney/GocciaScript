@@ -38,6 +38,16 @@ describe.runIf(hasGoccia)("Goccia.proposal", () => {
     });
   });
 
+  test("stage 3 includes Iterator Includes", () => {
+    const proposal = Goccia.proposal["stage-3"].find(
+      (entry) => entry.name === "Iterator Includes",
+    );
+
+    expect(proposal.link).toBe(
+      "https://github.com/tc39/proposal-iterator-includes",
+    );
+  });
+
   test("proposal is read-only", () => {
     const original = Goccia.proposal;
     expect(() => { Goccia.proposal = "overwritten"; }).toThrow(TypeError);
