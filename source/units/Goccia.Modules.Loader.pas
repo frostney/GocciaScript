@@ -62,6 +62,7 @@ type
     FModules: TOrderedStringMap<TGocciaModule>;
     FModuleLoadStates: TOrderedStringMap<TObject>;
     FModuleSourceValues: TOrderedStringMap<TGocciaValue>;
+    FRetiredModules: TGocciaModuleList;
     FVirtualModules: TGocciaVirtualModuleRegistry;
     FWarnedVirtualCollisions: TOrderedStringMap<Boolean>;
     FOnError: TGocciaThrowErrorCallback;
@@ -93,6 +94,7 @@ type
     function IsJavaScriptModuleResource(const AResolvedPath: string): Boolean;
     procedure RecordFailedModuleError(const ACacheKey: string;
       const AValue: TGocciaValue; const ALastModified: TDateTime);
+    procedure RetireModule(const AModule: TGocciaModule);
     procedure ClearFailedModuleError(const ACacheKey: string);
     function TryGetCachedFailedModuleError(const AResolvedPath,
       ACacheKey: string; out AValue: TGocciaValue): Boolean;
@@ -443,6 +445,7 @@ begin
   FModules := TOrderedStringMap<TGocciaModule>.Create;
   FModuleLoadStates := TOrderedStringMap<TObject>.Create;
   FModuleSourceValues := TOrderedStringMap<TGocciaValue>.Create;
+  FRetiredModules := TGocciaModuleList.Create;
   FVirtualModules := TGocciaVirtualModuleRegistry.Create;
   FWarnedVirtualCollisions := TOrderedStringMap<Boolean>.Create;
   FLoadingModules := TOrderedStringMap<Boolean>.Create;
@@ -507,6 +510,9 @@ begin
       if Assigned(ModulePair.Value) and
          (OwnedModules.IndexOf(ModulePair.Value) < 0) then
         OwnedModules.Add(ModulePair.Value);
+    for I := 0 to FRetiredModules.Count - 1 do
+      if OwnedModules.IndexOf(FRetiredModules[I]) < 0 then
+        OwnedModules.Add(FRetiredModules[I]);
     for I := 0 to OwnedModules.Count - 1 do
       OwnedModules[I].Free;
   finally
@@ -518,6 +524,7 @@ begin
   FFailedModuleErrorModifiedTimes.Free;
   FModules.Free;
   FModuleSourceValues.Free;
+  FRetiredModules.Free;
   FVirtualModules.Free;
   FWarnedVirtualCollisions.Free;
   FLoadingModules.Free;
@@ -1051,6 +1058,12 @@ begin
   ATargetModule.CopyExportsFrom(ASourceModule);
 end;
 
+procedure TGocciaModuleLoader.RetireModule(const AModule: TGocciaModule);
+begin
+  if Assigned(AModule) and (FRetiredModules.IndexOf(AModule) < 0) then
+    FRetiredModules.Add(AModule);
+end;
+
 procedure TGocciaModuleLoader.DiscardLinkedModules(
   const APreservedStates: TList<TObject>);
 var
@@ -1071,7 +1084,7 @@ begin
       LoadState := LoadStates[I];
       FModuleLoadStates.Remove(LoadState.ResolvedPath);
       FModules.Remove(LoadState.CacheKey);
-      LoadState.Module.Free;
+      RetireModule(LoadState.Module);
       LoadState.Free;
     end;
   finally
@@ -1272,7 +1285,11 @@ begin
       FModules.Remove(LoadState.CacheKey);
     LoadState.Free;
     if not Succeeded then
-      AModule.Free;
+      { A cyclic peer may already have finished evaluation while retaining
+        a live import binding to this failed module. Keep the target alive
+        until loader teardown so reads and GC tracing cannot follow a
+        dangling module pointer. }
+      RetireModule(AModule);
   end;
 end;
 

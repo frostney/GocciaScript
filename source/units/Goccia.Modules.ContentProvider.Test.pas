@@ -36,6 +36,7 @@ uses
   Goccia.Token,
   Goccia.TOML,
   Goccia.Values.ArrayValue,
+  Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
   Goccia.YAML;
@@ -78,9 +79,12 @@ type
     procedure WriteTextFile(const APath, AText: string);
     procedure AssertEngineModuleManifestDefaultsToEntryPath(
       const AExecutor: TGocciaExecutor);
+    procedure AssertFailedCycleKeepsLiveBindings(
+      const AExecutor: TGocciaExecutor);
 
     procedure TestEngineLoadsInMemoryModuleWithCustomProvider;
     procedure TestEngineRetriesModuleAfterFailedLoad;
+    procedure TestFailedCycleKeepsLiveBindings;
     procedure TestEngineReportsJSONLModuleLineNumbers;
     procedure TestEngineReportsTOMLModuleSyntaxErrors;
     procedure TestFileSystemContentProviderPreservesUTF8JSONLText;
@@ -169,6 +173,8 @@ begin
     TestEngineLoadsInMemoryModuleWithCustomProvider);
   Test('Engine retries module load after previous failure',
     TestEngineRetriesModuleAfterFailedLoad);
+  Test('Failed module cycles keep surviving live bindings valid',
+    TestFailedCycleKeepsLiveBindings);
   Test('Engine reports JSONL module parse line numbers',
     TestEngineReportsJSONLModuleLineNumbers);
   Test('Engine reports TOML module syntax errors',
@@ -483,6 +489,88 @@ begin
     Source.Free;
     Resolver.Free;
     Provider.Free;
+    Executor.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.AssertFailedCycleKeepsLiveBindings(
+  const AExecutor: TGocciaExecutor);
+const
+  ENTRY_PATH = 'memory:/app.mjs';
+  FAILED_PATH = 'memory:/failed-cycle.js';
+  SURVIVOR_PATH = 'memory:/failed-cycle-survivor.js';
+var
+  Engine: TGocciaEngine;
+  ExportValue: TGocciaValue;
+  ModuleLoader: TGocciaModuleLoader;
+  Provider: TMemoryModuleContentProvider;
+  RaisedExpected: Boolean;
+  Resolver: TInMemoryModuleResolver;
+  Source: TStringList;
+  SurvivorModule: TGocciaModule;
+begin
+  Provider := TMemoryModuleContentProvider.Create;
+  Resolver := TInMemoryModuleResolver.Create;
+  Source := TStringList.Create;
+  try
+    Provider.AddModule(FAILED_PATH,
+      'import "' + SURVIVOR_PATH + '";' + sLineBreak +
+      'export const value = "still live";' + sLineBreak +
+      'throw new Error("failed cycle");');
+    Provider.AddModule(SURVIVOR_PATH,
+      'import { value } from "' + FAILED_PATH + '";' + sLineBreak +
+      'export const readImportedValue = () => value;' + sLineBreak +
+      'export const evaluated = true;');
+    Source.Text := '1;';
+
+    ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
+    try
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader,
+        AExecutor);
+      try
+        RaisedExpected := False;
+        try
+          ModuleLoader.LoadModule(FAILED_PATH, ENTRY_PATH);
+        except
+          on E: Exception do
+            RaisedExpected := True;
+        end;
+        if not RaisedExpected then
+          Fail('Expected the cyclic parent module to fail evaluation.');
+
+        SurvivorModule := ModuleLoader.LoadModule(SURVIVOR_PATH, ENTRY_PATH);
+        Expect<Boolean>(SurvivorModule.TryGetExportValue('readImportedValue',
+          ExportValue)).ToBe(True);
+        Expect<Boolean>(ExportValue is TGocciaFunctionBase).ToBe(True);
+        SurvivorModule.MarkExportReferences;
+      finally
+        Engine.Free;
+      end;
+    finally
+      ModuleLoader.Free;
+    end;
+  finally
+    Source.Free;
+    Resolver.Free;
+    Provider.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestFailedCycleKeepsLiveBindings;
+var
+  Executor: TGocciaExecutor;
+begin
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    AssertFailedCycleKeepsLiveBindings(Executor);
+  finally
+    Executor.Free;
+  end;
+
+  Executor := TGocciaBytecodeExecutor.Create;
+  try
+    AssertFailedCycleKeepsLiveBindings(Executor);
+  finally
     Executor.Free;
   end;
 end;
