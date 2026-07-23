@@ -449,10 +449,6 @@ Current gaps from full ECMAScript RegExp semantics:
 
 GocciaScript implements several active TC39 proposals alongside core ECMAScript support.
 
-### Iterator Includes (Stage 3)
-
-GocciaScript supports the Stage 3 [Iterator Includes](https://github.com/tc39/proposal-iterator-includes) proposal. `Iterator.prototype.includes(searchElement, skippedElements?)` consumes a direct iterator and compares values with SameValueZero, so `NaN` matches `NaN` and positive and negative zero match. The optional `skippedElements` argument must be an integral Number from zero through `Number.MAX_SAFE_INTEGER`, or positive `Infinity`; it is not coerced. Finding a match closes the iterator, while normal exhaustion does not perform an additional close.
-
 ### Decorators (Stage 3)
 
 TC39 Stage 3 decorators ([proposal-decorators](https://github.com/tc39/proposal-decorators)) and decorator metadata ([proposal-decorator-metadata](https://github.com/tc39/proposal-decorator-metadata)) are fully supported.
@@ -925,7 +921,7 @@ With `--compat-function` and `--compat-non-strict-mode`, sloppy labeled function
 
 ### Generators and Iterators
 
-Generator method shorthand (`*method()` and `async *method()`) is supported by default. Generator function syntax (`function*` and `async function*`) is supported only when `--compat-function` is enabled. Iterator protocol and Iterator Helpers are also implemented, including the Stage 3 `Iterator.prototype.includes(searchElement, skippedElements?)` consuming search method.
+Generator method shorthand (`*method()` and `async *method()`) is supported by default. Generator function syntax (`function*` and `async function*`) is supported only when `--compat-function` is enabled. Iterator protocol and Iterator Helpers are also implemented, including the Stage 3 [Iterator Includes](https://github.com/tc39/proposal-iterator-includes) consuming search method. `Iterator.prototype.includes(searchElement, skippedElements?)` compares with SameValueZero; `skippedElements` must be an integral Number from zero through `Number.MAX_SAFE_INTEGER`, or positive `Infinity`, and is not coerced. Finding a match closes the iterator, while normal exhaustion does not perform an additional close.
 
 ## Intentional Divergences from ECMAScript
 
