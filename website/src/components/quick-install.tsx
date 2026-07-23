@@ -7,7 +7,7 @@ import {
   OS_TABS,
   type OsKey,
 } from "@/components/command-tabs";
-import { CANONICAL_SITE_URL } from "@/lib/site-url";
+import { QUICK_INSTALL_COMMANDS } from "@/lib/install-commands";
 
 /** OS-tabbed Quick install — the canonical "fastest path to running"
  *  surface, designed to be embedded in both the dedicated `/install`
@@ -30,11 +30,7 @@ export function QuickInstall() {
       tabs={OS_TABS}
       storageKey="goccia.install.os"
       initialKey={detectedOs}
-      commands={{
-        macos: `curl -fsSL ${CANONICAL_SITE_URL}/install | sh`,
-        linux: `curl -fsSL ${CANONICAL_SITE_URL}/install | sh`,
-        windows: `irm ${CANONICAL_SITE_URL}/install.ps1 | iex`,
-      }}
+      commands={QUICK_INSTALL_COMMANDS}
     />
   );
 }

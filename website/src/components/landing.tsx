@@ -1168,7 +1168,13 @@ export function Landing({
                   trigger={item.question}
                   value={item.question}
                 >
-                  <Text as="div" type="supporting" display="block">
+                  <Text
+                    as="div"
+                    type="large"
+                    color="secondary"
+                    weight="normal"
+                    display="block"
+                  >
                     {item.answer}
                   </Text>
                 </Collapsible>

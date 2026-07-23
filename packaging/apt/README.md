@@ -99,9 +99,6 @@ Steps 3–7 are intended to live in a GitHub Actions workflow triggered
 on tag push. The signing key gets imported via
 `echo "$APT_SIGNING_KEY" | gpg --import`; the host upload uses
 whichever credentials the host needs (S3 keys, SSH key, deploy hook).
-The same workflow job can also mirror the Homebrew formula into the
-tap repo (see `packaging/homebrew/README.md`) — both publishing
-surfaces fire off the same release artifact.
 
 Until the host is live, the install commands referenced from
 `/install` point at endpoints that 404 — they're the **intended**
