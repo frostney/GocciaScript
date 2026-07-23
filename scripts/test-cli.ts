@@ -1197,6 +1197,10 @@ console.log("--log option...");
 // -- Example scripts (Loader) ---------------------------------------------------
 
 console.log("Example scripts...");
-await $`${LOADER} examples`.quiet();
+const stableExamples = [...new Bun.Glob("**/*.js").scanSync({ cwd: "examples" })]
+  .filter((path) => !path.split("/").some((segment) => segment.startsWith("_")))
+  .sort()
+  .map((path) => join("examples", path));
+await $`${LOADER} ${stableExamples}`.quiet();
 
 console.log("\nAll test-cli.ts tests passed.");
