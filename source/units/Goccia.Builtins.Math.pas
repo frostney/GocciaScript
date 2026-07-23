@@ -512,17 +512,17 @@ begin
   Result := TGocciaNumberLiteralValue.Create(IntegralPart);
 end;
 
-// §21.3.2.10 Math.ceil ( x )
+// ES2026 §21.3.2.10 Math.ceil ( x )
 function TGocciaMath.MathCeil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
+  IntegralPart: Double;
   NumberArg: TGocciaNumberLiteralValue;
   V: Double;
 begin
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := TGocciaArgumentConverter.GetNumber(AArgs, 0);
-  // Step 2: If n is NaN, +∞𝔽, -∞𝔽, or an integral Number, return n.
-  if NumberArg.IsNaN or NumberArg.IsInfinite or NumberArg.IsNegativeZero or
-     (NumberArg.Value = 0) or IsFiniteIntegral(NumberArg.Value) then
+  // Step 2: If n is not finite or n is either +0𝔽 or -0𝔽, return n.
+  if NumberArg.IsNaN or NumberArg.IsInfinite or (NumberArg.Value = 0) then
   begin
     Result := NumberArg;
     Exit;
@@ -534,8 +534,19 @@ begin
     Result := TGocciaNumberLiteralValue.NegativeZeroValue;
     Exit;
   end;
-  // Step 4: Return the smallest (closest to -∞) integral Number ≥ n.
-  Result := TGocciaNumberLiteralValue.Create(Ceil(V));
+  // Step 4: If n is an integral Number, return n.
+  if IsFiniteIntegral(V) then
+  begin
+    Result := NumberArg;
+    Exit;
+  end;
+  // Step 5: Return the smallest (closest to -∞) integral Number ≥ n.
+  // Int preserves the binary64 representation; FPC 3.2.2's Ceil result is
+  // already narrowed at values above MaxInt before Create receives it.
+  IntegralPart := Int(V);
+  if V > 0 then
+    IntegralPart := IntegralPart + 1;
+  Result := TGocciaNumberLiteralValue.Create(IntegralPart);
 end;
 
 // §21.3.2.28 Math.round ( x )

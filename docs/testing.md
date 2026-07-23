@@ -453,6 +453,13 @@ python3 scripts/run_json5_test_suite.py --harness=./build/GocciaJSON5Check --out
 
 This runner extracts parser cases from the upstream `test/parse.js` and `test/errors.js` files, evaluates them with the reference implementation under Node.js, then compares Goccia's Pascal harness output against the canonical tagged values for valid cases. Invalid cases must fail to parse. The same command also runs `tests/built-ins/JSON5/stringify.js`, which mirrors the upstream stringify surface inside Goccia's JavaScript test harness. The runner exits non-zero when either the upstream parser corpus or the JSON5 stringify suite fails.
 
+### Pinned es-toolkit library probes
+
+The bounded es-toolkit lane runs named public-package probes in both execution
+modes and emits classified JSON without making a whole-suite percentage claim.
+See [es-toolkit Validation](es-toolkit-validation.md) for the pinned artifact,
+command, failure taxonomy, and sandbox/host-surface boundaries.
+
 ### Run Pascal Unit Tests
 
 ```bash
@@ -674,7 +681,7 @@ build → test             → artifacts
 
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 
-**`cli`** (needs build, all platforms) — Downloads pre-built binaries and runs CLI behavior smoke tests via Bun: `test-cli.ts` (options across all apps), `test-cli-lexer.ts` (numeric-separator rejection), `test-cli-parser.ts` (error display), `test-cli-config.ts` (config-file loading and per-file inheritance), and `test-cli-apps.ts` (app-specific features, including `GocciaScriptLoaderBare` stdin/file checks, CLI-local `print`, and runtime-global absence). Windows runs additionally assert that the loader binary does not link against OpenSSL DLLs.
+**`cli`** (needs build, all platforms) — Downloads pre-built binaries and runs CLI behavior smoke tests via Bun: `test-cli.ts` (options across all apps), `test-cli-lexer.ts` (numeric-separator rejection), `test-cli-parser.ts` (error display), `test-cli-config.ts` (config-file loading and per-file inheritance), and `test-cli-apps.ts` (app-specific features, including `GocciaScriptLoaderBare` stdin/file checks, CLI-local `print`, and runtime-global absence). The x86-64 Linux leg also runs the pinned es-toolkit compatibility probes and uploads their classified JSON report. Windows runs additionally assert that the loader binary does not link against OpenSSL DLLs.
 
 **`artifacts`** (needs test + toml-compliance + json5-compliance + awfy + benchmark + cli, `main` only) — Uploads release binaries after all checks pass. `test262` is **not** a gating dependency — failing tests there cannot block a release.
 
@@ -694,7 +701,7 @@ build → test
       → cli
 ```
 
-The PR workflow also posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing, top-level GocciaScript GC metrics, and selected FreePascal heap allocation metrics for interpreter mode and bytecode mode. GC memory rows aggregate the main thread plus all worker thread-local GCs. The test runner does not count worker shutdown reclamation as GC collections, while the benchmark runner explicitly collects between benchmark files, so collection counts are expected to differ. The comment hides negative FreePascal heap free-space deltas because they are valid allocator diagnostics but are noisy in a PR summary. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
+The PR workflow also runs the pinned es-toolkit compatibility probes in the Linux `cli` job and retains the classified JSON report. It posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing, top-level GocciaScript GC metrics, and selected FreePascal heap allocation metrics for interpreter mode and bytecode mode. GC memory rows aggregate the main thread plus all worker thread-local GCs. The test runner does not count worker shutdown reclamation as GC collections, while the benchmark runner explicitly collects between benchmark files, so collection counts are expected to differ. The comment hides negative FreePascal heap free-space deltas because they are valid allocator diagnostics but are noisy in a PR summary. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
 
 The **AWFY Results** comment posts median timings and geomean ratios for the pinned AWFY report set under Goccia bytecode, QuickJS, and the latest Node Current release. The underlying `awfy-report` artifact keeps the five raw interleaved samples per engine, min/max/CV, environment metadata, and first-class failure outcomes.
 

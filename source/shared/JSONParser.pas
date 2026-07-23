@@ -122,6 +122,7 @@ implementation
 
 uses
   NumericText,
+  StringBuffer,
   TextEncoding,
   TextSemantics;
 
@@ -176,7 +177,8 @@ end;
 
 class function TAbstractJSONParser.IsASCIIDigit(const AChar: Char): Boolean;
 begin
-  Result := AChar in ['0'..'9'];
+  // FPC 3.2.2 lowers WideChar set membership through an ANSI conversion.
+  Result := (AChar >= '0') and (AChar <= '9');
 end;
 
 class function TAbstractJSONParser.IsASCIIHexDigit(const AChar: Char): Boolean;
@@ -514,7 +516,8 @@ begin
   DecimalPointSeen := False;
   ExponentSeen := False;
 
-  if PeekChar in ['-', '+'] then
+  // Keep ASCII WideChar checks direct for the same reason as IsASCIIDigit.
+  if (PeekChar = '-') or (PeekChar = '+') then
   begin
     SignText := ReadChar;
     if (SignText = '+') and not Supports(jpcAllowLeadingPlusSign) then
@@ -546,7 +549,7 @@ begin
     if not IsAtEnd and IsASCIIDigit(PeekChar) then
       RaiseParseError('Invalid number format');
   end
-  else if not IsAtEnd and (PeekChar in ['1'..'9']) then
+  else if not IsAtEnd and (PeekChar >= '1') and (PeekChar <= '9') then
   begin
     while not IsAtEnd and IsASCIIDigit(PeekChar) do
       NumStr := NumStr + ReadChar;
@@ -568,11 +571,11 @@ begin
         NumStr := NumStr + ReadChar;
   end;
 
-  if not IsAtEnd and (PeekChar in ['e', 'E']) then
+  if not IsAtEnd and ((PeekChar = 'e') or (PeekChar = 'E')) then
   begin
     ExponentSeen := True;
     NumStr := NumStr + ReadChar;
-    if not IsAtEnd and (PeekChar in ['+', '-']) then
+    if not IsAtEnd and ((PeekChar = '+') or (PeekChar = '-')) then
       NumStr := NumStr + ReadChar;
     if IsAtEnd or not IsASCIIDigit(PeekChar) then
       RaiseParseError('Invalid number format in exponent');
@@ -694,18 +697,36 @@ end;
 
 function TAbstractJSONParser.ParseString(const AQuote: Char): string;
 var
-  Text: string;
+  Buffer: TStringBuffer;
   Ch: Char;
+  StartPosition: Integer;
 begin
   ExpectChar(AQuote);
-  Text := '';
+
+  StartPosition := FPosition;
+  while FPosition <= FLength do
+  begin
+    Ch := FText[FPosition];
+    if Ch = AQuote then
+    begin
+      Result := Copy(FText, StartPosition, FPosition - StartPosition);
+      Inc(FPosition);
+      Exit;
+    end;
+    if (Ch = '\') or (Ord(Ch) < 32) then
+      Break;
+    Inc(FPosition);
+  end;
+  FPosition := StartPosition;
+
+  Buffer := TStringBuffer.Create;
 
   while not IsAtEnd do
   begin
     Ch := ReadChar;
     if Ch = AQuote then
     begin
-      Result := Text;
+      Result := Buffer.ToString;
       Exit;
     end;
 
@@ -720,36 +741,36 @@ begin
       Ch := ReadChar;
       case Ch of
         '"':
-          Text := Text + '"';
+          Buffer.AppendChar('"');
         '''':
           if Supports(jpcAllowExtendedStringEscapes) or (AQuote = '''') then
-            Text := Text + ''''
+            Buffer.AppendChar('''')
           else
             RaiseParseError('Invalid escape character: \' + Ch);
         '\':
-          Text := Text + '\';
+          Buffer.AppendChar('\');
         '/':
-          Text := Text + '/';
+          Buffer.AppendChar('/');
         'b':
-          Text := Text + #8;
+          Buffer.AppendChar(#8);
         'f':
-          Text := Text + #12;
+          Buffer.AppendChar(#12);
         'n':
-          Text := Text + #10;
+          Buffer.AppendChar(#10);
         'r':
-          Text := Text + #13;
+          Buffer.AppendChar(#13);
         't':
-          Text := Text + #9;
+          Buffer.AppendChar(#9);
         'u':
-          Text := Text + ParseUnicodeEscape;
+          Buffer.Append(ParseUnicodeEscape);
         'v':
           if Supports(jpcAllowExtendedStringEscapes) then
-            Text := Text + #11
+            Buffer.AppendChar(#11)
           else
             RaiseParseError('Invalid escape character: \' + Ch);
         'x':
           if Supports(jpcAllowExtendedStringEscapes) then
-            Text := Text + ParseHexEscape(2)
+            Buffer.Append(ParseHexEscape(2))
           else
             RaiseParseError('Invalid escape character: \' + Ch);
         '0':
@@ -758,7 +779,7 @@ begin
             begin
               if not IsAtEnd and IsASCIIDigit(PeekChar) then
                 RaiseParseError('Invalid escape character: \' + PeekChar);
-              Text := Text + #0;
+              Buffer.AppendChar(#0);
             end
             else
               RaiseParseError('Invalid escape character: \' + Ch);
@@ -770,7 +791,7 @@ begin
             RaiseParseError('Invalid escape character: \' + Ch);
       else
         if Supports(jpcAllowExtendedStringEscapes) then
-          Text := Text + Ch
+          Buffer.AppendChar(Ch)
         else
           RaiseParseError('Invalid escape character: \' + Ch);
       end;
@@ -780,7 +801,7 @@ begin
     else if Ord(Ch) < 32 then
       RaiseParseError('Unescaped control character in string')
     else
-      Text := Text + Ch;
+      Buffer.AppendChar(Ch);
   end;
 
   RaiseParseError('Unterminated string');

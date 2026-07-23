@@ -1355,6 +1355,35 @@ jobs:
       - name: Check benchmark comparison logic
         run: bun run scripts/test-benchmark-compare.ts
 
+      - name: Check es-toolkit validation runner
+        if: matrix.target == 'x86_64-linux'
+        run: bun run scripts/test-es-toolkit-validation.ts
+
+      - name: Compute pinned es-toolkit cache key
+        if: matrix.target == 'x86_64-linux'
+        id: es-toolkit-cache-key
+        run: echo "key=$(bun run scripts/run_es_toolkit_validation.ts --print-cache-key)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pinned es-toolkit tarball
+        if: matrix.target == 'x86_64-linux'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .cache/es-toolkit/es-toolkit.tgz
+          key: ${{ steps.es-toolkit-cache-key.outputs.key }}
+
+      - name: Check pinned es-toolkit compatibility probes
+        if: matrix.target == 'x86_64-linux'
+        run: bun run scripts/run_es_toolkit_validation.ts --tarball-cache=.cache/es-toolkit/es-toolkit.tgz --output=es-toolkit-validation.json
+
+      - name: Upload es-toolkit validation report
+        if: always() && matrix.target == 'x86_64-linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: es-toolkit-validation
+          retention-days: 7
+          if-no-files-found: ignore
+          path: es-toolkit-validation.json
+
       - name: Check Windows TLS dependencies
         if: runner.os == 'Windows'
         shell: pwsh

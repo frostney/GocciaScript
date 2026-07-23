@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "upstream": {
+    "name": "es-toolkit",
+    "version": "1.49.0",
+    "repository": "https://github.com/toss/es-toolkit",
+    "commit": "c8d3c367dd509f5d8f137c6b623a30926fecd1f4",
+    "tarball": "https://registry.npmjs.org/es-toolkit/-/es-toolkit-1.49.0.tgz",
+    "integrity": "sha512-G5iZ6Pc/FNRY/soKZHC+TxGDD83rHUDXxzaWhGCX44vAv/tMs56WMusnm/KMNK+luUPsgA9U28cGr4RDlSzL2g=="
+  },
+  "engineFlags": [
+    "--compat-function",
+    "--compat-traditional-for-loop",
+    "--compat-while-loops",
+    "--compat-loose-equality"
+  ],
+  "expectedEnvironment": {
+    "functionConstructorErrorPattern": "^TypeError: Dynamic code generation is disabled\\."
+  },
+  "modules": {
+    "es-toolkit/compat/deburr": "dist/compat/string/deburr.mjs",
+    "es-toolkit/compat/sortedIndexBy": "dist/compat/array/sortedIndexBy.mjs",
+    "es-toolkit/compat/sortedLastIndexBy": "dist/compat/array/sortedLastIndexBy.mjs",
+    "es-toolkit/compat/unzipWith": "dist/compat/array/unzipWith.mjs",
+    "es-toolkit/compat/words": "dist/compat/string/words.mjs",
+    "es-toolkit/invariant": "dist/util/invariant.mjs"
+  },
+  "probes": [
+    {
+      "id": "deburr-combining-marks",
+      "file": "deburr-combining-marks.mjs",
+      "knownBytecodeDivergence": {
+        "errorPattern": "^ReferenceError: Cannot access '.+' before initialization$",
+        "reason": "Transitive module imports can throw before initialization; this is classified separately from library semantics."
+      }
+    },
+    {
+      "id": "ordinal-words",
+      "file": "ordinal-words.mjs",
+      "knownBytecodeDivergence": {
+        "errorPattern": "^ReferenceError: Cannot access '.+' before initialization$",
+        "reason": "Transitive module imports can throw before initialization; this is classified separately from library semantics."
+      }
+    },
+    {
+      "id": "invariant-true",
+      "file": "invariant-true.mjs"
+    },
+    {
+      "id": "empty-unzip-with",
+      "file": "empty-unzip-with.mjs",
+      "knownBytecodeDivergence": {
+        "errorPattern": "^ReferenceError: Cannot access '.+' before initialization$",
+        "reason": "Transitive module imports can throw before initialization; this is classified separately from library semantics."
+      }
+    },
+    {
+      "id": "large-array-sorted-index",
+      "file": "large-array-sorted-index.mjs",
+      "knownBytecodeDivergence": {
+        "errorPattern": "^ReferenceError: Cannot access '.+' before initialization$",
+        "reason": "Transitive module imports can throw before initialization; this is classified separately from library semantics."
+      }
+    }
+  ],
+  "environmentProbe": "environment.mjs"
+}
