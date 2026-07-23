@@ -36,9 +36,11 @@ uses
   Goccia.Token,
   Goccia.TOML,
   Goccia.Values.ArrayValue,
+  Goccia.Values.Error,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
+  Goccia.VM.Exception,
   Goccia.YAML;
 
 type
@@ -502,12 +504,15 @@ const
 var
   Engine: TGocciaEngine;
   ExportValue: TGocciaValue;
+  FailureMessage: string;
+  HasExpectedFailureMessage: Boolean;
   ModuleLoader: TGocciaModuleLoader;
   Provider: TMemoryModuleContentProvider;
   RaisedExpected: Boolean;
   Resolver: TInMemoryModuleResolver;
   Source: TStringList;
   SurvivorModule: TGocciaModule;
+  ThrownValue: TGocciaValue;
 begin
   Provider := TMemoryModuleContentProvider.Create;
   Resolver := TInMemoryModuleResolver.Create;
@@ -533,7 +538,22 @@ begin
           ModuleLoader.LoadModule(FAILED_PATH, ENTRY_PATH);
         except
           on E: Exception do
+          begin
             RaisedExpected := True;
+            FailureMessage := E.Message;
+            ThrownValue := nil;
+            if E is TGocciaThrowValue then
+              ThrownValue := TGocciaThrowValue(E).Value
+            else if E is EGocciaBytecodeThrow then
+              ThrownValue := EGocciaBytecodeThrow(E).ThrownValue;
+            if ThrownValue is TGocciaObjectValue then
+              FailureMessage := TGocciaObjectValue(ThrownValue)
+                .GetProperty(PROP_MESSAGE).ToStringLiteral.Value;
+            HasExpectedFailureMessage :=
+              Pos('failed cycle', FailureMessage) > 0;
+            if not HasExpectedFailureMessage then
+              Fail('Expected cyclic module evaluation failure message.');
+          end;
         end;
         if not RaisedExpected then
           Fail('Expected the cyclic parent module to fail evaluation.');
