@@ -1,5 +1,5 @@
-// Run: ./build/GocciaScriptLoader examples/tc39-ahead.js
-// Compare: node examples/tc39-ahead.js
+// Run: ./build/GocciaScriptLoader examples/_experimental/tc39-ahead.js
+// Compare: node examples/_experimental/tc39-ahead.js
 const leaders = Iterator.zip([
   ["Ada", "Grace", "Linus"],
   [100, 98, 60],

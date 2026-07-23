@@ -1,4 +1,4 @@
-// Run: ./build/GocciaTestRunner examples/testrunner-vitest.js
+// Run: ./build/GocciaTestRunner examples/_experimental/testrunner-vitest.js
 // Update snapshots: add --update (the Vitest-compatible alias)
 const cart = [];
 

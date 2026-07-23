@@ -1,4 +1,4 @@
-// This file runs inside the isolated child sandbox.
+// This experimental file runs inside the isolated child sandbox.
 import fs from "fs";
 
 console.log(fs.readFileSync("/message.txt", "utf8"));

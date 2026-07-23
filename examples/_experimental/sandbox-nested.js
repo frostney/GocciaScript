@@ -1,6 +1,6 @@
 // Run: ./build/GocciaSandboxRunner /sandbox-nested.js \
-//   --seed=examples/sandbox-nested.js=/ \
-//   --seed=examples/sandbox-child.js=/ --source-type=module \
+//   --seed=examples/_experimental/sandbox-nested.js=/ \
+//   --seed=examples/_experimental/sandbox-child.js=/ --source-type=module \
 //   --diff --diff-format=unified
 import fs from "fs";
 import { runScript } from "goccia";
