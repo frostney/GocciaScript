@@ -389,8 +389,12 @@ The lexical context used to resolve bindings and contextual values such as `this
 _Avoid_: Object, namespace.
 
 **Binding**:
-A name-to-value association in a scope.
+A named association in a scope. Most bindings hold a value directly; an import binding indirectly names an exported binding in another module.
 _Avoid_: Raw variable.
+
+**Import binding**:
+An immutable indirect binding created by a module import that refers to an exported binding in another module. Each read observes the target binding's current value and initialization state.
+_Avoid_: Imported value, import snapshot.
 
 **Define**:
 Create a new binding in the current scope.

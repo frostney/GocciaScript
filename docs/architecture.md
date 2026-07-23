@@ -47,7 +47,7 @@ Source -> Preprocessors (optional, e.g. JSX) -> Lexer -> Parser -> Compiler -> G
 | Bytecode compiler | `Goccia.Compiler*` | AST to bytecode templates/modules |
 | Bytecode format | `Goccia.Bytecode*` | Opcodes, templates, modules, binary I/O, debug info |
 | Bytecode VM | `Goccia.VM*` | Register execution, closures, upvalues, handlers |
-| Shared value system | `Goccia.Values.*`, `Goccia.Scope` | Objects, classes, arrays, promises, scopes, and shared value behavior |
+| Shared value system | `Goccia.Values.*`, `Goccia.Scope`, `Goccia.Modules` | Objects, classes, arrays, promises, scopes, live module import/export bindings, and shared value behavior |
 | Temporal semantics | `Goccia.Temporal.AbstractOperations`, `Goccia.Temporal.Options`, `Goccia.Temporal.Utils`, `Goccia.Temporal.TimeZone` | Shared specification operations for calendar coercion, options, rounding, RFC 9557 parsing, and time-zone offsets; Temporal built-ins and values delegate here instead of duplicating policy |
 | Realm | `Goccia.Realm` | Per-engine container for mutable intrinsic prototypes |
 | GC | `Goccia.GarbageCollector` | Mark-and-sweep garbage collection |

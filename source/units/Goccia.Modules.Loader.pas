@@ -57,9 +57,12 @@ type
     FGlobalModules: TOrderedStringMap<TGocciaModule>;
     FGlobalModuleProviders: TOrderedStringMap<TGocciaGlobalModuleProvider>;
     FGlobalScope: TGocciaGlobalScope;
+    FLinkingDepth: Integer;
     FLoadingModules: TOrderedStringMap<Boolean>;
     FModules: TOrderedStringMap<TGocciaModule>;
+    FModuleLoadStates: TOrderedStringMap<TObject>;
     FModuleSourceValues: TOrderedStringMap<TGocciaValue>;
+    FRetiredModules: TGocciaModuleList;
     FVirtualModules: TGocciaVirtualModuleRegistry;
     FWarnedVirtualCollisions: TOrderedStringMap<Boolean>;
     FOnError: TGocciaThrowErrorCallback;
@@ -70,6 +73,11 @@ type
 
     procedure CopyModuleContents(const ASourceModule,
       ATargetModule: TGocciaModule);
+    procedure DiscardLinkedModules(
+      const APreservedStates: TList<TObject>);
+    procedure EvaluateLinkedModule(const AModule: TGocciaModule);
+    function InstantiateModule(const AModulePath,
+      AImportingFilePath: string): TGocciaModule;
     function LoadJSONModule(const AResolvedPath,
       ACacheKey: string): TGocciaModule;
     function LoadTextModule(const AResolvedPath,
@@ -86,6 +94,7 @@ type
     function IsJavaScriptModuleResource(const AResolvedPath: string): Boolean;
     procedure RecordFailedModuleError(const ACacheKey: string;
       const AValue: TGocciaValue; const ALastModified: TDateTime);
+    procedure RetireModule(const AModule: TGocciaModule);
     procedure ClearFailedModuleError(const ACacheKey: string);
     function TryGetCachedFailedModuleError(const AResolvedPath,
       ACacheKey: string; out AValue: TGocciaValue): Boolean;
@@ -268,6 +277,21 @@ type
     procedure MarkReferences; override;
   end;
 
+  TGocciaModuleLoadStatus = (mlsLinking, mlsLinked, mlsEvaluating);
+
+  TGocciaModuleLoadState = class
+  public
+    CacheKey: string;
+    Context: TGocciaEvaluationContext;
+    Module: TGocciaModule;
+    PipelineOptions: TGocciaSourcePipelineOptions;
+    ProgramNode: TGocciaProgram;
+    RequestedModules: TGocciaModuleList;
+    ResolvedPath: string;
+    Status: TGocciaModuleLoadStatus;
+    destructor Destroy; override;
+  end;
+
 { TGocciaModuleEvaluationWaitState }
 
 function EncodeReExportModuleRequest(
@@ -319,6 +343,15 @@ begin
   inherited;
   if Assigned(FResultPromise) then
     FResultPromise.MarkReferences;
+end;
+
+{ TGocciaModuleLoadState }
+
+destructor TGocciaModuleLoadState.Destroy;
+begin
+  ProgramNode.Free;
+  RequestedModules.Free;
+  inherited;
 end;
 
 { TGocciaDeferredModuleBody }
@@ -410,7 +443,9 @@ begin
   FFailedModuleErrors := TOrderedStringMap<TGocciaValue>.Create;
   FFailedModuleErrorModifiedTimes := TOrderedStringMap<TDateTime>.Create;
   FModules := TOrderedStringMap<TGocciaModule>.Create;
+  FModuleLoadStates := TOrderedStringMap<TObject>.Create;
   FModuleSourceValues := TOrderedStringMap<TGocciaValue>.Create;
+  FRetiredModules := TGocciaModuleList.Create;
   FVirtualModules := TGocciaVirtualModuleRegistry.Create;
   FWarnedVirtualCollisions := TOrderedStringMap<Boolean>.Create;
   FLoadingModules := TOrderedStringMap<Boolean>.Create;
@@ -443,12 +478,16 @@ end;
 
 destructor TGocciaModuleLoader.Destroy;
 var
+  LoadStatePair: TOrderedStringMap<TObject>.TKeyValuePair;
   NamespacePair: TOrderedStringMap<TGocciaValue>.TKeyValuePair;
   SourceValuePair: TOrderedStringMap<TGocciaValue>.TKeyValuePair;
   ModulePair: TOrderedStringMap<TGocciaModule>.TKeyValuePair;
   OwnedModules: TGocciaModuleList;
   I: Integer;
 begin
+  for LoadStatePair in FModuleLoadStates do
+    LoadStatePair.Value.Free;
+  FModuleLoadStates.Free;
   if (TGarbageCollector.Instance <> nil) then
   begin
     for NamespacePair in FDeferredModuleNamespaces do
@@ -471,6 +510,9 @@ begin
       if Assigned(ModulePair.Value) and
          (OwnedModules.IndexOf(ModulePair.Value) < 0) then
         OwnedModules.Add(ModulePair.Value);
+    for I := 0 to FRetiredModules.Count - 1 do
+      if OwnedModules.IndexOf(FRetiredModules[I]) < 0 then
+        OwnedModules.Add(FRetiredModules[I]);
     for I := 0 to OwnedModules.Count - 1 do
       OwnedModules[I].Free;
   finally
@@ -482,6 +524,7 @@ begin
   FFailedModuleErrorModifiedTimes.Free;
   FModules.Free;
   FModuleSourceValues.Free;
+  FRetiredModules.Free;
   FVirtualModules.Free;
   FWarnedVirtualCollisions.Free;
   FLoadingModules.Free;
@@ -1015,9 +1058,246 @@ begin
   ATargetModule.CopyExportsFrom(ASourceModule);
 end;
 
+procedure TGocciaModuleLoader.RetireModule(const AModule: TGocciaModule);
+begin
+  if Assigned(AModule) and (FRetiredModules.IndexOf(AModule) < 0) then
+    FRetiredModules.Add(AModule);
+end;
+
+procedure TGocciaModuleLoader.DiscardLinkedModules(
+  const APreservedStates: TList<TObject>);
+var
+  I: Integer;
+  LoadState: TGocciaModuleLoadState;
+  LoadStateObject: TObject;
+  LoadStates: TList<TGocciaModuleLoadState>;
+begin
+  LoadStates := TList<TGocciaModuleLoadState>.Create;
+  try
+    for LoadStateObject in FModuleLoadStates.Values do
+      if (not Assigned(APreservedStates)) or
+         (APreservedStates.IndexOf(LoadStateObject) < 0) then
+        LoadStates.Add(TGocciaModuleLoadState(LoadStateObject));
+
+    for I := 0 to LoadStates.Count - 1 do
+    begin
+      LoadState := LoadStates[I];
+      FModuleLoadStates.Remove(LoadState.ResolvedPath);
+      FModules.Remove(LoadState.CacheKey);
+      RetireModule(LoadState.Module);
+      LoadState.Free;
+    end;
+  finally
+    LoadStates.Free;
+  end;
+end;
+
+// ES2026 §16.2.1.6.1.2 Link()
+// ES2026 §16.2.1.6.1.3 Evaluate()
 function TGocciaModuleLoader.LoadModule(const AModulePath,
   AImportingFilePath: string): TGocciaModule;
 var
+  IsOutermostLink: Boolean;
+  LoadStateObject: TObject;
+  PreservedStates: TList<TObject>;
+begin
+  IsOutermostLink := FLinkingDepth = 0;
+  PreservedStates := nil;
+  if IsOutermostLink then
+  begin
+    PreservedStates := TList<TObject>.Create;
+    for LoadStateObject in FModuleLoadStates.Values do
+      PreservedStates.Add(LoadStateObject);
+  end;
+  try
+    try
+      Inc(FLinkingDepth);
+      try
+        Result := InstantiateModule(AModulePath, AImportingFilePath);
+      finally
+        Dec(FLinkingDepth);
+      end;
+
+      if IsOutermostLink then
+        EvaluateLinkedModule(Result);
+    except
+      if IsOutermostLink then
+        DiscardLinkedModules(PreservedStates);
+      raise;
+    end;
+  finally
+    PreservedStates.Free;
+  end;
+end;
+
+procedure TGocciaModuleLoader.EvaluateLinkedModule(
+  const AModule: TGocciaModule);
+var
+  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
+  AggregatePromise: TGocciaPromiseValue;
+  DeferredBody: TGocciaDeferredModuleBody;
+  DeferredHandler: TGocciaNativeFunctionValue;
+  EvalPromise: TGocciaPromiseValue;
+  FulfillHandler: TGocciaNativeFunctionValue;
+  I: Integer;
+  LoadState: TGocciaModuleLoadState;
+  LoadStateObject: TObject;
+  PendingDependencyPromise: TGocciaPromiseValue;
+  PendingPromises: TList<TGocciaPromiseValue>;
+  ProgramConsumed: Boolean;
+  RejectHandler: TGocciaNativeFunctionValue;
+  Succeeded: Boolean;
+  WaitState: TGocciaModuleEvaluationWaitState;
+
+  function WaitPromiseFor(
+    const ARequestedModule: TGocciaModule): TGocciaPromiseValue;
+  var
+    WaitModule: TGocciaModule;
+  begin
+    Result := nil;
+    if not Assigned(ARequestedModule) then
+      Exit;
+
+    WaitModule := ARequestedModule.AsyncCycleRoot;
+    if Assigned(WaitModule) and (WaitModule <> AModule) and
+       (WaitModule.EvaluationPromise is TGocciaPromiseValue) then
+      Exit(TGocciaPromiseValue(WaitModule.EvaluationPromise));
+
+    if ARequestedModule.EvaluationPromise is TGocciaPromiseValue then
+      Result := TGocciaPromiseValue(ARequestedModule.EvaluationPromise);
+  end;
+
+  procedure DrainRequestedModuleEvaluationPromises;
+  var
+    J: Integer;
+  begin
+    PendingDependencyPromise := nil;
+    PendingPromises := TList<TGocciaPromiseValue>.Create;
+    try
+      for J := 0 to LoadState.RequestedModules.Count - 1 do
+      begin
+        EvalPromise := WaitPromiseFor(LoadState.RequestedModules[J]);
+        if not Assigned(EvalPromise) then
+          Continue;
+
+        case EvalPromise.State of
+          gpsRejected:
+            raise TGocciaThrowValue.Create(EvalPromise.PromiseResult);
+          gpsPending:
+            PendingPromises.Add(EvalPromise);
+        end;
+      end;
+
+      if PendingPromises.Count = 0 then
+        Exit;
+      if PendingPromises.Count = 1 then
+      begin
+        PendingDependencyPromise := PendingPromises[0];
+        Exit;
+      end;
+
+      AggregatePromise := TGocciaPromiseValue.Create;
+      WaitState := TGocciaModuleEvaluationWaitState.Create(AggregatePromise,
+        PendingPromises.Count);
+      FulfillHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        WaitState.Fulfill, '<module-dependency-fulfill>', 1);
+      FulfillHandler.CapturedRoot := WaitState;
+      RejectHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        WaitState.Reject, '<module-dependency-reject>', 1);
+      RejectHandler.CapturedRoot := WaitState;
+      for J := 0 to PendingPromises.Count - 1 do
+        PendingPromises[J].InvokeThen(FulfillHandler, RejectHandler);
+      PendingDependencyPromise := AggregatePromise;
+    finally
+      PendingPromises.Free;
+    end;
+  end;
+
+begin
+  if not Assigned(AModule) or
+     (not FModuleLoadStates.TryGetValue(AModule.Path, LoadStateObject)) then
+    Exit;
+
+  LoadState := TGocciaModuleLoadState(LoadStateObject);
+  if LoadState.Status = mlsEvaluating then
+    Exit;
+
+  LoadState.Status := mlsEvaluating;
+  FEvaluatingModules.AddOrSetValue(LoadState.CacheKey, True);
+  FEvaluatingModules.AddOrSetValue(LoadState.ResolvedPath, True);
+  Succeeded := False;
+  try
+    for I := 0 to LoadState.RequestedModules.Count - 1 do
+      EvaluateLinkedModule(LoadState.RequestedModules[I]);
+    DrainRequestedModuleEvaluationPromises;
+
+    if Assigned(PendingDependencyPromise) then
+    begin
+      DeferredBody := TGocciaDeferredModuleBody.Create(Self,
+        LoadState.ProgramNode, LoadState.Context, AModule,
+        LoadState.ProgramNode.HasTopLevelAwait, LoadState.PipelineOptions);
+      LoadState.ProgramNode := nil;
+      DeferredHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        DeferredBody.Invoke, '<module-evaluation-continuation>', 1);
+      DeferredHandler.CapturedRoot := DeferredBody;
+      AModule.EvaluationPromise := PendingDependencyPromise.InvokeThen(
+        DeferredHandler, nil);
+      Succeeded := True;
+      Exit;
+    end;
+
+    ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
+      LoadState.PipelineOptions);
+    try
+      try
+        ProgramConsumed := False;
+        try
+          FEvaluateModuleBody(LoadState.ProgramNode, LoadState.Context,
+            ProgramConsumed);
+        finally
+          if ProgramConsumed then
+            LoadState.ProgramNode := nil;
+        end;
+      except
+        on E: EGocciaBytecodeThrow do
+        begin
+          RecordFailedModuleError(LoadState.CacheKey, E.ThrownValue,
+            AModule.LastModified);
+          raise;
+        end;
+        on E: TGocciaThrowValue do
+        begin
+          RecordFailedModuleError(LoadState.CacheKey, E.Value,
+            AModule.LastModified);
+          raise;
+        end;
+      end;
+    finally
+      ActiveOptionsScope.Free;
+    end;
+    ClearFailedModuleError(LoadState.CacheKey);
+    Succeeded := True;
+  finally
+    FEvaluatingModules.Remove(LoadState.CacheKey);
+    FEvaluatingModules.Remove(LoadState.ResolvedPath);
+    FModuleLoadStates.Remove(LoadState.ResolvedPath);
+    if not Succeeded then
+      FModules.Remove(LoadState.CacheKey);
+    LoadState.Free;
+    if not Succeeded then
+      { A cyclic peer may already have finished evaluation while retaining
+        a live import binding to this failed module. Keep the target alive
+        until loader teardown so reads and GC tracing cannot follow a
+        dangling module pointer. }
+      RetireModule(AModule);
+  end;
+end;
+
+function TGocciaModuleLoader.InstantiateModule(const AModulePath,
+  AImportingFilePath: string): TGocciaModule;
+var
+  AttributeType: string;
+  CacheKey: string;
   Content: TGocciaModuleContent;
   Context: TGocciaEvaluationContext;
   ExportClassDecl: TGocciaExportClassDeclaration;
@@ -1027,23 +1307,21 @@ var
   ExportFuncDecl: TGocciaExportFunctionDeclaration;
   ExportName: string;
   ExportVarDecl: TGocciaExportVariableDeclaration;
-  AttributeType: string;
-  CacheKey: string;
   FailedValue: TGocciaValue;
   I: Integer;
   ImportingFilePath: string;
   IsDeferredEvaluation: Boolean;
+  LoadState: TGocciaModuleLoadState;
+  LoadSucceeded: Boolean;
   Module: TGocciaModule;
   ModuleParseResult: TGocciaSourcePipelineModuleResult;
   ModuleWarning: TGocciaSourcePipelineWarning;
   ModuleScope: TGocciaScope;
+  Names: TUnicodeStringList;
   PipelineOptions: TGocciaSourcePipelineOptions;
-  PendingDependencyPromise: TGocciaPromiseValue;
-  RequestedModules: TGocciaModuleList;
-  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   ProgramNode: TGocciaProgram;
-  ProgramConsumed: Boolean;
   ReExportDecl: TGocciaReExportDeclaration;
+  RequestedModules: TGocciaModuleList;
   RequestedModulePath: string;
   ResolvedPath: string;
   Seen: TOrderedStringMap<Boolean>;
@@ -1051,10 +1329,6 @@ var
   Stmt: TGocciaStatement;
   Value: TGocciaValue;
   VirtualContentType: TGocciaVirtualModuleContentType;
-  LoadSucceeded: Boolean;
-  Names: TUnicodeStringList;
-  DeferredBody: TGocciaDeferredModuleBody;
-  DeferredHandler: TGocciaNativeFunctionValue;
 
   function TryResolveImportedLocal(const ALocalName: string;
     out AValue: TGocciaValue): Boolean;
@@ -1190,10 +1464,13 @@ var
     end;
   end;
 
-  procedure EvaluateRequestedModulesInSourceOrder;
+  // ES2026 §16.2.1.6.1.2.1 InnerModuleLinking(module, stack, index)
+  procedure LinkRequestedModulesInSourceOrder;
   var
     ImportDecl: TGocciaImportDeclaration;
+    ImportPair: TStringStringMap.TKeyValuePair;
     J: Integer;
+    NamespaceObject: TGocciaValue;
     RequestedModule: TGocciaModule;
   begin
     for J := 0 to ProgramNode.Body.Count - 1 do
@@ -1210,9 +1487,23 @@ var
             if Assigned(RequestedModule) then
             begin
               if (RequestedModule <> Module) and
-                 FEvaluatingModules.ContainsKey(RequestedModule.Path) then
+                 FLoadingModules.ContainsKey(RequestedModule.Path) then
                 Module.AsyncCycleRoot := RequestedModule;
               RequestedModules.Add(RequestedModule);
+              for ImportPair in ImportDecl.Imports do
+                ModuleScope.CreateImportBinding(ImportPair.Key,
+                  RequestedModule, ImportPair.Value);
+              if ImportDecl.NamespaceName <> '' then
+              begin
+                NamespaceObject := RequestedModule.GetNamespaceObject;
+                if ModuleScope.ContainsOwnLexicalBinding(
+                   ImportDecl.NamespaceName) then
+                  ModuleScope.ForceUpdateBinding(ImportDecl.NamespaceName,
+                    NamespaceObject)
+                else
+                  ModuleScope.DefineLexicalBinding(ImportDecl.NamespaceName,
+                    NamespaceObject, dtConst);
+              end;
             end;
           end;
           icpDefer:
@@ -1229,81 +1520,11 @@ var
         if Assigned(RequestedModule) then
         begin
           if (RequestedModule <> Module) and
-             FEvaluatingModules.ContainsKey(RequestedModule.Path) then
+             FLoadingModules.ContainsKey(RequestedModule.Path) then
             Module.AsyncCycleRoot := RequestedModule;
           RequestedModules.Add(RequestedModule);
         end;
       end;
-    end;
-  end;
-
-  procedure DrainRequestedModuleEvaluationPromises;
-  var
-    AggregatePromise: TGocciaPromiseValue;
-    EvalPromise: TGocciaPromiseValue;
-    FulfillHandler: TGocciaNativeFunctionValue;
-    J: Integer;
-    PendingPromises: TList<TGocciaPromiseValue>;
-    RejectHandler: TGocciaNativeFunctionValue;
-    WaitState: TGocciaModuleEvaluationWaitState;
-
-    function WaitPromiseFor(const ARequestedModule: TGocciaModule): TGocciaPromiseValue;
-    var
-      WaitModule: TGocciaModule;
-    begin
-      Result := nil;
-      if not Assigned(ARequestedModule) then
-        Exit;
-
-      WaitModule := ARequestedModule.AsyncCycleRoot;
-      if Assigned(WaitModule) and (WaitModule <> Module) and
-         (WaitModule.EvaluationPromise is TGocciaPromiseValue) then
-        Exit(TGocciaPromiseValue(WaitModule.EvaluationPromise));
-
-      if ARequestedModule.EvaluationPromise is TGocciaPromiseValue then
-        Result := TGocciaPromiseValue(ARequestedModule.EvaluationPromise);
-    end;
-  begin
-    PendingDependencyPromise := nil;
-
-    PendingPromises := TList<TGocciaPromiseValue>.Create;
-    try
-      for J := 0 to RequestedModules.Count - 1 do
-      begin
-        EvalPromise := WaitPromiseFor(RequestedModules[J]);
-        if not Assigned(EvalPromise) then
-          Continue;
-
-        case EvalPromise.State of
-          gpsRejected:
-            raise TGocciaThrowValue.Create(EvalPromise.PromiseResult);
-          gpsPending:
-            PendingPromises.Add(EvalPromise);
-        end;
-      end;
-
-      if PendingPromises.Count = 0 then
-        Exit;
-      if PendingPromises.Count = 1 then
-      begin
-        PendingDependencyPromise := PendingPromises[0];
-        Exit;
-      end;
-
-      AggregatePromise := TGocciaPromiseValue.Create;
-      WaitState := TGocciaModuleEvaluationWaitState.Create(AggregatePromise,
-        PendingPromises.Count);
-      FulfillHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        WaitState.Fulfill, '<module-dependency-fulfill>', 1);
-      FulfillHandler.CapturedRoot := WaitState;
-      RejectHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        WaitState.Reject, '<module-dependency-reject>', 1);
-      RejectHandler.CapturedRoot := WaitState;
-      for J := 0 to PendingPromises.Count - 1 do
-        PendingPromises[J].InvokeThen(FulfillHandler, RejectHandler);
-      PendingDependencyPromise := AggregatePromise;
-    finally
-      PendingPromises.Free;
     end;
   end;
 
@@ -1653,14 +1874,14 @@ begin
       end;
 
       ProgramNode := ModuleParseResult.TakeProgramNode;
-        RequestedModules := TGocciaModuleList.Create;
+      RequestedModules := TGocciaModuleList.Create;
+      LoadState := nil;
       try
         Module := TGocciaModule.Create(ResolvedPath);
         Module.LastModified := Content.LastModified;
         FModules.Add(CacheKey, Module);
-        FLoadingModules.Add(CacheKey, True);
-        FEvaluatingModules.AddOrSetValue(CacheKey, True);
-        FEvaluatingModules.AddOrSetValue(ResolvedPath, True);
+        FLoadingModules.AddOrSetValue(CacheKey, True);
+        FLoadingModules.AddOrSetValue(ResolvedPath, True);
         LoadSucceeded := False;
         try
           ModuleScope := FGlobalScope.CreateChild(skModule,
@@ -1694,63 +1915,38 @@ begin
             HoistVarDeclarations(ProgramNode.Body, ModuleScope, Context);
           Context.ModuleEnvironmentInitialized := True;
           RegisterStaticModuleExports(False);
-          EvaluateRequestedModulesInSourceOrder;
+
+          LoadState := TGocciaModuleLoadState.Create;
+          LoadState.CacheKey := CacheKey;
+          LoadState.Context := Context;
+          LoadState.Module := Module;
+          LoadState.PipelineOptions := PipelineOptions;
+          LoadState.ProgramNode := ProgramNode;
+          LoadState.RequestedModules := RequestedModules;
+          LoadState.ResolvedPath := ResolvedPath;
+          LoadState.Status := mlsLinking;
+          FModuleLoadStates.Add(ResolvedPath, LoadState);
+
+          LinkRequestedModulesInSourceOrder;
           RegisterStaticModuleExports(True);
-          DrainRequestedModuleEvaluationPromises;
-
-          if Assigned(PendingDependencyPromise) then
-          begin
-            DeferredBody := TGocciaDeferredModuleBody.Create(Self,
-              ProgramNode, Context, Module, ProgramNode.HasTopLevelAwait,
-              PipelineOptions);
-            ProgramNode := nil;
-            DeferredHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-              DeferredBody.Invoke, '<module-evaluation-continuation>', 1);
-            DeferredHandler.CapturedRoot := DeferredBody;
-            Module.EvaluationPromise := PendingDependencyPromise.InvokeThen(
-              DeferredHandler, nil);
-            Result := Module;
-            LoadSucceeded := True;
-            Exit;
-          end;
-
-          ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
-            PipelineOptions);
-          try
-            try
-              ProgramConsumed := False;
-              try
-                FEvaluateModuleBody(ProgramNode, Context, ProgramConsumed);
-              finally
-                if ProgramConsumed then
-                  ProgramNode := nil;
-              end;
-            except
-              on E: EGocciaBytecodeThrow do
-              begin
-                RecordFailedModuleError(CacheKey, E.ThrownValue,
-                  Content.LastModified);
-                raise;
-              end;
-              on E: TGocciaThrowValue do
-              begin
-                RecordFailedModuleError(CacheKey, E.Value,
-                  Content.LastModified);
-                raise;
-              end;
-            end;
-          finally
-            ActiveOptionsScope.Free;
-          end;
+          LoadState.Status := mlsLinked;
           Result := Module;
           LoadSucceeded := True;
-          ClearFailedModuleError(CacheKey);
+          ProgramNode := nil;
+          RequestedModules := nil;
         finally
-          FEvaluatingModules.Remove(CacheKey);
-          FEvaluatingModules.Remove(ResolvedPath);
           FLoadingModules.Remove(CacheKey);
+          FLoadingModules.Remove(ResolvedPath);
           if not LoadSucceeded then
           begin
+            if Assigned(LoadState) then
+            begin
+              FModuleLoadStates.Remove(ResolvedPath);
+              LoadState.Free;
+              LoadState := nil;
+              ProgramNode := nil;
+              RequestedModules := nil;
+            end;
             FModules.Remove(CacheKey);
             Module.Free;
           end;

@@ -22,7 +22,9 @@ type
   TGocciaModule = class;
   TGocciaModuleList = TList<TGocciaModule>;
   TGocciaModuleExportBinding = class;
+  TGocciaModuleImportBinding = class;
   TGocciaModuleExportBindingMap = TOrderedStringMap<TGocciaModuleExportBinding>;
+  TGocciaModuleImportBindingMap = TOrderedStringMap<TGocciaModuleImportBinding>;
   TLoadModuleCallback = function(const AModulePath, AImportingFilePath: string): TGocciaModule of object;
   TLoadModuleSourceCallback = function(const AModulePath,
     AImportingFilePath: string): TGocciaValue of object;
@@ -47,6 +49,19 @@ type
     function GetValue: TGocciaValue;
     procedure UpdateValue(const AValue: TGocciaValue);
     procedure MarkReferences;
+  end;
+
+  TGocciaModuleImportBinding = class
+  private
+    FTargetExportName: string;
+    FTargetModule: TGocciaModule;
+  public
+    constructor Create(const ATargetModule: TGocciaModule;
+      const ATargetExportName: string);
+    function Matches(const ATargetModule: TGocciaModule;
+      const ATargetExportName: string): Boolean;
+    procedure MarkReferences;
+    function TryGetValue(out AValue: TGocciaValue): Boolean;
   end;
 
   TGocciaModule = class
@@ -316,6 +331,44 @@ begin
   Value := GetValue;
   if Assigned(Value) then
     Value.MarkReferences;
+end;
+
+{ TGocciaModuleImportBinding }
+
+constructor TGocciaModuleImportBinding.Create(
+  const ATargetModule: TGocciaModule; const ATargetExportName: string);
+begin
+  inherited Create;
+  FTargetModule := ATargetModule;
+  FTargetExportName := ATargetExportName;
+end;
+
+function TGocciaModuleImportBinding.Matches(
+  const ATargetModule: TGocciaModule;
+  const ATargetExportName: string): Boolean;
+begin
+  Result := (FTargetModule = ATargetModule) and
+    (FTargetExportName = ATargetExportName);
+end;
+
+procedure TGocciaModuleImportBinding.MarkReferences;
+var
+  Value: TGocciaValue;
+begin
+  try
+    if TryGetValue(Value) and Assigned(Value) then
+      Value.MarkReferences;
+  except
+    on TGocciaReferenceError do
+      Exit;
+  end;
+end;
+
+function TGocciaModuleImportBinding.TryGetValue(
+  out AValue: TGocciaValue): Boolean;
+begin
+  Result := Assigned(FTargetModule) and
+    FTargetModule.TryGetExportValue(FTargetExportName, AValue);
 end;
 
 { TGocciaModule }
