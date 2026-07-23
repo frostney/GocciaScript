@@ -36,6 +36,7 @@ type
     function IteratorSome(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorEvery(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorFind(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IteratorIncludes(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorFlatMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorConcat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -99,9 +100,12 @@ procedure PreserveCurrentExceptionAcrossNestedHandler;
 implementation
 
 uses
+  Math,
   SysUtils,
 
+  Goccia.Arithmetic,
   Goccia.Constants.ConstructorNames,
+  Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -563,6 +567,53 @@ begin
     GC.RemoveTempRoot(AValue);
 end;
 
+procedure CloseDirectIterator(const AIteratorObject: TGocciaValue);
+var
+  CallArgs: TGocciaArgumentsCollection;
+  ReturnMethod, ReturnResult: TGocciaValue;
+  IteratorWasRooted, ReturnMethodWasRooted: Boolean;
+begin
+  IteratorWasRooted := AddTempRootIfNeeded(AIteratorObject);
+  try
+    ReturnMethod := TGocciaObjectValue(AIteratorObject).GetProperty(PROP_RETURN);
+    if not Assigned(ReturnMethod) or
+       (ReturnMethod is TGocciaUndefinedLiteralValue) or
+       (ReturnMethod is TGocciaNullLiteralValue) then
+      Exit;
+    if not ReturnMethod.IsCallable then
+      ThrowTypeError(SErrorIteratorReturnMustBeCallable,
+        SSuggestIteratorProtocol);
+
+    ReturnMethodWasRooted := AddTempRootIfNeeded(ReturnMethod);
+    try
+      CallArgs := TGocciaArgumentsCollection.Create;
+      try
+        ReturnResult := InvokeCallable(ReturnMethod, CallArgs,
+          AIteratorObject);
+      finally
+        CallArgs.Free;
+      end;
+      if not (ReturnResult is TGocciaObjectValue) then
+        ThrowTypeError(SErrorIteratorReturnObject,
+          SSuggestIteratorResultObject);
+    finally
+      RemoveTempRootIfNeeded(ReturnMethod, ReturnMethodWasRooted);
+    end;
+  finally
+    RemoveTempRootIfNeeded(AIteratorObject, IteratorWasRooted);
+  end;
+end;
+
+procedure CloseDirectIteratorPreservingError(
+  const AIteratorObject: TGocciaValue);
+begin
+  try
+    CloseDirectIterator(AIteratorObject);
+  except
+    // An existing abrupt completion takes precedence over close failures.
+  end;
+end;
+
 { TGocciaIteratorValue }
 
 constructor TGocciaIteratorValue.Create;
@@ -733,6 +784,7 @@ begin
     Members.AddNamedMethod('some', IteratorSome, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddNamedMethod('every', IteratorEvery, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddNamedMethod('find', IteratorFind, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('includes', IteratorIncludes, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddNamedMethod('flatMap', IteratorFlatMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     PrototypeMembers := Members.ToDefinitions;
   finally
@@ -1413,6 +1465,88 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+  end;
+end;
+
+function TGocciaIteratorValue.IteratorIncludes(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Iterator: TGocciaIteratorValue;
+  NumberArg: TGocciaNumberLiteralValue;
+  SearchElement, SkippedArg, Value: TGocciaValue;
+  SkippedElements, Skipped: Double;
+  Done: Boolean;
+  IteratorWasRooted, SearchWasRooted: Boolean;
+begin
+  // Iterator Includes proposal §sec-iterator.prototype.includes.
+  if not (AThisValue is TGocciaObjectValue) then
+    ThrowTypeError(SErrorIteratorIncludesNonIterator,
+      SSuggestIteratorThisType);
+
+  SearchElement := AArgs.GetElement(0);
+  SkippedArg := AArgs.GetElement(1);
+  SkippedElements := 0;
+  if not (SkippedArg is TGocciaUndefinedLiteralValue) then
+  begin
+    if not (SkippedArg is TGocciaNumberLiteralValue) then
+    begin
+      CloseDirectIteratorPreservingError(AThisValue);
+      ThrowTypeError(SErrorIteratorIncludesSkippedElementsNumber,
+        SSuggestIteratorIncludesSkippedElements);
+    end;
+
+    NumberArg := TGocciaNumberLiteralValue(SkippedArg);
+    if NumberArg.IsNaN or
+       (not NumberArg.IsInfinite and (Frac(NumberArg.Value) <> 0)) then
+    begin
+      CloseDirectIteratorPreservingError(AThisValue);
+      ThrowTypeError(SErrorIteratorIncludesSkippedElementsNumber,
+        SSuggestIteratorIncludesSkippedElements);
+    end;
+    if NumberArg.Value < 0 then
+    begin
+      CloseDirectIteratorPreservingError(AThisValue);
+      ThrowRangeError(SErrorIteratorIncludesSkippedElementsNegative,
+        SSuggestIteratorIncludesSkippedElements);
+    end;
+    if not NumberArg.IsInfinite and
+       (NumberArg.Value > MAX_SAFE_INTEGER_F) then
+    begin
+      CloseDirectIteratorPreservingError(AThisValue);
+      ThrowRangeError(SErrorIteratorIncludesSkippedElementsTooLarge,
+        SSuggestIteratorIncludesSkippedElements);
+    end;
+    SkippedElements := NumberArg.Value;
+  end;
+
+  SearchWasRooted := AddTempRootIfNeeded(SearchElement);
+  try
+    Iterator := IteratorThisToDirectIterator(AThisValue, 'includes');
+    IteratorWasRooted := AddTempRootIfNeeded(Iterator);
+    try
+      Skipped := 0;
+      while True do
+      begin
+        Value := Iterator.DirectNext(Done);
+        if Done then
+          Exit(TGocciaBooleanLiteralValue.FalseValue);
+        if Skipped < SkippedElements then
+        begin
+          Skipped := Skipped + 1;
+          Continue;
+        end;
+        if IsSameValueZero(Value, SearchElement) then
+        begin
+          CloseDirectIterator(AThisValue);
+          Exit(TGocciaBooleanLiteralValue.TrueValue);
+        end;
+      end;
+    finally
+      RemoveTempRootIfNeeded(Iterator, IteratorWasRooted);
+    end;
+  finally
+    RemoveTempRootIfNeeded(SearchElement, SearchWasRooted);
   end;
 end;
 

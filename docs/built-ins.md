@@ -389,7 +389,7 @@ ErrorName: message
 
 ### Iterator (`Goccia.Values.IteratorValue.pas`, `Iterator.Concrete.pas`, `Iterator.Lazy.pas`, `Iterator.Concat.pas`, `Iterator.Generic.pas`)
 
-Implements the [ECMAScript Iterator Helpers](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Iterator), Iterator Sequencing (`Iterator.concat`), and the Stage 3 Joint Iteration proposal (`Iterator.zip`).
+Implements the [ECMAScript Iterator Helpers](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Iterator), Iterator Sequencing (`Iterator.concat`), the Stage 3 Joint Iteration proposal (`Iterator.zip`), and the Stage 3 [Iterator Includes](https://github.com/tc39/proposal-iterator-includes) proposal.
 
 All built-in iterators (Array, String, Map, Set) share a common `Iterator.prototype` with helper methods per the ECMAScript Iterator Helpers proposal:
 
@@ -408,8 +408,9 @@ All built-in iterators (Array, String, Map, Set) share a common `Iterator.protot
 | `iter.some(callback)` | Test if any value matches |
 | `iter.every(callback)` | Test if all values match |
 | `iter.find(callback)` | Find first matching value |
+| `iter.includes(searchElement, skippedElements?)` | Consume the iterator until a value matches by SameValueZero, optionally ignoring a non-negative integral Number of leading values |
 
-**Lazy helpers:** `map`, `filter`, `take`, `drop`, and `flatMap` return new lazy iterators that advance the source on-demand — they do not eagerly consume the underlying iterator. Consuming methods (`forEach`, `reduce`, `toArray`, `some`, `every`, `find`) do consume the iterator.
+**Lazy helpers:** `map`, `filter`, `take`, `drop`, and `flatMap` return new lazy iterators that advance the source on-demand — they do not eagerly consume the underlying iterator. Consuming methods (`forEach`, `reduce`, `toArray`, `some`, `every`, `find`, `includes`) do consume the iterator. `includes` closes the source when it finds a match, but leaves a normally exhausted source closed by exhaustion alone.
 
 Iterators are consumed once — calling `next()` past the end returns `{value: undefined, done: true}` forever. Spread (`[...iter]`), destructuring, and `Array.from()` all consume iterators via the `[Symbol.iterator]` protocol.
 
