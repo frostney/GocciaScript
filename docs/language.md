@@ -7,7 +7,7 @@
 
 - **Recommended defaults** — Modern, explicit ECMAScript: `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules; this profile is product policy rather than the engine's language ceiling
 - **Conformance objective** — Core ECMAScript compatibility is a release-track objective, measured by generated test262 reports; Annex B's browser-only legacy surface is deferred until any future Web API/browser-compatibility profile
-- **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
+- **TC39 proposals** — Decorators, decorator metadata, Iterator Includes, pattern matching, types as comments, enums, `Math.clamp`
 - **Excluded by design** — Runtime `eval` outside private conformance host hooks
 - **Parser policy** — Parser-recognized excluded or disabled syntax (`var`, `function`, `==`/`!=`, labels, `while`/`do...while`, `with`, traditional `for(;;)`, `for...in`) is a `SyntaxError` by default. `--warning-unsupported-features` / `"warning-unsupported-features": true` restores warning plus recovery behavior for migration and diagnostics without enabling real semantics.
 - **Compatibility flags** — `--compat-*` flags primarily exist for ECMAScript conformance and legacy semantic requirements. Userland code should usually prefer default forms instead of enabling ASI (`--compat-asi`), `var` (`--compat-var`), `function` (`--compat-function`), implicit `arguments` (`--compat-arguments-object`), non-strict Script compatibility (`--compat-non-strict-mode`), loose equality (`--compat-loose-equality`), labels (`--compat-label`), traditional loops (`--compat-traditional-for-loop`), `for...in` (`--compat-for-in-loop`), or `while`/`do...while` (`--compat-while-loops`) preemptively.
@@ -921,7 +921,7 @@ With `--compat-function` and `--compat-non-strict-mode`, sloppy labeled function
 
 ### Generators and Iterators
 
-Generator method shorthand (`*method()` and `async *method()`) is supported by default. Generator function syntax (`function*` and `async function*`) is supported only when `--compat-function` is enabled. Iterator protocol and Iterator Helpers are also implemented.
+Generator method shorthand (`*method()` and `async *method()`) is supported by default. Generator function syntax (`function*` and `async function*`) is supported only when `--compat-function` is enabled. Iterator protocol and Iterator Helpers are also implemented, including the Stage 3 [Iterator Includes](https://github.com/tc39/proposal-iterator-includes) consuming search method. `Iterator.prototype.includes(searchElement, skippedElements?)` compares with SameValueZero; `skippedElements` must be an integral Number from zero through `Number.MAX_SAFE_INTEGER`, or positive `Infinity`, and is not coerced. Finding a match closes the iterator, while normal exhaustion does not perform an additional close.
 
 ## Intentional Divergences from ECMAScript
 

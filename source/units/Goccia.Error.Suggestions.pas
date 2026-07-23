@@ -212,6 +212,7 @@ resourcestring
   SSuggestIteratorCallable = 'pass a function as the first argument';
   SSuggestIteratorFlatMapCallable = 'pass a function that returns an iterable';
   SSuggestIteratorNonNegative = 'pass a non-negative integer as the argument';
+  SSuggestIteratorIncludesSkippedElements = 'pass an integral Number from 0 through Number.MAX_SAFE_INTEGER, or Infinity';
   SSuggestIteratorFromArg = 'pass an array, string, set, map, or object with Symbol.iterator or a next() method';
   SSuggestIteratorZipOptions = 'pass an options object with mode and/or padding properties';
   SSuggestIteratorZipKeyedArg = 'pass an object whose values are iterables';
