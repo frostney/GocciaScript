@@ -201,29 +201,22 @@ jobs:
             echo "${name} built successfully for ${TARGET}"
           done
 
-          echo ""
-          echo "=== Building GocciaTOMLCheck for ${TARGET} ==="
-          "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
-            -Fu./source/units -Fu./source/generated -Fu./source/shared -Fu./source/app -Fu./souffle \
-            -Fi./source/units -Fi./source/shared -Fi./souffle \
-            -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$FCL_NET_SRC" -Fu"$OPENSSL_SRC" \
-            -FU"build/compiled" -FE"build" \
-            $EXTRA_FLAGS \
-            -dFPC_SOFT_FPUX80 \
-            "./scripts/GocciaTOMLCheck.dpr"
-          echo "GocciaTOMLCheck built successfully for ${TARGET}"
-
-          echo ""
-          echo "=== Building GocciaJSON5Check for ${TARGET} ==="
-          "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
-            -Fu./source/units -Fu./source/generated -Fu./source/shared -Fu./source/app -Fu./souffle \
-            -Fi./source/units -Fi./source/shared -Fi./souffle \
-            -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$FCL_NET_SRC" -Fu"$OPENSSL_SRC" \
-            -FU"build/compiled" -FE"build" \
-            $EXTRA_FLAGS \
-            -dFPC_SOFT_FPUX80 \
-            "./scripts/GocciaJSON5Check.dpr"
-          echo "GocciaJSON5Check built successfully for ${TARGET}"
+          # Compliance runners are explicit CI targets. They live outside the
+          # release-entrypoint glob so they cannot enter release archives.
+          for src in ./source/app/compliance/*.dpr; do
+            name="$(basename "${src%.dpr}")"
+            echo ""
+            echo "=== Building ${name} for ${TARGET} ==="
+            "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
+              -Fu./source/units -Fu./source/generated -Fu./source/shared -Fu./source/app -Fu./source/app/compliance -Fu./souffle \
+              -Fi./source/units -Fi./source/shared -Fi./souffle \
+              -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$FCL_NET_SRC" -Fu"$OPENSSL_SRC" \
+              -FU"build/compiled" -FE"build" \
+              $EXTRA_FLAGS \
+              -dFPC_SOFT_FPUX80 \
+              "$src"
+            echo "${name} built successfully for ${TARGET}"
+          done
 
           echo ""
           echo "=== Build artifacts for ${TARGET} ==="
@@ -232,31 +225,17 @@ jobs:
       - name: Stage build artifacts
         run: bash ./.github/scripts/stage-build-artifacts.sh build ci-artifacts --include-tests --strip
 
-      - name: Stage TOML compliance harness
+      - name: Stage TOML compliance runner
         run: |
           copied=0
-          for candidate in build/GocciaTOMLCheck build/GocciaTOMLCheck.exe; do
+          for candidate in build/GocciaTOMLComplianceRunner build/GocciaTOMLComplianceRunner.exe; do
             if [ -f "$candidate" ]; then
               cp "$candidate" ci-artifacts/
               copied=1
             fi
           done
           if [ "$copied" -eq 0 ]; then
-            echo "::error::Missing compiled GocciaTOMLCheck binary in build/"
-            exit 1
-          fi
-
-      - name: Stage JSON5 compliance harness
-        run: |
-          copied=0
-          for candidate in build/GocciaJSON5Check build/GocciaJSON5Check.exe; do
-            if [ -f "$candidate" ]; then
-              cp "$candidate" ci-artifacts/
-              copied=1
-            fi
-          done
-          if [ "$copied" -eq 0 ]; then
-            echo "::error::Missing compiled GocciaJSON5Check binary in build/"
+            echo "::error::Missing compiled GocciaTOMLComplianceRunner binary in build/"
             exit 1
           fi
 
@@ -432,39 +411,40 @@ jobs:
 
       - name: Run TOML 1.1.0 compliance suite
         run: |
-          PYTHON_BIN="$(command -v python3 || command -v python)"
-          HARNESS="./build/GocciaTOMLCheck"
-          if [ -f "./build/GocciaTOMLCheck.exe" ]; then
-            HARNESS="./build/GocciaTOMLCheck.exe"
+          set -euo pipefail
+          pin="$(tr -d '\r\n' < tests/compliance/toml-test.pin)"
+          suite_dir="$RUNNER_TEMP/toml-test"
+          git init "$suite_dir"
+          git -C "$suite_dir" remote add origin https://github.com/toml-lang/toml-test.git
+          git -C "$suite_dir" fetch --depth 1 origin "$pin"
+          git -C "$suite_dir" checkout --detach "$pin"
+          runner="./build/GocciaTOMLComplianceRunner"
+          if [ -f "$runner.exe" ]; then
+            runner="$runner.exe"
           fi
-          "$PYTHON_BIN" scripts/run_toml_test_suite.py --harness="$HARNESS" --output=toml-test-results-${{ matrix.target }}.json
+          "$runner" --suite-dir="$suite_dir" --jobs=4 \
+            --output=toml-test-results-${{ matrix.target }}.json
 
       - name: Check TOML compliance summary
         if: always()
         run: |
-          PYTHON_BIN="$(command -v python3 || command -v python)"
-          "$PYTHON_BIN" - <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          path = Path("toml-test-results-${{ matrix.target }}.json")
-          if not path.exists():
-            print(f"::error::Missing TOML report: {path}")
-            sys.exit(1)
-
-          summary = json.loads(path.read_text())["summary"]
-          expected_zero = ["failed", "false_accepts", "false_rejects", "valid_mismatches", "timeouts"]
-          for key in expected_zero:
-            if summary.get(key) != 0:
-              print(f"::error::{key}={summary.get(key)} in {path}")
-              print(json.dumps(summary, indent=2))
-              sys.exit(1)
-          if summary.get("total") != summary.get("passed"):
-            print(f"::error::passed={summary.get('passed')} total={summary.get('total')} in {path}")
-            print(json.dumps(summary, indent=2))
-            sys.exit(1)
-          PY
+          node - <<'JS'
+          const fs = require("fs");
+          const path = "toml-test-results-${{ matrix.target }}.json";
+          if (!fs.existsSync(path)) {
+            throw new Error(`Missing TOML report: ${path}`);
+          }
+          const report = JSON.parse(fs.readFileSync(path, "utf8"));
+          if (
+            report.reportVersion !== 1 ||
+            report.runner?.name !== "GocciaTOMLComplianceRunner" ||
+            report.suite?.name !== "toml-test" ||
+            typeof report.summary?.failed !== "number" ||
+            !Array.isArray(report.cases)
+          ) {
+            throw new Error(`Unexpected TOML report shape: ${path}`);
+          }
+          JS
 
       - name: Upload TOML compliance report
         if: always()
@@ -514,59 +494,39 @@ jobs:
 
       - name: Run JSON5 compliance suite
         run: |
-          PYTHON_BIN="$(command -v python3 || command -v python)"
-          HARNESS="./build/GocciaJSON5Check"
-          TEST_RUNNER="./build/GocciaTestRunner"
-          if [ -f "./build/GocciaJSON5Check.exe" ]; then
-            HARNESS="./build/GocciaJSON5Check.exe"
+          set -euo pipefail
+          pin="$(tr -d '\r\n' < tests/compliance/json5.pin)"
+          grep -Fq "Upstream json5/json5 revision: $pin" \
+            tests/built-ins/JSON5/upstream-parse.js
+          test_runner="./build/GocciaTestRunner"
+          if [ -f "$test_runner.exe" ]; then
+            test_runner="$test_runner.exe"
           fi
-          if [ -f "./build/GocciaTestRunner.exe" ]; then
-            TEST_RUNNER="./build/GocciaTestRunner.exe"
-          fi
-          "$PYTHON_BIN" scripts/run_json5_test_suite.py --harness="$HARNESS" --test-runner="$TEST_RUNNER" --output=json5-test-results-${{ matrix.target }}.json
+          "$test_runner" \
+            tests/built-ins/JSON5/upstream-parse.js \
+            tests/built-ins/JSON5/stringify.js \
+            --jobs=4 --no-progress \
+            --output=json5-test-results-${{ matrix.target }}.json
 
       - name: Check JSON5 compliance summary
         if: always()
         run: |
-          PYTHON_BIN="$(command -v python3 || command -v python)"
-          "$PYTHON_BIN" - <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          path = Path("json5-test-results-${{ matrix.target }}.json")
-          if not path.exists():
-            print(f"::error::Missing JSON5 report: {path}")
-            sys.exit(1)
-
-          summary = json.loads(path.read_text())
-          parse_summary = summary["summary"]["parse"]
-          stringify_summary = summary["summary"]["stringify"]
-
-          expected_parse_zero = ["failed", "false_accepts", "false_rejects", "valid_mismatches", "timeouts"]
-          for key in expected_parse_zero:
-            if parse_summary.get(key) != 0:
-              print(f"::error::parse.{key}={parse_summary.get(key)} in {path}")
-              print(json.dumps(summary, indent=2))
-              sys.exit(1)
-
-          if parse_summary.get("total") != parse_summary.get("passed"):
-            print(f"::error::parse.passed={parse_summary.get('passed')} parse.total={parse_summary.get('total')} in {path}")
-            print(json.dumps(summary, indent=2))
-            sys.exit(1)
-
-          expected_stringify_zero = ["failed", "skipped"]
-          for key in expected_stringify_zero:
-            if stringify_summary.get(key) != 0:
-              print(f"::error::stringify.{key}={stringify_summary.get(key)} in {path}")
-              print(json.dumps(summary, indent=2))
-              sys.exit(1)
-
-          if stringify_summary.get("totalTests") != stringify_summary.get("passed"):
-            print(f"::error::stringify.passed={stringify_summary.get('passed')} stringify.totalTests={stringify_summary.get('totalTests')} in {path}")
-            print(json.dumps(summary, indent=2))
-            sys.exit(1)
-          PY
+          node - <<'JS'
+          const fs = require("fs");
+          const path = "json5-test-results-${{ matrix.target }}.json";
+          if (!fs.existsSync(path)) {
+            throw new Error(`Missing JSON5 report: ${path}`);
+          }
+          const report = JSON.parse(fs.readFileSync(path, "utf8"));
+          if (
+            report.ok !== true ||
+            report.failed !== 0 ||
+            report.totalFiles !== report.results?.length ||
+            !Array.isArray(report.results)
+          ) {
+            throw new Error(`Unexpected JSON5 report shape: ${path}`);
+          }
+          JS
 
       - name: Upload JSON5 compliance report
         if: always()
