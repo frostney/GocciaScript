@@ -1,0 +1,79 @@
+name: JSON5 suite weekly bump
+
+# Updates the pinned json5/json5 revision and deterministically regenerates
+# the executable parser-case manifest from a prepared checkout.
+
+on:
+  schedule:
+    - cron: '45 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      - name: Install FPC
+        run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
+
+      - id: latest
+        run: |
+          sha=$(gh api repos/json5/json5/commits/main --jq .sha)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short=${sha:0:8}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update pin
+        run: bun scripts/suite-bump-pin.ts tests/compliance/json5.pin ${{ steps.latest.outputs.sha }}
+
+      - name: Prepare pinned checkout
+        run: |
+          git init "$RUNNER_TEMP/json5"
+          git -C "$RUNNER_TEMP/json5" remote add origin https://github.com/json5/json5.git
+          git -C "$RUNNER_TEMP/json5" fetch --depth 1 origin "${{ steps.latest.outputs.sha }}"
+          git -C "$RUNNER_TEMP/json5" checkout --detach "${{ steps.latest.outputs.sha }}"
+
+      - name: Regenerate manifest
+        run: |
+          ./build.pas json5compliancerunner
+          ./build/GocciaJSON5ComplianceRunner \
+            --regenerate-manifest \
+            --suite-dir="$RUNNER_TEMP/json5" \
+            --manifest=tests/compliance/json5-manifest.json
+
+      - id: changed
+        run: |
+          if git diff --quiet -- tests/compliance/json5.pin tests/compliance/json5-manifest.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "JSON5 suite already pinned to ${{ steps.latest.outputs.short }} — no PR to open."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update PR
+        if: steps.changed.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          branch: chore/json5-test-bump
+          commit-message: "chore(json5): bump suite pin to ${{ steps.latest.outputs.short }}"
+          title: "chore(json5): bump suite pin to ${{ steps.latest.outputs.short }}"
+          body: |
+            Automated bump of the json5/json5 SHA pin to `${{ steps.latest.outputs.sha }}`.
+
+            The executable parser-case manifest was regenerated from that
+            exact checkout. CI will run parser and stringify compliance.
+
+            Cron: weekly, Mondays 06:45 UTC.
+          labels: |
+            json5
+            automated

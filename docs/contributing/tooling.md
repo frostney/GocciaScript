@@ -110,11 +110,11 @@ from a clean build.
 FPC 3.2.2 aborts with `Fatal: Internal error 200611011` when a second program
 is compiled against the `.ppu` files another program left in a shared `-FU`
 unit-output directory (the inliner trips while recompiling a unit it loaded
-from the first program's build). This is why `build.pas` compiles every target
-into its own `build/compiled/targets/<target>` directory, and why
-`scripts/run_json5_test_suite.py` gives each program its own subdirectory of
-its build dir. Any script that compiles more than one program with
-`fpc @config.cfg` must use a separate `-FU` directory per program.
+from the first program's build). This is why `build.pas` compiles every target,
+including the TOML and JSON5 compliance runners, into its own
+`build/compiled/targets/<target>` directory. Any script that compiles more than
+one program with `fpc @config.cfg` must use a separate `-FU` directory per
+program.
 
 ### `Int64` to `Double` Conversion on FPC 3.2.2
 

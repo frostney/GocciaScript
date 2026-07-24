@@ -71,7 +71,12 @@ After `import * as JSON5 from "goccia:json5"`, `JSON5.parse` delegates to the st
 
 The `stringify` export delegates to `TGocciaJSON5Stringifier`, which reuses the same shared serialization core as strict JSON but switches to JSON5 formatting rules. That means unquoted identifier keys, single- or double-quoted strings (with optional `{ quote: "'" | '"' }` override), preserved `Infinity` / `-Infinity` / `NaN`, trailing commas when pretty-printing, `toJSON5()` preference over `toJSON()`, and the same replacer / space semantics as JSON plus the upstream JSON5 options-object form `{ replacer, space, quote }`.
 
-Compatibility goal: GocciaScript is targeting full JSON5 parser compatibility plus upstream-aligned stringify behavior. `python3 scripts/run_json5_test_suite.py` now runs both the official `json5/json5` parser corpus and the local upstream-aligned stringify suite in one command, and `python3 scripts/run_json5_test_suite.py --harness=./build/GocciaJSON5Check` reuses a prebuilt parser decoder when you already have it.
+Compatibility goal: GocciaScript is targeting full JSON5 parser compatibility
+plus upstream-aligned stringify behavior. The native
+`GocciaJSON5ComplianceRunner` runs the pinned upstream parser manifest through
+`GocciaTestRunner` and then runs the local upstream-aligned stringify suite.
+See [Testing](testing.md#running-tests) for checkout preparation and
+commands.
 
 ## YAML (`goccia:yaml`, `Goccia.Builtins.YAML.pas`)
 
@@ -141,4 +146,8 @@ After `import * as TOML from "goccia:toml"`, `TOML.parse` delegates to the stand
 
 TOML date/time values currently map to validated string scalars rather than Temporal values. This keeps the runtime and module-import behavior stable for v1 while leaving room for future Temporal-aware interop.
 
-Compatibility goal: GocciaScript is targeting full TOML 1.1.0 support over time. Historical decision context lives in [Architecture Decision Records](adr/), and the official `toml-test` rerun command is `python3 scripts/run_toml_test_suite.py` or `python3 scripts/run_toml_test_suite.py --harness=./build/GocciaTOMLCheck` when you already have the decoder harness built.
+Compatibility goal: GocciaScript is targeting full TOML 1.1.0 support over
+time. Historical decision context lives in
+[Architecture Decision Records](adr/). The native
+`GocciaTOMLComplianceRunner` verifies and runs a prepared pinned `toml-test`
+checkout; see [Testing](testing.md#running-tests).

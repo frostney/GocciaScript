@@ -1,14 +1,21 @@
 #!/usr/bin/env node
 
+// Maintainer-only adapter: normal compliance runs consume the committed
+// revision-tagged manifest and do not require Node.js.
 const Module = require("module");
+const fs = require("fs");
 const path = require("path");
 
-if (process.argv.length !== 3) {
-  console.error("Usage: extract_json5_cases.js <json5-repo-dir>");
+if (process.argv.length !== 5) {
+  console.error(
+    "Usage: regenerate-json5-manifest.js <json5-repo-dir> <revision> <output>",
+  );
   process.exit(2);
 }
 
 const suiteDir = path.resolve(process.argv[2]);
+const revision = process.argv[3];
+const outputPath = path.resolve(process.argv[4]);
 const testDir = path.join(suiteDir, "test");
 const realJSON5 = require(path.join(suiteDir, "lib"));
 
@@ -199,4 +206,11 @@ Module._load = function patchedLoad(request, parent, isMain) {
 require(path.join(testDir, "parse.js"));
 require(path.join(testDir, "errors.js"));
 
-process.stdout.write(`${JSON.stringify({ cases }, null, 2)}\n`);
+const manifest = {
+  manifestVersion: 1,
+  suite: "json5",
+  revision,
+  cases,
+};
+fs.writeFileSync(outputPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+process.stdout.write(`${outputPath}\n`);

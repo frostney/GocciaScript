@@ -420,18 +420,16 @@ This check is intentionally parse-only: it compares whether each suite case shou
 
 **Official TOML Suite**
 
-For TOML 1.1.0 checks against the official `toml-test` corpus (pinned to a specific SHA in the script), run:
+For TOML 1.1.0 checks against a prepared checkout of the official `toml-test` corpus, run:
 
 ```bash
-python3 scripts/run_toml_test_suite.py
-python3 scripts/run_toml_test_suite.py --output=tmp/toml-suite-results.json
-python3 scripts/run_toml_test_suite.py --suite-dir=/path/to/toml-test
-python3 scripts/run_toml_test_suite.py --harness=./build/GocciaTOMLCheck --output=tmp/toml-suite-results.json
+./build.pas tomlcompliancerunner
+./build/GocciaTOMLComplianceRunner --suite-dir=/path/to/toml-test --output=tmp/toml-suite-results.json
 ```
 
-Unlike the YAML script, this harness compares both parse/fail behavior and the official tagged JSON fixtures for valid cases. It uses a Pascal decoder built around `TGocciaTOMLParser.ParseDocument(...)` so TOML scalar kinds like `integer`, `float`, `datetime`, `datetime-local`, `date-local`, and `time-local` remain visible during compliance checks even though the normal TOML runtime API still maps date/time values to strings.
+The runner verifies the checkout against `tests/compliance/toml-test.pin` without fetching or cloning. It launches its private worker mode once per case, applies a bounded `--jobs` limit, and classifies mismatches, false accepts, false rejects, timeouts, crashes, and infrastructure failures. Valid cases are compared with the official tagged JSON fixtures through `TGocciaTOMLParser.ParseDocument(...)`, preserving scalar distinctions such as `integer`, `float`, `datetime`, `datetime-local`, `date-local`, and `time-local`.
 
-The TOML runner exits non-zero when any case fails or times out, so it is safe to use directly in CI. When `--harness` is omitted it compiles `scripts/GocciaTOMLCheck.dpr` automatically; CI uses a prebuilt harness from the matrix build artifacts instead.
+The runner prints a human summary, optionally writes the shared compliance JSON envelope with `--output`, and exits non-zero for compliance or infrastructure failures.
 
 The harness and any file-backed parser regression must read source text as
 UTF-8 bytes first and decode it strictly before handing UTF-16 text to the
@@ -442,16 +440,23 @@ identical on Windows and non-Windows hosts and prevent mojibake such as
 
 **Official JSON5 Suite**
 
-For JSON5 parser compatibility checks against the official `json5/json5` parser test corpus, run:
+For JSON5 parser compatibility checks against a prepared checkout of the official `json5/json5` parser test corpus, copy the committed manifest into the checkout and run:
 
 ```bash
-python3 scripts/run_json5_test_suite.py
-python3 scripts/run_json5_test_suite.py --output=tmp/json5-suite-results.json
-python3 scripts/run_json5_test_suite.py --suite-dir=/path/to/json5
-python3 scripts/run_json5_test_suite.py --harness=./build/GocciaJSON5Check --output=tmp/json5-suite-results.json
+./build.pas json5compliancerunner testrunner
+cp tests/compliance/json5-manifest.json /path/to/json5/goccia-json5-cases.json
+./build/GocciaJSON5ComplianceRunner --suite-dir=/path/to/json5 --test-runner=./build/GocciaTestRunner --output=tmp/json5-suite-results.json
 ```
 
-This runner extracts parser cases from the upstream `test/parse.js` and `test/errors.js` files, evaluates them with the reference implementation under Node.js, then compares Goccia's Pascal harness output against the canonical tagged values for valid cases. Invalid cases must fail to parse. The same command also runs `tests/built-ins/JSON5/stringify.js`, which mirrors the upstream stringify surface inside Goccia's JavaScript test harness. The runner exits non-zero when either the upstream parser corpus or the JSON5 stringify suite fails.
+The runner verifies both the checkout and manifest against `tests/compliance/json5.pin`. It converts each manifest entry into a valid JavaScript test file and launches `GocciaTestRunner` in a separate process for that case, so invalid JSON5 remains parser input rather than invalid outer JavaScript. The same command runs `tests/built-ins/JSON5/stringify.js`. Normal compliance execution requires neither Python nor Node.js.
+
+Maintainers regenerate the executable manifest from an already-prepared checkout:
+
+```bash
+./build/GocciaJSON5ComplianceRunner --regenerate-manifest --suite-dir=/path/to/json5 --manifest=tests/compliance/json5-manifest.json
+```
+
+Regeneration uses Node.js to execute the upstream reference tests, records the verified commit, and is intentionally separate from normal compliance runs.
 
 ### Pinned es-toolkit library probes
 
@@ -671,9 +676,9 @@ build → test             → artifacts
 
 **`test`** (needs build, all platforms) — Downloads pre-built binaries, runs all JavaScript tests and Pascal unit tests. Outputs JSON files via `--output=<file>` for CI timing comparison.
 
-**`toml-compliance`** (all platforms) — Downloads the prebuilt `GocciaTOMLCheck` harness from the matrix build artifacts, resolves `python3` or `python`, runs `scripts/run_toml_test_suite.py --harness=... --output=toml-test-results-<target>.json`, checks that the JSON summary reports zero failures, and uploads the per-platform TOML conformance report as a workflow artifact.
+**`toml-compliance`** (all platforms) — Downloads the prebuilt `GocciaTOMLComplianceRunner`, prepares the exact pinned `toml-test` checkout, and relies on the runner exit status. CI performs only lightweight validation of the report envelope before uploading it.
 
-**`json5-compliance`** (all platforms) — Downloads the prebuilt `GocciaJSON5Check` harness and `GocciaTestRunner` binary from the matrix build artifacts, resolves `python3` or `python`, runs `scripts/run_json5_test_suite.py --harness=... --test-runner=... --output=json5-test-results-<target>.json`, checks that both the parser and stringify summaries report zero failures, and uploads the per-platform JSON5 conformance report as a workflow artifact.
+**`json5-compliance`** (all platforms) — Downloads `GocciaJSON5ComplianceRunner` and `GocciaTestRunner`, prepares the exact pinned JSON5 checkout, installs its matching committed manifest, and relies on the native runner exit status for parser and stringify compliance. CI performs only lightweight report-envelope validation before upload.
 
 **`test262`** (needs build, ubuntu-latest x64 only, **non-blocking**) — Runs the official conformance suite in bytecode mode from the shared pin in `scripts/test262-suite-sha.txt`, uploads the JSON report, and saves a `main` baseline cache for PR deltas. The run step is `continue-on-error: true` so known steady-state conformance failures do not block unrelated work; the downstream PR comment still gates regressions against the cached main baseline. **See [test262.md](test262.md) for the harness contract** and [Build System](build-system.md#ciyml--push-to-main--tags) for the workflow wiring.
 
@@ -720,7 +725,8 @@ Weekly crons open (or update) a single PR every Monday with the latest upstream 
 | Suite | Workflow | Schedule | Pin location |
 |-------|----------|----------|--------------|
 | test262 | `test262-bump.yml` | 06:00 UTC | `scripts/test262-suite-sha.txt` |
-| toml-test | `toml-test-bump.yml` | 06:30 UTC | `scripts/run_toml_test_suite.py` |
+| toml-test | `toml-test-bump.yml` | 06:30 UTC | `tests/compliance/toml-test.pin` |
+| json5 | `json5-test-bump.yml` | 06:45 UTC | `tests/compliance/json5.pin` and `json5-manifest.json` |
 | yaml-test-suite | `yaml-test-bump.yml` | 07:00 UTC | `scripts/run_yaml_test_suite.py` |
 
 Each workflow reuses a fixed branch (`chore/<suite>-bump`), so an unmerged PR is updated in place rather than replaced. See [test262.md](test262.md) for details on the test262 harness contract.
