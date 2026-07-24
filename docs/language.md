@@ -5,14 +5,12 @@
 
 ## Executive Summary
 
-- **Recommended defaults** — Modern, explicit ECMAScript: `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules; this profile is product policy rather than the engine's language ceiling
-- **Conformance objective** — Core ECMAScript compatibility is a release-track objective, measured by generated test262 reports; Annex B's browser-only legacy surface is deferred until any future Web API/browser-compatibility profile
-- **TC39 proposals** — Decorators, decorator metadata, Iterator Includes, pattern matching, types as comments, enums, `Math.clamp`
-- **Excluded by design** — Runtime `eval` outside private conformance host hooks
-- **Parser policy** — Parser-recognized excluded or disabled syntax (`var`, `function`, `==`/`!=`, labels, `while`/`do...while`, `with`, traditional `for(;;)`, `for...in`) is a `SyntaxError` by default. `--warning-unsupported-features` / `"warning-unsupported-features": true` restores warning plus recovery behavior for migration and diagnostics without enabling real semantics.
-- **Compatibility flags** — `--compat-*` flags primarily exist for ECMAScript conformance and legacy semantic requirements. Userland code should usually prefer default forms instead of enabling ASI (`--compat-asi`), `var` (`--compat-var`), `function` (`--compat-function`), implicit `arguments` (`--compat-arguments-object`), non-strict Script compatibility (`--compat-non-strict-mode`), loose equality (`--compat-loose-equality`), labels (`--compat-label`), traditional loops (`--compat-traditional-for-loop`), `for...in` (`--compat-for-in-loop`), or `while`/`do...while` (`--compat-while-loops`) preemptively.
-- **Conformance-only host hooks** — `GocciaScriptLoaderBare --test262-host` exposes private test262 hooks (`eval`, `evalScript`, `createRealm`) without making them part of the public runtime surface
-- **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
+- **Implementation vs profile** — GocciaScript implements core ECMAScript; modern recommended defaults are product policy rather than the language ceiling
+- **Conformance evidence** — Generated test262 reports measure the release-track objective; canonical prose links to current results instead of freezing a percentage
+- **Compatibility paths** — Every standard core form disabled by the recommended profile has a targeted `--compat-*` path
+- **Host exposure** — Normal hosts do not install `eval`; the private `GocciaScriptLoaderBare --test262-host` exposes it only for conformance
+- **TC39 proposals and extensions** — The TC39 Type Annotations proposal uses types-as-comments semantics by default; GocciaScript's optional `--strict-types` extension adds runtime enforcement
+- **Annex B policy** — Browser-only Annex B behavior is not a general pre-1.0 target
 
 GocciaScript implements ECMAScript with curated recommended defaults. Calling it merely a JavaScript-like subset is misleading: the engine's implemented language capability, its recommended profile, and its host APIs are separate dimensions. This document details what's supported by default, what lives behind compatibility flags, what is shimmed for legacy conformance, and the rationale for each decision. For current generated evidence, use the live [ECMAScript compatibility dashboard](https://www.gocciascript.dev/compatibility); for quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
 
@@ -31,14 +29,15 @@ Annex B is not a general compatibility target before 1.0. ECMA-262 describes Ann
 | `--compat-asi` | Automatic semicolon insertion | Use explicit semicolons |
 | `--compat-var` | `var` declarations and ES script-global `var` binding behavior | Use `let` / `const` |
 | `--compat-function` | `function` declarations and expressions | Use arrows, methods, accessors, and class methods |
-| `--compat-non-strict-mode` | Script-source `arguments`, `with`, non-strict failed assignments, legacy `delete` return values, and sloppy ordinary-function `this` coercion | Use rest parameters, explicit property access, strict assignment/delete behavior, and explicit receivers |
+| `--compat-non-strict-mode` | Script-source `with`, non-strict failed assignments, legacy `delete` return values, and sloppy ordinary-function `this` coercion | Use explicit property access, strict assignment/delete behavior, and explicit receivers |
+| `--compat-arguments-object` | Implicit `arguments` objects; mapped semantics additionally require non-strict Script source | Use rest parameters |
 | `--compat-loose-equality` | `==` and `!=` | Use `===` and `!==` |
 | `--compat-label` | Labeled statements and labeled `break` / `continue` | Use helper functions or explicit state |
 | `--compat-traditional-for-loop` | `for(init; test; update)` | Use `for...of`, iterators, or array methods |
 | `--compat-for-in-loop` | `for...in` property enumeration | Use `Object.keys()` / `Object.entries()` with `for...of` |
 | `--compat-while-loops` | `while` and `do...while` | Use `for...of`, iterators, or array methods when possible |
 
-Runtime type enforcement (`--strict-types`) is separate from ECMAScript compatibility. It enforces GocciaScript's parsed type annotations at runtime and is opt-in for hosts that want that extra contract.
+Runtime type enforcement (`--strict-types`) is a GocciaScript extension separate from ECMAScript compatibility. The TC39 proposal gives annotations no runtime effect by default; the extension enforces supported annotations and inferred primitive contracts in interpreter and bytecode modes. It is not a static structural checker.
 
 `--warning-unsupported-features` is also separate from ECMAScript compatibility. It changes parser diagnostics for disabled syntax from hard errors back into the historical warning/recovery path, but it does not enable `var`, `function`, loose equality, labels, legacy loops, `for...in`, or `with` semantics. Use the matching `--compat-*` flag when code needs those semantics.
 
@@ -63,7 +62,7 @@ const name = "Goccia";
 - `fn.call()`, `fn.apply()`, `fn.bind()` for explicit `this` binding.
 - `fn.length` — Number of formal parameters (before defaults/rest).
 - `fn.name` — Function name (inferred from variable declarations for anonymous functions).
-- Type annotations on parameters and return types (parsed and ignored by default; enforced when `--strict-types` is set — see [Types as Comments](#types-as-comments-stage-1) below).
+- Type annotations on parameters and return types (proposal-compatible no-op semantics by default; enforced when `--strict-types` is set — see [Type Annotations](#type-annotations-stage-1) below).
 - `async`/`await` — Async functions return Promises; `await` suspends until the Promise settles (see [Async Functions](#async-functions) below).
 
 ```javascript
@@ -513,11 +512,11 @@ The computed key `[context.name]` preserves the wrapper's `.name` for stack trac
 
 Decorator metadata works as described in [Decorators](#decorators-stage-3) — each decorated class receives a `Symbol.metadata` property with prototype-chain inheritance. See [proposal-decorator-metadata](https://github.com/tc39/proposal-decorator-metadata).
 
-### Types as Comments (Stage 1)
+### Type Annotations (Stage 1)
 
-GocciaScript supports the [TC39 Types as Comments](https://tc39.es/proposal-type-annotations/) proposal. TypeScript-style type annotations are parsed without affecting runtime behaviour by default. Raw type strings are preserved on AST nodes for potential future optimization.
+GocciaScript implements the [TC39 Type Annotations](https://tc39.es/proposal-type-annotations/) proposal. Supported annotations follow its types-as-comments model and have no runtime effect by default. Raw type strings are preserved on AST nodes for potential future optimization.
 
-**Opt-in runtime enforcement** — pass `--strict-types` (or set `"strict-types": true` in `goccia.json`) to enforce annotations at runtime in both interpreter and bytecode mode. Annotated variables, function parameters, and primitive-literal-inferred types are checked on initial value and on every assignment; incompatible values throw `TypeError`. Union (`string | number`), `any`, and `unknown` annotations remain unenforced. Without the flag, annotations are treated purely as comments.
+**GocciaScript runtime extension** — pass `--strict-types` (or set `"strict-types": true` in `goccia.json`) to enforce supported annotations at runtime in both interpreter and bytecode modes. Annotated variables, function parameters, and primitive-literal-inferred types are checked on initial value and on every assignment; incompatible values throw `TypeError`. Union (`string | number`), `any`, and `unknown` annotations remain unenforced. This optional runtime contract is not a replacement for a static structural checker such as `tsc`.
 
 #### Supported Syntax
 
@@ -688,11 +687,11 @@ Weak references and finalization registries are supported for objects and non-re
 
 Reliable brand check for error objects: `Error.isError(value)`. See [ES2026 §20.5.3.2](https://tc39.es/ecma262/#sec-error.iserror).
 
-## Excluded Features
+## Recommended Profile and Compatibility Paths
 
 ### `var` Declarations
 
-**Opt-in.** Excluded by default; use `let` or `const` instead. Available as a compatibility mode via `--compat-var`. `var` has function-scoping and hoisting behavior that leads to subtle bugs:
+**Implemented; disabled by the recommended profile.** Use `let` or `const` by default, or enable `--compat-var` when ECMAScript `var` semantics are required. `var` has function-scoping and hoisting behavior that leads to subtle bugs:
 
 ```javascript
 // In JavaScript, this prints "undefined" then "5"
@@ -710,7 +709,7 @@ When enabled (CLI: `--compat-var`, engine API: include `cfVar` in `Engine.Compat
 
 ### `function` Keyword
 
-**Opt-in.** Excluded by default; use arrow functions or shorthand methods instead. Available as a compatibility mode via `--compat-function`.
+**Implemented; disabled by the recommended profile.** Use arrow functions or shorthand methods by default, or enable `--compat-function` when ordinary function syntax is required.
 
 When disabled (default), `function` declarations and expressions are a `SyntaxError`. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating declarations as no-ops and expressions as `undefined`:
 
@@ -738,7 +737,7 @@ When enabled (CLI: `--compat-function`, engine API: include `cfFunction` in `Eng
 
 ### Loose Equality (`==` and `!=`)
 
-**Opt-in.** Excluded by default; use `===` and `!==` unless you are running compatibility code. Available via `--compat-loose-equality` (CLI flag, `cfLooseEquality` in `Engine.Compatibility`, or `{"compat-loose-equality": true}` in config).
+**Implemented; disabled by the recommended profile.** Use `===` and `!==` by default. Enable `--compat-loose-equality` (CLI flag, `cfLooseEquality` in `Engine.Compatibility`, or `{"compat-loose-equality": true}` in config) when standard loose-equality semantics are required.
 
 When enabled, `==` and `!=` follow [ES2026 §7.2.13 IsLooselyEqual](https://tc39.es/ecma262/2026/multipage/abstract-operations.html#sec-islooselyequal) in both interpreter and bytecode modes, including `null == undefined`, string/number coercion, boolean-to-number coercion, BigInt/string and BigInt/number comparisons, and object `ToPrimitive` conversion.
 
@@ -765,13 +764,13 @@ Strict equality requires matching types, eliminating this entire class of bugs.
 
 ### `eval()`
 
-**Excluded from normal runtimes.** Runtime `eval` is intentionally unavailable in `GocciaScriptLoader`, `GocciaREPL`, `GocciaTestRunner`, and default `GocciaScriptLoaderBare`.
+**Implemented; not installed by normal hosts.** `GocciaScriptLoader`, `GocciaREPL`, `GocciaTestRunner`, and default `GocciaScriptLoaderBare` do not expose runtime `eval`.
 
 `eval` is a security risk — it executes arbitrary strings as code. In an embedded scripting environment, this is especially dangerous. The only implementation is a private conformance host hook: `GocciaScriptLoaderBare --test262-host` installs the official test262 host `eval`, plus `evalScript(sourceText)` and `createRealm()` properties on the private test262 host object, so the stock test262 harness can exercise ECMAScript direct-eval and realm semantics. Those hooks are not exposed outside conformance runs and should not be used as an application API.
 
 ### `arguments` Object
 
-**Opt-in.** Excluded by default; prefer rest parameters. Available via `--compat-arguments-object` (CLI flag, `cfArgumentsObject` in `Engine.Compatibility`, or `{"compat-arguments-object": true}` in config). `--compat-non-strict-mode` does not enable `arguments` by itself; it only changes the semantics of an explicitly enabled `arguments` object in sloppy script functions. Strict functions, modules, and functions with non-simple parameter lists create unmapped array-like objects whose indexed entries and `length` reflect the call's argument list without aliasing parameter variables. Sloppy functions with simple parameter lists create mapped arguments exotic objects: indexed properties alias the corresponding parameter binding until the property is deleted, converted to an accessor, or made non-writable. Arrow functions do not create their own `arguments`; they resolve it lexically from the nearest enclosing ordinary function or method that has one. `arguments` is an ordinary identifier, not a reserved keyword, so parameters or body-level lexical declarations named `arguments` shadow the implicit object.
+**Implemented; disabled by the recommended profile.** Prefer rest parameters, or enable `--compat-arguments-object` (CLI flag, `cfArgumentsObject` in `Engine.Compatibility`, or `{"compat-arguments-object": true}` in config). `--compat-non-strict-mode` does not enable `arguments` by itself; it only changes the semantics of an explicitly enabled `arguments` object in sloppy script functions. Strict functions, modules, and functions with non-simple parameter lists create unmapped array-like objects whose indexed entries and `length` reflect the call's argument list without aliasing parameter variables. Sloppy functions with simple parameter lists create mapped arguments exotic objects: indexed properties alias the corresponding parameter binding until the property is deleted, converted to an accessor, or made non-writable. Arrow functions do not create their own `arguments`; they resolve it lexically from the nearest enclosing ordinary function or method that has one. `arguments` is an ordinary identifier, not a reserved keyword, so parameters or body-level lexical declarations named `arguments` shadow the implicit object.
 
 ### Automatic Semicolon Insertion
 
@@ -818,7 +817,7 @@ When enabled, GocciaScript follows the ECMAScript ASI rules (ES2026 §12.10):
 
 ### Traditional `for(init; test; update)` Loop
 
-**Opt-in for JavaScript compatibility.** Excluded by default. Available via `--compat-traditional-for-loop` (CLI flag, `cfTraditionalFor` in `Engine.Compatibility`, or `{"compat-traditional-for-loop": true}` in config) when a program or conformance suite needs ECMAScript `for(init; test; update)` semantics.
+**Implemented; disabled by the recommended profile.** Enable `--compat-traditional-for-loop` (CLI flag, `cfTraditionalFor` in `Engine.Compatibility`, or `{"compat-traditional-for-loop": true}` in config) when a program or conformance suite needs ECMAScript `for(init; test; update)` semantics.
 
 When disabled (default), `for(init; test; update)` is a `SyntaxError`. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating the loop as a no-op. When enabled, `for(init; test; update) body` is fully supported in both interpreter and bytecode modes:
 
@@ -842,7 +841,7 @@ items.reduce((acc, item) => acc + item, 0);
 
 ### `for...in` Loop
 
-**Opt-in for JavaScript compatibility.** Excluded by default. Available via `--compat-for-in-loop` (CLI flag, `cfForIn` in `Engine.Compatibility`, or `{"compat-for-in-loop": true}` in config) when a program or conformance suite needs ECMAScript property enumeration semantics.
+**Implemented; disabled by the recommended profile.** Enable `--compat-for-in-loop` (CLI flag, `cfForIn` in `Engine.Compatibility`, or `{"compat-for-in-loop": true}` in config) when a program or conformance suite needs ECMAScript property enumeration semantics.
 
 When disabled (default), `for...in` declaration and assignment-target forms are `SyntaxError`s. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating the loop as a no-op. When enabled, declaration-head loops such as `for (const key in object) body` / `for (let key in object) body` and assignment-target loops such as `for (key in object) body` are supported in interpreter and bytecode modes:
 
@@ -862,7 +861,7 @@ for (const key of Object.keys(obj)) {
 
 ### `while` and `do...while`
 
-**Opt-in for JavaScript compatibility.** Excluded by default. Available via `--compat-while-loops` (CLI flag, `cfWhileLoops` in `Engine.Compatibility`, or `{"compat-while-loops": true}` in config) when a program or conformance suite needs ECMAScript `while` or `do...while` semantics.
+**Implemented; disabled by the recommended profile.** Enable `--compat-while-loops` (CLI flag, `cfWhileLoops` in `Engine.Compatibility`, or `{"compat-while-loops": true}` in config) when a program or conformance suite needs ECMAScript `while` or `do...while` semantics.
 
 When disabled (default), `while` and `do...while` syntax is a `SyntaxError`. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating each loop as a no-op. When enabled, both loop forms are supported in interpreter and bytecode modes:
 
@@ -887,7 +886,7 @@ do {
 
 ### `with` Statement
 
-**Opt-in for script source.** Excluded by default; use explicit property access. Available via `--compat-non-strict-mode` (CLI flag, `cfNonStrictMode` in `Engine.Compatibility`, or `{"compat-non-strict-mode": true}` in config). Module source remains strict even when this flag is enabled. When enabled in script source, `with (object) statement` evaluates the object expression, converts it with `ToObject`, and resolves unqualified identifiers through that object before falling back to outer lexical scopes. `Symbol.unscopables` is honored. Calls to functions resolved through the object environment use that object as `this`, closures created inside the body retain the object environment, and writes through non-writable or setter-less object properties silently keep the original value instead of throwing.
+**Implemented for compatible script source; disabled by the recommended profile.** Use explicit property access by default, or enable `--compat-non-strict-mode` (CLI flag, `cfNonStrictMode` in `Engine.Compatibility`, or `{"compat-non-strict-mode": true}` in config). Module source remains strict even when this flag is enabled. When enabled in script source, `with (object) statement` evaluates the object expression, converts it with `ToObject`, and resolves unqualified identifiers through that object before falling back to outer lexical scopes. `Symbol.unscopables` is honored. Calls to functions resolved through the object environment use that object as `this`, closures created inside the body retain the object environment, and writes through non-writable or setter-less object properties silently keep the original value instead of throwing.
 
 When disabled (default), script-source `with` is a `SyntaxError`. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating the statement as a no-op. Module-source `with` is always a strict-mode `SyntaxError`, even with warning recovery enabled. `with` creates ambiguous scope and is forbidden by JavaScript strict mode, so new GocciaScript code should prefer explicit property access. The keyword is reserved (it cannot be used as a variable name), but it can be used as a property name (for example, `obj.with`).
 
@@ -901,7 +900,7 @@ By default, GocciaScript follows strict delete behavior: deleting an unqualified
 
 ### Labeled Statements
 
-**Opt-in for JavaScript compatibility.** Excluded by default. Available via `--compat-label` (CLI flag, `cfLabel` in `Engine.Compatibility`, or `{"compat-label": true}` in config) when a program or conformance suite needs ECMAScript labeled control flow.
+**Implemented; disabled by the recommended profile.** Enable `--compat-label` (CLI flag, `cfLabel` in `Engine.Compatibility`, or `{"compat-label": true}` in config) when a program or conformance suite needs ECMAScript labeled control flow.
 
 When disabled (default), labeled statements are `SyntaxError`s. With `--warning-unsupported-features`, the parser emits the historical warning, strips the label, and parses the labeled statement:
 

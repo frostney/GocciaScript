@@ -4,33 +4,40 @@
 
 ## Executive Summary
 
-- **ECMAScript table** — Feature-by-feature status from ES1 through ES2027, sorted chronologically
+- **Profile table** — Implemented semantics, recommended defaults, exposure paths, and standards sources are separate fields
+- **ECMAScript table** — Default-enabled feature status from ES1 through ES2027, sorted chronologically
 - **Annex B policy** — Browser-only legacy Annex B semantics are not a pre-1.0 target; selected existing shims remain documented individually
 - **Parser policy** — Disabled parser syntax is a `SyntaxError` by default; `--warning-unsupported-features` restores warning/no-op recovery without enabling compatibility semantics
-- **Web Platform APIs table** — WHATWG and W3C APIs supported beyond ECMA-262
-- **TC39 proposals table** — Active proposals sorted by stage (highest first), with links to specs
+- **Beyond core ECMAScript** — Separate tables cover Web Platform APIs and active TC39 proposals
 - **Canonical source** — Detailed semantics, examples, and rationale live in [language.md](language.md)
 
-## ECMAScript Feature Summary
+## Recommended Profile Compatibility Paths
+
+These forms are implemented. The table describes whether the recommended
+profile exposes them, not whether the engine contains their semantics.
+
+| Form | Implemented | Default profile | Enablement / exposure | Standards source |
+|------|-------------|-----------------|-----------------------|------------------|
+| `var` | Yes | Disabled | `--compat-var` | ECMA-262 core |
+| traditional `function` syntax | Yes | Disabled | `--compat-function` | ECMA-262 core |
+| `==` / `!=` | Yes | Disabled | `--compat-loose-equality` | ECMA-262 core |
+| ASI | Yes | Disabled | `--compat-asi` | ECMA-262 core |
+| labels | Yes | Disabled | `--compat-label` | ECMA-262 core |
+| traditional `for(init; test; update)` | Yes | Disabled | `--compat-traditional-for-loop` | ECMA-262 core |
+| `for...in` | Yes | Disabled | `--compat-for-in-loop` | ECMA-262 core |
+| `while` / `do...while` | Yes | Disabled | `--compat-while-loops` | ECMA-262 core |
+| `arguments` | Yes | Disabled | `--compat-arguments-object`; mapped semantics also require non-strict Script source | ECMA-262 core |
+| non-strict Script semantics | Yes | Strict by default | `--compat-non-strict-mode`; modules remain strict | ECMA-262 core |
+| `with` | Yes | Disabled | `--compat-non-strict-mode` in Script source | ECMA-262 core |
+| `eval` | Yes | Not installed | Private `GocciaScriptLoaderBare --test262-host` only | ECMA-262 core |
+| `Function()` | Yes | Disabled | `--unsafe-function-constructor` | ECMA-262 core |
+
+## Implemented ECMAScript Surface
 
 | Feature | Spec | Status |
 |---------|------|--------|
-| `var` | ES1 | Opt-in (`--compat-var`) — ES script-global bindings are global-backed and non-configurable; disabled syntax is a parser error by default; use `let`/`const` |
-| `function` keyword | ES1 | Opt-in (`--compat-function`) — disabled syntax is a parser error by default; use arrow functions or shorthand methods |
 | Comma operator (`,`) | ES1 | Supported |
-| `==` / `!=` (loose equality) | ES1 | Opt-in (`--compat-loose-equality`) — disabled syntax is a parser error by default; use `===` / `!==` |
-| `eval()` | ES1 | Excluded from normal runtimes; private `GocciaScriptLoaderBare --test262-host` hook only for conformance |
 | Annex B web-browser legacy features | ES Annex B | Deferred before 1.0; `annexB` test262 results are informational, not a release gate. Selected existing surfaces remain documented individually; broad support should be revisited only with a future Web API/browser-compatibility profile. See [ADR 0085](adr/0085-defer-annex-b-before-1-0.md) |
-| Non-strict function `this` binding | ES1 | Strict by default; script source `--compat-non-strict-mode` coerces nullish regular-function `this` to `globalThis`; modules remain strict and arrows remain lexical |
-| `arguments` object | ES1 | Opt-in (`--compat-arguments-object`) for ordinary functions, methods, accessors, and generators; `--compat-non-strict-mode` does not enable it by itself, but sloppy simple parameter lists use mapped semantics when it is enabled; strict functions, modules, and non-simple parameter lists stay unmapped; arrows resolve it lexically; prefer rest parameters for new code |
-| Non-strict assignment failures | ES1 | Strict by default; script source `--compat-non-strict-mode` silently ignores failed ordinary object/global writes while assignment expressions return the assigned value |
-| Labeled statements | ES1 | Opt-in for JavaScript compatibility (`--compat-label`); disabled syntax is a parser error by default |
-| Traditional `for(init; test; update)` loop | ES1 | Opt-in for JavaScript compatibility (`--compat-traditional-for-loop`); disabled syntax is a parser error by default |
-| `for...in` | ES1 | Opt-in for JavaScript compatibility (`--compat-for-in-loop`); supports `var` heads with `--compat-var`; disabled syntax is a parser error by default |
-| `while` / `do...while` | ES1 | Opt-in for JavaScript compatibility (`--compat-while-loops`); disabled syntax is a parser error by default |
-| `with` statement | ES1 | Opt-in for script source (`--compat-non-strict-mode`) for compatibility with object-environment lookup, `Symbol.unscopables`, closure capture, method-call receivers, and non-strict write failures; disabled syntax is a parser error by default, and modules always reject it — prefer explicit property access |
-| `delete` non-strict return values | ES1 | Strict by default; script source `--compat-non-strict-mode` makes `delete identifier` handle declared bindings, configurable global object properties, and unresolvable names with legacy booleans; non-configurable property deletion returns `false` |
-| ASI (automatic semicolon insertion) | ES1 | Opt-in (`--compat-asi`) |
 | Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` | ES1 | Supported as legacy global shims installed through Goccia.shims; `parseInt`/`parseFloat` delegate to `Number.parseInt`/`Number.parseFloat`, while `isNaN`/`isFinite` keep standard global coercion behavior. Prefer `Number.*` in new code |
 | `let` / `const` | ES2015 | Supported |
 | Arrow functions | ES2015 | Supported |
@@ -115,7 +122,7 @@ APIs from WHATWG and W3C specifications — not part of ECMA-262, but widely exp
 | [ShadowRealm](https://github.com/tc39/proposal-shadowrealm) | 2.7 | Opt-in (`--unsafe-shadowrealm`) — global `ShadowRealm` constructor with `evaluate`, `importValue`, and the wrapped-function callable boundary; off by default because it evaluates dynamic source and imports modules |
 | [`Math.clamp`](https://github.com/tc39/proposal-math-clamp) | 2 | Supported |
 | [Pattern Matching](https://tc39.es/proposal-pattern-matching/) | 1 | Supported — `value is Pattern`, `match`, filtered `for...of` / `for await...of`, and pattern catches |
-| [Types as Comments](https://tc39.es/proposal-type-annotations/) | 1 | Supported — TypeScript-style annotations parsed, preserved on AST; runtime enforcement opt-in via `--strict-types` (works in both interpreter and bytecode) |
+| [Type Annotations](https://tc39.es/proposal-type-annotations/) | 1 | Supported — proposal-compatible types-as-comments semantics by default; GocciaScript's optional `--strict-types` extension adds runtime enforcement in interpreter and bytecode modes, not static structural checking |
 | [Enum Declarations](https://github.com/tc39/proposal-enum) | 0 | Supported — frozen, null-prototype enum objects with `Symbol.iterator` |
 
 ## Runtime Extensions

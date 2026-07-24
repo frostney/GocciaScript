@@ -10,7 +10,7 @@
 - **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, virtual modules, and host modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
 
-GocciaScript is designed to be embedded in FreePascal applications. `TGocciaRuntime` is the embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, and `URL`, plus import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, and `goccia:semver`, usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals or runtime modules.
+Native application embedding is an important secondary GocciaScript goal. `TGocciaRuntime` is the FreePascal embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, and `URL`, plus import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, and `goccia:semver`, usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals or runtime modules.
 
 ## Quick Start
 

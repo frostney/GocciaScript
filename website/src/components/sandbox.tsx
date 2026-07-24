@@ -676,17 +676,15 @@ export function Sandbox() {
         <div className="section-head">
           <div className="section-kicker">Sandbox · AI agents</div>
           <AnchorH2 id="overview">
-            A runtime designed for{" "}
-            <span className="wave-under">code you didn&apos;t write</span>.
+            Agent execution,{" "}
+            <span className="wave-under">under host control</span>.
           </AnchorH2>
           <p>
-            GocciaScript is meant for running untrusted or user-provided code in
-            a host-controlled environment. Scripts receive only the data and
-            capabilities the host provides, run with explicit limits, and return
-            structured results that the host can inspect. Filesystem workflows
-            use GocciaSandboxRunner: host paths are copied into a virtual
-            filesystem as seed baselines, sandbox writes stay in that
-            filesystem, and changes are surfaced as explicit diffs.
+            Provide AI-agent scripts with explicit data, modules, capabilities,
+            and limits. Filesystem workflows use GocciaSandboxRunner: host paths
+            are copied into a virtual filesystem as seed baselines, sandbox
+            writes stay in that filesystem, and the host receives structured
+            output plus explicit diffs.
           </p>
         </div>
 

@@ -329,7 +329,7 @@ These restrictions are intentional — they eliminate common sources of bugs and
 
 You now have a working understanding of GocciaScript. Here's where to go from here:
 
-- **[Language](language.md)** — Full list of what's supported and what's excluded, with rationale
+- **[Language](language.md)** — Implemented ECMAScript, recommended defaults, compatibility paths, and rationale
 - **[Built-in Objects](built-ins.md)** — Complete API reference for all built-in objects (Array, String, Map, Set, Promise, Temporal, etc.)
 - **[`examples/`](../examples/)** — More example programs: classes, promises, and unsupported feature demos
 - **[Architecture](architecture.md)** — Pipelines and main layers

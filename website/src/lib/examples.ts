@@ -24,9 +24,9 @@ export const EXAMPLES: Example[] = [
   {
     id: "types",
     ext: "ts",
-    label: "Types-as-comments — TypeScript-style annotations",
-    desc: "TC39 types-as-comments: TypeScript-style annotations are parsed and stripped at runtime — no separate compilation step.",
-    code: `// Type annotations are allowed, but treated as comments at runtime.
+    label: "TC39 Type Annotations — types-as-comments semantics",
+    desc: "The TC39 Type Annotations proposal lets supported annotations run directly with no runtime effect by default; GocciaScript's optional --strict-types extension adds runtime contracts.",
+    code: `// Proposal-compatible default: annotations have no runtime effect.
 // Runs directly — no transpilation step.
 
 type Currency = "USD" | "EUR" | "GBP";
@@ -478,7 +478,7 @@ const fizzbuzz = (n) =>
 
 console.log(fizzbuzz(15).join(" "));
 
-// Fibonacci as a hand-rolled iterator (function declarations are excluded,
+// Fibonacci as a hand-rolled iterator (function declarations are profile-disabled,
 // so no function*; instead implement the iterator protocol directly).
 class FibIterator {
   constructor() {

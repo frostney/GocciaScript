@@ -7,7 +7,7 @@ GocciaScript is a FreePascal implementation of ECMAScript with sandbox-first rec
 ### Project And Layers
 
 **GocciaScript**:
-A sandbox-first ECMAScript runtime and toolchain with explicit host-controlled capabilities, designed for embedding portable JavaScript in applications and implemented in FreePascal.
+A sandbox-first ECMAScript runtime and toolchain for AI agents, with an explicit host-defined capability model and generated test262 evidence. It is implemented in FreePascal, supports Delphi, and can also be embedded in native applications as an important secondary goal.
 _Avoid_: JS engine when the recommended defaults or host-tooling shape matters.
 
 **Recommended defaults**:
@@ -431,7 +431,7 @@ A class or object shorthand function that receives its call-site receiver as `th
 _Avoid_: Arrow method.
 
 **Compatibility flag**:
-An explicit boolean CLI flag or config value, using canonical `compat-*` spelling, that enables an excluded ECMAScript compatibility behavior.
+An explicit boolean CLI flag or config value, using canonical `compat-*` spelling, that enables an ECMAScript behavior disabled by the recommended profile.
 _Avoid_: Feature flag when the option exists for compatibility semantics.
 
 **Compatibility flag set**:
