@@ -13430,6 +13430,7 @@ var
   RealmSwitched: Boolean;
   PreviousCallSite: TGocciaCallSite;
   ClosedNumericInitializedRegisterTop: Integer;
+  InstructionLimitState: PGocciaInstructionLimitState;
 
   procedure CurrentInstructionDebugLocation(out ALine, AColumn: Integer);
   begin
@@ -13586,6 +13587,7 @@ begin
       end;
     end;
     Running := True;
+    InstructionLimitState := CaptureInstructionLimitState;
     while Running and (Frame.IP < Template.CodeCount) do
     begin
       try
@@ -13601,7 +13603,7 @@ begin
             Exit;
           end;
 
-          PollInstructionLimit;
+          PollInstructionLimit(InstructionLimitState);
           InstructionStartIP := Frame.IP;
           Instruction := Template.GetInstructionUnchecked(Frame.IP);
           Inc(Frame.IP);

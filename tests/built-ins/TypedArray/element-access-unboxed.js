@@ -97,6 +97,132 @@ describe("TypedArray unboxed element fast path", () => {
     });
   });
 
+  describe("fixed-length backing buffer specialization", () => {
+    test("reads and writes a fixed-length offset view through shared storage", () => {
+      const buffer = new ArrayBuffer(8);
+      const bytes = new Uint8Array(buffer);
+      const words = new Uint16Array(buffer, 2, 2);
+
+      words[0] = 0x1234;
+      words[1] = 0xabcd;
+
+      expect(words[0]).toBe(0x1234);
+      expect(words[1]).toBe(0xabcd);
+      expect(bytes[2]).toBe(0x34);
+      expect(bytes[3]).toBe(0x12);
+      expect(bytes[4]).toBe(0xcd);
+      expect(bytes[5]).toBe(0xab);
+    });
+
+    test("checks detachment before every fixed-length read and write", () => {
+      const buffer = new ArrayBuffer(4);
+      const view = new Uint8Array(buffer);
+      view[0] = 9;
+
+      buffer.transfer();
+
+      expect(view[0]).toBeUndefined();
+      view[0] = 7;
+      expect(view[0]).toBeUndefined();
+      expect(view.length).toBe(0);
+    });
+
+    test("preserves out-of-bounds results on fixed-length storage", () => {
+      const view = new Uint8Array(2);
+      view[2] = 7;
+      view[-1] = 8;
+
+      expect(view[2]).toBeUndefined();
+      expect(view[-1]).toBeUndefined();
+      expect(view.length).toBe(2);
+    });
+  });
+
+  describe("indexed access fallback paths", () => {
+    test("revalidates a fixed-length view over a resizable buffer", () => {
+      const buffer = new ArrayBuffer(4, { maxByteLength: 8 });
+      const view = new Uint8Array(buffer, 1, 2);
+      view[0] = 11;
+      view[1] = 22;
+
+      buffer.resize(1);
+      expect(view[0]).toBeUndefined();
+      view[0] = 33;
+      expect(view[0]).toBeUndefined();
+
+      buffer.resize(4);
+      view[0] = 44;
+      expect(view[0]).toBe(44);
+    });
+
+    test("keeps length-tracking resizable views synchronized", () => {
+      const buffer = new ArrayBuffer(1, { maxByteLength: 4 });
+      const view = new Uint8Array(buffer);
+      view[0] = 5;
+
+      buffer.resize(3);
+      view[2] = 9;
+
+      expect(view.length).toBe(3);
+      expect(view[0]).toBe(5);
+      expect(view[2]).toBe(9);
+    });
+
+    test("keeps SharedArrayBuffer-backed access on the general path", () => {
+      const buffer = new SharedArrayBuffer(4);
+      const view = new Uint8Array(buffer);
+
+      view[0] = 17;
+      expect(view[0]).toBe(17);
+    });
+
+    test("keeps immutable-buffer writes on the general path", () => {
+      const mutable = new ArrayBuffer(2);
+      const seed = new Uint8Array(mutable);
+      seed[0] = 23;
+      const view = new Uint8Array(mutable.transferToImmutable());
+
+      view[0] = 99;
+      expect(view[0]).toBe(23);
+    });
+
+    test("preserves computed-key then value conversion order", () => {
+      const order = [];
+      const view = new Uint8Array(1);
+      const key = {
+        toString() {
+          order.push("key");
+          return "0";
+        },
+      };
+      const value = {
+        valueOf() {
+          order.push("value");
+          return 31;
+        },
+      };
+
+      view[key] = value;
+
+      expect(order).toEqual(["key", "value"]);
+      expect(view[0]).toBe(31);
+    });
+
+    test("propagates numeric conversion exceptions", () => {
+      const view = new Uint8Array(1);
+      const value = {
+        valueOf() {
+          throw new Error("conversion failed");
+        },
+      };
+
+      expect(() => {
+        view[0] = value;
+      }).toThrow("conversion failed");
+      expect(view[0]).toBe(0);
+    });
+  });
+
   describe("Float16Array index access", () => {
     test("round-trips representable half-precision values", () => {
       const ta = new Float16Array(3);
