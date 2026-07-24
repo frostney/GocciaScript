@@ -961,6 +961,10 @@ console.log("test262 runner: deterministic shards merge into one complete report
             "const child = $262.createRealm();",
             "child.evalScript('globalThis.answer = 42;');",
             "if (child.global.answer !== 42) throw new Error('child realm eval failed');",
+            "const segmenterTag = Object.getOwnPropertyDescriptor(",
+            "  Intl.Segmenter.prototype, Symbol.toStringTag);",
+            "if (segmenterTag.value !== 'Intl.Segmenter')",
+            "  throw new Error('warm-up realm data leaked into worker');",
             "",
           ].join("\n")
         : "var value = 1 + 1;\n";

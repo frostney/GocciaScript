@@ -48,6 +48,10 @@ RSS to 3.23 GB. Engine-side Pascal exceptions remain conformance failures,
 matching the former process runner; only supervisor, host-protocol, and report
 failures count as wrapper infrastructure. Process exit is therefore both the
 native-crash containment boundary and the allocator reclamation boundary.
+Before forking, the supervisor drains the discarded warm-up realm's
+thread-local member-definition caches. Children retain the expensive
+process-shared ICU and time-zone data but rebuild realm-owned property values
+for their one engine.
 
 Alternatives considered:
 

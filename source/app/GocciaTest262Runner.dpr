@@ -30,6 +30,7 @@ uses
   Goccia.StackLimit,
   Goccia.Test262.Host,
   Goccia.TextFiles,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Threading,
   Goccia.Threading.Init,
   Goccia.Timeout,
@@ -1322,6 +1323,13 @@ begin
   if FCases.Count = 0 then
     Exit;
   EnsureSharedPrototypesInitialized(WarmUpRuntime);
+  {$IFDEF UNIX}
+  // The warm-up realm is deliberately discarded before workers fork. Clear
+  // its thread-local member definitions so children rebuild realm-owned data
+  // properties (such as Intl.Segmenter's @@toStringTag) for their one engine,
+  // while retaining the expensive process-shared ICU and time-zone data.
+  RunThreadvarCleanups;
+  {$ENDIF}
   StartNanoseconds := GetNanoseconds;
   {$IFDEF UNIX}
   SetLength(SlotPids, FOptions.Jobs);
