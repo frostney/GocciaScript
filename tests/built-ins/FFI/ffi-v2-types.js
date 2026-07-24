@@ -19,6 +19,13 @@ describe("FFI type descriptors", () => {
       returns: "i32",
     });
     const metadata = FFI.metadata(collision);
+    const Holder = FFI.struct({ prefix: "i32", collision: Collision });
+    const holder = Holder.create({
+      prefix: 9,
+      collision: Collision.create({ buffer: 11, byteOffset: 13 }),
+    });
+    const nestedCollision = holder.collision;
+    const nestedMetadata = FFI.metadata(nestedCollision);
     const Bytes = FFI.array("u8", 4);
     const bytes = Bytes.create([1, 2, 3, 4]);
     const bytesMetadata = FFI.metadata(bytes);
@@ -30,6 +37,11 @@ describe("FFI type descriptors", () => {
       expect(metadata.buffer).toBeInstanceOf(ArrayBuffer);
       expect(metadata.byteOffset).toBe(0);
       expect(metadata.size).toBe(8);
+      expect(nestedCollision.buffer).toBe(11);
+      expect(nestedCollision.byteOffset).toBe(13);
+      expect(nestedMetadata.buffer).toBe(holder.buffer);
+      expect(nestedMetadata.byteOffset).toBe(4);
+      expect(nestedMetadata.size).toBe(8);
       expect(bytesMetadata.buffer).toBe(bytes.buffer);
       expect(bytesMetadata.byteOffset).toBe(0);
       expect(bytesMetadata.size).toBe(4);

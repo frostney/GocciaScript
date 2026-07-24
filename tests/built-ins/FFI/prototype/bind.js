@@ -70,6 +70,7 @@ describe("FFILibrary.prototype.bind", () => {
 
     expect(strlen("h\u00e9\u{1F600}")).toBe(7);
     expect(strlen(null)).toBe(-1);
+    expect(() => strlen(123)).toThrow(TypeError);
     expect(() => strlen("\uD800")).toThrow(TypeError);
     expect(() => strlen("before\0after")).toThrow(TypeError);
   });

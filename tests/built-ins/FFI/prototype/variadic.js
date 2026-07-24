@@ -18,6 +18,7 @@ describe("FFILibrary.prototype.bind (variadic signatures)", () => {
         ),
       ),
     ).toBe(3);
+    expect(sum(0, FFI.varargs([], []))).toBe(0);
   });
 
   test("applies C default argument promotions to the variadic tail", () => {
