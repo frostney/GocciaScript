@@ -897,6 +897,45 @@ console.log("test262 runner: engine timeout is classified as TIMEOUT...");
       throw new Error(`marker-like user Error should remain FAIL, got summary ${JSON.stringify(markerErrorJson.summary)}`);
     if (markerErrorJson.results?.[0]?.status !== "FAIL")
       throw new Error(`marker-like user Error result should be FAIL, got ${markerErrorJson.results?.[0]?.status}`);
+
+    const engineFaultTest = join(tests, "engine-fault.js");
+    writeFileSync(engineFaultTest, [
+      "const buffer = new ArrayBuffer(8);",
+      "const view = new DataView(buffer);",
+      "const index = {",
+      "  valueOf() {",
+      "    $262.detachArrayBuffer(buffer);",
+      "    Goccia.gc();",
+      "    return 7;",
+      "  }",
+      "};",
+      "view.setUint8(index, 1);",
+      "",
+    ].join("\n"));
+    const engineFaultOut = join(tmp, "engine-fault-result.json");
+    const engineFaultProc = Bun.spawnSync(
+      [
+        TEST262RUNNER,
+        "--suite-dir", suite,
+        "--categories", "built-ins",
+        "--filter", "built-ins/engine-fault.js",
+        "--mode=bytecode",
+        "--jobs=1",
+        "--output", engineFaultOut,
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    if (engineFaultProc.exitCode !== 1)
+      throw new Error(`test262 engine-fault fixture should exit 1, got ${engineFaultProc.exitCode}: ${engineFaultProc.stderr.toString()}`);
+    const engineFaultJson = JSON.parse(readFileSync(engineFaultOut, "utf8"));
+    if (engineFaultJson.summary.failed !== 1 ||
+        engineFaultJson.summary.wrapperInfraFailures !== 0) {
+      throw new Error(
+        `engine execution fault should remain FAIL, got summary ${JSON.stringify(engineFaultJson.summary)}`,
+      );
+    }
+    if (engineFaultJson.results?.[0]?.status !== "FAIL")
+      throw new Error(`engine execution fault should be FAIL, got ${engineFaultJson.results?.[0]?.status}`);
   } finally {
     clean(tmp);
   }

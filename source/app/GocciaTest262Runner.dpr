@@ -996,7 +996,7 @@ end;
 
 procedure ClassifyResult(const AKind: TTest262WrapperKind;
   const AExpectedErrorType, AOutput, AErrorName, ADiagnostic: string;
-  const AExecutionFailed, AInfrastructureFailed, ATimedOut: Boolean;
+  const AExecutionFailed, ATimedOut: Boolean;
   out AOutcome: TTest262Outcome; out AMessage, AResultDiagnostic: string);
 var
   Actual: string;
@@ -1009,14 +1009,6 @@ begin
     AMessage := 'engine timeout';
     Exit;
   end;
-  if AInfrastructureFailed then
-  begin
-    AOutcome := toWrapperInfra;
-    AMessage := AErrorName;
-    AResultDiagnostic := Copy(ADiagnostic, 1, 800);
-    Exit;
-  end;
-
   if AKind = twNegativeParse then
   begin
     if AExecutionFailed then
@@ -1127,7 +1119,6 @@ var
   Executor: TGocciaExecutor;
   Harness: string;
   Host: TGocciaTest262Host;
-  InfrastructureFailed: Boolean;
   Kind: TTest262WrapperKind;
   Metadata: TTest262Metadata;
   PrintHost: TTest262PrintHost;
@@ -1147,7 +1138,6 @@ begin
   Host := nil;
   PrintHost := nil;
   ExecutionFailed := False;
-  InfrastructureFailed := False;
   TimedOut := False;
   ErrorName := '';
   Diagnostic := '';
@@ -1243,15 +1233,14 @@ begin
         on E: Exception do
         begin
           ExecutionFailed := True;
-          InfrastructureFailed := True;
           ErrorName := E.ClassName;
           Diagnostic := E.ClassName + ': ' + E.Message;
         end;
       end;
 
       ClassifyResult(Kind, Metadata.NegativeType, PrintHost.Text,
-        ErrorName, Diagnostic, ExecutionFailed, InfrastructureFailed,
-        TimedOut, AResult.Status, AResult.Message, AResult.Diagnostic);
+        ErrorName, Diagnostic, ExecutionFailed, TimedOut, AResult.Status,
+        AResult.Message, AResult.Diagnostic);
     except
       on E: Exception do
       begin

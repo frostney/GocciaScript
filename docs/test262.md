@@ -279,7 +279,8 @@ reads the exit code.
 | Body throws another value                             | JS throw escapes the engine              | conformance fail   |
 | Async body never calls `$DONE`                        | no captured `Test262:Async*` marker      | conformance fail   |
 | Cooperative deadline expires                          | `TGocciaTimeoutError`                    | timeout            |
-| Pascal-side exception                                 | non-Goccia exception at the test boundary | wrapper infra     |
+| Pascal-side exception during engine execution         | structured engine diagnostic              | conformance fail |
+| Runner/harness protocol exception                     | outside engine execution                   | wrapper infra     |
 | Native worker stalls beyond the watchdog              | supervisor kills only that worker         | timeout            |
 | Negative-runtime catch path itself fails              | no marker emitted                         | wrapper infra      |
 

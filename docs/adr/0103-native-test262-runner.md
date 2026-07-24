@@ -42,11 +42,12 @@ safe final boundary. Although every engine and thread-local runtime was
 destroyed between tests, Free Pascal's allocator retained released storage in
 the runner process and reached 14.5 GB RSS. Recreating the thread pool did not
 return that storage to the operating system, while forced heap reclamation was
-unsafe for process-shared engine caches. Fork-per-test workers produced exactly
-the same 13,022 pass, 23 fail, 2 wrapper-infrastructure, and 4 timeout
-classifications, completed locally in 183.9 seconds wall time, and bounded peak
-combined RSS to 3.23 GB. Process exit is therefore both the native-crash
-containment boundary and the allocator reclamation boundary.
+unsafe for process-shared engine caches. Fork-per-test workers completed the
+13,051-test shard locally in 183.9 seconds wall time and bounded peak combined
+RSS to 3.23 GB. Engine-side Pascal exceptions remain conformance failures,
+matching the former process runner; only supervisor, host-protocol, and report
+failures count as wrapper infrastructure. Process exit is therefore both the
+native-crash containment boundary and the allocator reclamation boundary.
 
 Alternatives considered:
 
