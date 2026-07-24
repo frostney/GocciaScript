@@ -72,9 +72,8 @@ After `import * as JSON5 from "goccia:json5"`, `JSON5.parse` delegates to the st
 The `stringify` export delegates to `TGocciaJSON5Stringifier`, which reuses the same shared serialization core as strict JSON but switches to JSON5 formatting rules. That means unquoted identifier keys, single- or double-quoted strings (with optional `{ quote: "'" | '"' }` override), preserved `Infinity` / `-Infinity` / `NaN`, trailing commas when pretty-printing, `toJSON5()` preference over `toJSON()`, and the same replacer / space semantics as JSON plus the upstream JSON5 options-object form `{ replacer, space, quote }`.
 
 Compatibility goal: GocciaScript is targeting full JSON5 parser compatibility
-plus upstream-aligned stringify behavior. The native
-`GocciaJSON5ComplianceRunner` runs the pinned upstream parser manifest through
-one `GocciaTestRunner` invocation together with the local upstream-aligned
+plus upstream-aligned stringify behavior. `GocciaTestRunner` runs the committed
+generated upstream parser suite together with the local upstream-aligned
 stringify suite.
 See [Testing](testing.md#running-tests) for checkout preparation and
 commands.

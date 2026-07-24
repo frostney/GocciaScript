@@ -440,23 +440,22 @@ identical on Windows and non-Windows hosts and prevent mojibake such as
 
 **Official JSON5 Suite**
 
-For JSON5 parser compatibility checks against a prepared checkout of the official `json5/json5` parser test corpus, copy the committed manifest into the checkout and run:
+The upstream JSON5 parser cases are committed as an ordinary generated JavaScript test suite. Run parser and stringify compliance directly through TestRunner:
 
 ```bash
-./build.pas json5compliancerunner testrunner
-cp tests/compliance/json5-manifest.json /path/to/json5/goccia-json5-cases.json
-./build/GocciaJSON5ComplianceRunner --suite-dir=/path/to/json5 --test-runner=./build/GocciaTestRunner --output=tmp/json5-suite-results.json
+./build.pas testrunner
+./build/GocciaTestRunner tests/built-ins/JSON5/upstream-parse.js tests/built-ins/JSON5/stringify.js --output=tmp/json5-suite-results.json
 ```
 
-The runner verifies both the checkout and manifest against `tests/compliance/json5.pin`, converts every manifest entry into a valid JavaScript test file, and invokes `GocciaTestRunner` once for the generated parser suite plus `tests/built-ins/JSON5/stringify.js`. TestRunner owns concurrency, per-file timeouts, aggregation, exit status, and the JSON report. Invalid JSON5 remains input to `JSON5.parse(...)` inside valid outer JavaScript. Normal compliance execution requires neither Python nor Node.js.
+The generated suite records the revision in `tests/compliance/json5.pin`. TestRunner owns concurrency, per-file timeouts, aggregation, exit status, and the JSON report. Invalid JSON5 remains input to `JSON5.parse(...)` inside valid outer JavaScript. Normal compliance execution requires neither an upstream checkout, Python, nor Node.js.
 
-Maintainers regenerate the executable manifest from an already-prepared checkout:
+Maintainers regenerate the JavaScript suite from an already-prepared checkout:
 
 ```bash
-./build/GocciaJSON5ComplianceRunner --regenerate-manifest --suite-dir=/path/to/json5 --manifest=tests/compliance/json5-manifest.json
+node scripts/regenerate-json5-tests.js /path/to/json5 <pinned-sha> tests/built-ins/JSON5/upstream-parse.js
 ```
 
-Regeneration uses Node.js to execute the upstream reference tests, records the verified commit, and is intentionally separate from normal compliance runs.
+Regeneration uses Node.js to execute the upstream reference tests, verifies and records the checkout commit, and is intentionally separate from normal compliance runs.
 
 ### Pinned es-toolkit library probes
 
@@ -678,7 +677,7 @@ build → test             → artifacts
 
 **`toml-compliance`** (all platforms) — Downloads the prebuilt `GocciaTOMLComplianceRunner`, prepares the exact pinned `toml-test` checkout, and relies on the runner exit status. CI performs only lightweight validation of the report envelope before uploading it.
 
-**`json5-compliance`** (all platforms) — Downloads `GocciaJSON5ComplianceRunner` and `GocciaTestRunner`, prepares the exact pinned JSON5 checkout, installs its matching committed manifest, and runs the generated parser cases and local stringify suite together through TestRunner. CI relies on TestRunner's exit status and performs only lightweight validation of its JSON report before upload.
+**`json5-compliance`** (all platforms) — Downloads `GocciaTestRunner`, verifies that the committed generated parser suite names the pinned JSON5 revision, and runs it together with the local stringify suite. CI relies on TestRunner's exit status and performs only lightweight validation of its JSON report before upload.
 
 **`test262`** (needs build, ubuntu-latest x64 only, **non-blocking**) — Runs the official conformance suite in bytecode mode from the shared pin in `scripts/test262-suite-sha.txt`, uploads the JSON report, and saves a `main` baseline cache for PR deltas. The run step is `continue-on-error: true` so known steady-state conformance failures do not block unrelated work; the downstream PR comment still gates regressions against the cached main baseline. **See [test262.md](test262.md) for the harness contract** and [Build System](build-system.md#ciyml--push-to-main--tags) for the workflow wiring.
 
@@ -726,7 +725,7 @@ Weekly crons open (or update) a single PR every Monday with the latest upstream 
 |-------|----------|----------|--------------|
 | test262 | `test262-bump.yml` | 06:00 UTC | `scripts/test262-suite-sha.txt` |
 | toml-test | `toml-test-bump.yml` | 06:30 UTC | `tests/compliance/toml-test.pin` |
-| json5 | `json5-test-bump.yml` | 06:45 UTC | `tests/compliance/json5.pin` and `json5-manifest.json` |
+| json5 | `json5-test-bump.yml` | 06:45 UTC | `tests/compliance/json5.pin` and `tests/built-ins/JSON5/upstream-parse.js` |
 | yaml-test-suite | `yaml-test-bump.yml` | 07:00 UTC | `scripts/run_yaml_test_suite.py` |
 
 Each workflow reuses a fixed branch (`chore/<suite>-bump`), so an unmerged PR is updated in place rather than replaced. See [test262.md](test262.md) for details on the test262 harness contract.

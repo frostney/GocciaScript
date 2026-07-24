@@ -463,21 +463,6 @@ begin
   WriteLn('GocciaTOMLComplianceRunner built successfully');
 end;
 
-procedure BuildJSON5ComplianceRunner;
-var
-  Output: string;
-begin
-  WriteLn('Building GocciaJSON5ComplianceRunner...');
-  if not RunCommand('fpc', FPCArgs(
-      'source/app/compliance/GocciaJSON5ComplianceRunner.dpr',
-      EnsureUnitOutputDirectory(
-        TargetUnitOutputDirectory('json5compliancerunner'))), Output) then
-    PrintBuildFailureAndExit(Output,
-      'GocciaJSON5ComplianceRunner build failed', 'json5compliancerunner');
-  WriteLn(Output);
-  WriteLn('GocciaJSON5ComplianceRunner built successfully');
-end;
-
 procedure BuildWasmTestRunner;
 var
   Output: string;
@@ -581,8 +566,6 @@ begin
   end
   else if ATrigger = 'tomlcompliancerunner' then
     BuildTOMLComplianceRunner
-  else if ATrigger = 'json5compliancerunner' then
-    BuildJSON5ComplianceRunner
   else if ATrigger = 'wasmtestrunner' then
     BuildWasmTestRunner
   else if ATrigger = 'benchmarkrunner' then
@@ -642,7 +625,6 @@ begin
     BuildTriggers.Add('sandboxrunner');
     BuildTriggers.Add('testrunner');
     BuildTriggers.Add('tomlcompliancerunner');
-    BuildTriggers.Add('json5compliancerunner');
     BuildTriggers.Add('wasmtestrunner');
     BuildTriggers.Add('benchmarkrunner');
     BuildTriggers.Add('bundler');

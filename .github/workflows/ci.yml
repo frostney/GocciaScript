@@ -225,21 +225,19 @@ jobs:
       - name: Stage build artifacts
         run: bash ./.github/scripts/stage-build-artifacts.sh build ci-artifacts --include-tests --strip
 
-      - name: Stage compliance runners
+      - name: Stage TOML compliance runner
         run: |
-          for name in GocciaTOMLComplianceRunner GocciaJSON5ComplianceRunner; do
-            copied=0
-            for candidate in "build/$name" "build/$name.exe"; do
-              if [ -f "$candidate" ]; then
-                cp "$candidate" ci-artifacts/
-                copied=1
-              fi
-            done
-            if [ "$copied" -eq 0 ]; then
-              echo "::error::Missing compiled $name binary in build/"
-              exit 1
+          copied=0
+          for candidate in build/GocciaTOMLComplianceRunner build/GocciaTOMLComplianceRunner.exe; do
+            if [ -f "$candidate" ]; then
+              cp "$candidate" ci-artifacts/
+              copied=1
             fi
           done
+          if [ "$copied" -eq 0 ]; then
+            echo "::error::Missing compiled GocciaTOMLComplianceRunner binary in build/"
+            exit 1
+          fi
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -496,23 +494,17 @@ jobs:
       - name: Run JSON5 compliance suite
         run: |
           pin="$(tr -d '\r\n' < tests/compliance/json5.pin)"
-          suite_dir="$RUNNER_TEMP/json5"
-          git init "$suite_dir"
-          git -C "$suite_dir" remote add origin https://github.com/json5/json5.git
-          git -C "$suite_dir" fetch --depth 1 origin "$pin"
-          git -C "$suite_dir" checkout --detach "$pin"
-          cp tests/compliance/json5-manifest.json \
-            "$suite_dir/goccia-json5-cases.json"
-          runner="./build/GocciaJSON5ComplianceRunner"
+          grep -Fq "Upstream json5/json5 revision: $pin" \
+            tests/built-ins/JSON5/upstream-parse.js
           test_runner="./build/GocciaTestRunner"
-          if [ -f "$runner.exe" ]; then
-            runner="$runner.exe"
-          fi
           if [ -f "$test_runner.exe" ]; then
             test_runner="$test_runner.exe"
           fi
-          "$runner" --suite-dir="$suite_dir" --test-runner="$test_runner" \
-            --jobs=4 --output=json5-test-results-${{ matrix.target }}.json
+          "$test_runner" \
+            tests/built-ins/JSON5/upstream-parse.js \
+            tests/built-ins/JSON5/stringify.js \
+            --jobs=4 --no-progress \
+            --output=json5-test-results-${{ matrix.target }}.json
 
       - name: Check JSON5 compliance summary
         if: always()

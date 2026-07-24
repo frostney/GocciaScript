@@ -1,7 +1,7 @@
 name: JSON5 suite weekly bump
 
 # Updates the pinned json5/json5 revision and deterministically regenerates
-# the executable parser-case manifest from a prepared checkout.
+# the executable JavaScript parser suite from a prepared checkout.
 
 on:
   schedule:
@@ -22,9 +22,6 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
 
-      - name: Install FPC
-        run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
-
       - id: latest
         run: |
           sha=$(gh api repos/json5/json5/commits/main --jq .sha)
@@ -43,17 +40,16 @@ jobs:
           git -C "$RUNNER_TEMP/json5" fetch --depth 1 origin "${{ steps.latest.outputs.sha }}"
           git -C "$RUNNER_TEMP/json5" checkout --detach "${{ steps.latest.outputs.sha }}"
 
-      - name: Regenerate manifest
+      - name: Regenerate parser tests
         run: |
-          ./build.pas json5compliancerunner
-          ./build/GocciaJSON5ComplianceRunner \
-            --regenerate-manifest \
-            --suite-dir="$RUNNER_TEMP/json5" \
-            --manifest=tests/compliance/json5-manifest.json
+          node scripts/regenerate-json5-tests.js \
+            "$RUNNER_TEMP/json5" \
+            "${{ steps.latest.outputs.sha }}" \
+            tests/built-ins/JSON5/upstream-parse.js
 
       - id: changed
         run: |
-          if git diff --quiet -- tests/compliance/json5.pin tests/compliance/json5-manifest.json; then
+          if git diff --quiet -- tests/compliance/json5.pin tests/built-ins/JSON5/upstream-parse.js; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "JSON5 suite already pinned to ${{ steps.latest.outputs.short }} — no PR to open."
           else
@@ -70,8 +66,9 @@ jobs:
           body: |
             Automated bump of the json5/json5 SHA pin to `${{ steps.latest.outputs.sha }}`.
 
-            The executable parser-case manifest was regenerated from that
-            exact checkout. CI will run parser and stringify compliance.
+            The executable JavaScript parser suite was regenerated from that
+            exact checkout. CI will run it with the stringify suite through
+            `GocciaTestRunner`.
 
             Cron: weekly, Mondays 06:45 UTC.
           labels: |
