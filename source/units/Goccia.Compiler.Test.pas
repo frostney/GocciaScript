@@ -338,8 +338,6 @@ begin
     // dereference the live binding, including reads captured by a closure.
     Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_IMPORT)).ToBe(2);
     Expect<Integer>(CountOpRecursive(Module.TopLevel,
-      OP_VALIDATE_IMPORT_BINDING)).ToBe(2);
-    Expect<Integer>(CountOpRecursive(Module.TopLevel,
       OP_GET_IMPORT_BINDING)).ToBe(9);
   finally
     Module.Free;

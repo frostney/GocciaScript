@@ -32,6 +32,15 @@ describe("import binding linking semantics", () => {
     expect(globalThis.__importAccessEvaluationCount).toBe(2);
   });
 
+  test("duplicate star exports of one namespace remain unambiguous", async () => {
+    const namespace = await import(
+      "../../../fixtures/modules/import-access-namespace-barrel.js"
+    );
+
+    expect(typeof namespace.sharedNamespace).toBe("object");
+    expect(Object.keys(namespace.sharedNamespace).length).toBe(0);
+  });
+
   test("missing named imports reject before module evaluation", async () => {
     globalThis.__importAccessMissingEvaluationCount = 0;
     let error;

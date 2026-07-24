@@ -4183,12 +4183,10 @@ begin
     end
     else
     begin
-      // Validate the export identity without reading its value. This keeps
-      // missing/ambiguous imports as declaration-time SyntaxErrors without
-      // triggering a TDZ read before a cyclic dependency initializes.
-      NameIdx := ACtx.Template.AddConstantString(Names[I]);
-      EmitInstruction(ACtx, EncodeABx(OP_VALIDATE_IMPORT_BINDING, ModReg,
-        NameIdx));
+      // InitializeEnvironment validates named imports while linking. Retain
+      // the linked namespace here without revalidating during evaluation:
+      // doing so would change observable error ordering for cyclic graphs and
+      // source-phase module requests.
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slots[I], ModReg, 0));
       SyncCapturedImportSlot(Slots[I], Captured[I]);
     end;

@@ -21,6 +21,11 @@ type
   EGocciaDeferredModuleNotReady = class(Exception);
   TGocciaModule = class;
   TGocciaModuleList = TList<TGocciaModule>;
+  TGocciaModuleResolutionStamp = record
+    Module: TGocciaModule;
+    Version: Cardinal;
+  end;
+  TGocciaModuleResolutionStamps = array of TGocciaModuleResolutionStamp;
   TGocciaModuleExportBinding = class;
   TGocciaModuleImportBinding = class;
   TGocciaModuleExportBindingMap = TOrderedStringMap<TGocciaModuleExportBinding>;
@@ -58,8 +63,10 @@ type
     FResolvedBindingName: string;
     FResolvedModule: TGocciaModule;
     FResolvedValue: TGocciaValue;
+    FResolutionStamps: TGocciaModuleResolutionStamps;
     FHasResolution: Boolean;
     FResolvedAsExportValue: Boolean;
+    function ResolutionIsCurrent: Boolean;
     function Resolve: Boolean;
   public
     constructor Create(const ATargetModule: TGocciaModule;
@@ -83,6 +90,8 @@ type
     FEvaluationPromise: TGocciaValue;
     FAsyncCycleRoot: TGocciaModule;
     FStarExportNames: TOrderedStringMap<Boolean>;
+    FExportResolutionVersion: Cardinal;
+    procedure InvalidateExportResolutions;
     procedure SetExportBinding(const AExportName: string;
       const ABinding: TGocciaModuleExportBinding);
     function TryResolveExportIdentity(const AExportName: string;
@@ -91,7 +100,12 @@ type
     function TryResolveExportIdentity(const AExportName: string;
       out ABindingModule: TGocciaModule; out ABindingName: string;
       out AValue: TGocciaValue;
-      const ASeen: TOrderedStringMap<Boolean>): Boolean; overload;
+      out AResolutionStamps: TGocciaModuleResolutionStamps): Boolean; overload;
+    function TryResolveExportIdentity(const AExportName: string;
+      out ABindingModule: TGocciaModule; out ABindingName: string;
+      out AValue: TGocciaValue;
+      const ASeen: TOrderedStringMap<Boolean>;
+      var AResolutionStamps: TGocciaModuleResolutionStamps): Boolean; overload;
     function TryResolveExportValue(const AExportName: string;
       out AValue: TGocciaValue;
       const ASeen: TOrderedStringMap<Boolean>): Boolean;
@@ -360,7 +374,7 @@ end;
 
 function TGocciaModuleImportBinding.CanResolve: Boolean;
 begin
-  Result := FHasResolution or Resolve;
+  Result := (FHasResolution and ResolutionIsCurrent) or Resolve;
 end;
 
 function TGocciaModuleImportBinding.Matches(
@@ -388,7 +402,8 @@ function TGocciaModuleImportBinding.TryGetValue(
   out AValue: TGocciaValue): Boolean;
 begin
   AValue := nil;
-  if (not FHasResolution) and (not Resolve) then
+  if ((not FHasResolution) or (not ResolutionIsCurrent)) and
+     (not Resolve) then
     Exit(False);
 
   if FResolvedAsExportValue then
@@ -420,6 +435,22 @@ begin
   Result := Assigned(AValue);
 end;
 
+function TGocciaModuleImportBinding.ResolutionIsCurrent: Boolean;
+var
+  I: Integer;
+begin
+  if Length(FResolutionStamps) = 0 then
+    Exit(False);
+
+  for I := 0 to High(FResolutionStamps) do
+    if (not Assigned(FResolutionStamps[I].Module)) or
+       (FResolutionStamps[I].Module.FExportResolutionVersion <>
+       FResolutionStamps[I].Version) then
+      Exit(False);
+
+  Result := True;
+end;
+
 // ES2026 §9.1.1.5.5 CreateImportBinding stores the target module and binding
 // name. Resolve that identity once, but never cache the binding's current
 // value: GetBindingValue must remain live across mutation.
@@ -428,10 +459,12 @@ begin
   FResolvedBindingName := '';
   FResolvedModule := nil;
   FResolvedValue := nil;
+  SetLength(FResolutionStamps, 0);
   FResolvedAsExportValue := False;
   FHasResolution := Assigned(FRequestedModule) and
     FRequestedModule.TryResolveExportIdentity(FRequestedExportName,
-      FResolvedModule, FResolvedBindingName, FResolvedValue);
+      FResolvedModule, FResolvedBindingName, FResolvedValue,
+      FResolutionStamps);
   if FHasResolution then
     FResolvedAsExportValue := Assigned(FResolvedModule) and
       Assigned(FResolvedValue);
@@ -447,6 +480,11 @@ begin
   FExportBindings := TGocciaModuleExportBindingMap.Create;
   FExportsTable := TGocciaValueMap.Create;
   FStarExportNames := TOrderedStringMap<Boolean>.Create;
+end;
+
+procedure TGocciaModule.InvalidateExportResolutions;
+begin
+  Inc(FExportResolutionVersion);
 end;
 
 procedure TGocciaModule.SetEnvironment(const AEnvironment: TGCManagedObject);
@@ -661,12 +699,13 @@ function TGocciaModule.TryResolveExportIdentity(const AExportName: string;
   out ABindingModule: TGocciaModule; out ABindingName: string;
   out AValue: TGocciaValue): Boolean;
 var
+  ResolutionStamps: TGocciaModuleResolutionStamps;
   Seen: TOrderedStringMap<Boolean>;
 begin
   Seen := TOrderedStringMap<Boolean>.Create;
   try
     Result := TryResolveExportIdentity(AExportName, ABindingModule,
-      ABindingName, AValue, Seen);
+      ABindingName, AValue, Seen, ResolutionStamps);
   finally
     Seen.Free;
   end;
@@ -675,9 +714,28 @@ end;
 function TGocciaModule.TryResolveExportIdentity(const AExportName: string;
   out ABindingModule: TGocciaModule; out ABindingName: string;
   out AValue: TGocciaValue;
-  const ASeen: TOrderedStringMap<Boolean>): Boolean;
+  out AResolutionStamps: TGocciaModuleResolutionStamps): Boolean;
+var
+  Seen: TOrderedStringMap<Boolean>;
+begin
+  SetLength(AResolutionStamps, 0);
+  Seen := TOrderedStringMap<Boolean>.Create;
+  try
+    Result := TryResolveExportIdentity(AExportName, ABindingModule,
+      ABindingName, AValue, Seen, AResolutionStamps);
+  finally
+    Seen.Free;
+  end;
+end;
+
+function TGocciaModule.TryResolveExportIdentity(const AExportName: string;
+  out ABindingModule: TGocciaModule; out ABindingName: string;
+  out AValue: TGocciaValue;
+  const ASeen: TOrderedStringMap<Boolean>;
+  var AResolutionStamps: TGocciaModuleResolutionStamps): Boolean;
 var
   Binding: TGocciaModuleExportBinding;
+  ResolutionStampIndex: Integer;
   ResolutionKey: string;
 begin
   ABindingModule := nil;
@@ -690,22 +748,35 @@ begin
   if ASeen.ContainsKey(ResolutionKey) then
     Exit(False);
   ASeen.AddOrSetValue(ResolutionKey, True);
+  ResolutionStampIndex := Length(AResolutionStamps);
+  SetLength(AResolutionStamps, ResolutionStampIndex + 1);
+  AResolutionStamps[ResolutionStampIndex].Module := Self;
+  AResolutionStamps[ResolutionStampIndex].Version :=
+    FExportResolutionVersion;
   try
     if FExportBindings.TryGetValue(AExportName, Binding) then
     begin
       if Assigned(Binding.FSourceModule) then
         Exit(Binding.FSourceModule.TryResolveExportIdentity(
           Binding.FSourceExportName, ABindingModule, ABindingName, AValue,
-          ASeen));
+          ASeen, AResolutionStamps));
       if Assigned(Binding.FEnvironment) then
       begin
         ABindingModule := Self;
         ABindingName := Binding.FLocalName;
         Exit(True);
       end;
+      AValue := Binding.FValue;
+      // Namespace and source-phase re-exports are represented as their
+      // immutable object value. Their resolved identity is that special
+      // binding, not the intermediate module/export pair: two star-export
+      // paths to the same object are unambiguous.
+      if Assigned(AValue) and
+         ((AValue is TGocciaModuleNamespaceObject) or
+          (AValue is TGocciaModuleSourceValue)) then
+        Exit(True);
       ABindingModule := Self;
       ABindingName := AExportName;
-      AValue := Binding.FValue;
       Exit(Assigned(AValue));
     end;
 
@@ -831,6 +902,7 @@ end;
 
 procedure TGocciaModule.InvalidateNamespaceObject(const ADetachModule: Boolean);
 begin
+  InvalidateExportResolutions;
   if Assigned(FNamespaceObject) then
   begin
     if FNamespaceObject is TGocciaModuleNamespaceObject then

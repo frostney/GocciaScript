@@ -13,6 +13,7 @@ uses
   TextEncoding,
   TextSemantics,
 
+  Goccia.Arguments.Collection,
   Goccia.AST.Node,
   Goccia.Bytecode.Module,
   Goccia.Constants.PropertyNames,
@@ -83,10 +84,13 @@ type
       const AExecutor: TGocciaExecutor);
     procedure AssertFailedCycleKeepsLiveBindings(
       const AExecutor: TGocciaExecutor);
+    procedure AssertReloadedModuleRetargetsCachedImport(
+      const AExecutor: TGocciaExecutor);
 
     procedure TestEngineLoadsInMemoryModuleWithCustomProvider;
     procedure TestEngineRetriesModuleAfterFailedLoad;
     procedure TestFailedCycleKeepsLiveBindings;
+    procedure TestInterpreterReloadedModuleRetargetsCachedImport;
     procedure TestEngineReportsJSONLModuleLineNumbers;
     procedure TestEngineReportsTOMLModuleSyntaxErrors;
     procedure TestFileSystemContentProviderPreservesUTF8JSONLText;
@@ -177,6 +181,8 @@ begin
     TestEngineRetriesModuleAfterFailedLoad);
   Test('Failed module cycles keep surviving live bindings valid',
     TestFailedCycleKeepsLiveBindings);
+  Test('Interpreter reloads retarget cached import bindings',
+    TestInterpreterReloadedModuleRetargetsCachedImport);
   Test('Engine reports JSONL module parse line numbers',
     TestEngineReportsJSONLModuleLineNumbers);
   Test('Engine reports TOML module syntax errors',
@@ -590,6 +596,101 @@ begin
   Executor := TGocciaBytecodeExecutor.Create;
   try
     AssertFailedCycleKeepsLiveBindings(Executor);
+  finally
+    Executor.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.AssertReloadedModuleRetargetsCachedImport(
+  const AExecutor: TGocciaExecutor);
+const
+  BRIDGE_PATH = 'memory:/bridge.js';
+  ENTRY_PATH = 'memory:/app.mjs';
+  IMPORTER_PATH = 'memory:/importer.js';
+  OUTER_PATH = 'memory:/outer.js';
+  SOURCE_A_PATH = 'memory:/source-a.js';
+  SOURCE_B_PATH = 'memory:/source-b.js';
+var
+  Args: TGocciaArgumentsCollection;
+  Engine: TGocciaEngine;
+  ExportValue: TGocciaValue;
+  ImporterModule: TGocciaModule;
+  ModuleLoader: TGocciaModuleLoader;
+  Provider: TMemoryModuleContentProvider;
+  ReadValue: TGocciaFunctionBase;
+  Resolver: TInMemoryModuleResolver;
+  ResultValue: TGocciaValue;
+  Source: TStringList;
+begin
+  Provider := TMemoryModuleContentProvider.Create;
+  Resolver := TInMemoryModuleResolver.Create;
+  Source := TStringList.Create;
+  try
+    Provider.AddModule(SOURCE_A_PATH, 'export const first = 1;');
+    Provider.AddModule(SOURCE_B_PATH, 'export const second = 2;');
+    Provider.SetModule(BRIDGE_PATH,
+      'export { first as value } from "' + SOURCE_A_PATH + '";',
+      EncodeDate(2026, 1, 1));
+    Provider.AddModule(OUTER_PATH,
+      'export { value } from "' + BRIDGE_PATH + '";');
+    Provider.AddModule(IMPORTER_PATH,
+      'import { value } from "' + OUTER_PATH + '";' + sLineBreak +
+      'export const readValue = () => value;');
+    Source.Text := '1;';
+
+    ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
+    try
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader,
+        AExecutor);
+      try
+        ImporterModule := ModuleLoader.LoadModule(IMPORTER_PATH, ENTRY_PATH);
+        Expect<Boolean>(ImporterModule.TryGetExportValue('readValue',
+          ExportValue)).ToBe(True);
+        Expect<Boolean>(ExportValue is TGocciaFunctionBase).ToBe(True);
+        ReadValue := TGocciaFunctionBase(ExportValue);
+
+        Args := TGocciaArgumentsCollection.Create;
+        try
+          ResultValue := ReadValue.Call(Args,
+            TGocciaUndefinedLiteralValue.UndefinedValue);
+          if not Assigned(ResultValue) then
+            Fail('Initial imported binding read returned no value.');
+          Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(1);
+
+          Provider.SetModule(BRIDGE_PATH,
+            'export { second as value } from "' + SOURCE_B_PATH + '";',
+            EncodeDate(2026, 1, 2));
+          ModuleLoader.LoadModule(BRIDGE_PATH, IMPORTER_PATH);
+
+          ResultValue := ReadValue.Call(Args,
+            TGocciaUndefinedLiteralValue.UndefinedValue);
+          if not Assigned(ResultValue) then
+            Fail('Reloaded imported binding read returned no value.');
+          Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(2);
+        finally
+          Args.Free;
+        end;
+      finally
+        Engine.Free;
+      end;
+    finally
+      ModuleLoader.Free;
+    end;
+  finally
+    Source.Free;
+    Resolver.Free;
+    Provider.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests
+  .TestInterpreterReloadedModuleRetargetsCachedImport;
+var
+  Executor: TGocciaExecutor;
+begin
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    AssertReloadedModuleRetargetsCachedImport(Executor);
   finally
     Executor.Free;
   end;
