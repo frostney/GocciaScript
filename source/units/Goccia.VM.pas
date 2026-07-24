@@ -16678,18 +16678,46 @@ begin
       // interpreter even on the entry path, which skips link-time validation.
       // CanResolveExport (not HasExport) walks star/forwarding chains, matching
       // the loader's ValidateStaticNamedImports and re-export validators.
+      OP_VALIDATE_IMPORT_BINDING:
+        begin
+          GlobalName := Template.GetConstantUnchecked(
+            DecodeBx(Instruction)).StringValue;
+          if (FRegisters[A].Kind <> grkObject) or
+             not (FRegisters[A].ObjectValue is
+               TGocciaModuleNamespaceObject) or
+             not TGocciaModuleNamespaceObject(FRegisters[A].ObjectValue)
+               .CanResolveExport(GlobalName) then
+          begin
+            if (FRegisters[A].Kind = grkObject) and
+               (FRegisters[A].ObjectValue is
+                 TGocciaModuleNamespaceObject) then
+              SpecifierString :=
+                TGocciaModuleNamespaceObject(FRegisters[A].ObjectValue)
+                  .Module.Path
+            else
+              SpecifierString := '';
+            ThrowSyntaxError(Format('Module "%s" has no export named "%s"',
+              [SpecifierString, GlobalName]));
+          end;
+        end;
+
       OP_GET_IMPORT_BINDING:
         begin
           GlobalName := Template.GetConstantUnchecked(
             DecodeBx(Instruction)).StringValue;
           if (FRegisters[A].Kind = grkObject) and
-             (FRegisters[A].ObjectValue is TGocciaModuleNamespaceObject) and
-             (not TGocciaModuleNamespaceObject(FRegisters[A].ObjectValue)
-                .Module.CanResolveExport(GlobalName)) then
-            ThrowSyntaxError(Format('Module "%s" has no export named "%s"',
-              [TGocciaModuleNamespaceObject(FRegisters[A].ObjectValue).Module.Path,
-               GlobalName]));
-          SetRegister(A, GetPropertyValue(GetRegister(A), GlobalName));
+             (FRegisters[A].ObjectValue is TGocciaModuleNamespaceObject) then
+          begin
+            if not TGocciaModuleNamespaceObject(
+               FRegisters[A].ObjectValue).TryGetExportValue(
+               GlobalName, GlobalBindingValue) then
+              ThrowSyntaxError(Format('Module "%s" has no export named "%s"',
+                [TGocciaModuleNamespaceObject(FRegisters[A].ObjectValue)
+                   .Module.Path, GlobalName]));
+            SetRegister(A, GlobalBindingValue);
+          end
+          else
+            SetRegister(A, GetPropertyValue(GetRegister(A), GlobalName));
         end;
 
       OP_EXPORT:

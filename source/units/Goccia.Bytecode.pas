@@ -163,7 +163,10 @@ const
   //               Number subtraction and less-than-or-equal branches.
   //   v74 -> v75: added a direct scalar-frame self-call opcode for functions
   //               accepted by the closed-world numeric-call proof.
-  GOCCIA_FORMAT_VERSION = 75;
+  //   v75 -> v76: added OP_VALIDATE_IMPORT_BINDING so static named imports
+  //               validate their resolved export once without reading a live
+  //               binding early during cyclic module initialization.
+  GOCCIA_FORMAT_VERSION = 76;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -429,7 +432,8 @@ type
     // A = destination, B = first contiguous argument register,
     // C = argument count (1..3). Valid only in a compiler-proven closed-world
     // numeric self-recursive template.
-    OP_CALL_SELF_NUM = 229
+    OP_CALL_SELF_NUM = 229,
+    OP_VALIDATE_IMPORT_BINDING = 230
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt16): UInt64; {$IFDEF FPC}inline;{$ENDIF}

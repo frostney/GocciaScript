@@ -4181,13 +4181,16 @@ begin
         UInt16(NameIdx)));
       SyncCapturedImportSlot(Slots[I], Captured[I]);
     end
-    else if Captured[I] then
+    else
     begin
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slots[I], ModReg, 0));
+      // Validate the export identity without reading its value. This keeps
+      // missing/ambiguous imports as declaration-time SyntaxErrors without
+      // triggering a TDZ read before a cyclic dependency initializes.
       NameIdx := ACtx.Template.AddConstantString(Names[I]);
-      EmitInstruction(ACtx, EncodeABx(OP_GET_IMPORT_BINDING, Slots[I],
+      EmitInstruction(ACtx, EncodeABx(OP_VALIDATE_IMPORT_BINDING, ModReg,
         NameIdx));
-      SyncCapturedImportSlot(Slots[I], True);
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slots[I], ModReg, 0));
+      SyncCapturedImportSlot(Slots[I], Captured[I]);
     end;
   end;
 

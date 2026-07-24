@@ -722,25 +722,15 @@ begin
   EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
 end;
 
-procedure EmitImportBindingAccess(const ACtx: TGocciaCompilationContext;
-  const APhase: TGocciaImportCallPhase; const AModulePath, AExportName: string;
+procedure EmitImportBindingDereference(const ACtx: TGocciaCompilationContext;
+  const APhase: TGocciaImportCallPhase; const AExportName: string;
   const ADest: UInt16);
 var
-  PathIdx, NameIdx: UInt16;
+  NameIdx: UInt16;
 begin
-  PathIdx := ACtx.Template.AddConstantString(AModulePath);
-  if APhase = icpSource then
-    EmitInstruction(ACtx, EncodeABx(OP_IMPORT_SOURCE, ADest, PathIdx))
-  else if APhase = icpDefer then
-    EmitInstruction(ACtx, EncodeABx(OP_IMPORT_DEFER, ADest, PathIdx))
-  else
-    EmitInstruction(ACtx, EncodeABx(OP_IMPORT, ADest, PathIdx));
-
-  // ES2026 §16.2.1.7.3.1: a named import of a missing or ambiguous export is a
-  // SyntaxError. OP_GET_IMPORT_BINDING loads the binding from the module
-  // namespace already in ADest and rejects names the module does not export,
-  // so the bytecode entry path (which bypasses link-time validation) still
-  // matches the interpreter (ADR 0014).
+  // The local/upvalue retains the module namespace loaded by the declaration.
+  // Reading the named property remains live, while repeated identifier reads
+  // avoid repeating module resolution and loader-cache lookup.
   if (APhase = icpEvaluation) and (AExportName <> '') then
   begin
     NameIdx := ACtx.Template.AddConstantString(AExportName);
@@ -779,7 +769,8 @@ begin
     Local := ACtx.Scope.GetLocal(LocalIdx);
     if Local.IsImportBinding then
     begin
-      EmitImportBindingAccess(ACtx, Local.ImportPhase, Local.ImportModulePath,
+      EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, ADest, Local.Slot));
+      EmitImportBindingDereference(ACtx, Local.ImportPhase,
         Local.ImportExportName, ADest);
       Exit;
     end;
@@ -799,8 +790,10 @@ begin
   begin
     if ACtx.Scope.GetUpvalue(UpvalIdx).IsImportBinding then
     begin
-      EmitImportBindingAccess(ACtx, ACtx.Scope.GetUpvalue(UpvalIdx).ImportPhase,
-        ACtx.Scope.GetUpvalue(UpvalIdx).ImportModulePath,
+      EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, ADest,
+        UInt16(UpvalIdx)));
+      EmitImportBindingDereference(ACtx,
+        ACtx.Scope.GetUpvalue(UpvalIdx).ImportPhase,
         ACtx.Scope.GetUpvalue(UpvalIdx).ImportExportName, ADest);
       Exit;
     end;
