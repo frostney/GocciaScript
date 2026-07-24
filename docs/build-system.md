@@ -1,5 +1,7 @@
 # Build System
 
+<!-- doc-length-limit: 850 -->
+
 *For contributors setting up their development environment or troubleshooting builds.*
 
 ## Executive Summary
@@ -32,6 +34,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 ```bash
 ./build.pas loader              # Dev build (default)
 ./build.pas loaderbare          # Dev build of Bare Script Loader
+./build.pas test262runner       # Dev build of native Test262 runner
 ./build.pas sandboxrunner       # Dev build of Sandbox Runner
 ./build.pas --dev loader        # Explicit dev build
 ./build.pas --prod loader       # Production build
@@ -47,7 +50,10 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 ./build.pas --prod    # Production build of all components
 ```
 
-Builds all components in order: tests, loader, loaderbare, sandboxrunner, testrunner, benchmarkrunner, bundler, repl. The default full build does not clean first; pass `--clean` explicitly when you need to remove stale build artifacts.
+Builds all components in order: tests, loader, loaderbare, sandboxrunner,
+testrunner, test262runner, benchmarkrunner, bundler, repl. The default full
+build does not clean first; pass `--clean` explicitly when you need to remove
+stale build artifacts.
 
 ### Build Specific Components
 
@@ -57,6 +63,7 @@ Builds all components in order: tests, loader, loaderbare, sandboxrunner, testru
 ./build.pas loaderbare       # Bare Script Loader (core engine only)
 ./build.pas sandboxrunner    # Sandbox Runner with virtual filesystem
 ./build.pas testrunner       # JavaScript test runner + native FFI fixture
+./build.pas test262runner    # Native Test262 conformance runner
 ./build.pas benchmarkrunner  # Performance benchmark runner
 ./build.pas bundler          # Bundler (compile to .gbc)
 ./build.pas tests            # Pascal unit tests
@@ -101,6 +108,20 @@ For a smaller runtime surface without the loader runtime profile, build and run 
 ./build.pas loaderbare && ./build/GocciaScriptLoaderBare example.js
 printf "Goccia.version;" | ./build/GocciaScriptLoaderBare --print
 ```
+
+Run a pinned Test262 checkout with the dedicated native runner:
+
+```bash
+./build.pas test262runner
+./build/GocciaTest262Runner \
+  --suite-dir=/path/to/test262 \
+  --mode=bytecode \
+  --jobs=4 \
+  --output=test262-results.json
+```
+
+See [Test262 Harness Contract](test262.md) for shard, profile, host, and report
+semantics.
 
 Coverage and profiling output are available from the loader:
 
@@ -479,7 +500,8 @@ All compiled binaries go to the `build/` directory:
 |--------|--------|-------------|
 | `build/GocciaREPL` | `source/app/GocciaREPL.dpr` | Interactive read-eval-print loop |
 | `build/GocciaScriptLoader` | `source/app/GocciaScriptLoader.dpr` | Execute `.js` files or stdin input, with optional JSON output |
-| `build/GocciaScriptLoaderBare` | `source/app/GocciaScriptLoaderBare.dpr` | Execute file or stdin source with the core engine and CLI-local `print`; no loader runtime profile. `--test262-host` exposes private conformance hooks for the test262 runner |
+| `build/GocciaScriptLoaderBare` | `source/app/GocciaScriptLoaderBare.dpr` | Execute file or stdin source with the core engine and CLI-local `print`; no loader runtime profile or conformance-only host hooks |
+| `build/GocciaTest262Runner` | `source/app/GocciaTest262Runner.dpr` | Discover, shard, execute, classify, and report the pinned Test262 corpus using isolated native worker runtimes |
 | `build/GocciaSandboxRunner` | `source/app/GocciaSandboxRunner.dpr` | Execute sandbox entry paths inside a seeded virtual filesystem |
 | `build/GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | JavaScript test runner |
 | `build/GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |
@@ -571,6 +593,7 @@ GocciaScript/
 │   │   ├── GocciaREPL.dpr              # REPL program source
 │   │   ├── GocciaScriptLoader.dpr      # Script loader program source
 │   │   ├── GocciaScriptLoaderBare.dpr  # Core-engine-only script loader
+│   │   ├── GocciaTest262Runner.dpr      # Native Test262 conformance runner
 │   │   ├── GocciaTestRunner.dpr        # Test runner program source
 │   │   ├── GocciaBenchmarkRunner.dpr   # Benchmark runner program source
 │   │   ├── GocciaBundler.dpr     # Bundler
@@ -658,7 +681,7 @@ Runs on the full platform matrix:
 
 **`json5-compliance`** — Downloads the prebuilt `GocciaJSON5Check` harness and `GocciaTestRunner` binary from each matrix build artifact, runs `python3 scripts/run_json5_test_suite.py --harness=... --test-runner=...` on every CI platform, validates both the parser and stringify summaries, and uploads the per-platform JSON report.
 
-**`test262`** (needs build, ubuntu-latest x64 only, **non-blocking**) — Downloads the `gocciascript-x86_64-linux` build, checks out [`tc39/test262`](https://github.com/tc39/test262) at the SHA pinned in `scripts/test262-suite-sha.txt`, runs `bun scripts/run_test262_suite.ts --suite-dir test262-suite --mode=bytecode --jobs=4 --timeout-ms=20000 --output=test262-results.json`, and uploads the report as a 30-day workflow artifact. The run step uses `continue-on-error: true` because the conformance lane is allowed to carry known steady-state failures while the engine closes compatibility gaps. On main, the JSON is also stashed via `actions/cache/save` under `test262-baseline-<sha>` so the PR workflow can compute Δ vs main, and `cd website && bun run publish-test262 ../test262-results.json` publishes the compressed run report plus its UTC daily dashboard pointer to Vercel Blob when `BLOB_READ_WRITE_TOKEN` is configured. Main runs also upload the `test262-profile` artifact and publish matching aggregate/detail profile payloads under the separate `test262-profiles/` Blob namespace for weekly performance review. The one-off `cd website && bun run backfill-test262` command seeds retained artifact reports and reruns expired historical days directly into Blob. The pin is bumped weekly by `.github/workflows/test262-bump.yml`. See [docs/test262.md](test262.md) for the harness and profile report contracts.
+**`test262`** (needs build, ubuntu-latest x64 only, **non-blocking**) — Downloads the `gocciascript-x86_64-linux` build, checks out [`tc39/test262`](https://github.com/tc39/test262) at the SHA pinned in `scripts/test262-suite-sha.txt`, and runs a matrix of native `GocciaTest262Runner` shards. GitHub's strategy index and total define each shard; the merge step discovers the shard reports by glob and uses `scripts/run_test262_suite.ts --merge-shards` to produce the canonical report. The run step uses `continue-on-error: true` because the conformance lane is allowed to carry known steady-state failures while the engine closes compatibility gaps. On main, the JSON is also stashed via `actions/cache/save` under `test262-baseline-<sha>` so the PR workflow can compute Δ vs main, and `cd website && bun run publish-test262 ../test262-results.json` publishes the compressed run report plus its UTC daily dashboard pointer to Vercel Blob when `BLOB_READ_WRITE_TOKEN` is configured. Main runs also upload the `test262-profile` artifact and publish matching aggregate/detail profile payloads under the separate `test262-profiles/` Blob namespace for weekly performance review. The one-off `cd website && bun run backfill-test262` command seeds retained artifact reports and reruns expired historical days directly into Blob. The pin is bumped weekly by `.github/workflows/test262-bump.yml`. See [docs/test262.md](test262.md) for the harness and profile report contracts.
 
 **`awfy`** (needs build, ubuntu-latest x64 only) — Downloads the `gocciascript-x86_64-linux` build, installs QuickJS, installs the latest Node Current release via `actions/setup-node` for the Node reference engine, checks out `smarr/are-we-fast-yet` at the SHA pinned in `perf/awfy/manifest.json`, and runs `node scripts/awfy-ci-report.js --awfy-dir awfy-suite/benchmarks/JavaScript --output awfy-report.json`. The report set is `ciReport` from the manifest: all pinned AWFY JavaScript benchmarks under Goccia bytecode, QuickJS, and Node Current, with five interleaved samples per engine. The job uploads `awfy-report` as a 30-day artifact. On main, `cd website && bun run publish-awfy ../awfy-report.json` publishes the compressed report plus its UTC daily pointer to the separate `awfy/` Vercel Blob namespace when `BLOB_READ_WRITE_TOKEN` is configured.
 
@@ -686,7 +709,7 @@ Runs on **ubuntu-latest x64 only**; workload suites may fan out through matrices
 
 **`benchmark`** (needs build + build-main) — Compares the PR against a `main` build measured **on the same runner**. A separate `build-main` job builds the benchmark runner from the PR's base commit (`github.event.pull_request.base.sha`); the `benchmark` job then warms up the runner (discarded) and benchmarks the `main` build and the PR build back-to-back, so deltas reflect the diff rather than cross-runner variance (issue #815, [ADR 0076](adr/0076-same-runner-benchmark-comparison.md)). It posts a collapsible comparison comment grouped by file: each file section shows the same-runner `main` and PR `opsPerSec` point estimates side by side, each carrying its min/max ops/sec range in brackets. Classification (in [`scripts/benchmark-compare.js`](../scripts/benchmark-compare.js), unit-tested by `scripts/test-benchmark-compare.ts`) uses range overlap: fully above the `main` range is an improvement, fully below is a regression, and overlapping ranges are treated as unchanged noise. The comment also reports the measured median per-run variance as a noise floor. Percentage deltas are secondary context, files with significant changes are auto-expanded, and the comparison is advisory (comment-only, never merge-blocking). The deterministic profile diff (opcode/allocation counts) is regenerated from the same `main` build. If no `main` build is available, shows results without comparison.
 
-**`test262`** (needs build, **non-blocking**) — Checks out `tc39/test262` at the pinned SHA, runs `bun scripts/run_test262_suite.ts --suite-dir test262-suite --mode=bytecode --jobs=4 --timeout-ms=20000 --output=test262-results.json`, and uploads the JSON report. Failing tests do not fail the job. The downstream `test262-comment` job (`if: always()`) restores the most recent `test262-baseline-` cache entry from main, then `bun scripts/run_test262_suite.ts --comment test262-results.json <baseline>` builds the markdown body and the workflow posts/updates a comment using marker `<!-- test262-results -->`. The comment shows a per-category breakdown (built-ins, harness, intl402, language, staging) with Δ-vs-main columns when a baseline is cached, an "Areas closest to 100%" sub-table, and a collapsible per-test delta list. PR CI does not generate or upload the full-corpus test262 profile artifact.
+**`test262`** (needs build, **non-blocking**) — Checks out `tc39/test262` at the pinned SHA and runs a matrix of native `GocciaTest262Runner` shards. GitHub's strategy index and total define each shard, and `scripts/run_test262_suite.ts --merge-shards` validates and merges every downloaded shard report. Failing tests do not fail the job. The downstream `test262-comment` job (`if: always()`) restores the most recent `test262-baseline-` cache entry from main, then `bun scripts/run_test262_suite.ts --comment test262-results.json <baseline>` builds the markdown body and the workflow posts/updates a comment using marker `<!-- test262-results -->`. The comment shows a per-category breakdown (built-ins, harness, intl402, language, staging) with Δ-vs-main columns when a baseline is cached, an "Areas closest to 100%" sub-table, and a collapsible per-test delta list. PR CI does not generate or upload the full-corpus test262 profile artifact.
 
 **`awfy`** (needs build) — Runs the same `ciReport` AWFY set as full CI on the PR x64 build, using Goccia bytecode, QuickJS, and the latest Node Current release with five interleaved samples per engine. It uploads the normalized `awfy-report` JSON artifact. The downstream `awfy-comment` job posts or updates an `AWFY Results` comment with median timings and geomean ratios; min/max/CV and raw samples remain in the artifact.
 

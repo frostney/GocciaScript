@@ -112,3 +112,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0100 — Native binary64 execution with narrow semantic operations](0100-native-binary64-execution.md)
 - [0101 — Closed numeric scalar self-call frames](0101-closed-numeric-scalar-self-call-frames.md)
 - [0102 — Explicit bounded FFI call descriptors](0102-explicit-bounded-ffi-call-descriptors.md)
+- [0103 — Native Test262 runner with isolated worker runtimes](0103-native-test262-runner.md)

@@ -19,7 +19,7 @@
 | `function` keyword | ES1 | Opt-in (`--compat-function`) — disabled syntax is a parser error by default; use arrow functions or shorthand methods |
 | Comma operator (`,`) | ES1 | Supported |
 | `==` / `!=` (loose equality) | ES1 | Opt-in (`--compat-loose-equality`) — disabled syntax is a parser error by default; use `===` / `!==` |
-| `eval()` | ES1 | Excluded from normal runtimes; private `GocciaScriptLoaderBare --test262-host` hook only for conformance |
+| `eval()` | ES1 | Excluded from normal runtimes; private `GocciaTest262Runner` host hook only for conformance |
 | Annex B web-browser legacy features | ES Annex B | Deferred before 1.0; `annexB` test262 results are informational, not a release gate. Selected existing surfaces remain documented individually; broad support should be revisited only with a future Web API/browser-compatibility profile. See [ADR 0085](adr/0085-defer-annex-b-before-1-0.md) |
 | Non-strict function `this` binding | ES1 | Strict by default; script source `--compat-non-strict-mode` coerces nullish regular-function `this` to `globalThis`; modules remain strict and arrows remain lexical |
 | `arguments` object | ES1 | Opt-in (`--compat-arguments-object`) for ordinary functions, methods, accessors, and generators; `--compat-non-strict-mode` does not enable it by itself, but sloppy simple parameter lists use mapped semantics when it is enabled; strict functions, modules, and non-simple parameter lists stay unmapped; arrows resolve it lexically; prefer rest parameters for new code |

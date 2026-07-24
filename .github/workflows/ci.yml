@@ -639,10 +639,8 @@ jobs:
         # test's wall time ~30-40% vs the old --jobs=2 baseline; borderline
         # 7-9s tests must not trip the deadline purely from contention.
         # --jobs=4 matches the 4 vCPUs on GH-hosted ubuntu-latest runners
-        # for public repos.  The old --jobs=2 ceiling guarded against
-        # watchdog stalls in the retired chunked-runner architecture;
-        # per-test subprocesses tolerate scheduler jitter, so the only
-        # remaining limit is core count.
+        # for public repos. Each native worker owns one isolated engine and
+        # recreates its thread-local runtime between tests.
         run: |
           profile_args=()
           if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
@@ -651,24 +649,24 @@ jobs:
             )
           fi
 
-          bun scripts/run_test262_suite.ts \
-            --suite-dir test262-suite \
+          ./build/GocciaTest262Runner \
+            --suite-dir=test262-suite \
             --mode=bytecode \
             --jobs=4 \
             --timeout-ms=20000 \
-            --shard-index=${{ matrix.shard }} \
-            --shard-count=4 \
-            --output=test262-results-${{ matrix.shard }}.json \
+            --shard-index=${{ strategy.job-index }} \
+            --shard-count=${{ strategy.job-total }} \
+            --output=test262-results-${{ strategy.job-index }}.json \
             "${profile_args[@]}"
 
       - name: Upload test262 shard
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: test262-shard-${{ matrix.shard }}
+          name: test262-shard-${{ strategy.job-index }}
           retention-days: 30
           path: |
-            test262-results-${{ matrix.shard }}.json
+            test262-results-${{ strategy.job-index }}.json
             test262-profile-details/
 
   test262-merge:
@@ -709,7 +707,7 @@ jobs:
             --merge-shards \
             --output=test262-results.json \
             "${profile_args[@]}" \
-            test262-results-{0,1,2,3}.json
+            test262-results-*.json
 
       - name: Stage test262 baseline
         if: github.ref == 'refs/heads/main'
