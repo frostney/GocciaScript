@@ -411,6 +411,7 @@ jobs:
 
       - name: Run TOML 1.1.0 compliance suite
         run: |
+          set -euo pipefail
           pin="$(tr -d '\r\n' < tests/compliance/toml-test.pin)"
           suite_dir="$RUNNER_TEMP/toml-test"
           git init "$suite_dir"
@@ -493,6 +494,7 @@ jobs:
 
       - name: Run JSON5 compliance suite
         run: |
+          set -euo pipefail
           pin="$(tr -d '\r\n' < tests/compliance/json5.pin)"
           grep -Fq "Upstream json5/json5 revision: $pin" \
             tests/built-ins/JSON5/upstream-parse.js

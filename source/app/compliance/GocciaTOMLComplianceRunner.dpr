@@ -426,6 +426,11 @@ begin
         Root.Free;
       end;
     except
+      on E: EConvertError do
+      begin
+        WriteLn(E.Message);
+        Halt(1);
+      end;
       on E: EGocciaTOMLParseError do
       begin
         WriteLn(E.Message);
@@ -433,8 +438,8 @@ begin
       end;
       on E: Exception do
       begin
-        WriteLn(E.Message);
-        Halt(1);
+        WriteLn(E.ClassName, ': ', E.Message);
+        Halt(2);
       end;
     end;
   finally
@@ -480,6 +485,12 @@ begin
   ReadOptionValue('output', OutputPath);
 
   Cases := DiscoverCases(SuiteDirectory);
+  if Cases.Count = 0 then
+  begin
+    Cases.Free;
+    raise Exception.CreateFmt('No TOML cases discovered in %s',
+      [SuiteDirectory]);
+  end;
   Executor := TTOMLComplianceExecutor.Create(ExpandFileName(ParamStr(0)),
     SuiteDirectory, TimeoutMilliseconds);
   Coordinator := TComplianceCoordinator.Create(Executor);
