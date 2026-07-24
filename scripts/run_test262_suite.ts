@@ -28,6 +28,7 @@
  *
  * Usage:
  *   bun scripts/run_test262_suite.ts [options]
+ *   bun scripts/run_test262_suite.ts --merge-shards [options] <shard.json>...
  *   bun scripts/run_test262_suite.ts --comment <results.json> <baseline.json|->
  *
  * --comment writes the PR comment markdown to stdout.  When run with a
@@ -922,6 +923,28 @@ interface SuiteSummary {
   byCategory: CategorySummary[];
 }
 
+interface SuiteRunMetadata {
+  suiteDir: string;
+  test262Sha: string | null;
+  mode: "interpreted" | "bytecode";
+  categories: string[];
+  jobs: number;
+  timeoutMs: number;
+  maxMemoryBytes: number;
+}
+
+interface ShardMetadata {
+  index: number;
+  count: number;
+}
+
+interface SuiteReport {
+  summary: SuiteSummary;
+  results: PerTestRecord[];
+  run?: SuiteRunMetadata;
+  shard?: ShardMetadata;
+}
+
 function aggregate(
   results: PerTestRecord[],
   durationSeconds: number,
@@ -979,6 +1002,17 @@ function aggregate(
     durationSeconds,
     byCategory: sorted,
   };
+}
+
+function shardForTest(testId: string, shardCount: number): number {
+  // FNV-1a gives a stable, platform-independent distribution without coupling
+  // shard membership to discovery order or test262 directory insertions.
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < testId.length; index++) {
+    hash ^= testId.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0) % shardCount;
 }
 
 // ---------------------------------------------------------------------------
@@ -1535,6 +1569,8 @@ interface MainArgs {
   maxMemoryBytes: number;
   verbose: boolean;
   bare: string;
+  shardIndex: number | null;
+  shardCount: number | null;
 }
 
 // Use Number() rather than parseInt(): parseInt("4x") silently returns 4,
@@ -1601,6 +1637,8 @@ function parseMainArgs(argv: string[]): MainArgs {
     ),
     verbose: false,
     bare: BARE,
+    shardIndex: null,
+    shardCount: null,
   };
   if (process.env.TEST262_MAX_TESTS !== undefined) {
     out.maxTests = parseNonNegativeInt(
@@ -1641,6 +1679,10 @@ function parseMainArgs(argv: string[]): MainArgs {
     else if (arg.startsWith("--max-memory=")) out.maxMemoryBytes = parsePositiveInt("--max-memory", arg.slice("--max-memory=".length));
     else if (arg === "--bare") out.bare = argv[++i];
     else if (arg.startsWith("--bare=")) out.bare = arg.slice("--bare=".length);
+    else if (arg === "--shard-index") out.shardIndex = parseNonNegativeInt("--shard-index", argv[++i]);
+    else if (arg.startsWith("--shard-index=")) out.shardIndex = parseNonNegativeInt("--shard-index", arg.slice("--shard-index=".length));
+    else if (arg === "--shard-count") out.shardCount = parsePositiveInt("--shard-count", argv[++i]);
+    else if (arg.startsWith("--shard-count=")) out.shardCount = parsePositiveInt("--shard-count", arg.slice("--shard-count=".length));
     else if (arg === "--verbose" || arg === "-v") out.verbose = true;
     else if (arg === "--help" || arg === "-h") {
       printUsage();
@@ -1657,7 +1699,22 @@ function parseMainArgs(argv: string[]): MainArgs {
   if (out.profileDir && out.mode !== "bytecode") {
     throw new Error("--profile-dir requires --mode=bytecode because VM profiler output is bytecode-only");
   }
-  if (out.profileDir) {
+  if ((out.shardIndex === null) !== (out.shardCount === null)) {
+    throw new Error("--shard-index and --shard-count must be provided together");
+  }
+  if (out.shardIndex !== null && out.shardCount !== null &&
+      out.shardIndex >= out.shardCount) {
+    throw new Error(
+      `--shard-index must be less than --shard-count, got ${out.shardIndex}/${out.shardCount}`,
+    );
+  }
+  if (out.shardCount !== null &&
+      (out.profileSummaryOutput || out.profileMarkdownOutput)) {
+    throw new Error(
+      "sharded runs write per-test profiles only; aggregate profile outputs with --merge-shards",
+    );
+  }
+  if (out.profileDir && out.shardCount === null) {
     out.profileSummaryOutput ??= join(out.profileDir, "aggregate.json");
     out.profileMarkdownOutput ??= join(out.profileDir, "aggregate.md");
   }
@@ -1666,6 +1723,7 @@ function parseMainArgs(argv: string[]): MainArgs {
 
 function printUsage(): void {
   console.log(`Usage: bun scripts/run_test262_suite.ts [options]
+       bun scripts/run_test262_suite.ts --merge-shards [options] <shard.json>...
        bun scripts/run_test262_suite.ts --comment <results.json> <baseline.json|->
 
 Run mode options:
@@ -1688,7 +1746,15 @@ Run mode options:
   --timeout-ms MS        Per-test engine timeout (default: ${DEFAULT_TIMEOUT_MS}).
   --max-memory BYTES     Per-test GC heap cap (default: 2 GiB).
   --bare PATH            Path to GocciaScriptLoaderBare (default: ./build/...).
+  --shard-index N        Zero-based shard to run; requires --shard-count.
+  --shard-count N        Total deterministic shards; requires --shard-index.
   --verbose              Print per-test results.
+
+Merge mode:
+  --merge-shards --output FILE <shard.json>...
+                         Validate a complete shard set and write one canonical
+                         report. Optional profile output flags aggregate merged
+                         per-test profiles from --profile-dir.
 
 Comment mode:
   --comment RESULTS BASELINE
@@ -1751,6 +1817,9 @@ async function runMain(argv: string[]): Promise<number> {
     }
     if (args.filter) console.log(`Filter:        ${args.filter}`);
     if (args.maxTests > 0) console.log(`Max tests:     ${args.maxTests}`);
+    if (args.shardIndex !== null && args.shardCount !== null) {
+      console.log(`Shard:         ${args.shardIndex + 1}/${args.shardCount}`);
+    }
     console.log();
 
     let tests = discoverTests(checkout.dir, args.categories, args.filter);
@@ -1758,6 +1827,13 @@ async function runMain(argv: string[]): Promise<number> {
     if (args.maxTests > 0 && tests.length > args.maxTests) {
       tests = tests.slice(0, args.maxTests);
       console.log(`Capped to ${tests.length} (--max-tests).`);
+    }
+    const totalDiscovered = tests.length;
+    if (args.shardIndex !== null && args.shardCount !== null) {
+      tests = tests.filter(
+        (test) => shardForTest(test.id, args.shardCount!) === args.shardIndex,
+      );
+      console.log(`Selected ${tests.length} tests for shard ${args.shardIndex + 1}/${args.shardCount}.`);
     }
 
     const cache = new HarnessCache(checkout.dir);
@@ -1805,9 +1881,24 @@ async function runMain(argv: string[]): Promise<number> {
     );
 
     const durationSeconds = (performance.now() - start) / 1000;
-    const summary = aggregate(results, durationSeconds, tests.length);
+    const summary = aggregate(results, durationSeconds, totalDiscovered);
 
-    const report = { summary, results };
+    const report: SuiteReport = {
+      summary,
+      results,
+      run: {
+        suiteDir: checkout.dir,
+        test262Sha: process.env.TEST262_SUITE_SHA ?? null,
+        mode: args.mode,
+        categories: [...args.categories],
+        jobs: args.jobs,
+        timeoutMs: args.timeoutMs,
+        maxMemoryBytes: args.maxMemoryBytes,
+      },
+      shard: args.shardIndex !== null && args.shardCount !== null
+        ? { index: args.shardIndex, count: args.shardCount }
+        : undefined,
+    };
     if (args.output) {
       mkdirSync(dirname(args.output), { recursive: true });
       writeFileSync(args.output, JSON.stringify(report, null, 2) + "\n");
@@ -1859,6 +1950,201 @@ async function runMain(argv: string[]): Promise<number> {
   } finally {
     if (checkout.cleanup) checkout.cleanup();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Shard merge mode
+// ---------------------------------------------------------------------------
+
+interface MergeArgs {
+  output: string | null;
+  profileDir: string | null;
+  profileSummaryOutput: string | null;
+  profileMarkdownOutput: string | null;
+  reports: string[];
+}
+
+function parseMergeArgs(argv: string[]): MergeArgs {
+  const out: MergeArgs = {
+    output: null,
+    profileDir: null,
+    profileSummaryOutput: null,
+    profileMarkdownOutput: null,
+    reports: [],
+  };
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (arg === "--output") out.output = argv[++index];
+    else if (arg.startsWith("--output=")) out.output = arg.slice("--output=".length);
+    else if (arg === "--profile-dir") out.profileDir = argv[++index];
+    else if (arg.startsWith("--profile-dir=")) out.profileDir = arg.slice("--profile-dir=".length);
+    else if (arg === "--profile-summary-output" || arg === "--profile-report-json") out.profileSummaryOutput = argv[++index];
+    else if (arg.startsWith("--profile-summary-output=")) out.profileSummaryOutput = arg.slice("--profile-summary-output=".length);
+    else if (arg.startsWith("--profile-report-json=")) out.profileSummaryOutput = arg.slice("--profile-report-json=".length);
+    else if (arg === "--profile-markdown-output" || arg === "--profile-report-md" || arg === "--profile-report-markdown") out.profileMarkdownOutput = argv[++index];
+    else if (arg.startsWith("--profile-markdown-output=")) out.profileMarkdownOutput = arg.slice("--profile-markdown-output=".length);
+    else if (arg.startsWith("--profile-report-md=")) out.profileMarkdownOutput = arg.slice("--profile-report-md=".length);
+    else if (arg.startsWith("--profile-report-markdown=")) out.profileMarkdownOutput = arg.slice("--profile-report-markdown=".length);
+    else if (arg.startsWith("-")) throw new Error(`Unknown merge argument: ${arg}`);
+    else out.reports.push(arg);
+  }
+  if (!out.output) throw new Error("--merge-shards requires --output");
+  if (out.reports.length === 0) {
+    throw new Error("--merge-shards requires at least one shard report");
+  }
+  if ((out.profileSummaryOutput || out.profileMarkdownOutput) && !out.profileDir) {
+    throw new Error("profile report output options require --profile-dir");
+  }
+  if (out.profileDir) {
+    out.profileSummaryOutput ??= join(out.profileDir, "aggregate.json");
+    out.profileMarkdownOutput ??= join(out.profileDir, "aggregate.md");
+  }
+  return out;
+}
+
+function readShardReport(path: string): SuiteReport {
+  let report: SuiteReport;
+  try {
+    report = JSON.parse(readFileSync(path, "utf8")) as SuiteReport;
+  } catch (err) {
+    throw new Error(`Cannot read shard report ${path}: ${err}`);
+  }
+  if (!report.summary || !Array.isArray(report.results) ||
+      !report.run || !report.shard) {
+    throw new Error(`Invalid shard report ${path}: missing summary, results, run, or shard metadata`);
+  }
+  if (report.summary.totalRun !== report.results.length) {
+    throw new Error(
+      `Invalid shard report ${path}: summary totalRun ${report.summary.totalRun} ` +
+        `does not match ${report.results.length} results`,
+    );
+  }
+  return report;
+}
+
+function mergeShardReports(paths: string[]): SuiteReport {
+  const reports = paths.map(readShardReport);
+  const first = reports[0];
+  const shardCount = first.shard!.count;
+  if (paths.length !== shardCount) {
+    throw new Error(`Expected ${shardCount} shard reports, got ${paths.length}`);
+  }
+
+  const runSignature = JSON.stringify({
+    test262Sha: first.run!.test262Sha,
+    mode: first.run!.mode,
+    categories: first.run!.categories,
+    jobs: first.run!.jobs,
+    timeoutMs: first.run!.timeoutMs,
+    maxMemoryBytes: first.run!.maxMemoryBytes,
+  });
+  const seenShards = new Set<number>();
+  const seenTests = new Set<string>();
+  const results: PerTestRecord[] = [];
+  let durationSeconds = 0;
+
+  for (const [pathIndex, report] of reports.entries()) {
+    const path = paths[pathIndex];
+    if (report.shard!.count !== shardCount) {
+      throw new Error(`Shard count mismatch in ${path}`);
+    }
+    if (report.shard!.index < 0 || report.shard!.index >= shardCount ||
+        seenShards.has(report.shard!.index)) {
+      throw new Error(`Duplicate or invalid shard index ${report.shard!.index} in ${path}`);
+    }
+    seenShards.add(report.shard!.index);
+    if (report.summary.totalDiscovered !== first.summary.totalDiscovered) {
+      throw new Error(`Discovered-test count mismatch in ${path}`);
+    }
+    const signature = JSON.stringify({
+      test262Sha: report.run!.test262Sha,
+      mode: report.run!.mode,
+      categories: report.run!.categories,
+      jobs: report.run!.jobs,
+      timeoutMs: report.run!.timeoutMs,
+      maxMemoryBytes: report.run!.maxMemoryBytes,
+    });
+    if (signature !== runSignature) {
+      throw new Error(`Run metadata mismatch in ${path}`);
+    }
+    durationSeconds = Math.max(durationSeconds, report.summary.durationSeconds);
+    for (const result of report.results) {
+      if (shardForTest(result.id, shardCount) !== report.shard!.index) {
+        throw new Error(`Test ${result.id} is in the wrong shard report: ${path}`);
+      }
+      if (seenTests.has(result.id)) {
+        throw new Error(`Duplicate test result ${result.id}`);
+      }
+      seenTests.add(result.id);
+      results.push(result);
+    }
+  }
+
+  if (seenShards.size !== shardCount) {
+    throw new Error(`Incomplete shard set: expected ${shardCount}, got ${seenShards.size}`);
+  }
+  if (results.length !== first.summary.totalDiscovered) {
+    throw new Error(
+      `Incomplete result set: discovered ${first.summary.totalDiscovered}, merged ${results.length}`,
+    );
+  }
+
+  results.sort((a, b) => a.id.localeCompare(b.id));
+  return {
+    summary: aggregate(results, durationSeconds, first.summary.totalDiscovered),
+    results,
+    run: {
+      ...first.run!,
+      jobs: first.run!.jobs * shardCount,
+    },
+  };
+}
+
+async function runMerge(argv: string[]): Promise<number> {
+  const args = parseMergeArgs(argv);
+  const report = mergeShardReports(args.reports);
+  if (args.profileDir && report.run!.mode !== "bytecode") {
+    throw new Error("--profile-dir requires bytecode shard reports");
+  }
+  mkdirSync(dirname(args.output!), { recursive: true });
+  writeFileSync(args.output!, JSON.stringify(report, null, 2) + "\n");
+  console.log(`Merged ${args.reports.length} shards into: ${resolve(args.output!)}`);
+
+  if (args.profileDir && (args.profileSummaryOutput || args.profileMarkdownOutput)) {
+    const run = report.run!;
+    const profileSummary = buildProfileSummary(report.results, args.profileDir, {
+      suiteDir: run.suiteDir,
+      test262Sha: run.test262Sha,
+      mode: "bytecode",
+      categories: run.categories,
+      jobs: run.jobs,
+      timeoutMs: run.timeoutMs,
+      maxMemoryBytes: run.maxMemoryBytes,
+      totalDiscovered: report.summary.totalDiscovered,
+      totalRun: report.summary.totalRun,
+      passed: report.summary.passed,
+      failed: report.summary.failed,
+      wrapperInfraFailures: report.summary.wrapperInfraFailures,
+      timeouts: report.summary.timeouts,
+      durationSeconds: report.summary.durationSeconds,
+    });
+    if (args.profileSummaryOutput) {
+      mkdirSync(dirname(args.profileSummaryOutput), { recursive: true });
+      writeFileSync(
+        args.profileSummaryOutput,
+        JSON.stringify(profileSummary, null, 2) + "\n",
+      );
+      console.log(`Profile summary written to: ${resolve(args.profileSummaryOutput)}`);
+    }
+    if (args.profileMarkdownOutput) {
+      writeProfileMarkdown(profileSummary, args.profileMarkdownOutput);
+      console.log(`Profile markdown written to: ${resolve(args.profileMarkdownOutput)}`);
+    }
+  }
+
+  printConsoleSummary(report.summary, report.results);
+  await emitStepSummary(report.summary);
+  return report.summary.wrapperInfraFailures > 0 ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -2148,6 +2434,14 @@ function runComment(argv: string[]): number {
 const argv = process.argv.slice(2);
 if (argv[0] === "--comment") {
   process.exit(runComment(argv.slice(1)));
+} else if (argv[0] === "--merge-shards") {
+  runMerge(argv.slice(1)).then(
+    (code) => process.exit(code),
+    (err) => {
+      console.error(err);
+      process.exit(1);
+    },
+  );
 } else {
   runMain(argv).then(
     (code) => process.exit(code),

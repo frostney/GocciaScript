@@ -933,6 +933,127 @@ console.log("test262 runner: engine timeout is classified as TIMEOUT...");
   }
 }
 
+console.log("test262 runner: deterministic shards merge into one complete report...");
+{
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "built-ins");
+    const profileDir = join(tmp, "profiles");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), "");
+    writeFileSync(join(harness, "assert.js"), "");
+    for (let index = 0; index < 12; index++) {
+      writeFileSync(join(tests, `shard-${index}.js`), "var value = 1 + 1;\n");
+    }
+
+    const shardReports: string[] = [];
+    const seenTests = new Set<string>();
+    for (let shard = 0; shard < 4; shard++) {
+      const reportPath = join(tmp, `shard-${shard}.json`);
+      shardReports.push(reportPath);
+      const proc = Bun.spawnSync(
+        [
+          "bun",
+          "scripts/run_test262_suite.ts",
+          "--suite-dir", suite,
+          "--categories", "built-ins",
+          "--mode=bytecode",
+          "--jobs=1",
+          "--profile-dir", profileDir,
+          "--shard-index", String(shard),
+          "--shard-count", "4",
+          "--output", reportPath,
+        ],
+        { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
+      );
+      if (proc.exitCode !== 0) {
+        throw new Error(
+          `test262 shard ${shard} should pass, got ${proc.exitCode}: ${proc.stderr.toString()}`,
+        );
+      }
+      const report = JSON.parse(readFileSync(reportPath, "utf8"));
+      if (report.shard?.index !== shard || report.shard?.count !== 4) {
+        throw new Error(`test262 shard metadata is incorrect: ${JSON.stringify(report.shard)}`);
+      }
+      if (report.summary.totalDiscovered !== 12) {
+        throw new Error(`test262 shard should preserve global discovery count: ${JSON.stringify(report.summary)}`);
+      }
+      for (const result of report.results) {
+        if (seenTests.has(result.id)) {
+          throw new Error(`test262 shard duplicated ${result.id}`);
+        }
+        seenTests.add(result.id);
+      }
+    }
+    if (seenTests.size !== 12) {
+      throw new Error(`test262 shards should cover all 12 tests, got ${seenTests.size}`);
+    }
+    if (existsSync(join(profileDir, "aggregate.json"))) {
+      throw new Error("individual test262 shards must not write partial profile aggregates");
+    }
+
+    const mergedPath = join(tmp, "merged.json");
+    const profileSummaryPath = join(tmp, "profile-summary.json");
+    const profileMarkdownPath = join(tmp, "profile-summary.md");
+    const mergeProc = Bun.spawnSync(
+      [
+        "bun",
+        "scripts/run_test262_suite.ts",
+        "--merge-shards",
+        "--output", mergedPath,
+        "--profile-dir", profileDir,
+        "--profile-summary-output", profileSummaryPath,
+        "--profile-markdown-output", profileMarkdownPath,
+        ...shardReports,
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
+    );
+    if (mergeProc.exitCode !== 0) {
+      throw new Error(
+        `test262 shard merge should pass, got ${mergeProc.exitCode}: ${mergeProc.stderr.toString()}`,
+      );
+    }
+    const merged = JSON.parse(readFileSync(mergedPath, "utf8"));
+    if (merged.summary.totalRun !== 12 || merged.summary.passed !== 12 ||
+        merged.results?.length !== 12 || merged.run?.jobs !== 4) {
+      throw new Error(`test262 merged report is incomplete: ${JSON.stringify(merged.summary)}`);
+    }
+    const profileSummary = JSON.parse(readFileSync(profileSummaryPath, "utf8"));
+    if (profileSummary.profileCount !== 12 ||
+        profileSummary.missingProfileCount !== 0 ||
+        !existsSync(profileMarkdownPath)) {
+      throw new Error(
+        `test262 merged profile report is incomplete: ${JSON.stringify(profileSummary)}`,
+      );
+    }
+
+    const duplicateProc = Bun.spawnSync(
+      [
+        "bun",
+        "scripts/run_test262_suite.ts",
+        "--merge-shards",
+        "--output", join(tmp, "invalid.json"),
+        shardReports[0],
+        shardReports[0],
+        shardReports[2],
+        shardReports[3],
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    if (duplicateProc.exitCode !== 1 ||
+        !duplicateProc.stderr.toString().includes("Duplicate or invalid shard index")) {
+      throw new Error(
+        `test262 merge should reject duplicate shards: ${duplicateProc.stderr.toString()}`,
+      );
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Bare Loader: --test262-host child realms expose host records...");
 {
   const proc = Bun.spawnSync([BARE, "--test262-host"], {

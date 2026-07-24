@@ -35,6 +35,9 @@ LoaderBare-plus-stock-harness setup, see
   same convention `test262-harness`/`eshost`/test262.fyi use.
 - Wrapper-infrastructure failures are classified separately from
   conformance failures and gated to zero in CI.
+- CI assigns every normalized test ID to one of four deterministic shards,
+  runs those shards concurrently, then validates and merges them into the
+  same canonical report and profile artifacts used by unsharded consumers.
 - CI uploads `test262-results.json` on every PR and main run. Main runs also
   publish the report to Vercel Blob when `BLOB_READ_WRITE_TOKEN` is configured,
   and the website compatibility dashboard reads those durable reports at
@@ -122,6 +125,7 @@ recommendations.
 ```text
 scripts/run_test262_suite.ts
   → discover tests under suite/test/{built-ins,harness,intl402,language,staging}
+  → optionally select one deterministic --shard-index/--shard-count partition
   → for each test (parallel pool, --jobs=N):
       → read frontmatter, classify by phase (parse / runtime / positive)
       → build source = (stock harness includes) + body, with a tiny
@@ -131,7 +135,47 @@ scripts/run_test262_suite.ts
       → classify into PASS / FAIL / WRAPPER_INFRA / TIMEOUT
   → aggregate per top-level category
   → emit JSON, console summary, GitHub Step Summary table
+  → CI merge mode validates all shard indexes and test IDs, then emits one
+    canonical report (and one aggregate profile from the merged details)
 ```
+
+## CI sharding
+
+PR and main workflows run four independent Test262 shards. Membership is the
+FNV-1a hash of the normalized test ID modulo the shard count, so it is stable
+across platforms, independent of filesystem discovery order, and insensitive
+to unrelated directory insertions. Sharding changes orchestration only: every
+test still runs through its own `GocciaScriptLoaderBare` process, and each
+shard keeps its own `--jobs=4` worker pool.
+
+Both `--shard-index` and `--shard-count` are required, and the index is
+zero-based:
+
+```bash
+bun scripts/run_test262_suite.ts \
+  --suite-dir <checkout> \
+  --shard-index 0 \
+  --shard-count 4 \
+  --output shard-0.json
+```
+
+After all shards finish, merge mode rejects missing or duplicate shard indexes,
+run-metadata mismatches, duplicate tests, tests assigned to the wrong shard,
+and incomplete corpus coverage before writing the canonical report:
+
+```bash
+bun scripts/run_test262_suite.ts \
+  --merge-shards \
+  --output test262-results.json \
+  shard-0.json shard-1.json shard-2.json shard-3.json
+```
+
+The merged duration is the slowest shard duration, matching the effective CI
+wall-clock. On main, shard jobs upload disjoint per-test profile details; merge
+mode rebuilds the single aggregate JSON and Markdown reports from their union.
+Downstream baseline caching, regression comments, dashboard publishing, and
+profile publishing therefore continue to consume their existing canonical
+artifact names.
 
 ## Wire protocol
 

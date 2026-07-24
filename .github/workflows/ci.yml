@@ -580,6 +580,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     defaults:
       run:
         shell: bash
@@ -644,8 +648,6 @@ jobs:
           if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
             profile_args=(
               --profile-dir=test262-profile-details
-              --profile-summary-output=test262-profile-aggregate.json
-              --profile-markdown-output=test262-profile-aggregate.md
             )
           fi
 
@@ -654,15 +656,64 @@ jobs:
             --mode=bytecode \
             --jobs=4 \
             --timeout-ms=20000 \
-            --output=test262-results.json \
+            --shard-index=${{ matrix.shard }} \
+            --shard-count=4 \
+            --output=test262-results-${{ matrix.shard }}.json \
             "${profile_args[@]}"
+
+      - name: Upload test262 shard
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test262-shard-${{ matrix.shard }}
+          retention-days: 30
+          path: |
+            test262-results-${{ matrix.shard }}.json
+            test262-profile-details/
+
+  test262-merge:
+    needs: test262
+    if: always()
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          no-cache: true
+
+      - name: Download test262 shards
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: test262-shard-*
+          path: .
+          merge-multiple: true
+
+      - name: Merge test262 shards
+        run: |
+          profile_args=()
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            profile_args=(
+              --profile-dir=test262-profile-details
+              --profile-summary-output=test262-profile-aggregate.json
+              --profile-markdown-output=test262-profile-aggregate.md
+            )
+          fi
+
+          bun scripts/run_test262_suite.ts \
+            --merge-shards \
+            --output=test262-results.json \
+            "${profile_args[@]}" \
+            test262-results-{0,1,2,3}.json
 
       - name: Stage test262 baseline
         if: github.ref == 'refs/heads/main'
-        run: |
-          if [ -f test262-results.json ]; then
-            cp test262-results.json test262-baseline.json
-          fi
+        run: cp test262-results.json test262-baseline.json
 
       - name: Cache test262 baseline
         if: github.ref == 'refs/heads/main' && hashFiles('test262-baseline.json') != ''
