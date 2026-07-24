@@ -14833,7 +14833,13 @@ begin
         if (TargetValue is TGocciaClassValue) or
            (TargetValue is TGocciaObjectValue) then
           SetBytecodeHomeObject(RightValue, TargetValue);
-        SetIndexValueLoose(TargetValue, FRegisters[B], RightValue);
+        if not ((TargetValue is TGocciaArrayValue) and
+                (FRegisters[B].Kind = grkInt) and
+                (FRegisters[B].IntValue >= 0) and
+                (FRegisters[B].IntValue <= High(Integer)) and
+                TGocciaArrayValue(TargetValue).TryAppendDenseElementFast(
+                  FRegisters[B].IntValue, RightValue)) then
+          SetIndexValueLoose(TargetValue, FRegisters[B], RightValue);
       end;
 
       OP_ADD:
