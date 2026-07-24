@@ -3,7 +3,7 @@ program GocciaTest262Runner;
 {$I Goccia.inc}
 
 uses
-  {$IFDEF UNIX}cthreads,{$ENDIF}
+  {$IFDEF UNIX}cthreads, BaseUnix,{$ENDIF}
   Classes,
   Generics.Collections,
   Generics.Defaults,
@@ -50,6 +50,7 @@ const
   ASYNC_FAIL_MARKER = 'Test262:AsyncTestFailure:';
   NEGATIVE_NO_ERROR_MARKER = 'Test262:NegativeTestNoError';
   NEGATIVE_ERROR_MARKER = 'Test262:NegativeTestError:';
+  WORKER_RESULT_VERSION = 1;
 
 type
   TTest262Outcome = (toPass, toFail, toWrapperInfra, toTimeout);
@@ -168,6 +169,93 @@ begin
     toFail: Result := 'FAIL';
     toWrapperInfra: Result := 'WRAPPER_INFRA';
     toTimeout: Result := 'TIMEOUT';
+  end;
+end;
+
+procedure WriteWorkerString(const AStream: TStream; const AValue: string);
+var
+  ByteLength: LongInt;
+  ValueBytes: UTF8String;
+begin
+  ValueBytes := UTF8String(AValue);
+  ByteLength := Length(ValueBytes);
+  AStream.WriteBuffer(ByteLength, SizeOf(ByteLength));
+  if ByteLength > 0 then
+    AStream.WriteBuffer(ValueBytes[1], ByteLength);
+end;
+
+function ReadWorkerString(const AStream: TStream): string;
+var
+  ByteLength: LongInt;
+  ValueBytes: UTF8String;
+begin
+  AStream.ReadBuffer(ByteLength, SizeOf(ByteLength));
+  if (ByteLength < 0) or (ByteLength > AStream.Size - AStream.Position) then
+    raise EReadError.Create('Invalid worker result string length');
+  SetLength(ValueBytes, ByteLength);
+  if ByteLength > 0 then
+    AStream.ReadBuffer(ValueBytes[1], ByteLength);
+  Result := string(ValueBytes);
+end;
+
+procedure WriteWorkerResult(const APath: string;
+  const AResult: TTest262Result);
+var
+  DurationMs: LongInt;
+  Outcome: LongInt;
+  ProfileMissing: Byte;
+  Stream: TFileStream;
+  Version: LongInt;
+begin
+  Stream := TFileStream.Create(APath, fmCreate);
+  try
+    Version := WORKER_RESULT_VERSION;
+    Outcome := Ord(AResult.Status);
+    DurationMs := AResult.DurationMs;
+    ProfileMissing := Ord(AResult.ProfileMissing);
+    Stream.WriteBuffer(Version, SizeOf(Version));
+    Stream.WriteBuffer(Outcome, SizeOf(Outcome));
+    Stream.WriteBuffer(DurationMs, SizeOf(DurationMs));
+    Stream.WriteBuffer(ProfileMissing, SizeOf(ProfileMissing));
+    WriteWorkerString(Stream, AResult.Id);
+    WriteWorkerString(Stream, AResult.Message);
+    WriteWorkerString(Stream, AResult.Diagnostic);
+    WriteWorkerString(Stream, AResult.ProfilePath);
+  finally
+    Stream.Free;
+  end;
+end;
+
+procedure ReadWorkerResult(const APath: string;
+  out AResult: TTest262Result);
+var
+  DurationMs: LongInt;
+  Outcome: LongInt;
+  ProfileMissing: Byte;
+  Stream: TFileStream;
+  Version: LongInt;
+begin
+  Stream := TFileStream.Create(APath, fmOpenRead or fmShareDenyWrite);
+  try
+    Stream.ReadBuffer(Version, SizeOf(Version));
+    if Version <> WORKER_RESULT_VERSION then
+      raise EReadError.Create('Unsupported worker result version');
+    Stream.ReadBuffer(Outcome, SizeOf(Outcome));
+    if (Outcome < Ord(Low(TTest262Outcome))) or
+       (Outcome > Ord(High(TTest262Outcome))) then
+      raise EReadError.Create('Invalid worker result outcome');
+    Stream.ReadBuffer(DurationMs, SizeOf(DurationMs));
+    Stream.ReadBuffer(ProfileMissing, SizeOf(ProfileMissing));
+    AResult := Default(TTest262Result);
+    AResult.Status := TTest262Outcome(Outcome);
+    AResult.DurationMs := DurationMs;
+    AResult.ProfileMissing := ProfileMissing <> 0;
+    AResult.Id := ReadWorkerString(Stream);
+    AResult.Message := ReadWorkerString(Stream);
+    AResult.Diagnostic := ReadWorkerString(Stream);
+    AResult.ProfilePath := ReadWorkerString(Stream);
+  finally
+    Stream.Free;
   end;
 end;
 
@@ -353,7 +441,7 @@ begin
   WriteLn('  --categories=LIST            Comma-separated top-level categories');
   WriteLn('  --filter=GLOB                Test ID glob');
   WriteLn('  --max-tests=N                Cap before sharding (0 = unlimited)');
-  WriteLn('  --jobs=N                     Native worker threads (default: 4)');
+  WriteLn('  --jobs=N                     Concurrent native workers (default: 4)');
   WriteLn('  --mode=interpreted|bytecode  Execution mode (default: bytecode)');
   WriteLn('  --timeout-ms=N               Per-test cooperative timeout');
   WriteLn('  --max-memory=N               Per-test GC heap ceiling');
@@ -1219,8 +1307,26 @@ end;
 
 procedure TTest262App.ExecuteAll;
 var
+  {$IFDEF UNIX}
+  ActiveWorkers: Integer;
+  ChildPid: TPid;
+  CompletedCount: Integer;
+  ExitCode: Integer;
+  I: Integer;
+  NextIndex: Integer;
+  ResultIndex: Integer;
+  ResultPaths: array of string;
+  Slot: Integer;
+  SlotIndices: array of Integer;
+  SlotPids: array of TPid;
+  SlotStartedNanoseconds: array of Int64;
+  SlotTimedOut: array of Boolean;
+  WaitStatus: cint;
+  WorkerMessage: string;
+  {$ELSE}
   I: Integer;
   Pool: TGocciaThreadPool;
+  {$ENDIF}
   StartNanoseconds: Int64;
 begin
   SetLength(FResults, FCases.Count);
@@ -1228,6 +1334,137 @@ begin
     Exit;
   EnsureSharedPrototypesInitialized(WarmUpRuntime);
   StartNanoseconds := GetNanoseconds;
+  {$IFDEF UNIX}
+  SetLength(SlotPids, FOptions.Jobs);
+  SetLength(SlotIndices, FOptions.Jobs);
+  SetLength(SlotStartedNanoseconds, FOptions.Jobs);
+  SetLength(SlotTimedOut, FOptions.Jobs);
+  SetLength(ResultPaths, FOptions.Jobs);
+  for Slot := 0 to FOptions.Jobs - 1 do
+    ResultPaths[Slot] := IncludeTrailingPathDelimiter(GetTempDir(False)) +
+      Format('goccia-test262-%d-%d.result', [fpGetPid, Slot]);
+  ActiveWorkers := 0;
+  CompletedCount := 0;
+  NextIndex := 0;
+  while CompletedCount < FCases.Count do
+  begin
+    while (NextIndex < FCases.Count) and
+      (ActiveWorkers < FOptions.Jobs) do
+    begin
+      Slot := 0;
+      while SlotPids[Slot] <> 0 do
+        Inc(Slot);
+      DeleteFile(ResultPaths[Slot]);
+      ResultIndex := NextIndex;
+      ChildPid := fpFork;
+      if ChildPid = 0 then
+      begin
+        try
+          ExecuteOne(FCases[ResultIndex], FResults[ResultIndex]);
+          WriteWorkerResult(ResultPaths[Slot], FResults[ResultIndex]);
+          fpExit(0);
+        except
+          fpExit(2);
+        end;
+      end;
+      if ChildPid < 0 then
+      begin
+        FResults[ResultIndex].Id := FCases[ResultIndex].Id;
+        FResults[ResultIndex].Status := toWrapperInfra;
+        FResults[ResultIndex].Message := 'Unable to fork Test262 worker';
+        FResults[ResultIndex].Diagnostic := FResults[ResultIndex].Message;
+        Inc(CompletedCount);
+      end
+      else
+      begin
+        SlotPids[Slot] := ChildPid;
+        SlotIndices[Slot] := ResultIndex;
+        SlotStartedNanoseconds[Slot] := GetNanoseconds;
+        SlotTimedOut[Slot] := False;
+        Inc(ActiveWorkers);
+      end;
+      Inc(NextIndex);
+    end;
+
+    ChildPid := fpWaitPid(-1, @WaitStatus, WNOHANG);
+    if ChildPid = 0 then
+    begin
+      for Slot := 0 to High(SlotPids) do
+        if (SlotPids[Slot] <> 0) and
+           (not SlotTimedOut[Slot]) and
+           (GetNanoseconds - SlotStartedNanoseconds[Slot] >
+             Int64(FOptions.TimeoutMs * 2 + 1000) * 1000000) then
+        begin
+          SlotTimedOut[Slot] := True;
+          fpKill(SlotPids[Slot], SIGKILL);
+        end;
+      Sleep(1);
+      Continue;
+    end;
+    if ChildPid < 0 then
+      Continue;
+    Slot := -1;
+    for I := 0 to High(SlotPids) do
+      if SlotPids[I] = ChildPid then
+      begin
+        Slot := I;
+        Break;
+      end;
+    if Slot < 0 then
+      Continue;
+    ResultIndex := SlotIndices[Slot];
+    WorkerMessage := '';
+    if SlotTimedOut[Slot] then
+    begin
+      FResults[ResultIndex].Id := FCases[ResultIndex].Id;
+      FResults[ResultIndex].Status := toTimeout;
+      WorkerMessage := Format(
+        'Test262 worker exceeded %dms watchdog',
+        [FOptions.TimeoutMs * 2 + 1000]);
+    end
+    else if WIFEXITED(WaitStatus) then
+    begin
+      ExitCode := WEXITSTATUS(WaitStatus);
+      if (ExitCode = 0) and FileExists(ResultPaths[Slot]) then
+        try
+          ReadWorkerResult(ResultPaths[Slot], FResults[ResultIndex]);
+        except
+          on E: Exception do
+            WorkerMessage := 'Invalid worker result: ' + E.Message;
+        end
+      else
+        WorkerMessage := Format(
+          'Test262 worker exited with status %d', [ExitCode]);
+    end
+    else if WIFSIGNALED(WaitStatus) then
+      WorkerMessage := Format(
+        'Test262 worker terminated by signal %d',
+        [WTERMSIG(WaitStatus)])
+    else
+      WorkerMessage := 'Test262 worker terminated unexpectedly';
+    if WorkerMessage <> '' then
+    begin
+      FResults[ResultIndex].Id := FCases[ResultIndex].Id;
+      if not SlotTimedOut[Slot] then
+        FResults[ResultIndex].Status := toWrapperInfra;
+      FResults[ResultIndex].Message := WorkerMessage;
+      FResults[ResultIndex].Diagnostic := WorkerMessage;
+    end;
+    DeleteFile(ResultPaths[Slot]);
+    SlotPids[Slot] := 0;
+    Dec(ActiveWorkers);
+    Inc(CompletedCount);
+    if FOptions.Verbose or
+       (CompletedCount = FCases.Count) or
+       ((CompletedCount mod 1024) = 0) then
+    begin
+      WriteLn('[', CompletedCount, '/', FCases.Count, ']');
+      Flush(Output);
+    end;
+  end;
+  for Slot := 0 to High(ResultPaths) do
+    DeleteFile(ResultPaths[Slot]);
+  {$ELSE}
   Pool := TGocciaThreadPool.Create(FOptions.Jobs);
   try
     Pool.MaxBytes := FOptions.MaxMemoryBytes;
@@ -1249,6 +1486,7 @@ begin
   finally
     Pool.Free;
   end;
+  {$ENDIF}
   FDurationNanoseconds := GetNanoseconds - StartNanoseconds;
 end;
 

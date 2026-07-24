@@ -130,14 +130,15 @@ GocciaTest262Runner
   → discover tests under suite/test/{built-ins,harness,intl402,language,staging}
   → optionally select one deterministic --shard-index/--shard-count partition
   → dispatch tests to native workers (--jobs=N)
-  → for each test on its owning worker:
-      → create a fresh thread-local runtime, heap, engine, and realm
+  → on POSIX, fork one short-lived child per test without starting a new binary
+  → for each test in its owning worker process:
+      → create one runtime, heap, engine, and realm
       → read frontmatter, classify by phase (parse / runtime / positive)
       → build source = (stock harness includes) + body, with a tiny
         marker-emitting wrapper for most negative-runtime tests
       → install the Test262-only host and execute in process
       → classify into PASS / FAIL / WRAPPER_INFRA / TIMEOUT
-      → destroy the engine and thread-local runtime before the next test
+      → return the Pascal result and exit the worker process
   → aggregate per top-level category
   → emit JSON and a console summary
 scripts/run_test262_suite.ts --merge-shards
@@ -279,13 +280,13 @@ reads the exit code.
 | Async body never calls `$DONE`                        | no captured `Test262:Async*` marker      | conformance fail   |
 | Cooperative deadline expires                          | `TGocciaTimeoutError`                    | timeout            |
 | Pascal-side exception                                 | non-Goccia exception at the test boundary | wrapper infra     |
-| Native worker stalls beyond the watchdog              | worker produces a timeout result          | timeout            |
+| Native worker stalls beyond the watchdog              | supervisor kills only that worker         | timeout            |
 | Negative-runtime catch path itself fails              | no marker emitted                         | wrapper infra      |
 
 `ClassifyResult` receives the structured engine outcome, captured output, and
-formatted diagnostic. A native signal terminates that shard process; the merge
-job then rejects the incomplete shard set instead of publishing partial
-conformance numbers.
+formatted diagnostic. On POSIX, a native signal terminates only the current
+worker process. The supervisor records a wrapper-infrastructure result for that
+test and continues the shard; a watchdog expiry is recorded as a timeout.
 
 `wrapper_infra_failures` is gated to zero in CI. Any non-zero count
 fails the run because the conformance numbers are not trustworthy when
@@ -415,17 +416,19 @@ Default categories: `built-ins, harness, intl402, language, staging`
 
 There is no eligibility filter. Every discovered test runs. Tests
 that depend on missing features fail with a real diagnostic, not an
-invisible skip. Each worker recreates its thread-local runtime after every
-test, so the heap, roots, queues, executor, engine, and realm cannot leak into
-the next case. Cooperative timeouts, per-test memory ceilings, and the native
-worker watchdog bound ordinary hangs and memory growth.
+invisible skip. On POSIX, each worker process owns exactly one test, so its
+heap, roots, queues, executor, engine, and realm cannot leak into the next case.
+Process exit also returns allocator-retained storage to the operating system.
+Cooperative timeouts, per-test memory ceilings, and the native worker watchdog
+bound ordinary hangs and memory growth.
 
 ## Known engine crashes
 
 The native runner has no crash skip list and no generic eligibility filter.
-A native signal terminates its shard, which prevents the merge job from
-publishing an incomplete report. Any future quarantine must name the exact
-test and link an engine issue; it must not become a feature-level filter.
+On POSIX, a native signal is contained to one worker and classified as wrapper
+infrastructure while the supervisor continues the shard. Any future quarantine
+must name the exact test and link an engine issue; it must not become a
+feature-level filter.
 
 ## Updating the contract
 

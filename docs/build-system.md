@@ -501,7 +501,7 @@ All compiled binaries go to the `build/` directory:
 | `build/GocciaREPL` | `source/app/GocciaREPL.dpr` | Interactive read-eval-print loop |
 | `build/GocciaScriptLoader` | `source/app/GocciaScriptLoader.dpr` | Execute `.js` files or stdin input, with optional JSON output |
 | `build/GocciaScriptLoaderBare` | `source/app/GocciaScriptLoaderBare.dpr` | Execute file or stdin source with the core engine and CLI-local `print`; no loader runtime profile or conformance-only host hooks |
-| `build/GocciaTest262Runner` | `source/app/GocciaTest262Runner.dpr` | Discover, shard, execute, classify, and report the pinned Test262 corpus using isolated native worker runtimes |
+| `build/GocciaTest262Runner` | `source/app/GocciaTest262Runner.dpr` | Discover, shard, execute, classify, and report the pinned Test262 corpus using isolated native workers |
 | `build/GocciaSandboxRunner` | `source/app/GocciaSandboxRunner.dpr` | Execute sandbox entry paths inside a seeded virtual filesystem |
 | `build/GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | JavaScript test runner |
 | `build/GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |

@@ -728,11 +728,19 @@ Each workflow reuses a fixed branch (`chore/<suite>-bump`), so an unmerged PR is
 ### Running test262 locally
 
 ```bash
-./build.pas loaderbare  # build the binary the runner needs
-bun scripts/run_test262_suite.ts --filter "built-ins/Array/*" --output=results.json
+./build.pas test262runner
+./build/GocciaTest262Runner \
+  --suite-dir=/path/to/test262 \
+  --filter="built-ins/Array/*" \
+  --output=results.json
 ```
 
-The runner clones test262 into a tempdir on first use, or accepts an existing checkout via `--suite-dir`. See `bun scripts/run_test262_suite.ts --help` for the full option set, including `--categories`, `--max-tests`, `--mode={interpreted,bytecode}`, `--jobs`, `--timeout-ms`, and `--max-memory`.
+The native runner accepts an existing checkout via `--suite-dir`; CI checks out
+the SHA pinned in `scripts/test262-suite-sha.txt`. Run
+`./build/GocciaTest262Runner --help` for execution options including
+`--categories`, `--max-tests`, `--mode={interpreted,bytecode}`, `--jobs`,
+`--timeout-ms`, and `--max-memory`. The TypeScript utility handles only
+cross-shard merge, profile aggregation, and comment rendering.
 
 ## Coverage
 

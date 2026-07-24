@@ -894,8 +894,8 @@ jobs:
         # test's wall time ~30-40% vs the old --jobs=2 baseline; borderline
         # 7-9s tests must not trip the deadline purely from contention.
         # --jobs=4 matches the 4 vCPUs on GH-hosted ubuntu-latest runners
-        # for public repos. Each native worker owns one isolated engine and
-        # recreates its thread-local runtime between tests.
+        # for public repos. The runner forks, rather than execs, one isolated
+        # engine process per test and keeps at most four alive concurrently.
         run: |
           ./build/GocciaTest262Runner \
             --suite-dir=test262-suite \
