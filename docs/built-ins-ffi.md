@@ -92,7 +92,7 @@ stringLength("hello"); // 5
 stringLength(null);    // native NULL
 ```
 
-Non-null values must be strings containing well-formed UTF-16 without embedded NUL characters. Nullable descriptors currently support only `utf8string`, only in bound native-function argument positions. Aggregate storage, return types, and callback signatures reject them so the API does not imply unsupported ownership or lifetime semantics.
+Non-null values must be strings containing well-formed UTF-16 without embedded NUL characters. GocciaScript encodes them into temporary NUL-terminated UTF-8 buffers that are valid only for the duration of the native call; native code must not retain those pointers after the call returns. Nullable descriptors currently support only `utf8string`, only in bound native-function argument positions. Aggregate storage, return types, and callback signatures reject them so the API does not imply unsupported ownership or lifetime semantics.
 
 ## Variadic Native Calls
 

@@ -23,10 +23,12 @@ ARM64 variadic stack rules. Variadic callbacks are rejected.
 
 Nullability is also explicit and compositional. `FFI.nullable("utf8string")`
 accepts strict UTF-8/NUL-checked text or JavaScript `null`, which maps to native
-`NULL`. It is valid only in bound native-function argument positions. Plain
-`utf8string` keeps its existing coercion behavior. Other wrapped types,
-aggregate storage, returns, and callback positions are rejected until their
-ownership and lifetime contracts are designed.
+`NULL`. Non-null text uses a temporary NUL-terminated UTF-8 buffer that is valid
+only for the duration of the native call; native code must not retain the pointer
+after the call returns. The descriptor is valid only in bound native-function
+argument positions. Plain `utf8string` keeps its existing coercion behavior.
+Other wrapped types, aggregate storage, returns, and callback positions are
+rejected until their ownership and lifetime contracts are designed.
 
 Aggregate definitions preserve exact native field names, including `buffer` and
 `byteOffset`. Declared fields take precedence over the legacy direct metadata

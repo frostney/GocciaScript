@@ -101,11 +101,14 @@ describe("FFILibrary.prototype.bind (variadic signatures)", () => {
     const types = [];
     const values = [];
 
-    for (const unused of new Array(64)) {
+    for (const unused of new Array(63)) {
       types.push("i32");
       values.push(1);
     }
 
+    expect(sum(63, FFI.varargs(types, values))).toBe(63);
+    types.push("i32");
+    values.push(1);
     expect(() => sum(64, FFI.varargs(types, values))).toThrow(RangeError);
   });
 });
