@@ -1380,7 +1380,8 @@ begin
     Any uncertainty falls back to the complete [[Set]] implementation. }
   Result := False;
   if (AIndex < 0) or (AIndex <> FElements.Count) or
-     (FProperties.Count <> 0) or (not FExtensible) then
+     (FProperties.Count <> 0) or (not FExtensible) or
+     (not CanStoreDenseElementIndex(AIndex, FElements.Count)) then
     Exit;
   if (Int64(AIndex) >= FLength) and not FLengthWritable then
     Exit;
