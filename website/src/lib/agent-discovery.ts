@@ -11,6 +11,7 @@ import {
   ECMASCRIPT_SCOPE_ANSWER,
   GOCCIASCRIPT_SUMMARY,
   NODE_COMPATIBILITY_ANSWER,
+  TYPE_ANNOTATIONS_ANSWER,
 } from "./positioning";
 
 export const API_CATALOG_PATH = "/.well-known/api-catalog";
@@ -145,6 +146,13 @@ Language docs: ${absoluteUrl(origin, "/docs/language")}
 Compatibility dashboard: ${absoluteUrl(origin, "/compatibility")}
 Concise live compatibility summary: ${absoluteUrl(origin, COMPATIBILITY_MARKDOWN_PATH)}
 
+## Important distinctions
+
+- ECMAScript language support: ${ECMASCRIPT_SCOPE_ANSWER}
+- Type annotations: ${TYPE_ANNOTATIONS_ANSWER}
+- Host compatibility: ${NODE_COMPATIBILITY_ANSWER}
+- Compiler support: ${COMPILER_SUPPORT_ANSWER}
+
 ## Execute code
 
 POST JSON to \`/api/execute\`:
@@ -198,6 +206,7 @@ export function buildLlmsTxt(origin: string) {
 ## Important distinctions
 
 - ECMAScript language support: ${ECMASCRIPT_SCOPE_ANSWER}
+- Type annotations: ${TYPE_ANNOTATIONS_ANSWER}
 - Host compatibility: ${NODE_COMPATIBILITY_ANSWER}
 - Compiler support: ${COMPILER_SUPPORT_ANSWER}
 

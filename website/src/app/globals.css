@@ -1735,67 +1735,48 @@ a.info-term {
   opacity: 0.5;
 }
 
-/* excluded pill list */
-.excluded-row {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
 .compat-note {
   margin: 1rem 0 0;
   color: var(--ink-2);
   font-size: 0.92rem;
   line-height: 1.5;
 }
-.excluded-pill {
-  font-family: var(--mono);
-  font-size: 0.82rem;
-  padding: 0.3rem 0.65rem;
-  background: var(--paper-2);
+.profile-table-wrap {
+  overflow-x: auto;
   border: 1px solid var(--rule-soft);
-  border-radius: 6px;
-  color: var(--ink-2);
-  position: relative;
-  cursor: help;
-  outline: 0;
-  transition:
-    border-color 0.15s,
-    color 0.15s;
+  border-radius: 10px;
+  background: var(--paper-2);
 }
-.excluded-pill:is(button) {
-  font-family: var(--mono);
+.profile-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: 0.82rem;
 }
-.excluded-pill:hover,
-.excluded-pill:focus-visible {
-  border-color: var(--amber);
+.profile-table th,
+.profile-table td {
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid var(--rule-soft);
+  text-align: left;
+  vertical-align: top;
+}
+.profile-table thead th {
+  color: var(--ink-3);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.profile-table tbody th {
   color: var(--ink);
+  font-family: var(--mono);
+  font-weight: 600;
 }
-/* Strikethrough — pseudo-element on the pill itself, drawn over the label.
-   Use a wrapper-friendly trick: span the label so the line draws across
-   only the visible name, not the tooltip. */
-.excluded-pill::after {
-  content: "";
-  position: absolute;
-  left: 0.25rem;
-  right: 0.25rem;
-  top: 50%;
-  height: 1.5px;
-  background: var(--amber);
-  transform: rotate(-4deg);
-  opacity: 0.75;
-  pointer-events: none;
+.profile-table tbody tr:last-child th,
+.profile-table tbody tr:last-child td {
+  border-bottom: 0;
 }
-/* The tooltip itself sits above the pill — strike-through must NOT cross it. */
-.excluded-pill > .bi-tooltip::after {
-  /* the bi-tooltip's own ::after is the caret arrow; nothing else needed */
-}
-.excluded-pill:hover .bi-tooltip {
-  opacity: 1;
-  transform: translateX(-50%) translateY(0);
-}
-.excluded-pill:focus-visible .bi-tooltip {
-  opacity: 1;
-  transform: translateX(-50%) translateY(0);
+.profile-table code {
+  white-space: nowrap;
 }
 
 /* ---------- built-ins chips ---------- */

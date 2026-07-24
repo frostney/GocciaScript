@@ -685,7 +685,10 @@ import fs from "fs";
 import { $, runScript } from "goccia";
 ```
 
-The `"fs"` module operates on the sandbox virtual filesystem. It follows a Node.js-shaped subset while keeping every path inside the sandbox namespace; it never reads from or writes to the host filesystem.
+The `"fs"` module provides Node-compatible filesystem operations over the sandbox virtual filesystem. Its documented method set includes synchronous,
+callback, and promise forms, `Stats`, and Node-shaped errors while keeping every
+path inside the sandbox namespace; it never reads from or writes to the host
+filesystem. This covers the listed `fs` surface, not the entire Node.js host or every Node `fs` method.
 
 | Method / Property | Description |
 |-------------------|-------------|

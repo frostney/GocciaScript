@@ -39,6 +39,14 @@ or validating one architecture is not parity. External compliance harnesses
 that require their own pinned suite checkout and update workflow are outside the
 native application matrix; ordinary repository tests remain required.
 
+## Why Validation Is IDE-Based
+
+The supported Delphi 12 Community Edition workflow is IDE-based. Community
+Edition does not provide the command-line automation path needed to reproduce
+the complete group build and test contract in ordinary per-commit CI. This is
+an operational constraint on automation, not a narrower runtime or application
+support tier.
+
 ## Portability Boundaries
 
 Shared source uses the project CPU symbols normalized by `Shared.inc` and the

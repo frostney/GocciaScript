@@ -86,7 +86,8 @@ Other features that produce suggestions include:
 - `for...in` loops when `--compat-for-in-loop` is off -- suggests `Object.keys()` / `Object.entries()` with `for...of`, or the flag
 - `while` / `do...while` loops when `--compat-while-loops` is off -- suggests `for...of`, array methods, or the flag
 
-See [Language](language.md) for the full list of excluded features and their rationale.
+See [Language](language.md) for the recommended profile, compatibility paths,
+and their rationale.
 
 ## Runtime Error Display
 
@@ -602,7 +603,7 @@ For Pascal-side error handling when embedding GocciaScript in FreePascal applica
 
 ## Related Documents
 
-- [Language](language.md) -- Supported features, excluded features, and rationale
+- [Language](language.md) -- Implemented features, recommended defaults, compatibility paths, and rationale
 - [Built-in Objects](built-ins.md) -- Error constructors and API reference
 - [Embedding the Engine](embedding.md) -- Pascal-side error handling for embedders
 - [Testing](testing.md) -- Writing tests that assert on error behavior
