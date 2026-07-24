@@ -4639,6 +4639,9 @@ procedure CompileMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaMemberExpression; const ADest: UInt16);
 var
   ObjReg, IdxReg, BaseReg, SuperReg, KeyReg: UInt16;
+  LocalIdx: Integer;
+  ObjectRegisterAllocated: Boolean;
+  Local: TGocciaCompilerLocal;
   PropIdx: UInt16;
   EndJump, JumpIndex: Integer;
   NullishJumps: TGocciaCompilerJumpArray;
@@ -4688,10 +4691,28 @@ begin
     Exit;
   end;
 
-  ObjReg := ACtx.Scope.AllocateRegister;
   NullishJumpCount := 0;
-  CompileExpressionWithOptionalChainJumps(ACtx, AExpr.ObjectExpr, ObjReg,
-    NullishJumps, NullishJumpCount);
+  ObjectRegisterAllocated := True;
+  if AExpr.ObjectExpr is TGocciaThisExpression then
+  begin
+    LocalIdx := ACtx.Scope.ResolveLocal(KEYWORD_THIS);
+    if LocalIdx >= 0 then
+    begin
+      Local := ACtx.Scope.GetLocal(LocalIdx);
+      if not Local.IsCaptured then
+      begin
+        EmitDerivedThisInitializedCheck(ACtx);
+        ObjReg := Local.Slot;
+        ObjectRegisterAllocated := False;
+      end;
+    end;
+  end;
+  if ObjectRegisterAllocated then
+  begin
+    ObjReg := ACtx.Scope.AllocateRegister;
+    CompileExpressionWithOptionalChainJumps(ACtx, AExpr.ObjectExpr, ObjReg,
+      NullishJumps, NullishJumpCount);
+  end;
 
   if AExpr.Optional then
     AddOptionalChainJump(ACtx, NullishJumps, NullishJumpCount, ObjReg);
@@ -4715,7 +4736,8 @@ begin
     PatchJumpTarget(ACtx, EndJump);
   end;
 
-  ACtx.Scope.FreeRegister;
+  if ObjectRegisterAllocated then
+    ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileConditional(const ACtx: TGocciaCompilationContext;
