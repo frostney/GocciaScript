@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdarg.h>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -74,6 +75,15 @@ float add_f32(float a, float b) {
   return a + b;
 }
 
+float mixed_f32_i32(float value, int32_t scale, float offset) {
+  return value * scale + offset;
+}
+
+float mixed_f32_pointer(float value, const int32_t* scale, float offset) {
+  if (!scale) return offset;
+  return value * *scale + offset;
+}
+
 // -- Strings ----------------------------------------------------------------
 
 int string_length(const char* s) {
@@ -114,10 +124,24 @@ int read_i32(const int* src) {
   return *src;
 }
 
-// -- Multi-arg (up to 6) ---------------------------------------------------
+// -- Multi-arg --------------------------------------------------------------
 
 int sum6(int a, int b, int c, int d, int e, int f) {
   return a + b + c + d + e + f;
+}
+
+int sum9(
+  int a,
+  int b,
+  int c,
+  int d,
+  int e,
+  int f,
+  int g,
+  int h,
+  int i
+) {
+  return a + b + c + d + e + f + g + h + i;
 }
 
 double sum4_f64(double a, double b, double c, double d) {
@@ -154,6 +178,44 @@ double mixed8(int a, double b, int c, double d, int e, double f, int g, double h
   return a + b + c + d + e + f + g + h;
 }
 
+// -- Variadic calls ---------------------------------------------------------
+
+int32_t ffi_variadic_sum_i32(int32_t count, ...) {
+  int32_t result = 0;
+  int32_t index;
+  va_list args;
+
+  va_start(args, count);
+  for (index = 0; index < count; index++) {
+    result += va_arg(args, int);
+  }
+  va_end(args);
+  return result;
+}
+
+double ffi_variadic_promotions(const char* label, ...) {
+  int bool_value;
+  int narrow_value;
+  double float_value;
+  const char* text_value;
+  double result;
+  va_list args;
+
+  va_start(args, label);
+  bool_value = va_arg(args, int);
+  narrow_value = va_arg(args, int);
+  float_value = va_arg(args, double);
+  text_value = va_arg(args, const char*);
+  va_end(args);
+
+  result = (double)strlen(label);
+  result += bool_value;
+  result += narrow_value;
+  result += float_value;
+  result += (double)strlen(text_value);
+  return result;
+}
+
 // -- FFI v2 callbacks ------------------------------------------------------
 
 typedef int32_t (*ffi_v2_i32_callback)(int32_t value);
@@ -161,6 +223,17 @@ typedef int8_t (*ffi_v2_i8_callback)(void);
 typedef int16_t (*ffi_v2_i16_callback)(void);
 typedef void (*ffi_v2_void_callback)(void);
 typedef int (*ffi_v2_compare_i32_callback)(const void* left, const void* right);
+typedef int32_t (*ffi_v2_sum9_callback)(
+  int32_t a,
+  int32_t b,
+  int32_t c,
+  int32_t d,
+  int32_t e,
+  int32_t f,
+  int32_t g,
+  int32_t h,
+  int32_t i
+);
 
 static ffi_v2_i32_callback ffi_v2_stored_i32_callback = NULL;
 static int32_t ffi_v2_callback_progress = 0;
@@ -220,6 +293,10 @@ int32_t ffi_v2_call_i32_callback_twice(
 
 int32_t ffi_v2_get_callback_progress(void) {
   return ffi_v2_callback_progress;
+}
+
+int32_t ffi_v2_call_sum9_callback(ffi_v2_sum9_callback callback) {
+  return callback(1, 2, 3, 4, 5, 6, 7, 8, 9);
 }
 
 // -- FFI v2 aggregate types ------------------------------------------------
@@ -284,6 +361,52 @@ typedef struct {
   uint8_t bytes[8192];
 } ffi_v2_large_byte_array;
 
+typedef struct {
+  int32_t buffer;
+  int32_t byteOffset;
+} ffi_metadata_collision;
+
+typedef struct {
+  float x;
+  float y;
+} ffi_billboard_vector2;
+
+typedef struct {
+  float x;
+  float y;
+  float z;
+} ffi_billboard_vector3;
+
+typedef struct {
+  float x;
+  float y;
+  float width;
+  float height;
+} ffi_billboard_rectangle;
+
+typedef struct {
+  ffi_billboard_vector3 position;
+  ffi_billboard_vector3 target;
+  ffi_billboard_vector3 up;
+  float fovy;
+  int32_t projection;
+} ffi_billboard_camera3d;
+
+typedef struct {
+  uint32_t id;
+  int32_t width;
+  int32_t height;
+  int32_t mipmaps;
+  int32_t format;
+} ffi_billboard_texture2d;
+
+typedef struct {
+  uint8_t r;
+  uint8_t g;
+  uint8_t b;
+  uint8_t a;
+} ffi_billboard_color;
+
 ffi_v2_point ffi_v2_add_points(ffi_v2_point left, ffi_v2_point right) {
   ffi_v2_point result;
   result.x = left.x + right.x;
@@ -295,6 +418,51 @@ double ffi_v2_point_distance_squared(ffi_v2_point left, ffi_v2_point right) {
   double dx = right.x - left.x;
   double dy = right.y - left.y;
   return dx * dx + dy * dy;
+}
+
+float ffi_v2_mixed_point_f32(
+  float scale,
+  ffi_v2_point point,
+  float offset
+) {
+  return scale * (float)(point.x + point.y) + offset;
+}
+
+double ffi_variadic_point_checksum(int32_t count, ...) {
+  double result = 0.0;
+  int32_t index;
+  va_list args;
+
+  va_start(args, count);
+  for (index = 0; index < count; index++) {
+    ffi_v2_point point = va_arg(args, ffi_v2_point);
+    result += point.x + point.y;
+  }
+  va_end(args);
+  return result;
+}
+
+int32_t ffi_metadata_collision_checksum(ffi_metadata_collision value) {
+  return value.buffer + value.byteOffset;
+}
+
+double ffi_draw_billboard_pro_checksum(
+  ffi_billboard_camera3d camera,
+  ffi_billboard_texture2d texture,
+  ffi_billboard_rectangle source,
+  ffi_billboard_vector3 position,
+  ffi_billboard_vector3 up,
+  ffi_billboard_vector2 size,
+  ffi_billboard_vector2 origin,
+  float rotation,
+  ffi_billboard_color tint
+) {
+  return camera.position.x + camera.target.y + camera.up.z + camera.fovy +
+    camera.projection + texture.id + texture.width + texture.height +
+    texture.mipmaps + texture.format + source.x + source.y + source.width +
+    source.height + position.x + position.y + position.z + up.x + up.y + up.z +
+    size.x + size.y + origin.x + origin.y + rotation + tint.r + tint.g +
+    tint.b + tint.a;
 }
 
 void ffi_v2_translate_point(

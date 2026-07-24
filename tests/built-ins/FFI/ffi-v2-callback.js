@@ -48,6 +48,20 @@ describe("FFI.callback", () => {
     ],
     returns: "f64",
   });
+  const Sum9Callback = FFI.callback({
+    args: [
+      "i32",
+      "i32",
+      "i32",
+      "i32",
+      "i32",
+      "i32",
+      "i32",
+      "i32",
+      "i32",
+    ],
+    returns: "i32",
+  });
 
   afterAll(() => lib.close());
 
@@ -81,6 +95,17 @@ describe("FFI.callback", () => {
     });
 
     expect(invoke((value) => add(value, 5), 37)).toBe(42);
+  });
+
+  test("passes more than eight arguments through reverse callbacks", () => {
+    const invoke = lib.bind("ffi_v2_call_sum9_callback", {
+      args: [Sum9Callback],
+      returns: "i32",
+    });
+
+    expect(
+      invoke((a, b, c, d, e, f, g, h, i) => a + b + c + d + e + f + g + h + i),
+    ).toBe(45);
   });
 
   test("sign-extends signed narrow scalar arguments and callback returns", () => {
