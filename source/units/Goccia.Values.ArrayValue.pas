@@ -45,6 +45,8 @@ type
     function HasDenseElementLength: Boolean;
     function GetElement(const AIndex: Integer): TGocciaValue;
     function SetElement(const AIndex: Integer; const AValue: TGocciaValue): Boolean;
+    function TryAppendDenseElementFast(const AIndex: Integer;
+      const AValue: TGocciaValue): Boolean;
     procedure SetIndexProperty(const AIndex: Integer; const AValue: TGocciaValue);
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
@@ -1369,6 +1371,39 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
+function TGocciaArrayValue.TryAppendDenseElementFast(
+  const AIndex: Integer; const AValue: TGocciaValue): Boolean;
+var
+  ArrayPrototype, ObjectPrototype: TGocciaObjectValue;
+begin
+  { The direct append is valid only for a pristine ordinary prototype chain.
+    Any uncertainty falls back to the complete [[Set]] implementation. }
+  Result := False;
+  if (AIndex < 0) or (AIndex <> FElements.Count) or
+     (FProperties.Count <> 0) or (not FExtensible) then
+    Exit;
+  if (Int64(AIndex) >= FLength) and not FLengthWritable then
+    Exit;
+
+  ArrayPrototype := GetSharedArrayPrototype;
+  ObjectPrototype :=
+    TGocciaObjectValue.GetSharedObjectPrototypeForRealm(CurrentRealm);
+  if (not Assigned(ArrayPrototype)) or
+     (not Assigned(ObjectPrototype)) or
+     (FPrototype <> ArrayPrototype) or
+     (ArrayPrototype.Prototype <> ObjectPrototype) or
+     Assigned(ObjectPrototype.Prototype) or
+     ArrayPrototype.HasEverHadIndexedOwnProperty or
+     ObjectPrototype.HasEverHadIndexedOwnProperty then
+    Exit;
+
+  FElements.Add(AValue);
+  if Int64(AIndex) + 1 > FLength then
+    FLength := Int64(AIndex) + 1;
+  FHasEverHadIndexedOwnProperty := True;
+  Result := True;
+end;
+
 function TGocciaArrayValue.SetElement(const AIndex: Integer; const AValue: TGocciaValue): Boolean;
 var
   Accessor: TGocciaPropertyDescriptorAccessor;
@@ -1383,6 +1418,7 @@ begin
   end;
 
   IndexName := IntToStr(AIndex);
+  NoteIndexedOwnProperty(IndexName);
   Descriptor := GetOwnPropertyDescriptor(IndexName);
   if Descriptor is TGocciaPropertyDescriptorAccessor then
   begin
@@ -1464,6 +1500,7 @@ begin
   end;
 
   IndexName := IntToStr(AIndex);
+  NoteIndexedOwnProperty(IndexName);
   Descriptor := GetOwnPropertyDescriptor(IndexName);
   if Descriptor is TGocciaPropertyDescriptorAccessor then
   begin
@@ -3745,6 +3782,7 @@ begin
   // Check if property name is a numeric index
   if TryParseArrayElementIndex(AName, Index) then
   begin
+    NoteIndexedOwnProperty(AName);
     Descriptor := GetOwnPropertyDescriptor(AName);
     if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
@@ -3992,6 +4030,7 @@ begin
 
   if TryParseArrayElementIndex(AName, Index) then
   begin
+    NoteIndexedOwnProperty(AName);
     if (Index >= FLength) and not FLengthWritable then
       ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
         SSuggestCannotDeleteNonConfigurable);
@@ -4073,6 +4112,7 @@ begin
   // Numeric index — update FElements directly
   if TryParseArrayElementIndex(AName, Index) then
   begin
+    NoteIndexedOwnProperty(AName);
     if (Index >= FLength) and not FLengthWritable then
     begin
       ADescriptor.Free;
