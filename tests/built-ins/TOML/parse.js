@@ -149,6 +149,13 @@ items = []
 [[items.metadata]]
 `),
     ).toThrow(SyntaxError);
+
+    expect(() =>
+      TOML.parse(`
+items = []
+items.metadata = true
+`),
+    ).toThrow(SyntaxError);
   });
 
   test("throws on invalid literals", () => {
