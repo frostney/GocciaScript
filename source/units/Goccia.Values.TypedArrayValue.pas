@@ -37,12 +37,15 @@ type
     FLength: Integer;
     FKind: TGocciaTypedArrayKind;
     FAutoLength: Boolean;
+    FUsesFixedLengthIndexedStorage: Boolean;
 
     procedure InitializePrototype;
     procedure SyncBufferData;
     function GetLength: Integer;
     function HasValidBackingRange(const ALength: Integer): Boolean;
     function HasValidElementIndex(const AIndex: Integer): Boolean;
+    function HasValidFixedLengthElementIndex(
+      const AIndex: Integer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
     function ReadElementUnchecked(const AIndex: Integer): Double;
     function ReadElement(const AIndex: Integer): Double;
@@ -431,6 +434,15 @@ begin
   Result := (AIndex >= 0) and (AIndex < GetLength);
 end;
 
+function TGocciaTypedArrayValue.HasValidFixedLengthElementIndex(
+  const AIndex: Integer): Boolean;
+begin
+  if not FUsesFixedLengthIndexedStorage then
+    Exit(False);
+  Result := not TGocciaArrayBufferValue(FBufferValue).Detached and
+    (AIndex >= 0) and (AIndex < FLength);
+end;
+
 { Element read/write via buffer }
 
 function TGocciaTypedArrayValue.ReadElementUnchecked(const AIndex: Integer): Double;
@@ -438,8 +450,11 @@ var
   Offset: Integer;
 begin
   // Precondition: AIndex is in range (the caller validated HasValidElementIndex).
-  // One sync + read, with no redundant bounds re-check on the hot element path.
-  SyncBufferData;
+  // Constructor-proven mutable fixed-length ArrayBuffers keep their data block
+  // and length stable until detachment, which the indexed fast path checks before
+  // calling here. Every other backing kind refreshes the data block as before.
+  if not FUsesFixedLengthIndexedStorage then
+    SyncBufferData;
   Offset := FByteOffset + AIndex * BytesPerElement(FKind);
   Result := ReadBinaryNumberElement(FBufferData, Offset,
     ToBinaryElementKind(FKind), TYPED_ARRAY_LITTLE_ENDIAN);
@@ -459,8 +474,10 @@ begin
   // Precondition: AIndex is in range (the caller validated HasValidElementIndex).
   // Integer coercion of the ToNumber result — non-finite -> 0 for integer kinds,
   // Uint8Clamped clamping +Infinity to 255, float kinds verbatim — is performed by
-  // WriteBinaryNumberElement, so it is not repeated here. One sync + write.
-  SyncBufferData;
+  // WriteBinaryNumberElement, so it is not repeated here. Fixed-length storage
+  // was validated by the indexed fast path; other backing kinds refresh here.
+  if not FUsesFixedLengthIndexedStorage then
+    SyncBufferData;
   Offset := FByteOffset + AIndex * BytesPerElement(FKind);
   WriteBinaryNumberElement(FBufferData, Offset, ToBinaryElementKind(FKind),
     AValue, TYPED_ARRAY_LITTLE_ENDIAN);
@@ -484,7 +501,21 @@ function TGocciaTypedArrayValue.TryReadIndexedScalar(const AIndex: Integer; out 
 begin
   // BigInt kinds yield TGocciaBigIntValue, never a Double, so they fall back to the
   // boxed path; an out-of-range index falls back so the caller yields `undefined`.
-  if IsBigIntKind(FKind) or (not HasValidElementIndex(AIndex)) then
+  if IsBigIntKind(FKind) then
+    Exit(False);
+
+  // ES2026 §10.4.5.17 TypedArrayGetElement(obj, index): a mutable fixed-length
+  // ArrayBuffer cannot resize, so its cached data block and FLength remain valid.
+  // Detachment and bounds are still checked for every access.
+  if FUsesFixedLengthIndexedStorage then
+  begin
+    if not HasValidFixedLengthElementIndex(AIndex) then
+      Exit(False);
+    AValue := ReadElementUnchecked(AIndex);
+    Exit(True);
+  end;
+
+  if not HasValidElementIndex(AIndex) then
     Exit(False);
   AValue := ReadElementUnchecked(AIndex);
   Result := True;
@@ -498,8 +529,20 @@ begin
     Exit(False);
   // Non-BigInt integer-indexed [[Set]] is always "handled": an out-of-range index is
   // ignored and an immutable backing buffer skips the store, both reporting success
-  // per ES2026 10.4.5.9 / the Immutable ArrayBuffers proposal.
+  // per ES2026 §10.4.5.6 / the Immutable ArrayBuffers proposal.
   Result := True;
+
+  // ES2026 §10.4.5.18 TypedArraySetElement(obj, index, value): scalar Number
+  // conversion has already completed in the VM. Fixed-length mutable storage can
+  // therefore validate detachment and bounds without rebuilding a buffer witness.
+  if FUsesFixedLengthIndexedStorage then
+  begin
+    if not HasValidFixedLengthElementIndex(AIndex) then
+      Exit;
+    WriteElementUnchecked(AIndex, AValue);
+    Exit;
+  end;
+
   if not HasValidElementIndex(AIndex) then
     Exit;
   if IsTypedArrayBackedByImmutableArrayBuffer(Self) then
@@ -782,6 +825,7 @@ begin
   FByteOffset := 0;
   FLength := ALength;
   FAutoLength := False;
+  FUsesFixedLengthIndexedStorage := True;
   ByteLen64 := Int64(ALength) * Int64(BytesPerElement(AKind));
   if (ALength < 0) or (ByteLen64 > High(Integer)) then
     ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
@@ -812,6 +856,8 @@ begin
   FByteOffset := AByteOffset;
   BPE := BytesPerElement(AKind);
   FAutoLength := (ALength < 0) and (ABuffer.MaxByteLength >= 0);
+  FUsesFixedLengthIndexedStorage :=
+    (ABuffer.MaxByteLength < 0) and not ABuffer.Immutable;
 
   if ALength >= 0 then
     FLength := ALength
@@ -841,6 +887,7 @@ begin
   FByteOffset := AByteOffset;
   BPE := BytesPerElement(AKind);
   FAutoLength := (ALength < 0) and (ASharedBuffer.MaxByteLength >= 0);
+  FUsesFixedLengthIndexedStorage := False;
 
   if ALength >= 0 then
     FLength := ALength
