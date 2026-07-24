@@ -50,12 +50,14 @@ type
     FScratchSize: Integer;
     FGPRCount: Integer;
     FFPRCount: Integer;
+    FVariadicStartIndex: Integer;
     function GetArgumentCount: Integer;
     function GetArgument(const AIndex: Integer): TGocciaFFIArgumentPlan;
   public
     constructor Create(const AABI: TGocciaFFIABI;
       const AArguments: array of TGocciaFFITypeDescriptor;
-      const AReturnType: TGocciaFFITypeDescriptor);
+      const AReturnType: TGocciaFFITypeDescriptor;
+      const AVariadicStartIndex: Integer = -1);
     destructor Destroy; override;
     property ABI: TGocciaFFIABI read FABI;
     property ArgumentCount: Integer read GetArgumentCount;
@@ -105,7 +107,7 @@ end;
 
 function TypeIsIntegerScalar(const AType: TGocciaFFITypeDescriptor): Boolean;
 begin
-  Result := (AType.Kind = ftkCallback) or
+  Result := (AType.Kind in [ftkCallback, ftkNullable]) or
     ((AType.Kind = ftkScalar) and
      not (AType.ScalarType in [fftVoid, fftF32, fftF64]));
 end;
@@ -625,9 +627,10 @@ begin
 end;
 
 procedure CompileWin64Argument(var APlan: TGocciaFFIArgumentPlan;
-  var APosition, AStackOffset, AScratchOffset: Integer);
+  var APosition, AStackOffset, AScratchOffset: Integer;
+  const AVariadicFunction: Boolean);
 var
-  Placement: TGocciaFFIPlacement;
+  Placement, IntegerMirrorPlacement: TGocciaFFIPlacement;
 begin
   Placement.RegisterIndex := -1;
   Placement.StackOffset := -1;
@@ -647,7 +650,9 @@ begin
   else
     Placement.Kind := fpkGPR;
   if APosition < 4 then
+  begin
     Placement.RegisterIndex := APosition
+  end
   else
   begin
     Placement.Kind := fpkStack;
@@ -655,7 +660,44 @@ begin
   end;
   SetLength(APlan.Placements, 1);
   APlan.Placements[0] := Placement;
+  if AVariadicFunction and TypeIsFloatScalar(APlan.TypeDescriptor) and
+     (APosition < 4) then
+  begin
+    IntegerMirrorPlacement := Placement;
+    IntegerMirrorPlacement.Kind := fpkGPR;
+    SetLength(APlan.Placements, 2);
+    APlan.Placements[1] := IntegerMirrorPlacement;
+  end;
   Inc(APosition);
+end;
+
+procedure CompileDarwinARM64VariadicArgument(
+  var APlan: TGocciaFFIArgumentPlan;
+  var AStackOffset, AScratchOffset: Integer);
+var
+  Placement: TGocciaFFIPlacement;
+begin
+  Placement.Kind := fpkStack;
+  Placement.RegisterIndex := -1;
+  Placement.ValueOffset := 0;
+  if APlan.TypeDescriptor.IsAggregate and
+     (APlan.TypeDescriptor.Size > 16) then
+  begin
+    APlan.Indirect := True;
+    APlan.IndirectCopyOffset := ScratchAppend(AScratchOffset,
+      APlan.TypeDescriptor.Size, 16);
+    Placement.Size := SizeOf(Pointer);
+    Placement.StackOffset := StackAppend(AStackOffset, SizeOf(Pointer),
+      SizeOf(Pointer), 8);
+  end
+  else
+  begin
+    Placement.Size := APlan.TypeDescriptor.Size;
+    Placement.StackOffset := StackAppend(AStackOffset,
+      APlan.TypeDescriptor.Size, APlan.TypeDescriptor.Alignment, 8);
+  end;
+  SetLength(APlan.Placements, 1);
+  APlan.Placements[0] := Placement;
 end;
 
 procedure CompileI386Return(var APlan: TGocciaFFIReturnPlan;
@@ -702,16 +744,21 @@ end;
 
 constructor TGocciaFFICompiledSignature.Create(const AABI: TGocciaFFIABI;
   const AArguments: array of TGocciaFFITypeDescriptor;
-  const AReturnType: TGocciaFFITypeDescriptor);
+  const AReturnType: TGocciaFFITypeDescriptor;
+  const AVariadicStartIndex: Integer);
 var
   I, GPRCount, FPRCount, Position, StackOffset, ScratchOffset: Integer;
 begin
   inherited Create;
   if Length(AArguments) > MAX_FFI_ARGS then
     raise EArgumentException.Create('FFI signature has too many arguments');
+  if (AVariadicStartIndex < -1) or
+     (AVariadicStartIndex > Length(AArguments)) then
+    raise EArgumentException.Create('FFI variadic argument index is invalid');
   if not Assigned(AReturnType) then
     raise EArgumentException.Create('FFI signature return type is missing');
   FABI := AABI;
+  FVariadicStartIndex := AVariadicStartIndex;
   FReturnPlan.TypeDescriptor := AReturnType;
   AReturnType.AddReference;
   SetLength(FArguments, Length(AArguments));
@@ -742,13 +789,18 @@ begin
         CompileSysVArgument(FArguments[I], GPRCount, FPRCount, StackOffset);
       fabiWin64:
         CompileWin64Argument(FArguments[I], Position, StackOffset,
-          ScratchOffset);
+          ScratchOffset, FVariadicStartIndex >= 0);
       fabiAAPCS64:
         CompileARM64Argument(FArguments[I], GPRCount, FPRCount, StackOffset,
           ScratchOffset, False);
       fabiDarwinARM64:
-        CompileARM64Argument(FArguments[I], GPRCount, FPRCount, StackOffset,
-          ScratchOffset, True);
+        if (FVariadicStartIndex >= 0) and
+           (I >= FVariadicStartIndex) then
+          CompileDarwinARM64VariadicArgument(FArguments[I], StackOffset,
+            ScratchOffset)
+        else
+          CompileARM64Argument(FArguments[I], GPRCount, FPRCount, StackOffset,
+            ScratchOffset, True);
       fabiI386Win:
         CompileI386Argument(FArguments[I], StackOffset);
     end;

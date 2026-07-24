@@ -24,6 +24,9 @@ The Foreign Function Interface calls native shared libraries. It is available on
 | `FFI.union(fields)` | Declare a native-layout union type whose fields share storage. |
 | `FFI.array(elementType, length)` | Declare a fixed-length inline array type. |
 | `FFI.callback(signature)` | Declare a native callback type. `signature` uses the same `{ args, returns }` shape as `library.bind`. |
+| `FFI.nullable("utf8string")` | Declare an explicit nullable UTF-8 string type for a bound native-function argument. |
+| `FFI.varargs(types, values)` | Create the one explicit typed tail required by a variadic bound function call. |
+| `FFI.metadata(value)` | Return aggregate backing metadata without conflicting with exact native field names. |
 | `FFI.nullptr` | Singleton null pointer value |
 | `FFI.suffix` | Platform library suffix (`.dylib`, `.so`, `.dll`) |
 
@@ -46,9 +49,9 @@ The Foreign Function Interface calls native shared libraries. It is available on
 
 ## Type Descriptors and Aggregate Values
 
-Supported scalar types are `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `pointer`, `utf8string`, `bool`, and `void` (return only). `i64`/`u64` are not available on i386.
+Supported scalar types are `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `pointer`, `utf8string`, `bool`, and `void` (return only). `i64`/`u64` are not available on i386. Top-level `f32` arguments may be mixed with integer, pointer, and aggregate arguments; the ABI planner assigns every argument independently.
 
-`FFI.struct`, `FFI.union`, and `FFI.array` return compositional type descriptors. Descriptors expose `kind`, `size`, and `alignment`; array descriptors also expose `length`. Calling `descriptor.create(initializer)` returns an aggregate value backed by an `ArrayBuffer`. Structure and union fields use property access, arrays use numeric indices, and nested aggregate reads return views sharing the root buffer. Aggregate values expose `buffer`, `byteOffset`, and `size` (plus `length` for arrays). Detaching that buffer invalidates the root value and all nested views.
+`FFI.struct`, `FFI.union`, and `FFI.array` return compositional type descriptors. Descriptors expose `kind`, `size`, and `alignment`; array descriptors also expose `length`. Calling `descriptor.create(initializer)` returns an aggregate value backed by an `ArrayBuffer`. Structure and union fields use property access, arrays use numeric indices, and nested aggregate reads return views sharing the root buffer. Aggregate values expose `buffer`, `byteOffset`, and `size` (plus `length` for arrays) when those names do not collide with declared fields. Exact native field names take precedence. `FFI.metadata(value)` always returns the backing `buffer`, `byteOffset`, and `size`, plus `length` for arrays. Detaching that buffer invalidates the root value and all nested views.
 
 Layouts follow the current platform's native C ABI, including natural alignment, padding, register classification, indirect arguments, and hidden returns. Packed layouts, bitfields, custom alignment, non-native calling conventions, and bare C array-parameter decay are not modeled. Use `FFI.array` for inline array storage, such as an array field or the ABI shape of a wrapper aggregate.
 
@@ -74,6 +77,38 @@ result.point.x;
 ```
 
 Pointer arguments accept `FFIPointer`, `ArrayBuffer`, `SharedArrayBuffer`, `TypedArray`, FFI aggregate values, persistent callback handles, or `null`.
+
+## Nullable UTF-8 Arguments
+
+Plain `utf8string` retains its existing JavaScript string-coercion behavior. Use `FFI.nullable("utf8string")` when JavaScript `null` must map to a native null pointer:
+
+```javascript
+const stringLength = library.bind("string_length", {
+  args: [FFI.nullable("utf8string")],
+  returns: "i32",
+});
+
+stringLength("hello"); // 5
+stringLength(null);    // native NULL
+```
+
+Non-null values must be strings containing well-formed UTF-16 without embedded NUL characters. Nullable descriptors currently support only `utf8string`, only in bound native-function argument positions. Aggregate storage, return types, and callback signatures reject them so the API does not imply unsupported ownership or lifetime semantics.
+
+## Variadic Native Calls
+
+Set `variadic: true` on a bound native-function signature and pass exactly one `FFI.varargs(types, values)` marker after the ordinary fixed arguments. The type and value arrays must have equal lengths. GocciaScript validates and plans the complete call before entering native code.
+
+```javascript
+const sum = library.bind("sum_values", {
+  args: ["i32"],
+  variadic: true,
+  returns: "i32",
+});
+
+sum(3, FFI.varargs(["i8", "i16", "i32"], [10, 20, 12]));
+```
+
+The variadic planner applies the C default argument promotions: `f32` becomes `f64`, while `bool`, `i8`, `i16`, `u8`, and `u16` become `i32`. Other supported argument descriptors retain their ordinary ABI classification. Variadic callbacks are not supported.
 
 ## Callbacks
 
@@ -102,13 +137,13 @@ Callbacks may enter JavaScript only on the runtime thread that created them. A f
 
 ## Limits
 
-- Function and callback signatures support at most 8 arguments.
+- Function and callback signatures support at most 64 arguments. For variadic calls, this limit applies to the combined fixed prefix and explicit tail.
 - At most 64 persistent or call-scoped callbacks may be active in the process at once. Closing a persistent handle or returning from a call-scoped callback releases its slot.
 - Structures and unions support at most 256 fields, descriptor nesting is limited to 32 levels, and one aggregate may occupy at most 65,536 bytes.
-- Bound function signatures cannot mix a top-level `f32` argument with other top-level argument types; use `f64` for mixed scalar signatures.
 - FFI remains an unsafe runtime opt-in. Lifetime and thread guards prevent the documented engine-side hazards but cannot make arbitrary native code memory-safe.
 
 ## Related Documentation
 
 - [Built-in Objects](built-ins.md) — index of core and runtime built-ins
 - [ADR 0095](adr/0095-custom-bidirectional-ffi-abi-engine.md) — custom bidirectional ABI architecture and trade-offs
+- [ADR 0102](adr/0102-explicit-bounded-ffi-call-descriptors.md) — explicit bounded high-arity, variadic, aggregate-metadata, and nullable-call contracts

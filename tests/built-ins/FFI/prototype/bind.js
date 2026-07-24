@@ -61,6 +61,28 @@ describe("FFILibrary.prototype.bind", () => {
     expect(strlen("h\u00e9\u{1F600}")).toBe(7);
   });
 
+  test("binds a nullable utf8string argument explicitly", () => {
+    const NullableUTF8 = FFI.nullable("utf8string");
+    const strlen = lib.bind("string_length", {
+      args: [NullableUTF8],
+      returns: "i32",
+    });
+
+    expect(strlen("h\u00e9\u{1F600}")).toBe(7);
+    expect(strlen(null)).toBe(-1);
+    expect(() => strlen("\uD800")).toThrow(TypeError);
+    expect(() => strlen("before\0after")).toThrow(TypeError);
+  });
+
+  test("keeps plain utf8string null coercion compatible", () => {
+    const strlen = lib.bind("string_length", {
+      args: ["utf8string"],
+      returns: "i32",
+    });
+
+    expect(strlen(null)).toBe(4);
+  });
+
   test("binds and calls a function returning utf8string", () => {
     const greet = lib.bind("greeting", { args: [], returns: "utf8string" });
     expect(greet()).toBe("hello from C");
