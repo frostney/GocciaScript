@@ -616,6 +616,7 @@ var
   ExportValue: TGocciaValue;
   ImporterModule: TGocciaModule;
   ModuleLoader: TGocciaModuleLoader;
+  OuterNamespace: TGocciaModuleNamespaceObject;
   Provider: TMemoryModuleContentProvider;
   ReadValue: TGocciaFunctionBase;
   Resolver: TInMemoryModuleResolver;
@@ -648,6 +649,10 @@ begin
           ExportValue)).ToBe(True);
         Expect<Boolean>(ExportValue is TGocciaFunctionBase).ToBe(True);
         ReadValue := TGocciaFunctionBase(ExportValue);
+        OuterNamespace := TGocciaModuleNamespaceObject(
+          ModuleLoader.LoadModule(OUTER_PATH, IMPORTER_PATH)
+            .GetNamespaceObject);
+        Expect<Boolean>(OuterNamespace.CanResolveExport('value')).ToBe(True);
 
         Args := TGocciaArgumentsCollection.Create;
         try
@@ -667,6 +672,12 @@ begin
           if not Assigned(ResultValue) then
             Fail('Reloaded imported binding read returned no value.');
           Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(2);
+
+          Provider.SetModule(BRIDGE_PATH,
+            'export const replacement = 3;',
+            EncodeDate(2026, 1, 3));
+          ModuleLoader.LoadModule(BRIDGE_PATH, IMPORTER_PATH);
+          Expect<Boolean>(OuterNamespace.CanResolveExport('value')).ToBe(False);
         finally
           Args.Free;
         end;

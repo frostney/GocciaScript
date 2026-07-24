@@ -1186,7 +1186,7 @@ begin
     Exit(False);
 
   if FResolvedBindings.TryGetValue(AName, Binding) then
-    Exit(True);
+    Exit(Binding.CanResolve);
 
   Binding := TGocciaModuleImportBinding.Create(FModule, AName);
   if not Binding.CanResolve then

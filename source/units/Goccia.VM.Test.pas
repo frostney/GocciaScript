@@ -11,14 +11,19 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Bytecode,
   Goccia.Bytecode.Chunk,
+  Goccia.Constants.PropertyNames,
   Goccia.ExecutionContext,
+  Goccia.Modules,
   Goccia.Realm,
+  Goccia.Scope,
   Goccia.TestSetup,
+  Goccia.Values.Error,
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
-  Goccia.VM;
+  Goccia.VM,
+  Goccia.VM.Exception;
 
 type
   TTestGocciaVM = class(TTestSuite)
@@ -38,6 +43,7 @@ type
     procedure TestExecuteIndexedObjectOps;
     procedure TestExecuteClosureCall;
     procedure TestExecuteCapturedClosure;
+    procedure TestDetachedModuleNamespaceImportRaisesSyntaxError;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -80,6 +86,8 @@ begin
   Test('Execute indexed object ops', TestExecuteIndexedObjectOps);
   Test('Execute closure call', TestExecuteClosureCall);
   Test('Execute captured closure', TestExecuteCapturedClosure);
+  Test('Detached module namespace import raises SyntaxError',
+    TestDetachedModuleNamespaceImportRaisesSyntaxError);
 end;
 
 procedure TTestGocciaVM.TestExecuteIntegerAddition;
@@ -459,6 +467,77 @@ begin
     CallArgs.Free;
     VM.Free;
     Template.Free;
+  end;
+end;
+
+procedure TTestGocciaVM.TestDetachedModuleNamespaceImportRaisesSyntaxError;
+var
+  ErrorObject: TGocciaObjectValue;
+  MissingNameIndex: UInt16;
+  Module: TGocciaModule;
+  NamespaceNameIndex: UInt16;
+  NamespaceObject: TGocciaModuleNamespaceObject;
+  RaisedExpected: Boolean;
+  Scope: TGocciaScope;
+  Template: TGocciaFunctionTemplate;
+  VM: TGocciaVM;
+begin
+  Module := TGocciaModule.Create('memory:/detached.js');
+  Scope := TGocciaScope.Create(nil, skGlobal, 'detached-import');
+  Template := TGocciaFunctionTemplate.Create('detached-import');
+  VM := TGocciaVM.Create;
+  try
+    NamespaceObject := TGocciaModuleNamespaceObject(
+      Module.GetNamespaceObject);
+    Scope.DefineLexicalBinding('namespace', NamespaceObject, dtConst);
+    Module.Free;
+    Module := nil;
+
+    VM.GlobalScope := Scope;
+    VM.Realm := FRealm;
+    Template.MaxRegisters := 1;
+    NamespaceNameIndex := Template.AddConstantString('namespace');
+    MissingNameIndex := Template.AddConstantString('missing');
+    Template.EmitInstruction(EncodeABx(OP_GET_GLOBAL, 0,
+      NamespaceNameIndex));
+    Template.EmitInstruction(EncodeABx(OP_GET_IMPORT_BINDING, 0,
+      MissingNameIndex));
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+
+    RaisedExpected := False;
+    try
+      VM.ExecuteFunction(Template);
+    except
+      on E: EGocciaBytecodeThrow do
+        if E.ThrownValue is TGocciaObjectValue then
+        begin
+          ErrorObject := TGocciaObjectValue(E.ThrownValue);
+          RaisedExpected :=
+            (ErrorObject.GetProperty(PROP_NAME).ToStringLiteral.Value =
+              'SyntaxError') and
+            (ErrorObject.GetProperty(PROP_MESSAGE).ToStringLiteral.Value =
+              'Module has no export named "missing"');
+        end;
+      on E: TGocciaThrowValue do
+        if E.Value is TGocciaObjectValue then
+        begin
+          ErrorObject := TGocciaObjectValue(E.Value);
+          RaisedExpected :=
+            (ErrorObject.GetProperty(PROP_NAME).ToStringLiteral.Value =
+              'SyntaxError') and
+            (ErrorObject.GetProperty(PROP_MESSAGE).ToStringLiteral.Value =
+              'Module has no export named "missing"');
+        end;
+    end;
+    Expect<Boolean>(RaisedExpected).ToBe(True);
+  finally
+    if Assigned(Module) then
+      Module.Free;
+    VM.GlobalScope := nil;
+    VM.Realm := nil;
+    VM.Free;
+    Template.Free;
+    Scope.Free;
   end;
 end;
 

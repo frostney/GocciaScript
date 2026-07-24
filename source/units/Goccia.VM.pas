@@ -16681,9 +16681,16 @@ begin
             if not TGocciaModuleNamespaceObject(
                FRegisters[A].ObjectValue).TryGetExportValue(
                GlobalName, GlobalBindingValue) then
-              ThrowSyntaxError(Format('Module "%s" has no export named "%s"',
-                [TGocciaModuleNamespaceObject(FRegisters[A].ObjectValue)
-                   .Module.Path, GlobalName]));
+            begin
+              if Assigned(TGocciaModuleNamespaceObject(
+                 FRegisters[A].ObjectValue).Module) then
+                ThrowSyntaxError(Format('Module "%s" has no export named "%s"',
+                  [TGocciaModuleNamespaceObject(FRegisters[A].ObjectValue)
+                     .Module.Path, GlobalName]))
+              else
+                ThrowSyntaxError(Format('Module has no export named "%s"',
+                  [GlobalName]));
+            end;
             SetRegister(A, GlobalBindingValue);
           end
           else
