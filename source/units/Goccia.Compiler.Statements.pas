@@ -4181,13 +4181,14 @@ begin
         UInt16(NameIdx)));
       SyncCapturedImportSlot(Slots[I], Captured[I]);
     end
-    else if Captured[I] then
+    else
     begin
+      // InitializeEnvironment validates named imports while linking. Retain
+      // the linked namespace here without revalidating during evaluation:
+      // doing so would change observable error ordering for cyclic graphs and
+      // source-phase module requests.
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slots[I], ModReg, 0));
-      NameIdx := ACtx.Template.AddConstantString(Names[I]);
-      EmitInstruction(ACtx, EncodeABx(OP_GET_IMPORT_BINDING, Slots[I],
-        NameIdx));
-      SyncCapturedImportSlot(Slots[I], True);
+      SyncCapturedImportSlot(Slots[I], Captured[I]);
     end;
   end;
 

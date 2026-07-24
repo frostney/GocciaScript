@@ -7,4 +7,19 @@ describe("experimental dynamic source-phase imports", () => {
     expect(second).toBe(first);
     expect(globalThis.__gocciaSourceDynamicImportEvaluated).toBe(false);
   });
+
+  test("source resolution errors precede later linking errors", async () => {
+    let error;
+
+    try {
+      await import(
+        "../../../../fixtures/modules/import-access-source-resolution-order.js"
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(typeof error).toBe("object");
+    expect(error instanceof SyntaxError).toBe(false);
+  });
 });

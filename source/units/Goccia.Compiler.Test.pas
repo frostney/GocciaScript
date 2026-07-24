@@ -44,6 +44,8 @@ type
       const AEnableDeadBranchElimination: Boolean = True): TGocciaBytecodeModule;
     function CountOp(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): Integer;
+    function CountOpRecursive(const ATemplate: TGocciaFunctionTemplate;
+      const AOp: TGocciaOpCode): Integer;
     function FindFunctionWithOp(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): TGocciaFunctionTemplate;
     function CountArithmeticOps(
@@ -72,6 +74,7 @@ type
     procedure TestCompileArithmetic;
     procedure TestCompileVariable;
     procedure TestCompileFunction;
+    procedure TestStaticImportLoadsScaleWithDeclarations;
     procedure TestBinaryRoundTrip;
     procedure TestBinaryRoundTripClosedNumericSelfCall;
     procedure TestBinaryRoundTripUpvalueNames;
@@ -127,6 +130,8 @@ begin
   Test('Compile arithmetic', TestCompileArithmetic);
   Test('Compile variable', TestCompileVariable);
   Test('Compile function', TestCompileFunction);
+  Test('Static import loads scale with declarations',
+    TestStaticImportLoadsScaleWithDeclarations);
   Test('Binary round-trip', TestBinaryRoundTrip);
   Test('Binary round-trip closed numeric self-call',
     TestBinaryRoundTripClosedNumericSelfCall);
@@ -287,6 +292,17 @@ begin
       Inc(Result);
 end;
 
+function TTestCompiler.CountOpRecursive(
+  const ATemplate: TGocciaFunctionTemplate;
+  const AOp: TGocciaOpCode): Integer;
+var
+  I: Integer;
+begin
+  Result := CountOp(ATemplate, AOp);
+  for I := 0 to ATemplate.FunctionCount - 1 do
+    Inc(Result, CountOpRecursive(ATemplate.GetFunction(I), AOp));
+end;
+
 function TTestCompiler.FindFunctionWithOp(
   const ATemplate: TGocciaFunctionTemplate;
   const AOp: TGocciaOpCode): TGocciaFunctionTemplate;
@@ -304,6 +320,27 @@ begin
     Result := FindFunctionWithOp(Candidate, AOp);
     if Assigned(Result) then
       Exit(Result);
+  end;
+end;
+
+procedure TTestCompiler.TestStaticImportLoadsScaleWithDeclarations;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'import { value } from "./dependency.js";' +
+    'import { other } from "./other-dependency.js";' +
+    'value; value; value; other; other;' +
+    'const read = () => value + value + value + value;' +
+    'read();');
+  try
+    // The declaration retains one module namespace. Identifier reads only
+    // dereference the live binding, including reads captured by a closure.
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_IMPORT)).ToBe(2);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel,
+      OP_GET_IMPORT_BINDING)).ToBe(9);
+  finally
+    Module.Free;
   end;
 end;
 

@@ -16671,25 +16671,30 @@ begin
             GlobalName));
         end;
 
-      // ES2026 §16.2.1.7.3.1 InitializeEnvironment: resolving a named import to
-      // a missing or ambiguous export is a SyntaxError. The module namespace is
-      // already loaded into register A by a preceding OP_IMPORT; reject names it
-      // cannot resolve before reading the binding value so bytecode matches the
-      // interpreter even on the entry path, which skips link-time validation.
-      // CanResolveExport (not HasExport) walks star/forwarding chains, matching
-      // the loader's ValidateStaticNamedImports and re-export validators.
       OP_GET_IMPORT_BINDING:
         begin
           GlobalName := Template.GetConstantUnchecked(
             DecodeBx(Instruction)).StringValue;
           if (FRegisters[A].Kind = grkObject) and
-             (FRegisters[A].ObjectValue is TGocciaModuleNamespaceObject) and
-             (not TGocciaModuleNamespaceObject(FRegisters[A].ObjectValue)
-                .Module.CanResolveExport(GlobalName)) then
-            ThrowSyntaxError(Format('Module "%s" has no export named "%s"',
-              [TGocciaModuleNamespaceObject(FRegisters[A].ObjectValue).Module.Path,
-               GlobalName]));
-          SetRegister(A, GetPropertyValue(GetRegister(A), GlobalName));
+             (FRegisters[A].ObjectValue is TGocciaModuleNamespaceObject) then
+          begin
+            if not TGocciaModuleNamespaceObject(
+               FRegisters[A].ObjectValue).TryGetExportValue(
+               GlobalName, GlobalBindingValue) then
+            begin
+              if Assigned(TGocciaModuleNamespaceObject(
+                 FRegisters[A].ObjectValue).Module) then
+                ThrowSyntaxError(Format('Module "%s" has no export named "%s"',
+                  [TGocciaModuleNamespaceObject(FRegisters[A].ObjectValue)
+                     .Module.Path, GlobalName]))
+              else
+                ThrowSyntaxError(Format('Module has no export named "%s"',
+                  [GlobalName]));
+            end;
+            SetRegister(A, GlobalBindingValue);
+          end
+          else
+            SetRegister(A, GetPropertyValue(GetRegister(A), GlobalName));
         end;
 
       OP_EXPORT:

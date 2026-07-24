@@ -1,5 +1,6 @@
 import source mathModuleSource from "../helpers/math-utils.js";
 import source sideEffectModuleSource from "../helpers/source-dynamic-import-side-effect.js";
+import { sharedSource } from "../../../../fixtures/modules/import-access-source-barrel.js";
 
 describe("experimental static source-phase imports", () => {
   test("binds ModuleSource objects without evaluating modules", () => {
@@ -14,5 +15,9 @@ describe("experimental static source-phase imports", () => {
     const abstractModuleSourcePrototype = Object.getPrototypeOf(moduleSourcePrototype);
 
     expect(Object.getPrototypeOf(abstractModuleSourcePrototype)).toBe(Object.prototype);
+  });
+
+  test("duplicate star exports of one ModuleSource remain unambiguous", () => {
+    expect(sharedSource).toBe(mathModuleSource);
   });
 });
