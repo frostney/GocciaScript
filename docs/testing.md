@@ -448,7 +448,7 @@ cp tests/compliance/json5-manifest.json /path/to/json5/goccia-json5-cases.json
 ./build/GocciaJSON5ComplianceRunner --suite-dir=/path/to/json5 --test-runner=./build/GocciaTestRunner --output=tmp/json5-suite-results.json
 ```
 
-The runner verifies both the checkout and manifest against `tests/compliance/json5.pin`. It converts each manifest entry into a valid JavaScript test file and launches `GocciaTestRunner` in a separate process for that case, so invalid JSON5 remains parser input rather than invalid outer JavaScript. The same command runs `tests/built-ins/JSON5/stringify.js`. Normal compliance execution requires neither Python nor Node.js.
+The runner verifies both the checkout and manifest against `tests/compliance/json5.pin`, converts every manifest entry into a valid JavaScript test file, and invokes `GocciaTestRunner` once for the generated parser suite plus `tests/built-ins/JSON5/stringify.js`. TestRunner owns concurrency, per-file timeouts, aggregation, exit status, and the JSON report. Invalid JSON5 remains input to `JSON5.parse(...)` inside valid outer JavaScript. Normal compliance execution requires neither Python nor Node.js.
 
 Maintainers regenerate the executable manifest from an already-prepared checkout:
 
@@ -678,7 +678,7 @@ build → test             → artifacts
 
 **`toml-compliance`** (all platforms) — Downloads the prebuilt `GocciaTOMLComplianceRunner`, prepares the exact pinned `toml-test` checkout, and relies on the runner exit status. CI performs only lightweight validation of the report envelope before uploading it.
 
-**`json5-compliance`** (all platforms) — Downloads `GocciaJSON5ComplianceRunner` and `GocciaTestRunner`, prepares the exact pinned JSON5 checkout, installs its matching committed manifest, and relies on the native runner exit status for parser and stringify compliance. CI performs only lightweight report-envelope validation before upload.
+**`json5-compliance`** (all platforms) — Downloads `GocciaJSON5ComplianceRunner` and `GocciaTestRunner`, prepares the exact pinned JSON5 checkout, installs its matching committed manifest, and runs the generated parser cases and local stringify suite together through TestRunner. CI relies on TestRunner's exit status and performs only lightweight validation of its JSON report before upload.
 
 **`test262`** (needs build, ubuntu-latest x64 only, **non-blocking**) — Runs the official conformance suite in bytecode mode from the shared pin in `scripts/test262-suite-sha.txt`, uploads the JSON report, and saves a `main` baseline cache for PR deltas. The run step is `continue-on-error: true` so known steady-state conformance failures do not block unrelated work; the downstream PR comment still gates regressions against the cached main baseline. **See [test262.md](test262.md) for the harness contract** and [Build System](build-system.md#ciyml--push-to-main--tags) for the workflow wiring.
 

@@ -74,7 +74,8 @@ The `stringify` export delegates to `TGocciaJSON5Stringifier`, which reuses the 
 Compatibility goal: GocciaScript is targeting full JSON5 parser compatibility
 plus upstream-aligned stringify behavior. The native
 `GocciaJSON5ComplianceRunner` runs the pinned upstream parser manifest through
-`GocciaTestRunner` and then runs the local upstream-aligned stringify suite.
+one `GocciaTestRunner` invocation together with the local upstream-aligned
+stringify suite.
 See [Testing](testing.md#running-tests) for checkout preparation and
 commands.
 

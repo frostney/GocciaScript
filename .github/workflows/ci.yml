@@ -525,13 +525,10 @@ jobs:
           }
           const report = JSON.parse(fs.readFileSync(path, "utf8"));
           if (
-            report.reportVersion !== 1 ||
-            report.runner?.name !== "GocciaJSON5ComplianceRunner" ||
-            report.suite?.name !== "json5" ||
-            typeof report.summary?.failed !== "number" ||
-            !Array.isArray(report.cases) ||
-            typeof report.sections?.parse?.summary?.failed !== "number" ||
-            typeof report.sections?.stringify?.testRunnerReport !== "object"
+            report.ok !== true ||
+            report.failed !== 0 ||
+            report.totalFiles !== report.results?.length ||
+            !Array.isArray(report.results)
           ) {
             throw new Error(`Unexpected JSON5 report shape: ${path}`);
           }

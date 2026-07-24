@@ -5,8 +5,6 @@ program GocciaJSON5ComplianceRunner;
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
-  Math,
-  StrUtils,
   SysUtils,
 
   Goccia.Compliance,
@@ -26,27 +24,6 @@ const
   DEFAULT_MANIFEST_NAME = 'goccia-json5-cases.json';
   DEFAULT_REGENERATOR = 'scripts/regenerate-json5-manifest.js';
   DEFAULT_STRINGIFY_SUITE = 'tests/built-ins/JSON5/stringify.js';
-
-type
-  TJSON5CaseData = record
-    ID: string;
-    Valid: Boolean;
-    TestPath: string;
-  end;
-
-  TJSON5CaseDataArray = array of TJSON5CaseData;
-
-  TJSON5ComplianceExecutor = class(TComplianceCaseExecutor)
-  private
-    FCases: TJSON5CaseDataArray;
-    FTestRunner: string;
-    FTimeoutMilliseconds: Integer;
-  public
-    constructor Create(const ACases: TJSON5CaseDataArray;
-      const ATestRunner: string; const ATimeoutMilliseconds: Integer);
-    procedure ExecuteCase(const ACaseID: string; const AIndex: Integer;
-      out AResult: TComplianceCaseResult); override;
-  end;
 
 function GeneratedCaseSource(const AID, ASource, AExpectedJSON: string;
   const AValid: Boolean): string;
@@ -85,12 +62,7 @@ var
 begin
   if AValid then
     Body :=
-      '  let actual;' + LineEnding +
-      '  try {' + LineEnding +
-      '    actual = JSON5.parse(source);' + LineEnding +
-      '  } catch (error) {' + LineEnding +
-      '    throw new Error("__GOCCIA_FALSE_REJECT__ " + error);' + LineEnding +
-      '  }' + LineEnding +
+      '  const actual = JSON5.parse(source);' + LineEnding +
       '  expect(JSON.stringify(encode(actual))).toBe(' +
       'JSON.stringify(expected));' + LineEnding
   else
@@ -104,67 +76,6 @@ begin
   if AValid then
     Result := Result + '  const expected = ' + AExpectedJSON + ';' + LineEnding;
   Result := Result + Body + '});' + LineEnding;
-end;
-
-constructor TJSON5ComplianceExecutor.Create(const ACases: TJSON5CaseDataArray;
-  const ATestRunner: string; const ATimeoutMilliseconds: Integer);
-var
-  I: Integer;
-begin
-  inherited Create;
-  SetLength(FCases, Length(ACases));
-  for I := 0 to High(ACases) do
-    FCases[I] := ACases[I];
-  FTestRunner := ATestRunner;
-  FTimeoutMilliseconds := ATimeoutMilliseconds;
-end;
-
-procedure TJSON5ComplianceExecutor.ExecuteCase(const ACaseID: string;
-  const AIndex: Integer; out AResult: TComplianceCaseResult);
-var
-  Arguments: TStringList;
-  ProcessResult: TComplianceProcessResult;
-begin
-  AResult.ID := ACaseID;
-  AResult.Valid := FCases[AIndex].Valid;
-  AResult.Outcome := coInfrastructure;
-  Arguments := TStringList.Create;
-  try
-    Arguments.Add(FCases[AIndex].TestPath);
-    Arguments.Add('--silent');
-    Arguments.Add('--no-progress');
-    Arguments.Add('--no-results');
-    ProcessResult := RunComplianceProcess(FTestRunner, Arguments,
-      FTimeoutMilliseconds);
-  finally
-    Arguments.Free;
-  end;
-  AResult.DurationMilliseconds := ProcessResult.DurationMilliseconds;
-  AResult.MessageText := CombinedProcessMessage(ProcessResult);
-  if not ProcessResult.Started then
-    Exit;
-  if ProcessResult.TimedOut then
-  begin
-    AResult.Outcome := coTimeout;
-    AResult.MessageText := 'timeout';
-    Exit;
-  end;
-  if ProcessResult.ExitCode = 0 then
-  begin
-    AResult.Outcome := coPassed;
-    AResult.MessageText := '';
-  end
-  else if ProcessResult.ExitCode = 1 then
-  begin
-    if not AResult.Valid then
-      AResult.Outcome := coFalseAccept
-    else if Pos('__GOCCIA_FALSE_REJECT__', AResult.MessageText) > 0 then
-      AResult.Outcome := coFalseReject
-    else
-      AResult.Outcome := coMismatch;
-  end
-  else
-    AResult.Outcome := coCrash;
 end;
 
 function DefaultTestRunnerPath: string;
@@ -187,19 +98,18 @@ begin
 end;
 
 procedure RemoveCaseDirectory(const ADirectory: string;
-  const ACases: TJSON5CaseDataArray);
+  const ACasePaths: TStrings);
 var
   I: Integer;
 begin
-  for I := 0 to High(ACases) do
-    if StartsText(IncludeTrailingPathDelimiter(ADirectory),
-        ExpandFileName(ACases[I].TestPath)) then
-      DeleteFile(ACases[I].TestPath);
+  if ACasePaths <> nil then
+    for I := 0 to ACasePaths.Count - 1 do
+      DeleteFile(ACasePaths[I]);
   RemoveDir(ADirectory);
 end;
 
-function LoadCases(const AManifestPath, AExpectedRevision,
-  ACaseDirectory: string; out ACases: TJSON5CaseDataArray): TStringList;
+function PrepareCases(const AManifestPath, AExpectedRevision,
+  ACaseDirectory: string): TStringList;
 var
   CaseArray: TGocciaArrayValue;
   CaseObject, ManifestObject: TGocciaObjectValue;
@@ -207,100 +117,58 @@ var
   I: Integer;
   JSONParser: TGocciaJSONParser;
   JSONStringifier: TGocciaJSONStringifier;
-  SourceText, ExpectedJSON: string;
+  CasePath, ExpectedJSON: string;
 begin
   if not FileExists(AManifestPath) then
     raise Exception.CreateFmt(
       'JSON5 manifest not found: %s (run --regenerate-manifest first)',
       [AManifestPath]);
+  Result := TStringList.Create;
   JSONParser := TGocciaJSONParser.Create;
   JSONStringifier := TGocciaJSONStringifier.Create;
   try
-    ManifestObject := TGocciaObjectValue(JSONParser.Parse(
-      ReadUTF8FileText(AManifestPath)));
-    if ManifestObject.GetProperty('manifestVersion').ToNumberLiteral.Value <>
-        1 then
-      raise Exception.Create('Unsupported JSON5 manifest version');
-    if ManifestObject.GetProperty('suite').ToStringLiteral.Value <>
-        SUITE_NAME then
-      raise Exception.Create('JSON5 manifest names the wrong suite');
-    if ManifestObject.GetProperty('revision').ToStringLiteral.Value <>
-        AExpectedRevision then
-      raise Exception.CreateFmt(
-        'JSON5 manifest revision mismatch: expected %s, got %s',
-        [AExpectedRevision,
-         ManifestObject.GetProperty('revision').ToStringLiteral.Value]);
-    CaseArray := TGocciaArrayValue(ManifestObject.GetProperty('cases'));
-    SetLength(ACases, CaseArray.Elements.Count);
-    Result := TStringList.Create;
-    for I := 0 to CaseArray.Elements.Count - 1 do
-    begin
-      CaseObject := TGocciaObjectValue(CaseArray.Elements[I]);
-      ACases[I].ID := CaseObject.GetProperty('id').ToStringLiteral.Value;
-      ACases[I].Valid := CaseObject.GetProperty('valid').ToBooleanLiteral.Value;
-      ACases[I].TestPath := IncludeTrailingPathDelimiter(ACaseDirectory) +
-        Format('case_%.4d.js', [I]);
-      SourceText := CaseObject.GetProperty('source').ToStringLiteral.Value;
-      ExpectedJSON := '';
-      if ACases[I].Valid then
+    try
+      ManifestObject := TGocciaObjectValue(JSONParser.Parse(
+        ReadUTF8FileText(AManifestPath)));
+      if ManifestObject.GetProperty('manifestVersion').ToNumberLiteral.Value <>
+          1 then
+        raise Exception.Create('Unsupported JSON5 manifest version');
+      if ManifestObject.GetProperty('suite').ToStringLiteral.Value <>
+          SUITE_NAME then
+        raise Exception.Create('JSON5 manifest names the wrong suite');
+      if ManifestObject.GetProperty('revision').ToStringLiteral.Value <>
+          AExpectedRevision then
+        raise Exception.CreateFmt(
+          'JSON5 manifest revision mismatch: expected %s, got %s',
+          [AExpectedRevision,
+           ManifestObject.GetProperty('revision').ToStringLiteral.Value]);
+      CaseArray := TGocciaArrayValue(ManifestObject.GetProperty('cases'));
+      for I := 0 to CaseArray.Elements.Count - 1 do
       begin
-        ExpectedValue := CaseObject.GetProperty('expected');
-        ExpectedJSON := JSONStringifier.Stringify(ExpectedValue);
+        CaseObject := TGocciaObjectValue(CaseArray.Elements[I]);
+        CasePath := IncludeTrailingPathDelimiter(ACaseDirectory) +
+          Format('case_%.4d.js', [I]);
+        ExpectedJSON := '';
+        if CaseObject.GetProperty('valid').ToBooleanLiteral.Value then
+        begin
+          ExpectedValue := CaseObject.GetProperty('expected');
+          ExpectedJSON := JSONStringifier.Stringify(ExpectedValue);
+        end;
+        WriteUTF8FileText(CasePath, GeneratedCaseSource(
+          CaseObject.GetProperty('id').ToStringLiteral.Value,
+          CaseObject.GetProperty('source').ToStringLiteral.Value,
+          ExpectedJSON,
+          CaseObject.GetProperty('valid').ToBooleanLiteral.Value));
+        Result.Add(CasePath);
       end;
-      WriteUTF8FileText(ACases[I].TestPath,
-        GeneratedCaseSource(ACases[I].ID, SourceText, ExpectedJSON,
-          ACases[I].Valid));
-      Result.Add(ACases[I].ID);
+    except
+      Result.Free;
+      raise;
     end;
   finally
     JSONStringifier.Free;
     JSONParser.Free;
   end;
-end;
-
-function RunStringifySuite(const ATestRunner, ASuitePath,
-  AReportPath: string; const ATimeoutMilliseconds: Integer;
-  out AReportJSON: string): TComplianceCaseResult;
-var
-  Arguments: TStringList;
-  ProcessResult: TComplianceProcessResult;
-begin
-  Result.ID := 'JSON5.stringify';
-  Result.Valid := True;
-  Result.Outcome := coInfrastructure;
-  Arguments := TStringList.Create;
-  try
-    Arguments.Add(ASuitePath);
-    Arguments.Add('--silent');
-    Arguments.Add('--no-progress');
-    Arguments.Add('--output=' + AReportPath);
-    ProcessResult := RunComplianceProcess(ATestRunner, Arguments,
-      ATimeoutMilliseconds);
-  finally
-    Arguments.Free;
-  end;
-  Result.DurationMilliseconds := ProcessResult.DurationMilliseconds;
-  Result.MessageText := CombinedProcessMessage(ProcessResult);
-  if ProcessResult.TimedOut then
-  begin
-    Result.Outcome := coTimeout;
-    Result.MessageText := 'timeout';
-  end
-  else if not ProcessResult.Started then
-    Result.Outcome := coInfrastructure
-  else if ProcessResult.ExitCode = 0 then
-  begin
-    Result.Outcome := coPassed;
-    Result.MessageText := '';
-  end
-  else if ProcessResult.ExitCode = 1 then
-    Result.Outcome := coMismatch
-  else
-    Result.Outcome := coCrash;
-  if FileExists(AReportPath) then
-    AReportJSON := ReadUTF8FileText(AReportPath)
-  else
-    AReportJSON := 'null';
 end;
 
 function RegenerateManifest: Integer;
@@ -348,28 +216,19 @@ begin
   WriteLn('  --test-runner=PATH      GocciaTestRunner executable');
   WriteLn('  --stringify-suite=PATH  Local JSON5 stringify test file');
   WriteLn('  --pin-file=PATH         Expected suite revision pin');
-  WriteLn('  --jobs=N                Maximum concurrent TestRunner processes');
-  WriteLn('  --timeout=N             Per-process timeout in milliseconds');
-  WriteLn('  --output=PATH           Write the complete JSON report');
+  WriteLn('  --jobs=N                TestRunner worker count');
+  WriteLn('  --timeout=N             TestRunner per-file timeout in milliseconds');
+  WriteLn('  --output=PATH           Write the TestRunner JSON report');
   WriteLn('  --regenerate-manifest   Maintainer-only manifest regeneration');
 end;
 
 function RunCoordinator: Integer;
 var
+  Arguments, CasePaths: TStringList;
   CaseDirectory, ManifestPath, OutputPath, PinPath, Revision,
-  StringifyReportJSON, StringifySuite, SuiteDirectory, TestRunner: string;
-  Cases: TJSON5CaseDataArray;
-  StringifyResults: TComplianceCaseResultArray;
-  CaseIDs: TStringList;
-  Coordinator: TComplianceCoordinator;
-  Executor: TJSON5ComplianceExecutor;
-  I, Jobs, TimeoutMilliseconds: Integer;
-  AllResults: TComplianceCaseResultArray;
-  ParseResults: TComplianceCaseResultArray;
-  AllSummary, ParseSummary: TComplianceSummary;
-  ReportJSON, StringifyReportPath: string;
-  StartedAt, DurationMilliseconds: QWord;
-  StringifyResult: TComplianceCaseResult;
+  StringifySuite, SuiteDirectory, TestRunner: string;
+  Jobs, TimeoutMilliseconds: Integer;
+  ProcessResult: TComplianceProcessResult;
 begin
   if not ReadOptionValue('suite-dir', SuiteDirectory) then
   begin
@@ -399,71 +258,45 @@ begin
   TimeoutMilliseconds := PositiveIntegerOption('timeout',
     DEFAULT_COMPLIANCE_TIMEOUT_MS);
   ReadOptionValue('output', OutputPath);
+  if (OutputPath <> '') and
+     (not ForceDirectories(ExtractFileDir(ExpandFileName(OutputPath)))) then
+    raise Exception.CreateFmt('Cannot create report directory: %s',
+      [ExtractFileDir(ExpandFileName(OutputPath))]);
 
   CaseDirectory := CreateCaseDirectory;
-  StringifyReportPath := IncludeTrailingPathDelimiter(CaseDirectory) +
-    'stringify-report.json';
+  CasePaths := nil;
   TGarbageCollector.Initialize;
   PinPrimitiveSingletons;
   try
-    CaseIDs := LoadCases(ExpandFileName(ManifestPath), Revision,
-      CaseDirectory, Cases);
-    Executor := TJSON5ComplianceExecutor.Create(Cases, TestRunner,
-      TimeoutMilliseconds);
-    Coordinator := TComplianceCoordinator.Create(Executor);
-    StartedAt := GetTickCount64;
+    CasePaths := PrepareCases(ExpandFileName(ManifestPath), Revision,
+      CaseDirectory);
+    Arguments := TStringList.Create;
     try
-      ParseResults := Coordinator.Run(CaseIDs, Jobs);
+      Arguments.Add(CaseDirectory);
+      Arguments.Add(StringifySuite);
+      Arguments.Add('--jobs=' + IntToStr(Jobs));
+      Arguments.Add('--timeout=' + IntToStr(TimeoutMilliseconds));
+      Arguments.Add('--silent');
+      Arguments.Add('--no-progress');
+      if OutputPath <> '' then
+        Arguments.Add('--output=' + ExpandFileName(OutputPath));
+      ProcessResult := RunComplianceProcess(TestRunner, Arguments, 0);
     finally
-      Coordinator.Free;
-      Executor.Free;
-      CaseIDs.Free;
+      Arguments.Free;
     end;
-    StringifyResult := RunStringifySuite(TestRunner, StringifySuite,
-      StringifyReportPath, TimeoutMilliseconds, StringifyReportJSON);
-    SetLength(StringifyResults, 1);
-    StringifyResults[0] := StringifyResult;
-    SetLength(AllResults, Length(ParseResults) + 1);
-    for I := 0 to High(ParseResults) do
-      AllResults[I] := ParseResults[I];
-    AllResults[High(AllResults)] := StringifyResult;
-    DurationMilliseconds := GetTickCount64 - StartedAt;
-    ParseSummary := SummarizeComplianceResults(ParseResults);
-    AllSummary := SummarizeComplianceResults(AllResults);
-    ReportJSON := Format(
-      '{"reportVersion":%d,"runner":{"name":%s,"version":%d},' +
-      '"suite":{"name":%s,"revision":%s},' +
-      '"mode":"testrunner","jobs":%d,' +
-      '"timing":{"durationMilliseconds":%d,"timeoutMilliseconds":%d},' +
-      '"summary":%s,"cases":%s,' +
-      '"sections":{"parse":{"summary":%s},' +
-      '"stringify":{"result":%s,"testRunnerReport":%s}}}',
-      [COMPLIANCE_REPORT_VERSION,
-       QuoteJSONString('GocciaJSON5ComplianceRunner'),
-       COMPLIANCE_RUNNER_VERSION, QuoteJSONString(SUITE_NAME),
-       QuoteJSONString(Revision), Min(Jobs, Max(1, ParseSummary.Total)),
-       DurationMilliseconds, TimeoutMilliseconds,
-       ComplianceSummaryJSON(AllSummary), ComplianceCasesJSON(AllResults),
-       ComplianceSummaryJSON(ParseSummary),
-       Copy(ComplianceCasesJSON(StringifyResults), 2,
-         Length(ComplianceCasesJSON(StringifyResults)) - 2),
-       Trim(StringifyReportJSON)]);
-    if OutputPath <> '' then
-      WriteJSONFile(OutputPath, ReportJSON);
-    WriteLn('JSON5 parse: ', ParseSummary.Passed, '/', ParseSummary.Total,
-      ' passed; stringify: ',
-      ComplianceOutcomeName(StringifyResult.Outcome));
-    WriteLn(ComplianceSummaryJSON(AllSummary));
   finally
     TGarbageCollector.Shutdown;
-    DeleteFile(StringifyReportPath);
-    RemoveCaseDirectory(CaseDirectory, Cases);
+    RemoveCaseDirectory(CaseDirectory, CasePaths);
+    CasePaths.Free;
   end;
-  if (ParseSummary.Failed > 0) or
-     (StringifyResult.Outcome <> coPassed) then
-    Result := 1
-  else
-    Result := 0;
+  if not ProcessResult.Started then
+    raise Exception.Create('Cannot start GocciaTestRunner: ' +
+      ProcessResult.ErrorMessage);
+  if ProcessResult.StdOutText <> '' then
+    Write(TrimRight(ProcessResult.StdOutText), LineEnding);
+  if ProcessResult.StdErrText <> '' then
+    Write(TrimRight(ProcessResult.StdErrText), LineEnding);
+  Result := ProcessResult.ExitCode;
 end;
 
 begin
