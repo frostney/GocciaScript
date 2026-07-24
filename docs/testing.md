@@ -29,7 +29,7 @@ When choosing where to add coverage, prefer the most public entry point — and 
 
 A JavaScript test that merely *parses and runs* a construct — e.g. `(a / b)` evaluating to `1`, or `(/x/).test(...)` returning `true` — is a positive **execution/conformance** test. It confirms the construct works, but it does **not** prove that a *different*, malformed construct is rejected, and it is not the lexer/parser gate. When a change is about what the parser or lexer accepts or rejects (disambiguation, early errors, token classification), put the rejection cases in `scripts/test-cli-parser.ts` / `test-cli-lexer.ts`.
 
-Do not use dynamic source execution (`Function(...)`, `eval(...)`, or equivalent runtime compilation) inside the JavaScript suite merely to smuggle parser failures into a runtime test. Keep dynamic-code assertions in `tests/` only when the dynamic-code API itself is the feature under test, such as `Function` constructor behavior. Direct `eval` is host-gated, so its private test262-host coverage belongs in `scripts/test-cli-apps.ts`, outside the JavaScript suite.
+Do not use dynamic source execution (`Function(...)`, `eval(...)`, or equivalent runtime compilation) inside the JavaScript suite merely to smuggle parser failures into a runtime test. Keep dynamic-code assertions in `tests/` only when the dynamic-code API itself is the feature under test, such as `Function` constructor behavior. Direct `eval` is host-gated, so its private `GocciaTest262Runner` coverage belongs in `scripts/test-cli-apps.ts`, outside the JavaScript suite.
 
 Avoid tests that lock onto private helper functions or transient implementation structure when the same behavior can be validated through a documented user-facing command or script entry point. Where native Pascal tests are still appropriate, keep them as stateless and repeatable as possible so they behave like pure input/output checks rather than process-sensitive probes.
 
@@ -728,11 +728,19 @@ Each workflow reuses a fixed branch (`chore/<suite>-bump`), so an unmerged PR is
 ### Running test262 locally
 
 ```bash
-./build.pas loaderbare  # build the binary the runner needs
-bun scripts/run_test262_suite.ts --filter "built-ins/Array/*" --output=results.json
+./build.pas test262runner
+./build/GocciaTest262Runner \
+  --suite-dir=/path/to/test262 \
+  --filter="built-ins/Array/*" \
+  --output=results.json
 ```
 
-The runner clones test262 into a tempdir on first use, or accepts an existing checkout via `--suite-dir`. See `bun scripts/run_test262_suite.ts --help` for the full option set, including `--categories`, `--max-tests`, `--mode={interpreted,bytecode}`, `--jobs`, `--timeout-ms`, and `--max-memory`.
+The native runner accepts an existing checkout via `--suite-dir`; CI checks out
+the SHA pinned in `scripts/test262-suite-sha.txt`. Run
+`./build/GocciaTest262Runner --help` for execution options including
+`--categories`, `--max-tests`, `--mode={interpreted,bytecode}`, `--jobs`,
+`--timeout-ms`, and `--max-memory`. The TypeScript utility handles only
+cross-shard merge, profile aggregation, and comment rendering.
 
 ## Coverage
 
