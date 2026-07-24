@@ -13,6 +13,14 @@ uses
   Goccia.Values.Primitives;
 
 type
+  TGocciaFFITypePosition = (
+    ftpBoundArgument,
+    ftpBoundReturn,
+    ftpAggregateStorage,
+    ftpCallbackArgument,
+    ftpCallbackReturn
+  );
+
   TGocciaFFITypeDescriptorValue = class(TGocciaObjectValue)
   private
     FDescriptor: TGocciaFFITypeDescriptor;
@@ -29,6 +37,21 @@ type
     function ToStringTag: string; override;
     procedure MarkReferences; override;
     property Descriptor: TGocciaFFITypeDescriptor read FDescriptor;
+  end;
+
+  TGocciaFFIVarArgsValue = class(TGocciaObjectValue)
+  private
+    FTypes: array of TGocciaFFITypeDescriptor;
+    FValues: array of TGocciaValue;
+  public
+    constructor Create(const ATypes: array of TGocciaFFITypeDescriptor;
+      const AValues: array of TGocciaValue);
+    destructor Destroy; override;
+    function Count: Integer; {$IFDEF FPC}inline;{$ENDIF}
+    function TypeAt(const AIndex: Integer): TGocciaFFITypeDescriptor;
+    function ValueAt(const AIndex: Integer): TGocciaValue;
+    function ToStringTag: string; override;
+    procedure MarkReferences; override;
   end;
 
   TGocciaFFIAggregatePointerGuardEntry = record
@@ -96,11 +119,14 @@ type
   end;
 
 function ParseFFITypeDescriptorValue(const AValue: TGocciaValue;
-  const AAllowVoid: Boolean): TGocciaFFITypeDescriptor;
+  const APosition: TGocciaFFITypePosition): TGocciaFFITypeDescriptor;
 function CreateFFIStructType(const ADefinition: TGocciaValue): TGocciaValue;
 function CreateFFIUnionType(const ADefinition: TGocciaValue): TGocciaValue;
 function CreateFFIArrayType(const AElementValue, ALengthValue: TGocciaValue): TGocciaValue;
 function CreateFFICallbackType(const ADefinition: TGocciaValue): TGocciaValue;
+function CreateFFINullableType(const AElementValue: TGocciaValue): TGocciaValue;
+function CreateFFIVarArgs(const ATypesValue,
+  AValuesValue: TGocciaValue): TGocciaValue;
 
 implementation
 
@@ -121,6 +147,7 @@ uses
 const
   FFI_TYPE_DESCRIPTOR_TAG = 'FFIType';
   FFI_AGGREGATE_TAG = 'FFIAggregate';
+  FFI_VARARGS_TAG = 'FFIVarArgs';
   PROP_CREATE = 'create';
   PROP_KIND = 'kind';
   PROP_SIZE = 'size';
@@ -128,6 +155,69 @@ const
   PROP_BUFFER = 'buffer';
   PROP_BYTE_OFFSET = 'byteOffset';
   PROP_LENGTH = 'length';
+
+constructor TGocciaFFIVarArgsValue.Create(
+  const ATypes: array of TGocciaFFITypeDescriptor;
+  const AValues: array of TGocciaValue);
+var
+  I: Integer;
+begin
+  inherited Create(TGocciaObjectValue.SharedObjectPrototype);
+  if Length(ATypes) <> Length(AValues) then
+    raise EArgumentException.Create(
+      'FFI variadic type and value counts do not match');
+  SetLength(FTypes, Length(ATypes));
+  SetLength(FValues, Length(AValues));
+  for I := 0 to High(ATypes) do
+  begin
+    FTypes[I] := ATypes[I];
+    FTypes[I].AddReference;
+    FValues[I] := AValues[I];
+  end;
+end;
+
+destructor TGocciaFFIVarArgsValue.Destroy;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FTypes) do
+    if Assigned(FTypes[I]) then
+      FTypes[I].ReleaseReference;
+  inherited;
+end;
+
+function TGocciaFFIVarArgsValue.Count: Integer;
+begin
+  Result := Length(FTypes);
+end;
+
+function TGocciaFFIVarArgsValue.TypeAt(
+  const AIndex: Integer): TGocciaFFITypeDescriptor;
+begin
+  Result := FTypes[AIndex];
+end;
+
+function TGocciaFFIVarArgsValue.ValueAt(
+  const AIndex: Integer): TGocciaValue;
+begin
+  Result := FValues[AIndex];
+end;
+
+function TGocciaFFIVarArgsValue.ToStringTag: string;
+begin
+  Result := FFI_VARARGS_TAG;
+end;
+
+procedure TGocciaFFIVarArgsValue.MarkReferences;
+var
+  I: Integer;
+begin
+  if GCMarked then Exit;
+  inherited;
+  for I := 0 to High(FValues) do
+    if Assigned(FValues[I]) then
+      FValues[I].MarkReferences;
+end;
 
 constructor TGocciaFFIAggregatePointerGuards.Create;
 begin
@@ -280,6 +370,7 @@ begin
     ftkUnion: Result := 'union';
     ftkArray: Result := 'array';
     ftkCallback: Result := 'callback';
+    ftkNullable: Result := 'nullable';
   else
     Result := 'unknown';
   end;
@@ -309,8 +400,20 @@ begin
     (IntToStr(AIndex) = AName);
 end;
 
+procedure ValidateFFITypePosition(const AType: TGocciaFFITypeDescriptor;
+  const APosition: TGocciaFFITypePosition);
+begin
+  if (AType.Kind = ftkScalar) and
+     (AType.ScalarType = fftVoid) and
+     not (APosition in [ftpBoundReturn, ftpCallbackReturn]) then
+    ThrowTypeError(SErrorFFIVoidReturnOnly, SSuggestFFIUsage);
+  if (AType.Kind = ftkNullable) and
+     (APosition <> ftpBoundArgument) then
+    ThrowTypeError(SErrorFFINullableArgumentOnly, SSuggestFFIUsage);
+end;
+
 function ParseFFITypeDescriptorValue(const AValue: TGocciaValue;
-  const AAllowVoid: Boolean): TGocciaFFITypeDescriptor;
+  const APosition: TGocciaFFITypePosition): TGocciaFFITypeDescriptor;
 var
   TypeName: string;
   ScalarType: TGocciaFFIType;
@@ -319,6 +422,12 @@ begin
   begin
     Result := TGocciaFFITypeDescriptorValue(AValue).Descriptor;
     Result.AddReference;
+    try
+      ValidateFFITypePosition(Result, APosition);
+    except
+      Result.ReleaseReference;
+      raise;
+    end;
     Exit;
   end;
 
@@ -330,14 +439,69 @@ begin
   ScalarType := ParseFFIType(TypeName);
   if (ScalarType = fftVoid) and (TypeName <> FFI_TYPE_VOID) then
     ThrowTypeError(Format(SErrorFFIUnknownType, [TypeName]), SSuggestFFIUsage);
-  if (ScalarType = fftVoid) and not AAllowVoid then
-    ThrowTypeError(SErrorFFIVoidReturnOnly,
-      SSuggestFFIUsage);
   {$IF not (defined(GOCCIA_CPU_64))}
   if ScalarType in [fftI64, fftU64] then
     ThrowTypeError(SErrorFFI64BitType32Bit, SSuggestFFIUsage);
   {$ENDIF}
   Result := TGocciaFFITypeDescriptor.CreateScalar(ScalarType);
+  try
+    ValidateFFITypePosition(Result, APosition);
+  except
+    Result.ReleaseReference;
+    raise;
+  end;
+end;
+
+function CreateFFINullableType(const AElementValue: TGocciaValue): TGocciaValue;
+var
+  ElementType, Descriptor: TGocciaFFITypeDescriptor;
+begin
+  if not (AElementValue is TGocciaStringLiteralValue) or
+     (TGocciaStringLiteralValue(AElementValue).Value <>
+      FFI_TYPE_UTF8STRING) then
+    ThrowTypeError(SErrorFFINullableUTF8StringOnly, SSuggestFFIUsage);
+  ElementType := TGocciaFFITypeDescriptor.CreateScalar(fftUTF8String);
+  try
+    Descriptor := TGocciaFFITypeDescriptor.CreateNullable(ElementType);
+  finally
+    ElementType.ReleaseReference;
+  end;
+  Result := TGocciaFFITypeDescriptorValue.Create(Descriptor, True);
+end;
+
+function CreateFFIVarArgs(const ATypesValue,
+  AValuesValue: TGocciaValue): TGocciaValue;
+var
+  TypesArray, ValuesArray: TGocciaArrayValue;
+  Types: array of TGocciaFFITypeDescriptor;
+  Values: array of TGocciaValue;
+  I, J: Integer;
+begin
+  if not (ATypesValue is TGocciaArrayValue) or
+     not (AValuesValue is TGocciaArrayValue) then
+    ThrowTypeError(SErrorFFIVarArgsArrays, SSuggestFFIUsage);
+  TypesArray := TGocciaArrayValue(ATypesValue);
+  ValuesArray := TGocciaArrayValue(AValuesValue);
+  if TypesArray.Elements.Count <> ValuesArray.Elements.Count then
+    ThrowTypeError(SErrorFFIVarArgsLength, SSuggestFFIUsage);
+  if TypesArray.Elements.Count > MAX_FFI_ARGS then
+    ThrowTypeError(Format(SErrorFFIMaxArguments, [MAX_FFI_ARGS]),
+      SSuggestFFIUsage);
+  SetLength(Types, TypesArray.Elements.Count);
+  SetLength(Values, ValuesArray.Elements.Count);
+  try
+    for I := 0 to TypesArray.Elements.Count - 1 do
+    begin
+      Types[I] := ParseFFITypeDescriptorValue(TypesArray.Elements[I],
+        ftpBoundArgument);
+      Values[I] := ValuesArray.Elements[I];
+    end;
+    Result := TGocciaFFIVarArgsValue.Create(Types, Values);
+  finally
+    for J := 0 to High(Types) do
+      if Assigned(Types[J]) then
+        Types[J].ReleaseReference;
+  end;
 end;
 
 function CreateAggregateType(const ADefinition: TGocciaValue;
@@ -363,13 +527,9 @@ begin
   try
     for I := 0 to High(FieldNames) do
     begin
-      if (FieldNames[I] = PROP_BUFFER) or
-         (FieldNames[I] = PROP_BYTE_OFFSET) then
-        ThrowTypeError(Format(SErrorFFIAggregateFieldReserved,
-          [FieldNames[I]]), SSuggestFFIUsage);
       Fields[I].Name := FieldNames[I];
       Fields[I].TypeDescriptor := ParseFFITypeDescriptorValue(
-        DefinitionObject.GetProperty(FieldNames[I]), False);
+        DefinitionObject.GetProperty(FieldNames[I]), ftpAggregateStorage);
     end;
     try
       if AKind = ftkStruct then
@@ -414,7 +574,8 @@ begin
     ThrowTypeError(SErrorFFIArrayLengthPositive,
       SSuggestFFIUsage);
   ElementCount := Trunc(LengthValue);
-  ElementType := ParseFFITypeDescriptorValue(AElementValue, False);
+  ElementType := ParseFFITypeDescriptorValue(AElementValue,
+    ftpAggregateStorage);
   try
     try
       Descriptor := TGocciaFFITypeDescriptor.CreateArray(ElementType,
@@ -431,7 +592,7 @@ end;
 function CreateFFICallbackType(const ADefinition: TGocciaValue): TGocciaValue;
 var
   DefinitionObject: TGocciaObjectValue;
-  ArgumentsValue, ReturnValue: TGocciaValue;
+  ArgumentsValue, ReturnValue, VariadicValue: TGocciaValue;
   ArgumentsArray: TGocciaArrayValue;
   ArgumentTypes: array of TGocciaFFITypeDescriptor;
   ReturnType, Descriptor: TGocciaFFITypeDescriptor;
@@ -442,6 +603,16 @@ begin
     ThrowTypeError(SErrorFFICallbackDefinitionObject,
       SSuggestFFIUsage);
   DefinitionObject := TGocciaObjectValue(ADefinition);
+  VariadicValue := DefinitionObject.GetProperty('variadic');
+  if Assigned(VariadicValue) and
+     not (VariadicValue is TGocciaUndefinedLiteralValue) then
+  begin
+    if not (VariadicValue is TGocciaBooleanLiteralValue) then
+      ThrowTypeError(SErrorFFIVariadicFlagBoolean, SSuggestFFIUsage);
+    if TGocciaBooleanLiteralValue(VariadicValue).Value then
+      ThrowTypeError(SErrorFFICallbackVariadicUnsupported,
+        SSuggestFFIUsage);
+  end;
 
   ReturnType := nil;
   try
@@ -455,7 +626,7 @@ begin
       SetLength(ArgumentTypes, ArgumentsArray.Elements.Count);
       for I := 0 to ArgumentsArray.Elements.Count - 1 do
         ArgumentTypes[I] := ParseFFITypeDescriptorValue(
-          ArgumentsArray.Elements[I], False);
+          ArgumentsArray.Elements[I], ftpCallbackArgument);
     end
     else if not (ArgumentsValue is TGocciaUndefinedLiteralValue) then
       ThrowTypeError(SErrorFFICallbackArgsArray, SSuggestFFIUsage);
@@ -464,7 +635,8 @@ begin
     if ReturnValue is TGocciaUndefinedLiteralValue then
       ReturnType := TGocciaFFITypeDescriptor.CreateScalar(fftVoid)
     else
-      ReturnType := ParseFFITypeDescriptorValue(ReturnValue, True);
+      ReturnType := ParseFFITypeDescriptorValue(ReturnValue,
+        ftpCallbackReturn);
     try
       Descriptor := TGocciaFFITypeDescriptor.CreateCallback(ArgumentTypes,
         ReturnType);

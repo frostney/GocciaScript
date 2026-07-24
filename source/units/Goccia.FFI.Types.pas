@@ -23,7 +23,8 @@ type
     ftkStruct,
     ftkUnion,
     ftkArray,
-    ftkCallback
+    ftkCallback,
+    ftkNullable
   );
 
   TGocciaFFITypeDescriptor = class;
@@ -61,6 +62,8 @@ type
     class function CreateCallback(
       const AArguments: array of TGocciaFFITypeDescriptor;
       const AReturnType: TGocciaFFITypeDescriptor): TGocciaFFITypeDescriptor;
+    class function CreateNullable(
+      const AElementType: TGocciaFFITypeDescriptor): TGocciaFFITypeDescriptor;
     procedure AddReference;
     procedure ReleaseReference;
     function IsAggregate: Boolean; {$IFDEF FPC}inline;{$ENDIF}
@@ -84,22 +87,6 @@ type
   TGocciaFFIArgClass = (facInteger, facSingle, facDouble, facMixed);
   TGocciaFFIReturnClass = (frcVoid, frcInteger, frcSingle, frcDouble);
 
-  TGocciaFFISlot = record
-    case Integer of
-      0: (AsInt: NativeInt);
-      1: (AsSingle: Single);
-      2: (AsDouble: Double);
-  end;
-
-  TGocciaFFISignature = record
-    ArgTypes: array of TGocciaFFIType;
-    ReturnType: TGocciaFFIType;
-    ArgCount: Integer;
-    ArgClass: TGocciaFFIArgClass;
-    ArgBitmask: Integer;
-    ReturnClass: TGocciaFFIReturnClass;
-  end;
-
   TGocciaFFIResult = record
     case Integer of
       0: (AsInt: NativeInt);
@@ -108,7 +95,7 @@ type
   end;
 
 const
-  MAX_FFI_ARGS = 8;
+  MAX_FFI_ARGS = 64;
   MAX_FFI_FIELDS = 256;
   MAX_FFI_DESCRIPTOR_DEPTH = 32;
   MAX_FFI_AGGREGATE_SIZE = 65536;
@@ -131,9 +118,6 @@ const
 function ParseFFIType(const AName: string): TGocciaFFIType;
 function FFITypeName(const AType: TGocciaFFIType): string;
 function AlignFFIOffset(const AOffset, AAlignment: Integer): Integer;
-function FFITypeToArgClass(const AType: TGocciaFFIType): TGocciaFFIArgClass;
-function FFITypeToReturnClass(const AType: TGocciaFFIType): TGocciaFFIReturnClass;
-function ValidateSignature(var ASignature: TGocciaFFISignature): string;
 
 implementation
 
@@ -366,6 +350,32 @@ begin
   end;
 end;
 
+class function TGocciaFFITypeDescriptor.CreateNullable(
+  const AElementType: TGocciaFFITypeDescriptor): TGocciaFFITypeDescriptor;
+begin
+  if not Assigned(AElementType) then
+    raise EArgumentException.Create('FFI nullable element type is missing');
+  if (AElementType.Kind <> ftkScalar) or
+     (AElementType.ScalarType <> fftUTF8String) then
+    raise EArgumentException.Create(
+      'FFI nullable currently supports only utf8string');
+  Result := TGocciaFFITypeDescriptor.Create;
+  try
+    Result.FKind := ftkNullable;
+    Result.FElementType := AElementType;
+    Result.FElementType.AddReference;
+    Result.FSize := AElementType.Size;
+    Result.FAlignment := AElementType.Alignment;
+    Result.FDepth := AElementType.Depth + 1;
+    if Result.FDepth > MAX_FFI_DESCRIPTOR_DEPTH then
+      raise EArgumentOutOfRangeException.Create(
+        'FFI descriptor nesting exceeds limit');
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
 procedure TGocciaFFITypeDescriptor.AddReference;
 begin
   Inc(FReferenceCount);
@@ -468,106 +478,6 @@ begin
   else
     Result := FFI_TYPE_VOID;
   end;
-end;
-
-function FFITypeToArgClass(const AType: TGocciaFFIType): TGocciaFFIArgClass;
-begin
-  case AType of
-    fftF32: Result := facSingle;
-    fftF64: Result := facDouble;
-  else
-    Result := facInteger;
-  end;
-end;
-
-function FFITypeToReturnClass(const AType: TGocciaFFIType): TGocciaFFIReturnClass;
-begin
-  case AType of
-    fftVoid: Result := frcVoid;
-    fftF32: Result := frcSingle;
-    fftF64: Result := frcDouble;
-  else
-    Result := frcInteger;
-  end;
-end;
-
-function ValidateSignature(var ASignature: TGocciaFFISignature): string;
-var
-  I: Integer;
-  HasInteger, HasSingle, HasDouble: Boolean;
-  Bitmask: Integer;
-begin
-  Result := '';
-  ASignature.ArgBitmask := 0;
-
-  if ASignature.ArgCount > MAX_FFI_ARGS then
-  begin
-    Result := 'FFI supports a maximum of ' + IntToStr(MAX_FFI_ARGS) + ' arguments';
-    Exit;
-  end;
-
-  {$IF not (defined(GOCCIA_CPU_64))}
-  for I := 0 to ASignature.ArgCount - 1 do
-    if ASignature.ArgTypes[I] in [fftI64, fftU64] then
-    begin
-      Result := 'i64/u64 argument types are not supported on 32-bit platforms';
-      Exit;
-    end;
-  if ASignature.ReturnType in [fftI64, fftU64] then
-  begin
-    Result := 'i64/u64 return types are not supported on 32-bit platforms';
-    Exit;
-  end;
-  {$ENDIF}
-
-  ASignature.ReturnClass := FFITypeToReturnClass(ASignature.ReturnType);
-
-  if ASignature.ArgCount = 0 then
-  begin
-    ASignature.ArgClass := facInteger;
-    Exit;
-  end;
-
-  HasInteger := False;
-  HasSingle := False;
-  HasDouble := False;
-  for I := 0 to ASignature.ArgCount - 1 do
-    case FFITypeToArgClass(ASignature.ArgTypes[I]) of
-      facInteger: HasInteger := True;
-      facSingle:  HasSingle := True;
-      facDouble:  HasDouble := True;
-    end;
-
-  if HasInteger and not HasSingle and not HasDouble then
-  begin
-    ASignature.ArgClass := facInteger;
-    Exit;
-  end;
-  if HasSingle and not HasInteger and not HasDouble then
-  begin
-    ASignature.ArgClass := facSingle;
-    Exit;
-  end;
-  if HasDouble and not HasInteger and not HasSingle then
-  begin
-    ASignature.ArgClass := facDouble;
-    Exit;
-  end;
-
-  if HasSingle then
-  begin
-    Result := 'f32 arguments cannot be mixed with other types. Use f64 instead, or keep all arguments f32';
-    Exit;
-  end;
-
-  // Mixed integer + double — supported via assembly trampolines on all platforms
-  Bitmask := 0;
-  for I := 0 to ASignature.ArgCount - 1 do
-    if FFITypeToArgClass(ASignature.ArgTypes[I]) = facDouble then
-      Bitmask := Bitmask or (1 shl I);
-
-  ASignature.ArgClass := facMixed;
-  ASignature.ArgBitmask := Bitmask;
 end;
 
 end.

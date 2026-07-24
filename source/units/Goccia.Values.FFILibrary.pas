@@ -94,24 +94,28 @@ type
     FSignature: TGocciaFFICompiledSignature;
     FName: string;
     FLibraryGuard: TGocciaFFILibraryGuard;
+    FVariadic: Boolean;
 
     function Invoke(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const ASymbol: Pointer;
       const ASignature: TGocciaFFICompiledSignature; const AName: string;
-      const ALibraryGuard: TGocciaFFILibraryGuard);
+      const ALibraryGuard: TGocciaFFILibraryGuard;
+      const AVariadic: Boolean);
     destructor Destroy; override;
   end;
 
 constructor TGocciaFFIBoundFunctionValue.Create(const ASymbol: Pointer;
   const ASignature: TGocciaFFICompiledSignature; const AName: string;
-  const ALibraryGuard: TGocciaFFILibraryGuard);
+  const ALibraryGuard: TGocciaFFILibraryGuard;
+  const AVariadic: Boolean);
 begin
   inherited CreateWithoutPrototype(Invoke, AName, ASignature.ArgumentCount);
   FSymbol := ASymbol;
   FSignature := ASignature;
   FName := AName;
+  FVariadic := AVariadic;
   ALibraryGuard.RetainDependent;
   FLibraryGuard := ALibraryGuard;
 end;
@@ -190,6 +194,22 @@ begin
   SetLength(Result, AType.Size);
   if Length(Result) > 0 then
     FillChar(Result[0], Length(Result), 0);
+  if AType.Kind = ftkNullable then
+  begin
+    if AValue is TGocciaNullLiteralValue then
+      PointerValue := nil
+    else
+    begin
+      if not (AValue is TGocciaStringLiteralValue) or
+         not TryEncodeFFIUTF8String(
+           TGocciaStringLiteralValue(AValue).Value, ATemporaryString) then
+        ThrowTypeError(SErrorFFINullableUTF8StringArgument,
+          SSuggestFFIUsage);
+      PointerValue := @ATemporaryString[0];
+    end;
+    Move(PointerValue, Result[0], SizeOf(Pointer));
+    Exit;
+  end;
   if AType.IsAggregate then
   begin
     if not (AValue is TGocciaFFIAggregateValue) then
@@ -386,6 +406,20 @@ begin
   end;
 end;
 
+function PromoteVariadicType(
+  const AType: TGocciaFFITypeDescriptor): TGocciaFFITypeDescriptor;
+begin
+  if AType.Kind = ftkScalar then
+    case AType.ScalarType of
+      fftBool, fftI8, fftI16, fftU8, fftU16:
+        Exit(TGocciaFFITypeDescriptor.CreateScalar(fftI32));
+      fftF32:
+        Exit(TGocciaFFITypeDescriptor.CreateScalar(fftF64));
+    end;
+  Result := AType;
+  Result.AddReference;
+end;
+
 function TGocciaFFIBoundFunctionValue.Invoke(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
@@ -395,26 +429,79 @@ var
   TemporaryStrings: array of TBytes;
   Callbacks: array of TGocciaFFICallbackValue;
   TemporaryCallbacks: array of Boolean;
+  CombinedTypes: array of TGocciaFFITypeDescriptor;
+  Signature: TGocciaFFICompiledSignature;
+  CallSignature: TGocciaFFICompiledSignature;
+  VarArgs: TGocciaFFIVarArgsValue;
+  ArgumentValue: TGocciaValue;
   CallContext: TGocciaFFICallContext;
   CallContextActive: Boolean;
-  I: Integer;
+  I, FixedCount, TotalCount: Integer;
 begin
   if FLibraryGuard.IsClosed then
     ThrowTypeError(Format(SErrorFFICallLibraryClosed, [FName]),
       SSuggestFFIUsage);
-  if AArgs.Length < FSignature.ArgumentCount then
+  FixedCount := FSignature.ArgumentCount;
+  if AArgs.Length < FixedCount then
     ThrowTypeError(Format(SErrorFFIFuncArgCount,
-      [FName, FSignature.ArgumentCount, AArgs.Length]), SSuggestFFIUsage);
+      [FName, FixedCount, AArgs.Length]), SSuggestFFIUsage);
 
-  SetLength(NativeArguments, FSignature.ArgumentCount);
-  SetLength(TemporaryStrings, FSignature.ArgumentCount);
-  SetLength(Callbacks, FSignature.ArgumentCount);
-  SetLength(TemporaryCallbacks, FSignature.ArgumentCount);
+  CallSignature := nil;
+  VarArgs := nil;
+  Signature := FSignature;
+  TotalCount := FixedCount;
+  if FVariadic then
+  begin
+    if (AArgs.Length <> FixedCount + 1) or
+       not (AArgs.GetElement(FixedCount) is TGocciaFFIVarArgsValue) then
+      ThrowTypeError(Format(SErrorFFIVariadicTailRequired, [FName]),
+        SSuggestFFIUsage);
+    VarArgs := TGocciaFFIVarArgsValue(AArgs.GetElement(FixedCount));
+    TotalCount := FixedCount + VarArgs.Count;
+    if TotalCount > MAX_FFI_ARGS then
+      ThrowRangeError(Format(SErrorFFIVariadicArgumentLimit,
+        [FName, MAX_FFI_ARGS]), SSuggestFFIUsage);
+    SetLength(CombinedTypes, TotalCount);
+    for I := 0 to FixedCount - 1 do
+      CombinedTypes[I] := FSignature.Arguments[I].TypeDescriptor;
+    try
+      for I := 0 to VarArgs.Count - 1 do
+        CombinedTypes[FixedCount + I] :=
+          PromoteVariadicType(VarArgs.TypeAt(I));
+      try
+        CallSignature := TGocciaFFICompiledSignature.Create(CurrentFFIABI,
+          CombinedTypes, FSignature.ReturnPlan.TypeDescriptor, FixedCount);
+      except
+        on E: EArgumentOutOfRangeException do
+          ThrowRangeError(SErrorFFICallLayoutLimit, SSuggestFFIUsage);
+        on E: EArgumentException do
+          ThrowTypeError(SErrorFFIInvalidCompiledSignature,
+            SSuggestFFIUsage);
+      end;
+    finally
+      for I := FixedCount to High(CombinedTypes) do
+        if Assigned(CombinedTypes[I]) then
+          CombinedTypes[I].ReleaseReference;
+    end;
+    Signature := CallSignature;
+  end;
+
+  SetLength(NativeArguments, TotalCount);
+  SetLength(TemporaryStrings, TotalCount);
+  SetLength(Callbacks, TotalCount);
+  SetLength(TemporaryCallbacks, TotalCount);
+  CallContextActive := False;
   try
-    for I := 0 to FSignature.ArgumentCount - 1 do
+    for I := 0 to TotalCount - 1 do
+    begin
+      if I < FixedCount then
+        ArgumentValue := AArgs.GetElement(I)
+      else
+        ArgumentValue := VarArgs.ValueAt(I - FixedCount);
       NativeArguments[I] := MarshalFFIValue(
-        FSignature.Arguments[I].TypeDescriptor, AArgs.GetElement(I), I,
+        Signature.Arguments[I].TypeDescriptor, ArgumentValue, I,
         TemporaryStrings[I], Callbacks[I], TemporaryCallbacks[I]);
+    end;
     if FLibraryGuard.IsClosed then
       ThrowTypeError(Format(SErrorFFICallLibraryClosed, [FName]),
         SSuggestFFIUsage);
@@ -423,7 +510,7 @@ begin
     CallContextActive := True;
     try
       try
-        FFIInvokeCompiled(FSymbol, FSignature, NativeArguments, NativeResult);
+        FFIInvokeCompiled(FSymbol, Signature, NativeArguments, NativeResult);
       finally
         try
           FinishFFICallContext(CallContext);
@@ -436,7 +523,7 @@ begin
           SSuggestFFIUsage);
       for I := 0 to High(Callbacks) do
         if Assigned(Callbacks[I]) then Callbacks[I].EnsureOpen;
-      Result := UnmarshalFFIValue(FSignature.ReturnPlan.TypeDescriptor,
+      Result := UnmarshalFFIValue(Signature.ReturnPlan.TypeDescriptor,
         NativeResult, FLibraryGuard);
     finally
       if CallContextActive then CancelFFICallContext(CallContext);
@@ -445,6 +532,7 @@ begin
     for I := 0 to High(Callbacks) do
       if TemporaryCallbacks[I] and Assigned(Callbacks[I]) then
         Callbacks[I].CloseForFFICallCleanup;
+    CallSignature.Free;
   end;
 end;
 
@@ -552,15 +640,14 @@ end;
 // -- Prototype methods ------------------------------------------------------
 
 function ParseSignatureFromArgs(const AArgs: TGocciaArgumentsCollection;
-  const AFuncName: string): TGocciaFFICompiledSignature;
+  const AFuncName: string; out AVariadic: Boolean): TGocciaFFICompiledSignature;
 var
   SigObj: TGocciaObjectValue;
-  ArgsField, ReturnsField: TGocciaValue;
+  ArgsField, ReturnsField, VariadicField: TGocciaValue;
   ArgsArray: TGocciaArrayValue;
   ArgumentTypes: array of TGocciaFFITypeDescriptor;
   ReturnType: TGocciaFFITypeDescriptor;
   I, J: Integer;
-  HasF32, HasOtherArgumentType: Boolean;
 begin
   if AArgs.Length < 2 then
     ThrowTypeError(SErrorFFIBindRequiresNameAndSig, SSuggestFFIUsage);
@@ -569,6 +656,7 @@ begin
     ThrowTypeError(SErrorFFIBindSigObject, SSuggestFFIUsage);
 
   SigObj := TGocciaObjectValue(AArgs.GetElement(1));
+  AVariadic := False;
   ReturnType := nil;
   try
     ArgsField := SigObj.GetProperty('args');
@@ -581,17 +669,7 @@ begin
       SetLength(ArgumentTypes, ArgsArray.Elements.Count);
       for I := 0 to ArgsArray.Elements.Count - 1 do
         ArgumentTypes[I] := ParseFFITypeDescriptorValue(
-          ArgsArray.Elements[I], False);
-      HasF32 := False;
-      HasOtherArgumentType := False;
-      for I := 0 to High(ArgumentTypes) do
-        if (ArgumentTypes[I].Kind = ftkScalar) and
-           (ArgumentTypes[I].ScalarType = fftF32) then
-          HasF32 := True
-        else
-          HasOtherArgumentType := True;
-      if HasF32 and HasOtherArgumentType then
-        ThrowTypeError(SErrorFFIMixedF32Arguments, SSuggestFFIUsage);
+          ArgsArray.Elements[I], ftpBoundArgument);
     end
     else if (ArgsField = nil) or
             (ArgsField is TGocciaUndefinedLiteralValue) then
@@ -604,7 +682,16 @@ begin
        (ReturnsField is TGocciaUndefinedLiteralValue) then
       ReturnType := TGocciaFFITypeDescriptor.CreateScalar(fftVoid)
     else
-      ReturnType := ParseFFITypeDescriptorValue(ReturnsField, True);
+      ReturnType := ParseFFITypeDescriptorValue(ReturnsField,
+        ftpBoundReturn);
+    VariadicField := SigObj.GetProperty('variadic');
+    if Assigned(VariadicField) and
+       not (VariadicField is TGocciaUndefinedLiteralValue) then
+    begin
+      if not (VariadicField is TGocciaBooleanLiteralValue) then
+        ThrowTypeError(SErrorFFIVariadicFlagBoolean, SSuggestFFIUsage);
+      AVariadic := TGocciaBooleanLiteralValue(VariadicField).Value;
+    end;
     try
       Result := TGocciaFFICompiledSignature.Create(CurrentFFIABI,
         ArgumentTypes, ReturnType);
@@ -629,6 +716,7 @@ var
   FuncName: string;
   Sig: TGocciaFFICompiledSignature;
   SymbolPtr: Pointer;
+  Variadic: Boolean;
 begin
   if not (AThisValue is TGocciaFFILibraryValue) then
     ThrowTypeError(SErrorFFIBindRequiresLibrary, SSuggestFFILibraryOpen);
@@ -638,7 +726,7 @@ begin
     ThrowTypeError(SErrorFFIBindLibraryClosed, SSuggestFFILibraryOpen);
 
   FuncName := AArgs.GetElement(0).ToStringLiteral.Value;
-  Sig := ParseSignatureFromArgs(AArgs, FuncName);
+  Sig := ParseSignatureFromArgs(AArgs, FuncName, Variadic);
 
   try
     try
@@ -648,7 +736,7 @@ begin
         ThrowTypeError(E.Message, SSuggestFFIUsage);
     end;
     Result := TGocciaFFIBoundFunctionValue.Create(SymbolPtr, Sig, FuncName,
-      Lib.FLibraryGuard);
+      Lib.FLibraryGuard, Variadic);
   except
     Sig.Free;
     raise;

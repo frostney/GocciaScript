@@ -63,9 +63,32 @@ describe("FFILibrary.prototype.bind (mixed int/float signatures)", () => {
     expect(m8(1, 2.0, 3, 4.0, 5, 6.0, 7, 8.0)).toBe(36);
   });
 
-  test("f32 mixing still throws", () => {
-    expect(() =>
-      lib.bind("get_answer", { args: ["i32", "f32"], returns: "i32" })
-    ).toThrow(TypeError);
+  test("calls mixed top-level f32 and integer arguments", () => {
+    const mixed = lib.bind("mixed_f32_i32", {
+      args: ["f32", "i32", "f32"],
+      returns: "f32",
+    });
+
+    expect(mixed(2.5, 4, 0.5)).toBe(10.5);
+  });
+
+  test("calls mixed top-level f32 and pointer arguments", () => {
+    const mixed = lib.bind("mixed_f32_pointer", {
+      args: ["f32", "pointer", "f32"],
+      returns: "f32",
+    });
+    const scale = new Int32Array([4]);
+
+    expect(mixed(2.5, scale, 0.5)).toBe(10.5);
+  });
+
+  test("calls mixed top-level f32 and aggregate arguments", () => {
+    const Point = FFI.struct({ x: "f64", y: "f64" });
+    const mixed = lib.bind("ffi_v2_mixed_point_f32", {
+      args: ["f32", Point, "f32"],
+      returns: "f32",
+    });
+
+    expect(mixed(2, Point.create({ x: 3, y: 4 }), 0.5)).toBe(14.5);
   });
 });

@@ -23,6 +23,9 @@ type
     function FFIUnion(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FFIArray(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FFICallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function FFINullable(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function FFIVarArgs(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function FFIMetadata(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FFINullptrGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FFISuffixGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
@@ -40,12 +43,14 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.FFI.DynamicLibrary,
+  Goccia.FFI.Types,
   Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FFILibrary,
   Goccia.Values.FFIPointer,
   Goccia.Values.FFIType,
-  Goccia.Values.ObjectPropertyDescriptor;
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue;
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
@@ -83,6 +88,9 @@ begin
     Members.AddNamedMethod('union', FFIUnion, 1, gmkStaticMethod);
     Members.AddNamedMethod('array', FFIArray, 2, gmkStaticMethod);
     Members.AddNamedMethod('callback', FFICallback, 1, gmkStaticMethod);
+    Members.AddNamedMethod('nullable', FFINullable, 1, gmkStaticMethod);
+    Members.AddNamedMethod('varargs', FFIVarArgs, 2, gmkStaticMethod);
+    Members.AddNamedMethod('metadata', FFIMetadata, 1, gmkStaticMethod);
     Members.AddAccessor(PROP_NULLPTR, FFINullptrGetter, nil, [pfConfigurable], gmkStaticGetter);
     Members.AddAccessor(PROP_SUFFIX, FFISuffixGetter, nil, [pfConfigurable], gmkStaticGetter);
     FStaticMembers := Members.ToDefinitions;
@@ -128,6 +136,48 @@ begin
     ThrowTypeError(SErrorFFICallbackRequiresDefinition,
       SSuggestFFIUsage);
   Result := CreateFFICallbackType(AArgs.GetElement(0));
+end;
+
+function TGocciaGlobalFFI.FFINullable(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AArgs.Length < 1 then
+    ThrowTypeError(SErrorFFINullableRequiresType, SSuggestFFIUsage);
+  Result := CreateFFINullableType(AArgs.GetElement(0));
+end;
+
+function TGocciaGlobalFFI.FFIVarArgs(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AArgs.Length < 2 then
+    ThrowTypeError(SErrorFFIVarArgsRequiresArrays, SSuggestFFIUsage);
+  Result := CreateFFIVarArgs(AArgs.GetElement(0), AArgs.GetElement(1));
+end;
+
+function TGocciaGlobalFFI.FFIMetadata(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Aggregate: TGocciaFFIAggregateValue;
+  Metadata: TGocciaObjectValue;
+begin
+  if (AArgs.Length < 1) or
+     not (AArgs.GetElement(0) is TGocciaFFIAggregateValue) then
+    ThrowTypeError(SErrorFFIMetadataRequiresAggregate, SSuggestFFIUsage);
+  Aggregate := TGocciaFFIAggregateValue(AArgs.GetElement(0));
+  Aggregate.EnsureBackingStore;
+  Metadata := TGocciaObjectValue.Create;
+  Metadata.CreateDataPropertyOrThrow('buffer', Aggregate.Buffer);
+  Metadata.CreateDataPropertyOrThrow('byteOffset',
+    TGocciaNumberLiteralValue.Create(Aggregate.ByteOffset));
+  Metadata.CreateDataPropertyOrThrow('size',
+    TGocciaNumberLiteralValue.Create(Aggregate.Descriptor.Size));
+  if Aggregate.Descriptor.Kind = ftkArray then
+    Metadata.CreateDataPropertyOrThrow('length',
+      TGocciaNumberLiteralValue.Create(Aggregate.Descriptor.ElementCount));
+  Result := Metadata;
 end;
 
 function TGocciaGlobalFFI.FFIOpen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
