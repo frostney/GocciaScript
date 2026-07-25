@@ -1,11 +1,11 @@
 # Language Tables
 
-*Quick-reference tables for GocciaScript's ECMAScript coverage and TC39 proposal support.*
+*Quick-reference tables for GocciaScript's recommended profile, web APIs, and TC39 proposal support.*
 
 ## Executive Summary
 
 - **Profile table** — Implemented semantics, recommended defaults, exposure paths, and standards sources are separate fields
-- **ECMAScript table** — Default-enabled feature status from ES1 through ES2027, sorted chronologically
+- **Generated evidence** — Core ECMAScript coverage is tracked by generated test262 reports rather than a hand-maintained feature inventory
 - **Annex B policy** — Browser-only legacy Annex B semantics are not a pre-1.0 target; selected existing shims remain documented individually
 - **Parser policy** — Disabled parser syntax is a `SyntaxError` by default; `--warning-unsupported-features` restores warning/no-op recovery without enabling compatibility semantics
 - **Beyond core ECMAScript** — Separate tables cover Web Platform APIs and active TC39 proposals
@@ -32,63 +32,17 @@ profile exposes them, not whether the engine contains their semantics.
 | `eval` | Yes | Not installed | Private `GocciaScriptLoaderBare --test262-host` only | ECMA-262 core |
 | `Function()` | Yes | Disabled | `--unsafe-function-constructor` | ECMA-262 core |
 
-## Implemented ECMAScript Surface
+## Core ECMAScript Evidence
 
-| Feature | Spec | Status |
-|---------|------|--------|
-| Comma operator (`,`) | ES1 | Supported |
-| Annex B web-browser legacy features | ES Annex B | Deferred before 1.0; `annexB` test262 results are informational, not a release gate. Selected existing surfaces remain documented individually; broad support should be revisited only with a future Web API/browser-compatibility profile. See [ADR 0085](adr/0085-defer-annex-b-before-1-0.md) |
-| Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` | ES1 | Supported as legacy global shims installed through Goccia.shims; `parseInt`/`parseFloat` delegate to `Number.parseInt`/`Number.parseFloat`, while `isNaN`/`isFinite` keep standard global coercion behavior. Prefer `Number.*` in new code |
-| `let` / `const` | ES2015 | Supported |
-| Arrow functions | ES2015 | Supported |
-| Classes (constructor, methods, static, getters/setters) | ES2015 | Supported |
-| Template literals | ES2015 | Supported |
-| Destructuring (array, object) | ES2015 | Supported |
-| Spread / rest (`...`) | ES2015 | Supported |
-| `for...of` | ES2015 | Supported |
-| `Symbol` | ES2015 | Supported |
-| `Promise` | ES2015 | Supported |
-| `WeakMap`, `WeakSet` | ES2015 | Supported |
-| `RegExp` (literals, flags `d`/`g`/`i`/`m`/`s`/`u`/`v`/`y`) | ES2015+ | Supported |
-| ES modules (`import` / `export`) | ES2015 | Supported |
-| Default exports / imports | ES2015 | Supported; project code convention prefers named exports for internal modules |
-| Generators (`function*`, `*method()`) | ES2015 | Supported; `function*` requires `--compat-function`; implicit `arguments` objects require `--compat-arguments-object`; generator methods are default syntax |
-| Nullish coalescing (`??`) | ES2020 | Supported |
-| Optional chaining (`?.`) | ES2020 | Supported |
-| `BigInt` | ES2020 | Supported |
-| `WeakRef`, `FinalizationRegistry` | ES2021 | Supported |
-| Logical assignment (`&&=`, `\|\|=`, `??=`) | ES2021 | Supported |
-| Private fields and methods (`#field`) | ES2022 | Supported |
-| Static class blocks | ES2022 | Supported |
-| `Array.prototype.at` | ES2022 | Supported |
-| `Object.hasOwn` | ES2022 | Supported |
-| Top-level `await` | ES2022 | Supported |
-| `Array.prototype.findLast`, `findLastIndex` | ES2023 | Supported |
-| `Array.prototype.toReversed`, `toSorted`, `toSpliced`, `with` | ES2023 | Supported |
-| `Object.groupBy`, `Map.groupBy` | ES2024 | Supported |
-| `Promise.withResolvers` | ES2024 | Supported |
-| `String.prototype.isWellFormed`, `toWellFormed` | ES2024 | Supported |
-| `Object.getOwnPropertyDescriptors` | ES2017 | Supported |
-| Set methods (`union`, `intersection`, `difference`, etc.) | ES2025 | Supported |
-| `Promise.try` | ES2025 | Supported |
-| Iterator Helpers (`map`, `filter`, `take`, `drop`, etc.) | ES2025 | Supported |
-| `Float16Array`, `Math.f16round` | ES2025 | Supported |
-| Resizable `ArrayBuffer` (`resize`, `transfer`, `transferToFixedLength`) | ES2024 | Supported |
-| `import.meta` | ES2020 | Supported |
-| `new.target` | ES2015 | Supported |
-| Dynamic `import()` | ES2020 | Supported |
-| `Uint8Array` Base64/Hex (`fromBase64`, `fromHex`, `toBase64`, `toHex`) | ES2026 | Supported |
-| `Error.isError` | ES2026 | Supported |
-| `RegExp.escape` | ES2026 | Supported |
-| `Array.fromAsync` | ES2026 | Supported |
-| `Math.sumPrecise` | ES2026 | Supported |
-| `Map.prototype.getOrInsert`, `getOrInsertComputed` | ES2026 | Supported |
-| `WeakMap.prototype.getOrInsert`, `getOrInsertComputed` | ES2026 | Supported |
-| `Iterator.concat` (Iterator Sequencing) | ES2026 | Supported |
-| Explicit Resource Management (`using`, `await using`) | ES2026 | Supported in interpreter and bytecode mode |
-| JSON.parse source text access (`JSON.rawJSON`, `JSON.isRawJSON`) | ES2026 | Supported |
-| `Temporal` (dates, times, durations, time zones) | ES2027 | Supported |
-| `Intl` (ECMA-402) | ECMA-402 | Supported |
+Core ECMAScript coverage is measured by generated test262 reports instead of a
+hand-maintained list of implemented features. See the
+[compatibility dashboard](https://www.gocciascript.dev/compatibility) for the
+current results and [language.md](language.md) for detailed semantics and
+profile policy.
+
+Browser-only legacy Annex B semantics are not a pre-1.0 target. Existing
+selected shims remain documented individually; see
+[ADR 0085](adr/0085-defer-annex-b-before-1-0.md).
 
 ## Web Platform APIs
 

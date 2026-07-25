@@ -11,60 +11,64 @@ import {
   TYPE_ANNOTATIONS_ANSWER,
 } from "@/lib/positioning";
 
+function expectConcepts(text: string, concepts: readonly RegExp[]) {
+  for (const concept of concepts) {
+    expect(text).toMatch(concept);
+  }
+}
+
 describe("GocciaScript positioning", () => {
   test("keeps the canonical summary centered on the runtime purpose", () => {
-    expect(GOCCIASCRIPT_SUMMARY).toContain(
-      "sandbox-first ECMAScript runtime and toolchain",
-    );
-    expect(GOCCIASCRIPT_SUMMARY).toContain("AI agents");
-    expect(GOCCIASCRIPT_SUMMARY).toContain("Hosts define");
-    expect(GOCCIASCRIPT_SUMMARY).toContain("embedded in native applications");
-    expect(GOCCIASCRIPT_SUMMARY.indexOf("AI agents")).toBeLessThan(
-      GOCCIASCRIPT_SUMMARY.indexOf("embedded"),
+    expectConcepts(GOCCIASCRIPT_SUMMARY, [
+      /sandbox-first ECMAScript runtime/i,
+      /AI agents/i,
+      /hosts define.+capabilities.+runtime surface.+execution limits/i,
+      /embedded in native applications/i,
+    ]);
+    expect(GOCCIASCRIPT_SUMMARY).toMatch(
+      /AI agents.+embedded in native applications/is,
     );
   });
 
   test("distinguishes the implementation from the recommended profile", () => {
-    expect(ECMASCRIPT_SCOPE_ANSWER).toContain("implements core ECMAScript");
-    expect(ECMASCRIPT_SCOPE_ANSWER).toContain(
-      "product policy, not the implementation ceiling",
-    );
-    expect(ECMASCRIPT_SCOPE_ANSWER).toContain("traditional for loops");
-    expect(ECMASCRIPT_SCOPE_ANSWER).toContain("for...in");
-    expect(ECMASCRIPT_SCOPE_ANSWER).toContain("while/do...while");
-    expect(ECMASCRIPT_SCOPE_ANSWER).toContain("non-strict Script semantics");
-    expect(ECMASCRIPT_SCOPE_ANSWER).toContain(
-      "private test262 host exposes it",
-    );
+    expectConcepts(ECMASCRIPT_SCOPE_ANSWER, [
+      /implements core ECMAScript/i,
+      /recommended profile/i,
+      /product policy.+implementation ceiling/i,
+      /traditional for loops/i,
+      /for\.\.\.in/i,
+      /while\/do\.\.\.while/i,
+      /non-strict Script semantics/i,
+      /private test262 host.+conformance/i,
+    ]);
   });
 
   test("keeps type annotations standards-first", () => {
-    expect(TYPE_ANNOTATIONS_ANSWER).toContain("TC39 Type Annotations proposal");
-    expect(TYPE_ANNOTATIONS_ANSWER).toContain(
-      "types-as-comments runtime model",
-    );
-    expect(TYPE_ANNOTATIONS_ANSWER).toContain(
-      "optional --strict-types GocciaScript extension",
-    );
-    expect(TYPE_ANNOTATIONS_ANSWER).toContain("interpreter and bytecode modes");
-    expect(TYPE_ANNOTATIONS_ANSWER).toContain("not a replacement");
+    expectConcepts(TYPE_ANNOTATIONS_ANSWER, [
+      /TC39 Type Annotations proposal/i,
+      /types-as-comments runtime model/i,
+      /optional --strict-types.+runtime enforcement/i,
+      /interpreter and bytecode modes/i,
+      /not a replacement.+static structural type checker/i,
+    ]);
   });
 
   test("distinguishes the Node host from the sandbox fs API", () => {
-    expect(NODE_COMPATIBILITY_ANSWER).toContain("not a complete Node.js host");
-    expect(NODE_COMPATIBILITY_ANSWER).toContain("Node-compatible fs API");
-    expect(NODE_COMPATIBILITY_ANSWER).toContain(
-      "synchronous, callback, and promise-based",
-    );
-    expect(NODE_COMPATIBILITY_ANSWER).toContain("virtual filesystem");
+    expectConcepts(NODE_COMPATIBILITY_ANSWER, [
+      /not a complete Node\.js host/i,
+      /Node-compatible fs API/i,
+      /virtual filesystem/i,
+      /synchronous, callback, and promise-based methods/i,
+      /does not expose the ambient host filesystem/i,
+    ]);
   });
 
   test("states the complete Delphi support contract", () => {
-    expect(COMPILER_SUPPORT_ANSWER).toContain("Win32 and Win64");
-    expect(COMPILER_SUPPORT_ANSWER).toContain(
-      "all applicable Pascal and JavaScript tests",
-    );
-    expect(COMPILER_SUPPORT_ANSWER).toContain("shared runtime semantics");
+    expectConcepts(COMPILER_SUPPORT_ANSWER, [
+      /Win32 and Win64 application matrix/i,
+      /all applicable Pascal and JavaScript tests/i,
+      /shared runtime semantics across both compilers/i,
+    ]);
   });
 
   test("rejects compressed claims and historical pass rates", () => {
