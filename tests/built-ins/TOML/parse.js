@@ -134,6 +134,28 @@ point = { x = 1 }
 point.y = 2
 `),
     ).toThrow(SyntaxError);
+
+    expect(() =>
+      TOML.parse(`
+items = [{ name = "first" }]
+[items.metadata]
+enabled = true
+`),
+    ).toThrow(SyntaxError);
+
+    expect(() =>
+      TOML.parse(`
+items = []
+[[items.metadata]]
+`),
+    ).toThrow(SyntaxError);
+
+    expect(() =>
+      TOML.parse(`
+items = []
+items.metadata = true
+`),
+    ).toThrow(SyntaxError);
   });
 
   test("throws on invalid literals", () => {

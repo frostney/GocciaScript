@@ -47,7 +47,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 ./build.pas --prod    # Production build of all components
 ```
 
-Builds all components in order: tests, loader, loaderbare, sandboxrunner, testrunner, benchmarkrunner, bundler, repl. The default full build does not clean first; pass `--clean` explicitly when you need to remove stale build artifacts.
+Builds all components in order: tests, loader, loaderbare, sandboxrunner, testrunner, the TOML compliance runner, benchmarkrunner, bundler, and repl. The default full build does not clean first; pass `--clean` explicitly when you need to remove stale build artifacts.
 
 ### Build Specific Components
 
@@ -57,6 +57,7 @@ Builds all components in order: tests, loader, loaderbare, sandboxrunner, testru
 ./build.pas loaderbare       # Bare Script Loader (core engine only)
 ./build.pas sandboxrunner    # Sandbox Runner with virtual filesystem
 ./build.pas testrunner       # JavaScript test runner + native FFI fixture
+./build.pas tomlcompliancerunner # Native TOML compliance runner
 ./build.pas benchmarkrunner  # Performance benchmark runner
 ./build.pas bundler          # Bundler (compile to .gbc)
 ./build.pas tests            # Pascal unit tests
@@ -482,6 +483,7 @@ All compiled binaries go to the `build/` directory:
 | `build/GocciaScriptLoaderBare` | `source/app/GocciaScriptLoaderBare.dpr` | Execute file or stdin source with the core engine and CLI-local `print`; no loader runtime profile. `--test262-host` exposes private conformance hooks for the test262 runner |
 | `build/GocciaSandboxRunner` | `source/app/GocciaSandboxRunner.dpr` | Execute sandbox entry paths inside a seeded virtual filesystem |
 | `build/GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | JavaScript test runner |
+| `build/GocciaTOMLComplianceRunner` | `source/app/compliance/GocciaTOMLComplianceRunner.dpr` | Native pinned `toml-test` runner |
 | `build/GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |
 | `build/GocciaBundler` | `source/app/GocciaBundler.dpr` | Bundler (source to `.gbc`) |
 | `build/Goccia.Values.Primitives.Test` | `*.Test.pas` | Pascal unit test binaries |
@@ -654,9 +656,8 @@ Runs on the full platform matrix:
 
 **`test`** (needs build) — Runs all JavaScript tests and Pascal unit tests on all platforms.
 
-**`toml-compliance`** — Downloads the prebuilt `GocciaTOMLCheck` harness from each matrix build artifact, runs the official `toml-test` TOML 1.1.0 suite (pinned to a specific SHA) on every CI platform via `python3 scripts/run_toml_test_suite.py --harness=...`, validates that the JSON summary reports zero failures, and uploads the per-platform JSON report. The pin is bumped weekly by `.github/workflows/toml-test-bump.yml`.
-
-**`json5-compliance`** — Downloads the prebuilt `GocciaJSON5Check` harness and `GocciaTestRunner` binary from each matrix build artifact, runs `python3 scripts/run_json5_test_suite.py --harness=... --test-runner=...` on every CI platform, validates both the parser and stringify summaries, and uploads the per-platform JSON report.
+**`toml-compliance`** — Downloads the prebuilt `GocciaTOMLComplianceRunner`, prepares the pinned `toml-test` checkout, trusts the runner exit status, validates the report envelope, and uploads the per-platform JSON report. The pin is bumped weekly by `.github/workflows/toml-test-bump.yml`.
+**`json5-compliance`** — Downloads `GocciaTestRunner`, verifies that the committed generated parser suite names the SHA in `tests/compliance/json5.pin`, and runs that suite together with the local stringify suite. The workflow trusts TestRunner's exit status, validates its JSON report shape, and uploads that report.
 
 **`test262`** (needs build, ubuntu-latest x64 only, **non-blocking**) — Downloads the `gocciascript-x86_64-linux` build, checks out [`tc39/test262`](https://github.com/tc39/test262) at the SHA pinned in `scripts/test262-suite-sha.txt`, runs `bun scripts/run_test262_suite.ts --suite-dir test262-suite --mode=bytecode --jobs=4 --timeout-ms=20000 --output=test262-results.json`, and uploads the report as a 30-day workflow artifact. The run step uses `continue-on-error: true` because the conformance lane is allowed to carry known steady-state failures while the engine closes compatibility gaps. On main, the JSON is also stashed via `actions/cache/save` under `test262-baseline-<sha>` so the PR workflow can compute Δ vs main, and `cd website && bun run publish-test262 ../test262-results.json` publishes the compressed run report plus its UTC daily dashboard pointer to Vercel Blob when `BLOB_READ_WRITE_TOKEN` is configured. Main runs also upload the `test262-profile` artifact and publish matching aggregate/detail profile payloads under the separate `test262-profiles/` Blob namespace for weekly performance review. The one-off `cd website && bun run backfill-test262` command seeds retained artifact reports and reruns expired historical days directly into Blob. The pin is bumped weekly by `.github/workflows/test262-bump.yml`. See [docs/test262.md](test262.md) for the harness and profile report contracts.
 
