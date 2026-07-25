@@ -932,7 +932,8 @@ begin
   end;
 
   case Existing.Kind of
-    tnkScalar:
+    tnkScalar,
+    tnkArray:
       RaiseParseError(Format(
         'Cannot redefine "%s" as a table after assigning it a value.',
         [AKey]));
@@ -1012,7 +1013,7 @@ begin
         I = Length(APath) - 1, I <> Length(APath) - 1, False, False);
       AttachChild(Context, APath[I], Existing);
     end
-    else if Existing.Kind = tnkScalar then
+    else if Existing.Kind in [tnkScalar, tnkArray] then
       RaiseParseError(Format(
         'Cannot redefine "%s" as a table after assigning it a value.',
         [JoinPathPrefix(APath, I + 1)]))
@@ -1071,7 +1072,7 @@ begin
         False, False);
       AttachChild(Context, APath[I], Existing);
     end
-    else if Existing.Kind = tnkScalar then
+    else if Existing.Kind in [tnkScalar, tnkArray] then
       RaiseParseError(Format(
         'Cannot redefine "%s" as a table after assigning it a value.',
         [JoinPathPrefix(APath, I + 1)]))

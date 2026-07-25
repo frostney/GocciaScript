@@ -121,6 +121,7 @@ Recent VM cleanup and optimization work has focused on reducing per-instruction 
 - use unchecked template access in the dispatch loop where bounds are already guaranteed
 - fuse `Number - Int16` as `OP_SUB_NUM_IMM` and conditional `Number <= Int16` as `OP_JUMP_IF_NUM_NOT_LTE_IMM` only when the compiler proves the source is an ECMAScript Number; these instructions remove literal-load and branch dispatches rather than merely replacing a generic arithmetic dispatch
 - retain a static named import's linked module namespace in its local/upvalue slot: `OP_IMPORT` scales with declarations, while repeated identifier reads use `OP_GET_IMPORT_BINDING` to dereference the cached live binding identity without repeating module-loader lookup
+- read standalone `this` properties directly from a non-captured local register, preserving the derived-constructor guard while avoiding a temporary-register move; captured, top-level, and method-call receiver paths retain their existing lowering
 - keep fast register access limited to proven hot/simple paths; local-slot and complex property paths should only move to fast access when they stay correct and measurably improve throughput
 - the register, local-cell, and argument window fills are GC-safety/correctness critical (the GC marks the whole live window): they are deliberately retained rather than trimmed
 

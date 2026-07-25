@@ -36,11 +36,13 @@ type
     FFrozen: Boolean;
     FSealed: Boolean;
     FExtensible: Boolean;
+    FHasEverHadIndexedOwnProperty: Boolean;
     FHasErrorData: Boolean;
     FErrorStack: string;
     FHasRegExpData: Boolean;
     FRegExpData: TObject;
     function BuiltinTagFallback: Boolean; virtual;
+    procedure NoteIndexedOwnProperty(const AName: string);
   public
     class procedure InitializeSharedPrototype;
     class function GetSharedObjectPrototype: TGocciaObjectValue; static;
@@ -130,6 +132,8 @@ type
     property Frozen: Boolean read FFrozen;
     property Sealed: Boolean read FSealed;
     property Extensible: Boolean read FExtensible;
+    property HasEverHadIndexedOwnProperty: Boolean
+      read FHasEverHadIndexedOwnProperty;
     property HasErrorData: Boolean read FHasErrorData write FHasErrorData;
     property ErrorStack: string read FErrorStack write FErrorStack;
     property HasRegExpData: Boolean read FHasRegExpData write FHasRegExpData;
@@ -500,6 +504,16 @@ begin
   FFrozen := False;
   FSealed := False;
   FExtensible := True;
+  FHasEverHadIndexedOwnProperty := False;
+end;
+
+procedure TGocciaObjectValue.NoteIndexedOwnProperty(const AName: string);
+var
+  Index: UInt64;
+begin
+  if not FHasEverHadIndexedOwnProperty and
+     TryParseArrayIndexKey(AName, Index) then
+    FHasEverHadIndexedOwnProperty := True;
 end;
 
 // ES2026 §20.1.3.6 Object.prototype.toString()
@@ -1222,6 +1236,7 @@ var
   Applied: TGocciaPropertyDescriptor;
   BlockedByExtensibility: Boolean;
 begin
+  NoteIndexedOwnProperty(AName);
   if StoreLazyPropertyDescriptor(AName, ADescriptor,
      BlockedByExtensibility) then
     Exit;
@@ -1260,6 +1275,7 @@ var
   Applied: TGocciaPropertyDescriptor;
   BlockedByExtensibility: Boolean;
 begin
+  NoteIndexedOwnProperty(AName);
   if StoreLazyPropertyDescriptor(AName, ADescriptor,
      BlockedByExtensibility) then
     Exit(True);

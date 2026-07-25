@@ -1,7 +1,7 @@
 name: toml-test weekly bump
 
 # Pulls the latest toml-lang/toml-test main SHA, updates the pin in
-# scripts/run_toml_test_suite.py, and opens a PR.  Merge once the
+# tests/compliance/toml-test.pin, and opens a PR. Merge once the
 # compliance delta is acceptable.
 #
 # Cadence: weekly (Mondays 06:30 UTC).  Manual trigger available via
@@ -34,11 +34,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update pin in suite runner
-        run: bun scripts/suite-bump-pin.ts scripts/run_toml_test_suite.py ${{ steps.latest.outputs.sha }}
+        run: bun scripts/suite-bump-pin.ts tests/compliance/toml-test.pin ${{ steps.latest.outputs.sha }}
 
       - id: changed
         run: |
-          if git diff --quiet -- scripts/run_toml_test_suite.py; then
+          if git diff --quiet -- tests/compliance/toml-test.pin; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "toml-test already pinned to ${{ steps.latest.outputs.short }} — no PR to open."
           else
