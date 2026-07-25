@@ -74,6 +74,8 @@ type
     procedure TestCompileArithmetic;
     procedure TestCompileVariable;
     procedure TestCompileFunction;
+    procedure TestThisPropertyReadUsesLocalRegister;
+    procedure TestThisPropertyReadRetainsDerivedGuard;
     procedure TestStaticImportLoadsScaleWithDeclarations;
     procedure TestBinaryRoundTrip;
     procedure TestBinaryRoundTripClosedNumericSelfCall;
@@ -130,6 +132,10 @@ begin
   Test('Compile arithmetic', TestCompileArithmetic);
   Test('Compile variable', TestCompileVariable);
   Test('Compile function', TestCompileFunction);
+  Test('this property read uses local register',
+    TestThisPropertyReadUsesLocalRegister);
+  Test('this property read retains derived-constructor guard',
+    TestThisPropertyReadRetainsDerivedGuard);
   Test('Static import loads scale with declarations',
     TestStaticImportLoadsScaleWithDeclarations);
   Test('Binary round-trip', TestBinaryRoundTrip);
@@ -572,6 +578,55 @@ begin
   try
     Expect<Boolean>(Assigned(Module)).ToBe(True);
     Expect<Boolean>(Module.TopLevel.FunctionCount > 0).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestThisPropertyReadUsesLocalRegister;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const holder = {' +
+    '  value: 42,' +
+    '  read() { return this.value; }' +
+    '};');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_GET_PROP_CONST);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_GET_PROP_CONST)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_MOVE)).ToBe(0);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestThisPropertyReadRetainsDerivedGuard;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'class Base {}' +
+    'class Derived extends Base {' +
+    '  constructor() {' +
+    '    this.value;' +
+    '    super();' +
+    '  }' +
+    '}');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_GET_PROP_CONST);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Boolean>(CountOp(Func, OP_JUMP_IF_TRUE) > 0).ToBe(True);
+      Expect<Boolean>(CountOp(Func, OP_THROW) > 0).ToBe(True);
+    end;
   finally
     Module.Free;
   end;
