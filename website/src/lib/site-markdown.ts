@@ -15,10 +15,17 @@ import {
   HOMEBREW_INSTALL_COMMAND,
   QUICK_INSTALL_COMMANDS,
 } from "@/lib/install-commands";
-import { BUILTINS, EXCLUDED, FEATURES } from "@/lib/landing-data";
 import {
+  BUILTINS,
+  FEATURES,
+  PROFILE_DISABLED_FEATURES,
+} from "@/lib/landing-data";
+import {
+  COMPILER_SUPPORT_ANSWER,
   ECMASCRIPT_SCOPE_ANSWER,
   GOCCIASCRIPT_SUMMARY,
+  NODE_COMPATIBILITY_ANSWER,
+  TYPE_ANNOTATIONS_ANSWER,
 } from "@/lib/positioning";
 import { SITE_DESCRIPTION } from "@/lib/site-url";
 import {
@@ -179,17 +186,34 @@ async function homeMarkdown(): Promise<string> {
     "",
     "Use the [live compatibility dashboard](/compatibility) or its [concise Markdown alternate](/compatibility.md) for current generated test262 evidence.",
     "",
-    "## Intentionally excluded",
+    "## Recommended language profile",
     "",
-    "Dynamic code construction and scope-changing syntax are left out of the recommended defaults to keep execution predictable in embedded runtimes. Coercive or legacy forms such as `==`, `var`, and `arguments` stay off by default but remain available behind explicit compatibility flags — a curated default, not a language ceiling. Those flags primarily exist for ECMAScript conformance and legacy code, opting back into excluded syntax such as `var`, `function`, loose equality, `arguments`, and ASI via CLI or config flags.",
+    "The recommended profile is policy, not the implementation ceiling. Every standard core form it disables has an explicit compatibility path. Dynamic source exposure remains a separate host decision: normal hosts do not install `eval`, while `Function()` requires an explicit unsafe opt-in.",
     "",
-    list(EXCLUDED.map((item) => `\`${item.name}\` - ${item.why}`)),
+    "| Form | Implemented | Default profile | Enablement / exposure | Standards source |",
+    "|------|-------------|-----------------|-----------------------|------------------|",
+    ...PROFILE_DISABLED_FEATURES.map(
+      (item) =>
+        `| \`${item.name}\` | ${item.implemented ? "Yes" : "No"} | ${item.defaultProfile} | \`${item.enablement}\` | ${item.standardsSource} |`,
+    ),
+    "",
+    "## Type annotations",
+    "",
+    TYPE_ANNOTATIONS_ANSWER,
     "",
     "## Runtime surface",
     "",
     "GocciaScript includes structured-data imports and parsers, console output, SemVer helpers, import maps, and a built-in test runner with `test`, `describe`, and `expect`. GocciaSandboxRunner adds import-only `fs` and `goccia` modules backed by a seeded virtual filesystem, sandbox shell commands, nested execution, and explicit diffs.",
     "",
+    NODE_COMPATIBILITY_ANSWER,
+    "",
     list(BUILTINS.map((item) => `\`${item.name}\``)),
+    "",
+    "## Native platform",
+    "",
+    COMPILER_SUPPORT_ANSWER,
+    "",
+    "Native application embedding is an important secondary goal; the host chooses application globals, modules, capabilities, limits, and result handling.",
     "",
     "## Example",
     "",
@@ -239,6 +263,8 @@ async function installationMarkdown(): Promise<string> {
     "## Build from source",
     "",
     "FreePascal is required.",
+    "",
+    "Delphi 12 Community Edition is also supported for the complete shipped Win32 and Win64 application matrix. Open `source/app/GocciaScript.Delphi.groupproj` and follow the [build and validation guide](/docs/build-system).",
     "",
     fence(
       [
@@ -406,12 +432,12 @@ console.log(audit.diff);`;
   return [
     frontmatter(
       "Sandbox - GocciaScript",
-      "A runtime designed for untrusted code, host-provided globals, AI agent tool calls, and seeded virtual filesystems.",
+      "AI-agent execution under explicit host control, with capability gates, limits, structured results, and a seeded virtual filesystem.",
     ),
     "",
     "# Sandbox",
     "",
-    "GocciaScript is meant for running untrusted or user-provided code in a host-controlled environment. Scripts receive only the data and capabilities the host provides, run with explicit limits, and return structured results that the host can inspect.",
+    "GocciaScript runs AI-agent scripts under an explicit host-defined capability model. Scripts receive only the data, modules, and capabilities the host provides, run with explicit limits, and return structured results that the host can inspect.",
     "",
     "Filesystem workflows use GocciaSandboxRunner. Host paths are copied into a virtual filesystem as seed baselines, sandbox writes stay in that filesystem, and changes are surfaced as explicit diffs.",
     "",
@@ -425,7 +451,7 @@ console.log(audit.diff);`;
     "",
     "## Virtual filesystem runner",
     "",
-    'GocciaSandboxRunner executes an entry path inside an isolated virtual filesystem. Seed paths and JSON seed config copy files into the sandbox before execution; they are import baselines, not live mounts. Source can import `"fs"` for sandbox filesystem operations and `"goccia"` for shell commands or nested execution.',
+    'GocciaSandboxRunner executes an entry path inside an isolated virtual filesystem. Seed paths and JSON seed config copy files into the sandbox before execution; they are import baselines, not live mounts. Source can import `"fs"` for Node-compatible synchronous, callback, and promise methods over the sandbox filesystem, and `"goccia"` for shell commands or nested execution.',
     "",
     fence(runnerCommand, "bash"),
     "",

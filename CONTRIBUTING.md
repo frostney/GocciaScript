@@ -79,9 +79,14 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
 
 See [docs/testing.md](docs/testing.md) for the full testing guide including directory structure, naming conventions, and platform-specific rules.
 
-### 4. Language Restrictions
+### 4. Language Profile and Restrictions
 
-GocciaScript intentionally excludes certain JavaScript features — do **not** add support for them. See [docs/language.md](docs/language.md) for the full list of supported and excluded features with rationale.
+GocciaScript's recommended profile deliberately keeps selected implemented
+ECMAScript forms behind compatibility or unsafe opt-ins, while other surfaces
+such as broad Annex B support remain deferred. Do **not** remove those gates or
+add deferred features without an explicit project decision. See
+[docs/language.md](docs/language.md) for the implementation, profile, and
+compatibility-path detail.
 
 ## Quick reference
 
