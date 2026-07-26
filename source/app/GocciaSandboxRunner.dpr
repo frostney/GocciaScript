@@ -645,6 +645,10 @@ begin
   if not Assigned(AResolver) then
     Exit;
 
+  if EngineOptions.RemoteImports.Present then
+    raise Exception.Create(
+      'GocciaSandboxRunner does not expose the host-backed remote package cache.');
+
   if EngineOptions.ImportMap.Present then
     AResolver.LoadImportMap(EngineOptions.ImportMap.Value);
 

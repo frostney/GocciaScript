@@ -13,6 +13,7 @@ type
   TGocciaCapabilityKind = (
     gckFetchHost,
     gckFetchDispatch,
+    gckRemoteImport,
     gckFFIOpen,
     gckFunctionConstructor,
     gckShadowRealm,
@@ -63,6 +64,8 @@ begin
       Result := 'fetch.host';
     gckFetchDispatch:
       Result := 'fetch.dispatch';
+    gckRemoteImport:
+      Result := 'remote-import.resolve';
     gckFFIOpen:
       Result := 'ffi.open';
     gckFunctionConstructor:

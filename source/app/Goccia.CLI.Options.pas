@@ -25,6 +25,7 @@ type
     FSourceType: TEnumOption<TGocciaSourceType>;
     FCompatibilityFlags: array[TGocciaCompatibility] of TFlagOption;
     FImportMap: TStringOption;
+    FRemoteImports: TFlagOption;
     FAliases: TRepeatableOption;
     FTimeout: TIntegerOption;
     FMaxMemory: TInt64Option;
@@ -51,6 +52,7 @@ type
     property Mode: TEnumOption<TGocciaExecutionMode> read FMode;
     property SourceType: TEnumOption<TGocciaSourceType> read FSourceType;
     property ImportMap: TStringOption read FImportMap;
+    property RemoteImports: TFlagOption read FRemoteImports;
     property Aliases: TRepeatableOption read FAliases;
     property Timeout: TIntegerOption read FTimeout;
     property MaxMemory: TInt64Option read FMaxMemory;
@@ -116,7 +118,7 @@ function TryApplyCompatibilityFlagArg(const AArg: string;
 implementation
 
 const
-  ENGINE_FIXED_OPTION_COUNT = 18;
+  ENGINE_FIXED_OPTION_COUNT = 19;
 
   SOURCE_COMPATIBILITY_FLAGS: array[TGocciaCompatibility]
     of TGocciaCompatibilityFlagDescriptor = (
@@ -204,6 +206,8 @@ begin
       SOURCE_COMPATIBILITY_FLAGS[Flag].HelpText, 'Engine');
   FImportMap := TStringOption.Create('import-map',
     'Path to import map JSON file', 'Engine');
+  FRemoteImports := TFlagOption.Create('remote-imports',
+    'Allow lockfile-pinned provider package imports (GET-only)', 'Engine');
   FAliases := TRepeatableOption.Create('alias',
     'Import alias (e.g. @/=./src/)', 'Engine');
   FTimeout := TIntegerOption.Create('timeout',
@@ -248,6 +252,7 @@ begin
   for Flag := Low(TGocciaCompatibility) to High(TGocciaCompatibility) do
     FCompatibilityFlags[Flag].Free;
   FImportMap.Free;
+  FRemoteImports.Free;
   FAliases.Free;
   FTimeout.Free;
   FMaxMemory.Free;
@@ -283,6 +288,8 @@ begin
     Inc(Index);
   end;
   Result[Index] := FImportMap;
+  Inc(Index);
+  Result[Index] := FRemoteImports;
   Inc(Index);
   Result[Index] := FAliases;
   Inc(Index);

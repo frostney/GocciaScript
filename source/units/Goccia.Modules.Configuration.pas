@@ -11,14 +11,17 @@ uses
 
 procedure ConfigureModuleResolver(const AResolver: TGocciaModuleResolver;
   const AEntryFileName, AExplicitImportMapPath: string;
-  const AInlineAliases: TStrings);
+  const AInlineAliases: TStrings;
+  const ARemoteImportsEnabled: Boolean = False);
 
 implementation
 
 uses
   SysUtils,
 
-  FileUtils;
+  FileUtils,
+
+  Goccia.Modules.RemotePackages;
 
 type
   TModuleAliasPair = record
@@ -57,7 +60,8 @@ end;
 
 procedure ConfigureModuleResolver(const AResolver: TGocciaModuleResolver;
   const AEntryFileName, AExplicitImportMapPath: string;
-  const AInlineAliases: TStrings);
+  const AInlineAliases: TStrings;
+  const ARemoteImportsEnabled: Boolean);
 var
   AliasPair: TModuleAliasPair;
   I: Integer;
@@ -65,6 +69,14 @@ var
 begin
   if not Assigned(AResolver) then
     Exit;
+
+  AResolver.RemoteImportsEnabled := ARemoteImportsEnabled;
+  if not Assigned(AResolver.RemotePackageResolver) then
+  begin
+    AResolver.RemotePackageResolver :=
+      TGocciaProviderRemotePackageResolver.Create;
+    AResolver.OwnsRemotePackageResolver := True;
+  end;
 
   if AExplicitImportMapPath <> '' then
     ImportMapPath := ExpandHostFileName(AExplicitImportMapPath)
