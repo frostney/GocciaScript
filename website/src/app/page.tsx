@@ -5,6 +5,7 @@ import { fetchLatestRelease } from "@/lib/github";
 import { parseAcceptLanguage } from "@/lib/locale";
 import { buildHomeStructuredData } from "@/lib/positioning";
 import { getSiteUrl } from "@/lib/site-url";
+import { loadTest262DashboardData } from "@/lib/test262-dashboard";
 
 export const metadata: Metadata = {
   alternates: { canonical: "/" },
@@ -12,8 +13,19 @@ export const metadata: Metadata = {
 };
 
 export default async function HomePage() {
-  const [release, hdrs] = await Promise.all([fetchLatestRelease(), headers()]);
+  const [release, hdrs, compatibilityData] = await Promise.all([
+    fetchLatestRelease(),
+    headers(),
+    loadTest262DashboardData(),
+  ]);
   const locale = parseAcceptLanguage(hdrs.get("accept-language"));
+  const compatibility =
+    compatibilityData.status === "ready" && compatibilityData.latest
+      ? {
+          passed: compatibilityData.latest.summary.passed,
+          totalRun: compatibilityData.latest.summary.totalRun,
+        }
+      : null;
   const structuredData = buildHomeStructuredData(getSiteUrl());
   const serializedStructuredData = JSON.stringify(structuredData).replace(
     /</g,
@@ -26,7 +38,11 @@ export default async function HomePage() {
         // biome-ignore lint/security/noDangerouslySetInnerHtml: Next.js recommends this JSON-LD pattern; the server-owned payload escapes "<" above.
         dangerouslySetInnerHTML={{ __html: serializedStructuredData }}
       />
-      <Landing release={release} locale={locale} />
+      <Landing
+        compatibility={compatibility}
+        release={release}
+        locale={locale}
+      />
     </>
   );
 }

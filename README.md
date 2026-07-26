@@ -2,19 +2,113 @@
 
 ![GocciaScript logo](./logo.png)
 
-A drop of JavaScript — A sandbox-first ECMAScript runtime implemented in FreePascal
+A drop of JavaScript — sandboxed by default
 
-GocciaScript is a sandbox-first ECMAScript runtime with explicit host-controlled capabilities, designed for embedding portable JavaScript in applications. It is implemented in FreePascal, uses safer recommended defaults, and tracks language compatibility through generated test262 reports.
+GocciaScript is a sandbox-first ECMAScript runtime and toolchain for AI agents.
+Hosts define the available capabilities, runtime surface, and execution limits.
+It uses modern recommended defaults while tracking ECMAScript compatibility
+through generated test262 reports.
 
-The host chooses the runtime surface: globals, modules, filesystem and network capabilities, execution limits, and application-specific APIs. The recommended language profile is product policy rather than the engine's language ceiling; compatibility flags enable many standard legacy forms for conformance and existing code. See [Language](docs/language.md) for the policy and the live [ECMAScript compatibility dashboard](https://www.gocciascript.dev/compatibility) for current evidence.
+GocciaScript is implemented in FreePascal, supports Delphi, and can also be
+embedded in native applications. Native embedding is an important secondary
+goal; the primary product goal is AI-agent execution under an explicit
+host-defined capability model. It is not trying to become Node.js or a browser
+host.
 
-## Features
+## Start with an agent sandbox
 
-GocciaScript implements a broad core ECMAScript surface: `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules, decorators, and TypeScript-style type annotations. Features that are error-prone, redundant, or security risks (`var`, `function` keyword, `==`/`!=`, `eval`, labels, traditional loops, `for...in`) are excluded from the recommended defaults; selected legacy forms are available through explicit conformance-focused compatibility flags.
+`GocciaSandboxRunner` seeds an in-memory virtual filesystem from explicit host
+paths, runs an entry script with host-owned limits, and reports sandbox changes
+as a diff. Seed entries are snapshots, not live mounts, and scripts receive no
+ambient host filesystem access.
 
-Core ECMAScript compatibility is now a release-track objective. The default language remains curated and sandbox-first, but test262 runs on every PR and main commit so conformance work can be measured from generated reports instead of hand-maintained status claims. Annex B's browser-only legacy surface is not a pre-1.0 target; see [ADR 0085](docs/adr/0085-defer-annex-b-before-1-0.md).
+```javascript
+// agent-workspace/main.js
+import fs from "fs";
 
-See [Language](docs/language.md) for the complete specification of supported features, TC39 proposals, and exclusions.
+const input = fs.readFileSync("/task.txt", "utf8");
+fs.mkdirSync("/out", { recursive: true });
+fs.writeFileSync("/out/result.txt", input.toUpperCase());
+```
+
+```bash
+./build.pas sandboxrunner
+./build/GocciaSandboxRunner /main.js \
+  --seed=./agent-workspace=/ \
+  --timeout=5000 \
+  --diff
+```
+
+The host can also define globals, virtual modules, allowed network hosts,
+instruction and memory limits, deterministic time/randomness, and
+application-specific APIs. See [Build System — Sandbox Runner](docs/build-system.md#gocciasandboxrunner-virtual-filesystem-sandbox)
+and [Built-ins — Sandbox Modules](docs/built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas).
+
+## ECMAScript implementation and recommended profile
+
+GocciaScript implements core ECMAScript and runs the official test262 corpus on
+every PR and main commit. The exact current result is rendered from published
+main-branch data on the live
+[ECMAScript compatibility dashboard](https://www.gocciascript.dev/compatibility);
+canonical prose does not freeze a historical percentage.
+
+The recommended language profile is product policy, not the implementation
+ceiling. Standard core forms disabled by default all have explicit compatibility
+paths:
+
+| Form | Default | Enablement / exposure |
+|------|---------|-----------------------|
+| `var` | Disabled | `--compat-var` |
+| traditional `function` syntax | Disabled | `--compat-function` |
+| `==` / `!=` | Disabled | `--compat-loose-equality` |
+| ASI | Disabled | `--compat-asi` |
+| labels | Disabled | `--compat-label` |
+| traditional `for(;;)` | Disabled | `--compat-traditional-for-loop` |
+| `for...in` | Disabled | `--compat-for-in-loop` |
+| `while` / `do...while` | Disabled | `--compat-while-loops` |
+| `arguments` | Disabled | `--compat-arguments-object` |
+| non-strict Script semantics and `with` | Strict / disabled | `--compat-non-strict-mode` |
+| `eval` | Not installed by normal hosts | private `GocciaScriptLoaderBare --test262-host` |
+| `Function()` | Disabled | `--unsafe-function-constructor` |
+
+Annex B's browser-only legacy surface is not a general pre-1.0 target; see
+[ADR 0085](docs/adr/0085-defer-annex-b-before-1-0.md). See
+[Language](docs/language.md) and [Language Tables](docs/language-tables.md) for
+the detailed semantics and feature matrix.
+
+## TC39 Type Annotations and `--strict-types`
+
+GocciaScript implements the official
+[TC39 Type Annotations proposal](https://tc39.es/proposal-type-annotations/) and
+its types-as-comments runtime model. Supported annotations have no runtime
+effect by default. GocciaScript additionally provides the optional
+`--strict-types` extension, which enforces supported annotations and relevant
+inferred primitive contracts at runtime in interpreter and bytecode modes.
+
+`--strict-types` is a runtime contract extension, not a replacement for a static
+structural type checker such as `tsc`.
+
+## Node host compatibility and sandbox `fs`
+
+GocciaScript is not a complete Node.js host: it does not provide CommonJS, npm
+package resolution, `process`, `Buffer`, or the general `node:` module set.
+`GocciaSandboxRunner` does provide a Node-compatible `fs` API over its virtual
+filesystem:
+
+- synchronous forms such as `readFileSync`, `writeFileSync`, `mkdirSync`,
+  `readdirSync`, `statSync`, `rmSync`, `renameSync`, and `copyFileSync`;
+- Node-shaped callback forms for the same operation families;
+- `fs.promises` forms, `Stats` objects, and Node-shaped filesystem errors.
+
+The documented method set never reaches the ambient host filesystem. See
+[Sandbox Modules](docs/built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas)
+for supported options, return types, error shapes, and method-level deviations.
+
+## Runtime and toolchain features
+
+The default profile includes modern ECMAScript forms such as `let`/`const`,
+arrow functions, classes with private fields, `for...of`, async/await, ES
+modules, decorators, and proposal-compatible type syntax.
 
 ### Built-in Objects
 
@@ -147,12 +241,18 @@ See [Testing](docs/testing.md) for test organization and [Build System](docs/bui
 
 The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec with variance (CV%) and engine-level timing breakdown (lex/parse/execute). Output formats: `console` (default), `text`, `csv`, `json`, `compact-json` (the same envelope as `json` without `build`, `memory`, `stdout`, or `stderr`). Calibration and measurement parameters are configurable via [environment variables](docs/benchmarks.md#configuring-benchmark-parameters). Retained AWFY and JetStream reference measurements are published through the [Performance Barometer](https://gocciascript.dev/performance).
 
-## Quick Tour
+## Recommended-profile quick tour
 
-GocciaScript looks like modern JavaScript — with a few intentional differences:
+The recommended profile favors modern, explicit forms. The corresponding core
+ECMAScript forms remain implemented through the compatibility paths listed
+above:
 
-- **Arrow functions only** — `const greet = (name) => \`Hello, ${name}!\`;` (no `function` keyword)
-- **No traditional loops** — `numbers.map((n) => n * 2)` or `for (const n of numbers) { ... }`
+- **Arrow functions and methods by default** —
+  ``const greet = (name) => `Hello, ${name}!`;``; traditional `function`
+  syntax uses `--compat-function`.
+- **Iterator-oriented loops by default** — use array methods, iterators, or
+  `for...of`; traditional `for(;;)`, `for...in`, `while`, and `do...while`
+  each have targeted compatibility flags.
 - **Classes** with private fields — `class Account { #balance = 0; ... }`
 - **ES modules** — default, named, and namespace imports/exports are supported; project code prefers named exports for clarity.
 - **Strict equality by default** — `===` and `!==` (`==`/`!=` require `--compat-loose-equality`)
@@ -196,7 +296,27 @@ const data = await fetchData();
 
 **Strict equality by default** — `===` and `!==`; `==` and `!=` are available only with `--compat-loose-equality`.
 
-For a full guided walkthrough, see the [Tutorial](docs/tutorial.md). For the complete list of what's supported and excluded, see [Language](docs/language.md).
+For a full guided walkthrough, see the [Tutorial](docs/tutorial.md). For the
+complete implementation, default-profile, and compatibility-path detail, see
+[Language](docs/language.md).
+
+## FreePascal, Delphi, and native embedding
+
+FreePascal is the cross-platform toolchain used for normal builds, releases, and
+the documented embedding API. The repository also includes
+[`GocciaScript.Delphi.groupproj`](source/app/GocciaScript.Delphi.groupproj) and
+Delphi projects for the REPL, both script loaders, Sandbox Runner, Test Runner,
+Benchmark Runner, and Bundler on Win32 and Win64.
+
+The Delphi support contract requires the complete application matrix and all
+applicable Pascal and JavaScript tests to pass with the same runtime semantics
+as the FreePascal build. Delphi 12 Community Edition contributors validate that
+contract through the IDE; see [Delphi Validation](docs/contributing/delphi.md)
+and [Build System](docs/build-system.md#prerequisites).
+
+Native hosts can embed GocciaScript to run portable JavaScript with
+application-specific globals, modules, capabilities, and limits. See
+[Embedding the Engine](docs/embedding.md).
 
 ## Architecture
 

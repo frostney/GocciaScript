@@ -106,72 +106,120 @@ describe("group", () => { test("…", () => {}); });`,
   },
 ];
 
-export type Excluded = {
+export type ProfileDisabledFeature = {
   name: string;
-  /** Why excluded (one short phrase). */
+  implemented: boolean;
+  defaultProfile: "Disabled" | "Strict" | "Not installed";
+  enablement: string;
+  standardsSource: string;
+  /** Why the recommended profile keeps it off (one short phrase). */
   why: string;
-  /** Code snippet showing the GocciaScript alternative. */
-  snippet: string;
 };
 
-export const EXCLUDED: Excluded[] = [
+export const PROFILE_DISABLED_FEATURES: ProfileDisabledFeature[] = [
   {
     name: "var",
+    implemented: true,
+    defaultProfile: "Disabled",
+    enablement: "--compat-var",
+    standardsSource: "ECMA-262 core",
     why: "ambiguous hoisting, function-scoped",
-    snippet: `// Use let / const (block-scoped).
-let count = 0;
-const PI = 3.14;`,
   },
   {
     name: "function",
+    implemented: true,
+    defaultProfile: "Disabled",
+    enablement: "--compat-function",
+    standardsSource: "ECMA-262 core",
     why: "use arrow functions, class methods, or object-literal methods",
-    snippet: `// Arrow funcs, class & object-literal methods.
-const add = (a, b) => a + b;
-const ops = { sub(a, b) { return a - b; } };`,
   },
   {
-    name: "==",
+    name: "== / !=",
+    implemented: true,
+    defaultProfile: "Disabled",
+    enablement: "--compat-loose-equality",
+    standardsSource: "ECMA-262 core",
     why: "type coercion is a footgun",
-    snippet: `// Use === (strict equality).
-if (id === 0) { /* ... */ }
-if (name === "alice") { /* ... */ }`,
   },
   {
-    name: "!=",
-    why: "type coercion is a footgun",
-    snippet: `// Use !== (strict inequality).
-if (id !== 0) { /* ... */ }
-if (status !== "ok") { /* ... */ }`,
+    name: "ASI",
+    implemented: true,
+    defaultProfile: "Disabled",
+    enablement: "--compat-asi",
+    standardsSource: "ECMA-262 core",
+    why: "explicit statement boundaries are the recommended default",
   },
   {
-    name: "eval",
-    why: "arbitrary code execution",
-    snippet: `// Not available — sandbox-first runtime.
-import handler from "./handler.js";
-// Compose modules instead of stringly code.`,
+    name: "labels",
+    implemented: true,
+    defaultProfile: "Disabled",
+    enablement: "--compat-label",
+    standardsSource: "ECMA-262 core",
+    why: "prefer explicit helpers or state",
   },
   {
-    name: "with",
-    why: "blocks static name resolution",
-    snippet: `// Use destructuring.
-const { x, y, z } = vector;
-// All names resolved statically.`,
+    name: "for (;;)",
+    implemented: true,
+    defaultProfile: "Disabled",
+    enablement: "--compat-traditional-for-loop",
+    standardsSource: "ECMA-262 core",
+    why: "prefer iterators, for...of, or array methods",
   },
   {
-    name: "Function()",
-    why: "dynamic-eval class of foot-guns",
-    snippet: `// Disabled by default; unsafe opt-in only.
-// --unsafe-function-constructor
-import handler from "./handler.js";
-// Use real modules, not stringly code.`,
+    name: "for...in",
+    implemented: true,
+    defaultProfile: "Disabled",
+    enablement: "--compat-for-in-loop",
+    standardsSource: "ECMA-262 core",
+    why: "prefer explicit own-key enumeration",
+  },
+  {
+    name: "while / do...while",
+    implemented: true,
+    defaultProfile: "Disabled",
+    enablement: "--compat-while-loops",
+    standardsSource: "ECMA-262 core",
+    why: "prefer bounded iteration forms",
   },
   {
     name: "arguments",
+    implemented: true,
+    defaultProfile: "Disabled",
+    enablement: "--compat-arguments-object",
+    standardsSource: "ECMA-262 core",
     why: "magic, non-array, function-scoped",
-    snippet: `// Use rest parameters (real array).
-const log = (...args) => {
-  for (const a of args) console.log(a);
-};`,
+  },
+  {
+    name: "non-strict Script",
+    implemented: true,
+    defaultProfile: "Strict",
+    enablement: "--compat-non-strict-mode",
+    standardsSource: "ECMA-262 core",
+    why: "strict semantics are the recommended default",
+  },
+  {
+    name: "with",
+    implemented: true,
+    defaultProfile: "Disabled",
+    enablement: "--compat-non-strict-mode",
+    standardsSource: "ECMA-262 core",
+    why: "blocks static name resolution",
+  },
+  {
+    name: "eval",
+    implemented: true,
+    defaultProfile: "Not installed",
+    enablement: "private --test262-host",
+    standardsSource: "ECMA-262 core",
+    why: "normal hosts do not expose dynamic source evaluation",
+  },
+  {
+    name: "Function()",
+    implemented: true,
+    defaultProfile: "Disabled",
+    enablement: "--unsafe-function-constructor",
+    standardsSource: "ECMA-262 core",
+    why: "dynamic source construction is an explicit unsafe opt-in",
   },
 ];
 
@@ -186,7 +234,7 @@ export const FEATURES: { icon: FeatureIcon; title: string; body: string }[] = [
   {
     icon: "shield",
     title: "Sandbox-first",
-    body: "Seeded VFS snapshots, import-only fs/goccia modules, nested execution, explicit diffs, and host-owned limits.",
+    body: "AI-agent execution with seeded VFS snapshots, explicit modules and capabilities, structured results, and host-owned limits.",
   },
   {
     icon: "leaf",
