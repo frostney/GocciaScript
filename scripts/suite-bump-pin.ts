@@ -2,8 +2,8 @@
 /**
  * suite-bump-pin.ts
  *
- * Update a SUITE_SHA pin in a compliance suite runner script.
- * Invoked by weekly bump workflows (toml-test-bump.yml, yaml-test-bump.yml).
+ * Update either a dedicated one-line SHA pin or a SUITE_SHA constant.
+ * Invoked by weekly bump workflows (TOML, JSON5, and YAML).
  *
  * Usage:
  *   bun scripts/suite-bump-pin.ts <target-file> <new-sha>
@@ -33,15 +33,25 @@ function main(argv: string[]): number {
 
   let seen = 0;
   let changed = 0;
-  const updated = text.replace(SUITE_SHA_RE, (full, prefix, oldSha, suffix) => {
-    seen++;
-    if (oldSha === newSha) return full;
-    changed++;
-    return `${prefix}${newSha}${suffix}`;
-  });
+  let updated: string;
+  if (SHA_RE.test(text.trim())) {
+    seen = 1;
+    changed = text.trim() === newSha ? 0 : 1;
+    updated = `${newSha}\n`;
+  } else {
+    updated = text.replace(
+      SUITE_SHA_RE,
+      (full, prefix, oldSha, suffix) => {
+        seen++;
+        if (oldSha === newSha) return full;
+        changed++;
+        return `${prefix}${newSha}${suffix}`;
+      },
+    );
+  }
 
   if (seen === 0) {
-    console.error(`${target}: no SUITE_SHA constant found`);
+    console.error(`${target}: no one-line SHA or SUITE_SHA constant found`);
     return 1;
   }
 
