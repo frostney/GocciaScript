@@ -7,7 +7,7 @@ GocciaScript is a FreePascal implementation of ECMAScript with sandbox-first rec
 ### Project And Layers
 
 **GocciaScript**:
-A sandbox-first ECMAScript runtime and toolchain with explicit host-controlled capabilities, designed for embedding portable JavaScript in applications and implemented in FreePascal.
+A sandbox-first ECMAScript runtime and toolchain for AI agents, with an explicit host-defined capability model and generated test262 evidence. It is implemented in FreePascal, supports Delphi, and can also be embedded in native applications as an important secondary goal.
 _Avoid_: JS engine when the recommended defaults or host-tooling shape matters.
 
 **Recommended defaults**:
@@ -343,7 +343,7 @@ The CLI host that executes through the core engine without attaching the runtime
 _Avoid_: Loader profile.
 
 **Test262 host capability**:
-A JavaScript-visible hook exposed on the `Goccia` namespace only when a CLI host opts into the test262 conformance contract, such as `GocciaScriptLoaderBare --test262-host`. It is not a core language built-in and not part of the normal runtime surface.
+A JavaScript-visible hook exposed on the `Goccia` namespace only by the dedicated `GocciaTest262Runner` conformance host. It is not a core language built-in and not part of the normal runtime surface.
 _Avoid_: Runtime global, compatibility flag.
 
 **Performance Barometer**:
@@ -431,7 +431,7 @@ A class or object shorthand function that receives its call-site receiver as `th
 _Avoid_: Arrow method.
 
 **Compatibility flag**:
-An explicit boolean CLI flag or config value, using canonical `compat-*` spelling, that enables an excluded ECMAScript compatibility behavior.
+An explicit boolean CLI flag or config value, using canonical `compat-*` spelling, that enables an ECMAScript behavior disabled by the recommended profile.
 _Avoid_: Feature flag when the option exists for compatibility semantics.
 
 **Compatibility flag set**:

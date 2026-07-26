@@ -39,9 +39,9 @@ import { formatMemorySegments, type MemoryJson } from "@/lib/format-memory";
 import { isPreStable, type ReleaseInfo } from "@/lib/github";
 import {
   BUILTINS,
-  EXCLUDED,
   FEATURES,
   type FeatureIcon,
+  PROFILE_DISABLED_FEATURES,
 } from "@/lib/landing-data";
 import {
   COMPILER_SUPPORT_ANSWER,
@@ -51,6 +51,8 @@ import {
   GOCCIASCRIPT_SUMMARY,
   NODE_COMPATIBILITY_ANSWER,
   NODE_COMPATIBILITY_QUESTION,
+  TYPE_ANNOTATIONS_ANSWER,
+  TYPE_ANNOTATIONS_QUESTION,
 } from "@/lib/positioning";
 
 const FEATURE_ICONS: Record<
@@ -491,7 +493,7 @@ console.log("total:", total);`;
       label: "Source",
       small: ".js · .ts · .jsx · .tsx · .mjs",
       overview:
-        "Every supported extension is the same language — TS/TSX type annotations are parsed and discarded, and JSX is rewritten to function calls in a preprocessing pass before the lexer ever sees it. There is no separate type-checker.",
+        "Every supported extension enters the same source pipeline. GocciaScript implements the TC39 Type Annotations proposal, so supported annotations have no runtime effect by default; --strict-types optionally adds runtime contracts. JSX is rewritten to function calls in a preprocessing pass before lexing.",
       docId: "language",
       docLabel: "Language",
     },
@@ -806,11 +808,15 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "What is GocciaScript for?",
     answer:
-      "It is built for applications that need JavaScript with an explicit, host-defined capability surface, including desktop scripting, automation, plugins, sandboxed workflows, and agent execution. The embedding API and guide target FreePascal hosts; Delphi 12 supports the shipped Win32 and Win64 applications.",
+      "Its primary goal is JavaScript execution for AI agents under an explicit, host-defined capability model. The same runtime and toolchain also serve sandboxed automation, portable native applications, plugins, and desktop scripting; native embedding is an important secondary goal.",
   },
   {
     question: ECMASCRIPT_SCOPE_QUESTION,
     answer: ECMASCRIPT_SCOPE_ANSWER,
+  },
+  {
+    question: TYPE_ANNOTATIONS_QUESTION,
+    answer: TYPE_ANNOTATIONS_ANSWER,
   },
   {
     question: NODE_COMPATIBILITY_QUESTION,
@@ -835,7 +841,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
           test262 results
         </Link>{" "}
         already makes it suitable for serious experiments and bounded production
-        embedding where the supported surface matches your needs.
+        use where the supported surface matches your needs.
       </>
     ),
   },
@@ -859,8 +865,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   },
   {
     question: "Can GocciaScript run TypeScript or JSX source?",
-    answer:
-      "Yes, the source pipeline accepts TS/TSX annotations and JSX as input forms: type annotations are parsed and discarded, and JSX is rewritten before lexing and parsing continue.",
+    answer: TYPE_ANNOTATIONS_ANSWER,
   },
   {
     question: "How do I try GocciaScript?",
@@ -881,9 +886,14 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
 ];
 
 export function Landing({
+  compatibility,
   release,
   locale,
 }: {
+  compatibility?: {
+    passed: number;
+    totalRun: number;
+  } | null;
   release?: ReleaseInfo | null;
   /** BCP-47 locale tag from `Accept-Language` so the release-date in
    *  the hero "Latest version" block formats the same on SSR and in
@@ -899,7 +909,7 @@ export function Landing({
               <h1>
                 A <span className="drop">drop</span> of
                 <br />
-                Java<span className="script">Script</span>.
+                Java<span className="script">Script</span>, sandboxed.
               </h1>
               <p className="hero-lede">
                 A sandbox-first{" "}
@@ -921,8 +931,8 @@ export function Landing({
                     conformance with generated test262 reports.
                   </span>
                 </a>{" "}
-                runtime with explicit host-controlled capabilities, designed for
-                embedding portable JavaScript in applications.
+                runtime and toolchain for AI agents. The host defines the
+                available capabilities, runtime surface, and execution limits.
               </p>
               <div className="hero-cta-row">
                 <Link
@@ -977,17 +987,35 @@ export function Landing({
       <section className="content-section">
         <div className="container">
           <div className="section-head">
-            <div className="section-kicker">Design principles</div>
+            <div className="section-kicker">ECMAScript compatibility</div>
             <AnchorH2 id="design-principles" className="hd-no-wrap">
-              Broad ECMAScript,{" "}
-              <span className="wave-under">with safer defaults.</span>
+              The implementation is broader than{" "}
+              <span className="wave-under">the recommended profile.</span>
             </AnchorH2>
             <p>
-              The engine&apos;s language capability is broader than its
-              recommended profile. Selected legacy and high-risk forms stay off
-              by default, while compatibility flags enable many standard forms
-              for conformance and existing code. The result ships as a compact,
-              portable native runtime.
+              GocciaScript implements core ECMAScript. Modern, explicit forms
+              are enabled by default; every standard core form disabled by the
+              recommended profile has an explicit compatibility path. Normal
+              hosts do not install <code className={inlineCodeClass}>eval</code>
+              , which is exposed only by the private test262 conformance host.
+            </p>
+            <p className="compat-note">
+              {compatibility ? (
+                <>
+                  Current generated evidence:{" "}
+                  <strong>
+                    {compatibility.passed.toLocaleString(locale)} of{" "}
+                    {compatibility.totalRun.toLocaleString(locale)}
+                  </strong>{" "}
+                  cases pass in the latest published non-Annex-B test262 run.
+                </>
+              ) : (
+                <>Current generated test262 evidence is published separately.</>
+              )}{" "}
+              <Link href="/compatibility" className="link-button">
+                Open the live compatibility dashboard
+              </Link>
+              .
             </p>
           </div>
           <div className="feature-grid">
@@ -1021,74 +1049,63 @@ export function Landing({
         <div className="container">
           <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-8">
             <div>
-              <div className="section-kicker mb-3">Intentionally excluded</div>
-              <AnchorH3 id="excluded" className="mb-3">
-                What&apos;s left out — and why
+              <div className="section-kicker mb-3">
+                Recommended language profile
+              </div>
+              <AnchorH3 id="recommended-profile" className="mb-3">
+                Implemented, with explicit defaults
               </AnchorH3>
               <p className="text-ink-2 mb-4">
-                Dynamic code construction and scope-changing syntax are left out
-                of the recommended defaults to keep execution predictable in
-                embedded runtimes. Coercive or legacy forms such as{" "}
-                <code className={inlineCodeClass}>==</code>,{" "}
-                <code className={inlineCodeClass}>var</code>, and{" "}
-                <code className={inlineCodeClass}>arguments</code> stay off by
-                default but remain available behind explicit compatibility flags
-                — a curated default, not a language ceiling. See{" "}
+                The profile is host policy, not a list of missing language
+                features. The table distinguishes implemented semantics from
+                their default exposure. See{" "}
                 <Link href="/docs/language" className="link-button">
                   Language
                 </Link>{" "}
                 for the per-feature rationale.
               </p>
-              <div className="excluded-row">
-                {EXCLUDED.map((x, i) => {
-                  // Append the index because the alphanumeric-only slug
-                  // would otherwise collide on operator-only names —
-                  // `"=="` and `"!="` both reduce to `"-"`, which would
-                  // duplicate `id="ex-tip--"` and break the
-                  // `aria-describedby` link for whichever pair lost the
-                  // DOM lookup. The index keeps the id stable per row
-                  // without relying on the actual operator characters.
-                  const slug = `${x.name.replace(/[^A-Za-z0-9]+/g, "-")}-${i}`;
-                  const tooltipId = `ex-tip-${slug}`;
-                  return (
-                    <button
-                      key={x.name}
-                      type="button"
-                      className="excluded-pill"
-                      aria-describedby={tooltipId}
-                    >
-                      {x.name}
-                      <span
-                        id={tooltipId}
-                        role="tooltip"
-                        className="bi-tooltip"
-                      >
-                        <code>
-                          <HighlightedCode code={x.snippet} />
-                        </code>
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+              <section
+                className="profile-table-wrap"
+                aria-label="Recommended profile compatibility paths"
+              >
+                <table className="profile-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Form</th>
+                      <th scope="col">Implemented</th>
+                      <th scope="col">Default</th>
+                      <th scope="col">Enablement / exposure</th>
+                      <th scope="col">Source</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {PROFILE_DISABLED_FEATURES.map((feature) => (
+                      <tr key={feature.name}>
+                        <th scope="row" title={feature.why}>
+                          {feature.name}
+                        </th>
+                        <td>{feature.implemented ? "Yes" : "No"}</td>
+                        <td>{feature.defaultProfile}</td>
+                        <td>
+                          <code>{feature.enablement}</code>
+                        </td>
+                        <td>{feature.standardsSource}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </section>
               <p className="compat-note">
-                Compatibility flags primarily exist for ECMAScript conformance
-                and legacy code. They opt back into excluded syntax such as{" "}
-                <code className={inlineCodeClass}>var</code>,{" "}
-                <code className={inlineCodeClass}>function</code>, loose
-                equality, <code className={inlineCodeClass}>arguments</code>,
-                and ASI via CLI or config flags.
+                Compatibility flags primarily serve ECMAScript conformance and
+                existing code. Dynamic source exposure is separate: normal hosts
+                do not install <code className={inlineCodeClass}>eval</code>,
+                and <code className={inlineCodeClass}>Function()</code> requires
+                the explicit{" "}
+                <code className={inlineCodeClass}>
+                  --unsafe-function-constructor
+                </code>{" "}
+                opt-in.
               </p>
-              <div className="mt-10">
-                <p className="text-ink-2 mb-0 text-[0.92rem]">
-                  The runtime is intentionally{" "}
-                  <strong>not Node.js host compatible</strong>: no CommonJS, no{" "}
-                  <code className={inlineCodeClass}>node:</code> built-ins, no
-                  npm-style package resolution, and no Node host globals such as{" "}
-                  <code className={inlineCodeClass}>process</code> or{" "}
-                  <code className={inlineCodeClass}>Buffer</code>.
-                </p>
-              </div>
             </div>
             <div>
               <div className="section-kicker mb-3">Runtime surface</div>
@@ -1120,6 +1137,16 @@ export function Landing({
                 <code className={inlineCodeClass}>goccia</code> modules backed
                 by a seeded virtual filesystem, sandbox shell commands, nested
                 execution, and explicit diffs.
+              </p>
+              <p className="text-ink-2 mb-4">
+                The sandbox <code className={inlineCodeClass}>fs</code> module
+                provides Node-compatible synchronous, callback, and promise
+                methods over that virtual filesystem, including Stats objects
+                and Node-shaped errors. GocciaScript is not a complete Node.js
+                host: it does not provide CommonJS, npm package resolution,{" "}
+                <code className={inlineCodeClass}>process</code>,{" "}
+                <code className={inlineCodeClass}>Buffer</code>, or the general{" "}
+                <code className={inlineCodeClass}>node:</code> module set.
               </p>
               <div className="builtins-grid">
                 {BUILTINS.map((b) => {
@@ -1153,11 +1180,59 @@ export function Landing({
       <section className="content-section pt-0">
         <div className="container">
           <div className="section-head">
+            <div className="section-kicker">Native platform</div>
+            <AnchorH2 id="native-platform">
+              Portable by design,{" "}
+              <span className="wave-under">embeddable by choice.</span>
+            </AnchorH2>
+            <p>
+              FreePascal is the cross-platform toolchain. Delphi support covers
+              the complete shipped Win32 and Win64 application matrix under the
+              same runtime semantics. Native application embedding remains an
+              important secondary goal.
+            </p>
+          </div>
+          <div className="feature-grid">
+            <Card className="paper-card feature-card" padding={6}>
+              <VStack gap={2}>
+                <Heading level={4}>FreePascal</Heading>
+                <Text as="p" type="supporting" display="block">
+                  Builds the cross-platform command-line toolchain and provides
+                  the documented native embedding path.
+                </Text>
+              </VStack>
+            </Card>
+            <Card className="paper-card feature-card" padding={6}>
+              <VStack gap={2}>
+                <Heading level={4}>Delphi 12</Heading>
+                <Text as="p" type="supporting" display="block">
+                  Repository projects cover every shipped application on Win32
+                  and Win64; the support contract includes all applicable Pascal
+                  and JavaScript tests.
+                </Text>
+              </VStack>
+            </Card>
+            <Card className="paper-card feature-card" padding={6}>
+              <VStack gap={2}>
+                <Heading level={4}>Native embedding</Heading>
+                <Text as="p" type="supporting" display="block">
+                  Hosts can embed portable JavaScript and define application
+                  globals, modules, capabilities, limits, and result handling.
+                </Text>
+              </VStack>
+            </Card>
+          </div>
+        </div>
+      </section>
+
+      <section className="content-section pt-0">
+        <div className="container">
+          <div className="section-head">
             <div className="section-kicker">FAQ</div>
             <AnchorH2 id="faq">GocciaScript questions, answered.</AnchorH2>
             <p>
               Short answers to the questions people usually ask before trying or
-              embedding the runtime.
+              integrating the runtime.
             </p>
           </div>
           <Card className="paper-card faq-list" padding={0}>

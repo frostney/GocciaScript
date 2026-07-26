@@ -364,6 +364,12 @@ export function Install({
               required. Clone, run the build script, then point your{" "}
               <code>$PATH</code> at <code>./build</code>.
             </p>
+            <p>
+              Delphi 12 Community Edition is also supported for the complete
+              shipped Win32 and Win64 application matrix. Open the repository
+              project group and follow the{" "}
+              <Link href="/docs/build-system">build and validation guide</Link>.
+            </p>
             <CommandTabs
               tabs={OS_TABS}
               storageKey="goccia.install.os"
