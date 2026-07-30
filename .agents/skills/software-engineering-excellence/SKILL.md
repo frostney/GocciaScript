@@ -10,89 +10,54 @@ license: Unlicense OR MIT
 
 # Software engineering excellence
 
-Apply this standard throughout technical work. Workflow skills own mechanics;
-this skill defines the completion and judgment bar above them.
-
-## North Star
-
 Leave the system more maintainable and the next change easier. Prefer the
-smallest complete solution at the right structural layer, not the smallest diff
-that hides the symptom and not speculative architecture beyond the request.
+smallest complete solution at the right layer: neither a symptom-hiding diff nor
+speculative architecture.
 
-## Principles
+## Working standard
 
-### 1. Ground in current reality
+1. **Ground in current reality.** Read applicable instructions, source,
+   project-defined commands, primary specifications, and durable decisions.
+   Treat issue text, comments, tests, docs, and prior notes as leads until
+   verified. Run the named reproduction or artifact when possible, then act.
+2. **Reuse by meaning.** Search for existing helpers, patterns, definitions, and
+   vocabulary. Reuse when semantics match; do not abstract merely similar shapes.
+3. **Solve the complete in-scope problem.** Cover real success, failure, and
+   state-transition paths. Fix blockers that invalidate the requested result;
+   report unrelated findings without absorbing them into scope.
+4. **Validate the real bar.** Observe every claimed pass, number, behavior, and
+   action in the current run. Reproduce defects when possible, add meaningful
+   regression coverage, and run the repository's relevant gate. Never weaken a
+   gate to obtain green output.
+5. **Make every surface earn its cost.** Add only code, tests, fallbacks,
+   abstractions, or tools with a real caller, requirement, or failure mode.
+   Remove unused surfaces.
+6. **Respect authority boundaries.** Diagnosis, review, and planning authorize
+   assessment; change requests authorize reversible in-scope implementation and
+   relevant validation. Pause only for a material product, architecture,
+   security, compatibility, or scope choice that evidence cannot resolve.
 
-Read the current source, applicable instructions, project-defined commands,
-primary specifications, and decisions before concluding. Treat issue text,
-documentation, comments, tests, prior notes, and external positioning as leads;
-verify material claims against source or observed behavior. When the request
-names a reproduction, test, or artifact, run that exact one when possible.
+For genuinely multi-layer work, establish a thin runnable path and deepen it in
+increments. Validate material performance changes against a relevant baseline.
+Follow the surrounding code's comment density and idiom; explain non-obvious
+decisions.
 
-Ground enough to act without guessing, then act. Exhaustive archaeology is not
-the goal.
+## Evidence and communication
 
-### 2. Reuse before creating
+Ground progress and completion in current source or tool evidence. Report
+material outcomes, limitations, and blockers without narrating routine activity.
+Finish with the outcome first and enough evidence for a reader who did not see
+the work trace.
 
-Search for existing helpers, components, patterns, definitions, and vocabulary
-before adding another. Reuse where the meaning matches; do not force unrelated
-cases into a shared abstraction merely because their shape looks similar.
+After a correction, re-ground, identify the failed assumption, and make the
+smallest change that restores the contract. Do not compensate with broader
+scope, tooling, or framework churn.
 
-### 3. Solve the complete in-scope problem at the right layer
+## Situational depth
 
-Handle every real path required by the request, including relevant failure and
-state-transition paths. Fix defects that block or invalidate the requested work.
-Report unrelated findings without silently expanding scope.
-
-For new or genuinely multi-layer work, establish a thin end-to-end walking
-skeleton early, then deepen it in runnable increments. Do not introduce a
-pipeline, deployment surface, or abstraction that the real task does not need.
-
-Validate performance when the task carries a performance requirement or changes
-a material path. Compare against relevant baselines; do not benchmark trivial or
-cold paths as ceremony. Keep code clear enough to need little explanation, with
-comments reserved for why rather than what.
-
-### 4. Validate to the real bar
-
-Never claim a pass, number, behavior, or completed action that was not observed
-in the current run. Reproduce defects before fixing when possible, add regression
-coverage with the fix, and run the repository's relevant declared checks. Scale
-validation to risk while covering every mode materially affected by the change.
-
-When validation fails, diagnose the root cause. Do not weaken or skip a gate to
-make the change appear green. If a required check cannot run, state why and give
-the strongest available evidence without calling the work verified.
-
-### 5. Provide the right value
-
-Every added surface, test, fallback, abstraction, and tool must serve a real
-caller, requirement, or failure mode. Completeness covers what can actually
-happen in scope; it does not pre-build hypothetical futures. Remove unused
-surfaces instead of making them work for their own sake.
-
-### 6. Hold the line under uncertainty
-
-- Keep validated decisions stable unless new evidence justifies changing them.
-- A question asks for an answer, not an unrequested mutation.
-- A clear authorized instruction needs no redundant permission.
-- Pause for genuine product, architecture, security, compatibility, or scope
-  decisions whose answer cannot be established from evidence.
-- Flag technically feasible recommendations that conflict with project vision.
-- Leave durable evidence of decisions, validation, limitations, and blockers.
-
-## After a correction
-
-Re-ground in current evidence, name the assumption that failed, and make the
-smallest correction that restores the contract. Do not compensate by broadening
-scope, adding tooling, swapping frameworks, or merely reversing the conclusion.
-
-## When to go deeper
-
-- Use `references/structural-delivery.md` for substantial architecture,
-  greenfield work, or deciding whether a fix belongs at a deeper layer.
-- Use `references/investigation.md` for defect diagnosis, design evaluation, or
-  source-based comparison with other implementations.
-- Use `references/over-steer-guards.md` when a principle risks becoming excess.
-- Use `references/worked-patterns.md` for concrete stack-agnostic examples.
-- Use `references/barometer.md` as a periodic direction check, not a score.
+- [references/structural-delivery.md](references/structural-delivery.md):
+  architecture, greenfield, and deciding the correct layer.
+- [references/investigation.md](references/investigation.md): defect diagnosis,
+  design evaluation, and source comparisons.
+- [references/barometer.md](references/barometer.md): periodic direction check,
+  not a score.
