@@ -25,6 +25,9 @@ type
     FHasPendingAllocation: Boolean;
     FPendingByteLength: Double;
     FPendingMaxByteLength: Double;
+    FChargedBytes: Int64;
+    procedure SetData(const AData: TBytes);
+    procedure SetDataLength(const ALength: Integer);
 
     function GetByteLength: Integer;
 
@@ -33,6 +36,7 @@ type
     constructor Create(const AByteLength: Integer = 0); overload;
     constructor Create(const AByteLength: Integer; const AMaxByteLength: Integer); overload;
     constructor Create(const AClass: TGocciaClassValue); overload;
+    destructor Destroy; override;
 
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
@@ -47,7 +51,7 @@ type
     class function GetSharedPrototypeForRealm(
       const ARealm: TGocciaRealm): TGocciaObjectValue; static;
 
-    property Data: TBytes read FData write FData;
+    property Data: TBytes read FData write SetData;
     property MaxByteLength: Integer read FMaxByteLength;
   published
     property ByteLength: Integer read GetByteLength;
@@ -68,6 +72,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -183,6 +188,52 @@ begin
   Result := Length(FData);
 end;
 
+procedure TGocciaSharedArrayBufferValue.SetData(const AData: TBytes);
+var
+  GC: TGarbageCollector;
+  Delta: Int64;
+begin
+  Delta := Length(AData) - FChargedBytes;
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and (Delta > 0) then
+  begin
+    GC.CollectForMemoryPressure(Self);
+    if not GC.TryReserveExternalBytes(Delta) then
+      ThrowRangeError(SErrorMemoryLimitExceeded,
+        SSuggestMemoryLimitExceeded);
+  end;
+  if Assigned(GC) and (Delta < 0) then
+    GC.ReleaseExternalBytes(-Delta);
+  FData := AData;
+  FChargedBytes := Length(AData);
+end;
+
+procedure TGocciaSharedArrayBufferValue.SetDataLength(const ALength: Integer);
+var
+  Delta: Int64;
+  GC: TGarbageCollector;
+begin
+  Delta := ALength - FChargedBytes;
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and (Delta > 0) then
+  begin
+    GC.CollectForMemoryPressure(Self);
+    if not GC.TryReserveExternalBytes(Delta) then
+      ThrowRangeError(SErrorMemoryLimitExceeded,
+        SSuggestMemoryLimitExceeded);
+  end;
+  try
+    SetLength(FData, ALength);
+  except
+    if Assigned(GC) and (Delta > 0) then
+      GC.ReleaseExternalBytes(Delta);
+    raise;
+  end;
+  if Assigned(GC) and (Delta < 0) then
+    GC.ReleaseExternalBytes(-Delta);
+  FChargedBytes := ALength;
+end;
+
 constructor TGocciaSharedArrayBufferValue.Create(const AByteLength: Integer);
 var
   Shared: TGocciaSharedPrototype;
@@ -192,9 +243,8 @@ begin
   FHasPendingAllocation := False;
   FPendingByteLength := 0;
   FPendingMaxByteLength := NO_MAX_BYTE_LENGTH;
-  SetLength(FData, AByteLength);
-  if AByteLength > 0 then
-    FillChar(FData[0], AByteLength, 0);
+  FChargedBytes := 0;
+  SetDataLength(AByteLength);
   InitializePrototype;
   Shared := GetSharedArrayBufferShared;
   if Assigned(Shared) then
@@ -217,9 +267,8 @@ begin
   end
   else
     FMaxByteLength := NO_MAX_BYTE_LENGTH;
-  SetLength(FData, AByteLength);
-  if AByteLength > 0 then
-    FillChar(FData[0], AByteLength, 0);
+  FChargedBytes := 0;
+  SetDataLength(AByteLength);
   InitializePrototype;
   Shared := GetSharedArrayBufferShared;
   if Assigned(Shared) then
@@ -235,7 +284,8 @@ begin
   FHasPendingAllocation := False;
   FPendingByteLength := 0;
   FPendingMaxByteLength := NO_MAX_BYTE_LENGTH;
-  SetLength(FData, 0);
+  FChargedBytes := 0;
+  SetDataLength(0);
   InitializePrototype;
   Shared := GetSharedArrayBufferShared;
   if not Assigned(AClass) and Assigned(Shared) then
@@ -355,15 +405,24 @@ begin
   else
     FMaxByteLength := NO_MAX_BYTE_LENGTH;
 
-  SetLength(FData, Len);
-  if Len > 0 then
-    FillChar(FData[0], Len, 0);
+  SetDataLength(Len);
   FHasPendingAllocation := False;
 end;
 
 procedure TGocciaSharedArrayBufferValue.MarkReferences;
 begin
   if GCMarked then Exit;
+  inherited;
+end;
+
+destructor TGocciaSharedArrayBufferValue.Destroy;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and (FChargedBytes > 0) then
+    GC.ReleaseExternalBytes(FChargedBytes);
+  FChargedBytes := 0;
   inherited;
 end;
 
@@ -454,9 +513,7 @@ end;
 function TGocciaSharedArrayBufferValue.SharedArrayBufferGrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Buf: TGocciaSharedArrayBufferValue;
-  CopyLength: Integer;
   NewByteLength: Integer;
-  NewData: TBytes;
   OldByteLength: Integer;
 begin
   if not (AThisValue is TGocciaSharedArrayBufferValue) then
@@ -480,13 +537,7 @@ begin
   if NewByteLength > Buf.FMaxByteLength then
     ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
 
-  CopyLength := Min(OldByteLength, NewByteLength);
-  SetLength(NewData, NewByteLength);
-  if NewByteLength > 0 then
-    FillChar(NewData[0], NewByteLength, 0);
-  if CopyLength > 0 then
-    Move(Buf.FData[0], NewData[0], CopyLength);
-  Buf.FData := NewData;
+  Buf.SetDataLength(NewByteLength);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 

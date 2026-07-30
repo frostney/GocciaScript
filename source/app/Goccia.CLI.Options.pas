@@ -37,6 +37,7 @@ type
     FStackSize: TIntegerOption;
     FStrictTypes: TFlagOption;
     FAllowedHosts: TRepeatableOption;
+    FNoHostFilesystem: TFlagOption;
     FInspectDepth: TIntegerOption;
     FModule: TRepeatableOption;
     FModules: TRepeatableOption;
@@ -63,6 +64,7 @@ type
     property StackSize: TIntegerOption read FStackSize;
     property StrictTypes: TFlagOption read FStrictTypes;
     property AllowedHosts: TRepeatableOption read FAllowedHosts;
+    property NoHostFilesystem: TFlagOption read FNoHostFilesystem;
     property InspectDepth: TIntegerOption read FInspectDepth;
     property ModuleDefinitions: TRepeatableOption read FModule;
     property ModuleManifests: TRepeatableOption read FModules;
@@ -116,7 +118,7 @@ function TryApplyCompatibilityFlagArg(const AArg: string;
 implementation
 
 const
-  ENGINE_FIXED_OPTION_COUNT = 18;
+  ENGINE_FIXED_OPTION_COUNT = 19;
 
   SOURCE_COMPATIBILITY_FLAGS: array[TGocciaCompatibility]
     of TGocciaCompatibilityFlagDescriptor = (
@@ -231,6 +233,8 @@ begin
   FAllowedHosts := TRepeatableOption.Create('allowed-host',
     'Hostname allowed for fetch requests (repeatable)', 'Engine');
   FAllowedHosts.ConfigName := 'allowed-hosts';
+  FNoHostFilesystem := TFlagOption.Create('no-host-filesystem',
+    'Disable ambient host-filesystem module loading', 'Runtime');
   FInspectDepth := TIntegerOption.Create('inspect-depth',
     'Maximum object inspection depth for console output (default: 5)', 'Engine');
   FModule := TRepeatableOption.Create('module',
@@ -260,6 +264,7 @@ begin
   FStackSize.Free;
   FStrictTypes.Free;
   FAllowedHosts.Free;
+  FNoHostFilesystem.Free;
   FInspectDepth.Free;
   FModule.Free;
   FModules.Free;
@@ -307,6 +312,8 @@ begin
   Result[Index] := FStrictTypes;
   Inc(Index);
   Result[Index] := FAllowedHosts;
+  Inc(Index);
+  Result[Index] := FNoHostFilesystem;
   Inc(Index);
   Result[Index] := FInspectDepth;
   Inc(Index);

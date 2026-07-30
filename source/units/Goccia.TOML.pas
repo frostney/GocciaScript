@@ -152,7 +152,9 @@ implementation
 uses
   Math,
 
-  NumericText;
+  NumericText,
+
+  Goccia.NativeLimits;
 
 function IsSpaceOrTab(const AChar: Char): Boolean;
 begin
@@ -1184,38 +1186,45 @@ function TGocciaTOMLParser.ParseArray: TGocciaTOMLNode;
 var
   ElementNode: TGocciaTOMLNode;
 begin
-  Result := TGocciaTOMLNode.CreateArray(TGocciaArrayValue.Create);
-  Advance;
-  SkipWhitespace(True);
-  if CurrentChar = ']' then
-  begin
+  EnterNativeDataDepth('TOML parsing');
+  try
+    CheckNativeWork;
+    Result := TGocciaTOMLNode.CreateArray(TGocciaArrayValue.Create);
     Advance;
-    Exit;
-  end;
-
-  while True do
-  begin
-    ElementNode := ParseValue(',]');
-    Result.Items.Add(ElementNode);
-    Result.ArrayValue.Elements.Add(ElementNode.Value);
     SkipWhitespace(True);
-    if CurrentChar = ',' then
-    begin
-      Advance;
-      SkipWhitespace(True);
-      if CurrentChar = ']' then
-      begin
-        Advance;
-        Exit;
-      end;
-      Continue;
-    end;
     if CurrentChar = ']' then
     begin
       Advance;
       Exit;
     end;
-    RaiseParseError('Expected "," or "]" after TOML array element.');
+
+    while True do
+    begin
+      CheckNativeWork;
+      ElementNode := ParseValue(',]');
+      Result.Items.Add(ElementNode);
+      Result.ArrayValue.Elements.Add(ElementNode.Value);
+      SkipWhitespace(True);
+      if CurrentChar = ',' then
+      begin
+        Advance;
+        SkipWhitespace(True);
+        if CurrentChar = ']' then
+        begin
+          Advance;
+          Exit;
+        end;
+        Continue;
+      end;
+      if CurrentChar = ']' then
+      begin
+        Advance;
+        Exit;
+      end;
+      RaiseParseError('Expected "," or "]" after TOML array element.');
+    end;
+  finally
+    LeaveNativeDataDepth;
   end;
 end;
 
@@ -1224,45 +1233,52 @@ var
   InlineNode, ValueNode: TGocciaTOMLNode;
   KeyPath: TArray<string>;
 begin
-  InlineNode := TGocciaTOMLNode.CreateTable(TGocciaObjectValue.Create, False, False,
-    True, False);
-  Advance;
-  SkipWhitespace(True);
-  if CurrentChar = '}' then
-  begin
-    Advance;
-    Exit(InlineNode);
-  end;
-
-  while True do
-  begin
-    KeyPath := ParseKeyPath;
-    SkipWhitespace(True);
-    if CurrentChar <> '=' then
-      RaiseParseError('Expected "=" inside inline table.');
+  EnterNativeDataDepth('TOML parsing');
+  try
+    CheckNativeWork;
+    InlineNode := TGocciaTOMLNode.CreateTable(TGocciaObjectValue.Create, False, False,
+      True, False);
     Advance;
     SkipWhitespace(True);
-    ValueNode := ParseValue(',}');
-    AssignValue(InlineNode, KeyPath, ValueNode.Value, ValueNode, True);
-
-    SkipWhitespace(True);
-    if CurrentChar = ',' then
-    begin
-      Advance;
-      SkipWhitespace(True);
-      if CurrentChar = '}' then
-      begin
-        Advance;
-        Exit(InlineNode);
-      end;
-      Continue;
-    end;
     if CurrentChar = '}' then
     begin
       Advance;
       Exit(InlineNode);
     end;
-    RaiseParseError('Expected "," or "}" after inline table entry.');
+
+    while True do
+    begin
+      CheckNativeWork;
+      KeyPath := ParseKeyPath;
+      SkipWhitespace(True);
+      if CurrentChar <> '=' then
+        RaiseParseError('Expected "=" inside inline table.');
+      Advance;
+      SkipWhitespace(True);
+      ValueNode := ParseValue(',}');
+      AssignValue(InlineNode, KeyPath, ValueNode.Value, ValueNode, True);
+
+      SkipWhitespace(True);
+      if CurrentChar = ',' then
+      begin
+        Advance;
+        SkipWhitespace(True);
+        if CurrentChar = '}' then
+        begin
+          Advance;
+          Exit(InlineNode);
+        end;
+        Continue;
+      end;
+      if CurrentChar = '}' then
+      begin
+        Advance;
+        Exit(InlineNode);
+      end;
+      RaiseParseError('Expected "," or "}" after inline table entry.');
+    end;
+  finally
+    LeaveNativeDataDepth;
   end;
 end;
 

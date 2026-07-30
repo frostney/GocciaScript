@@ -111,6 +111,17 @@ export function isFlagSupported(
   return features[kind].includes(name);
 }
 
+/** Public execute/test endpoints accept attacker-controlled source, so a
+ * vendored engine is selectable only when both binaries advertise the
+ * fail-closed host-filesystem capability. Missing probe data is unsafe here:
+ * it cannot prove that the boundary exists. */
+export function isPublicExecutionSafe(entry: VendorEntry): boolean {
+  return (
+    entry.features?.loader.includes("--no-host-filesystem") === true &&
+    entry.features.testRunner.includes("--no-host-filesystem")
+  );
+}
+
 /** The ASI flag the API actually sends for a binary, or `null` when it sends
  *  none. The flag was renamed `--asi` -> `--compat-asi` after 0.7.x (aligning it
  *  with the other `--compat-*` flags): vendored 0.7.x binaries advertise
@@ -153,5 +164,16 @@ export function findVersion(
 /** The tag list rendered in the playground's version dropdown.
  *  Preserves the manifest's order (newest stable first, `nightly` last). */
 export function listPlaygroundVersions(manifest: VendorManifest): string[] {
-  return manifest.versions.map((entry) => entry.tag);
+  return manifest.versions
+    .filter(isPublicExecutionSafe)
+    .map((entry) => entry.tag);
+}
+
+export function resolvePublicDefaultVersion(manifest: VendorManifest): string {
+  const configured = findVersion(manifest, manifest.defaultVersion);
+  if (configured && isPublicExecutionSafe(configured)) return configured.tag;
+  return (
+    manifest.versions.find(isPublicExecutionSafe)?.tag ??
+    manifest.defaultVersion
+  );
 }

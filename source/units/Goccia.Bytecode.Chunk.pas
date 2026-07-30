@@ -793,6 +793,9 @@ end;
 function TGocciaFunctionTemplate.GetConstantUnchecked(
   const AIndex: Integer): TGocciaBytecodeConstant;
 begin
+  if (AIndex < 0) or (AIndex >= FConstantCount) then
+    raise ERangeError.CreateFmt('Bytecode constant index %d out of range 0..%d',
+      [AIndex, FConstantCount - 1]);
   Result := FConstants[AIndex];
 end;
 
@@ -810,12 +813,19 @@ end;
 function TGocciaFunctionTemplate.GetFunctionUnchecked(
   const AIndex: Integer): TGocciaFunctionTemplate;
 begin
+  if (AIndex < 0) or (AIndex >= FFunctions.Count) then
+    raise ERangeError.CreateFmt('Bytecode function index %d out of range 0..%d',
+      [AIndex, FFunctions.Count - 1]);
   Result := FFunctions[AIndex];
 end;
 
 function TGocciaFunctionTemplate.GetInstructionUnchecked(
   const AIndex: Integer): UInt32;
 begin
+  if (AIndex < 0) or (AIndex >= FCodeCount) then
+    raise ERangeError.CreateFmt(
+      'Bytecode instruction index %d out of range 0..%d',
+      [AIndex, FCodeCount - 1]);
   Result := FCode[AIndex];
 end;
 

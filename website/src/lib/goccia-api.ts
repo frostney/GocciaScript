@@ -26,7 +26,9 @@ import {
 import {
   findVersion,
   isFlagSupported,
+  isPublicExecutionSafe,
   resolveAsiFlag,
+  resolvePublicDefaultVersion,
   type VendorFeatureSet,
 } from "@/lib/vendor-manifest";
 import { getVendorManifest } from "@/lib/vendor-manifest-server";
@@ -90,7 +92,8 @@ type TransportError = {
     | "CODE_TOO_LARGE"
     | "SPAWN_FAILED"
     | "ABORTED"
-    | "UNKNOWN_VERSION";
+    | "UNKNOWN_VERSION"
+    | "UNSAFE_ENGINE";
 };
 
 type TimingJson = {
@@ -211,6 +214,15 @@ function resolveBinaryPath(
   const manifest = getVendorManifest();
   const entry = findVersion(manifest, requestedVersion);
   if (entry) {
+    if (!isPublicExecutionSafe(entry)) {
+      return {
+        ok: false,
+        error: {
+          message: `version ${entry.tag} cannot safely run untrusted modules`,
+          code: "UNSAFE_ENGINE",
+        },
+      };
+    }
     const rel =
       config.kind === "execute"
         ? entry.binaries.loader
@@ -277,7 +289,7 @@ function buildEngineArgs(
   features: VendorFeatureSet | undefined,
   kind: "loader" | "testRunner",
 ): string[] {
-  const args: string[] = [];
+  const args: string[] = ["--no-host-filesystem"];
   const accept = (arg: string) => {
     if (isFlagSupported(features, arg, kind)) args.push(arg);
   };
@@ -784,7 +796,9 @@ async function runHandler(
   }
 
   const { asi, compatVar, compatFunction } = body;
-  const requestedVersion = body.version ?? getVendorManifest().defaultVersion;
+  const manifest = getVendorManifest();
+  const requestedVersion =
+    body.version ?? resolvePublicDefaultVersion(manifest);
   const resolved = resolveBinaryPath(config, requestedVersion);
   if (!resolved.ok) {
     captureServerEvent(`${config.eventPrefix}_unknown_version`, {

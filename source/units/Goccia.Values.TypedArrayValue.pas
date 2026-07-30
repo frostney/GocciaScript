@@ -197,6 +197,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.NativeLimits,
   Goccia.Scope,
   Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
@@ -1733,12 +1734,20 @@ begin
   if IsBigIntKind(TA.FKind) then
   begin
     for I := First to Final - 1 do
+    begin
+      if (I and $FF) = 0 then
+        CheckNativeWork;
       TA.WriteBigIntElement(I, FillBigInt);
+    end;
   end
   else
   begin
     for I := First to Final - 1 do
+    begin
+      if (I and $FF) = 0 then
+        CheckNativeWork;
       TA.WriteNumberLiteral(I, FillNum);
+    end;
   end;
   Result := AThisValue;
 end;
@@ -2021,6 +2030,13 @@ var
   HasCompare: Boolean;
   AbortSortWriteback: Boolean;
   Comparator: TGocciaValue;
+  ReservedBytes: Int64;
+
+  procedure PollSortWork(const AIndex: Integer);
+  begin
+    if (AIndex and $FF) = 0 then
+      CheckNativeWork;
+  end;
 
   function NumberBits(const AValue: Double): Int64;
   begin
@@ -2141,6 +2157,7 @@ var
         Dest := Integer(Lo);
         while (Left < Mid) and (Right < Hi) do
         begin
+          PollSortWork(Dest);
           if CompareNumbers(NumberValues[Right], NumberValues[Left]) < 0 then
           begin
             NumberScratch[Dest] := NumberValues[Right];
@@ -2157,12 +2174,14 @@ var
         end;
         while Left < Mid do
         begin
+          PollSortWork(Dest);
           NumberScratch[Dest] := NumberValues[Left];
           Inc(Left);
           Inc(Dest);
         end;
         while Right < Hi do
         begin
+          PollSortWork(Dest);
           NumberScratch[Dest] := NumberValues[Right];
           Inc(Right);
           Inc(Dest);
@@ -2170,7 +2189,10 @@ var
         Lo := Lo + 2 * Width;
       end;
       for Dest := 0 to SortLen - 1 do
+      begin
+        PollSortWork(Dest);
         NumberValues[Dest] := NumberScratch[Dest];
+      end;
       Width := Width * 2;
     end;
   end;
@@ -2201,6 +2223,7 @@ var
         Dest := Integer(Lo);
         while (Left < Mid) and (Right < Hi) do
         begin
+          PollSortWork(Dest);
           if CompareBigInts(BigIntValues[Right], BigIntValues[Left]) < 0 then
           begin
             BigIntScratch[Dest] := BigIntValues[Right];
@@ -2217,12 +2240,14 @@ var
         end;
         while Left < Mid do
         begin
+          PollSortWork(Dest);
           BigIntScratch[Dest] := BigIntValues[Left];
           Inc(Left);
           Inc(Dest);
         end;
         while Right < Hi do
         begin
+          PollSortWork(Dest);
           BigIntScratch[Dest] := BigIntValues[Right];
           Inc(Right);
           Inc(Dest);
@@ -2230,12 +2255,16 @@ var
         Lo := Lo + 2 * Width;
       end;
       for Dest := 0 to SortLen - 1 do
+      begin
+        PollSortWork(Dest);
         BigIntValues[Dest] := BigIntScratch[Dest];
+      end;
       Width := Width * 2;
     end;
   end;
 
 begin
+  ReservedBytes := 0;
   Comparator := TGocciaUndefinedLiteralValue.UndefinedValue;
   HasCompare := False;
   AbortSortWriteback := False;
@@ -2253,34 +2282,52 @@ begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.sort');
   EnsureTypedArrayWritable(TA, 'TypedArray.prototype.sort');
   SortLen := TA.Length;
+  ReservedBytes := CheckedNativeByteSize(SortLen, 2 * SizeOf(Int64));
+  ReserveNativeBytes(ReservedBytes);
+  try
 
   // BigInt sort path
   if IsBigIntKind(TA.FKind) then
   begin
     SetLength(BigIntValues, SortLen);
     for I := 0 to SortLen - 1 do
+    begin
+      PollSortWork(I);
       BigIntValues[I] := TA.ReadBigIntElement(I);
+    end;
 
     MergeSortBigInts;
     if AbortSortWriteback then
       Exit(AThisValue);
 
     for I := 0 to SortLen - 1 do
+    begin
+      PollSortWork(I);
       TA.WriteBigIntElement(I, BigIntValues[I]);
+    end;
     Exit(AThisValue);
   end;
 
   SetLength(NumberValues, SortLen);
   for I := 0 to SortLen - 1 do
+  begin
+    PollSortWork(I);
     NumberValues[I] := TA.ReadElement(I);
+  end;
 
   MergeSortNumbers;
   if AbortSortWriteback then
     Exit(AThisValue);
 
   for I := 0 to SortLen - 1 do
+  begin
+    PollSortWork(I);
     TA.WriteElement(I, NumberValues[I]);
+  end;
   Result := AThisValue;
+  finally
+    ReleaseNativeBytes(ReservedBytes);
+  end;
 end;
 
 // ES2026 §23.2.3.16 %TypedArray%.prototype.indexOf(searchElement [, fromIndex])

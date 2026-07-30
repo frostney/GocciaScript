@@ -122,6 +122,7 @@ type
     FStrictModeActive: Boolean;
     FStrictModeSourceActive: Boolean;
     FAllowInExpression: Boolean;
+    FParenthesizedExpressionDepth: Integer;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure AddUnsupportedFeatureWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
@@ -2863,19 +2864,32 @@ begin
     gttLeftParen:
       begin
         Advance;
-        // Check for arrow function by looking for pattern: () => or (id) => or (id, id) =>
-        if IsArrowFunction() then
-          Result := ArrowFunction
-        else
+        Inc(FParenthesizedExpressionDepth);
+        if FParenthesizedExpressionDepth > 256 then
         begin
-          Expr := ExpressionAllowIn;
-          Consume(gttRightParen, 'Expected ")" after expression',
+          Dec(FParenthesizedExpressionDepth);
+          raise TGocciaSyntaxError.Create(
+            'Parenthesized expression nesting exceeds the supported limit',
+            Peek.Line, Peek.Column, FFileName, FSourceLines,
             SSuggestCloseParenExpression);
-          Expr.Parenthesized := True;
-          if ExpressionContainsOptionalChain(Expr) then
-            Result := WrapOptionalChainParentheses(Expr)
+        end;
+        try
+          // Check for arrow function by looking for pattern: () => or (id) => or (id, id) =>
+          if IsArrowFunction() then
+            Result := ArrowFunction
           else
-            Result := Expr;
+          begin
+            Expr := ExpressionAllowIn;
+            Consume(gttRightParen, 'Expected ")" after expression',
+              SSuggestCloseParenExpression);
+            Expr.Parenthesized := True;
+            if ExpressionContainsOptionalChain(Expr) then
+              Result := WrapOptionalChainParentheses(Expr)
+            else
+              Result := Expr;
+          end;
+        finally
+          Dec(FParenthesizedExpressionDepth);
         end;
       end;
     gttFunction:

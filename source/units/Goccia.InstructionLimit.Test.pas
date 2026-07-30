@@ -12,6 +12,7 @@ type
   TInstructionLimitTests = class(TTestSuite)
   private
     procedure TestCapturedStateTracksLiveBudget;
+    procedure TestNestedScopePreservesBaseBudget;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -35,6 +36,8 @@ procedure TInstructionLimitTests.SetupTests;
 begin
   Test('Captured state tracks the live thread budget',
     TestCapturedStateTracksLiveBudget);
+  Test('Nested scope preserves the base thread budget',
+    TestNestedScopePreservesBaseBudget);
 end;
 
 procedure TInstructionLimitTests.TestCapturedStateTracksLiveBudget;
@@ -64,6 +67,32 @@ begin
   // Clearing after capture must disable the same handle immediately.
   ClearInstructionLimit;
   PollInstructionLimit(State);
+end;
+
+procedure TInstructionLimitTests.TestNestedScopePreservesBaseBudget;
+var
+  RaisedExpected: Boolean;
+begin
+  StartInstructionLimit(3);
+  IncrementInstructionCounter;
+  CheckInstructionLimit;
+
+  PushInstructionLimitScope(10);
+  try
+    IncrementInstructionCounter;
+    CheckInstructionLimit;
+    IncrementInstructionCounter;
+    RaisedExpected := False;
+    try
+      CheckInstructionLimit;
+    except
+      on TGocciaInstructionLimitError do
+        RaisedExpected := True;
+    end;
+    Expect<Boolean>(RaisedExpected).ToBe(True);
+  finally
+    PopInstructionLimitScope;
+  end;
 end;
 
 begin

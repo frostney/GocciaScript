@@ -31,6 +31,9 @@ type
   TGocciaBytecodeReader = class
   private
     FStream: TStream;
+    FFunctionDepth: Integer;
+    procedure RequireRemaining(const AByteCount: Int64;
+      const AContext: string);
     function ReadUInt8: UInt8;
     function ReadUInt16: UInt16;
     function ReadUInt32: UInt32;
@@ -58,6 +61,181 @@ uses
 
   Goccia.Bytecode,
   Goccia.Bytecode.Debug;
+
+const
+  MAX_BYTECODE_FILE_BYTES = 64 * 1024 * 1024;
+  MAX_BYTECODE_FUNCTION_DEPTH = 256;
+
+procedure RejectInvalidBytecode(const ATemplate: TGocciaFunctionTemplate;
+  const APC: Integer; const AReason: string);
+begin
+  raise Exception.CreateFmt('Invalid bytecode in function "%s" at PC %d: %s',
+    [ATemplate.Name, APC, AReason]);
+end;
+
+procedure VerifyFunctionTemplate(const ATemplate: TGocciaFunctionTemplate;
+  const ADepth: Integer);
+var
+  A, B, C: UInt16;
+  Handler: TGocciaExceptionHandler;
+  I, PC: Integer;
+  Instruction, Prefix: UInt32;
+  JumpTarget: Int64;
+  Op: UInt8;
+
+  procedure RequireConstant(const AIndex: Integer);
+  begin
+    if (AIndex < 0) or (AIndex >= ATemplate.ConstantCount) then
+      RejectInvalidBytecode(ATemplate, PC, Format(
+        'constant index %d is outside 0..%d',
+        [AIndex, ATemplate.ConstantCount - 1]));
+  end;
+
+  procedure RequireJumpTarget(const ATarget: Int64);
+  begin
+    if (ATarget < 0) or (ATarget > ATemplate.CodeCount) then
+      RejectInvalidBytecode(ATemplate, PC, Format(
+        'jump target %d is outside 0..%d',
+        [ATarget, ATemplate.CodeCount]));
+  end;
+
+begin
+  if ADepth > MAX_BYTECODE_FUNCTION_DEPTH then
+    raise Exception.Create('Goccia bytecode function nesting limit exceeded');
+  if not Assigned(ATemplate) then
+    raise Exception.Create('Invalid bytecode: missing function template');
+
+  PC := 0;
+  while PC < ATemplate.CodeCount do
+  begin
+    Instruction := ATemplate.GetInstruction(PC);
+    Prefix := 0;
+    Op := DecodeOp(Instruction);
+    if Op = Ord(OP_WIDE) then
+    begin
+      Prefix := Instruction;
+      Inc(PC);
+      if PC >= ATemplate.CodeCount then
+        RejectInvalidBytecode(ATemplate, PC - 1, 'truncated OP_WIDE prefix');
+      Instruction := ATemplate.GetInstruction(PC);
+      Op := DecodeOp(Instruction);
+      if Op = Ord(OP_WIDE) then
+        RejectInvalidBytecode(ATemplate, PC, 'nested OP_WIDE prefix');
+    end;
+
+    if Op > Ord(High(TGocciaOpCode)) then
+      RejectInvalidBytecode(ATemplate, PC, Format('unknown opcode %d', [Op]));
+
+    A := DecodeA(Instruction);
+    B := DecodeB(Instruction);
+    C := DecodeC(Instruction);
+    if Prefix <> 0 then
+    begin
+      A := A or (UInt16(DecodeA(Prefix)) shl 8);
+      B := B or (UInt16(DecodeB(Prefix)) shl 8);
+      C := C or (UInt16(DecodeC(Prefix)) shl 8);
+    end;
+
+    // A is the destination or primary source register for executable
+    // instructions. Structural opcodes encode no register in A.
+    if not (TGocciaOpCode(Op) in
+      [OP_NOP, OP_LINE, OP_JUMP, OP_POP_HANDLER, OP_WIDE]) and
+       (A >= ATemplate.MaxRegisters) then
+      RejectInvalidBytecode(ATemplate, PC, Format(
+        'register %d is outside MaxRegisters %d',
+        [A, ATemplate.MaxRegisters]));
+    // Non-wide B/C operands are physically bounded by the VM's 256-slot
+    // defensive register window. A non-zero wide prefix can name an arbitrary
+    // UInt16 slot, so reject a prefixed operand that escapes MaxRegisters.
+    // Constant/immediate Bx forms do not use the B/C wide-prefix bytes.
+    if (Prefix <> 0) and (DecodeB(Prefix) <> 0) and
+       (B >= ATemplate.MaxRegisters) then
+      RejectInvalidBytecode(ATemplate, PC, Format(
+        'register %d is outside MaxRegisters %d',
+        [B, ATemplate.MaxRegisters]));
+    if (Prefix <> 0) and (DecodeC(Prefix) <> 0) and
+       (C >= ATemplate.MaxRegisters) then
+      RejectInvalidBytecode(ATemplate, PC, Format(
+        'register %d is outside MaxRegisters %d',
+        [C, ATemplate.MaxRegisters]));
+
+    case TGocciaOpCode(Op) of
+      OP_LOAD_CONST, OP_LOAD_REGEXP, OP_SET_GLOBAL_STATIC, OP_NEW_CLASS,
+      OP_SET_CLASS_SOURCE_CONST, OP_DELETE_PROP_CONST,
+      OP_DELETE_PROP_CONST_LOOSE, OP_GET_GLOBAL, OP_SET_GLOBAL,
+      OP_SET_GLOBAL_LOOSE, OP_HAS_GLOBAL, OP_DELETE_GLOBAL, OP_IMPORT,
+      OP_IMPORT_DEFER, OP_IMPORT_SOURCE, OP_GET_IMPORT_BINDING, OP_EXPORT,
+      OP_THROW_TYPE_ERROR_CONST_LONG, OP_DEFINE_GLOBAL_VAR_DECL_LONG,
+      OP_DEFINE_GLOBAL_VAR_LONG, OP_DEFINE_GLOBAL_LET_LONG,
+      OP_DEFINE_GLOBAL_CONST_LONG, OP_DEFINE_GLOBAL_FUNCTION_LONG,
+      OP_PREDECLARE_GLOBAL_LET_LONG, OP_PREDECLARE_GLOBAL_CONST_LONG:
+        RequireConstant(DecodeBx(Instruction));
+
+      OP_CLASS_ADD_METHOD_CONST, OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
+      OP_SET_PROP_CONST, OP_SET_PROP_CONST_LOOSE,
+      OP_DEFINE_STATIC_PROP_CONST, OP_DEFINE_STATIC_METHOD_CONST:
+        RequireConstant(B);
+
+      OP_GET_PROP_CONST, OP_SETUP_AUTO_ACCESSOR_CONST,
+      OP_SETUP_AUTO_ACCESSOR_DYNAMIC, OP_APPLY_ELEMENT_DECORATOR_CONST,
+      OP_DEFINE_ACCESSOR_CONST, OP_THROW_TYPE_ERROR_CONST, OP_FINALIZE_ENUM,
+      OP_SUPER_GET_CONST:
+        RequireConstant(C);
+
+      OP_CLOSURE:
+        if DecodeBx(Instruction) >= ATemplate.FunctionCount then
+          RejectInvalidBytecode(ATemplate, PC, Format(
+            'function index %d is outside 0..%d',
+            [DecodeBx(Instruction), ATemplate.FunctionCount - 1]));
+
+      OP_JUMP:
+        begin
+          JumpTarget := Int64(PC) + 1 + DecodeAx(Instruction);
+          RequireJumpTarget(JumpTarget);
+        end;
+      OP_JUMP_IF_TRUE, OP_JUMP_IF_FALSE:
+        begin
+          JumpTarget := Int64(PC) + 1 + DecodesBx(Instruction);
+          RequireJumpTarget(JumpTarget);
+        end;
+      OP_JUMP_IF_NUM_NOT_LTE_IMM:
+        begin
+          JumpTarget := Int64(PC) + 1 + Int16(C);
+          RequireJumpTarget(JumpTarget);
+        end;
+      OP_JUMP_IF_NULLISH, OP_JUMP_IF_NOT_NULLISH:
+        begin
+          JumpTarget := Int64(PC) + 1 + C;
+          RequireJumpTarget(JumpTarget);
+        end;
+      OP_PUSH_HANDLER, OP_PUSH_FINALLY_HANDLER:
+        begin
+          JumpTarget := Int64(PC) + 1 + DecodeBx(Instruction);
+          RequireJumpTarget(JumpTarget);
+        end;
+    end;
+    Inc(PC);
+  end;
+
+  for I := 0 to ATemplate.ExceptionHandlerCount - 1 do
+  begin
+    Handler := ATemplate.GetExceptionHandler(I);
+    if (Handler.TryStart > Handler.TryEnd) or
+       (Handler.TryEnd > UInt32(ATemplate.CodeCount)) then
+      RejectInvalidBytecode(ATemplate, 0, 'invalid exception-handler range');
+    if (Handler.CatchTarget <> High(UInt32)) and
+       (Handler.CatchTarget > UInt32(ATemplate.CodeCount)) then
+      RejectInvalidBytecode(ATemplate, 0, 'invalid exception catch target');
+    if (Handler.FinallyTarget <> High(UInt32)) and
+       (Handler.FinallyTarget > UInt32(ATemplate.CodeCount)) then
+      RejectInvalidBytecode(ATemplate, 0, 'invalid exception finally target');
+    if Handler.CatchRegister >= ATemplate.MaxRegisters then
+      RejectInvalidBytecode(ATemplate, 0, 'invalid exception catch register');
+  end;
+
+  for I := 0 to ATemplate.FunctionCount - 1 do
+    VerifyFunctionTemplate(ATemplate.GetFunction(I), ADepth + 1);
+end;
 
 constructor TGocciaBytecodeWriter.Create(const AStream: TStream);
 begin
@@ -312,7 +490,22 @@ end;
 constructor TGocciaBytecodeReader.Create(const AStream: TStream);
 begin
   inherited Create;
+  if not Assigned(AStream) then
+    raise Exception.Create('Bytecode stream is required');
+  if AStream.Size > MAX_BYTECODE_FILE_BYTES then
+    raise Exception.CreateFmt(
+      'Goccia bytecode file exceeds the %d byte limit',
+      [MAX_BYTECODE_FILE_BYTES]);
   FStream := AStream;
+  FFunctionDepth := 0;
+end;
+
+procedure TGocciaBytecodeReader.RequireRemaining(const AByteCount: Int64;
+  const AContext: string);
+begin
+  if (AByteCount < 0) or (FStream.Position < 0) or
+     (AByteCount > FStream.Size - FStream.Position) then
+    raise Exception.CreateFmt('Truncated Goccia bytecode %s', [AContext]);
 end;
 
 function TGocciaBytecodeReader.ReadUInt8: UInt8;
@@ -371,6 +564,9 @@ begin
   Len := ReadUInt32;
   if Len = 0 then
     Exit('');
+  if Len > UInt32(High(Integer)) then
+    raise Exception.Create('Invalid Goccia bytecode string length');
+  RequireRemaining(Int64(Len) * SizeOf(UInt16), 'string data');
   SetLength(Result, Len);
   for I := 1 to Len do
     Result[I] := Char(ReadUInt16);
@@ -404,6 +600,13 @@ var
   CookedStrings, RawStrings: TGocciaBytecodeStringArray;
   CookedValid: TGocciaBytecodeTemplateCookedValid;
 begin
+  Inc(FFunctionDepth);
+  if FFunctionDepth > MAX_BYTECODE_FUNCTION_DEPTH then
+  begin
+    Dec(FFunctionDepth);
+    raise Exception.Create('Goccia bytecode function nesting limit exceeded');
+  end;
+  try
   Name := ReadString;
   MaxRegs := ReadUInt16;
   ParamCount := ReadUInt16;
@@ -423,13 +626,17 @@ begin
   Result.StrictThis := ReadBoolean;
 
   CodeCount := ReadUInt32;
-  for I := 0 to CodeCount - 1 do
+  RequireRemaining(Int64(CodeCount) * SizeOf(UInt32), 'instruction data');
+  for I := 0 to Integer(CodeCount) - 1 do
     Result.EmitInstruction(ReadUInt32);
 
   ConstCount := ReadUInt16;
   for I := 0 to ConstCount - 1 do
   begin
     ConstKind := ReadUInt8;
+    if ConstKind > Ord(High(TGocciaBytecodeConstantKind)) then
+      raise Exception.CreateFmt('Invalid bytecode constant kind: %d',
+        [ConstKind]);
     case TGocciaBytecodeConstantKind(ConstKind) of
       bckNil:     Result.AddConstantNil;
       bckTrue:    Result.AddConstantBoolean(True);
@@ -480,7 +687,11 @@ begin
     for J := 0 to EvalBindingCount - 1 do
     begin
       EvalBinding.Name := ReadString;
-      EvalBinding.Kind := TGocciaDirectEvalBindingKind(ReadUInt8);
+      ConstKind := ReadUInt8;
+      if ConstKind > Ord(High(TGocciaDirectEvalBindingKind)) then
+        raise Exception.CreateFmt('Invalid direct-eval binding kind: %d',
+          [ConstKind]);
+      EvalBinding.Kind := TGocciaDirectEvalBindingKind(ConstKind);
       EvalBinding.Index := ReadUInt16;
       EvalBinding.IsConst := ReadBoolean;
       EvalBinding.IsVarEnvironmentBinding := ReadBoolean;
@@ -507,11 +718,13 @@ begin
     DebugInfo := TGocciaDebugInfo.Create(SourceFile);
 
     LineMapCount := ReadUInt32;
-    for I := 0 to LineMapCount - 1 do
+    RequireRemaining(Int64(LineMapCount) * 10, 'debug line mappings');
+    for I := 0 to Integer(LineMapCount) - 1 do
       DebugInfo.AddLineMapping(ReadUInt32, ReadUInt32, ReadUInt16);
 
     LocalCount := ReadUInt32;
-    for I := 0 to LocalCount - 1 do
+    RequireRemaining(Int64(LocalCount) * 14, 'debug local mappings');
+    for I := 0 to Integer(LocalCount) - 1 do
       DebugInfo.AddLocal(ReadString, ReadUInt16, ReadUInt32, ReadUInt32);
 
     Result.DebugInfo := DebugInfo;
@@ -519,7 +732,12 @@ begin
 
   LocalTypeCount := ReadUInt16;
   for I := 0 to LocalTypeCount - 1 do
-    Result.SetLocalType(UInt16(I), TGocciaLocalType(ReadUInt8));
+  begin
+    ConstKind := ReadUInt8;
+    if ConstKind > Ord(High(TGocciaLocalType)) then
+      raise Exception.CreateFmt('Invalid local type kind: %d', [ConstKind]);
+    Result.SetLocalType(UInt16(I), TGocciaLocalType(ConstKind));
+  end;
 
   LocalStrictCount := ReadUInt16;
   for I := 0 to LocalStrictCount - 1 do
@@ -533,6 +751,9 @@ begin
   else
     Result.DirectEvalSyntheticArgumentsSlot := I;
   Result.RejectArgumentsInDirectEval := ReadBoolean;
+  finally
+    Dec(FFunctionDepth);
+  end;
 end;
 
 function TGocciaBytecodeReader.ReadModule: TGocciaBytecodeModule;
@@ -583,6 +804,9 @@ begin
     Result.AddExport(ReadString, ReadUInt16);
 
   Result.TopLevel := ReadFunctionTemplate;
+  VerifyFunctionTemplate(Result.TopLevel, 1);
+  if FStream.Position <> FStream.Size then
+    raise Exception.Create('Invalid trailing data in Goccia bytecode file');
 end;
 
 procedure SaveModuleToFile(const AModule: TGocciaBytecodeModule;

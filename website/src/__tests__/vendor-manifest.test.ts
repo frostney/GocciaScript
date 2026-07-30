@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
   findVersion,
   isFlagSupported,
+  isPublicExecutionSafe,
   listPlaygroundVersions,
   resolveAsiFlag,
+  resolvePublicDefaultVersion,
   type VendorFeatureSet,
   type VendorManifest,
 } from "@/lib/vendor-manifest";
@@ -17,6 +19,7 @@ const MODERN_FEATURES: VendorFeatureSet = {
     "--max-instructions",
     "--max-memory",
     "--mode",
+    "--no-host-filesystem",
     "--output",
     "--stack-size",
     "--timeout",
@@ -29,6 +32,7 @@ const MODERN_FEATURES: VendorFeatureSet = {
     "--max-instructions",
     "--max-memory",
     "--mode",
+    "--no-host-filesystem",
     "--no-progress",
     "--no-results",
     "--output",
@@ -193,12 +197,27 @@ describe("isFlagSupported", () => {
   });
 });
 
+describe("public execution safety", () => {
+  test("requires the filesystem-disable capability on both binaries", () => {
+    expect(isPublicExecutionSafe(SAMPLE_MANIFEST.versions[0])).toBe(true);
+    expect(isPublicExecutionSafe(SAMPLE_MANIFEST.versions[1])).toBe(false);
+    expect(isPublicExecutionSafe(SAMPLE_MANIFEST.versions[2])).toBe(false);
+  });
+
+  test("falls forward to the first safe version when the configured default is unsafe", () => {
+    expect(
+      resolvePublicDefaultVersion({
+        ...SAMPLE_MANIFEST,
+        defaultVersion: "0.6.1",
+      }),
+    ).toBe("0.7.0");
+  });
+});
+
 describe("listPlaygroundVersions", () => {
-  test("preserves manifest order — newest stable first, nightly last", () => {
+  test("preserves manifest order while hiding engines without the boundary", () => {
     expect(listPlaygroundVersions(SAMPLE_MANIFEST)).toEqual([
       "0.7.0",
-      "0.6.1",
-      "0.5.1",
       "nightly",
     ]);
   });
@@ -209,7 +228,7 @@ describe("listPlaygroundVersions", () => {
     ).toEqual([]);
   });
 
-  test("includes nightly when it's the only entry", () => {
+  test("hides an unprobed nightly entry", () => {
     expect(
       listPlaygroundVersions({
         defaultVersion: "nightly",
@@ -224,7 +243,7 @@ describe("listPlaygroundVersions", () => {
           },
         ],
       }),
-    ).toEqual(["nightly"]);
+    ).toEqual([]);
   });
 });
 

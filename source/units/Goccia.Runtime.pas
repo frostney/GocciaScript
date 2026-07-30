@@ -62,7 +62,8 @@ type
     function InjectModules(const AFormat: string;
       const AContent: string; const ABaseAddress: string): Boolean;
   public
-    constructor Create(const AEngine: TGocciaEngine);
+    constructor Create(const AEngine: TGocciaEngine;
+      const AEnableHostFileLoading: Boolean = True);
     destructor Destroy; override;
 
     function Install(const AExtension: TGocciaRuntimeExtension):
@@ -136,7 +137,8 @@ type
     property Core: TGocciaRuntimeCore read FCore;
   end;
 
-function AttachRuntime(const AEngine: TGocciaEngine): TGocciaRuntimeCore;
+function AttachRuntime(const AEngine: TGocciaEngine;
+  const AEnableHostFileLoading: Boolean = True): TGocciaRuntimeCore;
 function GetRuntime(const AEngine: TGocciaEngine): TGocciaRuntimeCore;
 
 implementation
@@ -154,7 +156,8 @@ uses
   Goccia.TextFiles,
   Goccia.Values.ArrayValue;
 
-function AttachRuntime(const AEngine: TGocciaEngine): TGocciaRuntimeCore;
+function AttachRuntime(const AEngine: TGocciaEngine;
+  const AEnableHostFileLoading: Boolean): TGocciaRuntimeCore;
 begin
   if not Assigned(AEngine) then
     raise Exception.Create('Cannot attach runtime to a nil engine.');
@@ -163,7 +166,7 @@ begin
   if Assigned(Result) then
     Exit;
 
-  Result := TGocciaRuntimeCore.Create(AEngine);
+  Result := TGocciaRuntimeCore.Create(AEngine, AEnableHostFileLoading);
   try
     AEngine.AddExtension(Result);
   except
@@ -233,7 +236,8 @@ end;
 
 { TGocciaRuntimeCore }
 
-constructor TGocciaRuntimeCore.Create(const AEngine: TGocciaEngine);
+constructor TGocciaRuntimeCore.Create(const AEngine: TGocciaEngine;
+  const AEnableHostFileLoading: Boolean);
 begin
   inherited Create;
   if not Assigned(AEngine) then
@@ -241,7 +245,8 @@ begin
 
   FEngine := AEngine;
   FExtensions := TObjectList<TGocciaRuntimeExtension>.Create(True);
-  ConfigureFileLoading;
+  if AEnableHostFileLoading then
+    ConfigureFileLoading;
   CaptureResolverExtensions;
   RefreshModuleExtensions;
   FPrevRuntimeModuleLoader := FEngine.ModuleLoader.RuntimeModuleLoader;

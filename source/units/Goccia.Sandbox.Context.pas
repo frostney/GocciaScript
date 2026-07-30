@@ -13,6 +13,10 @@ uses
 
   Goccia.Values.Primitives;
 
+const
+  DEFAULT_SANDBOX_BYTE_QUOTA = 16 * 1024 * 1024;
+  DEFAULT_SANDBOX_NODE_QUOTA = 4096;
+
 type
   TGocciaSandboxContext = class;
 
@@ -84,7 +88,9 @@ type
       const APath: string; const ABaselineStat,
       ACurrentStat: TSandboxFsStat);
   public
-    constructor Create(const AQuotaBytes: Int64 = 0);
+    constructor Create(
+      const AQuotaBytes: Int64 = DEFAULT_SANDBOX_BYTE_QUOTA;
+      const ANodeQuota: Integer = DEFAULT_SANDBOX_NODE_QUOTA);
     destructor Destroy; override;
 
     procedure CaptureBaseline;
@@ -141,10 +147,11 @@ end;
 
 { TGocciaSandboxContext }
 
-constructor TGocciaSandboxContext.Create(const AQuotaBytes: Int64);
+constructor TGocciaSandboxContext.Create(const AQuotaBytes: Int64;
+  const ANodeQuota: Integer);
 begin
   inherited Create;
-  FFs := TSandboxVirtualFileSystem.Create(AQuotaBytes);
+  FFs := TSandboxVirtualFileSystem.Create(AQuotaBytes, ANodeQuota);
   FShell := TSandboxShell.Create(FFs, False);
   FShell.CommandHandler := HandleShellCommand;
 end;

@@ -131,6 +131,7 @@ uses
 
   Goccia.Base64,
   Goccia.Constants.PropertyNames,
+  Goccia.NativeLimits,
   Goccia.Temporal.Utils;
 
 type
@@ -2151,18 +2152,24 @@ var
   AnchorName, RemainingText, TagName: string;
   LineNumber: Integer;
 begin
-  SkipIgnorableLines;
-  if not HasCurrentLine then
-    Exit(TGocciaNullLiteralValue.NullValue);
+  EnterNativeDataDepth('YAML parsing');
+  try
+    CheckNativeWork;
+    SkipIgnorableLines;
+    if not HasCurrentLine then
+      Exit(TGocciaNullLiteralValue.NullValue);
 
-  if CurrentLine.Indent <> AIndent then
-    RaiseParseError('Invalid indentation.', CurrentLine.Number);
-  LineNumber := CurrentLine.Number;
+    if CurrentLine.Indent <> AIndent then
+      RaiseParseError('Invalid indentation.', CurrentLine.Number);
+    LineNumber := CurrentLine.Number;
 
-  ParseNodeProperties(CurrentLine.Text, TagName, AnchorName, RemainingText, LineNumber);
-  Result := ParseNodeValue(RemainingText, AIndent, LineNumber, TagName,
-    AnchorName, True, False, False, (RemainingText = '') and
-    ((TagName <> '') or (AnchorName <> '')), False, True);
+    ParseNodeProperties(CurrentLine.Text, TagName, AnchorName, RemainingText, LineNumber);
+    Result := ParseNodeValue(RemainingText, AIndent, LineNumber, TagName,
+      AnchorName, True, False, False, (RemainingText = '') and
+      ((TagName <> '') or (AnchorName <> '')), False, True);
+  finally
+    LeaveNativeDataDepth;
+  end;
 end;
 
 function TGocciaYAMLParser.ParseNestedNode(const AParentIndent: Integer): TGocciaValue;
@@ -2833,9 +2840,12 @@ var
   RemainingText: string;
   TrimmedText: string;
 begin
-  TrimmedText := Trim(AText);
-  if TrimmedText = '' then
-    Exit(TGocciaNullLiteralValue.NullValue);
+  EnterNativeDataDepth('YAML parsing');
+  try
+    CheckNativeWork;
+    TrimmedText := Trim(AText);
+    if TrimmedText = '' then
+      Exit(TGocciaNullLiteralValue.NullValue);
 
   ParseNodeProperties(TrimmedText, TagName, AnchorName, RemainingText);
   if (AnchorName <> '') or (TagName <> '') then
@@ -2887,7 +2897,10 @@ begin
     Result := TGocciaStringLiteralValue.Create(TrimmedText);
 
   Result := ApplyTag(TagName, Result);
-  RegisterAnchor(AnchorName, Result);
+    RegisterAnchor(AnchorName, Result);
+  finally
+    LeaveNativeDataDepth;
+  end;
 end;
 
 function TGocciaYAMLParser.ParseInlineValueWithContinuations(const AText: string;

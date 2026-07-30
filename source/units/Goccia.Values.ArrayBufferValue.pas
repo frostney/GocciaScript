@@ -27,14 +27,18 @@ type
     FHasPendingAllocation: Boolean;
     FPendingByteLength: Double;
     FPendingMaxByteLength: Double;
+    FChargedBytes: Int64;
 
     function GetByteLength: Integer;
+    procedure SetData(const AData: TBytes);
+    procedure SetDataLength(const ALength: Integer);
 
     procedure InitializePrototype;
   public
     constructor Create(const AByteLength: Integer = 0); overload;
     constructor Create(const AByteLength: Integer; const AMaxByteLength: Integer); overload;
     constructor Create(const AClass: TGocciaClassValue); overload;
+    destructor Destroy; override;
 
     { Immutable ArrayBuffers proposal: build a fixed-length immutable buffer
       directly from raw bytes, without the transfer-and-detach dance. The bytes
@@ -56,7 +60,7 @@ type
     class function GetSharedPrototypeForRealm(
       const ARealm: TGocciaRealm): TGocciaObjectValue; static;
 
-    property Data: TBytes read FData write FData;
+    property Data: TBytes read FData write SetData;
     property Detached: Boolean read FDetached;
     property Immutable: Boolean read FImmutable;
     property MaxByteLength: Integer read FMaxByteLength;
@@ -85,6 +89,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -216,6 +221,52 @@ begin
     Result := Length(FData);
 end;
 
+procedure TGocciaArrayBufferValue.SetData(const AData: TBytes);
+var
+  GC: TGarbageCollector;
+  Delta: Int64;
+begin
+  Delta := Length(AData) - FChargedBytes;
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and (Delta > 0) then
+  begin
+    GC.CollectForMemoryPressure(Self);
+    if not GC.TryReserveExternalBytes(Delta) then
+      ThrowRangeError(SErrorMemoryLimitExceeded,
+        SSuggestMemoryLimitExceeded);
+  end;
+  if Assigned(GC) and (Delta < 0) then
+    GC.ReleaseExternalBytes(-Delta);
+  FData := AData;
+  FChargedBytes := Length(AData);
+end;
+
+procedure TGocciaArrayBufferValue.SetDataLength(const ALength: Integer);
+var
+  Delta: Int64;
+  GC: TGarbageCollector;
+begin
+  Delta := ALength - FChargedBytes;
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and (Delta > 0) then
+  begin
+    GC.CollectForMemoryPressure(Self);
+    if not GC.TryReserveExternalBytes(Delta) then
+      ThrowRangeError(SErrorMemoryLimitExceeded,
+        SSuggestMemoryLimitExceeded);
+  end;
+  try
+    SetLength(FData, ALength);
+  except
+    if Assigned(GC) and (Delta > 0) then
+      GC.ReleaseExternalBytes(Delta);
+    raise;
+  end;
+  if Assigned(GC) and (Delta < 0) then
+    GC.ReleaseExternalBytes(-Delta);
+  FChargedBytes := ALength;
+end;
+
 constructor TGocciaArrayBufferValue.Create(const AByteLength: Integer);
 var
   Shared: TGocciaSharedPrototype;
@@ -227,9 +278,8 @@ begin
   FHasPendingAllocation := False;
   FPendingByteLength := 0;
   FPendingMaxByteLength := NO_MAX_BYTE_LENGTH;
-  SetLength(FData, AByteLength);
-  if AByteLength > 0 then
-    FillChar(FData[0], AByteLength, 0);
+  FChargedBytes := 0;
+  SetDataLength(AByteLength);
   InitializePrototype;
   Shared := GetArrayBufferShared;
   if Assigned(Shared) then
@@ -254,9 +304,8 @@ begin
   end
   else
     FMaxByteLength := NO_MAX_BYTE_LENGTH;
-  SetLength(FData, AByteLength);
-  if AByteLength > 0 then
-    FillChar(FData[0], AByteLength, 0);
+  FChargedBytes := 0;
+  SetDataLength(AByteLength);
   InitializePrototype;
   Shared := GetArrayBufferShared;
   if Assigned(Shared) then
@@ -274,7 +323,8 @@ begin
   FHasPendingAllocation := False;
   FPendingByteLength := 0;
   FPendingMaxByteLength := NO_MAX_BYTE_LENGTH;
-  SetLength(FData, 0);
+  FChargedBytes := 0;
+  SetDataLength(0);
   InitializePrototype;
   Shared := GetArrayBufferShared;
   if not Assigned(AClass) and Assigned(Shared) then
@@ -288,7 +338,7 @@ class function TGocciaArrayBufferValue.CreateImmutableFromBytes(
   const AData: TBytes): TGocciaArrayBufferValue;
 begin
   Result := TGocciaArrayBufferValue.Create(0);
-  Result.FData := AData;
+  Result.SetData(AData);
   Result.FImmutable := True;
 end;
 
@@ -416,21 +466,30 @@ begin
   else
     FMaxByteLength := NO_MAX_BYTE_LENGTH;
 
-  SetLength(FData, Len);
-  if Len > 0 then
-    FillChar(FData[0], Len, 0);
+  SetDataLength(Len);
   FHasPendingAllocation := False;
 end;
 
 procedure TGocciaArrayBufferValue.Detach;
 begin
   FDetached := True;
-  SetLength(FData, 0);
+  SetDataLength(0);
 end;
 
 procedure TGocciaArrayBufferValue.MarkReferences;
 begin
   if GCMarked then Exit;
+  inherited;
+end;
+
+destructor TGocciaArrayBufferValue.Destroy;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and (FChargedBytes > 0) then
+    GC.ReleaseExternalBytes(FChargedBytes);
+  FChargedBytes := 0;
   inherited;
 end;
 
@@ -573,8 +632,7 @@ end;
 function TGocciaArrayBufferValue.ArrayBufferResize(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Buf: TGocciaArrayBufferValue;
-  NewByteLength, OldByteLength, CopyLength: Integer;
-  NewData: TBytes;
+  NewByteLength: Integer;
 begin
   Buf := RequireArrayBuffer(AThisValue, 'ArrayBuffer.prototype.resize');
 
@@ -600,16 +658,7 @@ begin
     ThrowRangeError(SErrorArrayBufferResizeExceedsMax, SSuggestArrayBufferResizable);
 
   // ES2026 §25.1.6.5 steps 10-16: Create new data block and copy
-  OldByteLength := Length(Buf.FData);
-  CopyLength := Min(NewByteLength, OldByteLength);
-
-  SetLength(NewData, NewByteLength);
-  if NewByteLength > 0 then
-    FillChar(NewData[0], NewByteLength, 0);
-  if CopyLength > 0 then
-    Move(Buf.FData[0], NewData[0], CopyLength);
-
-  Buf.FData := NewData;
+  Buf.SetDataLength(NewByteLength);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 

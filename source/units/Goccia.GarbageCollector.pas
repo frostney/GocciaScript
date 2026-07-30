@@ -73,6 +73,7 @@ type
     FTotalCollections: Integer;
 
     FBytesAllocated: Int64;
+    FExternalBytes: Int64;
     FPeakBytesAllocated: Int64;
     FTotalBytesAllocated: Int64;
     FMaxBytes: Int64;
@@ -145,6 +146,8 @@ type
     // collection. Tracing through old roots keeps those young objects live.
     procedure CollectYoung(const AWatermark: Integer);
     procedure ResetPeakBytesAllocated;
+    function TryReserveExternalBytes(const ABytes: Int64): Boolean;
+    procedure ReleaseExternalBytes(const ABytes: Int64);
 
     {$IFDEF GC_TIMING}
     procedure PrintTimingSummary;
@@ -394,6 +397,7 @@ begin
   FTotalCollected := 0;
   FTotalCollections := 0;
   FBytesAllocated := 0;
+  FExternalBytes := 0;
   FPeakBytesAllocated := 0;
   FTotalBytesAllocated := 0;
   FSuggestedMaxBytes := DetectDefaultMaxBytes;
@@ -895,6 +899,38 @@ end;
 procedure TGarbageCollector.ResetPeakBytesAllocated;
 begin
   FPeakBytesAllocated := FBytesAllocated;
+end;
+
+function TGarbageCollector.TryReserveExternalBytes(
+  const ABytes: Int64): Boolean;
+begin
+  if ABytes <= 0 then
+    Exit(True);
+  Result := (FBytesAllocated <= High(Int64) - ABytes) and
+    ((FMaxBytes <= 0) or (FBytesAllocated + ABytes <= FMaxBytes));
+  if not Result then
+    Exit;
+  Inc(FBytesAllocated, ABytes);
+  Inc(FExternalBytes, ABytes);
+  Inc(FTotalBytesAllocated, ABytes);
+  if FBytesAllocated > FPeakBytesAllocated then
+    FPeakBytesAllocated := FBytesAllocated;
+end;
+
+procedure TGarbageCollector.ReleaseExternalBytes(const ABytes: Int64);
+begin
+  if ABytes <= 0 then
+    Exit;
+  if ABytes >= FExternalBytes then
+  begin
+    Dec(FBytesAllocated, FExternalBytes);
+    FExternalBytes := 0;
+  end
+  else
+  begin
+    Dec(FExternalBytes, ABytes);
+    Dec(FBytesAllocated, ABytes);
+  end;
 end;
 
 {$IFDEF GC_TIMING}

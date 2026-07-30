@@ -99,6 +99,7 @@ type
   private
     FRoot: TSandboxFsNode;
     FQuotaBytes: Int64;
+    FNodeQuota: Integer;
     FUsedBytes: Int64;
     FNodeCount: Integer;
     FClock: TSandboxFsClock;
@@ -121,12 +122,15 @@ type
     function SubtreeHasOpenHandles(const ANode: TSandboxFsNode): Boolean;
     function IsDescendantOf(const ANode, AAncestor: TSandboxFsNode): Boolean;
     procedure EnsureGrowth(const ADelta: Int64);
+    procedure EnsureNodeGrowth(const ADelta: Integer);
     procedure GrowFile(const ANode: TSandboxFsNode; const ANewSize: Int64);
     procedure ValidateLeafName(const AName: string);
     function CreateFileNode(const ACanonicalPath: string): TSandboxFsNode;
   public
-    constructor Create(const AQuotaBytes: Int64 = 0;
-      const AClock: TSandboxFsClock = nil);
+    constructor Create(const AQuotaBytes: Int64;
+      const ANodeQuota: Integer; const AClock: TSandboxFsClock = nil); overload;
+    constructor Create(const AQuotaBytes: Int64 = 16 * 1024 * 1024;
+      const AClock: TSandboxFsClock = nil); overload;
     destructor Destroy; override;
 
     { Canonicalize APath against ABase ('/'-rooted). Collapses '.',
@@ -170,6 +174,7 @@ type
     function Fork: TSandboxVirtualFileSystem;
 
     property QuotaBytes: Int64 read FQuotaBytes write FQuotaBytes;
+    property NodeQuota: Integer read FNodeQuota write FNodeQuota;
     property UsedBytes: Int64 read FUsedBytes;
     property NodeCount: Integer read FNodeCount;
     property RootClampCallback: TSandboxRootClampCallback
@@ -362,14 +367,21 @@ end;
 { TSandboxVirtualFileSystem }
 
 constructor TSandboxVirtualFileSystem.Create(const AQuotaBytes: Int64;
-  const AClock: TSandboxFsClock);
+  const ANodeQuota: Integer; const AClock: TSandboxFsClock);
 begin
   inherited Create;
   FClock := AClock;
   FRoot := TSandboxFsNode.Create('', nkDirectory, CurrentTime);
   FQuotaBytes := AQuotaBytes;
+  FNodeQuota := ANodeQuota;
   FUsedBytes := 0;
   FNodeCount := 0;
+end;
+
+constructor TSandboxVirtualFileSystem.Create(const AQuotaBytes: Int64;
+  const AClock: TSandboxFsClock);
+begin
+  Create(AQuotaBytes, 4096, AClock);
 end;
 
 constructor TSandboxVirtualFileSystem.CreateFork(
@@ -379,6 +391,7 @@ begin
   FClock := ASource.FClock;
   FRoot := CloneNodePreservingMetadata(ASource.FRoot);
   FQuotaBytes := ASource.FQuotaBytes;
+  FNodeQuota := ASource.FNodeQuota;
   FUsedBytes := ASource.FUsedBytes;
   FNodeCount := ASource.FNodeCount;
 end;
@@ -565,6 +578,15 @@ begin
       SandboxHumanBytes(FQuotaBytes)]);
 end;
 
+procedure TSandboxVirtualFileSystem.EnsureNodeGrowth(const ADelta: Integer);
+begin
+  if (FNodeQuota > 0) and (ADelta > 0) and
+     (FNodeCount > FNodeQuota - ADelta) then
+    raise ESandboxFsQuotaExceeded.CreateFmt(
+      'node quota exceeded: %d used + %d requested > %d limit',
+      [FNodeCount, ADelta, FNodeQuota]);
+end;
+
 procedure TSandboxVirtualFileSystem.GrowFile(const ANode: TSandboxFsNode;
   const ANewSize: Int64);
 var
@@ -593,6 +615,7 @@ var
   LeafName: string;
   Time: TDateTime;
 begin
+  EnsureNodeGrowth(1);
   Parent := ResolveParent(ACanonicalPath, LeafName);
   ValidateLeafName(LeafName);
   Time := CurrentTime;
@@ -670,6 +693,7 @@ var
   Next: TSandboxFsNode;
   Index: Integer;
   Time: TDateTime;
+  MissingCount: Integer;
 begin
   Result := '';
   Canonical := Normalize(APath);
@@ -681,6 +705,22 @@ begin
   end;
 
   Segments := SplitPath(Canonical);
+  MissingCount := 0;
+  Current := FRoot;
+  for Index := 0 to High(Segments) do
+  begin
+    if Current.FKind <> nkDirectory then
+      Break;
+    Next := Current.FindChild(Segments[Index]);
+    if Next = nil then
+    begin
+      MissingCount := High(Segments) - Index + 1;
+      Break;
+    end;
+    Current := Next;
+  end;
+  EnsureNodeGrowth(MissingCount);
+
   Current := FRoot;
   for Index := 0 to High(Segments) do
   begin
@@ -902,6 +942,8 @@ var
   DestCanonical: string;
   LeafName: string;
   Clone: TSandboxFsNode;
+  ReplacedBytes: Int64;
+  ReplacedNodes: Integer;
   Time: TDateTime;
 begin
   SourceNode := RequireNode(ASource);
@@ -930,20 +972,28 @@ begin
       '%s: cannot copy a directory into itself',
       [SourceNode.FullPath]);
 
+  ReplacedBytes := 0;
+  ReplacedNodes := 0;
   if Assigned(DestNode) then
   begin
     if DestNode = SourceNode then
       Exit;
     if (DestNode.FKind = nkFile) and (SourceNode.FKind = nkFile) then
-      DeletePath(DestNode.FullPath)
+    begin
+      ReplacedBytes := SubtreeBytes(DestNode);
+      ReplacedNodes := SubtreeNodes(DestNode);
+    end
     else
       raise ESandboxFsExists.CreateFmt('%s: already exists',
         [DestNode.FullPath]);
   end;
 
-  EnsureGrowth(SubtreeBytes(SourceNode));
+  EnsureGrowth(SubtreeBytes(SourceNode) - ReplacedBytes);
+  EnsureNodeGrowth(SubtreeNodes(SourceNode) - ReplacedNodes);
   Time := CurrentTime;
   Clone := CloneNodeForCopy(SourceNode, Time);
+  if Assigned(DestNode) then
+    DeletePath(DestNode.FullPath);
   Clone.FName := LeafName;
   DestParent.AttachChild(Clone, Time);
   FUsedBytes := FUsedBytes + SubtreeBytes(Clone);

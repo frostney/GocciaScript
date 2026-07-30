@@ -144,8 +144,10 @@ type
   TGocciaStringLiteralValue = class(TGocciaValue)
   private
     FValue: string;
+    FChargedBytes: Int64;
   public
     constructor Create(const AValue: string);
+    destructor Destroy; override;
 
     function IsPrimitive: Boolean; override;
     function TypeName: string; override;
@@ -627,8 +629,34 @@ begin
 end;
 
 constructor TGocciaStringLiteralValue.Create(const AValue: string);
+var
+  GC: TGarbageCollector;
+const
+  MIN_EXTERNAL_STRING_BYTES = 4096;
 begin
+  inherited Create;
+  FChargedBytes := Int64(Length(AValue)) * SizeOf(Char);
+  // Small strings are already represented by a GC-managed value and charging
+  // every short-lived property name materially distorts collection cadence.
+  // Account substantial backing stores, which are the allocation-amplification
+  // boundary this external-byte counter is intended to enforce.
+  if FChargedBytes < MIN_EXTERNAL_STRING_BYTES then
+    FChargedBytes := 0;
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and not GC.TryReserveExternalBytes(FChargedBytes) then
+    ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
   FValue := AValue;
+end;
+
+destructor TGocciaStringLiteralValue.Destroy;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    GC.ReleaseExternalBytes(FChargedBytes);
+  FChargedBytes := 0;
+  inherited;
 end;
 
 function TGocciaStringLiteralValue.TypeName: string;

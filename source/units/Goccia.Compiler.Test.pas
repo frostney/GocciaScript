@@ -82,6 +82,7 @@ type
     procedure TestBinaryRoundTripUpvalueNames;
     procedure TestBinaryLittleEndian;
     procedure TestBinaryRoundTripConstants;
+    procedure TestBinaryRejectsMalformedArtifacts;
     procedure TestUndeclaredPrivateNameRaisesSyntaxError;
     procedure TestConstantFoldsNestedArithmetic;
     procedure TestConstantFoldsBigInt;
@@ -144,6 +145,8 @@ begin
   Test('Binary round-trip upvalue names', TestBinaryRoundTripUpvalueNames);
   Test('Binary little-endian format', TestBinaryLittleEndian);
   Test('Binary round-trip constants', TestBinaryRoundTripConstants);
+  Test('Binary loader rejects malformed artifacts',
+    TestBinaryRejectsMalformedArtifacts);
   Test('Undeclared private name raises SyntaxError', TestUndeclaredPrivateNameRaisesSyntaxError);
   Test('Constant folds nested arithmetic', TestConstantFoldsNestedArithmetic);
   Test('Constant folds BigInt', TestConstantFoldsBigInt);
@@ -814,6 +817,67 @@ begin
     Original.Free;
     DeleteFile(TempFile);
   end;
+end;
+
+procedure TTestCompiler.TestBinaryRejectsMalformedArtifacts;
+var
+  Loaded, Module: TGocciaBytecodeModule;
+  Template: TGocciaFunctionTemplate;
+  TempFile: string;
+
+  procedure ExpectRejected(const ATemplate: TGocciaFunctionTemplate);
+  var
+    Raised: Boolean;
+  begin
+    Module := TGocciaBytecodeModule.Create('test', '<malformed>');
+    Module.TopLevel := ATemplate;
+    TempFile := GetTempFileName + '.gbc';
+    try
+      SaveModuleToFile(Module, TempFile);
+      Loaded := nil;
+      Raised := False;
+      try
+        Loaded := LoadModuleFromFile(TempFile);
+      except
+        on E: Exception do
+          Raised := True;
+      end;
+      Loaded.Free;
+      Expect<Boolean>(Raised).ToBe(True);
+    finally
+      Module.Free;
+      DeleteFile(TempFile);
+    end;
+  end;
+
+begin
+  Module := nil;
+  Loaded := nil;
+
+  Template := TGocciaFunctionTemplate.Create('invalid-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_LOAD_TRUE, 1, 0, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-wide-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_MOVE, 0, 256, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-constant');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_LOAD_CONST, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-function');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_CLOSURE, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-jump');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeAx(OP_JUMP, -2));
+  ExpectRejected(Template);
 end;
 
 procedure TTestCompiler.TestUndeclaredPrivateNameRaisesSyntaxError;

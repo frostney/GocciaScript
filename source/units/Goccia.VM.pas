@@ -13174,7 +13174,10 @@ begin
   else
     ExecutionSourcePath := FCurrentModuleSourcePath;
 
-  AcquireRegisters(Max(ATemplate.MaxRegisters, 1));
+  // Compact bytecode operands can address 0..255. Keeping a complete compact
+  // window prevents malformed non-wide secondary operands from escaping the
+  // arena even before the loader's structural checks reject their use.
+  AcquireRegisters(Max(ATemplate.MaxRegisters, 256));
   AcquireLocalCells(Max(ATemplate.MaxRegisters, 1));
   // Acquire the argument window on the arena (sets FArgumentBase/FArgCount and
   // FArguments) before reading the previous frame's FArgCount, then fill it.
@@ -13588,10 +13591,11 @@ begin
     end;
     Running := True;
     InstructionLimitState := CaptureInstructionLimitState;
-    while Running and (Frame.IP < Template.CodeCount) do
+    while Running and (Frame.IP >= 0) and (Frame.IP < Template.CodeCount) do
     begin
       try
-        while Running and (Frame.IP < Template.CodeCount) do
+        while Running and (Frame.IP >= 0) and
+              (Frame.IP < Template.CodeCount) do
         begin
           if (AStopAtIP >= 0) and (Frame.IP >= AStopAtIP) and
              Assigned(AStopGenerator) then

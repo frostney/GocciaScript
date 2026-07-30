@@ -10,6 +10,7 @@ unit HTTPClient;
 interface
 
 uses
+  Classes,
   SysUtils,
 
   HTTPTypes;
@@ -24,9 +25,12 @@ type
   EHTTPError = HTTPTypes.EHTTPError;
 
 function HTTPGet(const AURL: string;
-  const AHeaders: THTTPHeaders): THTTPResponse;
+  const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings = nil;
+  const ATimeoutMilliseconds: Integer = 0): THTTPResponse;
 function HTTPHead(const AURL: string;
-  const AHeaders: THTTPHeaders): THTTPResponse;
+  const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings = nil;
+  const ATimeoutMilliseconds: Integer = 0): THTTPResponse;
+function HTTPURLHost(const AURL: string): string;
 
 implementation
 
@@ -38,10 +42,13 @@ uses
   WinSock2,
   {$ENDIF}
   TextEncoding,
+  TimingUtils,
   TransportSecurity;
 
 const
   MAX_REDIRECTS   = 20;
+  MAX_RESPONSE_HEADER_BYTES = 64 * 1024;
+  MAX_RESPONSE_BODY_BYTES = 8 * 1024 * 1024;
   CRLF            = #13#10;
   RECV_BUF_SIZE   = 8192;
 
@@ -91,10 +98,12 @@ end;
 // Minimal URL parsing (self-contained, no engine dependencies)
 // ---------------------------------------------------------------------------
 
-function ParseHTTPURL(const AURL: string): THTTPParsedURL;
+function ParseHTTPURL(const AURL: string;
+  const ARequireSupportedScheme: Boolean = True): THTTPParsedURL;
 var
   S, Rest: string;
-  I: Integer;
+  I, AuthorityEnd, ColonCount, ParsedPort: Integer;
+  PortText: string;
 begin
   Result.Scheme := '';
   Result.Host := '';
@@ -102,6 +111,9 @@ begin
   Result.Path := '/';
 
   S := AURL;
+  for I := 1 to Length(S) do
+    if (Ord(S[I]) < 32) or (Ord(S[I]) = 127) then
+      raise EHTTPError.Create('Invalid URL: control character');
 
   // Scheme
   I := Pos('://', S);
@@ -113,47 +125,74 @@ begin
   else
     raise EHTTPError.Create('Invalid URL: missing scheme');
 
-  if (Result.Scheme <> 'http') and (Result.Scheme <> 'https') then
+  if ARequireSupportedScheme and
+     (Result.Scheme <> 'http') and (Result.Scheme <> 'https') then
     raise EHTTPError.Create('Unsupported scheme: ' + Result.Scheme);
 
-  // Split host from path
-  I := Pos('/', Rest);
-  if I > 0 then
+  AuthorityEnd := Length(Rest) + 1;
+  for I := 1 to Length(Rest) do
+    if Rest[I] in ['/', '?', '#'] then
+    begin
+      AuthorityEnd := I;
+      Break;
+    end;
+  if AuthorityEnd <= Length(Rest) then
   begin
-    Result.Path := Copy(Rest, I, Length(Rest));
-    Rest := Copy(Rest, 1, I - 1);
+    Result.Path := Copy(Rest, AuthorityEnd, MaxInt);
+    Rest := Copy(Rest, 1, AuthorityEnd - 1);
+    I := Pos('#', Result.Path);
+    if I > 0 then
+      Delete(Result.Path, I, MaxInt);
+    if (Result.Path <> '') and (Result.Path[1] = '?') then
+      Result.Path := '/' + Result.Path;
   end;
 
-  // Strip userinfo if present
-  I := Pos('@', Rest);
-  if I > 0 then
-    Rest := Copy(Rest, I + 1, Length(Rest));
+  if Pos('@', Rest) > 0 then
+    raise EHTTPError.Create('Invalid URL: userinfo is not allowed');
 
   // Parse host:port
   if (Length(Rest) > 0) and (Rest[1] = '[') then
   begin
     // IPv6 — strip brackets for DNS resolution
     I := Pos(']', Rest);
-    if I > 0 then
+    if I > 1 then
     begin
-      Result.Host := Copy(Rest, 2, I - 2);
+      Result.Host := LowerCase(Copy(Rest, 2, I - 2));
       Rest := Copy(Rest, I + 1, Length(Rest));
       if (Length(Rest) > 0) and (Rest[1] = ':') then
-        Result.Port := StrToIntDef(Copy(Rest, 2, Length(Rest)), 0);
+      begin
+        PortText := Copy(Rest, 2, MaxInt);
+        ParsedPort := StrToIntDef(PortText, -1);
+        if (ParsedPort < 1) or (ParsedPort > 65535) then
+          raise EHTTPError.Create('Invalid URL: invalid port');
+        Result.Port := ParsedPort;
+      end
+      else if Rest <> '' then
+        raise EHTTPError.Create('Invalid URL: malformed IPv6 authority');
     end
     else
-      Result.Host := Copy(Rest, 2, Length(Rest));
+      raise EHTTPError.Create('Invalid URL: malformed IPv6 authority');
   end
   else
   begin
+    ColonCount := 0;
+    for I := 1 to Length(Rest) do
+      if Rest[I] = ':' then
+        Inc(ColonCount);
+    if ColonCount > 1 then
+      raise EHTTPError.Create('Invalid URL: IPv6 address must use brackets');
     I := Pos(':', Rest);
     if I > 0 then
     begin
-      Result.Host := Copy(Rest, 1, I - 1);
-      Result.Port := StrToIntDef(Copy(Rest, I + 1, Length(Rest)), 0);
+      Result.Host := LowerCase(Copy(Rest, 1, I - 1));
+      PortText := Copy(Rest, I + 1, MaxInt);
+      ParsedPort := StrToIntDef(PortText, -1);
+      if (ParsedPort < 1) or (ParsedPort > 65535) then
+        raise EHTTPError.Create('Invalid URL: invalid port');
+      Result.Port := ParsedPort;
     end
     else
-      Result.Host := Rest;
+      Result.Host := LowerCase(Rest);
   end;
 
   if Result.Host = '' then
@@ -172,12 +211,36 @@ begin
     Result.Path := '/';
 end;
 
+function HTTPURLHost(const AURL: string): string;
+begin
+  // Host validation is synchronous, but fetch network failures (including an
+  // unsupported scheme) are delivered through the returned promise. Parse the
+  // authority canonically here while leaving scheme enforcement to DoRequest.
+  Result := ParseHTTPURL(AURL, False).Host;
+end;
+
 // ---------------------------------------------------------------------------
 // Socket connect (cross-platform)
 // ---------------------------------------------------------------------------
 
 {$IFDEF UNIX}
-function ConnectSocket(const AHost: string; const APort: Integer): TSocket;
+procedure ConfigureSocketTimeout(const ASocket: TSocket;
+  const ATimeoutMilliseconds: Integer);
+var
+  Timeout: TTimeVal;
+begin
+  if ATimeoutMilliseconds <= 0 then
+    Exit;
+  Timeout.tv_sec := ATimeoutMilliseconds div 1000;
+  Timeout.tv_usec := (ATimeoutMilliseconds mod 1000) * 1000;
+  fpSetSockOpt(ASocket, SOL_SOCKET, SO_RCVTIMEO, @Timeout,
+    SizeOf(Timeout));
+  fpSetSockOpt(ASocket, SOL_SOCKET, SO_SNDTIMEO, @Timeout,
+    SizeOf(Timeout));
+end;
+
+function ConnectSocket(const AHost: string; const APort,
+  ATimeoutMilliseconds: Integer): TSocket;
 var
   SockAddr: TInetSockAddr;
   HostEntry: THostEntry;
@@ -196,6 +259,7 @@ begin
   Result := fpSocket(AF_INET, SOCK_STREAM, 0);
   if Result < 0 then
     raise EHTTPError.Create('Failed to create socket');
+  ConfigureSocketTimeout(Result, ATimeoutMilliseconds);
 
   FillChar(SockAddr, SizeOf(SockAddr), 0);
   SockAddr.sin_family := AF_INET;
@@ -211,7 +275,22 @@ end;
 {$ENDIF}
 
 {$IFDEF MSWINDOWS}
-function ConnectSocket(const AHost: string; const APort: Integer): TSocket;
+procedure ConfigureSocketTimeout(const ASocket: TSocket;
+  const ATimeoutMilliseconds: Integer);
+var
+  Timeout: LongInt;
+begin
+  if ATimeoutMilliseconds <= 0 then
+    Exit;
+  Timeout := ATimeoutMilliseconds;
+  WinSock2.setsockopt(ASocket, SOL_SOCKET, SO_RCVTIMEO,
+    PAnsiChar(@Timeout), SizeOf(Timeout));
+  WinSock2.setsockopt(ASocket, SOL_SOCKET, SO_SNDTIMEO,
+    PAnsiChar(@Timeout), SizeOf(Timeout));
+end;
+
+function ConnectSocket(const AHost: string; const APort,
+  ATimeoutMilliseconds: Integer): TSocket;
 var
   Hints, Res, Cur: PAddrInfo;
   HostBytes, PortBytes: TBytes;
@@ -256,6 +335,7 @@ begin
         Cur := Cur^.ai_next;
         Continue;
       end;
+      ConfigureSocketTimeout(Sock, ATimeoutMilliseconds);
 
       if WinSock2.connect(Sock, Cur^.ai_addr^,
         Integer(Cur^.ai_addrlen)) = 0 then
@@ -338,13 +418,16 @@ begin
 end;
 
 procedure AppendBytes(var ADestination: TBytes; const ASource: Pointer;
-  const ALength: Integer);
+  const ALength: Integer; const AMaxLength: Integer);
 var
   DestinationLength: Integer;
 begin
   if ALength <= 0 then
     Exit;
   DestinationLength := Length(ADestination);
+  if (DestinationLength > AMaxLength - ALength) then
+    raise EHTTPError.CreateFmt('HTTP response exceeds %d byte limit',
+      [AMaxLength]);
   SetLength(ADestination, DestinationLength + ALength);
   Move(ASource^, ADestination[DestinationLength], ALength);
 end;
@@ -438,7 +521,7 @@ end;
 
 function ReadResponse(const ASock: TSocket;
   var ATransport: TTransportSecurityConnection;
-  const AIsHead: Boolean): TRawHTTPResponse;
+  const AIsHead: Boolean; const ADeadlineNs: Int64): TRawHTTPResponse;
 var
   Buf: array[0..RECV_BUF_SIZE - 1] of Byte;
   RawHeader: TBytes;
@@ -452,6 +535,25 @@ var
   ChunkBuf: TBytes;
   Done: Boolean;
   Remaining: Integer;
+
+  function RemainingTimeoutMilliseconds: Integer;
+  var
+    RemainingNs: Int64;
+  begin
+    if ADeadlineNs = 0 then
+      Exit(0);
+    RemainingNs := ADeadlineNs - GetNanoseconds;
+    if RemainingNs <= 0 then
+      raise EHTTPError.Create('HTTP request timed out');
+    Result := Integer((RemainingNs + 999999) div 1000000);
+  end;
+
+  function Receive(var ABuffer: array of Byte;
+    const ALength: Integer): Integer;
+  begin
+    ConfigureSocketTimeout(ASock, RemainingTimeoutMilliseconds);
+    Result := RecvBytes(ASock, ATransport, ABuffer, ALength);
+  end;
 begin
   Result.StatusCode := 0;
   Result.StatusText := '';
@@ -462,9 +564,9 @@ begin
   SetLength(RawHeader, 0);
   HeaderEnd := -1;
   repeat
-    N := RecvBytes(ASock, ATransport, Buf, RECV_BUF_SIZE);
+    N := Receive(Buf, RECV_BUF_SIZE);
     if N <= 0 then Break;
-    AppendBytes(RawHeader, @Buf[0], N);
+    AppendBytes(RawHeader, @Buf[0], N, MAX_RESPONSE_HEADER_BYTES);
     HeaderEnd := FindHeaderTerminator(RawHeader);
   until HeaderEnd >= 0;
 
@@ -561,9 +663,10 @@ begin
     begin
       while FindCRLF(ChunkBuf) < 0 do
       begin
-        N := RecvBytes(ASock, ATransport, Buf, RECV_BUF_SIZE);
+        N := Receive(Buf, RECV_BUF_SIZE);
         if N <= 0 then begin Done := True; Break; end;
-        AppendBytes(ChunkBuf, @Buf[0], N);
+        AppendBytes(ChunkBuf, @Buf[0], N,
+          MAX_RESPONSE_BODY_BYTES + RECV_BUF_SIZE);
       end;
       if Done then Break;
 
@@ -577,12 +680,17 @@ begin
 
       ChunkSize := StrToIntDef('$' + Trim(Line), 0);
       if ChunkSize = 0 then Break;
+      if (ChunkSize < 0) or
+         (Length(Result.Body) > MAX_RESPONSE_BODY_BYTES - ChunkSize) then
+        raise EHTTPError.CreateFmt('HTTP response body exceeds %d byte limit',
+          [MAX_RESPONSE_BODY_BYTES]);
 
       while Length(ChunkBuf) < ChunkSize + 2 do
       begin
-        N := RecvBytes(ASock, ATransport, Buf, RECV_BUF_SIZE);
+        N := Receive(Buf, RECV_BUF_SIZE);
         if N <= 0 then begin Done := True; Break; end;
-        AppendBytes(ChunkBuf, @Buf[0], N);
+        AppendBytes(ChunkBuf, @Buf[0], N,
+          MAX_RESPONSE_BODY_BYTES + RECV_BUF_SIZE);
       end;
 
       BodyLen := Length(Result.Body);
@@ -597,6 +705,9 @@ begin
 
     if ContentLen >= 0 then
     begin
+      if ContentLen > MAX_RESPONSE_BODY_BYTES then
+        raise EHTTPError.CreateFmt('HTTP response body exceeds %d byte limit',
+          [MAX_RESPONSE_BODY_BYTES]);
       SetLength(Result.Body, ContentLen);
       BodyLen := 0;
 
@@ -618,7 +729,7 @@ begin
       // Read remaining
       while BodyLen < ContentLen do
       begin
-        N := RecvBytes(ASock, ATransport, Buf, RECV_BUF_SIZE);
+        N := Receive(Buf, RECV_BUF_SIZE);
         if N <= 0 then Break;
         Remaining := ContentLen - BodyLen;
         if N > Remaining then N := Remaining;
@@ -631,9 +742,13 @@ begin
       // Read until connection close
       Result.Body := Copy(BodyBytes);
       repeat
-        N := RecvBytes(ASock, ATransport, Buf, RECV_BUF_SIZE);
+        N := Receive(Buf, RECV_BUF_SIZE);
         if N <= 0 then Break;
         BodyLen := Length(Result.Body);
+        if BodyLen > MAX_RESPONSE_BODY_BYTES - N then
+          raise EHTTPError.CreateFmt(
+            'HTTP response body exceeds %d byte limit',
+            [MAX_RESPONSE_BODY_BYTES]);
         SetLength(Result.Body, BodyLen + N);
         Move(Buf[0], Result.Body[BodyLen], N);
       until False;
@@ -647,7 +762,8 @@ end;
 
 function DoRequest(const AMethod, AURL: string;
   const AHeaders: THTTPHeaders;
-  const AMaxRedirects: Integer): THTTPResponse;
+  const AMaxRedirects: Integer; const AAllowedHosts: TStrings;
+  const ATimeoutMilliseconds: Integer): THTTPResponse;
 var
   Parsed: THTTPParsedURL;
   Sock: TSocket;
@@ -660,7 +776,50 @@ var
   HasUserAgent: Boolean;
   IsHead: Boolean;
   Method: string;
+  HeaderName, HeaderValue: string;
+  DeadlineNs: Int64;
+
+  function RemainingTimeoutMilliseconds: Integer;
+  var
+    RemainingNs: Int64;
+  begin
+    if DeadlineNs = 0 then
+      Exit(0);
+    RemainingNs := DeadlineNs - GetNanoseconds;
+    if RemainingNs <= 0 then
+      raise EHTTPError.Create('HTTP request timed out');
+    Result := Integer((RemainingNs + 999999) div 1000000);
+  end;
+
+  procedure ValidateDestination(const AParsed: THTTPParsedURL);
+  begin
+    if Assigned(AAllowedHosts) and
+       (AAllowedHosts.IndexOf(AParsed.Host) < 0) then
+      raise EHTTPError.CreateFmt('fetch host not allowed: %s',
+        [AParsed.Host]);
+  end;
+
+  procedure ValidateRequestText(const AValue, AKind: string;
+    const AAllowTab: Boolean);
+  var
+    K, Code: Integer;
+  begin
+    for K := 1 to Length(AValue) do
+    begin
+      Code := Ord(AValue[K]);
+      if (Code = 127) or (Code = 0) or (Code = 13) or (Code = 10) or
+         ((Code < 32) and not (AAllowTab and (Code = 9))) then
+        raise EHTTPError.CreateFmt('Invalid HTTP %s', [AKind]);
+    end;
+  end;
 begin
+  if ATimeoutMilliseconds < 0 then
+    raise EHTTPError.Create('Invalid HTTP timeout');
+  if ATimeoutMilliseconds > 0 then
+    DeadlineNs := GetNanoseconds +
+      Int64(ATimeoutMilliseconds) * 1000000
+  else
+    DeadlineNs := 0;
   CurrentURL := AURL;
   Redirects := 0;
   Result.Redirected := False;
@@ -670,8 +829,11 @@ begin
   while True do
   begin
     Parsed := ParseHTTPURL(CurrentURL);
+    ValidateDestination(Parsed);
+    ValidateRequestText(Parsed.Path, 'request target', False);
     FillChar(Transport, SizeOf(Transport), 0);
-    Sock := ConnectSocket(Parsed.Host, Parsed.Port);
+    Sock := ConnectSocket(Parsed.Host, Parsed.Port,
+      RemainingTimeoutMilliseconds);
     try
       if Parsed.Scheme = 'https' then
         StartTransportSecurity(Transport, Sock, Parsed.Host);
@@ -700,16 +862,23 @@ begin
         // Add custom headers (skip Host since we already set it)
         for I := 0 to High(AHeaders) do
         begin
-          if LowerCase(AHeaders[I].Name) = 'host' then Continue;
-          RequestText := RequestText + AHeaders[I].Name + ': ' +
-            AHeaders[I].Value + CRLF;
+          HeaderName := AHeaders[I].Name;
+          HeaderValue := AHeaders[I].Value;
+          ValidateRequestText(HeaderName, 'header name', False);
+          ValidateRequestText(HeaderValue, 'header value', True);
+          if (HeaderName = '') or (Pos(':', HeaderName) > 0) or
+             (Pos(' ', HeaderName) > 0) or (Pos(#9, HeaderName) > 0) then
+            raise EHTTPError.Create('Invalid HTTP header name');
+          if LowerCase(HeaderName) = 'host' then Continue;
+          RequestText := RequestText + HeaderName + ': ' +
+            HeaderValue + CRLF;
         end;
 
         RequestText := RequestText + CRLF;
         Request := EncodeUTF8WithReplacement(RequestText);
 
         SendAll(Sock, Transport, Request);
-        Raw := ReadResponse(Sock, Transport, IsHead);
+        Raw := ReadResponse(Sock, Transport, IsHead, DeadlineNs);
       finally
         CloseTransportSecurity(Transport);
       end;
@@ -728,7 +897,9 @@ begin
         Result.Redirected := True;
 
         // Handle relative URLs
-        if (Length(Location) > 0) and (Location[1] = '/') then
+        if Copy(Location, 1, 2) = '//' then
+          CurrentURL := Parsed.Scheme + ':' + Location
+        else if (Length(Location) > 0) and (Location[1] = '/') then
           CurrentURL := Parsed.Scheme + '://' + HostHeader + Location
         else if Pos('://', Location) = 0 then
           CurrentURL := Parsed.Scheme + '://' + HostHeader + '/' + Location
@@ -761,15 +932,19 @@ end;
 // ---------------------------------------------------------------------------
 
 function HTTPGet(const AURL: string;
-  const AHeaders: THTTPHeaders): THTTPResponse;
+  const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
+  const ATimeoutMilliseconds: Integer): THTTPResponse;
 begin
-  Result := DoRequest('GET', AURL, AHeaders, MAX_REDIRECTS);
+  Result := DoRequest('GET', AURL, AHeaders, MAX_REDIRECTS, AAllowedHosts,
+    ATimeoutMilliseconds);
 end;
 
 function HTTPHead(const AURL: string;
-  const AHeaders: THTTPHeaders): THTTPResponse;
+  const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
+  const ATimeoutMilliseconds: Integer): THTTPResponse;
 begin
-  Result := DoRequest('HEAD', AURL, AHeaders, MAX_REDIRECTS);
+  Result := DoRequest('HEAD', AURL, AHeaders, MAX_REDIRECTS, AAllowedHosts,
+    ATimeoutMilliseconds);
 end;
 
 end.

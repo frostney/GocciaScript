@@ -49,6 +49,7 @@ type
   TAbstractJSONParser = class abstract
   private
     FCapabilities: TJSONParserCapabilities;
+    FDepth: Integer;
     FLength: Integer;
     FPosition: Integer;
     FText: string;
@@ -127,6 +128,7 @@ uses
   TextSemantics;
 
 const
+  MAX_JSON_NESTING_DEPTH = 256;
   JSON5_NO_BREAK_SPACE = #$00A0;
   JSON5_OGHAM_SPACE_MARK = #$1680;
   JSON5_EN_QUAD = #$2000;
@@ -257,6 +259,7 @@ begin
   FText := AText;
   FPosition := 1;
   FLength := Length(FText);
+  FDepth := 0;
 
   SkipWhitespace;
   if IsAtEnd then
@@ -308,9 +311,33 @@ begin
   Ch := PeekChar;
   case Ch of
     '{':
-      DoParseObject;
+      begin
+        Inc(FDepth);
+        if FDepth > MAX_JSON_NESTING_DEPTH then
+        begin
+          Dec(FDepth);
+          RaiseParseError('JSON nesting exceeds the supported limit');
+        end;
+        try
+          DoParseObject;
+        finally
+          Dec(FDepth);
+        end;
+      end;
     '[':
-      DoParseArray;
+      begin
+        Inc(FDepth);
+        if FDepth > MAX_JSON_NESTING_DEPTH then
+        begin
+          Dec(FDepth);
+          RaiseParseError('JSON nesting exceeds the supported limit');
+        end;
+        try
+          DoParseArray;
+        finally
+          Dec(FDepth);
+        end;
+      end;
     '"':
       OnString(ParseString('"'));
     '''':

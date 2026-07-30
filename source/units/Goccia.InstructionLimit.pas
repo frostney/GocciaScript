@@ -19,11 +19,16 @@ type
   private
     MaxInstructions: Int64;
     InstructionCount: Int64;
+    ScopeStarts: array of Int64;
+    ScopeLimits: array of Int64;
+    ScopeDepth: Integer;
   end;
   PGocciaInstructionLimitState = ^TGocciaInstructionLimitState;
 
 procedure StartInstructionLimit(const AMaxInstructions: Int64);
 procedure ClearInstructionLimit;
+procedure PushInstructionLimitScope(const AMaxInstructions: Int64);
+procedure PopInstructionLimitScope;
 function CaptureInstructionLimitState: PGocciaInstructionLimitState; {$IFDEF FPC}inline;{$ENDIF}
 procedure IncrementInstructionCounter; {$IFDEF FPC}inline;{$ENDIF}
 procedure CheckInstructionLimit; {$IFDEF FPC}inline;{$ENDIF}
@@ -37,14 +42,65 @@ threadvar
 
 procedure StartInstructionLimit(const AMaxInstructions: Int64);
 begin
+  GInstructionLimitState.ScopeDepth := 0;
+  SetLength(GInstructionLimitState.ScopeStarts, 0);
+  SetLength(GInstructionLimitState.ScopeLimits, 0);
   GInstructionLimitState.MaxInstructions := AMaxInstructions;
   GInstructionLimitState.InstructionCount := 0;
 end;
 
 procedure ClearInstructionLimit;
 begin
+  GInstructionLimitState.ScopeDepth := 0;
+  SetLength(GInstructionLimitState.ScopeStarts, 0);
+  SetLength(GInstructionLimitState.ScopeLimits, 0);
   GInstructionLimitState.MaxInstructions := 0;
   GInstructionLimitState.InstructionCount := 0;
+end;
+
+procedure PushInstructionLimitScope(const AMaxInstructions: Int64);
+var
+  Index: Integer;
+begin
+  if (GInstructionLimitState.ScopeDepth = 0) and
+     (GInstructionLimitState.MaxInstructions <= 0) then
+    GInstructionLimitState.InstructionCount := 0;
+  Index := GInstructionLimitState.ScopeDepth;
+  SetLength(GInstructionLimitState.ScopeStarts, Index + 1);
+  SetLength(GInstructionLimitState.ScopeLimits, Index + 1);
+  GInstructionLimitState.ScopeStarts[Index] :=
+    GInstructionLimitState.InstructionCount;
+  GInstructionLimitState.ScopeLimits[Index] := AMaxInstructions;
+  Inc(GInstructionLimitState.ScopeDepth);
+end;
+
+procedure PopInstructionLimitScope;
+begin
+  if GInstructionLimitState.ScopeDepth = 0 then
+    Exit;
+  Dec(GInstructionLimitState.ScopeDepth);
+  SetLength(GInstructionLimitState.ScopeStarts,
+    GInstructionLimitState.ScopeDepth);
+  SetLength(GInstructionLimitState.ScopeLimits,
+    GInstructionLimitState.ScopeDepth);
+end;
+
+procedure RaiseInstructionLimit(const AMaxInstructions: Int64);
+begin
+  raise TGocciaInstructionLimitError.CreateFmt(
+    'Execution exceeded instruction limit of %d', [AMaxInstructions]);
+end;
+
+procedure CheckScopedInstructionLimits;
+var
+  I: Integer;
+begin
+  for I := 0 to GInstructionLimitState.ScopeDepth - 1 do
+    if (GInstructionLimitState.ScopeLimits[I] > 0) and
+       (GInstructionLimitState.InstructionCount -
+        GInstructionLimitState.ScopeStarts[I] >=
+        GInstructionLimitState.ScopeLimits[I]) then
+      RaiseInstructionLimit(GInstructionLimitState.ScopeLimits[I]);
 end;
 
 function CaptureInstructionLimitState: PGocciaInstructionLimitState;
@@ -54,29 +110,29 @@ end;
 
 procedure IncrementInstructionCounter; {$IFDEF FPC}inline;{$ENDIF}
 begin
-  if GInstructionLimitState.MaxInstructions > 0 then
+  if (GInstructionLimitState.MaxInstructions > 0) or
+     (GInstructionLimitState.ScopeDepth > 0) then
     Inc(GInstructionLimitState.InstructionCount);
 end;
 
 procedure CheckInstructionLimit; {$IFDEF FPC}inline;{$ENDIF}
 begin
+  CheckScopedInstructionLimits;
   if (GInstructionLimitState.MaxInstructions > 0) and
      (GInstructionLimitState.InstructionCount >=
       GInstructionLimitState.MaxInstructions) then
-    raise TGocciaInstructionLimitError.CreateFmt(
-      'Execution exceeded instruction limit of %d',
-      [GInstructionLimitState.MaxInstructions]);
+    RaiseInstructionLimit(GInstructionLimitState.MaxInstructions);
 end;
 
 procedure PollInstructionLimit(
   const AState: PGocciaInstructionLimitState); {$IFDEF FPC}inline;{$ENDIF}
 begin
-  if AState.MaxInstructions > 0 then
+  if (AState.MaxInstructions > 0) or (AState.ScopeDepth > 0) then
   begin
-    if AState.InstructionCount >= AState.MaxInstructions then
-      raise TGocciaInstructionLimitError.CreateFmt(
-        'Execution exceeded instruction limit of %d',
-        [AState.MaxInstructions]);
+    CheckScopedInstructionLimits;
+    if (AState.MaxInstructions > 0) and
+       (AState.InstructionCount >= AState.MaxInstructions) then
+      RaiseInstructionLimit(AState.MaxInstructions);
     Inc(AState.InstructionCount);
   end;
 end;
