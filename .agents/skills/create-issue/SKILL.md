@@ -14,95 +14,49 @@ compatibility: >-
 
 ## Instructions
 
-Create a GitHub issue in the current repository from the user's tagline or short description.
+Turn the user's input into an implementation-ready issue grounded in the current
+repository, then create it after the required review boundary.
 
-### Non-negotiable gates
+### Gates
 
-1. **Investigate before drafting.** Search for duplicates and related work, read
-   the affected implementation area, and check project vision and instructions.
-2. **Run the grill skill when registered.** Use `grill-with-docs`, falling back
-   to `grill-me`, and complete its actual user-question loop before drafting.
-   Ad-hoc questions or a doc-grounded summary are not substitutes. If neither
-   skill is registered, note that once and continue.
+- Investigate before drafting: read the applicable project instructions and
+  vision, search open and closed issues for duplicates, and inspect the affected
+  code, tests, and docs.
+- When `grill-with-docs` or `grill-me` is registered, run its actual
+  user-question loop before drafting. Prefer `grill-with-docs`. If neither is
+  available, note that once and continue.
+- Stop before drafting when the request conflicts with project vision, is a
+  duplicate, or needs material facts that cannot be established. For a
+  duplicate, return the existing issue and stop without asking whether to file
+  the same request anyway or mutate the existing issue.
 
 ### Automatic mode
 
-Automatic mode is opt-in. It is active only when the user's original `/create-issue` prompt includes the standalone word `automatic` or explicitly asks for automatic mode.
+Automatic mode applies only when the original prompt says `automatic` or
+explicitly requests it. Complete every gate, then choose the template, title,
+labels, and body from project evidence and create the issue without draft
+approval. Material ambiguity or risk disables automatic mode.
 
-In automatic mode, do **not** skip template discovery, duplicate investigation, `VISION.md` review, grilling, the drafting checkpoint, or issue drafting. Auto-select the issue template, labels, title, and final issue body from project context, then create the issue without pausing for user review.
+### Workflow
 
-If the issue would be contrary to `VISION.md`, appears duplicate, needs missing facts that cannot be inferred from the project, or has materially risky scope, automatic mode does not apply: stop and ask the user for clarification.
+1. Discover the repository's issue templates and existing label conventions.
+2. Investigate the request using the gates above. Ground any progress claim in
+   evidence gathered this run.
+3. Run the registered grill skill and incorporate the result.
+4. Draft against the matching template. Keep only decision-, implementation-,
+   and verification-relevant content:
+   - a specific plain-language title;
+   - problem, current and expected behavior, scope, constraints, and acceptance
+     criteria;
+   - reproduction and regression expectations for bugs;
+   - user/test impact, likely affected area, and related work where relevant.
+5. For UI/UX work, add the affected states, current and expected visual evidence,
+   accessibility expectations, responsive/theme scope, and applicable design
+   system components or tokens.
+6. Choose only existing labels unless the user asks to create one.
+7. Show the proposed title, labels, and body unless the user waived review or
+   automatic mode applies.
+8. Create the issue with the available forge tooling and return its URL.
 
-### Drafting checkpoint
-
-After investigation and grilling, give one concise phase update naming the
-material project constraints or findings that shape the draft. Do not narrate an
-internal compliance checklist or list context that did not affect the result.
-
-### Steps
-
-1. Parse the tagline or short description. If missing, ask.
-2. Resolve the issue template:
-   - Search `.github/ISSUE_TEMPLATE/`, `.github/ISSUE_TEMPLATE/default.md`, and `.github/ISSUE_TEMPLATE.md`.
-   - Prefer `.github/ISSUE_TEMPLATE/` when multiple templates are discovered; pick the one matching the issue type (bug, feature, chore, etc.).
-   - Fall back to `.github/ISSUE_TEMPLATE/default.md` or `.github/ISSUE_TEMPLATE.md` when discovered.
-   - Absence protocol: after the template search finds no issue template, state that no project issue template was found and use a minimal structure: Summary, Reproduction (bugs), Current vs Expected, Scope, Related.
-3. **Investigate before drafting:**
-   - Search for `VISION.md` at the repository root and in relevant product/docs areas. Read every discovered vision document and use it to shape the issue scope, non-goals, and acceptance criteria. If the tagline asks for behavior contrary to the stated product or technical vision, call out the conflict explicitly and ask the user whether to revise the issue, override the vision for this work, or abandon the issue before drafting or creating it.
-   - Search code, docs, tests, and existing open/closed issues for duplicates and related work.
-   - Read the implementation area the issue touches. Do not draft from the tagline alone.
-   - If the tagline cannot become a concrete issue without guessing, stop and ask.
-4. **Run the grill gate.** Give the grill skill the tagline plus the material project and investigation context, complete its loop, and fold the result into the issue. Do not implement product code during grilling unless that skill explicitly requires a context update.
-5. **Give the drafting checkpoint, then draft the issue.** A good issue typically includes:
-   - A specific, plain-language title with no area prefix (use labels for area/type).
-   - A short problem summary.
-   - For bugs: reproduction command or minimal code/UI sample; current vs expected behavior.
-   - Project context (spec, RFC, related issue) when relevant.
-   - Test impact, user impact, or blocked work.
-   - Likely fix area, scope notes, constraints, and related issues.
-6. **If the change is UI/UX, also include:**
-   - Affected screens, routes, or components.
-   - Current visual state: screenshot, short recording, or precise description (layout, copy, state).
-   - Expected visual state: screenshot, mock, design link (Figma, etc.), or precise description.
-   - Accessibility expectations: keyboard navigation, focus order, visible focus, ARIA roles/labels, color contrast (target WCAG AA or the project's standard), motion / `prefers-reduced-motion`.
-   - Responsive scope: which breakpoints and devices apply, and which themes (light/dark/system).
-   - Design system or component library in use, and the specific tokens or components involved.
-7. Choose labels by matching existing repo conventions. Use labels (not title prefixes) for area and type. Do not invent labels unless the user asks.
-8. Show the title, labels, and body to the user before creating, unless the user asked to create without review or automatic mode applies. In automatic mode, state the auto-selected template, labels, title, and body rationale, then continue to issue creation without waiting.
-9. Resolve the repository ID, then create the issue with GraphQL:
-
-   ```bash
-   REPOSITORY_ID=$(gh api graphql \
-     -f query='query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id}}' \
-     -f owner="$OWNER" -f name="$REPO" --jq '.data.repository.id')
-
-   gh api graphql \
-     -f query='mutation($repositoryId:ID!, $title:String!, $body:String!, $labelIds:[ID!]) {
-       createIssue(input: {
-         repositoryId: $repositoryId,
-         title: $title,
-         body: $body,
-         labelIds: $labelIds
-       }) {
-         issue { url number }
-       }
-     }' \
-     -F repositoryId="$REPOSITORY_ID" \
-     -f title="$ISSUE_TITLE" \
-     -f body="$ISSUE_BODY"
-   ```
-
-   When labels were selected, append one `-F labelIds[]="$LABEL_ID"` argument per label ID.
-
-10. If GraphQL is rate-limited or unavailable, fall back to REST:
-
-    ```bash
-    gh api "repos/$OWNER/$REPO/issues" \
-      -f title="$ISSUE_TITLE" \
-      -f body="$ISSUE_BODY" \
-      --jq '.html_url'
-    ```
-
-    When labels were selected, append one `-f labels[]="$LABEL_NAME"` argument per label name.
-
-11. Return the issue URL.
+Lead with the outcome. Omit boilerplate, repeated summaries, and a narration of
+the workflow.
