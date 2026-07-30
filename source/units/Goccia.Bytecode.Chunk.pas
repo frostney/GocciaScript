@@ -832,11 +832,9 @@ end;
 function TGocciaFunctionTemplate.GetUpvalueDescriptor(
   const AIndex: Integer): TGocciaUpvalueDescriptor;
 begin
-  {$IFDEF DEBUG}
   if (AIndex < 0) or (AIndex >= FUpvalueCount) then
     raise ERangeError.CreateFmt('GetUpvalueDescriptor: index %d out of range 0..%d',
       [AIndex, FUpvalueCount - 1]);
-  {$ENDIF}
   Result := FUpvalueDescriptors[AIndex];
 end;
 

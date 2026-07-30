@@ -8,7 +8,9 @@ uses
 
   TestingPascalLibrary,
 
+  Goccia.GarbageCollector,
   Goccia.TestSetup,
+  Goccia.Values.Error,
   Goccia.Values.Primitives;
 
 type
@@ -19,6 +21,8 @@ type
     procedure TestStringValueEmpty;
     procedure TestStringValueNumber;
     procedure TestStringValuePreservesUnicode;
+    procedure TestStringValueAccountsForBackingStore;
+    procedure TestStringValueMemoryLimitRaisesOnce;
     procedure TestNumberValue;
     procedure TestNumberValueNaN;
     procedure TestNumberValueInfinity;
@@ -38,6 +42,10 @@ begin
   Test('String value with empty content', TestStringValueEmpty);
   Test('String value with number content', TestStringValueNumber);
   Test('String value preserves Unicode text', TestStringValuePreservesUnicode);
+  Test('String value accounts for its backing store',
+    TestStringValueAccountsForBackingStore);
+  Test('String value memory limit raises without recursion',
+    TestStringValueMemoryLimitRaisesOnce);
   Test('Number value', TestNumberValue);
   Test('NaN value', TestNumberValueNaN);
   Test('Infinity value', TestNumberValueInfinity);
@@ -102,6 +110,69 @@ begin
     'Caf' + #$00E9 + ' d' + #$00E9 + 'j' + #$00E0 + ' vu');
   Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(True);
   Expect<string>(Value.TypeName).ToBe('string');
+end;
+
+procedure TTestPrimitives.TestStringValueAccountsForBackingStore;
+const
+  STRING_CODE_UNITS = 1024;
+var
+  AccountedBytes, BaselineBytes: Int64;
+  GC: TGarbageCollector;
+  OwnsGarbageCollector: Boolean;
+  Value: TGocciaStringLiteralValue;
+begin
+  OwnsGarbageCollector := TGarbageCollector.Instance = nil;
+  if OwnsGarbageCollector then
+    TGarbageCollector.Initialize;
+  GC := TGarbageCollector.Instance;
+  try
+    BaselineBytes := GC.BytesAllocated;
+    Value := TGocciaStringLiteralValue.Create(
+      StringOfChar('x', STRING_CODE_UNITS));
+    GC.AddRootObject(Value);
+    try
+      AccountedBytes := GC.BytesAllocated - BaselineBytes;
+      Expect<Boolean>(
+        AccountedBytes >= STRING_CODE_UNITS * SizeOf(Char)).ToBe(True);
+    finally
+      GC.RemoveRootObject(Value);
+      GC.Collect;
+    end;
+  finally
+    if OwnsGarbageCollector then
+      TGarbageCollector.Shutdown;
+  end;
+end;
+
+procedure TTestPrimitives.TestStringValueMemoryLimitRaisesOnce;
+var
+  GC: TGarbageCollector;
+  OldMaxBytes: Int64;
+  OwnsGarbageCollector: Boolean;
+  RaisedMemoryLimit: Boolean;
+begin
+  OwnsGarbageCollector := TGarbageCollector.Instance = nil;
+  if OwnsGarbageCollector then
+    TGarbageCollector.Initialize;
+  GC := TGarbageCollector.Instance;
+  OldMaxBytes := GC.MaxBytes;
+  RaisedMemoryLimit := False;
+  try
+    GC.MaxBytes := GC.BytesAllocated + 1;
+    try
+      TGocciaStringLiteralValue.Create(StringOfChar('x', 64));
+    except
+      on E: TGocciaThrowValue do
+        RaisedMemoryLimit := True;
+    end;
+    Expect<Boolean>(RaisedMemoryLimit).ToBe(True);
+    Expect<Boolean>(GC.MemoryLimitFiring).ToBe(False);
+  finally
+    GC.MaxBytes := OldMaxBytes;
+    GC.Collect;
+    if OwnsGarbageCollector then
+      TGarbageCollector.Shutdown;
+  end;
 end;
 
 procedure TTestPrimitives.TestNumberValue;

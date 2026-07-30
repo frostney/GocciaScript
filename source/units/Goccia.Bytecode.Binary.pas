@@ -91,6 +91,22 @@ var
         [AIndex, ATemplate.ConstantCount - 1]));
   end;
 
+  procedure RequireRegister(const AIndex: Integer);
+  begin
+    if (AIndex < 0) or (AIndex >= ATemplate.MaxRegisters) then
+      RejectInvalidBytecode(ATemplate, PC, Format(
+        'register %d is outside MaxRegisters %d',
+        [AIndex, ATemplate.MaxRegisters]));
+  end;
+
+  procedure RequireUpvalue(const AIndex: Integer);
+  begin
+    if (AIndex < 0) or (AIndex >= ATemplate.UpvalueCount) then
+      RejectInvalidBytecode(ATemplate, PC, Format(
+        'upvalue index %d is outside 0..%d',
+        [AIndex, ATemplate.UpvalueCount - 1]));
+  end;
+
   procedure RequireJumpTarget(const ATarget: Int64);
   begin
     if (ATarget < 0) or (ATarget > ATemplate.CodeCount) then
@@ -160,6 +176,18 @@ begin
         [C, ATemplate.MaxRegisters]));
 
     case TGocciaOpCode(Op) of
+      OP_TO_PRIMITIVE, OP_GET_LOCAL, OP_SET_LOCAL, OP_CLOSE_UPVALUE:
+        RequireRegister(DecodeBx(Instruction));
+
+      OP_GET_UPVALUE, OP_SET_UPVALUE, OP_SET_UPVALUE_DYNAMIC:
+        RequireUpvalue(DecodeBx(Instruction));
+
+      OP_RESOLVE_UPVALUE_REF:
+        RequireUpvalue(B);
+
+      OP_SET_UPVALUE_REF:
+        RequireUpvalue(C);
+
       OP_LOAD_CONST, OP_LOAD_REGEXP, OP_SET_GLOBAL_STATIC, OP_NEW_CLASS,
       OP_SET_CLASS_SOURCE_CONST, OP_DELETE_PROP_CONST,
       OP_DELETE_PROP_CONST_LOOSE, OP_GET_GLOBAL, OP_SET_GLOBAL,

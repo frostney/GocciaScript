@@ -58,6 +58,9 @@ uses
   Goccia.Values.PromiseValue,
   Goccia.Values.URLValue;
 
+const
+  INVALID_FETCH_AUDIT_SUBJECT = '<invalid URL>';
+
 { TGocciaGlobalFetch }
 
 constructor TGocciaGlobalFetch.Create(const AName: string;
@@ -99,7 +102,18 @@ begin
     Host := HTTPURLHost(AURLStr);
   except
     on E: EHTTPError do
+    begin
+      try
+        Host := HTTPURLAuditHost(AURLStr);
+      except
+        on EAudit: EHTTPError do
+          Host := INVALID_FETCH_AUDIT_SUBJECT;
+      end;
+      if Assigned(FCapabilityAuditEmitter) then
+        FCapabilityAuditEmitter(gckFetchHost, gcdDeny, Host,
+          'fetch URL is invalid');
       ThrowTypeError('Invalid fetch URL: ' + E.Message);
+    end;
   end;
   if FAllowedHosts.Count = 0 then
   begin

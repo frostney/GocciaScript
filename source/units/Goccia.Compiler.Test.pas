@@ -864,6 +864,31 @@ begin
   Template.EmitInstruction(EncodeABC(OP_MOVE, 0, 256, 0));
   ExpectRejected(Template);
 
+  Template := TGocciaFunctionTemplate.Create('invalid-bx-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_TO_PRIMITIVE, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-local');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_GET_LOCAL, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-local-write');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_SET_LOCAL, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-upvalue');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_GET_UPVALUE, 0, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-upvalue-reference');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_RESOLVE_UPVALUE_REF, 0, 0, 0));
+  ExpectRejected(Template);
+
   Template := TGocciaFunctionTemplate.Create('invalid-constant');
   Template.MaxRegisters := 1;
   Template.EmitInstruction(EncodeABx(OP_LOAD_CONST, 0, 1));

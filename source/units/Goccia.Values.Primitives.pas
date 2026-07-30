@@ -630,21 +630,29 @@ end;
 
 constructor TGocciaStringLiteralValue.Create(const AValue: string);
 var
+  ChargedBytes: Int64;
   GC: TGarbageCollector;
-const
-  MIN_EXTERNAL_STRING_BYTES = 4096;
 begin
   inherited Create;
-  FChargedBytes := Int64(Length(AValue)) * SizeOf(Char);
-  // Small strings are already represented by a GC-managed value and charging
-  // every short-lived property name materially distorts collection cadence.
-  // Account substantial backing stores, which are the allocation-amplification
-  // boundary this external-byte counter is intended to enforce.
-  if FChargedBytes < MIN_EXTERNAL_STRING_BYTES then
-    FChargedBytes := 0;
+  FChargedBytes := 0;
+  ChargedBytes := Int64(Length(AValue)) * SizeOf(Char);
   GC := TGarbageCollector.Instance;
-  if Assigned(GC) and not GC.TryReserveExternalBytes(FChargedBytes) then
-    ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
+  if Assigned(GC) and not GC.MemoryLimitFiring then
+  begin
+    if not GC.TryReserveExternalBytes(ChargedBytes) then
+    begin
+      // The RangeError itself allocates short strings. Suppress accounting
+      // while constructing it so a failed reservation cannot recurse until
+      // the native stack overflows.
+      GC.MemoryLimitFiring := True;
+      try
+        ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
+      finally
+        GC.MemoryLimitFiring := False;
+      end;
+    end;
+    FChargedBytes := ChargedBytes;
+  end;
   FValue := AValue;
 end;
 

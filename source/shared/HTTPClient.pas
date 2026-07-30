@@ -31,26 +31,32 @@ function HTTPHead(const AURL: string;
   const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings = nil;
   const ATimeoutMilliseconds: Integer = 0): THTTPResponse;
 function HTTPURLHost(const AURL: string): string;
+function HTTPURLAuditHost(const AURL: string): string;
 
 implementation
 
 uses
+  SyncObjs,
+
   {$IFDEF UNIX}
   Sockets, BaseUnix, NetDB,
   {$ENDIF}
   {$IFDEF MSWINDOWS}
   WinSock2,
   {$ENDIF}
+  CriticalSections,
   TextEncoding,
   TimingUtils,
   TransportSecurity;
 
 const
-  MAX_REDIRECTS   = 20;
+  HTTP_CONNECTION_WORKER_STACK_SIZE = 1024 * 1024;
+  MAX_HTTP_CONNECTION_WORKERS = 16;
+  MAX_REDIRECTS = 20;
   MAX_RESPONSE_HEADER_BYTES = 64 * 1024;
   MAX_RESPONSE_BODY_BYTES = 8 * 1024 * 1024;
-  CRLF            = #13#10;
-  RECV_BUF_SIZE   = 8192;
+  CRLF = #13#10;
+  RECV_BUF_SIZE = 8192;
 
 type
   THTTPParsedURL = record
@@ -59,6 +65,46 @@ type
     Port: Integer;
     Path: string;
   end;
+
+  THTTPConnectionState = class
+  private
+    FAbandoned: Boolean;
+    FCompleted: Boolean;
+    FErrorMessage: string;
+    FEvent: TEvent;
+    FLock: TGocciaCriticalSection;
+    FRefCount: Integer;
+    FSocket: TSocket;
+  public
+    constructor Create;
+    destructor Destroy; override;
+
+    procedure AddRef;
+    procedure Complete(const ASocket: TSocket; const AErrorMessage: string);
+    procedure Release;
+    function TakeResult(out ASocket: TSocket;
+      out AErrorMessage: string): Boolean;
+    function TryAbandon: Boolean;
+    function WaitFor(const ATimeoutMilliseconds: Integer): TWaitResult;
+  end;
+
+  THTTPConnectionWorker = class(TThread)
+  private
+    FHost: string;
+    FPort: Integer;
+    FState: THTTPConnectionState;
+    FTimeoutMilliseconds: Integer;
+    FWorkerSlotAcquired: Boolean;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const AHost: string; const APort,
+      ATimeoutMilliseconds: Integer; const AState: THTTPConnectionState);
+    destructor Destroy; override;
+  end;
+
+var
+  GHTTPConnectionWorkerCount: Integer = 0;
 
 {$IFDEF MSWINDOWS}
 type
@@ -99,7 +145,8 @@ end;
 // ---------------------------------------------------------------------------
 
 function ParseHTTPURL(const AURL: string;
-  const ARequireSupportedScheme: Boolean = True): THTTPParsedURL;
+  const ARequireSupportedScheme: Boolean = True;
+  const AAllowUserInfo: Boolean = False): THTTPParsedURL;
 var
   S, Rest: string;
   I, AuthorityEnd, ColonCount, ParsedPort: Integer;
@@ -147,8 +194,13 @@ begin
       Result.Path := '/' + Result.Path;
   end;
 
-  if Pos('@', Rest) > 0 then
-    raise EHTTPError.Create('Invalid URL: userinfo is not allowed');
+  I := LastDelimiter('@', Rest);
+  if I > 0 then
+  begin
+    if not AAllowUserInfo then
+      raise EHTTPError.Create('Invalid URL: userinfo is not allowed');
+    Rest := Copy(Rest, I + 1, MaxInt);
+  end;
 
   // Parse host:port
   if (Length(Rest) > 0) and (Rest[1] = '[') then
@@ -219,6 +271,13 @@ begin
   Result := ParseHTTPURL(AURL, False).Host;
 end;
 
+function HTTPURLAuditHost(const AURL: string): string;
+begin
+  // This parser is only for capability-audit subjects. It canonicalizes the
+  // destination after userinfo without relaxing request validation.
+  Result := ParseHTTPURL(AURL, False, True).Host;
+end;
+
 // ---------------------------------------------------------------------------
 // Socket connect (cross-platform)
 // ---------------------------------------------------------------------------
@@ -239,7 +298,7 @@ begin
     SizeOf(Timeout));
 end;
 
-function ConnectSocket(const AHost: string; const APort,
+function ConnectSocketBlocking(const AHost: string; const APort,
   ATimeoutMilliseconds: Integer): TSocket;
 var
   SockAddr: TInetSockAddr;
@@ -289,7 +348,7 @@ begin
     PAnsiChar(@Timeout), SizeOf(Timeout));
 end;
 
-function ConnectSocket(const AHost: string; const APort,
+function ConnectSocketBlocking(const AHost: string; const APort,
   ATimeoutMilliseconds: Integer): TSocket;
 var
   Hints, Res, Cur: PAddrInfo;
@@ -390,6 +449,222 @@ begin
   {$IFDEF MSWINDOWS}
   WinSock2.closesocket(ASock);
   {$ENDIF}
+end;
+
+function InvalidHTTPSocket: TSocket; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  Result := -1;
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  Result := INVALID_SOCKET;
+  {$ENDIF}
+end;
+
+function IsValidHTTPSocket(const ASocket: TSocket): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  Result := ASocket >= 0;
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  Result := ASocket <> INVALID_SOCKET;
+  {$ENDIF}
+end;
+
+function TryAcquireHTTPConnectionWorker: Boolean;
+begin
+  Result := AtomicIncrementInt32(GHTTPConnectionWorkerCount) <=
+    MAX_HTTP_CONNECTION_WORKERS;
+  if not Result then
+    AtomicDecrementInt32(GHTTPConnectionWorkerCount);
+end;
+
+procedure ReleaseHTTPConnectionWorker;
+begin
+  AtomicDecrementInt32(GHTTPConnectionWorkerCount);
+end;
+
+{ THTTPConnectionState }
+
+constructor THTTPConnectionState.Create;
+begin
+  inherited;
+  FSocket := InvalidHTTPSocket;
+  CriticalSectionInit(FLock);
+  FEvent := TEvent.Create(nil, True, False, '');
+  FRefCount := 1;
+end;
+
+destructor THTTPConnectionState.Destroy;
+begin
+  if IsValidHTTPSocket(FSocket) then
+    SocketClose(FSocket);
+  FEvent.Free;
+  CriticalSectionDone(FLock);
+  inherited;
+end;
+
+procedure THTTPConnectionState.AddRef;
+begin
+  AtomicIncrementInt32(FRefCount);
+end;
+
+procedure THTTPConnectionState.Release;
+begin
+  if AtomicDecrementInt32(FRefCount) = 0 then
+    Free;
+end;
+
+procedure THTTPConnectionState.Complete(const ASocket: TSocket;
+  const AErrorMessage: string);
+var
+  CloseSocketAfterCompletion: Boolean;
+begin
+  CloseSocketAfterCompletion := False;
+  CriticalSectionEnter(FLock);
+  try
+    FCompleted := True;
+    if FAbandoned then
+      CloseSocketAfterCompletion := IsValidHTTPSocket(ASocket)
+    else
+    begin
+      FSocket := ASocket;
+      FErrorMessage := AErrorMessage;
+    end;
+  finally
+    CriticalSectionLeave(FLock);
+  end;
+  if CloseSocketAfterCompletion then
+    SocketClose(ASocket);
+  FEvent.SetEvent;
+end;
+
+function THTTPConnectionState.TakeResult(out ASocket: TSocket;
+  out AErrorMessage: string): Boolean;
+begin
+  ASocket := InvalidHTTPSocket;
+  AErrorMessage := '';
+  CriticalSectionEnter(FLock);
+  try
+    Result := FCompleted and not FAbandoned;
+    if Result then
+    begin
+      ASocket := FSocket;
+      FSocket := InvalidHTTPSocket;
+      AErrorMessage := FErrorMessage;
+    end;
+  finally
+    CriticalSectionLeave(FLock);
+  end;
+end;
+
+function THTTPConnectionState.TryAbandon: Boolean;
+begin
+  CriticalSectionEnter(FLock);
+  try
+    Result := not FCompleted;
+    if Result then
+      FAbandoned := True;
+  finally
+    CriticalSectionLeave(FLock);
+  end;
+end;
+
+function THTTPConnectionState.WaitFor(
+  const ATimeoutMilliseconds: Integer): TWaitResult;
+begin
+  Result := FEvent.WaitFor(ATimeoutMilliseconds);
+end;
+
+{ THTTPConnectionWorker }
+
+constructor THTTPConnectionWorker.Create(const AHost: string; const APort,
+  ATimeoutMilliseconds: Integer; const AState: THTTPConnectionState);
+begin
+  {$IFDEF FPC}
+  inherited Create(True, HTTP_CONNECTION_WORKER_STACK_SIZE);
+  {$ELSE}
+  inherited Create(True);
+  {$ENDIF}
+  FreeOnTerminate := True;
+  if not TryAcquireHTTPConnectionWorker then
+    raise EHTTPError.Create('HTTP connection worker limit exceeded');
+  FWorkerSlotAcquired := True;
+  FHost := AHost;
+  FPort := APort;
+  FTimeoutMilliseconds := ATimeoutMilliseconds;
+  FState := AState;
+  FState.AddRef;
+end;
+
+destructor THTTPConnectionWorker.Destroy;
+begin
+  if Assigned(FState) then
+    FState.Release;
+  if FWorkerSlotAcquired then
+    ReleaseHTTPConnectionWorker;
+  inherited;
+end;
+
+procedure THTTPConnectionWorker.Execute;
+var
+  ErrorMessage: string;
+  Socket: TSocket;
+begin
+  ErrorMessage := '';
+  Socket := InvalidHTTPSocket;
+  try
+    try
+      Socket := ConnectSocketBlocking(FHost, FPort, FTimeoutMilliseconds);
+    except
+      on E: Exception do
+        ErrorMessage := E.Message;
+    end;
+    FState.Complete(Socket, ErrorMessage);
+  except
+    if IsValidHTTPSocket(Socket) then
+      SocketClose(Socket);
+  end;
+end;
+
+function ConnectSocket(const AHost: string; const APort,
+  ATimeoutMilliseconds: Integer): TSocket;
+var
+  ErrorMessage: string;
+  State: THTTPConnectionState;
+  WaitResult: TWaitResult;
+  Worker: THTTPConnectionWorker;
+begin
+  if ATimeoutMilliseconds <= 0 then
+    Exit(ConnectSocketBlocking(AHost, APort, ATimeoutMilliseconds));
+
+  State := THTTPConnectionState.Create;
+  Worker := nil;
+  try
+    Worker := THTTPConnectionWorker.Create(AHost, APort,
+      ATimeoutMilliseconds, State);
+    Worker.Start;
+    Worker := nil;
+
+    WaitResult := State.WaitFor(ATimeoutMilliseconds);
+    if WaitResult = wrTimeout then
+    begin
+      if State.TryAbandon then
+        raise EHTTPError.Create('HTTP request timed out');
+    end
+    else if WaitResult <> wrSignaled then
+      raise EHTTPError.Create('HTTP connection wait failed');
+
+    if not State.TakeResult(Result, ErrorMessage) then
+      raise EHTTPError.Create('HTTP request timed out');
+    if ErrorMessage <> '' then
+      raise EHTTPError.Create(ErrorMessage);
+    if not IsValidHTTPSocket(Result) then
+      raise EHTTPError.Create('HTTP connection failed');
+  finally
+    Worker.Free;
+    State.Release;
+  end;
 end;
 
 // ---------------------------------------------------------------------------
@@ -835,6 +1110,7 @@ begin
     Sock := ConnectSocket(Parsed.Host, Parsed.Port,
       RemainingTimeoutMilliseconds);
     try
+      ConfigureSocketTimeout(Sock, RemainingTimeoutMilliseconds);
       if Parsed.Scheme = 'https' then
         StartTransportSecurity(Transport, Sock, Parsed.Host);
 
