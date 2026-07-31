@@ -22,6 +22,7 @@ type
     ScopeStarts: array of Int64;
     ScopeLimits: array of Int64;
     ScopeDepth: Integer;
+    Active: Boolean;
   end;
   PGocciaInstructionLimitState = ^TGocciaInstructionLimitState;
 
@@ -47,6 +48,7 @@ begin
   SetLength(GInstructionLimitState.ScopeLimits, 0);
   GInstructionLimitState.MaxInstructions := AMaxInstructions;
   GInstructionLimitState.InstructionCount := 0;
+  GInstructionLimitState.Active := AMaxInstructions > 0;
 end;
 
 procedure ClearInstructionLimit;
@@ -56,6 +58,7 @@ begin
   SetLength(GInstructionLimitState.ScopeLimits, 0);
   GInstructionLimitState.MaxInstructions := 0;
   GInstructionLimitState.InstructionCount := 0;
+  GInstructionLimitState.Active := False;
 end;
 
 procedure PushInstructionLimitScope(const AMaxInstructions: Int64);
@@ -72,6 +75,7 @@ begin
     GInstructionLimitState.InstructionCount;
   GInstructionLimitState.ScopeLimits[Index] := AMaxInstructions;
   Inc(GInstructionLimitState.ScopeDepth);
+  GInstructionLimitState.Active := True;
 end;
 
 procedure PopInstructionLimitScope;
@@ -83,6 +87,9 @@ begin
     GInstructionLimitState.ScopeDepth);
   SetLength(GInstructionLimitState.ScopeLimits,
     GInstructionLimitState.ScopeDepth);
+  GInstructionLimitState.Active :=
+    (GInstructionLimitState.MaxInstructions > 0) or
+    (GInstructionLimitState.ScopeDepth > 0);
 end;
 
 procedure RaiseInstructionLimit(const AMaxInstructions: Int64);
@@ -110,14 +117,14 @@ end;
 
 procedure IncrementInstructionCounter; {$IFDEF FPC}inline;{$ENDIF}
 begin
-  if (GInstructionLimitState.MaxInstructions > 0) or
-     (GInstructionLimitState.ScopeDepth > 0) then
+  if GInstructionLimitState.Active then
     Inc(GInstructionLimitState.InstructionCount);
 end;
 
 procedure CheckInstructionLimit; {$IFDEF FPC}inline;{$ENDIF}
 begin
-  CheckScopedInstructionLimits;
+  if GInstructionLimitState.ScopeDepth > 0 then
+    CheckScopedInstructionLimits;
   if (GInstructionLimitState.MaxInstructions > 0) and
      (GInstructionLimitState.InstructionCount >=
       GInstructionLimitState.MaxInstructions) then
@@ -127,9 +134,10 @@ end;
 procedure PollInstructionLimit(
   const AState: PGocciaInstructionLimitState); {$IFDEF FPC}inline;{$ENDIF}
 begin
-  if (AState.MaxInstructions > 0) or (AState.ScopeDepth > 0) then
+  if AState.Active then
   begin
-    CheckScopedInstructionLimits;
+    if AState.ScopeDepth > 0 then
+      CheckScopedInstructionLimits;
     if (AState.MaxInstructions > 0) and
        (AState.InstructionCount >= AState.MaxInstructions) then
       RaiseInstructionLimit(AState.MaxInstructions);

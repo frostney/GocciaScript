@@ -74,11 +74,14 @@ type
 
     FBytesAllocated: Int64;
     FExternalBytes: Int64;
+    FExternalBytesAllocatedSinceGC: Int64;
     FPeakBytesAllocated: Int64;
     FTotalBytesAllocated: Int64;
     FMaxBytes: Int64;
     FSuggestedMaxBytes: Int64;
     FMemoryLimitFiring: Boolean;
+    FExternalPressurePending: Boolean;
+    FMemoryPressureCountdown: PInteger;
 
     {$IFDEF GC_TIMING}
     FTotalMarkTimeNs: Int64;
@@ -148,6 +151,8 @@ type
     procedure ResetPeakBytesAllocated;
     function TryReserveExternalBytes(const ABytes: Int64): Boolean;
     procedure ReleaseExternalBytes(const ABytes: Int64);
+    function ExchangeMemoryPressureCountdown(
+      const ACountdown: PInteger): PInteger;
 
     {$IFDEF GC_TIMING}
     procedure PrintTimingSummary;
@@ -169,6 +174,8 @@ type
     property MaxBytes: Int64 read FMaxBytes write FMaxBytes;
     property SuggestedMaxBytes: Int64 read FSuggestedMaxBytes;
     property MemoryLimitFiring: Boolean read FMemoryLimitFiring write FMemoryLimitFiring;
+    property ExternalPressurePending: Boolean
+      read FExternalPressurePending;
 
     // Current position in the managed objects list. Capture before a
     // measurement phase and pass to CollectYoung for efficient
@@ -183,7 +190,8 @@ const
   MAX_BYTES_CAP_64BIT = Int64(8192) * 1024 * 1024;  { 8 GB cap for 64-bit }
   MAX_BYTES_CAP_32BIT = 700 * 1024 * 1024;          { 700 MB cap for 32-bit }
   MEMORY_PRESSURE_COLLECTION_MIN_RESERVE = 16 * 1024;
-  MEMORY_PRESSURE_COLLECTION_MAX_RESERVE = 1024 * 1024;
+  MEMORY_PRESSURE_COLLECTION_MAX_RESERVE = 16 * 1024 * 1024;
+  EXTERNAL_MEMORY_PRESSURE_ALLOCATION_INTERVAL = 256 * 1024 * 1024;
 
 function DetectDefaultMaxBytes: Int64;
 procedure InitializeTempRoot(var ARoot: TGocciaTempRoot); {$IFDEF FPC}inline;{$ENDIF}
@@ -398,11 +406,14 @@ begin
   FTotalCollections := 0;
   FBytesAllocated := 0;
   FExternalBytes := 0;
+  FExternalBytesAllocatedSinceGC := 0;
   FPeakBytesAllocated := 0;
   FTotalBytesAllocated := 0;
   FSuggestedMaxBytes := DetectDefaultMaxBytes;
   FMaxBytes := FSuggestedMaxBytes;
   FMemoryLimitFiring := False;
+  FExternalPressurePending := False;
+  FMemoryPressureCountdown := nil;
   {$IFDEF GC_TIMING}
   FTotalMarkTimeNs := 0;
   FTotalSweepTimeNs := 0;
@@ -726,6 +737,8 @@ begin
       {$ENDIF}
       SweepObjects;
       FAllocationsSinceLastGC := 0;
+      FExternalBytesAllocatedSinceGC := 0;
+      FExternalPressurePending := False;
 
       // Adaptive threshold: next collection after allocating as many
       // objects as survived, amortizing collection cost to O(1) per
@@ -812,7 +825,8 @@ procedure TGarbageCollector.CollectForMemoryPressure(
 var
   WasFiring: Boolean;
 begin
-  if not NeedsMemoryPressureCollection then
+  if not FExternalPressurePending and
+     not NeedsMemoryPressureCollection then
     Exit;
 
   if Assigned(AProtect) then
@@ -881,6 +895,8 @@ begin
       if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
         FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
       FAllocationsSinceLastGC := 0;
+      FExternalBytesAllocatedSinceGC := 0;
+      FExternalPressurePending := False;
       FTotalCollected := FTotalCollected + Collected;
       Inc(FTotalCollections);
       {$IFDEF GC_DEBUG}
@@ -912,9 +928,18 @@ begin
     Exit;
   Inc(FBytesAllocated, ABytes);
   Inc(FExternalBytes, ABytes);
+  Inc(FExternalBytesAllocatedSinceGC, ABytes);
   Inc(FTotalBytesAllocated, ABytes);
   if FBytesAllocated > FPeakBytesAllocated then
     FPeakBytesAllocated := FBytesAllocated;
+  if (FExternalBytesAllocatedSinceGC >=
+      EXTERNAL_MEMORY_PRESSURE_ALLOCATION_INTERVAL) or
+     NeedsMemoryPressureCollection then
+  begin
+    FExternalPressurePending := True;
+    if Assigned(FMemoryPressureCountdown) then
+      FMemoryPressureCountdown^ := 0;
+  end;
 end;
 
 procedure TGarbageCollector.ReleaseExternalBytes(const ABytes: Int64);
@@ -931,6 +956,15 @@ begin
     Dec(FExternalBytes, ABytes);
     Dec(FBytesAllocated, ABytes);
   end;
+end;
+
+function TGarbageCollector.ExchangeMemoryPressureCountdown(
+  const ACountdown: PInteger): PInteger;
+begin
+  Result := FMemoryPressureCountdown;
+  FMemoryPressureCountdown := ACountdown;
+  if FExternalPressurePending and Assigned(FMemoryPressureCountdown) then
+    FMemoryPressureCountdown^ := 0;
 end;
 
 {$IFDEF GC_TIMING}

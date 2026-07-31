@@ -13174,10 +13174,7 @@ begin
   else
     ExecutionSourcePath := FCurrentModuleSourcePath;
 
-  // Compact bytecode operands can address 0..255. Keeping a complete compact
-  // window prevents malformed non-wide secondary operands from escaping the
-  // arena even before the loader's structural checks reject their use.
-  AcquireRegisters(Max(ATemplate.MaxRegisters, 256));
+  AcquireRegisters(Max(ATemplate.MaxRegisters, 1));
   AcquireLocalCells(Max(ATemplate.MaxRegisters, 1));
   // Acquire the argument window on the arena (sets FArgumentBase/FArgCount and
   // FArguments) before reading the previous frame's FArgCount, then fill it.
@@ -13434,6 +13431,8 @@ var
   PreviousCallSite: TGocciaCallSite;
   ClosedNumericInitializedRegisterTop: Integer;
   InstructionLimitState: PGocciaInstructionLimitState;
+  GC: TGarbageCollector;
+  PreviousMemoryPressureCountdown: PInteger;
 
   procedure CurrentInstructionDebugLocation(out ALine, AColumn: Integer);
   begin
@@ -13483,6 +13482,12 @@ begin
   SavedHandlerCount := FHandlerStack.Count;
   InitialFrameStackCount := FFrameStackCount;
   InitialClosedNumericFrameCount := FClosedNumericFrameStackCount;
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    PreviousMemoryPressureCountdown :=
+      GC.ExchangeMemoryPressureCountdown(@FMemoryPressureCheckCountdown)
+  else
+    PreviousMemoryPressureCountdown := nil;
   FLastClosureThisValue := AThisValue;
   PushSavedStateRoot(SavedClosure, SavedNewTarget, SavedArgumentBase,
     SavedArgCount);
@@ -13591,11 +13596,10 @@ begin
     end;
     Running := True;
     InstructionLimitState := CaptureInstructionLimitState;
-    while Running and (Frame.IP >= 0) and (Frame.IP < Template.CodeCount) do
+    while Running and (Frame.IP < Template.CodeCount) do
     begin
       try
-        while Running and (Frame.IP >= 0) and
-              (Frame.IP < Template.CodeCount) do
+        while Running and (Frame.IP < Template.CodeCount) do
         begin
           if (AStopAtIP >= 0) and (Frame.IP >= AStopAtIP) and
              Assigned(AStopGenerator) then
@@ -13661,6 +13665,19 @@ begin
             bckTemplateObject:
               FRegisters[A] := ValueToRegister(BuildTemplateObjectConstant(
                 Template, DecodeBx(Instruction)));
+            bckString:
+              begin
+                LeftValue := TGocciaValue(
+                  Template.GetStringConstantCache(DecodeBx(Instruction)));
+                if not Assigned(LeftValue) then
+                begin
+                  LeftValue := TGocciaStringLiteralValue.Create(
+                    Constant.StringValue);
+                  Template.SetStringConstantCache(
+                    DecodeBx(Instruction), LeftValue);
+                end;
+                FRegisters[A] := RegisterObject(LeftValue);
+              end;
           else
             FRegisters[A] := ValueToRegister(ConstantToValue(Constant));
           end;
@@ -17323,8 +17340,8 @@ begin
         end;
         if FMemoryPressureCheckCountdown = 0 then
         begin
-          if (TGarbageCollector.Instance <> nil) then
-            TGarbageCollector.Instance.CollectForMemoryPressure(nil);
+          if Assigned(GC) then
+            GC.CollectForMemoryPressure(nil);
           FMemoryPressureCheckCountdown := MEMORY_PRESSURE_CHECK_INTERVAL;
         end
         else
@@ -17400,6 +17417,9 @@ begin
       if RealmSwitched then
         SetCurrentRealm(PreviousRealm);
     finally
+      if Assigned(GC) then
+        GC.ExchangeMemoryPressureCountdown(
+          PreviousMemoryPressureCountdown);
       PopSavedStateRoot;
     end;
   end;

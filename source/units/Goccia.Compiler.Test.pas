@@ -864,6 +864,21 @@ begin
   Template.EmitInstruction(EncodeABC(OP_MOVE, 0, 256, 0));
   ExpectRejected(Template);
 
+  Template := TGocciaFunctionTemplate.Create('invalid-compact-b-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_MOVE, 0, 1, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-compact-c-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_ADD, 0, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-call-register-window');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_CALL, 0, 1, 0));
+  ExpectRejected(Template);
+
   Template := TGocciaFunctionTemplate.Create('invalid-bx-register');
   Template.MaxRegisters := 1;
   Template.EmitInstruction(EncodeABx(OP_TO_PRIMITIVE, 0, 1));

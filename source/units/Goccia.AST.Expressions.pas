@@ -994,7 +994,8 @@ begin
   if Assigned(FValue)
      and (FValue <> TGocciaUndefinedLiteralValue.UndefinedValue)
      and (FValue <> TGocciaBooleanLiteralValue.TrueValue)
-     and (FValue <> TGocciaBooleanLiteralValue.FalseValue) then
+     and (FValue <> TGocciaBooleanLiteralValue.FalseValue)
+     and (FValue <> TGocciaNullLiteralValue.NullValue) then
     FValue.Free;
   inherited;
 end;

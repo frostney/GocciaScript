@@ -73,6 +73,14 @@ begin
     [ATemplate.Name, APC, AReason]);
 end;
 
+function IsDefinedOpCode(const AOp: UInt8): Boolean;
+begin
+  Result := (AOp <= Ord(OP_THROW_TYPE_ERROR_CONST)) or
+    ((AOp >= Ord(OP_FINALIZE_ENUM)) and
+     (AOp <= Ord(OP_SET_CLASS_SOURCE_CONST))) or
+    ((AOp >= Ord(OP_IMPORT)) and (AOp <= Ord(OP_CALL_SELF_NUM)));
+end;
+
 procedure VerifyFunctionTemplate(const ATemplate: TGocciaFunctionTemplate;
   const ADepth: Integer);
 var
@@ -91,12 +99,86 @@ var
         [AIndex, ATemplate.ConstantCount - 1]));
   end;
 
-  procedure RequireRegister(const AIndex: Integer);
+  procedure RequireRegister(const AIndex: Int64);
   begin
     if (AIndex < 0) or (AIndex >= ATemplate.MaxRegisters) then
       RejectInvalidBytecode(ATemplate, PC, Format(
         'register %d is outside MaxRegisters %d',
         [AIndex, ATemplate.MaxRegisters]));
+  end;
+
+  procedure RequireRegisterRange(const AFirst, ACount: Int64);
+  begin
+    if ACount <= 0 then
+      Exit;
+    if (AFirst < 0) or
+       (AFirst + ACount > Int64(ATemplate.MaxRegisters)) then
+      RejectInvalidBytecode(ATemplate, PC, Format(
+        'register range %d..%d is outside MaxRegisters %d',
+        [AFirst, AFirst + ACount - 1, ATemplate.MaxRegisters]));
+  end;
+
+  function UsesRegisterB(const AOp: TGocciaOpCode): Boolean;
+  begin
+    Result := AOp in [
+      OP_MOVE, OP_ARRAY_POP, OP_ARRAY_PUSH, OP_ARRAY_GET, OP_ARRAY_SET,
+      OP_GET_LENGTH, OP_ADD_INT, OP_SUB_INT, OP_MUL_INT, OP_DIV_INT,
+      OP_MOD_INT, OP_NEG_INT, OP_ADD_FLOAT, OP_SUB_FLOAT, OP_MUL_FLOAT,
+      OP_DIV_FLOAT, OP_MOD_FLOAT, OP_NEG_FLOAT, OP_EQ_INT, OP_NEQ_INT,
+      OP_LT_INT, OP_GT_INT, OP_LTE_INT, OP_GTE_INT, OP_EQ_FLOAT,
+      OP_NEQ_FLOAT, OP_LT_FLOAT, OP_GT_FLOAT, OP_LTE_FLOAT, OP_GTE_FLOAT,
+      OP_CONCAT, OP_GET_PROP_CONST, OP_GET_ITER, OP_ITER_NEXT,
+      OP_CLASS_SET_SUPER, OP_CLASS_SET_FIELD_INITIALIZER,
+      OP_CLASS_EXEC_STATIC_BLOCK, OP_UNPACK, OP_NOT, OP_TO_BOOL,
+      OP_DEL_INDEX_LOOSE, OP_SET_INDEX_LOOSE, OP_GET_INDEX, OP_SET_INDEX,
+      OP_DEL_INDEX, OP_SET_OBJECT_PROTO, OP_DEFINE_PROP_DYNAMIC, OP_ADD,
+      OP_SUB, OP_MUL, OP_DIV, OP_MOD, OP_POW, OP_BAND, OP_BOR, OP_BXOR,
+      OP_SHL, OP_SHR, OP_USHR, OP_DEFINE_CLASS_METHOD_DYNAMIC, OP_AWAIT,
+      OP_DYNAMIC_IMPORT, OP_USING_INIT, OP_USING_DISPOSE, OP_YIELD,
+      OP_MATCH_VALUE, OP_MATCH_HAS_PROPERTY, OP_MATCH_EXTRACTOR, OP_INC,
+      OP_DEC, OP_TO_NUMERIC, OP_TO_OBJECT, OP_HAS_WITH_BINDING,
+      OP_TO_PROPERTY_KEY, OP_ENUM_KEYS, OP_ENUM_ENTRY, OP_ITER_UNPACK,
+      OP_SET_FUNCTION_NAME, OP_INC_NUMERIC, OP_DEC_NUMERIC,
+      OP_POST_INC_NUMERIC, OP_POST_DEC_NUMERIC, OP_GET_WITH_BINDING,
+      OP_GET_WITH_BINDING_STRICT, OP_SET_WITH_BINDING,
+      OP_SET_WITH_BINDING_LOOSE, OP_SUPER_SET, OP_SUPER_BASE,
+      OP_SUPER_SET_BASE, OP_DEFINE_STATIC_PROP_DYNAMIC,
+      OP_CONSTRUCT_SPREAD, OP_SUB_NUM_IMM, OP_SET_UPVALUE_REF,
+      OP_DYNAMIC_IMPORT_OPTIONS, OP_DYNAMIC_IMPORT_SOURCE_OPTIONS,
+      OP_DYNAMIC_IMPORT_DEFER_OPTIONS, OP_TO_NUMBER, OP_TO_STRING,
+      OP_NEG, OP_BNOT, OP_EQ, OP_NEQ, OP_LOOSE_EQ, OP_LOOSE_NEQ,
+      OP_LT, OP_GT, OP_LTE, OP_GTE, OP_TYPEOF, OP_IS_INSTANCE,
+      OP_HAS_PROPERTY
+    ];
+  end;
+
+  function UsesRegisterC(const AOp: TGocciaOpCode): Boolean;
+  begin
+    Result := AOp in [
+      OP_ARRAY_GET, OP_ARRAY_SET, OP_ADD_INT, OP_SUB_INT, OP_MUL_INT,
+      OP_DIV_INT, OP_MOD_INT, OP_ADD_FLOAT, OP_SUB_FLOAT, OP_MUL_FLOAT,
+      OP_DIV_FLOAT, OP_MOD_FLOAT, OP_EQ_INT, OP_NEQ_INT, OP_LT_INT,
+      OP_GT_INT, OP_LTE_INT, OP_GTE_INT, OP_EQ_FLOAT, OP_NEQ_FLOAT,
+      OP_LT_FLOAT, OP_GT_FLOAT, OP_LTE_FLOAT, OP_GTE_FLOAT, OP_CONCAT,
+      OP_SET_PROP_CONST, OP_SET_PROP_CONST_LOOSE, OP_CLASS_ADD_METHOD_CONST,
+      OP_DEFINE_STATIC_PROP_CONST, OP_DEFINE_STATIC_PROP_DYNAMIC,
+      OP_DEFINE_PROP_DYNAMIC, OP_DEFINE_STATIC_METHOD_CONST,
+      OP_DEFINE_DATA_PROP, OP_DEFINE_METHOD_PROP,
+      OP_DEFINE_CLASS_METHOD_DYNAMIC, OP_ITER_NEXT, OP_GET_INDEX,
+      OP_SET_INDEX, OP_DEL_INDEX, OP_DEL_INDEX_LOOSE, OP_SET_INDEX_LOOSE,
+      OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD, OP_POW, OP_BAND, OP_BOR,
+      OP_BXOR, OP_SHL, OP_SHR, OP_USHR, OP_EQ, OP_NEQ, OP_LOOSE_EQ,
+      OP_LOOSE_NEQ, OP_LT, OP_GT, OP_LTE, OP_GTE, OP_IS_INSTANCE,
+      OP_HAS_PROPERTY, OP_DEFINE_ACCESSOR_DYNAMIC, OP_COLLECTION_OP,
+      OP_MATCH_VALUE, OP_MATCH_HAS_PROPERTY, OP_MATCH_EXTRACTOR,
+      OP_USING_DISPOSE, OP_ENUM_ENTRY, OP_ASYNC_ITER_NEXT, OP_ITER_UNPACK,
+      OP_DYNAMIC_IMPORT_OPTIONS, OP_DYNAMIC_IMPORT_SOURCE_OPTIONS,
+      OP_DYNAMIC_IMPORT_DEFER_OPTIONS, OP_GET_WITH_BINDING,
+      OP_GET_WITH_BINDING_STRICT, OP_SET_WITH_BINDING,
+      OP_SET_WITH_BINDING_LOOSE, OP_SUPER_GET, OP_SUPER_SET,
+      OP_SUPER_BASE, OP_SUPER_GET_BASE, OP_SUPER_SET_BASE,
+      OP_CONSTRUCT_SPREAD
+    ];
   end;
 
   procedure RequireUpvalue(const AIndex: Integer);
@@ -139,7 +221,7 @@ begin
         RejectInvalidBytecode(ATemplate, PC, 'nested OP_WIDE prefix');
     end;
 
-    if Op > Ord(High(TGocciaOpCode)) then
+    if not IsDefinedOpCode(Op) then
       RejectInvalidBytecode(ATemplate, PC, Format('unknown opcode %d', [Op]));
 
     A := DecodeA(Instruction);
@@ -160,22 +242,56 @@ begin
       RejectInvalidBytecode(ATemplate, PC, Format(
         'register %d is outside MaxRegisters %d',
         [A, ATemplate.MaxRegisters]));
-    // Non-wide B/C operands are physically bounded by the VM's 256-slot
-    // defensive register window. A non-zero wide prefix can name an arbitrary
-    // UInt16 slot, so reject a prefixed operand that escapes MaxRegisters.
-    // Constant/immediate Bx forms do not use the B/C wide-prefix bytes.
-    if (Prefix <> 0) and (DecodeB(Prefix) <> 0) and
-       (B >= ATemplate.MaxRegisters) then
-      RejectInvalidBytecode(ATemplate, PC, Format(
-        'register %d is outside MaxRegisters %d',
-        [B, ATemplate.MaxRegisters]));
-    if (Prefix <> 0) and (DecodeC(Prefix) <> 0) and
-       (C >= ATemplate.MaxRegisters) then
-      RejectInvalidBytecode(ATemplate, PC, Format(
-        'register %d is outside MaxRegisters %d',
-        [C, ATemplate.MaxRegisters]));
+    if UsesRegisterB(TGocciaOpCode(Op)) then
+      RequireRegister(B);
+    if UsesRegisterC(TGocciaOpCode(Op)) then
+      RequireRegister(C);
+    if (TGocciaOpCode(Op) = OP_APPLY_ELEMENT_DECORATOR_CONST) and
+       (B <> 0) then
+      RequireRegister(B);
+    if TGocciaOpCode(Op) in [OP_BEGIN_DECORATORS,
+       OP_DEFINE_ACCESSOR_CONST, OP_DEFINE_ACCESSOR_DYNAMIC] then
+      RequireRegister(Int64(A) + 1);
+    if (TGocciaOpCode(Op) in [OP_SUPER_GET_CONST, OP_SUPER_GET,
+       OP_SUPER_SET, OP_SUPER_GET_BASE, OP_SUPER_SET_BASE]) and
+       (A > 0) then
+      RequireRegister(Int64(A) + 1);
 
     case TGocciaOpCode(Op) of
+      OP_CALL:
+        if (C and CALL_FLAG_SPREAD) <> 0 then
+          RequireRegister(B)
+        else
+          RequireRegisterRange(Int64(A) + 1, B);
+
+      OP_CALL_METHOD:
+        begin
+          RequireRegister(Int64(A) - 1);
+          if (C and CALL_FLAG_SPREAD) <> 0 then
+            RequireRegister(B)
+          else
+            RequireRegisterRange(Int64(A) + 1, B);
+        end;
+
+      OP_CONSTRUCT:
+        begin
+          RequireRegister(B);
+          RequireRegisterRange(Int64(B) + 1, C);
+        end;
+
+      OP_CALL_SELF_NUM:
+        begin
+          if (C < 1) or (C > 3) then
+            RejectInvalidBytecode(ATemplate, PC, Format(
+              'closed numeric self-call argument count %d is outside 1..3',
+              [C]));
+          RequireRegisterRange(B, C);
+        end;
+
+      OP_ITER_CLOSE:
+        if C = ITER_CLOSE_PRESERVE_UNLESS_GENERATOR_RETURN then
+          RequireRegister(B);
+
       OP_TO_PRIMITIVE, OP_GET_LOCAL, OP_SET_LOCAL, OP_CLOSE_UPVALUE:
         RequireRegister(DecodeBx(Instruction));
 
