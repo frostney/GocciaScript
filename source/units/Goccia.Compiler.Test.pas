@@ -827,6 +827,7 @@ var
 
   procedure ExpectRejected(const ATemplate: TGocciaFunctionTemplate);
   var
+    ErrorMessage: string;
     Raised: Boolean;
   begin
     Module := TGocciaBytecodeModule.Create('test', '<malformed>');
@@ -835,15 +836,20 @@ var
     try
       SaveModuleToFile(Module, TempFile);
       Loaded := nil;
+      ErrorMessage := '';
       Raised := False;
       try
         Loaded := LoadModuleFromFile(TempFile);
       except
         on E: Exception do
+        begin
           Raised := True;
+          ErrorMessage := E.Message;
+        end;
       end;
       Loaded.Free;
       Expect<Boolean>(Raised).ToBe(True);
+      Expect<Boolean>(Pos('Invalid bytecode', ErrorMessage) > 0).ToBe(True);
     finally
       Module.Free;
       DeleteFile(TempFile);
@@ -910,6 +916,11 @@ begin
   Template := TGocciaFunctionTemplate.Create('invalid-local-write');
   Template.MaxRegisters := 1;
   Template.EmitInstruction(EncodeABx(OP_SET_LOCAL, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-close-upvalue');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_CLOSE_UPVALUE, 0, 1));
   ExpectRejected(Template);
 
   Template := TGocciaFunctionTemplate.Create('invalid-upvalue');
