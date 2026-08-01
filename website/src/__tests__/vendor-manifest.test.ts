@@ -4,6 +4,7 @@ import {
   isFlagSupported,
   isPublicExecutionSafe,
   listPlaygroundVersions,
+  parseAdvertisedFlags,
   resolveAsiFlag,
   resolvePublicDefaultVersion,
   type VendorFeatureSet,
@@ -211,6 +212,25 @@ describe("public execution safety", () => {
         defaultVersion: "0.6.1",
       }),
     ).toBe("0.7.0");
+  });
+
+  test("preserves an unmanifested default for override and local probing", () => {
+    expect(
+      resolvePublicDefaultVersion({
+        defaultVersion: "nightly",
+        versions: [],
+      }),
+    ).toBe("nightly");
+  });
+});
+
+describe("parseAdvertisedFlags", () => {
+  test("extracts unique long options from help output", () => {
+    expect(
+      parseAdvertisedFlags(
+        "Usage: runner [--no-host-filesystem] --timeout=<ms> --timeout=10",
+      ),
+    ).toEqual(["--no-host-filesystem", "--timeout"]);
   });
 });
 

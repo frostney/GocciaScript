@@ -45,6 +45,11 @@ export const EMPTY_MANIFEST: VendorManifest = {
   versions: [],
 };
 
+/** Extract the long-option names advertised by a binary's help text. */
+export function parseAdvertisedFlags(helpText: string): string[] {
+  return [...new Set(helpText.match(/--[a-z][a-z0-9-]*/g) ?? [])];
+}
+
 /** Coerce arbitrary JSON into a `VendorManifest`, dropping malformed entries
  *  and supplying defaults. Exposed so the server-side loader and tests both
  *  go through the same validation path. */

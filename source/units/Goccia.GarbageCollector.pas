@@ -149,7 +149,8 @@ type
     // collection. Tracing through old roots keeps those young objects live.
     procedure CollectYoung(const AWatermark: Integer);
     procedure ResetPeakBytesAllocated;
-    function TryReserveExternalBytes(const ABytes: Int64): Boolean;
+    function TryReserveExternalBytes(const ABytes: Int64;
+      const AProtect: TGCManagedObject = nil): Boolean;
     procedure ReleaseExternalBytes(const ABytes: Int64);
     function ExchangeMemoryPressureCountdown(
       const ACountdown: PInteger): PInteger;
@@ -918,12 +919,20 @@ begin
 end;
 
 function TGarbageCollector.TryReserveExternalBytes(
-  const ABytes: Int64): Boolean;
+  const ABytes: Int64; const AProtect: TGCManagedObject): Boolean;
 begin
   if ABytes <= 0 then
     Exit(True);
   Result := (FBytesAllocated <= High(Int64) - ABytes) and
     ((FMaxBytes <= 0) or (FBytesAllocated + ABytes <= FMaxBytes));
+  if not Result and not FCollecting and not FMemoryLimitFiring and
+     (FMaxBytes > 0) and (FBytesAllocated <= High(Int64) - ABytes) and
+     (FBytesAllocated + ABytes > FMaxBytes) then
+  begin
+    CollectForMemoryPressure(AProtect);
+    Result := (FBytesAllocated <= High(Int64) - ABytes) and
+      ((FMaxBytes <= 0) or (FBytesAllocated + ABytes <= FMaxBytes));
+  end;
   if not Result then
     Exit;
   Inc(FBytesAllocated, ABytes);

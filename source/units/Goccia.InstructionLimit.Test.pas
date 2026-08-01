@@ -6,12 +6,14 @@ uses
   TestingPascalLibrary,
 
   Goccia.InstructionLimit,
+  Goccia.NativeLimits,
   Goccia.TestSetup;
 
 type
   TInstructionLimitTests = class(TTestSuite)
   private
     procedure TestCapturedStateTracksLiveBudget;
+    procedure TestNativeDepthRollsBackWhenBudgetCheckRaises;
     procedure TestNestedScopePreservesBaseBudget;
   protected
     procedure BeforeEach; override;
@@ -38,6 +40,8 @@ begin
     TestCapturedStateTracksLiveBudget);
   Test('Nested scope preserves the base thread budget',
     TestNestedScopePreservesBaseBudget);
+  Test('Native depth rolls back when a budget check raises',
+    TestNativeDepthRollsBackWhenBudgetCheckRaises);
 end;
 
 procedure TInstructionLimitTests.TestCapturedStateTracksLiveBudget;
@@ -73,11 +77,11 @@ procedure TInstructionLimitTests.TestNestedScopePreservesBaseBudget;
 var
   RaisedExpected: Boolean;
 begin
-  StartInstructionLimit(3);
+  StartInstructionLimit(4);
   IncrementInstructionCounter;
   CheckInstructionLimit;
 
-  PushInstructionLimitScope(10);
+  PushInstructionLimitScope(2);
   try
     IncrementInstructionCounter;
     CheckInstructionLimit;
@@ -92,6 +96,51 @@ begin
     Expect<Boolean>(RaisedExpected).ToBe(True);
   finally
     PopInstructionLimitScope;
+  end;
+
+  IncrementInstructionCounter;
+  RaisedExpected := False;
+  try
+    CheckInstructionLimit;
+  except
+    on TGocciaInstructionLimitError do
+      RaisedExpected := True;
+  end;
+  Expect<Boolean>(RaisedExpected).ToBe(True);
+end;
+
+procedure TInstructionLimitTests.TestNativeDepthRollsBackWhenBudgetCheckRaises;
+var
+  EnteredDepth: Integer;
+  I: Integer;
+  RaisedExpected: Boolean;
+begin
+  StartInstructionLimit(1);
+  IncrementInstructionCounter;
+  RaisedExpected := False;
+  try
+    EnterNativeDataDepth('instruction-limit test');
+  except
+    on TGocciaInstructionLimitError do
+      RaisedExpected := True;
+  end;
+  Expect<Boolean>(RaisedExpected).ToBe(True);
+
+  ClearInstructionLimit;
+  EnteredDepth := 0;
+  try
+    for I := 1 to MAX_NATIVE_DATA_DEPTH do
+    begin
+      EnterNativeDataDepth('instruction-limit test');
+      Inc(EnteredDepth);
+    end;
+    Expect<Integer>(EnteredDepth).ToBe(MAX_NATIVE_DATA_DEPTH);
+  finally
+    while EnteredDepth > 0 do
+    begin
+      LeaveNativeDataDepth;
+      Dec(EnteredDepth);
+    end;
   end;
 end;
 

@@ -197,8 +197,7 @@ begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) and (Delta > 0) then
   begin
-    GC.CollectForMemoryPressure(Self);
-    if not GC.TryReserveExternalBytes(Delta) then
+    if not GC.TryReserveExternalBytes(Delta, Self) then
       ThrowRangeError(SErrorMemoryLimitExceeded,
         SSuggestMemoryLimitExceeded);
   end;
@@ -217,8 +216,7 @@ begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) and (Delta > 0) then
   begin
-    GC.CollectForMemoryPressure(Self);
-    if not GC.TryReserveExternalBytes(Delta) then
+    if not GC.TryReserveExternalBytes(Delta, Self) then
       ThrowRangeError(SErrorMemoryLimitExceeded,
         SSuggestMemoryLimitExceeded);
   end;

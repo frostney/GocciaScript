@@ -51,11 +51,13 @@ procedure THTTPClientTests.TestConnectionDeadlineBoundsBlockingWork;
 const
   DEADLINE_MILLISECONDS = 25;
   MAX_TEST_DURATION_MILLISECONDS = 2000;
+  WORKER_DRAIN_TIMEOUT_MILLISECONDS = 120000;
 var
   ElapsedMilliseconds: Int64;
   Headers: THTTPHeaders;
   Raised: Boolean;
   StartNanoseconds: Int64;
+  WorkersDrained: Boolean;
 begin
   SetLength(Headers, 0);
   Raised := False;
@@ -68,9 +70,12 @@ begin
       Raised := True;
   end;
   ElapsedMilliseconds := (GetNanoseconds - StartNanoseconds) div 1000000;
+  WorkersDrained := WaitForHTTPConnectionWorkers(
+    WORKER_DRAIN_TIMEOUT_MILLISECONDS);
   Expect<Boolean>(Raised).ToBe(True);
   Expect<Boolean>(
     ElapsedMilliseconds < MAX_TEST_DURATION_MILLISECONDS).ToBe(True);
+  Expect<Boolean>(WorkersDrained).ToBe(True);
 end;
 
 procedure THTTPClientTests.TestRejectsAmbiguousAuthority;

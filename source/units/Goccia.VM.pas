@@ -13488,16 +13488,17 @@ begin
       GC.ExchangeMemoryPressureCountdown(@FMemoryPressureCheckCountdown)
   else
     PreviousMemoryPressureCountdown := nil;
-  FLastClosureThisValue := AThisValue;
-  PushSavedStateRoot(SavedClosure, SavedNewTarget, SavedArgumentBase,
-    SavedArgCount);
-  if RealmSwitched then
-    SetCurrentRealm(ExecutionRealm);
   try
-    Inc(FNativeExecutionDepth);
-    SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
-      AArg0, AArg1, AArg2, AUseFixedArgs, APushExecutionContext,
-      Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+    FLastClosureThisValue := AThisValue;
+    PushSavedStateRoot(SavedClosure, SavedNewTarget, SavedArgumentBase,
+      SavedArgCount);
+    if RealmSwitched then
+      SetCurrentRealm(ExecutionRealm);
+    try
+      Inc(FNativeExecutionDepth);
+      SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
+        AArg0, AArg1, AArg2, AUseFixedArgs, APushExecutionContext,
+        Frame, Template, PrevCovLine, ProfileEntryTimestamp);
     ClosedNumericInitializedRegisterTop := FRegisterBase + FRegisterCount;
     if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
       FGlobalScope := AClosure.GlobalScope;
@@ -17385,9 +17386,9 @@ begin
       end;
     end;
     Result := RegisterUndefined;
-  finally
-    Dec(FNativeExecutionDepth);
-    try
+    finally
+      Dec(FNativeExecutionDepth);
+      try
       UnwindClosedNumericFrames(InitialClosedNumericFrameCount, Frame,
         Template, PrevCovLine, ProfileEntryTimestamp);
       // Unwind any remaining trampoline frames (exception escape path)
@@ -17416,12 +17417,14 @@ begin
       FLocalCells := @FLocalCellStack[FLocalCellBase];
       if RealmSwitched then
         SetCurrentRealm(PreviousRealm);
-    finally
-      if Assigned(GC) then
-        GC.ExchangeMemoryPressureCountdown(
-          PreviousMemoryPressureCountdown);
-      PopSavedStateRoot;
+      finally
+        PopSavedStateRoot;
+      end;
     end;
+  finally
+    if Assigned(GC) then
+      GC.ExchangeMemoryPressureCountdown(
+        PreviousMemoryPressureCountdown);
   end;
 end;
 

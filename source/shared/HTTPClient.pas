@@ -32,6 +32,8 @@ function HTTPHead(const AURL: string;
   const ATimeoutMilliseconds: Integer = 0): THTTPResponse;
 function HTTPURLHost(const AURL: string): string;
 function HTTPURLAuditHost(const AURL: string): string;
+function WaitForHTTPConnectionWorkers(
+  const ATimeoutMilliseconds: Integer): Boolean;
 
 implementation
 
@@ -304,6 +306,11 @@ var
   SockAddr: TInetSockAddr;
   HostEntry: THostEntry;
   Addr: in_addr;
+  ConnectResult: Integer;
+  OriginalFlags: Integer;
+  PollDescriptor: TPollFD;
+  SocketError: Integer;
+  SocketErrorLength: TSockLen;
 begin
   // Try as numeric IP first
   Addr := StrToNetAddr(AHost);
@@ -318,17 +325,50 @@ begin
   Result := fpSocket(AF_INET, SOCK_STREAM, 0);
   if Result < 0 then
     raise EHTTPError.Create('Failed to create socket');
-  ConfigureSocketTimeout(Result, ATimeoutMilliseconds);
 
   FillChar(SockAddr, SizeOf(SockAddr), 0);
   SockAddr.sin_family := AF_INET;
   SockAddr.sin_port := htons(APort);
   SockAddr.sin_addr := Addr;
 
-  if fpConnect(Result, @SockAddr, SizeOf(SockAddr)) <> 0 then
-  begin
+  try
+    if ATimeoutMilliseconds > 0 then
+    begin
+      OriginalFlags := fpFcntl(Result, F_GETFL, 0);
+      if (OriginalFlags < 0) or
+         (fpFcntl(Result, F_SETFL, OriginalFlags or O_NONBLOCK) < 0) then
+        raise EHTTPError.Create('Failed to configure non-blocking socket');
+      try
+        ConnectResult := fpConnect(Result, @SockAddr, SizeOf(SockAddr));
+        if (ConnectResult <> 0) and (fpGetErrNo <> ESysEINPROGRESS) then
+          raise EHTTPError.CreateFmt('Failed to connect to %s:%d',
+            [AHost, APort]);
+        if ConnectResult <> 0 then
+        begin
+          FillChar(PollDescriptor, SizeOf(PollDescriptor), 0);
+          PollDescriptor.fd := Result;
+          PollDescriptor.events := POLLOUT;
+          if fpPoll(@PollDescriptor, 1, ATimeoutMilliseconds) <= 0 then
+            raise EHTTPError.CreateFmt('Failed to connect to %s:%d',
+              [AHost, APort]);
+          SocketError := 0;
+          SocketErrorLength := SizeOf(SocketError);
+          if (fpGetSockOpt(Result, SOL_SOCKET, SO_ERROR, @SocketError,
+              @SocketErrorLength) <> 0) or (SocketError <> 0) then
+            raise EHTTPError.CreateFmt('Failed to connect to %s:%d',
+              [AHost, APort]);
+        end;
+      finally
+        fpFcntl(Result, F_SETFL, OriginalFlags);
+      end;
+    end
+    else if fpConnect(Result, @SockAddr, SizeOf(SockAddr)) <> 0 then
+      raise EHTTPError.CreateFmt('Failed to connect to %s:%d',
+        [AHost, APort]);
+    ConfigureSocketTimeout(Result, ATimeoutMilliseconds);
+  except
     CloseSocket(Result);
-    raise EHTTPError.CreateFmt('Failed to connect to %s:%d', [AHost, APort]);
+    raise;
   end;
 end;
 {$ENDIF}
@@ -482,6 +522,23 @@ end;
 procedure ReleaseHTTPConnectionWorker;
 begin
   AtomicDecrementInt32(GHTTPConnectionWorkerCount);
+end;
+
+function WaitForHTTPConnectionWorkers(
+  const ATimeoutMilliseconds: Integer): Boolean;
+var
+  DeadlineNanoseconds: Int64;
+begin
+  DeadlineNanoseconds := GetNanoseconds +
+    Int64(ATimeoutMilliseconds) * 1000000;
+  repeat
+    ReadMemoryBarrier;
+    if GHTTPConnectionWorkerCount = 0 then
+      Exit(True);
+    Sleep(1);
+  until GetNanoseconds >= DeadlineNanoseconds;
+  ReadMemoryBarrier;
+  Result := GHTTPConnectionWorkerCount = 0;
 end;
 
 { THTTPConnectionState }

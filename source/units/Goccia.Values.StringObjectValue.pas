@@ -2287,7 +2287,7 @@ begin
   try
     CheckNativeWork;
     Padding := RepeatUTF16String(PadString,
-      (PadNeeded + PadUnitLength - 1) div PadUnitLength);
+      Integer((Int64(PadNeeded) + PadUnitLength - 1) div PadUnitLength));
     Padding := UTF16Substring(Padding, 0, PadNeeded);
     PaddedValue := Padding + StringValue;
   finally
@@ -2343,7 +2343,7 @@ begin
   try
     CheckNativeWork;
     Padding := RepeatUTF16String(PadString,
-      (PadNeeded + PadUnitLength - 1) div PadUnitLength);
+      Integer((Int64(PadNeeded) + PadUnitLength - 1) div PadUnitLength));
     Padding := UTF16Substring(Padding, 0, PadNeeded);
     PaddedValue := StringValue + Padding;
   finally

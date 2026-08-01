@@ -639,7 +639,7 @@ begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) and not GC.MemoryLimitFiring then
   begin
-    if not GC.TryReserveExternalBytes(ChargedBytes) then
+    if not GC.TryReserveExternalBytes(ChargedBytes, Self) then
     begin
       // The RangeError itself allocates short strings. Suppress accounting
       // while constructing it so a failed reservation cannot recurse until

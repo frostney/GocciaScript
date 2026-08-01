@@ -854,6 +854,11 @@ begin
   Module := nil;
   Loaded := nil;
 
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_THROW_TYPE_ERROR_CONST))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(99)).ToBe(False);
+  Expect<Boolean>(IsValidGocciaOpCode(144)).ToBe(False);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CALL_SELF_NUM))).ToBe(True);
+
   Template := TGocciaFunctionTemplate.Create('invalid-register');
   Template.MaxRegisters := 1;
   Template.EmitInstruction(EncodeABC(OP_LOAD_TRUE, 1, 0, 0));

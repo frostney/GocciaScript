@@ -33,12 +33,14 @@ threadvar
 procedure EnterNativeDataDepth(const AOperation: string);
 begin
   Inc(GNativeDataDepth);
-  if GNativeDataDepth > MAX_NATIVE_DATA_DEPTH then
-  begin
+  try
+    if GNativeDataDepth > MAX_NATIVE_DATA_DEPTH then
+      ThrowRangeError(SErrorMaxCallStackExceeded);
+    CheckNativeWork;
+  except
     Dec(GNativeDataDepth);
-    ThrowRangeError(SErrorMaxCallStackExceeded);
+    raise;
   end;
-  CheckNativeWork;
 end;
 
 procedure LeaveNativeDataDepth;
@@ -73,7 +75,6 @@ begin
   GC := TGarbageCollector.Instance;
   if not Assigned(GC) then
     Exit;
-  GC.CollectForMemoryPressure(nil);
   if not GC.TryReserveExternalBytes(ABytes) then
     ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
 end;

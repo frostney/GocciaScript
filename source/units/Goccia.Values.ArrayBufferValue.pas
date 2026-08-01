@@ -230,15 +230,15 @@ begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) and (Delta > 0) then
   begin
-    GC.CollectForMemoryPressure(Self);
-    if not GC.TryReserveExternalBytes(Delta) then
+    if not GC.TryReserveExternalBytes(Delta, Self) then
       ThrowRangeError(SErrorMemoryLimitExceeded,
         SSuggestMemoryLimitExceeded);
   end;
   if Assigned(GC) and (Delta < 0) then
     GC.ReleaseExternalBytes(-Delta);
   FData := AData;
-  FChargedBytes := Length(AData);
+  if Assigned(GC) then
+    FChargedBytes := Length(AData);
 end;
 
 procedure TGocciaArrayBufferValue.SetDataLength(const ALength: Integer);
@@ -250,8 +250,7 @@ begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) and (Delta > 0) then
   begin
-    GC.CollectForMemoryPressure(Self);
-    if not GC.TryReserveExternalBytes(Delta) then
+    if not GC.TryReserveExternalBytes(Delta, Self) then
       ThrowRangeError(SErrorMemoryLimitExceeded,
         SSuggestMemoryLimitExceeded);
   end;
@@ -264,7 +263,8 @@ begin
   end;
   if Assigned(GC) and (Delta < 0) then
     GC.ReleaseExternalBytes(-Delta);
-  FChargedBytes := ALength;
+  if Assigned(GC) then
+    FChargedBytes := ALength;
 end;
 
 constructor TGocciaArrayBufferValue.Create(const AByteLength: Integer);
