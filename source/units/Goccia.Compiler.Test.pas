@@ -858,6 +858,9 @@ begin
   Expect<Boolean>(IsValidGocciaOpCode(99)).ToBe(False);
   Expect<Boolean>(IsValidGocciaOpCode(144)).ToBe(False);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CALL_SELF_NUM))).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterA(OP_CLOSE_UPVALUE)).ToBe(False);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_DEFINE_DATA_PROP)).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_DEFINE_METHOD_PROP)).ToBe(True);
 
   Template := TGocciaFunctionTemplate.Create('invalid-register');
   Template.MaxRegisters := 1;
@@ -872,6 +875,16 @@ begin
   Template := TGocciaFunctionTemplate.Create('invalid-compact-b-register');
   Template.MaxRegisters := 1;
   Template.EmitInstruction(EncodeABC(OP_MOVE, 0, 1, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-data-property-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_DEFINE_DATA_PROP, 0, 1, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-method-property-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_DEFINE_METHOD_PROP, 0, 1, 0));
   ExpectRejected(Template);
 
   Template := TGocciaFunctionTemplate.Create('invalid-compact-c-register');

@@ -71,6 +71,7 @@ var
   BaselineBytes: Int64;
   GarbageBytes: Int64;
   GC: TGarbageCollector;
+  PreviousMaxBytes: Int64;
   Reserved: Boolean;
 begin
   GC := TGarbageCollector.Instance;
@@ -80,6 +81,7 @@ begin
 
   GC.RegisterObject(TChildManaged.Create);
   GarbageBytes := GC.BytesAllocated - BaselineBytes;
+  PreviousMaxBytes := GC.MaxBytes;
   GC.MaxBytes := BaselineBytes + GarbageBytes;
   Reserved := False;
   try
@@ -89,7 +91,7 @@ begin
   finally
     if Reserved then
       GC.ReleaseExternalBytes(GarbageBytes);
-    GC.MaxBytes := 0;
+    GC.MaxBytes := PreviousMaxBytes;
   end;
 end;
 

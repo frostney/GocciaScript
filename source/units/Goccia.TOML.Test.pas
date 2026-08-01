@@ -48,9 +48,11 @@ const
     'item = { nested = [1, 2] missing-close'
   );
 var
+  CleanNode: TGocciaTOMLNode;
   I: Integer;
   Parser: TGocciaTOMLParser;
   RaisedExpected: Boolean;
+  Root: TGocciaTOMLNode;
 begin
   Parser := TGocciaTOMLParser.Create;
   try
@@ -64,6 +66,15 @@ begin
           RaisedExpected := True;
       end;
       Expect<Boolean>(RaisedExpected).ToBe(True);
+
+      Root := Parser.ParseDocument('clean = true' + sLineBreak);
+      try
+        Expect<Integer>(Root.Children.Count).ToBe(1);
+        CleanNode := GetChildOrFail(Root, 'clean');
+        Expect<string>(CleanNode.CanonicalValue).ToBe('true');
+      finally
+        Root.Free;
+      end;
     end;
   finally
     Parser.Free;
