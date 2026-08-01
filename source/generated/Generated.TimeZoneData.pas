@@ -13,7 +13,7 @@ const
   GeneratedTimeZoneDataVersion = '2026c';
   GeneratedTimeZoneDataResourceName = 'GOCCIA_TZDATA';
   GeneratedTimeZoneDataEntryCount = 598;
-  GeneratedTimeZoneDataBlobByteCount = 701932;
+  GeneratedTimeZoneDataBlobByteCount = 704788;
 
 implementation
 
