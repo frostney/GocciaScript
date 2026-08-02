@@ -257,7 +257,7 @@ above:
 - **ES modules** — default, named, and namespace imports/exports are supported; project code prefers named exports for clarity.
 - **Strict equality by default** — `===` and `!==` (`==`/`!=` require `--compat-loose-equality`)
 
-The CLI tools share WHATWG-style import map support with `--import-map=<file.json>`, `--alias key=value`, and automatic `goccia.json` discovery for project-level module aliases. Host-supplied dependencies should normally be configured as virtual ES modules with `--module`, `--modules`, or a config `modules` object; they participate in the same import pipeline as filesystem modules. Global injection remains supported for compatibility.
+The CLI tools share WHATWG-style import map support with `--import-map=<file.json>`, `--alias key=value`, and automatic `goccia.json` discovery for project-level module aliases. An import map may also contain lockfile-pinned `github:` package references when the host explicitly grants `--remote-imports`; artifacts are hash-verified into a local cache and remain usable offline, while raw HTTPS and Node/npm resolution stay unsupported. See [Remote Package Imports](docs/remote-package-imports.md) for the lockfile and cache contract. Host-supplied dependencies should normally be configured as virtual ES modules with `--module`, `--modules`, or a config `modules` object; they participate in the same import pipeline as filesystem modules. Global injection remains supported for compatibility.
 
 Structured data files and text assets can also be imported directly:
 

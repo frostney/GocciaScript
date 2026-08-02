@@ -851,6 +851,8 @@ begin
     FModuleLoader := TGocciaModuleLoader.Create(AFileName);
     FOwnsModuleLoader := True;
   end;
+  if Assigned(FModuleLoader.Resolver) then
+    FModuleLoader.Resolver.CapabilityAuditEmitter := EmitCapabilityAudit;
 
   TGarbageCollector.Initialize;
   TGocciaCallStack.Initialize;

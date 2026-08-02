@@ -36,6 +36,7 @@ The current event kinds are:
 |------|---------|
 | `fetch.host` | Fetch host allowlist decision |
 | `fetch.dispatch` | An allowed fetch request reached the dispatch boundary |
+| `remote-import.resolve` | A provider-qualified import-map entry was allowed or denied before cache access |
 | `ffi.open` | An installed FFI runtime accepted a library-open attempt |
 | `function.constructor` | Dynamic Function construction was allowed or denied |
 | `shadow-realm.construct` | An installed ShadowRealm constructor was invoked |
@@ -55,6 +56,13 @@ Ordinary sandbox reads and writes do not generate events.
 
 Fetch authorization and dispatch events are emitted synchronously on the
 runtime thread. The HTTP worker does not call the sink.
+
+Remote-package authorization is separate from script-level `fetch`.
+`remote-import.resolve` is emitted synchronously while an import map is
+configured, before the resolver checks a verified cache or performs a
+provider GET. A cache hit therefore still requires `--remote-imports` and
+emits an `allow` event. The subject is the provider-qualified package
+reference, not a derived artifact URL.
 
 ## Embedding
 

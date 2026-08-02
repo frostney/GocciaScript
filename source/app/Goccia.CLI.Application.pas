@@ -1091,7 +1091,8 @@ begin
     if Assigned(FEngineOptions) then
     begin
       ConfigureModuleResolver(Result.Resolver, AFileName,
-        FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
+        FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values,
+        ResolveFlagOption(FEngineOptions.RemoteImports, FileConfig));
       if ResolveFlagOption(FEngineOptions.Deterministic, FileConfig) then
         Result.HostEnvironment.UseDeterministicProfile;
     end;
