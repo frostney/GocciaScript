@@ -68,7 +68,7 @@ paths:
 | `while` / `do...while` | Disabled | `--compat-while-loops` |
 | `arguments` | Disabled | `--compat-arguments-object` |
 | non-strict Script semantics and `with` | Strict / disabled | `--compat-non-strict-mode` |
-| `eval` | Not installed by normal hosts | private `GocciaScriptLoaderBare --test262-host` |
+| `eval` | Not installed by normal hosts | private `GocciaTest262Runner` conformance host |
 | `Function()` | Disabled | `--unsafe-function-constructor` |
 
 Annex B's browser-only legacy surface is not a general pre-1.0 target; see

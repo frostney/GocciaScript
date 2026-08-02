@@ -30,6 +30,7 @@ import {
   SANDBOXRUNNER,
   REPL,
   TESTRUNNER,
+  TEST262RUNNER,
   BUNDLER,
   BENCHRUNNER,
 } from "./test-cli/binaries";
@@ -799,47 +800,18 @@ console.log("Bare Loader: test262 host marker is hidden by default...");
     throw new Error(`Bare default should hide test262 host hooks, got: ${proc.stdout.toString()}`);
 }
 
-console.log("Bare Loader: --test262-host exposes Goccia test262 hooks...");
+console.log("Bare Loader: Test262 host option belongs to GocciaTest262Runner...");
 {
-  const proc = Bun.spawnSync([BARE, "--test262-host", "--compat-loose-equality"], {
-    stdin: new TextEncoder().encode([
-      "print(Goccia.test262Host);",
-      "print(typeof Goccia.test262);",
-      "print(typeof Goccia.test262.createRealm);",
-      "print(typeof Goccia.test262.evalScript);",
-      "const htmlDDA = Goccia.test262.isHTMLDDA;",
-      "print(typeof htmlDDA);",
-      "print(Boolean(htmlDDA));",
-      "print(htmlDDA == null);",
-      "print(htmlDDA == undefined);",
-      "print(htmlDDA === undefined);",
-      "const realm = Goccia.test262.createRealm();",
-      "print(realm.global.Object !== Object);",
-      "print(typeof realm.global.eval);",
-      "print(realm.global.eval('1 + 2'));",
-      "",
-    ].join("\n")),
+  const proc = Bun.spawnSync([BARE, "--test262-host"], {
     stdout: "pipe",
     stderr: "pipe",
   });
-  const expected = [
-    "true",
-    "object",
-    "function",
-    "function",
-    "undefined",
-    "false",
-    "true",
-    "true",
-    "false",
-    "true",
-    "function",
-    "3",
-  ].join("\n");
-  if (proc.exitCode !== 0)
-    throw new Error(`Bare --test262-host hook probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-    throw new Error(`Bare --test262-host should expose realm hooks, got: ${proc.stdout.toString()}`);
+  if (proc.exitCode === 0 ||
+      !proc.stderr.toString().includes("Unknown option: --test262-host")) {
+    throw new Error(
+      `Bare should reject the Test262-only option: ${proc.stderr.toString()}`,
+    );
+  }
 }
 
 console.log("test262 runner: engine timeout is classified as TIMEOUT...");
@@ -859,8 +831,7 @@ console.log("test262 runner: engine timeout is classified as TIMEOUT...");
     const timeoutOut = join(tmp, "timeout-result.json");
     const timeoutProc = Bun.spawnSync(
       [
-        "bun",
-        "scripts/run_test262_suite.ts",
+        TEST262RUNNER,
         "--suite-dir", suite,
         "--categories", "built-ins",
         "--filter", "built-ins/timeout-loop.js",
@@ -884,8 +855,7 @@ console.log("test262 runner: engine timeout is classified as TIMEOUT...");
     const thrownErrorOut = join(tmp, "timeout-like-error-result.json");
     const thrownErrorProc = Bun.spawnSync(
       [
-        "bun",
-        "scripts/run_test262_suite.ts",
+        TEST262RUNNER,
         "--suite-dir", suite,
         "--categories", "built-ins",
         "--filter", "built-ins/timeout-like-error.js",
@@ -909,8 +879,7 @@ console.log("test262 runner: engine timeout is classified as TIMEOUT...");
     const markerErrorOut = join(tmp, "timeout-marker-error-result.json");
     const markerErrorProc = Bun.spawnSync(
       [
-        "bun",
-        "scripts/run_test262_suite.ts",
+        TEST262RUNNER,
         "--suite-dir", suite,
         "--categories", "built-ins",
         "--filter", "built-ins/timeout-marker-error.js",
@@ -928,14 +897,187 @@ console.log("test262 runner: engine timeout is classified as TIMEOUT...");
       throw new Error(`marker-like user Error should remain FAIL, got summary ${JSON.stringify(markerErrorJson.summary)}`);
     if (markerErrorJson.results?.[0]?.status !== "FAIL")
       throw new Error(`marker-like user Error result should be FAIL, got ${markerErrorJson.results?.[0]?.status}`);
+
+    const engineFaultTest = join(tests, "engine-fault.js");
+    writeFileSync(engineFaultTest, [
+      "const buffer = new ArrayBuffer(8);",
+      "const view = new DataView(buffer);",
+      "const index = {",
+      "  valueOf() {",
+      "    $262.detachArrayBuffer(buffer);",
+      "    Goccia.gc();",
+      "    return 7;",
+      "  }",
+      "};",
+      "view.setUint8(index, 1);",
+      "",
+    ].join("\n"));
+    const engineFaultOut = join(tmp, "engine-fault-result.json");
+    const engineFaultProc = Bun.spawnSync(
+      [
+        TEST262RUNNER,
+        "--suite-dir", suite,
+        "--categories", "built-ins",
+        "--filter", "built-ins/engine-fault.js",
+        "--mode=bytecode",
+        "--jobs=1",
+        "--output", engineFaultOut,
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    if (engineFaultProc.exitCode !== 1)
+      throw new Error(`test262 engine-fault fixture should exit 1, got ${engineFaultProc.exitCode}: ${engineFaultProc.stderr.toString()}`);
+    const engineFaultJson = JSON.parse(readFileSync(engineFaultOut, "utf8"));
+    if (engineFaultJson.summary.failed !== 1 ||
+        engineFaultJson.summary.wrapperInfraFailures !== 0) {
+      throw new Error(
+        `engine execution fault should remain FAIL, got summary ${JSON.stringify(engineFaultJson.summary)}`,
+      );
+    }
+    if (engineFaultJson.results?.[0]?.status !== "FAIL")
+      throw new Error(`engine execution fault should be FAIL, got ${engineFaultJson.results?.[0]?.status}`);
   } finally {
     clean(tmp);
   }
 }
 
-console.log("Bare Loader: --test262-host child realms expose host records...");
+console.log("test262 runner: deterministic shards merge into one complete report...");
 {
-  const proc = Bun.spawnSync([BARE, "--test262-host"], {
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "built-ins");
+    const profileDir = join(tmp, "profiles");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), "");
+    writeFileSync(join(harness, "assert.js"), "");
+    for (let index = 0; index < 12; index++) {
+      const source = index === 0
+        ? [
+            "if (!Goccia.test262Host) throw new Error('missing test262 host');",
+            "if (typeof $262.createRealm !== 'function') throw new Error('missing createRealm');",
+            "const child = $262.createRealm();",
+            "child.evalScript('globalThis.answer = 42;');",
+            "if (child.global.answer !== 42) throw new Error('child realm eval failed');",
+            "const segmenterTag = Object.getOwnPropertyDescriptor(",
+            "  Intl.Segmenter.prototype, Symbol.toStringTag);",
+            "if (segmenterTag.value !== 'Intl.Segmenter')",
+            "  throw new Error('warm-up realm data leaked into worker');",
+            "",
+          ].join("\n")
+        : "var value = 1 + 1;\n";
+      writeFileSync(join(tests, `shard-${index}.js`), source);
+    }
+
+    const shardReports: string[] = [];
+    const seenTests = new Set<string>();
+    for (let shard = 0; shard < 4; shard++) {
+      const reportPath = join(tmp, `shard-${shard}.json`);
+      shardReports.push(reportPath);
+      const proc = Bun.spawnSync(
+        [
+          TEST262RUNNER,
+          "--suite-dir", suite,
+          "--categories", "built-ins",
+          "--mode=bytecode",
+          "--jobs=1",
+          "--profile-dir", profileDir,
+          "--shard-index", String(shard),
+          "--shard-count", "4",
+          "--output", reportPath,
+        ],
+        { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
+      );
+      if (proc.exitCode !== 0) {
+        throw new Error(
+          `test262 shard ${shard} should pass, got ${proc.exitCode}: ${proc.stderr.toString()}`,
+        );
+      }
+      const report = JSON.parse(readFileSync(reportPath, "utf8"));
+      if (report.shard?.index !== shard || report.shard?.count !== 4) {
+        throw new Error(`test262 shard metadata is incorrect: ${JSON.stringify(report.shard)}`);
+      }
+      if (report.summary.totalDiscovered !== 12) {
+        throw new Error(`test262 shard should preserve global discovery count: ${JSON.stringify(report.summary)}`);
+      }
+      for (const result of report.results) {
+        if (seenTests.has(result.id)) {
+          throw new Error(`test262 shard duplicated ${result.id}`);
+        }
+        seenTests.add(result.id);
+      }
+    }
+    if (seenTests.size !== 12) {
+      throw new Error(`test262 shards should cover all 12 tests, got ${seenTests.size}`);
+    }
+    if (existsSync(join(profileDir, "aggregate.json"))) {
+      throw new Error("individual test262 shards must not write partial profile aggregates");
+    }
+
+    const mergedPath = join(tmp, "merged.json");
+    const profileSummaryPath = join(tmp, "profile-summary.json");
+    const profileMarkdownPath = join(tmp, "profile-summary.md");
+    const mergeProc = Bun.spawnSync(
+      [
+        "bun",
+        "scripts/run_test262_suite.ts",
+        "--merge-shards",
+        "--output", mergedPath,
+        "--profile-dir", profileDir,
+        "--profile-summary-output", profileSummaryPath,
+        "--profile-markdown-output", profileMarkdownPath,
+        ...shardReports,
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
+    );
+    if (mergeProc.exitCode !== 0) {
+      throw new Error(
+        `test262 shard merge should pass, got ${mergeProc.exitCode}: ${mergeProc.stderr.toString()}`,
+      );
+    }
+    const merged = JSON.parse(readFileSync(mergedPath, "utf8"));
+    if (merged.summary.totalRun !== 12 || merged.summary.passed !== 12 ||
+        merged.results?.length !== 12 || merged.run?.jobs !== 4) {
+      throw new Error(`test262 merged report is incomplete: ${JSON.stringify(merged.summary)}`);
+    }
+    const profileSummary = JSON.parse(readFileSync(profileSummaryPath, "utf8"));
+    if (profileSummary.profileCount !== 12 ||
+        profileSummary.missingProfileCount !== 0 ||
+        !existsSync(profileMarkdownPath)) {
+      throw new Error(
+        `test262 merged profile report is incomplete: ${JSON.stringify(profileSummary)}`,
+      );
+    }
+
+    const duplicateProc = Bun.spawnSync(
+      [
+        "bun",
+        "scripts/run_test262_suite.ts",
+        "--merge-shards",
+        "--output", join(tmp, "invalid.json"),
+        shardReports[0],
+        shardReports[0],
+        shardReports[2],
+        shardReports[3],
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    if (duplicateProc.exitCode !== 1 ||
+        !duplicateProc.stderr.toString().includes("Duplicate or invalid shard index")) {
+      throw new Error(
+        `test262 merge should reject duplicate shards: ${duplicateProc.stderr.toString()}`,
+      );
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Test262 Runner: child realms expose host records...");
+{
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
     stdin: new TextEncoder().encode([
       "const child = Goccia.test262.createRealm();",
       "print(typeof child.evalScript);",
@@ -969,14 +1111,14 @@ console.log("Bare Loader: --test262-host child realms expose host records...");
     "undefined",
   ].join("\n");
   if (proc.exitCode !== 0)
-    throw new Error(`Bare --test262-host child realm probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    throw new Error(`Test262 child realm probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-    throw new Error(`Bare --test262-host child realm hooks got: ${proc.stdout.toString()}`);
+    throw new Error(`Test262 child realm hooks got: ${proc.stdout.toString()}`);
 }
 
-console.log("Bare Loader: --test262-host child realm globals expose host hooks...");
+console.log("Test262 Runner: child realm globals expose host hooks...");
 {
-  const proc = Bun.spawnSync([BARE, "--test262-host"], {
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
     stdin: new TextEncoder().encode([
       "const child = Goccia.test262.createRealm();",
       "print(child.global.Goccia.test262Host);",
@@ -997,15 +1139,15 @@ console.log("Bare Loader: --test262-host child realm globals expose host hooks..
     "function",
   ].join("\n");
   if (proc.exitCode !== 0)
-    throw new Error(`Bare --test262-host child global hook probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    throw new Error(`Test262 child global hook probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-    throw new Error(`Bare --test262-host child global hooks got: ${proc.stdout.toString()}`);
+    throw new Error(`Test262 child global hooks got: ${proc.stdout.toString()}`);
 }
 
-console.log("Bare Loader: cross-realm weak constructors use the newTarget realm prototype...");
+console.log("Test262 Runner: cross-realm weak constructors use the newTarget realm prototype...");
 for (const { label, args } of [
-  { label: "interpreted", args: [BARE, "--test262-host", "--compat-function"] },
-  { label: "bytecode", args: [BARE, "--test262-host", "--compat-function", "--mode=bytecode"] },
+  { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--compat-function"] },
+  { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--compat-function", "--mode=bytecode"] },
 ]) {
   const proc = Bun.spawnSync(args, {
     stdin: new TextEncoder().encode([
@@ -1027,9 +1169,9 @@ for (const { label, args } of [
     throw new Error(`Bare ${label} cross-realm weak constructor prototype mismatch: ${proc.stdout.toString()}`);
 }
 
-console.log("Bare Loader: bytecode --test262-host eval is direct eval...");
+console.log("Test262 Runner: bytecode eval is direct eval...");
 {
-  const proc = Bun.spawnSync([BARE, "--test262-host", "--mode=bytecode"], {
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode"], {
     stdin: new TextEncoder().encode([
       "{",
       "  let x = 41;",
@@ -1060,11 +1202,11 @@ console.log("Bare Loader: bytecode --test262-host eval is direct eval...");
     throw new Error(`Bare bytecode direct eval got: ${proc.stdout.toString()}`);
 }
 
-console.log("Bare Loader: bytecode --test262-host eval keeps sloppy var declarations in the caller environment...");
+console.log("Test262 Runner: bytecode eval keeps sloppy var declarations in the caller environment...");
 {
   const proc = Bun.spawnSync([
-    BARE,
-    "--test262-host",
+    TEST262RUNNER,
+    "--eval-host",
     "--mode=bytecode",
     "--compat-var",
     "--compat-function",
@@ -1112,11 +1254,11 @@ console.log("Bare Loader: bytecode --test262-host eval keeps sloppy var declarat
     throw new Error(`Bare bytecode sloppy eval var probe got: ${proc.stdout.toString()}`);
 }
 
-console.log("Bare Loader: bytecode --test262-host eval exposes later sloppy vars to existing closures...");
+console.log("Test262 Runner: bytecode eval exposes later sloppy vars to existing closures...");
 {
   const proc = Bun.spawnSync([
-    BARE,
-    "--test262-host",
+    TEST262RUNNER,
+    "--eval-host",
     "--mode=bytecode",
     "--compat-var",
     "--compat-function",
@@ -1148,11 +1290,11 @@ console.log("Bare Loader: bytecode --test262-host eval exposes later sloppy vars
     throw new Error(`Bare bytecode sloppy eval pre-closure probe got: ${proc.stdout.toString()}`);
 }
 
-console.log("Bare Loader: bytecode --test262-host eval var declarations shadow outer upvalues...");
+console.log("Test262 Runner: bytecode eval var declarations shadow outer upvalues...");
 {
   const proc = Bun.spawnSync([
-    BARE,
-    "--test262-host",
+    TEST262RUNNER,
+    "--eval-host",
     "--mode=bytecode",
     "--compat-var",
     "--compat-function",
@@ -1189,11 +1331,11 @@ console.log("Bare Loader: bytecode --test262-host eval var declarations shadow o
     throw new Error(`Bare bytecode sloppy eval upvalue shadow probe got: ${proc.stdout.toString()}`);
 }
 
-console.log("Bare Loader: bytecode --test262-host eval keeps nested variable environments isolated...");
+console.log("Test262 Runner: bytecode eval keeps nested variable environments isolated...");
 {
   const proc = Bun.spawnSync([
-    BARE,
-    "--test262-host",
+    TEST262RUNNER,
+    "--eval-host",
     "--mode=bytecode",
     "--compat-var",
     "--compat-function",
@@ -1221,11 +1363,11 @@ console.log("Bare Loader: bytecode --test262-host eval keeps nested variable env
     throw new Error(`Bare bytecode nested eval environment probe got: ${proc.stdout.toString()}`);
 }
 
-console.log("Bare Loader: bytecode --test262-host eval preserves lexical upvalue precedence...");
+console.log("Test262 Runner: bytecode eval preserves lexical upvalue precedence...");
 {
   const proc = Bun.spawnSync([
-    BARE,
-    "--test262-host",
+    TEST262RUNNER,
+    "--eval-host",
     "--mode=bytecode",
     "--compat-var",
     "--compat-function",
@@ -1270,11 +1412,11 @@ console.log("Bare Loader: bytecode --test262-host eval preserves lexical upvalue
     throw new Error(`Bare bytecode eval lexical precedence probe got: ${proc.stdout.toString()}`);
 }
 
-console.log("Bare Loader: bytecode assignment retains its resolved eval environment reference...");
+console.log("Test262 Runner: bytecode assignment retains its resolved eval environment reference...");
 {
   const proc = Bun.spawnSync([
-    BARE,
-    "--test262-host",
+    TEST262RUNNER,
+    "--eval-host",
     "--mode=bytecode",
     "--compat-var",
     "--compat-function",
@@ -1321,7 +1463,7 @@ console.log("Bare Loader: bytecode assignment retains its resolved eval environm
     throw new Error(`Bare bytecode eval assignment reference probe got: ${proc.stdout.toString()}`);
 }
 
-console.log("Bare Loader: --test262-host generator parameter eval uses the parameter var environment...");
+console.log("Test262 Runner: generator parameter eval uses the parameter var environment...");
 {
   const source = [
     "var x = 'outside';",
@@ -1354,12 +1496,11 @@ console.log("Bare Loader: --test262-host generator parameter eval uses the param
     "inside,inside,outside",
   ].join("\n");
   for (const mode of [
-    { label: "interpreted", args: [BARE] },
-    { label: "bytecode", args: [BARE, "--mode=bytecode"] },
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host"] },
+    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
   ]) {
     const proc = Bun.spawnSync([
       ...mode.args,
-      "--test262-host",
       "--compat-var",
       "--compat-function",
       "--compat-non-strict-mode",
@@ -1375,7 +1516,7 @@ console.log("Bare Loader: --test262-host generator parameter eval uses the param
   }
 }
 
-console.log("Bare Loader: --test262-host Annex B eval preserves with-object properties...");
+console.log("Test262 Runner: Annex B eval preserves with-object properties...");
 {
   const source = [
     "function checkAnnexBEval() {",
@@ -1390,12 +1531,11 @@ console.log("Bare Loader: --test262-host Annex B eval preserves with-object prop
     "",
   ].join("\n");
   for (const mode of [
-    { label: "interpreted", args: [BARE] },
-    { label: "bytecode", args: [BARE, "--mode=bytecode"] },
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host"] },
+    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
   ]) {
     const proc = Bun.spawnSync([
       ...mode.args,
-      "--test262-host",
       "--compat-var",
       "--compat-function",
       "--compat-non-strict-mode",
@@ -1411,7 +1551,7 @@ console.log("Bare Loader: --test262-host Annex B eval preserves with-object prop
   }
 }
 
-console.log("Bare Loader: --test262-host eval reports strict delete identifier as SyntaxError...");
+console.log("Test262 Runner: eval reports strict delete identifier as SyntaxError...");
 {
   const source = [
     "try {",
@@ -1423,8 +1563,8 @@ console.log("Bare Loader: --test262-host eval reports strict delete identifier a
     "",
   ].join("\n");
   for (const mode of [
-    { label: "interpreted", args: [BARE, "--test262-host"] },
-    { label: "bytecode", args: [BARE, "--test262-host", "--mode=bytecode"] },
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host"] },
+    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
   ]) {
     const proc = Bun.spawnSync(mode.args, {
       stdin: new TextEncoder().encode(source),
@@ -1438,7 +1578,7 @@ console.log("Bare Loader: --test262-host eval reports strict delete identifier a
   }
 }
 
-console.log("Bare Loader: --test262-host eval validates destructuring pattern early errors...");
+console.log("Test262 Runner: eval validates destructuring pattern early errors...");
 {
   const source = [
     "const cases = [",
@@ -1468,8 +1608,8 @@ console.log("Bare Loader: --test262-host eval validates destructuring pattern ea
     "SyntaxError",
   ].join("\n");
   for (const mode of [
-    { label: "interpreted", args: [BARE, "--test262-host"] },
-    { label: "bytecode", args: [BARE, "--test262-host", "--mode=bytecode"] },
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host"] },
+    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
   ]) {
     const proc = Bun.spawnSync(mode.args, {
       stdin: new TextEncoder().encode(source),
@@ -1483,7 +1623,7 @@ console.log("Bare Loader: --test262-host eval validates destructuring pattern ea
   }
 }
 
-console.log("Bare Loader: --test262-host eval rejects arguments in class field initializers...");
+console.log("Test262 Runner: eval rejects arguments in class field initializers...");
 {
   const source = [
     "let instanceExecuted = false;",
@@ -1549,8 +1689,8 @@ console.log("Bare Loader: --test262-host eval rejects arguments in class field i
     "false",
   ].join("\n");
   for (const mode of [
-    { label: "interpreted", args: [BARE, "--test262-host"] },
-    { label: "bytecode", args: [BARE, "--test262-host", "--mode=bytecode"] },
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host"] },
+    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
   ]) {
     const proc = Bun.spawnSync(mode.args, {
       stdin: new TextEncoder().encode(source),
@@ -1564,7 +1704,7 @@ console.log("Bare Loader: --test262-host eval rejects arguments in class field i
   }
 }
 
-console.log("Bare Loader: --test262-host eval rejects arguments in generator method defaults...");
+console.log("Test262 Runner: eval rejects arguments in generator method defaults...");
 {
   const source = [
     "const cases = [",
@@ -1586,8 +1726,8 @@ console.log("Bare Loader: --test262-host eval rejects arguments in generator met
     "async-generator:SyntaxError",
   ].join("\n");
   for (const mode of [
-    { label: "interpreted", args: [BARE, "--test262-host", "--compat-var", "--compat-non-strict-mode"] },
-    { label: "bytecode", args: [BARE, "--test262-host", "--mode=bytecode", "--compat-var", "--compat-non-strict-mode"] },
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--compat-var", "--compat-non-strict-mode"] },
+    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode", "--compat-var", "--compat-non-strict-mode"] },
   ]) {
     const proc = Bun.spawnSync(mode.args, {
       stdin: new TextEncoder().encode(source),
@@ -1601,7 +1741,7 @@ console.log("Bare Loader: --test262-host eval rejects arguments in generator met
   }
 }
 
-console.log("Bare Loader: --test262-host eval super permissions stop at ordinary function boundary...");
+console.log("Test262 Runner: eval super permissions stop at ordinary function boundary...");
 {
   const source = [
     "class Base { method() { return 11; } }",
@@ -1621,8 +1761,8 @@ console.log("Bare Loader: --test262-host eval super permissions stop at ordinary
     "",
   ].join("\n");
   for (const mode of [
-    { label: "interpreted", args: [BARE, "--test262-host", "--compat-function", "--compat-non-strict-mode"] },
-    { label: "bytecode", args: [BARE, "--test262-host", "--mode=bytecode", "--compat-function", "--compat-non-strict-mode"] },
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--compat-function", "--compat-non-strict-mode"] },
+    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode", "--compat-function", "--compat-non-strict-mode"] },
   ]) {
     const proc = Bun.spawnSync(mode.args, {
       stdin: new TextEncoder().encode(source),
@@ -1636,9 +1776,9 @@ console.log("Bare Loader: --test262-host eval super permissions stop at ordinary
   }
 }
 
-console.log("Bare Loader: bytecode --test262-host eval inherits arrow lexical super and new.target...");
+console.log("Test262 Runner: bytecode eval inherits arrow lexical super and new.target...");
 {
-  const proc = Bun.spawnSync([BARE, "--test262-host", "--mode=bytecode"], {
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode"], {
     stdin: new TextEncoder().encode([
       "class Base {",
       "  constructor() { this.x = 1; }",
@@ -1672,8 +1812,8 @@ console.log("Bare Loader: bytecode --test262-host eval inherits arrow lexical su
 console.log("Bare Loader: bytecode direct eval creates top-level sloppy var...");
 {
   const proc = Bun.spawnSync([
-    BARE,
-    "--test262-host",
+    TEST262RUNNER,
+    "--eval-host",
     "--mode=bytecode",
     "--compat-var",
     "--compat-non-strict-mode",
@@ -1698,8 +1838,8 @@ console.log("Bare Loader: bytecode direct eval creates top-level sloppy var...")
 console.log("Bare Loader: bytecode module direct eval keeps module this binding...");
 {
   const proc = Bun.spawnSync([
-    BARE,
-    "--test262-host",
+    TEST262RUNNER,
+    "--eval-host",
     "--mode=bytecode",
     "--source-type=module",
   ], {
@@ -1730,8 +1870,8 @@ console.log("Bare Loader: --mode default is interpreted...");
     throw new Error(`Bare --help should document --mode, got: ${help}`);
   if (!help.includes("default: interpreted"))
     throw new Error(`Bare --help should document interpreted as default, got: ${help}`);
-  if (!help.includes("--test262-host"))
-    throw new Error(`Bare --help should document --test262-host, got: ${help}`);
+  if (help.includes("--test262-host"))
+    throw new Error(`Bare --help should not expose Test262 machinery, got: ${help}`);
 }
 
 console.log("Bare Loader: --mode invalid value rejected...");

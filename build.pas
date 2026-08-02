@@ -448,6 +448,20 @@ begin
   WriteLn('GocciaTestRunner built successfully');
 end;
 
+procedure BuildTest262Runner;
+var
+  Output: string;
+begin
+  WriteLn('Building GocciaTest262Runner...');
+  if not RunCommand('fpc', FPCArgs('source/app/GocciaTest262Runner.dpr',
+      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('test262runner'))),
+      Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaTest262Runner build failed',
+      'test262runner');
+  WriteLn(Output);
+  WriteLn('GocciaTest262Runner built successfully');
+end;
+
 procedure BuildTOMLComplianceRunner;
 var
   Output: string;
@@ -564,6 +578,8 @@ begin
     BuildTestRunner;
     BuildFFIFixture;
   end
+  else if ATrigger = 'test262runner' then
+    BuildTest262Runner
   else if ATrigger = 'tomlcompliancerunner' then
     BuildTOMLComplianceRunner
   else if ATrigger = 'wasmtestrunner' then
@@ -624,6 +640,7 @@ begin
     BuildTriggers.Add('loaderbare');
     BuildTriggers.Add('sandboxrunner');
     BuildTriggers.Add('testrunner');
+    BuildTriggers.Add('test262runner');
     BuildTriggers.Add('tomlcompliancerunner');
     BuildTriggers.Add('wasmtestrunner');
     BuildTriggers.Add('benchmarkrunner');

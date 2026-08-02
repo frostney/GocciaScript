@@ -17,6 +17,7 @@ import {
   BARE,
   REPL,
   TESTRUNNER,
+  TEST262RUNNER,
   BUNDLER,
   BENCHRUNNER,
 } from "./test-cli/binaries";
@@ -189,15 +190,13 @@ for (const mode of ["interpreted", "bytecode"] as const) {
 
   const bareRealmSource = [
     "const realm = Goccia.test262.createRealm();",
-    '[Math.random(), realm.evalScript("Math.random()"), realm.evalScript("Goccia.test262.createRealm().evalScript(\\"Math.random()\\")")].join("|");',
+    'print([Math.random(), realm.evalScript("Math.random()"), realm.evalScript("Goccia.test262.createRealm().evalScript(\\"Math.random()\\")")].join("|"));',
     "",
   ].join("\n");
   const bareRealm = Bun.spawnSync(
     [
-      BARE,
-      "-",
-      "--print",
-      "--test262-host",
+      TEST262RUNNER,
+      "--eval-host",
       "--deterministic",
       `--mode=${mode}`,
     ],
@@ -376,13 +375,22 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
         ...wideNames.map((name, index) => `  let ${name} = ${index};`),
         '  return eval("wideName259");',
         "}",
-        "readWideLocal();",
+        "print(readWideLocal());",
         "",
       ].join("\n"),
     );
-    const wideDirectEvalOut = await $`${BARE} --print ${wideDirectEvalSrc} --mode=bytecode --compat-function --test262-host 2>&1`.text();
-    if (wideDirectEvalOut.trim() !== "259")
-      throw new Error(`Bare bytecode wide direct eval expected 259, got: ${wideDirectEvalOut}`);
+    const wideDirectEval = Bun.spawnSync(
+      [TEST262RUNNER, "--eval-host", "--mode=bytecode"],
+      {
+        stdin: readFileSync(wideDirectEvalSrc),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const wideDirectEvalOut =
+      wideDirectEval.stdout.toString() + wideDirectEval.stderr.toString();
+    if (wideDirectEval.exitCode !== 0 || wideDirectEval.stdout.toString().trim() !== "259")
+      throw new Error(`Test262 Runner bytecode wide direct eval expected 259, got: ${wideDirectEvalOut}`);
 
     const wideCapturedBlockSrc = join(tmp, "wide-captured-block.js");
     writeFileSync(
@@ -460,12 +468,20 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
         "const realm = new ShadowRealm();",
         "const fromEvaluate = realm.evaluate('while (false) {} 23;');",
         "const fromEval = realm.evaluate(\"eval('while (false) {} 24;')\");",
-        "fromEvaluate + fromEval;",
+        "print(fromEvaluate + fromEval);",
         "",
       ].join("\n"),
     );
-    const shadowWarningProc = await $`${BARE} --print ${shadowWarningSrc} --unsafe-shadowrealm --test262-host --warning-unsupported-features 2>&1`.nothrow();
-    const shadowWarningOut = shadowWarningProc.text();
+    const shadowWarningProc = Bun.spawnSync(
+      [TEST262RUNNER, "--eval-host", "--mode=bytecode", "--warning-unsupported-features"],
+      {
+        stdin: readFileSync(shadowWarningSrc),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const shadowWarningOut =
+      shadowWarningProc.stdout.toString() + shadowWarningProc.stderr.toString();
     if (shadowWarningProc.exitCode !== 0 ||
         !shadowWarningOut.replace(/\r/g, "").split("\n").includes("47"))
       throw new Error(`ShadowRealm child realm should inherit warning-unsupported-features, got: ${shadowWarningOut}`);

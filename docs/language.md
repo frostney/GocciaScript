@@ -8,7 +8,7 @@
 - **Implementation vs profile** — GocciaScript implements core ECMAScript; modern recommended defaults are product policy rather than the language ceiling
 - **Conformance evidence** — Generated test262 reports measure the release-track objective; canonical prose links to current results instead of freezing a percentage
 - **Compatibility paths** — Every standard core form disabled by the recommended profile has a targeted `--compat-*` path
-- **Host exposure** — Normal hosts do not install `eval`; the private `GocciaScriptLoaderBare --test262-host` exposes it only for conformance
+- **Host exposure** — Normal hosts do not install `eval`; the private `GocciaTest262Runner` conformance host exposes `eval`, `evalScript`, and `createRealm`
 - **TC39 proposals and extensions** — The TC39 Type Annotations proposal uses types-as-comments semantics by default; GocciaScript's optional `--strict-types` extension adds runtime enforcement
 - **Annex B policy** — Browser-only Annex B behavior is not a general pre-1.0 target
 
@@ -766,7 +766,7 @@ Strict equality requires matching types, eliminating this entire class of bugs.
 
 **Implemented; not installed by normal hosts.** `GocciaScriptLoader`, `GocciaREPL`, `GocciaTestRunner`, and default `GocciaScriptLoaderBare` do not expose runtime `eval`.
 
-`eval` is a security risk — it executes arbitrary strings as code. In an embedded scripting environment, this is especially dangerous. The only implementation is a private conformance host hook: `GocciaScriptLoaderBare --test262-host` installs the official test262 host `eval`, plus `evalScript(sourceText)` and `createRealm()` properties on the private test262 host object, so the stock test262 harness can exercise ECMAScript direct-eval and realm semantics. Those hooks are not exposed outside conformance runs and should not be used as an application API.
+`eval` is a security risk — it executes arbitrary strings as code. In an embedded scripting environment, this is especially dangerous. The only implementation is a private conformance host hook: `GocciaTest262Runner` installs the official test262 host `eval`, plus `evalScript(sourceText)` and `createRealm()` properties on the private test262 host object, so the stock test262 harness can exercise ECMAScript direct-eval and realm semantics. Those hooks are not exposed outside conformance runs and should not be used as an application API.
 
 ### `arguments` Object
 

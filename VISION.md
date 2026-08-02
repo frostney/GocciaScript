@@ -23,7 +23,7 @@ AI agents need to execute generated code in a constrained environment. GocciaScr
 - **No dynamic code generation by default** — normal runtime hosts do not install `eval()`, and the `Function()` constructor stays disabled unless the host opts in via `--unsafe-function-constructor`; the private test262 host exposes a conformance-only eval hook
 - **Modern function syntax by default** — Arrow functions, methods, accessors, and class methods are the recommended forms; the `function` keyword (declarations and expressions) is available only through `--compat-function` for ECMAScript compatibility
 
-The sandbox is a *reduced attack surface*, not a formally verified security boundary. The engine has not been audited by a third party. The sandboxing relies on the host not exposing dangerous APIs, on `eval` being absent from normal runtimes, on the test262 eval hook remaining private to `GocciaScriptLoaderBare --test262-host`, and on the host not opting in to `--unsafe-function-constructor` (which would re-enable dynamic code generation via `Function()`).
+The sandbox is a *reduced attack surface*, not a formally verified security boundary. The engine has not been audited by a third party. The sandboxing relies on the host not exposing dangerous APIs, on `eval` being absent from normal runtimes, on the test262 eval hook remaining private to `GocciaTest262Runner`, and on the host not opting in to `--unsafe-function-constructor` (which would re-enable dynamic code generation via `Function()`).
 
 ## Secondary: Embeddable Desktop Platform
 
