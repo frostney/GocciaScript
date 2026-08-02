@@ -175,6 +175,14 @@ The dispatch loop supports an optional instruction counter (`Goccia.InstructionL
 - Endianness: little-endian
 - File extension: `.gbc`
 
+Binary loading is a validation boundary. The reader rejects oversized files,
+declared strings or tables that exceed the remaining stream, excessive nested
+function templates, invalid enum tags, and trailing data. Before a module can
+execute, the verifier checks opcodes, register destinations, constant and
+function references, control-flow targets, and exception-handler metadata.
+The VM retains bounds checks on instruction, constant, and function access as
+defense in depth.
+
 ## Current Status
 
 - `--mode=bytecode` runs the Goccia VM directly.

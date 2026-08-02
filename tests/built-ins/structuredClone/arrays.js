@@ -42,3 +42,7 @@ test("clones empty array", () => {
   const clone = structuredClone([]);
   expect(clone.length).toBe(0);
 });
+test("structuredClone rejects excessive acyclic nesting", () => {
+  const value = Array(257).fill(0).reduce((child) => [child], 0);
+  expect(() => structuredClone(value)).toThrow(RangeError);
+});

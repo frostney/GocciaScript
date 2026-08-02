@@ -169,7 +169,7 @@ procedure TTestGocciaVM.TestExecuteConstString;
 var
   Template: TGocciaFunctionTemplate;
   VM: TGocciaVM;
-  ResultValue: TGocciaValue;
+  FirstValue, SecondValue: TGocciaValue;
   ConstIdx: UInt16;
 begin
   Template := TGocciaFunctionTemplate.Create('const-string');
@@ -180,8 +180,10 @@ begin
     Template.EmitInstruction(EncodeABx(OP_LOAD_CONST, 0, ConstIdx));
     Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
 
-    ResultValue := VM.ExecuteFunction(Template);
-    Expect<string>(ResultValue.ToStringLiteral.Value).ToBe('hello');
+    FirstValue := VM.ExecuteFunction(Template);
+    SecondValue := VM.ExecuteFunction(Template);
+    Expect<string>(FirstValue.ToStringLiteral.Value).ToBe('hello');
+    Expect<Boolean>(SecondValue = FirstValue).ToBe(True);
   finally
     VM.Free;
     Template.Free;

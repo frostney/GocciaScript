@@ -58,6 +58,9 @@ type
     FDiffFormat: TStringOption;
     FDiffOutput: TStringOption;
     FPrint: TFlagOption;
+    FFsQuotaBytes: TInt64Option;
+    FFsNodeLimit: TIntegerOption;
+    FRunScriptDepth: Integer;
     FCurrentOutputLines: TStrings;
     FCurrentHostEnvironment: TGocciaHostEnvironment;
 
@@ -217,6 +220,11 @@ begin
     'Diff format: json or unified (default: json)');
   FDiffOutput := AddString('diff-output', 'Write diff output to a host file');
   FPrint := AddFlag('print', 'Print the script result value');
+  FFsQuotaBytes := TInt64Option.Create('fs-quota-bytes',
+    'Maximum bytes in the sandbox filesystem (default: 16777216)');
+  Add(FFsQuotaBytes);
+  FFsNodeLimit := AddInteger('fs-node-limit',
+    'Maximum files and directories in the sandbox filesystem (default: 4096)');
 end;
 
 function TSandboxRunnerApp.UsageLine: string;
@@ -238,6 +246,10 @@ begin
   if FDiffFormat.Present and (FDiffFormat.Value <> 'json') and
      (FDiffFormat.Value <> 'unified') then
     raise TParseError.Create('--diff-format must be json or unified.');
+  if FFsQuotaBytes.Present and (FFsQuotaBytes.Value <= 0) then
+    raise TParseError.Create('--fs-quota-bytes must be greater than 0.');
+  if FFsNodeLimit.Present and (FFsNodeLimit.Value <= 0) then
+    raise TParseError.Create('--fs-node-limit must be greater than 0.');
 end;
 
 function TSandboxRunnerApp.ReadHostBytes(const APath: string): TBytes;
@@ -798,8 +810,8 @@ begin
       FCurrentHostEnvironment := Engine.HostEnvironment;
 
       try
-        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
-        StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+        PushTimeoutScope(tsFile, EngineOptions.Timeout.ValueOr(0));
+        PushInstructionLimitScope(EngineOptions.MaxInstructions.ValueOr(0));
         ScriptResult := Engine.Execute;
         ExecutionRealm := CurrentRealm;
         try
@@ -811,8 +823,8 @@ begin
         Result.Ok := True;
         Result.ExitCode := 0;
       finally
-        ClearExecutionTimeout;
-        ClearInstructionLimit;
+        PopTimeoutScope;
+        PopInstructionLimitScope;
       end;
     except
       on E: EGocciaCapabilityAuditDeliveryError do
@@ -846,14 +858,26 @@ function TSandboxRunnerApp.ExecuteSandboxPath(
   const AOptions: TGocciaSandboxRunOptions): TGocciaSandboxRunResult;
 var
   ChildContext: TGocciaSandboxContext;
+  RemainingBytes: Int64;
+  RemainingNodes: Integer;
 begin
+  if FRunScriptDepth >= 32 then
+    raise Exception.Create('sandbox runScript nesting limit exceeded');
+  Inc(FRunScriptDepth);
+  try
   if not AOptions.Isolated then
     Exit(ExecuteSandboxPathInContext(AContext, AEntryPath));
 
   FillChar(Result, SizeOf(Result), 0);
   Result.Ok := False;
   Result.ExitCode := 1;
-  ChildContext := TGocciaSandboxContext.Create;
+  RemainingBytes := AContext.Fs.QuotaBytes - AContext.Fs.UsedBytes;
+  RemainingNodes := AContext.Fs.NodeQuota - AContext.Fs.NodeCount;
+  if RemainingBytes <= 0 then
+    raise ESandboxFsQuotaExceeded.Create('sandbox byte quota exhausted');
+  if RemainingNodes <= 0 then
+    raise ESandboxFsQuotaExceeded.Create('sandbox node quota exhausted');
+  ChildContext := TGocciaSandboxContext.Create(RemainingBytes, RemainingNodes);
   try
     try
       ChildContext.RunScriptCallback := ExecuteSandboxPath;
@@ -882,6 +906,9 @@ begin
     end;
   finally
     ChildContext.Free;
+  end;
+  finally
+    Dec(FRunScriptDepth);
   end;
 end;
 
@@ -925,7 +952,9 @@ begin
   end;
 
   FContext.Free;
-  FContext := TGocciaSandboxContext.Create;
+  FContext := TGocciaSandboxContext.Create(
+    FFsQuotaBytes.ValueOr(DEFAULT_SANDBOX_BYTE_QUOTA),
+    FFsNodeLimit.ValueOr(DEFAULT_SANDBOX_NODE_QUOTA));
   FContext.RunScriptCallback := ExecuteSandboxPath;
   LoadSeeds;
   FContext.CaptureBaseline;

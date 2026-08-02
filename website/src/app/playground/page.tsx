@@ -1,7 +1,11 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { Playground } from "@/components/playground";
-import { listPlaygroundVersions, resolveAsiFlag } from "@/lib/vendor-manifest";
+import {
+  listPlaygroundVersions,
+  resolveAsiFlag,
+  resolvePublicDefaultVersion,
+} from "@/lib/vendor-manifest";
 import { getVendorManifest } from "@/lib/vendor-manifest-server";
 
 export const metadata: Metadata = {
@@ -45,7 +49,7 @@ export default async function PlaygroundPage() {
     <Suspense>
       <Playground
         versions={versions}
-        defaultVersion={manifest.defaultVersion}
+        defaultVersion={resolvePublicDefaultVersion(manifest)}
         asiFlags={asiFlags}
       />
     </Suspense>

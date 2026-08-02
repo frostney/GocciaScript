@@ -82,6 +82,11 @@ test("JSON.stringify nested objects", () => {
   expect(JSON.stringify(obj)).toBe('{"a":{"b":{"c":1}}}');
 });
 
+test("JSON.stringify rejects excessive acyclic nesting", () => {
+  const value = Array(257).fill(0).reduce((child) => [child], 0);
+  expect(() => JSON.stringify(value)).toThrow(RangeError);
+});
+
 test("JSON.stringify empty structures", () => {
   expect(JSON.stringify({})).toBe("{}");
   expect(JSON.stringify([])).toBe("[]");

@@ -257,7 +257,8 @@ procedure TScriptLoaderApp.InitializeRuntime(const AEngine: TGocciaEngine);
 var
   Runtime: TGocciaRuntimeCore;
 begin
-  Runtime := AttachRuntime(AEngine);
+  Runtime := AttachRuntime(AEngine,
+    not EngineOptions.NoHostFilesystem.Present);
   ApplyLoaderRuntimeProfile(Runtime);
 end;
 
@@ -301,7 +302,8 @@ var
   HostEnvironmentModulePath: string;
   Runtime: TGocciaRuntimeCore;
 begin
-  Runtime := AttachRuntime(AEngine);
+  Runtime := AttachRuntime(AEngine,
+    not ResolveFlagOption(EngineOptions.NoHostFilesystem, AFileConfig));
 
   if FHostEnvironmentModule.FromCommandLine then
     HostEnvironmentModulePath := FHostEnvironmentModule.Value

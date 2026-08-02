@@ -101,6 +101,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
+  Goccia.NativeLimits,
   Goccia.Realm,
   Goccia.URI,
   Goccia.Values.ArrayBufferValue,
@@ -1033,8 +1034,11 @@ function StructuredCloneValue(const AValue: TGocciaValue;
 var
   Existing: TGocciaValue;
 begin
-  if AValue = nil then
-    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  EnterNativeDataDepth('structured clone');
+  try
+    CheckNativeWork;
+    if AValue = nil then
+      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
 
   if AValue is TGocciaSymbolValue then
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [TGocciaSymbolValue(AValue).ToDisplayString.Value]), SSuggestStructuredClone);
@@ -1068,8 +1072,11 @@ begin
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [CONSTRUCTOR_FINALIZATION_REGISTRY]), SSuggestStructuredClone)
   else if AValue is TGocciaObjectValue then
     Result := CloneObject(TGocciaObjectValue(AValue), AMemory)
-  else
-    ThrowDataCloneError(SErrorStructuredCloneValueNotCloneable, SSuggestStructuredClone);
+    else
+      ThrowDataCloneError(SErrorStructuredCloneValueNotCloneable, SSuggestStructuredClone);
+  finally
+    LeaveNativeDataDepth;
+  end;
 end;
 
 function TGocciaGlobals.StructuredCloneCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

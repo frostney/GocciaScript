@@ -144,8 +144,10 @@ type
   TGocciaStringLiteralValue = class(TGocciaValue)
   private
     FValue: string;
+    FChargedBytes: Int64;
   public
     constructor Create(const AValue: string);
+    destructor Destroy; override;
 
     function IsPrimitive: Boolean; override;
     function TypeName: string; override;
@@ -627,8 +629,42 @@ begin
 end;
 
 constructor TGocciaStringLiteralValue.Create(const AValue: string);
+var
+  ChargedBytes: Int64;
+  GC: TGarbageCollector;
 begin
+  inherited Create;
+  FChargedBytes := 0;
+  ChargedBytes := Int64(Length(AValue)) * SizeOf(Char);
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and not GC.MemoryLimitFiring then
+  begin
+    if not GC.TryReserveExternalBytes(ChargedBytes, Self) then
+    begin
+      // The RangeError itself allocates short strings. Suppress accounting
+      // while constructing it so a failed reservation cannot recurse until
+      // the native stack overflows.
+      GC.MemoryLimitFiring := True;
+      try
+        ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
+      finally
+        GC.MemoryLimitFiring := False;
+      end;
+    end;
+    FChargedBytes := ChargedBytes;
+  end;
   FValue := AValue;
+end;
+
+destructor TGocciaStringLiteralValue.Destroy;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    GC.ReleaseExternalBytes(FChargedBytes);
+  FChargedBytes := 0;
+  inherited;
 end;
 
 function TGocciaStringLiteralValue.TypeName: string;

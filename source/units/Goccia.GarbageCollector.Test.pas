@@ -30,6 +30,7 @@ type
     procedure SetupTests; override;
 
     procedure TestCollectYoungTracesOldToYoungReferences;
+    procedure TestReservationCollectsAndRetries;
   end;
 
 var
@@ -61,6 +62,37 @@ procedure TTestGarbageCollector.SetupTests;
 begin
   Test('CollectYoung traces references from old rooted objects',
     TestCollectYoungTracesOldToYoungReferences);
+  Test('External reservation collects and retries',
+    TestReservationCollectsAndRetries);
+end;
+
+procedure TTestGarbageCollector.TestReservationCollectsAndRetries;
+var
+  BaselineBytes: Int64;
+  GarbageBytes: Int64;
+  GC: TGarbageCollector;
+  PreviousMaxBytes: Int64;
+  Reserved: Boolean;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GChildDestructorCount := 0;
+  BaselineBytes := GC.BytesAllocated;
+
+  GC.RegisterObject(TChildManaged.Create);
+  GarbageBytes := GC.BytesAllocated - BaselineBytes;
+  PreviousMaxBytes := GC.MaxBytes;
+  GC.MaxBytes := BaselineBytes + GarbageBytes;
+  Reserved := False;
+  try
+    Reserved := GC.TryReserveExternalBytes(GarbageBytes);
+    Expect<Boolean>(Reserved).ToBe(True);
+    Expect<Integer>(GChildDestructorCount).ToBe(1);
+  finally
+    if Reserved then
+      GC.ReleaseExternalBytes(GarbageBytes);
+    GC.MaxBytes := PreviousMaxBytes;
+  end;
 end;
 
 procedure TTestGarbageCollector.TestCollectYoungTracesOldToYoungReferences;

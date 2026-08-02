@@ -20,6 +20,7 @@ type
     procedure TestParseDocumentPreservesUnicodeKeysAndValues;
     procedure TestParseDocumentTracksScalarKinds;
     procedure TestParseDocumentTracksArrayElementKinds;
+    procedure TestParseDocumentCleansAbruptContainerNodes;
   public
     procedure SetupTests; override;
   end;
@@ -36,6 +37,48 @@ begin
     TestParseDocumentPreservesUnicodeEscapeSequences);
   Test('ParseDocument preserves Unicode keys and values',
     TestParseDocumentPreservesUnicodeKeysAndValues);
+  Test('ParseDocument cleans abrupt container nodes',
+    TestParseDocumentCleansAbruptContainerNodes);
+end;
+
+procedure TTOMLParserTests.TestParseDocumentCleansAbruptContainerNodes;
+const
+  MALFORMED_DOCUMENTS: array[0..1] of string = (
+    'items = [1, { nested = true } missing-close',
+    'item = { nested = [1, 2] missing-close'
+  );
+var
+  CleanNode: TGocciaTOMLNode;
+  I: Integer;
+  Parser: TGocciaTOMLParser;
+  RaisedExpected: Boolean;
+  Root: TGocciaTOMLNode;
+begin
+  Parser := TGocciaTOMLParser.Create;
+  try
+    for I := Low(MALFORMED_DOCUMENTS) to High(MALFORMED_DOCUMENTS) do
+    begin
+      RaisedExpected := False;
+      try
+        Parser.ParseDocument(MALFORMED_DOCUMENTS[I]);
+      except
+        on EGocciaTOMLParseError do
+          RaisedExpected := True;
+      end;
+      Expect<Boolean>(RaisedExpected).ToBe(True);
+
+      Root := Parser.ParseDocument('clean = true' + sLineBreak);
+      try
+        Expect<Integer>(Root.Children.Count).ToBe(1);
+        CleanNode := GetChildOrFail(Root, 'clean');
+        Expect<string>(CleanNode.CanonicalValue).ToBe('true');
+      finally
+        Root.Free;
+      end;
+    end;
+  finally
+    Parser.Free;
+  end;
 end;
 
 function TTOMLParserTests.GetChildOrFail(const AParent: TGocciaTOMLNode;

@@ -95,6 +95,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.JSON.Utils,
+  Goccia.NativeLimits,
   Goccia.Utils,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
@@ -423,6 +424,7 @@ end;
 
 procedure TGocciaJSONVisitor.OnValueStart;
 begin
+  CheckNativeWork;
   FValueStartPosition := CurrentPosition;
 end;
 
@@ -909,12 +911,15 @@ procedure TGocciaJSONStringifier.WriteValue(var ABuffer: TStringBuffer;
 var
   EffectiveValue: TGocciaValue;
 begin
-  // ES2026 §25.5.2.2 step 4a: If value has [[IsRawJSON]], write its raw text verbatim.
-  if AValue is TGocciaRawJSONValue then
-  begin
-    ABuffer.Append(TGocciaRawJSONValue(AValue).RawText);
-    Exit;
-  end;
+  EnterNativeDataDepth('JSON serialization');
+  try
+    CheckNativeWork;
+    // ES2026 §25.5.2.2 step 4a: If value has [[IsRawJSON]], write its raw text verbatim.
+    if AValue is TGocciaRawJSONValue then
+    begin
+      ABuffer.Append(TGocciaRawJSONValue(AValue).RawText);
+      Exit;
+    end;
 
   // ES2026 §25.5.4.2 steps 4.b-4.d: unwrap boxed primitives.
   EffectiveValue := CoerceWrappedPrimitive(AValue);
@@ -978,8 +983,11 @@ begin
     WriteArray(ABuffer, TGocciaObjectValue(EffectiveValue), AIndent)
   else if EffectiveValue is TGocciaObjectValue then
     WriteObject(ABuffer, TGocciaObjectValue(EffectiveValue), AIndent)
-  else
-    ABuffer.Append('null');
+    else
+      ABuffer.Append('null');
+  finally
+    LeaveNativeDataDepth;
+  end;
 end;
 
 procedure TGocciaJSONStringifier.WriteObject(var ABuffer: TStringBuffer;

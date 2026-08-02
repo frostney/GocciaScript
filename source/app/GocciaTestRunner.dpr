@@ -137,7 +137,8 @@ type
     FUpdateSnapshots: TFlagOption;
     FUpdateSnapshotsAlias: TFlagOption;
     function SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
-    procedure InitializeRuntime(const AEngine: TGocciaEngine);
+    procedure InitializeRuntime(const AEngine: TGocciaEngine;
+      const AEnableHostFileLoading: Boolean = True);
     procedure InitializeRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
     procedure WarmUpRuntime(const AEngine: TGocciaEngine);
     procedure WarmUpRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
@@ -324,7 +325,8 @@ var
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
   Runtime: TGocciaRuntimeCore;
 begin
-  InitializeRuntime(AEngine);
+  InitializeRuntime(AEngine,
+    not ResolveFlagOption(EngineOptions.NoHostFilesystem, AFileConfig));
   Runtime := GetRuntime(AEngine);
   if Assigned(EngineOptions) and
      ResolveFlagOption(EngineOptions.UnsafeFFI, AFileConfig) then
@@ -603,11 +605,12 @@ begin
   end;
 end;
 
-procedure TTestRunnerApp.InitializeRuntime(const AEngine: TGocciaEngine);
+procedure TTestRunnerApp.InitializeRuntime(const AEngine: TGocciaEngine;
+  const AEnableHostFileLoading: Boolean);
 var
   Runtime: TGocciaRuntimeCore;
 begin
-  Runtime := AttachRuntime(AEngine);
+  Runtime := AttachRuntime(AEngine, AEnableHostFileLoading);
   ApplyTestRunnerRuntimeProfile(Runtime,
     TGocciaTestRunnerSnapshotHost.Create(AEngine.SourcePath),
     SnapshotUpdateMode);
@@ -615,7 +618,8 @@ end;
 
 procedure TTestRunnerApp.WarmUpRuntime(const AEngine: TGocciaEngine);
 begin
-  InitializeRuntime(AEngine);
+  InitializeRuntime(AEngine,
+    not EngineOptions.NoHostFilesystem.Present);
   WarmUpSharedLazyGlobals(AEngine);
 end;
 
@@ -629,7 +633,8 @@ end;
 procedure TTestRunnerApp.InitializeRuntimeWithUnsafeFFI(
   const AEngine: TGocciaEngine);
 begin
-  InitializeRuntime(AEngine);
+  InitializeRuntime(AEngine,
+    not EngineOptions.NoHostFilesystem.Present);
   GetRuntime(AEngine).Install(TGocciaFFIRuntimeExtension.Create);
 end;
 

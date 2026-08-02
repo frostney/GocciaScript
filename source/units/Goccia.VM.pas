@@ -13431,6 +13431,8 @@ var
   PreviousCallSite: TGocciaCallSite;
   ClosedNumericInitializedRegisterTop: Integer;
   InstructionLimitState: PGocciaInstructionLimitState;
+  GC: TGarbageCollector;
+  PreviousMemoryPressureCountdown: PInteger;
 
   procedure CurrentInstructionDebugLocation(out ALine, AColumn: Integer);
   begin
@@ -13480,16 +13482,23 @@ begin
   SavedHandlerCount := FHandlerStack.Count;
   InitialFrameStackCount := FFrameStackCount;
   InitialClosedNumericFrameCount := FClosedNumericFrameStackCount;
-  FLastClosureThisValue := AThisValue;
-  PushSavedStateRoot(SavedClosure, SavedNewTarget, SavedArgumentBase,
-    SavedArgCount);
-  if RealmSwitched then
-    SetCurrentRealm(ExecutionRealm);
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    PreviousMemoryPressureCountdown :=
+      GC.ExchangeMemoryPressureCountdown(@FMemoryPressureCheckCountdown)
+  else
+    PreviousMemoryPressureCountdown := nil;
   try
-    Inc(FNativeExecutionDepth);
-    SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
-      AArg0, AArg1, AArg2, AUseFixedArgs, APushExecutionContext,
-      Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+    FLastClosureThisValue := AThisValue;
+    PushSavedStateRoot(SavedClosure, SavedNewTarget, SavedArgumentBase,
+      SavedArgCount);
+    if RealmSwitched then
+      SetCurrentRealm(ExecutionRealm);
+    try
+      Inc(FNativeExecutionDepth);
+      SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
+        AArg0, AArg1, AArg2, AUseFixedArgs, APushExecutionContext,
+        Frame, Template, PrevCovLine, ProfileEntryTimestamp);
     ClosedNumericInitializedRegisterTop := FRegisterBase + FRegisterCount;
     if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
       FGlobalScope := AClosure.GlobalScope;
@@ -13657,6 +13666,19 @@ begin
             bckTemplateObject:
               FRegisters[A] := ValueToRegister(BuildTemplateObjectConstant(
                 Template, DecodeBx(Instruction)));
+            bckString:
+              begin
+                LeftValue := TGocciaValue(
+                  Template.GetStringConstantCache(DecodeBx(Instruction)));
+                if not Assigned(LeftValue) then
+                begin
+                  LeftValue := TGocciaStringLiteralValue.Create(
+                    Constant.StringValue);
+                  Template.SetStringConstantCache(
+                    DecodeBx(Instruction), LeftValue);
+                end;
+                FRegisters[A] := RegisterObject(LeftValue);
+              end;
           else
             FRegisters[A] := ValueToRegister(ConstantToValue(Constant));
           end;
@@ -17319,8 +17341,8 @@ begin
         end;
         if FMemoryPressureCheckCountdown = 0 then
         begin
-          if (TGarbageCollector.Instance <> nil) then
-            TGarbageCollector.Instance.CollectForMemoryPressure(nil);
+          if Assigned(GC) then
+            GC.CollectForMemoryPressure(nil);
           FMemoryPressureCheckCountdown := MEMORY_PRESSURE_CHECK_INTERVAL;
         end
         else
@@ -17364,9 +17386,9 @@ begin
       end;
     end;
     Result := RegisterUndefined;
-  finally
-    Dec(FNativeExecutionDepth);
-    try
+    finally
+      Dec(FNativeExecutionDepth);
+      try
       UnwindClosedNumericFrames(InitialClosedNumericFrameCount, Frame,
         Template, PrevCovLine, ProfileEntryTimestamp);
       // Unwind any remaining trampoline frames (exception escape path)
@@ -17395,9 +17417,14 @@ begin
       FLocalCells := @FLocalCellStack[FLocalCellBase];
       if RealmSwitched then
         SetCurrentRealm(PreviousRealm);
-    finally
-      PopSavedStateRoot;
+      finally
+        PopSavedStateRoot;
+      end;
     end;
+  finally
+    if Assigned(GC) then
+      GC.ExchangeMemoryPressureCountdown(
+        PreviousMemoryPressureCountdown);
   end;
 end;
 

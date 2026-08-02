@@ -9,6 +9,8 @@ interface
 // gate in the implementation.
 
 uses
+  Classes,
+
   CriticalSections,
   HTTPTypes,
 
@@ -22,7 +24,8 @@ type
     class procedure Shutdown;
 
     procedure StartFetch(const AURL, AMethod: string;
-      const AHeaders: THTTPHeaders; const APromise: TGocciaPromiseValue); virtual; abstract;
+      const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
+      const APromise: TGocciaPromiseValue); virtual; abstract;
     function PumpCompletions: Integer; virtual; abstract;
     function HasPending: Boolean; virtual; abstract;
     function WaitForPromise(const APromise: TGocciaPromiseValue): Boolean; virtual; abstract;
@@ -46,7 +49,6 @@ implementation
 
 uses
   {$IFNDEF LAKON}
-  Classes,
   Generics.Collections,
   SyncObjs,
 
@@ -60,7 +62,8 @@ uses
 
   Goccia.Builtins.Atomics,
   Goccia.GarbageCollector,
-  Goccia.MicrotaskQueue;
+  Goccia.MicrotaskQueue,
+  Goccia.Timeout;
 
 const
   FETCH_POLL_INTERVAL_MS = 1;
@@ -128,12 +131,15 @@ type
     FURL: string;
     FMethod: string;
     FHeaders: THTTPHeaders;
+    FAllowedHosts: TStringList;
+    FTimeoutMilliseconds: Integer;
   protected
     procedure Execute; override;
   public
     constructor Create(const AState: TGocciaFetchState;
       const ALimiter: TGocciaFetchLimiter; const ARequestID: Integer;
-      const AURL, AMethod: string; const AHeaders: THTTPHeaders);
+      const AURL, AMethod: string; const AHeaders: THTTPHeaders;
+      const AAllowedHosts: TStrings; const ATimeoutMilliseconds: Integer);
     destructor Destroy; override;
   end;
 
@@ -151,7 +157,8 @@ type
     destructor Destroy; override;
 
     procedure StartFetch(const AURL, AMethod: string;
-      const AHeaders: THTTPHeaders; const APromise: TGocciaPromiseValue); override;
+      const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
+      const APromise: TGocciaPromiseValue); override;
     function PumpCompletions: Integer; override;
     function HasPending: Boolean; override;
     function WaitForPromise(const APromise: TGocciaPromiseValue): Boolean; override;
@@ -315,7 +322,8 @@ end;
 
 constructor TGocciaFetchWorker.Create(const AState: TGocciaFetchState;
   const ALimiter: TGocciaFetchLimiter; const ARequestID: Integer;
-  const AURL, AMethod: string; const AHeaders: THTTPHeaders);
+  const AURL, AMethod: string; const AHeaders: THTTPHeaders;
+  const AAllowedHosts: TStrings; const ATimeoutMilliseconds: Integer);
 begin
   inherited Create(True, FETCH_WORKER_STACK_SIZE);
   FreeOnTerminate := True;
@@ -323,6 +331,11 @@ begin
   FURL := AURL;
   FMethod := AMethod;
   FHeaders := AHeaders;
+  FAllowedHosts := TStringList.Create;
+  FAllowedHosts.CaseSensitive := False;
+  if Assigned(AAllowedHosts) then
+    FAllowedHosts.Assign(AAllowedHosts);
+  FTimeoutMilliseconds := ATimeoutMilliseconds;
   FState := AState;
   FState.AddRef;
   FLimiter := ALimiter;
@@ -331,6 +344,7 @@ end;
 
 destructor TGocciaFetchWorker.Destroy;
 begin
+  FAllowedHosts.Free;
   if Assigned(FLimiter) then
   begin
     FLimiter.ReleaseWorker;
@@ -349,9 +363,11 @@ begin
   try
     try
       if FMethod = 'HEAD' then
-        Completion.Response := HTTPHead(FURL, FHeaders)
+        Completion.Response := HTTPHead(FURL, FHeaders, FAllowedHosts,
+          FTimeoutMilliseconds)
       else
-        Completion.Response := HTTPGet(FURL, FHeaders);
+        Completion.Response := HTTPGet(FURL, FHeaders, FAllowedHosts,
+          FTimeoutMilliseconds);
       Completion.Success := True;
     except
       on E: EHTTPError do
@@ -413,7 +429,8 @@ begin
 end;
 
 procedure TGocciaFetchManagerImpl.StartFetch(const AURL, AMethod: string;
-  const AHeaders: THTTPHeaders; const APromise: TGocciaPromiseValue);
+  const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
+  const APromise: TGocciaPromiseValue);
 var
   Pending: TGocciaPendingFetch;
   Worker: TGocciaFetchWorker;
@@ -437,7 +454,8 @@ begin
 
   try
     Worker := TGocciaFetchWorker.Create(FState, FLimiter,
-      Pending.RequestID, AURL, AMethod, AHeaders);
+      Pending.RequestID, AURL, AMethod, AHeaders, AAllowedHosts,
+      RemainingExecutionTimeoutMilliseconds);
     LimitAcquired := False;
 
     if (TGarbageCollector.Instance <> nil) then
@@ -560,7 +578,10 @@ begin
       Exit(False);
 
     while HasPending and (PumpCompletions = 0) do
+    begin
+      CheckExecutionTimeout;
       Sleep(FETCH_POLL_INTERVAL_MS);
+    end;
   end;
 end;
 
@@ -571,7 +592,10 @@ begin
     if not HasPending then
       Break;
     while HasPending and (PumpCompletions = 0) do
+    begin
+      CheckExecutionTimeout;
       Sleep(FETCH_POLL_INTERVAL_MS);
+    end;
   until False;
   DrainMicrotasksAndFetchCompletions;
 end;
@@ -660,6 +684,7 @@ begin
     if not HasPendingFetch and not HasPendingAtomicsWaitAsyncCompletions then
       Exit(False);
 
+    CheckExecutionTimeout;
     Sleep(FETCH_POLL_INTERVAL_MS);
   end;
 

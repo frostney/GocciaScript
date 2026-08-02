@@ -59,6 +59,12 @@ test("JSON.parse nested objects", () => {
   expect(obj.a.b).toBe(1);
 });
 
+test("JSON.parse rejects excessive container nesting", () => {
+  const open = Array(257).fill("[").join("");
+  const close = Array(257).fill("]").join("");
+  expect(() => JSON.parse(open + "0" + close)).toThrow(SyntaxError);
+});
+
 test("JSON.parse empty structures", () => {
   const obj = JSON.parse("{}");
   expect(Object.keys(obj).length).toBe(0);

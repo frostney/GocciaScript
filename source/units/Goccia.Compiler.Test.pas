@@ -82,6 +82,7 @@ type
     procedure TestBinaryRoundTripUpvalueNames;
     procedure TestBinaryLittleEndian;
     procedure TestBinaryRoundTripConstants;
+    procedure TestBinaryRejectsMalformedArtifacts;
     procedure TestUndeclaredPrivateNameRaisesSyntaxError;
     procedure TestConstantFoldsNestedArithmetic;
     procedure TestConstantFoldsBigInt;
@@ -144,6 +145,8 @@ begin
   Test('Binary round-trip upvalue names', TestBinaryRoundTripUpvalueNames);
   Test('Binary little-endian format', TestBinaryLittleEndian);
   Test('Binary round-trip constants', TestBinaryRoundTripConstants);
+  Test('Binary loader rejects malformed artifacts',
+    TestBinaryRejectsMalformedArtifacts);
   Test('Undeclared private name raises SyntaxError', TestUndeclaredPrivateNameRaisesSyntaxError);
   Test('Constant folds nested arithmetic', TestConstantFoldsNestedArithmetic);
   Test('Constant folds BigInt', TestConstantFoldsBigInt);
@@ -814,6 +817,136 @@ begin
     Original.Free;
     DeleteFile(TempFile);
   end;
+end;
+
+procedure TTestCompiler.TestBinaryRejectsMalformedArtifacts;
+var
+  Loaded, Module: TGocciaBytecodeModule;
+  Template: TGocciaFunctionTemplate;
+  TempFile: string;
+
+  procedure ExpectRejected(const ATemplate: TGocciaFunctionTemplate);
+  var
+    ErrorMessage: string;
+    Raised: Boolean;
+  begin
+    Module := TGocciaBytecodeModule.Create('test', '<malformed>');
+    Module.TopLevel := ATemplate;
+    TempFile := GetTempFileName + '.gbc';
+    try
+      SaveModuleToFile(Module, TempFile);
+      Loaded := nil;
+      ErrorMessage := '';
+      Raised := False;
+      try
+        Loaded := LoadModuleFromFile(TempFile);
+      except
+        on E: Exception do
+        begin
+          Raised := True;
+          ErrorMessage := E.Message;
+        end;
+      end;
+      Loaded.Free;
+      Expect<Boolean>(Raised).ToBe(True);
+      Expect<Boolean>(Pos('Invalid bytecode', ErrorMessage) > 0).ToBe(True);
+    finally
+      Module.Free;
+      DeleteFile(TempFile);
+    end;
+  end;
+
+begin
+  Module := nil;
+  Loaded := nil;
+
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_THROW_TYPE_ERROR_CONST))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(99)).ToBe(False);
+  Expect<Boolean>(IsValidGocciaOpCode(144)).ToBe(False);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CALL_SELF_NUM))).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterA(OP_CLOSE_UPVALUE)).ToBe(False);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_DEFINE_DATA_PROP)).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_DEFINE_METHOD_PROP)).ToBe(True);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_LOAD_TRUE, 1, 0, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-wide-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_MOVE, 0, 256, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-compact-b-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_MOVE, 0, 1, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-data-property-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_DEFINE_DATA_PROP, 0, 1, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-method-property-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_DEFINE_METHOD_PROP, 0, 1, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-compact-c-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_ADD, 0, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-call-register-window');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_CALL, 0, 1, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-bx-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_TO_PRIMITIVE, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-local');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_GET_LOCAL, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-local-write');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_SET_LOCAL, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-close-upvalue');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_CLOSE_UPVALUE, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-upvalue');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_GET_UPVALUE, 0, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-upvalue-reference');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_RESOLVE_UPVALUE_REF, 0, 0, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-constant');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_LOAD_CONST, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-function');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_CLOSURE, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-jump');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeAx(OP_JUMP, -2));
+  ExpectRejected(Template);
 end;
 
 procedure TTestCompiler.TestUndeclaredPrivateNameRaisesSyntaxError;

@@ -1060,6 +1060,46 @@ console.log("Bare Loader: bytecode --test262-host eval is direct eval...");
     throw new Error(`Bare bytecode direct eval got: ${proc.stdout.toString()}`);
 }
 
+console.log("Bare Loader: rejected eval source preserves primitive singletons...");
+for (const { label, args } of [
+  {
+    label: "interpreted",
+    args: [BARE, "--test262-host", "--compat-function", "--unsafe-function-constructor"],
+  },
+  {
+    label: "bytecode",
+    args: [
+      BARE,
+      "--test262-host",
+      "--compat-function",
+      "--unsafe-function-constructor",
+      "--mode=bytecode",
+    ],
+  },
+]) {
+  const proc = Bun.spawnSync(args, {
+    stdin: new TextEncoder().encode([
+      "function rejectsSyntaxError(callback) {",
+      "  try { callback(); } catch (error) { return error instanceof SyntaxError; }",
+      "  return false;",
+      "}",
+      "const source = 'null, [true && a] = [];';",
+      "const indirectEval = eval;",
+      "print(rejectsSyntaxError(() => Function(source)));",
+      "print(rejectsSyntaxError(() => eval(source)));",
+      "print(rejectsSyntaxError(() => indirectEval(source)));",
+      "print(null === null);",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare ${label} rejected eval source probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== "true\ntrue\ntrue\ntrue")
+    throw new Error(`Bare ${label} rejected eval source probe got: ${proc.stdout.toString()}`);
+}
+
 console.log("Bare Loader: bytecode --test262-host eval keeps sloppy var declarations in the caller environment...");
 {
   const proc = Bun.spawnSync([

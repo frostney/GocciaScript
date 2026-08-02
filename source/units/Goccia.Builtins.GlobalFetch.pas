@@ -41,6 +41,7 @@ implementation
 uses
   SysUtils,
 
+  HTTPClient,
   HTTPTypes,
 
   Goccia.Constants.ConstructorNames,
@@ -57,47 +58,8 @@ uses
   Goccia.Values.PromiseValue,
   Goccia.Values.URLValue;
 
-{ Host extraction }
-
-function ExtractHostFromURL(const AURL: string): string;
-var
-  SchemeEnd, HostStart, HostEnd, AtPos, ColonPos: Integer;
-begin
-  Result := '';
-  SchemeEnd := Pos('://', AURL);
-  if SchemeEnd = 0 then
-    Exit;
-
-  HostStart := SchemeEnd + 3;
-
-  // Find the end of the authority component
-  AtPos := HostStart;
-  HostEnd := HostStart;
-  while (HostEnd <= Length(AURL)) and
-        not (AURL[HostEnd] in ['/', '?', '#']) do
-  begin
-    if AURL[HostEnd] = '@' then
-      AtPos := HostEnd + 1;
-    Inc(HostEnd);
-  end;
-  HostStart := AtPos;
-
-  Result := LowerCase(Copy(AURL, HostStart, HostEnd - HostStart));
-
-  // Strip port (but preserve IPv6 bracket notation)
-  if (Length(Result) > 0) and (Result[1] <> '[') then
-  begin
-    ColonPos := Pos(':', Result);
-    if ColonPos > 0 then
-      Result := Copy(Result, 1, ColonPos - 1);
-  end
-  else if (Length(Result) > 0) and (Result[1] = '[') then
-  begin
-    ColonPos := Pos(']:', Result);
-    if ColonPos > 0 then
-      Result := Copy(Result, 1, ColonPos);
-  end;
-end;
+const
+  INVALID_FETCH_AUDIT_SUBJECT = '<invalid URL>';
 
 { TGocciaGlobalFetch }
 
@@ -136,7 +98,23 @@ procedure TGocciaGlobalFetch.ValidateHost(const AURLStr: string);
 var
   Host: string;
 begin
-  Host := ExtractHostFromURL(AURLStr);
+  try
+    Host := HTTPURLHost(AURLStr);
+  except
+    on E: EHTTPError do
+    begin
+      try
+        Host := HTTPURLAuditHost(AURLStr);
+      except
+        on EAudit: EHTTPError do
+          Host := INVALID_FETCH_AUDIT_SUBJECT;
+      end;
+      if Assigned(FCapabilityAuditEmitter) then
+        FCapabilityAuditEmitter(gckFetchHost, gcdDeny, Host,
+          'fetch URL is invalid');
+      ThrowTypeError('Invalid fetch URL: ' + E.Message);
+    end;
+  end;
   if FAllowedHosts.Count = 0 then
   begin
     if Assigned(FCapabilityAuditEmitter) then
@@ -244,7 +222,7 @@ begin
       'fetch dispatch is allowed');
   try
     TGocciaFetchManager.Instance.StartFetch(URLStr, Method, RequestHeaders,
-      Promise);
+      FAllowedHosts, Promise);
   except
     on E: TGocciaTimeoutError do
       raise;

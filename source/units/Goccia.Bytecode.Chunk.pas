@@ -195,6 +195,10 @@ type
     FClosedNumericSelfName: string;
     FTemplateSiteId: UInt64;
     FStringConstantIndex: TOrderedStringMap<UInt16>;
+    // Runtime-only cache for immutable string constants. ECMAScript strings
+    // have no observable identity, so reusing one pinned wrapper avoids
+    // repeatedly charging the same ref-counted Pascal backing store.
+    FStringConstantCaches: array of TObject;
     // Runtime-only cache for bckTemplateObject constants.  Indexed by the slot
     // number stored in the constant's IntValue field.  Not serialised to .gbc.
     FTemplateObjectCaches: array of TObject;  // TGocciaValue — typed as TObject to keep GC import out of interface
@@ -236,6 +240,9 @@ type
     function AddConstantRegExpLiteral(const APattern, AFlags: string): UInt16;
     function GetTemplateObjectCache(const ASlot: Integer): TObject;
     procedure SetTemplateObjectCache(const ASlot: Integer; const AValue: TObject);
+    function GetStringConstantCache(const AIndex: Integer): TObject;
+    procedure SetStringConstantCache(const AIndex: Integer;
+      const AValue: TObject);
     function GetRegExpProgramCache(const ASlot: Integer): TObject;
     procedure SetRegExpProgramCache(const ASlot: Integer; const AValue: TObject);
     function GlobalReadCacheSlot(
@@ -378,19 +385,53 @@ destructor TGocciaFunctionTemplate.Destroy;
 var
   I: Integer;
 begin
-  // Unpin any template objects that were built and cached during VM execution.
+  // Unpin any runtime values that were built and cached during VM execution.
   // Guard against the GC already having been shut down.
   if (TGarbageCollector.Instance <> nil) then
+  begin
+    for I := 0 to High(FStringConstantCaches) do
+      if Assigned(FStringConstantCaches[I]) then
+        TGarbageCollector.Instance.UnpinObject(
+          TGCManagedObject(FStringConstantCaches[I]));
     for I := 0 to FTemplateObjectCacheCount - 1 do
       if Assigned(FTemplateObjectCaches[I]) then
         TGarbageCollector.Instance.UnpinObject(
           TGCManagedObject(FTemplateObjectCaches[I]));
+  end;
   for I := 0 to FRegExpProgramCacheCount - 1 do
     FRegExpProgramCaches[I].Free;
   FStringConstantIndex.Free;
   FFunctions.Free;
   FDebugInfo.Free;
   inherited;
+end;
+
+function TGocciaFunctionTemplate.GetStringConstantCache(
+  const AIndex: Integer): TObject;
+begin
+  if (AIndex < 0) or (AIndex >= Length(FStringConstantCaches)) then
+    Exit(nil);
+  Result := FStringConstantCaches[AIndex];
+end;
+
+procedure TGocciaFunctionTemplate.SetStringConstantCache(
+  const AIndex: Integer; const AValue: TObject);
+begin
+  if (AIndex < 0) or (AIndex >= FConstantCount) then
+    raise ERangeError.CreateFmt(
+      'SetStringConstantCache: index %d out of range 0..%d',
+      [AIndex, FConstantCount - 1]);
+  if Length(FStringConstantCaches) < FConstantCount then
+    SetLength(FStringConstantCaches, FConstantCount);
+  if FStringConstantCaches[AIndex] = AValue then
+    Exit;
+  if Assigned(FStringConstantCaches[AIndex]) and
+     (TGarbageCollector.Instance <> nil) then
+    TGarbageCollector.Instance.UnpinObject(
+      TGCManagedObject(FStringConstantCaches[AIndex]));
+  FStringConstantCaches[AIndex] := AValue;
+  if Assigned(AValue) and (TGarbageCollector.Instance <> nil) then
+    TGarbageCollector.Instance.PinObject(TGCManagedObject(AValue));
 end;
 
 function TGocciaFunctionTemplate.EmitInstruction(
@@ -822,11 +863,9 @@ end;
 function TGocciaFunctionTemplate.GetUpvalueDescriptor(
   const AIndex: Integer): TGocciaUpvalueDescriptor;
 begin
-  {$IFDEF DEBUG}
   if (AIndex < 0) or (AIndex >= FUpvalueCount) then
     raise ERangeError.CreateFmt('GetUpvalueDescriptor: index %d out of range 0..%d',
       [AIndex, FUpvalueCount - 1]);
-  {$ENDIF}
   Result := FUpvalueDescriptors[AIndex];
 end;
 
