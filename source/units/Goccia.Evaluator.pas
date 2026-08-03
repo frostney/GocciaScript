@@ -57,7 +57,10 @@ function EvaluateObjectMethodDefinition(
 function EvaluateGetter(const AGetterExpression: TGocciaGetterExpression; const AContext: TGocciaEvaluationContext; const ASuperClass: TGocciaValue = nil; const AAsMethod: Boolean = False): TGocciaValue;
 function EvaluateSetter(const ASetterExpression: TGocciaSetterExpression; const AContext: TGocciaEvaluationContext; const ASuperClass: TGocciaValue = nil; const AAsMethod: Boolean = False): TGocciaValue;
 function EvaluateArrowFunction(const AArrowFunctionExpression: TGocciaArrowFunctionExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateFunctionExpression(const AFunctionExpression: TGocciaFunctionExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateFunctionExpression(
+  const AFunctionExpression: TGocciaFunctionExpression;
+  const AContext: TGocciaEvaluationContext;
+  const ABindOwnName: Boolean = True): TGocciaValue;
 function EvaluateBlock(const ABlockStatement: TGocciaBlockStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateIf(const AIfStatement: TGocciaIfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateTry(const ATryStatement: TGocciaTryStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -1112,7 +1115,7 @@ begin
   if not Assigned(FuncExpr) then
     Exit;
 
-  Value := FuncExpr.Evaluate(AContext);
+  Value := EvaluateFunctionExpression(FuncExpr, AContext, False);
   if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(Value);
   try
@@ -2951,7 +2954,8 @@ begin
     begin
       FuncDecl := FunctionsToInitialize[I];
       Name := FuncDecl.Name;
-      FunctionValue := FuncDecl.FunctionExpression.Evaluate(FunctionContext);
+      FunctionValue := EvaluateFunctionExpression(FuncDecl.FunctionExpression,
+        FunctionContext, False);
       if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.AddTempRoot(FunctionValue);
       try
@@ -7016,7 +7020,10 @@ begin
     TGocciaFunctionValue(Result).SourceText := AArrowFunctionExpression.SourceText;
 end;
 
-function EvaluateFunctionExpression(const AFunctionExpression: TGocciaFunctionExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateFunctionExpression(
+  const AFunctionExpression: TGocciaFunctionExpression;
+  const AContext: TGocciaEvaluationContext;
+  const ABindOwnName: Boolean): TGocciaValue;
 var
   Statements: TObjectList<TGocciaASTNode>;
   ClosureScope: TGocciaScope;
@@ -7037,8 +7044,10 @@ begin
   end;
 
   // ES2026 §15.2.5: Named function expressions get an intermediate scope
-  // with a read-only binding of the function name visible inside the body
-  if AFunctionExpression.Name <> '' then
+  // with a read-only binding of the function name visible inside the body.
+  // Declaration instantiation passes False so the body resolves the mutable
+  // declaration binding in the enclosing environment instead.
+  if ABindOwnName and (AFunctionExpression.Name <> '') then
   begin
     NameScope := TGocciaFunctionNameScope.Create(AContext.Scope,
       AFunctionExpression.Name);

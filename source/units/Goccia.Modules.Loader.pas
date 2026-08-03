@@ -1603,7 +1603,8 @@ var
           if ExportDefaultDecl.IsDirectDeclaration and
              (ExportDefaultDecl.Expression is TGocciaFunctionExpression) then
           begin
-            Value := ExportDefaultDecl.Expression.Evaluate(Context);
+            Value := EvaluateFunctionExpression(TGocciaFunctionExpression(
+              ExportDefaultDecl.Expression), Context, False);
             if (Value is TGocciaFunctionValue) and
                (TGocciaFunctionValue(Value).Name = '') then
               TGocciaFunctionValue(Value).Name := KEYWORD_DEFAULT;
