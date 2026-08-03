@@ -14,6 +14,7 @@ uses
   CriticalSections,
   HTTPTypes,
 
+  Goccia.Values.AbortValue,
   Goccia.Values.PromiseValue;
 
 type
@@ -25,7 +26,8 @@ type
 
     procedure StartFetch(const AURL, AMethod: string;
       const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
-      const APromise: TGocciaPromiseValue); virtual; abstract;
+      const APromise: TGocciaPromiseValue;
+      const ASignal: TGocciaAbortSignalValue = nil); virtual; abstract;
     function PumpCompletions: Integer; virtual; abstract;
     function HasPending: Boolean; virtual; abstract;
     function WaitForPromise(const APromise: TGocciaPromiseValue): Boolean; virtual; abstract;
@@ -121,6 +123,7 @@ type
   TGocciaPendingFetch = record
     RequestID: Integer;
     Promise: TGocciaPromiseValue;
+    Signal: TGocciaAbortSignalValue;
   end;
 
   TGocciaFetchWorker = class(TThread)
@@ -151,6 +154,8 @@ type
     FNextRequestID: Integer;
     function PopCompletion(out ACompletion: TGocciaFetchCompletion): Boolean;
     function FindPendingIndex(const ARequestID: Integer): Integer;
+    function RejectAbortedFetches: Integer;
+    procedure ReleasePendingRoots(const APending: TGocciaPendingFetch);
     procedure SettleCompletion(const ACompletion: TGocciaFetchCompletion);
   public
     constructor Create;
@@ -158,7 +163,8 @@ type
 
     procedure StartFetch(const AURL, AMethod: string;
       const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
-      const APromise: TGocciaPromiseValue); override;
+      const APromise: TGocciaPromiseValue;
+      const ASignal: TGocciaAbortSignalValue = nil); override;
     function PumpCompletions: Integer; override;
     function HasPending: Boolean; override;
     function WaitForPromise(const APromise: TGocciaPromiseValue): Boolean; override;
@@ -430,16 +436,24 @@ end;
 
 procedure TGocciaFetchManagerImpl.StartFetch(const AURL, AMethod: string;
   const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
-  const APromise: TGocciaPromiseValue);
+  const APromise: TGocciaPromiseValue;
+  const ASignal: TGocciaAbortSignalValue);
 var
   Pending: TGocciaPendingFetch;
   Worker: TGocciaFetchWorker;
   Added, LimitAcquired, Rooted: Boolean;
+  RequestTimeoutMilliseconds, SignalTimeoutMilliseconds: Integer;
 begin
   Worker := nil;
   Added := False;
   LimitAcquired := False;
   Rooted := False;
+
+  if Assigned(ASignal) and ASignal.IsAborted then
+  begin
+    APromise.Reject(ASignal.Reason);
+    Exit;
+  end;
 
   if not FLimiter.TryAcquireWorker then
   begin
@@ -451,16 +465,36 @@ begin
   Pending.RequestID := FNextRequestID;
   Inc(FNextRequestID);
   Pending.Promise := APromise;
+  Pending.Signal := ASignal;
 
   try
+    RequestTimeoutMilliseconds := RemainingExecutionTimeoutMilliseconds;
+    if Assigned(ASignal) then
+    begin
+      SignalTimeoutMilliseconds := ASignal.RemainingTimeoutMilliseconds;
+      if SignalTimeoutMilliseconds = 0 then
+      begin
+        ASignal.RefreshTimeout;
+        APromise.Reject(ASignal.Reason);
+        FLimiter.ReleaseWorker;
+        Exit;
+      end;
+      if (SignalTimeoutMilliseconds > 0) and
+         ((RequestTimeoutMilliseconds = 0) or
+          (SignalTimeoutMilliseconds < RequestTimeoutMilliseconds)) then
+        RequestTimeoutMilliseconds := SignalTimeoutMilliseconds;
+    end;
+
     Worker := TGocciaFetchWorker.Create(FState, FLimiter,
       Pending.RequestID, AURL, AMethod, AHeaders, AAllowedHosts,
-      RemainingExecutionTimeoutMilliseconds);
+      RequestTimeoutMilliseconds);
     LimitAcquired := False;
 
     if (TGarbageCollector.Instance <> nil) then
     begin
       TGarbageCollector.Instance.AddTempRoot(APromise);
+      if Assigned(ASignal) then
+        TGarbageCollector.Instance.AddTempRoot(ASignal);
       Rooted := True;
     end;
 
@@ -472,11 +506,44 @@ begin
     if Added then
       FPending.Delete(FPending.Count - 1);
     if Rooted and (TGarbageCollector.Instance <> nil) then
+    begin
       TGarbageCollector.Instance.RemoveTempRoot(APromise);
+      if Assigned(ASignal) then
+        TGarbageCollector.Instance.RemoveTempRoot(ASignal);
+    end;
     Worker.Free;
     if LimitAcquired then
       FLimiter.ReleaseWorker;
     raise;
+  end;
+end;
+
+procedure TGocciaFetchManagerImpl.ReleasePendingRoots(
+  const APending: TGocciaPendingFetch);
+begin
+  if TGarbageCollector.Instance = nil then
+    Exit;
+  TGarbageCollector.Instance.RemoveTempRoot(APending.Promise);
+  if Assigned(APending.Signal) then
+    TGarbageCollector.Instance.RemoveTempRoot(APending.Signal);
+end;
+
+function TGocciaFetchManagerImpl.RejectAbortedFetches: Integer;
+var
+  I: Integer;
+  Pending: TGocciaPendingFetch;
+begin
+  Result := 0;
+  for I := FPending.Count - 1 downto 0 do
+  begin
+    Pending := FPending[I];
+    if not Assigned(Pending.Signal) or not Pending.Signal.IsAborted then
+      Continue;
+
+    FPending.Delete(I);
+    Pending.Promise.Reject(Pending.Signal.Reason);
+    ReleasePendingRoots(Pending);
+    Inc(Result);
   end;
 end;
 
@@ -539,8 +606,7 @@ begin
     if (TGocciaMicrotaskQueue.Instance <> nil) then
       TGocciaMicrotaskQueue.Instance.DrainQueue;
   finally
-    if (TGarbageCollector.Instance <> nil) then
-      TGarbageCollector.Instance.RemoveTempRoot(Pending.Promise);
+    ReleasePendingRoots(Pending);
   end;
 end;
 
@@ -548,7 +614,7 @@ function TGocciaFetchManagerImpl.PumpCompletions: Integer;
 var
   Completion: TGocciaFetchCompletion;
 begin
-  Result := 0;
+  Result := RejectAbortedFetches;
   while PopCompletion(Completion) do
   begin
     try
@@ -558,6 +624,8 @@ begin
       Completion.Free;
     end;
   end;
+  if (Result > 0) and (TGocciaMicrotaskQueue.Instance <> nil) then
+    TGocciaMicrotaskQueue.Instance.DrainQueue;
 end;
 
 function TGocciaFetchManagerImpl.HasPending: Boolean;
@@ -611,8 +679,7 @@ begin
   for I := 0 to FPending.Count - 1 do
   begin
     Pending := FPending[I];
-    if (TGarbageCollector.Instance <> nil) then
-      TGarbageCollector.Instance.RemoveTempRoot(Pending.Promise);
+    ReleasePendingRoots(Pending);
   end;
   FPending.Clear;
 

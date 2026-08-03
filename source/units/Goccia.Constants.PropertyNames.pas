@@ -207,6 +207,12 @@ const
   PROP_JSON                = 'json';
   PROP_ARRAY_BUFFER_METHOD = 'arrayBuffer';
   PROP_METHOD              = 'method';
+  PROP_SIGNAL              = 'signal';
+  PROP_ABORT               = 'abort';
+  PROP_ABORTED             = 'aborted';
+  PROP_REASON              = 'reason';
+  PROP_THROW_IF_ABORTED    = 'throwIfAborted';
+  PROP_TIMEOUT             = 'timeout';
 
 implementation
 

@@ -59,6 +59,8 @@ const
 
   CONSTRUCTOR_HEADERS  = 'Headers';
   CONSTRUCTOR_RESPONSE = 'Response';
+  CONSTRUCTOR_ABORT_CONTROLLER = 'AbortController';
+  CONSTRUCTOR_ABORT_SIGNAL     = 'AbortSignal';
 
 implementation
 
