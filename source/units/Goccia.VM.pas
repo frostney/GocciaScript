@@ -13035,10 +13035,17 @@ begin
 
   if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
      Assigned(ATemplate.DebugInfo) and
-     (ATemplate.DebugInfo.LineMapCount > 0) then
+     (ATemplate.DebugInfo.LineMapCount > 0) and
+     (ATemplate.Name <> '<module>') then
+  begin
     TGocciaCoverageTracker.Instance.RecordLineHit(
       ATemplate.DebugInfo.SourceFile,
       ATemplate.DebugInfo.GetLineMapEntry(0).Line);
+    TGocciaCoverageTracker.Instance.RecordFunctionHit(
+      ATemplate.DebugInfo.SourceFile, ATemplate.Name,
+      ATemplate.DebugInfo.GetLineMapEntry(0).Line,
+      ATemplate.DebugInfo.GetLineMapEntry(0).Column);
+  end;
 
   if FProfilingFunctions and (TGocciaProfiler.Instance <> nil) then
   begin
@@ -13223,10 +13230,18 @@ begin
     FCurrentNewTarget := AClosure.NewTarget;
 
   if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
-     Assigned(ATemplate.DebugInfo) and (ATemplate.DebugInfo.LineMapCount > 0) then
+     Assigned(ATemplate.DebugInfo) and
+     (ATemplate.DebugInfo.LineMapCount > 0) and
+     (ATemplate.Name <> '<module>') then
+  begin
     TGocciaCoverageTracker.Instance.RecordLineHit(
       ATemplate.DebugInfo.SourceFile,
       ATemplate.DebugInfo.GetLineMapEntry(0).Line);
+    TGocciaCoverageTracker.Instance.RecordFunctionHit(
+      ATemplate.DebugInfo.SourceFile, ATemplate.Name,
+      ATemplate.DebugInfo.GetLineMapEntry(0).Line,
+      ATemplate.DebugInfo.GetLineMapEntry(0).Column);
+  end;
 
   if FProfilingFunctions and (TGocciaProfiler.Instance <> nil) then
   begin
@@ -15616,6 +15631,13 @@ begin
       OP_CLOSURE:
       begin
         ChildTemplate := Template.GetFunctionUnchecked(DecodeBx(Instruction));
+        if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
+           Assigned(ChildTemplate.DebugInfo) and
+           (ChildTemplate.DebugInfo.LineMapCount > 0) then
+          TGocciaCoverageTracker.Instance.RegisterFunction(
+            ChildTemplate.DebugInfo.SourceFile, ChildTemplate.Name,
+            ChildTemplate.DebugInfo.GetLineMapEntry(0).Line,
+            ChildTemplate.DebugInfo.GetLineMapEntry(0).Column);
         ChildClosure := TGocciaBytecodeClosure.Create(
           ChildTemplate, ChildTemplate.UpvalueCount);
         ChildClosure.GlobalScope := FGlobalScope;

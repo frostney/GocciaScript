@@ -741,7 +741,7 @@ The runner clones test262 into a tempdir on first use, or accepts an existing ch
 
 ## Coverage
 
-The GocciaTestRunner and GocciaScriptLoader support JavaScript source-level coverage reporting via the `--coverage` flag. Coverage tracks which lines and branches of JavaScript source code are executed at runtime.
+The GocciaTestRunner and GocciaScriptLoader support JavaScript source-level coverage reporting via the `--coverage` flag. Coverage tracks which lines, branches, and functions of JavaScript source code are executed at runtime.
 
 ### Usage
 
@@ -770,13 +770,15 @@ The GocciaTestRunner and GocciaScriptLoader support JavaScript source-level cove
 - Short-circuit operators (`&&`, `||`, `??`)
 - `switch` statement case clauses
 
+**Function coverage:** Which user-defined functions were created and called. Function definitions are retained with zero hits when they are not called, and repeated calls increment the function hit count.
+
 ### Output Formats
 
 | Format | Flag | Description |
 |--------|------|-------------|
-| Console | `--coverage` | Summary table printed to stdout after test results |
-| lcov | `--coverage-format=lcov --coverage-output=<file>` | Standard lcov tracefile with `DA:` and `BRDA:` entries |
-| JSON | `--coverage-format=json --coverage-output=<file>` | Istanbul-compatible JSON for tooling integration |
+| Console | `--coverage` | Summary table with line, branch, and function totals printed to stdout after test results |
+| lcov | `--coverage-format=lcov --coverage-output=<file>` | Standard lcov tracefile with `DA:`, `BRDA:`, `FN:`, and `FNDA:` entries |
+| JSON | `--coverage-format=json --coverage-output=<file>` | Istanbul-compatible JSON including `f` and `fnMap` function data |
 
 ### JSX Source Map Integration
 

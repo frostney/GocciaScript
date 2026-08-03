@@ -2250,6 +2250,57 @@ console.log("Loader: coverage --output=json not corrupted...");
     const jsonCov = readFileSync(jsonCovPath, "utf-8");
     if (!jsonCov.includes('"path":')) throw new Error('JSON coverage should contain "path":');
 
+    console.log("Loader: function coverage (interpreted + bytecode)...");
+    const functionSourcePath = join(tmp, "function-coverage.js");
+    writeFileSync(
+      functionSourcePath,
+      [
+        "const called = () => 1;",
+        "const neverCalled = () => 2;",
+        "called();",
+        "",
+      ].join("\n"),
+    );
+    for (const modeArgs of [[], ["--mode=bytecode"]]) {
+      const modeName = modeArgs.length === 0 ? "interpreted" : "bytecode";
+      const functionLcovPath = join(tmp, `function-${modeName}.lcov`);
+      await $`${LOADER} ${modeArgs} --coverage --coverage-format=lcov --coverage-output=${functionLcovPath} ${functionSourcePath}`.quiet();
+      const functionLcov = readFileSync(functionLcovPath, "utf-8");
+      if (!functionLcov.includes("FN:1,called")) throw new Error(`${modeName} LCOV should define called`);
+      if (!functionLcov.includes("FN:2,neverCalled")) throw new Error(`${modeName} LCOV should define neverCalled`);
+      if (!functionLcov.includes("FNDA:1,called")) throw new Error(`${modeName} LCOV should count called once`);
+      if (!functionLcov.includes("FNDA:0,neverCalled")) throw new Error(`${modeName} LCOV should retain the uncalled function`);
+      if (!functionLcov.includes("FNF:") || !functionLcov.includes("FNH:")) {
+        throw new Error(`${modeName} LCOV should report function totals`);
+      }
+    }
+    const functionJsonPath = join(tmp, "function-coverage.json");
+    await $`${LOADER} --coverage --coverage-format=json --coverage-output=${functionJsonPath} ${functionSourcePath}`.quiet();
+    const functionJson = JSON.parse(readFileSync(functionJsonPath, "utf-8"));
+    const functionFile = functionJson[functionSourcePath];
+    if (!functionFile) throw new Error("JSON coverage should contain the source file");
+    const functionIdsByName = Object.fromEntries(
+      Object.entries(functionFile.fnMap).map(([id, entry]: [string, any]) => [entry.name, id]),
+    );
+    if (functionFile.f[functionIdsByName.called] !== 1) {
+      throw new Error("JSON f should count called once");
+    }
+    if (functionFile.f[functionIdsByName.neverCalled] !== 0) {
+      throw new Error("JSON f should retain neverCalled with zero hits");
+    }
+
+    console.log("TestRunner: parallel function coverage merges workers...");
+    const workerOnePath = join(tmp, "function-worker-one.js");
+    const workerTwoPath = join(tmp, "function-worker-two.js");
+    writeFileSync(workerOnePath, 'test("worker one", () => { const workerOne = () => 1; expect(workerOne()).toBe(1); });\n');
+    writeFileSync(workerTwoPath, 'test("worker two", () => { const workerTwo = () => 2; expect(workerTwo()).toBe(2); });\n');
+    const workerLcovPath = join(tmp, "function-workers.lcov");
+    await $`${TESTRUNNER} ${workerOnePath} ${workerTwoPath} --jobs=2 --no-progress --coverage --coverage-format=lcov --coverage-output=${workerLcovPath}`.quiet();
+    const workerLcov = readFileSync(workerLcovPath, "utf-8");
+    if (!workerLcov.includes("FNDA:1,workerOne") || !workerLcov.includes("FNDA:1,workerTwo")) {
+      throw new Error("Parallel LCOV should merge function hits from both workers");
+    }
+
     console.log("Loader: coverage order-independent flags...");
     const orderPath = join(tmp, "order.lcov");
     await $`echo 'const x = 1 + 2; x;' | ${LOADER} --coverage-output=${orderPath} --coverage-format=lcov`.quiet();

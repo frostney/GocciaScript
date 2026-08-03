@@ -41,6 +41,21 @@ uses
 type
   TFileCovPair = TBaseMap<string, TGocciaFileCoverage>.TKeyValuePair;
 
+function LcovFunctionName(const AFileCov: TGocciaFileCoverage;
+  const AIndex: Integer): string;
+var
+  I: Integer;
+  Func: TGocciaCoverageFunction;
+begin
+  Func := AFileCov.Functions[AIndex];
+  Result := Func.Name;
+  if Result = '' then
+    Exit(Format('(anonymous_%d)', [AIndex + 1]));
+  for I := 0 to AFileCov.Functions.Count - 1 do
+    if (I <> AIndex) and (AFileCov.Functions[I].Name = Result) then
+      Exit(Format('%s@%d:%d', [Result, Func.Line, Func.Column]));
+end;
+
 { Build an array mapping original source lines (1-based index) to aggregated
   hit counts by translating each transformed line through the source map. }
 procedure BuildTranslatedLineHits(const AFileCov: TGocciaFileCoverage;
@@ -68,17 +83,22 @@ var
   Pair: TFileCovPair;
   FileCov: TGocciaFileCoverage;
   LinesHit, LinesTotal, BranchesHit, BranchesTotal: Integer;
+  FunctionsHit, FunctionsTotal: Integer;
   TotalLinesHit, TotalLinesTotal, TotalBranchesHit, TotalBranchesTotal: Integer;
-  LinePct, BranchPct: Double;
+  TotalFunctionsHit, TotalFunctionsTotal: Integer;
+  LinePct, BranchPct, FunctionPct: Double;
 begin
   TotalLinesHit := 0;
   TotalLinesTotal := 0;
   TotalBranchesHit := 0;
   TotalBranchesTotal := 0;
+  TotalFunctionsHit := 0;
+  TotalFunctionsTotal := 0;
 
   WriteLn;
   WriteLn('Coverage Summary:');
-  WriteLn(Format('  %-60s %-18s %s', ['File', 'Lines', 'Branches']));
+  WriteLn(Format('  %-52s %-18s %-18s %s',
+    ['File', 'Lines', 'Branches', 'Functions']));
 
   for Pair in ATracker.Files do
   begin
@@ -89,6 +109,8 @@ begin
       LinesTotal := FileCov.ExecutableLines;
     BranchesHit := FileCov.BranchesHit;
     BranchesTotal := FileCov.BranchesFound;
+    FunctionsHit := FileCov.FunctionsHit;
+    FunctionsTotal := FileCov.FunctionsFound;
 
     if LinesTotal > 0 then
       LinePct := (LinesHit / LinesTotal) * 100.0
@@ -99,15 +121,22 @@ begin
       BranchPct := (BranchesHit / BranchesTotal) * 100.0
     else
       BranchPct := 100.0;
+    if FunctionsTotal > 0 then
+      FunctionPct := (FunctionsHit / FunctionsTotal) * 100.0
+    else
+      FunctionPct := 100.0;
 
-    WriteLn(Format('  %-60s %d/%d (%5.1f%%)  %d/%d (%5.1f%%)',
+    WriteLn(Format('  %-52s %d/%d (%5.1f%%)  %d/%d (%5.1f%%)  %d/%d (%5.1f%%)',
       [FileCov.FileName, LinesHit, LinesTotal, LinePct,
-       BranchesHit, BranchesTotal, BranchPct]));
+       BranchesHit, BranchesTotal, BranchPct,
+       FunctionsHit, FunctionsTotal, FunctionPct]));
 
     TotalLinesHit := TotalLinesHit + LinesHit;
     TotalLinesTotal := TotalLinesTotal + LinesTotal;
     TotalBranchesHit := TotalBranchesHit + BranchesHit;
     TotalBranchesTotal := TotalBranchesTotal + BranchesTotal;
+    TotalFunctionsHit := TotalFunctionsHit + FunctionsHit;
+    TotalFunctionsTotal := TotalFunctionsTotal + FunctionsTotal;
   end;
 
   if TotalLinesTotal > 0 then
@@ -118,13 +147,18 @@ begin
     BranchPct := (TotalBranchesHit / TotalBranchesTotal) * 100.0
   else
     BranchPct := 100.0;
+  if TotalFunctionsTotal > 0 then
+    FunctionPct := (TotalFunctionsHit / TotalFunctionsTotal) * 100.0
+  else
+    FunctionPct := 100.0;
 
-  WriteLn(Format('  %-60s %-18s %s', [
-    '----------------------------------------------------------------',
-    '------------------', '------------------']));
-  WriteLn(Format('  %-60s %d/%d (%5.1f%%)  %d/%d (%5.1f%%)',
+  WriteLn(Format('  %-52s %-18s %-18s %s', [
+    '----------------------------------------------------',
+    '------------------', '------------------', '------------------']));
+  WriteLn(Format('  %-52s %d/%d (%5.1f%%)  %d/%d (%5.1f%%)  %d/%d (%5.1f%%)',
     ['Total', TotalLinesHit, TotalLinesTotal, LinePct,
-     TotalBranchesHit, TotalBranchesTotal, BranchPct]));
+     TotalBranchesHit, TotalBranchesTotal, BranchPct,
+     TotalFunctionsHit, TotalFunctionsTotal, FunctionPct]));
 end;
 
 { Line-by-Line Detail }
@@ -201,7 +235,9 @@ var
   Pair: TFileCovPair;
   FileCov: TGocciaFileCoverage;
   I, HitCount, LineCount, LinesHitCount, BranchCount, BranchHitCount: Integer;
+  FunctionCount, FunctionHitCount, FunctionLine: Integer;
   Branch: TGocciaCoverageBranch;
+  Func: TGocciaCoverageFunction;
   BranchBlockIndex: Integer;
   PrevLine, PrevColumn: Integer;
   HasSource: Boolean;
@@ -283,6 +319,30 @@ begin
         SourceLines.Free;
       end;
 
+      // Function definitions and hit counts
+      FunctionCount := FileCov.Functions.Count;
+      FunctionHitCount := 0;
+      for I := 0 to FileCov.Functions.Count - 1 do
+      begin
+        Func := FileCov.Functions[I];
+        FunctionLine := Func.Line;
+        if Assigned(SrcMap) and
+           SrcMap.Translate(Func.Line, Func.Column, OrigLine, OrigCol) then
+          FunctionLine := OrigLine;
+        Output.Add(Format('FN:%d,%s',
+          [FunctionLine, LcovFunctionName(FileCov, I)]));
+      end;
+      for I := 0 to FileCov.Functions.Count - 1 do
+      begin
+        Func := FileCov.Functions[I];
+        Output.Add(Format('FNDA:%d,%s',
+          [Func.HitCount, LcovFunctionName(FileCov, I)]));
+        if Func.HitCount > 0 then
+          Inc(FunctionHitCount);
+      end;
+      Output.Add(Format('FNF:%d', [FunctionCount]));
+      Output.Add(Format('FNH:%d', [FunctionHitCount]));
+
       // Branch coverage data
       // BRDA format: BRDA:line,block,branch,hit_count
       BranchCount := 0;
@@ -356,6 +416,8 @@ var
   SrcMap: TGocciaSourceMap;
   OrigLine, OrigCol: Integer;
   BranchLine, BranchCol: Integer;
+  FunctionLine, FunctionCol: Integer;
+  Func: TGocciaCoverageFunction;
 begin
   Buf := TStringBuffer.Create(4096);
   Buf.Append('{');
@@ -574,9 +636,38 @@ begin
     end;
     Buf.Append('},');
 
-    // f and fnMap (function coverage — not tracked yet, emit empty)
-    Buf.Append(#10'    "f": {},');
-    Buf.Append(#10'    "fnMap": {}');
+    // f (function hit counts)
+    Buf.Append(#10'    "f": {');
+    for I := 0 to FileCov.Functions.Count - 1 do
+    begin
+      if I > 0 then
+        Buf.AppendChar(',');
+      Func := FileCov.Functions[I];
+      Buf.Append(Format('"%d":%d', [I + 1, Func.HitCount]));
+    end;
+    Buf.Append('},');
+
+    // fnMap (function definitions, translated through source maps)
+    Buf.Append(#10'    "fnMap": {');
+    for I := 0 to FileCov.Functions.Count - 1 do
+    begin
+      if I > 0 then
+        Buf.AppendChar(',');
+      Func := FileCov.Functions[I];
+      FunctionLine := Func.Line;
+      FunctionCol := Func.Column;
+      if Assigned(SrcMap) and
+         SrcMap.Translate(Func.Line, Func.Column, OrigLine, OrigCol) then
+      begin
+        FunctionLine := OrigLine;
+        FunctionCol := OrigCol;
+      end;
+      Buf.Append(Format('"%d":{"name":"%s","decl":{"start":{"line":%d,"column":%d},"end":{"line":%d,"column":%d}},"loc":{"start":{"line":%d,"column":%d},"end":{"line":%d,"column":%d}}}',
+        [I + 1, EscapeJSONString(Func.Name),
+         FunctionLine, FunctionCol, FunctionLine, FunctionCol,
+         FunctionLine, FunctionCol, FunctionLine, FunctionCol]));
+    end;
+    Buf.Append('}');
 
     Buf.Append(#10'  }');
   end;

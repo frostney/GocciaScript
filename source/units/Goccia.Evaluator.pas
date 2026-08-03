@@ -4941,8 +4941,9 @@ begin
   end
   else
     MethodValue.StrictCode := True;
-  MethodValue.SourceFilePath := AContext.CurrentFilePath;
-  MethodValue.SourceLine := FunctionExpression.Line;
+  MethodValue.SetSourceLocation(AContext.CurrentFilePath,
+    FunctionExpression.Line, FunctionExpression.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     MethodValue.SourceText := FunctionExpression.SourceText;
 end;
@@ -5208,8 +5209,9 @@ begin
   end
   else
     TGocciaFunctionValue(Result).StrictCode := True;
-  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
-  TGocciaFunctionValue(Result).SourceLine := AGetterExpression.Line;
+  TGocciaFunctionValue(Result).SetSourceLocation(AContext.CurrentFilePath,
+    AGetterExpression.Line, AGetterExpression.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     TGocciaFunctionValue(Result).SourceText := AGetterExpression.SourceText;
 end;
@@ -5240,8 +5242,9 @@ begin
   end
   else
     TGocciaFunctionValue(Result).StrictCode := True;
-  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
-  TGocciaFunctionValue(Result).SourceLine := ASetterExpression.Line;
+  TGocciaFunctionValue(Result).SetSourceLocation(AContext.CurrentFilePath,
+    ASetterExpression.Line, ASetterExpression.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     TGocciaFunctionValue(Result).SourceText := ASetterExpression.SourceText;
 end;
@@ -7010,8 +7013,9 @@ begin
     (not AContext.NonStrictMode) or
     HasUseStrictDirective(AArrowFunctionExpression.Body);
   TGocciaFunctionValue(Result).IsExpressionBody := not (AArrowFunctionExpression.Body is TGocciaBlockStatement);
-  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
-  TGocciaFunctionValue(Result).SourceLine := AArrowFunctionExpression.Line;
+  TGocciaFunctionValue(Result).SetSourceLocation(AContext.CurrentFilePath,
+    AArrowFunctionExpression.Line, AArrowFunctionExpression.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     TGocciaFunctionValue(Result).SourceText := AArrowFunctionExpression.SourceText;
 end;
@@ -7072,8 +7076,9 @@ begin
   end
   else
     TGocciaFunctionValue(Result).StrictCode := True;
-  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
-  TGocciaFunctionValue(Result).SourceLine := AFunctionExpression.Line;
+  TGocciaFunctionValue(Result).SetSourceLocation(AContext.CurrentFilePath,
+    AFunctionExpression.Line, AFunctionExpression.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     TGocciaFunctionValue(Result).SourceText := AFunctionExpression.SourceText;
 
@@ -7782,8 +7787,9 @@ begin
   if AClassMethod.IsGenerator then
     InstallFunctionOwnPrototypeProperty(Result,
       FunctionIntrinsicKind(AClassMethod.IsAsync, AClassMethod.IsGenerator));
-  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
-  TGocciaFunctionValue(Result).SourceLine := AClassMethod.Line;
+  TGocciaFunctionValue(Result).SetSourceLocation(AContext.CurrentFilePath,
+    AClassMethod.Line, AClassMethod.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     TGocciaFunctionValue(Result).SourceText := AClassMethod.SourceText;
 end;
