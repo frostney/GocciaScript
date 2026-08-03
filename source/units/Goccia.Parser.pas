@@ -271,7 +271,8 @@ type
     procedure ValidateMatchPatternEarlyErrors(const APattern: TGocciaMatchPattern);
     // Type annotation helpers (Types as Comments)
     function CollectTypeAnnotation(const ATerminators: array of TGocciaTokenType;
-      const AContextualTerminator: string = ''): string;
+      const AContextualTerminator: string = '';
+      const AAllowInitialObjectType: Boolean = False): string;
     function CollectGenericParameters: string;
     procedure SkipUntilSemicolon;
     procedure SkipBlock;
@@ -4094,7 +4095,7 @@ begin
   if Check(gttColon) then
   begin
     Advance;
-    CollectTypeAnnotation([gttLeftBrace]);
+    CollectTypeAnnotation([gttLeftBrace], '', True);
   end;
   Consume(gttLeftBrace, 'Expected "{" before getter body',
     SSuggestOpenBraceGetterBody);
@@ -4149,7 +4150,7 @@ begin
   if Check(gttColon) then
   begin
     Advance;
-    CollectTypeAnnotation([gttLeftBrace]);
+    CollectTypeAnnotation([gttLeftBrace], '', True);
   end;
   Consume(gttLeftBrace, 'Expected "{" before setter body',
     SSuggestOpenBraceSetterBody);
@@ -4203,7 +4204,7 @@ begin
     if Check(gttColon) then
     begin
       Advance;
-      CollectTypeAnnotation([gttLeftBrace]);
+      CollectTypeAnnotation([gttLeftBrace], '', True);
     end;
 
     Consume(gttLeftBrace, 'Expected "{" before function body',
@@ -6443,7 +6444,7 @@ begin
     if Check(gttColon) then
     begin
       Advance;
-      MethodReturnType := CollectTypeAnnotation([gttLeftBrace]);
+      MethodReturnType := CollectTypeAnnotation([gttLeftBrace], '', True);
     end;
 
     Consume(gttLeftBrace, 'Expected "{" before method body',
@@ -8092,7 +8093,8 @@ end;
 
 function TGocciaParser.CollectTypeAnnotation(
   const ATerminators: array of TGocciaTokenType;
-  const AContextualTerminator: string): string;
+  const AContextualTerminator: string;
+  const AAllowInitialObjectType: Boolean): string;
 var
   Depth: Integer;
   I: Integer;
@@ -8120,7 +8122,9 @@ begin
           IsTerminator := True;
           Break;
         end;
-      if IsTerminator then
+      if IsTerminator and not
+         (AAllowInitialObjectType and (Result = '') and
+          (TokenType = gttLeftBrace)) then
         Exit;
     end;
 
