@@ -2169,25 +2169,33 @@ console.log("Loader: relative aliases use the invocation or config directory..."
         );
     }
 
+    const baseConfigDirectory = join(tmp, "base-config");
+    mkdirSync(baseConfigDirectory, { recursive: true });
+    writeFileSync(
+      join(baseConfigDirectory, "goccia.json"),
+      JSON.stringify({ alias: ["@/=./src/"] }),
+    );
     writeFileSync(
       join(project, "goccia.json"),
       JSON.stringify({
+        extends: "../base-config/goccia.json",
         "source-type": "module",
         "unsafe-shadowrealm": true,
-        alias: ["@/=./src/"],
       }),
     );
-    const configProc = Bun.spawnSync(
-      [loader, "project/api-tests/alias.test.js"],
-      { cwd: tmp, stdout: "pipe", stderr: "pipe" },
-    );
-    if (configProc.exitCode !== 0 ||
-        !containsLine(`\n${configProc.stdout.toString()}`, "project-root") ||
-        !containsLine(`\n${configProc.stdout.toString()}`, "child-project-root"))
-      throw new Error(
-        "Loader relative config alias should resolve from the config directory: " +
-        `${configProc.stdout}${configProc.stderr}`,
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const configProc = Bun.spawnSync(
+        [loader, "project/api-tests/alias.test.js", `--mode=${mode}`],
+        { cwd: tmp, stdout: "pipe", stderr: "pipe" },
       );
+      if (configProc.exitCode !== 0 ||
+          !containsLine(`\n${configProc.stdout.toString()}`, "project-root") ||
+          !containsLine(`\n${configProc.stdout.toString()}`, "child-project-root"))
+        throw new Error(
+          `Loader ${mode} inherited relative config alias should resolve from ` +
+          `the active config directory: ${configProc.stdout}${configProc.stderr}`,
+        );
+    }
   } finally {
     clean(tmp);
   }

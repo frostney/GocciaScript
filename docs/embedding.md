@@ -199,7 +199,7 @@ Engine.AddAlias('@/', 'src/');                       // prefix match
 Engine.AddAlias('@/components/', 'ui/lib/');         // more specific prefix
 ```
 
-For an embedded engine, the alias target is resolved relative to the resolver's base directory, which defaults to the entry file's directory. In the shared CLI hosts, relative `--alias` targets use the invocation directory, while aliases loaded from a configuration file use that configuration file's directory.
+For an embedded engine, the alias target is resolved relative to the resolver's base directory, which defaults to the entry file's directory. In the shared CLI hosts, relative `--alias` targets use the invocation directory, while aliases loaded from configuration use the active project configuration file's directory, including aliases inherited through `extends`.
 
 **Exact vs prefix matching:** A key without a trailing `/` is an exact match only. A key with a trailing `/` is a prefix match and appends the unmatched suffix to the target. This means `lodash` matches `import "lodash"` but not `import "lodash/fp"`, while `@/` matches `@/utils/math`.
 
