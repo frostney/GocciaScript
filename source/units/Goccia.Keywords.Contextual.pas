@@ -40,6 +40,7 @@ const
   // Types as Comments (parsed, ignored at runtime)
   KEYWORD_TYPE         = 'type';
   KEYWORD_INTERFACE    = 'interface';
+  KEYWORD_SATISFIES    = 'satisfies';
   KEYWORD_IMPLEMENTS   = 'implements';
   KEYWORD_PUBLIC       = 'public';
   KEYWORD_PROTECTED    = 'protected';

@@ -272,7 +272,9 @@ type
     // Type annotation helpers (Types as Comments)
     function CollectTypeAnnotation(const ATerminators: array of TGocciaTokenType;
       const AContextualTerminator: string = ''): string;
+    function CollectExpressionTypeAnnotation: string;
     function CollectGenericParameters: string;
+    function TryCollectNewExpressionTypeArguments: Boolean;
     procedure SkipUntilSemicolon;
     procedure SkipBlock;
     procedure SkipBalancedParens;
@@ -1805,24 +1807,33 @@ begin
 
   ParseIsExpressions;
 
-  while CheckWithLexicalGoal(gttAs, glgInputElementDiv) do
+  while True do
   begin
-    Advance;
-    if Check(gttConst) then
-      Advance
-    else
+    if CheckWithLexicalGoal(gttAs, glgInputElementDiv) then
     begin
-      TypeAnnotation := CollectTypeAnnotation([gttSemicolon, gttComma, gttRightParen, gttRightBracket, gttRightBrace, gttColon, gttQuestion,
-        gttAnd, gttOr, gttNullishCoalescing,
-        gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
-        gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual,
-        gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign, gttNullishCoalescingAssign,
-        gttLogicalAndAssign, gttLogicalOrAssign,
-        gttInstanceof, gttIn], KEYWORD_IS);
+      Advance;
+      if Check(gttConst) then
+        Advance
+      else
+      begin
+        TypeAnnotation := CollectExpressionTypeAnnotation;
+        if TypeAnnotation = '' then
+          raise TGocciaSyntaxError.Create('Expected type annotation after "as"',
+            Peek.Line, Peek.Column, FFileName, FSourceLines);
+      end;
+    end
+    else if (Previous.Line = Peek.Line) and
+      MatchContextualKeywordWithLexicalGoal(KEYWORD_SATISFIES,
+        glgInputElementDiv) then
+    begin
+      TypeAnnotation := CollectExpressionTypeAnnotation;
       if TypeAnnotation = '' then
-        raise TGocciaSyntaxError.Create('Expected type annotation after "as"',
+        raise TGocciaSyntaxError.Create(
+          'Expected type annotation after "satisfies"',
           Peek.Line, Peek.Column, FFileName, FSourceLines);
-    end;
+    end
+    else
+      Break;
   end;
 
   ParseIsExpressions;
@@ -2691,6 +2702,7 @@ begin
         Expr := Primary;
         while Check(gttDot) or Check(gttLeftBracket) do
           Expr := ParseMemberAccessSegment(Expr, True, False, Line, Column);
+        TryCollectNewExpressionTypeArguments;
         if Check(gttOptionalChaining) then
           raise TGocciaSyntaxError.Create(
             'Optional chaining is not allowed in an unparenthesized new expression',
@@ -8144,6 +8156,19 @@ begin
   end;
 end;
 
+function TGocciaParser.CollectExpressionTypeAnnotation: string;
+begin
+  Result := CollectTypeAnnotation([
+    gttSemicolon, gttComma, gttRightParen, gttRightBracket, gttRightBrace,
+    gttColon, gttQuestion, gttAnd, gttOr, gttNullishCoalescing,
+    gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
+    gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual,
+    gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign,
+    gttPercentAssign, gttPowerAssign, gttNullishCoalescingAssign,
+    gttLogicalAndAssign, gttLogicalOrAssign, gttInstanceof, gttIn],
+    KEYWORD_IS);
+end;
+
 function TGocciaParser.CollectGenericParameters: string;
 var
   Depth: Integer;
@@ -8181,6 +8206,41 @@ begin
   end;
 
   Result := Trim(Result);
+end;
+
+function TGocciaParser.TryCollectNewExpressionTypeArguments: Boolean;
+var
+  Depth: Integer;
+  HasTypeArgument: Boolean;
+  SavedCurrent: Integer;
+begin
+  Result := False;
+  if not CheckWithLexicalGoal(gttLess, glgInputElementDiv) then
+    Exit;
+
+  SavedCurrent := FCurrent;
+  Depth := 0;
+  HasTypeArgument := False;
+  repeat
+    case PeekWithLexicalGoal(glgInputElementDiv).TokenType of
+      gttLess: Inc(Depth);
+      gttGreater: Dec(Depth);
+      gttRightShift: Dec(Depth, 2);
+      gttUnsignedRightShift: Dec(Depth, 3);
+      gttComma:;
+    else
+      HasTypeArgument := True;
+    end;
+    Advance;
+  until IsAtEnd or (Depth <= 0);
+
+  if HasTypeArgument and (Depth = 0) and
+    (PeekWithLexicalGoal(glgInputElementDiv).TokenType in [
+      gttLeftParen, gttSemicolon, gttComma, gttRightParen,
+      gttRightBracket, gttRightBrace, gttEOF]) then
+    Exit(True);
+
+  FCurrent := SavedCurrent;
 end;
 
 procedure TGocciaParser.SkipUntilSemicolon;
