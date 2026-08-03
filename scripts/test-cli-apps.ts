@@ -2127,6 +2127,72 @@ console.log("Loader: ShadowRealm.importValue inherits the host module aliases...
   }
 }
 
+console.log("Loader: relative aliases use the invocation or config directory...");
+{
+  const tmp = makeTmp();
+  try {
+    const loader = resolve(LOADER);
+    const project = join(tmp, "project");
+    mkdirSync(join(project, "api-tests"), { recursive: true });
+    mkdirSync(join(project, "src"), { recursive: true });
+    writeFileSync(
+      join(project, "api-tests", "alias.test.js"),
+      [
+        'import { value } from "@/value";',
+        "console.log(value);",
+        'new ShadowRealm().importValue("@/value", "value")',
+        '  .then((childValue) => console.log("child-" + childValue));',
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(join(project, "src", "value.js"), 'export const value = "project-root";\n');
+
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const cliProc = Bun.spawnSync(
+        [
+          loader,
+          "api-tests/alias.test.js",
+          "--source-type=module",
+          `--mode=${mode}`,
+          "--unsafe-shadowrealm",
+          "--alias",
+          "@/=./src/",
+        ],
+        { cwd: project, stdout: "pipe", stderr: "pipe" },
+      );
+      if (cliProc.exitCode !== 0 ||
+          !containsLine(`\n${cliProc.stdout.toString()}`, "project-root") ||
+          !containsLine(`\n${cliProc.stdout.toString()}`, "child-project-root"))
+        throw new Error(
+          `Loader ${mode} relative CLI alias should resolve from the invocation directory: ` +
+          `${cliProc.stdout}${cliProc.stderr}`,
+        );
+    }
+
+    writeFileSync(
+      join(project, "goccia.json"),
+      JSON.stringify({
+        "source-type": "module",
+        "unsafe-shadowrealm": true,
+        alias: ["@/=./src/"],
+      }),
+    );
+    const configProc = Bun.spawnSync(
+      [loader, "project/api-tests/alias.test.js"],
+      { cwd: tmp, stdout: "pipe", stderr: "pipe" },
+    );
+    if (configProc.exitCode !== 0 ||
+        !containsLine(`\n${configProc.stdout.toString()}`, "project-root") ||
+        !containsLine(`\n${configProc.stdout.toString()}`, "child-project-root"))
+      throw new Error(
+        "Loader relative config alias should resolve from the config directory: " +
+        `${configProc.stdout}${configProc.stderr}`,
+      );
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Loader: --globals file...");
 {
   const tmp = makeTmp();
