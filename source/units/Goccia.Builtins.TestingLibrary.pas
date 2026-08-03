@@ -137,6 +137,7 @@ type
 
     // Mock matchers
     function ToHaveBeenCalled(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToHaveBeenCalledOnce(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToHaveBeenCalledTimes(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToHaveBeenCalledWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToHaveBeenLastCalledWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -894,6 +895,9 @@ begin
   // Mock matchers
   DefineProperty('toHaveBeenCalled', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToHaveBeenCalled, 'toHaveBeenCalled', 0), [pfConfigurable, pfWritable]));
+  DefineProperty('toHaveBeenCalledOnce', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToHaveBeenCalledOnce,
+      'toHaveBeenCalledOnce', 0), [pfConfigurable, pfWritable]));
   DefineProperty('toHaveBeenCalledTimes', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToHaveBeenCalledTimes, 'toHaveBeenCalledTimes', 1), [pfConfigurable, pfWritable]));
   DefineProperty('toHaveBeenCalledWith', TGocciaPropertyDescriptorData.Create(
@@ -2245,6 +2249,43 @@ begin
         Format('Expected mock to have been called %d time(s) but was called %d time(s)',
           [ExpectedTimes, MockFn.MockCalls.Count]));
   end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaExpectationValue.ToHaveBeenCalledOnce(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  MockFn: TGocciaMockFunctionValue;
+  Matches: Boolean;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 0, 'toHaveBeenCalledOnce',
+    TGocciaTestAssertions(FTestAssertions).ThrowError);
+
+  if not (FActualValue is TGocciaMockFunctionValue) then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed(
+      'toHaveBeenCalledOnce', 'Value must be a mock or spy function');
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  MockFn := TGocciaMockFunctionValue(FActualValue);
+  Matches := MockFn.MockCalls.Count = 1;
+  if FIsNegated then
+    Matches := not Matches;
+
+  if Matches then
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed(
+      'toHaveBeenCalledOnce')
+  else if FIsNegated then
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed(
+      'toHaveBeenCalledOnce',
+      'Expected mock not to have been called exactly once')
+  else
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed(
+      'toHaveBeenCalledOnce', Format(
+        'Expected mock to have been called exactly once but was called %d time(s)',
+        [MockFn.MockCalls.Count]));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
