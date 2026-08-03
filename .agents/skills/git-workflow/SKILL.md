@@ -12,15 +12,21 @@ compatibility: >-
 
 # Git workflow
 
-## Instructions
-
 Apply these defaults unless the user explicitly overrides them in the same
 turn. A git request authorizes only the repository and forge state required for
 that operation.
 
 - Resolve the base from the remote default; never hardcode `main`.
-- Create focused branches off the current remote base.
+- Before the first edit in any newly selected, created, or reused branch or
+  worktree, require a clean worktree and fetch the remote default branch. Stop
+  and report dirty files; never stash, commit, or discard them automatically.
+- Create focused branches and worktrees directly from the freshly fetched
+  remote default tip. Do not configure a focused branch to track the remote
+  default; set its upstream only when pushing that focused branch.
+- When entering an existing focused branch or worktree, merge the freshly
+  fetched remote default before editing.
 - Merge the remote base to update a branch. Never rebase.
+- Stop and report merge conflicts; do not bypass or rewrite them.
 - Never amend commits. Add a new commit for every correction.
 - Never force-push. Stop if a plain push is rejected by divergent history.
 - Stage only relevant files and exclude secrets or unrelated local work.

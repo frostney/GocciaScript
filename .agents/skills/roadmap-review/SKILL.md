@@ -13,12 +13,10 @@ compatibility: >-
 
 # Roadmap review
 
-## Instructions
-
 Produce a source-verified roadmap and throughput-anchored release plan. Analysis
 is the deliverable; forge changes are optional and confirmation-gated.
 
-### Evidence contract
+## Evidence contract
 
 - Pull current issues, releases, milestones, merged PR history, and project
   direction documents this run. Record missing sources and lower confidence
@@ -35,7 +33,7 @@ is the deliverable; forge changes are optional and confirmation-gated.
 Use a small bounded subagent fan-out only for genuinely independent, sizeable
 evidence areas; otherwise work directly. Synthesize before planning.
 
-### Workflow
+## Workflow
 
 1. Ground the review in the evidence contract and reconcile forge counts.
 2. Assess release cadence, merged-but-unreleased work, milestone-versus-commit
