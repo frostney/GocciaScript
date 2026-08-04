@@ -271,7 +271,8 @@ type
     procedure ValidateMatchPatternEarlyErrors(const APattern: TGocciaMatchPattern);
     // Type annotation helpers (Types as Comments)
     function CollectTypeAnnotation(const ATerminators: array of TGocciaTokenType;
-      const AContextualTerminator: string = ''): string;
+      const AContextualTerminator: string = '';
+      const ASecondaryContextualTerminator: string = ''): string;
     function CollectExpressionTypeAnnotation: string;
     function CollectGenericParameters: string;
     function TryCollectNewExpressionTypeArguments: Boolean;
@@ -8104,7 +8105,8 @@ end;
 
 function TGocciaParser.CollectTypeAnnotation(
   const ATerminators: array of TGocciaTokenType;
-  const AContextualTerminator: string): string;
+  const AContextualTerminator: string;
+  const ASecondaryContextualTerminator: string): string;
 var
   Depth: Integer;
   I: Integer;
@@ -8120,10 +8122,16 @@ begin
 
     if Depth = 0 then
     begin
-      if (AContextualTerminator <> '') and
-         (TokenType = gttIdentifier) and
-         (Peek.Lexeme = AContextualTerminator) then
-        Exit;
+      if TokenType = gttIdentifier then
+      begin
+        if (AContextualTerminator <> '') and
+           (Peek.Lexeme = AContextualTerminator) then
+          Exit;
+        if (Result <> '') and
+           (ASecondaryContextualTerminator <> '') and
+           (Peek.Lexeme = ASecondaryContextualTerminator) then
+          Exit;
+      end;
 
       IsTerminator := False;
       for I := 0 to High(ATerminators) do
@@ -8165,8 +8173,8 @@ begin
     gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual,
     gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign,
     gttPercentAssign, gttPowerAssign, gttNullishCoalescingAssign,
-    gttLogicalAndAssign, gttLogicalOrAssign, gttInstanceof, gttIn],
-    KEYWORD_IS);
+    gttLogicalAndAssign, gttLogicalOrAssign, gttInstanceof, gttIn, gttAs],
+    KEYWORD_IS, KEYWORD_SATISFIES);
 end;
 
 function TGocciaParser.CollectGenericParameters: string;
@@ -8213,34 +8221,50 @@ var
   Depth: Integer;
   HasTypeArgument: Boolean;
   SavedCurrent: Integer;
+  SavedLexer: TGocciaLexerCheckpoint;
 begin
   Result := False;
-  if not CheckWithLexicalGoal(gttLess, glgInputElementDiv) then
-    Exit;
-
   SavedCurrent := FCurrent;
-  Depth := 0;
-  HasTypeArgument := False;
-  repeat
-    case PeekWithLexicalGoal(glgInputElementDiv).TokenType of
-      gttLess: Inc(Depth);
-      gttGreater: Dec(Depth);
-      gttRightShift: Dec(Depth, 2);
-      gttUnsignedRightShift: Dec(Depth, 3);
-      gttComma:;
-    else
-      HasTypeArgument := True;
+  if Assigned(FLexer) then
+    SavedLexer := FLexer.CreateCheckpoint;
+
+  try
+    try
+      if not CheckWithLexicalGoal(gttLess, glgInputElementDiv) then
+        Exit;
+
+      Depth := 0;
+      HasTypeArgument := False;
+      repeat
+        case PeekWithLexicalGoal(glgInputElementDiv).TokenType of
+          gttLess: Inc(Depth);
+          gttGreater: Dec(Depth);
+          gttRightShift: Dec(Depth, 2);
+          gttUnsignedRightShift: Dec(Depth, 3);
+          gttComma:;
+        else
+          HasTypeArgument := True;
+        end;
+        Advance;
+      until IsAtEnd or (Depth <= 0);
+
+      if HasTypeArgument and (Depth = 0) and
+        (PeekWithLexicalGoal(glgInputElementDiv).TokenType in [
+          gttLeftParen, gttSemicolon, gttComma, gttRightParen,
+          gttRightBracket, gttRightBrace, gttEOF]) then
+        Result := True;
+    except
+      on E: TGocciaLexerError do
+        Result := False;
     end;
-    Advance;
-  until IsAtEnd or (Depth <= 0);
-
-  if HasTypeArgument and (Depth = 0) and
-    (PeekWithLexicalGoal(glgInputElementDiv).TokenType in [
-      gttLeftParen, gttSemicolon, gttComma, gttRightParen,
-      gttRightBracket, gttRightBrace, gttEOF]) then
-    Exit(True);
-
-  FCurrent := SavedCurrent;
+  finally
+    if not Result then
+    begin
+      FCurrent := SavedCurrent;
+      if Assigned(FLexer) then
+        FLexer.RestoreCheckpoint(SavedLexer);
+    end;
+  end;
 end;
 
 procedure TGocciaParser.SkipUntilSemicolon;

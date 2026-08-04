@@ -32,11 +32,22 @@ describe("satisfies suffix", () => {
     expect(unchecked).toBe("text");
   });
 
+  test("supports chained as and satisfies suffixes", () => {
+    const asserted = "value" as string as unknown;
+    const checked = "value" as string satisfies unknown;
+
+    expect(asserted).toBe("value");
+    expect(checked).toBe("value");
+  });
+
   test("keeps satisfies available as an identifier and property name", () => {
     const satisfies = (value) => value;
     const object = { satisfies: "property" };
 
+    const asserted = "value" as satisfies;
+
     expect(satisfies("identifier")).toBe("identifier");
     expect(object.satisfies).toBe("property");
+    expect(asserted).toBe("value");
   });
 });

@@ -49,5 +49,6 @@ describe("new expression type arguments", () => {
     expect(new Comparable < 2).toBe(true);
     expect(new Comparable < 2 > 0).toBe(true);
     expect(new Comparable() < 2).toBe(true);
+    expect(new Comparable < /x/.test("x")).toBe(false);
   });
 });
