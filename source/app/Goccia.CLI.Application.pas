@@ -1077,6 +1077,7 @@ end;
 function TGocciaCLIApplication.CreateEngine(const AFileName: string;
   const ASource: TStringList; const AExecutor: TGocciaExecutor): TGocciaEngine;
 var
+  AliasBaseDirectory: string;
   FileConfig: TConfigEntryArray;
   FileConfigPath: string;
 begin
@@ -1090,8 +1091,14 @@ begin
       SetLength(FileConfig, 0);
     if Assigned(FEngineOptions) then
     begin
+      if FEngineOptions.Aliases.FromCommandLine or
+         (FRootConfigPath = '') then
+        AliasBaseDirectory := GetCurrentDir
+      else
+        AliasBaseDirectory := ExtractFilePath(FRootConfigPath);
       ConfigureModuleResolver(Result.Resolver, AFileName,
-        FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
+        FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values,
+        AliasBaseDirectory);
       if ResolveFlagOption(FEngineOptions.Deterministic, FileConfig) then
         Result.HostEnvironment.UseDeterministicProfile;
     end;

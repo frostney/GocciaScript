@@ -11,7 +11,8 @@ uses
 
 procedure ConfigureModuleResolver(const AResolver: TGocciaModuleResolver;
   const AEntryFileName, AExplicitImportMapPath: string;
-  const AInlineAliases: TStrings);
+  const AInlineAliases: TStrings;
+  const AInlineAliasBaseDirectory: string = '');
 
 implementation
 
@@ -57,7 +58,8 @@ end;
 
 procedure ConfigureModuleResolver(const AResolver: TGocciaModuleResolver;
   const AEntryFileName, AExplicitImportMapPath: string;
-  const AInlineAliases: TStrings);
+  const AInlineAliases: TStrings;
+  const AInlineAliasBaseDirectory: string);
 var
   AliasPair: TModuleAliasPair;
   I: Integer;
@@ -77,6 +79,11 @@ begin
 
   if not Assigned(AInlineAliases) then
     Exit;
+
+  if (AInlineAliases.Count > 0) and
+     (AInlineAliasBaseDirectory <> '') then
+    AResolver.BaseDirectory := IncludeTrailingPathDelimiter(
+      ExpandHostFileName(AInlineAliasBaseDirectory));
 
   for I := 0 to AInlineAliases.Count - 1 do
   begin
