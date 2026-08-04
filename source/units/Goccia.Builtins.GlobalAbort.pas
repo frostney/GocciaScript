@@ -144,10 +144,9 @@ begin
   if AArgs.Length = 0 then
     ThrowTypeError('AbortSignal.timeout requires a timeout');
   Milliseconds := AArgs.GetElement(0).ToNumberLiteral.Value;
-  if IsNan(Milliseconds) then
-    Milliseconds := 0
-  else if IsInfinite(Milliseconds) or (Milliseconds < 0) or
-          (Milliseconds >= UNSIGNED_LONG_LONG_BOUND) then
+  if IsNan(Milliseconds) or IsInfinite(Milliseconds) or
+     (Milliseconds < 0) or
+     (Milliseconds >= UNSIGNED_LONG_LONG_BOUND) then
     ThrowTypeError(
       'AbortSignal.timeout must be an unsigned long long integer');
   Milliseconds := Trunc(Milliseconds);

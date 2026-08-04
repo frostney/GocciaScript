@@ -15,7 +15,8 @@ describe("AbortSignal.timeout", () => {
     expect(() => AbortSignal.timeout()).toThrow(TypeError);
   });
 
-  test("rejects values outside the unsigned long long range", () => {
+  test("rejects invalid unsigned long long values", () => {
+    expect(() => AbortSignal.timeout(NaN)).toThrow(TypeError);
     expect(() => AbortSignal.timeout(-1)).toThrow(TypeError);
     expect(() => AbortSignal.timeout(Infinity)).toThrow(TypeError);
     expect(() => AbortSignal.timeout(1e20)).toThrow(TypeError);
