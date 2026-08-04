@@ -14,12 +14,10 @@ compatibility: >-
 
 # Create release
 
-## Instructions
-
 Prepare a release whose tag contains its changelog, then publish through exactly
 one evidence-backed path when publication is authorized.
 
-### Authorization
+## Authorization
 
 - **Prepare**: determine the version, update changelog/version declarations,
   validate, and open the release PR. Requests to prepare, bump, or generate
@@ -29,7 +27,7 @@ one evidence-backed path when publication is authorized.
   `/create-release` authorize this stage too.
 - When ambiguous, perform Prepare only.
 
-### Invariants
+## Invariants
 
 - The changelog and version bump land before the tag, through a squash-merged PR.
 - Use the repository's configured tools and current documentation. Regenerate
@@ -40,7 +38,7 @@ one evidence-backed path when publication is authorized.
 - Never amend, force-push, force-update a tag, skip hooks, or publish through
   more than one path.
 
-### Prepare
+## Prepare
 
 1. Resolve the authorization stage, remote default branch, clean working tree,
    changelog/version tooling, last release, remote tags, workflows, and release
@@ -56,7 +54,7 @@ one evidence-backed path when publication is authorized.
    and open a draft release PR through `/create-pr`. Include the changelog
    section and observed validation. Stop here for Prepare-only requests.
 
-### Publish
+## Publish
 
 1. Wait for and verify the squash merge; never tag the open PR branch.
 2. Refresh the merged base, then re-read the actual workflow YAML and release
