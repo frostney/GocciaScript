@@ -2812,8 +2812,14 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, AValueReg, 0));
     if Local.IsCaptured then
       EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
-    EmitExportBindingUpdates(ACtx, Local.ExportNames,
-      Local.ExportNameCount, Slot);
+    // A linked module's persistent environment is initialized after the
+    // destructured value has been staged in its compiler local. Publishing an
+    // export first would initialize that environment binding too early, making
+    // the subsequent declaration look like a redeclaration. The enclosing
+    // export statement publishes the initialized binding immediately after.
+    if not (ACtx.PreinitializedTopLevelFunctions and Local.IsGlobalBacked) then
+      EmitExportBindingUpdates(ACtx, Local.ExportNames,
+        Local.ExportNameCount, Slot);
     Exit;
   end;
 

@@ -28,12 +28,22 @@ type
 
   TGocciaCoverageBranchList = TList<TGocciaCoverageBranch>;
 
+  TGocciaCoverageFunction = record
+    Name: string;
+    Line: Integer;
+    Column: Integer;
+    HitCount: Integer;
+  end;
+
+  TGocciaCoverageFunctionList = TList<TGocciaCoverageFunction>;
+
   TGocciaFileCoverage = class
   private
     FFileName: string;
     FLineHits: array of Integer;
     FExecutableLines: Integer;
     FBranches: TGocciaCoverageBranchList;
+    FFunctions: TGocciaCoverageFunctionList;
   public
     constructor Create(const AFileName: string; const AExecutableLines: Integer);
     destructor Destroy; override;
@@ -41,16 +51,23 @@ type
     procedure RecordLineHit(const ALine: Integer); {$IFDEF FPC}inline;{$ENDIF}
     procedure RecordBranchHit(const ALine, AColumn, ABranchIndex: Integer);
     procedure EnsureBranchExists(const ALine, AColumn, ABranchIndex: Integer);
+    procedure RegisterFunction(const AName: string;
+      const ALine, AColumn: Integer);
+    procedure RecordFunctionHit(const AName: string;
+      const ALine, AColumn: Integer);
 
     function LinesHit: Integer;
     function BranchesFound: Integer;
     function BranchesHit: Integer;
+    function FunctionsFound: Integer;
+    function FunctionsHit: Integer;
 
     function LineHitCount: Integer;
 
     property FileName: string read FFileName;
     property ExecutableLines: Integer read FExecutableLines;
     property Branches: TGocciaCoverageBranchList read FBranches;
+    property Functions: TGocciaCoverageFunctionList read FFunctions;
     function GetLineHitCount(const ALine: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
   end;
 
@@ -82,12 +99,16 @@ type
       const ALine: Integer); {$IFDEF FPC}inline;{$ENDIF}
     procedure RecordBranchHit(const AFilePath: string;
       const ALine, AColumn, ABranchIndex: Integer);
+    procedure RegisterFunction(const AFilePath, AName: string;
+      const ALine, AColumn: Integer);
+    procedure RecordFunctionHit(const AFilePath, AName: string;
+      const ALine, AColumn: Integer);
 
     function GetFileCoverage(const AFilePath: string): TGocciaFileCoverage;
     function GetSourceMap(const AFilePath: string): TGocciaSourceMap;
 
     { Merge all coverage data from ASource into this tracker.
-      Line hits and branch hits are summed. Files present in ASource
+      Line, branch, and function hits are summed. Files present in ASource
       but not in this tracker are created with 0 executable lines. }
     procedure MergeFrom(const ASource: TGocciaCoverageTracker);
 
@@ -298,12 +319,61 @@ begin
   for I := 0 to High(FLineHits) do
     FLineHits[I] := 0;
   FBranches := TGocciaCoverageBranchList.Create;
+  FFunctions := TGocciaCoverageFunctionList.Create;
 end;
 
 destructor TGocciaFileCoverage.Destroy;
 begin
+  FFunctions.Free;
   FBranches.Free;
   inherited;
+end;
+
+procedure TGocciaFileCoverage.RegisterFunction(const AName: string;
+  const ALine, AColumn: Integer);
+var
+  I: Integer;
+  Func: TGocciaCoverageFunction;
+begin
+  if ALine <= 0 then Exit;
+  for I := 0 to FFunctions.Count - 1 do
+    if (FFunctions[I].Line = ALine) and
+       (FFunctions[I].Column = AColumn) then
+    begin
+      if (FFunctions[I].Name = '') and (AName <> '') then
+      begin
+        Func := FFunctions[I];
+        Func.Name := AName;
+        FFunctions[I] := Func;
+      end;
+      Exit;
+    end;
+
+  Func.Name := AName;
+  Func.Line := ALine;
+  Func.Column := AColumn;
+  Func.HitCount := 0;
+  FFunctions.Add(Func);
+end;
+
+procedure TGocciaFileCoverage.RecordFunctionHit(const AName: string;
+  const ALine, AColumn: Integer);
+var
+  I: Integer;
+  Func: TGocciaCoverageFunction;
+begin
+  RegisterFunction(AName, ALine, AColumn);
+  for I := 0 to FFunctions.Count - 1 do
+    if (FFunctions[I].Line = ALine) and
+       (FFunctions[I].Column = AColumn) then
+    begin
+      Func := FFunctions[I];
+      if (Func.Name = '') and (AName <> '') then
+        Func.Name := AName;
+      Inc(Func.HitCount);
+      FFunctions[I] := Func;
+      Exit;
+    end;
 end;
 
 procedure TGocciaFileCoverage.RecordLineHit(const ALine: Integer);
@@ -399,6 +469,21 @@ begin
   Result := 0;
   for I := 0 to FBranches.Count - 1 do
     if FBranches[I].HitCount > 0 then
+      Inc(Result);
+end;
+
+function TGocciaFileCoverage.FunctionsFound: Integer;
+begin
+  Result := FFunctions.Count;
+end;
+
+function TGocciaFileCoverage.FunctionsHit: Integer;
+var
+  I: Integer;
+begin
+  Result := 0;
+  for I := 0 to FFunctions.Count - 1 do
+    if FFunctions[I].HitCount > 0 then
       Inc(Result);
 end;
 
@@ -525,6 +610,18 @@ begin
   GetOrCreateFile(AFilePath).RecordBranchHit(ALine, AColumn, ABranchIndex);
 end;
 
+procedure TGocciaCoverageTracker.RegisterFunction(const AFilePath,
+  AName: string; const ALine, AColumn: Integer);
+begin
+  GetOrCreateFile(AFilePath).RegisterFunction(AName, ALine, AColumn);
+end;
+
+procedure TGocciaCoverageTracker.RecordFunctionHit(const AFilePath,
+  AName: string; const ALine, AColumn: Integer);
+begin
+  GetOrCreateFile(AFilePath).RecordFunctionHit(AName, ALine, AColumn);
+end;
+
 function TGocciaCoverageTracker.GetFileCoverage(
   const AFilePath: string): TGocciaFileCoverage;
 begin
@@ -538,6 +635,8 @@ var
   Key: string;
   SrcFile, DstFile: TGocciaFileCoverage;
   Branch: TGocciaCoverageBranch;
+  Func, DstFunc: TGocciaCoverageFunction;
+  J: Integer;
   SrcMap: TGocciaSourceMap;
 begin
   if (ASource = nil) or (ASource.Files = nil) then Exit;
@@ -564,6 +663,23 @@ begin
         DstFile.RecordBranchHit(Branch.Line, Branch.Column, Branch.BranchIndex)
       else
         DstFile.EnsureBranchExists(Branch.Line, Branch.Column, Branch.BranchIndex);
+    end;
+
+    { Merge function definitions and hit counts by source position. }
+    for I := 0 to SrcFile.Functions.Count - 1 do
+    begin
+      Func := SrcFile.Functions[I];
+      DstFile.RegisterFunction(Func.Name, Func.Line, Func.Column);
+      if Func.HitCount > 0 then
+        for J := 0 to DstFile.Functions.Count - 1 do
+          if (DstFile.Functions[J].Line = Func.Line) and
+             (DstFile.Functions[J].Column = Func.Column) then
+          begin
+            DstFunc := DstFile.Functions[J];
+            Inc(DstFunc.HitCount, Func.HitCount);
+            DstFile.Functions[J] := DstFunc;
+            Break;
+          end;
     end;
   end;
 

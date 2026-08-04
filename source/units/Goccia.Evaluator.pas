@@ -57,7 +57,10 @@ function EvaluateObjectMethodDefinition(
 function EvaluateGetter(const AGetterExpression: TGocciaGetterExpression; const AContext: TGocciaEvaluationContext; const ASuperClass: TGocciaValue = nil; const AAsMethod: Boolean = False): TGocciaValue;
 function EvaluateSetter(const ASetterExpression: TGocciaSetterExpression; const AContext: TGocciaEvaluationContext; const ASuperClass: TGocciaValue = nil; const AAsMethod: Boolean = False): TGocciaValue;
 function EvaluateArrowFunction(const AArrowFunctionExpression: TGocciaArrowFunctionExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateFunctionExpression(const AFunctionExpression: TGocciaFunctionExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateFunctionExpression(
+  const AFunctionExpression: TGocciaFunctionExpression;
+  const AContext: TGocciaEvaluationContext;
+  const ABindOwnName: Boolean = True): TGocciaValue;
 function EvaluateBlock(const ABlockStatement: TGocciaBlockStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateIf(const AIfStatement: TGocciaIfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateTry(const ATryStatement: TGocciaTryStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -1112,12 +1115,13 @@ begin
   if not Assigned(FuncExpr) then
     Exit;
 
-  Value := FuncExpr.Evaluate(AContext);
+  Value := EvaluateFunctionExpression(FuncExpr, AContext, False);
   if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(Value);
   try
-    if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
-      TGocciaFunctionValue(Value).Name := Name;
+    if (Value is TGocciaFunctionValue) and
+       (TGocciaFunctionValue(Value).Name = '') then
+      TGocciaFunctionValue(Value).SetInferredName(Name);
     if AContext.Scope.ContainsOwnLexicalBinding(Name) then
       AContext.Scope.ForceUpdateBinding(Name, Value)
     else if ABlockScoped then
@@ -2951,7 +2955,8 @@ begin
     begin
       FuncDecl := FunctionsToInitialize[I];
       Name := FuncDecl.Name;
-      FunctionValue := FuncDecl.FunctionExpression.Evaluate(FunctionContext);
+      FunctionValue := EvaluateFunctionExpression(FuncDecl.FunctionExpression,
+        FunctionContext, False);
       if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.AddTempRoot(FunctionValue);
       try
@@ -4941,8 +4946,9 @@ begin
   end
   else
     MethodValue.StrictCode := True;
-  MethodValue.SourceFilePath := AContext.CurrentFilePath;
-  MethodValue.SourceLine := FunctionExpression.Line;
+  MethodValue.SetSourceLocation(AContext.CurrentFilePath,
+    FunctionExpression.Line, FunctionExpression.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     MethodValue.SourceText := FunctionExpression.SourceText;
 end;
@@ -5208,8 +5214,9 @@ begin
   end
   else
     TGocciaFunctionValue(Result).StrictCode := True;
-  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
-  TGocciaFunctionValue(Result).SourceLine := AGetterExpression.Line;
+  TGocciaFunctionValue(Result).SetSourceLocation(AContext.CurrentFilePath,
+    AGetterExpression.Line, AGetterExpression.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     TGocciaFunctionValue(Result).SourceText := AGetterExpression.SourceText;
 end;
@@ -5240,8 +5247,9 @@ begin
   end
   else
     TGocciaFunctionValue(Result).StrictCode := True;
-  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
-  TGocciaFunctionValue(Result).SourceLine := ASetterExpression.Line;
+  TGocciaFunctionValue(Result).SetSourceLocation(AContext.CurrentFilePath,
+    ASetterExpression.Line, ASetterExpression.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     TGocciaFunctionValue(Result).SourceText := ASetterExpression.SourceText;
 end;
@@ -7010,13 +7018,17 @@ begin
     (not AContext.NonStrictMode) or
     HasUseStrictDirective(AArrowFunctionExpression.Body);
   TGocciaFunctionValue(Result).IsExpressionBody := not (AArrowFunctionExpression.Body is TGocciaBlockStatement);
-  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
-  TGocciaFunctionValue(Result).SourceLine := AArrowFunctionExpression.Line;
+  TGocciaFunctionValue(Result).SetSourceLocation(AContext.CurrentFilePath,
+    AArrowFunctionExpression.Line, AArrowFunctionExpression.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     TGocciaFunctionValue(Result).SourceText := AArrowFunctionExpression.SourceText;
 end;
 
-function EvaluateFunctionExpression(const AFunctionExpression: TGocciaFunctionExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateFunctionExpression(
+  const AFunctionExpression: TGocciaFunctionExpression;
+  const AContext: TGocciaEvaluationContext;
+  const ABindOwnName: Boolean): TGocciaValue;
 var
   Statements: TObjectList<TGocciaASTNode>;
   ClosureScope: TGocciaScope;
@@ -7037,8 +7049,10 @@ begin
   end;
 
   // ES2026 §15.2.5: Named function expressions get an intermediate scope
-  // with a read-only binding of the function name visible inside the body
-  if AFunctionExpression.Name <> '' then
+  // with a read-only binding of the function name visible inside the body.
+  // Declaration instantiation passes False so the body resolves the mutable
+  // declaration binding in the enclosing environment instead.
+  if ABindOwnName and (AFunctionExpression.Name <> '') then
   begin
     NameScope := TGocciaFunctionNameScope.Create(AContext.Scope,
       AFunctionExpression.Name);
@@ -7072,8 +7086,9 @@ begin
   end
   else
     TGocciaFunctionValue(Result).StrictCode := True;
-  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
-  TGocciaFunctionValue(Result).SourceLine := AFunctionExpression.Line;
+  TGocciaFunctionValue(Result).SetSourceLocation(AContext.CurrentFilePath,
+    AFunctionExpression.Line, AFunctionExpression.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     TGocciaFunctionValue(Result).SourceText := AFunctionExpression.SourceText;
 
@@ -7782,8 +7797,9 @@ begin
   if AClassMethod.IsGenerator then
     InstallFunctionOwnPrototypeProperty(Result,
       FunctionIntrinsicKind(AClassMethod.IsAsync, AClassMethod.IsGenerator));
-  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
-  TGocciaFunctionValue(Result).SourceLine := AClassMethod.Line;
+  TGocciaFunctionValue(Result).SetSourceLocation(AContext.CurrentFilePath,
+    AClassMethod.Line, AClassMethod.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     TGocciaFunctionValue(Result).SourceText := AClassMethod.SourceText;
 end;

@@ -27,6 +27,8 @@ type
     FClosure: TGocciaScope;
     FSourceFilePath: string;
     FSourceLine: Integer;
+    FSourceColumn: Integer;
+    FTrackCoverage: Boolean;
     FSourceText: string;
     FHideNestedFunctionSourceText: Boolean;
     FIsExpressionBody: Boolean;
@@ -46,6 +48,7 @@ type
     procedure PredeclareParameterBindings(const ACallScope: TGocciaScope);
     function BuildParameterEvalVarDeclarationRejectNames(
       const AIncludeArgumentsObject: Boolean): TGocciaEvalRejectNameArray;
+    procedure RecordCoverageCall;
     procedure PrepareCallContext(const ACallScope: TGocciaScope;
       const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue;
       var AContext: TGocciaEvaluationContext; out ABodyScope: TGocciaScope;
@@ -64,6 +67,8 @@ type
       const AReceiver: TGocciaValue; const ANewTarget: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
     procedure SetInferredName(const AName: string);
+    procedure SetSourceLocation(const AFilePath: string;
+      const ALine, AColumn: Integer; const ATrackCoverage: Boolean);
 
     property Parameters: TGocciaParameterArray read FParameters;
     property BodyStatements: TObjectList<TGocciaASTNode> read FBodyStatements;
@@ -73,6 +78,7 @@ type
     property HideNestedFunctionSourceText: Boolean read FHideNestedFunctionSourceText write FHideNestedFunctionSourceText;
     property SourceFilePath: string read FSourceFilePath write FSourceFilePath;
     property SourceLine: Integer read FSourceLine write FSourceLine;
+    property SourceColumn: Integer read FSourceColumn write FSourceColumn;
     property SourceText: string read FSourceText write SetSourceText;
   end;
 
@@ -334,6 +340,8 @@ begin
   FBodyStatements := ABodyStatements;
   FClosure := AClosure;
   FName := AName;
+  FSourceColumn := 0;
+  FTrackCoverage := False;
 
   // Pre-compute whether all parameters are simple named params (no rest, no destructuring, no defaults)
   FIsSimpleParams := True;
@@ -517,6 +525,18 @@ begin
   end;
 end;
 
+procedure TGocciaFunctionValue.RecordCoverageCall;
+begin
+  if FTrackCoverage and (TGocciaCoverageTracker.Instance <> nil) and
+     TGocciaCoverageTracker.Instance.Enabled and (FSourceLine > 0) and
+     (FSourceFilePath <> '') then
+  begin
+    TGocciaCoverageTracker.Instance.RecordLineHit(FSourceFilePath, FSourceLine);
+    TGocciaCoverageTracker.Instance.RecordFunctionHit(FSourceFilePath,
+      GetFunctionName, FSourceLine, FSourceColumn);
+  end;
+end;
+
 procedure TGocciaFunctionValue.PrepareCallContext(const ACallScope: TGocciaScope;
   const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue;
   var AContext: TGocciaEvaluationContext; out ABodyScope: TGocciaScope;
@@ -574,8 +594,9 @@ begin
   AContext.LoadModuleSource := FClosure.LoadModuleSource;
   AContext.ResolveModuleURL := FClosure.ResolveModuleURL;
   AContext.CurrentFilePath := FSourceFilePath;
-  AContext.CoverageEnabled := (TGocciaCoverageTracker.Instance <> nil)
-    and TGocciaCoverageTracker.Instance.Enabled;
+  AContext.CoverageEnabled := FTrackCoverage and
+    (TGocciaCoverageTracker.Instance <> nil) and
+    TGocciaCoverageTracker.Instance.Enabled;
   AContext.StrictTypes := FClosure.EffectiveStrictTypes;
   CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
   ArgumentsObjectEnabled := FClosure.EffectiveArgumentsObjectEnabled;
@@ -591,9 +612,7 @@ begin
   else
     EvalRejectNames := nil;
 
-  if AContext.CoverageEnabled and (FSourceLine > 0) and
-     (FSourceFilePath <> '') then
-    TGocciaCoverageTracker.Instance.RecordLineHit(FSourceFilePath, FSourceLine);
+  RecordCoverageCall;
 
   BindThis(ACallScope, AThisValue);
   AContext.Scope := ACallScope;
@@ -1028,6 +1047,25 @@ procedure TGocciaFunctionValue.SetInferredName(const AName: string);
 begin
   if FName = '' then
     FName := AName;
+  if FTrackCoverage and (TGocciaCoverageTracker.Instance <> nil) and
+     TGocciaCoverageTracker.Instance.Enabled and
+     (FSourceFilePath <> '') and (FSourceLine > 0) then
+    TGocciaCoverageTracker.Instance.RegisterFunction(FSourceFilePath,
+      GetFunctionName, FSourceLine, FSourceColumn);
+end;
+
+procedure TGocciaFunctionValue.SetSourceLocation(const AFilePath: string;
+  const ALine, AColumn: Integer; const ATrackCoverage: Boolean);
+begin
+  FSourceFilePath := AFilePath;
+  FSourceLine := ALine;
+  FSourceColumn := AColumn;
+  FTrackCoverage := ATrackCoverage;
+  if FTrackCoverage and (TGocciaCoverageTracker.Instance <> nil) and
+     TGocciaCoverageTracker.Instance.Enabled and
+     (FSourceFilePath <> '') and (FSourceLine > 0) then
+    TGocciaCoverageTracker.Instance.RegisterFunction(FSourceFilePath,
+      GetFunctionName, FSourceLine, FSourceColumn);
 end;
 
 { TGocciaArrowFunctionValue }
