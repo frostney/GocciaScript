@@ -12,13 +12,11 @@ compatibility: >-
 
 # Review PR
 
-## Instructions
-
 Resolve the current PR's actionable review findings without creating a second
 review conversation. With the exact `automatic-merge` qualifier, converge the
 PR and merge it.
 
-### Invariants
+## Invariants
 
 - Preserve unrelated work. Never amend, force-push, or revert changes you did
   not author.
@@ -34,7 +32,7 @@ PR and merge it.
 - Treat review, approval, and CI evidence as valid only for the current PR head.
   A new commit or baseline merge resets every affected gate.
 
-### Automatic merge
+## Automatic merge
 
 The exact `automatic-merge` qualifier authorizes relevant fixes, validation,
 new commits, plain pushes, documented reviewer retriggers, monitoring, one
@@ -48,7 +46,7 @@ reviews, summaries, suggestions, and nitpicks. For CodeRabbit when active, a
 rate limit, quota response, incomplete run, or missing verdict is pending rather
 than passed; apply equivalent evidence-based semantics to other tools.
 
-### Workflow
+## Workflow
 
 1. Confirm the branch has an open PR and merge the remote default branch if
    behind.

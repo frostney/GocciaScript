@@ -12,12 +12,10 @@ compatibility: >-
 
 # Create issue
 
-## Instructions
-
 Turn the user's input into an implementation-ready issue grounded in the current
 repository, then create it after the required review boundary.
 
-### Gates
+## Gates
 
 - Investigate before drafting: read the applicable project instructions and
   vision, search open and closed issues for duplicates, and inspect the affected
@@ -30,14 +28,14 @@ repository, then create it after the required review boundary.
   duplicate, return the existing issue and stop without asking whether to file
   the same request anyway or mutate the existing issue.
 
-### Automatic mode
+## Automatic mode
 
 Automatic mode applies only when the original prompt says `automatic` or
 explicitly requests it. Complete every gate, then choose the template, title,
 labels, and body from project evidence and create the issue without draft
 approval. Material ambiguity or risk disables automatic mode.
 
-### Workflow
+## Workflow
 
 1. Discover the repository's issue templates and existing label conventions.
 2. Investigate the request using the gates above. Ground any progress claim in

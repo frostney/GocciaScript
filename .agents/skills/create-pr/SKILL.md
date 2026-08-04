@@ -12,8 +12,6 @@ compatibility: >-
 
 # Create PR
 
-## Instructions
-
 The request authorizes the repository's declared gates, relevant fixes and
 commits, plain pushes, PR metadata updates, one draft pull request, and its
 transition to ready for review. It does not authorize unrelated changes.
