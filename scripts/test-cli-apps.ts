@@ -2392,7 +2392,7 @@ console.log("Loader: coverage --output=json not corrupted...");
     const escapedFunctionNameLcovPath = join(tmp, "escaped-function-name.lcov");
     await $`${LOADER} --coverage --coverage-format=lcov --coverage-output=${escapedFunctionNameLcovPath} ${escapedFunctionNameSourcePath}`.quiet();
     const escapedFunctionNameLcov = readFileSync(escapedFunctionNameLcovPath, "utf-8");
-    const escapedFunctionRecords = escapedFunctionNameLcov.split("\n");
+    const escapedFunctionRecords = escapedFunctionNameLcov.split(/\r?\n/);
     if (!escapedFunctionRecords.some((line) => /^FN:\d+,line\\r\\nbreak$/.test(line)) ||
         !escapedFunctionRecords.includes("FNDA:1,line\\r\\nbreak")) {
       throw new Error("LCOV should escape carriage returns and newlines in function names");
