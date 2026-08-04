@@ -155,6 +155,7 @@ uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Coverage,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.GarbageCollector,
@@ -1371,7 +1372,9 @@ begin
   Context.LoadModuleSource := FClosure.LoadModuleSource;
   Context.ResolveModuleURL := FClosure.ResolveModuleURL;
   Context.CurrentFilePath := FSourceFilePath;
-  Context.CoverageEnabled := False;
+  Context.CoverageEnabled := FTrackCoverage and
+    (TGocciaCoverageTracker.Instance <> nil) and
+    TGocciaCoverageTracker.Instance.Enabled;
   // EffectiveStrictTypes walks to the root scope so generator bodies
   // observe TGocciaEngine.SetStrictTypes updates made after the
   // generator's closure scope was created.
@@ -1382,6 +1385,7 @@ begin
   Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
   Context.HideFunctionSourceText := FHideNestedFunctionSourceText;
   Context.DisposalTracker := nil;
+  RecordCoverageCall;
   HasParamExpressions := HasParameterExpressions;
   // EvalRejectNames is only read while evaluating a parameter default, so
   // only build it when a parameter actually has a default or pattern
@@ -1616,7 +1620,9 @@ begin
   Context.LoadModuleSource := FClosure.LoadModuleSource;
   Context.ResolveModuleURL := FClosure.ResolveModuleURL;
   Context.CurrentFilePath := FSourceFilePath;
-  Context.CoverageEnabled := False;
+  Context.CoverageEnabled := FTrackCoverage and
+    (TGocciaCoverageTracker.Instance <> nil) and
+    TGocciaCoverageTracker.Instance.Enabled;
   // EffectiveStrictTypes — see CreateContinuation above.
   Context.StrictTypes := FClosure.EffectiveStrictTypes;
   CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
@@ -1625,6 +1631,7 @@ begin
   Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
   Context.HideFunctionSourceText := FHideNestedFunctionSourceText;
   Context.DisposalTracker := nil;
+  RecordCoverageCall;
   HasParamExpressions := HasParameterExpressions;
   // EvalRejectNames is only read while evaluating a parameter default, so
   // only build it when a parameter actually has a default or pattern
