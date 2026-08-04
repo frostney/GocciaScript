@@ -355,6 +355,16 @@ console.log("Language early errors use the CLI parser...");
       args: [],
     },
     {
+      desc: "chained as assertion without a type",
+      source: '"value" as string as;\n',
+      args: [],
+    },
+    {
+      desc: "satisfies suffix without a type",
+      source: '"value" as string satisfies;\n',
+      args: [],
+    },
+    {
       desc: "pattern-filtered for-of without of",
       source: "for (const item is _ items) {}\n",
       args: [],

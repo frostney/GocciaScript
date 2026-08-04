@@ -552,9 +552,10 @@ export interface Serializable {
   toJSON(): string;
 }
 
-// as Type and as const assertions
+// Runtime-erased as, satisfies, and generic constructor syntax
 const x = 42 as number;
-const colors = ["red", "green"] as const;
+const colors = ["red", "green"] as const satisfies Array<string>;
+const names = new Map<string, string>();
 
 // Class annotations: field types, generics, implements, access modifiers
 class Box<T> implements Container {

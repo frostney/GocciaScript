@@ -12,8 +12,6 @@ compatibility: >-
 
 # Update PR
 
-## Instructions
-
 The request authorizes the repository's declared PR gate, relevant commits, a
 plain push to the current PR branch, and metadata reconciliation. It does not
 authorize unrelated changes.
