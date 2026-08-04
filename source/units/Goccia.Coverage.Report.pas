@@ -50,10 +50,17 @@ begin
   Func := AFileCov.Functions[AIndex];
   Result := Func.Name;
   if Result = '' then
-    Exit(Format('(anonymous_%d)', [AIndex + 1]));
-  for I := 0 to AFileCov.Functions.Count - 1 do
-    if (I <> AIndex) and (AFileCov.Functions[I].Name = Result) then
-      Exit(Format('%s@%d:%d', [Result, Func.Line, Func.Column]));
+    Result := Format('(anonymous_%d)', [AIndex + 1])
+  else
+    for I := 0 to AFileCov.Functions.Count - 1 do
+      if (I <> AIndex) and (AFileCov.Functions[I].Name = Result) then
+      begin
+        Result := Format('%s@%d:%d', [Result, Func.Line, Func.Column]);
+        Break;
+      end;
+  Result := StringReplace(Result, '\', '\\', [rfReplaceAll]);
+  Result := StringReplace(Result, #13, '\r', [rfReplaceAll]);
+  Result := StringReplace(Result, #10, '\n', [rfReplaceAll]);
 end;
 
 { Build an array mapping original source lines (1-based index) to aggregated

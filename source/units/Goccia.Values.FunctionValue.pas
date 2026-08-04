@@ -48,6 +48,7 @@ type
     procedure PredeclareParameterBindings(const ACallScope: TGocciaScope);
     function BuildParameterEvalVarDeclarationRejectNames(
       const AIncludeArgumentsObject: Boolean): TGocciaEvalRejectNameArray;
+    procedure RecordCoverageCall;
     procedure PrepareCallContext(const ACallScope: TGocciaScope;
       const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue;
       var AContext: TGocciaEvaluationContext; out ABodyScope: TGocciaScope;
@@ -524,6 +525,18 @@ begin
   end;
 end;
 
+procedure TGocciaFunctionValue.RecordCoverageCall;
+begin
+  if FTrackCoverage and (TGocciaCoverageTracker.Instance <> nil) and
+     TGocciaCoverageTracker.Instance.Enabled and (FSourceLine > 0) and
+     (FSourceFilePath <> '') then
+  begin
+    TGocciaCoverageTracker.Instance.RecordLineHit(FSourceFilePath, FSourceLine);
+    TGocciaCoverageTracker.Instance.RecordFunctionHit(FSourceFilePath,
+      GetFunctionName, FSourceLine, FSourceColumn);
+  end;
+end;
+
 procedure TGocciaFunctionValue.PrepareCallContext(const ACallScope: TGocciaScope;
   const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue;
   var AContext: TGocciaEvaluationContext; out ABodyScope: TGocciaScope;
@@ -581,8 +594,9 @@ begin
   AContext.LoadModuleSource := FClosure.LoadModuleSource;
   AContext.ResolveModuleURL := FClosure.ResolveModuleURL;
   AContext.CurrentFilePath := FSourceFilePath;
-  AContext.CoverageEnabled := (TGocciaCoverageTracker.Instance <> nil)
-    and TGocciaCoverageTracker.Instance.Enabled;
+  AContext.CoverageEnabled := FTrackCoverage and
+    (TGocciaCoverageTracker.Instance <> nil) and
+    TGocciaCoverageTracker.Instance.Enabled;
   AContext.StrictTypes := FClosure.EffectiveStrictTypes;
   CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
   ArgumentsObjectEnabled := FClosure.EffectiveArgumentsObjectEnabled;
@@ -598,13 +612,7 @@ begin
   else
     EvalRejectNames := nil;
 
-  if FTrackCoverage and AContext.CoverageEnabled and (FSourceLine > 0) and
-     (FSourceFilePath <> '') then
-  begin
-    TGocciaCoverageTracker.Instance.RecordLineHit(FSourceFilePath, FSourceLine);
-    TGocciaCoverageTracker.Instance.RecordFunctionHit(FSourceFilePath,
-      GetFunctionName, FSourceLine, FSourceColumn);
-  end;
+  RecordCoverageCall;
 
   BindThis(ACallScope, AThisValue);
   AContext.Scope := ACallScope;

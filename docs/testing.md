@@ -746,7 +746,7 @@ The GocciaTestRunner and GocciaScriptLoader support JavaScript source-level cove
 ### Usage
 
 ```bash
-# Console summary (printed after test results)
+# Console summary (printed after execution)
 ./build/GocciaTestRunner tests --coverage
 
 # lcov output (for Codecov, Coveralls, or genhtml)
@@ -770,13 +770,13 @@ The GocciaTestRunner and GocciaScriptLoader support JavaScript source-level cove
 - Short-circuit operators (`&&`, `||`, `??`)
 - `switch` statement case clauses
 
-**Function coverage:** Which user-defined functions were created and called. Function definitions are retained with zero hits when they are not called, and repeated calls increment the function hit count.
+**Function coverage:** Which user-defined functions were created and called. A function is registered when its definition is evaluated; created-but-uncalled functions are retained with zero hits, and repeated calls increment the function hit count. Definitions inside untaken control flow are not created and therefore do not appear in either execution mode.
 
 ### Output Formats
 
 | Format | Flag | Description |
 |--------|------|-------------|
-| Console | `--coverage` | Summary table with line, branch, and function totals printed to stdout after test results |
+| Console | `--coverage` | Summary table with line, branch, and function totals printed to stdout after execution |
 | lcov | `--coverage-format=lcov --coverage-output=<file>` | Standard lcov tracefile with `DA:`, `BRDA:`, `FN:`, and `FNDA:` entries |
 | JSON | `--coverage-format=json --coverage-output=<file>` | Istanbul-compatible JSON including `f` and `fnMap` function data |
 

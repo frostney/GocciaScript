@@ -1116,8 +1116,9 @@ begin
   if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(Value);
   try
-    if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
-      TGocciaFunctionValue(Value).Name := Name;
+    if (Value is TGocciaFunctionValue) and
+       (TGocciaFunctionValue(Value).Name = '') then
+      TGocciaFunctionValue(Value).SetInferredName(Name);
     if AContext.Scope.ContainsOwnLexicalBinding(Name) then
       AContext.Scope.ForceUpdateBinding(Name, Value)
     else if ABlockScoped then

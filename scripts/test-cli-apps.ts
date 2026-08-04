@@ -2273,6 +2273,12 @@ console.log("Loader: coverage --output=json not corrupted...");
       if (!functionLcov.includes("FNF:") || !functionLcov.includes("FNH:")) {
         throw new Error(`${modeName} LCOV should report function totals`);
       }
+      const functionNames = [...functionLcov.matchAll(/^FNDA:\d+,(.*)$/gm)]
+        .map((match) => match[1])
+        .sort();
+      if (functionNames.join(",") !== "called,neverCalled") {
+        throw new Error(`${modeName} LCOV should contain only user functions, got ${functionNames.join(", ")}`);
+      }
     }
     const functionJsonPath = join(tmp, "function-coverage.json");
     await $`${LOADER} --coverage --coverage-format=json --coverage-output=${functionJsonPath} ${functionSourcePath}`.quiet();
@@ -2287,6 +2293,117 @@ console.log("Loader: coverage --output=json not corrupted...");
     }
     if (functionFile.f[functionIdsByName.neverCalled] !== 0) {
       throw new Error("JSON f should retain neverCalled with zero hits");
+    }
+
+    console.log("Loader: generator function coverage (interpreted + bytecode)...");
+    const generatorSourcePath = join(tmp, "generator-function-coverage.js");
+    writeFileSync(
+      generatorSourcePath,
+      [
+        "function* generatorFunction() { yield 1; }",
+        "function* generatorWithDefault(value = 2) { yield value; }",
+        "function* nestedGenerator() {",
+        "  function innerDeclaration() { return 6; }",
+        "  yield 0;",
+        "  const innerArrow = () => 7;",
+        "  innerDeclaration();",
+        "  innerArrow();",
+        "  yield 1;",
+        "}",
+        "async function* asyncGeneratorFunction() { yield 3; }",
+        "const holder = {",
+        "  *generatorMethod() { yield 4; },",
+        "  async *asyncGeneratorMethod() { yield 5; },",
+        "};",
+        "const generator = generatorFunction();",
+        "generator.next();",
+        "generator.next();",
+        "const defaultGenerator = generatorWithDefault();",
+        "defaultGenerator.next();",
+        "const nested = nestedGenerator();",
+        "nested.next();",
+        "nested.next();",
+        "nested.next();",
+        "asyncGeneratorFunction();",
+        "holder.generatorMethod();",
+        "holder.asyncGeneratorMethod();",
+        "",
+      ].join("\n"),
+    );
+    for (const modeArgs of [[], ["--mode=bytecode"]]) {
+      const modeName = modeArgs.length === 0 ? "interpreted" : "bytecode";
+      const generatorLcovPath = join(tmp, `generator-function-${modeName}.lcov`);
+      await $`${LOADER} ${modeArgs} --compat-function --coverage --coverage-format=lcov --coverage-output=${generatorLcovPath} ${generatorSourcePath}`.quiet();
+      const generatorLcov = readFileSync(generatorLcovPath, "utf-8");
+      for (const name of [
+        "generatorFunction",
+        "generatorWithDefault",
+        "nestedGenerator",
+        "innerDeclaration",
+        "innerArrow",
+        "asyncGeneratorFunction",
+        "generatorMethod",
+        "asyncGeneratorMethod",
+      ]) {
+        if (!generatorLcov.includes(`FNDA:1,${name}`)) {
+          throw new Error(`${modeName} LCOV should count ${name} once`);
+        }
+      }
+    }
+
+    console.log("Loader: uncalled declarations keep names (interpreted + bytecode)...");
+    const declarationSourcePath = join(tmp, "function-declaration-coverage.js");
+    writeFileSync(
+      declarationSourcePath,
+      [
+        "function ordinaryNeverCalled() { return 1; }",
+        "function* generatorNeverCalled() { yield 2; }",
+        "",
+      ].join("\n"),
+    );
+    for (const modeArgs of [[], ["--mode=bytecode"]]) {
+      const modeName = modeArgs.length === 0 ? "interpreted" : "bytecode";
+      const declarationLcovPath = join(tmp, `function-declaration-${modeName}.lcov`);
+      await $`${LOADER} ${modeArgs} --compat-function --coverage --coverage-format=lcov --coverage-output=${declarationLcovPath} ${declarationSourcePath}`.quiet();
+      const declarationLcov = readFileSync(declarationLcovPath, "utf-8");
+      for (const name of ["ordinaryNeverCalled", "generatorNeverCalled"]) {
+        if (!declarationLcov.includes(`FNDA:0,${name}`)) {
+          throw new Error(`${modeName} LCOV should retain the name of ${name}`);
+        }
+      }
+    }
+
+    console.log("Loader: LCOV function names cannot inject tracefile records...");
+    const escapedFunctionNameSourcePath = join(tmp, "escaped-function-name.js");
+    writeFileSync(
+      escapedFunctionNameSourcePath,
+      [
+        'const newlineKey = "line" + String.fromCharCode(13, 10) + "break";',
+        'const literalKey = "line\\\\r\\\\nbreak";',
+        "const holder = {",
+        "  [newlineKey]() { return 1; },",
+        "  [literalKey]() { return 2; },",
+        "};",
+        "holder[newlineKey]();",
+        "holder[literalKey]();",
+        "",
+      ].join("\n"),
+    );
+    const escapedFunctionNameLcovPath = join(tmp, "escaped-function-name.lcov");
+    await $`${LOADER} --coverage --coverage-format=lcov --coverage-output=${escapedFunctionNameLcovPath} ${escapedFunctionNameSourcePath}`.quiet();
+    const escapedFunctionNameLcov = readFileSync(escapedFunctionNameLcovPath, "utf-8");
+    const escapedFunctionRecords = escapedFunctionNameLcov.split("\n");
+    if (!escapedFunctionRecords.some((line) => /^FN:\d+,line\\r\\nbreak$/.test(line)) ||
+        !escapedFunctionRecords.includes("FNDA:1,line\\r\\nbreak")) {
+      throw new Error("LCOV should escape carriage returns and newlines in function names");
+    }
+    if (!escapedFunctionRecords.some((line) => /^FN:\d+,line\\\\r\\\\nbreak$/.test(line)) ||
+        !escapedFunctionRecords.includes("FNDA:1,line\\\\r\\\\nbreak")) {
+      throw new Error("LCOV should preserve literal backslashes in function names");
+    }
+    if (escapedFunctionRecords.includes("break") ||
+        escapedFunctionRecords.filter((line) => line.startsWith("FNDA:1,line")).length !== 2) {
+      throw new Error("LCOV function names must not collide or create extra tracefile records");
     }
 
     console.log("TestRunner: parallel function coverage merges workers...");
@@ -2345,7 +2462,9 @@ console.log("Loader: coverage --output=json not corrupted...");
 
     const jsxLcovPath = join(tmp, "jsx-coverage.lcov");
     await $`${LOADER} --coverage --coverage-format=lcov --coverage-output=${jsxLcovPath} ${jsxPath}`.quiet();
-    if (!readFileSync(jsxLcovPath, "utf-8").includes("BRDA:3,")) throw new Error("JSX LCOV should have branch on line 3");
+    const jsxLcov = readFileSync(jsxLcovPath, "utf-8");
+    if (!jsxLcov.includes("BRDA:3,")) throw new Error("JSX LCOV should have branch on line 3");
+    if (!jsxLcov.includes("FN:2,Greet")) throw new Error("JSX LCOV should map Greet to original line 2");
 
     const jsxJsonPath = join(tmp, "jsx-coverage.json");
     await $`${LOADER} --coverage --coverage-format=json --coverage-output=${jsxJsonPath} ${jsxPath}`.quiet();

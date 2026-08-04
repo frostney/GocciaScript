@@ -2483,6 +2483,7 @@ type
     FClosure: TGocciaBytecodeClosure;
     FConstructClassValue: TGocciaValue;
     FVM: TGocciaVM;
+    procedure RecordGeneratorCoverageCall;
   protected
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
@@ -5514,6 +5515,27 @@ begin
     Result := '';
 end;
 
+procedure TGocciaBytecodeFunctionValue.RecordGeneratorCoverageCall;
+var
+  Template: TGocciaFunctionTemplate;
+begin
+  if not FVM.FCoverageEnabled or
+     (TGocciaCoverageTracker.Instance = nil) or
+     not Assigned(FClosure) then
+    Exit;
+  Template := FClosure.Template;
+  if not Assigned(Template) or not Assigned(Template.DebugInfo) or
+     (Template.DebugInfo.LineMapCount = 0) then
+    Exit;
+  TGocciaCoverageTracker.Instance.RecordLineHit(
+    Template.DebugInfo.SourceFile,
+    Template.DebugInfo.GetLineMapEntry(0).Line);
+  TGocciaCoverageTracker.Instance.RecordFunctionHit(
+    Template.DebugInfo.SourceFile, Template.Name,
+    Template.DebugInfo.GetLineMapEntry(0).Line,
+    Template.DebugInfo.GetLineMapEntry(0).Column);
+end;
+
 function TGocciaBytecodeFunctionValue.GetSourceText: string;
 begin
   Result := FClosure.Template.SourceText;
@@ -5708,6 +5730,7 @@ begin
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
+    RecordGeneratorCoverageCall;
     if FClosure.Template.IsAsync then
       Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
         TGocciaBytecodeAsyncGeneratorObjectValue.Create(FVM, FClosure,
@@ -5801,6 +5824,7 @@ begin
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
+    RecordGeneratorCoverageCall;
     if FClosure.Template.IsAsync then
       Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
         TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
@@ -5865,6 +5889,7 @@ begin
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
+    RecordGeneratorCoverageCall;
     if FClosure.Template.IsAsync then
       Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
         TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
@@ -5931,6 +5956,7 @@ begin
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
+    RecordGeneratorCoverageCall;
     if FClosure.Template.IsAsync then
       Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
         TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
@@ -6001,6 +6027,7 @@ begin
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
+    RecordGeneratorCoverageCall;
     if FClosure.Template.IsAsync then
       Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
         TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
@@ -13035,16 +13062,16 @@ begin
 
   if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
      Assigned(ATemplate.DebugInfo) and
-     (ATemplate.DebugInfo.LineMapCount > 0) and
-     (ATemplate.Name <> '<module>') then
+     (ATemplate.DebugInfo.LineMapCount > 0) and not ATemplate.IsGenerator then
   begin
     TGocciaCoverageTracker.Instance.RecordLineHit(
       ATemplate.DebugInfo.SourceFile,
       ATemplate.DebugInfo.GetLineMapEntry(0).Line);
-    TGocciaCoverageTracker.Instance.RecordFunctionHit(
-      ATemplate.DebugInfo.SourceFile, ATemplate.Name,
-      ATemplate.DebugInfo.GetLineMapEntry(0).Line,
-      ATemplate.DebugInfo.GetLineMapEntry(0).Column);
+    if ATemplate.Name <> '<module>' then
+      TGocciaCoverageTracker.Instance.RecordFunctionHit(
+        ATemplate.DebugInfo.SourceFile, ATemplate.Name,
+        ATemplate.DebugInfo.GetLineMapEntry(0).Line,
+        ATemplate.DebugInfo.GetLineMapEntry(0).Column);
   end;
 
   if FProfilingFunctions and (TGocciaProfiler.Instance <> nil) then
@@ -13231,16 +13258,16 @@ begin
 
   if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
      Assigned(ATemplate.DebugInfo) and
-     (ATemplate.DebugInfo.LineMapCount > 0) and
-     (ATemplate.Name <> '<module>') then
+     (ATemplate.DebugInfo.LineMapCount > 0) and not ATemplate.IsGenerator then
   begin
     TGocciaCoverageTracker.Instance.RecordLineHit(
       ATemplate.DebugInfo.SourceFile,
       ATemplate.DebugInfo.GetLineMapEntry(0).Line);
-    TGocciaCoverageTracker.Instance.RecordFunctionHit(
-      ATemplate.DebugInfo.SourceFile, ATemplate.Name,
-      ATemplate.DebugInfo.GetLineMapEntry(0).Line,
-      ATemplate.DebugInfo.GetLineMapEntry(0).Column);
+    if ATemplate.Name <> '<module>' then
+      TGocciaCoverageTracker.Instance.RecordFunctionHit(
+        ATemplate.DebugInfo.SourceFile, ATemplate.Name,
+        ATemplate.DebugInfo.GetLineMapEntry(0).Line,
+        ATemplate.DebugInfo.GetLineMapEntry(0).Column);
   end;
 
   if FProfilingFunctions and (TGocciaProfiler.Instance <> nil) then

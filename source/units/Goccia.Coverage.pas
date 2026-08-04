@@ -612,27 +612,13 @@ end;
 
 procedure TGocciaCoverageTracker.RegisterFunction(const AFilePath,
   AName: string; const ALine, AColumn: Integer);
-var
-  SrcMap: TGocciaSourceMap;
-  OrigLine, OrigColumn: Integer;
 begin
-  SrcMap := GetSourceMap(AFilePath);
-  if Assigned(SrcMap) and
-     not SrcMap.Translate(ALine, AColumn, OrigLine, OrigColumn) then
-    Exit;
   GetOrCreateFile(AFilePath).RegisterFunction(AName, ALine, AColumn);
 end;
 
 procedure TGocciaCoverageTracker.RecordFunctionHit(const AFilePath,
   AName: string; const ALine, AColumn: Integer);
-var
-  SrcMap: TGocciaSourceMap;
-  OrigLine, OrigColumn: Integer;
 begin
-  SrcMap := GetSourceMap(AFilePath);
-  if Assigned(SrcMap) and
-     not SrcMap.Translate(ALine, AColumn, OrigLine, OrigColumn) then
-    Exit;
   GetOrCreateFile(AFilePath).RecordFunctionHit(AName, ALine, AColumn);
 end;
 
