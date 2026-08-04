@@ -4238,6 +4238,7 @@ var
   BindingName: string;
   IsNamedDefaultFunction: Boolean;
   IsNamedDefaultClass: Boolean;
+  UsePreinitializedBinding: Boolean;
 begin
   BindingName := AStmt.LocalName;
   IsNamedDefaultFunction := (BindingName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
@@ -4247,6 +4248,12 @@ begin
     (AStmt.Expression is TGocciaClassExpression) and
     (TGocciaClassExpression(AStmt.Expression).ClassDefinition.Name =
     BindingName);
+  // Only declaration-form default functions are instantiated during linking;
+  // assignment expressions initialize *default* during module evaluation.
+  UsePreinitializedBinding := AStmt.IsDirectDeclaration and
+    ACtx.PreinitializedTopLevelFunctions and
+    (ACtx.Scope.Depth = 0) and
+    (AStmt.Expression is TGocciaFunctionExpression);
   LocalIdx := ACtx.Scope.ResolveLocal(BindingName);
   if (LocalIdx >= 0) and
      (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) then
@@ -4263,7 +4270,12 @@ begin
   end;
 
   FuncCount := ACtx.Template.FunctionCount;
-  if (AStmt.Expression is TGocciaClassExpression) and
+  if UsePreinitializedBinding then
+  begin
+    NameIdx := ACtx.Template.AddConstantString(BindingName);
+    EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, Slot, NameIdx));
+  end
+  else if (AStmt.Expression is TGocciaClassExpression) and
      (TGocciaClassExpression(AStmt.Expression).ClassDefinition.Name = '') then
     CompileClassExpression(ACtx,
       TGocciaClassExpression(AStmt.Expression).ClassDefinition, Slot,
@@ -4294,7 +4306,8 @@ begin
   if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
     EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
 
-  if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
+  if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) and
+     not UsePreinitializedBinding then
     EmitGlobalDefine(ACtx, Slot, BindingName,
       not (IsNamedDefaultFunction or IsNamedDefaultClass));
 

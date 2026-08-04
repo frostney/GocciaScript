@@ -121,7 +121,11 @@ begin
   AProgramConsumed := False;
   Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
   try
-    Compiler.GlobalBackedTopLevel := False;
+    // ES2026 §16.2.1.7.3.1 InitializeEnvironment: module declarations
+    // live in the linked Module Environment Record. Keep bytecode top-level
+    // locals backed by that preinitialized scope so hoisted function objects
+    // created during linking observe later let/const initialization and writes.
+    Compiler.GlobalBackedTopLevel := True;
     Compiler.AsyncTopLevel := AProgram.HasTopLevelAwait;
     Compiler.PreinitializedTopLevelFunctions := True;
     Compiler.StrictTypes := FStrictTypes;
