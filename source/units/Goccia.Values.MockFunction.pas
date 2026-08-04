@@ -62,6 +62,14 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     function DoMockReturnValueOnce(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+    function DoMockResolvedValue(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function DoMockResolvedValueOnce(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function DoMockRejectedValue(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function DoMockRejectedValueOnce(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     function DoMockReset(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function DoMockClear(const AArgs: TGocciaArgumentsCollection;
@@ -91,12 +99,77 @@ uses
   Goccia.GarbageCollector,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.NativeFunction;
+  Goccia.Values.NativeFunction,
+  Goccia.Values.PromiseValue;
+
+type
+  TGocciaMockPromiseFactoryValue = class(TGocciaFunctionBase)
+  private
+    FValue: TGocciaValue;
+    FReject: Boolean;
+  protected
+    function GetFunctionLength: Integer; override;
+    function GetFunctionName: string; override;
+  public
+    constructor Create(const AValue: TGocciaValue; const AReject: Boolean);
+    function Call(const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue; override;
+    procedure MarkReferences; override;
+  end;
 
 const
   MOCK_DEFAULT_NAME = 'mock';
   RESULT_TYPE_RETURN = 'return';
   RESULT_TYPE_THROW = 'throw';
+
+{ TGocciaMockPromiseFactoryValue }
+
+constructor TGocciaMockPromiseFactoryValue.Create(const AValue: TGocciaValue;
+  const AReject: Boolean);
+begin
+  inherited Create;
+  FValue := AValue;
+  FReject := AReject;
+end;
+
+function TGocciaMockPromiseFactoryValue.GetFunctionLength: Integer;
+begin
+  Result := 0;
+end;
+
+function TGocciaMockPromiseFactoryValue.GetFunctionName: string;
+begin
+  Result := '';
+end;
+
+function TGocciaMockPromiseFactoryValue.Call(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Promise: TGocciaPromiseValue;
+begin
+  Promise := TGocciaPromiseValue.Create;
+  if TGarbageCollector.Instance <> nil then
+    TGarbageCollector.Instance.AddTempRoot(Promise);
+  try
+    if FReject then
+      Promise.Reject(FValue)
+    else
+      Promise.Resolve(FValue);
+    Result := Promise;
+  finally
+    if TGarbageCollector.Instance <> nil then
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
+  end;
+end;
+
+procedure TGocciaMockPromiseFactoryValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FValue) then
+    FValue.MarkReferences;
+end;
 
 function ClonePropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
 begin
@@ -188,6 +261,18 @@ begin
   DefineProperty('mockReturnValueOnce', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(DoMockReturnValueOnce, 'mockReturnValueOnce', 1),
     [pfConfigurable, pfWritable]));
+  DefineProperty('mockResolvedValue', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(DoMockResolvedValue, 'mockResolvedValue', 1),
+    [pfConfigurable, pfWritable]));
+  DefineProperty('mockResolvedValueOnce', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(DoMockResolvedValueOnce,
+      'mockResolvedValueOnce', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('mockRejectedValue', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(DoMockRejectedValue, 'mockRejectedValue', 1),
+    [pfConfigurable, pfWritable]));
+  DefineProperty('mockRejectedValueOnce', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(DoMockRejectedValueOnce,
+      'mockRejectedValueOnce', 1), [pfConfigurable, pfWritable]));
   DefineProperty('mockReset', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(DoMockReset, 'mockReset', 0),
     [pfConfigurable, pfWritable]));
@@ -494,6 +579,52 @@ begin
   SetLength(FOnceIsImpl, Len + 1);
   FOnceIsImpl[Len] := False;
 
+  Result := Self;
+end;
+
+function TGocciaMockFunctionValue.DoMockResolvedValue(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  FImplementation := TGocciaMockPromiseFactoryValue.Create(
+    AArgs.GetElement(0), False);
+  Result := Self;
+end;
+
+function TGocciaMockFunctionValue.DoMockResolvedValueOnce(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Len: Integer;
+begin
+  FOnceQueue.Add(TGocciaMockPromiseFactoryValue.Create(
+    AArgs.GetElement(0), False));
+  Len := Length(FOnceIsImpl);
+  SetLength(FOnceIsImpl, Len + 1);
+  FOnceIsImpl[Len] := True;
+  Result := Self;
+end;
+
+function TGocciaMockFunctionValue.DoMockRejectedValue(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  FImplementation := TGocciaMockPromiseFactoryValue.Create(
+    AArgs.GetElement(0), True);
+  Result := Self;
+end;
+
+function TGocciaMockFunctionValue.DoMockRejectedValueOnce(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Len: Integer;
+begin
+  FOnceQueue.Add(TGocciaMockPromiseFactoryValue.Create(
+    AArgs.GetElement(0), True));
+  Len := Length(FOnceIsImpl);
+  SetLength(FOnceIsImpl, Len + 1);
+  FOnceIsImpl[Len] := True;
   Result := Self;
 end;
 
