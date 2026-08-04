@@ -1292,6 +1292,8 @@ var
   EffectiveTimeoutMs: Integer;
   WatchdogMs: Integer;
   WorkerMemoryStats: TCLIJSONMemoryStats;
+  CoverageTracker: TGocciaCoverageTracker;
+  CoverageWasEnabled: Boolean;
 begin
   WorkerMemoryStats := DefaultCLIJSONMemoryStats;
   SetLength(WorkerData, AFiles.Count);
@@ -1311,12 +1313,27 @@ begin
     SetLength(WorkerData[I].FailedTestNames, 0);
   end;
 
-  // Force all shared prototypes to be initialised on the main thread
-  // before any worker thread starts, avoiding class-var race conditions.
-  if AnyFileConfigEnablesFlag(AFiles, EngineOptions.UnsafeFFI) then
-    EnsureSharedPrototypesInitialized(WarmUpRuntimeWithUnsafeFFI)
-  else
-    EnsureSharedPrototypesInitialized(WarmUpRuntime);
+  // Force all shared prototypes to be initialised on the main thread before
+  // any worker starts, avoiding class-var race conditions. This throwaway
+  // engine is runner infrastructure, so do not register its <thread-init>
+  // source in the user's coverage report. Preserve the tracker state instead
+  // of filtering by file name so a user source can never be hidden.
+  CoverageTracker := TGocciaCoverageTracker.Instance;
+  CoverageWasEnabled := False;
+  if Assigned(CoverageTracker) then
+  begin
+    CoverageWasEnabled := CoverageTracker.Enabled;
+    CoverageTracker.Enabled := False;
+  end;
+  try
+    if AnyFileConfigEnablesFlag(AFiles, EngineOptions.UnsafeFFI) then
+      EnsureSharedPrototypesInitialized(WarmUpRuntimeWithUnsafeFFI)
+    else
+      EnsureSharedPrototypesInitialized(WarmUpRuntime);
+  finally
+    if Assigned(CoverageTracker) then
+      CoverageTracker.Enabled := CoverageWasEnabled;
+  end;
 
   WallClockStart := GetNanoseconds;
 

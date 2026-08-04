@@ -2444,6 +2444,40 @@ console.log("Loader: coverage --output=json not corrupted...");
     if (!branchJson.includes('"branchMap":')) throw new Error('Branch JSON should contain "branchMap":');
     if (!branchJson.includes('"b":')) throw new Error('Branch JSON should contain "b":');
 
+    console.log("TestRunner: parallel coverage excludes internal warm-up sources...");
+    const parallelFirst = join(tmp, "parallel-coverage-a.js");
+    const parallelSecond = join(tmp, "parallel-coverage-b.js");
+    writeFileSync(parallelFirst, 'test("a", () => { expect(1).toBe(1); });\n');
+    writeFileSync(parallelSecond, 'test("b", () => { expect(2).toBe(2); });\n');
+    for (const mode of ["interpreted", "bytecode"]) {
+      const parallelJsonPath = join(tmp, `parallel-${mode}.json`);
+      const modeArgs = mode === "bytecode" ? ["--mode=bytecode"] : [];
+      const proc = Bun.spawnSync(
+        [
+          resolve(TESTRUNNER),
+          parallelFirst,
+          parallelSecond,
+          "--no-progress",
+          "--no-results",
+          "--jobs=2",
+          "--coverage",
+          "--coverage-format=json",
+          `--coverage-output=${parallelJsonPath}`,
+          ...modeArgs,
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      if (proc.exitCode !== 0)
+        throw new Error(`Parallel ${mode} coverage exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const parallelCoverage = JSON.parse(readFileSync(parallelJsonPath, "utf-8"));
+      if (Object.hasOwn(parallelCoverage, "<thread-init>"))
+        throw new Error(`Parallel ${mode} coverage should exclude internal <thread-init> source`);
+      for (const file of [parallelFirst, parallelSecond]) {
+        if (!Object.hasOwn(parallelCoverage, file))
+          throw new Error(`Parallel ${mode} coverage should retain user source ${file}`);
+      }
+    }
+
     console.log("Loader: JSX coverage source-map translation...");
     const jsxPath = join(tmp, "coverage-test.jsx");
     writeFileSync(
