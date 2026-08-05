@@ -191,6 +191,47 @@ test("assignment to a nullish computed target still evaluates the right-hand sid
   expect(error instanceof TypeError).toBe(true);
 });
 
+test("the nullish read message is the V8-shaped wording", () => {
+  // Pinned so wording regressions and interpreter/bytecode divergence both fail
+  // here rather than silently drifting; this file runs under both engines.
+  const { error } = capture((key) => {
+    const base = null;
+    return base[key];
+  });
+
+  expect(error.message).toBe(
+    "Cannot read properties of null (reading '<computed>')"
+  );
+});
+
+test("the nullish write message is the V8-shaped wording", () => {
+  const { error } = capture((key) => {
+    const base = undefined;
+    base[key] = 1;
+  });
+
+  expect(error.message).toBe(
+    "Cannot set properties of undefined (setting '<computed>')"
+  );
+});
+
+test("a non-nullish computed store evaluates the right-hand side before the key", () => {
+  // §13.3.3 NOTE: for `a[b] = c`, ToPropertyKey is deferred until after `c`.
+  const order = [];
+  const key = {
+    toString() {
+      order.push("key");
+      return "a";
+    },
+  };
+  const target = {};
+
+  target[key] = (order.push("rhs"), 1);
+
+  expect(order.join(",")).toBe("rhs,key");
+  expect(target.a).toBe(1);
+});
+
 test("a symbol key on a nullish base throws TypeError without a property lookup", () => {
   const key = Symbol("marker");
   const base = null;
