@@ -227,6 +227,7 @@ const
   PROP_CANCELABLE            = 'cancelable';
   PROP_ONCE                  = 'once';
   PROP_CAPTURE               = 'capture';
+  PROP_PASSIVE               = 'passive';
 
 implementation
 

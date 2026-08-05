@@ -17,6 +17,21 @@ uses
   Goccia.Values.Primitives;
 
 type
+  TGocciaAbortSignalValue = class;
+
+  // WHATWG DOM §3.2 abort algorithm: a host-registered callback run when the
+  // signal aborts, before the "abort" event is fired. `AToken` identifies the
+  // host-side work the algorithm cancels (for fetch, the pending request id).
+  TGocciaAbortAlgorithmCallback = procedure(const AToken: Int64) of object;
+
+  TGocciaAbortAlgorithmEntry = record
+    Handle: Integer;
+    Callback: TGocciaAbortAlgorithmCallback;
+    Token: Int64;
+  end;
+
+  TGocciaAbortAlgorithmEntryList = TList<TGocciaAbortAlgorithmEntry>;
+
   // WHATWG DOM §3.2: `interface AbortSignal : EventTarget`. The prototype chain
   // genuinely runs through EventTarget.prototype, so `signal instanceof
   // EventTarget` holds and the listener machinery is the shared one.
@@ -26,6 +41,11 @@ type
     FTimeoutDeadlineNanoseconds: Int64;
     FAbortEventPending: Boolean;
     FAbortEventFired: Boolean;
+    FAbortAlgorithmsPending: Boolean;
+    FAbortAlgorithms: TGocciaAbortAlgorithmEntryList;
+    FNextAbortAlgorithmHandle: Integer;
+    procedure BecomeAborted(const AReason: TGocciaValue;
+      const ARunAlgorithmsNow: Boolean);
     function AbortedGetter(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function ReasonGetter(const AArgs: TGocciaArgumentsCollection;
@@ -39,6 +59,7 @@ type
     procedure InitializePrototype;
   public
     constructor Create(const AClass: TGocciaClassValue = nil);
+    destructor Destroy; override;
     function IsAborted: Boolean;
     function RemainingTimeoutMilliseconds: Integer;
     procedure RefreshTimeout;
@@ -46,6 +67,12 @@ type
     procedure SignalAbort(const AReason: TGocciaValue = nil);
     procedure FlushAbortEvent;
     procedure ObserveAbortState;
+    // WHATWG DOM §3.2 add/remove an algorithm. Returns 0 when the signal is
+    // already aborted, matching "if signal is aborted, then return".
+    function AddAbortAlgorithm(const ACallback: TGocciaAbortAlgorithmCallback;
+      const AToken: Int64): Integer;
+    procedure RemoveAbortAlgorithm(const AHandle: Integer);
+    procedure RunPendingAbortAlgorithms;
     function ToStringTag: string; override;
     procedure MarkReferences; override;
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
@@ -130,10 +157,93 @@ begin
   FTimeoutDeadlineNanoseconds := 0;
   FAbortEventPending := False;
   FAbortEventFired := False;
+  FAbortAlgorithmsPending := False;
+  FAbortAlgorithms := TGocciaAbortAlgorithmEntryList.Create;
+  FNextAbortAlgorithmHandle := 1;
   InitializePrototype;
   Shared := GetAbortSignalShared;
   if not Assigned(AClass) and Assigned(Shared) then
     FPrototype := Shared.Prototype;
+end;
+
+destructor TGocciaAbortSignalValue.Destroy;
+begin
+  FAbortAlgorithms.Free;
+  inherited;
+end;
+
+// WHATWG DOM §3.2 add an algorithm.
+function TGocciaAbortSignalValue.AddAbortAlgorithm(
+  const ACallback: TGocciaAbortAlgorithmCallback;
+  const AToken: Int64): Integer;
+var
+  Entry: TGocciaAbortAlgorithmEntry;
+begin
+  // "If signal is aborted, then return" — an algorithm registered after the
+  // abort never runs, the same rule that governs listeners.
+  if IsAborted then
+    Exit(0);
+
+  Entry.Handle := FNextAbortAlgorithmHandle;
+  Inc(FNextAbortAlgorithmHandle);
+  Entry.Callback := ACallback;
+  Entry.Token := AToken;
+  FAbortAlgorithms.Add(Entry);
+  Result := Entry.Handle;
+end;
+
+// WHATWG DOM §3.2 remove an algorithm — the host's normal-completion path.
+procedure TGocciaAbortSignalValue.RemoveAbortAlgorithm(const AHandle: Integer);
+var
+  I: Integer;
+begin
+  if AHandle = 0 then
+    Exit;
+  for I := 0 to FAbortAlgorithms.Count - 1 do
+    if FAbortAlgorithms[I].Handle = AHandle then
+    begin
+      FAbortAlgorithms.Delete(I);
+      Exit;
+    end;
+end;
+
+// WHATWG DOM §3.2 signal abort step 3: run the abort algorithms, then empty
+// the set. The set is emptied first so an algorithm that unregisters itself
+// (the fetch cleanup path) cannot disturb the walk; adding during the run is
+// already refused because the abort reason is set by now.
+procedure TGocciaAbortSignalValue.RunPendingAbortAlgorithms;
+var
+  Snapshot: TArray<TGocciaAbortAlgorithmEntry>;
+  I: Integer;
+begin
+  if not FAbortAlgorithmsPending then
+    Exit;
+  FAbortAlgorithmsPending := False;
+
+  Snapshot := FAbortAlgorithms.ToArray;
+  FAbortAlgorithms.Clear;
+  for I := 0 to High(Snapshot) do
+    if Assigned(Snapshot[I].Callback) then
+      Snapshot[I].Callback(Snapshot[I].Token);
+end;
+
+// WHATWG DOM §3.2 signal abort steps 2-4, shared by controller aborts and by
+// lazily observed timeouts. Timeouts defer the algorithms because they are
+// detected while the fetch manager is walking its pending list; every other
+// caller runs them immediately, so no script can run between the state change
+// and the algorithms.
+procedure TGocciaAbortSignalValue.BecomeAborted(const AReason: TGocciaValue;
+  const ARunAlgorithmsNow: Boolean);
+begin
+  // Step 2: set signal's abort reason.
+  FReason := AReason;
+  FAbortAlgorithmsPending := True;
+  // Step 4 is deferred to FlushAbortEvent so the reason and the host-side
+  // cancellation are both already settled when listeners run.
+  FAbortEventPending := True;
+  // Step 3: run the abort algorithms, then empty the set.
+  if ARunAlgorithmsNow then
+    RunPendingAbortAlgorithms;
 end;
 
 procedure TGocciaAbortSignalValue.InitializePrototype;
@@ -194,28 +304,30 @@ begin
 end;
 
 // WHATWG DOM §3.2 AbortSignal.timeout(milliseconds), observed at a host checkpoint.
-// The state flip is separated from the "abort" event so that internal callers
-// (the fetch pump) can settle their own bookkeeping before any listener runs;
-// FlushAbortEvent is what actually dispatches.
+// This only flips the state: the abort algorithms and the "abort" event are
+// deferred to FlushAbortEvent, because RefreshTimeout is called while the fetch
+// manager walks its pending list and an algorithm mutates that list.
 procedure TGocciaAbortSignalValue.RefreshTimeout;
 begin
   if (FTimeoutDeadlineNanoseconds > 0) and
      (FReason is TGocciaUndefinedLiteralValue) and
      (GetNanoseconds >= FTimeoutDeadlineNanoseconds) then
-  begin
-    FReason := CreateDOMExceptionObject(TIMEOUT_ERROR_NAME,
-      TIMEOUT_ERROR_MESSAGE);
-    FAbortEventPending := True;
-  end;
+    BecomeAborted(CreateDOMExceptionObject(TIMEOUT_ERROR_NAME,
+      TIMEOUT_ERROR_MESSAGE), False);
 end;
 
-// WHATWG DOM §3.2 signal abort, step 4: fire an event named "abort" at the
-// signal. A signal aborts at most once, so this fires at most once, and a
-// listener registered after the abort never runs.
+// WHATWG DOM §3.2 signal abort, steps 3-4: any abort algorithms still pending
+// run first, then the "abort" event is fired at the signal. A signal aborts at
+// most once, so the event fires at most once, and a listener or algorithm
+// registered after the abort never runs.
 procedure TGocciaAbortSignalValue.FlushAbortEvent;
 var
   Event: TGocciaEventValue;
 begin
+  // Step 3 before step 4: host-side cancellation is complete before any
+  // listener observes the abort.
+  RunPendingAbortAlgorithms;
+
   if not FAbortEventPending then
     Exit;
   FAbortEventPending := False;
@@ -274,21 +386,24 @@ end;
 
 // WHATWG DOM §3.2 signal abort.
 procedure TGocciaAbortSignalValue.SignalAbort(const AReason: TGocciaValue);
+var
+  Reason: TGocciaValue;
 begin
   RefreshTimeout;
+  // Step 1: if signal is aborted, then return.
   if not (FReason is TGocciaUndefinedLiteralValue) then
     Exit;
 
   if not Assigned(AReason) or
      (AReason is TGocciaUndefinedLiteralValue) then
-    FReason := CreateDOMExceptionObject(ABORT_ERROR_NAME,
-      ABORT_ERROR_MESSAGE)
+    Reason := CreateDOMExceptionObject(ABORT_ERROR_NAME, ABORT_ERROR_MESSAGE)
   else
-    FReason := AReason;
+    Reason := AReason;
 
-  // Step 4 is deferred to FlushAbortEvent so the reason is already observable
-  // when listeners run, and so internal callers control the dispatch point.
-  FAbortEventPending := True;
+  // Steps 2-3 run synchronously here: the abort algorithms (fetch rejection)
+  // complete before the caller flushes the "abort" event, and no script runs
+  // in between because rejecting a promise only queues a microtask.
+  BecomeAborted(Reason, True);
 end;
 
 // WHATWG DOM §3.2 get AbortSignal.prototype.aborted.

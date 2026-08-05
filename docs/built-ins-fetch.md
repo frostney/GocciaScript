@@ -77,7 +77,7 @@ GocciaScript does not provide a general timer task queue. Timeout signals theref
 | `signal.onabort` | Event handler attribute for the `abort` event; `null` when unset |
 | `event.type` / `event.target` | `"abort"` and the signal itself |
 
-Per [WHATWG DOM §3.2](https://dom.spec.whatwg.org/#abortsignal-signal-abort), a signal aborts at most once, so the `abort` event fires at most once and a listener registered after the abort never runs. The abort reason is already readable when listeners run, and `controller.abort()` dispatches synchronously.
+Per [WHATWG DOM §3.2](https://dom.spec.whatwg.org/#abortsignal-signal-abort), a signal aborts at most once, so the `abort` event fires at most once and a listener registered after the abort never runs. `controller.abort()` dispatches synchronously, and it runs the signal's abort algorithms before firing the event: an in-flight `fetch` registers one, so its promise is already rejected and the abort reason already readable by the time any listener runs.
 
 ```js
 const controller = new AbortController();
@@ -112,7 +112,7 @@ target.dispatchEvent(new Event("ready")); // logs "ready"
 target.dispatchEvent(new Event("ready")); // listener already removed
 ```
 
-An exception thrown by a listener propagates out of `dispatchEvent` (and out of `controller.abort()`). The WHATWG algorithm instead reports the exception to a global error handler, which GocciaScript does not have; propagating keeps the failure observable rather than discarding it. The dispatch state is still unwound, so the event and the target stay usable.
+An exception thrown by a listener propagates out of `dispatchEvent` (and out of `controller.abort()`, or out of an `await` when a timeout signal is observed by the fetch pump). The WHATWG algorithm instead reports the exception to a global error handler, which GocciaScript does not have; propagating keeps the failure observable rather than discarding it. The dispatch state is still unwound, so the event and the target stay usable, already-rejected requests stay rejected, and any signal not yet reached settles at the next pump.
 
 GocciaScript has no node tree, so `bubbles` and `capture` are recorded and reported but cause no propagation. `eventPhase`, `stopPropagation`, `stopImmediatePropagation`, `composed`, `composedPath`, `timeStamp`, `isTrusted`, and `CustomEvent` are not implemented; the `passive` listener option is accepted and ignored, and the `signal` member of `AddEventListenerOptions` is not supported.
 

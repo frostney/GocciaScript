@@ -124,6 +124,9 @@ type
     RequestID: Integer;
     Promise: TGocciaPromiseValue;
     Signal: TGocciaAbortSignalValue;
+    // WHATWG DOM §3.2 abort algorithm registration for this request, removed
+    // again whenever the pending entry leaves FPending.
+    AbortAlgorithmHandle: Integer;
   end;
 
   TGocciaFetchWorker = class(TThread)
@@ -155,6 +158,7 @@ type
     function PopCompletion(out ACompletion: TGocciaFetchCompletion): Boolean;
     function FindPendingIndex(const ARequestID: Integer): Integer;
     function RejectAbortedFetches: Integer;
+    procedure AbortPendingFetch(const AToken: Int64);
     procedure ReleasePendingRoots(const APending: TGocciaPendingFetch);
     procedure SettleCompletion(const ACompletion: TGocciaFetchCompletion);
   public
@@ -467,6 +471,7 @@ begin
 
   Pending.RequestID := FNextRequestID;
   Inc(FNextRequestID);
+  Pending.AbortAlgorithmHandle := 0;
   Pending.Promise := APromise;
   Pending.Signal := ASignal;
 
@@ -502,6 +507,13 @@ begin
       Rooted := True;
     end;
 
+    // WHATWG DOM §3.2 / Fetch: register this request's abort algorithm so a
+    // later abort rejects it before the "abort" event is fired, instead of
+    // waiting for the next pump.
+    if Assigned(ASignal) then
+      Pending.AbortAlgorithmHandle :=
+        ASignal.AddAbortAlgorithm(AbortPendingFetch, Pending.RequestID);
+
     FPending.Add(Pending);
     Added := True;
     Worker.Start;
@@ -509,6 +521,8 @@ begin
   except
     if Added then
       FPending.Delete(FPending.Count - 1);
+    if Assigned(ASignal) and (Pending.AbortAlgorithmHandle <> 0) then
+      ASignal.RemoveAbortAlgorithm(Pending.AbortAlgorithmHandle);
     if Rooted and (TGarbageCollector.Instance <> nil) then
     begin
       TGarbageCollector.Instance.RemoveTempRoot(APromise);
@@ -525,6 +539,12 @@ end;
 procedure TGocciaFetchManagerImpl.ReleasePendingRoots(
   const APending: TGocciaPendingFetch);
 begin
+  // The pending entry is leaving FPending, so its abort algorithm must go with
+  // it. This is a no-op when the algorithm list was already emptied by the
+  // signal abort that brought us here.
+  if Assigned(APending.Signal) and (APending.AbortAlgorithmHandle <> 0) then
+    APending.Signal.RemoveAbortAlgorithm(APending.AbortAlgorithmHandle);
+
   if TGarbageCollector.Instance = nil then
     Exit;
   TGarbageCollector.Instance.RemoveTempRoot(APending.Promise);
@@ -532,47 +552,80 @@ begin
     TGarbageCollector.Instance.RemoveTempRoot(APending.Signal);
 end;
 
+// WHATWG DOM §3.2 abort algorithm for one in-flight fetch: reject the request's
+// promise and drop its pending entry. Runs during signal abort, before the
+// "abort" event, so a listener already sees the fetch settled.
+procedure TGocciaFetchManagerImpl.AbortPendingFetch(const AToken: Int64);
+var
+  PendingIndex: Integer;
+  Pending: TGocciaPendingFetch;
+begin
+  PendingIndex := FindPendingIndex(Integer(AToken));
+  if PendingIndex < 0 then
+    Exit;
+
+  Pending := FPending[PendingIndex];
+  FPending.Delete(PendingIndex);
+  try
+    Pending.Promise.Reject(Pending.Signal.Reason);
+  finally
+    ReleasePendingRoots(Pending);
+  end;
+end;
+
+// Settles fetches whose signal has aborted. Controller-driven aborts already
+// rejected themselves through their abort algorithm, so what reaches here is
+// the lazily observed case: a timeout signal that expired since the last pump.
 function TGocciaFetchManagerImpl.RejectAbortedFetches: Integer;
 var
-  I: Integer;
-  Pending: TGocciaPendingFetch;
+  I, CountBefore: Integer;
+  Signal: TGocciaAbortSignalValue;
   AbortedSignals: TGocciaAbortSignalList;
+  SignalRoot: TGocciaTempRoot;
 begin
-  Result := 0;
-  // Listeners must not run while this loop walks FPending, so the "abort"
-  // events are collected here and dispatched once the walk is finished. No
-  // script runs in between, so a listener still cannot be registered after the
-  // signal aborted but before its event fires.
+  CountBefore := FPending.Count;
   AbortedSignals := TGocciaAbortSignalList.Create(False);
   try
-    for I := FPending.Count - 1 downto 0 do
+    // Phase 1 flips expired timeouts only. RefreshTimeout deliberately does not
+    // run abort algorithms, because an algorithm mutates FPending and this
+    // walks it.
+    for I := 0 to FPending.Count - 1 do
     begin
-      Pending := FPending[I];
-      if not Assigned(Pending.Signal) or not Pending.Signal.IsAborted then
+      Signal := FPending[I].Signal;
+      if not Assigned(Signal) then
         Continue;
-
-      FPending.Delete(I);
-      Pending.Promise.Reject(Pending.Signal.Reason);
-      // Keep the signal alive across ReleasePendingRoots so its pending
-      // "abort" event can still be dispatched below.
-      if AbortedSignals.IndexOf(Pending.Signal) < 0 then
-      begin
-        AbortedSignals.Add(Pending.Signal);
-        if TGarbageCollector.Instance <> nil then
-          TGarbageCollector.Instance.AddTempRoot(Pending.Signal);
-      end;
-      ReleasePendingRoots(Pending);
-      Inc(Result);
+      Signal.RefreshTimeout;
+      if not Signal.IsAborted then
+        Continue;
+      if AbortedSignals.IndexOf(Signal) < 0 then
+        AbortedSignals.Add(Signal);
     end;
 
+    // Phase 2 runs with no walk in progress, so each signal may now run its
+    // abort algorithms (rejecting and removing its own pending entries) and
+    // then fire its one-shot "abort" event. No script runs between the two, so
+    // a listener still cannot be registered after the signal aborted but
+    // before its event fires.
     for I := 0 to AbortedSignals.Count - 1 do
-      AbortedSignals[I].FlushAbortEvent;
+    begin
+      Signal := AbortedSignals[I];
+      Signal.RunPendingAbortAlgorithms;
+      // Those algorithms dropped the pending entries that were rooting this
+      // signal, so root it for the dispatch itself. AddTempRootIfNeeded is a
+      // no-op when another pending fetch still holds a root on it, which is
+      // why the raw AddTempRoot/RemoveTempRoot pair must not be used here.
+      InitializeTempRoot(SignalRoot);
+      AddTempRootIfNeeded(SignalRoot, Signal);
+      try
+        Signal.FlushAbortEvent;
+      finally
+        RemoveTempRootIfNeeded(SignalRoot);
+      end;
+    end;
   finally
-    if TGarbageCollector.Instance <> nil then
-      for I := 0 to AbortedSignals.Count - 1 do
-        TGarbageCollector.Instance.RemoveTempRoot(AbortedSignals[I]);
     AbortedSignals.Free;
   end;
+  Result := CountBefore - FPending.Count;
 end;
 
 function TGocciaFetchManagerImpl.PopCompletion(

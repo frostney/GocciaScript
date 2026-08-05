@@ -63,6 +63,19 @@ describe("AbortSignal.prototype.onabort", () => {
     expect(order).toEqual(["second"]);
   });
 
+  test("keeps its registration position when reassigned", () => {
+    const controller = new AbortController();
+    const order = [];
+    controller.signal.addEventListener("abort", () => order.push("listener"));
+    controller.signal.onabort = () => order.push("handler1");
+    controller.signal.onabort = () => order.push("handler2");
+
+    controller.abort();
+    // The handler's listener slot was claimed at the first assignment, so it
+    // still runs after the earlier addEventListener listener.
+    expect(order).toEqual(["listener", "handler2"]);
+  });
+
   test("ignores non-callable assignments", () => {
     const controller = new AbortController();
     controller.signal.onabort = 42;

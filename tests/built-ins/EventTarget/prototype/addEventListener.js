@@ -97,6 +97,83 @@ describe("EventTarget.prototype.addEventListener", () => {
     expect(received).toBe(event);
   });
 
+  test("uses the listener object as the handleEvent receiver", () => {
+    const target = new EventTarget();
+    let receiverIsListener = null;
+    const listener = {
+      handleEvent() {
+        receiverIsListener = this === listener;
+      },
+    };
+
+    target.addEventListener("ping", listener);
+    target.dispatchEvent(new Event("ping"));
+    expect(receiverIsListener).toBe(true);
+  });
+
+  test("invokes a listener added during dispatch on the next dispatch", () => {
+    const target = new EventTarget();
+    let inner = 0;
+    let added = false;
+    target.addEventListener("ping", () => {
+      if (added) return;
+      added = true;
+      target.addEventListener("ping", () => {
+        inner += 1;
+      });
+    });
+
+    target.dispatchEvent(new Event("ping"));
+    expect(inner).toBe(0);
+    target.dispatchEvent(new Event("ping"));
+    expect(inner).toBe(1);
+  });
+
+  test("does not invoke a listener removed and re-added during dispatch", () => {
+    const target = new EventTarget();
+    let calls = 0;
+    let mutated = false;
+    const listener = () => {
+      calls += 1;
+    };
+
+    target.addEventListener("ping", () => {
+      if (mutated) return;
+      mutated = true;
+      target.removeEventListener("ping", listener);
+      target.addEventListener("ping", listener);
+    });
+    target.addEventListener("ping", listener);
+
+    // The re-added listener is appended, so it is outside this dispatch.
+    target.dispatchEvent(new Event("ping"));
+    expect(calls).toBe(0);
+    target.dispatchEvent(new Event("ping"));
+    expect(calls).toBe(1);
+  });
+
+  test("reads the options dictionary in capture, once, passive order", () => {
+    const target = new EventTarget();
+    const seen = [];
+    const options = {
+      get capture() {
+        seen.push("capture");
+        return false;
+      },
+      get once() {
+        seen.push("once");
+        return false;
+      },
+      get passive() {
+        seen.push("passive");
+        return false;
+      },
+    };
+
+    target.addEventListener("ping", () => {}, options);
+    expect(seen).toEqual(["capture", "once", "passive"]);
+  });
+
   test("ignores null and undefined callbacks", () => {
     const target = new EventTarget();
     target.addEventListener("ping", null);

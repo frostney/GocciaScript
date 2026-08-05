@@ -43,6 +43,16 @@ describe("Event constructor", () => {
     expect(() => new Event()).toThrow(TypeError);
   });
 
+  test("treats null and undefined init as an absent dictionary", () => {
+    expect(new Event("ping", null).bubbles).toBe(false);
+    expect(new Event("ping", undefined).bubbles).toBe(false);
+  });
+
+  test("rejects a non-object init dictionary", () => {
+    expect(() => new Event("ping", 42)).toThrow(TypeError);
+    expect(() => new Event("ping", "init")).toThrow(TypeError);
+  });
+
   test("requires construction with new", () => {
     expect(() => Event("ping")).toThrow(TypeError);
   });

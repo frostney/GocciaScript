@@ -129,7 +129,12 @@ begin
       Event.Bubbles := Assigned(Member) and Member.ToBooleanLiteral.Value;
       Member := TGocciaObjectValue(Options).GetProperty(PROP_CANCELABLE);
       Event.Cancelable := Assigned(Member) and Member.ToBooleanLiteral.Value;
-    end;
+    end
+    // WebIDL dictionary conversion: null and undefined mean "no members
+    // present", anything else that is not an object is a TypeError.
+    else if not (Options is TGocciaNullLiteralValue) and
+            not (Options is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError('Event init dictionary must be an object');
   end;
 
   Result := Event;

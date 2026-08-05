@@ -93,6 +93,42 @@ describe("EventTarget.prototype.dispatchEvent", () => {
 
   // GocciaScript deviation (ADR 0104): WHATWG reports a listener exception to a
   // global error handler, which this runtime does not have, so it propagates.
+  test("supports nested dispatch of the same event type", () => {
+    const target = new EventTarget();
+    const order = [];
+    let depth = 0;
+    target.addEventListener("ping", () => {
+      depth += 1;
+      order.push("enter" + depth);
+      // A distinct Event object: re-dispatching the in-flight one is an error.
+      if (depth === 1) target.dispatchEvent(new Event("ping"));
+      order.push("exit" + depth);
+      depth -= 1;
+    });
+
+    target.dispatchEvent(new Event("ping"));
+    expect(order).toEqual(["enter1", "enter2", "exit2", "exit1"]);
+  });
+
+  test("still removes a once listener that throws", () => {
+    const target = new EventTarget();
+    let calls = 0;
+    target.addEventListener(
+      "boom",
+      () => {
+        calls += 1;
+        throw new RangeError("listener failed");
+      },
+      { once: true }
+    );
+
+    expect(() => target.dispatchEvent(new Event("boom"))).toThrow(RangeError);
+    expect(calls).toBe(1);
+    // The once listener was removed before it ran, so it is gone despite the throw.
+    target.dispatchEvent(new Event("boom"));
+    expect(calls).toBe(1);
+  });
+
   test("propagates an exception thrown by a listener", () => {
     const target = new EventTarget();
     target.addEventListener("boom", () => {

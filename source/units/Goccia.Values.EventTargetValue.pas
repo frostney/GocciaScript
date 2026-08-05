@@ -391,11 +391,14 @@ function TGocciaEventTargetValue.DispatchEventValue(
 var
   I, InitialCount: Integer;
   Listener: TGocciaEventListener;
-  Rooted: Boolean;
+  EventRoot: TGocciaTempRoot;
 begin
-  Rooted := TGarbageCollector.Instance <> nil;
-  if Rooted then
-    TGarbageCollector.Instance.AddTempRoot(AEvent);
+  // Temp roots are a set, not a refcount: the caller's frame may already have
+  // rooted this same event (the call machinery roots arguments), and a raw
+  // AddTempRoot/RemoveTempRoot pair here would tear that outer root down on
+  // exit. AddTempRootIfNeeded only adds — and only removes — what it owns.
+  InitializeTempRoot(EventRoot);
+  AddTempRootIfNeeded(EventRoot, AEvent);
   try
     AEvent.DispatchFlag := True;
     AEvent.Target := Self;
@@ -430,8 +433,7 @@ begin
     end;
     Result := not (AEvent.Cancelable and AEvent.DefaultPrevented);
   finally
-    if Rooted and (TGarbageCollector.Instance <> nil) then
-      TGarbageCollector.Instance.RemoveTempRoot(AEvent);
+    RemoveTempRootIfNeeded(EventRoot);
   end;
 end;
 
@@ -444,6 +446,7 @@ var
   Target: TGocciaEventTargetValue;
   Callback, Options: TGocciaValue;
   EventType: string;
+  Capture, Once: Boolean;
 begin
   if not (AThisValue is TGocciaEventTargetValue) then
     ThrowTypeError(
@@ -470,9 +473,15 @@ begin
   else
     Options := nil;
 
-  Target.AddListener(EventType, Callback,
-    FlattenBooleanOption(Options, PROP_CAPTURE),
-    FlattenBooleanOption(Options, PROP_ONCE));
+  // WHATWG DOM §2.7 flatten more, in declaration order: capture, then once,
+  // then passive. `passive` has no effect here (nothing this runtime dispatches
+  // has a preventable default action driven by it), but its getter is still
+  // observed so a dictionary with side-effecting accessors behaves the same.
+  Capture := FlattenBooleanOption(Options, PROP_CAPTURE);
+  Once := FlattenBooleanOption(Options, PROP_ONCE);
+  FlattenBooleanOption(Options, PROP_PASSIVE);
+
+  Target.AddListener(EventType, Callback, Capture, Once);
 end;
 
 // WHATWG DOM §2.7 EventTarget.prototype.removeEventListener(type, callback,

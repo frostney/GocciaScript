@@ -87,6 +87,27 @@ describe("AbortSignal abort event", () => {
     expect(onceCalls).toBe(1);
   });
 
+  test("exposes settled abort state to a re-entrant abort listener", () => {
+    const controller = new AbortController();
+    let fired = 0;
+    let abortedDuringDispatch = null;
+    let reasonDuringDispatch = null;
+
+    controller.signal.addEventListener("abort", () => {
+      fired += 1;
+      abortedDuringDispatch = controller.signal.aborted;
+      reasonDuringDispatch = controller.signal.reason;
+      // Re-entrant abort must be a no-op: the signal already aborted.
+      controller.abort("second");
+    });
+
+    controller.abort("first");
+    expect(fired).toBe(1);
+    expect(abortedDuringDispatch).toBe(true);
+    expect(reasonDuringDispatch).toBe("first");
+    expect(controller.signal.reason).toBe("first");
+  });
+
   test("does not fire for other event types", () => {
     const controller = new AbortController();
     let calls = 0;

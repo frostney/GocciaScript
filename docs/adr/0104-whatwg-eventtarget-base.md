@@ -27,11 +27,19 @@ The prototype chain is real rather than simulated: `AbortSignal.prototype`'s
 `[[Prototype]]` is `EventTarget.prototype` and `AbortSignal`'s `[[Prototype]]`
 is `EventTarget`, so `signal instanceof EventTarget` holds and the shared
 listener machinery is inherited rather than duplicated. `AbortSignal` follows
-§ 3.2 signal abort ordering: an already-aborted signal returns early, the abort
-reason is set, fetch's rejection (the only abort algorithm in this runtime) runs
-next, and the `abort` event is fired last. A signal aborts at most once, so the
-`abort` event fires at most once and a listener registered after the abort never
-runs. `onabort` is an event handler IDL attribute (§ 8.1.5.1): its listener is
+§ 3.2 signal abort ordering, and does so through the spec's own mechanism: the
+signal carries an abort-algorithms set that hosts register into. An
+already-aborted signal returns early, the abort reason is set, the registered
+algorithms run and the set is emptied, and the `abort` event is fired last.
+`fetch` is the one host that registers an algorithm today — it adds one per
+in-flight request that rejects that request's promise and drops its pending
+entry — so `controller.abort()` settles the fetch synchronously, before any
+listener observes the abort, rather than deferring the rejection to the next
+completion pump. Registering an algorithm on an already-aborted signal is
+refused, the same rule that governs listeners, and the host removes its
+algorithm when a request completes normally. A signal aborts at most once, so
+the `abort` event fires at most once and a listener registered after the abort
+never runs. `onabort` is an event handler IDL attribute (§ 8.1.5.1): its listener is
 registered when a non-null handler is first assigned and keeps that registration
 position, so assigning `null` clears the handler without reordering the
 remaining listeners.
@@ -39,10 +47,21 @@ remaining listeners.
 Because there is no timer task queue, an `AbortSignal.timeout()` signal aborts
 at the moment the host observes its expiry, and the `abort` event is delivered
 at that same observation point — reading `.aborted` or `.reason` after expiry
-both flips the state and dispatches the event, exactly once. The state flip and
-the dispatch are separated internally so the fetch pump can settle its pending
-list before any listener runs; no script executes between the two, so a listener
-still cannot be registered after a signal aborted but before its event fires.
+both flips the state and dispatches the event, exactly once. Timeout expiry is
+the one case where the state flip is separated from the algorithms and the
+event: it is detected while the fetch pump walks its pending-request list, and
+an abort algorithm mutates that list, so the pump flips the state during the
+walk and then runs the algorithms and fires the event once the walk is over. No
+script executes in that window, so a listener still cannot be registered after a
+signal aborted but before its event fires.
+
+A listener that throws during that pump-driven dispatch propagates out of the
+pumping call (typically an `await` on a fetch). The containment is deliberate
+and bounded: each signal's algorithms and event are processed as a unit, so the
+requests already rejected stay rejected and the signals not yet reached keep
+their pending state and are settled by the next pump. Completions already
+queued by worker threads are not lost either — they remain queued and settle at
+the next pump rather than being discarded.
 
 `EventTarget` and `Event` ship with the same runtime extension as
 `AbortController`, `AbortSignal`, `Headers`, and `Response` rather than as core
