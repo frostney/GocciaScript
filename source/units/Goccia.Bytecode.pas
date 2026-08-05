@@ -163,7 +163,10 @@ const
   //               Number subtraction and less-than-or-equal branches.
   //   v74 -> v75: added a direct scalar-frame self-call opcode for functions
   //               accepted by the closed-world numeric-call proof.
-  GOCCIA_FORMAT_VERSION = 75;
+  //   v75 -> v76: added the VALIDATE_OP_REQUIRE_OBJECT_FOR_MEMBER validation
+  //               mode, which rejects a nullish computed-member base before the
+  //               key is coerced and carries the key register in operand C.
+  GOCCIA_FORMAT_VERSION = 76;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
