@@ -549,6 +549,11 @@ const also = "id-42" as `id-${number}`;
 let pending!: number;
 pending = 5;
 
+// Non-null assertions (postfix !, erased — the chain continues unchanged)
+const nonNull = { v: "x" };
+nonNull.v!.length;
+const first = [{ y: 1 }][0]!.y;
+
 // Generic arrow function expressions
 const identity = <T,>(v: T): T => v;
 const withDefault = <T = string,>(v: T): T => v;
@@ -618,7 +623,7 @@ A leading `<` is ambiguous: it can open a JSX element or a type parameter list. 
 - Definite assignment assertions on class fields (`class C { x!: number }`) — only variable declarations accept `!`.
 - Generic **async** arrow expressions (`async <T,>(v: T) => v`) — the generic form is wired into primary-expression position only, so the `async` prefix is not recognised ahead of it.
 
-A definite assignment assertion is a restricted production: the `!` must appear on the same line as the binding name. A `!` at the start of the next line begins a new expression statement, so ASI code such as `let x` followed by `!fn()` keeps its usual meaning.
+Both `!` forms are restricted productions: the `!` must appear on the same line as the binding name (definite assignment) or its operand (non-null assertion). A `!` at the start of the next line begins a new expression statement, so ASI code such as `let x` followed by `!fn()` keeps its usual meaning. `!=` and `!==` lex as single tokens and are never assertions.
 
 ### Pattern Matching (Stage 1)
 

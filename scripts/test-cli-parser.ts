@@ -815,18 +815,6 @@ console.log("JSX preprocessor termination...");
     line?: number;
   }[] = [
     {
-      desc: "type-parameter arrow after a function type annotation",
-      // `: <T>` looks like a JSX opening tag, so the children scan runs on the
-      // rest of the file and reaches `<T,` — where no attribute branch
-      // consumes the ','.
-      source: [
-        "const g: <T>(x: T) => T = (x) => x;",
-        "const w = <T,>(v: T): T => v;",
-        "",
-      ].join("\n"),
-      messageIncludes: "attribute list",
-    },
-    {
       desc: "unterminated JSX opening tag",
       source: 'const element = <div className="a"\n',
       messageIncludes: "Unterminated opening tag",
@@ -888,6 +876,61 @@ console.log("JSX preprocessor termination...");
       messageIncludes,
       line,
     });
+
+  // The attribute-list stall is extension-sensitive, so it is pinned to real
+  // files instead of extensionless stdin. `: <T>` looks like a JSX opening tag,
+  // so the children scan runs on the rest of the file and reaches `<T,`, where
+  // no attribute branch consumes the ','.
+  const angleBracketSource = [
+    "const g: <T>(x: T) => T = (x) => x;",
+    "const w = <T,>(v: T): T => v;",
+    "console.log(g('a') + w('b'));",
+    "",
+  ].join("\n");
+
+  const tmp = mkdtemp("goccia-parser-jsx-");
+  try {
+    // A JSX-processed extension still runs the transformer, so the
+    // zero-progress guard must still turn the stall into a clean error rather
+    // than spinning.
+    const jsxFile = join(tmp, "stall.jsx");
+    writeFileSync(jsxFile, angleBracketSource);
+
+    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+      const label = modeArgs.length
+        ? "attribute list stall in .jsx (bytecode)"
+        : "attribute list stall in .jsx";
+      const res = runLoaderJson("", [...modeArgs, jsxFile], {
+        timeout: JSX_SCAN_TIMEOUT_MS,
+      });
+      if (res.exitCode !== 1)
+        throw new Error(`${label}: should exit 1, got ${res.exitCode}`);
+      if (res.json.ok !== false || res.json.error?.type !== "SyntaxError")
+        throw new Error(`${label}: expected SyntaxError, got ${JSON.stringify(res.json.error)}`);
+      if (!String(res.json.error?.message ?? "").includes("attribute list"))
+        throw new Error(`${label}: expected an attribute-list stall, got ${res.json.error?.message}`);
+    }
+
+    // The same source in a '.ts' file is never handed to the transformer, so
+    // '<' stays type syntax and the annotations parse and run.
+    const tsFile = join(tmp, "annotations.ts");
+    writeFileSync(tsFile, angleBracketSource);
+
+    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+      const label = modeArgs.length
+        ? "angle-bracket type syntax in .ts (bytecode)"
+        : "angle-bracket type syntax in .ts";
+      const res = runLoaderJson("", [...modeArgs, tsFile], {
+        timeout: JSX_SCAN_TIMEOUT_MS,
+      });
+      if (res.exitCode !== 0)
+        throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+      if (normalizeLineEndings(res.json.output) !== "ab\n")
+        throw new Error(`${label}: expected "ab", got ${JSON.stringify(res.json.output)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
 }
 
 // -- Definite assignment assertion rules ----------------------------------------

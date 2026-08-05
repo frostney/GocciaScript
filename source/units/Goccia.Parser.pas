@@ -2159,6 +2159,24 @@ begin
         begin
           Result := ParseMemberAccessSegment(Result, False, True, Line, Column);
         end;
+      gttNot:
+        begin
+          // TypeScript non-null assertion (postfix '!'): `a.b!.c`, `f()!.x`,
+          // `arr[0]!.y`, `a?.b!.c`, `x!++`. Types-as-comments, so it is erased
+          // — Result is left untouched and the chain continues, which keeps
+          // optional-chain short-circuiting and assignment targets intact.
+          //
+          // Restricted production: no LineTerminator before the '!', matching
+          // TypeScript. Without this, `const a = b` / newline / `!fn()` under
+          // ASI would absorb the next statement's leading '!'.
+          //
+          // '!=' and '!==' lex as single tokens (gttLooseNotEqual /
+          // gttNotEqual), so a comparison never reaches this branch.
+          if Peek.Line <> Previous.Line then
+            Break;
+
+          Advance;
+        end;
       gttIncrement, gttDecrement:
         begin
           if Peek.Line <> Previous.Line then
