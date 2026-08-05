@@ -170,7 +170,7 @@ printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
 # Load an explicit import map
 ./build/GocciaScriptLoader app.js --import-map=imports.json
 
-# Add one-off import-map-style aliases from the CLI
+# Add one-off import-map-style aliases from the CLI (relative targets use the invocation directory)
 ./build/GocciaScriptLoader app.js --alias @/=./src/ --alias config=./config/default.js
 
 # The same module-resolution and virtual-module flags are available on the shared CLI hosts.

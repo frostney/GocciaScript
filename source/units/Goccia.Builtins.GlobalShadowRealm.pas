@@ -225,6 +225,8 @@ begin
   FEngine.ModuleLoader.SetContentProvider(AParentEngine.ContentProvider, False);
   FEngine.ModuleLoader.CopyVirtualModulesFrom(AParentEngine.ModuleLoader);
   FEngine.ModuleLoader.Preprocessors := AParentEngine.Preprocessors;
+  FEngine.ModuleLoader.Resolver.BaseDirectory :=
+    AParentEngine.ModuleLoader.Resolver.BaseDirectory;
   for AliasPair in AParentEngine.ModuleLoader.Resolver.Aliases do
     FEngine.ModuleLoader.Resolver.AddAlias(AliasPair.Key, AliasPair.Value);
   // SetDefaultGlobalBindings installs `eval` on the realm global. GocciaScript

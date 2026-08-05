@@ -7,12 +7,14 @@ interface
 uses
   Classes,
 
+  Goccia.Builtins.GlobalAbort,
   Goccia.Builtins.GlobalFetch,
   Goccia.Runtime;
 
 type
   TGocciaFetchRuntimeExtension = class(TGocciaRuntimeExtension)
   private
+    FBuiltinAbort: TGocciaGlobalAbort;
     FBuiltinFetch: TGocciaGlobalFetch;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
@@ -55,6 +57,10 @@ var
 begin
   inherited Attach(ARuntime);
   TGocciaFetchManager.Initialize;
+  FBuiltinAbort := TGocciaGlobalAbort.Create('Abort',
+    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError);
+  Runtime.RegisterRuntimeGlobalName(CONSTRUCTOR_ABORT_CONTROLLER);
+  Runtime.RegisterRuntimeGlobalName(CONSTRUCTOR_ABORT_SIGNAL);
   FBuiltinFetch := TGocciaGlobalFetch.Create('Fetch',
     Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
     Runtime.Engine.EmitCapabilityAudit);
@@ -91,6 +97,8 @@ procedure TGocciaFetchRuntimeExtension.Detach;
 begin
   FBuiltinFetch.Free;
   FBuiltinFetch := nil;
+  FBuiltinAbort.Free;
+  FBuiltinAbort := nil;
   TGocciaFetchManager.Shutdown;
   inherited;
 end;

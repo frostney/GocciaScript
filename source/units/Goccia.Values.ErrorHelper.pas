@@ -12,6 +12,10 @@ uses
   ASkipTop controls how many frames to skip from the top of the call stack. }
 function CreateErrorObject(const AName, AMessage: string; const ASkipTop: Integer = 0): TGocciaObjectValue;
 
+{ Creates a DOMException object with the standard legacy code for AName. }
+function CreateDOMExceptionObject(const AName, AMessage: string;
+  const ASkipTop: Integer = 0): TGocciaObjectValue;
+
 { Raises a TGocciaThrowValue with a TypeError }
 procedure ThrowTypeError(const AMessage: string); overload;
 procedure ThrowTypeError(const AMessage, ASuggestion: string); overload;
@@ -53,7 +57,22 @@ uses
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Values.Error,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.Primitives;
+
+function DOMExceptionLegacyCode(const AName: string): Integer;
+begin
+  if AName = DATA_CLONE_ERROR_NAME then
+    Result := 25
+  else if AName = INVALID_CHARACTER_ERROR_NAME then
+    Result := 5
+  else if AName = ABORT_ERROR_NAME then
+    Result := 20
+  else if AName = TIMEOUT_ERROR_NAME then
+    Result := 23
+  else
+    Result := 0;
+end;
 
 function GetErrorPrototype(const AName: string): TGocciaObjectValue;
 begin
@@ -77,6 +96,22 @@ begin
     Result := GetErrorProto
   else
     Result := GetErrorProto;
+end;
+
+function CreateDOMExceptionObject(const AName, AMessage: string;
+  const ASkipTop: Integer): TGocciaObjectValue;
+begin
+  Result := CreateErrorObject(AName, AMessage, ASkipTop);
+  Result.HasErrorData := False;
+  if GetDOMExceptionProto <> nil then
+    Result.Prototype := GetDOMExceptionProto;
+  if Result.ErrorStack <> '' then
+    Result.DefineProperty(PROP_STACK,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create(Result.ErrorStack),
+        [pfConfigurable, pfWritable]));
+  Result.AssignProperty(PROP_CODE,
+    TGocciaNumberLiteralValue.Create(DOMExceptionLegacyCode(AName)));
 end;
 
 // ES2026 §10.4.4.4 [[ErrorData]]
@@ -174,11 +209,7 @@ procedure ThrowDataCloneError(const AMessage: string);
 var
   ErrorObj: TGocciaObjectValue;
 begin
-  ErrorObj := CreateErrorObject(DATA_CLONE_ERROR_NAME, AMessage);
-  ErrorObj.HasErrorData := False;
-  ErrorObj.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(25));
-  if (GetDOMExceptionProto <> nil) then
-    ErrorObj.Prototype := GetDOMExceptionProto;
+  ErrorObj := CreateDOMExceptionObject(DATA_CLONE_ERROR_NAME, AMessage);
   raise TGocciaThrowValue.Create(ErrorObj);
 end;
 
@@ -186,11 +217,7 @@ procedure ThrowDataCloneError(const AMessage, ASuggestion: string);
 var
   ErrorObj: TGocciaObjectValue;
 begin
-  ErrorObj := CreateErrorObject(DATA_CLONE_ERROR_NAME, AMessage);
-  ErrorObj.HasErrorData := False;
-  ErrorObj.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(25));
-  if (GetDOMExceptionProto <> nil) then
-    ErrorObj.Prototype := GetDOMExceptionProto;
+  ErrorObj := CreateDOMExceptionObject(DATA_CLONE_ERROR_NAME, AMessage);
   raise TGocciaThrowValue.Create(ErrorObj, ASuggestion);
 end;
 
@@ -198,11 +225,7 @@ procedure ThrowInvalidCharacterError(const AMessage: string);
 var
   ErrorObj: TGocciaObjectValue;
 begin
-  ErrorObj := CreateErrorObject(INVALID_CHARACTER_ERROR_NAME, AMessage);
-  ErrorObj.HasErrorData := False;
-  ErrorObj.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(5));
-  if (GetDOMExceptionProto <> nil) then
-    ErrorObj.Prototype := GetDOMExceptionProto;
+  ErrorObj := CreateDOMExceptionObject(INVALID_CHARACTER_ERROR_NAME, AMessage);
   raise TGocciaThrowValue.Create(ErrorObj);
 end;
 

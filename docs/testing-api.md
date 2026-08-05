@@ -106,6 +106,10 @@ fn.mock.lastCall;   // ["a", "b"]
 // Configure behavior
 fn.mockReturnValue(42);              // All calls return 42
 fn.mockReturnValueOnce(1);           // Next call returns 1
+fn.mockResolvedValue(42);            // All calls return fresh fulfilled promises
+fn.mockResolvedValueOnce(1);         // Next call returns a fulfilled promise
+fn.mockRejectedValue(error);         // All calls return fresh rejected promises
+fn.mockRejectedValueOnce(error);     // Next call returns a rejected promise
 fn.mockImplementation((x) => x + 1); // Set implementation
 fn.mockImplementationOnce(() => 99);  // One-shot implementation
 
@@ -123,11 +127,10 @@ fn.getMockName();  // "myFn"
 
 **Priority order** when a mock is called:
 
-1. One-shot implementation (`mockImplementationOnce`) --- FIFO
-2. One-shot return value (`mockReturnValueOnce`) --- FIFO
-3. Permanent implementation (`mockImplementation`)
-4. Permanent return value (`mockReturnValue`)
-5. Return `undefined`
+1. One-shot queue (`mockImplementationOnce`, `mockReturnValueOnce`, `mockResolvedValueOnce`, or `mockRejectedValueOnce`) --- shared FIFO
+2. Permanent implementation (`mockImplementation`, `mockResolvedValue`, or `mockRejectedValue`)
+3. Permanent return value (`mockReturnValue`)
+4. Return `undefined`
 
 #### `spyOn(object, methodName)`
 
@@ -154,6 +157,7 @@ obj.greet("test");   // "hello test"
 ```javascript
 // Call tracking
 expect(fn).toHaveBeenCalled();
+expect(fn).toHaveBeenCalledOnce();
 expect(fn).toHaveBeenCalledTimes(3);
 expect(fn).toHaveBeenCalledWith(1, 2);        // Any call matched
 expect(fn).toHaveBeenLastCalledWith("last");   // Last call matched

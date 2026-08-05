@@ -2127,6 +2127,80 @@ console.log("Loader: ShadowRealm.importValue inherits the host module aliases...
   }
 }
 
+console.log("Loader: relative aliases use the invocation or config directory...");
+{
+  const tmp = makeTmp();
+  try {
+    const loader = resolve(LOADER);
+    const project = join(tmp, "project");
+    mkdirSync(join(project, "api-tests"), { recursive: true });
+    mkdirSync(join(project, "src"), { recursive: true });
+    writeFileSync(
+      join(project, "api-tests", "alias.test.js"),
+      [
+        'import { value } from "@/value";',
+        "console.log(value);",
+        'new ShadowRealm().importValue("@/value", "value")',
+        '  .then((childValue) => console.log("child-" + childValue));',
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(join(project, "src", "value.js"), 'export const value = "project-root";\n');
+
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const cliProc = Bun.spawnSync(
+        [
+          loader,
+          "api-tests/alias.test.js",
+          "--source-type=module",
+          `--mode=${mode}`,
+          "--unsafe-shadowrealm",
+          "--alias",
+          "@/=./src/",
+        ],
+        { cwd: project, stdout: "pipe", stderr: "pipe" },
+      );
+      if (cliProc.exitCode !== 0 ||
+          !containsLine(`\n${cliProc.stdout.toString()}`, "project-root") ||
+          !containsLine(`\n${cliProc.stdout.toString()}`, "child-project-root"))
+        throw new Error(
+          `Loader ${mode} relative CLI alias should resolve from the invocation directory: ` +
+          `${cliProc.stdout}${cliProc.stderr}`,
+        );
+    }
+
+    const baseConfigDirectory = join(tmp, "base-config");
+    mkdirSync(baseConfigDirectory, { recursive: true });
+    writeFileSync(
+      join(baseConfigDirectory, "goccia.json"),
+      JSON.stringify({ alias: ["@/=./src/"] }),
+    );
+    writeFileSync(
+      join(project, "goccia.json"),
+      JSON.stringify({
+        extends: "../base-config/goccia.json",
+        "source-type": "module",
+        "unsafe-shadowrealm": true,
+      }),
+    );
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const configProc = Bun.spawnSync(
+        [loader, "project/api-tests/alias.test.js", `--mode=${mode}`],
+        { cwd: tmp, stdout: "pipe", stderr: "pipe" },
+      );
+      if (configProc.exitCode !== 0 ||
+          !containsLine(`\n${configProc.stdout.toString()}`, "project-root") ||
+          !containsLine(`\n${configProc.stdout.toString()}`, "child-project-root"))
+        throw new Error(
+          `Loader ${mode} inherited relative config alias should resolve from ` +
+          `the active config directory: ${configProc.stdout}${configProc.stderr}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Loader: --globals file...");
 {
   const tmp = makeTmp();
@@ -2250,6 +2324,174 @@ console.log("Loader: coverage --output=json not corrupted...");
     const jsonCov = readFileSync(jsonCovPath, "utf-8");
     if (!jsonCov.includes('"path":')) throw new Error('JSON coverage should contain "path":');
 
+    console.log("Loader: function coverage (interpreted + bytecode)...");
+    const functionSourcePath = join(tmp, "function-coverage.js");
+    writeFileSync(
+      functionSourcePath,
+      [
+        "const called = () => 1;",
+        "const neverCalled = () => 2;",
+        "called();",
+        "",
+      ].join("\n"),
+    );
+    for (const modeArgs of [[], ["--mode=bytecode"]]) {
+      const modeName = modeArgs.length === 0 ? "interpreted" : "bytecode";
+      const functionLcovPath = join(tmp, `function-${modeName}.lcov`);
+      await $`${LOADER} ${modeArgs} --coverage --coverage-format=lcov --coverage-output=${functionLcovPath} ${functionSourcePath}`.quiet();
+      const functionLcov = readFileSync(functionLcovPath, "utf-8");
+      if (!functionLcov.includes("FN:1,called")) throw new Error(`${modeName} LCOV should define called`);
+      if (!functionLcov.includes("FN:2,neverCalled")) throw new Error(`${modeName} LCOV should define neverCalled`);
+      if (!functionLcov.includes("FNDA:1,called")) throw new Error(`${modeName} LCOV should count called once`);
+      if (!functionLcov.includes("FNDA:0,neverCalled")) throw new Error(`${modeName} LCOV should retain the uncalled function`);
+      if (!functionLcov.includes("FNF:") || !functionLcov.includes("FNH:")) {
+        throw new Error(`${modeName} LCOV should report function totals`);
+      }
+      const functionNames = [...functionLcov.matchAll(/^FNDA:\d+,(.*)$/gm)]
+        .map((match) => match[1])
+        .sort();
+      if (functionNames.join(",") !== "called,neverCalled") {
+        throw new Error(`${modeName} LCOV should contain only user functions, got ${functionNames.join(", ")}`);
+      }
+    }
+    const functionJsonPath = join(tmp, "function-coverage.json");
+    await $`${LOADER} --coverage --coverage-format=json --coverage-output=${functionJsonPath} ${functionSourcePath}`.quiet();
+    const functionJson = JSON.parse(readFileSync(functionJsonPath, "utf-8"));
+    const functionFile = functionJson[functionSourcePath];
+    if (!functionFile) throw new Error("JSON coverage should contain the source file");
+    const functionIdsByName = Object.fromEntries(
+      Object.entries(functionFile.fnMap).map(([id, entry]: [string, any]) => [entry.name, id]),
+    );
+    if (functionFile.f[functionIdsByName.called] !== 1) {
+      throw new Error("JSON f should count called once");
+    }
+    if (functionFile.f[functionIdsByName.neverCalled] !== 0) {
+      throw new Error("JSON f should retain neverCalled with zero hits");
+    }
+
+    console.log("Loader: generator function coverage (interpreted + bytecode)...");
+    const generatorSourcePath = join(tmp, "generator-function-coverage.js");
+    writeFileSync(
+      generatorSourcePath,
+      [
+        "function* generatorFunction() { yield 1; }",
+        "function* generatorWithDefault(value = 2) { yield value; }",
+        "function* nestedGenerator() {",
+        "  function innerDeclaration() { return 6; }",
+        "  yield 0;",
+        "  const innerArrow = () => 7;",
+        "  innerDeclaration();",
+        "  innerArrow();",
+        "  yield 1;",
+        "}",
+        "async function* asyncGeneratorFunction() { yield 3; }",
+        "const holder = {",
+        "  *generatorMethod() { yield 4; },",
+        "  async *asyncGeneratorMethod() { yield 5; },",
+        "};",
+        "const generator = generatorFunction();",
+        "generator.next();",
+        "generator.next();",
+        "const defaultGenerator = generatorWithDefault();",
+        "defaultGenerator.next();",
+        "const nested = nestedGenerator();",
+        "nested.next();",
+        "nested.next();",
+        "nested.next();",
+        "asyncGeneratorFunction();",
+        "holder.generatorMethod();",
+        "holder.asyncGeneratorMethod();",
+        "",
+      ].join("\n"),
+    );
+    for (const modeArgs of [[], ["--mode=bytecode"]]) {
+      const modeName = modeArgs.length === 0 ? "interpreted" : "bytecode";
+      const generatorLcovPath = join(tmp, `generator-function-${modeName}.lcov`);
+      await $`${LOADER} ${modeArgs} --compat-function --coverage --coverage-format=lcov --coverage-output=${generatorLcovPath} ${generatorSourcePath}`.quiet();
+      const generatorLcov = readFileSync(generatorLcovPath, "utf-8");
+      for (const name of [
+        "generatorFunction",
+        "generatorWithDefault",
+        "nestedGenerator",
+        "innerDeclaration",
+        "innerArrow",
+        "asyncGeneratorFunction",
+        "generatorMethod",
+        "asyncGeneratorMethod",
+      ]) {
+        if (!generatorLcov.includes(`FNDA:1,${name}`)) {
+          throw new Error(`${modeName} LCOV should count ${name} once`);
+        }
+      }
+    }
+
+    console.log("Loader: uncalled declarations keep names (interpreted + bytecode)...");
+    const declarationSourcePath = join(tmp, "function-declaration-coverage.js");
+    writeFileSync(
+      declarationSourcePath,
+      [
+        "function ordinaryNeverCalled() { return 1; }",
+        "function* generatorNeverCalled() { yield 2; }",
+        "",
+      ].join("\n"),
+    );
+    for (const modeArgs of [[], ["--mode=bytecode"]]) {
+      const modeName = modeArgs.length === 0 ? "interpreted" : "bytecode";
+      const declarationLcovPath = join(tmp, `function-declaration-${modeName}.lcov`);
+      await $`${LOADER} ${modeArgs} --compat-function --coverage --coverage-format=lcov --coverage-output=${declarationLcovPath} ${declarationSourcePath}`.quiet();
+      const declarationLcov = readFileSync(declarationLcovPath, "utf-8");
+      for (const name of ["ordinaryNeverCalled", "generatorNeverCalled"]) {
+        if (!declarationLcov.includes(`FNDA:0,${name}`)) {
+          throw new Error(`${modeName} LCOV should retain the name of ${name}`);
+        }
+      }
+    }
+
+    console.log("Loader: LCOV function names cannot inject tracefile records...");
+    const escapedFunctionNameSourcePath = join(tmp, "escaped-function-name.js");
+    writeFileSync(
+      escapedFunctionNameSourcePath,
+      [
+        'const newlineKey = "line" + String.fromCharCode(13, 10) + "break";',
+        'const literalKey = "line\\\\r\\\\nbreak";',
+        "const holder = {",
+        "  [newlineKey]() { return 1; },",
+        "  [literalKey]() { return 2; },",
+        "};",
+        "holder[newlineKey]();",
+        "holder[literalKey]();",
+        "",
+      ].join("\n"),
+    );
+    const escapedFunctionNameLcovPath = join(tmp, "escaped-function-name.lcov");
+    await $`${LOADER} --coverage --coverage-format=lcov --coverage-output=${escapedFunctionNameLcovPath} ${escapedFunctionNameSourcePath}`.quiet();
+    const escapedFunctionNameLcov = readFileSync(escapedFunctionNameLcovPath, "utf-8");
+    const escapedFunctionRecords = escapedFunctionNameLcov.split(/\r?\n/);
+    if (!escapedFunctionRecords.some((line) => /^FN:\d+,line\\r\\nbreak$/.test(line)) ||
+        !escapedFunctionRecords.includes("FNDA:1,line\\r\\nbreak")) {
+      throw new Error("LCOV should escape carriage returns and newlines in function names");
+    }
+    if (!escapedFunctionRecords.some((line) => /^FN:\d+,line\\\\r\\\\nbreak$/.test(line)) ||
+        !escapedFunctionRecords.includes("FNDA:1,line\\\\r\\\\nbreak")) {
+      throw new Error("LCOV should preserve literal backslashes in function names");
+    }
+    if (escapedFunctionRecords.includes("break") ||
+        escapedFunctionRecords.filter((line) => line.startsWith("FNDA:1,line")).length !== 2) {
+      throw new Error("LCOV function names must not collide or create extra tracefile records");
+    }
+
+    console.log("TestRunner: parallel function coverage merges workers...");
+    const workerOnePath = join(tmp, "function-worker-one.js");
+    const workerTwoPath = join(tmp, "function-worker-two.js");
+    writeFileSync(workerOnePath, 'test("worker one", () => { const workerOne = () => 1; expect(workerOne()).toBe(1); });\n');
+    writeFileSync(workerTwoPath, 'test("worker two", () => { const workerTwo = () => 2; expect(workerTwo()).toBe(2); });\n');
+    const workerLcovPath = join(tmp, "function-workers.lcov");
+    await $`${TESTRUNNER} ${workerOnePath} ${workerTwoPath} --jobs=2 --no-progress --coverage --coverage-format=lcov --coverage-output=${workerLcovPath}`.quiet();
+    const workerLcov = readFileSync(workerLcovPath, "utf-8");
+    if (!workerLcov.includes("FNDA:1,workerOne") || !workerLcov.includes("FNDA:1,workerTwo")) {
+      throw new Error("Parallel LCOV should merge function hits from both workers");
+    }
+
     console.log("Loader: coverage order-independent flags...");
     const orderPath = join(tmp, "order.lcov");
     await $`echo 'const x = 1 + 2; x;' | ${LOADER} --coverage-output=${orderPath} --coverage-format=lcov`.quiet();
@@ -2276,6 +2518,40 @@ console.log("Loader: coverage --output=json not corrupted...");
     if (!branchJson.includes('"branchMap":')) throw new Error('Branch JSON should contain "branchMap":');
     if (!branchJson.includes('"b":')) throw new Error('Branch JSON should contain "b":');
 
+    console.log("TestRunner: parallel coverage excludes internal warm-up sources...");
+    const parallelFirst = join(tmp, "parallel-coverage-a.js");
+    const parallelSecond = join(tmp, "parallel-coverage-b.js");
+    writeFileSync(parallelFirst, 'test("a", () => { expect(1).toBe(1); });\n');
+    writeFileSync(parallelSecond, 'test("b", () => { expect(2).toBe(2); });\n');
+    for (const mode of ["interpreted", "bytecode"]) {
+      const parallelJsonPath = join(tmp, `parallel-${mode}.json`);
+      const modeArgs = mode === "bytecode" ? ["--mode=bytecode"] : [];
+      const proc = Bun.spawnSync(
+        [
+          resolve(TESTRUNNER),
+          parallelFirst,
+          parallelSecond,
+          "--no-progress",
+          "--no-results",
+          "--jobs=2",
+          "--coverage",
+          "--coverage-format=json",
+          `--coverage-output=${parallelJsonPath}`,
+          ...modeArgs,
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      if (proc.exitCode !== 0)
+        throw new Error(`Parallel ${mode} coverage exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const parallelCoverage = JSON.parse(readFileSync(parallelJsonPath, "utf-8"));
+      if (Object.hasOwn(parallelCoverage, "<thread-init>"))
+        throw new Error(`Parallel ${mode} coverage should exclude internal <thread-init> source`);
+      for (const file of [parallelFirst, parallelSecond]) {
+        if (!Object.hasOwn(parallelCoverage, file))
+          throw new Error(`Parallel ${mode} coverage should retain user source ${file}`);
+      }
+    }
+
     console.log("Loader: JSX coverage source-map translation...");
     const jsxPath = join(tmp, "coverage-test.jsx");
     writeFileSync(
@@ -2294,7 +2570,9 @@ console.log("Loader: coverage --output=json not corrupted...");
 
     const jsxLcovPath = join(tmp, "jsx-coverage.lcov");
     await $`${LOADER} --coverage --coverage-format=lcov --coverage-output=${jsxLcovPath} ${jsxPath}`.quiet();
-    if (!readFileSync(jsxLcovPath, "utf-8").includes("BRDA:3,")) throw new Error("JSX LCOV should have branch on line 3");
+    const jsxLcov = readFileSync(jsxLcovPath, "utf-8");
+    if (!jsxLcov.includes("BRDA:3,")) throw new Error("JSX LCOV should have branch on line 3");
+    if (!jsxLcov.includes("FN:2,Greet")) throw new Error("JSX LCOV should map Greet to original line 2");
 
     const jsxJsonPath = join(tmp, "jsx-coverage.json");
     await $`${LOADER} --coverage --coverage-format=json --coverage-output=${jsxJsonPath} ${jsxPath}`.quiet();

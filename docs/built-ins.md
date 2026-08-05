@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-- **Core vs runtime registration** — `TGocciaEngine` always registers core language built-ins (Math, Object, Array, String, Number, RegExp, JSON, Symbol, Set, Map, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, TypedArrays, Proxy, Reflect, Iterator, DisposableStack, etc.); `Goccia.Runtime` provides optional runtime globals (Console, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response) and import-only `goccia:` runtime modules
+- **Core vs runtime registration** — `TGocciaEngine` always registers core language built-ins (Math, Object, Array, String, Number, RegExp, JSON, Symbol, Set, Map, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, TypedArrays, Proxy, Reflect, Iterator, DisposableStack, etc.); `Goccia.Runtime` provides optional runtime globals (Console, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, AbortController/AbortSignal) and import-only `goccia:` runtime modules
 - **Runtime opt-ins** — Testing, benchmarking, FFI, data-format APIs, and SemVer extend the runtime surface through concrete runtime extension classes
 - **Goccia runtime modules** — Non-standard data-format APIs and SemVer are named-export-only modules (`goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, `goccia:semver`); use namespace imports for `CSV.parse(...)`-style call sites
 - **Sandbox modules** — `GocciaSandboxRunner` installs import-only `"fs"` and `"goccia"` modules for sandbox filesystem and shell/nested-execution access; they are not globals
@@ -20,7 +20,7 @@ GocciaScript provides a set of built-in global objects that mirror JavaScript's 
 
 Core language built-ins (Math, Object, Array, Number, JSON, Symbol, Set, Map, WeakSet, WeakMap, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, Proxy, Reflect, etc.) are always registered unconditionally by the engine.
 
-Runtime globals (Console, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response) are registered by the loader runtime profile and runtime extension classes under `source/units/Goccia.RuntimeExtensions.*.pas`. The same runtime profile also installs named-export-only Goccia modules for non-standard data-format APIs and SemVer: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. CLI hosts such as `GocciaScriptLoader` and `GocciaREPL` call `ApplyLoaderRuntimeProfile`; `GocciaTestRunner` applies the loader runtime profile plus `TGocciaTestingLibraryRuntimeExtension`; `GocciaBenchmarkRunner` applies the loader runtime profile plus `TGocciaBenchmarkRuntimeExtension`. `GocciaScriptLoaderBare` does not attach a runtime and exposes only a CLI-local `print(...args)` helper by default; the test262 conformance runner may opt into private test262 host capabilities with `--test262-host`.
+Runtime globals (Console, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, AbortController/AbortSignal) are registered by the loader runtime profile and runtime extension classes under `source/units/Goccia.RuntimeExtensions.*.pas`. The same runtime profile also installs named-export-only Goccia modules for non-standard data-format APIs and SemVer: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. CLI hosts such as `GocciaScriptLoader` and `GocciaREPL` call `ApplyLoaderRuntimeProfile`; `GocciaTestRunner` applies the loader runtime profile plus `TGocciaTestingLibraryRuntimeExtension`; `GocciaBenchmarkRunner` applies the loader runtime profile plus `TGocciaBenchmarkRuntimeExtension`. `GocciaScriptLoaderBare` does not attach a runtime and exposes only a CLI-local `print(...args)` helper by default; the test262 conformance runner may opt into private test262 host capabilities with `--test262-host`.
 
 `GocciaSandboxRunner` applies the loader runtime profile and then installs `TGocciaSandboxRuntimeExtension`. That extension registers sandbox capabilities as import-only runtime modules named `"fs"` and `"goccia"`; it does not create global `fs`, `$`, or `runScript` bindings.
 
@@ -924,73 +924,9 @@ Implements the [WHATWG URLSearchParams](https://developer.mozilla.org/en-US/docs
 
 **GocciaScript differences:** None -- full standard compliance.
 
-### fetch (`Goccia.Builtins.GlobalFetch.pas`)
+### Fetch runtime APIs
 
-Implements a subset of the [WHATWG Fetch Standard](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API). Only `GET` and `HEAD` methods are supported; other methods throw `TypeError`.
-
-| Function / Property | Description |
-|---------------------|-------------|
-| `fetch(url, options?)` | Perform an HTTP request, returns `Promise<Response>` |
-
-The `options` object supports `method` (`"GET"` or `"HEAD"`) and `headers` (plain object or `Headers` instance). Redirects (301/302/303/307/308) are followed automatically up to 20 hops. HTTPS uses the platform TLS backend: SecureTransport on macOS, SChannel on Windows, and OpenSSL on Linux. macOS and Windows builds do not require OpenSSL libraries for HTTPS; Linux supports OpenSSL 3 runtime-only installs as well as compatible older OpenSSL library names.
-
-**Allowed hosts** — `fetch` requires an explicit allowlist of hostnames. Without `--allowed-host` or an `"allowed-hosts"` config key in `goccia.json`, any call to `fetch` throws `TypeError`. Add one or more allowed hosts via CLI or config:
-
-```bash
-./build/GocciaScriptLoader example.js --allowed-host=api.example.com --allowed-host=cdn.example.com
-```
-
-```json
-{ "allowed-hosts": ["api.example.com", "cdn.example.com"] }
-```
-
-Host matching is case-insensitive and ignores port, path, and userinfo. Only the hostname portion of the URL is checked.
-
-**GocciaScript differences:** GocciaScript implements a focused subset of `fetch`:
-
-- **HTTP methods:** only `GET` and `HEAD` are supported.
-- **Absent features:** no `Request` object, `AbortSignal`, streaming body, or CORS.
-- **Runtime behavior:** requests run on fetch-specific background workers and settle their Promise on the owning runtime thread. `await fetch(...)` still synchronously waits by pumping fetch completions.
-- **Concurrency cap:** each runtime caps active fetch workers at 16; additional calls reject their returned Promise with `TypeError` until a worker finishes.
-- **Configuration:** requires `--allowed-host` or an `"allowed-hosts"` config key in `goccia.json`.
-
-### Headers (`Goccia.Values.HeadersValue.pas`)
-
-Implements the [WHATWG Fetch Headers](https://developer.mozilla.org/en-US/docs/Web/API/Headers) interface.
-
-| Method / Property | Description |
-|-------------------|-------------|
-| `new Headers()` | Create empty headers |
-| `new Headers(object)` | Create from plain object or another `Headers` |
-| `headers.get(name)` | Get header value (case-insensitive), or `null` |
-| `headers.has(name)` | Check if header exists (case-insensitive) |
-| `headers.forEach(callback)` | Iterate entries as `callback(value, name, headers)` |
-| `headers.entries()` | Iterator of `[name, value]` pairs |
-| `headers.keys()` | Iterator of header names |
-| `headers.values()` | Iterator of header values |
-| `headers[Symbol.iterator]()` | Same as `entries()` |
-
-**GocciaScript differences:** Read-only on Response headers. No `append`, `set`, or `delete` mutations.
-
-### Response (`Goccia.Values.ResponseValue.pas`)
-
-Implements the [WHATWG Fetch Response](https://developer.mozilla.org/en-US/docs/Web/API/Response) interface.
-
-| Method / Property | Description |
-|-------------------|-------------|
-| `response.status` | HTTP status code (e.g. `200`) |
-| `response.statusText` | HTTP status text (e.g. `"OK"`) |
-| `response.ok` | `true` if status is 200–299 |
-| `response.url` | Final URL after redirects |
-| `response.headers` | `Headers` object |
-| `response.type` | Always `"basic"` |
-| `response.redirected` | `true` if any redirect was followed |
-| `response.bodyUsed` | `true` after a body method is called |
-| `response.text()` | Returns `Promise<string>` (UTF-8 decoded body) |
-| `response.json()` | Returns `Promise<any>` (parsed JSON body) |
-| `response.arrayBuffer()` | Returns `Promise<ArrayBuffer>` (raw bytes) |
-
-**GocciaScript differences:** No `Response.body` (ReadableStream), `blob()`, `formData()`, or `clone()`. Body is fully buffered. Each body method can only be called once.
+The focused WHATWG `fetch`, `Headers`, `Response`, `AbortController`, and `AbortSignal` surface is documented in [Fetch Runtime APIs](built-ins-fetch.md).
 
 ### DisposableStack / AsyncDisposableStack (`Goccia.Builtins.DisposableStack.pas`)
 

@@ -51,6 +51,7 @@ uses
   Goccia.FetchManager,
   Goccia.InstructionLimit,
   Goccia.Timeout,
+  Goccia.Values.AbortValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HeadersValue,
   Goccia.Values.NativeFunction,
@@ -141,10 +142,11 @@ function TGocciaGlobalFetch.FetchCallback(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  URLArg, OptionsArg, MethodVal, HeadersVal: TGocciaValue;
+  URLArg, OptionsArg, MethodVal, HeadersVal, SignalVal: TGocciaValue;
   URLStr, Method: string;
   RequestHeaders: THTTPHeaders;
   Promise: TGocciaPromiseValue;
+  Signal: TGocciaAbortSignalValue;
   Obj: TGocciaObjectValue;
   PropNames: TArray<string>;
   I: Integer;
@@ -164,6 +166,7 @@ begin
 
   // Extract options
   Method := 'GET';
+  Signal := nil;
   SetLength(RequestHeaders, 0);
 
   if AArgs.Length >= 2 then
@@ -205,6 +208,17 @@ begin
           end;
         end;
       end;
+
+      // Read cancellation signal
+      SignalVal := Obj.GetProperty(PROP_SIGNAL);
+      if Assigned(SignalVal) and
+         not (SignalVal is TGocciaUndefinedLiteralValue) and
+         not (SignalVal is TGocciaNullLiteralValue) then
+      begin
+        if not (SignalVal is TGocciaAbortSignalValue) then
+          ThrowTypeError('fetch signal must be an AbortSignal');
+        Signal := TGocciaAbortSignalValue(SignalVal);
+      end;
     end;
   end;
 
@@ -222,7 +236,7 @@ begin
       'fetch dispatch is allowed');
   try
     TGocciaFetchManager.Instance.StartFetch(URLStr, Method, RequestHeaders,
-      FAllowedHosts, Promise);
+      FAllowedHosts, Promise, Signal);
   except
     on E: TGocciaTimeoutError do
       raise;
