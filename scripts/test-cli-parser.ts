@@ -842,4 +842,112 @@ console.log("JSX preprocessor termination...");
     });
 }
 
+// -- Definite assignment assertion rules ----------------------------------------
+
+console.log("Definite assignment assertion rules...");
+{
+  // TypeScript's three rules for `!` on a variable declaration. These are parse
+  // errors, so they cannot be asserted from a JS test file — see
+  // tests/language/types-as-comments/definite-assignment.js for the accepted
+  // forms.
+  const cases = [
+    {
+      desc: "definite assignment without a type annotation",
+      source: "let x!;\n",
+      messageIncludes: "must also have type annotations",
+    },
+    {
+      desc: "definite assignment with an initializer",
+      source: "let x!: number = 1;\n",
+      messageIncludes: "cannot also have definite assignment assertions",
+    },
+    {
+      desc: "definite assignment on a const declaration",
+      source: "const x!: number;\n",
+      messageIncludes: "not permitted on a const declaration",
+    },
+    {
+      desc: "definite assignment without an annotation on var",
+      source: "var x!;\n",
+      messageIncludes: "must also have type annotations",
+      args: ["--compat-var"],
+    },
+    {
+      desc: "definite assignment with an initializer on var",
+      source: "var x!: number = 1;\n",
+      messageIncludes: "cannot also have definite assignment assertions",
+      args: ["--compat-var"],
+    },
+  ] as const;
+
+  for (const { desc, source, messageIncludes, args } of cases)
+    assertSyntaxErrorInBothModes(source, desc, args ?? [], { messageIncludes });
+
+  // The '!' is a restricted production: on the next line it starts a new
+  // expression statement rather than being absorbed as an assertion.
+  const asiSource = [
+    "let x",
+    "!(() => { console.log('ran'); })()",
+    "console.log(typeof x)",
+    "",
+  ].join("\n");
+  for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+    const label = modeArgs.length ? "leading-! after ASI (bytecode)" : "leading-! after ASI";
+    const res = runLoaderJson(asiSource, ["--compat-asi", ...modeArgs]);
+    if (res.exitCode !== 0)
+      throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+    if (normalizeLineEndings(res.json.output) !== "ran\nundefined\n")
+      throw new Error(`${label}: expected "ran\\nundefined", got ${JSON.stringify(res.json.output)}`);
+  }
+}
+
+// -- Type alias skipping across line breaks under ASI ---------------------------
+
+console.log("Type alias skipping under ASI...");
+{
+  // A skipped `type` alias may wrap its type argument list across lines. The
+  // skipper does not depth-count '<' / '>', so it relies on the line break
+  // never being a legal ASI point: it follows a '<' or ',', or precedes a '>'.
+  const source = [
+    "type Handler = Map<",
+    "  string,",
+    "  number",
+    ">;",
+    "const after = 2",
+    "console.log(after)",
+    "",
+  ].join("\n");
+
+  for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+    const label = modeArgs.length ? "multi-line type alias (bytecode)" : "multi-line type alias";
+    const res = runLoaderJson(source, ["--compat-asi", ...modeArgs]);
+    if (res.exitCode !== 0)
+      throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+    if (normalizeLineEndings(res.json.output) !== "2\n")
+      throw new Error(`${label}: expected "2", got ${JSON.stringify(res.json.output)}`);
+  }
+
+  // The complementary guarantee: a relational expression in a skipped statement
+  // still ends at its own line break instead of swallowing what follows.
+  const relationalSource = [
+    "var skipped = 1 < 2",
+    "const after = 3",
+    "console.log(after)",
+    "",
+  ].join("\n");
+
+  for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+    const label = modeArgs.length ? "relational in skipped var (bytecode)" : "relational in skipped var";
+    const res = runLoaderJson(relationalSource, [
+      "--warning-unsupported-features",
+      "--compat-asi",
+      ...modeArgs,
+    ]);
+    if (res.exitCode !== 0)
+      throw new Error(`${label}: should recover, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+    if (normalizeLineEndings(res.json.output) !== "3\n")
+      throw new Error(`${label}: expected "3", got ${JSON.stringify(res.json.output)}`);
+  }
+}
+
 console.log("\nAll test-cli-parser.ts tests passed.");

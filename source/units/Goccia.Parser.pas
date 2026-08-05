@@ -4989,7 +4989,11 @@ end;
 function TGocciaParser.ParseDefiniteAssignmentAssertion(
   const AIsConst: Boolean): Boolean;
 begin
-  Result := Check(gttNot);
+  // Restricted production: the '!' must sit on the same line as the binding
+  // name. Without this, ASI code such as `let x` / newline / `!fn()` would have
+  // its leading-'!' expression statement swallowed as an assertion instead of
+  // starting a new statement. Mirrors the break/continue label restriction.
+  Result := Check(gttNot) and (Previous.Line = Peek.Line);
   if not Result then
     Exit;
 
@@ -8290,6 +8294,17 @@ begin
           Exit;
       end;
 
+      // Under ASI a line break ends the annotation once the collected type is
+      // complete. An annotation without an initializer has no terminator on its
+      // own line, so without this the collector runs into the next statement:
+      // `let v: number` / newline / `v = 5` collected "number v" and then took
+      // the next line's assignment as the declaration's initializer. A break
+      // after a type operator ('|', '&', '=>', ...) still continues the type.
+      if FAutomaticSemicolonInsertion and (Result <> '') and
+         (Previous.Line < Peek.Line) and Assigned(PreviousTypeToken) and
+         not TypeOperatorExpectsOperand(PreviousTypeToken) then
+        Exit;
+
       IsTerminator := False;
       for I := 0 to High(ATerminators) do
         if TokenType = ATerminators[I] then
@@ -8463,14 +8478,37 @@ end;
 procedure TGocciaParser.SkipUntilSemicolon;
 var
   Depth: Integer;
+
+  // A line break ends the skipped statement under ASI — except where a
+  // semicolon could not legally be inserted anyway. Since '<' and '>' are not
+  // depth-counted below, that carve-out is what keeps a type argument list
+  // broken across lines together:
+  //
+  //   type Handler = Map<
+  //     string,
+  //     number
+  //   >;
+  //
+  // The line breaks there follow a '<' or a ',' (neither can end a statement)
+  // or precede a '>' (which cannot start one), so none of them is an ASI point.
+  // A relational expression like `var x = 1 < 2` followed by a new statement
+  // still breaks at the newline, because its break sits after a complete
+  // operand.
+  function IsAutomaticSemicolonPoint: Boolean;
+  begin
+    Result := FAutomaticSemicolonInsertion and (Previous.Line < Peek.Line) and
+      not (Previous.TokenType in [gttLess, gttComma]) and
+      not (Peek.TokenType in [gttGreater, gttRightShift,
+        gttUnsignedRightShift]);
+  end;
+
 begin
   Depth := 0;
   while not IsAtEnd do
   begin
     if (Depth = 0) and Check(gttRightBrace) then
       Exit;
-    if (Depth = 0) and FAutomaticSemicolonInsertion and
-      (Previous.Line < Peek.Line) then
+    if (Depth = 0) and IsAutomaticSemicolonPoint then
       Exit;
 
     // Skip template literals whole so a substitution's closing '}' is not

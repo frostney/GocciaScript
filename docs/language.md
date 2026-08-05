@@ -616,6 +616,9 @@ A leading `<` is ambiguous: it can open a JSX element or a type parameter list. 
 - Parameter properties in constructors (`constructor(public x: number)`).
 - Angle-bracket type assertions (`<string>value`) — use `value as string` instead.
 - Definite assignment assertions on class fields (`class C { x!: number }`) — only variable declarations accept `!`.
+- Generic **async** arrow expressions (`async <T,>(v: T) => v`) — the generic form is wired into primary-expression position only, so the `async` prefix is not recognised ahead of it.
+
+A definite assignment assertion is a restricted production: the `!` must appear on the same line as the binding name. A `!` at the start of the next line begins a new expression statement, so ASI code such as `let x` followed by `!fn()` keeps its usual meaning.
 
 ### Pattern Matching (Stage 1)
 
@@ -834,6 +837,8 @@ GocciaScript requires explicit semicolons by default, preventing this class of b
 ./build/GocciaTestRunner tests/language/asi
 ./build/GocciaREPL --compat-asi
 ```
+
+Type-level declarations that are skipped rather than parsed (`type`, `import type`, `export type`) end at the first line break that is a legal ASI point. A type argument list wrapped across lines is fine, because its breaks fall after a `<` or `,` or before a `>`; a break at another operator, such as a union `|` leading the next line, ends the declaration early. Terminate multi-line type declarations with an explicit `;`, or keep the operator at the end of the line.
 
 ```pascal
 // Enable ASI via the engine API
