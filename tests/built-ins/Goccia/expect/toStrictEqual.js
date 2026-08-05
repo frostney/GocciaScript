@@ -10,6 +10,8 @@ class Other {
   }
 }
 
+class CustomError extends Error {}
+
 describe("toStrictEqual", () => {
   test("compares plain values like toEqual", () => {
     expect({ a: 1, b: [2, 3] }).toStrictEqual({ a: 1, b: [2, 3] });
@@ -87,6 +89,36 @@ describe("toStrictEqual", () => {
     right.push(right);
 
     expect(left).toStrictEqual(right);
+  });
+
+  test("applies error identity without adding a class check", () => {
+    expect(new Error("a")).toStrictEqual(new Error("a"));
+    expect(new Error("a")).not.toStrictEqual(new Error("b"));
+    expect(new TypeError("m")).not.toStrictEqual(new Error("m"));
+    expect(new Error("a")).not.toStrictEqual({});
+
+    // Unlike plain objects, a subclass instance is not distinguished from a
+    // base Error: the name is what identifies an error.
+    expect(new CustomError("m")).toStrictEqual(new Error("m"));
+    expect(new CustomError("m")).toStrictEqual(new CustomError("m"));
+  });
+
+  test("compares the cause strictly too", () => {
+    expect(new Error("m", { cause: "c" })).toStrictEqual(
+      new Error("m", { cause: "c" }),
+    );
+    expect(new Error("m", { cause: "c" })).not.toStrictEqual(
+      new Error("m", { cause: "d" }),
+    );
+  });
+
+  test("keeps a present-but-undefined cause distinct", () => {
+    expect(new Error("m", { cause: undefined })).not.toStrictEqual(
+      new Error("m"),
+    );
+    expect(new Error("m")).not.toStrictEqual(
+      new Error("m", { cause: undefined }),
+    );
   });
 
   test("supports negation", () => {

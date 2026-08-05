@@ -10,6 +10,15 @@ class Other {
   }
 }
 
+class CustomError extends Error {}
+
+class NamedError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "NamedError";
+  }
+}
+
 describe("toEqual", () => {
   test("compares primitives with Object.is semantics", () => {
     expect(1).toEqual(1);
@@ -152,6 +161,188 @@ describe("toEqual", () => {
     right.self = right;
 
     expect(left).toEqual(right);
+  });
+
+  test("compares errors on name and message", () => {
+    expect(new Error("a")).toEqual(new Error("a"));
+    expect(new Error("a")).not.toEqual(new Error("b"));
+    expect(new TypeError("m")).toEqual(new TypeError("m"));
+    expect(new TypeError("m")).not.toEqual(new Error("m"));
+  });
+
+  test("compares an error's own enumerable properties", () => {
+    const withCode = new Error("m");
+    withCode.code = 1;
+    const sameCode = new Error("m");
+    sameCode.code = 1;
+    const otherCode = new Error("m");
+    otherCode.code = 2;
+
+    expect(withCode).toEqual(sameCode);
+    expect(withCode).not.toEqual(otherCode);
+    expect(withCode).not.toEqual(new Error("m"));
+
+    // The undefined-key rule still applies inside errors.
+    const undefinedCode = new Error("m");
+    undefinedCode.code = undefined;
+    expect(undefinedCode).toEqual(new Error("m"));
+  });
+
+  test("never equates an error with a plain object", () => {
+    expect(new Error("a")).not.toEqual({});
+    expect(new Error("a")).not.toEqual({ message: "a" });
+    expect(new Error("a")).not.toEqual({ name: "Error", message: "a" });
+    expect({}).not.toEqual(new Error("a"));
+  });
+
+  test("keys error subclasses on name rather than the class", () => {
+    // A subclass that leaves name alone inherits "Error" and matches one.
+    expect(new CustomError("m")).toEqual(new Error("m"));
+    expect(new CustomError("m")).toEqual(new CustomError("m"));
+    expect(new NamedError("m")).not.toEqual(new Error("m"));
+
+    const renamed = new Error("m");
+    renamed.name = "Weird";
+    const sameName = new Error("m");
+    sameName.name = "Weird";
+    expect(renamed).toEqual(sameName);
+    expect(renamed).not.toEqual(new Error("m"));
+  });
+
+  test("compares the cause", () => {
+    expect(new Error("m", { cause: "c" })).toEqual(
+      new Error("m", { cause: "c" }),
+    );
+    expect(new Error("m", { cause: "c" })).not.toEqual(
+      new Error("m", { cause: "d" }),
+    );
+    expect(new Error("m", { cause: "c" })).not.toEqual(new Error("m"));
+    expect(new Error("m")).not.toEqual(new Error("m", { cause: "c" }));
+    expect(new Error("m", { cause: { a: 1 } })).toEqual(
+      new Error("m", { cause: { a: 1 } }),
+    );
+    expect(new Error("m", { cause: { a: 1 } })).not.toEqual(
+      new Error("m", { cause: { a: 2 } }),
+    );
+  });
+
+  test("terminates on a cyclic cause chain", () => {
+    const left = new Error("m");
+    left.cause = left;
+    const right = new Error("m");
+    right.cause = right;
+    expect(left).toEqual(right);
+
+    const outerLeft = new Error("outer");
+    const innerLeft = new Error("inner");
+    outerLeft.cause = innerLeft;
+    innerLeft.cause = outerLeft;
+    const outerRight = new Error("outer");
+    const innerRight = new Error("inner");
+    outerRight.cause = innerRight;
+    innerRight.cause = outerRight;
+    expect(outerLeft).toEqual(outerRight);
+  });
+
+  test("ignores AggregateError contents, matching bun", () => {
+    // bun compares neither `errors` nor `stack`; only name, message, cause
+    // and own enumerable properties participate.
+    expect(new AggregateError([new Error("x")], "agg")).toEqual(
+      new AggregateError([new Error("y")], "agg"),
+    );
+    expect(new AggregateError([new Error("x")], "agg")).not.toEqual(
+      new AggregateError([new Error("x")], "other"),
+    );
+  });
+
+  test("keys error-ness on the error slot, not the prototype chain", () => {
+    // Inheriting from Error.prototype does not make an object an error; only
+    // the slot an error constructor installs does.
+    expect(Object.create(Error.prototype)).toEqual({});
+    expect(Object.setPrototypeOf({}, Error.prototype)).toEqual({});
+    expect(Object.create(Error.prototype)).not.toEqual(new Error(""));
+    expect(new CustomError("m")).not.toEqual({});
+  });
+
+  test("forgives a cause that is present but undefined", () => {
+    expect(new Error("m", { cause: undefined })).toEqual(new Error("m"));
+    expect(new Error("m")).toEqual(new Error("m", { cause: undefined }));
+  });
+
+  test("compares name by value rather than by its string form", () => {
+    const undefinedName = new Error("m");
+    Object.setPrototypeOf(
+      undefinedName,
+      Object.create(Error.prototype, { name: { value: undefined } }),
+    );
+    const emptyName = new Error("m");
+    Object.setPrototypeOf(
+      emptyName,
+      Object.create(Error.prototype, { name: { value: "" } }),
+    );
+
+    expect(undefinedName).not.toEqual(emptyName);
+  });
+
+  test("never stringifies name, so a throwing toString stays put", () => {
+    let calls = 0;
+    const shared = Object.create(Error.prototype, {
+      name: {
+        value: {
+          toString: () => {
+            calls = calls + 1;
+            throw new RangeError("boom");
+          },
+        },
+      },
+    });
+    const left = new Error("m");
+    Object.setPrototypeOf(left, shared);
+    const right = new Error("m");
+    Object.setPrototypeOf(right, shared);
+
+    expect(left).toEqual(right);
+    expect(calls).toBe(0);
+  });
+
+  test("compares an AggregateError nested inside a cause", () => {
+    expect(
+      new Error("m", { cause: new AggregateError([new Error("x")], "agg") }),
+    ).toEqual(
+      new Error("m", { cause: new AggregateError([new Error("y")], "agg") }),
+    );
+    expect(
+      new Error("m", { cause: new AggregateError([], "agg") }),
+    ).not.toEqual(new Error("m", { cause: new AggregateError([], "other") }));
+  });
+
+  test("distinguishes DOMExceptions by their enumerable fields", () => {
+    // Known divergence: a DOMException carries name/message/code as ordinary
+    // enumerable properties here, so the plain object walk separates them.
+    // bun equates DOMExceptions with differing messages. Pre-existing.
+    expect(new DOMException("a", "AbortError")).toEqual(
+      new DOMException("a", "AbortError"),
+    );
+    expect(new DOMException("a", "AbortError")).not.toEqual(
+      new DOMException("b", "AbortError"),
+    );
+  });
+
+  test("compares errors nested in containers", () => {
+    expect([new Error("x")]).toEqual([new Error("x")]);
+    expect([new Error("x")]).not.toEqual([new Error("y")]);
+    expect(new Set([new Error("x")])).toEqual(new Set([new Error("x")]));
+    expect(new Set([new Error("x")])).not.toEqual(new Set([new Error("y")]));
+    expect(new Map([["k", new Error("x")]])).toEqual(
+      new Map([["k", new Error("x")]]),
+    );
+    expect(new Map([["k", new Error("x")]])).not.toEqual(
+      new Map([["k", new Error("y")]]),
+    );
+    expect({ e: new Error("x") }).toEqual({ e: new Error("x") });
+    expect({ e: new Error("x") }).not.toEqual({ e: new Error("y") });
+    expect([new Error("x")]).toContainEqual(new Error("x"));
+    expect([new Error("x")]).not.toContainEqual(new Error("y"));
   });
 
   test("supports negation", () => {
