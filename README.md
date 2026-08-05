@@ -112,7 +112,19 @@ modules, decorators, and proposal-compatible type syntax.
 
 ### Built-in Objects
 
-`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `RegExp`, `Symbol`, `Set`, `Map`, `WeakSet`, `WeakMap`, `Promise`, `Temporal`, `Iterator`, `Proxy`, `Reflect`, `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float16Array`, `Float32Array`, `Float64Array`, `BigInt64Array`, `BigUint64Array`) with ArrayBuffer and SharedArrayBuffer backing, `fetch`, `Headers`, `Response` ([WHATWG Fetch](https://fetch.spec.whatwg.org/) — GET/HEAD only), `AbortController`, `AbortSignal`, `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`, `DOMException`).
+Core built-ins include `Math`, `JSON`, `Object`, `Function`, `Array`, `Boolean`,
+`Number`, `BigInt`, `String`, `RegExp`, `Symbol`, `Set`, `Map`, `WeakSet`,
+`WeakMap`, `WeakRef`, `FinalizationRegistry`, `Promise`, `Temporal`, `Intl`,
+`Iterator`, `DisposableStack`, `AsyncDisposableStack`, `Proxy`, `Reflect`,
+`ArrayBuffer`, `SharedArrayBuffer`, `DataView`, `Atomics`, and TypedArrays
+(`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`,
+`Int32Array`, `Uint32Array`, `Float16Array`, `Float32Array`, `Float64Array`,
+`BigInt64Array`, `BigUint64Array`). The loader profile adds `console`,
+`performance`, `fetch`, `Headers`, `Response` ([WHATWG Fetch](https://fetch.spec.whatwg.org/) — GET/HEAD only),
+`AbortController`, `AbortSignal`, `URL`, `URLSearchParams`, `TextEncoder`, and
+`TextDecoder`. Error constructors include `Error`, `EvalError`, `TypeError`,
+`ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`,
+`SuppressedError`, and `DOMException`.
 
 Non-standard data-format APIs and SemVer are import-only Goccia runtime modules, not auto-installed globals: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. They expose named exports only; use `import * as CSV from "goccia:csv"` when you want the namespace-object shape. There is no default export.
 

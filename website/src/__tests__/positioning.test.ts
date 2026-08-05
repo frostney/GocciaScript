@@ -26,7 +26,7 @@ describe("GocciaScript positioning", () => {
       /embedded in native applications/i,
     ]);
     expect(GOCCIASCRIPT_SUMMARY).toMatch(
-      /AI agents.+embedded in native applications/is,
+      /AI agents[\s\S]+embedded in native applications/i,
     );
   });
 
