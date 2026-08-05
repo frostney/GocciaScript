@@ -17,21 +17,12 @@ function ToPrimitive(const AValue: TGocciaValue; const AHint: TGocciaToPrimitive
 // else is coerced via ToString. Callers must check the returned type.
 function ToPropertyKey(const AValue: TGocciaValue): TGocciaValue;
 
-// ES2026 §6.2.5.5 GetValue step 3.a and §6.2.5.6 PutValue step 3.a perform
-// ToObject(_V_.[[Base]]) — which throws a *TypeError* for null/undefined — BEFORE
-// step 3.c converts _V_.[[ReferencedName]] with ToPropertyKey. Since §13.3.3
-// EvaluatePropertyAccessWithExpressionKey stores the *unconverted* key value in the
-// Reference Record, a nullish base must be rejected before the key expression's
-// result is coerced: a throwing or observable toString/valueOf on the key must not
-// run. Note that the key *expression* is still evaluated first (§13.3.3 step 1);
-// only the ToPropertyKey conversion is ordered after the base check.
-//
-// Every computed property access on a possibly-nullish base must therefore call
+// Every computed property access on a possibly-nullish base must call
 // ToPropertyKeyForBase rather than a bare ToPropertyKey. Pass AForWrite for store
-// targets (PutValue) so the message reads "cannot set properties" rather than
-// "cannot read properties".
+// targets so the message reads "cannot set properties" rather than "cannot read
+// properties".
 procedure RequireCoercibleBaseForPropertyAccess(const ABase, AUncoercedKey: TGocciaValue;
-  const AForWrite: Boolean = False);
+  const AForWrite: Boolean = False); {$IFDEF FPC}inline;{$ENDIF}
 function ToPropertyKeyForBase(const ABase, AUncoercedKey: TGocciaValue;
   const AForWrite: Boolean = False): TGocciaValue;
 
@@ -202,15 +193,14 @@ begin
     Result := '<computed>';
 end;
 
-procedure RequireCoercibleBaseForPropertyAccess(const ABase, AUncoercedKey: TGocciaValue;
+// Throw path only. Split out of RequireCoercibleBaseForPropertyAccess — and
+// deliberately not inlined — so the managed string local and the implicit
+// exception frame FPC emits for it stay off every computed member access.
+procedure ThrowNullishBasePropertyAccess(const ABase, AUncoercedKey: TGocciaValue;
   const AForWrite: Boolean);
 var
   KeyText: string;
 begin
-  if not ((ABase is TGocciaNullLiteralValue) or
-          (ABase is TGocciaUndefinedLiteralValue)) then
-    Exit;
-
   KeyText := DescribeUncoercedPropertyKey(AUncoercedKey);
   if AForWrite then
   begin
@@ -232,6 +222,26 @@ begin
   end;
 end;
 
+// ES2026 §6.2.5.5 GetValue step 3.a and §6.2.5.6 PutValue step 3.a perform
+// ToObject(_V_.[[Base]]) — which throws a *TypeError* for null/undefined — BEFORE
+// step 3.c converts _V_.[[ReferencedName]] with ToPropertyKey. Since §13.3.3
+// EvaluatePropertyAccessWithExpressionKey stores the *unconverted* key value in the
+// Reference Record, a nullish base must be rejected before the key expression's
+// result is coerced: a throwing or observable toString/valueOf on the key must not
+// run. The key *expression* is still evaluated first (§13.3.3 step 1); only the
+// ToPropertyKey conversion is ordered after the base check.
+//
+// Hot path: no managed locals here, so FPC emits no implicit exception frame.
+procedure RequireCoercibleBaseForPropertyAccess(const ABase, AUncoercedKey: TGocciaValue;
+  const AForWrite: Boolean);
+begin
+  if (ABase is TGocciaNullLiteralValue) or
+     (ABase is TGocciaUndefinedLiteralValue) then
+    ThrowNullishBasePropertyAccess(ABase, AUncoercedKey, AForWrite);
+end;
+
+// ES2026 §6.2.5.5 GetValue steps 3.a then 3.c (or §6.2.5.6 PutValue, same order):
+// reject a nullish base, then convert the referenced name with ToPropertyKey.
 function ToPropertyKeyForBase(const ABase, AUncoercedKey: TGocciaValue;
   const AForWrite: Boolean): TGocciaValue;
 begin
