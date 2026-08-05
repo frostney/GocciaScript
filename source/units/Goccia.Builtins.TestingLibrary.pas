@@ -520,6 +520,143 @@ begin
   end;
 end;
 
+{ toHaveProperty accepts a dotted/bracketed path string ("items[0].type") or
+  an array of segments (["a", "b", 0, "c"]). The array form is also the escape
+  hatch for keys that themselves contain a dot, since a string path always
+  splits on dots. }
+function ParsePropertyPath(const APathValue: TGocciaValue): TArray<string>;
+var
+  PathArray: TGocciaArrayValue;
+  Path: string;
+  Current: string;
+  Bracket: string;
+  Position: Integer;
+  I: Integer;
+  HasCurrent: Boolean;
+  QuoteChar: Char;
+
+  procedure AppendSegment(const ASegment: string);
+  begin
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := ASegment;
+  end;
+
+begin
+  SetLength(Result, 0);
+
+  if APathValue is TGocciaArrayValue then
+  begin
+    PathArray := TGocciaArrayValue(APathValue);
+    for I := 0 to PathArray.Elements.Count - 1 do
+      AppendSegment(PathArray.GetElement(I).ToStringLiteral.Value);
+    Exit;
+  end;
+
+  Path := APathValue.ToStringLiteral.Value;
+  Current := '';
+  HasCurrent := False;
+  Position := 1;
+  while Position <= Length(Path) do
+  begin
+    if Path[Position] = '.' then
+    begin
+      AppendSegment(Current);
+      Current := '';
+      HasCurrent := False;
+      Inc(Position);
+    end
+    else if Path[Position] = '[' then
+    begin
+      if HasCurrent then
+      begin
+        AppendSegment(Current);
+        Current := '';
+        HasCurrent := False;
+      end;
+      Inc(Position);
+      Bracket := '';
+      while (Position <= Length(Path)) and (Path[Position] <> ']') do
+      begin
+        Bracket := Bracket + Path[Position];
+        Inc(Position);
+      end;
+      if Position <= Length(Path) then
+        Inc(Position);
+      // A quoted bracket segment carries the key verbatim: items["a.b"]
+      if Length(Bracket) >= 2 then
+      begin
+        QuoteChar := Bracket[1];
+        if ((QuoteChar = '"') or (QuoteChar = #39)) and
+           (Bracket[Length(Bracket)] = QuoteChar) then
+          Bracket := Copy(Bracket, 2, Length(Bracket) - 2);
+      end;
+      AppendSegment(Bracket);
+      if (Position <= Length(Path)) and (Path[Position] = '.') then
+        Inc(Position);
+    end
+    else
+    begin
+      Current := Current + Path[Position];
+      HasCurrent := True;
+      Inc(Position);
+    end;
+  end;
+
+  // An empty path is the single empty-string key, not an empty segment list.
+  if HasCurrent or (Length(Result) = 0) then
+    AppendSegment(Current);
+end;
+
+function DescribePropertyPath(const ASegments: TArray<string>): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to High(ASegments) do
+  begin
+    if I > 0 then
+      Result := Result + '.';
+    Result := Result + ASegments[I];
+  end;
+end;
+
+{ Walks the path one segment at a time. Each step uses the same prototype-aware
+  lookup a plain property read would, so inherited members resolve. }
+function TryResolvePropertyPath(const ARoot: TGocciaValue;
+  const ASegments: TArray<string>; out AValue: TGocciaValue): Boolean;
+var
+  Current: TGocciaValue;
+  Container: TGocciaObjectValue;
+  I: Integer;
+begin
+  Result := False;
+  AValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Current := ARoot;
+
+  for I := 0 to High(ASegments) do
+  begin
+    if Current is TGocciaObjectValue then
+      Container := TGocciaObjectValue(Current)
+    else
+    begin
+      // A primitive still exposes its wrapper's members ("a.length" on a
+      // string); null and undefined box to nil and end the walk.
+      Container := Current.Box;
+      if not Assigned(Container) then
+        Exit;
+    end;
+
+    if not Container.HasProperty(ASegments[I]) then
+      Exit;
+    Current := Container.GetPropertyWithContext(ASegments[I], Current);
+    if Current = nil then
+      Current := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+
+  AValue := Current;
+  Result := True;
+end;
+
 function IsNativeFunctionInstanceOf(const AObj: TGocciaObjectValue;
   const AConstructor: TGocciaNativeFunctionValue): Boolean;
 var
@@ -1782,7 +1919,10 @@ end;
 function TGocciaExpectationValue.ToHaveProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   HasProperty: Boolean;
-  PropertyName: string;
+  Segments: TArray<string>;
+  PathDescription: string;
+  ResolvedValue: TGocciaValue;
+  ExpectsValue: Boolean;
 begin
   TGocciaArgumentValidator.RequireBetween(AArgs, 1, 2, 'toHaveProperty',
     FTestAssertions.ThrowError);
@@ -1798,12 +1938,13 @@ begin
     Exit;
   end;
 
-  PropertyName := AArgs.GetElement(0).ToStringLiteral.Value;
-  HasProperty := TGocciaObjectValue(FActualValue).HasProperty(PropertyName);
-  if HasProperty and (AArgs.Length = 2) then
-    HasProperty := IsDeepEqual(
-      TGocciaObjectValue(FActualValue).GetProperty(PropertyName),
-      AArgs.GetElement(1));
+  Segments := ParsePropertyPath(AArgs.GetElement(0));
+  PathDescription := DescribePropertyPath(Segments);
+  ExpectsValue := AArgs.Length = 2;
+
+  HasProperty := TryResolvePropertyPath(FActualValue, Segments, ResolvedValue);
+  if HasProperty and ExpectsValue then
+    HasProperty := IsDeepEqual(ResolvedValue, AArgs.GetElement(1));
 
   if FIsNegated then
     HasProperty := not HasProperty;
@@ -1812,17 +1953,33 @@ begin
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveProperty');
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end
-  else
+    Exit;
+  end;
+
+  if ExpectsValue then
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
-        'Expected ' + FormatForDisplay(FActualValue) + ' not to have property ' + AArgs.GetElement(0).ToStringLiteral.Value)
+        'Expected ' + FormatForDisplay(FActualValue) + ' not to have property ' +
+        PathDescription + ' with value ' +
+        FormatForDisplay(AArgs.GetElement(1)))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
-        'Expected ' + FormatForDisplay(FActualValue) + ' to have property ' + AArgs.GetElement(0).ToStringLiteral.Value);
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end;
+        'Expected ' + FormatForDisplay(FActualValue) + ' to have property ' +
+        PathDescription + ' with value ' +
+        FormatForDisplay(AArgs.GetElement(1)) + ' but received ' +
+        FormatForDisplay(ResolvedValue));
+  end
+  else if FIsNegated then
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
+      'Expected ' + FormatForDisplay(FActualValue) + ' not to have property ' +
+      PathDescription)
+  else
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
+      'Expected ' + FormatForDisplay(FActualValue) + ' to have property ' +
+      PathDescription);
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaExpectationValue.ToThrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

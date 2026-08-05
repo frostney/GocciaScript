@@ -19,6 +19,7 @@ uses
   Goccia.Arithmetic,
   Goccia.Values.ArrayValue,
   Goccia.Values.AsymmetricMatcher,
+  Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
@@ -70,9 +71,99 @@ begin
     ADestination[I] := ASource[I];
 end;
 
+{ A missing property, an explicit undefined and an array hole are the three
+  shapes loose equality collapses together: Jest ignores object keys whose
+  value is undefined, and undefined array items past the shorter length. }
+function IsUndefinedLike(const AValue: TGocciaValue): Boolean;
+begin
+  Result := (AValue = nil) or (AValue is TGocciaUndefinedLiteralValue) or
+    (AValue = TGocciaHoleValue.HoleValue);
+end;
+
+{ Strict equality additionally requires the two objects to have the same type.
+  Class instances only match instances of the same class, and never a plain
+  object; every non-class object — including a null-prototype object or one
+  built with Object.create(proto) — counts as plain. }
+function HasSameObjectType(const AActual, AExpected: TGocciaValue): Boolean;
+var
+  ActualClass, ExpectedClass: TGocciaClassValue;
+begin
+  if AActual is TGocciaInstanceValue then
+    ActualClass := TGocciaInstanceValue(AActual).ClassValue
+  else
+    ActualClass := nil;
+
+  if AExpected is TGocciaInstanceValue then
+    ExpectedClass := TGocciaInstanceValue(AExpected).ClassValue
+  else
+    ExpectedClass := nil;
+
+  Result := ActualClass = ExpectedClass;
+end;
+
+{ Exactly one side being an array, Set or Map makes the two values different
+  kinds of container, which never compare equal even loosely. }
+function IsMismatchedContainer(const AActual, AExpected: TGocciaValue): Boolean;
+begin
+  Result :=
+    ((AActual is TGocciaArrayValue) <> (AExpected is TGocciaArrayValue)) or
+    ((AActual is TGocciaSetValue) <> (AExpected is TGocciaSetValue)) or
+    ((AActual is TGocciaMapValue) <> (AExpected is TGocciaMapValue));
+end;
+
 function IsDeepEqualInternal(const AActual, AExpected: TGocciaValue;
   var AComparedPairs: TComparedValuePairArray;
   const AStrict: Boolean): Boolean; forward;
+
+{ Snapshots of the members are taken before matching because the match is
+  order-insensitive and needs random access, and because a recursive compare
+  can run user getters that mutate either collection mid-walk. }
+function SnapshotSetMembers(const ASet: TGocciaSetValue): TArray<TGocciaValue>;
+var
+  Cursor, Count: Integer;
+  Item: TGocciaValue;
+begin
+  SetLength(Result, ASet.Count);
+  Count := 0;
+  Cursor := 0;
+  ASet.RetainIterator;
+  try
+    while ASet.NextItem(Cursor, Item) and (Count < Length(Result)) do
+    begin
+      Result[Count] := Item;
+      Inc(Count);
+    end;
+  finally
+    ASet.ReleaseIterator;
+  end;
+  SetLength(Result, Count);
+end;
+
+procedure SnapshotMapEntries(const AMap: TGocciaMapValue;
+  out AKeys, AValues: TArray<TGocciaValue>);
+var
+  Cursor, Count: Integer;
+  Key, Value: TGocciaValue;
+begin
+  SetLength(AKeys, AMap.Count);
+  SetLength(AValues, AMap.Count);
+  Count := 0;
+  Cursor := 0;
+  AMap.RetainIterator;
+  try
+    while AMap.NextEntry(Cursor, Key, Value) and (Count < Length(AKeys)) do
+    begin
+      AKeys[Count] := Key;
+      AValues[Count] := Value;
+      Inc(Count);
+    end;
+  finally
+    AMap.ReleaseIterator;
+  end;
+  SetLength(AKeys, Count);
+  SetLength(AValues, Count);
+end;
+
 function IsPartialDeepEqualInternal(const AActual, AExpected: TGocciaValue;
   var AComparedPairs: TComparedValuePairArray;
   const AIncludeInherited: Boolean): Boolean; forward;
@@ -84,10 +175,15 @@ var
   ActualObj, ExpectedObj: TGocciaObjectValue;
   ActualArr, ExpectedArr: TGocciaArrayValue;
   ActualKeys, ExpectedKeys: TArray<string>;
-  I: Integer;
+  I, J: Integer;
   Key: string;
-  CursorA, CursorB: Integer;
-  LeftKey, LeftValue, RightKey, RightValue: TGocciaValue;
+  CommonCount: Integer;
+  LeftValue, RightValue: TGocciaValue;
+  ActualMembers, ExpectedMembers: TArray<TGocciaValue>;
+  ActualMapKeys, ActualMapValues: TArray<TGocciaValue>;
+  ExpectedMapKeys, ExpectedMapValues: TArray<TGocciaValue>;
+  Used: TArray<Boolean>;
+  Found: Boolean;
 begin
   // Vitest/Jest asymmetric matchers participate in every equality-based
   // assertion. When both operands are matchers, compare their stored matcher
@@ -152,71 +248,90 @@ begin
     end;
   end;
 
+  // Different kinds of container never compare equal, however similar their
+  // contents look (a Set is not its array of members, a Map is not an object).
+  if IsMismatchedContainer(AActual, AExpected) then
+  begin
+    Result := False;
+    Exit;
+  end;
+
   // Handle arrays
   if (AActual is TGocciaArrayValue) and (AExpected is TGocciaArrayValue) then
   begin
     ActualArr := TGocciaArrayValue(AActual);
     ExpectedArr := TGocciaArrayValue(AExpected);
 
-    // Check lengths
-    if ActualArr.Elements.Count <> ExpectedArr.Elements.Count then
+    { Strict equality preserves length and sparseness. Loose equality ignores
+      undefined items past the shorter length, so [2] equals [2, undefined],
+      while a differing item inside the common prefix still fails. }
+    if AStrict and
+       (ActualArr.Elements.Count <> ExpectedArr.Elements.Count) then
     begin
       Result := False;
       Exit;
     end;
 
-    // Recursively compare elements
-    for I := 0 to ActualArr.Elements.Count - 1 do
-    begin
-      // Handle array holes via the internal hole sentinel.
-      if (ActualArr.Elements[I] = TGocciaHoleValue.HoleValue) and
-         (ExpectedArr.Elements[I] = TGocciaHoleValue.HoleValue) then
-        Continue; // Both are holes, they're equal
+    CommonCount := ActualArr.Elements.Count;
+    if ExpectedArr.Elements.Count < CommonCount then
+      CommonCount := ExpectedArr.Elements.Count;
 
-      { Vitest's loose equality treats an array hole like undefined. Its
-        strict-equality matcher is the surface that preserves sparseness. }
-      if (ActualArr.Elements[I] = TGocciaHoleValue.HoleValue) and
-         AStrict then
+    for I := 0 to CommonCount - 1 do
+    begin
+      LeftValue := ActualArr.Elements[I];
+      RightValue := ExpectedArr.Elements[I];
+
+      if AStrict then
       begin
-        Result := False;
-        Exit;
-      end;
-      if (ExpectedArr.Elements[I] = TGocciaHoleValue.HoleValue) and
-         AStrict then
+        // A hole is only ever equal to another hole, never to undefined.
+        if (LeftValue = TGocciaHoleValue.HoleValue) or
+           (RightValue = TGocciaHoleValue.HoleValue) then
+        begin
+          if LeftValue <> RightValue then
+          begin
+            Result := False;
+            Exit;
+          end;
+          Continue;
+        end;
+      end
+      else
       begin
-        Result := False;
-        Exit;
+        if LeftValue = TGocciaHoleValue.HoleValue then
+          LeftValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        if RightValue = TGocciaHoleValue.HoleValue then
+          RightValue := TGocciaUndefinedLiteralValue.UndefinedValue;
       end;
-      if (ActualArr.Elements[I] = TGocciaHoleValue.HoleValue) and
-         not IsDeepEqualInternal(TGocciaUndefinedLiteralValue.UndefinedValue,
-           ExpectedArr.Elements[I], AComparedPairs, AStrict) then
-      begin
-        Result := False;
-        Exit;
-      end;
-      if (ExpectedArr.Elements[I] = TGocciaHoleValue.HoleValue) and
-         not IsDeepEqualInternal(ActualArr.Elements[I],
-           TGocciaUndefinedLiteralValue.UndefinedValue,
-           AComparedPairs, AStrict) then
-      begin
-        Result := False;
-        Exit;
-      end;
-      if (ActualArr.Elements[I] <> TGocciaHoleValue.HoleValue) and
-         (ExpectedArr.Elements[I] <> TGocciaHoleValue.HoleValue) and
-         not IsDeepEqualInternal(ActualArr.Elements[I], ExpectedArr.Elements[I],
-           AComparedPairs, AStrict) then
+
+      if not IsDeepEqualInternal(LeftValue, RightValue, AComparedPairs,
+        AStrict) then
       begin
         Result := False;
         Exit;
       end;
     end;
 
+    // Surplus items exist only under loose equality, and must be undefined.
+    for I := CommonCount to ActualArr.Elements.Count - 1 do
+      if not IsUndefinedLike(ActualArr.Elements[I]) then
+      begin
+        Result := False;
+        Exit;
+      end;
+    for I := CommonCount to ExpectedArr.Elements.Count - 1 do
+      if not IsUndefinedLike(ExpectedArr.Elements[I]) then
+      begin
+        Result := False;
+        Exit;
+      end;
+
     Result := True;
     Exit;
   end;
 
-  // Handle Sets — compared by insertion order, element for element.
+  { Sets and Maps compare without regard to insertion order, and membership
+    uses deep equality so sets of objects behave like sets of values. Members
+    are paired off greedily against the members not yet claimed. }
   if (AActual is TGocciaSetValue) and (AExpected is TGocciaSetValue) then
   begin
     if TGocciaSetValue(AActual).Count <> TGocciaSetValue(AExpected).Count then
@@ -230,37 +345,44 @@ begin
       Exit;
     end;
     AddComparedPair(AComparedPairs, AActual, AExpected);
-    CursorA := 0;
-    CursorB := 0;
-    // Recursive comparison can run user getters that mutate either set; retain
-    // both so cursors stay valid, and confirm the expected side advances before
-    // comparing (avoids comparing stale out values).
-    TGocciaSetValue(AActual).RetainIterator;
-    TGocciaSetValue(AExpected).RetainIterator;
-    try
-      while TGocciaSetValue(AActual).NextItem(CursorA, LeftValue) do
+
+    ActualMembers := SnapshotSetMembers(TGocciaSetValue(AActual));
+    ExpectedMembers := SnapshotSetMembers(TGocciaSetValue(AExpected));
+    if Length(ActualMembers) <> Length(ExpectedMembers) then
+    begin
+      Result := False;
+      Exit;
+    end;
+
+    SetLength(Used, Length(ExpectedMembers));
+    for I := 0 to High(ActualMembers) do
+    begin
+      Found := False;
+      for J := 0 to High(ExpectedMembers) do
       begin
-        if not TGocciaSetValue(AExpected).NextItem(CursorB, RightValue) then
+        if Used[J] then
+          Continue;
+        if IsDeepEqualInternal(ActualMembers[I], ExpectedMembers[J],
+          AComparedPairs, AStrict) then
         begin
-          Result := False;
-          Exit;
-        end;
-        if not IsDeepEqualInternal(LeftValue, RightValue, AComparedPairs,
-          AStrict) then
-        begin
-          Result := False;
-          Exit;
+          Used[J] := True;
+          Found := True;
+          Break;
         end;
       end;
-    finally
-      TGocciaSetValue(AExpected).ReleaseIterator;
-      TGocciaSetValue(AActual).ReleaseIterator;
+      if not Found then
+      begin
+        Result := False;
+        Exit;
+      end;
     end;
+
     Result := True;
     Exit;
   end;
 
-  // Handle Maps — compared by insertion order, entry for entry.
+  // Map entries pair off on both key and value, so two maps holding the same
+  // entries in different insertion order are equal.
   if (AActual is TGocciaMapValue) and (AExpected is TGocciaMapValue) then
   begin
     if TGocciaMapValue(AActual).Count <> TGocciaMapValue(AExpected).Count then
@@ -274,38 +396,41 @@ begin
       Exit;
     end;
     AddComparedPair(AComparedPairs, AActual, AExpected);
-    CursorA := 0;
-    CursorB := 0;
-    // Recursive comparison can run user getters that mutate either map; retain
-    // both so cursors stay valid, and confirm the expected side advances before
-    // comparing (avoids comparing stale out values).
-    TGocciaMapValue(AActual).RetainIterator;
-    TGocciaMapValue(AExpected).RetainIterator;
-    try
-      while TGocciaMapValue(AActual).NextEntry(CursorA, LeftKey, LeftValue) do
+
+    SnapshotMapEntries(TGocciaMapValue(AActual), ActualMapKeys, ActualMapValues);
+    SnapshotMapEntries(TGocciaMapValue(AExpected), ExpectedMapKeys,
+      ExpectedMapValues);
+    if Length(ActualMapKeys) <> Length(ExpectedMapKeys) then
+    begin
+      Result := False;
+      Exit;
+    end;
+
+    SetLength(Used, Length(ExpectedMapKeys));
+    for I := 0 to High(ActualMapKeys) do
+    begin
+      Found := False;
+      for J := 0 to High(ExpectedMapKeys) do
       begin
-        if not TGocciaMapValue(AExpected).NextEntry(CursorB, RightKey, RightValue) then
+        if Used[J] then
+          Continue;
+        if IsDeepEqualInternal(ActualMapKeys[I], ExpectedMapKeys[J],
+          AComparedPairs, AStrict) and
+           IsDeepEqualInternal(ActualMapValues[I], ExpectedMapValues[J],
+          AComparedPairs, AStrict) then
         begin
-          Result := False;
-          Exit;
-        end;
-        if not IsDeepEqualInternal(LeftKey, RightKey, AComparedPairs,
-          AStrict) then
-        begin
-          Result := False;
-          Exit;
-        end;
-        if not IsDeepEqualInternal(LeftValue, RightValue, AComparedPairs,
-          AStrict) then
-        begin
-          Result := False;
-          Exit;
+          Used[J] := True;
+          Found := True;
+          Break;
         end;
       end;
-    finally
-      TGocciaMapValue(AExpected).ReleaseIterator;
-      TGocciaMapValue(AActual).ReleaseIterator;
+      if not Found then
+      begin
+        Result := False;
+        Exit;
+      end;
     end;
+
     Result := True;
     Exit;
   end;
@@ -316,12 +441,20 @@ begin
     ActualObj := TGocciaObjectValue(AActual);
     ExpectedObj := TGocciaObjectValue(AExpected);
 
+    if AStrict and not HasSameObjectType(AActual, AExpected) then
+    begin
+      Result := False;
+      Exit;
+    end;
+
     // Get enumerable property names from both objects
     ActualKeys := ActualObj.GetEnumerablePropertyNames;
     ExpectedKeys := ExpectedObj.GetEnumerablePropertyNames;
 
-    // Check if they have the same number of properties
-    if Length(ActualKeys) <> Length(ExpectedKeys) then
+    { Only strict equality requires the key sets to match exactly. Loose
+      equality ignores a key whose value is undefined when the other side
+      does not have it at all, in either direction. }
+    if AStrict and (Length(ActualKeys) <> Length(ExpectedKeys)) then
     begin
       Result := False;
       Exit;
@@ -341,8 +474,12 @@ begin
       // Check if expected object has this key
       if not ExpectedObj.HasOwnProperty(Key) then
       begin
-        Result := False;
-        Exit;
+        if AStrict or not IsUndefinedLike(ActualObj.GetProperty(Key)) then
+        begin
+          Result := False;
+          Exit;
+        end;
+        Continue;
       end;
 
       // Recursively compare property values
@@ -352,6 +489,18 @@ begin
         Result := False;
         Exit;
       end;
+    end;
+
+    // Keys only the expected side has are equally subject to the rule above.
+    for I := 0 to High(ExpectedKeys) do
+    begin
+      Key := ExpectedKeys[I];
+      if not ActualObj.HasOwnProperty(Key) then
+        if AStrict or not IsUndefinedLike(ExpectedObj.GetProperty(Key)) then
+        begin
+          Result := False;
+          Exit;
+        end;
     end;
 
     Result := True;
@@ -381,10 +530,12 @@ function IsPartialDeepEqualInternal(const AActual, AExpected: TGocciaValue;
   const AIncludeInherited: Boolean): Boolean;
 var
   ActualObj, ExpectedObj: TGocciaObjectValue;
+  ActualArr, ExpectedArr: TGocciaArrayValue;
   DeepComparedPairs: TComparedValuePairArray;
   ExpectedKeys: TArray<string>;
   I: Integer;
   Key: string;
+  LeftValue, RightValue: TGocciaValue;
 begin
   CopyComparedPairs(AComparedPairs, DeepComparedPairs);
   if IsDeepEqualInternal(AActual, AExpected, DeepComparedPairs, False) then
@@ -393,9 +544,40 @@ begin
     Exit;
   end;
 
-  { Vitest's object-subset semantics do not make arrays partial: an array
-    property shape must describe every element. }
-  if (AActual is TGocciaArrayValue) or (AExpected is TGocciaArrayValue) then
+  { Object-subset semantics do not make arrays partial in length: the shape
+    must describe every element. Each element is still matched partially, so
+    an array of objects can be described by an array of subsets. }
+  if (AActual is TGocciaArrayValue) and (AExpected is TGocciaArrayValue) then
+  begin
+    ActualArr := TGocciaArrayValue(AActual);
+    ExpectedArr := TGocciaArrayValue(AExpected);
+    if ActualArr.Elements.Count <> ExpectedArr.Elements.Count then
+      Exit(False);
+    if HasComparedPair(AComparedPairs, AActual, AExpected) then
+      Exit(True);
+    AddComparedPair(AComparedPairs, AActual, AExpected);
+
+    for I := 0 to ActualArr.Elements.Count - 1 do
+    begin
+      LeftValue := ActualArr.Elements[I];
+      RightValue := ExpectedArr.Elements[I];
+      if LeftValue = TGocciaHoleValue.HoleValue then
+        LeftValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      if RightValue = TGocciaHoleValue.HoleValue then
+        RightValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      if not IsPartialDeepEqualInternal(LeftValue, RightValue, AComparedPairs,
+        AIncludeInherited) then
+        Exit(False);
+    end;
+
+    Result := True;
+    Exit;
+  end;
+
+  { The shape drives the semantics: an expected plain object describes a subset
+    of keys even when the actual value is an array, but an expected array can
+    only describe an array. }
+  if AExpected is TGocciaArrayValue then
     Exit(False);
 
   if (AActual is TGocciaObjectValue) and (AExpected is TGocciaObjectValue) then
