@@ -3,6 +3,11 @@ description: Definite assignment assertions on variable declarations are parsed 
 features: [types-as-comments]
 ---*/
 
+// The three rejection rules ('!' without an annotation, '!' with an initializer,
+// '!' on a const) are parse errors and are covered in scripts/test-cli-parser.ts.
+// The same-line restriction on '!' is covered in
+// tests/language/asi/definite-assignment-restriction.js.
+
 describe("definite assignment assertions", () => {
 
 test("let with a definite assignment assertion", () => {

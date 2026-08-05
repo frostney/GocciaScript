@@ -101,6 +101,13 @@ begin
   Result := ActualClass = ExpectedClass;
 end;
 
+{ An asymmetric matcher accepts a whole family of values, so it has to be
+  paired off after the exact members have claimed their partners. }
+function IsAsymmetricValue(const AValue: TGocciaValue): Boolean;
+begin
+  Result := AValue is TGocciaAsymmetricMatcherValue;
+end;
+
 { Exactly one side being an array, Set or Map makes the two values different
   kinds of container, which never compare equal even loosely. }
 function IsMismatchedContainer(const AActual, AExpected: TGocciaValue): Boolean;
@@ -183,7 +190,9 @@ var
   ActualMapKeys, ActualMapValues: TArray<TGocciaValue>;
   ExpectedMapKeys, ExpectedMapValues: TArray<TGocciaValue>;
   Used: TArray<Boolean>;
-  Found: Boolean;
+  Claimed: TArray<Boolean>;
+  Pass: Integer;
+  TrialPairs: TComparedValuePairArray;
 begin
   // Vitest/Jest asymmetric matchers participate in every equality-based
   // assertion. When both operands are matchers, compare their stored matcher
@@ -272,6 +281,14 @@ begin
       Exit;
     end;
 
+    // An array reachable from itself would otherwise recurse forever.
+    if HasComparedPair(AComparedPairs, AActual, AExpected) then
+    begin
+      Result := True;
+      Exit;
+    end;
+    AddComparedPair(AComparedPairs, AActual, AExpected);
+
     CommonCount := ActualArr.Elements.Count;
     if ExpectedArr.Elements.Count < CommonCount then
       CommonCount := ExpectedArr.Elements.Count;
@@ -354,28 +371,45 @@ begin
       Exit;
     end;
 
+    { Two passes so a literal member is never stranded by a matcher that
+      claimed its partner first: pass 0 pairs off the plain members, pass 1
+      lets the asymmetric matchers take what is left. }
     SetLength(Used, Length(ExpectedMembers));
-    for I := 0 to High(ActualMembers) do
-    begin
-      Found := False;
-      for J := 0 to High(ExpectedMembers) do
+    SetLength(Claimed, Length(ActualMembers));
+    for Pass := 0 to 1 do
+      for I := 0 to High(ActualMembers) do
       begin
-        if Used[J] then
+        if Claimed[I] then
           Continue;
-        if IsDeepEqualInternal(ActualMembers[I], ExpectedMembers[J],
-          AComparedPairs, AStrict) then
+        if (Pass = 0) and IsAsymmetricValue(ActualMembers[I]) then
+          Continue;
+        for J := 0 to High(ExpectedMembers) do
         begin
-          Used[J] := True;
-          Found := True;
-          Break;
+          if Used[J] then
+            Continue;
+          if (Pass = 0) and IsAsymmetricValue(ExpectedMembers[J]) then
+            Continue;
+          { A rejected candidate must leave no trace: the pairs it recorded on
+            the way down would otherwise read as "already comparing" — and so
+            as equal — when a later pass retries the same two members. }
+          CopyComparedPairs(AComparedPairs, TrialPairs);
+          if IsDeepEqualInternal(ActualMembers[I], ExpectedMembers[J],
+            TrialPairs, AStrict) then
+          begin
+            CopyComparedPairs(TrialPairs, AComparedPairs);
+            Used[J] := True;
+            Claimed[I] := True;
+            Break;
+          end;
         end;
       end;
-      if not Found then
+
+    for I := 0 to High(ActualMembers) do
+      if not Claimed[I] then
       begin
         Result := False;
         Exit;
       end;
-    end;
 
     Result := True;
     Exit;
@@ -406,30 +440,46 @@ begin
       Exit;
     end;
 
+    { Same two passes as Sets: an entry whose key or value is a matcher only
+      claims a partner once the exact entries have been paired off. }
     SetLength(Used, Length(ExpectedMapKeys));
-    for I := 0 to High(ActualMapKeys) do
-    begin
-      Found := False;
-      for J := 0 to High(ExpectedMapKeys) do
+    SetLength(Claimed, Length(ActualMapKeys));
+    for Pass := 0 to 1 do
+      for I := 0 to High(ActualMapKeys) do
       begin
-        if Used[J] then
+        if Claimed[I] then
           Continue;
-        if IsDeepEqualInternal(ActualMapKeys[I], ExpectedMapKeys[J],
-          AComparedPairs, AStrict) and
-           IsDeepEqualInternal(ActualMapValues[I], ExpectedMapValues[J],
-          AComparedPairs, AStrict) then
+        if (Pass = 0) and (IsAsymmetricValue(ActualMapKeys[I]) or
+           IsAsymmetricValue(ActualMapValues[I])) then
+          Continue;
+        for J := 0 to High(ExpectedMapKeys) do
         begin
-          Used[J] := True;
-          Found := True;
-          Break;
+          if Used[J] then
+            Continue;
+          if (Pass = 0) and (IsAsymmetricValue(ExpectedMapKeys[J]) or
+             IsAsymmetricValue(ExpectedMapValues[J])) then
+            Continue;
+          // Same rejected-candidate isolation as the Set branch above.
+          CopyComparedPairs(AComparedPairs, TrialPairs);
+          if IsDeepEqualInternal(ActualMapKeys[I], ExpectedMapKeys[J],
+            TrialPairs, AStrict) and
+             IsDeepEqualInternal(ActualMapValues[I], ExpectedMapValues[J],
+            TrialPairs, AStrict) then
+          begin
+            CopyComparedPairs(TrialPairs, AComparedPairs);
+            Used[J] := True;
+            Claimed[I] := True;
+            Break;
+          end;
         end;
       end;
-      if not Found then
+
+    for I := 0 to High(ActualMapKeys) do
+      if not Claimed[I] then
       begin
         Result := False;
         Exit;
       end;
-    end;
 
     Result := True;
     Exit;

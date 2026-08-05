@@ -16,7 +16,7 @@ function assertSyntaxErrorInBothModes(
   source: string,
   desc: string,
   args: readonly string[] = [],
-  opts?: { timeout?: number; messageIncludes?: string },
+  opts?: { timeout?: number; messageIncludes?: string; line?: number },
 ): void {
   assertSyntaxError(source, desc, [...args], opts);
   assertSyntaxError(
@@ -795,7 +795,7 @@ console.log("Disabled-feature diagnostics with interpolated template literals...
   }
 }
 
-// -- JSX preprocessor termination on non-JSX angle brackets ---------------------
+// -- JSX preprocessor termination and error positions --------------------------
 
 console.log("JSX preprocessor termination...");
 {
@@ -803,9 +803,17 @@ console.log("JSX preprocessor termination...");
   // source character by character, and a branch that consumes nothing used to
   // spin forever at 100% CPU. A regression therefore hangs the loader instead
   // of failing an assertion, so each run is bounded by an explicit timeout.
+  // Cases carrying `line` additionally pin where the error is reported, since
+  // nested attribute expressions are transformed from a copied slice whose
+  // positions have to be rebased onto the enclosing source.
   const JSX_SCAN_TIMEOUT_MS = 30_000;
 
-  const cases = [
+  const cases: readonly {
+    desc: string;
+    source: string;
+    messageIncludes: string;
+    line?: number;
+  }[] = [
     {
       desc: "type-parameter arrow after a function type annotation",
       // `: <T>` looks like a JSX opening tag, so the children scan runs on the
@@ -833,13 +841,161 @@ console.log("JSX preprocessor termination...");
       source: `const element = ${"<a>".repeat(300)};\n`,
       messageIncludes: "Nesting depth exceeded",
     },
-  ] as const;
+    {
+      desc: "error inside a nested attribute expression",
+      source: [
+        "const first = 1;",
+        "const element = <div a={<b></c>} />;",
+        "",
+      ].join("\n"),
+      messageIncludes: "Expected closing tag",
+      line: 2,
+    },
+    {
+      desc: "error inside a nested attribute expression starting on a later line",
+      source: [
+        "const first = 1;",
+        "const element = <div a={",
+        "  <b></c>",
+        "} />;",
+        "",
+      ].join("\n"),
+      messageIncludes: "Expected closing tag",
+      line: 3,
+    },
+    {
+      desc: "error on a later line of a nested attribute expression",
+      source: [
+        "const first = 1;",
+        "const element = <div a={<b>",
+        "</c>} />;",
+        "",
+      ].join("\n"),
+      messageIncludes: "Expected closing tag",
+      line: 3,
+    },
+    {
+      desc: "namespaced attribute name is reported as unsupported, not as non-JSX",
+      source: 'const element = <svg xlink:href="a" />;\n',
+      messageIncludes: "Unsupported attribute syntax",
+      line: 1,
+    },
+  ];
 
-  for (const { desc, source, messageIncludes } of cases)
+  for (const { desc, source, messageIncludes, line } of cases)
     assertSyntaxErrorInBothModes(source, desc, [], {
       timeout: JSX_SCAN_TIMEOUT_MS,
       messageIncludes,
+      line,
     });
+}
+
+// -- Definite assignment assertion rules ----------------------------------------
+
+console.log("Definite assignment assertion rules...");
+{
+  // TypeScript's three rules for `!` on a variable declaration. These are parse
+  // errors, so they cannot be asserted from a JS test file — see
+  // tests/language/types-as-comments/definite-assignment.js for the accepted
+  // forms.
+  const cases = [
+    {
+      desc: "definite assignment without a type annotation",
+      source: "let x!;\n",
+      messageIncludes: "must also have type annotations",
+    },
+    {
+      desc: "definite assignment with an initializer",
+      source: "let x!: number = 1;\n",
+      messageIncludes: "cannot also have definite assignment assertions",
+    },
+    {
+      desc: "definite assignment on a const declaration",
+      source: "const x!: number;\n",
+      messageIncludes: "not permitted on a const declaration",
+    },
+    {
+      desc: "definite assignment without an annotation on var",
+      source: "var x!;\n",
+      messageIncludes: "must also have type annotations",
+      args: ["--compat-var"],
+    },
+    {
+      desc: "definite assignment with an initializer on var",
+      source: "var x!: number = 1;\n",
+      messageIncludes: "cannot also have definite assignment assertions",
+      args: ["--compat-var"],
+    },
+  ] as const;
+
+  for (const { desc, source, messageIncludes, args } of cases)
+    assertSyntaxErrorInBothModes(source, desc, args ?? [], { messageIncludes });
+
+  // The '!' is a restricted production: on the next line it starts a new
+  // expression statement rather than being absorbed as an assertion.
+  const asiSource = [
+    "let x",
+    "!(() => { console.log('ran'); })()",
+    "console.log(typeof x)",
+    "",
+  ].join("\n");
+  for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+    const label = modeArgs.length ? "leading-! after ASI (bytecode)" : "leading-! after ASI";
+    const res = runLoaderJson(asiSource, ["--compat-asi", ...modeArgs]);
+    if (res.exitCode !== 0)
+      throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+    if (normalizeLineEndings(res.json.output) !== "ran\nundefined\n")
+      throw new Error(`${label}: expected "ran\\nundefined", got ${JSON.stringify(res.json.output)}`);
+  }
+}
+
+// -- Type alias skipping across line breaks under ASI ---------------------------
+
+console.log("Type alias skipping under ASI...");
+{
+  // A skipped `type` alias may wrap its type argument list across lines. The
+  // skipper does not depth-count '<' / '>', so it relies on the line break
+  // never being a legal ASI point: it follows a '<' or ',', or precedes a '>'.
+  const source = [
+    "type Handler = Map<",
+    "  string,",
+    "  number",
+    ">;",
+    "const after = 2",
+    "console.log(after)",
+    "",
+  ].join("\n");
+
+  for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+    const label = modeArgs.length ? "multi-line type alias (bytecode)" : "multi-line type alias";
+    const res = runLoaderJson(source, ["--compat-asi", ...modeArgs]);
+    if (res.exitCode !== 0)
+      throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+    if (normalizeLineEndings(res.json.output) !== "2\n")
+      throw new Error(`${label}: expected "2", got ${JSON.stringify(res.json.output)}`);
+  }
+
+  // The complementary guarantee: a relational expression in a skipped statement
+  // still ends at its own line break instead of swallowing what follows.
+  const relationalSource = [
+    "var skipped = 1 < 2",
+    "const after = 3",
+    "console.log(after)",
+    "",
+  ].join("\n");
+
+  for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+    const label = modeArgs.length ? "relational in skipped var (bytecode)" : "relational in skipped var";
+    const res = runLoaderJson(relationalSource, [
+      "--warning-unsupported-features",
+      "--compat-asi",
+      ...modeArgs,
+    ]);
+    if (res.exitCode !== 0)
+      throw new Error(`${label}: should recover, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+    if (normalizeLineEndings(res.json.output) !== "3\n")
+      throw new Error(`${label}: expected "3", got ${JSON.stringify(res.json.output)}`);
+  }
 }
 
 console.log("\nAll test-cli-parser.ts tests passed.");

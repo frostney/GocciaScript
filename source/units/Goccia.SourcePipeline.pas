@@ -756,7 +756,18 @@ begin
 
   OriginalSourceLines := CreateECMAScriptSourceLines(Source);
   try
-    Source := ApplyPreprocessors(Source, AFileName, AOptions, SourceMap);
+    try
+      Source := ApplyPreprocessors(Source, AFileName, AOptions, SourceMap);
+    except
+      on E: TGocciaError do
+      begin
+        // A preprocessor error is positioned in the wrapper source, which is
+        // exactly what OriginalSourceLines holds — attach it so the caret
+        // display matches the coordinates the error already carries.
+        E.TranslatePosition(E.Line, E.Column, OriginalSourceLines);
+        raise;
+      end;
+    end;
     try
       Lexer := TGocciaLexer.Create(Source, AFileName);
       try

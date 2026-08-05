@@ -3,6 +3,9 @@ description: var declarations accept definite assignment assertions, which are e
 features: [compat-var, types-as-comments]
 ---*/
 
+// The rejection rules are parse errors and are covered in
+// scripts/test-cli-parser.ts.
+
 test("var with a definite assignment assertion", () => {
   var value!: number;
   value = 5;
