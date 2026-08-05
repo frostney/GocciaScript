@@ -17,9 +17,29 @@ function ToPrimitive(const AValue: TGocciaValue; const AHint: TGocciaToPrimitive
 // else is coerced via ToString. Callers must check the returned type.
 function ToPropertyKey(const AValue: TGocciaValue): TGocciaValue;
 
+// ES2026 §6.2.5.5 GetValue step 3.a and §6.2.5.6 PutValue step 3.a perform
+// ToObject(_V_.[[Base]]) — which throws a *TypeError* for null/undefined — BEFORE
+// step 3.c converts _V_.[[ReferencedName]] with ToPropertyKey. Since §13.3.3
+// EvaluatePropertyAccessWithExpressionKey stores the *unconverted* key value in the
+// Reference Record, a nullish base must be rejected before the key expression's
+// result is coerced: a throwing or observable toString/valueOf on the key must not
+// run. Note that the key *expression* is still evaluated first (§13.3.3 step 1);
+// only the ToPropertyKey conversion is ordered after the base check.
+//
+// Every computed property access on a possibly-nullish base must therefore call
+// ToPropertyKeyForBase rather than a bare ToPropertyKey. Pass AForWrite for store
+// targets (PutValue) so the message reads "cannot set properties" rather than
+// "cannot read properties".
+procedure RequireCoercibleBaseForPropertyAccess(const ABase, AUncoercedKey: TGocciaValue;
+  const AForWrite: Boolean = False);
+function ToPropertyKeyForBase(const ABase, AUncoercedKey: TGocciaValue;
+  const AForWrite: Boolean = False): TGocciaValue;
+
 implementation
 
 uses
+  SysUtils,
+
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -165,6 +185,58 @@ begin
   // Step 3: Return ! ToString(key). Prim is a primitive here, so ToStringLiteral
   // on it cannot re-enter user code.
   Result := Prim.ToStringLiteral;
+end;
+
+// Name the key for the TypeError message without invoking user code. The whole
+// point of the base check is that ToPropertyKey has not run yet, so only keys that
+// are already primitives can be named exactly; object keys report '<computed>'.
+function DescribeUncoercedPropertyKey(const AKeyValue: TGocciaValue): string;
+begin
+  // Symbols are primitives but ToStringLiteral throws on them (ES2026 §7.1.17),
+  // so use the non-throwing description instead.
+  if AKeyValue is TGocciaSymbolValue then
+    Result := TGocciaSymbolValue(AKeyValue).ToDisplayString.Value
+  else if AKeyValue.IsPrimitive then
+    Result := AKeyValue.ToStringLiteral.Value
+  else
+    Result := '<computed>';
+end;
+
+procedure RequireCoercibleBaseForPropertyAccess(const ABase, AUncoercedKey: TGocciaValue;
+  const AForWrite: Boolean);
+var
+  KeyText: string;
+begin
+  if not ((ABase is TGocciaNullLiteralValue) or
+          (ABase is TGocciaUndefinedLiteralValue)) then
+    Exit;
+
+  KeyText := DescribeUncoercedPropertyKey(AUncoercedKey);
+  if AForWrite then
+  begin
+    if ABase is TGocciaNullLiteralValue then
+      ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [KeyText]),
+        SSuggestCheckNullBeforeAccess)
+    else
+      ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [KeyText]),
+        SSuggestCheckNullBeforeAccess);
+  end
+  else
+  begin
+    if ABase is TGocciaNullLiteralValue then
+      ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull, [KeyText]),
+        SSuggestCheckNullBeforeAccess)
+    else
+      ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined, [KeyText]),
+        SSuggestCheckNullBeforeAccess);
+  end;
+end;
+
+function ToPropertyKeyForBase(const ABase, AUncoercedKey: TGocciaValue;
+  const AForWrite: Boolean): TGocciaValue;
+begin
+  RequireCoercibleBaseForPropertyAccess(ABase, AUncoercedKey, AForWrite);
+  Result := ToPropertyKey(AUncoercedKey);
 end;
 
 end.

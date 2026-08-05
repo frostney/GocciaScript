@@ -8088,10 +8088,18 @@ var
   FastIndex: Integer;
   FastElement: Double;
 begin
+  // ES2026 §6.2.5.5 GetValue step 3.a: ToObject on the Reference Record's [[Base]]
+  // throws for null/undefined before step 3.c runs ToPropertyKey on the referenced
+  // name. KeyDisplaySafe names the key without invoking user code, which is
+  // required here precisely because the key has not been coerced yet.
   if (caoThrowOnNullUndefined in AOptions) and
-     (AObjReg.Kind in [grkUndefined, grkNull]) then
-    ThrowTypeError(SErrorCannotConvertNullOrUndefined,
-      SSuggestCheckNullBeforeAccess)
+     (AObjReg.Kind = grkNull) then
+    ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull,
+      [KeyDisplaySafe(AKeyReg)]), SSuggestCheckNullBeforeAccess)
+  else if (caoThrowOnNullUndefined in AOptions) and
+          (AObjReg.Kind = grkUndefined) then
+    ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
+      [KeyDisplaySafe(AKeyReg)]), SSuggestCheckNullBeforeAccess)
   else if (AObjReg.Kind = grkObject) and
           (AObjReg.ObjectValue is TGocciaTypedArrayValue) and
           TryGetArrayIndexRegister(AKeyReg, FastIndex) and
@@ -8196,6 +8204,18 @@ var
   BoxedTarget: TGocciaObjectValue;
   FastIndex: Integer;
 begin
+  // ES2026 §6.2.5.6 PutValue step 3.a (ToObject on [[Base]]) precedes step 3.c
+  // (ToPropertyKey on [[ReferencedName]]), so a nullish target must throw before
+  // the key register is classified — ClassifyPropertyKey below can run a user
+  // toString/valueOf, and that side effect must not be observable here.
+  // KeyDisplaySafe names the key without coercing it.
+  if FRegisters[ATargetIndex].Kind = grkNull then
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull,
+      [KeyDisplaySafe(AKeyReg)]), SSuggestCheckNullBeforeAccess)
+  else if FRegisters[ATargetIndex].Kind = grkUndefined then
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined,
+      [KeyDisplaySafe(AKeyReg)]), SSuggestCheckNullBeforeAccess);
+
   // Typed-array unboxed element write: a numeric-scalar value going to a valid
   // integer index stores directly, with no heap TGocciaNumberLiteralValue and no
   // IntToStr index name. ToNumber on a Number is side-effect-free, so the spec's
@@ -14894,6 +14914,17 @@ begin
 
       OP_SET_INDEX_LOOSE:
       begin
+        // ES2026 §6.2.5.6 PutValue step 3.a precedes step 3.c: reject a nullish
+        // base before SetIndexValueLoose classifies (and possibly coerces) the key.
+        // Sloppy mode does not relax this — only the "assignment failed" case at
+        // step 3.e is strict-only.
+        if FRegisters[A].Kind = grkNull then
+          ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull,
+            [KeyDisplaySafe(FRegisters[B])]), SSuggestCheckNullBeforeAccess)
+        else if FRegisters[A].Kind = grkUndefined then
+          ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined,
+            [KeyDisplaySafe(FRegisters[B])]), SSuggestCheckNullBeforeAccess);
+
         RightValue := RegisterToValue(FRegisters[C]);
         TargetValue := GetRegister(A);
         if (TargetValue is TGocciaClassValue) or
@@ -17196,6 +17227,19 @@ begin
               if FRegisters[A].Kind in [grkNull, grkUndefined] then
                 ThrowTypeError(Format(SErrorCannotDestructureNotObject, [RegisterToValue(FRegisters[A]).ToStringLiteral.Value]),
                   SSuggestDestructureRequiresObject);
+            end;
+
+          // ES2026 §6.2.5.5 GetValue step 3.a on a computed member base. C holds
+          // the key register, still uncoerced (this runs before OP_TO_PROPERTY_KEY),
+          // so KeyDisplaySafe names it without invoking user code.
+          VALIDATE_OP_REQUIRE_OBJECT_FOR_MEMBER:
+            begin
+              if FRegisters[A].Kind = grkNull then
+                ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull,
+                  [KeyDisplaySafe(FRegisters[C])]), SSuggestCheckNullBeforeAccess)
+              else if FRegisters[A].Kind = grkUndefined then
+                ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
+                  [KeyDisplaySafe(FRegisters[C])]), SSuggestCheckNullBeforeAccess);
             end;
 
           VALIDATE_OP_REQUIRE_ITERABLE:

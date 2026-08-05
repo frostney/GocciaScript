@@ -180,6 +180,13 @@ const
   COLLECTION_OP_TRY_ITERABLE_TO_ARRAY = 3;
   VALIDATE_OP_REQUIRE_OBJECT = 0;
   VALIDATE_OP_REQUIRE_ITERABLE = 1;
+  // Same nullish-base rejection as VALIDATE_OP_REQUIRE_OBJECT, but for a computed
+  // *member* base (`a[k]++`, `a[k] += v`, `a[k] ??= v`) rather than a destructuring
+  // pattern, so it reports the ES2026 §6.2.5.5 GetValue step 3.a "cannot read
+  // properties of null" wording instead of the destructuring wording. The C operand
+  // carries the key register, still holding the UNCOERCED key: this validate is
+  // emitted before OP_TO_PROPERTY_KEY precisely so step 3.a precedes step 3.c.
+  VALIDATE_OP_REQUIRE_OBJECT_FOR_MEMBER = 2;
   ITER_CLOSE_NORMAL = 0;
   ITER_CLOSE_PRESERVE_ERROR = 1;
   ITER_CLOSE_PRESERVE_UNLESS_GENERATOR_RETURN = 2;
