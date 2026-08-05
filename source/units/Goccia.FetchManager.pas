@@ -451,7 +451,10 @@ begin
 
   if Assigned(ASignal) and ASignal.IsAborted then
   begin
+    // WHATWG DOM §3.2 signal abort: abort algorithms (the fetch rejection)
+    // run before the "abort" event is fired at the signal.
     APromise.Reject(ASignal.Reason);
+    ASignal.FlushAbortEvent;
     Exit;
   end;
 
@@ -476,6 +479,7 @@ begin
       begin
         ASignal.RefreshTimeout;
         APromise.Reject(ASignal.Reason);
+        ASignal.FlushAbortEvent;
         FLimiter.ReleaseWorker;
         Exit;
       end;
@@ -532,18 +536,42 @@ function TGocciaFetchManagerImpl.RejectAbortedFetches: Integer;
 var
   I: Integer;
   Pending: TGocciaPendingFetch;
+  AbortedSignals: TGocciaAbortSignalList;
 begin
   Result := 0;
-  for I := FPending.Count - 1 downto 0 do
-  begin
-    Pending := FPending[I];
-    if not Assigned(Pending.Signal) or not Pending.Signal.IsAborted then
-      Continue;
+  // Listeners must not run while this loop walks FPending, so the "abort"
+  // events are collected here and dispatched once the walk is finished. No
+  // script runs in between, so a listener still cannot be registered after the
+  // signal aborted but before its event fires.
+  AbortedSignals := TGocciaAbortSignalList.Create(False);
+  try
+    for I := FPending.Count - 1 downto 0 do
+    begin
+      Pending := FPending[I];
+      if not Assigned(Pending.Signal) or not Pending.Signal.IsAborted then
+        Continue;
 
-    FPending.Delete(I);
-    Pending.Promise.Reject(Pending.Signal.Reason);
-    ReleasePendingRoots(Pending);
-    Inc(Result);
+      FPending.Delete(I);
+      Pending.Promise.Reject(Pending.Signal.Reason);
+      // Keep the signal alive across ReleasePendingRoots so its pending
+      // "abort" event can still be dispatched below.
+      if AbortedSignals.IndexOf(Pending.Signal) < 0 then
+      begin
+        AbortedSignals.Add(Pending.Signal);
+        if TGarbageCollector.Instance <> nil then
+          TGarbageCollector.Instance.AddTempRoot(Pending.Signal);
+      end;
+      ReleasePendingRoots(Pending);
+      Inc(Result);
+    end;
+
+    for I := 0 to AbortedSignals.Count - 1 do
+      AbortedSignals[I].FlushAbortEvent;
+  finally
+    if TGarbageCollector.Instance <> nil then
+      for I := 0 to AbortedSignals.Count - 1 do
+        TGarbageCollector.Instance.RemoveTempRoot(AbortedSignals[I]);
+    AbortedSignals.Free;
   end;
 end;
 
