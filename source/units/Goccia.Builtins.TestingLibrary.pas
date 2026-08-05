@@ -532,8 +532,7 @@ var
   Bracket: string;
   Position: Integer;
   I: Integer;
-  HasCurrent: Boolean;
-  QuoteChar: Char;
+  SegmentOpen: Boolean;
 
   procedure AppendSegment(const ASegment: string);
   begin
@@ -554,7 +553,9 @@ begin
 
   Path := APathValue.ToStringLiteral.Value;
   Current := '';
-  HasCurrent := False;
+  // A text segment is open from the start, so an empty path is the single
+  // empty-string key and a trailing separator leaves an empty segment behind.
+  SegmentOpen := True;
   Position := 1;
   while Position <= Length(Path) do
   begin
@@ -562,17 +563,15 @@ begin
     begin
       AppendSegment(Current);
       Current := '';
-      HasCurrent := False;
+      SegmentOpen := True;
       Inc(Position);
     end
     else if Path[Position] = '[' then
     begin
-      if HasCurrent then
-      begin
+      if Current <> '' then
         AppendSegment(Current);
-        Current := '';
-        HasCurrent := False;
-      end;
+      Current := '';
+      SegmentOpen := False;
       Inc(Position);
       Bracket := '';
       while (Position <= Length(Path)) and (Path[Position] <> ']') do
@@ -582,28 +581,22 @@ begin
       end;
       if Position <= Length(Path) then
         Inc(Position);
-      // A quoted bracket segment carries the key verbatim: items["a.b"]
-      if Length(Bracket) >= 2 then
-      begin
-        QuoteChar := Bracket[1];
-        if ((QuoteChar = '"') or (QuoteChar = #39)) and
-           (Bracket[Length(Bracket)] = QuoteChar) then
-          Bracket := Copy(Bracket, 2, Length(Bracket) - 2);
-      end;
       AppendSegment(Bracket);
       if (Position <= Length(Path)) and (Path[Position] = '.') then
+      begin
+        SegmentOpen := True;
         Inc(Position);
+      end;
     end
     else
     begin
       Current := Current + Path[Position];
-      HasCurrent := True;
+      SegmentOpen := True;
       Inc(Position);
     end;
   end;
 
-  // An empty path is the single empty-string key, not an empty segment list.
-  if HasCurrent or (Length(Result) = 0) then
+  if SegmentOpen then
     AppendSegment(Current);
 end;
 
@@ -1921,6 +1914,7 @@ var
   HasProperty: Boolean;
   Segments: TArray<string>;
   PathDescription: string;
+  PathArgument: TGocciaValue;
   ResolvedValue: TGocciaValue;
   ExpectsValue: Boolean;
 begin
@@ -1938,7 +1932,15 @@ begin
     Exit;
   end;
 
-  Segments := ParsePropertyPath(AArgs.GetElement(0));
+  PathArgument := AArgs.GetElement(0);
+  if not ((PathArgument is TGocciaStringLiteralValue) or
+     (PathArgument is TGocciaArrayValue)) then
+  begin
+    ThrowTypeError(SErrorToHavePropertyExpectsPath, SSuggestTestUsage);
+    Exit;
+  end;
+
+  Segments := ParsePropertyPath(PathArgument);
   PathDescription := DescribePropertyPath(Segments);
   ExpectsValue := AArgs.Length = 2;
 

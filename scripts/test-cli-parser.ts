@@ -16,7 +16,7 @@ function assertSyntaxErrorInBothModes(
   source: string,
   desc: string,
   args: readonly string[] = [],
-  opts?: { timeout?: number; messageIncludes?: string },
+  opts?: { timeout?: number; messageIncludes?: string; line?: number },
 ): void {
   assertSyntaxError(source, desc, [...args], opts);
   assertSyntaxError(
@@ -795,7 +795,7 @@ console.log("Disabled-feature diagnostics with interpolated template literals...
   }
 }
 
-// -- JSX preprocessor termination on non-JSX angle brackets ---------------------
+// -- JSX preprocessor termination and error positions --------------------------
 
 console.log("JSX preprocessor termination...");
 {
@@ -803,9 +803,17 @@ console.log("JSX preprocessor termination...");
   // source character by character, and a branch that consumes nothing used to
   // spin forever at 100% CPU. A regression therefore hangs the loader instead
   // of failing an assertion, so each run is bounded by an explicit timeout.
+  // Cases carrying `line` additionally pin where the error is reported, since
+  // nested attribute expressions are transformed from a copied slice whose
+  // positions have to be rebased onto the enclosing source.
   const JSX_SCAN_TIMEOUT_MS = 30_000;
 
-  const cases = [
+  const cases: readonly {
+    desc: string;
+    source: string;
+    messageIncludes: string;
+    line?: number;
+  }[] = [
     {
       desc: "type-parameter arrow after a function type annotation",
       // `: <T>` looks like a JSX opening tag, so the children scan runs on the
@@ -833,12 +841,52 @@ console.log("JSX preprocessor termination...");
       source: `const element = ${"<a>".repeat(300)};\n`,
       messageIncludes: "Nesting depth exceeded",
     },
-  ] as const;
+    {
+      desc: "error inside a nested attribute expression",
+      source: [
+        "const first = 1;",
+        "const element = <div a={<b></c>} />;",
+        "",
+      ].join("\n"),
+      messageIncludes: "Expected closing tag",
+      line: 2,
+    },
+    {
+      desc: "error inside a nested attribute expression starting on a later line",
+      source: [
+        "const first = 1;",
+        "const element = <div a={",
+        "  <b></c>",
+        "} />;",
+        "",
+      ].join("\n"),
+      messageIncludes: "Expected closing tag",
+      line: 3,
+    },
+    {
+      desc: "error on a later line of a nested attribute expression",
+      source: [
+        "const first = 1;",
+        "const element = <div a={<b>",
+        "</c>} />;",
+        "",
+      ].join("\n"),
+      messageIncludes: "Expected closing tag",
+      line: 3,
+    },
+    {
+      desc: "namespaced attribute name is reported as unsupported, not as non-JSX",
+      source: 'const element = <svg xlink:href="a" />;\n',
+      messageIncludes: "Unsupported attribute syntax",
+      line: 1,
+    },
+  ];
 
-  for (const { desc, source, messageIncludes } of cases)
+  for (const { desc, source, messageIncludes, line } of cases)
     assertSyntaxErrorInBothModes(source, desc, [], {
       timeout: JSX_SCAN_TIMEOUT_MS,
       messageIncludes,
+      line,
     });
 }
 
