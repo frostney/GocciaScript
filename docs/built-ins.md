@@ -352,7 +352,7 @@ The constructor-backed objects mirror the `node-semver` public fields and core i
 
 `encodeURI` / `decodeURI` / `encodeURIComponent` / `decodeURIComponent` follow the ECMA-262 URI handling specification. The shared encoding/decoding logic lives in `Goccia.URI.pas` and is also used by `import.meta.url` for file-path percent-encoding. Multi-byte Unicode characters are encoded as UTF-8 octets, each percent-encoded individually (e.g., `encodeURIComponent("中")` → `%E4%B8%AD`). Lone surrogates (U+D800–U+DFFF) throw `URIError`. Decoding validates UTF-8 well-formedness: overlong encodings, truncated sequences, and code points above U+10FFFF all throw `URIError`. `decodeURI` re-emits reserved characters as uppercase percent-encoded sequences even when the input uses lowercase hex digits (e.g., `%2f` → `%2F`).
 
-**Error constructors:** `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `DOMException`
+**Error constructors:** `Error`, `EvalError`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, `DOMException`
 
 **Prototype chain:** All error types follow the standard prototype hierarchy. `TypeError.prototype`, `RangeError.prototype`, etc. inherit from `Error.prototype`. Each error prototype has a `constructor` property pointing back to its constructor (e.g., `Error.prototype.constructor === Error`), so `new TypeError("x").constructor.name === "TypeError"`. `instanceof` checks and cross-type checks also work correctly: `new TypeError("msg") instanceof TypeError` is `true`, `new TypeError("msg") instanceof Error` is `true`, and `new TypeError("msg") instanceof RangeError` is `false`.
 
