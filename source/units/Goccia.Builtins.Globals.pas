@@ -752,16 +752,6 @@ end;
   3. Set this.name to name.
   4. Set this.message to message.
   5. Set this.code to the legacy code for name (e.g. DataCloneError -> 25), or 0. }
-function DOMExceptionLegacyCode(const AName: string): Integer;
-begin
-  if AName = DATA_CLONE_ERROR_NAME then
-    Result := 25
-  else if AName = INVALID_CHARACTER_ERROR_NAME then
-    Result := 5
-  else
-    Result := 0;
-end;
-
 function TGocciaGlobals.BuildDOMException(const AArgs: TGocciaArgumentsCollection; const AProto: TGocciaObjectValue): TGocciaObjectValue;
 var
   Message, Name: string;
@@ -776,15 +766,8 @@ begin
   else
     Name := ERROR_NAME;
 
-  Result := CreateErrorObject(Name, Message, 1);
-  Result.HasErrorData := False;
+  Result := CreateDOMExceptionObject(Name, Message, 1);
   Result.Prototype := AProto;
-  if Result.ErrorStack <> '' then
-    Result.DefineProperty(PROP_STACK,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaStringLiteralValue.Create(Result.ErrorStack),
-        [pfConfigurable, pfWritable]));
-  Result.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(DOMExceptionLegacyCode(Name)));
 end;
 
 function TGocciaGlobals.DOMExceptionConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
