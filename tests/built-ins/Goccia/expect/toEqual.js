@@ -88,6 +88,63 @@ describe("toEqual", () => {
     expect(new Set([1])).not.toEqual(new Map([[1, 1]]));
   });
 
+  test("pairs members off so a matcher cannot strand a literal", () => {
+    // The literal 1 must claim its partner before expect.any(Number) takes it.
+    expect(new Set([1, 2])).toEqual(new Set([expect.any(Number), 1]));
+    expect(new Set([1, 2])).toEqual(new Set([1, expect.any(Number)]));
+    expect(new Set([1, 2])).toEqual(
+      new Set([expect.any(Number), expect.any(Number)]),
+    );
+    expect(new Set([{ a: 1 }, { a: 2 }])).toEqual(
+      new Set([expect.objectContaining({ a: 2 }), { a: 1 }]),
+    );
+    expect(new Set([1, 2])).not.toEqual(new Set([expect.any(String), 1]));
+  });
+
+  test("pairs Map entries off the same way", () => {
+    expect(new Map([[1, "x"], [2, "x"]])).toEqual(
+      new Map([[expect.any(Number), "x"], [1, "x"]]),
+    );
+    expect(new Map([[1, "x"], [2, "x"]])).toEqual(
+      new Map([[1, "x"], [expect.any(Number), "x"]]),
+    );
+    expect(new Map([["a", 1], ["b", 2]])).toEqual(
+      new Map([["b", expect.any(Number)], ["a", 1]]),
+    );
+    expect(new Map([[1, "x"]])).not.toEqual(
+      new Map([[expect.any(String), "x"]]),
+    );
+  });
+
+  test("requires every member to find its own partner", () => {
+    // bun accepts these because it never marks an expected member as claimed;
+    // requiring a distinct partner per member is the stricter reading.
+    expect(new Set([1, 2])).not.toEqual(new Set([expect.any(Number), 3]));
+    expect(new Set([{ a: 1 }, { a: 1 }])).not.toEqual(
+      new Set([{ a: 1 }, { b: 2 }]),
+    );
+  });
+
+  test("ignores a trailing hole", () => {
+    expect([1, ,]).toEqual([1]);
+  });
+
+  test("handles cyclic arrays", () => {
+    const left = [];
+    left.push(left);
+    const right = [];
+    right.push(right);
+
+    expect(left).toEqual(right);
+
+    const leftNested = [1, []];
+    leftNested[1].push(leftNested);
+    const rightNested = [1, []];
+    rightNested[1].push(rightNested);
+
+    expect(leftNested).toEqual(rightNested);
+  });
+
   test("handles cyclic structures", () => {
     const left = { name: "root" };
     left.self = left;

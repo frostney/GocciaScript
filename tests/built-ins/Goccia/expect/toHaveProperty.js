@@ -77,4 +77,21 @@ describe("toHaveProperty", () => {
   test("supports the empty-string key", () => {
     expect({ "": 1 }).toHaveProperty("", 1);
   });
+
+  test("treats a trailing separator as a real empty segment", () => {
+    expect({ a: 1 }).not.toHaveProperty("a.");
+    expect({ a: { b: 1 } }).not.toHaveProperty("a.");
+    expect({ a: { "": 1 } }).toHaveProperty("a.", 1);
+  });
+
+  test("does not unquote bracket segments", () => {
+    // Only an array path reaches a key containing a dot.
+    expect({ a: { "b.c": 1 } }).not.toHaveProperty('a["b.c"]', 1);
+    expect({ a: { "b.c": 1 } }).toHaveProperty(["a", "b.c"], 1);
+  });
+
+  test("requires a string or array path", () => {
+    expect(() => expect([1, 2]).toHaveProperty(0, 1)).toThrow();
+    expect(() => expect({ a: 1 }).toHaveProperty(null)).toThrow();
+  });
 });

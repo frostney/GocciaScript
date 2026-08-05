@@ -75,6 +75,20 @@ describe("toStrictEqual", () => {
     );
   });
 
+  test("applies the type check to Set members", () => {
+    expect(new Set([new Point(1)])).not.toStrictEqual(new Set([{ x: 1 }]));
+    expect(new Set([new Point(1)])).toStrictEqual(new Set([new Point(1)]));
+  });
+
+  test("handles cyclic arrays", () => {
+    const left = [];
+    left.push(left);
+    const right = [];
+    right.push(right);
+
+    expect(left).toStrictEqual(right);
+  });
+
   test("supports negation", () => {
     expect({ a: 1 }).not.toStrictEqual({ a: 2 });
     expect([1]).not.toStrictEqual([1, 2]);

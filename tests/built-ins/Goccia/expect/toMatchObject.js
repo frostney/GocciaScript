@@ -58,6 +58,37 @@ describe("toMatchObject", () => {
     });
   });
 
+  test("matches asymmetric matchers inside arrays", () => {
+    expect([{ a: 1 }]).toMatchObject([{ a: expect.any(Number) }]);
+    expect([{ a: 1 }]).not.toMatchObject([{ a: expect.any(String) }]);
+  });
+
+  test("handles cyclic values", () => {
+    const leftArray = [];
+    leftArray.push(leftArray);
+    const rightArray = [];
+    rightArray.push(rightArray);
+    expect(leftArray).toMatchObject(rightArray);
+
+    const leftSet = new Set();
+    leftSet.add(leftSet);
+    const rightSet = new Set();
+    rightSet.add(rightSet);
+    expect(leftSet).toMatchObject(rightSet);
+
+    const leftMap = new Map();
+    leftMap.set("k", leftMap);
+    const rightMap = new Map();
+    rightMap.set("k", rightMap);
+    expect(leftMap).toMatchObject(rightMap);
+
+    const leftObject = {};
+    leftObject.self = leftObject;
+    const rightObject = {};
+    rightObject.self = rightObject;
+    expect(leftObject).toMatchObject(rightObject);
+  });
+
   test("supports negation", () => {
     expect({ a: 1, b: 2 }).not.toMatchObject({ a: 9 });
   });
