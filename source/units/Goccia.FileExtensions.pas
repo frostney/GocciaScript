@@ -32,6 +32,14 @@ const
     EXT_JSX, EXT_TSX
   );
 
+  // Extensions where a leading '<' is always type syntax and never JSX, so the
+  // JSX preprocessor must not run. TypeScript draws the same line: '.ts' keeps
+  // angle-bracket type assertions and generic arrow functions (`<T>(x: T) => T`),
+  // and only '.tsx' hands '<' to JSX and requires the `<T,>` disambiguation.
+  JSXExcludedExtensions: array[0..0] of string = (
+    EXT_TS
+  );
+
   ModuleImportExtensions: array[0..15] of string = (
     EXT_JS, EXT_JSX, EXT_TS, EXT_TSX, EXT_MJS,
     EXT_JSON, EXT_JSON5, EXT_JSONC, EXT_JSONL, EXT_TOML, EXT_YAML, EXT_YML,
@@ -48,6 +56,7 @@ function IsCSVExtension(const AExtension: string): Boolean;
 function IsJSON5Extension(const AExtension: string): Boolean;
 function IsJSONLExtension(const AExtension: string): Boolean;
 function IsJSXNativeExtension(const AExtension: string): Boolean;
+function IsJSXExcludedExtension(const AExtension: string): Boolean;
 function IsModuleSourceExtension(const AExtension: string): Boolean;
 function IsModuleSourceFileName(const AFileName: string): Boolean;
 function IsTextAssetExtension(const AExtension: string): Boolean;
@@ -82,6 +91,18 @@ begin
   Ext := LowerCase(AExtension);
   for I := Low(JSXNativeExtensions) to High(JSXNativeExtensions) do
     if Ext = JSXNativeExtensions[I] then
+      Exit(True);
+  Result := False;
+end;
+
+function IsJSXExcludedExtension(const AExtension: string): Boolean;
+var
+  Ext: string;
+  I: Integer;
+begin
+  Ext := LowerCase(AExtension);
+  for I := Low(JSXExcludedExtensions) to High(JSXExcludedExtensions) do
+    if Ext = JSXExcludedExtensions[I] then
       Exit(True);
   Result := False;
 end;

@@ -277,6 +277,10 @@ type
     function CollectExpressionTypeAnnotation: string;
     function CollectGenericParameters: string;
     function TryCollectNewExpressionTypeArguments: Boolean;
+    function TryParseGenericArrowFunction(
+      out AExpression: TGocciaExpression): Boolean;
+    function ParseDefiniteAssignmentAssertion(
+      const AIsConst: Boolean): Boolean;
     procedure SkipUntilSemicolon;
     procedure SkipBlock;
     procedure SkipBalancedParens;
@@ -2965,12 +2969,80 @@ begin
       begin
         Advance;
         Result := ObjectLiteral;
+      end;
+    gttLess:
+      begin
+        // A '<' only reaches Primary in operand position, where a relational
+        // operator is impossible — `a < b > (c)` consumes its '<' in the
+        // comparison parser and never lands here. The only expression that can
+        // start with '<' is a generic arrow function, so probe for one and keep
+        // the previous "Expected expression" error when it is not.
+        if not TryParseGenericArrowFunction(Result) then
+          raise TGocciaSyntaxError.Create('Expected expression',
+            Peek.Line, Peek.Column, FFileName, FSourceLines,
+            SSuggestExpressionExpected);
       end
   else
     raise TGocciaSyntaxError.Create('Expected expression',
       Peek.Line, Peek.Column, FFileName, FSourceLines,
       SSuggestExpressionExpected);
   end;
+end;
+
+// `<T,>(v: T): T => v` and friends. The type parameter list is collected
+// speculatively: it must be followed by '(' opening a real arrow parameter
+// list, otherwise the parser cursor and lexer are rewound so the caller can
+// report its own error.
+function TGocciaParser.TryParseGenericArrowFunction(
+  out AExpression: TGocciaExpression): Boolean;
+var
+  SavedCurrent: Integer;
+  SavedLexer: TGocciaLexerCheckpoint;
+  Line, Column: Integer;
+  IsGenericArrow: Boolean;
+begin
+  Result := False;
+  AExpression := nil;
+
+  Line := Peek.Line;
+  Column := Peek.Column;
+  SavedCurrent := FCurrent;
+  if Assigned(FLexer) then
+    SavedLexer := FLexer.CreateCheckpoint;
+  IsGenericArrow := False;
+
+  try
+    try
+      if CollectGenericParameters = '' then
+        Exit;
+      if not CheckWithLexicalGoal(gttLeftParen, glgInputElementDiv) then
+        Exit;
+      Advance; // consume '(' so IsArrowFunction probes from the parameter list
+      IsGenericArrow := IsArrowFunction;
+    except
+      // A lexer error inside the probe only means "not a generic arrow"; the
+      // rewound source is re-parsed and reports the genuine error.
+      on E: TGocciaLexerError do
+        IsGenericArrow := False;
+    end;
+  finally
+    if not IsGenericArrow then
+    begin
+      FCurrent := SavedCurrent;
+      if Assigned(FLexer) then
+        FLexer.RestoreCheckpoint(SavedLexer);
+    end;
+  end;
+
+  if not IsGenericArrow then
+    Exit;
+
+  AExpression := ArrowFunction;
+  // ArrowFunction anchors its source text at the '(' it was entered on; widen
+  // it to include the type parameter list.
+  TGocciaArrowFunctionExpression(AExpression).SourceText :=
+    ExtractSourceRange(Line, Column);
+  Result := True;
 end;
 
 function TGocciaParser.ParseMatchExpression: TGocciaMatchExpression;
@@ -4908,9 +4980,32 @@ begin
   end;
 end;
 
+// TypeScript definite assignment assertion: `let x!: number;` tells the type
+// checker the binding is assigned elsewhere. It carries no runtime meaning, so
+// it is consumed and discarded — but the surrounding TypeScript rules are
+// enforced so accepted programs are the ones TypeScript accepts: the assertion
+// requires a type annotation, forbids an initializer, and is not allowed on a
+// const (which is always assigned at its declaration).
+function TGocciaParser.ParseDefiniteAssignmentAssertion(
+  const AIsConst: Boolean): Boolean;
+begin
+  Result := Check(gttNot);
+  if not Result then
+    Exit;
+
+  if AIsConst then
+    raise TGocciaSyntaxError.Create(
+      'A definite assignment assertion is not permitted on a const declaration',
+      Peek.Line, Peek.Column, FFileName, FSourceLines,
+      SSuggestDefiniteAssignmentNotOnConst);
+
+  Advance;
+end;
+
 function TGocciaParser.DeclarationStatement: TGocciaStatement;
 var
   IsConst: Boolean;
+  HasDefiniteAssignment: Boolean;
   Name: string;
   Line, Column: Integer;
   Variables: TArray<TGocciaVariableInfo>;
@@ -4945,11 +5040,24 @@ begin
         SSuggestProvideVariableName).Lexeme;
       Variables[VariableCount].Name := Name;
 
+      HasDefiniteAssignment := ParseDefiniteAssignmentAssertion(IsConst);
+
       if Check(gttColon) then
       begin
         Advance;
         Variables[VariableCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
-      end;
+      end
+      else if HasDefiniteAssignment then
+        raise TGocciaSyntaxError.Create(
+          'Declarations with definite assignment assertions must also have type annotations',
+          Previous.Line, Previous.Column, FFileName, FSourceLines,
+          SSuggestDefiniteAssignmentNeedsAnnotation);
+
+      if HasDefiniteAssignment and Check(gttAssign) then
+        raise TGocciaSyntaxError.Create(
+          'Declarations with initializers cannot also have definite assignment assertions',
+          Peek.Line, Peek.Column, FFileName, FSourceLines,
+          SSuggestDefiniteAssignmentNoInitializer);
 
       if Match(gttAssign) then
       begin
@@ -5421,6 +5529,7 @@ function TGocciaParser.VarStatement: TGocciaStatement;
 var
   Line, Column: Integer;
   Name: string;
+  HasDefiniteAssignment: Boolean;
   Variables: TArray<TGocciaVariableInfo>;
   VariableCount: Integer;
 
@@ -5470,11 +5579,24 @@ begin
       Name := ConsumeVarBindingName.Lexeme;
       Variables[VariableCount].Name := Name;
 
+      HasDefiniteAssignment := ParseDefiniteAssignmentAssertion(False);
+
       if Check(gttColon) then
       begin
         Advance;
         Variables[VariableCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
-      end;
+      end
+      else if HasDefiniteAssignment then
+        raise TGocciaSyntaxError.Create(
+          'Declarations with definite assignment assertions must also have type annotations',
+          Previous.Line, Previous.Column, FFileName, FSourceLines,
+          SSuggestDefiniteAssignmentNeedsAnnotation);
+
+      if HasDefiniteAssignment and Check(gttAssign) then
+        raise TGocciaSyntaxError.Create(
+          'Declarations with initializers cannot also have definite assignment assertions',
+          Peek.Line, Peek.Column, FFileName, FSourceLines,
+          SSuggestDefiniteAssignmentNoInitializer);
 
       if Match(gttAssign) then
       begin
@@ -8104,6 +8226,27 @@ end;
 
 { Type annotation helpers (Types as Comments) }
 
+// True when AToken cannot end a type, so whatever follows it is still part
+// of the same type expression. Used to tell a structured type operand apart
+// from the '{' that opens a function body: in `(): string | { a: number } {`
+// the first '{' follows a '|' and continues the union, while the second follows
+// a complete type and starts the body.
+function TypeOperatorExpectsOperand(const AToken: TGocciaToken): Boolean;
+begin
+  case AToken.TokenType of
+    gttBitwiseOr, gttBitwiseAnd, gttArrow, gttExtends, gttQuestion, gttColon:
+      Result := True;
+    gttIdentifier:
+      Result := (AToken.Lexeme = KEYWORD_KEYOF) or
+        (AToken.Lexeme = KEYWORD_READONLY) or
+        (AToken.Lexeme = KEYWORD_INFER) or
+        (AToken.Lexeme = KEYWORD_ASSERTS) or
+        (AToken.Lexeme = KEYWORD_IS);
+  else
+    Result := False;
+  end;
+end;
+
 function TGocciaParser.CollectTypeAnnotation(
   const ATerminators: array of TGocciaTokenType;
   const AContextualTerminator: string;
@@ -8112,11 +8255,23 @@ function TGocciaParser.CollectTypeAnnotation(
 var
   Depth: Integer;
   I: Integer;
+  TemplateStart: Integer;
   TokenType: TGocciaTokenType;
   IsTerminator: Boolean;
+  ContinuesType: Boolean;
+  PreviousTypeToken: TGocciaToken;
+
+  procedure AppendLexeme(const ALexeme: string);
+  begin
+    if Result <> '' then
+      Result := Result + ' ';
+    Result := Result + ALexeme;
+  end;
+
 begin
   Result := '';
   Depth := 0;
+  PreviousTypeToken := nil;
 
   while not IsAtEnd do
   begin
@@ -8142,10 +8297,30 @@ begin
           IsTerminator := True;
           Break;
         end;
-      if IsTerminator and not
-         (AAllowInitialObjectType and (Result = '') and
-          (TokenType = gttLeftBrace)) then
+      // A '{' terminator opens the function body only once the type collected
+      // so far is complete — at the start of the annotation, and after a type
+      // operator such as '|', '&' or '=>', it is a structured type instead.
+      ContinuesType := AAllowInitialObjectType and (TokenType = gttLeftBrace) and
+        ((Result = '') or
+         (Assigned(PreviousTypeToken) and
+          TypeOperatorExpectsOperand(PreviousTypeToken)));
+      if IsTerminator and not ContinuesType then
         Exit;
+    end;
+
+    // Template literal types (`id-${number}`) are consumed whole with the
+    // operand-aware skipper: lexing them token by token under the default goal
+    // would let the substitution's '}' close a structural brace and re-lex the
+    // trailing chunk as a fresh, unterminated template literal.
+    if (TokenType = gttTemplate) or (TokenType = gttTemplateHead) then
+    begin
+      TemplateStart := FCurrent;
+      SkipTemplateLiteral;
+      for I := TemplateStart to FCurrent - 1 do
+        AppendLexeme(FTokens[I].Lexeme);
+      if FCurrent > TemplateStart then
+        PreviousTypeToken := FTokens[FCurrent - 1];
+      Continue;
     end;
 
     case TokenType of
@@ -8160,10 +8335,15 @@ begin
       gttRightShift: Dec(Depth, 2);
       gttUnsignedRightShift: Dec(Depth, 3);
     end;
+    // Clamp so an unbalanced closer (a stray '>', or a '>>' closing a single
+    // '<') cannot drive Depth negative — the terminator checks above only run
+    // at Depth = 0, and a negative Depth would never reach it again, silently
+    // swallowing the rest of the file.
+    if Depth < 0 then
+      Depth := 0;
 
-    if Result <> '' then
-      Result := Result + ' ';
-    Result := Result + Peek.Lexeme;
+    PreviousTypeToken := Peek;
+    AppendLexeme(Peek.Lexeme);
     Advance;
   end;
 end;
@@ -8193,6 +8373,9 @@ begin
   Advance;
   Depth := 1;
 
+  // Depth is clamped at zero after every closer so a '>>' or '>>>' that closes
+  // fewer '<' than it decrements leaves the counter at the balanced value
+  // instead of going negative.
   while not IsAtEnd and (Depth > 0) do
   begin
     case Peek.TokenType of
@@ -8201,6 +8384,8 @@ begin
       gttRightShift:
       begin
         Dec(Depth, 2);
+        if Depth < 0 then
+          Depth := 0;
         Result := Result + ' ' + Peek.Lexeme;
         Advance;
         Continue;
@@ -8208,11 +8393,15 @@ begin
       gttUnsignedRightShift:
       begin
         Dec(Depth, 3);
+        if Depth < 0 then
+          Depth := 0;
         Result := Result + ' ' + Peek.Lexeme;
         Advance;
         Continue;
       end;
     end;
+    if Depth < 0 then
+      Depth := 0;
     Result := Result + ' ' + Peek.Lexeme;
     Advance;
   end;
@@ -8292,11 +8481,15 @@ begin
       Continue;
     end;
 
+    // '<' and '>' are deliberately not counted here. Nothing they can enclose
+    // needs protection from the ';' / '}' terminators (a type argument list
+    // holds no bare ';', and any ';' inside a mapped type is already covered by
+    // the brace depth), while counting them desynchronises the skip on ordinary
+    // relational expressions: `var x = a < b;` would leave Depth at 1 and run
+    // the skip past its own statement.
     case Peek.TokenType of
-      gttLeftParen, gttLeftBracket, gttLeftBrace, gttLess: Inc(Depth);
-      gttRightParen, gttRightBracket, gttRightBrace, gttGreater: Dec(Depth);
-      gttRightShift: Dec(Depth, 2);
-      gttUnsignedRightShift: Dec(Depth, 3);
+      gttLeftParen, gttLeftBracket, gttLeftBrace: Inc(Depth);
+      gttRightParen, gttRightBracket, gttRightBrace: Dec(Depth);
       gttSemicolon:
         if Depth = 0 then
         begin
@@ -8304,6 +8497,8 @@ begin
           Exit;
         end;
     end;
+    if Depth < 0 then
+      Depth := 0;
     Advance;
   end;
 end;

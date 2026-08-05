@@ -421,6 +421,8 @@ Lowercase tags produce string tag names (`"div"`, `"span"`); uppercase tags are 
 
 The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled by default via `DefaultPreprocessors`; embedders can disable it with `Engine.Preprocessors := Engine.Preprocessors - [ppJSX]`. Opening-tag detection is a heuristic, so source that merely looks like JSX — a TypeScript type annotation such as `: <T>(x: T) => T`, for example — can start a JSX scan; when that scan stalls on a character no branch consumes, exceeds the nesting bound, or reaches the end of input inside an opening tag, the transformer reports a `SyntaxError` positioned in the original source rather than scanning on.
 
+**Extensions:** the transformer runs for `.js`, `.jsx`, `.tsx`, and `.mjs`. It never runs for `.ts`, where a leading `<` is type syntax rather than a tag — see [Angle Brackets and JSX](#angle-brackets-and-jsx). `.js` and `.mjs` sources containing JSX are still transformed, and report a "JSX syntax found in source with a non-JSX extension" warning.
+
 ### Regular Expressions
 
 **Supported.** GocciaScript implements:
@@ -532,8 +534,24 @@ const greet = (name?: string) => name === undefined ? "hi" : "hi " + name;
 const sum = (...nums: number[]) => nums.reduce((a, b) => a + b, 0);
 const first = ({ name, age }: { name: string, age: number }) => name;
 
-// Return type annotations
+// Return type annotations, including unions and intersections of object types
 const double = (x: number): number => x * 2;
+class Registry {
+  lookup(flag: boolean): string | { code: number } { return flag ? "ok" : { code: 7 }; }
+  build(): { name: string } & { size: number } { return { name: "box", size: 2 }; }
+}
+
+// Template literal types
+const id: `id-${number}` = "id-42";
+const also = "id-42" as `id-${number}`;
+
+// Definite assignment assertions (require an annotation, forbid an initializer)
+let pending!: number;
+pending = 5;
+
+// Generic arrow function expressions
+const identity = <T,>(v: T): T => v;
+const withDefault = <T = string,>(v: T): T => v;
 
 // Type and interface declarations (skipped entirely)
 type Point = { x: number, y: number };
@@ -570,11 +588,34 @@ class Box<T> implements Container {
 try { throw new Error("oops"); } catch (e: Error) { }
 ```
 
+#### Angle Brackets and JSX
+
+A leading `<` is ambiguous: it can open a JSX element or a type parameter list. GocciaScript resolves this by file extension, the same way TypeScript does.
+
+- **`.ts`** — JSX is never recognised, so `<` is always type syntax. Generic function type annotations and every generic arrow form parse here:
+
+  ```typescript
+  const identity: <T>(x: T) => T = (x) => x;
+  const wrap = <T>(v: T): T[] => [v];
+  const idOf = <T extends { id: number }>(v: T): number => v.id;
+  ```
+
+- **`.js`, `.jsx`, `.tsx`, `.mjs`** — JSX is recognised, so a bare `<T>` or `<T extends U>` is read as a JSX element. Generic arrows still parse when the type parameter list cannot be mistaken for a tag, which means a trailing comma, a default, or more than one parameter:
+
+  ```javascript
+  const identity = <T,>(v: T): T => v;
+  const withDefault = <T = string,>(v: T): T => v;
+  const pair = <A, B>(a: A, b: B) => [a, b];
+  ```
+
+  Use a `.ts` source when an annotation needs the bare `<T>` form.
+
 #### Not Supported
 
 - Namespaces (`namespace Foo { ... }`).
 - Parameter properties in constructors (`constructor(public x: number)`).
 - Angle-bracket type assertions (`<string>value`) — use `value as string` instead.
+- Definite assignment assertions on class fields (`class C { x!: number }`) — only variable declarations accept `!`.
 
 ### Pattern Matching (Stage 1)
 
