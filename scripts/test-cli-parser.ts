@@ -16,9 +16,15 @@ function assertSyntaxErrorInBothModes(
   source: string,
   desc: string,
   args: readonly string[] = [],
+  opts?: { timeout?: number; messageIncludes?: string },
 ): void {
-  assertSyntaxError(source, desc, [...args]);
-  assertSyntaxError(source, `${desc} (bytecode)`, [...args, "--mode=bytecode"]);
+  assertSyntaxError(source, desc, [...args], opts);
+  assertSyntaxError(
+    source,
+    `${desc} (bytecode)`,
+    [...args, "--mode=bytecode"],
+    opts,
+  );
 }
 
 // -- Error display (SyntaxError with caret and suggestion) ----------------------
@@ -787,6 +793,53 @@ console.log("Disabled-feature diagnostics with interpolated template literals...
     if (diagOut.includes("Unterminated template literal"))
       throw new Error(`${desc}: diagnostic should not mention an unterminated template literal, got: ${diagOut}`);
   }
+}
+
+// -- JSX preprocessor termination on non-JSX angle brackets ---------------------
+
+console.log("JSX preprocessor termination...");
+{
+  // Every case here must be proven to *terminate*: the JSX preprocessor scans
+  // source character by character, and a branch that consumes nothing used to
+  // spin forever at 100% CPU. A regression therefore hangs the loader instead
+  // of failing an assertion, so each run is bounded by an explicit timeout.
+  const JSX_SCAN_TIMEOUT_MS = 30_000;
+
+  const cases = [
+    {
+      desc: "type-parameter arrow after a function type annotation",
+      // `: <T>` looks like a JSX opening tag, so the children scan runs on the
+      // rest of the file and reaches `<T,` — where no attribute branch
+      // consumes the ','.
+      source: [
+        "const g: <T>(x: T) => T = (x) => x;",
+        "const w = <T,>(v: T): T => v;",
+        "",
+      ].join("\n"),
+      messageIncludes: "attribute list",
+    },
+    {
+      desc: "unterminated JSX opening tag",
+      source: 'const element = <div className="a"\n',
+      messageIncludes: "Unterminated opening tag",
+    },
+    {
+      desc: "mismatched JSX closing tag",
+      source: "const element = <div></span>;\n",
+      messageIncludes: "Expected closing tag",
+    },
+    {
+      desc: "JSX nesting beyond the depth bound",
+      source: `const element = ${"<a>".repeat(300)};\n`,
+      messageIncludes: "Nesting depth exceeded",
+    },
+  ] as const;
+
+  for (const { desc, source, messageIncludes } of cases)
+    assertSyntaxErrorInBothModes(source, desc, [], {
+      timeout: JSX_SCAN_TIMEOUT_MS,
+      messageIncludes,
+    });
 }
 
 console.log("\nAll test-cli-parser.ts tests passed.");

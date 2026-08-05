@@ -49,12 +49,21 @@ export function runLoaderJson(
   return { exitCode: proc.exitCode, json, stderr };
 }
 
+/**
+ * Asserts the loader rejects `source` with a positioned SyntaxError.
+ *
+ * `opts.timeout` bounds the run — required for sources that must be proven to
+ * terminate, where a regression hangs the process instead of failing an
+ * assertion. `opts.messageIncludes` pins the diagnostic so an unrelated syntax
+ * error cannot satisfy the assertion.
+ */
 export function assertSyntaxError(
   source: string,
   desc: string,
   extraArgs?: string[],
+  opts?: { timeout?: number; messageIncludes?: string },
 ): void {
-  const { exitCode, json } = runLoaderJson(source, extraArgs);
+  const { exitCode, json } = runLoaderJson(source, extraArgs, opts);
   if (exitCode !== 1)
     throw new Error(`${desc} should exit 1, but exited ${exitCode}`);
   if (json.ok !== false || json.error?.type !== "SyntaxError")
@@ -67,6 +76,13 @@ export function assertSyntaxError(
   )
     throw new Error(
       `${desc} should include numeric line and column, got line=${json.error.line} column=${json.error.column}`,
+    );
+  if (
+    opts?.messageIncludes != null &&
+    !String(json.error.message).includes(opts.messageIncludes)
+  )
+    throw new Error(
+      `${desc} should mention ${JSON.stringify(opts.messageIncludes)}, got ${JSON.stringify(json.error.message)}`,
     );
 }
 

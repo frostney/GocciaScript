@@ -49,6 +49,10 @@ type
     procedure AdvanceInput; {$IFDEF FPC}inline;{$ENDIF}
     function CurrentChar: Char; {$IFDEF FPC}inline;{$ENDIF}
 
+    procedure RaiseJSXError(const AMessage: string);
+    procedure RequireScanProgress(var AGuardPosition: Integer;
+      const AContext: string);
+
     procedure Emit(const AText: string);
     procedure EmitMapped(const AText: string; const ASourceLine, ASourceColumn: Integer);
     procedure EmitChar(const AChar: Char); {$IFDEF FPC}inline;{$ENDIF}
@@ -86,6 +90,7 @@ type
     procedure TransformSource;
   public
     class function Transform(const ASource: string;
+      const AFileName: string = '';
       const AFactoryName: string = 'createElement';
       const AFragmentName: string = 'Fragment'): TGocciaJSXTransformResult;
   end;
@@ -95,6 +100,7 @@ implementation
 uses
   TextSemantics,
 
+  Goccia.Error,
   Goccia.FileExtensions;
 
 const
@@ -106,6 +112,13 @@ const
   // watchdog has to orphan the worker.
   MAX_JSX_DEPTH = 256;
 
+  // Scan contexts reported by RequireScanProgress, so a stalled loop names the
+  // construct it was scanning rather than a bare position.
+  JSX_CONTEXT_SOURCE = 'source';
+  JSX_CONTEXT_ATTRIBUTES = 'attribute list';
+  JSX_CONTEXT_CHILDREN = 'children';
+  JSX_CONTEXT_EXPRESSION = 'expression';
+
 procedure WarnIfJSXExtensionMismatch(const AFilePath: string);
 begin
   if not IsJSXNativeExtension(ExtractFileExt(AFilePath)) then
@@ -113,6 +126,7 @@ begin
 end;
 
 class function TGocciaJSXTransformer.Transform(const ASource: string;
+  const AFileName: string;
   const AFactoryName: string;
   const AFragmentName: string): TGocciaJSXTransformResult;
 var
@@ -120,6 +134,7 @@ var
 begin
   Transformer := TGocciaJSXTransformer.Create;
   try
+    Transformer.FFileName := AFileName;
     Transformer.FSource := ASource;
     Transformer.FPos := 1;
     Transformer.FLine := 1;
@@ -195,6 +210,38 @@ end;
 function TGocciaJSXTransformer.CurrentChar: Char;
 begin
   Result := FSource[FPos];
+end;
+
+// Every transformer diagnostic goes through here, so preprocessor failures
+// reach the host as ordinary positioned syntax errors instead of a bare
+// Exception the CLI can only print as "Error: <message>".
+procedure TGocciaJSXTransformer.RaiseJSXError(const AMessage: string);
+begin
+  raise TGocciaSyntaxError.Create(AMessage, FLine, FColumn, FFileName, nil);
+end;
+
+// Progress guard for the scanning loops. Each loop that can reach a character
+// none of its branches consume calls this once per iteration with its own guard
+// variable, initialised to 0 (FPos is 1-based, so the first iteration always
+// passes). A stalled FPos means the transformer is scanning input that only
+// looked like JSX — a TypeScript type annotation such as `: <T>(x: T) => T` is
+// enough to get here — and without the guard the loop spins forever at 100% CPU
+// instead of reporting the error.
+procedure TGocciaJSXTransformer.RequireScanProgress(var AGuardPosition: Integer;
+  const AContext: string);
+var
+  Offender: string;
+begin
+  if FPos > AGuardPosition then
+  begin
+    AGuardPosition := FPos;
+    Exit;
+  end;
+
+  Offender := Peek;
+  RaiseJSXError(Format(
+    'JSX: Unexpected character "%s" in %s (likely runaway scan on non-JSX input)',
+    [Offender, AContext]));
 end;
 
 procedure TGocciaJSXTransformer.Emit(const AText: string);
@@ -679,9 +726,9 @@ begin
   Inc(FJSXDepth);
   try
     if FJSXDepth > MAX_JSX_DEPTH then
-      raise Exception.CreateFmt(
-        'JSX nesting depth exceeded %d at line %d, column %d (likely runaway scan on non-JSX input)',
-        [MAX_JSX_DEPTH, FLine, FColumn]);
+      RaiseJSXError(Format(
+        'JSX: Nesting depth exceeded %d (likely runaway scan on non-JSX input)',
+        [MAX_JSX_DEPTH]));
 
     FHasJSX := True;
     StartLine := FLine;
@@ -767,6 +814,11 @@ begin
       FLastTokenKind := ltkExpressionEnd;
       Exit;
     end;
+
+    // Only reachable at end of input: EmitJSXAttributes stops at '>', '/>' or
+    // end of input, so falling through here means the opening tag was never
+    // closed. Report it instead of leaving an unbalanced factory call behind.
+    RaiseJSXError(Format('JSX: Unterminated opening tag <%s>', [TagName]));
   finally
     Dec(FJSXDepth);
   end;
@@ -788,6 +840,7 @@ var
   Depth: Integer;
   ValueStart: Integer;
   I: Integer;
+  GuardPosition: Integer;
   HasSpread: Boolean;
   RawExpr: string;
   SubResult: TGocciaJSXTransformResult;
@@ -812,8 +865,10 @@ begin
   SegmentCount := 0;
   AttrCount := 0;
   CurrentObjAttrs := TStringBuffer.Create;
+  GuardPosition := 0;
   while not IsAtEnd do
   begin
+    RequireScanProgress(GuardPosition, JSX_CONTEXT_ATTRIBUTES);
     SkipWhitespace;
     if IsAtEnd or (CurrentChar = '>') or ((CurrentChar = '/') and (PeekAt(1) = '>')) then
       Break;
@@ -944,7 +999,8 @@ begin
             AdvanceInput;
         end;
         RawExpr := Trim(Copy(FSource, ValueStart, FPos - ValueStart));
-        SubResult := TGocciaJSXTransformer.Transform(RawExpr, FFactoryName, FFragmentName);
+        SubResult := TGocciaJSXTransformer.Transform(RawExpr, FFileName,
+          FFactoryName, FFragmentName);
         if Assigned(SubResult.SourceMap) then
           SubResult.SourceMap.Free;
         CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': ' + SubResult.Source);
@@ -984,9 +1040,12 @@ procedure TGocciaJSXTransformer.EmitJSXChildren(const ATagName: string);
 var
   Text: string;
   ChildStartLine, ChildStartColumn: Integer;
+  GuardPosition: Integer;
 begin
+  GuardPosition := 0;
   while not IsAtEnd do
   begin
+    RequireScanProgress(GuardPosition, JSX_CONTEXT_CHILDREN);
     if CurrentChar = '<' then
     begin
       if PeekAt(1) = '/' then
@@ -1054,13 +1113,16 @@ var
   Quote: Char;
   SavedTokenKind: TLastTokenKind;
   IdStart: Integer;
+  GuardPosition: Integer;
   Ident: string;
 begin
   Depth := 0;
+  GuardPosition := 0;
   SavedTokenKind := FLastTokenKind;
   FLastTokenKind := ltkOperator;
   while not IsAtEnd do
   begin
+    RequireScanProgress(GuardPosition, JSX_CONTEXT_EXPRESSION);
     case CurrentChar of
       '{':
       begin
@@ -1257,7 +1319,8 @@ begin
   if not IsAtEnd and (CurrentChar = '>') then
     AdvanceInput;
   if ClosingTag <> ATagName then
-    raise Exception.CreateFmt('JSX: Expected closing tag </%s> but found </%s> at line %d', [ATagName, ClosingTag, FLine]);
+    RaiseJSXError(Format('JSX: Expected closing tag </%s> but found </%s>',
+      [ATagName, ClosingTag]));
 end;
 
 procedure TGocciaJSXTransformer.ScanPragmas;
@@ -1366,10 +1429,13 @@ end;
 procedure TGocciaJSXTransformer.TransformSource;
 var
   C: Char;
+  GuardPosition: Integer;
 begin
   AddIdentityMapping;
+  GuardPosition := 0;
   while not IsAtEnd do
   begin
+    RequireScanProgress(GuardPosition, JSX_CONTEXT_SOURCE);
     C := CurrentChar;
 
     if (C = '/') and (PeekAt(1) = '/') then
