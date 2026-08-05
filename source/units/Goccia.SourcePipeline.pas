@@ -174,7 +174,7 @@ begin
     Result.Assign(ASource);
 end;
 
-function ApplyPreprocessors(const ASource: string;
+function ApplyPreprocessors(const ASource, AFileName: string;
   const AOptions: TGocciaSourcePipelineOptions;
   out ASourceMap: TGocciaSourceMap): string;
 var
@@ -185,7 +185,7 @@ begin
 
   if ppJSX in AOptions.Preprocessors then
   begin
-    JSXResult := TGocciaJSXTransformer.Transform(Result);
+    JSXResult := TGocciaJSXTransformer.Transform(Result, AFileName);
     Result := JSXResult.Source;
     ASourceMap := JSXResult.SourceMap;
   end;
@@ -513,7 +513,19 @@ begin
       SourceText := '';
     OriginalSourceText := SourceText;
 
-    SourceText := ApplyPreprocessors(SourceText, AOptions, PreprocessorSourceMap);
+    try
+      SourceText := ApplyPreprocessors(SourceText, AFileName, AOptions,
+        PreprocessorSourceMap);
+    except
+      on E: TGocciaError do
+      begin
+        // A preprocessor error is already positioned in the original source —
+        // no source map exists yet — so only the source context is missing for
+        // the caret display the parser errors below get for free.
+        E.TranslatePosition(E.Line, E.Column, ASource);
+        raise;
+      end;
+    end;
     Result.FSourceMap := PreprocessorSourceMap;
     if Assigned(Result.FSourceMap) then
     begin
@@ -738,7 +750,18 @@ begin
 
   OriginalSourceLines := CreateECMAScriptSourceLines(Source);
   try
-    Source := ApplyPreprocessors(Source, AOptions, SourceMap);
+    try
+      Source := ApplyPreprocessors(Source, AFileName, AOptions, SourceMap);
+    except
+      on E: TGocciaError do
+      begin
+        // A preprocessor error is positioned in the wrapper source, which is
+        // exactly what OriginalSourceLines holds — attach it so the caret
+        // display matches the coordinates the error already carries.
+        E.TranslatePosition(E.Line, E.Column, OriginalSourceLines);
+        raise;
+      end;
+    end;
     try
       Lexer := TGocciaLexer.Create(Source, AFileName);
       try
