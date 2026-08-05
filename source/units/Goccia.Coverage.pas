@@ -48,8 +48,11 @@ type
     constructor Create(const AFileName: string; const AExecutableLines: Integer);
     destructor Destroy; override;
 
+    procedure AddLineHits(const ALine, ACount: Integer); {$IFDEF FPC}inline;{$ENDIF}
     procedure RecordLineHit(const ALine: Integer); {$IFDEF FPC}inline;{$ENDIF}
     procedure RecordBranchHit(const ALine, AColumn, ABranchIndex: Integer);
+    procedure AddBranchHits(const ALine, AColumn, ABranchIndex,
+      ACount: Integer);
     procedure EnsureBranchExists(const ALine, AColumn, ABranchIndex: Integer);
     procedure RegisterFunction(const AName: string;
       const ALine, AColumn: Integer);
@@ -108,8 +111,10 @@ type
     function GetSourceMap(const AFilePath: string): TGocciaSourceMap;
 
     { Merge all coverage data from ASource into this tracker.
-      Line, branch, and function hits are summed. Files present in ASource
-      but not in this tracker are created with 0 executable lines. }
+      Line, branch, and function hit *counts* are added together, so merging
+      N workers yields the same totals a single-threaded run would produce.
+      Files present in ASource but not in this tracker are created with
+      0 executable lines. }
     procedure MergeFrom(const ASource: TGocciaCoverageTracker);
 
     property Files: TGocciaCoverageFileMap read FFiles;
@@ -376,11 +381,11 @@ begin
     end;
 end;
 
-procedure TGocciaFileCoverage.RecordLineHit(const ALine: Integer);
+procedure TGocciaFileCoverage.AddLineHits(const ALine, ACount: Integer);
 var
   NewLength, I: Integer;
 begin
-  if ALine <= 0 then Exit;
+  if (ALine <= 0) or (ACount <= 0) then Exit;
   if ALine >= Length(FLineHits) then
   begin
     NewLength := Length(FLineHits);
@@ -396,21 +401,38 @@ begin
       Inc(I);
     end;
   end;
-  Inc(FLineHits[ALine]);
+  Inc(FLineHits[ALine], ACount);
+end;
+
+procedure TGocciaFileCoverage.RecordLineHit(const ALine: Integer);
+begin
+  AddLineHits(ALine, 1);
 end;
 
 procedure TGocciaFileCoverage.RecordBranchHit(const ALine, AColumn,
   ABranchIndex: Integer);
+begin
+  AddBranchHits(ALine, AColumn, ABranchIndex, 1);
+end;
+
+procedure TGocciaFileCoverage.AddBranchHits(const ALine, AColumn,
+  ABranchIndex, ACount: Integer);
 var
   I: Integer;
   Branch: TGocciaCoverageBranch;
 begin
+  if ACount <= 0 then
+  begin
+    EnsureBranchExists(ALine, AColumn, ABranchIndex);
+    Exit;
+  end;
+
   for I := 0 to FBranches.Count - 1 do
     if (FBranches[I].Line = ALine) and (FBranches[I].Column = AColumn) and
        (FBranches[I].BranchIndex = ABranchIndex) then
     begin
       Branch := FBranches[I];
-      Inc(Branch.HitCount);
+      Inc(Branch.HitCount, ACount);
       FBranches[I] := Branch;
       // Ensure the opposite arm exists for binary branches (if/ternary/short-circuit)
       if ABranchIndex <= 1 then
@@ -421,7 +443,7 @@ begin
   Branch.Line := ALine;
   Branch.Column := AColumn;
   Branch.BranchIndex := ABranchIndex;
-  Branch.HitCount := 1;
+  Branch.HitCount := ACount;
   FBranches.Add(Branch);
 
   // Ensure the opposite arm exists for binary branches
@@ -650,19 +672,17 @@ begin
     if (DstFile.ExecutableLines = 0) and (SrcFile.ExecutableLines > 0) then
       DstFile.FExecutableLines := SrcFile.ExecutableLines;
 
-    { Merge line hits — sum counts for each line. }
+    { Merge line hits — sum the source counts, not one hit per covered line. }
     for I := 1 to SrcFile.LineHitCount - 1 do
-      if SrcFile.GetLineHitCount(I) > 0 then
-        DstFile.RecordLineHit(I);
+      DstFile.AddLineHits(I, SrcFile.GetLineHitCount(I));
 
-    { Merge branch hits. }
+    { Merge branch hits — sum the source counts; zero-hit arms are still
+      registered so the branch map keeps its shape. }
     for I := 0 to SrcFile.Branches.Count - 1 do
     begin
       Branch := SrcFile.Branches[I];
-      if Branch.HitCount > 0 then
-        DstFile.RecordBranchHit(Branch.Line, Branch.Column, Branch.BranchIndex)
-      else
-        DstFile.EnsureBranchExists(Branch.Line, Branch.Column, Branch.BranchIndex);
+      DstFile.AddBranchHits(Branch.Line, Branch.Column, Branch.BranchIndex,
+        Branch.HitCount);
     end;
 
     { Merge function definitions and hit counts by source position. }

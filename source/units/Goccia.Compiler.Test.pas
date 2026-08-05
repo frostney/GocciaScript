@@ -80,6 +80,7 @@ type
     procedure TestBinaryRoundTrip;
     procedure TestBinaryRoundTripClosedNumericSelfCall;
     procedure TestBinaryRoundTripUpvalueNames;
+    procedure TestBinaryRoundTripFunctionDeclarationPosition;
     procedure TestBinaryLittleEndian;
     procedure TestBinaryRoundTripConstants;
     procedure TestBinaryRejectsMalformedArtifacts;
@@ -143,6 +144,8 @@ begin
   Test('Binary round-trip closed numeric self-call',
     TestBinaryRoundTripClosedNumericSelfCall);
   Test('Binary round-trip upvalue names', TestBinaryRoundTripUpvalueNames);
+  Test('Binary round-trip function declaration position',
+    TestBinaryRoundTripFunctionDeclarationPosition);
   Test('Binary little-endian format', TestBinaryLittleEndian);
   Test('Binary round-trip constants', TestBinaryRoundTripConstants);
   Test('Binary loader rejects malformed artifacts',
@@ -716,6 +719,71 @@ begin
       Expect<Integer>(LoadedFunc.UpvalueCount).ToBe(1);
       LoadedDesc := LoadedFunc.GetUpvalueDescriptor(0);
       Expect<string>(LoadedDesc.Name).ToBe(OriginalDesc.Name);
+    finally
+      Loaded.Free;
+    end;
+  finally
+    Original.Free;
+    DeleteFile(TempFile);
+  end;
+end;
+
+{ Coverage reports a function at its declaration site (LCOV FN:), which is a
+  different position from the first executed instruction of its body. The
+  declaration position must therefore be carried on the template and survive a
+  .gbc round-trip, so precompiled bytecode reports the same lines as source. }
+function FindTemplateByDeclarationLine(
+  const AParent: TGocciaFunctionTemplate;
+  const ALine: UInt32): TGocciaFunctionTemplate;
+var
+  I: Integer;
+begin
+  Result := nil;
+  for I := 0 to AParent.FunctionCount - 1 do
+    if Assigned(AParent.GetFunction(I).DebugInfo) and
+       (AParent.GetFunction(I).DebugInfo.DeclarationLine = ALine) then
+    begin
+      Result := AParent.GetFunction(I);
+      Exit;
+    end;
+end;
+
+procedure TTestCompiler.TestBinaryRoundTripFunctionDeclarationPosition;
+var
+  Original, Loaded: TGocciaBytecodeModule;
+  OriginalFunc, LoadedFunc: TGocciaFunctionTemplate;
+  TempFile: string;
+begin
+  // `multi` is declared on line 2; its body's first statement is on line 3.
+  Original := CompileSource(
+    'const oneLine = () => 1;'#10 +
+    'const multi = (a) => {'#10 +
+    '  const b = a + 1;'#10 +
+    '  return b;'#10 +
+    '};'#10,
+    False, False, False, False, False, False);
+  TempFile := GetTempFileName + '.gbc';
+  try
+    Expect<Integer>(Original.TopLevel.FunctionCount).ToBe(2);
+    Expect<Boolean>(Assigned(
+      FindTemplateByDeclarationLine(Original.TopLevel, 1))).ToBe(True);
+
+    OriginalFunc := FindTemplateByDeclarationLine(Original.TopLevel, 2);
+    Expect<Boolean>(Assigned(OriginalFunc)).ToBe(True);
+    // The body's first instruction is on a later line than the declaration,
+    // so the two positions cannot be conflated.
+    Expect<Integer>(
+      Integer(OriginalFunc.DebugInfo.GetLineMapEntry(0).Line)).ToBe(3);
+    Expect<Integer>(Integer(OriginalFunc.DebugInfo.CoverageLine)).ToBe(2);
+
+    SaveModuleToFile(Original, TempFile);
+    Loaded := LoadModuleFromFile(TempFile);
+    try
+      LoadedFunc := FindTemplateByDeclarationLine(Loaded.TopLevel, 2);
+      Expect<Boolean>(Assigned(LoadedFunc)).ToBe(True);
+      Expect<Integer>(Integer(LoadedFunc.DebugInfo.DeclarationColumn)).ToBe(
+        Integer(OriginalFunc.DebugInfo.DeclarationColumn));
+      Expect<Integer>(Integer(LoadedFunc.DebugInfo.CoverageLine)).ToBe(2);
     finally
       Loaded.Free;
     end;

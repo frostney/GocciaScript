@@ -488,6 +488,8 @@ begin
   if Assigned(AProto.DebugInfo) then
   begin
     WriteString(AProto.DebugInfo.SourceFile);
+    WriteUInt32(AProto.DebugInfo.DeclarationLine);
+    WriteUInt16(AProto.DebugInfo.DeclarationColumn);
     WriteUInt32(UInt32(AProto.DebugInfo.LineMapCount));
     for I := 0 to AProto.DebugInfo.LineMapCount - 1 do
     begin
@@ -669,6 +671,8 @@ var
   DebugInfo: TGocciaDebugInfo;
   SourceFile, RegExpPattern, RegExpFlags: string;
   LineMapCount, LocalCount: UInt32;
+  DeclarationLine: UInt32;
+  DeclarationColumn: UInt16;
   CookedStrings, RawStrings: TGocciaBytecodeStringArray;
   CookedValid: TGocciaBytecodeTemplateCookedValid;
 begin
@@ -787,7 +791,11 @@ begin
   if HasDebug then
   begin
     SourceFile := ReadString;
-    DebugInfo := TGocciaDebugInfo.Create(SourceFile);
+    RequireRemaining(6, 'debug declaration position');
+    DeclarationLine := ReadUInt32;
+    DeclarationColumn := ReadUInt16;
+    DebugInfo := TGocciaDebugInfo.Create(SourceFile, DeclarationLine,
+      DeclarationColumn);
 
     LineMapCount := ReadUInt32;
     RequireRemaining(Int64(LineMapCount) * 10, 'debug line mappings');
