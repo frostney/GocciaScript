@@ -2,6 +2,53 @@
 
 All notable changes to GocciaScript are documented in this file.
 
+## [0.11.0] - 2026-08-05
+
+### ⚡ Performance
+
+- perf(compiler): avoid redundant this property moves (#1051)
+- perf(array): fast-path guarded dense appends (#1049)
+- perf(vm): avoid per-opcode instruction-limit TLS lookup (#1048)
+- perf(typed-array): specialize fixed-length indexed access (#1046)
+- perf(modules): retain resolved import bindings (#1045)
+- perf(json): recover UTF-16 parser hot paths (#1000)
+
+### 🌐 Website
+
+- docs: sync release preparation claims (#1073)
+- fix(security): harden untrusted execution boundaries (#1057)
+- docs(positioning): lead with agent sandboxing (#1052)
+- feat(website): add Homebrew install and polish navigation (#1027)
+
+### 🏗️ Internal
+
+- test(coverage): handle Windows LCOV line endings (#1069)
+- chore(skills): sync provisioned skills (#1060)
+- chore(test262): bump pin to b363f29d (#1059)
+- chore(timezone): bump data to 2026c (#1058)
+- chore(skills): sync provisioned skills (#1056)
+- chore(test262): bump pin to 07dbcbca (#1055)
+- refactor(compliance): native TOML runner and generated JSON5 tests (#1047)
+- docs(examples): add experimental runtime demos (#1028)
+
+### 🐛 Fixed
+
+- fix(parser): parse structured function return types (#1061)
+- fix(modules): root relative CLI aliases (#1068)
+- fix(coverage): exclude parallel runner warm-up (#1066)
+- fix(bytecode): preserve module lexical captures (#1063)
+- fix(modules): preserve live import bindings across module graphs (#999)
+- fix(conformance): preserve ceil boundaries and pin truthful library probes (#998)
+
+### 🚀 Added
+
+- feat(runtime): add fetch abort signals (#1067)
+- feat(testing): add async mock helpers (#1065)
+- feat(coverage): report function hits (#1064)
+- feat(parser): erase TypeScript expression types (#1062)
+- feat(ffi): expand native call capabilities (#1034)
+- feat(iterator): implement Iterator.prototype.includes (#1026)
+
 ## [0.10.0] - 2026-07-21
 
 ### ⚡ Performance
