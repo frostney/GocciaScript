@@ -10,6 +10,7 @@ uses
 
   StringBuffer,
 
+  Goccia.Error,
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
   Goccia.SourceMap;
@@ -27,6 +28,7 @@ type
   private
     type
       TLastTokenKind = (ltkNone, ltkExpressionEnd, ltkOperator);
+      TScanContext = (scSource, scAttributes, scChildren, scExpression);
   private
     FSource: string;
     FPos: Integer;
@@ -51,7 +53,11 @@ type
 
     procedure RaiseJSXError(const AMessage: string);
     procedure RequireScanProgress(var AGuardPosition: Integer;
-      const AContext: string);
+      const AContext: TScanContext);
+    function ScanContextName(const AContext: TScanContext): string;
+    function IsUnsupportedAttributeChar(const AChar: Char): Boolean;
+    procedure RebaseNestedExpressionError(const AError: TGocciaError;
+      const ARawExpression: string; const AStartLine, AStartColumn: Integer);
 
     procedure Emit(const AText: string);
     procedure EmitMapped(const AText: string; const ASourceLine, ASourceColumn: Integer);
@@ -100,7 +106,6 @@ implementation
 uses
   TextSemantics,
 
-  Goccia.Error,
   Goccia.FileExtensions;
 
 const
@@ -220,6 +225,28 @@ begin
   raise TGocciaSyntaxError.Create(AMessage, FLine, FColumn, FFileName, nil);
 end;
 
+function TGocciaJSXTransformer.ScanContextName(
+  const AContext: TScanContext): string;
+begin
+  case AContext of
+    scAttributes: Result := JSX_CONTEXT_ATTRIBUTES;
+    scChildren: Result := JSX_CONTEXT_CHILDREN;
+    scExpression: Result := JSX_CONTEXT_EXPRESSION;
+  else
+    Result := JSX_CONTEXT_SOURCE;
+  end;
+end;
+
+// ':' opens a JSXNamespacedName (`xlink:href`) and bytes at or above #128 are
+// the lead bytes of a non-ASCII identifier. Both are legitimate JSX that this
+// transformer does not implement yet, so a stall on one is a missing feature
+// rather than evidence that the source was never JSX.
+function TGocciaJSXTransformer.IsUnsupportedAttributeChar(
+  const AChar: Char): Boolean;
+begin
+  Result := (AChar = ':') or (AChar >= #128);
+end;
+
 // Progress guard for the scanning loops. Each loop that can reach a character
 // none of its branches consume calls this once per iteration with its own guard
 // variable, initialised to 0 (FPos is 1-based, so the first iteration always
@@ -228,7 +255,7 @@ end;
 // enough to get here — and without the guard the loop spins forever at 100% CPU
 // instead of reporting the error.
 procedure TGocciaJSXTransformer.RequireScanProgress(var AGuardPosition: Integer;
-  const AContext: string);
+  const AContext: TScanContext);
 var
   Offender: string;
 begin
@@ -239,9 +266,46 @@ begin
   end;
 
   Offender := Peek;
-  RaiseJSXError(Format(
-    'JSX: Unexpected character "%s" in %s (likely runaway scan on non-JSX input)',
-    [Offender, AContext]));
+  if (AContext = scAttributes) and IsUnsupportedAttributeChar(Peek) then
+    RaiseJSXError(Format('JSX: Unsupported attribute syntax at "%s"',
+      [Offender]))
+  else
+    RaiseJSXError(Format(
+      'JSX: Unexpected character "%s" in %s (likely runaway scan on non-JSX input)',
+      [Offender, ScanContextName(AContext)]));
+end;
+
+// A nested attribute expression is transformed from a copied slice, so the
+// sub-transformer's positions are relative to that slice. Rebase them onto the
+// slice's position in this source before the error propagates — the slice's
+// leading whitespace is dropped by Trim, so it is skipped here too.
+procedure TGocciaJSXTransformer.RebaseNestedExpressionError(
+  const AError: TGocciaError; const ARawExpression: string;
+  const AStartLine, AStartColumn: Integer);
+var
+  Line, Column, I: Integer;
+begin
+  Line := AStartLine;
+  Column := AStartColumn;
+  I := 1;
+  while (I <= Length(ARawExpression)) and (ARawExpression[I] <= ' ') do
+  begin
+    if ARawExpression[I] = #10 then
+    begin
+      Inc(Line);
+      Column := 1;
+    end
+    else
+      Inc(Column);
+    Inc(I);
+  end;
+
+  // Only the slice's first line is column-shifted; every later line begins at
+  // column 1 in this source exactly as it does in the slice.
+  if AError.Line = 1 then
+    AError.TranslatePosition(Line, Column + AError.Column - 1, nil)
+  else
+    AError.TranslatePosition(Line + AError.Line - 1, AError.Column, nil);
 end;
 
 procedure TGocciaJSXTransformer.Emit(const AText: string);
@@ -839,10 +903,11 @@ var
   AttrName: string;
   Depth: Integer;
   ValueStart: Integer;
+  ValueLine, ValueColumn: Integer;
   I: Integer;
   GuardPosition: Integer;
   HasSpread: Boolean;
-  RawExpr: string;
+  RawExpr, RawSlice: string;
   SubResult: TGocciaJSXTransformResult;
 
   procedure FlushObjectAttrs;
@@ -868,7 +933,7 @@ begin
   GuardPosition := 0;
   while not IsAtEnd do
   begin
-    RequireScanProgress(GuardPosition, JSX_CONTEXT_ATTRIBUTES);
+    RequireScanProgress(GuardPosition, scAttributes);
     SkipWhitespace;
     if IsAtEnd or (CurrentChar = '>') or ((CurrentChar = '/') and (PeekAt(1) = '>')) then
       Break;
@@ -989,6 +1054,8 @@ begin
         AdvanceInput;
         Depth := 1;
         ValueStart := FPos;
+        ValueLine := FLine;
+        ValueColumn := FColumn;
         while not IsAtEnd and (Depth > 0) do
         begin
           if CurrentChar = '{' then
@@ -998,9 +1065,18 @@ begin
           if Depth > 0 then
             AdvanceInput;
         end;
-        RawExpr := Trim(Copy(FSource, ValueStart, FPos - ValueStart));
-        SubResult := TGocciaJSXTransformer.Transform(RawExpr, FFileName,
-          FFactoryName, FFragmentName);
+        RawSlice := Copy(FSource, ValueStart, FPos - ValueStart);
+        RawExpr := Trim(RawSlice);
+        try
+          SubResult := TGocciaJSXTransformer.Transform(RawExpr, FFileName,
+            FFactoryName, FFragmentName);
+        except
+          on E: TGocciaError do
+          begin
+            RebaseNestedExpressionError(E, RawSlice, ValueLine, ValueColumn);
+            raise;
+          end;
+        end;
         if Assigned(SubResult.SourceMap) then
           SubResult.SourceMap.Free;
         CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': ' + SubResult.Source);
@@ -1045,7 +1121,7 @@ begin
   GuardPosition := 0;
   while not IsAtEnd do
   begin
-    RequireScanProgress(GuardPosition, JSX_CONTEXT_CHILDREN);
+    RequireScanProgress(GuardPosition, scChildren);
     if CurrentChar = '<' then
     begin
       if PeekAt(1) = '/' then
@@ -1122,7 +1198,7 @@ begin
   FLastTokenKind := ltkOperator;
   while not IsAtEnd do
   begin
-    RequireScanProgress(GuardPosition, JSX_CONTEXT_EXPRESSION);
+    RequireScanProgress(GuardPosition, scExpression);
     case CurrentChar of
       '{':
       begin
@@ -1435,7 +1511,7 @@ begin
   GuardPosition := 0;
   while not IsAtEnd do
   begin
-    RequireScanProgress(GuardPosition, JSX_CONTEXT_SOURCE);
+    RequireScanProgress(GuardPosition, scSource);
     C := CurrentChar;
 
     if (C = '/') and (PeekAt(1) = '/') then
