@@ -614,40 +614,61 @@ begin
 end;
 
 { Walks the path one segment at a time. Each step uses the same prototype-aware
-  lookup a plain property read would, so inherited members resolve. }
+  lookup a plain property read would, so inherited members resolve.
+
+  Every step can run user code — an accessor on any segment is a getter call and
+  therefore a GC safe point — while the only reference to the previous step's
+  result is the local `Current`, and the only reference to a freshly boxed
+  primitive wrapper is the local `Container`. Both are rooted for as long as they
+  are live. The nest-safe TGocciaTempRoot form is used because the roots are
+  re-pointed on every iteration: re-adding releases the previous target, and the
+  finally releases whatever the last iteration left rooted. }
 function TryResolvePropertyPath(const ARoot: TGocciaValue;
   const ASegments: TArray<string>; out AValue: TGocciaValue): Boolean;
 var
   Current: TGocciaValue;
   Container: TGocciaObjectValue;
+  ContainerRoot: TGocciaTempRoot;
+  CurrentRoot: TGocciaTempRoot;
   I: Integer;
 begin
   Result := False;
   AValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   Current := ARoot;
 
-  for I := 0 to High(ASegments) do
-  begin
-    if Current is TGocciaObjectValue then
-      Container := TGocciaObjectValue(Current)
-    else
+  InitializeTempRoot(ContainerRoot);
+  InitializeTempRoot(CurrentRoot);
+  try
+    for I := 0 to High(ASegments) do
     begin
-      // A primitive still exposes its wrapper's members ("a.length" on a
-      // string); null and undefined box to nil and end the walk.
-      Container := Current.Box;
-      if not Assigned(Container) then
+      if Current is TGocciaObjectValue then
+        Container := TGocciaObjectValue(Current)
+      else
+      begin
+        // A primitive still exposes its wrapper's members ("a.length" on a
+        // string); null and undefined box to nil and end the walk. The wrapper
+        // is created here and reachable from nowhere else, so root it before
+        // the lookup that may collect it.
+        Container := Current.Box;
+        if not Assigned(Container) then
+          Exit;
+        Goccia.GarbageCollector.AddTempRootIfNeeded(ContainerRoot, Container);
+      end;
+
+      if not Container.HasProperty(ASegments[I]) then
         Exit;
+      Current := Container.GetPropertyWithContext(ASegments[I], Current);
+      if Current = nil then
+        Current := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Goccia.GarbageCollector.AddTempRootIfNeeded(CurrentRoot, Current);
     end;
 
-    if not Container.HasProperty(ASegments[I]) then
-      Exit;
-    Current := Container.GetPropertyWithContext(ASegments[I], Current);
-    if Current = nil then
-      Current := TGocciaUndefinedLiteralValue.UndefinedValue;
+    AValue := Current;
+    Result := True;
+  finally
+    Goccia.GarbageCollector.RemoveTempRootIfNeeded(CurrentRoot);
+    Goccia.GarbageCollector.RemoveTempRootIfNeeded(ContainerRoot);
   end;
-
-  AValue := Current;
-  Result := True;
 end;
 
 function IsNativeFunctionInstanceOf(const AObj: TGocciaObjectValue;
@@ -1916,6 +1937,9 @@ var
   PathDescription: string;
   PathArgument: TGocciaValue;
   ResolvedValue: TGocciaValue;
+  ResolvedRoot: TGocciaTempRoot;
+  ExpectedValue: TGocciaValue;
+  ExpectedRoot: TGocciaTempRoot;
   ExpectsValue: Boolean;
 begin
   TGocciaArgumentValidator.RequireBetween(AArgs, 1, 2, 'toHaveProperty',
@@ -1944,44 +1968,69 @@ begin
   PathDescription := DescribePropertyPath(Segments);
   ExpectsValue := AArgs.Length = 2;
 
-  HasProperty := TryResolvePropertyPath(FActualValue, Segments, ResolvedValue);
-  if HasProperty and ExpectsValue then
-    HasProperty := IsDeepEqual(ResolvedValue, AArgs.GetElement(1));
+  // The path walk calls accessors, and every accessor is a GC safe point. The
+  // expected value lives only in the argument collection, which is not itself a
+  // root, so root it before the walk can collect it.
+  InitializeTempRoot(ExpectedRoot);
+  InitializeTempRoot(ResolvedRoot);
+  try
+    if ExpectsValue then
+    begin
+      ExpectedValue := AArgs.GetElement(1);
+      Goccia.GarbageCollector.AddTempRootIfNeeded(ExpectedRoot, ExpectedValue);
+    end
+    else
+      ExpectedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  if FIsNegated then
-    HasProperty := not HasProperty;
+    HasProperty := TryResolvePropertyPath(FActualValue, Segments, ResolvedValue);
 
-  if HasProperty then
-  begin
-    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveProperty');
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Exit;
-  end;
+    // The walk releases its own roots on return, and a resolved value produced
+    // by an accessor (or by a computed member such as `length`) is reachable
+    // from nowhere else. The comparison and the failure formatting below both
+    // allocate, so root it for the rest of the matcher.
+    Goccia.GarbageCollector.AddTempRootIfNeeded(ResolvedRoot, ResolvedValue);
 
-  if ExpectsValue then
-  begin
+    if HasProperty and ExpectsValue then
+      HasProperty := IsDeepEqual(ResolvedValue, ExpectedValue);
+
     if FIsNegated then
+      HasProperty := not HasProperty;
+
+    if HasProperty then
+    begin
+      TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveProperty');
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Exit;
+    end;
+
+    if ExpectsValue then
+    begin
+      if FIsNegated then
+        TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
+          'Expected ' + FormatForDisplay(FActualValue) + ' not to have property ' +
+          PathDescription + ' with value ' +
+          FormatForDisplay(ExpectedValue))
+      else
+        TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
+          'Expected ' + FormatForDisplay(FActualValue) + ' to have property ' +
+          PathDescription + ' with value ' +
+          FormatForDisplay(ExpectedValue) + ' but received ' +
+          FormatForDisplay(ResolvedValue));
+    end
+    else if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
         'Expected ' + FormatForDisplay(FActualValue) + ' not to have property ' +
-        PathDescription + ' with value ' +
-        FormatForDisplay(AArgs.GetElement(1)))
+        PathDescription)
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
         'Expected ' + FormatForDisplay(FActualValue) + ' to have property ' +
-        PathDescription + ' with value ' +
-        FormatForDisplay(AArgs.GetElement(1)) + ' but received ' +
-        FormatForDisplay(ResolvedValue));
-  end
-  else if FIsNegated then
-    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
-      'Expected ' + FormatForDisplay(FActualValue) + ' not to have property ' +
-      PathDescription)
-  else
-    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
-      'Expected ' + FormatForDisplay(FActualValue) + ' to have property ' +
-      PathDescription);
+        PathDescription);
 
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  finally
+    Goccia.GarbageCollector.RemoveTempRootIfNeeded(ResolvedRoot);
+    Goccia.GarbageCollector.RemoveTempRootIfNeeded(ExpectedRoot);
+  end;
 end;
 
 function TGocciaExpectationValue.ToThrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

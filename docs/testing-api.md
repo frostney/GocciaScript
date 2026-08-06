@@ -45,7 +45,7 @@ Nested `describe` blocks compose their suite names with ` > ` separators. In the
 ```javascript
 // Equality
 expect(value).toBe(expected);           // Strict equality (===)
-expect(value).toEqual(expected);        // Deep equality, ignoring undefined
+expect(value).toEqual(expected);        // Deep equality, ignoring undefined-valued keys and trailing undefined items
 expect(value).toStrictEqual(expected);  // Deep equality, type and undefined sensitive
 
 // Type checks
