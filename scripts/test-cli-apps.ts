@@ -2670,6 +2670,77 @@ console.log("Loader: coverage --output=json not corrupted...");
       }
     }
 
+    console.log("Loader: coverage hit counts are identical across --jobs...");
+    // The loader runs its own worker pools. Without EnableCoverage plus a merge
+    // back into the main tracker, worker hits are silently dropped and the
+    // shared module reports only what the main thread executed. The
+    // --coverage-output-only run additionally pins that the flag implies
+    // --coverage, since the pool reads Enabled to decide whether to merge.
+    const loaderJobsDir = join(tmp, "loader-coverage-jobs");
+    mkdirSync(loaderJobsDir, { recursive: true });
+    writeFileSync(
+      join(loaderJobsDir, "shared.js"),
+      [
+        "export const step = (n) => {",
+        "  const doubled = n * 2;",
+        "  return doubled > 4 ? 'high' : 'low';",
+        "};",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(loaderJobsDir, "a.js"),
+      [
+        "import { step } from './shared.js';",
+        "console.log(step(1), step(2), step(5));",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(loaderJobsDir, "b.js"),
+      [
+        "import { step } from './shared.js';",
+        "console.log(step(2), step(9));",
+        "",
+      ].join("\n"),
+    );
+    const loaderEntries = [join(loaderJobsDir, "a.js"), join(loaderJobsDir, "b.js")];
+    // Both loader worker-pool paths (the plain run and the --output=json run),
+    // plus an "implied" run that omits --coverage on purpose.
+    for (const label of ["plain", "json", "implied"]) {
+      const counts: Record<string, string> = {};
+      for (const jobs of ["1", "2", "4"]) {
+        const outPath = join(loaderJobsDir, `coverage-${label}-${jobs}.json`);
+        const args = [
+          resolve(LOADER),
+          ...loaderEntries,
+          `--jobs=${jobs}`,
+          ...(label === "implied" ? [] : ["--coverage"]),
+          ...(label === "json" ? ["--output=json"] : []),
+          "--coverage-format=json",
+          `--coverage-output=${outPath}`,
+        ];
+        const proc = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
+        if (proc.exitCode !== 0)
+          throw new Error(`Loader coverage (${label}, jobs=${jobs}) exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+        const report = readCoverageByBasename(outPath);
+        if (Object.keys(report).some((f) => f.startsWith("<")))
+          throw new Error(`Loader coverage (${label}, jobs=${jobs}) leaked an internal source: ${Object.keys(report).join(", ")}`);
+        const shared = report["shared.js"];
+        if (!shared)
+          throw new Error(`Loader coverage (${label}, jobs=${jobs}) should report the shared module`);
+        counts[jobs] = JSON.stringify({ s: shared.s, b: shared.b, f: shared.f });
+      }
+      // The shared arrow runs 5 times in total across the two entry files.
+      if (JSON.parse(counts["1"]).f["1"] !== 5)
+        throw new Error(`Loader coverage (${label}) --jobs=1 should count 5 function hits, got ${counts["1"]}`);
+      for (const jobs of ["2", "4"])
+        if (counts[jobs] !== counts["1"])
+          throw new Error(
+            `Loader coverage (${label}) --jobs=${jobs} should equal --jobs=1: ${counts[jobs]} vs ${counts["1"]}`,
+          );
+    }
+
     console.log("Loader: branch coverage via TestRunner...");
     const branchLcovPath = join(tmp, "branch.lcov");
     await $`${TESTRUNNER} --coverage --coverage-format=lcov --coverage-output=${branchLcovPath} --no-progress tests/language/statements/if/if-else-statements.js`.quiet();
