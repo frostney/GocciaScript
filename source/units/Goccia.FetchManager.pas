@@ -494,6 +494,31 @@ begin
         RequestTimeoutMilliseconds := SignalTimeoutMilliseconds;
     end;
 
+    // WHATWG DOM §3.2 / Fetch: register this request's abort algorithm so a
+    // later abort rejects it before the "abort" event is fired, instead of
+    // waiting for the next pump. Registered before the worker exists so the
+    // already-aborted answer is known while this request is still cheap to
+    // abandon.
+    if Assigned(ASignal) then
+    begin
+      Pending.AbortAlgorithmHandle :=
+        ASignal.AddAbortAlgorithm(AbortPendingFetch, Pending.RequestID);
+      // "If signal is aborted, then return" — a zero handle means the signal
+      // aborted between the checks above and this registration, which a
+      // timeout signal can do purely by the deadline elapsing in between. No
+      // algorithm would ever reject this request, so phase 2 of
+      // RejectAbortedFetches would fire the abort event and the fetch would go
+      // on to settle normally afterwards. Take the same path the pre-flight
+      // already-aborted branch takes instead.
+      if Pending.AbortAlgorithmHandle = 0 then
+      begin
+        APromise.Reject(ASignal.Reason);
+        ASignal.FlushAbortEvent;
+        FLimiter.ReleaseWorker;
+        Exit;
+      end;
+    end;
+
     Worker := TGocciaFetchWorker.Create(FState, FLimiter,
       Pending.RequestID, AURL, AMethod, AHeaders, AAllowedHosts,
       RequestTimeoutMilliseconds);
@@ -506,13 +531,6 @@ begin
         TGarbageCollector.Instance.AddTempRoot(ASignal);
       Rooted := True;
     end;
-
-    // WHATWG DOM §3.2 / Fetch: register this request's abort algorithm so a
-    // later abort rejects it before the "abort" event is fired, instead of
-    // waiting for the next pump.
-    if Assigned(ASignal) then
-      Pending.AbortAlgorithmHandle :=
-        ASignal.AddAbortAlgorithm(AbortPendingFetch, Pending.RequestID);
 
     FPending.Add(Pending);
     Added := True;

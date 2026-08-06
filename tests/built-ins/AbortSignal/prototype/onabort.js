@@ -100,4 +100,16 @@ describe("AbortSignal.prototype.onabort", () => {
     expect(() => descriptor.get.call({})).toThrow(TypeError);
     expect(() => descriptor.set.call({}, () => {})).toThrow(TypeError);
   });
+
+  // Deliberate deviation from WebIDL, recorded in ADR 0104: onabort matches the
+  // pre-existing `aborted` and `reason` accessors rather than WebIDL's
+  // enumerable interface attributes.
+  test("is non-enumerable, like aborted and reason", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      AbortSignal.prototype,
+      "onabort"
+    );
+    expect(descriptor.enumerable).toBe(false);
+    expect(Object.keys(AbortSignal.prototype)).toEqual([]);
+  });
 });
