@@ -74,9 +74,12 @@ expect(value).toHaveProperty(name);
 expect(value).toBeInstanceOf(ClassName);
 
 // Errors
-expect(() => throwingFn()).toThrow();
-expect(() => throwingFn()).toThrow(TypeError);  // Check error constructor
-expect(() => throwingFn()).toThrow(RangeError);
+expect(() => throwingFn()).toThrow();                       // Anything thrown
+expect(() => throwingFn()).toThrow("partial message");      // Message substring
+expect(() => throwingFn()).toThrow(/message pattern/);      // Message pattern
+expect(() => throwingFn()).toThrow(TypeError);              // Error constructor
+expect(() => throwingFn()).toThrow(new Error("exact"));     // Equal messages
+expect(() => nonThrowingFn()).not.toThrow();
 
 // Negation
 expect(value).not.toBe(wrong);
@@ -84,6 +87,8 @@ expect(value).not.toContain(item);
 ```
 
 When `.toMatch()` receives a `RegExp`, the matcher uses regex semantics but does not mutate or depend on the regex object's current `lastIndex`.
+
+`.toThrow()` accepts every Jest argument form, and each form works under `.not` and after `.rejects`. A string matches when the thrown message *contains* it; a `RegExp` matches the message; a constructor matches by `instanceof`, so a subclass satisfies both its own class and its parent; an `Error` instance matches when the messages are equal. Thrown values that are not errors contribute their string form, so `throw 42` satisfies `toThrow("42")`. Like `.toMatch()`, the `RegExp` form does not depend on or mutate `lastIndex`.
 
 ### Mock Functions
 
