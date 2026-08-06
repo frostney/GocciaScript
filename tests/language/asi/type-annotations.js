@@ -48,4 +48,12 @@ describe("ASI type annotations", () => {
 
     expect(config.retries).toBe(2);
   });
+
+  test("a type query broken after typeof continues on the next line", () => {
+    const source = "kept"
+    let value: typeof
+      source = source
+
+    expect(value).toBe("kept");
+  });
 });
