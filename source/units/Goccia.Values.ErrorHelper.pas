@@ -70,6 +70,8 @@ begin
     Result := 20
   else if AName = TIMEOUT_ERROR_NAME then
     Result := 23
+  else if AName = INVALID_STATE_ERROR_NAME then
+    Result := 11
   else
     Result := 0;
 end;

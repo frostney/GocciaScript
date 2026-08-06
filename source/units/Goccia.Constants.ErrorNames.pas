@@ -18,6 +18,7 @@ const
   INVALID_CHARACTER_ERROR_NAME = 'InvalidCharacterError';
   ABORT_ERROR_NAME              = 'AbortError';
   TIMEOUT_ERROR_NAME            = 'TimeoutError';
+  INVALID_STATE_ERROR_NAME      = 'InvalidStateError';
   SUPPRESSED_ERROR_NAME        = 'SuppressedError';
 
 implementation
