@@ -10,16 +10,19 @@
  * agrees), so this gates CI directly.
  *
  * Two invariants:
- * 1. **Mode parity** — interpreter and bytecode must report the same
- *    pass/fail counts for the same file.
+ * 1. **Mode parity** — interpreter and bytecode must agree on the *set of
+ *    failed test names*, and on the pass/fail counts. Counts alone are not
+ *    enough: the two modes can fail the same number of different tests.
  * 2. **Bun as oracle** — the set of *failed test names* under goccia must
- *    equal the set under `bun test`. Counts alone are not enough: two
- *    runtimes can fail the same number of different tests.
+ *    equal the set under `bun test`, and bun's pass/fail counts must match
+ *    both goccia modes. Names alone are not enough either: bun can agree on
+ *    which tests fail while running a different number of them.
  *
  * Conventions:
- * - Battery files use only the `describe`/`test`/`expect` globals all three
- *   runtimes inject. `.test.ts` batteries work because bun transpiles TS
- *   natively while goccia parses annotations as types-as-comments.
+ * - A battery compared against bun uses only the `describe`/`test`/`expect`
+ *   globals all three runtimes inject. `.test.ts` batteries work because bun
+ *   transpiles TS natively while goccia parses annotations as
+ *   types-as-comments.
  * - A battery named `*.goccia.test.js` uses goccia-only globals (`mock`,
  *   `spyOn`): bun is skipped for it and only interp-vs-bytecode parity is
  *   checked.
@@ -141,17 +144,38 @@ for (const path of files) {
   const disagree: string[] = [];
   if (it.error || bc.error) {
     disagree.push("goccia load/exec failure");
-  } else if (it.verdict!.passed !== bc.verdict!.passed || it.verdict!.failed !== bc.verdict!.failed) {
-    disagree.push("MODE-PARITY BROKEN");
+  } else {
+    // Mode parity is a name-set comparison first: the two modes failing the
+    // same *number* of different tests is a divergence that a count-only check
+    // reports as agreement. The counts are still compared, because a failed-name
+    // set cannot reveal a test that ran in one mode and not the other.
+    const onlyInterp = difference(it.verdict!.failedNames, bc.verdict!.failedNames);
+    const onlyBytecode = difference(bc.verdict!.failedNames, it.verdict!.failedNames);
+    if (onlyInterp.length > 0)
+      disagree.push(`MODE-PARITY BROKEN: interp-only fails: ${JSON.stringify(onlyInterp)}`);
+    if (onlyBytecode.length > 0)
+      disagree.push(`MODE-PARITY BROKEN: bytecode-only fails: ${JSON.stringify(onlyBytecode)}`);
+    if (it.verdict!.passed !== bc.verdict!.passed || it.verdict!.failed !== bc.verdict!.failed)
+      disagree.push(`MODE-PARITY BROKEN: counts interp=${fmt(it)} bytecode=${fmt(bc)}`);
   }
   if (!gocciaOnly && disagree.length === 0) {
     if (bn.error) {
       disagree.push("bun load/exec failure");
-    } else if (!sameNames(it.verdict!.failedNames, bn.verdict!.failedNames)) {
-      const onlyGoccia = difference(it.verdict!.failedNames, bn.verdict!.failedNames);
-      const onlyBun = difference(bn.verdict!.failedNames, it.verdict!.failedNames);
-      if (onlyGoccia.length > 0) disagree.push(`goccia-only fails: ${JSON.stringify(onlyGoccia)}`);
-      if (onlyBun.length > 0) disagree.push(`bun-only fails: ${JSON.stringify(onlyBun)}`);
+    } else {
+      if (!sameNames(it.verdict!.failedNames, bn.verdict!.failedNames)) {
+        const onlyGoccia = difference(it.verdict!.failedNames, bn.verdict!.failedNames);
+        const onlyBun = difference(bn.verdict!.failedNames, it.verdict!.failedNames);
+        if (onlyGoccia.length > 0) disagree.push(`goccia-only fails: ${JSON.stringify(onlyGoccia)}`);
+        if (onlyBun.length > 0) disagree.push(`bun-only fails: ${JSON.stringify(onlyBun)}`);
+      }
+      // Agreeing on which tests fail is not the same as running the same tests,
+      // so hold bun's counts against both goccia modes, not just the interpreter.
+      for (const [label, run] of [["interp", it], ["bytecode", bc]] as [string, Run][])
+        if (
+          run.verdict!.passed !== bn.verdict!.passed ||
+          run.verdict!.failed !== bn.verdict!.failed
+        )
+          disagree.push(`bun counts differ from ${label}: bun=${fmt(bn)} ${label}=${fmt(run)}`);
     }
   }
 
