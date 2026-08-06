@@ -3545,6 +3545,18 @@ begin
                 '": ', E.Message);
             AFailedTestDetails.Add('Describe "' + ChildSuite.GetFullName +
               '": ' + E.Message);
+            { Count the registration failure, do not re-raise. Re-raising
+              would discard every result already collected for this file;
+              the remaining describes still register and run. But the
+              detail string alone is invisible to the runner: `failed` is
+              published from this counter, and both the envelope `ok` and
+              the process exit code derive from `failed` alone. Without
+              the bump a file whose describe threw reports ok/exit 0 and
+              CI misses it. Bumping TotalTests too keeps
+              passed+failed+skipped consistent with totalRunTests, the
+              same pairing snapshot-finalization errors use below. }
+            Inc(FTestStats.TotalTests);
+            Inc(FTestStats.FailedTests);
           end;
         end;
       finally
