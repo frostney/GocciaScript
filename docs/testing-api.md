@@ -40,6 +40,16 @@ describe("Feature Name", () => {
 
 Nested `describe` blocks compose their suite names with ` > ` separators. In the example above, the nested test's suite name would be `"Feature Name > sub-feature"`.
 
+### Importing the API
+
+`GocciaTestRunner` injects the whole testing API as globals, matching Vitest's `globals: true`, so a suite needs no imports. The same API is also importable from `goccia:test`, which is the canonical spelling in documentation and the only way to reach it outside the runner — an embedder that installs the testing extension gets the module, not the globals:
+
+```javascript
+import { describe, expect, mock, spyOn, test } from "goccia:test";
+```
+
+The module exports everything the globals do — `describe`, `test`, `it`, `expect`, `beforeAll`, `beforeEach`, `afterEach`, `afterAll`, `onTestFinished`, `mock`, and `spyOn` — and the imported `test` and `describe` carry their modifiers (`.each`, `.skip`, `.only`, `.todo`). Both spellings drive the same registry, so a mock created through the import is assertable through the global `expect` and the other way round.
+
 ### Available Assertions
 
 ```javascript
@@ -465,6 +475,20 @@ npx vitest                        # Watch mode
 ```
 
 Running `tests/` under Vitest needs a local Vitest install and a config that points at those files; the repository pins its own Vitest only for the differential battery lane, under `scripts/differential/`.
+
+### The `vitest` compatibility shim
+
+A suite written against Vitest imports from a bare `vitest` specifier, which would otherwise resolve to nothing. `GocciaTestRunner` ships a small shim inside the binary and resolves that specifier to it by default, so such a suite runs unchanged. Pass `--no-vitest-compat` to leave the specifier unresolvable.
+
+The shim re-exports `goccia:test` and adds the `vi` namespace. `vi` exists only in the shim — the engine itself never grows one:
+
+| Member | Behavior |
+|---|---|
+| `vi.fn` | The engine's `mock` |
+| `vi.spyOn` | The engine's `spyOn` |
+| everything else | Throws, naming the member and why it cannot be honored |
+
+Nothing is a silent no-op. `vi.mock` and the rest of the module-mocking family throw because the engine resolves every import once, at load time, and keeps no module registry to intercept. The fake-timer family throws because there is no fake clock — timers run on the real event loop. `vi.stubGlobal` and `vi.stubEnv` throw because globals are not snapshotted, so a stub could not be unwound safely. `vi.clearAllMocks`, `vi.resetAllMocks`, and `vi.restoreAllMocks` throw because no registry of created mocks exists; call `mockClear`, `mockReset`, or `mockRestore` on the mock itself.
 
 ### Writing Cross-Compatible Tests
 
