@@ -1081,4 +1081,51 @@ console.log("Type alias skipping under ASI...");
   }
 }
 
+// -- Parenthesized ternary consequent in minified bundles -----------------------
+
+console.log("Parenthesized ternary consequent...");
+{
+  // Regression from the v8 web-tooling prettier bundle: `cond?(a):b` enters the
+  // speculative arrow-function probe as "parenthesized group followed by ':'".
+  // The probe scanned for a '=>' with no bound and latched onto an unrelated
+  // arrow later in the file, so the ternary was parsed as an arrow function and
+  // the conditional reported a missing ':'. These shapes need the web-tooling
+  // compatibility flags, so they cannot live in the JS suite.
+  const COMPAT = ["--compat-asi", "--compat-var", "--compat-function"];
+
+  const cases = [
+    {
+      desc: "ternary and a later arrow in the same statement list",
+      source: "var c=1,a=2,b=3;var x=c?(a):b;var f=v=>v;console.log(x,f(9));\n",
+      output: "2 9\n",
+    },
+    {
+      desc: "ternary inside a function body with a later arrow",
+      source:
+        "var c=1,a=2,b=3;function g(){var x=c?(a):b;return x}var f=v=>v;console.log(g(),f(9));\n",
+      output: "2 9\n",
+    },
+    {
+      desc: "both branches parenthesized with a later arrow",
+      source: "var c=0,a=2,b=3;var x=c?(a):(b);var f=v=>v;console.log(x,f(1));\n",
+      output: "3 1\n",
+    },
+    {
+      desc: "arrow return type annotations still parse",
+      source: "var f=(v: number): number => v*2;console.log(f(4));\n",
+      output: "8\n",
+    },
+  ] as const;
+
+  for (const { desc, source, output } of cases)
+    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+      const label = modeArgs.length ? `${desc} (bytecode)` : desc;
+      const res = runLoaderJson(source, [...COMPAT, ...modeArgs]);
+      if (res.exitCode !== 0)
+        throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+      if (normalizeLineEndings(res.json.output) !== output)
+        throw new Error(`${label}: expected ${JSON.stringify(output)}, got ${JSON.stringify(res.json.output)}`);
+    }
+}
+
 console.log("\nAll test-cli-parser.ts tests passed.");
