@@ -3645,31 +3645,52 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
       expected: { passed: 2, failed: 0, skipped: 1, suiteErrors: 1 },
     },
     {
-      // A describe callback that throws is a registration failure, not a
-      // test failure: the remaining describes still register and run, so
-      // the passing suite below still reports its pass. Like Vitest, the
-      // error stays out of `failed` and fails the FILE via suiteErrors.
+      // A describe callback that throws aborts collection for the WHOLE
+      // file, exactly as Vitest does: no test runs, not even in the
+      // passing suite below. Collection-time; hook and test failures are
+      // execution-time and leave collected results intact.
       name: "a describe block throws during registration",
       source: [
         'describe("boom", () => { throw new Error("registration exploded"); });',
         'describe("ok", () => { test("passes", () => { expect(1).toBe(1); }); });',
         "",
       ].join("\n"),
-      expected: { passed: 1, failed: 0, skipped: 0, suiteErrors: 1 },
+      expected: { passed: 0, failed: 0, skipped: 0, suiteErrors: 1 },
+      extraMarkers: ["Error in describe block"],
+    },
+    {
+      // The decisive collection-abort property: a suite collected BEFORE
+      // the throwing describe is discarded too, so its test never runs.
+      // Verified against Vitest, which reports zero tests for this shape.
+      name: "a describe block throws after an earlier suite was collected",
+      source: [
+        'describe("collected first", () => {',
+        '  test("earlier", () => { expect(1).toBe(1); });',
+        "});",
+        'describe("boom", () => { throw new Error("registration exploded"); });',
+        'describe("collected last", () => {',
+        '  test("later", () => { expect(2).toBe(2); });',
+        "});",
+        "",
+      ].join("\n"),
+      expected: { passed: 0, failed: 0, skipped: 0, suiteErrors: 1 },
       extraMarkers: ["Error in describe block"],
     },
   ];
 
+  // Both JSON shapes: compact-json shares the envelope's count fields but
+  // omits build/memory/stdout/stderr, so it needs its own coverage.
+  for (const outputFlag of ["--output=json", "--output=compact-json"]) {
   for (const scenario of scenarios) {
-    const label = `TestRunner --output=json (${modeLabel}) when ${scenario.name}`;
-    console.log(`TestRunner: --output=json keeps stdout clean when ${scenario.name} (${modeLabel})...`);
+    const label = `TestRunner ${outputFlag} (${modeLabel}) when ${scenario.name}`;
+    console.log(`TestRunner: ${outputFlag} keeps stdout clean when ${scenario.name} (${modeLabel})...`);
     const tmp = makeTmp();
     try {
       const file = join(tmp, "test-reporter-markers.js");
       writeFileSync(file, scenario.source);
 
       const proc = Bun.spawnSync(
-        [resolve(TESTRUNNER), file, "--no-progress", "--output=json", ...modeArgs],
+        [resolve(TESTRUNNER), file, "--no-progress", outputFlag, ...modeArgs],
         { stdout: "pipe", stderr: "pipe" },
       );
       if (proc.exitCode === 0)
@@ -3708,6 +3729,7 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
       clean(tmp);
     }
   }
+  }
 
   // The worker-merge path aggregates counts differently from the single-file
   // path, so pin the describe-error accounting there too: the throwing file
@@ -3745,7 +3767,9 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
       if (json.ok !== false) throw new Error(`${label} ok should be false, got ${json.ok}`);
       if (json.failed !== 0) throw new Error(`${label} merged failed should be 0, got ${json.failed}`);
       if (json.suiteErrors !== 1) throw new Error(`${label} merged suiteErrors should be 1, got ${json.suiteErrors}`);
-      if (json.passed !== 2) throw new Error(`${label} merged passed should be 2, got ${json.passed}`);
+      // Only the clean sibling contributes a pass: collection aborted for
+      // the throwing file, so its own passing suite never ran either.
+      if (json.passed !== 1) throw new Error(`${label} merged passed should be 1, got ${json.passed}`);
 
       const badResult = json.files?.find((f: any) => String(f.fileName).endsWith("test-describe-throws.js"));
       const goodResult = json.files?.find((f: any) => String(f.fileName).endsWith("test-describe-clean.js"));
@@ -3753,6 +3777,10 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
         throw new Error(`${label} the throwing file should report ok=false, got ${badResult?.ok}`);
       if (badResult?.suiteErrors !== 1)
         throw new Error(`${label} the throwing file should report suiteErrors=1, got ${badResult?.suiteErrors}`);
+      if (badResult?.passed !== 0)
+        throw new Error(`${label} the throwing file should run no tests at all, got passed=${badResult?.passed}`);
+      if (goodResult?.passed !== 1)
+        throw new Error(`${label} the clean sibling file should keep its pass, got ${goodResult?.passed}`);
       if (!badResult?.failedTests?.some((t: string) => t.includes('Describe "boom"')))
         throw new Error(`${label} should keep the describe error visible in failedTests, got: ${JSON.stringify(badResult?.failedTests)}`);
       if (goodResult?.ok !== true)
