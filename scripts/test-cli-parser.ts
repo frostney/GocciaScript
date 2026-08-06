@@ -877,6 +877,33 @@ console.log("JSX preprocessor termination...");
       line,
     });
 
+  // A byte at or above #128 is one byte of a multi-byte character. Embedding it
+  // literally would put a truncated sequence into the diagnostic and from there
+  // into the JSON error envelope, so the transformer renders it as '\xNN'.
+  // The stall needs a preceding well-formed attribute: a non-ASCII byte in the
+  // first attribute position makes IsJSXStart reject the construct as non-JSX
+  // before the attribute scan ever begins.
+  {
+    const nonAsciiSource = 'const element = <svg fill="a" \u00fcnter="b" />;\n';
+    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+      const label = modeArgs.length
+        ? "non-ASCII attribute byte (bytecode)"
+        : "non-ASCII attribute byte";
+      const res = runLoaderJson(nonAsciiSource, modeArgs, {
+        timeout: JSX_SCAN_TIMEOUT_MS,
+      });
+      const message = String(res.json.error?.message ?? "");
+      if (res.json.error?.type !== "SyntaxError")
+        throw new Error(`${label}: expected a SyntaxError, got ${JSON.stringify(res.json.error)}`);
+      if (!/Unsupported attribute syntax at "\\x[0-9a-f]{2}"/.test(message))
+        throw new Error(`${label}: the stalled byte should be reported as a complete lowercase hex escape, got ${message}`);
+      // The whole point of the escape: nothing outside printable ASCII may
+      // reach the envelope, because a lone high byte is not valid UTF-8.
+      if (/[^\x09\x0a\x0d\x20-\x7e]/.test(message))
+        throw new Error(`${label}: the diagnostic should stay ASCII-only, got ${JSON.stringify(message)}`);
+    }
+  }
+
   // The attribute-list stall is extension-sensitive, so it is pinned to real
   // files instead of extensionless stdin. `: <T>` looks like a JSX opening tag,
   // so the children scan runs on the rest of the file and reaches `<T,`, where
@@ -967,6 +994,19 @@ console.log("Definite assignment assertion rules...");
       desc: "definite assignment with an initializer on var",
       source: "var x!: number = 1;\n",
       messageIncludes: "cannot also have definite assignment assertions",
+      args: ["--compat-var"],
+    },
+    {
+      // The colon is consumed but the annotation collector returns nothing, so
+      // the assertion still has no type to attach to.
+      desc: "definite assignment with an empty annotation",
+      source: "let x!:;\n",
+      messageIncludes: "must also have type annotations",
+    },
+    {
+      desc: "definite assignment with an empty annotation on var",
+      source: "var x!:;\n",
+      messageIncludes: "must also have type annotations",
       args: ["--compat-var"],
     },
   ] as const;

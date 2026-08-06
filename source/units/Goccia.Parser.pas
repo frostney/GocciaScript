@@ -281,6 +281,7 @@ type
       out AExpression: TGocciaExpression): Boolean;
     function ParseDefiniteAssignmentAssertion(
       const AIsConst: Boolean): Boolean;
+    procedure RejectDefiniteAssignmentWithoutAnnotation;
     procedure SkipUntilSemicolon;
     procedure SkipBlock;
     procedure SkipBalancedParens;
@@ -5024,6 +5025,18 @@ begin
   Advance;
 end;
 
+// The assertion is only meaningful attached to a type, and TypeScript rejects
+// it without one. Both the missing-colon form (`let x!;`) and the empty-
+// annotation form (`let x!:;`, where the collector consumes the colon and
+// returns nothing) end up here so the two spellings report identically.
+procedure TGocciaParser.RejectDefiniteAssignmentWithoutAnnotation;
+begin
+  raise TGocciaSyntaxError.Create(
+    'Declarations with definite assignment assertions must also have type annotations',
+    Previous.Line, Previous.Column, FFileName, FSourceLines,
+    SSuggestDefiniteAssignmentNeedsAnnotation);
+end;
+
 function TGocciaParser.DeclarationStatement: TGocciaStatement;
 var
   IsConst: Boolean;
@@ -5068,12 +5081,12 @@ begin
       begin
         Advance;
         Variables[VariableCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
+        if HasDefiniteAssignment and
+           (Variables[VariableCount].TypeAnnotation = '') then
+          RejectDefiniteAssignmentWithoutAnnotation;
       end
       else if HasDefiniteAssignment then
-        raise TGocciaSyntaxError.Create(
-          'Declarations with definite assignment assertions must also have type annotations',
-          Previous.Line, Previous.Column, FFileName, FSourceLines,
-          SSuggestDefiniteAssignmentNeedsAnnotation);
+        RejectDefiniteAssignmentWithoutAnnotation;
 
       if HasDefiniteAssignment and Check(gttAssign) then
         raise TGocciaSyntaxError.Create(
@@ -5607,12 +5620,12 @@ begin
       begin
         Advance;
         Variables[VariableCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
+        if HasDefiniteAssignment and
+           (Variables[VariableCount].TypeAnnotation = '') then
+          RejectDefiniteAssignmentWithoutAnnotation;
       end
       else if HasDefiniteAssignment then
-        raise TGocciaSyntaxError.Create(
-          'Declarations with definite assignment assertions must also have type annotations',
-          Previous.Line, Previous.Column, FFileName, FSourceLines,
-          SSuggestDefiniteAssignmentNeedsAnnotation);
+        RejectDefiniteAssignmentWithoutAnnotation;
 
       if HasDefiniteAssignment and Check(gttAssign) then
         raise TGocciaSyntaxError.Create(
@@ -8256,7 +8269,10 @@ end;
 function TypeOperatorExpectsOperand(const AToken: TGocciaToken): Boolean;
 begin
   case AToken.TokenType of
-    gttBitwiseOr, gttBitwiseAnd, gttArrow, gttExtends, gttQuestion, gttColon:
+    // gttTypeof opens a type query (`typeof source`), so the operand may sit on
+    // the next line just like the operand of any other type operator.
+    gttBitwiseOr, gttBitwiseAnd, gttArrow, gttExtends, gttQuestion, gttColon,
+    gttTypeof:
       Result := True;
     gttIdentifier:
       Result := (AToken.Lexeme = KEYWORD_KEYOF) or

@@ -5,8 +5,8 @@
 ## Executive Summary
 
 - **Three runtimes per file** — every battery under `scripts/differential/` runs under `GocciaTestRunner`, `GocciaTestRunner --mode=bytecode`, and `bun test`
-- **Two invariants** — mode parity on pass/fail counts, and equality of the *failed-test name sets* between goccia and bun
-- **Names, not counts** — two runtimes can fail the same number of different tests, so the oracle comparison diffs names
+- **Two invariants** — mode parity between the two goccia modes, and agreement with bun as the oracle
+- **Names *and* counts** — two runtimes can fail the same number of different tests, and can agree on which tests fail while running different numbers of them, so every comparison checks both
 - **A timeout is a divergence** — a hang is a finding, never an infrastructure error
 - **Run with**: `bun run scripts/test-cli-differential.ts`
 
@@ -15,20 +15,29 @@
 Each battery file produces three verdicts. A file is reported as divergent when
 either invariant breaks.
 
-**1. Mode parity.** The interpreter and the bytecode VM must report identical
-pass and fail counts for the same file. A break here means the two execution
-paths disagree with each other, independent of what the correct answer is.
+**1. Mode parity.** The interpreter and the bytecode VM must agree on the set of
+*failed test names* for the same file, and on the pass and fail counts. A break
+here means the two execution paths disagree with each other, independent of what
+the correct answer is. Names come first because equal counts prove nothing: the
+two modes can fail the same number of different tests. The counts are still
+compared, because a failed-name set cannot reveal a test that ran in one mode and
+not the other. The two directions are reported separately as
+`MODE-PARITY BROKEN: interp-only fails:` and `bytecode-only fails:`.
 
 **2. Bun as oracle.** The set of *failed test names* under goccia must equal the
-set under `bun test`. Bun stands in for ECMAScript/Vitest semantics: whatever it
-fails, goccia should fail, and nothing more. Comparing counts alone would let a
-goccia-only failure and a bun-only failure cancel out, so the harness diffs the
-names and reports the two directions separately as `goccia-only fails:` and
-`bun-only fails:`.
+set under `bun test`, and bun's pass and fail counts must match both goccia
+modes. Bun stands in for ECMAScript/Vitest semantics: whatever it fails, goccia
+should fail, and nothing more. Comparing counts alone would let a goccia-only
+failure and a bun-only failure cancel out, so the harness diffs the names and
+reports the two directions separately as `goccia-only fails:` and
+`bun-only fails:`. Comparing names alone is not enough either — bun can agree on
+which tests fail while running a different number of them — so the counts are
+held against the interpreter *and* the bytecode mode.
 
-The oracle comparison is skipped for a battery named `*.goccia.test.js`. Those
-files use goccia-only globals such as `mock` and `spyOn` that bun's runner does
-not provide, so only mode parity is enforced for them.
+A battery named `*.goccia.test.js` is never executed under bun at all, so both
+halves of invariant 2 — the failed-name comparison and the count comparison —
+are skipped for it and only mode parity is enforced. Those files use goccia-only
+globals such as `mock` and `spyOn` that bun's runner does not provide.
 
 ## Timeout as divergence
 
@@ -50,9 +59,12 @@ that hang the engine — never join the main suite run. The same placement keeps
 them out of `scripts/check-test-structure.ts` and the vitest configuration,
 both of which are scoped to `tests/`.
 
-A battery uses only the `describe`/`test`/`expect` globals that all three
-runtimes inject. A `.test.ts` battery works in both because bun transpiles
-TypeScript natively while goccia parses annotations as types-as-comments.
+A battery that is compared against bun uses only the `describe`/`test`/`expect`
+globals that all three runtimes inject; the `*.goccia.test.js` batteries are
+exempt, because they are the ones that deliberately reach for goccia-only
+globals and are never handed to bun. A `.test.ts` battery works in both because
+bun transpiles TypeScript natively while goccia parses annotations as
+types-as-comments.
 
 ## Running the lane
 
