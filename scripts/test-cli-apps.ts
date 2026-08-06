@@ -3617,6 +3617,50 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
       clean(tmp);
     }
   }
+
+  // A throwing describe callback is the remaining marker-producing shape. It
+  // cannot join the scenario loop: a describe-block error currently reports
+  // ok=true / failed=0 / exit 0 while still listing the error in failedTests —
+  // a pre-existing count/exit discrepancy tracked separately. This case pins
+  // what this layer guarantees: stdout stays parseable JSON with no reporter
+  // markers, and the describe error stays visible in failedTests.
+  {
+    const label = `TestRunner --output=json (${modeLabel}) when a describe block throws`;
+    console.log(`TestRunner: --output=json keeps stdout clean when a describe block throws (${modeLabel})...`);
+    const tmp = makeTmp();
+    try {
+      const file = join(tmp, "test-describe-throws.js");
+      writeFileSync(file, [
+        'describe("boom", () => { throw new Error("registration exploded"); });',
+        'describe("ok", () => { test("passes", () => { expect(1).toBe(1); }); });',
+        "",
+      ].join("\n"));
+
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), file, "--no-progress", "--output=json", ...modeArgs],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+
+      const stdout = proc.stdout.toString();
+      for (const marker of ["❌", "📝", "⏸️", "Test Results", "Error in describe block"]) {
+        if (stdout.includes(marker))
+          throw new Error(`${label} leaked reporter output ${marker} to stdout, got: ${stdout.slice(0, 200)}`);
+      }
+
+      let json: any;
+      try {
+        json = JSON.parse(stdout);
+      } catch {
+        throw new Error(`${label} should produce parseable JSON on stdout, got: ${stdout.slice(0, 200)}`);
+      }
+
+      const failedTests = json.files?.[0]?.failedTests;
+      if (!Array.isArray(failedTests) || !failedTests.some((t: string) => t.includes('Describe "boom"')))
+        throw new Error(`${label} should keep the describe error visible in failedTests, got: ${JSON.stringify(failedTests)}`);
+    } finally {
+      clean(tmp);
+    }
+  }
 }
 
 console.log("TestRunner: --output=json keeps stdout clean when script logs to console...");
