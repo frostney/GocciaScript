@@ -3718,6 +3718,16 @@ begin
     begin
       AFailedTestDetails.Add('Hook "beforeAll" in suite "' + EffectiveSuiteName +
         '" failed');
+      { Count the hook failure. The detail string alone is invisible to
+        the runner: `failed` is published from this counter, and both the
+        envelope `ok` and the process exit code derive from `failed`
+        alone, so without the bump a failing beforeAll reported ok/exit 0
+        and CI missed it. bun books a failed suite hook as one synthetic
+        unnamed test failure, so a single pair here matches its counts.
+        Bumping TotalTests too keeps passed+failed+skipped consistent
+        with totalRunTests, as snapshot finalization errors do. }
+      Inc(FTestStats.TotalTests);
+      Inc(FTestStats.FailedTests);
       if AExitOnFirstFailure then
       begin
         AShouldStop := True;
@@ -3958,6 +3968,13 @@ begin
     begin
       AFailedTestDetails.Add('Hook "afterAll" in suite "' + EffectiveSuiteName +
         '" failed');
+      { Same accounting gap as the beforeAll hook above: without the
+        counter bump a failing afterAll left ok/exit 0. The suite's tests
+        have already run and keep their results -- only the teardown
+        failure is added, matching bun, which reports the suite's passes
+        plus one synthetic failure for the throwing hook. }
+      Inc(FTestStats.TotalTests);
+      Inc(FTestStats.FailedTests);
       if AExitOnFirstFailure then
         AShouldStop := True;
     end;
