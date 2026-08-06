@@ -114,3 +114,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0102 — Explicit bounded FFI call descriptors](0102-explicit-bounded-ffi-call-descriptors.md)
 - [0103 — Layer untrusted execution boundaries](0103-layered-untrusted-execution-boundaries.md)
 - [0104 — WHATWG EventTarget base for AbortSignal](0104-whatwg-eventtarget-base.md)
+- [0105 — Argument collections root their elements](0105-argument-collections-root-their-elements.md)

@@ -406,6 +406,24 @@ uses
   Goccia.Scope.BindingMap,
   Goccia.Values.BigIntValue;
 
+// Terminators for the return-type annotation in the speculative arrow-function
+// probe (`(params) : Type => body`).
+//
+// The probe reaches this point for a plain parenthesized expression followed by
+// a colon too — which is exactly a ternary with a parenthesized consequent,
+// `cond ? (x) : y`. With only '=>' as a terminator the collector scanned past
+// the end of the statement looking for an arrow, found an unrelated one later
+// in the file, and concluded the ternary was an arrow function; the conditional
+// then reported a missing ':'. None of the tokens below can appear at depth 0
+// inside a real return type, so they bound the probe to its own expression:
+// ';' and ',' end the annotation, and ')' ']' '}' are unbalanced closers that
+// prove the scan has left the construct it started in. '?' and ':' are
+// deliberately absent so conditional return types still collect whole.
+const
+  ARROW_RETURN_TYPE_TERMINATORS: array[0..5] of TGocciaTokenType = (
+    gttArrow, gttSemicolon, gttComma,
+    gttRightParen, gttRightBracket, gttRightBrace);
+
 { TGocciaPrivateClassContext }
 
 constructor TGocciaPrivateClassContext.Create;
@@ -8156,7 +8174,7 @@ begin
         if CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
         begin
           Advance;
-          CollectTypeAnnotation([gttArrow]);
+          CollectTypeAnnotation(ARROW_RETURN_TYPE_TERMINATORS);
         end;
         Result := CheckWithLexicalGoal(gttArrow, glgInputElementDiv);
         Exit;
@@ -8236,7 +8254,7 @@ begin
       if CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
       begin
         Advance;
-        CollectTypeAnnotation([gttArrow]);
+        CollectTypeAnnotation(ARROW_RETURN_TYPE_TERMINATORS);
       end;
 
       Result := CheckWithLexicalGoal(gttArrow, glgInputElementDiv);

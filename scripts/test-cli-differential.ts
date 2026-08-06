@@ -2,30 +2,44 @@
 /**
  * test-cli-differential.ts
  *
- * Differential battery runner: goccia-interpreted vs goccia-bytecode vs bun.
+ * Differential battery runner: goccia-interpreted vs goccia-bytecode vs vitest
+ * vs bun.
  *
- * Each battery file under `scripts/differential/` runs under all three
- * runtimes; per-file pass/fail counts and failed-test name sets are diffed.
- * Any disagreement is a divergence and the process exits 1 (0 when everything
- * agrees), so this gates CI directly.
+ * Each battery file under `scripts/differential/` runs under the two goccia
+ * modes and under the external runtimes its classification names; per-file
+ * counts and failed-test name sets are diffed. A gating disagreement exits 1
+ * (0 when everything agrees), so this gates CI directly.
  *
- * Two invariants:
+ * Three invariants:
  * 1. **Mode parity** — interpreter and bytecode must agree on the *set of
  *    failed test names*, and on the pass/fail counts. Counts alone are not
  *    enough: the two modes can fail the same number of different tests.
- * 2. **Bun as oracle** — the set of *failed test names* under goccia must
- *    equal the set under `bun test`, and bun's pass/fail counts must match
- *    both goccia modes. Names alone are not enough either: bun can agree on
- *    which tests fail while running a different number of them.
+ * 2. **Vitest as the semantic oracle** — goccia's testing API targets Vitest as
+ *    an exact drop-in, so for batteries about testing-API semantics (matchers,
+ *    hook and describe accounting) Vitest decides. The failed-test name
+ *    set must match, the pass/fail/skip counts must match both goccia modes,
+ *    and the two runtimes must agree on whether the *file* failed — that last
+ *    one is how a suite-level error (throwing describe, failed
+ *    beforeAll/afterAll) is compared without depending on goccia's
+ *    goccia-specific `suiteErrors` field.
+ * 3. **Bun as the ECMAScript oracle** — for language and runtime batteries
+ *    (syntax, modules, builtins) bun is a sound oracle and gates. For
+ *    testing-API batteries it is *advisory*: a 223-probe three-way audit found
+ *    bun and vitest disagreeing on 30 of 178 matcher probes in both directions,
+ *    so bun cannot decide matcher semantics. Advisory drift is printed with a
+ *    `~~~` marker and never changes the exit code.
  *
  * Conventions:
- * - A battery compared against bun uses only the `describe`/`test`/`expect`
- *   globals all three runtimes inject. `.test.ts` batteries work because bun
- *   transpiles TS natively while goccia parses annotations as
- *   types-as-comments.
- * - A battery named `*.goccia.test.js` uses goccia-only globals (`mock`,
- *   `spyOn`): bun is skipped for it and only interp-vs-bytecode parity is
- *   checked.
+ * - Every battery must appear in `CLASSIFICATION` below; an unregistered
+ *   battery is itself a finding, so adding one forces a deliberate choice of
+ *   oracle rather than inheriting a default.
+ * - A battery handed to an external runtime uses only the
+ *   `describe`/`test`/`expect`/hook globals all runtimes inject. `.test.ts`
+ *   batteries work because bun transpiles TS natively while goccia parses
+ *   annotations as types-as-comments.
+ * - A battery that reaches for goccia-only globals (`mock`, `spyOn`) is named
+ *   `*.goccia.test.js` and is classified `skip` for both external runtimes, so
+ *   only mode parity is checked for it.
  * - The goccia binary defaults to the built `GocciaTestRunner`; set GOCCIA_BIN
  *   to point somewhere else.
  * - A runtime that exceeds the per-file timeout (DIFFRUN_TIMEOUT seconds,
@@ -34,7 +48,7 @@
  *   error.
  */
 
-import { readFileSync, readdirSync, rmSync } from "fs";
+import { existsSync, readFileSync, readdirSync, rmSync } from "fs";
 import { basename, join } from "path";
 
 import { TESTRUNNER } from "./test-cli/binaries";
@@ -44,8 +58,52 @@ const BATTERY_DIR = join(import.meta.dir, "differential");
 const GOCCIA_BIN = process.env.GOCCIA_BIN ?? TESTRUNNER;
 const TIMEOUT_MS = Number.parseInt(process.env.DIFFRUN_TIMEOUT ?? "60", 10) * 1000;
 const GFLAGS = ["--source-type=module", "--compat-function", "--no-progress"];
+const NODE_BIN = process.env.DIFFRUN_NODE ?? "node";
+const VITEST_ENTRY = join(BATTERY_DIR, "node_modules", "vitest", "vitest.mjs");
 
-type Verdict = { passed: number; failed: number; failedNames: Set<string> };
+/**
+ * How a battery is gated.
+ * - `gate`: a disagreement with this runtime is a divergence and exits 1.
+ * - `advisory`: a disagreement is reported but does not gate.
+ * - `skip`: the battery is never handed to this runtime.
+ */
+type Role = "gate" | "advisory" | "skip";
+type Classification = { kind: string; bun: Role; vitest: Role };
+
+/**
+ * Battery classification. `kind` names why the oracle was chosen:
+ * - `language` — ECMAScript syntax/semantics, where bun is a sound oracle and
+ *   the testing API is incidental.
+ * - `matcher` / `lifecycle` / `mocks` — testing-API semantics, where the
+ *   product target is Vitest-exact behaviour and only vitest may decide. The
+ *   `mocks` battery is not there yet: see its entry below.
+ */
+const CLASSIFICATION: Record<string, Classification> = {
+  "a-typesyntax.test.ts": { kind: "language", bun: "gate", vitest: "skip" },
+  "b-modules.test.js": { kind: "language", bun: "gate", vitest: "skip" },
+  "c-builtins.test.js": { kind: "language", bun: "gate", vitest: "skip" },
+  "d-matchers.test.js": { kind: "matcher", bun: "advisory", vitest: "gate" },
+  // Goccia-only for now: the battery reaches for the `mock`/`spyOn` globals,
+  // which neither external runtime injects. Its three-way upgrade waits on the
+  // planned `goccia:test` module and shipped vitest-compat shim, which let it
+  // import `vi` from a bare `vitest` specifier under every runtime.
+  "e-mocks.goccia.test.js": { kind: "mocks", bun: "skip", vitest: "skip" },
+  "f-lifecycle.test.js": { kind: "lifecycle", bun: "advisory", vitest: "gate" },
+  "g-filehook.test.js": { kind: "lifecycle", bun: "advisory", vitest: "gate" },
+};
+
+type Verdict = {
+  passed: number;
+  failed: number;
+  /** `null` when the runtime's output does not report skips. */
+  skipped: number | null;
+  /** Every failed entry, including goccia's suite-level ones. Mode parity. */
+  failedNames: Set<string>;
+  /** Test-level failures only — the dimension vitest also reports. */
+  failedTestNames: Set<string>;
+  /** `null` when the runtime's output does not distinguish file failure. */
+  fileFailed: boolean | null;
+};
 type Run = { verdict: Verdict | null; error: string | null };
 
 const scratch = mkdtemp("goccia-differential-");
@@ -78,11 +136,27 @@ function gocciaResults(path: string, bytecode: boolean): Run {
   }
 
   const failedNames = new Set<string>();
+  const failedTestNames = new Set<string>();
   for (const entry of file.failedTests ?? []) {
+    // Goccia reports test failures as `Test "<name>" in suite "<suite>"` and
+    // suite-level errors as `Hook "..."` / `Describe "..."`. Vitest has no
+    // per-name counterpart for the latter — it fails the file — so the two
+    // kinds are tracked apart.
     const m = /^Test "(.*?)" in suite/.exec(entry);
     failedNames.add(m ? m[1] : entry);
+    if (m) failedTestNames.add(m[1]);
   }
-  return { verdict: { passed: file.passed, failed: file.failed, failedNames }, error: null };
+  return {
+    verdict: {
+      passed: file.passed,
+      failed: file.failed,
+      skipped: file.skipped ?? null,
+      failedNames,
+      failedTestNames,
+      fileFailed: file.ok === false,
+    },
+    error: null,
+  };
 }
 
 /** Runs one file under `bun test`; parses the human summary for verdicts. */
@@ -111,17 +185,163 @@ function bunResults(path: string): Run {
     const tail = lines.length > 0 ? lines[lines.length - 1].slice(0, 100) : "EMPTY";
     return { verdict: null, error: `NO-TESTS: ${tail}` };
   }
-  return { verdict: { passed, failed, failedNames }, error: null };
+  return {
+    verdict: {
+      passed,
+      failed,
+      skipped: null,
+      failedNames,
+      failedTestNames: failedNames,
+      fileFailed: null,
+    },
+    error: null,
+  };
 }
 
-const fmt = (run: Run): string =>
-  run.error ?? `${run.verdict!.passed}p/${run.verdict!.failed}f`;
+/**
+ * Runs every vitest-compared battery in one `vitest run` and returns the
+ * per-file verdicts, keyed by battery basename.
+ *
+ * One invocation for the whole set is what makes vitest affordable as the
+ * gating oracle: the batteries complete in about a second in a single process,
+ * where one process per file would pay vitest's startup cost per battery.
+ */
+function vitestResults(paths: string[]): Map<string, Run> {
+  const results = new Map<string, Run>();
+  if (paths.length === 0) return results;
+
+  const outPath = join(scratch, "vitest.json");
+  const names = paths.map((p) => basename(p));
+  let proc;
+  try {
+    proc = Bun.spawnSync(
+      [NODE_BIN, VITEST_ENTRY, "run", "--reporter=json", `--outputFile=${outPath}`, ...names],
+      {
+        cwd: BATTERY_DIR,
+        stdout: "pipe",
+        stderr: "pipe",
+        // The whole set runs in one process, so the budget is the per-file
+        // timeout times the number of files: a hang is still a divergence.
+        timeout: TIMEOUT_MS * paths.length,
+      },
+    );
+  } catch (e: any) {
+    return fillVitest(results, names, `NO-VITEST (${e.message})`);
+  }
+  if (proc.exitedDueToTimeout) return fillVitest(results, names, "TIMEOUT");
+
+  let report: any;
+  try {
+    report = JSON.parse(readFileSync(outPath, "utf8"));
+  } catch (e: any) {
+    const tail = proc.stderr.toString().trim().split("\n").slice(-1)[0] ?? "";
+    return fillVitest(results, names, `NO-JSON (${e.message}) ${tail.slice(0, 100)}`);
+  } finally {
+    rmSync(outPath, { force: true });
+  }
+
+  for (const file of report.testResults ?? []) {
+    const key = basename(file.name ?? "");
+    let passed = 0;
+    let failed = 0;
+    let skipped = 0;
+    const failedNames = new Set<string>();
+    for (const assertion of file.assertionResults ?? []) {
+      // Vitest's json reporter reports `skipped` for a test the runner never
+      // entered (including the cascade under a failed beforeAll) and `pending`
+      // / `todo` for the declared forms; goccia counts all three as skipped.
+      if (assertion.status === "passed") passed = passed + 1;
+      else if (assertion.status === "failed") {
+        failed = failed + 1;
+        failedNames.add(assertion.title);
+      } else skipped = skipped + 1;
+    }
+    results.set(key, {
+      verdict: {
+        passed,
+        failed,
+        skipped,
+        failedNames,
+        failedTestNames: failedNames,
+        // A vitest file fails either because a test failed or because a suite
+        // errored (throwing describe, failed beforeAll/afterAll) — the same
+        // two reasons goccia clears its per-file `ok` for.
+        fileFailed: file.status === "failed",
+      },
+      error: null,
+    });
+  }
+
+  for (const name of names)
+    if (!results.has(name))
+      results.set(name, { verdict: null, error: "NO-RESULT (vitest reported no such file)" });
+  return results;
+}
+
+const fillVitest = (results: Map<string, Run>, names: string[], error: string): Map<string, Run> => {
+  for (const name of names) results.set(name, { verdict: null, error });
+  return results;
+};
+
+const fmt = (run: Run): string => {
+  if (run.error) return run.error;
+  const v = run.verdict!;
+  return `${v.passed}p/${v.failed}f${v.skipped ? `/${v.skipped}s` : ""}`;
+};
 
 const difference = (a: Set<string>, b: Set<string>): string[] =>
   [...a].filter((v) => !b.has(v)).sort();
 
 const sameNames = (a: Set<string>, b: Set<string>): boolean =>
   a.size === b.size && [...a].every((v) => b.has(v));
+
+/**
+ * Diffs an external runtime against both goccia modes and returns one line per
+ * disagreement. `label` names the runtime in the messages, and `options` turns
+ * off the dimensions a given runtime's output cannot report. The caller decides
+ * whether the result gates or is advisory.
+ */
+function compareOracle(
+  label: string,
+  oracle: Run,
+  modes: [string, Run][],
+  options: { compareSkipped: boolean; compareFileFailed: boolean },
+): string[] {
+  const disagree: string[] = [];
+  if (oracle.error) return [`${label} load/exec failure (${oracle.error})`];
+
+  const reference = modes[0][1].verdict!;
+  if (!sameNames(reference.failedTestNames, oracle.verdict!.failedTestNames)) {
+    const onlyGoccia = difference(reference.failedTestNames, oracle.verdict!.failedTestNames);
+    const onlyOracle = difference(oracle.verdict!.failedTestNames, reference.failedTestNames);
+    if (onlyGoccia.length > 0) disagree.push(`goccia-only fails: ${JSON.stringify(onlyGoccia)}`);
+    if (onlyOracle.length > 0)
+      disagree.push(`${label}-only fails: ${JSON.stringify(onlyOracle)}`);
+  }
+  // Agreeing on which tests fail is not the same as running the same tests,
+  // so hold the oracle's counts against both goccia modes, not just one.
+  for (const [modeLabel, run] of modes) {
+    const v = run.verdict!;
+    const o = oracle.verdict!;
+    if (v.passed !== o.passed || v.failed !== o.failed)
+      disagree.push(`${label} counts differ from ${modeLabel}: ${label}=${fmt(oracle)} ${modeLabel}=${fmt(run)}`);
+    else if (options.compareSkipped && v.skipped !== o.skipped)
+      disagree.push(`${label} skip counts differ from ${modeLabel}: ${label}=${o.skipped}s ${modeLabel}=${v.skipped}s`);
+  }
+  if (
+    options.compareFileFailed &&
+    reference.fileFailed !== null &&
+    oracle.verdict!.fileFailed !== null &&
+    reference.fileFailed !== oracle.verdict!.fileFailed
+  )
+    // Neither runtime names a suite-level error the other can match, so file
+    // failure is the dimension that carries it: goccia clears `ok`, vitest
+    // fails the file, and disagreeing means one of them swallowed the error.
+    disagree.push(
+      `${label} file verdict differs: ${label}=${oracle.verdict!.fileFailed ? "failed" : "ok"} goccia=${reference.fileFailed ? "failed" : "ok"}`,
+    );
+  return disagree;
+}
 
 const cliFiles = process.argv.slice(2);
 const files =
@@ -132,16 +352,49 @@ const files =
         .sort()
         .map((f) => join(BATTERY_DIR, f));
 
+const vitestFiles = files.filter((p) => {
+  const classification = CLASSIFICATION[basename(p)];
+  return classification !== undefined && classification.vitest !== "skip";
+});
+
+if (vitestFiles.length > 0 && !existsSync(VITEST_ENTRY)) {
+  console.error(
+    `Vitest is the semantic oracle for ${vitestFiles.length} of these batteries and is not installed.\n` +
+      `Install the pinned version first:\n\n  cd ${BATTERY_DIR} && bun install\n`,
+  );
+  clean(scratch);
+  process.exit(2);
+}
+
+const vitestRuns = vitestResults(vitestFiles);
+
 const findings: string[] = [];
+const advisories: string[] = [];
 
 for (const path of files) {
   const name = basename(path);
-  const gocciaOnly = name.includes(".goccia.");
+  const classification = CLASSIFICATION[name];
   const it = gocciaResults(path, false);
   const bc = gocciaResults(path, true);
-  const bn: Run = gocciaOnly ? { verdict: null, error: "SKIPPED" } : bunResults(path);
+
+  if (!classification) {
+    console.log(
+      `${name.padEnd(28)} UNCLASSIFIED — add it to CLASSIFICATION in scripts/test-cli-differential.ts`,
+    );
+    findings.push(name);
+    continue;
+  }
+
+  const runBun = classification.bun !== "skip";
+  const bn: Run = runBun ? bunResults(path) : { verdict: null, error: "SKIPPED" };
+  const vt: Run =
+    classification.vitest === "skip"
+      ? { verdict: null, error: "SKIPPED" }
+      : vitestRuns.get(name) ?? { verdict: null, error: "NO-RESULT" };
 
   const disagree: string[] = [];
+  const advisory: string[] = [];
+
   if (it.error || bc.error) {
     disagree.push("goccia load/exec failure");
   } else {
@@ -158,35 +411,44 @@ for (const path of files) {
     if (it.verdict!.passed !== bc.verdict!.passed || it.verdict!.failed !== bc.verdict!.failed)
       disagree.push(`MODE-PARITY BROKEN: counts interp=${fmt(it)} bytecode=${fmt(bc)}`);
   }
-  if (!gocciaOnly && disagree.length === 0) {
-    if (bn.error) {
-      disagree.push(`bun load/exec failure (${bn.error})`);
-    } else {
-      if (!sameNames(it.verdict!.failedNames, bn.verdict!.failedNames)) {
-        const onlyGoccia = difference(it.verdict!.failedNames, bn.verdict!.failedNames);
-        const onlyBun = difference(bn.verdict!.failedNames, it.verdict!.failedNames);
-        if (onlyGoccia.length > 0) disagree.push(`goccia-only fails: ${JSON.stringify(onlyGoccia)}`);
-        if (onlyBun.length > 0) disagree.push(`bun-only fails: ${JSON.stringify(onlyBun)}`);
-      }
-      // Agreeing on which tests fail is not the same as running the same tests,
-      // so hold bun's counts against both goccia modes, not just the interpreter.
-      for (const [label, run] of [["interp", it], ["bytecode", bc]] as [string, Run][])
-        if (
-          run.verdict!.passed !== bn.verdict!.passed ||
-          run.verdict!.failed !== bn.verdict!.failed
-        )
-          disagree.push(`bun counts differ from ${label}: bun=${fmt(bn)} ${label}=${fmt(run)}`);
+
+  // An oracle can only be read once goccia itself agrees with goccia.
+  if (disagree.length === 0) {
+    const modes: [string, Run][] = [
+      ["interp", it],
+      ["bytecode", bc],
+    ];
+    for (const [label, run, role] of [
+      ["vitest", vt, classification.vitest],
+      ["bun", bn, classification.bun],
+    ] as [string, Run, Role][]) {
+      if (role === "skip") continue;
+      const messages = compareOracle(label, run, modes, {
+        // Bun's human summary does not give a per-file skip count or a file
+        // verdict, so those dimensions are vitest-only.
+        compareSkipped: label === "vitest",
+        compareFileFailed: label === "vitest",
+      });
+      if (role === "gate") disagree.push(...messages);
+      else advisory.push(...messages);
     }
   }
 
   const marker = disagree.length > 0 ? `  <<< ${disagree.join("; ")}` : "";
+  const advisoryMarker =
+    advisory.length > 0 ? `  ~~~ ADVISORY(non-gating): ${advisory.join("; ")}` : "";
   console.log(
-    `${name.padEnd(42)} interp=${fmt(it)}  bytecode=${fmt(bc)}  bun=${fmt(bn)}${marker}`,
+    `${name.padEnd(28)} [${classification.kind}] interp=${fmt(it)}  bytecode=${fmt(bc)}  vitest=${fmt(vt)}  bun=${fmt(bn)}${marker}${advisoryMarker}`,
   );
   if (disagree.length > 0) findings.push(name);
+  else if (advisory.length > 0) advisories.push(name);
 }
 
 clean(scratch);
 
 console.log(`\n${findings.length} file(s) with divergence`);
+if (advisories.length > 0)
+  console.log(
+    `${advisories.length} file(s) with advisory-only drift (${advisories.join(", ")}) — reported, not gating`,
+  );
 process.exit(findings.length > 0 ? 1 : 0);

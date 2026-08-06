@@ -64,6 +64,9 @@ describe("toMatchObject", () => {
   });
 
   test("handles cyclic values", () => {
+    // KNOWN DIVERGENCE for the cyclic ARRAY case (outside the audit corpus,
+    // pending a decision): vitest does not terminate on it. The cyclic Set,
+    // Map and object cases match vitest.
     const leftArray = [];
     leftArray.push(leftArray);
     const rightArray = [];
@@ -89,7 +92,65 @@ describe("toMatchObject", () => {
     expect(leftObject).toMatchObject(rightObject);
   });
 
+  test("requires an expected undefined key to be present", () => {
+    // Vitest is the oracle: an expected key holding undefined still has to
+    // exist on the actual side.
+    expect({ a: 1 }).not.toMatchObject({ a: 1, b: undefined });
+    expect({ a: 1, b: undefined }).toMatchObject({ a: 1, b: undefined });
+  });
+
+  test("requires full equality for expected Sets and Maps", () => {
+    expect({ s: new Set([1, 2]) }).not.toMatchObject({ s: new Set([1]) });
+    expect({ s: new Set([1, 2]) }).toMatchObject({ s: new Set([2, 1]) });
+    expect({ m: new Map([["a", 1], ["b", 2]]) }).not.toMatchObject({
+      m: new Map([["a", 1]]),
+    });
+    expect({ m: new Map([["a", 1]]) }).toMatchObject({
+      m: new Map([["a", 1]]),
+    });
+  });
+
+  test("compares expected errors by their fields", () => {
+    expect({ e: new Error("x") }).toMatchObject({ e: new Error("x") });
+    expect({ e: new Error("x") }).not.toMatchObject({ e: new Error("y") });
+    // A plain expected object still describes a subset of the error.
+    expect({ e: new Error("x") }).toMatchObject({ e: {} });
+  });
+
   test("supports negation", () => {
     expect({ a: 1, b: 2 }).not.toMatchObject({ a: 9 });
+  });
+});
+
+// Same exposure as toEqual: see that file for the rationale.
+describe.runIf(typeof Goccia !== "undefined")("toMatchObject under explicit GC", () => {
+  // A bare gc() usually leaves the freed slot readable; the allocation churn
+  // afterwards is what makes a collected value observable.
+  const gcChurn = () => {
+    Goccia.gc();
+    let total = 0;
+    for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      const scratch = { a: i * 7.5, b: [i, i + 1], c: "x" + i };
+      total += scratch.a + scratch.b[0];
+    }
+    return total;
+  };
+
+  // Reachable only from the expectation while the comparison runs.
+  const freshExpected = () => ({
+    get k() {
+      gcChurn();
+      return { x: 1, arr: [1, 2, 3] };
+    },
+  });
+
+  test("matches through getters that collect", () => {
+    expect({ k: { x: 1, arr: [1, 2, 3] }, extra: "tail" }).toMatchObject(
+      freshExpected(),
+    );
+  });
+
+  test("keeps a temporary actual alive across the partial walk", () => {
+    expect([{ k: { x: 1, arr: [1, 2, 3] } }]).toContainEqual(freshExpected());
   });
 });

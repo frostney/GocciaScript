@@ -231,16 +231,20 @@ begin
               TGocciaNumberLiteralValue.Create(J));
 
             Args := TGocciaArgumentsCollection.CreateWithCapacity(3);
-            Args.Add(TGocciaStringLiteralValue.Create(Key));
-            if J < Length(FieldInfoRows[I]) then
-              Args.Add(
-                TGocciaStringLiteralValue.Create(FieldInfoRows[I][J].Value))
-            else
-              Args.Add(TGocciaStringLiteralValue.Create(''));
-            Args.Add(Context);
+            try
+              Args.Add(TGocciaStringLiteralValue.Create(Key));
+              if J < Length(FieldInfoRows[I]) then
+                Args.Add(
+                  TGocciaStringLiteralValue.Create(FieldInfoRows[I][J].Value))
+              else
+                Args.Add(TGocciaStringLiteralValue.Create(''));
+              Args.Add(Context);
 
-            ReviverResult := InvokeCallable(Reviver, Args,
-              TGocciaUndefinedLiteralValue.UndefinedValue);
+              ReviverResult := InvokeCallable(Reviver, Args,
+                TGocciaUndefinedLiteralValue.UndefinedValue);
+            finally
+              Args.Free;
+            end;
             Obj.AssignProperty(Key, ReviverResult);
           end;
           ParsedResult.Elements.Add(Obj);
@@ -260,13 +264,17 @@ begin
               TGocciaNumberLiteralValue.Create(J));
 
             Args := TGocciaArgumentsCollection.CreateWithCapacity(3);
-            Args.Add(TGocciaNumberLiteralValue.Create(J));
-            Args.Add(
-              TGocciaStringLiteralValue.Create(FieldInfoRows[I][J].Value));
-            Args.Add(Context);
+            try
+              Args.Add(TGocciaNumberLiteralValue.Create(J));
+              Args.Add(
+                TGocciaStringLiteralValue.Create(FieldInfoRows[I][J].Value));
+              Args.Add(Context);
 
-            ReviverResult := InvokeCallable(Reviver, Args,
-              TGocciaUndefinedLiteralValue.UndefinedValue);
+              ReviverResult := InvokeCallable(Reviver, Args,
+                TGocciaUndefinedLiteralValue.UndefinedValue);
+            finally
+              Args.Free;
+            end;
             Row.Elements.Add(ReviverResult);
           end;
           ParsedResult.Elements.Add(Row);
@@ -388,10 +396,14 @@ begin
             Item := TGocciaUndefinedLiteralValue.UndefinedValue;
 
           Args := TGocciaArgumentsCollection.CreateWithCapacity(2);
-          Args.Add(TGocciaStringLiteralValue.Create(Key));
-          Args.Add(Item);
-          ReplacerResult := InvokeCallable(Replacer, Args,
-            TGocciaUndefinedLiteralValue.UndefinedValue);
+          try
+            Args.Add(TGocciaStringLiteralValue.Create(Key));
+            Args.Add(Item);
+            ReplacerResult := InvokeCallable(Replacer, Args,
+              TGocciaUndefinedLiteralValue.UndefinedValue);
+          finally
+            Args.Free;
+          end;
           ReplacedObj.AssignProperty(Key, ReplacerResult);
         end;
         ReplacedArr.Elements.Add(ReplacedObj);
@@ -408,10 +420,14 @@ begin
           for J := 0 to Row.Elements.Count - 1 do
           begin
             Args := TGocciaArgumentsCollection.CreateWithCapacity(2);
-            Args.Add(TGocciaNumberLiteralValue.Create(J));
-            Args.Add(Row.Elements[J]);
-            ReplacerResult := InvokeCallable(Replacer, Args,
-              TGocciaUndefinedLiteralValue.UndefinedValue);
+            try
+              Args.Add(TGocciaNumberLiteralValue.Create(J));
+              Args.Add(Row.Elements[J]);
+              ReplacerResult := InvokeCallable(Replacer, Args,
+                TGocciaUndefinedLiteralValue.UndefinedValue);
+            finally
+              Args.Free;
+            end;
             ReplacedRow.Elements.Add(ReplacerResult);
           end;
           ReplacedArr.Elements.Add(ReplacedRow);

@@ -19,6 +19,55 @@ Edit route UI under `src/app/` and `src/components/`. Edit documentation in the 
 
 Fonts (Instrument Serif, IBM Plex Sans, and JetBrains Mono) are loaded through `next/font` in `src/app/layout.tsx`; the OG image generator (`src/app/opengraph-image.tsx`) embeds the matching display and body fonts.
 
+## Playground engines
+
+The playground runs real engine binaries, vendored at build time by
+`scripts/fetch-binaries.ts` (`prebuild`): the rolling `nightly` plus the top
+three stable precedence picks. Each run produces two descriptions of the same
+set.
+
+| Artifact | Reached by | Why |
+| --- | --- | --- |
+| `vendor/manifest.json` + the binaries | `/api/execute`, `/api/test` | `next.config.mjs` traces `vendor/**` into those two route bundles, which spawn the binaries. |
+| `src/generated/vendor-manifest.json` | every bundle | A **static import** (`src/lib/vendor-manifest-server.ts`). The playground page renders in its own bundle, which does not trace `vendor/**`, so a `process.cwd()` read there finds nothing. |
+
+Both are generated, never committed. `postinstall` creates the second one
+empty (`scripts/ensure-generated-manifest.ts`) so a fresh checkout typechecks
+and builds; `prebuild` fills it in. `/api/versions` reports what a deployment
+actually vendored.
+
+A build **fails** when the vendored set has no stable release, or none that
+advertises `--no-host-filesystem` on both binaries — a playground offering
+only `nightly` is a broken playground, not a degraded one. Individual tag
+failures stay warnings. Override with `ALLOW_NIGHTLY_ONLY_PLAYGROUND=1` only
+when shipping without a stable engine is intended.
+
+### Releases reach the site
+
+A release commit touches only `CHANGELOG.md`, so `scripts/vercel-ignore.sh`
+sees no website change and Vercel skips the build — the site keeps serving the
+previously vendored engines. Two pieces close that loop:
+
+1. The `release` job in `.github/workflows/ci.yml` POSTs a Vercel deploy hook
+   once the release archives exist.
+2. `scripts/vercel-ignore.sh` also builds when GitHub's newest stable release
+   is missing from the live site's `/api/versions`, which is what lets that
+   deployment through — and self-corrects if the site falls behind any other
+   way.
+
+Two settings live outside this repo:
+
+- **Vercel → project → Environment Variables → `GITHUB_TOKEN`** (optional but
+  recommended): used for GitHub API calls while vendoring and in the ignore
+  step. Without it those calls are limited to 60/hour per IP; the ignore step
+  fails toward building, so exhaustion costs build minutes rather than
+  freshness.
+- **GitHub → repository → Secrets → `VERCEL_DEPLOY_HOOK_URL`**: a Vercel deploy
+  hook for the production branch (Vercel → project → Settings → Git → Deploy
+  Hooks). Treat the URL as a credential. Without the secret the workflow step
+  logs that it skipped, and the release reaches the site on its next
+  deployment instead.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

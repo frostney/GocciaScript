@@ -18,6 +18,7 @@ implementation
 uses
   Goccia.Arithmetic,
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.AsymmetricMatcher,
   Goccia.Values.ClassValue,
@@ -85,21 +86,35 @@ end;
   Class instances only match instances of the same class, and never a plain
   object; every non-class object — including a null-prototype object or one
   built with Object.create(proto) — counts as plain. }
-function HasSameObjectType(const AActual, AExpected: TGocciaValue): Boolean;
-var
-  ActualClass, ExpectedClass: TGocciaClassValue;
+{ Strict equality additionally requires the two objects to resolve to the same
+  constructor. Comparing the constructor the prototype chain yields — rather
+  than any class the engine attached, or the prototype object itself — is what
+  keeps Object.create(null) and Object.create(Array.prototype) apart from a
+  plain literal while still equating Object.create(somePlainObject) with one,
+  and what keeps two same-named anonymous classes distinct. }
+function HasSameObjectType(const AActual, AExpected: TGocciaObjectValue): Boolean;
 begin
-  if AActual is TGocciaInstanceValue then
-    ActualClass := TGocciaInstanceValue(AActual).ClassValue
-  else
-    ActualClass := nil;
+  Result := AActual.GetProperty(PROP_CONSTRUCTOR) =
+    AExpected.GetProperty(PROP_CONSTRUCTOR);
+end;
 
-  if AExpected is TGocciaInstanceValue then
-    ExpectedClass := TGocciaInstanceValue(AExpected).ClassValue
-  else
-    ExpectedClass := nil;
+{ An error's stack is incidental: two errors raised at different places are
+  still the same error to a matcher, so an own `stack` never participates. }
+function IsIgnoredErrorKey(const AKey: string;
+  const ABothErrors: Boolean): Boolean;
+begin
+  Result := ABothErrors and (AKey = PROP_STACK);
+end;
 
-  Result := ActualClass = ExpectedClass;
+function CountComparableKeys(const AKeys: TArray<string>;
+  const ABothErrors: Boolean): Integer;
+var
+  I: Integer;
+begin
+  Result := 0;
+  for I := 0 to High(AKeys) do
+    if not IsIgnoredErrorKey(AKeys[I], ABothErrors) then
+      Inc(Result);
 end;
 
 { Reads a property the comparison needs but the enumerable-key walk cannot
@@ -112,13 +127,6 @@ begin
   Result := AObject.GetProperty(AName);
   if Result = nil then
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
-{ An asymmetric matcher accepts a whole family of values, so it has to be
-  paired off after the exact members have claimed their partners. }
-function IsAsymmetricValue(const AValue: TGocciaValue): Boolean;
-begin
-  Result := AValue is TGocciaAsymmetricMatcherValue;
 end;
 
 { Exactly one side being an array, Set or Map makes the two values different
@@ -188,6 +196,60 @@ function IsPartialDeepEqualInternal(const AActual, AExpected: TGocciaValue;
   var AComparedPairs: TComparedValuePairArray;
   const AIncludeInherited: Boolean): Boolean; forward;
 
+{ Reads the same property from both sides and compares the results.
+
+  Every read can run a user getter, and a getter is a GC safe point. Written as
+  one call expression — `Compare(Actual.GetProperty(K), Expected.GetProperty(K))`
+  — the first read's result sits in an unrooted compiler temporary while the
+  second getter runs, and neither result is rooted for the recursive walk, which
+  re-enters user code again at every level. Rooting here roots the whole tree:
+  each level holds its own two values while the level below it runs. }
+function DeepEqualPropertyPair(const AActualObj, AExpectedObj: TGocciaObjectValue;
+  const AName: string; var AComparedPairs: TComparedValuePairArray;
+  const AStrict: Boolean): Boolean;
+var
+  ActualValue, ExpectedValue: TGocciaValue;
+  ActualRoot, ExpectedRoot: TGocciaTempRoot;
+begin
+  InitializeTempRoot(ActualRoot);
+  InitializeTempRoot(ExpectedRoot);
+  try
+    ActualValue := ErrorFieldValue(AActualObj, AName);
+    AddTempRootIfNeeded(ActualRoot, ActualValue);
+    ExpectedValue := ErrorFieldValue(AExpectedObj, AName);
+    AddTempRootIfNeeded(ExpectedRoot, ExpectedValue);
+    Result := IsDeepEqualInternal(ActualValue, ExpectedValue, AComparedPairs,
+      AStrict);
+  finally
+    RemoveTempRootIfNeeded(ExpectedRoot);
+    RemoveTempRootIfNeeded(ActualRoot);
+  end;
+end;
+
+{ Subset counterpart of DeepEqualPropertyPair, with the same rooting rationale. }
+function PartialDeepEqualPropertyPair(const AActualObj,
+  AExpectedObj: TGocciaObjectValue; const AName: string;
+  var AComparedPairs: TComparedValuePairArray;
+  const AIncludeInherited: Boolean): Boolean;
+var
+  ActualValue, ExpectedValue: TGocciaValue;
+  ActualRoot, ExpectedRoot: TGocciaTempRoot;
+begin
+  InitializeTempRoot(ActualRoot);
+  InitializeTempRoot(ExpectedRoot);
+  try
+    ActualValue := ErrorFieldValue(AActualObj, AName);
+    AddTempRootIfNeeded(ActualRoot, ActualValue);
+    ExpectedValue := ErrorFieldValue(AExpectedObj, AName);
+    AddTempRootIfNeeded(ExpectedRoot, ExpectedValue);
+    Result := IsPartialDeepEqualInternal(ActualValue, ExpectedValue,
+      AComparedPairs, AIncludeInherited);
+  finally
+    RemoveTempRootIfNeeded(ExpectedRoot);
+    RemoveTempRootIfNeeded(ActualRoot);
+  end;
+end;
+
 function IsDeepEqualInternal(const AActual, AExpected: TGocciaValue;
   var AComparedPairs: TComparedValuePairArray;
   const AStrict: Boolean): Boolean;
@@ -202,12 +264,9 @@ var
   ActualMembers, ExpectedMembers: TArray<TGocciaValue>;
   ActualMapKeys, ActualMapValues: TArray<TGocciaValue>;
   ExpectedMapKeys, ExpectedMapValues: TArray<TGocciaValue>;
-  Used: TArray<Boolean>;
-  Claimed: TArray<Boolean>;
-  Pass: Integer;
+  Matched: Boolean;
   BothErrors: Boolean;
   ActualIsError, ExpectedIsError: Boolean;
-  ActualHasCause, ExpectedHasCause: Boolean;
   TrialPairs: TComparedValuePairArray;
 begin
   // Vitest/Jest asymmetric matchers participate in every equality-based
@@ -287,11 +346,10 @@ begin
     ActualArr := TGocciaArrayValue(AActual);
     ExpectedArr := TGocciaArrayValue(AExpected);
 
-    { Strict equality preserves length and sparseness. Loose equality ignores
-      undefined items past the shorter length, so [2] equals [2, undefined],
-      while a differing item inside the common prefix still fails. }
-    if AStrict and
-       (ActualArr.Elements.Count <> ExpectedArr.Elements.Count) then
+    { Array equality is length-first for both matchers: [1] never equals
+      [1, undefined]. Only sparseness is forgiven loosely, and only at equal
+      length, where a hole reads as undefined. }
+    if ActualArr.Elements.Count <> ExpectedArr.Elements.Count then
     begin
       Result := False;
       Exit;
@@ -305,11 +363,7 @@ begin
     end;
     AddComparedPair(AComparedPairs, AActual, AExpected);
 
-    CommonCount := ActualArr.Elements.Count;
-    if ExpectedArr.Elements.Count < CommonCount then
-      CommonCount := ExpectedArr.Elements.Count;
-
-    for I := 0 to CommonCount - 1 do
+    for I := 0 to ActualArr.Elements.Count - 1 do
     begin
       LeftValue := ActualArr.Elements[I];
       RightValue := ExpectedArr.Elements[I];
@@ -344,20 +398,6 @@ begin
       end;
     end;
 
-    // Surplus items exist only under loose equality, and must be undefined.
-    for I := CommonCount to ActualArr.Elements.Count - 1 do
-      if not IsUndefinedLike(ActualArr.Elements[I]) then
-      begin
-        Result := False;
-        Exit;
-      end;
-    for I := CommonCount to ExpectedArr.Elements.Count - 1 do
-      if not IsUndefinedLike(ExpectedArr.Elements[I]) then
-      begin
-        Result := False;
-        Exit;
-      end;
-
     Result := True;
     Exit;
   end;
@@ -387,45 +427,32 @@ begin
       Exit;
     end;
 
-    { Two passes so a literal member is never stranded by a matcher that
-      claimed its partner first: pass 0 pairs off the plain members, pass 1
-      lets the asymmetric matchers take what is left. }
-    SetLength(Used, Length(ExpectedMembers));
-    SetLength(Claimed, Length(ActualMembers));
-    for Pass := 0 to 1 do
-      for I := 0 to High(ActualMembers) do
+    { Membership is existential, not a pairing: every actual member has to
+      deep-equal some expected member, and an expected member may match
+      several actual members or none at all. }
+    for I := 0 to High(ActualMembers) do
+    begin
+      Matched := False;
+      for J := 0 to High(ExpectedMembers) do
       begin
-        if Claimed[I] then
-          Continue;
-        if (Pass = 0) and IsAsymmetricValue(ActualMembers[I]) then
-          Continue;
-        for J := 0 to High(ExpectedMembers) do
+        { A rejected candidate must leave no trace: the pairs it recorded on
+          the way down would otherwise read as "already comparing" — and so
+          as equal — when a later member is compared against the same pair. }
+        CopyComparedPairs(AComparedPairs, TrialPairs);
+        if IsDeepEqualInternal(ActualMembers[I], ExpectedMembers[J],
+          TrialPairs, AStrict) then
         begin
-          if Used[J] then
-            Continue;
-          if (Pass = 0) and IsAsymmetricValue(ExpectedMembers[J]) then
-            Continue;
-          { A rejected candidate must leave no trace: the pairs it recorded on
-            the way down would otherwise read as "already comparing" — and so
-            as equal — when a later pass retries the same two members. }
-          CopyComparedPairs(AComparedPairs, TrialPairs);
-          if IsDeepEqualInternal(ActualMembers[I], ExpectedMembers[J],
-            TrialPairs, AStrict) then
-          begin
-            CopyComparedPairs(TrialPairs, AComparedPairs);
-            Used[J] := True;
-            Claimed[I] := True;
-            Break;
-          end;
+          CopyComparedPairs(TrialPairs, AComparedPairs);
+          Matched := True;
+          Break;
         end;
       end;
-
-    for I := 0 to High(ActualMembers) do
-      if not Claimed[I] then
+      if not Matched then
       begin
         Result := False;
         Exit;
       end;
+    end;
 
     Result := True;
     Exit;
@@ -456,46 +483,31 @@ begin
       Exit;
     end;
 
-    { Same two passes as Sets: an entry whose key or value is a matcher only
-      claims a partner once the exact entries have been paired off. }
-    SetLength(Used, Length(ExpectedMapKeys));
-    SetLength(Claimed, Length(ActualMapKeys));
-    for Pass := 0 to 1 do
-      for I := 0 to High(ActualMapKeys) do
+    { Same existential rule as Sets, over whole entries: an actual entry has
+      to find some expected entry matching on both key and value. }
+    for I := 0 to High(ActualMapKeys) do
+    begin
+      Matched := False;
+      for J := 0 to High(ExpectedMapKeys) do
       begin
-        if Claimed[I] then
-          Continue;
-        if (Pass = 0) and (IsAsymmetricValue(ActualMapKeys[I]) or
-           IsAsymmetricValue(ActualMapValues[I])) then
-          Continue;
-        for J := 0 to High(ExpectedMapKeys) do
+        // Same rejected-candidate isolation as the Set branch above.
+        CopyComparedPairs(AComparedPairs, TrialPairs);
+        if IsDeepEqualInternal(ActualMapKeys[I], ExpectedMapKeys[J],
+          TrialPairs, AStrict) and
+           IsDeepEqualInternal(ActualMapValues[I], ExpectedMapValues[J],
+          TrialPairs, AStrict) then
         begin
-          if Used[J] then
-            Continue;
-          if (Pass = 0) and (IsAsymmetricValue(ExpectedMapKeys[J]) or
-             IsAsymmetricValue(ExpectedMapValues[J])) then
-            Continue;
-          // Same rejected-candidate isolation as the Set branch above.
-          CopyComparedPairs(AComparedPairs, TrialPairs);
-          if IsDeepEqualInternal(ActualMapKeys[I], ExpectedMapKeys[J],
-            TrialPairs, AStrict) and
-             IsDeepEqualInternal(ActualMapValues[I], ExpectedMapValues[J],
-            TrialPairs, AStrict) then
-          begin
-            CopyComparedPairs(TrialPairs, AComparedPairs);
-            Used[J] := True;
-            Claimed[I] := True;
-            Break;
-          end;
+          CopyComparedPairs(TrialPairs, AComparedPairs);
+          Matched := True;
+          Break;
         end;
       end;
-
-    for I := 0 to High(ActualMapKeys) do
-      if not Claimed[I] then
+      if not Matched then
       begin
         Result := False;
         Exit;
       end;
+    end;
 
     Result := True;
     Exit;
@@ -521,11 +533,7 @@ begin
       Exit;
     end;
 
-    { The strict matcher's class check does not apply to errors: a
-      `class MyError extends Error` instance that leaves `name` alone is equal
-      to a plain Error with the same message under both matchers. }
-    if AStrict and not BothErrors and
-       not HasSameObjectType(AActual, AExpected) then
+    if AStrict and not HasSameObjectType(ActualObj, ExpectedObj) then
     begin
       Result := False;
       Exit;
@@ -538,7 +546,8 @@ begin
     { Only strict equality requires the key sets to match exactly. Loose
       equality ignores a key whose value is undefined when the other side
       does not have it at all, in either direction. }
-    if AStrict and (Length(ActualKeys) <> Length(ExpectedKeys)) then
+    if AStrict and (CountComparableKeys(ActualKeys, BothErrors) <>
+       CountComparableKeys(ExpectedKeys, BothErrors)) then
     begin
       Result := False;
       Exit;
@@ -550,53 +559,54 @@ begin
     end;
     AddComparedPair(AComparedPairs, AActual, AExpected);
 
-    { An error's identity is its name, message and cause, none of which the
-      enumerable-key walk below can see. Comparing them after the pair is
-      registered lets a chain that loops back on itself terminate. }
+    { An error's identity is its name, message, cause and aggregated errors,
+      none of which the enumerable-key walk below can see. Comparing them
+      after the pair is registered lets a chain that loops back on itself
+      terminate. }
     if BothErrors then
     begin
-      if not IsDeepEqualInternal(ErrorFieldValue(ActualObj, PROP_NAME),
-        ErrorFieldValue(ExpectedObj, PROP_NAME), AComparedPairs, AStrict) or
-         not IsDeepEqualInternal(ErrorFieldValue(ActualObj, PROP_MESSAGE),
-        ErrorFieldValue(ExpectedObj, PROP_MESSAGE), AComparedPairs,
-        AStrict) then
+      if not DeepEqualPropertyPair(ActualObj, ExpectedObj, PROP_NAME,
+        AComparedPairs, AStrict) or
+         not DeepEqualPropertyPair(ActualObj, ExpectedObj, PROP_MESSAGE,
+        AComparedPairs, AStrict) then
       begin
         Result := False;
         Exit;
       end;
 
-      ActualHasCause := ActualObj.HasOwnProperty(PROP_CAUSE);
-      ExpectedHasCause := ExpectedObj.HasOwnProperty(PROP_CAUSE);
-      if ActualHasCause <> ExpectedHasCause then
+      { Cause is expected-driven: it participates only when the expected error
+        carries a defined one, so an actual error may hold a cause the
+        expectation does not mention. }
+      if ExpectedObj.HasOwnProperty(PROP_CAUSE) and
+         not IsUndefinedLike(ErrorFieldValue(ExpectedObj, PROP_CAUSE)) then
       begin
-        { A cause that is present but undefined reads the same as no cause at
-          all to the loose matcher, exactly like any other undefined-valued
-          property. The strict matcher keeps them apart. }
-        if AStrict then
+        if not ActualObj.HasOwnProperty(PROP_CAUSE) then
         begin
           Result := False;
           Exit;
         end;
-        if ActualHasCause and
-           not IsUndefinedLike(ErrorFieldValue(ActualObj, PROP_CAUSE)) then
+        if not DeepEqualPropertyPair(ActualObj, ExpectedObj, PROP_CAUSE,
+          AComparedPairs, AStrict) then
         begin
           Result := False;
           Exit;
         end;
-        if ExpectedHasCause and
-           not IsUndefinedLike(ErrorFieldValue(ExpectedObj, PROP_CAUSE)) then
-        begin
-          Result := False;
-          Exit;
-        end;
-      end
-      else if ActualHasCause and
-         not IsDeepEqualInternal(ErrorFieldValue(ActualObj, PROP_CAUSE),
-           ErrorFieldValue(ExpectedObj, PROP_CAUSE), AComparedPairs,
-           AStrict) then
+      end;
+
+      // An AggregateError's collected errors participate the same way.
+      if ExpectedObj.HasOwnProperty(PROP_ERRORS) then
       begin
-        Result := False;
-        Exit;
+        if not ActualObj.HasOwnProperty(PROP_ERRORS) then
+        begin
+          Result := False;
+          Exit;
+        end;
+        if not DeepEqualPropertyPair(ActualObj, ExpectedObj, PROP_ERRORS,
+          AComparedPairs, AStrict) then
+        begin
+          Result := False;
+          Exit;
+        end;
       end;
     end;
 
@@ -604,6 +614,8 @@ begin
     for I := 0 to High(ActualKeys) do
     begin
       Key := ActualKeys[I];
+      if IsIgnoredErrorKey(Key, BothErrors) then
+        Continue;
 
       // Check if expected object has this key
       if not ExpectedObj.HasOwnProperty(Key) then
@@ -617,8 +629,8 @@ begin
       end;
 
       // Recursively compare property values
-      if not IsDeepEqualInternal(ActualObj.GetProperty(Key),
-        ExpectedObj.GetProperty(Key), AComparedPairs, AStrict) then
+      if not DeepEqualPropertyPair(ActualObj, ExpectedObj, Key,
+        AComparedPairs, AStrict) then
       begin
         Result := False;
         Exit;
@@ -629,6 +641,8 @@ begin
     for I := 0 to High(ExpectedKeys) do
     begin
       Key := ExpectedKeys[I];
+      if IsIgnoredErrorKey(Key, BothErrors) then
+        Continue;
       if not ActualObj.HasOwnProperty(Key) then
         if AStrict or not IsUndefinedLike(ExpectedObj.GetProperty(Key)) then
         begin
@@ -671,10 +685,19 @@ var
   Key: string;
   LeftValue, RightValue: TGocciaValue;
 begin
-  CopyComparedPairs(AComparedPairs, DeepComparedPairs);
-  if IsDeepEqualInternal(AActual, AExpected, DeepComparedPairs, False) then
+  { Shapes the expectation cannot describe a subset of are compared in full:
+    an asymmetric matcher runs its own match, and an expected error, Set or
+    Map must equal the actual one outright rather than merely be contained
+    by it. An expected plain object keeps subset semantics even when the
+    actual value is one of these. }
+  if (AActual is TGocciaAsymmetricMatcherValue) or
+     (AExpected is TGocciaAsymmetricMatcherValue) or
+     IsErrorObject(AExpected) or (AExpected is TGocciaSetValue) or
+     (AExpected is TGocciaMapValue) then
   begin
-    Result := True;
+    CopyComparedPairs(AComparedPairs, DeepComparedPairs);
+    Result := IsDeepEqualInternal(AActual, AExpected, DeepComparedPairs,
+      False);
     Exit;
   end;
 
@@ -736,9 +759,8 @@ begin
         Exit;
       end;
 
-      if not IsPartialDeepEqualInternal(ActualObj.GetProperty(Key),
-        ExpectedObj.GetProperty(Key), AComparedPairs,
-        AIncludeInherited) then
+      if not PartialDeepEqualPropertyPair(ActualObj, ExpectedObj, Key,
+        AComparedPairs, AIncludeInherited) then
       begin
         Result := False;
         Exit;
@@ -749,7 +771,9 @@ begin
     Exit;
   end;
 
-  Result := False;
+  // Primitives and everything else compare outright.
+  CopyComparedPairs(AComparedPairs, DeepComparedPairs);
+  Result := IsDeepEqualInternal(AActual, AExpected, DeepComparedPairs, False);
 end;
 
 function IsPartialDeepEqual(const AActual, AExpected: TGocciaValue): Boolean;

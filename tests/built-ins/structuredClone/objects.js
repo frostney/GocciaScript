@@ -54,3 +54,55 @@ test("clones object with mixed value types", () => {
   expect(clone.arr.length).toBe(3);
   expect(clone.arr[0]).toBe(1);
 });
+
+// Accessor properties are read through their getter, which is a GC safe point.
+// The half-built clone is reachable only from a native local and the internal
+// memory map the collector cannot see.
+describe.runIf(typeof Goccia !== "undefined")("structuredClone under explicit GC", () => {
+  // A bare gc() usually leaves the freed slot readable; the allocation churn
+  // afterwards is what makes a collected value observable.
+  const gcChurn = () => {
+    Goccia.gc();
+    let total = 0;
+    for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      const scratch = { a: i * 7.5, b: [i, i + 1], c: "x" + i };
+      total += scratch.a + scratch.b[0];
+    }
+    return total;
+  };
+
+  test("keeps the in-progress clone alive when a getter collects", () => {
+    const source = {
+      head: 1,
+      get middle() {
+        gcChurn();
+        return { nested: "value", arr: [1, 2, 3] };
+      },
+      tail: "end",
+    };
+
+    const clone = structuredClone(source);
+    expect(clone.head).toBe(1);
+    expect(clone.middle.nested).toBe("value");
+    expect(clone.middle.arr).toEqual([1, 2, 3]);
+    expect(clone.tail).toBe("end");
+  });
+
+  test("keeps nested clones alive when a deep getter collects", () => {
+    const source = {
+      a: {
+        b: {
+          get c() {
+            gcChurn();
+            return { d: [1, 2, 3] };
+          },
+        },
+      },
+      e: 3,
+    };
+
+    const clone = structuredClone(source);
+    expect(clone.a.b.c.d).toEqual([1, 2, 3]);
+    expect(clone.e).toBe(3);
+  });
+});

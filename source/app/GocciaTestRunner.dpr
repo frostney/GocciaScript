@@ -75,6 +75,7 @@ type
     Passed: Double;
     Failed: Double;
     Skipped: Double;
+    SuiteErrors: Double;
     TotalRunTests: Double;
     Assertions: Double;
     Duration: Double;
@@ -106,6 +107,7 @@ type
     Passed: Double;
     Failed: Double;
     Skipped: Double;
+    SuiteErrors: Double;
     TotalTests: Double;
     LexTimeNanoseconds: Int64;
     ParseTimeNanoseconds: Int64;
@@ -241,6 +243,7 @@ begin
   Result.AssignProperty('passed', TGocciaNumberLiteralValue.ZeroValue);
   Result.AssignProperty('failed', TGocciaNumberLiteralValue.ZeroValue);
   Result.AssignProperty('skipped', TGocciaNumberLiteralValue.ZeroValue);
+  Result.AssignProperty('suiteErrors', TGocciaNumberLiteralValue.ZeroValue);
   Result.AssignProperty('assertions', TGocciaNumberLiteralValue.ZeroValue);
   Result.AssignProperty('duration', TGocciaNumberLiteralValue.ZeroValue);
   Result.AssignProperty('failedTests', TGocciaArrayValue.Create);
@@ -257,6 +260,8 @@ begin
     ATarget.AssignProperty('failed', AFileResult.GetProperty('failed'));
   if AFileResult.GetProperty('skipped').ToStringLiteral.Value <> 'undefined' then
     ATarget.AssignProperty('skipped', AFileResult.GetProperty('skipped'));
+  if AFileResult.GetProperty('suiteErrors').ToStringLiteral.Value <> 'undefined' then
+    ATarget.AssignProperty('suiteErrors', AFileResult.GetProperty('suiteErrors'));
   if AFileResult.GetProperty('assertions').ToStringLiteral.Value <> 'undefined' then
     ATarget.AssignProperty('assertions', AFileResult.GetProperty('assertions'));
   if AFileResult.GetProperty('duration').ToStringLiteral.Value <> 'undefined' then
@@ -1061,6 +1066,8 @@ begin
         FileResult.TestResult.GetProperty('failed').ToNumberLiteral.Value;
       Result.FileResults[0].Skipped :=
         FileResult.TestResult.GetProperty('skipped').ToNumberLiteral.Value;
+      Result.FileResults[0].SuiteErrors :=
+        FileResult.TestResult.GetProperty('suiteErrors').ToNumberLiteral.Value;
       Result.FileResults[0].TotalTests :=
         FileResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
       FileFailedTests := FileResult.TestResult.GetProperty('failedTests');
@@ -1110,6 +1117,7 @@ var
   FileResult: TAggregatedTestResult;
   FileFailedTests: TGocciaValue;
   PassedCount, FailedCount, SkippedCount, TotalRunCount, TotalAssertions, TotalDuration: Double;
+  SuiteErrorCount: Double;
 begin
   GC := TGarbageCollector.Instance;
 
@@ -1127,6 +1135,7 @@ begin
   AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.ZeroValue);
   AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.ZeroValue);
   AllTestResults.AssignProperty('skipped', TGocciaNumberLiteralValue.ZeroValue);
+  AllTestResults.AssignProperty('suiteErrors', TGocciaNumberLiteralValue.ZeroValue);
   AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.ZeroValue);
   AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.ZeroValue);
   AllTestResults.AssignProperty('failedTests', AllFailedTests);
@@ -1134,6 +1143,7 @@ begin
   PassedCount := 0;
   FailedCount := 0;
   SkippedCount := 0;
+  SuiteErrorCount := 0;
   TotalRunCount := 0;
   TotalAssertions := 0;
   TotalDuration := 0;
@@ -1165,6 +1175,7 @@ begin
     PassedCount := PassedCount + FileResult.TestResult.GetProperty('passed').ToNumberLiteral.Value;
     FailedCount := FailedCount + FileResult.TestResult.GetProperty('failed').ToNumberLiteral.Value;
     SkippedCount := SkippedCount + FileResult.TestResult.GetProperty('skipped').ToNumberLiteral.Value;
+    SuiteErrorCount := SuiteErrorCount + FileResult.TestResult.GetProperty('suiteErrors').ToNumberLiteral.Value;
     TotalRunCount := TotalRunCount + FileResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
     TotalDuration := TotalDuration + FileResult.TestResult.GetProperty('duration').ToNumberLiteral.Value;
     TotalAssertions := TotalAssertions + FileResult.TestResult.GetProperty('assertions').ToNumberLiteral.Value;
@@ -1191,6 +1202,8 @@ begin
       FileResult.TestResult.GetProperty('failed').ToNumberLiteral.Value;
     Result.FileResults[ProcessedCount].Skipped :=
       FileResult.TestResult.GetProperty('skipped').ToNumberLiteral.Value;
+    Result.FileResults[ProcessedCount].SuiteErrors :=
+      FileResult.TestResult.GetProperty('suiteErrors').ToNumberLiteral.Value;
     Result.FileResults[ProcessedCount].TotalTests :=
       FileResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
     if Length(FileResult.FileResults) > 0 then
@@ -1224,6 +1237,7 @@ begin
   AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.Create(PassedCount));
   AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.Create(FailedCount));
   AllTestResults.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(SkippedCount));
+  AllTestResults.AssignProperty('suiteErrors', TGocciaNumberLiteralValue.Create(SuiteErrorCount));
   AllTestResults.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(TotalRunCount));
   AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(TotalDuration));
   AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(TotalAssertions));
@@ -1259,6 +1273,7 @@ begin
       WorkerResults^[AIndex].Passed := TestResult.GetProperty('passed').ToNumberLiteral.Value;
       WorkerResults^[AIndex].Failed := TestResult.GetProperty('failed').ToNumberLiteral.Value;
       WorkerResults^[AIndex].Skipped := TestResult.GetProperty('skipped').ToNumberLiteral.Value;
+      WorkerResults^[AIndex].SuiteErrors := TestResult.GetProperty('suiteErrors').ToNumberLiteral.Value;
       WorkerResults^[AIndex].TotalRunTests := TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
       WorkerResults^[AIndex].Assertions := TestResult.GetProperty('assertions').ToNumberLiteral.Value;
       WorkerResults^[AIndex].Duration := TestResult.GetProperty('duration').ToNumberLiteral.Value;
@@ -1330,6 +1345,7 @@ var
   AllTestResults: TGocciaObjectValue;
   AllFailedTests: TGocciaArrayValue;
   PassedCount, FailedCount, SkippedCount, TotalRunCount, TotalAssertions: Double;
+  SuiteErrorCount: Double;
   WallClockStart, WallClockDuration: Int64;
   EffectiveTimeoutMs: Integer;
   WatchdogMs: Integer;
@@ -1488,6 +1504,7 @@ begin
   PassedCount := 0;
   FailedCount := 0;
   SkippedCount := 0;
+  SuiteErrorCount := 0;
   TotalRunCount := 0;
   TotalAssertions := 0;
   Result.TotalLexNanoseconds := 0;
@@ -1516,6 +1533,7 @@ begin
     PassedCount := PassedCount + Source^.Passed;
     FailedCount := FailedCount + Source^.Failed;
     SkippedCount := SkippedCount + Source^.Skipped;
+    SuiteErrorCount := SuiteErrorCount + Source^.SuiteErrors;
     TotalRunCount := TotalRunCount + Source^.TotalRunTests;
     TotalAssertions := TotalAssertions + Source^.Assertions;
 
@@ -1539,6 +1557,7 @@ begin
     Result.FileResults[I].Passed := Source^.Passed;
     Result.FileResults[I].Failed := Source^.Failed;
     Result.FileResults[I].Skipped := Source^.Skipped;
+    Result.FileResults[I].SuiteErrors := Source^.SuiteErrors;
     Result.FileResults[I].TotalTests := Source^.TotalRunTests;
     Result.FileResults[I].ErrorMessage := Source^.ErrorMessage;
     SetLength(Result.FileResults[I].FailedTests,
@@ -1552,6 +1571,7 @@ begin
   AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.Create(PassedCount));
   AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.Create(FailedCount));
   AllTestResults.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(SkippedCount));
+  AllTestResults.AssignProperty('suiteErrors', TGocciaNumberLiteralValue.Create(SuiteErrorCount));
   AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(WallClockDuration));
   AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(TotalAssertions));
   AllTestResults.AssignProperty('failedTests', AllFailedTests);
@@ -1578,6 +1598,11 @@ var
 begin
   IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
   FailedCount := Round(AResult.TestResult.GetProperty('failed').ToNumberLiteral.Value);
+  { Suite-level errors never enter `failed` (Vitest keeps them out of the
+    test counts), so `ok` and the exit code must consult them separately
+    -- otherwise a file whose describe or beforeAll threw reports ok. }
+  FailedCount := FailedCount +
+    Round(AResult.TestResult.GetProperty('suiteErrors').ToNumberLiteral.Value);
   if IsBytecodeMode then
     TotalNanoseconds := AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds
   else
@@ -1615,6 +1640,7 @@ begin
     Lines.Add(Format('  "passed": %d,', [Round(AResult.TestResult.GetProperty('passed').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "failed": %d,', [Round(AResult.TestResult.GetProperty('failed').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "skipped": %d,', [Round(AResult.TestResult.GetProperty('skipped').ToNumberLiteral.Value)]));
+    Lines.Add(Format('  "suiteErrors": %d,', [Round(AResult.TestResult.GetProperty('suiteErrors').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "assertions": %d,', [Round(AResult.TestResult.GetProperty('assertions').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "durationNanoseconds": %d,', [Round(AResult.TestResult.GetProperty('duration').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "lexTimeNanoseconds": %d,', [AResult.TotalLexNanoseconds]));
@@ -1709,9 +1735,12 @@ begin
       end;
 
       Entry.Append('    {');
+      { A file is ok only when nothing failed AND no suite-level error
+        (throwing describe / beforeAll / afterAll) was recorded. Vitest
+        fails the FILE for those while leaving the test counts alone. }
       Entry.Append(BuildCLIFileBaseJSON(Fr.FileName,
-        (Fr.Failed = 0) and (Fr.ErrorMessage = ''), '', '', '', ErrorJSON,
-        Timing, '"memory":null', ACompact));
+        (Fr.Failed = 0) and (Fr.ErrorMessage = '') and (Fr.SuiteErrors = 0),
+        '', '', '', ErrorJSON, Timing, '"memory":null', ACompact));
       Entry.Append(', ');
       Entry.Append('"passed": ');
       Entry.Append(Round(Fr.Passed));
@@ -1719,6 +1748,8 @@ begin
       Entry.Append(Round(Fr.Failed));
       Entry.Append(', "skipped": ');
       Entry.Append(Round(Fr.Skipped));
+      Entry.Append(', "suiteErrors": ');
+      Entry.Append(Round(Fr.SuiteErrors));
       Entry.Append(', "totalTests": ');
       Entry.Append(Round(Fr.TotalTests));
       Entry.Append(', "errorMessage": "');
@@ -1836,7 +1867,11 @@ begin
       WriteResultsJSON(AResult, CurrentOutputFile, False);
   end;
 
-  if StrToFloat(TotalFailed) > 0 then
+  { Suite-level errors (throwing describe / beforeAll / afterAll) are
+    deliberately absent from `failed`, so the exit code consults them
+    alongside it -- same rule as the envelope `ok`. }
+  if (StrToFloat(TotalFailed) > 0) or
+    (TestResult.GetProperty('suiteErrors').ToNumberLiteral.Value > 0) then
     ExitCode := 1;
 end;
 
