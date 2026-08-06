@@ -3683,7 +3683,8 @@ begin
   OldDerivedGuard := ACtx.DerivedConstructorThisGuard;
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<arrow>');
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(AExpr.Line), UInt16(AExpr.Column));
   ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildTemplate.IsArrow := True;
   ChildTemplate.StrictCode := ChildBodyIsStrictCode(ACtx, AExpr.Body);
@@ -4893,7 +4894,8 @@ begin
   OldScope := ACtx.Scope;
 
   ChildTemplate := TGocciaFunctionTemplate.Create('get ' + AKey);
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(AGetter.Line), UInt16(AGetter.Column));
   ChildTemplate.StrictCode := ChildBodyIsStrictCode(ACtx, AGetter.Body);
   ChildTemplate.StrictThis := ChildTemplate.StrictCode;
   ChildTemplate.SourceText := AGetter.SourceText;
@@ -4960,7 +4962,8 @@ begin
   OldScope := ACtx.Scope;
 
   ChildTemplate := TGocciaFunctionTemplate.Create('set ' + AKey);
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(ASetter.Line), UInt16(ASetter.Column));
   ChildTemplate.StrictCode := ChildBodyIsStrictCode(ACtx, ASetter.Body);
   ChildTemplate.StrictThis := ChildTemplate.StrictCode;
   ChildTemplate.SourceText := ASetter.SourceText;
@@ -5049,7 +5052,8 @@ begin
   OldScope := ACtx.Scope;
 
   ChildTemplate := TGocciaFunctionTemplate.Create('get [computed]');
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(AGetter.Line), UInt16(AGetter.Column));
   ChildTemplate.StrictCode := ChildBodyIsStrictCode(ACtx, AGetter.Body);
   ChildTemplate.StrictThis := ChildTemplate.StrictCode;
   ChildTemplate.SourceText := AGetter.SourceText;
@@ -5119,7 +5123,8 @@ begin
   OldScope := ACtx.Scope;
 
   ChildTemplate := TGocciaFunctionTemplate.Create('set [computed]');
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(ASetter.Line), UInt16(ASetter.Column));
   ChildTemplate.StrictCode := ChildBodyIsStrictCode(ACtx, ASetter.Body);
   ChildTemplate.StrictThis := ChildTemplate.StrictCode;
   ChildTemplate.SourceText := ASetter.SourceText;
@@ -5785,7 +5790,8 @@ begin
   end;
 
   ChildTemplate := TGocciaFunctionTemplate.Create(ATemplateName);
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(AExpr.Line), UInt16(AExpr.Column));
   ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildTemplate.IsGenerator := AExpr.IsGenerator;
   ChildTemplate.HasOwnPrototype := AExpr.HasOwnPrototype;

@@ -132,7 +132,7 @@ Useful test-runner forms:
 
 ### Bytecode Mode
 
-All execution tools support `--mode=bytecode` to compile and run via the Goccia bytecode VM instead of the tree-walk interpreter:
+All execution tools support `--mode=bytecode` to compile and run via the Goccia bytecode VM instead of the tree-walk interpreter. `--profile` (see [Profiling](profiling.md)) and `--coverage` (see [Testing — Coverage](testing.md#coverage)) select bytecode on their own and ignore `--mode`.
 
 ```bash
 # Execute via bytecode VM

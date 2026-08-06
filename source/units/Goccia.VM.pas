@@ -5536,8 +5536,8 @@ begin
     Template.DebugInfo.GetLineMapEntry(0).Line);
   TGocciaCoverageTracker.Instance.RecordFunctionHit(
     Template.DebugInfo.SourceFile, Template.Name,
-    Template.DebugInfo.GetLineMapEntry(0).Line,
-    Template.DebugInfo.GetLineMapEntry(0).Column);
+    Template.DebugInfo.CoverageLine,
+    Template.DebugInfo.CoverageColumn);
 end;
 
 function TGocciaBytecodeFunctionValue.GetSourceText: string;
@@ -13116,8 +13116,8 @@ begin
     if ATemplate.Name <> '<module>' then
       TGocciaCoverageTracker.Instance.RecordFunctionHit(
         ATemplate.DebugInfo.SourceFile, ATemplate.Name,
-        ATemplate.DebugInfo.GetLineMapEntry(0).Line,
-        ATemplate.DebugInfo.GetLineMapEntry(0).Column);
+        ATemplate.DebugInfo.CoverageLine,
+        ATemplate.DebugInfo.CoverageColumn);
   end;
 
   if FProfilingFunctions and (TGocciaProfiler.Instance <> nil) then
@@ -13312,8 +13312,8 @@ begin
     if ATemplate.Name <> '<module>' then
       TGocciaCoverageTracker.Instance.RecordFunctionHit(
         ATemplate.DebugInfo.SourceFile, ATemplate.Name,
-        ATemplate.DebugInfo.GetLineMapEntry(0).Line,
-        ATemplate.DebugInfo.GetLineMapEntry(0).Column);
+        ATemplate.DebugInfo.CoverageLine,
+        ATemplate.DebugInfo.CoverageColumn);
   end;
 
   if FProfilingFunctions and (TGocciaProfiler.Instance <> nil) then
@@ -15715,8 +15715,8 @@ begin
            (ChildTemplate.DebugInfo.LineMapCount > 0) then
           TGocciaCoverageTracker.Instance.RegisterFunction(
             ChildTemplate.DebugInfo.SourceFile, ChildTemplate.Name,
-            ChildTemplate.DebugInfo.GetLineMapEntry(0).Line,
-            ChildTemplate.DebugInfo.GetLineMapEntry(0).Column);
+            ChildTemplate.DebugInfo.CoverageLine,
+            ChildTemplate.DebugInfo.CoverageColumn);
         ChildClosure := TGocciaBytecodeClosure.Create(
           ChildTemplate, ChildTemplate.UpvalueCount);
         ChildClosure.GlobalScope := FGlobalScope;

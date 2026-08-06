@@ -4919,7 +4919,8 @@ begin
   DisplayName := DisplayClassElementName(AMethodName);
 
   ChildTemplate := TGocciaFunctionTemplate.Create(DisplayName);
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(AMethod.Line), UInt16(AMethod.Column));
   ChildTemplate.IsAsync := AMethod.IsAsync;
   ChildTemplate.IsGenerator := AMethod.IsGenerator;
   ChildTemplate.HasOwnPrototype := AMethod.IsGenerator;
@@ -5041,7 +5042,8 @@ begin
   DisplayName := DisplayClassElementName(AName);
 
   ChildTemplate := TGocciaFunctionTemplate.Create('get ' + DisplayName);
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(AGetter.Line), UInt16(AGetter.Column));
   ChildTemplate.SourceText := AGetter.SourceText;
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
@@ -5114,7 +5116,8 @@ begin
   DisplayName := DisplayClassElementName(AName);
 
   ChildTemplate := TGocciaFunctionTemplate.Create('set ' + DisplayName);
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(ASetter.Line), UInt16(ASetter.Column));
   ChildTemplate.SourceText := ASetter.SourceText;
   SetterParams := ASetter.Parameters;
   if Length(SetterParams) = 0 then
@@ -5209,7 +5212,8 @@ begin
   OldScope := ACtx.Scope;
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<get [computed]>');
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(AGetter.Line), UInt16(AGetter.Column));
   // Propagate the accessor source so DeclareArgumentsObjectLocal below can elide
   // the arguments object when the body never references it, matching the other
   // (non-computed) accessor and method body builders.
@@ -5283,7 +5287,8 @@ begin
   OldScope := ACtx.Scope;
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<set [computed]>');
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(ASetter.Line), UInt16(ASetter.Column));
   // Propagate the accessor source so DeclareArgumentsObjectLocal below can elide
   // the arguments object when the body never references it, matching the other
   // (non-computed) accessor and method body builders.
@@ -5381,7 +5386,8 @@ begin
   OldScope := ACtx.Scope;
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<method [computed]>');
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(AMethod.Line), UInt16(AMethod.Column));
   ChildTemplate.IsAsync := AMethod.IsAsync;
   ChildTemplate.IsGenerator := AMethod.IsGenerator;
   ChildTemplate.HasOwnPrototype := AMethod.IsGenerator;

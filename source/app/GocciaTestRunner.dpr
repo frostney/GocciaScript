@@ -348,8 +348,16 @@ end;
 
 procedure TTestRunnerApp.Validate;
 begin
+  inherited Validate;
+
   if CoverageOptions.Format.Present or CoverageOptions.OutputPath.Present then
     CoverageOptions.Enabled.Apply('');
+
+  // Coverage requires bytecode mode regardless of the --mode option: the
+  // interpreter only instruments the entry file and counts statements per
+  // AST node instead of per executed line.
+  if CoverageOptions.Enabled.Present then
+    EngineOptions.Mode.Apply('bytecode');
 end;
 
 function TTestRunnerApp.IsJsonOutput: Boolean;

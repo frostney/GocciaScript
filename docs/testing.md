@@ -743,6 +743,10 @@ The runner clones test262 into a tempdir on first use, or accepts an existing ch
 
 The GocciaTestRunner and GocciaScriptLoader support JavaScript source-level coverage reporting via the `--coverage` flag. Coverage tracks which lines, branches, and functions of JavaScript source code are executed at runtime.
 
+### Coverage implies `--mode=bytecode`
+
+Enabling coverage — via `--coverage`, `--coverage-format`, or `--coverage-output` — switches the engine to bytecode mode automatically, overriding any `--mode` from the command line or a config file, exactly as [`--profile`](profiling.md) does. The implication is silent: `--mode=interpreted --coverage` is not an error, it simply produces the bytecode report, and no flag combination yields an interpreter-mode one. The reason is that the interpreter's coverage path is structurally incomplete and unmaintained — it instruments only the entry file (imported modules run with coverage disabled, so their lines, branches, and functions never appear) and counts a statement hit per executed AST node rather than per executed source line, so its counts are not comparable to bytecode's. Coverage therefore always reports through the bytecode path, over the entry file and every module it imports. The switch is applied in each application's `Validate` (`TTestRunnerApp.Validate`, `TScriptLoaderApp.Validate`), after config-file application and before the tracker is initialized.
+
 ### Usage
 
 ```bash
@@ -761,7 +765,7 @@ The GocciaTestRunner and GocciaScriptLoader support JavaScript source-level cove
 
 ### What is Tracked
 
-**Line coverage:** Which source lines were executed and how many times. Instrumented in both the tree-walk interpreter (`EvaluateStatement`/`EvaluateExpression`) and the bytecode VM (main dispatch loop with line-change deduplication).
+**Line coverage:** Which source lines were executed and how many times. Instrumented in the bytecode VM's main dispatch loop, with per-frame line-change deduplication so several instructions on one source line count as one hit.
 
 **Branch coverage:** Which branch arms were taken at:
 
@@ -770,7 +774,9 @@ The GocciaTestRunner and GocciaScriptLoader support JavaScript source-level cove
 - Short-circuit operators (`&&`, `||`, `??`)
 - `switch` statement case clauses
 
-**Function coverage:** Which user-defined functions were created and called. A function is registered when its definition is evaluated; created-but-uncalled functions are retained with zero hits, and repeated calls increment the function hit count. Definitions inside untaken control flow are not created and therefore do not appear in either execution mode.
+**Function coverage:** Which user-defined functions were created and called. A function is registered when its definition is evaluated and is reported at its declaration line (what LCOV's `FN:` means), not at the first line of its body; created-but-uncalled functions are retained with zero hits, and repeated calls increment the function hit count. Definitions inside untaken control flow are never created and therefore do not appear.
+
+**Parallel runs:** `--jobs=N` does not change any of these numbers. Each worker collects into its own tracker and the counts are added together at the end, so line, branch, and function hit counts for a given run are identical whatever `--jobs` is set to.
 
 ### Output Formats
 
@@ -788,6 +794,6 @@ The source map is registered with `TGocciaCoverageTracker` during file registrat
 
 ### Architecture
 
-Coverage uses a runtime boolean check (`CoverageEnabled` on `TGocciaEvaluationContext` for the interpreter, `FCoverageEnabled` on `TGocciaVM` for bytecode). When `--coverage` is not passed, the boolean is `False` and branch prediction makes the check effectively free — no separate build is needed.
+Coverage uses a runtime boolean check (`FCoverageEnabled` on `TGocciaVM`). When `--coverage` is not passed, the boolean is `False` and branch prediction makes the check effectively free — no separate build is needed.
 
-Data is collected by `TGocciaCoverageTracker` (`Goccia.Coverage.pas`), a per-thread tracker that follows the same Initialize/Shutdown pattern as `TGarbageCollector` and `TGocciaCallStack`. During parallel test runs each worker thread initializes its own thread-local instance; after all workers complete, `TGocciaThreadPool.MergeCoverageInto` merges their data into the main thread's tracker via `TGocciaCoverageTracker.MergeFrom`. Output formatting is in `Goccia.Coverage.Report.pas`. When a JSX source map is available for a file, `BuildTranslatedLineHits` translates transformed line hits back to original coordinates, and branch positions are translated via `TGocciaSourceMap.Translate` during report emission.
+Data is collected by `TGocciaCoverageTracker` (`Goccia.Coverage.pas`), a per-thread tracker that follows the same Initialize/Shutdown pattern as `TGarbageCollector` and `TGocciaCallStack`. During parallel test runs each worker thread initializes its own thread-local instance; after all workers complete, `TGocciaThreadPool.MergeCoverageInto` merges their data into the main thread's tracker via `TGocciaCoverageTracker.MergeFrom`, which adds the source hit *counts* into the destination (via `AddLineHits` / `AddBranchHits`) rather than registering a single hit per covered entry. Output formatting is in `Goccia.Coverage.Report.pas`. When a JSX source map is available for a file, `BuildTranslatedLineHits` translates transformed line hits back to original coordinates, and branch positions are translated via `TGocciaSourceMap.Translate` during report emission.
