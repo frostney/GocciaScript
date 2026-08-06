@@ -877,6 +877,33 @@ console.log("JSX preprocessor termination...");
       line,
     });
 
+  // A byte at or above #128 is one byte of a multi-byte character. Embedding it
+  // literally would put a truncated sequence into the diagnostic and from there
+  // into the JSON error envelope, so the transformer renders it as '\xNN'.
+  // The stall needs a preceding well-formed attribute: a non-ASCII byte in the
+  // first attribute position makes IsJSXStart reject the construct as non-JSX
+  // before the attribute scan ever begins.
+  {
+    const nonAsciiSource = 'const element = <svg fill="a" \u00fcnter="b" />;\n';
+    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+      const label = modeArgs.length
+        ? "non-ASCII attribute byte (bytecode)"
+        : "non-ASCII attribute byte";
+      const res = runLoaderJson(nonAsciiSource, modeArgs, {
+        timeout: JSX_SCAN_TIMEOUT_MS,
+      });
+      const message = String(res.json.error?.message ?? "");
+      if (res.json.error?.type !== "SyntaxError")
+        throw new Error(`${label}: expected a SyntaxError, got ${JSON.stringify(res.json.error)}`);
+      if (!message.includes('Unsupported attribute syntax at "\\x'))
+        throw new Error(`${label}: the stalled byte should be reported as a hex escape, got ${message}`);
+      // The whole point of the escape: nothing outside printable ASCII may
+      // reach the envelope, because a lone high byte is not valid UTF-8.
+      if (/[^\x09\x0a\x0d\x20-\x7e]/.test(message))
+        throw new Error(`${label}: the diagnostic should stay ASCII-only, got ${JSON.stringify(message)}`);
+    }
+  }
+
   // The attribute-list stall is extension-sensitive, so it is pinned to real
   // files instead of extensionless stdin. `: <T>` looks like a JSX opening tag,
   // so the children scan runs on the rest of the file and reaches `<T,`, where
