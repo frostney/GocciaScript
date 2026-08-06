@@ -559,6 +559,7 @@ The CLI behaviour tests are standalone bun scripts under `scripts/test-cli-*.ts`
 | Global injection | `--global`, `--globals` file/module injection, collision detection |
 | Stdin smoke tests | Piped input executes correctly in interpreter mode and bytecode mode |
 | GocciaBenchmarkRunner output | `--format=json` produces valid JSON with benchmark structure |
+| Differential batteries | `test-cli-differential.ts` runs each `scripts/differential/` battery under interpreter, bytecode, and `bun test`, requiring mode parity on pass/fail counts and equality of failed-test **name** sets against bun; a per-file timeout counts as a divergence. See [Differential Testing](differential-testing.md) |
 
 This table is non-exhaustive — the `scripts/test-cli-*.ts` scripts that the `cli` job runs are the source of truth. The intent is to check all CLI options, all parser/lexer error paths, and all output-format correctness. To add a new check, add a case to the matching `scripts/test-cli-*.ts` (parser/lexer rejection → `test-cli-parser.ts` / `test-cli-lexer.ts`; CLI flags/output → `test-cli.ts` / `test-cli-apps.ts`); the `cli` job already invokes these scripts, so no workflow change is needed.
 
