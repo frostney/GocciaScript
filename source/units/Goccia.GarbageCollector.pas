@@ -12,6 +12,27 @@ uses
   MemoryDetection;
 
 type
+  TGarbageCollector = class;
+
+  // A live object that contributes roots the collector cannot otherwise see.
+  // Registration is driven by AfterConstruction/BeforeDestruction so it happens
+  // once per instance regardless of which constructor ran, including subclass
+  // constructors that do not chain to an inherited one. TInterfacedObject stays
+  // the ancestor so descendants keep the ancestry they already had.
+  TGCRootSource = class(TInterfacedObject)
+  private
+    // Position in the owner's root-source list, for O(1) unregistration.
+    FRootSourceIndex: Integer;
+    // The collector this instance registered with. Thread-local collectors mean
+    // an instance must unregister from the same one, and a collector that is
+    // destroyed first nils this so unregistration cannot reach freed memory.
+    FRootSourceOwner: TGarbageCollector;
+  public
+    procedure AfterConstruction; override;
+    procedure BeforeDestruction; override;
+    procedure MarkRootReferences; virtual; abstract;
+  end;
+
   TGCManagedObject = class
   private
     FGCMark: Cardinal;
@@ -32,6 +53,7 @@ type
   end;
 
   TGCManagedObjectList = TObjectList<TGCManagedObject>;
+  TGCRootSourceList = TList<TGCRootSource>;
   TGCObjectSet = THashMap<TGCManagedObject, Boolean>;
   TGCObjectRefCounts = THashMap<TGCManagedObject, Integer>;
 
@@ -53,6 +75,7 @@ type
   TGarbageCollector = class
   private
     FManagedObjects: TGCManagedObjectList;
+    FRootSources: TGCRootSourceList;
     FPinnedObjects: TGCObjectSet;
     FTempRoots: TGCObjectSet;
     FQueuedRoots: TGCObjectRefCounts;
@@ -109,6 +132,8 @@ type
 
     procedure RegisterObject(const AObject: TGCManagedObject);
     procedure UnregisterObject(const AObject: TGCManagedObject);
+    procedure RegisterRootSource(const ASource: TGCRootSource);
+    procedure UnregisterRootSource(const ASource: TGCRootSource);
     procedure RegisterWeakContainer(const AObject: TGCManagedObject);
     procedure UnregisterWeakContainer(const AObject: TGCManagedObject);
     procedure PinObject(const AObject: TGCManagedObject);
@@ -286,6 +311,27 @@ begin
   inherited;
 end;
 
+{ TGCRootSource }
+
+procedure TGCRootSource.AfterConstruction;
+begin
+  inherited;
+  FRootSourceIndex := -1;
+  FRootSourceOwner := TGarbageCollector.Instance;
+  if Assigned(FRootSourceOwner) then
+    FRootSourceOwner.RegisterRootSource(Self);
+end;
+
+procedure TGCRootSource.BeforeDestruction;
+begin
+  if Assigned(FRootSourceOwner) then
+  begin
+    FRootSourceOwner.UnregisterRootSource(Self);
+    FRootSourceOwner := nil;
+  end;
+  inherited;
+end;
+
 procedure InitializeTempRoot(var ARoot: TGocciaTempRoot);
 begin
   ARoot.ObjectValue := nil;
@@ -392,6 +438,7 @@ constructor TGarbageCollector.Create;
 begin
   inherited Create;
   FManagedObjects := TGCManagedObjectList.Create(False);
+  FRootSources := TGCRootSourceList.Create;
   FPinnedObjects := TGCObjectSet.Create;
   FTempRoots := TGCObjectSet.Create;
   FQueuedRoots := TGCObjectRefCounts.Create;
@@ -425,10 +472,21 @@ begin
 end;
 
 destructor TGarbageCollector.Destroy;
+var
+  I: Integer;
 begin
   {$IFDEF GC_TIMING}
   PrintTimingSummary;
   {$ENDIF}
+  // Root sources are not owned and can outlive the collector (a pooled argument
+  // collection freed during engine tear-down, for instance). Drop their
+  // back-pointer so their destructors do not unregister into freed memory.
+  for I := 0 to FRootSources.Count - 1 do
+  begin
+    FRootSources[I].FRootSourceOwner := nil;
+    FRootSources[I].FRootSourceIndex := -1;
+  end;
+  FRootSources.Free;
   FManagedObjects.Free;
   FPinnedObjects.Free;
   FTempRoots.Free;
@@ -487,6 +545,44 @@ begin
     AObject.GCIndex := -1;
     Dec(FBytesAllocated, AObject.InstanceSize);
   end;
+end;
+
+procedure TGarbageCollector.RegisterRootSource(
+  const ASource: TGCRootSource);
+begin
+  ASource.FRootSourceIndex := FRootSources.Count;
+  FRootSources.Add(ASource);
+end;
+
+// Removal swaps the last entry into the vacated slot rather than leaving a nil
+// behind. Root sources are created and destroyed far more often than managed
+// objects — one per builtin invocation — and nothing depends on their order or
+// on a stable index across a collection, so there is no compaction pass to
+// piggyback on and nil slots would grow without bound while automatic
+// collection is disabled (as it is throughout bytecode execution).
+procedure TGarbageCollector.UnregisterRootSource(
+  const ASource: TGCRootSource);
+var
+  Idx, LastIdx: Integer;
+  Last: TGCRootSource;
+begin
+  if not Assigned(FRootSources) then
+    Exit;
+
+  Idx := ASource.FRootSourceIndex;
+  if (Idx < 0) or (Idx >= FRootSources.Count) or
+     (FRootSources[Idx] <> ASource) then
+    Exit;
+
+  LastIdx := FRootSources.Count - 1;
+  if Idx <> LastIdx then
+  begin
+    Last := FRootSources[LastIdx];
+    FRootSources[Idx] := Last;
+    Last.FRootSourceIndex := Idx;
+  end;
+  FRootSources.Delete(LastIdx);
+  ASource.FRootSourceIndex := -1;
 end;
 
 procedure TGarbageCollector.RegisterWeakContainer(
@@ -638,6 +734,9 @@ begin
   for I := 0 to FActiveRootStack.Count - 1 do
     if Assigned(FActiveRootStack[I]) then
       FActiveRootStack[I].MarkReferences;
+
+  for I := 0 to FRootSources.Count - 1 do
+    FRootSources[I].MarkRootReferences;
 end;
 
 procedure TGarbageCollector.TraceWeakReferences;

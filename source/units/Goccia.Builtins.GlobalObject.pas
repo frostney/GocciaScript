@@ -1051,6 +1051,7 @@ var
   PropertyKey: TGocciaValue;
   Value: TGocciaValue;
   IteratorRoot, ResultRoot: TGocciaTempRoot;
+  EntryRoot, KeyRoot, ValueRoot: TGocciaTempRoot;
 begin
   if AArgs.Length > 0 then
     Iterable := AArgs.GetElement(0)
@@ -1066,6 +1067,9 @@ begin
 
   InitializeTempRoot(IteratorRoot);
   InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(EntryRoot);
+  InitializeTempRoot(KeyRoot);
+  InitializeTempRoot(ValueRoot);
   AddTempRootIfNeeded(IteratorRoot, Iterator);
   try
     // Step 2: Let obj be OrdinaryObjectCreate(%Object.prototype%).
@@ -1079,18 +1083,27 @@ begin
         if Done then
           Exit(Obj);
 
+        AddTempRootIfNeeded(EntryRoot, Entry);
+
         try
           if not (Entry is TGocciaObjectValue) then
             ThrowTypeError(SErrorObjectFromEntriesRequiresPairs, SSuggestNotIterable);
           EntryObject := TGocciaObjectValue(Entry);
 
+          { All three reads below can run user code — two accessors and then a
+            @@toPrimitive or toString — and each is a GC safe point. The entry
+            pair is a value the iterator just produced, so the key read first is
+            reachable from nowhere else while the value accessor runs, and the
+            value is likewise exposed while ToPropertyKey coerces the key. }
           // ES2026 §24.1.1.2 steps 2.d-f: Get(entry, "0") and Get(entry, "1").
           Key := EntryObject.GetProperty('0');
           if not Assigned(Key) then
             Key := TGocciaUndefinedLiteralValue.UndefinedValue;
+          AddTempRootIfNeeded(KeyRoot, Key);
           Value := EntryObject.GetProperty('1');
           if not Assigned(Value) then
             Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+          AddTempRootIfNeeded(ValueRoot, Value);
 
           // ES2026 §20.1.2.7 steps 4.a-b: ToPropertyKey and CreateDataProperty.
           PropertyKey := ToPropertyKey(Key);
@@ -1101,6 +1114,9 @@ begin
         end;
       end;
     finally
+      RemoveTempRootIfNeeded(ValueRoot);
+      RemoveTempRootIfNeeded(KeyRoot);
+      RemoveTempRootIfNeeded(EntryRoot);
       RemoveTempRootIfNeeded(ResultRoot);
     end;
   finally
@@ -1304,6 +1320,7 @@ var
   Done: Boolean;
   I: Integer;
   ItemsRoot, IteratorRoot, CallbackRoot, ResultRoot: TGocciaTempRoot;
+  ItemRoot, KeyValueRoot: TGocciaTempRoot;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Object.groupBy', ThrowError);
 
@@ -1322,6 +1339,8 @@ begin
   InitializeTempRoot(IteratorRoot);
   InitializeTempRoot(CallbackRoot);
   InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(ItemRoot);
+  InitializeTempRoot(KeyValueRoot);
   AddTempRootIfNeeded(ItemsRoot, Items);
   AddTempRootIfNeeded(IteratorRoot, Iterator);
   AddTempRootIfNeeded(CallbackRoot, Callback);
@@ -1336,6 +1355,12 @@ begin
       if Done then
         Break;
 
+      { The item the iterator just produced, and the key the callback returned
+        for it, are reachable only from these locals once CallArgs is gone —
+        and ToPropertyKey below runs the key's @@toPrimitive or toString, which
+        is a GC safe point. The item is only stored into its group after that. }
+      AddTempRootIfNeeded(ItemRoot, Item);
+
       try
         CallArgs := TGocciaArgumentsCollection.Create;
         try
@@ -1348,6 +1373,7 @@ begin
           CallArgs.Free;
         end;
 
+        AddTempRootIfNeeded(KeyValueRoot, KeyValue);
         PropertyKey := ToPropertyKey(KeyValue);
 
         if PropertyKey is TGocciaSymbolValue then
@@ -1388,6 +1414,8 @@ begin
     // Step 4: Return obj
     Result := ResultObj;
   finally
+    RemoveTempRootIfNeeded(KeyValueRoot);
+    RemoveTempRootIfNeeded(ItemRoot);
     RemoveTempRootIfNeeded(ResultRoot);
     RemoveTempRootIfNeeded(CallbackRoot);
     RemoveTempRootIfNeeded(IteratorRoot);

@@ -114,3 +114,50 @@ describe("Weak collection cloning", () => {
     expect(true).toBe(false);
   });
 });
+
+// Same exposure as the object walk: see structuredClone/objects.js.
+describe.runIf(typeof Goccia !== "undefined")("collection clones under explicit GC", () => {
+  // A bare gc() usually leaves the freed slot readable; the allocation churn
+  // afterwards is what makes a collected value observable.
+  const gcChurn = () => {
+    Goccia.gc();
+    let total = 0;
+    for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      const scratch = { a: i * 7.5, b: [i, i + 1], c: "x" + i };
+      total += scratch.a + scratch.b[0];
+    }
+    return total;
+  };
+
+  test("keeps a Map clone alive when an entry's getter collects", () => {
+    const source = new Map();
+    source.set("a", {
+      get x() {
+        gcChurn();
+        return 1;
+      },
+      y: "z",
+    });
+    source.set("b", 2);
+
+    const clone = structuredClone(source);
+    expect(clone.size).toBe(2);
+    expect(clone.get("a").x).toBe(1);
+    expect(clone.get("b")).toBe(2);
+  });
+
+  test("keeps a Set clone alive when a member's getter collects", () => {
+    const source = new Set();
+    source.add({
+      get x() {
+        gcChurn();
+        return 1;
+      },
+      y: "z",
+    });
+    source.add(2);
+
+    const clone = structuredClone(source);
+    expect(clone.size).toBe(2);
+  });
+});

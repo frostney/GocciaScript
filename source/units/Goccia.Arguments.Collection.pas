@@ -5,11 +5,19 @@ unit Goccia.Arguments.Collection;
 interface
 
 uses
+  Goccia.GarbageCollector,
   Goccia.Values.Primitives;
 
 type
-  // Array-like collection for function arguments
-  TGocciaArgumentsCollection = class(TInterfacedObject)
+  // Array-like collection for function arguments.
+  //
+  // A live collection is a GC root source: its elements are marked for as long
+  // as it exists. Without that, anything reachable only from the collection —
+  // a number the VM boxed out of a raw scalar register on the way in, a value a
+  // builtin read out of it and still holds — is unreachable the moment a native
+  // builtin re-enters JS (a getter, a callback, a Proxy trap) and hits a GC safe
+  // point. See docs/adr/0105-argument-collections-root-their-elements.md.
+  TGocciaArgumentsCollection = class(TGCRootSource)
   private
     FArgs: TGocciaValueList;
   public
@@ -17,6 +25,8 @@ type
     constructor CreateWithCapacity(const ACapacity: Integer); overload;
     constructor Create(const AValues: array of TGocciaValue); overload;
     destructor Destroy; override;
+
+    procedure MarkRootReferences; override;
 
     // Index-based element access
     function GetElement(const AIndex: Integer): TGocciaValue; virtual;
@@ -69,6 +79,19 @@ destructor TGocciaArgumentsCollection.Destroy;
 begin
   FArgs.Free;
   inherited;
+end;
+
+// FArgs is nil for subclasses whose constructors do not chain to an inherited
+// one (see Goccia.Arguments.Callbacks); they supply their own slots instead.
+procedure TGocciaArgumentsCollection.MarkRootReferences;
+var
+  I: Integer;
+begin
+  if not Assigned(FArgs) then
+    Exit;
+  for I := 0 to FArgs.Count - 1 do
+    if Assigned(FArgs[I]) then
+      FArgs[I].MarkReferences;
 end;
 
 function TGocciaArgumentsCollection.GetElement(const AIndex: Integer): TGocciaValue;
