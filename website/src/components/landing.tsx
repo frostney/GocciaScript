@@ -30,6 +30,7 @@ import {
   PlayIcon,
   RunIcon,
   ShieldIcon,
+  TestTubeIcon,
 } from "@/components/icons";
 import { LatestVersion } from "@/components/latest-version";
 import { QuickInstall } from "@/components/quick-install";
@@ -53,6 +54,8 @@ import {
   NODE_COMPATIBILITY_QUESTION,
   TYPE_ANNOTATIONS_ANSWER,
   TYPE_ANNOTATIONS_QUESTION,
+  VITEST_COMPATIBILITY_ANSWER,
+  VITEST_COMPATIBILITY_QUESTION,
 } from "@/lib/positioning";
 
 const FEATURE_ICONS: Record<
@@ -63,6 +66,7 @@ const FEATURE_ICONS: Record<
   shield: ShieldIcon,
   leaf: LeafIcon,
   clock: ClockIcon,
+  test: TestTubeIcon,
 };
 
 function HeroRunnableCard({ code }: { code: string }) {
@@ -821,6 +825,10 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: NODE_COMPATIBILITY_QUESTION,
     answer: NODE_COMPATIBILITY_ANSWER,
+  },
+  {
+    question: VITEST_COMPATIBILITY_QUESTION,
+    answer: VITEST_COMPATIBILITY_ANSWER,
   },
   {
     question: "Is GocciaScript a browser runtime?",

@@ -21,6 +21,12 @@ export const NODE_COMPATIBILITY_QUESTION = "Is GocciaScript Node-compatible?";
 export const NODE_COMPATIBILITY_ANSWER =
   "GocciaScript is not a complete Node.js host: it does not provide CommonJS, npm package resolution, process, Buffer, or the general node: module set. GocciaSandboxRunner does provide a Node-compatible fs API over its virtual filesystem, with synchronous, callback, and promise-based methods, Stats objects, and Node-shaped errors. The documented method set stays inside the sandbox and does not expose the ambient host filesystem.";
 
+export const VITEST_COMPATIBILITY_QUESTION =
+  "Can I run my Vitest tests on GocciaScript?";
+
+export const VITEST_COMPATIBILITY_ANSWER =
+  "GocciaScript's built-in runner uses the Vitest and Jest test API: describe, test, expect, lifecycle hooks, and mocks. Matcher and comparison semantics — equality, Set and Map, errors, and toThrow — are probed against a pinned Vitest release and reconciled against it, and shared batteries run against an external JavaScript runtime as the semantics oracle in CI. Being a drop-in replacement is the direction, not a finished claim: there is no vi namespace yet, so mock() and spyOn() are standalone globals and suites written against vi.* need adaptation, and a few divergences are deliberate. Suites run as a single native binary with no Node.js installation or transform step in front of them, which is a statement about what a run has to do rather than about raw engine throughput.";
+
 export const COMPILER_SUPPORT_QUESTION =
   "Does GocciaScript support FreePascal and Delphi?";
 
@@ -43,6 +49,10 @@ export const POSITIONING_FAQS = [
   {
     question: NODE_COMPATIBILITY_QUESTION,
     answer: NODE_COMPATIBILITY_ANSWER,
+  },
+  {
+    question: VITEST_COMPATIBILITY_QUESTION,
+    answer: VITEST_COMPATIBILITY_ANSWER,
   },
   {
     question: COMPILER_SUPPORT_QUESTION,

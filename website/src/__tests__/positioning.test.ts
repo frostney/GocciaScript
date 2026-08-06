@@ -9,6 +9,7 @@ import {
   NODE_COMPATIBILITY_ANSWER,
   POSITIONING_FAQS,
   TYPE_ANNOTATIONS_ANSWER,
+  VITEST_COMPATIBILITY_ANSWER,
 } from "@/lib/positioning";
 
 function expectConcepts(text: string, concepts: readonly RegExp[]) {
@@ -63,6 +64,25 @@ describe("GocciaScript positioning", () => {
     ]);
   });
 
+  test("frames Vitest compatibility as a direction with its gaps named", () => {
+    expectConcepts(VITEST_COMPATIBILITY_ANSWER, [
+      /Vitest and Jest test API/i,
+      /pinned Vitest release/i,
+      /semantics oracle/i,
+      /direction, not a finished claim/i,
+      /no vi namespace/i,
+      /rather than about raw engine throughput/i,
+    ]);
+  });
+
+  test("never upgrades the compatibility direction into an absolute claim", () => {
+    // The drop-in audit has not closed, and no repository evidence compares
+    // this runner's wall-clock against Vitest. Copy must not imply either.
+    expect(VITEST_COMPATIBILITY_ANSWER).not.toMatch(
+      /\b(100%|exact(ly)? compatible|fully compatible|complete drop-in|faster than Vitest)\b/i,
+    );
+  });
+
   test("states the complete Delphi support contract", () => {
     expectConcepts(COMPILER_SUPPORT_ANSWER, [
       /Win32 and Win64 application matrix/i,
@@ -114,6 +134,7 @@ describe("GocciaScript positioning", () => {
       expect(output).toContain(ECMASCRIPT_SCOPE_ANSWER);
       expect(output).toContain(TYPE_ANNOTATIONS_ANSWER);
       expect(output).toContain(NODE_COMPATIBILITY_ANSWER);
+      expect(output).toContain(VITEST_COMPATIBILITY_ANSWER);
       expect(output).toContain(COMPILER_SUPPORT_ANSWER);
     }
   });

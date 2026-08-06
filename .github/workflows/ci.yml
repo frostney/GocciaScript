@@ -1595,10 +1595,20 @@ jobs:
             exit 0
           fi
           # The URL is the credential, so keep it out of the log: report only
-          # the status code.
-          status="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${VERCEL_DEPLOY_HOOK_URL}")"
-          if [ "${status}" -lt 200 ] || [ "${status}" -ge 300 ]; then
-            echo "Vercel deploy hook returned HTTP ${status}; the website was NOT redeployed for ${GITHUB_REF_NAME}."
-            exit 1
-          fi
-          echo "Vercel deploy hook accepted (HTTP ${status}); website redeploying with ${GITHUB_REF_NAME}."
+          # the status code. Bounded so a stalled endpoint cannot hold the
+          # release job open; curl reports 000 when it never got a response.
+          status="$(curl -sS -o /dev/null -w '%{http_code}' \
+            --connect-timeout 10 --max-time 30 \
+            -X POST "${VERCEL_DEPLOY_HOOK_URL}" || true)"
+          # A `case` rather than an integer comparison: on timeout `status` can
+          # be empty, and `[ "" -lt 200 ]` fails the test itself, which would
+          # read as success.
+          case "${status}" in
+            2??)
+              echo "Vercel deploy hook accepted (HTTP ${status}); website redeploying with ${GITHUB_REF_NAME}."
+              ;;
+            *)
+              echo "Vercel deploy hook returned HTTP ${status:-000}; the website was NOT redeployed for ${GITHUB_REF_NAME}."
+              exit 1
+              ;;
+          esac
