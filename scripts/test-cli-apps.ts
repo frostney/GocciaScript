@@ -3541,6 +3541,8 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
     name: string;
     source: string;
     expected: { passed: number; failed: number; skipped: number };
+    // Reporter markers this shape can leak beyond the shared set below.
+    extraMarkers?: string[];
   }> = [
     {
       name: "a test assertion fails",
@@ -3605,6 +3607,21 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
       ].join("\n"),
       expected: { passed: 2, failed: 1, skipped: 0 },
     },
+    {
+      // A describe callback that throws is a registration failure, not a test
+      // failure: the remaining describes still register and run, so the
+      // passing suite below still reports its pass. The error is counted as a
+      // failure so ok/exit reflect it -- bun exits non-zero here too, though
+      // it books the error in a separate `error` counter rather than `fail`.
+      name: "a describe block throws during registration",
+      source: [
+        'describe("boom", () => { throw new Error("registration exploded"); });',
+        'describe("ok", () => { test("passes", () => { expect(1).toBe(1); }); });',
+        "",
+      ].join("\n"),
+      expected: { passed: 1, failed: 1, skipped: 0 },
+      extraMarkers: ["Error in describe block"],
+    },
   ];
 
   for (const scenario of scenarios) {
@@ -3623,7 +3640,7 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
         throw new Error(`${label} should exit non-zero because tests failed, got 0`);
 
       const stdout = proc.stdout.toString();
-      for (const marker of ["❌", "📝", "⏸️", "Test Results"]) {
+      for (const marker of ["❌", "📝", "⏸️", "Test Results", ...(scenario.extraMarkers ?? [])]) {
         if (stdout.includes(marker))
           throw new Error(`${label} leaked reporter output ${marker} to stdout, got: ${stdout.slice(0, 200)}`);
       }
@@ -3650,35 +3667,32 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
     }
   }
 
-  // A throwing describe callback is the remaining marker-producing shape. It
-  // cannot join the scenario loop: a describe-block error currently reports
-  // ok=true / failed=0 / exit 0 while still listing the error in failedTests —
-  // a pre-existing count/exit discrepancy tracked separately. This case pins
-  // what this layer guarantees: stdout stays parseable JSON with no reporter
-  // markers, and the describe error stays visible in failedTests.
+  // The worker-merge path aggregates counts differently from the single-file
+  // path, so pin the describe-error accounting there too: the throwing file
+  // must flip its own ok and the top-level ok while the clean sibling file
+  // stays ok, and the merged `failed` must carry the registration error.
   {
-    const label = `TestRunner --output=json (${modeLabel}) when a describe block throws`;
-    console.log(`TestRunner: --output=json keeps stdout clean when a describe block throws (${modeLabel})...`);
+    const label = `TestRunner --output=json --jobs (${modeLabel}) when a describe block throws`;
+    console.log(`TestRunner: --output=json counts a throwing describe under --jobs (${modeLabel})...`);
     const tmp = makeTmp();
     try {
-      const file = join(tmp, "test-describe-throws.js");
-      writeFileSync(file, [
+      const bad = join(tmp, "test-describe-throws.js");
+      const good = join(tmp, "test-describe-clean.js");
+      writeFileSync(bad, [
         'describe("boom", () => { throw new Error("registration exploded"); });',
         'describe("ok", () => { test("passes", () => { expect(1).toBe(1); }); });',
         "",
       ].join("\n"));
+      writeFileSync(good, 'describe("clean", () => { test("passes", () => { expect(2).toBe(2); }); });\n');
 
       const proc = Bun.spawnSync(
-        [resolve(TESTRUNNER), file, "--no-progress", "--output=json", ...modeArgs],
+        [resolve(TESTRUNNER), bad, good, "--jobs=2", "--no-progress", "--output=json", ...modeArgs],
         { stdout: "pipe", stderr: "pipe" },
       );
+      if (proc.exitCode === 0)
+        throw new Error(`${label} should exit non-zero because a describe block threw, got 0`);
 
       const stdout = proc.stdout.toString();
-      for (const marker of ["❌", "📝", "⏸️", "Test Results", "Error in describe block"]) {
-        if (stdout.includes(marker))
-          throw new Error(`${label} leaked reporter output ${marker} to stdout, got: ${stdout.slice(0, 200)}`);
-      }
-
       let json: any;
       try {
         json = JSON.parse(stdout);
@@ -3686,9 +3700,20 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
         throw new Error(`${label} should produce parseable JSON on stdout, got: ${stdout.slice(0, 200)}`);
       }
 
-      const failedTests = json.files?.[0]?.failedTests;
-      if (!Array.isArray(failedTests) || !failedTests.some((t: string) => t.includes('Describe "boom"')))
-        throw new Error(`${label} should keep the describe error visible in failedTests, got: ${JSON.stringify(failedTests)}`);
+      if (json.ok !== false) throw new Error(`${label} ok should be false, got ${json.ok}`);
+      if (json.failed !== 1) throw new Error(`${label} merged failed should be 1, got ${json.failed}`);
+      if (json.passed !== 2) throw new Error(`${label} merged passed should be 2, got ${json.passed}`);
+
+      const badResult = json.files?.find((f: any) => String(f.fileName).endsWith("test-describe-throws.js"));
+      const goodResult = json.files?.find((f: any) => String(f.fileName).endsWith("test-describe-clean.js"));
+      if (badResult?.ok !== false)
+        throw new Error(`${label} the throwing file should report ok=false, got ${badResult?.ok}`);
+      if (badResult?.failed !== 1)
+        throw new Error(`${label} the throwing file should report failed=1, got ${badResult?.failed}`);
+      if (!badResult?.failedTests?.some((t: string) => t.includes('Describe "boom"')))
+        throw new Error(`${label} should keep the describe error visible in failedTests, got: ${JSON.stringify(badResult?.failedTests)}`);
+      if (goodResult?.ok !== true)
+        throw new Error(`${label} the clean sibling file should stay ok, got ${goodResult?.ok}`);
     } finally {
       clean(tmp);
     }
