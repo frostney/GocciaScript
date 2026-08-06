@@ -46,6 +46,10 @@ describe("toHaveProperty", () => {
   });
 
   test("uses an array path as the escape hatch for dotted keys", () => {
+    // KNOWN DIVERGENCE (outside the audit corpus, pending a decision):
+    // Vitest falls back to the literal key when a dotted path does not
+    // resolve, so it finds {"a.b": 5} via the string path "a.b"; goccia
+    // always splits on dots.
     expect({ "a.b": 5 }).toHaveProperty(["a.b"], 5);
     expect({ "a.b": 5 }).not.toHaveProperty("a.b", 5);
   });
@@ -57,8 +61,8 @@ describe("toHaveProperty", () => {
   });
 
   test("does not walk through a nullish or missing value", () => {
-    // bun throws a TypeError out of the matcher here; reporting a plain
-    // assertion failure keeps .not usable.
+    // Protected parity with vitest, which reports a plain assertion failure
+    // here; bun instead throws a TypeError out of the matcher.
     expect({ a: null }).not.toHaveProperty("a.b");
     expect({ a: undefined }).not.toHaveProperty("a.b");
     expect({}).not.toHaveProperty("zz.b");
@@ -74,11 +78,27 @@ describe("toHaveProperty", () => {
     expect(new WithPrototypeMember()).toHaveProperty("describe");
   });
 
+  test("lets a throwing getter mid-path propagate", () => {
+    // Protected parity: goccia and vitest agree, bun does not.
+    const target = {};
+    Object.defineProperty(target, "a", {
+      get: () => {
+        throw new Error("getter-boom");
+      },
+      configurable: true,
+    });
+
+    expect(() => expect(target).toHaveProperty("a.b")).toThrow("getter-boom");
+  });
+
   test("supports the empty-string key", () => {
     expect({ "": 1 }).toHaveProperty("", 1);
   });
 
   test("treats a trailing separator as a real empty segment", () => {
+    // KNOWN DIVERGENCE (outside the audit corpus, pending a decision):
+    // Vitest ignores a trailing separator entirely — "a." resolves to "a" and
+    // never reaches an empty-string key.
     expect({ a: 1 }).not.toHaveProperty("a.");
     expect({ a: { b: 1 } }).not.toHaveProperty("a.");
     expect({ a: { "": 1 } }).toHaveProperty("a.", 1);
@@ -91,6 +111,8 @@ describe("toHaveProperty", () => {
   });
 
   test("requires a string or array path", () => {
+    // KNOWN DIVERGENCE (outside the audit corpus, pending a decision):
+    // Vitest accepts a numeric path argument rather than raising.
     expect(() => expect([1, 2]).toHaveProperty(0, 1)).toThrow();
     expect(() => expect({ a: 1 }).toHaveProperty(null)).toThrow();
   });

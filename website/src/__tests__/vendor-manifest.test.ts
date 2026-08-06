@@ -1,10 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
+  checkVendorManifestFloor,
   findVersion,
   isFlagSupported,
   isPublicExecutionSafe,
   listPlaygroundVersions,
+  normalizeManifest,
   parseAdvertisedFlags,
+  pickVendorManifestSource,
   resolveAsiFlag,
   resolvePublicDefaultVersion,
   type VendorFeatureSet,
@@ -300,5 +307,236 @@ describe("resolveAsiFlag", () => {
     };
     expect(resolveAsiFlag(mixed, "loader")).toBe("--compat-asi");
     expect(resolveAsiFlag(mixed, "testRunner")).toBe("--asi");
+  });
+});
+
+describe("checkVendorManifestFloor", () => {
+  const NIGHTLY_ONLY: VendorManifest = {
+    defaultVersion: "nightly",
+    versions: [
+      {
+        tag: "nightly",
+        isPrerelease: true,
+        binaries: {
+          loader: "nightly/GocciaScriptLoader",
+          testRunner: "nightly/GocciaTestRunner",
+        },
+        features: MODERN_FEATURES,
+      },
+    ],
+  };
+
+  test("accepts a set with a public-execution-safe stable release", () => {
+    expect(
+      checkVendorManifestFloor({
+        defaultVersion: "0.11.0",
+        versions: [
+          {
+            tag: "0.11.0",
+            binaries: {
+              loader: "0.11.0/GocciaScriptLoader",
+              testRunner: "0.11.0/GocciaTestRunner",
+            },
+            features: MODERN_FEATURES,
+          },
+          ...NIGHTLY_ONLY.versions,
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  test("rejects a nightly-only set — the release regression that shipped 0.11.0", () => {
+    // Every precedence-picked stable failed to vendor. The playground would
+    // deploy offering `nightly` and nothing else, with no build-time signal.
+    expect(checkVendorManifestFloor(NIGHTLY_ONLY)?.code).toBe(
+      "NO_STABLE_VENDORED",
+    );
+  });
+
+  test("rejects an empty set", () => {
+    expect(
+      checkVendorManifestFloor({ defaultVersion: "nightly", versions: [] })
+        ?.code,
+    ).toBe("NO_STABLE_VENDORED");
+  });
+
+  test("rejects a set where nothing advertises the sandbox boundary", () => {
+    // `listPlaygroundVersions` would return [] — a version picker with no
+    // entries at all.
+    expect(
+      checkVendorManifestFloor({
+        defaultVersion: "0.6.1",
+        versions: [
+          {
+            tag: "0.6.1",
+            binaries: {
+              loader: "0.6.1/ScriptLoader",
+              testRunner: "0.6.1/TestRunner",
+            },
+            features: LEGACY_061_FEATURES,
+          },
+        ],
+      })?.code,
+    ).toBe("NO_PUBLIC_SAFE_ENGINE");
+  });
+
+  test("rejects a set whose only safe engine is a prerelease", () => {
+    // Stables vendored fine but all predate the #1057 boundary, so the
+    // dropdown is nightly-only again — same user-visible failure.
+    expect(
+      checkVendorManifestFloor({
+        defaultVersion: "0.10.0",
+        versions: [
+          {
+            tag: "0.10.0",
+            binaries: {
+              loader: "0.10.0/GocciaScriptLoader",
+              testRunner: "0.10.0/GocciaTestRunner",
+            },
+            features: LEGACY_061_FEATURES,
+          },
+          ...NIGHTLY_ONLY.versions,
+        ],
+      })?.code,
+    ).toBe("NO_PUBLIC_SAFE_STABLE");
+  });
+
+  test("reports a message naming the reason, for the failing build log", () => {
+    expect(checkVendorManifestFloor(NIGHTLY_ONLY)?.message).toContain(
+      "no stable release could be vendored",
+    );
+  });
+});
+
+describe("pickVendorManifestSource", () => {
+  const GENERATED = {
+    defaultVersion: "0.11.0",
+    versions: [
+      {
+        tag: "0.11.0",
+        binaries: {
+          loader: "0.11.0/GocciaScriptLoader",
+          testRunner: "0.11.0/GocciaTestRunner",
+        },
+        features: MODERN_FEATURES,
+      },
+    ],
+  };
+
+  test("falls back to the static import when vendor/ is unreadable", () => {
+    // The playground page's bundle: `vendor/**` is traced into the API routes
+    // only, so the on-disk read returns null and the page must still know the
+    // versions. This is the bug that left the picker showing `nightly`.
+    expect(
+      pickVendorManifestSource(null, GENERATED).versions.map((v) => v.tag),
+    ).toEqual(["0.11.0"]);
+  });
+
+  test("prefers the on-disk manifest, which is the truth about spawnable binaries", () => {
+    const disk = {
+      defaultVersion: "nightly",
+      versions: [
+        {
+          tag: "nightly",
+          binaries: {
+            loader: "nightly/GocciaScriptLoader",
+            testRunner: "nightly/GocciaTestRunner",
+          },
+          features: MODERN_FEATURES,
+        },
+      ],
+    };
+    expect(pickVendorManifestSource(disk, GENERATED).versions[0].tag).toBe(
+      "nightly",
+    );
+  });
+
+  test("ignores an empty or malformed disk manifest", () => {
+    expect(
+      pickVendorManifestSource({ versions: [] }, GENERATED).versions,
+    ).toHaveLength(1);
+    expect(
+      pickVendorManifestSource("not json at all", GENERATED).versions,
+    ).toHaveLength(1);
+  });
+
+  test("returns the empty manifest when neither source has entries", () => {
+    expect(pickVendorManifestSource(null, null)).toEqual({
+      defaultVersion: "nightly",
+      versions: [],
+    });
+  });
+});
+
+describe("generated manifest artifact", () => {
+  const generatedPath = path.join(
+    import.meta.dir,
+    "..",
+    "generated",
+    "vendor-manifest.json",
+  );
+
+  test("exists and normalizes, whether empty or freshly vendored", () => {
+    // `postinstall` guarantees the file exists (empty), `prebuild` fills it
+    // in. Either state has to survive `normalizeManifest`, because the static
+    // import is a hard build dependency of the playground page.
+    const raw = JSON.parse(readFileSync(generatedPath, "utf8"));
+    const manifest = normalizeManifest(raw);
+    expect(typeof manifest.defaultVersion).toBe("string");
+    expect(Array.isArray(manifest.versions)).toBe(true);
+  });
+
+  test("postinstall writes an empty placeholder, and never clobbers a vendored one", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "goccia-generated-"));
+    const target = path.join(dir, "nested", "vendor-manifest.json");
+    const run = () =>
+      spawnSync(
+        "bun",
+        [
+          path.join(
+            import.meta.dir,
+            "..",
+            "..",
+            "scripts",
+            "ensure-generated-manifest.ts",
+          ),
+        ],
+        {
+          encoding: "utf8",
+          env: { ...process.env, GOCCIA_GENERATED_MANIFEST_PATH: target },
+        },
+      );
+
+    expect(run().status).toBe(0);
+    expect(normalizeManifest(JSON.parse(readFileSync(target, "utf8")))).toEqual(
+      {
+        defaultVersion: "nightly",
+        versions: [],
+      },
+    );
+
+    // A `bun install` after a vendoring run must not throw the versions away.
+    writeFileSync(
+      target,
+      JSON.stringify({ defaultVersion: "0.11.0", versions: [] }),
+    );
+    expect(run().status).toBe(0);
+    expect(JSON.parse(readFileSync(target, "utf8")).defaultVersion).toBe(
+      "0.11.0",
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("the server loader imports it statically", () => {
+    // Regression guard for the original fault: a `process.cwd()` read is
+    // invisible to the bundler's file tracing, so the playground page shipped
+    // without any manifest. The static import is what makes the manifest
+    // reachable from every bundle by construction — a runtime-only read here
+    // would silently reintroduce the empty version picker.
+    const source = readFileSync(
+      path.join(import.meta.dir, "..", "lib", "vendor-manifest-server.ts"),
+      "utf8",
+    );
+    expect(source).toContain('from "@/generated/vendor-manifest.json"');
   });
 });
