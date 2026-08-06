@@ -279,6 +279,10 @@ type
     function ResolveDynamicUpvalueScope(const AIndex: Integer;
       const AName: string): TGocciaScope;
     function KeyDisplaySafe(const AKey: TGocciaRegister): string;
+    procedure ThrowNullishBasePropertyAccess(const ABaseKind: TGocciaRegisterKind;
+      const AKeyReg: TGocciaRegister; const AForWrite: Boolean);
+    procedure RequireCoercibleBaseRegister(const ABaseReg,
+      AKeyReg: TGocciaRegister; const AForWrite: Boolean); {$IFDEF FPC}inline;{$ENDIF}
     // ALimit semantics:
     //   ALimit < 0 → unbounded (drain until iterator returns done:true);
     //   ALimit = 0 → consume zero elements (used for `const [] = iter`);
@@ -8088,10 +8092,10 @@ var
   FastIndex: Integer;
   FastElement: Double;
 begin
+  // ES2026 §6.2.5.5 GetValue step 3.a runs before step 3.c ToPropertyKey.
   if (caoThrowOnNullUndefined in AOptions) and
-     (AObjReg.Kind in [grkUndefined, grkNull]) then
-    ThrowTypeError(SErrorCannotConvertNullOrUndefined,
-      SSuggestCheckNullBeforeAccess)
+     (AObjReg.Kind in [grkNull, grkUndefined]) then
+    ThrowNullishBasePropertyAccess(AObjReg.Kind, AKeyReg, False)
   else if (AObjReg.Kind = grkObject) and
           (AObjReg.ObjectValue is TGocciaTypedArrayValue) and
           TryGetArrayIndexRegister(AKeyReg, FastIndex) and
@@ -8196,6 +8200,11 @@ var
   BoxedTarget: TGocciaObjectValue;
   FastIndex: Integer;
 begin
+  // ES2026 §6.2.5.6 PutValue step 3.a precedes step 3.c, so a nullish target must
+  // throw before ClassifyPropertyKey below — that call can run a user
+  // toString/valueOf, and the side effect must not be observable here.
+  RequireCoercibleBaseRegister(FRegisters[ATargetIndex], AKeyReg, True);
+
   // Typed-array unboxed element write: a numeric-scalar value going to a valid
   // integer index stores directly, with no heap TGocciaNumberLiteralValue and no
   // IntToStr index name. ToNumber on a Number is side-effect-free, so the spec's
@@ -8319,14 +8328,8 @@ var
   Deleted: Boolean;
   KeyName: string;
 begin
-  if AObjReg.Kind = grkNull then
-    ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull,
-      [KeyDisplaySafe(AKeyReg)]),
-      SSuggestCheckNullBeforeAccess)
-  else if AObjReg.Kind = grkUndefined then
-    ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
-      [KeyDisplaySafe(AKeyReg)]),
-      SSuggestCheckNullBeforeAccess)
+  if AObjReg.Kind in [grkNull, grkUndefined] then
+    ThrowNullishBasePropertyAccess(AObjReg.Kind, AKeyReg, False)
   else if (AObjReg.Kind = grkObject) and
           (AObjReg.ObjectValue is TGocciaObjectValue) then
   begin
@@ -8468,6 +8471,49 @@ begin
   else
     Result := '<computed>';
   end;
+end;
+
+// Throw path only. Kept out of RequireCoercibleBaseRegister — and deliberately
+// not inlined — so the managed string local and its implicit exception frame stay
+// off every computed member access.
+procedure TGocciaVM.ThrowNullishBasePropertyAccess(
+  const ABaseKind: TGocciaRegisterKind; const AKeyReg: TGocciaRegister;
+  const AForWrite: Boolean);
+var
+  KeyText: string;
+begin
+  // The key has not been coerced yet, so it must be named without invoking user
+  // code (ES2026 §6.2.5.5 GetValue step 3.a runs before step 3.c ToPropertyKey).
+  KeyText := KeyDisplaySafe(AKeyReg);
+  if AForWrite then
+  begin
+    if ABaseKind = grkNull then
+      ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [KeyText]),
+        SSuggestCheckNullBeforeAccess)
+    else
+      ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [KeyText]),
+        SSuggestCheckNullBeforeAccess);
+  end
+  else
+  begin
+    if ABaseKind = grkNull then
+      ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull, [KeyText]),
+        SSuggestCheckNullBeforeAccess)
+    else
+      ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined, [KeyText]),
+        SSuggestCheckNullBeforeAccess);
+  end;
+end;
+
+// ES2026 §6.2.5.5 GetValue step 3.a / §6.2.5.6 PutValue step 3.a: ToObject on the
+// Reference Record's [[Base]] throws a TypeError for null/undefined, and it does so
+// before step 3.c converts [[ReferencedName]] via ToPropertyKey. Pass AForWrite for
+// store targets so the message reads "cannot set properties".
+procedure TGocciaVM.RequireCoercibleBaseRegister(const ABaseReg,
+  AKeyReg: TGocciaRegister; const AForWrite: Boolean);
+begin
+  if ABaseReg.Kind in [grkNull, grkUndefined] then
+    ThrowNullishBasePropertyAccess(ABaseReg.Kind, AKeyReg, AForWrite);
 end;
 
 // IteratorClose for the raw-object form returned by GetIteratorValue
@@ -14894,6 +14940,12 @@ begin
 
       OP_SET_INDEX_LOOSE:
       begin
+        // ES2026 §6.2.5.6 PutValue step 3.a precedes step 3.c: reject a nullish
+        // base before SetIndexValueLoose classifies (and possibly coerces) the key.
+        // Sloppy mode does not relax this — only the "assignment failed" case at
+        // step 3.e is strict-only.
+        RequireCoercibleBaseRegister(FRegisters[A], FRegisters[B], True);
+
         RightValue := RegisterToValue(FRegisters[C]);
         TargetValue := GetRegister(A);
         if (TargetValue is TGocciaClassValue) or
@@ -17197,6 +17249,11 @@ begin
                 ThrowTypeError(Format(SErrorCannotDestructureNotObject, [RegisterToValue(FRegisters[A]).ToStringLiteral.Value]),
                   SSuggestDestructureRequiresObject);
             end;
+
+          // ES2026 §6.2.5.5 GetValue step 3.a on a computed member base. C holds
+          // the key register, still uncoerced (this runs before OP_TO_PROPERTY_KEY).
+          VALIDATE_OP_REQUIRE_OBJECT_FOR_MEMBER:
+            RequireCoercibleBaseRegister(FRegisters[A], FRegisters[C], False);
 
           VALIDATE_OP_REQUIRE_ITERABLE:
             // Operand C is the iteration bound emitted by the compiler
