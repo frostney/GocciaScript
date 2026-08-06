@@ -160,7 +160,7 @@ for (const path of files) {
   }
   if (!gocciaOnly && disagree.length === 0) {
     if (bn.error) {
-      disagree.push("bun load/exec failure");
+      disagree.push(`bun load/exec failure (${bn.error})`);
     } else {
       if (!sameNames(it.verdict!.failedNames, bn.verdict!.failedNames)) {
         const onlyGoccia = difference(it.verdict!.failedNames, bn.verdict!.failedNames);

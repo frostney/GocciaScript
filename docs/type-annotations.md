@@ -6,7 +6,7 @@
 
 - **Types as comments by default** — Supported annotations follow the [TC39 Type Annotations](https://tc39.es/proposal-type-annotations/) proposal's types-as-comments model and have no runtime effect
 - **Optional enforcement** — `--strict-types` checks supported annotations at runtime in both execution modes; it is a runtime contract, not a static structural checker such as `tsc`
-- **Extension decides `<`** — A leading `<` is read as JSX or as a type parameter list by file extension, exactly as TypeScript does
+- **Extension decides `<`** — A leading `<` is read as JSX or as a type parameter list by file extension, modeled on TypeScript with GocciaScript-specific extension rules (JSX is also recognized in `.js` and `.mjs`)
 - **Restricted `!` productions** — Definite assignment and non-null assertions must sit on the same line as their operand, so ASI code keeps its usual meaning
 - **Bounded surface** — Namespaces, parameter properties, angle-bracket assertions, class-field definite assignment, and generic async arrows are deliberately unsupported
 
@@ -52,7 +52,7 @@ pending = 5;
 // Non-null assertions (postfix !, erased — the chain continues unchanged)
 const nonNull = { v: "x" };
 nonNull.v!.length;
-const first = [{ y: 1 }][0]!.y;
+const firstY = [{ y: 1 }][0]!.y;
 
 // Generic arrow function expressions
 const identity = <T,>(v: T): T => v;
@@ -76,7 +76,7 @@ export interface Serializable {
 }
 
 // Runtime-erased as, satisfies, and generic constructor syntax
-const x = 42 as number;
+const asserted = 42 as number;
 const colors = ["red", "green"] as const satisfies Array<string>;
 const names = new Map<string, string>();
 
@@ -95,7 +95,7 @@ try { throw new Error("oops"); } catch (e: Error) { }
 
 ## Angle Brackets and JSX
 
-A leading `<` is ambiguous: it can open a JSX element or a type parameter list. GocciaScript resolves this by file extension, the same way TypeScript does.
+A leading `<` is ambiguous: it can open a JSX element or a type parameter list. GocciaScript resolves this by file extension — modeled on TypeScript's `.ts`/`.tsx` rule, with GocciaScript-specific extensions: JSX is also recognized (with a warning) in `.js` and `.mjs` sources.
 
 - **`.ts`** — JSX is never recognised, so `<` is always type syntax. Generic function type annotations and every generic arrow form parse here:
 

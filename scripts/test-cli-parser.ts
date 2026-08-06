@@ -895,8 +895,8 @@ console.log("JSX preprocessor termination...");
       const message = String(res.json.error?.message ?? "");
       if (res.json.error?.type !== "SyntaxError")
         throw new Error(`${label}: expected a SyntaxError, got ${JSON.stringify(res.json.error)}`);
-      if (!message.includes('Unsupported attribute syntax at "\\x'))
-        throw new Error(`${label}: the stalled byte should be reported as a hex escape, got ${message}`);
+      if (!/Unsupported attribute syntax at "\\x[0-9a-f]{2}"/.test(message))
+        throw new Error(`${label}: the stalled byte should be reported as a complete lowercase hex escape, got ${message}`);
       // The whole point of the escape: nothing outside printable ASCII may
       // reach the envelope, because a lone high byte is not valid UTF-8.
       if (/[^\x09\x0a\x0d\x20-\x7e]/.test(message))
