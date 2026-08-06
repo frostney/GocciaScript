@@ -350,3 +350,48 @@ describe("toEqual", () => {
     expect([1]).not.toEqual([1, 2]);
   });
 });
+
+// Two things are exposed here. The deep walk reads the same key from both
+// sides, so the first result sits unrooted while the second getter runs and
+// both stay unrooted for the recursion. And expect(<expression>) holds its
+// actual value in a native field of the expectation, which is what keeps a
+// value with no other referent alive for the whole assertion.
+describe.runIf(typeof Goccia !== "undefined")("toEqual under explicit GC", () => {
+  // A bare gc() usually leaves the freed slot readable; the allocation churn
+  // afterwards is what makes a collected value observable.
+  const gcChurn = () => {
+    Goccia.gc();
+    let total = 0;
+    for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      const scratch = { a: i * 7.5, b: [i, i + 1], c: "x" + i };
+      total += scratch.a + scratch.b[0];
+    }
+    return total;
+  };
+
+  // Reachable only from the expectation while the comparison runs.
+  const freshExpected = () => ({
+    get k() {
+      gcChurn();
+      return { x: 1, arr: [1, 2, 3] };
+    },
+  });
+
+  test("compares through getters that collect", () => {
+    expect({ k: { x: 1, arr: [1, 2, 3] } }).toEqual(freshExpected());
+  });
+
+  test("compares a temporary actual against a collecting getter", () => {
+    expect({ k: { x: 1, arr: [1, 2, 3] }, extra: "tail" }).toEqual({
+      get k() {
+        gcChurn();
+        return { x: 1, arr: [1, 2, 3] };
+      },
+      extra: "tail",
+    });
+  });
+
+  test("still reports inequality after a getter collects", () => {
+    expect({ k: { x: 2, arr: [1, 2, 3] } }).not.toEqual(freshExpected());
+  });
+});

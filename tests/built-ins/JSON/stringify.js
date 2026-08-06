@@ -762,3 +762,85 @@ test("JSON.stringify truncates a long multibyte string space to 10 characters", 
     JSON.stringify(obj, null, "あ".repeat(10)),
   );
 });
+
+// The replacer, and every accessor the traversal reads through, is a GC safe
+// point. The synthetic wrapper object, the partially built copy, and the
+// traversal stack that detects cycles are all held in native locals that are
+// not roots, so a collection triggered from user code can free them mid-walk.
+// A bare gc() often leaves the freed slot readable, so each case allocates
+// afterwards to make the corruption observable.
+describe.runIf(typeof Goccia !== "undefined")("explicit GC during stringify", () => {
+  const churn = () => {
+    Goccia.gc();
+    let total = 0;
+    for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      const scratch = { a: i * 7.5, b: [i, i + 1], c: "x" + i };
+      total += scratch.a + scratch.b[0];
+    }
+    return total;
+  };
+
+  test("keeps the wrapper alive when a getter collects during the walk", () => {
+    const obj = {
+      get a() {
+        churn();
+        return 1;
+      },
+      b: 2,
+    };
+
+    expect(JSON.stringify(obj, (key, value) => value)).toBe('{"a":1,"b":2}');
+  });
+
+  test("keeps the walk alive when the replacer itself collects", () => {
+    const obj = { a: 1, b: 2 };
+
+    expect(
+      JSON.stringify(obj, (key, value) => {
+        churn();
+        return value;
+      }, 4),
+    ).toBe('{\n    "a": 1,\n    "b": 2\n}');
+  });
+
+  test("keeps nested holders alive when the replacer collects mid-walk", () => {
+    const obj = { a: { b: { c: [1, { d: 2 }] } }, e: 3 };
+
+    expect(
+      JSON.stringify(obj, (key, value) => {
+        churn();
+        return value;
+      }),
+    ).toBe('{"a":{"b":{"c":[1,{"d":2}]}},"e":3}');
+  });
+
+  test("keeps a toJSON result alive when the hook collects", () => {
+    const obj = {
+      a: {
+        toJSON() {
+          churn();
+          return { nested: 1 };
+        },
+      },
+    };
+
+    expect(
+      JSON.stringify(obj, (key, value) => {
+        churn();
+        return value;
+      }),
+    ).toBe('{"a":{"nested":1}}');
+  });
+
+  test("still detects a cycle after the replacer collects", () => {
+    const obj = { a: 1 };
+    obj.self = obj;
+
+    expect(() =>
+      JSON.stringify(obj, (key, value) => {
+        churn();
+        return value;
+      })
+    ).toThrow(TypeError);
+  });
+});

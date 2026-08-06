@@ -383,3 +383,42 @@ test("JSON.parse reviver source text is reentrant", () => {
   expect(result.a).toBe(1);
   expect(result.b).toBe(2);
 });
+
+// The reviver is user code, so it is a GC safe point. The synthetic wrapper
+// holding the parsed tree, the value being internalized, and the source-text
+// context object are all held in native locals that are not roots. The
+// allocation churn after each gc() is what makes a freed slot observable.
+describe.runIf(typeof Goccia !== "undefined")("explicit GC during parse", () => {
+  const churn = () => {
+    Goccia.gc();
+    let total = 0;
+    for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      const scratch = { a: i * 7.5, b: [i, i + 1], c: "x" + i };
+      total += scratch.a + scratch.b[0];
+    }
+    return total;
+  };
+
+  test("keeps the wrapper and parsed tree alive when the reviver collects", () => {
+    const result = JSON.parse('{"a":{"b":[1,2]},"c":3}', (key, value) => {
+      churn();
+      return value;
+    });
+
+    expect(result).toEqual({ a: { b: [1, 2] }, c: 3 });
+  });
+
+  test("keeps the source-text context alive when the reviver collects", () => {
+    const sources = [];
+    const result = JSON.parse('{"a":1,"b":2}', (key, value, context) => {
+      churn();
+      if (key !== "") {
+        sources.push(context.source);
+      }
+      return value;
+    });
+
+    expect(sources).toEqual(["1", "2"]);
+    expect(result).toEqual({ a: 1, b: 2 });
+  });
+});

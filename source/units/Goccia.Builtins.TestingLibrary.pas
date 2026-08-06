@@ -110,6 +110,7 @@ type
   public
     constructor Create(const AActualValue: TGocciaValue; const ATestAssertions: TGocciaTestAssertions; const AIsNegated: Boolean = False;
       const AIsRejectionReason: Boolean = False);
+    procedure MarkReferences; override;
 
     // Core matchers
     function ToBe(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1102,6 +1103,20 @@ begin
 end;
 
 { TGocciaExpectationValue }
+
+{ The actual value is held in a native field, not as a property, so the
+  inherited walk cannot see it. `expect(<expression>)` is the common case where
+  nothing else refers to it — a literal or call result, alive only because this
+  expectation holds it — and every matcher then re-enters user code through
+  getters on the expected side before it is done reading the actual. Without
+  this the value is collected mid-assertion. FTestAssertions is a builtin, not a
+  collected value, so it is deliberately not marked. }
+procedure TGocciaExpectationValue.MarkReferences;
+begin
+  inherited;
+  if Assigned(FActualValue) then
+    FActualValue.MarkReferences;
+end;
 
 constructor TGocciaExpectationValue.Create(const AActualValue: TGocciaValue; const ATestAssertions: TGocciaTestAssertions; const AIsNegated: Boolean;
   const AIsRejectionReason: Boolean);

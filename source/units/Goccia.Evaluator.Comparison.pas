@@ -18,6 +18,7 @@ implementation
 uses
   Goccia.Arithmetic,
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.AsymmetricMatcher,
   Goccia.Values.ClassValue,
@@ -187,6 +188,60 @@ end;
 function IsPartialDeepEqualInternal(const AActual, AExpected: TGocciaValue;
   var AComparedPairs: TComparedValuePairArray;
   const AIncludeInherited: Boolean): Boolean; forward;
+
+{ Reads the same property from both sides and compares the results.
+
+  Every read can run a user getter, and a getter is a GC safe point. Written as
+  one call expression — `Compare(Actual.GetProperty(K), Expected.GetProperty(K))`
+  — the first read's result sits in an unrooted compiler temporary while the
+  second getter runs, and neither result is rooted for the recursive walk, which
+  re-enters user code again at every level. Rooting here roots the whole tree:
+  each level holds its own two values while the level below it runs. }
+function DeepEqualPropertyPair(const AActualObj, AExpectedObj: TGocciaObjectValue;
+  const AName: string; var AComparedPairs: TComparedValuePairArray;
+  const AStrict: Boolean): Boolean;
+var
+  ActualValue, ExpectedValue: TGocciaValue;
+  ActualRoot, ExpectedRoot: TGocciaTempRoot;
+begin
+  InitializeTempRoot(ActualRoot);
+  InitializeTempRoot(ExpectedRoot);
+  try
+    ActualValue := ErrorFieldValue(AActualObj, AName);
+    AddTempRootIfNeeded(ActualRoot, ActualValue);
+    ExpectedValue := ErrorFieldValue(AExpectedObj, AName);
+    AddTempRootIfNeeded(ExpectedRoot, ExpectedValue);
+    Result := IsDeepEqualInternal(ActualValue, ExpectedValue, AComparedPairs,
+      AStrict);
+  finally
+    RemoveTempRootIfNeeded(ExpectedRoot);
+    RemoveTempRootIfNeeded(ActualRoot);
+  end;
+end;
+
+{ Subset counterpart of DeepEqualPropertyPair, with the same rooting rationale. }
+function PartialDeepEqualPropertyPair(const AActualObj,
+  AExpectedObj: TGocciaObjectValue; const AName: string;
+  var AComparedPairs: TComparedValuePairArray;
+  const AIncludeInherited: Boolean): Boolean;
+var
+  ActualValue, ExpectedValue: TGocciaValue;
+  ActualRoot, ExpectedRoot: TGocciaTempRoot;
+begin
+  InitializeTempRoot(ActualRoot);
+  InitializeTempRoot(ExpectedRoot);
+  try
+    ActualValue := ErrorFieldValue(AActualObj, AName);
+    AddTempRootIfNeeded(ActualRoot, ActualValue);
+    ExpectedValue := ErrorFieldValue(AExpectedObj, AName);
+    AddTempRootIfNeeded(ExpectedRoot, ExpectedValue);
+    Result := IsPartialDeepEqualInternal(ActualValue, ExpectedValue,
+      AComparedPairs, AIncludeInherited);
+  finally
+    RemoveTempRootIfNeeded(ExpectedRoot);
+    RemoveTempRootIfNeeded(ActualRoot);
+  end;
+end;
 
 function IsDeepEqualInternal(const AActual, AExpected: TGocciaValue;
   var AComparedPairs: TComparedValuePairArray;
@@ -555,11 +610,10 @@ begin
       registered lets a chain that loops back on itself terminate. }
     if BothErrors then
     begin
-      if not IsDeepEqualInternal(ErrorFieldValue(ActualObj, PROP_NAME),
-        ErrorFieldValue(ExpectedObj, PROP_NAME), AComparedPairs, AStrict) or
-         not IsDeepEqualInternal(ErrorFieldValue(ActualObj, PROP_MESSAGE),
-        ErrorFieldValue(ExpectedObj, PROP_MESSAGE), AComparedPairs,
-        AStrict) then
+      if not DeepEqualPropertyPair(ActualObj, ExpectedObj, PROP_NAME,
+        AComparedPairs, AStrict) or
+         not DeepEqualPropertyPair(ActualObj, ExpectedObj, PROP_MESSAGE,
+        AComparedPairs, AStrict) then
       begin
         Result := False;
         Exit;
@@ -591,9 +645,8 @@ begin
         end;
       end
       else if ActualHasCause and
-         not IsDeepEqualInternal(ErrorFieldValue(ActualObj, PROP_CAUSE),
-           ErrorFieldValue(ExpectedObj, PROP_CAUSE), AComparedPairs,
-           AStrict) then
+         not DeepEqualPropertyPair(ActualObj, ExpectedObj, PROP_CAUSE,
+           AComparedPairs, AStrict) then
       begin
         Result := False;
         Exit;
@@ -617,8 +670,8 @@ begin
       end;
 
       // Recursively compare property values
-      if not IsDeepEqualInternal(ActualObj.GetProperty(Key),
-        ExpectedObj.GetProperty(Key), AComparedPairs, AStrict) then
+      if not DeepEqualPropertyPair(ActualObj, ExpectedObj, Key,
+        AComparedPairs, AStrict) then
       begin
         Result := False;
         Exit;
@@ -736,9 +789,8 @@ begin
         Exit;
       end;
 
-      if not IsPartialDeepEqualInternal(ActualObj.GetProperty(Key),
-        ExpectedObj.GetProperty(Key), AComparedPairs,
-        AIncludeInherited) then
+      if not PartialDeepEqualPropertyPair(ActualObj, ExpectedObj, Key,
+        AComparedPairs, AIncludeInherited) then
       begin
         Result := False;
         Exit;
