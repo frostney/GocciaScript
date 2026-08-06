@@ -996,6 +996,19 @@ console.log("Definite assignment assertion rules...");
       messageIncludes: "cannot also have definite assignment assertions",
       args: ["--compat-var"],
     },
+    {
+      // The colon is consumed but the annotation collector returns nothing, so
+      // the assertion still has no type to attach to.
+      desc: "definite assignment with an empty annotation",
+      source: "let x!:;\n",
+      messageIncludes: "must also have type annotations",
+    },
+    {
+      desc: "definite assignment with an empty annotation on var",
+      source: "var x!:;\n",
+      messageIncludes: "must also have type annotations",
+      args: ["--compat-var"],
+    },
   ] as const;
 
   for (const { desc, source, messageIncludes, args } of cases)
