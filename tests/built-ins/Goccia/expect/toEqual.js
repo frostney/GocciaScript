@@ -45,11 +45,15 @@ describe("toEqual", () => {
     expect({ a: 1, b: null }).not.toEqual({ a: 1 });
   });
 
-  test("ignores undefined array items past the shorter length", () => {
-    expect([1, undefined]).toEqual([1]);
-    expect([2]).toEqual([2, undefined]);
-    expect([]).toEqual([undefined]);
-    expect([1, 2]).toEqual([1, 2, undefined, undefined]);
+  test("requires arrays to match in length", () => {
+    // Vitest compares arrays length-first: a trailing undefined is a real
+    // element, not padding.
+    expect([1, undefined]).not.toEqual([1]);
+    expect([2]).not.toEqual([2, undefined]);
+    expect([]).not.toEqual([undefined]);
+    expect([1, 2]).not.toEqual([1, 2, undefined, undefined]);
+    expect([[1, undefined]]).not.toEqual([[1]]);
+    expect([1, undefined]).toEqual([1, undefined]);
   });
 
   test("does not shift array items to absorb an undefined", () => {
@@ -125,17 +129,33 @@ describe("toEqual", () => {
     );
   });
 
-  test("requires every member to find its own partner", () => {
-    // bun accepts these because it never marks an expected member as claimed;
-    // requiring a distinct partner per member is the stricter reading.
-    expect(new Set([1, 2])).not.toEqual(new Set([expect.any(Number), 3]));
-    expect(new Set([{ a: 1 }, { a: 1 }])).not.toEqual(
+  test("scans membership existentially rather than pairing off", () => {
+    // Vitest is the oracle: sizes must match and every ACTUAL member must
+    // deep-equal SOME expected member, but an expected member may match
+    // several actual members or none at all.
+    expect(new Set([1, 2])).toEqual(new Set([expect.any(Number), 3]));
+    expect(new Set([1, 2])).toEqual(
+      new Set([expect.any(Number), expect.any(String)]),
+    );
+    expect(new Set([{ a: 1 }, { a: 1 }])).toEqual(
       new Set([{ a: 1 }, { b: 2 }]),
+    );
+
+    // An actual member matching nothing still fails, in either direction.
+    expect(new Set([{ a: 1 }, { b: 2 }])).not.toEqual(
+      new Set([{ a: 1 }, { a: 1 }]),
+    );
+    expect(new Set([1, "x"])).not.toEqual(new Set([expect.any(Number), 1]));
+    expect(new Map([[1, "x"], [2, "y"]])).not.toEqual(
+      new Map([[expect.any(Number), "x"], [3, "x"]]),
     );
   });
 
-  test("ignores a trailing hole", () => {
-    expect([1, ,]).toEqual([1]);
+  test("counts a trailing hole as an element", () => {
+    // [1, ,] has length 2, so it does not equal [1].
+    expect([1, ,]).not.toEqual([1]);
+    expect([1, ,]).toEqual([1, ,]);
+    expect([1, ,]).toEqual([1, undefined]);
   });
 
   test("handles cyclic arrays", () => {
@@ -209,14 +229,13 @@ describe("toEqual", () => {
     expect(renamed).not.toEqual(new Error("m"));
   });
 
-  test("compares the cause", () => {
+  test("compares the cause, driven by the expected side", () => {
     expect(new Error("m", { cause: "c" })).toEqual(
       new Error("m", { cause: "c" }),
     );
     expect(new Error("m", { cause: "c" })).not.toEqual(
       new Error("m", { cause: "d" }),
     );
-    expect(new Error("m", { cause: "c" })).not.toEqual(new Error("m"));
     expect(new Error("m")).not.toEqual(new Error("m", { cause: "c" }));
     expect(new Error("m", { cause: { a: 1 } })).toEqual(
       new Error("m", { cause: { a: 1 } }),
@@ -224,6 +243,9 @@ describe("toEqual", () => {
     expect(new Error("m", { cause: { a: 1 } })).not.toEqual(
       new Error("m", { cause: { a: 2 } }),
     );
+
+    // A cause the expectation does not mention is ignored.
+    expect(new Error("m", { cause: "c" })).toEqual(new Error("m"));
   });
 
   test("terminates on a cyclic cause chain", () => {
@@ -244,15 +266,31 @@ describe("toEqual", () => {
     expect(outerLeft).toEqual(outerRight);
   });
 
-  test("ignores AggregateError contents, matching bun", () => {
-    // bun compares neither `errors` nor `stack`; only name, message, cause
-    // and own enumerable properties participate.
+  test("compares AggregateError contents", () => {
     expect(new AggregateError([new Error("x")], "agg")).toEqual(
+      new AggregateError([new Error("x")], "agg"),
+    );
+    expect(new AggregateError([new Error("x")], "agg")).not.toEqual(
       new AggregateError([new Error("y")], "agg"),
     );
+    expect(
+      new AggregateError([new Error("x"), new Error("y")], "agg"),
+    ).not.toEqual(new AggregateError([new Error("x")], "agg"));
     expect(new AggregateError([new Error("x")], "agg")).not.toEqual(
       new AggregateError([new Error("x")], "other"),
     );
+  });
+
+  test("ignores stack entirely", () => {
+    const left = new Error("m");
+    left.stack = "one";
+    const right = new Error("m");
+    right.stack = "two";
+    expect(left).toEqual(right);
+
+    const restacked = new Error("m");
+    restacked.stack = "different";
+    expect(new Error("m")).toEqual(restacked);
   });
 
   test("keys error-ness on the error slot, not the prototype chain", () => {
@@ -267,6 +305,7 @@ describe("toEqual", () => {
   test("forgives a cause that is present but undefined", () => {
     expect(new Error("m", { cause: undefined })).toEqual(new Error("m"));
     expect(new Error("m")).toEqual(new Error("m", { cause: undefined }));
+    expect(new Error("m", { cause: undefined })).toStrictEqual(new Error("m"));
   });
 
   test("compares name by value rather than by its string form", () => {
@@ -309,17 +348,20 @@ describe("toEqual", () => {
     expect(
       new Error("m", { cause: new AggregateError([new Error("x")], "agg") }),
     ).toEqual(
-      new Error("m", { cause: new AggregateError([new Error("y")], "agg") }),
+      new Error("m", { cause: new AggregateError([new Error("x")], "agg") }),
     );
     expect(
-      new Error("m", { cause: new AggregateError([], "agg") }),
-    ).not.toEqual(new Error("m", { cause: new AggregateError([], "other") }));
+      new Error("m", { cause: new AggregateError([new Error("x")], "agg") }),
+    ).not.toEqual(
+      new Error("m", { cause: new AggregateError([new Error("y")], "agg") }),
+    );
   });
 
   test("distinguishes DOMExceptions by their enumerable fields", () => {
-    // Known divergence: a DOMException carries name/message/code as ordinary
-    // enumerable properties here, so the plain object walk separates them.
-    // bun equates DOMExceptions with differing messages. Pre-existing.
+    // Deliberate divergence from the Vitest oracle, decided by the project:
+    // a DOMException carries name/message/code as ordinary enumerable
+    // properties here, so the object walk separates them. Vitest equates all
+    // DOMExceptions regardless of name or message; goccia keeps them apart.
     expect(new DOMException("a", "AbortError")).toEqual(
       new DOMException("a", "AbortError"),
     );
@@ -343,6 +385,43 @@ describe("toEqual", () => {
     expect({ e: new Error("x") }).not.toEqual({ e: new Error("y") });
     expect([new Error("x")]).toContainEqual(new Error("x"));
     expect([new Error("x")]).not.toContainEqual(new Error("y"));
+  });
+
+  test("matches objectContaining against Map keys", () => {
+    // Protected parity: goccia and vitest agree here, bun does not.
+    expect(
+      new Map([
+        [{ a: 1 }, "v"],
+        [{ a: 1, b: 2 }, "w"],
+      ]),
+    ).toEqual(
+      new Map([
+        [expect.objectContaining({ a: 1 }), "v"],
+        [expect.objectContaining({ a: 1 }), "w"],
+      ]),
+    );
+  });
+
+  test("lets a throwing name getter propagate", () => {
+    // Protected parity with vitest: reading name runs the getter, so its
+    // error escapes the matcher rather than being swallowed. bun differs.
+    const thrower = new Error("m");
+    Object.defineProperty(thrower, "name", {
+      get: () => {
+        throw new Error("boom-getter");
+      },
+      configurable: true,
+    });
+
+    expect(() => expect(thrower).toEqual(new Error("m"))).toThrow(
+      "boom-getter",
+    );
+  });
+
+  test("finds Set members with toContainEqual", () => {
+    expect(new Set([{ a: 1 }])).toContainEqual({ a: 1 });
+    expect(new Set([1, 2])).toContainEqual(1);
+    expect(new Set([{ a: 1 }])).not.toContainEqual({ a: 2 });
   });
 
   test("supports negation", () => {
