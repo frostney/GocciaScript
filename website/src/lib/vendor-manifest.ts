@@ -127,6 +127,76 @@ export function isPublicExecutionSafe(entry: VendorEntry): boolean {
   );
 }
 
+/** Why a freshly vendored manifest is not fit to deploy. Each code is a
+ *  state that used to ship silently and surface as a playground offering
+ *  nothing but `nightly`. */
+export type VendorManifestFloorViolation = {
+  code:
+    | "NO_STABLE_VENDORED"
+    | "NO_PUBLIC_SAFE_ENGINE"
+    | "NO_PUBLIC_SAFE_STABLE";
+  message: string;
+};
+
+/** The deployable floor for a vendored manifest, checked by
+ *  `scripts/fetch-binaries.ts` before the build is allowed to continue.
+ *
+ *  Per-tag fetch failures stay warnings — losing one of three precedence
+ *  picks still leaves a usable playground. These three states do not:
+ *  every one of them leaves the version picker with no released engine in
+ *  it, which is indistinguishable from "the playground is broken".
+ *
+ *  Returns `null` when the manifest is fit to deploy. */
+export function checkVendorManifestFloor(
+  manifest: VendorManifest,
+): VendorManifestFloorViolation | null {
+  const stable = manifest.versions.filter((entry) => !entry.isPrerelease);
+  if (stable.length === 0) {
+    return {
+      code: "NO_STABLE_VENDORED",
+      message:
+        "no stable release could be vendored — the playground would offer only prereleases",
+    };
+  }
+  if (!manifest.versions.some(isPublicExecutionSafe)) {
+    return {
+      code: "NO_PUBLIC_SAFE_ENGINE",
+      message:
+        "no vendored engine advertises --no-host-filesystem on both binaries — the playground version picker would be empty",
+    };
+  }
+  if (!stable.some(isPublicExecutionSafe)) {
+    return {
+      code: "NO_PUBLIC_SAFE_STABLE",
+      message:
+        "no vendored *stable* engine advertises --no-host-filesystem on both binaries — the playground would offer only nightly",
+    };
+  }
+  return null;
+}
+
+/** Choose between the manifest read from `vendor/manifest.json` on disk and
+ *  the one bundled at `src/generated/vendor-manifest.json`.
+ *
+ *  Both are written by the same `scripts/fetch-binaries.ts` run, so they agree
+ *  on content; they differ in *reachability*. `vendor/` is traced into the
+ *  API route bundles only (`next.config.mjs` → `outputFileTracingIncludes`),
+ *  so a `process.cwd()` read returns nothing when the playground page renders
+ *  in its own bundle. The generated JSON is a static import, so bundling
+ *  includes it by construction, everywhere.
+ *
+ *  Disk wins when it has entries: it is the literal truth about which
+ *  binaries are spawnable, and it stays correct for hand-populated `vendor/`
+ *  trees built with `SKIP_VENDOR_FETCH=1`. */
+export function pickVendorManifestSource(
+  disk: unknown,
+  generated: unknown,
+): VendorManifest {
+  const fromDisk = normalizeManifest(disk);
+  if (fromDisk.versions.length > 0) return fromDisk;
+  return normalizeManifest(generated);
+}
+
 /** The ASI flag the API actually sends for a binary, or `null` when it sends
  *  none. The flag was renamed `--asi` -> `--compat-asi` after 0.7.x (aligning it
  *  with the other `--compat-*` flags): vendored 0.7.x binaries advertise

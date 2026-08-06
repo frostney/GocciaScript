@@ -1577,3 +1577,28 @@ jobs:
           files: |
             gocciascript-*.tar.gz
             gocciascript-*.zip
+
+      # The website vendors engine archives at build time, but a release
+      # commit touches only CHANGELOG.md, so nothing under website/ changes
+      # and Vercel's ignore step skips the build (website/scripts/vercel-ignore.sh).
+      # Ask Vercel for a deployment now that the archives above exist; the
+      # ignore step lets it through because the live site does not yet vendor
+      # this tag. Optional: without the secret the site simply picks the
+      # release up on its next deployment.
+      - name: Redeploy website with the new release
+        env:
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "${VERCEL_DEPLOY_HOOK_URL}" ]; then
+            echo "VERCEL_DEPLOY_HOOK_URL is not configured; skipping website redeploy."
+            echo "The playground will keep serving the previously vendored engines until the next website deployment."
+            exit 0
+          fi
+          # The URL is the credential, so keep it out of the log: report only
+          # the status code.
+          status="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${VERCEL_DEPLOY_HOOK_URL}")"
+          if [ "${status}" -lt 200 ] || [ "${status}" -ge 300 ]; then
+            echo "Vercel deploy hook returned HTTP ${status}; the website was NOT redeployed for ${GITHUB_REF_NAME}."
+            exit 1
+          fi
+          echo "Vercel deploy hook accepted (HTTP ${status}); website redeploying with ${GITHUB_REF_NAME}."
