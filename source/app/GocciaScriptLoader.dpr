@@ -16,6 +16,7 @@ uses
   Goccia.Bytecode.Binary,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  Goccia.CLI.Stdin,
   Goccia.CLI.SourceMaps,
   Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
@@ -148,6 +149,7 @@ type
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); override;
     function UsageLine: string; override;
+    function StdinUsage: TGocciaStdinUsage; override;
     procedure Validate; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
     procedure HandleError(const AException: Exception); override;
@@ -272,6 +274,11 @@ end;
 function TScriptLoaderApp.UsageLine: string;
 begin
   Result := '[file|directory|-] [options]';
+end;
+
+function TScriptLoaderApp.StdinUsage: TGocciaStdinUsage;
+begin
+  Result := suStdinDefaultWithREPL;
 end;
 
 procedure TScriptLoaderApp.Configure;

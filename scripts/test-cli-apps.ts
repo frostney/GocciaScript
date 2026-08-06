@@ -6325,4 +6325,153 @@ console.log("SandboxRunner: virtual modules share the CLI surface and cannot sha
   }
 }
 
+// ============================================================================
+// No-argument stdin policy (clig.dev)
+//
+// The interactive-terminal branch cannot be exercised here — Bun.spawn has no
+// pty — so the decision itself is covered by the Pascal unit tests in
+// source/app/Goccia.CLI.Stdin.Test.pas.  What matters for CI is that every
+// NON-terminal path is byte-for-byte unchanged: piped stdin, closed stdin,
+// and an explicit "-" must all still read the program from standard input.
+// See docs/contributing/cli-conventions.md.
+// ============================================================================
+
+{
+  const tmp = makeTmp();
+  const stdinBenchEnv = {
+    ...process.env,
+    GOCCIA_BENCH_CALIBRATION_MS: "50",
+    GOCCIA_BENCH_ROUNDS: "3",
+  } as Record<string, string>;
+
+  // Each binary needs input it can actually accept: the benchmark runner
+  // fails a run with zero benchmarks, and the bundler requires an explicit
+  // --output when its source came from stdin.
+  const stdinApps = [
+    {
+      name: "GocciaScriptLoader",
+      bin: LOADER,
+      args: [] as string[],
+      source: "const x = 1;\n",
+      env: undefined as Record<string, string> | undefined,
+    },
+    {
+      name: "GocciaScriptLoaderBare",
+      bin: BARE,
+      args: [],
+      source: "const x = 1;\n",
+      env: undefined,
+    },
+    {
+      name: "GocciaTestRunner",
+      bin: TESTRUNNER,
+      args: [],
+      source: "const x = 1;\n",
+      env: undefined,
+    },
+    {
+      name: "GocciaBenchmarkRunner",
+      bin: BENCHRUNNER,
+      args: ["--source-type=module", "--no-progress"],
+      source: microbenchModule(['bench("noop", () => 1);']),
+      env: stdinBenchEnv,
+    },
+    {
+      name: "GocciaBundler",
+      bin: BUNDLER,
+      args: [`--output=${join(tmp, "stdin-policy.gbc")}`],
+      source: "const x = 1;\n",
+      env: undefined,
+    },
+  ];
+
+  try {
+    console.log("Stdin policy: piped stdin with no arguments still runs...");
+    for (const app of stdinApps) {
+      const proc = Bun.spawnSync([app.bin, ...app.args], {
+        stdin: new TextEncoder().encode(app.source),
+        stdout: "pipe",
+        stderr: "pipe",
+        env: app.env,
+        timeout: 120_000,
+      });
+      if (proc.exitCode !== 0)
+        throw new Error(
+          `${app.name} with piped stdin exited ${proc.exitCode}: ${proc.stdout.toString()}${proc.stderr.toString()}`,
+        );
+    }
+
+    console.log('Stdin policy: explicit "-" with piped stdin still runs...');
+    for (const app of stdinApps) {
+      const proc = Bun.spawnSync([app.bin, ...app.args, "-"], {
+        stdin: new TextEncoder().encode(app.source),
+        stdout: "pipe",
+        stderr: "pipe",
+        env: app.env,
+        timeout: 120_000,
+      });
+      if (proc.exitCode !== 0)
+        throw new Error(
+          `${app.name} with explicit "-" exited ${proc.exitCode}: ${proc.stdout.toString()}${proc.stderr.toString()}`,
+        );
+    }
+
+    console.log("Stdin policy: closed stdin with no arguments is not a usage error...");
+    for (const app of stdinApps) {
+      // No `stdin` option: Bun attaches the null device, which is not a
+      // terminal, so the implicit-stdin path must still be taken.  The run
+      // may fail on its empty program, but it must never be the usage exit.
+      const proc = Bun.spawnSync([app.bin, ...app.args], {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: app.env,
+        timeout: 120_000,
+      });
+      if (proc.exitCode === 2)
+        throw new Error(
+          `${app.name} treated closed stdin as an interactive terminal: ${proc.stderr.toString()}`,
+        );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (output.includes("standard input is a terminal"))
+        throw new Error(`${app.name} printed the terminal hint for closed stdin: ${output}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Stdin policy: --help documents the stdin rule and escape hatch...");
+for (const app of [
+  { name: "GocciaScriptLoader", bin: LOADER },
+  { name: "GocciaScriptLoaderBare", bin: BARE },
+  { name: "GocciaTestRunner", bin: TESTRUNNER },
+  { name: "GocciaBenchmarkRunner", bin: BENCHRUNNER },
+  { name: "GocciaBundler", bin: BUNDLER },
+]) {
+  const proc = Bun.spawnSync([app.bin, "--help"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`${app.name} --help exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  const help = normalizeLineEndings(proc.stdout.toString());
+  for (const needle of ["Input:", `${app.name} < app.js`, '"-"', "Ctrl-D", "exits 2"]) {
+    if (!help.includes(needle))
+      throw new Error(`${app.name} --help is missing ${JSON.stringify(needle)}:\n${help}`);
+  }
+  if (proc.stderr.toString() !== "")
+    throw new Error(`${app.name} --help wrote to stderr: ${proc.stderr.toString()}`);
+}
+
+console.log("Stdin policy: GocciaREPL and GocciaSandboxRunner opt out...");
+for (const app of [
+  { name: "GocciaREPL", bin: REPL },
+  { name: "GocciaSandboxRunner", bin: SANDBOXRUNNER },
+]) {
+  const proc = Bun.spawnSync([app.bin, "--help"], { stdout: "pipe", stderr: "pipe" });
+  const help = normalizeLineEndings(proc.stdout.toString());
+  if (help.includes("Input:"))
+    throw new Error(`${app.name} should not advertise the stdin rule:\n${help}`);
+}
+
 console.log("\nAll test-cli-apps.ts tests passed.");

@@ -15,6 +15,7 @@ uses
   Goccia.Application,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  Goccia.CLI.Stdin,
   Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
   CLI.ConfigFile,
@@ -151,6 +152,7 @@ type
     function ShouldApplyRootConfig(const APaths: TStringList;
       const AConfigPath: string; const AExplicitConfig: Boolean): Boolean; override;
     function UsageLine: string; override;
+    function StdinUsage: TGocciaStdinUsage; override;
     procedure Validate; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
   private
@@ -397,6 +399,11 @@ end;
 function TTestRunnerApp.UsageLine: string;
 begin
   Result := '[path...|-] [options]';
+end;
+
+function TTestRunnerApp.StdinUsage: TGocciaStdinUsage;
+begin
+  Result := suStdinDefault;
 end;
 
 function NormalizeSnapshotAttributionPath(const APath: string): string;

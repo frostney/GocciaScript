@@ -9,6 +9,7 @@
 | [Workflow](docs/contributing/workflow.md) | Local setup, branch workflow, issues & PRs, verification |
 | [Code Style](docs/contributing/code-style.md) | Pascal naming, constants, spec annotations, generics, hash maps, file organization |
 | [Tooling](docs/contributing/tooling.md) | Auto-formatting, Lefthook, editor config, platform-specific pitfalls |
+| [CLI Conventions](docs/contributing/cli-conventions.md) | Stdin and no-argument rules, exit codes, stdout/stderr discipline, help output |
 
 ## Documentation
 
