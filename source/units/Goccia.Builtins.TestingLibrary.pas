@@ -2053,6 +2053,14 @@ begin
           DidThrow := True;
           ThrownValue := CreateErrorObject(EngineErrorName(E), E.Message);
         end;
+        { An expired per-test/per-describe/per-file deadline is not something
+          the callable threw, so it must never satisfy the expectation. Listed
+          before the generic arm because TGocciaTimeoutError descends from
+          Exception: absorbing it here would report toThrow as passing and let
+          execution continue past the limit instead of unwinding to
+          ExecuteSuite (see the same guard at RunCallbacks). }
+        on E: TGocciaTimeoutError do
+          raise;
         on E: Exception do
         begin
           DidThrow := True;

@@ -3276,6 +3276,62 @@ console.log("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + byt
   }
 }
 
+console.log("TestRunner: an expired deadline inside a toThrow callable is not a thrown error...");
+{
+  // A per-test deadline is not something the callable threw. If toThrow's
+  // generic exception arm absorbs TGocciaTimeoutError the assertion reports a
+  // pass and the deadline never unwinds to ExecuteSuite, so the run finishes
+  // green while having blown straight past the limit.
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "throw-timeout.test.js");
+    writeFileSync(
+      file,
+      [
+        // for(;;) and while are gated off by default, so spin through an
+        // iterator that never reports done.
+        "const forever = {",
+        "  [Symbol.iterator]() {",
+        "    return { next: () => ({ value: 1, done: false }) };",
+        "  },",
+        "};",
+        "",
+        'test("deadline inside toThrow", () => {',
+        "  expect(() => {",
+        "    for (const value of forever) {",
+        "      if (value === 2) break;",
+        "    }",
+        "  }).toThrow();",
+        "});",
+        "",
+      ].join("\n"),
+    );
+
+    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+      const label = modeArgs.length
+        ? "toThrow deadline (bytecode)"
+        : "toThrow deadline";
+      // Report to a file: a failing test still prints its marker line to
+      // stdout, so stdout is not parseable JSON here.
+      const reportPath = join(tmp, `throw-timeout${modeArgs.length ? "-bc" : ""}.json`);
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), file, ...modeArgs, "--test-timeout=300", "--no-progress", `--output=${reportPath}`],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      if (proc.exitCode === 0)
+        throw new Error(`${label}: an expired deadline must not report a passing toThrow`);
+      const json = JSON.parse(readFileSync(reportPath, "utf-8"));
+      if (json.passed !== 0 || json.failed !== 1)
+        throw new Error(`${label}: expected 0 passed / 1 failed, got ${json.passed}/${json.failed}`);
+      const failures = (json.files?.[0]?.failedTests ?? []).join("\n");
+      if (!failures.includes("TIMEOUT"))
+        throw new Error(`${label}: expected the failure to be recorded as a TIMEOUT, got ${failures}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("TestRunner: JSON multi-file structure...");
 {
   const tmp = makeTmp();
