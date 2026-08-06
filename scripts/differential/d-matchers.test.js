@@ -42,6 +42,136 @@ describe("deep equality semantics", () => {
   });
 });
 
+describe("error equality", () => {
+  test("errors compare on name and message", () => {
+    expect(new Error("a")).toEqual(new Error("a"));
+    expect(new Error("a")).not.toEqual(new Error("b"));
+    expect(new TypeError("m")).not.toEqual(new Error("m"));
+  });
+
+  test("errors compare on own enumerable properties", () => {
+    const withCode = new Error("m");
+    withCode.code = 1;
+    const sameCode = new Error("m");
+    sameCode.code = 1;
+    const otherCode = new Error("m");
+    otherCode.code = 2;
+
+    expect(withCode).toEqual(sameCode);
+    expect(withCode).not.toEqual(otherCode);
+    expect(withCode).not.toEqual(new Error("m"));
+  });
+
+  test("an error never equals a plain object", () => {
+    expect(new Error("a")).not.toEqual({});
+    expect(new Error("a")).not.toEqual({ message: "a" });
+    expect(new Error("a")).not.toEqual({ name: "Error", message: "a" });
+    expect({}).not.toEqual(new Error("a"));
+  });
+
+  test("error subclasses key on name, not on the class", () => {
+    class CustomError extends Error {}
+    class NamedError extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "NamedError";
+      }
+    }
+
+    expect(new CustomError("m")).toEqual(new Error("m"));
+    expect(new CustomError("m")).toStrictEqual(new Error("m"));
+    expect(new NamedError("m")).not.toEqual(new Error("m"));
+    expect(new TypeError("m")).not.toStrictEqual(new Error("m"));
+  });
+
+  test("cause participates in equality", () => {
+    expect(new Error("m", { cause: "c" })).toEqual(new Error("m", { cause: "c" }));
+    expect(new Error("m", { cause: "c" })).not.toEqual(new Error("m", { cause: "d" }));
+    expect(new Error("m", { cause: "c" })).not.toEqual(new Error("m"));
+    expect(new Error("m", { cause: { a: 1 } })).toEqual(
+      new Error("m", { cause: { a: 1 } }),
+    );
+  });
+
+  test("a cyclic cause chain terminates", () => {
+    const left = new Error("m");
+    left.cause = left;
+    const right = new Error("m");
+    right.cause = right;
+
+    expect(left).toEqual(right);
+  });
+
+  test("errors nested in containers", () => {
+    expect([new Error("x")]).toEqual([new Error("x")]);
+    expect([new Error("x")]).not.toEqual([new Error("y")]);
+    expect(new Set([new Error("x")])).toEqual(new Set([new Error("x")]));
+    expect(new Map([["k", new Error("x")]])).toEqual(
+      new Map([["k", new Error("x")]]),
+    );
+    expect([new Error("x")]).toContainEqual(new Error("x"));
+  });
+
+  test("error-ness comes from the error slot, not the prototype chain", () => {
+    expect(Object.create(Error.prototype)).toEqual({});
+    expect(Object.setPrototypeOf({}, Error.prototype)).toEqual({});
+    expect(Object.create(Error.prototype)).not.toEqual(new Error(""));
+  });
+
+  test("a present-but-undefined cause reads as absent to toEqual", () => {
+    expect(new Error("m", { cause: undefined })).toEqual(new Error("m"));
+    expect(new Error("m")).toEqual(new Error("m", { cause: undefined }));
+    expect(new Error("m", { cause: undefined })).not.toStrictEqual(
+      new Error("m"),
+    );
+  });
+
+  test("name is compared by value, never stringified", () => {
+    const undefinedName = new Error("m");
+    Object.setPrototypeOf(
+      undefinedName,
+      Object.create(Error.prototype, { name: { value: undefined } }),
+    );
+    const emptyName = new Error("m");
+    Object.setPrototypeOf(
+      emptyName,
+      Object.create(Error.prototype, { name: { value: "" } }),
+    );
+    expect(undefinedName).not.toEqual(emptyName);
+
+    let calls = 0;
+    const shared = Object.create(Error.prototype, {
+      name: {
+        value: {
+          toString: () => {
+            calls = calls + 1;
+            throw new RangeError("boom");
+          },
+        },
+      },
+    });
+    const left = new Error("m");
+    Object.setPrototypeOf(left, shared);
+    const right = new Error("m");
+    Object.setPrototypeOf(right, shared);
+    expect(left).toEqual(right);
+    expect(calls).toBe(0);
+  });
+
+  test("an AggregateError nested inside a cause", () => {
+    expect(
+      new Error("m", { cause: new AggregateError([new Error("x")], "agg") }),
+    ).toEqual(
+      new Error("m", { cause: new AggregateError([new Error("y")], "agg") }),
+    );
+  });
+
+  test("toMatchObject keeps subset semantics for errors", () => {
+    expect({ e: new Error("x") }).toMatchObject({ e: new Error("y") });
+    expect({ e: new Error("x") }).toMatchObject({ e: {} });
+  });
+});
+
 describe("asymmetric matchers", () => {
   test("expect.any / expect.anything", () => {
     expect({ id: "x", n: 3 }).toEqual({ id: expect.any(String), n: expect.any(Number) });

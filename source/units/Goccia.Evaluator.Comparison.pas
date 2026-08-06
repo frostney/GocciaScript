@@ -17,6 +17,7 @@ implementation
 
 uses
   Goccia.Arithmetic,
+  Goccia.Constants.PropertyNames,
   Goccia.Values.ArrayValue,
   Goccia.Values.AsymmetricMatcher,
   Goccia.Values.ClassValue,
@@ -99,6 +100,18 @@ begin
     ExpectedClass := nil;
 
   Result := ActualClass = ExpectedClass;
+end;
+
+{ Reads a property the comparison needs but the enumerable-key walk cannot
+  see, normalizing a missing property to undefined. The value is returned raw:
+  stringifying it here would both collapse distinct values and run user code
+  inside the matcher. }
+function ErrorFieldValue(const AObject: TGocciaObjectValue;
+  const AName: string): TGocciaValue;
+begin
+  Result := AObject.GetProperty(AName);
+  if Result = nil then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 { An asymmetric matcher accepts a whole family of values, so it has to be
@@ -192,6 +205,9 @@ var
   Used: TArray<Boolean>;
   Claimed: TArray<Boolean>;
   Pass: Integer;
+  BothErrors: Boolean;
+  ActualIsError, ExpectedIsError: Boolean;
+  ActualHasCause, ExpectedHasCause: Boolean;
   TrialPairs: TComparedValuePairArray;
 begin
   // Vitest/Jest asymmetric matchers participate in every equality-based
@@ -491,7 +507,25 @@ begin
     ActualObj := TGocciaObjectValue(AActual);
     ExpectedObj := TGocciaObjectValue(AExpected);
 
-    if AStrict and not HasSameObjectType(AActual, AExpected) then
+    ActualIsError := IsErrorObject(AActual);
+    ExpectedIsError := IsErrorObject(AExpected);
+    BothErrors := ActualIsError and ExpectedIsError;
+
+    { An error is never equal to a plain object, however similar their visible
+      properties are: name and message are not enumerable, so without this the
+      key walk below would call every error equal to every other one and to an
+      empty object. }
+    if ActualIsError <> ExpectedIsError then
+    begin
+      Result := False;
+      Exit;
+    end;
+
+    { The strict matcher's class check does not apply to errors: a
+      `class MyError extends Error` instance that leaves `name` alone is equal
+      to a plain Error with the same message under both matchers. }
+    if AStrict and not BothErrors and
+       not HasSameObjectType(AActual, AExpected) then
     begin
       Result := False;
       Exit;
@@ -515,6 +549,56 @@ begin
       Exit;
     end;
     AddComparedPair(AComparedPairs, AActual, AExpected);
+
+    { An error's identity is its name, message and cause, none of which the
+      enumerable-key walk below can see. Comparing them after the pair is
+      registered lets a chain that loops back on itself terminate. }
+    if BothErrors then
+    begin
+      if not IsDeepEqualInternal(ErrorFieldValue(ActualObj, PROP_NAME),
+        ErrorFieldValue(ExpectedObj, PROP_NAME), AComparedPairs, AStrict) or
+         not IsDeepEqualInternal(ErrorFieldValue(ActualObj, PROP_MESSAGE),
+        ErrorFieldValue(ExpectedObj, PROP_MESSAGE), AComparedPairs,
+        AStrict) then
+      begin
+        Result := False;
+        Exit;
+      end;
+
+      ActualHasCause := ActualObj.HasOwnProperty(PROP_CAUSE);
+      ExpectedHasCause := ExpectedObj.HasOwnProperty(PROP_CAUSE);
+      if ActualHasCause <> ExpectedHasCause then
+      begin
+        { A cause that is present but undefined reads the same as no cause at
+          all to the loose matcher, exactly like any other undefined-valued
+          property. The strict matcher keeps them apart. }
+        if AStrict then
+        begin
+          Result := False;
+          Exit;
+        end;
+        if ActualHasCause and
+           not IsUndefinedLike(ErrorFieldValue(ActualObj, PROP_CAUSE)) then
+        begin
+          Result := False;
+          Exit;
+        end;
+        if ExpectedHasCause and
+           not IsUndefinedLike(ErrorFieldValue(ExpectedObj, PROP_CAUSE)) then
+        begin
+          Result := False;
+          Exit;
+        end;
+      end
+      else if ActualHasCause and
+         not IsDeepEqualInternal(ErrorFieldValue(ActualObj, PROP_CAUSE),
+           ErrorFieldValue(ExpectedObj, PROP_CAUSE), AComparedPairs,
+           AStrict) then
+      begin
+        Result := False;
+        Exit;
+      end;
+    end;
 
     // Check if all keys exist in both objects and values are deeply equal
     for I := 0 to High(ActualKeys) do

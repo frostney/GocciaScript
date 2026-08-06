@@ -104,6 +104,22 @@ When `.toMatch()` receives a `RegExp`, the matcher uses regex semantics but does
 
 Under `.toStrictEqual()`, a class instance matches only an instance of the same class. Every object that is not a class instance counts as plain, including a null-prototype object and one built with `Object.create(proto)`. Only trailing `undefined` items are forgiven by `.toEqual()`, and only past the shorter length: `[1, undefined, 2]` does not equal `[1, 2]`.
 
+**Errors** are the one shape both matchers treat identically. An error's `name` and `message` are inherited or non-enumerable, so comparing visible properties alone would make every error equal to every other one and to `{}`. Both matchers therefore compare `name`, `message`, `cause`, and the error's own enumerable properties, and an error is never equal to a plain object:
+
+```javascript
+expect(new Error("a")).toEqual(new Error("a"));
+expect(new Error("a")).not.toEqual(new Error("b"));
+expect(new TypeError("m")).not.toEqual(new Error("m"));
+expect(new Error("a")).not.toEqual({ name: "Error", message: "a" });
+expect(new Error("m", { cause: "c" })).not.toEqual(new Error("m"));
+```
+
+What counts as an error is the internal slot an error constructor installs, not the prototype chain: `Object.create(Error.prototype)` is a plain object and equals `{}`. An error is then identified by its `name`, not by its class, and this is the one place `.toStrictEqual()` adds no class check: `class MyError extends Error {}` that leaves `name` alone inherits `"Error"` and equals a plain `Error` with the same message under both matchers. Assigning `this.name` makes it distinct.
+
+`name`, `message`, and `cause` are compared by value and are never stringified, so a `name` whose `toString` throws does not turn an assertion into a raised error. A `cause` that is present but `undefined` reads as absent to `.toEqual()`, like any other undefined-valued property, while `.toStrictEqual()` keeps them apart; a `cause` chain that loops back on itself terminates rather than recursing. `stack` never participates, and neither does `AggregateError`'s `errors` — matching bun, which diverges from the Vitest documentation here. `.toMatchObject()` is unaffected: it keeps subset semantics, so `{ e: new Error("x") }` matches `{ e: {} }`.
+
+One known divergence: a `DOMException` carries `name`, `message`, and `code` as ordinary enumerable properties in this engine, so the plain object walk distinguishes two DOMExceptions whose messages differ, where bun equates them.
+
 #### Property paths
 
 `.toHaveProperty()` accepts a path rather than a flat key. A string path splits on dots and understands bracket indices, so `"items[0].type"` and `"a.b"` both walk into nested values; an array path (`["a", "b", 0, "c"]`) takes each segment verbatim, which is also how you reach a key that itself contains a dot. Each segment resolves the way a normal property read would, so inherited members and the members of a boxed primitive (`"name.length"`) are found. A second argument is compared with `.toEqual()` semantics. Walking into `null` or `undefined` reports a normal assertion failure rather than raising.
