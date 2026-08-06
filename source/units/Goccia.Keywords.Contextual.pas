@@ -48,6 +48,9 @@ const
   KEYWORD_READONLY     = 'readonly';
   KEYWORD_OVERRIDE     = 'override';
   KEYWORD_ABSTRACT     = 'abstract';
+  KEYWORD_KEYOF        = 'keyof';
+  KEYWORD_INFER        = 'infer';
+  KEYWORD_ASSERTS      = 'asserts';
 
   // Contextual keywords that the lexer tokenizes directly. Other contextual
   // keywords stay as identifiers so the parser can interpret them by context.

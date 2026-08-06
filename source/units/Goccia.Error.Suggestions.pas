@@ -104,6 +104,9 @@ resourcestring
   SSuggestAddPropertyInitializer = 'Add ''= value'' to initialize the property';
   SSuggestAddConstInitializer = 'Add ''= value'' after the variable name';
   SSuggestComputedPropertyNeedsValue = 'Add '': value'' after the computed property (e.g., [key]: value)';
+  SSuggestDefiniteAssignmentNeedsAnnotation = 'Add a type annotation after ''!'' (e.g., let x!: number)';
+  SSuggestDefiniteAssignmentNoInitializer = 'Remove the ''!'' — a declaration with an initializer is already assigned';
+  SSuggestDefiniteAssignmentNotOnConst = 'Remove the ''!'' — a const is always assigned at its declaration';
 
   // Imports and exports
   SSuggestImportMetaSyntax = 'Use import.meta to access module metadata (e.g., import.meta.url)';

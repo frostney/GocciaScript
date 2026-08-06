@@ -183,7 +183,13 @@ begin
   Result := ASource;
   ASourceMap := nil;
 
-  if ppJSX in AOptions.Preprocessors then
+  // '.ts' sources never contain JSX, so '<' stays type syntax there: running
+  // the transformer would rewrite generic annotations such as
+  // `const g: <T>(x: T) => T` into a bogus JSX element before the parser sees
+  // them. Every other extension keeps its current behaviour, including JSX in
+  // '.js' (transformed, with the non-JSX-extension warning).
+  if (ppJSX in AOptions.Preprocessors) and
+     not IsJSXExcludedExtension(ExtractFileExt(AFileName)) then
   begin
     JSXResult := TGocciaJSXTransformer.Transform(Result, AFileName);
     Result := JSXResult.Source;
