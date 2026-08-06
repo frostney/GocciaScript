@@ -34,9 +34,16 @@ describe("toThrow", () => {
     expect(() => {
       throw new Error("full message here");
     }).not.toThrow("absent");
+  });
+
+  test("treats an empty string as an empty-message assertion", () => {
+    // Vitest compiles toThrow("") to /^$/ rather than a substring test.
+    expect(() => {
+      throw new Error("");
+    }).toThrow("");
     expect(() => {
       throw new Error("anything");
-    }).toThrow("");
+    }).not.toThrow("");
   });
 
   test("matches a regular expression against the message", () => {
@@ -97,7 +104,9 @@ describe("toThrow", () => {
     }).not.toThrow(Error);
   });
 
-  test("matches an error instance by equal messages", () => {
+  test("matches an error instance by error-aware deep equality", () => {
+    // Vitest is the oracle: an expected error instance is compared as a
+    // value, so name, own properties and an expected-side cause all count.
     expect(() => {
       throw new Error("exact text");
     }).toThrow(new Error("exact text"));
@@ -106,10 +115,32 @@ describe("toThrow", () => {
     }).not.toThrow(new Error("exact text"));
     expect(() => {
       throw new TypeError("same");
-    }).toThrow(new Error("same"));
+    }).not.toThrow(new Error("same"));
+
+    expect(() => {
+      const thrown = new Error("m");
+      thrown.code = "X";
+      throw thrown;
+    }).not.toThrow(new Error("m"));
+
+    expect(() => {
+      throw new Error("m", { cause: "c1" });
+    }).not.toThrow(new Error("m", { cause: "c2" }));
+    expect(() => {
+      throw new Error("m");
+    }).not.toThrow(new Error("m", { cause: "c" }));
+    // A cause the expectation does not mention is ignored.
+    expect(() => {
+      throw new Error("m", { cause: "c" });
+    }).toThrow(new Error("m"));
+
+    expect(() => {
+      throw { message: "boom" };
+    }).not.toThrow(new Error("boom"));
   });
 
-  test("matches thrown non-error values by their string form", () => {
+  test("reads the message subject the way Vitest does", () => {
+    // A thrown string is its own subject.
     expect(() => {
       throw "boom string";
     }).toThrow("boom");
@@ -119,15 +150,54 @@ describe("toThrow", () => {
     expect(() => {
       throw "boom string";
     }).not.toThrow(Error);
+
+    // A message-carrying object contributes its message.
+    expect(() => {
+      throw { message: "objmsg" };
+    }).toThrow("objmsg");
+    expect(() => {
+      throw { message: "" };
+    }).toThrow("");
+
+    // Anything else offers no subject, so the string and RegExp forms never
+    // match it — not even the empty string.
     expect(() => {
       throw 42;
-    }).toThrow("42");
+    }).not.toThrow("42");
     expect(() => {
       throw 42;
-    }).toThrow(/42/);
+    }).not.toThrow(/42/);
+    expect(() => {
+      throw 42;
+    }).not.toThrow("");
+    expect(() => {
+      throw true;
+    }).not.toThrow("true");
+    expect(() => {
+      throw { code: 1 };
+    }).not.toThrow("1");
+
+    // The no-argument form still sees the throw.
+    expect(() => {
+      throw 42;
+    }).toThrow();
+  });
+
+  test("lets a thrown nullish value match any message", () => {
+    // Replicates Vitest exactly: with nothing to read a message from, the
+    // string and RegExp forms impose no constraint. The class form still does.
     expect(() => {
       throw null;
-    }).toThrow("null");
+    }).toThrow("anything at all");
+    expect(() => {
+      throw null;
+    }).toThrow(/anything/);
+    expect(() => {
+      throw undefined;
+    }).toThrow("anything at all");
+    expect(() => {
+      throw null;
+    }).not.toThrow(Error);
   });
 
   test("reads the message property of thrown plain objects", () => {
