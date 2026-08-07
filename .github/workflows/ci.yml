@@ -1310,6 +1310,9 @@ jobs:
         if: runner.os != 'Windows'
         run: chmod +x build/*
 
+      - name: Check shared CLI test assertions
+        run: bun run scripts/test-cli-assertions.ts
+
       - name: Check CLI flags across all apps
         run: bun run scripts/test-cli.ts
 

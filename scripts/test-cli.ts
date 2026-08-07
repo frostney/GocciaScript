@@ -467,7 +467,7 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
     const shadowWarningProc = await $`${BARE} --print ${shadowWarningSrc} --unsafe-shadowrealm --test262-host --warning-unsupported-features 2>&1`.nothrow();
     const shadowWarningOut = shadowWarningProc.text();
     if (shadowWarningProc.exitCode !== 0 ||
-        !shadowWarningOut.replace(/\r/g, "").split("\n").includes("47"))
+        !containsLine(shadowWarningOut, "47"))
       throw new Error(`ShadowRealm child realm should inherit warning-unsupported-features, got: ${shadowWarningOut}`);
 
     const forSrc = join(tmp, "use-for.js");
