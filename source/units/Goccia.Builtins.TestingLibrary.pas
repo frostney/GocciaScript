@@ -546,7 +546,14 @@ end;
 { toHaveProperty accepts a dotted/bracketed path string ("items[0].type") or
   an array of segments (["a", "b", 0, "c"]). The array form is also the escape
   hatch for keys that themselves contain a dot, since a string path always
-  splits on dots. }
+  splits on dots.
+
+  A string path drops every empty segment, so "a.", ".a" and "a..b" all parse
+  the same as "a" / "a" / "a.b". That matches vitest, whose path grammar
+  (chai's parsePath, `str.match(/(\\\.|[^.]+?)+/g)`) can never produce an empty
+  segment. An empty-string key is therefore unreachable through a string path;
+  it is reached by the literal-key lookup in ToHaveProperty (for the whole path)
+  or by an array path (for a nested one). }
 function ParsePropertyPath(const APathValue: TGocciaValue): TArray<string>;
 var
   PathArray: TGocciaArrayValue;
@@ -555,7 +562,6 @@ var
   Bracket: string;
   Position: Integer;
   I: Integer;
-  SegmentOpen: Boolean;
 
   procedure AppendSegment(const ASegment: string);
   begin
@@ -576,17 +582,16 @@ begin
 
   Path := APathValue.ToStringLiteral.Value;
   Current := '';
-  // A text segment is open from the start, so an empty path is the single
-  // empty-string key and a trailing separator leaves an empty segment behind.
-  SegmentOpen := True;
   Position := 1;
   while Position <= Length(Path) do
   begin
     if Path[Position] = '.' then
     begin
-      AppendSegment(Current);
+      // Empty segments are dropped, so a leading, doubled or trailing
+      // separator never contributes a key.
+      if Current <> '' then
+        AppendSegment(Current);
       Current := '';
-      SegmentOpen := True;
       Inc(Position);
     end
     else if Path[Position] = '[' then
@@ -594,7 +599,6 @@ begin
       if Current <> '' then
         AppendSegment(Current);
       Current := '';
-      SegmentOpen := False;
       Inc(Position);
       Bracket := '';
       while (Position <= Length(Path)) and (Path[Position] <> ']') do
@@ -606,20 +610,16 @@ begin
         Inc(Position);
       AppendSegment(Bracket);
       if (Position <= Length(Path)) and (Path[Position] = '.') then
-      begin
-        SegmentOpen := True;
         Inc(Position);
-      end;
     end
     else
     begin
       Current := Current + Path[Position];
-      SegmentOpen := True;
       Inc(Position);
     end;
   end;
 
-  if SegmentOpen then
+  if Current <> '' then
     AppendSegment(Current);
 end;
 
@@ -2058,6 +2058,8 @@ var
   ExpectedValue: TGocciaValue;
   ExpectedRoot: TGocciaTempRoot;
   ExpectsValue: Boolean;
+  LiteralKey: string;
+  HasLiteralKey: Boolean;
 begin
   TGocciaArgumentValidator.RequireBetween(AArgs, 1, 2, 'toHaveProperty',
     FTestAssertions.ThrowError);
@@ -2075,11 +2077,28 @@ begin
 
   PathArgument := AArgs.GetElement(0);
   if not ((PathArgument is TGocciaStringLiteralValue) or
+     (PathArgument is TGocciaNumberLiteralValue) or
      (PathArgument is TGocciaArrayValue)) then
   begin
     ThrowTypeError(SErrorToHavePropertyExpectsPath, SSuggestTestUsage);
     Exit;
   end;
+
+  // A string or number path is first tried as a single literal own key, and only
+  // split into segments if that key is absent. Vitest does the same
+  // (`Object.prototype.hasOwnProperty.call(actual, path)` ahead of its path
+  // walk), which is what makes `expect({ "a.b": 5 }).toHaveProperty("a.b")` pass
+  // and what lets a number reach an index without any dedicated numeric path
+  // support. The check is deliberately own-only and ignores enumerability, so an
+  // inherited "a.b" is not found this way but a non-enumerable own one is. It
+  // also applies to the whole path only — a dotted key nested deeper in the
+  // object still needs an array path.
+  HasLiteralKey := (PathArgument is TGocciaStringLiteralValue) or
+    (PathArgument is TGocciaNumberLiteralValue);
+  if HasLiteralKey then
+    LiteralKey := PathArgument.ToStringLiteral.Value
+  else
+    LiteralKey := '';
 
   Segments := ParsePropertyPath(PathArgument);
   PathDescription := DescribePropertyPath(Segments);
@@ -2099,7 +2118,28 @@ begin
     else
       ExpectedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-    HasProperty := TryResolvePropertyPath(FActualValue, Segments, ResolvedValue);
+    if HasLiteralKey and
+       TGocciaObjectValue(FActualValue).HasOwnProperty(LiteralKey) then
+    begin
+      // Reading the key runs any accessor on it, exactly like a path step.
+      ResolvedValue := TGocciaObjectValue(FActualValue)
+        .GetPropertyWithContext(LiteralKey, FActualValue);
+      if ResolvedValue = nil then
+        ResolvedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      PathDescription := LiteralKey;
+      HasProperty := True;
+    end
+    else if Length(Segments) = 0 then
+    begin
+      // Every segment of the path was empty ("", ".", ".."), and no own key
+      // spells it literally, so there is nothing to resolve. Vitest throws a
+      // TypeError out of its path parser here; reporting a plain assertion
+      // failure is the same verdict without the crash.
+      ResolvedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      HasProperty := False;
+    end
+    else
+      HasProperty := TryResolvePropertyPath(FActualValue, Segments, ResolvedValue);
 
     // The walk releases its own roots on return, and a resolved value produced
     // by an accessor (or by a computed member such as `length`) is reachable

@@ -11,6 +11,88 @@ test("clones a simple object", () => {
   expect(clone.c).toBe(true);
 });
 
+// The comparison cases for tests/built-ins/structuredClone/arrays.js: a plain
+// object goes through the same StructuredSerialize property walk as an array,
+// so accessors, enumerability and descriptor flags behave identically whether
+// the key is an array index or an ordinary name.
+describe("accessor properties", () => {
+  test("serializes the value a getter returns, as a data property", () => {
+    const original = { x: 1 };
+    Object.defineProperty(original, "y", {
+      get: () => 99,
+      enumerable: true,
+      configurable: false,
+    });
+
+    const clone = structuredClone(original);
+    expect(clone.y).toBe(99);
+    expect(Object.getOwnPropertyDescriptor(clone, "y")).toEqual({
+      value: 99,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  });
+
+  test("lets a throwing getter propagate", () => {
+    const original = {};
+    Object.defineProperty(original, "k", {
+      get: () => {
+        throw new Error("getter-boom");
+      },
+      enumerable: true,
+      configurable: true,
+    });
+
+    expect(() => structuredClone(original)).toThrow("getter-boom");
+  });
+
+  test("clones a setter-only property as undefined", () => {
+    const original = {};
+    Object.defineProperty(original, "s", {
+      set: () => {},
+      enumerable: true,
+      configurable: true,
+    });
+
+    const clone = structuredClone(original);
+    expect(clone.s).toBe(undefined);
+    expect(Object.prototype.hasOwnProperty.call(clone, "s")).toBe(true);
+  });
+
+  test("skips non-enumerable properties", () => {
+    const original = { a: 1 };
+    Object.defineProperty(original, "k", {
+      value: 1,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+
+    const clone = structuredClone(original);
+    expect(Object.prototype.hasOwnProperty.call(clone, "k")).toBe(false);
+    expect(Object.keys(clone)).toEqual(["a"]);
+  });
+
+  test("does not preserve data descriptor flags", () => {
+    const original = {};
+    Object.defineProperty(original, "k", {
+      value: 1,
+      writable: false,
+      enumerable: true,
+      configurable: false,
+    });
+
+    expect(Object.getOwnPropertyDescriptor(structuredClone(original), "k"))
+      .toEqual({
+        value: 1,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+  });
+});
+
 test("clone is a distinct object", () => {
   const original = { x: 1 };
   const clone = structuredClone(original);
