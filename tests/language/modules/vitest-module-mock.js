@@ -66,11 +66,28 @@ describe("vi.mock factory form", () => {
     expect(remockedLabel).toBe("LAST");
   });
 
-  test("vi.mock is a no-op by the time the call itself runs", () => {
-    // The hoisted pre-pass already did the work; the runtime member exists so
-    // a suite written against Vitest still runs unchanged.
-    expect(vi.mock("./helpers/mock-target.js", () => ({}))).toBe(undefined);
-    expect(vi.unmock("./helpers/mock-target.js")).toBe(undefined);
+  test("an aliased callee is not hoisted and the runtime member is inert", () => {
+    // Hoisting is a syntactic transform over the literal `vi.mock` and
+    // `vitest.mock` spellings — Vitest matches exactly those two callee names
+    // and leaves an aliased one alone, after which the runtime member is
+    // reached for real and does nothing. That is what this asserts, and it is
+    // the only way to observe the runtime member: a literal `vi.mock(...)`
+    // written here would be hoisted out of the callback like any other.
+    //
+    // Do NOT rewrite this as `expect(vi.mock(...)).toBe(undefined)`. That shape
+    // does not merely fail to prove the point, it is invalid input: Vitest
+    // hoists by MOVING the call's source text to the top of the file, so a
+    // literal `vi.mock` in an expression position leaves `expect().toBe(...)`
+    // behind and the whole file dies with a parse error (verified against
+    // vitest 4.1.10). GocciaScript hoists without rewriting text, so the same
+    // shape silently re-registered the mock and then unmocked it again — which
+    // is how that spelling used to "pass" here.
+    const viAlias = vi;
+
+    expect(viAlias.mock("./helpers/mock-target.js", () => ({}))).toBe(undefined);
+    expect(viAlias.unmock("./helpers/mock-target.js")).toBe(undefined);
+    // Neither aliased call was hoisted, so the file-level mock still stands.
+    expect(label).toBe("MOCKED");
   });
 
   test("vitest is the same namespace object as vi", () => {
