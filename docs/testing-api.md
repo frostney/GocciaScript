@@ -9,7 +9,7 @@
 - **Mock functions** --- `mock()` creates tracked mock functions and `spyOn()` wraps existing methods; both record calls, arguments, return values, and support configurable behavior
 - **Lifecycle hooks** --- `beforeAll`/`afterAll` run once per suite, `beforeEach`/`afterEach` run around every test and are inherited by nested suites, and `onTestFinished` registers per-test cleanup
 - **Async patterns** --- Tests can be `async` functions or return Promises; `.resolves`/`.rejects` matchers unwrap Promises for Vitest/Jest-compatible assertions
-- **Vitest compatibility** --- Tests are designed to pass in both GocciaScript's GocciaTestRunner and Vitest, with known divergences around `mock()`/`spyOn()` globals, `Math.clamp`, emoji identifiers, and arrow-function `this` binding on object properties
+- **Vitest is the compatibility target** --- The testing API aims at being an exact Vitest drop-in, so Vitest decides what a matcher, hook, or accounting rule is *supposed* to do; bun is a fast proxy whose expect differs from Vitest's often enough that it cannot decide (see [Differential Testing](differential-testing.md)). Known deliberate divergences remain around `mock()`/`spyOn()` globals, `Math.clamp`, emoji identifiers, and arrow-function `this` binding on object properties
 
 ## Writing Tests
 
@@ -94,32 +94,33 @@ When `.toMatch()` receives a `RegExp`, the matcher uses regex semantics but does
 
 `.toEqual()` and `.toStrictEqual()` share one recursive comparison and differ only in what they forgive. Both use `Object.is` at the leaves, so `NaN` equals `NaN` while `0` and `-0` stay distinct, and both compare `Set` and `Map` contents without regard to insertion order, matching members and entries by deep equality rather than by reference. Neither ever equates different kinds of container: a `Map` is not a plain object, and a `Set` is not an array.
 
-`.toEqual()` ignores four things that `.toStrictEqual()` enforces:
+`.toEqual()` ignores three things that `.toStrictEqual()` enforces:
 
 | Ignored by `.toEqual()` | Example |
 |---|---|
 | Object keys whose value is `undefined` | `{ a: 1, b: undefined }` equals `{ a: 1 }` |
-| `undefined` array items past the shorter length | `[2]` equals `[2, undefined]` |
 | Array sparseness | `[1, , 3]` equals `[1, undefined, 3]` |
 | The object's type | `new Point(1)` equals `{ x: 1 }` |
 
-Under `.toStrictEqual()`, a class instance matches only an instance of the same class. Every object that is not a class instance counts as plain, including a null-prototype object and one built with `Object.create(proto)`. Only trailing `undefined` items are forgiven by `.toEqual()`, and only past the shorter length: `[1, undefined, 2]` does not equal `[1, 2]`.
+The forgiveness stops at array length. Arrays of different lengths are never equal under either matcher, so `[1]` does not equal `[1, undefined]` in either direction, and `[]` does not equal `[undefined]`. An `undefined` *item* is only ignorable where a hole and an explicit `undefined` collapse to the same thing at the same index; a trailing one still lengthens the array.
 
-**Errors** are the one shape both matchers treat identically. An error's `name` and `message` are inherited or non-enumerable, so comparing visible properties alone would make every error equal to every other one and to `{}`. Both matchers therefore compare `name`, `message`, `cause`, and the error's own enumerable properties, and an error is never equal to a plain object:
+Type equality under `.toStrictEqual()` is a constructor comparison, not a "class instance versus literal" distinction: two values match only when `a.constructor === b.constructor`. A class instance therefore matches only an instance of the same class, a null-prototype object does not match `{}` (it has no `constructor` at all), and `Object.create(proto)` takes its constructor from `proto` — `Object.create(Array.prototype)` compares as an `Array`, not as a plain object.
+
+**Errors** are compared by a rule of their own, and both matchers apply it — they differ only in the constructor check `.toStrictEqual()` adds on top. An error's `name` and `message` are inherited or non-enumerable, so comparing visible properties alone would make every error equal to every other one and to `{}`. Both matchers therefore compare `name` and `message` alongside the error's own enumerable properties, and an error is never equal to a plain object:
 
 ```javascript
 expect(new Error("a")).toEqual(new Error("a"));
 expect(new Error("a")).not.toEqual(new Error("b"));
 expect(new TypeError("m")).not.toEqual(new Error("m"));
 expect(new Error("a")).not.toEqual({ name: "Error", message: "a" });
-expect(new Error("m", { cause: "c" })).not.toEqual(new Error("m"));
+expect(new Error("m", { cause: "c" })).not.toEqual(new Error("m", { cause: "d" }));
 ```
 
-What counts as an error is the internal slot an error constructor installs, not the prototype chain: `Object.create(Error.prototype)` is a plain object and equals `{}`. An error is then identified by its `name`, not by its class, and this is the one place `.toStrictEqual()` adds no class check: `class MyError extends Error {}` that leaves `name` alone inherits `"Error"` and equals a plain `Error` with the same message under both matchers. Assigning `this.name` makes it distinct.
+What counts as an error is the internal slot an error constructor installs, not the prototype chain: `Object.create(Error.prototype)` is a plain object and equals `{}`. Under `.toEqual()` an error is then identified by its `name` rather than by its class, so `class MyError extends Error {}` that leaves `name` alone inherits `"Error"` and equals a plain `Error` with the same message; assigning `this.name` makes it distinct. `.toStrictEqual()` makes no exception for errors: its constructor check applies to them like to any other object, so that same subclass is *not* strictly equal to `Error`.
 
-`name`, `message`, and `cause` are compared by value and are never stringified, so a `name` whose `toString` throws does not turn an assertion into a raised error. A `cause` that is present but `undefined` reads as absent to `.toEqual()`, like any other undefined-valued property, while `.toStrictEqual()` keeps them apart; a `cause` chain that loops back on itself terminates rather than recursing. `stack` never participates, and neither does `AggregateError`'s `errors` — matching bun, which diverges from the Vitest documentation here. `.toMatchObject()` is unaffected: it keeps subset semantics, so `{ e: new Error("x") }` matches `{ e: {} }`.
+`name`, `message`, and `cause` are compared by value and are never stringified, so a `name` whose `toString` throws does not turn an assertion into a raised error. `cause` is compared asymmetrically — it participates only when the *expected* error has a defined one. `new Error("m", { cause: "c" })` therefore equals `new Error("m")`, while swapping the two sides does not hold, and a `cause` that is present but `undefined` reads as absent to both matchers. A `cause` chain that loops back on itself terminates rather than recursing. `stack` never participates; `AggregateError`'s `errors` does, and is compared like any other value whenever both sides are `AggregateError`s. `.toMatchObject()` keeps subset semantics for the containers around errors but not for the errors themselves: `{ e: new Error("x") }` matches `{ e: {} }`, because an empty expected object constrains nothing, but it does not match `{ e: new Error("y") }`.
 
-One known divergence: a `DOMException` carries `name`, `message`, and `code` as ordinary enumerable properties in this engine, so the plain object walk distinguishes two DOMExceptions whose messages differ, where bun equates them.
+One deliberate divergence, in `DOMException`. A DOMException has no error slot, and in a standard runtime its `name`, `message`, and `code` are prototype getters rather than own properties — so Vitest sees two objects with nothing own-enumerable to compare and calls any two DOMExceptions with the same class equal, whatever their `name`s (bun agrees with Vitest here). This engine materializes those three as ordinary own enumerable properties, so it keeps them apart. That difference is intentional and stands: two DOMExceptions with different `name`s differ in every way a test cares about, and Vitest's all-equal result is arguably a bug in it rather than a rule worth copying. No upstream issue has been filed.
 
 #### Property paths
 
@@ -127,7 +128,7 @@ One known divergence: a `DOMException` carries `name`, `message`, and `code` as 
 
 `.toMatchObject()` matches a subset of keys at every level and recurses per index through arrays, so `{ list: [{ a: 1, b: 2 }] }` matches `{ list: [{ a: 1 }] }`. Arrays must still match in length. An expected plain object may describe an array (`{ l: { 0: 1 } }` matches `{ l: [1] }`), but an expected array only matches an array.
 
-`.toThrow()` accepts every Jest argument form, and each form works under `.not` and after `.rejects`. A string matches when the thrown message *contains* it; a `RegExp` matches the message; a constructor matches by `instanceof`, so a subclass satisfies both its own class and its parent; an `Error` instance matches when the messages are equal. An asymmetric matcher is delegated to the matcher itself and tested against the thrown value rather than its message, so `expect(fn).toThrow(expect.any(TypeError))` is the asymmetric spelling of `toThrow(TypeError)`. Thrown values that are not errors contribute their string form, so `throw 42` satisfies `toThrow("42")`. Like `.toMatch()`, the `RegExp` form does not depend on or mutate `lastIndex`.
+`.toThrow()` accepts every Vitest argument form, and each form works under `.not` and after `.rejects`. A string matches when the thrown message *contains* it, except for the empty string: `toThrow("")` asserts that the message *is* empty rather than matching everything. A `RegExp` matches the message; a constructor matches by `instanceof`, so a subclass satisfies both its own class and its parent. An `Error` instance is not a message comparison — it is the deep-equality rule above, so the thrown error must also agree on `name`, on own enumerable properties, on `cause` where the expected error has one, and on `errors` when both are `AggregateError`s. A thrown value that is not an error consequently never matches an `Error` instance, even with the same `message`. An asymmetric matcher is delegated to the matcher itself and tested against the thrown value rather than its message, so `expect(fn).toThrow(expect.any(TypeError))` is the asymmetric spelling of `toThrow(TypeError)`. For the string and `RegExp` forms the message of a non-error is the thrown value itself when it is a string, or its `message` property when it has one. Like `.toMatch()`, the `RegExp` form does not depend on or mutate `lastIndex`.
 
 ### Mock Functions
 
@@ -445,13 +446,15 @@ describe.runIf(hasFeature)("Temporal tests", () => { ... });
 test.runIf(hasFeature)("uses Temporal.Now", () => { ... });
 ```
 
-These follow the [Bun test runner API](https://bun.com/reference/bun/test/Describe/skipIf). When skipped, tests are counted in the total but not executed and reported as skipped.
+The target for these is [Vitest's `skipIf`/`runIf`](https://vitest.dev/api/#test-skipif). When skipped, tests are counted in the total but not executed and reported as skipped. The exact accounting of the conditional and `todo` forms has not been through the differential lane yet — the lifecycle battery covers hook and describe accounting, not these — so treat the details here as intent rather than as verified parity.
 
 ## Cross-Runtime Compatibility (Vitest)
 
-Tests are designed to pass in both GocciaScript's GocciaTestRunner and standard JavaScript via [Vitest](https://vitest.dev/). This ensures tests serve as both GocciaScript validation and ECMAScript conformance checks.
+[Vitest](https://vitest.dev/) is the compatibility target, not merely a second place the tests happen to run: the testing API aims at being an exact drop-in, so where this engine and Vitest disagree about a matcher, a hook, or how a result is counted, Vitest is right by definition and the difference is a defect unless it is written down here as deliberate. Tests that pass in both therefore serve as GocciaScript validation and as ECMAScript conformance checks at once.
 
-Vitest is also the reference for what the matchers *mean*, not only for the API shape: equality, `Set`/`Map`, error, and `toThrow` behavior is probed against a pinned Vitest release and reconciled. Accepting unmodified Vitest suites is a stated project direction rather than a current guarantee — the divergences listed below are the remaining gap. See [Vision](../VISION.md) for where this is heading.
+That reference covers what the matchers *mean*, not only the API shape: equality, `Set`/`Map`, error, and `toThrow` behavior is probed against a pinned Vitest release and reconciled. Accepting unmodified Vitest suites is a stated project direction rather than a current guarantee — the divergences listed below are the remaining gap. See [Vision](../VISION.md) for where this is heading.
+
+Bun runs the same tests far faster and is used that way as a proxy, but it is advisory only. A three-way audit of 223 probes found bun and Vitest disagreeing on 30 of 178 matcher probes, in both directions, so bun agreeing is evidence and bun disagreeing is a question — neither is a verdict. [Differential Testing](differential-testing.md) describes how the two roles are enforced per battery.
 
 ### Running with Vitest
 
@@ -461,7 +464,7 @@ npx vitest run tests/built-ins/   # Run a category
 npx vitest                        # Watch mode
 ```
 
-The `vitest.config.js` at the project root configures Vitest to discover test files in `tests/`.
+Running `tests/` under Vitest needs a local Vitest install and a config that points at those files; the repository pins its own Vitest only for the differential battery lane, under `scripts/differential/`.
 
 ### Writing Cross-Compatible Tests
 
