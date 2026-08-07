@@ -1573,7 +1573,8 @@ begin
     { clig.dev: "If your command is expecting to have something piped
       to it and stdin is an interactive terminal, display help
       immediately and quit."  Without this, a bare invocation at a
-      terminal blocks on ReadLn until Ctrl-D and looks stuck.  Help
+      terminal blocks on ReadLn until the platform's end-of-input keys
+      (EndOfInputKeys) are pressed and looks stuck.  Help
       goes to stderr because this is an error, not a request for help,
       which also keeps stdout clean for --output=json callers. }
     if (StdinUsage <> suNone) and
