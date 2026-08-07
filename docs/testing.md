@@ -1,3 +1,4 @@
+<!-- doc-length-limit: 1000 -->
 # Testing
 
 *For contributors writing, running, or debugging tests.*
@@ -331,15 +332,36 @@ Both execution modes must pass. Test subtrees that require opt-in parser or runt
 |------|-------------|
 | `--no-progress` | Suppress per-file progress output |
 | `--no-results` | Suppress test results summary |
-| `--exit-on-first-failure` | Stop on the first test failure **or suite error** (a throwing `describe`, a failed `beforeAll`/`afterAll`). Under `--jobs` the worker queue is cancelled too; files that never ran are omitted from the report rather than counted as failures |
+| `--exit-on-first-failure` | Stop on the first test failure **or suite error** (a throwing `describe`, a failed `beforeAll`/`afterAll`). Under `--jobs` the worker queue is cancelled too; files that never ran are omitted from the report rather than counted as failures. It stops the queue, not the run — see [Stopping behaviour](#--exit-on-first-failure-stopping-behaviour) |
 | `--silent` | Suppress all console output from test scripts |
 | `--jobs=N` / `-j N` | Number of parallel worker threads (default: CPU count) |
 | `--update-snapshots` / `-u` | Create, update, and prune snapshots |
 | `--update` | Vitest-compatible alias for `--update-snapshots` |
 
+#### `--exit-on-first-failure` stopping behaviour
+
+The flag stops the **file queue**, not the run in progress:
+
+- **Sequential (`--jobs=1`)** — execution stops at the failing file; no file
+  after it runs.
+- **Parallel (`--jobs=N`, `N > 1`)** — the queue is cancelled, but files a
+  worker already picked up run to completion, and a worker reaching for its
+  next file before the cancellation is visible starts that one too. Files after
+  the failure can therefore still execute: expect roughly the failing file's
+  position plus about one file per worker. The exact count depends on
+  scheduling and is **not** reproducible between runs — do not assert on it.
+
+Files the queue never reached are omitted from the report rather than counted
+as failures, so reported totals shrink as workers are added. For a
+deterministic "everything up to the failure and nothing after" run — bisecting,
+or a reproducible failure list — use `--jobs=1`.
+
 ```bash
 # CI-friendly: no progress, stop on first failure
 ./build/GocciaTestRunner tests --no-progress --exit-on-first-failure
+
+# Deterministic stop: nothing after the failing file runs
+./build/GocciaTestRunner tests --no-progress --exit-on-first-failure --jobs=1
 
 # Silent mode: only show results, suppress script console output
 ./build/GocciaTestRunner tests --silent
@@ -786,6 +808,43 @@ Enabling coverage — via `--coverage`, `--coverage-format`, or `--coverage-outp
 | Console | `--coverage` | Summary table with line, branch, and function totals printed to stdout after execution |
 | lcov | `--coverage-format=lcov --coverage-output=<file>` | Standard lcov tracefile with `DA:`, `BRDA:`, `FN:`, and `FNDA:` entries |
 | JSON | `--coverage-format=json --coverage-output=<file>` | Istanbul-compatible JSON including `f` and `fnMap` function data |
+
+### Report Path Keys
+
+Every file gets exactly **one** record per run, under one canonical path,
+however it was reached. A file can enter a run by two routes at once — named on
+the command line, and imported by another file — and each route knows it by a
+different spelling: the command line supplies whatever the user typed, import
+resolution produces an absolute path. Keying by the incoming spelling used to
+split such a file into two records whose hits were never added together.
+
+The canonical form, applied uniformly to the console summary, the lcov `SF:`
+records, and the JSON keys and `"path"` fields:
+
+- **repo-relative** when the file is under a repository root — the nearest
+  ancestor directory holding a `.git` entry (a directory in a normal clone, a
+  file in a linked worktree or submodule);
+- **absolute** when the file is outside any repository;
+- **`/` as the separator, on every platform**, including Windows.
+
+Repo-relative is what the consumers want: Codecov matches report paths against
+repository paths, so a build machine's absolute paths need a `fixes` mapping
+while repo-relative paths match directly, and genhtml resolves relative paths
+against its working directory. Forward slashes matter because imports resolve
+through FPC's `ExpandFileName` — on Windows the raw paths carry backslashes,
+which genhtml and Codecov commonly mishandle in an `SF:` record.
+
+Canonicalization is textual (`ExpandFileName` plus the repo-root trim), so it
+does not resolve symlinks: two spellings that differ by a symlinked ancestor —
+macOS's `/var` → `/private/var`, say — still produce separate records. Reaching
+the same file by two genuinely different real paths is not something normal
+entry-plus-import runs do.
+
+Paths with no on-disk backing are identities, not files — `<stdin>`, and
+multifile section names such as `<stdin>[part1]` — and are left verbatim. Report
+keys are never used to read source: the tracker remembers the native on-disk
+path behind each key, so reports still render source when the process runs from
+outside the repository.
 
 ### JSX Source Map Integration
 
