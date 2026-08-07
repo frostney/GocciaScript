@@ -159,10 +159,16 @@ type
     // exit; the alternative of TerminateThread is unsafe across FPC
     // platforms and would corrupt the shared GC's bookkeeping anyway.
     FAbandoned: array of Boolean;
-    { The single shared stop signal handed to every worker.  Owned here,
-      but leaked instead of freed once a worker has been abandoned —
-      that thread is still alive in native code and still reads it. }
+    { The stop signal handed to every worker of the CURRENT run.  Owned
+      here and freed with the pool, except once a worker has been
+      abandoned: that thread is still alive and still reads the flag it
+      was given, so the flag is leaked to it and the next run starts on a
+      replacement.  One flag therefore never spans an abandonment. }
     FCancelFlag: TGocciaCancellationFlag;
+    { True while FCancelFlag belongs to an abandoned worker rather than to
+      this pool.  Set when a run abandons, cleared when the next run mints
+      a replacement — so the destructor frees exactly the flags the pool
+      still owns and never one a zombie is reading. }
     FCancelFlagLeaked: Boolean;
     FCancelOnError: Boolean;
     FEnableCoverage: Boolean;
@@ -488,8 +494,10 @@ end;
 destructor TGocciaThreadPool.Destroy;
 begin
   // Same rule as the work queue: an abandoned worker is still running and
-  // still calls IsCancelled on this flag, so freeing it would be a
-  // use-after-free.  Leak it and let the OS reclaim it on process exit.
+  // still calls IsCancelled on the flag it holds, so freeing that one
+  // would be a use-after-free.  Leak it and let the OS reclaim it on
+  // process exit.  Any flag replaced by a later run was already leaked
+  // under this same rule, so every owned flag is freed exactly once.
   if not FCancelFlagLeaked then
     FCancelFlag.Free;
   FCancelFlag := nil;
@@ -513,7 +521,20 @@ var
   StalledFiles: TGocciaWorkerResultArray;
   SnapshotResults: TGocciaWorkerResultArray;
 begin
-  FCancelFlag.Reset;
+  if FCancelFlagLeaked then
+  begin
+    // A previous run abandoned a worker that is still alive and still
+    // reads the flag it was handed.  That flag now belongs to the zombie
+    // alone — resetting it here would re-arm a signal the zombie can
+    // still fire: if it ever unsticks, finishes its old file and fails,
+    // its Cancel would land on THIS run and skip files that were never
+    // asked to stop.  Give it up for good (it is leaked, never freed)
+    // and dispatch this run on a fresh flag we own.
+    FCancelFlag := TGocciaCancellationFlag.Create;
+    FCancelFlagLeaked := False;
+  end
+  else
+    FCancelFlag.Reset;
   FMemoryStats := DefaultCLIJSONMemoryStats;
   AnyAbandoned := False;
   FileCount := AFiles.Count;
@@ -639,11 +660,12 @@ begin
         'they will be reclaimed on process exit.');
 
     // Only free the queue when no abandoned workers remain — they
-    // still hold a reference to it via FQueue.  The shared cancellation
-    // flag is reached the same way (FCancelFlag), so an abandonment also
-    // takes it out of this pool's ownership for good; a later RunAll on
-    // this pool keeps using the same flag object, exactly as before, so
-    // the zombie never sees freed memory.
+    // still hold a reference to it via FQueue.  Each run builds its own
+    // queue, so a leaked one belongs to that run's zombie and can never
+    // reach a later run.  The cancellation flag is different: it is a
+    // pool field that every run would otherwise share, so marking it
+    // leaked here only settles ownership for THIS run — the next RunAll
+    // replaces it with a fresh instance rather than reusing it.
     if AnyAbandoned then
       FCancelFlagLeaked := True
     else

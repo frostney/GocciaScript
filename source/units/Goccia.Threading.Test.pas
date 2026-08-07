@@ -30,6 +30,7 @@ type
     procedure TestPoolCancelOnErrorStopsOnFailure;
     procedure TestCancellationFlagLifecycle;
     procedure TestPoolCancelOnErrorBoundsWorkAcrossWorkers;
+    procedure TestResumedAbandonedWorkerCannotCancelLaterRun;
     procedure TestPoolResetsCancelledBetweenRuns;
     procedure TestPoolHandlesEmptyFileList;
     procedure TestPoolSingleWorker;
@@ -87,7 +88,53 @@ type
     procedure CountingFailWorker(const AFileName: string;
       const AIndex: Integer; out AConsoleOutput: string;
       out AErrorMessage: string; AData: Pointer);
+    { Blocks on 'stall.js' until the main thread releases it, then fails —
+      the shape the watchdog abandons, resuming only once a later run is
+      already in flight. }
+    procedure StallThenFailWorker(const AFileName: string;
+      const AIndex: Integer; out AConsoleOutput: string;
+      out AErrorMessage: string; AData: Pointer);
+    { Deliberately slow so a later run stays in flight long enough for a
+      resumed zombie's cancellation to be observable if it leaked in. }
+    procedure SlowCountingWorker(const AFileName: string;
+      const AIndex: Integer; out AConsoleOutput: string;
+      out AErrorMessage: string; AData: Pointer);
   end;
+
+{ Release gate for the stalling worker.  Guarded rather than a bare
+  Boolean: this file is the regression suite for an unsynchronised
+  cross-thread flag, so the test must not reintroduce one. }
+var
+  GStallReleased: Boolean;
+
+procedure ReleaseStalledWorker;
+begin
+  CriticalSectionEnter(GWorkerLock);
+  try
+    GStallReleased := True;
+  finally
+    CriticalSectionLeave(GWorkerLock);
+  end;
+end;
+
+function StallReleased: Boolean;
+begin
+  CriticalSectionEnter(GWorkerLock);
+  try
+    Result := GStallReleased;
+  finally
+    CriticalSectionLeave(GWorkerLock);
+  end;
+end;
+
+{ Worker-thread exits observed so far.  SentinelWorkerCleanup increments
+  this from every worker's ShutdownThreadRuntime, which is the only
+  externally visible signal that an abandoned thread has fully retired. }
+function WorkerExitCount: Integer;
+begin
+  ReadMemoryBarrier;
+  Result := GSentinelWorkerCount;
+end;
 
 procedure TTestWorkerHost.CountingWorker(const AFileName: string;
   const AIndex: Integer; out AConsoleOutput: string;
@@ -133,6 +180,36 @@ begin
     AErrorMessage := '';
 end;
 
+procedure TTestWorkerHost.StallThenFailWorker(const AFileName: string;
+  const AIndex: Integer; out AConsoleOutput: string;
+  out AErrorMessage: string; AData: Pointer);
+begin
+  AConsoleOutput := '';
+  AErrorMessage := '';
+  if AFileName <> 'stall.js' then
+    Exit;
+  // Stand in for a worker wedged in native code: the pool's watchdog sees
+  // no progress and abandons this thread while it is still alive here.
+  while not StallReleased do
+    Sleep(1);
+  AErrorMessage := 'deliberate failure after resuming';
+end;
+
+procedure TTestWorkerHost.SlowCountingWorker(const AFileName: string;
+  const AIndex: Integer; out AConsoleOutput: string;
+  out AErrorMessage: string; AData: Pointer);
+begin
+  AConsoleOutput := '';
+  AErrorMessage := '';
+  Sleep(5);
+  CriticalSectionEnter(GWorkerLock);
+  try
+    Inc(GWorkerCallCount);
+  finally
+    CriticalSectionLeave(GWorkerLock);
+  end;
+end;
+
 { TTestThreading }
 
 procedure TTestThreading.SetupTests;
@@ -152,6 +229,12 @@ begin
   Test('Pool single worker processes all files', TestPoolSingleWorker);
   Test('ThreadCleanupRegistry runs registered callbacks', TestThreadCleanupRegistryRunsRegistered);
   Test('ShutdownThreadRuntime drains registry once per worker', TestShutdownThreadRuntimeDrainsRegistryPerWorker);
+  { Registered last: this is the only case that deliberately strands a
+    worker thread.  It joins that thread before returning, but running it
+    after the registry tests keeps their exact sentinel counts out of
+    reach of a straggler even if that join ever regressed. }
+  Test('Resumed abandoned worker cannot cancel a later run',
+    TestResumedAbandonedWorkerCannotCancelLaterRun);
 end;
 
 procedure TTestThreading.TestWorkQueueDrainsAllItems;
@@ -419,6 +502,90 @@ begin
       finally
         Pool.Free;
       end;
+    end;
+  finally
+    Files.Free;
+    Host.Free;
+  end;
+end;
+
+{ Regression guard for cancellation-flag ownership across an abandonment.
+  The flag is a pool field, so a run that abandons a worker used to hand
+  the zombie a pointer to the very object the NEXT run would reset and
+  reuse.  A zombie that later unsticks, finishes its old file and fails
+  then calls Cancel — landing on an unrelated run and silently skipping
+  files nobody asked to stop.  Here run 1 strands a worker, run 2 starts
+  on what must be a fresh flag, and the zombie is released so its failure
+  lands squarely inside run 2.  If the two runs share a flag, run 2's
+  files are marked cancelled instead of executed and both assertions
+  below fail loudly. }
+procedure TTestThreading.TestResumedAbandonedWorkerCannotCancelLaterRun;
+const
+  STALL_WATCHDOG_MS = 200;
+  LATER_RUN_FILES = 200;
+  { Run 1 spawns 2 workers (one strands, one finds no work) and run 2
+    spawns 2 more; every worker thread increments the exit counter from
+    ShutdownThreadRuntime as it retires. }
+  EXPECTED_WORKER_EXITS = 4;
+var
+  Pool: TGocciaThreadPool;
+  Files: TStringList;
+  Host: TTestWorkerHost;
+  ExitBaseline, I, WaitedMs: Integer;
+  AllSucceeded: Boolean;
+begin
+  ResetWorkerState;
+  GStallReleased := False;
+  ExitBaseline := WorkerExitCount;
+  Host := TTestWorkerHost.Create;
+  Files := TStringList.Create;
+  try
+    { Run 1 — the only file wedges its worker, so the watchdog abandons
+      that thread and RunAll returns while it is still alive.  Its queue
+      is left empty, so once released it finishes and exits promptly. }
+    Files.Add('stall.js');
+    Pool := TGocciaThreadPool.Create(2);
+    try
+      // CancelOnError must be armed here: the zombie captured this at
+      // construction, and it is what makes its later failure call Cancel.
+      Pool.CancelOnError := True;
+      Pool.RunAll(Files, Host.StallThenFailWorker, nil, STALL_WATCHDOG_MS);
+
+      { Run 2 — a long, entirely healthy batch on the same pool. }
+      Files.Clear;
+      for I := 1 to LATER_RUN_FILES do
+        Files.Add('later' + IntToStr(I) + '.js');
+      ResetWorkerState;
+
+      // Let the zombie resume and fail while run 2 is in flight.
+      ReleaseStalledWorker;
+      Pool.RunAll(Files, Host.SlowCountingWorker);
+
+      // Nothing in run 2 failed, so nothing may have cancelled it.
+      Expect<Boolean>(Pool.Cancelled).ToBe(False);
+      // Every file must have reached the callback — a leaked-in cancel
+      // shows up as dequeued-but-skipped files, not as an error.
+      Expect<Integer>(GWorkerCallCount).ToBe(LATER_RUN_FILES);
+      AllSucceeded := True;
+      for I := 0 to High(Pool.Results) do
+        if not Pool.Results[I].Success then
+          AllSucceeded := False;
+      Expect<Boolean>(AllSucceeded).ToBe(True);
+
+      { Retire the zombie before leaving: it drains the shared cleanup
+        registry on its way out, and the registry tests assert exact
+        counts.  Its exit is observable only through that same counter. }
+      WaitedMs := 0;
+      while (WorkerExitCount - ExitBaseline < EXPECTED_WORKER_EXITS)
+          and (WaitedMs < 5000) do
+      begin
+        Sleep(10);
+        Inc(WaitedMs, 10);
+      end;
+      Expect<Integer>(WorkerExitCount - ExitBaseline)
+        .ToBe(EXPECTED_WORKER_EXITS);
+    finally
+      Pool.Free;
     end;
   finally
     Files.Free;
