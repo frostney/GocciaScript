@@ -7004,4 +7004,237 @@ console.log("TestRunner: vitest compatibility shim and its off-switch...");
   }
 }
 
+// ============================================================================
+// goccia:test availability per binary
+// ============================================================================
+//
+// The testing API has two halves that install independently: the `goccia:test`
+// module namespace, which every host attaching the loader runtime profile
+// gets, and the testing globals, which only GocciaTestRunner injects. These
+// cases pin both directions — the import must work where the profile is
+// applied, and no binary but the runner may grow a testing global.
+
+// containsLine anchors on a preceding newline, so it cannot match the first
+// line of a capture. These scripts print their assertions first, so match
+// against a leading newline.
+const containsOwnLine = (s: string, value: string): boolean =>
+  containsLine(`\n${s}`, value);
+
+console.log("Loader: goccia:test is importable and injects no globals...");
+{
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "self-test.js");
+    writeFileSync(
+      file,
+      [
+        'import { describe, test, expect, mock, runTests } from "goccia:test";',
+        "",
+        "// Importing the module must not publish anything globally.",
+        'for (const name of ["describe", "test", "it", "expect", "mock", "spyOn",',
+        '  "beforeAll", "beforeEach", "afterEach", "afterAll", "onTestFinished",',
+        '  "runTests", "__gocciaTest262Describe", "__gocciaTest262Test"]) {',
+        "  if (globalThis[name] !== undefined)",
+        '    throw new Error("leaked testing global: " + name);',
+        "}",
+        "",
+        'describe("loader suite", () => {',
+        '  test("registers and runs", () => { expect(1 + 1).toBe(2); });',
+        '  test("mock is wired to the same registry", () => {',
+        "    const fn = mock(() => 42);",
+        "    expect(fn()).toBe(42);",
+        "    expect(fn).toHaveBeenCalledTimes(1);",
+        "  });",
+        "});",
+        "",
+        "// Nothing drives execution in a loader script: runTests is the entry point.",
+        "const results = runTests({ showTestResults: false });",
+        'console.log("passed:" + results.passed);',
+        'console.log("failed:" + results.failed);',
+        'console.log("run:" + results.totalRunTests);',
+        "",
+      ].join("\n"),
+    );
+
+    for (const [label, extraArgs] of [
+      ["interpreted", []],
+      ["bytecode", ["--mode=bytecode"]],
+    ] as const) {
+      const proc = Bun.spawnSync([LOADER, file, ...extraArgs], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 0)
+        throw new Error(`Loader goccia:test (${label}) exited ${proc.exitCode}:\n${out}`);
+      if (!containsOwnLine(out, "passed:2"))
+        throw new Error(`Loader goccia:test (${label}) should run 2 tests:\n${out}`);
+      if (!containsOwnLine(out, "failed:0"))
+        throw new Error(`Loader goccia:test (${label}) should report no failures:\n${out}`);
+      if (!containsOwnLine(out, "run:2"))
+        throw new Error(`Loader goccia:test (${label}) should report 2 run tests:\n${out}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Loader: a failing imported suite is only fatal if the script says so...");
+{
+  const tmp = makeTmp();
+  try {
+    // A loader script has no runner to interpret results, so runTests reports
+    // rather than decides. The process status stays 0 unless the script throws.
+    const reporting = join(tmp, "reporting.js");
+    writeFileSync(
+      reporting,
+      [
+        'import { test, expect, runTests } from "goccia:test";',
+        'test("fails", () => { expect(1).toBe(2); });',
+        "const results = runTests({ showTestResults: false });",
+        'console.log("failed:" + results.failed);',
+        "",
+      ].join("\n"),
+    );
+    const lenient = Bun.spawnSync([LOADER, reporting], { stdout: "pipe", stderr: "pipe" });
+    const lenientOut = lenient.stdout.toString() + lenient.stderr.toString();
+    if (lenient.exitCode !== 0)
+      throw new Error(`A failing imported suite should not fail the loader by itself, got ${lenient.exitCode}:\n${lenientOut}`);
+    if (!containsOwnLine(lenientOut, "failed:1"))
+      throw new Error(`Loader runTests should report the failure:\n${lenientOut}`);
+
+    const strict = join(tmp, "strict.js");
+    writeFileSync(
+      strict,
+      [
+        'import { test, expect, runTests } from "goccia:test";',
+        'test("fails", () => { expect(1).toBe(2); });',
+        "const results = runTests({ showTestResults: false });",
+        'if (results.failed > 0) throw new Error(results.failed + " test(s) failed");',
+        "",
+      ].join("\n"),
+    );
+    const failing = Bun.spawnSync([LOADER, strict], { stdout: "pipe", stderr: "pipe" });
+    const failingOut = failing.stdout.toString() + failing.stderr.toString();
+    if (failing.exitCode === 0)
+      throw new Error(`Throwing on a failed suite should fail the loader:\n${failingOut}`);
+    if (!failingOut.includes("1 test(s) failed"))
+      throw new Error(`Loader should surface the thrown suite error:\n${failingOut}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Loader: the bare vitest specifier stays unresolvable...");
+{
+  // The compatibility shim is a GocciaTestRunner default, not a loader one.
+  // Having goccia:test available must not drag `vitest` along with it.
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "vitest-import.js");
+    writeFileSync(file, 'import { vi } from "vitest";\n');
+    const proc = Bun.spawnSync([LOADER, file], { stdout: "pipe", stderr: "pipe" });
+    const out = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode === 0)
+      throw new Error(`Loader should not resolve the bare vitest specifier:\n${out}`);
+    if (!out.includes('Cannot resolve bare module specifier "vitest"'))
+      throw new Error(`Loader should report the vitest specifier as unresolvable:\n${out}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Bare Loader: goccia:test is absent along with the rest of the runtime...");
+{
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "import-test.js");
+    writeFileSync(file, 'import { expect } from "goccia:test";\n');
+    const proc = Bun.spawnSync([BARE, file], { stdout: "pipe", stderr: "pipe" });
+    const out = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode === 0)
+      throw new Error(`Bare loader attaches no runtime, so goccia:test must not resolve:\n${out}`);
+    if (!out.includes('Cannot resolve bare module specifier "goccia:test"'))
+      throw new Error(`Bare loader should report goccia:test as unresolvable:\n${out}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: goccia:test is importable and injects no globals...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(
+      seed,
+      JSON.stringify({
+        files: [
+          {
+            path: "/main.js",
+            text: [
+              'import { test, expect, runTests } from "goccia:test";',
+              'if (globalThis.describe !== undefined) throw new Error("leaked describe");',
+              'if (globalThis.expect !== undefined) throw new Error("leaked expect");',
+              'test("runs inside the sandbox", () => { expect(2 + 2).toBe(4); });',
+              "const results = runTests({ showTestResults: false });",
+              'console.log("sandbox-passed:" + results.passed);',
+            ].join("\n"),
+          },
+        ],
+      }),
+    );
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const out = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode !== 0)
+      throw new Error(`SandboxRunner goccia:test exited ${proc.exitCode}:\n${out}`);
+    if (!containsOwnLine(out, "sandbox-passed:1"))
+      throw new Error(`SandboxRunner should run the imported suite:\n${out}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("TestRunner: globals stay injected and share the imported registry...");
+{
+  const tmp = makeTmp();
+  try {
+    const suitePath = join(tmp, "globals.test.js");
+    writeFileSync(
+      suitePath,
+      [
+        'import { expect as importedExpect, test as importedTest } from "goccia:test";',
+        'describe("runner globals", () => {',
+        '  test("the whole API is global", () => {',
+        '    for (const name of ["describe", "test", "it", "expect", "mock", "spyOn",',
+        '      "beforeAll", "beforeEach", "afterEach", "afterAll", "onTestFinished",',
+        '      "runTests", "__gocciaTest262Describe", "__gocciaTest262Test"]) {',
+        '      expect(typeof globalThis[name]).toBe("function");',
+        "    }",
+        "  });",
+        '  test("import and global are the same function", () => {',
+        "    expect(importedExpect).toBe(globalThis.expect);",
+        "    expect(importedTest).toBe(globalThis.test);",
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    const proc = Bun.spawnSync([TESTRUNNER, suitePath, "--no-progress"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const out = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode !== 0)
+      throw new Error(`TestRunner globals regression exited ${proc.exitCode}:\n${out}`);
+    if (!out.includes("Passed: 2"))
+      throw new Error(`TestRunner should keep injecting the testing globals:\n${out}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("\nAll test-cli-apps.ts tests passed.");

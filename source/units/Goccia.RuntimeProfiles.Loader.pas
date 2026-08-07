@@ -7,7 +7,13 @@ interface
 uses
   Goccia.Runtime;
 
-procedure ApplyLoaderRuntimeProfile(const ARuntime: TGocciaRuntimeCore);
+{ ATestingModule registers the `goccia:test` module namespace without
+  injecting any testing global. Every host that attaches this profile gets the
+  importable API; only GocciaTestRunner adds the globals on top, and it passes
+  False here so its own TGocciaTestingLibraryRuntimeExtension owns the single
+  `goccia:test` registration. }
+procedure ApplyLoaderRuntimeProfile(const ARuntime: TGocciaRuntimeCore;
+  const ATestingModule: Boolean = True);
 
 implementation
 
@@ -19,6 +25,7 @@ uses
   Goccia.RuntimeExtensions.JSONL,
   Goccia.RuntimeExtensions.Performance,
   Goccia.RuntimeExtensions.Semver,
+  Goccia.RuntimeExtensions.TestingLibrary,
   Goccia.RuntimeExtensions.TextAssets,
   Goccia.RuntimeExtensions.TextEncoding,
   Goccia.RuntimeExtensions.TOML,
@@ -26,7 +33,8 @@ uses
   Goccia.RuntimeExtensions.URL,
   Goccia.RuntimeExtensions.YAML;
 
-procedure ApplyLoaderRuntimeProfile(const ARuntime: TGocciaRuntimeCore);
+procedure ApplyLoaderRuntimeProfile(const ARuntime: TGocciaRuntimeCore;
+  const ATestingModule: Boolean);
 begin
   ARuntime.Install(TGocciaConsoleRuntimeExtension.Create);
   ARuntime.Engine.BuiltinGlobals.RegisterUtilityRuntimeGlobals;
@@ -42,6 +50,8 @@ begin
   ARuntime.Install(TGocciaTextEncodingRuntimeExtension.Create);
   ARuntime.Install(TGocciaURLRuntimeExtension.Create);
   ARuntime.Install(TGocciaFetchRuntimeExtension.Create);
+  if ATestingModule then
+    ARuntime.Install(TGocciaTestingLibraryRuntimeExtension.CreateModuleOnly);
 end;
 
 end.
