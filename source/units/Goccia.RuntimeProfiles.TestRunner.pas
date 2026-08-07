@@ -36,9 +36,13 @@ procedure ApplyTestRunnerRuntimeProfile(const ARuntime: TGocciaRuntimeCore;
   const ASnapshotFormatter: IGocciaSnapshotFormatter;
   const AVitestCompat: Boolean); overload;
 begin
-  ApplyLoaderRuntimeProfile(ARuntime);
+  { The loader profile's module-only testing install is suppressed here: the
+    runner needs the globals half too, and both halves come from one extension
+    so that globals and `goccia:test` drive the same registry. Installing the
+    loader's copy as well would register `goccia:test` twice. }
+  ApplyLoaderRuntimeProfile(ARuntime, False);
   ARuntime.Install(TGocciaTestingLibraryRuntimeExtension.Create(
-    ASnapshotHost, ASnapshotUpdateMode, ASnapshotFormatter));
+    ASnapshotHost, ASnapshotUpdateMode, ASnapshotFormatter, True));
   { A suite written against Vitest imports from a bare `vitest` specifier,
     which resolves to nothing otherwise. Installed by default so such a suite
     runs unchanged; --no-vitest-compat leaves the specifier unresolvable. }

@@ -42,13 +42,51 @@ Nested `describe` blocks compose their suite names with ` > ` separators. In the
 
 ### Importing the API
 
-`GocciaTestRunner` injects the whole testing API as globals, matching Vitest's `globals: true`, so a suite needs no imports. The same API is also importable from `goccia:test`, which is the canonical spelling in documentation and the only way to reach it outside the runner — an embedder that installs the testing extension gets the module, not the globals:
+`GocciaTestRunner` injects the whole testing API as globals, matching Vitest's `globals: true`, so a suite needs no imports. The same API is also importable from `goccia:test`, which is the canonical spelling in documentation:
 
 ```javascript
 import { describe, expect, mock, spyOn, test } from "goccia:test";
 ```
 
-The module exports everything the globals do — `describe`, `test`, `it`, `expect`, `beforeAll`, `beforeEach`, `afterEach`, `afterAll`, `onTestFinished`, `mock`, and `spyOn` — and the imported `test` and `describe` carry their modifiers (`.each`, `.skip`, `.only`, `.todo`). Both spellings drive the same registry, so a mock created through the import is assertable through the global `expect` and the other way round.
+The module exports everything the globals do — `describe`, `test`, `it`, `expect`, `beforeAll`, `beforeEach`, `afterEach`, `afterAll`, `onTestFinished`, `mock`, `spyOn`, and `runTests` — and the imported `test` and `describe` carry their modifiers (`.each`, `.skip`, `.only`, `.todo`). Both spellings drive the same registry, so a mock created through the import is assertable through the global `expect` and the other way round.
+
+#### Availability per binary
+
+The module namespace and the globals install independently. Every host that applies the loader runtime profile registers `goccia:test`; only the runner adds the globals on top.
+
+| Binary | `goccia:test` | Testing globals |
+|---|---|---|
+| `GocciaTestRunner` | Yes | Yes |
+| `GocciaScriptLoader` | Yes | No |
+| `GocciaREPL` | Yes | No |
+| `GocciaSandboxRunner` | Yes | No |
+| `GocciaBenchmarkRunner` | Yes | No |
+| `GocciaScriptLoaderBare` | No — attaches no runtime | No |
+
+An embedder gets the same split: `ApplyLoaderRuntimeProfile` registers the module only, and `TGocciaTestingLibraryRuntimeExtension.CreateModuleOnly` is the direct spelling for hosts that assemble their own profile. Passing `AInjectGlobals = True` to that extension's ordinary constructor is what makes the globals appear, and the runner is the only host that does it.
+
+Outside the runner the assertions object is built lazily, on the first import that resolves. A script that never imports `goccia:test` pays nothing for its availability.
+
+#### Running an imported suite outside the runner
+
+`describe` and `test` only *register* — they never execute on their own. Under `GocciaTestRunner` the runner drives execution after the file is evaluated. A loader script has no such driver, so registrations would simply sit in the root suite and nothing would run. `runTests` is the entry point that closes that gap:
+
+```javascript
+import { expect, runTests, test } from "goccia:test";
+
+test("adds", () => {
+  expect(1 + 1).toBe(2);
+});
+
+const results = runTests({ showTestResults: false });
+if (results.failed > 0) {
+  throw new Error(`${results.failed} test(s) failed`);
+}
+```
+
+`runTests` executes everything registered so far, prints its report unless `showTestResults` is `false`, and returns a result object with `passed`, `failed`, `skipped`, `totalTests`, `totalRunTests`, `assertions`, `duration`, `suiteErrors`, `failedTests`, and `summary`. It accepts `{ exitOnFirstFailure, showTestResults }`.
+
+`runTests` reports; it does not decide. A failing test does not by itself change the loader's exit status, because the loader has no notion of a test outcome — the script owns that decision, and throwing on `results.failed > 0` as above is what turns a failure into a non-zero exit. A second `runTests` call resets the statistics and re-runs the whole registry, not just the tests registered since the previous call — registration accumulates for the life of the script.
 
 ### Available Assertions
 
@@ -479,6 +517,8 @@ Running `tests/` under Vitest needs a local Vitest install and a config that poi
 ### The `vitest` compatibility shim
 
 A suite written against Vitest imports from a bare `vitest` specifier, which would otherwise resolve to nothing. `GocciaTestRunner` ships a small shim inside the binary and resolves that specifier to it by default, so such a suite runs unchanged. Pass `--no-vitest-compat` to leave the specifier unresolvable.
+
+The shim is a runner default only. It does not follow `goccia:test` to the other binaries: in `GocciaScriptLoader`, `GocciaREPL`, `GocciaSandboxRunner`, and `GocciaBenchmarkRunner` a bare `vitest` import fails to resolve even though `goccia:test` imports fine. Resolving a bare specifier that the host cannot honor is a Vitest-shaped promise, and only the runner is Vitest-shaped. There is no CLI flag or configuration key that turns it on elsewhere; an embedder that wants it installs `TGocciaVitestCompatRuntimeExtension` alongside the testing extension.
 
 The shim re-exports `goccia:test` and adds the `vi` namespace. `vi` exists only in the shim — the engine itself never grows one:
 
