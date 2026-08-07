@@ -64,9 +64,19 @@ describe("toMatchObject", () => {
   });
 
   test("handles cyclic values", () => {
-    // KNOWN DIVERGENCE for the cyclic ARRAY case (outside the audit corpus,
-    // pending a decision): vitest does not terminate on it. The cyclic Set,
-    // Map and object cases match vitest.
+    // DELIBERATE DIVERGENCE for the cyclic ARRAY case, documented in
+    // docs/testing-api.md alongside the DOMException one.
+    //
+    // Vitest 4.1.10 does not hang here — it dies with "RangeError: Maximum
+    // call stack size exceeded" in a few milliseconds, and it does so in BOTH
+    // polarities (`toMatchObject` and `not.toMatchObject` alike), so there is
+    // no vitest verdict to copy. Only its top-level array walk lacks the cycle
+    // guard: the same cyclic array nested one level inside an object matches
+    // cleanly, as do cyclic objects, Sets and Maps.
+    //
+    // Goccia terminates and reports a match, which is exactly the answer
+    // vitest itself gives whenever it manages to complete. Reproducing a stack
+    // overflow to be bug-compatible would be strictly worse for users.
     const leftArray = [];
     leftArray.push(leftArray);
     const rightArray = [];
@@ -90,6 +100,15 @@ describe("toMatchObject", () => {
     const rightObject = {};
     rightObject.self = rightObject;
     expect(leftObject).toMatchObject(rightObject);
+  });
+
+  test("terminates on a cyclic array nested inside an object", () => {
+    // The nested shape is the one vitest also completes, and it agrees: match.
+    const leftArray = [];
+    leftArray.push(leftArray);
+    const rightArray = [];
+    rightArray.push(rightArray);
+    expect({ v: leftArray }).toMatchObject({ v: rightArray });
   });
 
   test("requires an expected undefined key to be present", () => {
