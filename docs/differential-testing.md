@@ -52,15 +52,16 @@ oracle instead of inheriting a default.
 | `b-modules.test.js` | language | skip | gate |
 | `c-builtins.test.js` | language | skip | gate |
 | `d-matchers.test.js` | matcher | gate | advisory |
-| `e-mocks.goccia.test.js` | mocks | skip | skip |
+| `e-mocks.test.js` | mocks | gate | skip |
 | `f-lifecycle.test.js` | lifecycle | gate | advisory |
 | `g-filehook.test.js` | lifecycle | gate | advisory |
 
-`e-mocks.goccia.test.js` is compared between the two goccia modes only: it
-reaches for the `mock` and `spyOn` globals, which neither external runtime
-injects. Its upgrade to a three-way battery waits on the planned `goccia:test`
-module and shipped vitest-compat shim, which will let it import `vi` from a bare
-`vitest` specifier under every runtime.
+`e-mocks.test.js` imports `vi` from a bare `vitest` specifier, which Vitest
+resolves to itself and goccia resolves to its bundled compatibility shim, so the
+battery gates against Vitest across both goccia modes. Bun stays skipped: it
+injects its own `vi` under `bun:test`, but importing the real `vitest` package
+from a file run by `bun test` drops bun's injected globals and the file fails on
+`describe is not defined`, so there is no bun-runnable spelling of it.
 
 ## The three invariants
 
@@ -149,7 +150,8 @@ A battery that is handed to an external runtime uses only the
 `describe`/`test`/`expect` and hook globals that every runtime injects; a
 battery named `*.goccia.test.js` is the exception, because it deliberately
 reaches for goccia-only globals, and it is classified `skip` for both external
-runtimes. A `.test.ts` battery works under bun because bun transpiles TypeScript
+runtimes. A battery that needs the mocking API instead imports `vi` from
+`vitest`, which every runtime that can run it resolves for itself. A `.test.ts` battery works under bun because bun transpiles TypeScript
 natively while goccia parses annotations as types-as-comments.
 
 The pinned oracle lives in the same directory: `scripts/differential/package.json`

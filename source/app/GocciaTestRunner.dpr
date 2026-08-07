@@ -140,6 +140,7 @@ type
     FDescribeTimeout: TIntegerOption;
     FUpdateSnapshots: TFlagOption;
     FUpdateSnapshotsAlias: TFlagOption;
+    FNoVitestCompat: TFlagOption;
     function SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
     procedure InitializeRuntime(const AEngine: TGocciaEngine;
       const AEnableHostFileLoading: Boolean = True);
@@ -337,6 +338,8 @@ begin
   FUpdateSnapshots.ShortName := 'u';
   FUpdateSnapshotsAlias := AddFlag('update',
     'Alias for --update-snapshots');
+  FNoVitestCompat := AddFlag('no-vitest-compat',
+    'Do not resolve the bare "vitest" specifier to the bundled compatibility shim');
 end;
 
 function TTestRunnerApp.SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
@@ -656,7 +659,7 @@ begin
   Runtime := AttachRuntime(AEngine, AEnableHostFileLoading);
   ApplyTestRunnerRuntimeProfile(Runtime,
     TGocciaTestRunnerSnapshotHost.Create(AEngine.SourcePath),
-    SnapshotUpdateMode);
+    SnapshotUpdateMode, nil, not FNoVitestCompat.Present);
 end;
 
 procedure TTestRunnerApp.WarmUpRuntime(const AEngine: TGocciaEngine);

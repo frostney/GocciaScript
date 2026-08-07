@@ -8,7 +8,9 @@ uses
   Goccia.Builtins.Testing.SnapshotFormatting,
   Goccia.Builtins.Testing.Snapshots,
   Goccia.Builtins.TestingLibrary,
-  Goccia.Runtime;
+  Goccia.Runtime,
+  Goccia.RuntimeExtensions.NamespaceModule,
+  Goccia.Values.Primitives;
 
 type
   TGocciaTestingLibraryRuntimeExtension = class(TGocciaRuntimeExtension)
@@ -17,6 +19,8 @@ type
     FSnapshotHost: IGocciaSnapshotHost;
     FSnapshotUpdateMode: TGocciaSnapshotUpdateMode;
     FSnapshotFormatter: IGocciaSnapshotFormatter;
+    FTestModule: TGocciaRuntimeNamespaceModuleRegistration;
+    function MaterializeTestModule: TGocciaValue;
   public
     constructor Create(const ASnapshotHost: IGocciaSnapshotHost = nil;
       const ASnapshotUpdateMode: TGocciaSnapshotUpdateMode = sumNew;
@@ -51,10 +55,23 @@ begin
     Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
     FSnapshotHost, FSnapshotUpdateMode, FSnapshotFormatter);
   Runtime.RegisterRuntimeGlobalName('TestAssertions');
+
+  { The same helpers the runner exposes as globals are also importable, so a
+    suite can name what it uses and so embedders that do not install globals
+    still reach the testing API. }
+  FTestModule := TGocciaRuntimeNamespaceModuleRegistration.Create(Runtime,
+    'goccia:test', MaterializeTestModule);
+end;
+
+function TGocciaTestingLibraryRuntimeExtension.MaterializeTestModule: TGocciaValue;
+begin
+  Result := FBuiltinTestAssertions.BuiltinObject;
 end;
 
 procedure TGocciaTestingLibraryRuntimeExtension.Detach;
 begin
+  FTestModule.Free;
+  FTestModule := nil;
   FBuiltinTestAssertions.Free;
   FBuiltinTestAssertions := nil;
   inherited;
