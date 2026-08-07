@@ -15,6 +15,7 @@ uses
   Goccia.Builtins.Benchmark,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  Goccia.CLI.Stdin,
   Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
   CLI.ConfigFile,
@@ -246,6 +247,7 @@ type
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); override;
     function UsageLine: string; override;
+    function StdinUsage: TGocciaStdinUsage; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
   end;
 
@@ -1056,6 +1058,11 @@ end;
 function TBenchmarkRunnerApp.UsageLine: string;
 begin
   Result := '[path...|-] [options]';
+end;
+
+function TBenchmarkRunnerApp.StdinUsage: TGocciaStdinUsage;
+begin
+  Result := suStdinDefault;
 end;
 
 procedure TBenchmarkRunnerApp.Configure;
