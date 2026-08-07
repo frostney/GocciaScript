@@ -3576,6 +3576,38 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
       expected: { passed: 1, failed: 1, skipped: 2 },
     },
     {
+      // A throwing beforeAll is a suite-setup failure, counted once for the
+      // suite rather than once per test. This engine still runs the suite's
+      // tests after the hook fails, so both tests below report their pass --
+      // bun instead skips them and reports only the hook failure. The
+      // ok/exit contract matches bun either way.
+      name: "a beforeAll hook throws",
+      source: [
+        'describe("suite", () => {',
+        '  beforeAll(() => { throw new Error("beforeAll exploded"); });',
+        '  test("t1", () => { expect(1).toBe(1); });',
+        '  test("t2", () => { expect(2).toBe(2); });',
+        "});",
+        "",
+      ].join("\n"),
+      expected: { passed: 2, failed: 1, skipped: 0 },
+    },
+    {
+      // A throwing afterAll is a teardown failure: the suite's tests have
+      // already run and keep their passes, and the hook adds one failure.
+      // This matches bun's counts exactly.
+      name: "an afterAll hook throws",
+      source: [
+        'describe("suite", () => {',
+        '  afterAll(() => { throw new Error("afterAll exploded"); });',
+        '  test("t1", () => { expect(1).toBe(1); });',
+        '  test("t2", () => { expect(2).toBe(2); });',
+        "});",
+        "",
+      ].join("\n"),
+      expected: { passed: 2, failed: 1, skipped: 0 },
+    },
+    {
       // A describe callback that throws is a registration failure, not a test
       // failure: the remaining describes still register and run, so the
       // passing suite below still reports its pass. The error is counted as a
@@ -3680,6 +3712,59 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
         throw new Error(`${label} the throwing file should report failed=1, got ${badResult?.failed}`);
       if (!badResult?.failedTests?.some((t: string) => t.includes('Describe "boom"')))
         throw new Error(`${label} should keep the describe error visible in failedTests, got: ${JSON.stringify(badResult?.failedTests)}`);
+      if (goodResult?.ok !== true)
+        throw new Error(`${label} the clean sibling file should stay ok, got ${goodResult?.ok}`);
+    } finally {
+      clean(tmp);
+    }
+  }
+
+  // The worker-merge path aggregates counts separately from the single-file
+  // path, so pin the hook-failure accounting there too: the file with the
+  // throwing beforeAll must flip its own ok and the top-level ok, while the
+  // clean sibling file stays ok and the merged `failed` carries the hook.
+  {
+    const label = `TestRunner --output=json --jobs (${modeLabel}) when a beforeAll hook throws`;
+    console.log(`TestRunner: --output=json counts a throwing beforeAll under --jobs (${modeLabel})...`);
+    const tmp = makeTmp();
+    try {
+      const bad = join(tmp, "test-hook-throws.js");
+      const good = join(tmp, "test-hook-clean.js");
+      writeFileSync(bad, [
+        'describe("suite", () => {',
+        '  beforeAll(() => { throw new Error("beforeAll exploded"); });',
+        '  test("t1", () => { expect(1).toBe(1); });',
+        "});",
+        "",
+      ].join("\n"));
+      writeFileSync(good, 'describe("clean", () => { test("passes", () => { expect(2).toBe(2); }); });\n');
+
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), bad, good, "--jobs=2", "--no-progress", "--output=json", ...modeArgs],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      if (proc.exitCode === 0)
+        throw new Error(`${label} should exit non-zero because a beforeAll hook threw, got 0`);
+
+      const stdout = proc.stdout.toString();
+      let json: any;
+      try {
+        json = JSON.parse(stdout);
+      } catch {
+        throw new Error(`${label} should produce parseable JSON on stdout, got: ${stdout.slice(0, 200)}`);
+      }
+
+      if (json.ok !== false) throw new Error(`${label} ok should be false, got ${json.ok}`);
+      if (json.failed !== 1) throw new Error(`${label} merged failed should be 1, got ${json.failed}`);
+
+      const badResult = json.files?.find((f: any) => String(f.fileName).endsWith("test-hook-throws.js"));
+      const goodResult = json.files?.find((f: any) => String(f.fileName).endsWith("test-hook-clean.js"));
+      if (badResult?.ok !== false)
+        throw new Error(`${label} the hook-failing file should report ok=false, got ${badResult?.ok}`);
+      if (badResult?.failed !== 1)
+        throw new Error(`${label} the hook-failing file should report failed=1, got ${badResult?.failed}`);
+      if (!badResult?.failedTests?.some((t: string) => t.includes('Hook "beforeAll"')))
+        throw new Error(`${label} should keep the hook error visible in failedTests, got: ${JSON.stringify(badResult?.failedTests)}`);
       if (goodResult?.ok !== true)
         throw new Error(`${label} the clean sibling file should stay ok, got ${goodResult?.ok}`);
     } finally {
