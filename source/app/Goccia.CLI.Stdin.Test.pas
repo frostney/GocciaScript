@@ -26,6 +26,7 @@ type
     procedure TestUsageNoteMentionsREPLOnlyWhenRequested;
     procedure TestNoInputMessageIsEmptyForNonStdinCommands;
     procedure TestNoInputMessageNamesTheThreeOuts;
+    procedure TestEndOfInputKeysMatchThePlatformConsole;
   public
     procedure SetupTests; override;
   end;
@@ -57,6 +58,8 @@ begin
     TestNoInputMessageIsEmptyForNonStdinCommands);
   Test('No-input message names the three ways out',
     TestNoInputMessageNamesTheThreeOuts);
+  Test('End-of-input guidance matches the platform console',
+    TestEndOfInputKeysMatchThePlatformConsole);
 end;
 
 { Argument order: AHasInputArgs, AHasExplicitStdinArg, AStdinIsTerminal. }
@@ -125,7 +128,7 @@ begin
   Note := StdinUsageNote('GocciaTestRunner', suStdinDefault);
   Expect<Boolean>(ContainsStr(Note, 'GocciaTestRunner')).ToBe(True);
   Expect<Boolean>(ContainsStr(Note, '"-"')).ToBe(True);
-  Expect<Boolean>(ContainsStr(Note, 'Ctrl-D')).ToBe(True);
+  Expect<Boolean>(ContainsStr(Note, EndOfInputKeys)).ToBe(True);
   Expect<Boolean>(ContainsStr(Note, 'exits 2')).ToBe(True);
 end;
 
@@ -155,6 +158,19 @@ begin
     .ToBe(True);
   Expect<Boolean>(ContainsStr(Message, '"-"')).ToBe(True);
   Expect<Boolean>(ContainsStr(Message, 'GocciaREPL')).ToBe(True);
+  Expect<Boolean>(ContainsStr(Message, EndOfInputKeys)).ToBe(True);
+end;
+
+{ The guidance has to name the key sequence the local console actually
+  honours: a Unix terminal ends input on Ctrl-D, a Windows console on
+  Ctrl-Z followed by Enter. }
+procedure TCLIStdinTests.TestEndOfInputKeysMatchThePlatformConsole;
+begin
+{$IFDEF MSWINDOWS}
+  Expect<string>(EndOfInputKeys).ToBe('Ctrl-Z then Enter');
+{$ELSE}
+  Expect<string>(EndOfInputKeys).ToBe('Ctrl-D');
+{$ENDIF}
 end;
 
 begin

@@ -58,9 +58,20 @@ describe("goccia:test", () => {
   });
 
   test("imported helpers drive the same registry as the globals", () => {
+    // Both directions across the import boundary. Asserting an imported mock
+    // with the imported expect only proves the module is self-consistent —
+    // it would still pass if the module got its own private registry.
     const viaImport = mock();
     viaImport("value");
+    globalThis.expect(viaImport).toHaveBeenCalledWith("value");
 
-    expect(viaImport).toHaveBeenCalledWith("value");
+    const viaGlobal = globalThis.mock();
+    viaGlobal("other");
+    expect(viaGlobal).toHaveBeenCalledWith("other");
+
+    // The two spellings are the same function object, not two wrappers over
+    // separate state.
+    expect(globalThis.mock).toBe(mock);
+    expect(globalThis.expect).toBe(expect);
   });
 });

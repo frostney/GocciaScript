@@ -17,6 +17,41 @@ describe("deep equality semantics", () => {
     expect(new Set([1, 2])).toEqual(new Set([2, 1]));
   });
 
+  test("toStrictEqual reads an accessor-backed constructor", () => {
+    // The strict type check compares `actual.constructor` against
+    // `expected.constructor` as ordinary property reads, so a prototype
+    // accessor runs inside the matcher. Pinned here because the alternative
+    // (a type identity resolved without reading the property) is a
+    // plausible-looking change that would silently diverge from vitest.
+    class Fresh {
+      constructor(x) {
+        this.x = x;
+      }
+    }
+    Object.defineProperty(Fresh.prototype, "constructor", {
+      get() {
+        return { fresh: true };
+      },
+      configurable: true,
+    });
+    expect(new Fresh(1)).not.toStrictEqual(new Fresh(1));
+    expect(new Fresh(1)).toEqual({ x: 1 });
+
+    class Stable {
+      constructor(x) {
+        this.x = x;
+      }
+    }
+    Object.defineProperty(Stable.prototype, "constructor", {
+      get() {
+        return Stable;
+      },
+      configurable: true,
+    });
+    expect(new Stable(1)).toStrictEqual(new Stable(1));
+    expect(new Stable(1)).not.toStrictEqual({ x: 1 });
+  });
+
   test("toEqual distinguishes Map from plain object", () => {
     expect(new Map([["a", 1]])).not.toEqual({ a: 1 });
   });

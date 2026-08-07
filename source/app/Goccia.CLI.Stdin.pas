@@ -55,6 +55,13 @@ type
 function DecideStdinInput(const AHasInputArgs, AHasExplicitStdinArg,
   AStdinIsTerminal: Boolean): TGocciaStdinDecision;
 
+{ The key sequence that ends terminal input on this platform, for use in
+  user-facing guidance.  A Unix console signals EOF on Ctrl-D, but the
+  Windows console needs Ctrl-Z followed by Enter — telling a Windows user
+  to press Ctrl-D leaves the command looking hung, which is the exact
+  failure the no-argument rule exists to prevent. }
+function EndOfInputKeys: string;
+
 { True when standard input is attached to an interactive terminal.
   Never mutates console state — unlike IsColorTerminal, which enables
   virtual-terminal processing on the Windows output handle. }
@@ -92,6 +99,15 @@ begin
   if AStdinIsTerminal then
     Exit(sdShowUsage);
   Result := sdReadStdin;
+end;
+
+function EndOfInputKeys: string;
+begin
+{$IFDEF MSWINDOWS}
+  Result := 'Ctrl-Z then Enter';
+{$ELSE}
+  Result := 'Ctrl-D';
+{$ENDIF}
 end;
 
 function IsInputTerminal: Boolean;
@@ -135,7 +151,8 @@ begin
       'so' + sLineBreak +
     '  ' + AProgramName + ' prints this help and exits ' +
       IntToStr(EXIT_CODE_USAGE) + ' instead.  Pass "-" to' + sLineBreak +
-    '  read from the terminal anyway (finish with Ctrl-D).' + sLineBreak;
+    '  read from the terminal anyway (finish with ' + EndOfInputKeys + ').' +
+      sLineBreak;
 
   if AUsage = suStdinDefaultWithREPL then
     Result := Result +
@@ -154,8 +171,8 @@ begin
     '  - pass a file or directory path' + sLineBreak +
     '  - pipe or redirect a script:  ' + AProgramName + ' < app.js' +
       sLineBreak +
-    '  - pass "-" to read from the terminal (finish with Ctrl-D)' +
-      sLineBreak;
+    '  - pass "-" to read from the terminal (finish with ' +
+      EndOfInputKeys + ')' + sLineBreak;
 
   if AUsage = suStdinDefaultWithREPL then
     Result := Result +

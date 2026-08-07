@@ -55,7 +55,7 @@ The module exports everything the globals do — `describe`, `test`, `it`, `expe
 ```javascript
 // Equality
 expect(value).toBe(expected);           // Strict equality (===)
-expect(value).toEqual(expected);        // Deep equality, ignoring undefined-valued keys and trailing undefined items
+expect(value).toEqual(expected);        // Deep equality, ignoring undefined-valued keys and array sparseness
 expect(value).toStrictEqual(expected);  // Deep equality, type and undefined sensitive
 
 // Type checks
