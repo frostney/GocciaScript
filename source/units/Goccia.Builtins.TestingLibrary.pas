@@ -168,9 +168,19 @@ type
       PassedTests: Integer;
       FailedTests: Integer;
       SkippedTests: Integer;
+      { Suite-level errors: a describe callback that threw during
+        registration, or a failed beforeAll/afterAll hook. Vitest keeps
+        these out of the test counts (the affected tests report as
+        skipped) and fails the FILE instead, so they are tracked apart
+        from FailedTests and surface as the `suiteErrors` field. }
+      SuiteErrors: Integer;
       CurrentSuiteName: string;
       CurrentTestName: string;
       CurrentTestHasFailures: Boolean;
+      { Message of the first failure recorded for the current test or
+        hook. Hook/describe detail strings surface it so the reported
+        payload keeps the error text both oracles print. }
+      CurrentFailureMessage: string;
       CurrentTestIsSkipped: Boolean;
       CurrentTestAssertionCount: Integer;  // Assertions in current test
       TotalAssertionCount: Integer;        // Total assertions across all tests
@@ -222,9 +232,13 @@ type
       const AHasFocusedEntries: Boolean): Boolean;
     function SuiteHasRunnableEntries(const ASuite: TGocciaTestSuite;
       const AHasFocusedEntries: Boolean): Boolean;
+    { ASetupFailed: an ancestor suite's beforeAll hook threw. Its tests
+      and every descendant's report as skipped, and neither beforeAll nor
+      afterAll runs for those descendants. }
     procedure ExecuteSuite(const ASuite: TGocciaTestSuite;
       const AHasFocusedEntries, AExitOnFirstFailure: Boolean;
-      const AFailedTestDetails: TStringList; var AShouldStop: Boolean);
+      const AFailedTestDetails: TStringList; var AShouldStop: Boolean;
+      const ASetupFailed: Boolean = False);
     function CountRegisteredTests(const ASuite: TGocciaTestSuite): Integer;
     procedure CollectSuiteNames(const ASuite: TGocciaTestSuite;
       const ANames: TStringList);
@@ -3504,6 +3518,52 @@ begin
       TGocciaTestSuite(ASuite.Entries[I]).ClearRegisteredContent;
 end;
 
+{ ': <message>' when there is one, otherwise ''. Keeps the detail
+  string readable when a hook failed without a usable payload. }
+function FormatHookFailureSuffix(const AMessage: string): string;
+begin
+  if AMessage = '' then
+    Result := ''
+  else
+    Result := ': ' + AMessage;
+end;
+
+{ Error objects render as an empty object literal through
+  FormatForDisplay because their data lives on non-enumerable own
+  properties, which loses exactly the text both oracles print. Prefer
+  'Name: message' when the value looks like an Error, and fall back to
+  the generic formatter otherwise. }
+function DescribeThrownValue(const AValue: TGocciaValue): string;
+var
+  NameValue, MessageValue: TGocciaValue;
+  NameText, MessageText: string;
+begin
+  Result := '';
+  if not Assigned(AValue) then
+    Exit;
+
+  if AValue is TGocciaObjectValue then
+  begin
+    NameValue := AValue.GetProperty('name');
+    MessageValue := AValue.GetProperty('message');
+    if Assigned(MessageValue) and not (MessageValue is TGocciaUndefinedLiteralValue) then
+    begin
+      MessageText := MessageValue.ToStringLiteral.Value;
+      NameText := '';
+      if Assigned(NameValue) and not (NameValue is TGocciaUndefinedLiteralValue) then
+        NameText := NameValue.ToStringLiteral.Value;
+      if (NameText <> '') and (MessageText <> '') then
+        Exit(NameText + ': ' + MessageText);
+      if MessageText <> '' then
+        Exit(MessageText);
+      if NameText <> '' then
+        Exit(NameText);
+    end;
+  end;
+
+  Result := FormatForDisplay(AValue);
+end;
+
 procedure TGocciaTestAssertions.BuildNestedRegistrations(
   const ASuite: TGocciaTestSuite; const AFailedTestDetails: TStringList);
 var
@@ -3543,20 +3603,22 @@ begin
             if not FSuppressOutput then
               WriteLn('Error in describe block "', ChildSuite.GetFullName,
                 '": ', E.Message);
-            AFailedTestDetails.Add('Describe "' + ChildSuite.GetFullName +
-              '": ' + E.Message);
-            { Count the registration failure, do not re-raise. Re-raising
+            { E.Message is empty for a thrown JS value; the payload lives
+              on TGocciaThrowValue.Value. }
+            if (E is TGocciaThrowValue) and Assigned(TGocciaThrowValue(E).Value) then
+              AFailedTestDetails.Add('Describe "' + ChildSuite.GetFullName +
+                '": ' + DescribeThrownValue(TGocciaThrowValue(E).Value))
+            else
+              AFailedTestDetails.Add('Describe "' + ChildSuite.GetFullName +
+                '": ' + E.Message);
+            { Record the registration failure, do not re-raise. Re-raising
               would discard every result already collected for this file;
-              the remaining describes still register and run. But the
-              detail string alone is invisible to the runner: `failed` is
-              published from this counter, and both the envelope `ok` and
-              the process exit code derive from `failed` alone. Without
-              the bump a file whose describe threw reports ok/exit 0 and
-              CI misses it. Bumping TotalTests too keeps
-              passed+failed+skipped consistent with totalRunTests, the
-              same pairing snapshot-finalization errors use below. }
-            Inc(FTestStats.TotalTests);
-            Inc(FTestStats.FailedTests);
+              the remaining describes still register and run. Vitest keeps
+              a suite-level error out of the test counts and fails the
+              FILE instead, so this counts as a suite error rather than a
+              failed test -- `suiteErrors` makes the file not-ok, which is
+              what drives the envelope `ok` and the exit code. }
+            Inc(FTestStats.SuiteErrors);
           end;
         end;
       finally
@@ -3690,7 +3752,8 @@ end;
 
 procedure TGocciaTestAssertions.ExecuteSuite(const ASuite: TGocciaTestSuite;
   const AHasFocusedEntries, AExitOnFirstFailure: Boolean;
-  const AFailedTestDetails: TStringList; var AShouldStop: Boolean);
+  const AFailedTestDetails: TStringList; var AShouldStop: Boolean;
+  const ASetupFailed: Boolean);
 var
   I: Integer;
   Entry: TGocciaRegisteredEntry;
@@ -3703,13 +3766,21 @@ var
   FailureRecorded: Boolean;
   EffectiveSuiteName: string;
   HookFailed: Boolean;
+  HookMessage: string;
   RunSuiteHooks: Boolean;
+  SetupFailed: Boolean;
 begin
+  { Inherited from an ancestor whose beforeAll threw; set below when this
+    suite's own beforeAll fails. }
+  SetupFailed := ASetupFailed;
   if AShouldStop then
     Exit;
 
   EffectiveSuiteName := ASuite.GetFullName;
-  RunSuiteHooks := not IsSuiteSkipped(ASuite) and
+  { ASetupFailed (not SetupFailed) gates both hooks: a suite whose own
+    beforeAll throws still runs its afterAll, but a descendant of a
+    failed suite runs neither. Both match Vitest. }
+  RunSuiteHooks := not ASetupFailed and not IsSuiteSkipped(ASuite) and
     SuiteHasRunnableEntries(ASuite, AHasFocusedEntries);
 
   { The per-describe deadline is no longer pushed here.  It now lives in
@@ -3725,21 +3796,18 @@ begin
     ResetCurrentTestState;
     RunCallbacks(ASuite.BeforeAllCallbacks);
     HookFailed := FTestStats.CurrentTestHasFailures;
+    HookMessage := FTestStats.CurrentFailureMessage;
     ResetCurrentTestState;
     if HookFailed then
     begin
       AFailedTestDetails.Add('Hook "beforeAll" in suite "' + EffectiveSuiteName +
-        '" failed');
-      { Count the hook failure. The detail string alone is invisible to
-        the runner: `failed` is published from this counter, and both the
-        envelope `ok` and the process exit code derive from `failed`
-        alone, so without the bump a failing beforeAll reported ok/exit 0
-        and CI missed it. bun books a failed suite hook as one synthetic
-        unnamed test failure, so a single pair here matches its counts.
-        Bumping TotalTests too keeps passed+failed+skipped consistent
-        with totalRunTests, as snapshot finalization errors do. }
-      Inc(FTestStats.TotalTests);
-      Inc(FTestStats.FailedTests);
+        '" failed' + FormatHookFailureSuffix(HookMessage));
+      { Record the hook failure as a suite error, not a failed test:
+        Vitest reports this suite's tests as SKIPPED with fail=0 and
+        fails the file instead. SetupFailed below carries that decision
+        into the entry loop and into descendant suites. }
+      Inc(FTestStats.SuiteErrors);
+      SetupFailed := True;
       if AExitOnFirstFailure then
       begin
         AShouldStop := True;
@@ -3757,7 +3825,7 @@ begin
     if Entry is TGocciaTestSuite then
     begin
       ExecuteSuite(TGocciaTestSuite(Entry), AHasFocusedEntries,
-        AExitOnFirstFailure, AFailedTestDetails, AShouldStop);
+        AExitOnFirstFailure, AFailedTestDetails, AShouldStop, SetupFailed);
       Continue;
     end;
 
@@ -3784,7 +3852,8 @@ begin
           WriteLn('    📝 ', TestCase.Name, ': TODO');
       end;
     end
-    else if TestCase.IsSkipped or IsSuiteSkipped(TestCase.ParentSuite) or
+    else if SetupFailed or TestCase.IsSkipped or
+      IsSuiteSkipped(TestCase.ParentSuite) or
       (AHasFocusedEntries and not IsTestSelected(TestCase, True)) then
     begin
       FTestStats.CurrentTestIsSkipped := True;
@@ -3821,7 +3890,16 @@ begin
           PushTimeoutScope(tsTest, GTestRunnerTestTimeoutMs);
           try
             try
-              if Assigned(TestCase.TestFunction) then
+              { A failed beforeEach leaves the fixture the body depends on
+                broken, so the body must not run -- Vitest and bun both
+                skip it and still fail the test. RunCallbacks routes a
+                throwing/rejecting hook through AssertionFailed, so this
+                flag is exactly "a beforeEach for this test failed". The
+                counts are unchanged; only the side effects of executing
+                a body against a broken fixture go away. }
+              if FTestStats.CurrentTestHasFailures then
+                TestResult := TGocciaUndefinedLiteralValue.UndefinedValue
+              else if Assigned(TestCase.TestFunction) then
                 TestResult := TestCase.TestFunction.Call(TestCase.TestArguments,
                   TGocciaUndefinedLiteralValue.UndefinedValue)
               else
@@ -3975,18 +4053,17 @@ begin
     ResetCurrentTestState;
     RunCallbacks(ASuite.AfterAllCallbacks);
     HookFailed := FTestStats.CurrentTestHasFailures;
+    HookMessage := FTestStats.CurrentFailureMessage;
     ResetCurrentTestState;
     if HookFailed then
     begin
       AFailedTestDetails.Add('Hook "afterAll" in suite "' + EffectiveSuiteName +
-        '" failed');
-      { Same accounting gap as the beforeAll hook above: without the
-        counter bump a failing afterAll left ok/exit 0. The suite's tests
-        have already run and keep their results -- only the teardown
-        failure is added, matching bun, which reports the suite's passes
-        plus one synthetic failure for the throwing hook. }
-      Inc(FTestStats.TotalTests);
-      Inc(FTestStats.FailedTests);
+        '" failed' + FormatHookFailureSuffix(HookMessage));
+      { Teardown failure: the suite's tests have already run and keep
+        their results, so nothing is skipped here. Like the beforeAll
+        hook, Vitest leaves this out of the test counts (fail=0) and
+        fails the file, which `suiteErrors` expresses. }
+      Inc(FTestStats.SuiteErrors);
       if AExitOnFirstFailure then
         AShouldStop := True;
     end;
@@ -4025,9 +4102,11 @@ begin
   FTestStats.PassedTests := 0;
   FTestStats.FailedTests := 0;
   FTestStats.SkippedTests := 0;
+  FTestStats.SuiteErrors := 0;
   FTestStats.CurrentSuiteName := '';
   FTestStats.CurrentTestName := '';
   FTestStats.CurrentTestHasFailures := False;
+  FTestStats.CurrentFailureMessage := '';
   FTestStats.CurrentTestIsSkipped := False;
   FTestStats.CurrentTestAssertionCount := 0;
   FTestStats.TotalAssertionCount := 0;
@@ -4062,7 +4141,7 @@ begin
               Promise := TGocciaPromiseValue(CallbackResult);
               WaitForFetchPromise(Promise);
               if Promise.State = gpsRejected then
-                AssertionFailed('callback execution', 'Async callback rejected: ' + FormatForDisplay(Promise.PromiseResult))
+                AssertionFailed('callback execution', 'Async callback rejected: ' + DescribeThrownValue(Promise.PromiseResult))
               else if Promise.State = gpsPending then
                 AssertionFailed('callback execution', 'Async callback Promise still pending after microtask drain');
             end
@@ -4080,6 +4159,12 @@ begin
             execution keep running past the limit. }
           on E: TGocciaTimeoutError do
             raise;
+          { A thrown JS value carries its payload on TGocciaThrowValue.Value;
+            E.Message is empty for it, which dropped the text both oracles
+            print. }
+          on E: TGocciaThrowValue do
+            AssertionFailed('callback execution',
+              'Callback threw an exception: ' + DescribeThrownValue(E.Value));
           on E: Exception do
             AssertionFailed('callback execution', 'Callback threw an exception: ' + E.Message);
         end;
@@ -4094,6 +4179,7 @@ procedure TGocciaTestAssertions.StartTest(const ATestName: string);
 begin
   FTestStats.CurrentTestName := ATestName;
   FTestStats.CurrentTestHasFailures := False;
+  FTestStats.CurrentFailureMessage := '';
   FTestStats.CurrentTestIsSkipped := False;
   FTestStats.CurrentTestAssertionCount := 0;
 end;
@@ -4116,6 +4202,7 @@ end;
 procedure TGocciaTestAssertions.ResetCurrentTestState;
 begin
   FTestStats.CurrentTestHasFailures := False;
+  FTestStats.CurrentFailureMessage := '';
   FTestStats.CurrentTestAssertionCount := 0;
 end;
 
@@ -4130,6 +4217,11 @@ begin
   Inc(FTestStats.CurrentTestAssertionCount);
   Inc(FTestStats.TotalAssertionCount);
   FTestStats.CurrentTestHasFailures := True;
+  { Keep the first message: later assertions in the same hook must not
+    overwrite the one that actually explains the failure. Recorded
+    before the suppress-output exit so JSON runs keep it too. }
+  if FTestStats.CurrentFailureMessage = '' then
+    FTestStats.CurrentFailureMessage := AMessage;
 
   if FSuppressOutput then
     Exit;
@@ -4702,6 +4794,8 @@ begin
       FTestStats.FailedTests));
     ResultObj.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(
       FTestStats.SkippedTests));
+    ResultObj.AssignProperty('suiteErrors', TGocciaNumberLiteralValue.Create(
+      FTestStats.SuiteErrors));
     ResultObj.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(
       FTestStats.TotalAssertionCount));
     ResultObj.AssignProperty('duration', TGocciaNumberLiteralValue.Create(
