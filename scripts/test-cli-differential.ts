@@ -92,6 +92,25 @@ const CLASSIFICATION: Record<string, Classification> = {
   "e-mocks.test.js": { kind: "mocks", bun: "skip", vitest: "gate" },
   "f-lifecycle.test.js": { kind: "lifecycle", bun: "advisory", vitest: "gate" },
   "g-filehook.test.js": { kind: "lifecycle", bun: "advisory", vitest: "gate" },
+  // Module mocking. Vitest gates: `vi.mock` hoisting, factory semantics, and
+  // mock/unmock source ordering are testing-API semantics where Vitest-exact
+  // behaviour is the product target. Bun is skipped for the same reason as
+  // e-mocks — the battery imports `vi` from a bare `vitest` specifier, and
+  // importing the real `vitest` package from a `bun test` file drops bun's
+  // injected globals and dies on `describe is not defined`.
+  //
+  // The battery deliberately exercises only the subset both runtimes agree on.
+  // Automock, `vi.doMock`, and `importActual`-based partial mocks are omitted
+  // because goccia throws on them by design; a spread-based partial mock would
+  // pass under vitest and fail under goccia, which is a documented gap rather
+  // than a divergence the harness should rediscover on every run.
+  "h-modulemock.test.js": { kind: "mocks", bun: "skip", vitest: "gate" },
+  // The companion file for cross-file isolation: it mocks nothing and must see
+  // the real module even though h-modulemock mocks it in the same `vitest run`.
+  // It imports no `vi`, so bun could in principle run it — but pairing it with
+  // its mocking half is the whole point, and that half cannot run under bun, so
+  // bun would be checking an isolation property whose other half never ran.
+  "i-modulemock-isolation.test.js": { kind: "mocks", bun: "skip", vitest: "gate" },
 };
 
 type Verdict = {

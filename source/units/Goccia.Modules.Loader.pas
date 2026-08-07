@@ -693,9 +693,18 @@ var
   AliasCandidate, FileSystemAddress: string;
 
   procedure WarnOnCollision(const AVirtualAddress: string);
+  var
+    Definition: TGocciaVirtualModuleDefinition;
   begin
     if not Assigned(FResolver) or
        FWarnedVirtualCollisions.ContainsKey(AVirtualAddress) then
+      Exit;
+    { A `vi.mock` injection shadows the real file deliberately — that is the
+      feature, not a collision — so warning about it would put a line of noise
+      in front of every mocked test file. Every other virtual module keeps the
+      warning. }
+    if FVirtualModules.TryGetDefinition(AVirtualAddress, Definition) and
+       (Definition.Provenance = VIRTUAL_MODULE_PROVENANCE_VITEST_MOCK) then
       Exit;
     try
       FileSystemAddress := FResolver.Resolve(AModulePath,

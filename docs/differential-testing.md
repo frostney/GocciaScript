@@ -55,6 +55,22 @@ oracle instead of inheriting a default.
 | `e-mocks.test.js` | mocks | gate | skip |
 | `f-lifecycle.test.js` | lifecycle | gate | advisory |
 | `g-filehook.test.js` | lifecycle | gate | advisory |
+| `h-modulemock.test.js` | mocks | gate | skip |
+| `i-modulemock-isolation.test.js` | mocks | gate | skip |
+
+`h-modulemock.test.js` and `i-modulemock-isolation.test.js` are a pair: the
+first mocks `./mods/mockable.js` with a `vi.mock` factory, the second mocks
+nothing and must still see the real module. Under Vitest both files run in one
+`vitest run`, so the pair is a genuine cross-file check of Vitest's per-file
+mock registry. Under goccia the harness spawns one process per battery file, so
+goccia's half is trivially isolated — the load-bearing goccia isolation test is
+the file pair under `tests/language/modules/`, where the whole directory runs in
+a single runner process with parallel worker threads and a leaking registry
+would actually surface. The battery asserts only the subset both runtimes agree
+on; automock, `vi.doMock`, and spread-based partial mocks are left out because
+goccia throws on them by design, and a spread partial mock would pass under
+Vitest and fail here — a documented gap, not a divergence worth rediscovering on
+every run. See [Testing API](testing-api.md) for the supported surface.
 
 `e-mocks.test.js` imports `vi` from a bare `vitest` specifier, which Vitest
 resolves to itself and goccia resolves to its bundled compatibility shim, so the
