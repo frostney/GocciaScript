@@ -1,10 +1,10 @@
 # Differential Testing
 
-*Four-runtime battery comparison: goccia interpreted, goccia bytecode, vitest as the testing-API oracle, and bun as the ECMAScript oracle.*
+*Four-runtime differential suite comparison: goccia interpreted, goccia bytecode, vitest as the testing-API oracle, and bun as the ECMAScript oracle.*
 
 ## Executive Summary
 
-- **Four runtimes per file** — every battery under `scripts/differential/` runs under `GocciaTestRunner`, `GocciaTestRunner --mode=bytecode`, and whichever external runtimes its classification names
+- **Four runtimes per file** — every differential suite under `scripts/differential/` runs under `GocciaTestRunner`, `GocciaTestRunner --mode=bytecode`, and whichever external runtimes its classification names
 - **Two oracles, different jobs** — vitest decides testing-API semantics (matchers, hooks, accounting) because being an exact Vitest drop-in *is* the product; bun decides ECMAScript semantics, and is advisory everywhere else
 - **Names *and* counts** — two runtimes can fail the same number of different tests, and can agree on which tests fail while running different numbers of them, so every comparison checks both
 - **A timeout is a divergence** — a hang is a finding, never an infrastructure error
@@ -15,10 +15,10 @@
 Bun was the lane's only oracle at first, on the assumption that it stands in for
 Vitest semantics. A three-way audit of 223 probes measured that assumption and
 refuted it: across 178 matcher probes, bun and vitest disagreed on 30 — in both
-directions, and on exactly the questions a matcher battery exists to settle
-(deep equality of errors, `.toThrow()` argument forms, trailing `undefined` in
-arrays, prototype handling under `.toStrictEqual()`, `Set` and `Map` subset
-matching). A runtime that disagrees with the target one time in six cannot
+directions, and on exactly the questions a matcher differential suite exists to
+settle (deep equality of errors, `.toThrow()` argument forms, trailing
+`undefined` in arrays, prototype handling under `.toStrictEqual()`, `Set` and
+`Map` subset matching). A runtime that disagrees with the target one time in six cannot
 decide what the target requires.
 
 So the oracles are split by what they are actually authoritative about:
@@ -30,23 +30,23 @@ So the oracles are split by what they are actually authoritative about:
   silently redefines what the engine must do.
 - **Bun is normative for ECMAScript.** For syntax, module semantics, and
   built-ins, bun is a sound, fast oracle and the testing API is incidental to
-  what the battery asserts.
-- **Bun is advisory for testing-API batteries.** Its verdicts are still printed
-  there, marked `~~~ ADVISORY(non-gating)`, because drift against the fast proxy
-  is worth seeing. It never changes the exit code.
+  what the differential suite asserts.
+- **Bun is advisory for testing-API differential suites.** Its verdicts are
+  still printed there, marked `~~~ ADVISORY(non-gating)`, because drift against
+  the fast proxy is worth seeing. It never changes the exit code.
 
-Cost is not the reason for the split: vitest runs all of the eligible batteries
-in about a second, in a single process.
+Cost is not the reason for the split: vitest runs all of the eligible
+differential suites in about a second, in a single process.
 
-## Battery classification
+## Differential suite classification
 
-Every battery is registered in the `CLASSIFICATION` table in
+Every differential suite is registered in the `CLASSIFICATION` table in
 `scripts/test-cli-differential.ts`, which names its kind and the role each
-external runtime plays for it. A battery that is not registered is reported as
+external runtime plays for it. A suite that is not registered is reported as
 `UNCLASSIFIED` and fails the lane — adding one forces a deliberate choice of
 oracle instead of inheriting a default.
 
-| Battery | Kind | Vitest | Bun |
+| Differential suite | Kind | Vitest | Bun |
 |---|---|---|---|
 | `a-typesyntax.test.ts` | language | skip | gate |
 | `b-modules.test.js` | language | skip | gate |
@@ -62,26 +62,27 @@ oracle instead of inheriting a default.
 first mocks `./mods/mockable.js` with a `vi.mock` factory, the second mocks
 nothing and must still see the real module. Under Vitest both files run in one
 `vitest run`, so the pair is a genuine cross-file check of Vitest's per-file
-mock registry. Under goccia the harness spawns one process per battery file, so
-goccia's half is trivially isolated — the load-bearing goccia isolation test is
-the file pair under `tests/language/modules/`, where the whole directory runs in
-a single runner process with parallel worker threads and a leaking registry
-would actually surface. The battery asserts only the subset both runtimes agree
-on; automock, `vi.doMock`, and spread-based partial mocks are left out because
+mock registry. Under goccia the harness spawns one process per differential
+suite, so goccia's half is trivially isolated — the load-bearing goccia
+isolation test is the file pair under `tests/language/modules/`, where the whole
+directory runs in a single runner process with parallel worker threads and a
+leaking registry would actually surface. The differential suite asserts only the
+subset both runtimes agree on; automock, `vi.doMock`, and spread-based partial
+mocks are left out because
 goccia throws on them by design, and a spread partial mock would pass under
 Vitest and fail here — a documented gap, not a divergence worth rediscovering on
 every run. See [Testing API](testing-api.md) for the supported surface.
 
 `e-mocks.test.js` imports `vi` from a bare `vitest` specifier, which Vitest
 resolves to itself and goccia resolves to its bundled compatibility shim, so the
-battery gates against Vitest across both goccia modes. Bun stays skipped: it
-injects its own `vi` under `bun:test`, but importing the real `vitest` package
+differential suite gates against Vitest across both goccia modes. Bun stays
+skipped: it injects its own `vi` under `bun:test`, but importing the real `vitest` package
 from a file run by `bun test` drops bun's injected globals and the file fails on
 `describe is not defined`, so there is no bun-runnable spelling of it.
 
 ## The three invariants
 
-Each battery file produces a verdict per runtime. A file is reported as
+Each differential suite produces a verdict per runtime. A file is reported as
 divergent when a gating invariant breaks.
 
 **1. Mode parity.** The interpreter and the bytecode VM must agree on the set of
@@ -94,16 +95,16 @@ not the other. The two directions are reported separately as
 `MODE-PARITY BROKEN: interp-only fails:` and `bytecode-only fails:`. An oracle is
 only consulted once goccia agrees with goccia.
 
-**2. Vitest as the testing-API oracle.** For a battery vitest gates, the set of
-failed test names under goccia must equal the set under vitest; the pass, fail
+**2. Vitest as the testing-API oracle.** For a differential suite vitest gates,
+the set of failed test names under goccia must equal the set under vitest; the pass, fail
 and skip counts must match both goccia modes; and the two must agree on whether
 the *file* failed. Skip counts matter here in a way they do not elsewhere: the
 difference between a test that failed and a test that was never entered is
 exactly what hook semantics are about, and a runner that failed two tests where
 vitest skipped them has the same pass count and the wrong behaviour.
 
-**3. Bun as the ECMAScript oracle.** For a battery bun gates, the failed-name
-sets and the pass/fail counts must match, held against the interpreter *and* the
+**3. Bun as the ECMAScript oracle.** For a differential suite bun gates, the
+failed-name sets and the pass/fail counts must match, held against the interpreter *and* the
 bytecode mode. Bun's human summary reports neither skips nor a file-level
 verdict, so those two dimensions are compared for vitest only. Where bun is
 advisory the same comparison runs and the same messages are printed, without
@@ -120,7 +121,7 @@ not compare `suiteErrors` at all. It compares the dimension both express: whethe
 the file failed. A suite error that goccia recorded and vitest did not — or the
 reverse — shows up as `vitest file verdict differs`.
 
-## The lifecycle batteries
+## The lifecycle differential suites
 
 `f-lifecycle.test.js` covers hook and describe accounting: the skip cascade under
 a failed `beforeAll` (including into nested suites and from an `async` hook that
@@ -153,26 +154,27 @@ defect this lane exists to surface, and treating it as infrastructure noise woul
 hide it. The counterpart is that the timeout must stay generous enough that a
 slow but healthy run is never mistaken for a hang.
 
-## Battery layout
+## Differential suite layout
 
-Batteries live in `scripts/differential/`, alongside the harness that drives
-them, with shared import fixtures in `scripts/differential/mods/`. They are
-deliberately outside `tests/`: `GocciaTestRunner` scans only the paths it is
-given on the command line, so batteries that assert not-yet-fixed behavior — or
-that hang the engine — never join the main suite run. The same placement keeps
-them out of `scripts/check-test-structure.ts`.
+Differential suites live in `scripts/differential/`, alongside the harness that
+drives them, with shared import fixtures in `scripts/differential/mods/`. They
+are deliberately outside `tests/`: `GocciaTestRunner` scans only the paths it is
+given on the command line, so suites that assert not-yet-fixed behavior — or
+that hang the engine — never join the main `tests/` run. The same placement
+keeps them out of `scripts/check-test-structure.ts`.
 
-A battery that is handed to an external runtime uses only the
+A differential suite that is handed to an external runtime uses only the
 `describe`/`test`/`expect` and hook globals that every runtime injects; a
-battery named `*.goccia.test.js` is the exception, because it deliberately
+suite named `*.goccia.test.js` is the exception, because it deliberately
 reaches for goccia-only globals, and it is classified `skip` for both external
-runtimes. A battery that needs the mocking API instead imports `vi` from
-`vitest`, which every runtime that can run it resolves for itself. A `.test.ts` battery works under bun because bun transpiles TypeScript
-natively while goccia parses annotations as types-as-comments.
+runtimes. A suite that needs the mocking API instead imports `vi` from
+`vitest`, which every runtime that can run it resolves for itself. A `.test.ts`
+suite works under bun because bun transpiles TypeScript natively while goccia
+parses annotations as types-as-comments.
 
 The pinned oracle lives in the same directory: `scripts/differential/package.json`
 pins vitest to an exact version, `bun.lock` pins its dependencies, and
-`vitest.config.mjs` injects the globals so battery files need no imports.
+`vitest.config.mjs` injects the globals so the suite files need no imports.
 
 ## Running the lane
 
@@ -192,7 +194,7 @@ exits 2 with the install command rather than reporting a false divergence.
 | `DIFFRUN_TIMEOUT=<seconds>` | Per-file, per-runtime timeout (default `60`) |
 | `GOCCIA_BIN=<path>` | Goccia binary to test (default `./build/GocciaTestRunner`) |
 | `DIFFRUN_NODE=<path>` | Node binary that hosts vitest (default `node`) |
-| trailing file paths | Restrict the run to the named batteries instead of the whole directory |
+| trailing file paths | Restrict the run to the named differential suites instead of the whole directory |
 
 ```bash
 DIFFRUN_TIMEOUT=25 bun run scripts/test-cli-differential.ts scripts/differential/b-modules.test.js

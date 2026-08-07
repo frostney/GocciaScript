@@ -1,5 +1,5 @@
-// Battery F — hook and describe accounting. Vitest is the oracle: a failed
-// beforeAll skips the suite's tests rather than failing them, a failed
+// Differential suite F — hook and describe accounting. Vitest is the oracle:
+// a failed beforeAll skips the suite's tests rather than failing them, a failed
 // afterAll leaves the already-passed tests alone, and a failed
 // beforeEach/afterEach fails the test it wraps. Counts alone cannot tell a
 // skipped test from a test whose body ran and passed, so every case records
@@ -10,10 +10,10 @@
 // whole file (it reports "no tests"), while goccia registers and runs the
 // sibling describes. The queued describe-body collection-abort layer is what
 // makes that case comparable; it cannot be written to pass under both current
-// behaviours, so it stays out of this battery until that layer lands.
+// behaviours, so it stays out of this differential suite until that layer lands.
 //
 // A file-level (top-level) beforeAll cascade cannot live here either: it would
-// skip every test in the file. It is battery G.
+// skip every test in the file. It is differential suite G.
 
 const beforeAllOrder = [];
 const nestedOrder = [];

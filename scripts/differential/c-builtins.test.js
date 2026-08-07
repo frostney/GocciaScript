@@ -1,4 +1,5 @@
-// Battery C — real semantics of the 0.11.0 built-ins, not just typeof checks.
+// Differential suite C — real semantics of the 0.11.0 built-ins, not just
+// typeof checks.
 
 describe("AbortController semantics", () => {
   test("fresh signal is not aborted", () => {

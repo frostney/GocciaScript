@@ -2,11 +2,11 @@
 /**
  * test-cli-differential.ts
  *
- * Differential battery runner: goccia-interpreted vs goccia-bytecode vs vitest
+ * Differential suite runner: goccia-interpreted vs goccia-bytecode vs vitest
  * vs bun.
  *
- * Each battery file under `scripts/differential/` runs under the two goccia
- * modes and under the external runtimes its classification names; per-file
+ * Each differential suite under `scripts/differential/` runs under the two
+ * goccia modes and under the external runtimes its classification names; per-file
  * counts and failed-test name sets are diffed. A gating disagreement exits 1
  * (0 when everything agrees), so this gates CI directly.
  *
@@ -15,31 +15,31 @@
  *    failed test names*, and on the pass/fail counts. Counts alone are not
  *    enough: the two modes can fail the same number of different tests.
  * 2. **Vitest as the semantic oracle** — goccia's testing API targets Vitest as
- *    an exact drop-in, so for batteries about testing-API semantics (matchers,
- *    hook and describe accounting) Vitest decides. The failed-test name
- *    set must match, the pass/fail/skip counts must match both goccia modes,
+ *    an exact drop-in, so for differential suites about testing-API semantics
+ *    (matchers, hook and describe accounting) Vitest decides. The failed-test
+ *    name set must match, the pass/fail/skip counts must match both goccia modes,
  *    and the two runtimes must agree on whether the *file* failed — that last
  *    one is how a suite-level error (throwing describe, failed
  *    beforeAll/afterAll) is compared without depending on goccia's
  *    goccia-specific `suiteErrors` field.
- * 3. **Bun as the ECMAScript oracle** — for language and runtime batteries
- *    (syntax, modules, builtins) bun is a sound oracle and gates. For
- *    testing-API batteries it is *advisory*: a 223-probe three-way audit found
+ * 3. **Bun as the ECMAScript oracle** — for language and runtime differential
+ *    suites (syntax, modules, builtins) bun is a sound oracle and gates. For
+ *    testing-API suites it is *advisory*: a 223-probe three-way audit found
  *    bun and vitest disagreeing on 30 of 178 matcher probes in both directions,
  *    so bun cannot decide matcher semantics. Advisory drift is printed with a
  *    `~~~` marker and never changes the exit code.
  *
  * Conventions:
- * - Every battery must appear in `CLASSIFICATION` below; an unregistered
- *   battery is itself a finding, so adding one forces a deliberate choice of
- *   oracle rather than inheriting a default.
- * - A battery handed to an external runtime uses only the
+ * - Every differential suite must appear in `CLASSIFICATION` below; an
+ *   unregistered suite is itself a finding, so adding one forces a deliberate
+ *   choice of oracle rather than inheriting a default.
+ * - A differential suite handed to an external runtime uses only the
  *   `describe`/`test`/`expect`/hook globals all runtimes inject. `.test.ts`
- *   batteries work because bun transpiles TS natively while goccia parses
+ *   suites work because bun transpiles TS natively while goccia parses
  *   annotations as types-as-comments.
- * - A battery that reaches for goccia-only globals (`mock`, `spyOn`) is named
- *   `*.goccia.test.js` and is classified `skip` for both external runtimes, so
- *   only mode parity is checked for it.
+ * - A differential suite that reaches for goccia-only globals (`mock`,
+ *   `spyOn`) is named `*.goccia.test.js` and is classified `skip` for both
+ *   external runtimes, so only mode parity is checked for it.
  * - The goccia binary defaults to the built `GocciaTestRunner`; set GOCCIA_BIN
  *   to point somewhere else.
  * - A runtime that exceeds the per-file timeout (DIFFRUN_TIMEOUT seconds,
@@ -54,56 +54,57 @@ import { basename, join } from "path";
 import { TESTRUNNER } from "./test-cli/binaries";
 import { clean, mkdtemp } from "./test-cli/tmpdir";
 
-const BATTERY_DIR = join(import.meta.dir, "differential");
+const DIFFERENTIAL_DIR = join(import.meta.dir, "differential");
 const GOCCIA_BIN = process.env.GOCCIA_BIN ?? TESTRUNNER;
 const TIMEOUT_MS = Number.parseInt(process.env.DIFFRUN_TIMEOUT ?? "60", 10) * 1000;
 const GFLAGS = ["--source-type=module", "--compat-function", "--no-progress"];
 const NODE_BIN = process.env.DIFFRUN_NODE ?? "node";
-const VITEST_ENTRY = join(BATTERY_DIR, "node_modules", "vitest", "vitest.mjs");
+const VITEST_ENTRY = join(DIFFERENTIAL_DIR, "node_modules", "vitest", "vitest.mjs");
 
 /**
- * How a battery is gated.
+ * How a differential suite is gated.
  * - `gate`: a disagreement with this runtime is a divergence and exits 1.
  * - `advisory`: a disagreement is reported but does not gate.
- * - `skip`: the battery is never handed to this runtime.
+ * - `skip`: the differential suite is never handed to this runtime.
  */
 type Role = "gate" | "advisory" | "skip";
 type Classification = { kind: string; bun: Role; vitest: Role };
 
 /**
- * Battery classification. `kind` names why the oracle was chosen:
+ * Differential suite classification. `kind` names why the oracle was chosen:
  * - `language` — ECMAScript syntax/semantics, where bun is a sound oracle and
  *   the testing API is incidental.
  * - `matcher` / `lifecycle` / `mocks` — testing-API semantics, where the
  *   product target is Vitest-exact behaviour and only vitest may decide. The
- *   `mocks` battery is not there yet: see its entry below.
+ *   `mocks` suite is not there yet: see its entry below.
  */
 const CLASSIFICATION: Record<string, Classification> = {
   "a-typesyntax.test.ts": { kind: "language", bun: "gate", vitest: "skip" },
   "b-modules.test.js": { kind: "language", bun: "gate", vitest: "skip" },
   "c-builtins.test.js": { kind: "language", bun: "gate", vitest: "skip" },
   "d-matchers.test.js": { kind: "matcher", bun: "advisory", vitest: "gate" },
-  // Now three-way: the battery imports `vi` from a bare `vitest` specifier,
-  // which vitest resolves to itself and goccia resolves to its bundled
-  // compatibility shim. Bun stays skipped — it injects its own `vi` under
+  // Now three-way: the differential suite imports `vi` from a bare `vitest`
+  // specifier, which vitest resolves to itself and goccia resolves to its
+  // bundled compatibility shim. Bun stays skipped — it injects its own `vi` under
   // `bun:test`, but importing the real `vitest` package from a `bun test` file
   // drops bun's injected globals and the file dies on `describe is not
-  // defined`, so there is no bun-runnable spelling of this battery.
+  // defined`, so there is no bun-runnable spelling of this differential suite.
   "e-mocks.test.js": { kind: "mocks", bun: "skip", vitest: "gate" },
   "f-lifecycle.test.js": { kind: "lifecycle", bun: "advisory", vitest: "gate" },
   "g-filehook.test.js": { kind: "lifecycle", bun: "advisory", vitest: "gate" },
   // Module mocking. Vitest gates: `vi.mock` hoisting, factory semantics, and
   // mock/unmock source ordering are testing-API semantics where Vitest-exact
   // behaviour is the product target. Bun is skipped for the same reason as
-  // e-mocks — the battery imports `vi` from a bare `vitest` specifier, and
-  // importing the real `vitest` package from a `bun test` file drops bun's
-  // injected globals and dies on `describe is not defined`.
+  // e-mocks — the differential suite imports `vi` from a bare `vitest`
+  // specifier, and importing the real `vitest` package from a `bun test` file
+  // drops bun's injected globals and dies on `describe is not defined`.
   //
-  // The battery deliberately exercises only the subset both runtimes agree on.
-  // Automock, `vi.doMock`, and `importActual`-based partial mocks are omitted
-  // because goccia throws on them by design; a spread-based partial mock would
-  // pass under vitest and fail under goccia, which is a documented gap rather
-  // than a divergence the harness should rediscover on every run.
+  // The differential suite deliberately exercises only the subset both
+  // runtimes agree on. Automock, `vi.doMock`, and `importActual`-based partial
+  // mocks are omitted because goccia throws on them by design; a spread-based
+  // partial mock would pass under vitest and fail under goccia, which is a
+  // documented gap rather than a divergence the harness should rediscover on
+  // every run.
   "h-modulemock.test.js": { kind: "mocks", bun: "skip", vitest: "gate" },
   // The companion file for cross-file isolation: it mocks nothing and must see
   // the real module even though h-modulemock mocks it in the same `vitest run`.
@@ -220,12 +221,12 @@ function bunResults(path: string): Run {
 }
 
 /**
- * Runs every vitest-compared battery in one `vitest run` and returns the
- * per-file verdicts, keyed by battery basename.
+ * Runs every vitest-compared differential suite in one `vitest run` and returns
+ * the per-file verdicts, keyed by file basename.
  *
  * One invocation for the whole set is what makes vitest affordable as the
- * gating oracle: the batteries complete in about a second in a single process,
- * where one process per file would pay vitest's startup cost per battery.
+ * gating oracle: the suites complete in about a second in a single process,
+ * where one process per file would pay vitest's startup cost for each one.
  */
 function vitestResults(paths: string[]): Map<string, Run> {
   const results = new Map<string, Run>();
@@ -238,7 +239,7 @@ function vitestResults(paths: string[]): Map<string, Run> {
     proc = Bun.spawnSync(
       [NODE_BIN, VITEST_ENTRY, "run", "--reporter=json", `--outputFile=${outPath}`, ...names],
       {
-        cwd: BATTERY_DIR,
+        cwd: DIFFERENTIAL_DIR,
         stdout: "pipe",
         stderr: "pipe",
         // The whole set runs in one process, so the budget is the per-file
@@ -389,10 +390,10 @@ const cliFiles = process.argv.slice(2);
 const files =
   cliFiles.length > 0
     ? cliFiles
-    : readdirSync(BATTERY_DIR)
+    : readdirSync(DIFFERENTIAL_DIR)
         .filter((f) => f.endsWith(".test.js") || f.endsWith(".test.ts"))
         .sort()
-        .map((f) => join(BATTERY_DIR, f));
+        .map((f) => join(DIFFERENTIAL_DIR, f));
 
 const vitestFiles = files.filter((p) => {
   const classification = CLASSIFICATION[basename(p)];
@@ -401,8 +402,8 @@ const vitestFiles = files.filter((p) => {
 
 if (vitestFiles.length > 0 && !existsSync(VITEST_ENTRY)) {
   console.error(
-    `Vitest is the semantic oracle for ${vitestFiles.length} of these batteries and is not installed.\n` +
-      `Install the pinned version first:\n\n  cd ${BATTERY_DIR} && bun install\n`,
+    `Vitest is the semantic oracle for ${vitestFiles.length} of these differential suites and is not installed.\n` +
+      `Install the pinned version first:\n\n  cd ${DIFFERENTIAL_DIR} && bun install\n`,
   );
   clean(scratch);
   process.exit(2);
