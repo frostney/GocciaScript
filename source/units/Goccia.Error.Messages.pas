@@ -837,7 +837,7 @@ resourcestring
   SErrorFunctionExpectsFunctionSecond = '%s expects second argument to be a function';
   SErrorFunctionExpectsTableArray = '%s expects a table array';
   SErrorFunctionExpectsFunctionArg = '%s expects a function argument';
-  SErrorToHavePropertyExpectsPath = 'toHaveProperty expects a string path or an array of path segments';
+  SErrorToHavePropertyExpectsPath = 'toHaveProperty expects a string or number path, or an array of path segments';
   SErrorToThrowExpectsFunction = 'toThrow expects actual value to be a function';
   SErrorToThrowExpectsMatchableValue = 'toThrow expects a string, RegExp, error class, or Error instance';
   SErrorToHaveBeenCalledTimesExpectsInt = 'toHaveBeenCalledTimes expects a non-negative integer';

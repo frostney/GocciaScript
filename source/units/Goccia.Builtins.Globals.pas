@@ -901,12 +901,96 @@ begin
     TGarbageCollector.Instance.AddTempRoot(AClone);
 end;
 
+{ Flags every deserialized property carries. StructuredDeserialize installs each
+  one with CreateDataProperty, so how the source defined it — non-writable,
+  non-configurable, or an accessor — never survives the round trip. }
+const
+  STRUCTURED_CLONE_PROPERTY_FLAGS = [pfEnumerable, pfConfigurable, pfWritable];
+
+{ Canonical array index test for the clone walk. The walk only ever sees keys
+  the array itself produced, so this needs to recognise "0", "1", "42" and
+  reject everything else, including anything past the dense store's range. }
+function TryParseCloneElementIndex(const AKey: string; out AIndex: Integer): Boolean;
+var
+  I: Integer;
+  Value: Int64;
+begin
+  Result := False;
+  AIndex := 0;
+
+  if (AKey = '') or (Length(AKey) > 10) then
+    Exit;
+  if (AKey[1] = '0') and (Length(AKey) > 1) then
+    Exit;
+
+  Value := 0;
+  for I := 1 to Length(AKey) do
+  begin
+    if (AKey[I] < '0') or (AKey[I] > '9') then
+      Exit;
+    Value := Value * 10 + Int64(Ord(AKey[I]) - Ord('0'));
+    if Value > MaxInt then
+      Exit;
+  end;
+
+  AIndex := Integer(Value);
+  Result := True;
+end;
+
+{ Reads one own property of the source the way StructuredSerialize does.
+
+  The serializer enumerates with EnumerableOwnPropertyNames (ECMA-262 §7.3.23),
+  which skips non-enumerable own properties and takes each value with Get. Get
+  on an accessor runs the getter, and it is the getter's RESULT that gets
+  serialized — accessors themselves are never preserved. A getter that throws
+  therefore propagates out of structuredClone, and one that returns something
+  unserializable raises DataCloneError. Verified against node 24 and bun 1.3.
+
+  Returns False when the key has no own descriptor (a getter earlier in the walk
+  may have deleted it) or is not enumerable; in both cases the clone omits it. }
+function TryCloneOwnProperty(const ASource: TGocciaObjectValue; const AKey: string;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>;
+  out AClonedValue: TGocciaValue): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  RawValue: TGocciaValue;
+  RawRoot: TGocciaTempRoot;
+begin
+  Result := False;
+  AClonedValue := nil;
+
+  Descriptor := ASource.GetOwnPropertyDescriptor(AKey);
+  if not Assigned(Descriptor) then
+    Exit;
+  if not (pfEnumerable in Descriptor.Flags) then
+    Exit;
+
+  if Descriptor is TGocciaPropertyDescriptorData then
+    RawValue := TGocciaPropertyDescriptorData(Descriptor).Value
+  else
+    RawValue := ASource.GetPropertyWithContext(AKey, ASource);
+
+  if RawValue = nil then
+    RawValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  // A getter is user code and therefore a GC safe point, and its result is
+  // reachable from nowhere else while the recursive clone below allocates.
+  InitializeTempRoot(RawRoot);
+  try
+    AddTempRootIfNeeded(RawRoot, RawValue);
+    AClonedValue := StructuredCloneValue(RawValue, AMemory);
+  finally
+    RemoveTempRootIfNeeded(RawRoot);
+  end;
+
+  Result := True;
+end;
+
 function CloneObject(const AObj: TGocciaObjectValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaObjectValue;
 var
   I: Integer;
   Keys: TArray<string>;
-  Descriptor: TGocciaPropertyDescriptor;
   ClonedValue: TGocciaValue;
 begin
   Result := TGocciaObjectValue.Create;
@@ -914,44 +998,59 @@ begin
 
   Keys := AObj.GetOwnPropertyKeys;
   for I := 0 to Length(Keys) - 1 do
-  begin
-    Descriptor := AObj.GetOwnPropertyDescriptor(Keys[I]);
-    if not Assigned(Descriptor) then
-      Continue;
-
-    if Descriptor is TGocciaPropertyDescriptorData then
-    begin
-      ClonedValue := StructuredCloneValue(TGocciaPropertyDescriptorData(Descriptor).Value, AMemory);
+    if TryCloneOwnProperty(AObj, Keys[I], AMemory, ClonedValue) then
       Result.DefineProperty(Keys[I],
-        TGocciaPropertyDescriptorData.Create(ClonedValue, Descriptor.Flags));
-    end
-    // HTML spec §2.7.3: accessor properties are read via getter and cloned as data properties
-    else if Descriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      ClonedValue := StructuredCloneValue(AObj.GetProperty(Keys[I]), AMemory);
-      Result.DefineProperty(Keys[I],
-        TGocciaPropertyDescriptorData.Create(ClonedValue, Descriptor.Flags - [pfConfigurable, pfWritable] + [pfEnumerable]));
-    end;
-  end;
+        TGocciaPropertyDescriptorData.Create(ClonedValue,
+          STRUCTURED_CLONE_PROPERTY_FLAGS));
 end;
 
+{ Arrays serialize through the same property walk as objects rather than through
+  the dense element store, because the store is only half the picture: an index
+  defined as an accessor lives in the property map with a hole left behind in the
+  store, and so do sparse indices and any non-index key. Reading the store alone
+  silently dropped all of those. }
 function CloneArray(const AArr: TGocciaArrayValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaArrayValue;
 var
   I: Integer;
-  Element: TGocciaValue;
+  Index: Integer;
+  SourceLength: Integer;
+  Keys: TArray<string>;
+  ClonedValue: TGocciaValue;
 begin
   Result := TGocciaArrayValue.Create;
   RegisterClone(AArr, Result, AMemory);
 
-  for I := 0 to AArr.Elements.Count - 1 do
+  // Both snapshotted before the first getter can run, so a getter that resizes
+  // the source cannot change which keys are visited or how long the clone ends
+  // up — matching node and bun.
+  SourceLength := AArr.GetLength;
+  Keys := AArr.GetOwnPropertyKeys;
+
+  for I := 0 to Length(Keys) - 1 do
   begin
-    Element := AArr.Elements[I];
-    if Element = TGocciaHoleValue.HoleValue then
-      Result.Elements.Add(TGocciaHoleValue.HoleValue)
-    else
-      Result.Elements.Add(StructuredCloneValue(Element, AMemory));
+    // Length is not serialized; it is restored from the snapshot below.
+    if Keys[I] = PROP_LENGTH then
+      Continue;
+
+    if TryParseCloneElementIndex(Keys[I], Index) and
+       (Index < AArr.Elements.Count) and
+       (AArr.Elements[Index] <> TGocciaHoleValue.HoleValue) then
+      // Plain dense element: always enumerable, never an accessor, and reading
+      // it runs no user code. Kept off the descriptor path because that path
+      // materializes a fresh descriptor for every dense index.
+      ClonedValue := StructuredCloneValue(AArr.Elements[Index], AMemory)
+    else if not TryCloneOwnProperty(AArr, Keys[I], AMemory, ClonedValue) then
+      Continue;
+
+    Result.DefineProperty(Keys[I],
+      TGocciaPropertyDescriptorData.Create(ClonedValue,
+        STRUCTURED_CLONE_PROPERTY_FLAGS));
   end;
+
+  // Trailing holes carry no keys, so the length has to be restored explicitly.
+  if Result.GetLength < SourceLength then
+    Result.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(SourceLength));
 end;
 
 function CloneMap(const AMap: TGocciaMapValue;
