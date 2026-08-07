@@ -84,6 +84,46 @@ describe("toStrictEqual", () => {
     expect(new Point(1)).toStrictEqual(pointPrototype);
   });
 
+  test("resolves an accessor-backed constructor by reading it", () => {
+    // The type check reads `constructor` as an ordinary property, so a
+    // prototype accessor RUNS during the comparison. Vitest 4.1.10 is the
+    // oracle and does the same (its typeEquality compares
+    // `a.constructor === b.constructor`): a getter returning a fresh object
+    // makes two instances of one class differ, and only a getter with a
+    // stable result behaves like the data slot it replaced. Resolving a
+    // "stable type identity" without reading the property would be a
+    // divergence from the oracle, not a fix.
+    class Fresh {
+      constructor(x) {
+        this.x = x;
+      }
+    }
+    Object.defineProperty(Fresh.prototype, "constructor", {
+      get() {
+        return { fresh: true };
+      },
+      configurable: true,
+    });
+    expect(new Fresh(1)).not.toStrictEqual(new Fresh(1));
+    expect(new Fresh(1)).not.toStrictEqual({ x: 1 });
+    // The type never participates in loose equality.
+    expect(new Fresh(1)).toEqual({ x: 1 });
+
+    class Stable {
+      constructor(x) {
+        this.x = x;
+      }
+    }
+    Object.defineProperty(Stable.prototype, "constructor", {
+      get() {
+        return Stable;
+      },
+      configurable: true,
+    });
+    expect(new Stable(1)).toStrictEqual(new Stable(1));
+    expect(new Stable(1)).not.toStrictEqual({ x: 1 });
+  });
+
   test("keeps same-named anonymous classes distinct", () => {
     // Protected divergence: goccia and vitest agree, bun does not.
     const First = class Same {};

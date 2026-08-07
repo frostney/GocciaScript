@@ -32,6 +32,13 @@ uses
   Goccia.CLI.JSON.Reporter,
   Goccia.Threading.Flags;
 
+const
+  { Error message recorded for a file that was dequeued after the pool had
+    already been cancelled, i.e. one that never ran. Callers that cancel
+    deliberately (CancelOnError) need to tell these apart from genuine
+    failures, so the spelling is shared rather than duplicated. }
+  GOCCIA_POOL_CANCELLED_MESSAGE = 'Cancelled';
+
 type
   { Callback executed on each worker thread for a single file.
     Implementations must NOT call WriteLn directly — capture output in
@@ -333,7 +340,7 @@ begin
         FResults[Idx].Index := Item.Index;
         FResults[Idx].FileName := Item.FileName;
         FResults[Idx].Success := False;
-        FResults[Idx].ErrorMessage := 'Cancelled';
+        FResults[Idx].ErrorMessage := GOCCIA_POOL_CANCELLED_MESSAGE;
         FResults[Idx].ConsoleOutput := '';
         FResults[Idx].Data := nil;
         Continue;

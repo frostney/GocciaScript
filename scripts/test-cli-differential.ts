@@ -285,10 +285,19 @@ const fillVitest = (results: Map<string, Run>, names: string[], error: string): 
   return results;
 };
 
+/**
+ * Renders a skip count. `null` means the runtime does not report skips at
+ * all, which is not the same as reporting zero — printing it as an empty
+ * string (or as the string "null") would claim agreement the output never
+ * established.
+ */
+const fmtSkipped = (skipped: number | null): string =>
+  skipped === null ? "/?s" : skipped > 0 ? `/${skipped}s` : "";
+
 const fmt = (run: Run): string => {
   if (run.error) return run.error;
   const v = run.verdict!;
-  return `${v.passed}p/${v.failed}f${v.skipped ? `/${v.skipped}s` : ""}`;
+  return `${v.passed}p/${v.failed}f${fmtSkipped(v.skipped)}`;
 };
 
 const difference = (a: Set<string>, b: Set<string>): string[] =>
@@ -327,8 +336,20 @@ function compareOracle(
     const o = oracle.verdict!;
     if (v.passed !== o.passed || v.failed !== o.failed)
       disagree.push(`${label} counts differ from ${modeLabel}: ${label}=${fmt(oracle)} ${modeLabel}=${fmt(run)}`);
-    else if (options.compareSkipped && v.skipped !== o.skipped)
-      disagree.push(`${label} skip counts differ from ${modeLabel}: ${label}=${o.skipped}s ${modeLabel}=${v.skipped}s`);
+    // Both sides must actually report skips before a difference means
+    // anything: goccia carries `null` for an envelope without the field, and
+    // comparing that against a number printed a divergence whose message
+    // read `goccia=nulls`. The file-verdict comparison below already guards
+    // both sides the same way.
+    else if (
+      options.compareSkipped &&
+      v.skipped !== null &&
+      o.skipped !== null &&
+      v.skipped !== o.skipped
+    )
+      disagree.push(
+        `${label} skip counts differ from ${modeLabel}: ${label}=${o.skipped}s ${modeLabel}=${v.skipped}s`,
+      );
   }
   if (
     options.compareFileFailed &&

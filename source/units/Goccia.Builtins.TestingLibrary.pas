@@ -4132,13 +4132,20 @@ begin
 
       EndTest;
 
+      { Reached when the failure came from somewhere that did not write its
+        own detail line — most often a beforeEach that threw, which skips
+        the body entirely. The name alone leaves the JSON payload without
+        any explanation, so carry the first recorded failure message (the
+        one AssertionFailed kept) into the entry. }
       if FTestStats.CurrentTestHasFailures and not FailureRecorded then
       begin
         if FTestStats.CurrentSuiteName <> '' then
           AFailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' +
-            FTestStats.CurrentSuiteName + '"')
+            FTestStats.CurrentSuiteName + '"' +
+            FormatHookFailureSuffix(FTestStats.CurrentFailureMessage))
         else
-          AFailedTestDetails.Add('Test "' + TestCase.Name + '"');
+          AFailedTestDetails.Add('Test "' + TestCase.Name + '"' +
+            FormatHookFailureSuffix(FTestStats.CurrentFailureMessage));
       end;
 
       if FTestStats.CurrentTestHasFailures and AExitOnFirstFailure then
@@ -4896,8 +4903,15 @@ begin
 
      // Create result object
     ResultObj := TGocciaObjectValue.Create;
-    ResultObj.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(
-      CountRegisteredTests(FRootSuite)));
+    { Collection aborted: Vitest discards the whole file, so the tests
+      registered before the throwing describe are not collected either.
+      Reporting them here contradicted the zero run counts beside it — the
+      envelope claimed a total the runner never intended to run. }
+    if FCollectionAborted then
+      ResultObj.AssignProperty('totalTests', TGocciaNumberLiteralValue.ZeroValue)
+    else
+      ResultObj.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(
+        CountRegisteredTests(FRootSuite)));
     ResultObj.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(
       FTestStats.TotalTests));
     ResultObj.AssignProperty('passed', TGocciaNumberLiteralValue.Create(
@@ -4930,7 +4944,10 @@ begin
           WriteLn('  • ', FailedTestDetails[I]);
       end;
 
-      if FTestStats.FailedTests = 0 then
+      { A suite-level error (throwing describe, failed beforeAll/afterAll)
+        never enters FailedTests, so checking that alone printed "All tests
+        passed!" for a file the runner is about to mark not-ok. }
+      if (FTestStats.FailedTests = 0) and (FTestStats.SuiteErrors = 0) then
       begin
         if FTestStats.SkippedTests > 0 then
           WriteLn(Format('✅ All tests passed! (%d skipped)',

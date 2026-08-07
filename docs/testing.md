@@ -331,7 +331,7 @@ Both execution modes must pass. Test subtrees that require opt-in parser or runt
 |------|-------------|
 | `--no-progress` | Suppress per-file progress output |
 | `--no-results` | Suppress test results summary |
-| `--exit-on-first-failure` | Stop on first test failure |
+| `--exit-on-first-failure` | Stop on the first test failure **or suite error** (a throwing `describe`, a failed `beforeAll`/`afterAll`). Under `--jobs` the worker queue is cancelled too; files that never ran are omitted from the report rather than counted as failures |
 | `--silent` | Suppress all console output from test scripts |
 | `--jobs=N` / `-j N` | Number of parallel worker threads (default: CPU count) |
 | `--update-snapshots` / `-u` | Create, update, and prune snapshots |
