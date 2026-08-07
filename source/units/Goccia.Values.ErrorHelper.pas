@@ -15,8 +15,12 @@ function CreateErrorObject(const AName, AMessage: string; const ASkipTop: Intege
 
 { True when AValue carries [[ErrorData]] — the slot every error constructor
   installs, including through a `class MyError extends Error` subclass. Merely
-  inheriting from Error.prototype does not make an object an error, and
-  DOMException clears the slot on purpose. }
+  inheriting from Error.prototype does not make an object an error.
+
+  DOMException clears the slot on purpose, so it compares as an ordinary
+  object through its enumerable name/message/code. That is a deliberate,
+  project-level divergence from Vitest, which treats every DOMException as
+  equal to every other one regardless of name or message. }
 function IsErrorObject(const AValue: TGocciaValue): Boolean;
 
 { Creates a DOMException object with the standard legacy code for AName. }
