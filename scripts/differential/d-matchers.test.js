@@ -1,7 +1,7 @@
-// Battery D — matcher semantics. Vitest is the ground truth here: goccia's
-// expect targets it as an exact drop-in, and a 223-probe audit found bun
+// Differential suite D — matcher semantics. Vitest is the ground truth here:
+// goccia's expect targets it as an exact drop-in, and a 223-probe audit found bun
 // disagreeing with vitest on 30 of 178 matcher probes, so bun is advisory for
-// this battery and never decides what an assertion below should say.
+// this differential suite and never decides what an assertion below should say.
 
 describe("deep equality semantics", () => {
   test("toEqual ignores explicit-undefined properties", () => {

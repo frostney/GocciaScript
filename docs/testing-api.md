@@ -494,7 +494,7 @@ describe.runIf(hasFeature)("Temporal tests", () => { ... });
 test.runIf(hasFeature)("uses Temporal.Now", () => { ... });
 ```
 
-The target for these is [Vitest's `skipIf`/`runIf`](https://vitest.dev/api/#test-skipif). When skipped, tests are counted in the total but not executed and reported as skipped. The exact accounting of the conditional and `todo` forms has not been through the differential lane yet — the lifecycle battery covers hook and describe accounting, not these — so treat the details here as intent rather than as verified parity.
+The target for these is [Vitest's `skipIf`/`runIf`](https://vitest.dev/api/#test-skipif). When skipped, tests are counted in the total but not executed and reported as skipped. The exact accounting of the conditional and `todo` forms has not been through the differential lane yet — the lifecycle differential suite covers hook and describe accounting, not these — so treat the details here as intent rather than as verified parity.
 
 ## Cross-Runtime Compatibility (Vitest)
 
@@ -502,7 +502,7 @@ The target for these is [Vitest's `skipIf`/`runIf`](https://vitest.dev/api/#test
 
 That reference covers what the matchers *mean*, not only the API shape: equality, `Set`/`Map`, error, and `toThrow` behavior is probed against a pinned Vitest release and reconciled. Accepting unmodified Vitest suites is a stated project direction rather than a current guarantee — the divergences listed below are the remaining gap. See [Vision](../VISION.md) for where this is heading.
 
-Bun runs the same tests far faster and is used that way as a proxy, but it is advisory only. A three-way audit of 223 probes found bun and Vitest disagreeing on 30 of 178 matcher probes, in both directions, so bun agreeing is evidence and bun disagreeing is a question — neither is a verdict. [Differential Testing](differential-testing.md) describes how the two roles are enforced per battery.
+Bun runs the same tests far faster and is used that way as a proxy, but it is advisory only. A three-way audit of 223 probes found bun and Vitest disagreeing on 30 of 178 matcher probes, in both directions, so bun agreeing is evidence and bun disagreeing is a question — neither is a verdict. [Differential Testing](differential-testing.md) describes how the two roles are enforced per differential suite.
 
 ### Running with Vitest
 
@@ -512,7 +512,7 @@ npx vitest run tests/built-ins/   # Run a category
 npx vitest                        # Watch mode
 ```
 
-Running `tests/` under Vitest needs a local Vitest install and a config that points at those files; the repository pins its own Vitest only for the differential battery lane, under `scripts/differential/`.
+Running `tests/` under Vitest needs a local Vitest install and a config that points at those files; the repository pins its own Vitest only for the differential suite lane, under `scripts/differential/`.
 
 ### The `vitest` compatibility shim
 

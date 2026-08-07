@@ -2,7 +2,7 @@
   "name": "goccia-differential-oracle",
   "version": "0.0.0",
   "private": true,
-  "description": "Pinned Vitest oracle for the differential battery lane. Not part of the engine build; scripts/test-cli-differential.ts runs vitest from here.",
+  "description": "Pinned Vitest oracle for the differential suite lane. Not part of the engine build; scripts/test-cli-differential.ts runs vitest from here.",
   "devDependencies": {
     "vitest": "4.1.10"
   }

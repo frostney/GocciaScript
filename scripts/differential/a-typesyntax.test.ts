@@ -1,4 +1,4 @@
-// Battery A — type-annotation parser edges around the 0.11.0 fixes.
+// Differential suite A — type-annotation parser edges around the 0.11.0 fixes.
 // Runs under goccia (types-as-comments) and bun (TS transpile) identically.
 
 type Pair = { a: string; b: number };
