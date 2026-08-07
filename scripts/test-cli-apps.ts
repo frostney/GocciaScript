@@ -2582,6 +2582,119 @@ console.log("Loader: coverage --output=json not corrupted...");
       }
     }
 
+    console.log("TestRunner: coverage merges an entry file that is also an import...");
+    {
+      // shared.test.js is BOTH an entry file named on the command line and an
+      // import of main.test.js. The entry role used to be keyed by the spelling
+      // as typed while the import role was keyed by its resolved absolute path,
+      // so the file produced two report records whose hits were never merged.
+      // Canonicalizing both roles to one key collapses them into one record.
+      const dualDir = join(tmp, "coverage-dual-role");
+      mkdirSync(dualDir, { recursive: true });
+      writeFileSync(
+        join(dualDir, "shared.test.js"),
+        [
+          "export const bump = (n) => n + 1;",
+          "",
+          "test('shared bump', () => {",
+          "  expect(bump(1)).toBe(2);",
+          "});",
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(
+        join(dualDir, "main.test.js"),
+        [
+          "import { bump } from './shared.test.js';",
+          "",
+          "test('main bump', () => {",
+          "  expect(bump(5)).toBe(6);",
+          "});",
+          "",
+        ].join("\n"),
+      );
+
+      // The command line must use relative spellings: the mismatch only shows
+      // up when the typed path differs from the absolute path that import
+      // resolution produces. Binary paths are repo-relative, so resolve them
+      // before running with a different working directory.
+      const runner = resolve(TESTRUNNER);
+      const runDual = async (name: string, files: string[]) => {
+        const outPath = join(dualDir, name);
+        await $`${runner} ${files} --coverage --coverage-format=json --coverage-output=${name} --no-progress --silent`
+          .cwd(dualDir)
+          .quiet();
+        return JSON.parse(readFileSync(outPath, "utf-8")) as Record<string, any>;
+      };
+
+      const sharedRecords = (report: Record<string, any>) =>
+        Object.keys(report).filter((key) => key.endsWith("shared.test.js"));
+
+      // Each role in isolation, then both together.
+      const entryOnly = await runDual("entry-only.json", ["./shared.test.js"]);
+      const importOnly = await runDual("import-only.json", ["./main.test.js"]);
+      const bothRoles = await runDual("both-roles.json", ["./shared.test.js", "./main.test.js"]);
+
+      const bothKeys = sharedRecords(bothRoles);
+      if (bothKeys.length !== 1) {
+        throw new Error(
+          `A file that is both entry and import should get exactly one coverage record, got ${bothKeys.length}: ${bothKeys.join(", ")}`,
+        );
+      }
+
+      // Hits must be merged, not one role's counts overwriting the other's.
+      const entryHits = entryOnly[sharedRecords(entryOnly)[0]].s;
+      const importHits = importOnly[sharedRecords(importOnly)[0]].s;
+      const mergedHits = bothRoles[bothKeys[0]].s;
+      for (const statement of Object.keys(mergedHits)) {
+        const expected = (entryHits[statement] ?? 0) + (importHits[statement] ?? 0);
+        if (mergedHits[statement] !== expected) {
+          throw new Error(
+            `Dual-role statement ${statement} should carry the summed hits of both roles: expected ${expected}, got ${mergedHits[statement]}`,
+          );
+        }
+      }
+
+      // The same physical file named two different ways must land on one key.
+      // Compare against the *real* directory: canonicalization is textual and
+      // deliberately does not resolve symlinks, and on macOS the system temp
+      // directory is reached through the /var -> /private/var symlink.
+      const realDualDir = realpathSync(dualDir);
+      const absoluteSpelling = await runDual("absolute-spelling.json", [
+        join(realDualDir, "shared.test.js"),
+        join(realDualDir, "main.test.js"),
+      ]);
+      if (JSON.stringify(Object.keys(absoluteSpelling).sort()) !== JSON.stringify(Object.keys(bothRoles).sort())) {
+        throw new Error(
+          `Absolute and relative command-line spellings should produce identical report keys: ${Object.keys(absoluteSpelling).sort().join(", ")} vs ${Object.keys(bothRoles).sort().join(", ")}`,
+        );
+      }
+
+      // Separators are '/' in every emitted path on every platform: genhtml and
+      // Codecov both mishandle the backslashes Windows path resolution yields.
+      const dualLcovPath = join(dualDir, "dual.lcov");
+      await $`${runner} ./shared.test.js ./main.test.js --coverage --coverage-format=lcov --coverage-output=dual.lcov --no-progress --silent`
+        .cwd(dualDir)
+        .quiet();
+      const sfRecords = readFileSync(dualLcovPath, "utf-8")
+        .split("\n")
+        .filter((line) => line.startsWith("SF:"));
+      if (sfRecords.length === 0) throw new Error("Dual-role LCOV should contain SF: records");
+      for (const record of sfRecords) {
+        if (record.includes("\\")) {
+          throw new Error(`LCOV SF: paths must use '/' separators, got ${record}`);
+        }
+      }
+      for (const key of Object.keys(bothRoles)) {
+        if (key.includes("\\")) {
+          throw new Error(`JSON coverage keys must use '/' separators, got ${key}`);
+        }
+        if (bothRoles[key].path.includes("\\")) {
+          throw new Error(`JSON coverage "path" must use '/' separators, got ${bothRoles[key].path}`);
+        }
+      }
+    }
+
     console.log("Loader: coverage reports functions at their declaration line...");
     // LCOV FN: records where a function is declared. The bytecode VM used to
     // report the first executed instruction instead, which lands on the body's

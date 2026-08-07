@@ -18,6 +18,47 @@ procedure BuildExecutableLineFlags(const ASourceLines: TStrings;
 function IsStructuralOnly(const ATrimmed: string): Boolean;
 function StartsWithWord(const ALine, AWord: string): Boolean;
 
+{ Canonical coverage path form.
+
+  Every report key and every emitted path — lcov `SF:`, the JSON object
+  keys and their `"path"` field — uses one canonical spelling, so a file
+  that is both the entry point and an imported module collapses into a
+  single record instead of one record per spelling:
+
+    * repo-relative when the file lives under a repository root (the
+      nearest ancestor directory holding a `.git` entry, which is a
+      directory in a normal clone and a file in a linked worktree or
+      submodule), otherwise the absolute path;
+    * directory separators are always '/', on every platform.
+
+  Repo-relative is the form coverage consumers expect: Codecov matches
+  report paths against repository paths and needs `fixes` mappings to
+  cope with the absolute build-machine paths a CI run would otherwise
+  emit, and genhtml resolves relative paths against its working
+  directory.  Files outside any repository have no relative form to fall
+  back to, so they stay absolute.
+
+  Paths with no on-disk backing are virtual identities rather than
+  files — `<stdin>`, and multifile section names such as `<stdin>[part1]`
+  or `/abs/foo[part2].jsx`.  They keep their spelling verbatim and only
+  have separators normalized. }
+procedure ResolveCoveragePath(const APath: string;
+  out ACanonical, AResolved: string);
+
+{ The canonical half of ResolveCoveragePath. }
+function CanonicalCoveragePath(const APath: string): string;
+
+{ Rewrite directory separators to '/'.  On Windows both separators are
+  accepted by the OS, so a backslash is always a separator and rewriting
+  it is safe.  On POSIX the separator is already '/' and a backslash is a
+  legal filename character, so the "every separator is '/'" guarantee
+  holds without touching the string. }
+function NormalizeCoveragePathSeparators(const APath: string): string;
+
+{ Nearest ancestor of AStartDirectory holding a `.git` entry, or '' when
+  there is none. }
+function FindRepositoryRoot(const AStartDirectory: string): string;
+
 type
   TGocciaCoverageBranch = record
     Line: Integer;
@@ -78,14 +119,33 @@ type
 
   TGocciaSourceMapMap = TOrderedStringMap<TGocciaSourceMap>;
 
+  { Specialized here rather than reusing OrderedStringMap's TStringStringMap
+    so the protected sequential-iteration API is reachable from this unit,
+    exactly as it is for the two maps above. }
+  TGocciaCoveragePathMap = TOrderedStringMap<string>;
+
   TGocciaCoverageTracker = class
   private
     FFiles: TGocciaCoverageFileMap;
     FSourceMaps: TGocciaSourceMapMap;
+    { Raw spelling as it reaches the tracker -> canonical report key.
+      Canonicalization stats the filesystem and walks up to the repository
+      root, so it runs once per distinct spelling and is memoized here. }
+    FPathCache: TGocciaCoveragePathMap;
+    { Canonical report key -> native on-disk path it was derived from. }
+    FResolvedPaths: TGocciaCoveragePathMap;
     FEnabled: Boolean;
     FLastHitFile: string;
     FLastHitLine: Integer;
+    { Single-entry memo over the canonicalize-then-look-up pair, which
+      together dominate the per-line-hit cost of a coverage run. }
+    FLastLookupPath: string;
+    FLastLookupFile: TGocciaFileCoverage;
+    { AFilePath must already be canonical. }
     function GetOrCreateFile(const AFilePath: string): TGocciaFileCoverage;
+    function CanonicalizePath(const AFilePath: string): string;
+    { Canonicalize AFilePath, then resolve it to its coverage record. }
+    function FileFor(const AFilePath: string): TGocciaFileCoverage;
   public
     class function Instance: TGocciaCoverageTracker;
     class procedure Initialize;
@@ -110,6 +170,14 @@ type
     function GetFileCoverage(const AFilePath: string): TGocciaFileCoverage;
     function GetSourceMap(const AFilePath: string): TGocciaSourceMap;
 
+    { Native on-disk path behind a canonical report key.  Reporters must
+      read source text through this and never through the key itself: a
+      canonical key is repo-relative and so need not resolve against the
+      process's working directory.  Falls back to ACanonicalPath when the
+      key was never registered (virtual identities, or a record created by
+      MergeFrom from a tracker that had no resolved path either). }
+    function ResolvedSourcePath(const ACanonicalPath: string): string;
+
     { Merge all coverage data from ASource into this tracker.
       Line, branch, and function hit *counts* are added together, so merging
       N workers yields the same totals a single-threaded run would produce.
@@ -129,6 +197,93 @@ uses
 
 const
   DEFAULT_LINE_CAPACITY = 256;
+
+{ Coverage Path Canonicalization }
+
+function NormalizeCoveragePathSeparators(const APath: string): string;
+begin
+  {$IFDEF MSWINDOWS}
+  Result := StringReplace(APath, '\', '/', [rfReplaceAll]);
+  {$ELSE}
+  Result := APath;
+  {$ENDIF}
+end;
+
+function FindRepositoryRoot(const AStartDirectory: string): string;
+var
+  Dir, Parent, Marker: string;
+begin
+  Result := '';
+  Dir := ExcludeTrailingPathDelimiter(AStartDirectory);
+  while Dir <> '' do
+  begin
+    Marker := IncludeTrailingPathDelimiter(Dir) + '.git';
+    if DirectoryExists(Marker) or FileExists(Marker) then
+      Exit(Dir);
+    Parent := ExcludeTrailingPathDelimiter(ExtractFileDir(Dir));
+    { ExtractFileDir is a fixed point at the filesystem root ('C:' on
+      Windows) and returns '' once it runs past a POSIX root. }
+    if (Parent = '') or (Parent = Dir) then
+      Break;
+    Dir := Parent;
+  end;
+end;
+
+function SamePathPrefix(const A, B: string): Boolean;
+begin
+  {$IFDEF MSWINDOWS}
+  Result := CompareText(A, B) = 0;
+  {$ELSE}
+  Result := A = B;
+  {$ENDIF}
+end;
+
+procedure ResolveCoveragePath(const APath: string;
+  out ACanonical, AResolved: string);
+var
+  Absolute, Root, RootPrefix: string;
+begin
+  if APath = '' then
+  begin
+    ACanonical := '';
+    AResolved := '';
+    Exit;
+  end;
+
+  if not FileExists(APath) then
+  begin
+    { Virtual identity — nothing on disk to canonicalize against, and
+      expanding it would invent a bogus absolute path. }
+    AResolved := APath;
+    ACanonical := NormalizeCoveragePathSeparators(APath);
+    Exit;
+  end;
+
+  Absolute := ExpandFileName(APath);
+  AResolved := Absolute;
+
+  Root := FindRepositoryRoot(ExtractFileDir(Absolute));
+  if Root <> '' then
+  begin
+    RootPrefix := IncludeTrailingPathDelimiter(Root);
+    if (Length(Absolute) > Length(RootPrefix)) and
+       SamePathPrefix(Copy(Absolute, 1, Length(RootPrefix)), RootPrefix) then
+    begin
+      ACanonical := NormalizeCoveragePathSeparators(
+        Copy(Absolute, Length(RootPrefix) + 1, MaxInt));
+      Exit;
+    end;
+  end;
+
+  ACanonical := NormalizeCoveragePathSeparators(Absolute);
+end;
+
+function CanonicalCoveragePath(const APath: string): string;
+var
+  Resolved: string;
+begin
+  ResolveCoveragePath(APath, Result, Resolved);
+end;
 
 function IsStructuralOnly(const ATrimmed: string): Boolean;
 var
@@ -548,7 +703,10 @@ begin
   inherited Create;
   FFiles := TGocciaCoverageFileMap.Create;
   FSourceMaps := TGocciaSourceMapMap.Create;
+  FPathCache := TGocciaCoveragePathMap.Create;
+  FResolvedPaths := TGocciaCoveragePathMap.Create;
   FEnabled := False;
+  FLastLookupFile := nil;
 end;
 
 destructor TGocciaCoverageTracker.Destroy;
@@ -572,7 +730,22 @@ begin
       FileCov.Free;
     FFiles.Free;
   end;
+  FResolvedPaths.Free;
+  FPathCache.Free;
   inherited;
+end;
+
+function TGocciaCoverageTracker.CanonicalizePath(
+  const AFilePath: string): string;
+var
+  Resolved: string;
+begin
+  if FPathCache.TryGetValue(AFilePath, Result) then
+    Exit;
+  ResolveCoveragePath(AFilePath, Result, Resolved);
+  FPathCache.Add(AFilePath, Result);
+  if not FResolvedPaths.ContainsKey(Result) then
+    FResolvedPaths.Add(Result, Resolved);
 end;
 
 function TGocciaCoverageTracker.GetOrCreateFile(
@@ -585,36 +758,62 @@ begin
   end;
 end;
 
+function TGocciaCoverageTracker.FileFor(
+  const AFilePath: string): TGocciaFileCoverage;
+begin
+  if Assigned(FLastLookupFile) and (AFilePath = FLastLookupPath) then
+    Exit(FLastLookupFile);
+  Result := GetOrCreateFile(CanonicalizePath(AFilePath));
+  FLastLookupPath := AFilePath;
+  FLastLookupFile := Result;
+end;
+
+function TGocciaCoverageTracker.ResolvedSourcePath(
+  const ACanonicalPath: string): string;
+begin
+  if not FResolvedPaths.TryGetValue(ACanonicalPath, Result) then
+    Result := ACanonicalPath;
+end;
+
 procedure TGocciaCoverageTracker.RegisterSourceFile(const AFilePath: string;
   const AExecutableLines: Integer);
 var
   FileCov: TGocciaFileCoverage;
+  Key: string;
 begin
-  if not FFiles.TryGetValue(AFilePath, FileCov) then
+  Key := CanonicalizePath(AFilePath);
+  if not FFiles.TryGetValue(Key, FileCov) then
   begin
-    FileCov := TGocciaFileCoverage.Create(AFilePath, AExecutableLines);
-    FFiles.Add(AFilePath, FileCov);
-  end;
+    FileCov := TGocciaFileCoverage.Create(Key, AExecutableLines);
+    FFiles.Add(Key, FileCov);
+  end
+  { A file registered once as an import (auto-created with no executable
+    line count) and again as the entry point is one record, not two. }
+  else if (FileCov.ExecutableLines = 0) and (AExecutableLines > 0) then
+    FileCov.FExecutableLines := AExecutableLines;
 end;
 
 procedure TGocciaCoverageTracker.RegisterSourceMap(const AFilePath: string;
   const ASourceMap: TGocciaSourceMap);
 var
   OldMap: TGocciaSourceMap;
+  Key: string;
 begin
-  if FSourceMaps.TryGetValue(AFilePath, OldMap) then
+  Key := CanonicalizePath(AFilePath);
+  if FSourceMaps.TryGetValue(Key, OldMap) then
   begin
     OldMap.Free;
-    FSourceMaps.Remove(AFilePath);
+    FSourceMaps.Remove(Key);
   end;
-  FSourceMaps.Add(AFilePath, ASourceMap);
+  FSourceMaps.Add(Key, ASourceMap);
 end;
 
 function TGocciaCoverageTracker.GetSourceMap(
   const AFilePath: string): TGocciaSourceMap;
 begin
   if not FSourceMaps.TryGetValue(AFilePath, Result) then
-    Result := nil;
+    if not FSourceMaps.TryGetValue(CanonicalizePath(AFilePath), Result) then
+      Result := nil;
 end;
 
 procedure TGocciaCoverageTracker.RecordLineHit(const AFilePath: string;
@@ -623,32 +822,33 @@ begin
   if (ALine = FLastHitLine) and (AFilePath = FLastHitFile) then Exit;
   FLastHitLine := ALine;
   FLastHitFile := AFilePath;
-  GetOrCreateFile(AFilePath).RecordLineHit(ALine);
+  FileFor(AFilePath).RecordLineHit(ALine);
 end;
 
 procedure TGocciaCoverageTracker.RecordBranchHit(const AFilePath: string;
   const ALine, AColumn, ABranchIndex: Integer);
 begin
-  GetOrCreateFile(AFilePath).RecordBranchHit(ALine, AColumn, ABranchIndex);
+  FileFor(AFilePath).RecordBranchHit(ALine, AColumn, ABranchIndex);
 end;
 
 procedure TGocciaCoverageTracker.RegisterFunction(const AFilePath,
   AName: string; const ALine, AColumn: Integer);
 begin
-  GetOrCreateFile(AFilePath).RegisterFunction(AName, ALine, AColumn);
+  FileFor(AFilePath).RegisterFunction(AName, ALine, AColumn);
 end;
 
 procedure TGocciaCoverageTracker.RecordFunctionHit(const AFilePath,
   AName: string; const ALine, AColumn: Integer);
 begin
-  GetOrCreateFile(AFilePath).RecordFunctionHit(AName, ALine, AColumn);
+  FileFor(AFilePath).RecordFunctionHit(AName, ALine, AColumn);
 end;
 
 function TGocciaCoverageTracker.GetFileCoverage(
   const AFilePath: string): TGocciaFileCoverage;
 begin
   if not FFiles.TryGetValue(AFilePath, Result) then
-    Result := nil;
+    if not FFiles.TryGetValue(CanonicalizePath(AFilePath), Result) then
+      Result := nil;
 end;
 
 procedure TGocciaCoverageTracker.MergeFrom(const ASource: TGocciaCoverageTracker);
@@ -660,6 +860,7 @@ var
   Func, DstFunc: TGocciaCoverageFunction;
   J: Integer;
   SrcMap: TGocciaSourceMap;
+  ResolvedPath: string;
 begin
   if (ASource = nil) or (ASource.Files = nil) then Exit;
 
@@ -712,6 +913,17 @@ begin
       if not FSourceMaps.ContainsKey(Key) then
         FSourceMaps.Add(Key, SrcMap.Clone);
     end;
+  end;
+
+  { Adopt the source's canonical-key -> on-disk-path mappings.  A worker
+    thread may be the only tracker that ever saw a given file, and without
+    its resolved path the reporters could not read that file's source. }
+  if Assigned(ASource.FResolvedPaths) then
+  begin
+    IterState := 0;
+    while ASource.FResolvedPaths.GetNextEntry(IterState, Key, ResolvedPath) do
+      if not FResolvedPaths.ContainsKey(Key) then
+        FResolvedPaths.Add(Key, ResolvedPath);
   end;
 end;
 
