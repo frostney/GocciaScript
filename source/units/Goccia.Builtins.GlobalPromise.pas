@@ -376,6 +376,23 @@ begin
   Result := CreateAnonymousPromiseBuiltinFunction(AFunction, ACapturedRoot, 1);
 end;
 
+{ Keeps a capability's three values reachable for as long as the caller needs
+  them.
+
+  The triple lives in a plain record, which is a native local the collector
+  cannot see, and every combinator holds it across repeated re-entries into user
+  code: the subclass constructor that produced the promise, the `resolve` getter
+  read straight afterwards, the iterator's `next`, and each thenable's `then`.
+  All of those are GC safe points, and until the combinator returns it the
+  promise is reachable from nowhere else. }
+procedure RootCapability(var AFrame: TGocciaActiveRootFrame;
+  const ACapability: TPromiseCapability);
+begin
+  AFrame.Add(ACapability.Promise);
+  AFrame.Add(ACapability.Resolve);
+  AFrame.Add(ACapability.Reject);
+end;
+
 function NewPromiseCapability(const AConstructor: TGocciaValue;
   const ANativeConstructor: TGocciaNativeFunctionValue): TPromiseCapability;
 var
@@ -490,24 +507,44 @@ begin
   Result := AIntrinsicDefault;
 end;
 
+{ Reading `then` off a thenable runs a user getter, and a getter is a GC safe
+  point. The three values are freshly built native locals at every call site —
+  the object a user `resolve` just returned, and the per-element handler
+  functions built for it — so nothing else holds them across that read. They only
+  become reachable again once ThenArgs exists, since a live argument collection
+  roots its elements. }
 procedure InvokePromiseLikeThen(const APromiseLike, AOnFulfilled,
   AOnRejected: TGocciaValue);
 var
   ThenMethod: TGocciaValue;
   ThenArgs: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
+  ThenMethodRoot: TGocciaTempRoot;
 begin
   if not (APromiseLike is TGocciaObjectValue) then
     ThrowTypeError(SErrorPromiseResolverNotFunction, SSuggestPromiseResolver);
 
-  ThenMethod := TGocciaObjectValue(APromiseLike).GetProperty(PROP_THEN);
-  if not Assigned(ThenMethod) or not ThenMethod.IsCallable then
-    ThrowTypeError(SErrorThenNotFunction, SSuggestPromiseThisType);
-
-  ThenArgs := TGocciaArgumentsCollection.Create([AOnFulfilled, AOnRejected]);
+  Roots.Initialize;
+  InitializeTempRoot(ThenMethodRoot);
   try
-    DispatchCall(ThenMethod, ThenArgs, APromiseLike);
+    Roots.Add(APromiseLike);
+    Roots.Add(AOnFulfilled);
+    Roots.Add(AOnRejected);
+
+    ThenMethod := TGocciaObjectValue(APromiseLike).GetProperty(PROP_THEN);
+    AddTempRootIfNeeded(ThenMethodRoot, ThenMethod);
+    if not Assigned(ThenMethod) or not ThenMethod.IsCallable then
+      ThrowTypeError(SErrorThenNotFunction, SSuggestPromiseThisType);
+
+    ThenArgs := TGocciaArgumentsCollection.Create([AOnFulfilled, AOnRejected]);
+    try
+      DispatchCall(ThenMethod, ThenArgs, APromiseLike);
+    finally
+      ThenArgs.Free;
+    end;
   finally
-    ThenArgs.Free;
+    RemoveTempRootIfNeeded(ThenMethodRoot);
+    Roots.Clear;
   end;
 end;
 
@@ -1184,6 +1221,7 @@ var
   ValueConstructor: TGocciaValue;
   Capability: TPromiseCapability;
   ResolveArgs: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     Goccia.Values.ErrorHelper.ThrowTypeError(SErrorValueNotConstructor,
@@ -1203,16 +1241,24 @@ begin
   end;
 
   { Steps 3-4: Let promiseCapability = NewPromiseCapability; Call(resolve, x) }
-  Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
-  ResolveArgs := TGocciaArgumentsCollection.Create([Value]);
+  { The capability's promise is only returned after the resolve function has
+    run, and that function is user code whenever C is a subclass. }
+  Roots.Initialize;
   try
-    DispatchCall(Capability.Resolve, ResolveArgs,
-      TGocciaUndefinedLiteralValue.UndefinedValue);
+    Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
+    RootCapability(Roots, Capability);
+    ResolveArgs := TGocciaArgumentsCollection.Create([Value]);
+    try
+      DispatchCall(Capability.Resolve, ResolveArgs,
+        TGocciaUndefinedLiteralValue.UndefinedValue);
+    finally
+      ResolveArgs.Free;
+    end;
+    { Step 5: Return promiseCapability.[[Promise]] }
+    Result := Capability.Promise;
   finally
-    ResolveArgs.Free;
+    Roots.Clear;
   end;
-  { Step 5: Return promiseCapability.[[Promise]] }
-  Result := Capability.Promise;
 end;
 
 { Promise.reject ( r ) — §27.2.4.6
@@ -1225,19 +1271,28 @@ function TGocciaGlobalPromise.PromiseReject(const AArgs: TGocciaArgumentsCollect
 var
   Capability: TPromiseCapability;
   RejectArgs: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
 begin
-  { Step 2: Let promiseCapability = NewPromiseCapability(C) }
-  Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
-  { Step 3: Call(reject, undefined, « r ») }
-  RejectArgs := TGocciaArgumentsCollection.Create([AArgs.GetElement(0)]);
+  { Same as PromiseResolve: the promise is returned only after user reject code
+    has run. }
+  Roots.Initialize;
   try
-    DispatchCall(Capability.Reject, RejectArgs,
-      TGocciaUndefinedLiteralValue.UndefinedValue);
+    { Step 2: Let promiseCapability = NewPromiseCapability(C) }
+    Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
+    RootCapability(Roots, Capability);
+    { Step 3: Call(reject, undefined, « r ») }
+    RejectArgs := TGocciaArgumentsCollection.Create([AArgs.GetElement(0)]);
+    try
+      DispatchCall(Capability.Reject, RejectArgs,
+        TGocciaUndefinedLiteralValue.UndefinedValue);
+    finally
+      RejectArgs.Free;
+    end;
+    { Step 4: Return promiseCapability.[[Promise]] }
+    Result := Capability.Promise;
   finally
-    RejectArgs.Free;
+    Roots.Clear;
   end;
-  { Step 4: Return promiseCapability.[[Promise]] }
-  Result := Capability.Promise;
 end;
 
 function TGocciaGlobalPromise.ExtractPromiseArray(const AArgs: TGocciaArgumentsCollection): TGocciaArrayValue;
@@ -1371,10 +1426,12 @@ var
   FulfillFn: TGocciaNativeFunctionValue;
   RejectFn: TGocciaValue;
   PromiseResolveRoot, ResultRoot, StateRoot: TGocciaTempRoot;
-  IterationRoots: TGocciaActiveRootFrame;
+  IterationRoots, CapabilityRoots: TGocciaActiveRootFrame;
   I: Integer;
 begin
+  CapabilityRoots.Initialize;
   Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
+  RootCapability(CapabilityRoots, Capability);
   InitializeTempRoot(PromiseResolveRoot);
   InitializeTempRoot(ResultRoot);
   InitializeTempRoot(StateRoot);
@@ -1457,6 +1514,7 @@ begin
     RemoveTempRootIfNeeded(PromiseResolveRoot);
     RemoveTempRootIfNeeded(StateRoot);
     RemoveTempRootIfNeeded(ResultRoot);
+    CapabilityRoots.Clear;
   end;
 
   Result := Capability.Promise;
@@ -1485,20 +1543,33 @@ var
   FulfillFn: TGocciaNativeFunctionValue;
   Done: Boolean;
   Index: Integer;
+  Roots, IterationRoots: TGocciaActiveRootFrame;
 begin
+  { The capability, the resolve method read off C, the iterator and the shared
+    state all live in native locals across the iterator's `next` and each
+    thenable's `then` — every one of them a GC safe point. Iterable itself needs
+    no root: it stays in the live AArgs, which roots its own elements. }
+  Roots.Initialize;
+  IterationRoots.Initialize;
+  try
   { Step 2: Let promiseCapability = NewPromiseCapability(C) }
   Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
+  RootCapability(Roots, Capability);
   try
     PromiseResolve := GetPromiseResolveMethod(AThisValue);
+    Roots.Add(PromiseResolve);
     Iterable := AArgs.GetElement(0);
     Iterator := GetPromiseIterator(Iterable);
+    Roots.Add(Iterator);
     State := TPromiseAllState.Create(Capability.Promise, Capability.Resolve,
       Capability.Reject, 0);
+    Roots.Add(State);
     State.Remaining := 1;
     Index := 0;
 
     while True do
     begin
+      IterationRoots.Clear;
       try
         NextValue := Iterator.DirectNext(Done);
       except
@@ -1519,13 +1590,18 @@ begin
         Exit;
       end;
 
+      IterationRoots.Add(NextValue);
+
       try
         State.Results.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
         PromiseLike := CallPromiseResolveMethod(PromiseResolve, AThisValue,
           NextValue);
+        IterationRoots.Add(PromiseLike);
         FulfillHandler := TPromiseAllHandler.Create(State, Index);
+        IterationRoots.Add(FulfillHandler);
         FulfillFn := CreatePromiseElementFunction(FulfillHandler.Invoke,
           FulfillHandler);
+        IterationRoots.Add(FulfillFn);
         State.Remaining := State.Remaining + 1;
         InvokePromiseLikeThen(PromiseLike, FulfillFn, Capability.Reject);
       except
@@ -1561,6 +1637,10 @@ begin
 
   { Step 7: Return promiseCapability.[[Promise]] }
   Result := Capability.Promise;
+  finally
+    IterationRoots.Clear;
+    Roots.Clear;
+  end;
 end;
 
 { Promise.allSettled ( iterable ) — §27.2.4.2
@@ -1589,20 +1669,30 @@ var
   AlreadyCalled: TPromiseAlreadyCalledCell;
   Done: Boolean;
   Index: Integer;
+  Roots, IterationRoots: TGocciaActiveRootFrame;
 begin
+  // Same rooting rationale as PromiseAll.
+  Roots.Initialize;
+  IterationRoots.Initialize;
+  try
   { Step 2: Let promiseCapability = NewPromiseCapability(C) }
   Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
+  RootCapability(Roots, Capability);
   try
     PromiseResolve := GetPromiseResolveMethod(AThisValue);
+    Roots.Add(PromiseResolve);
     Iterable := AArgs.GetElement(0);
     Iterator := GetPromiseIterator(Iterable);
+    Roots.Add(Iterator);
     State := TPromiseAllState.Create(Capability.Promise, Capability.Resolve,
       Capability.Reject, 0);
+    Roots.Add(State);
     State.Remaining := 1;
     Index := 0;
 
     while True do
     begin
+      IterationRoots.Clear;
       try
         NextValue := Iterator.DirectNext(Done);
       except
@@ -1623,20 +1713,28 @@ begin
         Exit;
       end;
 
+      IterationRoots.Add(NextValue);
+
       try
         State.Results.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
         PromiseLike := CallPromiseResolveMethod(PromiseResolve, AThisValue,
           NextValue);
+        IterationRoots.Add(PromiseLike);
         AlreadyCalled := TPromiseAlreadyCalledCell.Create(nil);
+        IterationRoots.Add(AlreadyCalled);
         FulfillHandler := TPromiseAllSettledFulfillHandler.Create(State,
           Index, AlreadyCalled);
+        IterationRoots.Add(FulfillHandler);
         RejectHandler := TPromiseAllSettledRejectHandler.Create(State, Index,
           AlreadyCalled);
+        IterationRoots.Add(RejectHandler);
 
         FulfillFn := CreatePromiseElementFunction(FulfillHandler.Invoke,
           FulfillHandler);
+        IterationRoots.Add(FulfillFn);
         RejectFn := CreatePromiseElementFunction(RejectHandler.Invoke,
           RejectHandler);
+        IterationRoots.Add(RejectFn);
         State.Remaining := State.Remaining + 1;
         InvokePromiseLikeThen(PromiseLike, FulfillFn, RejectFn);
       except
@@ -1672,6 +1770,10 @@ begin
 
   { Step 7: Return promiseCapability.[[Promise]] }
   Result := Capability.Promise;
+  finally
+    IterationRoots.Clear;
+    Roots.Clear;
+  end;
 end;
 
 { Promise.race ( iterable ) — §27.2.4.5
@@ -1693,16 +1795,25 @@ var
   Iterator: TGocciaIteratorValue;
   PromiseResolve, Iterable, NextValue, PromiseLike: TGocciaValue;
   Done: Boolean;
+  Roots, IterationRoots: TGocciaActiveRootFrame;
 begin
+  // Same rooting rationale as PromiseAll.
+  Roots.Initialize;
+  IterationRoots.Initialize;
+  try
   { Step 2: Let promiseCapability = NewPromiseCapability(C) }
   Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
+  RootCapability(Roots, Capability);
   try
     PromiseResolve := GetPromiseResolveMethod(AThisValue);
+    Roots.Add(PromiseResolve);
     Iterable := AArgs.GetElement(0);
     Iterator := GetPromiseIterator(Iterable);
+    Roots.Add(Iterator);
 
     while True do
     begin
+      IterationRoots.Clear;
       try
         NextValue := Iterator.DirectNext(Done);
       except
@@ -1720,9 +1831,12 @@ begin
         Exit;
       end;
 
+      IterationRoots.Add(NextValue);
+
       try
         PromiseLike := CallPromiseResolveMethod(PromiseResolve, AThisValue,
           NextValue);
+        IterationRoots.Add(PromiseLike);
         InvokePromiseLikeThen(PromiseLike, Capability.Resolve,
           Capability.Reject);
       except
@@ -1744,6 +1858,10 @@ begin
 
   { Step 7: Return promiseCapability.[[Promise]] }
   Result := Capability.Promise;
+  finally
+    IterationRoots.Clear;
+    Roots.Clear;
+  end;
 end;
 
 { Promise.any ( iterable ) — §27.2.4.3
@@ -1770,20 +1888,30 @@ var
   ErrorObj: TGocciaObjectValue;
   Done: Boolean;
   Index: Integer;
+  Roots, IterationRoots: TGocciaActiveRootFrame;
 begin
+  // Same rooting rationale as PromiseAll.
+  Roots.Initialize;
+  IterationRoots.Initialize;
+  try
   { Step 2: Let promiseCapability = NewPromiseCapability(C) }
   Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
+  RootCapability(Roots, Capability);
   try
     PromiseResolve := GetPromiseResolveMethod(AThisValue);
+    Roots.Add(PromiseResolve);
     Iterable := AArgs.GetElement(0);
     Iterator := GetPromiseIterator(Iterable);
+    Roots.Add(Iterator);
     State := TPromiseAnyState.Create(Capability.Promise, Capability.Resolve,
       Capability.Reject, 0);
+    Roots.Add(State);
     State.Remaining := 1;
     Index := 0;
 
     while True do
     begin
+      IterationRoots.Clear;
       try
         NextValue := Iterator.DirectNext(Done);
       except
@@ -1809,14 +1937,19 @@ begin
         Exit;
       end;
 
+      IterationRoots.Add(NextValue);
+
       try
         State.Errors.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
         PromiseLike := CallPromiseResolveMethod(PromiseResolve, AThisValue,
           NextValue);
+        IterationRoots.Add(PromiseLike);
         RejectHandler := TPromiseAnyRejectHandler.Create(State, Index);
+        IterationRoots.Add(RejectHandler);
 
         RejectFn := CreatePromiseElementFunction(RejectHandler.Invoke,
           RejectHandler);
+        IterationRoots.Add(RejectFn);
         State.Remaining := State.Remaining + 1;
         InvokePromiseLikeThen(PromiseLike, Capability.Resolve, RejectFn);
       except
@@ -1852,6 +1985,10 @@ begin
 
   { Step 7: Return promiseCapability.[[Promise]] }
   Result := Capability.Promise;
+  finally
+    IterationRoots.Clear;
+    Roots.Clear;
+  end;
 end;
 
 function TGocciaGlobalPromise.PromiseAllKeyed(

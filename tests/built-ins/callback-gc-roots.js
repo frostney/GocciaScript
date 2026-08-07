@@ -263,4 +263,33 @@ describe.runIf(hasGoccia)("native callback GC roots", () => {
     expect(headersJoined).toBe("a1");
     expect(paramsJoined).toBe("a1");
   });
+
+  // A live argument collection roots its elements. Without that contract an
+  // argument the caller never stored anywhere else — in bytecode, a number the
+  // VM boxed out of a raw scalar register purely to build the call — is
+  // reachable only from that collection, so a builtin that re-enters user code
+  // and then reads the argument back reads freed memory. split's @@split lookup
+  // runs an accessor before it reads its limit argument, which is exactly that
+  // shape. The allocation churn after gc() is what makes the freed slot
+  // observable; a bare gc() usually leaves it readable.
+  test("argument collection elements survive a GC from re-entered user code", () => {
+    const churn = () => {
+      Goccia.gc();
+      let total = 0;
+      for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+        const scratch = { a: i * 7.5, b: [i, i + 1], c: "x" + i };
+        total += scratch.a + scratch.b[0];
+      }
+      return total;
+    };
+
+    const separator = {
+      get [Symbol.split]() {
+        churn();
+        return (target, limit) => [target, String(limit)];
+      },
+    };
+
+    expect("abc".split(separator, 7)).toEqual(["abc", "7"]);
+  });
 });
