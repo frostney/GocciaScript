@@ -25,6 +25,21 @@ vi.mock("./helpers/mock-error-computed-key-factory.js", () => ({ ["value"]: 1 })
 // A factory that demonstrably does not return an object.
 vi.mock("./helpers/mock-error-non-object-factory.js", () => 42);
 
+// An interpolated template literal is just as demonstrably a string as a plain
+// one, so it gets the same Vitest-shaped TypeError rather than a generic
+// "could not be analysed" report.
+vi.mock("./helpers/mock-error-template-factory.js", () => `value-${1 + 1}`);
+
+// A reserved word is identifier-like but is not a BindingIdentifier, so the
+// generated module cannot declare it as an export.
+vi.mock("./helpers/mock-error-reserved-key-factory.js", () => ({ class: 1 }));
+
+// Strict-mode reserved words are rejected for the same reason: every generated
+// mock module is module source, and module source is always strict.
+vi.mock("./helpers/mock-error-strict-reserved-key-factory.js", () => ({
+  static: 1,
+}));
+
 // An async factory only has its object after a microtask, which is too late.
 vi.mock("./helpers/mock-error-async-factory.js", async () => ({ value: 1 }));
 
@@ -71,6 +86,31 @@ describe("vi.mock factories the shim cannot generate a module for", () => {
     expect(error instanceof TypeError).toBe(true);
     expect(error.message).toContain("is not returning an object");
     expect(error.message).toContain('return an object with a "default" key');
+  });
+
+  test("a factory returning an interpolated template reports a TypeError", async () => {
+    const error = await importError("./helpers/mock-error-template-factory.js");
+
+    expect(error instanceof TypeError).toBe(true);
+    expect(error.message).toContain("is not returning an object");
+  });
+
+  test("a reserved word as an export name is rejected", async () => {
+    const error = await importError(
+      "./helpers/mock-error-reserved-key-factory.js",
+    );
+
+    expect(error instanceof Error).toBe(true);
+    expect(error.message).toContain('"class" is a reserved word');
+  });
+
+  test("a strict-mode reserved word as an export name is rejected too", async () => {
+    const error = await importError(
+      "./helpers/mock-error-strict-reserved-key-factory.js",
+    );
+
+    expect(error instanceof Error).toBe(true);
+    expect(error.message).toContain('"static" is a reserved word');
   });
 
   test("an async factory is rejected", async () => {

@@ -52,7 +52,7 @@ The module exports everything the globals do — `describe`, `test`, `it`, `expe
 
 #### Availability per binary
 
-The module namespace and the globals install independently. Every host that applies the loader runtime profile registers `goccia:test`; only the runner adds the globals on top.
+The module namespace and the globals install independently. A host that applies the loader runtime profile in its default configuration — `ApplyLoaderRuntimeProfile(ARuntime)`, i.e. `ATestingModule = True` — registers `goccia:test`; only the runner adds the globals on top. `ApplyLoaderRuntimeProfile(ARuntime, False)` applies the rest of the profile with the `goccia:test` registration suppressed, which is what `GocciaTestRunner` does so its own `TGocciaTestingLibraryRuntimeExtension` owns the single registration.
 
 | Binary | `goccia:test` | Testing globals |
 |---|---|---|
@@ -63,7 +63,7 @@ The module namespace and the globals install independently. Every host that appl
 | `GocciaBenchmarkRunner` | Yes | No |
 | `GocciaScriptLoaderBare` | No — attaches no runtime | No |
 
-An embedder gets the same split: `ApplyLoaderRuntimeProfile` registers the module only, and `TGocciaTestingLibraryRuntimeExtension.CreateModuleOnly` is the direct spelling for hosts that assemble their own profile. Passing `AInjectGlobals = True` to that extension's ordinary constructor is what makes the globals appear, and the runner is the only host that does it.
+An embedder gets the same split: `ApplyLoaderRuntimeProfile` with its default `ATestingModule = True` registers the module only, and `TGocciaTestingLibraryRuntimeExtension.CreateModuleOnly` is the direct spelling for hosts that assemble their own profile. Passing `AInjectGlobals = True` to that extension's ordinary constructor is what makes the globals appear, and the runner is the only host that does it.
 
 Outside the runner the assertions object is built lazily, on the first import that resolves. A script that never imports `goccia:test` pays nothing for its availability.
 
@@ -568,7 +568,7 @@ Three Vitest behaviors follow from that structure rather than from emulation:
   Under script source type the entry file's top-level `const`/`let` are backed by the global scope, so a factory that runs *after* the test body has initialized them — which only happens when the mocked module is reached by a dynamic `import()` — can see them. Do not rely on this: it is an artifact of script-mode scoping, Vitest rejects the same code, and running the suite under module source type turns it back into an error.
 - **Factories are lazy.** A factory for a module nothing imports never runs.
 - **Isolation is per file.** The runner builds a fresh engine, module loader, and virtual-module registry per test file, so a mock cannot reach another file.
-- **A nested `vi.mock` still hoists.** A call inside an `if`, a block, a function body, or a `test()` callback is hoisted and applied, and a warning is written to stderr naming the file and specifier. This matches Vitest, which hoists nested calls, warns, and documents that it will become an error in a future version. Move such a call to the top level.
+- **A nested `vi.mock` still hoists, wherever it is written.** The hoister walks the whole file, so a call inside an `if`, a block, a function body, a `test()` callback, a call *callee*, a conditional, an array element, an object property, a class method, or a class static block is hoisted and applied — and a warning is written to stderr naming the file and specifier. This matches Vitest, which walks the whole AST, hoists nested calls, warns, and documents that it will become an error in a future version. Move such a call to the top level.
 
 Matching is by **resolved address**, so a consumer that spells the same file differently still gets the mock, and a mock applies to code under test and to the test file's own import as one shared instance.
 
@@ -583,6 +583,7 @@ The factory must be a **synchronous arrow function whose body is directly an obj
 | Spread-based partial mock: `() => ({ ...actual, fn: vi.fn() })` | Throws |
 | `async` factory, or one with a block body (`() => { return {...}; }`) | Throws |
 | Computed keys, getters, or setters in the returned object | Throws |
+| A key that is not usable as an export name, including reserved words: `() => ({ class: 1 })` | Throws (`default` is the exception — it becomes the default export) |
 | `vi.doMock` / `vi.doUnmock` / `vi.resetModules` | Throws |
 | `vi.importActual` / `vi.importMock` / `importOriginal` inside a factory | Throws |
 | `vi.mocked` | Throws (type-only helper in Vitest) |
