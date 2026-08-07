@@ -6,7 +6,7 @@ description: >
 features: [modules, runtime-modules]
 ---*/
 
-import { describe, expect, mock, test, vi } from "vitest";
+import { describe, expect, mock, test, vi, vitest } from "vitest";
 
 describe("vitest compatibility shim", () => {
   test("re-exports the testing API", () => {
@@ -41,13 +41,31 @@ describe("vitest compatibility shim", () => {
     expect(viaGlobal).toHaveBeenCalledWith("shared");
   });
 
-  test("module mocking throws and names the reason", () => {
-    expect(() => vi.mock("./x.js")).toThrow(
-      "vi.mock is not supported by the GocciaScript vitest compatibility shim",
+  test("vi.mock and vi.unmock are hoisted, so the calls themselves are no-ops", () => {
+    // The mocking itself happens before the file is parsed; see
+    // vitest-module-mock.js for the behaviour these calls stand in for.
+    expect(vi.mock("./x.js", () => ({}))).toBe(undefined);
+    expect(vi.unmock("./x.js")).toBe(undefined);
+  });
+
+  test("vitest is exported as an alias of the vi namespace", () => {
+    expect(vitest).toBe(vi);
+    expect(vitest.fn).toBe(mock);
+  });
+
+  test("the mocking members that are not implemented throw and name the reason", () => {
+    expect(() => vi.doMock("./x.js")).toThrow(
+      "vi.doMock is not supported by the GocciaScript vitest compatibility shim",
     );
-    expect(() => vi.mock("./x.js")).toThrow("keeps no module registry");
-    expect(() => vi.unmock("./x.js")).toThrow("vi.unmock is not supported");
+    expect(() => vi.doMock("./x.js")).toThrow("module-cache eviction");
+    expect(() => vi.doUnmock("./x.js")).toThrow("vi.doUnmock");
+    expect(() => vi.resetModules()).toThrow("vi.resetModules");
     expect(() => vi.importActual("./x.js")).toThrow("vi.importActual");
+    expect(() => vi.importActual("./x.js")).toThrow(
+      "the real module is not reachable once it is mocked",
+    );
+    expect(() => vi.importMock("./x.js")).toThrow("vi.importMock");
+    expect(() => vi.mocked({})).toThrow("vi.mocked");
     expect(() => vi.hoisted(() => {})).toThrow("vi.hoisted");
   });
 
@@ -74,12 +92,13 @@ describe("vitest compatibility shim", () => {
 
   test("every unsupported member is a defined function, never a no-op", () => {
     expect(typeof vi.mock).toBe("function");
+    expect(typeof vi.importActual).toBe("function");
     expect(typeof vi.useFakeTimers).toBe("function");
     expect(typeof vi.stubGlobal).toBe("function");
     expect(typeof vi.restoreAllMocks).toBe("function");
   });
 
   test("every unsupported member points at the docs", () => {
-    expect(() => vi.mock("./x.js")).toThrow("docs/testing-api.md");
+    expect(() => vi.importActual("./x.js")).toThrow("docs/testing-api.md");
   });
 });

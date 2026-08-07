@@ -486,9 +486,78 @@ The shim re-exports `goccia:test` and adds the `vi` namespace. `vi` exists only 
 |---|---|
 | `vi.fn` | The engine's `mock` |
 | `vi.spyOn` | The engine's `spyOn` |
+| `vi.mock` | Supported, **factory form only** (see below) |
+| `vi.unmock` | Supported; hoisted with `vi.mock`, last directive in source order wins |
 | everything else | Throws, naming the member and why it cannot be honored |
 
-Nothing is a silent no-op. `vi.mock` and the rest of the module-mocking family throw because the engine resolves every import once, at load time, and keeps no module registry to intercept. The fake-timer family throws because there is no fake clock — timers run on the real event loop. `vi.stubGlobal` and `vi.stubEnv` throw because globals are not snapshotted, so a stub could not be unwound safely. `vi.clearAllMocks`, `vi.resetAllMocks`, and `vi.restoreAllMocks` throw because no registry of created mocks exists; call `mockClear`, `mockReset`, or `mockRestore` on the mock itself.
+Nothing is a silent no-op. Every member that throws names its own reason rather than a blanket one.
+
+#### `vi.mock` — what is supported
+
+`vi.mock(specifier, factory)` replaces a module for the duration of one test file. The call is **hoisted**: it applies to imports written above it, exactly as in Vitest.
+
+```javascript
+import { vi } from "vitest";
+import { getRate } from "./rates.js";
+
+vi.mock("./rates.js", () => ({ getRate: () => 42 }));
+
+test("uses the mocked rate", () => {
+  expect(getRate()).toBe(42);
+});
+```
+
+Hoisting works by a pre-pass over the entry test file: before any import is linked, each `vi.mock` specifier is resolved to its absolute address and a generated module is injected into the loader's virtual-module registry, which resolves ahead of files on disk. The factory is inlined into that generated module verbatim, so it runs in its own module scope, lazily, the first time something imports the mocked module.
+
+Three Vitest behaviors follow from that structure rather than from emulation:
+
+- **A factory normally may not reference variables from the test file** — it is in a different module scope, so such a reference is a `ReferenceError`, as in Vitest. The exact behavior depends on source type, and there is one case where this engine is *looser* than Vitest:
+
+  | Source type | Mocked module imported | Factory referencing a test-file `const` |
+  |---|---|---|
+  | Module (`.mjs`, `--source-type=module`, or `source-type: module`) | statically or dynamically | `ReferenceError` — matches Vitest |
+  | Script (plain `.js`, the default) | statically | `ReferenceError` (TDZ: `Cannot access 'x' before initialization`) |
+  | Script (plain `.js`, the default) | dynamically, via `await import()` | **Resolves the variable** — looser than Vitest |
+
+  Under script source type the entry file's top-level `const`/`let` are backed by the global scope, so a factory that runs *after* the test body has initialized them — which only happens when the mocked module is reached by a dynamic `import()` — can see them. Do not rely on this: it is an artifact of script-mode scoping, Vitest rejects the same code, and running the suite under module source type turns it back into an error.
+- **Factories are lazy.** A factory for a module nothing imports never runs.
+- **Isolation is per file.** The runner builds a fresh engine, module loader, and virtual-module registry per test file, so a mock cannot reach another file.
+- **A nested `vi.mock` still hoists.** A call inside an `if`, a block, a function body, or a `test()` callback is hoisted and applied, and a warning is written to stderr naming the file and specifier. This matches Vitest, which hoists nested calls, warns, and documents that it will become an error in a future version. Move such a call to the top level.
+
+Matching is by **resolved address**, so a consumer that spells the same file differently still gets the mock, and a mock applies to code under test and to the test file's own import as one shared instance.
+
+#### `vi.mock` — what is not supported
+
+The factory must be a **synchronous arrow function whose body is directly an object literal with plain named properties**. Anything else throws:
+
+| Form | Status |
+|---|---|
+| `vi.mock(spec, () => ({ a: 1, fn: vi.fn() }))` | Supported |
+| `vi.mock(spec)` with no factory (automock) | Throws |
+| Spread-based partial mock: `() => ({ ...actual, fn: vi.fn() })` | Throws |
+| `async` factory, or one with a block body (`() => { return {...}; }`) | Throws |
+| Computed keys, getters, or setters in the returned object | Throws |
+| `vi.doMock` / `vi.doUnmock` / `vi.resetModules` | Throws |
+| `vi.importActual` / `vi.importMock` / `importOriginal` inside a factory | Throws |
+| `vi.mocked` | Throws (type-only helper in Vitest) |
+| `vi.hoisted` | Throws |
+
+**These throw on first import of the mocked module, not at the `vi.mock` call.** The `vi.mock` call itself is a no-op by then — the work happened during hoisting — so the error surfaces where the generated module is first evaluated. A mocked module nothing imports never reports its error at all, which matches the laziness Vitest also has.
+
+Export names are read statically from the factory's returned object literal, because the engine resolves named imports at link time and a generated module must declare its exports up front. That is what rules out spread-based partial mocks — a real gap, and the most likely reason an unmodified Vitest suite will not run as-is.
+
+Automock throws because it would have to execute the real module's top-level code and then deep-wrap its exports (functions to spies, classes to mock constructors, arrays to empty arrays); none of that machinery exists yet. `vi.doMock`, `vi.doUnmock`, and `vi.resetModules` throw because they need the module cache mutated after load, which the loader has no eviction path for. `vi.importActual` and `vi.importMock` throw because the registry holds one module per resolved address, so once an address is shadowed the real module is no longer reachable. `vi.hoisted` throws because the factory is relocated into its own module scope, which is precisely what `vi.hoisted` exists to work around.
+
+Further divergences from Vitest worth knowing:
+
+- A missing export is reported **eagerly, at link time**, as `Module "./m.js" has no export named "x"`. Vitest reports it lazily, at property access.
+- An **aliased or namespaced callee silently does nothing**: `import { vi as v } from "vitest"; v.mock(...)` is not hoisted and never applies. This is Vitest parity — Vitest's hoist is a syntactic transform that matches only the literal `vi.mock` / `vitest.mock` spellings — but it is silent in both, so prefer the literal spelling.
+- A **non-string specifier is skipped**, since the address cannot be resolved before evaluation.
+- Vitest silently yields `undefined` for a `var` referenced from a factory; here it is a `ReferenceError`.
+
+#### Why the other members throw
+
+The fake-timer family throws because there is no fake clock — timers run on the real event loop. `vi.stubGlobal` and `vi.stubEnv` throw because globals are not snapshotted, so a stub could not be unwound safely. `vi.clearAllMocks`, `vi.resetAllMocks`, and `vi.restoreAllMocks` throw because no registry of created mocks exists; call `mockClear`, `mockReset`, or `mockRestore` on the mock itself. `vi.resetModules` throws because the loader has no cache-eviction path.
 
 ### Writing Cross-Compatible Tests
 
@@ -520,6 +589,8 @@ expect(set).toEqual(new Set([2, 1]));
 | Arrow methods `this` | Binds to owning object | Inherits from enclosing scope |
 | Global `parseInt`, `isNaN`, etc. | Available as shims; prefer `Number.*` | Available as global functions |
 | `mock()` / `spyOn()` | Standalone globals | `vi.fn()` / `vi.spyOn()` (Vitest) or `jest.fn()` / `jest.spyOn()` (Jest) |
+| `vi.mock` factories | Must directly return an object literal; no automock, no spread-based partial mock | Any factory shape; automock and `importOriginal` partial mocks supported |
+| Missing export on a mock | Reported eagerly at link time | Reported lazily, at property access |
 
 ## Related documents
 
