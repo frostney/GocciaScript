@@ -60,6 +60,50 @@ describe("modern built-ins", () => {
     expect(c.s.has(2)).toBe(true);
   });
 
+  test("structuredClone serializes accessors as their getter's value", () => {
+    const arr = [1, 2, 3];
+    Object.defineProperty(arr, 1, {
+      get: () => 42,
+      enumerable: true,
+      configurable: true,
+    });
+    const obj = {};
+    Object.defineProperty(obj, "y", {
+      get: () => 99,
+      enumerable: true,
+      configurable: true,
+    });
+
+    const clonedArray = structuredClone(arr);
+    expect(clonedArray[1]).toBe(42);
+    expect(Object.getOwnPropertyDescriptor(clonedArray, "1")).toEqual({
+      value: 42,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+    expect(structuredClone(obj).y).toBe(99);
+  });
+
+  test("structuredClone keeps holes and non-index properties on arrays", () => {
+    const arr = [1, , 3];
+    arr.extra = "e";
+    const clone = structuredClone(arr);
+    expect(clone.length).toBe(3);
+    expect(Object.prototype.hasOwnProperty.call(clone, "1")).toBe(false);
+    expect(clone.extra).toBe("e");
+  });
+
+  test("structuredClone skips non-enumerable properties", () => {
+    const src = { a: 1 };
+    Object.defineProperty(src, "hidden", {
+      value: 2,
+      enumerable: false,
+      configurable: true,
+    });
+    expect(Object.keys(structuredClone(src))).toEqual(["a"]);
+  });
+
   test("Object.groupBy groups", () => {
     const g = Object.groupBy([1, 2, 3, 4], (n) => (n % 2 === 0 ? "even" : "odd"));
     expect(g.even).toEqual([2, 4]);

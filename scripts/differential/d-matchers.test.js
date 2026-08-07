@@ -281,8 +281,46 @@ describe("property and containment matchers", () => {
     expect(o).toHaveProperty(["a", "b", 0, "c"], 7);
   });
 
+  test("toHaveProperty tries the whole path as a literal own key first", () => {
+    expect({ "a.b": 5 }).toHaveProperty("a.b", 5);
+    // The literal check runs ahead of the walk, so it wins outright.
+    expect({ "a.b": 5, a: { b: 9 } }).toHaveProperty("a.b", 5);
+    expect({ "a.b": 5, a: { b: 9 } }).not.toHaveProperty("a.b", 9);
+    // Own only, and only ever the whole path.
+    expect({ a: { "b.c": 1 } }).not.toHaveProperty("a.b.c", 1);
+    expect({ a: { "b.c": 1 } }).toHaveProperty(["a", "b.c"], 1);
+  });
+
+  test("toHaveProperty drops empty path segments", () => {
+    expect({ a: 1 }).toHaveProperty("a.", 1);
+    expect({ a: 1 }).toHaveProperty(".a", 1);
+    expect({ a: { b: 1 } }).toHaveProperty("a..b", 1);
+    // "a." is "a", so it never reaches a nested empty-string key.
+    expect({ a: { "": 1 } }).not.toHaveProperty("a.", 1);
+    expect({ a: { "": 1 } }).toHaveProperty("a.", { "": 1 });
+    // An empty-string key is reachable only as a literal whole path.
+    expect({ "": 1 }).toHaveProperty("", 1);
+  });
+
+  test("toHaveProperty accepts a number path that names an own key", () => {
+    expect([1, 2]).toHaveProperty(0, 1);
+    expect([1, 2]).not.toHaveProperty(0, 99);
+    expect({ 5: "v" }).toHaveProperty(5, "v");
+  });
+
   test("toContainEqual with objects", () => {
     expect([{ x: 1 }, { x: 2 }]).toContainEqual({ x: 2 });
+  });
+
+  test("toMatchObject terminates on a cyclic array inside an object", () => {
+    // The top-level cyclic array is a deliberate divergence (vitest overflows
+    // its stack in both polarities), so the battery pins the nested shape,
+    // which vitest completes and agrees on.
+    const left = [];
+    left.push(left);
+    const right = [];
+    right.push(right);
+    expect({ v: left }).toMatchObject({ v: right });
   });
 
   test("toMatchObject with nested arrays", () => {
