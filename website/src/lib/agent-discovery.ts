@@ -12,6 +12,7 @@ import {
   GOCCIASCRIPT_SUMMARY,
   NODE_COMPATIBILITY_ANSWER,
   TYPE_ANNOTATIONS_ANSWER,
+  VITEST_COMPATIBILITY_ANSWER,
 } from "./positioning";
 
 export const API_CATALOG_PATH = "/.well-known/api-catalog";
@@ -151,6 +152,7 @@ Concise live compatibility summary: ${absoluteUrl(origin, COMPATIBILITY_MARKDOWN
 - ECMAScript language support: ${ECMASCRIPT_SCOPE_ANSWER}
 - Type annotations: ${TYPE_ANNOTATIONS_ANSWER}
 - Host compatibility: ${NODE_COMPATIBILITY_ANSWER}
+- Vitest compatibility: ${VITEST_COMPATIBILITY_ANSWER}
 - Compiler support: ${COMPILER_SUPPORT_ANSWER}
 
 ## Execute code
@@ -208,6 +210,7 @@ export function buildLlmsTxt(origin: string) {
 - ECMAScript language support: ${ECMASCRIPT_SCOPE_ANSWER}
 - Type annotations: ${TYPE_ANNOTATIONS_ANSWER}
 - Host compatibility: ${NODE_COMPATIBILITY_ANSWER}
+- Vitest compatibility: ${VITEST_COMPATIBILITY_ANSWER}
 - Compiler support: ${COMPILER_SUPPORT_ANSWER}
 
 ## Canonical sources

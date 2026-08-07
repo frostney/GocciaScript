@@ -102,7 +102,11 @@ release_is_missing_from_site() {
     return 0
   fi
 
-  if printf '%s' "$site_body" | grep -q "\"v\{0,1\}${latest_tag}\""; then
+  # Fixed-string, both quoted forms. A regex would let `.` match anything, so
+  # a live `0x11y0` would satisfy a search for `0.11.0` and skip a build the
+  # site actually needs.
+  if printf '%s' "$site_body" |
+    grep -qF -e "\"${latest_tag}\"" -e "\"v${latest_tag}\""; then
     echo "Live site already vendors release ${latest_tag}."
     return 1
   fi
