@@ -10,6 +10,22 @@
  * during `next build`. `next dev` skips it; the API's dev fallback chain
  * uses the locally compiled `../build/<binary>` instead.
  *
+ * Two artifacts come out of a run, both describing the same vendored set:
+ *
+ *   - `vendor/manifest.json` — sits next to the binaries it points at, and is
+ *     traced into the `/api/execute` and `/api/test` bundles along with
+ *     `vendor/**` (see `next.config.mjs`). Carries `sourceAssetDigest` so a
+ *     re-run can skip downloads.
+ *   - `src/generated/vendor-manifest.json` — a *statically imported* copy, so
+ *     every bundle that needs the version list gets it by construction. The
+ *     playground page renders in its own bundle, which does not trace
+ *     `vendor/**`; without this artifact its `process.cwd()` read finds
+ *     nothing and the page offers an empty version picker.
+ *
+ * The run hard-fails when the resulting set is not fit to deploy — see
+ * `checkVendorManifestFloor`. Individual tag failures stay warnings above
+ * that floor.
+ *
  * Set `SKIP_VENDOR_FETCH=1` to bypass when offline or when the binaries
  * have already been hand-placed under `vendor/`.
  *
@@ -19,7 +35,14 @@
  *   GOCCIA_PLAYGROUND_TAGS   — comma-separated tag list to vendor instead of
  *                              the precedence-picked set (debug only;
  *                              `nightly` is always implicitly included)
- *   GITHUB_TOKEN             — used as Bearer for higher-quota API calls
+ *   GITHUB_TOKEN             — used as Bearer for higher-quota API calls.
+ *                              Unauthenticated GitHub API access is 60
+ *                              requests/hour per IP, which shared CI/build
+ *                              IPs exhaust; set it in the Vercel project so
+ *                              release listing never silently 403s.
+ *   ALLOW_NIGHTLY_ONLY_PLAYGROUND=1
+ *                            — downgrade the deployability floor to a warning
+ *                              (early-stage repo with no safe stable release)
  *   SKIP_VENDOR_FETCH=1      — early-out, no network fetch
  */
 
@@ -39,6 +62,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parseSemverTag, pickPrecedenceVersions } from "../src/lib/github";
+import { checkVendorManifestFloor } from "../src/lib/vendor-manifest";
+import {
+  GENERATED_MANIFEST_NOTE,
+  GENERATED_MANIFEST_PATH,
+} from "./ensure-generated-manifest";
 
 const REPO = process.env.GOCCIA_REPO ?? "frostney/GocciaScript";
 const NIGHTLY_TAG = process.env.GOCCIA_NIGHTLY_TAG ?? "nightly";
@@ -311,6 +339,47 @@ async function vendorBinaries(
   };
 }
 
+/** Mirror the manifest into `src/generated/` so every bundle can import it
+ *  statically. `sourceAssetDigest` is a build-cache detail and is dropped —
+ *  the runtime never reads it. */
+async function writeGeneratedManifest(manifest: Manifest): Promise<void> {
+  const payload = {
+    _note: GENERATED_MANIFEST_NOTE,
+    defaultVersion: manifest.defaultVersion,
+    versions: manifest.versions.map(
+      ({ sourceAssetDigest: _ignored, ...entry }) => entry,
+    ),
+  };
+  await mkdir(path.dirname(GENERATED_MANIFEST_PATH), { recursive: true });
+  await writeFile(
+    GENERATED_MANIFEST_PATH,
+    `${JSON.stringify(payload, null, 2)}\n`,
+    "utf8",
+  );
+  console.log(
+    `[fetch-binaries] wrote ${GENERATED_MANIFEST_PATH} (static import for the playground page)`,
+  );
+}
+
+/** Refuse to hand a manifest to the build when it would deploy a playground
+ *  with no released engine in it. Individual tag failures are warnings; this
+ *  floor is not. */
+function enforceDeployableFloor(manifest: Manifest): void {
+  const violation = checkVendorManifestFloor(manifest);
+  if (!violation) return;
+  if (process.env.ALLOW_NIGHTLY_ONLY_PLAYGROUND === "1") {
+    console.warn(
+      `[fetch-binaries] WARN: ${violation.code}: ${violation.message} (allowed by ALLOW_NIGHTLY_ONLY_PLAYGROUND=1)`,
+    );
+    return;
+  }
+  throw new Error(
+    `${violation.code}: ${violation.message}. Vendored: ${
+      manifest.versions.map((v) => v.tag).join(", ") || "(nothing)"
+    }. Re-run with ALLOW_NIGHTLY_ONLY_PLAYGROUND=1 only if shipping a playground without a stable engine is intended.`,
+  );
+}
+
 async function loadExistingManifest(): Promise<Manifest | null> {
   if (!existsSync(MANIFEST_PATH)) return null;
   try {
@@ -388,6 +457,11 @@ async function fetchOne(
 async function main(): Promise<void> {
   if (process.env.SKIP_VENDOR_FETCH === "1") {
     console.log("[fetch-binaries] SKIP_VENDOR_FETCH=1 — leaving vendor/ as-is");
+    // Still mirror whatever is already staged: a hand-populated `vendor/`
+    // otherwise reaches the API routes but never the playground page, which
+    // reads the static import.
+    const staged = await loadExistingManifest();
+    if (staged) await writeGeneratedManifest(staged);
     return;
   }
 
@@ -495,6 +569,11 @@ async function main(): Promise<void> {
   console.log(
     `[fetch-binaries] wrote ${MANIFEST_PATH} (${versions.length} version${versions.length === 1 ? "" : "s"})`,
   );
+
+  // Order matters: the disk manifest is written first so a retry can reuse
+  // its download cache even when the floor rejects this run.
+  enforceDeployableFloor(manifest);
+  await writeGeneratedManifest(manifest);
 }
 
 main().catch((err) => {
