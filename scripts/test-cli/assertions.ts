@@ -1,15 +1,32 @@
 /**
  * Shared output-matching helpers for the scripts/test-cli*.ts harnesses.
  *
- * Pascal's WriteLn writes \r\n on Windows, so substring matches against
- * \n<value>\n fail there unless \r is stripped first.
+ * Pascal's WriteLn writes \r\n on Windows, so every matcher here has to treat
+ * CRLF and LF captures identically.
  */
 
 import { LOADER } from "./binaries";
 
-/** Returns true when `value` appears on its own line in `s`, CRLF-tolerant. */
-export const containsLine = (s: string, value: string): boolean =>
-  s.replace(/\r/g, "").includes(`\n${value}\n`);
+/**
+ * Returns true when `value` appears on its own line in `s`, CRLF-tolerant.
+ *
+ * Whole-line, not substring: `containsLine(out, "ok")` must not match a line
+ * reading `not ok`. Every line counts, including the first and the last —
+ * a capture is split into lines rather than searched for `\n<value>\n`, which
+ * can never match a boundary line.
+ *
+ * A single trailing line terminator is a terminator, not a following empty
+ * line, so `containsLine("a\n", "")` is false while `containsLine("a\n\n", "")`
+ * is true. An empty capture has no lines at all.
+ */
+export const containsLine = (s: string, value: string): boolean => {
+  if (s.length === 0) return false;
+  const lines = s.split(/\r?\n/);
+  // Drop the empty segment produced by a trailing terminator (not a line).
+  if (lines[lines.length - 1] === "") lines.pop();
+  // A capture ending in a bare CR (no LF) still ends that line there.
+  return lines.some((line) => line.replace(/\r$/, "") === value);
+};
 
 export function runLoaderJson(
   source: string,
