@@ -39,6 +39,29 @@ import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
 
+/**
+ * Re-key a coverage report by basename.
+ *
+ * Report keys are canonical coverage paths: repo-relative when the file sits
+ * under a repository root, absolute otherwise, always with '/' separators. A
+ * test that knows only the native path it passed on the command line cannot
+ * reconstruct that key — on Windows the separators differ, and whether the
+ * key is relative depends on where the temp directory happens to live. The
+ * basename is the one part both spellings agree on. Splitting on both
+ * separators keeps the helper honest if a key ever reaches it unnormalized.
+ */
+function readCoverageByBasename(path: string): Record<string, any> {
+  const raw = JSON.parse(readFileSync(path, "utf-8"));
+  return Object.fromEntries(
+    Object.entries(raw).map(([file, entry]) => [file.split(/[\\/]/).pop(), entry]),
+  ) as Record<string, any>;
+}
+
+function coverageEntryFor(reportPath: string, sourcePath: string): any {
+  const basename = sourcePath.split(/[\\/]/).pop() as string;
+  return readCoverageByBasename(reportPath)[basename];
+}
+
 const MICROBENCH_MODULE_IMPORT = 'import { bench, group } from "goccia:microbench";';
 
 function microbenchModule(lines: string[]): string {
@@ -2357,8 +2380,7 @@ console.log("Loader: coverage --output=json not corrupted...");
     }
     const functionJsonPath = join(tmp, "function-coverage.json");
     await $`${LOADER} --coverage --coverage-format=json --coverage-output=${functionJsonPath} ${functionSourcePath}`.quiet();
-    const functionJson = JSON.parse(readFileSync(functionJsonPath, "utf-8"));
-    const functionFile = functionJson[functionSourcePath];
+    const functionFile = coverageEntryFor(functionJsonPath, functionSourcePath);
     if (!functionFile) throw new Error("JSON coverage should contain the source file");
     const functionIdsByName = Object.fromEntries(
       Object.entries(functionFile.fnMap).map(([id, entry]: [string, any]) => [entry.name, id]),
@@ -2536,16 +2558,6 @@ console.log("Loader: coverage --output=json not corrupted...");
         "",
       ].join("\n"),
     );
-    // Normalize to basenames: the entry is keyed by the path as typed while
-    // imported modules are keyed by their resolved absolute path. Split on
-    // both separators — on Windows the engine resolves imports through FPC's
-    // ExpandFileName, so coverage keys arrive with backslashes.
-    const readCoverageByBasename = (path: string) => {
-      const raw = JSON.parse(readFileSync(path, "utf-8"));
-      return Object.fromEntries(
-        Object.entries(raw).map(([file, entry]) => [file.split(/[\\/]/).pop(), entry]),
-      ) as Record<string, any>;
-    };
     const implyReports: Record<string, Record<string, any>> = {};
     for (const [label, modeArgs] of [
       ["default", []],
