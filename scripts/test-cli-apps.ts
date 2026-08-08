@@ -2911,8 +2911,13 @@ console.log("Loader: coverage --output=json not corrupted...");
       const parallelCoverage = JSON.parse(readFileSync(parallelJsonPath, "utf-8"));
       if (Object.hasOwn(parallelCoverage, "<thread-init>"))
         throw new Error(`Parallel ${mode} coverage should exclude internal <thread-init> source`);
+      // Raw keys above (the internal-source check needs the literal
+      // "<thread-init>"); user sources by basename, since a report key is
+      // canonical and a native path is not.
+      const parallelByBasename = readCoverageByBasename(parallelJsonPath);
       for (const file of [parallelFirst, parallelSecond]) {
-        if (!Object.hasOwn(parallelCoverage, file))
+        const basename = file.split(/[\\/]/).pop() as string;
+        if (!Object.hasOwn(parallelByBasename, basename))
           throw new Error(`Parallel ${mode} coverage should retain user source ${file}`);
       }
     }
