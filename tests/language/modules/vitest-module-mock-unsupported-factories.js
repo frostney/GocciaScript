@@ -40,6 +40,26 @@ vi.mock("./helpers/mock-error-strict-reserved-key-factory.js", () => ({
   static: 1,
 }));
 
+// Names no module may bind, even though no keyword predicate lists them:
+// module source is always strict and always has a module goal, so `await` is
+// reserved outright and `yield`, `eval` and `arguments` are barred as
+// BindingIdentifiers. Node rejects `export const <name> = 1;` for all four.
+// GocciaScript's own parser happens to accept them, so without this rejection
+// the mock would work here and be a SyntaxError under real Vitest — a
+// divergence that only shows up once a suite is ported back.
+vi.mock("./helpers/mock-error-module-binding-await-factory.js", () => ({
+  await: 1,
+}));
+vi.mock("./helpers/mock-error-module-binding-yield-factory.js", () => ({
+  yield: 1,
+}));
+vi.mock("./helpers/mock-error-module-binding-eval-factory.js", () => ({
+  eval: 1,
+}));
+vi.mock("./helpers/mock-error-module-binding-arguments-factory.js", () => ({
+  arguments: 1,
+}));
+
 // An async factory only has its object after a microtask, which is too late.
 vi.mock("./helpers/mock-error-async-factory.js", async () => ({ value: 1 }));
 
@@ -111,6 +131,17 @@ describe("vi.mock factories the shim cannot generate a module for", () => {
 
     expect(error instanceof Error).toBe(true);
     expect(error.message).toContain('"static" is a reserved word');
+  });
+
+  test("names no module can bind are rejected as export names", async () => {
+    for (const name of ["await", "yield", "eval", "arguments"]) {
+      const error = await importError(
+        `./helpers/mock-error-module-binding-${name}-factory.js`,
+      );
+
+      expect(error instanceof Error).toBe(true);
+      expect(error.message).toContain(`"${name}" is a reserved word`);
+    }
   });
 
   test("an async factory is rejected", async () => {
