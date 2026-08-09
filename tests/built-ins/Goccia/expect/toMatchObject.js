@@ -64,6 +64,9 @@ describe("toMatchObject", () => {
   });
 
   test("handles cyclic values", () => {
+    // KNOWN DIVERGENCE for the cyclic ARRAY case (outside the audit corpus,
+    // pending a decision): vitest does not terminate on it. The cyclic Set,
+    // Map and object cases match vitest.
     const leftArray = [];
     leftArray.push(leftArray);
     const rightArray = [];
@@ -87,6 +90,31 @@ describe("toMatchObject", () => {
     const rightObject = {};
     rightObject.self = rightObject;
     expect(leftObject).toMatchObject(rightObject);
+  });
+
+  test("requires an expected undefined key to be present", () => {
+    // Vitest is the oracle: an expected key holding undefined still has to
+    // exist on the actual side.
+    expect({ a: 1 }).not.toMatchObject({ a: 1, b: undefined });
+    expect({ a: 1, b: undefined }).toMatchObject({ a: 1, b: undefined });
+  });
+
+  test("requires full equality for expected Sets and Maps", () => {
+    expect({ s: new Set([1, 2]) }).not.toMatchObject({ s: new Set([1]) });
+    expect({ s: new Set([1, 2]) }).toMatchObject({ s: new Set([2, 1]) });
+    expect({ m: new Map([["a", 1], ["b", 2]]) }).not.toMatchObject({
+      m: new Map([["a", 1]]),
+    });
+    expect({ m: new Map([["a", 1]]) }).toMatchObject({
+      m: new Map([["a", 1]]),
+    });
+  });
+
+  test("compares expected errors by their fields", () => {
+    expect({ e: new Error("x") }).toMatchObject({ e: new Error("x") });
+    expect({ e: new Error("x") }).not.toMatchObject({ e: new Error("y") });
+    // A plain expected object still describes a subset of the error.
+    expect({ e: new Error("x") }).toMatchObject({ e: {} });
   });
 
   test("supports negation", () => {

@@ -391,6 +391,7 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.Formatting,
   Goccia.Values.HoleValue,
+  Goccia.Values.MapValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
   Goccia.Values.SetValue,
@@ -768,6 +769,45 @@ begin
     Result := ERROR_NAME;
 end;
 
+{ The subject the string and RegExp forms match against. Vitest reads the
+  thrown value's message, falling back to the thrown value itself only when it
+  is already a string; a thrown number, boolean or message-less object offers
+  no subject and matches nothing. A thrown null or undefined is the one shape
+  Vitest lets match anything. }
+type
+  TGocciaThrowSubject = (tsAnything, tsText, tsNothing);
+
+function ThrownMessageSubject(const AValue: TGocciaValue;
+  out AText: string): TGocciaThrowSubject;
+var
+  MessageValue: TGocciaValue;
+begin
+  AText := '';
+
+  if (AValue = nil) or (AValue is TGocciaUndefinedLiteralValue) or
+     (AValue is TGocciaNullLiteralValue) then
+    Exit(tsAnything);
+
+  if AValue is TGocciaObjectValue then
+  begin
+    MessageValue := TGocciaObjectValue(AValue).GetProperty(PROP_MESSAGE);
+    if MessageValue is TGocciaStringLiteralValue then
+    begin
+      AText := TGocciaStringLiteralValue(MessageValue).Value;
+      Exit(tsText);
+    end;
+    Exit(tsNothing);
+  end;
+
+  if AValue is TGocciaStringLiteralValue then
+  begin
+    AText := TGocciaStringLiteralValue(AValue).Value;
+    Exit(tsText);
+  end;
+
+  Result := tsNothing;
+end;
+
 { toThrow accepts a substring, a RegExp, an error constructor, an Error
   instance, or an asymmetric matcher. Anything else is a usage error. }
 function IsSupportedThrowExpectation(const AValue: TGocciaValue): Boolean;
@@ -798,6 +838,7 @@ function ThrownValueMatchesExpectation(const AThrownValue,
   AExpected: TGocciaValue): Boolean;
 var
   ExpectedSubstring: string;
+  Subject: string;
   MatchValue: TGocciaValue;
   MatchIndex: Integer;
   MatchEnd: Integer;
@@ -806,17 +847,25 @@ begin
   if AExpected is TGocciaAsymmetricMatcherValue then
     Exit(IsDeepEqual(AThrownValue, AExpected));
 
-  if AExpected is TGocciaStringLiteralValue then
+  if (AExpected is TGocciaStringLiteralValue) or
+     IsRegExpInstance(AExpected) then
   begin
-    ExpectedSubstring := TGocciaStringLiteralValue(AExpected).Value;
-    // Pos returns 0 for an empty needle, but every message contains one.
-    Exit((ExpectedSubstring = '') or
-      (Pos(ExpectedSubstring, ThrownValueMessage(AThrownValue)) > 0));
-  end;
+    case ThrownMessageSubject(AThrownValue, Subject) of
+      tsAnything: Exit(True);
+      tsNothing: Exit(False);
+    end;
 
-  if IsRegExpInstance(AExpected) then
-    Exit(MatchRegExpObject(AExpected, ThrownValueMessage(AThrownValue), 0,
-      False, False, MatchValue, MatchIndex, MatchEnd, NextIndex));
+    if IsRegExpInstance(AExpected) then
+      Exit(MatchRegExpObject(AExpected, Subject, 0, False, False, MatchValue,
+        MatchIndex, MatchEnd, NextIndex));
+
+    ExpectedSubstring := TGocciaStringLiteralValue(AExpected).Value;
+    { An empty expected string asserts an empty message rather than matching
+      everything, the way Vitest compiles it to /^$/. }
+    if ExpectedSubstring = '' then
+      Exit(Subject = '');
+    Exit(Pos(ExpectedSubstring, Subject) > 0);
+  end;
 
   // ES2026 §13.10.2 InstanceofOperator(value, target) — the same prototype
   // walk the instanceof operator uses, so `class Derived extends Error {}`
@@ -824,7 +873,10 @@ begin
   if AExpected.IsCallable then
     Exit(InstanceofOperatorResult(AThrownValue, AExpected));
 
-  Result := ThrownValueMessage(AThrownValue) = ThrownValueMessage(AExpected);
+  { An expected error instance is compared as a value: name, message, own
+    enumerable properties and an expected-side cause all participate, so a
+    TypeError never satisfies an expected plain Error. }
+  Result := IsDeepEqual(AThrownValue, AExpected);
 end;
 
 function FormatThrowValueDetail(const AValue: TGocciaValue): string;
@@ -1284,29 +1336,49 @@ function TGocciaExpectationValue.ToContainEqual(const AArgs: TGocciaArgumentsCol
 var
   Expected: TGocciaValue;
   I: Integer;
+  SetCursor: Integer;
+  SetItem: TGocciaValue;
   Contains: Boolean;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toContainEqual', FTestAssertions.ThrowError);
 
-  if not (FActualValue is TGocciaArrayValue) then
+  if not ((FActualValue is TGocciaArrayValue) or
+     (FActualValue is TGocciaSetValue)) then
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionPassed('toContainEqual')
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toContainEqual',
-        'Expected an array but received ' + FormatForDisplay(FActualValue));
+        'Expected an array or a Set but received ' +
+        FormatForDisplay(FActualValue));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
 
   Expected := AArgs.GetElement(0);
   Contains := False;
-  for I := 0 to TGocciaArrayValue(FActualValue).Elements.Count - 1 do
-    if IsDeepEqual(TGocciaArrayValue(FActualValue).Elements[I], Expected) then
-    begin
-      Contains := True;
-      Break;
+  if FActualValue is TGocciaSetValue then
+  begin
+    SetCursor := 0;
+    TGocciaSetValue(FActualValue).RetainIterator;
+    try
+      while TGocciaSetValue(FActualValue).NextItem(SetCursor, SetItem) do
+        if IsDeepEqual(SetItem, Expected) then
+        begin
+          Contains := True;
+          Break;
+        end;
+    finally
+      TGocciaSetValue(FActualValue).ReleaseIterator;
     end;
+  end
+  else
+    for I := 0 to TGocciaArrayValue(FActualValue).Elements.Count - 1 do
+      if IsDeepEqual(TGocciaArrayValue(FActualValue).Elements[I], Expected) then
+      begin
+        Contains := True;
+        Break;
+      end;
 
   if FIsNegated then
     Contains := not Contains;
@@ -1916,6 +1988,15 @@ begin
   if FActualValue is TGocciaArrayValue then
   begin
     HasLength := TGocciaArrayValue(FActualValue).Elements.Count = Expected.ToNumberLiteral.Value;
+  end
+  // A Set and a Map report their entry count as size rather than length.
+  else if FActualValue is TGocciaSetValue then
+  begin
+    HasLength := TGocciaSetValue(FActualValue).Count = Expected.ToNumberLiteral.Value;
+  end
+  else if FActualValue is TGocciaMapValue then
+  begin
+    HasLength := TGocciaMapValue(FActualValue).Count = Expected.ToNumberLiteral.Value;
   end
   else if FActualValue is TGocciaObjectValue then
   begin
