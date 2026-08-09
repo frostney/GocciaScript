@@ -331,7 +331,11 @@ begin
   AddCoverageOptions;
   FNoProgress := AddFlag('no-progress', 'Suppress per-file progress output');
   FNoResults := AddFlag('no-results', 'Suppress test results summary');
-  FExitOnFirst := AddFlag('exit-on-first-failure', 'Stop on first test failure');
+  FExitOnFirst := AddFlag('exit-on-first-failure',
+    'Stop on first test failure or suite error. Sequential runs stop at the '
+    + 'failing file; under --jobs the queue is cancelled but files already '
+    + 'in flight run to completion, so some files after the failure still '
+    + 'execute.');
   FSilent := AddFlag('silent', 'Suppress console output from test scripts');
   FOutputFile := AddString('output',
     '"json" emits a structured JSON envelope to stdout, "compact-json" '

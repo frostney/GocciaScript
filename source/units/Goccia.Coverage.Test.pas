@@ -23,6 +23,11 @@ type
     procedure TestMergeSumsFunctionHitCounts;
     procedure TestMergeRetainsZeroHitBranchesAndFunctions;
     procedure TestMergeAdoptsUnknownFilesAndExecutableLines;
+    procedure TestVirtualPathsAreLeftVerbatim;
+    procedure TestCanonicalPathUsesForwardSlashes;
+    procedure TestEntryAndImportSpellingsShareOneRecord;
+    procedure TestResolvedSourcePathSurvivesCanonicalization;
+    procedure TestCanonicalPathIsRepoRelativeUnderARepository;
   end;
 
 const
@@ -37,6 +42,37 @@ begin
     TestMergeRetainsZeroHitBranchesAndFunctions);
   Test('MergeFrom adopts unknown files and executable line counts',
     TestMergeAdoptsUnknownFilesAndExecutableLines);
+  Test('virtual paths are left verbatim', TestVirtualPathsAreLeftVerbatim);
+  Test('canonical paths use forward slashes',
+    TestCanonicalPathUsesForwardSlashes);
+  Test('entry and import spellings share one record',
+    TestEntryAndImportSpellingsShareOneRecord);
+  Test('resolved source path survives canonicalization',
+    TestResolvedSourcePathSurvivesCanonicalization);
+  Test('canonical path is repo-relative under a repository',
+    TestCanonicalPathIsRepoRelativeUnderARepository);
+end;
+
+{ A temporary file the canonicalizer can actually stat.  Returned as the
+  absolute path; callers derive the other spellings they need from it.
+
+  Deliberately created under the working directory rather than the system
+  temp directory: canonicalization is textual (ExpandFileName), so it does
+  not collapse spellings that differ by a symlinked ancestor, and on macOS
+  the temp directory is reached through the /var -> /private/var symlink. }
+function MakeTempSourceFile: string;
+var
+  Lines: TextFile;
+begin
+  Result := IncludeTrailingPathDelimiter(GetCurrentDir) +
+    Format('goccia-cov-%d.js', [Random(1000000)]);
+  AssignFile(Lines, Result);
+  Rewrite(Lines);
+  try
+    WriteLn(Lines, 'const a = 1;');
+  finally
+    CloseFile(Lines);
+  end;
 end;
 
 function TTestCoverage.MakeWorker(const AFilePath: string;
@@ -213,6 +249,113 @@ begin
     end;
   finally
     Main.Free;
+  end;
+end;
+
+{ `<stdin>` and multifile section names identify sources that were never on
+  disk.  Expanding them would invent a bogus absolute path, so they must pass
+  through untouched. }
+procedure TTestCoverage.TestVirtualPathsAreLeftVerbatim;
+begin
+  Expect<string>(CanonicalCoveragePath('<stdin>')).ToBe('<stdin>');
+  Expect<string>(CanonicalCoveragePath('<stdin>[part1]')).ToBe('<stdin>[part1]');
+  Expect<string>(CanonicalCoveragePath('')).ToBe('');
+end;
+
+{ genhtml and Codecov mishandle backslash separators in an `SF:` record, so
+  every emitted path uses '/' whatever the platform produced. }
+procedure TTestCoverage.TestCanonicalPathUsesForwardSlashes;
+var
+  SourceFile, Canonical: string;
+begin
+  SourceFile := MakeTempSourceFile;
+  try
+    Canonical := CanonicalCoveragePath(SourceFile);
+    Expect<Boolean>(Pos('\', Canonical) > 0).ToBe(False);
+    Expect<Boolean>(Canonical <> '').ToBe(True);
+  finally
+    DeleteFile(SourceFile);
+  end;
+end;
+
+{ The regression behind issue #1094: a file reached both as the entry point
+  (keyed by the spelling as typed) and as an import (keyed by its resolved
+  absolute path) produced two records whose hits were never added together. }
+procedure TTestCoverage.TestEntryAndImportSpellingsShareOneRecord;
+var
+  Tracker: TGocciaCoverageTracker;
+  SourceFile, RelativeSpelling: string;
+begin
+  SourceFile := MakeTempSourceFile;
+  try
+    { A relative spelling of the same file, as a command line would supply. }
+    RelativeSpelling := '.' + PathDelim + ExtractFileName(SourceFile);
+    Expect<string>(CanonicalCoveragePath(RelativeSpelling))
+      .ToBe(CanonicalCoveragePath(SourceFile));
+
+    Tracker := TGocciaCoverageTracker.Create;
+    try
+      Tracker.RegisterSourceFile(RelativeSpelling, 3);
+      Tracker.RecordLineHit(RelativeSpelling, 1);
+      { Same physical file, absolute spelling — the import route. }
+      Tracker.RecordLineHit(SourceFile, 1);
+
+      Expect<Integer>(Tracker.Files.Count).ToBe(1);
+      Expect<Integer>(
+        Tracker.GetFileCoverage(SourceFile).GetLineHitCount(1)).ToBe(2);
+      Expect<Integer>(
+        Tracker.GetFileCoverage(RelativeSpelling).ExecutableLines).ToBe(3);
+    finally
+      Tracker.Free;
+    end;
+  finally
+    DeleteFile(SourceFile);
+  end;
+end;
+
+{ Under a repository root the canonical form drops the root prefix, which is
+  what Codecov matches against and what genhtml resolves. }
+procedure TTestCoverage.TestCanonicalPathIsRepoRelativeUnderARepository;
+var
+  SourceFile, Canonical: string;
+begin
+  SourceFile := MakeTempSourceFile;
+  try
+    Canonical := CanonicalCoveragePath(SourceFile);
+    if FindRepositoryRoot(ExtractFileDir(SourceFile)) <> '' then
+      Expect<string>(Canonical).ToBe(ExtractFileName(SourceFile))
+    else
+      { Outside any repository there is no root to be relative to. }
+      Expect<string>(Canonical).ToBe(
+        NormalizeCoveragePathSeparators(SourceFile));
+  finally
+    DeleteFile(SourceFile);
+  end;
+end;
+
+{ A canonical key may be repo-relative and so unresolvable from the process's
+  working directory.  Reporters read source through the remembered native
+  path instead, which must survive canonicalization. }
+procedure TTestCoverage.TestResolvedSourcePathSurvivesCanonicalization;
+var
+  Tracker: TGocciaCoverageTracker;
+  SourceFile, Canonical: string;
+begin
+  SourceFile := MakeTempSourceFile;
+  try
+    Tracker := TGocciaCoverageTracker.Create;
+    try
+      Tracker.RegisterSourceFile(SourceFile, 1);
+      Canonical := CanonicalCoveragePath(SourceFile);
+      Expect<Boolean>(
+        FileExists(Tracker.ResolvedSourcePath(Canonical))).ToBe(True);
+      { Unknown keys fall back to themselves rather than returning ''. }
+      Expect<string>(Tracker.ResolvedSourcePath('<stdin>')).ToBe('<stdin>');
+    finally
+      Tracker.Free;
+    end;
+  finally
+    DeleteFile(SourceFile);
   end;
 end;
 

@@ -179,7 +179,7 @@ var
   OwnsSource: Boolean;
   ExecutableFlags: array of Boolean;
   I, HitCount, LineWidth: Integer;
-  Gutter: string;
+  Gutter, SourcePath: string;
 begin
   FileCov := ATracker.GetFileCoverage(AFilePath);
   if not Assigned(FileCov) then Exit;
@@ -191,8 +191,12 @@ begin
   end
   else
   begin
-    if not FileExists(AFilePath) then Exit;
-    SourceLines := CreateFileTextLines(ReadUTF8FileText(AFilePath));
+    { Read through the resolved on-disk path — the record's own name is
+      the canonical report key, which is repo-relative and need not
+      resolve against the working directory. }
+    SourcePath := ATracker.ResolvedSourcePath(FileCov.FileName);
+    if not FileExists(SourcePath) then Exit;
+    SourceLines := CreateFileTextLines(ReadUTF8FileText(SourcePath));
     OwnsSource := True;
   end;
 
@@ -209,7 +213,9 @@ begin
       LineWidth := 3;
 
     WriteLn;
-    WriteLn(AFilePath + ':');
+    { Print the canonical key so the detail header matches the file column
+      of the summary table and the SF:/JSON keys. }
+    WriteLn(FileCov.FileName + ':');
 
     for I := 0 to SourceLines.Count - 1 do
     begin
@@ -251,6 +257,7 @@ var
   SrcMap: TGocciaSourceMap;
   OrigLine, OrigCol: Integer;
   BranchLine, BranchCol: Integer;
+  SourcePath: string;
 begin
   Output := TStringList.Create;
   try
@@ -259,16 +266,19 @@ begin
     for Pair in ATracker.Files do
     begin
       FileCov := Pair.Value;
+      { SF: carries the canonical key — repo-relative with '/' separators,
+        which is what Codecov matches against and what genhtml resolves. }
       Output.Add('SF:' + FileCov.FileName);
       SrcMap := ATracker.GetSourceMap(FileCov.FileName);
+      SourcePath := ATracker.ResolvedSourcePath(FileCov.FileName);
 
       // Load source to identify executable lines for zero-hit entries
       HasSource := False;
       SourceLines := nil;
       try
-        if FileExists(FileCov.FileName) then
+        if FileExists(SourcePath) then
         begin
-          SourceLines := CreateFileTextLines(ReadUTF8FileText(FileCov.FileName));
+          SourceLines := CreateFileTextLines(ReadUTF8FileText(SourcePath));
           if SourceLines.Count > 0 then
           begin
             SetLength(ExecutableFlags, SourceLines.Count);
@@ -425,6 +435,7 @@ var
   BranchLine, BranchCol: Integer;
   FunctionLine, FunctionCol: Integer;
   Func: TGocciaCoverageFunction;
+  SourcePath: string;
 begin
   Buf := TStringBuffer.Create(4096);
   Buf.Append('{');
@@ -437,6 +448,7 @@ begin
       Buf.AppendChar(',');
     FirstFile := False;
     SrcMap := ATracker.GetSourceMap(FileCov.FileName);
+    SourcePath := ATracker.ResolvedSourcePath(FileCov.FileName);
 
     Buf.Append(#10'  "');
     Buf.Append(EscapeJSONString(FileCov.FileName));
@@ -451,9 +463,9 @@ begin
     HasSource := False;
     SourceLines := nil;
     try
-      if FileExists(FileCov.FileName) then
+      if FileExists(SourcePath) then
       begin
-        SourceLines := CreateFileTextLines(ReadUTF8FileText(FileCov.FileName));
+        SourceLines := CreateFileTextLines(ReadUTF8FileText(SourcePath));
         if SourceLines.Count > 0 then
         begin
           SetLength(ExecutableFlags, SourceLines.Count);
