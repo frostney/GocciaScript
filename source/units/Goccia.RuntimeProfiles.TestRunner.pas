@@ -14,28 +14,36 @@ procedure ApplyTestRunnerRuntimeProfile(const ARuntime: TGocciaRuntimeCore);
 procedure ApplyTestRunnerRuntimeProfile(const ARuntime: TGocciaRuntimeCore;
   const ASnapshotHost: IGocciaSnapshotHost;
   const ASnapshotUpdateMode: TGocciaSnapshotUpdateMode;
-  const ASnapshotFormatter: IGocciaSnapshotFormatter = nil); overload;
+  const ASnapshotFormatter: IGocciaSnapshotFormatter = nil;
+  const AVitestCompat: Boolean = True); overload;
 
 implementation
 
 uses
   Goccia.RuntimeExtensions.TestingLibrary,
+  Goccia.RuntimeExtensions.VitestCompat,
   Goccia.RuntimeProfiles.Loader;
 
 procedure ApplyTestRunnerRuntimeProfile(const ARuntime: TGocciaRuntimeCore);
   overload;
 begin
-  ApplyTestRunnerRuntimeProfile(ARuntime, nil, sumNew, nil);
+  ApplyTestRunnerRuntimeProfile(ARuntime, nil, sumNew, nil, True);
 end;
 
 procedure ApplyTestRunnerRuntimeProfile(const ARuntime: TGocciaRuntimeCore;
   const ASnapshotHost: IGocciaSnapshotHost;
   const ASnapshotUpdateMode: TGocciaSnapshotUpdateMode;
-  const ASnapshotFormatter: IGocciaSnapshotFormatter); overload;
+  const ASnapshotFormatter: IGocciaSnapshotFormatter;
+  const AVitestCompat: Boolean); overload;
 begin
   ApplyLoaderRuntimeProfile(ARuntime);
   ARuntime.Install(TGocciaTestingLibraryRuntimeExtension.Create(
     ASnapshotHost, ASnapshotUpdateMode, ASnapshotFormatter));
+  { A suite written against Vitest imports from a bare `vitest` specifier,
+    which resolves to nothing otherwise. Installed by default so such a suite
+    runs unchanged; --no-vitest-compat leaves the specifier unresolvable. }
+  if AVitestCompat then
+    ARuntime.Install(TGocciaVitestCompatRuntimeExtension.Create);
 end;
 
 end.

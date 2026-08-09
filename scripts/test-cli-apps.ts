@@ -6739,4 +6739,47 @@ for (const app of [
     throw new Error(`${app.name} should not advertise the stdin rule:\n${help}`);
 }
 
+console.log("TestRunner: vitest compatibility shim and its off-switch...");
+{
+  const tmp = makeTmp();
+  try {
+    const suitePath = join(tmp, "vitest-import.test.js");
+    writeFileSync(
+      suitePath,
+      [
+        'import { vi } from "vitest";',
+        'test("vi.fn is available", () => {',
+        "  const fn = vi.fn();",
+        "  fn(1);",
+        "  expect(fn).toHaveBeenCalledWith(1);",
+        "});",
+        "",
+      ].join("\n"),
+    );
+
+    const enabled = Bun.spawnSync([TESTRUNNER, suitePath, "--no-progress"]);
+    const enabledOutput = new TextDecoder().decode(enabled.stdout);
+    if (!enabledOutput.includes("Passed: 1"))
+      throw new Error(
+        `TestRunner should resolve the bare vitest specifier by default:\n${enabledOutput}`,
+      );
+
+    const disabled = Bun.spawnSync([
+      TESTRUNNER,
+      suitePath,
+      "--no-progress",
+      "--no-vitest-compat",
+    ]);
+    const disabledOutput =
+      new TextDecoder().decode(disabled.stdout) +
+      new TextDecoder().decode(disabled.stderr);
+    if (!disabledOutput.includes('Cannot resolve bare module specifier "vitest"'))
+      throw new Error(
+        `--no-vitest-compat should leave the vitest specifier unresolvable:\n${disabledOutput}`,
+      );
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("\nAll test-cli-apps.ts tests passed.");

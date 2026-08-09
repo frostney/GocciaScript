@@ -83,11 +83,13 @@ const CLASSIFICATION: Record<string, Classification> = {
   "b-modules.test.js": { kind: "language", bun: "gate", vitest: "skip" },
   "c-builtins.test.js": { kind: "language", bun: "gate", vitest: "skip" },
   "d-matchers.test.js": { kind: "matcher", bun: "advisory", vitest: "gate" },
-  // Goccia-only for now: the battery reaches for the `mock`/`spyOn` globals,
-  // which neither external runtime injects. Its three-way upgrade waits on the
-  // planned `goccia:test` module and shipped vitest-compat shim, which let it
-  // import `vi` from a bare `vitest` specifier under every runtime.
-  "e-mocks.goccia.test.js": { kind: "mocks", bun: "skip", vitest: "skip" },
+  // Now three-way: the battery imports `vi` from a bare `vitest` specifier,
+  // which vitest resolves to itself and goccia resolves to its bundled
+  // compatibility shim. Bun stays skipped — it injects its own `vi` under
+  // `bun:test`, but importing the real `vitest` package from a `bun test` file
+  // drops bun's injected globals and the file dies on `describe is not
+  // defined`, so there is no bun-runnable spelling of this battery.
+  "e-mocks.test.js": { kind: "mocks", bun: "skip", vitest: "gate" },
   "f-lifecycle.test.js": { kind: "lifecycle", bun: "advisory", vitest: "gate" },
   "g-filehook.test.js": { kind: "lifecycle", bun: "advisory", vitest: "gate" },
 };
