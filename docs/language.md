@@ -413,13 +413,13 @@ const el = <div className="active">Hello {name}</div>;
 // Transformed to: createElement("div", { className: "active" }, "Hello ", name)
 ```
 
-**Supported syntax:** Elements, self-closing tags (`<br />`), fragments (`<>...</>`), string/expression/boolean attributes, spread attributes (`{...props}`), shorthand props (`<div {value} />` → `value={value}`), expression children (`{expr}`), nested JSX in expressions, dotted component names (`<Foo.Bar />`).
+**Supported syntax:** Elements, self-closing tags (`<br />`), fragments (`<>...</>`), string/expression/boolean attributes, spread attributes (`{...props}`), shorthand props (`<div {value} />` → `value={value}`), expression children (`{expr}`), nested JSX in expressions, dotted component names (`<Foo.Bar />`). Namespaced attribute names (`xlink:href`) and non-ASCII attribute names are **not** supported; both are reported as an unsupported-attribute-syntax `SyntaxError`.
 
 Lowercase tags produce string tag names (`"div"`, `"span"`); uppercase tags are passed as identifier references (component functions/classes).
 
 **Custom factory:** The factory and fragment function names can be overridden per-file using pragma comments (`@jsxFactory`, `@jsxFragment`) at the top of the file, before any code.
 
-The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled by default via `DefaultPreprocessors`; embedders can disable it with `Engine.Preprocessors := Engine.Preprocessors - [ppJSX]`.
+The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled by default via `DefaultPreprocessors`; embedders can disable it with `Engine.Preprocessors := Engine.Preprocessors - [ppJSX]`. Opening-tag detection is a heuristic, so source that merely looks like JSX — a TypeScript type annotation such as `: <T>(x: T) => T`, for example — can start a JSX scan; when that scan stalls on a character no branch consumes, exceeds the nesting bound, or reaches the end of input inside an opening tag, the transformer reports a `SyntaxError` positioned in the original source rather than scanning on.
 
 ### Regular Expressions
 
