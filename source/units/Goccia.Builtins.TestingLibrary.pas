@@ -103,9 +103,13 @@ type
   private
     FActualValue: TGocciaValue;
     FIsNegated: Boolean;
+    // True when FActualValue is a promise rejection reason unwrapped by
+    // .rejects, so toThrow treats it as the thrown value instead of calling it.
+    FIsRejectionReason: Boolean;
     FTestAssertions: TGocciaTestAssertions; // Reference to parent
   public
-    constructor Create(const AActualValue: TGocciaValue; const ATestAssertions: TGocciaTestAssertions; const AIsNegated: Boolean = False);
+    constructor Create(const AActualValue: TGocciaValue; const ATestAssertions: TGocciaTestAssertions; const AIsNegated: Boolean = False;
+      const AIsRejectionReason: Boolean = False);
 
     // Core matchers
     function ToBe(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -370,7 +374,8 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
   Goccia.Values.SetValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.VM.Exception;
 
 function SnapshotTestName(const AAssertions: TGocciaTestAssertions): string;
 begin
@@ -535,6 +540,120 @@ begin
     end;
     CurrentProto := CurrentProto.Prototype;
   end;
+end;
+
+{ The message a thrown value contributes to string and RegExp comparisons.
+  Jest reads the "message" property of Error-like values and falls back to the
+  string form of anything else, so `throw 42` matches toThrow('42'). }
+function ThrownValueMessage(const AValue: TGocciaValue): string;
+var
+  MessageValue: TGocciaValue;
+begin
+  if AValue is TGocciaObjectValue then
+  begin
+    MessageValue := TGocciaObjectValue(AValue).GetProperty(PROP_MESSAGE);
+    if MessageValue is TGocciaStringLiteralValue then
+      Exit(TGocciaStringLiteralValue(MessageValue).Value);
+  end;
+
+  if AValue is TGocciaSymbolValue then
+    Exit(TGocciaSymbolValue(AValue).ToDisplayString.Value);
+
+  Result := AValue.ToStringLiteral.Value;
+end;
+
+{ Errors carry non-enumerable fields and would otherwise render as an empty
+  object, so describe them by name and message in assertion output. }
+function DescribeThrowValue(const AValue: TGocciaValue): string;
+var
+  NameValue: TGocciaValue;
+  MessageValue: TGocciaValue;
+begin
+  if AValue is TGocciaObjectValue then
+  begin
+    NameValue := TGocciaObjectValue(AValue).GetProperty(PROP_NAME);
+    MessageValue := TGocciaObjectValue(AValue).GetProperty(PROP_MESSAGE);
+    if (NameValue is TGocciaStringLiteralValue) and
+       (MessageValue is TGocciaStringLiteralValue) then
+      Exit(TGocciaStringLiteralValue(NameValue).Value + ': ' +
+        TGocciaStringLiteralValue(MessageValue).Value);
+  end;
+
+  Result := FormatForDisplay(AValue);
+end;
+
+{ The JavaScript error name whose prototype an engine-level Pascal error maps
+  onto, so a rebuilt error object matches the same constructors a JS throw of
+  the equivalent error would. }
+function EngineErrorName(const AError: TGocciaError): string;
+begin
+  if AError is TGocciaTypeError then
+    Result := TYPE_ERROR_NAME
+  else if AError is TGocciaReferenceError then
+    Result := REFERENCE_ERROR_NAME
+  else if AError is TGocciaSyntaxError then
+    Result := SYNTAX_ERROR_NAME
+  else
+    Result := ERROR_NAME;
+end;
+
+{ toThrow accepts a substring, a RegExp, an error constructor, an Error
+  instance, or an asymmetric matcher. Anything else is a usage error. }
+function IsSupportedThrowExpectation(const AValue: TGocciaValue): Boolean;
+begin
+  Result := (AValue is TGocciaStringLiteralValue) or
+    (AValue is TGocciaObjectValue) or AValue.IsCallable;
+end;
+
+function ThrowExpectationDescription(const AValue: TGocciaValue): string;
+begin
+  if IsRegExpInstance(AValue) then
+    Result := RegExpObjectToString(AValue)
+  else if AValue is TGocciaClassValue then
+    Result := TGocciaClassValue(AValue).Name
+  else if AValue is TGocciaNativeFunctionValue then
+    Result := TGocciaNativeFunctionValue(AValue).Name
+  else
+    Result := DescribeThrowValue(AValue);
+end;
+
+{ Applies the argument form the expectation was given:
+  - string: the thrown message contains it
+  - RegExp: the thrown message matches it
+  - constructor: the thrown value is an instance of it, subclasses included
+  - Error instance: the messages are equal
+  - asymmetric matcher: delegated to the matcher }
+function ThrownValueMatchesExpectation(const AThrownValue,
+  AExpected: TGocciaValue): Boolean;
+var
+  ExpectedSubstring: string;
+  MatchValue: TGocciaValue;
+  MatchIndex: Integer;
+  MatchEnd: Integer;
+  NextIndex: Integer;
+begin
+  if AExpected is TGocciaAsymmetricMatcherValue then
+    Exit(IsDeepEqual(AThrownValue, AExpected));
+
+  if AExpected is TGocciaStringLiteralValue then
+  begin
+    ExpectedSubstring := TGocciaStringLiteralValue(AExpected).Value;
+    // Pos returns 0 for an empty needle, but every message contains one.
+    Exit((ExpectedSubstring = '') or
+      (Pos(ExpectedSubstring, ThrownValueMessage(AThrownValue)) > 0));
+  end;
+
+  if IsRegExpInstance(AExpected) then
+    Exit(MatchRegExpObject(AExpected, ThrownValueMessage(AThrownValue), 0,
+      False, False, MatchValue, MatchIndex, MatchEnd, NextIndex));
+
+  // ES2026 §13.10.2 InstanceofOperator(value, target) — the same prototype
+  // walk the instanceof operator uses, so `class Derived extends Error {}`
+  // satisfies both toThrow(Derived) and toThrow(Error).
+  if AExpected.IsCallable then
+    Exit(InstanceofOperatorResult(AThrownValue, AExpected));
+
+  Result := ThrownValueMessage(AThrownValue) = ThrownValueMessage(AExpected);
 end;
 
 function FormatThrowValueDetail(const AValue: TGocciaValue): string;
@@ -833,12 +952,14 @@ end;
 
 { TGocciaExpectationValue }
 
-constructor TGocciaExpectationValue.Create(const AActualValue: TGocciaValue; const ATestAssertions: TGocciaTestAssertions; const AIsNegated: Boolean);
+constructor TGocciaExpectationValue.Create(const AActualValue: TGocciaValue; const ATestAssertions: TGocciaTestAssertions; const AIsNegated: Boolean;
+  const AIsRejectionReason: Boolean);
 begin
   inherited Create;
   FActualValue := AActualValue;
   FTestAssertions := ATestAssertions;
   FIsNegated := AIsNegated;
+  FIsRejectionReason := AIsRejectionReason;
 
   // Add matcher methods
   DefineProperty('toBe', TGocciaPropertyDescriptorData.Create(
@@ -1706,187 +1827,126 @@ end;
 
 function TGocciaExpectationValue.ToThrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  ExpectedErrorType: string;
+  Expected: TGocciaValue;
+  HasExpectation: Boolean;
+  ThrownValue: TGocciaValue;
+  DidThrow: Boolean;
+  Matches: Boolean;
   EmptyArgs: TGocciaArgumentsCollection;
-  TestFunc: TGocciaFunctionBase;
-  ThrownObj: TGocciaObjectValue;
-  ErrorConstructor: TGocciaValue;
-  ConstructorName: string;
-  ErrorName: string;
-  ErrorClassArg: TGocciaValue;
+  TestFunction: TGocciaFunctionBase;
+  SubjectDescription: string;
+  ExpectedDescription: string;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  ExpectedErrorType := '';
-  if AArgs.Length > 0 then
+  Expected := nil;
+  // toThrow(undefined) is the no-argument form, matching Jest.
+  HasExpectation := (AArgs.Length > 0) and
+    not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue);
+  if HasExpectation then
   begin
-    // If args are provided, expect a specific error type
-    ErrorClassArg := AArgs.GetElement(0);
-    // If it's a class, get its name; otherwise use string representation
-    if ErrorClassArg is TGocciaClassValue then
-      ExpectedErrorType := TGocciaClassValue(ErrorClassArg).Name
-    else if ErrorClassArg is TGocciaNativeFunctionValue then
-      ExpectedErrorType := TGocciaNativeFunctionValue(ErrorClassArg).Name
-    else
-      ExpectedErrorType := ErrorClassArg.ToStringLiteral.Value;
+    Expected := AArgs.GetElement(0);
+    if not IsSupportedThrowExpectation(Expected) then
+    begin
+      ThrowTypeError(SErrorToThrowExpectsMatchableValue, SSuggestTestUsage);
+      Exit;
+    end;
   end;
 
-  if not (FActualValue is TGocciaFunctionBase) then
+  ThrownValue := nil;
+  DidThrow := False;
+
+  if FIsRejectionReason then
   begin
-    // Support .rejects.toThrow(TypeError) — actual value is the rejection reason
-    if (FActualValue is TGocciaObjectValue) and TGocciaObjectValue(FActualValue).HasErrorData then
+    // .rejects already unwrapped the rejection reason for us.
+    DidThrow := True;
+    ThrownValue := FActualValue;
+  end
+  else
+  begin
+    if not (FActualValue is TGocciaFunctionBase) then
     begin
-      if ExpectedErrorType = '' then
-      begin
-        TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-        Exit;
-      end;
-      ThrownObj := TGocciaObjectValue(FActualValue);
-      if ThrownObj.HasProperty(PROP_NAME) then
-      begin
-        ErrorName := ThrownObj.GetProperty(PROP_NAME).ToStringLiteral.Value;
-        if (ErrorName = ExpectedErrorType) or
-           (LowerCase(ErrorName) = LowerCase(ExpectedErrorType)) then
-        begin
-          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-          Exit;
-        end;
-      end;
-      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
-        'Expected error of type ' + ExpectedErrorType + ' but got: ' + FormatForDisplay(FActualValue));
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      ThrowTypeError(SErrorToThrowExpectsFunction, SSuggestTestUsage);
       Exit;
     end;
 
-    ThrowTypeError(SErrorToThrowExpectsFunction, SSuggestTestUsage);
-    Exit;
-  end;
-
-    TestFunc := TGocciaFunctionBase(FActualValue);
-  EmptyArgs := TGocciaArgumentsCollection.Create;
-
-  try
+    TestFunction := TGocciaFunctionBase(FActualValue);
+    EmptyArgs := TGocciaArgumentsCollection.Create;
     try
-      TestFunc.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-    except
-      on E: TGocciaThrowValue do
-      begin
-        // Handle thrown JavaScript values (e.g., throw new TypeError())
-        if ExpectedErrorType = '' then
+      try
+        TestFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      except
+        on E: TGocciaThrowValue do
         begin
-          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-          Exit;
+          DidThrow := True;
+          ThrownValue := E.Value;
         end;
-
-        // Check if thrown value matches expected error type
-        if E.Value is TGocciaObjectValue then
+        on E: EGocciaBytecodeThrow do
         begin
-          ThrownObj := TGocciaObjectValue(E.Value);
-
-          // Check if the error object has a name property that matches
-          if ThrownObj.HasProperty(PROP_NAME) then
-          begin
-            ErrorName := ThrownObj.GetProperty(PROP_NAME).ToStringLiteral.Value;
-            // Direct comparison: "TypeError" == "TypeError"
-            if (ErrorName = ExpectedErrorType) or
-               (LowerCase(ErrorName) = LowerCase(ExpectedErrorType)) then
-            begin
-              TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-              Exit;
-            end;
-          end;
-
-          // Fallback: check constructor property
-          if ThrownObj.HasProperty(PROP_CONSTRUCTOR) then
-          begin
-            ErrorConstructor := ThrownObj.GetProperty(PROP_CONSTRUCTOR);
-            if ErrorConstructor.ToStringLiteral.Value = ExpectedErrorType then
-            begin
-              TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-              Exit;
-            end;
-            if ErrorConstructor is TGocciaNativeFunctionValue then
-            begin
-              ConstructorName := TGocciaNativeFunctionValue(ErrorConstructor).Name;
-              if (Pos(ConstructorName, ExpectedErrorType) > 0) or
-                 (Pos(LowerCase(ConstructorName), LowerCase(ExpectedErrorType)) > 0) then
-              begin
-                TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-                Exit;
-              end;
-            end;
-          end;
+          // The bytecode VM reports a JS throw with its own exception type.
+          DidThrow := True;
+          ThrownValue := E.ThrownValue;
         end;
-
-        // Fallback to string matching in the thrown value
-        if (Pos(LowerCase(ExpectedErrorType), LowerCase(E.Value.ToStringLiteral.Value)) > 0) then
+        on E: TGocciaError do
         begin
-          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-          Exit;
-        end
-        else
+          // Engine-level errors carry no JavaScript value; rebuild one so the
+          // constructor and message forms see the same shape as a JS throw.
+          DidThrow := True;
+          ThrownValue := CreateErrorObject(EngineErrorName(E), E.Message);
+        end;
+        on E: Exception do
         begin
-          TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
-            'Expected ' + FormatForDisplay(FActualValue) + ' to throw ' + ExpectedErrorType + ' but threw: ' + FormatForDisplay(E.Value));
-          Exit;
+          DidThrow := True;
+          ThrownValue := CreateErrorObject(ERROR_NAME,
+            E.ClassName + ': ' + E.Message);
         end;
       end;
-      on E: TGocciaError do
-      begin
-        if ExpectedErrorType = '' then
-        begin
-          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-          Exit;
-        end;
-
-        if ((ExpectedErrorType = TYPE_ERROR_NAME) and (E is TGocciaTypeError)) or
-           ((ExpectedErrorType = REFERENCE_ERROR_NAME) and (E is TGocciaReferenceError)) or
-           ((ExpectedErrorType = SYNTAX_ERROR_NAME) and (E is TGocciaSyntaxError)) or
-           ((ExpectedErrorType = ERROR_NAME) and (E is TGocciaRuntimeError)) or
-           (Pos(LowerCase(ExpectedErrorType), LowerCase(E.Message)) > 0) then
-        begin
-          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-          Exit;
-        end
-        else
-        begin
-          TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
-            'Expected ' + FormatForDisplay(FActualValue) + ' to throw ' + ExpectedErrorType + ' but threw: ' + E.Message);
-          Exit;
-        end;
-      end;
-      on E: Exception do
-      begin
-        // Handle other Pascal exceptions (including EInvalidCast)
-        if ExpectedErrorType = '' then
-        begin
-          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-          Exit;
-        end;
-
-        // For non-Goccia errors, be more lenient with type matching
-        if (Pos(LowerCase(ExpectedErrorType), LowerCase(E.ClassName)) > 0) or
-           (Pos(LowerCase(ExpectedErrorType), LowerCase(E.Message)) > 0) then
-        begin
-          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-          Exit;
-        end
-        else
-        begin
-          TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
-            'Expected ' + FormatForDisplay(FActualValue) + ' to throw ' + ExpectedErrorType + ' but threw: ' + E.ClassName + ': ' + E.Message);
-          Exit;
-        end;
-      end;
+    finally
+      EmptyArgs.Free;
     end;
-  finally
-    EmptyArgs.Free;
   end;
 
-  TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
-    'Expected ' + FormatForDisplay(FActualValue) + ' to throw an exception');
+  if DidThrow and (TGarbageCollector.Instance <> nil) then
+    TGarbageCollector.Instance.AddTempRoot(ThrownValue);
+  try
+    Matches := DidThrow and
+      (not HasExpectation or ThrownValueMatchesExpectation(ThrownValue, Expected));
+
+    if FIsNegated then
+      Matches := not Matches;
+
+    if Matches then
+    begin
+      TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
+      Exit;
+    end;
+
+    if FIsRejectionReason then
+      SubjectDescription := 'the rejected promise'
+    else
+      SubjectDescription := 'the function';
+
+    if HasExpectation then
+      ExpectedDescription := ' to throw ' + ThrowExpectationDescription(Expected)
+    else
+      ExpectedDescription := ' to throw an exception';
+
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
+        'Expected ' + SubjectDescription + ' not' + ExpectedDescription +
+        ' but it threw: ' + DescribeThrowValue(ThrownValue))
+    else if DidThrow then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
+        'Expected ' + SubjectDescription + ExpectedDescription +
+        ' but it threw: ' + DescribeThrowValue(ThrownValue))
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
+        'Expected ' + SubjectDescription + ExpectedDescription +
+        ' but it did not throw');
+  finally
+    if DidThrow and (TGarbageCollector.Instance <> nil) then
+      TGarbageCollector.Instance.RemoveTempRoot(ThrownValue);
+  end;
 end;
 
 function TGocciaExpectationValue.ToBeCloseTo(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -2762,7 +2822,8 @@ end;
 
 function TGocciaExpectationValue.GetNot(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaExpectationValue.Create(FActualValue, FTestAssertions, True);
+  Result := TGocciaExpectationValue.Create(FActualValue, FTestAssertions, True,
+    FIsRejectionReason);
 end;
 
 function TGocciaExpectationValue.GetResolves(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -2822,7 +2883,7 @@ begin
     WaitForFetchPromise(Promise);
 
     if Promise.State = gpsRejected then
-      Result := TGocciaExpectationValue.Create(Promise.PromiseResult, FTestAssertions, FIsNegated)
+      Result := TGocciaExpectationValue.Create(Promise.PromiseResult, FTestAssertions, FIsNegated, True)
     else if Promise.State = gpsFulfilled then
     begin
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('rejects',

@@ -838,6 +838,7 @@ resourcestring
   SErrorFunctionExpectsTableArray = '%s expects a table array';
   SErrorFunctionExpectsFunctionArg = '%s expects a function argument';
   SErrorToThrowExpectsFunction = 'toThrow expects actual value to be a function';
+  SErrorToThrowExpectsMatchableValue = 'toThrow expects a string, RegExp, error class, or Error instance';
   SErrorToHaveBeenCalledTimesExpectsInt = 'toHaveBeenCalledTimes expects a non-negative integer';
   SErrorToHaveBeenNthCalledWithRequiresArg = 'toHaveBeenNthCalledWith requires at least 1 argument (call index)';
   SErrorToHaveBeenNthCalledWithExpectsInt = 'toHaveBeenNthCalledWith expects a positive integer index';
