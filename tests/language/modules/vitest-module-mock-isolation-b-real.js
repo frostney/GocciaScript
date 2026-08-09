@@ -20,7 +20,7 @@ import { label } from "./helpers/mock-isolation-target.js";
 // vitest-module-mock-isolation-a-mocked.js would leak into this file and this
 // assertion is the only place in the suite that would notice. A single-file
 // test cannot catch it, and neither can the differential harness, which runs
-// one process per battery file.
+// one process per differential suite.
 describe("vi.mock isolation (unmocked half)", () => {
   test("a mock declared by another test file does not leak into this one", () => {
     expect(label).toBe("REAL-ISOLATION-TARGET");

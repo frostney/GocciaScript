@@ -1,6 +1,6 @@
-// Battery G — the file-level (top-level) beforeAll cascade, which needs a file
-// of its own: a failing top-level beforeAll skips every test in the file, so it
-// cannot share one with battery F.
+// Differential suite G — the file-level (top-level) beforeAll cascade, which
+// needs a file of its own: a failing top-level beforeAll skips every test in
+// the file, so it cannot share one with differential suite F.
 //
 // Vitest reports the file as failed with every test skipped and none failed.
 // The test bodies assert something false on purpose: a runtime that runs them

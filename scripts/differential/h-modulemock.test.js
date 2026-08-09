@@ -7,8 +7,8 @@ import { tag as mockLastTag } from "./mods/mock-last.js";
 
 // Every `vi.mock` below is written AFTER the imports it affects. That placement
 // is the point: both runtimes must hoist these above the import statements, so
-// a battery that sees the mocked values has proved hoisting rather than merely
-// proved that assignment order happened to work out.
+// a differential suite that sees the mocked values has proved hoisting rather
+// than merely proved that assignment order happened to work out.
 vi.mock("./mods/mockable.js", () => ({
   label: "MOCK_LABEL",
   compute: vi.fn(() => 99),

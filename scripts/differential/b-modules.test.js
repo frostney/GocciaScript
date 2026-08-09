@@ -1,4 +1,4 @@
-// Battery B — module-linking edges around the §2 TDZ fix.
+// Differential suite B — module-linking edges around the §2 TDZ fix.
 import { viaB, fromA } from "./mods/circA.js";
 import { viaA } from "./mods/circB.js";
 import readSecret, { counter, bump } from "./mods/live.js";
