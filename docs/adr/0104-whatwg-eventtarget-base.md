@@ -68,15 +68,24 @@ the next pump rather than being discarded.
 realm globals, because the core GocciaScript realm is ECMA-262 only and every
 WHATWG surface is opt-in through a runtime profile.
 
-One deliberate deviation: WHATWG DOM § 2.9 inner invoke *reports* an exception
-thrown by a listener rather than propagating it, so `dispatchEvent` and
-`controller.abort()` never throw on the listener's behalf. GocciaScript has no
-global error-reporting channel to report into, so an exception thrown by a
-listener propagates out of `dispatchEvent` (and out of `controller.abort()`)
-instead of being swallowed. Making it observable is preferred over discarding
-it; the dispatch state is still unwound, so the event and the target remain
-usable afterwards, and a signal's `abort` event is still marked as fired and
-never re-dispatched.
+One deliberate deviation concerns listener exceptions. Under WHATWG DOM § 2.9,
+inner invoke *reports* an exception thrown by a listener rather than propagating
+it, which is why `dispatchEvent` and `controller.abort()` never throw on a
+listener's behalf in a browser. GocciaScript deviates: it has no global
+error-reporting channel to report into, so an exception thrown by a listener
+propagates out of `dispatchEvent` (and out of `controller.abort()`) instead of
+being swallowed. Making it observable is preferred over discarding it; the
+dispatch state is still unwound, so the event and the target remain usable
+afterwards, and a signal's `abort` event is still marked as fired and never
+re-dispatched.
+
+A second deliberate deviation: the accessors this runtime installs on
+`Event.prototype` — and `onabort` on `AbortSignal` — are non-enumerable, where
+WebIDL specifies interface attributes as enumerable. This follows the house
+convention already set by the pre-existing `aborted` and `reason` accessors, so
+`Object.keys(Event.prototype)` is empty and every accessor's descriptor reports
+`enumerable: false`. Consistency within the runtime is preferred over matching
+WebIDL enumerability for one interface.
 
 Deliberately out of scope: there is no node tree, so `bubbles` and `capture` are
 recorded and reported faithfully but produce no propagation — `eventPhase`,

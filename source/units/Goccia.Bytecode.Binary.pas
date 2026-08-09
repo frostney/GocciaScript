@@ -220,6 +220,14 @@ begin
         if C = ITER_CLOSE_PRESERVE_UNLESS_GENERATOR_RETURN then
           RequireRegister(B);
 
+      // Only the computed-member mode puts a register in C (the uncoerced key
+      // register the VM reads for the ES2026 §6.2.5.5 step 3.a diagnostic). The
+      // other modes encode an immediate there, which is why
+      // GocciaOpCodeUsesRegisterC excludes this opcode outright.
+      OP_VALIDATE_VALUE:
+        if B = VALIDATE_OP_REQUIRE_OBJECT_FOR_MEMBER then
+          RequireRegister(C);
+
       OP_TO_PRIMITIVE, OP_GET_LOCAL, OP_SET_LOCAL, OP_CLOSE_UPVALUE:
         RequireRegister(DecodeBx(Instruction));
 

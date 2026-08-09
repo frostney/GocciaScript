@@ -86,7 +86,9 @@ effect by default. GocciaScript additionally provides the optional
 inferred primitive contracts at runtime in interpreter and bytecode modes.
 
 `--strict-types` is a runtime contract extension, not a replacement for a static
-structural type checker such as `tsc`.
+structural type checker such as `tsc`. See
+[Type Annotations](docs/type-annotations.md) for the supported syntax and its
+parsing rules.
 
 ## Node host compatibility and sandbox `fs`
 
@@ -364,6 +366,7 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | [Tutorial](docs/tutorial.md) | Your first GocciaScript program — a guided walkthrough for newcomers |
 | [Language](docs/language.md) | ECMAScript support, recommended defaults, compatibility flags, and rationale |
 | [Language Tables](docs/language-tables.md) | Quick-reference: ECMAScript feature matrix and TC39 proposal status |
+| [Type Annotations](docs/type-annotations.md) | TypeScript-compatible type syntax, `--strict-types`, and the `<` disambiguation rules |
 | [Built-in Objects](docs/built-ins.md) | Available built-ins and API reference |
 | [FFI Built-ins](docs/built-ins-ffi.md) | Native libraries, aggregate types, callbacks, lifetimes, and safety limits |
 | [Temporal Built-ins](docs/built-ins-temporal.md) | Temporal API: dates, times, durations, time zones |

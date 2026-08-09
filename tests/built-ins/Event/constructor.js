@@ -87,4 +87,19 @@ describe("Event constructor", () => {
     );
     expect(() => descriptor.get.call({})).toThrow(TypeError);
   });
+
+  // Deliberate deviation from WebIDL, recorded in ADR 0104: this runtime's
+  // accessors are non-enumerable, matching the pre-existing AbortSignal
+  // `aborted` and `reason` accessors rather than WebIDL's enumerable
+  // interface attributes.
+  test("exposes its accessors as non-enumerable, unlike WebIDL", () => {
+    expect(Object.keys(Event.prototype)).toEqual([]);
+
+    for (const name of ["type", "bubbles", "cancelable", "defaultPrevented"]) {
+      const descriptor = Object.getOwnPropertyDescriptor(Event.prototype, name);
+      expect(typeof descriptor.get).toBe("function");
+      expect(descriptor.enumerable).toBe(false);
+      expect(descriptor.configurable).toBe(true);
+    }
+  });
 });

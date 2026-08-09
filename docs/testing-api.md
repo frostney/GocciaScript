@@ -45,7 +45,7 @@ Nested `describe` blocks compose their suite names with ` > ` separators. In the
 ```javascript
 // Equality
 expect(value).toBe(expected);           // Strict equality (===)
-expect(value).toEqual(expected);        // Deep equality, ignoring undefined
+expect(value).toEqual(expected);        // Deep equality, ignoring undefined-valued keys and trailing undefined items
 expect(value).toStrictEqual(expected);  // Deep equality, type and undefined sensitive
 
 // Type checks
@@ -80,6 +80,7 @@ expect(() => throwingFn()).toThrow("partial message");      // Message substring
 expect(() => throwingFn()).toThrow(/message pattern/);      // Message pattern
 expect(() => throwingFn()).toThrow(TypeError);              // Error constructor
 expect(() => throwingFn()).toThrow(new Error("exact"));     // Equal messages
+expect(() => throwingFn()).toThrow(expect.any(TypeError));  // Asymmetric matcher
 expect(() => nonThrowingFn()).not.toThrow();
 
 // Negation
@@ -126,7 +127,7 @@ One known divergence: a `DOMException` carries `name`, `message`, and `code` as 
 
 `.toMatchObject()` matches a subset of keys at every level and recurses per index through arrays, so `{ list: [{ a: 1, b: 2 }] }` matches `{ list: [{ a: 1 }] }`. Arrays must still match in length. An expected plain object may describe an array (`{ l: { 0: 1 } }` matches `{ l: [1] }`), but an expected array only matches an array.
 
-`.toThrow()` accepts every Jest argument form, and each form works under `.not` and after `.rejects`. A string matches when the thrown message *contains* it; a `RegExp` matches the message; a constructor matches by `instanceof`, so a subclass satisfies both its own class and its parent; an `Error` instance matches when the messages are equal. Thrown values that are not errors contribute their string form, so `throw 42` satisfies `toThrow("42")`. Like `.toMatch()`, the `RegExp` form does not depend on or mutate `lastIndex`.
+`.toThrow()` accepts every Jest argument form, and each form works under `.not` and after `.rejects`. A string matches when the thrown message *contains* it; a `RegExp` matches the message; a constructor matches by `instanceof`, so a subclass satisfies both its own class and its parent; an `Error` instance matches when the messages are equal. An asymmetric matcher is delegated to the matcher itself and tested against the thrown value rather than its message, so `expect(fn).toThrow(expect.any(TypeError))` is the asymmetric spelling of `toThrow(TypeError)`. Thrown values that are not errors contribute their string form, so `throw 42` satisfies `toThrow("42")`. Like `.toMatch()`, the `RegExp` form does not depend on or mutate `lastIndex`.
 
 ### Mock Functions
 

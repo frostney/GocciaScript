@@ -94,4 +94,40 @@ describe("toHaveProperty", () => {
     expect(() => expect([1, 2]).toHaveProperty(0, 1)).toThrow();
     expect(() => expect({ a: 1 }).toHaveProperty(null)).toThrow();
   });
+
+  // The path walk holds each intermediate in a native local only. A getter on a
+  // later segment is a GC safe point, so an unrooted intermediate — or the
+  // wrapper a primitive segment boxes into — can be collected mid-walk.
+  describe.runIf(typeof Goccia !== "undefined")("explicit GC during the walk", () => {
+    test("keeps an intermediate alive across a later getter", () => {
+      const root = {
+        get first() {
+          return { second: { get third() { Goccia.gc(); return 7; } } };
+        },
+      };
+      expect(root).toHaveProperty("first.second.third", 7);
+    });
+
+    test("keeps a boxed primitive wrapper alive across a getter", () => {
+      const root = {
+        get text() {
+          Goccia.gc();
+          return "xy";
+        },
+      };
+      expect(root).toHaveProperty("text.length", 2);
+    });
+
+    test("keeps the resolved value alive when the last segment collects", () => {
+      const root = {
+        outer: {
+          get inner() {
+            Goccia.gc();
+            return { done: true };
+          },
+        },
+      };
+      expect(root).toHaveProperty("outer.inner", { done: true });
+    });
+  });
 });

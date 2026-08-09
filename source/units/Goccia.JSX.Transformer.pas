@@ -56,6 +56,7 @@ type
       const AContext: TScanContext);
     function ScanContextName(const AContext: TScanContext): string;
     function IsUnsupportedAttributeChar(const AChar: Char): Boolean;
+    function DescribeOffenderChar(const AChar: Char): string;
     procedure RebaseNestedExpressionError(const AError: TGocciaError;
       const ARawExpression: string; const AStartLine, AStartColumn: Integer);
 
@@ -123,6 +124,12 @@ const
   JSX_CONTEXT_ATTRIBUTES = 'attribute list';
   JSX_CONTEXT_CHILDREN = 'children';
   JSX_CONTEXT_EXPRESSION = 'expression';
+
+  // Rendering for an offending byte that cannot be embedded literally. Two hex
+  // digits cover the whole Char range, and the prefix matches the JavaScript
+  // escape the reader would type to reproduce the byte.
+  JSX_BYTE_ESCAPE_PREFIX = '\x';
+  JSX_BYTE_ESCAPE_DIGITS = 2;
 
 procedure WarnIfJSXExtensionMismatch(const AFilePath: string);
 begin
@@ -247,6 +254,19 @@ begin
   Result := (AChar = ':') or (AChar >= #128);
 end;
 
+// A byte at or above #128 is one byte of a multi-byte UTF-8 sequence, so
+// embedding it literally would put a truncated sequence into the diagnostic and
+// from there into the CLI's JSON error envelope. Render those as '\xNN' so the
+// message stays valid UTF-8 while still naming the exact offending byte.
+function TGocciaJSXTransformer.DescribeOffenderChar(const AChar: Char): string;
+begin
+  if AChar >= #128 then
+    Result := JSX_BYTE_ESCAPE_PREFIX +
+      LowerCase(IntToHex(Ord(AChar), JSX_BYTE_ESCAPE_DIGITS))
+  else
+    Result := AChar;
+end;
+
 // Progress guard for the scanning loops. Each loop that can reach a character
 // none of its branches consume calls this once per iteration with its own guard
 // variable, initialised to 0 (FPos is 1-based, so the first iteration always
@@ -257,7 +277,8 @@ end;
 procedure TGocciaJSXTransformer.RequireScanProgress(var AGuardPosition: Integer;
   const AContext: TScanContext);
 var
-  Offender: string;
+  Offender: Char;
+  Rendered: string;
 begin
   if FPos > AGuardPosition then
   begin
@@ -266,13 +287,14 @@ begin
   end;
 
   Offender := Peek;
-  if (AContext = scAttributes) and IsUnsupportedAttributeChar(Peek) then
+  Rendered := DescribeOffenderChar(Offender);
+  if (AContext = scAttributes) and IsUnsupportedAttributeChar(Offender) then
     RaiseJSXError(Format('JSX: Unsupported attribute syntax at "%s"',
-      [Offender]))
+      [Rendered]))
   else
     RaiseJSXError(Format(
       'JSX: Unexpected character "%s" in %s (likely runaway scan on non-JSX input)',
-      [Offender, ScanContextName(AContext)]));
+      [Rendered, ScanContextName(AContext)]));
 end;
 
 // A nested attribute expression is transformed from a copied slice, so the
