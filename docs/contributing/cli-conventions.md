@@ -12,7 +12,7 @@
 
 ## The no-argument rule
 
-Several binaries take their program source from standard input when no path is given. Without a guard, running one bare at a terminal blocks inside `ReadLn` until the user presses Ctrl-D — the command looks hung, with no output explaining why.
+Several binaries take their program source from standard input when no path is given. Without a guard, running one bare at a terminal blocks inside `ReadLn` until the user signals end of input — Ctrl-D on a Unix console, Ctrl-Z then Enter on a Windows one — and the command looks hung, with no output explaining why. `EndOfInputKeys` in `Goccia.CLI.Stdin` is the single source for that key sequence, so the hint printed at runtime always names the right one for the platform.
 
 [The Command Line Interface Guidelines](https://clig.dev/) state the rule plainly: if a command expects something piped to it and stdin is an interactive terminal, it should display help immediately and quit, rather than just hanging the way `cat` does.
 

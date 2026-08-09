@@ -80,13 +80,37 @@ type
     function TryDequeue(out AItem: TGocciaWorkItem): Boolean;
   end;
 
+  { Shared cancellation flag — the pool's stop signal, read and written
+    from the main thread and from every worker.  The Boolean itself is
+    private and reachable only through these three methods, so there is
+    no way to touch it outside the lock; a plain shared Boolean let a
+    worker observe a stale False after a peer had already cancelled and
+    run further queued files.  The lock is the same critical-section
+    idiom TGocciaWorkQueue uses, and it is taken once per dequeued file
+    — nothing next to the cost of running one. }
+  TGocciaCancellationFlag = class
+  private
+    FCancelled: Boolean;
+    FLock: TGocciaCriticalSection;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    { True once Cancel has been called and Reset has not. }
+    function IsCancelled: Boolean;
+    procedure Cancel;
+    { Clears the flag for a fresh run. Main thread only, before workers start. }
+    procedure Reset;
+  end;
+
   TGocciaFileWorker = class(TThread)
   private
     FQueue: TGocciaWorkQueue;
     FResults: TGocciaWorkerResultArray;
     FResultCount: Integer;
     FWorkerProc: TGocciaWorkerProc;
-    FCancelled: PBoolean;
+    { Not owned — the pool owns this flag and outlives the worker, except
+      for abandoned workers, for which the pool deliberately leaks it. }
+    FCancelFlag: TGocciaCancellationFlag;
     FCancelOnError: Boolean;
     FEnableCoverage: Boolean;
     FMaxBytes: Int64;
@@ -110,7 +134,7 @@ type
     procedure Execute; override;
   public
     constructor Create(AQueue: TGocciaWorkQueue;
-      AWorkerProc: TGocciaWorkerProc; ACancelled: PBoolean;
+      AWorkerProc: TGocciaWorkerProc; ACancelFlag: TGocciaCancellationFlag;
       ACancelOnError: Boolean; AEnableCoverage: Boolean; AMaxBytes: Int64;
       AData: Pointer);
     property Results: TGocciaWorkerResultArray read FResults;
@@ -135,13 +159,19 @@ type
     // exit; the alternative of TerminateThread is unsafe across FPC
     // platforms and would corrupt the shared GC's bookkeeping anyway.
     FAbandoned: array of Boolean;
-    FCancelled: Boolean;
+    { The single shared stop signal handed to every worker.  Owned here,
+      but leaked instead of freed once a worker has been abandoned —
+      that thread is still alive in native code and still reads it. }
+    FCancelFlag: TGocciaCancellationFlag;
+    FCancelFlagLeaked: Boolean;
     FCancelOnError: Boolean;
     FEnableCoverage: Boolean;
     FMaxBytes: Int64;
     FMemoryStats: TCLIJSONMemoryStats;
+    function GetCancelled: Boolean;
   public
     constructor Create(AWorkerCount: Integer);
+    destructor Destroy; override;
 
     { Execute AFiles across worker threads. Blocks until all complete.
       AWorkerProc is called on each worker thread for each file.
@@ -166,7 +196,9 @@ type
     property Results: TGocciaWorkerResultArray read FResults;
     property MemoryStats: TCLIJSONMemoryStats read FMemoryStats;
     property WorkerCount: Integer read FWorkerCount;
-    property Cancelled: Boolean read FCancelled;
+    { Reads the shared flag under its lock, so callers never see a torn
+      or stale value while workers are still running. }
+    property Cancelled: Boolean read GetCancelled;
     { When True, the first worker error automatically cancels remaining files. }
     property CancelOnError: Boolean read FCancelOnError write FCancelOnError;
     { When True, each worker initialises a per-thread coverage tracker.
@@ -285,10 +317,55 @@ begin
   end;
 end;
 
+{ TGocciaCancellationFlag }
+
+constructor TGocciaCancellationFlag.Create;
+begin
+  inherited Create;
+  FCancelled := False;
+  CriticalSectionInit(FLock);
+end;
+
+destructor TGocciaCancellationFlag.Destroy;
+begin
+  CriticalSectionDone(FLock);
+  inherited;
+end;
+
+function TGocciaCancellationFlag.IsCancelled: Boolean;
+begin
+  CriticalSectionEnter(FLock);
+  try
+    Result := FCancelled;
+  finally
+    CriticalSectionLeave(FLock);
+  end;
+end;
+
+procedure TGocciaCancellationFlag.Cancel;
+begin
+  CriticalSectionEnter(FLock);
+  try
+    FCancelled := True;
+  finally
+    CriticalSectionLeave(FLock);
+  end;
+end;
+
+procedure TGocciaCancellationFlag.Reset;
+begin
+  CriticalSectionEnter(FLock);
+  try
+    FCancelled := False;
+  finally
+    CriticalSectionLeave(FLock);
+  end;
+end;
+
 { TGocciaFileWorker }
 
 constructor TGocciaFileWorker.Create(AQueue: TGocciaWorkQueue;
-  AWorkerProc: TGocciaWorkerProc; ACancelled: PBoolean;
+  AWorkerProc: TGocciaWorkerProc; ACancelFlag: TGocciaCancellationFlag;
   ACancelOnError: Boolean; AEnableCoverage: Boolean; AMaxBytes: Int64;
   AData: Pointer);
 const
@@ -298,7 +375,7 @@ begin
   FreeOnTerminate := False;
   FQueue := AQueue;
   FWorkerProc := AWorkerProc;
-  FCancelled := ACancelled;
+  FCancelFlag := ACancelFlag;
   FCancelOnError := ACancelOnError;
   FEnableCoverage := AEnableCoverage;
   FMaxBytes := AMaxBytes;
@@ -331,7 +408,7 @@ begin
       FCurrentFileIndex := Item.Index;
       FLastActivityNs := GetNanoseconds;
 
-      if FCancelled^ then
+      if FCancelFlag.IsCancelled then
       begin
         Idx := FResultCount;
         Inc(FResultCount);
@@ -379,7 +456,7 @@ begin
 
       { Cancel remaining files across all workers on first error. }
       if FCancelOnError and (not FResults[Idx].Success) then
-        FCancelled^ := True;
+        FCancelFlag.Cancel;
     end;
   finally
     // Refresh the timestamp as we exit the work loop so the watchdog
@@ -400,11 +477,28 @@ constructor TGocciaThreadPool.Create(AWorkerCount: Integer);
 begin
   inherited Create;
   FWorkerCount := Max(1, AWorkerCount);
-  FCancelled := False;
+  FCancelFlag := TGocciaCancellationFlag.Create;
+  FCancelFlagLeaked := False;
   FCancelOnError := False;
   FEnableCoverage := False;
   FMaxBytes := 0;
   FMemoryStats := DefaultCLIJSONMemoryStats;
+end;
+
+destructor TGocciaThreadPool.Destroy;
+begin
+  // Same rule as the work queue: an abandoned worker is still running and
+  // still calls IsCancelled on this flag, so freeing it would be a
+  // use-after-free.  Leak it and let the OS reclaim it on process exit.
+  if not FCancelFlagLeaked then
+    FCancelFlag.Free;
+  FCancelFlag := nil;
+  inherited;
+end;
+
+function TGocciaThreadPool.GetCancelled: Boolean;
+begin
+  Result := FCancelFlag.IsCancelled;
 end;
 
 procedure TGocciaThreadPool.RunAll(const AFiles: TStringList;
@@ -419,7 +513,7 @@ var
   StalledFiles: TGocciaWorkerResultArray;
   SnapshotResults: TGocciaWorkerResultArray;
 begin
-  FCancelled := False;
+  FCancelFlag.Reset;
   FMemoryStats := DefaultCLIJSONMemoryStats;
   AnyAbandoned := False;
   FileCount := AFiles.Count;
@@ -454,7 +548,7 @@ begin
     for I := 0 to FWorkerCount - 1 do
     begin
       FWorkers[I] := TGocciaFileWorker.Create(Queue, AWorkerProc,
-        @FCancelled, FCancelOnError, FEnableCoverage, FMaxBytes, AData);
+        FCancelFlag, FCancelOnError, FEnableCoverage, FMaxBytes, AData);
       FWorkers[I].Start;
     end;
   finally
@@ -545,8 +639,14 @@ begin
         'they will be reclaimed on process exit.');
 
     // Only free the queue when no abandoned workers remain — they
-    // still hold a reference to it via FQueue.
-    if not AnyAbandoned then
+    // still hold a reference to it via FQueue.  The shared cancellation
+    // flag is reached the same way (FCancelFlag), so an abandonment also
+    // takes it out of this pool's ownership for good; a later RunAll on
+    // this pool keeps using the same flag object, exactly as before, so
+    // the zombie never sees freed memory.
+    if AnyAbandoned then
+      FCancelFlagLeaked := True
+    else
       Queue.Free;
   end;
 
@@ -629,7 +729,7 @@ end;
 
 procedure TGocciaThreadPool.Cancel;
 begin
-  FCancelled := True;
+  FCancelFlag.Cancel;
 end;
 
 procedure TGocciaThreadPool.MergeCoverageInto(ATarget: TObject);

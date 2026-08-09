@@ -28,6 +28,8 @@ type
     procedure TestPoolResultsInFileOrder;
     procedure TestPoolCancelSkipsRemaining;
     procedure TestPoolCancelOnErrorStopsOnFailure;
+    procedure TestCancellationFlagLifecycle;
+    procedure TestPoolCancelOnErrorBoundsWorkAcrossWorkers;
     procedure TestPoolResetsCancelledBetweenRuns;
     procedure TestPoolHandlesEmptyFileList;
     procedure TestPoolSingleWorker;
@@ -80,6 +82,11 @@ type
     procedure FailOnSecondWorker(const AFileName: string;
       const AIndex: Integer; out AConsoleOutput: string;
       out AErrorMessage: string; AData: Pointer);
+    { Counts every invocation and fails on 'fail.js', so a test can assert
+      how much work actually reached the worker callback after a cancel. }
+    procedure CountingFailWorker(const AFileName: string;
+      const AIndex: Integer; out AConsoleOutput: string;
+      out AErrorMessage: string; AData: Pointer);
   end;
 
 procedure TTestWorkerHost.CountingWorker(const AFileName: string;
@@ -109,6 +116,23 @@ begin
     AErrorMessage := '';
 end;
 
+procedure TTestWorkerHost.CountingFailWorker(const AFileName: string;
+  const AIndex: Integer; out AConsoleOutput: string;
+  out AErrorMessage: string; AData: Pointer);
+begin
+  AConsoleOutput := '';
+  CriticalSectionEnter(GWorkerLock);
+  try
+    Inc(GWorkerCallCount);
+  finally
+    CriticalSectionLeave(GWorkerLock);
+  end;
+  if AFileName = 'fail.js' then
+    AErrorMessage := 'deliberate failure'
+  else
+    AErrorMessage := '';
+end;
+
 { TTestThreading }
 
 procedure TTestThreading.SetupTests;
@@ -120,6 +144,9 @@ begin
   Test('Pool results in file order', TestPoolResultsInFileOrder);
   Test('Pool Cancel skips remaining', TestPoolCancelSkipsRemaining);
   Test('Pool CancelOnError stops on failure', TestPoolCancelOnErrorStopsOnFailure);
+  Test('CancellationFlag cancels and resets', TestCancellationFlagLifecycle);
+  Test('Pool CancelOnError bounds work across workers',
+    TestPoolCancelOnErrorBoundsWorkAcrossWorkers);
   Test('Pool resets Cancelled between runs', TestPoolResetsCancelledBetweenRuns);
   Test('Pool handles empty file list', TestPoolHandlesEmptyFileList);
   Test('Pool single worker processes all files', TestPoolSingleWorker);
@@ -321,6 +348,77 @@ begin
       Expect<Boolean>(CancelledCount > 0).ToBe(True);
     finally
       Pool.Free;
+    end;
+  finally
+    Files.Free;
+    Host.Free;
+  end;
+end;
+
+{ The flag is the pool's only stop signal and every thread reaches it
+  through these three methods, so its state machine is worth pinning
+  directly rather than only through a pool run. }
+procedure TTestThreading.TestCancellationFlagLifecycle;
+var
+  Flag: TGocciaCancellationFlag;
+begin
+  Flag := TGocciaCancellationFlag.Create;
+  try
+    Expect<Boolean>(Flag.IsCancelled).ToBe(False);
+    Flag.Cancel;
+    Expect<Boolean>(Flag.IsCancelled).ToBe(True);
+    // Cancel is idempotent — a second failing file must not un-cancel.
+    Flag.Cancel;
+    Expect<Boolean>(Flag.IsCancelled).ToBe(True);
+    Flag.Reset;
+    Expect<Boolean>(Flag.IsCancelled).ToBe(False);
+  finally
+    Flag.Free;
+  end;
+end;
+
+{ Regression guard for the shared-cancellation-flag data race: the flag
+  used to be a plain Boolean written and read by several threads without
+  synchronisation, so a worker could observe a stale False after a peer
+  had already failed and keep pulling queued files.  With the failing
+  file first in a long queue and eight workers, only the handful of files
+  already in flight may reach the callback; a worker that misses the
+  cancel drains the rest of the queue and blows the bound.  Repeated
+  because a lost update is timing-dependent and a single run proves
+  little. }
+procedure TTestThreading.TestPoolCancelOnErrorBoundsWorkAcrossWorkers;
+const
+  FILE_COUNT = 2000;
+  WORKER_COUNT = 8;
+  { Generous: the true in-flight set is at most WORKER_COUNT.  The bound
+    only has to separate "cancelled promptly" from "drained the queue". }
+  MAX_EXECUTED = 200;
+var
+  Pool: TGocciaThreadPool;
+  Files: TStringList;
+  Host: TTestWorkerHost;
+  Iteration, I: Integer;
+begin
+  Host := TTestWorkerHost.Create;
+  Files := TStringList.Create;
+  try
+    Files.Add('fail.js');
+    for I := 1 to FILE_COUNT - 1 do
+      Files.Add('ok' + IntToStr(I) + '.js');
+
+    for Iteration := 1 to 10 do
+    begin
+      ResetWorkerState;
+      Pool := TGocciaThreadPool.Create(WORKER_COUNT);
+      try
+        Pool.CancelOnError := True;
+        Pool.RunAll(Files, Host.CountingFailWorker);
+        Expect<Boolean>(Pool.Cancelled).ToBe(True);
+        Expect<Boolean>(GWorkerCallCount >= 1).ToBe(True);
+        Expect<Boolean>(GWorkerCallCount <= MAX_EXECUTED).ToBe(True);
+      finally
+        Pool.Free;
+      end;
     end;
   finally
     Files.Free;
