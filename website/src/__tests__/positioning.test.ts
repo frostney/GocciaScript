@@ -12,6 +12,24 @@ import {
   VITEST_COMPATIBILITY_ANSWER,
 } from "@/lib/positioning";
 
+/**
+ * Claims the compatibility copy may never make: the drop-in audit has not
+ * closed, and no repository evidence compares this runner's wall-clock
+ * against Vitest.
+ *
+ * Each alternative carries its own boundaries because `%` is not a word
+ * character — a single trailing `\b` around the whole alternation silently
+ * stopped `100%` from ever matching when followed by a space.
+ */
+const FORBIDDEN_CLAIM_PATTERNS: readonly RegExp[] = [
+  /\b100\s*%/i,
+  /\bexact(?:ly)?\s+compatible\b/i,
+  /\bfully\s+compatible\b/i,
+  /\bcomplete\s+drop-in\b/i,
+  /\b(?:faster|quicker|speedier|snappier)\s+than\s+Vitest\b/i,
+  /\b(?:outperforms|outpaces|outruns|beats)\s+Vitest\b/i,
+];
+
 function expectConcepts(text: string, concepts: readonly RegExp[]) {
   for (const concept of concepts) {
     expect(text).toMatch(concept);
@@ -76,11 +94,47 @@ describe("GocciaScript positioning", () => {
   });
 
   test("never upgrades the compatibility direction into an absolute claim", () => {
-    // The drop-in audit has not closed, and no repository evidence compares
-    // this runner's wall-clock against Vitest. Copy must not imply either.
-    expect(VITEST_COMPATIBILITY_ANSWER).not.toMatch(
-      /\b(100%|exact(ly)? compatible|fully compatible|complete drop-in|faster than Vitest)\b/i,
-    );
+    for (const pattern of FORBIDDEN_CLAIM_PATTERNS)
+      expect(VITEST_COMPATIBILITY_ANSWER).not.toMatch(pattern);
+  });
+
+  // A guard that cannot match the phrasing it forbids is worse than none: it
+  // reads as coverage. `100%` ended in a non-word character, so a trailing
+  // \b required a word character after the percent sign and `100% compatible`
+  // slipped through; the performance rule only knew one verb.
+  test("the forbidden-claim guard matches the phrasings it exists to stop", () => {
+    const forbidden = [
+      "100% compatible with Vitest.",
+      "100%-compatible today.",
+      "It is 100 % compatible.",
+      "The runner is exactly compatible with Vitest.",
+      "The runner is exactly compatible.",
+      "It is fully compatible with Vitest.",
+      "A complete drop-in for Vitest.",
+      "It is faster than Vitest.",
+      "It is much faster than Vitest on every suite.",
+      "It outperforms Vitest.",
+      "The runner beats Vitest on wall-clock.",
+      "It outpaces Vitest.",
+      "Runs quicker than Vitest.",
+    ];
+
+    for (const claim of forbidden)
+      expect(
+        FORBIDDEN_CLAIM_PATTERNS.some((pattern) => pattern.test(claim)),
+      ).toBe(true);
+
+    // The guard must not fire on the copy the answer is allowed to make.
+    const allowed = [
+      "Vitest is the semantics oracle for this runner.",
+      "Compatibility is a direction, not a finished claim.",
+      "About 90 tests exercise the matchers.",
+    ];
+
+    for (const claim of allowed)
+      expect(
+        FORBIDDEN_CLAIM_PATTERNS.some((pattern) => pattern.test(claim)),
+      ).toBe(false);
   });
 
   test("states the complete Delphi support contract", () => {
@@ -101,7 +155,9 @@ describe("GocciaScript positioning", () => {
     expect(canonicalCopy).not.toContain("No traditional loops");
     expect(canonicalCopy).not.toContain("parsed and discarded");
     expect(canonicalCopy).not.toContain("there is no separate type-checker");
-    expect(canonicalCopy).not.toMatch(/\b\d{2,3}(?:\.\d+)?%\b/);
+    // No trailing \b: `%` is not a word character, so requiring a boundary
+    // after it means the pattern only matches a percentage glued to a word.
+    expect(canonicalCopy).not.toMatch(/\b\d{2,3}(?:\.\d+)?\s*%/);
   });
 
   test("structured data reuses the visible positioning FAQ", () => {

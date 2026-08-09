@@ -41,7 +41,9 @@ CI cannot allocate a pseudo-terminal from the CLI harness, so the split is:
 
 - The decision matrix is covered by Pascal unit tests over the pure function.
 - `scripts/test-cli-apps.ts` covers every **non**-terminal path — piped stdin, closed stdin, explicit `-` — plus the `--help` text. These are the paths the rest of the test harness depends on, and they must stay byte-for-byte unchanged.
-- The terminal path is verified by hand under a pty, for example `script -q /dev/null ./build/GocciaTestRunner < /dev/null`.
+- The terminal path is verified by hand under a pty. The `script` invocation differs by platform:
+  - BSD/macOS: `script -q /dev/null ./build/GocciaTestRunner < /dev/null`
+  - Linux (util-linux): `script -q -c "./build/GocciaTestRunner" /dev/null < /dev/null`
 
 ## Stdin conventions
 

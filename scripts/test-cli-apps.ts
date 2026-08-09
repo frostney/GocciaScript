@@ -20,6 +20,7 @@ import {
   mkdirSync,
   realpathSync,
   chmodSync,
+  rmSync,
   symlinkSync,
 } from "fs";
 import { join, resolve } from "path";
@@ -3545,7 +3546,16 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
     // suiteErrors: describe/hook failures. Vitest keeps these OUT of
     // `failed` (affected tests report as skipped) and fails the file
     // instead, so they are asserted separately. Defaults to 0.
-    expected: { passed: number; failed: number; skipped: number; suiteErrors?: number };
+    // totalTests: tests the runner actually entered. Defaults to
+    // passed + failed + skipped, which is the only shape that does not hold
+    // when collection aborts and the file is discarded whole.
+    expected: {
+      passed: number;
+      failed: number;
+      skipped: number;
+      suiteErrors?: number;
+      totalTests?: number;
+    };
     // Reporter markers this shape can leak beyond the shared set below.
     extraMarkers?: string[];
   }> = [
@@ -3657,7 +3667,7 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
         'describe("ok", () => { test("passes", () => { expect(1).toBe(1); }); });',
         "",
       ].join("\n"),
-      expected: { passed: 0, failed: 0, skipped: 0, suiteErrors: 1 },
+      expected: { passed: 0, failed: 0, skipped: 0, suiteErrors: 1, totalTests: 0 },
       extraMarkers: ["Error in describe block"],
     },
     {
@@ -3675,7 +3685,7 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
         "});",
         "",
       ].join("\n"),
-      expected: { passed: 0, failed: 0, skipped: 0, suiteErrors: 1 },
+      expected: { passed: 0, failed: 0, skipped: 0, suiteErrors: 1, totalTests: 0 },
       extraMarkers: ["Error in describe block"],
     },
   ];
@@ -3721,6 +3731,15 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
       const expectedSuiteErrors = scenario.expected.suiteErrors ?? 0;
       if (json.suiteErrors !== expectedSuiteErrors)
         throw new Error(`${label} suiteErrors should be ${expectedSuiteErrors}, got ${json.suiteErrors}`);
+      // A collection abort discards the file, so the tests registered before
+      // the throwing describe must not be counted as run either. Without
+      // this the retained registrations of the "collected first" shape pass
+      // undetected.
+      const expectedTotalTests =
+        scenario.expected.totalTests ??
+        scenario.expected.passed + scenario.expected.failed + scenario.expected.skipped;
+      if (json.totalTests !== expectedTotalTests)
+        throw new Error(`${label} totalTests should be ${expectedTotalTests}, got ${json.totalTests}`);
       const failedTests = json.files?.[0]?.failedTests;
       // failedTests stays the human-visible detail channel for BOTH
       // failed tests and suite errors, so it carries one entry each.
@@ -3781,6 +3800,10 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
         throw new Error(`${label} the throwing file should report suiteErrors=1, got ${badResult?.suiteErrors}`);
       if (badResult?.passed !== 0)
         throw new Error(`${label} the throwing file should run no tests at all, got passed=${badResult?.passed}`);
+      // Same guard as the single-file scenarios: a retained registration
+      // would surface here as a non-zero total for the discarded file.
+      if (badResult?.totalTests !== 0)
+        throw new Error(`${label} the throwing file should report totalTests=0, got ${badResult?.totalTests}`);
       if (goodResult?.passed !== 1)
         throw new Error(`${label} the clean sibling file should keep its pass, got ${goodResult?.passed}`);
       if (!badResult?.failedTests?.some((t: string) => t.includes('Describe "boom"')))
@@ -3823,6 +3846,23 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
         throw new Error(`${label} must NOT execute the test body after the hook failed, got: ${all.slice(0, 300)}`);
       if (proc.exitCode === 0)
         throw new Error(`${label} should exit non-zero, got 0`);
+
+      // The skipped body writes no detail line of its own, so the entry is
+      // built from the fallback. Without the hook's message carried into it,
+      // the JSON payload names the failed test and never says why.
+      const jsonProc = Bun.spawnSync(
+        [resolve(TESTRUNNER), file, "--no-progress", "--output=json", ...modeArgs],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const json = JSON.parse(jsonProc.stdout.toString());
+      const details: string[] = json.files?.[0]?.failedTests ?? [];
+      if (details.length !== 2)
+        throw new Error(`${label} should report both tests as failed, got: ${JSON.stringify(details)}`);
+      for (const detail of details)
+        if (!detail.includes("beforeEach exploded"))
+          throw new Error(
+            `${label} failedTests entry must carry the hook failure message, got: ${JSON.stringify(details)}`,
+          );
     } finally {
       clean(tmp);
     }
@@ -3880,6 +3920,92 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
         throw new Error(`${label} should keep the hook error visible in failedTests, got: ${JSON.stringify(badResult?.failedTests)}`);
       if (goodResult?.ok !== true)
         throw new Error(`${label} the clean sibling file should stay ok, got ${goodResult?.ok}`);
+    } finally {
+      clean(tmp);
+    }
+  }
+
+  // A suite error never enters `failed`, so a bail keyed on `failed` alone
+  // walks straight past a file that already died. Both the sequential loop
+  // and the worker pool have to stop, and the human summary must not call
+  // the run green.
+  {
+    const label = `TestRunner (${modeLabel}) --exit-on-first-failure on a suite error`;
+    console.log(`TestRunner: --exit-on-first-failure stops on a suite error (${modeLabel})...`);
+    const tmp = makeTmp();
+    try {
+      // "a-" sorts first so the failing file is the one the runner reaches
+      // first on both paths.
+      const failing = join(tmp, "a-suite-error.test.js");
+      writeFileSync(failing, [
+        'describe("suite", () => {',
+        '  beforeAll(() => { throw new Error("beforeAll exploded"); });',
+        '  test("t1", () => { expect(1).toBe(1); });',
+        "});",
+        "",
+      ].join("\n"));
+
+      // Slow enough that a second worker cannot drain the whole queue in the
+      // window before the first file's failure cancels it.
+      const laterFiles: string[] = [];
+      for (const index of [1, 2, 3, 4, 5]) {
+        const later = join(tmp, `b-later-${index}.test.js`);
+        writeFileSync(later, [
+          `test("later ${index}", () => {`,
+          // Array methods, not a traditional for loop: those need
+          // --compat-traditional-for-loop and would fail the file for the
+          // wrong reason.
+          "  const total = Array.from({ length: 200000 }, (_, i) => i)",
+          "    .reduce((sum, value) => sum + value, 0);",
+          `  console.log("RAN:later-${index}");`,
+          "  expect(total > 0).toBe(true);",
+          "});",
+          "",
+        ].join("\n"));
+        laterFiles.push(later);
+      }
+
+      // Sequential: the loop must break before the next file is opened.
+      const sequential = Bun.spawnSync(
+        [resolve(TESTRUNNER), failing, ...laterFiles, "--jobs=1", "--no-progress",
+          "--exit-on-first-failure", ...modeArgs],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const sequentialOut = sequential.stdout.toString() + sequential.stderr.toString();
+      if (sequential.exitCode === 0)
+        throw new Error(`${label} sequential should exit non-zero, got 0`);
+      for (const index of [1, 2, 3, 4, 5])
+        if (sequentialOut.includes(`RAN:later-${index}`))
+          throw new Error(
+            `${label} sequential kept running files after the suite error: ${sequentialOut.slice(0, 400)}`,
+          );
+      // The summary must not claim the run passed when only a suite errored.
+      if (sequentialOut.includes("All tests passed"))
+        throw new Error(`${label} printed the all-passed summary for a suite error: ${sequentialOut.slice(0, 400)}`);
+
+      // Parallel: the pool must cancel the queue, so at least one queued file
+      // never runs and never appears as a synthesised failure.
+      const parallel = Bun.spawnSync(
+        [resolve(TESTRUNNER), failing, ...laterFiles, "--jobs=2", "--no-progress",
+          "--exit-on-first-failure", "--output=json", ...modeArgs],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      if (parallel.exitCode === 0)
+        throw new Error(`${label} parallel should exit non-zero, got 0`);
+      const parallelJson = JSON.parse(parallel.stdout.toString());
+      if (parallelJson.ok !== false)
+        throw new Error(`${label} parallel ok should be false, got ${parallelJson.ok}`);
+      if (!Array.isArray(parallelJson.files) || parallelJson.files.length >= 6)
+        throw new Error(
+          `${label} parallel ran every queued file instead of bailing, got ${parallelJson.files?.length} file results`,
+        );
+      // Cancelled files are omitted, not reported as failures of their own.
+      if (parallelJson.failed !== 0)
+        throw new Error(
+          `${label} parallel should not synthesise failures for cancelled files, got failed=${parallelJson.failed}`,
+        );
+      if (parallelJson.suiteErrors !== 1)
+        throw new Error(`${label} parallel suiteErrors should be 1, got ${parallelJson.suiteErrors}`);
     } finally {
       clean(tmp);
     }
@@ -6614,47 +6740,115 @@ console.log("SandboxRunner: virtual modules share the CLI surface and cannot sha
   // Each binary needs input it can actually accept: the benchmark runner
   // fails a run with zero benchmarks, and the bundler requires an explicit
   // --output when its source came from stdin.
+  //
+  // Exit 0 alone would not prove anything: a regression that drops stdin on
+  // the floor and executes nothing still exits 0. Every entry therefore
+  // carries a postcondition only a real execution of *this* source can
+  // satisfy — a marker the program prints, or, for the bundler (which
+  // prints nothing), the artifact it writes. `reset` runs before each
+  // invocation so a stale artifact cannot stand in for a fresh one.
+  const bundlerOut = join(tmp, "stdin-policy.gbc");
+  const STDIN_MARKER = "stdin-policy-marker";
+  type SpawnResult = {
+    stdout: { toString(): string };
+    stderr: { toString(): string };
+  };
+  const expectMarker = (name: string, run: string, proc: SpawnResult) => {
+    const output = proc.stdout.toString();
+    if (!output.includes(STDIN_MARKER))
+      throw new Error(
+        `${name} ${run}: stdin source did not run (no ${JSON.stringify(STDIN_MARKER)} in stdout): ${output}${proc.stderr.toString()}`,
+      );
+  };
+
   const stdinApps = [
     {
       name: "GocciaScriptLoader",
       bin: LOADER,
       args: [] as string[],
-      source: "const x = 1;\n",
+      source: `console.log("${STDIN_MARKER}");\n`,
       env: undefined as Record<string, string> | undefined,
+      reset: undefined as (() => void) | undefined,
+      verify: expectMarker,
     },
     {
       name: "GocciaScriptLoaderBare",
       bin: BARE,
       args: [],
-      source: "const x = 1;\n",
+      // The bare loader has no console; `print` is its output global.
+      source: `print("${STDIN_MARKER}");\n`,
       env: undefined,
+      reset: undefined,
+      verify: expectMarker,
     },
     {
       name: "GocciaTestRunner",
       bin: TESTRUNNER,
-      args: [],
-      source: "const x = 1;\n",
+      args: ["--no-progress"],
+      // The marker proves the source ran; the passing test proves the suite
+      // was registered and executed rather than merely parsed.
+      source: [
+        'test("stdin suite", () => {',
+        `  console.log("${STDIN_MARKER}");`,
+        "  expect(1 + 1).toBe(2);",
+        "});",
+        "",
+      ].join("\n"),
       env: undefined,
+      reset: undefined,
+      verify: (name: string, run: string, proc: SpawnResult) => {
+        expectMarker(name, run, proc);
+        const output = proc.stdout.toString();
+        if (!output.includes("Test Results Passed: 1"))
+          throw new Error(
+            `${name} ${run}: stdin suite did not run a passing test: ${output}${proc.stderr.toString()}`,
+          );
+      },
     },
     {
       name: "GocciaBenchmarkRunner",
       bin: BENCHRUNNER,
       args: ["--source-type=module", "--no-progress"],
-      source: microbenchModule(['bench("noop", () => 1);']),
+      source: microbenchModule([`bench("${STDIN_MARKER}", () => 1);`]),
       env: stdinBenchEnv,
+      reset: undefined,
+      // The benchmark name only reaches the report if the benchmark was
+      // registered and measured.
+      verify: expectMarker,
     },
     {
       name: "GocciaBundler",
       bin: BUNDLER,
-      args: [`--output=${join(tmp, "stdin-policy.gbc")}`],
-      source: "const x = 1;\n",
+      args: [`--output=${bundlerOut}`],
+      source: `console.log("${STDIN_MARKER}");\n`,
       env: undefined,
+      reset: () => rmSync(bundlerOut, { force: true }),
+      // The bundler compiles rather than runs, so its evidence is the
+      // artifact: it must exist and, when executed, produce the marker that
+      // only the stdin source could have put there.
+      verify: (name: string, run: string, proc: SpawnResult) => {
+        if (!existsSync(bundlerOut))
+          throw new Error(
+            `${name} ${run}: no bundle written from stdin source: ${proc.stdout.toString()}${proc.stderr.toString()}`,
+          );
+        const roundtrip = Bun.spawnSync([LOADER, bundlerOut], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 120_000,
+        });
+        const roundtripOutput = roundtrip.stdout.toString();
+        if (roundtrip.exitCode !== 0 || !roundtripOutput.includes(STDIN_MARKER))
+          throw new Error(
+            `${name} ${run}: the bundle does not carry the stdin source (exit ${roundtrip.exitCode}): ${roundtripOutput}${roundtrip.stderr.toString()}`,
+          );
+      },
     },
   ];
 
   try {
     console.log("Stdin policy: piped stdin with no arguments still runs...");
     for (const app of stdinApps) {
+      app.reset?.();
       const proc = Bun.spawnSync([app.bin, ...app.args], {
         stdin: new TextEncoder().encode(app.source),
         stdout: "pipe",
@@ -6666,10 +6860,12 @@ console.log("SandboxRunner: virtual modules share the CLI surface and cannot sha
         throw new Error(
           `${app.name} with piped stdin exited ${proc.exitCode}: ${proc.stdout.toString()}${proc.stderr.toString()}`,
         );
+      app.verify(app.name, "with piped stdin", proc);
     }
 
     console.log('Stdin policy: explicit "-" with piped stdin still runs...');
     for (const app of stdinApps) {
+      app.reset?.();
       const proc = Bun.spawnSync([app.bin, ...app.args, "-"], {
         stdin: new TextEncoder().encode(app.source),
         stdout: "pipe",
@@ -6681,6 +6877,7 @@ console.log("SandboxRunner: virtual modules share the CLI surface and cannot sha
         throw new Error(
           `${app.name} with explicit "-" exited ${proc.exitCode}: ${proc.stdout.toString()}${proc.stderr.toString()}`,
         );
+      app.verify(app.name, 'with explicit "-"', proc);
     }
 
     console.log("Stdin policy: closed stdin with no arguments is not a usage error...");
@@ -6722,7 +6919,11 @@ for (const app of [
   if (proc.exitCode !== 0)
     throw new Error(`${app.name} --help exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   const help = normalizeLineEndings(proc.stdout.toString());
-  for (const needle of ["Input:", `${app.name} < app.js`, '"-"', "Ctrl-D", "exits 2"]) {
+  // The EOF key sequence is platform-specific: a Unix console ends input on
+  // Ctrl-D, a Windows console on Ctrl-Z followed by Enter, and the help text
+  // renders whichever one the local console honours (Goccia.CLI.Stdin).
+  const endOfInputKeys = process.platform === "win32" ? "Ctrl-Z then Enter" : "Ctrl-D";
+  for (const needle of ["Input:", `${app.name} < app.js`, '"-"', endOfInputKeys, "exits 2"]) {
     if (!help.includes(needle))
       throw new Error(`${app.name} --help is missing ${JSON.stringify(needle)}:\n${help}`);
   }
@@ -6736,7 +6937,16 @@ for (const app of [
   { name: "GocciaSandboxRunner", bin: SANDBOXRUNNER },
 ]) {
   const proc = Bun.spawnSync([app.bin, "--help"], { stdout: "pipe", stderr: "pipe" });
+  // Without these the test also passes when --help fails outright and prints
+  // nothing: an empty stdout trivially lacks "Input:". Same postconditions as
+  // the stdin-defaulting binaries above.
+  if (proc.exitCode !== 0)
+    throw new Error(`${app.name} --help exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stderr.toString() !== "")
+    throw new Error(`${app.name} --help wrote to stderr: ${proc.stderr.toString()}`);
   const help = normalizeLineEndings(proc.stdout.toString());
+  if (!help.includes(app.name))
+    throw new Error(`${app.name} --help did not print its own usage:\n${help}`);
   if (help.includes("Input:"))
     throw new Error(`${app.name} should not advertise the stdin rule:\n${help}`);
 }
@@ -6761,6 +6971,12 @@ console.log("TestRunner: vitest compatibility shim and its off-switch...");
 
     const enabled = Bun.spawnSync([TESTRUNNER, suitePath, "--no-progress"]);
     const enabledOutput = new TextDecoder().decode(enabled.stdout);
+    // Output alone does not pin the contract: the process status is what CI
+    // and every caller act on, so assert it on both invocations.
+    if (enabled.exitCode !== 0)
+      throw new Error(
+        `TestRunner with the default shim exited ${enabled.exitCode}:\n${enabledOutput}${new TextDecoder().decode(enabled.stderr)}`,
+      );
     if (!enabledOutput.includes("Passed: 1"))
       throw new Error(
         `TestRunner should resolve the bare vitest specifier by default:\n${enabledOutput}`,
@@ -6775,6 +6991,10 @@ console.log("TestRunner: vitest compatibility shim and its off-switch...");
     const disabledOutput =
       new TextDecoder().decode(disabled.stdout) +
       new TextDecoder().decode(disabled.stderr);
+    if (disabled.exitCode === 0)
+      throw new Error(
+        `--no-vitest-compat should fail the run, but it exited 0:\n${disabledOutput}`,
+      );
     if (!disabledOutput.includes('Cannot resolve bare module specifier "vitest"'))
       throw new Error(
         `--no-vitest-compat should leave the vitest specifier unresolvable:\n${disabledOutput}`,

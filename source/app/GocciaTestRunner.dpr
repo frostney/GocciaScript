@@ -67,6 +67,14 @@ const
     --timeout=0. }
   DEFAULT_TIMEOUT_MS = 30000;  // 30 seconds
 
+  { Sentinel the parallel worker returns as its pool error message when
+    --exit-on-first-failure has to stop the queue. It carries no diagnostic
+    value — the file's own counts and failed-test names are already in
+    TTestWorkerData — it only trips TGocciaThreadPool.CancelOnError, and the
+    aggregation recognises it so the slot is not rewritten as a synthetic
+    failure. }
+  EXIT_ON_FIRST_FAILURE_SIGNAL = '<exit-on-first-failure>';
+
 type
   { Plain-data record for extracting test results from GC-managed objects.
     Used by the parallel path to pass results across thread boundaries
@@ -1225,7 +1233,11 @@ begin
     if Assigned(GC) then
       GC.Collect;
 
-    if FExitOnFirst.Present and (FailedCount > 0) then
+    { Suite-level errors (throwing describe, failed beforeAll/afterAll) never
+      enter `failed` — Vitest keeps them out of the test counts — so bailing
+      on `failed` alone would keep running files after a file already died.
+      Both counters gate the break, matching the parallel path. }
+    if FExitOnFirst.Present and ((FailedCount > 0) or (SuiteErrorCount > 0)) then
       Break;
   end;
   SetLength(Result.FileResults, ProcessedCount);
@@ -1324,6 +1336,19 @@ begin
     end;
   end;
 
+  { Arm --exit-on-first-failure. The pool's only stop signal is a non-empty
+    AErrorMessage (TGocciaFileWorker sets Success := ErrorMsg = '' and
+    cancels the queue when CancelOnError is on), and a file that merely
+    failed tests or errored a suite otherwise returns as a successful
+    worker — so queued files kept running. Suite errors are consulted
+    alongside `failed` because they never enter the test counts. The
+    sentinel is not a real error message: the aggregation recognises it and
+    keeps the slot's own numbers, so nothing is reported twice. }
+  if FExitOnFirst.Present and
+    ((WorkerResults^[AIndex].Failed > 0) or
+     (WorkerResults^[AIndex].SuiteErrors > 0)) then
+    AErrorMessage := EXIT_ON_FIRST_FAILURE_SIGNAL;
+
   // No per-file GC.Collect here. Explicit script-level Goccia.gc() is
   // serialized by the collector lock, but the runner still lets worker
   // shutdown reclaim each thread-local heap in bulk.
@@ -1342,9 +1367,12 @@ var
     aggregation reads is a refcount race we cannot tolerate. }
   OrphanResults: array of TTestWorkerData;
   IsOrphan: array of Boolean;
+  { Files the queue never got to because --exit-on-first-failure cancelled
+    the run. They contribute nothing and are omitted from the report. }
+  NeverRan: array of Boolean;
   Source: ^TTestWorkerData;
   GC: TGarbageCollector;
-  I, J: Integer;
+  I, J, ProcessedCount: Integer;
   AllTestResults: TGocciaObjectValue;
   AllFailedTests: TGocciaArrayValue;
   PassedCount, FailedCount, SkippedCount, TotalRunCount, TotalAssertions: Double;
@@ -1363,6 +1391,9 @@ begin
     WorkerData[I].Passed := 0;
     WorkerData[I].Failed := 0;
     WorkerData[I].Skipped := 0;
+    { Explicit: the cancelled-slot discrimination below reads this field to
+      tell a file that never ran from one that reported a suite error. }
+    WorkerData[I].SuiteErrors := 0;
     WorkerData[I].TotalRunTests := 0;
     WorkerData[I].Assertions := 0;
     WorkerData[I].Duration := 0;
@@ -1445,10 +1476,33 @@ begin
       Success=False slots get rewritten. }
     SetLength(OrphanResults, AFiles.Count);
     SetLength(IsOrphan, AFiles.Count);
+    SetLength(NeverRan, AFiles.Count);
     for I := 0 to AFiles.Count - 1 do
     begin
       if (I > High(Pool.Results)) or Pool.Results[I].Success then
         Continue;
+
+      { The file ran and reported its own numbers; the sentinel exists only
+        to have stopped the queue. Leave WorkerData[I] exactly as the worker
+        wrote it. }
+      if Pool.Results[I].ErrorMessage = EXIT_ON_FIRST_FAILURE_SIGNAL then
+        Continue;
+
+      { Queue cancelled by --exit-on-first-failure: this file never ran, and
+        a bail is not a per-file failure. Drop it from the report instead of
+        synthesising one failed test for it (which is what the watchdog path
+        below legitimately does — there the file was expected to complete). }
+      if FExitOnFirst.Present and
+        (Pool.Results[I].ErrorMessage = GOCCIA_POOL_CANCELLED_MESSAGE) and
+        (WorkerData[I].ErrorMessage = '') and
+        (WorkerData[I].Passed = 0) and
+        (WorkerData[I].Failed = 0) and
+        (WorkerData[I].SuiteErrors = 0) and
+        (WorkerData[I].TotalRunTests = 0) then
+      begin
+        NeverRan[I] := True;
+        Continue;
+      end;
 
       if Pool.Results[I].ErrorMessage <> '' then
       begin
@@ -1516,9 +1570,15 @@ begin
   Result.TotalExecNanoseconds := 0;
   Result.MemoryStats := WorkerMemoryStats;
   SetLength(Result.FileResults, AFiles.Count);
+  ProcessedCount := 0;
 
   for I := 0 to AFiles.Count - 1 do
   begin
+    { Bailed-out files never ran, so they neither print progress nor take a
+      results row — the same shape the sequential path's Break produces. }
+    if (I < Length(NeverRan)) and NeverRan[I] then
+      Continue;
+
     if (not FNoProgress.Present) and (not IsJsonOutput) then
       WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, AFiles.Count, AFiles[I]]));
 
@@ -1552,22 +1612,25 @@ begin
     { Per-file record for the JSON output. Copying strings by value
       keeps the aggregated result self-contained once WorkerData goes
       out of scope. }
-    Result.FileResults[I].FileName := AFiles[I];
-    Result.FileResults[I].LexTimeNanoseconds := Source^.LexNs;
-    Result.FileResults[I].ParseTimeNanoseconds := Source^.ParseNs;
-    Result.FileResults[I].CompileTimeNanoseconds := Source^.CompileNs;
-    Result.FileResults[I].ExecuteTimeNanoseconds := Source^.ExecNs;
-    Result.FileResults[I].Passed := Source^.Passed;
-    Result.FileResults[I].Failed := Source^.Failed;
-    Result.FileResults[I].Skipped := Source^.Skipped;
-    Result.FileResults[I].SuiteErrors := Source^.SuiteErrors;
-    Result.FileResults[I].TotalTests := Source^.TotalRunTests;
-    Result.FileResults[I].ErrorMessage := Source^.ErrorMessage;
-    SetLength(Result.FileResults[I].FailedTests,
+    Result.FileResults[ProcessedCount].FileName := AFiles[I];
+    Result.FileResults[ProcessedCount].LexTimeNanoseconds := Source^.LexNs;
+    Result.FileResults[ProcessedCount].ParseTimeNanoseconds := Source^.ParseNs;
+    Result.FileResults[ProcessedCount].CompileTimeNanoseconds := Source^.CompileNs;
+    Result.FileResults[ProcessedCount].ExecuteTimeNanoseconds := Source^.ExecNs;
+    Result.FileResults[ProcessedCount].Passed := Source^.Passed;
+    Result.FileResults[ProcessedCount].Failed := Source^.Failed;
+    Result.FileResults[ProcessedCount].Skipped := Source^.Skipped;
+    Result.FileResults[ProcessedCount].SuiteErrors := Source^.SuiteErrors;
+    Result.FileResults[ProcessedCount].TotalTests := Source^.TotalRunTests;
+    Result.FileResults[ProcessedCount].ErrorMessage := Source^.ErrorMessage;
+    SetLength(Result.FileResults[ProcessedCount].FailedTests,
       Length(Source^.FailedTestNames));
     for J := 0 to High(Source^.FailedTestNames) do
-      Result.FileResults[I].FailedTests[J] := Source^.FailedTestNames[J];
+      Result.FileResults[ProcessedCount].FailedTests[J] :=
+        Source^.FailedTestNames[J];
+    Inc(ProcessedCount);
   end;
+  SetLength(Result.FileResults, ProcessedCount);
 
   AllTestResults.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(AFiles.Count * 1.0));
   AllTestResults.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(TotalRunCount));
