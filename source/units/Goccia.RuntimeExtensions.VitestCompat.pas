@@ -175,6 +175,35 @@ begin
   Result := True;
 end;
 
+{ Whether any factory key starts with APrefix followed only by digits, i.e.
+  could name one of the alias locals this prefix will generate. }
+function AliasPrefixCollides(const AKeys: TStringList;
+  const APrefix: string): Boolean;
+var
+  I, J: Integer;
+  Tail: string;
+  AllDigits: Boolean;
+begin
+  for I := 0 to AKeys.Count - 1 do
+  begin
+    if Copy(AKeys[I], 1, Length(APrefix)) <> APrefix then
+      Continue;
+    Tail := Copy(AKeys[I], Length(APrefix) + 1, MaxInt);
+    if Tail = '' then
+      Exit(True);
+    AllDigits := True;
+    for J := 1 to Length(Tail) do
+      if not (Tail[J] in ['0' .. '9']) then
+      begin
+        AllDigits := False;
+        Break;
+      end;
+    if AllDigits then
+      Exit(True);
+  end;
+  Result := False;
+end;
+
 function VitestCompatShimSource: string;
 const
   LB = sLineBreak;
@@ -355,7 +384,7 @@ const
   LB = sLineBreak;
 var
   AliasCount: Integer;
-  AliasLocal: string;
+  AliasLocal, AliasPrefix, ResultBinding: string;
   Arrow: TGocciaArrowFunctionExpression;
   EmittedKeys: TStringList;
   Entry: TGocciaPropertySourceOrder;
@@ -422,6 +451,34 @@ begin
   EmittedKeys := TStringList.Create;
   try
     EmittedKeys.CaseSensitive := True;
+
+    { Pick binding names the factory's own keys cannot collide with.
+
+      The generated module declares a local for the factory result, and one
+      per aliased export. Both used fixed names, so a factory exporting
+      `__gocciaMockFactoryResult` produced
+      `const X = …; export const X = X.X;` — a redeclaration that fails to
+      parse, reproduced as "Identifier '__gocciaMockFactoryResult' has already
+      been declared". The alias locals carry the same hazard one layer deeper,
+      since a factory may name a key `__gocciaMockFactoryResultAlias1`.
+
+      Every static key is collected first and each generated name grows an
+      underscore until it is outside that set, so the names are chosen against
+      the actual factory rather than hoped to be improbable. }
+    for I := Low(ObjectLiteral.PropertySourceOrder) to
+             High(ObjectLiteral.PropertySourceOrder) do
+      if ObjectLiteral.PropertySourceOrder[I].PropertyType = pstStatic then
+        EmittedKeys.Add(ObjectLiteral.PropertySourceOrder[I].StaticKey);
+
+    ResultBinding := MOCK_RESULT_BINDING;
+    while EmittedKeys.IndexOf(ResultBinding) >= 0 do
+      ResultBinding := ResultBinding + '_';
+
+    AliasPrefix := ResultBinding + 'Alias';
+    while AliasPrefixCollides(EmittedKeys, AliasPrefix) do
+      AliasPrefix := AliasPrefix + '_';
+
+    EmittedKeys.Clear;
     for I := Low(ObjectLiteral.PropertySourceOrder) to
              High(ObjectLiteral.PropertySourceOrder) do
     begin
@@ -449,11 +506,11 @@ begin
       EmittedKeys.Add(Key);
 
       if Key = MOCK_DEFAULT_KEY then
-        ExportsText := ExportsText + 'export default ' + MOCK_RESULT_BINDING +
+        ExportsText := ExportsText + 'export default ' + ResultBinding +
           '.' + MOCK_DEFAULT_KEY + ';' + LB
       else if IsBindableName(Key) then
         ExportsText := ExportsText + 'export const ' + Key + ' = ' +
-          MOCK_RESULT_BINDING + '.' + Key + ';' + LB
+          ResultBinding + '.' + Key + ';' + LB
       else
       begin
         { A key that is identifier-like but not a BindingIdentifier — a
@@ -475,9 +532,9 @@ begin
           everywhere. Property access is safe
           unaliased: any IdentifierName may follow a dot. }
         Inc(AliasCount);
-        AliasLocal := MOCK_RESULT_BINDING + 'Alias' + IntToStr(AliasCount);
+        AliasLocal := AliasPrefix + IntToStr(AliasCount);
         ExportsText := ExportsText +
-          'const ' + AliasLocal + ' = ' + MOCK_RESULT_BINDING + '.' + Key +
+          'const ' + AliasLocal + ' = ' + ResultBinding + '.' + Key +
             ';' + LB +
           'export { ' + AliasLocal + ' as ' + Key + ' };' + LB;
       end;
@@ -490,7 +547,7 @@ begin
     '// GocciaScript vi.mock factory module for "' +
       EscapeJavaScriptStringLiteral(ASpecifier) + '".' + LB +
     'import { vi } from "' + VITEST_COMPAT_SPECIFIER + '";' + LB +
-    'const ' + MOCK_RESULT_BINDING + ' = (' + FactorySource + ')();' + LB +
+    'const ' + ResultBinding + ' = (' + FactorySource + ')();' + LB +
     ExportsText;
 end;
 

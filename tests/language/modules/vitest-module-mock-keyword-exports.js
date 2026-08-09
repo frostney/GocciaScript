@@ -14,6 +14,7 @@ features: [modules, runtime-modules]
 import { describe, expect, test, vi } from "vitest";
 
 import * as mocked from "./helpers/mock-keyword-export-target.js";
+import * as generated from "./helpers/mock-generated-binding-target.js";
 
 vi.mock("./helpers/mock-keyword-export-target.js", () => ({
   value: "MOCKED",
@@ -25,6 +26,18 @@ vi.mock("./helpers/mock-keyword-export-target.js", () => ({
   yield: 6,
   eval: 7,
   arguments: 8,
+}));
+
+// The shim declares a local for the factory result and one per aliased
+// export. A factory may name its exports anything, including those generated
+// names, which produced `const X = ...; export const X = X.X;` — a
+// redeclaration that failed to parse. The names are now chosen against the
+// factory's own key set.
+vi.mock("./helpers/mock-generated-binding-target.js", () => ({
+  value: "MOCKED",
+  __gocciaMockFactoryResult: 1,
+  __gocciaMockFactoryResultAlias1: 2,
+  class: 3,
 }));
 
 describe("vi.mock factory keys that cannot be const bindings", () => {
@@ -46,5 +59,13 @@ describe("vi.mock factory keys that cannot be const bindings", () => {
     expect(mocked["yield"]).toBe(6);
     expect(mocked["eval"]).toBe(7);
     expect(mocked["arguments"]).toBe(8);
+  });
+
+  test("keys colliding with the shim's generated bindings still work", () => {
+    expect(generated.value).toBe("MOCKED");
+    expect(generated["__gocciaMockFactoryResult"]).toBe(1);
+    expect(generated["__gocciaMockFactoryResultAlias1"]).toBe(2);
+    // Present alongside an aliased export, whose local must also dodge the key.
+    expect(generated["class"]).toBe(3);
   });
 });

@@ -583,9 +583,12 @@ begin
         if any, has already happened, so the wait moves ahead of the
         assertions and closes the window rather than leaving it open.
 
-        The wait is needed on the way out regardless: the zombie drains the
-        shared cleanup registry as it exits and the registry tests assert
-        exact counts. }
+        An earlier version of this comment justified the wait by the cleanup
+        registry: the zombie drains it on the way out and the registry tests
+        assert exact counts. That reason does not apply — this test is
+        registered after both registry tests, which have already made their
+        assertions by the time it runs. What the wait actually guarantees is
+        that the abandoned thread has retired before the pool is freed. }
       WaitedMs := 0;
       while (WorkerExitCount - ExitBaseline < EXPECTED_WORKER_EXITS)
           and (WaitedMs < 5000) do
