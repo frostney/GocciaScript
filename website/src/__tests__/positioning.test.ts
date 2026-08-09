@@ -88,7 +88,13 @@ describe("GocciaScript positioning", () => {
       /pinned Vitest release/i,
       /semantics oracle/i,
       /direction, not a finished claim/i,
-      /no vi namespace/i,
+      // Was /no vi namespace/i. That gap closed: `vi` is importable from
+      // "vitest" and covers fn, spyOn and factory-form mock. The contract this
+      // test defends is that the answer keeps naming its gaps, so it now
+      // asserts the two that are actually true — an unimplemented member
+      // fails loudly, and the namespace is not ambient.
+      /throw a named error/i,
+      /rather than as an ambient global/i,
       /rather than about raw engine throughput/i,
     ]);
   });
