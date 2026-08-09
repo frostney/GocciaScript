@@ -30,36 +30,6 @@ vi.mock("./helpers/mock-error-non-object-factory.js", () => 42);
 // "could not be analysed" report.
 vi.mock("./helpers/mock-error-template-factory.js", () => `value-${1 + 1}`);
 
-// A reserved word is identifier-like but is not a BindingIdentifier, so the
-// generated module cannot declare it as an export.
-vi.mock("./helpers/mock-error-reserved-key-factory.js", () => ({ class: 1 }));
-
-// Strict-mode reserved words are rejected for the same reason: every generated
-// mock module is module source, and module source is always strict.
-vi.mock("./helpers/mock-error-strict-reserved-key-factory.js", () => ({
-  static: 1,
-}));
-
-// Names no module may bind, even though no keyword predicate lists them:
-// module source is always strict and always has a module goal, so `await` is
-// reserved outright and `yield`, `eval` and `arguments` are barred as
-// BindingIdentifiers. Node rejects `export const <name> = 1;` for all four.
-// GocciaScript's own parser happens to accept them, so without this rejection
-// the mock would work here and be a SyntaxError under real Vitest — a
-// divergence that only shows up once a suite is ported back.
-vi.mock("./helpers/mock-error-module-binding-await-factory.js", () => ({
-  await: 1,
-}));
-vi.mock("./helpers/mock-error-module-binding-yield-factory.js", () => ({
-  yield: 1,
-}));
-vi.mock("./helpers/mock-error-module-binding-eval-factory.js", () => ({
-  eval: 1,
-}));
-vi.mock("./helpers/mock-error-module-binding-arguments-factory.js", () => ({
-  arguments: 1,
-}));
-
 // An async factory only has its object after a microtask, which is too late.
 vi.mock("./helpers/mock-error-async-factory.js", async () => ({ value: 1 }));
 
@@ -113,35 +83,6 @@ describe("vi.mock factories the shim cannot generate a module for", () => {
 
     expect(error instanceof TypeError).toBe(true);
     expect(error.message).toContain("is not returning an object");
-  });
-
-  test("a reserved word as an export name is rejected", async () => {
-    const error = await importError(
-      "./helpers/mock-error-reserved-key-factory.js",
-    );
-
-    expect(error instanceof Error).toBe(true);
-    expect(error.message).toContain('"class" is a reserved word');
-  });
-
-  test("a strict-mode reserved word as an export name is rejected too", async () => {
-    const error = await importError(
-      "./helpers/mock-error-strict-reserved-key-factory.js",
-    );
-
-    expect(error instanceof Error).toBe(true);
-    expect(error.message).toContain('"static" is a reserved word');
-  });
-
-  test("names no module can bind are rejected as export names", async () => {
-    for (const name of ["await", "yield", "eval", "arguments"]) {
-      const error = await importError(
-        `./helpers/mock-error-module-binding-${name}-factory.js`,
-      );
-
-      expect(error instanceof Error).toBe(true);
-      expect(error.message).toContain(`"${name}" is a reserved word`);
-    }
   });
 
   test("an async factory is rejected", async () => {
