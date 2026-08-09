@@ -775,6 +775,9 @@ jobs:
       - name: Check Intl taint robustness under lazy materialization
         run: bun run scripts/test-cli-intl-taint.ts
 
+      - name: Check differential batteries against bun
+        run: bun run scripts/test-cli-differential.ts
+
       - name: Check benchmark comparison logic
         run: bun run scripts/test-benchmark-compare.ts
 
