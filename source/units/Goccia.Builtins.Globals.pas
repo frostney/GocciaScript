@@ -885,6 +885,22 @@ end;
 function StructuredCloneValue(const AValue: TGocciaValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaValue; forward;
 
+{ Registers a clone against its original and keeps it alive for the rest of the
+  walk.
+
+  AMemory is a plain hash map the collector cannot see, so a half-built clone is
+  otherwise referenced only by a native local — and the walk re-enters user code
+  at every accessor property, which is a GC safe point. Rooting on registration
+  pairs with the sweep in StructuredCloneCallback, which drops the root for every
+  memory entry once the clone finishes or throws. }
+procedure RegisterClone(const AOriginal, AClone: TGocciaValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>);
+begin
+  AMemory.Add(AOriginal, AClone);
+  if TGarbageCollector.Instance <> nil then
+    TGarbageCollector.Instance.AddTempRoot(AClone);
+end;
+
 function CloneObject(const AObj: TGocciaObjectValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaObjectValue;
 var
@@ -894,7 +910,7 @@ var
   ClonedValue: TGocciaValue;
 begin
   Result := TGocciaObjectValue.Create;
-  AMemory.Add(AObj, Result);
+  RegisterClone(AObj, Result, AMemory);
 
   Keys := AObj.GetOwnPropertyKeys;
   for I := 0 to Length(Keys) - 1 do
@@ -926,7 +942,7 @@ var
   Element: TGocciaValue;
 begin
   Result := TGocciaArrayValue.Create;
-  AMemory.Add(AArr, Result);
+  RegisterClone(AArr, Result, AMemory);
 
   for I := 0 to AArr.Elements.Count - 1 do
   begin
@@ -945,7 +961,7 @@ var
   Key, Value: TGocciaValue;
 begin
   Result := TGocciaMapValue.Create;
-  AMemory.Add(AMap, Result);
+  RegisterClone(AMap, Result, AMemory);
 
   // StructuredCloneValue can run user getters that mutate AMap; retain it so
   // compaction cannot renumber entries mid-walk and invalidate Cursor.
@@ -968,7 +984,7 @@ var
   Item: TGocciaValue;
 begin
   Result := TGocciaSetValue.Create;
-  AMemory.Add(ASet, Result);
+  RegisterClone(ASet, Result, AMemory);
 
   // StructuredCloneValue can run user getters that mutate ASet; retain it so
   // compaction cannot renumber entries mid-walk and invalidate Cursor.
@@ -989,9 +1005,7 @@ var
 begin
   Len := Length(ABuf.Data);
   Result := TGocciaArrayBufferValue.Create(Len);
-  AMemory.Add(ABuf, Result);
-  if (TGarbageCollector.Instance <> nil) then
-    TGarbageCollector.Instance.AddTempRoot(Result);
+  RegisterClone(ABuf, Result, AMemory);
 
   if Len > 0 then
     Move(ABuf.Data[0], Result.Data[0], Len);
@@ -1004,9 +1018,7 @@ var
 begin
   Len := Length(ABuf.Data);
   Result := TGocciaSharedArrayBufferValue.Create(Len);
-  AMemory.Add(ABuf, Result);
-  if (TGarbageCollector.Instance <> nil) then
-    TGarbageCollector.Instance.AddTempRoot(Result);
+  RegisterClone(ABuf, Result, AMemory);
 
   if Len > 0 then
     Move(ABuf.Data[0], Result.Data[0], Len);

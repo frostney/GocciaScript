@@ -121,3 +121,36 @@ describe("toMatchObject", () => {
     expect({ a: 1, b: 2 }).not.toMatchObject({ a: 9 });
   });
 });
+
+// Same exposure as toEqual: see that file for the rationale.
+describe.runIf(typeof Goccia !== "undefined")("toMatchObject under explicit GC", () => {
+  // A bare gc() usually leaves the freed slot readable; the allocation churn
+  // afterwards is what makes a collected value observable.
+  const gcChurn = () => {
+    Goccia.gc();
+    let total = 0;
+    for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      const scratch = { a: i * 7.5, b: [i, i + 1], c: "x" + i };
+      total += scratch.a + scratch.b[0];
+    }
+    return total;
+  };
+
+  // Reachable only from the expectation while the comparison runs.
+  const freshExpected = () => ({
+    get k() {
+      gcChurn();
+      return { x: 1, arr: [1, 2, 3] };
+    },
+  });
+
+  test("matches through getters that collect", () => {
+    expect({ k: { x: 1, arr: [1, 2, 3] }, extra: "tail" }).toMatchObject(
+      freshExpected(),
+    );
+  });
+
+  test("keeps a temporary actual alive across the partial walk", () => {
+    expect([{ k: { x: 1, arr: [1, 2, 3] } }]).toContainEqual(freshExpected());
+  });
+});
