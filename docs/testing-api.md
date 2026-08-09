@@ -451,6 +451,8 @@ These follow the [Bun test runner API](https://bun.com/reference/bun/test/Descri
 
 Tests are designed to pass in both GocciaScript's GocciaTestRunner and standard JavaScript via [Vitest](https://vitest.dev/). This ensures tests serve as both GocciaScript validation and ECMAScript conformance checks.
 
+Vitest is also the reference for what the matchers *mean*, not only for the API shape: equality, `Set`/`Map`, error, and `toThrow` behavior is probed against a pinned Vitest release and reconciled. Accepting unmodified Vitest suites is a stated project direction rather than a current guarantee — the divergences listed below are the remaining gap. See [Vision](../VISION.md) for where this is heading.
+
 ### Running with Vitest
 
 ```bash
