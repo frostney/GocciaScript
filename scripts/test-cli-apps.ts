@@ -2324,7 +2324,7 @@ console.log("Loader: coverage --output=json not corrupted...");
     const jsonCov = readFileSync(jsonCovPath, "utf-8");
     if (!jsonCov.includes('"path":')) throw new Error('JSON coverage should contain "path":');
 
-    console.log("Loader: function coverage (interpreted + bytecode)...");
+    console.log("Loader: function coverage (--coverage implies bytecode, so --mode is a no-op)...");
     const functionSourcePath = join(tmp, "function-coverage.js");
     writeFileSync(
       functionSourcePath,
@@ -2336,7 +2336,7 @@ console.log("Loader: coverage --output=json not corrupted...");
       ].join("\n"),
     );
     for (const modeArgs of [[], ["--mode=bytecode"]]) {
-      const modeName = modeArgs.length === 0 ? "interpreted" : "bytecode";
+      const modeName = modeArgs.length === 0 ? "default" : "explicit-bytecode";
       const functionLcovPath = join(tmp, `function-${modeName}.lcov`);
       await $`${LOADER} ${modeArgs} --coverage --coverage-format=lcov --coverage-output=${functionLcovPath} ${functionSourcePath}`.quiet();
       const functionLcov = readFileSync(functionLcovPath, "utf-8");
@@ -2369,7 +2369,7 @@ console.log("Loader: coverage --output=json not corrupted...");
       throw new Error("JSON f should retain neverCalled with zero hits");
     }
 
-    console.log("Loader: generator function coverage (interpreted + bytecode)...");
+    console.log("Loader: generator function coverage (--mode is a no-op under --coverage)...");
     const generatorSourcePath = join(tmp, "generator-function-coverage.js");
     writeFileSync(
       generatorSourcePath,
@@ -2405,7 +2405,7 @@ console.log("Loader: coverage --output=json not corrupted...");
       ].join("\n"),
     );
     for (const modeArgs of [[], ["--mode=bytecode"]]) {
-      const modeName = modeArgs.length === 0 ? "interpreted" : "bytecode";
+      const modeName = modeArgs.length === 0 ? "default" : "explicit-bytecode";
       const generatorLcovPath = join(tmp, `generator-function-${modeName}.lcov`);
       await $`${LOADER} ${modeArgs} --compat-function --coverage --coverage-format=lcov --coverage-output=${generatorLcovPath} ${generatorSourcePath}`.quiet();
       const generatorLcov = readFileSync(generatorLcovPath, "utf-8");
@@ -2436,7 +2436,7 @@ console.log("Loader: coverage --output=json not corrupted...");
       ].join("\n"),
     );
     for (const modeArgs of [[], ["--mode=bytecode"]]) {
-      const modeName = modeArgs.length === 0 ? "interpreted" : "bytecode";
+      const modeName = modeArgs.length === 0 ? "default" : "explicit-bytecode";
       const declarationLcovPath = join(tmp, `function-declaration-${modeName}.lcov`);
       await $`${LOADER} ${modeArgs} --compat-function --coverage --coverage-format=lcov --coverage-output=${declarationLcovPath} ${declarationSourcePath}`.quiet();
       const declarationLcov = readFileSync(declarationLcovPath, "utf-8");
@@ -2451,15 +2451,17 @@ console.log("Loader: coverage --output=json not corrupted...");
     const escapedFunctionNameSourcePath = join(tmp, "escaped-function-name.js");
     writeFileSync(
       escapedFunctionNameSourcePath,
+      // Static string-literal keys, not computed ones: coverage always runs in
+      // bytecode mode, where a computed method key is not known at compile time
+      // and the function is named "<method>@<line>:<column>". Literal keys carry
+      // the real CR/LF and backslash characters this escaping check needs.
       [
-        'const newlineKey = "line" + String.fromCharCode(13, 10) + "break";',
-        'const literalKey = "line\\\\r\\\\nbreak";',
         "const holder = {",
-        "  [newlineKey]() { return 1; },",
-        "  [literalKey]() { return 2; },",
+        '  "line\\r\\nbreak"() { return 1; },',
+        '  "line\\\\r\\\\nbreak"() { return 2; },',
         "};",
-        "holder[newlineKey]();",
-        "holder[literalKey]();",
+        'holder["line\\r\\nbreak"]();',
+        'holder["line\\\\r\\\\nbreak"]();',
         "",
       ].join("\n"),
     );
@@ -2503,6 +2505,170 @@ console.log("Loader: coverage --output=json not corrupted...");
     await $`echo 'const x = 1 + 2; x;' | ${LOADER} --mode=bytecode --coverage-format=lcov --coverage-output=${bcLcovPath}`.quiet();
     if (!existsSync(bcLcovPath)) throw new Error("Bytecode LCOV should exist");
     if (!readFileSync(bcLcovPath, "utf-8").includes("DA:")) throw new Error("Bytecode LCOV should contain DA:");
+
+    console.log("Loader: coverage implies bytecode and reports imported modules...");
+    const implyDir = join(tmp, "coverage-imply");
+    mkdirSync(implyDir, { recursive: true });
+    const implyHelperPath = join(implyDir, "helper.js");
+    const implyEntryPath = join(implyDir, "entry.js");
+    writeFileSync(
+      implyHelperPath,
+      [
+        "export const classify = (n) => {",
+        "  if (n > 10) {",
+        "    return 'big';",
+        "  }",
+        "  return 'small';",
+        "};",
+        "",
+        "export const unused = (n) => n - 1;",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      implyEntryPath,
+      [
+        "import { classify } from './helper.js';",
+        "",
+        "const labels = [1, 42].map((v) => classify(v));",
+        "globalThis.__labels = labels.join(',');",
+        "",
+      ].join("\n"),
+    );
+    // Normalize to basenames: the entry is keyed by the path as typed while
+    // imported modules are keyed by their resolved absolute path.
+    const readCoverageByBasename = (path: string) => {
+      const raw = JSON.parse(readFileSync(path, "utf-8"));
+      return Object.fromEntries(
+        Object.entries(raw).map(([file, entry]) => [file.split("/").pop(), entry]),
+      ) as Record<string, any>;
+    };
+    const implyReports: Record<string, Record<string, any>> = {};
+    for (const [label, modeArgs] of [
+      ["default", []],
+      ["interpreted", ["--mode=interpreted"]],
+      ["bytecode", ["--mode=bytecode"]],
+    ] as [string, string[]][]) {
+      const implyJsonPath = join(implyDir, `coverage-${label}.json`);
+      await $`${LOADER} ${modeArgs} --coverage --coverage-format=json --coverage-output=${implyJsonPath} ${implyEntryPath}`.quiet();
+      const report = readCoverageByBasename(implyJsonPath);
+      implyReports[label] = report;
+      const helper = report["helper.js"];
+      if (!helper) {
+        throw new Error(`Coverage (${label}) should report the imported module helper.js`);
+      }
+      const helperFunctionNames = Object.values(helper.fnMap)
+        .map((fn: any) => fn.name)
+        .sort();
+      if (!helperFunctionNames.includes("classify") || !helperFunctionNames.includes("unused")) {
+        throw new Error(
+          `Coverage (${label}) should report imported-module functions, got ${helperFunctionNames.join(", ")}`,
+        );
+      }
+      if (Object.keys(helper.branchMap).length === 0) {
+        throw new Error(`Coverage (${label}) should report imported-module branches`);
+      }
+      if (!report["entry.js"]) {
+        throw new Error(`Coverage (${label}) should still report the entry file`);
+      }
+    }
+    // --coverage forces bytecode, so --mode is irrelevant to the report.
+    for (const label of ["default", "interpreted"]) {
+      if (JSON.stringify(implyReports[label]) !== JSON.stringify(implyReports.bytecode)) {
+        throw new Error(`Coverage with --mode=${label} should match the --mode=bytecode report`);
+      }
+    }
+
+    console.log("Loader: coverage reports functions at their declaration line...");
+    // LCOV FN: records where a function is declared. The bytecode VM used to
+    // report the first executed instruction instead, which lands on the body's
+    // first line for any function whose body starts on a later line.
+    const declLinePath = join(tmp, "declaration-line.js");
+    writeFileSync(
+      declLinePath,
+      [
+        "const oneLine = () => 1;",
+        "const multi = (a) => {",
+        "  const b = a + 1;",
+        "  return b;",
+        "};",
+        "oneLine();",
+        "multi(1);",
+        "",
+      ].join("\n"),
+    );
+    const declLineLcovPath = join(tmp, "declaration-line.lcov");
+    await $`${LOADER} --coverage --coverage-format=lcov --coverage-output=${declLineLcovPath} ${declLinePath}`.quiet();
+    const declLineRecords = readFileSync(declLineLcovPath, "utf-8").split(/\r?\n/);
+    for (const expected of ["FN:1,oneLine", "FN:2,multi", "FNDA:1,oneLine", "FNDA:1,multi"]) {
+      if (!declLineRecords.includes(expected)) {
+        throw new Error(
+          `LCOV should report ${expected}, got ${declLineRecords.filter((l) => l.startsWith("FN")).join(" ")}`,
+        );
+      }
+    }
+    // The per-call line hit still belongs to the first executed body line.
+    if (!declLineRecords.includes("DA:3,1")) {
+      throw new Error("Function body's first line should still record a line hit");
+    }
+
+    console.log("TestRunner: coverage hit counts are identical across --jobs...");
+    const jobsDir = join(tmp, "coverage-jobs");
+    mkdirSync(jobsDir, { recursive: true });
+    writeFileSync(
+      join(jobsDir, "shared.js"),
+      [
+        "export const step = (n) => {",
+        "  const doubled = n * 2;",
+        "  return doubled > 4 ? 'high' : 'low';",
+        "};",
+        "",
+      ].join("\n"),
+    );
+    // Asymmetric arm usage: a merge that records one hit per covered entry
+    // instead of summing counts collapses these totals.
+    writeFileSync(
+      join(jobsDir, "a.test.js"),
+      [
+        "import { step } from './shared.js';",
+        'test("a", () => {',
+        "  expect(step(1)).toBe('low');",
+        "  expect(step(2)).toBe('low');",
+        "  expect(step(5)).toBe('high');",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(jobsDir, "b.test.js"),
+      [
+        "import { step } from './shared.js';",
+        'test("b", () => {',
+        "  expect(step(2)).toBe('low');",
+        "  expect(step(9)).toBe('high');",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    const jobsCounts: Record<string, string> = {};
+    for (const jobs of ["1", "2", "4"]) {
+      const jobsJsonPath = join(jobsDir, `coverage-jobs-${jobs}.json`);
+      await $`${TESTRUNNER} ${join(jobsDir, "a.test.js")} ${join(jobsDir, "b.test.js")} --jobs=${jobs} --no-progress --coverage --coverage-format=json --coverage-output=${jobsJsonPath}`.quiet();
+      const shared = readCoverageByBasename(jobsJsonPath)["shared.js"];
+      if (!shared) throw new Error(`--jobs=${jobs} coverage should report the shared module`);
+      jobsCounts[jobs] = JSON.stringify({ s: shared.s, b: shared.b, f: shared.f });
+    }
+    // A statement executed 5 times must report 5, not "2 workers touched it".
+    if (JSON.parse(jobsCounts["1"]).s["2"] !== 5) {
+      throw new Error(`--jobs=1 should count the shared statement 5 times, got ${jobsCounts["1"]}`);
+    }
+    for (const jobs of ["2", "4"]) {
+      if (jobsCounts[jobs] !== jobsCounts["1"]) {
+        throw new Error(
+          `--jobs=${jobs} coverage counts should equal --jobs=1: ${jobsCounts[jobs]} vs ${jobsCounts["1"]}`,
+        );
+      }
+    }
 
     console.log("Loader: branch coverage via TestRunner...");
     const branchLcovPath = join(tmp, "branch.lcov");

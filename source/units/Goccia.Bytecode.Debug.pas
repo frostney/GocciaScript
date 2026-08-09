@@ -25,8 +25,17 @@ type
     FLineMapCount: Integer;
     FLocals: array of TGocciaLocalInfo;
     FLocalCount: Integer;
+    FDeclarationLine: UInt32;
+    FDeclarationColumn: UInt16;
   public
-    constructor Create(const ASourceFile: string);
+    { ADeclarationLine/ADeclarationColumn locate the function's declaration
+      (`const f = () => {`), which is what LCOV's FN: record means. They are
+      distinct from the first line-map entry, which locates the first executed
+      instruction of the body and drives per-call line hits. Zero means
+      "not recorded" — the module-level template has no declaration site. }
+    constructor Create(const ASourceFile: string;
+      const ADeclarationLine: UInt32 = 0;
+      const ADeclarationColumn: UInt16 = 0);
 
     procedure AddLineMapping(const APC: UInt32; const ALine: UInt32;
       const AColumn: UInt16);
@@ -39,19 +48,53 @@ type
     function GetLineMapEntry(const AIndex: Integer): TGocciaLineMapEntry;
     function GetLocalInfo(const AIndex: Integer): TGocciaLocalInfo;
 
+    { Declaration position, falling back to the first line-map entry when the
+      declaration site was not recorded, so callers always get a usable
+      position. }
+    function CoverageLine: UInt32;
+    function CoverageColumn: UInt16;
+
     property SourceFile: string read FSourceFile;
     property LineMapCount: Integer read FLineMapCount;
     property LocalCount: Integer read FLocalCount;
+    property DeclarationLine: UInt32 read FDeclarationLine
+      write FDeclarationLine;
+    property DeclarationColumn: UInt16 read FDeclarationColumn
+      write FDeclarationColumn;
   end;
 
 implementation
 
-constructor TGocciaDebugInfo.Create(const ASourceFile: string);
+constructor TGocciaDebugInfo.Create(const ASourceFile: string;
+  const ADeclarationLine: UInt32 = 0;
+  const ADeclarationColumn: UInt16 = 0);
 begin
   inherited Create;
   FSourceFile := ASourceFile;
   FLineMapCount := 0;
   FLocalCount := 0;
+  FDeclarationLine := ADeclarationLine;
+  FDeclarationColumn := ADeclarationColumn;
+end;
+
+function TGocciaDebugInfo.CoverageLine: UInt32;
+begin
+  if FDeclarationLine > 0 then
+    Result := FDeclarationLine
+  else if FLineMapCount > 0 then
+    Result := FLineMap[0].Line
+  else
+    Result := 0;
+end;
+
+function TGocciaDebugInfo.CoverageColumn: UInt16;
+begin
+  if FDeclarationLine > 0 then
+    Result := FDeclarationColumn
+  else if FLineMapCount > 0 then
+    Result := FLineMap[0].Column
+  else
+    Result := 0;
 end;
 
 procedure TGocciaDebugInfo.AddLineMapping(const APC: UInt32;

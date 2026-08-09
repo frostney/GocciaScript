@@ -360,6 +360,13 @@ begin
   if ProfilerOptions.Mode.Present then
     EngineOptions.Mode.Apply('bytecode');
 
+  // Coverage requires bytecode mode regardless of the --mode option: the
+  // interpreter only instruments the entry file and counts statements per
+  // AST node instead of per executed line.
+  if CoverageOptions.Enabled.Present or CoverageOptions.Format.Present or
+     CoverageOptions.OutputPath.Present then
+    EngineOptions.Mode.Apply('bytecode');
+
   if ProfilerOptions.OutputPath.Present and not ProfilerOptions.Mode.Present then
     raise TParseError.Create(
       '--profile-output requires --profile=opcodes|functions|all.');
