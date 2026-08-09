@@ -34,6 +34,7 @@ uses
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
   Goccia.RuntimeExtensions.FFI,
+  Goccia.RuntimeExtensions.TestingLibrary,
   Goccia.RuntimeProfiles.TestRunner,
   Goccia.Scope,
   Goccia.ScriptLoader.Input,
@@ -284,6 +285,28 @@ begin
     Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
   if Assigned(ConsoleExtension) and Assigned(ConsoleExtension.BuiltinConsole) then
     ConsoleExtension.BuiltinConsole.Enabled := False;
+end;
+
+{ The testing library writes per-test markers (❌ failures, 📝 todo,
+  ⏸️ skipped, describe-block errors) straight to stdout unless its reporter
+  is muted. `showTestResults: false` only silences the trailing summary
+  block, so in the JSON envelope modes those markers used to land on stdout
+  ahead of the envelope and made it unparseable for any failing, todo, or
+  skipped test. The counts and messages still reach the envelope through the
+  runTests result object, so muting the reporter costs no information. }
+procedure SuppressTestReporterOutput(const AEngine: TGocciaEngine);
+var
+  TestingExtension: TGocciaTestingLibraryRuntimeExtension;
+  Runtime: TGocciaRuntimeCore;
+begin
+  Runtime := GetRuntime(AEngine);
+  if not Assigned(Runtime) then
+    Exit;
+  TestingExtension := TGocciaTestingLibraryRuntimeExtension(
+    Runtime.FindRuntimeExtension(TGocciaTestingLibraryRuntimeExtension));
+  if Assigned(TestingExtension) and
+    Assigned(TestingExtension.BuiltinTestAssertions) then
+    TestingExtension.BuiltinTestAssertions.SuppressOutput := True;
 end;
 
 procedure TTestRunnerApp.Configure;
@@ -736,6 +759,8 @@ begin
             DisableRuntimeConsole(Engine);
             Engine.SuppressWarnings := True;
           end;
+          if IsJsonOutput then
+            SuppressTestReporterOutput(Engine);
 
           StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
           StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
@@ -875,6 +900,8 @@ begin
             DisableRuntimeConsole(Engine);
             Engine.SuppressWarnings := True;
           end;
+          if IsJsonOutput then
+            SuppressTestReporterOutput(Engine);
 
             LexStart := GetNanoseconds;
             PipelineOptions := TGocciaSourcePipeline.DefaultOptions;

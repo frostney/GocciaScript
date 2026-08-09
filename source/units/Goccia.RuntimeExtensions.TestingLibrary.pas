@@ -23,6 +23,11 @@ type
       const ASnapshotFormatter: IGocciaSnapshotFormatter = nil);
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
+    { Hosts that own stdout — the JSON envelope modes of GocciaTestRunner —
+      need to silence the reporter's per-test markers. Exposed the same way
+      the console extension exposes its builtin. }
+    property BuiltinTestAssertions: TGocciaTestAssertions
+      read FBuiltinTestAssertions;
   end;
 
 implementation
