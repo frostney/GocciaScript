@@ -1,4 +1,7 @@
-// Battery D — matcher semantics vs Vitest/Jest. Bun's expect is the ground truth here.
+// Battery D — matcher semantics. Vitest is the ground truth here: goccia's
+// expect targets it as an exact drop-in, and a 223-probe audit found bun
+// disagreeing with vitest on 30 of 178 matcher probes, so bun is advisory for
+// this battery and never decides what an assertion below should say.
 
 describe("deep equality semantics", () => {
   test("toEqual ignores explicit-undefined properties", () => {
@@ -78,16 +81,22 @@ describe("error equality", () => {
       }
     }
 
+    // Under .toEqual() an error is keyed on `name`, so a subclass that leaves
+    // `name` alone is indistinguishable from a plain Error. .toStrictEqual()
+    // makes no exception for errors: its constructor check applies to them too.
     expect(new CustomError("m")).toEqual(new Error("m"));
-    expect(new CustomError("m")).toStrictEqual(new Error("m"));
+    expect(new CustomError("m")).not.toStrictEqual(new Error("m"));
     expect(new NamedError("m")).not.toEqual(new Error("m"));
     expect(new TypeError("m")).not.toStrictEqual(new Error("m"));
   });
 
-  test("cause participates in equality", () => {
+  test("cause participates in equality, asymmetrically", () => {
     expect(new Error("m", { cause: "c" })).toEqual(new Error("m", { cause: "c" }));
     expect(new Error("m", { cause: "c" })).not.toEqual(new Error("m", { cause: "d" }));
-    expect(new Error("m", { cause: "c" })).not.toEqual(new Error("m"));
+    // `cause` is only compared when the *expected* error has one, so an
+    // actual-only cause is ignored and the same pair reversed is not equal.
+    expect(new Error("m", { cause: "c" })).toEqual(new Error("m"));
+    expect(new Error("m")).not.toEqual(new Error("m", { cause: "c" }));
     expect(new Error("m", { cause: { a: 1 } })).toEqual(
       new Error("m", { cause: { a: 1 } }),
     );
@@ -118,12 +127,12 @@ describe("error equality", () => {
     expect(Object.create(Error.prototype)).not.toEqual(new Error(""));
   });
 
-  test("a present-but-undefined cause reads as absent to toEqual", () => {
+  test("a present-but-undefined cause reads as absent to both matchers", () => {
     expect(new Error("m", { cause: undefined })).toEqual(new Error("m"));
     expect(new Error("m")).toEqual(new Error("m", { cause: undefined }));
-    expect(new Error("m", { cause: undefined })).not.toStrictEqual(
-      new Error("m"),
-    );
+    // An expected cause of `undefined` is not a defined cause, so the
+    // asymmetric check skips it under .toStrictEqual() as well.
+    expect(new Error("m", { cause: undefined })).toStrictEqual(new Error("m"));
   });
 
   test("name is compared by value, never stringified", () => {
@@ -159,16 +168,26 @@ describe("error equality", () => {
   });
 
   test("an AggregateError nested inside a cause", () => {
+    // `errors` participates whenever both sides are AggregateErrors, and a
+    // cause is compared with the same rule as a top-level error.
+    expect(
+      new Error("m", { cause: new AggregateError([new Error("x")], "agg") }),
+    ).not.toEqual(
+      new Error("m", { cause: new AggregateError([new Error("y")], "agg") }),
+    );
     expect(
       new Error("m", { cause: new AggregateError([new Error("x")], "agg") }),
     ).toEqual(
-      new Error("m", { cause: new AggregateError([new Error("y")], "agg") }),
+      new Error("m", { cause: new AggregateError([new Error("x")], "agg") }),
     );
   });
 
-  test("toMatchObject keeps subset semantics for errors", () => {
-    expect({ e: new Error("x") }).toMatchObject({ e: new Error("y") });
+  test("toMatchObject subsets the container, not the errors inside it", () => {
+    // An empty expected object constrains nothing, but two errors are compared
+    // by the error rule rather than by subset.
+    expect({ e: new Error("x") }).not.toMatchObject({ e: new Error("y") });
     expect({ e: new Error("x") }).toMatchObject({ e: {} });
+    expect({ e: new Error("x") }).toMatchObject({ e: new Error("x") });
   });
 });
 
