@@ -3540,7 +3540,10 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
   const scenarios: Array<{
     name: string;
     source: string;
-    expected: { passed: number; failed: number; skipped: number };
+    // suiteErrors: describe/hook failures. Vitest keeps these OUT of
+    // `failed` (affected tests report as skipped) and fails the file
+    // instead, so they are asserted separately. Defaults to 0.
+    expected: { passed: number; failed: number; skipped: number; suiteErrors?: number };
     // Reporter markers this shape can leak beyond the shared set below.
     extraMarkers?: string[];
   }> = [
@@ -3576,11 +3579,9 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
       expected: { passed: 1, failed: 1, skipped: 2 },
     },
     {
-      // A throwing beforeAll is a suite-setup failure, counted once for the
-      // suite rather than once per test. This engine still runs the suite's
-      // tests after the hook fails, so both tests below report their pass --
-      // bun instead skips them and reports only the hook failure. The
-      // ok/exit contract matches bun either way.
+      // A throwing beforeAll aborts its suite: every test in it (and in
+      // any descendant suite) reports as SKIPPED, and the hook failure is
+      // a suite error rather than a failed test. Matches Vitest exactly.
       name: "a beforeAll hook throws",
       source: [
         'describe("suite", () => {',
@@ -3590,12 +3591,12 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
         "});",
         "",
       ].join("\n"),
-      expected: { passed: 2, failed: 1, skipped: 0 },
+      expected: { passed: 0, failed: 0, skipped: 2, suiteErrors: 1 },
     },
     {
       // A throwing afterAll is a teardown failure: the suite's tests have
-      // already run and keep their passes, and the hook adds one failure.
-      // This matches bun's counts exactly.
+      // already run and keep their passes, so nothing is skipped and the
+      // hook is recorded as a suite error. Matches Vitest exactly.
       name: "an afterAll hook throws",
       source: [
         'describe("suite", () => {',
@@ -3605,21 +3606,56 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
         "});",
         "",
       ].join("\n"),
-      expected: { passed: 2, failed: 1, skipped: 0 },
+      expected: { passed: 2, failed: 0, skipped: 0, suiteErrors: 1 },
     },
     {
-      // A describe callback that throws is a registration failure, not a test
-      // failure: the remaining describes still register and run, so the
-      // passing suite below still reports its pass. The error is counted as a
-      // failure so ok/exit reflect it -- bun exits non-zero here too, though
-      // it books the error in a separate `error` counter rather than `fail`.
+      // Scope check: a failed beforeAll skips the suite's own tests AND
+      // every test in its descendant suites -- the child's test never
+      // runs even though the child itself has no failing hook.
+      name: "a beforeAll hook throws in a suite with nested child suites",
+      source: [
+        'describe("parent", () => {',
+        '  beforeAll(() => { throw new Error("parent beforeAll exploded"); });',
+        '  test("direct", () => { expect(1).toBe(1); });',
+        '  describe("child", () => {',
+        '    test("nested", () => { expect(2).toBe(2); });',
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+      expected: { passed: 0, failed: 0, skipped: 2, suiteErrors: 1 },
+    },
+    {
+      // Scope check, other direction: an inner suite's failed beforeAll
+      // must NOT affect the outer suite's own tests or a sibling suite.
+      name: "a nested suite's beforeAll throws without affecting siblings",
+      source: [
+        'describe("outer", () => {',
+        '  test("outer-test", () => { expect(1).toBe(1); });',
+        '  describe("inner", () => {',
+        '    beforeAll(() => { throw new Error("inner beforeAll exploded"); });',
+        '    test("inner-test", () => { expect(2).toBe(2); });',
+        "  });",
+        '  describe("sibling", () => {',
+        '    test("sibling-test", () => { expect(3).toBe(3); });',
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+      expected: { passed: 2, failed: 0, skipped: 1, suiteErrors: 1 },
+    },
+    {
+      // A describe callback that throws is a registration failure, not a
+      // test failure: the remaining describes still register and run, so
+      // the passing suite below still reports its pass. Like Vitest, the
+      // error stays out of `failed` and fails the FILE via suiteErrors.
       name: "a describe block throws during registration",
       source: [
         'describe("boom", () => { throw new Error("registration exploded"); });',
         'describe("ok", () => { test("passes", () => { expect(1).toBe(1); }); });',
         "",
       ].join("\n"),
-      expected: { passed: 1, failed: 1, skipped: 0 },
+      expected: { passed: 1, failed: 0, skipped: 0, suiteErrors: 1 },
       extraMarkers: ["Error in describe block"],
     },
   ];
@@ -3659,9 +3695,15 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
         throw new Error(`${label} failed should be ${scenario.expected.failed}, got ${json.failed}`);
       if (json.skipped !== scenario.expected.skipped)
         throw new Error(`${label} skipped should be ${scenario.expected.skipped}, got ${json.skipped}`);
+      const expectedSuiteErrors = scenario.expected.suiteErrors ?? 0;
+      if (json.suiteErrors !== expectedSuiteErrors)
+        throw new Error(`${label} suiteErrors should be ${expectedSuiteErrors}, got ${json.suiteErrors}`);
       const failedTests = json.files?.[0]?.failedTests;
-      if (!Array.isArray(failedTests) || failedTests.length !== scenario.expected.failed)
-        throw new Error(`${label} should report ${scenario.expected.failed} failedTests entries, got: ${JSON.stringify(failedTests)}`);
+      // failedTests stays the human-visible detail channel for BOTH
+      // failed tests and suite errors, so it carries one entry each.
+      const expectedDetails = scenario.expected.failed + expectedSuiteErrors;
+      if (!Array.isArray(failedTests) || failedTests.length !== expectedDetails)
+        throw new Error(`${label} should report ${expectedDetails} failedTests entries, got: ${JSON.stringify(failedTests)}`);
     } finally {
       clean(tmp);
     }
@@ -3701,19 +3743,56 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
       }
 
       if (json.ok !== false) throw new Error(`${label} ok should be false, got ${json.ok}`);
-      if (json.failed !== 1) throw new Error(`${label} merged failed should be 1, got ${json.failed}`);
+      if (json.failed !== 0) throw new Error(`${label} merged failed should be 0, got ${json.failed}`);
+      if (json.suiteErrors !== 1) throw new Error(`${label} merged suiteErrors should be 1, got ${json.suiteErrors}`);
       if (json.passed !== 2) throw new Error(`${label} merged passed should be 2, got ${json.passed}`);
 
       const badResult = json.files?.find((f: any) => String(f.fileName).endsWith("test-describe-throws.js"));
       const goodResult = json.files?.find((f: any) => String(f.fileName).endsWith("test-describe-clean.js"));
       if (badResult?.ok !== false)
         throw new Error(`${label} the throwing file should report ok=false, got ${badResult?.ok}`);
-      if (badResult?.failed !== 1)
-        throw new Error(`${label} the throwing file should report failed=1, got ${badResult?.failed}`);
+      if (badResult?.suiteErrors !== 1)
+        throw new Error(`${label} the throwing file should report suiteErrors=1, got ${badResult?.suiteErrors}`);
       if (!badResult?.failedTests?.some((t: string) => t.includes('Describe "boom"')))
         throw new Error(`${label} should keep the describe error visible in failedTests, got: ${JSON.stringify(badResult?.failedTests)}`);
       if (goodResult?.ok !== true)
         throw new Error(`${label} the clean sibling file should stay ok, got ${goodResult?.ok}`);
+    } finally {
+      clean(tmp);
+    }
+  }
+
+  // Body-execution guard. A failed beforeEach produces IDENTICAL counts
+  // whether or not the body runs (the test fails either way), so counts
+  // cannot detect a regression here -- only the body's side effects can.
+  // Vitest and bun both skip the body; running it executes user code
+  // against a fixture the hook failed to build.
+  {
+    const label = `TestRunner (${modeLabel}) beforeEach failure skips the test body`;
+    console.log(`TestRunner: a failed beforeEach does not run the test body (${modeLabel})...`);
+    const tmp = makeTmp();
+    try {
+      const file = join(tmp, "test-beforeeach-body.js");
+      writeFileSync(file, [
+        'describe("suite", () => {',
+        '  beforeEach(() => { console.log("RAN:beforeEach"); throw new Error("beforeEach exploded"); });',
+        '  test("t1", () => { console.log("RAN:body1"); expect(1).toBe(1); });',
+        '  test("t2", () => { console.log("RAN:body2"); expect(2).toBe(2); });',
+        "});",
+        "",
+      ].join("\n"));
+
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), file, "--no-progress", ...modeArgs],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const all = proc.stdout.toString() + proc.stderr.toString();
+      if (!all.includes("RAN:beforeEach"))
+        throw new Error(`${label} should still run the beforeEach hook, got: ${all.slice(0, 300)}`);
+      if (all.includes("RAN:body1") || all.includes("RAN:body2"))
+        throw new Error(`${label} must NOT execute the test body after the hook failed, got: ${all.slice(0, 300)}`);
+      if (proc.exitCode === 0)
+        throw new Error(`${label} should exit non-zero, got 0`);
     } finally {
       clean(tmp);
     }
@@ -3755,14 +3834,18 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
       }
 
       if (json.ok !== false) throw new Error(`${label} ok should be false, got ${json.ok}`);
-      if (json.failed !== 1) throw new Error(`${label} merged failed should be 1, got ${json.failed}`);
+      if (json.failed !== 0) throw new Error(`${label} merged failed should be 0, got ${json.failed}`);
+      if (json.suiteErrors !== 1) throw new Error(`${label} merged suiteErrors should be 1, got ${json.suiteErrors}`);
+      if (json.skipped !== 1) throw new Error(`${label} merged skipped should be 1, got ${json.skipped}`);
 
       const badResult = json.files?.find((f: any) => String(f.fileName).endsWith("test-hook-throws.js"));
       const goodResult = json.files?.find((f: any) => String(f.fileName).endsWith("test-hook-clean.js"));
       if (badResult?.ok !== false)
         throw new Error(`${label} the hook-failing file should report ok=false, got ${badResult?.ok}`);
-      if (badResult?.failed !== 1)
-        throw new Error(`${label} the hook-failing file should report failed=1, got ${badResult?.failed}`);
+      if (badResult?.suiteErrors !== 1)
+        throw new Error(`${label} the hook-failing file should report suiteErrors=1, got ${badResult?.suiteErrors}`);
+      if (badResult?.skipped !== 1)
+        throw new Error(`${label} the hook-failing file's test should report as skipped, got ${badResult?.skipped}`);
       if (!badResult?.failedTests?.some((t: string) => t.includes('Hook "beforeAll"')))
         throw new Error(`${label} should keep the hook error visible in failedTests, got: ${JSON.stringify(badResult?.failedTests)}`);
       if (goodResult?.ok !== true)
