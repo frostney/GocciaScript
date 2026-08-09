@@ -260,7 +260,8 @@ type
       const AThrowError: TGocciaThrowErrorCallback;
       const ASnapshotHost: IGocciaSnapshotHost = nil;
       const ASnapshotUpdateMode: TGocciaSnapshotUpdateMode = sumNew;
-      const ASnapshotFormatter: IGocciaSnapshotFormatter = nil);
+      const ASnapshotFormatter: IGocciaSnapshotFormatter = nil;
+      const AInjectGlobals: Boolean = True);
     destructor Destroy; override;
 
     // Main expect function
@@ -3280,7 +3281,8 @@ constructor TGocciaTestAssertions.Create(const AName: string;
   const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback;
   const ASnapshotHost: IGocciaSnapshotHost;
   const ASnapshotUpdateMode: TGocciaSnapshotUpdateMode;
-  const ASnapshotFormatter: IGocciaSnapshotFormatter);
+  const ASnapshotFormatter: IGocciaSnapshotFormatter;
+  const AInjectGlobals: Boolean);
 var
   GlobalObject: TGocciaObjectValue;
   ExpectFunction: TGocciaNativeFunctionValue;
@@ -3297,8 +3299,14 @@ var
   MockFunctionValue: TGocciaNativeFunctionValue;
   SpyOnFunction: TGocciaNativeFunctionValue;
 
+  { Global injection is the half a host can decline. A host that only
+    registers the `goccia:test` module namespace passes AInjectGlobals=False
+    and gets every helper on FBuiltinObject with nothing added to the global
+    object or the global scope. }
   procedure RegisterPublicGlobal(const AName: string; const AValue: TGocciaValue);
   begin
+    if not AInjectGlobals then
+      Exit;
     if Assigned(GlobalObject) then
       GlobalObject.DefineProperty(AName,
         TGocciaPropertyDescriptorData.Create(AValue, [pfWritable, pfConfigurable]))
@@ -3393,10 +3401,15 @@ begin
   RegisterPublicGlobal('test', TestFunction);
 
   // Private aliases used by generated Test262 wrappers.  Some conformance
-  // tests intentionally declare globals named describe/test.
-  AScope.DefineLexicalBinding('__gocciaTest262Describe', DescribeFunction,
-    dtConst, True);
-  AScope.DefineLexicalBinding('__gocciaTest262Test', TestFunction, dtConst, True);
+  // tests intentionally declare globals named describe/test.  These are
+  // global-scope bindings, so they belong to the global-injection half.
+  if AInjectGlobals then
+  begin
+    AScope.DefineLexicalBinding('__gocciaTest262Describe', DescribeFunction,
+      dtConst, True);
+    AScope.DefineLexicalBinding('__gocciaTest262Test', TestFunction, dtConst,
+      True);
+  end;
 
   ItFunction := TGocciaNativeFunctionValue.Create(It, 'it', 2);
   ConfigureTestFunction(ItFunction);
