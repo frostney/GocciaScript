@@ -49,12 +49,31 @@ const makeTmp = makeTmpFactory("goccia-apps-");
  * key is relative depends on where the temp directory happens to live. The
  * basename is the one part both spellings agree on. Splitting on both
  * separators keeps the helper honest if a key ever reaches it unnormalized.
+ *
+ * Basenames are only unique because every fixture in this file gives its
+ * sources distinct names. Nothing enforces that, so a later test adding
+ * `helpers/shared.js` next to `shared.js` would land both on one key and every
+ * assertion after it would silently read whichever the report happened to list
+ * last — a passing test measuring the wrong file. Collisions therefore throw
+ * here rather than resolving arbitrarily.
  */
 function readCoverageByBasename(path: string): Record<string, any> {
   const raw = JSON.parse(readFileSync(path, "utf-8"));
-  return Object.fromEntries(
-    Object.entries(raw).map(([file, entry]) => [file.split(/[\\/]/).pop(), entry]),
-  ) as Record<string, any>;
+  const byBasename: Record<string, any> = {};
+  const sources: Record<string, string> = {};
+  for (const [file, entry] of Object.entries(raw)) {
+    const basename = file.split(/[\\/]/).pop() as string;
+    if (basename in byBasename) {
+      throw new Error(
+        `Coverage report ${path} has two files named ${basename} ` +
+          `(${sources[basename]} and ${file}); this helper keys by basename, ` +
+          `so give the fixtures distinct names or match on the full key.`,
+      );
+    }
+    byBasename[basename] = entry;
+    sources[basename] = file;
+  }
+  return byBasename;
 }
 
 function coverageEntryFor(reportPath: string, sourcePath: string): any {
