@@ -1840,8 +1840,14 @@ begin
   end;
 
   Obj := ObjectExpr.Evaluate(AContext);
-  PropertyValue := ToPropertyKey(PropertyExpression.Evaluate(AContext));
+  // ES2026 §13.3.3 stores the UNCONVERTED key in the Reference Record, and its
+  // NOTE calls out this exact form: for `a[b] = c`, ToPropertyKey is not performed
+  // until after evaluation of `c`. So evaluate the key expression, then the RHS,
+  // and only then apply §6.2.5.6 PutValue step 3.a (nullish base throws) followed
+  // by step 3.c (ToPropertyKey).
+  PropertyValue := PropertyExpression.Evaluate(AContext);
   Result := Value.Evaluate(AContext);
+  PropertyValue := ToPropertyKeyForBase(Obj, PropertyValue, True);
   if PropertyValue is TGocciaSymbolValue then
     AssignSymbolProperty(Obj, TGocciaSymbolValue(PropertyValue),
       Result, AContext.OnError, Line, Column, AContext.NonStrictMode)
@@ -2099,7 +2105,10 @@ begin
   end;
 
   Obj := ObjectExpr.Evaluate(AContext);
-  PropertyKeyValue := ToPropertyKey(PropertyExpression.Evaluate(AContext));
+  // ES2026 §13.15.2 compound assignment reads through §6.2.5.5 GetValue, whose
+  // step 3.a base check precedes the step 3.c ToPropertyKey conversion.
+  PropertyKeyValue := ToPropertyKeyForBase(Obj,
+    PropertyExpression.Evaluate(AContext));
   if PropertyKeyValue is TGocciaSymbolValue then
   begin
     CurrentValue := NormalizeAssignmentValue(ReadSymbolProperty(Obj,
@@ -2192,7 +2201,10 @@ begin
     Obj := MemberExpr.ObjectExpr.Evaluate(AContext);
     if MemberExpr.Computed then
     begin
-      PropertyKeyValue := ToPropertyKey(MemberExpr.PropertyExpression.Evaluate(AContext));
+      // ES2026 §13.4.2/§13.4.3 UpdateExpression reads via §6.2.5.5 GetValue, whose
+      // step 3.a base check precedes the step 3.c ToPropertyKey conversion.
+      PropertyKeyValue := ToPropertyKeyForBase(Obj,
+        MemberExpr.PropertyExpression.Evaluate(AContext));
       if (PropertyKeyValue is TGocciaSymbolValue) and ((Obj is TGocciaClassValue) or (Obj is TGocciaObjectValue)) then
       begin
         if Obj is TGocciaClassValue then

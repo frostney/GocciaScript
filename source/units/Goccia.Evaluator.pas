@@ -4735,20 +4735,18 @@ begin
 
   // Determine the property name. ES2026 §7.1.19 ToPropertyKey on the
   // computed expression: symbols pass through; otherwise coerce via
-  // ToPrimitive(string) → ToString.
+  // ToPrimitive(string) → ToString. ToPropertyKeyForBase applies §6.2.5.5
+  // GetValue step 3.a first, so a nullish base throws a TypeError before the key
+  // is coerced (its toString/valueOf must not run).
   if AMemberExpression.Computed and Assigned(AMemberExpression.PropertyExpression) then
   begin
     PropertyValue := EvaluateExpression(AMemberExpression.PropertyExpression, AContext);
     AddValueRoot(Roots, PropertyValue);
-    PropertyKey := ToPropertyKey(PropertyValue);
+    PropertyKey := ToPropertyKeyForBase(Obj, PropertyValue);
     AddValueRoot(Roots, PropertyKey);
 
     if PropertyKey is TGocciaSymbolValue then
     begin
-      if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
-        ThrowTypeError(Format(SErrorCannotReadPropertiesOf, [Obj.ToStringLiteral.Value, 'Symbol()']),
-          SSuggestCheckNullBeforeAccess);
-
       if Obj is TGocciaClassValue then
       begin
         Result := TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKey));
@@ -11859,7 +11857,10 @@ begin
         AContext.NonStrictMode);
     pdrComputedProperty:
       begin
-        PropValue := ToPropertyKey(AReference.ComputedKeyValue);
+        // ES2026 §6.2.5.6 PutValue step 3.a before step 3.c: a nullish base
+        // throws a TypeError before the stored key value is coerced.
+        PropValue := ToPropertyKeyForBase(AReference.ObjectValue,
+          AReference.ComputedKeyValue, True);
         if PropValue is TGocciaSymbolValue then
           AssignSymbolProperty(AReference.ObjectValue,
             TGocciaSymbolValue(PropValue), AValue, AContext.OnError,
@@ -12208,8 +12209,11 @@ begin
   if MemberExpr.Computed then
   begin
     // ES2026 §13.5.1.2 PropertyDestructuringAssignmentEvaluation step 5:
-    // ToPropertyKey on the computed key.
-    PropValue := ToPropertyKey(EvaluateExpression(MemberExpr.PropertyExpression, AContext));
+    // ToPropertyKey on the computed key — but the store goes through §6.2.5.6
+    // PutValue, whose step 3.a base check precedes step 3.c, so a nullish base
+    // throws before the key is coerced.
+    PropValue := ToPropertyKeyForBase(Obj,
+      EvaluateExpression(MemberExpr.PropertyExpression, AContext), True);
     if PropValue is TGocciaSymbolValue then
       AssignSymbolProperty(Obj, TGocciaSymbolValue(PropValue), AValue,
         AContext.OnError, APattern.Line, APattern.Column,
@@ -12659,31 +12663,10 @@ begin
     begin
       PropertyKey := EvaluateExpression(MemberExpr.PropertyExpression, AContext);
 
-      if (ObjValue is TGocciaNullLiteralValue) or
-         (ObjValue is TGocciaUndefinedLiteralValue) then
-      begin
-        if PropertyKey is TGocciaSymbolValue then
-          ThrowTypeError(Format(SErrorCannotReadPropertiesOf,
-            [ObjValue.ToStringLiteral.Value,
-             TGocciaSymbolValue(PropertyKey).ToDisplayString.Value]),
-            SSuggestCheckNullBeforeAccess)
-        else if PropertyKey is TGocciaStringLiteralValue then
-          ThrowTypeError(Format(SErrorCannotReadPropertiesOf,
-            [ObjValue.ToStringLiteral.Value,
-             TGocciaStringLiteralValue(PropertyKey).Value]),
-            SSuggestCheckNullBeforeAccess)
-        else if PropertyKey is TGocciaNumberLiteralValue then
-          ThrowTypeError(Format(SErrorCannotReadPropertiesOf,
-            [ObjValue.ToStringLiteral.Value,
-             FormatDouble(TGocciaNumberLiteralValue(PropertyKey).Value)]),
-            SSuggestCheckNullBeforeAccess)
-        else
-          ThrowTypeError(Format(SErrorCannotReadPropertiesOf,
-            [ObjValue.ToStringLiteral.Value, '<computed>']),
-            SSuggestCheckNullBeforeAccess);
-      end;
-
-      PropertyKey := ToPropertyKey(PropertyKey);
+      // ES2026 §13.5.1.2 delete on a property reference resolves the base through
+      // ToObject before the key is converted, so the nullish-base TypeError wins
+      // over any key-coercion side effect.
+      PropertyKey := ToPropertyKeyForBase(ObjValue, PropertyKey);
       if PropertyKey is TGocciaSymbolValue then
       begin
         IsSymbolKey := True;

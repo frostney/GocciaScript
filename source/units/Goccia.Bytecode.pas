@@ -163,7 +163,10 @@ const
   //               Number subtraction and less-than-or-equal branches.
   //   v74 -> v75: added a direct scalar-frame self-call opcode for functions
   //               accepted by the closed-world numeric-call proof.
-  GOCCIA_FORMAT_VERSION = 75;
+  //   v75 -> v76: added the VALIDATE_OP_REQUIRE_OBJECT_FOR_MEMBER validation
+  //               mode, which rejects a nullish computed-member base before the
+  //               key is coerced and carries the key register in operand C.
+  GOCCIA_FORMAT_VERSION = 76;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -180,6 +183,13 @@ const
   COLLECTION_OP_TRY_ITERABLE_TO_ARRAY = 3;
   VALIDATE_OP_REQUIRE_OBJECT = 0;
   VALIDATE_OP_REQUIRE_ITERABLE = 1;
+  // Same nullish-base rejection as VALIDATE_OP_REQUIRE_OBJECT, but for a computed
+  // *member* base (`a[k]++`, `a[k] += v`, `a[k] ??= v`) rather than a destructuring
+  // pattern, so it reports the ES2026 §6.2.5.5 GetValue step 3.a "cannot read
+  // properties of null" wording instead of the destructuring wording. The C operand
+  // carries the key register, still holding the UNCOERCED key: this validate is
+  // emitted before OP_TO_PROPERTY_KEY precisely so step 3.a precedes step 3.c.
+  VALIDATE_OP_REQUIRE_OBJECT_FOR_MEMBER = 2;
   ITER_CLOSE_NORMAL = 0;
   ITER_CLOSE_PRESERVE_ERROR = 1;
   ITER_CLOSE_PRESERVE_UNLESS_GENERATOR_RETURN = 2;
