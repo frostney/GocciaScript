@@ -201,6 +201,17 @@ procedure TTestWorkerHost.SlowCountingWorker(const AFileName: string;
 begin
   AConsoleOutput := '';
   AErrorMessage := '';
+  { Release the abandoned worker from inside the later run rather than
+    before it starts.  Releasing beforehand leaves the zombie racing
+    RunAll's flag reset: if it lost that race the cancel would be wiped
+    and the run would pass whether or not the pool isolates flags.  The
+    race resolves in the test's favour in practice — the current test
+    fails 5/5 against the pre-fix pool — but that rests on a zombie
+    waking slower than RunAll dispatches, which is a scheduling accident,
+    not a guarantee, and this test runs on four CI platforms.  Releasing
+    here makes the cancellation land mid-run by construction.  The call
+    is idempotent (one guarded Boolean), so every worker may run it. }
+  ReleaseStalledWorker;
   Sleep(5);
   CriticalSectionEnter(GWorkerLock);
   try
@@ -557,8 +568,8 @@ begin
         Files.Add('later' + IntToStr(I) + '.js');
       ResetWorkerState;
 
-      // Let the zombie resume and fail while run 2 is in flight.
-      ReleaseStalledWorker;
+      // The zombie is released by SlowCountingWorker itself, so it
+      // resumes and fails with run 2 already in flight.
       Pool.RunAll(Files, Host.SlowCountingWorker);
 
       // Nothing in run 2 failed, so nothing may have cancelled it.

@@ -31,9 +31,13 @@ So the oracles are split by what they are actually authoritative about:
 - **Bun is normative for ECMAScript.** For syntax, module semantics, and
   built-ins, bun is a sound, fast oracle and the testing API is incidental to
   what the differential suite asserts.
-- **Bun is advisory for testing-API differential suites.** Its verdicts are
-  still printed there, marked `~~~ ADVISORY(non-gating)`, because drift against
-  the fast proxy is worth seeing. It never changes the exit code.
+- **Bun is advisory for matcher and lifecycle differential suites.** Its
+  verdicts are still printed there, marked `~~~ ADVISORY(non-gating)`, because
+  drift against the fast proxy is worth seeing. It never changes the exit code.
+- **Bun is skipped entirely for mock suites.** `e-mocks.test.js` is classified
+  `bun: "skip"`, so no bun column is produced for it at all — an absent verdict,
+  not a non-gating one. Its mock surface is goccia-and-vitest-specific, so a bun
+  run would report divergence that says nothing about the product target.
 
 Cost is not the reason for the split: vitest runs all of the eligible
 differential suites in about a second, in a single process.

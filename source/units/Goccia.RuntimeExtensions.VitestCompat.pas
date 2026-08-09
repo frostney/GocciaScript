@@ -139,6 +139,27 @@ begin
   Result := Buffer;
 end;
 
+{ Names that are identifier-like and not keywords, yet still cannot be bound in
+  a module.
+
+  A generated mock module is module code, and module code is always strict, so
+  `await` (reserved in a module goal outright) and `yield`, `eval` and
+  `arguments` (barred as strict-mode BindingIdentifiers) are all invalid in
+  `export const <name>` even though the keyword predicates do not list them.
+  Verified against Node, which rejects `export const await = 1;` and each of
+  the other three under `--input-type=module`.
+
+  GocciaScript's own parser currently accepts them, so without this check the
+  generated module loads here and the very same suite is a SyntaxError under
+  real Vitest — the drop-in divergence this shim exists to remove. Rejecting
+  them turns a silent cross-runtime split into the same named error the other
+  unusable keys already produce. }
+function IsInvalidModuleBindingName(const AName: string): Boolean;
+begin
+  Result := (AName = 'await') or (AName = 'yield') or (AName = 'eval') or
+    (AName = 'arguments');
+end;
+
 { Export names are emitted as `export const <name>`, so a key that is not an
   identifier cannot become an export. Deliberately ASCII-only: a non-ASCII
   identifier as a mock export name is not worth a Unicode table here, and the
@@ -429,7 +450,8 @@ begin
         key that never becomes `export const` — it becomes `export default`
         below — so it is checked first and let through. }
       if (Key <> MOCK_DEFAULT_KEY) and
-         (IsReservedKeyword(Key) or IsStrictModeReservedKeyword(Key)) then
+         (IsReservedKeyword(Key) or IsStrictModeReservedKeyword(Key) or
+          IsInvalidModuleBindingName(Key)) then
         Exit(BuildThrowingModuleSource(ASpecifier, 'Error',
           '[vitest] vi.mock("' + ASpecifier + '") could not be hoisted by ' +
           'the GocciaScript vitest compatibility shim: "' + Key + '" is a ' +
@@ -631,14 +653,45 @@ begin
   VisitSetters(ADefinition.Setters);
   VisitSetters(ADefinition.StaticSetters);
 
-  { FElements is not a complete element list — the parser only records static
-    blocks and `accessor` fields there — so it is read for static blocks alone,
-    which are the one class element the maps above do not reach. Taking
-    anything else from it would visit the same node twice and print the nested
-    warning twice. }
+  { FElements records every class element, not only static blocks and
+    `accessor` fields as an earlier comment here claimed — the parser appends
+    cekMethod, cekGetter, cekSetter, cekField and cekAccessor to it as well.
+    That wrong description is what kept this loop looking at static blocks
+    alone.
+
+    The maps above are keyed by an element's static name, so they reach every
+    NAMED element's body and nothing else. Two things they structurally cannot
+    reach, because a computed element has no name to be keyed by:
+
+      - the key expression itself, and
+      - the body or initializer of a computed element.
+
+    Both are visited here, and both were silently dropped before: a vi.mock
+    written inside a computed key, or inside the body of a method whose key is
+    computed, never registered and nothing said so. Named elements are NOT
+    revisited from here — the maps already covered them, and a second visit
+    would print the nested-directive warning twice. }
   for I := Low(ADefinition.FElements) to High(ADefinition.FElements) do
+  begin
     if ADefinition.FElements[I].Kind = cekStaticBlock then
+    begin
       VisitNode(ADefinition.FElements[I].StaticBlockBody, False);
+      Continue;
+    end;
+
+    if not ADefinition.FElements[I].IsComputed then
+      Continue;
+
+    VisitNode(ADefinition.FElements[I].ComputedKeyExpression, False);
+
+    if Assigned(ADefinition.FElements[I].MethodNode) then
+      VisitNode(ADefinition.FElements[I].MethodNode.Body, False);
+    if Assigned(ADefinition.FElements[I].GetterNode) then
+      VisitNode(ADefinition.FElements[I].GetterNode.Body, False);
+    if Assigned(ADefinition.FElements[I].SetterNode) then
+      VisitNode(ADefinition.FElements[I].SetterNode.Body, False);
+    VisitNode(ADefinition.FElements[I].FieldInitializer, False);
+  end;
 end;
 
 { A structural walk over every child position an expression or a statement can
