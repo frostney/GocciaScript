@@ -38,6 +38,16 @@ describe("toHaveBeenCalledWith", () => {
     expect(fn).toHaveBeenCalledWith({ x: 1 });
   });
 
+  test("compares error arguments by identity", () => {
+    const fn = mock();
+    fn(new Error("boom"));
+
+    expect(fn).toHaveBeenCalledWith(new Error("boom"));
+    expect(fn).not.toHaveBeenCalledWith(new Error("other"));
+    expect(fn).not.toHaveBeenCalledWith(new TypeError("boom"));
+    expect(fn).not.toHaveBeenCalledWith({});
+  });
+
   test("matches any recorded call", () => {
     const fn = mock();
     fn("first");

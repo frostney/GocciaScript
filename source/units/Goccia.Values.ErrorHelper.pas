@@ -6,11 +6,18 @@ interface
 
 uses
   Goccia.Realm,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 { Creates a JavaScript error object with the given name and message.
   ASkipTop controls how many frames to skip from the top of the call stack. }
 function CreateErrorObject(const AName, AMessage: string; const ASkipTop: Integer = 0): TGocciaObjectValue;
+
+{ True when AValue carries [[ErrorData]] — the slot every error constructor
+  installs, including through a `class MyError extends Error` subclass. Merely
+  inheriting from Error.prototype does not make an object an error, and
+  DOMException clears the slot on purpose. }
+function IsErrorObject(const AValue: TGocciaValue): Boolean;
 
 { Creates a DOMException object with the standard legacy code for AName. }
 function CreateDOMExceptionObject(const AName, AMessage: string;
@@ -57,8 +64,7 @@ uses
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Values.Error,
-  Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.Primitives;
+  Goccia.Values.ObjectPropertyDescriptor;
 
 function DOMExceptionLegacyCode(const AName: string): Integer;
 begin
@@ -98,6 +104,12 @@ begin
     Result := GetErrorProto
   else
     Result := GetErrorProto;
+end;
+
+function IsErrorObject(const AValue: TGocciaValue): Boolean;
+begin
+  Result := (AValue is TGocciaObjectValue) and
+    TGocciaObjectValue(AValue).HasErrorData;
 end;
 
 function CreateDOMExceptionObject(const AName, AMessage: string;
