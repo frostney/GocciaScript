@@ -2536,11 +2536,13 @@ console.log("Loader: coverage --output=json not corrupted...");
       ].join("\n"),
     );
     // Normalize to basenames: the entry is keyed by the path as typed while
-    // imported modules are keyed by their resolved absolute path.
+    // imported modules are keyed by their resolved absolute path. Split on
+    // both separators — on Windows the engine resolves imports through FPC's
+    // ExpandFileName, so coverage keys arrive with backslashes.
     const readCoverageByBasename = (path: string) => {
       const raw = JSON.parse(readFileSync(path, "utf-8"));
       return Object.fromEntries(
-        Object.entries(raw).map(([file, entry]) => [file.split("/").pop(), entry]),
+        Object.entries(raw).map(([file, entry]) => [file.split(/[\\/]/).pop(), entry]),
       ) as Record<string, any>;
     };
     const implyReports: Record<string, Record<string, any>> = {};
