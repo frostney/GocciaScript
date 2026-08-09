@@ -2162,8 +2162,8 @@ console.log("Loader: relative aliases use the invocation or config directory..."
         { cwd: project, stdout: "pipe", stderr: "pipe" },
       );
       if (cliProc.exitCode !== 0 ||
-          !containsLine(`\n${cliProc.stdout.toString()}`, "project-root") ||
-          !containsLine(`\n${cliProc.stdout.toString()}`, "child-project-root"))
+          !containsLine(cliProc.stdout.toString(), "project-root") ||
+          !containsLine(cliProc.stdout.toString(), "child-project-root"))
         throw new Error(
           `Loader ${mode} relative CLI alias should resolve from the invocation directory: ` +
           `${cliProc.stdout}${cliProc.stderr}`,
@@ -2190,8 +2190,8 @@ console.log("Loader: relative aliases use the invocation or config directory..."
         { cwd: tmp, stdout: "pipe", stderr: "pipe" },
       );
       if (configProc.exitCode !== 0 ||
-          !containsLine(`\n${configProc.stdout.toString()}`, "project-root") ||
-          !containsLine(`\n${configProc.stdout.toString()}`, "child-project-root"))
+          !containsLine(configProc.stdout.toString(), "project-root") ||
+          !containsLine(configProc.stdout.toString(), "child-project-root"))
         throw new Error(
           `Loader ${mode} inherited relative config alias should resolve from ` +
           `the active config directory: ${configProc.stdout}${configProc.stderr}`,
@@ -5493,7 +5493,7 @@ console.log("SandboxRunner: fs Stats expose realm-owned lazy Date metadata in ev
         "shared-stats-prototype:true",
         "intrinsic-stats-date:true",
       ]) {
-        if (!containsLine(`\n${stdout}`, expected))
+        if (!containsLine(stdout, expected))
           throw new Error(`SandboxRunner ${label} Stats stdout should include ${expected}, got: ${stdout}`);
       }
     }
@@ -5658,7 +5658,7 @@ console.log("SandboxRunner: aliases and import maps resolve sandbox module paths
     const aliasStdout = normalizeLineEndings(aliasProc.stdout.toString());
     if (aliasProc.exitCode !== 0)
       throw new Error(`SandboxRunner alias import should exit 0, got ${aliasProc.exitCode}: ${aliasProc.stderr.toString()}`);
-    if (!containsLine(`\n${aliasStdout}`, "alias-ok"))
+    if (!containsLine(aliasStdout, "alias-ok"))
       throw new Error(`SandboxRunner alias import should print alias-ok, got: ${aliasStdout}`);
 
     const importMapProc = Bun.spawnSync(
@@ -5668,9 +5668,9 @@ console.log("SandboxRunner: aliases and import maps resolve sandbox module paths
     const importMapStdout = normalizeLineEndings(importMapProc.stdout.toString());
     if (importMapProc.exitCode !== 0)
       throw new Error(`SandboxRunner import map should exit 0, got ${importMapProc.exitCode}: ${importMapProc.stderr.toString()}`);
-    if (!containsLine(`\n${importMapStdout}`, "map-ok"))
+    if (!containsLine(importMapStdout, "map-ok"))
       throw new Error(`SandboxRunner import map should print map-ok, got: ${importMapStdout}`);
-    if (!containsLine(`\n${importMapStdout}`, "relative-ok"))
+    if (!containsLine(importMapStdout, "relative-ok"))
       throw new Error(`SandboxRunner import map should print relative-ok, got: ${importMapStdout}`);
   } finally {
     clean(tmp);
@@ -5721,7 +5721,7 @@ console.log("SandboxRunner: Windows-style sandbox paths normalize to virtual pat
     if (proc.exitCode !== 0)
       throw new Error(`SandboxRunner Windows-style paths should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
     for (const expected of ["hello", "child-shared"]) {
-      if (!containsLine(`\n${stdout}`, expected))
+      if (!containsLine(stdout, expected))
         throw new Error(`SandboxRunner Windows-style paths should include ${JSON.stringify(expected)}, got: ${stdout}`);
     }
     const helloCount = stdout.split("\n").filter((line) => line === "hello").length;
@@ -5830,11 +5830,11 @@ console.log("SandboxRunner: bytecode uses the same sandbox runtime modules...");
     const stdout = normalizeLineEndings(proc.stdout.toString());
     if (proc.exitCode !== 0)
       throw new Error(`SandboxRunner bytecode should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (!containsLine(`\n${stdout}`, "bytecode"))
+    if (!containsLine(stdout, "bytecode"))
       throw new Error(`SandboxRunner bytecode stdout should include bytecode, got: ${stdout}`);
-    if (!containsLine(`\n${stdout}`, "byte-child"))
+    if (!containsLine(stdout, "byte-child"))
       throw new Error(`SandboxRunner bytecode nested stdout should include byte-child, got: ${stdout}`);
-    if (!containsLine(`\n${stdout}`, "true") || !containsLine(`\n${stdout}`, "false"))
+    if (!containsLine(stdout, "true") || !containsLine(stdout, "false"))
       throw new Error(`SandboxRunner bytecode nested diff/isolation booleans missing, got: ${stdout}`);
     const changes = JSON.parse(readFileSync(diff, "utf-8")).changes;
     if (!changes.some((c: any) => c.kind === "create" && c.path === "/byte.txt"))
@@ -5929,7 +5929,7 @@ console.log("SandboxRunner: nested sandbox execution seeds from parent VFS witho
       "true",
       "false",
     ]) {
-      if (!containsLine(`\n${stdout}`, expected))
+      if (!containsLine(stdout, expected))
         throw new Error(`SandboxRunner nested sandbox stdout should include line ${JSON.stringify(expected)}, got: ${stdout}`);
     }
     if (!stdout.includes("parent-seed\ninline-child\n3\nout:parent-seed"))
@@ -5979,13 +5979,13 @@ console.log("SandboxRunner: seed config imports host paths relative to the confi
     const stdout = normalizeLineEndings(proc.stdout.toString());
     if (proc.exitCode !== 0)
       throw new Error(`SandboxRunner host seed should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (!containsLine(`\n${stdout}`, "from-host"))
+    if (!containsLine(stdout, "from-host"))
       throw new Error(`SandboxRunner host seed stdout should include imported host text, got: ${stdout}`);
-    if (!containsLine(`\n${stdout}`, "from-file-target"))
+    if (!containsLine(stdout, "from-file-target"))
       throw new Error(`SandboxRunner host seed stdout should include file copied under trailing slash target, got: ${stdout}`);
-    if (!containsLine(`\n${stdout}`, "from-existing-dir"))
+    if (!containsLine(stdout, "from-existing-dir"))
       throw new Error(`SandboxRunner host seed stdout should include file copied under existing target directory, got: ${stdout}`);
-    if (!containsLine(`\n${stdout}`, "3"))
+    if (!containsLine(stdout, "3"))
       throw new Error(`SandboxRunner host seed stdout should include base64 byte length, got: ${stdout}`);
   } finally {
     clean(tmp);
@@ -6025,7 +6025,7 @@ console.log("SandboxRunner: --audit-log reports root escapes without changing cl
       );
       if (proc.exitCode !== 0)
         throw new Error(`Sandbox audit ${mode} exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-      if (!containsLine(`\n${proc.stdout.toString()}`, "inside-jail"))
+      if (!containsLine(proc.stdout.toString(), "inside-jail"))
         throw new Error(`Sandbox audit ${mode} changed clamped access: ${proc.stdout.toString()}`);
       const events = readJsonLines(audit);
       if (events.length !== 1 ||
@@ -7127,12 +7127,6 @@ console.log("TestRunner: vitest compatibility shim and its off-switch...");
 // cases pin both directions — the import must work where the profile is
 // applied, and no binary but the runner may grow a testing global.
 
-// containsLine anchors on a preceding newline, so it cannot match the first
-// line of a capture. These scripts print their assertions first, so match
-// against a leading newline.
-const containsOwnLine = (s: string, value: string): boolean =>
-  containsLine(`\n${s}`, value);
-
 console.log("Loader: goccia:test is importable and injects no globals...");
 {
   const tmp = makeTmp();
@@ -7180,11 +7174,11 @@ console.log("Loader: goccia:test is importable and injects no globals...");
       const out = proc.stdout.toString() + proc.stderr.toString();
       if (proc.exitCode !== 0)
         throw new Error(`Loader goccia:test (${label}) exited ${proc.exitCode}:\n${out}`);
-      if (!containsOwnLine(out, "passed:2"))
+      if (!containsLine(out, "passed:2"))
         throw new Error(`Loader goccia:test (${label}) should run 2 tests:\n${out}`);
-      if (!containsOwnLine(out, "failed:0"))
+      if (!containsLine(out, "failed:0"))
         throw new Error(`Loader goccia:test (${label}) should report no failures:\n${out}`);
-      if (!containsOwnLine(out, "run:2"))
+      if (!containsLine(out, "run:2"))
         throw new Error(`Loader goccia:test (${label}) should report 2 run tests:\n${out}`);
     }
   } finally {
@@ -7213,7 +7207,7 @@ console.log("Loader: a failing imported suite is only fatal if the script says s
     const lenientOut = lenient.stdout.toString() + lenient.stderr.toString();
     if (lenient.exitCode !== 0)
       throw new Error(`A failing imported suite should not fail the loader by itself, got ${lenient.exitCode}:\n${lenientOut}`);
-    if (!containsOwnLine(lenientOut, "failed:1"))
+    if (!containsLine(lenientOut, "failed:1"))
       throw new Error(`Loader runTests should report the failure:\n${lenientOut}`);
 
     const strict = join(tmp, "strict.js");
@@ -7304,7 +7298,7 @@ console.log("SandboxRunner: goccia:test is importable and injects no globals..."
     const out = proc.stdout.toString() + proc.stderr.toString();
     if (proc.exitCode !== 0)
       throw new Error(`SandboxRunner goccia:test exited ${proc.exitCode}:\n${out}`);
-    if (!containsOwnLine(out, "sandbox-passed:1"))
+    if (!containsLine(out, "sandbox-passed:1"))
       throw new Error(`SandboxRunner should run the imported suite:\n${out}`);
   } finally {
     clean(tmp);
