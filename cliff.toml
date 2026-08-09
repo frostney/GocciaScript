@@ -33,9 +33,14 @@ sort_commits = "newest"
 commit_preprocessors = [
   # Keep website release work distinct from language/runtime changes.
   # git-cliff does not expose changed paths to commit_parsers, so prefix the
-  # commit message before parsing when a commit touches website/.
+  # commit message before parsing when a commit is predominantly website work.
+  #
+  # "Predominantly" means at least half the changed paths live under website/.
+  # Matching *any* website/ path (the previous rule) filed cross-stack commits
+  # under Website whenever their diff grazed a single file there — which split
+  # the same `fix(review):` prefix across two changelog groups.
   { pattern = "(?s).*", replace_command = '''
-sh -c 'msg=$(cat); if git diff-tree --no-commit-id --name-only -r "$COMMIT_SHA" | grep -q "^website/"; then printf "Website: %s" "$msg"; else printf "%s" "$msg"; fi'
+sh -c 'msg=$(cat); paths=$(git diff-tree --no-commit-id --name-only -r "$COMMIT_SHA"); total=$(printf "%s" "$paths" | grep -c .); web=$(printf "%s" "$paths" | grep -c "^website/"); if [ "$total" -gt 0 ] && [ "$((web * 2))" -ge "$total" ]; then printf "Website: %s" "$msg"; else printf "%s" "$msg"; fi'
 ''' },
 ]
 commit_parsers = [
