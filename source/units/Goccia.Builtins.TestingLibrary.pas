@@ -188,6 +188,12 @@ type
 
     FRootSuite: TGocciaTestSuite;
     FCurrentRegistrationSuite: TGocciaTestSuite;
+    { A describe callback threw while the file was being collected.
+      Vitest discards the WHOLE file in that case -- including suites
+      collected before the throwing one -- so registration stops and no
+      test runs. Distinct from a hook or test failure, which are
+      execution-time and leave already-collected results intact. }
+    FCollectionAborted: Boolean;
     FSkipNextDescribe: Boolean;
     FFocusNextDescribe: Boolean;
     FSkipNextTest: Boolean;
@@ -3574,6 +3580,10 @@ var
 begin
   for I := 0 to ASuite.Entries.Count - 1 do
   begin
+    { Collection died in an earlier describe: stop walking the tree. }
+    if FCollectionAborted then
+      Exit;
+
     Entry := ASuite.Entries[I];
     if not (Entry is TGocciaTestSuite) then
       Continue;
@@ -3611,14 +3621,16 @@ begin
             else
               AFailedTestDetails.Add('Describe "' + ChildSuite.GetFullName +
                 '": ' + E.Message);
-            { Record the registration failure, do not re-raise. Re-raising
-              would discard every result already collected for this file;
-              the remaining describes still register and run. Vitest keeps
-              a suite-level error out of the test counts and fails the
-              FILE instead, so this counts as a suite error rather than a
-              failed test -- `suiteErrors` makes the file not-ok, which is
-              what drives the envelope `ok` and the exit code. }
+            { A throw in a describe CALLBACK is a collection failure, and
+              Vitest discards the entire file for it: zero tests run, even
+              ones in suites collected before the throwing describe.
+              Registration stops here and RunTests skips execution
+              entirely. `suiteErrors` makes the file not-ok, which drives
+              the envelope `ok` and the exit code. Execution-time failures
+              (hooks, tests) keep their own accounting and do NOT abort
+              collection. }
             Inc(FTestStats.SuiteErrors);
+            FCollectionAborted := True;
           end;
         end;
       finally
@@ -4103,6 +4115,7 @@ begin
   FTestStats.FailedTests := 0;
   FTestStats.SkippedTests := 0;
   FTestStats.SuiteErrors := 0;
+  FCollectionAborted := False;
   FTestStats.CurrentSuiteName := '';
   FTestStats.CurrentTestName := '';
   FTestStats.CurrentTestHasFailures := False;
@@ -4731,8 +4744,11 @@ begin
 
     HasFocusedEntries := SuiteHasSelectedEntries(FRootSuite, True);
     ShouldStop := False;
-    ExecuteSuite(FRootSuite, HasFocusedEntries, ExitOnFirstFailure,
-      FailedTestDetails, ShouldStop);
+    { Collection aborted: the file is discarded whole, so nothing runs.
+      Counts stay at zero and `suiteErrors` carries the failure. }
+    if not FCollectionAborted then
+      ExecuteSuite(FRootSuite, HasFocusedEntries, ExitOnFirstFailure,
+        FailedTestDetails, ShouldStop);
 
     if Assigned(FSnapshotState) then
     begin
