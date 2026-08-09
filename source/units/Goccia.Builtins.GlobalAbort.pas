@@ -32,7 +32,8 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope;
-      const AThrowError: TGocciaThrowErrorCallback);
+      const AThrowError: TGocciaThrowErrorCallback;
+      const AEventTargetConstructor: TGocciaValue = nil);
   end;
 
 implementation
@@ -54,7 +55,8 @@ const
 
 constructor TGocciaGlobalAbort.Create(const AName: string;
   const AScope: TGocciaScope;
-  const AThrowError: TGocciaThrowErrorCallback);
+  const AThrowError: TGocciaThrowErrorCallback;
+  const AEventTargetConstructor: TGocciaValue);
 var
   AbortSignalConstructor: TGocciaNativeFunctionValue;
   Members: TGocciaMemberCollection;
@@ -75,6 +77,12 @@ begin
     AbortSignalCall, CONSTRUCTOR_ABORT_SIGNAL, 0);
   AbortSignalConstructor.NotConstructable := True;
   TGocciaAbortSignalValue.ExposePrototype(AbortSignalConstructor);
+  // WHATWG DOM §3.2 `interface AbortSignal : EventTarget` — the prototype-chain
+  // link is made in TGocciaAbortSignalValue.InitializePrototype; this is the
+  // matching constructor-inherits-constructor link.
+  if Assigned(AEventTargetConstructor) then
+    AbortSignalConstructor.Prototype :=
+      TGocciaObjectValue(AEventTargetConstructor);
   Members := TGocciaMemberCollection.Create;
   try
     Members.AddNamedMethod(PROP_ABORT, AbortSignalAbort, 1,
@@ -130,6 +138,9 @@ begin
     Signal.SignalAbort(AArgs.GetElement(0))
   else
     Signal.SignalAbort;
+  // The signal is aborted before it can be observed, so settle its one-shot
+  // "abort" event now: a listener added later must never fire.
+  Signal.FlushAbortEvent;
   Result := Signal;
 end;
 
