@@ -45,8 +45,8 @@ Nested `describe` blocks compose their suite names with ` > ` separators. In the
 ```javascript
 // Equality
 expect(value).toBe(expected);           // Strict equality (===)
-expect(value).toEqual(expected);        // Deep equality
-expect(value).toStrictEqual(expected);  // Deep equality alias for Vitest compatibility
+expect(value).toEqual(expected);        // Deep equality, ignoring undefined
+expect(value).toStrictEqual(expected);  // Deep equality, type and undefined sensitive
 
 // Type checks
 expect(value).toBeNull();
@@ -68,7 +68,8 @@ expect(string).toMatch("part");      // String substring match
 expect(string).toMatch(/pattern/);   // Regular expression match
 expect(value).toMatchObject(obj);    // Partial recursive object match
 expect(value).toHaveLength(n);
-expect(value).toHaveProperty(name);
+expect(value).toHaveProperty("a.b[0].c", value);  // Path, optional expected value
+expect(value).toHaveProperty(["a", "b", 0, "c"], value);
 
 // Type
 expect(value).toBeInstanceOf(ClassName);
@@ -87,6 +88,27 @@ expect(value).not.toContain(item);
 ```
 
 When `.toMatch()` receives a `RegExp`, the matcher uses regex semantics but does not mutate or depend on the regex object's current `lastIndex`.
+
+#### Deep equality
+
+`.toEqual()` and `.toStrictEqual()` share one recursive comparison and differ only in what they forgive. Both use `Object.is` at the leaves, so `NaN` equals `NaN` while `0` and `-0` stay distinct, and both compare `Set` and `Map` contents without regard to insertion order, matching members and entries by deep equality rather than by reference. Neither ever equates different kinds of container: a `Map` is not a plain object, and a `Set` is not an array.
+
+`.toEqual()` ignores four things that `.toStrictEqual()` enforces:
+
+| Ignored by `.toEqual()` | Example |
+|---|---|
+| Object keys whose value is `undefined` | `{ a: 1, b: undefined }` equals `{ a: 1 }` |
+| `undefined` array items past the shorter length | `[2]` equals `[2, undefined]` |
+| Array sparseness | `[1, , 3]` equals `[1, undefined, 3]` |
+| The object's type | `new Point(1)` equals `{ x: 1 }` |
+
+Under `.toStrictEqual()`, a class instance matches only an instance of the same class. Every object that is not a class instance counts as plain, including a null-prototype object and one built with `Object.create(proto)`. Only trailing `undefined` items are forgiven by `.toEqual()`, and only past the shorter length: `[1, undefined, 2]` does not equal `[1, 2]`.
+
+#### Property paths
+
+`.toHaveProperty()` accepts a path rather than a flat key. A string path splits on dots and understands bracket indices, so `"items[0].type"` and `"a.b"` both walk into nested values; an array path (`["a", "b", 0, "c"]`) takes each segment verbatim, which is also how you reach a key that itself contains a dot. Each segment resolves the way a normal property read would, so inherited members and the members of a boxed primitive (`"name.length"`) are found. A second argument is compared with `.toEqual()` semantics. Walking into `null` or `undefined` reports a normal assertion failure rather than raising.
+
+`.toMatchObject()` matches a subset of keys at every level and recurses per index through arrays, so `{ list: [{ a: 1, b: 2 }] }` matches `{ list: [{ a: 1 }] }`. Arrays must still match in length. An expected plain object may describe an array (`{ l: { 0: 1 } }` matches `{ l: [1] }`), but an expected array only matches an array.
 
 `.toThrow()` accepts every Jest argument form, and each form works under `.not` and after `.rejects`. A string matches when the thrown message *contains* it; a `RegExp` matches the message; a constructor matches by `instanceof`, so a subclass satisfies both its own class and its parent; an `Error` instance matches when the messages are equal. Thrown values that are not errors contribute their string form, so `throw 42` satisfies `toThrow("42")`. Like `.toMatch()`, the `RegExp` form does not depend on or mutate `lastIndex`.
 
@@ -432,6 +454,13 @@ When writing tests that should pass in both environments, follow these patterns:
 // Works in both GocciaScript and standard JS
 expect([...map.keys()]).toEqual(["a", "b", "c"]);
 expect([...set.values()]).toEqual([1, 2, 3]);
+```
+
+This applies to the iterator-returning methods only. Comparing the collections themselves needs no spreading, since `Map` and `Set` equality is order-insensitive in both environments:
+
+```javascript
+expect(map).toEqual(new Map([["a", 1]]));
+expect(set).toEqual(new Set([2, 1]));
 ```
 
 **GocciaScript-specific behaviors** --- Some tests exercise GocciaScript extensions or intentional divergences from the spec (e.g., `Math.clamp`, emoji identifiers, arrow function `this` binding in object methods). These will fail in Vitest since standard JS doesn't support them. This is expected.
