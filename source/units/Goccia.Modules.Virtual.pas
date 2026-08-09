@@ -12,6 +12,15 @@ uses
 
   Goccia.Modules.ContentProvider;
 
+const
+  { Provenance stamp for the virtual modules the vitest compatibility shim
+    injects for `vi.mock`. Shadowing a real file is the whole point of a module
+    mock, so the loader's "virtual module shadows module" warning is noise for
+    these and only for these — see TGocciaModuleLoader.ResolveModuleAddress.
+    Declared here rather than in the shim so the loader can recognise the stamp
+    without depending on the runtime extension. }
+  VIRTUAL_MODULE_PROVENANCE_VITEST_MOCK = 'vitest:vi.mock';
+
 type
   TGocciaVirtualModuleContentType = (
     vmctJavaScript,

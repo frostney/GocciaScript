@@ -331,6 +331,13 @@ type
     property CapabilityAuditSink: TGocciaCapabilityAuditSink
       read FCapabilityAuditSink write FCapabilityAuditSink;
     property SourcePath: string read FSourcePath;
+    { Read-only view of the entry source. Runtime extensions attach after
+      Initialize has stored the source but before Execute parses it, which is
+      the only window in which an extension can rewrite the module graph for
+      the file it is about to run — the vitest compatibility shim uses it to
+      hoist `vi.mock` calls into virtual modules. Deliberately read-only: the
+      engine owns the list and callers must not mutate what it will parse. }
+    property SourceLines: TStringList read FSourceLines;
     property FunctionConstructor: TGocciaFunctionConstructorClassValue read FFunctionConstructor;
     property ObjectConstructor: TGocciaClassValue read FObjectConstructor;
     property Preprocessors: TGocciaPreprocessors read FPreprocessors write SetPreprocessors;
