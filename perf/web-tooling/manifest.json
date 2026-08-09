@@ -54,6 +54,9 @@
       "terser",
       "typescript",
       "uglify-js"
-    ]
+    ],
+    "timeoutMsByWorkload": {
+      "babel": 600000
+    }
   }
 }
