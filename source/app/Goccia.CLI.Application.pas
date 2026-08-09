@@ -16,6 +16,7 @@ uses
   Goccia.Builtins.GlobalShadowRealm,
   Goccia.CapabilityAudit,
   Goccia.CLI.Options,
+  Goccia.CLI.Stdin,
   Goccia.Engine,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
@@ -56,6 +57,13 @@ type
   protected
     procedure Configure; virtual; abstract;
     function UsageLine: string; virtual; abstract;
+    { How this command relates to standard input.  suNone (the default)
+      opts out of the no-argument rule entirely — for commands like
+      GocciaREPL and GocciaSandboxRunner that never source a program
+      from stdin.  Stdin-defaulting commands override this so they get
+      the "Input:" help section and the clig.dev no-argument behaviour
+      from the shared base instead of restating it per binary. }
+    function StdinUsage: TGocciaStdinUsage; virtual;
     procedure Execute; override;
     procedure ExecuteWithPaths(const APaths: TStringList); virtual; abstract;
     procedure Validate; virtual;
@@ -1219,6 +1227,11 @@ begin
   // Override point for subclasses
 end;
 
+function TGocciaCLIApplication.StdinUsage: TGocciaStdinUsage;
+begin
+  Result := suNone;
+end;
+
 procedure TGocciaCLIApplication.AfterExecute;
 begin
   // Override point for subclasses
@@ -1507,8 +1520,17 @@ end;
 procedure TGocciaCLIApplication.Execute;
 var
   Paths: TStringList;
-  HelpText, ConfigPath, ConfigStartDir: string;
+  ConfigPath, ConfigStartDir: string;
   I: Integer;
+
+  { Built on demand — the common case never renders help at all. }
+  function BuildHelpText: string;
+  begin
+    Result := GenerateHelpText(Name, UsageLine, FAllOptions);
+    if StdinUsage <> suNone then
+      Result := Result + sLineBreak + StdinUsageNote(Name, StdinUsage);
+  end;
+
 begin
   Configure;
 
@@ -1544,8 +1566,25 @@ begin
   try
     if FHelp.Present then
     begin
-      HelpText := GenerateHelpText(Name, UsageLine, FAllOptions);
-      Write(HelpText);
+      Write(BuildHelpText);
+      Exit;
+    end;
+
+    { clig.dev: "If your command is expecting to have something piped
+      to it and stdin is an interactive terminal, display help
+      immediately and quit."  Without this, a bare invocation at a
+      terminal blocks on ReadLn until Ctrl-D and looks stuck.  Help
+      goes to stderr because this is an error, not a request for help,
+      which also keeps stdout clean for --output=json callers. }
+    if (StdinUsage <> suNone) and
+       (DecideStdinInput(Paths.Count > 0,
+          (Paths.Count = 1) and IsStdinPath(Paths[0]),
+          IsInputTerminal) = sdShowUsage) then
+    begin
+      Write(ErrOutput, BuildHelpText);
+      WriteLn(ErrOutput);
+      Write(ErrOutput, NoInputAtTerminalMessage(Name, StdinUsage));
+      ExitCode := EXIT_CODE_USAGE;
       Exit;
     end;
 

@@ -20,6 +20,7 @@ uses
   Goccia.Builtins.Atomics,
   Goccia.Builtins.GlobalShadowRealm,
   Goccia.CLI.Options,
+  Goccia.CLI.Stdin,
   Goccia.Engine,
   Goccia.Error,
   Goccia.Error.Detail,
@@ -83,6 +84,7 @@ type
     SourceType: TGocciaSourceType;
     SourceTypeExplicit: Boolean;
     FileName: string;
+    FileNameExplicit: Boolean;
     SourceName: string;
     TimeoutMs: Integer;
     MaxMemoryBytes: Int64;
@@ -211,6 +213,11 @@ type
 
 const
   BARE_PRINT_GLOBAL_NAME = 'print';
+  BARE_PROGRAM_NAME = 'GocciaScriptLoaderBare';
+  { Bare defaults its input to stdin like GocciaScriptLoader, so it takes
+    the same no-argument rule; GocciaREPL is the right pointer for anyone
+    who typed the command expecting an interactive prompt. }
+  BARE_STDIN_USAGE = suStdinDefaultWithREPL;
   TEST262_TIMEOUT_MARKER = 'GocciaTest262:Timeout';
   TEST262_TIMEOUT_EXIT_CODE = 124;
   // Finite default call-stack depth for the bare loader.  Without a bound,
@@ -1228,39 +1235,41 @@ begin
   OriginalContent.Free;
 end;
 
-procedure PrintUsage;
+procedure PrintUsage(var AOut: Text);
 var
   Flag: TGocciaCompatibility;
   Descriptor: TGocciaCompatibilityFlagDescriptor;
 begin
-  WriteLn('Usage: GocciaScriptLoaderBare [file|-] [options]');
-  WriteLn('');
-  WriteLn('Options:');
+  WriteLn(AOut, 'Usage: GocciaScriptLoaderBare [file|-] [options]');
+  WriteLn(AOut);
+  WriteLn(AOut, 'Options:');
   for Flag := Low(TGocciaCompatibility) to High(TGocciaCompatibility) do
   begin
     Descriptor := CompatibilityFlagDescriptor(Flag);
-    WriteLn(Format('  --%-28s %s', [Descriptor.OptionName,
+    WriteLn(AOut, Format('  --%-28s %s', [Descriptor.OptionName,
       Descriptor.HelpText]));
   end;
-  WriteLn('  --strict-types                Enforce type annotations at runtime');
-  WriteLn('  --warning-unsupported-features');
-  WriteLn('                                Warn and recover for unsupported/default-disabled syntax');
-  WriteLn('  --mode=interpreted|bytecode   Execution mode (default: interpreted)');
-  WriteLn('  --source-type=script|module   Load entry as script source or module source (.mjs infers module)');
-  WriteLn('  --source-name=PATH            Name stdin source as PATH for diagnostics and module resolution');
-  WriteLn('  --unsafe-function-constructor Enable dynamic Function constructor');
-  WriteLn('  --unsafe-shadowrealm          Enable the ShadowRealm constructor');
-  WriteLn('  --deterministic               Use fixed script-visible time, UTC, and seeded randomness');
-  WriteLn('  --test262-host                Expose Goccia.test262 host hooks for test262');
-  WriteLn('  --print                       Print the script''s last value (incl. undefined)');
-  WriteLn('  --timeout=MS                  Per-file cooperative timeout in milliseconds');
-  WriteLn('  --max-memory=BYTES            GC heap byte limit (RangeError on exceed)');
-  WriteLn('  --max-instructions=N          Maximum bytecode steps before aborting');
-  WriteLn('  --stack-size=N                Maximum call stack depth (0 = no limit)');
-  WriteLn('  --profile=opcodes|functions|all');
-  WriteLn('                                Enable bytecode VM profiling (forces bytecode mode)');
-  WriteLn('  --profile-output=PATH         Write profiler JSON to PATH');
-  WriteLn('  --help                        Show this help');
+  WriteLn(AOut, '  --strict-types                Enforce type annotations at runtime');
+  WriteLn(AOut, '  --warning-unsupported-features');
+  WriteLn(AOut, '                                Warn and recover for unsupported/default-disabled syntax');
+  WriteLn(AOut, '  --mode=interpreted|bytecode   Execution mode (default: interpreted)');
+  WriteLn(AOut, '  --source-type=script|module   Load entry as script source or module source (.mjs infers module)');
+  WriteLn(AOut, '  --source-name=PATH            Name stdin source as PATH for diagnostics and module resolution');
+  WriteLn(AOut, '  --unsafe-function-constructor Enable dynamic Function constructor');
+  WriteLn(AOut, '  --unsafe-shadowrealm          Enable the ShadowRealm constructor');
+  WriteLn(AOut, '  --deterministic               Use fixed script-visible time, UTC, and seeded randomness');
+  WriteLn(AOut, '  --test262-host                Expose Goccia.test262 host hooks for test262');
+  WriteLn(AOut, '  --print                       Print the script''s last value (incl. undefined)');
+  WriteLn(AOut, '  --timeout=MS                  Per-file cooperative timeout in milliseconds');
+  WriteLn(AOut, '  --max-memory=BYTES            GC heap byte limit (RangeError on exceed)');
+  WriteLn(AOut, '  --max-instructions=N          Maximum bytecode steps before aborting');
+  WriteLn(AOut, '  --stack-size=N                Maximum call stack depth (0 = no limit)');
+  WriteLn(AOut, '  --profile=opcodes|functions|all');
+  WriteLn(AOut, '                                Enable bytecode VM profiling (forces bytecode mode)');
+  WriteLn(AOut, '  --profile-output=PATH         Write profiler JSON to PATH');
+  WriteLn(AOut, '  --help                        Show this help');
+  WriteLn(AOut);
+  Write(AOut, StdinUsageNote(BARE_PROGRAM_NAME, BARE_STDIN_USAGE));
 end;
 
 procedure ParseMode(const AValue: string; var AOptions: TBareOptions);
@@ -1394,6 +1403,7 @@ begin
   AOptions.SourceType := stScript;
   AOptions.SourceTypeExplicit := False;
   AOptions.FileName := STDIN_PATH_MARKER;
+  AOptions.FileNameExplicit := False;
   AOptions.SourceName := '';
   AOptions.TimeoutMs := 0;
   AOptions.MaxMemoryBytes := 0;
@@ -1409,7 +1419,7 @@ begin
     Arg := Arguments[I];
     if Arg = '--help' then
     begin
-      PrintUsage;
+      PrintUsage(Output);
       Halt(0);
     end
     else if Arg = '--compat-label' then
@@ -1459,8 +1469,11 @@ begin
         MaxInt)
     else if Copy(Arg, 1, 2) = '--' then
       raise Exception.Create('Unknown option: ' + Arg)
-    else if AOptions.FileName = STDIN_PATH_MARKER then
-      AOptions.FileName := Arg
+    else if not AOptions.FileNameExplicit then
+    begin
+      AOptions.FileName := Arg;
+      AOptions.FileNameExplicit := True;
+    end
     else
       raise Exception.Create('Unexpected argument: ' + Arg);
   end;
@@ -1659,7 +1672,21 @@ begin
   Options := Default(TBareOptions);
   try
     ParseOptions(Options);
-    ExitCode := RunBare(Options);
+    { clig.dev no-argument rule — see Goccia.CLI.Stdin.  Bare has its
+      own argument parser, so the shared TGocciaCLIApplication gate
+      does not cover it and the same decision is applied here. }
+    if DecideStdinInput(Options.FileNameExplicit,
+      Options.FileNameExplicit and IsStdinPath(Options.FileName),
+      IsInputTerminal) = sdShowUsage then
+    begin
+      PrintUsage(ErrOutput);
+      WriteLn(ErrOutput);
+      Write(ErrOutput, NoInputAtTerminalMessage(BARE_PROGRAM_NAME,
+        BARE_STDIN_USAGE));
+      ExitCode := EXIT_CODE_USAGE;
+    end
+    else
+      ExitCode := RunBare(Options);
   except
     on E: TGocciaTimeoutError do
     begin
