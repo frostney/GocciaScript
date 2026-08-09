@@ -317,17 +317,38 @@ end;
   what Codecov matches against and what genhtml resolves. }
 procedure TTestCoverage.TestCanonicalPathIsRepoRelativeUnderARepository;
 var
-  SourceFile, Canonical: string;
+  Absolute, Canonical, Expected, Root, RootPrefix, SourceFile: string;
 begin
   SourceFile := MakeTempSourceFile;
   try
+    Absolute := ExpandFileName(SourceFile);
     Canonical := CanonicalCoveragePath(SourceFile);
-    if FindRepositoryRoot(ExtractFileDir(SourceFile)) <> '' then
-      Expect<string>(Canonical).ToBe(ExtractFileName(SourceFile))
+    Root := FindRepositoryRoot(ExtractFileDir(Absolute));
+    if Root <> '' then
+    begin
+      { The expected key is derived from the repository root rather than
+        assumed to be the basename. MakeTempSourceFile writes into
+        GetCurrentDir, so the file only sits directly in the root when the
+        suite happens to be launched from there; run from a subdirectory the
+        canonical key is `<subdir>/<name>`, which is exactly what
+        CanonicalCoveragePath is supposed to produce. Asserting the basename
+        made this test pass or fail on the caller's working directory instead
+        of on the behaviour under test. }
+      RootPrefix := IncludeTrailingPathDelimiter(Root);
+      Expected := NormalizeCoveragePathSeparators(
+        Copy(Absolute, Length(RootPrefix) + 1, MaxInt));
+      Expect<string>(Canonical).ToBe(Expected);
+      { And it really is relative: the root prefix is gone, and what is left
+        cannot be read as an absolute path. }
+      Expect<Boolean>(Canonical = NormalizeCoveragePathSeparators(Absolute))
+        .ToBe(False);
+      Expect<Boolean>(Canonical <> '').ToBe(True);
+      Expect<Boolean>(Canonical[1] = '/').ToBe(False);
+    end
     else
       { Outside any repository there is no root to be relative to. }
       Expect<string>(Canonical).ToBe(
-        NormalizeCoveragePathSeparators(SourceFile));
+        NormalizeCoveragePathSeparators(Absolute));
   finally
     DeleteFile(SourceFile);
   end;

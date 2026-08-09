@@ -51,6 +51,7 @@ implementation
 
 uses
   Classes,
+  Generics.Collections,
   SysUtils,
 
   TextSemantics,
@@ -60,6 +61,7 @@ uses
   Goccia.AST.Statements,
   Goccia.Engine,
   Goccia.Error,
+  Goccia.Keywords.Reserved,
   Goccia.Modules.Virtual,
   Goccia.SourcePipeline,
   Goccia.Values.Primitives;
@@ -106,6 +108,8 @@ type
       const AAtTopLevel: Boolean);
     function TryResolveSpecifier(const ASpecifier: string;
       out AAddress: string): Boolean;
+    procedure VisitClassDefinition(const ADefinition: TGocciaClassDefinition);
+    procedure VisitExpressions(const AExpressions: TObjectList<TGocciaExpression>);
     procedure VisitNode(const ANode: TGocciaASTNode;
       const AAtTopLevel: Boolean);
     procedure WarnNestedDirective(const AMemberName, ASpecifier: string;
@@ -359,9 +363,15 @@ begin
 
   if not (Arrow.Body is TGocciaObjectExpression) then
   begin
+    { The parser produces TGocciaTemplateLiteralExpression only for a template
+      with no substitutions; an interpolated one is a
+      TGocciaTemplateWithInterpolationExpression. Both demonstrably yield a
+      string, so both belong here rather than in the generic analysis-failure
+      branch below. }
     if (Arrow.Body is TGocciaLiteralExpression) or
        (Arrow.Body is TGocciaArrayExpression) or
-       (Arrow.Body is TGocciaTemplateLiteralExpression) then
+       (Arrow.Body is TGocciaTemplateLiteralExpression) or
+       (Arrow.Body is TGocciaTemplateWithInterpolationExpression) then
       { The factory demonstrably yields a non-object, which is the shape Vitest
         rejects by name — report it the way Vitest does rather than as an
         analysis failure. }
@@ -412,6 +422,20 @@ begin
           '[vitest] vi.mock("' + ASpecifier + '") could not be hoisted by ' +
           'the GocciaScript vitest compatibility shim: "' + Key + '" is not ' +
           'usable as an export name. ' + DOCS_REFERENCE));
+
+      { A reserved word is identifier-LIKE but not a BindingIdentifier, so
+        `export const <name>` would be a syntax error in the generated module.
+        `default` is the one exception: it is reserved, and it is also the one
+        key that never becomes `export const` — it becomes `export default`
+        below — so it is checked first and let through. }
+      if (Key <> MOCK_DEFAULT_KEY) and
+         (IsReservedKeyword(Key) or IsStrictModeReservedKeyword(Key)) then
+        Exit(BuildThrowingModuleSource(ASpecifier, 'Error',
+          '[vitest] vi.mock("' + ASpecifier + '") could not be hoisted by ' +
+          'the GocciaScript vitest compatibility shim: "' + Key + '" is a ' +
+          'reserved word, so it cannot be declared as an export of the ' +
+          'generated mock module. Rename the mocked export. ' +
+          DOCS_REFERENCE));
 
       if EmittedKeys.IndexOf(Key) >= 0 then
         Continue;
@@ -535,6 +559,107 @@ begin
     BuildMockModuleSource(Specifier, ACall.Arguments[1]));
 end;
 
+procedure TGocciaVitestMockHoister.VisitExpressions(
+  const AExpressions: TObjectList<TGocciaExpression>);
+var
+  I: Integer;
+begin
+  if not Assigned(AExpressions) then
+    Exit;
+  for I := 0 to AExpressions.Count - 1 do
+    VisitNode(AExpressions[I], False);
+end;
+
+procedure TGocciaVitestMockHoister.VisitClassDefinition(
+  const ADefinition: TGocciaClassDefinition);
+var
+  Getter: TGocciaGetterExpression;
+  I: Integer;
+  Initializer: TGocciaExpression;
+  Method: TGocciaClassMethod;
+  Setter: TGocciaSetterExpression;
+
+  procedure VisitMethods(const AMethods: TGocciaClassMethodMap);
+  begin
+    if not Assigned(AMethods) then
+      Exit;
+    for Method in AMethods.Values do
+      if Assigned(Method) then
+        VisitNode(Method.Body, False);
+  end;
+
+  procedure VisitProperties(const AProperties: TGocciaExpressionMap);
+  begin
+    if not Assigned(AProperties) then
+      Exit;
+    for Initializer in AProperties.Values do
+      VisitNode(Initializer, False);
+  end;
+
+  procedure VisitGetters(const AGetters: TGocciaGetterExpressionMap);
+  begin
+    if not Assigned(AGetters) then
+      Exit;
+    for Getter in AGetters.Values do
+      if Assigned(Getter) then
+        VisitNode(Getter.Body, False);
+  end;
+
+  procedure VisitSetters(const ASetters: TGocciaSetterExpressionMap);
+  begin
+    if not Assigned(ASetters) then
+      Exit;
+    for Setter in ASetters.Values do
+      if Assigned(Setter) then
+        VisitNode(Setter.Body, False);
+  end;
+
+begin
+  if not Assigned(ADefinition) then
+    Exit;
+
+  VisitNode(ADefinition.SuperClassExpression, False);
+  VisitMethods(ADefinition.Methods);
+  VisitMethods(ADefinition.StaticMethods);
+  VisitMethods(ADefinition.PrivateMethods);
+  VisitProperties(ADefinition.InstanceProperties);
+  VisitProperties(ADefinition.StaticProperties);
+  VisitProperties(ADefinition.PrivateInstanceProperties);
+  VisitProperties(ADefinition.PrivateStaticProperties);
+  VisitGetters(ADefinition.Getters);
+  VisitGetters(ADefinition.StaticGetters);
+  VisitSetters(ADefinition.Setters);
+  VisitSetters(ADefinition.StaticSetters);
+
+  { FElements is not a complete element list — the parser only records static
+    blocks and `accessor` fields there — so it is read for static blocks alone,
+    which are the one class element the maps above do not reach. Taking
+    anything else from it would visit the same node twice and print the nested
+    warning twice. }
+  for I := Low(ADefinition.FElements) to High(ADefinition.FElements) do
+    if ADefinition.FElements[I].Kind = cekStaticBlock then
+      VisitNode(ADefinition.FElements[I].StaticBlockBody, False);
+end;
+
+{ A structural walk over every child position an expression or a statement can
+  hold, so that a `vi.mock` is found wherever it is written.
+
+  The walk is deliberately exhaustive rather than "the places a directive
+  plausibly appears". Vitest's own hoisting transform walks the whole AST
+  (`esmWalker` + `onCallExpression` in @vitest/mocker), so anything this walk
+  fails to reach is a directive Vitest would have hoisted and GocciaScript
+  silently drops — the worst possible failure mode, because the mock simply
+  never applies and nothing says so. Function bodies in particular hide behind
+  ordinary expression nodes: an arrow holding a directive can sit inside a call
+  *callee* (everything but the trailing member call of
+  `expect(f(cb)).toBe(x)`), inside a conditional, inside an array element,
+  inside an object property, or inside a class method — none of which the
+  previous statement-and-arguments-only walk reached.
+
+  What does NOT change here is which callees count: only the literal `vi.mock`
+  / `vitest.mock` spellings are collected, at any depth. An aliased or
+  namespaced callee is left alone at every position, exactly as Vitest leaves
+  it alone (`utilsObjectNames` defaults to `["vi", "vitest"]`). }
 procedure TGocciaVitestMockHoister.VisitNode(const ANode: TGocciaASTNode;
   const AAtTopLevel: Boolean);
 var
@@ -542,7 +667,11 @@ var
   CaseClause: TGocciaCaseClause;
   CallExpression: TGocciaCallExpression;
   I, J: Integer;
+  ObjectExpression: TGocciaObjectExpression;
+  ObjectGetter: TGocciaGetterExpression;
+  ObjectSetter: TGocciaSetterExpression;
   SwitchStatement: TGocciaSwitchStatement;
+  TaggedTemplate: TGocciaTaggedTemplateExpression;
   TryStatement: TGocciaTryStatement;
   VariableDeclaration: TGocciaVariableDeclaration;
 begin
@@ -562,22 +691,42 @@ begin
   end
   else if ANode is TGocciaIfStatement then
   begin
+    VisitNode(TGocciaIfStatement(ANode).Condition, False);
     VisitNode(TGocciaIfStatement(ANode).Consequent, False);
     VisitNode(TGocciaIfStatement(ANode).Alternate, False);
   end
   else if ANode is TGocciaForStatement then
   begin
     VisitNode(TGocciaForStatement(ANode).Init, False);
+    VisitNode(TGocciaForStatement(ANode).Condition, False);
+    VisitNode(TGocciaForStatement(ANode).Update, False);
     VisitNode(TGocciaForStatement(ANode).Body, False);
   end
   else if ANode is TGocciaWhileStatement then
-    VisitNode(TGocciaWhileStatement(ANode).Body, False)
+  begin
+    VisitNode(TGocciaWhileStatement(ANode).Condition, False);
+    VisitNode(TGocciaWhileStatement(ANode).Body, False);
+  end
   else if ANode is TGocciaDoWhileStatement then
-    VisitNode(TGocciaDoWhileStatement(ANode).Body, False)
+  begin
+    VisitNode(TGocciaDoWhileStatement(ANode).Body, False);
+    VisitNode(TGocciaDoWhileStatement(ANode).Condition, False);
+  end
+  else if ANode is TGocciaWithStatement then
+  begin
+    VisitNode(TGocciaWithStatement(ANode).ObjectExpression, False);
+    VisitNode(TGocciaWithStatement(ANode).Body, False);
+  end
   else if ANode is TGocciaForOfStatement then
-    VisitNode(TGocciaForOfStatement(ANode).Body, False)
+  begin
+    VisitNode(TGocciaForOfStatement(ANode).Iterable, False);
+    VisitNode(TGocciaForOfStatement(ANode).Body, False);
+  end
   else if ANode is TGocciaForInStatement then
-    VisitNode(TGocciaForInStatement(ANode).Body, False)
+  begin
+    VisitNode(TGocciaForInStatement(ANode).ObjectExpression, False);
+    VisitNode(TGocciaForInStatement(ANode).Body, False);
+  end
   else if ANode is TGocciaTryStatement then
   begin
     TryStatement := TGocciaTryStatement(ANode);
@@ -588,6 +737,7 @@ begin
   else if ANode is TGocciaSwitchStatement then
   begin
     SwitchStatement := TGocciaSwitchStatement(ANode);
+    VisitNode(SwitchStatement.Discriminant, False);
     for I := 0 to SwitchStatement.Cases.Count - 1 do
     begin
       CaseClause := SwitchStatement.Cases[I];
@@ -597,6 +747,8 @@ begin
   end
   else if ANode is TGocciaReturnStatement then
     VisitNode(TGocciaReturnStatement(ANode).Value, False)
+  else if ANode is TGocciaThrowStatement then
+    VisitNode(TGocciaThrowStatement(ANode).Value, False)
   else if ANode is TGocciaVariableDeclaration then
   begin
     VariableDeclaration := TGocciaVariableDeclaration(ANode);
@@ -604,23 +756,170 @@ begin
              High(VariableDeclaration.Variables) do
       VisitNode(VariableDeclaration.Variables[I].Initializer, False);
   end
+  else if ANode is TGocciaUsingDeclaration then
+    for I := Low(TGocciaUsingDeclaration(ANode).Variables) to
+             High(TGocciaUsingDeclaration(ANode).Variables) do
+      VisitNode(TGocciaUsingDeclaration(ANode).Variables[I].Initializer, False)
   else if ANode is TGocciaDestructuringDeclaration then
     VisitNode(TGocciaDestructuringDeclaration(ANode).Initializer, False)
   else if ANode is TGocciaFunctionDeclaration then
     VisitNode(TGocciaFunctionDeclaration(ANode).FunctionExpression, False)
+  else if ANode is TGocciaClassDeclaration then
+    VisitClassDefinition(TGocciaClassDeclaration(ANode).ClassDefinition)
   else if ANode is TGocciaExportVariableDeclaration then
     VisitNode(TGocciaExportVariableDeclaration(ANode).Declaration, AAtTopLevel)
+  else if ANode is TGocciaExportDestructuringDeclaration then
+    VisitNode(TGocciaExportDestructuringDeclaration(ANode).Declaration, False)
   else if ANode is TGocciaExportFunctionDeclaration then
     VisitNode(TGocciaExportFunctionDeclaration(ANode).Declaration, False)
+  else if ANode is TGocciaExportClassDeclaration then
+    VisitNode(TGocciaExportClassDeclaration(ANode).Declaration, False)
+  else if ANode is TGocciaExportDefaultDeclaration then
+    VisitNode(TGocciaExportDefaultDeclaration(ANode).Expression, False)
+
+  { Expressions. }
   else if ANode is TGocciaCallExpression then
   begin
     CallExpression := TGocciaCallExpression(ANode);
     CollectCall(CallExpression, AAtTopLevel);
+    // The callee matters as much as the arguments: in `expect(f(cb)).toBe(x)`
+    // everything but the trailing `.toBe(x)` sits inside the outer call's
+    // callee, so a directive written in `cb` is only reachable through it.
+    VisitNode(CallExpression.Callee, False);
     // A callback argument is where a nested directive realistically hides, as
     // in a `vi.mock` written inside a `describe` or `test` callback.
-    for I := 0 to CallExpression.Arguments.Count - 1 do
-      VisitNode(CallExpression.Arguments[I], False);
+    VisitExpressions(CallExpression.Arguments);
   end
+  else if ANode is TGocciaNewExpression then
+  begin
+    VisitNode(TGocciaNewExpression(ANode).Callee, False);
+    VisitExpressions(TGocciaNewExpression(ANode).Arguments);
+  end
+  else if ANode is TGocciaMemberExpression then
+  begin
+    VisitNode(TGocciaMemberExpression(ANode).ObjectExpr, False);
+    VisitNode(TGocciaMemberExpression(ANode).PropertyExpression, False);
+  end
+  else if ANode is TGocciaPrivateMemberExpression then
+    VisitNode(TGocciaPrivateMemberExpression(ANode).ObjectExpr, False)
+  else if ANode is TGocciaBinaryExpression then
+  begin
+    { `&&`, `||` and `??` are TGocciaBinaryExpression too, so this covers the
+      logical forms as well. }
+    VisitNode(TGocciaBinaryExpression(ANode).Left, False);
+    VisitNode(TGocciaBinaryExpression(ANode).Right, False);
+  end
+  else if ANode is TGocciaConditionalExpression then
+  begin
+    VisitNode(TGocciaConditionalExpression(ANode).Condition, False);
+    VisitNode(TGocciaConditionalExpression(ANode).Consequent, False);
+    VisitNode(TGocciaConditionalExpression(ANode).Alternate, False);
+  end
+  else if ANode is TGocciaSequenceExpression then
+    VisitExpressions(TGocciaSequenceExpression(ANode).Expressions)
+  else if ANode is TGocciaUnaryExpression then
+    VisitNode(TGocciaUnaryExpression(ANode).Operand, False)
+  else if ANode is TGocciaIncrementExpression then
+    VisitNode(TGocciaIncrementExpression(ANode).Operand, False)
+  else if ANode is TGocciaAwaitExpression then
+    VisitNode(TGocciaAwaitExpression(ANode).Operand, False)
+  else if ANode is TGocciaYieldExpression then
+    VisitNode(TGocciaYieldExpression(ANode).Operand, False)
+  else if ANode is TGocciaSpreadExpression then
+    VisitNode(TGocciaSpreadExpression(ANode).Argument, False)
+  else if ANode is TGocciaAssignmentExpression then
+    VisitNode(TGocciaAssignmentExpression(ANode).Value, False)
+  else if ANode is TGocciaCompoundAssignmentExpression then
+    VisitNode(TGocciaCompoundAssignmentExpression(ANode).Value, False)
+  else if ANode is TGocciaPropertyAssignmentExpression then
+  begin
+    VisitNode(TGocciaPropertyAssignmentExpression(ANode).ObjectExpr, False);
+    VisitNode(TGocciaPropertyAssignmentExpression(ANode).Value, False);
+  end
+  else if ANode is TGocciaPropertyCompoundAssignmentExpression then
+  begin
+    VisitNode(
+      TGocciaPropertyCompoundAssignmentExpression(ANode).ObjectExpr, False);
+    VisitNode(TGocciaPropertyCompoundAssignmentExpression(ANode).Value, False);
+  end
+  else if ANode is TGocciaComputedPropertyAssignmentExpression then
+  begin
+    VisitNode(
+      TGocciaComputedPropertyAssignmentExpression(ANode).ObjectExpr, False);
+    VisitNode(TGocciaComputedPropertyAssignmentExpression(ANode)
+      .PropertyExpression, False);
+    VisitNode(TGocciaComputedPropertyAssignmentExpression(ANode).Value, False);
+  end
+  else if ANode is TGocciaComputedPropertyCompoundAssignmentExpression then
+  begin
+    VisitNode(TGocciaComputedPropertyCompoundAssignmentExpression(ANode)
+      .ObjectExpr, False);
+    VisitNode(TGocciaComputedPropertyCompoundAssignmentExpression(ANode)
+      .PropertyExpression, False);
+    VisitNode(TGocciaComputedPropertyCompoundAssignmentExpression(ANode)
+      .Value, False);
+  end
+  else if ANode is TGocciaPrivatePropertyAssignmentExpression then
+  begin
+    VisitNode(
+      TGocciaPrivatePropertyAssignmentExpression(ANode).ObjectExpr, False);
+    VisitNode(TGocciaPrivatePropertyAssignmentExpression(ANode).Value, False);
+  end
+  else if ANode is TGocciaPrivatePropertyCompoundAssignmentExpression then
+  begin
+    VisitNode(TGocciaPrivatePropertyCompoundAssignmentExpression(ANode)
+      .ObjectExpr, False);
+    VisitNode(
+      TGocciaPrivatePropertyCompoundAssignmentExpression(ANode).Value, False);
+  end
+  else if ANode is TGocciaDestructuringAssignmentExpression then
+    VisitNode(TGocciaDestructuringAssignmentExpression(ANode).Right, False)
+  else if ANode is TGocciaArrayExpression then
+    VisitExpressions(TGocciaArrayExpression(ANode).Elements)
+  else if ANode is TGocciaObjectExpression then
+  begin
+    ObjectExpression := TGocciaObjectExpression(ANode);
+    for I := Low(ObjectExpression.PropertySourceOrder) to
+             High(ObjectExpression.PropertySourceOrder) do
+      VisitNode(ObjectExpression.PropertySourceOrder[I].Expression, False);
+    for I := Low(ObjectExpression.ComputedPropertiesInOrder) to
+             High(ObjectExpression.ComputedPropertiesInOrder) do
+    begin
+      VisitNode(ObjectExpression.ComputedPropertiesInOrder[I].Key, False);
+      VisitNode(ObjectExpression.ComputedPropertiesInOrder[I].Value, False);
+    end;
+    { A getter or setter of an object literal is not carried by
+      PropertySourceOrder[].Expression, only by these maps. }
+    if Assigned(ObjectExpression.Getters) then
+      for ObjectGetter in ObjectExpression.Getters.Values do
+        if Assigned(ObjectGetter) then
+          VisitNode(ObjectGetter.Body, False);
+    if Assigned(ObjectExpression.Setters) then
+      for ObjectSetter in ObjectExpression.Setters.Values do
+        if Assigned(ObjectSetter) then
+          VisitNode(ObjectSetter.Body, False);
+  end
+  else if ANode is TGocciaTemplateWithInterpolationExpression then
+    VisitExpressions(TGocciaTemplateWithInterpolationExpression(ANode).Parts)
+  else if ANode is TGocciaTaggedTemplateExpression then
+  begin
+    TaggedTemplate := TGocciaTaggedTemplateExpression(ANode);
+    VisitNode(TaggedTemplate.Tag, False);
+    VisitExpressions(TaggedTemplate.Expressions);
+  end
+  else if ANode is TGocciaImportCallExpression then
+  begin
+    VisitNode(TGocciaImportCallExpression(ANode).Specifier, False);
+    VisitNode(TGocciaImportCallExpression(ANode).Options, False);
+  end
+  else if ANode is TGocciaClassExpression then
+    VisitClassDefinition(TGocciaClassExpression(ANode).ClassDefinition)
+  else if ANode is TGocciaObjectMethodDefinition then
+    VisitNode(TGocciaObjectMethodDefinition(ANode).FunctionExpression, False)
+  else if ANode is TGocciaGetterExpression then
+    VisitNode(TGocciaGetterExpression(ANode).Body, False)
+  else if ANode is TGocciaSetterExpression then
+    VisitNode(TGocciaSetterExpression(ANode).Body, False)
   else if ANode is TGocciaArrowFunctionExpression then
     VisitNode(TGocciaArrowFunctionExpression(ANode).Body, False)
   else if ANode is TGocciaFunctionExpression then
@@ -697,6 +996,15 @@ begin
     script source accepts sloppy-mode constructs, and neither is a superset of
     the other. Trying both means a directory that opts into `source-type:
     module` through a config file the engine has not applied yet still hoists. }
+  { Both attempts swallow every exception class, not just TGocciaError. This
+    pre-pass is best-effort by construction: the lexer, the preprocessors and
+    the parser can all raise plain RTL exceptions (EConvertError,
+    EArgumentException, EListError) on input the engine's own parse would
+    reject anyway, and letting one escape here would kill a run over a file the
+    hoister merely failed to analyse. A failure must therefore mean "no
+    hoisting", never "crash". Nothing is lost by being quiet: the engine parses
+    the same source immediately afterwards, and that parse — not this one — is
+    the authoritative one that reports syntax errors to the user. }
   PipelineResult := nil;
   try
     PipelineOptions.SourceType := stModule;
@@ -704,7 +1012,7 @@ begin
       PipelineResult := TGocciaSourcePipeline.Parse(AEngine.SourceLines,
         AEngine.SourcePath, PipelineOptions);
     except
-      on TGocciaError do
+      on Exception do
         PipelineResult := nil;
     end;
 
@@ -715,7 +1023,7 @@ begin
         PipelineResult := TGocciaSourcePipeline.Parse(AEngine.SourceLines,
           AEngine.SourcePath, PipelineOptions);
       except
-        on TGocciaError do
+        on Exception do
           Exit;
       end;
     end;
