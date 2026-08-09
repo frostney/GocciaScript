@@ -56,14 +56,19 @@ const makeTmp = makeTmpFactory("goccia-apps-");
  * assertion after it would silently read whichever the report happened to list
  * last — a passing test measuring the wrong file. Collisions therefore throw
  * here rather than resolving arbitrarily.
+ *
+ * Null-prototype maps with own-property checks, not `in` on a plain object: a
+ * source named `constructor` or `toString` would otherwise inherit a truthy
+ * hit and be reported as a collision that never happened, and a `__proto__`
+ * key assigned onto a plain object sets the prototype instead of an entry.
  */
 function readCoverageByBasename(path: string): Record<string, any> {
   const raw = JSON.parse(readFileSync(path, "utf-8"));
-  const byBasename: Record<string, any> = {};
-  const sources: Record<string, string> = {};
+  const byBasename: Record<string, any> = Object.create(null);
+  const sources: Record<string, string> = Object.create(null);
   for (const [file, entry] of Object.entries(raw)) {
     const basename = file.split(/[\\/]/).pop() as string;
-    if (basename in byBasename) {
+    if (Object.hasOwn(byBasename, basename)) {
       throw new Error(
         `Coverage report ${path} has two files named ${basename} ` +
           `(${sources[basename]} and ${file}); this helper keys by basename, ` +

@@ -139,25 +139,22 @@ begin
   Result := Buffer;
 end;
 
-{ Names that are identifier-like and not keywords, yet still cannot be bound in
-  a module.
+{ Whether a name may appear as the binding in `export const <name>`.
 
-  A generated mock module is module code, and module code is always strict, so
-  `await` (reserved in a module goal outright) and `yield`, `eval` and
-  `arguments` (barred as strict-mode BindingIdentifiers) are all invalid in
-  `export const <name>` even though the keyword predicates do not list them.
-  Verified against Node, which rejects `export const await = 1;` and each of
-  the other three under `--input-type=module`.
+  Reserved words and strict-mode reserved words are not BindingIdentifiers. Nor
+  are `await` (reserved outright in a module goal), `yield`, `eval` or
+  `arguments` (barred as strict-mode BindingIdentifiers) — module source is
+  always strict, and no keyword predicate lists those four. Node agrees:
+  `export const await = 1;` and each of the other three are rejected under
+  `--input-type=module`.
 
-  GocciaScript's own parser currently accepts them, so without this check the
-  generated module loads here and the very same suite is a SyntaxError under
-  real Vitest — the drop-in divergence this shim exists to remove. Rejecting
-  them turns a silent cross-runtime split into the same named error the other
-  unusable keys already produce. }
-function IsInvalidModuleBindingName(const AName: string): Boolean;
+  Anything this returns False for is still exportable, just through an export
+  clause with an alias rather than a `const` declaration. }
+function IsBindableName(const AName: string): Boolean;
 begin
-  Result := (AName = 'await') or (AName = 'yield') or (AName = 'eval') or
-    (AName = 'arguments');
+  Result := not (IsReservedKeyword(AName) or IsStrictModeReservedKeyword(AName)
+    or (AName = 'await') or (AName = 'yield') or (AName = 'eval')
+    or (AName = 'arguments'));
 end;
 
 { Export names are emitted as `export const <name>`, so a key that is not an
@@ -357,6 +354,8 @@ function TGocciaVitestMockHoister.BuildMockModuleSource(
 const
   LB = sLineBreak;
 var
+  AliasCount: Integer;
+  AliasLocal: string;
   Arrow: TGocciaArrowFunctionExpression;
   EmittedKeys: TStringList;
   Entry: TGocciaPropertySourceOrder;
@@ -364,6 +363,7 @@ var
   I: Integer;
   ObjectLiteral: TGocciaObjectExpression;
 begin
+  AliasCount := 0;
   if not (AFactory is TGocciaArrowFunctionExpression) then
     Exit(BuildThrowingModuleSource(ASpecifier, 'Error',
       '[vitest] vi.mock("' + ASpecifier + '") could not be hoisted by the ' +
@@ -444,21 +444,6 @@ begin
           'the GocciaScript vitest compatibility shim: "' + Key + '" is not ' +
           'usable as an export name. ' + DOCS_REFERENCE));
 
-      { A reserved word is identifier-LIKE but not a BindingIdentifier, so
-        `export const <name>` would be a syntax error in the generated module.
-        `default` is the one exception: it is reserved, and it is also the one
-        key that never becomes `export const` — it becomes `export default`
-        below — so it is checked first and let through. }
-      if (Key <> MOCK_DEFAULT_KEY) and
-         (IsReservedKeyword(Key) or IsStrictModeReservedKeyword(Key) or
-          IsInvalidModuleBindingName(Key)) then
-        Exit(BuildThrowingModuleSource(ASpecifier, 'Error',
-          '[vitest] vi.mock("' + ASpecifier + '") could not be hoisted by ' +
-          'the GocciaScript vitest compatibility shim: "' + Key + '" is a ' +
-          'reserved word, so it cannot be declared as an export of the ' +
-          'generated mock module. Rename the mocked export. ' +
-          DOCS_REFERENCE));
-
       if EmittedKeys.IndexOf(Key) >= 0 then
         Continue;
       EmittedKeys.Add(Key);
@@ -466,9 +451,36 @@ begin
       if Key = MOCK_DEFAULT_KEY then
         ExportsText := ExportsText + 'export default ' + MOCK_RESULT_BINDING +
           '.' + MOCK_DEFAULT_KEY + ';' + LB
-      else
+      else if IsBindableName(Key) then
         ExportsText := ExportsText + 'export const ' + Key + ' = ' +
-          MOCK_RESULT_BINDING + '.' + Key + ';' + LB;
+          MOCK_RESULT_BINDING + '.' + Key + ';' + LB
+      else
+      begin
+        { A key that is identifier-like but not a BindingIdentifier — a
+          reserved word like `class`, or one of await/yield/eval/arguments,
+          which module code cannot bind. `export const <name>` would be a
+          syntax error, but an export CLAUSE takes any IdentifierName as the
+          exported name, so the value binds to a generated local and is
+          exported under an alias.
+
+          Rejecting these instead, as this code did, was measured against the
+          pinned oracle and found wrong in both directions: Vitest 4.1.10
+          exposes every one of them as a module export (probed with a factory
+          returning await/yield/eval/arguments and again with
+          class/static/import/function — all readable through the namespace),
+          so refusing the mock diverges from the product target just as surely
+          as emitting an invalid `export const` did. An export clause aliasing
+          a local to the name `await` is accepted by Node and parses under
+          GocciaScript too, so the alias form is the one shape valid
+          everywhere. Property access is safe
+          unaliased: any IdentifierName may follow a dot. }
+        Inc(AliasCount);
+        AliasLocal := MOCK_RESULT_BINDING + 'Alias' + IntToStr(AliasCount);
+        ExportsText := ExportsText +
+          'const ' + AliasLocal + ' = ' + MOCK_RESULT_BINDING + '.' + Key +
+            ';' + LB +
+          'export { ' + AliasLocal + ' as ' + Key + ' };' + LB;
+      end;
     end;
   finally
     EmittedKeys.Free;

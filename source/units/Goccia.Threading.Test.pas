@@ -572,6 +572,30 @@ begin
       // resumes and fails with run 2 already in flight.
       Pool.RunAll(Files, Host.SlowCountingWorker);
 
+      { Wait for the zombie to retire BEFORE asserting anything.
+
+        Releasing it from inside the later run puts its failure inside that
+        run, but says nothing about whether it has reached its Cancel by the
+        time RunAll returns. Assert first and a pool that reuses the flag can
+        cancel immediately afterwards, leaving every assertion already passed
+        — the test would go green against precisely the defect it exists to
+        catch. Its exit is the one externally visible proof that its Cancel,
+        if any, has already happened, so the wait moves ahead of the
+        assertions and closes the window rather than leaving it open.
+
+        The wait is needed on the way out regardless: the zombie drains the
+        shared cleanup registry as it exits and the registry tests assert
+        exact counts. }
+      WaitedMs := 0;
+      while (WorkerExitCount - ExitBaseline < EXPECTED_WORKER_EXITS)
+          and (WaitedMs < 5000) do
+      begin
+        Sleep(10);
+        Inc(WaitedMs, 10);
+      end;
+      Expect<Integer>(WorkerExitCount - ExitBaseline)
+        .ToBe(EXPECTED_WORKER_EXITS);
+
       // Nothing in run 2 failed, so nothing may have cancelled it.
       Expect<Boolean>(Pool.Cancelled).ToBe(False);
       // Every file must have reached the callback — a leaked-in cancel
@@ -582,19 +606,6 @@ begin
         if not Pool.Results[I].Success then
           AllSucceeded := False;
       Expect<Boolean>(AllSucceeded).ToBe(True);
-
-      { Retire the zombie before leaving: it drains the shared cleanup
-        registry on its way out, and the registry tests assert exact
-        counts.  Its exit is observable only through that same counter. }
-      WaitedMs := 0;
-      while (WorkerExitCount - ExitBaseline < EXPECTED_WORKER_EXITS)
-          and (WaitedMs < 5000) do
-      begin
-        Sleep(10);
-        Inc(WaitedMs, 10);
-      end;
-      Expect<Integer>(WorkerExitCount - ExitBaseline)
-        .ToBe(EXPECTED_WORKER_EXITS);
     finally
       Pool.Free;
     end;
