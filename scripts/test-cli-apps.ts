@@ -40,6 +40,38 @@ import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 const makeTmp = makeTmpFactory("goccia-apps-");
 
 /**
+ * Run one named section, recording a failure instead of aborting the run.
+ *
+ * This script is a straight sequence of assertions that throw, so the first
+ * failure used to end the run and every later section went unexamined. On
+ * platforms exercised only in CI that meant one defect per round: during the
+ * 0.11.0 stack the Windows job reported a coverage assertion, then — after a
+ * fix and another twenty-minute round — a second one 550 lines further down.
+ * Collecting failures turns those rounds into one.
+ *
+ * Output on a green run is unchanged: the header prints, the body runs, and
+ * nothing is recorded. A failing section prints its error where it happened
+ * and the run continues; every failure is repeated at the end and the process
+ * exits non-zero.
+ */
+const sectionFailures: { name: string; error: unknown }[] = [];
+
+async function section(
+  name: string,
+  body: () => Promise<void> | void,
+): Promise<void> {
+  console.log(name);
+  try {
+    await body();
+  } catch (error) {
+    sectionFailures.push({ name, error });
+    const message = error instanceof Error ? error.message : String(error);
+    console.log(`  FAILED: ${message}`);
+  }
+}
+
+
+/**
  * Re-key a coverage report by basename.
  *
  * Report keys are canonical coverage paths: repo-relative when the file sits
@@ -217,8 +249,7 @@ function assertPreservesBodyFailure(outputPath: string, label: string): void {
 
 // -- JSON output (interpreted + bytecode) ---------------------------------------
 
-console.log("Loader: JSON output (interpreted)...");
-{
+await section("Loader: JSON output (interpreted)...", async () => {
   const { json } = runLoaderJson("console.log('hi'); 2 + 2;\n");
   const file = json.files?.[0];
   if (json.ok !== true) throw new Error(`JSON ok should be true, got ${json.ok}`);
@@ -240,10 +271,9 @@ console.log("Loader: JSON output (interpreted)...");
   if ("total_ms" in json.timing) throw new Error("JSON timing should not include millisecond fields");
   if (typeof file?.timing?.total_ns !== "number") throw new Error("JSON per-file timing.total_ns should be present");
   if ("total_ms" in file.timing) throw new Error("JSON per-file timing should not include millisecond fields");
-}
+});
 
-console.log("Loader: JSON output (bytecode)...");
-{
+await section("Loader: JSON output (bytecode)...", async () => {
   const { json } = runLoaderJson("console.log('hi'); 2 + 2;\n", ["--mode=bytecode"]);
   const file = json.files?.[0];
   if (json.ok !== true) throw new Error(`Bytecode JSON ok should be true, got ${json.ok}`);
@@ -252,10 +282,9 @@ console.log("Loader: JSON output (bytecode)...");
   if (!json.stdout?.includes("hi")) throw new Error(`Bytecode JSON stdout should contain "hi"`);
   if (typeof json.stderr !== "string") throw new Error("Bytecode JSON stderr should always be present");
   if (typeof json.memory?.gc?.peakLiveBytes !== "number") throw new Error("Bytecode JSON memory.gc.peakLiveBytes should be present");
-}
+});
 
-console.log("Loader: bytecode TypedArray.from roots mapper during iterator GC...");
-{
+await section("Loader: bytecode TypedArray.from roots mapper during iterator GC...", async () => {
   const source = `
 let i = 0;
 const iterable = {
@@ -281,28 +310,25 @@ ta[0] * 10 + ta[1];
   if (exitCode !== 0) throw new Error(`TypedArray.from GC repro exited ${exitCode}: ${stderr}`);
   const result = json.files?.[0]?.result;
   if (result !== 12) throw new Error(`TypedArray.from GC repro expected 12, got ${result}`);
-}
+});
 
-console.log("Loader: JSON undefined result...");
-{
+await section("Loader: JSON undefined result...", async () => {
   const { json } = runLoaderJson("undefined;\n");
   if (json.ok !== true) throw new Error(`JSON undefined run should succeed, got ${json.ok}`);
   if (json.files?.[0]?.error !== null) throw new Error("JSON undefined result should not imply an error");
   if (json.files?.[0]?.result !== null) throw new Error(`JSON undefined result should serialize as null, got ${json.files?.[0]?.result}`);
-}
+});
 
-console.log("Loader: JSON stdout/stderr split...");
-{
+await section("Loader: JSON stdout/stderr split...", async () => {
   const { json } = runLoaderJson("console.log('out'); console.error('err'); 1;\n");
   if (!json.stdout?.includes("out")) throw new Error(`JSON stdout should contain "out", got ${json.stdout}`);
   if (!json.stderr?.includes("err")) throw new Error(`JSON stderr should contain "err", got ${json.stderr}`);
   if (!json.output?.includes("out") || !json.output?.includes("Error: err")) {
     throw new Error(`JSON output should include both streams, got ${json.output}`);
   }
-}
+});
 
-console.log("Loader: JSON multi-file structure...");
-{
+await section("Loader: JSON multi-file structure...", async () => {
   const tmp = makeTmp();
   try {
     const first = join(tmp, "first.js");
@@ -343,10 +369,9 @@ console.log("Loader: JSON multi-file structure...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: JSON source-load failure stays per-file...");
-{
+await section("Loader: JSON source-load failure stays per-file...", async () => {
   const tmp = makeTmp();
   try {
     const unreadable = join(tmp, "unreadable.js");
@@ -373,10 +398,9 @@ console.log("Loader: JSON source-load failure stays per-file...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: compact-json omits build, memory, stdout, stderr...");
-{
+await section("Loader: compact-json omits build, memory, stdout, stderr...", async () => {
   const { exitCode, json, stderr } = runLoaderJson("console.log('hi'); console.error('warn'); 2 + 2;\n", ["--output=compact-json"]);
   if (exitCode !== 0) throw new Error(`compact-json exited ${exitCode}: ${stderr}`);
   if ("build" in json) throw new Error("compact-json should omit top-level build");
@@ -400,10 +424,9 @@ console.log("Loader: compact-json omits build, memory, stdout, stderr...");
   if (file.fileName !== "<stdin>") throw new Error(`compact-json fileName should be <stdin>, got ${file.fileName}`);
   if (file.result !== 4) throw new Error(`compact-json file result should be 4, got ${file.result}`);
   if (typeof file.timing?.total_ns !== "number") throw new Error("compact-json per-file timing should be present");
-}
+});
 
-console.log("Loader: compact-json error path omits build, memory, stdout, stderr...");
-{
+await section("Loader: compact-json error path omits build, memory, stdout, stderr...", async () => {
   const { exitCode, json } = runLoaderJson("throw new Error('boom');\n", ["--output=compact-json"]);
   if (exitCode === 0) throw new Error("compact-json error path should set non-zero exit code");
   if ("build" in json) throw new Error("compact-json error should omit top-level build");
@@ -421,10 +444,9 @@ console.log("Loader: compact-json error path omits build, memory, stdout, stderr
   if ("file" in file) throw new Error("compact-json error per-file should not include duplicate \"file\" alias");
   if (file.ok !== false) throw new Error(`compact-json error per-file ok should be false, got ${file.ok}`);
   if (file.result !== null) throw new Error(`compact-json error per-file result should be null, got ${file.result}`);
-}
+});
 
-console.log("Loader: compact-json multi-file omits build, memory, stdout, stderr...");
-{
+await section("Loader: compact-json multi-file omits build, memory, stdout, stderr...", async () => {
   const tmp = makeTmp();
   try {
     const first = join(tmp, "first.js");
@@ -462,10 +484,9 @@ console.log("Loader: compact-json multi-file omits build, memory, stdout, stderr
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: parallel human-readable output preserves console output...");
-{
+await section("Loader: parallel human-readable output preserves console output...", async () => {
   const tmp = makeTmp();
   try {
     const first = join(tmp, "parallel-first.js");
@@ -484,12 +505,11 @@ console.log("Loader: parallel human-readable output preserves console output..."
   } finally {
     clean(tmp);
   }
-}
+});
 
 // -- --print --------------------------------------------------------------------
 
-console.log("Loader: silent (no result line) by default...");
-{
+await section("Loader: silent (no result line) by default...", async () => {
   const proc = Bun.spawnSync([LOADER], {
     stdin: new TextEncoder().encode("const r = 'this contains the word error'; r;\n"),
     stdout: "pipe",
@@ -503,10 +523,9 @@ console.log("Loader: silent (no result line) by default...");
     throw new Error(`Loader default should not print script value, got: ${out}`);
   if (!out.includes("Running script"))
     throw new Error(`Loader default should still print timing banner, got: ${out}`);
-}
+});
 
-console.log("Loader: --print emits bare value (no 'Result:' prefix)...");
-{
+await section("Loader: --print emits bare value (no 'Result:' prefix)...", async () => {
   const proc = Bun.spawnSync([LOADER, "--print"], {
     stdin: new TextEncoder().encode("const r = 'this contains the word error'; r;\n"),
     stdout: "pipe",
@@ -518,10 +537,9 @@ console.log("Loader: --print emits bare value (no 'Result:' prefix)...");
     throw new Error(`Loader --print must not prefix with "Result:", got: ${out}`);
   if (!containsLine(out, "this contains the word error"))
     throw new Error(`Loader --print should emit bare value on its own line, got: ${out}`);
-}
+});
 
-console.log("Loader: --print emits 'undefined' when result is undefined...");
-{
+await section("Loader: --print emits 'undefined' when result is undefined...", async () => {
   const proc = Bun.spawnSync([LOADER, "--print"], {
     stdin: new TextEncoder().encode("undefined;\n"),
     stdout: "pipe",
@@ -531,10 +549,9 @@ console.log("Loader: --print emits 'undefined' when result is undefined...");
   const out = proc.stdout.toString();
   if (!containsLine(out, "undefined"))
     throw new Error(`Loader --print should emit "undefined" (matches node -p), got: ${out}`);
-}
+});
 
-console.log("Loader: --print honored from goccia.json...");
-{
+await section("Loader: --print honored from goccia.json...", async () => {
   const tmp = makeTmp();
   try {
     writeFileSync(join(tmp, "goccia.json"), '{"print": true}\n');
@@ -551,14 +568,13 @@ console.log("Loader: --print honored from goccia.json...");
   } finally {
     clean(tmp);
   }
-}
+});
 
 // ============================================================================
 // GocciaScriptLoaderBare
 // ============================================================================
 
-console.log("Bare Loader: stdin default path...");
-{
+await section("Bare Loader: stdin default path...", async () => {
   const proc = Bun.spawnSync([BARE, "--print"], {
     stdin: new TextEncoder().encode("const x = 2 + 2; x;\n"),
     stdout: "pipe",
@@ -566,10 +582,9 @@ console.log("Bare Loader: stdin default path...");
   });
   if (proc.exitCode !== 0) throw new Error(`Bare stdin exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "4") throw new Error(`Bare stdin expected 4, got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: stdin dash path...");
-{
+await section("Bare Loader: stdin dash path...", async () => {
   const proc = Bun.spawnSync([BARE, "--print", "-"], {
     stdin: new TextEncoder().encode("21 * 2;\n"),
     stdout: "pipe",
@@ -577,10 +592,9 @@ console.log("Bare Loader: stdin dash path...");
   });
   if (proc.exitCode !== 0) throw new Error(`Bare stdin dash exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "42") throw new Error(`Bare stdin dash expected 42, got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: quoted source names survive argv parsing...");
-{
+await section("Bare Loader: quoted source names survive argv parsing...", async () => {
   const sourceName = 'quoted "source".js';
   const proc = Bun.spawnSync([BARE, `--source-name=${sourceName}`], {
     stdin: new TextEncoder().encode("const = ;\n"),
@@ -590,10 +604,9 @@ console.log("Bare Loader: quoted source names survive argv parsing...");
   const output = proc.stdout.toString() + proc.stderr.toString();
   if (proc.exitCode === 0 || !output.includes(sourceName))
     throw new Error(`Bare quoted source name was not preserved: ${output}`);
-}
+});
 
-console.log("Bare Loader: input file...");
-{
+await section("Bare Loader: input file...", async () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "bare.js");
@@ -607,10 +620,9 @@ console.log("Bare Loader: input file...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Bare Loader: print global...");
-{
+await section("Bare Loader: print global...", async () => {
   const proc = Bun.spawnSync([BARE], {
     stdin: new TextEncoder().encode("print('hello', 7); undefined;\n"),
     stdout: "pipe",
@@ -618,10 +630,9 @@ console.log("Bare Loader: print global...");
   });
   if (proc.exitCode !== 0) throw new Error(`Bare print exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "hello 7") throw new Error(`Bare print expected hello 7, got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: --stack-size bounds deep non-tail recursion with RangeError...");
-{
+await section("Bare Loader: --stack-size bounds deep non-tail recursion with RangeError...", async () => {
   const src =
     "const f = (n) => (n === 0 ? 0 : 1 + f(n - 1)); try { f(100000); print('NO THROW'); } catch (e) { print(e.constructor.name); }\n";
   const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--stack-size=1000"], {
@@ -632,10 +643,9 @@ console.log("Bare Loader: --stack-size bounds deep non-tail recursion with Range
   if (proc.exitCode !== 0) throw new Error(`Bare --stack-size exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "RangeError")
     throw new Error(`Bare --stack-size expected RangeError, got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: proper tail calls reuse the frame (deep strict tail recursion completes)...");
-{
+await section("Bare Loader: proper tail calls reuse the frame (deep strict tail recursion completes)...", async () => {
   // Without proper tail calls this 100k-deep recursion would exceed --stack-size;
   // a tail call in strict-mode code reuses the current frame, so it runs in O(1)
   // stack and completes well under the 1000-frame limit.
@@ -649,10 +659,9 @@ console.log("Bare Loader: proper tail calls reuse the frame (deep strict tail re
   if (proc.exitCode !== 0) throw new Error(`Bare tail-call exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "done")
     throw new Error(`Bare tail-call expected 'done', got: ${proc.stdout.toString()} / ${proc.stderr.toString()}`);
-}
+});
 
-console.log("Bare Loader: tail-call optimization stays strict-mode only...");
-{
+await section("Bare Loader: tail-call optimization stays strict-mode only...", async () => {
   // The same tail recursion in sloppy-mode code is NOT a proper tail call, so it
   // is bounded by --stack-size and throws RangeError.
   const src =
@@ -665,10 +674,9 @@ console.log("Bare Loader: tail-call optimization stays strict-mode only...");
   if (proc.exitCode !== 0) throw new Error(`Bare sloppy tail-call exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "RangeError")
     throw new Error(`Bare sloppy tail-call expected RangeError, got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: native re-entry recursion throws RangeError instead of crashing...");
-{
+await section("Bare Loader: native re-entry recursion throws RangeError instead of crashing...", async () => {
   // Recursion through a native callback (Array.prototype.forEach) and through a
   // generator resume re-enters the VM on a native stack frame. Both must be
   // bounded (RangeError), not overflow the native stack (SIGSEGV / non-zero
@@ -687,10 +695,9 @@ console.log("Bare Loader: native re-entry recursion throws RangeError instead of
     if (proc.stdout.toString().trim() !== "RangeError")
       throw new Error(`Bare native re-entry expected RangeError, got: ${proc.stdout.toString()}`);
   }
-}
+});
 
-console.log("Bare Loader: no runtime globals...");
-{
+await section("Bare Loader: no runtime globals...", async () => {
   const source = [
     "typeof print + ':' +",
     "typeof globalThis.print + ':' +",
@@ -709,10 +716,9 @@ console.log("Bare Loader: no runtime globals...");
   const output = proc.stdout.toString().trim();
   if (output !== "function:function:undefined:undefined:object:true")
     throw new Error(`Bare runtime-global check mismatch, got: ${output}`);
-}
+});
 
-console.log("Bare Loader: module source type...");
-{
+await section("Bare Loader: module source type...", async () => {
   const proc = Bun.spawnSync([BARE, "--print", "--source-type=module"], {
     stdin: new TextEncoder().encode("this === undefined;\n"),
     stdout: "pipe",
@@ -720,10 +726,9 @@ console.log("Bare Loader: module source type...");
   });
   if (proc.exitCode !== 0) throw new Error(`Bare module source exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "true") throw new Error(`Bare module source expected true, got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: .mjs module inference...");
-{
+await section("Bare Loader: .mjs module inference...", async () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "entry.mjs");
@@ -747,11 +752,10 @@ console.log("Bare Loader: .mjs module inference...");
   } finally {
     clean(tmp);
   }
-}
+});
 
 // --mode option: bare loader defaults to interpreter mode; both values must execute.
-console.log("Bare Loader: --mode=interpreted...");
-{
+await section("Bare Loader: --mode=interpreted...", async () => {
   const proc = Bun.spawnSync([BARE, "--print", "--mode=interpreted"], {
     stdin: new TextEncoder().encode("21 * 2;\n"),
     stdout: "pipe",
@@ -759,10 +763,9 @@ console.log("Bare Loader: --mode=interpreted...");
   });
   if (proc.exitCode !== 0) throw new Error(`Bare --mode=interpreted exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "42") throw new Error(`Bare --mode=interpreted expected 42, got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: interpreted for-in scope survives Goccia.gc...");
-{
+await section("Bare Loader: interpreted for-in scope survives Goccia.gc...", async () => {
   const source = [
     "function f() {",
     "  let obj = { p: 1, r: 3, s: 4 };",
@@ -792,10 +795,9 @@ console.log("Bare Loader: interpreted for-in scope survives Goccia.gc...");
     throw new Error(`Bare interpreted for-in Goccia.gc exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "prs")
     throw new Error(`Bare interpreted for-in Goccia.gc expected prs, got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: --mode=bytecode...");
-{
+await section("Bare Loader: --mode=bytecode...", async () => {
   const proc = Bun.spawnSync([BARE, "--print", "--mode=bytecode"], {
     stdin: new TextEncoder().encode("21 * 2;\n"),
     stdout: "pipe",
@@ -803,10 +805,9 @@ console.log("Bare Loader: --mode=bytecode...");
   });
   if (proc.exitCode !== 0) throw new Error(`Bare --mode=bytecode exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "42") throw new Error(`Bare --mode=bytecode expected 42, got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: bytecode top-level declarations back globalThis...");
-{
+await section("Bare Loader: bytecode top-level declarations back globalThis...", async () => {
   const source = [
     "var x = 1;",
     "function f() {}",
@@ -832,10 +833,9 @@ console.log("Bare Loader: bytecode top-level declarations back globalThis...");
     throw new Error(`Bare bytecode global-backed top-level exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "true:true:function")
     throw new Error(`Bare bytecode global-backed top-level mismatch, got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: test262 host marker is hidden by default...");
-{
+await section("Bare Loader: test262 host marker is hidden by default...", async () => {
   const proc = Bun.spawnSync([BARE], {
     stdin: new TextEncoder().encode("print(typeof Goccia.test262Host); print(typeof Goccia.test262);\n"),
     stdout: "pipe",
@@ -845,10 +845,9 @@ console.log("Bare Loader: test262 host marker is hidden by default...");
     throw new Error(`Bare default test262 marker probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== "undefined\nundefined")
     throw new Error(`Bare default should hide test262 host hooks, got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: --test262-host exposes Goccia test262 hooks...");
-{
+await section("Bare Loader: --test262-host exposes Goccia test262 hooks...", async () => {
   const proc = Bun.spawnSync([BARE, "--test262-host", "--compat-loose-equality"], {
     stdin: new TextEncoder().encode([
       "print(Goccia.test262Host);",
@@ -888,10 +887,9 @@ console.log("Bare Loader: --test262-host exposes Goccia test262 hooks...");
     throw new Error(`Bare --test262-host hook probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare --test262-host should expose realm hooks, got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("test262 runner: engine timeout is classified as TIMEOUT...");
-{
+await section("test262 runner: engine timeout is classified as TIMEOUT...", async () => {
   const tmp = makeTmp();
   try {
     const suite = join(tmp, "suite");
@@ -979,10 +977,9 @@ console.log("test262 runner: engine timeout is classified as TIMEOUT...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Bare Loader: --test262-host child realms expose host records...");
-{
+await section("Bare Loader: --test262-host child realms expose host records...", async () => {
   const proc = Bun.spawnSync([BARE, "--test262-host"], {
     stdin: new TextEncoder().encode([
       "const child = Goccia.test262.createRealm();",
@@ -1020,10 +1017,9 @@ console.log("Bare Loader: --test262-host child realms expose host records...");
     throw new Error(`Bare --test262-host child realm probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare --test262-host child realm hooks got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: --test262-host child realm globals expose host hooks...");
-{
+await section("Bare Loader: --test262-host child realm globals expose host hooks...", async () => {
   const proc = Bun.spawnSync([BARE, "--test262-host"], {
     stdin: new TextEncoder().encode([
       "const child = Goccia.test262.createRealm();",
@@ -1048,7 +1044,7 @@ console.log("Bare Loader: --test262-host child realm globals expose host hooks..
     throw new Error(`Bare --test262-host child global hook probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare --test262-host child global hooks got: ${proc.stdout.toString()}`);
-}
+});
 
 console.log("Bare Loader: cross-realm weak constructors use the newTarget realm prototype...");
 for (const { label, args } of [
@@ -1075,8 +1071,7 @@ for (const { label, args } of [
     throw new Error(`Bare ${label} cross-realm weak constructor prototype mismatch: ${proc.stdout.toString()}`);
 }
 
-console.log("Bare Loader: bytecode --test262-host eval is direct eval...");
-{
+await section("Bare Loader: bytecode --test262-host eval is direct eval...", async () => {
   const proc = Bun.spawnSync([BARE, "--test262-host", "--mode=bytecode"], {
     stdin: new TextEncoder().encode([
       "{",
@@ -1106,7 +1101,7 @@ console.log("Bare Loader: bytecode --test262-host eval is direct eval...");
     throw new Error(`Bare bytecode direct eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare bytecode direct eval got: ${proc.stdout.toString()}`);
-}
+});
 
 console.log("Bare Loader: rejected eval source preserves primitive singletons...");
 for (const { label, args } of [
@@ -1148,8 +1143,7 @@ for (const { label, args } of [
     throw new Error(`Bare ${label} rejected eval source probe got: ${proc.stdout.toString()}`);
 }
 
-console.log("Bare Loader: bytecode --test262-host eval keeps sloppy var declarations in the caller environment...");
-{
+await section("Bare Loader: bytecode --test262-host eval keeps sloppy var declarations in the caller environment...", async () => {
   const proc = Bun.spawnSync([
     BARE,
     "--test262-host",
@@ -1198,10 +1192,9 @@ console.log("Bare Loader: bytecode --test262-host eval keeps sloppy var declarat
     throw new Error(`Bare bytecode sloppy eval var probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare bytecode sloppy eval var probe got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: bytecode --test262-host eval exposes later sloppy vars to existing closures...");
-{
+await section("Bare Loader: bytecode --test262-host eval exposes later sloppy vars to existing closures...", async () => {
   const proc = Bun.spawnSync([
     BARE,
     "--test262-host",
@@ -1234,10 +1227,9 @@ console.log("Bare Loader: bytecode --test262-host eval exposes later sloppy vars
     throw new Error(`Bare bytecode sloppy eval pre-closure probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare bytecode sloppy eval pre-closure probe got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: bytecode --test262-host eval var declarations shadow outer upvalues...");
-{
+await section("Bare Loader: bytecode --test262-host eval var declarations shadow outer upvalues...", async () => {
   const proc = Bun.spawnSync([
     BARE,
     "--test262-host",
@@ -1275,10 +1267,9 @@ console.log("Bare Loader: bytecode --test262-host eval var declarations shadow o
     throw new Error(`Bare bytecode sloppy eval upvalue shadow probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare bytecode sloppy eval upvalue shadow probe got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: bytecode --test262-host eval keeps nested variable environments isolated...");
-{
+await section("Bare Loader: bytecode --test262-host eval keeps nested variable environments isolated...", async () => {
   const proc = Bun.spawnSync([
     BARE,
     "--test262-host",
@@ -1307,10 +1298,9 @@ console.log("Bare Loader: bytecode --test262-host eval keeps nested variable env
     throw new Error(`Bare bytecode nested eval environment probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare bytecode nested eval environment probe got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: bytecode --test262-host eval preserves lexical upvalue precedence...");
-{
+await section("Bare Loader: bytecode --test262-host eval preserves lexical upvalue precedence...", async () => {
   const proc = Bun.spawnSync([
     BARE,
     "--test262-host",
@@ -1356,10 +1346,9 @@ console.log("Bare Loader: bytecode --test262-host eval preserves lexical upvalue
     throw new Error(`Bare bytecode eval lexical precedence probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare bytecode eval lexical precedence probe got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: bytecode assignment retains its resolved eval environment reference...");
-{
+await section("Bare Loader: bytecode assignment retains its resolved eval environment reference...", async () => {
   const proc = Bun.spawnSync([
     BARE,
     "--test262-host",
@@ -1407,10 +1396,9 @@ console.log("Bare Loader: bytecode assignment retains its resolved eval environm
     throw new Error(`Bare bytecode eval assignment reference probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare bytecode eval assignment reference probe got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: --test262-host generator parameter eval uses the parameter var environment...");
-{
+await section("Bare Loader: --test262-host generator parameter eval uses the parameter var environment...", async () => {
   const source = [
     "var x = 'outside';",
     "var declaredBefore, declaredAfter;",
@@ -1461,10 +1449,9 @@ console.log("Bare Loader: --test262-host generator parameter eval uses the param
     if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
       throw new Error(`Bare ${mode.label} generator parameter eval probe got: ${proc.stdout.toString()}`);
   }
-}
+});
 
-console.log("Bare Loader: --test262-host Annex B eval preserves with-object properties...");
-{
+await section("Bare Loader: --test262-host Annex B eval preserves with-object properties...", async () => {
   const source = [
     "function checkAnnexBEval() {",
     "  function g() { return 'outer-g'; }",
@@ -1497,10 +1484,9 @@ console.log("Bare Loader: --test262-host Annex B eval preserves with-object prop
     if (normalizeLineEndings(proc.stdout.toString()).trim() !== "eval-g,with-g")
       throw new Error(`Bare ${mode.label} Annex B eval probe got: ${proc.stdout.toString()}`);
   }
-}
+});
 
-console.log("Bare Loader: --test262-host eval reports strict delete identifier as SyntaxError...");
-{
+await section("Bare Loader: --test262-host eval reports strict delete identifier as SyntaxError...", async () => {
   const source = [
     "try {",
     "  eval('\"use strict\"; delete x');",
@@ -1524,10 +1510,9 @@ console.log("Bare Loader: --test262-host eval reports strict delete identifier a
     if (normalizeLineEndings(proc.stdout.toString()).trim() !== "SyntaxError")
       throw new Error(`Bare ${mode.label} strict delete eval probe got: ${proc.stdout.toString()}`);
   }
-}
+});
 
-console.log("Bare Loader: --test262-host eval validates destructuring pattern early errors...");
-{
+await section("Bare Loader: --test262-host eval validates destructuring pattern early errors...", async () => {
   const source = [
     "const cases = [",
     "  'let { [super.x]: y } = {};',",
@@ -1569,10 +1554,9 @@ console.log("Bare Loader: --test262-host eval validates destructuring pattern ea
     if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
       throw new Error(`Bare ${mode.label} eval destructuring early errors got: ${proc.stdout.toString()}`);
   }
-}
+});
 
-console.log("Bare Loader: --test262-host eval rejects arguments in class field initializers...");
-{
+await section("Bare Loader: --test262-host eval rejects arguments in class field initializers...", async () => {
   const source = [
     "let instanceExecuted = false;",
     "try {",
@@ -1650,10 +1634,9 @@ console.log("Bare Loader: --test262-host eval rejects arguments in class field i
     if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
       throw new Error(`Bare ${mode.label} eval class-field arguments got: ${proc.stdout.toString()}`);
   }
-}
+});
 
-console.log("Bare Loader: --test262-host eval rejects arguments in generator method defaults...");
-{
+await section("Bare Loader: --test262-host eval rejects arguments in generator method defaults...", async () => {
   const source = [
     "const cases = [",
     "  { label: 'generator', run: () => ({ *method(value = eval('var value = 42')) { yield value; } }).method() },",
@@ -1687,10 +1670,9 @@ console.log("Bare Loader: --test262-host eval rejects arguments in generator met
     if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
       throw new Error(`Bare ${mode.label} eval generator-method arguments got: ${proc.stdout.toString()}`);
   }
-}
+});
 
-console.log("Bare Loader: --test262-host eval super permissions stop at ordinary function boundary...");
-{
+await section("Bare Loader: --test262-host eval super permissions stop at ordinary function boundary...", async () => {
   const source = [
     "class Base { method() { return 11; } }",
     "class Derived extends Base {",
@@ -1722,10 +1704,9 @@ console.log("Bare Loader: --test262-host eval super permissions stop at ordinary
     if (proc.stdout.toString().trim() !== "SyntaxError")
       throw new Error(`Bare ${mode.label} eval ordinary-boundary got: ${proc.stdout.toString()}`);
   }
-}
+});
 
-console.log("Bare Loader: bytecode --test262-host eval inherits arrow lexical super and new.target...");
-{
+await section("Bare Loader: bytecode --test262-host eval inherits arrow lexical super and new.target...", async () => {
   const proc = Bun.spawnSync([BARE, "--test262-host", "--mode=bytecode"], {
     stdin: new TextEncoder().encode([
       "class Base {",
@@ -1755,10 +1736,9 @@ console.log("Bare Loader: bytecode --test262-host eval inherits arrow lexical su
     throw new Error(`Bare bytecode eval arrow lexical probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare bytecode eval arrow lexical got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: bytecode direct eval creates top-level sloppy var...");
-{
+await section("Bare Loader: bytecode direct eval creates top-level sloppy var...", async () => {
   const proc = Bun.spawnSync([
     BARE,
     "--test262-host",
@@ -1781,10 +1761,9 @@ console.log("Bare Loader: bytecode direct eval creates top-level sloppy var...")
     throw new Error(`Bare bytecode sloppy direct eval var probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== "true\n33\n33\ntrue")
     throw new Error(`Bare bytecode sloppy direct eval var got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: bytecode module direct eval keeps module this binding...");
-{
+await section("Bare Loader: bytecode module direct eval keeps module this binding...", async () => {
   const proc = Bun.spawnSync([
     BARE,
     "--test262-host",
@@ -1804,10 +1783,9 @@ console.log("Bare Loader: bytecode module direct eval keeps module this binding.
     throw new Error(`Bare bytecode module direct eval this probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== "true\ntrue")
     throw new Error(`Bare bytecode module direct eval this got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: --mode default is interpreted...");
-{
+await section("Bare Loader: --mode default is interpreted...", async () => {
   const proc = Bun.spawnSync([BARE, "--help"], {
     stdout: "pipe",
     stderr: "pipe",
@@ -1820,10 +1798,9 @@ console.log("Bare Loader: --mode default is interpreted...");
     throw new Error(`Bare --help should document interpreted as default, got: ${help}`);
   if (!help.includes("--test262-host"))
     throw new Error(`Bare --help should document --test262-host, got: ${help}`);
-}
+});
 
-console.log("Bare Loader: --mode invalid value rejected...");
-{
+await section("Bare Loader: --mode invalid value rejected...", async () => {
   const proc = Bun.spawnSync([BARE, "--mode=foo"], {
     stdin: new TextEncoder().encode("1;\n"),
     stdout: "pipe",
@@ -1833,12 +1810,11 @@ console.log("Bare Loader: --mode invalid value rejected...");
   const stderr = proc.stderr.toString();
   if (!stderr.includes("Invalid --mode value: foo"))
     throw new Error(`Bare --mode=foo should report invalid value, got stderr: ${stderr}`);
-}
+});
 
 // -- --print --------------------------------------------------------------------
 
-console.log("Bare Loader: silent by default (no script result printed)...");
-{
+await section("Bare Loader: silent by default (no script result printed)...", async () => {
   const proc = Bun.spawnSync([BARE], {
     stdin: new TextEncoder().encode("const r = 'this contains the word error'; r;\n"),
     stdout: "pipe",
@@ -1847,10 +1823,9 @@ console.log("Bare Loader: silent by default (no script result printed)...");
   if (proc.exitCode !== 0) throw new Error(`Bare default exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString() !== "")
     throw new Error(`Bare default should produce empty stdout (matches node script.js), got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: --print emits bare value...");
-{
+await section("Bare Loader: --print emits bare value...", async () => {
   const proc = Bun.spawnSync([BARE, "--print"], {
     stdin: new TextEncoder().encode("const r = 'this contains the word error'; r;\n"),
     stdout: "pipe",
@@ -1859,10 +1834,9 @@ console.log("Bare Loader: --print emits bare value...");
   if (proc.exitCode !== 0) throw new Error(`Bare --print exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "this contains the word error")
     throw new Error(`Bare --print should emit bare value, got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: --print emits 'undefined' (matches node -p)...");
-{
+await section("Bare Loader: --print emits 'undefined' (matches node -p)...", async () => {
   const proc = Bun.spawnSync([BARE, "--print"], {
     stdin: new TextEncoder().encode("undefined;\n"),
     stdout: "pipe",
@@ -1871,10 +1845,9 @@ console.log("Bare Loader: --print emits 'undefined' (matches node -p)...");
   if (proc.exitCode !== 0) throw new Error(`Bare --print undefined exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "undefined")
     throw new Error(`Bare --print undefined should emit "undefined", got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: print() output independent of --print flag...");
-{
+await section("Bare Loader: print() output independent of --print flag...", async () => {
   const proc = Bun.spawnSync([BARE], {
     stdin: new TextEncoder().encode("print('explicit'); 'last value';\n"),
     stdout: "pipe",
@@ -1883,10 +1856,9 @@ console.log("Bare Loader: print() output independent of --print flag...");
   if (proc.exitCode !== 0) throw new Error(`Bare default+print() exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "explicit")
     throw new Error(`Bare default should emit print() output but no result, got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: --help documents --print...");
-{
+await section("Bare Loader: --help documents --print...", async () => {
   const proc = Bun.spawnSync([BARE, "--help"], {
     stdout: "pipe",
     stderr: "pipe",
@@ -1894,15 +1866,14 @@ console.log("Bare Loader: --help documents --print...");
   if (proc.exitCode !== 0) throw new Error(`Bare --help exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (!proc.stdout.toString().includes("--print"))
     throw new Error(`Bare --help should document --print, got: ${proc.stdout.toString()}`);
-}
+});
 
 // -- Promise.then microtask drain (Bare) ----------------------------------------
 // Top-level .then callbacks must fire via WaitForRuntimeIdle post-execution drain.
 // Regression: ExecuteProgram freed the bytecode module before the drain, leaving
 // closures with dangling template pointers (Range check error on FCode access).
 
-console.log("Bare Loader: Promise.then drain (interpreted)...");
-{
+await section("Bare Loader: Promise.then drain (interpreted)...", async () => {
   const proc = Bun.spawnSync([BARE, "--mode=interpreted"], {
     stdin: new TextEncoder().encode('Promise.resolve(42).then(v => print("then-" + v));\n'),
     stdout: "pipe",
@@ -1911,10 +1882,9 @@ console.log("Bare Loader: Promise.then drain (interpreted)...");
   if (proc.exitCode !== 0) throw new Error(`Bare Promise drain interpreted exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "then-42")
     throw new Error(`Bare Promise drain interpreted expected then-42, got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Bare Loader: Promise.then drain (bytecode)...");
-{
+await section("Bare Loader: Promise.then drain (bytecode)...", async () => {
   const proc = Bun.spawnSync([BARE, "--mode=bytecode"], {
     stdin: new TextEncoder().encode('Promise.resolve(42).then(v => print("then-" + v));\n'),
     stdout: "pipe",
@@ -1923,12 +1893,11 @@ console.log("Bare Loader: Promise.then drain (bytecode)...");
   if (proc.exitCode !== 0) throw new Error(`Bare Promise drain bytecode exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "then-42")
     throw new Error(`Bare Promise drain bytecode expected then-42, got: ${proc.stdout.toString()}`);
-}
+});
 
 // -- Promise.then microtask drain (Loader) --------------------------------------
 
-console.log("Loader: Promise.then drain (interpreted)...");
-{
+await section("Loader: Promise.then drain (interpreted)...", async () => {
   const proc = Bun.spawnSync([LOADER, "--mode=interpreted"], {
     stdin: new TextEncoder().encode('Promise.resolve(42).then(v => console.log("then-" + v));\n'),
     stdout: "pipe",
@@ -1937,10 +1906,9 @@ console.log("Loader: Promise.then drain (interpreted)...");
   if (proc.exitCode !== 0) throw new Error(`Loader Promise drain interpreted exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (!proc.stdout.toString().includes("then-42"))
     throw new Error(`Loader Promise drain interpreted expected then-42, got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Loader: Promise.then drain (bytecode)...");
-{
+await section("Loader: Promise.then drain (bytecode)...", async () => {
   const proc = Bun.spawnSync([LOADER, "--mode=bytecode"], {
     stdin: new TextEncoder().encode('Promise.resolve(42).then(v => console.log("then-" + v));\n'),
     stdout: "pipe",
@@ -1949,10 +1917,9 @@ console.log("Loader: Promise.then drain (bytecode)...");
   if (proc.exitCode !== 0) throw new Error(`Loader Promise drain bytecode exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (!proc.stdout.toString().includes("then-42"))
     throw new Error(`Loader Promise drain bytecode expected then-42, got: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Loader: --audit-log records capability decisions with source locations...");
-{
+await section("Loader: --audit-log records capability decisions with source locations...", async () => {
   const tmp = makeTmp();
   try {
     for (const mode of ["interpreted", "bytecode"] as const) {
@@ -2028,10 +1995,9 @@ console.log("Loader: --audit-log records capability decisions with source locati
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: --audit-log fails closed when the output cannot be opened...");
-{
+await section("Loader: --audit-log fails closed when the output cannot be opened...", async () => {
   const tmp = makeTmp();
   try {
     const proc = Bun.spawnSync([LOADER, `--audit-log=${tmp}`], {
@@ -2044,10 +2010,9 @@ console.log("Loader: --audit-log fails closed when the output cannot be opened..
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: --log and --audit-log reject the same output path...");
-{
+await section("Loader: --log and --audit-log reject the same output path...", async () => {
   const tmp = makeTmp();
   try {
     const shared = join(tmp, "combined.log");
@@ -2070,12 +2035,11 @@ console.log("Loader: --log and --audit-log reject the same output path...");
   } finally {
     clean(tmp);
   }
-}
+});
 
 // -- --global / --globals -------------------------------------------------------
 
-console.log("Loader: --host-environment module controls time, zone, and random streams...");
-{
+await section("Loader: --host-environment module controls time, zone, and random streams...", async () => {
   const tmp = makeTmp();
   try {
     const providerPath = join(tmp, "host-environment.js");
@@ -2136,16 +2100,14 @@ console.log("Loader: --host-environment module controls time, zone, and random s
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: --global option...");
-{
+await section("Loader: --global option...", async () => {
   const { json } = runLoaderJson("x + y;\n", ["--global", "x=10", "--global", "y=20"]);
   if (json.files?.[0]?.result !== 30) throw new Error(`--global x+y should be 30, got ${json.files?.[0]?.result}`);
-}
+});
 
-console.log("Loader: ShadowRealm.importValue inherits the host module aliases...");
-{
+await section("Loader: ShadowRealm.importValue inherits the host module aliases...", async () => {
   const tmp = makeTmp();
   try {
     writeFileSync(join(tmp, "real.js"), "export const v = 99;\n");
@@ -2173,10 +2135,9 @@ console.log("Loader: ShadowRealm.importValue inherits the host module aliases...
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: relative aliases use the invocation or config directory...");
-{
+await section("Loader: relative aliases use the invocation or config directory...", async () => {
   const tmp = makeTmp();
   try {
     const loader = resolve(LOADER);
@@ -2247,10 +2208,9 @@ console.log("Loader: relative aliases use the invocation or config directory..."
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: --globals file...");
-{
+await section("Loader: --globals file...", async () => {
   const tmp = makeTmp();
   try {
     const globalsPath = join(tmp, "globals.json");
@@ -2260,10 +2220,9 @@ console.log("Loader: --globals file...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: --globals JSON5 file...");
-{
+await section("Loader: --globals JSON5 file...", async () => {
   const tmp = makeTmp();
   try {
     const globalsPath = join(tmp, "globals.json5");
@@ -2283,10 +2242,9 @@ console.log("Loader: --globals JSON5 file...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: --globals TOML file...");
-{
+await section("Loader: --globals TOML file...", async () => {
   const tmp = makeTmp();
   try {
     const globalsPath = join(tmp, "globals.toml");
@@ -2305,10 +2263,9 @@ console.log("Loader: --globals TOML file...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: --global overrides --globals file...");
-{
+await section("Loader: --global overrides --globals file...", async () => {
   const tmp = makeTmp();
   try {
     const globalsPath = join(tmp, "globals.json");
@@ -2318,10 +2275,9 @@ console.log("Loader: --global overrides --globals file...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: --globals from JS module...");
-{
+await section("Loader: --globals from JS module...", async () => {
   const tmp = makeTmp();
   try {
     const moduleJsPath = join(tmp, "module.js");
@@ -2331,28 +2287,25 @@ console.log("Loader: --globals from JS module...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: --global cannot override built-in...");
-{
+await section("Loader: --global cannot override built-in...", async () => {
   const res = await $`echo '1;' | ${LOADER} --global console=1 2>&1`.nothrow();
   if (res.exitCode === 0) throw new Error("Overriding built-in should fail");
   if (!res.text().includes("Cannot override built-in global")) throw new Error("Should mention 'Cannot override built-in global'");
-}
+});
 
 // -- Coverage -------------------------------------------------------------------
 
-console.log("Loader: coverage summary...");
-{
+await section("Loader: coverage summary...", async () => {
   const out = await $`echo 'const x = 1 + 2; x;' | ${LOADER} --coverage 2>&1`.text();
   if (!out.includes("Coverage Summary:")) throw new Error(`Expected "Coverage Summary:", got: ${out}`);
-}
+});
 
-console.log("Loader: coverage --output=json not corrupted...");
-{
+await section("Loader: coverage --output=json not corrupted...", async () => {
   const { json } = runLoaderJson("const x = 1 + 2;\nx;\n", ["--coverage"]);
   if (json.ok === undefined) throw new Error(`Coverage --output=json should produce valid JSON with ok field`);
-}
+});
 
 {
   const tmp = makeTmp();
@@ -2980,8 +2933,7 @@ console.log("Loader: coverage --output=json not corrupted...");
 // GocciaTestRunner
 // ============================================================================
 
-console.log("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + bytecode)...");
-{
+await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + bytecode)...", async () => {
   const tmp = makeTmp();
   const localEnv = { ...process.env };
   // Keep this list aligned with GocciaTestRunner.IsContinuousIntegration.
@@ -3502,10 +3454,9 @@ console.log("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + byt
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("TestRunner: an expired deadline inside a toThrow callable is not a thrown error...");
-{
+await section("TestRunner: an expired deadline inside a toThrow callable is not a thrown error...", async () => {
   // A per-test deadline is not something the callable threw. If toThrow's
   // generic exception arm absorbs TGocciaTimeoutError the assertion reports a
   // pass and the deadline never unwinds to ExecuteSuite, so the run finishes
@@ -3558,10 +3509,9 @@ console.log("TestRunner: an expired deadline inside a toThrow callable is not a 
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("TestRunner: JSON multi-file structure...");
-{
+await section("TestRunner: JSON multi-file structure...", async () => {
   const tmp = makeTmp();
   try {
     const first = join(tmp, "test-a.js");
@@ -3617,10 +3567,9 @@ console.log("TestRunner: JSON multi-file structure...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("TestRunner: --output=json emits structured JSON envelope to stdout...");
-{
+await section("TestRunner: --output=json emits structured JSON envelope to stdout...", async () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "test-stdout-json.js");
@@ -3653,10 +3602,9 @@ console.log("TestRunner: --output=json emits structured JSON envelope to stdout.
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("TestRunner: --output=json keeps stdout clean when test throws...");
-{
+await section("TestRunner: --output=json keeps stdout clean when test throws...", async () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "test-throws.js");
@@ -3686,7 +3634,7 @@ console.log("TestRunner: --output=json keeps stdout clean when test throws...");
   } finally {
     clean(tmp);
   }
-}
+});
 
 // A file-level throw emits no per-test reporter output, so the case above cannot
 // catch the reporter markers the testing library writes straight to stdout for
@@ -4166,8 +4114,7 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
   }
 }
 
-console.log("TestRunner: --output=json keeps stdout clean when script logs to console...");
-{
+await section("TestRunner: --output=json keeps stdout clean when script logs to console...", async () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "test-with-log.js");
@@ -4194,10 +4141,9 @@ console.log("TestRunner: --output=json keeps stdout clean when script logs to co
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("TestRunner: --output=json keeps stdout clean when --coverage is enabled...");
-{
+await section("TestRunner: --output=json keeps stdout clean when --coverage is enabled...", async () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "test-coverage.js");
@@ -4216,10 +4162,9 @@ console.log("TestRunner: --output=json keeps stdout clean when --coverage is ena
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("TestRunner: --output=compact-json omits build, memory, stdout, stderr...");
-{
+await section("TestRunner: --output=compact-json omits build, memory, stdout, stderr...", async () => {
   const tmp = makeTmp();
   try {
     const first = join(tmp, "test-compact-a.js");
@@ -4281,7 +4226,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
   } finally {
     clean(tmp);
   }
-}
+});
 
 // -- Source maps (Loader) -------------------------------------------------------
 
@@ -5084,45 +5029,38 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
 // GocciaREPL
 // ============================================================================
 
-console.log("REPL: banner (interpreted)...");
-{
+await section("REPL: banner (interpreted)...", async () => {
   const out = await $`echo '' | ${REPL} 2>&1`.text();
   if (!out.includes("Goccia REPL")) throw new Error(`Banner should contain "Goccia REPL", got: ${out.slice(0, 200)}`);
   if (!out.includes("(interpreted)")) throw new Error(`Banner should contain "(interpreted)", got: ${out.slice(0, 200)}`);
-}
+});
 
-console.log("REPL: banner (bytecode)...");
-{
+await section("REPL: banner (bytecode)...", async () => {
   const out = await $`echo '' | ${REPL} --mode=bytecode 2>&1`.text();
   if (!out.includes("(bytecode)")) throw new Error(`Bytecode banner should contain "(bytecode)", got: ${out.slice(0, 200)}`);
-}
+});
 
-console.log("REPL: expression evaluation...");
-{
+await section("REPL: expression evaluation...", async () => {
   const out = await $`echo '2 + 2;' | ${REPL} 2>&1`.text();
   if (!out.includes("4")) throw new Error(`Expression 2+2 should produce 4, got: ${out}`);
-}
+});
 
-console.log("REPL: ASI mode...");
-{
+await section("REPL: ASI mode...", async () => {
   const out = await $`printf 'const x = 5\nx\n' | ${REPL} --compat-asi 2>&1`.text();
   if (!out.includes("5")) throw new Error(`ASI mode should produce 5, got: ${out}`);
-}
+});
 
-console.log("REPL: error recovery...");
-{
+await section("REPL: error recovery...", async () => {
   const out = await $`printf 'const x = ;\n2 + 2;\n' | ${REPL} 2>&1`.text();
   if (!out.includes("4")) throw new Error(`After error, second expression should produce 4, got: ${out}`);
-}
+});
 
-console.log("REPL: bytecode evaluation...");
-{
+await section("REPL: bytecode evaluation...", async () => {
   const out = await $`echo '2 + 2;' | ${REPL} --mode=bytecode 2>&1`.text();
   if (!out.includes("4")) throw new Error(`Bytecode 2+2 should produce 4, got: ${out}`);
-}
+});
 
-console.log("REPL: repeated tagged template execution (interpreted + bytecode)...");
-{
+await section("REPL: repeated tagged template execution (interpreted + bytecode)...", async () => {
   const src = [
     "globalThis.tag = (strings) => { globalThis.firstTemplate = strings; return strings[0]; }; tag`first`;",
     'globalThis.tag = (strings) => globalThis.firstTemplate === strings ? "stale" : strings[0]; tag`second`;',
@@ -5144,14 +5082,13 @@ console.log("REPL: repeated tagged template execution (interpreted + bytecode)..
         out.includes("'stale'"))
       throw new Error(`REPL ${label} should keep repeated parse template sites distinct, got: ${out}`);
   }
-}
+});
 
 // ============================================================================
 // GocciaSandboxRunner
 // ============================================================================
 
-console.log("SandboxRunner: fs callback APIs and promises defer filesystem work...");
-{
+await section("SandboxRunner: fs callback APIs and promises defer filesystem work...", async () => {
   const tmp = makeTmp();
   try {
     const seed = join(tmp, "seed.json");
@@ -5204,10 +5141,9 @@ console.log("SandboxRunner: fs callback APIs and promises defer filesystem work.
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: fs callback overloads use Node-shaped results...");
-{
+await section("SandboxRunner: fs callback overloads use Node-shaped results...", async () => {
   const tmp = makeTmp();
   try {
     const seed = join(tmp, "seed.json");
@@ -5324,10 +5260,9 @@ console.log("SandboxRunner: fs callback overloads use Node-shaped results...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: deterministic nested engines use stable distinct streams...");
-{
+await section("SandboxRunner: deterministic nested engines use stable distinct streams...", async () => {
   const tmp = makeTmp();
   try {
     const seed = join(tmp, "deterministic-seed.json");
@@ -5370,10 +5305,9 @@ console.log("SandboxRunner: deterministic nested engines use stable distinct str
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: inline seeds, fs, $, runScript, and diffs...");
-{
+await section("SandboxRunner: inline seeds, fs, $, runScript, and diffs...", async () => {
   const tmp = makeTmp();
   try {
     const seed = join(tmp, "seed.json");
@@ -5460,10 +5394,9 @@ console.log("SandboxRunner: inline seeds, fs, $, runScript, and diffs...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: fs Stats expose realm-owned lazy Date metadata in every execution mode...");
-{
+await section("SandboxRunner: fs Stats expose realm-owned lazy Date metadata in every execution mode...", async () => {
   const tmp = makeTmp();
   try {
     const seed = join(tmp, "seed.json");
@@ -5541,10 +5474,9 @@ console.log("SandboxRunner: fs Stats expose realm-owned lazy Date metadata in ev
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: metadata diffing is opt-in and separate from content changes...");
-{
+await section("SandboxRunner: metadata diffing is opt-in and separate from content changes...", async () => {
   const tmp = makeTmp();
   try {
     const seed = join(tmp, "seed.json");
@@ -5600,10 +5532,9 @@ console.log("SandboxRunner: metadata diffing is opt-in and separate from content
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: fs errors are Node-shaped in every execution mode...");
-{
+await section("SandboxRunner: fs errors are Node-shaped in every execution mode...", async () => {
   const tmp = makeTmp();
   try {
     const seed = join(tmp, "seed.json");
@@ -5659,10 +5590,9 @@ console.log("SandboxRunner: fs errors are Node-shaped in every execution mode...
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: aliases and import maps resolve sandbox module paths...");
-{
+await section("SandboxRunner: aliases and import maps resolve sandbox module paths...", async () => {
   const tmp = makeTmp();
   try {
     const seed = join(tmp, "seed.json");
@@ -5716,10 +5646,9 @@ console.log("SandboxRunner: aliases and import maps resolve sandbox module paths
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: Windows-style sandbox paths normalize to virtual paths...");
-{
+await section("SandboxRunner: Windows-style sandbox paths normalize to virtual paths...", async () => {
   const tmp = makeTmp();
   try {
     const seed = join(tmp, "seed.json");
@@ -5771,10 +5700,9 @@ console.log("SandboxRunner: Windows-style sandbox paths normalize to virtual pat
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: seed config rejects null source values...");
-{
+await section("SandboxRunner: seed config rejects null source values...", async () => {
   const tmp = makeTmp();
   try {
     const seed = join(tmp, "seed.json");
@@ -5797,10 +5725,9 @@ console.log("SandboxRunner: seed config rejects null source values...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: unified diff includes deleted seeded files...");
-{
+await section("SandboxRunner: unified diff includes deleted seeded files...", async () => {
   const tmp = makeTmp();
   try {
     const seed = join(tmp, "seed.json");
@@ -5830,10 +5757,9 @@ console.log("SandboxRunner: unified diff includes deleted seeded files...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: bytecode uses the same sandbox runtime modules...");
-{
+await section("SandboxRunner: bytecode uses the same sandbox runtime modules...", async () => {
   const tmp = makeTmp();
   try {
     const seed = join(tmp, "seed.json");
@@ -5885,10 +5811,9 @@ console.log("SandboxRunner: bytecode uses the same sandbox runtime modules...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: nested sandbox execution seeds from parent VFS without leaking writes...");
-{
+await section("SandboxRunner: nested sandbox execution seeds from parent VFS without leaking writes...", async () => {
   const tmp = makeTmp();
   try {
     const seed = join(tmp, "seed.json");
@@ -5981,10 +5906,9 @@ console.log("SandboxRunner: nested sandbox execution seeds from parent VFS witho
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: seed config imports host paths relative to the config file...");
-{
+await section("SandboxRunner: seed config imports host paths relative to the config file...", async () => {
   const tmp = makeTmp();
   try {
     const project = join(tmp, "project");
@@ -6031,10 +5955,9 @@ console.log("SandboxRunner: seed config imports host paths relative to the confi
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: --audit-log reports root escapes without changing clamped access...");
-{
+await section("SandboxRunner: --audit-log reports root escapes without changing clamped access...", async () => {
   const tmp = makeTmp();
   try {
     const seed = join(tmp, "audit-seed.json");
@@ -6080,10 +6003,9 @@ console.log("SandboxRunner: --audit-log reports root escapes without changing cl
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: seed directory rejects nested host symlink (no leak)...");
-{
+await section("SandboxRunner: seed directory rejects nested host symlink (no leak)...", async () => {
   const tmp = makeTmp();
   try {
     if (process.platform !== "win32") {
@@ -6112,10 +6034,9 @@ console.log("SandboxRunner: seed directory rejects nested host symlink (no leak)
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: direct seed argument rejects host symlink (no leak)...");
-{
+await section("SandboxRunner: direct seed argument rejects host symlink (no leak)...", async () => {
   const tmp = makeTmp();
   try {
     if (process.platform !== "win32") {
@@ -6143,10 +6064,9 @@ console.log("SandboxRunner: direct seed argument rejects host symlink (no leak).
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: seed-config from directory rejects nested host symlink (no leak)...");
-{
+await section("SandboxRunner: seed-config from directory rejects nested host symlink (no leak)...", async () => {
   const tmp = makeTmp();
   try {
     if (process.platform !== "win32") {
@@ -6183,10 +6103,9 @@ console.log("SandboxRunner: seed-config from directory rejects nested host symli
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: trailing slash on a symlinked-directory seed is still rejected (no leak)...");
-{
+await section("SandboxRunner: trailing slash on a symlinked-directory seed is still rejected (no leak)...", async () => {
   const tmp = makeTmp();
   try {
     if (process.platform !== "win32") {
@@ -6217,10 +6136,9 @@ console.log("SandboxRunner: trailing slash on a symlinked-directory seed is stil
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: Windows directory junction seed is rejected (no leak)...");
-{
+await section("SandboxRunner: Windows directory junction seed is rejected (no leak)...", async () => {
   const tmp = makeTmp();
   try {
     // Windows-only: file symlinks need elevation on CI runners, but a directory
@@ -6254,14 +6172,13 @@ console.log("SandboxRunner: Windows directory junction seed is rejected (no leak
   } finally {
     clean(tmp);
   }
-}
+});
 
 // ============================================================================
 // --allowed-host option
 // ============================================================================
 
-console.log("Loader: --allowed-host blocks unlisted host...");
-{
+await section("Loader: --allowed-host blocks unlisted host...", async () => {
   const tmp = makeTmp();
   try {
     const audit = join(tmp, "blocked-fetch-audit.jsonl");
@@ -6279,22 +6196,20 @@ console.log("Loader: --allowed-host blocks unlisted host...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: no --allowed-host blocks all fetch...");
-{
+await section("Loader: no --allowed-host blocks all fetch...", async () => {
   const res = await $`echo 'fetch("http://example.com");' | ${LOADER} 2>&1`.nothrow();
   if (res.exitCode === 0) throw new Error("Fetch without --allowed-host should fail");
   if (!res.text().includes("allowed hosts")) throw new Error(`Error should mention allowed hosts, got: ${res.text()}`);
-}
+});
 
-console.log("Loader: --allowed-host multiple hosts...");
-{
+await section("Loader: --allowed-host multiple hosts...", async () => {
   // Both hosts in the list; blocked.test is not
   const res = await $`echo 'fetch("http://blocked.test");' | ${LOADER} --allowed-host=example.com --allowed-host=other.com 2>&1`.nothrow();
   if (res.exitCode === 0) throw new Error("Fetch to unlisted host should fail with multiple --allowed-host");
   if (!res.text().includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.text()}`);
-}
+});
 
 console.log("Loader: local fetch smoke with --allowed-host...");
 await withFetchTestServer(async (baseUrl) => {
@@ -6326,8 +6241,7 @@ await withFetchTestServer(async (baseUrl) => {
 // --multifile (all runners)
 // ============================================================================
 
-console.log("Loader: --multifile splits a single file into N section results...");
-{
+await section("Loader: --multifile splits a single file into N section results...", async () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "multifile-loader.js");
@@ -6359,10 +6273,9 @@ console.log("Loader: --multifile splits a single file into N section results..."
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: --multifile on stdin produces <stdin>[partN] entries...");
-{
+await section("Loader: --multifile on stdin produces <stdin>[partN] entries...", async () => {
   const { exitCode, json } = runLoaderJson(
     "console.log('a');\n---\nconsole.log('b');\n---\nconsole.log('c');\n",
     ["--multifile"],
@@ -6374,10 +6287,9 @@ console.log("Loader: --multifile on stdin produces <stdin>[partN] entries...");
     if (json.files[i].fileName !== expected)
       throw new Error(`Loader --multifile stdin file ${i} fileName mismatch: expected ${expected}, got ${json.files[i].fileName}`);
   }
-}
+});
 
-console.log("Loader: --multifile with no separator runs file as a single section...");
-{
+await section("Loader: --multifile with no separator runs file as a single section...", async () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "no-sep.js");
@@ -6394,10 +6306,9 @@ console.log("Loader: --multifile with no separator runs file as a single section
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: --multifile drops leading/trailing separators...");
-{
+await section("Loader: --multifile drops leading/trailing separators...", async () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "edge.js");
@@ -6412,10 +6323,9 @@ console.log("Loader: --multifile drops leading/trailing separators...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: --multifile dispatches sections in parallel with --jobs...");
-{
+await section("Loader: --multifile dispatches sections in parallel with --jobs...", async () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "parallel.js");
@@ -6431,10 +6341,9 @@ console.log("Loader: --multifile dispatches sections in parallel with --jobs..."
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: --source-map with --multifile is rejected...");
-{
+await section("Loader: --source-map with --multifile is rejected...", async () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "sm.js");
@@ -6451,10 +6360,9 @@ console.log("Loader: --source-map with --multifile is rejected...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("TestRunner: --multifile splits a single test file into N file results...");
-{
+await section("TestRunner: --multifile splits a single test file into N file results...", async () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "multifile-tests.js");
@@ -6479,10 +6387,9 @@ console.log("TestRunner: --multifile splits a single test file into N file resul
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Bundler: --multifile compiles each section as a separate .gbc...");
-{
+await section("Bundler: --multifile compiles each section as a separate .gbc...", async () => {
   const tmp = makeTmp();
   const out = join(tmp, "out");
   try {
@@ -6505,10 +6412,9 @@ console.log("Bundler: --multifile compiles each section as a separate .gbc...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Bundler: --multifile rejects --output=<file>...");
-{
+await section("Bundler: --multifile rejects --output=<file>...", async () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "rejected.js");
@@ -6525,10 +6431,9 @@ console.log("Bundler: --multifile rejects --output=<file>...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("BenchmarkRunner: --multifile produces multiple file entries...");
-{
+await section("BenchmarkRunner: --multifile produces multiple file entries...", async () => {
   const tmp = makeTmp();
   const benchEnv = {
     ...process.env,
@@ -6560,10 +6465,9 @@ console.log("BenchmarkRunner: --multifile produces multiple file entries...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: goccia.json multifile=true works without --multifile flag...");
-{
+await section("Loader: goccia.json multifile=true works without --multifile flag...", async () => {
   const tmp = makeTmp();
   try {
     writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ multifile: true }));
@@ -6580,7 +6484,7 @@ console.log("Loader: goccia.json multifile=true works without --multifile flag..
   } finally {
     clean(tmp);
   }
-}
+});
 
 console.log("Loader: --module virtual modules use the ordinary module pipeline...");
 for (const mode of ["interpreted", "bytecode"] as const) {
@@ -6621,8 +6525,7 @@ for (const mode of ["interpreted", "bytecode"] as const) {
     throw new Error(`--module ${mode} did not preserve module phases, addresses, and bytes: ${proc.stdout.toString()}`);
 }
 
-console.log("Loader: dynamic import and ShadowRealm use configured virtual modules...");
-{
+await section("Loader: dynamic import and ShadowRealm use configured virtual modules...", async () => {
   const source = [
     'import("host:dynamic").then(ns => console.log("dynamic:" + ns.value));',
     'import { count } from "host:realm-state";',
@@ -6651,10 +6554,9 @@ console.log("Loader: dynamic import and ShadowRealm use configured virtual modul
   if (!output.includes("dynamic:9") || !output.includes("realm:13") ||
       !output.includes("parent-state:1") || !output.includes("child-state:1"))
     throw new Error(`Dynamic/ShadowRealm virtual modules produced unexpected output: ${output}`);
-}
+});
 
-console.log("Loader: hierarchical virtual module addresses preserve canonical URLs...");
-{
+await section("Loader: hierarchical virtual module addresses preserve canonical URLs...", async () => {
   const proc = Bun.spawnSync(
     [
       LOADER,
@@ -6677,10 +6579,9 @@ console.log("Loader: hierarchical virtual module addresses preserve canonical UR
   if (!containsLine(proc.stdout.toString(),
       "https://example.test/pkg/main?redirect/a/../b|https://example.test/pkg/dep"))
     throw new Error(`Hierarchical virtual address was not preserved: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Loader: virtual import.meta.resolve uses aliases for bare specifiers...");
-{
+await section("Loader: virtual import.meta.resolve uses aliases for bare specifiers...", async () => {
   const tmp = makeTmp();
   try {
     const dependency = join(tmp, "dependency.mjs");
@@ -6721,10 +6622,9 @@ console.log("Loader: virtual import.meta.resolve uses aliases for bare specifier
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: attributed virtual modules reinterpret their stored content...");
-{
+await section("Loader: attributed virtual modules reinterpret their stored content...", async () => {
   const proc = Bun.spawnSync(
     [
       LOADER,
@@ -6746,10 +6646,9 @@ console.log("Loader: attributed virtual modules reinterpret their stored content
     throw new Error(`Attributed virtual module failed: ${proc.stderr.toString()}`);
   if (!containsLine(proc.stdout.toString(), "65"))
     throw new Error(`Attributed virtual module should expose source bytes: ${proc.stdout.toString()}`);
-}
+});
 
-console.log("Loader: virtual definitions validate eagerly but JavaScript parses lazily...");
-{
+await section("Loader: virtual definitions validate eagerly but JavaScript parses lazily...", async () => {
   const unused = Bun.spawnSync(
     [LOADER, "-", "--module", "host:unused=!!! not valid JavaScript !!!"],
     { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
@@ -6772,10 +6671,9 @@ console.log("Loader: virtual definitions validate eagerly but JavaScript parses 
   const collisionOutput = runtimeCollision.stdout.toString() + runtimeCollision.stderr.toString();
   if (runtimeCollision.exitCode === 0 || !collisionOutput.includes("runtime module"))
     throw new Error(`Runtime module collision should be a configuration error: ${collisionOutput}`);
-}
+});
 
-console.log("SandboxRunner: virtual modules share the CLI surface and cannot shadow host modules...");
-{
+await section("SandboxRunner: virtual modules share the CLI surface and cannot shadow host modules...", async () => {
   const tmp = makeTmp();
   try {
     const seed = join(tmp, "seed.json");
@@ -6870,7 +6768,7 @@ console.log("SandboxRunner: virtual modules share the CLI surface and cannot sha
   } finally {
     clean(tmp);
   }
-}
+});
 
 // ============================================================================
 // No-argument stdin policy (clig.dev)
@@ -7105,8 +7003,7 @@ for (const app of [
     throw new Error(`${app.name} should not advertise the stdin rule:\n${help}`);
 }
 
-console.log("TestRunner: vitest compatibility shim and its off-switch...");
-{
+await section("TestRunner: vitest compatibility shim and its off-switch...", async () => {
   const tmp = makeTmp();
   try {
     const suitePath = join(tmp, "vitest-import.test.js");
@@ -7156,7 +7053,7 @@ console.log("TestRunner: vitest compatibility shim and its off-switch...");
   } finally {
     clean(tmp);
   }
-}
+});
 
 // ============================================================================
 // goccia:test availability per binary
@@ -7168,8 +7065,7 @@ console.log("TestRunner: vitest compatibility shim and its off-switch...");
 // cases pin both directions — the import must work where the profile is
 // applied, and no binary but the runner may grow a testing global.
 
-console.log("Loader: goccia:test is importable and injects no globals...");
-{
+await section("Loader: goccia:test is importable and injects no globals...", async () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "self-test.js");
@@ -7225,10 +7121,9 @@ console.log("Loader: goccia:test is importable and injects no globals...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: a failing imported suite is only fatal if the script says so...");
-{
+await section("Loader: a failing imported suite is only fatal if the script says so...", async () => {
   const tmp = makeTmp();
   try {
     // A loader script has no runner to interpret results, so runTests reports
@@ -7271,10 +7166,9 @@ console.log("Loader: a failing imported suite is only fatal if the script says s
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Loader: the bare vitest specifier stays unresolvable...");
-{
+await section("Loader: the bare vitest specifier stays unresolvable...", async () => {
   // The compatibility shim is a GocciaTestRunner default, not a loader one.
   // Having goccia:test available must not drag `vitest` along with it.
   const tmp = makeTmp();
@@ -7290,10 +7184,9 @@ console.log("Loader: the bare vitest specifier stays unresolvable...");
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Bare Loader: goccia:test is absent along with the rest of the runtime...");
-{
+await section("Bare Loader: goccia:test is absent along with the rest of the runtime...", async () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "import-test.js");
@@ -7307,10 +7200,9 @@ console.log("Bare Loader: goccia:test is absent along with the rest of the runti
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("SandboxRunner: goccia:test is importable and injects no globals...");
-{
+await section("SandboxRunner: goccia:test is importable and injects no globals...", async () => {
   const tmp = makeTmp();
   try {
     const seed = join(tmp, "seed.json");
@@ -7344,10 +7236,9 @@ console.log("SandboxRunner: goccia:test is importable and injects no globals..."
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("TestRunner: globals stay injected and share the imported registry...");
-{
+await section("TestRunner: globals stay injected and share the imported registry...", async () => {
   const tmp = makeTmp();
   try {
     const suitePath = join(tmp, "globals.test.js");
@@ -7383,6 +7274,17 @@ console.log("TestRunner: globals stay injected and share the imported registry..
   } finally {
     clean(tmp);
   }
+});
+
+if (sectionFailures.length > 0) {
+  console.error(`\n${sectionFailures.length} section(s) failed:`);
+  for (const failure of sectionFailures) {
+    const message =
+      failure.error instanceof Error ? failure.error.message : String(failure.error);
+    console.error(`  - ${failure.name}`);
+    console.error(`      ${message}`);
+  }
+  process.exit(1);
 }
 
 console.log("\nAll test-cli-apps.ts tests passed.");
