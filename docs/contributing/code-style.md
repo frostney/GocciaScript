@@ -198,6 +198,22 @@ In the **built-in documentation** (`docs/built-ins*.md`), do not annotate featur
 
 The **language tables** (`docs/language-tables.md`) are the one place where edition years are listed, as a feature-provenance reference. **Source code** annotations (`// ES2026 §X.Y.Z`) always use the current edition year per the rules above.
 
+### Comments That Quote JavaScript
+
+Use `(* ... *)` rather than brace delimiters for any comment containing a
+JavaScript brace. A brace comment ends at the first `}` inside it, and the
+compiler then reports an "illegal character" at whatever token follows — a
+column with no relation to the cause, which is easy to spend a rebuild cycle
+chasing.
+
+Nested brace comments are deliberately not enabled: no `$NESTEDCOMMENTS`
+directive exists on either compiler, and FPC's modeswitch of that name is
+FPC-only, so relying on it would let a comment compile under FreePascal and
+break the Delphi build. `(* ... *)` behaves the same on both.
+
+Comments of the same kind still do not nest, so a comment that discusses these
+delimiters spells them out in words instead of quoting the characters.
+
 ### No Abbreviations
 
 Class names, function names, method names, and type names must use **full words** — do not abbreviate. This keeps the codebase consistent and self-documenting.

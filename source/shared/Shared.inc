@@ -59,24 +59,24 @@
   {$modeswitch advancedrecords}
 {$ENDIF}
 
-{ Nested comments, on both compilers.
+(* Comments quoting JavaScript use star-parenthesis delimiters, not braces.
 
-  This is a JavaScript engine written in Pascal, so comments quote JavaScript
-  constantly, and JavaScript is full of braces. Without this, a comment
-  containing an export clause or an empty block ends at the first closing
-  brace inside it, and the compiler then reports an "illegal character" at
-  whatever token follows — a column unrelated to the real cause.
+   This is a JavaScript engine written in Pascal, so comments quote JavaScript
+   constantly and JavaScript is full of braces. A brace comment ends at the
+   first closing brace inside it, and the compiler then reports an "illegal
+   character" at whatever token follows — a column unrelated to the cause.
 
-  Nesting fixes the balanced case, which is the one that occurs in practice.
-  A lone unmatched closing brace still ends the comment, so keep braces in
-  comment prose balanced or spell them out in words.
+   Nested brace comments are deliberately NOT enabled to paper over this.
+   Neither compiler takes a $NESTEDCOMMENTS directive: FPC answers "Illegal
+   compiler directive" and carries on, and it is absent from Embarcadero's
+   directive index, so a Delphi branch would silently do nothing while brace
+   comments broke that build — and Delphi is validated locally rather than in
+   CI, so the divergence would surface late. FPC's modeswitch of the same name
+   does work, but is FPC-only, which creates that divergence from the other
+   side.
 
-  The spelling differs per compiler: FPC takes a modeswitch, Delphi a
-  directive. Define GOCCIA_NO_NESTED_COMMENTS to opt out. }
-{$IFNDEF GOCCIA_NO_NESTED_COMMENTS}
-  {$IFDEF FPC}
-    {$modeswitch nestedcomments}
-  {$ELSE}
-    {$NESTEDCOMMENTS ON}
-  {$ENDIF}
-{$ENDIF}
+   Star-parenthesis delimiters need no switch and behave the same on both
+   compilers, which is what Embarcadero's documentation recommends for a
+   comment containing other comments. Note that these do not nest with each
+   other either, so a comment quoting one uses words rather than the literal
+   characters. *)

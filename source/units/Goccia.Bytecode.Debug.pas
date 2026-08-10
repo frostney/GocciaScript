@@ -28,11 +28,11 @@ type
     FDeclarationLine: UInt32;
     FDeclarationColumn: UInt16;
   public
-    { ADeclarationLine/ADeclarationColumn locate the function's declaration
-      (`const f = () => { … }`), which is what LCOV's FN: record means. They are
-      distinct from the first line-map entry, which locates the first executed
-      instruction of the body and drives per-call line hits. Zero means
-      "not recorded" — the module-level template has no declaration site. }
+    (* ADeclarationLine/ADeclarationColumn locate the function's declaration
+       (`const f = () => {`), which is what LCOV's FN: record means. They are
+       distinct from the first line-map entry, which locates the first executed
+       instruction of the body and drives per-call line hits. Zero means
+       "not recorded" — the module-level template has no declaration site. *)
     constructor Create(const ASourceFile: string;
       const ADeclarationLine: UInt32 = 0;
       const ADeclarationColumn: UInt16 = 0);
