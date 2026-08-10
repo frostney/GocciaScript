@@ -58,25 +58,3 @@
 {$IFDEF FPC}
   {$modeswitch advancedrecords}
 {$ENDIF}
-
-{ Nested comments, on both compilers.
-
-  This is a JavaScript engine written in Pascal, so comments quote JavaScript
-  constantly, and JavaScript is full of braces. Without this, a comment
-  containing an export clause or an empty block ends at the first closing
-  brace inside it, and the compiler then reports an "illegal character" at
-  whatever token follows — a column unrelated to the real cause.
-
-  Nesting fixes the balanced case, which is the one that occurs in practice.
-  A lone unmatched closing brace still ends the comment, so keep braces in
-  comment prose balanced or spell them out in words.
-
-  The spelling differs per compiler: FPC takes a modeswitch, Delphi a
-  directive. Define GOCCIA_NO_NESTED_COMMENTS to opt out. }
-{$IFNDEF GOCCIA_NO_NESTED_COMMENTS}
-  {$IFDEF FPC}
-    {$modeswitch nestedcomments}
-  {$ELSE}
-    {$NESTEDCOMMENTS ON}
-  {$ENDIF}
-{$ENDIF}

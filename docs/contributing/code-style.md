@@ -198,6 +198,16 @@ In the **built-in documentation** (`docs/built-ins*.md`), do not annotate featur
 
 The **language tables** (`docs/language-tables.md`) are the one place where edition years are listed, as a feature-provenance reference. **Source code** annotations (`// ES2026 §X.Y.Z`) always use the current edition year per the rules above.
 
+### Comments That Quote JavaScript
+
+Use `(* ... *)` rather than brace delimiters for any comment containing a
+JavaScript brace. A brace comment ends at the first `}` inside it, and the
+compiler then reports an "illegal character" at whatever token follows — a
+column with no relation to the cause.
+
+Neither comment form nests with itself, so a comment that discusses these
+delimiters spells them out in words instead of quoting the characters.
+
 ### No Abbreviations
 
 Class names, function names, method names, and type names must use **full words** — do not abbreviate. This keeps the codebase consistent and self-documenting.
