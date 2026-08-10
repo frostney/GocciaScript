@@ -58,25 +58,3 @@
 {$IFDEF FPC}
   {$modeswitch advancedrecords}
 {$ENDIF}
-
-(* Comments quoting JavaScript use star-parenthesis delimiters, not braces.
-
-   This is a JavaScript engine written in Pascal, so comments quote JavaScript
-   constantly and JavaScript is full of braces. A brace comment ends at the
-   first closing brace inside it, and the compiler then reports an "illegal
-   character" at whatever token follows — a column unrelated to the cause.
-
-   Nested brace comments are deliberately NOT enabled to paper over this.
-   Neither compiler takes a $NESTEDCOMMENTS directive: FPC answers "Illegal
-   compiler directive" and carries on, and it is absent from Embarcadero's
-   directive index, so a Delphi branch would silently do nothing while brace
-   comments broke that build — and Delphi is validated locally rather than in
-   CI, so the divergence would surface late. FPC's modeswitch of the same name
-   does work, but is FPC-only, which creates that divergence from the other
-   side.
-
-   Star-parenthesis delimiters need no switch and behave the same on both
-   compilers, which is what Embarcadero's documentation recommends for a
-   comment containing other comments. Note that these do not nest with each
-   other either, so a comment quoting one uses words rather than the literal
-   characters. *)
