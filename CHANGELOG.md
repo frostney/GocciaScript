@@ -2,6 +2,58 @@
 
 All notable changes to GocciaScript are documented in this file.
 
+## [0.12.0] - 2026-08-10
+
+### 🌐 Website
+
+- feat(website): Vitest drop-in direction on VISION and the homepage (#1096)
+- fix(website): vendored playground versions reach the page and stay fresh (#1087)
+
+### 🏗️ Internal
+
+- test(cli): look up coverage entries by basename, not native path (#1111)
+- test(cli): match boundary lines in containsLine and drop the workarounds (#1110)
+- docs: call them differential suites, not batteries (#1108)
+- test(cli): split coverage keys on both path separators (#1100)
+- ci(testing): gate testing-API suites on a pinned Vitest oracle (#1097)
+- ci(testing): differential suites gate goccia against bun (#1082)
+
+### 🐛 Fixed
+
+- fix(changelog): require website predominance before the Website group (#1115)
+- fix(review): CodeRabbit round-7 findings on the round-6 layer (#1113)
+- fix(review): CodeRabbit round-6 findings across the five unreviewed layers (#1112)
+- fix(review): CodeRabbit round-5 findings across the stack (#1109)
+- fix(coverage): canonicalize report path keys and document the parallel bail (#1107)
+- fix(testing): close the last Vitest and ECMA-262 semantic divergences (#1104)
+- fix(threading): give each run its own cancellation flag after abandonment (#1103)
+- fix(threading): guard the pool cancellation flag behind a lock (#1102)
+- fix(review): CodeRabbit round-2 findings across the stack (#1101)
+- fix(cli): print usage instead of blocking when run without input at a TTY (#1098)
+- fix(gc): root builtin argument collections and re-entry temporaries (#1095)
+- fix(testing): Vitest comparison parity across equality, Set/Map, and errors (#1093)
+- fix(testing): count beforeAll/afterAll hook failures as failures (#1090)
+- fix(parser): bound the arrow return-type probe; hard-gate web-tooling outcomes (#1089)
+- fix(testing): count throwing describe callbacks as failures (#1088)
+- fix(cli): keep JSON envelope stdout clean for every failure shape (#1086)
+- fix(review): CodeRabbit round-1 findings across the stack (#1085)
+- fix(testing): compare Error objects by value in deep equality (#1084)
+- fix(coverage): imply bytecode mode, sum parallel merges, register declaration lines (#1081)
+- fix(testing): bring deep-equality and property matchers to Vitest parity (#1078)
+- fix(testing): apply negation and full argument semantics to toThrow (#1077)
+- fix(engine): check nullish base before property-key coercion (#1076)
+- fix(jsx): guarantee transformer scan progress and positioned errors (#1075)
+
+### 🚀 Added
+
+- feat(testing): make goccia:test importable without injecting globals (#1106)
+- feat(testing): support vi.mock factory-form module mocking (#1105)
+- feat(testing): goccia:test module and default-on vitest compatibility shim (#1099)
+- feat(testing): abort file collection when a describe callback throws (#1092)
+- feat(testing): Vitest-exact suite-error attribution and hook control flow (#1091)
+- feat(runtime): WHATWG EventTarget base with AbortSignal abort events (#1080)
+- feat(parser): parse TS type-syntax edges as annotations (#1079)
+
 ## [0.11.0] - 2026-08-05
 
 ### ⚡ Performance
