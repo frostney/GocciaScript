@@ -1,9 +1,21 @@
 name: PR
 
+# No `branches:` filter on purpose. That key matches the pull request's BASE,
+# so a stacked pull request — one whose base is the layer below it rather than
+# main — was skipped entirely. During the 0.11.0 adversarial-findings stack
+# several layers (#1076, #1095, #1103, #1109) received no PR run at all, which
+# is how a Windows-only failure survived eleven layers before anyone saw it.
+# Every pull request runs this workflow whatever its base.
 on:
   pull_request:
-    branches:
-      - main
+
+# Widening the trigger multiplies runs across a stack, so supersede rather than
+# accumulate: a new push cancels the previous run for the same pull request.
+# This also keeps the surviving verdict attached to the current head instead of
+# leaving a green result that belongs to an already-replaced commit.
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

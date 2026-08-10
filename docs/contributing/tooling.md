@@ -105,6 +105,30 @@ Treat messages such as `Compilation raised exception internally` and
 investigate the reported Pascal source line after the same target still fails
 from a clean build.
 
+### Website Checks Are Inert Without Its Dependencies
+
+The website has its own dependency tree, and its checks fail to load rather
+than fail loudly when that tree is missing. In a fresh clone or worktree,
+`bun run test` inside `website/` reports **142 pass / 8 fail** — and reports
+exactly that before and after any change you make, because the 8 are modules
+that cannot import, not assertions that disagree with your edit.
+
+Install first, then the same tree reports **204 pass / 0 fail** and a genuine
+regression fails immediately and by name:
+
+```bash
+cd website
+bun install
+bun run test
+bun run lint
+```
+
+Two regressions shipped in `website/src/lib/positioning.ts` during 0.11.0
+because the unprovisioned numbers were compared before and after a change and
+read as "unchanged, therefore safe". They were identical because the file
+guarding that text never loaded. A check that cannot run is not a passing
+check — confirm the checker actually executed, not merely that it reported.
+
 ### Shared `-FU` Directories Across Programs — Internal Error 200611011
 
 FPC 3.2.2 aborts with `Fatal: Internal error 200611011` when a second program
