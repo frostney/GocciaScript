@@ -66,6 +66,31 @@ git commit -m "Short imperative description of the change"
 - **Issues:** Use `.github/ISSUE_TEMPLATE/default.md` (Summary, Why, current vs expected behavior, scope).
 - **Pull requests:** Use `.github/pull_request_template.md` (Summary with constraints and links, testing checklist).
 
+### Stacked pull requests
+
+A stacked pull request targets the layer below it rather than `main`, and
+automation treats that base differently from a normal branch. Two consequences
+are worth knowing before starting a stack:
+
+- **Automatic review does not fire.** CodeRabbit reviews only pull requests
+  based on the default branch, so every layer needs an explicit
+  `@coderabbitai review` comment. A layer that is never triggered shows no
+  review at all, and an instant acknowledgement of an already-reviewed commit
+  is not a review of the current head.
+- **A review round ends when its own fix layer reviews clean**, not when the
+  findings from the layer below are dispositioned. A round that fixes findings
+  creates a new top layer, and that layer needs its own review like any other.
+  Confirm every layer has a review before calling a stack finished — the
+  terminating one is the easiest to miss, because nothing after it prompts a
+  sweep.
+
+The PR workflow itself runs for every pull request whatever its base; it
+previously filtered on `main`, which skipped stacked layers entirely. Full CI
+(`ci.yml`) still runs only on `main`, tags, and manual dispatch, so use
+`gh workflow run ci.yml --ref <branch>` when a stacked branch needs the full
+matrix, and check the result against the branch's current head SHA rather than
+the newest run — a dispatched run belongs to the commit it started from.
+
 ## Verify changes
 
 ```bash

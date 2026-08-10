@@ -115,6 +115,12 @@
       "skillPath": "roadmap-review/SKILL.md",
       "computedHash": "84243a7b0f41dcd957ce05da75e67dc2923d1b52900336893bbf21d44a545a5d"
     },
+    "run-retro": {
+      "source": "frostney/known-good-route",
+      "sourceType": "github",
+      "skillPath": "run-retro/SKILL.md",
+      "computedHash": "a7adbe79d73147f9db4f180275c3ef3f83b6e7998113d203537dda139b0cc7d5"
+    },
     "software-engineering-excellence": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
