@@ -153,7 +153,7 @@ type
     FRealm: TGocciaRealm;
     FSettled: Boolean;
     procedure AttachAwait(const ASuspension: EGocciaAsyncAwaitSuspend);
-    procedure RejectWithException(const AException: Exception);
+    function RejectWithException(const AException: Exception): Boolean;
     procedure Resume(const AKind: TGocciaGeneratorResumeKind;
       const AValue: TGocciaValue);
   public
@@ -171,9 +171,21 @@ type
     procedure MarkReferences; override;
   end;
 
-procedure RejectAsyncPromiseWithException(const APromise: TGocciaPromiseValue;
-  const AException: Exception);
+{ True when AException is a script-level failure and the promise now carries
+  it. False means the exception is not the guest's to observe, and the caller
+  — which is inside the handler that owns it — must let it continue with a
+  bare `raise`.
+
+  The bare raise at the call site is the whole point of the Boolean. This
+  used to end in `raise AException`, which re-raises the very object the RTL
+  is already unwinding: the original handler frees it on the way out, so the
+  second raise carries a dangling reference and the async path surfaced a
+  spurious "Access violation" instead of the limit that actually fired. }
+function TryRejectAsyncPromiseWithException(
+  const APromise: TGocciaPromiseValue;
+  const AException: Exception): Boolean;
 begin
+  Result := True;
   if AException is TGocciaThrowValue then
     APromise.Reject(TGocciaThrowValue(AException).Value)
   else if AException is TGocciaTypeError then
@@ -185,7 +197,7 @@ begin
   else if AException is TGocciaRuntimeError then
     APromise.Reject(CreateErrorObject(ERROR_NAME, AException.Message))
   else
-    raise AException;
+    Result := False;
 end;
 
 { TGocciaAsyncFunctionEvaluation }
@@ -247,13 +259,17 @@ begin
   end;
 end;
 
-procedure TGocciaAsyncFunctionEvaluation.RejectWithException(
-  const AException: Exception);
+function TGocciaAsyncFunctionEvaluation.RejectWithException(
+  const AException: Exception): Boolean;
 begin
   if FSettled then
-    Exit;
-  FSettled := True;
-  RejectAsyncPromiseWithException(FPromise, AException);
+    Exit(True);
+  Result := TryRejectAsyncPromiseWithException(FPromise, AException);
+  { Only a rejection settles the evaluation. Marking it settled for an
+    exception that keeps unwinding would leave a promise that can never be
+    resolved and silence the later resume paths. }
+  if Result then
+    FSettled := True;
 end;
 
 procedure TGocciaAsyncFunctionEvaluation.Resume(
@@ -285,7 +301,8 @@ begin
       on E: EGocciaAsyncAwaitSuspend do
         AttachAwait(E);
       on E: Exception do
-        RejectWithException(E);
+        if not RejectWithException(E) then
+          raise;
     end;
   finally
     PopAsyncAwaitSuspension;
@@ -847,6 +864,7 @@ var
   AsyncBodyStatements: TObjectList<TGocciaASTNode>;
   SyntheticReturn: TGocciaReturnStatement;
   RejectedPromise: TGocciaPromiseValue;
+  Rejected: Boolean;
 begin
   GC := TGarbageCollector.Instance;
   BodyScopeRooted := False;
@@ -930,12 +948,17 @@ begin
       if Assigned(GC) then
         GC.AddTempRoot(RejectedPromise);
       try
-        RejectAsyncPromiseWithException(RejectedPromise, E);
-        Result := RejectedPromise;
+        Rejected := TryRejectAsyncPromiseWithException(RejectedPromise, E);
+        if Rejected then
+          Result := RejectedPromise;
       finally
         if Assigned(GC) then
           GC.RemoveTempRoot(RejectedPromise);
       end;
+      { Outside the temp-root frame: FPC rejects a re-raise inside a nested
+        try/finally, and the root has to come off either way. }
+      if not Rejected then
+        raise;
     end;
   end;
 

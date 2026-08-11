@@ -117,6 +117,7 @@ uses
   Goccia.InstructionLimit,
   Goccia.JSON,
   Goccia.JSON.Utils,
+  Goccia.MemoryLimit,
   Goccia.Platform,
   Goccia.Timeout,
   Goccia.Values.Error,
@@ -545,6 +546,12 @@ begin
     Result := 'TimeoutError'
   else if E is TGocciaInstructionLimitError then
     Result := 'InstructionLimitError'
+  { Named alongside the other two limits: now that a refused allocation
+    unwinds to the host instead of being caught by the script, this is the
+    channel the host reads it on, and "the sandbox hit its ceiling" has to be
+    distinguishable from an ordinary native failure. }
+  else if E is TGocciaMemoryLimitError then
+    Result := 'MemoryLimitError'
   else if E is TGocciaError then
     Result := ErrorDisplayName(TGocciaError(E))
   else

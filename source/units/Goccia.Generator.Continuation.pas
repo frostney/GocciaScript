@@ -213,6 +213,7 @@ uses
   Goccia.Evaluator,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.Timeout,
   Goccia.Values.Await,
   Goccia.Values.Error,
@@ -413,6 +414,8 @@ begin
         raise;
       on E: TGocciaInstructionLimitError do
         raise;
+      on E: TGocciaMemoryLimitError do
+        raise;
       on E: Exception do
         Promise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
     end;
@@ -473,6 +476,8 @@ begin
       raise;
     on E: TGocciaInstructionLimitError do
       raise;
+    on E: TGocciaMemoryLimitError do
+      raise;
     on E: Exception do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
   end;
@@ -516,6 +521,8 @@ begin
       raise;
     on E: TGocciaInstructionLimitError do
       raise;
+    on E: TGocciaMemoryLimitError do
+      raise;
     on E: Exception do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
   end;
@@ -555,6 +562,8 @@ begin
     on E: TGocciaTimeoutError do
       raise;
     on E: TGocciaInstructionLimitError do
+      raise;
+    on E: TGocciaMemoryLimitError do
       raise;
     on E: Exception do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
