@@ -33,6 +33,7 @@ import {
   TESTRUNNER,
   BUNDLER,
   BENCHRUNNER,
+  FUZZHARNESS,
 } from "./test-cli/binaries";
 import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
@@ -7274,6 +7275,97 @@ await section("TestRunner: globals stay injected and share the imported registry
   } finally {
     clean(tmp);
   }
+});
+
+// ── GocciaFuzzHarness ──────────────────────────────────────────────────
+//
+// The harness's contract is entirely in its exit code: every engine-modelled
+// outcome must be 0, and only an unmodelled fault may be nonzero. If that
+// inverts, a fuzz campaign either reports nothing or reports everything, and
+// in both cases it is worthless. These sections pin the contract.
+
+await section("Fuzz Harness: engine-modelled outcomes exit zero...", async () => {
+  const tmp = makeTmp();
+  try {
+    // One input per outcome class the engine models. All must exit 0.
+    const cases: Record<string, string> = {
+      completed: "const x = 1 + 1;",
+      "parse-error": "const = = = {{{",
+      "runtime-error": "undefinedIdentifier;",
+      "script-throw": "null.x;",
+      timeout: "while (true) {}",
+      "module-denied": 'import { a } from "./nope.js";',
+      "deep-recursion": "const f = () => f(); f();",
+    };
+    for (const [name, source] of Object.entries(cases)) {
+      const file = join(tmp, `${name}.js`);
+      writeFileSync(file, source);
+      const proc = Bun.spawnSync([FUZZHARNESS, "--verbose", file], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 0)
+        throw new Error(`Fuzz harness treated "${name}" as a fault (exit ${proc.exitCode}):\n${output}`);
+      // Both executors must report, otherwise a mode is silently skipped.
+      if (!output.includes("[interpreter]") || !output.includes("[bytecode]"))
+        throw new Error(`Fuzz harness did not run both executors for "${name}":\n${output}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Fuzz Harness: unmodelled fault exits nonzero with a backtrace...", async () => {
+  const proc = Bun.spawnSync([FUZZHARNESS, "--self-test-fault"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const output = proc.stdout.toString() + proc.stderr.toString();
+  if (proc.exitCode === 0)
+    throw new Error(`Fuzz harness fault path exited 0; findings would be invisible:\n${output}`);
+  if (!output.includes("unexpected fault"))
+    throw new Error(`Fuzz harness fault path did not report the fault:\n${output}`);
+  // Frames print as symbols on Linux and bare $ addresses on macOS; either
+  // proves a backtrace was captured before the handler unwound.
+  if (!/\$[0-9A-F]{8}|\.pas|\.dpr/i.test(output))
+    throw new Error(`Fuzz harness fault path produced no backtrace:\n${output}`);
+});
+
+await section("Fuzz Harness: modules cannot reach the host filesystem...", async () => {
+  const tmp = makeTmp();
+  try {
+    // A real, readable file on disk. The harness must still refuse it: fuzz
+    // input driving host file reads is the property this guards.
+    const secret = join(tmp, "secret.js");
+    writeFileSync(secret, "globalThis.__leaked = 1; export const a = 1;\n");
+    const entry = join(tmp, "entry.js");
+    writeFileSync(entry, `import { a } from ${JSON.stringify(secret)};\n`);
+    const proc = Bun.spawnSync([FUZZHARNESS, "--verbose", entry], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode !== 0)
+      throw new Error(`Fuzz harness faulted on a module import (exit ${proc.exitCode}):\n${output}`);
+    if (!output.includes("module-denied"))
+      throw new Error(`Fuzz harness loaded a host file instead of denying it:\n${output}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Fuzz Harness: stdin input path...", async () => {
+  const proc = Bun.spawnSync([FUZZHARNESS, "--verbose", "-"], {
+    stdin: new TextEncoder().encode("const x = 1;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const output = proc.stdout.toString() + proc.stderr.toString();
+  if (proc.exitCode !== 0)
+    throw new Error(`Fuzz harness stdin path exited ${proc.exitCode}:\n${output}`);
+  if (!output.includes("completed"))
+    throw new Error(`Fuzz harness stdin path did not run the input:\n${output}`);
 });
 
 if (sectionFailures.length > 0) {
