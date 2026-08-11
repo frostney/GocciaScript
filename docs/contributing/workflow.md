@@ -65,6 +65,13 @@ git commit -m "Short imperative description of the change"
 
 - **Issues:** Use `.github/ISSUE_TEMPLATE/default.md` (Summary, Why, current vs expected behavior, scope).
 - **Pull requests:** Use `.github/pull_request_template.md` (Summary with constraints and links, testing checklist).
+- **Pull request titles are Conventional Commits.** Pull requests are
+  squash-merged, so the title — not the branch's commits — becomes the commit
+  subject on `main`, and `cliff.toml` parses that subject to build the changelog.
+  A title that does not match `type(scope): summary` still merges and is then
+  silently absent from the release notes. Pick the type from the change as a
+  whole: `feat` when the net effect is new capability, even if most of the
+  commits under it are fixes.
 
 ### Stacked pull requests
 

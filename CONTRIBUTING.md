@@ -89,6 +89,26 @@ add deferred features without an explicit project decision. See
 [docs/language.md](docs/language.md) for the implementation, profile, and
 compatibility-path detail.
 
+### 5. Speculative Parser Probes Must Be Able to Back Out
+
+The parser decides several constructs by trying one reading, then rewinding when
+it does not fit — generic arrow functions, arrow return types, and call-site type
+arguments all work this way. A probe runs over source whose shape is not yet
+known, so **code reached from inside a probe must never raise**. Report the
+problem from the committed parse instead, once the parser has decided what it is
+looking at.
+
+Raising inside a probe turns valid JavaScript into a `SyntaxError`. The
+arrow-return-type probe reaches the ternary `c ? (a, b) : d << 2`, collects
+`d << 2` as a would-be return type, and rewinds; a validator that rejected
+`<<` there failed the whole file. Minified bundles are full of such shapes, so
+the first sign of this is usually a third-party corpus that stops parsing rather
+than a first-party test.
+
+Type annotations already carry the committed/probed distinction: pass
+`ARequireType` when the call site has consumed a `:` and is no longer guessing,
+and validate only then. See [docs/type-annotations.md](docs/type-annotations.md).
+
 ## Quick reference
 
 See [Build System](docs/build-system.md) for the full build, run, test,
