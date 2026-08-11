@@ -38,6 +38,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
   Goccia.ThreadCleanupRegistry,
   Goccia.Timeout,
@@ -221,6 +222,8 @@ begin
     on E: TGocciaTimeoutError do
       raise;
     on E: TGocciaInstructionLimitError do
+      raise;
+    on E: TGocciaMemoryLimitError do
       raise;
     on E: Exception do
     begin

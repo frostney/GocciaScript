@@ -56,6 +56,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
   Goccia.Realm,
   Goccia.ThreadCleanupRegistry,
@@ -345,7 +346,21 @@ begin
   else if AException is TGocciaRuntimeError then
     Result := CreateErrorObject(ERROR_NAME, AException.Message)
   else
-    raise AException;
+    { An exception with no rejection-reason representation is not the promise's
+      to absorb — the resource ceilings (timeout, instruction, memory) and the
+      capability-audit delivery error must keep unwinding to the host with
+      their exact type intact so the host classifies them correctly.
+
+      This branch runs inside the `on E: Exception` handler that caught
+      AException (via RejectPromiseCapabilityWithException, and directly in
+      Promise.try), but not lexically, so a bare `raise` will not compile.
+      `raise AException` re-raised the object by name, starting a second
+      propagation of an exception the enclosing handler still owns and frees on
+      exit — the dangling re-raise that surfaced as a spurious "Access
+      violation" from Promise.all/race iteration. AcquireExceptionObject takes a
+      reference to the in-flight exception so the enclosing handler no longer
+      frees it out from under this re-raise. }
+    raise Exception(AcquireExceptionObject);
 end;
 
 function RejectPromiseCapabilityWithException(
@@ -2081,6 +2096,8 @@ begin
     on E: TGocciaTimeoutError do
       raise;
     on E: TGocciaInstructionLimitError do
+      raise;
+    on E: TGocciaMemoryLimitError do
       raise;
     on E: Exception do
       CallPromiseCapability(Capability.Reject,

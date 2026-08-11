@@ -69,6 +69,7 @@ uses
   Goccia.Error,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -183,8 +184,17 @@ end;
 procedure RejectPromiseWithException(const APromise: TGocciaPromiseValue;
   const AException: Exception);
 begin
+  { Precondition, shared with the sibling reject helpers in Goccia.Values.Await
+    and Goccia.Interpreter: invoke this only from inside the `on E: Exception`
+    handler that caught AException. With no promise to reject there is nothing
+    to absorb the exception into, so it keeps unwinding to the host. `raise
+    AException` re-raised the object by name, which starts a second propagation
+    of an exception the enclosing handler still owns and frees on exit (the
+    dangling re-raise behind the async-path access violations); a bare `raise`
+    will not compile outside a lexical handler, so AcquireExceptionObject takes
+    a reference to the in-flight exception and re-raises that same object. }
   if not Assigned(APromise) then
-    raise AException;
+    raise Exception(AcquireExceptionObject);
 
   if AException is EGocciaBytecodeThrow then
     APromise.Reject(EGocciaBytecodeThrow(AException).ThrownValue)
@@ -237,6 +247,8 @@ begin
         on E: TGocciaTimeoutError do
           raise;
         on E: TGocciaInstructionLimitError do
+          raise;
+        on E: TGocciaMemoryLimitError do
           raise;
         on E: EGocciaCapabilityAuditDeliveryError do
           raise;
@@ -461,6 +473,8 @@ begin
         on E: TGocciaTimeoutError do
           raise;
         on E: TGocciaInstructionLimitError do
+          raise;
+        on E: TGocciaMemoryLimitError do
           raise;
         on E: EGocciaCapabilityAuditDeliveryError do
           raise;
