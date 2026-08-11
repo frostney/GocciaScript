@@ -175,6 +175,65 @@ ENOENT: no such file or directory, rename '/missing.txt' -> '/destination.txt'
 `code` is the portable field to branch on. Numeric `errno` follows libuv's
 target convention, so its value can differ between operating systems.
 
+### Module loading errors
+
+An engine that was never given a module content provider refuses every module
+load it is asked to *retrieve*. The refusal is a JavaScript error rather than an
+RTL exception: `import()` rejects with it and source can catch it, and a static
+import — which no `try`/`catch` in the importing module can wrap — surfaces it as
+a JavaScript throw (`TGocciaThrowValue`) carrying the same error value.
+
+Loading a module is resolution followed by retrieval, and only retrieval reaches
+the provider. A specifier the resolver rejects fails first, and that is a
+different failure carrying no `code` — with the default resolver, which resolves
+against the host filesystem, `import "./dep.js"` where `dep.js` does not exist
+fails there. `import()` rejects with a plain `Error` reading
+`Module not found: "./dep.js" (resolved to "…")`, and a **static import raises
+`TGocciaRuntimeError` out of the engine as a host-language exception**. So an
+embedder still has to guard its engine boundary, and resolution messages do name
+host filesystem addresses, which the refusal below deliberately does not.
+
+In addition to the standard error properties, the refusal carries:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `code` | `string` | `"ERR_MODULE_LOADING_UNSUPPORTED"` |
+
+```javascript
+try {
+  await import("./dep.js");  // resolves, no provider installed
+} catch (error) {
+  error instanceof Error;  // true
+  error.name;              // "Error"
+  error.code;              // "ERR_MODULE_LOADING_UNSUPPORTED"
+  error.message;           // "Cannot load module: no module content provider is configured"
+  error.path;              // undefined — see below
+}
+```
+
+There is deliberately no `path`, and the message names no module address. The
+only address available where the refusal is raised is the *resolved* one, which
+the default resolver expands into an absolute host filesystem path, and an
+engine with no provider is exactly the configuration an embedder runs untrusted
+source in — an enumerable own property would carry that host detail into
+`JSON.stringify(error)` and object spread. Nothing is lost: while no provider is
+installed the refusal is unconditional for every module, so acting on it never
+depends on which one was asked for. Contrast
+[sandbox filesystem errors](#sandbox-filesystem-errors), whose `path` is a
+sandbox VFS address the guest itself named.
+
+The error type is a plain `Error` rather than a `TypeError`. ECMA-262
+`HostLoadImportedModule` requires a throw completion but mandates no type, and
+for this case — an engine with no loader at all — V8, JavaScriptCore, and
+SpiderMonkey all report a plain `Error`; `TypeError` is the convention for a
+*configured* loader that tried and failed. Because the constructor cannot
+separate the two, `code` is the field to branch on: a provider that is
+configured and cannot produce a module reports its own failure and never
+`ERR_MODULE_LOADING_UNSUPPORTED`. See
+[ADR 0106](adr/0106-sandbox-hardening-scope.md) for the full rationale, and
+[Embedding](embedding.md#custom-content-provider) for how to install a
+provider.
+
 ### Stack Traces
 
 The `stack` property contains a V8-style formatted string with the error header followed by `at` frames:
