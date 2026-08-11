@@ -82,6 +82,14 @@ _Avoid_: Default diff, content diff.
 A JavaScript `Error` reported by a sandbox runtime extension when a virtual filesystem operation fails. It carries a stable error code and operation/path context plus a target-appropriate numeric errno. It is shared by synchronous and promise APIs, and by callback APIs when installed.
 _Avoid_: Raw virtual filesystem exception, host filesystem error.
 
+**Out-of-process sandbox**:
+An isolation mode in which an isolated sandbox run executes the engine in a separate child process reached over stdio, instead of in the host process. Process separation buys crash containment and turns a wedged native loop into a parent-enforced deadline and hard kill; it is not a syscall jail, which is deferred. The parent materialises the seed baseline into bytes and sends it in the run request, so the child never reaches the host filesystem.
+_Avoid_: Sandbox jail, syscall confinement, worker thread.
+
+**Child run**:
+One entry program executed in one out-of-process sandbox child, under the child-per-run model where each isolated run spawns a fresh child that runs exactly one program and exits. A child run reports its own outcome in-band as a failure kind; only the parent, observing the child process, sets the reserved child-process-crash classification.
+_Avoid_: Nested sandbox run, pooled child, worker task.
+
 **WinterTC compatibility**:
 The open product direction of aligning selected runtime globals and host behavior with web-interoperable server runtime standards, especially WinterTC's Minimum Common Web API. It is distinct from Node.js host compatibility, CommonJS support, and `node:` built-ins.
 _Avoid_: WHATWG API compatibility, browser host environment, Node.js host compatibility.
