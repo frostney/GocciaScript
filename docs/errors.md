@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-- **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus `TimeoutError` for the `--timeout` option
+- **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus the uncatchable resource ceilings `TimeoutError` (`--timeout`), `InstructionLimitError` (`--max-instructions`), and `MemoryLimitError` (`--max-memory`)
 - **Parser errors** -- Displayed with source context, a caret pointing to the exact column, and optional suggestion text (e.g., "Use 'let' or 'const' instead")
 - **Runtime errors** -- Carry `name`, `message`, `stack`, and optional `cause`; catchable with `try`/`catch`/`finally`
 - **Sandbox filesystem errors** -- Use real `Error` objects with Node-shaped `code`, `errno`, `path`, `syscall`, and optional `dest` metadata
@@ -13,7 +13,7 @@
 
 ## Error Types
 
-GocciaScript supports the standard ECMAScript error constructors plus two additional types. All JavaScript-visible error types inherit from `Error` and work with `instanceof`. `TimeoutError` is CLI-only and not exposed as a JavaScript constructor.
+GocciaScript supports the standard ECMAScript error constructors plus the CLI-only resource-ceiling types below. All JavaScript-visible error types inherit from `Error` and work with `instanceof`. `TimeoutError`, `InstructionLimitError`, and `MemoryLimitError` are CLI-only and not exposed as JavaScript constructors.
 
 | Type | Thrown when | MDN |
 |------|-----------|-----|
@@ -26,6 +26,15 @@ GocciaScript supports the standard ECMAScript error constructors plus two additi
 | [`AggregateError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) | Multiple errors wrapped together; used by `Promise.any` when all promises reject | [AggregateError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) |
 | [`SuppressedError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SuppressedError) | Disposal error during explicit resource management (`using`/`await using`); wraps both the new and suppressed error | [SuppressedError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SuppressedError) |
 | `TimeoutError` | Execution exceeded the `--timeout` limit (CLI only; not a JS-visible constructor) | -- |
+| `InstructionLimitError` | Execution exceeded the `--max-instructions` budget (CLI only; not a JS-visible constructor) | -- |
+| `MemoryLimitError` | An allocation was refused by the `--max-memory` budget (CLI only; not a JS-visible constructor) | -- |
+
+The last three are resource ceilings rather than in-language errors. Script
+`try`/`catch` cannot observe them in either execution mode: they unwind past
+every handler to the host, because a ceiling the guest can catch is a ceiling
+the guest can ignore in a loop. Allocation sites that charge the budget
+against an owning value (string payloads, `ArrayBuffer`) still throw an
+ordinary catchable `RangeError`, which is unchanged.
 
 ### Inheritance
 
@@ -537,7 +546,7 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
 | `stderr` | `string` | Unformatted stderr-oriented console output; present even when empty |
 | `output` | `string[]` | Formatted console output split into lines |
 | `error` | `object \| null` | First failed file's error details, or `null` when the run succeeds |
-| `error.type` | `string` | Error type name (`"TypeError"`, `"SyntaxError"`, `"TimeoutError"`, etc.) |
+| `error.type` | `string` | Error type name (`"TypeError"`, `"SyntaxError"`, `"TimeoutError"`, `"MemoryLimitError"`, etc.) |
 | `error.message` | `string` | Error message text |
 | `error.line` | `number \| null` | Source line number (1-based), or `null` if unavailable |
 | `error.column` | `number \| null` | Source column number (1-based), or `null` if unavailable |

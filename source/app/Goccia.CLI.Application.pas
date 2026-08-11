@@ -139,6 +139,16 @@ function ResolveSourceTypeOption(
 procedure ApplyCompatibilityAndWarningFlags(const AEngine: TGocciaEngine;
   const AEngineOptions: TGocciaEngineOptions;
   const AFileConfig: TConfigEntryArray);
+{ The single place engine-affecting options reach an engine.  CreateEngine
+  calls it for every binary that builds its engine through the base class;
+  binaries that must construct the engine themselves — GocciaSandboxRunner
+  needs its own module resolver — call it directly rather than restating
+  the option set, which is how the sandbox runner previously lost
+  --max-memory and the fetch policy.  Pass an empty AFileConfig when there
+  is no host file to discover a per-file config for. }
+procedure ApplyFileConfigToEngine(const AEngine: TGocciaEngine;
+  const AEngineOptions: TGocciaEngineOptions;
+  const AFileConfig: TConfigEntryArray; const AFileName: string);
 
 implementation
 
