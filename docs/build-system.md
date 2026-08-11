@@ -1,5 +1,11 @@
 # Build System
 
+<!-- doc-length-limit: 900 -->
+<!-- This is the authoritative command reference (build targets, CLI options,
+     config-file behaviour) and grows with each runtime feature, so it carries
+     a higher line budget than a human-narrative doc. Keep it dense and
+     reference-shaped rather than splitting the single source of truth. -->
+
 *For contributors setting up their development environment or troubleshooting builds.*
 
 ## Executive Summary
