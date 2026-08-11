@@ -37,6 +37,8 @@ type
     FStackSize: TIntegerOption;
     FStrictTypes: TFlagOption;
     FAllowedHosts: TRepeatableOption;
+    FFetchDenyPrivateRanges: TFlagOption;
+    FFetchMaxResponseBytes: TIntegerOption;
     FNoHostFilesystem: TFlagOption;
     FInspectDepth: TIntegerOption;
     FModule: TRepeatableOption;
@@ -64,6 +66,8 @@ type
     property StackSize: TIntegerOption read FStackSize;
     property StrictTypes: TFlagOption read FStrictTypes;
     property AllowedHosts: TRepeatableOption read FAllowedHosts;
+    property FetchDenyPrivateRanges: TFlagOption read FFetchDenyPrivateRanges;
+    property FetchMaxResponseBytes: TIntegerOption read FFetchMaxResponseBytes;
     property NoHostFilesystem: TFlagOption read FNoHostFilesystem;
     property InspectDepth: TIntegerOption read FInspectDepth;
     property ModuleDefinitions: TRepeatableOption read FModule;
@@ -118,7 +122,7 @@ function TryApplyCompatibilityFlagArg(const AArg: string;
 implementation
 
 const
-  ENGINE_FIXED_OPTION_COUNT = 19;
+  ENGINE_FIXED_OPTION_COUNT = 21;
 
   SOURCE_COMPATIBILITY_FLAGS: array[TGocciaCompatibility]
     of TGocciaCompatibilityFlagDescriptor = (
@@ -233,6 +237,12 @@ begin
   FAllowedHosts := TRepeatableOption.Create('allowed-host',
     'Hostname allowed for fetch requests (repeatable)', 'Engine');
   FAllowedHosts.ConfigName := 'allowed-hosts';
+  FFetchDenyPrivateRanges := TFlagOption.Create('fetch-deny-private-ranges',
+    'Reject fetch targets resolving to private, loopback, or link-local addresses',
+    'Runtime');
+  FFetchMaxResponseBytes := TIntegerOption.Create('fetch-max-response-bytes',
+    'Maximum fetch response body size in bytes (TypeError on exceed)',
+    'Runtime');
   FNoHostFilesystem := TFlagOption.Create('no-host-filesystem',
     'Disable ambient host-filesystem module loading', 'Runtime');
   FInspectDepth := TIntegerOption.Create('inspect-depth',
@@ -264,6 +274,8 @@ begin
   FStackSize.Free;
   FStrictTypes.Free;
   FAllowedHosts.Free;
+  FFetchDenyPrivateRanges.Free;
+  FFetchMaxResponseBytes.Free;
   FNoHostFilesystem.Free;
   FInspectDepth.Free;
   FModule.Free;
@@ -312,6 +324,10 @@ begin
   Result[Index] := FStrictTypes;
   Inc(Index);
   Result[Index] := FAllowedHosts;
+  Inc(Index);
+  Result[Index] := FFetchDenyPrivateRanges;
+  Inc(Index);
+  Result[Index] := FFetchMaxResponseBytes;
   Inc(Index);
   Result[Index] := FNoHostFilesystem;
   Inc(Index);

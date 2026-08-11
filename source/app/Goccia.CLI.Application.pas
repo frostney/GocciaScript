@@ -147,11 +147,13 @@ uses
   Math,
 
   CLI.Parser,
+  HTTPTypes,
   TextEncoding,
   TextSemantics,
 
   Goccia.CLI.Help,
   Goccia.Coverage,
+  Goccia.FetchManager,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.JSON,
@@ -627,6 +629,8 @@ procedure ApplyFileConfigToEngine(const AEngine: TGocciaEngine;
 var
   ValueStr: string;
   MemoryLimit: Int64;
+  ResponseLimit: Integer;
+  FetchPolicy: THTTPRequestPolicy;
   GC: TGarbageCollector;
   FileHosts: TStringList;
   HasFileHosts: Boolean;
@@ -711,6 +715,32 @@ begin
     else if AEngineOptions.AllowedHosts.Present then
       AEngine.SetAllowedFetchHosts(AEngineOptions.AllowedHosts.Values);
   end;
+
+  { fetch-deny-private-ranges / fetch-max-response-bytes: CLI flag > per-file
+    config > root config > defaults. Always assigned, for the same reason
+    max-memory is: the fetch manager is process-global, so leaving a previous
+    file's policy in place would silently apply it to the next one. }
+  FetchPolicy := DefaultHTTPPolicy;
+  FetchPolicy.DenyPrivateRanges := ResolveFlagOption(
+    AEngineOptions.FetchDenyPrivateRanges, AFileConfig);
+
+  if AEngineOptions.FetchMaxResponseBytes.FromCommandLine then
+    FetchPolicy.MaxResponseBytes := AEngineOptions.FetchMaxResponseBytes.Value
+  else if FindConfigEntry(AFileConfig, 'fetch-max-response-bytes',
+    ValueStr) then
+  begin
+    if not TryStrToInt(ValueStr, ResponseLimit) then
+      raise Exception.CreateFmt(
+        'Invalid fetch-max-response-bytes value in config: %s', [ValueStr]);
+    FetchPolicy.MaxResponseBytes := ResponseLimit;
+  end
+  else if AEngineOptions.FetchMaxResponseBytes.Present then
+    FetchPolicy.MaxResponseBytes := AEngineOptions.FetchMaxResponseBytes.Value;
+
+  if FetchPolicy.MaxResponseBytes < 0 then
+    raise Exception.Create('fetch-max-response-bytes must be 0 or greater');
+
+  SetFetchRequestPolicy(FetchPolicy);
 end;
 
 procedure TGocciaCLIApplication.ConfigureCreatedEngine(
