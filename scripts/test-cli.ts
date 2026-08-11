@@ -777,8 +777,13 @@ console.log("--timeout (native sparse-array fill, interpreted)...");
 {
   // Far single-index writes route to sparse storage and complete instantly;
   // the Array constructor still materializes dense holes, so it stalls.
+  // --max-memory=0 lifts the budget: 2**30 pointers is exactly the 8 GiB
+  // default cap, so the allocation gate would otherwise refuse the request
+  // up front and this would assert the memory limit instead of the deadline.
+  // The stall is still bounded — hole extension polls the deadline as it
+  // grows, so only the fraction allocated within 50ms is ever committed.
   const fill = "const x = new Array(2 ** 30); x.length;\n";
-  const { exitCode, json } = runLoaderJson(fill, ["--timeout=50"], { timeout: 10_000 });
+  const { exitCode, json } = runLoaderJson(fill, ["--timeout=50", "--max-memory=0"], { timeout: 10_000 });
   if (exitCode !== 1) throw new Error(`Array-fill timeout exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
@@ -787,8 +792,9 @@ console.log("--timeout (native sparse-array fill, bytecode)...");
 {
   // Far single-index writes route to sparse storage and complete instantly;
   // the Array constructor still materializes dense holes, so it stalls.
+  // --max-memory=0 for the same reason as the interpreted case above.
   const fill = "const x = new Array(2 ** 30); x.length;\n";
-  const { exitCode, json } = runLoaderJson(fill, ["--timeout=50", "--mode=bytecode"], { timeout: 10_000 });
+  const { exitCode, json } = runLoaderJson(fill, ["--timeout=50", "--max-memory=0", "--mode=bytecode"], { timeout: 10_000 });
   if (exitCode !== 1) throw new Error(`Bytecode array-fill timeout exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
