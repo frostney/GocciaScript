@@ -79,7 +79,7 @@ directions carry **length-prefixed frames**. There is no shared memory in v1.
 
 **Frame format.**
 
-```
+```text
 +-------------------+------------------------------+
 | length (4 bytes)  | payload (length bytes)       |
 | uint32, big-endian| UTF-8 JSON document          |
