@@ -6722,6 +6722,10 @@ await section("SandboxRunner: virtual modules share the CLI surface and cannot s
     if (isolated.exitCode !== 0 ||
         normalizeLineEndings(isolated.stdout.toString()).trim() !== "isolated")
       throw new Error(`Sandbox consulted host config for a virtual path: ${isolated.stdout.toString()}${isolated.stderr.toString()}`);
+    // Skipping the discovered config is deliberate, and silence about it is
+    // not: this is the one binary whose ignored config fails open.
+    if (!isolated.stderr.toString().includes("ignoring discovered configuration"))
+      throw new Error(`Sandbox skipped a discoverable config without saying so: ${isolated.stderr.toString()}`);
 
     const manifest = join(tmp, "modules.mjs");
     const manifestSource = join(tmp, "module-map.mjs");
@@ -7522,6 +7526,268 @@ await section("Memory budget: aggregated small-object growth is NOT bounded (ADR
       // page size and allocator behaviour, and low enough that the sampler
       // fallback undershooting a spike cannot fail it.
       assertPeakRssAbove(run, `distributed property growth (${label})`, 32 * 1024 * 1024);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+// ── Sandbox runner engine options (WP-5) ───────────────────────────────
+//
+// The sandbox runner builds its own engine, because it needs its own module
+// resolver. It used to build it without applying the engine options, so the
+// binary whose entire purpose is running untrusted code silently ignored its
+// own resource and network policy flags. These assert the flags reach the
+// engine, and — for the budget — that the refusal is a refusal rather than a
+// broken gate that rejects everything.
+
+await section("SandboxRunner: --max-memory bounds the sandboxed program...", async () => {
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/alloc.js",
+          // 32 MB of pointer storage in one step: enough to sit either side
+          // of the two budgets below, small enough that the permitted arm
+          // allocates it in milliseconds rather than seconds.
+          text: "const a = new Array(4000000); console.log('len ' + a.length);\n",
+        },
+      ],
+    }));
+
+    const refused = Bun.spawnSync(
+      [SANDBOXRUNNER, "/alloc.js", `--seed-config=${seed}`, "--max-memory=8388608"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const refusedOut = refused.stdout.toString() + refused.stderr.toString();
+    if (refused.exitCode === 0)
+      throw new Error(`Sandbox allocation past the budget was permitted:\n${refusedOut}`);
+    if (!/memory limit exceeded/i.test(refusedOut))
+      throw new Error(`Expected a sandbox memory-budget error, got:\n${refusedOut}`);
+
+    // The same script under a budget that accommodates it must still run,
+    // otherwise the option is not applied so much as the runner is broken.
+    const permitted = Bun.spawnSync(
+      [SANDBOXRUNNER, "/alloc.js", `--seed-config=${seed}`, "--max-memory=67108864"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const permittedOut = permitted.stdout.toString() + permitted.stderr.toString();
+    if (permitted.exitCode !== 0 || !permittedOut.includes("len 4000000"))
+      throw new Error(`Sandbox allocation within budget was refused:\n${permittedOut}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("SandboxRunner: --fetch-deny-private-ranges reaches the sandboxed fetch...", async () => {
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/fetch.js",
+          // Port 1 on loopback needs no server: with the policy on the request
+          // is refused before any connect, with it off it fails at connect.
+          text: [
+            "try {",
+            "  await fetch('http://127.0.0.1:1/');",
+            "  console.log('no-error');",
+            "} catch (error) {",
+            "  console.log('err:' + error.message);",
+            "}",
+          ].join("\n"),
+        },
+      ],
+    }));
+    const args = [
+      SANDBOXRUNNER,
+      "/fetch.js",
+      `--seed-config=${seed}`,
+      "--source-type=module",
+      "--allowed-host=127.0.0.1",
+    ];
+
+    const denied = Bun.spawnSync([...args, "--fetch-deny-private-ranges"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const deniedOut = denied.stdout.toString() + denied.stderr.toString();
+    if (!deniedOut.includes("resolves to private address 127.0.0.1"))
+      throw new Error(`Sandbox fetch should be refused by address policy, got:\n${deniedOut}`);
+
+    // Asserted positively: the default arm has to prove the request reached
+    // the connect, because an absent substring is also what a script that
+    // never ran produces.
+    const allowed = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
+    const allowedOut = allowed.stdout.toString() + allowed.stderr.toString();
+    if (allowed.exitCode !== 0 ||
+        !allowedOut.includes("err:Failed to connect to 127.0.0.1:1"))
+      throw new Error(`Sandbox fetch should reach the connect by default, got (exit ${allowed.exitCode}):\n${allowedOut}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+// ── Sandbox run failure taxonomy (WP-5) ────────────────────────────────
+//
+// `runScript` reports why a nested run ended alongside the message that says
+// it in prose, so a host orchestrating children can tell a bug from a
+// ceiling without matching on text. The property worth pinning is not that
+// the field exists: it is that the guest cannot talk its way into
+// "host-error". Everything the child steers — its own throw, a path it
+// named, a ceiling it ran into — must classify as its own fault or as the
+// limit it hit, or the distinction the field exists to draw is gone.
+//
+// Both execution modes, because the classification sits in the runner's
+// exception ladder and the executors raise through it differently.
+
+const sandboxSeedConfig = (files: Record<string, string>): string =>
+  JSON.stringify({
+    files: Object.entries(files).map(([path, text]) => ({ path, text })),
+  });
+
+const runSandboxKinds = (
+  seed: string,
+  mode: "interpreted" | "bytecode",
+  extraArgs: string[] = [],
+): { stdout: string; exitCode: number | null; combined: string } => {
+  const proc = Bun.spawnSync(
+    [
+      SANDBOXRUNNER,
+      "/main.js",
+      `--seed-config=${seed}`,
+      "--source-type=module",
+      `--mode=${mode}`,
+      ...extraArgs,
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  return {
+    stdout: normalizeLineEndings(proc.stdout.toString()).trim(),
+    exitCode: proc.exitCode,
+    combined: proc.stdout.toString() + proc.stderr.toString(),
+  };
+};
+
+await section("SandboxRunner: guest-reachable failures never classify as host faults...", async () => {
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "failure-kinds.json");
+    writeFileSync(seed, sandboxSeedConfig({
+      "/main.js": [
+        'import { runScript } from "goccia";',
+        'const ok = runScript("/ok.js");',
+        'console.log("success:" + ok.failureKind + ":" + ok.ok);',
+        'const thrown = runScript("/throw.js");',
+        'console.log("throw:" + thrown.failureKind + ":" + thrown.ok);',
+        // An entry path the guest picked, which the VFS does not have.
+        'const missing = runScript("/absent.js");',
+        'console.log("missing:" + missing.failureKind);',
+        // A child seed source the guest picked, which the VFS does not have.
+        'const badSeed = runScript("/ok.js", { sandbox: true, seed: ["/ok.js", "/absent.txt"] });',
+        'console.log("seed:" + badSeed.failureKind);',
+        // The nesting ceiling, observed from the frame one level above it.
+        'console.log("nesting:" + runScript("/deep.js").stdout.trim());',
+      ].join("\n"),
+      "/ok.js": 'console.log("child ran");\n',
+      "/throw.js": 'throw new Error("boom");\n',
+      "/deep.js": [
+        'import { runScript } from "goccia";',
+        'const child = runScript("/deep.js");',
+        "if (child.ok) console.log(child.stdout.trim());",
+        'else console.log(child.failureKind);',
+      ].join("\n"),
+    }));
+
+    const expected = [
+      "success:none:true",
+      "throw:script-error:false",
+      "missing:script-error",
+      "seed:script-error",
+      "nesting:resource-limit",
+    ].join("\n");
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const run = runSandboxKinds(seed, mode);
+      if (run.exitCode !== 0)
+        throw new Error(`SandboxRunner ${mode} failure-kind run should exit 0, got ${run.exitCode}:\n${run.combined}`);
+      if (run.stdout !== expected)
+        throw new Error(`SandboxRunner ${mode} failure kinds should be ${JSON.stringify(expected)}, got:\n${run.stdout}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("SandboxRunner: every host-set ceiling reports itself as one...", async () => {
+  const tmp = makeTmp();
+  try {
+    const memorySeed = join(tmp, "memory-kind.json");
+    writeFileSync(memorySeed, sandboxSeedConfig({
+      "/main.js": [
+        'import { runScript } from "goccia";',
+        'const child = runScript("/hog.js");',
+        'console.log("memory:" + child.failureKind + ":" + child.ok);',
+      ].join("\n"),
+      "/hog.js": "const a = new Array(4000000); console.log(a.length);\n",
+    }));
+
+    const timeoutSeed = join(tmp, "timeout-kind.json");
+    writeFileSync(timeoutSeed, sandboxSeedConfig({
+      "/main.js": [
+        'import { runScript } from "goccia";',
+        'const child = runScript("/spin.js");',
+        'console.log("timeout:" + child.failureKind + ":" + child.ok);',
+      ].join("\n"),
+      "/spin.js": "while (true) {}\n",
+    }));
+
+    // The child sandbox inherits what the parent VFS has left, so a parent
+    // that has spent its node quota cannot seed one at all. That refusal
+    // raises out of the nested call rather than returning a result, so it is
+    // classified by the frame that called it — here, /filler.js.
+    const quotaSeed = join(tmp, "quota-kind.json");
+    writeFileSync(quotaSeed, sandboxSeedConfig({
+      "/main.js": [
+        'import { runScript } from "goccia";',
+        'const filler = runScript("/filler.js");',
+        'console.log("quota:" + filler.failureKind + ":" + filler.ok);',
+        'console.log("filler:" + filler.stdout.trim());',
+      ].join("\n"),
+      "/filler.js": [
+        'import fs from "fs";',
+        'import { runScript } from "goccia";',
+        'let code = "";',
+        'for (const name of Array.from({ length: 200 }, (_, i) => "/f" + i + ".txt")) {',
+        '  try { fs.writeFileSync(name, "x"); } catch (error) { code = error.code; }',
+        "}",
+        'console.log("filled:" + code);',
+        'runScript("/ok.js", { sandbox: true, seed: ["/ok.js"] });',
+        'console.log("unreachable");',
+      ].join("\n"),
+      "/ok.js": 'console.log("child ran");\n',
+    }));
+
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const memory = runSandboxKinds(memorySeed, mode, ["--max-memory=8388608"]);
+      if (memory.stdout !== "memory:resource-limit:false")
+        throw new Error(`SandboxRunner ${mode} memory ceiling should classify as a resource limit, got:\n${memory.combined}`);
+
+      // The parent shares the deadline it hands the child, so it may be out
+      // of time itself once the child is refused. Its output is captured
+      // either way; the exit code is not the assertion.
+      const timeout = runSandboxKinds(timeoutSeed, mode, [
+        "--compat-while-loops",
+        "--timeout=300",
+      ]);
+      if (!containsLine(timeout.stdout, "timeout:timeout:false"))
+        throw new Error(`SandboxRunner ${mode} deadline should classify as a timeout, got:\n${timeout.combined}`);
+
+      const quota = runSandboxKinds(quotaSeed, mode, ["--fs-node-limit=32"]);
+      const expectedQuota = ["quota:resource-limit:false", "filler:filled:ENOSPC"].join("\n");
+      if (quota.stdout !== expectedQuota)
+        throw new Error(`SandboxRunner ${mode} filesystem quota should classify as a resource limit, got:\n${quota.combined}`);
     }
   } finally {
     clean(tmp);

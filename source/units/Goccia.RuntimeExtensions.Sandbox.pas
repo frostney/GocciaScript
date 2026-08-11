@@ -1488,6 +1488,13 @@ begin
     Obj.SetProperty('diff', TGocciaStringLiteralValue.Create(RunResult.Diff))
   else
     Obj.SetProperty('diff', TGocciaNullLiteralValue.NullValue);
+  { Why the run ended, next to the message that says it in prose.  A
+    caller orchestrating nested runs has to tell "the child is buggy"
+    from "the child hit a ceiling I set" to decide whether retrying or
+    raising the ceiling is the answer, and `error` alone forces that
+    decision to be made by matching on message text. }
+  Obj.SetProperty('failureKind', TGocciaStringLiteralValue.Create(
+    SandboxFailureKindName(RunResult.FailureKind)));
   Result := Obj;
 end;
 

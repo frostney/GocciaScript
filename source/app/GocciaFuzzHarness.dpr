@@ -107,9 +107,11 @@ type
     Two reasons, both mandatory. First, a fuzz input must never reach the host
     filesystem — without this, `import "/etc/passwd"` is a file read driven by
     attacker-shaped input, which is precisely the property this harness exists
-    to protect. Second, the engine's default provider raises a bare
-    EStreamError, an RTL type the harness cannot distinguish from a real
-    stream fault; owning the provider means owning the exception type. }
+    to protect. Second, the engine's default provider refuses with a
+    script-catchable JavaScript error, so the fuzzed input could swallow its own
+    import with a try/catch and the outcome ladder would score the run as
+    ordinary script behaviour; EFuzzModuleDenied is an RTL type the input cannot
+    intercept, so owning the provider means owning that distinction. }
   TFuzzDeniedModuleContentProvider = class(TGocciaModuleContentProvider)
   public
     function Exists(const APath: string): Boolean; override;

@@ -905,6 +905,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.RegExp.Runtime,
   Goccia.Scope,
   Goccia.Timeout,
@@ -2446,6 +2447,8 @@ begin
       on E: TGocciaTimeoutError do
         raise;
       on E: TGocciaInstructionLimitError do
+        raise;
+      on E: TGocciaMemoryLimitError do
         raise;
       on E: Exception do
         Promise.Reject(CreateErrorObject(ERROR_NAME, E.Message));

@@ -28,7 +28,17 @@ type
     to the guest — because a resource ceiling the guest can catch is a
     resource ceiling the guest can ignore in a loop. The gate guards paths
     that had no check at all before, so nothing that used to be catchable
-    stops being catchable. }
+    stops being catchable.
+
+    Opacity is a property of the handlers, not of the class. Every boundary
+    that would otherwise convert a Pascal exception into something the guest
+    can observe — the evaluator's try/catch statement paths, the VM's
+    async-iterator and dynamic-import arms, the microtask, await, generator
+    and promise-reaction boundaries, Array.fromAsync, and the test library's
+    toThrow — names this class in its re-raise allowlist ahead of its generic
+    `on E: Exception` arm. A new boundary that omits the arm makes the
+    ceiling catchable again, which is what Goccia.MemoryLimit.Test.pas
+    guards against in both execution modes. }
   TGocciaMemoryLimitError = class(Exception)
   private
     FRequestedBytes: Int64;

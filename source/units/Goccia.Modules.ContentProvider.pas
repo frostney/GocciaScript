@@ -64,6 +64,7 @@ uses
   TextEncoding,
   TextSemantics,
 
+  Goccia.Modules.Errors,
   Goccia.TextFiles;
 
 function TryGetFileLastModified(const APath: string;
@@ -133,8 +134,16 @@ end;
 function TGocciaUnavailableModuleContentProvider.LoadContent(
   const APath: string): TGocciaModuleContent;
 begin
-  raise EStreamError.Create(
-    'No module content provider configured for: ' + APath);
+  { An embedder that runs untrusted source without installing a provider must
+    not get an RTL exception through its engine boundary, so the refusal is
+    reported to source as a plain Error carrying a stable code. LoadContentBytes
+    inherits this: the base implementation calls LoadContent first.
+
+    APath is deliberately dropped: it is the resolved address, which the default
+    resolver expands against the host filesystem, and this refusal is reported
+    to potentially untrusted source. See Goccia.Modules.Errors. }
+  Result := nil;
+  ThrowModuleLoadingUnsupported;
 end;
 
 function TGocciaUnavailableModuleContentProvider.TryGetLastModified(
