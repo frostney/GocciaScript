@@ -3084,6 +3084,7 @@ end;
 function TGocciaParser.TryParseGenericArrowFunction(
   out AExpression: TGocciaExpression): Boolean;
 var
+  GenericParametersEnd: Integer;
   SavedCurrent: Integer;
   SavedLexer: TGocciaLexerCheckpoint;
   Line, Column: Integer;
@@ -3099,10 +3100,12 @@ begin
     SavedLexer := FLexer.CreateCheckpoint;
   IsGenericArrow := False;
 
+  GenericParametersEnd := SavedCurrent;
   try
     try
       if CollectGenericParameters = '' then
         Exit;
+      GenericParametersEnd := FCurrent;
       if not CheckWithLexicalGoal(gttLeftParen, glgInputElementDiv) then
         Exit;
       Advance; // consume '(' so IsArrowFunction probes from the parameter list
@@ -3124,6 +3127,12 @@ begin
 
   if not IsGenericArrow then
     Exit;
+
+  { Committed: this really is a generic arrow, so the type parameter list is
+    type syntax and can be held to it. ArrowFunction resumes inside the
+    parameter list and never revisits the list, so this is the only place it
+    can be checked. }
+  ValidateTypeSyntaxTokens(SavedCurrent, GenericParametersEnd);
 
   AExpression := ArrowFunction;
   // ArrowFunction anchors its source text at the '(' it was entered on; widen
@@ -4501,7 +4510,7 @@ begin
     if Check(gttColon) then
     begin
       Advance;
-      FnReturnType := CollectTypeAnnotation([gttArrow]);
+      FnReturnType := CollectTypeAnnotation([gttArrow], '', '', False, True);
     end;
 
     Consume(gttArrow, 'Expected "=>" in arrow function',
@@ -8474,10 +8483,18 @@ end;
   unchanged — erasing is what types-as-comments is — but a collected span is now
   rejected when it is not type syntax at all; see ValidateTypeSyntaxTokens.
 
-  ARequireType is set by the call sites that have just consumed a ':', where an
-  empty collection means the annotation itself is missing: `const a: = 1` used
-  to run. The speculative probes leave it False, because an empty collection
-  there only means "not the construct being probed". }
+  ARequireType marks a COMMITTED annotation: the call site has consumed a ':'
+  and the parser is no longer guessing. It does two things. An empty collection
+  is then a missing annotation rather than a failed guess — `const a: = 1` used
+  to run. And it is the gate for validation, because only a committed span is
+  known to be type syntax at all.
+
+  That gate is load-bearing. The speculative probes run this collector over
+  source they have not decided the shape of yet, and expect to back out of it:
+  the arrow-return-type probe reaches `c ? (a, b) : d << 2` — an ordinary
+  ternary — collects `d << 2` as a would-be return type, and backtracks.
+  Validating there turned that valid JavaScript into a hard SyntaxError, which
+  is how a minified bundle in the Web Tooling suite stopped parsing. }
 function TGocciaParser.CollectTypeAnnotation(
   const ATerminators: array of TGocciaTokenType;
   const AContextualTerminator: string;
@@ -8494,7 +8511,10 @@ begin
   { Whether anything was consumed, not whether the collected text is empty: a
     template literal type without substitutions carries its text outside the
     token lexeme, so it collects tokens but renders as ''. }
-  if ARequireType and (FCurrent = StartIndex) then
+  if not ARequireType then
+    Exit;
+
+  if FCurrent = StartIndex then
     raise TGocciaSyntaxError.Create('Expected a type annotation',
       Peek.Line, Peek.Column, FFileName, FSourceLines, SSuggestTypeExpected);
 
@@ -8626,16 +8646,17 @@ begin
     KEYWORD_IS, KEYWORD_SATISFIES);
 end;
 
+{ No validation here: TryParseGenericArrowFunction calls this before it knows
+  whether it is looking at a generic arrow, and must be able to back out. The
+  probe validates the span itself once it has committed. }
 function TGocciaParser.CollectGenericParameters: string;
 var
   Depth: Integer;
-  StartIndex: Integer;
 begin
   Result := '';
   if not Check(gttLess) then
     Exit;
 
-  StartIndex := FCurrent;
   Result := Peek.Lexeme;
   Advance;
   Depth := 1;
@@ -8673,7 +8694,6 @@ begin
     Advance;
   end;
 
-  ValidateTypeSyntaxTokens(StartIndex, FCurrent);
   Result := Trim(Result);
 end;
 

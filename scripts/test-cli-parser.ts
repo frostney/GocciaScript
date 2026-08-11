@@ -1029,6 +1029,14 @@ console.log("Malformed type annotations...");
     "const n: unique symbol | null = null;",
     "const o: [first: string, second: number] = [\"a\", 1];",
     "const p: typeof globalThis | undefined = undefined;",
+    // The speculative probes run the annotation collector over source whose
+    // shape is not decided yet and back out of it. The arrow-return-type probe
+    // reaches this ternary, collects `d << 2` as a would-be return type, and
+    // rewinds; validating there rejected valid JavaScript, which is how a
+    // minified bundle in the Web Tooling suite stopped parsing.
+    "const f = (c, a, b, d) => (c ? (a, b) : d << 2);",
+    "const q = (x) => (x ? (1, 2) : 3 >> 4);",
+    "const r = (x) => (x ? (1, 2) : 3 >>> 4);",
   ] as const;
 
   {
