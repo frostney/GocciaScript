@@ -164,7 +164,7 @@ printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20 --print
 printf "name;" | ./build/GocciaScriptLoader --globals=context.json --output=json
 printf "name;" | ./build/GocciaScriptLoader --globals=context.json5 --output=json
 printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
-# `--global name=value` parses inline values as JSON only; `--globals=file` accepts JSON, JSON5, TOML, or YAML by file extension.
+# `--global name=value` parses the value as JSON and keeps it as a string when that fails; `--globals=file` accepts JSON, JSON5, TOML, or YAML by file extension. GocciaTestRunner accepts both — that is how a suite gets `process` (docs/testing-api.md).
 # Injected globals can override earlier injected values, but not built-in globals like console
 
 # Load an explicit import map

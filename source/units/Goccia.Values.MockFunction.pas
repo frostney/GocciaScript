@@ -22,6 +22,10 @@ type
     FResults: TGocciaValueList;
     FContexts: TGocciaValueList;
     FImplementation: TGocciaValue;
+    { The implementation the mock was created with — the argument to
+      `mock(impl)`, or the method a spy replaced. mockReset restores this rather
+      than clearing the implementation outright, which is what Vitest does. }
+    FOriginalImplementation: TGocciaValue;
     FOnceQueue: TGocciaValueList;
     FOnceIsImpl: array of Boolean;
     FDefaultReturnValue: TGocciaValue;
@@ -200,6 +204,7 @@ begin
   FOnceQueue := TGocciaValueList.Create(False);
   SetLength(FOnceIsImpl, 0);
   FImplementation := AImplementation;
+  FOriginalImplementation := AImplementation;
   FHasDefaultReturnValue := False;
   FDefaultReturnValue := nil;
   FSpyTarget := nil;
@@ -230,7 +235,10 @@ begin
 
   // Spy passes through to original by default
   if Assigned(OriginalValue) and (OriginalValue is TGocciaFunctionBase) then
+  begin
     FImplementation := OriginalValue;
+    FOriginalImplementation := OriginalValue;
+  end;
 
   // Replace the method on the target object with this spy
   ATarget.DefineProperty(AMethodName,
@@ -500,6 +508,9 @@ begin
   if Assigned(FImplementation) then
     FImplementation.MarkReferences;
 
+  if Assigned(FOriginalImplementation) then
+    FOriginalImplementation.MarkReferences;
+
   if Assigned(FDefaultReturnValue) then
     FDefaultReturnValue.MarkReferences;
 
@@ -640,7 +651,11 @@ begin
   Result := Self;
 end;
 
-// mockReset() — clears everything including implementation
+// mockReset() — clears recorded calls and every implementation added after
+// creation, then reinstates the implementation the mock was created with: the
+// argument to `mock(impl)`, or the method a spy replaced. Vitest 4 defines it
+// that way, so `vi.fn(impl)` followed by mockReset still calls impl; only a
+// mock created without one is left returning undefined.
 function TGocciaMockFunctionValue.DoMockReset(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
@@ -650,7 +665,7 @@ begin
   FContexts.Clear;
   FOnceQueue.Clear;
   SetLength(FOnceIsImpl, 0);
-  FImplementation := nil;
+  FImplementation := FOriginalImplementation;
   FDefaultReturnValue := nil;
   FHasDefaultReturnValue := False;
   InvalidateMockObject;
@@ -673,7 +688,12 @@ begin
       FSpyTarget.DeleteProperty(FSpyMethodName);
   end;
 
-  // Also reset tracking
+  { Direct mockRestore() also clears the recorded calls: Vitest 4 leaves a
+    restored spy reporting zero calls. That is NOT what vi.restoreAllMocks()
+    does — measured against the pinned release, the bulk member restores the
+    descriptor and leaves the history intact — so the two cannot share this
+    path. The vitest shim restores the target descriptor itself rather than
+    calling through here. }
   DoMockReset(AArgs, AThisValue);
   Result := Self;
 end;

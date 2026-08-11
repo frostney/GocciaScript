@@ -50,6 +50,9 @@ type
 
 implementation
 
+uses
+  Goccia.FileExtensions;
+
 const
   CURRENT_DIRECTORY_PREFIX = './';
   PARENT_DIRECTORY_PREFIX = '../';
@@ -224,11 +227,22 @@ var
   Extensions: TModuleResolverExtensionArray;
   I: Integer;
   Candidate: string;
+  TypeScriptCandidates: TFileExtensionArray;
 begin
   if FFs.IsFile(ABasePath) then
   begin
     AResolvedPath := ABasePath;
     Exit(True);
+  end;
+
+  TypeScriptCandidates := TypeScriptSourceCandidates(ABasePath);
+  for I := 0 to High(TypeScriptCandidates) do
+  begin
+    if FFs.IsFile(TypeScriptCandidates[I]) then
+    begin
+      AResolvedPath := TypeScriptCandidates[I];
+      Exit(True);
+    end;
   end;
 
   Extensions := GetExtensions;

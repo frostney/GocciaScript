@@ -586,7 +586,6 @@ The factory must be a **synchronous arrow function whose body is directly an obj
 | A key that is not usable as an export name, including reserved words: `() => ({ class: 1 })` | Throws (`default` is the exception — it becomes the default export) |
 | `vi.doMock` / `vi.doUnmock` / `vi.resetModules` | Throws |
 | `vi.importActual` / `vi.importMock` / `importOriginal` inside a factory | Throws |
-| `vi.mocked` | Throws (type-only helper in Vitest) |
 | `vi.hoisted` | Throws |
 
 **These throw on first import of the mocked module, not at the `vi.mock` call.** The `vi.mock` call itself is a no-op by then — the work happened during hoisting — so the error surfaces where the generated module is first evaluated. A mocked module nothing imports never reports its error at all, which matches the laziness Vitest also has.
@@ -602,9 +601,47 @@ Further divergences from Vitest worth knowing:
 - A **non-string specifier is skipped**, since the address cannot be resolved before evaluation.
 - Vitest silently yields `undefined` for a `var` referenced from a factory; here it is a `ReferenceError`.
 
+#### The rest of the `vi` namespace
+
+| Member | Status |
+|---|---|
+| `vi.fn`, `vi.spyOn` | Supported — the engine's `mock` and `spyOn`, registered so the bulk members below can drain them |
+| `vi.mocked` | Supported — the identity function it is in Vitest |
+| `vi.stubGlobal`, `vi.unstubAllGlobals` | Supported |
+| `vi.stubEnv`, `vi.unstubAllEnvs` | Supported, over an injected `process.env` |
+| `vi.clearAllMocks`, `vi.resetAllMocks`, `vi.restoreAllMocks` | Supported |
+| `vi.useFakeTimers` and the rest of the timer family | Throws |
+| `vi.hoisted` | Throws |
+| `vi.doMock`, `vi.doUnmock`, `vi.resetModules` | Throws |
+| `vi.importActual`, `vi.importMock` | Throws |
+| `vi.setConfig`, `vi.resetConfig` | Throws |
+
+`vi.stubGlobal` records the value a name held before its **first** stub, so restubbing the same name repeatedly still unwinds to the original, and `vi.unstubAllGlobals` deletes a name that did not exist rather than leaving it behind as an undefined global. `vi.stubEnv` and `vi.unstubAllEnvs` behave the same way over `process.env`, and match Vitest's remaining details: the value is coerced with `String()`, and an `undefined` value deletes the variable instead of setting it.
+
+#### `process.env`
+
+GocciaScript has no `process`. `vi.stubEnv` writes to whatever one the host injected, so a suite that needs it supplies it — the same `--global` and `--globals` options the loader has, now on `GocciaTestRunner` too:
+
+```bash
+./build/GocciaTestRunner suite.test.ts --global 'process={"env":{}}'
+./build/GocciaTestRunner suite.test.ts --globals=env.json
+```
+
+`--globals` takes JSON, JSON5, TOML or YAML, so a file of preset variables works as well as an empty object:
+
+```json
+{ "process": { "env": { "API_BASE": "http://localhost" } } }
+```
+
+Globals are injected before the runtime extensions attach, so a module that reads `process.env` at import time sees it wherever `vitest` sits in the import order. A test file can also just define `globalThis.process = { env: {} }` itself.
+
+Nothing is inherited from the machine's real environment. A suite reading a variable it never stubbed sees the same thing everywhere, and the engine reads no ambient process state — wall time, time zone and randomness all arrive through an [injected host environment](host-environment.md) too.
+
+With no `process` at all, `vi.stubEnv` throws and names the two options rather than silently doing nothing.
+
 #### Why the other members throw
 
-The fake-timer family throws because there is no fake clock — timers run on the real event loop. `vi.stubGlobal` and `vi.stubEnv` throw because globals are not snapshotted, so a stub could not be unwound safely. `vi.clearAllMocks`, `vi.resetAllMocks`, and `vi.restoreAllMocks` throw because no registry of created mocks exists; call `mockClear`, `mockReset`, or `mockRestore` on the mock itself. `vi.resetModules` throws because the loader has no cache-eviction path.
+The fake-timer family throws because there is no fake clock — timers run on the real event loop. `vi.resetModules` throws because the loader has no cache-eviction path.
 
 ### Writing Cross-Compatible Tests
 
@@ -638,6 +675,13 @@ expect(set).toEqual(new Set([2, 1]));
 | `mock()` / `spyOn()` | Standalone globals | `vi.fn()` / `vi.spyOn()` (Vitest) or `jest.fn()` / `jest.spyOn()` (Jest) |
 | `vi.mock` factories | Must directly return an object literal; no automock, no spread-based partial mock | Any factory shape; automock and `importOriginal` partial mocks supported |
 | Missing export on a mock | Reported eagerly at link time | Reported lazily, at property access |
+| `process` | Not provided; inject one with `--global` / `--globals` when a suite needs it | The real process environment and the rest of the Node `process` API |
+| `import.meta.env` | Not available; `vi.stubEnv` writes to `process.env` | Vite populates it, and `vi.stubEnv` writes there |
+| 12-hour `Intl` time separator | U+202F (narrow no-break space) before AM/PM | U+0020 in Node 24 (ICU 77.1) and bun 1.3 |
+
+One of those rows is worth expanding, because it cost a debugging session before it was written down:
+
+**The 12-hour time separator** is a data difference, not a formatting one. GocciaScript's `Intl` data is generated from CLDR 45, whose `en` time patterns put U+202F (narrow no-break space) before the day period; the ICU that Node 24 and bun 1.3 ship emits U+0020 for the same pattern. It applies to every 12-hour format — `timeStyle: "short"`, an explicit `hour`/`minute` skeleton, and `toLocaleTimeString` alike. A test written as `/^\d{2}:\d{2} (AM|PM)$/` therefore fails against `06:04 AM` for a reason nothing in the output shows. Match with `\s` or a character class covering both code points rather than a literal space. This is a deliberate divergence and stands: the pinned CLDR release is the source of truth for the data.
 
 ## Related documents
 

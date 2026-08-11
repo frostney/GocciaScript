@@ -41,7 +41,9 @@ type
 implementation
 
 uses
-  FileUtils;
+  FileUtils,
+
+  Goccia.FileExtensions;
 
 const
   ALIAS_SEGMENT_DELIMITER = '/';
@@ -230,11 +232,22 @@ end;
 function TModuleResolver.TryResolveWithExtensions(const ABasePath: string; out AResolvedPath: string): Boolean;
 var
   I: Integer;
+  TypeScriptCandidates: TFileExtensionArray;
 begin
   if HostFileExists(ABasePath) then
   begin
     AResolvedPath := ABasePath;
     Exit(True);
+  end;
+
+  TypeScriptCandidates := TypeScriptSourceCandidates(ABasePath);
+  for I := 0 to High(TypeScriptCandidates) do
+  begin
+    if HostFileExists(TypeScriptCandidates[I]) then
+    begin
+      AResolvedPath := TypeScriptCandidates[I];
+      Exit(True);
+    end;
   end;
 
   for I := 0 to High(FExtensions) do

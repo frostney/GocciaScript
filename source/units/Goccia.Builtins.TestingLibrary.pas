@@ -372,6 +372,7 @@ uses
   TimingUtils,
 
   Goccia.Arithmetic,
+  Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -754,6 +755,63 @@ begin
   end;
 
   Result := FormatForDisplay(AValue);
+end;
+
+{ The name a value's own "name" property reports, or '' when it has none. }
+function OwnNamePropertyOf(const AValue: TGocciaValue): string;
+var
+  NameValue: TGocciaValue;
+begin
+  Result := '';
+  if not (AValue is TGocciaObjectValue) then
+    Exit;
+  NameValue := TGocciaObjectValue(AValue).GetProperty(PROP_NAME);
+  if NameValue is TGocciaStringLiteralValue then
+    Result := TGocciaStringLiteralValue(NameValue).Value;
+end;
+
+{ How a constructor is named in assertion output. Serializing the class object
+  itself renders every class as an empty object literal, which tells a reader
+  nothing about which constructor the assertion expected — Vitest prints the
+  name instead. }
+function DescribeConstructor(const AValue: TGocciaValue): string;
+begin
+  if AValue is TGocciaClassValue then
+    Result := TGocciaClassValue(AValue).Name
+  else if AValue is TGocciaNativeFunctionValue then
+    Result := TGocciaNativeFunctionValue(AValue).Name
+  else
+    Result := OwnNamePropertyOf(AValue);
+
+  if Result = '' then
+    Result := FormatForDisplay(AValue);
+end;
+
+{ How the subject of an instance-of assertion is described. Errors read as
+  "Error: boom"; anything else built by a named constructor is prefixed with
+  that constructor's name, so two structurally identical instances of different
+  classes do not both render as a bare empty object literal. }
+function DescribeInstanceOfSubject(const AValue: TGocciaValue): string;
+var
+  ConstructorValue: TGocciaValue;
+  ConstructorName, Rendered: string;
+begin
+  Rendered := DescribeThrowValue(AValue);
+  if not (AValue is TGocciaObjectValue) then
+    Exit(Rendered);
+  if Rendered <> FormatForDisplay(AValue) then
+    Exit(Rendered);
+
+  ConstructorValue := TGocciaObjectValue(AValue).GetProperty(PROP_CONSTRUCTOR);
+  ConstructorName := '';
+  if Assigned(ConstructorValue) then
+    ConstructorName := DescribeConstructor(ConstructorValue);
+
+  if (ConstructorName <> '') and (ConstructorName <> CONSTRUCTOR_OBJECT) and
+    (ConstructorName <> Rendered) then
+    Result := ConstructorName + Rendered
+  else
+    Result := Rendered;
 end;
 
 { The JavaScript error name whose prototype an engine-level Pascal error maps
@@ -1962,13 +2020,16 @@ begin
                    (FActualValue.ClassName = 'TGocciaFunctionPrototypeMethod') or
                    (FActualValue.ClassName = 'TGocciaBoundFunctionValue');
     end
-    else
+    else if FActualValue is TGocciaObjectValue then
     begin
-      // Check if the actual value is an instance of the class
-      if FActualValue is TGocciaInstanceValue then
-      begin
-        IsInstance := IsObjectInstanceOfClass(TGocciaInstanceValue(FActualValue), TGocciaClassValue(ExpectedConstructor));
-      end;
+      // ES2026 §13.10.2 InstanceofOperator(value, target) — the same prototype
+      // walk the instanceof operator and toThrow(Class) use. Gating on
+      // TGocciaInstanceValue instead missed every value a class produces
+      // through some other representation, `class Failure extends Error {}`
+      // above all: its instances carry the right prototype chain but are error
+      // values, so the matcher disagreed with both `instanceof` and
+      // `toThrow(Failure)` on the same object.
+      IsInstance := InstanceofOperatorResult(FActualValue, ExpectedConstructor);
     end;
   end;
 
@@ -1984,10 +2045,12 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeInstanceOf',
-        'Expected ' + FormatForDisplay(FActualValue) + ' not to be an instance of ' + FormatForDisplay(ExpectedConstructor))
+        'Expected ' + DescribeInstanceOfSubject(FActualValue) +
+        ' not to be an instance of ' + DescribeConstructor(ExpectedConstructor))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeInstanceOf',
-        'Expected ' + FormatForDisplay(FActualValue) + ' to be an instance of ' + FormatForDisplay(ExpectedConstructor));
+        'Expected ' + DescribeInstanceOfSubject(FActualValue) +
+        ' to be an instance of ' + DescribeConstructor(ExpectedConstructor));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;

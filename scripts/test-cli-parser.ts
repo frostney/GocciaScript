@@ -960,6 +960,132 @@ console.log("JSX preprocessor termination...");
   }
 }
 
+// -- Malformed type annotations --------------------------------------------------
+
+console.log("Malformed type annotations...");
+{
+  // Types are erased, so a malformed annotation used to run to completion with
+  // nothing to show for it: `const x: string number = "a"` exited 0. Silence is
+  // the whole problem — a typo in an annotation had no way of being noticed,
+  // and --strict-types can only enforce what was parsed. These are parse
+  // errors, so they cannot be asserted from a JS test file; the accepted forms
+  // live in tests/language/types-as-comments/.
+  const malformed = [
+    {
+      desc: "annotation with no type",
+      source: "const a: = 1;\n",
+      messageIncludes: "Expected a type annotation",
+    },
+    {
+      desc: "empty type parameter slot",
+      source: "const y = <T,,>(v) => v;\n",
+      messageIncludes: 'Expected a type before ","',
+    },
+    {
+      desc: "'<<' in a type argument list",
+      source: "const b: NotAType<<> = 1;\n",
+      messageIncludes: "not valid type syntax",
+    },
+    {
+      desc: "object type member with no type",
+      source: "const f = (): { a: ; } => 1;\n",
+      messageIncludes: 'Expected a type after ":"',
+    },
+    {
+      desc: "two type names side by side",
+      source: 'const x: string number = "a";\n',
+      messageIncludes: 'Unexpected "number" after the type "string"',
+    },
+    {
+      desc: "two type names side by side in a parameter",
+      source: "const f = (a: string number) => a;\n",
+      messageIncludes: "Unexpected",
+    },
+    {
+      desc: "empty slot in a type argument list",
+      source: "const c: Array<,string> = [];\n",
+      messageIncludes: 'Expected a type before ","',
+    },
+  ] as const;
+
+  for (const { desc, source, messageIncludes } of malformed)
+    assertSyntaxErrorInBothModes(source, desc, [], { messageIncludes });
+
+  // assertSyntaxErrorInBothModes feeds the source over stdin, which the
+  // pipeline names `<stdin>`; the accepted forms below are written to a `.ts`
+  // file. Those are different parser paths — JSX preprocessing is skipped only
+  // for TypeScript extensions — so the rejections are repeated as real `.ts`
+  // files rather than being asserted on one path and trusted on the other.
+  {
+    const tmp = mkdtemp("goccia-type-annotations-rejected-");
+    try {
+      for (const { desc, source, messageIncludes } of malformed) {
+        const path = join(tmp, "malformed.ts");
+        writeFileSync(path, source);
+        for (const args of [[] as string[], ["--mode=bytecode"]]) {
+          const res = await $`${LOADER} ${path} ${args} 2>&1`.quiet().nothrow();
+          const out = res.text();
+          if (res.exitCode === 0)
+            throw new Error(`${desc} (.ts file) should be rejected, got exit 0`);
+          if (!out.includes(messageIncludes))
+            throw new Error(
+              `${desc} (.ts file) should mention "${messageIncludes}", got: ${out}`,
+            );
+        }
+      }
+    } finally {
+      clean(tmp);
+    }
+  }
+
+  // The other half of the contract: the shapes that look adjacent but are real
+  // type syntax must keep parsing. A false rejection here fails a program that
+  // runs correctly, which is worse than the silence being fixed.
+  const accepted = [
+    'const a: string = "x";',
+    "const b: string | number = 1;",
+    "const c: Array<Map<string, number>> = [];",
+    "const d = <T,>(v: T): T => v;",
+    'const e: keyof { a: 1 } = "a";',
+    "const g: readonly string[] = [];",
+    'const h = (x: unknown): x is string => typeof x === "string";',
+    'const i: { a: string; b: number } = { a: "1", b: 2 };',
+    "const j: (a: string, b: number) => void = () => {};",
+    "const k: -1 | 1 = 1;",
+    "type M = A extends B ? C : D;",
+    "const n: unique symbol | null = null;",
+    "const o: [first: string, second: number] = [\"a\", 1];",
+    "const p: typeof globalThis | undefined = undefined;",
+    // The speculative probes run the annotation collector over source whose
+    // shape is not decided yet and back out of it. The arrow-return-type probe
+    // reaches this ternary, collects `d << 2` as a would-be return type, and
+    // rewinds; validating there rejected valid JavaScript, which is how a
+    // minified bundle in the Web Tooling suite stopped parsing.
+    "const f = (c, a, b, d) => (c ? (a, b) : d << 2);",
+    "const q = (x) => (x ? (1, 2) : 3 >> 4);",
+    "const r = (x) => (x ? (1, 2) : 3 >>> 4);",
+  ] as const;
+
+  {
+    const tmp = mkdtemp("goccia-type-annotations-");
+    try {
+      for (const source of accepted) {
+        const path = join(tmp, "accepted.ts");
+        writeFileSync(path, `${source}\n`);
+        for (const args of [[] as string[], ["--mode=bytecode"]]) {
+          const res = await $`${LOADER} ${path} ${args} 2>&1`.quiet().nothrow();
+          if (res.exitCode !== 0)
+            throw new Error(
+              `Valid type syntax must still parse: ${source}\n  got: ${res.text()}`,
+            );
+        }
+      }
+    } finally {
+      clean(tmp);
+    }
+  }
+}
+
 // -- Definite assignment assertion rules ----------------------------------------
 
 console.log("Definite assignment assertion rules...");
@@ -997,16 +1123,17 @@ console.log("Definite assignment assertion rules...");
       args: ["--compat-var"],
     },
     {
-      // The colon is consumed but the annotation collector returns nothing, so
-      // the assertion still has no type to attach to.
+      // The colon is consumed but there is no type after it, so the empty
+      // annotation is reported before the definite-assignment rule is reached.
+      // tsc reports the same source as "Type expected." for the same reason.
       desc: "definite assignment with an empty annotation",
       source: "let x!:;\n",
-      messageIncludes: "must also have type annotations",
+      messageIncludes: "Expected a type annotation",
     },
     {
       desc: "definite assignment with an empty annotation on var",
       source: "var x!:;\n",
-      messageIncludes: "must also have type annotations",
+      messageIncludes: "Expected a type annotation",
       args: ["--compat-var"],
     },
   ] as const;

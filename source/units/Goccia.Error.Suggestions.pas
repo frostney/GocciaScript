@@ -105,6 +105,8 @@ resourcestring
   SSuggestAddConstInitializer = 'Add ''= value'' after the variable name';
   SSuggestComputedPropertyNeedsValue = 'Add '': value'' after the computed property (e.g., [key]: value)';
   SSuggestDefiniteAssignmentNeedsAnnotation = 'Add a type annotation after ''!'' (e.g., let x!: number)';
+  SSuggestTypeExpected = 'Write the type here, or drop the '':'' to leave the binding unannotated';
+  SSuggestTypeSyntaxOperator = 'Types are joined with ''|'', ''&'', ''extends'' or a type argument list — two type names cannot sit side by side';
   SSuggestDefiniteAssignmentNoInitializer = 'Remove the ''!'' — a declaration with an initializer is already assigned';
   SSuggestDefiniteAssignmentNotOnConst = 'Remove the ''!'' — a const is always assigned at its declaration';
 

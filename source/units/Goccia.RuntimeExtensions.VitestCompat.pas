@@ -268,21 +268,156 @@ begin
     '  "vi.mock with a factory is supported, but the factory is relocated " +' + LB +
     '  "into its own module scope, so there is no shared hoisted-variable " +' + LB +
     '  "scope for it to read.";' + LB +
-    'const TYPE_HELPER =' + LB +
-    '  "vi.mocked is a TypeScript type helper with no runtime behaviour to " +' + LB +
-    '  "provide; call the mock''s own methods instead.";' + LB +
     'const FAKE_TIMERS =' + LB +
     '  "GocciaScript has no fake-timer clock; timers run on the real event loop.";' + LB +
-    'const GLOBAL_STUBS =' + LB +
-    '  "GocciaScript does not snapshot globals or environment variables, so a " +' + LB +
-    '  "stub could not be unwound safely.";' + LB +
-    'const MOCK_REGISTRY =' + LB +
-    '  "GocciaScript keeps no registry of created mocks; call mockClear, " +' + LB +
-    '  "mockReset or mockRestore on the mock itself.";' + LB +
+    'const CONFIG =' + LB +
+    '  "GocciaScript has no runtime-mutable test configuration.";' + LB +
+    LB +
+    '// vi.fn and vi.spyOn are the registry Vitest drains in clearAllMocks,' + LB +
+    '// resetAllMocks and restoreAllMocks, so registration happens here rather' + LB +
+    '// than inside `mock` and `spyOn` themselves: those are also GocciaScript' + LB +
+    '// globals, and a suite that never touches `vi` should not pay for a' + LB +
+    '// registry it cannot drain.' + LB +
+    'const createdMocks = [];' + LB +
+    'const createdSpies = [];' + LB +
+    LB +
+    'const registerMock = (...args) => {' + LB +
+    '  const created = mock(...args);' + LB +
+    '  createdMocks.push(created);' + LB +
+    '  return created;' + LB +
+    '};' + LB +
+    LB +
+    '// The spy records the descriptor it displaced, because restoreAllMocks' + LB +
+    '// puts that descriptor back WITHOUT touching the recorded calls. Calling' + LB +
+    '// mockRestore() here instead would clear them, which is what the direct' + LB +
+    '// member does and the bulk one does not.' + LB +
+    'const registerSpy = (target, key, ...rest) => {' + LB +
+    '  const previous = Object.getOwnPropertyDescriptor(target, key);' + LB +
+    '  const created = spyOn(target, key, ...rest);' + LB +
+    '  createdSpies.push({ mock: created, target, key, previous });' + LB +
+    '  return created;' + LB +
+    '};' + LB +
+    LB +
+    '// Vitest semantics: clear drops recorded calls, reset also drops the' + LB +
+    '// implementations added after creation, and restore reverts a spy to the' + LB +
+    '// method it replaced while leaving bare vi.fn mocks alone.' + LB +
+    'const everyMock = () => [' + LB +
+    '  ...createdMocks,' + LB +
+    '  ...createdSpies.map((entry) => entry.mock),' + LB +
+    '];' + LB +
+    LB +
+    'const clearAllMocks = () => {' + LB +
+    '  everyMock().forEach((entry) => entry.mockClear());' + LB +
+    '  return vi;' + LB +
+    '};' + LB +
+    LB +
+    'const resetAllMocks = () => {' + LB +
+    '  everyMock().forEach((entry) => entry.mockReset());' + LB +
+    '  return vi;' + LB +
+    '};' + LB +
+    LB +
+    '// Descriptor-only, and deliberately not entry.mock.mockRestore(): the' + LB +
+    '// bulk member reverts the target and leaves the spy reporting the calls' + LB +
+    '// it recorded, so a suite can still assert on them afterwards. The spies' + LB +
+    '// stay registered, as they do in Vitest, so a later clearAllMocks still' + LB +
+    '// reaches that history.' + LB +
+    'const restoreAllMocks = () => {' + LB +
+    '  createdSpies.forEach((entry) => {' + LB +
+    '    if (entry.previous) {' + LB +
+    '      Object.defineProperty(entry.target, entry.key, entry.previous);' + LB +
+    '    } else {' + LB +
+    '      delete entry.target[entry.key];' + LB +
+    '    }' + LB +
+    '  });' + LB +
+    '  return vi;' + LB +
+    '};' + LB +
+    LB +
+    '// Global stubs. The first stub of a name records the value that was there' + LB +
+    '// before it, so restubbing the same name repeatedly still unwinds to the' + LB +
+    '// original — and a name that did not exist is deleted rather than left' + LB +
+    '// behind as an undefined global.' + LB +
+    'const globalStubs = [];' + LB +
+    LB +
+    'const stubGlobal = (name, value) => {' + LB +
+    '  if (!globalStubs.some((stub) => stub.name === name)) {' + LB +
+    '    globalStubs.push({' + LB +
+    '      name,' + LB +
+    '      existed: Object.prototype.hasOwnProperty.call(globalThis, name),' + LB +
+    '      value: globalThis[name],' + LB +
+    '    });' + LB +
+    '  }' + LB +
+    '  globalThis[name] = value;' + LB +
+    '  return vi;' + LB +
+    '};' + LB +
+    LB +
+    '// Environment stubs. GocciaScript has no process of its own, so the' + LB +
+    '// environment is whatever the host injected — `--global` or `--globals`' + LB +
+    '// put it there, and it is an ordinary object this writes to. Vitest' + LB +
+    '// coerces the value with String() and treats undefined as a deletion,' + LB +
+    '// so the same source sets and clears a variable either way.' + LB +
+    'const envStubs = [];' + LB +
+    LB +
+    'const environment = () => {' + LB +
+    '  const found = typeof process === "undefined" ? undefined : process.env;' + LB +
+    '  if (found === undefined || found === null) {' + LB +
+    '    throw new Error(' + LB +
+    '      "vi.stubEnv needs a process.env to write to, and GocciaScript has " +' + LB +
+    '        "no process of its own. Inject one with --global or --globals, " +' + LB +
+    '        "as a process key holding an env object. " + DOCS,' + LB +
+    '    );' + LB +
+    '  }' + LB +
+    '  return found;' + LB +
+    '};' + LB +
+    LB +
+    'const stubEnv = (name, value) => {' + LB +
+    '  const env = environment();' + LB +
+    '  if (!envStubs.some((stub) => stub.name === name)) {' + LB +
+    '    envStubs.push({' + LB +
+    '      name,' + LB +
+    '      existed: Object.prototype.hasOwnProperty.call(env, name),' + LB +
+    '      value: env[name],' + LB +
+    '    });' + LB +
+    '  }' + LB +
+    '  if (value === undefined) {' + LB +
+    '    delete env[name];' + LB +
+    '  } else {' + LB +
+    '    env[name] = String(value);' + LB +
+    '  }' + LB +
+    '  return vi;' + LB +
+    '};' + LB +
+    LB +
+    'const unstubAllEnvs = () => {' + LB +
+    '  const env = environment();' + LB +
+    '  [...envStubs].reverse().forEach((stub) => {' + LB +
+    '    if (stub.existed) {' + LB +
+    '      env[stub.name] = stub.value;' + LB +
+    '    } else {' + LB +
+    '      delete env[stub.name];' + LB +
+    '    }' + LB +
+    '  });' + LB +
+    '  envStubs.splice(0, envStubs.length);' + LB +
+    '  return vi;' + LB +
+    '};' + LB +
+    LB +
+    'const unstubAllGlobals = () => {' + LB +
+    '  [...globalStubs].reverse().forEach((stub) => {' + LB +
+    '    if (stub.existed) {' + LB +
+    '      globalThis[stub.name] = stub.value;' + LB +
+    '    } else {' + LB +
+    '      delete globalThis[stub.name];' + LB +
+    '    }' + LB +
+    '  });' + LB +
+    '  globalStubs.splice(0, globalStubs.length);' + LB +
+    '  return vi;' + LB +
+    '};' + LB +
     LB +
     'export const vi = {' + LB +
-    '  fn: mock,' + LB +
-    '  spyOn: spyOn,' + LB +
+    '  fn: registerMock,' + LB +
+    '  spyOn: registerSpy,' + LB +
+    LB +
+    '  // A TypeScript type helper: at runtime it is the identity function, and' + LB +
+    '  // Vitest defines it that way too.' + LB +
+    '  mocked: (value) => value,' + LB +
     LB +
     '  mock: hoistedDirective,' + LB +
     '  unmock: hoistedDirective,' + LB +
@@ -290,7 +425,6 @@ begin
     '  doMock: unsupported("doMock", DYNAMIC_MOCKING),' + LB +
     '  doUnmock: unsupported("doUnmock", DYNAMIC_MOCKING),' + LB +
     '  resetModules: unsupported("resetModules", DYNAMIC_MOCKING),' + LB +
-    '  mocked: unsupported("mocked", TYPE_HELPER),' + LB +
     '  importActual: unsupported("importActual", NO_ACTUAL_MODULE),' + LB +
     '  importMock: unsupported("importMock", NO_ACTUAL_MODULE),' + LB +
     '  hoisted: unsupported("hoisted", FACTORY_SCOPE),' + LB +
@@ -309,19 +443,19 @@ begin
     '  runAllTimers: unsupported("runAllTimers", FAKE_TIMERS),' + LB +
     '  runOnlyPendingTimers: unsupported("runOnlyPendingTimers", FAKE_TIMERS),' + LB +
     LB +
-    '  stubEnv: unsupported("stubEnv", GLOBAL_STUBS),' + LB +
-    '  stubGlobal: unsupported("stubGlobal", GLOBAL_STUBS),' + LB +
-    '  unstubAllEnvs: unsupported("unstubAllEnvs", GLOBAL_STUBS),' + LB +
-    '  unstubAllGlobals: unsupported("unstubAllGlobals", GLOBAL_STUBS),' + LB +
+    '  stubGlobal: stubGlobal,' + LB +
+    '  unstubAllGlobals: unstubAllGlobals,' + LB +
+    '  stubEnv: stubEnv,' + LB +
+    '  unstubAllEnvs: unstubAllEnvs,' + LB +
     LB +
-    '  clearAllMocks: unsupported("clearAllMocks", MOCK_REGISTRY),' + LB +
-    '  resetAllMocks: unsupported("resetAllMocks", MOCK_REGISTRY),' + LB +
-    '  restoreAllMocks: unsupported("restoreAllMocks", MOCK_REGISTRY),' + LB +
+    '  clearAllMocks: clearAllMocks,' + LB +
+    '  resetAllMocks: resetAllMocks,' + LB +
+    '  restoreAllMocks: restoreAllMocks,' + LB +
     LB +
     '  waitFor: unsupported("waitFor", FAKE_TIMERS),' + LB +
     '  waitUntil: unsupported("waitUntil", FAKE_TIMERS),' + LB +
-    '  setConfig: unsupported("setConfig", GLOBAL_STUBS),' + LB +
-    '  resetConfig: unsupported("resetConfig", GLOBAL_STUBS),' + LB +
+    '  setConfig: unsupported("setConfig", CONFIG),' + LB +
+    '  resetConfig: unsupported("resetConfig", CONFIG),' + LB +
     '};' + LB +
     LB +
     '// Vitest exports the same namespace object under both names, and hoists' + LB +

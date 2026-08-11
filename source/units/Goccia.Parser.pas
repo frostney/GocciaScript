@@ -94,6 +94,10 @@ type
     FLexer: TGocciaLexer;
     FCurrent: Integer;
     FFileName: string;
+    // Call-site type arguments are TypeScript-only: `a < b > (c)` is a
+    // comparison chain in JavaScript. Resolved once from the source file's
+    // extension; see IsTypeScriptExtension.
+    FAllowsTypeScriptOnlySyntax: Boolean;
     FSourceLines: TStringList;
     FWarnings: array of TGocciaParserWarning;
     FWarningCount: Integer;
@@ -273,10 +277,18 @@ type
     function CollectTypeAnnotation(const ATerminators: array of TGocciaTokenType;
       const AContextualTerminator: string = '';
       const ASecondaryContextualTerminator: string = '';
-      const AAllowInitialObjectType: Boolean = False): string;
+      const AAllowInitialObjectType: Boolean = False;
+      const ARequireType: Boolean = False): string;
+    function CollectTypeAnnotationTokens(
+      const ATerminators: array of TGocciaTokenType;
+      const AContextualTerminator: string;
+      const ASecondaryContextualTerminator: string;
+      const AAllowInitialObjectType: Boolean): string;
+    procedure ValidateTypeSyntaxTokens(const AStartIndex, AEndIndex: Integer);
     function CollectExpressionTypeAnnotation: string;
     function CollectGenericParameters: string;
     function TryCollectNewExpressionTypeArguments: Boolean;
+    function TryCollectCallExpressionTypeArguments: Boolean;
     function TryParseGenericArrowFunction(
       out AExpression: TGocciaExpression): Boolean;
     function ParseDefiniteAssignmentAssertion(
@@ -401,6 +413,7 @@ uses
   Goccia.Constants,
   Goccia.Error,
   Goccia.Error.Suggestions,
+  Goccia.FileExtensions,
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
   Goccia.Scope.BindingMap,
@@ -423,6 +436,34 @@ const
   ARROW_RETURN_TYPE_TERMINATORS: array[0..5] of TGocciaTokenType = (
     gttArrow, gttSemicolon, gttComma,
     gttRightParen, gttRightBracket, gttRightBrace);
+
+// Tokens that can never appear at the top level of a call-site type argument
+// list, and so disqualify the type-argument reading of a `<...>` span. See
+// TryCollectCallExpressionTypeArguments for why the check is needed.
+//
+// '&' and '|' are absent: they are intersection and union types. '?' ':' '=>'
+// and '.' are absent too — conditional types, optional members, function types
+// and qualified names. 'in' is here because a mapped type's `in` only occurs
+// inside braces, where this check does not apply.
+type
+  TGocciaTokenTypeSet = set of TGocciaTokenType;
+
+const
+  EXPRESSION_ONLY_TYPE_ARGUMENT_TOKENS: TGocciaTokenTypeSet = [
+    gttAnd, gttOr, gttNullishCoalescing, gttNot,
+    gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
+    gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual,
+    gttLessEqual, gttGreaterEqual,
+    gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign,
+    gttPercentAssign, gttPowerAssign, gttNullishCoalescingAssign,
+    gttLogicalAndAssign, gttLogicalOrAssign,
+    gttBitwiseXor, gttBitwiseNot,
+    gttBitwiseAndAssign, gttBitwiseOrAssign, gttBitwiseXorAssign,
+    gttLeftShift, gttLeftShiftAssign, gttRightShiftAssign,
+    gttUnsignedRightShiftAssign,
+    gttIncrement, gttDecrement, gttInstanceof, gttIn, gttDelete,
+    gttOptionalChaining, gttSemicolon, gttRegex, gttAt, gttHash, gttSpread,
+    gttEOF];
 
 { TGocciaPrivateClassContext }
 
@@ -541,6 +582,7 @@ begin
   FTokens := ATokens;
   FLexer := nil;
   FFileName := AFileName;
+  FAllowsTypeScriptOnlySyntax := IsTypeScriptFileName(AFileName);
   FSourceLines := ASourceLines;
   FCurrent := 0;
   FWarningCount := 0;
@@ -561,6 +603,7 @@ begin
   FTokens := ALexer.Tokens;
   FLexer := ALexer;
   FFileName := AFileName;
+  FAllowsTypeScriptOnlySyntax := IsTypeScriptFileName(AFileName);
   FSourceLines := ASourceLines;
   FCurrent := 0;
   FWarningCount := 0;
@@ -2234,6 +2277,14 @@ begin
           Column := Token.Column;
           Result := ParseTaggedTemplate(Result, Token, Line, Column);
         end;
+      gttLess:
+        begin
+          // Call-site type arguments — `fn<T>(x)`, erased like every other type
+          // annotation. Anything the probe declines is left for the relational
+          // operator, so the loop must end rather than consume the '<'.
+          if not TryCollectCallExpressionTypeArguments then
+            Break;
+        end;
     else
       Break;
     end;
@@ -3033,6 +3084,7 @@ end;
 function TGocciaParser.TryParseGenericArrowFunction(
   out AExpression: TGocciaExpression): Boolean;
 var
+  GenericParametersEnd: Integer;
   SavedCurrent: Integer;
   SavedLexer: TGocciaLexerCheckpoint;
   Line, Column: Integer;
@@ -3048,10 +3100,12 @@ begin
     SavedLexer := FLexer.CreateCheckpoint;
   IsGenericArrow := False;
 
+  GenericParametersEnd := SavedCurrent;
   try
     try
       if CollectGenericParameters = '' then
         Exit;
+      GenericParametersEnd := FCurrent;
       if not CheckWithLexicalGoal(gttLeftParen, glgInputElementDiv) then
         Exit;
       Advance; // consume '(' so IsArrowFunction probes from the parameter list
@@ -3073,6 +3127,12 @@ begin
 
   if not IsGenericArrow then
     Exit;
+
+  { Committed: this really is a generic arrow, so the type parameter list is
+    type syntax and can be held to it. ArrowFunction resumes inside the
+    parameter list and never revisits the list, so this is the only place it
+    can be checked. }
+  ValidateTypeSyntaxTokens(SavedCurrent, GenericParametersEnd);
 
   AExpression := ArrowFunction;
   // ArrowFunction anchors its source text at the '(' it was entered on; widen
@@ -4142,7 +4202,7 @@ begin
         if Check(gttColon) then
         begin
           Advance;
-          Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttRightParen, gttComma]);
+          Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttRightParen, gttComma], '', '', False, True);
         end;
         Inc(ParamCount);
         Break;
@@ -4157,7 +4217,7 @@ begin
         if Check(gttColon) then
         begin
           Advance;
-          Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttRightParen, gttComma]);
+          Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttRightParen, gttComma], '', '', False, True);
         end;
 
         if Match(gttAssign) then
@@ -4182,7 +4242,7 @@ begin
         if Check(gttColon) then
         begin
           Advance;
-          Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttRightParen, gttComma]);
+          Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttRightParen, gttComma], '', '', False, True);
         end;
 
         if Match(gttAssign) then
@@ -4217,7 +4277,7 @@ begin
   if Check(gttColon) then
   begin
     Advance;
-    CollectTypeAnnotation([gttLeftBrace], '', '', True);
+    CollectTypeAnnotation([gttLeftBrace], '', '', True, True);
   end;
   Consume(gttLeftBrace, 'Expected "{" before getter body',
     SSuggestOpenBraceGetterBody);
@@ -4272,7 +4332,7 @@ begin
   if Check(gttColon) then
   begin
     Advance;
-    CollectTypeAnnotation([gttLeftBrace], '', '', True);
+    CollectTypeAnnotation([gttLeftBrace], '', '', True, True);
   end;
   Consume(gttLeftBrace, 'Expected "{" before setter body',
     SSuggestOpenBraceSetterBody);
@@ -4326,7 +4386,7 @@ begin
     if Check(gttColon) then
     begin
       Advance;
-      CollectTypeAnnotation([gttLeftBrace], '', '', True);
+      CollectTypeAnnotation([gttLeftBrace], '', '', True, True);
     end;
 
     Consume(gttLeftBrace, 'Expected "{" before function body',
@@ -4450,7 +4510,7 @@ begin
     if Check(gttColon) then
     begin
       Advance;
-      FnReturnType := CollectTypeAnnotation([gttArrow]);
+      FnReturnType := CollectTypeAnnotation([gttArrow], '', '', False, True);
     end;
 
     Consume(gttArrow, 'Expected "=>" in arrow function',
@@ -5080,7 +5140,7 @@ begin
       begin
         Advance;
         Variables[VariableCount].TypeAnnotation :=
-          CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
+          CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True);
       end;
       Consume(gttAssign, 'Destructuring declarations must have an initializer',
         SSuggestDestructuringRequiresInitializer);
@@ -5098,7 +5158,7 @@ begin
       if Check(gttColon) then
       begin
         Advance;
-        Variables[VariableCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
+        Variables[VariableCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True);
         if HasDefiniteAssignment and
            (Variables[VariableCount].TypeAnnotation = '') then
           RejectDefiniteAssignmentWithoutAnnotation;
@@ -5177,7 +5237,7 @@ begin
     begin
       Advance;
       Variables[VariableCount].TypeAnnotation :=
-        CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
+        CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True);
     end;
 
     // using declarations must have an initializer
@@ -5620,7 +5680,7 @@ begin
       begin
         Advance;
         Variables[VariableCount].TypeAnnotation :=
-          CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
+          CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True);
       end;
       Consume(gttAssign, 'Destructuring declarations must have an initializer',
         SSuggestDestructuringRequiresInitializer);
@@ -5637,7 +5697,7 @@ begin
       if Check(gttColon) then
       begin
         Advance;
-        Variables[VariableCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
+        Variables[VariableCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True);
         if HasDefiniteAssignment and
            (Variables[VariableCount].TypeAnnotation = '') then
           RejectDefiniteAssignmentWithoutAnnotation;
@@ -6166,7 +6226,7 @@ begin
         begin
           Advance;
           Variables[VarCount].TypeAnnotation :=
-            CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
+            CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True);
         end;
         Consume(gttAssign, 'Destructuring declarations must have an initializer',
           SSuggestDestructuringRequiresInitializer);
@@ -6187,7 +6247,7 @@ begin
         begin
           Advance;
           Variables[VarCount].TypeAnnotation :=
-            CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
+            CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True);
         end;
         if Match(gttAssign) then
         begin
@@ -6558,10 +6618,10 @@ begin
         if Check(gttColon) then
         begin
           Advance;
-          CatchType := CollectTypeAnnotation([gttRightParen]);
-          if CatchType = '' then
-            raise TGocciaSyntaxError.Create('Expected type annotation after ":"',
-              Peek.Line, Peek.Column, FFileName, FSourceLines);
+          { The collector reports the missing annotation itself now — and does
+            it by whether anything was consumed, so a type that renders as ''
+            (a template literal type) is no longer mistaken for an absent one. }
+          CatchType := CollectTypeAnnotation([gttRightParen], '', '', False, True);
         end;
         if (CatchType = '') and MatchContextualKeyword(KEYWORD_IS) then
           CatchPattern := ParseMatchPattern;
@@ -6632,7 +6692,7 @@ begin
     if Check(gttColon) then
     begin
       Advance;
-      MethodReturnType := CollectTypeAnnotation([gttLeftBrace], '', '', True);
+      MethodReturnType := CollectTypeAnnotation([gttLeftBrace], '', '', True, True);
     end;
 
     Consume(gttLeftBrace, 'Expected "{" before method body',
@@ -7774,7 +7834,7 @@ begin
       if Check(gttColon) and not IsGetter and not IsSetter then
       begin
         Advance;
-        FieldType := CollectTypeAnnotation([gttAssign, gttSemicolon]);
+        FieldType := CollectTypeAnnotation([gttAssign, gttSemicolon], '', '', False, True);
       end;
 
       if IsAccessor then
@@ -8279,6 +8339,122 @@ end;
 
 { Type annotation helpers (Types as Comments) }
 
+// Whether a token can stand on its own as a type operand — a type name, or a
+// literal type. Two of these in a row with nothing between them is not a type.
+function IsTypeOperandToken(const AToken: TGocciaToken): Boolean;
+begin
+  Result := AToken.TokenType in [gttIdentifier, gttString, gttNumber, gttBigInt,
+    gttTrue, gttFalse, gttNull, gttThis];
+end;
+
+// Whether a token joins two type operands, so a name on either side of it is a
+// second operand rather than a juxtaposition. Covers the punctuators the type
+// grammar uses and the keywords that take an operand — `keyof T`, `infer U`,
+// `readonly string[]`, `T extends U`, `x is Foo`, `unique symbol`, and the
+// modifiers TypeScript spells as contextual identifiers.
+function IsTypeConnectorToken(const AToken: TGocciaToken): Boolean;
+begin
+  case AToken.TokenType of
+    gttTypeof, gttVoid, gttNew, gttIn, gttExtends, gttAs, gttImport, gttConst:
+      Result := True;
+    gttIdentifier:
+      Result := (AToken.Lexeme = KEYWORD_KEYOF) or
+        (AToken.Lexeme = KEYWORD_READONLY) or
+        (AToken.Lexeme = KEYWORD_INFER) or
+        (AToken.Lexeme = KEYWORD_ASSERTS) or
+        (AToken.Lexeme = KEYWORD_IS) or
+        (AToken.Lexeme = KEYWORD_SATISFIES) or
+        (AToken.Lexeme = 'unique') or
+        (AToken.Lexeme = 'abstract') or
+        (AToken.Lexeme = 'out') or
+        (AToken.Lexeme = 'declare');
+  else
+    Result := False;
+  end;
+end;
+
+{ Rejects the type-syntax shapes the erasing collectors would otherwise consume
+  in silence.
+
+  Types are runtime-inert, so nothing misbehaves when a malformed annotation is
+  skipped — which is exactly the problem: `const x: string number = "a"` ran to
+  completion, and a typo in an annotation had no way of being noticed.
+  --strict-types can only enforce what was parsed, so the same silence limits it
+  too.
+
+  This is a validation pass over the tokens a collector consumed, not a type
+  parser: it names the defects that are unambiguous at the token level and
+  leaves everything else to be erased as before. Rejecting more than that would
+  need the real type grammar, and a false rejection here fails a program that
+  runs correctly. }
+procedure TGocciaParser.ValidateTypeSyntaxTokens(const AStartIndex,
+  AEndIndex: Integer);
+var
+  AngleDepth, I: Integer;
+  PreviousMeaningful: TGocciaToken;
+  Token: TGocciaToken;
+begin
+  AngleDepth := 0;
+  PreviousMeaningful := nil;
+
+  for I := AStartIndex to AEndIndex - 1 do
+  begin
+    Token := FTokens[I];
+
+    case Token.TokenType of
+      // '<<' cannot occur in type syntax at all: a nested type argument list
+      // opens one '<' at a time. Left unchecked it also breaks the collectors'
+      // depth counting, which count '<' but not '<<', so the list never closes
+      // and the rest of the annotation is swallowed.
+      gttLeftShift, gttLeftShiftAssign, gttRightShiftAssign,
+      gttUnsignedRightShiftAssign:
+        raise TGocciaSyntaxError.Create(
+          Format('"%s" is not valid type syntax', [Token.Lexeme]),
+          Token.Line, Token.Column, FFileName, FSourceLines,
+          SSuggestTypeSyntaxOperator);
+      gttLess: Inc(AngleDepth);
+      gttGreater: Dec(AngleDepth);
+      gttRightShift: Dec(AngleDepth, 2);
+      gttUnsignedRightShift: Dec(AngleDepth, 3);
+    end;
+    if AngleDepth < 0 then
+      AngleDepth := 0;
+
+    // An empty slot in a type argument or type parameter list. A trailing
+    // comma before '>' is legal — `<T,>` is the .tsx spelling of a single type
+    // parameter — so only a comma that opens the list or follows another comma
+    // is a missing type.
+    if (Token.TokenType = gttComma) and (AngleDepth > 0) and
+      Assigned(PreviousMeaningful) and
+      (PreviousMeaningful.TokenType in [gttLess, gttComma]) then
+      raise TGocciaSyntaxError.Create('Expected a type before ","',
+        Token.Line, Token.Column, FFileName, FSourceLines,
+        SSuggestTypeExpected);
+
+    // A ':' inside type syntax always introduces a type — an object member, a
+    // named tuple element, an index signature, the false branch of a
+    // conditional type — so a closer right after one is a missing type:
+    // `{ a: ; }`.
+    if Assigned(PreviousMeaningful) and
+      (PreviousMeaningful.TokenType = gttColon) and
+      (Token.TokenType in [gttSemicolon, gttComma, gttRightBrace,
+        gttRightBracket, gttRightParen, gttGreater]) then
+      raise TGocciaSyntaxError.Create('Expected a type after ":"',
+        Token.Line, Token.Column, FFileName, FSourceLines, SSuggestTypeExpected);
+
+    if Assigned(PreviousMeaningful) and IsTypeOperandToken(PreviousMeaningful) and
+      IsTypeOperandToken(Token) and not IsTypeConnectorToken(PreviousMeaningful) and
+      not IsTypeConnectorToken(Token) then
+      raise TGocciaSyntaxError.Create(
+        Format('Unexpected "%s" after the type "%s"',
+          [Token.Lexeme, PreviousMeaningful.Lexeme]),
+        Token.Line, Token.Column, FFileName, FSourceLines,
+        SSuggestTypeSyntaxOperator);
+
+    PreviousMeaningful := Token;
+  end;
+end;
+
 // True when AToken cannot end a type, so whatever follows it is still part
 // of the same type expression. Used to tell a structured type operand apart
 // from the '{' that opens a function body: in `(): string | { a: number } {`
@@ -8303,7 +8479,49 @@ begin
   end;
 end;
 
+{ Collects an annotation and then checks what it collected. The scan itself is
+  unchanged — erasing is what types-as-comments is — but a collected span is now
+  rejected when it is not type syntax at all; see ValidateTypeSyntaxTokens.
+
+  ARequireType marks a COMMITTED annotation: the call site has consumed a ':'
+  and the parser is no longer guessing. It does two things. An empty collection
+  is then a missing annotation rather than a failed guess — `const a: = 1` used
+  to run. And it is the gate for validation, because only a committed span is
+  known to be type syntax at all.
+
+  That gate is load-bearing. The speculative probes run this collector over
+  source they have not decided the shape of yet, and expect to back out of it:
+  the arrow-return-type probe reaches `c ? (a, b) : d << 2` — an ordinary
+  ternary — collects `d << 2` as a would-be return type, and backtracks.
+  Validating there turned that valid JavaScript into a hard SyntaxError, which
+  is how a minified bundle in the Web Tooling suite stopped parsing. }
 function TGocciaParser.CollectTypeAnnotation(
+  const ATerminators: array of TGocciaTokenType;
+  const AContextualTerminator: string;
+  const ASecondaryContextualTerminator: string;
+  const AAllowInitialObjectType: Boolean;
+  const ARequireType: Boolean): string;
+var
+  StartIndex: Integer;
+begin
+  StartIndex := FCurrent;
+  Result := CollectTypeAnnotationTokens(ATerminators, AContextualTerminator,
+    ASecondaryContextualTerminator, AAllowInitialObjectType);
+
+  { Whether anything was consumed, not whether the collected text is empty: a
+    template literal type without substitutions carries its text outside the
+    token lexeme, so it collects tokens but renders as ''. }
+  if not ARequireType then
+    Exit;
+
+  if FCurrent = StartIndex then
+    raise TGocciaSyntaxError.Create('Expected a type annotation',
+      Peek.Line, Peek.Column, FFileName, FSourceLines, SSuggestTypeExpected);
+
+  ValidateTypeSyntaxTokens(StartIndex, FCurrent);
+end;
+
+function TGocciaParser.CollectTypeAnnotationTokens(
   const ATerminators: array of TGocciaTokenType;
   const AContextualTerminator: string;
   const ASecondaryContextualTerminator: string;
@@ -8428,6 +8646,9 @@ begin
     KEYWORD_IS, KEYWORD_SATISFIES);
 end;
 
+{ No validation here: TryParseGenericArrowFunction calls this before it knows
+  whether it is looking at a generic arrow, and must be able to back out. The
+  probe validates the span itself once it has committed. }
 function TGocciaParser.CollectGenericParameters: string;
 var
   Depth: Integer;
@@ -8512,6 +8733,108 @@ begin
         (PeekWithLexicalGoal(glgInputElementDiv).TokenType in [
           gttLeftParen, gttSemicolon, gttComma, gttRightParen,
           gttRightBracket, gttRightBrace, gttEOF]) then
+        Result := True;
+    except
+      on E: TGocciaLexerError do
+        Result := False;
+    end;
+  finally
+    if not Result then
+    begin
+      FCurrent := SavedCurrent;
+      if Assigned(FLexer) then
+        FLexer.RestoreCheckpoint(SavedLexer);
+    end;
+  end;
+end;
+
+// Call-site type arguments (`fn<T>(x)`, `obj.fn<T>(x)`, `tag<T>`...``).
+//
+// `<` after a callee is ambiguous with the relational operator, so this is
+// try-then-backtrack, the same shape as TryCollectNewExpressionTypeArguments.
+// Two conditions have to hold before the span is taken as a type argument list:
+//
+//  1. It closes at depth zero and the token after the closing '>' is one that
+//     may follow call-site type arguments. TypeScript's own list is exactly
+//     '(' and a template literal (parser.ts,
+//     canFollowTypeArgumentsInExpression); its remaining cases exist for
+//     instantiation expressions (`const g = fn<string>;`), which GocciaScript
+//     does not accept, so they are deliberately left out. That keeps
+//     `a < b > c` a comparison chain: 'c' is neither.
+//
+//  2. No token that cannot occur in type syntax appears at the top level of the
+//     list. Types here are erased rather than parsed, so bracket matching alone
+//     would read `a < b && c > (d)` — a valid comparison — as a call with type
+//     arguments and silently change what it evaluates to. TypeScript rejects
+//     that span because `b && c` does not parse as a type; the denylist below
+//     is the erasure-level stand-in for that check. It also rejects
+//     `Foo<-1>(x)`, whose negative numeric literal type TypeScript does accept
+//     — the safe direction, since the fallback is the comparison reading.
+//
+// The probe only runs for TypeScript source (FAllowsTypeScriptOnlySyntax).
+// GocciaScript erases type syntax in JavaScript files too, but call-site type
+// arguments are the one construct that collides with a valid JavaScript
+// reading: `a < b > (c)` is a comparison chain in a `.js` file and a generic
+// call in a `.ts` file. tsc, esbuild and bun all draw the line at the file
+// extension, and so does the Type Annotations proposal, which leaves generic
+// call syntax out for this exact reason.
+function TGocciaParser.TryCollectCallExpressionTypeArguments: Boolean;
+var
+  BracketDepth, Depth: Integer;
+  HasTypeArgument: Boolean;
+  SavedCurrent: Integer;
+  SavedLexer: TGocciaLexerCheckpoint;
+  TokenType: TGocciaTokenType;
+begin
+  Result := False;
+  if not FAllowsTypeScriptOnlySyntax then
+    Exit;
+
+  SavedCurrent := FCurrent;
+  if Assigned(FLexer) then
+    SavedLexer := FLexer.CreateCheckpoint;
+
+  try
+    try
+      if not CheckWithLexicalGoal(gttLess, glgInputElementDiv) then
+        Exit;
+
+      BracketDepth := 0;
+      Depth := 0;
+      HasTypeArgument := False;
+      repeat
+        TokenType := PeekWithLexicalGoal(glgInputElementDiv).TokenType;
+
+        if (Depth = 1) and (BracketDepth = 0) and
+          (TokenType in EXPRESSION_ONLY_TYPE_ARGUMENT_TOKENS) then
+          Exit;
+
+        case TokenType of
+          gttLess: Inc(Depth);
+          gttGreater: Dec(Depth);
+          gttRightShift: Dec(Depth, 2);
+          gttUnsignedRightShift: Dec(Depth, 3);
+          gttComma:;
+          gttLeftParen, gttLeftBracket, gttLeftBrace:
+            begin
+              Inc(BracketDepth);
+              HasTypeArgument := True;
+            end;
+          gttRightParen, gttRightBracket, gttRightBrace:
+            begin
+              Dec(BracketDepth);
+              if BracketDepth < 0 then
+                Exit;
+            end;
+        else
+          HasTypeArgument := True;
+        end;
+        Advance;
+      until IsAtEnd or (Depth <= 0);
+
+      if HasTypeArgument and (Depth = 0) and (BracketDepth = 0) and
+        (PeekWithLexicalGoal(glgInputElementDiv).TokenType in [
+          gttLeftParen, gttTemplate, gttTemplateHead]) then
         Result := True;
     except
       on E: TGocciaLexerError do
