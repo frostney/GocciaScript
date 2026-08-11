@@ -23,6 +23,10 @@ function CreateErrorObject(const AName, AMessage: string; const ASkipTop: Intege
   equal to every other one regardless of name or message. }
 function IsErrorObject(const AValue: TGocciaValue): Boolean;
 
+{ The Error.prototype an error with this name should be created against. Falls
+  back to Error.prototype for any name without a dedicated intrinsic. }
+function GetErrorPrototype(const AName: string): TGocciaObjectValue;
+
 { Creates a DOMException object with the standard legacy code for AName. }
 function CreateDOMExceptionObject(const AName, AMessage: string;
   const ASkipTop: Integer = 0): TGocciaObjectValue;

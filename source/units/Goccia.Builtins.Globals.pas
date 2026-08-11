@@ -1004,6 +1004,79 @@ begin
           STRUCTURED_CLONE_PROPERTY_FLAGS));
 end;
 
+{ The error names StructuredSerializeInternal preserves. Anything else — an
+  Error subclass, a `this.name = "BatchError"`, and also AggregateError and
+  SuppressedError, which postdate the list — deserializes as a plain Error.
+  Verified against node 24 and bun 1.3, which agree on every one of these. }
+function SerializedErrorName(const AName: string): string;
+begin
+  if (AName = ERROR_NAME) or (AName = EVAL_ERROR_NAME) or
+    (AName = RANGE_ERROR_NAME) or (AName = REFERENCE_ERROR_NAME) or
+    (AName = SYNTAX_ERROR_NAME) or (AName = TYPE_ERROR_NAME) or
+    (AName = URI_ERROR_NAME) then
+    Result := AName
+  else
+    Result := ERROR_NAME;
+end;
+
+{ An error clones as an error, not as an ordinary object.
+
+  A value with an [[ErrorData]] internal slot is serializable, and the HTML
+  algorithm gives it its own branch: the serialized form carries the name, the
+  message and — as the implementation-defined "interesting accompanying data" —
+  the stack, and nothing else. Own properties are deliberately NOT copied, since
+  the property walk only runs for the Map, Set, Array and Object serialization
+  types. Taking the ordinary-object path instead produced a plain object that
+  had lost name, message and stack and had gained the source's own enumerable
+  properties: `structuredClone(new Error("x")).message` was undefined, and
+  nothing threw to say so.
+
+  The message is read from the own property, not through Get, and an accessor
+  there serializes as no message at all. The name is read through Get, so it may
+  come from the prototype — which is how an Error subclass reports "Error".
+
+  DOMException is excluded by construction: it is a platform object with its own
+  serialization steps, and GocciaScript models that by leaving HasErrorData
+  False on it, so it keeps taking the ordinary-object path. }
+function CloneError(const AError: TGocciaObjectValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaObjectValue;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  ErrorName: string;
+  NameValue: TGocciaValue;
+  Prototype: TGocciaObjectValue;
+begin
+  NameValue := AError.GetProperty(PROP_NAME);
+  if NameValue is TGocciaStringLiteralValue then
+    ErrorName := SerializedErrorName(TGocciaStringLiteralValue(NameValue).Value)
+  else
+    ErrorName := ERROR_NAME;
+
+  Prototype := GetErrorPrototype(ErrorName);
+  if Assigned(Prototype) then
+    Result := TGocciaObjectValue.Create(Prototype)
+  else
+    Result := TGocciaObjectValue.Create;
+  Result.HasErrorData := True;
+  RegisterClone(AError, Result, AMemory);
+
+  Descriptor := AError.GetOwnPropertyDescriptor(PROP_MESSAGE);
+  if (Descriptor is TGocciaPropertyDescriptorData) and
+    Assigned(TGocciaPropertyDescriptorData(Descriptor).Value) then
+    { Non-enumerable, matching both an ordinary error's own message and what
+      node and bun put on the clone. }
+    Result.DefineProperty(PROP_MESSAGE,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create(
+          TGocciaPropertyDescriptorData(Descriptor).Value.ToStringLiteral.Value),
+        [pfConfigurable, pfWritable]));
+
+  { The source's stack text, not a fresh capture: node and bun both hand back a
+    stack identical to the original's. `stack` is an accessor on Error.prototype
+    backed by this field, so the clone reads it exactly as any other error. }
+  Result.ErrorStack := AError.ErrorStack;
+end;
+
 { Arrays serialize through the same property walk as objects rather than through
   the dense element store, because the store is only half the picture: an index
   defined as an accessor lives in the property map with a hole left behind in the
@@ -1164,6 +1237,8 @@ begin
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [CONSTRUCTOR_WEAK_REF]), SSuggestStructuredClone)
   else if AValue is TGocciaFinalizationRegistryValue then
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [CONSTRUCTOR_FINALIZATION_REGISTRY]), SSuggestStructuredClone)
+  else if IsErrorObject(AValue) then
+    Result := CloneError(TGocciaObjectValue(AValue), AMemory)
   else if AValue is TGocciaObjectValue then
     Result := CloneObject(TGocciaObjectValue(AValue), AMemory)
     else
