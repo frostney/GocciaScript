@@ -462,8 +462,17 @@ begin
     ThrowTypeError(E.Message, SSuggestSemverUsage)
   else if E is EGocciaSemverError then
     ThrowError(E.Message, SSuggestSemverUsage)
+  { Anything that is not a semver error — a resource ceiling, an audit delivery
+    failure — is not this host's to translate; it keeps unwinding to the host
+    with its exact type intact. This runs inside the caller's `on E: Exception`
+    handler but not lexically, so a bare `raise` will not compile. `raise E`
+    re-raised the object by name, starting a second propagation of an exception
+    the enclosing handler still owns and frees on exit — the dangling re-raise
+    that surfaces as a spurious access violation. AcquireExceptionObject
+    references the in-flight exception so the enclosing handler no longer frees
+    it under this re-raise. }
   else
-    raise E;
+    raise Exception(AcquireExceptionObject);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 

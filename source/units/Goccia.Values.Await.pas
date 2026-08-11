@@ -22,6 +22,7 @@ uses
   Goccia.FetchManager,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
   Goccia.Timeout,
   Goccia.Values.Error,
@@ -99,6 +100,8 @@ begin
         on E: TGocciaTimeoutError do
           raise;
         on E: TGocciaInstructionLimitError do
+          raise;
+        on E: TGocciaMemoryLimitError do
           raise;
         on E: Exception do
           RejectPromiseWithException(Promise, E);
