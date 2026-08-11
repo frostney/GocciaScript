@@ -16,9 +16,9 @@ describe("vitest compatibility shim", () => {
     expect(typeof mock).toBe("function");
   });
 
-  test("vi.fn is the engine's mock", () => {
-    expect(vi.fn).toBe(mock);
-
+  test("vi.fn creates the engine's mock", () => {
+    // Not `mock` itself: vi.fn registers what it creates, so that
+    // vi.clearAllMocks and friends have something to drain.
     const fn = vi.fn();
     fn(1, 2);
     expect(fn).toHaveBeenCalledWith(1, 2);
@@ -50,7 +50,7 @@ describe("vitest compatibility shim", () => {
 
   test("vitest is exported as an alias of the vi namespace", () => {
     expect(vitest).toBe(vi);
-    expect(vitest.fn).toBe(mock);
+    expect(vitest.fn).toBe(vi.fn);
   });
 
   test("the mocking members that are not implemented throw and name the reason", () => {
@@ -65,7 +65,6 @@ describe("vitest compatibility shim", () => {
       "the real module is not reachable once it is mocked",
     );
     expect(() => vi.importMock("./x.js")).toThrow("vi.importMock");
-    expect(() => vi.mocked({})).toThrow("vi.mocked");
     expect(() => vi.hoisted(() => {})).toThrow("vi.hoisted");
   });
 
@@ -77,25 +76,18 @@ describe("vitest compatibility shim", () => {
     expect(() => vi.runAllTimers()).toThrow("vi.runAllTimers");
   });
 
-  test("global stubbing throws and names the reason", () => {
-    expect(() => vi.stubGlobal("x", 1)).toThrow("vi.stubGlobal is not supported");
-    expect(() => vi.stubEnv("X", "1")).toThrow("does not snapshot globals");
-    expect(() => vi.unstubAllGlobals()).toThrow("vi.unstubAllGlobals");
-  });
+  test("vi.mocked is the identity function it is in Vitest", () => {
+    const value = { a: 1 };
 
-  test("bulk mock management points at the per-mock methods", () => {
-    expect(() => vi.restoreAllMocks()).toThrow("vi.restoreAllMocks is not supported");
-    expect(() => vi.restoreAllMocks()).toThrow("mockRestore");
-    expect(() => vi.clearAllMocks()).toThrow("vi.clearAllMocks");
-    expect(() => vi.resetAllMocks()).toThrow("vi.resetAllMocks");
+    expect(vi.mocked(value)).toBe(value);
   });
 
   test("every unsupported member is a defined function, never a no-op", () => {
     expect(typeof vi.mock).toBe("function");
     expect(typeof vi.importActual).toBe("function");
     expect(typeof vi.useFakeTimers).toBe("function");
-    expect(typeof vi.stubGlobal).toBe("function");
-    expect(typeof vi.restoreAllMocks).toBe("function");
+    expect(typeof vi.hoisted).toBe("function");
+    expect(typeof vi.resetModules).toBe("function");
   });
 
   test("every unsupported member points at the docs", () => {

@@ -38,6 +38,7 @@ uses
   Goccia.RuntimeExtensions.TestingLibrary,
   Goccia.RuntimeProfiles.TestRunner,
   Goccia.Scope,
+  Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
   Goccia.SourcePipeline,
   Goccia.Builtins.TestingLibrary,
@@ -148,10 +149,13 @@ type
     FDescribeTimeout: TIntegerOption;
     FUpdateSnapshots: TFlagOption;
     FUpdateSnapshotsAlias: TFlagOption;
+    FGlobalFiles: TRepeatableOption;
+    FInlineGlobals: TRepeatableOption;
     FNoVitestCompat: TFlagOption;
     function SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
     procedure InitializeRuntime(const AEngine: TGocciaEngine;
       const AEnableHostFileLoading: Boolean = True);
+    procedure ApplyGlobalsToEngine(const AEngine: TGocciaEngine);
     procedure InitializeRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
     procedure WarmUpRuntime(const AEngine: TGocciaEngine);
     procedure WarmUpRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
@@ -350,6 +354,13 @@ begin
   FUpdateSnapshots.ShortName := 'u';
   FUpdateSnapshotsAlias := AddFlag('update',
     'Alias for --update-snapshots');
+  { The same two the loader exposes, applied through the same shared helpers.
+    A suite that needs a host global — `process` for vi.stubEnv above all —
+    injects it here rather than the runner inventing one. }
+  FGlobalFiles := AddRepeatable('globals',
+    'Inject globals from a JSON/JSON5/TOML/YAML file or a module with named exports');
+  FInlineGlobals := AddRepeatable('global',
+    'Inject a single global; value is parsed as JSON or kept as a string');
   FNoVitestCompat := AddFlag('no-vitest-compat',
     'Do not resolve the bare "vitest" specifier to the bundled compatibility shim');
 end;
@@ -364,12 +375,42 @@ begin
     Result := sumNew;
 end;
 
+{ Globals are injected before the runtime extensions attach, so a module that
+  reads one at import time sees it no matter where it sits in the import order. }
+procedure TTestRunnerApp.ApplyGlobalsToEngine(const AEngine: TGocciaEngine);
+var
+  I: Integer;
+  Pair: TScriptLoaderGlobalPair;
+begin
+  for I := 0 to FGlobalFiles.Values.Count - 1 do
+    if IsStructuredGlobalsFile(FGlobalFiles.Values[I]) then
+    begin
+      if IsYAMLGlobalsFile(FGlobalFiles.Values[I]) then
+        AEngine.InjectGlobalsFromYAML(ReadFileText(FGlobalFiles.Values[I]))
+      else if IsJSON5GlobalsFile(FGlobalFiles.Values[I]) then
+        AEngine.InjectGlobalsFromJSON5(ReadFileText(FGlobalFiles.Values[I]))
+      else if IsTOMLGlobalsFile(FGlobalFiles.Values[I]) then
+        AEngine.InjectGlobalsFromTOML(ReadFileText(FGlobalFiles.Values[I]))
+      else
+        AEngine.InjectGlobalsFromJSON(ReadFileText(FGlobalFiles.Values[I]));
+    end
+    else
+      AEngine.InjectGlobalsFromModule(FGlobalFiles.Values[I]);
+
+  for I := 0 to FInlineGlobals.Values.Count - 1 do
+  begin
+    Pair := ParseGlobalPair(FInlineGlobals.Values[I]);
+    AEngine.InjectGlobal(Pair.Key, ParseInlineGlobalValue(Pair.ValueText));
+  end;
+end;
+
 procedure TTestRunnerApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
   const AFileConfig: TConfigEntryArray);
 var
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
   Runtime: TGocciaRuntimeCore;
 begin
+  ApplyGlobalsToEngine(AEngine);
   InitializeRuntime(AEngine,
     not ResolveFlagOption(EngineOptions.NoHostFilesystem, AFileConfig));
   Runtime := GetRuntime(AEngine);
