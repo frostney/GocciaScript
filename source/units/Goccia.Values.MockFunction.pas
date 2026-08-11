@@ -688,16 +688,13 @@ begin
       FSpyTarget.DeleteProperty(FSpyMethodName);
   end;
 
-  { The recorded calls survive. Vitest 4 restores the original descriptor and
-    leaves the spy's call history alone — a suite that asserts on the calls made
-    before the restore still sees them — so only the implementation added on top
-    of the original is dropped. }
-  FOnceQueue.Clear;
-  SetLength(FOnceIsImpl, 0);
-  FImplementation := FOriginalImplementation;
-  FDefaultReturnValue := nil;
-  FHasDefaultReturnValue := False;
-  InvalidateMockObject;
+  { Direct mockRestore() also clears the recorded calls: Vitest 4 leaves a
+    restored spy reporting zero calls. That is NOT what vi.restoreAllMocks()
+    does — measured against the pinned release, the bulk member restores the
+    descriptor and leaves the history intact — so the two cannot share this
+    path. The vitest shim restores the target descriptor itself rather than
+    calling through here. }
+  DoMockReset(AArgs, AThisValue);
   Result := Self;
 end;
 

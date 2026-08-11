@@ -1267,10 +1267,15 @@ console.log("Assertion failure text...");
     unsupported.forEach(([call, message], index) => {
       if (shimOut.includes(`NO-THROW ${index}`))
         throw new Error(`${call} must keep throwing its named error, got: ${shimOut}`);
-      if (!shimOut.includes(`THREW ${index}: ${message}`))
+      // The whole capture would pass the docs-link check as soon as any one
+      // member carried the link, so each case is matched on its own line.
+      const line = shimOut
+        .split("\n")
+        .find((entry) => entry.includes(`THREW ${index}: `));
+      if (line === undefined || !line.includes(`THREW ${index}: ${message}`))
         throw new Error(`${call} should report "${message}", got: ${shimOut}`);
-      if (!shimOut.includes("docs/testing-api.md"))
-        throw new Error(`${call} should point at the docs, got: ${shimOut}`);
+      if (!line.includes("docs/testing-api.md"))
+        throw new Error(`${call} should point at the docs, got: ${line}`);
     });
   } finally {
     clean(tmp);

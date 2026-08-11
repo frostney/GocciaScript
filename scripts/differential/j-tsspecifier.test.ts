@@ -11,6 +11,7 @@ import { fromTsx } from "./mods/tsspec-jsx.js";
 import { fromTsx as fromTsxViaJsx } from "./mods/tsspec-jsx.jsx";
 import { fromMts } from "./mods/tsspec-esm.mjs";
 import { shadowed } from "./mods/tsspec-shadow.js";
+import { fromMts as fromMtsExtensionless } from "./mods/tsspec-esm";
 
 describe("TypeScript .js specifier resolution", () => {
   test(".js specifier resolves to the .ts file on disk", () => {
@@ -31,6 +32,10 @@ describe("TypeScript .js specifier resolution", () => {
 
   test(".mjs specifier resolves to the .mts file", () => {
     expect(fromMts).toBe("mts");
+  });
+
+  test("an extensionless specifier reaches a .mts file", () => {
+    expect(fromMtsExtensionless).toBe("mts");
   });
 
   test("a real .js file wins over its same-stem .ts neighbour", () => {

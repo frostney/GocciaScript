@@ -42,15 +42,16 @@ const
     EXT_TS, EXT_MTS
   );
 
-  ModuleImportExtensions: array[0..15] of string = (
-    EXT_JS, EXT_JSX, EXT_TS, EXT_TSX, EXT_MJS,
+  ModuleImportExtensions: array[0..16] of string = (
+    EXT_JS, EXT_JSX, EXT_TS, EXT_TSX, EXT_MJS, EXT_MTS,
     EXT_JSON, EXT_JSON5, EXT_JSONC, EXT_JSONL, EXT_TOML, EXT_YAML, EXT_YML,
     EXT_CSV, EXT_TSV,
     EXT_TXT, EXT_MD
   );
 
-  EngineModuleImportExtensions: array[0..7] of string = (
-    EXT_JS, EXT_JSX, EXT_TS, EXT_TSX, EXT_MJS, EXT_JSON, EXT_TXT, EXT_MD
+  EngineModuleImportExtensions: array[0..8] of string = (
+    EXT_JS, EXT_JSX, EXT_TS, EXT_TSX, EXT_MJS, EXT_MTS, EXT_JSON, EXT_TXT,
+    EXT_MD
   );
 
 type

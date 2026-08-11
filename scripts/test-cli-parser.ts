@@ -1011,6 +1011,33 @@ console.log("Malformed type annotations...");
   for (const { desc, source, messageIncludes } of malformed)
     assertSyntaxErrorInBothModes(source, desc, [], { messageIncludes });
 
+  // assertSyntaxErrorInBothModes feeds the source over stdin, which the
+  // pipeline names `<stdin>`; the accepted forms below are written to a `.ts`
+  // file. Those are different parser paths — JSX preprocessing is skipped only
+  // for TypeScript extensions — so the rejections are repeated as real `.ts`
+  // files rather than being asserted on one path and trusted on the other.
+  {
+    const tmp = mkdtemp("goccia-type-annotations-rejected-");
+    try {
+      for (const { desc, source, messageIncludes } of malformed) {
+        const path = join(tmp, "malformed.ts");
+        writeFileSync(path, source);
+        for (const args of [[] as string[], ["--mode=bytecode"]]) {
+          const res = await $`${LOADER} ${path} ${args} 2>&1`.quiet().nothrow();
+          const out = res.text();
+          if (res.exitCode === 0)
+            throw new Error(`${desc} (.ts file) should be rejected, got exit 0`);
+          if (!out.includes(messageIncludes))
+            throw new Error(
+              `${desc} (.ts file) should mention "${messageIncludes}", got: ${out}`,
+            );
+        }
+      }
+    } finally {
+      clean(tmp);
+    }
+  }
+
   // The other half of the contract: the shapes that look adjacent but are real
   // type syntax must keep parsing. A false rejection here fails a program that
   // runs correctly, which is worse than the silence being fixed.

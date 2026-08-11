@@ -103,9 +103,33 @@ describe("vi mock registry", () => {
     vi.restoreAllMocks();
 
     expect(target.read()).toBe("real");
-    // The call made while the spy was installed still counts: restoring puts
-    // the original method back, it does not erase what was recorded.
+    // The call made while the spy was installed still counts: the bulk member
+    // puts the original descriptor back and does not erase what was recorded.
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  test("a direct mockRestore also clears the recorded calls", () => {
+    const target = { read: () => "real" };
+    const spy = vi.spyOn(target, "read").mockReturnValue("spied");
+
+    target.read();
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    // Unlike vi.restoreAllMocks, the per-spy member resets the mock as well.
+    spy.mockRestore();
+
+    expect(target.read()).toBe("real");
+    expect(spy).toHaveBeenCalledTimes(0);
+  });
+
+  test("a direct mockRestore on a bare mock keeps its implementation", () => {
+    const fn = vi.fn(() => "impl");
+    fn();
+
+    fn.mockRestore();
+
+    expect(fn).toHaveBeenCalledTimes(0);
+    expect(fn()).toBe("impl");
   });
 
   test("restoreAllMocks leaves bare mocks alone", () => {

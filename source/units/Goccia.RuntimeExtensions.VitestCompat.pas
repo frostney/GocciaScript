@@ -287,30 +287,48 @@ begin
     '  return created;' + LB +
     '};' + LB +
     LB +
-    'const registerSpy = (...args) => {' + LB +
-    '  const created = spyOn(...args);' + LB +
-    '  createdSpies.push(created);' + LB +
+    '// The spy records the descriptor it displaced, because restoreAllMocks' + LB +
+    '// puts that descriptor back WITHOUT touching the recorded calls. Calling' + LB +
+    '// mockRestore() here instead would clear them, which is what the direct' + LB +
+    '// member does and the bulk one does not.' + LB +
+    'const registerSpy = (target, key, ...rest) => {' + LB +
+    '  const previous = Object.getOwnPropertyDescriptor(target, key);' + LB +
+    '  const created = spyOn(target, key, ...rest);' + LB +
+    '  createdSpies.push({ mock: created, target, key, previous });' + LB +
     '  return created;' + LB +
     '};' + LB +
     LB +
     '// Vitest semantics: clear drops recorded calls, reset also drops the' + LB +
     '// implementations added after creation, and restore reverts a spy to the' + LB +
     '// method it replaced while leaving bare vi.fn mocks alone.' + LB +
+    'const everyMock = () => [' + LB +
+    '  ...createdMocks,' + LB +
+    '  ...createdSpies.map((entry) => entry.mock),' + LB +
+    '];' + LB +
+    LB +
     'const clearAllMocks = () => {' + LB +
-    '  [...createdMocks, ...createdSpies].forEach((entry) => entry.mockClear());' + LB +
+    '  everyMock().forEach((entry) => entry.mockClear());' + LB +
     '  return vi;' + LB +
     '};' + LB +
     LB +
     'const resetAllMocks = () => {' + LB +
-    '  [...createdMocks, ...createdSpies].forEach((entry) => entry.mockReset());' + LB +
+    '  everyMock().forEach((entry) => entry.mockReset());' + LB +
     '  return vi;' + LB +
     '};' + LB +
     LB +
-    '// The spies stay registered after restoring, as they do in Vitest, so a' + LB +
-    '// later clearAllMocks still reaches their call history. mockRestore is' + LB +
-    '// idempotent, so restoring twice is harmless.' + LB +
+    '// Descriptor-only, and deliberately not entry.mock.mockRestore(): the' + LB +
+    '// bulk member reverts the target and leaves the spy reporting the calls' + LB +
+    '// it recorded, so a suite can still assert on them afterwards. The spies' + LB +
+    '// stay registered, as they do in Vitest, so a later clearAllMocks still' + LB +
+    '// reaches that history.' + LB +
     'const restoreAllMocks = () => {' + LB +
-    '  createdSpies.forEach((entry) => entry.mockRestore());' + LB +
+    '  createdSpies.forEach((entry) => {' + LB +
+    '    if (entry.previous) {' + LB +
+    '      Object.defineProperty(entry.target, entry.key, entry.previous);' + LB +
+    '    } else {' + LB +
+    '      delete entry.target[entry.key];' + LB +
+    '    }' + LB +
+    '  });' + LB +
     '  return vi;' + LB +
     '};' + LB +
     LB +

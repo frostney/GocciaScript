@@ -115,6 +115,7 @@ try {
     );
 
   const mismatches: string[] = [];
+  let statementCounters = 0;
   let functionCounters = 0;
   let branchCounters = 0;
 
@@ -135,6 +136,7 @@ try {
         mismatches.push(`  ${key} ${map} ids differ between modes`);
     }
 
+    statementCounters += Object.keys(left.s ?? {}).length;
     functionCounters += Object.keys(left.f ?? {}).length;
     branchCounters += Object.keys(left.b ?? {}).length;
   }
@@ -142,7 +144,10 @@ try {
   if (mismatches.length > 0)
     throw new Error(`Coverage differs between modes:\n${mismatches.join("\n")}`);
 
-  // Without this the check could pass on reports that carry statements alone.
+  // Without these the check could pass on reports carrying no counters at all:
+  // diffCounters over two empty maps agrees.
+  if (statementCounters === 0)
+    throw new Error("No statement counters in the coverage report — fixtures no longer cover statements");
   if (functionCounters === 0)
     throw new Error("No function counters in the coverage report — fixtures no longer cover functions");
   if (branchCounters === 0)
