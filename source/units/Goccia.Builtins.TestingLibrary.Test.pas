@@ -302,6 +302,7 @@ type
     { mockClear / mockReset }
     procedure TestMockClearKeepsImplementation;
     procedure TestMockResetClearsImplementation;
+    procedure TestMockResetWithoutImplementation;
 
     { mockName / getMockName }
     procedure TestMockNameDefault;
@@ -3005,7 +3006,8 @@ begin
 
   { mockClear / mockReset }
   Test('mockClear clears tracking but keeps implementation', TestMockClearKeepsImplementation);
-  Test('mockReset clears tracking and implementation', TestMockResetClearsImplementation);
+  Test('mockReset reinstates the creation implementation', TestMockResetClearsImplementation);
+  Test('mockReset leaves an implementation-less mock returning undefined', TestMockResetWithoutImplementation);
 
   { mockName / getMockName }
   Test('getMockName returns default name', TestMockNameDefault);
@@ -3408,15 +3410,62 @@ begin
   Expect<Double>(R.ToNumberLiteral.Value).ToBe(42);
 end;
 
+{ Vitest 4 semantics: mockReset drops the recorded calls and every
+  implementation added after creation, then reinstates the one the mock was
+  created with. Verified against the pinned Vitest release — `vi.fn(impl)`
+  followed by mockReset still calls impl. }
 procedure TTestMockAndSpyAPIs.TestMockResetClearsImplementation;
 var
   M: TGocciaMockFunctionValue;
-  EmptyArgs: TGocciaArgumentsCollection;
+  EmptyArgs, OverrideArgs: TGocciaArgumentsCollection;
   R: TGocciaValue;
-  ImplFn: TGocciaNativeFunctionValue;
+  ImplFn, OverrideFn: TGocciaNativeFunctionValue;
 begin
   ImplFn := TGocciaNativeFunctionValue.Create(CallbackReturn42, 'impl', 0);
+  OverrideFn := TGocciaNativeFunctionValue.Create(CallbackReturn99, 'override', 0);
   M := TGocciaMockFunctionValue.Create(ImplFn);
+
+  OverrideArgs := TGocciaArgumentsCollection.Create;
+  try
+    OverrideArgs.Add(OverrideFn);
+    M.DoMockImplementation(OverrideArgs, nil);
+  finally
+    OverrideArgs.Free;
+  end;
+
+  CallMockFunction(M, []);
+
+  EmptyArgs := TGocciaArgumentsCollection.Create;
+  try
+    M.DoMockReset(EmptyArgs, nil);
+  finally
+    EmptyArgs.Free;
+  end;
+
+  Expect<Integer>(M.MockCalls.Count).ToBe(0);
+  R := CallMockFunction(M, []);
+  Expect<Double>(R.ToNumberLiteral.Value).ToBe(42);
+end;
+
+{ The other half: a mock created without an implementation has nothing to
+  reinstate, so it goes back to returning undefined. }
+procedure TTestMockAndSpyAPIs.TestMockResetWithoutImplementation;
+var
+  M: TGocciaMockFunctionValue;
+  EmptyArgs, OverrideArgs: TGocciaArgumentsCollection;
+  R: TGocciaValue;
+  OverrideFn: TGocciaNativeFunctionValue;
+begin
+  OverrideFn := TGocciaNativeFunctionValue.Create(CallbackReturn42, 'override', 0);
+  M := TGocciaMockFunctionValue.Create(nil);
+
+  OverrideArgs := TGocciaArgumentsCollection.Create;
+  try
+    OverrideArgs.Add(OverrideFn);
+    M.DoMockImplementation(OverrideArgs, nil);
+  finally
+    OverrideArgs.Free;
+  end;
 
   CallMockFunction(M, []);
 
