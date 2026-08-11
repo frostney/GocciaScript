@@ -46,12 +46,56 @@ type
     DiffFormat: string;
   end;
 
+  { Why a sandbox run ended, as a value the host can branch on.
+
+    ErrorMessage stays the human-readable text it always was; this is
+    additive and never replaces it.  The distinction that matters is
+    "the guest program failed" versus "the guest hit a ceiling the host
+    set" — those arrive through the same string today and a host cannot
+    tell a runaway from a bug without parsing prose.
+
+    The dividing line is who is at fault, so nothing the guest can
+    trigger may classify as sfkHostError: a guest that can name its own
+    failure kind has erased the distinction the type exists to draw.
+    Anything the guest chose — a path it passed, a seed it asked for, a
+    ceiling it ran into — is its own error or the ceiling it hit.
+
+    sfkChildProcessCrash is reserved and never produced in-process: a
+    crashed child is only observable once execution moves out of process
+    (see ADR 0106), and naming it here keeps that outcome from being
+    folded into sfkHostError when it lands. }
+  TGocciaSandboxFailureKind = (
+    { The run completed; Ok is True and no error was reported. }
+    sfkNone,
+    { The guest program failed: it threw, failed to parse or link, or
+      named a path that the sandbox filesystem does not have — its own
+      entry path, or a path it asked to seed a child from. }
+    sfkScriptError,
+    { A host-set resource ceiling refused the run: memory budget,
+      instruction limit, sandbox filesystem quota, or nesting depth. }
+    sfkResourceLimit,
+    { The execution deadline elapsed. }
+    sfkTimeout,
+    { The runner itself could not carry the run out — a native error
+      with no engine meaning and no guest-reachable cause. }
+    sfkHostError,
+    { Reserved: an out-of-process child died without reporting. }
+    sfkChildProcessCrash
+  );
+
+  { Raised when the guest asks to nest runScript deeper than the runner
+    permits.  Typed rather than a bare Exception so the ceiling
+    classifies as the resource limit it is, instead of falling through
+    to the host-error branch or being recognised by message text. }
+  EGocciaSandboxNestingLimitExceeded = class(Exception);
+
   TGocciaSandboxRunResult = record
     Ok: Boolean;
     ExitCode: Integer;
     Output: string;
     ErrorOutput: string;
     ErrorMessage: string;
+    FailureKind: TGocciaSandboxFailureKind;
     Diff: string;
     DiffRequested: Boolean;
     ResultValue: TGocciaValue;
@@ -105,12 +149,33 @@ type
   end;
 
 function DefaultSandboxRunOptions: TGocciaSandboxRunOptions;
+{ The wire name of a failure kind.  Hosts see these strings — runScript
+  exposes them as its `failureKind` property — so they are a stable
+  contract: rename a value here and every host branching on it breaks. }
+function SandboxFailureKindName(
+  const AKind: TGocciaSandboxFailureKind): string;
 
 implementation
+
+const
+  SANDBOX_FAILURE_KIND_NAMES: array[TGocciaSandboxFailureKind] of string = (
+    'none',
+    'script-error',
+    'resource-limit',
+    'timeout',
+    'host-error',
+    'child-process-crash'
+  );
 
 function BytesLength(const ABytes: TBytes): Int64;
 begin
   Result := Length(ABytes);
+end;
+
+function SandboxFailureKindName(
+  const AKind: TGocciaSandboxFailureKind): string;
+begin
+  Result := SANDBOX_FAILURE_KIND_NAMES[AKind];
 end;
 
 function DefaultSandboxRunOptions: TGocciaSandboxRunOptions;

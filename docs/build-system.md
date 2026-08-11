@@ -471,6 +471,24 @@ const shellChild = await $`goccia --sandbox --seed /child.js --diff-metadata /ch
 
 Child seed entries are copied from the parent virtual filesystem, not the host filesystem. Child writes are discarded with the child VFS; request `diff: true` or shell `--diff` to inspect them. Use nested `diffMetadata: true` or shell `--diff-metadata` to include timestamp changes; either form implies a diff.
 
+Engine options apply to sandboxed execution exactly as they do to the other binaries — `--max-memory`, `--timeout`, `--max-instructions`, `--allowed-host`, `--fetch-deny-private-ranges`, and `--fetch-max-response-bytes` all bound the sandboxed program:
+
+```bash
+# Refuse allocations past 64 MiB and any fetch that resolves into private space.
+./build/GocciaSandboxRunner /main.js --seed-config=seed.json \
+  --max-memory=67108864 --allowed-host=api.example.com --fetch-deny-private-ranges
+```
+
+Config-file values reach the sandbox runner **only** through an explicit `--config`. It is the one binary that does not auto-discover a `goccia.json`, because the entry path names a file in the virtual filesystem: walking up from it leaves the sandbox namespace and climbs the host filesystem instead, from wherever the spelling happens to start — the host root for `/main.js`, the current directory for `main.js`. Config picked up by accident of spelling is a poor default for the binary that runs untrusted code, so the operator has to name the file.
+
+The cost is that limits an operator sets in a discovered `goccia.json` apply to every other binary and not to this one, and the omission is in the permissive direction. When a config file is discoverable and skipped for that reason, the runner says so on stderr:
+
+```
+Warning: ignoring discovered configuration /path/to/goccia.json. GocciaSandboxRunner applies configuration files only when named with --config.
+```
+
+Pass `--config=<file>` to apply it, and note that `--config` is the only way to bound a sandboxed run from a file rather than from flags.
+
 Diff output is explicit. `--diff` prints the diff after execution, `--diff-output=<host-path>` writes it to a host file, and `--diff-format=json|unified` selects the format. JSON is the default. Metadata is omitted unless `--diff-metadata` is present. In JSON it appears as a separate `metadataChanges` array whose per-path `changes` object contains only changed `atimeMs`, `mtimeMs`, `ctimeMs`, and `birthtimeMs` fields; timestamp-only changes never appear as content modifications.
 
 ## Build Output
@@ -696,7 +714,7 @@ Runs on **ubuntu-latest x64 only**; workload suites may fan out through matrices
 
 **`web-tooling-workload` / `web-tooling-report`** (needs build) — Runs the same direct-invocation workload matrix as full CI on the PR x64 build, using Goccia bytecode only, then validates and merges the shards into the normalized `web-tooling-report` JSON artifact. The downstream `web-tooling-comment` job posts or updates a `Web Tooling Benchmark` comment with per-workload build/execution status and Goccia `runs/s` where available; full stdout/stderr for failures and min/max/CV remain in the artifact.
 
-**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection), plus `GocciaSandboxRunner` coverage for seed config imports, inline text/base64 files, virtual `fs`, `$`, shared and child-sandbox `runScript` / shell `goccia`, bytecode mode, and diff output.
+**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection), plus `GocciaSandboxRunner` coverage for seed config imports, inline text/base64 files, virtual `fs`, `$`, shared and child-sandbox `runScript` / shell `goccia`, bytecode mode, diff output, the engine resource and fetch-policy options, and the `runScript` failure kinds for every guest-reachable failure and every host-set ceiling.
 
 FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, test262, and cli jobs do the same.
 

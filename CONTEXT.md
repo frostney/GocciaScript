@@ -38,6 +38,10 @@ _Avoid_: Global module, runtime module when the module is registered directly by
 An import-only module installed by a runtime extension, such as a `goccia:` data-format module.
 _Avoid_: Runtime global, host module.
 
+**Module content provider**:
+The host-installed component that retrieves a module's text or bytes once an address has been resolved. Resolution and retrieval are separate concerns: a resolver decides which address to load, a content provider decides how its content is obtained. An engine with no provider installed is not a broken engine — it refuses every retrieval with a script-catchable error carrying a stable code, which is a different condition both from an installed provider that cannot produce a particular module and from a specifier that never resolved, since resolution runs first and fails on its own terms.
+_Avoid_: Module resolver, module loader, filesystem when the retrieval mechanism is the defining property.
+
 **Runtime profile**:
 A named bundle of runtime extensions used by a CLI host or embedding host.
 _Avoid_: Mode, preset.
