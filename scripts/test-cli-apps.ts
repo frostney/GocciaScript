@@ -37,6 +37,7 @@ import {
 } from "./test-cli/binaries";
 import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
+import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-cli/rss";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
 
@@ -7371,8 +7372,10 @@ await section("Fuzz Harness: stdin input path...", async () => {
 // ── Memory budget (WP-3) ───────────────────────────────────────────────
 //
 // The budget's whole promise is that it bounds the process. A limit that is
-// only noticed after the allocation has already happened bounds nothing, so
-// the assertion here is on resident memory, not just on the error.
+// only noticed after the allocation has already happened bounds nothing, and
+// it prints the same error and exits the same way either case, so every
+// refusal below asserts peak resident memory as well as the error. See
+// scripts/test-cli/rss.ts for how that is measured and where it cannot be.
 
 await section("Memory budget: single large allocation is refused before it happens...", async () => {
   const tmp = makeTmp();
@@ -7381,15 +7384,15 @@ await section("Memory budget: single large allocation is refused before it happe
     // ~800 MB of pointer storage requested in one step.
     writeFileSync(file, "const a = new Array(100000000); print('len ' + a.length);\n");
 
-    const refused = Bun.spawnSync([BARE, "--max-memory=67108864", file], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const refusedOut = refused.stdout.toString() + refused.stderr.toString();
+    const refused = await runWithPeakRss([BARE, "--max-memory=67108864", file]);
     if (refused.exitCode === 0)
-      throw new Error(`Allocation past the budget was permitted:\n${refusedOut}`);
-    if (!/exceed the memory budget/i.test(refusedOut))
-      throw new Error(`Expected a memory-budget error, got:\n${refusedOut}`);
+      throw new Error(`Allocation past the budget was permitted:\n${refused.output}`);
+    if (!/exceed the memory budget/i.test(refused.output))
+      throw new Error(`Expected a memory-budget error, got:\n${refused.output}`);
+    // Measured ~16 MiB here; the same script when the gate lets it through
+    // peaks near 1.4 GB, so the ceiling sits an order of magnitude below the
+    // failure mode and well clear of interpreter startup.
+    assertPeakRssBelow(refused, "refused Array(100000000)", 192 * 1024 * 1024);
 
     // The same script under a budget that accommodates it must still work,
     // otherwise the gate is just broken rather than enforcing anything.
@@ -7400,6 +7403,126 @@ await section("Memory budget: single large allocation is refused before it happe
     const permittedOut = permitted.stdout.toString() + permitted.stderr.toString();
     if (permitted.exitCode !== 0 || !permittedOut.includes("len 100000000"))
       throw new Error(`Allocation within budget was refused:\n${permittedOut}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+// Property storage grows in doublings rather than in one step, so the refusal
+// arrives after several successful growths rather than on the first request —
+// the assertion is that the script cannot outrun the budget, not that any
+// single write is refused. Keys are produced by nested loops over two small
+// arrays so the driver itself stays far inside the budget: a keys array would
+// have to hold every key string alive and could exhaust the budget on its own,
+// which would prove nothing about property storage.
+await section("Memory budget: property storage growth is refused before it happens...", async () => {
+  const tmp = makeTmp();
+  try {
+    const runaway = join(tmp, "properties-runaway.js");
+    writeFileSync(
+      runaway,
+      "const outer = Array.from({ length: 2000 }, (_, i) => i);\n" +
+        "const inner = Array.from({ length: 2000 }, (_, i) => i);\n" +
+        "const target = {};\n" +
+        "for (const a of outer) {\n" +
+        "  for (const b of inner) {\n" +
+        '    target["k" + (a * 2000 + b)] = b;\n' +
+        "  }\n" +
+        "}\n" +
+        'print("kept " + Object.keys(target).length);\n',
+    );
+
+    // Same shape, small enough that its property storage fits the same budget.
+    const bounded = join(tmp, "properties-bounded.js");
+    writeFileSync(
+      bounded,
+      'const keys = Array.from({ length: 20000 }, (_, i) => "k" + i);\n' +
+        "const target = {};\n" +
+        "for (const k of keys) {\n" +
+        "  target[k] = 1;\n" +
+        "}\n" +
+        'print("kept " + keys.length);\n',
+    );
+
+    for (const modeArgs of [[], ["--mode=bytecode"]]) {
+      const label = modeArgs.length > 0 ? "bytecode" : "interpreter";
+
+      const refused = await runWithPeakRss([
+        BARE,
+        "--max-memory=16777216",
+        ...modeArgs,
+        runaway,
+      ]);
+      if (refused.exitCode === 0)
+        throw new Error(
+          `Property growth past the budget was permitted (${label}):\n${refused.output}`,
+        );
+      if (!/exceed the memory budget/i.test(refused.output))
+        throw new Error(`Expected a memory-budget error (${label}), got:\n${refused.output}`);
+      // Measured ~143 MiB interpreted and ~80 MiB compiled. The ceiling is far
+      // above both and far below the ~1 GB the same 4M-property loop reaches
+      // when nothing refuses it — most of what is resident here is descriptor
+      // and key-string storage the budget never sees (ADR 0106 Amendment 1),
+      // not the entry array the gate does bound.
+      assertPeakRssBelow(refused, `refused property growth (${label})`, 384 * 1024 * 1024);
+
+      const permitted = Bun.spawnSync([BARE, "--max-memory=16777216", ...modeArgs, bounded], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const permittedOut = permitted.stdout.toString() + permitted.stderr.toString();
+      if (permitted.exitCode !== 0 || !permittedOut.includes("kept 20000"))
+        throw new Error(`Property growth within budget was refused (${label}):\n${permittedOut}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+// The gate is per-allocation, and the budget's used-figure does not grow with
+// property descriptors, so spreading the same properties across many objects
+// escapes it entirely: the section above refuses one 4M-property object, and
+// this one runs 480k properties to completion at eight times the same budget.
+//
+// This asserts the hole, not a guarantee. It is here because ADR 0106 states
+// the gap in measured bytes and a prose statement rots silently; if the
+// aggregate is ever bounded, the RSS floor below fails and the ADR and
+// docs/garbage-collector.md have to be revisited rather than left wrong.
+await section("Memory budget: aggregated small-object growth is NOT bounded (ADR 0106 A1)...", async () => {
+  const tmp = makeTmp();
+  try {
+    const distributed = join(tmp, "properties-distributed.js");
+    writeFileSync(
+      distributed,
+      'const outer = Array.from({ length: 4000 }, (_, i) => i);\n' +
+        'const inner = Array.from({ length: 120 }, (_, i) => "k" + i);\n' +
+        "const sink = [];\n" +
+        "for (const a of outer) {\n" +
+        "  const o = {};\n" +
+        "  for (const k of inner) o[k] = a;\n" +
+        "  sink.push(o);\n" +
+        "}\n" +
+        'print("objects " + sink.length);\n',
+    );
+
+    for (const modeArgs of [[], ["--mode=bytecode"]]) {
+      const label = modeArgs.length > 0 ? "bytecode" : "interpreter";
+
+      const run = await runWithPeakRss([BARE, "--max-memory=16777216", ...modeArgs, distributed]);
+      if (run.exitCode !== 0 || !run.output.includes("objects 4000"))
+        throw new Error(
+          `Distributed property growth is now refused (${label}). That is a real ` +
+            `improvement, but ADR 0106 Amendment 1 documents it as permitted — ` +
+            `update the ADR and docs/garbage-collector.md, then rewrite this ` +
+            `section as a refusal test:\n${run.output}`,
+        );
+      // Measured ~131 MiB interpreted and ~80 MiB compiled against a 16 MiB
+      // budget. The floor is 2x the budget: high enough that a merely-idle
+      // process cannot reach it, low enough to survive platform differences in
+      // page size and allocator behaviour, and low enough that the sampler
+      // fallback undershooting a spike cannot fail it.
+      assertPeakRssAbove(run, `distributed property growth (${label})`, 32 * 1024 * 1024);
+    }
   } finally {
     clean(tmp);
   }

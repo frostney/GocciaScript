@@ -100,6 +100,24 @@ type
     FShape: TGocciaShape;
     FShapeEntryCount: Integer;
     function OwnerRealmIsCurrent: Boolean; {$IFDEF FPC}inline;{$ENDIF}
+  protected
+    // Property storage is sized by the script: `obj[k] = v` in a loop grows
+    // this map without bound, and neither the entry array nor the bucket
+    // array is a GC-registered object, so the budget never saw a byte of it.
+    // The base class calls this only when storage actually grows — the array
+    // doubles, so O(log Count) times per map — which is why the check can be
+    // a raise here without appearing on the per-write property path. ABytes is
+    // the transient footprint (new block plus the old one still live), not the
+    // new block alone.
+    // A gate rather than a charge: this storage belongs to the map, which has
+    // no hook to release a reservation when a property is deleted or the
+    // owning object is collected, so a charge would leak budget permanently.
+    // What this does NOT bound is the aggregate across many maps: property
+    // descriptors are not GC-registered, so the budget's used-figure never
+    // grows with them and a per-map request is always compared against a
+    // budget that looks empty. ADR 0106 records the measured size of that
+    // hole; it is a property of the charging model, not of this gate.
+    procedure RequireStorageBytes(const ABytes: Int64); override;
   public
     constructor Create; overload;
     constructor Create(AInitialCapacity: Integer); overload;
@@ -133,6 +151,7 @@ function CurrentRealmShapeTable: TGocciaShapeTable;
 implementation
 
 uses
+  Goccia.MemoryLimit,
   Goccia.Profiler;
 
 var
@@ -247,6 +266,11 @@ begin
     FOwnerRealmIdentity := 0;
   FShape := nil;
   FShapeEntryCount := 0;
+end;
+
+procedure TGocciaShapedPropertyMap.RequireStorageBytes(const ABytes: Int64);
+begin
+  RequireNativeBytes(ABytes);
 end;
 
 function TGocciaShapedPropertyMap.OwnerRealmIsCurrent: Boolean;
