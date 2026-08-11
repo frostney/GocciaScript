@@ -69,4 +69,14 @@ test("comparison followed by a parenthesized operand stays relational", () => {
   expect(a < b > (c)).toBe(true);
 });
 
+// The same source in a .ts file is a generic call — see
+// call-expression-type-arguments.ts. Call-site type arguments are the one piece
+// of type syntax GocciaScript does not erase in JavaScript sources, because the
+// JavaScript reading is valid and means something else.
+test("call-site type arguments are not type syntax in a .js source", () => {
+  const identity = (value) => value;
+
+  expect(() => identity<string>("v")).toThrow(ReferenceError);
+});
+
 });
