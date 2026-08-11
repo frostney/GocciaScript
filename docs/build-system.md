@@ -489,7 +489,7 @@ Config-file values reach the sandbox runner **only** through an explicit `--conf
 
 The cost is that limits an operator sets in a discovered `goccia.json` apply to every other binary and not to this one, and the omission is in the permissive direction. When a config file is discoverable and skipped for that reason, the runner says so on stderr:
 
-```
+```text
 Warning: ignoring discovered configuration /path/to/goccia.json. GocciaSandboxRunner applies configuration files only when named with --config.
 ```
 
