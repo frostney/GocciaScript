@@ -128,13 +128,7 @@ Useful test-runner forms:
 ./build/GocciaTestRunner tests --no-progress --exit-on-first-failure --silent
 ./build/GocciaTestRunner tests --output=results.json --log=test-console.log
 ./build/GocciaTestRunner tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov
-./build/GocciaTestRunner suite.test.ts --global 'process={"env":{}}'
-./build/GocciaTestRunner suite.test.ts --globals=env.json
 ```
-
-`--global` and `--globals` behave exactly as they do on `GocciaScriptLoader`
-(see below). On the test runner they are how a suite gets a host global it
-needs — `process` for `vi.stubEnv`, above all.
 
 ### Bytecode Mode
 
@@ -170,8 +164,7 @@ printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20 --print
 printf "name;" | ./build/GocciaScriptLoader --globals=context.json --output=json
 printf "name;" | ./build/GocciaScriptLoader --globals=context.json5 --output=json
 printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
-# `--global name=value` parses inline values as JSON only; `--globals=file` accepts JSON, JSON5, TOML, or YAML by file extension.
-# GocciaTestRunner accepts both, which is how a suite gets `process` (see docs/testing-api.md).
+# `--global name=value` parses inline values as JSON only; `--globals=file` accepts JSON, JSON5, TOML, or YAML by file extension. GocciaTestRunner accepts both — that is how a suite gets `process` (docs/testing-api.md).
 # Injected globals can override earlier injected values, but not built-in globals like console
 
 # Load an explicit import map
