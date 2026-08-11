@@ -7368,6 +7368,43 @@ await section("Fuzz Harness: stdin input path...", async () => {
     throw new Error(`Fuzz harness stdin path did not run the input:\n${output}`);
 });
 
+// ── Memory budget (WP-3) ───────────────────────────────────────────────
+//
+// The budget's whole promise is that it bounds the process. A limit that is
+// only noticed after the allocation has already happened bounds nothing, so
+// the assertion here is on resident memory, not just on the error.
+
+await section("Memory budget: single large allocation is refused before it happens...", async () => {
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "alloc.js");
+    // ~800 MB of pointer storage requested in one step.
+    writeFileSync(file, "const a = new Array(100000000); print('len ' + a.length);\n");
+
+    const refused = Bun.spawnSync([BARE, "--max-memory=67108864", file], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const refusedOut = refused.stdout.toString() + refused.stderr.toString();
+    if (refused.exitCode === 0)
+      throw new Error(`Allocation past the budget was permitted:\n${refusedOut}`);
+    if (!/exceed the memory budget/i.test(refusedOut))
+      throw new Error(`Expected a memory-budget error, got:\n${refusedOut}`);
+
+    // The same script under a budget that accommodates it must still work,
+    // otherwise the gate is just broken rather than enforcing anything.
+    const permitted = Bun.spawnSync([BARE, "--max-memory=2147483648", file], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const permittedOut = permitted.stdout.toString() + permitted.stderr.toString();
+    if (permitted.exitCode !== 0 || !permittedOut.includes("len 100000000"))
+      throw new Error(`Allocation within budget was refused:\n${permittedOut}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 if (sectionFailures.length > 0) {
   console.error(`\n${sectionFailures.length} section(s) failed:`);
   for (const failure of sectionFailures) {
