@@ -1337,6 +1337,13 @@ jobs:
       - name: Check differential suites against vitest and bun
         run: bun run scripts/test-cli-differential.ts
 
+      # The coverage steps above assert that a report is produced and has the
+      # right shape. This one asserts the counts themselves match between the
+      # interpreter and the bytecode VM, which is how an interpreter miscount
+      # that kept the percentages plausible was caught.
+      - name: Check coverage parity between execution modes
+        run: bun run scripts/test-cli-coverage-parity.ts
+
       - name: Check benchmark comparison logic
         run: bun run scripts/test-benchmark-compare.ts
 

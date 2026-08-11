@@ -1194,6 +1194,133 @@ console.log("--log option...");
   }
 }
 
+// -- Assertion failure text (TestRunner) ---------------------------------------
+
+// A failed assertion is recorded rather than thrown, so its message cannot be
+// observed from inside a test. These two properties are load-bearing enough to
+// pin from the outside: toBeInstanceOf naming what it compared, and the vitest
+// shim keeping a named, actionable error for every member it does not provide.
+console.log("Assertion failure text...");
+{
+  const tmp = mkdtemp("goccia-assertion-text-");
+  try {
+    const instanceOfSrc = join(tmp, "instance-of.test.js");
+    writeFileSync(
+      instanceOfSrc,
+      [
+        "class BatchError extends Error {}",
+        "class NamedError extends Error {}",
+        "class Plain {}",
+        "class Sibling {}",
+        'describe("rendering", () => {',
+        '  test("error subject", () => {',
+        '    expect(new BatchError("boom")).toBeInstanceOf(NamedError);',
+        "  });",
+        '  test("plain subject", () => {',
+        "    expect(new Plain()).toBeInstanceOf(Sibling);",
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    const instanceOf = await $`${TESTRUNNER} ${instanceOfSrc} --no-progress 2>&1`.nothrow();
+    const instanceOfOut = instanceOf.text();
+    // The class object serializes as "{}", so a message built from the values
+    // alone said "Expected {} to be an instance of {}" and named neither side.
+    for (const expected of [
+      "Expected Error: boom to be an instance of NamedError",
+      "Expected Plain{} to be an instance of Sibling",
+    ]) {
+      if (!instanceOfOut.includes(expected))
+        throw new Error(`toBeInstanceOf should report ${expected}, got: ${instanceOfOut}`);
+    }
+
+    // Every member the shim does not implement must keep throwing by name. The
+    // contract is what tells a suite author which member to work around, so
+    // silently degrading one to a no-op is worse than not having it.
+    const unsupported: Array<[string, string]> = [
+      ["vi.hoisted(() => ({}))", "vi.hoisted is not supported"],
+      ["vi.importMock('./x.js')", "vi.importMock is not supported"],
+      ["vi.setConfig({})", "vi.setConfig is not supported"],
+      ["vi.useFakeTimers()", "vi.useFakeTimers is not supported"],
+      ["vi.advanceTimersByTime(1)", "vi.advanceTimersByTime is not supported"],
+      ["vi.importActual('./x.js')", "vi.importActual is not supported"],
+      ["vi.resetModules()", "vi.resetModules is not supported"],
+      ["vi.doMock('./x.js')", "vi.doMock is not supported"],
+    ];
+    const shimSrc = join(tmp, "shim.test.js");
+    writeFileSync(
+      shimSrc,
+      [
+        'import { vi } from "vitest";',
+        'describe("unsupported", () => {',
+        ...unsupported.map(
+          ([call], index) =>
+            `  test("case ${index}", () => { try { ${call}; console.log("NO-THROW ${index}"); } catch (e) { console.log("THREW ${index}: " + e.message); } });`,
+        ),
+        "});",
+        "",
+      ].join("\n"),
+    );
+    const shim = await $`${TESTRUNNER} ${shimSrc} --source-type=module --no-progress 2>&1`.nothrow();
+    const shimOut = shim.text();
+    unsupported.forEach(([call, message], index) => {
+      if (shimOut.includes(`NO-THROW ${index}`))
+        throw new Error(`${call} must keep throwing its named error, got: ${shimOut}`);
+      if (!shimOut.includes(`THREW ${index}: ${message}`))
+        throw new Error(`${call} should report "${message}", got: ${shimOut}`);
+      if (!shimOut.includes("docs/testing-api.md"))
+        throw new Error(`${call} should point at the docs, got: ${shimOut}`);
+    });
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- Global injection (TestRunner) ---------------------------------------------
+
+// The runner grew --global/--globals so a suite can be handed a host global it
+// needs. `process` is the case that forced it: GocciaScript has none, and
+// vi.stubEnv has nowhere to write without one.
+console.log("Global injection (TestRunner)...");
+{
+  const tmp = mkdtemp("goccia-testrunner-globals-");
+  try {
+    const suite = join(tmp, "globals.test.js");
+    writeFileSync(
+      suite,
+      [
+        'describe("injected", () => {',
+        '  test("reads the injected global", () => {',
+        '    expect(process.env.PRESET).toBe("from-host");',
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
+
+    const inline = await $`${TESTRUNNER} ${suite} --no-progress --global ${'process={"env":{"PRESET":"from-host"}}'} 2>&1`.nothrow();
+    if (inline.exitCode !== 0)
+      throw new Error(`--global should inject process, got: ${inline.text()}`);
+
+    const globalsFile = join(tmp, "env.json");
+    writeFileSync(globalsFile, JSON.stringify({ process: { env: { PRESET: "from-host" } } }));
+    const fromFile = await $`${TESTRUNNER} ${suite} --no-progress --globals=${globalsFile} 2>&1`.nothrow();
+    if (fromFile.exitCode !== 0)
+      throw new Error(`--globals should inject process, got: ${fromFile.text()}`);
+
+    // Without the injection the suite must fail on the missing global rather
+    // than quietly reading undefined.
+    const without = await $`${TESTRUNNER} ${suite} --no-progress 2>&1`.nothrow();
+    if (without.exitCode === 0)
+      throw new Error("Suite should fail when process is not injected");
+    if (!without.text().includes("process"))
+      throw new Error(`Missing-global failure should name process, got: ${without.text()}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 // -- Example scripts (Loader) ---------------------------------------------------
 
 console.log("Example scripts...");

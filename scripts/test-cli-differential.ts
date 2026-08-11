@@ -112,6 +112,16 @@ const CLASSIFICATION: Record<string, Classification> = {
   // its mocking half is the whole point, and that half cannot run under bun, so
   // bun would be checking an isolation property whose other half never ran.
   "i-modulemock-isolation.test.js": { kind: "mocks", bun: "skip", vitest: "gate" },
+  // TypeScript's `.js`-specifier convention is module resolution, so bun gates.
+  // Vitest is skipped: it resolves through vite, whose own `.js` -> `.ts`
+  // fallback is a plugin-level concern rather than the testing-API semantics
+  // vitest is the oracle for.
+  "j-tsspecifier.test.ts": { kind: "language", bun: "gate", vitest: "skip" },
+  // Call-site type arguments are TypeScript syntax over a JavaScript
+  // expression grammar, so bun gates: it is the runtime that decides the same
+  // ambiguity for the toolchain this runner replaces. Vitest is skipped —
+  // nothing here is testing-API semantics.
+  "k-callgenerics.test.ts": { kind: "language", bun: "gate", vitest: "skip" },
 };
 
 type Verdict = {
