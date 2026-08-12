@@ -31,6 +31,7 @@ uses
   Classes,
   SysUtils,
 
+  TextEncoding,
   TextSemantics,
 
   Goccia.CLI.Stdin,
@@ -356,6 +357,8 @@ var
   SourceText: string;
   InputStream: TFileStream;
   FileByteSize: Int64;
+  FileBytes: TBytes;
+  DecodeErrorOffset: Integer;
 begin
   ADetail := '';
   ASource := nil;
@@ -382,15 +385,27 @@ begin
         fmOpenRead or fmShareDenyWrite);
       try
         FileByteSize := InputStream.Size;
+        if FileByteSize > FUZZ_MAX_INPUT_BYTES then
+        begin
+          ADetail := Format('input exceeds %d bytes', [FUZZ_MAX_INPUT_BYTES]);
+          Exit(False);
+        end;
+        { Read the handle that was just size-checked rather than reopening
+          AFileName. Reopening would leave a TOCTOU window in which the path
+          could be swapped for a larger file after the size check, defeating
+          the cap; reading the validated handle binds the check and the read
+          to the same open file. }
+        SetLength(FileBytes, FileByteSize);
+        if FileByteSize > 0 then
+          InputStream.ReadBuffer(FileBytes[0], FileByteSize);
       finally
         InputStream.Free;
       end;
-      if FileByteSize > FUZZ_MAX_INPUT_BYTES then
+      if not TryDecodeUTF8(FileBytes, SourceText, DecodeErrorOffset) then
       begin
-        ADetail := Format('input exceeds %d bytes', [FUZZ_MAX_INPUT_BYTES]);
+        ADetail := Format('invalid UTF-8 at byte %d', [DecodeErrorOffset]);
         Exit(False);
       end;
-      SourceText := ReadUTF8FileText(AFileName);
     end;
   except
     { Unreadable or undecodable bytes are an input-selection problem, not an
