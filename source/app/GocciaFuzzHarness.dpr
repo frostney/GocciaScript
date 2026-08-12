@@ -41,6 +41,7 @@ uses
   Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.Modules.ContentProvider,
   Goccia.ScriptLoader.Input,
   Goccia.StackLimit,
@@ -81,7 +82,12 @@ const
 
 type
   { How a single run ended. Everything except feUnexpected is a bounded,
-    engine-modelled outcome and must not be reported to the fuzzer. }
+    engine-modelled outcome and must not be reported to the fuzzer.
+
+    Stack overflow has no outcome of its own: the engine deliberately models a
+    depth breach as a script-catchable RangeError (see Goccia.StackLimit), so it
+    is indistinguishable from a guest throw at this boundary and lands in
+    foScriptThrow. foMemoryLimit, by contrast, is a distinct RTL type. }
   TFuzzOutcome = (
     foCompleted,
     foScriptThrow,
@@ -89,7 +95,6 @@ type
     foRuntimeError,
     foInstructionLimit,
     foTimeout,
-    foStackOverflow,
     foMemoryLimit,
     foModuleDenied,
     foInputRejected,
@@ -150,7 +155,6 @@ begin
     foRuntimeError:     Result := 'runtime-error';
     foInstructionLimit: Result := 'instruction-limit';
     foTimeout:          Result := 'timeout';
-    foStackOverflow:    Result := 'stack-overflow';
     foMemoryLimit:      Result := 'memory-limit';
     foModuleDenied:     Result := 'module-denied';
     foInputRejected:    Result := 'input-rejected';
@@ -252,6 +256,16 @@ begin
             Result := foScriptThrow;
             ADetail := E.Message;
           end;
+          on E: TGocciaMemoryLimitError do
+          begin
+            { The 256 MB budget is a bounded, engine-modelled outcome, not a
+              finding. TGocciaMemoryLimitError is an RTL type the input cannot
+              catch (uncatchable from script by design), so the host owns this
+              distinction here at its top-level boundary. Without this branch it
+              would escape the ladder and be misreported as an unexpected fault. }
+            Result := foMemoryLimit;
+            ADetail := E.Message;
+          end;
           on E: TGocciaInstructionLimitError do
           begin
             Result := foInstructionLimit;
@@ -296,21 +310,33 @@ function ReadInput(const AFileName: string; out ASource: TStringList;
   out ADetail: string): Boolean;
 var
   SourceText: string;
+  StdinLines: TStringList;
 begin
   ADetail := '';
   ASource := nil;
   try
     if (AFileName = '') or (AFileName = '-') then
     begin
-      ASource := ReadSourceFromText(Input);
-      Exit(True);
-    end;
-    if not FileExists(AFileName) then
+      { Read stdin into the same SourceText the file path uses so the
+        FUZZ_MAX_INPUT_BYTES bound below applies to both interfaces. A fuzzer
+        can pipe a multi-megabyte input through `-`; without sharing the check
+        it would reach the lexer unbounded. }
+      StdinLines := ReadSourceFromText(Input);
+      try
+        SourceText := StdinLines.Text;
+      finally
+        StdinLines.Free;
+      end;
+    end
+    else
     begin
-      ADetail := 'no such input file: ' + AFileName;
-      Exit(False);
+      if not FileExists(AFileName) then
+      begin
+        ADetail := 'no such input file: ' + AFileName;
+        Exit(False);
+      end;
+      SourceText := ReadUTF8FileText(AFileName);
     end;
-    SourceText := ReadUTF8FileText(AFileName);
   except
     { Unreadable or undecodable bytes are an input-selection problem, not an
       engine finding. }

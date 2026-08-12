@@ -143,8 +143,13 @@ against the gated build, peak RSS from `/usr/bin/time -l`:
 
 A one-line restructuring of a runaway script — spreading the same properties
 over more objects — turns a refusal into a ~15x overshoot that runs to
-completion. The first workload never consults the gate at all; the second
-consults it on every doubling and it permits every time.
+completion. Both workloads consult the gate. At 120 properties each map's entry
+array crosses the 62 -> 126 step, whose 4,512-byte transient clears
+`GATED_GROWTH_MIN_BYTES`, so the gate runs once per map (the bucket array stays
+below its 512 -> 1024 threshold); the second, at 1,200 properties, consults it
+on every doubling. The gate permits every time — not because it is never
+consulted, but because the figure it compares against omits the dominant cost
+(below).
 
 ### Why
 

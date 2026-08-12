@@ -7301,6 +7301,11 @@ await section("Fuzz Harness: engine-modelled outcomes exit zero...", async () =>
       timeout: "while (true) {}",
       "module-denied": 'import { a } from "./nope.js";',
       "deep-recursion": "const f = () => f(); f();",
+      // Requests ~800 MB of element storage in one step, past the harness's
+      // 256 MB budget. The refusal raises the uncatchable TGocciaMemoryLimitError;
+      // the harness must classify it as a bounded outcome (exit 0), not let it
+      // escape the typed ladder into an unexpected-fault report.
+      "memory-limit": "const a = new Array(100000000); a.length;",
     };
     for (const [name, source] of Object.entries(cases)) {
       const file = join(tmp, `${name}.js`);
@@ -7371,6 +7376,22 @@ await section("Fuzz Harness: stdin input path...", async () => {
     throw new Error(`Fuzz harness stdin path exited ${proc.exitCode}:\n${output}`);
   if (!output.includes("completed"))
     throw new Error(`Fuzz harness stdin path did not run the input:\n${output}`);
+});
+
+await section("Fuzz Harness: oversized stdin is rejected like an oversized file...", async () => {
+  // The size bound must guard both interfaces. A fuzzer can pipe a multi-MB
+  // input through `-`; it must be rejected before the lexer, not lexed.
+  const huge = "a".repeat(2 * 1024 * 1024) + ";\n";
+  const proc = Bun.spawnSync([FUZZHARNESS, "--verbose", "-"], {
+    stdin: new TextEncoder().encode(huge),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const output = proc.stdout.toString() + proc.stderr.toString();
+  if (proc.exitCode !== 0)
+    throw new Error(`Fuzz harness oversized stdin exited ${proc.exitCode}:\n${output}`);
+  if (!output.includes("input-rejected"))
+    throw new Error(`Fuzz harness did not reject oversized stdin before lexing:\n${output}`);
 });
 
 // ── Memory budget (WP-3) ───────────────────────────────────────────────

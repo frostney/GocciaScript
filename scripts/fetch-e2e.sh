@@ -51,7 +51,8 @@ run_js() {
 run_js_with() {
   local extra="$1"
   echo "$2" > "$TMPFILE"
-  # shellcheck disable=SC2086 -- $extra is a deliberate flag list
+  # $extra is a deliberate flag list, so word splitting is wanted here.
+  # shellcheck disable=SC2086
   "$LOADER" "$ALLOW_HOST" $extra "$TMPFILE" --compat-asi 2>&1
 }
 
@@ -228,10 +229,21 @@ try {
 
 # A redirect hop must be resolved and validated exactly like the first
 # request; validating only the initial target would leave the hole open.
-check_with "redirect hop is policy-checked too" \
-  "--fetch-deny-private-ranges" 1 "
-await fetch('${BASE}/redirect')
-" "TypeError"
+#
+# The initial request goes to loopback (allowed), so it is NOT rejected up
+# front — the 302 then points at a private, off-allowlist address. Only per-hop
+# revalidation can catch that, and the rejection must name the redirect target
+# (10.255.255.1), not the initial host, proving the hop itself was checked. A
+# regression that validates only the first request would instead attempt to
+# connect to the redirect target and fail with a different, connect-level error.
+check_with "redirect hop is policy-checked, not just the initial request" \
+  "" 0 "
+try {
+  await fetch('${BASE}/redirect-external')
+} catch (e) {
+  console.log(e.message)
+}
+" "not allowed: 10.255.255.1"
 
 # --- Response body cap (WP-2) ---
 

@@ -3764,6 +3764,10 @@ begin
             ChildSuite.SuiteFunction.Call(ChildSuite.SuiteArguments,
               TGocciaUndefinedLiteralValue.UndefinedValue);
         except
+          { A refused allocation is uncatchable and must unwind to the host on
+            every execution path, not be converted into a describe failure. }
+          on E: TGocciaMemoryLimitError do
+            raise;
           on E: Exception do
           begin
             if not FSuppressOutput then
@@ -4141,6 +4145,10 @@ begin
                 else
                   raise;
               end;
+              { A refused allocation is uncatchable and must unwind to the host,
+                not be converted into a test failure and swallowed here. }
+              on E: TGocciaMemoryLimitError do
+                raise;
               on E: Exception do
               begin
                 if (TGocciaMicrotaskQueue.Instance <> nil) then
@@ -4338,6 +4346,10 @@ begin
           { A thrown JS value carries its payload on TGocciaThrowValue.Value;
             E.Message is empty for it, which dropped the text both oracles
             print. }
+          { A refused allocation is uncatchable and must unwind to the host, not
+            be converted into a hook failure and swallowed here. }
+          on E: TGocciaMemoryLimitError do
+            raise;
           on E: TGocciaThrowValue do
             AssertionFailed('callback execution',
               'Callback threw an exception: ' + DescribeThrownValue(E.Value));

@@ -22,7 +22,7 @@
 
 import { createHash } from "crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
-import { dirname, join, relative } from "path";
+import { dirname, join, relative, resolve } from "path";
 import { fileURLToPath } from "url";
 
 // ── Config ─────────────────────────────────────────────────────────────
@@ -31,7 +31,24 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 
 const argOut = process.argv.indexOf("--out");
-const OUT_DIR = argOut === -1 ? join(ROOT, "build", "fuzz", "corpus") : process.argv[argOut + 1];
+let OUT_DIR: string;
+if (argOut === -1) {
+  OUT_DIR = join(ROOT, "build", "fuzz", "corpus");
+} else {
+  // OUT_DIR feeds a recursive rmSync below, so a missing or out-of-tree value
+  // must be rejected before anything is deleted.
+  const value = process.argv[argOut + 1];
+  if (value === undefined || value.startsWith("--")) {
+    console.error("--out requires a directory path");
+    process.exit(1);
+  }
+  OUT_DIR = resolve(ROOT, value);
+  const rel = relative(ROOT, OUT_DIR);
+  if (rel === "" || rel.startsWith("..")) {
+    console.error(`Refusing to use ${OUT_DIR} as the corpus directory (outside the repository)`);
+    process.exit(1);
+  }
+}
 const VERBOSE = process.argv.includes("--verbose");
 
 // AFL++ trims inputs it cannot shrink; seeds above this size cost more than
@@ -90,9 +107,9 @@ let written = 0;
 let skippedSize = 0;
 let skippedDuplicate = 0;
 
-const addSeed = (content: string, label: string): void => {
+const addSeed = (content: string, label: string, allowShort = false): void => {
   const bytes = Buffer.byteLength(content, "utf8");
-  if (bytes < MIN_SEED_BYTES || bytes > MAX_SEED_BYTES) {
+  if ((!allowShort && bytes < MIN_SEED_BYTES) || bytes > MAX_SEED_BYTES) {
     skippedSize += 1;
     return;
   }
@@ -163,8 +180,10 @@ const SYNTHETIC_SEEDS: Record<string, string> = {
   "proxy-reflect": "new Proxy({}, { get: (t, k) => Reflect.get(t, k) }).x;",
 };
 
+// Synthetic seeds are hand-picked to reach specific parser paths; bypass the
+// minimum-size filter so short ones (e.g. "/* abc") are not silently dropped.
 for (const [name, content] of Object.entries(SYNTHETIC_SEEDS)) {
-  addSeed(content, `synthetic-${name}`);
+  addSeed(content, `synthetic-${name}`, true);
 }
 
 console.log(

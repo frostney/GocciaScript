@@ -41,7 +41,6 @@ implementation
 uses
   SysUtils,
 
-  HTTPClient,
   HTTPTypes,
 
   Goccia.Constants.ConstructorNames,
