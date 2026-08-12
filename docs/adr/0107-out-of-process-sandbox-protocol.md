@@ -289,7 +289,10 @@ no downgrade or negotiation; negotiation is an out-of-scope follow-up (§7).
   computes the diff itself, exactly as `ExecuteSandboxPath` does today — it
   captures its post-seed baseline, runs, and diffs — so the parent relays a diff
   rather than reconstructing the child's virtual filesystem. `diff` is `null`
-  when no diff was requested.
+  when no diff was requested, and also `null` in the overflow fallback below
+  even when `diffRequested` is true; the `truncated` flag is what distinguishes
+  "diff omitted for size" from "no diff requested", so a `null` `diff` is never
+  ambiguous.
 - **`output`** and **`errorOutput`** are the captured console and error streams.
   The in-process runner does not cap capture today (`FCurrentOutputLines` is an
   unbounded list), so bounding it is a protocol requirement here, not a runner
@@ -302,6 +305,16 @@ no downgrade or negotiation; negotiation is an out-of-scope follow-up (§7).
   visible rather than silent. The exact budget is Phase B's to fix, but bounding
   capture on the child side — never relying on the parent's oversize path to
   absorb legitimate output — is normative.
+- **`truncated`** is a boolean, `false` on every frame except the overflow
+  fallback below, where it is `true`. It is the single flag the parent reads to
+  learn that a **clean** run's frame was reduced to fit `MAX_FRAME_BYTES` — that
+  `diff` and `resultValue` were dropped to `null` and `errorMessage` was cut —
+  rather than that the run produced no diff or no result. The parent treats a
+  `truncated` frame as a successful, lossy run: it keeps `ok`, `exitCode`, and
+  `failureKind` verbatim and surfaces the truncation to the host, and it **never**
+  reclassifies a `truncated` frame as `child-process-crash` (§2/§4), because the
+  frame is well-formed and complete — it is the payload, not the framing, that was
+  bounded.
 - **Total frame size** is bounded, not only the two captured streams. A
   per-stream capture budget alone does not guarantee frame fit: `diff`,
   `resultValue`, and `errorMessage` are also variable-length and must each carry a
@@ -310,9 +323,12 @@ no downgrade or negotiation; negotiation is an out-of-scope follow-up (§7).
   large clone or diff), the child applies a **deterministic** fallback rather than
   emitting an oversize frame the parent would misread as a crash — it drops
   `diff` and `resultValue` to `null`, truncates `errorMessage` to its byte limit,
-  and sets an explicit `truncated` marker, in that fixed order, so a clean run
-  always yields a well-formed frame. Guaranteeing frame fit for every clean run is
-  normative; the exact per-field limits are Phase B's to fix.
+  and sets the `truncated` field (defined above) to `true`, in that fixed order,
+  so a clean run always yields a schema-valid, well-formed frame. The `truncated`
+  field is what keeps this fallback consistent with the schema: `diff` may be
+  `null` with `diffRequested` still `true`, and the parent disambiguates that from
+  a genuinely empty result solely by `truncated`. Guaranteeing frame fit for every
+  clean run is normative; the exact per-field limits are Phase B's to fix.
 
 ### 4. Failure taxonomy mapping
 
