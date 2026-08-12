@@ -120,7 +120,7 @@ The formula is `min(physicalMemory / 2, platformCap)`.
 
 ### What `BytesAllocated` tracks
 
-`BytesAllocated` sums `InstanceSize` of each `TGCManagedObject` registered with the GC. This covers the Delphi/FPC object instance (vtable, fields, padding) but **not** backing storage allocated separately by the object (e.g., dynamic array buffers in `TGocciaArrayValue`, string heap allocations in `TGocciaStringLiteralValue`). The ceiling is therefore an approximate safety net, not a precise memory accounting system.
+`BytesAllocated` sums `InstanceSize` of each `TGCManagedObject` registered with the GC. This covers the Delphi/FPC object instance (vtable, fields, padding). Backing storage allocated separately by an object splits into two cases. Storage with a clear owner and a release hook is **charged** to `BytesAllocated` through the `TryReserveExternalBytes` contract — string payloads (`TGocciaStringLiteralValue`) and `ArrayBuffer`/`SharedArrayBuffer` backing stores reserve on allocation and release in the destructor, so they do count. Storage that is only **gated** (checked before allocation, never charged) does not — dynamic array element buffers in `TGocciaArrayValue` are bounded per-allocation by the growth gate below, not summed into `BytesAllocated`. The ceiling is therefore an approximate safety net, not a precise memory accounting system.
 
 ### Gated growth points
 

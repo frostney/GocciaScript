@@ -63,7 +63,7 @@ The engine-owned host callback that receives capability audit events synchronous
 _Avoid_: Runtime extension, script-visible logger, best-effort telemetry, effect log.
 
 **Resource limit**:
-The umbrella for engine-enforced execution ceilings: instruction limit, execution timeout, and memory budget. A resource limit is enforced by the engine against the running program as a whole, is configured by the host rather than the program, and is not catchable from source. Exceeding one ends execution rather than producing a value source can handle. (Capability budget is a separate concept, realised per capability rather than as a program-wide ceiling — see below — so it is not part of this umbrella.)
+The umbrella for engine-enforced execution ceilings: instruction limit, execution timeout, and the memory budget's native-growth gate. A resource limit is enforced by the engine against the running program as a whole, is configured by the host rather than the program, and is not catchable from source. Exceeding one ends execution rather than producing a value source can handle. Only the native-growth gate makes the memory budget a resource limit in this sense; the budget's _charged_ allocation failures are the deliberate exception — they surface as an ordinary catchable `RangeError`, so they are not part of this umbrella (see Memory budget below). (Capability budget is a separate concept, realised per capability rather than as a program-wide ceiling — see below — so it is not part of this umbrella.)
 _Avoid_: Sandbox permission, capability, quota, script error.
 
 **Memory budget**:

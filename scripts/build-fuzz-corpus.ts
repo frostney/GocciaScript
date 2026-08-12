@@ -21,33 +21,64 @@
  */
 
 import { createHash } from "crypto";
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
-import { dirname, join, relative, resolve } from "path";
+import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import { fileURLToPath } from "url";
 
 // ── Config ─────────────────────────────────────────────────────────────
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
+// Canonical (symlink-resolved) repository root. All containment checks run
+// against this, so a symlinked ancestor of the repo does not read as escape.
+const CANONICAL_ROOT = realpathSync(ROOT);
+
+// Canonicalize a path whose leaf may not exist yet: resolve symlinks on its
+// nearest existing ancestor, then re-append the not-yet-created segments. A
+// plain resolve()/relative() check is lexical and a symlinked `build/` could
+// redirect the recursive rmSync below outside the repository.
+const canonicalize = (target: string): string => {
+  let current = resolve(target);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync(current);
+      return tail.length === 0 ? real : join(real, ...tail.reverse());
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) {
+        // Reached the filesystem root without an existing ancestor.
+        return tail.length === 0 ? current : join(current, ...tail.reverse());
+      }
+      tail.push(basename(current));
+      current = parent;
+    }
+  }
+};
+
+// OUT_DIR feeds a recursive rmSync below, so a value that canonicalizes to the
+// repository root or outside it must be rejected before anything is deleted.
+const resolveOutDir = (candidate: string): string => {
+  const canonical = canonicalize(candidate);
+  const rel = relative(CANONICAL_ROOT, canonical);
+  if (rel === "" || rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) {
+    console.error(`Refusing to use ${candidate} as the corpus directory (outside the repository)`);
+    process.exit(1);
+  }
+  return canonical;
+};
 
 const argOut = process.argv.indexOf("--out");
 let OUT_DIR: string;
 if (argOut === -1) {
-  OUT_DIR = join(ROOT, "build", "fuzz", "corpus");
+  OUT_DIR = resolveOutDir(join(ROOT, "build", "fuzz", "corpus"));
 } else {
-  // OUT_DIR feeds a recursive rmSync below, so a missing or out-of-tree value
-  // must be rejected before anything is deleted.
   const value = process.argv[argOut + 1];
   if (value === undefined || value.startsWith("--")) {
     console.error("--out requires a directory path");
     process.exit(1);
   }
-  OUT_DIR = resolve(ROOT, value);
-  const rel = relative(ROOT, OUT_DIR);
-  if (rel === "" || rel.startsWith("..")) {
-    console.error(`Refusing to use ${OUT_DIR} as the corpus directory (outside the repository)`);
-    process.exit(1);
-  }
+  OUT_DIR = resolveOutDir(resolve(ROOT, value));
 }
 const VERBOSE = process.argv.includes("--verbose");
 

@@ -236,8 +236,15 @@ try {
 # (10.255.255.1), not the initial host, proving the hop itself was checked. A
 # regression that validates only the first request would instead attempt to
 # connect to the redirect target and fail with a different, connect-level error.
+#
+# --timeout bounds that regression: the fetch connect timeout derives from the
+# remaining execution budget (FetchManager: RequestTimeoutMilliseconds :=
+# RemainingExecutionTimeoutMilliseconds), so a hard loader timeout caps an
+# otherwise-unbounded blocking connect to 10.255.255.1:1 if per-hop validation
+# regresses. In the passing case the hop is rejected before any connect, so the
+# timeout never fires.
 check_with "redirect hop is policy-checked, not just the initial request" \
-  "" 0 "
+  "--timeout=15000" 0 "
 try {
   await fetch('${BASE}/redirect-external')
 } catch (e) {
