@@ -134,11 +134,15 @@ directions carry **length-prefixed frames**. There is no shared memory in v1.
   violation by an untrusted child, treated as death, never trusted enough to
   size an allocation from.
 - **Oversize handling, parent → child:** the parent constructs the request frame
-  itself, so it must guarantee the frame fits. If a host configures a filesystem
-  byte quota (`--fs-quota-bytes`) large enough that the materialised baseline
-  would exceed `MAX_FRAME_BYTES`, the parent **fails before spawning** with
-  `sfkHostError` (a host misconfiguration, not source misbehaviour). With the
-  default quota this cannot happen.
+  itself, so it must guarantee the frame fits. It measures the UTF-8 byte length
+  of the **complete serialised `run-request`** — every variable field, not the
+  materialised baseline alone: config, capability grants, import map and aliases,
+  and the base64-expanded seed bytes all count — and if that total exceeds
+  `MAX_FRAME_BYTES` it **fails before spawning** with `sfkHostError` (a host
+  misconfiguration, not source misbehaviour). The filesystem byte quota
+  (`--fs-quota-bytes`) large enough to inflate the baseline is the common cause,
+  but the check is on the whole frame so no field can silently push the request
+  over. With the default configuration this cannot happen.
 - **Single-frame, non-streaming:** each direction sends exactly one frame per
   run. There is no framing for incremental or streamed output in v1; streaming
   frames are an out-of-scope follow-up (§7).
@@ -328,12 +332,17 @@ no downgrade or negotiation; negotiation is an out-of-scope follow-up (§7).
 - **Total frame size** is bounded, not only the two captured streams. A
   per-stream capture budget alone does not guarantee frame fit: `diff`,
   `resultValue`, and `errorMessage` are also variable-length and must each carry a
-  documented UTF-8 byte limit. After serialisation the child re-checks the whole
-  `run-result` against `MAX_FRAME_BYTES`; if it still overflows (a legitimately
+  documented UTF-8 byte limit. Every truncation — `output`, `errorOutput`, and
+  `errorMessage` — cuts at a **code-point boundary**, never mid-sequence, so the
+  result is always well-formed UTF-8, and it reserves the marker's byte length
+  before cutting so the marker plus the retained text still fit the field's limit.
+  After serialisation the child re-checks the whole `run-result` against
+  `MAX_FRAME_BYTES` as the final guard; if it still overflows (a legitimately
   large clone or diff), the child applies a **deterministic** fallback rather than
   emitting an oversize frame the parent would misread as a crash — it drops
-  `diff` and `resultValue` to `null`, truncates `errorMessage` to its byte limit,
-  and sets the `truncated` field (defined above) to `true`, in that fixed order,
+  `diff` and `resultValue` to `null`, truncates `errorMessage` to its byte limit
+  at a code-point boundary, and sets the `truncated` field (defined above) to
+  `true`, in that fixed order,
   so a clean run always yields a schema-valid, well-formed frame. The `truncated`
   field is what keeps this fallback consistent with the schema: `diff` may be
   `null` with `diffRequested` still `true`, and the parent disambiguates that from
