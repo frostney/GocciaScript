@@ -88,11 +88,55 @@ begin
   Result.MaxResponseBytes := DEFAULT_MAX_RESPONSE_BODY_BYTES;
 end;
 
+{ A bracketed authority must hold an IPv6 literal, not an arbitrary name:
+  without this check ParseHTTPURL would strip the brackets off
+  `[allowed.example]` and hand back `allowed.example` as a valid host, so a
+  malformed URL would slip past the invalid-URL reject+audit path in
+  TGocciaGlobalFetch.ValidateHost. This is deliberately a plausibility gate,
+  not a full RFC 4291 parser: the address portion must contain a ':' and use
+  only IPv6-legal characters (hex digits, ':', '.', for embedded IPv4), with an
+  optional non-empty '%zone' suffix (RFC 6874), which is enough to keep a
+  hostname from masquerading as an IPv6 literal. }
+function IsPlausibleIPv6Literal(const AContent: string): Boolean;
+var
+  I, PercentPos: Integer;
+  AddressPart: string;
+  HasColon: Boolean;
+begin
+  Result := False;
+  if AContent = '' then
+    Exit;
+  PercentPos := Pos('%', AContent);
+  if PercentPos > 0 then
+  begin
+    // A zone identifier follows '%'; require it to be non-empty and validate
+    // only the address portion that precedes it.
+    if PercentPos = Length(AContent) then
+      Exit;
+    AddressPart := Copy(AContent, 1, PercentPos - 1);
+  end
+  else
+    AddressPart := AContent;
+  if AddressPart = '' then
+    Exit;
+  HasColon := False;
+  for I := 1 to Length(AddressPart) do
+    case AddressPart[I] of
+      '0'..'9', 'a'..'f', 'A'..'F', '.':
+        ;
+      ':':
+        HasColon := True;
+    else
+      Exit;
+    end;
+  Result := HasColon;
+end;
+
 function ParseHTTPURL(const AURL: string;
   const ARequireSupportedScheme: Boolean = True;
   const AAllowUserInfo: Boolean = False): THTTPParsedURL;
 var
-  S, Rest: string;
+  S, Rest, HostContent: string;
   I, AuthorityEnd, ColonCount, ParsedPort: Integer;
   PortText: string;
 begin
@@ -153,7 +197,10 @@ begin
     I := Pos(']', Rest);
     if I > 1 then
     begin
-      Result.Host := LowerCase(Copy(Rest, 2, I - 2));
+      HostContent := Copy(Rest, 2, I - 2);
+      if not IsPlausibleIPv6Literal(HostContent) then
+        raise EHTTPError.Create('Invalid URL: malformed IPv6 authority');
+      Result.Host := LowerCase(HostContent);
       Rest := Copy(Rest, I + 1, Length(Rest));
       if (Length(Rest) > 0) and (Rest[1] = ':') then
       begin

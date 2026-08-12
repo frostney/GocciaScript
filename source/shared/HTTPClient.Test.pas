@@ -20,6 +20,8 @@ type
     procedure TestAuditAuthorityOmitsUserInfo;
     procedure TestConnectionDeadlineBoundsBlockingWork;
     procedure TestRejectsAmbiguousAuthority;
+    procedure TestAcceptsValidIPv6Literals;
+    procedure TestRejectsNonIPv6BracketedAuthority;
     procedure TestRejectsRequestTargetControls;
     procedure TestClassifiesPrivateAddressRanges;
     procedure TestClassifiesPublicAddressesAsRoutable;
@@ -35,6 +37,9 @@ begin
   Test('Connection deadline bounds blocking work',
     TestConnectionDeadlineBoundsBlockingWork);
   Test('Rejects ambiguous authority', TestRejectsAmbiguousAuthority);
+  Test('Accepts valid IPv6 literals', TestAcceptsValidIPv6Literals);
+  Test('Rejects non-IPv6 bracketed authority',
+    TestRejectsNonIPv6BracketedAuthority);
   Test('Rejects request-target controls', TestRejectsRequestTargetControls);
   Test('Classifies private address ranges',
     TestClassifiesPrivateAddressRanges);
@@ -106,6 +111,40 @@ begin
       Raised := True;
   end;
   Expect<Boolean>(Raised).ToBe(True);
+end;
+
+{ Valid IPv6 literals must survive bracket stripping unchanged — including a
+  compressed loopback and a percent-encoded zone id (RFC 6874). Regression
+  guard for the bracket-content plausibility check. }
+procedure THTTPClientTests.TestAcceptsValidIPv6Literals;
+begin
+  Expect<string>(HTTPURLHost('http://[2001:db8::1]/')).ToBe('2001:db8::1');
+  Expect<string>(HTTPURLHost('http://[::1]/')).ToBe('::1');
+  Expect<string>(HTTPURLHost(
+    'http://[fe80::1%25eth0]/')).ToBe('fe80::1%25eth0');
+end;
+
+{ A bracketed authority whose content is not a plausible IPv6 literal must
+  raise, so a hostname like [allowed.example] can never masquerade as a valid
+  host and slip past the invalid-URL reject+audit path. }
+procedure THTTPClientTests.TestRejectsNonIPv6BracketedAuthority;
+
+  function Rejects(const AURL: string): Boolean;
+  begin
+    Result := False;
+    try
+      HTTPURLHost(AURL);
+    except
+      on E: EHTTPError do
+        Result := True;
+    end;
+  end;
+
+begin
+  Expect<Boolean>(Rejects('http://[allowed.example]/')).ToBe(True);
+  Expect<Boolean>(Rejects('http://[example]/')).ToBe(True);
+  Expect<Boolean>(Rejects('http://[]/')).ToBe(True);
+  Expect<Boolean>(Rejects('http://[fe80::1%]/')).ToBe(True);
 end;
 
 procedure THTTPClientTests.TestRejectsRequestTargetControls;

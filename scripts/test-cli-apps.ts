@@ -7378,6 +7378,33 @@ await section("Fuzz Harness: stdin input path...", async () => {
     throw new Error(`Fuzz harness stdin path did not run the input:\n${output}`);
 });
 
+await section("Fuzz Harness: oversized file is rejected without materializing it...", async () => {
+  // The AFL common case is a file argument (`@@`). The size gate must fire on
+  // the file's on-disk length BEFORE the whole file is read, otherwise a
+  // pathologically large input OOMs the harness and the fuzzer misreads that
+  // as a crash. A 256 MiB file proves it: rejecting it before read keeps peak
+  // RSS at the harness's small startup floor, while materializing it would push
+  // resident memory past the file size. The RSS ceiling sits well below both.
+  const tmp = makeTmp();
+  try {
+    const huge = join(tmp, "oversized.js");
+    const oversizeBytes = 256 * 1024 * 1024;
+    writeFileSync(huge, Buffer.alloc(oversizeBytes, 0x61)); // 'a'
+
+    const rejected = await runWithPeakRss([FUZZHARNESS, "--verbose", huge]);
+    if (rejected.exitCode !== 0)
+      throw new Error(`Fuzz harness oversized file exited ${rejected.exitCode}:\n${rejected.output}`);
+    if (!rejected.output.includes("input-rejected"))
+      throw new Error(`Fuzz harness did not reject the oversized file:\n${rejected.output}`);
+    // Reading the 256 MiB file would peak well above 256 MiB; the pre-read gate
+    // keeps it at startup scale. 128 MiB is far below the materialized cost and
+    // clear of the harness's own startup.
+    assertPeakRssBelow(rejected, "rejected oversized fuzz file", 128 * 1024 * 1024);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Fuzz Harness: oversized stdin is rejected like an oversized file...", async () => {
   // The size bound must guard both interfaces. A fuzzer can pipe a multi-MB
   // input through `-`; it must be rejected before the lexer, not lexed.

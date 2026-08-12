@@ -271,7 +271,8 @@ no downgrade or negotiation; negotiation is an out-of-scope follow-up (§7).
   "errorOutput": "",
   "resultValue": null,
   "diffRequested": false,
-  "diff": null
+  "diff": null,
+  "truncated": false
 }
 ```
 
