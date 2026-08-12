@@ -9,6 +9,7 @@ uses
 
   OrderedStringMap,
 
+  Goccia.Error,
   Goccia.ModuleResolver;
 
 type
@@ -28,6 +29,27 @@ type
 
   EGocciaModuleNotFound = EModuleNotFound;
 
+  { The module loader turns EGocciaModuleNotFound into this runtime error so a
+    failed import is catchable from script. Message stays specifier-only —
+    ResolvedCandidatePath carries the expanded host address for host-side
+    diagnostics and is never copied into a script-visible error (ADR 0106). }
+  TGocciaModuleResolutionError = class(TGocciaRuntimeError)
+  private
+    FResolvedCandidatePath: string;
+  public
+    constructor CreateResolutionFailure(const AMessage,
+      AResolvedCandidatePath, AFileName: string);
+
+    property ResolvedCandidatePath: string read FResolvedCandidatePath;
+  end;
+
+{ Renders any engine error for host output: the usual detailed message plus,
+  for a module resolution failure, the expanded candidate path the resolver
+  tried. Host reporters use this instead of GetDetailedMessage so the candidate
+  path kept out of AError.Message still reaches the host. }
+function FormatHostErrorDiagnostic(const AError: TGocciaError;
+  const AUseColor: Boolean): string;
+
 implementation
 
 uses
@@ -45,6 +67,24 @@ const
   IMPORTS_PROPERTY_NAME = 'imports';
   CURRENT_DIRECTORY_PREFIX = './';
   PARENT_DIRECTORY_PREFIX = '../';
+  RESOLVED_CANDIDATE_DIAGNOSTIC_FORMAT = '  Resolved to: %s';
+
+constructor TGocciaModuleResolutionError.CreateResolutionFailure(
+  const AMessage, AResolvedCandidatePath, AFileName: string);
+begin
+  inherited Create(AMessage, 0, 0, AFileName, nil);
+  FResolvedCandidatePath := AResolvedCandidatePath;
+end;
+
+function FormatHostErrorDiagnostic(const AError: TGocciaError;
+  const AUseColor: Boolean): string;
+begin
+  Result := AError.GetDetailedMessage(AUseColor);
+  if (AError is TGocciaModuleResolutionError) and
+     (TGocciaModuleResolutionError(AError).ResolvedCandidatePath <> '') then
+    Result := Result + Format(RESOLVED_CANDIDATE_DIAGNOSTIC_FORMAT,
+      [TGocciaModuleResolutionError(AError).ResolvedCandidatePath]) + sLineBreak;
+end;
 
 function TGocciaModuleResolver.IsAbsoluteImportMapPath(
   const APath: string): Boolean;

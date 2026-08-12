@@ -32,6 +32,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.JSON.Utils,
+  Goccia.Modules.Resolver,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
   Goccia.RuntimeExtensions.FFI,
@@ -861,7 +862,7 @@ begin
         if E is TGocciaError then
         begin
           if (not GIsWorkerThread) and (not IsJsonOutput) then
-            WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal));
+            WriteLn(FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal));
           MarkLoadError(ScriptResult, AFileName, TGocciaError(E).GetDetailedMessage);
           Result := MakeEmptyTestResult(ScriptResult,
             TGocciaError(E).GetDetailedMessage);
@@ -1040,7 +1041,7 @@ begin
         if E is TGocciaError then
         begin
           if (not GIsWorkerThread) and (not IsJsonOutput) then
-            WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal));
+            WriteLn(FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal));
           MarkLoadError(ScriptResult, AFileName, TGocciaError(E).GetDetailedMessage);
           Result := MakeEmptyTestResult(ScriptResult,
             TGocciaError(E).GetDetailedMessage);
@@ -1140,7 +1141,7 @@ begin
     on E: Exception do
     begin
       if E is TGocciaError then
-        WriteLn(ErrOutput, TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+        WriteLn(ErrOutput, FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal))
       else
         WriteLn(ErrOutput, 'Fatal error: ', E.Message);
       { Synthesize a one-failed-file TestResult so PrintTestResults still

@@ -30,6 +30,7 @@ uses
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.Modules.Resolver,
   Goccia.Profiler,
   Goccia.Profiler.Report,
   Goccia.Runtime,
@@ -401,7 +402,7 @@ begin
       on E: TGocciaError do
       begin
         if not GIsWorkerThread then
-          WriteLn(ErrOutput, E.GetDetailedMessage(IsColorTerminal));
+          WriteLn(ErrOutput, FormatHostErrorDiagnostic(E, IsColorTerminal));
         MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
       end;
       on E: TGocciaThrowValue do
@@ -537,7 +538,7 @@ begin
       on E: TGocciaError do
       begin
         if not GIsWorkerThread then
-          WriteLn(ErrOutput, E.GetDetailedMessage(IsColorTerminal));
+          WriteLn(ErrOutput, FormatHostErrorDiagnostic(E, IsColorTerminal));
         MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
       end;
       on E: TGocciaThrowValue do
@@ -638,7 +639,7 @@ begin
     on E: TGocciaError do
     begin
       if not GIsWorkerThread then
-        WriteLn(ErrOutput, E.GetDetailedMessage(IsColorTerminal));
+        WriteLn(ErrOutput, FormatHostErrorDiagnostic(E, IsColorTerminal));
       MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
     end;
     on E: TGocciaThrowValue do
@@ -753,7 +754,7 @@ begin
     on E: TGocciaError do
     begin
       if not GIsWorkerThread then
-        WriteLn(ErrOutput, E.GetDetailedMessage(IsColorTerminal));
+        WriteLn(ErrOutput, FormatHostErrorDiagnostic(E, IsColorTerminal));
       MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
     end;
     on E: TGocciaThrowValue do

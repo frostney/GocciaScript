@@ -8,6 +8,7 @@
 - **Parser errors** -- Displayed with source context, a caret pointing to the exact column, and optional suggestion text (e.g., "Use 'let' or 'const' instead")
 - **Runtime errors** -- Carry `name`, `message`, `stack`, and optional `cause`; catchable with `try`/`catch`/`finally`
 - **Sandbox filesystem errors** -- Use real `Error` objects with Node-shaped `code`, `errno`, `path`, `syscall`, and optional `dest` metadata
+- **Module loading errors** -- Script-visible failures name only the specifier as written; the expanded host path reaches hosts through the typed exception and human-readable CLI output, never through `error.message` (the JSON envelope's `error.fileName` remains a host-side path, as it is for every error type)
 - **JSON output** -- `--output=json` wraps every execution result in a structured envelope with `ok`, `error.type`, `error.message`, `error.line`, and `error.column`. `--output=compact-json` produces the same envelope without the `build`, `memory`, `stdout`, or `stderr` fields, leaving only the normalized `output` array and structured `error` for console output. The same `compact-json` value is recognised by `GocciaTestRunner` (via `--output`) and `GocciaBenchmarkRunner` (via `--format`).
 - **`Error.cause`** -- All error constructors accept an options bag with a `cause` property for error chaining (ES2022+)
 
@@ -174,6 +175,68 @@ ENOENT: no such file or directory, rename '/missing.txt' -> '/destination.txt'
 
 `code` is the portable field to branch on. Numeric `errno` follows libuv's
 target convention, so its value can differ between operating systems.
+
+### Module loading errors
+
+When a static or dynamic `import` fails against the host filesystem, the
+script-visible error message names **only the specifier as the import statement
+wrote it**:
+
+```javascript
+try {
+  await import("./missing.js");
+} catch (error) {
+  error.message; // 'Module not found: "./missing.js"'
+}
+```
+
+The expanded host filesystem address is deliberately absent. Script code —
+including untrusted guest code — must not be able to map the host directory
+layout by importing probe specifiers, so no module-loading failure message
+reaching a JavaScript error object contains an expanded path, an applied alias
+replacement, or the importing file's base directory. This covers the whole load
+path, not resolution alone:
+
+| Failure | Script-visible message |
+|---------|------------------------|
+| Specifier does not resolve | `Module not found: "./missing.js"` |
+| `import.source` of a non-script module | `Module source is not available for "./data.json"` |
+| JSON module fails to parse | `Failed to parse JSON module "./data.json": <parse detail>` |
+
+See [ADR 0106 — Specifier-only module resolution errors](adr/0106-specifier-only-module-resolution-errors.md).
+
+Hosts keep the resolution diagnostic on the **human-readable** output path. The
+resolver raises the typed Pascal exception `EModuleNotFound`
+(`Goccia.ModuleResolver`), whose read-only `ResolvedCandidatePath` property
+carries the expanded candidate; the module loader forwards it on
+`TGocciaModuleResolutionError` (`Goccia.Modules.Resolver`), and the CLI
+reporters render it through `FormatHostErrorDiagnostic` as its own line:
+
+```text
+RuntimeError: Module not found: "./missing.js"
+  --> /home/user/project/entry.js:0:0
+  Resolved to: /home/user/project/missing.js
+```
+
+`--output=json` and `--output=compact-json` do **not** carry it. The JSON
+envelope's `error` object is the documented set of `type`, `message`, `line`,
+`column`, and `fileName`, and its `message` is the same sanitized text script
+sees. Embedders that need the candidate path should catch `EModuleNotFound` or
+`TGocciaModuleResolutionError` directly rather than parse CLI JSON. The other
+two message shapes above carry no structured host counterpart at all — the
+expanded path survives only in the error's `FileName` field, which stays
+host-side: the `-->` line of human-readable output and the envelope's
+`error.fileName`, never `error.message`.
+
+Two resolution messages are unaffected because they never carried a host path:
+a bare specifier reports `Cannot resolve bare module specifier "lodash". Imports
+must start with "./" or "../"`, and a runtime configured without a resolver
+reports `No module resolver configured and cannot resolve "./missing.js"`.
+
+**Sandbox modules are exempt.** The Sandbox Runner resolves against a virtual
+filesystem the guest already owns and can enumerate, so its resolution failures
+keep the `(resolved to "...")` and `(alias resolved to "...")` detail — those
+paths are guest namespace, not host namespace.
 
 ### Stack Traces
 

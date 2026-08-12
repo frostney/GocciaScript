@@ -78,8 +78,8 @@ type
     procedure EvaluateLinkedModule(const AModule: TGocciaModule);
     function InstantiateModule(const AModulePath,
       AImportingFilePath: string): TGocciaModule;
-    function LoadJSONModule(const AResolvedPath,
-      ACacheKey: string): TGocciaModule;
+    function LoadJSONModule(const AResolvedPath, ACacheKey,
+      ASpecifier: string): TGocciaModule;
     function LoadTextModule(const AResolvedPath,
       ACacheKey: string; const ADefaultOnly: Boolean): TGocciaModule;
     function LoadBytesModule(const AResolvedPath,
@@ -1759,6 +1759,9 @@ begin
   except
     on E: TGocciaRuntimeError do
       raise;
+    on E: EGocciaModuleNotFound do
+      raise TGocciaModuleResolutionError.CreateResolutionFailure(E.Message,
+        E.ResolvedCandidatePath, ImportingFilePath);
     on E: Exception do
       raise TGocciaRuntimeError.Create(E.Message, 0, 0, ImportingFilePath, nil);
   end;
@@ -1791,7 +1794,7 @@ begin
 
   if AttributeType = 'json' then
   begin
-    Result := LoadJSONModule(ResolvedPath, CacheKey);
+    Result := LoadJSONModule(ResolvedPath, CacheKey, RequestedModulePath);
     Exit;
   end;
 
@@ -1813,7 +1816,7 @@ begin
     case VirtualContentType of
       vmctJSON:
         begin
-          Result := LoadJSONModule(ResolvedPath, CacheKey);
+          Result := LoadJSONModule(ResolvedPath, CacheKey, RequestedModulePath);
           Exit;
         end;
       vmctText:
@@ -1831,7 +1834,7 @@ begin
 
   if LowerCase(ExtractFileExt(ResolvedPath)) = EXT_JSON then
   begin
-    Result := LoadJSONModule(ResolvedPath, CacheKey);
+    Result := LoadJSONModule(ResolvedPath, CacheKey, RequestedModulePath);
     Exit;
   end;
 
@@ -2024,6 +2027,9 @@ begin
   except
     on E: TGocciaRuntimeError do
       raise;
+    on E: EGocciaModuleNotFound do
+      raise TGocciaModuleResolutionError.CreateResolutionFailure(E.Message,
+        E.ResolvedCandidatePath, AImportingFilePath);
     on E: Exception do
       raise TGocciaRuntimeError.Create(E.Message, 0, 0, AImportingFilePath, nil);
   end;
@@ -2040,8 +2046,10 @@ begin
       (not IsScriptExtension(ExtractFileExt(ResolvedPath)))) or
      (FVirtualModules.GetContentType(ResolvedPath, VirtualContentType) and
       (VirtualContentType <> vmctJavaScript)) then
+    { Names the specifier as written, never ResolvedPath: this message reaches
+      script through the dynamic-import rejection path (ADR 0106). }
     raise TGocciaSyntaxError.Create(
-      Format('Module source is not available for "%s"', [ResolvedPath]),
+      Format('Module source is not available for "%s"', [RequestedModulePath]),
       0, 0, AImportingFilePath, nil);
 
   if not (FExperimentalJSModuleSourceEnabled or
@@ -2396,6 +2404,9 @@ begin
     except
       on E: TGocciaRuntimeError do
         raise;
+      on E: EGocciaModuleNotFound do
+        raise TGocciaModuleResolutionError.CreateResolutionFailure(E.Message,
+          E.ResolvedCandidatePath, AImportingFilePath);
       on E: Exception do
         raise TGocciaRuntimeError.Create(E.Message, 0, 0, AImportingFilePath,
           nil);
@@ -2490,8 +2501,8 @@ begin
   FGlobalModules.Remove(AModulePath);
 end;
 
-function TGocciaModuleLoader.LoadJSONModule(const AResolvedPath,
-  ACacheKey: string): TGocciaModule;
+function TGocciaModuleLoader.LoadJSONModule(const AResolvedPath, ACacheKey,
+  ASpecifier: string): TGocciaModule;
 var
   Content: TGocciaModuleContent;
   HasDefaultKey: Boolean;
@@ -2509,10 +2520,13 @@ begin
       try
         ParsedValue := JSONParser.Parse(Content.Text);
       except
+        { Names the specifier as written, never AResolvedPath: this message
+          reaches script through the import rejection path (ADR 0106). The
+          expanded path stays in the host-only FileName field. }
         on E: EGocciaJSONParseError do
           raise TGocciaRuntimeError.Create(
             Format('Failed to parse JSON module "%s": %s',
-              [AResolvedPath, E.Message]),
+              [ASpecifier, E.Message]),
             0, 0, AResolvedPath, nil);
       end;
     finally

@@ -170,6 +170,48 @@ describe("dynamic import()", () => {
     expect(caught).toBe(true);
   });
 
+  test("rejection names the specifier as written and leaks no host path", async () => {
+    let message;
+    try {
+      await import("./definitely-missing-probe.js");
+    } catch (e) {
+      message = e.message;
+    }
+    // The expanded host candidate stays host-side; script code only ever sees
+    // the specifier it wrote itself.
+    expect(message).toBe('Module not found: "./definitely-missing-probe.js"');
+    expect(message.includes("/")).toBe(true);
+    expect(message.replace('"./definitely-missing-probe.js"', "").includes("/")).toBe(false);
+  });
+
+  test("source import of a non-script module names the specifier, not the host path", async () => {
+    // This rejection is raised before the --experimental-js-module-source gate,
+    // so it is reachable without the flag — and must still name only the
+    // specifier the import wrote.
+    let message;
+    try {
+      await import.source("./helpers/config.json");
+    } catch (e) {
+      message = e.message;
+    }
+    expect(message).toBe('Module source is not available for "./helpers/config.json"');
+  });
+
+  test("JSON module parse failure names the specifier, not the host path", async () => {
+    const specifier = "../../../fixtures/modules/malformed-json-module.json";
+    let message;
+    try {
+      await import(specifier);
+    } catch (e) {
+      message = e.message;
+    }
+    expect(message.indexOf(`Failed to parse JSON module "${specifier}": `)).toBe(0);
+    // Nothing beyond the specifier itself may look like a filesystem path.
+    // The fixture must keep "/" out of its parse-error text (offending
+    // character and position) for this assertion to stay meaningful.
+    expect(message.replace(`"${specifier}"`, "").includes("/")).toBe(false);
+  });
+
   test("works inside conditional", async () => {
     const shouldLoad = true;
     let result;

@@ -9,6 +9,12 @@ uses
 
   OrderedStringMap;
 
+const
+  { Script-visible resolution failures name the specifier exactly as the import
+    statement wrote it. The expanded host candidate never enters the message —
+    it travels in EModuleNotFound.ResolvedCandidatePath instead (ADR 0106). }
+  MODULE_NOT_FOUND_MESSAGE_FORMAT = 'Module not found: "%s"';
+
 type
   TModuleResolverExtensionArray = array of string;
 
@@ -36,7 +42,17 @@ type
     property BaseDirectory: string read FBaseDirectory write FBaseDirectory;
   end;
 
-  EModuleNotFound = class(Exception);
+  { Raised when a specifier cannot be resolved. Message is safe to hand to
+    untrusted script code; ResolvedCandidatePath is host-only diagnostic
+    detail and is empty unless CreateNotFound supplied one. }
+  EModuleNotFound = class(Exception)
+  private
+    FResolvedCandidatePath: string;
+  public
+    constructor CreateNotFound(const ASpecifier, AResolvedCandidatePath: string);
+
+    property ResolvedCandidatePath: string read FResolvedCandidatePath;
+  end;
 
 implementation
 
@@ -130,6 +146,13 @@ begin
     Result := Copy(MatchPath, 1, Length(AAlias)) = AAlias
   else
     Result := MatchPath = AAlias;
+end;
+
+constructor EModuleNotFound.CreateNotFound(const ASpecifier,
+  AResolvedCandidatePath: string);
+begin
+  inherited CreateFmt(MODULE_NOT_FOUND_MESSAGE_FORMAT, [ASpecifier]);
+  FResolvedCandidatePath := AResolvedCandidatePath;
 end;
 
 constructor TModuleResolver.Create(const ABaseDirectory: string);
@@ -273,24 +296,24 @@ end;
 
 function TModuleResolver.Resolve(const AModulePath, AImportingFilePath: string): string;
 var
-  AliasApplied, BaseDirectory: string;
+  AliasApplied, BaseDirectory, CandidatePath: string;
 begin
   AliasApplied := ApplyAliases(AModulePath, AImportingFilePath);
 
   if AliasApplied <> AModulePath then
   begin
-    if TryResolveWithExtensions(ExpandHostFileName(AliasApplied), Result) then
+    CandidatePath := ExpandHostFileName(AliasApplied);
+    if TryResolveWithExtensions(CandidatePath, Result) then
       Exit;
-    raise EModuleNotFound.CreateFmt(
-      'Module not found: "%s" (alias resolved to "%s")', [AModulePath, ExpandHostFileName(AliasApplied)]);
+    raise EModuleNotFound.CreateNotFound(AModulePath, CandidatePath);
   end;
 
   if IsAbsolutePath(AModulePath) then
   begin
-    if TryResolveWithExtensions(ExpandHostFileName(AModulePath), Result) then
+    CandidatePath := ExpandHostFileName(AModulePath);
+    if TryResolveWithExtensions(CandidatePath, Result) then
       Exit;
-    raise EModuleNotFound.CreateFmt(
-      'Module not found: "%s"', [AModulePath]);
+    raise EModuleNotFound.CreateNotFound(AModulePath, CandidatePath);
   end;
 
   if (Copy(AModulePath, 1, 2) = './') or (Copy(AModulePath, 1, 3) = '../') then
@@ -299,11 +322,11 @@ begin
     if BaseDirectory = '' then
       BaseDirectory := GetCurrentDir + PathDelim;
 
-    if TryResolveWithExtensions(ExpandHostFileName(BaseDirectory + AModulePath), Result) then
+    CandidatePath := ExpandHostFileName(BaseDirectory + AModulePath);
+    if TryResolveWithExtensions(CandidatePath, Result) then
       Exit;
 
-    raise EModuleNotFound.CreateFmt(
-      'Module not found: "%s" (resolved to "%s")', [AModulePath, ExpandHostFileName(BaseDirectory + AModulePath)]);
+    raise EModuleNotFound.CreateNotFound(AModulePath, CandidatePath);
   end;
 
   raise EModuleNotFound.CreateFmt(

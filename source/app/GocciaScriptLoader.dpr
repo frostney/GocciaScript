@@ -35,6 +35,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.HostEnvironment.JavaScript,
   Goccia.InstructionLimit,
+  Goccia.Modules.Resolver,
   Goccia.Profiler,
   Goccia.Profiler.Report,
   Goccia.Runtime,
@@ -829,7 +830,7 @@ begin
           if IsJsonOutput then
             PrintJSONError(E, Report, Capture, AFileName, IsCompactJsonOutput)
           else if E is TGocciaError then
-            WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+            WriteLn(FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal))
           else if E is TGocciaThrowValue then
             WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, ASource, IsColorTerminal, TGocciaThrowValue(E).Suggestion))
           else if E is EGocciaBytecodeThrow then
