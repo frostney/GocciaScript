@@ -132,11 +132,43 @@ begin
   Result := HasColon;
 end;
 
+{ A URI scheme must match RFC 3986 §3.1 syntax —
+  scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) — i.e. non-empty, first
+  character a letter, remaining characters letters/digits/'+'/'-'/'.'. Without
+  this gate ParseHTTPURL would accept an empty scheme (`://allowed.example`) or
+  one with illegal characters (`ht*tp://allowed.example`) whenever
+  ARequireSupportedScheme is False, returning a bare host that skips the fetch
+  invalid-URL reject+audit path in TGocciaGlobalFetch.ValidateHost. The scheme
+  is validated on the raw (case-preserved) text; letter-case does not affect
+  validity. }
+function IsValidURIScheme(const AScheme: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  if AScheme = '' then
+    Exit;
+  case AScheme[1] of
+    'a'..'z', 'A'..'Z':
+      ;
+  else
+    Exit;
+  end;
+  for I := 2 to Length(AScheme) do
+    case AScheme[I] of
+      'a'..'z', 'A'..'Z', '0'..'9', '+', '-', '.':
+        ;
+    else
+      Exit;
+    end;
+  Result := True;
+end;
+
 function ParseHTTPURL(const AURL: string;
   const ARequireSupportedScheme: Boolean = True;
   const AAllowUserInfo: Boolean = False): THTTPParsedURL;
 var
-  S, Rest, HostContent: string;
+  S, Rest, HostContent, RawScheme: string;
   I, AuthorityEnd, ColonCount, ParsedPort: Integer;
   PortText: string;
 begin
@@ -154,7 +186,10 @@ begin
   I := Pos('://', S);
   if I > 0 then
   begin
-    Result.Scheme := LowerCase(Copy(S, 1, I - 1));
+    RawScheme := Copy(S, 1, I - 1);
+    if not IsValidURIScheme(RawScheme) then
+      raise EHTTPError.Create('Invalid URL: malformed scheme');
+    Result.Scheme := LowerCase(RawScheme);
     Rest := Copy(S, I + 3, Length(S));
   end
   else

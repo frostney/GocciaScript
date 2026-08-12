@@ -242,7 +242,16 @@ no downgrade or negotiation; negotiation is an out-of-scope follow-up (§7).
   transport limits. An empty `allowedFetchHosts` blocks every request outright,
   regardless of the transport settings, and transport limits never substitute for
   the host grant — an implementation may not apply `denyPrivateRanges` or
-  `maxResponseBytes` in place of enforcing the allowlist.
+  `maxResponseBytes` in place of enforcing the allowlist. This authorization is
+  re-applied to **every redirect hop's resolved target**, not just the initial
+  URL: the `allowedFetchHosts` check and, when `denyPrivateRanges` is enabled,
+  the private-range denial MUST be evaluated against each hop's resolved
+  destination before that hop is connected, so a `302` to an off-allowlist host
+  or a private address (for example a loopback URL that redirects to
+  `10.255.255.1`) is refused mid-chain even though the initial URL was
+  authorized. This mirrors the in-process client, which already re-runs
+  `ResolveAndValidateDestination` per hop rather than trusting the first
+  authorization.
 - **`baseline`** is the fully **materialised** seed baseline, not the seed specs.
   The parent resolves every seed — including `sskParentPath` seeds that read the
   parent's host filesystem and `sskText`/`sskBytes` inline seeds — into concrete

@@ -56,13 +56,25 @@ const canonicalize = (target: string): string => {
   }
 };
 
-// OUT_DIR feeds a recursive rmSync below, so a value that canonicalizes to the
-// repository root or outside it must be rejected before anything is deleted.
+// Canonical build/ subtree. OUT_DIR feeds a recursive rmSync below, so the
+// destination is confined here rather than merely to somewhere inside the repo:
+// an in-repo but non-build path (e.g. `--out source`) would still let the
+// cleanup delete tracked source. Containment is checked against this canonical
+// path so a symlinked build/ cannot redirect the delete elsewhere.
+const CANONICAL_BUILD = canonicalize(join(CANONICAL_ROOT, "build"));
+
+// OUT_DIR feeds a recursive rmSync below, so a value that resolves anywhere
+// other than a proper subpath of <repo>/build/ must be rejected before anything
+// is deleted — this rejects the repo root, the build/ root itself, any other
+// in-repo tree (source/, tests/, …), and any path outside the repository.
 const resolveOutDir = (candidate: string): string => {
   const canonical = canonicalize(candidate);
-  const rel = relative(CANONICAL_ROOT, canonical);
+  const rel = relative(CANONICAL_BUILD, canonical);
   if (rel === "" || rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) {
-    console.error(`Refusing to use ${candidate} as the corpus directory (outside the repository)`);
+    console.error(
+      `Refusing to use ${candidate} as the corpus directory ` +
+        `(must be within ${relative(CANONICAL_ROOT, CANONICAL_BUILD)}/)`,
+    );
     process.exit(1);
   }
   return canonical;
