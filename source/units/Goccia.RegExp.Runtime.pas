@@ -353,13 +353,19 @@ function BuildNamedGroupsValue(
   const AMatchResult: TGocciaRegExpMatchResult): TGocciaValue;
 var
   GroupsObject: TGocciaObjectValue;
+  GroupsRoot: TGocciaTempRoot;
   GroupIndex: Integer;
   I: Integer;
 begin
   if Length(AMatchResult.NamedGroups) = 0 then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
 
+  { Group value strings are charged against the memory ceiling — GC safe
+    points — so the object under construction needs a temp root. }
+  InitializeTempRoot(GroupsRoot);
   GroupsObject := TGocciaObjectValue.Create(nil);
+  AddTempRootIfNeeded(GroupsRoot, GroupsObject);
+  try
   // ES2026: Two-pass approach for duplicate named capture groups.
   // Pass 1: Initialize all unique names to undefined.
   for I := 0 to High(AMatchResult.NamedGroups) do
@@ -378,6 +384,9 @@ begin
           AMatchResult.Groups[GroupIndex].Value));
   end;
   Result := GroupsObject;
+  finally
+    RemoveTempRootIfNeeded(GroupsRoot);
+  end;
 end;
 
 function BuildMatchArray(const AInput: string;
@@ -386,6 +395,9 @@ var
   IndicesArray: TGocciaArrayValue;
   IndicesGroupsObject: TGocciaObjectValue;
   MatchArray: TGocciaArrayValue;
+  MatchArrayRoot: TGocciaTempRoot;
+  IndicesRoot: TGocciaTempRoot;
+  IndicesGroupsRoot: TGocciaTempRoot;
   GroupsValue: TGocciaValue;
   GroupIndex: Integer;
   I: Integer;
@@ -398,7 +410,14 @@ var
     Result.Elements.Add(TGocciaNumberLiteralValue.Create(AEndIndex));
   end;
 begin
+  { Match strings are charged against the memory ceiling — GC safe points —
+    so the containers under construction need temp roots. }
+  InitializeTempRoot(MatchArrayRoot);
+  InitializeTempRoot(IndicesRoot);
+  InitializeTempRoot(IndicesGroupsRoot);
+  try
   MatchArray := TGocciaArrayValue.Create;
+  AddTempRootIfNeeded(MatchArrayRoot, MatchArray);
   for I := 0 to High(AMatchResult.Groups) do
   begin
     if AMatchResult.Groups[I].Matched then
@@ -417,6 +436,7 @@ begin
   if AMatchResult.HasIndices then
   begin
     IndicesArray := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(IndicesRoot, IndicesArray);
     for I := 0 to High(AMatchResult.Groups) do
     begin
       if AMatchResult.Groups[I].Matched then
@@ -430,6 +450,7 @@ begin
     if Length(AMatchResult.NamedGroups) > 0 then
     begin
       IndicesGroupsObject := TGocciaObjectValue.Create(nil);
+      AddTempRootIfNeeded(IndicesGroupsRoot, IndicesGroupsObject);
       for I := 0 to High(AMatchResult.NamedGroups) do
         IndicesGroupsObject.CreateDataPropertyOrThrow(AMatchResult.NamedGroups[I].Name,
           TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -453,6 +474,11 @@ begin
   end;
 
   Result := MatchArray;
+  finally
+    RemoveTempRootIfNeeded(IndicesGroupsRoot);
+    RemoveTempRootIfNeeded(IndicesRoot);
+    RemoveTempRootIfNeeded(MatchArrayRoot);
+  end;
 end;
 
 class function TGocciaRegExpExecutionResult.FromNative(

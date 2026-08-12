@@ -473,13 +473,22 @@ function TGocciaIntlListFormatValue.IntlListFormatResolvedOptions(const AArgs: T
 var
   LF: TGocciaIntlListFormatValue;
   Obj: TGocciaObjectValue;
+  ObjRoot: TGocciaTempRoot;
 begin
   LF := AsListFormat(AThisValue, 'Intl.ListFormat.prototype.resolvedOptions');
+  { The option strings below are GC safe points; root the object while it
+    fills. }
+  InitializeTempRoot(ObjRoot);
+  try
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  AddTempRootIfNeeded(ObjRoot, Obj);
   Obj.CreateDataPropertyOrThrow('locale', TGocciaStringLiteralValue.Create(LF.FLocale));
   Obj.CreateDataPropertyOrThrow('type', TGocciaStringLiteralValue.Create(LF.FType));
   Obj.CreateDataPropertyOrThrow('style', TGocciaStringLiteralValue.Create(LF.FStyle));
   Result := Obj;
+  finally
+    RemoveTempRootIfNeeded(ObjRoot);
+  end;
 end;
 
 initialization

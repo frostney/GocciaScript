@@ -77,6 +77,7 @@ uses
   IntlTypes,
 
   Goccia.Error.Messages,
+  Goccia.GarbageCollector,
   Goccia.Intl.CLDRData,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
@@ -545,19 +546,38 @@ begin
   SetLength(AParsed.Extensions, WriteIndex);
 end;
 
+{ Each element string is charged against the memory ceiling, so its
+  construction is a GC safe point.  The array under construction is reachable
+  only from this frame, so it needs a temp root or the collection sweeps it
+  and the next Add writes through a dangling pointer. }
 function CreateStringArray(const AValues: IntlTypes.TStringArray): TGocciaArrayValue;
 var
   Index: Integer;
+  ResultRoot: TGocciaTempRoot;
 begin
-  Result := TGocciaArrayValue.Create;
-  for Index := 0 to High(AValues) do
-    Result.Elements.Add(TGocciaStringLiteralValue.Create(AValues[Index]));
+  InitializeTempRoot(ResultRoot);
+  try
+    Result := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ResultRoot, Result);
+    for Index := 0 to High(AValues) do
+      Result.Elements.Add(TGocciaStringLiteralValue.Create(AValues[Index]));
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 function CreateSingleStringArray(const AValue: string): TGocciaArrayValue;
+var
+  ResultRoot: TGocciaTempRoot;
 begin
-  Result := TGocciaArrayValue.Create;
-  Result.Elements.Add(TGocciaStringLiteralValue.Create(AValue));
+  InitializeTempRoot(ResultRoot);
+  try
+    Result := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ResultRoot, Result);
+    Result.Elements.Add(TGocciaStringLiteralValue.Create(AValue));
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 function NormalizeCalendarArray(const AValues: IntlTypes.TStringArray): IntlTypes.TStringArray;

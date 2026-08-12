@@ -876,6 +876,97 @@ console.log("--max-memory (OOM triggers RangeError)...");
   if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError`);
 }
 
+console.log("--max-memory (own-key enumeration survives a mid-loop collection)...");
+{
+  // Enumerating a large property map allocates one string per key, and every
+  // string allocation is charged against the ceiling — so it is a GC safe
+  // point. The half-built result array must stay rooted across the loop or the
+  // collection sweeps it and the builtin writes through a dangling pointer
+  // (bus error / nil dereference, depending on build flags).
+  const src = [
+    "const outer = Array.from({ length: 30 }, (_, i) => i);",
+    "const inner = Array.from({ length: 1000 }, (_, i) => i);",
+    "const o = {};",
+    "for (const a of outer) { for (const b of inner) { o['k' + (a * 1000 + b)] = b; } }",
+    "Object.keys(o).length + Object.values(o).length + Object.entries(o).length +",
+    "  Object.getOwnPropertyNames(o).length + Reflect.ownKeys(o).length;",
+    "",
+  ].join("\n");
+
+  // The window in which a collection lands mid-enumeration moves with the
+  // build's object sizes, so sweep limits rather than pinning one value.
+  for (const maxMemory of [1_048_576, 1_572_864, 2_097_152, 3_145_728, 8_388_608]) {
+    const proc = Bun.spawnSync([LOADER, `--max-memory=${maxMemory}`, "--compat-asi"], {
+      stdin: new TextEncoder().encode(src),
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 60_000,
+    });
+    const out = proc.stdout.toString() + proc.stderr.toString();
+    // "Fatal error" is the loader's top-level handler reporting a hardware
+    // fault or a failed object check — never an acceptable outcome here.
+    if (out.includes("Fatal error"))
+      throw new Error(`Own-key enumeration at --max-memory=${maxMemory} crashed: ${out}`);
+    if (proc.exitCode !== 0 && !out.includes("RangeError"))
+      throw new Error(`Own-key enumeration at --max-memory=${maxMemory} failed without RangeError (exitCode=${proc.exitCode}): ${out}`);
+  }
+
+  // With headroom the enumeration must complete and return every key.
+  const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=134217728", "--compat-asi"], { timeout: 60_000 });
+  if (exitCode !== 0) throw new Error(`Own-key enumeration exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
+  if (json.files?.[0]?.result !== 150000) throw new Error(`Own-key enumeration should return 150000, got ${json.files?.[0]?.result}`);
+}
+
+console.log("--max-memory (builtin result builders survive mid-build collections)...");
+{
+  // Same defect class as own-key enumeration: any builtin that fills a result
+  // container across string allocations (each charged against the ceiling and
+  // therefore a GC safe point) must keep that container rooted. This exercises
+  // the CSV/TSV parsers and revivers, URLSearchParams, RegExp match arrays,
+  // and the Intl resolved-options/parts builders under a sweep of limits.
+  const src = [
+    'import * as CSVNS from "goccia:csv"; const CSV = CSVNS.CSV ?? CSVNS;',
+    'import * as TSVNS from "goccia:tsv"; const TSV = TSVNS.TSV ?? TSVNS;',
+    'const rows = Array.from({ length: 3000 }, (_, i) => "a" + i + ",b" + i + ",c" + i).join("\\n");',
+    'const parsedCsv = CSV.parse("h1,h2,h3\\n" + rows);',
+    'const trows = Array.from({ length: 3000 }, (_, i) => "a" + i + "\\tb" + i).join("\\n");',
+    'const params = new URLSearchParams(Array.from({ length: 2000 }, (_, i) => "k=v" + i).join("&"));',
+    'const m = "x123y456z".match(/(?<a>\\d+)y(?<b>\\d+)/d);',
+    "const total = parsedCsv.length +",
+    '  CSV.parse("h1,h2,h3\\n" + rows, {}, (k, v) => v).length +',
+    '  CSV.parseChunk("h1,h2,h3\\n" + rows, {}, 0, -1).values.length +',
+    '  TSV.parse("h1\\th2\\n" + trows).length +',
+    '  params.getAll("k").length + [...params.entries()].length +',
+    "  m.indices.groups.b[0] +",
+    '  Intl.getCanonicalLocales(["en-US", "de-DE"]).length +',
+    '  new Intl.PluralRules("en").resolvedOptions().pluralCategories.length +',
+    '  new Intl.ListFormat("en").formatToParts(["a", "b", "c"]).length;',
+    "console.log('total', total);",
+    "",
+  ].join("\n");
+  const tmp = mkdtemp("goccia-memroot-");
+  const srcPath = join(tmp, "sweep.mjs");
+  writeFileSync(srcPath, src);
+  try {
+    for (const maxMemory of [1_048_576, 1_572_864, 2_097_152, 3_145_728, 8_388_608, 67_108_864]) {
+      const proc = Bun.spawnSync([LOADER, `--max-memory=${maxMemory}`, srcPath], {
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 120_000,
+      });
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      if (out.includes("Fatal error"))
+        throw new Error(`Builder sweep at --max-memory=${maxMemory} crashed: ${out}`);
+      if (proc.exitCode !== 0 && !out.includes("RangeError"))
+        throw new Error(`Builder sweep at --max-memory=${maxMemory} failed without RangeError (exitCode=${proc.exitCode}): ${out}`);
+      if (proc.exitCode === 0 && !out.includes("total 16014"))
+        throw new Error(`Builder sweep at --max-memory=${maxMemory} completed with wrong total: ${out}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("--max-memory (manual gc reclaims inside active calls)...");
 {
   const src = [

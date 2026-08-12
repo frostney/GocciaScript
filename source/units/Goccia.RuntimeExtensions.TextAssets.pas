@@ -27,6 +27,7 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.FileExtensions,
+  Goccia.GarbageCollector,
   Goccia.Keywords.Reserved,
   Goccia.Modules.ContentProvider,
   Goccia.Values.ObjectValue,
@@ -50,6 +51,8 @@ var
   Metadata: TGocciaObjectValue;
   NormalizedText: string;
   TextValue: TGocciaValue;
+  MetadataRoot: TGocciaTempRoot;
+  TextRoot: TGocciaTempRoot;
 begin
   AModule := nil;
   Result := IsTextAssetExtension(ExtractFileExt(AResolvedPath));
@@ -60,8 +63,15 @@ begin
     AResolvedPath);
   try
     NormalizedText := NormalizeNewlinesToLF(Content.Text);
+    { The metadata strings below are GC safe points; the metadata object and
+      the (possibly large) content string are reachable only from this frame
+      until the module owns them. }
+    InitializeTempRoot(MetadataRoot);
+    InitializeTempRoot(TextRoot);
+    try
     Metadata := TGocciaObjectValue.Create(
       TGocciaObjectValue.SharedObjectPrototype, 5);
+    AddTempRootIfNeeded(MetadataRoot, Metadata);
     Metadata.SetProperty(PROP_KIND,
       TGocciaStringLiteralValue.Create(TEXT_ASSET_KIND));
     Metadata.SetProperty(PROP_PATH,
@@ -74,6 +84,7 @@ begin
       TGocciaNumberLiteralValue.Create(Content.ByteLength));
     Metadata.Freeze;
     TextValue := TGocciaStringLiteralValue.Create(NormalizedText);
+    AddTempRootIfNeeded(TextRoot, TextValue);
 
     AModule := TGocciaModule.Create(AResolvedPath);
     AModule.LastModified := Content.LastModified;
@@ -89,6 +100,10 @@ begin
         AModule.Free;
         AModule := nil;
       end;
+    end;
+    finally
+      RemoveTempRootIfNeeded(TextRoot);
+      RemoveTempRootIfNeeded(MetadataRoot);
     end;
   finally
     Content.Free;

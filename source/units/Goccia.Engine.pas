@@ -1620,10 +1620,25 @@ var
   ShimsArray: TGocciaArrayValue;
   GCFunc: TGocciaNativeFunctionValue;
   I: Integer;
+  RuntimeGlobalsRoot: TGocciaTempRoot;
+  BuildRoot: TGocciaTempRoot;
+  ShimsRoot: TGocciaTempRoot;
+  GocciaRoot: TGocciaTempRoot;
 begin
+  { Registration runs before the Goccia object reaches the global scope, and
+    each version/os/shim string is charged against the memory ceiling — a GC
+    safe point under a tight --max-memory — so the objects under construction
+    need temp roots. }
+  InitializeTempRoot(RuntimeGlobalsRoot);
+  InitializeTempRoot(BuildRoot);
+  InitializeTempRoot(ShimsRoot);
+  InitializeTempRoot(GocciaRoot);
+  try
   RuntimeGlobalsArray := TGocciaArrayValue.Create;
+  AddTempRootIfNeeded(RuntimeGlobalsRoot, RuntimeGlobalsArray);
 
   BuildObj := TGocciaObjectValue.Create;
+  AddTempRootIfNeeded(BuildRoot, BuildObj);
   BuildObj.DefineProperty('os', TGocciaPropertyDescriptorData.Create(
     TGocciaStringLiteralValue.Create(GetBuildOS), [pfEnumerable]));
   BuildObj.DefineProperty('arch', TGocciaPropertyDescriptorData.Create(
@@ -1632,10 +1647,12 @@ begin
     TGocciaStringLiteralValue.Create(GetBuildDate), [pfEnumerable]));
 
   ShimsArray := TGocciaArrayValue.Create;
+  AddTempRootIfNeeded(ShimsRoot, ShimsArray);
   for I := 0 to FShims.Count - 1 do
     ShimsArray.Elements.Add(TGocciaStringLiteralValue.Create(FShims[I]));
 
   GocciaObj := TGocciaObjectValue.Create;
+  AddTempRootIfNeeded(GocciaRoot, GocciaObj);
   GocciaObj.AssignProperty('version', TGocciaStringLiteralValue.Create(GetVersion));
   GocciaObj.AssignProperty('commit', TGocciaStringLiteralValue.Create(GetCommit));
   GocciaObj.AssignProperty(PROP_RUNTIME_GLOBALS, RuntimeGlobalsArray);
@@ -1666,6 +1683,12 @@ begin
 
   FGocciaGlobal := GocciaObj;
   FInterpreter.GlobalScope.DefineLexicalBinding(PROP_GOCCIA, FGocciaGlobal, dtConst, True);
+  finally
+    RemoveTempRootIfNeeded(GocciaRoot);
+    RemoveTempRootIfNeeded(ShimsRoot);
+    RemoveTempRootIfNeeded(BuildRoot);
+    RemoveTempRootIfNeeded(RuntimeGlobalsRoot);
+  end;
 end;
 
 function TGocciaEngine.GetResolver: TGocciaModuleResolver;

@@ -251,6 +251,7 @@ function TGocciaGlobalObject.ObjectKeys(const AArgs: TGocciaArgumentsCollection;
 var
   Obj: TGocciaObjectValue;
   Keys: TGocciaArrayValue;
+  KeysRoot: TGocciaTempRoot;
   Names: TArray<string>;
   Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
@@ -262,8 +263,14 @@ begin
   if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
+  InitializeTempRoot(KeysRoot);
   try
     Keys := TGocciaArrayValue.Create;
+    { The key strings below are charged against the memory ceiling, so each
+      TGocciaStringLiteralValue.Create is a GC safe point.  Without a root the
+      half-built result array is unreachable and gets swept mid-loop, leaving
+      Keys dangling. }
+    AddTempRootIfNeeded(KeysRoot, Keys);
 
     // Step 2: Let nameList be ? EnumerableOwnProperties(obj, key).
     if Obj is TGocciaStringObjectValue then
@@ -280,6 +287,7 @@ begin
 
     Result := Keys;
   finally
+    RemoveTempRootIfNeeded(KeysRoot);
     if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
@@ -291,6 +299,7 @@ function TGocciaGlobalObject.ObjectValues(const AArgs: TGocciaArgumentsCollectio
 var
   Obj: TGocciaObjectValue;
   Values: TGocciaArrayValue;
+  ValuesRoot: TGocciaTempRoot;
   PropertyNames: TArray<string>;
   Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
@@ -302,8 +311,12 @@ begin
   if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
+  InitializeTempRoot(ValuesRoot);
   try
     Values := TGocciaArrayValue.Create;
+    { GetProperty below can run an accessor, and accessors allocate, so the
+      half-built result array must stay reachable across the loop. }
+    AddTempRootIfNeeded(ValuesRoot, Values);
 
     // Step 2: Let valueList be ? EnumerableOwnProperties(obj, value).
     if Obj is TGocciaStringObjectValue then
@@ -320,6 +333,7 @@ begin
 
     Result := Values;
   finally
+    RemoveTempRootIfNeeded(ValuesRoot);
     if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
@@ -331,7 +345,9 @@ function TGocciaGlobalObject.ObjectEntries(const AArgs: TGocciaArgumentsCollecti
 var
   Obj: TGocciaObjectValue;
   Entries: TGocciaArrayValue;
+  EntriesRoot: TGocciaTempRoot;
   Entry: TGocciaArrayValue;
+  EntryRoot: TGocciaTempRoot;
   PropertyNames: TArray<string>;
   Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
@@ -343,8 +359,14 @@ begin
   if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
+  InitializeTempRoot(EntriesRoot);
+  InitializeTempRoot(EntryRoot);
   try
     Entries := TGocciaArrayValue.Create;
+    { Both the key string and the accessor call below are GC safe points, so
+      the outer array and the in-flight pair need roots.  A pair is only
+      unrooted once Entries owns it. }
+    AddTempRootIfNeeded(EntriesRoot, Entries);
 
     // Step 2: Let entryList be ? EnumerableOwnProperties(obj, key+value).
     if Obj is TGocciaStringObjectValue then
@@ -359,6 +381,7 @@ begin
         Continue;
 
       Entry := TGocciaArrayValue.Create;
+      AddTempRootIfNeeded(EntryRoot, Entry);
       Entry.Elements.Add(TGocciaStringLiteralValue.Create(PropertyNames[I]));
       Entry.Elements.Add(Obj.GetProperty(PropertyNames[I]));
       Entries.Elements.Add(Entry);
@@ -366,6 +389,8 @@ begin
 
     Result := Entries;
   finally
+    RemoveTempRootIfNeeded(EntryRoot);
+    RemoveTempRootIfNeeded(EntriesRoot);
     if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
@@ -614,6 +639,7 @@ function TGocciaGlobalObject.ObjectGetOwnPropertyNames(const AArgs: TGocciaArgum
 var
   Obj: TGocciaObjectValue;
   Names: TGocciaArrayValue;
+  NamesRoot: TGocciaTempRoot;
   PropertyNames: TArray<string>;
   I: Integer;
 begin
@@ -624,8 +650,12 @@ begin
   if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
+  InitializeTempRoot(NamesRoot);
   try
     Names := TGocciaArrayValue.Create;
+    { Each name string is charged against the memory ceiling and is therefore
+      a GC safe point; keep the half-built result reachable. }
+    AddTempRootIfNeeded(NamesRoot, Names);
 
     // Step 1: Return GetOwnPropertyKeys(O, string)
     PropertyNames := Obj.GetAllPropertyNames;
@@ -634,6 +664,7 @@ begin
 
     Result := Names;
   finally
+    RemoveTempRootIfNeeded(NamesRoot);
     if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);

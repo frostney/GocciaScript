@@ -446,27 +446,37 @@ function TGocciaGlobals.BuildErrorObject(const AName: string; const AProto: TGoc
 var
   MessageText: string;
   MessageValue: TGocciaValue;
+  ResultRoot: TGocciaTempRoot;
 begin
-  Result := TGocciaObjectValue.Create(AProto);
-  Result.HasErrorData := True;
-  MessageText := '';
+  { ToStringLiteral below can run a user toString, and the message string is
+    charged against the memory ceiling — both GC safe points — so the error
+    under construction needs a temp root. }
+  InitializeTempRoot(ResultRoot);
+  try
+    Result := TGocciaObjectValue.Create(AProto);
+    AddTempRootIfNeeded(ResultRoot, Result);
+    Result.HasErrorData := True;
+    MessageText := '';
 
-  if (AArgs.Length > 0) and
-     not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
-  begin
-    MessageText := AArgs.GetElement(0).ToStringLiteral.Value;
-    MessageValue := TGocciaStringLiteralValue.Create(
-      MessageText);
-    Result.DefineProperty(PROP_MESSAGE,
-      TGocciaPropertyDescriptorData.Create(MessageValue, [pfConfigurable, pfWritable]));
+    if (AArgs.Length > 0) and
+       not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
+    begin
+      MessageText := AArgs.GetElement(0).ToStringLiteral.Value;
+      MessageValue := TGocciaStringLiteralValue.Create(
+        MessageText);
+      Result.DefineProperty(PROP_MESSAGE,
+        TGocciaPropertyDescriptorData.Create(MessageValue, [pfConfigurable, pfWritable]));
+    end;
+
+    if (TGocciaCallStack.Instance <> nil) then
+      Result.ErrorStack :=
+        TGocciaCallStack.Instance.CaptureStackTrace(AName, MessageText, 1);
+
+    if AArgs.Length > 1 then
+      InstallErrorCause(Result, AArgs.GetElement(1));
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
   end;
-
-  if (TGocciaCallStack.Instance <> nil) then
-    Result.ErrorStack :=
-      TGocciaCallStack.Instance.CaptureStackTrace(AName, MessageText, 1);
-
-  if AArgs.Length > 1 then
-    InstallErrorCause(Result, AArgs.GetElement(1));
 end;
 
 function TGocciaGlobals.ErrorStackGetter(const AArgs: TGocciaArgumentsCollection;
@@ -705,6 +715,7 @@ function TGocciaGlobals.BuildSuppressedError(const AArgs: TGocciaArgumentsCollec
 var
   ErrorArg, SuppressedArg: TGocciaValue;
   Message: string;
+  ResultRoot: TGocciaTempRoot;
 begin
   if AArgs.Length > 0 then
     ErrorArg := AArgs.GetElement(0)
@@ -721,7 +732,12 @@ begin
   else
     Message := '';
 
+  { The message string below is a GC safe point; root the error while it
+    fills. }
+  InitializeTempRoot(ResultRoot);
+  try
   Result := TGocciaObjectValue.Create(AProto);
+  AddTempRootIfNeeded(ResultRoot, Result);
   Result.HasErrorData := True;
   if (TGocciaCallStack.Instance <> nil) then
     Result.ErrorStack :=
@@ -739,6 +755,9 @@ begin
 
   if AArgs.Length > 3 then
     InstallErrorCause(Result, AArgs.GetElement(3));
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 function TGocciaGlobals.SuppressedErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

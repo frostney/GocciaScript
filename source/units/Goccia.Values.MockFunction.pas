@@ -311,15 +311,26 @@ end;
 function TGocciaMockFunctionValue.CreateResultEntry(const AResultType: string;
   const AValue: TGocciaValue): TGocciaObjectValue;
 begin
+  { AValue may itself be freshly allocated and otherwise unreachable (e.g.
+    the message string built at a throw site), and the type-string creation
+    below is a GC safe point — root both. }
   Result := TGocciaObjectValue.Create;
   if (TGarbageCollector.Instance <> nil) then
+  begin
     TGarbageCollector.Instance.AddTempRoot(Result);
+    if AValue is TGCManagedObject then
+      TGarbageCollector.Instance.AddTempRoot(TGCManagedObject(AValue));
+  end;
   try
     Result.AssignProperty(PROP_TYPE, TGocciaStringLiteralValue.Create(AResultType));
     Result.AssignProperty(PROP_VALUE, AValue);
   finally
     if (TGarbageCollector.Instance <> nil) then
+    begin
+      if AValue is TGCManagedObject then
+        TGarbageCollector.Instance.RemoveTempRoot(TGCManagedObject(AValue));
       TGarbageCollector.Instance.RemoveTempRoot(Result);
+    end;
   end;
 end;
 

@@ -1023,9 +1023,16 @@ begin
 end;
 
 function TGocciaSandboxShellCommandValue.ResultObject: TGocciaObjectValue;
+var
+  ResultRoot: TGocciaTempRoot;
 begin
+  { The stdout/stderr strings below are GC safe points (and can be large);
+    root the object while it fills. }
+  InitializeTempRoot(ResultRoot);
+  try
   Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype,
     4);
+  AddTempRootIfNeeded(ResultRoot, Result);
   Result.SetProperty('exitCode',
     TGocciaNumberLiteralValue.Create(FResult.ExitCode));
   if FQuiet then
@@ -1042,6 +1049,9 @@ begin
   end;
   Result.SetProperty('ok',
     TGocciaBooleanLiteralValue.Create(FResult.ExitCode = 0));
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 function TGocciaSandboxShellCommandValue.Fulfilled(
@@ -1460,6 +1470,7 @@ var
   Options: TGocciaSandboxRunOptions;
   RunResult: TGocciaSandboxRunResult;
   Obj: TGocciaObjectValue;
+  ObjRoot: TGocciaTempRoot;
 begin
   EntryPath := RequireStringArg(AArgs, 0, 'runScript');
   if not Assigned(FContext.RunScriptCallback) then
@@ -1468,7 +1479,12 @@ begin
   Options := ParseRunScriptOptions(FContext, AArgs.GetElement(1), 'runScript');
   RunResult := FContext.RunScriptCallback(FContext, FContext.Fs.Normalize(
     EntryPath, FContext.Shell.WorkingDirectory), Options);
+  { The stdout/stderr/diff strings below are GC safe points (and can be
+    large); root the result object while it fills. }
+  InitializeTempRoot(ObjRoot);
+  try
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype, 8);
+  AddTempRootIfNeeded(ObjRoot, Obj);
   Obj.SetProperty('ok', TGocciaBooleanLiteralValue.Create(RunResult.Ok));
   Obj.SetProperty('exitCode',
     TGocciaNumberLiteralValue.Create(RunResult.ExitCode));
@@ -1489,6 +1505,9 @@ begin
   else
     Obj.SetProperty('diff', TGocciaNullLiteralValue.NullValue);
   Result := Obj;
+  finally
+    RemoveTempRootIfNeeded(ObjRoot);
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsReadFileSync(

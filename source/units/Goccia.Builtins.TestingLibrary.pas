@@ -4923,6 +4923,8 @@ var
   ShouldStop: Boolean;
   SnapshotErrors: TStringList;
   FloatingPointState: TGocciaFloatingPointState;
+  FailedDetailsRoot: TGocciaTempRoot;
+  ResultObjRoot: TGocciaTempRoot;
 begin
   ExitOnFirstFailure := False;
   ShowTestResults := True;
@@ -5009,7 +5011,14 @@ begin
       Summary := Summary + ')';
     end;
 
+    { The detail strings and the summary string below are GC safe points;
+      root the containers while they fill. }
+    Goccia.GarbageCollector.InitializeTempRoot(FailedDetailsRoot);
+    Goccia.GarbageCollector.InitializeTempRoot(ResultObjRoot);
+    try
     FailedTestDetailsArray := TGocciaArrayValue.Create;
+    Goccia.GarbageCollector.AddTempRootIfNeeded(FailedDetailsRoot,
+      FailedTestDetailsArray);
     if FailedTestDetails.Count > 0 then
     begin
       for I := 0 to FailedTestDetails.Count - 1 do
@@ -5019,6 +5028,7 @@ begin
 
      // Create result object
     ResultObj := TGocciaObjectValue.Create;
+    Goccia.GarbageCollector.AddTempRootIfNeeded(ResultObjRoot, ResultObj);
     { Collection aborted: Vitest discards the whole file, so the tests
       registered before the throwing describe are not collected either.
       Reporting them here contradicted the zero run counts beside it — the
@@ -5078,6 +5088,10 @@ begin
     end;
 
     Result := ResultObj;
+    finally
+      Goccia.GarbageCollector.RemoveTempRootIfNeeded(ResultObjRoot);
+      Goccia.GarbageCollector.RemoveTempRootIfNeeded(FailedDetailsRoot);
+    end;
     finally
       FailedTestDetails.Free;
       SuiteNames.Free;

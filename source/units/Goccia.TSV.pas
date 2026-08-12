@@ -55,7 +55,9 @@ uses
   Classes,
 
   BOM,
-  TextSemantics;
+  TextSemantics,
+
+  Goccia.GarbageCollector;
 
 class function TGocciaTSVParser.ClampOffset(const AValue,
   ALimit: Integer): Integer;
@@ -195,51 +197,66 @@ var
   Obj: TGocciaObjectValue;
   Pos: Integer;
   Row: TGocciaArrayValue;
+  ResultRoot: TGocciaTempRoot;
+  RowRoot: TGocciaTempRoot;
 begin
-  Result := TGocciaArrayValue.Create;
-  if Length(AText) = 0 then
-    Exit;
-
-  Pos := 1;
-  EndIndex := Length(AText);
-  if HasByteOrderMark(AText) then
-    Inc(Pos, BYTE_ORDER_MARK_CODE_UNIT_LENGTH);
-
-  if AHeaders then
-  begin
-    if not ParseTSVRow(AText, Pos, EndIndex, HeaderFields, Consumed) then
+  { Every field string is charged against the memory ceiling, so its
+    construction is a GC safe point; the result array and the in-flight row
+    are reachable only from this frame and need temp roots. }
+  InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(RowRoot);
+  try
+    Result := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ResultRoot, Result);
+    if Length(AText) = 0 then
       Exit;
-  end;
 
-  while Pos <= EndIndex do
-  begin
-    if not ParseTSVRow(AText, Pos, EndIndex, Fields, Consumed) then
-      Break;
-
-    if ASkipEmptyLines and IsEmptyTSVRow(Fields) then
-      Continue;
+    Pos := 1;
+    EndIndex := Length(AText);
+    if HasByteOrderMark(AText) then
+      Inc(Pos, BYTE_ORDER_MARK_CODE_UNIT_LENGTH);
 
     if AHeaders then
     begin
-      Obj := TGocciaObjectValue.Create;
-      for I := 0 to Length(HeaderFields) - 1 do
-      begin
-        if I < Length(Fields) then
-          Obj.AssignProperty(HeaderFields[I],
-            TGocciaStringLiteralValue.Create(Fields[I]))
-        else
-          Obj.AssignProperty(HeaderFields[I],
-            TGocciaStringLiteralValue.Create(''));
-      end;
-      Result.Elements.Add(Obj);
-    end
-    else
-    begin
-      Row := TGocciaArrayValue.Create;
-      for I := 0 to Length(Fields) - 1 do
-        Row.Elements.Add(TGocciaStringLiteralValue.Create(Fields[I]));
-      Result.Elements.Add(Row);
+      if not ParseTSVRow(AText, Pos, EndIndex, HeaderFields, Consumed) then
+        Exit;
     end;
+
+    while Pos <= EndIndex do
+    begin
+      if not ParseTSVRow(AText, Pos, EndIndex, Fields, Consumed) then
+        Break;
+
+      if ASkipEmptyLines and IsEmptyTSVRow(Fields) then
+        Continue;
+
+      if AHeaders then
+      begin
+        Obj := TGocciaObjectValue.Create;
+        AddTempRootIfNeeded(RowRoot, Obj);
+        for I := 0 to Length(HeaderFields) - 1 do
+        begin
+          if I < Length(Fields) then
+            Obj.AssignProperty(HeaderFields[I],
+              TGocciaStringLiteralValue.Create(Fields[I]))
+          else
+            Obj.AssignProperty(HeaderFields[I],
+              TGocciaStringLiteralValue.Create(''));
+        end;
+        Result.Elements.Add(Obj);
+      end
+      else
+      begin
+        Row := TGocciaArrayValue.Create;
+        AddTempRootIfNeeded(RowRoot, Row);
+        for I := 0 to Length(Fields) - 1 do
+          Row.Elements.Add(TGocciaStringLiteralValue.Create(Fields[I]));
+        Result.Elements.Add(Row);
+      end;
+    end;
+  finally
+    RemoveTempRootIfNeeded(RowRoot);
+    RemoveTempRootIfNeeded(ResultRoot);
   end;
 end;
 
@@ -302,10 +319,17 @@ var
   Pos: Integer;
   ResumeOffset: Integer;
   Row: TGocciaArrayValue;
+  ValuesRoot: TGocciaTempRoot;
+  RowRoot: TGocciaTempRoot;
 begin
+  // Same rooting rationale as Parse above: field strings are GC safe points.
+  InitializeTempRoot(ValuesRoot);
+  InitializeTempRoot(RowRoot);
   Result.Values := TGocciaArrayValue.Create;
+  AddTempRootIfNeeded(ValuesRoot, Result.Values);
   Result.Done := True;
   Result.ErrorMessage := '';
+  try
 
   if AEnd < 0 then
     EffectiveEnd := Length(AText)
@@ -364,6 +388,7 @@ begin
     if AHeaders then
     begin
       Obj := TGocciaObjectValue.Create;
+      AddTempRootIfNeeded(RowRoot, Obj);
       for I := 0 to Length(HeaderFields) - 1 do
       begin
         if I < Length(Fields) then
@@ -378,6 +403,7 @@ begin
     else
     begin
       Row := TGocciaArrayValue.Create;
+      AddTempRootIfNeeded(RowRoot, Row);
       for I := 0 to Length(Fields) - 1 do
         Row.Elements.Add(TGocciaStringLiteralValue.Create(Fields[I]));
       Result.Values.Elements.Add(Row);
@@ -387,6 +413,10 @@ begin
   end;
 
   Result.Read := EffectiveEnd;
+  finally
+    RemoveTempRootIfNeeded(RowRoot);
+    RemoveTempRootIfNeeded(ValuesRoot);
+  end;
 end;
 
 class function TGocciaTSVStringifier.EscapeField(

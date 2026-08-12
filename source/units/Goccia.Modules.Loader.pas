@@ -2565,17 +2565,27 @@ var
   Module: TGocciaModule;
   NormalizedText: string;
   TextValue: TGocciaValue;
+  TextRoot: TGocciaTempRoot;
+  MetadataRoot: TGocciaTempRoot;
 begin
   Content := LoadResolvedContent(AResolvedPath);
   try
     NormalizedText := NormalizeNewlinesToLF(Content.Text);
+    { The metadata strings below are GC safe points; the content string (which
+      can be large) and the metadata object are reachable only from this frame
+      until the module owns them. }
+    InitializeTempRoot(TextRoot);
+    InitializeTempRoot(MetadataRoot);
+    try
     TextValue := TGocciaStringLiteralValue.Create(NormalizedText);
+    AddTempRootIfNeeded(TextRoot, TextValue);
 
     Metadata := nil;
     if not ADefaultOnly then
     begin
       Metadata := TGocciaObjectValue.Create(
         TGocciaObjectValue.SharedObjectPrototype, 5);
+      AddTempRootIfNeeded(MetadataRoot, Metadata);
       Metadata.SetProperty(PROP_KIND, TGocciaStringLiteralValue.Create('text'));
       Metadata.SetProperty(PROP_PATH,
         TGocciaStringLiteralValue.Create(AResolvedPath));
@@ -2605,6 +2615,10 @@ begin
     finally
       if not LoadSucceeded then
         Module.Free;
+    end;
+    finally
+      RemoveTempRootIfNeeded(MetadataRoot);
+      RemoveTempRootIfNeeded(TextRoot);
     end;
   finally
     Content.Free;

@@ -73,6 +73,7 @@ uses
 
   Goccia.Builtins.Intl,
   Goccia.Error.Messages,
+  Goccia.GarbageCollector,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
@@ -1060,27 +1061,40 @@ var
   PartObj: TGocciaObjectValue;
   ListStyle, PartType, PartValue: string;
   I, ElementIndex: Integer;
+  ItemsRoot: TGocciaTempRoot;
+  OptionsRoot: TGocciaTempRoot;
 begin
   SetLength(Result, 0);
-  Items := TGocciaArrayValue.Create;
-  for I := 0 to Length(AGroups) - 1 do
-    Items.Elements.Add(TGocciaStringLiteralValue.Create(
-      DurationPartArrayString(AGroups[I])));
-
-  ListStyle := AFormat.FStyle;
-  if ListStyle = 'digital' then
-    ListStyle := 'short';
-
-  Options := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Options.AssignProperty('type', TGocciaStringLiteralValue.Create('unit'));
-  Options.AssignProperty('style', TGocciaStringLiteralValue.Create(ListStyle));
-  ListFormat := TGocciaIntlListFormatValue.Create(AFormat.FLocale, Options);
-  FormatArgs := TGocciaArgumentsCollection.Create([Items]);
+  { The group strings are charged against the memory ceiling — GC safe
+    points — so the containers under construction need temp roots. }
+  InitializeTempRoot(ItemsRoot);
+  InitializeTempRoot(OptionsRoot);
   try
-    PartsArray := TGocciaArrayValue(ListFormat.IntlListFormatFormatToParts(
-      FormatArgs, ListFormat));
+    Items := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ItemsRoot, Items);
+    for I := 0 to Length(AGroups) - 1 do
+      Items.Elements.Add(TGocciaStringLiteralValue.Create(
+        DurationPartArrayString(AGroups[I])));
+
+    ListStyle := AFormat.FStyle;
+    if ListStyle = 'digital' then
+      ListStyle := 'short';
+
+    Options := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    AddTempRootIfNeeded(OptionsRoot, Options);
+    Options.AssignProperty('type', TGocciaStringLiteralValue.Create('unit'));
+    Options.AssignProperty('style', TGocciaStringLiteralValue.Create(ListStyle));
+    ListFormat := TGocciaIntlListFormatValue.Create(AFormat.FLocale, Options);
+    FormatArgs := TGocciaArgumentsCollection.Create([Items]);
+    try
+      PartsArray := TGocciaArrayValue(ListFormat.IntlListFormatFormatToParts(
+        FormatArgs, ListFormat));
+    finally
+      FormatArgs.Free;
+    end;
   finally
-    FormatArgs.Free;
+    RemoveTempRootIfNeeded(OptionsRoot);
+    RemoveTempRootIfNeeded(ItemsRoot);
   end;
 
   ElementIndex := 0;
@@ -1212,22 +1226,35 @@ begin
   Result := FormatDurationPartList(AFormat, Groups);
 end;
 
+{ Each part string is charged against the memory ceiling — a GC safe point —
+  so the array and the in-flight part object need temp roots. }
 function FormatDurationPartsToArray(
   const AParts: TDurationFormatPartArray): TGocciaArrayValue;
 var
   I: Integer;
   PartObj: TGocciaObjectValue;
+  ResultRoot: TGocciaTempRoot;
+  PartRoot: TGocciaTempRoot;
 begin
-  Result := TGocciaArrayValue.Create;
-  for I := 0 to Length(AParts) - 1 do
-  begin
-    PartObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-    PartObj.AssignProperty('type', TGocciaStringLiteralValue.Create(AParts[I].PartType));
-    PartObj.AssignProperty('value', TGocciaStringLiteralValue.Create(AParts[I].Value));
-    if AParts[I].UnitIdentifier <> '' then
-      PartObj.AssignProperty('unit',
-        TGocciaStringLiteralValue.Create(AParts[I].UnitIdentifier));
-    Result.Elements.Add(PartObj);
+  InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(PartRoot);
+  try
+    Result := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ResultRoot, Result);
+    for I := 0 to Length(AParts) - 1 do
+    begin
+      PartObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+      AddTempRootIfNeeded(PartRoot, PartObj);
+      PartObj.AssignProperty('type', TGocciaStringLiteralValue.Create(AParts[I].PartType));
+      PartObj.AssignProperty('value', TGocciaStringLiteralValue.Create(AParts[I].Value));
+      if AParts[I].UnitIdentifier <> '' then
+        PartObj.AssignProperty('unit',
+          TGocciaStringLiteralValue.Create(AParts[I].UnitIdentifier));
+      Result.Elements.Add(PartObj);
+    end;
+  finally
+    RemoveTempRootIfNeeded(PartRoot);
+    RemoveTempRootIfNeeded(ResultRoot);
   end;
 end;
 
