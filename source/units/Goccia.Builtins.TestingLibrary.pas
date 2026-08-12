@@ -938,6 +938,26 @@ begin
     RemoveTempRootIfNeeded(ACollection.GetElement(I));
 end;
 
+{ True while an uncatchable resource-limit exception is unwinding through the
+  current finally block. FPC's ExceptObject is non-nil only during
+  exception-driven unwind, so a normal pass or an ordinary recorded failure
+  leaves it nil. This matters for the per-test teardown: a hard memory limit
+  (refused allocation) and a describe/file-scope timeout are re-raised from the
+  test-execution handler and tear the run down uncatchably, whereas an ordinary
+  failure -- including a test-scope timeout, which the runner catches and
+  records rather than re-raising -- does not unwind here. When this returns True
+  the guest afterEach / onTestFinished hooks must be skipped (guest code may not
+  execute past a hard limit); engine bookkeeping still runs so no callback roots
+  leak as the exception propagates to the host. }
+function UncatchableLimitUnwinding: Boolean;
+var
+  InFlight: TObject;
+begin
+  InFlight := ExceptObject;
+  Result := (InFlight is TGocciaMemoryLimitError)
+    or (InFlight is TGocciaTimeoutError);
+end;
+
 { TGocciaRegisteredEntry }
 
 constructor TGocciaRegisteredEntry.Create(const AParentSuite: TGocciaTestSuite;
@@ -4185,12 +4205,30 @@ begin
             PopTimeoutScope;
           end;
         finally
-          RunCallbacks(AfterCallbacks);
-          if FOnTestFinishedCallbacks.Length > 0 then
+          { When an uncatchable resource limit is tearing the run down, the
+            guest afterEach / onTestFinished hooks must NOT run -- the limit has
+            already fired and guest code may not execute past it. Keep the
+            engine bookkeeping (root removal / Clear) so no callback roots leak
+            while the exception unwinds to the host. On every normal path (pass,
+            ordinary failure, recorded test-scope timeout) ExceptObject is nil,
+            so the hooks run exactly as before. }
+          if UncatchableLimitUnwinding then
           begin
-            RunCallbacks(FOnTestFinishedCallbacks);
-            RemoveCollectionRoots(FOnTestFinishedCallbacks);
-            FOnTestFinishedCallbacks.Clear;
+            if FOnTestFinishedCallbacks.Length > 0 then
+            begin
+              RemoveCollectionRoots(FOnTestFinishedCallbacks);
+              FOnTestFinishedCallbacks.Clear;
+            end;
+          end
+          else
+          begin
+            RunCallbacks(AfterCallbacks);
+            if FOnTestFinishedCallbacks.Length > 0 then
+            begin
+              RunCallbacks(FOnTestFinishedCallbacks);
+              RemoveCollectionRoots(FOnTestFinishedCallbacks);
+              FOnTestFinishedCallbacks.Clear;
+            end;
           end;
         end;
       finally
