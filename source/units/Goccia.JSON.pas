@@ -94,6 +94,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
+  Goccia.GarbageCollector,
   Goccia.JSON.Utils,
   Goccia.NativeLimits,
   Goccia.Utils,
@@ -109,8 +110,28 @@ uses
   Goccia.Values.WrapperPrimitives;
 
 type
+  TGocciaJSONVisitor = class;
+
+  // The visitor builds its tree in FStack and FResult, both plain Pascal fields
+  // the collector cannot see, and the native stack is never scanned. Every
+  // non-empty string the visitor creates charges the memory ceiling, and
+  // crossing it collects with only the new string protected — which would sweep
+  // the whole in-progress tree. This root source marks that tree instead, for as
+  // long as the visitor it belongs to is alive.
+  //
+  // The visitor cannot be a TGCRootSource itself: TAbstractJSONParser is already
+  // its ancestor.
+  TGocciaJSONVisitorRoots = class(TGCRootSource)
+  private
+    FVisitor: TGocciaJSONVisitor;
+  public
+    constructor Create(const AVisitor: TGocciaJSONVisitor);
+    procedure MarkRootReferences; override;
+  end;
+
   TGocciaJSONVisitor = class(TAbstractJSONParser)
   private
+    FRoots: TGocciaJSONVisitorRoots;
     FCollectRecords: Boolean;
     FCollectSources: Boolean;
     FKeyStack: TUnicodeStringList;
@@ -374,6 +395,36 @@ begin
   end;
 end;
 
+{ TGocciaJSONVisitorRoots }
+
+constructor TGocciaJSONVisitorRoots.Create(const AVisitor: TGocciaJSONVisitor);
+begin
+  inherited Create;
+  FVisitor := AVisitor;
+end;
+
+procedure TGocciaJSONVisitorRoots.MarkRootReferences;
+var
+  I: Integer;
+begin
+  if not Assigned(FVisitor) then
+    Exit;
+
+  // Every open container on the stack, from the document root down to the one
+  // currently being filled. Only the innermost one is attached to nothing, but
+  // none of the outer ones is reachable from a real root either until the parse
+  // finishes and the caller takes ownership.
+  if Assigned(FVisitor.FStack) then
+    for I := 0 to FVisitor.FStack.Count - 1 do
+      if Assigned(FVisitor.FStack[I]) then
+        FVisitor.FStack[I].MarkReferences;
+
+  // Set once the outermost value is emitted, and the only reference to the
+  // finished tree until the caller stores it.
+  if Assigned(FVisitor.FResult) then
+    FVisitor.FResult.MarkReferences;
+end;
+
 { TGocciaJSONVisitor }
 
 constructor TGocciaJSONVisitor.Create;
@@ -393,10 +444,16 @@ begin
   FRootRecord := nil;
   FCollectRecords := False;
   FCollectSources := False;
+  // Last, so the collector never sees a root source over a half-built visitor.
+  FRoots := TGocciaJSONVisitorRoots.Create(Self);
 end;
 
 destructor TGocciaJSONVisitor.Destroy;
 begin
+  // First, so no collection can reach FStack after it is freed. This also runs on
+  // the parse-error path, where the stack is still holding open containers.
+  FRoots.Free;
+  FRoots := nil;
   FRootRecord.Free;
   while FRecordStack.Count > 0 do
   begin

@@ -681,6 +681,7 @@ function TPromiseAllSettledFulfillHandler.Invoke(const AArgs: TGocciaArgumentsCo
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Entry: TGocciaObjectValue;
+  EntryRoot: TGocciaTempRoot;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if Assigned(FAlreadyCalled) and FAlreadyCalled.Called then Exit;
@@ -688,11 +689,22 @@ begin
     FAlreadyCalled.Called := True;
   if FState.Settled then Exit;
 
-  Entry := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Entry.CreateDataPropertyOrThrow('status',
-    TGocciaStringLiteralValue.Create('fulfilled'));
-  Entry.CreateDataPropertyOrThrow(PROP_VALUE, AArgs.GetElement(0));
-  FState.Results.Elements[FIndex] := Entry;
+  // The status string charges the memory ceiling, and crossing it collects with
+  // only that string protected — so the allocation is a GC safe point, and the
+  // entry is reachable only from this frame until it lands in the results array
+  // below. (The property writes only check the budget and raise; they never
+  // collect.)
+  InitializeTempRoot(EntryRoot);
+  try
+    Entry := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    AddTempRootIfNeeded(EntryRoot, Entry);
+    Entry.CreateDataPropertyOrThrow('status',
+      TGocciaStringLiteralValue.Create('fulfilled'));
+    Entry.CreateDataPropertyOrThrow(PROP_VALUE, AArgs.GetElement(0));
+    FState.Results.Elements[FIndex] := Entry;
+  finally
+    RemoveTempRootIfNeeded(EntryRoot);
+  end;
   FState.Remaining := FState.Remaining - 1;
 
   if FState.Remaining = 0 then
@@ -726,6 +738,7 @@ function TPromiseAllSettledRejectHandler.Invoke(const AArgs: TGocciaArgumentsCol
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Entry: TGocciaObjectValue;
+  EntryRoot: TGocciaTempRoot;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if Assigned(FAlreadyCalled) and FAlreadyCalled.Called then Exit;
@@ -733,11 +746,20 @@ begin
     FAlreadyCalled.Called := True;
   if FState.Settled then Exit;
 
-  Entry := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Entry.CreateDataPropertyOrThrow('status',
-    TGocciaStringLiteralValue.Create('rejected'));
-  Entry.CreateDataPropertyOrThrow('reason', AArgs.GetElement(0));
-  FState.Results.Elements[FIndex] := Entry;
+  // Same shape as the fulfill handler: the status string allocation is the GC
+  // safe point, and nothing but this frame references the entry until it is
+  // stored in the results array.
+  InitializeTempRoot(EntryRoot);
+  try
+    Entry := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    AddTempRootIfNeeded(EntryRoot, Entry);
+    Entry.CreateDataPropertyOrThrow('status',
+      TGocciaStringLiteralValue.Create('rejected'));
+    Entry.CreateDataPropertyOrThrow('reason', AArgs.GetElement(0));
+    FState.Results.Elements[FIndex] := Entry;
+  finally
+    RemoveTempRootIfNeeded(EntryRoot);
+  end;
   FState.Remaining := FState.Remaining - 1;
 
   if FState.Remaining = 0 then

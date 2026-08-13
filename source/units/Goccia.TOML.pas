@@ -154,6 +154,7 @@ uses
 
   NumericText,
 
+  Goccia.GarbageCollector,
   Goccia.NativeLimits;
 
 function IsSpaceOrTab(const AChar: Char): Boolean;
@@ -471,27 +472,43 @@ begin
 end;
 
 function TGocciaTOMLParser.ParseDocument(const AText: string): TGocciaTOMLNode;
+var
+  RootValueRoot: TGocciaTempRoot;
 begin
-  Reset(AText);
+  // The whole document hangs off the root table's property graph, and the only
+  // thing holding that table is the TGocciaTOMLNode tree — plain Pascal objects
+  // the collector cannot see. Every string value the document contains charges
+  // the memory ceiling, and crossing it collects with only the new string
+  // protected, so one root over the root table covers the entire parse: each
+  // table and array below it is attached to a parent before any further string is
+  // built (see ParseArray and ParseInlineTable for the two that are not).
+  InitializeTempRoot(RootValueRoot);
   try
-    PrepareInput;
-    SkipBlankLinesAndComments;
-    while not IsAtEnd do
-    begin
-      if PeekChar = '[' then
-        ParseTableHeader
-      else
-        ParseKeyValuePair;
+    Reset(AText);
+    // Reset builds a fresh root table, so the root has to be taken after it.
+    AddTempRootIfNeeded(RootValueRoot, FRoot.TableValue);
+    try
+      PrepareInput;
       SkipBlankLinesAndComments;
+      while not IsAtEnd do
+      begin
+        if PeekChar = '[' then
+          ParseTableHeader
+        else
+          ParseKeyValuePair;
+        SkipBlankLinesAndComments;
+      end;
+      Result := FRoot;
+      FRoot := nil;
+    finally
+      FText := '';
+      FIndex := 1;
+      FCurrentTable := nil;
+      FRoot.Free;
+      FRoot := nil;
     end;
-    Result := FRoot;
-    FRoot := nil;
   finally
-    FText := '';
-    FIndex := 1;
-    FCurrentTable := nil;
-    FRoot.Free;
-    FRoot := nil;
+    RemoveTempRootIfNeeded(RootValueRoot);
   end;
 end;
 
@@ -1185,11 +1202,17 @@ end;
 function TGocciaTOMLParser.ParseArray: TGocciaTOMLNode;
 var
   ElementNode: TGocciaTOMLNode;
+  ArrayRoot: TGocciaTempRoot;
 begin
+  // Unlike the table nodes, this array is not attached to anything until the
+  // caller takes it, and it is filled first — across ParseValue calls that build
+  // strings, each of which charges the memory ceiling and can collect.
+  InitializeTempRoot(ArrayRoot);
   EnterNativeDataDepth('TOML parsing');
   try
     CheckNativeWork;
     Result := TGocciaTOMLNode.CreateArray(TGocciaArrayValue.Create);
+    AddTempRootIfNeeded(ArrayRoot, Result.ArrayValue);
     try
       Advance;
       SkipWhitespace(True);
@@ -1230,6 +1253,7 @@ begin
       raise;
     end;
   finally
+    RemoveTempRootIfNeeded(ArrayRoot);
     LeaveNativeDataDepth;
   end;
 end;
@@ -1238,12 +1262,17 @@ function TGocciaTOMLParser.ParseInlineTable: TGocciaTOMLNode;
 var
   InlineNode, ValueNode: TGocciaTOMLNode;
   KeyPath: TArray<string>;
+  TableRoot: TGocciaTempRoot;
 begin
+  // Same as ParseArray: detached from the document until the caller attaches it,
+  // and every entry parsed into it can collect.
+  InitializeTempRoot(TableRoot);
   EnterNativeDataDepth('TOML parsing');
   try
     CheckNativeWork;
     InlineNode := TGocciaTOMLNode.CreateTable(TGocciaObjectValue.Create, False, False,
       True, False);
+    AddTempRootIfNeeded(TableRoot, InlineNode.TableValue);
     try
       Advance;
       SkipWhitespace(True);
@@ -1289,6 +1318,7 @@ begin
       raise;
     end;
   finally
+    RemoveTempRootIfNeeded(TableRoot);
     LeaveNativeDataDepth;
   end;
 end;
