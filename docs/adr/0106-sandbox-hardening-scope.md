@@ -58,6 +58,9 @@ containing them.
   before allocating, never charged. This is a deliberate asymmetry, recorded
   because it is easy to misread the budget as stronger than it is: gating
   bounds any single allocation but not the aggregate of many small ones.
+  *(This sentence understates the gap by enough to mislead. See
+  [Amendment 1](#amendment-1--the-aggregate-caveat-measured) below for what it
+  costs in measured bytes.)*
 - **No watchdog thread.** The cooperative-timeout gap is a chokepoint-coverage
   problem, not an architecture problem. Blocking waits already poll every
   iteration, so the only uncovered case is a native loop with no poll point —
@@ -115,3 +118,81 @@ changes that.
 "Effect log" is rejected as a term. It named the same concept as capability
 audit event and would have split one vocabulary in two; the existing entry is
 extended to cover delivery in the sandbox run result instead.
+
+## Amendment 1 — the aggregate caveat, measured
+
+**Date:** 2026-08-11
+
+Decision records here are immutable; this is an exception on the narrow ground
+that the original text is not merely incomplete but materially misleading. It
+reads as a theoretical caveat. It is a measured ~15x overshoot, and a reader
+sizing a budget from the sentence above would size it wrong. The decision
+itself is unchanged — gate, do not charge — so this corrects the statement of
+its consequence rather than the choice.
+
+### What was measured
+
+`GocciaScriptLoaderBare --max-memory=67108864` (64 MiB) on macOS aarch64,
+against the gated build, peak RSS from `/usr/bin/time -l`:
+
+| Workload (same ~4.8M total properties) | Outcome | Peak RSS |
+| --- | --- | --- |
+| 40,000 objects x 120 properties | completes | 978 MB |
+| 4,000 objects x 1,200 properties | completes | 1007 MB |
+| 1 object x 4.8M properties | **refused** at 37,748,640 bytes | 324 MB |
+
+A one-line restructuring of a runaway script — spreading the same properties
+over more objects — turns a refusal into a ~15x overshoot that runs to
+completion. The first workload never consults the gate at all; the second
+consults it on every doubling and it permits every time.
+
+### Why
+
+Two independent reasons, and only the second one matters.
+
+1. **A band of small maps is never checked.** `GATED_GROWTH_MIN_BYTES` (4096)
+   suppresses reports whose transient footprint is below it, so with
+   `SizeOf(TEntry) = 24` on a 64-bit target an object that never exceeds 62
+   properties is never checked, and the bucket array is not checked below 1024
+   buckets (about 358 entries). This is a real blind spot and it is now pinned
+   by a unit test, but it is not the cause.
+
+2. **The remaining budget the gate compares against omits the dominant cost.**
+   `TGocciaPropertyDescriptor`
+   (`source/units/Goccia.Values.ObjectPropertyDescriptor.pas`) is a plain
+   class, not a `TGCManagedObject`, so descriptors never enter
+   `GC.BytesAllocated`. The gate therefore weighs a script-sized block against
+   a budget that always looks nearly empty, and permits. The single-map case
+   is refused only because *one reallocation's* transient reached 37 MB
+   against a 64 MiB ceiling — the request size did the work, not the
+   accounting.
+
+   The size of the omission is bounded by the run below: 4,000 objects of 120
+   properties each completes under a **16 MiB** budget, and every one of those
+   objects reports a 4512-byte entry-array growth that is permitted. Permission
+   requires `BytesAllocated + 4512 <= 16777216`, so `BytesAllocated` was still
+   under 16 MiB with roughly 480,000 descriptors live and 131 MB resident.
+
+Rebuilding with `GATED_GROWTH_MIN_BYTES = 64`, which reports essentially every
+growth, moved the two distributed workloads to 975 MB and 1000 MB: unchanged
+inside run-to-run noise.
+Lowering the threshold cannot close a hole that lives in the used-figure, so it
+was left at 4096 rather than churned for no measured gain. (A property-write
+microbenchmark showed no cost either way, so the constant is not being defended
+on performance grounds — it simply buys nothing.)
+
+### Standing statement
+
+The budget bounds **the size of any one gated allocation**, not the engine's
+resident memory. Objects below the small-map band are not gated at all, and no
+number of gated objects sums to a refusal. Charging descriptors would fix this
+and is out of scope for this programme; until then, a host that needs a real
+ceiling must impose one outside the process (`ulimit`, cgroup, container, or
+`--isolate=process`). This is consistent with
+[VISION.md](../../VISION.md): a reduced attack surface, not a verified
+boundary.
+
+`scripts/test-cli-apps.ts` pins both halves — the refusal cases assert peak
+RSS, and a distributed-shape case asserts that it still completes far past its
+budget — so if the aggregate hole is ever closed, that test fails and this
+amendment has to be revisited rather than quietly rotting.
