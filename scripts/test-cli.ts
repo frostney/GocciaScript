@@ -937,6 +937,44 @@ console.log("--max-memory (own-key enumeration survives a mid-loop collection)..
   if (json.files?.[0]?.result !== 150000) throw new Error(`Own-key enumeration should return 150000, got ${json.files?.[0]?.result}`);
 }
 
+// Parking is measured, never assumed. A fixed ballast cap fails silently in
+// both directions: at a tight ceiling the loop stops while the budget still has
+// room to spare, and at a wide one the cap runs out long before the ceiling is
+// in reach — either way the probe runs unparked and passes without ever entering
+// the window it exists to test. This grows ballast in bounded passes, collecting
+// between them so each measurement counts live bytes only, and reports the
+// outcome for the assertions to insist on.
+//
+// Shared by every parked-heap block below (parser probes, parse ceiling, parse
+// gate, stringify gate) so the calibration is defined once: they differ only in
+// the slack they park at, which is measured per block and passed in here.
+const parkingPreamble = (slackTarget: number): string[] => [
+  `const SLACK = ${slackTarget};`,
+  // Sized from the ceiling so it cannot run out, and materialised before the
+  // first measurement so it counts as baseline live set instead of quietly
+  // defeating the parking it is driving.
+  "const iters = Array.from({ length: Math.ceil(Goccia.gc.maxBytes / 4096) + 64 }, (_, j) => j);",
+  "const ballast = [];",
+  "let slack = Goccia.gc.maxBytes;",
+  "Goccia.gc();",
+  // Each pass adds only live ballast and then collects, so the post-collection
+  // slack falls monotonically and a handful of passes converges. Measuring
+  // before the collection is what let the old loop stop early: it was reading
+  // garbage the next collection would hand straight back.
+  "for (const pass of [0, 1, 2, 3, 4]) {",
+  "  for (const i of iters) {",
+  "    if (Goccia.gc.maxBytes - Goccia.gc.bytesAllocated <= SLACK) break;",
+  '    ballast.push("x".repeat(4096));',
+  "  }",
+  "  Goccia.gc();",
+  "  slack = Goccia.gc.maxBytes - Goccia.gc.bytesAllocated;",
+  "  if (slack <= SLACK) break;",
+  "}",
+  // Every caller asserts on "parked true"; the trailing numbers are diagnostics
+  // for when a calibration drifts and the assertion starts failing.
+  'console.log("parked", slack <= SLACK, "slack", slack, "ballast", ballast.length);',
+];
+
 console.log("--max-memory (builtin result builders survive mid-build collections)...");
 {
   // Same defect class as own-key enumeration: any builtin that fills a result
@@ -1146,38 +1184,6 @@ console.log("--max-memory (builtin result builders survive mid-build collections
     // nothing after it is a resource ceiling the guest can mistake for bad input,
     // so it is a failure, not a refusal.
     const EMPTY_REFUSAL = /^refused \S+ ::\s*$/m;
-
-    // Parking is measured, never assumed. A fixed ballast cap fails silently in
-    // both directions: at a tight ceiling the loop stops while the budget still
-    // has room to spare, and at a wide one the cap runs out long before the
-    // ceiling is in reach — either way the probe runs unparked and passes without
-    // ever entering the window it exists to test. This grows ballast in bounded
-    // passes, collecting between them so each measurement counts live bytes only,
-    // and reports the outcome for the assertions to insist on.
-    const parkingPreamble = (slackTarget: number): string[] => [
-      `const SLACK = ${slackTarget};`,
-      // Sized from the ceiling so it cannot run out, and materialised before the
-      // first measurement so it counts as baseline live set instead of quietly
-      // defeating the parking it is driving.
-      "const iters = Array.from({ length: Math.ceil(Goccia.gc.maxBytes / 4096) + 64 }, (_, j) => j);",
-      "const ballast = [];",
-      "let slack = Goccia.gc.maxBytes;",
-      "Goccia.gc();",
-      // Each pass adds only live ballast and then collects, so the post-collection
-      // slack falls monotonically and a handful of passes converges. Measuring
-      // before the collection is what let the old loop stop early: it was reading
-      // garbage the next collection would hand straight back.
-      "for (const pass of [0, 1, 2, 3, 4]) {",
-      "  for (const i of iters) {",
-      "    if (Goccia.gc.maxBytes - Goccia.gc.bytesAllocated <= SLACK) break;",
-      '    ballast.push("x".repeat(4096));',
-      "  }",
-      "  Goccia.gc();",
-      "  slack = Goccia.gc.maxBytes - Goccia.gc.bytesAllocated;",
-      "  if (slack <= SLACK) break;",
-      "}",
-      'console.log("parked", slack <= SLACK, "slack", slack, "ballast", ballast.length);',
-    ];
 
     // `expect` is the exact line the parse must produce when it completes.
     // "ok " on its own proves nothing: a container that was swept and had its
@@ -1561,23 +1567,9 @@ console.log("--max-memory (builtin result builders survive mid-build collections
           ...imports,
           'const S = "s".repeat(200);',
           'const doc = "[" + Array.from({ length: 1200 }, (_, i) => \'"\' + S + i + \'"\').join(",") + "]";',
-          // Same measured parking as the parser probes above, kept local so this
-          // block reads on its own.
-          "const SLACK = 300000;",
-          "const iters = Array.from({ length: Math.ceil(Goccia.gc.maxBytes / 4096) + 64 }, (_, j) => j);",
-          "const ballast = [];",
-          "let slack = Goccia.gc.maxBytes;",
-          "Goccia.gc();",
-          "for (const pass of [0, 1, 2, 3, 4]) {",
-          "  for (const i of iters) {",
-          "    if (Goccia.gc.maxBytes - Goccia.gc.bytesAllocated <= SLACK) break;",
-          '    ballast.push("x".repeat(4096));',
-          "  }",
-          "  Goccia.gc();",
-          "  slack = Goccia.gc.maxBytes - Goccia.gc.bytesAllocated;",
-          "  if (slack <= SLACK) break;",
-          "}",
-          'console.log("parked", slack <= SLACK);',
+          // Same measured parking as the parser probes above, at the slack this
+          // block was calibrated against.
+          ...parkingPreamble(300_000),
           "try {",
           `  const value = ${parse};`,
           '  console.log("completed", value === null || value === undefined ? "empty" : "value");',
@@ -1669,21 +1661,7 @@ console.log("--max-memory (builtin result builders survive mid-build collections
           // 120000 sits in the middle of the measured window: the parse survives
           // its own charges (~96 KB for 4000 properties) but the storage doubling
           // asks for 73632 or 147360 bytes in one block and is refused.
-          "const SLACK = 120000;",
-          "const iters = Array.from({ length: Math.ceil(Goccia.gc.maxBytes / 4096) + 64 }, (_, j) => j);",
-          "const ballast = [];",
-          "let slack = Goccia.gc.maxBytes;",
-          "Goccia.gc();",
-          "for (const pass of [0, 1, 2, 3, 4]) {",
-          "  for (const i of iters) {",
-          "    if (Goccia.gc.maxBytes - Goccia.gc.bytesAllocated <= SLACK) break;",
-          '    ballast.push("x".repeat(4096));',
-          "  }",
-          "  Goccia.gc();",
-          "  slack = Goccia.gc.maxBytes - Goccia.gc.bytesAllocated;",
-          "  if (slack <= SLACK) break;",
-          "}",
-          'console.log("parked", slack <= SLACK);',
+          ...parkingPreamble(120_000),
           "try {",
           `  const value = ${parse};`,
           '  console.log("guest-completed", Object.keys(value).length);',
@@ -1752,21 +1730,7 @@ console.log("--max-memory (builtin result builders survive mid-build collections
     [
       ...imports,
       setup,
-      `const SLACK = ${slackTarget};`,
-      "const iters = Array.from({ length: Math.ceil(Goccia.gc.maxBytes / 4096) + 64 }, (_, j) => j);",
-      "const ballast = [];",
-      "let slack = Goccia.gc.maxBytes;",
-      "Goccia.gc();",
-      "for (const pass of [0, 1, 2, 3, 4]) {",
-      "  for (const i of iters) {",
-      "    if (Goccia.gc.maxBytes - Goccia.gc.bytesAllocated <= SLACK) break;",
-      '    ballast.push("x".repeat(4096));',
-      "  }",
-      "  Goccia.gc();",
-      "  slack = Goccia.gc.maxBytes - Goccia.gc.bytesAllocated;",
-      "  if (slack <= SLACK) break;",
-      "}",
-      'console.log("parked", slack <= SLACK);',
+      ...parkingPreamble(slackTarget),
       "try {",
       `  const value = ${call};`,
       '  console.log("guest-completed", value.length);',
