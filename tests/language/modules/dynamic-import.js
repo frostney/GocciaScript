@@ -206,10 +206,13 @@ describe("dynamic import()", () => {
       message = e.message;
     }
     expect(message.indexOf(`Failed to parse JSON module "${specifier}": `)).toBe(0);
-    // Nothing beyond the specifier itself may look like a filesystem path.
-    // The fixture must keep "/" out of its parse-error text (offending
-    // character and position) for this assertion to stay meaningful.
-    expect(message.replace(`"${specifier}"`, "").includes("/")).toBe(false);
+    // Nothing beyond the specifier itself may look like a filesystem path,
+    // on either separator convention. The fixture must keep path separators
+    // out of its parse-error text (offending character and position) for
+    // this assertion to stay meaningful.
+    const detail = message.replace(`"${specifier}"`, "");
+    expect(detail.includes("/")).toBe(false);
+    expect(detail.includes("\\")).toBe(false);
   });
 
   test("works inside conditional", async () => {

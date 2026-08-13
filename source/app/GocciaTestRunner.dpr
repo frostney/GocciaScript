@@ -95,6 +95,9 @@ type
     CompileNs: Int64;
     ExecNs: Int64;
     ErrorMessage: string;
+    { Console-only rendering of ErrorMessage — may carry the module
+      'Resolved to:' line and color codes; never serialized into results. }
+    HostDiagnostic: string;
   end;
 
   TTestWorkerDataArray = array[0..MaxInt div SizeOf(TTestWorkerData) - 1] of TTestWorkerData;
@@ -104,6 +107,9 @@ type
     TestResult: TGocciaObjectValue;
     Timing: TGocciaScriptResult;
     ErrorMessage: string;
+    { Console-only rendering of ErrorMessage — may carry the module
+      'Resolved to:' line and color codes; never serialized into results. }
+    HostDiagnostic: string;
   end;
 
   { Per-input-file outcome, serialised into the JSON output's "results"
@@ -209,6 +215,7 @@ begin
   Result.Timing.TotalTimeNanoseconds := 0;
   Result.Timing.FileName := '';
   Result.ErrorMessage := AErrorMessage;
+  Result.HostDiagnostic := '';
 end;
 
 function IsContinuousIntegration: Boolean;
@@ -866,6 +873,8 @@ begin
           MarkLoadError(ScriptResult, AFileName, TGocciaError(E).GetDetailedMessage);
           Result := MakeEmptyTestResult(ScriptResult,
             TGocciaError(E).GetDetailedMessage);
+          Result.HostDiagnostic :=
+            FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal);
         end
         else if E is TGocciaThrowValue then
         begin
@@ -1045,6 +1054,8 @@ begin
           MarkLoadError(ScriptResult, AFileName, TGocciaError(E).GetDetailedMessage);
           Result := MakeEmptyTestResult(ScriptResult,
             TGocciaError(E).GetDetailedMessage);
+          Result.HostDiagnostic :=
+            FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal);
         end
         else if E is TGocciaThrowValue then
         begin
@@ -1343,6 +1354,7 @@ begin
       WorkerResults^[AIndex].CompileNs := FileResult.Timing.CompileTimeNanoseconds;
       WorkerResults^[AIndex].ExecNs := FileResult.Timing.ExecuteTimeNanoseconds;
       WorkerResults^[AIndex].ErrorMessage := FileResult.ErrorMessage;
+      WorkerResults^[AIndex].HostDiagnostic := FileResult.HostDiagnostic;
 
       FailedTests := TestResult.GetProperty('failedTests');
       if FailedTests is TGocciaArrayValue then
@@ -1359,6 +1371,8 @@ begin
     on E: TGocciaError do
     begin
       WorkerResults^[AIndex].ErrorMessage := E.GetDetailedMessage;
+      WorkerResults^[AIndex].HostDiagnostic :=
+        FormatHostErrorDiagnostic(E, IsColorTerminal);
       WorkerResults^[AIndex].Failed := 1;
       WorkerResults^[AIndex].TotalRunTests := 1;
       SetLength(WorkerResults^[AIndex].FailedTestNames, 1);
@@ -1636,7 +1650,9 @@ begin
     else
       Source := @WorkerData[I];
 
-    if Source^.ErrorMessage <> '' then
+    if Source^.HostDiagnostic <> '' then
+      WriteLn(ErrOutput, Source^.HostDiagnostic)
+    else if Source^.ErrorMessage <> '' then
       WriteLn(ErrOutput, Source^.ErrorMessage);
 
     PassedCount := PassedCount + Source^.Passed;
