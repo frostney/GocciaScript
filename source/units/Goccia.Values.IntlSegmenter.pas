@@ -639,26 +639,36 @@ end;
 function TGocciaIntlSegmentIteratorValue.IntlSegmentIteratorNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
+  ObjRoot: TGocciaTempRoot;
 begin
   if not (AThisValue is TGocciaIntlSegmentIteratorValue) then
     ThrowTypeError('Segment Iterator next called on non-iterator');
 
-  Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  if TGocciaIntlSegmentIteratorValue(AThisValue).FIndex >= Length(TGocciaIntlSegmentIteratorValue(AThisValue).FSegments) then
-  begin
-    Obj.AssignProperty('value', TGocciaUndefinedLiteralValue.UndefinedValue);
-    Obj.AssignProperty('done', TGocciaBooleanLiteralValue.TrueValue);
-  end
-  else
-  begin
-    Obj.AssignProperty('value', CreateSegmentObject(
-      TGocciaIntlSegmentIteratorValue(AThisValue).FSegments[TGocciaIntlSegmentIteratorValue(AThisValue).FIndex],
-      TGocciaIntlSegmentIteratorValue(AThisValue).FGranularity = 'word',
-      TGocciaIntlSegmentIteratorValue(AThisValue).FOriginalText));
-    Obj.AssignProperty('done', TGocciaBooleanLiteralValue.FalseValue);
-    Inc(TGocciaIntlSegmentIteratorValue(AThisValue).FIndex);
+  { CreateSegmentObject allocates segment strings and property storage is
+    charged on assignment — both GC safe points — so the iterator result needs
+    a temp root while it fills. }
+  InitializeTempRoot(ObjRoot);
+  try
+    Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    AddTempRootIfNeeded(ObjRoot, Obj);
+    if TGocciaIntlSegmentIteratorValue(AThisValue).FIndex >= Length(TGocciaIntlSegmentIteratorValue(AThisValue).FSegments) then
+    begin
+      Obj.AssignProperty('value', TGocciaUndefinedLiteralValue.UndefinedValue);
+      Obj.AssignProperty('done', TGocciaBooleanLiteralValue.TrueValue);
+    end
+    else
+    begin
+      Obj.AssignProperty('value', CreateSegmentObject(
+        TGocciaIntlSegmentIteratorValue(AThisValue).FSegments[TGocciaIntlSegmentIteratorValue(AThisValue).FIndex],
+        TGocciaIntlSegmentIteratorValue(AThisValue).FGranularity = 'word',
+        TGocciaIntlSegmentIteratorValue(AThisValue).FOriginalText));
+      Obj.AssignProperty('done', TGocciaBooleanLiteralValue.FalseValue);
+      Inc(TGocciaIntlSegmentIteratorValue(AThisValue).FIndex);
+    end;
+    Result := Obj;
+  finally
+    RemoveTempRootIfNeeded(ObjRoot);
   end;
-  Result := Obj;
 end;
 
 function TGocciaIntlSegmentIteratorValue.IntlSegmentIteratorSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

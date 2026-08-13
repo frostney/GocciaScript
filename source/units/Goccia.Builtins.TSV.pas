@@ -160,12 +160,15 @@ var
   ResultObject: TGocciaObjectValue;
   ValuesRoot: TGocciaTempRoot;
   ResultRoot: TGocciaTempRoot;
+  ErrorRoot: TGocciaTempRoot;
 begin
-  { CreateErrorObject allocates (a GC safe point); until the assignments
-    below, both the parsed values array and the result object are reachable
-    only from this frame. }
+  { CreateErrorObject allocates and property storage is charged on
+    assignment — both GC safe points — so the parsed values array, the result
+    object, and the error object are all rooted until the assignments below
+    store them. }
   InitializeTempRoot(ValuesRoot);
   InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(ErrorRoot);
   AddTempRootIfNeeded(ValuesRoot, AChunkResult.Values);
   try
     ResultObject := TGocciaObjectValue.Create;
@@ -173,8 +176,11 @@ begin
     if AChunkResult.ErrorMessage = '' then
       ErrorValue := TGocciaNullLiteralValue.NullValue
     else
+    begin
       ErrorValue := CreateErrorObject(SYNTAX_ERROR_NAME,
         AChunkResult.ErrorMessage, 1);
+      AddTempRootIfNeeded(ErrorRoot, ErrorValue);
+    end;
 
     ResultObject.AssignProperty(PROP_VALUES, AChunkResult.Values);
     ResultObject.AssignProperty(PROP_READ,
@@ -184,6 +190,7 @@ begin
     ResultObject.AssignProperty(PROP_ERROR, ErrorValue);
     Result := ResultObject;
   finally
+    RemoveTempRootIfNeeded(ErrorRoot);
     RemoveTempRootIfNeeded(ResultRoot);
     RemoveTempRootIfNeeded(ValuesRoot);
   end;

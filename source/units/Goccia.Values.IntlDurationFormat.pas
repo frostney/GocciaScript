@@ -1063,12 +1063,17 @@ var
   I, ElementIndex: Integer;
   ItemsRoot: TGocciaTempRoot;
   OptionsRoot: TGocciaTempRoot;
+  ListFormatRoot: TGocciaTempRoot;
+  PartsRoot: TGocciaTempRoot;
 begin
   SetLength(Result, 0);
   { The group strings are charged against the memory ceiling — GC safe
     points — so the containers under construction need temp roots. }
   InitializeTempRoot(ItemsRoot);
   InitializeTempRoot(OptionsRoot);
+  InitializeTempRoot(ListFormatRoot);
+  InitializeTempRoot(PartsRoot);
+  try
   try
     Items := TGocciaArrayValue.Create;
     AddTempRootIfNeeded(ItemsRoot, Items);
@@ -1084,11 +1089,16 @@ begin
     AddTempRootIfNeeded(OptionsRoot, Options);
     Options.AssignProperty('type', TGocciaStringLiteralValue.Create('unit'));
     Options.AssignProperty('style', TGocciaStringLiteralValue.Create(ListStyle));
+    { formatToParts allocates part strings and objects — GC safe points — so
+      the formatter itself and its returned parts array need roots while the
+      parts are read back below. }
     ListFormat := TGocciaIntlListFormatValue.Create(AFormat.FLocale, Options);
+    AddTempRootIfNeeded(ListFormatRoot, ListFormat);
     FormatArgs := TGocciaArgumentsCollection.Create([Items]);
     try
       PartsArray := TGocciaArrayValue(ListFormat.IntlListFormatFormatToParts(
         FormatArgs, ListFormat));
+      AddTempRootIfNeeded(PartsRoot, PartsArray);
     finally
       FormatArgs.Free;
     end;
@@ -1112,6 +1122,10 @@ begin
     end
     else
       AppendDurationPart(Result, PartType, PartValue, '');
+  end;
+  finally
+    RemoveTempRootIfNeeded(PartsRoot);
+    RemoveTempRootIfNeeded(ListFormatRoot);
   end;
 end;
 

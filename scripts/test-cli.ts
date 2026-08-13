@@ -894,8 +894,10 @@ console.log("--max-memory (own-key enumeration survives a mid-loop collection)..
     "const inner = Array.from({ length: 1000 }, (_, i) => i);",
     "const o = {};",
     "for (const a of outer) { for (const b of inner) { o['k' + (a * 1000 + b)] = b; } }",
-    "Object.keys(o).length + Object.values(o).length + Object.entries(o).length +",
+    "const total = Object.keys(o).length + Object.values(o).length + Object.entries(o).length +",
     "  Object.getOwnPropertyNames(o).length + Reflect.ownKeys(o).length;",
+    "console.log('total', total);",
+    "total;",
     "",
   ].join("\n");
 
@@ -909,12 +911,17 @@ console.log("--max-memory (own-key enumeration survives a mid-loop collection)..
       timeout: 60_000,
     });
     const out = proc.stdout.toString() + proc.stderr.toString();
-    // "Fatal error" is the loader's top-level handler reporting a hardware
-    // fault or a failed object check — never an acceptable outcome here.
-    if (out.includes("Fatal error"))
+    // A budget refusal ("would exceed the memory budget") is the intended
+    // uncatchable ceiling. Any other fatal — bus error, access violation,
+    // nil object check — is the heap corruption this test guards against.
+    if (out.includes("Fatal error") && !out.includes("would exceed the memory budget"))
       throw new Error(`Own-key enumeration at --max-memory=${maxMemory} crashed: ${out}`);
-    if (proc.exitCode !== 0 && !out.includes("RangeError"))
-      throw new Error(`Own-key enumeration at --max-memory=${maxMemory} failed without RangeError (exitCode=${proc.exitCode}): ${out}`);
+    if (proc.exitCode !== 0 && !out.includes("RangeError") && !out.includes("would exceed the memory budget"))
+      throw new Error(`Own-key enumeration at --max-memory=${maxMemory} failed without a clean refusal (exitCode=${proc.exitCode}): ${out}`);
+    // A run that completes under pressure must also have enumerated
+    // correctly — a wrong count here is silent heap corruption.
+    if (proc.exitCode === 0 && !out.includes("total 150000"))
+      throw new Error(`Own-key enumeration at --max-memory=${maxMemory} completed with wrong total: ${out}`);
   }
 
   // With headroom the enumeration must complete and return every key.
@@ -961,12 +968,27 @@ console.log("--max-memory (builtin result builders survive mid-build collections
         timeout: 120_000,
       });
       const out = proc.stdout.toString() + proc.stderr.toString();
-      if (out.includes("Fatal error"))
+      if (out.includes("Fatal error") && !out.includes("would exceed the memory budget"))
         throw new Error(`Builder sweep at --max-memory=${maxMemory} crashed: ${out}`);
-      if (proc.exitCode !== 0 && !out.includes("RangeError"))
-        throw new Error(`Builder sweep at --max-memory=${maxMemory} failed without RangeError (exitCode=${proc.exitCode}): ${out}`);
+      if (proc.exitCode !== 0 && !out.includes("RangeError") && !out.includes("would exceed the memory budget"))
+        throw new Error(`Builder sweep at --max-memory=${maxMemory} failed without a clean refusal (exitCode=${proc.exitCode}): ${out}`);
       if (proc.exitCode === 0 && !out.includes("total 16014"))
         throw new Error(`Builder sweep at --max-memory=${maxMemory} completed with wrong total: ${out}`);
+    }
+
+    // With headroom the builders must complete and produce the exact total —
+    // an all-RangeError sweep would otherwise verify nothing.
+    {
+      const proc = Bun.spawnSync([LOADER, "--max-memory=134217728", srcPath], {
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 120_000,
+      });
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 0)
+        throw new Error(`Builder sweep headroom run should exit 0, got ${proc.exitCode}: ${out}`);
+      if (!out.includes("total 16014"))
+        throw new Error(`Builder sweep headroom run should report total 16014: ${out}`);
     }
   } finally {
     clean(tmp);
