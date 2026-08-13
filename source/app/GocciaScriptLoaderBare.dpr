@@ -37,6 +37,7 @@ uses
   Goccia.MicrotaskQueue,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
+  Goccia.Modules.Resolver,
   Goccia.Profiler,
   Goccia.Profiler.Report,
   Goccia.Scope,
@@ -1703,7 +1704,7 @@ begin
     end;
     on E: TGocciaError do
     begin
-      WriteLn(ErrOutput, E.GetDetailedMessage(IsColorTerminal));
+      WriteLn(ErrOutput, FormatHostErrorDiagnostic(E, IsColorTerminal));
       ExitCode := 1;
     end;
     on E: Exception do

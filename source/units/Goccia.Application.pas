@@ -29,6 +29,7 @@ implementation
 uses
   Goccia.Error,
   Goccia.Error.Detail,
+  Goccia.Modules.Resolver,
   Goccia.Terminal.Colors,
   Goccia.Values.Error,
   Goccia.VM.Exception;
@@ -45,7 +46,7 @@ var
 begin
   UseColor := IsColorTerminal;
   if AException is TGocciaError then
-    WriteLn(TGocciaError(AException).GetDetailedMessage(UseColor))
+    WriteLn(FormatHostErrorDiagnostic(TGocciaError(AException), UseColor))
   else if AException is TGocciaThrowValue then
     WriteLn(FormatThrowDetail(TGocciaThrowValue(AException).Value, '', nil, UseColor, TGocciaThrowValue(AException).Suggestion))
   else if AException is EGocciaBytecodeThrow then
