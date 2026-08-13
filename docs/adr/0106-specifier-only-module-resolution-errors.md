@@ -45,8 +45,8 @@ instead.
   `TGocciaModuleResolutionError` (a `TGocciaRuntimeError` subclass) so the path
   survives to the CLI reporters without ever entering `Message`. Every host
   reporter renders engine errors through `FormatHostErrorDiagnostic`, which is a
-  drop-in for `GetDetailedMessage` that appends a trailing
-  `  Resolved to: <path>` line when the error carries one.
+  drop-in for `GetDetailedMessage` that appends a trailing, two-space-indented
+  `Resolved to: <path>` line when the error carries one.
 - The two non-resolution load failures — `import.source` of a non-script module
   and a JSON module parse error — name the specifier instead of the resolved
   path. They get no structured field: their expanded path already survives in
