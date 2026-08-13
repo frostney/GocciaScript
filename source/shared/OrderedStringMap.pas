@@ -50,6 +50,24 @@ type
     DELETED_SLOT        = -2;
     INITIAL_CAPACITY    = 16;
     LOAD_FACTOR_PERCENT = 70;
+    // Storage growth whose transient footprint is smaller than this is not
+    // reported to RequireStorageBytes. The hook exists to bound runaway
+    // growth, and every small map in a program — one per object literal —
+    // would otherwise pay a virtual call for blocks far too small to matter.
+    // Growth is geometric, so a map that does run away crosses the threshold
+    // within a few appends and is reported at every doubling from then on.
+    //
+    // The threshold buys that at the price of a precisely known blind spot.
+    // With SizeOf(TEntry) = 24 on a 64-bit target the entry array's capacity
+    // runs 2, 6, 14, 30, 62, 126, … and the transient (old + new) first
+    // reaches 4096 bytes at the 62 -> 126 step, so a map that never holds
+    // more than 62 entries is never reported at all; the bucket array's
+    // transient first reaches it at 512 -> 1024 buckets, around 358 entries.
+    // Lowering the threshold does not measurably shrink the gate's real hole
+    // — that hole is the *used* figure the request is compared against, not
+    // the request-size filter — so the blind spot is documented rather than
+    // paid down. See ADR 0106 for the measurements.
+    GATED_GROWTH_MIN_BYTES = 4096;
 
   private
     FEntries: TEntryArray;
@@ -80,8 +98,29 @@ type
     procedure Grow;
     procedure Rehash(ANewBucketCount: Integer);
     procedure Compact;
+    // Reports a storage reallocation to RequireStorageBytes, but only when its
+    // transient footprint clears GATED_GROWTH_MIN_BYTES.
+    //
+    // AOldBytes is the block that is still live while ANewBytes is being
+    // allocated. SetLength on a dynamic array of records with managed fields
+    // is free to allocate a fresh block and copy rather than extend in place,
+    // and Compact holds both arrays at once by construction, so the peak the
+    // gate is asked to bound is the sum — reporting only the new block would
+    // under-report the real peak by up to a third.
+    procedure GateStorageGrowth(const AOldBytes, ANewBytes: Int64);
 
   protected
+    // Growth gate: called with the transient byte footprint of a storage
+    // reallocation — the block being allocated plus the block still live while
+    // it is — before the map mutates anything. The default permits every
+    // request; this unit is generic infrastructure and owns no budget. A
+    // subclass whose contents are sized by untrusted input (JS object property
+    // storage) overrides it and raises, which aborts the Add with the map
+    // still in its pre-Add state.
+    // It runs only when storage actually grows past GATED_GROWTH_MIN_BYTES —
+    // growth is geometric, so O(log Count) times over the map's life, never
+    // once per Add and never at all for the small maps that dominate.
+    procedure RequireStorageBytes(const ABytes: Int64); virtual;
     function GetCount: Integer; override;
     function GetValue(const AKey: string): TValue; override;
     procedure SetValue(const AKey: string; const AValue: TValue); override;
@@ -209,6 +248,21 @@ end;
 
 { Resize }
 
+procedure TOrderedStringMap<TValue>.RequireStorageBytes(const ABytes: Int64);
+begin
+  // No budget at this layer; see the declaration.
+end;
+
+procedure TOrderedStringMap<TValue>.GateStorageGrowth(const AOldBytes,
+  ANewBytes: Int64);
+var
+  Transient: Int64;
+begin
+  Transient := AOldBytes + ANewBytes;
+  if Transient >= GATED_GROWTH_MIN_BYTES then
+    RequireStorageBytes(Transient);
+end;
+
 procedure TOrderedStringMap<TValue>.Grow;
 var
   N: Integer;
@@ -216,6 +270,8 @@ begin
   N := FBucketCount * 2;
   if N < INITIAL_CAPACITY then
     N := INITIAL_CAPACITY;
+  GateStorageGrowth(Int64(FBucketCount) * SizeOf(Int32),
+    Int64(N) * SizeOf(Int32));
   Rehash(N);
 end;
 
@@ -245,6 +301,20 @@ var
   NewEntries: TEntryArray;
   I, J: Integer;
 begin
+  // Compaction can never end up larger than the map already is, so it cannot
+  // run away — but it holds the old and the new entry array at the same time,
+  // which is a real transient the gate would otherwise never see. Reporting it
+  // here, before either array is touched, keeps a refusal in Compact as clean
+  // as one in Add: the map is still exactly as the caller found it. Rehash
+  // below reuses FBucketCount, so its SetLength is a no-op and contributes
+  // nothing to the peak.
+  //
+  // A refusal here abandons a compaction that would have *reduced* steady
+  // state. That is the right trade only because it can happen only when the
+  // budget is already exhausted, and the alternative is committing a peak the
+  // budget exists to forbid.
+  GateStorageGrowth(Int64(FEntryCount) * SizeOf(TEntry),
+    Int64(FCount) * SizeOf(TEntry));
   SetLength(NewEntries, FCount);
   J := 0;
   for I := 0 to FEntryCount - 1 do
@@ -308,7 +378,7 @@ end;
 procedure TOrderedStringMap<TValue>.Add(const AKey: string; const AValue: TValue);
 var
   Hash: Cardinal;
-  BucketIdx, EntryIdx: Integer;
+  BucketIdx, EntryIdx, NewEntryCapacity: Integer;
 begin
   Hash := HashKey(AKey);
 
@@ -337,9 +407,16 @@ begin
   end;
 
   EntryIdx := FEntryCount;
+  // Grow the entry array before claiming the slot, so a refused growth leaves
+  // the map exactly as the caller found it.
+  if EntryIdx >= Length(FEntries) then
+  begin
+    NewEntryCapacity := (EntryIdx + 1) * 2;
+    GateStorageGrowth(Int64(Length(FEntries)) * SizeOf(TEntry),
+      Int64(NewEntryCapacity) * SizeOf(TEntry));
+    SetLength(FEntries, NewEntryCapacity);
+  end;
   Inc(FEntryCount);
-  if FEntryCount > Length(FEntries) then
-    SetLength(FEntries, FEntryCount * 2);
 
   FEntries[EntryIdx].Key := AKey;
   FEntries[EntryIdx].Value := AValue;

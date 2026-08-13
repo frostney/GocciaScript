@@ -752,13 +752,31 @@ The `"goccia"` module exposes sandbox runner orchestration helpers.
 | Export | Description |
 |--------|-------------|
 | `$` | Bun-like shell tagged template / command factory. Commands run against the sandbox filesystem and return a lazy command object with `.run()`, `.text()`, `.json()`, `.quiet()`, and `.nothrow()` |
-| `runScript(path, options?)` | Execute another sandbox entry path with the same execution mode. Shared VFS is the default; `{ sandbox: true }` creates a child VFS. Returns `{ ok, exitCode, stdout, stderr, result, error, diff }` |
+| `runScript(path, options?)` | Execute another sandbox entry path with the same execution mode. Shared VFS is the default; `{ sandbox: true }` creates a child VFS. Returns `{ ok, exitCode, stdout, stderr, result, error, diff, failureKind }` |
 
 `$` accepts tagged templates or command strings. Tagged-template substitutions are shell-quoted before command parsing.
 
 ```javascript
 const name = "hello world";
 console.log(await $`echo ${name}`.text());
+```
+
+`failureKind` says **why** a run ended, so an orchestrating script does not have to match on `error` text to tell a buggy child from one that hit a ceiling:
+
+| `failureKind` | Meaning |
+|---------------|---------|
+| `"none"` | The run completed. `ok` is `true` and `error` is `null` |
+| `"script-error"` | The child failed: it threw, failed to parse or link, or named a path the sandbox filesystem does not have — its own entry path, or a seed source |
+| `"resource-limit"` | A host-set ceiling refused the run: `--max-memory`, `--max-instructions`, the sandbox filesystem quota, or the `runScript` nesting depth |
+| `"timeout"` | The `--timeout` deadline elapsed |
+| `"host-error"` | The runner itself could not carry the run out. Nothing the child does produces this |
+| `"child-process-crash"` | Reserved for out-of-process execution; never produced in-process |
+
+```javascript
+const child = runScript("/child.js");
+if (child.failureKind === "resource-limit") {
+  // Raise the ceiling or split the work; retrying unchanged will not help.
+}
 ```
 
 By default, nested execution shares the current virtual filesystem:

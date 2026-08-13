@@ -38,6 +38,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
   Goccia.ThreadCleanupRegistry,
   Goccia.Timeout,
@@ -222,6 +223,19 @@ begin
       raise;
     on E: TGocciaInstructionLimitError do
       raise;
+    on E: TGocciaMemoryLimitError do
+    begin
+      // Memory-limit is uncatchable and must re-raise to the host, but the host
+      // can recover and keep running (see runScript result conversion), so the
+      // iterator must still be closed. Use the file's abrupt-close convention so
+      // the memory-limit error survives even if return() also throws.
+      if Assigned(FIterator) then
+      begin
+        PreserveCurrentExceptionAcrossNestedHandler;
+        CloseIteratorPreservingError(FIterator);
+      end;
+      raise;
+    end;
     on E: Exception do
     begin
       if Assigned(FIterator) then

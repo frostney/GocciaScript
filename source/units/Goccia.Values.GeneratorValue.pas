@@ -159,8 +159,11 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.GarbageCollector,
+  Goccia.InstructionLimit,
   Goccia.Intrinsics.FunctionObjects,
+  Goccia.MemoryLimit,
   Goccia.Realm,
+  Goccia.Timeout,
   Goccia.Types.Enforcement,
   Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.ArrayValue,
@@ -1022,6 +1025,17 @@ begin
           RejectAwaitedReturn(E.Value);
         Exit;
       end;
+      { A resource ceiling reached while resolving the return/yield value —
+        e.g. `.return(thenable)` whose `then` getter allocates past the budget,
+        or an instruction/timeout deadline expiring mid-resolution — is opaque
+        to the guest. Named before the generic arm (Pascal first-match), which
+        would otherwise fold it into a promise rejection the guest can catch. }
+      on E: TGocciaTimeoutError do
+        raise;
+      on E: TGocciaInstructionLimitError do
+        raise;
+      on E: TGocciaMemoryLimitError do
+        raise;
       on E: Exception do
       begin
         if AThrowIntoGenerator then
@@ -1180,6 +1194,16 @@ begin
           RejectAwaitedYield(E.Value);
           Exit;
         end;
+        { The limit family stays opaque here too: resolving a promise-valued
+          `.return()` runs guest code (a thenable's `then` getter) that can
+          hit the budget, and the generic arm below would hand that ceiling
+          back to the guest as a catchable rejection. First-match ordering. }
+        on E: TGocciaTimeoutError do
+          raise;
+        on E: TGocciaInstructionLimitError do
+          raise;
+        on E: TGocciaMemoryLimitError do
+          raise;
         on E: Exception do
         begin
           RejectAwaitedYield(ExceptionToErrorValue(E));
@@ -1232,6 +1256,18 @@ begin
       FState := gsCompleted;
       CompleteCurrentRequest(E.Value, True, True);
     end;
+    { A `for await ... break` runs the body's `finally` as part of the
+      generator's `.return()`; a resource ceiling raised there reaches this
+      handler on the grkReturn path and, without these arms, was converted
+      into a rejection the guest could catch (and, in bytecode, diverged to a
+      fatal — a mode split). The ceiling must keep unwinding to the host in
+      both executors. Named before the generic arm (Pascal first-match). }
+    on E: TGocciaTimeoutError do
+      raise;
+    on E: TGocciaInstructionLimitError do
+      raise;
+    on E: TGocciaMemoryLimitError do
+      raise;
     on E: Exception do
     begin
       if ARequest.Kind = grkReturn then

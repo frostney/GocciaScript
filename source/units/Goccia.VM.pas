@@ -536,6 +536,7 @@ uses
   Goccia.Execution.CallSite,
   Goccia.ImportMeta,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
   Goccia.NumberConversion,
   Goccia.NumberExponentiation,
@@ -3823,6 +3824,8 @@ begin
       raise;
     on E: TGocciaInstructionLimitError do
       raise;
+    on E: TGocciaMemoryLimitError do
+      raise;
     on E: EGocciaCapabilityAuditDeliveryError do
       raise;
     on E: Exception do
@@ -3911,6 +3914,8 @@ begin
     on E: TGocciaTimeoutError do
       raise;
     on E: TGocciaInstructionLimitError do
+      raise;
+    on E: TGocciaMemoryLimitError do
       raise;
     on E: EGocciaCapabilityAuditDeliveryError do
       raise;
@@ -4010,6 +4015,8 @@ begin
     on E: TGocciaTimeoutError do
       raise;
     on E: TGocciaInstructionLimitError do
+      raise;
+    on E: TGocciaMemoryLimitError do
       raise;
     on E: EGocciaCapabilityAuditDeliveryError do
       raise;
@@ -4931,6 +4938,8 @@ begin
     on E: TGocciaTimeoutError do
       raise;
     on E: TGocciaInstructionLimitError do
+      raise;
+    on E: TGocciaMemoryLimitError do
       raise;
     on E: EGocciaCapabilityAuditDeliveryError do
       raise;
@@ -16928,6 +16937,8 @@ begin
               raise;
             on E: TGocciaInstructionLimitError do
               raise;
+            on E: TGocciaMemoryLimitError do
+              raise;
             on E: EGocciaCapabilityAuditDeliveryError do
               raise;
             on E: Exception do
@@ -17001,6 +17012,8 @@ begin
             on E: TGocciaTimeoutError do
               raise;
             on E: TGocciaInstructionLimitError do
+              raise;
+            on E: TGocciaMemoryLimitError do
               raise;
             on E: EGocciaCapabilityAuditDeliveryError do
               raise;
@@ -17126,6 +17139,8 @@ begin
             on E: TGocciaTimeoutError do
               raise;
             on E: TGocciaInstructionLimitError do
+              raise;
+            on E: TGocciaMemoryLimitError do
               raise;
             on E: EGocciaCapabilityAuditDeliveryError do
               raise;

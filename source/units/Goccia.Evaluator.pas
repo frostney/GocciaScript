@@ -219,6 +219,7 @@ uses
   Goccia.InstructionLimit,
   Goccia.Intrinsics.FunctionObjects,
   Goccia.Keywords.Reserved,
+  Goccia.MemoryLimit,
   Goccia.SourcePipeline,
   Goccia.StackLimit,
   Goccia.Timeout,
@@ -7642,6 +7643,8 @@ var
         raise;
       on E: TGocciaInstructionLimitError do
         raise;
+      on E: TGocciaMemoryLimitError do
+        raise;
       on E: EGocciaCapabilityAuditDeliveryError do
         raise;
       on E: Exception do
@@ -7707,6 +7710,8 @@ begin
       on E: TGocciaTimeoutError do
         raise;
       on E: TGocciaInstructionLimitError do
+        raise;
+      on E: TGocciaMemoryLimitError do
         raise;
       on E: EGocciaCapabilityAuditDeliveryError do
         raise;

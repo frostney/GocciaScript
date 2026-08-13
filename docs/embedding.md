@@ -350,7 +350,7 @@ begin
 end;
 ```
 
-`TGocciaEngine` also accepts an injected module loader via its constructor. When no loader is supplied, it creates a default `TGocciaModuleLoader` with the standard resolver but no filesystem content provider. `TGocciaRuntime` installs the filesystem provider when attached unless `AttachRuntime(Engine, False)` is used. Untrusted-source hosts should pass `False` and supply virtual modules, host modules, or a bounded custom content provider explicitly. Core-language-only embedders that need imports should inject their own provider.
+`TGocciaEngine` also accepts an injected module loader via its constructor. When no loader is supplied, it creates a default `TGocciaModuleLoader` with the standard resolver but no filesystem content provider. `TGocciaRuntime` installs the filesystem provider when attached unless `AttachRuntime(Engine, False)` is used. Untrusted-source hosts should pass `False` and supply virtual modules, host modules, or a bounded custom content provider explicitly. Core-language-only embedders that need imports should inject their own provider. With no provider installed, a module load that gets as far as retrieval is refused with a script-catchable `Error` carrying `code === "ERR_MODULE_LOADING_UNSUPPORTED"` rather than a Pascal exception. That covers retrieval only: resolution runs first, so a specifier the resolver rejects — with the default resolver, one whose file is absent from the host filesystem — fails before the provider is consulted, carries no `code`, and raises `TGocciaRuntimeError` across the engine boundary for a static import. Keep guarding the boundary; see [Module loading errors](errors.md#module-loading-errors).
 
 ### Virtual Modules
 

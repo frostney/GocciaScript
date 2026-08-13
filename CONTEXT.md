@@ -38,6 +38,10 @@ _Avoid_: Global module, runtime module when the module is registered directly by
 An import-only module installed by a runtime extension, such as a `goccia:` data-format module.
 _Avoid_: Runtime global, host module.
 
+**Module content provider**:
+The host-installed component that retrieves a module's text or bytes once an address has been resolved. Resolution and retrieval are separate concerns: a resolver decides which address to load, a content provider decides how its content is obtained. An engine with no provider installed is not a broken engine — it refuses every retrieval with a script-catchable error carrying a stable code, which is a different condition both from an installed provider that cannot produce a particular module and from a specifier that never resolved, since resolution runs first and fails on its own terms.
+_Avoid_: Module resolver, module loader, filesystem when the retrieval mechanism is the defining property.
+
 **Runtime profile**:
 A named bundle of runtime extensions used by a CLI host or embedding host.
 _Avoid_: Mode, preset.
@@ -55,8 +59,20 @@ A versioned structured host event emitted when source reaches a capability bound
 _Avoid_: Console log, operation result, security policy callback.
 
 **Capability audit sink**:
-The engine-owned host callback that receives capability audit events synchronously. Sink failures propagate and stop execution; CLI hosts provide a thread-safe JSONL sink through `--audit-log`.
-_Avoid_: Runtime extension, script-visible logger, best-effort telemetry.
+The engine-owned host callback that receives capability audit events synchronously. Sink failures propagate and stop execution; CLI hosts provide a thread-safe JSONL sink through `--audit-log`. A sink is one delivery route for capability audit events, not the only one: sandbox hosts may also receive the same events in the structured run result alongside the filesystem diff.
+_Avoid_: Runtime extension, script-visible logger, best-effort telemetry, effect log.
+
+**Resource limit**:
+The umbrella for engine-enforced execution ceilings: instruction limit, execution timeout, and the memory budget's native-growth gate. A resource limit is enforced by the engine against the running program as a whole, is configured by the host rather than the program, and is not catchable from source. Exceeding one ends execution rather than producing a value source can handle. Only the native-growth gate makes the memory budget a resource limit in this sense; the budget's _charged_ allocation failures are the deliberate exception — they surface as an ordinary catchable `RangeError`, so they are not part of this umbrella (see Memory budget below). (Capability budget is a separate concept, realised per capability rather than as a program-wide ceiling — see below — so it is not part of this umbrella.)
+_Avoid_: Sandbox permission, capability, quota, script error.
+
+**Memory budget**:
+The per-thread ceiling on allocated bytes, configured through `--max-memory`. The collector instance is thread-local, so engines that share a thread share one `MaxBytes` and one `BytesAllocated` — the ceiling is not isolated per engine. It is enforced two ways, with different failure semantics: allocation sites whose owner can reserve and release the native storage through a reliable hook charge against it and release on destruction, and a refused charge surfaces as an ordinary catchable `RangeError`; growth points that have a container owner but no such release hook — array element buffers and object property storage — are gated instead — checked before allocating, never charged — and a refused gate raises the uncatchable resource-limit ceiling. Gating bounds any single allocation but not the aggregate of many small ones, so a memory budget bounds peak allocation requests rather than guaranteeing steady-state residency.
+_Avoid_: GC heap size, resident set limit, virtual filesystem quota.
+
+**Capability budget**:
+A bound on how often or how much an installed capability may be exercised — at most N invocations, or up to M bytes — after which further use is refused. It narrows a grant that would otherwise be unlimited once installed, and is distinct from whether the capability is installed at all.
+_Avoid_: Capability audit event, rate limit, allowlist.
 
 **Seed baseline**:
 An explicitly imported snapshot used to initialise a sandbox-visible filesystem. Top-level sandbox seeds copy from host paths or inline seed config entries; nested child sandbox seeds copy from the parent virtual filesystem or inline child entries. A seed baseline is not a live mount and does not make the source path ambiently available to running source.
@@ -69,6 +85,14 @@ _Avoid_: Default diff, content diff.
 **Sandbox filesystem error**:
 A JavaScript `Error` reported by a sandbox runtime extension when a virtual filesystem operation fails. It carries a stable error code and operation/path context plus a target-appropriate numeric errno. It is shared by synchronous and promise APIs, and by callback APIs when installed.
 _Avoid_: Raw virtual filesystem exception, host filesystem error.
+
+**Out-of-process sandbox**:
+An isolation mode in which an isolated sandbox run executes the engine in a separate child process reached over stdio, instead of in the host process. Process separation buys crash containment and turns a wedged native loop into a parent-enforced deadline and hard kill; it is not a syscall jail, which is deferred. The parent materialises the seed baseline into bytes and sends it in the run request, so the child is given no host paths and a well-behaved run needs no host-filesystem access; OS-level confinement that would stop a compromised child from reaching the host filesystem remains deferred.
+_Avoid_: Sandbox jail, syscall confinement, worker thread.
+
+**Child run**:
+One entry program executed in one out-of-process sandbox child, under the child-per-run model where each isolated run spawns a fresh child that runs exactly one program and exits. A child run reports its own outcome in-band as a failure kind; only the parent, observing the child process, sets the reserved child-process-crash classification.
+_Avoid_: Nested sandbox run, pooled child, worker task.
 
 **WinterTC compatibility**:
 The open product direction of aligning selected runtime globals and host behavior with web-interoperable server runtime standards, especially WinterTC's Minimum Common Web API. It is distinct from Node.js host compatibility, CommonJS support, and `node:` built-ins.

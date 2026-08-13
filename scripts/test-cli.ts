@@ -777,8 +777,13 @@ console.log("--timeout (native sparse-array fill, interpreted)...");
 {
   // Far single-index writes route to sparse storage and complete instantly;
   // the Array constructor still materializes dense holes, so it stalls.
+  // --max-memory=0 lifts the budget: 2**30 pointers is exactly the 8 GiB
+  // default cap, so the allocation gate would otherwise refuse the request
+  // up front and this would assert the memory limit instead of the deadline.
+  // The stall is still bounded — hole extension polls the deadline as it
+  // grows, so only the fraction allocated within 50ms is ever committed.
   const fill = "const x = new Array(2 ** 30); x.length;\n";
-  const { exitCode, json } = runLoaderJson(fill, ["--timeout=50"], { timeout: 10_000 });
+  const { exitCode, json } = runLoaderJson(fill, ["--timeout=50", "--max-memory=0"], { timeout: 10_000 });
   if (exitCode !== 1) throw new Error(`Array-fill timeout exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
@@ -787,8 +792,9 @@ console.log("--timeout (native sparse-array fill, bytecode)...");
 {
   // Far single-index writes route to sparse storage and complete instantly;
   // the Array constructor still materializes dense holes, so it stalls.
+  // --max-memory=0 for the same reason as the interpreted case above.
   const fill = "const x = new Array(2 ** 30); x.length;\n";
-  const { exitCode, json } = runLoaderJson(fill, ["--timeout=50", "--mode=bytecode"], { timeout: 10_000 });
+  const { exitCode, json } = runLoaderJson(fill, ["--timeout=50", "--max-memory=0", "--mode=bytecode"], { timeout: 10_000 });
   if (exitCode !== 1) throw new Error(`Bytecode array-fill timeout exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
@@ -964,6 +970,83 @@ console.log("--max-memory (builtin result builders survive mid-build collections
     }
   } finally {
     clean(tmp);
+  }
+}
+
+// A refused allocation is a resource ceiling, not an in-language error: a
+// ceiling the guest can catch is a ceiling it can ignore in a loop. Every
+// shape below wraps the refusal in the handler that used to swallow it, so
+// each one fails if a re-raise allowlist ever drops the memory limit again.
+// Both execution modes must agree — the interpreter used to let the script
+// catch and continue while the VM treated the same refusal as fatal.
+//
+// The Promise.all/race shapes additionally guard the combinator error path:
+// a refusal escaping iteration was re-raised by name from inside the active
+// handler (PromiseRejectionReasonFromException), which dereferenced the
+// exception object the handler had already freed and surfaced as a spurious
+// "Access violation" (exit 1 with the wrong message) instead of the ceiling.
+{
+  const combinatorIterator =
+    "{ [Symbol.iterator]: () => ({ next: () => { const a = new Array(100000000); return { done: true, value: a.length }; } }) }";
+  const shapes: Array<[string, string]> = [
+    ["sync try/catch", "try { const a = new Array(100000000); a.length; } catch (e) {}\n"],
+    [
+      "async function body",
+      [
+        "const grow = async () => { const a = new Array(100000000); return a.length; };",
+        "const main = async () => { try { await grow(); } catch (e) {} };",
+        "main();",
+        "",
+      ].join("\n"),
+    ],
+    [
+      "promise executor",
+      "try { new Promise((r) => { const a = new Array(100000000); r(a.length); }).catch(() => {}); } catch (e) {}\n",
+    ],
+    [
+      "Promise.all iterator allocation",
+      `Promise.all(${combinatorIterator}).then(() => {}, () => {});\n`,
+    ],
+    [
+      "Promise.race iterator allocation",
+      `Promise.race(${combinatorIterator}).then(() => {}, () => {});\n`,
+    ],
+    // `for await ... break` runs the async generator's .return(), executing the
+    // body's finally as guest code. A refusal there was folded into a catchable
+    // rejection by the interpreter (guest caught it, kept running) while the VM
+    // was fatal — a swallow and a mode divergence. Both must be fatal now.
+    [
+      "async generator return/finally",
+      [
+        "const obj = { async *g() { try { yield 1; } finally { const a = new Array(100000000); a.length; } } };",
+        "const main = async () => { try { for await (const v of obj.g()) { break; } } catch (e) {} };",
+        "main();",
+        "",
+      ].join("\n"),
+    ],
+  ];
+
+  for (const [shape, src] of shapes) {
+    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+      const label = `${shape} ${modeArgs.length > 0 ? "bytecode" : "interpreted"}`;
+      console.log(`--max-memory (refusal is not catchable: ${label})...`);
+      const { exitCode, json } = runLoaderJson(src, ["--max-memory=67108864", ...modeArgs], { timeout: 30_000 });
+      if (exitCode !== 1) throw new Error(`Memory limit refusal (${label}) should exit 1, got ${exitCode}: ${JSON.stringify(json)}`);
+      if (json.error?.type !== "MemoryLimitError") throw new Error(`Memory limit refusal (${label}) should report MemoryLimitError, got ${json.error?.type}`);
+    }
+  }
+}
+
+console.log("--max-memory (ordinary script errors stay catchable under a budget)...");
+{
+  // The counterweight: the same budget must not turn an in-language error
+  // into a host-level failure.
+  for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+    const label = modeArgs.length > 0 ? "bytecode" : "interpreted";
+    const src = "let caught = false; try { null.property; } catch (e) { caught = true; } caught\n";
+    const { exitCode, json } = runLoaderJson(src, ["--max-memory=67108864", "--compat-asi", ...modeArgs], { timeout: 30_000 });
+    if (exitCode !== 0) throw new Error(`Catchable script error (${label}) should exit 0, got ${exitCode}: ${JSON.stringify(json)}`);
+    if (json.files?.[0]?.result !== true) throw new Error(`Catchable script error (${label}) should be caught by the script, got ${json.files?.[0]?.result}`);
   }
 }
 
