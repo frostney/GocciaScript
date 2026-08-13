@@ -29,6 +29,7 @@ uses
   Goccia.HostEnvironment,
   Goccia.InstructionLimit,
   Goccia.JSON,
+  Goccia.MemoryLimit,
   Goccia.Modules.Loader,
   Goccia.Realm,
   Goccia.Runtime,
@@ -829,6 +830,15 @@ begin
     except
       on E: EGocciaCapabilityAuditDeliveryError do
         raise;
+      { Named before the generic Exception branch so a budget refusal is
+        reported as the limit it is, rather than folded into "some native
+        error happened". A structured failure taxonomy on
+        TGocciaSandboxRunResult belongs to the out-of-process work, which has
+        to define crash / timeout-kill / limit / script-error as one set;
+        adding a field here would pre-empt that design, so this layer only
+        makes the case distinguishable in the message. }
+      on E: TGocciaMemoryLimitError do
+        Result.ErrorMessage := 'memory limit exceeded: ' + E.Message;
       on E: TGocciaError do
         Result.ErrorMessage := E.GetDetailedMessage(False);
       on E: TGocciaThrowValue do

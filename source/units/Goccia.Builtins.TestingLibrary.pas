@@ -383,6 +383,7 @@ uses
   Goccia.FetchManager,
   Goccia.FloatingPoint,
   Goccia.GarbageCollector,
+  Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
   Goccia.RegExp.Runtime,
   Goccia.Timeout,
@@ -2329,6 +2330,12 @@ begin
           execution continue past the limit instead of unwinding to
           ExecuteSuite (see the same guard at RunCallbacks). }
         on E: TGocciaTimeoutError do
+          raise;
+        { A refused allocation is the same shape of event as an expired
+          deadline: absorbing it would let `expect(fn).toThrow()` report the
+          memory ceiling as a satisfied expectation, which is precisely the
+          "catch the limit and keep going" the budget exists to prevent. }
+        on E: TGocciaMemoryLimitError do
           raise;
         on E: Exception do
         begin

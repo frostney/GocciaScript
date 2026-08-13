@@ -38,6 +38,7 @@ implementation
 
 uses
   Goccia.Constants.TypeNames,
+  Goccia.MemoryLimit,
   Goccia.Timeout;
 
 procedure ExtendElementsWithHoles(const AElements: TGocciaValueList;
@@ -46,6 +47,16 @@ var
   StartCount: Integer;
 begin
   StartCount := AElements.Count;
+  { Gate the whole extension up front.
+    ACount comes from a JS-controlled length, so `arr.length = 1e9` asks for
+    ~8 GB of pointer storage here. Growing element by element would sail past
+    the budget between GC samples and only be noticed once the process had
+    already committed the memory — the budget must refuse the request before
+    the first slot is allocated, not after the last.
+    A gate rather than a charge: this storage belongs to the list, which has
+    no hook to release a reservation when it shrinks or is freed. }
+  if ACount > StartCount then
+    RequireNativeBytes((ACount - StartCount) * SizeOf(Pointer));
   // Fast path: small extensions skip both the poll and the rollback frame.
   // Sequential element writes extend by one slot at a time, and an FPC
   // try/except frame per append is a measurable tax on every array-building
