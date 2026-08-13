@@ -3972,6 +3972,83 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
     }
   }
 
+  // Uncatchable-limit teardown guard. afterEach / onTestFinished are GUEST code:
+  // on an ordinary failure they MUST run (fixtures still need tearing down), but
+  // once a hard memory limit has fired the guest may not execute past it. The
+  // per-test finally distinguishes the two through the in-flight exception, so
+  // pin BOTH directions here. Each test prints "RAN:body" before its outcome and
+  // "RAN:afterEach" from the hook; the body marker proves stdout was captured up
+  // to the abort, so an ABSENT afterEach marker means the hook was skipped, not
+  // merely buffered away.
+  {
+    const label = `TestRunner (${modeLabel}) afterEach vs uncatchable limit`;
+
+    // (a) Ordinary failing test: afterEach still runs.
+    console.log(`TestRunner: afterEach runs after an ordinary test failure (${modeLabel})...`);
+    {
+      const tmp = makeTmp();
+      try {
+        const file = join(tmp, "afterEach-normal.test.js");
+        writeFileSync(file, [
+          'describe("suite", () => {',
+          '  afterEach(() => { console.log("RAN:afterEach"); });',
+          '  test("t", () => { console.log("RAN:body"); expect(1).toBe(2); });',
+          "});",
+          "",
+        ].join("\n"));
+
+        const proc = Bun.spawnSync(
+          [resolve(TESTRUNNER), file, "--no-progress", ...modeArgs],
+          { stdout: "pipe", stderr: "pipe" },
+        );
+        const all = proc.stdout.toString() + proc.stderr.toString();
+        if (!all.includes("RAN:body"))
+          throw new Error(`${label} (normal) should run the test body, got: ${all.slice(0, 300)}`);
+        if (!all.includes("RAN:afterEach"))
+          throw new Error(`${label} (normal) must run afterEach on an ordinary failure, got: ${all.slice(0, 300)}`);
+        if (proc.exitCode === 0)
+          throw new Error(`${label} (normal) should exit non-zero for the failing test, got 0`);
+      } finally {
+        clean(tmp);
+      }
+    }
+
+    // (b) Test that trips --max-memory: afterEach is skipped and the run aborts
+    // uncatchably. 100M array elements far exceed the 64 MiB budget; the refusal
+    // raises the uncatchable TGocciaMemoryLimitError, which must tear the run
+    // down without running the guest hook.
+    console.log(`TestRunner: afterEach is skipped when a memory limit aborts the run (${modeLabel})...`);
+    {
+      const tmp = makeTmp();
+      try {
+        const file = join(tmp, "afterEach-memory.test.js");
+        writeFileSync(file, [
+          'describe("suite", () => {',
+          '  afterEach(() => { console.log("RAN:afterEach"); });',
+          '  test("t", () => { console.log("RAN:body"); const a = new Array(100000000); expect(a.length).toBe(100000000); });',
+          "});",
+          "",
+        ].join("\n"));
+
+        const proc = Bun.spawnSync(
+          [resolve(TESTRUNNER), file, "--no-progress", "--max-memory=67108864", ...modeArgs],
+          { stdout: "pipe", stderr: "pipe" },
+        );
+        const all = proc.stdout.toString() + proc.stderr.toString();
+        if (!all.includes("RAN:body"))
+          throw new Error(`${label} (memory) should run the body up to the refusal, got: ${all.slice(0, 400)}`);
+        if (!/memory budget/.test(all))
+          throw new Error(`${label} (memory) should abort on the memory budget, got: ${all.slice(0, 400)}`);
+        if (all.includes("RAN:afterEach"))
+          throw new Error(`${label} (memory) must NOT run afterEach after an uncatchable limit, got: ${all.slice(0, 400)}`);
+        if (proc.exitCode === 0)
+          throw new Error(`${label} (memory) should abort with a non-zero exit, got 0`);
+      } finally {
+        clean(tmp);
+      }
+    }
+  }
+
   // The worker-merge path aggregates counts separately from the single-file
   // path, so pin the hook-failure accounting there too: the file with the
   // throwing beforeAll must flip its own ok and the top-level ok, while the
@@ -7301,6 +7378,11 @@ await section("Fuzz Harness: engine-modelled outcomes exit zero...", async () =>
       timeout: "while (true) {}",
       "module-denied": 'import { a } from "./nope.js";',
       "deep-recursion": "const f = () => f(); f();",
+      // Requests ~800 MB of element storage in one step, past the harness's
+      // 256 MB budget. The refusal raises the uncatchable TGocciaMemoryLimitError;
+      // the harness must classify it as a bounded outcome (exit 0), not let it
+      // escape the typed ladder into an unexpected-fault report.
+      "memory-limit": "const a = new Array(100000000); a.length;",
     };
     for (const [name, source] of Object.entries(cases)) {
       const file = join(tmp, `${name}.js`);
@@ -7371,6 +7453,49 @@ await section("Fuzz Harness: stdin input path...", async () => {
     throw new Error(`Fuzz harness stdin path exited ${proc.exitCode}:\n${output}`);
   if (!output.includes("completed"))
     throw new Error(`Fuzz harness stdin path did not run the input:\n${output}`);
+});
+
+await section("Fuzz Harness: oversized file is rejected without materializing it...", async () => {
+  // The AFL common case is a file argument (`@@`). The size gate must fire on
+  // the file's on-disk length BEFORE the whole file is read, otherwise a
+  // pathologically large input OOMs the harness and the fuzzer misreads that
+  // as a crash. A 256 MiB file proves it: rejecting it before read keeps peak
+  // RSS at the harness's small startup floor, while materializing it would push
+  // resident memory past the file size. The RSS ceiling sits well below both.
+  const tmp = makeTmp();
+  try {
+    const huge = join(tmp, "oversized.js");
+    const oversizeBytes = 256 * 1024 * 1024;
+    writeFileSync(huge, Buffer.alloc(oversizeBytes, 0x61)); // 'a'
+
+    const rejected = await runWithPeakRss([FUZZHARNESS, "--verbose", huge]);
+    if (rejected.exitCode !== 0)
+      throw new Error(`Fuzz harness oversized file exited ${rejected.exitCode}:\n${rejected.output}`);
+    if (!rejected.output.includes("input-rejected"))
+      throw new Error(`Fuzz harness did not reject the oversized file:\n${rejected.output}`);
+    // Reading the 256 MiB file would peak well above 256 MiB; the pre-read gate
+    // keeps it at startup scale. 128 MiB is far below the materialized cost and
+    // clear of the harness's own startup.
+    assertPeakRssBelow(rejected, "rejected oversized fuzz file", 128 * 1024 * 1024);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Fuzz Harness: oversized stdin is rejected like an oversized file...", async () => {
+  // The size bound must guard both interfaces. A fuzzer can pipe a multi-MB
+  // input through `-`; it must be rejected before the lexer, not lexed.
+  const huge = "a".repeat(2 * 1024 * 1024) + ";\n";
+  const proc = Bun.spawnSync([FUZZHARNESS, "--verbose", "-"], {
+    stdin: new TextEncoder().encode(huge),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const output = proc.stdout.toString() + proc.stderr.toString();
+  if (proc.exitCode !== 0)
+    throw new Error(`Fuzz harness oversized stdin exited ${proc.exitCode}:\n${output}`);
+  if (!output.includes("input-rejected"))
+    throw new Error(`Fuzz harness did not reject oversized stdin before lexing:\n${output}`);
 });
 
 // ── Memory budget (WP-3) ───────────────────────────────────────────────

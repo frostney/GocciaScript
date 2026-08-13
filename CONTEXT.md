@@ -63,11 +63,11 @@ The engine-owned host callback that receives capability audit events synchronous
 _Avoid_: Runtime extension, script-visible logger, best-effort telemetry, effect log.
 
 **Resource limit**:
-The umbrella for engine-enforced execution ceilings: instruction limit, execution timeout, memory budget, and capability budget. A resource limit is enforced by the engine against the running program as a whole, is configured by the host rather than the program, and is not catchable from source. Exceeding one ends execution rather than producing a value source can handle.
+The umbrella for engine-enforced execution ceilings: instruction limit, execution timeout, and the memory budget's native-growth gate. A resource limit is enforced by the engine against the running program as a whole, is configured by the host rather than the program, and is not catchable from source. Exceeding one ends execution rather than producing a value source can handle. Only the native-growth gate makes the memory budget a resource limit in this sense; the budget's _charged_ allocation failures are the deliberate exception — they surface as an ordinary catchable `RangeError`, so they are not part of this umbrella (see Memory budget below). (Capability budget is a separate concept, realised per capability rather than as a program-wide ceiling — see below — so it is not part of this umbrella.)
 _Avoid_: Sandbox permission, capability, quota, script error.
 
 **Memory budget**:
-The per-engine ceiling on allocated bytes, configured through `--max-memory`. It is enforced two ways: allocation sites with a known owner charge against it and release on destruction, while native growth points with no owner are gated — checked before allocating, never charged. Gating bounds any single allocation but not the aggregate of many small ones, so a memory budget bounds peak allocation requests rather than guaranteeing steady-state residency.
+The per-thread ceiling on allocated bytes, configured through `--max-memory`. The collector instance is thread-local, so engines that share a thread share one `MaxBytes` and one `BytesAllocated` — the ceiling is not isolated per engine. It is enforced two ways, with different failure semantics: allocation sites whose owner can reserve and release the native storage through a reliable hook charge against it and release on destruction, and a refused charge surfaces as an ordinary catchable `RangeError`; growth points that have a container owner but no such release hook — array element buffers and object property storage — are gated instead — checked before allocating, never charged — and a refused gate raises the uncatchable resource-limit ceiling. Gating bounds any single allocation but not the aggregate of many small ones, so a memory budget bounds peak allocation requests rather than guaranteeing steady-state residency.
 _Avoid_: GC heap size, resident set limit, virtual filesystem quota.
 
 **Capability budget**:
@@ -87,7 +87,7 @@ A JavaScript `Error` reported by a sandbox runtime extension when a virtual file
 _Avoid_: Raw virtual filesystem exception, host filesystem error.
 
 **Out-of-process sandbox**:
-An isolation mode in which an isolated sandbox run executes the engine in a separate child process reached over stdio, instead of in the host process. Process separation buys crash containment and turns a wedged native loop into a parent-enforced deadline and hard kill; it is not a syscall jail, which is deferred. The parent materialises the seed baseline into bytes and sends it in the run request, so the child never reaches the host filesystem.
+An isolation mode in which an isolated sandbox run executes the engine in a separate child process reached over stdio, instead of in the host process. Process separation buys crash containment and turns a wedged native loop into a parent-enforced deadline and hard kill; it is not a syscall jail, which is deferred. The parent materialises the seed baseline into bytes and sends it in the run request, so the child is given no host paths and a well-behaved run needs no host-filesystem access; OS-level confinement that would stop a compromised child from reaching the host filesystem remains deferred.
 _Avoid_: Sandbox jail, syscall confinement, worker thread.
 
 **Child run**:

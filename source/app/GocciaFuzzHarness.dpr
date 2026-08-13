@@ -31,6 +31,7 @@ uses
   Classes,
   SysUtils,
 
+  TextEncoding,
   TextSemantics,
 
   Goccia.CLI.Stdin,
@@ -41,8 +42,8 @@ uses
   Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.Modules.ContentProvider,
-  Goccia.ScriptLoader.Input,
   Goccia.StackLimit,
   Goccia.TextFiles,
   Goccia.Timeout,
@@ -81,7 +82,12 @@ const
 
 type
   { How a single run ended. Everything except feUnexpected is a bounded,
-    engine-modelled outcome and must not be reported to the fuzzer. }
+    engine-modelled outcome and must not be reported to the fuzzer.
+
+    Stack overflow has no outcome of its own: the engine deliberately models a
+    depth breach as a script-catchable RangeError (see Goccia.StackLimit), so it
+    is indistinguishable from a guest throw at this boundary and lands in
+    foScriptThrow. foMemoryLimit, by contrast, is a distinct RTL type. }
   TFuzzOutcome = (
     foCompleted,
     foScriptThrow,
@@ -89,7 +95,6 @@ type
     foRuntimeError,
     foInstructionLimit,
     foTimeout,
-    foStackOverflow,
     foMemoryLimit,
     foModuleDenied,
     foInputRejected,
@@ -150,7 +155,6 @@ begin
     foRuntimeError:     Result := 'runtime-error';
     foInstructionLimit: Result := 'instruction-limit';
     foTimeout:          Result := 'timeout';
-    foStackOverflow:    Result := 'stack-overflow';
     foMemoryLimit:      Result := 'memory-limit';
     foModuleDenied:     Result := 'module-denied';
     foInputRejected:    Result := 'input-rejected';
@@ -252,6 +256,16 @@ begin
             Result := foScriptThrow;
             ADetail := E.Message;
           end;
+          on E: TGocciaMemoryLimitError do
+          begin
+            { The 256 MB budget is a bounded, engine-modelled outcome, not a
+              finding. TGocciaMemoryLimitError is an RTL type the input cannot
+              catch (uncatchable from script by design), so the host owns this
+              distinction here at its top-level boundary. Without this branch it
+              would escape the ladder and be misreported as an unexpected fault. }
+            Result := foMemoryLimit;
+            ADetail := E.Message;
+          end;
           on E: TGocciaInstructionLimitError do
           begin
             Result := foInstructionLimit;
@@ -292,25 +306,107 @@ begin
   end;
 end;
 
+{ Reads stdin but stops the instant the FUZZ_MAX_INPUT_BYTES cap is breached,
+  so a fuzzer piping a multi-gigabyte input through `-` is rejected without the
+  harness ever holding it in memory. Reading raw bytes from the fd in chunks —
+  rather than materialising every line and measuring afterwards — is what makes
+  the bound apply before the allocation, not after: a single unbounded line
+  would otherwise be fully read before any length check could see it.
+  THandleStream never consults a (pipe-invalid) length and never closes the
+  handle it did not open. }
+function ReadBoundedStdin(out ASourceText: string; out ADetail: string): Boolean;
+const
+  STDIN_CHUNK_BYTES = 65536;
+var
+  Stream: THandleStream;
+  Chunk, Collected: TBytes;
+  Total, BytesRead: Integer;
+begin
+  ASourceText := '';
+  ADetail := '';
+  SetLength(Collected, 0);
+  Total := 0;
+  Stream := THandleStream.Create(StdInputHandle);
+  try
+    SetLength(Chunk, STDIN_CHUNK_BYTES);
+    repeat
+      BytesRead := Stream.Read(Chunk[0], STDIN_CHUNK_BYTES);
+      if BytesRead > 0 then
+      begin
+        if Total + BytesRead > FUZZ_MAX_INPUT_BYTES then
+        begin
+          ADetail := Format('input exceeds %d bytes', [FUZZ_MAX_INPUT_BYTES]);
+          Exit(False);
+        end;
+        SetLength(Collected, Total + BytesRead);
+        Move(Chunk[0], Collected[Total], BytesRead);
+        Inc(Total, BytesRead);
+      end;
+    until BytesRead <= 0;
+  finally
+    Stream.Free;
+  end;
+  if Total > 0 then
+    SetString(ASourceText, PAnsiChar(@Collected[0]), Total);
+  Result := True;
+end;
+
 function ReadInput(const AFileName: string; out ASource: TStringList;
   out ADetail: string): Boolean;
 var
   SourceText: string;
+  InputStream: TFileStream;
+  FileByteSize: Int64;
+  FileBytes: TBytes;
+  DecodeErrorOffset: Integer;
 begin
   ADetail := '';
   ASource := nil;
   try
     if (AFileName = '') or (AFileName = '-') then
     begin
-      ASource := ReadSourceFromText(Input);
-      Exit(True);
-    end;
-    if not FileExists(AFileName) then
+      if not ReadBoundedStdin(SourceText, ADetail) then
+        Exit(False);
+    end
+    else
     begin
-      ADetail := 'no such input file: ' + AFileName;
-      Exit(False);
+      if not FileExists(AFileName) then
+      begin
+        ADetail := 'no such input file: ' + AFileName;
+        Exit(False);
+      end;
+      { Reject an oversized file by its on-disk length BEFORE reading it.
+        ReadUTF8FileText would otherwise allocate the whole file first, so a
+        pathologically large input could exhaust memory before the size gate
+        ran — and a harness that OOMs on input it should have rejected reports
+        a false crash to the fuzzer. Opening the stream reads no content; only
+        its length is consulted. }
+      InputStream := TFileStream.Create(AFileName,
+        fmOpenRead or fmShareDenyWrite);
+      try
+        FileByteSize := InputStream.Size;
+        if FileByteSize > FUZZ_MAX_INPUT_BYTES then
+        begin
+          ADetail := Format('input exceeds %d bytes', [FUZZ_MAX_INPUT_BYTES]);
+          Exit(False);
+        end;
+        { Read the handle that was just size-checked rather than reopening
+          AFileName. Reopening would leave a TOCTOU window in which the path
+          could be swapped for a larger file after the size check, defeating
+          the cap; reading the validated handle binds the check and the read
+          to the same open file. }
+        SetLength(FileBytes, FileByteSize);
+        if FileByteSize > 0 then
+          InputStream.ReadBuffer(FileBytes[0], FileByteSize);
+      finally
+        InputStream.Free;
+      end;
+      if not TryDecodeUTF8(FileBytes, SourceText, DecodeErrorOffset) then
+      begin
+        ADetail := Format('invalid UTF-8 at byte %d', [DecodeErrorOffset]);
+        Exit(False);
+      end;
     end;
-    SourceText := ReadUTF8FileText(AFileName);
   except
     { Unreadable or undecodable bytes are an input-selection problem, not an
       engine finding. }
@@ -321,6 +417,8 @@ begin
     end;
   end;
 
+  { Belt-and-suspenders: both interfaces above bound input at or before read,
+    so this decoded-length re-check can only ever confirm the cap already held. }
   if Length(SourceText) > FUZZ_MAX_INPUT_BYTES then
   begin
     ADetail := Format('input exceeds %d bytes', [FUZZ_MAX_INPUT_BYTES]);

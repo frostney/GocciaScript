@@ -59,9 +59,35 @@ The child is the sandbox runner binary itself, re-entered in a child mode over
 stdio rather than a second executable. Because parent and child are the same
 build, the protocol version matches by construction; the version check (§3) is
 defense-in-depth against a mixed-binary deployment, not an expected runtime path.
-Phase B owns the exact re-exec mechanism (argv flag, environment marker, or
-inherited descriptor); this ADR fixes only that the child speaks this protocol on
-its standard streams.
+Phase B owns the exact re-exec mechanism (argv flag or environment marker); this
+ADR fixes only that the child speaks this protocol on its standard streams. An
+*inherited-descriptor* re-exec mechanism is deliberately excluded: it would add a
+fourth inherited descriptor, which the descriptor boundary below forbids.
+
+**Inherited process state is constrained now, even though the mechanism is
+deferred.** Whatever re-exec Phase B picks, the inherited-resource boundary is an
+isolation property Phase A fixes, not a Phase B liberty — otherwise a child could
+follow the wire protocol perfectly while still holding host resources:
+
+- **Descriptors:** the child inherits only the three standard streams the
+  protocol uses (stdin, stdout, stderr). No other parent descriptor is passed
+  down — not an already-open host file or socket, and not a control descriptor
+  for re-exec signalling — so nothing can leak across the boundary and the
+  re-exec mechanism (above) may not smuggle a fourth descriptor in.
+- **Environment:** the parent's environment is not a channel into the child. The
+  child inherits nothing from it beyond what the chosen mechanism strictly needs
+  (at most a single re-exec marker), so host secrets in the parent's environment
+  are not visible to guest source.
+- **Working directory:** the child process still has an operating-system working
+  directory — the in-memory VFS is the *guest* file view (§3a), not a replacement
+  for the process's OS working directory. Guest file APIs resolve only against the
+  VFS and never consult the OS working directory, which is set to a neutral
+  location that grants no reach. This is not filesystem confinement: raw
+  host-filesystem access from a child that has escaped into native code stays
+  outside the Phase A guarantee (§5), exactly as §3a records.
+
+Only the concrete plumbing — which flag, which marker — is Phase B's to choose;
+these constraints on what may cross the boundary are not.
 
 ### 2. IPC transport: stdio, length-prefixed frames
 
@@ -108,11 +134,15 @@ directions carry **length-prefixed frames**. There is no shared memory in v1.
   violation by an untrusted child, treated as death, never trusted enough to
   size an allocation from.
 - **Oversize handling, parent → child:** the parent constructs the request frame
-  itself, so it must guarantee the frame fits. If a host configures a filesystem
-  byte quota (`--fs-quota-bytes`) large enough that the materialised baseline
-  would exceed `MAX_FRAME_BYTES`, the parent **fails before spawning** with
-  `sfkHostError` (a host misconfiguration, not source misbehaviour). With the
-  default quota this cannot happen.
+  itself, so it must guarantee the frame fits. It measures the UTF-8 byte length
+  of the **complete serialised `run-request`** — every variable field, not the
+  materialised baseline alone: config, capability grants, import map and aliases,
+  and the base64-expanded seed bytes all count — and if that total exceeds
+  `MAX_FRAME_BYTES` it **fails before spawning** with `sfkHostError` (a host
+  misconfiguration, not source misbehaviour). The filesystem byte quota
+  (`--fs-quota-bytes`) large enough to inflate the baseline is the common cause,
+  but the check is on the whole frame so no field can silently push the request
+  over. With the default configuration this cannot happen.
 - **Single-frame, non-streaming:** each direction sends exactly one frame per
   run. There is no framing for incremental or streamed output in v1; streaming
   frames are an out-of-scope follow-up (§7).
@@ -207,19 +237,38 @@ no downgrade or negotiation; negotiation is an out-of-scope follow-up (§7).
   `maxInstructions: 0` mean unbounded, matching `ValueOr(0)` today.
 - **`capabilities`** are the grants the child is permitted to exercise:
   `allowedFetchHosts` (the fetch allowlist; empty means fetch is blocked) and
-  `hostFilesystemLoading` (false for sandbox runs — the child never reaches the
-  host filesystem). Fetch host policy appears here as the capability grant and
-  in `engine.fetch` as the transport policy; they are the same allowlist viewed
-  as grant vs. mechanism.
+  `hostFilesystemLoading` (false for sandbox runs — the guest is granted no
+  host-filesystem module loading). `allowedFetchHosts` here is host
+  *authorization*; `engine.fetch`'s `denyPrivateRanges` and `maxResponseBytes`
+  are *transport* policy — they are not the same list, so the enforcement order
+  is fixed, not incidental: host authorization is checked first, and only a
+  request whose target is on `allowedFetchHosts` may then be subjected to the
+  transport limits. An empty `allowedFetchHosts` blocks every request outright,
+  regardless of the transport settings, and transport limits never substitute for
+  the host grant — an implementation may not apply `denyPrivateRanges` or
+  `maxResponseBytes` in place of enforcing the allowlist. This authorization is
+  re-applied to **every redirect hop's resolved target**, not just the initial
+  URL: the `allowedFetchHosts` check and, when `denyPrivateRanges` is enabled,
+  the private-range denial MUST be evaluated against each hop's resolved
+  destination before that hop is connected, so a `302` to an off-allowlist host
+  or a private address (for example a loopback URL that redirects to
+  `10.255.255.1`) is refused mid-chain even though the initial URL was
+  authorized. This mirrors the in-process client, which already re-runs
+  `ResolveAndValidateDestination` per hop rather than trusting the first
+  authorization.
 - **`baseline`** is the fully **materialised** seed baseline, not the seed specs.
   The parent resolves every seed — including `sskParentPath` seeds that read the
   parent's host filesystem and `sskText`/`sskBytes` inline seeds — into concrete
   virtual-filesystem entries before sending. Each entry is `{ path, kind }` with
   `kind` `"file"` or `"dir"`; files carry `base64` content. This is the load-
   bearing isolation property: the child receives bytes, never paths into the
-  parent's host, so a child cannot reach the host filesystem even if it wanted
-  to. Materialisation on the parent side also means host-path symlink rejection
-  and quota accounting stay where they already are.
+  parent's host, so a sandbox run needs no host-filesystem access to execute.
+  This narrows to what Phase A actually buys — the child is not *given* host
+  paths. Stopping a *compromised* child, one that has escaped the engine into
+  native code, from reaching the host filesystem through raw syscalls is a
+  syscall-level jail, which §5 defers; Phase A/B provide process separation, not
+  OS-level filesystem confinement. Materialisation on the parent side also means
+  host-path symlink rejection and quota accounting stay where they already are.
 
 #### 3b. `run-result` (child → parent)
 
@@ -235,7 +284,8 @@ no downgrade or negotiation; negotiation is an out-of-scope follow-up (§7).
   "errorOutput": "",
   "resultValue": null,
   "diffRequested": false,
-  "diff": null
+  "diff": null,
+  "truncated": false
 }
 ```
 
@@ -253,10 +303,51 @@ no downgrade or negotiation; negotiation is an out-of-scope follow-up (§7).
   computes the diff itself, exactly as `ExecuteSandboxPath` does today — it
   captures its post-seed baseline, runs, and diffs — so the parent relays a diff
   rather than reconstructing the child's virtual filesystem. `diff` is `null`
-  when no diff was requested.
-- **`output`** and **`errorOutput`** are the captured console and error streams,
-  bounded by the run's own limits; both fit within one frame under the frame-size
-  argument in §2.
+  when no diff was requested, and also `null` in the overflow fallback below
+  even when `diffRequested` is true; the `truncated` flag is what distinguishes
+  "diff omitted for size" from "no diff requested", so a `null` `diff` is never
+  ambiguous.
+- **`output`** and **`errorOutput`** are the captured console and error streams.
+  The in-process runner does not cap capture today (`FCurrentOutputLines` is an
+  unbounded list), so bounding it is a protocol requirement here, not a runner
+  nicety: a run that prints more than a frame can hold would otherwise emit an
+  oversize `run-result` and be misread as a crash by the parent's §2 oversize
+  handling, even though it ran cleanly. The child therefore truncates each stream
+  to a documented capture budget sized so that the stream text, plus the
+  materialised `diff` and the rest of the result object, stays within
+  `MAX_FRAME_BYTES` (§2); truncation appends an explicit marker so the loss is
+  visible rather than silent. The exact budget is Phase B's to fix, but bounding
+  capture on the child side — never relying on the parent's oversize path to
+  absorb legitimate output — is normative.
+- **`truncated`** is a boolean, `false` on every frame except the overflow
+  fallback below, where it is `true`. It is the single flag the parent reads to
+  learn that a **clean** run's frame was reduced to fit `MAX_FRAME_BYTES` — that
+  `diff` and `resultValue` were dropped to `null` and `errorMessage` was cut —
+  rather than that the run produced no diff or no result. The parent treats a
+  `truncated` frame as a successful, lossy run: it keeps `ok`, `exitCode`, and
+  `failureKind` verbatim and surfaces the truncation to the host, and it **never**
+  reclassifies a `truncated` frame as `child-process-crash` (§2/§4), because the
+  frame is well-formed and complete — it is the payload, not the framing, that was
+  bounded.
+- **Total frame size** is bounded, not only the two captured streams. A
+  per-stream capture budget alone does not guarantee frame fit: `diff`,
+  `resultValue`, and `errorMessage` are also variable-length and must each carry a
+  documented UTF-8 byte limit. Every truncation — `output`, `errorOutput`, and
+  `errorMessage` — cuts at a **code-point boundary**, never mid-sequence, so the
+  result is always well-formed UTF-8, and it reserves the marker's byte length
+  before cutting so the marker plus the retained text still fit the field's limit.
+  After serialisation the child re-checks the whole `run-result` against
+  `MAX_FRAME_BYTES` as the final guard; if it still overflows (a legitimately
+  large clone or diff), the child applies a **deterministic** fallback rather than
+  emitting an oversize frame the parent would misread as a crash — it drops
+  `diff` and `resultValue` to `null`, truncates `errorMessage` to its byte limit
+  at a code-point boundary, and sets the `truncated` field (defined above) to
+  `true`, in that fixed order,
+  so a clean run always yields a schema-valid, well-formed frame. The `truncated`
+  field is what keeps this fallback consistent with the schema: `diff` may be
+  `null` with `diffRequested` still `true`, and the parent disambiguates that from
+  a genuinely empty result solely by `truncated`. Guaranteeing frame fit for every
+  clean run is normative; the exact per-field limits are Phase B's to fix.
 
 ### 4. Failure taxonomy mapping
 
@@ -270,8 +361,8 @@ own outcome onto `failureKind`:
 | Child-side condition | `failureKind` |
 | --- | --- |
 | Clean completion | `none` |
-| Uncaught script error (`TGocciaError`, `TGocciaThrowValue`) | `script-error` |
-| Memory or filesystem quota exceeded (`TGocciaMemoryLimitError`, `ESandboxFsQuotaExceeded`) | `resource-limit` |
+| Parse or link failure, a missing entry path, or an uncaught script error (`TGocciaError` — including `TGocciaSyntaxError` — or `TGocciaThrowValue`) | `script-error` |
+| Instruction, memory, or filesystem-quota ceiling exceeded (`TGocciaInstructionLimitError`, `TGocciaMemoryLimitError`, `ESandboxFsQuotaExceeded`) | `resource-limit` |
 | Cooperative timeout fired *inside* the child, cleanly | `timeout` |
 | Capability-audit delivery or other host/Pascal fault | `host-error` |
 
@@ -283,8 +374,8 @@ is, a script throw as a script error — now surfaced as an enum instead of only
 message string.
 
 **Out-of-band (parent observed the child process, no trustworthy frame).** The
-parent sets `sfkChildProcessCrash` — the reserved value — whenever it cannot
-obtain a well-formed in-band `run-result`:
+parent sets `sfkChildProcessCrash` — the reserved value — when a child that
+**did start** then fails to deliver a well-formed in-band `run-result`:
 
 - the child exits without ever writing a complete result frame (EOF mid-frame,
   short read, truncated payload, non-JSON payload, or an oversize declared
@@ -294,17 +385,52 @@ obtain a well-formed in-band `run-result`:
 - the parent's deadline elapses and the parent **hard-kills** the child because
   the child never reached a poll point to report a cooperative timeout.
 
+A failure on the parent's **own** side is *not* a child crash and never takes the
+reserved value: the child never spawns (`fork`/`exec`, `posix_spawn`, or
+`CreateProcess` fails), or a parent-side pipe, write, read, or wait syscall
+fails. No child outcome was ever observed in these cases, so they are
+`sfkHostError` — the same class as a version mismatch (§3). `sfkChildProcessCrash`
+is reserved for a child that *started* and then died or produced an untrustworthy
+frame; it never absorbs a parent-side transport or spawn fault. An *interruptible*
+wait failure is not yet a wait failure: a `wait`/`waitpid` that returns `EINTR`
+(or `EAGAIN` on a non-blocking wait) is retried, and the outcome is classified
+`sfkHostError` only after a retried wait establishes a genuine parent-side fault.
+
 This is the crisp crash-vs-in-band distinction: **"child died"** — the parent
 observed the death and has no trusted frame — is always `sfkChildProcessCrash`,
 while **"child ran and reported a limit"** — a complete frame carrying
 `resource-limit` or `timeout` — is always the in-band value. `sfkChildProcessCrash`
 means *the parent could not trust an in-band result*, nothing narrower.
 
+**The parent deadline, normatively.** `execution.timeoutMs` is the child's
+*cooperative* budget. The parent's hard deadline is derived from it —
+`timeoutMs` plus a fixed grace margin — so the child always gets first chance to
+observe the deadline at a poll point and emit a clean `timeout` frame; only after
+the grace elapses does the parent hard-kill. `timeoutMs: 0` (unbounded) means the
+parent arms no deadline. Precedence when a result races the deadline is settled
+by the same evidence rule, not by timing luck: if the parent has read a complete,
+trustworthy `run-result` before it hard-kills, that in-band frame wins (and a
+`timeout` frame reads as `timeout`); if the parent hard-kills first and no such
+frame was read, it is `sfkChildProcessCrash`. The grace margin's exact value is
+Phase B's to fix; that the parent deadline is `timeoutMs`-derived, grace-delayed,
+and evidence-resolved is not. The evidence rule outranks the reaping outcome as
+well: once the parent has read a complete, trustworthy `run-result`, that frame is
+authoritative even if the subsequent `wait` fails — a reap error after a trusted
+frame is logged, never a reclassification, so a valid result is never downgraded
+to `sfkHostError` by a wait that failed only after the outcome was already known.
+
 The parent's synthesised crash result preserves the cause in `errorMessage`: a
 deadline hard-kill records `"execution deadline exceeded; child hard-killed after
 Nms"`, an unexpected signal records the signal number and any captured stderr
-tail. A host that needs to tell "timed out, killed" apart from "crashed on
-SIGSEGV" reads that message and the signal, not a separate enum value.
+tail. That stderr tail is **byte-capped** before it is folded into `errorMessage`:
+the parent retains only a bounded UTF-8 tail (the exact bound is Phase B's to
+fix), so a child that floods stderr before dying cannot drive unbounded
+parent-side diagnostic memory or push `errorMessage` past its §3b byte limit. The
+signal is carried **in that message**, not in a separate field — the
+`run-result` schema (§3b) and `TGocciaSandboxRunResult` define no `signal`
+member, by the same "cause lives in `errorMessage`" choice this section makes
+throughout. A host that needs to tell "timed out, killed" apart from "crashed on
+`SIGSEGV`" reads that message, not a separate enum value or signal field.
 
 > **Decision 0106 did not settle — flagged for review.** 0106 says Phase B adds
 > "a parent-enforced deadline and hard kill" but does not say which `failureKind`

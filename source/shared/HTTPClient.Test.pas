@@ -20,6 +20,10 @@ type
     procedure TestAuditAuthorityOmitsUserInfo;
     procedure TestConnectionDeadlineBoundsBlockingWork;
     procedure TestRejectsAmbiguousAuthority;
+    procedure TestAcceptsValidIPv6Literals;
+    procedure TestRejectsNonIPv6BracketedAuthority;
+    procedure TestAcceptsValidSchemes;
+    procedure TestRejectsMalformedScheme;
     procedure TestRejectsRequestTargetControls;
     procedure TestClassifiesPrivateAddressRanges;
     procedure TestClassifiesPublicAddressesAsRoutable;
@@ -35,6 +39,11 @@ begin
   Test('Connection deadline bounds blocking work',
     TestConnectionDeadlineBoundsBlockingWork);
   Test('Rejects ambiguous authority', TestRejectsAmbiguousAuthority);
+  Test('Accepts valid IPv6 literals', TestAcceptsValidIPv6Literals);
+  Test('Rejects non-IPv6 bracketed authority',
+    TestRejectsNonIPv6BracketedAuthority);
+  Test('Accepts valid URI schemes', TestAcceptsValidSchemes);
+  Test('Rejects malformed URI scheme', TestRejectsMalformedScheme);
   Test('Rejects request-target controls', TestRejectsRequestTargetControls);
   Test('Classifies private address ranges',
     TestClassifiesPrivateAddressRanges);
@@ -106,6 +115,77 @@ begin
       Raised := True;
   end;
   Expect<Boolean>(Raised).ToBe(True);
+end;
+
+{ Valid IPv6 literals must survive bracket stripping unchanged — including a
+  compressed loopback and a percent-encoded zone id (RFC 6874). Regression
+  guard for the bracket-content plausibility check. }
+procedure THTTPClientTests.TestAcceptsValidIPv6Literals;
+begin
+  Expect<string>(HTTPURLHost('http://[2001:db8::1]/')).ToBe('2001:db8::1');
+  Expect<string>(HTTPURLHost('http://[::1]/')).ToBe('::1');
+  Expect<string>(HTTPURLHost(
+    'http://[fe80::1%25eth0]/')).ToBe('fe80::1%25eth0');
+end;
+
+{ A bracketed authority whose content is not a plausible IPv6 literal must
+  raise, so a hostname like [allowed.example] can never masquerade as a valid
+  host and slip past the invalid-URL reject+audit path. }
+procedure THTTPClientTests.TestRejectsNonIPv6BracketedAuthority;
+
+  function Rejects(const AURL: string): Boolean;
+  begin
+    Result := False;
+    try
+      HTTPURLHost(AURL);
+    except
+      on E: EHTTPError do
+        Result := True;
+    end;
+  end;
+
+begin
+  Expect<Boolean>(Rejects('http://[allowed.example]/')).ToBe(True);
+  Expect<Boolean>(Rejects('http://[example]/')).ToBe(True);
+  Expect<Boolean>(Rejects('http://[]/')).ToBe(True);
+  Expect<Boolean>(Rejects('http://[fe80::1%]/')).ToBe(True);
+end;
+
+{ A syntactically valid RFC 3986 scheme must parse even when it is not http(s):
+  HTTPURLHost passes ARequireSupportedScheme=False, so a non-HTTP scheme like
+  `file` or `custom+v1.0` canonicalizes to its host rather than being rejected. }
+procedure THTTPClientTests.TestAcceptsValidSchemes;
+begin
+  Expect<string>(HTTPURLHost('http://allowed.example/')).ToBe('allowed.example');
+  Expect<string>(HTTPURLHost(
+    'https://allowed.example/')).ToBe('allowed.example');
+  Expect<string>(HTTPURLHost('file://allowed.example/')).ToBe('allowed.example');
+  Expect<string>(HTTPURLHost(
+    'custom+v1.0://allowed.example/')).ToBe('allowed.example');
+end;
+
+{ A scheme that violates RFC 3986 syntax — empty, a non-letter first character,
+  an illegal character, or absent entirely — must raise before host extraction,
+  so a malformed URL can never leak a bare host past the fetch invalid-URL
+  reject+audit path. }
+procedure THTTPClientTests.TestRejectsMalformedScheme;
+
+  function Rejects(const AURL: string): Boolean;
+  begin
+    Result := False;
+    try
+      HTTPURLHost(AURL);
+    except
+      on E: EHTTPError do
+        Result := True;
+    end;
+  end;
+
+begin
+  Expect<Boolean>(Rejects('://allowed.example')).ToBe(True);
+  Expect<Boolean>(Rejects('ht*tp://allowed.example')).ToBe(True);
+  Expect<Boolean>(Rejects('1http://x')).ToBe(True);
+  Expect<Boolean>(Rejects('allowed.example')).ToBe(True);
 end;
 
 procedure THTTPClientTests.TestRejectsRequestTargetControls;

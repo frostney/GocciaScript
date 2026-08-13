@@ -21,17 +21,77 @@
  */
 
 import { createHash } from "crypto";
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
-import { dirname, join, relative } from "path";
+import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import { fileURLToPath } from "url";
 
 // ── Config ─────────────────────────────────────────────────────────────
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
+// Canonical (symlink-resolved) repository root. All containment checks run
+// against this, so a symlinked ancestor of the repo does not read as escape.
+const CANONICAL_ROOT = realpathSync(ROOT);
+
+// Canonicalize a path whose leaf may not exist yet: resolve symlinks on its
+// nearest existing ancestor, then re-append the not-yet-created segments. A
+// plain resolve()/relative() check is lexical and a symlinked `build/` could
+// redirect the recursive rmSync below outside the repository.
+const canonicalize = (target: string): string => {
+  let current = resolve(target);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync(current);
+      return tail.length === 0 ? real : join(real, ...tail.reverse());
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) {
+        // Reached the filesystem root without an existing ancestor.
+        return tail.length === 0 ? current : join(current, ...tail.reverse());
+      }
+      tail.push(basename(current));
+      current = parent;
+    }
+  }
+};
+
+// Canonical build/ subtree. OUT_DIR feeds a recursive rmSync below, so the
+// destination is confined here rather than merely to somewhere inside the repo:
+// an in-repo but non-build path (e.g. `--out source`) would still let the
+// cleanup delete tracked source. Containment is checked against this canonical
+// path so a symlinked build/ cannot redirect the delete elsewhere.
+const CANONICAL_BUILD = canonicalize(join(CANONICAL_ROOT, "build"));
+
+// OUT_DIR feeds a recursive rmSync below, so a value that resolves anywhere
+// other than a proper subpath of <repo>/build/ must be rejected before anything
+// is deleted — this rejects the repo root, the build/ root itself, any other
+// in-repo tree (source/, tests/, …), and any path outside the repository.
+const resolveOutDir = (candidate: string): string => {
+  const canonical = canonicalize(candidate);
+  const rel = relative(CANONICAL_BUILD, canonical);
+  if (rel === "" || rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) {
+    console.error(
+      `Refusing to use ${candidate} as the corpus directory ` +
+        `(must be within ${relative(CANONICAL_ROOT, CANONICAL_BUILD)}/)`,
+    );
+    process.exit(1);
+  }
+  return canonical;
+};
 
 const argOut = process.argv.indexOf("--out");
-const OUT_DIR = argOut === -1 ? join(ROOT, "build", "fuzz", "corpus") : process.argv[argOut + 1];
+let OUT_DIR: string;
+if (argOut === -1) {
+  OUT_DIR = resolveOutDir(join(ROOT, "build", "fuzz", "corpus"));
+} else {
+  const value = process.argv[argOut + 1];
+  if (value === undefined || value.startsWith("--")) {
+    console.error("--out requires a directory path");
+    process.exit(1);
+  }
+  OUT_DIR = resolveOutDir(resolve(ROOT, value));
+}
 const VERBOSE = process.argv.includes("--verbose");
 
 // AFL++ trims inputs it cannot shrink; seeds above this size cost more than
@@ -90,9 +150,9 @@ let written = 0;
 let skippedSize = 0;
 let skippedDuplicate = 0;
 
-const addSeed = (content: string, label: string): void => {
+const addSeed = (content: string, label: string, allowShort = false): void => {
   const bytes = Buffer.byteLength(content, "utf8");
-  if (bytes < MIN_SEED_BYTES || bytes > MAX_SEED_BYTES) {
+  if ((!allowShort && bytes < MIN_SEED_BYTES) || bytes > MAX_SEED_BYTES) {
     skippedSize += 1;
     return;
   }
@@ -163,8 +223,10 @@ const SYNTHETIC_SEEDS: Record<string, string> = {
   "proxy-reflect": "new Proxy({}, { get: (t, k) => Reflect.get(t, k) }).x;",
 };
 
+// Synthetic seeds are hand-picked to reach specific parser paths; bypass the
+// minimum-size filter so short ones (e.g. "/* abc") are not silently dropped.
 for (const [name, content] of Object.entries(SYNTHETIC_SEEDS)) {
-  addSeed(content, `synthetic-${name}`);
+  addSeed(content, `synthetic-${name}`, true);
 }
 
 console.log(

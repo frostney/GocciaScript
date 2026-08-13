@@ -106,8 +106,8 @@ jobs:
           crashes=$(find build/fuzz/out -path '*/crashes/id:*' 2>/dev/null | wc -l)
           hangs=$(find build/fuzz/out -path '*/hangs/id:*' 2>/dev/null | wc -l)
           echo "AFL crashes: $crashes, hangs: $hangs"
-          if [ "$crashes" -gt 0 ]; then
-            echo "::error::afl-fuzz recorded $crashes crashing input(s)"
+          if [ "$crashes" -gt 0 ] || [ "$hangs" -gt 0 ]; then
+            echo "::error::afl-fuzz recorded $crashes crashing input(s) and $hangs hanging input(s)"
             exit 1
           fi
 
@@ -164,7 +164,8 @@ jobs:
           ./build/GocciaTestRunnerHeaptrc tests $modeflag 2> build/heaptrc-${{ matrix.mode }}.log
           tail -20 build/heaptrc-${{ matrix.mode }}.log
           if grep -qE '[1-9][0-9]* unfreed memory blocks' build/heaptrc-${{ matrix.mode }}.log; then
-            echo "::warning::heaptrc reported unfreed blocks in ${{ matrix.mode }} mode"
+            echo "::error::heaptrc reported unfreed blocks in ${{ matrix.mode }} mode"
+            exit 1
           fi
 
       - name: Run suite under Valgrind memcheck

@@ -77,13 +77,9 @@ const
   RECV_BUF_SIZE = 8192;
 
 type
-  THTTPParsedURL = record
-    Scheme: string;
-    Host: string;
-    Port: Integer;
-    Path: string;
-  end;
-
+  // THTTPParsedURL and ParseHTTPURL now live in HTTPTypes (socket-free) so the
+  // fetch builtin's host validation and the Lakon WASM lane can canonicalize a
+  // URL without this unit's socket closure. Named here through the used unit.
   THTTPConnectionState = class
   private
     FAbandoned: Boolean;
@@ -159,141 +155,20 @@ end;
 {$ENDIF}
 
 // ---------------------------------------------------------------------------
-// Minimal URL parsing (self-contained, no engine dependencies)
+// URL parsing (ParseHTTPURL) lives in HTTPTypes so socket-free layers can use
+// it; named here through the used unit.
 // ---------------------------------------------------------------------------
 
-function ParseHTTPURL(const AURL: string;
-  const ARequireSupportedScheme: Boolean = True;
-  const AAllowUserInfo: Boolean = False): THTTPParsedURL;
-var
-  S, Rest: string;
-  I, AuthorityEnd, ColonCount, ParsedPort: Integer;
-  PortText: string;
-begin
-  Result.Scheme := '';
-  Result.Host := '';
-  Result.Port := 0;
-  Result.Path := '/';
-
-  S := AURL;
-  for I := 1 to Length(S) do
-    if (Ord(S[I]) < 32) or (Ord(S[I]) = 127) then
-      raise EHTTPError.Create('Invalid URL: control character');
-
-  // Scheme
-  I := Pos('://', S);
-  if I > 0 then
-  begin
-    Result.Scheme := LowerCase(Copy(S, 1, I - 1));
-    Rest := Copy(S, I + 3, Length(S));
-  end
-  else
-    raise EHTTPError.Create('Invalid URL: missing scheme');
-
-  if ARequireSupportedScheme and
-     (Result.Scheme <> 'http') and (Result.Scheme <> 'https') then
-    raise EHTTPError.Create('Unsupported scheme: ' + Result.Scheme);
-
-  AuthorityEnd := Length(Rest) + 1;
-  for I := 1 to Length(Rest) do
-    if Rest[I] in ['/', '?', '#'] then
-    begin
-      AuthorityEnd := I;
-      Break;
-    end;
-  if AuthorityEnd <= Length(Rest) then
-  begin
-    Result.Path := Copy(Rest, AuthorityEnd, MaxInt);
-    Rest := Copy(Rest, 1, AuthorityEnd - 1);
-    I := Pos('#', Result.Path);
-    if I > 0 then
-      Delete(Result.Path, I, MaxInt);
-    if (Result.Path <> '') and (Result.Path[1] = '?') then
-      Result.Path := '/' + Result.Path;
-  end;
-
-  I := LastDelimiter('@', Rest);
-  if I > 0 then
-  begin
-    if not AAllowUserInfo then
-      raise EHTTPError.Create('Invalid URL: userinfo is not allowed');
-    Rest := Copy(Rest, I + 1, MaxInt);
-  end;
-
-  // Parse host:port
-  if (Length(Rest) > 0) and (Rest[1] = '[') then
-  begin
-    // IPv6 — strip brackets for DNS resolution
-    I := Pos(']', Rest);
-    if I > 1 then
-    begin
-      Result.Host := LowerCase(Copy(Rest, 2, I - 2));
-      Rest := Copy(Rest, I + 1, Length(Rest));
-      if (Length(Rest) > 0) and (Rest[1] = ':') then
-      begin
-        PortText := Copy(Rest, 2, MaxInt);
-        ParsedPort := StrToIntDef(PortText, -1);
-        if (ParsedPort < 1) or (ParsedPort > 65535) then
-          raise EHTTPError.Create('Invalid URL: invalid port');
-        Result.Port := ParsedPort;
-      end
-      else if Rest <> '' then
-        raise EHTTPError.Create('Invalid URL: malformed IPv6 authority');
-    end
-    else
-      raise EHTTPError.Create('Invalid URL: malformed IPv6 authority');
-  end
-  else
-  begin
-    ColonCount := 0;
-    for I := 1 to Length(Rest) do
-      if Rest[I] = ':' then
-        Inc(ColonCount);
-    if ColonCount > 1 then
-      raise EHTTPError.Create('Invalid URL: IPv6 address must use brackets');
-    I := Pos(':', Rest);
-    if I > 0 then
-    begin
-      Result.Host := LowerCase(Copy(Rest, 1, I - 1));
-      PortText := Copy(Rest, I + 1, MaxInt);
-      ParsedPort := StrToIntDef(PortText, -1);
-      if (ParsedPort < 1) or (ParsedPort > 65535) then
-        raise EHTTPError.Create('Invalid URL: invalid port');
-      Result.Port := ParsedPort;
-    end
-    else
-      Result.Host := LowerCase(Rest);
-  end;
-
-  if Result.Host = '' then
-    raise EHTTPError.Create('Invalid URL: empty host');
-
-  // Default ports
-  if Result.Port = 0 then
-  begin
-    if Result.Scheme = 'https' then
-      Result.Port := 443
-    else
-      Result.Port := 80;
-  end;
-
-  if Result.Path = '' then
-    Result.Path := '/';
-end;
-
+// Re-exported from HTTPTypes so existing HTTPClient consumers keep naming
+// these unchanged; the socket-free implementations live there.
 function HTTPURLHost(const AURL: string): string;
 begin
-  // Host validation is synchronous, but fetch network failures (including an
-  // unsupported scheme) are delivered through the returned promise. Parse the
-  // authority canonically here while leaving scheme enforcement to DoRequest.
-  Result := ParseHTTPURL(AURL, False).Host;
+  Result := HTTPTypes.HTTPURLHost(AURL);
 end;
 
 function HTTPURLAuditHost(const AURL: string): string;
 begin
-  // This parser is only for capability-audit subjects. It canonicalizes the
-  // destination after userinfo without relaxing request validation.
-  Result := ParseHTTPURL(AURL, False, True).Host;
+  Result := HTTPTypes.HTTPURLAuditHost(AURL);
 end;
 
 // ---------------------------------------------------------------------------
