@@ -115,3 +115,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0103 — Layer untrusted execution boundaries](0103-layered-untrusted-execution-boundaries.md)
 - [0104 — WHATWG EventTarget base for AbortSignal](0104-whatwg-eventtarget-base.md)
 - [0105 — Argument collections root their elements](0105-argument-collections-root-their-elements.md)
+- [0106 — Scope the sandbox-hardening programme to finding bugs over jailing them](0106-sandbox-hardening-scope.md)

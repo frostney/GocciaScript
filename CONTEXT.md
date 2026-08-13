@@ -55,8 +55,20 @@ A versioned structured host event emitted when source reaches a capability bound
 _Avoid_: Console log, operation result, security policy callback.
 
 **Capability audit sink**:
-The engine-owned host callback that receives capability audit events synchronously. Sink failures propagate and stop execution; CLI hosts provide a thread-safe JSONL sink through `--audit-log`.
-_Avoid_: Runtime extension, script-visible logger, best-effort telemetry.
+The engine-owned host callback that receives capability audit events synchronously. Sink failures propagate and stop execution; CLI hosts provide a thread-safe JSONL sink through `--audit-log`. A sink is one delivery route for capability audit events, not the only one: sandbox hosts may also receive the same events in the structured run result alongside the filesystem diff.
+_Avoid_: Runtime extension, script-visible logger, best-effort telemetry, effect log.
+
+**Resource limit**:
+The umbrella for engine-enforced execution ceilings: instruction limit, execution timeout, memory budget, and capability budget. A resource limit is enforced by the engine against the running program as a whole, is configured by the host rather than the program, and is not catchable from source. Exceeding one ends execution rather than producing a value source can handle.
+_Avoid_: Sandbox permission, capability, quota, script error.
+
+**Memory budget**:
+The per-engine ceiling on allocated bytes, configured through `--max-memory`. It is enforced two ways: allocation sites with a known owner charge against it and release on destruction, while native growth points with no owner are gated — checked before allocating, never charged. Gating bounds any single allocation but not the aggregate of many small ones, so a memory budget bounds peak allocation requests rather than guaranteeing steady-state residency.
+_Avoid_: GC heap size, resident set limit, virtual filesystem quota.
+
+**Capability budget**:
+A bound on how often or how much an installed capability may be exercised — at most N invocations, or up to M bytes — after which further use is refused. It narrows a grant that would otherwise be unlimited once installed, and is distinct from whether the capability is installed at all.
+_Avoid_: Capability audit event, rate limit, allowlist.
 
 **Seed baseline**:
 An explicitly imported snapshot used to initialise a sandbox-visible filesystem. Top-level sandbox seeds copy from host paths or inline seed config entries; nested child sandbox seeds copy from the parent virtual filesystem or inline child entries. A seed baseline is not a live mount and does not make the source path ambiently available to running source.
