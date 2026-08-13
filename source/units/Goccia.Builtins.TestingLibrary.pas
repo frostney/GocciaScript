@@ -996,26 +996,6 @@ begin
     RemoveTempRootIfNeeded(ACollection.GetElement(I));
 end;
 
-{ True while an uncatchable resource-limit exception is unwinding through the
-  current finally block. FPC's ExceptObject is non-nil only during
-  exception-driven unwind, so a normal pass or an ordinary recorded failure
-  leaves it nil. This matters for the per-test teardown: a hard memory limit
-  (refused allocation) and a describe/file-scope timeout are re-raised from the
-  test-execution handler and tear the run down uncatchably, whereas an ordinary
-  failure -- including a test-scope timeout, which the runner catches and
-  records rather than re-raising -- does not unwind here. When this returns True
-  the guest afterEach / onTestFinished hooks must be skipped (guest code may not
-  execute past a hard limit); engine bookkeeping still runs so no callback roots
-  leak as the exception propagates to the host. }
-function UncatchableLimitUnwinding: Boolean;
-var
-  InFlight: TObject;
-begin
-  InFlight := ExceptObject;
-  Result := (InFlight is TGocciaMemoryLimitError)
-    or (InFlight is TGocciaTimeoutError);
-end;
-
 { TGocciaRegisteredEntry }
 
 constructor TGocciaRegisteredEntry.Create(const AParentSuite: TGocciaTestSuite;
@@ -4026,6 +4006,7 @@ var
   RejectionReason: string;
   ExceptionDetail, ExceptionSummary: string;
   FailureRecorded: Boolean;
+  TerminalLimitUnwinding: Boolean;
   EffectiveSuiteName: string;
   HookFailed: Boolean;
   HookMessage: string;
@@ -4143,6 +4124,7 @@ begin
         RunCallbacks(BeforeCallbacks);
 
         FailureRecorded := False;
+        TerminalLimitUnwinding := False;
         TestResult := nil;
         try
           { Per-test deadline. Push unconditionally — a 0 value
@@ -4233,7 +4215,10 @@ begin
                   FailureRecorded := True;
                 end
                 else
+                begin
+                  TerminalLimitUnwinding := True;
                   raise;
+                end;
               end;
               { A refused allocation is uncatchable and must unwind to the host,
                 not be converted into a test failure and swallowed here. Pending
@@ -4245,6 +4230,7 @@ begin
                 if (TGocciaMicrotaskQueue.Instance <> nil) then
                   TGocciaMicrotaskQueue.Instance.ClearQueue;
                 DiscardFetchCompletions;
+                TerminalLimitUnwinding := True;
                 raise;
               end;
               on E: Exception do
@@ -4287,10 +4273,15 @@ begin
             guest afterEach / onTestFinished hooks must NOT run -- the limit has
             already fired and guest code may not execute past it. Keep the
             engine bookkeeping (root removal / Clear) so no callback roots leak
-            while the exception unwinds to the host. On every normal path (pass,
-            ordinary failure, recorded test-scope timeout) ExceptObject is nil,
-            so the hooks run exactly as before. }
-          if UncatchableLimitUnwinding then
+            while the exception unwinds to the host. The flag is set explicitly
+            by the two terminal re-raise arms above rather than inferred from
+            the RTL ExceptObject: on SEH targets (i386-win32) ExceptObject is
+            populated only inside except handlers, not while a finally runs
+            during unwinding, so an ExceptObject-based check silently ran the
+            hooks there. Every normal path (pass, ordinary failure, recorded
+            test-scope timeout) leaves the flag False, so the hooks run exactly
+            as before. }
+          if TerminalLimitUnwinding then
           begin
             if FOnTestFinishedCallbacks.Length > 0 then
             begin
