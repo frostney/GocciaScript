@@ -525,6 +525,12 @@ resourcestring
   SErrorCannotDestructureNotObject = 'Cannot destructure %s as it is not an object';
   SErrorMaxCallStackExceeded = 'Maximum call stack size exceeded';
 
+  // Module loading errors
+  // Names no module address on purpose: the only address available where this
+  // is raised is the resolved one, which the default resolver expands against
+  // the host filesystem. See Goccia.Modules.Errors.
+  SErrorModuleLoadingUnsupported = 'Cannot load module: no module content provider is configured';
+
   // Uint8Array encoding errors
   SErrorRequiresUint8Array = '%s requires that |this| be a Uint8Array';
   SErrorInvalidAlphabet = 'Invalid alphabet: expected "base64" or "base64url"';

@@ -83,7 +83,14 @@ containing them.
   callback is set, JavaScriptCore's default loader with `Could not open the
   module`, and SpiderMonkey with `Module load hook not set`. `TypeError` is the
   convention for a *configured* loader that failed (HTML, Deno), which is a
-  different condition and should stay distinguishable.
+  different condition and should stay distinguishable. The error carries `code`
+  and nothing else: unlike the sandbox filesystem errors of
+  [ADR 0092](0092-sandbox-filesystem-error-contract.md), whose `path` is a VFS
+  address the guest itself named, the only address available at this refusal is
+  the resolver's output — a host filesystem path by default — and the engine
+  that has no provider is precisely the one running untrusted source. It also
+  bounds the contract: resolution runs before retrieval, so a specifier that
+  never resolves fails earlier and carries no code at all.
 
 ## Consequences
 
