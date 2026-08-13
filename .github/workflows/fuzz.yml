@@ -1,0 +1,193 @@
+name: Fuzz and memory safety
+
+# Coverage-blind crash fuzzing plus memory-safety tooling over the JavaScript
+# suite. Scheduled rather than per-PR: a useful fuzz run takes far longer than
+# a PR should wait, and Valgrind slows the suite by roughly an order of
+# magnitude. PR-time coverage stays with the ordinary suite in pr.yml.
+#
+# Cadence: nightly (03:00 UTC). Manual trigger available via workflow_dispatch,
+# where the fuzz duration can be raised for a longer campaign.
+#
+# Reproducing a finding locally is documented in
+# docs/contributing/tooling.md#fuzzing-and-memory-safety.
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      fuzz-seconds:
+        description: 'Seconds to fuzz per run'
+        required: false
+        default: '900'
+
+permissions:
+  contents: read
+
+env:
+  FUZZ_SECONDS: ${{ github.event.inputs.fuzz-seconds || '900' }}
+
+jobs:
+  # ── Coverage-blind fuzzing ───────────────────────────────────────────
+  #
+  # FPC emits no AFL instrumentation, so afl-fuzz runs in non-instrumented
+  # (-n) mode. That trades coverage feedback for pure random mutation: it
+  # still finds parser and lexer faults, but it will not discover deep
+  # execution paths on its own. The seed corpus is what carries coverage
+  # here, which is why it is derived from the real test suites.
+  #
+  # Instrumented builds were evaluated and rejected for now: afl-gcc-style
+  # instrumentation requires either an FPC assembler pass rewrite or building
+  # via -Cg + a GCC-compatible IR, neither of which FPC 3.2.2 exposes. The
+  # tractable future path is afl-clang-lto over LLVM bitcode from an LLVM FPC
+  # backend build; recorded as a follow-up rather than attempted here.
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      - name: Install FPC and AFL++
+        run: |
+          sudo apt-get update
+          sudo apt-get install fpc afl++ -qq > /dev/null
+
+      - name: Build fuzz harness
+        run: ./build.pas fuzzharness
+
+      - name: Build seed corpus
+        run: bun run scripts/build-fuzz-corpus.ts --verbose
+
+      - name: Verify the harness reports faults nonzero
+        # Guards against the harness silently swallowing every outcome, which
+        # would make a green fuzz run meaningless.
+        run: |
+          if ./build/GocciaFuzzHarness --self-test-fault; then
+            echo "::error::Harness self-test returned 0; fault path is broken"
+            exit 1
+          fi
+
+      - name: Sweep the seed corpus
+        # Every seed is known-good input from our own suites, so any nonzero
+        # exit here is a finding even before mutation begins.
+        run: |
+          status=0
+          mkdir -p build/fuzz/findings
+          for seed in build/fuzz/corpus/*.js; do
+            if ! ./build/GocciaFuzzHarness "$seed" > "build/fuzz/findings/$(basename "$seed").log" 2>&1; then
+              echo "::error::Seed sweep fault: $seed"
+              cp "$seed" build/fuzz/findings/
+              status=1
+            else
+              rm -f "build/fuzz/findings/$(basename "$seed").log"
+            fi
+          done
+          exit $status
+
+      - name: Fuzz
+        run: |
+          # AFL refuses to run when the host uses a core-dump handler pipe.
+          echo core | sudo tee /proc/sys/kernel/core_pattern > /dev/null
+          mkdir -p build/fuzz/out
+          # -n: non-instrumented. AFL_SKIP_CPUFREQ/AFL_NO_AFFINITY are the
+          # standard CI accommodations for shared runners.
+          AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
+          timeout "${FUZZ_SECONDS}" afl-fuzz -n \
+            -i build/fuzz/corpus \
+            -o build/fuzz/out \
+            -- ./build/GocciaFuzzHarness @@ || true
+
+      - name: Report crashes
+        run: |
+          crashes=$(find build/fuzz/out -path '*/crashes/id:*' 2>/dev/null | wc -l)
+          hangs=$(find build/fuzz/out -path '*/hangs/id:*' 2>/dev/null | wc -l)
+          echo "AFL crashes: $crashes, hangs: $hangs"
+          if [ "$crashes" -gt 0 ]; then
+            echo "::error::afl-fuzz recorded $crashes crashing input(s)"
+            exit 1
+          fi
+
+      - name: Upload reproducers
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-reproducers
+          path: |
+            build/fuzz/out/**/crashes/**
+            build/fuzz/out/**/hangs/**
+            build/fuzz/findings/**
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ── Memory safety over the real suite ────────────────────────────────
+  #
+  # heaptrc and Valgrind answer different questions: heaptrc reports FPC-level
+  # leaks and double-frees from inside the process, Valgrind catches invalid
+  # reads and writes the allocator never sees. Both run the full JavaScript
+  # suite because that is the only workload exercising every builtin.
+  memory-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [interpreter, bytecode]
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Install FPC and Valgrind
+        run: |
+          sudo apt-get update
+          sudo apt-get install fpc valgrind -qq > /dev/null
+
+      - name: Build test runner with heaptrc
+        # -gh links the heaptrc unit; the trailing summary goes to stderr on
+        # exit and names every unfreed block with its allocation site.
+        run: |
+          ./build.pas testrunner
+          fpc @config.cfg -gh -gl -FUbuild/compiled/targets/testrunner-heaptrc \
+            -obuild/GocciaTestRunnerHeaptrc source/app/GocciaTestRunner.dpr
+
+      - name: Run suite under heaptrc
+        id: heaptrc
+        run: |
+          modeflag=""
+          if [ "${{ matrix.mode }}" = "bytecode" ]; then modeflag="--mode=bytecode"; fi
+          # HEAPTRC halt-on-error would abort mid-suite; capture and inspect
+          # the summary instead so a leak reports alongside the test results.
+          ./build/GocciaTestRunnerHeaptrc tests $modeflag 2> build/heaptrc-${{ matrix.mode }}.log
+          tail -20 build/heaptrc-${{ matrix.mode }}.log
+          if grep -qE '[1-9][0-9]* unfreed memory blocks' build/heaptrc-${{ matrix.mode }}.log; then
+            echo "::warning::heaptrc reported unfreed blocks in ${{ matrix.mode }} mode"
+          fi
+
+      - name: Run suite under Valgrind memcheck
+        # A full suite run under memcheck is slow; --error-exitcode makes any
+        # invalid access fail the job rather than scroll past.
+        run: |
+          modeflag=""
+          if [ "${{ matrix.mode }}" = "bytecode" ]; then modeflag="--mode=bytecode"; fi
+          valgrind \
+            --tool=memcheck \
+            --error-exitcode=42 \
+            --errors-for-leak-kinds=none \
+            --leak-check=no \
+            --track-origins=yes \
+            --log-file=build/valgrind-${{ matrix.mode }}.log \
+            ./build/GocciaTestRunner tests $modeflag
+          tail -40 build/valgrind-${{ matrix.mode }}.log
+
+      - name: Upload memory-safety logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: memory-safety-${{ matrix.mode }}
+          path: build/*.log
+          if-no-files-found: ignore
+          retention-days: 30

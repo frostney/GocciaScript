@@ -205,3 +205,107 @@ end;
 ```
 
 This works because `Int64` and `Double` share the same sign bit position (bit 63) at the integer level, regardless of byte ordering.
+
+## Fuzzing and Memory Safety
+
+`GocciaFuzzHarness` drives a single input through lex, parse, and **both**
+executors under tight instruction, timeout, memory, and stack bounds. It exists
+because the engine is a from-scratch, manually memory-managed implementation
+whose stated purpose is running adversarial input — see
+[VISION.md](../../VISION.md).
+
+The harness classifies every outcome the engine models — parse error, runtime
+error, script throw, instruction limit, timeout, memory limit, denied module —
+as **normal**, and exits `0`. Only an outcome the engine does *not* model
+(an unexpected Pascal exception, an access violation, a heap abort) exits
+nonzero. That is what makes a nonzero exit a finding rather than noise.
+
+### Building and running
+
+```bash
+./build.pas fuzzharness
+./build/GocciaFuzzHarness --verbose path/to/input.js
+```
+
+Read from stdin with `-`. `--verbose` prints the per-executor classification;
+without it the harness is silent and communicates only through its exit code,
+which is what `afl-fuzz` needs.
+
+### Seed corpus
+
+```bash
+bun run scripts/build-fuzz-corpus.ts --verbose
+```
+
+Seeds are derived from `fixtures/`, `tests/`, and `examples/`, deduplicated by
+content hash and capped at 8 KiB, plus a small set of synthetic seeds for
+shapes the repo's own tests avoid by construction (deep nesting, unterminated
+literals, mixed dialect features). Set `TEST262_PATH` to include a strided
+sample of a local test262 checkout:
+
+```bash
+TEST262_PATH=../test262 bun run scripts/build-fuzz-corpus.ts
+```
+
+### Fuzzing locally
+
+```bash
+afl-fuzz -n -i build/fuzz/corpus -o build/fuzz/out -- ./build/GocciaFuzzHarness @@
+```
+
+The `-n` is **not** optional. FPC emits no AFL instrumentation, so AFL++ runs
+in non-instrumented ("dumb") mode: pure random mutation with no coverage
+feedback. Practically this means the seed corpus carries the coverage, which is
+why it is derived from the real suites rather than generated. Instrumented
+builds were evaluated and deferred — `afl-gcc`-style instrumentation needs
+either an FPC assembler-pass rewrite or a GCC-compatible IR, and FPC 3.2.2
+exposes neither. The tractable path is `afl-clang-lto` over bitcode from an
+LLVM-backend FPC build.
+
+### Reproducing a finding
+
+A reproducer from CI or from `build/fuzz/out/default/crashes/` replays directly:
+
+```bash
+./build/GocciaFuzzHarness --verbose build/fuzz/out/default/crashes/id:000000,...
+```
+
+The run is deterministic — same input, same classification, same exit code.
+The harness prints a backtrace on the finding path. On Linux the frames carry
+file and line. On macOS FPC emits DWARF into a separate `.dSYM` it does not
+read back, so frames print as bare addresses; resolve them with:
+
+```bash
+atos -o build/GocciaFuzzHarness 0x102d69c6c
+```
+
+To check the fault path itself is intact — useful when a fuzz run comes back
+suspiciously clean — inject a fault:
+
+```bash
+./build/GocciaFuzzHarness --self-test-fault
+```
+
+That must print a backtrace and exit `1`.
+
+### Modules are denied, deliberately
+
+The harness installs a content provider that refuses every module load. A fuzz
+input must not be able to reach the host filesystem — without this,
+`import "/etc/passwd"` would be a file read driven by attacker-shaped input.
+Inputs containing `import` are therefore classified `module-denied`, and the
+harness does not exercise the module loader.
+
+### Memory safety
+
+The scheduled [fuzz workflow](../../.github/workflows/fuzz.yml) runs the full
+JavaScript suite under two tools that answer different questions:
+
+| Tool | Catches | Invocation |
+|------|---------|-----------|
+| **heaptrc** (`-gh`) | FPC-level leaks, double frees, unfreed blocks with allocation sites | `fpc @config.cfg -gh -gl -oBIN source/app/GocciaTestRunner.dpr` |
+| **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `valgrind --tool=memcheck --error-exitcode=42 ./build/GocciaTestRunner tests` |
+
+Both run on Linux only. Valgrind slows the suite by roughly an order of
+magnitude, which is why neither runs per-PR. Findings upload as artifacts with
+a 30-day retention.
