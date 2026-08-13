@@ -143,6 +143,16 @@ directions carry **length-prefixed frames**. There is no shared memory in v1.
   (`--fs-quota-bytes`) large enough to inflate the baseline is the common cause,
   but the check is on the whole frame so no field can silently push the request
   over. With the default configuration this cannot happen.
+- **Exact-length pipe I/O:** a successful pipe `read` or `write` may transfer
+  fewer bytes than requested — that is normal pipe behaviour, not an error. Both
+  sides therefore read and write the 4-byte prefix and the payload in
+  **exact-length loops**: continue issuing the operation for the remaining bytes
+  until the requested count has been transferred, EOF is reached, or a genuine
+  error occurs. `EINTR` (and `EAGAIN` when non-blocking descriptors are used) is
+  retried, never surfaced. Only after EOF or a genuine error does the failure
+  taxonomy apply (§4): a short read is never itself classified — a prefix or
+  payload cut short by EOF is an incomplete frame (`sfkChildProcessCrash` when
+  reading from the child; `sfkHostError` when the parent's own write fails).
 - **Single-frame, non-streaming:** each direction sends exactly one frame per
   run. There is no framing for incremental or streamed output in v1; streaming
   frames are an out-of-scope follow-up (§7).

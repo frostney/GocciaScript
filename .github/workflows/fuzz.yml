@@ -95,8 +95,12 @@ jobs:
           mkdir -p build/fuzz/out
           # -n: non-instrumented. AFL_SKIP_CPUFREQ/AFL_NO_AFFINITY are the
           # standard CI accommodations for shared runners.
+          # -t 5000: the harness's own budget is 1000ms and a harness timeout
+          # is a NORMAL exit-0 outcome, so AFL's exec threshold must sit safely
+          # above it — otherwise process overhead around a legitimate slow input
+          # lands it in hangs/ and false-fails the job.
           AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
-          timeout "${FUZZ_SECONDS}" afl-fuzz -n \
+          timeout "${FUZZ_SECONDS}" afl-fuzz -n -t 5000 \
             -i build/fuzz/corpus \
             -o build/fuzz/out \
             -- ./build/GocciaFuzzHarness @@ || true

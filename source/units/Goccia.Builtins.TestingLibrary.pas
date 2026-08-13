@@ -3848,9 +3848,16 @@ begin
               TGocciaUndefinedLiteralValue.UndefinedValue);
         except
           { A refused allocation is uncatchable and must unwind to the host on
-            every execution path, not be converted into a describe failure. }
+            every execution path, not be converted into a describe failure.
+            Pending host work is cleared before the unwind for the same reason
+            as the per-test arm: later files run in this process. }
           on E: TGocciaMemoryLimitError do
+          begin
+            if (TGocciaMicrotaskQueue.Instance <> nil) then
+              TGocciaMicrotaskQueue.Instance.ClearQueue;
+            DiscardFetchCompletions;
             raise;
+          end;
           on E: Exception do
           begin
             if not FSuppressOutput then
@@ -4229,9 +4236,17 @@ begin
                   raise;
               end;
               { A refused allocation is uncatchable and must unwind to the host,
-                not be converted into a test failure and swallowed here. }
+                not be converted into a test failure and swallowed here. Pending
+                host work is cleared first: the host catches this error and later
+                files still run in the same process, so stale microtasks or fetch
+                completions from the aborted file must not leak into them. }
               on E: TGocciaMemoryLimitError do
+              begin
+                if (TGocciaMicrotaskQueue.Instance <> nil) then
+                  TGocciaMicrotaskQueue.Instance.ClearQueue;
+                DiscardFetchCompletions;
                 raise;
+              end;
               on E: Exception do
               begin
                 if (TGocciaMicrotaskQueue.Instance <> nil) then
