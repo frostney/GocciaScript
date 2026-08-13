@@ -143,6 +143,23 @@ directions carry **length-prefixed frames**. There is no shared memory in v1.
   (`--fs-quota-bytes`) large enough to inflate the baseline is the common cause,
   but the check is on the whole frame so no field can silently push the request
   over. With the default configuration this cannot happen.
+- **Exact-length pipe I/O:** a successful pipe `read` or `write` may transfer
+  fewer bytes than requested — that is normal pipe behaviour, not an error. Both
+  sides therefore read and write the 4-byte prefix and the payload in
+  **exact-length loops**: continue issuing the operation for the remaining bytes
+  until the requested count has been transferred, EOF is reached, or a genuine
+  error occurs. v1 uses **blocking descriptors**, so `EAGAIN` does not arise; an
+  implementation that nevertheless chooses non-blocking descriptors must wait
+  for readiness (`select`/`poll`) before reissuing the operation rather than
+  spin on `EAGAIN`. `EINTR` is retried, never surfaced — but the parent checks
+  its deadline and kill state **before** each retry, because a signal
+  interrupting a blocked read is exactly how the wall-clock deadline reaches a
+  single-threaded parent: if the deadline has expired it hard-kills the child
+  and classifies (§4) instead of resuming the read. The child has no deadline of
+  its own and retries unconditionally. Only after EOF or a genuine error does the failure
+  taxonomy apply (§4): a short read is never itself classified — a prefix or
+  payload cut short by EOF is an incomplete frame (`sfkChildProcessCrash` when
+  reading from the child; `sfkHostError` when the parent's own write fails).
 - **Single-frame, non-streaming:** each direction sends exactly one frame per
   run. There is no framing for incremental or streamed output in v1; streaming
   frames are an out-of-scope follow-up (§7).
