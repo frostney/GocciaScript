@@ -536,6 +536,7 @@ uses
   Goccia.Execution.CallSite,
   Goccia.ImportMeta,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
   Goccia.NumberConversion,
   Goccia.NumberExponentiation,
@@ -3823,6 +3824,8 @@ begin
       raise;
     on E: TGocciaInstructionLimitError do
       raise;
+    on E: TGocciaMemoryLimitError do
+      raise;
     on E: EGocciaCapabilityAuditDeliveryError do
       raise;
     on E: Exception do
@@ -3911,6 +3914,8 @@ begin
     on E: TGocciaTimeoutError do
       raise;
     on E: TGocciaInstructionLimitError do
+      raise;
+    on E: TGocciaMemoryLimitError do
       raise;
     on E: EGocciaCapabilityAuditDeliveryError do
       raise;
@@ -4010,6 +4015,8 @@ begin
     on E: TGocciaTimeoutError do
       raise;
     on E: TGocciaInstructionLimitError do
+      raise;
+    on E: TGocciaMemoryLimitError do
       raise;
     on E: EGocciaCapabilityAuditDeliveryError do
       raise;
@@ -4931,6 +4938,8 @@ begin
     on E: TGocciaTimeoutError do
       raise;
     on E: TGocciaInstructionLimitError do
+      raise;
+    on E: TGocciaMemoryLimitError do
       raise;
     on E: EGocciaCapabilityAuditDeliveryError do
       raise;
@@ -9851,38 +9860,52 @@ var
   I: Integer;
   Key: string;
   MemberValue: TGocciaValue;
+  EnumRoot: TGocciaTempRoot;
+  PairRoot: TGocciaTempRoot;
 begin
   if not (AValue is TGocciaObjectValue) then
     Exit(AValue);
 
-  EnumObj := TGocciaEnumValue.Create(AName);
-  Entries := TGocciaArrayValue.Create;
-  EnumObj.Entries := Entries;
+  { Each key string is charged against the memory ceiling — a GC safe
+    point — so the enum object (which reaches Entries) and the in-flight
+    pair need temp roots. }
+  InitializeTempRoot(EnumRoot);
+  InitializeTempRoot(PairRoot);
+  try
+    EnumObj := TGocciaEnumValue.Create(AName);
+    AddTempRootIfNeeded(EnumRoot, EnumObj);
+    Entries := TGocciaArrayValue.Create;
+    EnumObj.Entries := Entries;
 
-  Names := TGocciaObjectValue(AValue).GetOwnPropertyNames;
-  for I := 0 to High(Names) do
-  begin
-    Key := Names[I];
-    MemberValue := TGocciaObjectValue(AValue).GetProperty(Key);
+    Names := TGocciaObjectValue(AValue).GetOwnPropertyNames;
+    for I := 0 to High(Names) do
+    begin
+      Key := Names[I];
+      MemberValue := TGocciaObjectValue(AValue).GetProperty(Key);
 
-    if not (MemberValue is TGocciaNumberLiteralValue) and
-       not (MemberValue is TGocciaStringLiteralValue) and
-       not (MemberValue is TGocciaSymbolValue) then
-      ThrowTypeError(Format(SErrorEnumMemberType, [Key]),
-        SSuggestEnumValueType);
+      if not (MemberValue is TGocciaNumberLiteralValue) and
+         not (MemberValue is TGocciaStringLiteralValue) and
+         not (MemberValue is TGocciaSymbolValue) then
+        ThrowTypeError(Format(SErrorEnumMemberType, [Key]),
+          SSuggestEnumValueType);
 
-    EnumObj.DefineProperty(Key,
-      TGocciaPropertyDescriptorData.Create(MemberValue, [pfEnumerable]));
+      EnumObj.DefineProperty(Key,
+        TGocciaPropertyDescriptorData.Create(MemberValue, [pfEnumerable]));
 
-    PairArr := TGocciaArrayValue.Create;
-    PairArr.Elements.Add(TGocciaStringLiteralValue.Create(Key));
-    PairArr.Elements.Add(MemberValue);
-    Entries.Elements.Add(PairArr);
+      PairArr := TGocciaArrayValue.Create;
+      AddTempRootIfNeeded(PairRoot, PairArr);
+      PairArr.Elements.Add(TGocciaStringLiteralValue.Create(Key));
+      PairArr.Elements.Add(MemberValue);
+      Entries.Elements.Add(PairArr);
+    end;
+
+    InitializeEnumSymbols(EnumObj);
+    EnumObj.PreventExtensions;
+    Result := EnumObj;
+  finally
+    RemoveTempRootIfNeeded(PairRoot);
+    RemoveTempRootIfNeeded(EnumRoot);
   end;
-
-  InitializeEnumSymbols(EnumObj);
-  EnumObj.PreventExtensions;
-  Result := EnumObj;
 end;
 
 function IsBytecodePrivateKey(const AKey: string): Boolean;
@@ -16914,6 +16937,8 @@ begin
               raise;
             on E: TGocciaInstructionLimitError do
               raise;
+            on E: TGocciaMemoryLimitError do
+              raise;
             on E: EGocciaCapabilityAuditDeliveryError do
               raise;
             on E: Exception do
@@ -16987,6 +17012,8 @@ begin
             on E: TGocciaTimeoutError do
               raise;
             on E: TGocciaInstructionLimitError do
+              raise;
+            on E: TGocciaMemoryLimitError do
               raise;
             on E: EGocciaCapabilityAuditDeliveryError do
               raise;
@@ -17112,6 +17139,8 @@ begin
             on E: TGocciaTimeoutError do
               raise;
             on E: TGocciaInstructionLimitError do
+              raise;
+            on E: TGocciaMemoryLimitError do
               raise;
             on E: EGocciaCapabilityAuditDeliveryError do
               raise;

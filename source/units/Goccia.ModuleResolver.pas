@@ -12,7 +12,7 @@ uses
 const
   { Script-visible resolution failures name the specifier exactly as the import
     statement wrote it. The expanded host candidate never enters the message —
-    it travels in EModuleNotFound.ResolvedCandidatePath instead (ADR 0106). }
+    it travels in EModuleNotFound.ResolvedCandidatePath instead (ADR 0108). }
   MODULE_NOT_FOUND_MESSAGE_FORMAT = 'Module not found: "%s"';
 
 type

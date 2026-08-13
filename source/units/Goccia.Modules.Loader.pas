@@ -2047,7 +2047,7 @@ begin
      (FVirtualModules.GetContentType(ResolvedPath, VirtualContentType) and
       (VirtualContentType <> vmctJavaScript)) then
     { Names the specifier as written, never ResolvedPath: this message reaches
-      script through the dynamic-import rejection path (ADR 0106). }
+      script through the dynamic-import rejection path (ADR 0108). }
     raise TGocciaSyntaxError.Create(
       Format('Module source is not available for "%s"', [RequestedModulePath]),
       0, 0, AImportingFilePath, nil);
@@ -2521,7 +2521,7 @@ begin
         ParsedValue := JSONParser.Parse(Content.Text);
       except
         { Names the specifier as written, never AResolvedPath: this message
-          reaches script through the import rejection path (ADR 0106). The
+          reaches script through the import rejection path (ADR 0108). The
           expanded path stays in the host-only FileName field. }
         on E: EGocciaJSONParseError do
           raise TGocciaRuntimeError.Create(
@@ -2579,17 +2579,27 @@ var
   Module: TGocciaModule;
   NormalizedText: string;
   TextValue: TGocciaValue;
+  TextRoot: TGocciaTempRoot;
+  MetadataRoot: TGocciaTempRoot;
 begin
   Content := LoadResolvedContent(AResolvedPath);
   try
     NormalizedText := NormalizeNewlinesToLF(Content.Text);
+    { The metadata strings below are GC safe points; the content string (which
+      can be large) and the metadata object are reachable only from this frame
+      until the module owns them. }
+    InitializeTempRoot(TextRoot);
+    InitializeTempRoot(MetadataRoot);
+    try
     TextValue := TGocciaStringLiteralValue.Create(NormalizedText);
+    AddTempRootIfNeeded(TextRoot, TextValue);
 
     Metadata := nil;
     if not ADefaultOnly then
     begin
       Metadata := TGocciaObjectValue.Create(
         TGocciaObjectValue.SharedObjectPrototype, 5);
+      AddTempRootIfNeeded(MetadataRoot, Metadata);
       Metadata.SetProperty(PROP_KIND, TGocciaStringLiteralValue.Create('text'));
       Metadata.SetProperty(PROP_PATH,
         TGocciaStringLiteralValue.Create(AResolvedPath));
@@ -2619,6 +2629,10 @@ begin
     finally
       if not LoadSucceeded then
         Module.Free;
+    end;
+    finally
+      RemoveTempRootIfNeeded(MetadataRoot);
+      RemoveTempRootIfNeeded(TextRoot);
     end;
   finally
     Content.Free;

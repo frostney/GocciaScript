@@ -41,7 +41,6 @@ implementation
 uses
   SysUtils,
 
-  HTTPClient,
   HTTPTypes,
 
   Goccia.Constants.ConstructorNames,
@@ -50,6 +49,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.FetchManager,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.Timeout,
   Goccia.Values.AbortValue,
   Goccia.Values.ErrorHelper,
@@ -241,6 +241,8 @@ begin
     on E: TGocciaTimeoutError do
       raise;
     on E: TGocciaInstructionLimitError do
+      raise;
+    on E: TGocciaMemoryLimitError do
       raise;
     on E: Exception do
       Promise.Reject(CreateErrorObject('TypeError', 'fetch failed: ' + E.Message));

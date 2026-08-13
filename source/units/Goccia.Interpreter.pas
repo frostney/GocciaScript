@@ -114,6 +114,9 @@ uses
   Goccia.Coverage,
   Goccia.GarbageCollector,
   Goccia.Generator.Continuation,
+  Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
+  Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -241,6 +244,16 @@ begin
       on E: EGocciaAsyncAwaitSuspend do
         AttachAwait(E);
       on E: EGocciaCapabilityAuditDeliveryError do
+        raise;
+      { The limit family is opaque to the guest everywhere else, and a
+        top-level-await module body is no exception: rejecting the module's
+        promise with it would hand the ceiling back to script code as an
+        ordinary Error for a `.catch` to absorb. }
+      on E: TGocciaTimeoutError do
+        raise;
+      on E: TGocciaInstructionLimitError do
+        raise;
+      on E: TGocciaMemoryLimitError do
         raise;
       on E: Exception do
         RejectWithException(E);

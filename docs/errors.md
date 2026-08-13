@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-- **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus `TimeoutError` for the `--timeout` option
+- **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus the uncatchable resource ceilings `TimeoutError` (`--timeout`), `InstructionLimitError` (`--max-instructions`), and `MemoryLimitError` (`--max-memory`)
 - **Parser errors** -- Displayed with source context, a caret pointing to the exact column, and optional suggestion text (e.g., "Use 'let' or 'const' instead")
 - **Runtime errors** -- Carry `name`, `message`, `stack`, and optional `cause`; catchable with `try`/`catch`/`finally`
 - **Sandbox filesystem errors** -- Use real `Error` objects with Node-shaped `code`, `errno`, `path`, `syscall`, and optional `dest` metadata
@@ -14,7 +14,7 @@
 
 ## Error Types
 
-GocciaScript supports the standard ECMAScript error constructors plus two additional types. All JavaScript-visible error types inherit from `Error` and work with `instanceof`. `TimeoutError` is CLI-only and not exposed as a JavaScript constructor.
+GocciaScript supports the standard ECMAScript error constructors plus the CLI-only resource-ceiling types below. All JavaScript-visible error types inherit from `Error` and work with `instanceof`. `TimeoutError`, `InstructionLimitError`, and `MemoryLimitError` are CLI-only and not exposed as JavaScript constructors.
 
 | Type | Thrown when | MDN |
 |------|-----------|-----|
@@ -27,6 +27,15 @@ GocciaScript supports the standard ECMAScript error constructors plus two additi
 | [`AggregateError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) | Multiple errors wrapped together; used by `Promise.any` when all promises reject | [AggregateError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) |
 | [`SuppressedError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SuppressedError) | Disposal error during explicit resource management (`using`/`await using`); wraps both the new and suppressed error | [SuppressedError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SuppressedError) |
 | `TimeoutError` | Execution exceeded the `--timeout` limit (CLI only; not a JS-visible constructor) | -- |
+| `InstructionLimitError` | Execution exceeded the `--max-instructions` budget (CLI only; not a JS-visible constructor) | -- |
+| `MemoryLimitError` | An allocation was refused by the `--max-memory` budget (CLI only; not a JS-visible constructor) | -- |
+
+The last three are resource ceilings rather than in-language errors. Script
+`try`/`catch` cannot observe them in either execution mode: they unwind past
+every handler to the host, because a ceiling the guest can catch is a ceiling
+the guest can ignore in a loop. Allocation sites that charge the budget
+against an owning value (string payloads, `ArrayBuffer`) still throw an
+ordinary catchable `RangeError`, which is unchanged.
 
 ### Inheritance
 
@@ -203,7 +212,7 @@ path, not resolution alone:
 | `import.source` of a non-script module | `Module source is not available for "./data.json"` |
 | JSON module fails to parse | `Failed to parse JSON module "./data.json": <parse detail>` |
 
-See [ADR 0106 — Specifier-only module resolution errors](adr/0106-specifier-only-module-resolution-errors.md).
+See [ADR 0108 — Specifier-only module resolution errors](adr/0108-specifier-only-module-resolution-errors.md).
 
 Hosts keep the resolution diagnostic on the **human-readable** output path. The
 resolver raises the typed Pascal exception `EModuleNotFound`
@@ -237,6 +246,65 @@ reports `No module resolver configured and cannot resolve "./missing.js"`.
 filesystem the guest already owns and can enumerate, so its resolution failures
 keep the `(resolved to "...")` and `(alias resolved to "...")` detail — those
 paths are guest namespace, not host namespace.
+
+#### No content provider configured
+
+An engine that was never given a module content provider refuses every module
+load it is asked to *retrieve*. The refusal is a JavaScript error rather than an
+RTL exception: `import()` rejects with it and source can catch it, and a static
+import — which no `try`/`catch` in the importing module can wrap — surfaces it as
+a JavaScript throw (`TGocciaThrowValue`) carrying the same error value.
+
+Loading a module is resolution followed by retrieval, and only retrieval reaches
+the provider. A specifier the resolver rejects fails first, and that is a
+different failure carrying no `code` — with the default resolver, which resolves
+against the host filesystem, `import "./dep.js"` where `dep.js` does not exist
+fails there. `import()` rejects with a plain `Error` reading
+`Module not found: "./dep.js"`, and a **static import raises
+`TGocciaRuntimeError` out of the engine as a host-language exception**. So an
+embedder still has to guard its engine boundary. Resolution messages name only
+the specifier as written (see above), matching the refusal below.
+
+In addition to the standard error properties, the refusal carries:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `code` | `string` | `"ERR_MODULE_LOADING_UNSUPPORTED"` |
+
+```javascript
+try {
+  await import("./dep.js");  // resolves, no provider installed
+} catch (error) {
+  error instanceof Error;  // true
+  error.name;              // "Error"
+  error.code;              // "ERR_MODULE_LOADING_UNSUPPORTED"
+  error.message;           // "Cannot load module: no module content provider is configured"
+  error.path;              // undefined — see below
+}
+```
+
+There is deliberately no `path`, and the message names no module address. The
+only address available where the refusal is raised is the *resolved* one, which
+the default resolver expands into an absolute host filesystem path, and an
+engine with no provider is exactly the configuration an embedder runs untrusted
+source in — an enumerable own property would carry that host detail into
+`JSON.stringify(error)` and object spread. Nothing is lost: while no provider is
+installed the refusal is unconditional for every module, so acting on it never
+depends on which one was asked for. Contrast
+[sandbox filesystem errors](#sandbox-filesystem-errors), whose `path` is a
+sandbox VFS address the guest itself named.
+
+The error type is a plain `Error` rather than a `TypeError`. ECMA-262
+`HostLoadImportedModule` requires a throw completion but mandates no type, and
+for this case — an engine with no loader at all — V8, JavaScriptCore, and
+SpiderMonkey all report a plain `Error`; `TypeError` is the convention for a
+*configured* loader that tried and failed. Because the constructor cannot
+separate the two, `code` is the field to branch on: a provider that is
+configured and cannot produce a module reports its own failure and never
+`ERR_MODULE_LOADING_UNSUPPORTED`. See
+[ADR 0106](adr/0106-sandbox-hardening-scope.md) for the full rationale, and
+[Embedding](embedding.md#custom-content-provider) for how to install a
+provider.
 
 ### Stack Traces
 
@@ -541,7 +609,7 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
 | `stderr` | `string` | Unformatted stderr-oriented console output; present even when empty |
 | `output` | `string[]` | Formatted console output split into lines |
 | `error` | `object \| null` | First failed file's error details, or `null` when the run succeeds |
-| `error.type` | `string` | Error type name (`"TypeError"`, `"SyntaxError"`, `"TimeoutError"`, etc.) |
+| `error.type` | `string` | Error type name (`"TypeError"`, `"SyntaxError"`, `"TimeoutError"`, `"MemoryLimitError"`, etc.) |
 | `error.message` | `string` | Error message text |
 | `error.line` | `number \| null` | Source line number (1-based), or `null` if unavailable |
 | `error.column` | `number \| null` | Source column number (1-based), or `null` if unavailable |

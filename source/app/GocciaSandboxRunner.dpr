@@ -15,7 +15,6 @@ uses
   Goccia.Application,
   Goccia.Base64,
   Goccia.Builtins.Console,
-  Goccia.Builtins.GlobalShadowRealm,
   Goccia.CapabilityAudit,
   Goccia.CLI.Application,
   Goccia.CLI.Options,
@@ -29,6 +28,7 @@ uses
   Goccia.HostEnvironment,
   Goccia.InstructionLimit,
   Goccia.JSON,
+  Goccia.MemoryLimit,
   Goccia.Modules.Loader,
   Goccia.Realm,
   Goccia.Runtime,
@@ -45,7 +45,15 @@ uses
   Goccia.Values.Error,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
+  Goccia.VM.Exception,
   SandboxVirtualFileSystem;
+
+const
+  { Each nesting level holds an engine, a realm, and a virtual
+    filesystem alive on the native stack, so the depth a guest may ask
+    for is a resource ceiling like the memory budget, not a taste
+    judgement about how deep orchestration should go. }
+  MAX_RUN_SCRIPT_DEPTH = 32;
 
 type
   TSandboxRunnerApp = class(TGocciaCLIApplication)
@@ -232,10 +240,28 @@ begin
   Result := '<sandbox-entry-path> [options]';
 end;
 
+{ Config reaches this runner only through an explicit --config.  The entry
+  path names a file in the virtual filesystem, so discovery walking up from
+  it describes host directories that have nothing to do with the run, and
+  which host directories those are depends on how the operator spelled the
+  path: an absolute sandbox path starts the walk at the host root, a bare
+  name starts it at the current directory.  Config that lands by accident of
+  spelling is worse than no config for the one binary that runs untrusted
+  code, so the runner requires the operator to say which file to apply.
+
+  The cost is that an operator who sets limits in a discovered goccia.json
+  gets no limits here while every other binary honours them, and the failure
+  is silent and in the permissive direction.  So say so, on stderr, whenever
+  a config was found and skipped — this predicate is the only place that
+  knows both that a config exists and that it will not be applied. }
 function TSandboxRunnerApp.ShouldApplyRootConfig(const APaths: TStringList;
   const AConfigPath: string; const AExplicitConfig: Boolean): Boolean;
 begin
   Result := AExplicitConfig;
+  if not Result then
+    WriteLn(ErrOutput, Format('Warning: ignoring discovered configuration ' +
+      '%s. %s applies configuration files only when named with --config.',
+      [AConfigPath, Name]));
 end;
 
 procedure TSandboxRunnerApp.Validate;
@@ -614,27 +640,27 @@ var
 begin
   EmptyConfig := EmptyConfigEntries;
   ConfigureCapabilityAudit(AEngine);
-  AEngine.SourceType := ResolveSourceTypeOption(EngineOptions.SourceType,
-    EmptyConfig, AFileName);
-  ApplyCompatibilityAndWarningFlags(AEngine, EngineOptions, EmptyConfig);
-  AEngine.StrictTypes := ResolveFlagOption(EngineOptions.StrictTypes,
-    EmptyConfig);
-  AEngine.FunctionConstructor.Enabled := ResolveFlagOption(
-    EngineOptions.UnsafeFunctionConstructor, EmptyConfig);
   if Assigned(AParentHostEnvironment) then
     AEngine.HostEnvironment.ConfigureAsChildOf(AParentHostEnvironment)
   else if ResolveFlagOption(EngineOptions.Deterministic, EmptyConfig) then
     AEngine.HostEnvironment.UseDeterministicProfile;
-  if ResolveFlagOption(EngineOptions.UnsafeShadowRealm, EmptyConfig) then
-    EnableShadowRealm(AEngine);
 
   Runtime := AttachRuntime(AEngine);
   ApplyLoaderRuntimeProfile(Runtime);
   Runtime.Install(TGocciaSandboxRuntimeExtension.Create(AContext));
   if ResolveFlagOption(EngineOptions.UnsafeFFI, EmptyConfig) then
     Runtime.Install(TGocciaFFIRuntimeExtension.Create);
-  if EngineOptions.AllowedHosts.Present then
-    AEngine.SetAllowedFetchHosts(EngineOptions.AllowedHosts.Values);
+
+  { Same option application every other binary gets from CreateEngine, in the
+    same position relative to runtime attachment — SetAllowedFetchHosts fans
+    out to engine extensions, so it has to run after the runtime is installed.
+    The per-file config is empty because AFileName is a sandbox path, not a
+    host path: a per-file walk upwards from it would leave the sandbox
+    namespace entirely and climb the host filesystem from its root, so it
+    could only ever find a config that has nothing to do with this run.
+    Root config still applies, because it is merged into the option values
+    before execution starts. }
+  ApplyFileConfigToEngine(AEngine, EngineOptions, EmptyConfig, AFileName);
 
   ConsoleExtension := TGocciaConsoleRuntimeExtension(
     Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
@@ -768,10 +794,18 @@ begin
   FillChar(Result, SizeOf(Result), 0);
   Result.Ok := False;
   Result.ExitCode := 1;
+  { Only a fall-through default: every path below assigns a kind, so
+    this stands for "the runner returned without classifying", which is
+    a runner defect by definition. }
+  Result.FailureKind := sfkHostError;
 
   if not AContext.Fs.IsFile(AEntryPath) then
   begin
+    { The entry path is an argument, and for a nested run the guest
+      chose it — sfkHostError here would let the guest name the runner
+      as the party at fault by passing a path that does not exist. }
     Result.ErrorMessage := 'sandbox entry file not found: ' + AEntryPath;
+    Result.FailureKind := sfkScriptError;
     Exit;
   end;
 
@@ -822,6 +856,7 @@ begin
         end;
         Result.Ok := True;
         Result.ExitCode := 0;
+        Result.FailureKind := sfkNone;
       finally
         PopTimeoutScope;
         PopInstructionLimitScope;
@@ -829,13 +864,71 @@ begin
     except
       on E: EGocciaCapabilityAuditDeliveryError do
         raise;
+      { Each branch classifies as well as formats.  The order is what does
+        the classifying: every kind the guest can steer is named ahead of
+        the generic Exception branch, so a ceiling is reported as the
+        ceiling it is and a guest throw as the guest's, rather than either
+        being folded into "some native error happened". }
+      on E: TGocciaMemoryLimitError do
+      begin
+        Result.ErrorMessage := 'memory limit exceeded: ' + E.Message;
+        Result.FailureKind := sfkResourceLimit;
+      end;
+      on E: TGocciaInstructionLimitError do
+      begin
+        Result.ErrorMessage := E.Message;
+        Result.FailureKind := sfkResourceLimit;
+      end;
+      { Reached from a nested isolated runScript, which checks the
+        inherited quota before it builds the child context and raises
+        out through the calling guest rather than returning a result;
+        this frame is where that lands. }
+      on E: ESandboxFsQuotaExceeded do
+      begin
+        Result.ErrorMessage := E.Message;
+        Result.FailureKind := sfkResourceLimit;
+      end;
+      on E: EGocciaSandboxNestingLimitExceeded do
+      begin
+        Result.ErrorMessage := E.Message;
+        Result.FailureKind := sfkResourceLimit;
+      end;
+      on E: TGocciaTimeoutError do
+      begin
+        Result.ErrorMessage := E.Message;
+        Result.FailureKind := sfkTimeout;
+      end;
       on E: TGocciaError do
+      begin
         Result.ErrorMessage := E.GetDetailedMessage(False);
+        Result.FailureKind := sfkScriptError;
+      end;
       on E: TGocciaThrowValue do
+      begin
         Result.ErrorMessage := FormatThrowDetail(E.Value, AEntryPath, Source,
           False, E.Suggestion);
+        Result.FailureKind := sfkScriptError;
+      end;
+      { The same guest throw, as the bytecode VM delivers it.  Without this
+        branch a bytecode run reported an uncaught throw as a host fault and
+        printed the bare message where the interpreter printed the frame —
+        the guest picking both the classification and the format. }
+      on E: EGocciaBytecodeThrow do
+      begin
+        Result.ErrorMessage := FormatThrowDetail(E.ThrownValue, AEntryPath,
+          Source, False);
+        Result.FailureKind := sfkScriptError;
+      end;
+      { Whatever is left is a native error the engine does not model.
+        Every failure the guest can steer is named above, so reaching
+        here means the runner malfunctioned; if a guest-reachable
+        condition ever lands here it belongs in a branch of its own
+        rather than in this one. }
       on E: Exception do
+      begin
         Result.ErrorMessage := E.Message;
+        Result.FailureKind := sfkHostError;
+      end;
     end;
 
     Result.Output := OutputLines.Text;
@@ -861,8 +954,9 @@ var
   RemainingBytes: Int64;
   RemainingNodes: Integer;
 begin
-  if FRunScriptDepth >= 32 then
-    raise Exception.Create('sandbox runScript nesting limit exceeded');
+  if FRunScriptDepth >= MAX_RUN_SCRIPT_DEPTH then
+    raise EGocciaSandboxNestingLimitExceeded.Create(
+      'sandbox runScript nesting limit exceeded');
   Inc(FRunScriptDepth);
   try
   if not AOptions.Isolated then
@@ -871,6 +965,10 @@ begin
   FillChar(Result, SizeOf(Result), 0);
   Result.Ok := False;
   Result.ExitCode := 1;
+  { Fall-through default, as in ExecuteSandboxPathInContext: the child
+    run replaces the whole record and every except branch assigns a
+    kind, so this only survives if the runner returned unclassified. }
+  Result.FailureKind := sfkHostError;
   RemainingBytes := AContext.Fs.QuotaBytes - AContext.Fs.UsedBytes;
   RemainingNodes := AContext.Fs.NodeQuota - AContext.Fs.NodeCount;
   if RemainingBytes <= 0 then
@@ -896,12 +994,38 @@ begin
     except
       on E: EGocciaCapabilityAuditDeliveryError do
         raise;
+      { Seeding and diffing the child context, not the child program —
+        but the guest supplies the seed list, so most of what fails here
+        is still its own doing: the inherited quotas are a ceiling like
+        any other, and a seed path that is missing, is not a directory,
+        or is otherwise unusable is the guest naming a path the parent
+        filesystem does not have. }
+      on E: ESandboxFsQuotaExceeded do
+      begin
+        Result.Ok := False;
+        Result.ExitCode := 1;
+        Result.ErrorMessage := E.Message;
+        Result.ErrorOutput := E.Message + sLineBreak;
+        Result.FailureKind := sfkResourceLimit;
+      end;
+      on E: ESandboxFsError do
+      begin
+        Result.Ok := False;
+        Result.ExitCode := 1;
+        Result.ErrorMessage := E.Message;
+        Result.ErrorOutput := E.Message + sLineBreak;
+        Result.FailureKind := sfkScriptError;
+      end;
+      { What is left is seeding or diffing failing for a reason the
+        guest did not name — a native error in the runner's own copy or
+        diff machinery. }
       on E: Exception do
       begin
         Result.Ok := False;
         Result.ExitCode := 1;
         Result.ErrorMessage := E.Message;
         Result.ErrorOutput := E.Message + sLineBreak;
+        Result.FailureKind := sfkHostError;
       end;
     end;
   finally

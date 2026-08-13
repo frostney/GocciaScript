@@ -32,7 +32,7 @@ type
   { The module loader turns EGocciaModuleNotFound into this runtime error so a
     failed import is catchable from script. Message stays specifier-only —
     ResolvedCandidatePath carries the expanded host address for host-side
-    diagnostics and is never copied into a script-visible error (ADR 0106). }
+    diagnostics and is never copied into a script-visible error (ADR 0108). }
   TGocciaModuleResolutionError = class(TGocciaRuntimeError)
   private
     FResolvedCandidatePath: string;

@@ -23,13 +23,30 @@ type
   THTTPHeaders = HTTPTypes.THTTPHeaders;
   THTTPResponse = HTTPTypes.THTTPResponse;
   EHTTPError = HTTPTypes.EHTTPError;
+  THTTPRequestPolicy = HTTPTypes.THTTPRequestPolicy;
+
+const
+  DEFAULT_MAX_RESPONSE_BODY_BYTES = HTTPTypes.DEFAULT_MAX_RESPONSE_BODY_BYTES;
 
 function HTTPGet(const AURL: string;
   const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings = nil;
-  const ATimeoutMilliseconds: Integer = 0): THTTPResponse;
+  const ATimeoutMilliseconds: Integer = 0): THTTPResponse; overload;
+function HTTPGet(const AURL: string;
+  const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
+  const ATimeoutMilliseconds: Integer;
+  const APolicy: THTTPRequestPolicy): THTTPResponse; overload;
 function HTTPHead(const AURL: string;
   const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings = nil;
-  const ATimeoutMilliseconds: Integer = 0): THTTPResponse;
+  const ATimeoutMilliseconds: Integer = 0): THTTPResponse; overload;
+function HTTPHead(const AURL: string;
+  const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
+  const ATimeoutMilliseconds: Integer;
+  const APolicy: THTTPRequestPolicy): THTTPResponse; overload;
+
+{ Exposed for testing: the address-classification and resolution steps that
+  DoRequest performs between validating a destination and connecting to it. }
+function IsPrivateNetworkAddress(const AAddressText: string): Boolean;
+function ResolveHostToAddress(const AHost: string): string;
 function HTTPURLHost(const AURL: string): string;
 function HTTPURLAuditHost(const AURL: string): string;
 function WaitForHTTPConnectionWorkers(
@@ -56,18 +73,13 @@ const
   MAX_HTTP_CONNECTION_WORKERS = 16;
   MAX_REDIRECTS = 20;
   MAX_RESPONSE_HEADER_BYTES = 64 * 1024;
-  MAX_RESPONSE_BODY_BYTES = 8 * 1024 * 1024;
   CRLF = #13#10;
   RECV_BUF_SIZE = 8192;
 
 type
-  THTTPParsedURL = record
-    Scheme: string;
-    Host: string;
-    Port: Integer;
-    Path: string;
-  end;
-
+  // THTTPParsedURL and ParseHTTPURL now live in HTTPTypes (socket-free) so the
+  // fetch builtin's host validation and the Lakon WASM lane can canonicalize a
+  // URL without this unit's socket closure. Named here through the used unit.
   THTTPConnectionState = class
   private
     FAbandoned: Boolean;
@@ -143,141 +155,20 @@ end;
 {$ENDIF}
 
 // ---------------------------------------------------------------------------
-// Minimal URL parsing (self-contained, no engine dependencies)
+// URL parsing (ParseHTTPURL) lives in HTTPTypes so socket-free layers can use
+// it; named here through the used unit.
 // ---------------------------------------------------------------------------
 
-function ParseHTTPURL(const AURL: string;
-  const ARequireSupportedScheme: Boolean = True;
-  const AAllowUserInfo: Boolean = False): THTTPParsedURL;
-var
-  S, Rest: string;
-  I, AuthorityEnd, ColonCount, ParsedPort: Integer;
-  PortText: string;
-begin
-  Result.Scheme := '';
-  Result.Host := '';
-  Result.Port := 0;
-  Result.Path := '/';
-
-  S := AURL;
-  for I := 1 to Length(S) do
-    if (Ord(S[I]) < 32) or (Ord(S[I]) = 127) then
-      raise EHTTPError.Create('Invalid URL: control character');
-
-  // Scheme
-  I := Pos('://', S);
-  if I > 0 then
-  begin
-    Result.Scheme := LowerCase(Copy(S, 1, I - 1));
-    Rest := Copy(S, I + 3, Length(S));
-  end
-  else
-    raise EHTTPError.Create('Invalid URL: missing scheme');
-
-  if ARequireSupportedScheme and
-     (Result.Scheme <> 'http') and (Result.Scheme <> 'https') then
-    raise EHTTPError.Create('Unsupported scheme: ' + Result.Scheme);
-
-  AuthorityEnd := Length(Rest) + 1;
-  for I := 1 to Length(Rest) do
-    if Rest[I] in ['/', '?', '#'] then
-    begin
-      AuthorityEnd := I;
-      Break;
-    end;
-  if AuthorityEnd <= Length(Rest) then
-  begin
-    Result.Path := Copy(Rest, AuthorityEnd, MaxInt);
-    Rest := Copy(Rest, 1, AuthorityEnd - 1);
-    I := Pos('#', Result.Path);
-    if I > 0 then
-      Delete(Result.Path, I, MaxInt);
-    if (Result.Path <> '') and (Result.Path[1] = '?') then
-      Result.Path := '/' + Result.Path;
-  end;
-
-  I := LastDelimiter('@', Rest);
-  if I > 0 then
-  begin
-    if not AAllowUserInfo then
-      raise EHTTPError.Create('Invalid URL: userinfo is not allowed');
-    Rest := Copy(Rest, I + 1, MaxInt);
-  end;
-
-  // Parse host:port
-  if (Length(Rest) > 0) and (Rest[1] = '[') then
-  begin
-    // IPv6 — strip brackets for DNS resolution
-    I := Pos(']', Rest);
-    if I > 1 then
-    begin
-      Result.Host := LowerCase(Copy(Rest, 2, I - 2));
-      Rest := Copy(Rest, I + 1, Length(Rest));
-      if (Length(Rest) > 0) and (Rest[1] = ':') then
-      begin
-        PortText := Copy(Rest, 2, MaxInt);
-        ParsedPort := StrToIntDef(PortText, -1);
-        if (ParsedPort < 1) or (ParsedPort > 65535) then
-          raise EHTTPError.Create('Invalid URL: invalid port');
-        Result.Port := ParsedPort;
-      end
-      else if Rest <> '' then
-        raise EHTTPError.Create('Invalid URL: malformed IPv6 authority');
-    end
-    else
-      raise EHTTPError.Create('Invalid URL: malformed IPv6 authority');
-  end
-  else
-  begin
-    ColonCount := 0;
-    for I := 1 to Length(Rest) do
-      if Rest[I] = ':' then
-        Inc(ColonCount);
-    if ColonCount > 1 then
-      raise EHTTPError.Create('Invalid URL: IPv6 address must use brackets');
-    I := Pos(':', Rest);
-    if I > 0 then
-    begin
-      Result.Host := LowerCase(Copy(Rest, 1, I - 1));
-      PortText := Copy(Rest, I + 1, MaxInt);
-      ParsedPort := StrToIntDef(PortText, -1);
-      if (ParsedPort < 1) or (ParsedPort > 65535) then
-        raise EHTTPError.Create('Invalid URL: invalid port');
-      Result.Port := ParsedPort;
-    end
-    else
-      Result.Host := LowerCase(Rest);
-  end;
-
-  if Result.Host = '' then
-    raise EHTTPError.Create('Invalid URL: empty host');
-
-  // Default ports
-  if Result.Port = 0 then
-  begin
-    if Result.Scheme = 'https' then
-      Result.Port := 443
-    else
-      Result.Port := 80;
-  end;
-
-  if Result.Path = '' then
-    Result.Path := '/';
-end;
-
+// Re-exported from HTTPTypes so existing HTTPClient consumers keep naming
+// these unchanged; the socket-free implementations live there.
 function HTTPURLHost(const AURL: string): string;
 begin
-  // Host validation is synchronous, but fetch network failures (including an
-  // unsupported scheme) are delivered through the returned promise. Parse the
-  // authority canonically here while leaving scheme enforcement to DoRequest.
-  Result := ParseHTTPURL(AURL, False).Host;
+  Result := HTTPTypes.HTTPURLHost(AURL);
 end;
 
 function HTTPURLAuditHost(const AURL: string): string;
 begin
-  // This parser is only for capability-audit subjects. It canonicalizes the
-  // destination after userinfo without relaxing request validation.
-  Result := ParseHTTPURL(AURL, False, True).Host;
+  Result := HTTPTypes.HTTPURLAuditHost(AURL);
 end;
 
 // ---------------------------------------------------------------------------
@@ -853,7 +744,8 @@ end;
 
 function ReadResponse(const ASock: TSocket;
   var ATransport: TTransportSecurityConnection;
-  const AIsHead: Boolean; const ADeadlineNs: Int64): TRawHTTPResponse;
+  const AIsHead: Boolean; const ADeadlineNs: Int64;
+  const AMaxBodyBytes: Integer): TRawHTTPResponse;
 var
   Buf: array[0..RECV_BUF_SIZE - 1] of Byte;
   RawHeader: TBytes;
@@ -998,7 +890,7 @@ begin
         N := Receive(Buf, RECV_BUF_SIZE);
         if N <= 0 then begin Done := True; Break; end;
         AppendBytes(ChunkBuf, @Buf[0], N,
-          MAX_RESPONSE_BODY_BYTES + RECV_BUF_SIZE);
+          AMaxBodyBytes + RECV_BUF_SIZE);
       end;
       if Done then Break;
 
@@ -1013,16 +905,16 @@ begin
       ChunkSize := StrToIntDef('$' + Trim(Line), 0);
       if ChunkSize = 0 then Break;
       if (ChunkSize < 0) or
-         (Length(Result.Body) > MAX_RESPONSE_BODY_BYTES - ChunkSize) then
+         (Length(Result.Body) > AMaxBodyBytes - ChunkSize) then
         raise EHTTPError.CreateFmt('HTTP response body exceeds %d byte limit',
-          [MAX_RESPONSE_BODY_BYTES]);
+          [AMaxBodyBytes]);
 
       while Length(ChunkBuf) < ChunkSize + 2 do
       begin
         N := Receive(Buf, RECV_BUF_SIZE);
         if N <= 0 then begin Done := True; Break; end;
         AppendBytes(ChunkBuf, @Buf[0], N,
-          MAX_RESPONSE_BODY_BYTES + RECV_BUF_SIZE);
+          AMaxBodyBytes + RECV_BUF_SIZE);
       end;
 
       BodyLen := Length(Result.Body);
@@ -1037,9 +929,9 @@ begin
 
     if ContentLen >= 0 then
     begin
-      if ContentLen > MAX_RESPONSE_BODY_BYTES then
+      if ContentLen > AMaxBodyBytes then
         raise EHTTPError.CreateFmt('HTTP response body exceeds %d byte limit',
-          [MAX_RESPONSE_BODY_BYTES]);
+          [AMaxBodyBytes]);
       SetLength(Result.Body, ContentLen);
       BodyLen := 0;
 
@@ -1077,15 +969,190 @@ begin
         N := Receive(Buf, RECV_BUF_SIZE);
         if N <= 0 then Break;
         BodyLen := Length(Result.Body);
-        if BodyLen > MAX_RESPONSE_BODY_BYTES - N then
+        if BodyLen > AMaxBodyBytes - N then
           raise EHTTPError.CreateFmt(
             'HTTP response body exceeds %d byte limit',
-            [MAX_RESPONSE_BODY_BYTES]);
+            [AMaxBodyBytes]);
         SetLength(Result.Body, BodyLen + N);
         Move(Buf[0], Result.Body[BodyLen], N);
       until False;
     end;
   end;
+end;
+
+// ---------------------------------------------------------------------------
+// Destination resolution and address policy
+// ---------------------------------------------------------------------------
+
+{ Parses dotted-quad IPv4 text. Deliberately strict: anything that is not
+  exactly four decimal octets is not an IPv4 literal, so shortened forms
+  ("10.1", "0x7f.1") and octal-looking octets are rejected rather than
+  reinterpreted. Those forms are a classic way to smuggle a loopback address
+  past a naive textual filter, and both platform resolvers here are AF_INET
+  so we never have to accept them. }
+function TryParseIPv4(const AValue: string; out AOctets: array of Byte): Boolean;
+var
+  I, Part, Digits, Value: Integer;
+  Ch: Char;
+begin
+  Part := 0;
+  Value := 0;
+  Digits := 0;
+  for I := 1 to Length(AValue) do
+  begin
+    Ch := AValue[I];
+    if (Ch >= '0') and (Ch <= '9') then
+    begin
+      Inc(Digits);
+      if Digits > 3 then
+        Exit(False);
+      Value := Value * 10 + (Ord(Ch) - Ord('0'));
+      if Value > 255 then
+        Exit(False);
+    end
+    else if Ch = '.' then
+    begin
+      if (Digits = 0) or (Part > 2) then
+        Exit(False);
+      AOctets[Part] := Byte(Value);
+      Inc(Part);
+      Value := 0;
+      Digits := 0;
+    end
+    else
+      Exit(False);
+  end;
+  if (Digits = 0) or (Part <> 3) then
+    Exit(False);
+  AOctets[3] := Byte(Value);
+  Result := True;
+end;
+
+{ True when the address belongs to a range that is not routable on the public
+  internet and is therefore reachable only from inside the host's own network
+  position — which is exactly what an SSRF payload is after. The cloud
+  instance-metadata endpoint (169.254.169.254) falls under link-local. }
+function IsPrivateNetworkAddress(const AAddressText: string): Boolean;
+var
+  Octets: array[0..3] of Byte;
+  Normalized: string;
+begin
+  Normalized := LowerCase(Trim(AAddressText));
+  if Normalized = '' then
+    Exit(True);
+
+  { Strip the brackets an IPv6 authority carries in a URL. }
+  if (Length(Normalized) >= 2) and (Normalized[1] = '[') and
+     (Normalized[Length(Normalized)] = ']') then
+    Normalized := Copy(Normalized, 2, Length(Normalized) - 2);
+
+  if TryParseIPv4(Normalized, Octets) then
+  begin
+    Result :=
+      (Octets[0] = 10) or                                        // 10/8
+      (Octets[0] = 127) or                                       // loopback
+      (Octets[0] = 0) or                                         // this host
+      ((Octets[0] = 172) and (Octets[1] >= 16) and
+       (Octets[1] <= 31)) or                                     // 172.16/12
+      ((Octets[0] = 192) and (Octets[1] = 168)) or               // 192.168/16
+      ((Octets[0] = 169) and (Octets[1] = 254)) or               // link-local
+      ((Octets[0] = 100) and (Octets[1] >= 64) and
+       (Octets[1] <= 127)) or                                    // CGNAT
+      ((Octets[0] = 192) and (Octets[1] = 0) and
+       (Octets[2] = 0)) or                                       // IETF proto
+      (Octets[0] >= 224);                                        // multicast +
+    Exit;
+  end;
+
+  { IPv6. Neither platform connect path requests AF_INET6 today, so this is
+    defensive: it keeps the classifier correct if a literal reaches it, and
+    stays deny-biased for anything it cannot parse. }
+  if Pos(':', Normalized) > 0 then
+  begin
+    Result :=
+      (Normalized = '::1') or                                    // loopback
+      (Normalized = '::') or                                     // unspecified
+      (Copy(Normalized, 1, 2) = 'fc') or                         // ULA fc00::/7
+      (Copy(Normalized, 1, 2) = 'fd') or
+      (Copy(Normalized, 1, 4) = 'fe80') or                       // link-local
+      (Copy(Normalized, 1, 7) = '::ffff:');                      // v4-mapped
+    Exit;
+  end;
+
+  { Not an address literal at all. Callers pass a resolved address here, so
+    reaching this means resolution produced something unexpected; refuse it
+    rather than let an unclassifiable target through. }
+  Result := True;
+end;
+
+{ Resolves a hostname to a single numeric address, once.
+
+  This is the fix for the check-then-use window: DoRequest used to validate a
+  *hostname* and then hand that same hostname to connect, which resolved it
+  again. An allowlisted name under attacker DNS control could answer the first
+  lookup with a public address and the second with 169.254.169.254. Resolving
+  here and connecting to the returned literal means the address that was
+  checked is the address that is used.
+
+  An input that is already a literal is returned unchanged, so no lookup
+  happens for numeric targets. }
+function ResolveHostToAddress(const AHost: string): string;
+{$IFDEF UNIX}
+var
+  Octets: array[0..3] of Byte;
+  HostEntry: THostEntry;
+{$ENDIF}
+{$IFDEF MSWINDOWS}
+var
+  Octets: array[0..3] of Byte;
+  Hints, Res: PAddrInfo;
+  HostBytes: TBytes;
+  ErrorOffset: Integer;
+  SockAddr: PSockAddrIn;
+{$ENDIF}
+begin
+  if AHost = '' then
+    raise EHTTPError.Create('Failed to resolve host: (empty)');
+  if TryParseIPv4(AHost, Octets) then
+    Exit(AHost);
+
+  {$IFDEF UNIX}
+  if not ResolveHostByName(AHost, HostEntry) then
+    raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
+  Result := NetAddrToStr(HostEntry.Addr);
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  EnsureWinSockInit;
+  New(Hints);
+  try
+    FillChar(Hints^, SizeOf(TAddrInfo), 0);
+    Hints^.ai_family := AF_INET;
+    Hints^.ai_socktype := SOCK_STREAM;
+    Hints^.ai_protocol := IPPROTO_TCP;
+    if not TryEncodeASCIINullTerminated(AHost, HostBytes, ErrorOffset) then
+      raise EHTTPError.CreateFmt(
+        'HTTP host contains a non-ASCII code unit at offset %d',
+        [ErrorOffset]);
+    Res := nil;
+    if Getaddrinfo(PAnsiChar(@HostBytes[0]), nil, Hints, Res) <> 0 then
+      raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
+    try
+      if not Assigned(Res) or not Assigned(Res^.ai_addr) then
+        raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
+      SockAddr := PSockAddrIn(Res^.ai_addr);
+      Result := Format('%d.%d.%d.%d', [
+        SockAddr^.sin_addr.S_un_b.s_b1, SockAddr^.sin_addr.S_un_b.s_b2,
+        SockAddr^.sin_addr.S_un_b.s_b3, SockAddr^.sin_addr.S_un_b.s_b4]);
+    finally
+      Freeaddrinfo(Res);
+    end;
+  finally
+    Dispose(Hints);
+  end;
+  {$ENDIF}
+
+  if Result = '' then
+    raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
 end;
 
 // ---------------------------------------------------------------------------
@@ -1095,9 +1162,12 @@ end;
 function DoRequest(const AMethod, AURL: string;
   const AHeaders: THTTPHeaders;
   const AMaxRedirects: Integer; const AAllowedHosts: TStrings;
-  const ATimeoutMilliseconds: Integer): THTTPResponse;
+  const ATimeoutMilliseconds: Integer;
+  const APolicy: THTTPRequestPolicy): THTTPResponse;
 var
   Parsed: THTTPParsedURL;
+  ResolvedAddress: string;
+  MaxBodyBytes: Integer;
   Sock: TSocket;
   Transport: TTransportSecurityConnection;
   Request: TBytes;
@@ -1123,12 +1193,28 @@ var
     Result := Integer((RemainingNs + 999999) div 1000000);
   end;
 
-  procedure ValidateDestination(const AParsed: THTTPParsedURL);
+  { Resolves the destination once and validates both the name and the address
+    it resolved to, returning the address the caller must connect to.
+
+    Order matters. The name check runs first so an off-allowlist host is
+    rejected without a DNS lookup, which keeps a denied request from becoming
+    an observable side effect. The address check runs on the resolved value,
+    because that is the only form in which "is this target internal" is a
+    meaningful question. }
+  function ResolveAndValidateDestination(
+    const AParsed: THTTPParsedURL): string;
   begin
     if Assigned(AAllowedHosts) and
        (AAllowedHosts.IndexOf(AParsed.Host) < 0) then
       raise EHTTPError.CreateFmt('fetch host not allowed: %s',
         [AParsed.Host]);
+
+    Result := ResolveHostToAddress(AParsed.Host);
+
+    if APolicy.DenyPrivateRanges and IsPrivateNetworkAddress(Result) then
+      raise EHTTPError.CreateFmt(
+        'fetch destination not allowed: %s resolves to private address %s',
+        [AParsed.Host, Result]);
   end;
 
   procedure ValidateRequestText(const AValue, AKind: string;
@@ -1147,6 +1233,9 @@ var
 begin
   if ATimeoutMilliseconds < 0 then
     raise EHTTPError.Create('Invalid HTTP timeout');
+  MaxBodyBytes := APolicy.MaxResponseBytes;
+  if MaxBodyBytes <= 0 then
+    MaxBodyBytes := DEFAULT_MAX_RESPONSE_BODY_BYTES;
   if ATimeoutMilliseconds > 0 then
     DeadlineNs := GetNanoseconds +
       Int64(ATimeoutMilliseconds) * 1000000
@@ -1161,13 +1250,23 @@ begin
   while True do
   begin
     Parsed := ParseHTTPURL(CurrentURL);
-    ValidateDestination(Parsed);
+    { Runs on every pass of this loop, so a redirect hop is resolved,
+      validated, and pinned exactly like the initial request. }
+    ResolvedAddress := ResolveAndValidateDestination(Parsed);
     ValidateRequestText(Parsed.Path, 'request target', False);
     FillChar(Transport, SizeOf(Transport), 0);
-    Sock := ConnectSocket(Parsed.Host, Parsed.Port,
+    { Connect to the address that was just validated, not to the name. Both
+      platform connect paths take a numeric fast path for a literal, so this
+      performs no second lookup and there is no window in which DNS can
+      answer differently. }
+    Sock := ConnectSocket(ResolvedAddress, Parsed.Port,
       RemainingTimeoutMilliseconds);
     try
       ConfigureSocketTimeout(Sock, RemainingTimeoutMilliseconds);
+      { TLS still verifies against the hostname. Pinning changes which
+        address we dial, never which identity we require the peer to prove —
+        handing the literal here would break certificate validation and
+        silently downgrade the connection's guarantees. }
       if Parsed.Scheme = 'https' then
         StartTransportSecurity(Transport, Sock, Parsed.Host);
 
@@ -1211,7 +1310,8 @@ begin
         Request := EncodeUTF8WithReplacement(RequestText);
 
         SendAll(Sock, Transport, Request);
-        Raw := ReadResponse(Sock, Transport, IsHead, DeadlineNs);
+        Raw := ReadResponse(Sock, Transport, IsHead, DeadlineNs,
+          MaxBodyBytes);
       finally
         CloseTransportSecurity(Transport);
       end;
@@ -1269,7 +1369,25 @@ function HTTPGet(const AURL: string;
   const ATimeoutMilliseconds: Integer): THTTPResponse;
 begin
   Result := DoRequest('GET', AURL, AHeaders, MAX_REDIRECTS, AAllowedHosts,
-    ATimeoutMilliseconds);
+    ATimeoutMilliseconds, DefaultHTTPPolicy);
+end;
+
+function HTTPGet(const AURL: string;
+  const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
+  const ATimeoutMilliseconds: Integer;
+  const APolicy: THTTPRequestPolicy): THTTPResponse;
+begin
+  Result := DoRequest('GET', AURL, AHeaders, MAX_REDIRECTS, AAllowedHosts,
+    ATimeoutMilliseconds, APolicy);
+end;
+
+function HTTPHead(const AURL: string;
+  const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
+  const ATimeoutMilliseconds: Integer;
+  const APolicy: THTTPRequestPolicy): THTTPResponse;
+begin
+  Result := DoRequest('HEAD', AURL, AHeaders, MAX_REDIRECTS, AAllowedHosts,
+    ATimeoutMilliseconds, APolicy);
 end;
 
 function HTTPHead(const AURL: string;
@@ -1277,7 +1395,7 @@ function HTTPHead(const AURL: string;
   const ATimeoutMilliseconds: Integer): THTTPResponse;
 begin
   Result := DoRequest('HEAD', AURL, AHeaders, MAX_REDIRECTS, AAllowedHosts,
-    ATimeoutMilliseconds);
+    ATimeoutMilliseconds, DefaultHTTPPolicy);
 end;
 
 end.

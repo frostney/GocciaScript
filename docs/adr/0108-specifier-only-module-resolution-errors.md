@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-12
 **Area:** `modules`, `errors`, `security`
-**Related:** [ADR 0092](0092-sandbox-filesystem-error-contract.md), [ADR 0103](0103-layered-untrusted-execution-boundaries.md)
+**Related:** [ADR 0092](0092-sandbox-filesystem-error-contract.md), [ADR 0103](0103-layered-untrusted-execution-boundaries.md), [ADR 0106](0106-sandbox-hardening-scope.md)
 
 ## Context
 

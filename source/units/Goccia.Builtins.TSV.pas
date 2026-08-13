@@ -49,6 +49,7 @@ implementation
 uses
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
@@ -157,21 +158,42 @@ function TGocciaTSVBuiltin.BuildChunkResultObject(
 var
   ErrorValue: TGocciaValue;
   ResultObject: TGocciaObjectValue;
+  ValuesRoot: TGocciaTempRoot;
+  ResultRoot: TGocciaTempRoot;
+  ErrorRoot: TGocciaTempRoot;
 begin
-  ResultObject := TGocciaObjectValue.Create;
-  if AChunkResult.ErrorMessage = '' then
-    ErrorValue := TGocciaNullLiteralValue.NullValue
-  else
-    ErrorValue := CreateErrorObject(SYNTAX_ERROR_NAME,
-      AChunkResult.ErrorMessage, 1);
+  { CreateErrorObject allocates and property storage is charged on
+    assignment — both GC safe points — so the parsed values array, the result
+    object, and the error object are all rooted until the assignments below
+    store them. }
+  InitializeTempRoot(ValuesRoot);
+  InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(ErrorRoot);
+  AddTempRootIfNeeded(ValuesRoot, AChunkResult.Values);
+  try
+    ResultObject := TGocciaObjectValue.Create;
+    AddTempRootIfNeeded(ResultRoot, ResultObject);
+    if AChunkResult.ErrorMessage = '' then
+      ErrorValue := TGocciaNullLiteralValue.NullValue
+    else
+    begin
+      ErrorValue := CreateErrorObject(SYNTAX_ERROR_NAME,
+        AChunkResult.ErrorMessage, 1);
+      AddTempRootIfNeeded(ErrorRoot, ErrorValue);
+    end;
 
-  ResultObject.AssignProperty(PROP_VALUES, AChunkResult.Values);
-  ResultObject.AssignProperty(PROP_READ,
-    TGocciaNumberLiteralValue.Create(AChunkResult.Read));
-  ResultObject.AssignProperty(PROP_DONE,
-    TGocciaBooleanLiteralValue.Create(AChunkResult.Done));
-  ResultObject.AssignProperty(PROP_ERROR, ErrorValue);
-  Result := ResultObject;
+    ResultObject.AssignProperty(PROP_VALUES, AChunkResult.Values);
+    ResultObject.AssignProperty(PROP_READ,
+      TGocciaNumberLiteralValue.Create(AChunkResult.Read));
+    ResultObject.AssignProperty(PROP_DONE,
+      TGocciaBooleanLiteralValue.Create(AChunkResult.Done));
+    ResultObject.AssignProperty(PROP_ERROR, ErrorValue);
+    Result := ResultObject;
+  finally
+    RemoveTempRootIfNeeded(ErrorRoot);
+    RemoveTempRootIfNeeded(ResultRoot);
+    RemoveTempRootIfNeeded(ValuesRoot);
+  end;
 end;
 
 function TGocciaTSVBuiltin.TSVParse(
@@ -192,6 +214,9 @@ var
   Row: TGocciaArrayValue;
   SkipEmptyLines: Boolean;
   Text: string;
+  ParsedResultRoot: TGocciaTempRoot;
+  RowRoot: TGocciaTempRoot;
+  ContextRoot: TGocciaTempRoot;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'TSV.parse', ThrowError);
 
@@ -202,6 +227,14 @@ begin
   ReadOptions(AArgs, 1, Headers, SkipEmptyLines);
   Reviver := GetReviver(AArgs, 2);
 
+  { The reviver is arbitrary JS and every field string is charged against the
+    memory ceiling, so both are GC safe points; the result array, the
+    in-flight row, and the context object are reachable only from this frame
+    until stored, and need temp roots. }
+  InitializeTempRoot(ParsedResultRoot);
+  InitializeTempRoot(RowRoot);
+  InitializeTempRoot(ContextRoot);
+  try
   try
     if Assigned(Reviver) then
     begin
@@ -209,6 +242,7 @@ begin
         SkipEmptyLines);
 
       ParsedResult := TGocciaArrayValue.Create;
+      AddTempRootIfNeeded(ParsedResultRoot, ParsedResult);
       if Length(FieldInfoRows) = 0 then
       begin
         Result := ParsedResult;
@@ -221,10 +255,12 @@ begin
         for I := 1 to Length(FieldInfoRows) - 1 do
         begin
           Obj := TGocciaObjectValue.Create;
+          AddTempRootIfNeeded(RowRoot, Obj);
           for J := 0 to Length(HeaderRow) - 1 do
           begin
             Key := HeaderRow[J].Value;
             Context := TGocciaObjectValue.Create;
+            AddTempRootIfNeeded(ContextRoot, Context);
             Context.AssignProperty('row',
               TGocciaNumberLiteralValue.Create(I - 1));
             Context.AssignProperty('column',
@@ -255,9 +291,11 @@ begin
         for I := 0 to Length(FieldInfoRows) - 1 do
         begin
           Row := TGocciaArrayValue.Create;
+          AddTempRootIfNeeded(RowRoot, Row);
           for J := 0 to Length(FieldInfoRows[I]) - 1 do
           begin
             Context := TGocciaObjectValue.Create;
+            AddTempRootIfNeeded(ContextRoot, Context);
             Context.AssignProperty('row',
               TGocciaNumberLiteralValue.Create(I));
             Context.AssignProperty('column',
@@ -288,6 +326,11 @@ begin
   except
     on E: EGocciaTSVParseError do
       ThrowSyntaxError(E.Message);
+  end;
+  finally
+    RemoveTempRootIfNeeded(ContextRoot);
+    RemoveTempRootIfNeeded(RowRoot);
+    RemoveTempRootIfNeeded(ParsedResultRoot);
   end;
 end;
 
@@ -364,6 +407,8 @@ var
   ReplacedRow: TGocciaArrayValue;
   Row: TGocciaArrayValue;
   SkipEmptyLines: Boolean;
+  ReplacedArrRoot: TGocciaTempRoot;
+  ReplacedRowRoot: TGocciaTempRoot;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'TSV.stringify',
     ThrowError);
@@ -374,8 +419,14 @@ begin
 
   if Assigned(Replacer) and (Data is TGocciaArrayValue) then
   begin
+    { The replacer is arbitrary JS (a GC safe point); the replaced rows exist
+      only in this frame until stringified, so they need temp roots. }
+    InitializeTempRoot(ReplacedArrRoot);
+    InitializeTempRoot(ReplacedRowRoot);
+    try
     Arr := TGocciaArrayValue(Data);
     ReplacedArr := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ReplacedArrRoot, ReplacedArr);
 
     if (Arr.Elements.Count > 0) and
        (Arr.Elements[0] is TGocciaObjectValue) and
@@ -388,6 +439,7 @@ begin
           Continue;
         Obj := TGocciaObjectValue(Arr.Elements[I]);
         ReplacedObj := TGocciaObjectValue.Create;
+        AddTempRootIfNeeded(ReplacedRowRoot, ReplacedObj);
         for J := 0 to Length(Keys) - 1 do
         begin
           Key := Keys[J];
@@ -417,6 +469,7 @@ begin
         begin
           Row := TGocciaArrayValue(Arr.Elements[I]);
           ReplacedRow := TGocciaArrayValue.Create;
+          AddTempRootIfNeeded(ReplacedRowRoot, ReplacedRow);
           for J := 0 to Row.Elements.Count - 1 do
           begin
             Args := TGocciaArgumentsCollection.CreateWithCapacity(2);
@@ -437,6 +490,10 @@ begin
 
     Result := TGocciaStringLiteralValue.Create(
       TGocciaTSVStringifier.Stringify(ReplacedArr, Headers));
+    finally
+      RemoveTempRootIfNeeded(ReplacedRowRoot);
+      RemoveTempRootIfNeeded(ReplacedArrRoot);
+    end;
   end
   else
     Result := TGocciaStringLiteralValue.Create(

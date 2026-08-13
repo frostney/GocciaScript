@@ -370,15 +370,24 @@ function TGocciaIntlBuiltin.GetCanonicalLocales(const AArgs: TGocciaArgumentsCol
 var
   Canonical: IntlTypes.TStringArray;
   ResultArr: TGocciaArrayValue;
+  ResultRoot: TGocciaTempRoot;
   I: Integer;
 begin
   Canonical := CanonicalizeLocaleListFromValue(AArgs.GetElement(0));
 
-  ResultArr := TGocciaArrayValue.Create;
-  for I := 0 to High(Canonical) do
-    ResultArr.Elements.Add(TGocciaStringLiteralValue.Create(Canonical[I]));
+  { Each locale string is charged against the memory ceiling — a GC safe
+    point — so the array under construction needs a temp root. }
+  InitializeTempRoot(ResultRoot);
+  try
+    ResultArr := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ResultRoot, ResultArr);
+    for I := 0 to High(Canonical) do
+      ResultArr.Elements.Add(TGocciaStringLiteralValue.Create(Canonical[I]));
 
-  Result := ResultArr;
+    Result := ResultArr;
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 { Intl.supportedValuesOf }
@@ -390,6 +399,7 @@ var
   Collations: IntlTypes.TStringArray;
   TimeZones: TTemporalTimeZoneIdentifierArray;
   ResultArr: TGocciaArrayValue;
+  ResultRoot: TGocciaTempRoot;
   I: Integer;
 
   procedure AddString(const AValue: string);
@@ -450,7 +460,12 @@ var
 begin
   Key := AArgs.GetElement(0).ToStringLiteral.Value;
 
+  { Each value string is charged against the memory ceiling — a GC safe
+    point — so the array under construction needs a temp root. }
+  InitializeTempRoot(ResultRoot);
+  try
   ResultArr := TGocciaArrayValue.Create;
+  AddTempRootIfNeeded(ResultRoot, ResultArr);
 
   if Key = 'calendar' then
   begin
@@ -928,6 +943,9 @@ begin
 
   SortResultStrings;
   Result := ResultArr;
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 { supportedLocalesOf — shared by all constructors }
@@ -938,17 +956,26 @@ var
   Canonical: IntlTypes.TStringArray;
   Supported: IntlTypes.TStringArray;
   ResultArr: TGocciaArrayValue;
+  ResultRoot: TGocciaTempRoot;
   I: Integer;
 begin
   ValidateLocaleMatcherOption(AArgs.GetElement(1));
   Canonical := CanonicalizeLocaleListFromValue(AArgs.GetElement(0));
   Supported := SupportedLocalesOf(Canonical);
 
-  ResultArr := TGocciaArrayValue.Create;
-  for I := 0 to High(Supported) do
-    ResultArr.Elements.Add(TGocciaStringLiteralValue.Create(Supported[I]));
+  { Each locale string is charged against the memory ceiling — a GC safe
+    point — so the array under construction needs a temp root. }
+  InitializeTempRoot(ResultRoot);
+  try
+    ResultArr := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ResultRoot, ResultArr);
+    for I := 0 to High(Supported) do
+      ResultArr.Elements.Add(TGocciaStringLiteralValue.Create(Supported[I]));
 
-  Result := ResultArr;
+    Result := ResultArr;
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 { Locale }

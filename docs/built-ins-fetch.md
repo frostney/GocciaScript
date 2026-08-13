@@ -38,6 +38,57 @@ Without `--allowed-host` or an `"allowed-hosts"` config key in `goccia.json`, an
 
 Host matching is case-insensitive and ignores port, path, and userinfo.
 
+### Address policy and response size
+
+The allowlist answers *which names* a script may reach. Two further options
+answer *what those names may resolve to* and *how much they may return* —
+questions a name-based allowlist cannot express.
+
+| Option | Config key | Default | Effect |
+|--------|-----------|---------|--------|
+| `--fetch-deny-private-ranges` | `fetch-deny-private-ranges` | off | Rejects targets that resolve into RFC1918, loopback, link-local, CGNAT, or IPv6 ULA space |
+| `--fetch-max-response-bytes=<n>` | `fetch-max-response-bytes` | 8388608 (8 MiB) | Hard ceiling on the response body |
+
+Both reject with `TypeError` in script space, matching the existing
+"host not allowed" behavior, and both apply identically in interpreter and
+bytecode modes.
+
+```bash
+./build/GocciaScriptLoader example.js \
+  --allowed-host=api.example.com \
+  --fetch-deny-private-ranges \
+  --fetch-max-response-bytes=1048576
+```
+
+### Threat model notes
+
+These are documented candidly, in the spirit of [VISION.md](../VISION.md): the
+sandbox is a reduced attack surface, not a verified security boundary.
+
+**DNS rebinding is addressed.** The host is resolved **once**, the resolved
+address is validated, and the connection is pinned to that address. Previously
+the allowlist was checked against a *hostname* and the connect re-resolved it,
+so an allowlisted name under attacker DNS control could answer the check with
+a public address and the connect with an internal one. Resolution, validation,
+and pinning are re-applied on **every redirect hop**, not just the initial
+request.
+
+TLS verification still runs against the **hostname**, never the pinned
+literal. Pinning changes which address is dialed, not which identity the peer
+must prove.
+
+**SSRF is reduced, not eliminated.** `--fetch-deny-private-ranges` blocks the
+common targets — cloud instance metadata at `169.254.169.254`, loopback
+services, RFC1918 hosts. It cannot stop a *public* address that proxies to an
+internal one, and it is off by default so existing hosts are unaffected. Turn
+it on for any workload running untrusted script.
+
+Address classification is deliberately deny-biased: anything that is not
+exactly four decimal octets or a recognizable IPv6 form is treated as private
+rather than reinterpreted. Shortened and hex forms (`127.1`, `0x7f.0.0.1`)
+are a standard way to smuggle loopback past a textual filter, so they are
+refused rather than parsed.
+
 ### Runtime behavior and limits
 
 Requests run on fetch-specific background workers and settle promises on the owning runtime thread. `await fetch(...)` synchronously waits by pumping fetch completions; the Promise microtask queue is not a general I/O event loop.

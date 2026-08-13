@@ -45,6 +45,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
@@ -495,6 +496,7 @@ var
   Target: TGocciaValue;
   Obj: TGocciaObjectValue;
   Keys: TGocciaArrayValue;
+  KeysRoot: TGocciaTempRoot;
   KeyValues: TArray<TGocciaValue>;
   PropertyNames: TArray<string>;
   OwnSymbols: TArray<TGocciaSymbolValue>;
@@ -508,29 +510,38 @@ begin
   RequireObjectTarget(Target, 'Reflect.ownKeys');
 
   Obj := TGocciaObjectValue(Target);
-  Keys := TGocciaArrayValue.Create;
+  InitializeTempRoot(KeysRoot);
+  try
+    Keys := TGocciaArrayValue.Create;
+    { The ownKeys trap and the key strings below are both GC safe points — a
+      string allocation can trip the memory ceiling and collect — so the
+      half-built result array needs a root. }
+    AddTempRootIfNeeded(KeysRoot, Keys);
 
-  // Step 2: Let keys be ? target.[[OwnPropertyKeys]]()
-  if Obj is TGocciaProxyValue then
-  begin
-    KeyValues := TGocciaProxyValue(Obj).GetOwnPropertyKeyValues;
-    for I := 0 to High(KeyValues) do
-      Keys.Elements.Add(KeyValues[I]);
+    // Step 2: Let keys be ? target.[[OwnPropertyKeys]]()
+    if Obj is TGocciaProxyValue then
+    begin
+      KeyValues := TGocciaProxyValue(Obj).GetOwnPropertyKeyValues;
+      for I := 0 to High(KeyValues) do
+        Keys.Elements.Add(KeyValues[I]);
+      Result := Keys;
+      Exit;
+    end;
+
+    // String keys first, then symbol keys (per spec ordering)
+    PropertyNames := Obj.GetAllPropertyNames;
+    for I := 0 to High(PropertyNames) do
+      Keys.Elements.Add(TGocciaStringLiteralValue.Create(PropertyNames[I]));
+
+    OwnSymbols := Obj.GetOwnSymbols;
+    for I := 0 to High(OwnSymbols) do
+      Keys.Elements.Add(OwnSymbols[I]);
+
+    // Step 3: Return CreateArrayFromList(keys)
     Result := Keys;
-    Exit;
+  finally
+    RemoveTempRootIfNeeded(KeysRoot);
   end;
-
-  // String keys first, then symbol keys (per spec ordering)
-  PropertyNames := Obj.GetAllPropertyNames;
-  for I := 0 to High(PropertyNames) do
-    Keys.Elements.Add(TGocciaStringLiteralValue.Create(PropertyNames[I]));
-
-  OwnSymbols := Obj.GetOwnSymbols;
-  for I := 0 to High(OwnSymbols) do
-    Keys.Elements.Add(OwnSymbols[I]);
-
-  // Step 3: Return CreateArrayFromList(keys)
-  Result := Keys;
 end;
 
 // ES2026 §28.1.11 Reflect.preventExtensions(target)
