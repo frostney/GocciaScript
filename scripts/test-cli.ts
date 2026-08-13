@@ -961,9 +961,17 @@ const parkingPreamble = (slackTarget: number): string[] => [
   // slack falls monotonically and a handful of passes converges. Measuring
   // before the collection is what let the old loop stop early: it was reading
   // garbage the next collection would hand straight back.
-  "for (const pass of [0, 1, 2, 3, 4]) {",
+  //
+  // The push threshold sits one ballast chunk below the target because each
+  // collection hands back a little transient garbage: pushing to exactly SLACK
+  // lets the post-collection measurement bounce back just above it and stall
+  // there for every remaining pass (CI stalled 116 bytes short of a 600000
+  // target this way — the baseline live set differs per platform, so the
+  // convergence point does too). The pass cap is a generous termination bound,
+  // not a calibration: parking breaks out early on the first pass that lands.
+  "for (const pass of Array.from({ length: 32 }, (_, p) => p)) {",
   "  for (const i of iters) {",
-  "    if (Goccia.gc.maxBytes - Goccia.gc.bytesAllocated <= SLACK) break;",
+  "    if (Goccia.gc.maxBytes - Goccia.gc.bytesAllocated <= SLACK - 8192) break;",
   '    ballast.push("x".repeat(4096));',
   "  }",
   "  Goccia.gc();",
