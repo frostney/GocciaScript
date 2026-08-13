@@ -244,13 +244,117 @@ begin
   Result := AIndex < High(UInt32);
 end;
 
+// Bottom-up merge sort over the collected array-index keys.  Every own-key
+// enumeration runs this, and insertion order is arbitrary, so an insertion sort
+// degrades to O(n^2) on descending input; the already-ascending case is the
+// common one and returns from the ordered check without touching the scratch
+// buffer.  Small key counts stay on insertion sort: below the threshold it
+// beats the merge because it never allocates the scratch buffer.  The keys
+// come from distinct property names, so stability is not required here.
+procedure SortArrayIndexKeys(var AKeys: TArray<UInt64>; const ACount: Integer);
+const
+  InsertionSortThreshold = 32;
+var
+  IsOrdered: Boolean;
+  Scratch: TArray<UInt64>;
+  // Width and LowIndex are Int64 so doubling Width and computing LowIndex +
+  // 2 * Width cannot overflow Integer near High(Integer) key counts.
+  Width, LowIndex: Int64;
+  Destination, HighIndex, Index, Left, MiddleIndex, Right: Integer;
+  SortedIndex: Integer;
+  TempKey: UInt64;
+begin
+  if ACount < 2 then
+    Exit;
+
+  if ACount <= InsertionSortThreshold then
+  begin
+    for Index := 1 to ACount - 1 do
+    begin
+      TempKey := AKeys[Index];
+      SortedIndex := Index - 1;
+      while (SortedIndex >= 0) and (AKeys[SortedIndex] > TempKey) do
+      begin
+        AKeys[SortedIndex + 1] := AKeys[SortedIndex];
+        Dec(SortedIndex);
+      end;
+      AKeys[SortedIndex + 1] := TempKey;
+    end;
+    Exit;
+  end;
+
+  IsOrdered := True;
+  for Index := 1 to ACount - 1 do
+    if AKeys[Index] < AKeys[Index - 1] then
+    begin
+      IsOrdered := False;
+      Break;
+    end;
+  if IsOrdered then
+    Exit;
+
+  SetLength(Scratch, ACount);
+  Width := 1;
+  while Width < ACount do
+  begin
+    LowIndex := 0;
+    while LowIndex < ACount do
+    begin
+      // Clamp in Int64, then narrow: both bounds are <= ACount.
+      if LowIndex + Width < ACount then
+        MiddleIndex := Integer(LowIndex + Width)
+      else
+        MiddleIndex := ACount;
+      if LowIndex + 2 * Width < ACount then
+        HighIndex := Integer(LowIndex + 2 * Width)
+      else
+        HighIndex := ACount;
+
+      Left := Integer(LowIndex);
+      Right := MiddleIndex;
+      Destination := Integer(LowIndex);
+      while (Left < MiddleIndex) and (Right < HighIndex) do
+      begin
+        if AKeys[Right] < AKeys[Left] then
+        begin
+          Scratch[Destination] := AKeys[Right];
+          Inc(Right);
+        end
+        else
+        begin
+          Scratch[Destination] := AKeys[Left];
+          Inc(Left);
+        end;
+        Inc(Destination);
+      end;
+      while Left < MiddleIndex do
+      begin
+        Scratch[Destination] := AKeys[Left];
+        Inc(Left);
+        Inc(Destination);
+      end;
+      while Right < HighIndex do
+      begin
+        Scratch[Destination] := AKeys[Right];
+        Inc(Right);
+        Inc(Destination);
+      end;
+      LowIndex := LowIndex + 2 * Width;
+    end;
+
+    for Index := 0 to ACount - 1 do
+      AKeys[Index] := Scratch[Index];
+    Width := Width * 2;
+  end;
+end;
+
 function OrderOwnStringPropertyKeys(const AKeys: TArray<string>):
   TArray<string>;
 var
-  Count, I, J, K: Integer;
+  Count, I, J: Integer;
   NumericKeys: TArray<UInt64>;
   OtherKeys: TArray<string>;
-  ParsedIndex, TempIndex: UInt64;
+  ParsedIndex: UInt64;
 begin
   SetLength(NumericKeys, Length(AKeys));
   SetLength(OtherKeys, Length(AKeys));
@@ -271,17 +375,7 @@ begin
     end;
   end;
 
-  for I := 1 to Count - 1 do
-  begin
-    TempIndex := NumericKeys[I];
-    K := I - 1;
-    while (K >= 0) and (NumericKeys[K] > TempIndex) do
-    begin
-      NumericKeys[K + 1] := NumericKeys[K];
-      Dec(K);
-    end;
-    NumericKeys[K + 1] := TempIndex;
-  end;
+  SortArrayIndexKeys(NumericKeys, Count);
 
   SetLength(Result, Count + J);
   for I := 0 to Count - 1 do
