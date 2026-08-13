@@ -686,6 +686,7 @@ function TGocciaURLSearchParamsIteratorValue.AdvanceNext: TGocciaObjectValue;
 var
   Params: TGocciaURLSearchParamsValue;
   EntryArray: TGocciaArrayValue;
+  EntryRoot: TGocciaTempRoot;
 begin
   if FDone then
   begin
@@ -710,12 +711,19 @@ begin
         TGocciaStringLiteralValue.Create(Params.List[FIndex].Value), False);
     spikEntries:
     begin
+      { The entry strings are GC safe points; root the pair while it fills. }
+      Goccia.GarbageCollector.InitializeTempRoot(EntryRoot);
       EntryArray := TGocciaArrayValue.Create;
-      EntryArray.Elements.Add(
-        TGocciaStringLiteralValue.Create(Params.List[FIndex].Name));
-      EntryArray.Elements.Add(
-        TGocciaStringLiteralValue.Create(Params.List[FIndex].Value));
-      Result := CreateIteratorResult(EntryArray, False);
+      Goccia.GarbageCollector.AddTempRootIfNeeded(EntryRoot, EntryArray);
+      try
+        EntryArray.Elements.Add(
+          TGocciaStringLiteralValue.Create(Params.List[FIndex].Name));
+        EntryArray.Elements.Add(
+          TGocciaStringLiteralValue.Create(Params.List[FIndex].Value));
+        Result := CreateIteratorResult(EntryArray, False);
+      finally
+        Goccia.GarbageCollector.RemoveTempRootIfNeeded(EntryRoot);
+      end;
     end;
   end;
   Inc(FIndex);
@@ -725,6 +733,7 @@ function TGocciaURLSearchParamsIteratorValue.DirectNext(out ADone: Boolean): TGo
 var
   Params: TGocciaURLSearchParamsValue;
   EntryArray: TGocciaArrayValue;
+  EntryRoot: TGocciaTempRoot;
 begin
   if FDone then
   begin
@@ -750,12 +759,19 @@ begin
       Result := TGocciaStringLiteralValue.Create(Params.List[FIndex].Value);
     spikEntries:
     begin
+      { The entry strings are GC safe points; root the pair while it fills. }
+      Goccia.GarbageCollector.InitializeTempRoot(EntryRoot);
       EntryArray := TGocciaArrayValue.Create;
-      EntryArray.Elements.Add(
-        TGocciaStringLiteralValue.Create(Params.List[FIndex].Name));
-      EntryArray.Elements.Add(
-        TGocciaStringLiteralValue.Create(Params.List[FIndex].Value));
-      Result := EntryArray;
+      Goccia.GarbageCollector.AddTempRootIfNeeded(EntryRoot, EntryArray);
+      try
+        EntryArray.Elements.Add(
+          TGocciaStringLiteralValue.Create(Params.List[FIndex].Name));
+        EntryArray.Elements.Add(
+          TGocciaStringLiteralValue.Create(Params.List[FIndex].Value));
+        Result := EntryArray;
+      finally
+        Goccia.GarbageCollector.RemoveTempRootIfNeeded(EntryRoot);
+      end;
     end;
   end;
   Inc(FIndex);
@@ -796,6 +812,7 @@ function TGocciaHeadersIteratorValue.AdvanceNext: TGocciaObjectValue;
 var
   H: TGocciaHeadersValue;
   EntryArray: TGocciaArrayValue;
+  EntryRoot: TGocciaTempRoot;
 begin
   if FDone then
   begin
@@ -814,12 +831,19 @@ begin
   case FKind of
     hikEntries:
     begin
+      { The entry strings are GC safe points; root the pair while it fills. }
+      Goccia.GarbageCollector.InitializeTempRoot(EntryRoot);
       EntryArray := TGocciaArrayValue.Create;
-      EntryArray.Elements.Add(
-        TGocciaStringLiteralValue.Create(H.Entries[FIndex].Name));
-      EntryArray.Elements.Add(
-        TGocciaStringLiteralValue.Create(H.Entries[FIndex].Value));
-      Result := CreateIteratorResult(EntryArray, False);
+      Goccia.GarbageCollector.AddTempRootIfNeeded(EntryRoot, EntryArray);
+      try
+        EntryArray.Elements.Add(
+          TGocciaStringLiteralValue.Create(H.Entries[FIndex].Name));
+        EntryArray.Elements.Add(
+          TGocciaStringLiteralValue.Create(H.Entries[FIndex].Value));
+        Result := CreateIteratorResult(EntryArray, False);
+      finally
+        Goccia.GarbageCollector.RemoveTempRootIfNeeded(EntryRoot);
+      end;
     end;
     hikKeys:
       Result := CreateIteratorResult(
@@ -835,6 +859,7 @@ function TGocciaHeadersIteratorValue.DirectNext(out ADone: Boolean): TGocciaValu
 var
   H: TGocciaHeadersValue;
   EntryArray: TGocciaArrayValue;
+  EntryRoot: TGocciaTempRoot;
 begin
   if FDone then
   begin
@@ -856,12 +881,19 @@ begin
   case FKind of
     hikEntries:
     begin
+      { The entry strings are GC safe points; root the pair while it fills. }
+      Goccia.GarbageCollector.InitializeTempRoot(EntryRoot);
       EntryArray := TGocciaArrayValue.Create;
-      EntryArray.Elements.Add(
-        TGocciaStringLiteralValue.Create(H.Entries[FIndex].Name));
-      EntryArray.Elements.Add(
-        TGocciaStringLiteralValue.Create(H.Entries[FIndex].Value));
-      Result := EntryArray;
+      Goccia.GarbageCollector.AddTempRootIfNeeded(EntryRoot, EntryArray);
+      try
+        EntryArray.Elements.Add(
+          TGocciaStringLiteralValue.Create(H.Entries[FIndex].Name));
+        EntryArray.Elements.Add(
+          TGocciaStringLiteralValue.Create(H.Entries[FIndex].Value));
+        Result := EntryArray;
+      finally
+        Goccia.GarbageCollector.RemoveTempRootIfNeeded(EntryRoot);
+      end;
     end;
     hikKeys:
       Result := TGocciaStringLiteralValue.Create(H.Entries[FIndex].Name);

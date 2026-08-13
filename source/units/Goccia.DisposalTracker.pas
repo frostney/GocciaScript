@@ -164,12 +164,18 @@ function CreateSuppressedErrorObject(const AError, ASuppressed: TGocciaValue;
 var
   ErrorObj: TGocciaObjectValue;
   SuppressedErrorProto: TGocciaObjectValue;
+  ErrorRoot: TGocciaTempRoot;
 begin
   SuppressedErrorProto := GetSuppressedErrorProto;
+  { The name/message/stack strings below are GC safe points; root the error
+    while it fills. }
+  InitializeTempRoot(ErrorRoot);
+  try
   if Assigned(SuppressedErrorProto) then
     ErrorObj := TGocciaObjectValue.Create(SuppressedErrorProto)
   else
     ErrorObj := TGocciaObjectValue.Create(GetErrorProto);
+  AddTempRootIfNeeded(ErrorRoot, ErrorObj);
   ErrorObj.HasErrorData := True;
   ErrorObj.DefineProperty(PROP_NAME,
     TGocciaPropertyDescriptorData.Create(
@@ -198,6 +204,9 @@ begin
         TGocciaCallStack.Instance.CaptureStackTrace(SUPPRESSED_ERROR_NAME, AMessage)));
 
   Result := ErrorObj;
+  finally
+    RemoveTempRootIfNeeded(ErrorRoot);
+  end;
 end;
 
 // TC39 Explicit Resource Management §3.3 GetDisposeMethod(V, hint)

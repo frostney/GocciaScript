@@ -42,6 +42,7 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
+  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Values.ErrorHelper;
 
@@ -51,22 +52,35 @@ const
 var
   GIntlFallbackSymbolSlot: TGocciaRealmSlotId;
 
+{ Each part string is charged against the memory ceiling — a GC safe point —
+  so the array and the in-flight part object need temp roots. }
 function FormatPartsToArray(const AParts: TIntlFormatPartArray): TGocciaArrayValue;
 var
   I: Integer;
   PartObj: TGocciaObjectValue;
+  ResultRoot: TGocciaTempRoot;
+  PartRoot: TGocciaTempRoot;
 begin
-  Result := TGocciaArrayValue.Create;
-  for I := 0 to Length(AParts) - 1 do
-  begin
-    PartObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-    PartObj.AssignProperty(PROP_TYPE, TGocciaStringLiteralValue.Create(AParts[I].PartType));
-    PartObj.AssignProperty(PROP_VALUE, TGocciaStringLiteralValue.Create(AParts[I].Value));
-    if AParts[I].Source <> '' then
-      PartObj.AssignProperty(PROP_SOURCE, TGocciaStringLiteralValue.Create(AParts[I].Source));
-    if AParts[I].UnitIdentifier <> '' then
-      PartObj.AssignProperty(PROP_UNIT, TGocciaStringLiteralValue.Create(AParts[I].UnitIdentifier));
-    Result.Elements.Add(PartObj);
+  InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(PartRoot);
+  try
+    Result := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ResultRoot, Result);
+    for I := 0 to Length(AParts) - 1 do
+    begin
+      PartObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+      AddTempRootIfNeeded(PartRoot, PartObj);
+      PartObj.AssignProperty(PROP_TYPE, TGocciaStringLiteralValue.Create(AParts[I].PartType));
+      PartObj.AssignProperty(PROP_VALUE, TGocciaStringLiteralValue.Create(AParts[I].Value));
+      if AParts[I].Source <> '' then
+        PartObj.AssignProperty(PROP_SOURCE, TGocciaStringLiteralValue.Create(AParts[I].Source));
+      if AParts[I].UnitIdentifier <> '' then
+        PartObj.AssignProperty(PROP_UNIT, TGocciaStringLiteralValue.Create(AParts[I].UnitIdentifier));
+      Result.Elements.Add(PartObj);
+    end;
+  finally
+    RemoveTempRootIfNeeded(PartRoot);
+    RemoveTempRootIfNeeded(ResultRoot);
   end;
 end;
 

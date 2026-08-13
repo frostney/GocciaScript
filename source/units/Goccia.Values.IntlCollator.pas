@@ -48,6 +48,7 @@ uses
   IntlTypes,
 
   Goccia.Error.Messages,
+  Goccia.GarbageCollector,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
@@ -517,9 +518,15 @@ function TGocciaIntlCollatorValue.IntlCollatorResolvedOptions(const AArgs: TGocc
 var
   C: TGocciaIntlCollatorValue;
   Obj: TGocciaObjectValue;
+  ObjRoot: TGocciaTempRoot;
 begin
   C := AsCollator(AThisValue, 'Intl.Collator.prototype.resolvedOptions');
+  { The option strings below are GC safe points; root the object while it
+    fills. }
+  InitializeTempRoot(ObjRoot);
+  try
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  AddTempRootIfNeeded(ObjRoot, Obj);
   Obj.CreateDataPropertyOrThrow('locale', TGocciaStringLiteralValue.Create(C.FLocale));
   Obj.CreateDataPropertyOrThrow('usage', TGocciaStringLiteralValue.Create(C.FUsage));
   Obj.CreateDataPropertyOrThrow('sensitivity', TGocciaStringLiteralValue.Create(C.FSensitivity));
@@ -528,6 +535,9 @@ begin
   Obj.CreateDataPropertyOrThrow('numeric', TGocciaBooleanLiteralValue.Create(C.FNumeric));
   Obj.CreateDataPropertyOrThrow('caseFirst', TGocciaStringLiteralValue.Create(C.FCaseFirst));
   Result := Obj;
+  finally
+    RemoveTempRootIfNeeded(ObjRoot);
+  end;
 end;
 
 initialization

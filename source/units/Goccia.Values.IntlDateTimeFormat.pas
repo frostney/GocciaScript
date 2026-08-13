@@ -82,6 +82,7 @@ uses
 
   Goccia.Builtins.Intl,
   Goccia.Error.Messages,
+  Goccia.GarbageCollector,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
@@ -2463,6 +2464,7 @@ function TGocciaIntlDateTimeFormatValue.IntlDateTimeFormatResolvedOptions(const 
 var
   DTF: TGocciaIntlDateTimeFormatValue;
   Obj: TGocciaObjectValue;
+  ObjRoot: TGocciaTempRoot;
 
   procedure AddStringOption(const AName, AValue: string);
   begin
@@ -2471,7 +2473,12 @@ var
 
 begin
   DTF := AsDateTimeFormat(AThisValue, 'Intl.DateTimeFormat.prototype.resolvedOptions');
+  { The option strings below are GC safe points; root the object while it
+    fills. }
+  InitializeTempRoot(ObjRoot);
+  try
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  AddTempRootIfNeeded(ObjRoot, Obj);
   AddStringOption('locale', DTF.FLocale);
   AddStringOption('calendar', DTF.FCalendar);
   AddStringOption('numberingSystem', DTF.FNumberingSystem);
@@ -2513,6 +2520,9 @@ begin
   if DTF.FTimeStyle <> '' then
     AddStringOption('timeStyle', DTF.FTimeStyle);
   Result := Obj;
+  finally
+    RemoveTempRootIfNeeded(ObjRoot);
+  end;
 end;
 
 initialization

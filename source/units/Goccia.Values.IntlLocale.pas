@@ -77,6 +77,7 @@ uses
   IntlTypes,
 
   Goccia.Error.Messages,
+  Goccia.GarbageCollector,
   Goccia.Intl.CLDRData,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
@@ -545,19 +546,38 @@ begin
   SetLength(AParsed.Extensions, WriteIndex);
 end;
 
+{ Each element string is charged against the memory ceiling, so its
+  construction is a GC safe point.  The array under construction is reachable
+  only from this frame, so it needs a temp root or the collection sweeps it
+  and the next Add writes through a dangling pointer. }
 function CreateStringArray(const AValues: IntlTypes.TStringArray): TGocciaArrayValue;
 var
   Index: Integer;
+  ResultRoot: TGocciaTempRoot;
 begin
-  Result := TGocciaArrayValue.Create;
-  for Index := 0 to High(AValues) do
-    Result.Elements.Add(TGocciaStringLiteralValue.Create(AValues[Index]));
+  InitializeTempRoot(ResultRoot);
+  try
+    Result := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ResultRoot, Result);
+    for Index := 0 to High(AValues) do
+      Result.Elements.Add(TGocciaStringLiteralValue.Create(AValues[Index]));
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 function CreateSingleStringArray(const AValue: string): TGocciaArrayValue;
+var
+  ResultRoot: TGocciaTempRoot;
 begin
-  Result := TGocciaArrayValue.Create;
-  Result.Elements.Add(TGocciaStringLiteralValue.Create(AValue));
+  InitializeTempRoot(ResultRoot);
+  try
+    Result := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ResultRoot, Result);
+    Result.Elements.Add(TGocciaStringLiteralValue.Create(AValue));
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 function NormalizeCalendarArray(const AValues: IntlTypes.TStringArray): IntlTypes.TStringArray;
@@ -1369,15 +1389,24 @@ var
   L: TGocciaIntlLocaleValue;
   Direction: string;
   Obj: TGocciaObjectValue;
+  ObjRoot: TGocciaTempRoot;
 begin
   L := AsLocale(AThisValue, 'Intl.Locale.prototype.getTextInfo');
   if not TryGetScriptTextDirection(L.FScript, Direction) and
      not TryGetLocaleTextDirection(L.FBaseName, Direction) then
     Direction := 'ltr';
 
-  Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Obj.AssignProperty('direction', TGocciaStringLiteralValue.Create(Direction));
-  Result := Obj;
+  { The direction string and charged property storage are GC safe points;
+    root the object while it fills. }
+  InitializeTempRoot(ObjRoot);
+  try
+    Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    AddTempRootIfNeeded(ObjRoot, Obj);
+    Obj.AssignProperty('direction', TGocciaStringLiteralValue.Create(Direction));
+    Result := Obj;
+  finally
+    RemoveTempRootIfNeeded(ObjRoot);
+  end;
 end;
 
 // ECMA-402 §sec-intl.locale.prototype.getweekinfo Intl.Locale.prototype.getWeekInfo()
@@ -1386,6 +1415,7 @@ var
   L: TGocciaIntlLocaleValue;
   FirstDay, WeekendStart, WeekendEnd, MinimalDays, OverrideFirstDay: Integer;
   Obj: TGocciaObjectValue;
+  ObjRoot: TGocciaTempRoot;
 begin
   L := AsLocale(AThisValue, 'Intl.Locale.prototype.getWeekInfo');
 
@@ -1401,10 +1431,18 @@ begin
   if OverrideFirstDay <> 0 then
     FirstDay := OverrideFirstDay;
 
-  Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Obj.AssignProperty('firstDay', TGocciaNumberLiteralValue.Create(FirstDay));
-  Obj.AssignProperty('weekend', CreateWeekendArray(WeekendStart, WeekendEnd));
-  Result := Obj;
+  { Property storage growth is charged on assignment — a GC safe point — so
+    the object needs a temp root while it fills. }
+  InitializeTempRoot(ObjRoot);
+  try
+    Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    AddTempRootIfNeeded(ObjRoot, Obj);
+    Obj.AssignProperty('firstDay', TGocciaNumberLiteralValue.Create(FirstDay));
+    Obj.AssignProperty('weekend', CreateWeekendArray(WeekendStart, WeekendEnd));
+    Result := Obj;
+  finally
+    RemoveTempRootIfNeeded(ObjRoot);
+  end;
 end;
 
 function TGocciaIntlLocaleValue.IntlLocaleToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
