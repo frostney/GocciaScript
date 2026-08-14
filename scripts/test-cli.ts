@@ -911,9 +911,16 @@ console.log("--max-memory (own-key enumeration survives a mid-loop collection)..
       timeout: 60_000,
     });
     const out = proc.stdout.toString() + proc.stderr.toString();
-    // A budget refusal ("would exceed the memory budget") is the intended
-    // uncatchable ceiling. Any other fatal — bus error, access violation,
-    // nil object check — is the heap corruption this test guards against.
+    // The engine has two memory limiters and they surface differently, which is
+    // why the clauses below excuse one text and reject every other fatal. A
+    // charged allocation (string payload, buffer) raises a script-catchable
+    // RangeError. The growth gate (RequireNativeBytes, Goccia.MemoryLimit.pas)
+    // raises TGocciaMemoryLimitError, which is deliberately opaque to the guest:
+    // every boundary re-raises it, it escapes to the host, and the loader reports
+    // it as "Fatal error: ... would exceed the memory budget" with exit 1. That
+    // text is a refusal by design, not a crash — do not tighten these clauses
+    // into failures. Any other fatal — bus error, access violation, nil object
+    // check — is the heap corruption this test guards against.
     if (out.includes("Fatal error") && !out.includes("would exceed the memory budget"))
       throw new Error(`Own-key enumeration at --max-memory=${maxMemory} crashed: ${out}`);
     if (proc.exitCode !== 0 && !out.includes("RangeError") && !out.includes("would exceed the memory budget"))
@@ -929,6 +936,52 @@ console.log("--max-memory (own-key enumeration survives a mid-loop collection)..
   if (exitCode !== 0) throw new Error(`Own-key enumeration exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
   if (json.files?.[0]?.result !== 150000) throw new Error(`Own-key enumeration should return 150000, got ${json.files?.[0]?.result}`);
 }
+
+// Parking is measured, never assumed. A fixed ballast cap fails silently in
+// both directions: at a tight ceiling the loop stops while the budget still has
+// room to spare, and at a wide one the cap runs out long before the ceiling is
+// in reach — either way the probe runs unparked and passes without ever entering
+// the window it exists to test. This grows ballast in bounded passes, collecting
+// between them so each measurement counts live bytes only, and reports the
+// outcome for the assertions to insist on.
+//
+// Shared by every parked-heap block below (parser probes, parse ceiling, parse
+// gate, stringify gate) so the calibration is defined once: they differ only in
+// the slack they park at, which is measured per block and passed in here.
+const parkingPreamble = (slackTarget: number): string[] => [
+  `const SLACK = ${slackTarget};`,
+  // Sized from the ceiling so it cannot run out, and materialised before the
+  // first measurement so it counts as baseline live set instead of quietly
+  // defeating the parking it is driving.
+  "const iters = Array.from({ length: Math.ceil(Goccia.gc.maxBytes / 4096) + 64 }, (_, j) => j);",
+  "const ballast = [];",
+  "let slack = Goccia.gc.maxBytes;",
+  "Goccia.gc();",
+  // Each pass adds only live ballast and then collects, so the post-collection
+  // slack falls monotonically and a handful of passes converges. Measuring
+  // before the collection is what let the old loop stop early: it was reading
+  // garbage the next collection would hand straight back.
+  //
+  // The push threshold sits one ballast chunk below the target because each
+  // collection hands back a little transient garbage: pushing to exactly SLACK
+  // lets the post-collection measurement bounce back just above it and stall
+  // there for every remaining pass (CI stalled 116 bytes short of a 600000
+  // target this way — the baseline live set differs per platform, so the
+  // convergence point does too). The pass cap is a generous termination bound,
+  // not a calibration: parking breaks out early on the first pass that lands.
+  "for (const pass of Array.from({ length: 32 }, (_, p) => p)) {",
+  "  for (const i of iters) {",
+  "    if (Goccia.gc.maxBytes - Goccia.gc.bytesAllocated <= SLACK - 8192) break;",
+  '    ballast.push("x".repeat(4096));',
+  "  }",
+  "  Goccia.gc();",
+  "  slack = Goccia.gc.maxBytes - Goccia.gc.bytesAllocated;",
+  "  if (slack <= SLACK) break;",
+  "}",
+  // Every caller asserts on "parked true"; the trailing numbers are diagnostics
+  // for when a calibration drifts and the assertion starts failing.
+  'console.log("parked", slack <= SLACK, "slack", slack, "ballast", ballast.length);',
+];
 
 console.log("--max-memory (builtin result builders survive mid-build collections)...");
 {
@@ -968,6 +1021,8 @@ console.log("--max-memory (builtin result builders survive mid-build collections
         timeout: 120_000,
       });
       const out = proc.stdout.toString() + proc.stderr.toString();
+      // Budget-text fatal = the uncatchable growth gate refusing; see the
+      // two-limiter note on the own-key enumeration sweep above.
       if (out.includes("Fatal error") && !out.includes("would exceed the memory budget"))
         throw new Error(`Builder sweep at --max-memory=${maxMemory} crashed: ${out}`);
       if (proc.exitCode !== 0 && !out.includes("RangeError") && !out.includes("would exceed the memory budget"))
@@ -989,6 +1044,419 @@ console.log("--max-memory (builtin result builders survive mid-build collections
         throw new Error(`Builder sweep headroom run should exit 0, got ${proc.exitCode}: ${out}`);
       if (!out.includes("total 16014"))
         throw new Error(`Builder sweep headroom run should report total 16014: ${out}`);
+    }
+
+    // Second wave of the same defect class, in builders the first sweep does not
+    // reach: the JSONL chunk-result object and its error object, the JSON5
+    // reviver context/holder plus the replacer's partially built copies, and the
+    // Promise.allSettled entries — each is filled across a string allocation or
+    // a property write, and each of those is charged against the ceiling and so
+    // is a collecting safe point.
+    const wave2Src = [
+      'import * as JSONLNS from "goccia:jsonl"; const JSONL = JSONLNS.JSONL ?? JSONLNS;',
+      'import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;',
+      'const lines = Array.from({ length: 800 }, (_, i) => \'{"k":"v\' + i + \'","n":\' + i + \'}\').join("\\n");',
+      'const chunk = JSONL.parseChunk(lines + "\\n");',
+      // An unterminated record makes parseChunk build the SyntaxError object too.
+      "const badChunk = JSONL.parseChunk('{\"k\":1}\\n{\"k\":\\n');",
+      'const json5Text = "{" + Array.from({ length: 500 }, (_, i) => "k" + i + ": \'v" + i + "\'").join(", ") + "}";',
+      "const revived = JSON5.parse(json5Text, (k, v) => v);",
+      'const nested = JSON5.parse("[" + Array.from({ length: 400 }, (_, i) => "{a: " + i + "}").join(", ") + "]", (k, v) => v);',
+      "const replaced = JSON5.stringify(nested, (k, v) => v);",
+      "const sync = chunk.values.length + badChunk.values.length +",
+      "  (badChunk.error === null ? 0 : 1) + Object.keys(revived).length +",
+      "  nested.length + replaced.length;",
+      "Promise.allSettled(Array.from({ length: 500 }, (_, i) =>",
+      '  i % 2 === 0 ? Promise.resolve("v" + i) : Promise.reject(new Error("e" + i)),',
+      ")).then((rs) => {",
+      "  console.log('total', sync + rs.length +",
+      '    rs.filter((r) => r.status === "fulfilled").length +',
+      '    rs.filter((r) => r.status === "rejected").length);',
+      "});",
+      "",
+    ].join("\n");
+    const wave2Path = join(tmp, "sweep-wave2.mjs");
+    writeFileSync(wave2Path, wave2Src);
+    for (const maxMemory of [1_048_576, 1_572_864, 2_097_152, 3_145_728, 8_388_608, 67_108_864]) {
+      const proc = Bun.spawnSync([LOADER, `--max-memory=${maxMemory}`, wave2Path], {
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 120_000,
+      });
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      // Budget-text fatal = the uncatchable growth gate refusing, as above.
+      if (out.includes("Fatal error") && !out.includes("would exceed the memory budget"))
+        throw new Error(`Wave-2 builder sweep at --max-memory=${maxMemory} crashed: ${out}`);
+      if (proc.exitCode !== 0 && !out.includes("RangeError") && !out.includes("would exceed the memory budget"))
+        throw new Error(`Wave-2 builder sweep at --max-memory=${maxMemory} failed without a clean refusal (exitCode=${proc.exitCode}): ${out}`);
+      if (proc.exitCode === 0 && !out.includes("total 5793"))
+        throw new Error(`Wave-2 builder sweep at --max-memory=${maxMemory} completed with wrong total: ${out}`);
+    }
+
+    // As above, one guaranteed-success run so an all-refusals sweep cannot pass
+    // vacuously.
+    {
+      const proc = Bun.spawnSync([LOADER, "--max-memory=134217728", wave2Path], {
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 120_000,
+      });
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 0)
+        throw new Error(`Wave-2 builder sweep headroom run should exit 0, got ${proc.exitCode}: ${out}`);
+      if (!out.includes("total 5793"))
+        throw new Error(`Wave-2 builder sweep headroom run should report total 5793: ${out}`);
+    }
+
+    // A ceiling sweep only lands in the collecting window by luck: the pressure
+    // collection runs inside the allocation that would cross the ceiling, so the
+    // heap has to already sit right below it. This shape parks it there on
+    // purpose — ballast is grown until the remaining budget is a fixed slack,
+    // after which nearly every builder allocation collects — and then keeps the
+    // reviver/replacer results alive so a swept container's slot is reused (that
+    // reuse is what turns the dangling pointer into an observable fault). With
+    // the JSON5 holder/context/copy roots removed this faults within seconds
+    // ("Object reference is Nil", "Invalid type cast"); with them it either
+    // completes or refuses cleanly.
+    const parkedSrc = [
+      'import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;',
+      "const ballast = [];",
+      "for (const i of Array.from({ length: 20000 }, (_, j) => j)) {",
+      "  if (Goccia.gc.maxBytes - Goccia.gc.bytesAllocated <= 262144) break;",
+      '  ballast.push("x".repeat(2048));',
+      "}",
+      "const kept = [];",
+      "let n = 0;",
+      "for (const i of Array.from({ length: 600 }, (_, j) => j)) {",
+      "  const revived = JSON5.parse(\"{a: 1, b: 'two'}\", (k, v) => v);",
+      "  const text = JSON5.stringify({ a: 1, b: [2, 3] }, (k, v) => v);",
+      "  kept.push(revived, text);",
+      "  n += Object.keys(revived).length + text.length;",
+      "}",
+      "console.log('parked', n, ballast.length > 0, kept.length);",
+      "",
+    ].join("\n");
+    const parkedPath = join(tmp, "sweep-parked.mjs");
+    writeFileSync(parkedPath, parkedSrc);
+    for (const maxMemory of [2_097_152, 3_145_728, 4_194_304]) {
+      const proc = Bun.spawnSync([LOADER, `--max-memory=${maxMemory}`, parkedPath], {
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 180_000,
+      });
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      // A parked heap makes the growth gate far more likely to be the limiter
+      // that fires, and its refusal is uncatchable by design: the budget text is
+      // a legitimate outcome here, anything else fatal is not. See the
+      // two-limiter note on the own-key enumeration sweep above.
+      if (out.includes("Fatal error") && !out.includes("would exceed the memory budget"))
+        throw new Error(`Parked-heap builder run at --max-memory=${maxMemory} crashed: ${out}`);
+      if (proc.exitCode !== 0 && !out.includes("RangeError") && !out.includes("would exceed the memory budget"))
+        throw new Error(`Parked-heap builder run at --max-memory=${maxMemory} failed without a clean refusal (exitCode=${proc.exitCode}): ${out}`);
+      if (proc.exitCode === 0 && !out.includes("parked 9000 true 1200"))
+        throw new Error(`Parked-heap builder run at --max-memory=${maxMemory} completed with wrong result: ${out}`);
+    }
+
+    // The same defect class in the recursive parsers, which build their trees in
+    // plain Pascal fields and locals (JSON's visitor stack, YAML's key/value
+    // locals and anchor map, JSONL's record accumulator, TOML's node tree) that
+    // the collector cannot see. The shape below parks the heap right under the
+    // ceiling with no other garbage available, so the parse crosses the ceiling
+    // partway through and the only thing the pressure collection can free is the
+    // in-progress tree itself — after which the parse keeps writing into swept
+    // containers and the remaining values reuse their memory.
+    //
+    // The parse is wrapped in try/catch because a refused allocation surfaces as a
+    // catchable JS RangeError. A crash used to be indistinguishable from a clean
+    // refusal — both arrived as a caught SyntaxError, because the builtins
+    // converted every exception out of the parser into one — so the assertions
+    // read the whole line rather than just its shape.
+    const USE_AFTER_FREE_SIGNATURES = [
+      "Access violation",
+      "Invalid type cast",
+      "Object reference is Nil",
+      "SIGSEGV",
+      "Segmentation fault",
+      "EAccessViolation",
+      // FPC runtime errors for a nil-object call and an invalid typecast, as
+      // reported when no handler formats them.
+      "Runtime error 210",
+      "Runtime error 216",
+      "Runtime error 219",
+      "Runtime error 204",
+    ];
+
+    // A refusal whose message is empty: the shape a blanket `on E: Exception`
+    // handler produces when it relabels an engine failure, since the Pascal
+    // Message of a thrown JS value is empty by construction. `SyntaxError: ` with
+    // nothing after it is a resource ceiling the guest can mistake for bad input,
+    // so it is a failure, not a refusal.
+    const EMPTY_REFUSAL = /^refused \S+ ::\s*$/m;
+
+    // `expect` is the exact line the parse must produce when it completes.
+    // "ok " on its own proves nothing: a container that was swept and had its
+    // memory reused almost always yields silently wrong data rather than a crash,
+    // so every length and count is read back and compared.
+    //
+    // `windowCeiling` / `windowSlack` override the collecting-window run for
+    // probes whose parse cannot finish in the default window. Every probe must
+    // have one configuration that completes while parked, or the read-back check
+    // only ever runs unballasted and the window run proves nothing; the values
+    // are measured per probe, not guessed. Slack alone was enough for all nine
+    // here — no probe needs a different ceiling — but both knobs are exposed
+    // because which one moves a stuck probe into its window is a measurement.
+    // See the window run below.
+    const parserProbes: Array<{
+      name: string;
+      setup: string[];
+      parse: string;
+      check: string;
+      expect: string;
+      windowCeiling?: number;
+      windowSlack?: number;
+    }> = [
+      {
+        name: "json-flat",
+        setup: [
+          'const doc = "[" + Array.from({ length: 1200 }, (_, i) => \'"\' + S + i + \'"\').join(",") + "]";',
+        ],
+        parse: "JSON.parse(doc)",
+        check: "'ok', b.length, b[0].length, b[600].length, b[1199].length",
+        expect: "ok 1200 201 203 204",
+      },
+      {
+        name: "json-nested",
+        setup: [
+          'const doc = "[" + Array.from({ length: 400 }, (_, i) => \'{"a":"\' + S + i + \'","b":["\' + S + \'","\' + S + \'"]}\').join(",") + "]";',
+        ],
+        parse: "JSON.parse(doc)",
+        check: "'ok', b.length, b[0].a.length, b[399].b[1].length",
+        expect: "ok 400 201 200",
+        // Measured: at the default 600000 the parse only ever refuses; it first
+        // completes at 650000 and 800000 leaves margin over that threshold.
+        windowSlack: 800_000,
+      },
+      {
+        name: "json5",
+        setup: [
+          'import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;',
+          'const doc = "[" + Array.from({ length: 1200 }, (_, i) => "\'" + S + i + "\'").join(",") + "]";',
+        ],
+        parse: "JSON5.parse(doc)",
+        check: "'ok', b.length, b[0].length, b[600].length, b[1199].length",
+        expect: "ok 1200 201 203 204",
+      },
+      {
+        // The JSONL accumulator: one array collecting every parsed record while
+        // each line's parse builds strings that can collect. Only the caller's
+        // hand-off window was rooted, not the loop that fills it.
+        name: "jsonl-chunk",
+        setup: [
+          'import * as JSONLNS from "goccia:jsonl"; const JSONL = JSONLNS.JSONL ?? JSONLNS;',
+          'const doc = Array.from({ length: 400 }, (_, i) => \'{"a":"\' + S + \'","b":"\' + S + i + \'"}\').join("\\n") + "\\n";',
+        ],
+        parse: "JSONL.parseChunk(doc)",
+        check: "'ok', b.values.length, b.values[0].a.length, b.values[399].b.length, b.done, b.error === null",
+        expect: "ok 400 200 203 true true",
+      },
+      {
+        // The same accumulator reached through the whole-input entry point, which
+        // returns the array directly instead of a chunk record.
+        name: "jsonl-parse",
+        setup: [
+          'import * as JSONLNS from "goccia:jsonl"; const JSONL = JSONLNS.JSONL ?? JSONLNS;',
+          'const doc = Array.from({ length: 400 }, (_, i) => \'{"a":"\' + S + \'","b":"\' + S + i + \'"}\').join("\\n") + "\\n";',
+        ],
+        parse: "JSONL.parse(doc)",
+        check: "'ok', b.length, b[0].a.length, b[399].b.length",
+        expect: "ok 400 200 203",
+      },
+      {
+        name: "yaml-block-and-flow",
+        setup: [
+          'import * as YAMLNS from "goccia:yaml"; const YAML = YAMLNS.YAML ?? YAMLNS;',
+          'const doc = Array.from({ length: 300 }, (_, i) => "k" + i + ":\\n  a: \'" + S + i + "\'\\n  b: [\'" + S + "\', \'" + S + "\']\\n  c:\\n    - \'" + S + "\'\\n    - \'" + S + "\'").join("\\n") + "\\n";',
+        ],
+        parse: "YAML.parse(doc)",
+        check: "'ok', Object.keys(b).length, b.k0.a.length, b.k299.b[1].length, b.k299.c[1].length",
+        expect: "ok 300 201 200 200",
+        // Measured: refuses through 750000, first completes at 800000.
+        windowSlack: 900_000,
+      },
+      {
+        // Explicit `? key` / `: value` entries: the key survives a full nested
+        // node parse before it is canonicalised, and the value survives the
+        // canonicalisation. Long keys make both windows wide.
+        name: "yaml-explicit-keys",
+        setup: [
+          'import * as YAMLNS from "goccia:yaml"; const YAML = YAMLNS.YAML ?? YAMLNS;',
+          'const K = "k".repeat(200);',
+          'const doc = Array.from({ length: 200 }, (_, i) => "? " + K + i + "\\n:\\n  - \'" + S + "\'\\n  - \'" + S + "\'").join("\\n") + "\\n";',
+        ],
+        parse: "YAML.parse(doc)",
+        check: "'ok', Object.keys(b).length, b[K + 0].length, b[K + 199][1].length",
+        expect: "ok 200 2 200",
+      },
+      {
+        // Anchors and aliases specifically: a value referenced only by the anchor
+        // map is invisible to the collector without a root over that map.
+        name: "yaml-anchors",
+        setup: [
+          'import * as YAMLNS from "goccia:yaml"; const YAML = YAMLNS.YAML ?? YAMLNS;',
+          'const doc = Array.from({ length: 250 }, (_, i) => "a" + i + ": &anc" + i + "\\n  x: \'" + S + i + "\'\\n  y: [\'" + S + "\', \'" + S + "\']\\nb" + i + ": *anc" + i + "\\nc" + i + ":\\n  <<: *anc" + i + "\\n  z: \'" + S + i + "\'").join("\\n") + "\\n";',
+        ],
+        parse: "YAML.parse(doc)",
+        check: "'ok', Object.keys(b).length, b.a0.x.length, b.b249.y[1].length, b.c249.z.length, b.c249.x.length",
+        expect: "ok 750 201 200 203 203",
+      },
+      {
+        name: "toml",
+        setup: [
+          'import * as TOMLNS from "goccia:toml"; const TOML = TOMLNS.TOML ?? TOMLNS;',
+          'const doc = Array.from({ length: 300 }, (_, i) => "k" + i + \' = "\' + S + i + \'"\\narr\' + i + \' = ["\' + S + \'", "\' + S + \'"]\\ninl\' + i + \' = { x = "\' + S + \'", y = "\' + S + \'" }\').join("\\n") + "\\n";',
+        ],
+        parse: "TOML.parse(doc)",
+        check: "'ok', Object.keys(b).length, b.k0.length, b.arr299[1].length, b.inl299.y.length",
+        expect: "ok 900 201 200 200",
+        // Measured: refuses through 750000, first completes at 800000.
+        windowSlack: 900_000,
+      },
+    ];
+
+    // Shared verdict for every parked-parse run. `requireParked` is off only for
+    // the headroom run, which deliberately carries no ballast. `requireExpect`
+    // is on for the calibrated window run, where a refusal is not an acceptable
+    // outcome — see there.
+    const assertProbeRun = (
+      label: string,
+      out: string,
+      exitCode: number | null,
+      expect: string,
+      requireParked: boolean,
+      requireExpect: boolean,
+    ): void => {
+      const signature = USE_AFTER_FREE_SIGNATURES.find((text) => out.includes(text));
+      if (signature) throw new Error(`${label} hit a use-after-free (${signature}): ${out}`);
+      if (out.includes("Fatal error") && !out.includes("would exceed the memory budget"))
+        throw new Error(`${label} crashed: ${out}`);
+      if (requireParked && !out.includes("parked true"))
+        throw new Error(
+          `${label} never got the heap under the ceiling, so it exercised no collecting window: ${out}`,
+        );
+      if (EMPTY_REFUSAL.test(out))
+        throw new Error(
+          `${label} refused with an empty message — an engine failure relabelled as a syntax error: ${out}`,
+        );
+      if (out.includes("refused ") && !out.includes("refused RangeError"))
+        throw new Error(
+          `${label} refused with something other than the RangeError a memory ceiling raises: ${out}`,
+        );
+      if (requireExpect) {
+        // No `|| refused` escape: this run is calibrated to finish, and a
+        // refusal means the calibration drifted rather than that the ceiling
+        // did its job. Accepting one here would silently retire the only check
+        // that reads the parsed values back under collection pressure.
+        if (exitCode !== 0 || !out.includes(expect))
+          throw new Error(
+            `${label} did not complete with "${expect}" while parked (exitCode=${exitCode}): ${out}`,
+          );
+        return;
+      }
+      if (exitCode !== 0 && !out.includes("RangeError") && !out.includes("would exceed the memory budget"))
+        throw new Error(`${label} failed without a clean refusal (exitCode=${exitCode}): ${out}`);
+      if (exitCode === 0 && !out.includes(expect) && !out.includes("refused RangeError"))
+        throw new Error(`${label} produced neither "${expect}" nor a clean refusal: ${out}`);
+    };
+
+    for (const probe of parserProbes) {
+      const buildSrc = (preamble: string[]): string =>
+        [
+          ...probe.setup.filter((line) => line.startsWith("import ")),
+          'const S = "s".repeat(200);',
+          ...probe.setup.filter((line) => !line.startsWith("import ")),
+          ...preamble,
+          "try {",
+          `  const b = ${probe.parse};`,
+          `  console.log(${probe.check});`,
+          "} catch (e) {",
+          "  console.log('refused', e.name, '::', e.message);",
+          "}",
+          "",
+        ].join("\n");
+
+      // A tight window puts the crossing early in the parse, where the most
+      // allocation still follows to reuse whatever the sweep freed — 100 KiB is
+      // where the YAML explicit-key and JSONL accumulator defects reproduce, and
+      // a wider one lets several of them through. 2 MiB is not in the ceiling
+      // set: the wider documents cannot even be built at that ceiling, so the run
+      // refuses before it has a heap to park and proves nothing.
+      const tightPath = join(tmp, `parser-parked-${probe.name}.mjs`);
+      writeFileSync(tightPath, buildSrc(parkingPreamble(100_000)));
+      for (const maxMemory of [3_145_728, 4_194_304]) {
+        const proc = Bun.spawnSync([LOADER, `--max-memory=${maxMemory}`, tightPath], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 180_000,
+        });
+        assertProbeRun(
+          `Parked-heap ${probe.name} parse at --max-memory=${maxMemory}`,
+          proc.stdout.toString() + proc.stderr.toString(),
+          proc.exitCode,
+          probe.expect,
+          true,
+          false,
+        );
+      }
+
+      // A wider window at a wider ceiling: parked enough that the parse collects
+      // repeatedly, with enough left over that it can still finish. This is the
+      // only shape that can observe a swept container being written into and then
+      // read back, which is how a missing root shows up as wrong data rather than
+      // as a fault — so this run has to complete, and a refusal fails it.
+      //
+      // The window is per probe because the documents differ by an order of
+      // magnitude in what they need to finish: the default pair completes for six
+      // of the nine, while json-nested, yaml-block-and-flow and toml only refuse
+      // there and carry a measured `windowSlack` instead. Each override sits above
+      // the smallest slack at which that probe was observed to complete, and the
+      // slack the preamble converges to is deterministic for a given build, so
+      // "completes while parked" is a property of the calibration, not luck.
+      {
+        const windowCeiling = probe.windowCeiling ?? 6_291_456;
+        const windowPath = join(tmp, `parser-window-${probe.name}.mjs`);
+        writeFileSync(windowPath, buildSrc(parkingPreamble(probe.windowSlack ?? 600_000)));
+        const proc = Bun.spawnSync([LOADER, `--max-memory=${windowCeiling}`, windowPath], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 180_000,
+        });
+        assertProbeRun(
+          `Collecting-window ${probe.name} parse at --max-memory=${windowCeiling}`,
+          proc.stdout.toString() + proc.stderr.toString(),
+          proc.exitCode,
+          probe.expect,
+          true,
+          true,
+        );
+      }
+
+      // One run with room to spare and no ballast at all, so a probe that only
+      // ever refuses cannot pass vacuously: the parse has to complete and every
+      // value has to read back exactly.
+      {
+        const headroomPath = join(tmp, `parser-headroom-${probe.name}.mjs`);
+        writeFileSync(headroomPath, buildSrc([]));
+        const proc = Bun.spawnSync([LOADER, "--max-memory=134217728", headroomPath], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 180_000,
+        });
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        if (proc.exitCode !== 0)
+          throw new Error(`Headroom ${probe.name} run should exit 0, got ${proc.exitCode}: ${out}`);
+        if (!out.includes(probe.expect))
+          throw new Error(`Headroom ${probe.name} run should report "${probe.expect}": ${out}`);
+      }
     }
   } finally {
     clean(tmp);
@@ -1056,6 +1524,353 @@ console.log("--max-memory (builtin result builders survive mid-build collections
       if (exitCode !== 1) throw new Error(`Memory limit refusal (${label}) should exit 1, got ${exitCode}: ${JSON.stringify(json)}`);
       if (json.error?.type !== "MemoryLimitError") throw new Error(`Memory limit refusal (${label}) should report MemoryLimitError, got ${json.error?.type}`);
     }
+  }
+}
+
+// The data-format parse builtins are the other half of that convention. Their
+// handlers used to catch every Pascal exception out of the parser and re-throw it
+// as a SyntaxError, which is the same swallow in a different disguise: the
+// ceiling still reached the guest, but wearing a name that says "your input is
+// malformed" and carrying no message at all (a thrown JS value's Pascal Message
+// is empty by construction, so the conversion produced `SyntaxError: ` and
+// nothing else). Each handler now names only its own parse-error class, so a
+// refusal keeps its RangeError identity and its message.
+//
+// TOML is included even though its handler was already narrow — it is the
+// reference shape the others were brought in line with, and it should stay that
+// way. Both execution modes run, because a handler that only the VM path reaches
+// is a handler that can diverge.
+{
+  const ceilingTmp = mkdtemp("goccia-parse-ceiling-");
+  try {
+    const parkedParse: Array<[string, string[], string]> = [
+      ["JSON.parse", [], "JSON.parse(doc)"],
+      [
+        "JSON5.parse",
+        ['import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;'],
+        "JSON5.parse(doc)",
+      ],
+      [
+        "YAML.parse",
+        ['import * as YAMLNS from "goccia:yaml"; const YAML = YAMLNS.YAML ?? YAMLNS;'],
+        'YAML.parse(Array.from({ length: 400 }, (_, i) => "k" + i + ": \'" + S + i + "\'").join("\\n") + "\\n")',
+      ],
+      [
+        "JSONL.parse",
+        ['import * as JSONLNS from "goccia:jsonl"; const JSONL = JSONLNS.JSONL ?? JSONLNS;'],
+        'JSONL.parse(Array.from({ length: 400 }, (_, i) => \'{"a":"\' + S + i + \'"}\').join("\\n") + "\\n")',
+      ],
+      [
+        "TOML.parse",
+        ['import * as TOMLNS from "goccia:toml"; const TOML = TOMLNS.TOML ?? TOMLNS;'],
+        'TOML.parse(Array.from({ length: 400 }, (_, i) => "k" + i + \' = "\' + S + i + \'"\').join("\\n") + "\\n")',
+      ],
+    ];
+
+    for (const [label, imports, parse] of parkedParse) {
+      for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+        const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+        console.log(`--max-memory (parse refusal keeps its RangeError: ${label} ${modeLabel})...`);
+        const src = [
+          ...imports,
+          'const S = "s".repeat(200);',
+          'const doc = "[" + Array.from({ length: 1200 }, (_, i) => \'"\' + S + i + \'"\').join(",") + "]";',
+          // Same measured parking as the parser probes above, at the slack this
+          // block was calibrated against.
+          ...parkingPreamble(300_000),
+          "try {",
+          `  const value = ${parse};`,
+          '  console.log("completed", value === null || value === undefined ? "empty" : "value");',
+          "} catch (e) {",
+          "  console.log('caught', e.name, '::', e.message);",
+          "}",
+          "",
+        ].join("\n");
+        const srcPath = join(ceilingTmp, `parse-ceiling-${label.replace(".", "-")}-${modeLabel}.mjs`);
+        writeFileSync(srcPath, src);
+        const proc = Bun.spawnSync([LOADER, "--max-memory=4194304", ...modeArgs, srcPath], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 180_000,
+        });
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        if (!out.includes("parked true"))
+          throw new Error(`Parse-ceiling ${label} (${modeLabel}) never parked the heap: ${out}`);
+        if (/^caught \S+ ::\s*$/m.test(out))
+          throw new Error(
+            `Parse-ceiling ${label} (${modeLabel}) surfaced a refusal with an empty message: ${out}`,
+          );
+        if (out.includes("caught SyntaxError"))
+          throw new Error(
+            `Parse-ceiling ${label} (${modeLabel}) relabelled a memory ceiling as a SyntaxError: ${out}`,
+          );
+        if (!out.includes("caught RangeError") && !out.includes("completed"))
+          throw new Error(
+            `Parse-ceiling ${label} (${modeLabel}) produced neither a RangeError refusal nor a completed parse: ${out}`,
+          );
+      }
+    }
+  } finally {
+    clean(ceilingTmp);
+  }
+}
+
+// The narrowing above must not have made the OTHER limiter guest-visible. A
+// charged allocation inside a parse raises the script-catchable RangeError the
+// block above pins; the growth gate (RequireNativeBytes, Goccia.MemoryLimit.pas)
+// raises TGocciaMemoryLimitError, which is opaque to the guest by design — the
+// narrowed handlers name only their own parse-error class, so the gate passes
+// straight through them, escapes to the host, and the loader reports it as
+// "Fatal error: ... would exceed the memory budget" with a nonzero exit. A guest
+// catch marker printing here would mean a parse builtin had converted the
+// ceiling into something script code can absorb and retry in a loop.
+//
+// Goccia.MemoryLimit.Test.pas guards the same convention at the executor
+// boundaries; this lives here because the gate has to be reached mid-parse,
+// which needs a measured park against a CLI-set ceiling, and because the
+// assertion is host-level (exit code plus the loader's report).
+//
+// The shape: a wide object of cheap numeric values, so the parse charges almost
+// nothing per property (~24 bytes measured) while the property map's storage
+// doubling asks for a single block far larger than the parked slack. The
+// document is built before parking, or building it — not parsing it — is what
+// would cross the ceiling.
+{
+  const gateTmp = mkdtemp("goccia-parse-gate-");
+  try {
+    const gatedParses: Array<[string, string[], string, string]> = [
+      [
+        "JSON.parse",
+        [],
+        'const doc = "{" + Array.from({ length: 4000 }, (_, i) => \'"k\' + i + \'":\' + i).join(",") + "}";',
+        "JSON.parse(doc)",
+      ],
+      [
+        "JSON5.parse",
+        ['import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;'],
+        'const doc = "{" + Array.from({ length: 4000 }, (_, i) => "k" + i + ": " + i).join(",") + "}";',
+        "JSON5.parse(doc)",
+      ],
+      [
+        "YAML.parse",
+        ['import * as YAMLNS from "goccia:yaml"; const YAML = YAMLNS.YAML ?? YAMLNS;'],
+        'const doc = Array.from({ length: 4000 }, (_, i) => "k" + i + ": " + i).join("\\n") + "\\n";',
+        "YAML.parse(doc)",
+      ],
+    ];
+
+    for (const [label, imports, setup, parse] of gatedParses) {
+      for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+        const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+        console.log(`--max-memory (growth gate inside ${label} stays opaque to the guest: ${modeLabel})...`);
+        const src = [
+          ...imports,
+          setup,
+          // 120000 sits in the middle of the measured window: the parse survives
+          // its own charges (~96 KB for 4000 properties) but the storage doubling
+          // asks for 73632 or 147360 bytes in one block and is refused.
+          ...parkingPreamble(120_000),
+          "try {",
+          `  const value = ${parse};`,
+          '  console.log("guest-completed", Object.keys(value).length);',
+          "} catch (e) {",
+          // The marker the gate must never let the guest print.
+          "  console.log('guest-caught', e.name, '::', e.message);",
+          "}",
+          "",
+        ].join("\n");
+        const srcPath = join(gateTmp, `parse-gate-${label.replace(".", "-")}-${modeLabel}.mjs`);
+        writeFileSync(srcPath, src);
+        const proc = Bun.spawnSync([LOADER, "--max-memory=4194304", ...modeArgs, srcPath], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 180_000,
+        });
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        if (!out.includes("parked true"))
+          throw new Error(`Parse gate ${label} (${modeLabel}) never parked the heap: ${out}`);
+        if (out.includes("guest-caught"))
+          throw new Error(
+            `Parse gate ${label} (${modeLabel}) let the guest catch a growth-gate refusal: ${out}`,
+          );
+        if (out.includes("guest-completed"))
+          throw new Error(
+            `Parse gate ${label} (${modeLabel}) never reached the growth gate, so it proved nothing: ${out}`,
+          );
+        if (proc.exitCode === 0)
+          throw new Error(`Parse gate ${label} (${modeLabel}) should exit nonzero, got 0: ${out}`);
+        if (!out.includes("would exceed the memory budget"))
+          throw new Error(
+            `Parse gate ${label} (${modeLabel}) failed without the budget refusal the host reports: ${out}`,
+          );
+      }
+    }
+  } finally {
+    clean(gateTmp);
+  }
+}
+
+// The stringify half of the same convention. JSON.stringify and JSON5.stringify
+// wrap their whole body in a handler that converts a Pascal exception into a
+// script-visible TypeError ("JSON.stringify error: ..."), and that handler had
+// no re-raise allowlist: a growth-gate refusal arrived at the guest as a
+// catchable TypeError carrying the budget text, which is the ceiling-you-can-
+// ignore-in-a-loop this whole convention exists to prevent. Both handlers now
+// name the limit family (timeout, instruction limit, memory limit) ahead of the
+// generic arm, as Goccia.Builtins.GlobalFetch.pas and Goccia.Interpreter.pas do.
+//
+// Reaching the gate from a stringify needs a replacer: the plain serializer
+// writes into a native buffer and only the result string is charged, while the
+// replacer walk rebuilds every object property-by-property, so the property
+// map's storage doubling is what asks for one block larger than the parked
+// slack. The same 4000-key cheap-value object and the same measured slack as
+// the parse block above land inside the window (measured: the gate is the
+// crossing limiter for a slack of roughly 10000-150000; at 160000 and above the
+// stringify simply completes).
+{
+  const stringifyGateTmp = mkdtemp("goccia-stringify-gate-");
+  const parkedStringifySource = (
+    imports: string[],
+    setup: string,
+    call: string,
+    slackTarget: number,
+  ): string =>
+    [
+      ...imports,
+      setup,
+      ...parkingPreamble(slackTarget),
+      "try {",
+      `  const value = ${call};`,
+      '  console.log("guest-completed", value.length);',
+      "} catch (e) {",
+      // The marker the gate must never let the guest print.
+      "  console.log('guest-caught', e.name, '::', e.message);",
+      "}",
+      "",
+    ].join("\n");
+
+  try {
+    // The object is built before parking, or building it — not stringifying it —
+    // is what would cross the ceiling.
+    const wideObject =
+      'const obj = Object.fromEntries(Array.from({ length: 4000 }, (_, i) => ["k" + i, i]));';
+    const gatedStringifies: Array<[string, string[], string, string]> = [
+      ["JSON.stringify", [], wideObject, "JSON.stringify(obj, (k, v) => v)"],
+      [
+        "JSON5.stringify",
+        ['import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;'],
+        wideObject,
+        "JSON5.stringify(obj, (k, v) => v)",
+      ],
+    ];
+
+    for (const [label, imports, setup, call] of gatedStringifies) {
+      for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+        const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+        console.log(`--max-memory (growth gate inside ${label} stays opaque to the guest: ${modeLabel})...`);
+        const srcPath = join(stringifyGateTmp, `stringify-gate-${label.replace(".", "-")}-${modeLabel}.mjs`);
+        writeFileSync(srcPath, parkedStringifySource(imports, setup, call, 120000));
+        const proc = Bun.spawnSync([LOADER, "--max-memory=4194304", ...modeArgs, srcPath], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 180_000,
+        });
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        if (!out.includes("parked true"))
+          throw new Error(`Stringify gate ${label} (${modeLabel}) never parked the heap: ${out}`);
+        if (out.includes("guest-caught"))
+          throw new Error(
+            `Stringify gate ${label} (${modeLabel}) let the guest catch a growth-gate refusal: ${out}`,
+          );
+        if (out.includes("guest-completed"))
+          throw new Error(
+            `Stringify gate ${label} (${modeLabel}) never reached the growth gate, so it proved nothing: ${out}`,
+          );
+        if (proc.exitCode === 0)
+          throw new Error(`Stringify gate ${label} (${modeLabel}) should exit nonzero, got 0: ${out}`);
+        if (!out.includes("would exceed the memory budget"))
+          throw new Error(
+            `Stringify gate ${label} (${modeLabel}) failed without the budget refusal the host reports: ${out}`,
+          );
+      }
+    }
+
+    // Vacuity control for the "no guest-caught" assertion above. The other
+    // limiter — a charged string allocation — is script-visible by design and
+    // always was, so the same harness pointed at a shape that only ever crosses
+    // the charge (no replacer, one oversized string) MUST print the marker the
+    // gate cases forbid. If this stops catching, the assertions above are
+    // passing because nothing reaches any limiter, not because the ceiling is
+    // opaque.
+    console.log("--max-memory (stringify gate vacuity control: a charged refusal is still catchable)...");
+    {
+      const controlPath = join(stringifyGateTmp, "stringify-gate-control.mjs");
+      writeFileSync(
+        controlPath,
+        parkedStringifySource([], 'const big = "y".repeat(400000);', "JSON.stringify(big)", 120000),
+      );
+      const proc = Bun.spawnSync([LOADER, "--max-memory=4194304", controlPath], {
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 180_000,
+      });
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      if (!out.includes("parked true"))
+        throw new Error(`Stringify gate control never parked the heap: ${out}`);
+      if (!out.includes("guest-caught RangeError"))
+        throw new Error(
+          `Stringify gate control should let the guest catch the charged RangeError, making the gate assertions non-vacuous: ${out}`,
+        );
+      if (proc.exitCode !== 0)
+        throw new Error(`Stringify gate control should exit 0, got ${proc.exitCode}: ${out}`);
+    }
+  } finally {
+    clean(stringifyGateTmp);
+  }
+}
+
+console.log("goccia:yaml (deep flow nesting reports a named, non-empty error)...");
+{
+  // Depth refusals out of the data-format parsers do not agree on a class, and
+  // that split is pre-existing and deliberate here: JSON, JSON5 and JSONL hit
+  // their own parser-internal nesting cap and report SyntaxError, while YAML and
+  // TOML hit the shared native depth guard (EnterNativeDataDepth) and report
+  // RangeError "Maximum call stack size exceeded". Documented, not changed.
+  //
+  // For YAML this is a reclassification the except-narrowing brought about: the
+  // blanket handler used to relabel the depth guard's RangeError as a SyntaxError
+  // with an empty message, so the guest could not tell a resource ceiling from
+  // malformed input. The message being non-empty is the half that regressed.
+  const depthTmp = mkdtemp("goccia-parse-depth-");
+  try {
+    const src = [
+      'import * as YAMLNS from "goccia:yaml"; const YAML = YAMLNS.YAML ?? YAMLNS;',
+      'const deep = "[".repeat(5000) + "]".repeat(5000);',
+      "const report = (label, parse) => {",
+      "  try {",
+      "    parse();",
+      '    console.log(label, "no-throw", "::", "no-throw");',
+      "  } catch (e) {",
+      "    console.log(label, e.name, '::', e.message);",
+      "  }",
+      "};",
+      'report("yaml", () => YAML.parse(deep));',
+      'report("json", () => JSON.parse(deep));',
+      "",
+    ].join("\n");
+    const srcPath = join(depthTmp, "parse-depth.mjs");
+    writeFileSync(srcPath, src);
+    const proc = Bun.spawnSync([LOADER, srcPath], { stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+    const out = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode !== 0) throw new Error(`Parse depth run should exit 0, got ${proc.exitCode}: ${out}`);
+    if (!/^yaml RangeError :: .+$/m.test(out))
+      throw new Error(`YAML deep flow nesting should report a named RangeError with a message: ${out}`);
+    if (!out.includes("yaml RangeError :: Maximum call stack size exceeded"))
+      throw new Error(`YAML deep flow nesting should report the native depth guard's message: ${out}`);
+    if (!/^json SyntaxError :: .+$/m.test(out))
+      throw new Error(`JSON deep nesting should report a SyntaxError with a message: ${out}`);
+  } finally {
+    clean(depthTmp);
   }
 }
 

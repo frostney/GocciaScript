@@ -46,6 +46,7 @@ uses
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
+  Goccia.GarbageCollector,
   Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -120,21 +121,47 @@ function TGocciaJSONLBuiltin.BuildChunkResultObject(
 var
   ErrorValue: TGocciaValue;
   ResultObject: TGocciaObjectValue;
+  ValuesRoot: TGocciaTempRoot;
+  ResultRoot: TGocciaTempRoot;
+  ErrorRoot: TGocciaTempRoot;
 begin
-  ResultObject := TGocciaObjectValue.Create;
-  if AChunkResult.ErrorMessage = '' then
-    ErrorValue := TGocciaNullLiteralValue.NullValue
-  else
-    ErrorValue := CreateErrorObject(SYNTAX_ERROR_NAME, AChunkResult.ErrorMessage,
-      1);
+  { CreateErrorObject builds its message string, and a non-empty string charges
+    the memory ceiling — which collects when crossed, protecting only that
+    string. So the parsed values array, the result object, and the error object
+    are all rooted until the assignments below store them. (The property writes
+    themselves only check the budget and raise; they never collect.)
 
-  ResultObject.AssignProperty(PROP_VALUES, AChunkResult.Values);
-  ResultObject.AssignProperty(PROP_READ,
-    TGocciaNumberLiteralValue.Create(AChunkResult.Read));
-  ResultObject.AssignProperty(PROP_DONE,
-    TGocciaBooleanLiteralValue.Create(AChunkResult.Done));
-  ResultObject.AssignProperty(PROP_ERROR, ErrorValue);
-  Result := ResultObject;
+    The values array arrives already-parsed but still unreachable: the root
+    TGocciaJSONLParser.ParseChunk holds over it for the duration of its own loop
+    is gone by the time it returns, so this hand-off window needs its own. }
+  InitializeTempRoot(ValuesRoot);
+  InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(ErrorRoot);
+  AddTempRootIfNeeded(ValuesRoot, AChunkResult.Values);
+  try
+    ResultObject := TGocciaObjectValue.Create;
+    AddTempRootIfNeeded(ResultRoot, ResultObject);
+    if AChunkResult.ErrorMessage = '' then
+      ErrorValue := TGocciaNullLiteralValue.NullValue
+    else
+    begin
+      ErrorValue := CreateErrorObject(SYNTAX_ERROR_NAME,
+        AChunkResult.ErrorMessage, 1);
+      AddTempRootIfNeeded(ErrorRoot, ErrorValue);
+    end;
+
+    ResultObject.AssignProperty(PROP_VALUES, AChunkResult.Values);
+    ResultObject.AssignProperty(PROP_READ,
+      TGocciaNumberLiteralValue.Create(AChunkResult.Read));
+    ResultObject.AssignProperty(PROP_DONE,
+      TGocciaBooleanLiteralValue.Create(AChunkResult.Done));
+    ResultObject.AssignProperty(PROP_ERROR, ErrorValue);
+    Result := ResultObject;
+  finally
+    RemoveTempRootIfNeeded(ErrorRoot);
+    RemoveTempRootIfNeeded(ResultRoot);
+    RemoveTempRootIfNeeded(ValuesRoot);
+  end;
 end;
 
 function TGocciaJSONLBuiltin.JSONLParse(const AArgs: TGocciaArgumentsCollection;

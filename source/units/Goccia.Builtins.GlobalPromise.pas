@@ -665,6 +665,30 @@ begin
   if Assigned(FState) then FState.MarkReferences;
 end;
 
+// Builds one Promise.allSettled result entry: `{ status, value }` for a
+// fulfilment, `{ status, reason }` for a rejection. The status string charges
+// the memory ceiling, and crossing it collects with only that string protected —
+// so the allocation is a GC safe point, and the entry is reachable only from
+// this frame until the caller stores it. (The property writes only check the
+// budget and raise; they never collect.) Callers root the returned entry across
+// that store.
+function CreateAllSettledEntry(const AStatus, APropertyName: string;
+  const AValue: TGocciaValue): TGocciaObjectValue;
+var
+  EntryRoot: TGocciaTempRoot;
+begin
+  InitializeTempRoot(EntryRoot);
+  Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  AddTempRootIfNeeded(EntryRoot, Result);
+  try
+    Result.CreateDataPropertyOrThrow('status',
+      TGocciaStringLiteralValue.Create(AStatus));
+    Result.CreateDataPropertyOrThrow(APropertyName, AValue);
+  finally
+    RemoveTempRootIfNeeded(EntryRoot);
+  end;
+end;
+
 { TPromiseAllSettledFulfillHandler }
 
 constructor TPromiseAllSettledFulfillHandler.Create(
@@ -681,6 +705,7 @@ function TPromiseAllSettledFulfillHandler.Invoke(const AArgs: TGocciaArgumentsCo
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Entry: TGocciaObjectValue;
+  EntryRoot: TGocciaTempRoot;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if Assigned(FAlreadyCalled) and FAlreadyCalled.Called then Exit;
@@ -688,11 +713,17 @@ begin
     FAlreadyCalled.Called := True;
   if FState.Settled then Exit;
 
-  Entry := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Entry.CreateDataPropertyOrThrow('status',
-    TGocciaStringLiteralValue.Create('fulfilled'));
-  Entry.CreateDataPropertyOrThrow(PROP_VALUE, AArgs.GetElement(0));
-  FState.Results.Elements[FIndex] := Entry;
+  // Nothing but this frame references the entry until it lands in the results
+  // array, so it stays rooted across the store as well as across its own
+  // construction (see CreateAllSettledEntry).
+  Entry := CreateAllSettledEntry('fulfilled', PROP_VALUE, AArgs.GetElement(0));
+  InitializeTempRoot(EntryRoot);
+  AddTempRootIfNeeded(EntryRoot, Entry);
+  try
+    FState.Results.Elements[FIndex] := Entry;
+  finally
+    RemoveTempRootIfNeeded(EntryRoot);
+  end;
   FState.Remaining := FState.Remaining - 1;
 
   if FState.Remaining = 0 then
@@ -726,6 +757,7 @@ function TPromiseAllSettledRejectHandler.Invoke(const AArgs: TGocciaArgumentsCol
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Entry: TGocciaObjectValue;
+  EntryRoot: TGocciaTempRoot;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if Assigned(FAlreadyCalled) and FAlreadyCalled.Called then Exit;
@@ -733,11 +765,16 @@ begin
     FAlreadyCalled.Called := True;
   if FState.Settled then Exit;
 
-  Entry := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Entry.CreateDataPropertyOrThrow('status',
-    TGocciaStringLiteralValue.Create('rejected'));
-  Entry.CreateDataPropertyOrThrow('reason', AArgs.GetElement(0));
-  FState.Results.Elements[FIndex] := Entry;
+  // Same shape as the fulfill handler: nothing but this frame references the
+  // entry until it is stored in the results array.
+  Entry := CreateAllSettledEntry('rejected', 'reason', AArgs.GetElement(0));
+  InitializeTempRoot(EntryRoot);
+  AddTempRootIfNeeded(EntryRoot, Entry);
+  try
+    FState.Results.Elements[FIndex] := Entry;
+  finally
+    RemoveTempRootIfNeeded(EntryRoot);
+  end;
   FState.Remaining := FState.Remaining - 1;
 
   if FState.Remaining = 0 then
@@ -904,23 +941,6 @@ begin
     AObject.AssignSymbolProperty(ASymbol, AValue)
   else
     AObject.AssignProperty(AName, AValue);
-end;
-
-function CreateAllSettledEntry(const AStatus, APropertyName: string;
-  const AValue: TGocciaValue): TGocciaObjectValue;
-var
-  EntryRoot: TGocciaTempRoot;
-begin
-  InitializeTempRoot(EntryRoot);
-  Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  AddTempRootIfNeeded(EntryRoot, Result);
-  try
-    Result.CreateDataPropertyOrThrow('status',
-      TGocciaStringLiteralValue.Create(AStatus));
-    Result.CreateDataPropertyOrThrow(APropertyName, AValue);
-  finally
-    RemoveTempRootIfNeeded(EntryRoot);
-  end;
 end;
 
 { TPromiseKeyedFulfillHandler }

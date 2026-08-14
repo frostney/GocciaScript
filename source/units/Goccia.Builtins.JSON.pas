@@ -60,7 +60,10 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.ThreadCleanupRegistry,
+  Goccia.Timeout,
   Goccia.Utils,
   Goccia.Values.BigIntValue,
   Goccia.Values.Error,
@@ -297,10 +300,16 @@ begin
     InitializeTempRoot(HolderRoot);
     try
       // Step 2: Parse with parse-record tracking for the reviver context.
+      // Only the parser's own error means "this text is not JSON". A blanket
+      // Exception arm here also swallowed the engine's own failures: a refused
+      // allocation (TGocciaThrowValue carrying a RangeError, whose Pascal Message
+      // is empty by construction) became `SyntaxError: ` with no message, and a
+      // ceiling the guest can mistake for a syntax error is a ceiling it can
+      // retry in a loop. Everything that is not a parse error re-raises.
       try
         FParser.ParseWithRecord(JSONString, Result, ParseRecord);
       except
-        on E: Exception do
+        on E: EGocciaJSONParseError do
           ThrowSyntaxError(E.Message, SSuggestJSONFormat);
       end;
 
@@ -327,7 +336,7 @@ begin
     try
       Result := FParser.Parse(JSONString);
     except
-      on E: Exception do
+      on E: EGocciaJSONParseError do
         ThrowSyntaxError(E.Message, SSuggestJSONFormat);
     end;
   end;
@@ -369,10 +378,13 @@ begin
     ThrowSyntaxError(SErrorJSONRawJSONTrailingWhitespace, SSuggestJSONFormat);
 
   // Step 3: Parse jsonString as a JSON text. Throw SyntaxError if invalid.
+  // Narrow for the same reason as JSONParse: an engine failure is not a syntax
+  // error, and reporting it as one hides a refused allocation behind an empty
+  // message.
   try
     Parsed := FParser.Parse(JSONString);
   except
-    on E: Exception do
+    on E: EGocciaJSONParseError do
       ThrowSyntaxError(Format(SErrorJSONRawJSONInvalid, [E.Message]), SSuggestJSONFormat);
   end;
 
@@ -737,6 +749,21 @@ begin
       Result := TGocciaStringLiteralValue.Create(Stringified);
   except
     on E: TGocciaThrowValue do
+      raise;
+    // The generic arm below exists for the serializer's own native failures —
+    // anything the stringifier or a user toJSON/replacer surfaces as a plain
+    // Pascal exception — and turns them into a script-visible TypeError. The
+    // limit family is not that: WriteValue polls the deadline and the
+    // instruction counter (CheckNativeWork), and building the replacer's
+    // transformed copy grows property storage through the memory gate, so all
+    // three can land here. Converting one would hand the guest a ceiling it can
+    // catch and retry in a loop, which is exactly what the limit family is
+    // opaque to prevent (see Goccia.MemoryLimit.pas).
+    on E: TGocciaTimeoutError do
+      raise;
+    on E: TGocciaInstructionLimitError do
+      raise;
+    on E: TGocciaMemoryLimitError do
       raise;
     on E: Exception do
     begin

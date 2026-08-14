@@ -61,7 +61,9 @@ uses
 
   BOM,
   TextEncoding,
-  TextSemantics;
+  TextSemantics,
+
+  Goccia.GarbageCollector;
 
 constructor TGocciaJSONLParser.Create;
 begin
@@ -210,50 +212,64 @@ var
   LineText: string;
   NextLineStart: Integer;
   ParsedValue: TGocciaValue;
+  RecordsRoot: TGocciaTempRoot;
   StartIndex: Integer;
   EndIndex: Integer;
 begin
-  Result := TGocciaArrayValue.Create;
-  if not NormalizeTextRange(AText, 0, -1, StartIndex, EndIndex) then
-    Exit;
+  { The accumulator holds every record parsed so far, and until the caller takes
+    the result nothing else refers to it — this local is invisible to the
+    collector, which never scans the native stack. Each line's parse builds
+    non-empty strings, every one of which charges the memory ceiling and collects
+    when it crosses, protecting only that new string. So the accumulator stays
+    rooted for the whole loop. The values already inside it need no root of their
+    own: marking is precise and reaches them through the array. }
+  InitializeTempRoot(RecordsRoot);
+  try
+    Result := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(RecordsRoot, Result);
+    if not NormalizeTextRange(AText, 0, -1, StartIndex, EndIndex) then
+      Exit;
 
-  LineStart := StartIndex;
-  LineNumber := 1;
-  while LineStart < EndIndex do
-  begin
-    DelimiterStart := LineStart;
-    while (DelimiterStart < EndIndex) and
-      not (AText[DelimiterStart + 1] in [#10, #13]) do
-      Inc(DelimiterStart);
+    LineStart := StartIndex;
+    LineNumber := 1;
+    while LineStart < EndIndex do
+    begin
+      DelimiterStart := LineStart;
+      while (DelimiterStart < EndIndex) and
+        not (AText[DelimiterStart + 1] in [#10, #13]) do
+        Inc(DelimiterStart);
 
-    HasDelimiter := DelimiterStart < EndIndex;
-    if HasDelimiter then
-    begin
-      LineEnd := DelimiterStart;
-      DelimiterLength := 1;
-      if (AText[DelimiterStart + 1] = #13) and
-         (DelimiterStart + 1 < EndIndex) and
-         (AText[DelimiterStart + 2] = #10) then
-        DelimiterLength := 2;
-      NextLineStart := DelimiterStart + DelimiterLength;
-    end
-    else
-    begin
-      LineEnd := EndIndex;
-      NextLineStart := EndIndex;
+      HasDelimiter := DelimiterStart < EndIndex;
+      if HasDelimiter then
+      begin
+        LineEnd := DelimiterStart;
+        DelimiterLength := 1;
+        if (AText[DelimiterStart + 1] = #13) and
+           (DelimiterStart + 1 < EndIndex) and
+           (AText[DelimiterStart + 2] = #10) then
+          DelimiterLength := 2;
+        NextLineStart := DelimiterStart + DelimiterLength;
+      end
+      else
+      begin
+        LineEnd := EndIndex;
+        NextLineStart := EndIndex;
+      end;
+
+      LineText := Copy(AText, LineStart + 1, LineEnd - LineStart);
+      if not IsBlankLine(LineText) then
+      begin
+        if not TryParseLine(LineText, ParsedValue, ErrorMessage) then
+          raise EGocciaJSONLParseError.Create(
+            FormatParseError(LineNumber, ErrorMessage));
+        Result.Elements.Add(ParsedValue);
+      end;
+
+      LineStart := NextLineStart;
+      Inc(LineNumber);
     end;
-
-    LineText := Copy(AText, LineStart + 1, LineEnd - LineStart);
-    if not IsBlankLine(LineText) then
-    begin
-      if not TryParseLine(LineText, ParsedValue, ErrorMessage) then
-        raise EGocciaJSONLParseError.Create(
-          FormatParseError(LineNumber, ErrorMessage));
-      Result.Elements.Add(ParsedValue);
-    end;
-
-    LineStart := NextLineStart;
-    Inc(LineNumber);
+  finally
+    RemoveTempRootIfNeeded(RecordsRoot);
   end;
 end;
 
@@ -271,51 +287,60 @@ var
   LineText: string;
   NextLineStart: Integer;
   ParsedValue: TGocciaValue;
+  RecordsRoot: TGocciaTempRoot;
 begin
-  Result := TGocciaArrayValue.Create;
-  if not NormalizeByteRange(ABytes, 0, -1, EffectiveStart, EffectiveEnd) then
-    Exit;
+  { Same accumulator window as the string overload: unrooted for the whole chunk
+    parse otherwise, with every line's strings as collecting safe points. }
+  InitializeTempRoot(RecordsRoot);
+  try
+    Result := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(RecordsRoot, Result);
+    if not NormalizeByteRange(ABytes, 0, -1, EffectiveStart, EffectiveEnd) then
+      Exit;
 
-  if HasUTF8BOM(ABytes, EffectiveStart, EffectiveEnd) then
-    Inc(EffectiveStart, 3);
+    if HasUTF8BOM(ABytes, EffectiveStart, EffectiveEnd) then
+      Inc(EffectiveStart, 3);
 
-  LineStart := EffectiveStart;
-  LineNumber := 1;
-  while LineStart < EffectiveEnd do
-  begin
-    DelimiterStart := LineStart;
-    while (DelimiterStart < EffectiveEnd) and
-      not (ABytes[DelimiterStart] in [10, 13]) do
-      Inc(DelimiterStart);
-
-    HasDelimiter := DelimiterStart < EffectiveEnd;
-    if HasDelimiter then
+    LineStart := EffectiveStart;
+    LineNumber := 1;
+    while LineStart < EffectiveEnd do
     begin
-      LineEnd := DelimiterStart;
-      DelimiterLength := 1;
-      if (ABytes[DelimiterStart] = 13) and
-         (DelimiterStart + 1 < EffectiveEnd) and
-         (ABytes[DelimiterStart + 1] = 10) then
-        DelimiterLength := 2;
-      NextLineStart := DelimiterStart + DelimiterLength;
-    end
-    else
-    begin
-      LineEnd := EffectiveEnd;
-      NextLineStart := EffectiveEnd;
+      DelimiterStart := LineStart;
+      while (DelimiterStart < EffectiveEnd) and
+        not (ABytes[DelimiterStart] in [10, 13]) do
+        Inc(DelimiterStart);
+
+      HasDelimiter := DelimiterStart < EffectiveEnd;
+      if HasDelimiter then
+      begin
+        LineEnd := DelimiterStart;
+        DelimiterLength := 1;
+        if (ABytes[DelimiterStart] = 13) and
+           (DelimiterStart + 1 < EffectiveEnd) and
+           (ABytes[DelimiterStart + 1] = 10) then
+          DelimiterLength := 2;
+        NextLineStart := DelimiterStart + DelimiterLength;
+      end
+      else
+      begin
+        LineEnd := EffectiveEnd;
+        NextLineStart := EffectiveEnd;
+      end;
+
+      LineText := SliceBytesToString(ABytes, LineStart, LineEnd);
+      if not IsBlankLine(LineText) then
+      begin
+        if not TryParseLine(LineText, ParsedValue, ErrorMessage) then
+          raise EGocciaJSONLParseError.Create(
+            FormatParseError(LineNumber, ErrorMessage));
+        Result.Elements.Add(ParsedValue);
+      end;
+
+      LineStart := NextLineStart;
+      Inc(LineNumber);
     end;
-
-    LineText := SliceBytesToString(ABytes, LineStart, LineEnd);
-    if not IsBlankLine(LineText) then
-    begin
-      if not TryParseLine(LineText, ParsedValue, ErrorMessage) then
-        raise EGocciaJSONLParseError.Create(
-          FormatParseError(LineNumber, ErrorMessage));
-      Result.Elements.Add(ParsedValue);
-    end;
-
-    LineStart := NextLineStart;
-    Inc(LineNumber);
+  finally
+    RemoveTempRootIfNeeded(RecordsRoot);
   end;
 end;
 
@@ -334,69 +359,80 @@ var
   LineText: string;
   NextLineStart: Integer;
   ParsedValue: TGocciaValue;
+  RecordsRoot: TGocciaTempRoot;
   ResumeOffset: Integer;
 begin
-  Result.Values := TGocciaArrayValue.Create;
-  Result.Read := ClampOffset(AStart, Length(AText));
-  Result.Done := True;
-  Result.ErrorMessage := '';
-  if not NormalizeTextRange(AText, AStart, AEnd, EffectiveStart, EffectiveEnd) then
-  begin
-    Result.Read := EffectiveStart;
-    Exit;
-  end;
-
-  LineStart := EffectiveStart;
-  LineNumber := 1;
-  ResumeOffset := EffectiveStart;
-  while LineStart < EffectiveEnd do
-  begin
-    DelimiterStart := LineStart;
-    while (DelimiterStart < EffectiveEnd) and
-      not (AText[DelimiterStart + 1] in [#10, #13]) do
-      Inc(DelimiterStart);
-
-    HasDelimiter := DelimiterStart < EffectiveEnd;
-    if HasDelimiter then
+  { Result is a plain record: its Values field is no more visible to the
+    collector than a local would be, and it accumulates across a whole chunk of
+    per-line parses, each of which can collect while building a string. The
+    caller's BuildChunkResultObject takes over from here with a root of its own. }
+  InitializeTempRoot(RecordsRoot);
+  try
+    Result.Values := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(RecordsRoot, Result.Values);
+    Result.Read := ClampOffset(AStart, Length(AText));
+    Result.Done := True;
+    Result.ErrorMessage := '';
+    if not NormalizeTextRange(AText, AStart, AEnd, EffectiveStart, EffectiveEnd) then
     begin
-      LineEnd := DelimiterStart;
-      DelimiterLength := 1;
-      if (AText[DelimiterStart + 1] = #13) and
-         (DelimiterStart + 1 < EffectiveEnd) and
-         (AText[DelimiterStart + 2] = #10) then
-        DelimiterLength := 2;
-      NextLineStart := DelimiterStart + DelimiterLength;
-    end
-    else
-    begin
-      LineEnd := EffectiveEnd;
-      NextLineStart := EffectiveEnd;
+      Result.Read := EffectiveStart;
+      Exit;
     end;
 
-    LineText := Copy(AText, LineStart + 1, LineEnd - LineStart);
-    if not IsBlankLine(LineText) then
+    LineStart := EffectiveStart;
+    LineNumber := 1;
+    ResumeOffset := EffectiveStart;
+    while LineStart < EffectiveEnd do
     begin
-      if not TryParseLine(LineText, ParsedValue, ErrorMessage) then
+      DelimiterStart := LineStart;
+      while (DelimiterStart < EffectiveEnd) and
+        not (AText[DelimiterStart + 1] in [#10, #13]) do
+        Inc(DelimiterStart);
+
+      HasDelimiter := DelimiterStart < EffectiveEnd;
+      if HasDelimiter then
       begin
-        Result.Read := ResumeOffset;
-        Result.Done := False;
-        if HasDelimiter or not IsIncompleteFinalRecord(LineText, ErrorMessage) then
-          Result.ErrorMessage := FormatParseError(LineNumber, ErrorMessage);
-        Exit;
+        LineEnd := DelimiterStart;
+        DelimiterLength := 1;
+        if (AText[DelimiterStart + 1] = #13) and
+           (DelimiterStart + 1 < EffectiveEnd) and
+           (AText[DelimiterStart + 2] = #10) then
+          DelimiterLength := 2;
+        NextLineStart := DelimiterStart + DelimiterLength;
+      end
+      else
+      begin
+        LineEnd := EffectiveEnd;
+        NextLineStart := EffectiveEnd;
       end;
-      Result.Values.Elements.Add(ParsedValue);
+
+      LineText := Copy(AText, LineStart + 1, LineEnd - LineStart);
+      if not IsBlankLine(LineText) then
+      begin
+        if not TryParseLine(LineText, ParsedValue, ErrorMessage) then
+        begin
+          Result.Read := ResumeOffset;
+          Result.Done := False;
+          if HasDelimiter or not IsIncompleteFinalRecord(LineText, ErrorMessage) then
+            Result.ErrorMessage := FormatParseError(LineNumber, ErrorMessage);
+          Exit;
+        end;
+        Result.Values.Elements.Add(ParsedValue);
+      end;
+
+      if HasDelimiter then
+        ResumeOffset := DelimiterStart
+      else
+        ResumeOffset := EffectiveEnd;
+
+      LineStart := NextLineStart;
+      Inc(LineNumber);
     end;
 
-    if HasDelimiter then
-      ResumeOffset := DelimiterStart
-    else
-      ResumeOffset := EffectiveEnd;
-
-    LineStart := NextLineStart;
-    Inc(LineNumber);
+    Result.Read := EffectiveEnd;
+  finally
+    RemoveTempRootIfNeeded(RecordsRoot);
   end;
-
-  Result.Read := EffectiveEnd;
 end;
 
 function TGocciaJSONLParser.ParseChunk(const ABytes: TBytes; const AStart,
@@ -414,72 +450,80 @@ var
   LineText: string;
   NextLineStart: Integer;
   ParsedValue: TGocciaValue;
+  RecordsRoot: TGocciaTempRoot;
   ResumeOffset: Integer;
 begin
-  Result.Values := TGocciaArrayValue.Create;
-  Result.Read := ClampOffset(AStart, Length(ABytes));
-  Result.Done := True;
-  Result.ErrorMessage := '';
-  if not NormalizeByteRange(ABytes, AStart, AEnd, EffectiveStart, EffectiveEnd) then
-  begin
-    Result.Read := EffectiveStart;
-    Exit;
-  end;
-
-  if (EffectiveStart = 0) and HasUTF8BOM(ABytes, EffectiveStart, EffectiveEnd) then
-    Inc(EffectiveStart, 3);
-
-  LineStart := EffectiveStart;
-  LineNumber := 1;
-  ResumeOffset := EffectiveStart;
-  while LineStart < EffectiveEnd do
-  begin
-    DelimiterStart := LineStart;
-    while (DelimiterStart < EffectiveEnd) and
-      not (ABytes[DelimiterStart] in [10, 13]) do
-      Inc(DelimiterStart);
-
-    HasDelimiter := DelimiterStart < EffectiveEnd;
-    if HasDelimiter then
+  { Same accumulator window as the string overload of ParseChunk. }
+  InitializeTempRoot(RecordsRoot);
+  try
+    Result.Values := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(RecordsRoot, Result.Values);
+    Result.Read := ClampOffset(AStart, Length(ABytes));
+    Result.Done := True;
+    Result.ErrorMessage := '';
+    if not NormalizeByteRange(ABytes, AStart, AEnd, EffectiveStart, EffectiveEnd) then
     begin
-      LineEnd := DelimiterStart;
-      DelimiterLength := 1;
-      if (ABytes[DelimiterStart] = 13) and
-         (DelimiterStart + 1 < EffectiveEnd) and
-         (ABytes[DelimiterStart + 1] = 10) then
-        DelimiterLength := 2;
-      NextLineStart := DelimiterStart + DelimiterLength;
-    end
-    else
-    begin
-      LineEnd := EffectiveEnd;
-      NextLineStart := EffectiveEnd;
+      Result.Read := EffectiveStart;
+      Exit;
     end;
 
-    LineText := SliceBytesToString(ABytes, LineStart, LineEnd);
-    if not IsBlankLine(LineText) then
+    if (EffectiveStart = 0) and HasUTF8BOM(ABytes, EffectiveStart, EffectiveEnd) then
+      Inc(EffectiveStart, 3);
+
+    LineStart := EffectiveStart;
+    LineNumber := 1;
+    ResumeOffset := EffectiveStart;
+    while LineStart < EffectiveEnd do
     begin
-      if not TryParseLine(LineText, ParsedValue, ErrorMessage) then
+      DelimiterStart := LineStart;
+      while (DelimiterStart < EffectiveEnd) and
+        not (ABytes[DelimiterStart] in [10, 13]) do
+        Inc(DelimiterStart);
+
+      HasDelimiter := DelimiterStart < EffectiveEnd;
+      if HasDelimiter then
       begin
-        Result.Read := ResumeOffset;
-        Result.Done := False;
-        if HasDelimiter or not IsIncompleteFinalRecord(LineText, ErrorMessage) then
-          Result.ErrorMessage := FormatParseError(LineNumber, ErrorMessage);
-        Exit;
+        LineEnd := DelimiterStart;
+        DelimiterLength := 1;
+        if (ABytes[DelimiterStart] = 13) and
+           (DelimiterStart + 1 < EffectiveEnd) and
+           (ABytes[DelimiterStart + 1] = 10) then
+          DelimiterLength := 2;
+        NextLineStart := DelimiterStart + DelimiterLength;
+      end
+      else
+      begin
+        LineEnd := EffectiveEnd;
+        NextLineStart := EffectiveEnd;
       end;
-      Result.Values.Elements.Add(ParsedValue);
+
+      LineText := SliceBytesToString(ABytes, LineStart, LineEnd);
+      if not IsBlankLine(LineText) then
+      begin
+        if not TryParseLine(LineText, ParsedValue, ErrorMessage) then
+        begin
+          Result.Read := ResumeOffset;
+          Result.Done := False;
+          if HasDelimiter or not IsIncompleteFinalRecord(LineText, ErrorMessage) then
+            Result.ErrorMessage := FormatParseError(LineNumber, ErrorMessage);
+          Exit;
+        end;
+        Result.Values.Elements.Add(ParsedValue);
+      end;
+
+      if HasDelimiter then
+        ResumeOffset := DelimiterStart
+      else
+        ResumeOffset := EffectiveEnd;
+
+      LineStart := NextLineStart;
+      Inc(LineNumber);
     end;
 
-    if HasDelimiter then
-      ResumeOffset := DelimiterStart
-    else
-      ResumeOffset := EffectiveEnd;
-
-    LineStart := NextLineStart;
-    Inc(LineNumber);
+    Result.Read := EffectiveEnd;
+  finally
+    RemoveTempRootIfNeeded(RecordsRoot);
   end;
-
-  Result.Read := EffectiveEnd;
 end;
 
 end.
