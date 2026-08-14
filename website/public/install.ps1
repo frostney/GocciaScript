@@ -19,6 +19,18 @@ $ErrorActionPreference = "Stop"
 $Repo = if ($env:GOCCIA_REPO) { $env:GOCCIA_REPO } else { "frostney/GocciaScript" }
 $InstallDir = if ($env:GOCCIA_INSTALL_DIR) { $env:GOCCIA_INSTALL_DIR } else { "$env:USERPROFILE\bin" }
 
+# Trim trailing separators before anything compares this against PATH: the
+# membership test below is an exact `-contains` over the split PATH, so
+# "C:\bin\" would never match the stored "C:\bin" and every run would append
+# another duplicate to the persistent user PATH. A bare drive root keeps its
+# separator — "C:" alone means the current directory on that drive, not its
+# root — and a lone "\" is left as-is.
+while ($InstallDir.Length -gt 1 -and
+       ($InstallDir.EndsWith('\') -or $InstallDir.EndsWith('/')) -and
+       $InstallDir -notmatch '^[A-Za-z]:[\\/]$') {
+  $InstallDir = $InstallDir.Substring(0, $InstallDir.Length - 1)
+}
+
 # --- detect arch -----------------------------------------------------
 $Arch = if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
 
@@ -62,23 +74,34 @@ try {
   )
   $Candidates += (Join-Path $TempDir "build"), $TempDir
 
-  $SrcDir = $Candidates |
-    Where-Object { Test-Path -LiteralPath (Join-Path $_ "GocciaScriptLoader.exe") } |
-    Select-Object -First 1
-  if (-not $SrcDir) {
-    throw "install.ps1: could not find GocciaScriptLoader.exe in $Asset"
+  # A candidate qualifies only when it holds all three executables. Matching
+  # on the loader alone would commit to the first directory that happens to
+  # have it and then hard-fail on the missing sibling, even when a later
+  # candidate is complete.
+  $Exes = @("GocciaScriptLoader", "GocciaTestRunner", "GocciaREPL")
+  $MissingIn = {
+    param($Dir)
+    $Exes | Where-Object { -not (Test-Path -LiteralPath (Join-Path $Dir "$_.exe")) }
   }
 
-  # Every release archive carries all three; a missing one means a broken
-  # download or a layout change, so fail rather than report a partial
-  # install as success.
-  foreach ($exe in @("GocciaScriptLoader", "GocciaTestRunner", "GocciaREPL")) {
-    $src = Join-Path $SrcDir "$exe.exe"
-    if (-not (Test-Path -LiteralPath $src)) {
-      throw "install.ps1: $src not found in archive"
+  $SrcDir = $Candidates |
+    Where-Object { @(& $MissingIn $_).Count -eq 0 } |
+    Select-Object -First 1
+  if (-not $SrcDir) {
+    # Every release archive carries all three; a missing one means a broken
+    # download or a layout change, so fail rather than report a partial
+    # install as success. Name what the loader-bearing candidate lacked.
+    $Partial = $Candidates |
+      Where-Object { Test-Path -LiteralPath (Join-Path $_ "GocciaScriptLoader.exe") } |
+      Select-Object -First 1
+    if ($Partial) {
+      $Missing = (& $MissingIn $Partial | ForEach-Object { "$_.exe" }) -join ", "
+      throw "install.ps1: incomplete archive ${Asset}: $Partial is missing $Missing"
     }
+    throw "install.ps1: could not find GocciaScriptLoader.exe, GocciaTestRunner.exe and GocciaREPL.exe in $Asset"
   }
-  foreach ($exe in @("GocciaScriptLoader", "GocciaTestRunner", "GocciaREPL")) {
+
+  foreach ($exe in $Exes) {
     Move-Item -Force (Join-Path $SrcDir "$exe.exe") (Join-Path $InstallDir "$exe.exe")
   }
 
