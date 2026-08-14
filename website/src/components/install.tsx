@@ -105,7 +105,10 @@ function unixPrebuiltBlock(
  *  exes there is not enough to make them runnable by name. The last two
  *  lines mirror what `install.ps1` does: append the directory to the
  *  persistent user PATH only when it is missing, then patch the current
- *  session's `$env:Path` so the commands work without a new shell. */
+ *  session's `$env:Path` so the commands work without a new shell. Both
+ *  appends are guarded on the entry being absent — these are display
+ *  commands people re-paste, and an unguarded session append grows
+ *  `$env:Path` by one copy every time. */
 function windowsPrebuiltBlock(
   active: ArchKey,
   commented: boolean,
@@ -125,7 +128,7 @@ function windowsPrebuiltBlock(
     `${c}Move-Item -Force ${dir}\\GocciaScriptLoader.exe, ${dir}\\GocciaTestRunner.exe, ${dir}\\GocciaREPL.exe "$bin\\"`,
     `${c}$userPath = [Environment]::GetEnvironmentVariable("Path", "User")`,
     `${c}if (($userPath -split ';') -notcontains $bin) { [Environment]::SetEnvironmentVariable("Path", (($userPath, $bin | Where-Object { $_ }) -join ';'), "User") }`,
-    `${c}$env:Path = "$env:Path;$bin"`,
+    `${c}if (($env:Path -split ';') -notcontains $bin) { $env:Path = "$env:Path;$bin" }`,
   ].join("\n");
 }
 

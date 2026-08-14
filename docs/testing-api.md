@@ -611,7 +611,7 @@ Further divergences from Vitest worth knowing:
 | `vi.stubEnv`, `vi.unstubAllEnvs` | Supported, over an injected `process.env` |
 | `vi.clearAllMocks`, `vi.resetAllMocks`, `vi.restoreAllMocks` | Supported |
 | `vi.useFakeTimers` and the rest of the timer family | Throws |
-| `vi.waitFor`, `vi.waitUntil` | Throws |
+| `vi.waitFor`, `vi.waitUntil` | Throws — async polling, not the timer gap above |
 | `vi.hoisted` | Throws |
 | `vi.doMock`, `vi.doUnmock`, `vi.resetModules` | Throws |
 | `vi.importActual`, `vi.importMock` | Throws |
@@ -644,7 +644,7 @@ With no `process` at all, `vi.stubEnv` throws and names the two options rather t
 
 The fake-timer family throws because there is no fake clock — timers run on the real event loop.
 
-`vi.waitFor` and `vi.waitUntil` throw for a different reason. They are async polling APIs, not timer APIs: each retries its callback on an interval until it passes or a timeout elapses, which needs execution to suspend and resume between attempts. GocciaScript's runner has no such primitive — `await` is a synchronous drain and there is no general event loop, as [Async Tests](#async-tests-promises) describes, so a poll loop would spin without anything ever being able to change the condition. Both members currently report the fake-timer message, which understates the gap; the fake clock is not what is missing.
+`vi.waitFor` and `vi.waitUntil` throw for a different reason. They are async polling APIs, not timer APIs: each retries its callback on an interval until it passes or a timeout elapses, which needs execution to suspend and resume between attempts. GocciaScript's runner has no such primitive — `await` is a synchronous drain and there is no general event loop, as [Async Tests](#async-tests-promises) describes, so a poll loop would spin without anything ever being able to change the condition. Both members report that reason rather than the fake-timer one: a fake clock is not what is missing.
 
 `vi.resetModules` throws because the loader has no cache-eviction path.
 

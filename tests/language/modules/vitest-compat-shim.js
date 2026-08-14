@@ -76,6 +76,25 @@ describe("vitest compatibility shim", () => {
     expect(() => vi.runAllTimers()).toThrow("vi.runAllTimers");
   });
 
+  test("the async polling members throw for polling, not for fake timers", () => {
+    expect(() => vi.waitFor(() => true)).toThrow(
+      "vi.waitFor is not supported by the GocciaScript vitest compatibility shim",
+    );
+    expect(() => vi.waitUntil(() => true)).toThrow(
+      "vi.waitUntil is not supported by the GocciaScript vitest compatibility shim",
+    );
+
+    // The reason has to name the actual gap. Both members used to report the
+    // fake-timer message, which describes a clock they do not need.
+    expect(() => vi.waitFor(() => true)).toThrow("polls asynchronously");
+    expect(() => vi.waitUntil(() => true)).toThrow("polls asynchronously");
+    expect(() => vi.waitFor(() => true)).toThrow("suspend and resume between attempts");
+    expect(() => vi.waitUntil(() => true)).toThrow("suspend and resume between attempts");
+
+    expect(() => vi.waitFor(() => true)).not.toThrow("fake-timer clock");
+    expect(() => vi.waitUntil(() => true)).not.toThrow("fake-timer clock");
+  });
+
   test("vi.mocked is the identity function it is in Vitest", () => {
     const value = { a: 1 };
 

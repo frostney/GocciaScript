@@ -270,6 +270,12 @@ begin
     '  "scope for it to read.";' + LB +
     'const FAKE_TIMERS =' + LB +
     '  "GocciaScript has no fake-timer clock; timers run on the real event loop.";' + LB +
+    'const ASYNC_POLLING =' + LB +
+    '  "this member polls asynchronously, retrying its callback until the " +' + LB +
+    '  "condition holds or a timeout elapses, which needs execution to " +' + LB +
+    '  "suspend and resume between attempts. GocciaScript has no such " +' + LB +
+    '  "primitive: await is a synchronous drain and there is no general " +' + LB +
+    '  "event loop on which a pending condition could change.";' + LB +
     'const CONFIG =' + LB +
     '  "GocciaScript has no runtime-mutable test configuration.";' + LB +
     LB +
@@ -452,8 +458,8 @@ begin
     '  resetAllMocks: resetAllMocks,' + LB +
     '  restoreAllMocks: restoreAllMocks,' + LB +
     LB +
-    '  waitFor: unsupported("waitFor", FAKE_TIMERS),' + LB +
-    '  waitUntil: unsupported("waitUntil", FAKE_TIMERS),' + LB +
+    '  waitFor: unsupported("waitFor", ASYNC_POLLING),' + LB +
+    '  waitUntil: unsupported("waitUntil", ASYNC_POLLING),' + LB +
     '  setConfig: unsupported("setConfig", CONFIG),' + LB +
     '  resetConfig: unsupported("resetConfig", CONFIG),' + LB +
     '};' + LB +
