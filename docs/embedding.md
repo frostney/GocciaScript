@@ -47,7 +47,7 @@ These helpers create, execute, and clean up in a single call. The `TGocciaEngine
 | `TGocciaRuntime.RunScriptFromStringList(Source, FileName)` | Execute from a `TStringList` through the runtime layer |
 All methods return `TGocciaScriptResult` — a record containing the result value, per-phase timing (in microseconds), and the filename.
 
-`SourceType` is an engine-level language option, not a runtime option. Set `Engine.SourceType` (or use the CLI `--source-type=script|module`) to choose script source or module source for the entry file. File names ending in `.mjs` infer module source unless an explicit source type is provided. File loading is separate: `TGocciaEngine` one-shot helpers accept source text or caller-provided `TStringList` instances only, while `TGocciaRuntime.RunScriptFromFile` is the runtime convenience API for loading an entry file.
+`SourceType` is an engine-level language option, not a runtime option. Set `Engine.SourceType` (or use the CLI `--source-type=script|module`) to choose script source or module source for the entry file. File names ending in `.mjs` or `.mts` infer module source unless an explicit source type is provided. File loading is separate: `TGocciaEngine` one-shot helpers accept source text or caller-provided `TStringList` instances only, while `TGocciaRuntime.RunScriptFromFile` is the runtime convenience API for loading an entry file.
 
 `TGocciaEngine.Execute` remains the public "run the whole source pipeline and execute" API for embedders. Hosts that need parse artifacts without executing can call `TGocciaSourcePipeline.Parse` directly; its result object owns the AST and source map until the caller frees the result or transfers ownership with `TakeProgramNode` / `TakeSourceMap`. Hosts should use the source-pipeline entry points for module source, dynamic `Function` validation, and expression fragments rather than constructing `TGocciaParser` directly; this keeps parser policy in one place.
 
@@ -174,7 +174,7 @@ The engine uses a pluggable module resolver (`TGocciaModuleResolver`) that suppo
 
 ### Extension-Free Imports
 
-Import paths can omit file extensions. The resolver tries extensions in order: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.json`, `.json5`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.txt`, `.md`:
+Import paths can omit file extensions. The engine's own list comes first, in order: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`, `.json`, `.txt`, `.md`. Installed runtime extensions append the structured-data extensions they own, so a host that applies the loader runtime profile also resolves `.json5`, `.jsonc`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv`:
 
 ```javascript
 // These all resolve through the shared module extension list:
@@ -519,7 +519,7 @@ Runtime globals and runtime modules can be reduced by installing only concrete e
 | `Preprocessors` | `TGocciaPreprocessors` | `[ppJSX]` | Source transformations before parsing |
 | `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | ECMAScript conformance and legacy-behavior toggles; leave empty for the recommended defaults |
 | `WarningUnsupportedFeatures` | `Boolean` | `False` | Parser diagnostic policy for disabled syntax; `True` restores warning/no-op recovery without enabling compatibility semantics |
-| `SourceType` | `TGocciaSourceType` | `stScript` | Load entry as script source (default) or module source; `.mjs` file names infer `stModule` |
+| `SourceType` | `TGocciaSourceType` | `stScript` | Load entry as script source (default) or module source; `.mjs` and `.mts` file names infer `stModule` |
 | `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations (works in both interpreter and bytecode); setter propagates to the active executor and interpreter scope |
 
 ```pascal
@@ -545,7 +545,7 @@ finally
 end;
 ```
 
-When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh module scope (`skModule`) with `this = undefined`, mirroring the semantics imported modules already receive from the module loader (ES2026 §16.2.1.6.4). The CLI surface for this is `--source-type=script|module` and the matching `goccia.json` key `"source-type"`. Without an explicit source type, `.mjs` entry files are loaded as module source.
+When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh module scope (`skModule`) with `this = undefined`, mirroring the semantics imported modules already receive from the module loader (ES2026 §16.2.1.6.4). The CLI surface for this is `--source-type=script|module` and the matching `goccia.json` key `"source-type"`. Without an explicit source type, `.mjs` and `.mts` entry files are loaded as module source.
 
 **Top-level binding persistence differs between source types.** With `SourceType = stScript`, the engine reuses `Interpreter.GlobalScope` across every call to `Execute`, which is what makes the [long-lived engine pattern](#instance-usage-long-lived-engine) above work: `const x = 42` defined in one `Execute` is visible to the next. With `SourceType = stModule`, each `Execute` allocates a brand-new `skModule` child scope, so top-level `let`/`const`/`class` declarations live and die with that single call. If callers need cross-`Execute` persistence, keep `SourceType` at `stScript` (the default) or expose the desired symbols through the global scope (e.g. `Engine.RegisterGlobal(...)` or `Engine.Interpreter.GlobalScope.DefineLexicalBinding(...)`).
 
@@ -942,7 +942,7 @@ The repository includes five embedding examples:
 
 | Program | File | Description |
 |---------|------|-------------|
-| `GocciaScriptLoader` | `source/app/GocciaScriptLoader.dpr` | Executes source files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`) from disk or stdin, with optional JSON output, injected globals, and execution timeouts for one-shot automation |
+| `GocciaScriptLoader` | `source/app/GocciaScriptLoader.dpr` | Executes source files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`) from disk or stdin, with optional JSON output, injected globals, and execution timeouts for one-shot automation |
 | `GocciaREPL` | `source/app/GocciaREPL.dpr` | Interactive read-eval-print loop (long-lived engine) |
 | `GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | Runs test suites with the test-runner runtime profile |
 | `GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Runs benchmarks with the benchmark-runner runtime profile from files or stdin |

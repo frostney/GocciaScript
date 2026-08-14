@@ -495,7 +495,7 @@ console.log("total:", total);`;
     {
       id: "source",
       label: "Source",
-      small: ".js · .ts · .jsx · .tsx · .mjs",
+      small: ".js · .ts · .jsx · .tsx · .mjs · .mts",
       overview:
         "Every supported extension enters the same source pipeline. GocciaScript implements the TC39 Type Annotations proposal, so supported annotations have no runtime effect by default; --strict-types optionally adds runtime contracts. JSX is rewritten to function calls in a preprocessing pass before lexing.",
       docId: "language",
@@ -848,7 +848,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
         <Link href="/compatibility" className="link-button">
           test262 results
         </Link>{" "}
-        already makes it suitable for serious experiments and bounded production
+        already make it suitable for serious experiments and bounded production
         use where the supported surface matches your needs.
       </>
     ),
