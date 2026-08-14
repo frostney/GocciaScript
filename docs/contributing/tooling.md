@@ -303,8 +303,16 @@ JavaScript suite under two tools that answer different questions:
 
 | Tool | Catches | Invocation |
 |------|---------|-----------|
-| **heaptrc** (`-gh`) | FPC-level leaks, double frees, unfreed blocks with allocation sites | `fpc @config.cfg -gh -gl -oBIN source/app/GocciaTestRunner.dpr` |
+| **heaptrc** (`-gh`) | FPC-level leaks, double frees, unfreed blocks with allocation sites | `mkdir -p DIR && fpc @config.cfg -gh -gl -FUDIR -oBIN source/app/GocciaTestRunner.dpr` |
 | **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `valgrind --tool=memcheck --error-exitcode=42 ./build/GocciaTestRunner tests` |
+
+`DIR` is a unit-output directory of your own (CI uses
+`build/compiled/targets/testrunner-heaptrc`). Give the heaptrc build its own
+per the [per-program `-FU` rule](#shared--fu-directories-across-programs--internal-error-200611011) —
+and create the directory first, because `fpc` writes into a `-FU` directory but
+will not create one; against a missing directory it fails with
+`Can't create object file: … (error code: 2)` (on external-assembler targets
+such as macOS the message is `Can't create assembler file: …` instead).
 
 Both run on Linux only. Valgrind slows the suite by roughly an order of
 magnitude, which is why neither runs per-PR. Findings upload as artifacts with
