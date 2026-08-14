@@ -1387,12 +1387,41 @@ console.log("--max-memory (builtin result builders survive mid-build collections
       // A tight window puts the crossing early in the parse, where the most
       // allocation still follows to reuse whatever the sweep freed — 100 KiB is
       // where the YAML explicit-key and JSONL accumulator defects reproduce, and
-      // a wider one lets several of them through. 2 MiB is not in the ceiling
-      // set: the wider documents cannot even be built at that ceiling, so the run
-      // refuses before it has a heap to park and proves nothing.
+      // a wider one lets several of them through. The window is that slack, not
+      // the ceiling: the ceiling only has to be wide enough that building the
+      // document cannot refuse before there is a heap to park at all.
+      //
+      // That floor is higher than it looks, and it is not monotonic. Every setup
+      // ends in one `join` that asks for the whole document as a single charged
+      // string — 617 KiB for yaml-block-and-flow, 620 KiB for toml — and absent
+      // latched external pressure, a reservation R is refused *without* a
+      // collection whenever the heap sits in (maxBytes - R, maxBytes -
+      // maxBytes/8), below the threshold at which TryReserveExternalBytes
+      // collects before giving up. Whether a given ceiling survives therefore
+      // depends on where the setup's transient garbage happens to sit at that
+      // instant, so the refusals come in bands. Measured every 50 KB from
+      // 2.5 MB across all nine documents: refusals cluster at 2.5-2.6,
+      // 2.75-3.05, 3.2-3.3, 3.45-3.55 and 3.85-3.9 MB, the top cluster toml's;
+      // from 3.95 MB to 12 MB no ceiling refuses. The old 3 MiB first ceiling
+      // sat 54 KB below a cluster on this machine and inside one on i386-win32,
+      // which is how a document that never got parsed failed as "exercised no
+      // collecting window". 6 and 8 MiB clear the top cluster by 61% and 115%.
+      //
+      // The choice is structural, not just empirical: that refusal interval is
+      // non-empty only when R > maxBytes/8, and the largest setup reservation
+      // is toml's 634,520 B — below maxBytes/8 at 6 MiB (786,432) and 8 MiB
+      // (1,048,576), so refuse-before-park is impossible at these ceilings for
+      // every document. R is pure charged string payload (length *
+      // SizeOf(Char), 2 bytes/char on every target under delphiunicode), so
+      // the condition holds on i386 unchanged; per-object InstanceSize is the
+      // only pointer-size-sensitive heap term and it only makes i386 smaller.
+      // Which of the two accepted terminal outcomes a probe lands on (refused
+      // RangeError vs the tolerated growth-gate fatal) can shift with the
+      // ceiling — yaml-anchors takes the RangeError path at 4 MiB but the
+      // growth gate here — and assertProbeRun accepts both.
       const tightPath = join(tmp, `parser-parked-${probe.name}.mjs`);
       writeFileSync(tightPath, buildSrc(parkingPreamble(100_000)));
-      for (const maxMemory of [3_145_728, 4_194_304]) {
+      for (const maxMemory of [6_291_456, 8_388_608]) {
         const proc = Bun.spawnSync([LOADER, `--max-memory=${maxMemory}`, tightPath], {
           stdout: "pipe",
           stderr: "pipe",
@@ -1408,8 +1437,8 @@ console.log("--max-memory (builtin result builders survive mid-build collections
         );
       }
 
-      // A wider window at a wider ceiling: parked enough that the parse collects
-      // repeatedly, with enough left over that it can still finish. This is the
+      // A wider window: parked enough that the parse collects repeatedly, with
+      // enough left over that it can still finish. This is the
       // only shape that can observe a swept container being written into and then
       // read back, which is how a missing root shows up as wrong data rather than
       // as a fault — so this run has to complete, and a refusal fails it.
