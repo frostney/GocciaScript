@@ -1391,34 +1391,38 @@ console.log("--max-memory (builtin result builders survive mid-build collections
       // the ceiling: the ceiling only has to be wide enough that building the
       // document cannot refuse before there is a heap to park at all.
       //
-      // That floor is higher than it looks, and it is not monotonic. Every setup
-      // ends in one `join` that asks for the whole document as a single charged
-      // string — 617 KiB for yaml-block-and-flow, 620 KiB for toml — and absent
-      // latched external pressure, a reservation R is refused *without* a
-      // collection whenever the heap sits in (maxBytes - R, maxBytes -
-      // maxBytes/8), below the threshold at which TryReserveExternalBytes
-      // collects before giving up. Whether a given ceiling survives therefore
-      // depends on where the setup's transient garbage happens to sit at that
-      // instant, so the refusals come in bands. Measured every 50 KB from
-      // 2.5 MB across all nine documents: refusals cluster at 2.5-2.6,
-      // 2.75-3.05, 3.2-3.3, 3.45-3.55 and 3.85-3.9 MB, the top cluster toml's;
-      // from 3.95 MB to 12 MB no ceiling refuses. The old 3 MiB first ceiling
-      // sat 54 KB below a cluster on this machine and inside one on i386-win32,
-      // which is how a document that never got parsed failed as "exercised no
-      // collecting window". 6 and 8 MiB clear the top cluster by 61% and 115%.
+      // That floor is higher than it looks. Every setup ends in one `join` that
+      // asks for the whole document as a single charged string — 617 KiB for
+      // yaml-block-and-flow, 620 KiB for toml — on top of whatever transient
+      // garbage the setup is holding when it lands.
       //
-      // The choice is structural, not just empirical: that refusal interval is
-      // non-empty only when R > maxBytes/8, and the largest setup reservation
-      // is toml's 634,520 B — below maxBytes/8 at 6 MiB (786,432) and 8 MiB
-      // (1,048,576), so refuse-before-park is impossible at these ceilings for
-      // every document. R is pure charged string payload (length *
-      // SizeOf(Char), 2 bytes/char on every target under delphiunicode), so
-      // the condition holds on i386 unchanged; per-object InstanceSize is the
-      // only pointer-size-sensitive heap term and it only makes i386 smaller.
-      // Which of the two accepted terminal outcomes a probe lands on (refused
-      // RangeError vs the tolerated growth-gate fatal) can shift with the
-      // ceiling — yaml-anchors takes the RangeError path at 4 MiB but the
-      // growth gate here — and assertProbeRun accepts both.
+      // It used to be worse than high: it was not even monotonic. A reservation
+      // R was refused *without* any collection whenever the heap sat in
+      // (maxBytes - R, maxBytes - maxBytes/8), so which ceilings survived
+      // depended on where the setup's garbage happened to sit and the refusals
+      // came in bands — the old 3 MiB first ceiling sat 54 KB below one on this
+      // machine and inside one on i386-win32, which is how a document that never
+      // got parsed failed as "exercised no collecting window".
+      // TryReserveExternalBytes now forces the collection and re-tests before
+      // refusing, so the bands are gone (see the reserve-band probe below).
+      //
+      // The 6 and 8 MiB ceilings are kept, and for a structural reason rather
+      // than a historical one: these probes must not depend on a last-resort
+      // collection for their own setup, or the state they park from is the state
+      // that collection happened to leave. That interval was non-empty only when
+      // R > maxBytes/8, and the largest setup reservation is toml's 634,520 B —
+      // below maxBytes/8 at 6 MiB (786,432) and 8 MiB (1,048,576) — so at these
+      // ceilings the document is built without a forced collection ever being
+      // load-bearing for it. The last-resort branch is still entered if a
+      // reservation misses; what these ceilings buy is that the setup never
+      // depends on it. R is pure charged string payload (length * SizeOf(Char), 2
+      // bytes/char on every target under delphiunicode), so that holds on i386
+      // unchanged; per-object InstanceSize is the only pointer-size-sensitive
+      // heap term and it only makes i386 smaller. Which of the two accepted
+      // terminal outcomes a probe lands on (refused RangeError vs the tolerated
+      // growth-gate fatal) can still shift with the ceiling — yaml-anchors takes
+      // the RangeError path at 4 MiB but the growth gate here — and
+      // assertProbeRun accepts both.
       const tightPath = join(tmp, `parser-parked-${probe.name}.mjs`);
       writeFileSync(tightPath, buildSrc(parkingPreamble(100_000)));
       for (const maxMemory of [6_291_456, 8_388_608]) {
@@ -1855,6 +1859,96 @@ console.log("--max-memory (builtin result builders survive mid-build collections
     }
   } finally {
     clean(stringifyGateTmp);
+  }
+}
+
+console.log("--max-memory (a charged reservation collects before it refuses)...");
+{
+  // A charged reservation R used to be refused without collecting at all
+  // whenever the live set sat below the pressure trigger, which fires only
+  // once BytesAllocated reaches maxBytes - maxBytes/8 (clamped to
+  // 16 KiB..16 MiB). Any R larger than that reserve therefore had a whole
+  // interval of heap positions in which it was refused with megabytes of
+  // reclaimable garbage still on the heap, and which positions those were
+  // depended on where a script's transient garbage happened to sit — so the
+  // refusals came in bands rather than at a floor. TryReserveExternalBytes now
+  // forces the collection and re-tests once before refusing.
+  //
+  // The shape is constructed rather than sampled, because a band's position is
+  // a property of a particular machine's live set and would not survive CI.
+  // Under a 64 MiB ceiling the pressure reserve is 8,388,608 B. Park to 22 MB
+  // of slack, then drop ~10.5 MB of reclaimable garbage: the heap sits at
+  // ~11.5 MB of slack, still clear of the trigger by ~3 MB, so the heuristic
+  // declines. An 18 MB reservation is over that slack and over the reserve —
+  // squarely in the old refusal interval — and fits comfortably once the
+  // garbage goes. `band true` pins that the probe really is in the interval;
+  // if the margins ever drift the diagnostics say which one.
+  const reserveTmp = mkdtemp("goccia-reserve-collect-");
+  try {
+    const RESERVE_CEILING = 67_108_864;
+    const parkedReservationSource = (repeatChars: number): string =>
+      [
+        ...parkingPreamble(22_000_000),
+        "let garbage = [];",
+        'for (const g of Array.from({ length: 320 }, (_, j) => j)) garbage.push("g".repeat(16384));',
+        "garbage = null;",
+        "const floor = Goccia.gc.maxBytes / 8;",
+        "const slackBefore = Goccia.gc.maxBytes - Goccia.gc.bytesAllocated;",
+        'console.log("band", slackBefore > floor, "slack", slackBefore, "floor", floor);',
+        "try {",
+        `  const big = "b".repeat(${repeatChars});`,
+        '  console.log("reserved", big.length);',
+        "} catch (e) {",
+        "  console.log('refused', e.name, '::', e.message);",
+        "}",
+        "",
+      ].join("\n");
+
+    // 18,000,000 charged bytes: over the ~11.5 MB of slack the reservation
+    // sees, over the 8,388,608 B reserve, and under the ~22 MB a collection
+    // gives back. Before the fix this refused; it must now succeed.
+    const bandPath = join(reserveTmp, "reserve-band.mjs");
+    writeFileSync(bandPath, parkedReservationSource(9_000_000));
+    const bandProc = Bun.spawnSync([LOADER, `--max-memory=${RESERVE_CEILING}`, bandPath], {
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 180_000,
+    });
+    const bandOut = bandProc.stdout.toString() + bandProc.stderr.toString();
+    if (!bandOut.includes("parked true"))
+      throw new Error(`Reserve-band probe never parked the heap: ${bandOut}`);
+    if (!bandOut.includes("band true"))
+      throw new Error(
+        `Reserve-band probe did not land below the pressure trigger, so it proves nothing: ${bandOut}`,
+      );
+    if (bandProc.exitCode !== 0)
+      throw new Error(`Reserve-band probe should exit 0, got ${bandProc.exitCode}: ${bandOut}`);
+    if (!bandOut.includes("reserved 9000000"))
+      throw new Error(
+        `A reservation larger than the pressure reserve must succeed after the forced collection: ${bandOut}`,
+      );
+
+    // The floor is still a floor. 48,000,000 charged bytes fits the ceiling on
+    // its own but not beside a live set the collection cannot reclaim, so the
+    // collect-then-retry path has to end in the refusal it always did.
+    const floorPath = join(reserveTmp, "reserve-floor.mjs");
+    writeFileSync(floorPath, parkedReservationSource(24_000_000));
+    const floorProc = Bun.spawnSync([LOADER, `--max-memory=${RESERVE_CEILING}`, floorPath], {
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 180_000,
+    });
+    const floorOut = floorProc.stdout.toString() + floorProc.stderr.toString();
+    if (!floorOut.includes("parked true"))
+      throw new Error(`Reserve-floor probe never parked the heap: ${floorOut}`);
+    if (floorProc.exitCode !== 0)
+      throw new Error(`Reserve-floor probe should exit 0, got ${floorProc.exitCode}: ${floorOut}`);
+    if (!floorOut.includes("refused RangeError"))
+      throw new Error(
+        `A reservation a collection cannot make room for must still be refused: ${floorOut}`,
+      );
+  } finally {
+    clean(reserveTmp);
   }
 }
 
