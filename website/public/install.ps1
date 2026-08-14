@@ -81,7 +81,7 @@ try {
   $Exes = @("GocciaScriptLoader", "GocciaTestRunner", "GocciaREPL")
   $MissingIn = {
     param($Dir)
-    $Exes | Where-Object { -not (Test-Path -LiteralPath (Join-Path $Dir "$_.exe")) }
+    $Exes | Where-Object { -not (Test-Path -LiteralPath (Join-Path $Dir "$_.exe") -PathType Leaf) }
   }
 
   $SrcDir = $Candidates |
@@ -92,7 +92,7 @@ try {
     # download or a layout change, so fail rather than report a partial
     # install as success. Name what the loader-bearing candidate lacked.
     $Partial = $Candidates |
-      Where-Object { Test-Path -LiteralPath (Join-Path $_ "GocciaScriptLoader.exe") } |
+      Where-Object { Test-Path -LiteralPath (Join-Path $_ "GocciaScriptLoader.exe") -PathType Leaf } |
       Select-Object -First 1
     if ($Partial) {
       $Missing = (& $MissingIn $Partial | ForEach-Object { "$_.exe" }) -join ", "

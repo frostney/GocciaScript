@@ -895,6 +895,10 @@ interface ResolveCase {
   accepted: boolean;
 }
 
+// These cases build real symlink fixtures with symlinkSync and therefore
+// need Unix symbolic-link support; CI runs --self-test on ubuntu-latest
+// only. On a platform without symlink support the run fails loudly rather
+// than skipping.
 const SELF_TEST_RESOLVE: ResolveCase[] = [
   {
     name: "a regular file inside the checkout is read",
