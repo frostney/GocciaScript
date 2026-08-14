@@ -260,6 +260,8 @@ async function installationMarkdown(): Promise<string> {
     "",
     `Download release archives from [GitHub Releases](${GITHUB_RELEASES_URL}). Each archive carries the whole toolchain — \`GocciaScriptLoader\`, \`GocciaScriptLoaderBare\`, \`GocciaSandboxRunner\`, \`GocciaTestRunner\`, \`GocciaBundler\`, \`GocciaBenchmarkRunner\`, \`GocciaREPL\`, \`GocciaFuzzHarness\`, and \`GocciaWasmTestRunner\` — alongside the \`tests/\`, \`benchmarks/\`, and \`examples/\` directories.`,
     "",
+    "Everything unpacks into one versioned directory named after the archive (`gocciascript-<version>-<os>-<arch>/`), with every binary at its root. The quick-install scripts, and the manual commands on the [install page](/installation#binaries), both put exactly `GocciaScriptLoader`, `GocciaTestRunner`, and `GocciaREPL` on your `PATH`; the remaining tools are yours to copy out of that directory.",
+    "",
     "## Build from source",
     "",
     "FreePascal is required.",

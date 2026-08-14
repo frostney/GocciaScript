@@ -642,7 +642,11 @@ With no `process` at all, `vi.stubEnv` throws and names the two options rather t
 
 #### Why the other members throw
 
-The fake-timer family throws because there is no fake clock — timers run on the real event loop; `vi.waitFor` and `vi.waitUntil` throw with the same reason, since they poll that clock. `vi.resetModules` throws because the loader has no cache-eviction path.
+The fake-timer family throws because there is no fake clock — timers run on the real event loop.
+
+`vi.waitFor` and `vi.waitUntil` throw for a different reason. They are async polling APIs, not timer APIs: each retries its callback on an interval until it passes or a timeout elapses, which needs execution to suspend and resume between attempts. GocciaScript's runner has no such primitive — `await` is a synchronous drain and there is no general event loop, as [Async Tests](#async-tests-promises) describes, so a poll loop would spin without anything ever being able to change the condition. Both members currently report the fake-timer message, which understates the gap; the fake clock is not what is missing.
+
+`vi.resetModules` throws because the loader has no cache-eviction path.
 
 ### Writing Cross-Compatible Tests
 

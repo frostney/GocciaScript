@@ -92,14 +92,20 @@ function unixPrebuiltBlock(
     `# ${label} — ${note}`,
     `${c}curl -fsSL -O "${url}"`,
     unpack,
-    `${c}cd "${dir}"`,
-    `${c}chmod +x GocciaScriptLoader GocciaTestRunner GocciaREPL`,
-    `${c}sudo mv GocciaScriptLoader GocciaTestRunner GocciaREPL /usr/local/bin/`,
+    // cd, chmod and mv are one `&&` chain: a failed `cd` must not leave the
+    // `sudo mv` running against whatever directory the user started in.
+    `${c}cd "${dir}" && chmod +x GocciaScriptLoader GocciaTestRunner GocciaREPL && sudo mv GocciaScriptLoader GocciaTestRunner GocciaREPL /usr/local/bin/`,
   ].join("\n");
 }
 
 /** Build a Windows prebuilt block (PowerShell). Active arch lines are
- *  uncommented; alternate arch is fully commented. */
+ *  uncommented; alternate arch is fully commented.
+ *
+ *  `$env:USERPROFILE\bin` is not on a clean profile's PATH, so moving the
+ *  exes there is not enough to make them runnable by name. The last two
+ *  lines mirror what `install.ps1` does: append the directory to the
+ *  persistent user PATH only when it is missing, then patch the current
+ *  session's `$env:Path` so the commands work without a new shell. */
 function windowsPrebuiltBlock(
   active: ArchKey,
   commented: boolean,
@@ -115,8 +121,11 @@ function windowsPrebuiltBlock(
     `# ${label} — ${note}`,
     `${c}Invoke-WebRequest -Uri "${url}" -OutFile "${archive}"`,
     `${c}Expand-Archive -Path "${archive}" -DestinationPath . -Force`,
-    `${c}New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\\bin" | Out-Null`,
-    `${c}Move-Item -Force ${dir}\\GocciaScriptLoader.exe, ${dir}\\GocciaTestRunner.exe, ${dir}\\GocciaREPL.exe "$env:USERPROFILE\\bin\\"`,
+    `${c}$bin = "$env:USERPROFILE\\bin"; New-Item -ItemType Directory -Force -Path $bin | Out-Null`,
+    `${c}Move-Item -Force ${dir}\\GocciaScriptLoader.exe, ${dir}\\GocciaTestRunner.exe, ${dir}\\GocciaREPL.exe "$bin\\"`,
+    `${c}$userPath = [Environment]::GetEnvironmentVariable("Path", "User")`,
+    `${c}if (($userPath -split ';') -notcontains $bin) { [Environment]::SetEnvironmentVariable("Path", (($userPath, $bin | Where-Object { $_ }) -join ';'), "User") }`,
+    `${c}$env:Path = "$env:Path;$bin"`,
   ].join("\n");
 }
 
