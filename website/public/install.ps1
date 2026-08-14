@@ -51,13 +51,35 @@ try {
   # --- install -------------------------------------------------------
   New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
+  # The archive expands into a single top-level directory named after the
+  # release (gocciascript-<version>-windows-<arch>) with the executables
+  # sitting at its root. Resolve it by glob rather than by exact name, and
+  # keep the legacy build\ and flat layouts as fallbacks.
+  $Candidates = @(Join-Path $TempDir "gocciascript-$Version-windows-$Arch")
+  $Candidates += @(
+    Get-ChildItem -Path $TempDir -Directory -Filter "gocciascript-*" |
+      ForEach-Object { $_.FullName }
+  )
+  $Candidates += (Join-Path $TempDir "build"), $TempDir
+
+  $SrcDir = $Candidates |
+    Where-Object { Test-Path -LiteralPath (Join-Path $_ "GocciaScriptLoader.exe") } |
+    Select-Object -First 1
+  if (-not $SrcDir) {
+    throw "install.ps1: could not find GocciaScriptLoader.exe in $Asset"
+  }
+
+  # Every release archive carries all three; a missing one means a broken
+  # download or a layout change, so fail rather than report a partial
+  # install as success.
   foreach ($exe in @("GocciaScriptLoader", "GocciaTestRunner", "GocciaREPL")) {
-    $src = Join-Path $TempDir "build\$exe.exe"
-    if (Test-Path $src) {
-      Move-Item -Force $src (Join-Path $InstallDir "$exe.exe")
-    } else {
-      Write-Warning "install.ps1: $src not found in archive — skipping"
+    $src = Join-Path $SrcDir "$exe.exe"
+    if (-not (Test-Path -LiteralPath $src)) {
+      throw "install.ps1: $src not found in archive"
     }
+  }
+  foreach ($exe in @("GocciaScriptLoader", "GocciaTestRunner", "GocciaREPL")) {
+    Move-Item -Force (Join-Path $SrcDir "$exe.exe") (Join-Path $InstallDir "$exe.exe")
   }
 
   # --- ensure InstallDir is on user PATH -----------------------------
