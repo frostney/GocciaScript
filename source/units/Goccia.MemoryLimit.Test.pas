@@ -35,6 +35,10 @@ type
       what puts Response in scope, and to give the engine an audit sink that
       refuses delivery so any capability the script exercises raises. }
     FInstallFailingAuditSink: Boolean;
+    { Set by the witness native below. FaultEscapesScript clears it before each
+      run, so it answers one question about one script: did guest code keep
+      running after a fault it should never have been able to observe? }
+    FSwallowedFaultReported: Boolean;
     { The refusing sink itself. EmitCapabilityAudit wraps whatever it raises in
       EGocciaCapabilityAuditDeliveryError. }
     procedure FailingAuditSink(const AEvent: TGocciaCapabilityAuditEvent);
@@ -42,6 +46,12 @@ type
       call through a collected value raises under `$OBJECTCHECKS ON`, which is
       how a real unrooted-temporary bug arrives. }
     function RaiseIntegrityFault(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    { The witness the integrity-fault scripts call from inside their `catch`.
+      Being called at all means the catch block ran, which is the swallow the
+      guards exist to prevent — so the tests assert it stayed silent. Raising
+      here instead would be indistinguishable from the fault under test. }
+    function ReportSwallowedFault(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     { Raises whatever FSandboxFaultClass names. The refusal comes from the gate
       itself rather than a hand-built instance, so the test exercises the same
@@ -106,6 +116,11 @@ const
     stack trace. }
   INTEGRITY_FAULT_GLOBAL_NAME = '__gocciaRaiseIntegrityFault';
   INTEGRITY_FAULT_MESSAGE = 'Object reference is Nil';
+
+  { Name of the witness native the integrity-fault scripts call from their
+    `catch` blocks, so a swallow reports itself instead of only showing up as
+    the absence of an escaping fault. }
+  SWALLOW_WITNESS_GLOBAL_NAME = '__gocciaReportSwallowedFault';
 
   { Name of the native the sandbox tests reach through an options getter. }
   SANDBOX_FAULT_GLOBAL_NAME = '__gocciaRaiseSandboxFault';
@@ -190,6 +205,14 @@ begin
   raise EObjectCheck.Create(INTEGRITY_FAULT_MESSAGE);
 end;
 
+function TMemoryLimitTests.ReportSwallowedFault(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  FSwallowedFaultReported := True;
+end;
+
 procedure TMemoryLimitTests.RaiseConfiguredFault;
 begin
   if FSandboxFaultClass = nil then
@@ -232,10 +255,14 @@ begin
   Engine := TGocciaEngine.Create(AName, Source, AExecutor);
   GC := TGarbageCollector.Instance;
   PreviousMaxBytes := 0;
+  FSwallowedFaultReported := False;
   try
     Engine.InjectGlobal(INTEGRITY_FAULT_GLOBAL_NAME,
       TGocciaNativeFunctionValue.CreateWithoutPrototype(RaiseIntegrityFault,
         INTEGRITY_FAULT_GLOBAL_NAME, 0));
+    Engine.InjectGlobal(SWALLOW_WITNESS_GLOBAL_NAME,
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(ReportSwallowedFault,
+        SWALLOW_WITNESS_GLOBAL_NAME, 0));
     if FInstallFailingAuditSink then
     begin
       AttachRuntime(Engine).Install(TGocciaFetchRuntimeExtension.Create);
@@ -480,11 +507,10 @@ end;
 procedure TMemoryLimitTests.TestSyncCatchCannotSwallowIntegrityFault;
 const
   SourceText =
-    'let caught = false;' + sLineBreak +
     'try {' + sLineBreak +
     '  ' + INTEGRITY_FAULT_GLOBAL_NAME + '();' + sLineBreak +
     '} catch (e) {' + sLineBreak +
-    '  caught = true;' + sLineBreak +
+    '  ' + SWALLOW_WITNESS_GLOBAL_NAME + '();' + sLineBreak +
     '}';
 begin
   { An engine-integrity fault is not a JavaScript error and must not become
@@ -492,13 +518,20 @@ begin
     catchable Error object, which turned a use-after-free — the shape an
     unrooted evaluator temporary produces under memory pressure — into
     `catch (e)` and let the script keep running on corrupted state. Both
-    executors must now unwind to the host. }
+    executors must now unwind to the host.
+
+    The escaping EObjectCheck is the load-bearing assertion; the witness is the
+    other half of the same question, and it distinguishes the two ways this can
+    fail — a fault that never reached the host because the guest caught it,
+    versus one that never fired at all. }
   Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaInterpreterExecutor.Create,
     'integrity-fault-sync-interpreted.js', EObjectCheck)).ToBe(True);
+  Expect<Boolean>(FSwallowedFaultReported).ToBe(False);
   Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
     'integrity-fault-sync-bytecode.js', EObjectCheck)).ToBe(True);
+  Expect<Boolean>(FSwallowedFaultReported).ToBe(False);
 end;
 
 procedure TMemoryLimitTests.TestAsyncFunctionCatchCannotSwallowIntegrityFault;
@@ -510,19 +543,26 @@ const
     'const main = async () => {' + sLineBreak +
     '  try {' + sLineBreak +
     '    await fault();' + sLineBreak +
-    '  } catch (e) {}' + sLineBreak +
+    '  } catch (e) {' + sLineBreak +
+    '    ' + SWALLOW_WITNESS_GLOBAL_NAME + '();' + sLineBreak +
+    '  }' + sLineBreak +
     '};' + sLineBreak +
     'main();';
 begin
   { The await and promise-reaction boundaries convert a Pascal exception into a
     rejection, which `catch` then absorbs — the same swallow by a different
-    route. }
+    route. The witness matters more here than on the synchronous path: a throw
+    from inside this catch block would only become another rejection nothing
+    observes, so a host-side flag is the only way the swallow can report
+    itself. }
   Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaInterpreterExecutor.Create,
     'integrity-fault-async-interpreted.js', EObjectCheck)).ToBe(True);
+  Expect<Boolean>(FSwallowedFaultReported).ToBe(False);
   Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
     'integrity-fault-async-bytecode.js', EObjectCheck)).ToBe(True);
+  Expect<Boolean>(FSwallowedFaultReported).ToBe(False);
 end;
 
 procedure TMemoryLimitTests.TestSandboxFsPromiseCannotSwallowRefusal;
