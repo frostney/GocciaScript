@@ -105,6 +105,11 @@ type
     FMemoryLimitFiring: Boolean;
     FExternalPressurePending: Boolean;
     FMemoryPressureCountdown: PInteger;
+    // Bytes still live after the most recent forced reservation collection
+    // that failed to make room, or -1 when no such observation is on record.
+    // A collection cannot bring the heap below the level the last one left,
+    // so this bounds what a repeat attempt could possibly reclaim.
+    FForcedCollectFloor: Int64;
 
     {$IFDEF GC_TIMING}
     FTotalMarkTimeNs: Int64;
@@ -117,6 +122,7 @@ type
     function GetManagedObjectCount: Integer;
     function GetWatermark: Integer; {$IFDEF FPC}inline;{$ENDIF}
     procedure ClearActiveRootEntries(const AObject: TGCManagedObject);
+    function ShouldForceReservationCollection(const ABytes: Int64): Boolean;
   protected
     procedure MarkRoots; virtual;
     procedure TraceWeakReferences;
@@ -165,7 +171,14 @@ type
     procedure CollectIfNeeded(const AProtect: TGCManagedObject); overload;
 
     function NeedsMemoryPressureCollection: Boolean;
-    procedure CollectForMemoryPressure(const AProtect: TGCManagedObject);
+
+    // Collects when pressure has been latched by an external reservation or
+    // when the live set has crossed the reserve below the ceiling. AForce
+    // skips that heuristic and always collects; it exists for the last-resort
+    // site in TryReserveExternalBytes, which must not refuse a reservation
+    // before a collection has actually been attempted.
+    procedure CollectForMemoryPressure(const AProtect: TGCManagedObject;
+      const AForce: Boolean = False);
 
     // Young-generation collection: marks from real roots, then sweeps
     // only objects allocated after AWatermark. Old objects are retained
@@ -462,6 +475,7 @@ begin
   FMemoryLimitFiring := False;
   FExternalPressurePending := False;
   FMemoryPressureCountdown := nil;
+  FForcedCollectFloor := -1;
   {$IFDEF GC_TIMING}
   FTotalMarkTimeNs := 0;
   FTotalSweepTimeNs := 0;
@@ -544,6 +558,11 @@ begin
     FManagedObjects[Idx] := nil;
     AObject.GCIndex := -1;
     Dec(FBytesAllocated, AObject.InstanceSize);
+    // Same invalidation as ReleaseExternalBytes: dropping below the recorded
+    // floor means that observation no longer bounds what a collection could
+    // reclaim and must not go on suppressing one.
+    if (FForcedCollectFloor >= 0) and (FBytesAllocated < FForcedCollectFloor) then
+      FForcedCollectFloor := -1;
   end;
 end;
 
@@ -839,6 +858,9 @@ begin
       FAllocationsSinceLastGC := 0;
       FExternalBytesAllocatedSinceGC := 0;
       FExternalPressurePending := False;
+      // This collection supersedes whatever the last forced one observed, so
+      // the next failing reservation is entitled to force again.
+      FForcedCollectFloor := -1;
 
       // Adaptive threshold: next collection after allocating as many
       // objects as survived, amortizing collection cost to O(1) per
@@ -921,11 +943,11 @@ begin
 end;
 
 procedure TGarbageCollector.CollectForMemoryPressure(
-  const AProtect: TGCManagedObject);
+  const AProtect: TGCManagedObject; const AForce: Boolean);
 var
   WasFiring: Boolean;
 begin
-  if not FExternalPressurePending and
+  if not AForce and not FExternalPressurePending and
      not NeedsMemoryPressureCollection then
     Exit;
 
@@ -997,6 +1019,7 @@ begin
       FAllocationsSinceLastGC := 0;
       FExternalBytesAllocatedSinceGC := 0;
       FExternalPressurePending := False;
+      FForcedCollectFloor := -1;
       FTotalCollected := FTotalCollected + Collected;
       Inc(FTotalCollections);
       {$IFDEF GC_DEBUG}
@@ -1017,6 +1040,32 @@ begin
   FPeakBytesAllocated := FBytesAllocated;
 end;
 
+function TGarbageCollector.ShouldForceReservationCollection(
+  const ABytes: Int64): Boolean;
+begin
+  // Last resort: a reservation is only refused once a collection has actually
+  // been attempted. The pressure heuristic cannot decide this on its own — it
+  // triggers at a fixed reserve below the ceiling, so a reservation larger
+  // than that reserve used to be refused with reclaimable garbage still on the
+  // heap whenever the live set sat below the trigger.
+  //
+  // Two shapes are refused without walking the heap, because for them no
+  // collection could change the answer. A request larger than the whole budget
+  // never fits. And once a forced collection has left FForcedCollectFloor
+  // bytes live, no later collection gets the heap below that level, so a
+  // request that does not fit beside the floor cannot be made to fit either —
+  // which is what keeps a guest that catches the RangeError and retries at
+  // O(1) per attempt instead of a full mark-and-sweep each time. The floor is
+  // per request size, so a smaller request that the floor does not rule out
+  // still forces its collection.
+  Result := not FCollecting and not FMemoryLimitFiring and
+    (FMaxBytes > 0) and (ABytes <= FMaxBytes) and
+    (FBytesAllocated <= High(Int64) - ABytes) and
+    (FBytesAllocated + ABytes > FMaxBytes) and
+    ((FForcedCollectFloor < 0) or
+     (FForcedCollectFloor <= FMaxBytes - ABytes));
+end;
+
 function TGarbageCollector.TryReserveExternalBytes(
   const ABytes: Int64; const AProtect: TGCManagedObject): Boolean;
 begin
@@ -1024,13 +1073,16 @@ begin
     Exit(True);
   Result := (FBytesAllocated <= High(Int64) - ABytes) and
     ((FMaxBytes <= 0) or (FBytesAllocated + ABytes <= FMaxBytes));
-  if not Result and not FCollecting and not FMemoryLimitFiring and
-     (FMaxBytes > 0) and (FBytesAllocated <= High(Int64) - ABytes) and
-     (FBytesAllocated + ABytes > FMaxBytes) then
+  if not Result and ShouldForceReservationCollection(ABytes) then
   begin
-    CollectForMemoryPressure(AProtect);
+    CollectForMemoryPressure(AProtect, True);
     Result := (FBytesAllocated <= High(Int64) - ABytes) and
       ((FMaxBytes <= 0) or (FBytesAllocated + ABytes <= FMaxBytes));
+    // Record the level this collection could not get below, so a retry of a
+    // request it already refused skips the walk that just proved fruitless.
+    // Collect clears this again, so any ordinary collection re-arms forcing.
+    if not Result then
+      FForcedCollectFloor := FBytesAllocated;
   end;
   if not Result then
     Exit;
@@ -1064,6 +1116,11 @@ begin
     Dec(FExternalBytes, ABytes);
     Dec(FBytesAllocated, ABytes);
   end;
+  // Released bytes take the heap below the level the last forced collection
+  // observed, so that observation no longer bounds what a collection could
+  // reclaim and must not go on suppressing one.
+  if (FForcedCollectFloor >= 0) and (FBytesAllocated < FForcedCollectFloor) then
+    FForcedCollectFloor := -1;
 end;
 
 function TGarbageCollector.ExchangeMemoryPressureCountdown(
