@@ -388,6 +388,16 @@ const stripComments = (lines: string[]): string[] => {
         continue;
       }
 
+      // An escaped character outside a string is regex-literal territory
+      // (`/\/\//`, `/\/*/`): copy both so the `/` after a backslash can
+      // never read as a comment opener — otherwise the rest of the line
+      // (or, via a phantom `/*`, the rest of the file) would be dropped
+      // and a real claim there never seen.
+      if (ch === "\\") {
+        out += ch + next;
+        i += 2;
+        continue;
+      }
       if (ch === "/" && next === "/") break; // rest of the line is a comment
       if (ch === "/" && next === "*") {
         inBlock = true;
@@ -863,6 +873,24 @@ const SELF_TEST_CASES: SelfTestCase[] = [
       "// test262 pass rate: 80%\n" +
       "const enabled = true;\n",
     expected: 0,
+  },
+
+  {
+    name: "an escaped slash in a regex does not end the line scan early",
+    path: "website/src/lib/demo.ts",
+    content:
+      'const isUrl = /^https?:\\/\\//g; const label = "test262 pass rate: 80%";\n' +
+      "const enabled = true;\n",
+    expected: 1,
+  },
+  {
+    name: "an escaped slash before a star does not latch block-comment state",
+    path: "website/src/lib/demo.ts",
+    content:
+      "const slashStars = /\\/*/g;\n" +
+      'const label = "test262 pass rate: 80%";\n' +
+      "const enabled = true;\n",
+    expected: 1,
   },
 ];
 
