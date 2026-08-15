@@ -36,3 +36,7 @@ fixtures/ffi/*.pdb
 # Claude Code agent runtime state
 .claude/scheduled_tasks.lock
 .claude/worktrees/
+
+# check-conformance-claims.ts --self-test symlink fixtures. Removed in a
+# `finally`, but a SIGKILL mid-run would otherwise leave untracked litter.
+.conformance-selftest-*/

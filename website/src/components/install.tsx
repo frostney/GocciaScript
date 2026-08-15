@@ -87,19 +87,42 @@ function unixPrebuiltBlock(
   const c = commented ? "# " : "";
   const note = commented ? "uncomment to use instead" : "auto-detected";
   const unpack =
-    os === "linux" ? `${c}tar xzf "${archive}"` : `${c}unzip -q "${archive}"`;
+    os === "linux" ? `tar xzf "${archive}"` : `unzip -q "${archive}"`;
+  // Download, unpack, enter, mark executable and install are ONE failure-gated
+  // chain. Rendered as separate statements, a failed download or a failed
+  // extraction still falls through to `sudo mv` — and if a directory of the
+  // expected name is left over from an earlier attempt, that installs stale
+  // binaries system-wide.
+  //
+  // `&& \` keeps every rendered line prefixed by `${c}`, so the commented
+  // alternate stays inert: a trailing backslash inside a `#` comment is comment
+  // text, not a line continuation, so each commented line stands alone.
+  const steps = [
+    `curl -fsSL -O "${url}"`,
+    unpack,
+    `cd "${dir}"`,
+    "chmod +x GocciaScriptLoader GocciaTestRunner GocciaREPL",
+    "sudo mv GocciaScriptLoader GocciaTestRunner GocciaREPL /usr/local/bin/",
+  ];
   return [
     `# ${label} — ${note}`,
-    `${c}curl -fsSL -O "${url}"`,
-    unpack,
-    `${c}cd "${dir}"`,
-    `${c}chmod +x GocciaScriptLoader GocciaTestRunner GocciaREPL`,
-    `${c}sudo mv GocciaScriptLoader GocciaTestRunner GocciaREPL /usr/local/bin/`,
+    ...steps.map((step, i) =>
+      i === steps.length - 1 ? `${c}${step}` : `${c}${step} && \\`,
+    ),
   ].join("\n");
 }
 
 /** Build a Windows prebuilt block (PowerShell). Active arch lines are
- *  uncommented; alternate arch is fully commented. */
+ *  uncommented; alternate arch is fully commented.
+ *
+ *  `$env:USERPROFILE\bin` is not on a clean profile's PATH, so moving the
+ *  exes there is not enough to make them runnable by name. The last two
+ *  lines mirror what `install.ps1` does: append the directory to the
+ *  persistent user PATH only when it is missing, then patch the current
+ *  session's `$env:Path` so the commands work without a new shell. Both
+ *  appends are guarded on the entry being absent — these are display
+ *  commands people re-paste, and an unguarded session append grows
+ *  `$env:Path` by one copy every time. */
 function windowsPrebuiltBlock(
   active: ArchKey,
   commented: boolean,
@@ -115,8 +138,11 @@ function windowsPrebuiltBlock(
     `# ${label} — ${note}`,
     `${c}Invoke-WebRequest -Uri "${url}" -OutFile "${archive}"`,
     `${c}Expand-Archive -Path "${archive}" -DestinationPath . -Force`,
-    `${c}New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\\bin" | Out-Null`,
-    `${c}Move-Item -Force ${dir}\\GocciaScriptLoader.exe, ${dir}\\GocciaTestRunner.exe, ${dir}\\GocciaREPL.exe "$env:USERPROFILE\\bin\\"`,
+    `${c}$bin = "$env:USERPROFILE\\bin"; New-Item -ItemType Directory -Force -Path $bin | Out-Null`,
+    `${c}Move-Item -Force ${dir}\\GocciaScriptLoader.exe, ${dir}\\GocciaTestRunner.exe, ${dir}\\GocciaREPL.exe "$bin\\"`,
+    `${c}$userPath = [Environment]::GetEnvironmentVariable("Path", "User")`,
+    `${c}if (($userPath -split ';') -notcontains $bin) { [Environment]::SetEnvironmentVariable("Path", (($userPath, $bin | Where-Object { $_ }) -join ';'), "User") }`,
+    `${c}if (($env:Path -split ';') -notcontains $bin) { $env:Path = "$env:Path;$bin" }`,
   ].join("\n");
 }
 

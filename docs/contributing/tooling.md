@@ -308,7 +308,8 @@ JavaScript suite under two tools that answer different questions:
 
 `DIR` is a unit-output directory of your own (CI uses
 `build/compiled/targets/testrunner-heaptrc`). Give the heaptrc build its own
-per the [per-program `-FU` rule](#shared--fu-directories-across-programs--internal-error-200611011) —
+unit-output directory per the
+[per-program `-FU` rule](#shared--fu-directories-across-programs--internal-error-200611011) —
 and create the directory first, because `fpc` writes into a `-FU` directory but
 will not create one; against a missing directory it fails with
 `Can't create object file: … (error code: 2)` (on external-assembler targets

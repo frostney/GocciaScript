@@ -18,6 +18,14 @@ set -e
 REPO="${GOCCIA_REPO:-frostney/GocciaScript}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
+# Trim every trailing slash, not just one: "/usr/local/bin//" must match the
+# PATH entry "/usr/local/bin" or the installer prints a false "add it to your
+# PATH" hint. A bare "/" is left intact — reducing it to "" would report an
+# empty install location and probe PATH for "".
+while [ "$INSTALL_DIR" != "/" ] && [ "$INSTALL_DIR" != "${INSTALL_DIR%/}" ]; do
+  INSTALL_DIR="${INSTALL_DIR%/}"
+done
+
 err() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 
 # --- detect OS -------------------------------------------------------
@@ -75,29 +83,48 @@ fi
 # release (gocciascript-<version>-<os>-<arch>) with the executables sitting
 # at its root. Resolve it by glob rather than by exact name, and keep the
 # legacy build/ and flat layouts as fallbacks.
+#
+# A candidate qualifies only when it holds all three executables. Matching on
+# the loader alone would commit to the first directory that happens to have
+# it and then hard-fail on the missing sibling, even when a later candidate
+# is complete.
 SRC_DIR=""
+PARTIAL_DIR=""
+PARTIAL_MISSING=""
 for candidate in "gocciascript-${VERSION}-${OS}-${ARCH}" gocciascript-*/ build .; do
   candidate="${candidate%/}"
-  if [ -f "${candidate}/GocciaScriptLoader" ]; then
+  [ -d "$candidate" ] || continue
+  missing=""
+  for bin in GocciaScriptLoader GocciaTestRunner GocciaREPL; do
+    [ -f "${candidate}/${bin}" ] || missing="${missing} ${bin}"
+  done
+  if [ -z "$missing" ]; then
     SRC_DIR="$candidate"
     break
   fi
+  # Keep the first loader-bearing candidate for diagnostics: it is the one
+  # that looked like a GocciaScript layout, so its missing files are what
+  # the user needs to hear about if nothing else qualifies.
+  if [ -z "$PARTIAL_DIR" ] && [ -f "${candidate}/GocciaScriptLoader" ]; then
+    PARTIAL_DIR="$candidate"
+    PARTIAL_MISSING="${missing# }"
+  fi
 done
-[ -n "$SRC_DIR" ] || err "could not find GocciaScriptLoader in $ASSET"
 
-# Every release archive carries all three; a missing one means a broken
-# download or a layout change, so fail rather than report a partial
-# install as success.
-for bin in GocciaScriptLoader GocciaTestRunner GocciaREPL; do
-  [ -f "${SRC_DIR}/${bin}" ] || err "${SRC_DIR}/${bin} not found in archive"
-done
+if [ -z "$SRC_DIR" ]; then
+  # Every release archive carries all three; a missing one means a broken
+  # download or a layout change, so fail rather than report a partial
+  # install as success.
+  [ -z "$PARTIAL_DIR" ] || err "incomplete archive ${ASSET}: ${PARTIAL_DIR} is missing ${PARTIAL_MISSING}"
+  err "could not find GocciaScriptLoader, GocciaTestRunner and GocciaREPL in $ASSET"
+fi
+
 for bin in GocciaScriptLoader GocciaTestRunner GocciaREPL; do
   src="${SRC_DIR}/${bin}"
   chmod +x "$src"
   $SUDO mv "$src" "${INSTALL_DIR}/${bin}"
 done
 
-INSTALL_DIR="${INSTALL_DIR%/}"
 printf '\nGocciaScript %s installed to %s\n' "$VERSION" "$INSTALL_DIR"
 case ":${PATH}:" in
   *":${INSTALL_DIR}:"*) ;;

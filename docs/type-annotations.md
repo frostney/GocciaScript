@@ -97,7 +97,7 @@ try { throw new Error("oops"); } catch (e: Error) { }
 
 A leading `<` is ambiguous: it can open a JSX element or a type parameter list. GocciaScript resolves this by file extension — modeled on TypeScript's `.ts`/`.mts` versus `.tsx` rule, with GocciaScript-specific extensions: JSX is also recognized (with a warning) in `.js` and `.mjs` sources.
 
-- **`.ts`, `.mts`** — JSX is never recognised, so `<` is always type syntax. Generic function type annotations and every generic arrow form parse here:
+- **`.ts`, `.mts`** — JSX is never recognised, so `<` is always type syntax. Generic function type annotations parse here, as does every *supported* generic arrow form — including the bare `<T>` the JSX extensions cannot take. Generic **async** arrows are unsupported in every extension; see [Not Supported](#not-supported).
 
   ```typescript
   const identity: <T>(x: T) => T = (x) => x;

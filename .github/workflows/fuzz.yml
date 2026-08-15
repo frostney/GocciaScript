@@ -106,18 +106,46 @@ jobs:
           # signal makes FUZZ_SECONDS an actual bound. Findings are written to
           # crashes/ and hangs/ as they are discovered, so a hard kill loses no
           # reproducers — only the final stats summary.
-          AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
           status=0
+          started=${SECONDS}
+          AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
           timeout -k 60 "${FUZZ_SECONDS}" afl-fuzz -n -t 5000 \
             -i build/fuzz/corpus \
             -o build/fuzz/out \
             -- ./build/GocciaFuzzHarness @@ || status=$?
-          # 124 = deadline reached, SIGTERM honored; 137 = SIGKILL was needed,
-          # i.e. the SIGTERM hang recurred. Crash triage happens in the next
-          # step either way.
-          echo "afl-fuzz exit status: ${status}"
+          elapsed=$(( SECONDS - started ))
+          echo "afl-fuzz exit status: ${status} after ${elapsed}s"
+          # 0 = afl-fuzz returned on its own; 124 = deadline reached and the
+          # SIGTERM was honored; 137 = SIGKILL — expected only when it is
+          # timeout's -k escalation at the deadline. A 137 long before the
+          # deadline is an outside kill (OOM killer) and must not pass as a
+          # completed fuzz run, so 137 is accepted only once the deadline
+          # elapsed. Anything else is afl-fuzz never getting off the ground
+          # (bad arguments, missing binary, 127 from a missing afl-fuzz) and
+          # must fail the job rather than pass as a fuzz run that found
+          # nothing. Crash triage still runs — "Report crashes" is
+          # `!cancelled()`.
+          case "${status}" in
+            0 | 124) ;;
+            137)
+              if [ "${elapsed}" -lt "${FUZZ_SECONDS}" ]; then
+                echo "::error::afl-fuzz was SIGKILLed after ${elapsed}s, before the ${FUZZ_SECONDS}s deadline (OOM killer?)"
+                exit "${status}"
+              fi
+              ;;
+            *)
+              echo "::error::afl-fuzz did not run to a deadline (exit ${status})"
+              exit "${status}"
+              ;;
+          esac
 
       - name: Report crashes
+        # Runs even when the Fuzz step failed: findings are written to
+        # crashes/ and hangs/ as they are discovered, so reproducers found
+        # before the failure must still be triaged and uploaded. `!cancelled()`
+        # rather than `always()` — a cancelled run should stop, not push on
+        # through triage.
+        if: ${{ !cancelled() }}
         run: |
           crashes=$(find build/fuzz/out -path '*/crashes/id:*' 2>/dev/null | wc -l)
           hangs=$(find build/fuzz/out -path '*/hangs/id:*' 2>/dev/null | wc -l)

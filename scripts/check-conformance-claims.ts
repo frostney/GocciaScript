@@ -20,14 +20,26 @@
  *   - pass- or conformance-strength vocabulary within +/- 3 lines.
  * Generic words alone (corpus, coverage, compatible) never convict, so an
  * unrelated percentage does not start failing because an edit moved a test262
- * sentence three lines closer to it.
+ * sentence three lines closer to it. Both the claim and the vocabulary must be
+ * visible prose: context is built from the extracted spans, so a fenced or
+ * indented block cannot supply the words that convict its neighbour. Inline
+ * code still can — backticks are typography, and `test262` in a sentence is
+ * what the reader is being told about — but its content is never itself a
+ * candidate, so a CLI flag cannot become a figure.
+ *
+ * Symlinks resolve before anything is read, and the target must be a regular
+ * file inside the checkout. A link out of the tree would scan host state, and
+ * one to a character device would never reach EOF.
  *
  * Not checked (by design):
  *   - docs/adr/ and docs/spikes/ — immutable, dated measurement records
  *   - CHANGELOG.md — generated release history, not maintained prose
+ *   - TypeScript comments — a `//` or block comment is not published copy;
+ *     string and template literals (URLs included) are left intact
  *   - Fenced (``` and ~~~) and indented code blocks, inline code spans, and
  *     link targets — sample report output, CLI flags, and pinned SHAs are not
- *     prose claims
+ *     prose claims. Inline code is excluded as a claim only; its text still
+ *     counts as vocabulary for the lines around it.
  *   - Website test files — synthetic fixtures, not published copy
  *   - Percentages computed or formatted from live data: the extraction drops
  *     `${...}` expressions, so a rendered figure leaves no literal behind
@@ -50,14 +62,30 @@
  *   npx tsx scripts/check-conformance-claims.ts --self-test
  */
 
-import { readFileSync, readdirSync, existsSync, lstatSync, realpathSync } from "fs";
-import { join, relative, dirname } from "path";
+import {
+  readFileSync,
+  readdirSync,
+  existsSync,
+  statSync,
+  realpathSync,
+  mkdirSync,
+  mkdtempSync,
+  writeFileSync,
+  symlinkSync,
+  rmSync,
+} from "fs";
+import { join, relative, dirname, sep } from "path";
+import { tmpdir } from "os";
 import { fileURLToPath } from "url";
 
 // -- Config -------------------------------------------------------------------
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
+// Canonical checkout root. Symlink containment is decided against this, not
+// against ROOT: on macOS a path under /tmp resolves into /private/tmp, so an
+// uncanonicalised prefix test would reject legitimate targets.
+const ROOT_REAL = realpathSync(ROOT);
 const VERBOSE = process.argv.includes("--verbose");
 const SELF_TEST = process.argv.includes("--self-test");
 
@@ -143,17 +171,59 @@ const shouldScan = (repoPath: string): boolean => {
 
 // -- File discovery -----------------------------------------------------------
 
-const collectFiles = (): string[] => {
-  const files: string[] = [];
+/**
+ * What the scan will actually read, or null when the entry must not be read.
+ *
+ * The repository contains symlinks (AGENTS.md and CLAUDE.md are one document)
+ * and a pull request can add more, so the link target — not the link — decides
+ * whether an entry is scanned:
+ *
+ *   - Outside the checkout (`docs/x.md -> /etc/passwd`): reading it would scan
+ *     host state that no reviewer of the diff ever sees.
+ *   - Not a regular file (`docs/x.md -> /dev/zero`): readFileSync on a
+ *     character device never reaches EOF and takes the runner down on memory.
+ *
+ * Both are reachable from an untrusted branch, which is exactly when this
+ * check runs in CI.
+ */
+const resolveScannable = (full: string): string | null => {
+  let real: string;
+  try {
+    real = realpathSync(full);
+  } catch {
+    return null; // broken link or an unresolvable path
+  }
+
+  if (real !== ROOT_REAL && !real.startsWith(ROOT_REAL + sep)) return null;
+
+  try {
+    if (!statSync(real).isFile()) return null;
+  } catch {
+    return null;
+  }
+
+  return real;
+};
+
+/** A file to scan: the path reported, and the canonical path read. */
+interface ScanTarget {
+  repoPath: string;
+  realPath: string;
+}
+
+const collectFiles = (): ScanTarget[] => {
+  const files: ScanTarget[] = [];
   const seen = new Set<string>();
 
   const add = (full: string): void => {
-    if (!shouldScan(toRepoPath(full))) return;
+    const repoPath = toRepoPath(full);
+    if (!shouldScan(repoPath)) return;
+    const realPath = resolveScannable(full);
+    if (realPath === null) return;
     // AGENTS.md and CLAUDE.md are the same document behind a symlink.
-    const real = lstatSync(full).isSymbolicLink() ? realpathSync(full) : full;
-    if (seen.has(real)) return;
-    seen.add(real);
-    files.push(full);
+    if (seen.has(realPath)) return;
+    seen.add(realPath);
+    files.push({ repoPath, realPath });
   };
 
   const walk = (dir: string, recurse: boolean): void => {
@@ -187,12 +257,31 @@ const collectFiles = (): string[] => {
 type LineSpans = string[];
 
 /**
+ * One line under its two readings.
+ *
+ *   spans   — the candidate side: text that may hold a claim. Inline code is
+ *             excluded, so `--timeout-ms=20000` never becomes a figure.
+ *   context — the vocabulary side: everything a reader actually sees, inline
+ *             code included. "The `test262` suite pass rate is 88.4%" puts the
+ *             subject in backticks, and it is still the word test262 on the
+ *             rendered page, so it must be able to convict the figure beside
+ *             it. Fenced and indented blocks contribute to neither.
+ */
+interface LineProse {
+  spans: LineSpans;
+  context: string;
+}
+
+/** A line that reads as neither a claim nor vocabulary. */
+const EMPTY_PROSE: LineProse = { spans: [], context: "" };
+
+/**
  * Markdown: everything outside fenced (``` / ~~~) and indented code blocks,
  * inline code spans, and link targets. A CLI flag (`--timeout-ms=20000`) or a
  * report filename is not a claim about the engine.
  */
-const markdownProse = (lines: string[]): LineSpans[] => {
-  const prose: LineSpans[] = [];
+const markdownProse = (lines: string[]): LineProse[] => {
+  const prose: LineProse[] = [];
   let fence: string | null = null;
   // Four-space indentation is a code block only outside list bodies, where the
   // same indentation is ordinary continuation prose.
@@ -204,11 +293,11 @@ const markdownProse = (lines: string[]): LineSpans[] => {
       const marker = fenceMatch[1][0];
       if (fence === null) fence = marker;
       else if (fence === marker) fence = null;
-      prose.push([]);
+      prose.push(EMPTY_PROSE);
       continue;
     }
     if (fence !== null) {
-      prose.push([]);
+      prose.push(EMPTY_PROSE);
       continue;
     }
 
@@ -218,16 +307,20 @@ const markdownProse = (lines: string[]): LineSpans[] => {
       else if (!indented) inList = false;
     }
     if (indented && !inList) {
-      prose.push([]);
+      prose.push(EMPTY_PROSE);
       continue;
     }
 
-    prose.push([
-      line
-        .replace(/`[^`]*`/g, " ")           // inline code spans
-        .replace(/\]\([^)]*\)/g, "] ")      // link targets
-        .replace(/https?:\/\/\S+/g, " "),   // bare URLs
-    ]);
+    // Link targets and bare URLs leave both readings: a path or a pinned SHA
+    // is neither a claim nor vocabulary. Inline code leaves only the candidate
+    // side — its text is on the page, so it still supplies vocabulary.
+    const visible = line
+      .replace(/\]\([^)]*\)/g, "] ")      // link targets
+      .replace(/https?:\/\/\S+/g, " ");   // bare URLs
+    prose.push({
+      spans: [visible.replace(/`[^`]*`/g, " ")],
+      context: visible.replace(/`/g, " "),
+    });
   }
 
   return prose;
@@ -243,9 +336,99 @@ const markdownProse = (lines: string[]): LineSpans[] => {
  * is the idiomatic stat-object shape, and the number lives in a span of its
  * own with the vocabulary on the neighbouring line.
  */
-const sourceProse = (lines: string[]): LineSpans[] => {
-  const prose: LineSpans[] = [];
+/**
+ * Blank out `//` line comments and block comments, leaving string and template
+ * literals — including the `//` inside a URL — untouched.
+ *
+ * Comment text is not published copy: `// test262 pass rate: 80%` is invisible
+ * to every reader of the site and must not be convicted. Stripping it with a
+ * plain `//` search would instead cut `"https://gocciascript.dev"` in half and
+ * silently drop the rest of the line, so the scan is character-wise with
+ * string state. Comment bodies are replaced by spaces rather than removed, so
+ * every surviving span keeps its original line and column.
+ *
+ * Regex literals are not tracked, matching the tokenisation the literal
+ * extractor below already uses: a quote inside a regex is read as a string
+ * start by both, so the two stay consistent.
+ */
+const stripComments = (lines: string[]): string[] => {
+  const stripped: string[] = [];
+  let inBlock = false;
+  let quote = "";
+
+  for (const line of lines) {
+    let out = "";
+    let i = 0;
+
+    while (i < line.length) {
+      const ch = line[i];
+      const next = i + 1 < line.length ? line[i + 1] : "";
+
+      if (inBlock) {
+        if (ch === "*" && next === "/") {
+          inBlock = false;
+          out += "  ";
+          i += 2;
+          continue;
+        }
+        out += " ";
+        i++;
+        continue;
+      }
+
+      if (quote !== "") {
+        out += ch;
+        if (ch === "\\") {
+          out += next;
+          i += 2;
+          continue;
+        }
+        if (ch === quote) quote = "";
+        i++;
+        continue;
+      }
+
+      // An escaped character outside a string is regex-literal territory
+      // (`/\/\//`, `/\/*/`): copy both so the `/` after a backslash can
+      // never read as a comment opener — otherwise the rest of the line
+      // (or, via a phantom `/*`, the rest of the file) would be dropped
+      // and a real claim there never seen.
+      if (ch === "\\") {
+        out += ch + next;
+        i += 2;
+        continue;
+      }
+      if (ch === "/" && next === "/") break; // rest of the line is a comment
+      if (ch === "/" && next === "*") {
+        inBlock = true;
+        out += "  ";
+        i += 2;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") quote = ch;
+
+      out += ch;
+      i++;
+    }
+
+    // Only a template literal legally spans lines. A `'` or `"` still open at
+    // the newline was never a string: it is an apostrophe in JSX text
+    // ("It's the built-in runner") or a quote character inside a regex class
+    // (/['"]/g). Carrying that state forward would treat the rest of the file
+    // as one long string — comments would stop being stripped and the next
+    // `// test262 pass rate: 80%` would be reported as published copy.
+    if (quote !== "`") quote = "";
+
+    stripped.push(out);
+  }
+
+  return stripped;
+};
+
+const sourceProse = (rawLines: string[]): LineProse[] => {
+  const prose: LineProse[] = [];
   const literalRe = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g;
+  const lines = stripComments(rawLines);
 
   for (const line of lines) {
     const spans: string[] = [];
@@ -267,7 +450,9 @@ const sourceProse = (lines: string[]): LineSpans[] => {
       .replace(/<[^>]*>?/g, " ");
     if (jsxText.trim() !== "") spans.push(jsxText);
 
-    prose.push(spans);
+    // No inline-code notion in TypeScript: what a reader sees is exactly the
+    // literal and JSX text already extracted, so both readings coincide.
+    prose.push({ spans, context: spans.join(" ") });
   }
 
   return prose;
@@ -397,18 +582,26 @@ const analyzeContent = (repoPath: string, content: string): Finding[] => {
   const prose = repoPath.endsWith(".md") ? markdownProse(lines) : sourceProse(lines);
   const findings: Finding[] = [];
 
-  for (const [i, spans] of prose.entries()) {
-    if (spans.length === 0) continue;
+  for (const [i, line] of prose.entries()) {
+    if (line.spans.length === 0) continue;
 
     const from = Math.max(0, i - CONTEXT_LINES);
     const to = Math.min(lines.length, i + CONTEXT_LINES + 1);
-    const context = lines.slice(from, to).join("\n");
+    // Context comes from the visible reading of the neighbouring lines, not the
+    // raw text. A fenced or indented block contributes nothing: sample report
+    // output three lines above an unrelated percentage must not convict it.
+    // Inline code does contribute — backticks are typography, and `test262` in
+    // a sentence is still the reader's subject.
+    const context = prose
+      .slice(from, to)
+      .map((neighbour) => neighbour.context)
+      .join("\n");
 
     if (!TEST262_VOCAB.test(context)) continue;
     if (!CLAIM_VOCAB.test(context)) continue;
 
     const countsAllowed = PASS_WORD.test(context);
-    const claims = spans.flatMap((span) => findClaimsInSpan(span, countsAllowed));
+    const claims = line.spans.flatMap((span) => findClaimsInSpan(span, countsAllowed));
     if (claims.length === 0) continue;
 
     const allowed = allowanceFor(repoPath, lines, i);
@@ -457,16 +650,21 @@ const SELF_TEST_CASES: SelfTestCase[] = [
     claims: ["88.4%"],
   },
   {
+    // Vocabulary is deliberately in a visible literal, not a comment: with
+    // comments stripped, a commented heading would make this case pass
+    // whether or not the CSS exclusion still works.
     name: "letterless CSS dimension stays clean",
     path: "website/src/components/demo.tsx",
-    content: `// test262 pass rate dashboard shell\nconst style = { width: "100%", height: "100%" };\n`,
+    content: `const heading = "test262 pass rate";\nconst style = { width: "100%", height: "100%" };\n`,
     expected: 0,
   },
   {
+    // Visible vocabulary again, so the case tests the expression drop rather
+    // than the comment strip.
     name: "rendered figure leaves no literal",
     path: "website/src/lib/demo.ts",
     content:
-      "// test262 corpus pass rate\n" +
+      'const LABEL = "test262 corpus pass rate";\n' +
       "const rate = (passed: number, run: number): string =>\n" +
       '  run <= 0 ? "0.0%" : `${((passed / run) * 100).toFixed(1)}%`;\n',
     expected: 0,
@@ -607,6 +805,93 @@ const SELF_TEST_CASES: SelfTestCase[] = [
       "matched the expected result for 336 of 402 cases (83.6%).\n",
     expected: 0,
   },
+  {
+    name: "line-comment claim is not published copy",
+    path: "website/src/lib/demo.ts",
+    content: "// test262 pass rate: 80%\nconst enabled = true;\n",
+    expected: 0,
+  },
+  {
+    name: "block-comment claim is not published copy",
+    path: "website/src/lib/demo.ts",
+    content: "/*\n * test262 pass rate is 88.4% as of the pinned run.\n */\nconst enabled = true;\n",
+    expected: 0,
+  },
+  {
+    // Guards the comment strip against a naive `//` search: cutting the line
+    // at the URL's slashes would drop the claim that follows it.
+    name: "a URL inside a literal does not hide the claim after it",
+    path: "website/src/lib/demo.ts",
+    content:
+      'const COPY = "See https://www.gocciascript.dev/compatibility — test262 pass rate 88.4%";\n',
+    expected: 1,
+    claims: ["88.4%"],
+  },
+  {
+    name: "fenced sample output does not convict a neighbouring figure",
+    path: "docs/demo.md",
+    content:
+      "```text\ntest262 pass rate: 88.4%\n```\n\nThe published bundle is 42% smaller.\n",
+    expected: 0,
+  },
+  {
+    // Inline code is typography, not a code block: the reader sees the word
+    // test262, so it convicts the figure in the same sentence.
+    name: "backticked vocabulary still convicts a visible figure",
+    path: "docs/demo.md",
+    content: "The `test262` suite pass rate is 88.4% on the pinned run.\n",
+    expected: 1,
+    claims: ["88.4%"],
+  },
+  {
+    // ...but inline code is never itself a candidate, so a flag value in
+    // backticks is not a figure however much vocabulary surrounds it.
+    name: "a number inside inline code is not a claim",
+    path: "docs/demo.md",
+    content: "The test262 runner passes with `--timeout-ms=20000` set.\n",
+    expected: 0,
+  },
+  {
+    // An apostrophe in JSX text is not a string delimiter. Carrying the quote
+    // state past the newline would stop comments being stripped for the rest
+    // of the file, and the comment below would be reported as copy.
+    name: "an apostrophe in JSX text does not leak string state",
+    path: "website/src/components/demo.tsx",
+    content:
+      "export const Blurb = () => (\n" +
+      "  <p>It's the built-in runner.</p>\n" +
+      ");\n" +
+      "// test262 pass rate: 80%\n" +
+      "const enabled = true;\n",
+    expected: 0,
+  },
+  {
+    name: "quote characters in a regex literal do not leak string state",
+    path: "website/src/lib/demo.ts",
+    content:
+      "const strip = (s: string) => s.replace(/['\"]/g, \"\");\n" +
+      "// test262 pass rate: 80%\n" +
+      "const enabled = true;\n",
+    expected: 0,
+  },
+
+  {
+    name: "an escaped slash in a regex does not end the line scan early",
+    path: "website/src/lib/demo.ts",
+    content:
+      'const isUrl = /^https?:\\/\\//g; const label = "test262 pass rate: 80%";\n' +
+      "const enabled = true;\n",
+    expected: 1,
+  },
+  {
+    name: "an escaped slash before a star does not latch block-comment state",
+    path: "website/src/lib/demo.ts",
+    content:
+      "const slashStars = /\\/*/g;\n" +
+      'const label = "test262 pass rate: 80%";\n' +
+      "const enabled = true;\n",
+    expected: 1,
+  },
 ];
 
 const SELF_TEST_PATHS: { path: string; scanned: boolean }[] = [
@@ -624,6 +909,118 @@ const SELF_TEST_PATHS: { path: string; scanned: boolean }[] = [
   { path: "website/src/lib/positioning.spec.ts", scanned: false },
   { path: "scripts/run_test262_suite.ts", scanned: false },
 ];
+
+/**
+ * Symlink containment cannot be expressed as a string fixture — the battery
+ * above feeds content straight to analyzeContent and never touches a path — so
+ * resolveScannable is tested directly against real links. Fixtures live under
+ * the checkout (containment is judged against it) and are removed afterwards.
+ */
+interface ResolveCase {
+  name: string;
+  /** Builds the fixture and returns the path to hand to resolveScannable. */
+  make: (dir: string, outside: string) => string;
+  accepted: boolean;
+}
+
+// These cases build real symlink fixtures with symlinkSync and therefore
+// need Unix symbolic-link support; CI runs --self-test on ubuntu-latest
+// only. On a platform without symlink support the run fails loudly rather
+// than skipping.
+const SELF_TEST_RESOLVE: ResolveCase[] = [
+  {
+    name: "a regular file inside the checkout is read",
+    make: (dir) => {
+      const file = join(dir, "plain.md");
+      writeFileSync(file, "# plain\n");
+      return file;
+    },
+    accepted: true,
+  },
+  {
+    name: "a symlink to a file inside the checkout is read",
+    make: (dir) => {
+      const target = join(dir, "target.md");
+      const link = join(dir, "link.md");
+      writeFileSync(target, "# target\n");
+      symlinkSync(target, link);
+      return link;
+    },
+    accepted: true,
+  },
+  {
+    name: "a symlink escaping the checkout is refused",
+    make: (dir, outside) => {
+      const link = join(dir, "escape.md");
+      symlinkSync(outside, link);
+      return link;
+    },
+    accepted: false,
+  },
+  {
+    name: "a symlink to a directory is refused",
+    make: (dir) => {
+      const target = join(dir, "subdir");
+      const link = join(dir, "dirlink.md");
+      mkdirSync(target, { recursive: true });
+      symlinkSync(target, link);
+      return link;
+    },
+    accepted: false,
+  },
+  {
+    name: "a broken symlink is refused",
+    make: (dir) => {
+      const link = join(dir, "broken.md");
+      symlinkSync(join(dir, "does-not-exist.md"), link);
+      return link;
+    },
+    accepted: false,
+  },
+];
+
+// /dev/zero is the memory-exhaustion case, and it only exists on Unix.
+if (existsSync("/dev/zero")) {
+  SELF_TEST_RESOLVE.push({
+    name: "a symlink to a character device is refused",
+    make: (dir) => {
+      const link = join(dir, "zero.md");
+      symlinkSync("/dev/zero", link);
+      return link;
+    },
+    accepted: false,
+  });
+}
+
+const runResolveCases = (): number => {
+  const dir = join(ROOT_REAL, `.conformance-selftest-${process.pid}`);
+  const outsideDir = mkdtempSync(join(realpathSync(tmpdir()), "goccia-conformance-"));
+  const outside = join(outsideDir, "host.md");
+  let failures = 0;
+
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(outside, "# outside the checkout\n");
+
+    for (const resolveCase of SELF_TEST_RESOLVE) {
+      const path = resolveCase.make(dir, outside);
+      const actual = resolveScannable(path) !== null;
+      if (actual === resolveCase.accepted) {
+        console.log(`  OK    ${resolveCase.name} — ${actual ? "read" : "refused"}`);
+      } else {
+        failures++;
+        console.error(
+          `  FAIL  ${resolveCase.name} — expected ${resolveCase.accepted ? "read" : "refused"}`,
+        );
+      }
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  }
+
+  return failures;
+};
 
 const runSelfTest = (): void => {
   console.log("Self-testing the conformance-claim heuristic...\n");
@@ -659,7 +1056,9 @@ const runSelfTest = (): void => {
     }
   }
 
-  const total = SELF_TEST_CASES.length + SELF_TEST_PATHS.length;
+  failures += runResolveCases();
+
+  const total = SELF_TEST_CASES.length + SELF_TEST_PATHS.length + SELF_TEST_RESOLVE.length;
   console.log(`\n${total - failures}/${total} self-test cases passed.`);
 
   if (failures > 0) process.exit(1);
@@ -679,12 +1078,11 @@ const main = (): void => {
   const findings: Finding[] = [];
 
   for (const file of files) {
-    const repoPath = toRepoPath(file);
-    const fileFindings = analyzeContent(repoPath, readFileSync(file, "utf-8"));
+    const fileFindings = analyzeContent(file.repoPath, readFileSync(file.realPath, "utf-8"));
     findings.push(...fileFindings);
 
     if (VERBOSE && fileFindings.length === 0) {
-      console.log(`  OK    ${repoPath}`);
+      console.log(`  OK    ${file.repoPath}`);
     }
   }
 
