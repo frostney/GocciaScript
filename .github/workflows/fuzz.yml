@@ -99,11 +99,23 @@ jobs:
           # is a NORMAL exit-0 outcome, so AFL's exec threshold must sit safely
           # above it — otherwise process overhead around a legitimate slow input
           # lands it in hangs/ and false-fails the job.
+          # -k 60: afl-fuzz does not reliably exit on the SIGTERM `timeout`
+          # sends at the deadline — run 31771115536 sat 43 further minutes on a
+          # delivered SIGTERM until the job's own 60-minute cap cancelled it,
+          # leaving `timeout` and afl-fuzz behind as orphans. The kill
+          # signal makes FUZZ_SECONDS an actual bound. Findings are written to
+          # crashes/ and hangs/ as they are discovered, so a hard kill loses no
+          # reproducers — only the final stats summary.
           AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
-          timeout "${FUZZ_SECONDS}" afl-fuzz -n -t 5000 \
+          status=0
+          timeout -k 60 "${FUZZ_SECONDS}" afl-fuzz -n -t 5000 \
             -i build/fuzz/corpus \
             -o build/fuzz/out \
-            -- ./build/GocciaFuzzHarness @@ || true
+            -- ./build/GocciaFuzzHarness @@ || status=$?
+          # 124 = deadline reached, SIGTERM honored; 137 = SIGKILL was needed,
+          # i.e. the SIGTERM hang recurred. Crash triage happens in the next
+          # step either way.
+          echo "afl-fuzz exit status: ${status}"
 
       - name: Report crashes
         run: |
@@ -152,9 +164,14 @@ jobs:
 
       - name: Build test runner with heaptrc
         # -gh links the heaptrc unit; the trailing summary goes to stderr on
-        # exit and names every unfreed block with its allocation site.
+        # exit and names every unfreed block with its allocation site. The
+        # separate -FU dir follows the per-program unit-output rule (see
+        # docs/contributing/tooling.md, "Shared -FU Directories Across
+        # Programs" — Internal error 200611011) — but fpc does not create a
+        # -FU directory, it only writes into one, so mkdir it first.
         run: |
           ./build.pas testrunner
+          mkdir -p build/compiled/targets/testrunner-heaptrc
           fpc @config.cfg -gh -gl -FUbuild/compiled/targets/testrunner-heaptrc \
             -obuild/GocciaTestRunnerHeaptrc source/app/GocciaTestRunner.dpr
 
