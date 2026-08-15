@@ -137,6 +137,7 @@ uses
   Goccia.FetchManager,
   Goccia.FloatingPoint,
   Goccia.MicrotaskQueue,
+  Goccia.UncatchableFault,
   Goccia.Values.ArrayValue,
   Goccia.Values.Await,
   Goccia.Values.Error,
@@ -1062,9 +1063,19 @@ begin
       except
         on E: Exception do
         begin
+          { Pending host work is cleared before either outcome: on the recorded
+            path the next case must not inherit this one's microtasks, and on
+            the unwind path the host catches the fault and keeps running. }
           if (TGocciaMicrotaskQueue.Instance <> nil) then
             TGocciaMicrotaskQueue.Instance.ClearQueue;
           DiscardFetchCompletions;
+
+          { A benchmark loop is the worst place to absorb an uncatchable fault:
+            recording it as this case's `error` string starts the next case
+            immediately, so a ceiling is re-tripped case after case and an
+            integrity fault keeps the process measuring on freed memory. }
+          if IsUncatchableFault(E) then
+            raise;
 
           SingleResult := TGocciaObjectValue.Create;
           if Assigned(GC) then
@@ -1160,9 +1171,19 @@ begin
       except
         on E: Exception do
         begin
+          { Pending host work is cleared before either outcome: on the recorded
+            path the next case must not inherit this one's microtasks, and on
+            the unwind path the host catches the fault and keeps running. }
           if (TGocciaMicrotaskQueue.Instance <> nil) then
             TGocciaMicrotaskQueue.Instance.ClearQueue;
           DiscardFetchCompletions;
+
+          { A benchmark loop is the worst place to absorb an uncatchable fault:
+            recording it as this case's `error` string starts the next case
+            immediately, so a ceiling is re-tripped case after case and an
+            integrity fault keeps the process measuring on freed memory. }
+          if IsUncatchableFault(E) then
+            raise;
 
           SingleResult := TGocciaObjectValue.Create;
           if Assigned(GC) then
