@@ -1648,6 +1648,41 @@ console.log("--max-memory (builtin result builders survive mid-build collections
   }
 }
 
+// The slack the growth-gate blocks below park at, and the arithmetic that makes
+// the gate — never the charged path — the limiter that crosses first on both
+// pointer widths.
+//
+// The gated request is one entry-array doubling of a property map.
+// TOrderedStringMap grows that array C -> 2C + 2 (2, 6, 14, 30, … 1022, 2046,
+// 4094) and gates the transient old + new = (3C + 2) * SizeOf(TEntry). TEntry is
+// {string, TGocciaPropertyDescriptor, Cardinal, Boolean}: 24 bytes on a 64-bit
+// target, 16 on i386 (4 + 4 + 4 + 1, aligned to 4), so every request there is
+// two thirds the size. With a 4000-key object the largest doubling the run
+// reaches is C = 2046 — 147,360 bytes on 64-bit, 98,240 on i386 — and the ones
+// before it are 73,632 / 36,768 and 49,088 / 24,512.
+//
+// Parking asserts `slack <= SLACK` and never releases its ballast, so the budget
+// remaining when the gate is consulted is at most SLACK for the whole run. The
+// gate therefore refuses on a width as long as SLACK is under that width's
+// largest reachable doubling, which is what pins this number to the *narrower*
+// width: 48,000 leaves i386 2.04x of margin (98,240) and 64-bit 3.07x
+// (147,360). Earlier doublings fire sooner once anything has been consumed —
+// measured, the crossing request on 64-bit is 36,768 here — but the guarantee
+// rests on the largest one, so it holds whatever the run has consumed. It also
+// holds if that entry size is ever read wrong: even a fully packed 13-byte
+// entry would make the C = 2046 request 79,820, still 1.66x over.
+//
+// The other half of the guarantee is that nothing charged can refuse first.
+// Charged bytes — string payloads, GC-registered values — raise the *catchable*
+// RangeError, so a probe that trips them proves the opposite of what these
+// blocks claim. `true` values keep the charge of a whole 4000-key parse at 104
+// bytes, which is why the margin above may be read as if the parse consumed
+// nothing. The measured 64-bit window: every parked slack from 6,726 to 112,074
+// crosses the gate, and at 147,428 — just over the C = 2046 request — the gate
+// stops firing and the charged path takes over. i386's edge is the same
+// arithmetic at 98,240, and the old 120,000 sat above it.
+const GROWTH_GATE_SLACK = 48_000;
+
 // The narrowing above must not have made the OTHER limiter guest-visible. A
 // charged allocation inside a parse raises the script-catchable RangeError the
 // block above pins; the growth gate (RequireNativeBytes, Goccia.MemoryLimit.pas)
@@ -1663,32 +1698,60 @@ console.log("--max-memory (builtin result builders survive mid-build collections
 // which needs a measured park against a CLI-set ceiling, and because the
 // assertion is host-level (exit code plus the loader's report).
 //
-// The shape: a wide object of cheap numeric values, so the parse charges almost
-// nothing per property (~24 bytes measured) while the property map's storage
-// doubling asks for a single block far larger than the parked slack. The
-// document is built before parking, or building it — not parsing it — is what
-// would cross the ceiling.
+// The shape: a wide object of literal `true` values, so the parse charges
+// nothing at all (measured: 104 bytes for a whole 4000-key object, 0.026 B per
+// property) while the property map's storage doubling asks for a single block
+// larger than the parked slack. The document is built before parking, or
+// building it — not parsing it — is what would cross the ceiling.
+//
+// Cheap *numeric* values were the old shape, and they made the outcome a race
+// rather than a guarantee: 24 charged bytes per property is 96,000 over 4000 of
+// them, the same order as the 120,000 slack this block used to park at, so which
+// limiter crossed first came down to how the two sides scaled — and they scale
+// differently. On i386 the charged side shrinks with the smaller value objects
+// while the gate's requests shrink with SizeOf(TEntry), and the charged side won:
+// a catchable RangeError reached the guest and this block failed reporting the
+// opposite of what it guards. GROWTH_GATE_SLACK is the arithmetic that removes
+// the race rather than re-tuning it.
 {
   const gateTmp = mkdtemp("goccia-parse-gate-");
   try {
+    // Every format the parse-ceiling block above covers, because the gate/charge
+    // question is per parser: each one builds the same property map, but they
+    // differ in what else they allocate on the way there.
     const gatedParses: Array<[string, string[], string, string]> = [
       [
         "JSON.parse",
         [],
-        'const doc = "{" + Array.from({ length: 4000 }, (_, i) => \'"k\' + i + \'":\' + i).join(",") + "}";',
+        'const doc = "{" + Array.from({ length: 4000 }, (_, i) => \'"k\' + i + \'":true\').join(",") + "}";',
         "JSON.parse(doc)",
       ],
       [
         "JSON5.parse",
         ['import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;'],
-        'const doc = "{" + Array.from({ length: 4000 }, (_, i) => "k" + i + ": " + i).join(",") + "}";',
+        'const doc = "{" + Array.from({ length: 4000 }, (_, i) => "k" + i + ": true").join(",") + "}";',
         "JSON5.parse(doc)",
       ],
       [
         "YAML.parse",
         ['import * as YAMLNS from "goccia:yaml"; const YAML = YAMLNS.YAML ?? YAMLNS;'],
-        'const doc = Array.from({ length: 4000 }, (_, i) => "k" + i + ": " + i).join("\\n") + "\\n";',
+        'const doc = Array.from({ length: 4000 }, (_, i) => "k" + i + ": true").join("\\n") + "\\n";',
         "YAML.parse(doc)",
+      ],
+      [
+        "JSONL.parse",
+        ['import * as JSONLNS from "goccia:jsonl"; const JSONL = JSONLNS.JSONL ?? JSONLNS;'],
+        // One line holding the whole wide object: the map that has to double is
+        // per record, so splitting it across lines would only build 4000 small
+        // maps that never reach the gate.
+        'const doc = "{" + Array.from({ length: 4000 }, (_, i) => \'"k\' + i + \'":true\').join(",") + "}\\n";',
+        "JSONL.parse(doc)",
+      ],
+      [
+        "TOML.parse",
+        ['import * as TOMLNS from "goccia:toml"; const TOML = TOMLNS.TOML ?? TOMLNS;'],
+        'const doc = Array.from({ length: 4000 }, (_, i) => "k" + i + " = true").join("\\n") + "\\n";',
+        "TOML.parse(doc)",
       ],
     ];
 
@@ -1699,10 +1762,7 @@ console.log("--max-memory (builtin result builders survive mid-build collections
         const src = [
           ...imports,
           setup,
-          // 120000 sits in the middle of the measured window: the parse survives
-          // its own charges (~96 KB for 4000 properties) but the storage doubling
-          // asks for 73632 or 147360 bytes in one block and is refused.
-          ...parkingPreamble(120_000),
+          ...parkingPreamble(GROWTH_GATE_SLACK),
           "try {",
           `  const value = ${parse};`,
           '  console.log("guest-completed", Object.keys(value).length);',
@@ -1756,10 +1816,12 @@ console.log("--max-memory (builtin result builders survive mid-build collections
 // writes into a native buffer and only the result string is charged, while the
 // replacer walk rebuilds every object property-by-property, so the property
 // map's storage doubling is what asks for one block larger than the parked
-// slack. The same 4000-key cheap-value object and the same measured slack as
-// the parse block above land inside the window (measured: the gate is the
-// crossing limiter for a slack of roughly 10000-150000; at 160000 and above the
-// stringify simply completes).
+// slack. Same 4000-key `true`-valued object and same GROWTH_GATE_SLACK as the
+// parse block above, and for the same reason: the doublings are the same
+// (36,768 measured as the crossing request on 64-bit, 98,240 the largest
+// reachable one on i386), and the walk itself charges 56 bytes measured — every
+// other byte the stringify wants is the result string, which is only reserved
+// once the walk has finished and so cannot beat the gate to the ceiling.
 {
   const stringifyGateTmp = mkdtemp("goccia-stringify-gate-");
   const parkedStringifySource = (
@@ -1786,7 +1848,7 @@ console.log("--max-memory (builtin result builders survive mid-build collections
     // The object is built before parking, or building it — not stringifying it —
     // is what would cross the ceiling.
     const wideObject =
-      'const obj = Object.fromEntries(Array.from({ length: 4000 }, (_, i) => ["k" + i, i]));';
+      'const obj = Object.fromEntries(Array.from({ length: 4000 }, (_, i) => ["k" + i, true]));';
     const gatedStringifies: Array<[string, string[], string, string]> = [
       ["JSON.stringify", [], wideObject, "JSON.stringify(obj, (k, v) => v)"],
       [
@@ -1802,7 +1864,7 @@ console.log("--max-memory (builtin result builders survive mid-build collections
         const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
         console.log(`--max-memory (growth gate inside ${label} stays opaque to the guest: ${modeLabel})...`);
         const srcPath = join(stringifyGateTmp, `stringify-gate-${label.replace(".", "-")}-${modeLabel}.mjs`);
-        writeFileSync(srcPath, parkedStringifySource(imports, setup, call, 120000));
+        writeFileSync(srcPath, parkedStringifySource(imports, setup, call, GROWTH_GATE_SLACK));
         const proc = Bun.spawnSync([LOADER, "--max-memory=4194304", ...modeArgs, srcPath], {
           stdout: "pipe",
           stderr: "pipe",
@@ -1835,12 +1897,17 @@ console.log("--max-memory (builtin result builders survive mid-build collections
     // gate cases forbid. If this stops catching, the assertions above are
     // passing because nothing reaches any limiter, not because the ceiling is
     // opaque.
+    //
+    // This half is the same on every width without any calibration: the result
+    // string reserves 800,004 bytes (length * SizeOf(Char), 2 bytes per char
+    // under delphiunicode everywhere), 16x the parked slack, and no property map
+    // is touched at all — so there is no gate request for it to race.
     console.log("--max-memory (stringify gate vacuity control: a charged refusal is still catchable)...");
     {
       const controlPath = join(stringifyGateTmp, "stringify-gate-control.mjs");
       writeFileSync(
         controlPath,
-        parkedStringifySource([], 'const big = "y".repeat(400000);', "JSON.stringify(big)", 120000),
+        parkedStringifySource([], 'const big = "y".repeat(400000);', "JSON.stringify(big)", GROWTH_GATE_SLACK),
       );
       const proc = Bun.spawnSync([LOADER, "--max-memory=4194304", controlPath], {
         stdout: "pipe",
