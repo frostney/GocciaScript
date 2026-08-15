@@ -2365,6 +2365,122 @@ const assertParkedGateOutcome = (
   }
 }
 
+// The same growth gate reached from plain guest code rather than a builtin, and
+// the reason this block exists at all: under a parked heap the tree-walking
+// interpreter used to answer `Error :: Object reference is Nil` where the VM
+// answered the uncatchable refusal. That was not a limiter disagreement — it was
+// a use-after-free surfacing as a guest-catchable error. `o["k" + i] = V(i)`
+// holds three GC-managed values in native Pascal locals (base, key, assigned
+// value) while `V(i)` pushes a call frame; that allocation charges the ceiling,
+// trips CollectForMemoryPressure, and the collector marks explicit roots only,
+// so the key was swept and ToPropertyKeyForBase then dispatched a virtual call
+// through it (EObjectCheck under `$OBJECTCHECKS ON`, a silent read into freed
+// memory in a production build). Two defences now stand behind this probe: the
+// temporaries are rooted (Goccia.AST.Expressions.pas) and integrity faults are
+// re-raised ahead of every generic conversion arm (Goccia.EngineFault.pas).
+//
+// One-sided by construction, unlike the parse and stringify gates above. Those
+// pin `true` values so nothing charged can refuse first, which is what lets them
+// insist the gate fires. This shape cannot: `"k" + i` builds a charged string
+// per iteration, and the GROWTH_GATE_SLACK note explains why a charged side that
+// scales with property count turns which-limiter-first into a per-width race.
+// So all three survivable outcomes are accepted — the loop completing, the host
+// reporting the growth-gate refusal, or the guest catching the charged
+// RangeError that has always been catchable by design — and only the outcomes
+// that mean the engine ran on freed memory are rejected: any integrity-fault
+// text, and any guest catch that is not that one charged RangeError. A
+// `guest-caught Error :: Object reference is Nil` is exactly what the
+// interpreter printed here before the fix.
+//
+// Parked wider than GROWTH_GATE_SLACK, and that is the calibration. At 48,000
+// the charged string keys exhaust the slack before the property map doubles
+// (measured: both modes end in the catchable RangeError), so the growth-gate
+// path — the one that was faulting — is never entered and the probe proves
+// nothing. 147,000 sits between the 64-bit C = 1022 doubling (73,632) and the
+// C = 2046 one (147,360): measured, the run parks at ~133,800 of real slack and
+// the gate refuses the 73,632-byte request, which is where the fault reproduced.
+// On i386 the largest reachable doubling for a 4000-key map is 98,240, below
+// this slack, so the gate cannot fire there at all and the run ends in one of
+// the other two outcomes — which is the reason this probe is one-sided rather
+// than a re-tuned two-sided one. `parked true` keeps it from passing without
+// ever entering the window.
+const ASSIGNMENT_FAULT_SLACK = 147_000;
+{
+  const assignGateTmp = mkdtemp("goccia-assign-gate-");
+  try {
+    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+      const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+      console.log(
+        `--max-memory (computed property assignment never faults into the guest: ${modeLabel})...`,
+      );
+      const src = [
+        "const V = (i) => true;",
+        ...parkingPreamble(ASSIGNMENT_FAULT_SLACK),
+        "try {",
+        "  const o = {};",
+        "  for (const i of Array.from({ length: 4000 }, (_, j) => j)) o['k' + i] = V(i);",
+        '  console.log("guest-completed", Object.keys(o).length);',
+        "} catch (e) {",
+        // The marker an internal fault must never reach.
+        "  console.log('guest-caught', e.name, '::', e.message);",
+        "}",
+        "",
+      ].join("\n");
+      const srcPath = join(assignGateTmp, `assign-gate-${modeLabel}.mjs`);
+      writeFileSync(srcPath, src);
+      const proc = Bun.spawnSync([LOADER, "--max-memory=4194304", ...modeArgs, srcPath], {
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 180_000,
+      });
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      if (!out.includes("parked true"))
+        throw new Error(`Assignment gate (${modeLabel}) never parked the heap: ${out}`);
+      // The fault text itself, wherever it lands — caught by the guest or
+      // reported by the host. Either way the engine touched freed memory.
+      if (/Object reference is Nil|Access violation|Bus error|Invalid pointer/i.test(out))
+        throw new Error(
+          `Assignment gate (${modeLabel}) hit an engine-integrity fault under memory pressure: ${out}`,
+        );
+      if (out.includes("Fatal error") && !out.includes("would exceed the memory budget"))
+        throw new Error(`Assignment gate (${modeLabel}) crashed: ${out}`);
+      if (out.includes("guest-caught")) {
+        // The charged limiter is script-visible by design and always was; every
+        // other guest catch here is the engine handing script code a failure of
+        // its own, which is what this block exists to forbid.
+        if (!out.includes("guest-caught RangeError :: Allocation failed"))
+          throw new Error(
+            `Assignment gate (${modeLabel}) let the guest catch something other than the charged RangeError: ${out}`,
+          );
+        if (proc.exitCode !== 0)
+          throw new Error(
+            `Assignment gate (${modeLabel}) caught the charged RangeError but exited ${proc.exitCode}: ${out}`,
+          );
+      } else if (out.includes("guest-completed")) {
+        if (!out.includes("guest-completed 4000"))
+          throw new Error(
+            `Assignment gate (${modeLabel}) completed with the wrong key count, which is silent corruption: ${out}`,
+          );
+        if (proc.exitCode !== 0)
+          throw new Error(
+            `Assignment gate (${modeLabel}) completed but exited ${proc.exitCode}: ${out}`,
+          );
+      } else if (out.includes("would exceed the memory budget")) {
+        if (proc.exitCode === 0)
+          throw new Error(
+            `Assignment gate (${modeLabel}) reported the budget refusal but exited 0: ${out}`,
+          );
+      } else {
+        throw new Error(
+          `Assignment gate (${modeLabel}) produced none of the permitted outcomes: ${out}`,
+        );
+      }
+    }
+  } finally {
+    clean(assignGateTmp);
+  }
+}
+
 console.log("--max-memory (a charged reservation collects before it refuses)...");
 {
   // A charged reservation R used to be refused without collecting at all

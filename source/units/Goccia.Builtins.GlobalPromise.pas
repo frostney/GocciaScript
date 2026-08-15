@@ -51,6 +51,7 @@ uses
   Goccia.Arithmetic,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.EngineFault,
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -2120,8 +2121,12 @@ begin
     on E: TGocciaMemoryLimitError do
       raise;
     on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       CallPromiseCapability(Capability.Reject,
         PromiseRejectionReasonFromException(E));
+    end;
   end;
 
   { Step 7: Return promiseCapability.[[Promise]] }

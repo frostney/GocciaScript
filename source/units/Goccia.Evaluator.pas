@@ -206,6 +206,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
   Goccia.DisposalTracker,
+  Goccia.EngineFault,
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -6550,6 +6551,11 @@ var
     try
       CloseAsyncIterator(AIter);
     except
+      on E: Exception do
+        // ES2026 §7.4.10 step 5: the original abrupt completion wins over a
+        // failing close. An engine-integrity fault is not a close error.
+        if IsEngineIntegrityFault(E) then
+          raise;
     end;
   end;
 
@@ -7649,6 +7655,8 @@ var
         raise;
       on E: Exception do
       begin
+        if IsEngineIntegrityFault(E) then
+          raise;
         Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
         HasUnhandledThrow := True;
         ThrownValue := PascalExceptionToErrorObject(E);
@@ -7717,6 +7725,14 @@ begin
         raise;
       on E: Exception do
       begin
+        { This is the arm a guest `catch` is made of: everything unlisted above
+          becomes an Error object the script receives. An engine-integrity fault
+          must not — it means the heap or a pointer is already unsound, so
+          handing it to the script would let the script keep running on top of
+          it. See Goccia.EngineFault.pas for the family and the reasoning; every
+          other conversion boundary in the engine opens the same way. }
+        if IsEngineIntegrityFault(E) then
+          raise;
         if Assigned(ATryStatement.CatchBlock) then
           ExecuteCatchWithState(PascalExceptionToErrorObject(E))
         else

@@ -209,6 +209,7 @@ implementation
 uses
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.EngineFault,
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.GarbageCollector,
@@ -417,7 +418,11 @@ begin
       on E: TGocciaMemoryLimitError do
         raise;
       on E: Exception do
+      begin
+        if IsEngineIntegrityFault(E) then
+          raise;
         Promise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
+      end;
     end;
   except
     if IsRooted then
@@ -479,7 +484,11 @@ begin
     on E: TGocciaMemoryLimitError do
       raise;
     on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
+    end;
   end;
 end;
 
@@ -524,7 +533,11 @@ begin
     on E: TGocciaMemoryLimitError do
       raise;
     on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
+    end;
   end;
 end;
 
@@ -566,7 +579,11 @@ begin
     on E: TGocciaMemoryLimitError do
       raise;
     on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
+    end;
   end;
 end;
 

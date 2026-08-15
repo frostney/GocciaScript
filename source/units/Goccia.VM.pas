@@ -528,6 +528,7 @@ uses
   Goccia.ControlFlow,
   Goccia.Coverage,
   Goccia.DisposalTracker,
+  Goccia.EngineFault,
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -3619,8 +3620,12 @@ begin
       end;
     end;
   except
-    // AsyncFromSyncIteratorContinuation preserves the rejected value when
-    // closing after a rejected wrapped value also fails.
+    on E: Exception do
+      // AsyncFromSyncIteratorContinuation preserves the rejected value when
+      // closing after a rejected wrapped value also fails. An engine-integrity
+      // fault is not a close failure and keeps unwinding.
+      if IsEngineIntegrityFault(E) then
+        raise;
   end;
   ClearIteratorState;
 end;
@@ -3829,7 +3834,11 @@ begin
     on E: EGocciaCapabilityAuditDeliveryError do
       raise;
     on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
+    end;
   end;
 end;
 
@@ -3920,7 +3929,11 @@ begin
     on E: EGocciaCapabilityAuditDeliveryError do
       raise;
     on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
+    end;
   end;
 end;
 
@@ -4021,7 +4034,11 @@ begin
     on E: EGocciaCapabilityAuditDeliveryError do
       raise;
     on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
+    end;
   end;
 end;
 
@@ -4944,7 +4961,11 @@ begin
     on E: EGocciaCapabilityAuditDeliveryError do
       raise;
     on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       FPromise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
+    end;
   end;
 end;
 
@@ -8623,8 +8644,12 @@ begin
     else
       CloseRawIterator(AIteratorObject);
   except
-    // Swallow: the original abrupt completion is the one that must
-    // surface to the caller.
+    on E: Exception do
+      // Swallow: the original abrupt completion is the one that must
+      // surface to the caller. An engine-integrity fault is not part of
+      // that contract and must reach the host.
+      if IsEngineIntegrityFault(E) then
+        raise;
   end;
 end;
 
@@ -16942,8 +16967,12 @@ begin
             on E: EGocciaCapabilityAuditDeliveryError do
               raise;
             on E: Exception do
+            begin
+              if IsEngineIntegrityFault(E) then
+                raise;
               DynImportPromise.Reject(
                 CreateErrorObject(ERROR_NAME, E.Message));
+            end;
           end;
           SetRegister(A, DynImportPromise);
         finally
@@ -17018,8 +17047,12 @@ begin
             on E: EGocciaCapabilityAuditDeliveryError do
               raise;
             on E: Exception do
+            begin
+              if IsEngineIntegrityFault(E) then
+                raise;
               DynImportPromise.Reject(
                 CreateErrorObject(ERROR_NAME, E.Message));
+            end;
           end;
           SetRegister(A, DynImportPromise);
         finally
@@ -17146,6 +17179,8 @@ begin
               raise;
             on E: Exception do
             begin
+              if IsEngineIntegrityFault(E) then
+                raise;
               // Preserve typed error names for native Goccia exceptions
               if E is TGocciaTypeError then
                 LeftValue := CreateErrorObject(TYPE_ERROR_NAME, E.Message)

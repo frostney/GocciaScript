@@ -45,23 +45,24 @@ function TryCallMethod(const AObj: TGocciaObjectValue; const AMethodName: string
 var
   Method: TGocciaValue;
   Args: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
 begin
   Result := False;
   Method := AObj.GetProperty(AMethodName);
   if Assigned(Method) and Method.IsCallable then
   begin
+    { The frame, not AddTempRoot/RemoveTempRoot: temp roots are a set, so an
+      unconditional removal deletes the entry a *caller* added when the method
+      returned an object that caller already roots — a toString that returns
+      `this` is enough to alias them. A frame push is owned by this call alone. }
+    Roots.Initialize;
     Args := TGocciaArgumentsCollection.Create;
     try
       AResult := TGocciaFunctionBase(Method).Call(Args, AThisValue);
-      if (TGarbageCollector.Instance <> nil) then
-        TGarbageCollector.Instance.AddTempRoot(AResult);
-      try
-        Result := AResult.IsPrimitive;
-      finally
-        if (TGarbageCollector.Instance <> nil) then
-          TGarbageCollector.Instance.RemoveTempRoot(AResult);
-      end;
+      Roots.Add(AResult);
+      Result := AResult.IsPrimitive;
     finally
+      Roots.Clear;
       Args.Free;
     end;
   end;
@@ -98,6 +99,7 @@ var
   Obj: TGocciaObjectValue;
   ExoticToPrim: TGocciaValue;
   Args: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
 begin
   if AValue.IsPrimitive then
   begin
@@ -125,17 +127,18 @@ begin
       finally
         Args.Free;
       end;
-      if (TGarbageCollector.Instance <> nil) then
-        TGarbageCollector.Instance.AddTempRoot(Result);
+      { Frame-rooted for the same reason as TryCallMethod: a shared temp-root
+        entry removed here is removed for whoever else was holding it. }
+      Roots.Initialize;
       try
+        Roots.Add(Result);
         // Step 2.b.ii: If result is not an Object, return result.
         if Result.IsPrimitive then
           Exit;
         // Step 2.b.iii: Throw a TypeError exception.
         ThrowTypeError(SErrorToPrimitiveReturnedObject, SSuggestToPrimitiveReturnPrimitive);
       finally
-        if (TGarbageCollector.Instance <> nil) then
-          TGarbageCollector.Instance.RemoveTempRoot(Result);
+        Roots.Clear;
       end;
     end;
 

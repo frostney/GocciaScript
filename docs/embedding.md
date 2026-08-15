@@ -1,4 +1,4 @@
-<!-- doc-length-limit: 1000 -->
+<!-- doc-length-limit: 1010 -->
 # Embedding the Engine
 
 *For Pascal developers who want to embed the GocciaScript engine in their own applications.*
@@ -819,6 +819,7 @@ end;
 | `TGocciaTypeError` | Type-specific runtime error |
 | `TGocciaReferenceError` | Undefined variable access |
 | `TGocciaThrowValue` | JavaScript `throw` — wraps any thrown value including `RangeError` |
+| `EObjectCheck`, `EAccessViolation`, `EInvalidPointer`, `EDivByZero`, `EPrivilege`, `EExternalException` | Engine-integrity faults. The engine re-raises these past every guest `catch`, so they escape `Engine.Execute` even while guest code is running: they mean a pointer, a mapping, or the heap is no longer trustworthy. Report and exit — do not resume the process, and do not treat one as a script failure. `EOutOfMemory` is deliberately *not* one of them and stays catchable. See [ADR 0109](adr/0109-engine-integrity-faults-are-uncatchable.md) |
 
 ## Execution Limits
 

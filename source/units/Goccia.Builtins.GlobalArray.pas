@@ -33,6 +33,7 @@ uses
 
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.EngineFault,
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -238,6 +239,8 @@ begin
     end;
     on E: Exception do
     begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       if Assigned(FIterator) then
       begin
         try
@@ -245,6 +248,8 @@ begin
         except
           on CloseError: Exception do
           begin
+            if IsEngineIntegrityFault(CloseError) then
+              raise;
             RejectWithException(CloseError);
             Exit;
           end;

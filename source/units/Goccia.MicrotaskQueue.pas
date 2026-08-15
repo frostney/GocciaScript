@@ -66,6 +66,7 @@ uses
   Goccia.Builtins.Atomics,
   Goccia.CapabilityAudit,
   Goccia.Constants.ErrorNames,
+  Goccia.EngineFault,
   Goccia.Error,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
@@ -253,7 +254,11 @@ begin
         on E: EGocciaCapabilityAuditDeliveryError do
           raise;
         on E: Exception do
+        begin
+          if IsEngineIntegrityFault(E) then
+            raise;
           ResolvingFunctions.RejectException(E);
+        end;
       end;
     finally
       if Assigned(GC) then
@@ -494,10 +499,14 @@ begin
           else
             raise;
         on E: Exception do
+        begin
+          if IsEngineIntegrityFault(E) then
+            raise;
           if Assigned(Promise) or Assigned(Capability) then
             RejectExceptionResult(E)
           else
             raise;
+        end;
       end;
     finally
       CallArgs.Free;

@@ -71,6 +71,7 @@ uses
   TextSemantics,
 
   Goccia.Constants.PropertyNames,
+  Goccia.EngineFault,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
@@ -744,6 +745,8 @@ begin
       raise;
     on E: Exception do
     begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       ReraiseBytecodeThrow(E);
       ThrowTypeError(Format(SErrorJSON5StringifyError, [E.Message]), SSuggestJSONFormat);
     end;

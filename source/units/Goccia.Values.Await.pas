@@ -16,6 +16,7 @@ uses
 
   Goccia.Builtins.Atomics,
   Goccia.Constants.ErrorNames,
+  Goccia.EngineFault,
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -104,7 +105,11 @@ begin
         on E: TGocciaMemoryLimitError do
           raise;
         on E: Exception do
+        begin
+          if IsEngineIntegrityFault(E) then
+            raise;
           RejectPromiseWithException(Promise, E);
+        end;
       end;
     end;
 
