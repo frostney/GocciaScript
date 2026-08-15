@@ -1658,26 +1658,33 @@ console.log("--max-memory (builtin result builders survive mid-build collections
 // {string, TGocciaPropertyDescriptor, Cardinal, Boolean}: 24 bytes on a 64-bit
 // target, 16 on i386 (4 + 4 + 4 + 1, aligned to 4), so every request there is
 // two thirds the size. With a 4000-key object the largest doubling the run
-// reaches is C = 2046 — 147,360 bytes on 64-bit, 98,240 on i386 — and the ones
-// before it are 73,632 / 36,768 and 49,088 / 24,512.
+// reaches is C = 2046: 147,360 bytes on 64-bit, 98,240 on i386. The step
+// before it, C = 1022, is 73,632 on 64-bit and 49,088 on i386; C = 510 is
+// 36,768 and 24,512. A second, width-independent refusal path backs this up:
+// the bucket-array growth at the 4096 -> 8192 step gates 3 * 4096 * 4 =
+// 49,152 bytes on every architecture.
 //
 // Parking asserts `slack <= SLACK` and never releases its ballast, so the budget
 // remaining when the gate is consulted is at most SLACK for the whole run. The
 // gate therefore refuses on a width as long as SLACK is under that width's
 // largest reachable doubling, which is what pins this number to the *narrower*
 // width: 48,000 leaves i386 2.04x of margin (98,240) and 64-bit 3.07x
-// (147,360). Earlier doublings fire sooner once anything has been consumed —
-// measured, the crossing request on 64-bit is 36,768 here — but the guarantee
-// rests on the largest one, so it holds whatever the run has consumed. It also
+// (147,360). The guarantee rests on that LARGEST doubling, deliberately: the
+// intermediate i386 step (C = 1022, 49,088) clears SLACK by only 1.02x, so
+// retuning SLACK upward against an intermediate step would be wrong — earlier
+// doublings merely fire sooner once anything has been consumed (measured, the
+// crossing request on 64-bit is 36,768 here). It also
 // holds if that entry size is ever read wrong: even a fully packed 13-byte
 // entry would make the C = 2046 request 79,820, still 1.66x over.
 //
 // The other half of the guarantee is that nothing charged can refuse first.
 // Charged bytes — string payloads, GC-registered values — raise the *catchable*
 // RangeError, so a probe that trips them proves the opposite of what these
-// blocks claim. `true` values keep the charge of a whole 4000-key parse at 104
-// bytes, which is why the margin above may be read as if the parse consumed
-// nothing. The measured 64-bit window: every parked slack from 6,726 to 112,074
+// blocks claim. `true` values keep the retained post-collection charge of a
+// whole 4000-key parse at 104 bytes (the gate itself compares against
+// instantaneous BytesAllocated without collecting, so gross parse transients
+// only make it refuse SOONER — the safe direction). The measured 64-bit
+// window: every parked slack from 6,726 to 112,074
 // crosses the gate, and at 147,428 — just over the C = 2046 request — the gate
 // stops firing and the charged path takes over. i386's edge is the same
 // arithmetic at 98,240, and the old 120,000 sat above it.
@@ -1765,7 +1772,7 @@ const GROWTH_GATE_SLACK = 48_000;
           ...parkingPreamble(GROWTH_GATE_SLACK),
           "try {",
           `  const value = ${parse};`,
-          '  console.log("guest-completed", Object.keys(value).length);',
+          '  console.log("guest-completed", Array.isArray(value) ? value.length : Object.keys(value).length);',
           "} catch (e) {",
           // The marker the gate must never let the guest print.
           "  console.log('guest-caught', e.name, '::', e.message);",
