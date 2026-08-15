@@ -23,6 +23,7 @@ uses
   Goccia.Coverage,
   Goccia.Coverage.Report,
   Goccia.Engine,
+  Goccia.EngineFault,
   Goccia.Executor.Interpreter,
   Goccia.Executor.Bytecode,
   Goccia.Executor,
@@ -76,6 +77,32 @@ const
     aggregation recognises it so the slot is not rewritten as a synthetic
     failure. }
   EXIT_ON_FIRST_FAILURE_SIGNAL = '<exit-on-first-failure>';
+
+  { Sentinel a parallel worker returns as its pool error message after an
+    engine-integrity fault. It only has to survive the trip back to the main
+    thread: the diagnostic is already on stderr, and the main thread reads this
+    to know the run must stop rather than be aggregated. }
+  INTEGRITY_FAULT_SIGNAL = '<engine-integrity-fault>';
+
+  { Prefix on every line of the integrity-fault diagnostic. Deliberately unlike
+    any ordinary failure line the runner prints, so `grep 'Integrity fault:'`
+    over a CI log finds the abort and nothing else. }
+  INTEGRITY_FAULT_PREFIX = 'Integrity fault: ';
+
+  { Stands in for a file name in the diagnostic when the fault came from
+    end-of-run inline-snapshot write-back, which belongs to no single file. }
+  INLINE_SNAPSHOT_FLUSH_SITE = '<inline snapshot write-back>';
+
+  { Exit code for a run the engine abandoned. An integrity fault
+    (Goccia.EngineFault.IsEngineIntegrityFault) means a value was used after it
+    was freed, a pointer was never valid, or the heap's own bookkeeping is
+    destroyed — so every later file would execute on state the engine has
+    already lost track of, and the verdict it reported would be worthless.
+    Distinct from 1 (the suite ran and reported failures) and 2 (the invocation
+    was unusable) so a harness can tell "these tests failed" from "stop
+    believing this process". 70 is sysexits' EX_SOFTWARE, "an internal software
+    error has been detected"; see docs/contributing/cli-conventions.md. }
+  EXIT_CODE_INTEGRITY_FAULT = 70;
 
 type
   { Plain-data record for extracting test results from GC-managed objects.
@@ -159,6 +186,24 @@ type
     FGlobalFiles: TRepeatableOption;
     FInlineGlobals: TRepeatableOption;
     FNoVitestCompat: TFlagOption;
+    { Stop signal of the parallel run currently in flight, or nil. Not owned —
+      RunScriptsFromFilesParallel publishes it before RunAll starts any worker
+      and clears it once RunAll has joined them. It exists so a worker that hits
+      an engine-integrity fault can stop the queue: the pool's automatic
+      cancel-on-error only arms under --exit-on-first-failure, and an integrity
+      fault must stop dispatching new files whether or not the user asked to
+      bail on failures.
+
+      The flag rather than the pool, deliberately. A worker the watchdog
+      abandoned keeps running after RunAll returns and after the pool is freed,
+      so a cached pool pointer would be a use-after-free waiting for that
+      zombie to fault. The pool leaks the flag instead of freeing it as soon as
+      any worker is abandoned, which is exactly the condition under which a
+      zombie exists — so this pointer is live whenever anything can still read
+      it. Clearing it in the same scope keeps a zombie from a finished run
+      cancelling a later one, which is the mis-cancellation
+      TGocciaThreadPool.RunAll guards against on its own side. }
+    FActiveCancelFlag: TGocciaCancellationFlag;
     function SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
     procedure InitializeRuntime(const AEngine: TGocciaEngine;
       const AEnableHostFileLoading: Boolean = True);
@@ -202,6 +247,88 @@ type
       const ACompact: Boolean);
     procedure PrintTestResults(const AResult: TAggregatedTestResult);
   end;
+
+var
+  { Set once, by whichever thread reports the first engine-integrity fault, and
+    never cleared. Two jobs, both of which need it to outlive the pool:
+
+    It decides who prints. Faults arrive on worker threads, and a run that
+    corrupts shared state is as likely to fault two workers as one; an
+    unsynchronised WriteLn race would shred the very diagnostic the abort
+    exists to produce. First fault wins, the rest stay silent.
+
+    It is also the abort's own record. The sentinel a faulting worker returns
+    travels in the pool's results, and those can be lost: if the watchdog
+    abandons the faulting worker, RunAll drops its in-progress slot and the
+    stalled-file override rewrites it as a TIMEOUT, so the sentinel scan alone
+    would let a run that had already printed "the run is aborted" go on to
+    print a full summary and exit 0. This lives in process memory that no pool
+    owns, so nothing can rewrite it.
+
+    LongInt with an interlocked write because the claim it makes ("I am the
+    reporter") must be exclusive; plain aligned reads are enough on the
+    consuming side, which only ever asks whether it is non-zero. }
+  GIntegrityFaultReported: LongInt;
+
+{ Writes the abort diagnostic for an engine-integrity fault to stderr and
+  flushes it immediately. Only the first caller in the process writes anything;
+  later ones return silently, having lost the race to report.
+
+  Written at the point of the fault, including from a worker thread — a
+  deliberate exception to the pool's "capture your output, never WriteLn"
+  contract. Handing the text back to the main thread would mean allocating and
+  refcounting strings on the heap that just proved untrustworthy, and the
+  faulting thread may not get that far; the diagnostic is the one thing that
+  must survive. The first-fault gate removes the worker-against-worker race,
+  and composing the whole report into one string leaves a single write rather
+  than a sequence of them — the remaining interleaving partner is the pool
+  watchdog's own stall warnings on the main thread, which are line-oriented and
+  only appear once a worker has already been stuck for twice the file timeout.
+  Flushing matters because Halt still runs unit finalization on the suspect
+  heap, and that is not a good bet to write through. }
+procedure ReportIntegrityFault(const AFileName: string;
+  const AException: Exception);
+begin
+  if InterlockedExchange(GIntegrityFaultReported, 1) <> 0 then
+    Exit;
+  WriteLn(ErrOutput, INTEGRITY_FAULT_PREFIX + AException.ClassName + ' in ' +
+    AFileName + ': ' + AException.Message + sLineBreak +
+    INTEGRITY_FAULT_PREFIX + 'the engine can no longer vouch for its own ' +
+    'state, so the run is aborted and the remaining files were not executed.');
+  Flush(ErrOutput);
+end;
+
+{ True once any thread has reported an integrity fault. }
+function IntegrityFaultWasReported: Boolean;
+begin
+  Result := GIntegrityFaultReported <> 0;
+end;
+
+{ Reports the fault and stops the process. Deliberately not an unwind: the
+  aggregation the runner would unwind through reads the very objects the fault
+  calls into question, and PrintTestResults would then overwrite ExitCode with
+  a pass/fail verdict this process is in no position to give. }
+procedure AbortRunOnIntegrityFault(const AFileName: string;
+  const AException: Exception);
+begin
+  ReportIntegrityFault(AFileName, AException);
+  Halt(EXIT_CODE_INTEGRITY_FAULT);
+end;
+
+{ True when any worker of the finished run came back carrying the integrity
+  sentinel. Kept alongside the process-level flag rather than replaced by it:
+  the flag is the one that survives an abandoned worker, and this is the one
+  tied to the pool's own record of which file it was. Either alone stops the
+  run. }
+function PoolReportedIntegrityFault(const APool: TGocciaThreadPool): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(APool.Results) do
+    if APool.Results[I].ErrorMessage = INTEGRITY_FAULT_SIGNAL then
+      Exit(True);
+  Result := False;
+end;
 
 function MakeEmptyTestResult(const AScriptResult: TGocciaObjectValue;
   const AErrorMessage: string = ''): TTestFileResult;
@@ -654,8 +781,17 @@ begin
       FlushPendingInlineSnapshots;
     except
       on E: Exception do
+      begin
+        { Host tier once more. Write-back re-reads the recorded snapshot values
+          and rewrites test sources from them, so an integrity fault here is a
+          fault over the results the run is about to report — filing it as one
+          recorded finalization failure would publish those results anyway
+          (ADR 0109). }
+        if IsEngineIntegrityFault(E) then
+          AbortRunOnIntegrityFault(INLINE_SNAPSHOT_FLUSH_SITE, E);
         RecordSnapshotFinalizationFailure(AggregatedResult,
           'Snapshot finalization failed: ' + E.Message);
+      end;
     end;
     MainMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
     if IsParallelRun then
@@ -866,6 +1002,13 @@ begin
     except
       on E: Exception do
       begin
+        { An integrity fault is not a per-file verdict, so this arm must not
+          turn it into one. Re-raise it to the runner's host tier —
+          RunScriptFromFile for a sequential run, TestWorkerProc for a parallel
+          one — which stops the whole run. See ADR 0109, "Host tier: the test
+          runner". }
+        if IsEngineIntegrityFault(E) then
+          raise;
         if E is TGocciaError then
         begin
           if (not GIsWorkerThread) and (not IsJsonOutput) then
@@ -1047,6 +1190,10 @@ begin
     except
       on E: Exception do
       begin
+        { Same host-tier rule as the interpreted path: an integrity fault
+          unwinds past this arm rather than becoming a failed file. }
+        if IsEngineIntegrityFault(E) then
+          raise;
         if E is TGocciaError then
         begin
           if (not GIsWorkerThread) and (not IsJsonOutput) then
@@ -1151,6 +1298,13 @@ begin
   except
     on E: Exception do
     begin
+      { Host tier, sequential path. A refused allocation or a thrown value is a
+        verdict on this one file and the rest of the run still means something;
+        an integrity fault is a verdict on the process, so the run stops here
+        instead of relabelling the fault as one more failed file and executing
+        hundreds more on a heap the engine has lost track of (ADR 0109). }
+      if IsEngineIntegrityFault(E) then
+        AbortRunOnIntegrityFault(AFileName, E);
       if E is TGocciaError then
         WriteLn(ErrOutput, FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal))
       else
@@ -1388,6 +1542,20 @@ begin
     end;
     on E: Exception do
     begin
+      { Host tier, parallel path. Report first — the diagnostic must be out
+        before anything else is attempted on this heap — then stop the queue so
+        no further file is dispatched, and hand the main thread the sentinel it
+        aborts the run on. Cancelling is the pool's own stop signal, so the
+        worker does not Halt from a thread: files already in flight finish or
+        are marked cancelled, and RunAll returns normally (ADR 0109). }
+      if IsEngineIntegrityFault(E) then
+      begin
+        ReportIntegrityFault(AFileName, E);
+        if Assigned(FActiveCancelFlag) then
+          FActiveCancelFlag.Cancel;
+        AErrorMessage := INTEGRITY_FAULT_SIGNAL;
+        Exit;
+      end;
       WorkerResults^[AIndex].ErrorMessage := E.Message;
       WorkerResults^[AIndex].Failed := 1;
       WorkerResults^[AIndex].TotalRunTests := 1;
@@ -1490,6 +1658,12 @@ begin
   WallClockStart := GetNanoseconds;
 
   Pool := TGocciaThreadPool.Create(AJobCount);
+  { Published for the workers before any of them starts: a worker that faults
+    needs to reach Cancel. Reading the flag before RunAll is safe because this
+    pool was constructed two lines up — RunAll only mints a replacement flag
+    for a pool whose previous run leaked one, and this one has had no previous
+    run. }
+  FActiveCancelFlag := Pool.CancelFlag;
   try
     Pool.CancelOnError := FExitOnFirst.Present;
     Pool.EnableCoverage := CoverageOptions.Enabled.Present;
@@ -1510,6 +1684,15 @@ begin
     else
       WatchdogMs := 0;
     Pool.RunAll(AFiles, TestWorkerProc, @WorkerData[0], WatchdogMs);
+    { A worker hit an engine-integrity fault: it wrote the diagnostic and
+      cancelled the queue, and the files that did finish were running beside a
+      heap that is no longer sound. Stop before aggregating them into a total
+      the run cannot stand behind. The process-level flag is checked first
+      because it is the one that still holds when the faulting worker was the
+      one the watchdog abandoned — its slot is dropped and then rewritten as a
+      TIMEOUT, so its sentinel never reaches Pool.Results. }
+    if IntegrityFaultWasReported or PoolReportedIntegrityFault(Pool) then
+      Halt(EXIT_CODE_INTEGRITY_FAULT);
     WorkerMemoryStats := Pool.MemoryStats;
     if Pool.EnableCoverage and (TGocciaCoverageTracker.Instance <> nil) then
       Pool.MergeCoverageInto(TGocciaCoverageTracker.Instance);
@@ -1601,6 +1784,7 @@ begin
       end;
     end;
   finally
+    FActiveCancelFlag := nil;
     Pool.Free;
   end;
 
