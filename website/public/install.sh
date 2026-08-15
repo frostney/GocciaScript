@@ -71,17 +71,35 @@ if [ ! -w "$INSTALL_DIR" ]; then
   fi
 fi
 
-mkdir -p build  # paranoia: archive should already create this
-for bin in GocciaScriptLoader GocciaTestRunner GocciaREPL; do
-  src="build/${bin}"
-  if [ ! -f "$src" ]; then
-    printf 'install.sh: %s not found in archive — skipping\n' "$src" >&2
-    continue
+# The archive expands into a single top-level directory named after the
+# release (gocciascript-<version>-<os>-<arch>) with the executables sitting
+# at its root. Resolve it by glob rather than by exact name, and keep the
+# legacy build/ and flat layouts as fallbacks.
+SRC_DIR=""
+for candidate in "gocciascript-${VERSION}-${OS}-${ARCH}" gocciascript-*/ build .; do
+  candidate="${candidate%/}"
+  if [ -f "${candidate}/GocciaScriptLoader" ]; then
+    SRC_DIR="$candidate"
+    break
   fi
+done
+[ -n "$SRC_DIR" ] || err "could not find GocciaScriptLoader in $ASSET"
+
+# Every release archive carries all three; a missing one means a broken
+# download or a layout change, so fail rather than report a partial
+# install as success.
+for bin in GocciaScriptLoader GocciaTestRunner GocciaREPL; do
+  [ -f "${SRC_DIR}/${bin}" ] || err "${SRC_DIR}/${bin} not found in archive"
+done
+for bin in GocciaScriptLoader GocciaTestRunner GocciaREPL; do
+  src="${SRC_DIR}/${bin}"
   chmod +x "$src"
   $SUDO mv "$src" "${INSTALL_DIR}/${bin}"
 done
 
+INSTALL_DIR="${INSTALL_DIR%/}"
 printf '\nGocciaScript %s installed to %s\n' "$VERSION" "$INSTALL_DIR"
-"${INSTALL_DIR}/GocciaScriptLoader" --version 2>/dev/null \
-  || printf 'Add %s to your PATH if it is not already there.\n' "$INSTALL_DIR"
+case ":${PATH}:" in
+  *":${INSTALL_DIR}:"*) ;;
+  *) printf 'Add %s to your PATH if it is not already there.\n' "$INSTALL_DIR" ;;
+esac
