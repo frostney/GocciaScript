@@ -100,13 +100,13 @@ describe.runIf(hasGoccia)("assignment expression GC roots", () => {
   });
 
   test("compound assignment survives a right-hand side that rebinds the target", () => {
-    // The left operand is read before the right-hand side runs, and the
-    // right-hand side drops the binding's reference to it: the old string is
-    // then reachable only from the evaluator. The replacement has the same
-    // contents so the assertion does not depend on which of the two instances
-    // the executor adds to.
+    // §13.15.2 step 3 reads the left operand before the right-hand side runs,
+    // and the right-hand side then drops the binding's only other reference to
+    // it: the old string is reachable from the executor's own temporaries
+    // alone while gc() runs. The replacement is empty, so a value that was not
+    // rooted across the collection cannot produce the expected result.
     let text = "a".repeat(20);
-    text += ((text = "a".repeat(20)), churn(), "tail");
+    text += ((text = ""), churn(), "tail");
 
     expect(text).toBe("a".repeat(20) + "tail");
   });
