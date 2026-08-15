@@ -2012,9 +2012,9 @@ begin
     key literal, the read-back current value and the RHS sit in native locals
     across `Value.Evaluate`, a getter call, or a property-map growth — each a
     collecting safe point that marks explicit roots only. Only the values still
-    read after such a point are rooted: on the non-super paths the current value
-    is consumed by the short-circuit predicates before anything can collect, and
-    PerformPropertyCompoundAssignment re-reads the property itself. }
+    read after such a point are rooted: the short-circuit predicates consume the
+    current value before anything can collect, while the arithmetic branches
+    carry it across the RHS and hand it to the store. }
   Roots.Initialize;
   try
     if ObjectExpr is TGocciaSuperExpression then
@@ -2070,7 +2070,12 @@ begin
 
     Obj := ObjectExpr.Evaluate(AContext);
     Roots.Add(Obj);
-    CurrentValue := NormalizeAssignmentValue(Obj.GetProperty(PropertyName));
+    // ES2026 §13.15.2 step 3: GetValue(lref) runs exactly once here, before the
+    // RHS, and feeds both the short-circuit predicates and the arithmetic.
+    if not ReadPropertyCompoundAssignmentValue(Obj, PropertyName,
+      AContext.OnError, Line, Column, CurrentValue) then
+      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+
     // ES2026 §13.15.2 step 3: ??=
     if Operator = gttNullishCoalescingAssign then
     begin
@@ -2110,10 +2115,14 @@ begin
       Exit;
     end;
 
+    { The current value is now the only copy of what step 3 read — a getter's
+      result is reachable from nothing else, and the RHS can overwrite the
+      property — so it has to survive `Value.Evaluate` and the arithmetic. }
+    Roots.Add(CurrentValue);
     RhsValue := Value.Evaluate(AContext);
     Roots.Add(RhsValue);
-    Result := PerformPropertyCompoundAssignment(Obj, PropertyName, RhsValue,
-      Operator, AContext.OnError, Line, Column, AContext.NonStrictMode);
+    Result := PerformPropertyCompoundAssignment(Obj, PropertyName, CurrentValue,
+      RhsValue, Operator, AContext.OnError, Line, Column, AContext.NonStrictMode);
   finally
     Roots.Clear;
   end;
@@ -2226,11 +2235,12 @@ begin
     begin
       { A symbol key survives the read, the RHS and the store; a string key is
         consumed by the PropName extraction below with nothing collecting in
-        between. Neither branch roots the current value: it is read by the
-        short-circuit predicates before anything can collect, and
-        PerformSymbolPropertyCompoundAssignment / PerformPropertyCompoundAssignment
-        re-read the property themselves. }
+        between. The current value is only rooted on the arithmetic branches:
+        the short-circuit predicates read it before anything can collect, while
+        the arithmetic carries it across the RHS and hands it to the store. }
       Roots.Add(PropertyKeyValue);
+      // ES2026 §13.15.2 step 3: GetValue(lref) runs exactly once here, before
+      // the RHS, and feeds both the short-circuit predicates and the arithmetic.
       CurrentValue := NormalizeAssignmentValue(ReadSymbolProperty(Obj,
         TGocciaSymbolValue(PropertyKeyValue)));
 
@@ -2246,16 +2256,20 @@ begin
         Exit;
       end;
 
+      Roots.Add(CurrentValue);
       RhsValue := Value.Evaluate(AContext);
       Roots.Add(RhsValue);
       Result := PerformSymbolPropertyCompoundAssignment(Obj,
-        TGocciaSymbolValue(PropertyKeyValue), RhsValue, Operator,
+        TGocciaSymbolValue(PropertyKeyValue), CurrentValue, RhsValue, Operator,
         AContext.OnError, Line, Column, AContext.NonStrictMode);
       Exit;
     end;
 
     PropName := TGocciaStringLiteralValue(PropertyKeyValue).Value;
-    CurrentValue := NormalizeAssignmentValue(Obj.GetProperty(PropName));
+    if not ReadPropertyCompoundAssignmentValue(Obj, PropName, AContext.OnError,
+      Line, Column, CurrentValue) then
+      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+
     if IsShortCircuitOperator then
     begin
       if ShortCircuits then
@@ -2268,10 +2282,12 @@ begin
       Exit;
     end;
 
+    Roots.Add(CurrentValue);
     RhsValue := Value.Evaluate(AContext);
     Roots.Add(RhsValue);
-    Result := PerformPropertyCompoundAssignment(Obj, PropName, RhsValue,
-      Operator, AContext.OnError, Line, Column, AContext.NonStrictMode);
+    Result := PerformPropertyCompoundAssignment(Obj, PropName, CurrentValue,
+      RhsValue, Operator, AContext.OnError, Line, Column,
+      AContext.NonStrictMode);
   finally
     Roots.Clear;
   end;
