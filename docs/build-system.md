@@ -261,7 +261,7 @@ The first file found is loaded and applied as the **root config**. When running 
 1. **CLI options** (highest priority — always win)
 2. **Per-file config** (`goccia.toml`, `goccia.json5`, or `goccia.json` nearest to the file being processed)
 3. **Root config** (discovered from the entry file's directory at startup, or supplied via `--config`)
-4. **File extension default** (`.mjs` infers module source)
+4. **File extension default** (`.mjs` and `.mts` infer module source)
 5. **System default** (engine defaults)
 
 `GocciaTestRunner` keeps explicit multi-file test invocations isolated: when you pass more than one input path and do not pass `--config`, the first file's auto-discovered config is not promoted to a root config for the rest of the list. Each file still gets its nearest per-file config. Pass `--config=<path>` when you intentionally want one shared root config across an explicit test file list.
@@ -281,7 +281,7 @@ The path may be either a **file** (any registered extension — `.json`, `.json5
 
 Relative paths are resolved against the current working directory. A missing file or a directory with no recognised `goccia.*` is a hard error so a typo is not silently ignored. CLI options still take precedence over values from the file, and per-file configs continue to be discovered normally for individual files.
 
-`source-type` follows that same precedence. Without an explicit CLI or config value, `.mjs` entry files are parsed and evaluated as module source; other script extensions default to script source.
+`source-type` follows that same precedence. Without an explicit CLI or config value, `.mjs` and `.mts` entry files are parsed and evaluated as module source; other script extensions default to script source.
 
 ```json
 {

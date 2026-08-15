@@ -835,7 +835,7 @@ describe("group name", () => {
 });
 ```
 
-**Functions:** `describe`, `describe.skip`, `describe.skipIf`, `describe.runIf`, `describe.only`, `describe.each`, `test`, `it` (alias for `test`), `test.skip`, `test.skipIf`, `test.runIf`, `test.only`, `it.only`, `test.each`, `test.todo`, `beforeAll`, `beforeEach`, `afterEach`, `afterAll`
+**Functions:** `describe`, `describe.skip`, `describe.skipIf`, `describe.runIf`, `describe.only`, `describe.each`, `test`, `it` (alias for `test`), `test.skip`, `test.skipIf`, `test.runIf`, `test.only`, `it.only`, `test.each`, `test.todo`, `beforeAll`, `beforeEach`, `afterEach`, `afterAll`, `onTestFinished`
 
 **Vitest-style structure helpers:**
 

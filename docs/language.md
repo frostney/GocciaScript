@@ -184,7 +184,7 @@ const fn = async () => {
 
 ### Modules
 
-ES module syntax with default, named, and namespace imports/exports. Project code convention prefers named exports for internal modules, but default imports and exports are language-supported. Supported source file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`; `.mjs` entry files default to module source. Structured-data imports are also supported for `.json`, `.json5`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv`, and text-asset imports are supported for `.txt` and `.md`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries source, structured-data, and text-asset extensions in order. Directory imports resolve to `index` files. The CLI tools support WHATWG-style import maps through `--import-map=<file.json>`, `--alias key=value`, and implicit `goccia.json` discovery.
+ES module syntax with default, named, and namespace imports/exports. Project code convention prefers named exports for internal modules, but default imports and exports are language-supported. Supported source file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`; `.mjs` and `.mts` entry files default to module source. Structured-data imports are also supported for `.json`, `.json5`, `.jsonc`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv`, and text-asset imports are supported for `.txt` and `.md`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries source, structured-data, and text-asset extensions in order. Directory imports resolve to `index` files. The CLI tools support WHATWG-style import maps through `--import-map=<file.json>`, `--alias key=value`, and implicit `goccia.json` discovery.
 
 Hosts can supply ordinary ES modules through virtual-module configuration. See
 [Virtual Module Configuration](virtual-modules.md) for the complete reference.
@@ -192,7 +192,7 @@ Hosts can supply ordinary ES modules through virtual-module configuration. See
 ```javascript
 // Named imports (with or without extension)
 import { add, multiply } from "./math.js";
-import { add, multiply } from "./math";      // resolves to ./math.js, .jsx, .ts, .tsx, or .mjs
+import { add, multiply } from "./math";      // resolves to ./math.js, .jsx, .ts, .tsx, .mjs, or .mts
 import { "foo-bar" as fooBar } from "./config.json";
 // Default imports
 import add from "./math.js";
@@ -421,7 +421,7 @@ Lowercase tags produce string tag names (`"div"`, `"span"`); uppercase tags are 
 
 The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled by default via `DefaultPreprocessors`; embedders can disable it with `Engine.Preprocessors := Engine.Preprocessors - [ppJSX]`. Opening-tag detection is a heuristic, so source that merely looks like JSX — a TypeScript type annotation such as `: <T>(x: T) => T`, for example — can start a JSX scan; when that scan stalls on a character no branch consumes, exceeds the nesting bound, or reaches the end of input inside an opening tag, the transformer reports a `SyntaxError` positioned in the original source rather than scanning on.
 
-**Extensions:** the transformer runs for `.js`, `.jsx`, `.tsx`, and `.mjs`. It never runs for `.ts`, where a leading `<` is type syntax rather than a tag — see [Angle Brackets and JSX](type-annotations.md#angle-brackets-and-jsx). `.js` and `.mjs` sources containing JSX are still transformed, and report a "JSX syntax found in source with a non-JSX extension" warning.
+**Extensions:** the transformer runs for `.js`, `.jsx`, `.tsx`, and `.mjs`. It never runs for `.ts` or `.mts`, where a leading `<` is type syntax rather than a tag — see [Angle Brackets and JSX](type-annotations.md#angle-brackets-and-jsx). `.js` and `.mjs` sources containing JSX are still transformed, and report a "JSX syntax found in source with a non-JSX extension" warning.
 
 ### Regular Expressions
 

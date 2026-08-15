@@ -70,6 +70,7 @@ paths:
 | non-strict Script semantics and `with` | Strict / disabled | `--compat-non-strict-mode` |
 | `eval` | Not installed by normal hosts | private `GocciaScriptLoaderBare --test262-host` |
 | `Function()` | Disabled | `--unsafe-function-constructor` |
+| `ShadowRealm` | Not installed | `--unsafe-shadowrealm` |
 
 Annex B's browser-only legacy surface is not a general pre-1.0 target; see
 [ADR 0085](docs/adr/0085-defer-annex-b-before-1-0.md). See
@@ -244,6 +245,10 @@ GocciaScript has 11,000+ JavaScript unit tests covering language features, built
 
 The test runner supports Vitest-compatible external and inline snapshots,
 property shapes, asymmetric matchers, custom serializers, and `-u` updates.
+Importing `vi` from `"vitest"` resolves to a bundled compatibility shim, so
+suites written against `vi.fn`, `vi.spyOn`, and factory-form `vi.mock` run
+unmodified; see [Test Framework API](docs/testing-api.md) for the members that
+are not implemented.
 See [Testing](docs/testing.md) for test organization and [Build System](docs/build-system.md#compile-and-test) for runner options.
 
 ### Run Benchmarks

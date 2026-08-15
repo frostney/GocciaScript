@@ -30,10 +30,15 @@ const SHOW_JAVASCRIPT_PACKAGE_MANAGER_SECTIONS = false;
 /** Pre-built binary download instructions per OS.
  *
  *  Releases ship a single archive per OS / arch with the full
- *  toolchain inside (loader / test runner / REPL under `build/`):
+ *  toolchain inside:
  *    gocciascript-{version}-macos-{arm64|x64}.zip
  *    gocciascript-{version}-linux-{arm64|x64}.tar.gz
  *    gocciascript-{version}-windows-{x64|x86}.zip
+ *
+ *  Each archive unpacks into one directory named after the archive
+ *  (`gocciascript-{version}-{os}-{arch}/`) holding every binary at its
+ *  root plus `tests/`, `benchmarks/` and `examples/` — there is no
+ *  `build/` level inside. See the Package releases step in ci.yml.
  *
  *  The macOS / Linux variants render BOTH arch blocks, with the
  *  detected arch active and the other commented out so the user can
@@ -53,7 +58,13 @@ function stripV(tag: string): string {
 
 function archiveFilename(os: OsKey, arch: ArchKey, version: string): string {
   const ext = os === "linux" ? "tar.gz" : "zip";
-  return `gocciascript-${version}-${os}-${arch}.${ext}`;
+  return `${archiveDirname(os, arch, version)}.${ext}`;
+}
+
+/** The single directory an archive unpacks into — the archive name
+ *  without its extension, with every binary directly inside it. */
+function archiveDirname(os: OsKey, arch: ArchKey, version: string): string {
+  return `gocciascript-${version}-${os}-${arch}`;
 }
 
 function archiveUrl(os: OsKey, arch: ArchKey, tag: string): string {
@@ -71,6 +82,7 @@ function unixPrebuiltBlock(
 ): string {
   const url = archiveUrl(os, active, tag);
   const archive = archiveFilename(os, active, stripV(tag));
+  const dir = archiveDirname(os, active, stripV(tag));
   const label = ARCH_LABELS[os][active];
   const c = commented ? "# " : "";
   const note = commented ? "uncomment to use instead" : "auto-detected";
@@ -80,8 +92,9 @@ function unixPrebuiltBlock(
     `# ${label} — ${note}`,
     `${c}curl -fsSL -O "${url}"`,
     unpack,
-    `${c}chmod +x build/GocciaScriptLoader build/GocciaTestRunner build/GocciaREPL`,
-    `${c}sudo mv build/GocciaScriptLoader build/GocciaTestRunner build/GocciaREPL /usr/local/bin/`,
+    `${c}cd "${dir}"`,
+    `${c}chmod +x GocciaScriptLoader GocciaTestRunner GocciaREPL`,
+    `${c}sudo mv GocciaScriptLoader GocciaTestRunner GocciaREPL /usr/local/bin/`,
   ].join("\n");
 }
 
@@ -94,6 +107,7 @@ function windowsPrebuiltBlock(
 ): string {
   const url = archiveUrl("windows", active, tag);
   const archive = archiveFilename("windows", active, stripV(tag));
+  const dir = archiveDirname("windows", active, stripV(tag));
   const label = ARCH_LABELS.windows[active];
   const c = commented ? "# " : "";
   const note = commented ? "uncomment to use instead" : "auto-detected";
@@ -102,7 +116,7 @@ function windowsPrebuiltBlock(
     `${c}Invoke-WebRequest -Uri "${url}" -OutFile "${archive}"`,
     `${c}Expand-Archive -Path "${archive}" -DestinationPath . -Force`,
     `${c}New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\\bin" | Out-Null`,
-    `${c}Move-Item -Force build\\GocciaScriptLoader.exe, build\\GocciaTestRunner.exe, build\\GocciaREPL.exe "$env:USERPROFILE\\bin\\"`,
+    `${c}Move-Item -Force ${dir}\\GocciaScriptLoader.exe, ${dir}\\GocciaTestRunner.exe, ${dir}\\GocciaREPL.exe "$env:USERPROFILE\\bin\\"`,
   ].join("\n");
 }
 
@@ -334,14 +348,22 @@ export function Install({
             </>
           )}
 
-          {/* Pre-built binaries — OS-tabbed, downloads loader + testrunner + REPL. */}
+          {/* Pre-built binaries — OS-tabbed; the archive holds the whole
+              toolchain, the commands put loader + testrunner + REPL on PATH. */}
           <section id="binaries" className="install-method">
             <AnchorH2 id="binaries">Pre-built binaries</AnchorH2>
             <p>
-              Download the binaries for your OS / arch from the GitHub release
-              and drop them on your <code>$PATH</code>. Includes{" "}
-              <code>GocciaScriptLoader</code> (the runtime),{" "}
-              <code>GocciaTestRunner</code>, and <code>GocciaREPL</code>.
+              Download the archive for your OS / arch from the GitHub release.
+              It carries the whole toolchain — <code>GocciaScriptLoader</code>{" "}
+              (the runtime), <code>GocciaScriptLoaderBare</code>,{" "}
+              <code>GocciaSandboxRunner</code>, <code>GocciaTestRunner</code>,{" "}
+              <code>GocciaBundler</code>, <code>GocciaBenchmarkRunner</code>,{" "}
+              <code>GocciaREPL</code>, <code>GocciaFuzzHarness</code>, and{" "}
+              <code>GocciaWasmTestRunner</code> — plus the <code>tests/</code>,{" "}
+              <code>benchmarks/</code>, and <code>examples/</code> directories,
+              all inside one versioned folder named after the archive. The
+              commands below put the three most common binaries on your{" "}
+              <code>$PATH</code>; the rest are yours to copy from that folder.
             </p>
             <CommandTabs
               tabs={OS_TABS}

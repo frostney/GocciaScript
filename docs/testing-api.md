@@ -611,6 +611,7 @@ Further divergences from Vitest worth knowing:
 | `vi.stubEnv`, `vi.unstubAllEnvs` | Supported, over an injected `process.env` |
 | `vi.clearAllMocks`, `vi.resetAllMocks`, `vi.restoreAllMocks` | Supported |
 | `vi.useFakeTimers` and the rest of the timer family | Throws |
+| `vi.waitFor`, `vi.waitUntil` | Throws |
 | `vi.hoisted` | Throws |
 | `vi.doMock`, `vi.doUnmock`, `vi.resetModules` | Throws |
 | `vi.importActual`, `vi.importMock` | Throws |
@@ -641,7 +642,7 @@ With no `process` at all, `vi.stubEnv` throws and names the two options rather t
 
 #### Why the other members throw
 
-The fake-timer family throws because there is no fake clock — timers run on the real event loop. `vi.resetModules` throws because the loader has no cache-eviction path.
+The fake-timer family throws because there is no fake clock — timers run on the real event loop; `vi.waitFor` and `vi.waitUntil` throw with the same reason, since they poll that clock. `vi.resetModules` throws because the loader has no cache-eviction path.
 
 ### Writing Cross-Compatible Tests
 

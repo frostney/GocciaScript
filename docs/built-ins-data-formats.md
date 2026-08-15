@@ -7,7 +7,7 @@
 - **JSON remains standard** — `JSON` is the ECMAScript global object and is always registered by the engine.
 - **Non-standard formats are modules** — JSON5, YAML, JSONL, CSV, TSV, and TOML runtime APIs are named-export-only `goccia:` modules, not auto-installed globals.
 - **Namespace imports preserve the old call shape** — Use `import * as CSV from "goccia:csv"` when you want `CSV.parse(...)`; there is no default export.
-- **File-backed imports are unchanged** — `.json5`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv` files keep their structured-data import behavior.
+- **File-backed imports are unchanged** — `.json5`, `.jsonc`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv` files keep their structured-data import behavior.
 - **Shared parser utilities** — Runtime modules and file-backed imports continue to share the same underlying parser utilities.
 
 ## Runtime module access

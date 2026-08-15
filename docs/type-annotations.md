@@ -6,7 +6,7 @@
 
 - **Types as comments by default** — Supported annotations follow the [TC39 Type Annotations](https://tc39.es/proposal-type-annotations/) proposal's types-as-comments model and have no runtime effect
 - **Optional enforcement** — `--strict-types` checks supported annotations at runtime in both execution modes; it is a runtime contract, not a static structural checker such as `tsc`
-- **Extension decides `<`** — A leading `<` is read as JSX or as a type parameter list by file extension, modeled on TypeScript with GocciaScript-specific extension rules (JSX is also recognized in `.js` and `.mjs`)
+- **Extension decides `<`** — A leading `<` is read as JSX or as a type parameter list by file extension, modeled on TypeScript with GocciaScript-specific extension rules (JSX is also recognized in `.js` and `.mjs`, and never in `.ts` or `.mts`)
 - **Restricted `!` productions** — Definite assignment and non-null assertions must sit on the same line as their operand, so ASI code keeps its usual meaning
 - **Bounded surface** — Namespaces, parameter properties, angle-bracket assertions, class-field definite assignment, and generic async arrows are deliberately unsupported
 
@@ -95,9 +95,9 @@ try { throw new Error("oops"); } catch (e: Error) { }
 
 ## Angle Brackets and JSX
 
-A leading `<` is ambiguous: it can open a JSX element or a type parameter list. GocciaScript resolves this by file extension — modeled on TypeScript's `.ts`/`.tsx` rule, with GocciaScript-specific extensions: JSX is also recognized (with a warning) in `.js` and `.mjs` sources.
+A leading `<` is ambiguous: it can open a JSX element or a type parameter list. GocciaScript resolves this by file extension — modeled on TypeScript's `.ts`/`.mts` versus `.tsx` rule, with GocciaScript-specific extensions: JSX is also recognized (with a warning) in `.js` and `.mjs` sources.
 
-- **`.ts`** — JSX is never recognised, so `<` is always type syntax. Generic function type annotations and every generic arrow form parse here:
+- **`.ts`, `.mts`** — JSX is never recognised, so `<` is always type syntax. Generic function type annotations and every generic arrow form parse here:
 
   ```typescript
   const identity: <T>(x: T) => T = (x) => x;
@@ -113,7 +113,7 @@ A leading `<` is ambiguous: it can open a JSX element or a type parameter list. 
   const pair = <A, B>(a: A, b: B) => [a, b];
   ```
 
-  Use a `.ts` source when an annotation needs the bare `<T>` form.
+  Use a `.ts` or `.mts` source when an annotation needs the bare `<T>` form.
 
 ## Automatic Semicolon Insertion and Type Syntax
 

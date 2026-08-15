@@ -8,7 +8,7 @@ errors.
 ## What test262 is, and why we run it
 
 [test262](https://github.com/tc39/test262) is the TC39-maintained
-conformance suite for ECMAScript. ~50K tests cover every observable
+conformance suite for ECMAScript. ~52K tests cover every observable
 behavior in the language and built-ins, plus Intl, staging proposals,
 and the harness itself. We run it as an indicator metric and regression
 signal to track which spec corners GocciaScript implements, where the

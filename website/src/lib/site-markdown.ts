@@ -258,7 +258,7 @@ async function installationMarkdown(): Promise<string> {
     "",
     "## Pre-built binaries",
     "",
-    `Download release archives from [GitHub Releases](${GITHUB_RELEASES_URL}). Each archive includes \`GocciaScriptLoader\`, \`GocciaTestRunner\`, and \`GocciaREPL\`.`,
+    `Download release archives from [GitHub Releases](${GITHUB_RELEASES_URL}). Each archive carries the whole toolchain — \`GocciaScriptLoader\`, \`GocciaScriptLoaderBare\`, \`GocciaSandboxRunner\`, \`GocciaTestRunner\`, \`GocciaBundler\`, \`GocciaBenchmarkRunner\`, \`GocciaREPL\`, \`GocciaFuzzHarness\`, and \`GocciaWasmTestRunner\` — alongside the \`tests/\`, \`benchmarks/\`, and \`examples/\` directories.`,
     "",
     "## Build from source",
     "",
