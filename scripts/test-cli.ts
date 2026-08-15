@@ -2504,9 +2504,12 @@ console.log("TestRunner (a failing file stays exit 1, not an integrity abort)...
       join(failTmp, "failing.test.js"),
       'describe("d", () => {\n  test("fails", () => {\n    expect(1).toBe(2);\n  });\n});\n',
     );
+    // The console.log marker proves the passing FILE executed — the count
+    // assertions below prove one test passed, but only the marker ties that
+    // pass to this file rather than to some shape change in the failing one.
     writeFileSync(
       join(failTmp, "passing.test.js"),
-      'describe("d", () => {\n  test("passes", () => {\n    expect(1).toBe(1);\n  });\n});\n',
+      'console.log("RAN: passing.test.js");\ndescribe("d", () => {\n  test("passes", () => {\n    expect(1).toBe(1);\n  });\n});\n',
     );
     for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
       for (const jobsArg of ["--jobs=1", "--jobs=2"]) {
@@ -2528,6 +2531,11 @@ console.log("TestRunner (a failing file stays exit 1, not an integrity abort)...
           "Test Results Passed: 1 (50.00%)",
           "Test Results Failed: 1 (50.00%)",
           'Test "fails" in suite "d": Expected 1 to be 2',
+          // The guest marker directly proves the passing FILE executed. The
+          // parallel workers capture guest console output, so the marker is
+          // only observable sequentially; the jobs=2 shape keeps the count
+          // assertions, which pin the same fact arithmetically.
+          ...(jobsArg === "--jobs=1" ? ["RAN: passing.test.js"] : []),
         ]) {
           if (!out.includes(expected))
             throw new Error(`TestRunner (${label}) report lost "${expected}": ${out}`);

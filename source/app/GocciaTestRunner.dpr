@@ -10,6 +10,7 @@ uses
 
   TimingUtils,
   TextSemantics,
+  CriticalSections,
 
   Goccia.Arguments.Collection,
   Goccia.Application,
@@ -265,10 +266,10 @@ var
     print a full summary and exit 0. This lives in process memory that no pool
     owns, so nothing can rewrite it.
 
-    LongInt with an interlocked write because the claim it makes ("I am the
+    Integer with an interlocked write because the claim it makes ("I am the
     reporter") must be exclusive; plain aligned reads are enough on the
     consuming side, which only ever asks whether it is non-zero. }
-  GIntegrityFaultReported: LongInt;
+  GIntegrityFaultReported: Integer;
 
 { Writes the abort diagnostic for an engine-integrity fault to stderr and
   flushes it immediately. Only the first caller in the process writes anything;
@@ -289,7 +290,7 @@ var
 procedure ReportIntegrityFault(const AFileName: string;
   const AException: Exception);
 begin
-  if InterlockedExchange(GIntegrityFaultReported, 1) <> 0 then
+  if AtomicExchangeInt32(GIntegrityFaultReported, 1) <> 0 then
     Exit;
   WriteLn(ErrOutput, INTEGRITY_FAULT_PREFIX + AException.ClassName + ' in ' +
     AFileName + ': ' + AException.Message + sLineBreak +
