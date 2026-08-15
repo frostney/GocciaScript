@@ -2154,11 +2154,15 @@ var
 
   function ReadSymbolProperty(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue): TGocciaValue;
   begin
+    { This is the read step, so a nullish base fails as a read — the store's
+      set-flavored message would misattribute the failure (and diverge from the
+      VM, which reports the read). Matches ReadPropertyCompoundAssignmentValue
+      on the string-key path. }
     if AObj is TGocciaNullLiteralValue then
-      ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [ASymbol.ToDisplayString.Value]),
+      ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull, [ASymbol.ToDisplayString.Value]),
         SSuggestCheckNullBeforeAccess)
     else if AObj is TGocciaUndefinedLiteralValue then
-      ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [ASymbol.ToDisplayString.Value]),
+      ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined, [ASymbol.ToDisplayString.Value]),
         SSuggestCheckNullBeforeAccess);
 
     if AObj is TGocciaClassValue then
