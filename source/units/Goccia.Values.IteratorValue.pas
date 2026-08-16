@@ -111,6 +111,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.UncatchableFault,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -404,10 +405,15 @@ begin
     AIterator.Close;
   except
     on E: Exception do
-      // Preserve the original abrupt-completion error when cleanup also throws
-      // (ES2026 §7.4.10 step 5) -- but an engine-integrity fault is not a close
-      // error to suppress, it is the run ending.
-      if IsEngineIntegrityFault(E) then
+      { ES2026 §7.4.11 IteratorClose step 5: when the body completed abruptly,
+        that completion wins over an error from iterator.return(). The
+        suppression is defined over Completion Records — guest completions — and
+        a host fault never becomes one. A resource ceiling and an
+        engine-integrity fault are not close errors the clause is speaking
+        about, so re-raising them is orthogonal to the contract rather than a
+        breach of it; the ceiling argument is in Goccia.MemoryLimit.pas and the
+        family in Goccia.UncatchableFault.pas. }
+      if IsUncatchableFault(E) then
         raise;
   end;
 end;
@@ -617,9 +623,15 @@ begin
     CloseDirectIterator(AIteratorObject);
   except
     on E: Exception do
-      // An existing abrupt completion takes precedence over close failures --
-      // an engine-integrity fault is neither, and must keep unwinding.
-      if IsEngineIntegrityFault(E) then
+      { ES2026 §7.4.11 IteratorClose step 5: when the body completed abruptly,
+        that completion wins over an error from iterator.return(). The
+        suppression is defined over Completion Records — guest completions — and
+        a host fault never becomes one. A resource ceiling and an
+        engine-integrity fault are not close errors the clause is speaking
+        about, so re-raising them is orthogonal to the contract rather than a
+        breach of it; the ceiling argument is in Goccia.MemoryLimit.pas and the
+        family in Goccia.UncatchableFault.pas. }
+      if IsUncatchableFault(E) then
         raise;
   end;
 end;
