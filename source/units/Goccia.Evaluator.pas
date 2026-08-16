@@ -6553,8 +6553,9 @@ var
       CloseAsyncIterator(AIter);
     except
       on E: Exception do
-        { ES2026 §7.4.11 IteratorClose step 5: when the body completed abruptly,
-        that completion wins over an error from iterator.return(). The
+        { ES2026 §7.4.15 AsyncIteratorClose step 5 (the async analogue of
+        §7.4.11 IteratorClose): when the body completed abruptly, that
+        completion wins over an error from iterator.return(). The
         suppression is defined over Completion Records — guest completions — and
         a host fault never becomes one. A resource ceiling and an
         engine-integrity fault are not close errors the clause is speaking

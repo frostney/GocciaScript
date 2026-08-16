@@ -257,8 +257,19 @@ type
   peer worker threads that are still running; Halt does both. Declared against
   the C runtime rather than routed through the RTL for that reason. }
 {$IFDEF WINDOWS}
-procedure TerminateProcessNow(AStatus: LongInt); stdcall;
-  external 'kernel32' name 'ExitProcess';
+{ TerminateProcess rather than ExitProcess: ExitProcess first terminates the
+  peer threads and THEN runs DLL process-detach handlers — a detach handler
+  needing a lock a just-terminated worker held deadlocks the abort. Terminate
+  skips detach handlers entirely, which is the whole contract here. }
+function GetCurrentProcess: THandle; stdcall;
+  external 'kernel32' name 'GetCurrentProcess';
+function TerminateProcess(AProcess: THandle; AExitCode: LongWord): LongBool;
+  stdcall; external 'kernel32' name 'TerminateProcess';
+
+procedure TerminateProcessNow(AStatus: LongInt);
+begin
+  TerminateProcess(GetCurrentProcess, LongWord(AStatus));
+end;
 {$ELSE}
 procedure TerminateProcessNow(AStatus: LongInt); cdecl; external name '_exit';
 {$ENDIF}

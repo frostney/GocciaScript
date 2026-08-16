@@ -165,7 +165,9 @@ seventy-five, and the halt was provably its cause: removing only the worker-side
 halt took it to zero in three hundred runs, and forty non-aborting runs of the
 same files — each executing every file rather than the handful an abort reaches
 — never produced one. The abort therefore terminates through the C runtime
-(`_exit`, `ExitProcess` on Windows), running no finalization at all. That
+(`_exit`; `TerminateProcess` on Windows, which unlike `ExitProcess` also skips
+DLL process-detach handlers that could deadlock on a dead worker's lock),
+running no finalization at all. That
 removes the window instead of papering over it, and it trusts the suspect heap
 *less*: no finalizer runs on a heap the engine has already said it cannot vouch
 for. Buffered stdout dies with the process, which is what an abort wants.
