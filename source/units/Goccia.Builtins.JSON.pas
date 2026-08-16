@@ -58,6 +58,7 @@ uses
 
   Goccia.Arithmetic,
   Goccia.Constants.PropertyNames,
+  Goccia.EngineFault,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.InstructionLimit,
@@ -767,6 +768,8 @@ begin
       raise;
     on E: Exception do
     begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       ReraiseBytecodeThrow(E);
       ThrowTypeError(Format(SErrorJSONStringifyError, [E.Message]), SSuggestJSONFormat);
     end;

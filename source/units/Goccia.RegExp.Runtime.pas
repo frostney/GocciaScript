@@ -76,6 +76,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
+  Goccia.EngineFault,
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
   Goccia.Realm,
@@ -608,7 +609,13 @@ begin
     CompiledProgram := CompileRegExpProgram(APattern, CanonicalFlags);
   except
     on E: Exception do
+    begin
+      { Compile failures are guest SyntaxErrors -- including the EConvertError
+        that invalid flags raise. An engine-integrity fault is not one. }
+      if IsEngineIntegrityFault(E) then
+        raise;
       ThrowSyntaxError(E.Message);
+    end;
   end;
 
   Result := CreateRegExpObjectFromProgram(APattern, CanonicalFlags, CompiledProgram);
@@ -628,7 +635,11 @@ begin
     CompiledProgram := CompileRegExpProgram(APattern, CanonicalFlags);
   except
     on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       ThrowSyntaxError(E.Message);
+    end;
   end;
   Source := NormalizeRegExpSource(APattern);
   TGocciaObjectValue(AValue).RegExpData := TGocciaRegExpProgramData.Create(
@@ -667,7 +678,11 @@ begin
       CompiledProgram := CompileRegExpProgram(APattern, CanonicalFlags);
     except
       on E: Exception do
+      begin
+        if IsEngineIntegrityFault(E) then
+          raise;
         ThrowSyntaxError(E.Message);
+      end;
     end;
     Cached := TGocciaCachedRegExpProgram.Create(CompiledProgram, CanonicalFlags);
   end;

@@ -45,6 +45,7 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.EngineFault,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.FetchManager,
@@ -245,7 +246,11 @@ begin
     on E: TGocciaMemoryLimitError do
       raise;
     on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       Promise.Reject(CreateErrorObject('TypeError', 'fetch failed: ' + E.Message));
+    end;
   end;
 
   Result := Promise;

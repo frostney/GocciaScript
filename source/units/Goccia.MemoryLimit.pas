@@ -38,7 +38,18 @@ type
     toThrow — names this class in its re-raise allowlist ahead of its generic
     `on E: Exception` arm. A new boundary that omits the arm makes the
     ceiling catchable again, which is what Goccia.MemoryLimit.Test.pas
-    guards against in both execution modes. }
+    guards against in both execution modes.
+
+    The same boundary list carries a second, wider guard: where the allowlist
+    above names a class, the generic arm opens with
+    `if IsEngineIntegrityFault(E) then raise;`. This ceiling is opaque because
+    a ceiling the guest can catch is one it can ignore; an integrity fault is
+    opaque for a stronger reason still, and is the backstop for the failure
+    this family cannot describe — an evaluator temporary left unrooted across a
+    collecting safe point surfaces as a use-after-free, which without the guard
+    `catch (e)` absorbs. The family, its two deliberate carve-outs and the
+    reasoning live in Goccia.EngineFault.pas and
+    docs/adr/0109-engine-integrity-faults-are-uncatchable.md. }
   TGocciaMemoryLimitError = class(Exception)
   private
     FRequestedBytes: Int64;

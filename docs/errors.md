@@ -6,6 +6,7 @@
 
 - **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus the uncatchable resource ceilings `TimeoutError` (`--timeout`), `InstructionLimitError` (`--max-instructions`), and `MemoryLimitError` (`--max-memory`)
 - **`--max-memory` refuses in two ways** -- a *charged* allocation (string payload, `ArrayBuffer` backing store) forces a collection, re-tests, and only then throws a **catchable** `RangeError` -- except for the two shapes no collection could help, a request larger than the whole budget and a repeat of one a forced collection has already refused, which are refused straight away; a *gated* growth point (array element storage, object property storage) refuses without collecting and ends the run with the uncatchable `MemoryLimitError`. The same byte count can therefore be survivable on one path and fatal on the other -- see [Garbage Collector § Gated growth points](garbage-collector.md#gated-growth-points)
+- **Engine-integrity faults** -- A fourth uncatchable class, and not an error type at all: a use-after-free, an invalid dereference, or a broken heap unwinds past every `catch` to the host, because a script cannot meaningfully continue on top of one. See [ADR 0109](adr/0109-engine-integrity-faults-are-uncatchable.md)
 - **Parser errors** -- Displayed with source context, a caret pointing to the exact column, and optional suggestion text (e.g., "Use 'let' or 'const' instead")
 - **Runtime errors** -- Carry `name`, `message`, `stack`, and optional `cause`; catchable with `try`/`catch`/`finally`
 - **Sandbox filesystem errors** -- Use real `Error` objects with Node-shaped `code`, `errno`, `path`, `syscall`, and optional `dest` metadata
@@ -37,6 +38,17 @@ every handler to the host, because a ceiling the guest can catch is a ceiling
 the guest can ignore in a loop. Allocation sites that charge the budget
 against an owning value (string payloads, `ArrayBuffer`) still throw an
 ordinary catchable `RangeError`, which is unchanged.
+
+One more class of failure is uncatchable, for a stronger reason and without
+appearing in the table at all: an **engine-integrity fault** -- a virtual call
+through a collected value, an invalid dereference, a heap whose bookkeeping has
+been destroyed. These are engine bugs rather than anything the script did, and
+unlike a refused allocation they have no defined continuation, so they unwind
+past every `catch` to the host instead of becoming an `Error` object. A refused
+allocation is deliberately *not* one of them: it leaves the heap intact, so
+catching it and retrying with less remains valid. [ADR
+0109](adr/0109-engine-integrity-faults-are-uncatchable.md) records the decision;
+`source/units/Goccia.EngineFault.pas` is the authoritative list of the classes.
 
 ### Inheritance
 

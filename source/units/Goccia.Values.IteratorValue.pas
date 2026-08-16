@@ -107,6 +107,7 @@ uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
+  Goccia.EngineFault,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
@@ -402,7 +403,12 @@ begin
   try
     AIterator.Close;
   except
-    // Preserve the original abrupt-completion error when cleanup also throws.
+    on E: Exception do
+      // Preserve the original abrupt-completion error when cleanup also throws
+      // (ES2026 §7.4.10 step 5) -- but an engine-integrity fault is not a close
+      // error to suppress, it is the run ending.
+      if IsEngineIntegrityFault(E) then
+        raise;
   end;
 end;
 
@@ -610,7 +616,11 @@ begin
   try
     CloseDirectIterator(AIteratorObject);
   except
-    // An existing abrupt completion takes precedence over close failures.
+    on E: Exception do
+      // An existing abrupt completion takes precedence over close failures --
+      // an engine-integrity fault is neither, and must keep unwinding.
+      if IsEngineIntegrityFault(E) then
+        raise;
   end;
 end;
 

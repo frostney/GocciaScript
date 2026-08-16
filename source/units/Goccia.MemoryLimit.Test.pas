@@ -8,21 +8,32 @@ uses
 
   TestingPascalLibrary,
 
+  Goccia.Arguments.Collection,
   Goccia.Engine,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
   Goccia.MemoryLimit,
-  Goccia.TestSetup;
+  Goccia.TestSetup,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.Primitives;
 
 type
   TMemoryLimitTests = class(TTestSuite)
   private
-    { Runs ASource under a budget that cannot fit the allocation it asks for,
-      once per executor, and answers whether the refusal reached the host. }
-    function RefusalEscapesScript(const ASource: string;
-      const AExecutor: TGocciaExecutor; const AName: string): Boolean;
+    { The native the integrity-fault tests call. Raises the same class a virtual
+      call through a collected value raises under `$OBJECTCHECKS ON`, which is
+      how a real unrooted-temporary bug arrives. }
+    function RaiseIntegrityFault(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    { Runs ASource under a budget that cannot fit the over-budget allocation and
+      with that native bound as a global, and answers whether AFaultClass
+      reached the host instead of the script. Any other escaping exception is
+      not an answer to that question and propagates. }
+    function FaultEscapesScript(const ASource: string;
+      const AExecutor: TGocciaExecutor; const AName: string;
+      const AFaultClass: ExceptClass): Boolean;
     procedure TestGateRefusesOverBudgetRequest;
     procedure TestGatePermitsInBudgetRequest;
     procedure TestSyncCatchCannotSwallowRefusal;
@@ -30,6 +41,8 @@ type
     procedure TestPromiseExecutorCatchCannotSwallowRefusal;
     procedure TestAsyncGeneratorReturnCannotSwallowRefusal;
     procedure TestScriptErrorsStayCatchable;
+    procedure TestSyncCatchCannotSwallowIntegrityFault;
+    procedure TestAsyncFunctionCatchCannotSwallowIntegrityFault;
   protected
     procedure BeforeEach; override;
   public
@@ -46,6 +59,13 @@ const
     process-global and the suite shares it with everything already allocated,
     so a fixed number would refuse the engine's own setup on a busy run. }
   BUDGET_HEADROOM_BYTES = 64 * 1024 * 1024;
+
+  { Name and message for the injected integrity fault. Nothing asserts on the
+    message — the class reaching the host is the whole signal. It matches the
+    text FPC produces for a real object check so the intent is legible in a
+    stack trace. }
+  INTEGRITY_FAULT_GLOBAL_NAME = '__gocciaRaiseIntegrityFault';
+  INTEGRITY_FAULT_MESSAGE = 'Object reference is Nil';
 
 procedure TMemoryLimitTests.BeforeEach;
 begin
@@ -71,10 +91,23 @@ begin
   Test('An async generator return/finally cannot swallow a refusal',
     TestAsyncGeneratorReturnCannotSwallowRefusal);
   Test('Ordinary script errors stay catchable', TestScriptErrorsStayCatchable);
+  Test('Script try/catch cannot swallow an engine-integrity fault',
+    TestSyncCatchCannotSwallowIntegrityFault);
+  Test('An async function body cannot swallow an engine-integrity fault',
+    TestAsyncFunctionCatchCannotSwallowIntegrityFault);
 end;
 
-function TMemoryLimitTests.RefusalEscapesScript(const ASource: string;
-  const AExecutor: TGocciaExecutor; const AName: string): Boolean;
+function TMemoryLimitTests.RaiseIntegrityFault(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  raise EObjectCheck.Create(INTEGRITY_FAULT_MESSAGE);
+end;
+
+function TMemoryLimitTests.FaultEscapesScript(const ASource: string;
+  const AExecutor: TGocciaExecutor; const AName: string;
+  const AFaultClass: ExceptClass): Boolean;
 var
   Source: TStringList;
   Engine: TGocciaEngine;
@@ -88,6 +121,9 @@ begin
   GC := TGarbageCollector.Instance;
   PreviousMaxBytes := 0;
   try
+    Engine.InjectGlobal(INTEGRITY_FAULT_GLOBAL_NAME,
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(RaiseIntegrityFault,
+        INTEGRITY_FAULT_GLOBAL_NAME, 0));
     if Assigned(GC) then
     begin
       PreviousMaxBytes := GC.MaxBytes;
@@ -96,8 +132,11 @@ begin
     try
       Engine.Execute;
     except
-      on E: TGocciaMemoryLimitError do
-        Result := True;
+      on E: Exception do
+        if E.InheritsFrom(AFaultClass) then
+          Result := True
+        else
+          raise;
     end;
   finally
     if Assigned(GC) then
@@ -168,12 +207,12 @@ begin
   { Nothing but an escaping TGocciaMemoryLimitError can produce True here:
     had the catch block absorbed the refusal, the script would have run to
     completion and Execute would have returned normally. }
-  Expect<Boolean>(RefusalEscapesScript(SourceText,
+  Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaInterpreterExecutor.Create,
-    'memory-limit-sync-interpreted.js')).ToBe(True);
-  Expect<Boolean>(RefusalEscapesScript(SourceText,
+    'memory-limit-sync-interpreted.js', TGocciaMemoryLimitError)).ToBe(True);
+  Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
-    'memory-limit-sync-bytecode.js')).ToBe(True);
+    'memory-limit-sync-bytecode.js', TGocciaMemoryLimitError)).ToBe(True);
 end;
 
 procedure TMemoryLimitTests.TestAsyncFunctionCatchCannotSwallowRefusal;
@@ -192,12 +231,12 @@ begin
   { Regression guard for the async path specifically: a refusal escaping an
     async function body used to be converted into a spurious access
     violation, which the guest could then catch as an ordinary Error. }
-  Expect<Boolean>(RefusalEscapesScript(SourceText,
+  Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaInterpreterExecutor.Create,
-    'memory-limit-async-interpreted.js')).ToBe(True);
-  Expect<Boolean>(RefusalEscapesScript(SourceText,
+    'memory-limit-async-interpreted.js', TGocciaMemoryLimitError)).ToBe(True);
+  Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
-    'memory-limit-async-bytecode.js')).ToBe(True);
+    'memory-limit-async-bytecode.js', TGocciaMemoryLimitError)).ToBe(True);
 end;
 
 procedure TMemoryLimitTests.TestPromiseExecutorCatchCannotSwallowRefusal;
@@ -210,12 +249,12 @@ const
     '  }).catch(() => {});' + sLineBreak +
     '} catch (e) {}';
 begin
-  Expect<Boolean>(RefusalEscapesScript(SourceText,
+  Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaInterpreterExecutor.Create,
-    'memory-limit-executor-interpreted.js')).ToBe(True);
-  Expect<Boolean>(RefusalEscapesScript(SourceText,
+    'memory-limit-executor-interpreted.js', TGocciaMemoryLimitError)).ToBe(True);
+  Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
-    'memory-limit-executor-bytecode.js')).ToBe(True);
+    'memory-limit-executor-bytecode.js', TGocciaMemoryLimitError)).ToBe(True);
 end;
 
 procedure TMemoryLimitTests.TestAsyncGeneratorReturnCannotSwallowRefusal;
@@ -238,12 +277,12 @@ const
     '};' + sLineBreak +
     'main();';
 begin
-  Expect<Boolean>(RefusalEscapesScript(SourceText,
+  Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaInterpreterExecutor.Create,
-    'memory-limit-async-generator-interpreted.js')).ToBe(True);
-  Expect<Boolean>(RefusalEscapesScript(SourceText,
+    'memory-limit-async-generator-interpreted.js', TGocciaMemoryLimitError)).ToBe(True);
+  Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
-    'memory-limit-async-generator-bytecode.js')).ToBe(True);
+    'memory-limit-async-generator-bytecode.js', TGocciaMemoryLimitError)).ToBe(True);
 end;
 
 procedure TMemoryLimitTests.TestScriptErrorsStayCatchable;
@@ -258,12 +297,60 @@ const
 begin
   { The counterweight to the guards above: the same budget must not turn an
     ordinary in-language error into a host-level failure. }
-  Expect<Boolean>(RefusalEscapesScript(SourceText,
+  Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaInterpreterExecutor.Create,
-    'memory-limit-script-error-interpreted.js')).ToBe(False);
-  Expect<Boolean>(RefusalEscapesScript(SourceText,
+    'memory-limit-script-error-interpreted.js', TGocciaMemoryLimitError)).ToBe(False);
+  Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
-    'memory-limit-script-error-bytecode.js')).ToBe(False);
+    'memory-limit-script-error-bytecode.js', TGocciaMemoryLimitError)).ToBe(False);
+end;
+
+procedure TMemoryLimitTests.TestSyncCatchCannotSwallowIntegrityFault;
+const
+  SourceText =
+    'let caught = false;' + sLineBreak +
+    'try {' + sLineBreak +
+    '  ' + INTEGRITY_FAULT_GLOBAL_NAME + '();' + sLineBreak +
+    '} catch (e) {' + sLineBreak +
+    '  caught = true;' + sLineBreak +
+    '}';
+begin
+  { An engine-integrity fault is not a JavaScript error and must not become
+    one. The interpreter used to fold every unlisted Pascal exception into a
+    catchable Error object, which turned a use-after-free — the shape an
+    unrooted evaluator temporary produces under memory pressure — into
+    `catch (e)` and let the script keep running on corrupted state. Both
+    executors must now unwind to the host. }
+  Expect<Boolean>(FaultEscapesScript(SourceText,
+    TGocciaInterpreterExecutor.Create,
+    'integrity-fault-sync-interpreted.js', EObjectCheck)).ToBe(True);
+  Expect<Boolean>(FaultEscapesScript(SourceText,
+    TGocciaBytecodeExecutor.Create,
+    'integrity-fault-sync-bytecode.js', EObjectCheck)).ToBe(True);
+end;
+
+procedure TMemoryLimitTests.TestAsyncFunctionCatchCannotSwallowIntegrityFault;
+const
+  SourceText =
+    'const fault = async () => {' + sLineBreak +
+    '  ' + INTEGRITY_FAULT_GLOBAL_NAME + '();' + sLineBreak +
+    '};' + sLineBreak +
+    'const main = async () => {' + sLineBreak +
+    '  try {' + sLineBreak +
+    '    await fault();' + sLineBreak +
+    '  } catch (e) {}' + sLineBreak +
+    '};' + sLineBreak +
+    'main();';
+begin
+  { The await and promise-reaction boundaries convert a Pascal exception into a
+    rejection, which `catch` then absorbs — the same swallow by a different
+    route. }
+  Expect<Boolean>(FaultEscapesScript(SourceText,
+    TGocciaInterpreterExecutor.Create,
+    'integrity-fault-async-interpreted.js', EObjectCheck)).ToBe(True);
+  Expect<Boolean>(FaultEscapesScript(SourceText,
+    TGocciaBytecodeExecutor.Create,
+    'integrity-fault-async-bytecode.js', EObjectCheck)).ToBe(True);
 end;
 
 begin

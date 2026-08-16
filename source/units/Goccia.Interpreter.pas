@@ -112,6 +112,7 @@ uses
   Goccia.CapabilityAudit,
   Goccia.Constants.ErrorNames,
   Goccia.Coverage,
+  Goccia.EngineFault,
   Goccia.GarbageCollector,
   Goccia.Generator.Continuation,
   Goccia.InstructionLimit,
@@ -256,7 +257,11 @@ begin
       on E: TGocciaMemoryLimitError do
         raise;
       on E: Exception do
+      begin
+        if IsEngineIntegrityFault(E) then
+          raise;
         RejectWithException(E);
+      end;
     end;
   finally
     PopAsyncAwaitSuspension;

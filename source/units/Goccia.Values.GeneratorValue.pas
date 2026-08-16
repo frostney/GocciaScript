@@ -156,6 +156,7 @@ uses
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
+  Goccia.EngineFault,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.GarbageCollector,
@@ -1038,6 +1039,8 @@ begin
         raise;
       on E: Exception do
       begin
+        if IsEngineIntegrityFault(E) then
+          raise;
         if AThrowIntoGenerator then
           RejectAwaitedYield(ExceptionToErrorValue(E))
         else
@@ -1206,6 +1209,8 @@ begin
           raise;
         on E: Exception do
         begin
+          if IsEngineIntegrityFault(E) then
+            raise;
           RejectAwaitedYield(ExceptionToErrorValue(E));
           Exit;
         end;
@@ -1270,6 +1275,8 @@ begin
       raise;
     on E: Exception do
     begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       if ARequest.Kind = grkReturn then
       begin
         FState := gsCompleted;

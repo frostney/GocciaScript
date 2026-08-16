@@ -375,6 +375,7 @@ uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.EngineFault,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Evaluator,
@@ -2339,6 +2340,8 @@ begin
           raise;
         on E: Exception do
         begin
+          if IsEngineIntegrityFault(E) then
+            raise;
           DidThrow := True;
           ThrownValue := CreateErrorObject(ERROR_NAME,
             E.ClassName + ': ' + E.Message);
@@ -3840,6 +3843,15 @@ begin
           end;
           on E: Exception do
           begin
+            if IsEngineIntegrityFault(E) then
+            begin
+              { Terminal like the refusal above: clear pending host work before
+                unwinding, because later files run in this process. }
+              if (TGocciaMicrotaskQueue.Instance <> nil) then
+                TGocciaMicrotaskQueue.Instance.ClearQueue;
+              DiscardFetchCompletions;
+              raise;
+            end;
             if not FSuppressOutput then
               WriteLn('Error in describe block "', ChildSuite.GetFullName,
                 '": ', E.Message);
@@ -4006,7 +4018,7 @@ var
   RejectionReason: string;
   ExceptionDetail, ExceptionSummary: string;
   FailureRecorded: Boolean;
-  TerminalLimitUnwinding: Boolean;
+  TerminalUnwinding: Boolean;
   EffectiveSuiteName: string;
   HookFailed: Boolean;
   HookMessage: string;
@@ -4124,7 +4136,7 @@ begin
         RunCallbacks(BeforeCallbacks);
 
         FailureRecorded := False;
-        TerminalLimitUnwinding := False;
+        TerminalUnwinding := False;
         TestResult := nil;
         try
           { Per-test deadline. Push unconditionally — a 0 value
@@ -4216,7 +4228,7 @@ begin
                 end
                 else
                 begin
-                  TerminalLimitUnwinding := True;
+                  TerminalUnwinding := True;
                   raise;
                 end;
               end;
@@ -4230,11 +4242,24 @@ begin
                 if (TGocciaMicrotaskQueue.Instance <> nil) then
                   TGocciaMicrotaskQueue.Instance.ClearQueue;
                 DiscardFetchCompletions;
-                TerminalLimitUnwinding := True;
+                TerminalUnwinding := True;
                 raise;
               end;
               on E: Exception do
               begin
+                if IsEngineIntegrityFault(E) then
+                begin
+                  { Terminal for the same reason as the refusal above, and with
+                    the same bookkeeping: the run is unwinding to the host, so
+                    pending host work must not leak into the next file and the
+                    guest afterEach / onTestFinished hooks must not run on a
+                    heap that is no longer sound. }
+                  if (TGocciaMicrotaskQueue.Instance <> nil) then
+                    TGocciaMicrotaskQueue.Instance.ClearQueue;
+                  DiscardFetchCompletions;
+                  TerminalUnwinding := True;
+                  raise;
+                end;
                 if (TGocciaMicrotaskQueue.Instance <> nil) then
                   TGocciaMicrotaskQueue.Instance.ClearQueue;
                 DiscardFetchCompletions;
@@ -4269,19 +4294,21 @@ begin
             PopTimeoutScope;
           end;
         finally
-          { When an uncatchable resource limit is tearing the run down, the
-            guest afterEach / onTestFinished hooks must NOT run -- the limit has
-            already fired and guest code may not execute past it. Keep the
-            engine bookkeeping (root removal / Clear) so no callback roots leak
-            while the exception unwinds to the host. The flag is set explicitly
-            by the two terminal re-raise arms above rather than inferred from
+          { When an uncatchable fault is tearing the run down -- a resource
+            limit, an out-of-test-scope timeout, or an engine-integrity fault --
+            the guest afterEach / onTestFinished hooks must NOT run: the limit
+            has already fired, or the heap is no longer sound, and guest code
+            may not execute past either. Keep the engine bookkeeping (root
+            removal / Clear) so no callback roots leak while the exception
+            unwinds to the host. The flag is set explicitly by the terminal
+            re-raise arms above rather than inferred from
             the RTL ExceptObject: on SEH targets (i386-win32) ExceptObject is
             populated only inside except handlers, not while a finally runs
             during unwinding, so an ExceptObject-based check silently ran the
             hooks there. Every normal path (pass, ordinary failure, recorded
             test-scope timeout) leaves the flag False, so the hooks run exactly
             as before. }
-          if TerminalLimitUnwinding then
+          if TerminalUnwinding then
           begin
             if FOnTestFinishedCallbacks.Length > 0 then
             begin
@@ -4461,7 +4488,11 @@ begin
             AssertionFailed('callback execution',
               'Callback threw an exception: ' + DescribeThrownValue(E.Value));
           on E: Exception do
+          begin
+            if IsEngineIntegrityFault(E) then
+              raise;
             AssertionFailed('callback execution', 'Callback threw an exception: ' + E.Message);
+          end;
         end;
       end;
     end;
