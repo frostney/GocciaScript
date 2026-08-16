@@ -25,14 +25,20 @@ type
     FCalls: Integer;
     FLastBytes: Int64;
     FCountAtFirstCall: Integer;
+    FValueAtFirstCall: Integer;
   protected
-    procedure RequireStorageBytes(const ABytes: Int64); override;
+    procedure RequireStorageBytes(const ABytes: Int64;
+      const APendingValue: Integer); override;
   public
     constructor Create(AInitialCapacity: Integer);
     property Armed: Boolean read FArmed write FArmed;
     property Calls: Integer read FCalls;
     property LastBytes: Int64 read FLastBytes;
     property CountAtFirstCall: Integer read FCountAtFirstCall;
+    { The value the Add that tripped the gate had not stored yet. The gated
+      subclass roots this, so a growth path that dropped it on the floor would
+      silently unroot the value being stored. }
+    property ValueAtFirstCall: Integer read FValueAtFirstCall;
   end;
 
   TTestOrderedStringMap = class(TTestSuite)
@@ -65,12 +71,17 @@ begin
   FCalls := 0;
   FLastBytes := 0;
   FCountAtFirstCall := -1;
+  FValueAtFirstCall := -1;
 end;
 
-procedure TGatedStringMap.RequireStorageBytes(const ABytes: Int64);
+procedure TGatedStringMap.RequireStorageBytes(const ABytes: Int64;
+  const APendingValue: Integer);
 begin
   if FCalls = 0 then
+  begin
     FCountAtFirstCall := Count;
+    FValueAtFirstCall := APendingValue;
+  end;
   Inc(FCalls);
   FLastBytes := ABytes;
   if FArmed then
@@ -310,6 +321,11 @@ begin
     Expect<Boolean>(Steps > 0).ToBe(True);
     // ...and it is only consulted once the map has left the small-map band.
     Expect<Boolean>(Map.CountAtFirstCall > 32).ToBe(True);
+    // The value the in-flight Add has not stored yet reaches the gate. The
+    // gated subclass roots it there — it is reachable from nowhere else at that
+    // moment — so a growth path that stopped threading it through would unroot
+    // the value being stored without changing anything else observable.
+    Expect<Integer>(Map.ValueAtFirstCall).ToBe(Map.CountAtFirstCall);
   finally
     Map.Free;
   end;

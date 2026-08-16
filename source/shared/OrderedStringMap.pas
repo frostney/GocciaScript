@@ -95,9 +95,9 @@ type
     function DeletedSlotsNeedCompaction: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function FindBucket(const AKey: string; AHash: Cardinal;
       out ABucketIdx: Integer): Boolean;
-    procedure Grow;
+    procedure Grow(const APendingValue: TValue);
     procedure Rehash(ANewBucketCount: Integer);
-    procedure Compact;
+    procedure Compact(const APendingValue: TValue);
     // Reports a storage reallocation to RequireStorageBytes, but only when its
     // transient footprint clears GATED_GROWTH_MIN_BYTES.
     //
@@ -107,7 +107,8 @@ type
     // and Compact holds both arrays at once by construction, so the peak the
     // gate is asked to bound is the sum — reporting only the new block would
     // under-report the real peak by up to a third.
-    procedure GateStorageGrowth(const AOldBytes, ANewBytes: Int64);
+    procedure GateStorageGrowth(const AOldBytes, ANewBytes: Int64;
+      const APendingValue: TValue);
 
   protected
     // Growth gate: called with the transient byte footprint of a storage
@@ -120,7 +121,18 @@ type
     // It runs only when storage actually grows past GATED_GROWTH_MIN_BYTES —
     // growth is geometric, so O(log Count) times over the map's life, never
     // once per Add and never at all for the small maps that dominate.
-    procedure RequireStorageBytes(const ABytes: Int64); virtual;
+    //
+    // APendingValue is the value the in-flight Add has not stored yet. Every
+    // growth point is reached from Add and from nowhere else — Grow and Compact
+    // are private and Add is their only caller — so it is always the real
+    // pending value, never a default. It is passed because a gate that can
+    // collect — and the JS property-storage subclass's will — must be able to
+    // root what the caller is holding: the value is not in the map yet, so
+    // nothing else in the engine can see it. Threading it here rather than
+    // having callers root before every Add is what keeps the cost on the
+    // O(log Count) growth path instead of the per-store one.
+    procedure RequireStorageBytes(const ABytes: Int64;
+      const APendingValue: TValue); virtual;
     function GetCount: Integer; override;
     function GetValue(const AKey: string): TValue; override;
     procedure SetValue(const AKey: string; const AValue: TValue); override;
@@ -248,22 +260,23 @@ end;
 
 { Resize }
 
-procedure TOrderedStringMap<TValue>.RequireStorageBytes(const ABytes: Int64);
+procedure TOrderedStringMap<TValue>.RequireStorageBytes(const ABytes: Int64;
+  const APendingValue: TValue);
 begin
   // No budget at this layer; see the declaration.
 end;
 
 procedure TOrderedStringMap<TValue>.GateStorageGrowth(const AOldBytes,
-  ANewBytes: Int64);
+  ANewBytes: Int64; const APendingValue: TValue);
 var
   Transient: Int64;
 begin
   Transient := AOldBytes + ANewBytes;
   if Transient >= GATED_GROWTH_MIN_BYTES then
-    RequireStorageBytes(Transient);
+    RequireStorageBytes(Transient, APendingValue);
 end;
 
-procedure TOrderedStringMap<TValue>.Grow;
+procedure TOrderedStringMap<TValue>.Grow(const APendingValue: TValue);
 var
   N: Integer;
 begin
@@ -271,7 +284,7 @@ begin
   if N < INITIAL_CAPACITY then
     N := INITIAL_CAPACITY;
   GateStorageGrowth(Int64(FBucketCount) * SizeOf(Int32),
-    Int64(N) * SizeOf(Int32));
+    Int64(N) * SizeOf(Int32), APendingValue);
   Rehash(N);
 end;
 
@@ -296,7 +309,7 @@ begin
   FDeletedCount := 0;
 end;
 
-procedure TOrderedStringMap<TValue>.Compact;
+procedure TOrderedStringMap<TValue>.Compact(const APendingValue: TValue);
 var
   NewEntries: TEntryArray;
   I, J: Integer;
@@ -314,7 +327,7 @@ begin
   // budget is already exhausted, and the alternative is committing a peak the
   // budget exists to forbid.
   GateStorageGrowth(Int64(FEntryCount) * SizeOf(TEntry),
-    Int64(FCount) * SizeOf(TEntry));
+    Int64(FCount) * SizeOf(TEntry), APendingValue);
   SetLength(NewEntries, FCount);
   J := 0;
   for I := 0 to FEntryCount - 1 do
@@ -383,7 +396,7 @@ begin
   Hash := HashKey(AKey);
 
   if FBucketCount = 0 then
-    Grow;
+    Grow(AValue);
 
   if FindBucket(AKey, Hash, BucketIdx) then
   begin
@@ -394,15 +407,15 @@ begin
   if (FEntryCount + 1) * 100 > FBucketCount * LOAD_FACTOR_PERCENT then
   begin
     if FCount < FEntryCount div 2 then
-      Compact
+      Compact(AValue)
     else
-      Grow;
+      Grow(AValue);
     FindBucket(AKey, Hash, BucketIdx);
   end;
 
   if DeletedSlotsNeedCompaction then
   begin
-    Compact;
+    Compact(AValue);
     FindBucket(AKey, Hash, BucketIdx);
   end;
 
@@ -413,7 +426,7 @@ begin
   begin
     NewEntryCapacity := (EntryIdx + 1) * 2;
     GateStorageGrowth(Int64(Length(FEntries)) * SizeOf(TEntry),
-      Int64(NewEntryCapacity) * SizeOf(TEntry));
+      Int64(NewEntryCapacity) * SizeOf(TEntry), AValue);
     SetLength(FEntries, NewEntryCapacity);
   end;
   Inc(FEntryCount);
