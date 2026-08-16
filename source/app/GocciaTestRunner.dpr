@@ -99,6 +99,12 @@ const
     error has been detected"; see docs/contributing/cli-conventions.md. }
   EXIT_CODE_INTEGRITY_FAULT = 70;
 
+  { Upper bound, in milliseconds, that a thread ending the process will wait for
+    the reporting thread to finish writing the diagnostic. Generous next to a
+    single flushed write, and bounded so a reporter that itself dies mid-write
+    cannot leave the process hanging in an abort. }
+  INTEGRITY_DIAGNOSTIC_WAIT_MS = 2000;
+
 type
   { Plain-data record for extracting test results from GC-managed objects.
     Used by the parallel path to pass results across thread boundaries
@@ -245,6 +251,18 @@ type
     procedure PrintTestResults(const AResult: TAggregatedTestResult);
   end;
 
+{ Ends the process immediately, running no unit finalization and flushing
+  nothing. The abort path needs a termination that cannot run code on a heap the
+  engine has already declared untrustworthy, and cannot tear down the RTL under
+  peer worker threads that are still running; Halt does both. Declared against
+  the C runtime rather than routed through the RTL for that reason. }
+{$IFDEF WINDOWS}
+procedure TerminateProcessNow(AStatus: LongInt); stdcall;
+  external 'kernel32' name 'ExitProcess';
+{$ELSE}
+procedure TerminateProcessNow(AStatus: LongInt); cdecl; external name '_exit';
+{$ENDIF}
+
 var
   { Set once, by whichever thread reports the first engine-integrity fault, and
     never cleared. Two jobs, both of which need it to outlive the pool:
@@ -255,18 +273,26 @@ var
     exists to produce. First fault wins, the rest stay silent.
 
     It also lets the main thread recognise an abort that is already under way.
-    A faulting worker halts the process, but halt runs unit finalization before
-    the process actually ends, and the main thread can return from RunAll
-    inside that window; reading this tells it to stop rather than spend the
-    window aggregating a summary that is about to be truncated mid-sentence.
-    The pool's own results cannot serve that purpose — a worker the watchdog
-    abandoned has its in-progress slot dropped and rewritten as a TIMEOUT — and
-    this lives in process memory no pool owns, so nothing can rewrite it.
+    A faulting worker ends the process itself, but it waits for the diagnostic
+    to be written first, and the main thread can return from RunAll inside that
+    window; reading this tells it to stop rather than spend the window
+    aggregating a summary that is about to vanish mid-sentence. The pool's own
+    results cannot serve that purpose — a worker the watchdog abandoned has its
+    in-progress slot dropped and rewritten as a TIMEOUT — and this lives in
+    process memory no pool owns, so nothing can rewrite it.
 
     Integer with an interlocked write because the claim it makes ("I am the
     reporter") must be exclusive; plain aligned reads are enough on the
     consuming side, which only ever asks whether it is non-zero. }
   GIntegrityFaultReported: Integer;
+
+  { Raised by the reporting thread once its diagnostic is written AND flushed.
+    Every thread that ends the process waits for this first. Without it the
+    abort could truncate its own message: the reporter is mid-write while a
+    second faulting worker reaches the exit, and the process dies with one of
+    the two lines delivered. That was observed once per ~150 aborting runs with
+    two or more faulting files, and never with one. }
+  GIntegrityFaultDiagnosticWritten: Integer;
 
 { Writes the abort diagnostic for an engine-integrity fault to stderr and
   flushes it immediately. Only the first caller in the process writes anything;
@@ -282,8 +308,8 @@ var
   than a sequence of them — the remaining interleaving partner is the pool
   watchdog's own stall warnings on the main thread, which are line-oriented and
   only appear once a worker has already been stuck for twice the file timeout.
-  Flushing matters because Halt still runs unit finalization on the suspect
-  heap, and that is not a good bet to write through. }
+  Flushing is what makes the message survive the exit below, which runs no
+  finalization and so flushes nothing on its own. }
 procedure ReportIntegrityFault(const AFileName: string;
   const AException: Exception);
 begin
@@ -294,12 +320,49 @@ begin
     INTEGRITY_FAULT_PREFIX + 'the engine can no longer vouch for its own ' +
     'state, so the run is aborted and the remaining files were not executed.');
   Flush(ErrOutput);
+  AtomicExchangeInt32(GIntegrityFaultDiagnosticWritten, 1);
 end;
 
 { True once any thread has reported an integrity fault. }
 function IntegrityFaultWasReported: Boolean;
 begin
   Result := GIntegrityFaultReported <> 0;
+end;
+
+{ Ends the process on an integrity fault, from whichever thread got here first.
+
+  Not Halt, and that is the whole point of this routine. Halt runs unit
+  finalization on the calling thread before the process dies, and on a worker
+  thread that tears down process-wide RTL state — the thread manager included —
+  while peer workers are still executing tests. The next threading operation in
+  a peer then fails with the RTL's own 'Thread error' (sysconst.SThreadError),
+  the testing library's generic per-test arm converts it into a recorded test
+  failure, and the abort prints an ordinary-looking red test line for a test
+  that never really failed. Measured at ~1 aborting run in 75 before this, and
+  provably the halt's doing: removing only the worker-side halt took it to zero
+  in 300 runs, and 40 non-aborting runs of the same files never produced one.
+
+  Exiting without finalization removes the window rather than papering over it,
+  and it trusts the suspect heap less, not more: no finalizer runs on a heap the
+  engine has already said it cannot vouch for. Buffered stdout dies with it,
+  which is exactly right — a run that stopped mid-way has no summary worth
+  flushing. The diagnostic survives because it is flushed at the point of the
+  fault, and because of the wait below. }
+procedure TerminateAfterIntegrityFault;
+var
+  Waited: Integer;
+begin
+  { Never overtake the reporting thread. Whoever lost the report gate would
+    otherwise end the process while the winner is still inside its write, and
+    the abort would truncate its own diagnostic. }
+  Waited := 0;
+  while (GIntegrityFaultDiagnosticWritten = 0) and
+    (Waited < INTEGRITY_DIAGNOSTIC_WAIT_MS) do
+  begin
+    Sleep(1);
+    Inc(Waited);
+  end;
+  TerminateProcessNow(EXIT_CODE_INTEGRITY_FAULT);
 end;
 
 { Reports the fault and stops the process. Deliberately not an unwind: the
@@ -310,7 +373,7 @@ procedure AbortRunOnIntegrityFault(const AFileName: string;
   const AException: Exception);
 begin
   ReportIntegrityFault(AFileName, AException);
-  Halt(EXIT_CODE_INTEGRITY_FAULT);
+  TerminateAfterIntegrityFault;
 end;
 
 function MakeEmptyTestResult(const AScriptResult: TGocciaObjectValue;
@@ -1542,22 +1605,15 @@ begin
         the process itself. Graceful shutdown on a suspect heap was never a
         goal (ADR 0109).
 
-        Two consequences, both measured rather than assumed. Halting from a
-        secondary thread does end the process with this code on our targets,
-        and several threads doing it at once is safe — eight concurrent halts
-        exit cleanly, so a second faulting worker needs no special case. And a
-        peer worker that is mid-test when the process starts exiting can lose
-        its thread runtime and print one ordinary-looking failure line ("Thread
-        error") before it dies. That is cosmetic: the exit code, the single
-        diagnostic and the absence of a summary are unaffected, and silencing
-        it would mean coordinating a clean stop across threads on the very heap
-        this abort exists because it cannot trust. }
+        Ending it means TerminateAfterIntegrityFault, not Halt. Halt would run
+        unit finalization on this thread and tear the RTL down under peers that
+        are still running tests; see that routine for the measurements. }
       if IsEngineIntegrityFault(E) then
       begin
         ReportIntegrityFault(AFileName, E);
         if Assigned(FActiveCancelFlag) then
           FActiveCancelFlag.Cancel;
-        Halt(EXIT_CODE_INTEGRITY_FAULT);
+        TerminateAfterIntegrityFault;
       end;
       WorkerResults^[AIndex].ErrorMessage := E.Message;
       WorkerResults^[AIndex].Failed := 1;
@@ -1699,7 +1755,7 @@ begin
       window aggregating and printing a summary that the process is about to
       truncate at an arbitrary point. }
     if IntegrityFaultWasReported then
-      Halt(EXIT_CODE_INTEGRITY_FAULT);
+      TerminateAfterIntegrityFault;
     WorkerMemoryStats := Pool.MemoryStats;
     if Pool.EnableCoverage and (TGocciaCoverageTracker.Instance <> nil) then
       Pool.MergeCoverageInto(TGocciaCoverageTracker.Instance);
