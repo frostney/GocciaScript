@@ -202,6 +202,16 @@ type
     property Results: TGocciaWorkerResultArray read FResults;
     property MemoryStats: TCLIJSONMemoryStats read FMemoryStats;
     property WorkerCount: Integer read FWorkerCount;
+    { This run's stop signal, exposed so a worker callback can cancel the queue
+      without holding a reference to the pool itself. That distinction is a
+      lifetime one, not a convenience: the pool is freed while an abandoned
+      worker is still running, so a callback that cached the pool could call
+      into freed memory, whereas the flag is leaked rather than freed the
+      moment any worker is abandoned (see Destroy) — precisely the case in
+      which a zombie can still reach for it. Read it before RunAll; RunAll
+      replaces the flag when the previous run leaked one, so a pool that is
+      being reused must be re-read rather than cached across runs. }
+    property CancelFlag: TGocciaCancellationFlag read FCancelFlag;
     { Reads the shared flag under its lock, so callers never see a torn
       or stale value while workers are still running. }
     property Cancelled: Boolean read GetCancelled;

@@ -370,6 +370,38 @@ or a reproducible failure list — use `--jobs=1`.
 ./build/GocciaTestRunner tests --jobs=4
 ```
 
+#### Engine-integrity faults abort the run
+
+There is one stop the runner makes on its own, without being asked for it. An
+**engine-integrity fault** — a use-after-free, an invalid dereference, a heap
+whose own bookkeeping is destroyed — unwinds past every guest `catch` to the
+host ([ADR 0109](adr/0109-engine-integrity-faults-are-uncatchable.md)), and when
+one escapes a test file's execution or the end-of-run inline-snapshot
+write-back, the whole run stops instead of the file being recorded as one more
+failure. Every later file would be executing on state the engine has already
+lost track of, so whatever it reported would mean nothing. (Those are the paths
+that abort. A fault from the runner's own setup — argument parsing, path
+expansion, config discovery — still lands in the shared CLI error handler that
+every Goccia binary uses, and exits `1` with no `Integrity fault:` line.)
+
+The runner names the faulting file and the exception class on stderr under a
+fixed prefix, stops dispatching files (cancelling the worker queue under
+`--jobs`), and exits **70**:
+
+```text
+Integrity fault: EObjectCheck in tests/some/file.js: Object reference is Nil
+Integrity fault: the engine can no longer vouch for its own state, so the run is aborted and the remaining files were not executed.
+```
+
+No summary and no JSON envelope follow — a run that stopped mid-way has no total
+worth reporting. Grep CI logs for `Integrity fault:` to find these. The exit
+code is distinct from the ordinary failure exit `1` on purpose, so a harness can
+tell a suite that failed from a suite that stopped being trustworthy; see [CLI
+Conventions](contributing/cli-conventions.md#exit-codes). A refused allocation
+under `--max-memory` is deliberately **not** one of these: it is a verdict on
+one file delivered by an intact heap, so it stays a per-file failure and the run
+carries on.
+
 ### Snapshot Testing
 
 `toMatchSnapshot()` writes external snapshots to

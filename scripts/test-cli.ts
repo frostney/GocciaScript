@@ -2481,6 +2481,64 @@ const ASSIGNMENT_FAULT_SLACK = 147_000;
   }
 }
 
+// An ordinary failing test file is still an ordinary failing test file. The
+// runner now aborts the whole run — exit 70, no summary — when an engine
+// integrity fault reaches one of its per-file arms (ADR 0109, "Host tier: the
+// test runner"), and the failure mode worth guarding against is that policy
+// widening to catch things it was never meant to. A failed assertion is a
+// verdict on one file delivered by a sound heap: it stays exit 1, the passing
+// file beside it still runs and still counts, and the summary is unchanged.
+//
+// The abort path itself is not reachable from here. Raising a genuine
+// EObjectCheck inside a test file would take an injection hook in the runner —
+// a switch whose only purpose is to corrupt a production binary on request —
+// and that is not worth shipping for a test; the abort was verified by hand
+// against a temporary build instead. What this block locks is the contract the
+// abort must not disturb, in both execution modes and both --jobs shapes,
+// since the sequential and parallel paths reach the arms differently.
+console.log("TestRunner (a failing file stays exit 1, not an integrity abort)...");
+{
+  const failTmp = mkdtemp("goccia-runner-fail-");
+  try {
+    writeFileSync(
+      join(failTmp, "failing.test.js"),
+      'describe("d", () => {\n  test("fails", () => {\n    expect(1).toBe(2);\n  });\n});\n',
+    );
+    writeFileSync(
+      join(failTmp, "passing.test.js"),
+      'describe("d", () => {\n  test("passes", () => {\n    expect(1).toBe(1);\n  });\n});\n',
+    );
+    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+      for (const jobsArg of ["--jobs=1", "--jobs=2"]) {
+        const label = `${modeArgs.length > 0 ? "bytecode" : "interpreted"} ${jobsArg}`;
+        const proc = Bun.spawnSync(
+          [TESTRUNNER, failTmp, "--no-progress", jobsArg, ...modeArgs],
+          { stdout: "pipe", stderr: "pipe" },
+        );
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        if (out.includes("Integrity fault:"))
+          throw new Error(`TestRunner (${label}) treated a failed assertion as an integrity fault: ${out}`);
+        if (proc.exitCode !== 1)
+          throw new Error(`TestRunner (${label}) should exit 1 on a failed test, got ${proc.exitCode}: ${out}`);
+        // The report shape the abort must leave alone: the failing file counted
+        // once, the file beside it still executed, and the failure named.
+        for (const expected of [
+          "Test Results Test Files: 2",
+          "Test Results Run Tests: 2",
+          "Test Results Passed: 1 (50.00%)",
+          "Test Results Failed: 1 (50.00%)",
+          'Test "fails" in suite "d": Expected 1 to be 2',
+        ]) {
+          if (!out.includes(expected))
+            throw new Error(`TestRunner (${label}) report lost "${expected}": ${out}`);
+        }
+      }
+    }
+  } finally {
+    clean(failTmp);
+  }
+}
+
 console.log("--max-memory (a charged reservation collects before it refuses)...");
 {
   // A charged reservation R used to be refused without collecting at all

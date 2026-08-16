@@ -110,6 +110,70 @@ module and engine domain invariants), and `EInvalidCast`. The authoritative list
 with the reason for each membership and each exclusion, stays in
 `Goccia.EngineFault.pas` and is not duplicated elsewhere.
 
+### Host tier: the test runner
+
+Re-raising past every conversion boundary only moves the decision up one level:
+it hands the fault to whatever host called `Engine.Execute`. `GocciaTestRunner`
+is that host for the entire JavaScript suite, and it had the same generic arms
+one tier up — one per execution mode, one in the sequential aggregator, one in
+the parallel worker body — each of which relabelled an escaped fault as "this
+file failed" and moved on to the next of roughly fifteen hundred files. That is
+the boundary bug again with a results row in place of the guest's `catch`: the
+suite would go on reporting passes and failures for the rest of the run from a
+process that had already lost track of its heap, and the verdict would be
+worthless without ever looking wrong.
+
+So the runner **aborts the run** when `IsEngineIntegrityFault` holds at one of
+those arms, and at the end-of-run inline-snapshot write-back, whose own arm
+would otherwise file a fault over the recorded results as one recorded
+finalization failure and publish the results anyway. It writes a diagnostic naming the faulting file and the exception
+class to stderr under a fixed `Integrity fault:` prefix, flushes it, stops
+dispatching files, and exits `70` — sysexits' `EX_SOFTWARE`, chosen so it is
+distinct from `1` (the suite ran and reported failures) and `2` (the invocation
+was unusable) and a harness can tell "these tests failed" from "stop believing
+this process" (see [CLI
+Conventions](../contributing/cli-conventions.md#exit-codes)). The two per-mode
+arms only re-raise, which keeps one abort site per tier: the sequential
+aggregator for a `--jobs=1` run, the worker body for a parallel one. A faulting
+worker cancels the pool's shared queue rather than halting from a thread — that
+queue is the pool's own stop signal, so files already in flight finish or are
+marked cancelled and `RunAll` returns normally — and the main thread halts the
+moment it does, before the aggregation reads a single worker slot. The abort is
+deliberately not an unwind: the aggregation would read the very objects the
+fault calls into question, and the summary at the end of it would overwrite the
+exit code with a pass/fail verdict the process is in no position to give.
+
+Two mechanics are worth naming because the obvious version of each is wrong. A
+faulting worker cancels through the pool's cancellation flag rather than through
+the pool object: the pool is freed while an abandoned worker is still running,
+and it leaks the flag rather than freeing it for exactly that reason, so the
+flag is the only handle a zombie can safely hold. And the main thread's decision
+to abort rests on a process-level first-fault flag, not only on the sentinel the
+worker returns — if the watchdog abandons the *faulting* worker, its slot is
+dropped and rewritten as a timeout, and a run that had already printed "the run
+is aborted" would go on to print a full summary. That flag also settles who
+writes the diagnostic: faults arrive on worker threads, corruption that reaches
+one worker can reach two, and first-fault-wins keeps the two of them from
+shredding the message between them.
+
+This is one tier's policy, not a guarantee about every exit path. The shared CLI
+entry point every Goccia binary runs under (`TGocciaApplication.Run`) still ends
+in a generic arm of its own, so a fault raised outside per-file execution and
+the snapshot flush — argument parsing, path expansion, config discovery — is
+still reported as an ordinary error and exits `1` with no `Integrity fault:`
+line. Closing that one is a change to every CLI binary at once and belongs to
+its own decision.
+
+The limit family keeps its per-file treatment, and the contrast is the argument.
+`TGocciaMemoryLimitError` is uncatchable *by the guest* for the reason above,
+but it is still a verdict on one test file delivered by an intact heap: the file
+asked for more than the budget allowed, the runner records the refusal, and the
+next file's result means exactly what it says. An integrity fault is not a
+verdict on the file at all — it is the engine reporting that it can no longer
+vouch for anything, that file's result included. Per-file isolation was rejected
+for it on exactly that ground: isolation presupposes the failure is contained,
+and containment is the one thing an integrity fault disproves.
+
 ## Consequences
 
 Embedders can now see these classes escape `Engine.Execute`. They could always
@@ -129,3 +193,11 @@ made for the hardening programme — find the bugs rather than jail them.
 `Goccia.MemoryLimit.Test.pas` covers both families in both execution modes, with
 a native that raises `EObjectCheck` from inside guest code and asserts the class
 reaches the host rather than the script's `catch`.
+
+The runner's abort has no such automated coverage, and deliberately so: reaching
+it needs a fault raised inside a test file's execution, and the only way to
+arrange that would be an injection hook in the runner itself — a switch whose
+sole purpose is to corrupt a production binary on request. The behaviour was
+verified by hand with a temporary local build, in both execution modes and both
+`--jobs` shapes; what CI keeps honest is the surrounding contract, that an
+ordinary failing file still exits `1` with an unchanged report.
