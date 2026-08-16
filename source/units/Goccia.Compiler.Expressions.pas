@@ -5899,7 +5899,8 @@ procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt16);
 var
   LocalIdx, UpvalIdx: Integer;
-  Slot, RegVal, RegResult, RegTemp, CondReg, ArgReg, ObjReg, KeyReg: UInt16;
+  Slot, RegVal, RegOld, RegResult, RegTemp, CondReg, ArgReg, ObjReg,
+    KeyReg: UInt16;
   ReferenceReg: Integer;
   NameIdx: UInt16;
   Op, FloatOp: TGocciaOpCode;
@@ -6122,17 +6123,33 @@ begin
       Exit;
     end;
     Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+    // The type hint has to be sampled here, together with the value it
+    // describes: compiling the right-hand side can rebind the target and
+    // rewrite its hint, and the operand registers below still hold the value
+    // read before that happened. Reading the hint afterwards would let
+    // `let x = 'a'; x += ((x = 5), 2)` take the unguarded float path against a
+    // string operand.
+    LocalType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
+    // ES2026 §13.15.2 step 3: GetValue(lRef) runs BEFORE step 4 evaluates the
+    // right-hand side, so the old value has to be captured into its own
+    // register first. Naming the local's slot as the operator's operand would
+    // instead sample it after the right-hand side ran, and a right-hand side
+    // that rebinds the target (`x += ((x = 10), 100)`) would then be folded
+    // against the new value. OP_GET_LOCAL also performs the GetValue TDZ check
+    // that reading the raw slot skips.
+    RegOld := ACtx.Scope.AllocateRegister;
+    EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, RegOld, Slot));
     RegVal := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(AExpr.Value, RegVal);
 
-    LocalType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
     if ACtx.Scope.GetLocal(LocalIdx).IsConst then
     begin
       if ShouldIgnoreNonStrictImmutableLocalAssignment(ACtx,
          ACtx.Scope.GetLocal(LocalIdx)) then
-        EmitInstruction(ACtx, EncodeABC(Op, ADest, Slot, RegVal))
+        EmitInstruction(ACtx, EncodeABC(Op, ADest, RegOld, RegVal))
       else
         EmitConstAssignmentError(ACtx);
+      ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
       Exit;
     end;
@@ -6143,10 +6160,10 @@ begin
        IsArithmeticCompoundAssign(AExpr.Operator, ArithOp) and
        TryFloatOp(ArithOp, FloatOp) then
     begin
-      EmitInstruction(ACtx, EncodeABC(FloatOp, RegTemp, Slot, RegVal))
+      EmitInstruction(ACtx, EncodeABC(FloatOp, RegTemp, RegOld, RegVal))
     end
     else
-      EmitInstruction(ACtx, EncodeABC(Op, RegTemp, Slot, RegVal));
+      EmitInstruction(ACtx, EncodeABC(Op, RegTemp, RegOld, RegVal));
     ResultType := sltUntyped;
     if IsArithmeticCompoundAssign(AExpr.Operator, ArithOp) and
        IsKnownNumeric(LocalType) and IsKnownNumeric(ValType) then
@@ -6162,6 +6179,7 @@ begin
     end;
     if ADest <> Slot then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegTemp, 0));
+    ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
     Exit;
