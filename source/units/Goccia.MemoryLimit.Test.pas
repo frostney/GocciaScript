@@ -6,15 +6,21 @@ uses
   Classes,
   SysUtils,
 
+  SandboxVirtualFileSystem,
   TestingPascalLibrary,
 
   Goccia.Arguments.Collection,
+  Goccia.CapabilityAudit,
   Goccia.Engine,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
   Goccia.MemoryLimit,
+  Goccia.Runtime,
+  Goccia.RuntimeExtensions.Fetch,
+  Goccia.RuntimeExtensions.Sandbox,
+  Goccia.Sandbox.Context,
   Goccia.TestSetup,
   Goccia.Values.NativeFunction,
   Goccia.Values.Primitives;
@@ -22,10 +28,33 @@ uses
 type
   TMemoryLimitTests = class(TTestSuite)
   private
+    { The class the sandbox injection points raise, or nil for "raise nothing".
+      Set by SandboxFaultEscapesScript for the duration of one run. }
+    FSandboxFaultClass: ExceptClass;
+    { Arms FaultEscapesScript to install the fetch runtime extension, which is
+      what puts Response in scope, and to give the engine an audit sink that
+      refuses delivery so any capability the script exercises raises. }
+    FInstallFailingAuditSink: Boolean;
+    { The refusing sink itself. EmitCapabilityAudit wraps whatever it raises in
+      EGocciaCapabilityAuditDeliveryError. }
+    procedure FailingAuditSink(const AEvent: TGocciaCapabilityAuditEvent);
     { The native the integrity-fault tests call. Raises the same class a virtual
       call through a collected value raises under `$OBJECTCHECKS ON`, which is
       how a real unrooted-temporary bug arrives. }
     function RaiseIntegrityFault(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    { Raises whatever FSandboxFaultClass names. The refusal comes from the gate
+      itself rather than a hand-built instance, so the test exercises the same
+      object a real over-budget allocation produces. }
+    procedure RaiseConfiguredFault;
+    { Root-clamp hook, installed on the sandbox filesystem after the extension
+      has taken its own. It fires from inside TGocciaSandboxFsJob.Execute, so it
+      injects the fault at the job's completion boundary. }
+    procedure SandboxRootClamp(const APath, ABase, ACanonicalPath: string);
+    { Guest-callable native, reached through an options-object getter, so it
+      injects the same fault at the synchronous fs.promises argument boundary
+      that RejectedPromiseFromException guards. }
+    function RaiseSandboxFault(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     { Runs ASource under a budget that cannot fit the over-budget allocation and
       with that native bound as a global, and answers whether AFaultClass
@@ -34,6 +63,13 @@ type
     function FaultEscapesScript(const ASource: string;
       const AExecutor: TGocciaExecutor; const AName: string;
       const AFaultClass: ExceptClass): Boolean;
+    { The same question for a module running against the sandbox runtime
+      extension. Both sandbox injection points are armed to raise
+      AInjectedClass; pass nil to arm neither and let the ordinary filesystem
+      error through. }
+    function SandboxFaultEscapesScript(const ASource: string;
+      const AExecutor: TGocciaExecutor; const AName: string;
+      const AEscapingClass, AInjectedClass: ExceptClass): Boolean;
     procedure TestGateRefusesOverBudgetRequest;
     procedure TestGatePermitsInBudgetRequest;
     procedure TestSyncCatchCannotSwallowRefusal;
@@ -43,6 +79,10 @@ type
     procedure TestScriptErrorsStayCatchable;
     procedure TestSyncCatchCannotSwallowIntegrityFault;
     procedure TestAsyncFunctionCatchCannotSwallowIntegrityFault;
+    procedure TestSandboxFsPromiseCannotSwallowRefusal;
+    procedure TestSandboxFsPromiseCannotSwallowIntegrityFault;
+    procedure TestSandboxFsPromiseErrorsStayCatchable;
+    procedure TestResponseJsonCannotSwallowAuditDeliveryFailure;
   protected
     procedure BeforeEach; override;
   public
@@ -66,6 +106,37 @@ const
     stack trace. }
   INTEGRITY_FAULT_GLOBAL_NAME = '__gocciaRaiseIntegrityFault';
   INTEGRITY_FAULT_MESSAGE = 'Object reference is Nil';
+
+  { Name of the native the sandbox tests reach through an options getter. }
+  SANDBOX_FAULT_GLOBAL_NAME = '__gocciaRaiseSandboxFault';
+
+  { A path that escapes the sandbox root, so normalising it clamps and calls the
+    root-clamp hook. The clamp happens inside the queued filesystem job rather
+    than at the call, which is what puts the injected fault on the job's
+    completion boundary. }
+  SANDBOX_CLAMPING_PATH = '../../missing.txt';
+
+  { The queued filesystem job normalises the escaping path, the clamp hook
+    raises, and the job's completion boundary decides whether the guest's
+    `catch` sees it. }
+  SANDBOX_JOB_SOURCE =
+    'import fs from "fs";' + sLineBreak +
+    'try {' + sLineBreak +
+    '  await fs.promises.readFile("' + SANDBOX_CLAMPING_PATH + '", "utf8");' +
+    sLineBreak +
+    '} catch (e) {}';
+
+  { The options getter runs while fs.promises.readFile is still validating its
+    arguments, before anything is queued, so the fault arrives at the
+    synchronous boundary that RejectedPromiseFromException guards. }
+  SANDBOX_ARGUMENT_SOURCE =
+    'import fs from "fs";' + sLineBreak +
+    'try {' + sLineBreak +
+    '  await fs.promises.readFile("/present.txt", {' + sLineBreak +
+    '    get encoding() { return ' + SANDBOX_FAULT_GLOBAL_NAME + '(); },' +
+    sLineBreak +
+    '  });' + sLineBreak +
+    '} catch (e) {}';
 
 procedure TMemoryLimitTests.BeforeEach;
 begin
@@ -95,6 +166,20 @@ begin
     TestSyncCatchCannotSwallowIntegrityFault);
   Test('An async function body cannot swallow an engine-integrity fault',
     TestAsyncFunctionCatchCannotSwallowIntegrityFault);
+  Test('A sandbox fs promise cannot swallow a refusal',
+    TestSandboxFsPromiseCannotSwallowRefusal);
+  Test('A sandbox fs promise cannot swallow an engine-integrity fault',
+    TestSandboxFsPromiseCannotSwallowIntegrityFault);
+  Test('Sandbox filesystem errors stay catchable',
+    TestSandboxFsPromiseErrorsStayCatchable);
+  Test('Response.json cannot swallow an audit delivery failure',
+    TestResponseJsonCannotSwallowAuditDeliveryFailure);
+end;
+
+procedure TMemoryLimitTests.FailingAuditSink(
+  const AEvent: TGocciaCapabilityAuditEvent);
+begin
+  raise Exception.Create('audit sink refused ' + AEvent.Subject);
 end;
 
 function TMemoryLimitTests.RaiseIntegrityFault(
@@ -103,6 +188,33 @@ function TMemoryLimitTests.RaiseIntegrityFault(
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   raise EObjectCheck.Create(INTEGRITY_FAULT_MESSAGE);
+end;
+
+procedure TMemoryLimitTests.RaiseConfiguredFault;
+begin
+  if FSandboxFaultClass = nil then
+    Exit;
+  if FSandboxFaultClass = TGocciaMemoryLimitError then
+    { Ask the gate for more than the budget the caller installed, so the test
+      asserts on the exception the engine really raises rather than one the
+      test built. }
+    RequireNativeBytes(Int64(BUDGET_HEADROOM_BYTES) * 4)
+  else
+    raise EObjectCheck.Create(INTEGRITY_FAULT_MESSAGE);
+end;
+
+procedure TMemoryLimitTests.SandboxRootClamp(const APath, ABase,
+  ACanonicalPath: string);
+begin
+  RaiseConfiguredFault;
+end;
+
+function TMemoryLimitTests.RaiseSandboxFault(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  RaiseConfiguredFault;
 end;
 
 function TMemoryLimitTests.FaultEscapesScript(const ASource: string;
@@ -124,6 +236,11 @@ begin
     Engine.InjectGlobal(INTEGRITY_FAULT_GLOBAL_NAME,
       TGocciaNativeFunctionValue.CreateWithoutPrototype(RaiseIntegrityFault,
         INTEGRITY_FAULT_GLOBAL_NAME, 0));
+    if FInstallFailingAuditSink then
+    begin
+      AttachRuntime(Engine).Install(TGocciaFetchRuntimeExtension.Create);
+      Engine.CapabilityAuditSink := FailingAuditSink;
+    end;
     if Assigned(GC) then
     begin
       PreviousMaxBytes := GC.MaxBytes;
@@ -142,6 +259,61 @@ begin
     if Assigned(GC) then
       GC.MaxBytes := PreviousMaxBytes;
     Engine.Free;
+    AExecutor.Free;
+    Source.Free;
+  end;
+end;
+
+function TMemoryLimitTests.SandboxFaultEscapesScript(const ASource: string;
+  const AExecutor: TGocciaExecutor; const AName: string;
+  const AEscapingClass, AInjectedClass: ExceptClass): Boolean;
+var
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  Runtime: TGocciaRuntimeCore;
+  Context: TGocciaSandboxContext;
+  GC: TGarbageCollector;
+  PreviousMaxBytes: Int64;
+begin
+  Result := False;
+  Source := TStringList.Create;
+  Source.Text := ASource;
+  Engine := TGocciaEngine.Create(AName, Source, AExecutor);
+  Context := TGocciaSandboxContext.Create;
+  GC := TGarbageCollector.Instance;
+  PreviousMaxBytes := 0;
+  FSandboxFaultClass := AInjectedClass;
+  try
+    Engine.SourceType := stModule;
+    Engine.InjectGlobal(SANDBOX_FAULT_GLOBAL_NAME,
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(RaiseSandboxFault,
+        SANDBOX_FAULT_GLOBAL_NAME, 0));
+    Runtime := AttachRuntime(Engine);
+    Runtime.Install(TGocciaSandboxRuntimeExtension.Create(Context));
+    { After Install, so the extension's own audit-emitting hook is the one being
+      replaced rather than the other way round. }
+    Context.Fs.RootClampCallback := SandboxRootClamp;
+
+    if Assigned(GC) then
+    begin
+      PreviousMaxBytes := GC.MaxBytes;
+      GC.MaxBytes := GC.BytesAllocated + BUDGET_HEADROOM_BYTES;
+    end;
+    try
+      Engine.Execute;
+    except
+      on E: Exception do
+        if E.InheritsFrom(AEscapingClass) then
+          Result := True
+        else
+          raise;
+    end;
+  finally
+    FSandboxFaultClass := nil;
+    if Assigned(GC) then
+      GC.MaxBytes := PreviousMaxBytes;
+    Engine.Free;
+    Context.Free;
     AExecutor.Free;
     Source.Free;
   end;
@@ -351,6 +523,111 @@ begin
   Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
     'integrity-fault-async-bytecode.js', EObjectCheck)).ToBe(True);
+end;
+
+procedure TMemoryLimitTests.TestSandboxFsPromiseCannotSwallowRefusal;
+begin
+  { fs.promises hands the guest a promise, and a promise is a `catch` away from
+    absorbing whatever settles it. Both sandbox boundaries used to convert every
+    Pascal exception into a rejection, so the budget stopped being a ceiling the
+    moment a script wrapped its filesystem calls in try/catch. }
+  Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_JOB_SOURCE,
+    TGocciaInterpreterExecutor.Create, 'sandbox-refusal-job-interpreted.js',
+    TGocciaMemoryLimitError, TGocciaMemoryLimitError)).ToBe(True);
+  Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_JOB_SOURCE,
+    TGocciaBytecodeExecutor.Create, 'sandbox-refusal-job-bytecode.js',
+    TGocciaMemoryLimitError, TGocciaMemoryLimitError)).ToBe(True);
+  Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_ARGUMENT_SOURCE,
+    TGocciaInterpreterExecutor.Create,
+    'sandbox-refusal-argument-interpreted.js',
+    TGocciaMemoryLimitError, TGocciaMemoryLimitError)).ToBe(True);
+  Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_ARGUMENT_SOURCE,
+    TGocciaBytecodeExecutor.Create, 'sandbox-refusal-argument-bytecode.js',
+    TGocciaMemoryLimitError, TGocciaMemoryLimitError)).ToBe(True);
+end;
+
+procedure TMemoryLimitTests.TestSandboxFsPromiseCannotSwallowIntegrityFault;
+begin
+  { The stronger half of the same guard: a use-after-free reaching either
+    sandbox boundary must not become a rejected promise the guest catches and
+    carries on from. }
+  Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_JOB_SOURCE,
+    TGocciaInterpreterExecutor.Create, 'sandbox-integrity-job-interpreted.js',
+    EObjectCheck, EObjectCheck)).ToBe(True);
+  Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_JOB_SOURCE,
+    TGocciaBytecodeExecutor.Create, 'sandbox-integrity-job-bytecode.js',
+    EObjectCheck, EObjectCheck)).ToBe(True);
+  Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_ARGUMENT_SOURCE,
+    TGocciaInterpreterExecutor.Create,
+    'sandbox-integrity-argument-interpreted.js',
+    EObjectCheck, EObjectCheck)).ToBe(True);
+  Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_ARGUMENT_SOURCE,
+    TGocciaBytecodeExecutor.Create, 'sandbox-integrity-argument-bytecode.js',
+    EObjectCheck, EObjectCheck)).ToBe(True);
+end;
+
+procedure TMemoryLimitTests.TestSandboxFsPromiseErrorsStayCatchable;
+const
+  { Nothing is armed here, so the only thing that can settle the promise is the
+    ENOENT the virtual filesystem produces. The script asserts it arrived as a
+    Node-shaped error object; if it did not, the throw escapes as an exception
+    that is not the class under test and the helper propagates it. }
+  SourceText =
+    'import fs from "fs";' + sLineBreak +
+    'let caught = null;' + sLineBreak +
+    'try {' + sLineBreak +
+    '  await fs.promises.readFile("/missing.txt", "utf8");' + sLineBreak +
+    '} catch (e) {' + sLineBreak +
+    '  caught = e;' + sLineBreak +
+    '}' + sLineBreak +
+    'if (caught === null || caught.code !== "ENOENT") {' + sLineBreak +
+    '  throw new Error("sandbox fs rejection was not catchable");' +
+    sLineBreak +
+    '}';
+begin
+  { The counterweight to the two guards above: hardening the boundary must not
+    cost the sandbox its ordinary, guest-visible filesystem errors. Asserting
+    against Exception rather than a specific class makes any escape at all a
+    failure. }
+  Expect<Boolean>(SandboxFaultEscapesScript(SourceText,
+    TGocciaInterpreterExecutor.Create, 'sandbox-catchable-interpreted.js',
+    Exception, nil)).ToBe(False);
+  Expect<Boolean>(SandboxFaultEscapesScript(SourceText,
+    TGocciaBytecodeExecutor.Create, 'sandbox-catchable-bytecode.js',
+    Exception, nil)).ToBe(False);
+end;
+
+procedure TMemoryLimitTests.TestResponseJsonCannotSwallowAuditDeliveryFailure;
+const
+  { ES2026 §27.2.1.3.2 step 9 has Resolve read `then` off the parsed body, and
+    that read walks the prototype chain, so a getter on Object.prototype runs
+    guest code inside Response.json's conversion arm. The getter calls the
+    Function constructor, which is capability-audited; with a sink that cannot
+    deliver, EmitCapabilityAudit raises from there. }
+  SourceText =
+    'Object.defineProperty(Object.prototype, "then", {' + sLineBreak +
+    '  get: () => { Function("return 1"); },' + sLineBreak +
+    '  configurable: true,' + sLineBreak +
+    '});' + sLineBreak +
+    'new Response(''{"a":1}'').json();';
+begin
+  { The arm around the parse rejects with a SyntaxError, so before the guard it
+    reported an undeliverable audit record as a malformed body and the host
+    heard nothing at all. Being the only guarded block in this change that runs
+    guest code, it is also the only one where omitting the capability-audit
+    class from the allowlist was observable — which is why the allowlist is now
+    stated once, in Goccia.UncatchableFault.pas, rather than per boundary. }
+  FInstallFailingAuditSink := True;
+  try
+    Expect<Boolean>(FaultEscapesScript(SourceText,
+      TGocciaInterpreterExecutor.Create, 'response-json-audit-interpreted.js',
+      EGocciaCapabilityAuditDeliveryError)).ToBe(True);
+    Expect<Boolean>(FaultEscapesScript(SourceText,
+      TGocciaBytecodeExecutor.Create, 'response-json-audit-bytecode.js',
+      EGocciaCapabilityAuditDeliveryError)).ToBe(True);
+  finally
+    FInstallFailingAuditSink := False;
+  end;
 end;
 
 begin

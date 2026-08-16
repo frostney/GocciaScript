@@ -156,6 +156,7 @@ uses
   Goccia.Realm,
   Goccia.Sandbox.FileSystemErrors,
   Goccia.Shims,
+  Goccia.UncatchableFault,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.Error,
@@ -280,8 +281,20 @@ end;
 function RejectedPromiseFromException(
   const AException: Exception): TGocciaPromiseValue;
 begin
-  if AException is EGocciaCapabilityAuditDeliveryError then
-    raise AException
+  { Opacity is decided before conversion, because everything below this test
+    turns a Pascal exception into something `.catch` can absorb.
+
+    This runs inside the `on E: Exception` handler that caught AException, but
+    not lexically, so a bare `raise` will not compile. `raise AException`
+    re-raised the object by name, which starts a second propagation of an
+    exception the enclosing handler still owns and frees on exit — the dangling
+    re-raise behind the spurious access violations on the async paths (see the
+    same note at PromiseRejectionReasonFromException in
+    Goccia.Builtins.GlobalPromise.pas). AcquireExceptionObject takes a
+    reference to the in-flight exception so the enclosing handler no longer
+    frees it out from under this re-raise. }
+  if IsUncatchableFault(AException) then
+    raise Exception(AcquireExceptionObject)
   else if AException is EGocciaBytecodeThrow then
     Result := RejectedPromise(EGocciaBytecodeThrow(AException).ThrownValue)
   else if AException is TGocciaThrowValue then
@@ -424,10 +437,16 @@ begin
       CompleteFailure(E.Value);
       Exit;
     end;
-    on E: EGocciaCapabilityAuditDeliveryError do
-      raise;
     on E: Exception do
     begin
+      { CompleteFailure settles the promise the guest is awaiting (or calls its
+        callback with an Error), so absorbing a ceiling or an integrity fault
+        here would hand it straight to `catch`. The job runs from
+        TGocciaMicrotaskQueue.ExecuteTask on the engine's own thread, and the
+        task carries no result promise, so every arm there re-raises too and
+        the fault keeps unwinding out of DrainQueue to the host. }
+      if IsUncatchableFault(E) then
+        raise;
       CompleteFailure(CreateErrorObject(ERROR_NAME, E.Message));
       Exit;
     end;
@@ -1070,10 +1089,14 @@ begin
   except
     on E: TGocciaThrowValue do
       Result := RejectedPromise(E.Value);
-    on E: EGocciaCapabilityAuditDeliveryError do
-      raise;
     on E: Exception do
+    begin
+      { A rejected promise is guest-catchable, so the opaque families must be
+        turned away before the conversion below. }
+      if IsUncatchableFault(E) then
+        raise;
       Result := RejectedPromise(TGocciaStringLiteralValue.Create(E.Message));
+    end;
   end;
 end;
 
@@ -1090,10 +1113,14 @@ begin
   except
     on E: TGocciaThrowValue do
       Result := RejectedPromise(E.Value);
-    on E: EGocciaCapabilityAuditDeliveryError do
-      raise;
     on E: Exception do
+    begin
+      { A rejected promise is guest-catchable, so the opaque families must be
+        turned away before the conversion below. }
+      if IsUncatchableFault(E) then
+        raise;
       Result := RejectedPromise(TGocciaStringLiteralValue.Create(E.Message));
+    end;
   end;
 end;
 
@@ -1116,10 +1143,14 @@ begin
   except
     on E: TGocciaThrowValue do
       Result := RejectedPromise(E.Value);
-    on E: EGocciaCapabilityAuditDeliveryError do
-      raise;
     on E: Exception do
+    begin
+      { A rejected promise is guest-catchable, so the opaque families must be
+        turned away before the conversion below. }
+      if IsUncatchableFault(E) then
+        raise;
       Result := RejectedPromise(TGocciaStringLiteralValue.Create(E.Message));
+    end;
   end;
 end;
 

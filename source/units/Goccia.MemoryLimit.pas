@@ -34,11 +34,16 @@ type
     that would otherwise convert a Pascal exception into something the guest
     can observe — the evaluator's try/catch statement paths, the VM's
     async-iterator and dynamic-import arms, the microtask, await, generator
-    and promise-reaction boundaries, Array.fromAsync, and the test library's
-    toThrow — names this class in its re-raise allowlist ahead of its generic
-    `on E: Exception` arm. A new boundary that omits the arm makes the
-    ceiling catchable again, which is what Goccia.MemoryLimit.Test.pas
-    guards against in both execution modes.
+    and promise-reaction boundaries, Array.fromAsync, the sandbox's
+    fs.promises and shell boundaries, Response.json, the benchmark run loop,
+    and the test library's toThrow — names this class in its re-raise
+    allowlist ahead of its generic `on E: Exception` arm, either as an
+    explicit `on E: TGocciaMemoryLimitError do raise;` or through the shared
+    IsUncatchableFault predicate in Goccia.UncatchableFault.pas. A new
+    boundary that omits it makes the ceiling catchable again, which is what
+    Goccia.MemoryLimit.Test.pas guards against in both execution modes.
+    Prefer the shared predicate at new boundaries: an allowlist spelled out by
+    hand is one that can be spelled out incompletely.
 
     The same boundary list carries a second, wider guard: where the allowlist
     above names a class, the generic arm opens with
