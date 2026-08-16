@@ -12,6 +12,7 @@
 - **Generation-counter marking** — O(1) mark-clear via `AdvanceMark` instead of O(n) flag reset per collection; explicit collections are serialized across worker threads because some intrinsic objects are shared
 - **Pinned singletons** — `undefined`, `null`, `true`, `false`, `NaN`, `Infinity` are pinned once at engine startup; built-in prototypes are pinned per-engine via [realm slots](core-patterns.md#realm-ownership--slot-registration) and released atomically when the realm is destroyed
 - **Adaptive threshold** — Collection frequency scales with surviving object count to amortize cost on large heaps
+- **Two refusal contracts** — the `--max-memory` ceiling refuses a *charged* allocation with a catchable `RangeError`, after forcing a collection and re-testing, and a [gated growth point](#gated-growth-points) with the script-opaque `MemoryLimitError`, without collecting at all
 
 ## Value Integration
 
@@ -94,7 +95,7 @@ The GC tracks approximate heap usage via `InstanceSize` per registered object. A
 - **Default:** half of physical memory, capped at 8 GB on 64-bit or 700 MB on 32-bit. Falls back to 512 MB when OS detection fails.
 - **Override:** `--max-memory=<bytes>` sets an explicit limit.
 
-Any allocation that pushes `BytesAllocated` above `MaxBytes` raises a JavaScript `RangeError`. The error is catchable with `try/catch`; after catching, the script can call `Goccia.gc()` to free unreachable objects and retry.
+An allocation that pushes `BytesAllocated` above `MaxBytes` is refused, and *how* it is refused depends on which path it took. A **charged** allocation — one with an owner that can release it again — raises a JavaScript `RangeError`. That error is catchable with `try/catch`; after catching, the script can call `Goccia.gc()` to free unreachable objects and retry. A **gated** growth point ([below](#gated-growth-points)) instead refuses without collecting at all and raises `TGocciaMemoryLimitError`, which is opaque to the script and ends the run. The rest of this section describes the charged path; the gate's contract is stated where it is defined.
 
 The interpreter also has safe checkpoints that call `CollectForMemoryPressure` as live bytes approach the ceiling. These checkpoints protect the current expression result and active Pascal-local temporaries, allowing transient-heavy programs to reclaim unreachable values before the hard allocation guard fires. If a collection cannot bring usage below the ceiling, the next allocation still raises `RangeError`.
 

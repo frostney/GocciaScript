@@ -1648,214 +1648,717 @@ console.log("--max-memory (builtin result builders survive mid-build collections
   }
 }
 
-// The narrowing above must not have made the OTHER limiter guest-visible. A
-// charged allocation inside a parse raises the script-catchable RangeError the
-// block above pins; the growth gate (RequireNativeBytes, Goccia.MemoryLimit.pas)
-// raises TGocciaMemoryLimitError, which is opaque to the guest by design — the
-// narrowed handlers name only their own parse-error class, so the gate passes
-// straight through them, escapes to the host, and the loader reports it as
-// "Fatal error: ... would exceed the memory budget" with a nonzero exit. A guest
-// catch marker printing here would mean a parse builtin had converted the
-// ceiling into something script code can absorb and retry in a loop.
+// --- Growth-gate family -----------------------------------------------------
+//
+// The convention these blocks pin: the growth gate (RequireNativeBytes,
+// Goccia.MemoryLimit.pas) raises TGocciaMemoryLimitError, which is opaque to
+// the guest by design — it passes straight through every builtin's handler,
+// escapes to the host, and the loader reports it as "Fatal error: ... would
+// exceed the memory budget" with a nonzero exit. A guest catch marker carrying
+// that text would mean a builtin had converted the ceiling into something
+// script code can absorb and retry in a loop.
 //
 // Goccia.MemoryLimit.Test.pas guards the same convention at the executor
-// boundaries; this lives here because the gate has to be reached mid-parse,
-// which needs a measured park against a CLI-set ceiling, and because the
-// assertion is host-level (exit code plus the loader's report).
+// boundaries; this lives here because the gate has to be reached inside a
+// builtin, and because the assertion is host-level (exit code plus the
+// loader's report).
 //
-// The shape: a wide object of cheap numeric values, so the parse charges almost
-// nothing per property (~24 bytes measured) while the property map's storage
-// doubling asks for a single block far larger than the parked slack. The
-// document is built before parking, or building it — not parsing it — is what
-// would cross the ceiling.
+// WHY THIS IS NOT A CALIBRATED PROBE ANY MORE.
+//
+// The engine has two memory limiters with two different contracts, and for a
+// fixed script WHICH one refuses first is a race:
+//
+//   * The gated request is one storage doubling of a property map.
+//     TOrderedStringMap grows the entry array C -> 2C + 2 and gates the
+//     transient old + new = (3C + 2) * SizeOf(TEntry) — 24 bytes per entry on a
+//     64-bit target, 16 on i386, so every request there is two thirds the size.
+//     The bucket array is gated too, at 12 * B bytes, and that one is Int32 on
+//     every width.
+//   * The charged side — string payloads and GC-registered values — reserves
+//     through the garbage collector, which collects and re-tests before it
+//     refuses, and then raises the script-CATCHABLE RangeError.
+//
+// The gate refuses at the FIRST doubling whose request exceeds what is left of
+// the budget, so the loser of the race is decided by the charge the builtin has
+// piled up by the time that doubling is reached — a per-parser trajectory, not
+// a constant. Measured over a 4000-key document of `true` values: JSON, JSON5
+// and TOML charge 104 bytes for the whole parse (0.026 B per property), while
+// YAML holds 165,884 bytes of live intermediates mid-parse (41.5 B per
+// property). Cross that spread with the two-thirds width factor on the request
+// side and the crossing point moves by parser AND by pointer width. The i386
+// CI failure that produced this rework was exactly that: JSON.parse and
+// JSON5.parse refused through the gate on i386 as intended, and only
+// YAML.parse lost the race — by about 1% of the parked slack — and surfaced
+// the catchable RangeError instead.
+//
+// Two further sources of drift, recorded because both were live defects here:
+// the gate compares against instantaneous BytesAllocated WITHOUT collecting
+// first (unlike the charged path), so a doubling is refused or permitted
+// depending on how much collectable garbage happens to be on the heap at that
+// instant; and an assertion that itself allocates inside the region under test
+// (this block used to call Object.keys there) can be the allocation that
+// decides the outcome. A separate change is making the gate collect before it
+// refuses; nothing here depends on that landing.
+//
+// So no constant can make "the gate refuses first" true on every width for
+// every parser, and picking one by margin arithmetic is how this block broke.
+// The rework instead:
+//
+//   1. carries the contract assertion in a probe that needs no parking at all
+//      (below): a single doubling whose request exceeds the WHOLE ceiling is
+//      refused by CanAllocateNativeBytes' own arithmetic, independent of the
+//      heap, the collector, the parser and the pointer width;
+//   2. derives every parked probe's slack from what THIS build on THIS
+//      architecture actually refuses, instead of from arithmetic written down
+//      here;
+//   3. measures each builtin's charged footprint in-guest — as a peak, with a
+//      collection canary that says whether the number is a peak at all — and
+//      lets that MEASUREMENT decide which assertion applies, so a width where
+//      the race goes the other way is classified rather than failed, and a
+//      measurement that cannot support the strong claim does not get to make it;
+//   4. checks that a refusal really came from property-map growth, so a probe
+//      cannot pass on a refusal from some unrelated allocation.
+
+// The ceiling the parked probes run under. The constructed probe below sets its
+// own, because its whole point is a request that outgrows the ceiling.
+const GATE_CEILING = 4_194_304;
+// The charge measurements run under their own, far larger ceiling, so neither
+// the workload nor the collection canary they carry can come near it.
+const CHARGE_MEASURE_CEILING = 134_217_728;
+
+// The byte counts the two ENUMERABLE property-map growth shapes can ask the gate
+// for, across every plausible entry size (source/shared/OrderedStringMap.pas):
+//   entry array   C -> 2C + 2, transient (3C + 2) * SizeOf(TEntry)
+//   bucket array  B -> 2B,     transient 12 * B (Int32 on every width)
+// SizeOf(TEntry) is 24 on a 64-bit target and 16 on i386 today; it is swept
+// rather than pinned because the assertion this set backs is "the refusal came
+// from property-map growth", which must not need re-tuning when a field is
+// added to TEntry.
+//
+// Compact is the third gated shape and is deliberately absent: it reports
+// (FEntryCount + FCount) * SizeOf(TEntry), a pair that depends on how many
+// entries have been deleted, so it cannot be enumerated. It also cannot run
+// here — Compact is reached only through a delete, or through a load factor a
+// delete produced, and no probe in this family deletes a property. A refusal
+// carrying a Compact-shaped size is therefore a probe that has drifted into a
+// shape it was never meant to test, which is what this set exists to catch.
+const gatedStorageRequests: Set<number> = (() => {
+  const sizes = new Set<number>();
+  for (let entrySize = 8; entrySize <= 64; entrySize += 4) {
+    let capacity = 0;
+    for (let step = 0; step < 32; step += 1) {
+      sizes.add((3 * capacity + 2) * entrySize);
+      capacity = capacity * 2 + 2;
+    }
+  }
+  let buckets = 16;
+  for (let step = 0; step < 24; step += 1) {
+    sizes.add(12 * buckets);
+    buckets *= 2;
+  }
+  return sizes;
+})();
+
+const refusedRequestBytes = (out: string): number | null => {
+  const m = out.match(/Allocation of (\d+) bytes would exceed the memory budget/);
+  return m === null ? null : Number(m[1]);
+};
+
+type GateRun = {
+  outcome: "gate" | "charged" | "completed" | "unparked" | "other";
+  refused: number | null;
+  parkedSlack: number | null;
+  charge: number | null;
+  caught: string | null;
+  exitCode: number | null;
+  out: string;
+};
+
+// Classification is deliberately mechanical: every later assertion reads these
+// fields rather than re-matching the output, so "which limiter refused" is
+// decided in one place.
+const runGateCase = (
+  srcPath: string,
+  src: string,
+  modeArgs: readonly string[],
+  ceiling: number = GATE_CEILING,
+): GateRun => {
+  writeFileSync(srcPath, src);
+  const proc = Bun.spawnSync([LOADER, `--max-memory=${ceiling}`, ...modeArgs, srcPath], {
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: 180_000,
+  });
+  const out = proc.stdout.toString() + proc.stderr.toString();
+  const parked = out.match(/parked (?:true|false) slack (\d+)/);
+  // Signed: a negative delta is not noise, it is the canary telling us a
+  // collection ran inside the call (see measureCallCharge).
+  const charge = out.match(/^charge (-?\d+)/m);
+  const caught = out.match(/^guest-caught .*$/m);
+  const refused = refusedRequestBytes(out);
+  let outcome: GateRun["outcome"];
+  if (src.includes("parked") && !out.includes("parked true")) outcome = "unparked";
+  else if (caught !== null) outcome = "charged";
+  else if (out.includes("guest-completed")) outcome = "completed";
+  else if (refused !== null && proc.exitCode !== 0) outcome = "gate";
+  else outcome = "other";
+  return {
+    outcome,
+    refused,
+    parkedSlack: parked === null ? null : Number(parked[1]),
+    charge: charge === null ? null : Number(charge[1]),
+    caught: caught === null ? null : caught[0],
+    exitCode: proc.exitCode,
+    out,
+  };
+};
+
+// The assertions every gate probe shares, whichever limiter it ends up
+// reaching. None of them depends on a slack, a width or a parser: they say
+// that a gate refusal never becomes guest-visible, that a refusal is never
+// relabelled or emptied on its way out, and that a "budget" fatal really is
+// one — not a crash wearing the same exit code.
+const assertGateContract = (what: string, run: GateRun): void => {
+  // Most specific first, so the message names the actual failure mode: a relabel
+  // is a SyntaxError or TypeError that still carries the ceiling's text. A
+  // genuine parse or serializer error must not abort this family as a
+  // misdiagnosis — and the historical relabel that carried NO message at all is
+  // caught by the empty-message check below, not by this one.
+  if (/^guest-caught (?:SyntaxError|TypeError) ::.*would exceed the memory budget/m.test(run.out))
+    throw new Error(`${what} relabelled a memory ceiling as a parse or serializer error: ${run.out}`);
+  // Every caught line, not just the first: the guarantee must not depend on
+  // which refusal the guest happened to print first.
+  if (/^guest-caught .*would exceed the memory budget/m.test(run.out))
+    throw new Error(`${what} let the guest catch a growth-gate refusal: ${run.out}`);
+  if (/^guest-caught \S+ ::\s*$/m.test(run.out))
+    throw new Error(`${what} surfaced a refusal with an empty message: ${run.out}`);
+  // Line-wise, not whole-output: a crash fatal alongside a budget refusal is
+  // exactly the case a substring test would mask.
+  const foreignFatal = run.out
+    .split("\n")
+    .find((line) => line.includes("Fatal error") && !line.includes("would exceed the memory budget"));
+  if (foreignFatal !== undefined)
+    throw new Error(`${what} produced a fatal that is not a budget refusal (${foreignFatal.trim()}): ${run.out}`);
+  if (run.outcome === "gate") {
+    if (run.exitCode === 0)
+      throw new Error(`${what} reported a budget refusal but exited 0: ${run.out}`);
+    if (run.refused === null || !gatedStorageRequests.has(run.refused))
+      throw new Error(
+        `${what} was refused ${run.refused} bytes, which is not a property-map storage growth ` +
+          `((3C + 2) * SizeOf(TEntry), or 12 * B buckets) — the probe is passing on a refusal from ` +
+          `somewhere else and is no longer testing what it claims: ${run.out}`,
+      );
+  }
+};
+
+// The contract assertion, with no slack to calibrate — but one sizing decision,
+// stated with its margin rather than called free.
+//
+// CanAllocateNativeBytes refuses whenever the request alone exceeds MaxBytes,
+// whatever BytesAllocated happens to be — so a run that reaches a doubling
+// bigger than the entire ceiling is refused on every pointer width, at every
+// heap position, with no parking, no ballast and no slack. The live set is kept
+// near zero (the keys are Pascal strings inside the map and the values are the
+// boolean singletons, neither of which is charged; the transient key strings are
+// collected each pass), so the whole ceiling is available and the crossing is
+// decided by the request size alone.
+//
+// The sizing: under a 1 MiB ceiling the entry array's transient (3C + 2) * E
+// first exceeds the ceiling at
+//   E = 24 (64-bit today)  C = 16,382, 1,179,552 B, at property 16,383
+//   E = 16 (i386 today)    C = 32,766, 1,572,800 B, at property 32,767
+//   E = 12                 C = 32,766, 1,179,600 B, at property 32,767
+//   E =  8                 C = 65,534, 1,572,832 B, at property 65,535
+// so 300 * 300 = 90,000 properties crosses for any entry size down to 8 bytes —
+// 1.4x the properties the narrowest of those needs, and 5.5x what the current
+// 64-bit build needs. Below 8 bytes a TEntry cannot hold a string reference and
+// a pointer on any target this builds for. The two widths refuse at different
+// points, which is the part that cannot be made width-independent; the contract
+// they refuse under is identical, which is the part that must be.
+const CONSTRUCTED_GATE_CEILING = 1_048_576;
+{
+  const constructedTmp = mkdtemp("goccia-gate-constructed-");
+  try {
+    const src = [
+      // Both loop bounds are materialised before the region under test, so the
+      // only growth left inside it is the property map's.
+      "const outer = Array.from({ length: 300 }, (_, i) => i);",
+      "const inner = Array.from({ length: 300 }, (_, j) => j);",
+      "let built = false;",
+      "try {",
+      "  const o = {};",
+      "  for (const i of outer) {",
+      '    for (const j of inner) o["k" + i + "_" + j] = true;',
+      // Keeps the transient key strings from inflating BytesAllocated: the gate
+      // does not collect before it refuses, so without this the refusal could
+      // come from a garbage-filled heap rather than from the request size.
+      "    Goccia.gc();",
+      "  }",
+      "  built = true;",
+      "} catch (e) {",
+      "  console.log('guest-caught', e.name, '::', e.message);",
+      "}",
+      // Outside the try and allocating nothing beyond the call itself: an
+      // assertion that allocates inside the region under test can be the
+      // allocation that decides the outcome.
+      "if (built) console.log('guest-completed');",
+      "",
+    ].join("\n");
+
+    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+      const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+      console.log(`--max-memory (growth gate refuses a request larger than the whole ceiling: ${modeLabel})...`);
+      const what = `Constructed gate probe (${modeLabel})`;
+      const run = runGateCase(
+        join(constructedTmp, `gate-constructed-${modeLabel}.mjs`),
+        src,
+        modeArgs,
+        CONSTRUCTED_GATE_CEILING,
+      );
+      assertGateContract(what, run);
+      if (run.outcome !== "gate")
+        throw new Error(
+          `${what} did not reach the growth gate (outcome: ${run.outcome}). This probe cannot be ` +
+            `raced by the charged path — it allocates nothing charged — so this means the map never ` +
+            `reached a doubling larger than the ceiling: ${run.out}`,
+        );
+      if (run.refused === null || run.refused <= CONSTRUCTED_GATE_CEILING)
+        throw new Error(
+          `${what} was refused ${run.refused} bytes against a ${CONSTRUCTED_GATE_CEILING}-byte ceiling. The point ` +
+            `of this probe is that the request alone exceeds the budget, so the refusal cannot depend ` +
+            `on the heap: a smaller request means it does: ${run.out}`,
+        );
+    }
+  } finally {
+    clean(constructedTmp);
+  }
+}
+
+// The parked half: per-builtin coverage. The probe above proves the gate stays
+// opaque; these prove it for each builtin's own handler, which is where the
+// leak this family was written for actually lived (a handler that catches every
+// Pascal exception and re-throws it as SyntaxError or TypeError swallows the
+// ceiling too). Reaching a handler needs the gate to fire INSIDE the builtin,
+// which needs a parked heap — so this half keeps the parking, and derives
+// everything it would otherwise have had to assume.
+type ParkedGateCase = {
+  label: string;
+  imports: string[];
+  setup: string;
+  call: string;
+  // Printed once the call has returned, so nothing on the success path
+  // allocates inside the region under test.
+  completedGuard: string;
+};
+
+// Source shared by the parse and stringify halves. Nothing but the call itself
+// runs inside the try — not even the success guard — because an assertion that
+// allocates inside the region under test can be the allocation that decides
+// which limiter refuses.
+const parkedGateSource = (probe: ParkedGateCase, slackTarget: number): string =>
+  [
+    ...probe.imports,
+    probe.setup,
+    ...parkingPreamble(slackTarget),
+    "let produced = undefined;",
+    "let completed = false;",
+    "try {",
+    `  produced = ${probe.call};`,
+    "  completed = true;",
+    "} catch (e) {",
+    "  console.log('guest-caught', e.name, '::', e.message);",
+    "}",
+    `if (completed && ${probe.completedGuard}) console.log('guest-completed');`,
+    "",
+  ].join("\n");
+
+type ChargeMeasurement = {
+  bytes: number;
+  // True only when the number is a genuine PEAK bound: no collection ran inside
+  // the call, so BytesAllocated rose monotonically and its end value is its
+  // high-water mark. False means the number is a lower bound and nothing may be
+  // inferred from it.
+  peakKnown: boolean;
+  note: string;
+};
+
+// What a call charges, measured as a peak instead of inferred from a delta.
+//
+// A post-call delta of BytesAllocated is not a peak: a collection inside the
+// call reclaims transients, and the delta then understates the high-water mark
+// by whatever it freed — which would put the architecture race back into the
+// probe, relocated into an inference. The canary makes the difference
+// observable from inside the guest. Unreferenced strings are allocated and
+// dropped, still counted, immediately before the call; any collection during the
+// call must reclaim them, because they are unreachable, so the delta falls by at
+// least the canary and goes negative:
+//
+//   delta >= 0  =>  nothing was reclaimed  =>  BytesAllocated only rose
+//                                          =>  the delta IS the peak increment
+//   delta <  0  =>  a collection ran       =>  lower bound only
+//
+// `armed` closes the last hole: if something collected between dropping the
+// canary and reading the baseline, the detector was disarmed before the call,
+// and that result is reported as a lower bound too.
+//
+// The canary is far above any charge these workloads produce (the largest
+// measured is ~1 MB) and far below both the measurement ceiling and
+// EXTERNAL_MEMORY_PRESSURE_ALLOCATION_INTERVAL (256 MiB), so arming it cannot
+// provoke the collection it exists to detect. The measurement runs in its own
+// process at its own ceiling, and a peak measured with nothing reclaimed is an
+// upper bound on what the parked run — which may collect — can hold at once, so
+// using it below is conservative in the direction that matters.
+const CHARGE_CANARY_BYTES = 4_194_304;
+
+const measureCallCharge = (
+  probe: ParkedGateCase,
+  modeArgs: readonly string[],
+  srcPath: string,
+): ChargeMeasurement => {
+  const src = [
+    ...probe.imports,
+    probe.setup,
+    "Goccia.gc();",
+    "const canaryBase = Goccia.gc.bytesAllocated;",
+    `let canary = Array.from({ length: ${CHARGE_CANARY_BYTES / 8192} }, () => "x".repeat(4096));`,
+    "canary = null;",
+    "const before = Goccia.gc.bytesAllocated;",
+    `const armed = before - canaryBase >= ${CHARGE_CANARY_BYTES - 65_536};`,
+    `let produced = ${probe.call};`,
+    "const delta = Goccia.gc.bytesAllocated - before;",
+    "produced = null;",
+    'console.log("charge", delta, "armed", armed);',
+    "",
+  ].join("\n");
+  writeFileSync(srcPath, src);
+  const proc = Bun.spawnSync([LOADER, `--max-memory=${CHARGE_MEASURE_CEILING}`, ...modeArgs, srcPath], {
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: 180_000,
+  });
+  const out = proc.stdout.toString() + proc.stderr.toString();
+  const m = out.match(/^charge (-?\d+) armed (true|false)/m);
+  if (proc.exitCode !== 0 || m === null)
+    throw new Error(
+      `Charge measurement for ${probe.label} did not complete (exit ${proc.exitCode}). The parked ` +
+        `probes below classify themselves from this number, so a missing measurement is a failure, ` +
+        `not a default: ${out}`,
+    );
+  const bytes = Number(m[1]);
+  const armed = m[2] === "true";
+  if (!armed) return { bytes, peakKnown: false, note: "canary was already gone before the call" };
+  if (bytes < 0) return { bytes, peakKnown: false, note: "a collection ran inside the call" };
+  return { bytes, peakKnown: true, note: "no collection ran inside the call" };
+};
+
+// The parked slack is searched for, not chosen.
+//
+// A parked probe needs a slack tight enough that the builtin's own storage
+// growth crosses it, and the tightest one that works is a property of the
+// build, the architecture and the parser — SizeOf(TEntry) alone moves every
+// request by a third. So the ladder is walked from tight to loose and the first
+// rung at which THIS build refuses through the growth gate is the probe. The
+// rungs are search positions, not calibrations: their only requirement is that
+// the parking loop can converge to one of them, and the error below fires if
+// none of them reaches a limiter at all.
+//
+// Walking upward matters: the tightest rung that works crosses at the earliest
+// storage doubling, which is the point at which the builtin has charged the
+// least, so it is also the rung least able to lose the race to the charged
+// limiter.
+const GATE_SLACK_LADDER = [16_384, 32_768, 65_536, 131_072] as const;
+
+// One parked case, end to end. Everything that used to be a constant is either
+// searched for (the slack) or measured (the charge), and the measurement
+// decides which assertion applies rather than a comment claiming one holds.
+const runParkedGateProbe = (
+  kind: string,
+  probe: ParkedGateCase,
+  modeArgs: readonly string[],
+  tmpDir: string,
+): GateRun => {
+  const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+  const what = `${kind} ${probe.label} (${modeLabel})`;
+  const srcPath = join(tmpDir, `${kind.replace(" ", "-")}-${probe.label.replace(".", "-")}-${modeLabel}.mjs`);
+  const charge = measureCallCharge(probe, modeArgs, `${srcPath}.charge.mjs`);
+  const attempts: string[] = [];
+  // The FIRST — tightest — rung that reached the charged limiter instead. Kept
+  // as the fallback so a width or a parser that genuinely cannot win the race is
+  // still held to the contract assertions rather than failing for losing a race
+  // no constant can win. First-wins, not last: the tightest racing rung is the
+  // one the tightest-rung rationale above argues for, and last-wins would keep
+  // the loosest one — the rung most likely to trip the hard throw below, which
+  // is exactly backwards. YAML.parse is the live example: it holds ~166 KB of
+  // intermediates for a 4000-key document, more than any rung here parks at.
+  let raced: GateRun | null = null;
+  let racedSeed: number | null = null;
+
+  for (const seed of GATE_SLACK_LADDER) {
+    const run = runGateCase(srcPath, parkedGateSource(probe, seed), modeArgs);
+    // Every rung is held to the contract, whatever it reached.
+    assertGateContract(`${what} at slack rung ${seed}`, run);
+    attempts.push(
+      `${seed} -> ${run.outcome}${run.refused === null ? "" : ` (${run.refused} B)`}` +
+        `${run.parkedSlack === null ? "" : ` [parked ${run.parkedSlack}]`}`,
+    );
+    if (run.outcome === "unparked") continue; // tighter than this build's parking loop converges
+    if (run.outcome === "completed") continue; // looser than this builtin's largest storage growth
+    if (run.outcome === "gate") {
+      // A tighter rung that lost the race is the under-reporting signal this
+      // family is here to surface: the gate result below is real, but on a
+      // narrower pointer width the tighter rung is the one that would be
+      // reached. Log it rather than discarding it.
+      if (racedSeed !== null)
+        console.log(
+          `  (${what}: slack rung ${racedSeed} refused through the charged limiter while rung ${seed} ` +
+            `reached the gate — a width whose requests are smaller may see the charged path here)`,
+        );
+      return assertParkedGateOutcome(what, run, attempts, charge);
+    }
+    if (run.outcome === "charged" && raced === null) {
+      raced = run;
+      racedSeed = seed;
+    }
+  }
+
+  if (raced !== null) return assertParkedGateOutcome(what, raced, attempts, charge);
+  throw new Error(
+    `${what} reached no limiter at any slack rung (${attempts.join("; ")}), so it proved nothing. ` +
+      `Either the builtin no longer grows a property map, or the parking loop can no longer converge ` +
+      `tightly enough to reach one.`,
+  );
+};
+
+// The checked precondition, applied to whichever rung the search settled on.
+//
+// The hard form holds only when the measurement is a genuine peak bound: if the
+// whole call's PEAK charge is below the parked slack then the charged limiter is
+// unreachable for this run, "the gate refuses first" is a fact about measured
+// bytes, and anything else is a regression. Two cases fall out of it, and both
+// route to the same softer classification rather than to a throw:
+//
+//   * the peak is not known (a collection ran inside the measured call, so the
+//     number is a lower bound) — inferring from it would be the architecture
+//     race back again, wearing an inference;
+//   * the peak is known and is at or above the parked slack — the two limiters
+//     genuinely race, and which one wins moves with SizeOf(TEntry).
+//
+// A note on the second: it is a bound on the WHOLE call, so it says only that
+// one-sidedness cannot be proven — the crossing may still happen long before the
+// charge arrives, and on this build it does. It is reported either way so a
+// width that flips is visible in the log instead of silent.
+const assertParkedGateOutcome = (
+  what: string,
+  run: GateRun,
+  attempts: string[],
+  charge: ChargeMeasurement,
+): GateRun => {
+  if (run.parkedSlack === null)
+    throw new Error(`${what} did not report its parked slack: ${run.out}`);
+  if (charge.peakKnown && charge.bytes < run.parkedSlack) {
+    if (run.outcome !== "gate")
+      throw new Error(
+        `${what} charges at most ${charge.bytes} B (measured peak, ${charge.note}) against ` +
+          `${run.parkedSlack} B of parked slack, so the growth gate is the only limiter it can ` +
+          `reach — but the run refused through "${run.outcome}" (rungs: ${attempts.join("; ")}): ${run.out}`,
+      );
+  } else {
+    const why = charge.peakKnown
+      ? `measured peak charge ${charge.bytes} B >= parked slack ${run.parkedSlack} B`
+      : `charge is a lower bound only (${charge.note}), so ${charge.bytes} B proves nothing`;
+    console.log(
+      `  (${what}: ${why} — one-sidedness not provable, so only the contract assertions apply here; ` +
+        `refused through "${run.outcome}")`,
+    );
+  }
+  return run;
+};
+
+// A 4000-key document of `true` values: the boolean singletons are not charged
+// and the keys are Pascal strings inside the map, so for every parser except
+// YAML the parse charges essentially nothing and the one-sidedness above is
+// measured to hold. The document is built before the charge measurement and
+// before parking, or building it — not parsing it — is what would cross the
+// ceiling.
 {
   const gateTmp = mkdtemp("goccia-parse-gate-");
+  // Counted per execution mode, not per family: a mode whose gate is never
+  // reached is a mode whose contract assertions are all running against
+  // refusals that never involve the gate, and a single gate hit anywhere would
+  // hide that.
+  const reachedGate: Record<string, number> = { interpreted: 0, bytecode: 0 };
   try {
-    const gatedParses: Array<[string, string[], string, string]> = [
-      [
-        "JSON.parse",
-        [],
-        'const doc = "{" + Array.from({ length: 4000 }, (_, i) => \'"k\' + i + \'":\' + i).join(",") + "}";',
-        "JSON.parse(doc)",
-      ],
-      [
-        "JSON5.parse",
-        ['import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;'],
-        'const doc = "{" + Array.from({ length: 4000 }, (_, i) => "k" + i + ": " + i).join(",") + "}";',
-        "JSON5.parse(doc)",
-      ],
-      [
-        "YAML.parse",
-        ['import * as YAMLNS from "goccia:yaml"; const YAML = YAMLNS.YAML ?? YAMLNS;'],
-        'const doc = Array.from({ length: 4000 }, (_, i) => "k" + i + ": " + i).join("\\n") + "\\n";',
-        "YAML.parse(doc)",
-      ],
+    const gatedParses: ParkedGateCase[] = [
+      {
+        label: "JSON.parse",
+        imports: [],
+        setup:
+          'const doc = "{" + Array.from({ length: 4000 }, (_, i) => \'"k\' + i + \'":true\').join(",") + "}";',
+        call: "JSON.parse(doc)",
+        completedGuard: "produced !== undefined",
+      },
+      {
+        label: "JSON5.parse",
+        imports: ['import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;'],
+        setup: 'const doc = "{" + Array.from({ length: 4000 }, (_, i) => "k" + i + ": true").join(",") + "}";',
+        call: "JSON5.parse(doc)",
+        completedGuard: "produced !== undefined",
+      },
+      {
+        label: "YAML.parse",
+        imports: ['import * as YAMLNS from "goccia:yaml"; const YAML = YAMLNS.YAML ?? YAMLNS;'],
+        setup: 'const doc = Array.from({ length: 4000 }, (_, i) => "k" + i + ": true").join("\\n") + "\\n";',
+        call: "YAML.parse(doc)",
+        completedGuard: "produced !== undefined",
+      },
+      {
+        label: "JSONL.parse",
+        imports: ['import * as JSONLNS from "goccia:jsonl"; const JSONL = JSONLNS.JSONL ?? JSONLNS;'],
+        // One line holding the whole wide object: the map that has to double is
+        // per record, so splitting it across lines would only build 4000 small
+        // maps that never reach the gate.
+        setup:
+          'const doc = "{" + Array.from({ length: 4000 }, (_, i) => \'"k\' + i + \'":true\').join(",") + "}\\n";',
+        call: "JSONL.parse(doc)",
+        completedGuard: "produced !== undefined",
+      },
+      {
+        label: "TOML.parse",
+        imports: ['import * as TOMLNS from "goccia:toml"; const TOML = TOMLNS.TOML ?? TOMLNS;'],
+        setup: 'const doc = Array.from({ length: 4000 }, (_, i) => "k" + i + " = true").join("\\n") + "\\n";',
+        call: "TOML.parse(doc)",
+        completedGuard: "produced !== undefined",
+      },
     ];
 
-    for (const [label, imports, setup, parse] of gatedParses) {
+    for (const probe of gatedParses) {
       for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
         const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
-        console.log(`--max-memory (growth gate inside ${label} stays opaque to the guest: ${modeLabel})...`);
-        const src = [
-          ...imports,
-          setup,
-          // 120000 sits in the middle of the measured window: the parse survives
-          // its own charges (~96 KB for 4000 properties) but the storage doubling
-          // asks for 73632 or 147360 bytes in one block and is refused.
-          ...parkingPreamble(120_000),
-          "try {",
-          `  const value = ${parse};`,
-          '  console.log("guest-completed", Object.keys(value).length);',
-          "} catch (e) {",
-          // The marker the gate must never let the guest print.
-          "  console.log('guest-caught', e.name, '::', e.message);",
-          "}",
-          "",
-        ].join("\n");
-        const srcPath = join(gateTmp, `parse-gate-${label.replace(".", "-")}-${modeLabel}.mjs`);
-        writeFileSync(srcPath, src);
-        const proc = Bun.spawnSync([LOADER, "--max-memory=4194304", ...modeArgs, srcPath], {
-          stdout: "pipe",
-          stderr: "pipe",
-          timeout: 180_000,
-        });
-        const out = proc.stdout.toString() + proc.stderr.toString();
-        if (!out.includes("parked true"))
-          throw new Error(`Parse gate ${label} (${modeLabel}) never parked the heap: ${out}`);
-        if (out.includes("guest-caught"))
-          throw new Error(
-            `Parse gate ${label} (${modeLabel}) let the guest catch a growth-gate refusal: ${out}`,
-          );
-        if (out.includes("guest-completed"))
-          throw new Error(
-            `Parse gate ${label} (${modeLabel}) never reached the growth gate, so it proved nothing: ${out}`,
-          );
-        if (proc.exitCode === 0)
-          throw new Error(`Parse gate ${label} (${modeLabel}) should exit nonzero, got 0: ${out}`);
-        if (!out.includes("would exceed the memory budget"))
-          throw new Error(
-            `Parse gate ${label} (${modeLabel}) failed without the budget refusal the host reports: ${out}`,
-          );
+        console.log(`--max-memory (growth gate inside ${probe.label} stays opaque to the guest: ${modeLabel})...`);
+        if (runParkedGateProbe("Parse gate", probe, modeArgs, gateTmp).outcome === "gate")
+          reachedGate[modeLabel] += 1;
       }
     }
+
+    // Non-vacuity, per mode: the contract assertions accept a charged refusal
+    // wherever the race is real, so a mode in which no parse reached the gate is
+    // a mode asserting the contract against refusals that never involve the gate.
+    for (const [modeLabel, hits] of Object.entries(reachedGate))
+      if (hits === 0)
+        throw new Error(
+          `No parse gate case reached the growth gate in ${modeLabel} mode on this build, so the ` +
+            `parse half of this family is asserting the contract against refusals that never ` +
+            `involve the gate there.`,
+        );
   } finally {
     clean(gateTmp);
   }
 }
 
-// The stringify half of the same convention. JSON.stringify and JSON5.stringify
-// wrap their whole body in a handler that converts a Pascal exception into a
-// script-visible TypeError ("JSON.stringify error: ..."), and that handler had
-// no re-raise allowlist: a growth-gate refusal arrived at the guest as a
-// catchable TypeError carrying the budget text, which is the ceiling-you-can-
-// ignore-in-a-loop this whole convention exists to prevent. Both handlers now
-// name the limit family (timeout, instruction limit, memory limit) ahead of the
-// generic arm, as Goccia.Builtins.GlobalFetch.pas and Goccia.Interpreter.pas do.
+// The stringify half of the same convention, and the same treatment. JSON.stringify
+// and JSON5.stringify wrap their whole body in a handler that converts a Pascal
+// exception into a script-visible TypeError ("JSON.stringify error: ..."), and that
+// handler had no re-raise allowlist: a growth-gate refusal arrived at the guest as a
+// catchable TypeError carrying the budget text, which is the ceiling-you-can-ignore-
+// in-a-loop this whole convention exists to prevent. Both handlers now name the limit
+// family (timeout, instruction limit, memory limit) ahead of the generic arm, as
+// Goccia.Builtins.GlobalFetch.pas and Goccia.Interpreter.pas do.
 //
-// Reaching the gate from a stringify needs a replacer: the plain serializer
-// writes into a native buffer and only the result string is charged, while the
-// replacer walk rebuilds every object property-by-property, so the property
-// map's storage doubling is what asks for one block larger than the parked
-// slack. The same 4000-key cheap-value object and the same measured slack as
-// the parse block above land inside the window (measured: the gate is the
-// crossing limiter for a slack of roughly 10000-150000; at 160000 and above the
-// stringify simply completes).
+// Reaching the gate from a stringify needs a replacer: the plain serializer writes
+// into a native buffer and only the result string is charged, while the replacer walk
+// rebuilds every object property-by-property, so the property map's storage doubling
+// is what asks for a block larger than the parked slack.
+//
+// What the measurement can and cannot say here. It measures the peak charge of the
+// WHOLE call, and that necessarily includes the result string — around a megabyte for
+// a 4000-key object, far above any slack rung. So these cases can never satisfy the
+// one-sidedness precondition and always classify as "not provable", on every
+// architecture; a comment arguing that the result string is reserved too late to beat
+// the gate would be claiming something no assertion here checks. What IS checked is
+// the contract on every rung, plus the per-mode requirement below that a stringify
+// actually reaches the gate — which is what keeps this half pointed at the thing it
+// names.
 {
   const stringifyGateTmp = mkdtemp("goccia-stringify-gate-");
-  const parkedStringifySource = (
-    imports: string[],
-    setup: string,
-    call: string,
-    slackTarget: number,
-  ): string =>
-    [
-      ...imports,
-      setup,
-      ...parkingPreamble(slackTarget),
-      "try {",
-      `  const value = ${call};`,
-      '  console.log("guest-completed", value.length);',
-      "} catch (e) {",
-      // The marker the gate must never let the guest print.
-      "  console.log('guest-caught', e.name, '::', e.message);",
-      "}",
-      "",
-    ].join("\n");
-
+  const reachedGate: Record<string, number> = { interpreted: 0, bytecode: 0 };
   try {
-    // The object is built before parking, or building it — not stringifying it —
-    // is what would cross the ceiling.
+    // The object is built before the charge measurement and before parking, or
+    // building it — not stringifying it — is what would cross the ceiling.
     const wideObject =
-      'const obj = Object.fromEntries(Array.from({ length: 4000 }, (_, i) => ["k" + i, i]));';
-    const gatedStringifies: Array<[string, string[], string, string]> = [
-      ["JSON.stringify", [], wideObject, "JSON.stringify(obj, (k, v) => v)"],
-      [
-        "JSON5.stringify",
-        ['import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;'],
-        wideObject,
-        "JSON5.stringify(obj, (k, v) => v)",
-      ],
+      'const obj = Object.fromEntries(Array.from({ length: 4000 }, (_, i) => ["k" + i, true]));';
+    const gatedStringifies: ParkedGateCase[] = [
+      {
+        label: "JSON.stringify",
+        imports: [],
+        setup: wideObject,
+        call: "JSON.stringify(obj, (k, v) => v)",
+        completedGuard: "produced.length > 0",
+      },
+      {
+        label: "JSON5.stringify",
+        imports: ['import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;'],
+        setup: wideObject,
+        call: "JSON5.stringify(obj, (k, v) => v)",
+        completedGuard: "produced.length > 0",
+      },
     ];
 
-    for (const [label, imports, setup, call] of gatedStringifies) {
+    for (const probe of gatedStringifies) {
       for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
         const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
-        console.log(`--max-memory (growth gate inside ${label} stays opaque to the guest: ${modeLabel})...`);
-        const srcPath = join(stringifyGateTmp, `stringify-gate-${label.replace(".", "-")}-${modeLabel}.mjs`);
-        writeFileSync(srcPath, parkedStringifySource(imports, setup, call, 120000));
-        const proc = Bun.spawnSync([LOADER, "--max-memory=4194304", ...modeArgs, srcPath], {
-          stdout: "pipe",
-          stderr: "pipe",
-          timeout: 180_000,
-        });
-        const out = proc.stdout.toString() + proc.stderr.toString();
-        if (!out.includes("parked true"))
-          throw new Error(`Stringify gate ${label} (${modeLabel}) never parked the heap: ${out}`);
-        if (out.includes("guest-caught"))
-          throw new Error(
-            `Stringify gate ${label} (${modeLabel}) let the guest catch a growth-gate refusal: ${out}`,
-          );
-        if (out.includes("guest-completed"))
-          throw new Error(
-            `Stringify gate ${label} (${modeLabel}) never reached the growth gate, so it proved nothing: ${out}`,
-          );
-        if (proc.exitCode === 0)
-          throw new Error(`Stringify gate ${label} (${modeLabel}) should exit nonzero, got 0: ${out}`);
-        if (!out.includes("would exceed the memory budget"))
-          throw new Error(
-            `Stringify gate ${label} (${modeLabel}) failed without the budget refusal the host reports: ${out}`,
-          );
+        console.log(`--max-memory (growth gate inside ${probe.label} stays opaque to the guest: ${modeLabel})...`);
+        if (runParkedGateProbe("Stringify gate", probe, modeArgs, stringifyGateTmp).outcome === "gate")
+          reachedGate[modeLabel] += 1;
       }
     }
 
-    // Vacuity control for the "no guest-caught" assertion above. The other
-    // limiter — a charged string allocation — is script-visible by design and
-    // always was, so the same harness pointed at a shape that only ever crosses
-    // the charge (no replacer, one oversized string) MUST print the marker the
-    // gate cases forbid. If this stops catching, the assertions above are
-    // passing because nothing reaches any limiter, not because the ceiling is
+    // Per mode, and it carries more weight here than in the parse half: a
+    // stringify's measured charge always includes the result string, so no
+    // stringify case can ever prove one-sidedness from its measurement and this
+    // is the only assertion that keeps the half pointed at the gate.
+    for (const [modeLabel, hits] of Object.entries(reachedGate))
+      if (hits === 0)
+        throw new Error(
+          `No stringify gate case reached the growth gate in ${modeLabel} mode on this build, so the ` +
+            `stringify half of this family is asserting the contract against refusals that never ` +
+            `involve the gate there.`,
+        );
+
+    // Vacuity control for the "no guest-caught gate text" assertion above. The
+    // other limiter — a charged string allocation — is script-visible by design
+    // and always was, so the same harness pointed at a shape that only ever
+    // crosses the charge (no replacer, one oversized string) MUST print the
+    // marker the gate cases forbid. If this stops catching, the assertions above
+    // are passing because nothing reaches any limiter, not because the ceiling is
     // opaque.
+    //
+    // This half needs no calibration on any width: the result string reserves
+    // 800,004 bytes (length * SizeOf(Char), 2 bytes per char under delphiunicode
+    // everywhere), more than 20x the parked slack whichever seed is used, and no
+    // property map is touched at all — so there is no gate request for it to
+    // race.
     console.log("--max-memory (stringify gate vacuity control: a charged refusal is still catchable)...");
     {
-      const controlPath = join(stringifyGateTmp, "stringify-gate-control.mjs");
-      writeFileSync(
-        controlPath,
-        parkedStringifySource([], 'const big = "y".repeat(400000);', "JSON.stringify(big)", 120000),
+      const control: ParkedGateCase = {
+        label: "control",
+        imports: [],
+        setup: 'const big = "y".repeat(400000);',
+        call: "JSON.stringify(big)",
+        completedGuard: "produced.length > 0",
+      };
+      const run = runGateCase(
+        join(stringifyGateTmp, "stringify-gate-control.mjs"),
+        parkedGateSource(control, 32_768),
+        [],
       );
-      const proc = Bun.spawnSync([LOADER, "--max-memory=4194304", controlPath], {
-        stdout: "pipe",
-        stderr: "pipe",
-        timeout: 180_000,
-      });
-      const out = proc.stdout.toString() + proc.stderr.toString();
-      if (!out.includes("parked true"))
-        throw new Error(`Stringify gate control never parked the heap: ${out}`);
-      if (!out.includes("guest-caught RangeError"))
+      if (run.outcome === "unparked")
+        throw new Error(`Stringify gate control never parked the heap: ${run.out}`);
+      if (run.caught === null || !/^guest-caught RangeError/.test(run.caught))
         throw new Error(
-          `Stringify gate control should let the guest catch the charged RangeError, making the gate assertions non-vacuous: ${out}`,
+          `Stringify gate control should let the guest catch the charged RangeError, making the gate assertions non-vacuous: ${run.out}`,
         );
-      if (proc.exitCode !== 0)
-        throw new Error(`Stringify gate control should exit 0, got ${proc.exitCode}: ${out}`);
+      if (run.exitCode !== 0)
+        throw new Error(`Stringify gate control should exit 0, got ${run.exitCode}: ${run.out}`);
     }
   } finally {
     clean(stringifyGateTmp);

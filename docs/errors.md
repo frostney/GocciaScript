@@ -5,6 +5,7 @@
 ## Executive Summary
 
 - **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus the uncatchable resource ceilings `TimeoutError` (`--timeout`), `InstructionLimitError` (`--max-instructions`), and `MemoryLimitError` (`--max-memory`)
+- **`--max-memory` refuses in two ways** -- a *charged* allocation (string payload, `ArrayBuffer` backing store) forces a collection, re-tests, and only then throws a **catchable** `RangeError` -- except for the two shapes no collection could help, a request larger than the whole budget and a repeat of one a forced collection has already refused, which are refused straight away; a *gated* growth point (array element storage, object property storage) refuses without collecting and ends the run with the uncatchable `MemoryLimitError`. The same byte count can therefore be survivable on one path and fatal on the other -- see [Garbage Collector § Gated growth points](garbage-collector.md#gated-growth-points)
 - **Parser errors** -- Displayed with source context, a caret pointing to the exact column, and optional suggestion text (e.g., "Use 'let' or 'const' instead")
 - **Runtime errors** -- Carry `name`, `message`, `stack`, and optional `cause`; catchable with `try`/`catch`/`finally`
 - **Sandbox filesystem errors** -- Use real `Error` objects with Node-shaped `code`, `errno`, `path`, `syscall`, and optional `dest` metadata
@@ -28,7 +29,7 @@ GocciaScript supports the standard ECMAScript error constructors plus the CLI-on
 | [`SuppressedError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SuppressedError) | Disposal error during explicit resource management (`using`/`await using`); wraps both the new and suppressed error | [SuppressedError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SuppressedError) |
 | `TimeoutError` | Execution exceeded the `--timeout` limit (CLI only; not a JS-visible constructor) | -- |
 | `InstructionLimitError` | Execution exceeded the `--max-instructions` budget (CLI only; not a JS-visible constructor) | -- |
-| `MemoryLimitError` | An allocation was refused by the `--max-memory` budget (CLI only; not a JS-visible constructor) | -- |
+| `MemoryLimitError` | A *gated* growth point -- array element storage or object property storage -- was refused by the `--max-memory` budget, without a collection being attempted first. Charged allocations under the same budget throw a catchable `RangeError` instead (CLI only; not a JS-visible constructor) | -- |
 
 The last three are resource ceilings rather than in-language errors. Script
 `try`/`catch` cannot observe them in either execution mode: they unwind past
