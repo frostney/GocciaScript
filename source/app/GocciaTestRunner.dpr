@@ -350,18 +350,17 @@ end;
   fault, and because of the wait below. }
 procedure TerminateAfterIntegrityFault;
 var
-  Waited: Integer;
+  Deadline: Int64;
 begin
   { Never overtake the reporting thread. Whoever lost the report gate would
     otherwise end the process while the winner is still inside its write, and
-    the abort would truncate its own diagnostic. }
-  Waited := 0;
+    the abort would truncate its own diagnostic. The bound is a monotonic
+    deadline, not a Sleep(1) iteration count: on Windows Sleep(1) can consume
+    a full scheduler tick, which would stretch the intended ceiling ~15x. }
+  Deadline := GetMilliseconds + INTEGRITY_DIAGNOSTIC_WAIT_MS;
   while (GIntegrityFaultDiagnosticWritten = 0) and
-    (Waited < INTEGRITY_DIAGNOSTIC_WAIT_MS) do
-  begin
+    (GetMilliseconds < Deadline) do
     Sleep(1);
-    Inc(Waited);
-  end;
   TerminateProcessNow(EXIT_CODE_INTEGRITY_FAULT);
 end;
 
