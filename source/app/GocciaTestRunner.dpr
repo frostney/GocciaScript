@@ -10,6 +10,7 @@ uses
 
   TimingUtils,
   TextSemantics,
+  CriticalSections,
 
   Goccia.Arguments.Collection,
   Goccia.Application,
@@ -77,12 +78,6 @@ const
     aggregation recognises it so the slot is not rewritten as a synthetic
     failure. }
   EXIT_ON_FIRST_FAILURE_SIGNAL = '<exit-on-first-failure>';
-
-  { Sentinel a parallel worker returns as its pool error message after an
-    engine-integrity fault. It only has to survive the trip back to the main
-    thread: the diagnostic is already on stderr, and the main thread reads this
-    to know the run must stop rather than be aggregated. }
-  INTEGRITY_FAULT_SIGNAL = '<engine-integrity-fault>';
 
   { Prefix on every line of the integrity-fault diagnostic. Deliberately unlike
     any ordinary failure line the runner prints, so `grep 'Integrity fault:'`
@@ -189,10 +184,12 @@ type
     { Stop signal of the parallel run currently in flight, or nil. Not owned —
       RunScriptsFromFilesParallel publishes it before RunAll starts any worker
       and clears it once RunAll has joined them. It exists so a worker that hits
-      an engine-integrity fault can stop the queue: the pool's automatic
-      cancel-on-error only arms under --exit-on-first-failure, and an integrity
-      fault must stop dispatching new files whether or not the user asked to
-      bail on failures.
+      an engine-integrity fault can stop the queue on its way out: the pool's
+      automatic cancel-on-error only arms under --exit-on-first-failure, and an
+      integrity fault must stop dispatching new files whether or not the user
+      asked to bail on failures. What it does not do is guarantee the abort —
+      the faulting worker halts the process itself — it keeps peer workers from
+      starting more files during the window that halt takes.
 
       The flag rather than the pool, deliberately. A worker the watchdog
       abandoned keeps running after RunAll returns and after the pool is freed,
@@ -257,18 +254,19 @@ var
     unsynchronised WriteLn race would shred the very diagnostic the abort
     exists to produce. First fault wins, the rest stay silent.
 
-    It is also the abort's own record. The sentinel a faulting worker returns
-    travels in the pool's results, and those can be lost: if the watchdog
-    abandons the faulting worker, RunAll drops its in-progress slot and the
-    stalled-file override rewrites it as a TIMEOUT, so the sentinel scan alone
-    would let a run that had already printed "the run is aborted" go on to
-    print a full summary and exit 0. This lives in process memory that no pool
-    owns, so nothing can rewrite it.
+    It also lets the main thread recognise an abort that is already under way.
+    A faulting worker halts the process, but halt runs unit finalization before
+    the process actually ends, and the main thread can return from RunAll
+    inside that window; reading this tells it to stop rather than spend the
+    window aggregating a summary that is about to be truncated mid-sentence.
+    The pool's own results cannot serve that purpose — a worker the watchdog
+    abandoned has its in-progress slot dropped and rewritten as a TIMEOUT — and
+    this lives in process memory no pool owns, so nothing can rewrite it.
 
-    LongInt with an interlocked write because the claim it makes ("I am the
+    Integer with an interlocked write because the claim it makes ("I am the
     reporter") must be exclusive; plain aligned reads are enough on the
     consuming side, which only ever asks whether it is non-zero. }
-  GIntegrityFaultReported: LongInt;
+  GIntegrityFaultReported: Integer;
 
 { Writes the abort diagnostic for an engine-integrity fault to stderr and
   flushes it immediately. Only the first caller in the process writes anything;
@@ -289,7 +287,7 @@ var
 procedure ReportIntegrityFault(const AFileName: string;
   const AException: Exception);
 begin
-  if InterlockedExchange(GIntegrityFaultReported, 1) <> 0 then
+  if AtomicExchangeInt32(GIntegrityFaultReported, 1) <> 0 then
     Exit;
   WriteLn(ErrOutput, INTEGRITY_FAULT_PREFIX + AException.ClassName + ' in ' +
     AFileName + ': ' + AException.Message + sLineBreak +
@@ -313,21 +311,6 @@ procedure AbortRunOnIntegrityFault(const AFileName: string;
 begin
   ReportIntegrityFault(AFileName, AException);
   Halt(EXIT_CODE_INTEGRITY_FAULT);
-end;
-
-{ True when any worker of the finished run came back carrying the integrity
-  sentinel. Kept alongside the process-level flag rather than replaced by it:
-  the flag is the one that survives an abandoned worker, and this is the one
-  tied to the pool's own record of which file it was. Either alone stops the
-  run. }
-function PoolReportedIntegrityFault(const APool: TGocciaThreadPool): Boolean;
-var
-  I: Integer;
-begin
-  for I := 0 to High(APool.Results) do
-    if APool.Results[I].ErrorMessage = INTEGRITY_FAULT_SIGNAL then
-      Exit(True);
-  Result := False;
 end;
 
 function MakeEmptyTestResult(const AScriptResult: TGocciaObjectValue;
@@ -1542,19 +1525,39 @@ begin
     end;
     on E: Exception do
     begin
-      { Host tier, parallel path. Report first — the diagnostic must be out
-        before anything else is attempted on this heap — then stop the queue so
-        no further file is dispatched, and hand the main thread the sentinel it
-        aborts the run on. Cancelling is the pool's own stop signal, so the
-        worker does not Halt from a thread: files already in flight finish or
-        are marked cancelled, and RunAll returns normally (ADR 0109). }
+      { Host tier, parallel path. Report first — the diagnostic must be out and
+        flushed before anything else is attempted on this heap — then cancel
+        the queue so no further file is dispatched, then end the process from
+        this thread.
+
+        The cancel is the orderly half and the Halt is the unconditional one.
+        Cancelling alone was the original design, on the grounds that the pool
+        had a cleaner stop than halting from a worker; that reasoning holds
+        only while the main thread is still listening. A worker the watchdog
+        abandoned outlives RunAll, so if it faults after the main thread has
+        made its post-RunAll check, the cancel lands on a queue nobody is
+        draining and the run goes on to print a summary under a stderr line
+        that already said it was aborted. No fixed checkpoint closes that — the
+        zombie can report at any later moment — so the thread that knows ends
+        the process itself. Graceful shutdown on a suspect heap was never a
+        goal (ADR 0109).
+
+        Two consequences, both measured rather than assumed. Halting from a
+        secondary thread does end the process with this code on our targets,
+        and several threads doing it at once is safe — eight concurrent halts
+        exit cleanly, so a second faulting worker needs no special case. And a
+        peer worker that is mid-test when the process starts exiting can lose
+        its thread runtime and print one ordinary-looking failure line ("Thread
+        error") before it dies. That is cosmetic: the exit code, the single
+        diagnostic and the absence of a summary are unaffected, and silencing
+        it would mean coordinating a clean stop across threads on the very heap
+        this abort exists because it cannot trust. }
       if IsEngineIntegrityFault(E) then
       begin
         ReportIntegrityFault(AFileName, E);
         if Assigned(FActiveCancelFlag) then
           FActiveCancelFlag.Cancel;
-        AErrorMessage := INTEGRITY_FAULT_SIGNAL;
-        Exit;
+        Halt(EXIT_CODE_INTEGRITY_FAULT);
       end;
       WorkerResults^[AIndex].ErrorMessage := E.Message;
       WorkerResults^[AIndex].Failed := 1;
@@ -1684,14 +1687,18 @@ begin
     else
       WatchdogMs := 0;
     Pool.RunAll(AFiles, TestWorkerProc, @WorkerData[0], WatchdogMs);
-    { A worker hit an engine-integrity fault: it wrote the diagnostic and
-      cancelled the queue, and the files that did finish were running beside a
-      heap that is no longer sound. Stop before aggregating them into a total
-      the run cannot stand behind. The process-level flag is checked first
-      because it is the one that still holds when the faulting worker was the
-      one the watchdog abandoned — its slot is dropped and then rewritten as a
-      TIMEOUT, so its sentinel never reaches Pool.Results. }
-    if IntegrityFaultWasReported or PoolReportedIntegrityFault(Pool) then
+    { A worker hit an engine-integrity fault: it wrote the diagnostic, cancelled
+      the queue, and is ending the process. The files that did finish were
+      running beside a heap that is no longer sound, so stop before aggregating
+      them into a total the run cannot stand behind.
+
+      This is not the mechanism that guarantees the abort — the faulting worker
+      halts on its own thread — it is what keeps the ordinary case from racing
+      it. Halt runs unit finalization first, and the main thread can come out
+      of RunAll inside that window; without this check it would spend the
+      window aggregating and printing a summary that the process is about to
+      truncate at an arbitrary point. }
+    if IntegrityFaultWasReported then
       Halt(EXIT_CODE_INTEGRITY_FAULT);
     WorkerMemoryStats := Pool.MemoryStats;
     if Pool.EnableCoverage and (TGocciaCoverageTracker.Instance <> nil) then

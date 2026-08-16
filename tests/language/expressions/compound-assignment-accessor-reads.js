@@ -242,4 +242,39 @@ describe("compound assignment on data properties", () => {
     }).toThrow(TypeError);
     expect(sideEffects).toBe(0);
   });
+
+  test("a nullish base with a symbol key reports the failure as a read", () => {
+    // §6.2.5.5 GetValue step 3.a rejects the base before step 3.c converts the
+    // key, so the message describes the read that failed rather than the store
+    // that never happened. Asserted as a fragment because the rest of the text
+    // names the symbol, whose description formatting is not what is under test.
+    const key = Symbol("count");
+    let sideEffects = 0;
+    let message = "";
+    const base = { missing: null };
+
+    expect(() => {
+      try {
+        base.missing[key] += (sideEffects += 1);
+      } catch (error) {
+        message = error.message;
+        throw error;
+      }
+    }).toThrow(TypeError);
+    expect(sideEffects).toBe(0);
+    expect(message).toContain("Cannot read properties of null");
+
+    const undefinedBase = {};
+    let undefinedMessage = "";
+
+    expect(() => {
+      try {
+        undefinedBase.missing[key] += 1;
+      } catch (error) {
+        undefinedMessage = error.message;
+        throw error;
+      }
+    }).toThrow(TypeError);
+    expect(undefinedMessage).toContain("Cannot read properties of undefined");
+  });
 });

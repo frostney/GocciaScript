@@ -27,6 +27,7 @@ procedure CriticalSectionLeave(var ASection: TGocciaCriticalSection); {$IFDEF FP
 function GetGocciaThreadId: TThreadID; {$IFDEF FPC}inline;{$ENDIF}
 function AtomicIncrementInt32(var AValue: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 function AtomicDecrementInt32(var AValue: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
+function AtomicExchangeInt32(var AValue: Integer; const ANewValue: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 procedure ReadMemoryBarrier; {$IFDEF FPC}inline;{$ENDIF}
 procedure WriteMemoryBarrier; {$IFDEF FPC}inline;{$ENDIF}
 
@@ -93,6 +94,15 @@ begin
   Result := System.InterlockedDecrement(AValue);
   {$ELSE}
   Result := TInterlocked.Decrement(AValue);
+  {$ENDIF}
+end;
+
+function AtomicExchangeInt32(var AValue: Integer; const ANewValue: Integer): Integer;
+begin
+  {$IFDEF FPC}
+  Result := System.InterlockedExchange(AValue, ANewValue);
+  {$ELSE}
+  Result := TInterlocked.Exchange(AValue, ANewValue);
   {$ENDIF}
 end;
 

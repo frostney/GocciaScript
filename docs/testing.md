@@ -385,8 +385,7 @@ expansion, config discovery — still lands in the shared CLI error handler that
 every Goccia binary uses, and exits `1` with no `Integrity fault:` line.)
 
 The runner names the faulting file and the exception class on stderr under a
-fixed prefix, stops dispatching files (cancelling the worker queue under
-`--jobs`), and exits **70**:
+fixed prefix, stops dispatching files, and exits **70**:
 
 ```text
 Integrity fault: EObjectCheck in tests/some/file.js: Object reference is Nil
@@ -394,7 +393,13 @@ Integrity fault: the engine can no longer vouch for its own state, so the run is
 ```
 
 No summary and no JSON envelope follow — a run that stopped mid-way has no total
-worth reporting. Grep CI logs for `Integrity fault:` to find these. The exit
+worth reporting. Grep CI logs for `Integrity fault:` to find these. Unlike
+`--exit-on-first-failure`, this does not let in-flight files finish: under
+`--jobs` the process ends as soon as the faulting worker has written its
+diagnostic, because a worker the watchdog has abandoned outlives the run and
+could otherwise fault after the main thread has stopped listening. A peer worker
+caught mid-test by that exit may print one last `Thread error` failure line —
+noise from the shutdown, not a real test result. The exit
 code is distinct from the ordinary failure exit `1` on purpose, so a harness can
 tell a suite that failed from a suite that stopped being trustworthy; see [CLI
 Conventions](contributing/cli-conventions.md#exit-codes). A refused allocation

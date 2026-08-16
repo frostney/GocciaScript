@@ -134,27 +134,40 @@ was unusable) and a harness can tell "these tests failed" from "stop believing
 this process" (see [CLI
 Conventions](../contributing/cli-conventions.md#exit-codes)). The two per-mode
 arms only re-raise, which keeps one abort site per tier: the sequential
-aggregator for a `--jobs=1` run, the worker body for a parallel one. A faulting
-worker cancels the pool's shared queue rather than halting from a thread — that
-queue is the pool's own stop signal, so files already in flight finish or are
-marked cancelled and `RunAll` returns normally — and the main thread halts the
-moment it does, before the aggregation reads a single worker slot. The abort is
-deliberately not an unwind: the aggregation would read the very objects the
+aggregator for a `--jobs=1` run, the worker body for a parallel one. The abort
+is deliberately not an unwind: the aggregation would read the very objects the
 fault calls into question, and the summary at the end of it would overwrite the
 exit code with a pass/fail verdict the process is in no position to give.
 
-Two mechanics are worth naming because the obvious version of each is wrong. A
-faulting worker cancels through the pool's cancellation flag rather than through
-the pool object: the pool is freed while an abandoned worker is still running,
-and it leaks the flag rather than freeing it for exactly that reason, so the
-flag is the only handle a zombie can safely hold. And the main thread's decision
-to abort rests on a process-level first-fault flag, not only on the sentinel the
-worker returns — if the watchdog abandons the *faulting* worker, its slot is
-dropped and rewritten as a timeout, and a run that had already printed "the run
-is aborted" would go on to print a full summary. That flag also settles who
+In the parallel case a faulting worker does two things, and it is worth being
+precise about which one is load-bearing. It cancels the pool's shared queue, so
+peer workers stop reaching for new files; then it ends the process from its own
+thread. The first draft stopped at the cancel, reasoning that the pool had a
+cleaner stop than halting from a worker and that in-flight files could finish
+while `RunAll` returned normally. That is true only while the main thread is
+still listening. A worker the watchdog abandoned outlives `RunAll`, so a fault
+in it lands after the main thread has already made whatever check it was going
+to make: the cancel reaches a queue nobody is draining, and the run prints a
+full summary and exits `0` beneath a stderr line that says it was aborted. No
+fixed checkpoint fixes that, because the zombie can report at any later moment
+— a second check only moves the window. So the thread that knows ends the
+process, and the cancel becomes what it always really was, the orderly half.
+Halting from a secondary thread is not a compromise here: unit finalization on
+a suspect heap was never something this ADR promised to survive, and the
+diagnostic is written and flushed before the halt for exactly that reason.
+
+Two smaller mechanics, because the obvious version of each is wrong. The worker
+cancels through the pool's cancellation *flag* rather than the pool object: the
+pool is freed while an abandoned worker is still running, and it leaks the flag
+rather than freeing it for precisely that reason, so the flag is the only handle
+a zombie can safely hold. And the main thread keeps a check of its own on a
+process-level first-fault flag — not because the abort depends on it, but
+because halt runs finalization first and the main thread can surface from
+`RunAll` inside that window; without the check it would spend the window
+printing a summary the process is about to truncate. That flag also settles who
 writes the diagnostic: faults arrive on worker threads, corruption that reaches
-one worker can reach two, and first-fault-wins keeps the two of them from
-shredding the message between them.
+one worker can reach two, and first-fault-wins keeps them from shredding the
+message between them.
 
 This is one tier's policy, not a guarantee about every exit path. The shared CLI
 entry point every Goccia binary runs under (`TGocciaApplication.Run`) still ends

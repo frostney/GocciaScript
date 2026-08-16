@@ -4481,16 +4481,33 @@ begin
             E.Message is empty for it, which dropped the text both oracles
             print. }
           { A refused allocation is uncatchable and must unwind to the host, not
-            be converted into a hook failure and swallowed here. }
+            be converted into a hook failure and swallowed here. Pending host
+            work is cleared first: the host catches this error and later files
+            still run in the same process, so stale microtasks or fetch
+            completions from the aborted file must not leak into them. }
           on E: TGocciaMemoryLimitError do
+          begin
+            if (TGocciaMicrotaskQueue.Instance <> nil) then
+              TGocciaMicrotaskQueue.Instance.ClearQueue;
+            DiscardFetchCompletions;
             raise;
+          end;
           on E: TGocciaThrowValue do
             AssertionFailed('callback execution',
               'Callback threw an exception: ' + DescribeThrownValue(E.Value));
           on E: Exception do
           begin
             if IsEngineIntegrityFault(E) then
+            begin
+              { Terminal for the same reason as the refusal above, and with the
+                same bookkeeping: the run is unwinding to the host, so pending
+                host work must not leak into the next file and the remaining
+                hooks must not run on a heap that is no longer sound. }
+              if (TGocciaMicrotaskQueue.Instance <> nil) then
+                TGocciaMicrotaskQueue.Instance.ClearQueue;
+              DiscardFetchCompletions;
               raise;
+            end;
             AssertionFailed('callback execution', 'Callback threw an exception: ' + E.Message);
           end;
         end;
