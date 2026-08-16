@@ -86,6 +86,7 @@ type
     procedure TestAsyncFunctionCatchCannotSwallowRefusal;
     procedure TestPromiseExecutorCatchCannotSwallowRefusal;
     procedure TestAsyncGeneratorReturnCannotSwallowRefusal;
+    procedure TestIteratorCloseCannotSwallowRefusal;
     procedure TestScriptErrorsStayCatchable;
     procedure TestSyncCatchCannotSwallowIntegrityFault;
     procedure TestAsyncFunctionCatchCannotSwallowIntegrityFault;
@@ -179,6 +180,8 @@ begin
   Test('Ordinary script errors stay catchable', TestScriptErrorsStayCatchable);
   Test('Script try/catch cannot swallow an engine-integrity fault',
     TestSyncCatchCannotSwallowIntegrityFault);
+  Test('A guest iterator return() cannot swallow a refusal while closing',
+    TestIteratorCloseCannotSwallowRefusal);
   Test('An async function body cannot swallow an engine-integrity fault',
     TestAsyncFunctionCatchCannotSwallowIntegrityFault);
   Test('A sandbox fs promise cannot swallow a refusal',
@@ -482,6 +485,44 @@ begin
   Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
     'memory-limit-async-generator-bytecode.js', TGocciaMemoryLimitError)).ToBe(True);
+end;
+
+procedure TMemoryLimitTests.TestIteratorCloseCannotSwallowRefusal;
+const
+  { The close path, which is the one place the engine deliberately throws
+    errors away. A `for..of` body that throws closes the iterator, and
+    ES2026 §7.4.11 IteratorClose step 5 says the body's completion wins over
+    anything `return()` raises — so the engine's Close*PreservingError helpers
+    swallow whatever comes out of `return()`.
+
+    That rule is written over Completion Records: it is about one guest
+    completion displacing another. A host resource ceiling never becomes a
+    Completion Record, so suppressing it there is not the spec's instruction,
+    it is a hole — and precisely the shape the ceiling contract exists to
+    forbid, since a guest could refuse allocations for free by growing inside
+    a return() reached from a throwing loop body. Both executors must let it
+    through. }
+  SourceText =
+    'const iterable = {' + sLineBreak +
+    '  [Symbol.iterator]() {' + sLineBreak +
+    '    return {' + sLineBreak +
+    '      next: () => ({ value: 1, done: false }),' + sLineBreak +
+    '      return: () => { ' + OVER_BUDGET_SOURCE_TAIL + ' }' + sLineBreak +
+    '    };' + sLineBreak +
+    '  }' + sLineBreak +
+    '};' + sLineBreak +
+    'try {' + sLineBreak +
+    '  for (const v of iterable) { throw new Error("body"); }' + sLineBreak +
+    '} catch (e) {}';
+begin
+  Expect<Boolean>(FaultEscapesScript(SourceText,
+    TGocciaInterpreterExecutor.Create,
+    'memory-limit-iterator-close-interpreted.js',
+    TGocciaMemoryLimitError)).ToBe(True);
+  Expect<Boolean>(FaultEscapesScript(SourceText,
+    TGocciaBytecodeExecutor.Create,
+    'memory-limit-iterator-close-bytecode.js',
+    TGocciaMemoryLimitError)).ToBe(True);
 end;
 
 procedure TMemoryLimitTests.TestScriptErrorsStayCatchable;

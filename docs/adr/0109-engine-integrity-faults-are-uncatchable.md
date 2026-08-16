@@ -152,22 +152,42 @@ full summary and exits `0` beneath a stderr line that says it was aborted. No
 fixed checkpoint fixes that, because the zombie can report at any later moment
 — a second check only moves the window. So the thread that knows ends the
 process, and the cancel becomes what it always really was, the orderly half.
-Halting from a secondary thread is not a compromise here: unit finalization on
-a suspect heap was never something this ADR promised to survive, and the
-diagnostic is written and flushed before the halt for exactly that reason.
 
-Two smaller mechanics, because the obvious version of each is wrong. The worker
-cancels through the pool's cancellation *flag* rather than the pool object: the
-pool is freed while an abandoned worker is still running, and it leaks the flag
-rather than freeing it for precisely that reason, so the flag is the only handle
-a zombie can safely hold. And the main thread keeps a check of its own on a
-process-level first-fault flag — not because the abort depends on it, but
-because halt runs finalization first and the main thread can surface from
-`RunAll` inside that window; without the check it would spend the window
-printing a summary the process is about to truncate. That flag also settles who
-writes the diagnostic: faults arrive on worker threads, corruption that reaches
-one worker can reach two, and first-fault-wins keeps them from shredding the
-message between them.
+*How* it ends the process is not `Halt`, and that distinction was paid for.
+`Halt` runs unit finalization on the calling thread before the process dies; on
+a worker thread that tears down process-wide RTL state — the thread manager
+included — while peer workers are still executing tests. The next threading
+operation in a peer then fails with the RTL's own `Thread error`
+(`sysconst.SThreadError`), the testing library's generic per-test arm converts
+it into a recorded test failure, and the abort prints an ordinary-looking red
+line for a test that never failed. It reproduced in roughly one aborting run in
+seventy-five, and the halt was provably its cause: removing only the worker-side
+halt took it to zero in three hundred runs, and forty non-aborting runs of the
+same files — each executing every file rather than the handful an abort reaches
+— never produced one. The abort therefore terminates through the C runtime
+(`_exit`; `TerminateProcess` on Windows, which unlike `ExitProcess` also skips
+DLL process-detach handlers that could deadlock on a dead worker's lock),
+running no finalization at all. That
+removes the window instead of papering over it, and it trusts the suspect heap
+*less*: no finalizer runs on a heap the engine has already said it cannot vouch
+for. Buffered stdout dies with the process, which is what an abort wants.
+
+Three smaller mechanics, because the obvious version of each is wrong. The
+worker cancels through the pool's cancellation *flag* rather than the pool
+object: the pool is freed while an abandoned worker is still running, and it
+leaks the flag rather than freeing it for precisely that reason, so the flag is
+the only handle a zombie can safely hold. The main thread keeps a check of its
+own on a process-level first-fault flag — not because the abort depends on it,
+but because a terminating thread waits for the diagnostic to be written and the
+main thread can surface from `RunAll` inside that window; without the check it
+would spend the window printing a summary that is about to vanish. And that wait
+is itself the fix to a second defect: the diagnostic is written by whichever
+thread wins the first-fault gate, so a *loser* reaching the exit first would end
+the process mid-write and the abort would truncate its own message. That was
+seen once per hundred and fifty aborting runs with two or more faulting files,
+and never with one — the signature of a race between two threads rather than of
+the teardown above. Every thread that terminates now waits for the written flag,
+under a bounded timeout so a reporter that dies mid-write cannot hang the abort.
 
 This is one tier's policy, not a guarantee about every exit path. The shared CLI
 entry point every Goccia binary runs under (`TGocciaApplication.Run`) still ends

@@ -549,6 +549,7 @@ uses
   Goccia.StackLimit,
   Goccia.Timeout,
   Goccia.Types.Enforcement,
+  Goccia.UncatchableFault,
   Goccia.URI,
   Goccia.Utils,
   Goccia.Values.ArgumentsObjectValue,
@@ -3621,10 +3622,13 @@ begin
     end;
   except
     on E: Exception do
-      // AsyncFromSyncIteratorContinuation preserves the rejected value when
-      // closing after a rejected wrapped value also fails. An engine-integrity
-      // fault is not a close failure and keeps unwinding.
-      if IsEngineIntegrityFault(E) then
+      { AsyncFromSyncIteratorContinuation preserves the rejected value when
+        closing after a rejected wrapped value also fails — the ES2026 §7.4.11
+        step 5 rule, applied to a rejection. It is a rule about Completion
+        Records, and a host fault never becomes one: a resource ceiling or an
+        engine-integrity fault is not a close failure, so it keeps unwinding.
+        See Goccia.UncatchableFault.pas. }
+      if IsUncatchableFault(E) then
         raise;
   end;
   ClearIteratorState;
@@ -8628,7 +8632,7 @@ begin
       SSuggestIteratorResultObject);
 end;
 
-// Abrupt-completion variant of CloseRawIterator: per ES2024 §7.4.10
+// Abrupt-completion variant of CloseRawIterator: per ES2026 §7.4.11
 // step 5, when an iteration body completes abruptly the close must
 // not let iter.return()'s own errors replace the original exception.
 // Mirrors CloseIteratorPreservingError in Goccia.Values.IteratorSupport
@@ -8645,10 +8649,15 @@ begin
       CloseRawIterator(AIteratorObject);
   except
     on E: Exception do
-      // Swallow: the original abrupt completion is the one that must
-      // surface to the caller. An engine-integrity fault is not part of
-      // that contract and must reach the host.
-      if IsEngineIntegrityFault(E) then
+      { ES2026 §7.4.11 IteratorClose step 5: when the body completed abruptly,
+        that completion wins over an error from iterator.return(). The
+        suppression is defined over Completion Records — guest completions — and
+        a host fault never becomes one. A resource ceiling and an
+        engine-integrity fault are not close errors the clause is speaking
+        about, so re-raising them is orthogonal to the contract rather than a
+        breach of it; the ceiling argument is in Goccia.MemoryLimit.pas and the
+        family in Goccia.UncatchableFault.pas. }
+      if IsUncatchableFault(E) then
         raise;
   end;
 end;

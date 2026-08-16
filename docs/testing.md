@@ -397,9 +397,7 @@ worth reporting. Grep CI logs for `Integrity fault:` to find these. Unlike
 `--exit-on-first-failure`, this does not let in-flight files finish: under
 `--jobs` the process ends as soon as the faulting worker has written its
 diagnostic, because a worker the watchdog has abandoned outlives the run and
-could otherwise fault after the main thread has stopped listening. A peer worker
-caught mid-test by that exit may print one last `Thread error` failure line —
-noise from the shutdown, not a real test result. The exit
+could otherwise fault after the main thread has stopped listening. The exit
 code is distinct from the ordinary failure exit `1` on purpose, so a harness can
 tell a suite that failed from a suite that stopped being trustworthy; see [CLI
 Conventions](contributing/cli-conventions.md#exit-codes). A refused allocation
