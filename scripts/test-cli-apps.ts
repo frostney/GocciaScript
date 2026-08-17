@@ -7593,6 +7593,21 @@ await section("Memory budget: property storage growth is refused before it happe
       // when nothing refuses it — most of what is resident here is descriptor
       // and key-string storage the budget never sees (ADR 0106 Amendment 1),
       // not the entry array the gate does bound.
+      //
+      // The collecting gate (ADR 0110) raises the interpreted figure, and the
+      // headroom above is what absorbs it. Measured on one machine, production
+      // builds, before -> after: interpreted 80.5 -> 101.7 MiB, compiled
+      // 73.8 -> 73.9 MiB. The cause is visible in the refusal itself — before,
+      // the interpreted run was refused a 4,718,496-byte doubling and the
+      // compiled run an 18,874,272-byte one; after, both are refused the same
+      // 18,874,272-byte doubling. So the interpreted run now carries two more
+      // doublings' worth of descriptors and key strings (4,718,496 -> 9,437,088
+      // -> 18,874,272) when it is finally
+      // refused, and those are exactly the storage the budget does not see.
+      // Compiled is unchanged because it already reached that doubling. Note
+      // which mode was unlucky here is the opposite of the 4 MiB case in
+      // scripts/test-cli.ts: pre-H4 the loser was whichever mode happened to
+      // arrive with a dirtier heap, which is the point of the change.
       assertPeakRssBelow(refused, `refused property growth (${label})`, 384 * 1024 * 1024);
 
       const permitted = Bun.spawnSync([BARE, "--max-memory=16777216", ...modeArgs, bounded], {

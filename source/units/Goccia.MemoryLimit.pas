@@ -79,10 +79,37 @@ type
   Where an owner does exist (ArrayBuffer, string payloads), keep using
   TGarbageCollector.TryReserveExternalBytes and release in the destructor:
   that accounts the allocation for as long as it is live, which a gate
-  cannot do. }
+  cannot do.
+
+  This reads the counter and nothing else — it never collects, so it is safe
+  to ask from anywhere, including from a caller that has not made its own
+  temporaries safe to collect across. RequireNativeBytes below does collect
+  before it refuses, and states the obligation that comes with that. }
 function CanAllocateNativeBytes(const ABytes: Int64): Boolean;
 
-{ Raises TGocciaMemoryLimitError unless ABytes fits the remaining budget. }
+{ Raises TGocciaMemoryLimitError unless ABytes fits the remaining budget.
+
+  Unlike CanAllocateNativeBytes, which only reads the counter, this refuses
+  only once a collection has actually been attempted: a request that does not
+  fit forces one full collection and re-tests the fit before raising. Whether a
+  storage doubling is refused therefore depends on what the program is holding,
+  not on how much collectable garbage happened to be resident when the growth
+  arrived — measured, the same 4 MiB-ceiling property-growth loop that refused
+  at a 2,359,200-byte doubling now reaches the arithmetic crossing at 4,718,496.
+
+  Three shapes still refuse without walking the heap, because for them no
+  collection could change the answer: a request larger than the whole budget, a
+  repeat of a request the previous forced collection already refused at the
+  current live level, and a re-entrant call from inside the collector. See
+  TGarbageCollector.ShouldForceLimitCollection and ADR 0110.
+
+  The forced collection is a real safe point, and this gate is reached from
+  inside a property or element store. Callers must therefore have made the
+  growth point safe to collect at BEFORE consulting the budget — which they do:
+  TGocciaShapedPropertyMap.RequireStorageBytes and
+  TGocciaElementList.RequireStorageBytes each open a TGocciaActiveRootFrame
+  over the store's owner and its pending value and call the budget from inside
+  it. That is why nothing is passed here to protect. }
 procedure RequireNativeBytes(const ABytes: Int64);
 
 implementation
@@ -127,7 +154,24 @@ begin
     Exit;
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
-    Budget := GC.MaxBytes
+  begin
+    { Refuse only once a collection has actually been attempted. Without this
+      the answer depends on how much collectable garbage happens to be resident
+      when the growth arrives, not on what the program is holding: the same
+      workload that refused a doubling at 32,766 entries under a 4 MiB ceiling
+      reached 65,534 with a periodic explicit collection.
+      TryCollectForLimitedBytes forces the collection, re-tests the fit once,
+      and declines to walk the heap for the shapes no collection could change —
+      a request larger than the whole budget, and a repeat of a request the
+      previous forced collection already refused at the current live level.
+
+      Nothing is passed to protect: the callers that reach this gate have
+      already opened their rooting window around the consult (see the contract
+      above), so a value this call could be handed is one they have rooted. }
+    if GC.TryCollectForLimitedBytes(ABytes) then
+      Exit;
+    Budget := GC.MaxBytes;
+  end
   else
     Budget := 0;
   raise TGocciaMemoryLimitError.Create(ABytes, Budget);

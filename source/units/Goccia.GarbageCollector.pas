@@ -147,10 +147,15 @@ type
     FMemoryLimitFiring: Boolean;
     FExternalPressurePending: Boolean;
     FMemoryPressureCountdown: PInteger;
-    // Bytes still live after the most recent forced reservation collection
-    // that failed to make room, or -1 when no such observation is on record.
-    // A collection cannot bring the heap below the level the last one left,
-    // so this bounds what a repeat attempt could possibly reclaim.
+    // Bytes still live after the most recent forced collection that failed to
+    // make room, or -1 when no such observation is on record. Absent an
+    // intervening collection or counter drop, no collection gets below the
+    // level the last forced one left, so this bounds what a repeat attempt
+    // could possibly reclaim — a bounded heuristic, not an invariant: objects
+    // that merely become unreachable move no counter, and the guest-side
+    // escape is Goccia.gc(), which clears the floor. Shared by the charged
+    // reservation path and the uncharged growth gate, for the reason
+    // ShouldForceLimitCollection states.
     FForcedCollectFloor: Int64;
 
     {$IFDEF GC_TIMING}
@@ -165,7 +170,7 @@ type
     function GetWatermark: Integer; {$IFDEF FPC}inline;{$ENDIF}
     procedure ClearActiveRootEntries(const AObject: TGCManagedObject);
     procedure GrowActiveRootStack;
-    function ShouldForceReservationCollection(const ABytes: Int64): Boolean;
+    function ShouldForceLimitCollection(const ABytes: Int64): Boolean;
   protected
     procedure MarkRoots; virtual;
     procedure TraceWeakReferences;
@@ -236,6 +241,26 @@ type
     // collection. Tracing through old roots keeps those young objects live.
     procedure CollectYoung(const AWatermark: Integer);
     procedure ResetPeakBytesAllocated;
+
+    // Forces one collection when a request of ABytes does not currently fit
+    // under MaxBytes and a collection could plausibly change that, then
+    // re-tests the fit. Returns True only when ABytes fits afterwards.
+    //
+    // Charges nothing: the charged path (TryReserveExternalBytes) adds the
+    // bytes itself once this returns True, and the uncharged growth gate
+    // (Goccia.MemoryLimit) permits the growth without ever charging.
+    // False also covers the shapes no collection could help — a request
+    // larger than the whole budget, a repeat of a request the last forced
+    // collection already refused, and re-entrant calls from inside the
+    // collector — none of which walk the heap.
+    //
+    // AProtect is for callers whose stack-held value nothing else roots. The
+    // growth gate passes nil deliberately: its callers have already opened a
+    // TGocciaActiveRootFrame over the store's owner and pending value before
+    // consulting the budget, so the window is the caller's, not this one's.
+    // See ADR 0110.
+    function TryCollectForLimitedBytes(const ABytes: Int64;
+      const AProtect: TGCManagedObject = nil): Boolean;
     function TryReserveExternalBytes(const ABytes: Int64;
       const AProtect: TGCManagedObject = nil): Boolean;
     procedure ReleaseExternalBytes(const ABytes: Int64);
@@ -1119,30 +1144,56 @@ begin
   FPeakBytesAllocated := FBytesAllocated;
 end;
 
-function TGarbageCollector.ShouldForceReservationCollection(
+function TGarbageCollector.ShouldForceLimitCollection(
   const ABytes: Int64): Boolean;
 begin
-  // Last resort: a reservation is only refused once a collection has actually
-  // been attempted. The pressure heuristic cannot decide this on its own — it
-  // triggers at a fixed reserve below the ceiling, so a reservation larger
-  // than that reserve used to be refused with reclaimable garbage still on the
-  // heap whenever the live set sat below the trigger.
+  // Last resort: a reservation — or a gated growth — is only refused once a
+  // collection has actually been attempted. The pressure heuristic cannot
+  // decide this on its own: it triggers at a fixed reserve below the ceiling,
+  // so a request larger than that reserve used to be refused with reclaimable
+  // garbage still on the heap whenever the live set sat below the trigger.
   //
   // Two shapes are refused without walking the heap, because for them no
   // collection could change the answer. A request larger than the whole budget
   // never fits. And once a forced collection has left FForcedCollectFloor
   // bytes live, no later collection gets the heap below that level, so a
   // request that does not fit beside the floor cannot be made to fit either —
-  // which is what keeps a guest that catches the RangeError and retries at
-  // O(1) per attempt instead of a full mark-and-sweep each time. The floor is
-  // per request size, so a smaller request that the floor does not rule out
-  // still forces its collection.
+  // which is what keeps a guest that retries a refused request at O(1) per
+  // attempt instead of a full mark-and-sweep each time. The floor is per
+  // request size, so a smaller request that the floor does not rule out still
+  // forces its collection.
+  //
+  // The floor is shared by both refusal paths on purpose. It records a fact
+  // about the heap ("the last forced collection left this many bytes live"),
+  // not about the caller, and both paths force the same full collection and
+  // then apply the same fit test, so a level that defeated one defeats the
+  // other at the same request size. A second, gate-private floor would only
+  // buy each path the right to re-learn what the other just proved.
   Result := not FCollecting and not FMemoryLimitFiring and
     (FMaxBytes > 0) and (ABytes <= FMaxBytes) and
     (FBytesAllocated <= High(Int64) - ABytes) and
     (FBytesAllocated + ABytes > FMaxBytes) and
     ((FForcedCollectFloor < 0) or
      (FForcedCollectFloor <= FMaxBytes - ABytes));
+end;
+
+function TGarbageCollector.TryCollectForLimitedBytes(const ABytes: Int64;
+  const AProtect: TGCManagedObject): Boolean;
+begin
+  if not ShouldForceLimitCollection(ABytes) then
+    Exit(False);
+  CollectForMemoryPressure(AProtect, True);
+  Result := (FBytesAllocated <= High(Int64) - ABytes) and
+    ((FMaxBytes <= 0) or (FBytesAllocated + ABytes <= FMaxBytes));
+  // Record the level this collection could not get below, so a retry of a
+  // request it already refused skips the walk that just proved fruitless.
+  // Collect clears this again — as do CollectYoung and the conditional
+  // invalidations on any counter drop (ReleaseExternalBytes,
+  // UnregisterObject) — so any ordinary collection re-arms forcing.
+  // The per-request-size term is pinned by the damper test's third arm in
+  // Goccia.GarbageCollector.Test.pas (a size-independent floor fails it).
+  if not Result then
+    FForcedCollectFloor := FBytesAllocated;
 end;
 
 function TGarbageCollector.TryReserveExternalBytes(
@@ -1152,17 +1203,8 @@ begin
     Exit(True);
   Result := (FBytesAllocated <= High(Int64) - ABytes) and
     ((FMaxBytes <= 0) or (FBytesAllocated + ABytes <= FMaxBytes));
-  if not Result and ShouldForceReservationCollection(ABytes) then
-  begin
-    CollectForMemoryPressure(AProtect, True);
-    Result := (FBytesAllocated <= High(Int64) - ABytes) and
-      ((FMaxBytes <= 0) or (FBytesAllocated + ABytes <= FMaxBytes));
-    // Record the level this collection could not get below, so a retry of a
-    // request it already refused skips the walk that just proved fruitless.
-    // Collect clears this again, so any ordinary collection re-arms forcing.
-    if not Result then
-      FForcedCollectFloor := FBytesAllocated;
-  end;
+  if not Result then
+    Result := TryCollectForLimitedBytes(ABytes, AProtect);
   if not Result then
     Exit;
   Inc(FBytesAllocated, ABytes);

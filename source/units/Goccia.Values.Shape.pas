@@ -131,8 +131,8 @@ type
       const APendingValue: TGocciaPropertyDescriptor); override;
     // The budget decision, taken inside the rooted window RequireStorageBytes
     // has just opened. Separate and virtual so the window and the decision can
-    // be reasoned about — and exercised — apart: a gate that collects before
-    // refusing collects HERE, with the store's values already rooted.
+    // be reasoned about — and exercised — apart: the gate collects before
+    // refusing, and it collects HERE, with the store's values already rooted.
     procedure ConsultStorageBudget(const ABytes: Int64); virtual;
   public
     constructor Create; overload;
@@ -313,7 +313,18 @@ begin
     geometric growth makes O(log Count) times over a map's whole life.
 
     APendingValue is pushed unconditionally: every growth point is reached from
-    Add, which always has a real value in hand. }
+    Add, which always has a real value in hand.
+
+    The frame closes when this method returns — BEFORE the reallocation it just
+    authorized. Re-audited when the gate learned to collect (ADR 0110), on the
+    same invariant the element-side gate carries: the gate is the only
+    prospective collection point in the growth window. It holds here by a
+    shorter argument than on the element side, because nothing after the
+    consult allocates a managed object at all — Grow's Rehash and Compact's
+    copy are SetLength on plain dynamic arrays and record moves, so there is no
+    allocation for a collection to hang off even in principle. The collection
+    the gate now takes happens inside this frame, in ConsultStorageBudget, with
+    FOwner and the pending descriptor's roots already pushed. }
   Roots.Initialize;
   try
     Roots.Add(FOwner);
