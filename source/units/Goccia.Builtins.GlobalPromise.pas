@@ -670,9 +670,13 @@ end;
 // fulfilment, `{ status, reason }` for a rejection. The status string charges
 // the memory ceiling, and crossing it collects with only that string protected —
 // so the allocation is a GC safe point, and the entry is reachable only from
-// this frame until the caller stores it. (The property writes only check the
-// budget and raise; they never collect.) Callers root the returned entry across
-// that store.
+// this frame until the caller stores it. The property writes are a second
+// prospective safe point rather than none: each one can reach the property
+// map's growth gate, and the gate consults the budget inside a frame of its
+// own that roots the map's owner and the descriptor it has not stored yet. So
+// the entry and the value going into it are covered at the store by the gate,
+// and covered before it — while the status string is being built — by the root
+// this function takes. Callers root the returned entry across their own store.
 function CreateAllSettledEntry(const AStatus, APropertyName: string;
   const AValue: TGocciaValue): TGocciaObjectValue;
 var

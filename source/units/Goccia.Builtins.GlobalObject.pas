@@ -96,10 +96,21 @@ type
 
   TPendingDefinePropertyArray = array of TPendingDefineProperty;
 
+// AStagingRoots roots what the appended descriptor points at for as long as
+// the batch is staged. §20.1.2.3.1 collects every descriptor before it defines
+// any of them, and each collection step reads through the properties object —
+// an accessor or a Proxy trap, so a guest-code safe point. A staged
+// TGocciaPropertyDescriptor is a plain class the collector does not trace, and
+// this array is a native local it cannot see either, so without this push the
+// values captured for the first key are reachable from nowhere while the
+// second key's getter runs. A shared frame, not a temp root per descriptor:
+// the same function can legitimately appear as several keys' getter, and a
+// temp-root set would collapse those into one entry.
 procedure AppendPendingDefineProperty(
   var APendingProperties: TPendingDefinePropertyArray;
   const AName: string; const ASymbol: TGocciaSymbolValue;
-  const AIsSymbol: Boolean; const ADescriptor: TGocciaPropertyDescriptor);
+  const AIsSymbol: Boolean; const ADescriptor: TGocciaPropertyDescriptor;
+  var AStagingRoots: TGocciaActiveRootFrame);
 var
   Index: Integer;
 begin
@@ -109,6 +120,9 @@ begin
   APendingProperties[Index].Symbol := ASymbol;
   APendingProperties[Index].IsSymbol := AIsSymbol;
   APendingProperties[Index].Descriptor := ADescriptor;
+  AStagingRoots.Add(ASymbol);
+  if Assigned(ADescriptor) then
+    ADescriptor.PushRoots(AStagingRoots);
 end;
 
 procedure ReleasePendingDefineProperties(
@@ -856,7 +870,22 @@ var
   KeyValue: TGocciaValue;
   GC: TGarbageCollector;
   I: Integer;
+  StagingRoots: TGocciaActiveRootFrame;
 
+  // PropertyDescriptor is read for its Enumerable flag and then dropped, and
+  // it is deliberately NOT freed. Whether GetOwnPropertyDescriptor's result is
+  // caller-owned cannot be decided here: an ordinary object returns the
+  // descriptor its property map owns, and freeing that corrupts the map; a
+  // proxy returns a freshly completed one when it has a
+  // getOwnPropertyDescriptor trap but forwards to the target — map-owned
+  // again — when it does not; a String object synthesises for index and
+  // `length` keys and returns a map-owned descriptor for every other key. So
+  // the receiver's type does not answer the question, and probing for the trap
+  // would re-run guest code the spec only permits once per key.
+  //
+  // The consequence is a small leak per synthesising key, shared with every
+  // other GetOwnPropertyDescriptor caller in the engine. Closing it needs an
+  // ownership signal on the accessor itself, not a rule at this call site.
   procedure CaptureStringDescriptor(const AName: string);
   begin
     PropertyDescriptor := PropertiesObject.GetOwnPropertyDescriptor(AName);
@@ -864,7 +893,7 @@ var
     begin
       DescriptorValue := PropertiesObject.GetProperty(AName);
       AppendPendingDefineProperty(PendingProperties, AName, nil, False,
-        ToPropertyDescriptor(DescriptorValue, nil));
+        ToPropertyDescriptor(DescriptorValue, nil), StagingRoots);
     end;
   end;
 
@@ -875,7 +904,7 @@ var
     begin
       DescriptorValue := PropertiesObject.GetSymbolProperty(ASymbol);
       AppendPendingDefineProperty(PendingProperties, '', ASymbol, True,
-        ToPropertyDescriptor(DescriptorValue, nil));
+        ToPropertyDescriptor(DescriptorValue, nil), StagingRoots);
     end;
   end;
 begin
@@ -890,6 +919,12 @@ begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) and not (AArgs.GetElement(1) is TGocciaObjectValue) then
     GC.AddTempRoot(PropertiesObject);
+  { The staged batch and the proxy key list are both native locals holding
+    values nothing else refers to while the capture loop runs guest code; see
+    AppendPendingDefineProperty. The frame spans the apply loop as well, so a
+    descriptor still staged when an earlier DefineProperty runs a Proxy
+    defineProperty trap stays rooted too. }
+  StagingRoots.Initialize;
   try
     try
       // ES2026 §20.1.2.3.1 steps 2-4: collect descriptors before
@@ -897,6 +932,8 @@ begin
       if PropertiesObject is TGocciaProxyValue then
       begin
         PropertyKeyValues := TGocciaProxyValue(PropertiesObject).GetOwnPropertyKeyValues;
+        for I := 0 to High(PropertyKeyValues) do
+          StagingRoots.Add(PropertyKeyValues[I]);
         for KeyValue in PropertyKeyValues do
         begin
           if KeyValue is TGocciaSymbolValue then
@@ -915,6 +952,8 @@ begin
           CaptureStringDescriptor(PropertyNames[I]);
 
         SymbolKeys := PropertiesObject.GetOwnSymbols;
+        for I := 0 to High(SymbolKeys) do
+          StagingRoots.Add(SymbolKeys[I]);
         for I := 0 to High(SymbolKeys) do
           CaptureSymbolDescriptor(SymbolKeys[I]);
       end;
@@ -945,6 +984,7 @@ begin
     end;
   finally
     ReleasePendingDefineProperties(PendingProperties);
+    StagingRoots.Clear;
     if Assigned(GC) and not (AArgs.GetElement(1) is TGocciaObjectValue) then
       GC.RemoveTempRoot(PropertiesObject);
   end;
