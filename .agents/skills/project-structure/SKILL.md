@@ -12,7 +12,7 @@ license: Unlicense OR MIT
 
 Apply only the roles and documents needed by the requested work. Preserve valid
 project conventions; surface a material restructuring choice before making it.
-Stack skills own language-specific commands and config.
+Language and stack skills own language-specific commands and config.
 
 ## Core layout
 
