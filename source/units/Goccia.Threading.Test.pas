@@ -42,12 +42,25 @@ type
 
 var
   GWorkerCallCount: Integer;
+  { Callbacks that found the run's cancellation flag ALREADY set when they
+    started.  This is the only work a cancel is answerable for: everything
+    counted before the flag is set ran while the pool had no reason to stop.
+    See TestPoolCancelOnErrorBoundsWorkAcrossWorkers. }
+  GPostCancelCallCount: Integer;
+  { Test-owned stop marker, set by the failing callback AFTER it has set the
+    pool's cancellation flag. Deliberately independent of the pool's own flag
+    reads: a probe that asked the pool's flag would observe the same stale
+    value a broken cross-thread read path would feed the workers, counting
+    zero in exactly the regression this test guards. }
+  GCancelSignalled: Boolean;
   GWorkerFileNames: array of string;
   GWorkerLock: TGocciaCriticalSection;
 
 procedure ResetWorkerState;
 begin
   GWorkerCallCount := 0;
+  GPostCancelCallCount := 0;
+  GCancelSignalled := False;
   SetLength(GWorkerFileNames, 0);
 end;
 
@@ -83,8 +96,10 @@ type
     procedure FailOnSecondWorker(const AFileName: string;
       const AIndex: Integer; out AConsoleOutput: string;
       out AErrorMessage: string; AData: Pointer);
-    { Counts every invocation and fails on 'fail.js', so a test can assert
-      how much work actually reached the worker callback after a cancel. }
+    { Counts every invocation and fails on 'fail.js'.  AData carries the
+      run's cancellation flag, so each invocation can also record whether
+      the stop signal was already set when it started — the measurement
+      TestPoolCancelOnErrorBoundsWorkAcrossWorkers asserts on. }
     procedure CountingFailWorker(const AFileName: string;
       const AIndex: Integer; out AConsoleOutput: string;
       out AErrorMessage: string; AData: Pointer);
@@ -166,16 +181,42 @@ end;
 procedure TTestWorkerHost.CountingFailWorker(const AFileName: string;
   const AIndex: Integer; out AConsoleOutput: string;
   out AErrorMessage: string; AData: Pointer);
+var
+  StartedAfterCancel: Boolean;
 begin
   AConsoleOutput := '';
+  { The started-after-cancel probe reads the test-owned marker, not the
+    pool's flag: the pool flag is read through the very path whose
+    cross-thread visibility is under test, so a stale-read regression would
+    blind a flag-based probe to itself. The marker is set only after the
+    pool's flag, so marker-set implies flag-set, and the design bound (one
+    in-flight file per worker) carries over. }
   CriticalSectionEnter(GWorkerLock);
   try
+    StartedAfterCancel := GCancelSignalled;
     Inc(GWorkerCallCount);
+    if StartedAfterCancel then
+      Inc(GPostCancelCallCount);
   finally
     CriticalSectionLeave(GWorkerLock);
   end;
   if AFileName = 'fail.js' then
-    AErrorMessage := 'deliberate failure'
+  begin
+    { Set the pool's stop signal directly, then the marker. Cancel first:
+      every callback that starts after the marker is visible therefore
+      started after the pool was told to stop, which is what the ceiling
+      bounds. The pool's own cancel-on-error follows when this result is
+      recorded; the property exists for exactly this early-cancel use. }
+    if Assigned(AData) then
+      TGocciaCancellationFlag(AData).Cancel;
+    CriticalSectionEnter(GWorkerLock);
+    try
+      GCancelSignalled := True;
+    finally
+      CriticalSectionLeave(GWorkerLock);
+    end;
+    AErrorMessage := 'deliberate failure';
+  end
   else
     AErrorMessage := '';
 end;
@@ -475,18 +516,40 @@ end;
   used to be a plain Boolean written and read by several threads without
   synchronisation, so a worker could observe a stale False after a peer
   had already failed and keep pulling queued files.  With the failing
-  file first in a long queue and eight workers, only the handful of files
-  already in flight may reach the callback; a worker that misses the
-  cancel drains the rest of the queue and blows the bound.  Repeated
+  file first in a long queue and eight workers, a worker that misses the
+  cancel drains the rest of the queue instead of stopping.  Repeated
   because a lost update is timing-dependent and a single run proves
-  little. }
+  little.
+
+  What is measured is the work admitted AFTER the stop signal is set, not
+  the total.  The total is a race against the scheduler and not the
+  pool's to answer for: every file counted before the flag is set ran
+  while nothing had asked the pool to stop.  The failing worker only
+  reaches Cancel once its callback has returned and its result slot is
+  written, and on a loaded machine it can lose the CPU inside that
+  window while seven peers keep dequeuing — measured draining 1999 of
+  2000 files with the pool behaving exactly as designed.  An earlier
+  version of this test capped the total at 200 and failed roughly 1 run
+  in 50 under eight-way oversubscription for that reason alone.
+
+  The post-cancel count, by contrast, is bounded by the design rather
+  than by timing.  A worker re-reads the flag before every file, so once
+  Cancel returns the only callbacks that can still start are those whose
+  check happened just before it — at most one per worker, and never a
+  second, because that worker's next check sees the flag set.
+
+  The count is taken against a test-owned marker set AFTER the pool's
+  flag, never against the pool's flag itself: a probe that asked the
+  pool would read through the very path whose cross-thread visibility
+  this test guards, and a stale-read regression would report zero while
+  the queue drained.  Against the independent marker, that same
+  regression sends the count into the hundreds and the ceiling bites. }
 procedure TTestThreading.TestPoolCancelOnErrorBoundsWorkAcrossWorkers;
 const
   FILE_COUNT = 2000;
   WORKER_COUNT = 8;
-  { Generous: the true in-flight set is at most WORKER_COUNT.  The bound
-    only has to separate "cancelled promptly" from "drained the queue". }
-  MAX_EXECUTED = 200;
+  { One in-flight file per worker is the whole in-flight set. }
+  MAX_POST_CANCEL_EXECUTIONS = WORKER_COUNT;
 var
   Pool: TGocciaThreadPool;
   Files: TStringList;
@@ -506,10 +569,16 @@ begin
       Pool := TGocciaThreadPool.Create(WORKER_COUNT);
       try
         Pool.CancelOnError := True;
-        Pool.RunAll(Files, Host.CountingFailWorker);
+        { Hand this run's stop signal to the callback so each invocation
+          can tell whether it started before or after the cancel.  Read
+          after construction and before RunAll, as the property requires
+          — nothing here abandons a worker, so the flag stays this
+          pool's for the whole run. }
+        Pool.RunAll(Files, Host.CountingFailWorker, Pool.CancelFlag);
         Expect<Boolean>(Pool.Cancelled).ToBe(True);
         Expect<Boolean>(GWorkerCallCount >= 1).ToBe(True);
-        Expect<Boolean>(GWorkerCallCount <= MAX_EXECUTED).ToBe(True);
+        Expect<Boolean>(
+          GPostCancelCallCount <= MAX_POST_CANCEL_EXECUTIONS).ToBe(True);
       finally
         Pool.Free;
       end;
