@@ -7,9 +7,9 @@ description: >-
   or generate release notes.
 license: Unlicense OR MIT
 compatibility: >-
-  Requires git and the GitHub CLI (gh) authenticated to the target repository,
-  plus network access. Supports the project's changelog tooling or a
-  hand-maintained changelog.
+  Requires git, Python 3.11 or newer, the GitHub CLI (gh) authenticated to the
+  target repository, the internal `delivery-wait` skill, and network access.
+  Supports the project's changelog tooling or a hand-maintained changelog.
 ---
 
 # Create release
@@ -56,7 +56,8 @@ one evidence-backed path when publication is authorized.
 
 ## Publish
 
-1. Wait for and verify the squash merge; never tag the open PR branch.
+1. Use `delivery-wait` to await and verify the squash merge for the exact PR
+   head; never tag the open PR branch.
 2. Refresh the merged base, then re-read the actual workflow YAML and release
    documentation. Identify separate owners for tag creation, GitHub release
    creation, artifact signing, and registry publishing.
@@ -70,7 +71,10 @@ one evidence-backed path when publication is authorized.
      tag once and create one release.
 4. Stop when ownership is ambiguous or documentation and workflow disagree.
 5. Execute only the selected route and verify the final tag target, release,
-   workflow result, artifacts, and registry state that the route owns.
+   workflow result, artifacts, and registry state that the route owns. Use the
+   helper's `wait workflow-terminal`, `wait tag-target`, and
+   `wait release-assets` operations for those GitHub transitions; do not
+   monitor unchanged state through model turns.
 
 Lead with the release outcome, PR/release URL, selected publisher, and current
 evidence. Never describe an unobserved state as complete.
