@@ -42,8 +42,8 @@ describe.runIf(hasGoccia)("class installation GC roots", () => {
   });
 
   test("a computed static field key survives its own conversion", () => {
-    // The initializer is evaluated before the key is resolved, so the field
-    // value is live across the guest toString.
+    // The key is resolved while the class is being defined, so the class
+    // itself is what is live across the guest toString.
     const Keyed = class {
       static [{
         toString() {
@@ -54,6 +54,39 @@ describe.runIf(hasGoccia)("class installation GC roots", () => {
     };
 
     expect(Keyed.computed).toBe("held-value");
+  });
+
+  test("a computed static field key survives an earlier field's collection", () => {
+    // Every computed element key is resolved up front, during class
+    // definition, and held until the element that owns it is installed. A
+    // field declared ahead of it runs its initializer in between, so the
+    // already-resolved key is live across that guest code.
+    const Keyed = class {
+      static early = (churn(), "first");
+      static [{
+        toString() {
+          return "com" + "puted";
+        },
+      }] = "held" + "-value";
+    };
+
+    expect(Keyed.early).toBe("first");
+    expect(Keyed.computed).toBe("held-value");
+  });
+
+  test("a computed static field key survives a collecting static block", () => {
+    const Keyed = class {
+      static {
+        churn();
+      }
+      static [{
+        toString() {
+          return "blocked" + "-key";
+        },
+      }] = "block-value";
+    };
+
+    expect(Keyed["blocked-key"]).toBe("block-value");
   });
 
   test("an anonymous class survives collecting instance field initializers", () => {

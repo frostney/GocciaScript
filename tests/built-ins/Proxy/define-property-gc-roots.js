@@ -134,8 +134,8 @@ describe.runIf(hasGoccia)("Proxy descriptor GC roots", () => {
 
   test("getOwnPropertyDescriptor keeps the trapped value alive across the extensibility check", () => {
     // The completed descriptor is the sole holder of the value the trap
-    // produced while ProxyTargetIsExtensible runs the inner isExtensible trap.
-    const marker = { tag: "trapped" };
+    // produced while ProxyTargetIsExtensible runs the inner isExtensible trap,
+    // so reading it back after the churn is the whole assertion.
     const inner = { p: 0 };
     const innerProxy = new Proxy(inner, {
       isExtensible(t) {
@@ -156,7 +156,6 @@ describe.runIf(hasGoccia)("Proxy descriptor GC roots", () => {
 
     const desc = Object.getOwnPropertyDescriptor(outer, "p");
     expect(desc.value.tag).toBe("trapped");
-    expect(marker.tag).toBe("trapped");
   });
 
   test("a symbol-keyed getOwnPropertyDescriptor keeps its trapped value alive", () => {

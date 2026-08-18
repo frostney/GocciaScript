@@ -7,19 +7,30 @@ uses
 
   TestingPascalLibrary,
 
+  Goccia.Arguments.Collection,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error,
+  Goccia.Realm,
   Goccia.TestSetup,
   Goccia.Values.Error,
   Goccia.Values.Formatting,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.Values.Primitives,
+  Goccia.Values.ProxyValue;
 
 type
   TTestObjectValue = class(TTestSuite)
   private
+    FLazyFactoryCalls: Integer;
+    FTrapSeenValue: string;
+
     function SimpleObject: TGocciaObjectValue;
+    function LazyPropertyValue: TGocciaValue;
+    function RecordDefinePropertyTrap(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
   public
     procedure SetupTests; override;
 
@@ -30,6 +41,7 @@ type
     procedure TestDeleteProperties;
     procedure TestPrototype;
     procedure TestPrototypeChain;
+    procedure TestProxyDefineTrapSeesMaterializedLazyValue;
   end;
 
 function ContainsFragment(const AText, AFragment: string): Boolean;
@@ -53,6 +65,29 @@ begin
   Result := ObjectValue;
 end;
 
+function TTestObjectValue.LazyPropertyValue: TGocciaValue;
+begin
+  Inc(FLazyFactoryCalls);
+  Result := TGocciaStringLiteralValue.Create('materialized');
+end;
+
+function TTestObjectValue.RecordDefinePropertyTrap(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  DescriptorObject: TGocciaValue;
+begin
+  FTrapSeenValue := '<no descriptor>';
+  if AArgs.Length > 2 then
+  begin
+    DescriptorObject := AArgs.GetElement(2);
+    if DescriptorObject is TGocciaObjectValue then
+      FTrapSeenValue := TGocciaObjectValue(DescriptorObject)
+        .GetProperty(PROP_VALUE).ToStringLiteral.Value;
+  end;
+  Result := TGocciaBooleanLiteralValue.TrueValue;
+end;
+
 procedure TTestObjectValue.SetupTests;
 begin
   Test('Casting', TestCasting);
@@ -62,6 +97,8 @@ begin
   Test('Delete Properties', TestDeleteProperties);
   Test('Prototype', TestPrototype);
   Test('Prototype Chain', TestPrototypeChain);
+  Test('Proxy Define Trap Sees Materialized Lazy Value',
+    TestProxyDefineTrapSeesMaterializedLazyValue);
 end;
 
 procedure TTestObjectValue.TestCasting;
@@ -231,6 +268,46 @@ begin
 
   ObjectValue.AssignProperty('name', TGocciaStringLiteralValue.Create('Jane'));
   Expect<string>(ObjectValue.GetProperty('name').ToStringLiteral.Value).ToBe('Jane');
+end;
+
+{ A lazy descriptor exists so a plain object can keep the factory and run it on
+  first read. A proxy keeps nothing: its [[DefineOwnProperty]] hands the
+  descriptor to the trap and frees it, so the value the trap sees is the only
+  chance the factory's result ever gets. The define path therefore materializes
+  before it roots — without that, the trap is handed `value: undefined` and the
+  factory result is dropped on the floor. }
+procedure TTestObjectValue.TestProxyDefineTrapSeesMaterializedLazyValue;
+var
+  Handler: TGocciaObjectValue;
+  PreviousRealm: TGocciaRealm;
+  Proxy: TGocciaProxyValue;
+  Realm: TGocciaRealm;
+  Target: TGocciaObjectValue;
+begin
+  PreviousRealm := CurrentRealm;
+  Realm := TGocciaRealm.Create('object-value-proxy-lazy-test');
+  SetCurrentRealm(Realm);
+  try
+    FLazyFactoryCalls := 0;
+    FTrapSeenValue := '<trap not run>';
+
+    Target := TGocciaObjectValue.Create;
+    Handler := TGocciaObjectValue.Create;
+    Handler.AssignProperty(PROP_DEFINE_PROPERTY,
+      TGocciaNativeFunctionValue.Create(RecordDefinePropertyTrap,
+        PROP_DEFINE_PROPERTY, 3));
+    Proxy := TGocciaProxyValue.Create(Target, Handler);
+
+    Proxy.DefineProperty('lazy',
+      TGocciaLazyPropertyDescriptorData.Create(LazyPropertyValue,
+        [pfEnumerable, pfConfigurable, pfWritable]));
+
+    Expect<string>(FTrapSeenValue).ToBe('materialized');
+    Expect<Integer>(FLazyFactoryCalls).ToBe(1);
+  finally
+    SetCurrentRealm(PreviousRealm);
+    Realm.Free;
+  end;
 end;
 
 begin

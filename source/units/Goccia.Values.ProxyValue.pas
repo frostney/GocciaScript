@@ -241,7 +241,21 @@ begin
   AFrame.Add(FHandler);
   AFrame.Add(FTarget);
   if Assigned(ADescriptor) then
+  begin
+    { A lazy descriptor is materialized here rather than rooted as it stands.
+      PushRoots deliberately pushes the unmaterialized placeholder — the right
+      call on the store path, where the map keeps the lazy descriptor and
+      materializes it on first read — but a proxy has no map to keep it in:
+      the descriptor is read into the trap's descriptor object immediately
+      below and freed once the trap returns, so leaving it lazy would hand the
+      trap `value: undefined` and drop the factory's value entirely. Forcing
+      the factory before the push is what makes that value both correct and
+      rooted, and it happens after Self/handler/target are on the frame so the
+      factory's own allocations run inside a protected window. }
+    if ADescriptor is TGocciaLazyPropertyDescriptorData then
+      TGocciaLazyPropertyDescriptorData(ADescriptor).Materialize;
     ADescriptor.PushRoots(AFrame);
+  end;
 end;
 
 function CompleteProxyTrapPropertyDescriptor(
