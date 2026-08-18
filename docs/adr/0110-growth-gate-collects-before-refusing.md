@@ -53,7 +53,7 @@ that no map holds yet — a plain class the collector does not trace. It is
 reachable from no GC root at all. A deterministic canary whose `Recycle` records
 the sweep showed the collection taking it:
 
-```
+```text
 with gate-collect:  [probe] collections during gated growth: 1
                     [probe] in-flight value swept by the gate: TRUE
 baseline:           TGocciaMemoryLimitError (0 collections)   # non-vacuity
