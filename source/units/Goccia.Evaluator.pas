@@ -591,22 +591,39 @@ var
   Keys: TArray<TGocciaValue>;
   KeyName: string;
   SourceObject: TGocciaObjectValue;
-  SourceRooted: Boolean;
   SymbolKey: TGocciaSymbolValue;
   Value: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if (ASource is TGocciaUndefinedLiteralValue) or
      (ASource is TGocciaNullLiteralValue) then
     Exit;
 
   SourceObject := ToObject(ASource);
-  SourceRooted := (TGarbageCollector.Instance <> nil) and
-    not (ASource is TGocciaObjectValue);
-  if SourceRooted then
-    TGarbageCollector.Instance.AddTempRoot(SourceObject);
 
+  { The key list is the exposure this loop is built around. OwnPropertyKeysAsValues
+    hands back freshly created string values (and the source's symbols) in a plain
+    Pascal array, which is not a root, and the very next thing the loop does is
+    call a guest getter — arbitrary collecting script code. Without the frame the
+    keys this iteration has not reached yet are reachable from nowhere, so a
+    collection taken inside the *first* getter frees the *second* key and the
+    loop then dispatches ToStringLiteral through freed memory.
+
+    Target and source join them because both must outlive the same getters:
+    ToObject returns the source unchanged when it is already an object, so a
+    spread of a value held only in an evaluator local — a spread of the result
+    of a call — has no root either, and the target is only reachable through the
+    caller's own local until the store lands. The frame replaces the AddTempRoot pair
+    this path used to take on the boxing case for the reason the GC docs give:
+    temp roots are a set, so spreading the same source twice into one literal
+    would have the inner removal unroot the outer copy's source. }
+  Roots.Initialize;
   try
+    Roots.Add(ATarget);
+    Roots.Add(SourceObject);
     Keys := OwnPropertyKeysAsValues(SourceObject);
+    for Key in Keys do
+      Roots.Add(Key);
     for Key in Keys do
     begin
       if CopyDataPropertyKeyExcluded(Key, AExcludedStringKeys,
@@ -635,8 +652,7 @@ begin
       end;
     end;
   finally
-    if SourceRooted then
-      TGarbageCollector.Instance.RemoveTempRoot(SourceObject);
+    Roots.Clear;
   end;
 end;
 
@@ -794,24 +810,6 @@ begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
     GC.CollectForMemoryPressure(AProtect);
-end;
-
-procedure QueueInterpreterResultHandoff(const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
-var
-  GC: TGarbageCollector;
-begin
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) and Assigned(AValue) then
-    GC.AddQueuedRoot(AValue);
-end;
-
-procedure ClearInterpreterResultHandoff(const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
-var
-  GC: TGarbageCollector;
-begin
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) and Assigned(AValue) then
-    GC.RemoveQueuedRoot(AValue);
 end;
 
 function VarBindingNameCollectionMode(
@@ -4041,8 +4039,7 @@ end;
 function EvaluateCallWithOptionalShortCircuit(
   const ACallExpression: TGocciaCallExpression;
   const AContext: TGocciaEvaluationContext;
-  out AShortCircuited: Boolean;
-  const AQueueResultHandoff: Boolean = False): TGocciaValue;
+  out AShortCircuited: Boolean): TGocciaValue;
 var
   Callee: TGocciaValue;
   Arguments: TGocciaArgumentsCollection;
@@ -4238,8 +4235,6 @@ begin
     MarkSuperConstructorCalled;
     AddValueRoot(Roots, Result);
     CollectInterpreterMemoryPressure(Result);
-    if AQueueResultHandoff then
-      QueueInterpreterResultHandoff(Result);
     Roots.Clear;
     Exit;
   end;
@@ -4297,12 +4292,8 @@ begin
   begin
     Callee := EvaluateCallWithOptionalShortCircuit(
       TGocciaCallExpression(ACallExpression.Callee), AContext,
-      AShortCircuited, True);
-    try
-      AddValueRoot(Roots, Callee);
-    finally
-      ClearInterpreterResultHandoff(Callee);
-    end;
+      AShortCircuited);
+    AddValueRoot(Roots, Callee);
     ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
     if AShortCircuited then
     begin
@@ -4371,8 +4362,6 @@ begin
       Result := DirectEvalResult;
       AddValueRoot(Roots, Result);
       CollectInterpreterMemoryPressure(Result);
-      if AQueueResultHandoff then
-        QueueInterpreterResultHandoff(Result);
       Exit;
     end;
 
@@ -4440,8 +4429,6 @@ begin
     end;
     AddValueRoot(Roots, Result);
     CollectInterpreterMemoryPressure(Result);
-    if AQueueResultHandoff then
-      QueueInterpreterResultHandoff(Result);
 
   finally
     Arguments.Free;
@@ -4646,12 +4633,8 @@ begin
   begin
     CallExpr := TGocciaCallExpression(AMemberExpression.ObjectExpr);
     Obj := EvaluateCallWithOptionalShortCircuit(CallExpr, AContext,
-      ShortCircuited, True);
-    try
-      AddValueRoot(Roots, Obj);
-    finally
-      ClearInterpreterResultHandoff(Obj);
-    end;
+      ShortCircuited);
+    AddValueRoot(Roots, Obj);
     ObjectEvaluated := True;
     if Assigned(AOutObjectValue) then
       AOutObjectValue^ := Obj;
@@ -4972,12 +4955,21 @@ var
   ExistingSetter: TGocciaValue;
   ExistingGetter: TGocciaValue;
   IsProtoSetter: Boolean;
+  Roots: TGocciaActiveRootFrame;
+  KeyRoots: TGocciaActiveRootFrame;
 begin
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  if (TGarbageCollector.Instance <> nil) then
-    TGarbageCollector.Instance.AddTempRoot(Obj);
 
+  { Obj is under construction and reachable from nothing else for the whole
+    literal; a property value that runs guest code — a method's default, a
+    spread source's getter — can collect while it is still only a local here.
+    The frame replaces the AddTempRoot pair for the reason the GC docs give for
+    the assignment family: temp roots are a set, so a nested literal that
+    somehow reached the same object would unroot it for the outer one on the
+    inner removal. }
+  Roots.Initialize;
   try
+    Roots.Add(Obj);
     // Process all properties in source order
     for I := 0 to High(AObjectExpression.PropertySourceOrder) do
     begin
@@ -5035,22 +5027,36 @@ begin
               PropertyValue := EvaluateExpression(ComputedPair.Key, AContext);
               PropertyKey := ToPropertyKey(PropertyValue);
               PropertyExpression := ComputedPair.Value;
-              if PropertyExpression is TGocciaObjectMethodDefinition then
-                PropertyValue := EvaluateObjectMethodDefinition(
-                  TGocciaObjectMethodDefinition(PropertyExpression), AContext,
-                  Obj, FunctionNameFromPropertyKey(PropertyKey))
-              else
-              begin
-                PropertyValue := EvaluateExpression(PropertyExpression, AContext);
-                ApplyInferredNameForExpression(PropertyExpression, PropertyValue,
-                  FunctionNameFromPropertyKey(PropertyKey));
-              end;
-              if PropertyKey is TGocciaSymbolValue then
-                Obj.DefineSymbolProperty(TGocciaSymbolValue(PropertyKey), TGocciaPropertyDescriptorData.Create(PropertyValue, [pfEnumerable, pfConfigurable, pfWritable]))
-              else
-              begin
-                ComputedKey := TGocciaStringLiteralValue(PropertyKey).Value;
-                Obj.DefineProperty(ComputedKey, TGocciaPropertyDescriptorData.Create(PropertyValue, [pfEnumerable, pfConfigurable, pfWritable]));
+              { §13.2.5.5 converts the key before the value is evaluated, so the
+                converted key is held in a native local across the value
+                expression — arbitrary guest code, and the collector marks
+                explicit roots only. A key produced by conversion — an object
+                with a toString, or a concatenated string — is referenced from
+                nowhere else, so a collection inside the value expression frees
+                it and the store below reads a freed instance. The per-property
+                frame closes at the store: the key is dead after it. }
+              KeyRoots.Initialize;
+              try
+                KeyRoots.Add(PropertyKey);
+                if PropertyExpression is TGocciaObjectMethodDefinition then
+                  PropertyValue := EvaluateObjectMethodDefinition(
+                    TGocciaObjectMethodDefinition(PropertyExpression), AContext,
+                    Obj, FunctionNameFromPropertyKey(PropertyKey))
+                else
+                begin
+                  PropertyValue := EvaluateExpression(PropertyExpression, AContext);
+                  ApplyInferredNameForExpression(PropertyExpression, PropertyValue,
+                    FunctionNameFromPropertyKey(PropertyKey));
+                end;
+                if PropertyKey is TGocciaSymbolValue then
+                  Obj.DefineSymbolProperty(TGocciaSymbolValue(PropertyKey), TGocciaPropertyDescriptorData.Create(PropertyValue, [pfEnumerable, pfConfigurable, pfWritable]))
+                else
+                begin
+                  ComputedKey := TGocciaStringLiteralValue(PropertyKey).Value;
+                  Obj.DefineProperty(ComputedKey, TGocciaPropertyDescriptorData.Create(PropertyValue, [pfEnumerable, pfConfigurable, pfWritable]));
+                end;
+              finally
+                KeyRoots.Clear;
               end;
             end;
           end;
@@ -5183,8 +5189,7 @@ begin
 
   Result := Obj;
   finally
-    if (TGarbageCollector.Instance <> nil) then
-      TGarbageCollector.Instance.RemoveTempRoot(Obj);
+    Roots.Clear;
   end;
 end;
 
@@ -5292,6 +5297,7 @@ var
   ShouldCloseIterator: Boolean;
   IterationTracker: TGocciaDisposalTracker;
   DisposalError: TGocciaValue;
+  HeadRoots: TGocciaActiveRootFrame;
 
   procedure RegisterForOfUsingResource;
   var
@@ -5464,13 +5470,35 @@ begin
         HeadCompleted := False;
         HeadYielding := False;
         ShouldCloseIterator := True;
+        { The iteration head is the one stretch where the per-iteration values
+          are held by native locals alone. The value read out of the guest
+          `next` result crosses it, and the binding scope is freshly created
+          here — a scope is a managed object, and CreateChild does not root it.
+          The body is safe because EvaluateLoopBodyStatement pushes
+          IterContext.Scope as an active root and scope marking walks the parent
+          chain; between them sits AssignPattern, which runs guest code for a
+          destructuring default, a computed key or an assignment target. The
+          frame closes in the head's own finally, before the body pushes.
+
+          IterResult is deliberately *not* pushed. It is dead here — both reads
+          of it happen above, before this frame exists, and every later mention
+          is a reassignment — and pushing it would be actively unsafe: on a
+          resume into the head (a yield or await inside a destructuring default)
+          HasSavedLoopState skips the AdvanceNext assignment, so the local holds
+          stack garbage that the next collection would virtual-dispatch through.
+          The two reads it does have are safe on their own account: IterResult is
+          the receiver of both GetProperty calls, so a collecting `done` or
+          `value` getter has it rooted through the call scope. }
+        HeadRoots.Initialize;
         try
           try
             CheckExecutionTimeout;
             IncrementInstructionCounter;
             CheckInstructionLimit;
 
+            HeadRoots.Add(CurrentValue);
             IterScope := AContext.Scope.CreateChild(skBlock);
+            HeadRoots.Add(IterScope);
             IterContext := AContext;
             IterContext.Scope := IterScope;
 
@@ -5543,6 +5571,7 @@ begin
             ClearSavedLoopState;
             Continuation.ClearExpressionValues;
           end;
+          HeadRoots.Clear;
         end;
       end;
 
@@ -5749,6 +5778,7 @@ var
   SavedIteratorValue, SavedCurrentValue, SavedNextMethod: TGocciaValue;
   SavedIterScope, SavedActiveScope: TGocciaScope;
   HasSavedLoopState: Boolean;
+  HeadRoots: TGocciaActiveRootFrame;
 begin
   LoopValue := UndefinedCompletionValue;
   Result := TGocciaControlFlow.Normal(LoopValue);
@@ -5827,7 +5857,17 @@ begin
       end
       else
       begin
+        { The key string is constructed here and the binding scope right after
+          it, and both are held by native locals alone until the body runs and
+          EvaluateLoopBodyStatement pushes the scope. `for (o[f()] in src)` and
+          a destructuring head put guest code in between; a plain binding name
+          reaches no safe point at all, so this costs two pushes only on the
+          iterations that need them. }
+        HeadRoots.Initialize;
+        try
+        HeadRoots.Add(CurrentValue);
         IterScope := AContext.Scope.CreateChild(skBlock);
+        HeadRoots.Add(IterScope);
         IterContext := AContext;
         IterContext.Scope := IterScope;
 
@@ -5870,6 +5910,9 @@ begin
           Continuation.SaveLoopState(AForInStatement, EntriesArray, CurrentValue,
             TGocciaNumberLiteralValue.Create(EntryIndex), IterScope,
             IterContext.Scope);
+        finally
+          HeadRoots.Clear;
+        end;
       end;
 
       try
@@ -8653,12 +8696,24 @@ procedure ExecuteStaticBlock(const ABody: TGocciaBlockStatement;
 var
   BlockScope: TGocciaClassInitScope;
   BlockContext: TGocciaEvaluationContext;
+  Roots: TGocciaActiveRootFrame;
 begin
   BlockScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue);
   BlockScope.ThisValue := AClassValue;
   BlockContext := AContext;
   BlockContext.Scope := BlockScope;
-  EvaluateBlock(ABody, BlockContext);
+  { The block's own scope is the only thing binding `this` to the class, and a
+    scope is a managed object that nothing points *down* to — EvaluateBlock
+    roots the child scope it creates for declarations, not the one handed to
+    it. A static block that collects therefore frees the scope it is running
+    in, and the next `this` read dereferences it. }
+  Roots.Initialize;
+  try
+    Roots.Add(BlockScope);
+    EvaluateBlock(ABody, BlockContext);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 procedure AddClassCallableEvalEntry(var AEntries: TClassCallableEvalEntries;
@@ -8798,6 +8853,8 @@ var
   StaticFieldScope: TGocciaScope;
   HeritageContext: TGocciaEvaluationContext;
   ClassStrictContext: TGocciaEvaluationContext;
+  ClassRoots: TGocciaActiveRootFrame;
+  FieldRoots: TGocciaActiveRootFrame;
 
   function BuildClassGetter(const AGetterExpression: TGocciaGetterExpression): TGocciaFunctionValue;
   begin
@@ -9100,7 +9157,18 @@ var
         Continuation.SaveCompletedExpressionValue(
           Elem.ComputedKeyExpression, ComputedKey);
 
+      { The cache is a plain Pascal array the collector does not trace, and it
+        is read back long after this pass: a computed field's key is stored
+        when the static-field loop reaches it, and the auto-accessor and
+        decorator passes read it later still. Every static field initializer
+        and static block between here and those reads is arbitrary guest code,
+        so a key resolved for a *later* element is reachable from nothing at
+        all while an *earlier* one collects — `static early = (gc(), 1)` ahead
+        of a computed field loses the key outright. It joins the class frame
+        for the same reason the static-field scope does: one push per computed
+        element key, released when the class is installed. }
       ResolvedComputedElementKeys[Entry.ElementIndex] := ComputedKey;
+      ClassRoots.Add(ComputedKey);
 
       case Elem.Kind of
         cekField:
@@ -9266,7 +9334,25 @@ begin
   else
     ClassName := '<anonymous>';
 
+  { Everything from here to the returned class runs with the class object held
+    by a native local and, for an anonymous class, by nothing else at all: a
+    class *declaration* is bound into the scope at ForceUpdateBinding below,
+    but an anonymous class expression with a static field has no binding until
+    this function returns. Guest code runs in between at every interesting
+    point — computed element keys go through ToPropertyKey, static field
+    initializers and static blocks are arbitrary script, and decorators are
+    guest calls — so a collection taken inside any of them frees the class the
+    very next DefineProperty writes into. The static-field scope does not save it: its
+    ThisValue is the class, but the scope itself is only reachable from this
+    frame's locals too.
+
+    The try spans the rest of the function rather than each guest-code region
+    because there are a dozen of them; the body below is unchanged and
+    deliberately not re-indented, so the diff stays reviewable. }
+  ClassRoots.Initialize;
+  try
   ClassValue := TGocciaClassValue.Create(ClassName, SuperClass);
+  ClassRoots.Add(ClassValue);
   if not AContext.HideFunctionSourceText then
     ClassValue.SetSourceText(AClassDef.SourceText);
   if SuperClassValue is TGocciaNullLiteralValue then
@@ -9454,6 +9540,13 @@ begin
           ClassValue);
         StaticFieldScope.ThisValue := ClassValue;
         StaticFieldContext.Scope := StaticFieldScope;
+        { The initializer's own scope binds `this` and nothing points down to
+          it; see ExecuteStaticBlock for the same hazard. It joins the class
+          frame rather than taking one of its own — that costs one push per
+          static field, released with the class frame, and a nested frame here
+          would have to be a third variable to avoid re-Initializing the
+          computed-key frame below. }
+        ClassRoots.Add(StaticFieldScope);
         PropertyValue := EvaluateExpression(Elem.FieldInitializer,
           StaticFieldContext);
       end
@@ -9463,12 +9556,24 @@ begin
         ClassValue.AddPrivateStaticProperty(Elem.Name, PropertyValue)
       else if Elem.IsComputed then
       begin
+        { The key was resolved during class definition, before any static field
+          initializer ran, and is read back out of the cache here — the class
+          frame is what kept it alive across the initializers in between. The
+          fallback below is the case this frame covers: when the cache holds no
+          key for this element the conversion happens here instead, and the
+          guest `toString`/`@@toPrimitive` it runs would otherwise collect the
+          field's value out of the native local above. Both halves stay rooted
+          across the store either way. }
+        FieldRoots.Initialize;
+        try
+        FieldRoots.Add(PropertyValue);
         ComputedKey := nil;
         if I <= High(ResolvedComputedElementKeys) then
           ComputedKey := ResolvedComputedElementKeys[I];
         if not Assigned(ComputedKey) then
           ComputedKey := ToPropertyKey(EvaluateExpression(
             Elem.ComputedKeyExpression, ClassStrictContext));
+        FieldRoots.Add(ComputedKey);
         if ComputedKey is TGocciaSymbolValue then
           ClassValue.DefineSymbolProperty(
             TGocciaSymbolValue(ComputedKey),
@@ -9478,6 +9583,9 @@ begin
           ClassValue.DefineProperty(ComputedKey.ToStringLiteral.Value,
             TGocciaPropertyDescriptorData.Create(PropertyValue,
               [pfEnumerable, pfConfigurable, pfWritable]));
+        finally
+          FieldRoots.Clear;
+        end;
       end
       else
         ClassValue.DefineProperty(Elem.Name,
@@ -9941,6 +10049,9 @@ begin
           AClassDef.FElements[I].ComputedKeyExpression);
 
   Result := ClassValue;
+  finally
+    ClassRoots.Clear;
+  end;
 end;
 
 function ResolveLexicalPrivateAccessClass(
@@ -10768,12 +10879,24 @@ var
   Instance: TGocciaInstanceValue;
   ClassValue: TGocciaClassValue;
   Value: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
+  { `box().#slot = f()` holds the receiver in a native local across the
+    right-hand side — arbitrary guest code — and then dispatches a class test
+    and a private store through it. Nothing else references a receiver produced
+    by a call, so a collection inside the right-hand side frees it and the `is`
+    below reads a freed vtable. The assigned value is carried across the store,
+    which can run a private setter. This is the same protection the increment
+    sibling already takes on its private arm. }
+  Roots.Initialize;
+  try
   // Evaluate the object expression
   ObjectValue := EvaluateExpression(APrivatePropertyAssignmentExpression.ObjectExpr, AContext);
+  Roots.Add(ObjectValue);
 
   // Evaluate the value to assign
   Value := EvaluateExpression(APrivatePropertyAssignmentExpression.Value, AContext);
+  Roots.Add(Value);
 
   if ObjectValue is TGocciaInstanceValue then
   begin
@@ -10802,6 +10925,9 @@ begin
   end;
 
   Result := Value;
+  finally
+    Roots.Clear;
+  end;
 end;
 
 // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??= AssignmentExpression
@@ -10812,9 +10938,18 @@ var
   ClassValue: TGocciaClassValue;
   CurrentValue: TGocciaValue;
   Value: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
+  { Same exposure as the plain private store, plus the read-back current value:
+    a private *getter* produces it, and it then has to survive the right-hand
+    side and the arithmetic — which can run a guest `valueOf` — before the store
+    consumes it. The short-circuit forms exit before any of that, so only the
+    values actually read after a safe point are pushed. }
+  Roots.Initialize;
+  try
   // Evaluate the object expression
   ObjectValue := EvaluateExpression(APrivatePropertyCompoundAssignmentExpression.ObjectExpr, AContext);
+  Roots.Add(ObjectValue);
 
   if ObjectValue is TGocciaInstanceValue then
   begin
@@ -10869,6 +11004,7 @@ begin
 
     Value := EvaluateExpression(APrivatePropertyCompoundAssignmentExpression.Value, AContext);
     Result := Value;
+    Roots.Add(Result);
 
     if ObjectValue is TGocciaInstanceValue then
       AssignPrivateMemberOnInstance(
@@ -10886,12 +11022,17 @@ begin
     Exit;
   end;
 
+  // The current value has to outlive the right-hand side and the arithmetic.
+  Roots.Add(CurrentValue);
+
   // Evaluate the value to operate with
   Value := EvaluateExpression(APrivatePropertyCompoundAssignmentExpression.Value, AContext);
+  Roots.Add(Value);
 
   // Use shared compound operation function
   Result := Goccia.Arithmetic.CompoundOperations(
     CurrentValue, Value, APrivatePropertyCompoundAssignmentExpression.Operator);
+  Roots.Add(Result);
 
   // Set the new value
   if ObjectValue is TGocciaInstanceValue then
@@ -10907,6 +11048,9 @@ begin
       TGocciaObjectValue(ObjectValue),
       APrivatePropertyCompoundAssignmentExpression.PrivateName, Result,
       AContext);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 procedure InitializePrivateInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext; const AInitializationMode: TGocciaInstanceInitializationMode);
@@ -10938,11 +11082,24 @@ var
   InitContext, SuperInitContext: TGocciaEvaluationContext;
   InitScope, SuperInitScope: TGocciaScope;
   WalkClass: TGocciaClassValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   InitContext := AContext;
   InitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue);
   InitScope.ThisValue := AInstance;
   InitContext.Scope := InitScope;
+
+  { Field initializers are arbitrary guest code and they run against these
+    scopes, which bind `this` to the instance and are pointed at by nothing —
+    the same hazard ExecuteStaticBlock has. The instance and class join them:
+    the instance is still inside construction, so a `new` whose field
+    initializer collects has nothing else holding it. One frame covers the
+    per-superclass scopes too; the walk is bounded by the inheritance depth. }
+  Roots.Initialize;
+  try
+  Roots.Add(InitScope);
+  Roots.Add(AInstance);
+  Roots.Add(AClassValue);
 
   if AInstance is TGocciaInstanceValue then
   begin
@@ -10960,6 +11117,7 @@ begin
         SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, WalkClass);
         SuperInitScope.ThisValue := AInstance;
         SuperInitContext.Scope := SuperInitScope;
+        Roots.Add(SuperInitScope);
         if WalkClass.FieldOrderCount = 0 then
           InitializePrivateInstanceProperties(
             AInstance, WalkClass, SuperInitContext, AInitializationMode);
@@ -10979,6 +11137,9 @@ begin
   AClassValue.RunDecoratorFieldInitializers(AInstance);
   if AInitializationMode = iimEagerReplacement then
     StampRawPrivateInstanceInitializersApplied(AInstance, AClassValue);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 function InstantiateClass(const AClassValue: TGocciaClassValue;
@@ -11980,6 +12141,7 @@ var
   DoneFlag: Boolean;
   ShouldCloseIterator: Boolean;
   Key: string;
+  Roots: TGocciaActiveRootFrame;
 
   function DirectNextClosingOnThrow(out ADone: Boolean): TGocciaValue;
   begin
@@ -12020,6 +12182,13 @@ begin
     ObjPat := TGocciaObjectDestructuringPattern(APattern);
     UsedKeys := TStringList.Create;
     UsedSymbolKeys := TList<TGocciaSymbolValue>.Create;
+    { Same window as the lexical twin AssignObjectPattern: the source is read
+      once per property and has to survive computed keys, getters and default
+      initializers in between, and a computed symbol key survives only in a
+      plain TList. }
+    Roots.Initialize;
+    try
+      Roots.Add(ObjectValue);
     try
       for I := 0 to ObjPat.Properties.Count - 1 do
       begin
@@ -12027,17 +12196,17 @@ begin
         begin
           RestObject := TGocciaObjectValue.Create(
             TGocciaObjectValue.SharedObjectPrototype);
-          TGarbageCollector.Instance.AddTempRoot(RestObject);
-          try
-            CopyDataProperties(RestObject, ObjectValue, UsedKeys,
-              UsedSymbolKeys);
-            AssignVariablePattern(
-              TGocciaRestDestructuringPattern(ObjPat.Properties[I].Pattern).
-                Argument,
-              RestObject, AContext);
-          finally
-            TGarbageCollector.Instance.RemoveTempRoot(RestObject);
-          end;
+          { On the frame rather than a temp-root pair, matching the
+            AssignObjectPattern twin: the frame is nil-collector-safe by
+            construction, where the unguarded AddTempRoot this replaced would
+            have dereferenced a nil Instance. }
+          Roots.Add(RestObject);
+          CopyDataProperties(RestObject, ObjectValue, UsedKeys,
+            UsedSymbolKeys);
+          AssignVariablePattern(
+            TGocciaRestDestructuringPattern(ObjPat.Properties[I].Pattern).
+              Argument,
+            RestObject, AContext);
         end
         else
         begin
@@ -12049,6 +12218,7 @@ begin
             // ToPropertyKey on the evaluated expression, dispatch by type.
             PropertyKey := ToPropertyKey(EvaluateExpression(
               ObjPat.Properties[I].KeyExpression, AContext));
+            Roots.Add(PropertyKey);
             if PropertyKey is TGocciaSymbolValue then
             begin
               SymbolKey := TGocciaSymbolValue(PropertyKey);
@@ -12087,6 +12257,9 @@ begin
       UsedSymbolKeys.Free;
       UsedKeys.Free;
     end;
+    finally
+      Roots.Clear;
+    end;
   end
   else if APattern is TGocciaArrayDestructuringPattern then
   begin
@@ -12102,7 +12275,8 @@ begin
       ThrowTypeError(
         Format(SErrorNotIterable, [AValue.TypeName]),
         SSuggestDestructureRequiresIterable);
-    TGarbageCollector.Instance.AddTempRoot(Iterator);
+    if (TGarbageCollector.Instance <> nil) then
+      TGarbageCollector.Instance.AddTempRoot(Iterator);
     try
       Exhausted := False;
       for I := 0 to ArrPat.Elements.Count - 1 do
@@ -12192,7 +12366,8 @@ begin
       end;
       CloseIterator(Iterator);
     finally
-      TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+      if (TGarbageCollector.Instance <> nil) then
+        TGarbageCollector.Instance.RemoveTempRoot(Iterator);
     end;
   end
   else if APattern is TGocciaAssignmentDestructuringPattern then
@@ -12494,6 +12669,7 @@ var
   UsedSymbolKeys: TList<TGocciaSymbolValue>;
   I: Integer;
   PreparedReference: TPreparedDestructuringReference;
+  Roots: TGocciaActiveRootFrame;
 begin
   if (AValue is TGocciaNullLiteralValue) or
      (AValue is TGocciaUndefinedLiteralValue) then
@@ -12505,6 +12681,21 @@ begin
   UsedKeys := TStringList.Create;
   UsedSymbolKeys := TList<TGocciaSymbolValue>.Create;
 
+  { The source object is read once per pattern property and lives in a native
+    local across everything in between: a computed key expression, the guest
+    `toString`/`@@toPrimitive` ToPropertyKey runs on it, a getter behind the
+    property read, and a default initializer. Destructuring `a` with a default
+    and then `b`, out of the result of a call, is the minimal shape — the source
+    is reachable from nothing once the call returns, so a collection inside the
+    default frees it before `b` is read.
+
+    Symbol keys join it because `UsedSymbolKeys` is a plain TList: a symbol
+    produced by a computed key and used only as a rest-pattern exclusion is
+    otherwise unreachable across the same guest code. The rest target is rooted
+    where it is built, matching the var-pattern twin. }
+  Roots.Initialize;
+  try
+    Roots.Add(ObjectValue);
   try
     // Use indexed for loop to ensure properties are processed in source order
     for I := 0 to APattern.Properties.Count - 1 do
@@ -12515,6 +12706,7 @@ begin
         // Rest pattern: collect remaining properties
         RestObject := TGocciaObjectValue.Create(
           TGocciaObjectValue.SharedObjectPrototype);
+        Roots.Add(RestObject);
         CopyDataProperties(RestObject, ObjectValue, UsedKeys, UsedSymbolKeys);
         AssignPattern(TGocciaRestDestructuringPattern(Prop.Pattern).Argument, RestObject, AContext, AIsDeclaration, ADeclarationType);
       end
@@ -12529,6 +12721,7 @@ begin
           begin
             ComputedPropertyKey := ToPropertyKey(
               EvaluateExpression(Prop.KeyExpression, AContext));
+            Roots.Add(ComputedPropertyKey);
             if ComputedPropertyKey is TGocciaSymbolValue then
             begin
               SymbolKey := TGocciaSymbolValue(ComputedPropertyKey);
@@ -12568,6 +12761,9 @@ begin
   finally
     UsedSymbolKeys.Free;
     UsedKeys.Free;
+  end;
+  finally
+    Roots.Clear;
   end;
 end;
 
@@ -12643,6 +12839,7 @@ var
   Index: Integer;
   ShortCircuited: Boolean;
   ReferencedObject: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   IsSymbolKey := False;
   SymbolKey := nil;
@@ -12660,6 +12857,15 @@ begin
       Exit;
     end;
 
+    { §13.5.1.2 resolves the base before the key, so the base is held in a
+      native local across the key expression and across ToPropertyKeyForBase,
+      which runs a guest `@@toPrimitive`/`toString`. A base that came from a
+      call is referenced from nowhere else, and every arm below dereferences it
+      — the nullish tests, the array-index arm, the object arm. The converted
+      key joins it because a Proxy `deleteProperty` trap is guest code too, and
+      the symbol arm still holds the key across it. }
+    Roots.Initialize;
+    try
     ShortCircuited := False;
     if MemberExpr.ObjectExpr is TGocciaMemberExpression then
       ObjValue := EvaluateMember(
@@ -12671,6 +12877,7 @@ begin
         ShortCircuited)
     else
       ObjValue := EvaluateExpression(MemberExpr.ObjectExpr, AContext);
+    Roots.Add(ObjValue);
 
     if ShortCircuited then
     begin
@@ -12696,6 +12903,7 @@ begin
       // ToObject before the key is converted, so the nullish-base TypeError wins
       // over any key-coercion side effect.
       PropertyKey := ToPropertyKeyForBase(ObjValue, PropertyKey);
+      Roots.Add(PropertyKey);
       if PropertyKey is TGocciaSymbolValue then
       begin
         IsSymbolKey := True;
@@ -12781,6 +12989,9 @@ begin
 
       // Other primitive property references have no own property to remove.
       Result := TGocciaBooleanLiteralValue.TrueValue;
+    end;
+    finally
+      Roots.Clear;
     end;
   end
   else

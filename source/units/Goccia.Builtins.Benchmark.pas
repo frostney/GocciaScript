@@ -777,11 +777,19 @@ begin
   SetupResult := nil;
   RunFunction := ABenchCase.RunFunction;
   GeneratorIterator := nil;
+  { Initialize records the floor; the pushes belong inside the try that
+    releases them. Anything between a push and the guarding try leaks the
+    entries permanently if it raises — the frame is a stack record, so nothing
+    downstream ever releases them, and the objects stay pinned for the life of
+    the thread. Both the second Add (the root stack can grow) and the
+    arguments collection can raise, so both move inside. RunArgs is nil'd
+    first because the finally now runs on paths that never reached it. }
   ActiveRoots.Initialize;
-  ActiveRoots.Add(ABenchCase.RunFunction);
-  ActiveRoots.Add(ABenchCase.GeneratorFunction);
-  RunArgs := TGocciaArgumentsCollection.CreateWithCapacity(1);
+  RunArgs := nil;
   try
+    ActiveRoots.Add(ABenchCase.RunFunction);
+    ActiveRoots.Add(ABenchCase.GeneratorFunction);
+    RunArgs := TGocciaArgumentsCollection.CreateWithCapacity(1);
     try
       if Assigned(ABenchCase.GeneratorFunction) then
       begin
@@ -982,11 +990,13 @@ begin
   SetupResult := nil;
   RunFunction := ABenchCase.RunFunction;
   GeneratorIterator := nil;
+  // Pushes inside the try that releases them; see RunSingleBenchmark.
   ActiveRoots.Initialize;
-  ActiveRoots.Add(ABenchCase.RunFunction);
-  ActiveRoots.Add(ABenchCase.GeneratorFunction);
-  RunArgs := TGocciaArgumentsCollection.CreateWithCapacity(1);
+  RunArgs := nil;
   try
+    ActiveRoots.Add(ABenchCase.RunFunction);
+    ActiveRoots.Add(ABenchCase.GeneratorFunction);
+    RunArgs := TGocciaArgumentsCollection.CreateWithCapacity(1);
     try
       if Assigned(ABenchCase.GeneratorFunction) then
         RunFunction := CreateRunFunctionFromGenerator(ABenchCase, ActiveRoots,

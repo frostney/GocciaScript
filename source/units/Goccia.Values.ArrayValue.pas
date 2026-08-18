@@ -9,6 +9,7 @@ uses
   Goccia.ObjectModel,
   Goccia.Realm,
   Goccia.Values.ClassValue,
+  Goccia.Values.HoleValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -26,7 +27,7 @@ type
     procedure ThrowError(const AMessage: string; const AArgs: array of const;
       const ASuggestion: string); overload; {$IFDEF FPC}inline;{$ENDIF}
   protected
-    FElements: TGocciaValueList;
+    FElements: TGocciaElementList;
     FLength: Int64;
     FLengthWritable: Boolean;
   public
@@ -67,7 +68,7 @@ type
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
-    property Elements: TGocciaValueList read FElements;
+    property Elements: TGocciaElementList read FElements;
   published
     function ArrayMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayFilter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -139,7 +140,6 @@ uses
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
-  Goccia.Values.HoleValue,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.ProxyValue,
   Goccia.Values.StringObjectValue,
@@ -744,9 +744,13 @@ begin
       // Only materialize dense holes when the new length stays within the
       // dense extension gap; a far-out length leaves the tail sparse, the
       // same storage a far index assignment uses.
+      // The pending value is the length the descriptor carries. Nothing reads
+      // it after the extension — NewLen is already an Int64 by this point —
+      // but it is what this store is holding, so it goes to the gate with it.
       if (NewLen <= MaxInt) and
          (NewLen <= Int64(AArray.FElements.Count) + MAX_DENSE_EXTENSION_GAP) then
-        ExtendElementsWithHoles(AArray.FElements, NewLen);
+        ExtendElementsWithHoles(AArray.FElements, NewLen,
+          TGocciaPropertyDescriptorData(ADescriptor).Value);
       AArray.FLength := NewLen;
       if ADescriptor.HasWritableField and not ADescriptor.Writable then
         AArray.FLengthWritable := False;
@@ -766,7 +770,8 @@ begin
     if not DeleteArrayIndexesAtOrAbove(AArray, NewLen, FailedIndex) then
     begin
       if CanStoreDenseElementIndex(FailedIndex, AArray.FElements.Count) then
-        ExtendElementsWithHoles(AArray.FElements, FailedIndex + 1);
+        ExtendElementsWithHoles(AArray.FElements, FailedIndex + 1,
+          TGocciaPropertyDescriptorData(ADescriptor).Value);
       AArray.FLength := FailedIndex + 1;
       if not NewWritable then
         AArray.FLengthWritable := False;
@@ -1111,7 +1116,13 @@ var
   SharedPrototype: TGocciaObjectValue;
 begin
   inherited Create(AClass);
-  FElements := TGocciaValueList.Create(False);
+  FElements := TGocciaElementList.Create(False);
+  // Rooting for the element-store path lives on the list, at its growth gate —
+  // the one point in a store that can collect. The list needs a way back to the
+  // value that holds it so both the array and the elements already stored stay
+  // reachable across a collection taken there. Same backref the inherited
+  // constructor sets on the property map for the property-store path.
+  FElements.Owner := Self;
   FLength := 0;
   FLengthWritable := True;
   if AElementCapacity > 0 then
@@ -1284,7 +1295,12 @@ begin
       FLength := IntLen;
       if IntLen > MaxInt then
         Exit;
-      ExtendElementsWithHoles(FElements, IntLen);
+      // No pending element value: `new Array(n)` fills with holes and the
+      // length argument itself is held by AArguments, which roots its own
+      // elements. What is unrooted here is Self — the instance is still inside
+      // its own construction and no scope, register or argument collection has
+      // been handed it yet — and the gate roots that through the list's Owner.
+      ExtendElementsWithHoles(FElements, IntLen, nil);
     end
     else
     begin
@@ -1479,7 +1495,9 @@ begin
     FElements.Add(AValue)
   else
   begin
-    ExtendElementsWithHoles(FElements, Int64(AIndex) + 1);
+    // AValue is stored after the gate and is held only by this frame until
+    // then, so it goes to the gate as the pending value.
+    ExtendElementsWithHoles(FElements, Int64(AIndex) + 1, AValue);
     FElements[AIndex] := AValue;
   end;
   if AIndex + 1 > FLength then
@@ -1551,7 +1569,7 @@ begin
       FElements.Add(AValue)
     else
     begin
-      ExtendElementsWithHoles(FElements, Int64(AIndex) + 1);
+      ExtendElementsWithHoles(FElements, Int64(AIndex) + 1, AValue);
       FElements[AIndex] := AValue;
     end;
   end
@@ -3830,11 +3848,27 @@ begin
 
     if CanStoreDenseElementIndex(Index, FElements.Count) then
     begin
-      // Expand array if necessary
-      ExtendElementsWithHoles(FElements, Int64(Index) + 1);
+      // Append at exactly the element count is the same store the extension
+      // path would perform — one hole added and immediately overwritten — so
+      // take it directly, the way SetElement and SetIndexProperty already do.
+      // It keeps `arr.push(v)`, which reaches this method through
+      // AssignProperty with a stringified index, off the growth gate: nothing
+      // is being extended over, and a single-slot append has never been gated
+      // on the two paths above. One qualification to "identical": in the
+      // 8-byte window just under the ceiling, the old path refused with the
+      // uncatchable MemoryLimitError at the store, while this defers refusal
+      // to the next managed allocation's catchable RangeError — the behavior
+      // the two sibling paths always had; this aligns the third with them.
+      if Index = FElements.Count then
+        FElements.Add(AValue)
+      else
+      begin
+        // Expand array if necessary
+        ExtendElementsWithHoles(FElements, Int64(Index) + 1, AValue);
 
-      // Set the element
-      FElements[Integer(Index)] := AValue;
+        // Set the element
+        FElements[Integer(Index)] := AValue;
+      end;
     end
     else
       inherited DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
@@ -4070,7 +4104,12 @@ begin
     if CanStoreDenseElementIndex(Index, FElements.Count) and
        CanCreateDenseArrayElement(ADescriptor) then
     begin
-      ExtendElementsWithHoles(FElements, Int64(Index) + 1);
+      // The descriptor's value is read back into the new slot AFTER the gate,
+      // and a property descriptor is a plain class the collector does not
+      // trace — so between here and the store the value is reachable from
+      // nowhere. Hand it to the gate, which roots it for the duration.
+      ExtendElementsWithHoles(FElements, Int64(Index) + 1,
+        TGocciaPropertyDescriptorData(ADescriptor).Value);
       FElements[Integer(Index)] := TGocciaPropertyDescriptorData(ADescriptor).Value;
       if Index + 1 > FLength then
         FLength := Index + 1;
@@ -4081,8 +4120,12 @@ begin
     // Non-dense descriptors must be stored in the ordinary property map so
     // missing/defaulted attributes keep their spec values.
     inherited DefineProperty(AName, ADescriptor);
+    // No pending value: the descriptor has been handed to the property map,
+    // which owns it now (and may already have freed it), so its value is
+    // reachable through this array's own map and the gate's owner push covers
+    // it. Touching ADescriptor here would be the use-after-free instead.
     if CanStoreDenseElementIndex(Index, FElements.Count) then
-      ExtendElementsWithHoles(FElements, Int64(Index) + 1);
+      ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
     if Index + 1 > FLength then
       FLength := Index + 1;
     if CanStoreDenseElementIndex(Index, FElements.Count) and
@@ -4156,7 +4199,10 @@ begin
     if CanStoreDenseElementIndex(Index, FElements.Count) and
        CanCreateDenseArrayElement(ADescriptor) then
     begin
-      ExtendElementsWithHoles(FElements, Int64(Index) + 1);
+      // Same post-gate descriptor read as the DefineProperty arm above, and
+      // the same reason the value has to reach the gate.
+      ExtendElementsWithHoles(FElements, Int64(Index) + 1,
+        TGocciaPropertyDescriptorData(ADescriptor).Value);
       FElements[Integer(Index)] := TGocciaPropertyDescriptorData(ADescriptor).Value;
       if Index + 1 > FLength then
         FLength := Index + 1;
@@ -4170,8 +4216,10 @@ begin
     Result := inherited TryDefineProperty(AName, ADescriptor);
     if Result then
     begin
+      // nil for the same reason as the DefineProperty arm: the map owns the
+      // descriptor now, and the owner push covers what it holds.
       if CanStoreDenseElementIndex(Index, FElements.Count) then
-        ExtendElementsWithHoles(FElements, Int64(Index) + 1);
+        ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
       if Index + 1 > FLength then
         FLength := Index + 1;
       if CanStoreDenseElementIndex(Index, FElements.Count) and

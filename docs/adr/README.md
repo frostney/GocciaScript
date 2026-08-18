@@ -119,3 +119,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0107 — Out-of-process sandbox execution protocol](0107-out-of-process-sandbox-protocol.md)
 - [0108 — Specifier-only module resolution errors](0108-specifier-only-module-resolution-errors.md)
 - [0109 — Engine-integrity faults are never guest-catchable](0109-engine-integrity-faults-are-uncatchable.md)
+- [0110 — The growth gate collects before refusing, and store paths root their temporaries](0110-growth-gate-collects-before-refusing.md)

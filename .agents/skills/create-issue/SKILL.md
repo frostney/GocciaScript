@@ -27,6 +27,9 @@ repository, then create it after the required review boundary.
   duplicate, or needs material facts that cannot be established. For a
   duplicate, return the existing issue and stop without asking whether to file
   the same request anyway or mutate the existing issue.
+- Before posting, resolve the authenticated GitHub username and exact model name
+  from current forge and host evidence. Stop if either is unavailable; never
+  guess or substitute a generic label.
 
 ## Automatic mode
 
@@ -54,7 +57,13 @@ approval. Material ambiguity or risk disables automatic mode.
 6. Choose only existing labels unless the user asks to create one.
 7. Show the proposed title, labels, and body unless the user waived review or
    automatic mode applies.
-8. Create the issue with the available forge tooling and return its URL.
+8. End the issue body with this visually separate GitHub Note, replacing both
+   values with the exact identities resolved for this run:
+
+   > [!NOTE]
+   > Created on behalf of @username using ModelName.
+
+9. Create the issue with the available forge tooling and return its URL.
 
 Lead with the outcome. Omit boilerplate, repeated summaries, and a narration of
 the workflow.

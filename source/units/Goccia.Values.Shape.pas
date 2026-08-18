@@ -29,6 +29,7 @@ uses
 
   OrderedStringMap,
 
+  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Values.ObjectPropertyDescriptor;
 
@@ -95,6 +96,7 @@ type
   // and they live on the map itself so no mutation path can bypass them.
   TGocciaShapedPropertyMap = class(TGocciaPropertyMap)
   private
+    FOwner: TGCManagedObject;
     FOwnerRealm: TGocciaRealm;
     FOwnerRealmIdentity: TGocciaRealmIdentity;
     FShape: TGocciaShape;
@@ -117,10 +119,30 @@ type
     // grows with them and a per-map request is always compared against a
     // budget that looks empty. ADR 0106 records the measured size of that
     // hole; it is a property of the charging model, not of this gate.
-    procedure RequireStorageBytes(const ABytes: Int64); override;
+    //
+    // This override does two things, in this order: it makes the growth point
+    // safe to collect at, and only then consults the budget. The rooting is
+    // here, and not at the property-store entry points, because this is the
+    // one place in the store path that can collect and it runs O(log Count)
+    // times per map — a frame at every DefineProperty/TryDefineProperty/
+    // AssignProperty instead measured +2.4%..+4.0% across the store-hot-path
+    // benchmark shapes, for protection that is only ever consumed here.
+    procedure RequireStorageBytes(const ABytes: Int64;
+      const APendingValue: TGocciaPropertyDescriptor); override;
+    // The budget decision, taken inside the rooted window RequireStorageBytes
+    // has just opened. Separate and virtual so the window and the decision can
+    // be reasoned about — and exercised — apart: the gate collects before
+    // refusing, and it collects HERE, with the store's values already rooted.
+    procedure ConsultStorageBudget(const ABytes: Int64); virtual;
   public
     constructor Create; overload;
     constructor Create(AInitialCapacity: Integer); overload;
+
+    // The value this map stores properties for. Rooted for the duration of a
+    // gated growth point so everything the map already holds stays reachable
+    // across a collection taken there; nil for a standalone map with no owning
+    // value, which roots nothing extra.
+    property Owner: TGCManagedObject read FOwner write FOwner;
     function Remove(const AKey: string): Boolean; override;
     procedure Clear; override;
     // Recompute the shape to cover all current entries (resuming from the
@@ -259,6 +281,7 @@ end;
 constructor TGocciaShapedPropertyMap.Create(AInitialCapacity: Integer);
 begin
   inherited Create(AInitialCapacity);
+  FOwner := nil;
   FOwnerRealm := CurrentRealm;
   if Assigned(FOwnerRealm) then
     FOwnerRealmIdentity := FOwnerRealm.Identity
@@ -268,7 +291,51 @@ begin
   FShapeEntryCount := 0;
 end;
 
-procedure TGocciaShapedPropertyMap.RequireStorageBytes(const ABytes: Int64);
+procedure TGocciaShapedPropertyMap.RequireStorageBytes(const ABytes: Int64;
+  const APendingValue: TGocciaPropertyDescriptor);
+var
+  Roots: TGocciaActiveRootFrame;
+begin
+  { Two things are live here and reachable from nowhere else. The owning value
+    holds this map, and a native builder or an evaluator temporary may be the
+    only thing holding the owner. The pending descriptor is worse: the Add that
+    called this has not stored it yet, so the value it points at is reachable
+    only through a plain class the collector does not trace, and a descriptor
+    read out of — or on its way into — a property map is not a root.
+
+    Pushed as it stands, never materialized first: a lazy descriptor arriving
+    at a store is put into the map whole, so its pinned placeholder is what is
+    reachable right now. See the contract on TGocciaPropertyDescriptor.PushRoots
+    — push-then-materialize is the hazard, and nothing on this path materializes.
+
+    A frame here costs nothing on the store path: the base class consults the
+    gate only when storage actually grows past its small-block threshold, which
+    geometric growth makes O(log Count) times over a map's whole life.
+
+    APendingValue is pushed unconditionally: every growth point is reached from
+    Add, which always has a real value in hand.
+
+    The frame closes when this method returns — BEFORE the reallocation it just
+    authorized. Re-audited when the gate learned to collect (ADR 0110), on the
+    same invariant the element-side gate carries: the gate is the only
+    prospective collection point in the growth window. It holds here by a
+    shorter argument than on the element side, because nothing after the
+    consult allocates a managed object at all — Grow's Rehash and Compact's
+    copy are SetLength on plain dynamic arrays and record moves, so there is no
+    allocation for a collection to hang off even in principle. The collection
+    the gate now takes happens inside this frame, in ConsultStorageBudget, with
+    FOwner and the pending descriptor's roots already pushed. }
+  Roots.Initialize;
+  try
+    Roots.Add(FOwner);
+    APendingValue.PushRoots(Roots);
+    ConsultStorageBudget(ABytes);
+  finally
+    Roots.Clear;
+  end;
+end;
+
+procedure TGocciaShapedPropertyMap.ConsultStorageBudget(const ABytes: Int64);
 begin
   RequireNativeBytes(ABytes);
 end;

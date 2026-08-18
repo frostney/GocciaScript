@@ -1,0 +1,41 @@
+{
+  "title": "Impact report preview",
+  "subtitle": "Interactive evidence and mechanism walkthrough",
+  "changes": [
+    {
+      "title": "Validation now happens at the boundary",
+      "impact": "Invalid input now returns a typed result before it reaches application logic.",
+      "before": {
+        "kind": "code",
+        "content": "const retries = config.retries;",
+        "language": "typescript",
+        "caption": "Unchecked input entered the application."
+      },
+      "after": {
+        "kind": "code",
+        "content": "const config = parseConfig(input);",
+        "language": "typescript",
+        "caption": "The boundary returns a validated value."
+      },
+      "deepDive": "Inspect the parser contract, failure result, and regression fixture.",
+      "discussionPrompt": "Walk through the validation-boundary impact with me.",
+      "diagram": {
+        "title": "Validated input flow",
+        "nodes": [
+          { "id": "input", "label": "Unknown input" },
+          { "id": "validator", "label": "Validator" },
+          { "id": "result", "label": "Typed result" }
+        ],
+        "edges": [
+          { "id": "to-validator", "from": "input", "to": "validator" },
+          { "id": "to-result", "from": "validator", "to": "result" }
+        ],
+        "steps": [
+          { "label": "Receive input", "highlights": ["input"] },
+          { "label": "Validate", "highlights": ["to-validator", "validator"] },
+          { "label": "Return result", "highlights": ["to-result", "result"] }
+        ]
+      }
+    }
+  ]
+}

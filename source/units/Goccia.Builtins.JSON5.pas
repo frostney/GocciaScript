@@ -174,11 +174,13 @@ var
   PropKey: string;
   Value: TGocciaValue;
   ValueRoot, ContextRoot: TGocciaTempRoot;
+  NewValueRoots: TGocciaActiveRootFrame;
 begin
   Value := AHolder.GetProperty(AKey);
 
   InitializeTempRoot(ValueRoot);
   InitializeTempRoot(ContextRoot);
+  NewValueRoots.Initialize;
   try
     // Every recursion below ends in a reviver call, and the reviver is arbitrary
     // user code — a GC safe point that can also delete the holder property this
@@ -195,6 +197,13 @@ begin
         for I := 0 to Arr.Elements.Count - 1 do
         begin
           NewValue := ApplyReviver(Arr, IntToStr(I), AReviver);
+          // The reviver's return value is reachable only from this local
+          // between the recursion releasing its roots and the store below,
+          // and the store can collect. A frame and not a re-pointed temp
+          // root: a temp root is a set, so a reviver returning one object for
+          // two keys would have the first store's release unroot it for the
+          // second. See the JSON builtin's twin for the full argument.
+          NewValueRoots.Add(NewValue);
           if NewValue is TGocciaUndefinedLiteralValue then
             Arr.Elements[I] := TGocciaHoleValue.HoleValue
           else
@@ -206,6 +215,8 @@ begin
         for PropKey in Obj.GetEnumerablePropertyNames do
         begin
           NewValue := ApplyReviver(Obj, PropKey, AReviver);
+          // Same window as the array arm above.
+          NewValueRoots.Add(NewValue);
           if NewValue is TGocciaUndefinedLiteralValue then
             Obj.DeleteProperty(PropKey)
           else
@@ -238,6 +249,7 @@ begin
       Args.Free;
     end;
   finally
+    NewValueRoots.Clear;
     RemoveTempRootIfNeeded(ContextRoot);
     RemoveTempRootIfNeeded(ValueRoot);
   end;

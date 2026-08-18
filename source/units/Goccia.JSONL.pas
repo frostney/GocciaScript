@@ -222,7 +222,16 @@ begin
     non-empty strings, every one of which charges the memory ceiling and collects
     when it crosses, protecting only that new string. So the accumulator stays
     rooted for the whole loop. The values already inside it need no root of their
-    own: marking is precise and reaches them through the array. }
+    own: marking is precise and reaches them through the array.
+
+    The hand-off itself needs none either: the per-line visitor's root source
+    dies with the visitor, so ParsedValue is unrooted from TryParseLine
+    returning until the append — but nothing in between allocates, and the
+    append cannot collect at any density. That second half is structural, not a
+    density argument: Elements.Add is TGocciaValueList.Add, and the storage
+    gate is reachable only through TGocciaElementList.RequireStorageBytes,
+    which only ExtendElementsWithHoles calls. Anything inserted into that gap
+    that *can* allocate needs a root of its own. }
   InitializeTempRoot(RecordsRoot);
   try
     Result := TGocciaArrayValue.Create;

@@ -53,6 +53,13 @@ type
   end;
 
   TGCManagedObjectList = TObjectList<TGCManagedObject>;
+  // Backing store for the active-root stack only. A bare array rather than
+  // TGCManagedObjectList because that stack is pushed and popped once per
+  // rooted evaluator temporary: TObjectList pays a virtual Notify dispatch per
+  // Add and per Delete, and Delete additionally moves the tail, none of which
+  // buys anything for a non-owning LIFO stack whose element type is a plain
+  // class reference.
+  TGCManagedObjectArray = array of TGCManagedObject;
   TGCRootSourceList = TList<TGCRootSource>;
   TGCObjectSet = THashMap<TGCManagedObject, Boolean>;
   TGCObjectRefCounts = THashMap<TGCManagedObject, Integer>;
@@ -63,8 +70,42 @@ type
     Added: Boolean;
   end;
 
+  // A stack-local group of GC roots. Initialize before first use, Add every
+  // value that must survive a collecting safe point, and Clear in a finally so
+  // the exception path is covered. Add tolerates nil and tolerates the same
+  // object twice, which is what makes it the right tool for evaluator
+  // temporaries where two locals can hold one object.
+  //
+  // Release is a count rollback, not a per-entry pop: Clear releases exactly
+  // the top FCount entries of the collector's active-root stack in one
+  // assignment. That is what the pop loop it replaces did, entry for entry, so
+  // frames that share a base depth keep behaving as they do today — in the
+  // promise combinators the inner per-iteration frame is Initialized before
+  // the outer frame has pushed anything, so its recorded base depth sits
+  // below the outer frame's entries, and releasing to that base depth instead
+  // would let the inner frame's Clear take the outer frame's roots with it.
+  //
+  // FBaseDepth is therefore a floor, not a target: Clear never unwinds past
+  // the depth the frame was Initialized at, so a frame cannot eat an enclosing
+  // frame's roots even if the stack is left unbalanced beneath it. Clear is
+  // idempotent — the second call has no entries to release and returns without
+  // touching the stack, which is what makes clearing a frame in an inner
+  // finally and again in an outer one safe during exception unwind.
   TGocciaActiveRootFrame = record
   private
+    // Resolved once in Initialize: Add runs per rooted temporary on the
+    // property-store path, and re-reading the collector threadvar there costs
+    // more than the push itself. nil means "no collector on this thread", and
+    // the frame stays a no-op for its whole lifetime.
+    //
+    // Invariant: a frame must not outlive the collector it was Initialized
+    // against. Clear dereferences this cached pointer, so a frame still live
+    // across TGarbageCollector.Shutdown would touch freed memory — and an
+    // Assigned check could not save it, because the stale pointer stays
+    // non-nil. Every current Shutdown site (thread runtime teardown, app
+    // mains, test suite teardowns) runs with no frame live; keep it that way.
+    FCollector: TGarbageCollector;
+    FBaseDepth: Integer;
     FCount: Integer;
   public
     procedure Initialize; {$IFDEF FPC}inline;{$ENDIF}
@@ -81,7 +122,8 @@ type
     FQueuedRoots: TGCObjectRefCounts;
     FKeptObjects: TGCObjectSet;
     FRootObjects: TGCObjectSet;
-    FActiveRootStack: TGCManagedObjectList;
+    FActiveRootStack: TGCManagedObjectArray;
+    FActiveRootCount: Integer;
     // Weak containers (WeakMap/WeakSet/WeakRef/FinalizationRegistry) that have
     // held weak data: a container joins on its first weak insertion and leaves
     // only when it is itself collected, so an emptied-but-live container stays
@@ -105,10 +147,15 @@ type
     FMemoryLimitFiring: Boolean;
     FExternalPressurePending: Boolean;
     FMemoryPressureCountdown: PInteger;
-    // Bytes still live after the most recent forced reservation collection
-    // that failed to make room, or -1 when no such observation is on record.
-    // A collection cannot bring the heap below the level the last one left,
-    // so this bounds what a repeat attempt could possibly reclaim.
+    // Bytes still live after the most recent forced collection that failed to
+    // make room, or -1 when no such observation is on record. Absent an
+    // intervening collection or counter drop, no collection gets below the
+    // level the last forced one left, so this bounds what a repeat attempt
+    // could possibly reclaim — a bounded heuristic, not an invariant: objects
+    // that merely become unreachable move no counter, and the guest-side
+    // escape is Goccia.gc(), which clears the floor. Shared by the charged
+    // reservation path and the uncharged growth gate, for the reason
+    // ShouldForceLimitCollection states.
     FForcedCollectFloor: Int64;
 
     {$IFDEF GC_TIMING}
@@ -122,7 +169,8 @@ type
     function GetManagedObjectCount: Integer;
     function GetWatermark: Integer; {$IFDEF FPC}inline;{$ENDIF}
     procedure ClearActiveRootEntries(const AObject: TGCManagedObject);
-    function ShouldForceReservationCollection(const ABytes: Int64): Boolean;
+    procedure GrowActiveRootStack;
+    function ShouldForceLimitCollection(const ABytes: Int64): Boolean;
   protected
     procedure MarkRoots; virtual;
     procedure TraceWeakReferences;
@@ -155,7 +203,13 @@ type
     procedure AddRootObject(const AObject: TGCManagedObject);
     procedure RemoveRootObject(const AObject: TGCManagedObject);
     procedure PushActiveRoot(const AObject: TGCManagedObject);
-    procedure PopActiveRoot;
+    procedure PopActiveRoot; {$IFDEF FPC}inline;{$ENDIF}
+
+    // Release the top ACount active roots in one step, never unwinding below
+    // AFloorDepth. Equivalent to ACount PopActiveRoot calls at O(1) instead of
+    // O(ACount); the floor is the guard described at TGocciaActiveRootFrame.
+    procedure ReleaseActiveRoots(const ACount: Integer;
+      const AFloorDepth: Integer);
 
     // Full mark-and-sweep of all managed objects. Unconditional — ignores
     // the Enabled flag and always runs. Use when a clean heap is required
@@ -187,6 +241,26 @@ type
     // collection. Tracing through old roots keeps those young objects live.
     procedure CollectYoung(const AWatermark: Integer);
     procedure ResetPeakBytesAllocated;
+
+    // Forces one collection when a request of ABytes does not currently fit
+    // under MaxBytes and a collection could plausibly change that, then
+    // re-tests the fit. Returns True only when ABytes fits afterwards.
+    //
+    // Charges nothing: the charged path (TryReserveExternalBytes) adds the
+    // bytes itself once this returns True, and the uncharged growth gate
+    // (Goccia.MemoryLimit) permits the growth without ever charging.
+    // False also covers the shapes no collection could help — a request
+    // larger than the whole budget, a repeat of a request the last forced
+    // collection already refused, and re-entrant calls from inside the
+    // collector — none of which walk the heap.
+    //
+    // AProtect is for callers whose stack-held value nothing else roots. The
+    // growth gate passes nil deliberately: its callers have already opened a
+    // TGocciaActiveRootFrame over the store's owner and pending value before
+    // consulting the budget, so the window is the caller's, not this one's.
+    // See ADR 0110.
+    function TryCollectForLimitedBytes(const ABytes: Int64;
+      const AProtect: TGCManagedObject = nil): Boolean;
     function TryReserveExternalBytes(const ABytes: Int64;
       const AProtect: TGCManagedObject = nil): Boolean;
     procedure ReleaseExternalBytes(const ABytes: Int64);
@@ -202,6 +276,11 @@ type
     property TotalCollected: Int64 read FTotalCollected;
     property TotalCollections: Integer read FTotalCollections;
     property ManagedObjectCount: Integer read GetManagedObjectCount;
+
+    // Current depth of the active-root stack. Captured by
+    // TGocciaActiveRootFrame.Initialize as the floor its Clear may not
+    // unwind past.
+    property ActiveRootDepth: Integer read FActiveRootCount;
 
     // Byte-level memory tracking. BytesAllocated is the approximate
     // number of bytes currently tracked by the GC (InstanceSize per
@@ -247,6 +326,11 @@ uses
   SysUtils
   {$IFDEF GC_TIMING}, TimingUtils{$ENDIF}
   {$ENDIF};
+
+const
+  // Slots pre-allocated for the active-root stack, and the unit it doubles
+  // from. Deep enough that ordinary evaluator nesting never reallocates.
+  ACTIVE_ROOT_STACK_INITIAL_CAPACITY = 256;
 
 function DetectDefaultMaxBytes: Int64;
 var
@@ -391,37 +475,30 @@ end;
 
 procedure TGocciaActiveRootFrame.Initialize;
 begin
+  FCollector := TGarbageCollector.Instance;
+  if Assigned(FCollector) then
+    FBaseDepth := FCollector.ActiveRootDepth
+  else
+    FBaseDepth := 0;
   FCount := 0;
 end;
 
 procedure TGocciaActiveRootFrame.Add(const AObject: TGCManagedObject);
-var
-  GC: TGarbageCollector;
 begin
-  if not Assigned(AObject) then
+  if not Assigned(AObject) or not Assigned(FCollector) then
     Exit;
-  GC := TGarbageCollector.Instance;
-  if not Assigned(GC) then
-    Exit;
-  GC.PushActiveRoot(AObject);
+  FCollector.PushActiveRoot(AObject);
   Inc(FCount);
 end;
 
 procedure TGocciaActiveRootFrame.Clear;
-var
-  GC: TGarbageCollector;
 begin
+  // FCount > 0 implies a collector: Add is the only thing that increments it,
+  // and it only does so after pushing onto an assigned collector.
   if FCount <= 0 then
     Exit;
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) then
-    while FCount > 0 do
-    begin
-      GC.PopActiveRoot;
-      Dec(FCount);
-    end
-  else
-    FCount := 0;
+  FCollector.ReleaseActiveRoots(FCount, FBaseDepth);
+  FCount := 0;
 end;
 
 { TGarbageCollector }
@@ -457,7 +534,8 @@ begin
   FQueuedRoots := TGCObjectRefCounts.Create;
   FKeptObjects := TGCObjectSet.Create;
   FRootObjects := TGCObjectSet.Create;
-  FActiveRootStack := TGCManagedObjectList.Create(False);
+  SetLength(FActiveRootStack, ACTIVE_ROOT_STACK_INITIAL_CAPACITY);
+  FActiveRootCount := 0;
   FWeakContainers := TGCObjectSet.Create;
   FAllocationsSinceLastGC := 0;
   FGCThreshold := DEFAULT_GC_THRESHOLD;
@@ -507,7 +585,8 @@ begin
   FQueuedRoots.Free;
   FKeptObjects.Free;
   FRootObjects.Free;
-  FActiveRootStack.Free;
+  FActiveRootCount := 0;
+  SetLength(FActiveRootStack, 0);
   FWeakContainers.Free;
   inherited;
 end;
@@ -627,9 +706,7 @@ procedure TGarbageCollector.ClearActiveRootEntries(
 var
   I: Integer;
 begin
-  if not Assigned(FActiveRootStack) then
-    Exit;
-  for I := FActiveRootStack.Count - 1 downto 0 do
+  for I := FActiveRootCount - 1 downto 0 do
     if FActiveRootStack[I] = AObject then
       FActiveRootStack[I] := nil;
 end;
@@ -717,16 +794,43 @@ begin
   FRootObjects.Remove(AObject);
 end;
 
+procedure TGarbageCollector.GrowActiveRootStack;
+begin
+  if Length(FActiveRootStack) = 0 then
+    SetLength(FActiveRootStack, ACTIVE_ROOT_STACK_INITIAL_CAPACITY)
+  else
+    SetLength(FActiveRootStack, Length(FActiveRootStack) * 2);
+end;
+
 procedure TGarbageCollector.PushActiveRoot(
   const AObject: TGCManagedObject);
 begin
-  FActiveRootStack.Add(AObject);
+  if FActiveRootCount = Length(FActiveRootStack) then
+    GrowActiveRootStack;
+  FActiveRootStack[FActiveRootCount] := AObject;
+  Inc(FActiveRootCount);
 end;
 
 procedure TGarbageCollector.PopActiveRoot;
 begin
-  if FActiveRootStack.Count > 0 then
-    FActiveRootStack.Delete(FActiveRootStack.Count - 1);
+  if FActiveRootCount > 0 then
+    Dec(FActiveRootCount);
+end;
+
+procedure TGarbageCollector.ReleaseActiveRoots(const ACount: Integer;
+  const AFloorDepth: Integer);
+var
+  Target: Integer;
+begin
+  if ACount <= 0 then
+    Exit;
+  Target := FActiveRootCount - ACount;
+  if Target < AFloorDepth then
+    Target := AFloorDepth;
+  if Target < 0 then
+    Target := 0;
+  if Target < FActiveRootCount then
+    FActiveRootCount := Target;
 end;
 
 procedure TGarbageCollector.MarkRoots;
@@ -750,7 +854,7 @@ begin
   for Pair in FRootObjects do
     Pair.Key.MarkReferences;
 
-  for I := 0 to FActiveRootStack.Count - 1 do
+  for I := 0 to FActiveRootCount - 1 do
     if Assigned(FActiveRootStack[I]) then
       FActiveRootStack[I].MarkReferences;
 
@@ -912,12 +1016,12 @@ begin
      FCollecting then
     Exit;
   if Assigned(AProtect) then
-    FActiveRootStack.Add(AProtect);
+    PushActiveRoot(AProtect);
   try
     Collect;
   finally
     if Assigned(AProtect) then
-      FActiveRootStack.Delete(FActiveRootStack.Count - 1);
+      PopActiveRoot;
   end;
 end;
 
@@ -952,7 +1056,7 @@ begin
     Exit;
 
   if Assigned(AProtect) then
-    FActiveRootStack.Add(AProtect);
+    PushActiveRoot(AProtect);
   WasFiring := FMemoryLimitFiring;
   FMemoryLimitFiring := True;
   try
@@ -960,7 +1064,7 @@ begin
   finally
     FMemoryLimitFiring := WasFiring;
     if Assigned(AProtect) then
-      FActiveRootStack.Delete(FActiveRootStack.Count - 1);
+      PopActiveRoot;
   end;
 end;
 
@@ -1040,30 +1144,56 @@ begin
   FPeakBytesAllocated := FBytesAllocated;
 end;
 
-function TGarbageCollector.ShouldForceReservationCollection(
+function TGarbageCollector.ShouldForceLimitCollection(
   const ABytes: Int64): Boolean;
 begin
-  // Last resort: a reservation is only refused once a collection has actually
-  // been attempted. The pressure heuristic cannot decide this on its own — it
-  // triggers at a fixed reserve below the ceiling, so a reservation larger
-  // than that reserve used to be refused with reclaimable garbage still on the
-  // heap whenever the live set sat below the trigger.
+  // Last resort: a reservation — or a gated growth — is only refused once a
+  // collection has actually been attempted. The pressure heuristic cannot
+  // decide this on its own: it triggers at a fixed reserve below the ceiling,
+  // so a request larger than that reserve used to be refused with reclaimable
+  // garbage still on the heap whenever the live set sat below the trigger.
   //
   // Two shapes are refused without walking the heap, because for them no
   // collection could change the answer. A request larger than the whole budget
   // never fits. And once a forced collection has left FForcedCollectFloor
   // bytes live, no later collection gets the heap below that level, so a
   // request that does not fit beside the floor cannot be made to fit either —
-  // which is what keeps a guest that catches the RangeError and retries at
-  // O(1) per attempt instead of a full mark-and-sweep each time. The floor is
-  // per request size, so a smaller request that the floor does not rule out
-  // still forces its collection.
+  // which is what keeps a guest that retries a refused request at O(1) per
+  // attempt instead of a full mark-and-sweep each time. The floor is per
+  // request size, so a smaller request that the floor does not rule out still
+  // forces its collection.
+  //
+  // The floor is shared by both refusal paths on purpose. It records a fact
+  // about the heap ("the last forced collection left this many bytes live"),
+  // not about the caller, and both paths force the same full collection and
+  // then apply the same fit test, so a level that defeated one defeats the
+  // other at the same request size. A second, gate-private floor would only
+  // buy each path the right to re-learn what the other just proved.
   Result := not FCollecting and not FMemoryLimitFiring and
     (FMaxBytes > 0) and (ABytes <= FMaxBytes) and
     (FBytesAllocated <= High(Int64) - ABytes) and
     (FBytesAllocated + ABytes > FMaxBytes) and
     ((FForcedCollectFloor < 0) or
      (FForcedCollectFloor <= FMaxBytes - ABytes));
+end;
+
+function TGarbageCollector.TryCollectForLimitedBytes(const ABytes: Int64;
+  const AProtect: TGCManagedObject): Boolean;
+begin
+  if not ShouldForceLimitCollection(ABytes) then
+    Exit(False);
+  CollectForMemoryPressure(AProtect, True);
+  Result := (FBytesAllocated <= High(Int64) - ABytes) and
+    ((FMaxBytes <= 0) or (FBytesAllocated + ABytes <= FMaxBytes));
+  // Record the level this collection could not get below, so a retry of a
+  // request it already refused skips the walk that just proved fruitless.
+  // Collect clears this again — as do CollectYoung and the conditional
+  // invalidations on any counter drop (ReleaseExternalBytes,
+  // UnregisterObject) — so any ordinary collection re-arms forcing.
+  // The per-request-size term is pinned by the damper test's third arm in
+  // Goccia.GarbageCollector.Test.pas (a size-independent floor fails it).
+  if not Result then
+    FForcedCollectFloor := FBytesAllocated;
 end;
 
 function TGarbageCollector.TryReserveExternalBytes(
@@ -1073,17 +1203,8 @@ begin
     Exit(True);
   Result := (FBytesAllocated <= High(Int64) - ABytes) and
     ((FMaxBytes <= 0) or (FBytesAllocated + ABytes <= FMaxBytes));
-  if not Result and ShouldForceReservationCollection(ABytes) then
-  begin
-    CollectForMemoryPressure(AProtect, True);
-    Result := (FBytesAllocated <= High(Int64) - ABytes) and
-      ((FMaxBytes <= 0) or (FBytesAllocated + ABytes <= FMaxBytes));
-    // Record the level this collection could not get below, so a retry of a
-    // request it already refused skips the walk that just proved fruitless.
-    // Collect clears this again, so any ordinary collection re-arms forcing.
-    if not Result then
-      FForcedCollectFloor := FBytesAllocated;
-  end;
+  if not Result then
+    Result := TryCollectForLimitedBytes(ABytes, AProtect);
   if not Result then
     Exit;
   Inc(FBytesAllocated, ABytes);

@@ -22,10 +22,103 @@ uses
   Goccia.RuntimeExtensions.Sandbox,
   Goccia.Sandbox.Context,
   Goccia.TestSetup,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.HoleValue,
   Goccia.Values.NativeFunction,
-  Goccia.Values.Primitives;
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives,
+  Goccia.Values.Shape;
 
 type
+  { A managed value that reports its own sweep. Recycle, not Destroy: the sweep
+    calls Recycle, so a value freed some other way — by its owner, at teardown —
+    is not miscounted as collected. }
+  TCanaryValue = class(TGocciaObjectValue)
+  public
+    procedure Recycle; override;
+  end;
+
+  { The same, counted separately, for the value the control test deliberately
+    never hands to a store. Two classes rather than one counter with a flag so
+    "protected" and "must not be protected" can never be confused for each
+    other in an assertion. }
+  TControlValue = class(TGocciaObjectValue)
+  public
+    procedure Recycle; override;
+  end;
+
+  { A property map whose growth gate collects before deciding. It overrides only
+    the budget decision, so the rooting under test is the production
+    TGocciaShapedPropertyMap.RequireStorageBytes and not something the test put
+    there: the collection happens inside the window that override opens, at
+    exactly the point the gate takes it.
+
+    Two arms, and the difference between them is what the H4 layer added.
+    GCollectDuringPropertyStore is the SEAM: it collects unconditionally,
+    needs no budget arithmetic, and pins the rooting deterministically on
+    every pointer width in microseconds. GTightCeilingDuringPropertyStore is
+    the REAL gate: it arms a ceiling this growth cannot fit and then calls the
+    production consult, so the collection is taken by RequireNativeBytes
+    itself. The seam proves the window is wide enough; the real arm proves the
+    production gate collects inside it. Neither substitutes for the other —
+    a seam that stopped matching the gate would still pass, and a real-gate
+    run alone could not tell "collected and everything survived" from "never
+    collected". }
+  TCollectingPropertyMap = class(TGocciaShapedPropertyMap)
+  private
+    FGateCalls: Integer;
+    FForcedCollections: Integer;
+  protected
+    procedure ConsultStorageBudget(const ABytes: Int64); override;
+  public
+    { Number of times the growth gate has been consulted. Read by the tests so
+      a run that never reached the gate fails instead of passing vacuously. }
+    property GateCalls: Integer read FGateCalls;
+    { Collections taken by the production gate itself, under the tight-ceiling
+      arm. Counted around the inherited consult so the number cannot include a
+      collection the test injected. }
+    property ForcedCollections: Integer read FForcedCollections;
+  end;
+
+  { An ordinary object whose property storage is the collecting map above. }
+  TGatedStoreObjectValue = class(TGocciaObjectValue)
+  private
+    FGatedProperties: TCollectingPropertyMap;
+  public
+    constructor CreateGated;
+    property GatedProperties: TCollectingPropertyMap read FGatedProperties;
+  end;
+
+  { The element-storage twin of TCollectingPropertyMap, with the same two arms:
+    an element list whose growth gate collects before deciding. It likewise
+    overrides only the budget decision, so what is under test is the production
+    TGocciaElementList.RequireStorageBytes and not something the test put
+    there. }
+  TCollectingElementList = class(TGocciaElementList)
+  private
+    FGateCalls: Integer;
+    FForcedCollections: Integer;
+  protected
+    procedure ConsultStorageBudget(const ABytes: Int64); override;
+  public
+    { Number of times the growth gate has been consulted. Read by the tests so
+      a run that never reached the gate fails instead of passing vacuously. }
+    property GateCalls: Integer read FGateCalls;
+    { Collections taken by the production gate itself, under the tight-ceiling
+      arm. }
+    property ForcedCollections: Integer read FForcedCollections;
+  end;
+
+  { An ordinary array whose dense element storage is the collecting list. }
+  TGatedElementsArrayValue = class(TGocciaArrayValue)
+  private
+    FGatedElements: TCollectingElementList;
+  public
+    constructor CreateGated;
+    property GatedElements: TCollectingElementList read FGatedElements;
+  end;
+
   TMemoryLimitTests = class(TTestSuite)
   private
     { The class the sandbox injection points raise, or nil for "raise nothing".
@@ -82,6 +175,30 @@ type
       const AEscapingClass, AInjectedClass: ExceptClass): Boolean;
     procedure TestGateRefusesOverBudgetRequest;
     procedure TestGatePermitsInBudgetRequest;
+    procedure StoreCanaries(const ATarget: TGatedStoreObjectValue;
+      const AFirstIndex, ACount: Integer);
+    function StoreCanariesUntilGateFires(
+      const ATarget: TGatedStoreObjectValue;
+      const ALimit: Integer): Integer;
+    function StoreCanariesUntilBucketRehash(
+      const ATarget: TGatedStoreObjectValue;
+      const ALimit: Integer): Integer;
+    procedure TestGateCollectsBeforeRefusing;
+    procedure TestRepeatedRefusalCollectsOnlyOnce;
+    procedure TestGatedGrowthRootsNativeOnlyValues;
+    procedure TestRealGatedGrowthRootsNativeOnlyValues;
+    procedure TestGatedGrowthRootsAnUnrootedMapOwner;
+    procedure TestGatedBucketRehashRootsThePendingValue;
+    procedure TestGatedCompactionRootsThePendingValue;
+    procedure TestGatedWindowCollectionSweepsAnUnhandedValue;
+    function HoleExtendCanaries(const ATarget: TGatedElementsArrayValue;
+      const ACount: Integer): Integer;
+    procedure TestElementGateCollectsBeforeRefusing;
+    procedure TestGatedHoleExtendRootsTheIncomingValue;
+    procedure TestRealGatedHoleExtendRootsTheIncomingValue;
+    procedure TestGatedHoleExtendRootsAnUnrootedArray;
+    procedure TestGatedHoleExtendRootsTheDescriptorValue;
+    procedure TestGatedElementWindowSweepsAnUnhandedValue;
     procedure TestSyncCatchCannotSwallowRefusal;
     procedure TestAsyncFunctionCatchCannotSwallowRefusal;
     procedure TestPromiseExecutorCatchCannotSwallowRefusal;
@@ -123,6 +240,46 @@ const
     the absence of an escaping fault. }
   SWALLOW_WITNESS_GLOBAL_NAME = '__gocciaReportSwallowedFault';
 
+  { Upper bound on the properties the canary tests store while waiting for the
+    growth gate to fire. The entry array first clears GATED_GROWTH_MIN_BYTES at
+    62 entries on a 64-bit target and later on a 32-bit one, so this is well
+    clear of both while still turning a gate that stopped firing into a failed
+    assertion rather than a hung test. }
+  GATE_PROBE_LIMIT = 512;
+
+  { The bucket array is Int32 slots and Grow doubles it, so the transient a
+    rehash reports is old + 2*old. The first rehash whose transient clears
+    GATED_GROWTH_MIN_BYTES (4096) is 512 -> 1024 buckets, at (512 + 1024) * 4 =
+    6144 bytes; every smaller rehash is under the threshold and is never gated.
+    A map that has reached this capacity has therefore been through a gated
+    Grow — on every pointer width, since SizeOf(Int32) does not vary. Reaching
+    it takes roughly 359 properties at the map's 70% load factor, so the probe
+    limit below has to be well clear of that. }
+  BUCKET_REHASH_GATED_CAPACITY = 1024;
+  BUCKET_PROBE_LIMIT = 2048;
+
+  { The compaction test stores this many properties and then deletes all but
+    every COMPACTION_LIVE_STRIDE'th. DeletedSlotsNeedCompaction is
+    FDeletedCount > FCount, so three dead entries per live one puts the next
+    store on the Compact path, and compacting 400 entries down to 100 reports
+    (400 + 100) * SizeOf(TEntry) — comfortably over the gate's threshold at
+    either pointer width. }
+  COMPACTION_TOTAL_PROPERTIES = 400;
+  COMPACTION_LIVE_STRIDE = 4;
+
+  { How many hole-extending element stores the element canaries perform. The
+    element gate has no small-block threshold to clear — every extension past
+    the current element count is reported — so one store would be enough; a
+    handful runs the window repeatedly and leaves several already-stored
+    canaries behind for the owner push to keep alive. }
+  ELEMENT_CANARY_STORES = 8;
+
+  { Stride between the indices those stores use. Anything above 1 leaves a hole
+    behind every write, which is what puts the store on the extension path
+    rather than the append fast path (an append at exactly the element count
+    never reaches the gate at all). }
+  ELEMENT_CANARY_STRIDE = 2;
+
   { Name of the native the sandbox tests reach through an options getter. }
   SANDBOX_FAULT_GLOBAL_NAME = '__gocciaRaiseSandboxFault';
 
@@ -154,6 +311,28 @@ const
     '  });' + sLineBreak +
     '} catch (e) {}';
 
+var
+  { Number of TCanaryValue instances the sweep has reclaimed. Reset by each
+    test that reads it. }
+  GCanarySweepCount: Integer;
+  { The same for TControlValue, the never-handed-out value. }
+  GControlSweepCount: Integer;
+  { Arms TCollectingPropertyMap. Off by default so the setup stores the canary
+    tests perform before the interesting one do not collect. }
+  GCollectDuringPropertyStore: Boolean;
+  { The same for TCollectingElementList. Separate from the flag above so a
+    property-store gate reached incidentally from an element test — an array
+    index that lands in the property map — cannot collect and make an element
+    assertion pass or fail for the other layer's reason. }
+  GCollectDuringElementStore: Boolean;
+  { Arms the real-gate arm of TCollectingPropertyMap: instead of injecting a
+    collection, install a ceiling the growth cannot fit and let the production
+    RequireNativeBytes be the thing that collects. Off by default for the same
+    reason the seam flags are. }
+  GTightCeilingDuringPropertyStore: Boolean;
+  { The same for TCollectingElementList. }
+  GTightCeilingDuringElementStore: Boolean;
+
 procedure TMemoryLimitTests.BeforeEach;
 begin
   inherited BeforeEach;
@@ -169,6 +348,34 @@ begin
     TestGateRefusesOverBudgetRequest);
   Test('The gate permits a request that fits the remaining budget',
     TestGatePermitsInBudgetRequest);
+  Test('The gate collects and re-tests before refusing',
+    TestGateCollectsBeforeRefusing);
+  Test('A repeated refusal of the same size collects only once',
+    TestRepeatedRefusalCollectsOnlyOnce);
+  Test('A gated growth keeps the values a store is carrying alive across a ' +
+    'collection taken there', TestGatedGrowthRootsNativeOnlyValues);
+  Test('The real gate''s own collection keeps those values alive too',
+    TestRealGatedGrowthRootsNativeOnlyValues);
+  Test('A gated growth keeps an object no caller roots alive with it',
+    TestGatedGrowthRootsAnUnrootedMapOwner);
+  Test('A gated bucket rehash keeps the pending value alive',
+    TestGatedBucketRehashRootsThePendingValue);
+  Test('A gated compaction keeps the pending value alive',
+    TestGatedCompactionRootsThePendingValue);
+  Test('That same collection sweeps a value the store was never handed',
+    TestGatedWindowCollectionSweepsAnUnhandedValue);
+  Test('The element gate collects and re-tests before refusing',
+    TestElementGateCollectsBeforeRefusing);
+  Test('A gated hole extension keeps the element being stored alive across ' +
+    'a collection taken there', TestGatedHoleExtendRootsTheIncomingValue);
+  Test('The real element gate''s own collection keeps it alive too',
+    TestRealGatedHoleExtendRootsTheIncomingValue);
+  Test('A gated hole extension keeps an array no caller roots alive with it',
+    TestGatedHoleExtendRootsAnUnrootedArray);
+  Test('A gated hole extension keeps the descriptor value its caller reads ' +
+    'back afterwards alive', TestGatedHoleExtendRootsTheDescriptorValue);
+  Test('That same collection sweeps a value the element store was never handed',
+    TestGatedElementWindowSweepsAnUnhandedValue);
   Test('Script try/catch cannot swallow a refusal',
     TestSyncCatchCannotSwallowRefusal);
   Test('An async function body cannot swallow a refusal',
@@ -192,6 +399,140 @@ begin
     TestSandboxFsPromiseErrorsStayCatchable);
   Test('Response.json cannot swallow an audit delivery failure',
     TestResponseJsonCannotSwallowAuditDeliveryFailure);
+end;
+
+procedure TCanaryValue.Recycle;
+begin
+  Inc(GCanarySweepCount);
+  inherited;
+end;
+
+procedure TControlValue.Recycle;
+begin
+  Inc(GControlSweepCount);
+  inherited;
+end;
+
+{ The tight-ceiling arm, shared by both gates as prose because Pascal cannot
+  share it as code — `inherited` is not something a method pointer can carry.
+
+  ArmTightCeiling installs a ceiling one byte below what the growth asks for,
+  which is the only shape that makes the gate collect: the request is over what
+  is left of the budget, so the fit test fails, and inside the whole budget, so
+  ShouldForceLimitCollection does not rule it out. The test plants reclaimable
+  garbage first, so the forced collection gets BytesAllocated back under the
+  armed ceiling and the gate then PERMITS — the store completes, and what the
+  test reads afterwards is a map or list the production gate collected inside
+  and then let grow.
+
+  ReleaseTightCeiling restores the budget whatever happened, and answers how
+  many collections ran inside the window. A refusal that escaped without the
+  restore would leave every later test running against a one-byte budget. }
+procedure ArmTightCeiling(const ABytes: Int64;
+  out APreviousMaxBytes: Int64; out ACollectionsBefore: Integer);
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  { One object's worth of guaranteed reclaim, created unreferenced and counted
+    into the baseline below. The armed ceiling is one byte under the request,
+    so the forced collection has to find SOMETHING or the gate refuses and the
+    store raises instead of growing — and a gate consulted repeatedly (the
+    element list is gated on every extension) would otherwise find the heap
+    already swept clean by its own previous call. Planting it here rather than
+    in the tests makes each gate call independent of the last. }
+  TGocciaObjectValue.Create;
+  APreviousMaxBytes := GC.MaxBytes;
+  ACollectionsBefore := GC.TotalCollections;
+  GC.MaxBytes := GC.BytesAllocated + ABytes - 1;
+end;
+
+function ReleaseTightCeiling(const APreviousMaxBytes: Int64;
+  const ACollectionsBefore: Integer): Integer;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  Result := GC.TotalCollections - ACollectionsBefore;
+  GC.MaxBytes := APreviousMaxBytes;
+end;
+
+procedure TCollectingPropertyMap.ConsultStorageBudget(const ABytes: Int64);
+var
+  CollectionsBefore: Integer;
+  GC: TGarbageCollector;
+  PreviousMaxBytes: Int64;
+begin
+  Inc(FGateCalls);
+  if GTightCeilingDuringPropertyStore then
+  begin
+    ArmTightCeiling(ABytes, PreviousMaxBytes, CollectionsBefore);
+    try
+      inherited ConsultStorageBudget(ABytes);
+    finally
+      Inc(FForcedCollections,
+        ReleaseTightCeiling(PreviousMaxBytes, CollectionsBefore));
+    end;
+    Exit;
+  end;
+  if GCollectDuringPropertyStore then
+  begin
+    GC := TGarbageCollector.Instance;
+    if Assigned(GC) then
+      GC.Collect;
+  end;
+  inherited ConsultStorageBudget(ABytes);
+end;
+
+procedure TCollectingElementList.ConsultStorageBudget(const ABytes: Int64);
+var
+  CollectionsBefore: Integer;
+  GC: TGarbageCollector;
+  PreviousMaxBytes: Int64;
+begin
+  Inc(FGateCalls);
+  if GTightCeilingDuringElementStore then
+  begin
+    ArmTightCeiling(ABytes, PreviousMaxBytes, CollectionsBefore);
+    try
+      inherited ConsultStorageBudget(ABytes);
+    finally
+      Inc(FForcedCollections,
+        ReleaseTightCeiling(PreviousMaxBytes, CollectionsBefore));
+    end;
+    Exit;
+  end;
+  if GCollectDuringElementStore then
+  begin
+    GC := TGarbageCollector.Instance;
+    if Assigned(GC) then
+      GC.Collect;
+  end;
+  inherited ConsultStorageBudget(ABytes);
+end;
+
+constructor TGatedElementsArrayValue.CreateGated;
+begin
+  inherited Create;
+  { The base constructor already built an ordinary element list; swap it for
+    the collecting one before anything has been stored in it, and give it the
+    same owner the real one gets. }
+  FElements.Free;
+  FGatedElements := TCollectingElementList.Create(False);
+  FGatedElements.Owner := Self;
+  FElements := FGatedElements;
+end;
+
+constructor TGatedStoreObjectValue.CreateGated;
+begin
+  inherited Create;
+  { The base constructor already built an ordinary shaped map; swap it for the
+    collecting one before anything has been stored in it, and give it the same
+    owner the real one gets. }
+  FProperties.Free;
+  FGatedProperties := TCollectingPropertyMap.Create;
+  FGatedProperties.Owner := Self;
+  FProperties := FGatedProperties;
 end;
 
 procedure TMemoryLimitTests.FailingAuditSink(
@@ -351,6 +692,7 @@ end;
 
 procedure TMemoryLimitTests.TestGateRefusesOverBudgetRequest;
 var
+  CollectionsBefore: Integer;
   GC: TGarbageCollector;
   PreviousMaxBytes: Int64;
   Raised: Boolean;
@@ -360,8 +702,14 @@ begin
   PreviousMaxBytes := GC.MaxBytes;
   try
     GC.MaxBytes := GC.BytesAllocated + BUDGET_HEADROOM_BYTES;
+    { The precondition the zero-collection claim below rests on, asserted
+      rather than assumed: this request does not merely exceed what is LEFT of
+      the budget, it exceeds the whole of it. }
+    Expect<Boolean>(
+      Int64(BUDGET_HEADROOM_BYTES) * 4 > GC.MaxBytes).ToBe(True);
     Expect<Boolean>(CanAllocateNativeBytes(
       Int64(BUDGET_HEADROOM_BYTES) * 4)).ToBe(False);
+    CollectionsBefore := GC.TotalCollections;
     Raised := False;
     try
       RequireNativeBytes(Int64(BUDGET_HEADROOM_BYTES) * 4);
@@ -370,6 +718,13 @@ begin
         Raised := True;
     end;
     Expect<Boolean>(Raised).ToBe(True);
+
+    { The half of the contract the collecting gate does NOT change. A request
+      larger than the whole budget can never fit however much is reclaimed, so
+      it is refused on the arithmetic alone and never walks the heap — the
+      cheap answer a runaway `new Array(1e8)` gets, and the reason a guest
+      cannot turn the ceiling into a mark-and-sweep generator. }
+    Expect<Integer>(GC.TotalCollections - CollectionsBefore).ToBe(0);
   finally
     GC.MaxBytes := PreviousMaxBytes;
   end;
@@ -394,6 +749,726 @@ begin
   finally
     GC.MaxBytes := PreviousMaxBytes;
   end;
+end;
+
+procedure TMemoryLimitTests.TestGateCollectsBeforeRefusing;
+var
+  CollectionsBefore: Integer;
+  GC: TGarbageCollector;
+  PreviousMaxBytes: Int64;
+  Raised: Boolean;
+  Request: Int64;
+begin
+  GC := TGarbageCollector.Instance;
+  PreviousMaxBytes := GC.MaxBytes;
+  try
+    { Clears any floor an earlier test's refusal recorded, so this one measures
+      the gate's own behaviour rather than the damper's. }
+    GC.Collect;
+    GC.MaxBytes := GC.BytesAllocated + BUDGET_HEADROOM_BYTES;
+    { Exactly the whole budget. That is the one request size that is both
+      inside the budget — so the gate is obliged to try — and impossible to
+      make room for, since fitting it would need the live set at zero. A
+      refusal that collects first, deterministically, on every pointer width. }
+    Request := GC.MaxBytes;
+    CollectionsBefore := GC.TotalCollections;
+    Raised := False;
+    try
+      RequireNativeBytes(Request);
+    except
+      on TGocciaMemoryLimitError do
+        Raised := True;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+
+    { The expectation this layer exists to flip. The gate used to answer from
+      the byte counter and never walk the heap, so whether a storage doubling
+      was refused depended on how much collectable garbage happened to be
+      resident. It now forces one collection and re-tests before refusing —
+      once, not per attempt; TestRepeatedRefusalCollectsOnlyOnce pins that
+      half. The rooting the canary tests below pin is what makes this safe,
+      and it does not move. }
+    Expect<Integer>(GC.TotalCollections - CollectionsBefore).ToBe(1);
+  finally
+    GC.MaxBytes := PreviousMaxBytes;
+  end;
+end;
+
+procedure TMemoryLimitTests.TestRepeatedRefusalCollectsOnlyOnce;
+const
+  { Enough attempts that a per-attempt mark-and-sweep would be unmistakable in
+    the count; the assertion is exact, so one extra walk fails it. }
+  RETRY_ATTEMPTS = 8;
+var
+  CollectionsBefore: Integer;
+  GC: TGarbageCollector;
+  I: Integer;
+  PreviousMaxBytes: Int64;
+  Refusals: Integer;
+  Request: Int64;
+begin
+  GC := TGarbageCollector.Instance;
+  PreviousMaxBytes := GC.MaxBytes;
+  try
+    GC.Collect;
+    GC.MaxBytes := GC.BytesAllocated + BUDGET_HEADROOM_BYTES;
+    Request := GC.MaxBytes;
+
+    { The damper, from the guest's side. A script that catches the catchable
+      RangeError and retries — or a native builder that asks again after a
+      refusal — must not be able to bill the engine a full mark-and-sweep per
+      attempt. The first forced collection records the level it could not get
+      below, and every later attempt at the same size is answered from that
+      record without walking the heap. }
+    CollectionsBefore := GC.TotalCollections;
+    Refusals := 0;
+    for I := 1 to RETRY_ATTEMPTS do
+      try
+        RequireNativeBytes(Request);
+      except
+        on TGocciaMemoryLimitError do
+          Inc(Refusals);
+      end;
+    { Every attempt still refuses: the damper skips the walk, never the
+      refusal. }
+    Expect<Integer>(Refusals).ToBe(RETRY_ATTEMPTS);
+    Expect<Integer>(GC.TotalCollections - CollectionsBefore).ToBe(1);
+
+    { And the damper suppresses a proven-hopeless repeat, not the mechanism: an
+      ordinary collection clears the record, so the next attempt forces its own
+      collection again. Without this the first refusal at a given size would
+      disarm the gate for the rest of the run. }
+    CollectionsBefore := GC.TotalCollections;
+    GC.Collect;
+    try
+      RequireNativeBytes(Request);
+    except
+      on TGocciaMemoryLimitError do;
+    end;
+    { Two: the explicit collection, and the one the re-armed gate forced. }
+    Expect<Integer>(GC.TotalCollections - CollectionsBefore).ToBe(2);
+  finally
+    GC.MaxBytes := PreviousMaxBytes;
+  end;
+end;
+
+{ Stores canary-valued properties into ATarget until its growth gate has fired
+  at least once, and answers how many were stored. Each value is created and
+  handed straight to DefineProperty, so between the two it exists only in a
+  Pascal local and in a descriptor no map holds yet — the native-unrooted shape,
+  and the one no evaluator-side frame can cover.
+
+  A loop rather than a fixed property count because how many entries it takes to
+  clear GATED_GROWTH_MIN_BYTES depends on SizeOf(TEntry), which differs by
+  pointer width. }
+function TMemoryLimitTests.StoreCanariesUntilGateFires(
+  const ATarget: TGatedStoreObjectValue; const ALimit: Integer): Integer;
+var
+  I: Integer;
+begin
+  Result := 0;
+  for I := 0 to ALimit - 1 do
+  begin
+    StoreCanaries(ATarget, I, 1);
+    Inc(Result);
+    if ATarget.GatedProperties.GateCalls > 0 then
+      Exit;
+  end;
+end;
+
+{ Keeps storing until the bucket array has been rehashed to the first capacity
+  whose rehash is large enough to be gated. The loop above stops at the FIRST
+  gate call, which is always an entry-array growth — the bucket array is Int32
+  slots and stays under the threshold until far more properties have been
+  stored — so reaching Grow's gate needs its own probe. }
+function TMemoryLimitTests.StoreCanariesUntilBucketRehash(
+  const ATarget: TGatedStoreObjectValue; const ALimit: Integer): Integer;
+var
+  I: Integer;
+begin
+  Result := 0;
+  for I := 0 to ALimit - 1 do
+  begin
+    StoreCanaries(ATarget, I, 1);
+    Inc(Result);
+    if ATarget.GatedProperties.Capacity >= BUCKET_REHASH_GATED_CAPACITY then
+      Exit;
+  end;
+end;
+
+procedure TMemoryLimitTests.StoreCanaries(
+  const ATarget: TGatedStoreObjectValue;
+  const AFirstIndex, ACount: Integer);
+var
+  I: Integer;
+begin
+  for I := AFirstIndex to AFirstIndex + ACount - 1 do
+    ATarget.DefineProperty('canary' + IntToStr(I),
+      TGocciaPropertyDescriptorData.Create(TCanaryValue.Create,
+        [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
+procedure TMemoryLimitTests.TestGatedGrowthRootsNativeOnlyValues;
+var
+  GC: TGarbageCollector;
+  Roots: TGocciaActiveRootFrame;
+  Stored: Integer;
+  Target: TGatedStoreObjectValue;
+begin
+  GC := TGarbageCollector.Instance;
+  Target := TGatedStoreObjectValue.CreateGated;
+  Roots.Initialize;
+  try
+    { The object being stored into is the caller's to keep alive, not the store
+      path's, so root it the way a real caller's frame would. That leaves
+      exactly one unrooted thing in the picture: the values. }
+    Roots.Add(Target);
+    GC.Collect;
+    GCanarySweepCount := 0;
+
+    GCollectDuringPropertyStore := True;
+    try
+      Stored := StoreCanariesUntilGateFires(Target, GATE_PROBE_LIMIT);
+    finally
+      GCollectDuringPropertyStore := False;
+    end;
+
+    { The gate really was reached — without this the run below could pass
+      because nothing ever collected. }
+    Expect<Boolean>(Target.GatedProperties.GateCalls > 0).ToBe(True);
+    { Every value handed to the store survived: the ones already in the map
+      because the gate roots the map's owner, and the one the gating Add had
+      not stored yet because the gate roots the pending descriptor. }
+    Expect<Integer>(GCanarySweepCount).ToBe(0);
+    Expect<Boolean>(
+      Target.GetProperty('canary0') is TCanaryValue).ToBe(True);
+  finally
+    Roots.Clear;
+  end;
+
+  { Nothing roots the object now, so it and every canary it holds go on the
+    next collection — the protection is scoped to the growth window, not a
+    leak. }
+  GC.Collect;
+  Expect<Integer>(GCanarySweepCount).ToBe(Stored);
+end;
+
+procedure TMemoryLimitTests.TestGatedGrowthRootsAnUnrootedMapOwner;
+var
+  GC: TGarbageCollector;
+  Stored: Integer;
+  Target: TGatedStoreObjectValue;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GCanarySweepCount := 0;
+
+  { No caller-side root anywhere: the object exists only in this bare Pascal
+    local. That is the shape the gate's owner push exists for — a native
+    builder part-way through populating an object it has not handed to anyone
+    yet, so nothing in the engine can see it and no evaluator frame covers it.
+    The test above roots the object itself, which leaves the owner push
+    unexercised; here it is the only thing standing between the collection and
+    both the object and every canary already in its map. }
+  Target := TGatedStoreObjectValue.CreateGated;
+  GCollectDuringPropertyStore := True;
+  try
+    Stored := StoreCanariesUntilGateFires(Target, GATE_PROBE_LIMIT);
+  finally
+    GCollectDuringPropertyStore := False;
+  end;
+
+  Expect<Boolean>(Target.GatedProperties.GateCalls > 0).ToBe(True);
+  Expect<Integer>(GCanarySweepCount).ToBe(0);
+  { Reading a property back would fault rather than fail if the object itself
+    had been swept, so assert on the canaries first and on the object second. }
+  Expect<Boolean>(Target.GetProperty('canary0') is TCanaryValue).ToBe(True);
+
+  GC.Collect;
+  Expect<Integer>(GCanarySweepCount).ToBe(Stored);
+end;
+
+procedure TMemoryLimitTests.TestGatedBucketRehashRootsThePendingValue;
+var
+  GC: TGarbageCollector;
+  Roots: TGocciaActiveRootFrame;
+  Stored: Integer;
+  Target: TGatedStoreObjectValue;
+begin
+  GC := TGarbageCollector.Instance;
+  Target := TGatedStoreObjectValue.CreateGated;
+  Roots.Initialize;
+  try
+    Roots.Add(Target);
+    GC.Collect;
+    GCanarySweepCount := 0;
+
+    { The entry-array growth point is the one the other tests reach; this one
+      drives the map far enough that Grow's bucket rehash is gated too. Both
+      paths receive the pending value from the same Add, and a rehash that
+      stopped passing it on would leave the store's own value unrooted across
+      the collection while everything already in the map stayed safe — a hole
+      no test that stops at the first gate call can see. }
+    GCollectDuringPropertyStore := True;
+    try
+      Stored := StoreCanariesUntilBucketRehash(Target, BUCKET_PROBE_LIMIT);
+    finally
+      GCollectDuringPropertyStore := False;
+    end;
+
+    Expect<Integer>(Target.GatedProperties.Capacity).ToBe(
+      BUCKET_REHASH_GATED_CAPACITY);
+    Expect<Integer>(GCanarySweepCount).ToBe(0);
+  finally
+    Roots.Clear;
+  end;
+
+  GC.Collect;
+  Expect<Integer>(GCanarySweepCount).ToBe(Stored);
+end;
+
+procedure TMemoryLimitTests.TestGatedCompactionRootsThePendingValue;
+var
+  GateCallsBefore: Integer;
+  GC: TGarbageCollector;
+  I: Integer;
+  Roots: TGocciaActiveRootFrame;
+  Target: TGatedStoreObjectValue;
+begin
+  GC := TGarbageCollector.Instance;
+  Target := TGatedStoreObjectValue.CreateGated;
+  Roots.Initialize;
+  try
+    Roots.Add(Target);
+
+    { Built with the collection disarmed, so the only collection in this test is
+      the one the store under test takes. The properties that will be deleted
+      hold the pinned undefined singleton rather than canaries: a deleted
+      canary would become garbage and be swept for reasons that have nothing to
+      do with the rooting under test. }
+    for I := 0 to COMPACTION_TOTAL_PROPERTIES - 1 do
+      if I mod COMPACTION_LIVE_STRIDE = 0 then
+        StoreCanaries(Target, I, 1)
+      else
+        Target.DefineProperty('filler' + IntToStr(I),
+          TGocciaPropertyDescriptorData.Create(
+            TGocciaUndefinedLiteralValue.UndefinedValue,
+            [pfEnumerable, pfConfigurable, pfWritable]));
+
+    for I := 0 to COMPACTION_TOTAL_PROPERTIES - 1 do
+      if I mod COMPACTION_LIVE_STRIDE <> 0 then
+        Target.DeleteProperty('filler' + IntToStr(I));
+
+    GC.Collect;
+    GCanarySweepCount := 0;
+    GateCallsBefore := Target.GatedProperties.GateCalls;
+
+    { Dead entries now outnumber live ones, so the next store compacts before
+      it appends — the third gated growth point, and the only one that shrinks
+      rather than grows. Compact reports the two entry arrays it holds at once,
+      and it must carry the pending value the same way Grow does. }
+    GCollectDuringPropertyStore := True;
+    try
+      StoreCanaries(Target, COMPACTION_TOTAL_PROPERTIES, 1);
+    finally
+      GCollectDuringPropertyStore := False;
+    end;
+
+    Expect<Boolean>(
+      Target.GatedProperties.GateCalls > GateCallsBefore).ToBe(True);
+    Expect<Integer>(Target.GatedProperties.DeletedCount).ToBe(0);
+    Expect<Integer>(GCanarySweepCount).ToBe(0);
+  finally
+    Roots.Clear;
+  end;
+end;
+
+procedure TMemoryLimitTests.TestGatedWindowCollectionSweepsAnUnhandedValue;
+var
+  Control: TControlValue;
+  GC: TGarbageCollector;
+  Roots: TGocciaActiveRootFrame;
+  Target: TGatedStoreObjectValue;
+begin
+  GC := TGarbageCollector.Instance;
+  Target := TGatedStoreObjectValue.CreateGated;
+  Roots.Initialize;
+  try
+    Roots.Add(Target);
+    GC.Collect;
+    GCanarySweepCount := 0;
+    GControlSweepCount := 0;
+
+    { The vacuity control for the test above: same object, same stores, same
+      collection at the same gate — but this value is never handed to the
+      store, so nothing is entitled to root it and the collection must take it.
+      Without this, canaries that survived because the collection never ran
+      would read exactly like canaries the gate protected.
+
+      Never-handed-out is the shape that answers the question. A value returned
+      to a caller and then dropped survives for an unrelated reason — the
+      interpreter's own pressure checkpoints protect the current expression
+      result — so it would prove nothing about the store. }
+    Control := TControlValue.Create;
+    Expect<Boolean>(Assigned(Control)).ToBe(True);
+
+    GCollectDuringPropertyStore := True;
+    try
+      StoreCanariesUntilGateFires(Target, GATE_PROBE_LIMIT);
+    finally
+      GCollectDuringPropertyStore := False;
+    end;
+
+    Expect<Boolean>(Target.GatedProperties.GateCalls > 0).ToBe(True);
+    Expect<Integer>(GControlSweepCount).ToBe(1);
+    Expect<Integer>(GCanarySweepCount).ToBe(0);
+  finally
+    Roots.Clear;
+  end;
+end;
+
+procedure TMemoryLimitTests.TestRealGatedGrowthRootsNativeOnlyValues;
+var
+  Control: TControlValue;
+  GC: TGarbageCollector;
+  Stored: Integer;
+  Target: TGatedStoreObjectValue;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GCanarySweepCount := 0;
+  GControlSweepCount := 0;
+
+  { The seam version of this test injects the collection, which pins the
+    rooting deterministically but says nothing about whether the production
+    gate takes one. This runs the same stores against a ceiling the growth
+    cannot fit, so RequireNativeBytes itself is what collects — the H4
+    behaviour, exercised end to end through the real budget arithmetic,
+    inside the real rooted window.
+
+    Target is deliberately held only in this Pascal local — no frame, no
+    external root. The gate's own Owner push is the sole thing keeping the
+    object and its stored canaries alive across the collection the gate
+    takes, which is the production bare-local-builder shape, and what makes
+    removing the owner push fail THIS test and not only the seam variant.
+
+    The vacuity control is folded in rather than split off: the collection
+    here is the gate's, not the test's, so "did it actually run" and "did it
+    spare only what it was entitled to" are one question. }
+  Target := TGatedStoreObjectValue.CreateGated;
+  Control := TControlValue.Create;
+  Expect<Boolean>(Assigned(Control)).ToBe(True);
+
+  GTightCeilingDuringPropertyStore := True;
+  try
+    Stored := StoreCanariesUntilGateFires(Target, GATE_PROBE_LIMIT);
+  finally
+    GTightCeilingDuringPropertyStore := False;
+  end;
+
+  Expect<Boolean>(Target.GatedProperties.GateCalls > 0).ToBe(True);
+  { The production gate collected, and the store still completed: it made
+    room and permitted rather than refusing. }
+  Expect<Boolean>(Target.GatedProperties.ForcedCollections > 0).ToBe(True);
+  { The value the gating Add had not stored yet, and every value already in
+    the map, survived a collection the engine itself decided to take. }
+  Expect<Integer>(GCanarySweepCount).ToBe(0);
+  { And it really was a sweep: the one value nothing handed to the store is
+    gone. }
+  Expect<Integer>(GControlSweepCount).ToBe(1);
+  Expect<Boolean>(
+    Target.GetProperty('canary0') is TCanaryValue).ToBe(True);
+
+  GC.Collect;
+  Expect<Integer>(GCanarySweepCount).ToBe(Stored);
+end;
+
+{ Stores ACount canary values into ATarget at a stride that leaves a hole
+  behind every write, and answers how many it stored. Each value is created and
+  handed straight to SetElement, so between the two it exists only in a Pascal
+  local — the native-unrooted shape, and the one no evaluator-side frame covers.
+
+  A strided index rather than a sequential one because an append at exactly the
+  element count takes the list's Add fast path and never reaches the gate.
+
+  Every other store goes through SetProperty with a stringified index — the
+  route the evaluator's property store takes into an array — so the SetProperty
+  extension arm's pending-value threading is pinned by the same canaries as
+  SetElement's, not merely argued equivalent to it. (AssignProperty is the
+  wrong vehicle here: for a not-yet-existing index it funnels into
+  DefineProperty's dense-create arm, which the descriptor canary already
+  pins.) }
+function TMemoryLimitTests.HoleExtendCanaries(
+  const ATarget: TGatedElementsArrayValue; const ACount: Integer): Integer;
+var
+  I: Integer;
+  Index: Integer;
+begin
+  Result := 0;
+  for I := 0 to ACount - 1 do
+  begin
+    Index := ATarget.Elements.Count + ELEMENT_CANARY_STRIDE - 1;
+    if I mod 2 = 0 then
+      ATarget.SetElement(Index, TCanaryValue.Create)
+    else
+      ATarget.SetProperty(IntToStr(Index), TCanaryValue.Create);
+    Inc(Result);
+  end;
+end;
+
+procedure TMemoryLimitTests.TestElementGateCollectsBeforeRefusing;
+var
+  CollectionsBefore: Integer;
+  Elements: TGocciaElementList;
+  GC: TGarbageCollector;
+  PreviousMaxBytes: Int64;
+  Raised: Boolean;
+  RequestedSlots: Int64;
+begin
+  GC := TGarbageCollector.Instance;
+  Elements := TGocciaElementList.Create(False);
+  PreviousMaxBytes := GC.MaxBytes;
+  try
+    GC.Collect;
+    GC.MaxBytes := GC.BytesAllocated + BUDGET_HEADROOM_BYTES;
+    { As many pointer slots as the whole budget could hold, so the request the
+      gate is handed is the whole budget rounded down — the element-side twin
+      of the property gate's request above, and inside the budget on every
+      pointer width because the slot count is derived from SizeOf(Pointer)
+      rather than assumed. Reported before a single slot is allocated, which is
+      what the refusal has to happen for. }
+    RequestedSlots := GC.MaxBytes div SizeOf(Pointer);
+    CollectionsBefore := GC.TotalCollections;
+    Raised := False;
+    try
+      ExtendElementsWithHoles(Elements, RequestedSlots, nil);
+    except
+      on TGocciaMemoryLimitError do
+        Raised := True;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+    { Refused before allocating: the list is untouched, not partly extended. }
+    Expect<Integer>(Elements.Count).ToBe(0);
+
+    { The element-side twin of the pinned assertion the property gate carries,
+      and it flips for the same reason: the gate forces one collection and
+      re-tests before refusing. The rooting the canary tests below pin is what
+      makes that safe, and it does not move. }
+    Expect<Integer>(GC.TotalCollections - CollectionsBefore).ToBe(1);
+  finally
+    GC.MaxBytes := PreviousMaxBytes;
+    Elements.Free;
+  end;
+end;
+
+procedure TMemoryLimitTests.TestGatedHoleExtendRootsTheIncomingValue;
+var
+  GC: TGarbageCollector;
+  Roots: TGocciaActiveRootFrame;
+  Stored: Integer;
+  Target: TGatedElementsArrayValue;
+begin
+  GC := TGarbageCollector.Instance;
+  Target := TGatedElementsArrayValue.CreateGated;
+  Roots.Initialize;
+  try
+    { The array being stored into is the caller's to keep alive, not the store
+      path's, so root it the way a real caller's frame would. That leaves
+      exactly one unrooted thing in the picture: the element being stored. }
+    Roots.Add(Target);
+    GC.Collect;
+    GCanarySweepCount := 0;
+
+    GCollectDuringElementStore := True;
+    try
+      Stored := HoleExtendCanaries(Target, ELEMENT_CANARY_STORES);
+    finally
+      GCollectDuringElementStore := False;
+    end;
+
+    { The gate really was reached — without this the run below could pass
+      because nothing ever collected. }
+    Expect<Boolean>(Target.GatedElements.GateCalls > 0).ToBe(True);
+    { Every value handed to the store survived: the ones already in the list
+      because the gate roots the list's owner, and the one the gating store had
+      not written yet because the gate roots the pending value. }
+    Expect<Integer>(GCanarySweepCount).ToBe(0);
+    Expect<Boolean>(
+      Target.GetElement(ELEMENT_CANARY_STRIDE - 1) is TCanaryValue).ToBe(True);
+  finally
+    Roots.Clear;
+  end;
+
+  { Nothing roots the array now, so it and every canary it holds go on the next
+    collection — the protection is scoped to the growth window, not a leak. }
+  GC.Collect;
+  Expect<Integer>(GCanarySweepCount).ToBe(Stored);
+end;
+
+procedure TMemoryLimitTests.TestGatedHoleExtendRootsAnUnrootedArray;
+var
+  GC: TGarbageCollector;
+  Stored: Integer;
+  Target: TGatedElementsArrayValue;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GCanarySweepCount := 0;
+
+  { No caller-side root anywhere: the array exists only in this bare Pascal
+    local. That is the shape the gate's owner push exists for, and it is not a
+    contrived one — TGocciaArrayValue.InitializeNativeFromArguments extends the
+    element list with holes while the instance is still inside its own
+    construction, so `new Array(n)` reaches the gate from every one of the
+    engine's construct sites with the array reachable from nothing at all. The
+    test above roots the array itself, which leaves the owner push unexercised;
+    here it is the only thing standing between the collection and both the
+    array and every canary already in its list. }
+  Target := TGatedElementsArrayValue.CreateGated;
+  GCollectDuringElementStore := True;
+  try
+    Stored := HoleExtendCanaries(Target, ELEMENT_CANARY_STORES);
+  finally
+    GCollectDuringElementStore := False;
+  end;
+
+  Expect<Boolean>(Target.GatedElements.GateCalls > 0).ToBe(True);
+  Expect<Integer>(GCanarySweepCount).ToBe(0);
+  { Reading an element back would fault rather than fail if the array itself
+    had been swept, so assert on the canaries first and on the array second. }
+  Expect<Boolean>(
+    Target.GetElement(ELEMENT_CANARY_STRIDE - 1) is TCanaryValue).ToBe(True);
+
+  GC.Collect;
+  Expect<Integer>(GCanarySweepCount).ToBe(Stored);
+end;
+
+procedure TMemoryLimitTests.TestGatedHoleExtendRootsTheDescriptorValue;
+var
+  GC: TGarbageCollector;
+  Roots: TGocciaActiveRootFrame;
+  Target: TGatedElementsArrayValue;
+begin
+  GC := TGarbageCollector.Instance;
+  Target := TGatedElementsArrayValue.CreateGated;
+  Roots.Initialize;
+  try
+    Roots.Add(Target);
+    GC.Collect;
+    GCanarySweepCount := 0;
+
+    { The store family above hands the gate a value it holds in a Pascal local.
+      This one is worse: ArrayDefineOwnProperty's dense-create arm reads the
+      descriptor's value back out AFTER the extension, and a property
+      descriptor is a plain class the collector does not trace — so a
+      collection taken at the gate would free the value and leave the read
+      storing a dangling pointer into the element list, a use-after-free that
+      outlives the store rather than one that ends with it. Reading the field
+      before the gate would not help: the hazard is the object's lifetime, not
+      when the field is loaded. }
+    GCollectDuringElementStore := True;
+    try
+      Target.DefineProperty(IntToStr(ELEMENT_CANARY_STRIDE),
+        TGocciaPropertyDescriptorData.Create(TCanaryValue.Create,
+          [pfEnumerable, pfConfigurable, pfWritable]));
+    finally
+      GCollectDuringElementStore := False;
+    end;
+
+    Expect<Boolean>(Target.GatedElements.GateCalls > 0).ToBe(True);
+    Expect<Integer>(GCanarySweepCount).ToBe(0);
+    { And the value that reached the slot is the one the descriptor carried,
+      not a stale pointer that happens to still read as a canary. }
+    Expect<Boolean>(
+      Target.GetElement(ELEMENT_CANARY_STRIDE) is TCanaryValue).ToBe(True);
+  finally
+    Roots.Clear;
+  end;
+
+  GC.Collect;
+  Expect<Integer>(GCanarySweepCount).ToBe(1);
+end;
+
+procedure TMemoryLimitTests.TestGatedElementWindowSweepsAnUnhandedValue;
+var
+  Control: TControlValue;
+  GC: TGarbageCollector;
+  Roots: TGocciaActiveRootFrame;
+  Target: TGatedElementsArrayValue;
+begin
+  GC := TGarbageCollector.Instance;
+  Target := TGatedElementsArrayValue.CreateGated;
+  Roots.Initialize;
+  try
+    Roots.Add(Target);
+    GC.Collect;
+    GCanarySweepCount := 0;
+    GControlSweepCount := 0;
+
+    { The vacuity control for the element tests above: same array, same stores,
+      same collection at the same gate — but this value is never handed to the
+      store, so nothing is entitled to root it and the collection must take it.
+      Without this, canaries that survived because the collection never ran
+      would read exactly like canaries the gate protected. }
+    Control := TControlValue.Create;
+    Expect<Boolean>(Assigned(Control)).ToBe(True);
+
+    GCollectDuringElementStore := True;
+    try
+      HoleExtendCanaries(Target, ELEMENT_CANARY_STORES);
+    finally
+      GCollectDuringElementStore := False;
+    end;
+
+    Expect<Boolean>(Target.GatedElements.GateCalls > 0).ToBe(True);
+    Expect<Integer>(GControlSweepCount).ToBe(1);
+    Expect<Integer>(GCanarySweepCount).ToBe(0);
+  finally
+    Roots.Clear;
+  end;
+end;
+
+procedure TMemoryLimitTests.TestRealGatedHoleExtendRootsTheIncomingValue;
+var
+  Control: TControlValue;
+  GC: TGarbageCollector;
+  Stored: Integer;
+  Target: TGatedElementsArrayValue;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GCanarySweepCount := 0;
+  GControlSweepCount := 0;
+
+  { The element-side twin of the real-gate property test: the same stores the
+    seam version makes, but against a ceiling each extension cannot fit, so
+    the collection is the production RequireNativeBytes'. Every one of these
+    stores is gated — the element gate has no small-block threshold — so this
+    runs the forced-collect-and-re-test path repeatedly rather than once.
+
+    As in the property twin, Target lives only in this Pascal local: the
+    gate's Owner push is the sole root across each collection, so removing
+    that push fails this test, not only the seam variant. }
+  Target := TGatedElementsArrayValue.CreateGated;
+  Control := TControlValue.Create;
+  Expect<Boolean>(Assigned(Control)).ToBe(True);
+
+  GTightCeilingDuringElementStore := True;
+  try
+    Stored := HoleExtendCanaries(Target, ELEMENT_CANARY_STORES);
+  finally
+    GTightCeilingDuringElementStore := False;
+  end;
+
+  Expect<Boolean>(Target.GatedElements.GateCalls > 0).ToBe(True);
+  Expect<Boolean>(Target.GatedElements.ForcedCollections > 0).ToBe(True);
+  Expect<Integer>(GCanarySweepCount).ToBe(0);
+  Expect<Integer>(GControlSweepCount).ToBe(1);
+  Expect<Boolean>(
+    Target.GetElement(ELEMENT_CANARY_STRIDE - 1) is TCanaryValue).ToBe(True);
+
+  GC.Collect;
+  Expect<Integer>(GCanarySweepCount).ToBe(Stored);
 end;
 
 procedure TMemoryLimitTests.TestSyncCatchCannotSwallowRefusal;
@@ -712,6 +1787,21 @@ begin
 end;
 
 begin
+  { The gated-growth tests collect explicitly, and some of them run before this
+    program has built its first engine. The primitive singletons are reachable
+    only from class variables the collector cannot see, and nothing pins them
+    until TGocciaEngine.PinSingletons runs during engine construction — so a
+    collection on a fresh collector sweeps UndefinedValue out from under every
+    class variable still pointing at it. Production never has that window:
+    every site that collects postdates engine construction, and the pins the
+    engine takes are process-wide and are NOT released by realm teardown (the
+    realm only unpins what it stored in a slot). Taking the same pins here, once
+    and for the life of the program, gives this program the floor an engine
+    would have given it — same set the engine pins, HoleValue included. }
+  TGarbageCollector.Initialize;
+  PinPrimitiveSingletons;
+  TGarbageCollector.Instance.PinObject(TGocciaHoleValue.HoleValue);
+
   TestRunnerProgram.AddSuite(TMemoryLimitTests.Create('Memory limit'));
   RunGocciaTests;
 

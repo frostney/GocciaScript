@@ -5,13 +5,26 @@ program Goccia.GarbageCollector.Test;
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
 
+  SysUtils,
+
   Goccia.GarbageCollector,
   TestingPascalLibrary,
 
-  Goccia.TestSetup;
+  Goccia.TestSetup,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TChildManaged = class(TGCManagedObject)
+  public
+    destructor Destroy; override;
+  end;
+
+  { A real TGocciaValue, so a descriptor can hold it, that reports its own
+    sweep. Created with a nil prototype: nothing here reads a property, and a
+    standalone object keeps the suite free of engine setup. }
+  TCountedObjectValue = class(TGocciaObjectValue)
   public
     destructor Destroy; override;
   end;
@@ -34,11 +47,17 @@ type
     procedure TestReservationCollectsBeyondPressureReserve;
     procedure TestReservationRefusesWhatCollectionCannotFit;
     procedure TestRepeatedRefusalCollectsOnlyOnce;
+    procedure TestDataDescriptorPushRootsProtectsValue;
+    procedure TestAccessorDescriptorPushRootsProtectsBothHalves;
+    procedure TestInnerFrameClearLeavesOuterFrameRootsIntact;
+    procedure TestActiveRootStackGrowsPastInitialCapacity;
+    procedure TestPushesOutsideTheGuardingTryLeakOnRaise;
   end;
 
 var
   GParentDestructorCount: Integer;
   GChildDestructorCount: Integer;
+  GCountedValueDestructorCount: Integer;
 
 destructor TChildManaged.Destroy;
 begin
@@ -49,6 +68,12 @@ end;
 destructor TParentManaged.Destroy;
 begin
   Inc(GParentDestructorCount);
+  inherited;
+end;
+
+destructor TCountedObjectValue.Destroy;
+begin
+  Inc(GCountedValueDestructorCount);
   inherited;
 end;
 
@@ -73,6 +98,242 @@ begin
     TestReservationRefusesWhatCollectionCannotFit);
   Test('Repeated refusal of the same size collects only once',
     TestRepeatedRefusalCollectsOnlyOnce);
+  Test('Data descriptor PushRoots keeps its value alive across a collection',
+    TestDataDescriptorPushRootsProtectsValue);
+  Test('Accessor descriptor PushRoots keeps getter and setter alive',
+    TestAccessorDescriptorPushRootsProtectsBothHalves);
+  Test('Clearing an inner frame leaves an outer frame''s roots intact',
+    TestInnerFrameClearLeavesOuterFrameRootsIntact);
+  Test('The active-root stack grows past its initial capacity and releases',
+    TestActiveRootStackGrowsPastInitialCapacity);
+  Test('A frame''s pushes must sit inside the try that clears it',
+    TestPushesOutsideTheGuardingTryLeakOnRaise);
+end;
+
+procedure TTestGarbageCollector.TestDataDescriptorPushRootsProtectsValue;
+var
+  Descriptor: TGocciaPropertyDescriptorData;
+  GC: TGarbageCollector;
+  Roots: TGocciaActiveRootFrame;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GCountedValueDestructorCount := 0;
+
+  { The descriptor is a plain class, not a managed object, so it is not itself
+    a root: without PushRoots the value it points at is unreachable the moment
+    the only other reference to it is a Pascal local. }
+  Descriptor := TGocciaPropertyDescriptorData.Create(
+    TCountedObjectValue.Create, [pfWritable, pfEnumerable, pfConfigurable]);
+  try
+    Roots.Initialize;
+    try
+      Descriptor.PushRoots(Roots);
+      GC.Collect;
+      Expect<Integer>(GCountedValueDestructorCount).ToBe(0);
+    finally
+      Roots.Clear;
+    end;
+
+    { Clearing twice must be a no-op, not a second release: the frames this
+      primitive serves are cleared in nested finally blocks during unwind. }
+    Roots.Clear;
+
+    GC.Collect;
+    Expect<Integer>(GCountedValueDestructorCount).ToBe(1);
+  finally
+    Descriptor.Free;
+  end;
+end;
+
+procedure TTestGarbageCollector.TestAccessorDescriptorPushRootsProtectsBothHalves;
+var
+  Descriptor: TGocciaPropertyDescriptorAccessor;
+  GC: TGarbageCollector;
+  GetterOnly: TGocciaPropertyDescriptorAccessor;
+  Roots: TGocciaActiveRootFrame;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GCountedValueDestructorCount := 0;
+
+  Descriptor := TGocciaPropertyDescriptorAccessor.Create(
+    TCountedObjectValue.Create, TCountedObjectValue.Create, [pfConfigurable]);
+  { A setter-less accessor is the ordinary case, and PushRoots must drop the
+    nil half rather than push it. }
+  GetterOnly := TGocciaPropertyDescriptorAccessor.Create(
+    TCountedObjectValue.Create, nil, [pfConfigurable]);
+  try
+    Roots.Initialize;
+    try
+      Descriptor.PushRoots(Roots);
+      GetterOnly.PushRoots(Roots);
+      GC.Collect;
+      Expect<Integer>(GCountedValueDestructorCount).ToBe(0);
+    finally
+      Roots.Clear;
+    end;
+
+    GC.Collect;
+    Expect<Integer>(GCountedValueDestructorCount).ToBe(3);
+  finally
+    Descriptor.Free;
+    GetterOnly.Free;
+  end;
+end;
+
+procedure TTestGarbageCollector.TestInnerFrameClearLeavesOuterFrameRootsIntact;
+var
+  GC: TGarbageCollector;
+  InnerRoots: TGocciaActiveRootFrame;
+  InnerValue: TCountedObjectValue;
+  OuterRoots: TGocciaActiveRootFrame;
+  OuterValue: TCountedObjectValue;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GCountedValueDestructorCount := 0;
+
+  { Both frames are Initialized at the same depth and then added to in
+    interleaved order — a strictly harder shape than the promise combinators,
+    where the inner frame is merely Initialized before the outer has pushed.
+    Releasing to a recorded base depth would make the inner Clear take the
+    outer frame's entry with it; releasing the frame's own count cannot. }
+  OuterRoots.Initialize;
+  InnerRoots.Initialize;
+  try
+    OuterValue := TCountedObjectValue.Create;
+    OuterRoots.Add(OuterValue);
+    InnerValue := TCountedObjectValue.Create;
+    InnerRoots.Add(InnerValue);
+
+    GC.Collect;
+    Expect<Integer>(GCountedValueDestructorCount).ToBe(0);
+
+    InnerRoots.Clear;
+    GC.Collect;
+    Expect<Integer>(GCountedValueDestructorCount).ToBe(1);
+
+    { Re-adding after a Clear rolls back against the current depth, so a frame
+      reused across loop iterations stays correct. }
+    InnerRoots.Add(OuterValue);
+    InnerRoots.Clear;
+    GC.Collect;
+    Expect<Integer>(GCountedValueDestructorCount).ToBe(1);
+  finally
+    { Innermost first: if anything above raises before the mid-test Clear, the
+      inner frame's entry is still on top of the outer frame's, and releasing
+      the outer one first would take the inner entry with it. Clear is
+      idempotent — it exits on a zero count — so the mid-test Clears above cost
+      this one nothing, and a leaked inner entry would otherwise outlive the
+      test on the active-root stack. }
+    InnerRoots.Clear;
+    OuterRoots.Clear;
+  end;
+
+  GC.Collect;
+  Expect<Integer>(GCountedValueDestructorCount).ToBe(2);
+end;
+
+procedure TTestGarbageCollector.TestActiveRootStackGrowsPastInitialCapacity;
+const
+  { Two doublings past the stack's initial 256-slot capacity, so the growth
+    path itself is under test, not just the fast path the other tests touch. }
+  PUSH_COUNT = 600;
+var
+  GC: TGarbageCollector;
+  I: Integer;
+  Roots: TGocciaActiveRootFrame;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GCountedValueDestructorCount := 0;
+
+  Roots.Initialize;
+  try
+    for I := 1 to PUSH_COUNT do
+      Roots.Add(TCountedObjectValue.Create);
+
+    { Every pushed value must survive a collection while the frame holds it —
+      a growth bug that dropped or duplicated slots would surface here. }
+    GC.Collect;
+    Expect<Integer>(GCountedValueDestructorCount).ToBe(0);
+  finally
+    Roots.Clear;
+  end;
+
+  GC.Collect;
+  Expect<Integer>(GCountedValueDestructorCount).ToBe(PUSH_COUNT);
+end;
+
+{ Stands in for the allocation the benchmark builtin used to perform between
+  its pushes and its try — anything on that line that can raise turns the
+  pushes above it into a permanent leak. }
+procedure RaiseAfterPush;
+begin
+  raise Exception.Create('between the push and the guarded region');
+end;
+
+procedure TTestGarbageCollector.TestPushesOutsideTheGuardingTryLeakOnRaise;
+var
+  BaseDepth: Integer;
+  GC: TGarbageCollector;
+  Raised: Boolean;
+  Roots: TGocciaActiveRootFrame;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GCountedValueDestructorCount := 0;
+  BaseDepth := GC.ActiveRootDepth;
+
+  { The shape the builtins must not write: a push, then something that can
+    raise, then the try whose finally would have cleared the frame. A frame is
+    a stack record, so an escape here is not a recoverable leak — the entries
+    stay on the collector's stack for the life of the thread and pin whatever
+    they point at. Asserting on the depth rather than on a sweep count is what
+    makes this cheap: no collection is needed to see the imbalance. }
+  Raised := False;
+  Roots.Initialize;
+  try
+    Roots.Add(TCountedObjectValue.Create);
+    RaiseAfterPush;
+  except
+    on E: Exception do
+      Raised := True;
+  end;
+  Expect<Boolean>(Raised).ToBe(True);
+  Expect<Integer>(GC.ActiveRootDepth).ToBe(BaseDepth + 1);
+
+  { And the shape they must, modelled on the benchmark builtin the fix came
+    from: a push, then a call that can raise (there, the arguments collection
+    whose construction the pushes used to precede), then a second push — all
+    inside the try. Moving the first push and RaiseAfterPush above the `try`
+    reproduces the original defect and this assertion fails, which is what the
+    first half above only demonstrates in isolation. Without the intervening
+    raising call the two shapes are indistinguishable: a raise *inside* the try
+    unwinds through the finally either way. }
+  Roots.Clear;
+  Expect<Integer>(GC.ActiveRootDepth).ToBe(BaseDepth);
+
+  Raised := False;
+  Roots.Initialize;
+  try
+    try
+      Roots.Add(TCountedObjectValue.Create);
+      RaiseAfterPush;
+      Roots.Add(TCountedObjectValue.Create);
+    finally
+      Roots.Clear;
+    end;
+  except
+    on E: Exception do
+      Raised := True;
+  end;
+  Expect<Boolean>(Raised).ToBe(True);
+  Expect<Integer>(GC.ActiveRootDepth).ToBe(BaseDepth);
+
+  GC.Collect;
+  Expect<Integer>(GCountedValueDestructorCount).ToBe(2);
 end;
 
 procedure TTestGarbageCollector.TestReservationCollectsAndRetries;
