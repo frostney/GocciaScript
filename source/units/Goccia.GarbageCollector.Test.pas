@@ -221,6 +221,13 @@ begin
     GC.Collect;
     Expect<Integer>(GCountedValueDestructorCount).ToBe(1);
   finally
+    { Innermost first: if anything above raises before the mid-test Clear, the
+      inner frame's entry is still on top of the outer frame's, and releasing
+      the outer one first would take the inner entry with it. Clear is
+      idempotent — it exits on a zero count — so the mid-test Clears above cost
+      this one nothing, and a leaked inner entry would otherwise outlive the
+      test on the active-root stack. }
+    InnerRoots.Clear;
     OuterRoots.Clear;
   end;
 

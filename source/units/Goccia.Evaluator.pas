@@ -9157,7 +9157,18 @@ var
         Continuation.SaveCompletedExpressionValue(
           Elem.ComputedKeyExpression, ComputedKey);
 
+      { The cache is a plain Pascal array the collector does not trace, and it
+        is read back long after this pass: a computed field's key is stored
+        when the static-field loop reaches it, and the auto-accessor and
+        decorator passes read it later still. Every static field initializer
+        and static block between here and those reads is arbitrary guest code,
+        so a key resolved for a *later* element is reachable from nothing at
+        all while an *earlier* one collects — `static early = (gc(), 1)` ahead
+        of a computed field loses the key outright. It joins the class frame
+        for the same reason the static-field scope does: one push per computed
+        element key, released when the class is installed. }
       ResolvedComputedElementKeys[Entry.ElementIndex] := ComputedKey;
+      ClassRoots.Add(ComputedKey);
 
       case Elem.Kind of
         cekField:
@@ -9545,11 +9556,14 @@ begin
         ClassValue.AddPrivateStaticProperty(Elem.Name, PropertyValue)
       else if Elem.IsComputed then
       begin
-        { A computed static field evaluates its initializer above and only then
-          resolves the key, so the field's value is held in a native local
-          across the key expression and the guest `toString`/`@@toPrimitive`
-          ToPropertyKey runs — and the key it produces then has to survive to
-          the store below. }
+        { The key was resolved during class definition, before any static field
+          initializer ran, and is read back out of the cache here — the class
+          frame is what kept it alive across the initializers in between. The
+          fallback below is the case this frame covers: when the cache holds no
+          key for this element the conversion happens here instead, and the
+          guest `toString`/`@@toPrimitive` it runs would otherwise collect the
+          field's value out of the native local above. Both halves stay rooted
+          across the store either way. }
         FieldRoots.Initialize;
         try
         FieldRoots.Add(PropertyValue);
