@@ -163,8 +163,8 @@ jobs:
         run: |
           # --coverage prints a summary to stdout
           cov_output="$(./build/GocciaTestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage 2>&1)"
-          printf '%s\n' "$cov_output" | grep -q 'Coverage Summary:'
-          printf '%s\n' "$cov_output" | grep -q 'array-creation.js'
+          [[ "$cov_output" == *'Coverage Summary:'* ]]
+          [[ "$cov_output" == *'array-creation.js'* ]]
 
           # --coverage-format=lcov --coverage-output writes an lcov file
           ./build/GocciaTestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-format=lcov --coverage-output=cov.lcov
@@ -186,7 +186,8 @@ jobs:
 
           # single-file detail view shows line annotations
           detail_output="$(./build/GocciaTestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage 2>&1)"
-          printf '%s\n' "$detail_output" | grep -Eq '[0-9]+x \|'
+          detail_re='[0-9]+x \|'
+          [[ "$detail_output" =~ $detail_re ]]
 
           # branch coverage: lcov contains BRDA/BRF entries for branching code
           ./build/GocciaTestRunner tests/language/statements/if/if-else-statements.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-format=lcov --coverage-output=branch-cov.lcov
