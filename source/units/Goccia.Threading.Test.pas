@@ -202,15 +202,24 @@ begin
   end;
   if AFileName = 'fail.js' then
   begin
-    { Set the pool's stop signal directly, then the marker. Cancel first:
-      every callback that starts after the marker is visible therefore
-      started after the pool was told to stop, which is what the ceiling
-      bounds. The pool's own cancel-on-error follows when this result is
-      recorded; the property exists for exactly this early-cancel use. }
-    if Assigned(AData) then
-      TGocciaCancellationFlag(AData).Cancel;
+    { Set the pool's stop signal directly, then the marker, both under
+      GWorkerLock so the transition is indivisible for the probe above:
+      every callback blocks on the lock until both are visible, so a
+      callback that starts after Cancel cannot read the marker as unset
+      and go uncounted. Without that, a defective pool could drain the
+      queue in the Cancel-to-marker gap with every dispatch counted as
+      pre-cancel, and the ceiling would pass against the very stale-read
+      regression it bounds. Cancel before the marker keeps the one-way
+      implication: marker-set means the pool was already told to stop.
+      Holding GWorkerLock across Cancel cannot invert lock order — the
+      flag's internal lock guards only its own field writes and is never
+      held while a callback runs. The pool's own cancel-on-error follows
+      when this result is recorded; the property exists for exactly this
+      early-cancel use. }
     CriticalSectionEnter(GWorkerLock);
     try
+      if Assigned(AData) then
+        TGocciaCancellationFlag(AData).Cancel;
       GCancelSignalled := True;
     finally
       CriticalSectionLeave(GWorkerLock);
