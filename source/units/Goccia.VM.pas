@@ -2180,9 +2180,9 @@ var
   KeyName: string;
   Keys: TArray<TGocciaValue>;
   SourceObject: TGocciaObjectValue;
-  SourceRooted: Boolean;
   SymbolKey: TGocciaSymbolValue;
   Value: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if not Assigned(ATarget) or
      (ASource is TGocciaUndefinedLiteralValue) or
@@ -2190,13 +2190,20 @@ begin
     Exit;
 
   SourceObject := ToObject(ASource);
-  SourceRooted := (TGarbageCollector.Instance <> nil) and
-    not (ASource is TGocciaObjectValue);
-  if SourceRooted then
-    TGarbageCollector.Instance.AddTempRoot(SourceObject);
 
+  { The VM's register slots are roots; this key list is not. It is a plain
+    Pascal array of freshly created string values, and the loop calls a guest
+    getter between reading one key and the next, so without the frame a
+    collection inside the first getter frees the keys the copy has not reached.
+    Target and source join it for the same reason the interpreter's
+    CopyDataProperties roots them. }
+  Roots.Initialize;
   try
+    Roots.Add(ATarget);
+    Roots.Add(SourceObject);
     Keys := VMOwnPropertyKeysAsValues(SourceObject);
+    for Key in Keys do
+      Roots.Add(Key);
     for Key in Keys do
     begin
       if VMCopyDataPropertyKeyExcluded(Key, AExclusionKeys) then
@@ -2224,8 +2231,7 @@ begin
       end;
     end;
   finally
-    if SourceRooted then
-      TGarbageCollector.Instance.RemoveTempRoot(SourceObject);
+    Roots.Clear;
   end;
 end;
 
