@@ -1691,14 +1691,23 @@ console.log("--max-memory (builtin result builders survive mid-build collections
 // YAML.parse lost the race — by about 1% of the parked slack — and surfaced
 // the catchable RangeError instead.
 //
-// Two further sources of drift, recorded because both were live defects here:
-// the gate compares against instantaneous BytesAllocated WITHOUT collecting
-// first (unlike the charged path), so a doubling is refused or permitted
-// depending on how much collectable garbage happens to be on the heap at that
-// instant; and an assertion that itself allocates inside the region under test
-// (this block used to call Object.keys there) can be the allocation that
-// decides the outcome. A separate change is making the gate collect before it
-// refuses; nothing here depends on that landing.
+// One further source of drift, recorded because it was a live defect here: an
+// assertion that itself allocates inside the region under test (this block used
+// to call Object.keys there) can be the allocation that decides the outcome.
+//
+// A second one has been REMOVED rather than worked around, and the difference
+// matters to anyone re-tuning these constants. The gate used to compare against
+// instantaneous BytesAllocated without collecting first, so a doubling was
+// refused or permitted depending on how much collectable garbage happened to be
+// on the heap at that instant — which made every rung here sensitive to
+// transient allocation the probe does not control. It now forces a collection
+// and re-tests before refusing (ADR 0110), so the crossing a parked run reaches
+// is a property of its LIVE set. The parking loop already parks with live
+// ballast and collects before measuring, so the slack it reports is what the
+// gate now sees; that is why the rungs below did not have to move. What did
+// move is which doubling is reached: a probe whose transients used to push it
+// over the line now gets one or more doublings further, so a rung that stops
+// reaching a limiter is re-tuned by walking the ladder, not by adding garbage.
 //
 // So no constant can make "the gate refuses first" true on every width for
 // every parser, and picking one by margin arithmetic is how this block broke.
@@ -1863,6 +1872,16 @@ const assertGateContract = (what: string, run: GateRun): void => {
 // collected each pass), so the whole ceiling is available and the crossing is
 // decided by the request size alone.
 //
+// This is also the one probe the collecting gate (ADR 0110) leaves exactly as
+// it was, and for a reason worth stating rather than assuming: a request larger
+// than the WHOLE budget is the first of the three shapes
+// ShouldForceLimitCollection refuses without walking the heap, so this probe
+// still measures pure arithmetic. Its periodic Goccia.gc() is now belt and
+// braces — the gate would collect for itself at any earlier doubling — and it
+// is kept because the sizing argument above is stated in terms of a near-zero
+// live set, and a probe whose premise is maintained by the code under test is a
+// probe that stops being independent of it.
+//
 // The sizing: under a 1 MiB ceiling the entry array's transient (3C + 2) * E
 // first exceeds the ceiling at
 //   E = 24 (64-bit today)  C = 16,382, 1,179,552 B, at property 16,383
@@ -1889,9 +1908,9 @@ const CONSTRUCTED_GATE_CEILING = 1_048_576;
       "  const o = {};",
       "  for (const i of outer) {",
       '    for (const j of inner) o["k" + i + "_" + j] = true;',
-      // Keeps the transient key strings from inflating BytesAllocated: the gate
-      // does not collect before it refuses, so without this the refusal could
-      // come from a garbage-filled heap rather than from the request size.
+      // Keeps the transient key strings from inflating BytesAllocated, so the
+      // near-zero live set the sizing above assumes is maintained by the probe
+      // rather than by the gate's own collection.
       "    Goccia.gc();",
       "  }",
       "  built = true;",
@@ -1931,6 +1950,119 @@ const CONSTRUCTED_GATE_CEILING = 1_048_576;
     }
   } finally {
     clean(constructedTmp);
+  }
+}
+
+// The capacity result — the reason ADR 0110 exists, asserted as a differential
+// rather than as a number.
+//
+// The gate used to answer from instantaneous BytesAllocated without collecting,
+// so which doubling was refused depended on how much collectable garbage
+// happened to be resident. That made the ceiling a measure of the collector's
+// recent luck rather than of the program, and it made the two execution modes
+// disagree — automatic collection is disabled during bytecode execution, so the
+// compiled run reached the gate with a dirtier heap and was refused a doubling
+// EARLIER. Measured on this workload at a 4 MiB ceiling, before the change:
+//
+//              plain loop                     with a periodic Goccia.gc()
+//   interp.    2,359,200 B  (C = 32,766)      4,718,496 B  (C = 65,534)
+//   bytecode   1,179,552 B  (C = 16,382)      4,718,496 B  (C = 65,534)
+//
+// The assertion is that the two columns are now the SAME: the same workload,
+// with and without the guest collecting for itself, must be refused the same
+// byte count. That is sharper than pinning either number and it needs no
+// re-tuning per pointer width — the equality holds for any SizeOf(TEntry),
+// while 4,718,496 is a 64-bit fact. Both modes are asserted because the
+// pre-change gap differed per mode, so a fix that only reached one of them
+// would pass a single-mode test.
+//
+// Two supporting checks, each closing a way this could pass while proving
+// nothing. Both runs must actually reach the gate — a workload that completed,
+// or that lost to the charged limiter, would make the equality vacuous. And the
+// refused request must exceed the whole ceiling, which is what pins it as the
+// ARITHMETIC crossing rather than merely a shared one: consecutive doublings
+// roughly double, so the first request that does not fit beside a
+// freshly-collected live set is above the ceiling, while any earlier doubling
+// (the pre-change answers above, both under 4 MiB) is not.
+//
+// Sizing: 400 * 400 = 160,000 properties. Reaching the crossing under a 4 MiB
+// ceiling needs 65,535 properties at SizeOf(TEntry) = 24 (64-bit today) and
+// 131,071 at 16 (i386 today) or 12, so this clears the narrowest real width by
+// 1.2x. It does not cover a hypothetical 8-byte TEntry, which would need
+// 262,143 — an entry cannot hold a string reference and a pointer in 8 bytes on
+// any 32-bit target this builds for, and the non-vacuity check below turns that
+// case into a clear failure rather than a silent pass.
+const CAPACITY_GATE_CEILING = 4_194_304;
+{
+  const capacityTmp = mkdtemp("goccia-gate-capacity-");
+  const capacityWorkload = (collectPerPass: boolean): string =>
+    [
+      // Both loop bounds are materialised before the region under test, so the
+      // only growth left inside it is the property map's.
+      "const outer = Array.from({ length: 400 }, (_, i) => i);",
+      "const inner = Array.from({ length: 400 }, (_, j) => j);",
+      "let built = false;",
+      "try {",
+      "  const o = {};",
+      "  for (const i of outer) {",
+      '    for (const j of inner) o["k" + i + "_" + j] = true;',
+      ...(collectPerPass ? ["    Goccia.gc();"] : []),
+      "  }",
+      "  built = true;",
+      "} catch (e) {",
+      "  console.log('guest-caught', e.name, '::', e.message);",
+      "}",
+      // Outside the try and allocating nothing beyond the call itself.
+      "if (built) console.log('guest-completed');",
+      "",
+    ].join("\n");
+  try {
+    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+      const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+      console.log(
+        `--max-memory (a gated growth is refused at the same doubling with or without guest collection: ${modeLabel})...`,
+      );
+      const what = `Gate capacity probe (${modeLabel})`;
+      const runs = (["plain", "collected"] as const).map((variant) => ({
+        variant,
+        run: runGateCase(
+          join(capacityTmp, `gate-capacity-${variant}-${modeLabel}.mjs`),
+          capacityWorkload(variant === "collected"),
+          modeArgs,
+          CAPACITY_GATE_CEILING,
+        ),
+      }));
+
+      for (const { variant, run } of runs) {
+        assertGateContract(`${what} [${variant}]`, run);
+        if (run.outcome !== "gate")
+          throw new Error(
+            `${what} [${variant}] did not reach the growth gate (outcome: ${run.outcome}). The ` +
+              `equality below is vacuous unless both runs are refused by the gate — either the ` +
+              `workload no longer reaches a doubling this ceiling cannot fit, or the charged ` +
+              `limiter won the race: ${run.out}`,
+          );
+        if (run.refused === null || run.refused <= CAPACITY_GATE_CEILING)
+          throw new Error(
+            `${what} [${variant}] was refused ${run.refused} bytes against a ${CAPACITY_GATE_CEILING}-byte ` +
+              `ceiling. A refusal BELOW the ceiling is a doubling that only failed because the heap ` +
+              `was dirty, which is exactly what the gate's forced collection is supposed to have ` +
+              `stopped happening: ${run.out}`,
+          );
+      }
+
+      const [plain, collected] = runs;
+      if (plain.run.refused !== collected.run.refused)
+        throw new Error(
+          `${what} refused ${plain.run.refused} B without a periodic Goccia.gc() and ` +
+            `${collected.run.refused} B with one. The gate is meant to force a collection and ` +
+            `re-test before refusing, so a guest that collects for itself must not get more ` +
+            `capacity out of the same budget (ADR 0110):\n${plain.run.out}\n${collected.run.out}`,
+        );
+      console.log(`  (${what}: both variants refused ${plain.run.refused} B)`);
+    }
+  } finally {
+    clean(capacityTmp);
   }
 }
 
@@ -2404,6 +2536,28 @@ const assertParkedGateOutcome = (
 // the other two outcomes — which is the reason this probe is one-sided rather
 // than a re-tuned two-sided one. `parked true` keeps it from passing without
 // ever entering the window.
+//
+// RE-DERIVED when the gate learned to collect (ADR 0110), because a collecting
+// gate is exactly the kind of change that silently moves a crossing. The
+// constants did not have to move, and the reason is worth recording rather than
+// leaving as a lucky pass. Measured on the same shape, before and after:
+//
+//   before   interpreted  parked slack 136,498   refused 73,632
+//            bytecode     parked slack 136,804   refused 73,632
+//   after    interpreted  parked slack 133,802   refused 73,632
+//            bytecode     parked slack 134,124   refused 73,632
+//
+// The crossing is unmoved because almost nothing here is reclaimable at the
+// moment the gate fires: the parked ballast is live by construction, and the
+// 4000-element iterable the loop walks is live for the whole loop, so the
+// forced collection finds little and the fit test lands where it landed
+// before. That is the opposite of the capacity probe above — where the live set
+// really is near zero and the collection moves the crossing by two doublings —
+// and having both shapes in the suite is what distinguishes "the gate collects"
+// from "the gate collects and that always buys capacity". The ~2.7 KB of slack
+// difference between the columns is run-to-run baseline noise, not behaviour:
+// it is well inside the 60 KB margin between the parked slack and the refused
+// request.
 const ASSIGNMENT_FAULT_SLACK = 147_000;
 {
   const assignGateTmp = mkdtemp("goccia-assign-gate-");
@@ -2557,7 +2711,11 @@ console.log("--max-memory (a charged reservation collects before it refuses)..."
   // reclaimable garbage still on the heap, and which positions those were
   // depended on where a script's transient garbage happened to sit — so the
   // refusals came in bands rather than at a floor. TryReserveExternalBytes now
-  // forces the collection and re-tests once before refusing.
+  // forces the collection and re-tests once before refusing, through the shared
+  // TryCollectForLimitedBytes that the uncharged growth gate also uses (ADR
+  // 0110) — including the shared floor that keeps a retry at O(1). This probe
+  // covers the charged half of that routine; the capacity probe above covers
+  // the gated half.
   //
   // The shape is constructed rather than sampled, because a band's position is
   // a property of a particular machine's live set and would not survive CI.

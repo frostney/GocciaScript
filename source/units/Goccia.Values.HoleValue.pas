@@ -52,8 +52,9 @@ type
       const APendingValue: TGocciaValue);
     // The budget decision, taken inside the window RequireStorageBytes has
     // just opened. Virtual for the same reason
-    // TGocciaShapedPropertyMap.ConsultStorageBudget is: a gate that collects
-    // before refusing collects HERE, with the store's values already rooted.
+    // TGocciaShapedPropertyMap.ConsultStorageBudget is: the gate collects
+    // before refusing, and it collects HERE, with the store's values already
+    // rooted.
     procedure ConsultStorageBudget(const ABytes: Int64); virtual;
   public
     // The value this list holds elements for. Rooted for the duration of a
@@ -122,7 +123,17 @@ begin
     because allocation in this engine registers but never collects
     (TGocciaValue.AfterConstruction). If that ever changes — a collecting
     allocator, or hole construction that can collect — the window must widen
-    to cover the whole extension, and the H4 layer re-audits exactly this. }
+    to cover the whole extension.
+
+    Re-audited when the gate learned to collect (ADR 0110), because that
+    turned the invariant from a precaution into the thing the store's safety
+    rests on. It holds, and the argument is unchanged in shape: the collection
+    the gate now takes happens INSIDE this frame, in ConsultStorageBudget,
+    with FOwner and APendingValue already pushed. Everything after the frame
+    closes still only allocates — the hole fill appends the pinned hole
+    singleton and grows a plain dynamic array, the timeout poll raises but
+    never collects, and AfterConstruction registers and may raise but never
+    collects — so no post-gate step can reclaim what the caller reads back. }
   Roots.Initialize;
   try
     Roots.Add(FOwner);
