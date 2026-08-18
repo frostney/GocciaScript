@@ -592,6 +592,12 @@ begin
   // Shaped map: layout tracking for the VM's shape-validated inline caches
   // rides on the property map itself, so every mutation path stays in sync.
   FProperties := TGocciaShapedPropertyMap.Create(APropertyCapacity);
+  // Rooting for the property-store path lives on the map, at the growth gate:
+  // that is the one point in a store that can collect, and the map is the only
+  // thing every entry path — evaluator, native builder, class field, spread —
+  // passes through. The map needs a way back to the value that holds it so the
+  // properties already stored stay reachable across a collection taken there.
+  TGocciaShapedPropertyMap(FProperties).Owner := Self;
   FSymbolDescriptors := TSymbolDescriptorMap.Create;
   FSymbolInsertionOrder := TList<TGocciaSymbolValue>.Create;
   FPrototype := APrototype;
