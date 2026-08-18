@@ -53,6 +53,13 @@ type
   end;
 
   TGCManagedObjectList = TObjectList<TGCManagedObject>;
+  // Backing store for the active-root stack only. A bare array rather than
+  // TGCManagedObjectList because that stack is pushed and popped once per
+  // rooted evaluator temporary: TObjectList pays a virtual Notify dispatch per
+  // Add and per Delete, and Delete additionally moves the tail, none of which
+  // buys anything for a non-owning LIFO stack whose element type is a plain
+  // class reference.
+  TGCManagedObjectArray = array of TGCManagedObject;
   TGCRootSourceList = TList<TGCRootSource>;
   TGCObjectSet = THashMap<TGCManagedObject, Boolean>;
   TGCObjectRefCounts = THashMap<TGCManagedObject, Integer>;
@@ -63,8 +70,42 @@ type
     Added: Boolean;
   end;
 
+  // A stack-local group of GC roots. Initialize before first use, Add every
+  // value that must survive a collecting safe point, and Clear in a finally so
+  // the exception path is covered. Add tolerates nil and tolerates the same
+  // object twice, which is what makes it the right tool for evaluator
+  // temporaries where two locals can hold one object.
+  //
+  // Release is a count rollback, not a per-entry pop: Clear releases exactly
+  // the top FCount entries of the collector's active-root stack in one
+  // assignment. That is what the pop loop it replaces did, entry for entry, so
+  // frames that share a base depth keep behaving as they do today — in the
+  // promise combinators the inner per-iteration frame is Initialized before
+  // the outer frame has pushed anything, so its recorded base depth sits
+  // below the outer frame's entries, and releasing to that base depth instead
+  // would let the inner frame's Clear take the outer frame's roots with it.
+  //
+  // FBaseDepth is therefore a floor, not a target: Clear never unwinds past
+  // the depth the frame was Initialized at, so a frame cannot eat an enclosing
+  // frame's roots even if the stack is left unbalanced beneath it. Clear is
+  // idempotent — the second call has no entries to release and returns without
+  // touching the stack, which is what makes clearing a frame in an inner
+  // finally and again in an outer one safe during exception unwind.
   TGocciaActiveRootFrame = record
   private
+    // Resolved once in Initialize: Add runs per rooted temporary on the
+    // property-store path, and re-reading the collector threadvar there costs
+    // more than the push itself. nil means "no collector on this thread", and
+    // the frame stays a no-op for its whole lifetime.
+    //
+    // Invariant: a frame must not outlive the collector it was Initialized
+    // against. Clear dereferences this cached pointer, so a frame still live
+    // across TGarbageCollector.Shutdown would touch freed memory — and an
+    // Assigned check could not save it, because the stale pointer stays
+    // non-nil. Every current Shutdown site (thread runtime teardown, app
+    // mains, test suite teardowns) runs with no frame live; keep it that way.
+    FCollector: TGarbageCollector;
+    FBaseDepth: Integer;
     FCount: Integer;
   public
     procedure Initialize; {$IFDEF FPC}inline;{$ENDIF}
@@ -81,7 +122,8 @@ type
     FQueuedRoots: TGCObjectRefCounts;
     FKeptObjects: TGCObjectSet;
     FRootObjects: TGCObjectSet;
-    FActiveRootStack: TGCManagedObjectList;
+    FActiveRootStack: TGCManagedObjectArray;
+    FActiveRootCount: Integer;
     // Weak containers (WeakMap/WeakSet/WeakRef/FinalizationRegistry) that have
     // held weak data: a container joins on its first weak insertion and leaves
     // only when it is itself collected, so an emptied-but-live container stays
@@ -122,6 +164,7 @@ type
     function GetManagedObjectCount: Integer;
     function GetWatermark: Integer; {$IFDEF FPC}inline;{$ENDIF}
     procedure ClearActiveRootEntries(const AObject: TGCManagedObject);
+    procedure GrowActiveRootStack;
     function ShouldForceReservationCollection(const ABytes: Int64): Boolean;
   protected
     procedure MarkRoots; virtual;
@@ -155,7 +198,13 @@ type
     procedure AddRootObject(const AObject: TGCManagedObject);
     procedure RemoveRootObject(const AObject: TGCManagedObject);
     procedure PushActiveRoot(const AObject: TGCManagedObject);
-    procedure PopActiveRoot;
+    procedure PopActiveRoot; {$IFDEF FPC}inline;{$ENDIF}
+
+    // Release the top ACount active roots in one step, never unwinding below
+    // AFloorDepth. Equivalent to ACount PopActiveRoot calls at O(1) instead of
+    // O(ACount); the floor is the guard described at TGocciaActiveRootFrame.
+    procedure ReleaseActiveRoots(const ACount: Integer;
+      const AFloorDepth: Integer);
 
     // Full mark-and-sweep of all managed objects. Unconditional — ignores
     // the Enabled flag and always runs. Use when a clean heap is required
@@ -203,6 +252,11 @@ type
     property TotalCollections: Integer read FTotalCollections;
     property ManagedObjectCount: Integer read GetManagedObjectCount;
 
+    // Current depth of the active-root stack. Captured by
+    // TGocciaActiveRootFrame.Initialize as the floor its Clear may not
+    // unwind past.
+    property ActiveRootDepth: Integer read FActiveRootCount;
+
     // Byte-level memory tracking. BytesAllocated is the approximate
     // number of bytes currently tracked by the GC (InstanceSize per
     // registered object). Set MaxBytes to a positive value to impose
@@ -247,6 +301,11 @@ uses
   SysUtils
   {$IFDEF GC_TIMING}, TimingUtils{$ENDIF}
   {$ENDIF};
+
+const
+  // Slots pre-allocated for the active-root stack, and the unit it doubles
+  // from. Deep enough that ordinary evaluator nesting never reallocates.
+  ACTIVE_ROOT_STACK_INITIAL_CAPACITY = 256;
 
 function DetectDefaultMaxBytes: Int64;
 var
@@ -391,37 +450,30 @@ end;
 
 procedure TGocciaActiveRootFrame.Initialize;
 begin
+  FCollector := TGarbageCollector.Instance;
+  if Assigned(FCollector) then
+    FBaseDepth := FCollector.ActiveRootDepth
+  else
+    FBaseDepth := 0;
   FCount := 0;
 end;
 
 procedure TGocciaActiveRootFrame.Add(const AObject: TGCManagedObject);
-var
-  GC: TGarbageCollector;
 begin
-  if not Assigned(AObject) then
+  if not Assigned(AObject) or not Assigned(FCollector) then
     Exit;
-  GC := TGarbageCollector.Instance;
-  if not Assigned(GC) then
-    Exit;
-  GC.PushActiveRoot(AObject);
+  FCollector.PushActiveRoot(AObject);
   Inc(FCount);
 end;
 
 procedure TGocciaActiveRootFrame.Clear;
-var
-  GC: TGarbageCollector;
 begin
+  // FCount > 0 implies a collector: Add is the only thing that increments it,
+  // and it only does so after pushing onto an assigned collector.
   if FCount <= 0 then
     Exit;
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) then
-    while FCount > 0 do
-    begin
-      GC.PopActiveRoot;
-      Dec(FCount);
-    end
-  else
-    FCount := 0;
+  FCollector.ReleaseActiveRoots(FCount, FBaseDepth);
+  FCount := 0;
 end;
 
 { TGarbageCollector }
@@ -457,7 +509,8 @@ begin
   FQueuedRoots := TGCObjectRefCounts.Create;
   FKeptObjects := TGCObjectSet.Create;
   FRootObjects := TGCObjectSet.Create;
-  FActiveRootStack := TGCManagedObjectList.Create(False);
+  SetLength(FActiveRootStack, ACTIVE_ROOT_STACK_INITIAL_CAPACITY);
+  FActiveRootCount := 0;
   FWeakContainers := TGCObjectSet.Create;
   FAllocationsSinceLastGC := 0;
   FGCThreshold := DEFAULT_GC_THRESHOLD;
@@ -507,7 +560,8 @@ begin
   FQueuedRoots.Free;
   FKeptObjects.Free;
   FRootObjects.Free;
-  FActiveRootStack.Free;
+  FActiveRootCount := 0;
+  SetLength(FActiveRootStack, 0);
   FWeakContainers.Free;
   inherited;
 end;
@@ -627,9 +681,7 @@ procedure TGarbageCollector.ClearActiveRootEntries(
 var
   I: Integer;
 begin
-  if not Assigned(FActiveRootStack) then
-    Exit;
-  for I := FActiveRootStack.Count - 1 downto 0 do
+  for I := FActiveRootCount - 1 downto 0 do
     if FActiveRootStack[I] = AObject then
       FActiveRootStack[I] := nil;
 end;
@@ -717,16 +769,43 @@ begin
   FRootObjects.Remove(AObject);
 end;
 
+procedure TGarbageCollector.GrowActiveRootStack;
+begin
+  if Length(FActiveRootStack) = 0 then
+    SetLength(FActiveRootStack, ACTIVE_ROOT_STACK_INITIAL_CAPACITY)
+  else
+    SetLength(FActiveRootStack, Length(FActiveRootStack) * 2);
+end;
+
 procedure TGarbageCollector.PushActiveRoot(
   const AObject: TGCManagedObject);
 begin
-  FActiveRootStack.Add(AObject);
+  if FActiveRootCount = Length(FActiveRootStack) then
+    GrowActiveRootStack;
+  FActiveRootStack[FActiveRootCount] := AObject;
+  Inc(FActiveRootCount);
 end;
 
 procedure TGarbageCollector.PopActiveRoot;
 begin
-  if FActiveRootStack.Count > 0 then
-    FActiveRootStack.Delete(FActiveRootStack.Count - 1);
+  if FActiveRootCount > 0 then
+    Dec(FActiveRootCount);
+end;
+
+procedure TGarbageCollector.ReleaseActiveRoots(const ACount: Integer;
+  const AFloorDepth: Integer);
+var
+  Target: Integer;
+begin
+  if ACount <= 0 then
+    Exit;
+  Target := FActiveRootCount - ACount;
+  if Target < AFloorDepth then
+    Target := AFloorDepth;
+  if Target < 0 then
+    Target := 0;
+  if Target < FActiveRootCount then
+    FActiveRootCount := Target;
 end;
 
 procedure TGarbageCollector.MarkRoots;
@@ -750,7 +829,7 @@ begin
   for Pair in FRootObjects do
     Pair.Key.MarkReferences;
 
-  for I := 0 to FActiveRootStack.Count - 1 do
+  for I := 0 to FActiveRootCount - 1 do
     if Assigned(FActiveRootStack[I]) then
       FActiveRootStack[I].MarkReferences;
 
@@ -912,12 +991,12 @@ begin
      FCollecting then
     Exit;
   if Assigned(AProtect) then
-    FActiveRootStack.Add(AProtect);
+    PushActiveRoot(AProtect);
   try
     Collect;
   finally
     if Assigned(AProtect) then
-      FActiveRootStack.Delete(FActiveRootStack.Count - 1);
+      PopActiveRoot;
   end;
 end;
 
@@ -952,7 +1031,7 @@ begin
     Exit;
 
   if Assigned(AProtect) then
-    FActiveRootStack.Add(AProtect);
+    PushActiveRoot(AProtect);
   WasFiring := FMemoryLimitFiring;
   FMemoryLimitFiring := True;
   try
@@ -960,7 +1039,7 @@ begin
   finally
     FMemoryLimitFiring := WasFiring;
     if Assigned(AProtect) then
-      FActiveRootStack.Delete(FActiveRootStack.Count - 1);
+      PopActiveRoot;
   end;
 end;
 

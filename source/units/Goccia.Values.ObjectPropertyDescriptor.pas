@@ -7,6 +7,7 @@ interface
 uses
   OrderedStringMap,
 
+  Goccia.GarbageCollector,
   Goccia.Values.Primitives;
 
 type
@@ -40,6 +41,21 @@ type
       const AFields: TPropertyDescriptorFields);
     procedure MarkValues; virtual;
 
+    // Root what this descriptor points at RIGHT NOW for the lifetime of
+    // AFrame. MarkValues answers the collector's question — "what does this
+    // descriptor reach?" — from inside a collection; this answers the
+    // caller's — "what must survive the safe point I am about to cross?" —
+    // from outside one. A descriptor read out of a property map is a plain
+    // class, not a managed object, so nothing roots the values it points at
+    // once the map entry it came from can be replaced.
+    //
+    // "Right now" is load-bearing for lazy descriptors: they push their
+    // pinned placeholder, not the value their factory would produce, so a
+    // caller must Materialize BEFORE PushRoots — push-then-materialize
+    // leaves the freshly built value unrooted, which is the exact hazard
+    // this method exists to close.
+    procedure PushRoots(var AFrame: TGocciaActiveRootFrame); virtual;
+
     property Flags: TPropertyFlags read FFlags;
     property Fields: TPropertyDescriptorFields read FFields;
     property Enumerable: Boolean read GetEnumerable;
@@ -61,6 +77,7 @@ type
     constructor CreatePartial(const AValue: TGocciaValue;
       const AFlags: TPropertyFlags; const AFields: TPropertyDescriptorFields);
     procedure MarkValues; override;
+    procedure PushRoots(var AFrame: TGocciaActiveRootFrame); override;
 
     property Value: TGocciaValue read FValue write FValue;
   end;
@@ -102,6 +119,7 @@ type
       const ASetter: TGocciaValue; const AFlags: TPropertyFlags;
       const AFields: TPropertyDescriptorFields);
     procedure MarkValues; override;
+    procedure PushRoots(var AFrame: TGocciaActiveRootFrame); override;
 
     property Getter: TGocciaValue read FGetter;
     property Setter: TGocciaValue read FSetter;
@@ -186,6 +204,13 @@ begin
   // No-op base: subclasses override to mark their value references
 end;
 
+procedure TGocciaPropertyDescriptor.PushRoots(
+  var AFrame: TGocciaActiveRootFrame);
+begin
+  // No-op base: a descriptor with neither a value nor an accessor pair holds
+  // nothing to root. Subclasses override to push what they hold.
+end;
+
 constructor TGocciaPropertyDescriptorData.Create(const AValue: TGocciaValue; const AFlags: TPropertyFlags);
 begin
   inherited Create(AFlags,
@@ -205,6 +230,15 @@ procedure TGocciaPropertyDescriptorData.MarkValues;
 begin
   if Assigned(FValue) then
     FValue.MarkReferences;
+end;
+
+procedure TGocciaPropertyDescriptorData.PushRoots(
+  var AFrame: TGocciaActiveRootFrame);
+begin
+  // Deliberately not materialized: a lazy descriptor's placeholder is what is
+  // reachable right now, and forcing the factory here would allocate on a path
+  // whose only job is to protect what already exists.
+  AFrame.Add(FValue);
 end;
 
 constructor TGocciaLazyPropertyDescriptorData.Create(
@@ -264,6 +298,15 @@ begin
     FGetter.MarkReferences;
   if Assigned(FSetter) then
     FSetter.MarkReferences;
+end;
+
+procedure TGocciaPropertyDescriptorAccessor.PushRoots(
+  var AFrame: TGocciaActiveRootFrame);
+begin
+  // Either half may be nil — a getter-only or setter-only accessor is the
+  // ordinary case, and the frame drops nil without pushing.
+  AFrame.Add(FGetter);
+  AFrame.Add(FSetter);
 end;
 
 function TGocciaPropertyDescriptorAccessor.GetWritable: Boolean;
