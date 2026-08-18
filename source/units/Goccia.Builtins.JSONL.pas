@@ -128,8 +128,11 @@ begin
   { CreateErrorObject builds its message string, and a non-empty string charges
     the memory ceiling — which collects when crossed, protecting only that
     string. So the parsed values array, the result object, and the error object
-    are all rooted until the assignments below store them. (The property writes
-    themselves only check the budget and raise; they never collect.)
+    are all rooted until the assignments below store them. The assignments are
+    a second prospective safe point rather than none: each can reach the
+    property map's growth gate, which consults the budget inside its own frame
+    over the map's owner and the not-yet-stored descriptor. These roots are
+    what covers the window *before* the store — the gate covers the store.
 
     The values array arrives already-parsed but still unreachable: the root
     TGocciaJSONLParser.ParseChunk holds over it for the duration of its own loop

@@ -171,12 +171,14 @@ var
   Args: TGocciaArgumentsCollection;
   Context: TGocciaObjectValue;
   ValueRoot, ContextRoot: TGocciaTempRoot;
+  NewValueRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let val be ? Get(holder, name).
   Value := AHolder.GetProperty(AKey);
 
   InitializeTempRoot(ValueRoot);
   InitializeTempRoot(ContextRoot);
+  NewValueRoots.Initialize;
   try
     // Every recursion below ends in a reviver call, and the reviver is arbitrary
     // user code — a GC safe point that can also delete the holder property this
@@ -197,6 +199,25 @@ begin
           // Step 2a.i: Let newElement be ? InternalizeJSONProperty(val, ToString(I), reviver).
           NewValue := ApplyReviver(Obj, IntToStr(I), AReviver,
             ChildRecordForIndex(AParseRecord, I));
+          // The reviver's return value is a fresh object more often than not,
+          // and the recursion that produced it released its own roots on the
+          // way out, so between here and the store it lives in this local
+          // alone. The holder is always an ordinary object or array here — the
+          // parse tree contains no proxies and the walk is top-down, so a
+          // reviver's returned proxy is never recursed into — which leaves the
+          // storage growth gate as the safe point this window has to survive.
+          //
+          // A frame and not a re-pointed temp root: a temp root is a set, so a
+          // reviver returning one object for two keys would have the first
+          // store's release unroot it for the second, and re-pointing costs a
+          // hash remove plus a hash insert per property. The frame pushes one
+          // pointer per property of the level being revived and releases them
+          // all when this level returns — the entries it keeps are bounded by
+          // an object the tree already holds. The root stack therefore grows
+          // O(size of the level being revived), not O(tree): about 8 MB while
+          // a million-element array is revived, against the array itself,
+          // which is already larger.
+          NewValueRoots.Add(NewValue);
           // Step 2a.ii: If newElement is undefined, delete the element; else create a data property.
           if NewValue is TGocciaUndefinedLiteralValue then
             Obj.DeleteProperty(IntToStr(I))
@@ -213,6 +234,8 @@ begin
           // Step 2b.i: Let newElement be ? InternalizeJSONProperty(val, P, reviver).
           NewValue := ApplyReviver(Obj, PropKey, AReviver,
             ChildRecordForKey(AParseRecord, PropKey));
+          // Same window as the array arm above.
+          NewValueRoots.Add(NewValue);
           // Step 2b.ii: If newElement is undefined, delete property; else create a data property.
           if NewValue is TGocciaUndefinedLiteralValue then
             Obj.DeleteProperty(PropKey)
@@ -249,6 +272,7 @@ begin
       Args.Free;
     end;
   finally
+    NewValueRoots.Clear;
     RemoveTempRootIfNeeded(ContextRoot);
     RemoveTempRootIfNeeded(ValueRoot);
   end;
@@ -282,6 +306,7 @@ var
   Root: TGocciaObjectValue;
   TextValue: TGocciaValue;
   ParsedRoot, HolderRoot: TGocciaTempRoot;
+  RecordRoots: TGocciaJSONParseRecordRoots;
 begin
   // ES2026 §25.5.2 step 1: Let jsonString be ? ToString(text).
   if AArgs.Length >= 1 then
@@ -297,6 +322,7 @@ begin
   begin
     Reviver := AArgs.GetElement(1);
     ParseRecord := nil;
+    RecordRoots := nil;
     InitializeTempRoot(ParsedRoot);
     InitializeTempRoot(HolderRoot);
     try
@@ -314,6 +340,14 @@ begin
           ThrowSyntaxError(E.Message, SSuggestJSONFormat);
       end;
 
+      // The visitor rooted this record tree while it built it, and it is gone.
+      // The tree keeps raw pointers to the parsed values so ApplyReviver can
+      // ask whether the value at a position is still the one the text
+      // produced — a question it asks *after* earlier revivers have run, by
+      // which time an overwritten primitive is reachable from this tree and
+      // nowhere else. Root it for the whole walk.
+      RecordRoots := TGocciaJSONParseRecordRoots.Create(ParseRecord);
+
       // Steps 5-7: Wrap in root object and create the empty-string root data property.
       // The parsed tree is held only by this frame until the wrapper's property
       // write below, and creating the wrapper allocates.
@@ -328,6 +362,8 @@ begin
     finally
       RemoveTempRootIfNeeded(HolderRoot);
       RemoveTempRootIfNeeded(ParsedRoot);
+      // Before the records themselves, so no collection can reach a freed one.
+      RecordRoots.Free;
       ParseRecord.Free;
     end;
   end

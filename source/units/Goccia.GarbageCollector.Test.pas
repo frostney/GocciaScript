@@ -5,6 +5,8 @@ program Goccia.GarbageCollector.Test;
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
 
+  SysUtils,
+
   Goccia.GarbageCollector,
   TestingPascalLibrary,
 
@@ -49,6 +51,7 @@ type
     procedure TestAccessorDescriptorPushRootsProtectsBothHalves;
     procedure TestInnerFrameClearLeavesOuterFrameRootsIntact;
     procedure TestActiveRootStackGrowsPastInitialCapacity;
+    procedure TestPushesOutsideTheGuardingTryLeakOnRaise;
   end;
 
 var
@@ -103,6 +106,8 @@ begin
     TestInnerFrameClearLeavesOuterFrameRootsIntact);
   Test('The active-root stack grows past its initial capacity and releases',
     TestActiveRootStackGrowsPastInitialCapacity);
+  Test('A frame''s pushes must sit inside the try that clears it',
+    TestPushesOutsideTheGuardingTryLeakOnRaise);
 end;
 
 procedure TTestGarbageCollector.TestDataDescriptorPushRootsProtectsValue;
@@ -252,6 +257,76 @@ begin
 
   GC.Collect;
   Expect<Integer>(GCountedValueDestructorCount).ToBe(PUSH_COUNT);
+end;
+
+{ Stands in for the allocation the benchmark builtin used to perform between
+  its pushes and its try — anything on that line that can raise turns the
+  pushes above it into a permanent leak. }
+procedure RaiseAfterPush;
+begin
+  raise Exception.Create('between the push and the guarded region');
+end;
+
+procedure TTestGarbageCollector.TestPushesOutsideTheGuardingTryLeakOnRaise;
+var
+  BaseDepth: Integer;
+  GC: TGarbageCollector;
+  Raised: Boolean;
+  Roots: TGocciaActiveRootFrame;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GCountedValueDestructorCount := 0;
+  BaseDepth := GC.ActiveRootDepth;
+
+  { The shape the builtins must not write: a push, then something that can
+    raise, then the try whose finally would have cleared the frame. A frame is
+    a stack record, so an escape here is not a recoverable leak — the entries
+    stay on the collector's stack for the life of the thread and pin whatever
+    they point at. Asserting on the depth rather than on a sweep count is what
+    makes this cheap: no collection is needed to see the imbalance. }
+  Raised := False;
+  Roots.Initialize;
+  try
+    Roots.Add(TCountedObjectValue.Create);
+    RaiseAfterPush;
+  except
+    on E: Exception do
+      Raised := True;
+  end;
+  Expect<Boolean>(Raised).ToBe(True);
+  Expect<Integer>(GC.ActiveRootDepth).ToBe(BaseDepth + 1);
+
+  { And the shape they must, modelled on the benchmark builtin the fix came
+    from: a push, then a call that can raise (there, the arguments collection
+    whose construction the pushes used to precede), then a second push — all
+    inside the try. Moving the first push and RaiseAfterPush above the `try`
+    reproduces the original defect and this assertion fails, which is what the
+    first half above only demonstrates in isolation. Without the intervening
+    raising call the two shapes are indistinguishable: a raise *inside* the try
+    unwinds through the finally either way. }
+  Roots.Clear;
+  Expect<Integer>(GC.ActiveRootDepth).ToBe(BaseDepth);
+
+  Raised := False;
+  Roots.Initialize;
+  try
+    try
+      Roots.Add(TCountedObjectValue.Create);
+      RaiseAfterPush;
+      Roots.Add(TCountedObjectValue.Create);
+    finally
+      Roots.Clear;
+    end;
+  except
+    on E: Exception do
+      Raised := True;
+  end;
+  Expect<Boolean>(Raised).ToBe(True);
+  Expect<Integer>(GC.ActiveRootDepth).ToBe(BaseDepth);
+
+  GC.Collect;
+  Expect<Integer>(GCountedValueDestructorCount).ToBe(2);
 end;
 
 procedure TTestGarbageCollector.TestReservationCollectsAndRetries;
