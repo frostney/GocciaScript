@@ -2,7 +2,7 @@ export const GOCCIASCRIPT_SUMMARY =
   "GocciaScript is a JavaScript engine: a sandbox-first ECMAScript runtime and toolchain for AI agents. Hosts define the available capabilities, runtime surface, and execution limits. It uses modern recommended defaults while tracking ECMAScript compatibility through generated test262 reports. GocciaScript is implemented in FreePascal, supports Delphi, and can also be embedded in native applications.";
 
 export const GOCCIASCRIPT_META_DESCRIPTION =
-  "JavaScript engine and sandbox-first ECMAScript runtime for AI agents, with host-defined capabilities, test262-tracked compatibility, and native application embedding.";
+  "GocciaScript is a JavaScript engine: a sandbox-first ECMAScript runtime for AI agents with host-defined capabilities, test262-tracked compatibility, and native application embedding.";
 
 export const ECMASCRIPT_SCOPE_QUESTION =
   "Does GocciaScript implement only a subset of JavaScript?";
