@@ -2,6 +2,76 @@
 
 All notable changes to GocciaScript are documented in this file.
 
+## [0.13.0] - 2026-08-19
+
+### ⚡ Performance
+
+- perf(gc): O(1) active-root frame ops; descriptors learn PushRoots (#1169)
+- perf(objects): sort array-index keys in O(n log n) during own-key ordering (#1144)
+
+### 🌐 Website
+
+- docs(aeo): name GocciaScript as a JavaScript engine in citation surfaces (#1186)
+- fix(website): make the installers work against the real release-archive layout (#1150)
+
+### 🏗️ Internal
+
+- chore(toml-test): bump pin to d168c2a4 (#1176)
+- chore(skills): sync provisioned skills (#1178)
+- chore(test262): bump pin to 3655e746 (#1175)
+- chore(docs): enforce the no-hand-typed-test262-number rule mechanically (#1149)
+- docs: sync docs and website claims to shipped reality for release prep (#1147)
+- docs(sandbox): specify the out-of-process execution protocol (WP-5 Phase A) (#1138)
+- docs(sandbox): record the hardening scope decisions and limit vocabulary (#1134)
+- docs(contributing): record the probe invariant and the PR-title rule (#1127)
+- style(pascal): quote JavaScript in star-parenthesis comments, drop the switch (#1125)
+- test(cli): report every failing section instead of stopping at the first (#1123)
+- chore: install run-retro, and apply its findings for stacked PR automation (#1122)
+- chore(jetstream): bump pin to 7769b693 (#1121)
+- chore(skills): sync provisioned skills (#1120)
+- chore(tc39-mcp): bump pin to v0.6.2 (#1119)
+- chore(test262): bump pin to be13516f (#1118)
+
+### 🐛 Fixed
+
+- fix(spec): true up TC39 stages, spec anchors, and shipped-surface claims (#1185)
+- fix(ci): coverage CLI checks no longer flake on broken-pipe races (#1183)
+- fix(test): pool-cancel bound asserts a design quantity, not a scheduler race (#1177)
+- fix(gc): computed class keys survive collections during static initializers (#1182)
+- fix(gc): builders and proxy traps root their in-flight values (#1179)
+- fix(gc): root the evaluator's remaining guest-call windows (#1174)
+- fix(gc): the element-storage gate roots its store window (#1172)
+- fix(gc): the property-map growth gate roots its store window (#1170)
+- fix(testrunner): parallel aborts report exactly once; iterator close can no longer swallow ceilings (#1165)
+- fix(engine): fault unwinds no longer leak iterator roots or pending host work (#1164)
+- fix(sandbox): stop promise boundaries from swallowing uncatchable faults (#1162)
+- fix(vm): read a compound assignment's target before the right-hand side (#1161)
+- fix(interpreter): perform compound assignment's GetValue exactly once (#1160)
+- fix(gc): root evaluator temporaries and make engine-integrity faults uncatchable (#1158)
+- fix(testing): replace growth-gate probe calibration with construction and measurement (#1155)
+- fix: gate the install path and fuzz exits, harden the sentinel, true up vi claims (#1154)
+- fix(ci): create the heaptrc -FU dir and hard-bound the fuzz timeout (#1148)
+- fix(gc): attempt a collection before refusing a charged reservation (#1152)
+- fix(testing): lift the parked parser-probe ceilings clear of the refusal bands (#1151)
+- fix(gc): root parser and builtin containers across collecting safe points (#1146)
+- fix(modules): keep expanded host paths out of script-visible module errors (#1141)
+- fix(testing): detect terminal limit unwind with a flag, not ExceptObject (#1145)
+- fix(sandbox): clear pending work on memory-limit unwind, bound AFL timeout, specify pipe I/O (#1142)
+- fix(gc): root builtin result containers across allocation safe points (#1140)
+- fix(sandbox): harden fuzz-input bounds, fetch URL validation, and resource-limit propagation (#1139)
+- fix(modules): report a missing content provider as a coded JavaScript Error (#1136)
+- fix(sandbox): apply engine options in the sandbox runner and classify failures (#1135)
+
+### 🚀 Added
+
+- feat(gc): the growth gate collects once before refusing (#1181)
+- feat(testrunner): abort the run when an engine-integrity fault escapes (#1163)
+- feat(memory): gate object property storage growth against the budget (#1137)
+- feat(memory): gate uncharged allocation paths and add a host-catchable limit (#1132)
+- feat(fetch): pin resolved addresses and add private-range and size policy (#1131)
+- feat(fuzz): add fuzz harness and memory-safety CI (#1130)
+- feat(vitest): close the drop-in gap in module resolution, generics, and the vi surface (#1126)
+
 ## [0.12.0] - 2026-08-10
 
 ### 🌐 Website
