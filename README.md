@@ -236,7 +236,7 @@ For custom providers, pass a JavaScript module to `--host-environment` or implem
 
 ### Run Tests
 
-GocciaScript has 12,000+ JavaScript unit tests across 1,500+ test files, covering language features, built-in objects, and edge cases.
+GocciaScript has 12,000+ JavaScript end-to-end tests across 1,500+ test files, covering language features, built-in objects, and edge cases.
 
 ```bash
 ./build.pas testrunner
