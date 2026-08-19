@@ -221,6 +221,14 @@ export const PROFILE_DISABLED_FEATURES: ProfileDisabledFeature[] = [
     standardsSource: "ECMA-262 core",
     why: "dynamic source construction is an explicit unsafe opt-in",
   },
+  {
+    name: "ShadowRealm",
+    implemented: true,
+    defaultProfile: "Not installed",
+    enablement: "--unsafe-shadowrealm",
+    standardsSource: "TC39 Stage 2.7",
+    why: "evaluates dynamic source and imports modules",
+  },
 ];
 
 export type FeatureIcon = "drop" | "shield" | "leaf" | "clock" | "test";

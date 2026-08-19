@@ -420,7 +420,7 @@ See [bytecode-vm.md](bytecode-vm.md) for the bytecode VM architecture and binary
 
 ### GocciaSandboxRunner (Virtual Filesystem Sandbox)
 
-GocciaSandboxRunner executes a sandbox entry path after populating an isolated virtual filesystem. Seed paths are import baselines: the runner copies data into the sandbox before execution, captures that filesystem as the baseline, and never treats the host path as a live mount.
+GocciaSandboxRunner executes a sandbox entry path after populating an isolated virtual filesystem. Seed paths establish a seed baseline: the runner copies data into the sandbox before execution, captures that filesystem as the baseline, and never treats the host path as a live mount.
 
 ```bash
 ./build.pas sandboxrunner

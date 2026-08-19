@@ -104,7 +104,7 @@ tests/
 └── language/               # Core language feature tests
     ├── classes/            # Class declarations, inheritance, private fields/methods/getters/setters
     ├── declarations/       # let, const
-    ├── decorators/         # TC39 Stage 3 decorators and decorator metadata
+    ├── decorators/         # TC39 Stage 2.7 decorators and decorator metadata
     ├── expressions/        # Arithmetic, comparison, logical, destructuring, trailing commas, etc.
     │   ├── addition/       # Addition with ToPrimitive
     │   ├── arithmetic/     # Division (IEEE-754 signed zeros, Infinity), exponentiation (Infinity edge cases)

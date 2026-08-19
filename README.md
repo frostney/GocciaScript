@@ -122,10 +122,11 @@ Core built-ins include `Math`, `JSON`, `Object`, `Function`, `Array`, `Boolean`,
 `ArrayBuffer`, `SharedArrayBuffer`, `DataView`, `Atomics`, and TypedArrays
 (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`,
 `Int32Array`, `Uint32Array`, `Float16Array`, `Float32Array`, `Float64Array`,
-`BigInt64Array`, `BigUint64Array`). The loader profile adds `console`,
-`performance`, `fetch`, `Headers`, `Response` ([WHATWG Fetch](https://fetch.spec.whatwg.org/) — GET/HEAD only),
-`AbortController`, `AbortSignal`, `URL`, `URLSearchParams`, `TextEncoder`, and
-`TextDecoder`. Error constructors include `Error`, `EvalError`, `TypeError`,
+`BigInt64Array`, `BigUint64Array`), alongside the global functions
+`queueMicrotask`, `structuredClone`, `atob`, and `btoa`. The loader profile adds
+`console`, `performance`, `fetch`, `Headers`, `Response` ([WHATWG Fetch](https://fetch.spec.whatwg.org/) — GET/HEAD only),
+`AbortController`, `AbortSignal`, `EventTarget`, `Event`, `URL`,
+`URLSearchParams`, `TextEncoder`, and `TextDecoder`. Error constructors include `Error`, `EvalError`, `TypeError`,
 `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`,
 `SuppressedError`, and `DOMException`.
 
@@ -235,7 +236,7 @@ For custom providers, pass a JavaScript module to `--host-environment` or implem
 
 ### Run Tests
 
-GocciaScript has 11,000+ JavaScript unit tests covering language features, built-in objects, and edge cases.
+GocciaScript has 12,000+ JavaScript end-to-end tests across 1,500+ test files, covering language features, built-in objects, and edge cases.
 
 ```bash
 ./build.pas testrunner

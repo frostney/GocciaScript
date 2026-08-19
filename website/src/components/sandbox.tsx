@@ -723,7 +723,7 @@ export function Sandbox() {
           <div className="sb-caplist">
             <span className="sb-cap on">
               <span className="sb-cap-dot" />
-              import baselines
+              seed baselines
             </span>
             <span className="sb-cap on">
               <span className="sb-cap-dot" />
@@ -749,7 +749,7 @@ export function Sandbox() {
             <p>
               GocciaSandboxRunner executes an entry path inside an isolated
               virtual filesystem. Seed paths and JSON seed config copy files
-              into the sandbox before execution; they are import baselines, not
+              into the sandbox before execution; they are seed baselines, not
               live mounts. Source can import <code>&quot;fs&quot;</code> for
               sandbox filesystem operations and <code>&quot;goccia&quot;</code>{" "}
               for shell commands or nested execution.

@@ -171,7 +171,7 @@ POST JSON to \`/api/execute\`:
 
 Options:
 
-- \`code\` — GocciaScript source code, capped at ${MAX_GOCCIA_CODE_BYTES} bytes (8 KiB).
+- \`code\` — GocciaScript source code, capped at ${MAX_GOCCIA_CODE_BYTES} bytes (${MAX_GOCCIA_CODE_BYTES / 1024} KiB).
 - \`mode\` — \`interpreted\` or \`bytecode\`, matching \`--mode=bytecode\`.
 - \`asi\` — enables automatic semicolon insertion. The website API keeps this short field name for version compatibility; selected binaries may map it to \`--asi\` or \`--compat-asi\` depending on their supported flags. The website API defaults this to \`true\`.
 - \`compatVar\` — enables legacy \`var\` declarations, matching \`--compat-var\`.
@@ -196,7 +196,7 @@ Prefer modern JavaScript forms that GocciaScript supports by default. Compatibil
 
 ## Limits
 
-Requests are rate-limited and source code is capped at 8 KiB. These APIs are intended for short examples, docs checks, and agent-assisted exploration.
+Requests are rate-limited and source code is capped at ${MAX_GOCCIA_CODE_BYTES / 1024} KiB. These APIs are intended for short examples, docs checks, and agent-assisted exploration.
 `;
 }
 
