@@ -31,6 +31,7 @@ profile exposes them, not whether the engine contains their semantics.
 | `with` | Yes | Disabled | `--compat-non-strict-mode` in Script source | ECMA-262 core |
 | `eval` | Yes | Not installed | Private `GocciaScriptLoaderBare --test262-host` only | ECMA-262 core |
 | `Function()` | Yes | Disabled | `--unsafe-function-constructor` | ECMA-262 core |
+| `ShadowRealm` | Yes | Not installed | `--unsafe-shadowrealm` | TC39 Stage 2.7 |
 
 ## Core ECMAScript Evidence
 
@@ -68,18 +69,18 @@ APIs from WHATWG and W3C specifications — not part of ECMA-262, but widely exp
 
 | Proposal | Stage | Status |
 |----------|-------|--------|
-| [Decorators](https://github.com/tc39/proposal-decorators) | 3 | Supported — class, method, field, getter/setter, auto-accessor decorators with `addInitializer` |
-| [Decorator Metadata](https://github.com/tc39/proposal-decorator-metadata) | 3 | Supported — `Symbol.metadata` for decorator-attached class metadata with inheritance |
+| [Joint Iteration](https://github.com/tc39/proposal-joint-iteration) | 4 (finished) | Supported — `Iterator.zip` and `Iterator.zipKeyed` |
 | [Import Defer](https://tc39.es/proposal-defer-import-eval/) | 3 | Supported — static `import defer * as ns` and dynamic `import.defer()` create deferred namespace objects |
 | [Iterator Includes](https://github.com/tc39/proposal-iterator-includes) | 3 | Supported — `Iterator.prototype.includes(searchElement, skippedElements?)` with SameValueZero comparison and iterator closing |
-| [Joint Iteration](https://github.com/tc39/proposal-joint-iteration) | 3 | Supported — `Iterator.zip` and `Iterator.zipKeyed` |
+| [Decorators](https://github.com/tc39/proposal-decorators) | 2.7 | Supported — class, method, field, getter/setter, auto-accessor decorators with `addInitializer` |
+| [Decorator Metadata](https://github.com/tc39/proposal-decorator-metadata) | 2.7 | Supported — `Symbol.metadata` for decorator-attached class metadata with inheritance |
 | [Import Bytes](https://github.com/tc39/proposal-import-bytes) | 2.7 | Supported — `import x from "./f" with { type: "bytes" }` (static, dynamic, `import.defer`) yields a default-only `Uint8Array` over an immutable `ArrayBuffer` |
 | [Immutable ArrayBuffers](https://github.com/tc39/proposal-immutable-arraybuffer) | 2.7 | Supported — `ArrayBuffer.prototype.transferToImmutable` plus the `immutable` getter; writes to immutable-backed views are rejected |
 | [ShadowRealm](https://github.com/tc39/proposal-shadowrealm) | 2.7 | Opt-in (`--unsafe-shadowrealm`) — global `ShadowRealm` constructor with `evaluate`, `importValue`, and the wrapped-function callable boundary; off by default because it evaluates dynamic source and imports modules |
 | [`Math.clamp`](https://github.com/tc39/proposal-math-clamp) | 2 | Supported |
 | [Pattern Matching](https://tc39.es/proposal-pattern-matching/) | 1 | Supported — `value is Pattern`, `match`, filtered `for...of` / `for await...of`, and pattern catches |
 | [Type Annotations](https://tc39.es/proposal-type-annotations/) | 1 | Supported — proposal-compatible types-as-comments semantics by default; GocciaScript's optional `--strict-types` extension adds runtime enforcement in interpreter and bytecode modes, not static structural checking. See [Type Annotations](type-annotations.md) |
-| [Enum Declarations](https://github.com/tc39/proposal-enum) | 0 | Supported — frozen, null-prototype enum objects with `Symbol.iterator` |
+| [Enum Declarations](https://github.com/tc39/proposal-enum) | 1 | Supported — frozen, null-prototype enum objects with `Symbol.iterator` |
 
 ## Runtime Extensions
 

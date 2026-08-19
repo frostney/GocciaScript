@@ -453,7 +453,7 @@ console.log(audit.diff);`;
     "",
     "## Virtual filesystem runner",
     "",
-    'GocciaSandboxRunner executes an entry path inside an isolated virtual filesystem. Seed paths and JSON seed config copy files into the sandbox before execution; they are import baselines, not live mounts. Source can import `"fs"` for Node-compatible synchronous, callback, and promise methods over the sandbox filesystem, and `"goccia"` for shell commands or nested execution.',
+    'GocciaSandboxRunner executes an entry path inside an isolated virtual filesystem. Seed paths and JSON seed config copy files into the sandbox before execution; they are seed baselines, not live mounts. Source can import `"fs"` for Node-compatible synchronous, callback, and promise methods over the sandbox filesystem, and `"goccia"` for shell commands or nested execution.',
     "",
     fence(runnerCommand, "bash"),
     "",

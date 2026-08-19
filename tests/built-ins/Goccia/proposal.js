@@ -17,7 +17,7 @@ describe.runIf(hasGoccia)("Goccia.proposal", () => {
     expect(keys.includes("stage-3")).toBe(true);
   });
 
-  test("stage keys follow the stage-N format", () => {
+  test("stage keys use the stage- prefix", () => {
     const keys = Object.keys(Goccia.proposal);
     keys.forEach((key) => {
       expect(key.startsWith("stage-")).toBe(true);

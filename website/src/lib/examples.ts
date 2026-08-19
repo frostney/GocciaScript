@@ -426,7 +426,7 @@ console.log("decoded:", new TextDecoder().decode(bytes));`,
   {
     id: "decorators",
     label: "Decorators — class members",
-    desc: "Stage-3 decorators using object notation wrappers.",
+    desc: "Stage-2.7 decorators using object notation wrappers.",
     code: `const log = (value, context) => {
   return ({
     [context.name](...args) {

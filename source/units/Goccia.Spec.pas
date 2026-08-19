@@ -178,7 +178,7 @@ const
   // ---------------------------------------------------------------------------
   ES2026_FEATURES: array[0..9] of TGocciaFeatureEntry = (
     (Name: 'JSON.parse Source Text Access';         Link: 'https://tc39.es/ecma262/#sec-json.parse'),
-    (Name: 'Explicit Resource Management';          Link: 'https://tc39.es/ecma262/#sec-using-declaration'),
+    (Name: 'Explicit Resource Management';          Link: 'https://tc39.es/ecma262/#sec-let-and-const-declarations'),
     (Name: 'RegExp.escape';                         Link: 'https://tc39.es/ecma262/#sec-regexp.escape'),
     (Name: 'Error.isError';                         Link: 'https://tc39.es/ecma262/#sec-error.iserror'),
     (Name: 'Uint8Array Base64/Hex';                 Link: 'https://tc39.es/ecma262/#sec-typedarray-objects'),
@@ -190,10 +190,10 @@ const
   );
 
   // ---------------------------------------------------------------------------
-  // ES2027
+  // ES2027 — merged into the ECMA-262 working draft, not yet ratified
   // ---------------------------------------------------------------------------
   ES2027_FEATURES: array[0..0] of TGocciaFeatureEntry = (
-    (Name: 'Temporal';  Link: 'https://tc39.es/ecma262/#sec-temporal-objects')
+    (Name: 'Joint Iteration';  Link: 'https://tc39.es/ecma262/#sec-iterator.zip')
   );
 
   // ---------------------------------------------------------------------------
@@ -218,13 +218,25 @@ const
   );
 
   // ---------------------------------------------------------------------------
+  // TC39 Stage 4 — finished, not yet in a ratified ECMA-262 edition
+  // ---------------------------------------------------------------------------
+  STAGE4_PROPOSALS: array[0..0] of TGocciaFeatureEntry = (
+    (Name: 'Temporal';  Link: 'https://tc39.es/proposal-temporal/')
+  );
+
+  // ---------------------------------------------------------------------------
   // TC39 Stage 3
   // ---------------------------------------------------------------------------
-  STAGE3_PROPOSALS: array[0..3] of TGocciaFeatureEntry = (
-    (Name: 'Decorators';            Link: 'https://github.com/tc39/proposal-decorators'),
-    (Name: 'Decorator Metadata';    Link: 'https://github.com/tc39/proposal-decorator-metadata'),
-    (Name: 'Iterator Includes';     Link: 'https://github.com/tc39/proposal-iterator-includes'),
-    (Name: 'Joint Iteration';       Link: 'https://github.com/tc39/proposal-joint-iteration')
+  STAGE3_PROPOSALS: array[0..0] of TGocciaFeatureEntry = (
+    (Name: 'Iterator Includes';  Link: 'https://github.com/tc39/proposal-iterator-includes')
+  );
+
+  // ---------------------------------------------------------------------------
+  // TC39 Stage 2.7
+  // ---------------------------------------------------------------------------
+  STAGE27_PROPOSALS: array[0..1] of TGocciaFeatureEntry = (
+    (Name: 'Decorators';          Link: 'https://github.com/tc39/proposal-decorators'),
+    (Name: 'Decorator Metadata';  Link: 'https://github.com/tc39/proposal-decorator-metadata')
   );
 
   // ---------------------------------------------------------------------------
@@ -237,16 +249,10 @@ const
   // ---------------------------------------------------------------------------
   // TC39 Stage 1
   // ---------------------------------------------------------------------------
-  STAGE1_PROPOSALS: array[0..1] of TGocciaFeatureEntry = (
+  STAGE1_PROPOSALS: array[0..2] of TGocciaFeatureEntry = (
     (Name: 'Types as Comments'; Link: 'https://tc39.es/proposal-type-annotations/'),
-    (Name: 'Pattern Matching'; Link: 'https://tc39.es/proposal-pattern-matching/')
-  );
-
-  // ---------------------------------------------------------------------------
-  // TC39 Stage 0
-  // ---------------------------------------------------------------------------
-  STAGE0_PROPOSALS: array[0..0] of TGocciaFeatureEntry = (
-    (Name: 'Enums'; Link: 'https://github.com/nicolo-ribaudo/proposal-enum')
+    (Name: 'Pattern Matching'; Link: 'https://tc39.es/proposal-pattern-matching/'),
+    (Name: 'Enums'; Link: 'https://github.com/tc39/proposal-enum')
   );
 
 function CreateFeatureEntryObject(const AEntry: TGocciaFeatureEntry): TGocciaObjectValue;
@@ -304,10 +310,11 @@ var
   Obj: TGocciaObjectValue;
 begin
   Obj := TGocciaObjectValue.Create;
+  DefineReadOnlyProperty(Obj, 'stage-4', CreateFeatureArray(STAGE4_PROPOSALS));
   DefineReadOnlyProperty(Obj, 'stage-3', CreateFeatureArray(STAGE3_PROPOSALS));
+  DefineReadOnlyProperty(Obj, 'stage-2.7', CreateFeatureArray(STAGE27_PROPOSALS));
   DefineReadOnlyProperty(Obj, 'stage-2', CreateFeatureArray(STAGE2_PROPOSALS));
   DefineReadOnlyProperty(Obj, 'stage-1', CreateFeatureArray(STAGE1_PROPOSALS));
-  DefineReadOnlyProperty(Obj, 'stage-0', CreateFeatureArray(STAGE0_PROPOSALS));
   Result := Obj;
 end;
 
