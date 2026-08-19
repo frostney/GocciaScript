@@ -15,7 +15,7 @@ The recommended out-of-the-box way to use GocciaScript: sandbox-first, modern, a
 _Avoid_: Language ceiling, hard limit.
 
 **Recommended profile**:
-The default-on feature configuration that realises the recommended defaults: the forms and globals GocciaScript exposes without a compatibility or unsafe opt-in. Also written *recommended language profile*. See [Language](docs/language.md) for the profile and its compatibility paths.
+The default-on feature configuration that realises the recommended defaults: the forms and globals GocciaScript exposes without a compatibility or unsafe opt-in. Also written _recommended language profile_. See [Language](docs/language.md) for the profile and its compatibility paths.
 _Avoid_: Language ceiling, hard limit, runtime profile.
 
 **Engine**:
