@@ -4,7 +4,7 @@
 
 A drop of JavaScript — sandboxed by default
 
-GocciaScript is a sandbox-first ECMAScript runtime and toolchain for AI agents.
+GocciaScript is a JavaScript engine: a sandbox-first ECMAScript runtime and toolchain for AI agents.
 Hosts define the available capabilities, runtime surface, and execution limits.
 It uses modern recommended defaults while tracking ECMAScript compatibility
 through generated test262 reports.
