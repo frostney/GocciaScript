@@ -999,6 +999,7 @@ end;
 
 constructor TGocciaFunctionSharedPrototype.Create;
 var
+  BindIntrinsic: TGocciaValue;
   Members: array[0..4] of TGocciaMemberDefinition;
   Thrower: TGocciaNativeFunctionValue;
 begin
@@ -1032,6 +1033,10 @@ begin
       1,
       []);
     RegisterMemberDefinitions(Self, Members);
+    BindIntrinsic := GetProperty('bind');
+    if BindIntrinsic is TGocciaNativeFunctionValue then
+      TGocciaNativeFunctionValue(BindIntrinsic).IntrinsicKind :=
+        nikFunctionBind;
   except
     if (CurrentRealm <> nil) and (CurrentRealm.GetSlot(GFunctionPrototypeSlot) = Self) then
       CurrentRealm.SetSlot(GFunctionPrototypeSlot, nil);

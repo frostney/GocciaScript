@@ -16197,7 +16197,11 @@ begin
              (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) then
           begin
             GlobalName := TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).Name;
-            if (GlobalName = 'bind') and
+            { Identity, not name: an own static named `bind` on a function
+              object is a different function, and matching on the name alone
+              silently redirected the call into Function.prototype.bind. }
+            if (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue)
+                 .IntrinsicKind = nikFunctionBind) and
                (FRegisters[A - 1].ObjectValue is TGocciaFunctionBase) then
             begin
               case B of

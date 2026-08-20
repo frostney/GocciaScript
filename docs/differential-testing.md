@@ -66,6 +66,18 @@ oracle instead of inheriting a default.
 | `l-modulefndecl.test.js` | language | skip | gate |
 | `m-nodemods.test.js` | language | skip | gate |
 | `n-nodemods.goccia.test.js` | language | skip | skip |
+| `o-asynccontext.test.js` | language | skip | gate |
+
+`o-asynccontext.test.js` covers `node:async_hooks` propagation only, and stops
+there on purpose. Bun 1.3.14 does not honour the `defaultValue` or `name`
+constructor options, leaks the store bound by a `run` that follows a `disable`,
+and returns `undefined` rather than the resource from `emitDestroy`. Gating on
+bun for those four would report bun's gaps as GocciaScript divergences, so they
+are covered against Node's behaviour in `tests/built-ins/AsyncHooks` instead,
+where bun is not the oracle. Everything the suite does check — stores surviving
+`await`, interleaved chains, several instances at once, `.then` / `.catch` /
+`.finally` continuations, `exit`, `enterWith`, and `AsyncResource` — bun and
+Node agree on.
 
 `h-modulemock.test.js` and `i-modulemock-isolation.test.js` are a pair: the
 first mocks `./mods/mockable.js` with a `vi.mock` factory, the second mocks

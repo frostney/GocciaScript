@@ -165,6 +165,17 @@ const CLASSIFICATION: Record<string, Classification> = {
     vitest: "skip",
     gocciaFlags: ["--allow-node-modules"],
   },
+  // node:async_hooks context propagation. Bun gates: async-context propagation
+  // is runtime semantics, not testing-API semantics, and bun implements
+  // node:async_hooks. Vitest is skipped for the same reason — nothing here is
+  // a matcher or a hook.
+  //
+  // The suite deliberately covers propagation only. Bun 1.3.14 does not honour
+  // the `defaultValue` or `name` constructor options, leaks the store bound by
+  // a `run` that follows a `disable`, and returns undefined rather than the
+  // resource from `emitDestroy`; all four are covered against Node's behaviour
+  // in tests/built-ins/AsyncHooks, where bun is not the oracle.
+  "o-asynccontext.test.js": { kind: "language", bun: "gate", vitest: "skip" },
 };
 
 type Verdict = {

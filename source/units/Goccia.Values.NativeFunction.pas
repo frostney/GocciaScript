@@ -17,7 +17,13 @@ type
     nikNone,
     nikDecodeURI,
     nikDecodeURIComponent,
-    nikStringFromCharCode
+    nikStringFromCharCode,
+    { Function.prototype.bind. Marked so the bytecode VM's bound-function fast
+      path can recognise the intrinsic itself rather than any callable that
+      happens to be named `bind` — an own static named `bind` on a function
+      object (node:async_hooks installs two) is a different function and must
+      not be redirected into TGocciaBoundFunctionValue. }
+    nikFunctionBind
   );
 
   TGocciaNativeFunctionValue = class(TGocciaFunctionBase)
