@@ -885,7 +885,10 @@ begin
       InnerMatched := TryMatchPatternInternal(ASubject,
         TGocciaNotMatchPattern(APattern).Pattern, BranchContext, NextContext);
     except
-      ReleaseMatchContext(NextContext, AContext);
+      // BranchContext, not NextContext: the inner match's own handler has
+      // already released everything deeper than the branch scope, and its
+      // advanced NextContext may point at a scope it just un-rooted.
+      ReleaseMatchContext(BranchContext, AContext);
       raise;
     end;
     if InnerMatched then
