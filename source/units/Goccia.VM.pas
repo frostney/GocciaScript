@@ -2788,6 +2788,11 @@ type
       const ANewTarget: TGocciaValue = nil): TGocciaValue; override;
     function InstantiateRegisters(
       const AArguments: TGocciaRegisterArray): TGocciaRegister;
+    function UsesOwnInstantiation: Boolean; override;
+    function TryConstructOnReceiver(
+      const AArguments: TGocciaArgumentsCollection;
+      const AReceiver: TGocciaValue; const ANewTarget: TGocciaValue;
+      out AResult: TGocciaValue): Boolean; override;
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     procedure SetVMConstructor(const AValue: TGocciaValue);
@@ -6492,6 +6497,63 @@ destructor TGocciaBytecodeFunctionValue.Destroy;
 begin
   FClosure.Free;
   inherited;
+end;
+
+// A compiled class holds its constructor as a bytecode closure, not as the AST
+// TGocciaMethodValue the tree-walk instantiation path drives, so construction
+// must run through Instantiate / InstantiateRegisters. This matters outside the
+// VM because a module's top-level function declarations are created by the
+// tree-walk evaluator while linking (ES2026 §16.2.1.7.3.1 InitializeEnvironment)
+// and keep running there even in bytecode mode.
+function TGocciaVMClassValue.UsesOwnInstantiation: Boolean;
+begin
+  Result := True;
+end;
+
+// Mirrors the compiled-class branch of TGocciaVM.InvokeConstructableWithReceiver
+// so that a tree-walk `super()` or bound `new` reaching a compiled class runs
+// the same steps the VM would.
+function TGocciaVMClassValue.TryConstructOnReceiver(
+  const AArguments: TGocciaArgumentsCollection;
+  const AReceiver: TGocciaValue; const ANewTarget: TGocciaValue;
+  out AResult: TGocciaValue): Boolean;
+var
+  ConstructorThisValue: TGocciaValue;
+begin
+  Result := True;
+
+  if not Assigned(FConstructorValue) then
+  begin
+    AResult := FVM.InvokeImplicitSuperInitialization(Self, AReceiver,
+      AArguments);
+    if not Assigned(AResult) then
+      AResult := AReceiver;
+    Exit;
+  end;
+
+  FVM.FPendingNewTarget := ANewTarget;
+  FVM.RunClassInitializers(Self, AReceiver);
+  AResult := FVM.InvokeFunctionValue(FConstructorValue, AArguments, AReceiver);
+
+  // ES2026 §10.2.2 step 13.b: a derived constructor may only return an Object
+  // or undefined.
+  if (Assigned(SuperClass) or Assigned(NativeSuperConstructor)) and
+     Assigned(AResult) and
+     not (AResult is TGocciaObjectValue) and
+     not (AResult is TGocciaUndefinedLiteralValue) then
+    ThrowTypeError('Derived constructor returned non-object',
+      SSuggestNotConstructorType);
+
+  if FConstructorValue is TGocciaBytecodeFunctionValue then
+    ConstructorThisValue := RegisterToValue(FVM.FLastClosureThisValue)
+  else
+    ConstructorThisValue := nil;
+  if not (AResult is TGocciaObjectValue) and
+     (ConstructorThisValue is TGocciaObjectValue) then
+    AResult := ConstructorThisValue;
+  if (AResult is TGocciaObjectValue) and (AResult <> AReceiver) and
+     (AResult = ConstructorThisValue) then
+    FVM.RunClassInitializers(Self, AResult);
 end;
 
 // ES2026 §10.2.2 [[Construct]](argumentsList, newTarget)

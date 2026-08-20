@@ -165,6 +165,7 @@ type
     function DefaultPrototypeForNewTarget(const ANewTarget: TGocciaValue;
       const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
     function GetClassLength: Integer; override;
+    function UsesOwnInstantiation: Boolean; override;
     property Kind: TGocciaTypedArrayKind read FKind;
   end;
 
@@ -174,6 +175,7 @@ type
       const AThisValue: TGocciaValue): TGocciaValue; override;
     function Instantiate(const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaValue = nil): TGocciaValue; override;
+    function UsesOwnInstantiation: Boolean; override;
   end;
 
   TGocciaTypedArrayStaticFrom = class
@@ -3019,6 +3021,14 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
+// ES2026 §23.2.5.1: %TypedArray% is abstract and rejects direct construction,
+// so the tree-walk instantiation path must not build an ordinary instance for
+// it either.
+function TGocciaTypedArrayIntrinsicClassValue.UsesOwnInstantiation: Boolean;
+begin
+  Result := True;
+end;
+
 constructor TGocciaTypedArrayClassValue.Create(const AName: string; const ASuperClass: TGocciaClassValue; const AKind: TGocciaTypedArrayKind);
 begin
   inherited Create(AName, ASuperClass);
@@ -3069,6 +3079,14 @@ end;
 function TGocciaTypedArrayClassValue.GetClassLength: Integer;
 begin
   Result := 3;
+end;
+
+// ES2026 §23.2.5.1 TypedArray(...): the constructor allocates an exotic
+// integer-indexed receiver from newTarget, which the tree-walk instantiation
+// path cannot produce.
+function TGocciaTypedArrayClassValue.UsesOwnInstantiation: Boolean;
+begin
+  Result := True;
 end;
 
 function TGocciaTypedArrayClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
