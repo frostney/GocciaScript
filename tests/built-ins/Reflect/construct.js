@@ -305,6 +305,26 @@ describe("Reflect.construct", () => {
     expect(obj.ntName).toBe("Custom");
   });
 
+  test("holes in argumentsList are passed as undefined", () => {
+    class Collect {
+      constructor(...args) {
+        this.tag = args.map((a) => String(a)).join("|");
+        this.secondIsUndefined = args[1] === undefined;
+      }
+    }
+
+    expect(Reflect.construct(Collect, [1, , 3]).tag).toBe("1|undefined|3");
+    expect(Reflect.construct(Collect, [1, , 3]).secondIsUndefined).toBe(true);
+    expect(Reflect.construct(Collect, [, 2]).tag).toBe("undefined|2");
+    expect(Reflect.construct(Collect, [1, ,]).tag).toBe("1|undefined");
+    expect(Reflect.construct(Collect, [, , ,]).tag).toBe(
+      "undefined|undefined|undefined",
+    );
+    expect(Reflect.construct(Collect, [1, , , 4]).tag).toBe(
+      "1|undefined|undefined|4",
+    );
+  });
+
   test("new.target is the class itself for normal new expression", () => {
     class Bar {
       constructor() {

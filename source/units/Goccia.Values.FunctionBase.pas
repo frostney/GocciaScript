@@ -1216,6 +1216,7 @@ var
   NewThisValue: TGocciaValue;
   ArgArray: TGocciaValue;
   ArrVal: TGocciaArrayValue;
+  FastArg0, FastArg1, FastArg2: TGocciaValue;
 begin
   // Step 1: Perform ? RequireObjectCoercible(this)
   if not AThisValue.IsCallable then
@@ -1253,7 +1254,12 @@ begin
   if TryCallStringFromCodePointApplyFast(AThisValue, ArgArray, Result) then
     Exit;
 
-  // Fast path: small arrays use specialized call methods (FunctionBase only)
+  // Fast path: small arrays use specialized call methods (FunctionBase only).
+  // Elements still go through ArrayArgumentElement so that ES2026 §7.3.19 step
+  // 6b Get semantics hold: a hole is not an own property, so it resolves through
+  // the prototype chain and never reaches the callee as the hole sentinel.
+  // Indices are read into locals in ascending order because an inherited
+  // accessor makes the read order observable.
   if (AThisValue is TGocciaFunctionBase) and (ArgArray is TGocciaArrayValue) then
   begin
     ArrVal := TGocciaArrayValue(ArgArray);
@@ -1261,13 +1267,25 @@ begin
       0:
         Exit(TGocciaFunctionBase(AThisValue).CallNoArgs(NewThisValue));
       1:
-        Exit(TGocciaFunctionBase(AThisValue).CallOneArg(ArrVal.Elements[0], NewThisValue));
+        begin
+          FastArg0 := ArrayArgumentElement(ArrVal, 0);
+          Exit(TGocciaFunctionBase(AThisValue).CallOneArg(FastArg0, NewThisValue));
+        end;
       2:
-        Exit(TGocciaFunctionBase(AThisValue).CallTwoArgs(ArrVal.Elements[0],
-          ArrVal.Elements[1], NewThisValue));
+        begin
+          FastArg0 := ArrayArgumentElement(ArrVal, 0);
+          FastArg1 := ArrayArgumentElement(ArrVal, 1);
+          Exit(TGocciaFunctionBase(AThisValue).CallTwoArgs(FastArg0, FastArg1,
+            NewThisValue));
+        end;
       3:
-        Exit(TGocciaFunctionBase(AThisValue).CallThreeArgs(ArrVal.Elements[0],
-          ArrVal.Elements[1], ArrVal.Elements[2], NewThisValue));
+        begin
+          FastArg0 := ArrayArgumentElement(ArrVal, 0);
+          FastArg1 := ArrayArgumentElement(ArrVal, 1);
+          FastArg2 := ArrayArgumentElement(ArrVal, 2);
+          Exit(TGocciaFunctionBase(AThisValue).CallThreeArgs(FastArg0, FastArg1,
+            FastArg2, NewThisValue));
+        end;
     end;
   end;
 

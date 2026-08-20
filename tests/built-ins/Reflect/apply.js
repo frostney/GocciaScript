@@ -58,6 +58,51 @@ describe("Reflect.apply", () => {
     expect(result).toEqual(["arg1", 2, undefined, null]);
   });
 
+  test("holes at every position of argumentsList become undefined", () => {
+    const collect = (...args) => args.map((a) => String(a)).join("|");
+
+    expect(Reflect.apply(collect, undefined, [1, , 3])).toBe("1|undefined|3");
+    expect(Reflect.apply(collect, undefined, [, 2, 3])).toBe("undefined|2|3");
+    expect(Reflect.apply(collect, undefined, [1, 2, ,])).toBe("1|2|undefined");
+    expect(Reflect.apply(collect, undefined, [, , ,])).toBe(
+      "undefined|undefined|undefined",
+    );
+    expect(Reflect.apply(collect, undefined, [,])).toBe("undefined");
+    expect(
+      Reflect.apply((a, b, c) => b === undefined, undefined, [1, , 3]),
+    ).toBe(true);
+  });
+
+  // CreateListFromArrayLike step 6b reads each index with Get, so a hole is
+  // resolved through the prototype chain rather than replaced with undefined.
+  test("holes in argumentsList resolve through the array prototype chain", () => {
+    const collect = (...args) => args.map((a) => String(a)).join("|");
+
+    Object.defineProperty(Array.prototype, 1, {
+      get() {
+        return "inherited";
+      },
+      configurable: true,
+    });
+
+    try {
+      expect(Reflect.apply(collect, undefined, [1, , 3])).toBe("1|inherited|3");
+      expect(Reflect.apply(collect, undefined, [1, , 3, 4])).toBe(
+        "1|inherited|3|4",
+      );
+
+      class Box {
+        constructor(...args) {
+          this.tag = args.map((a) => String(a)).join("|");
+        }
+      }
+
+      expect(Reflect.construct(Box, [1, , 3]).tag).toBe("1|inherited|3");
+    } finally {
+      delete Array.prototype[1];
+    }
+  });
+
   test("works with array-like object with string length", () => {
     const fn = (a) => a;
     const arrayLike = { 0: "hello", length: "1" };
