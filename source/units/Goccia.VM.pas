@@ -5055,9 +5055,21 @@ var
   I: Integer;
   Upvalue: TGocciaBytecodeUpvalue;
 begin
+  // Marking the function value below closes a reference cycle back to this
+  // generator (a generator reachable from its own function's upvalues), so the
+  // walk has to be idempotent the way TGocciaBytecodeFunctionValue's is.
+  if GCMarked then Exit;
   inherited;
   if Assigned(FClosure) then
   begin
+    // FClosure is a clone whose FunctionValue still borrows the function object
+    // that owns the original closure. A suspended generator — including the
+    // continuation OP_AWAIT builds for a plain async function — resumes through
+    // ExecuteClosureRegisters, which reads FunctionValue for the execution realm
+    // and global this. Without this edge a collection taken while the generator
+    // is the only thing holding the function object frees it under the frame.
+    if Assigned(FClosure.FunctionValue) then
+      FClosure.FunctionValue.MarkReferences;
     if Assigned(FClosure.HomeObject) then
       FClosure.HomeObject.MarkReferences;
     if Assigned(FClosure.HomeClass) then
