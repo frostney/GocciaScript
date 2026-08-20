@@ -18,6 +18,11 @@ function FindAllFiles(const ADirectory: string; const AFileExtensions: array of 
 function FindAllFilesExcludingDirectories(const ADirectory: string;
   const AFileExtensions: array of string;
   const AExcludedDirectoryNames: array of string): TStringList;
+{ True when APath is rooted rather than interpreted against a working
+  directory: a leading path separator, a drive letter, or a UNC prefix.
+  (Several units still carry private copies of this predating the shared one;
+  they are unchanged here rather than refactored in passing.) }
+function IsAbsoluteHostPath(const APath: string): Boolean;
 function ExpandHostFileName(const APath: string): string;
 function HostDirectoryExists(const APath: string): Boolean;
 function HostFileExists(const APath: string): Boolean;
@@ -39,6 +44,17 @@ implementation
 
 uses
   TextEncoding;
+
+function IsAbsoluteHostPath(const APath: string): Boolean;
+begin
+  if Length(APath) = 0 then
+    Exit(False);
+  if (APath[1] = '/') or (APath[1] = '\') then
+    Exit(True);
+  if (Length(APath) >= 2) and (APath[2] = ':') then
+    Exit(True);
+  Result := Copy(APath, 1, 2) = '\\';
+end;
 
 function ExpandHostFileName(const APath: string): string;
 begin

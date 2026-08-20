@@ -26,10 +26,17 @@ procedure ConfigureModuleResolver(const AResolver: TGocciaModuleResolver;
   APresent is whether the option was given at all — the flag alone arrives as
   a present option with an empty value, so presence and value carry different
   information. The default profile never calls this, which is what keeps bare
-  specifiers sealed unless a host opts in. }
+  specifiers sealed unless a host opts in.
+
+  ABaseDirectory anchors a relative ceiling. It is the invocation directory for
+  a command-line flag and the configuration file's own directory for a config
+  key, matching how relative `--alias` targets are anchored: a ceiling written
+  in a config file has to mean the same directory wherever the command is run
+  from, or a relative allow-node-modules value would point somewhere different
+  for every caller. }
 procedure ConfigureNodeModulesResolution(
   const AResolver: TGocciaModuleResolver; const APresent: Boolean;
-  const ASetting: string);
+  const ASetting: string; const ABaseDirectory: string = '');
 
 implementation
 
@@ -109,9 +116,18 @@ begin
   end;
 end;
 
+function AnchorCeilingDirectory(const ASetting,
+  ABaseDirectory: string): string;
+begin
+  if (ABaseDirectory = '') or IsAbsoluteHostPath(ASetting) then
+    Exit(ASetting);
+  Result := IncludeTrailingPathDelimiter(ExpandHostFileName(ABaseDirectory)) +
+    ASetting;
+end;
+
 procedure ConfigureNodeModulesResolution(
   const AResolver: TGocciaModuleResolver; const APresent: Boolean;
-  const ASetting: string);
+  const ASetting: string; const ABaseDirectory: string);
 begin
   if (not Assigned(AResolver)) or (not APresent) then
     Exit;
@@ -120,7 +136,8 @@ begin
   if (ASetting = '') or (ASetting = NODE_MODULES_SETTING_ENABLED) then
     AResolver.AllowNodeModules
   else
-    AResolver.AllowNodeModules(ASetting);
+    AResolver.AllowNodeModules(AnchorCeilingDirectory(ASetting,
+      ABaseDirectory));
 end;
 
 end.

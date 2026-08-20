@@ -60,7 +60,12 @@ type
   TGocciaExportsOutcome = (
     eoNoExportsField,
     eoResolved,
-    eoNotExported
+    eoNotExported,
+    { The map matched, but the specifier or the target it selected is one Node
+      rejects outright: a `.`/`..`/`node_modules` segment, or a target that
+      does not start with "./". Kept apart from eoNotExported because this is a
+      malformed or hostile request rather than an author's deliberate refusal. }
+    eoInvalidTarget
   );
 
   { The fields of a `package.json` this resolver reads. Everything else in the
@@ -116,6 +121,28 @@ function LoadPackageManifest(const APackageDirectory: string;
 function ResolvePackageSubpath(const AManifest: TGocciaPackageManifest;
   const ASubpath: string; out ATarget: string): Boolean;
 
+{ True when any segment of APath is `.`, `..`, or `node_modules`.
+
+  This is Node's `invalidSegmentRegEx`, `(^|/)(\.\.?|node_modules)(/|$)`, with
+  a backslash accepted as a separator too so a Windows-spelled specifier cannot
+  slip a segment past the check. Both an exports target and the star value
+  substituted into one are validated with it; a package that reaches outside
+  itself is malformed, and a specifier that tries to is hostile. }
+function HasInvalidPathSegment(const APath: string): Boolean;
+
+{ Whether an exports-map string target is one Node would accept: it must start
+  with "./" and carry no invalid segment after that prefix. Node raises
+  ERR_INVALID_PACKAGE_TARGET otherwise. }
+function IsValidExportsTarget(const ATarget: string): Boolean;
+
+{ True when APath is ADirectory itself or lives beneath it.
+
+  The final containment gate: segment validation rejects the specifiers and
+  targets that are invalid on their face, and this catches whatever a
+  combination of them still managed to normalize into. Both sides are expanded
+  first, so it compares real host paths rather than spellings. }
+function IsPathInsideDirectory(const APath, ADirectory: string): Boolean;
+
 { Heuristic CommonJS detection over module source text.
 
   True when the source carries CommonJS markers (`require(...)`,
@@ -127,9 +154,13 @@ function LooksLikeCommonJSSource(const ASource: string): Boolean;
 { Whether a resolved file inside a package must be refused as CommonJS.
 
   `.mjs`/`.mts` are always ES modules and `.cjs` is always CommonJS, both
-  regardless of content. Every other extension is decided by the source text,
-  not by the manifest's "type" field, because the "module" field routinely
-  points at ES module `.js` sources inside a package that declares no type. }
+  regardless of content. The manifest's "type" field is then consulted
+  asymmetrically: `"type": "module"` is trusted and ends the check, while
+  `"type": "commonjs"` (or its absence) is not, and the source text decides.
+  The asymmetry is what makes the "module"-field fallback usable — those ES
+  module builds routinely sit in packages that declare no type or declare
+  commonjs for their `main` — and trusting a positive ESM declaration keeps the
+  heuristic away from files whose author already answered the question. }
 function IsCommonJSModuleFile(const AManifest: TGocciaPackageManifest;
   const AResolvedPath: string): Boolean;
 
@@ -457,6 +488,53 @@ begin
     [rfReplaceAll]);
 end;
 
+function HasInvalidPathSegment(const APath: string): Boolean;
+var
+  Segment: string;
+  SegmentStart, I, PathLength: Integer;
+
+  function SegmentIsInvalid(const ASegment: string): Boolean;
+  begin
+    Result := (ASegment = '.') or (ASegment = '..') or
+      (LowerCase(ASegment) = NODE_MODULES_DIRECTORY_NAME);
+  end;
+
+begin
+  PathLength := Length(APath);
+  SegmentStart := 1;
+  for I := 1 to PathLength do
+    if APath[I] in [SPECIFIER_SEGMENT_SEPARATOR, '\'] then
+    begin
+      Segment := Copy(APath, SegmentStart, I - SegmentStart);
+      if SegmentIsInvalid(Segment) then
+        Exit(True);
+      SegmentStart := I + 1;
+    end;
+
+  Result := SegmentIsInvalid(Copy(APath, SegmentStart,
+    PathLength - SegmentStart + 1));
+end;
+
+function IsValidExportsTarget(const ATarget: string): Boolean;
+begin
+  if Copy(ATarget, 1, Length(RELATIVE_TARGET_PREFIX)) <>
+     RELATIVE_TARGET_PREFIX then
+    Exit(False);
+  Result := not HasInvalidPathSegment(
+    Copy(ATarget, Length(RELATIVE_TARGET_PREFIX) + 1, MaxInt));
+end;
+
+function IsPathInsideDirectory(const APath, ADirectory: string): Boolean;
+var
+  Directory, Path: string;
+begin
+  if (APath = '') or (ADirectory = '') then
+    Exit(False);
+  Path := ExpandHostFileName(APath);
+  Directory := IncludeTrailingPathDelimiter(ExpandHostFileName(ADirectory));
+  Result := Copy(Path, 1, Length(Directory)) = Directory;
+end;
+
 { Walks a condition value — a string, a nested condition object, or an array of
   fallbacks — and returns the first target the supported conditions select. }
 function ResolveConditionalTarget(const ANodes: TGocciaExportsNodes;
@@ -473,6 +551,11 @@ begin
   case ANodes[AIndex].Kind of
     enString:
       begin
+        { Validate the authored target before substitution, so a target that
+          reaches outside the package is rejected on its own terms rather than
+          being judged by whatever the star value happened to make of it. }
+        if not IsValidExportsTarget(ANodes[AIndex].Text) then
+          Exit(False);
         ATarget := SubstituteWildcard(ANodes[AIndex].Text, AStarValue);
         Result := ATarget <> '';
       end;
@@ -600,6 +683,12 @@ begin
 
   if BestIndex < 0 then
     Exit(eoNotExported);
+  { The star value comes from the importing specifier, so it is the one part of
+    a pattern resolution an attacker controls. Node raises
+    ERR_INVALID_MODULE_SPECIFIER for it rather than falling through to another
+    pattern, and so does this: the request is refused, not re-matched. }
+  if HasInvalidPathSegment(BestStarValue) then
+    Exit(eoInvalidTarget);
   if ResolveConditionalTarget(ExportsNodes, BestIndex, BestStarValue,
     ATarget) then
     Exit(eoResolved);
@@ -611,11 +700,17 @@ function ResolvePackageSubpath(const AManifest: TGocciaPackageManifest;
 begin
   case AManifest.ResolveExportsSubpath(ASubpath, ATarget) of
     eoResolved: Exit(True);
-    eoNotExported: Exit(False);
+    eoNotExported, eoInvalidTarget: Exit(False);
   end;
 
   if ASubpath <> PACKAGE_MAIN_EXPORT_KEY then
   begin
+    { The legacy path takes the subpath literally, which is exactly how a
+      specifier like `pkg/../../evil.js` walked out of the package before this
+      check existed. `..` in an import subpath is never legitimate. }
+    if HasInvalidPathSegment(Copy(ASubpath,
+      Length(RELATIVE_TARGET_PREFIX) + 1, MaxInt)) then
+      Exit(False);
     ATarget := ASubpath;
     Exit(True);
   end;

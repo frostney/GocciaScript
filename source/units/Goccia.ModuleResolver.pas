@@ -400,8 +400,20 @@ begin
     IncludeTrailingPathDelimiter(PackageDirectory) +
     StringReplace(Target, SPECIFIER_SEGMENT_SEPARATOR, PathDelim,
       [rfReplaceAll]));
+  { Containment is checked before the extension probe as well as after it, so a
+    target that escaped the package is refused without the resolver stat-ing
+    paths outside it. The segment validation in Goccia.Modules.NodeResolution
+    rejects the specifiers and targets that are invalid on their face; this
+    catches whatever any combination of them still normalized into, and is what
+    makes the --allow-node-modules ceiling a real boundary (ADR 0111). }
+  if not IsPathInsideDirectory(TargetCandidate, PackageDirectory) then
+    raise EModuleNotFound.CreateNotFound(AModulePath, TargetCandidate);
+
   if not TryResolveWithExtensions(TargetCandidate, AResolvedPath) then
     raise EModuleNotFound.CreateNotFound(AModulePath, TargetCandidate);
+
+  if not IsPathInsideDirectory(AResolvedPath, PackageDirectory) then
+    raise EModuleNotFound.CreateNotFound(AModulePath, AResolvedPath);
 
   if IsCommonJSModuleFile(Manifest, AResolvedPath) then
     raise EModuleIsCommonJS.CreateCommonJS(PackageName,

@@ -84,7 +84,7 @@ type
       precedence order. Without it the resolver stays sealed against bare
       specifiers. }
     procedure ApplyNodeModulesResolution(const AEngine: TGocciaEngine;
-      const AFileConfig: TConfigEntryArray);
+      const AFileConfig: TConfigEntryArray; const AFileConfigPath: string);
     function ShouldApplyRootConfig(const APaths: TStringList;
       const AConfigPath: string; const AExplicitConfig: Boolean): Boolean; virtual;
     procedure HandleConsoleLog(const AMethod, ALine: string);
@@ -765,25 +765,52 @@ begin
 end;
 
 procedure TGocciaCLIApplication.ApplyNodeModulesResolution(
-  const AEngine: TGocciaEngine; const AFileConfig: TConfigEntryArray);
+  const AEngine: TGocciaEngine; const AFileConfig: TConfigEntryArray;
+  const AFileConfigPath: string);
 var
+  BaseDirectory, Setting: string;
   Option: TOptionalStringOption;
-  Setting: string;
 begin
   if not Assigned(FEngineOptions) then
     Exit;
 
+  { A relative ceiling is anchored to whichever source supplied it: the
+    invocation directory for the flag, and the configuration file's own
+    directory for a config key — the same rule relative --alias targets
+    follow. Without it, a relative ceiling written in a config file would name
+    a different directory for every working directory the command runs from. }
   Option := FEngineOptions.AllowNodeModules;
   if Option.FromCommandLine then
-    Setting := Option.Value
-  else if not FindConfigEntry(AFileConfig, Option.LongName, Setting) then
+  begin
+    Setting := Option.Value;
+    BaseDirectory := GetCurrentDir;
+  end
+  else if FindConfigEntry(AFileConfig, Option.LongName, Setting) then
+    BaseDirectory := ExtractFilePath(AFileConfigPath)
+  else
   begin
     if not Option.Present then
       Exit;
     Setting := Option.Value;
+    if FRootConfigPath <> '' then
+      BaseDirectory := ExtractFilePath(FRootConfigPath)
+    else
+      BaseDirectory := GetCurrentDir;
   end;
 
-  ConfigureNodeModulesResolution(AEngine.Resolver, True, Setting);
+  if BaseDirectory = '' then
+    BaseDirectory := GetCurrentDir;
+
+  ConfigureNodeModulesResolution(AEngine.Resolver, True, Setting,
+    BaseDirectory);
+
+  { The grant is a host decision, not a script action, so it is emitted once at
+    configuration time. The subject is the effective ceiling — empty when the
+    walk is unbounded, which is the part an auditor most needs to see. }
+  if AEngine.Resolver.NodeModulesEnabled then
+    AEngine.EmitCapabilityAudit(gckNodeModulesResolution, gcdAllow,
+      AEngine.Resolver.NodeModulesCeiling,
+      'bare specifiers resolve against node_modules');
 end;
 
 procedure TGocciaCLIApplication.ConfigureCapabilityAudit(
@@ -1175,7 +1202,7 @@ begin
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values,
         AliasBaseDirectory);
-      ApplyNodeModulesResolution(Result, FileConfig);
+      ApplyNodeModulesResolution(Result, FileConfig, FileConfigPath);
       if ResolveFlagOption(FEngineOptions.Deterministic, FileConfig) then
         Result.HostEnvironment.UseDeterministicProfile;
     end;

@@ -68,8 +68,17 @@ directory tree the script never named, so a host has to ask for it.
 The optional value is a **ceiling**, not a starting point. The walk still
 begins at the importing file's directory, so a package that ships its own
 nested `node_modules` still resolves; the ceiling only stops the walk from
-climbing past the directory named. That is what makes the option safe to point
-at a project root: nothing outside it can satisfy an import.
+climbing past the directory named. Together with the package-boundary rules
+below — which keep a resolved file inside the package it was found in — that is
+what makes the option safe to point at a project root: nothing outside it can
+satisfy an import.
+
+A relative ceiling is anchored to whatever supplied it: the invocation
+directory for the command-line flag, and the configuration file's own directory
+for a config key, the same rule relative `--alias` targets follow. The ceiling
+is compared against expanded host paths, so give it the path the engine will
+see; a spelling that reaches the same directory through a symlink does not
+match, and the resolver fails closed rather than widening the boundary.
 
 The value is also how a config file distinguishes the two forms. `true` (or a
 bare `--allow-node-modules`) means an unbounded walk, `false` means the option
@@ -101,8 +110,34 @@ Given a bare specifier and the importing file:
    extension probe every other specifier uses, so `"exports": {"./x/*":
    "./src/*.ts"}` reaches a real `.ts` source and a target with no extension
    still finds one.
-6. **Refuse CommonJS.** A resolved file that is CommonJS raises a named error
+6. **Refuse anything outside the package.** See below.
+7. **Refuse CommonJS.** A resolved file that is CommonJS raises a named error
    rather than reaching the parser.
+
+### The package boundary
+
+A resolved file must live inside the package directory it was found in. Three
+checks enforce it, and a failure of any is an ordinary `Module not found:
+"<specifier>"` refusal:
+
+- **Segment validation.** A subpath, a pattern's star value, or an `exports`
+  target whose segments include `.`, `..`, or `node_modules` is rejected —
+  Node's `invalidSegmentRegEx`. This is what stops
+  `import "pkg/../../secrets.js"` on the legacy path and
+  `import "pkg/sub/../../../secrets"` through a `"./sub/*"` pattern, where the
+  star value is the half of the substitution the importer controls.
+- **Target shape.** Every `exports` string target must start with `./`, as
+  Node requires; `"exports": "../../outside.js"` is a malformed package rather
+  than a way out of one.
+- **Containment.** The final expanded candidate is checked against the package
+  directory before the extension probe and again after it. Segment validation
+  rejects what is invalid on its face; this catches whatever any combination
+  still normalized into.
+
+The legacy no-`exports` path is stricter here than Node, which would let
+`new URL(subpath, packageURL)` walk upward. A subpath containing `..` is never
+a legitimate import, and the ceiling above is only a real boundary if the
+package boundary holds too.
 
 ### The `exports` map
 
@@ -178,8 +213,12 @@ The path in the message is **package-relative**. Per
 [ADR 0108](adr/0108-specifier-only-module-resolution-errors.md) no expanded
 host path may reach script-visible error text; the package-relative spelling
 names the file without disclosing where the package lives. Host reporters still
-print the absolute path on the trailing `Resolved to:` line, and an embedding
-host can catch the typed `EModuleIsCommonJS` exception for both.
+print the absolute path on the trailing `Resolved to:` line, because the module
+loader forwards the candidate path when it rewraps the failure. The typed
+`EModuleIsCommonJS` exception is only visible to a host calling
+`TModuleResolver.Resolve` directly: the loader rewraps every resolution failure
+into a flat `TGocciaModuleResolutionError`, so a host going through the loader
+distinguishes this case by its message, not by its class.
 
 The error is a module-resolution failure, so it is catchable from script
 through `import()` and it is never a `SyntaxError` — the CommonJS source is

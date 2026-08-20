@@ -44,6 +44,16 @@ is a subset of Node's ESM resolver.
   patterns ranked by Node's `PACKAGE_EXPORTS_RESOLVE` specificity; then the
   legacy entry fields. The `imports` map, self-reference, and `node:` builtins
   are out.
+- **A resolved file may not leave the package it was found in.** Node's
+  `PACKAGE_TARGET_RESOLVE` validation is enforced — no `.`, `..`, or
+  `node_modules` segment in a subpath, a pattern's star value, or an `exports`
+  target, and every `exports` string target must start with `./` — and the
+  final expanded candidate is checked for containment inside the package
+  directory as well. The ceiling above bounds which `node_modules` may be
+  consulted; without the package boundary it would bound nothing, because a
+  `..` in a specifier or a target would walk straight back out. On the legacy
+  no-`exports` path this is stricter than Node, which resolves the subpath as a
+  URL against the package and lets it climb.
 - **Only the `import` and `default` conditions are selected.** Node's default
   ESM condition set is `["node", "import"]`. `node` is dropped deliberately: a
   `node` branch leads to CommonJS or to Node built-ins, neither of which this
@@ -59,6 +69,10 @@ is a subset of Node's ESM resolver.
   ES module markers. A CommonJS file raises `EModuleIsCommonJS` — a subclass of
   the resolver's not-found exception, so it flows through the existing
   rewrapping path and stays catchable from `import()`.
+- **The grant is audited.** Applying the option emits one
+  `modules.node-modules` capability-audit event per engine, with the effective
+  ceiling as its subject and an empty subject when the walk is unbounded. It is
+  a configuration-time host decision, so individual resolutions emit nothing.
 - **The refusal message obeys ADR 0108.** It names the file
   *package-relatively* (`index.js`), never by expanded host path; the absolute
   path travels in `ResolvedCandidatePath` to host reporters only.
@@ -71,6 +85,12 @@ boundary: anything that can pass it can also pass `--alias`, so this grants no
 authority a host did not already have, but it does widen what a *single*
 grant reaches — every ancestor `node_modules` rather than one named file. The
 ceiling form exists for hosts that want the narrower grant.
+
+Every boundary failure surfaces as the same `Module not found: "<specifier>"`
+refusal rather than a distinct diagnostic. That is deliberate under ADR 0108 —
+a probing script learns nothing about the host from the message — but it does
+mean a package author who mis-writes an `exports` target sees the same text as
+someone importing a path that was never exported.
 
 The `module`-field preference means GocciaScript and Node resolve the same
 `exports`-less package to different files. That is a real divergence, not a

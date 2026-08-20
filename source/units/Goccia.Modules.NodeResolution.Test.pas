@@ -33,6 +33,16 @@ type
     procedure TestArrayTargetFallsBackToFirstUsable;
     procedure TestUnlistedSubpathIsNotExported;
 
+    procedure TestInvalidSegmentsAreDetected;
+    procedure TestValidSegmentsAreAccepted;
+    procedure TestExportsTargetMustBeRelative;
+    procedure TestExportsTargetMayNotEscapeThePackage;
+    procedure TestPatternStarValueMayNotEscapeThePackage;
+    procedure TestLegacySubpathMayNotEscapeThePackage;
+    procedure TestNodeModulesSegmentIsRejected;
+    procedure TestContainmentAcceptsPathsInsideTheDirectory;
+    procedure TestContainmentRejectsSiblingAndEscapedPaths;
+
     procedure TestModuleFieldIsPreferredOverMain;
     procedure TestMainIsUsedWhenNoModuleField;
     procedure TestIndexIsTheLastResort;
@@ -83,6 +93,22 @@ begin
   Test('Array target falls back to the first usable entry',
     TestArrayTargetFallsBackToFirstUsable);
   Test('Unlisted subpath is not exported', TestUnlistedSubpathIsNotExported);
+
+  Test('Invalid path segments are detected', TestInvalidSegmentsAreDetected);
+  Test('Ordinary path segments are accepted', TestValidSegmentsAreAccepted);
+  Test('An exports target must start with "./"',
+    TestExportsTargetMustBeRelative);
+  Test('An exports target may not escape the package',
+    TestExportsTargetMayNotEscapeThePackage);
+  Test('A pattern star value may not escape the package',
+    TestPatternStarValueMayNotEscapeThePackage);
+  Test('A legacy subpath may not escape the package',
+    TestLegacySubpathMayNotEscapeThePackage);
+  Test('A node_modules segment is rejected', TestNodeModulesSegmentIsRejected);
+  Test('Containment accepts paths inside the directory',
+    TestContainmentAcceptsPathsInsideTheDirectory);
+  Test('Containment rejects sibling and escaped paths',
+    TestContainmentRejectsSiblingAndEscapedPaths);
 
   Test('module field is preferred over main', TestModuleFieldIsPreferredOverMain);
   Test('main is used when there is no module field',
@@ -345,6 +371,156 @@ begin
 
   Expect<Boolean>(Manifest.ResolveExportsSubpath('./hidden',
     Target) = eoNotExported).ToBe(True);
+end;
+
+{ ── PACKAGE_TARGET_RESOLVE validation ──────────────────────── }
+
+procedure TNodeResolutionTests.TestInvalidSegmentsAreDetected;
+begin
+  Expect<Boolean>(HasInvalidPathSegment('..')).ToBe(True);
+  Expect<Boolean>(HasInvalidPathSegment('.')).ToBe(True);
+  Expect<Boolean>(HasInvalidPathSegment('../evil.js')).ToBe(True);
+  Expect<Boolean>(HasInvalidPathSegment('src/../../evil.js')).ToBe(True);
+  Expect<Boolean>(HasInvalidPathSegment('src/./evil.js')).ToBe(True);
+  Expect<Boolean>(HasInvalidPathSegment('node_modules/other')).ToBe(True);
+  Expect<Boolean>(HasInvalidPathSegment('src/node_modules')).ToBe(True);
+  { A backslash counts as a separator too, so a Windows spelling cannot slip a
+    segment past a check written for forward slashes. }
+  Expect<Boolean>(HasInvalidPathSegment('src\..\evil.js')).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestValidSegmentsAreAccepted;
+begin
+  Expect<Boolean>(HasInvalidPathSegment('')).ToBe(False);
+  Expect<Boolean>(HasInvalidPathSegment('index.js')).ToBe(False);
+  Expect<Boolean>(HasInvalidPathSegment('src/deep/index.js')).ToBe(False);
+  { Only a whole segment counts: these merely contain the forbidden text. }
+  Expect<Boolean>(HasInvalidPathSegment('..hidden/x.js')).ToBe(False);
+  Expect<Boolean>(HasInvalidPathSegment('my_node_modules/x.js')).ToBe(False);
+end;
+
+procedure TNodeResolutionTests.TestExportsTargetMustBeRelative;
+var
+  Manifest: TGocciaPackageManifest;
+  Target: string;
+begin
+  Expect<Boolean>(IsValidExportsTarget('./index.js')).ToBe(True);
+  Expect<Boolean>(IsValidExportsTarget('index.js')).ToBe(False);
+  Expect<Boolean>(IsValidExportsTarget('/abs/index.js')).ToBe(False);
+  Expect<Boolean>(IsValidExportsTarget('../outside.js')).ToBe(False);
+
+  Manifest := ParsePackageManifest('{"exports":"index.js"}');
+  Expect<Boolean>(Manifest.ResolveExportsSubpath(PACKAGE_MAIN_EXPORT_KEY,
+    Target) = eoNotExported).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestExportsTargetMayNotEscapeThePackage;
+var
+  Manifest: TGocciaPackageManifest;
+  Target: string;
+begin
+  { Reviewer repro 3: a package whose whole exports value points outside. }
+  Manifest := ParsePackageManifest('{"exports":"../../outside.js"}');
+
+  Expect<Boolean>(Manifest.ResolveExportsSubpath(PACKAGE_MAIN_EXPORT_KEY,
+    Target) = eoNotExported).ToBe(True);
+  Expect<Boolean>(ResolvePackageSubpath(Manifest, PACKAGE_MAIN_EXPORT_KEY,
+    Target)).ToBe(False);
+
+  { The same target reached through a condition object is refused too. }
+  Manifest := ParsePackageManifest(
+    '{"exports":{".":{"import":"./../../outside.js"}}}');
+  Expect<Boolean>(Manifest.ResolveExportsSubpath(PACKAGE_MAIN_EXPORT_KEY,
+    Target) = eoNotExported).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestPatternStarValueMayNotEscapeThePackage;
+var
+  Manifest: TGocciaPackageManifest;
+  Target: string;
+begin
+  { Reviewer repro 2: the star value is the attacker-controlled half of a
+    pattern resolution. It is refused rather than matched against a later
+    pattern, which is what Node's ERR_INVALID_MODULE_SPECIFIER does. }
+  Manifest := ParsePackageManifest('{"exports":{"./sub/*":"./src/*.ts"}}');
+
+  Expect<Boolean>(Manifest.ResolveExportsSubpath('./sub/widen',
+    Target) = eoResolved).ToBe(True);
+  Expect<string>(Target).ToBe('./src/widen.ts');
+
+  Expect<Boolean>(Manifest.ResolveExportsSubpath('./sub/../../../../evil',
+    Target) = eoInvalidTarget).ToBe(True);
+  Expect<Boolean>(ResolvePackageSubpath(Manifest, './sub/../../../../evil',
+    Target)).ToBe(False);
+end;
+
+procedure TNodeResolutionTests.TestLegacySubpathMayNotEscapeThePackage;
+var
+  Manifest: TGocciaPackageManifest;
+  Target: string;
+begin
+  { Reviewer repro 1: no exports map, so the subpath is taken literally — the
+    route that walked straight out of the package before this check. }
+  Manifest := ParsePackageManifest('{"main":"./lib/entry.js"}');
+
+  Expect<Boolean>(ResolvePackageSubpath(Manifest, './lib/util',
+    Target)).ToBe(True);
+  Expect<string>(Target).ToBe('./lib/util');
+
+  Expect<Boolean>(ResolvePackageSubpath(Manifest, './../../../evil.js',
+    Target)).ToBe(False);
+end;
+
+procedure TNodeResolutionTests.TestNodeModulesSegmentIsRejected;
+var
+  Manifest: TGocciaPackageManifest;
+  Target: string;
+begin
+  { Node rejects a node_modules segment for the same reason as `..`: it
+    reaches a different package's files through this package's name. }
+  Manifest := ParsePackageManifest('{"main":"./index.js"}');
+  Expect<Boolean>(ResolvePackageSubpath(Manifest, './node_modules/other',
+    Target)).ToBe(False);
+
+  Manifest := ParsePackageManifest('{"exports":{"./*":"./src/*.js"}}');
+  Expect<Boolean>(Manifest.ResolveExportsSubpath('./node_modules/other',
+    Target) = eoInvalidTarget).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestContainmentAcceptsPathsInsideTheDirectory;
+var
+  PackageDirectory: string;
+begin
+  PackageDirectory := IncludeTrailingPathDelimiter(GetCurrentDir) + 'pkg';
+
+  Expect<Boolean>(IsPathInsideDirectory(
+    PackageDirectory + PathDelim + 'index.js', PackageDirectory)).ToBe(True);
+  Expect<Boolean>(IsPathInsideDirectory(
+    PackageDirectory + PathDelim + 'src' + PathDelim + 'deep.js',
+    PackageDirectory)).ToBe(True);
+  { A `..` that normalizes back inside is still inside. }
+  Expect<Boolean>(IsPathInsideDirectory(
+    PackageDirectory + PathDelim + 'src' + PathDelim + '..' + PathDelim +
+    'index.js', PackageDirectory)).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestContainmentRejectsSiblingAndEscapedPaths;
+var
+  ParentDirectory, PackageDirectory: string;
+begin
+  ParentDirectory := IncludeTrailingPathDelimiter(GetCurrentDir);
+  PackageDirectory := ParentDirectory + 'pkg';
+
+  Expect<Boolean>(IsPathInsideDirectory(ParentDirectory + 'evil.js',
+    PackageDirectory)).ToBe(False);
+  Expect<Boolean>(IsPathInsideDirectory(
+    PackageDirectory + PathDelim + '..' + PathDelim + 'evil.js',
+    PackageDirectory)).ToBe(False);
+  { A sibling whose name merely starts with the package directory's name must
+    not pass a prefix comparison. }
+  Expect<Boolean>(IsPathInsideDirectory(ParentDirectory + 'pkg-evil' +
+    PathDelim + 'x.js', PackageDirectory)).ToBe(False);
+  Expect<Boolean>(IsPathInsideDirectory('', PackageDirectory)).ToBe(False);
 end;
 
 { ── Target selection ───────────────────────────────────────── }
