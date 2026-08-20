@@ -768,8 +768,9 @@ end;
 
   A user class extending Error inherits Error.prototype.name, so its own
   identity -- the one thing that says which of a suite's error types rejected
-  -- lives only on the constructor; prefer that name when the instance does not
-  carry a "name" of its own, and keep an explicitly assigned name when it does. }
+  -- lives only on the constructor; prefer that name while the resolved "name"
+  is still the default "Error", and keep any assigned name -- instance or
+  prototype -- when the author supplied one. }
 function DescribeRejectionReason(const AValue: TGocciaValue): string;
 var
   NameValue: TGocciaValue;
@@ -781,12 +782,15 @@ begin
     Exit;
 
   { Only the name DescribeThrowValue just read off the prototype chain is up
-    for replacement, and only while the instance carries no "name" of its own:
-    a name the author assigned is already their answer to this question. }
+    for replacement, and only while it is still the default "Error" that
+    Error.prototype supplies: any other name — assigned on the instance or on
+    a prototype — is already the author's answer to this question. }
   NameValue := TGocciaObjectValue(AValue).GetProperty(PROP_NAME);
   MessageValue := TGocciaObjectValue(AValue).GetProperty(PROP_MESSAGE);
   if not ((NameValue is TGocciaStringLiteralValue) and
           (MessageValue is TGocciaStringLiteralValue)) then
+    Exit;
+  if TGocciaStringLiteralValue(NameValue).Value <> 'Error' then
     Exit;
   if TGocciaObjectValue(AValue).HasOwnProperty(PROP_NAME) then
     Exit;
