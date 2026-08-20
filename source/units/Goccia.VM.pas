@@ -6519,6 +6519,11 @@ function TGocciaVMClassValue.TryConstructOnReceiver(
   out AResult: TGocciaValue): Boolean;
 var
   ConstructorThisValue: TGocciaValue;
+  PreviousConstructorSuperCalled: Boolean;
+  function HasDerivedConstructorReturnRestriction: Boolean;
+  begin
+    Result := Assigned(SuperClass) or Assigned(NativeSuperConstructor);
+  end;
 begin
   Result := True;
 
@@ -6531,13 +6536,31 @@ begin
     Exit;
   end;
 
+  // A derived class initializes its fields when its own super() returns, not
+  // before its constructor runs; doing both would evaluate every initializer
+  // twice and stamp the private brand twice, which the second stamp reports as
+  // a repeated super() call.
+  if not HasDerivedConstructorReturnRestriction then
+    FVM.RunClassInitializers(Self, AReceiver);
   FVM.FPendingNewTarget := ANewTarget;
-  FVM.RunClassInitializers(Self, AReceiver);
-  AResult := FVM.InvokeFunctionValue(FConstructorValue, AArguments, AReceiver);
+  if not Assigned(FVM.FPendingNewTarget) then
+    FVM.FPendingNewTarget := Self;
+
+  // The super()-called flag belongs to the constructor being entered. Leaving
+  // it set on the way out makes the next constructor to run believe it has
+  // already called super().
+  PreviousConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
+  FVM.FCurrentConstructorSuperCalled := False;
+  try
+    AResult := FVM.InvokeFunctionValue(FConstructorValue, AArguments,
+      AReceiver);
+  finally
+    FVM.FCurrentConstructorSuperCalled := PreviousConstructorSuperCalled;
+  end;
 
   // ES2026 §10.2.2 step 13.b: a derived constructor may only return an Object
   // or undefined.
-  if (Assigned(SuperClass) or Assigned(NativeSuperConstructor)) and
+  if HasDerivedConstructorReturnRestriction and
      Assigned(AResult) and
      not (AResult is TGocciaObjectValue) and
      not (AResult is TGocciaUndefinedLiteralValue) then
@@ -6552,8 +6575,12 @@ begin
      (ConstructorThisValue is TGocciaObjectValue) then
     AResult := ConstructorThisValue;
   if (AResult is TGocciaObjectValue) and (AResult <> AReceiver) and
-     (AResult = ConstructorThisValue) then
-    FVM.RunClassInitializers(Self, AResult);
+     (AResult = ConstructorThisValue) and
+     not HasBytecodePrivateInitializersApplied(AResult, Self) then
+  begin
+    FVM.RunClassInitializers(Self, AResult, False);
+    StampBytecodePrivateInitializersApplied(AResult, Self);
+  end;
 end;
 
 // ES2026 §10.2.2 [[Construct]](argumentsList, newTarget)

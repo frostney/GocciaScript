@@ -20,6 +20,30 @@ export class Tagged extends Point {
   }
 }
 
+let derivedTicks = 0;
+
+export function derivedTickCount() {
+  return derivedTicks;
+}
+
+// A derived module class that calls super() and owns both a side-effecting
+// instance field and a private field, so a repeated initializer run is
+// observable as a doubled tick or a twice-stamped private brand.
+export class Counted extends Point {
+  seq = ++derivedTicks;
+
+  #brand = PREFIX + "counted";
+
+  constructor(x) {
+    super(x, x + 1);
+    this.owner = "counted";
+  }
+
+  brand() {
+    return this.#brand;
+  }
+}
+
 export function fnDeclConstruct() {
   return new Point(1, 2);
 }
@@ -65,6 +89,25 @@ export function fnDeclLocalImplicitSubclassConstruct() {
   class Local extends Point {}
 
   return new Local(15, 16);
+}
+
+export function fnDeclLocalSubclassOfDerivedConstruct() {
+  class Local extends Counted {
+    stamp = "local";
+
+    #localBrand = PREFIX + "local";
+
+    constructor() {
+      super(20);
+      this.local = true;
+    }
+
+    localBrand() {
+      return this.#localBrand;
+    }
+  }
+
+  return new Local();
 }
 
 export function fnDeclClosureRead() {

@@ -28,6 +28,32 @@ export class Tagged extends Point {
   }
 }
 
+// A *derived* module class — it calls super(), and it owns both an instance
+// field with an observable side effect and a private field. Extending this one
+// rather than the base Point is what exercises the ordering rule that a derived
+// class initializes its fields when its own super() returns: running them a
+// second time would advance the tick twice and stamp the private brand twice.
+let derivedTicks = 0;
+
+export function derivedTickCount() {
+  return derivedTicks;
+}
+
+export class Counted extends Point {
+  seq = ++derivedTicks;
+
+  #brand = PREFIX + "counted";
+
+  constructor(x) {
+    super(x, x + 1);
+    this.owner = "counted";
+  }
+
+  brand() {
+    return this.#brand;
+  }
+}
+
 export function fnDeclConstruct() {
   return new Point(1, 2);
 }
@@ -81,6 +107,27 @@ export function fnDeclLocalImplicitSubclassConstruct() {
   class Local extends Point {}
 
   return new Local(15, 16);
+}
+
+// Called more than once on purpose: the constructor being entered owns the
+// super()-called flag, so a leak only shows on the second call.
+export function fnDeclLocalSubclassOfDerivedConstruct() {
+  class Local extends Counted {
+    stamp = "local";
+
+    #localBrand = PREFIX + "local";
+
+    constructor() {
+      super(20);
+      this.local = true;
+    }
+
+    localBrand() {
+      return this.#localBrand;
+    }
+  }
+
+  return new Local();
 }
 
 export const arrowConstruct = () => new Point(1, 2);
