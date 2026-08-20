@@ -11410,6 +11410,96 @@ begin
   Result := Instance;
 end;
 
+// Reports whether constructing this class ends up allocating a built-in
+// receiver: a native intrinsic prototype or a linked native super constructor
+// anywhere up the superclass chain.
+function ClassChainReachesNativeConstruction(
+  const AClassValue: TGocciaClassValue): Boolean;
+var
+  WalkClass: TGocciaClassValue;
+begin
+  WalkClass := AClassValue;
+  while Assigned(WalkClass) do
+  begin
+    if Assigned(WalkClass.NativeInstanceDefaultPrototype) or
+       Assigned(WalkClass.NativeSuperConstructor) then
+      Exit(True);
+    WalkClass := WalkClass.SuperClass;
+  end;
+  Result := False;
+end;
+
+// ES2026 §7.3.14 Construct(F, argumentsList, newTarget) for a class the
+// tree-walk evaluator built. Reflect.construct (§28.1.2), the proxy
+// [[Construct]] fallback (§10.5.13), construction through a bound wrapper
+// (§10.4.1.2), and species construction all funnel through the shared
+// ConstructValue, which cannot reach the AST field tables that §7.3.33
+// InitializeInstanceElements needs — it has no evaluation context to run them
+// in. Left alone they land on TGocciaClassValue.Instantiate, which runs the
+// constructor body and nothing else, so every field, private field, and
+// method initializer is dropped. Redirect them into the same InstantiateClass
+// the `new` operator uses, which initializes instance elements at the §10.2.2
+// step 5b (base) and §13.3.7.1 step 11 (derived) points.
+//
+// DefinitionScope selects exactly the evaluator-built classes: §15.7.14
+// ClassDefinitionEvaluation records the class environment there, and nothing
+// else does — built-in class values and bytecode class values carry none, so
+// they keep their own [[Construct]]. UsesOwnInstantiation is the same guard
+// the `new` operator applies, so both entry points agree on which classes
+// InstantiateClass may drive.
+//
+// A chain that reaches a built-in constructor stays on Instantiate, which is
+// what TGocciaVM.ConstructValue already does for the same shapes. Only
+// Instantiate implements the §10.1.13 GetPrototypeFromConstructor ordering
+// those constructors need — ArrayBuffer, SharedArrayBuffer and DataView
+// validate their arguments before newTarget.prototype may be observed — and
+// only Instantiate builds the native receiver exactly once for a derived class
+// whose constructor calls super() explicitly. Such a class's own fields are
+// still skipped here; that gap belongs to the native construction path, which
+// drops them for `new` as well, and not to this redirect.
+function RedirectEvaluatorClassConstruct(const ATarget: TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue;
+  out AResult: TGocciaValue): Boolean;
+var
+  ClassValue: TGocciaClassValue;
+  DefinitionScope: TGocciaScope;
+  EvalContext: TGocciaEvaluationContext;
+begin
+  Result := False;
+  AResult := nil;
+
+  if not (ATarget is TGocciaClassValue) then
+    Exit;
+
+  ClassValue := TGocciaClassValue(ATarget);
+  if ClassValue.UsesOwnInstantiation then
+    Exit;
+  if ClassChainReachesNativeConstruction(ClassValue) then
+    Exit;
+
+  DefinitionScope := ClassValue.DefinitionScope;
+  if not Assigned(DefinitionScope) then
+    Exit;
+
+  { The class environment is the only context this construction can be
+    anchored to — the caller is a native function with none of its own — and
+    it is the one §15.7.10 ClassFieldDefinitionEvaluation step 2b names as the
+    initializers' [[Environment]] anyway. }
+  EvalContext := Default(TGocciaEvaluationContext);
+  EvalContext.Realm := ClassValue.CreationRealm;
+  EvalContext.Scope := DefinitionScope;
+  EvalContext.OnError := DefinitionScope.OnError;
+  EvalContext.CoverageEnabled := (TGocciaCoverageTracker.Instance <> nil) and
+    TGocciaCoverageTracker.Instance.Enabled;
+  EvalContext.StrictTypes := DefinitionScope.EffectiveStrictTypes;
+  EvalContext.NonStrictMode := DefinitionScope.EffectiveNonStrictMode;
+  EvalContext.CompatibilityNonStrictMode := EvalContext.NonStrictMode;
+
+  AResult := InstantiateClass(ClassValue, AArguments, EvalContext, ANewTarget);
+  Result := True;
+end;
+
 // Template literals without real interpolations are returned as static strings.
 // The parser pre-segments templates with interpolations into
 // TGocciaTemplateWithInterpolationExpression, so this function only handles
@@ -13052,5 +13142,8 @@ begin
     end;
   end;
 end;
+
+initialization
+  RegisterClassConstructRedirectHook(RedirectEvaluatorClassConstruct);
 
 end.
