@@ -1010,8 +1010,12 @@ var
     Intrinsic: TGocciaValue;
   begin
     Intrinsic := GetProperty(AName);
-    if Intrinsic is TGocciaNativeFunctionValue then
-      TGocciaNativeFunctionValue(Intrinsic).IntrinsicKind := AKind;
+    // A miss here would silently disengage every fast path keyed on the
+    // kind — the slow path stays correct, so no test could notice.
+    Assert(Intrinsic is TGocciaNativeFunctionValue,
+      'Function.prototype.' + AName + ' must be a native function to carry ' +
+      'its intrinsic kind');
+    TGocciaNativeFunctionValue(Intrinsic).IntrinsicKind := AKind;
   end;
 
 begin
