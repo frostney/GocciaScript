@@ -106,4 +106,68 @@ describe("Function.prototype.apply", () => {
     expect(String.apply(null, [42])).toBe("42");
     expect(Boolean.apply(null, [1])).toBe(true);
   });
+
+  test("forwards argument arrays of every length", () => {
+    const collect = ({
+      m(...args) {
+        return `${this.tag}:${args.join(",")}`;
+      },
+    }).m;
+    const receiver = { tag: "r" };
+
+    expect(collect.apply(receiver, [])).toBe("r:");
+    expect(collect.apply(receiver, [1])).toBe("r:1");
+    expect(collect.apply(receiver, [1, 2])).toBe("r:1,2");
+    expect(collect.apply(receiver, [1, 2, 3])).toBe("r:1,2,3");
+    expect(collect.apply(receiver, [1, 2, 3, 4])).toBe("r:1,2,3,4");
+  });
+
+  test("an own apply property is invoked instead of the intrinsic", () => {
+    const host = () => "host";
+    host.apply = (thisArg, list) => `own apply(${thisArg},[${list.join(",")}])`;
+
+    expect(host.apply("t", [1, 2])).toBe("own apply(t,[1,2])");
+    expect(host()).toBe("host");
+    expect(Function.prototype.apply.call(host, undefined, [])).toBe("host");
+  });
+
+  test("a different built-in installed as apply keeps its own semantics", () => {
+    const inner = ({
+      m() {
+        return `inner(thisIsArray=${Array.isArray(this)})`;
+      },
+    }).m;
+    const host = () => "host";
+    host.apply = Reflect.apply;
+
+    // Reflect.apply(target, thisArgument, argumentsList) ignores the receiver
+    // entirely, and reads its argument list from the third position rather than
+    // the second — where Function.prototype.apply would have read it.
+    expect(host.apply(inner, [], [])).toBe("inner(thisIsArray=true)");
+    expect(host.apply.name).toBe("apply");
+    expect(host.apply).not.toBe(Function.prototype.apply);
+  });
+
+  test("an apply inherited from the function's prototype chain is invoked", () => {
+    const behaviour = {
+      apply(tag, list) {
+        return `inherited apply(${tag},${list.length})`;
+      },
+    };
+    const host = () => "host";
+    Object.setPrototypeOf(host, behaviour);
+
+    expect(host.apply("t", [1, 2, 3])).toBe("inherited apply(t,3)");
+  });
+
+  test("a class static named apply is the class's own method", () => {
+    class Registry {
+      static apply(name, list) {
+        return `Registry.apply(${name})[${list.join(",")}]`;
+      }
+    }
+
+    expect(Registry.apply("a", [1, 2])).toBe("Registry.apply(a)[1,2]");
+    expect(Registry.apply).not.toBe(Function.prototype.apply);
+  });
 });

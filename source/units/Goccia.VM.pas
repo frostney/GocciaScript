@@ -13630,6 +13630,7 @@ var
   KeyIndex: Integer;
   ArgsArray: TGocciaArrayValue;
   CallArgs: TGocciaArgumentsCollection;
+  CalleeIntrinsicKind: TGocciaNativeIntrinsicKind;
   I: Integer;
   GlobalName: string;
   GlobalBindingValue: TGocciaValue;
@@ -16211,12 +16212,13 @@ begin
              (FRegisters[A].Kind = grkObject) and
              (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) then
           begin
-            GlobalName := TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).Name;
-            { Identity, not name: an own static named `bind` on a function
-              object is a different function, and matching on the name alone
-              silently redirected the call into Function.prototype.bind. }
-            if (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue)
-                 .IntrinsicKind = nikFunctionBind) and
+            { Identity, not name: an own `bind`, `call` or `apply` on a function
+              object is a different function — `Reflect.apply` assigned as one,
+              or the two statics node:async_hooks installs — and matching on the
+              name alone silently redirected the call into the intrinsic. }
+            CalleeIntrinsicKind :=
+              TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).IntrinsicKind;
+            if (CalleeIntrinsicKind = nikFunctionBind) and
                (FRegisters[A - 1].ObjectValue is TGocciaFunctionBase) then
             begin
               case B of
@@ -16251,7 +16253,7 @@ begin
                  (not BytecodeFunction.FClosure.Template.IsAsync) and
                  (not BytecodeFunction.FClosure.Template.IsGenerator) then
               begin
-                if GlobalName = 'call' then
+                if CalleeIntrinsicKind = nikFunctionCall then
                 begin
                   if B = 0 then
                     CallThisRegister := RegisterUndefined
@@ -16304,7 +16306,7 @@ begin
                   end;
                   Continue;
                 end
-                else if (GlobalName = 'apply') and (B >= 2) and
+                else if (CalleeIntrinsicKind = nikFunctionApply) and (B >= 2) and
                         (FRegisters[A + 2].Kind = grkObject) and
                         (FRegisters[A + 2].ObjectValue is TGocciaArrayValue) then
                 begin

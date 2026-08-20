@@ -999,9 +999,21 @@ end;
 
 constructor TGocciaFunctionSharedPrototype.Create;
 var
-  BindIntrinsic: TGocciaValue;
   Members: array[0..4] of TGocciaMemberDefinition;
   Thrower: TGocciaNativeFunctionValue;
+
+  // Stamp the identity the bytecode VM's call fast paths match on, so they
+  // recognise the intrinsic itself rather than any callable sharing its name.
+  procedure MarkIntrinsic(const AName: string;
+    const AKind: TGocciaNativeIntrinsicKind);
+  var
+    Intrinsic: TGocciaValue;
+  begin
+    Intrinsic := GetProperty(AName);
+    if Intrinsic is TGocciaNativeFunctionValue then
+      TGocciaNativeFunctionValue(Intrinsic).IntrinsicKind := AKind;
+  end;
+
 begin
   inherited Create;
 
@@ -1033,10 +1045,9 @@ begin
       1,
       []);
     RegisterMemberDefinitions(Self, Members);
-    BindIntrinsic := GetProperty('bind');
-    if BindIntrinsic is TGocciaNativeFunctionValue then
-      TGocciaNativeFunctionValue(BindIntrinsic).IntrinsicKind :=
-        nikFunctionBind;
+    MarkIntrinsic('call', nikFunctionCall);
+    MarkIntrinsic('apply', nikFunctionApply);
+    MarkIntrinsic('bind', nikFunctionBind);
   except
     if (CurrentRealm <> nil) and (CurrentRealm.GetSlot(GFunctionPrototypeSlot) = Self) then
       CurrentRealm.SetSlot(GFunctionPrototypeSlot, nil);

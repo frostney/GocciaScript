@@ -178,6 +178,15 @@ const CLASSIFICATION: Record<string, Classification> = {
   // and a `run` after one leaks. All of that is covered against Node's
   // behaviour in tests/built-ins/AsyncHooks, where bun is not the oracle.
   "o-asynccontext.test.js": { kind: "language", bun: "gate", vitest: "skip" },
+  // Members named `call`, `apply` and `bind` that are not the
+  // `Function.prototype` intrinsics — the shape a name-matching call fast path
+  // confuses: both a user-defined `bind` and `Reflect.apply` installed as a
+  // function's own `apply` were hijacked into the intrinsic in bytecode mode
+  // only, until the fast paths matched on intrinsic identity instead of on the
+  // callee name. Bun gates: this is property lookup and call semantics,
+  // and the testing API is incidental. Vitest is skipped for the same reason as
+  // the other language suites.
+  "p-callintrinsics.test.js": { kind: "language", bun: "gate", vitest: "skip" },
 };
 
 type Verdict = {
