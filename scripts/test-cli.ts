@@ -3174,9 +3174,10 @@ console.log("--log option...");
 // -- Assertion failure text (TestRunner) ---------------------------------------
 
 // A failed assertion is recorded rather than thrown, so its message cannot be
-// observed from inside a test. These two properties are load-bearing enough to
-// pin from the outside: toBeInstanceOf naming what it compared, and the vitest
-// shim keeping a named, actionable error for every member it does not provide.
+// observed from inside a test. These properties are load-bearing enough to pin
+// from the outside: toBeInstanceOf naming what it compared, a rejected returned
+// Promise naming the error it rejected with, and the vitest shim keeping a
+// named, actionable error for every member it does not provide.
 console.log("Assertion failure text...");
 {
   const tmp = mkdtemp("goccia-assertion-text-");
@@ -3210,6 +3211,47 @@ console.log("Assertion failure text...");
     ]) {
       if (!instanceOfOut.includes(expected))
         throw new Error(`toBeInstanceOf should report ${expected}, got: ${instanceOfOut}`);
+    }
+
+    // The reason a returned Promise rejected with is the whole failure report,
+    // and an Error keeps "name" on its prototype and "message" non-enumerable,
+    // so serializing the value reported `new Error("boom")` as "{}" — the one
+    // shape a debugging session most needs named. A class extending Error
+    // inherits Error.prototype.name, so its identity is read off the
+    // constructor, while an explicitly assigned name still wins.
+    const rejectionSrc = join(tmp, "rejection.test.js");
+    writeFileSync(
+      rejectionSrc,
+      [
+        "class MyErr extends Error {}",
+        "class NamedErr extends Error {",
+        "  constructor(message) { super(message); this.name = 'ValidationFailure'; }",
+        "}",
+        'test("plain error", () => Promise.reject(new Error("boom")));',
+        'test("subclass error", () => Promise.reject(new MyErr("boom")));',
+        'test("named subclass error", () => Promise.reject(new NamedErr("boom")));',
+        'test("native error", () => Promise.reject(new TypeError("bad")));',
+        'test("plain object", () => Promise.reject({ code: 42 }));',
+        'test("message only", () => Promise.reject({ message: "hi" }));',
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const rejection = await $`${TESTRUNNER} ${rejectionSrc} ${mode} --no-progress 2>&1`.nothrow();
+      const rejectionOut = rejection.text();
+      for (const expected of [
+        "Returned Promise rejected: Error: boom",
+        "Returned Promise rejected: MyErr: boom",
+        "Returned Promise rejected: ValidationFailure: boom",
+        "Returned Promise rejected: TypeError: bad",
+        "Returned Promise rejected: { code: 42 }",
+        "Returned Promise rejected: { message: 'hi' }",
+      ]) {
+        if (!rejectionOut.includes(expected))
+          throw new Error(
+            `TestRunner (${mode}) should report "${expected}", got: ${rejectionOut}`,
+          );
+      }
     }
 
     // Every member the shim does not implement must keep throwing by name. The

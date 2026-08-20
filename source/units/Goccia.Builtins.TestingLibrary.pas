@@ -759,6 +759,48 @@ begin
   Result := FormatForDisplay(AValue);
 end;
 
+{ How the reason of a rejected returned Promise is reported. The reason is the
+  only evidence the failure line carries, and an Error keeps "name" on its
+  prototype and "message" non-enumerable, so serializing the value rendered
+  `new Error('boom')` as an empty object and named neither the error nor what
+  went wrong. The prototype-chain read DescribeThrowValue already uses for
+  assertion output recovers both.
+
+  A user class extending Error inherits Error.prototype.name, so its own
+  identity -- the one thing that says which of a suite's error types rejected
+  -- lives only on the constructor; prefer that name when the instance does not
+  carry a "name" of its own, and keep an explicitly assigned name when it does. }
+function DescribeRejectionReason(const AValue: TGocciaValue): string;
+var
+  NameValue: TGocciaValue;
+  MessageValue: TGocciaValue;
+  ConstructorValue: TGocciaValue;
+begin
+  Result := DescribeThrowValue(AValue);
+  if not (AValue is TGocciaObjectValue) then
+    Exit;
+
+  { Only the name DescribeThrowValue just read off the prototype chain is up
+    for replacement, and only while the instance carries no "name" of its own:
+    a name the author assigned is already their answer to this question. }
+  NameValue := TGocciaObjectValue(AValue).GetProperty(PROP_NAME);
+  MessageValue := TGocciaObjectValue(AValue).GetProperty(PROP_MESSAGE);
+  if not ((NameValue is TGocciaStringLiteralValue) and
+          (MessageValue is TGocciaStringLiteralValue)) then
+    Exit;
+  if TGocciaObjectValue(AValue).HasOwnProperty(PROP_NAME) then
+    Exit;
+
+  { Only a declared class narrows the name: a built-in error's constructor
+    already agrees with its "name", and a plain object's is Object, which would
+    report every object-literal reason as "Object". }
+  ConstructorValue := TGocciaObjectValue(AValue).GetProperty(PROP_CONSTRUCTOR);
+  if (ConstructorValue is TGocciaClassValue) and
+     (TGocciaClassValue(ConstructorValue).Name <> '') then
+    Result := TGocciaClassValue(ConstructorValue).Name + ': ' +
+      TGocciaStringLiteralValue(MessageValue).Value;
+end;
+
 { The name a value's own "name" property reports, or '' when it has none. }
 function OwnNamePropertyOf(const AValue: TGocciaValue): string;
 var
@@ -4169,7 +4211,7 @@ begin
                   WaitForFetchPromise(TGocciaPromiseValue(TestResult));
                   if TGocciaPromiseValue(TestResult).State = gpsRejected then
                   begin
-                    RejectionReason := FormatForDisplay(
+                    RejectionReason := DescribeRejectionReason(
                       TGocciaPromiseValue(TestResult).PromiseResult);
                     AssertionFailed('async test', 'Returned Promise rejected: ' +
                       RejectionReason);
