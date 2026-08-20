@@ -2878,6 +2878,11 @@ var
 begin
   if not Assigned(AClosure) then
     Exit;
+  // The closure borrows its owning function value (see the suspended-
+  // continuation mark walk); a live or displaced frame must keep it
+  // reachable the same way a parked one does.
+  if Assigned(AClosure.FunctionValue) then
+    AClosure.FunctionValue.MarkReferences;
   if Assigned(AClosure.HomeObject) then
     AClosure.HomeObject.MarkReferences;
   if Assigned(AClosure.HomeClass) then
@@ -5559,6 +5564,10 @@ var
   I: Integer;
   Index: Integer;
 begin
+  // The continuation's function edge can cycle back through an upvalue to
+  // this wrapper; the guard keeps re-visits from re-walking the queue.
+  if GCMarked then
+    Exit;
   inherited;
   if Assigned(FInner) then
     FInner.MarkReferences;
