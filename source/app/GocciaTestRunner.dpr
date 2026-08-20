@@ -34,6 +34,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.JSON.Utils,
+  Goccia.Modules.NodeResolution,
   Goccia.Modules.Resolver,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
@@ -70,6 +71,14 @@ const
     hanging the process. Override with --timeout=N or disable with
     --timeout=0. }
   DEFAULT_TIMEOUT_MS = 30000;  // 30 seconds
+
+  { Directory names never descended into when a positional path is a directory.
+    A node_modules tree in a test folder is a module-resolution fixture that
+    the suites inside that folder import; treating its packages as test files
+    would execute third-party (or, here, deliberately CommonJS) source. }
+  TEST_DISCOVERY_EXCLUDED_DIRECTORIES: array[0..0] of string = (
+    NODE_MODULES_DIRECTORY_NAME
+  );
 
   { Sentinel the parallel worker returns as its pool error message when
     --exit-on-first-failure has to stop the queue. It carries no diagnostic
@@ -781,7 +790,11 @@ begin
         for I := 0 to APaths.Count - 1 do
         begin
           if DirectoryExists(APaths[I]) then
-            RawFiles.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
+            { A committed node_modules tree is a resolution fixture, not a
+              suite: its packages are ordinary .js files that would otherwise
+              be discovered and executed as test files. }
+            RawFiles.AddStrings(FindAllFilesExcludingDirectories(APaths[I],
+              ScriptExtensions, TEST_DISCOVERY_EXCLUDED_DIRECTORIES))
           else if FileExists(APaths[I]) then
             RawFiles.Add(APaths[I])
           else

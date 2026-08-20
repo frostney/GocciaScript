@@ -270,6 +270,12 @@ type
       AColumn: Integer);
 
     procedure AddAlias(const APattern, AReplacement: string);
+    { Grants bare-specifier resolution against node_modules. Off by default:
+      an embedded engine resolves only what its aliases and relative paths
+      name until a host asks for the ancestor walk. ACeilingDirectory bounds
+      that walk to itself and below; empty walks to the filesystem root.
+      See docs/module-resolution.md. }
+    procedure AllowNodeModules(const ACeilingDirectory: string = '');
     procedure SetAllowedFetchHosts(const AHosts: TStrings);
     procedure EmitCapabilityAudit(const AKind: TGocciaCapabilityKind;
       const ADecision: TGocciaCapabilityDecision;
@@ -1699,6 +1705,11 @@ end;
 procedure TGocciaEngine.AddAlias(const APattern, AReplacement: string);
 begin
   Resolver.AddAlias(APattern, AReplacement);
+end;
+
+procedure TGocciaEngine.AllowNodeModules(const ACeilingDirectory: string);
+begin
+  Resolver.AllowNodeModules(ACeilingDirectory);
 end;
 
 procedure TGocciaEngine.SetAllowedFetchHosts(const AHosts: TStrings);

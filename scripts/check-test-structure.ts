@@ -152,10 +152,17 @@ const toRepositoryPath = (path: string): string =>
 const escapeRegularExpression = (value: string): string =>
   value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+// A committed node_modules tree under tests/ is a module-resolution fixture
+// whose files are third-party-shaped package sources, not suites. The test
+// runner skips those directories for the same reason, so the layout rules here
+// must not be applied to them either.
+const EXCLUDED_DIRECTORY_NAMES = new Set(["node_modules"]);
+
 const walkJavaScript = (directory: string, output: string[]): void => {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
+      if (EXCLUDED_DIRECTORY_NAMES.has(entry.name)) continue;
       walkJavaScript(path, output);
     } else if (entry.name.endsWith(".js")) {
       output.push(path);

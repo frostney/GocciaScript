@@ -9,10 +9,27 @@ uses
 
   Goccia.Modules.Resolver;
 
+const
+  { Config-file spellings of the node_modules capability. `true`/`false` are
+    what a JSON boolean flattens to; any other value is read as the ceiling
+    directory for the ancestor walk. }
+  NODE_MODULES_SETTING_ENABLED = 'true';
+  NODE_MODULES_SETTING_DISABLED = 'false';
+
 procedure ConfigureModuleResolver(const AResolver: TGocciaModuleResolver;
   const AEntryFileName, AExplicitImportMapPath: string;
   const AInlineAliases: TStrings;
   const AInlineAliasBaseDirectory: string = '');
+
+{ Applies the --allow-node-modules capability to a resolver.
+
+  APresent is whether the option was given at all — the flag alone arrives as
+  a present option with an empty value, so presence and value carry different
+  information. The default profile never calls this, which is what keeps bare
+  specifiers sealed unless a host opts in. }
+procedure ConfigureNodeModulesResolution(
+  const AResolver: TGocciaModuleResolver; const APresent: Boolean;
+  const ASetting: string);
 
 implementation
 
@@ -90,6 +107,20 @@ begin
     AliasPair := ParseAliasPair(AInlineAliases[I]);
     AResolver.AddAlias(AliasPair.Key, AliasPair.ValueText);
   end;
+end;
+
+procedure ConfigureNodeModulesResolution(
+  const AResolver: TGocciaModuleResolver; const APresent: Boolean;
+  const ASetting: string);
+begin
+  if (not Assigned(AResolver)) or (not APresent) then
+    Exit;
+  if ASetting = NODE_MODULES_SETTING_DISABLED then
+    Exit;
+  if (ASetting = '') or (ASetting = NODE_MODULES_SETTING_ENABLED) then
+    AResolver.AllowNodeModules
+  else
+    AResolver.AllowNodeModules(ASetting);
 end;
 
 end.

@@ -388,6 +388,7 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | [Garbage Collector](docs/garbage-collector.md) | Mark-and-sweep GC: architecture, contributor rules, design rationale |
 | [Adding Built-in Types](docs/adding-built-in-types.md) | Step-by-step guide for adding new built-in types |
 | [Embedding the Engine](docs/embedding.md) | Embedding GocciaScript in FreePascal applications |
+| [Module Resolution](docs/module-resolution.md) | Resolution order, opt-in `node_modules` lookup, and the deviations from Node |
 | [Virtual Module Configuration](docs/virtual-modules.md) | CLI, config-file, and embedding reference for host-supplied modules |
 | [Host Environment](docs/host-environment.md) | Injecting JavaScript-visible clock, time-zone, and random providers |
 | [Capability Audit Events](docs/capability-audit.md) | Structured host capability decisions, embedding sink, and CLI JSONL output |

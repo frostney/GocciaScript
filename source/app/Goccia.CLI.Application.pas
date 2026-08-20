@@ -79,6 +79,12 @@ type
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); virtual;
     procedure ConfigureCapabilityAudit(const AEngine: TGocciaEngine);
+    { Grants the node_modules capability when --allow-node-modules was given on
+      the command line, in the per-file config, or in the root config, in that
+      precedence order. Without it the resolver stays sealed against bare
+      specifiers. }
+    procedure ApplyNodeModulesResolution(const AEngine: TGocciaEngine;
+      const AFileConfig: TConfigEntryArray);
     function ShouldApplyRootConfig(const APaths: TStringList;
       const AConfigPath: string; const AExplicitConfig: Boolean): Boolean; virtual;
     procedure HandleConsoleLog(const AMethod, ALine: string);
@@ -758,6 +764,28 @@ procedure TGocciaCLIApplication.ConfigureCreatedEngine(
 begin
 end;
 
+procedure TGocciaCLIApplication.ApplyNodeModulesResolution(
+  const AEngine: TGocciaEngine; const AFileConfig: TConfigEntryArray);
+var
+  Option: TOptionalStringOption;
+  Setting: string;
+begin
+  if not Assigned(FEngineOptions) then
+    Exit;
+
+  Option := FEngineOptions.AllowNodeModules;
+  if Option.FromCommandLine then
+    Setting := Option.Value
+  else if not FindConfigEntry(AFileConfig, Option.LongName, Setting) then
+  begin
+    if not Option.Present then
+      Exit;
+    Setting := Option.Value;
+  end;
+
+  ConfigureNodeModulesResolution(AEngine.Resolver, True, Setting);
+end;
+
 procedure TGocciaCLIApplication.ConfigureCapabilityAudit(
   const AEngine: TGocciaEngine);
 begin
@@ -1147,6 +1175,7 @@ begin
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values,
         AliasBaseDirectory);
+      ApplyNodeModulesResolution(Result, FileConfig);
       if ResolveFlagOption(FEngineOptions.Deterministic, FileConfig) then
         Result.HostEnvironment.UseDeterministicProfile;
     end;
