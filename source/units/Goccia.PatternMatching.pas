@@ -66,7 +66,10 @@ end;
 destructor TGocciaMatchEnvironment.Destroy;
 begin
   FBindings.Free;
-  FScope.Free;
+  // FScope is GC-managed: closures and classes created while matching can
+  // capture it and outlive this environment, so the collector — not this
+  // destructor — decides when it dies.
+  FScope := nil;
   inherited;
 end;
 
