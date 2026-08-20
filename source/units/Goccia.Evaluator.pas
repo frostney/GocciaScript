@@ -24,12 +24,6 @@ uses
 
 type
   PGocciaValue = ^TGocciaValue;
-  TGocciaInstanceInitializationMode = (
-    iimFirstPass,
-    iimEagerReplacement,
-    iimReplay
-  );
-
 function Evaluate(const ANode: TGocciaASTNode; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateExpression(const AExpression: TGocciaExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateStatement(const AStatement: TGocciaStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -109,7 +103,7 @@ procedure StampRawPrivateInstanceBrand(const AReceiver: TGocciaObjectValue;
   const AAccessClass: TGocciaClassValue);
 
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
-procedure InitializePrivateInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext; const AInitializationMode: TGocciaInstanceInitializationMode = iimFirstPass);
+procedure InitializePrivateInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 function InstantiateClass(const AClassValue: TGocciaClassValue; const AArguments: TGocciaArgumentsCollection; const AContext: TGocciaEvaluationContext; const ANewTarget: TGocciaValue = nil): TGocciaValue;
 procedure ValidateClassConstructorReturn(const AClassValue: TGocciaClassValue; const AValue: TGocciaValue);
 
@@ -253,8 +247,7 @@ uses
 
 procedure RunClassInstanceInitializers(const AClassValue: TGocciaClassValue;
   const AInstance: TGocciaObjectValue;
-  const AContext: TGocciaEvaluationContext;
-  const AInitializationMode: TGocciaInstanceInitializationMode); forward;
+  const AContext: TGocciaEvaluationContext); forward;
 function DisposeTrackedResources(const ATracker: TGocciaDisposalTracker;
   const AExistingError: TGocciaValue): TGocciaValue; forward;
 function DisposeTrackedResourcesAsync(const ATracker: TGocciaDisposalTracker;
@@ -3691,9 +3684,7 @@ end;
 function ClassRequiresObjectConstructorReturn(
   const AClassValue: TGocciaClassValue): Boolean;
 begin
-  Result := Assigned(AClassValue) and
-    (Assigned(AClassValue.SuperClass) or
-     Assigned(AClassValue.NativeSuperConstructor));
+  Result := Assigned(AClassValue) and AClassValue.HasDerivedConstructorKind;
 end;
 
 procedure ValidateClassConstructorReturn(
@@ -3705,6 +3696,24 @@ begin
     ThrowTypeError(
       'Derived constructor returned non-object',
       SSuggestNotConstructorType);
+end;
+
+{ ES2026 §10.2.2 [[Construct]] step 5b: a ~base~ constructor initializes its
+  instance elements between binding `this` and evaluating its body. A ~derived~
+  constructor does not — §13.3.7.1 SuperCall step 11 initializes them when its
+  own super() returns. So invoking a superclass constructor body directly must
+  pre-initialize only when that superclass is a base class; doing it
+  unconditionally is what put a subclass's fields ahead of its base's
+  constructor assignments. }
+procedure RunBaseSuperclassInitializers(const AClassValue: TGocciaClassValue;
+  const AReceiver: TGocciaValue; const AContext: TGocciaEvaluationContext);
+begin
+  if ClassRequiresObjectConstructorReturn(AClassValue) then
+    Exit;
+  if not (AReceiver is TGocciaObjectValue) then
+    Exit;
+  RunClassInstanceInitializers(AClassValue, TGocciaObjectValue(AReceiver),
+    AContext);
 end;
 
 function InvokeConstructableWithReceiver(const AConstructor: TGocciaValue;
@@ -3762,11 +3771,11 @@ var
       ValidateClassConstructorReturn(ClassConstructor, Result);
       if Result is TGocciaObjectValue then
         RunClassInstanceInitializers(ClassConstructor,
-          TGocciaObjectValue(Result), AContext, iimFirstPass)
+          TGocciaObjectValue(Result), AContext)
       else if AReceiver is TGocciaObjectValue then
       begin
         RunClassInstanceInitializers(ClassConstructor,
-          TGocciaObjectValue(AReceiver), AContext, iimFirstPass);
+          TGocciaObjectValue(AReceiver), AContext);
         Result := AReceiver;
       end;
     finally
@@ -3823,20 +3832,19 @@ begin
       ValidateClassConstructorReturn(ClassConstructor, SuperResult)
     else if Assigned(ClassConstructor.ConstructorMethod) then
     begin
-      if AReceiver is TGocciaObjectValue then
-        RunClassInstanceInitializers(ClassConstructor,
-          TGocciaObjectValue(AReceiver), AContext, iimFirstPass);
+      RunBaseSuperclassInitializers(ClassConstructor, AReceiver, AContext);
       SuperResult := ClassConstructor.ConstructorMethod.CallWithThisValue(
         AArguments, AReceiver, ConstructorThisValue, EffectiveNewTarget);
       ValidateClassConstructorReturn(ClassConstructor, SuperResult);
       if not (SuperResult is TGocciaObjectValue) and
          (ConstructorThisValue is TGocciaObjectValue) then
         SuperResult := ConstructorThisValue;
+      { A derived constructor whose super() replaced `this` already ran its own
+        initializers against the replacement, inside that super() call. }
       if (SuperResult is TGocciaObjectValue) and
          (SuperResult <> AReceiver) and
          (SuperResult = ConstructorThisValue) then
-        RunClassInstanceInitializers(ClassConstructor,
-          TGocciaObjectValue(SuperResult), AContext, iimFirstPass);
+        RunBaseSuperclassInitializers(ClassConstructor, SuperResult, AContext);
     end
     else
       SuperResult := InvokeImplicitClassConstructor;
@@ -4101,17 +4109,22 @@ var
       Sequence.Expressions[0]);
     Result := True;
   end;
-  procedure InitializeReplacementThis(const AReplacement: TGocciaObjectValue;
-    const APreviousThis: TGocciaValue);
+  { ES2026 §13.3.7.1 SuperCall steps 7-11: once the super construction has
+    produced the receiver and it has been bound as `this`, the constructor's
+    own class initializes its instance elements against it. This is the point
+    at which a derived class's fields land — after everything the base
+    constructor assigned, and before the rest of the derived body. }
+  procedure InitializeOwnInstanceElementsAfterSuper(
+    const AFinalThis: TGocciaValue);
   begin
-    if (not Assigned(AReplacement)) or (AReplacement = APreviousThis) then
+    if not (AFinalThis is TGocciaObjectValue) then
       Exit;
     CurrentCtorClassValue := AContext.Scope.FindOwningClass;
     if not (CurrentCtorClassValue is TGocciaClassValue) then
       Exit;
     CurrentCtorClass := TGocciaClassValue(CurrentCtorClassValue);
-    RunClassInstanceInitializers(CurrentCtorClass, AReplacement, AContext,
-      iimEagerReplacement);
+    RunClassInstanceInitializers(CurrentCtorClass,
+      TGocciaObjectValue(AFinalThis), AContext);
   end;
   procedure MarkSuperConstructorCalled;
   var
@@ -4182,8 +4195,6 @@ begin
       begin
         if SuperResult is TGocciaObjectValue then
         begin
-          InitializeReplacementThis(TGocciaObjectValue(SuperResult),
-            AContext.Scope.ThisValue);
           AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
           ThisScope := AContext.Scope.FindFunctionOrModuleScope;
           if Assigned(ThisScope) then
@@ -4193,13 +4204,13 @@ begin
       end
       else if Assigned(SuperClass) and Assigned(SuperClass.ConstructorMethod) then
       begin
+        RunBaseSuperclassInitializers(SuperClass, AContext.Scope.ThisValue,
+          AContext);
         SuperResult := SuperClass.ConstructorMethod.CallWithThisValue(
           Arguments, AContext.Scope.ThisValue, ConstructorThisValue,
           AContext.Scope.FindNewTarget);
         if SuperResult is TGocciaObjectValue then
         begin
-          InitializeReplacementThis(TGocciaObjectValue(SuperResult),
-            AContext.Scope.ThisValue);
           AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
           ThisScope := AContext.Scope.FindFunctionOrModuleScope;
           if Assigned(ThisScope) then
@@ -4215,8 +4226,6 @@ begin
             SSuggestNotConstructorType)
         else if ConstructorThisValue is TGocciaObjectValue then
         begin
-          InitializeReplacementThis(TGocciaObjectValue(ConstructorThisValue),
-            AContext.Scope.ThisValue);
           AContext.Scope.ThisValue := TGocciaObjectValue(ConstructorThisValue);
           ThisScope := AContext.Scope.FindFunctionOrModuleScope;
           if Assigned(ThisScope) then
@@ -4228,8 +4237,34 @@ begin
       end
       else if Assigned(SuperClass) then
       begin
-        if AContext.Scope.ThisValue is TGocciaInstanceValue then
-          TGocciaInstanceValue(AContext.Scope.ThisValue).InitializeNativeFromArguments(Arguments);
+        if (SuperClass.NativeInstanceDefaultPrototype = nil) and
+           (Assigned(SuperClass.SuperClass) or
+            Assigned(SuperClass.NativeSuperConstructor)) then
+        begin
+          // The superclass declares no constructor, so its implicit default
+          // constructor (§15.7.14 step 15a) still has to forward to the rest
+          // of the chain and then initialize its own instance elements.
+          // Skipping that dropped every ancestor constructor sitting below an
+          // intermediate class with no constructor of its own.
+          SuperResult := InvokeConstructableWithReceiver(SuperClass, Arguments,
+            AContext.Scope.ThisValue, AContext, AContext.Scope.FindNewTarget);
+          if (SuperResult is TGocciaObjectValue) and
+             (SuperResult <> AContext.Scope.ThisValue) then
+          begin
+            AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
+            ThisScope := AContext.Scope.FindFunctionOrModuleScope;
+            if Assigned(ThisScope) then
+              ThisScope.ThisValue := AContext.Scope.ThisValue;
+          end;
+        end
+        else
+        begin
+          if AContext.Scope.ThisValue is TGocciaInstanceValue then
+            TGocciaInstanceValue(AContext.Scope.ThisValue).InitializeNativeFromArguments(Arguments);
+          if AContext.Scope.ThisValue is TGocciaObjectValue then
+            RunClassInstanceInitializers(SuperClass,
+              TGocciaObjectValue(AContext.Scope.ThisValue), AContext);
+        end;
         Result := AContext.Scope.ThisValue;
       end
       else if SuperClassValue is TGocciaObjectValue then
@@ -4239,8 +4274,6 @@ begin
           AContext.Scope.FindNewTarget);
         if SuperResult is TGocciaObjectValue then
         begin
-          InitializeReplacementThis(TGocciaObjectValue(SuperResult),
-            AContext.Scope.ThisValue);
           AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
           ThisScope := AContext.Scope.FindFunctionOrModuleScope;
           if Assigned(ThisScope) then
@@ -4260,6 +4293,7 @@ begin
     end;
     MarkSuperConstructorCalled;
     AddValueRoot(Roots, Result);
+    InitializeOwnInstanceElementsAfterSuper(Result);
     CollectInterpreterMemoryPressure(Result);
     Roots.Clear;
     Exit;
@@ -7979,6 +8013,21 @@ begin
   Result := EnumValue;
 end;
 
+// ES2026 §15.7.10 ClassFieldDefinitionEvaluation step 2b: an instance field
+// initializer is a function whose [[Environment]] is the class environment
+// captured at ClassDefinitionEvaluation time, so its scope chain must hang off
+// that, never off the scope that happens to be running `new`. Classes built by
+// paths that do not record a definition scope (native classes, bytecode class
+// values reaching the tree-walk evaluator) fall back to the caller's scope.
+function ClassInitializerScopeParent(const AClassValue: TGocciaClassValue;
+  const AFallbackScope: TGocciaScope): TGocciaScope;
+begin
+  if Assigned(AClassValue) and Assigned(AClassValue.DefinitionScope) then
+    Result := AClassValue.DefinitionScope
+  else
+    Result := AFallbackScope;
+end;
+
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
@@ -7990,12 +8039,15 @@ var
   LocalScope: TGocciaScope;
 begin
   LocalContext := AContext;
-  LocalScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue);
+  LocalScope := TGocciaClassInitScope.Create(
+    ClassInitializerScopeParent(AClassValue, AContext.Scope), AClassValue);
   LocalScope.ThisValue := AInstance;
   LocalContext.Scope := LocalScope;
 
-  if Assigned(AClassValue.SuperClass) then
-    InitializeInstanceProperties(AInstance, AClassValue.SuperClass, LocalContext);
+  { ES2026 §7.3.33 InitializeInstanceElements only ever defines the fields of
+    the one class it is handed. A superclass initializes its own fields inside
+    its own [[Construct]] — §10.2.2 step 5b for a base class, §13.3.7.1
+    SuperCall step 11 for a derived one — so this must not walk the chain. }
 
   if AClassValue.HasPrivateInstanceElements then
     StampRawPrivateInstanceBrand(AInstance, AClassValue);
@@ -8057,10 +8109,9 @@ end;
 
 procedure InitializeRawPrivateInstanceProperty(
   const AReceiver: TGocciaObjectValue; const APrivateName: string;
-  const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue;
-  const AInitializationMode: TGocciaInstanceInitializationMode); forward;
+  const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue); forward;
 
-procedure InitializeObjectInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext; const AInitializationMode: TGocciaInstanceInitializationMode);
+procedure InitializeObjectInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
   Entry: TGocciaExpressionMap.TKeyValuePair;
@@ -8070,16 +8121,11 @@ var
   SuperInitContext: TGocciaEvaluationContext;
   SuperInitScope: TGocciaScope;
 begin
-  if (AInitializationMode <> iimEagerReplacement) and
-     Assigned(AClassValue.SuperClass) then
-  begin
-    SuperInitContext := AContext;
-    SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue.SuperClass);
-    SuperInitScope.ThisValue := AInstance;
-    SuperInitContext.Scope := SuperInitScope;
-    InitializeObjectInstanceProperties(AInstance, AClassValue.SuperClass,
-      SuperInitContext, AInitializationMode);
-  end;
+  { §7.3.33 InitializeInstanceElements defines this class's fields only — each
+    superclass initializes its own inside its own [[Construct]]. Walking the
+    chain here re-ran an ancestor's private field initializers on a receiver
+    that already had them, which is a "Cannot initialize private elements
+    twice" TypeError. }
 
   if AClassValue.HasPrivateInstanceElements then
     StampRawPrivateInstanceBrand(AInstance, AClassValue);
@@ -8116,7 +8162,7 @@ begin
           else
             PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
           InitializeRawPrivateInstanceProperty(AInstance, FOEntry.Name,
-            PropertyValue, AClassValue, AInitializationMode);
+            PropertyValue, AClassValue);
         end;
       end
       else
@@ -8136,8 +8182,7 @@ begin
       PropertyValue := EvaluateExpression(Entry.Value, AContext);
       AInstance.AssignProperty(Entry.Key, PropertyValue);
     end;
-    InitializePrivateInstanceProperties(AInstance, AClassValue, AContext,
-      AInitializationMode);
+    InitializePrivateInstanceProperties(AInstance, AClassValue, AContext);
   end;
 end;
 
@@ -9378,6 +9423,14 @@ begin
   ClassRoots.Initialize;
   try
   ClassValue := TGocciaClassValue.Create(ClassName, SuperClass);
+  { ES2026 §15.7.14 ClassDefinitionEvaluation steps 14-15 run the class
+    elements with the LexicalEnvironment set to _classEnv_, and §15.7.10
+    ClassFieldDefinitionEvaluation step 2b captures that environment as the
+    initializer function's [[Environment]]. AContext.Scope is that
+    environment here (EvaluateClass/EvaluateClassExpression create it for a
+    named class), so remember it: the initializers must see it later, no
+    matter which scope calls `new`. }
+  ClassValue.DefinitionScope := AContext.Scope;
   ClassRoots.Add(ClassValue);
   if not AContext.HideFunctionSourceText then
     ClassValue.SetSourceText(AClassDef.SourceText);
@@ -10253,11 +10306,6 @@ begin
   Result := '#slot:' + AAccessClass.PrivateBrandToken + ':' + APrivateName;
 end;
 
-function RawPrivateInitializedKey(const AAccessClass: TGocciaClassValue): string;
-begin
-  Result := '#initialized:' + AAccessClass.PrivateBrandToken;
-end;
-
 function TryGetRawObjectPrivateDescriptor(const AReceiver: TGocciaObjectValue;
   const AKey: string; out ADescriptor: TGocciaPropertyDescriptor): Boolean;
 begin
@@ -10282,35 +10330,6 @@ begin
     ExistingDescriptor.Free;
   AReceiver.Properties.Add(AKey,
     TGocciaPropertyDescriptorData.Create(AValue, AFlags));
-end;
-
-function HasRawPrivateInstanceInitializersApplied(
-  const AReceiver: TGocciaObjectValue;
-  const AAccessClass: TGocciaClassValue): Boolean;
-var
-  Descriptor: TGocciaPropertyDescriptor;
-begin
-  Result := False;
-  if not Assigned(AAccessClass) then
-    Exit;
-  TryGetRawObjectPrivateDescriptor(AReceiver,
-    RawPrivateInitializedKey(AAccessClass), Descriptor);
-  Result := Descriptor is TGocciaPropertyDescriptorData;
-end;
-
-procedure StampRawPrivateInstanceInitializersApplied(
-  const AReceiver: TGocciaObjectValue;
-  const AAccessClass: TGocciaClassValue);
-begin
-  if not Assigned(AAccessClass) then
-    Exit;
-  if not AAccessClass.HasInstanceInitializerWork then
-    Exit;
-  if HasRawPrivateInstanceInitializersApplied(AReceiver, AAccessClass) then
-    Exit;
-  DefineRawObjectPrivateDataProperty(AReceiver,
-    RawPrivateInitializedKey(AAccessClass),
-    TGocciaBooleanLiteralValue.TrueValue, []);
 end;
 
 function HasRawPrivateInstanceBrand(const AReceiver: TGocciaObjectValue;
@@ -10393,8 +10412,7 @@ end;
 
 procedure InitializeRawPrivateInstanceProperty(
   const AReceiver: TGocciaObjectValue; const APrivateName: string;
-  const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue;
-  const AInitializationMode: TGocciaInstanceInitializationMode);
+  const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue);
 var
   PrivateSlotKey: string;
   Descriptor: TGocciaPropertyDescriptor;
@@ -10405,21 +10423,10 @@ begin
   PrivateSlotKey := RawPrivateInstanceKey(AAccessClass, APrivateName);
   if TryGetRawObjectPrivateDescriptor(AReceiver, PrivateSlotKey,
      Descriptor) then
-  begin
-    if AInitializationMode = iimReplay then
-      Exit;
-    if (AInitializationMode = iimEagerReplacement) and
-       not HasRawPrivateInstanceInitializersApplied(AReceiver,
-         AAccessClass) then
-    begin
-      if not AReceiver.Extensible then
-        ThrowTypeError('Cannot add private elements to a non-extensible object',
-          SSuggestObjectNotExtensible);
-    end
-    else
-      ThrowTypeError('Cannot initialize private elements twice',
-        SSuggestPrivateFieldAccess);
-  end;
+    // ES2026 §7.3.28 PrivateFieldAdd step 2: a private field may only be
+    // added once per receiver.
+    ThrowTypeError('Cannot initialize private elements twice',
+      SSuggestPrivateFieldAccess);
   DefineRawObjectPrivateDataProperty(AReceiver, PrivateSlotKey, AValue,
     [pfWritable, pfConfigurable]);
 end;
@@ -11079,7 +11086,7 @@ begin
   end;
 end;
 
-procedure InitializePrivateInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext; const AInitializationMode: TGocciaInstanceInitializationMode);
+procedure InitializePrivateInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
   Entry: TGocciaExpressionMap.TKeyValuePair;
@@ -11095,32 +11102,29 @@ begin
         Entry.Key, PropertyValue, AClassValue, True)
     else
       InitializeRawPrivateInstanceProperty(
-        AInstance, Entry.Key, PropertyValue, AClassValue,
-        AInitializationMode);
+        AInstance, Entry.Key, PropertyValue, AClassValue);
   end;
 end;
 
 procedure RunClassInstanceInitializers(const AClassValue: TGocciaClassValue;
   const AInstance: TGocciaObjectValue;
-  const AContext: TGocciaEvaluationContext;
-  const AInitializationMode: TGocciaInstanceInitializationMode);
+  const AContext: TGocciaEvaluationContext);
 var
-  InitContext, SuperInitContext: TGocciaEvaluationContext;
-  InitScope, SuperInitScope: TGocciaScope;
-  WalkClass: TGocciaClassValue;
+  InitContext: TGocciaEvaluationContext;
+  InitScope: TGocciaScope;
   Roots: TGocciaActiveRootFrame;
 begin
   InitContext := AContext;
-  InitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue);
+  InitScope := TGocciaClassInitScope.Create(
+    ClassInitializerScopeParent(AClassValue, AContext.Scope), AClassValue);
   InitScope.ThisValue := AInstance;
   InitContext.Scope := InitScope;
 
-  { Field initializers are arbitrary guest code and they run against these
-    scopes, which bind `this` to the instance and are pointed at by nothing —
-    the same hazard ExecuteStaticBlock has. The instance and class join them:
+  { Field initializers are arbitrary guest code and they run against this
+    scope, which binds `this` to the instance and is pointed at by nothing —
+    the same hazard ExecuteStaticBlock has. The instance and class join it:
     the instance is still inside construction, so a `new` whose field
-    initializer collects has nothing else holding it. One frame covers the
-    per-superclass scopes too; the walk is bounded by the inheritance depth. }
+    initializer collects has nothing else holding it. }
   Roots.Initialize;
   try
   Roots.Add(InitScope);
@@ -11131,38 +11135,18 @@ begin
   begin
     InitializeInstanceProperties(TGocciaInstanceValue(AInstance), AClassValue, InitContext);
 
+    { A class whose fields never made it into the field-order table still has
+      its private fields to initialize; the superclasses do their own. }
     if AClassValue.FieldOrderCount = 0 then
-    begin
-      WalkClass := AClassValue.SuperClass;
-      while Assigned(WalkClass) do
-      begin
-        CheckExecutionTimeout;
-        IncrementInstructionCounter;
-        CheckInstructionLimit;
-        SuperInitContext := AContext;
-        SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, WalkClass);
-        SuperInitScope.ThisValue := AInstance;
-        SuperInitContext.Scope := SuperInitScope;
-        Roots.Add(SuperInitScope);
-        if WalkClass.FieldOrderCount = 0 then
-          InitializePrivateInstanceProperties(
-            AInstance, WalkClass, SuperInitContext, AInitializationMode);
-        WalkClass := WalkClass.SuperClass;
-      end;
-
-      InitializePrivateInstanceProperties(AInstance, AClassValue, InitContext,
-        AInitializationMode);
-    end;
+      InitializePrivateInstanceProperties(AInstance, AClassValue,
+        InitContext);
   end
   else
-    InitializeObjectInstanceProperties(AInstance, AClassValue, InitContext,
-      AInitializationMode);
+    InitializeObjectInstanceProperties(AInstance, AClassValue, InitContext);
 
   AClassValue.RunMethodInitializers(AInstance);
   AClassValue.RunFieldInitializers(AInstance);
   AClassValue.RunDecoratorFieldInitializers(AInstance);
-  if AInitializationMode = iimEagerReplacement then
-    StampRawPrivateInstanceInitializersApplied(AInstance, AClassValue);
   finally
     Roots.Clear;
   end;
@@ -11182,7 +11166,6 @@ var
   ConstructorThisValue: TGocciaValue;
   EffectiveNewTarget: TGocciaValue;
   InstancePrototype: TGocciaObjectValue;
-  InitializerReplayReceiver: TGocciaObjectValue;
   function ConstructNativeSuperInstance(
     const AConstructor: TGocciaObjectValue): TGocciaObjectValue;
   var
@@ -11248,18 +11231,13 @@ var
     begin
       ThisObject := TGocciaObjectValue(AConstructorThisValue);
       SetFinalInstance(ThisObject);
-      InitializerReplayReceiver := ThisObject;
     end;
 
     if AValue is TGocciaObjectValue then
     begin
       ReturnObject := TGocciaObjectValue(AValue);
       if ReturnObject <> Instance then
-      begin
         SetFinalInstance(ReturnObject);
-        if ReturnObject <> InitializerReplayReceiver then
-          InitializerReplayReceiver := nil;
-      end;
     end
     else if HasDerivedConstructorReturnRestriction and
             not IsUndefinedConstructedValue(AValue) then
@@ -11274,14 +11252,11 @@ var
       if TGocciaObjectValue(AValue) = Instance then
         Exit;
       SetFinalInstance(TGocciaObjectValue(AValue));
-      InitializerReplayReceiver := Instance;
     end;
   end;
-  procedure RunInstanceInitializers(
-    const AInitializationMode: TGocciaInstanceInitializationMode);
+  procedure RunInstanceInitializers;
   begin
-    RunClassInstanceInitializers(AClassValue, Instance, AContext,
-      AInitializationMode);
+    RunClassInstanceInitializers(AClassValue, Instance, AContext);
   end;
 begin
   CheckExecutionTimeout;
@@ -11342,10 +11317,15 @@ begin
   end;
 
   RootedInstance := Instance;
-  InitializerReplayReceiver := nil;
   TGarbageCollector.Instance.AddTempRoot(RootedInstance);
   try
-    RunInstanceInitializers(iimFirstPass);
+    // ES2026 §10.2.2 [[Construct]] step 5b: only a ~base~ constructor
+    // initializes its instance elements before the constructor body runs. A
+    // ~derived~ one initializes them when its super() returns (§13.3.7.1
+    // SuperCall step 11), which is what puts a subclass's own fields after
+    // everything its base constructor assigned.
+    if not HasDerivedConstructorReturnRestriction then
+      RunInstanceInitializers;
 
     if Assigned(AClassValue.ConstructorMethod) then
     begin
@@ -11376,6 +11356,7 @@ begin
       else if Assigned(ImplicitSuperClass) and
          Assigned(ImplicitSuperClass.ConstructorMethod) then
       begin
+        RunBaseSuperclassInitializers(ImplicitSuperClass, Instance, AContext);
         ConstructedValue := ImplicitSuperClass.ConstructorMethod.CallWithThisValue(
           AArguments, Instance, ConstructorThisValue, EffectiveNewTarget);
         ValidateClassConstructorReturn(ImplicitSuperClass, ConstructedValue);
@@ -11401,13 +11382,26 @@ begin
       begin
         TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
         TGocciaInstanceValue(NativeInstance).FinalizeNativeFromArguments(AArguments);
-      end;
+      end
+      else if Assigned(ImplicitSuperClass) then
+        // The superclass declares no constructor either, so its own implicit
+        // default constructor has to carry the chain further up before this
+        // class initializes its instance elements below.
+        ApplyReplacementResult(InvokeConstructableWithReceiver(
+          ImplicitSuperClass, AArguments, Instance, AContext,
+          EffectiveNewTarget));
+
+      // The implicit derived constructor (§15.7.14 step 15a) forwards to
+      // super and then initializes its instance elements — so they run once
+      // the super construction above has completed, against whatever receiver
+      // it left behind.
+      if HasDerivedConstructorReturnRestriction then
+        RunInstanceInitializers;
     end;
 
-    if Assigned(InitializerReplayReceiver) and
-       (Instance = InitializerReplayReceiver) and
-       not HasRawPrivateInstanceInitializersApplied(Instance, AClassValue) then
-      RunInstanceInitializers(iimReplay);
+    { No replay pass: the initializers now run once, on the receiver super()
+      settled on, so a constructor that replaces `this` never leaves them
+      applied to the wrong object for a later pass to redo. }
   finally
     TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
   end;

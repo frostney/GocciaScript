@@ -6257,17 +6257,22 @@ begin
      Assigned(TGocciaVMClassValue(SuperClass).FConstructorValue) then
   begin
     TGocciaVMClassValue(SuperClass).FVM.FPendingNewTarget := FNewTarget;
-    TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
-      SuperClass, AThisValue);
+    // ES2026 §10.2.2 [[Construct]] step 5b: only a ~base~ superclass
+    // initializes its instance elements ahead of its constructor body. A
+    // ~derived~ one does it when its own super() returns (§13.3.7.1 step 11,
+    // reached through InitializeCurrentCtorReceiver); running them here too
+    // put its fields before its base's constructor and evaluated them twice.
+    if not SuperClass.HasDerivedConstructorKind then
+      TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
+        SuperClass, AThisValue);
     SuperResult := TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
       TGocciaVMClassValue(SuperClass).FConstructorValue,
       AArguments, AThisValue);
     if SuperResult is TGocciaObjectValue then
       begin
-        if (SuperResult <> AThisValue) and
-           not HasBytecodePrivateInitializersApplied(SuperResult, SuperClass) then
-          TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
-            SuperClass, SuperResult);
+        // §10.2.2 step 12: an object the super constructor *returns* replaces
+        // the receiver but never inherits that constructor's instance
+        // elements — those were installed on the receiver it was called with.
         MarkCurrentConstructorSuperCalled;
         InitializeCurrentCtorReceiver(SuperResult);
         Exit(SuperResult);
@@ -6297,18 +6302,17 @@ begin
 
   if Assigned(SuperClass.ConstructorMethod) then
   begin
-    if SuperClass is TGocciaVMClassValue then
+    // §10.2.2 step 5b again: pre-initialize only for a ~base~ superclass.
+    if (SuperClass is TGocciaVMClassValue) and
+       not SuperClass.HasDerivedConstructorKind then
       TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
         SuperClass, AThisValue);
     SuperResult := SuperClass.ConstructorMethod.CallWithThisValue(
       AArguments, AThisValue, ConstructorThisValue, FNewTarget);
     if SuperResult is TGocciaObjectValue then
       begin
-        if (SuperResult <> AThisValue) and
-           (SuperClass is TGocciaVMClassValue) and
-           not HasBytecodePrivateInitializersApplied(SuperResult, SuperClass) then
-          TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
-            SuperClass, SuperResult);
+        // §10.2.2 step 12 again: the returned object does not receive the
+        // returning constructor's own instance elements.
         MarkCurrentConstructorSuperCalled;
         InitializeCurrentCtorReceiver(SuperResult);
         Exit(SuperResult);

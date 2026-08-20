@@ -28,6 +28,34 @@ export class Tagged extends Point {
   }
 }
 
+// ES2026 §15.7.10 ClassFieldDefinitionEvaluation step 2b: a field initializer
+// closes over the class's own definition environment. These two read PREFIX
+// from a *field* initializer rather than a constructor body, so constructing
+// them from the entry file — which has no PREFIX — is what shows the
+// initializer did not resolve against the scope that ran `new`.
+export class Labelled {
+  label = PREFIX + "labelled";
+
+  constructor(n) {
+    this.n = n;
+  }
+}
+
+export class StampedLabel extends Labelled {
+  stamp = PREFIX + "stamp";
+
+  #secret = PREFIX + "secret";
+
+  constructor(n) {
+    super(n);
+    this.tail = PREFIX + "tail";
+  }
+
+  secret() {
+    return this.#secret;
+  }
+}
+
 // A *derived* module class — it calls super(), and it owns both an instance
 // field with an observable side effect and a private field. Extending this one
 // rather than the base Point is what exercises the ordering rule that a derived

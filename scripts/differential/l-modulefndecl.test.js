@@ -9,7 +9,9 @@
 import {
   Counted,
   Factory,
+  Labelled,
   Point,
+  StampedLabel,
   Tagged,
   arrowClosureRead,
   arrowConstruct,
@@ -175,17 +177,18 @@ describe("construction from module function declarations", () => {
     for (const instance of [first, second]) {
       expect(instance instanceof Counted).toBe(true);
       expect(instance instanceof Point).toBe(true);
-      // Sorted: the three runtimes disagree on own-property *order* for a
-      // derived class's field initializers, which is a separate question from
-      // whether each field is initialized exactly once.
-      expect(Object.keys(instance).sort()).toEqual([
+      // Exact insertion order: each class's fields are initialized when its own
+      // super() returns (ES2026 §13.3.7.1 step 11), so Point's `label` comes
+      // first, then Point's constructor writes, then Counted's `seq`, then
+      // Counted's body, then Local's `stamp`, then Local's body.
+      expect(Object.keys(instance)).toEqual([
         "label",
-        "local",
-        "owner",
-        "seq",
-        "stamp",
         "x",
         "y",
+        "seq",
+        "owner",
+        "stamp",
+        "local",
       ]);
       expect(instance.label).toBe("point");
       expect(instance.x).toBe(20);
@@ -200,5 +203,33 @@ describe("construction from module function declarations", () => {
 
     expect(second.seq - first.seq).toBe(1);
     expect(derivedTickCount() - ticksBefore).toBe(2);
+  });
+
+  // The entry file has no PREFIX binding. A field initializer resolved against
+  // the scope that ran `new` would throw a ReferenceError here instead.
+  test("entry file: a module class's field initializers read module bindings", () => {
+    const labelled = new Labelled(7);
+    expect(Object.keys(labelled)).toEqual(["label", "n"]);
+    expect(labelled.label).toBe("id-labelled");
+    expect(labelled.n).toBe(7);
+  });
+
+  test("entry file: a derived module class keeps module scope and field order", () => {
+    const stamped = new StampedLabel(9);
+    expect(stamped instanceof Labelled).toBe(true);
+    expect(Object.keys(stamped)).toEqual(["label", "n", "stamp", "tail"]);
+    expect(stamped.label).toBe("id-labelled");
+    expect(stamped.stamp).toBe("id-stamp");
+    expect(stamped.tail).toBe("id-tail");
+    expect(stamped.secret()).toBe("id-secret");
+  });
+
+  test("entry file: constructing a derived module class initializes it once", () => {
+    const ticksBefore = derivedTickCount();
+    const counted = new Counted(30);
+
+    expect(Object.keys(counted)).toEqual(["label", "x", "y", "seq", "owner"]);
+    expect(counted.brand()).toBe("id-counted");
+    expect(derivedTickCount() - ticksBefore).toBe(1);
   });
 });
