@@ -3839,12 +3839,8 @@ begin
       if not (SuperResult is TGocciaObjectValue) and
          (ConstructorThisValue is TGocciaObjectValue) then
         SuperResult := ConstructorThisValue;
-      { A derived constructor whose super() replaced `this` already ran its own
-        initializers against the replacement, inside that super() call. }
-      if (SuperResult is TGocciaObjectValue) and
-         (SuperResult <> AReceiver) and
-         (SuperResult = ConstructorThisValue) then
-        RunBaseSuperclassInitializers(ClassConstructor, SuperResult, AContext);
+      { No initializer pass on a replaced `this`: only a derived constructor
+        can have one, and its own super() already ran them there. }
     end
     else
       SuperResult := InvokeImplicitClassConstructor;
@@ -4293,9 +4289,16 @@ begin
     end;
     MarkSuperConstructorCalled;
     AddValueRoot(Roots, Result);
-    InitializeOwnInstanceElementsAfterSuper(Result);
-    CollectInterpreterMemoryPressure(Result);
-    Roots.Clear;
+    { The field initializers below are guest code and can throw, and the
+      pressure check can raise a RangeError, so the root frame has to be
+      released from a finally — TGocciaActiveRootFrame.Clear is a count
+      rollback that must run on the exception path too. }
+    try
+      InitializeOwnInstanceElementsAfterSuper(Result);
+      CollectInterpreterMemoryPressure(Result);
+    finally
+      Roots.Clear;
+    end;
     Exit;
   end;
 
@@ -8118,8 +8121,6 @@ var
   I: Integer;
   FOEntry: TGocciaClassFieldOrderEntry;
   Expr: TGocciaExpression;
-  SuperInitContext: TGocciaEvaluationContext;
-  SuperInitScope: TGocciaScope;
 begin
   { §7.3.33 InitializeInstanceElements defines this class's fields only — each
     superclass initializes its own inside its own [[Construct]]. Walking the

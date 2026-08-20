@@ -9,7 +9,10 @@
 import {
   Counted,
   Factory,
+  ImplicitLeaf,
   Labelled,
+  OverriddenLeaf,
+  OverriddenMiddle,
   Point,
   StampedLabel,
   Tagged,
@@ -23,11 +26,14 @@ import {
   fnDeclConstruct,
   fnDeclDerivedConstruct,
   fnDeclFieldRead,
+  fnDeclImplicitLeafConstruct,
   fnDeclLocalImplicitSubclassConstruct,
   fnDeclLocalSubclassConstruct,
   fnDeclLocalSubclassOfDerivedConstruct,
   fnDeclNestedConstruct,
+  fnDeclOverriddenLeafConstruct,
   fnDeclSpreadConstruct,
+  implicitTickCount,
 } from "./mods/fndecl.js";
 
 const ENTRY_PREFIX = "entry-";
@@ -231,5 +237,38 @@ describe("construction from module function declarations", () => {
     expect(Object.keys(counted)).toEqual(["label", "x", "y", "seq", "owner"]);
     expect(counted.brand()).toBe("id-counted");
     expect(derivedTickCount() - ticksBefore).toBe(1);
+  });
+
+  // Classes with no constructor of their own take the implicit-default path
+  // (§15.7.14 step 15a), which is separate machinery from an explicit super().
+  // Every probe here is run from both sides of the import for that reason.
+  test("an override returned by a base constructor carries no fields from its own layer", () => {
+    for (const leaf of [fnDeclOverriddenLeafConstruct(), new OverriddenLeaf()]) {
+      // §10.2.2 step 12: Overriding's `a` went on the receiver it was called
+      // with, which the returned object replaced.
+      expect(Object.keys(leaf)).toEqual(["tag", "b", "c"]);
+      expect(leaf.tag).toBe("id-override");
+      expect(leaf.b).toBe("id-b");
+      expect(leaf.c).toBe("id-c");
+    }
+  });
+
+  test("an implicit layer below an explicit derived one initializes each layer once", () => {
+    for (const construct of [
+      fnDeclImplicitLeafConstruct,
+      () => new ImplicitLeaf(),
+    ]) {
+      const ticksBefore = implicitTickCount();
+      const leaf = construct();
+
+      expect(Object.keys(leaf)).toEqual(["x", "b", "c", "C", "d"]);
+      expect(implicitTickCount() - ticksBefore).toBe(3);
+      expect(leaf.c - leaf.b).toBe(1);
+      expect(leaf.d - leaf.c).toBe(1);
+    }
+  });
+
+  test("entry file: an all-implicit chain over a returning base still overrides", () => {
+    expect(Object.keys(new OverriddenMiddle())).toEqual(["tag", "b"]);
   });
 });

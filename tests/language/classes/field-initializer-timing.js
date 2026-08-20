@@ -243,6 +243,121 @@ describe("base and derived field initializer timing", () => {
   });
 });
 
+// A class with no constructor of its own takes the implicit-default-constructor
+// path (§15.7.14 step 15a), which is separate machinery from an explicit
+// super(). These shapes put implicit layers above, below, and between explicit
+// ones so neither path can drift from the other.
+describe("implicit constructors between explicit ones", () => {
+  test("an override returned by a base constructor carries no fields from the layer that returned it", () => {
+    class A {
+      a = 1;
+
+      constructor() {
+        return { tag: "override" };
+      }
+    }
+
+    class B extends A {
+      b = 2;
+    }
+
+    class C extends B {
+      c = 3;
+    }
+
+    // §10.2.2 step 12: A's `a` went on the receiver A was called with, which
+    // the returned object replaced. B and C then initialize onto the override.
+    expect(Object.keys(new C())).toEqual(["tag", "b", "c"]);
+  });
+
+  test("an override returned under a single implicit layer behaves the same", () => {
+    class A {
+      a = 1;
+
+      constructor() {
+        return { tag: "override" };
+      }
+    }
+
+    class B extends A {
+      b = 2;
+    }
+
+    expect(Object.keys(new B())).toEqual(["tag", "b"]);
+  });
+
+  test("an implicit layer below an explicit derived one initializes each layer once", () => {
+    const order = [];
+
+    class A {
+      constructor() {
+        this.x = 1;
+      }
+    }
+
+    class B extends A {
+      b = (order.push("B"), 1);
+    }
+
+    class C extends B {
+      c = (order.push("C"), 1);
+
+      constructor() {
+        super();
+        this.C = 1;
+      }
+    }
+
+    class D extends C {
+      d = (order.push("D"), 1);
+    }
+
+    expect(Object.keys(new D())).toEqual(["x", "b", "c", "C", "d"]);
+    expect(order).toEqual(["B", "C", "D"]);
+  });
+
+  test("private fields survive an implicit layer below an explicit derived one", () => {
+    class A {
+      constructor() {
+        this.x = 1;
+      }
+    }
+
+    class B extends A {
+      #b = "b";
+
+      readB() {
+        return this.#b;
+      }
+    }
+
+    class C extends B {
+      #c = "c";
+
+      constructor() {
+        super();
+        this.C = 1;
+      }
+
+      readC() {
+        return this.#c;
+      }
+    }
+
+    class D extends C {
+      #d = "d";
+
+      readD() {
+        return this.#d;
+      }
+    }
+
+    const d = new D();
+    expect(Object.keys(d)).toEqual(["x", "C"]);
+    expect([d.readB(), d.readC(), d.readD()]).toEqual(["b", "c", "d"]);
+  });
+});
+
 describe("field initializers close over the class definition environment", () => {
   const makeLabelled = () => {
     const PREFIX = "id-";

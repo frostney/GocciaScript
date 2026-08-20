@@ -153,11 +153,15 @@ type
       const AReceiver: TGocciaValue; const ANewTarget: TGocciaValue;
       out AResult: TGocciaValue): Boolean; virtual;
     function EstimatedInstancePropertyCapacity: Integer;
-    // ES2026 §15.7.14 ClassDefinitionEvaluation step 19: [[ConstructorKind]]
-    // is ~derived~ exactly when the class has a ClassHeritage. It decides when
-    // instance elements are initialized: a ~base~ constructor does it before
-    // its body (§10.2.2 step 5b), a ~derived~ one when super() returns
-    // (§13.3.7.1 step 11).
+    // Approximates ES2026 §15.7.14 ClassDefinitionEvaluation step 19's
+    // [[ConstructorKind]] = ~derived~, which decides when instance elements
+    // are initialized: a ~base~ constructor does it before its body (§10.2.2
+    // step 5b), a ~derived~ one when super() returns (§13.3.7.1 step 11).
+    // Reports True when a resolved superclass or a linked native super
+    // constructor is present. Known gap: `class A extends null {}` is
+    // ~derived~ per the spec but reports False here, because extends-null
+    // records no superclass. Tree-walk `extends null` is separately broken;
+    // do not lean on this predicate for it.
     function HasDerivedConstructorKind: Boolean;
     function HasInstanceInitializerWork: Boolean;
     // ECMAScript: number of expected constructor parameters before the first
