@@ -150,6 +150,105 @@ describe("Function.prototype.apply", () => {
     }
   });
 
+  test("reads inherited index getters in ascending index order", () => {
+    const collect = (...args) => args.map((a) => String(a)).join("|");
+    let order = "";
+    const define = (index) =>
+      Object.defineProperty(Array.prototype, index, {
+        get() {
+          order += String(index);
+          return `g${index}`;
+        },
+        configurable: true,
+      });
+
+    define(0);
+    define(1);
+    define(2);
+
+    try {
+      const run = (fn) => {
+        order = "";
+        return `${fn()} order=${order}`;
+      };
+
+      expect(run(() => collect.apply(undefined, [, ,]))).toBe("g0|g1 order=01");
+      expect(run(() => collect.apply(undefined, [, , ,]))).toBe(
+        "g0|g1|g2 order=012",
+      );
+      expect(run(() => collect.apply(undefined, [, , , 4]))).toBe(
+        "g0|g1|g2|4 order=012",
+      );
+      expect(run(() => collect.bind(undefined).apply(undefined, [, , ,]))).toBe(
+        "g0|g1|g2 order=012",
+      );
+    } finally {
+      delete Array.prototype[0];
+      delete Array.prototype[1];
+      delete Array.prototype[2];
+    }
+  });
+
+  test("a getter that truncates the argument array keeps the original count", () => {
+    const collect = (...args) => args.map((a) => String(a)).join("|");
+    const argArray = [1, , 3];
+
+    Object.defineProperty(Array.prototype, 1, {
+      get() {
+        argArray.length = 1;
+        return "g";
+      },
+      configurable: true,
+    });
+
+    try {
+      // LengthOfArrayLike is read once, up front, so shrinking the array from
+      // inside a getter cannot change the argument count; index 2 is simply
+      // absent by the time it is read.
+      expect(collect.apply(undefined, argArray)).toBe("1|g|undefined");
+    } finally {
+      delete Array.prototype[1];
+    }
+  });
+
+  test("uses the array's length, not its dense element count", () => {
+    const collect = (...args) => args.map((a) => String(a)).join("|");
+    const grown = [1, 2];
+    grown.length = 5;
+
+    expect(collect.apply(undefined, grown)).toBe(
+      "1|2|undefined|undefined|undefined",
+    );
+
+    const emptyGrown = [];
+    emptyGrown.length = 3;
+    expect(collect.apply(undefined, emptyGrown)).toBe(
+      "undefined|undefined|undefined",
+    );
+
+    Object.defineProperty(Array.prototype, 3, {
+      get() {
+        return "p3";
+      },
+      configurable: true,
+    });
+
+    try {
+      expect(collect.apply(undefined, grown)).toBe("1|2|undefined|p3|undefined");
+    } finally {
+      delete Array.prototype[3];
+    }
+  });
+
+  test("throws RangeError for an array whose length exceeds the maximum", () => {
+    const fn = () => {};
+    const huge = [1, 2];
+    huge.length = 2000000;
+
+    expect(() => fn.apply(undefined, huge)).toThrow(RangeError);
+    expect(() => Reflect.apply(fn, undefined, huge)).toThrow(RangeError);
+  });
+
   test("throws RangeError for excessively large array-like length", () => {
     const fn = () => {};
     expect(() => fn.apply(undefined, { length: 2000000000 })).toThrow(RangeError);

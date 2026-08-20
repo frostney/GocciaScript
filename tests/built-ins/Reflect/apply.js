@@ -103,6 +103,20 @@ describe("Reflect.apply", () => {
     }
   });
 
+  test("uses the array's length, not its dense element count", () => {
+    const collect = (...args) => args.map((a) => String(a)).join("|");
+    const grown = [1, 2];
+    grown.length = 5;
+
+    expect(Reflect.apply(collect, undefined, grown)).toBe(
+      "1|2|undefined|undefined|undefined",
+    );
+
+    const huge = [1, 2];
+    huge.length = 2000000;
+    expect(() => Reflect.apply(collect, undefined, huge)).toThrow(RangeError);
+  });
+
   test("works with array-like object with string length", () => {
     const fn = (a) => a;
     const arrayLike = { 0: "hello", length: "1" };

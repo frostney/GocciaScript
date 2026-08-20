@@ -1216,7 +1216,6 @@ var
   NewThisValue: TGocciaValue;
   ArgArray: TGocciaValue;
   ArrVal: TGocciaArrayValue;
-  FastArg0, FastArg1, FastArg2: TGocciaValue;
 begin
   // Step 1: Perform ? RequireObjectCoercible(this)
   if not AThisValue.IsCallable then
@@ -1254,38 +1253,29 @@ begin
   if TryCallStringFromCodePointApplyFast(AThisValue, ArgArray, Result) then
     Exit;
 
-  // Fast path: small arrays use specialized call methods (FunctionBase only).
-  // Elements still go through ArrayArgumentElement so that ES2026 §7.3.19 step
-  // 6b Get semantics hold: a hole is not an own property, so it resolves through
-  // the prototype chain and never reaches the callee as the hole sentinel.
-  // Indices are read into locals in ascending order because an inherited
-  // accessor makes the read order observable.
-  if (AThisValue is TGocciaFunctionBase) and (ArgArray is TGocciaArrayValue) then
+  // Fast path: small dense hole-free arrays use specialized call methods
+  // (FunctionBase only). The gate is what keeps the direct element reads legal:
+  // on a dense hole-free array no read can reach an accessor, so no guest code
+  // runs between the reads and the call and these plain locals cannot be
+  // invalidated by a collection. A hole (ES2026 §7.3.19 step 6b resolves it with
+  // Get, which can invoke an inherited accessor) or a length grown past the
+  // element count sends the call down CreateListFromArrayLike instead, where the
+  // arguments collection is itself a GC root source and the reads are ascending.
+  if (AThisValue is TGocciaFunctionBase) and (ArgArray is TGocciaArrayValue) and
+     IsDenseHoleFreeArgumentArray(TGocciaArrayValue(ArgArray)) then
   begin
     ArrVal := TGocciaArrayValue(ArgArray);
     case ArrVal.Elements.Count of
       0:
         Exit(TGocciaFunctionBase(AThisValue).CallNoArgs(NewThisValue));
       1:
-        begin
-          FastArg0 := ArrayArgumentElement(ArrVal, 0);
-          Exit(TGocciaFunctionBase(AThisValue).CallOneArg(FastArg0, NewThisValue));
-        end;
+        Exit(TGocciaFunctionBase(AThisValue).CallOneArg(ArrVal.Elements[0], NewThisValue));
       2:
-        begin
-          FastArg0 := ArrayArgumentElement(ArrVal, 0);
-          FastArg1 := ArrayArgumentElement(ArrVal, 1);
-          Exit(TGocciaFunctionBase(AThisValue).CallTwoArgs(FastArg0, FastArg1,
-            NewThisValue));
-        end;
+        Exit(TGocciaFunctionBase(AThisValue).CallTwoArgs(ArrVal.Elements[0],
+          ArrVal.Elements[1], NewThisValue));
       3:
-        begin
-          FastArg0 := ArrayArgumentElement(ArrVal, 0);
-          FastArg1 := ArrayArgumentElement(ArrVal, 1);
-          FastArg2 := ArrayArgumentElement(ArrVal, 2);
-          Exit(TGocciaFunctionBase(AThisValue).CallThreeArgs(FastArg0, FastArg1,
-            FastArg2, NewThisValue));
-        end;
+        Exit(TGocciaFunctionBase(AThisValue).CallThreeArgs(ArrVal.Elements[0],
+          ArrVal.Elements[1], ArrVal.Elements[2], NewThisValue));
     end;
   end;
 

@@ -292,4 +292,61 @@ describe.runIf(hasGoccia)("native callback GC roots", () => {
 
     expect("abc".split(separator, 7)).toEqual(["abc", "7"]);
   });
+
+  // Holes in an argument array are resolved with Get (ES2026 §7.3.19 step 6b),
+  // so an inherited index accessor is user code running in the middle of
+  // building the argument list. Every argument already materialized has to stay
+  // rooted across that call: an argument the caller never stored anywhere else
+  // is reachable only from the list being built, and the churn after gc() is
+  // what makes a freed slot observable — the earlier argument comes back as
+  // whatever object landed in its memory.
+  test("argument list elements survive a GC run from an inherited index getter", () => {
+    const churn = (tag) => {
+      Goccia.gc();
+      Goccia.gc();
+      let total = 0;
+      for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+        const scratch = { a: i * 7.5, b: [i, i + 1], c: tag + i };
+        total += scratch.a + scratch.b[0];
+      }
+      return total;
+    };
+    const tags = (...args) =>
+      args.map((value) => (value && value.tag) || String(value)).join("|");
+
+    Object.defineProperty(Array.prototype, 0, {
+      get() {
+        return { tag: "first", pad: ["first", "first"] };
+      },
+      configurable: true,
+    });
+    Object.defineProperty(Array.prototype, 1, {
+      get() {
+        churn("second");
+        return { tag: "second", pad: ["second", "second"] };
+      },
+      configurable: true,
+    });
+
+    try {
+      expect(tags.apply(undefined, [,])).toBe("first");
+      expect(tags.apply(undefined, [, ,])).toBe("first|second");
+      expect(tags.apply(undefined, [, , 3])).toBe("first|second|3");
+      expect(tags.apply(undefined, [, , 3, 4])).toBe("first|second|3|4");
+      expect(tags.bind(undefined).apply(undefined, [, ,])).toBe("first|second");
+      expect(Reflect.apply(tags, undefined, [, ,])).toBe("first|second");
+
+      class Box {
+        constructor(...args) {
+          this.tag = tags(...args);
+        }
+      }
+
+      expect(Reflect.construct(Box, [, ,]).tag).toBe("first|second");
+      expect(new Box(...[, ,]).tag).toBe("first|second");
+    } finally {
+      delete Array.prototype[0];
+      delete Array.prototype[1];
+    }
+  });
 });

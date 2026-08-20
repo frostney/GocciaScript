@@ -514,6 +514,7 @@ uses
   TextSemantics,
   TimingUtils,
 
+  Goccia.Arguments.ArrayLike,
   Goccia.Arithmetic,
   Goccia.AST.Node,
   Goccia.AST.Statements,
@@ -13728,6 +13729,7 @@ var
   CallThisRegister: TGocciaRegister;
   CallGlobalThisValue: TGocciaValue;
   FixedArg0, FixedArg1, FixedArg2: TGocciaRegister;
+  ApplyArgRegister0, ApplyArgRegister1, ApplyArgRegister2: TGocciaRegister;
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   BoundFunction: TGocciaBoundFunctionValue;
   JumpOffset: Integer;
@@ -16366,9 +16368,21 @@ begin
                   end;
                   Continue;
                 end
+                // The dense hole-free gate is what makes the direct element
+                // reads below legal: no read can reach an accessor, so the
+                // argument values cannot be produced by guest code that
+                // allocates (and collects) while the earlier ones sit in plain
+                // locals, and no read order is observable. A holey array or one
+                // whose length was grown past its element count falls through
+                // to the generic call, which runs Function.prototype.apply and
+                // therefore CreateListFromArrayLike — ascending Get order, a
+                // rooted arguments collection, and the spec argument count,
+                // exactly as the interpreter does.
                 else if (CalleeIntrinsicKind = nikFunctionApply) and (B >= 2) and
                         (FRegisters[A + 2].Kind = grkObject) and
-                        (FRegisters[A + 2].ObjectValue is TGocciaArrayValue) then
+                        (FRegisters[A + 2].ObjectValue is TGocciaArrayValue) and
+                        IsDenseHoleFreeArgumentArray(
+                          TGocciaArrayValue(FRegisters[A + 2].ObjectValue)) then
                 begin
                   ArgsArray := TGocciaArrayValue(FRegisters[A + 2].ObjectValue);
                   CallThisRegister := FRegisters[A + 1];
@@ -16387,31 +16401,44 @@ begin
                         RegisterUndefined, RegisterUndefined, RegisterUndefined,
                         True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     1:
-                      SetupNewFrame(BytecodeFunction.FClosure,
-	                        CallThisRegister, TGocciaRegisterArray(nil), 1,
-	                        VMValueToRegisterFast(ArgsArray.GetProperty('0')),
-	                        RegisterUndefined, RegisterUndefined,
-                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                      begin
+                        ApplyArgRegister0 :=
+                          VMValueToRegisterFast(ArgsArray.Elements[0]);
+                        SetupNewFrame(BytecodeFunction.FClosure,
+                          CallThisRegister, TGocciaRegisterArray(nil), 1,
+                          ApplyArgRegister0, RegisterUndefined, RegisterUndefined,
+                          True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                      end;
                     2:
-                      SetupNewFrame(BytecodeFunction.FClosure,
-	                        CallThisRegister, TGocciaRegisterArray(nil), 2,
-	                        VMValueToRegisterFast(ArgsArray.GetProperty('0')),
-	                        VMValueToRegisterFast(ArgsArray.GetProperty('1')),
-	                        RegisterUndefined,
-                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                      begin
+                        ApplyArgRegister0 :=
+                          VMValueToRegisterFast(ArgsArray.Elements[0]);
+                        ApplyArgRegister1 :=
+                          VMValueToRegisterFast(ArgsArray.Elements[1]);
+                        SetupNewFrame(BytecodeFunction.FClosure,
+                          CallThisRegister, TGocciaRegisterArray(nil), 2,
+                          ApplyArgRegister0, ApplyArgRegister1, RegisterUndefined,
+                          True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                      end;
                     3:
-                      SetupNewFrame(BytecodeFunction.FClosure,
-	                        CallThisRegister, TGocciaRegisterArray(nil), 3,
-	                        VMValueToRegisterFast(ArgsArray.GetProperty('0')),
-	                        VMValueToRegisterFast(ArgsArray.GetProperty('1')),
-	                        VMValueToRegisterFast(ArgsArray.GetProperty('2')),
-                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                      begin
+                        ApplyArgRegister0 :=
+                          VMValueToRegisterFast(ArgsArray.Elements[0]);
+                        ApplyArgRegister1 :=
+                          VMValueToRegisterFast(ArgsArray.Elements[1]);
+                        ApplyArgRegister2 :=
+                          VMValueToRegisterFast(ArgsArray.Elements[2]);
+                        SetupNewFrame(BytecodeFunction.FClosure,
+                          CallThisRegister, TGocciaRegisterArray(nil), 3,
+                          ApplyArgRegister0, ApplyArgRegister1, ApplyArgRegister2,
+                          True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                      end;
                   else
                     begin
-	                      SetLength(RegisterArgs, ArgsArray.Elements.Count);
-	                      for I := 0 to High(RegisterArgs) do
-	                        RegisterArgs[I] := VMValueToRegisterFast(
-	                          ArgsArray.GetProperty(IntToStr(I)));
+                      SetLength(RegisterArgs, ArgsArray.Elements.Count);
+                      for I := 0 to High(RegisterArgs) do
+                        RegisterArgs[I] :=
+                          VMValueToRegisterFast(ArgsArray.Elements[I]);
                       SetupNewFrame(BytecodeFunction.FClosure,
                         CallThisRegister, RegisterArgs, Length(RegisterArgs),
                         RegisterUndefined, RegisterUndefined, RegisterUndefined,
