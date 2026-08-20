@@ -16,7 +16,11 @@ interface
 uses
   Goccia.Values.ObjectValue;
 
-function CreateAsyncHooksNamespace: TGocciaObjectValue;
+{ Returns the namespace object. AHostToken receives an opaque handle for the
+  per-namespace host state; pass it to ReleaseAsyncHooksHost when the module
+  registration that owns this namespace goes away. }
+function CreateAsyncHooksNamespace(out AHostToken: TObject): TGocciaObjectValue;
+procedure ReleaseAsyncHooksHost(const AHostToken: TObject);
 procedure ClearAsyncHooksHosts;
 
 implementation
@@ -51,6 +55,11 @@ const
     are unique per resource and never recycled; nothing in GocciaScript acts
     on them, and there is no async-hooks callback surface to relate them to. }
   FIRST_ASYNC_ID = 1;
+  { Every bind-family member returns a function Node calls `bound`, with the
+    target's own length. The snapshot runner takes (callback, ...args), so its
+    length is one however long the callback is. }
+  BOUND_FUNCTION_NAME = 'bound';
+  SNAPSHOT_RUNNER_LENGTH = 1;
 
 type
   TGocciaAsyncHooksHostList = TObjectList<TObject>;
@@ -60,12 +69,10 @@ type
   TGocciaAsyncLocalStorageValue = class(TGocciaObjectValue)
   private
     FDefaultValue: TGocciaValue;
-    FDisabled: Boolean;
     FStorageName: string;
   public
     procedure MarkReferences; override;
     property DefaultValue: TGocciaValue read FDefaultValue write FDefaultValue;
-    property Disabled: Boolean read FDisabled write FDisabled;
     property StorageName: string read FStorageName write FStorageName;
   end;
 
@@ -115,6 +122,8 @@ type
     function CreateBoundFunction(const ATarget, ABoundThis: TGocciaValue;
       const AContext: TGocciaAsyncContextSnapshot;
       const AUsesCallerTarget: Boolean): TGocciaValue;
+    function ReceiverArgument(const AArgs: TGocciaArgumentsCollection;
+      const AIndex: Integer): TGocciaValue;
   public
     constructor Create;
 
@@ -156,6 +165,39 @@ type
 threadvar
   GAsyncHooksHosts: TGocciaAsyncHooksHostList;
 
+{ Node's bind family runs validateFunction(fn) before it builds anything, so a
+  non-callable is a TypeError at the bind call rather than a surprise at the
+  first invocation. }
+procedure RequireCallable(const AValue: TGocciaValue);
+begin
+  if not (Assigned(AValue) and AValue.IsCallable) then
+    ThrowTypeError(SErrorAsyncHooksCallbackRequired, SSuggestCallbackRequired);
+end;
+
+{ The `length` a bound wrapper should report: the target's own, read through
+  the ordinary property lookup so a bound or native target answers too. A
+  snapshot runner has no target to ask. }
+function CallableLength(const ATarget: TGocciaValue;
+  const AUsesCallerTarget: Boolean): Integer;
+var
+  LengthValue: TGocciaValue;
+  Reported: Double;
+begin
+  if AUsesCallerTarget then
+    Exit(SNAPSHOT_RUNNER_LENGTH);
+  if not (ATarget is TGocciaObjectValue) then
+    Exit(0);
+
+  LengthValue := TGocciaObjectValue(ATarget).GetProperty(PROP_LENGTH);
+  if not (LengthValue is TGocciaNumberLiteralValue) then
+    Exit(0);
+
+  Reported := TGocciaNumberLiteralValue(LengthValue).Value;
+  if (Reported <> Reported) or (Reported < 0) or (Reported > MaxInt) then
+    Exit(0);
+  Result := Trunc(Reported);
+end;
+
 { TGocciaAsyncLocalStorageValue }
 
 procedure TGocciaAsyncLocalStorageValue.MarkReferences;
@@ -195,8 +237,7 @@ function TGocciaAsyncBoundFunction.Invoke(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   CallArgs: TGocciaArgumentsCollection;
-  I: Integer;
-  PreviousContext: TGocciaAsyncContextSnapshot;
+  ContextToken, I: Integer;
   Receiver, Target: TGocciaValue;
 begin
   { AsyncLocalStorage.snapshot() returns a function that takes the callback to
@@ -210,6 +251,12 @@ begin
   if not (Assigned(Target) and Target.IsCallable) then
     ThrowTypeError(SErrorAsyncHooksCallbackRequired, SSuggestCallbackRequired);
 
+  (* Node forwards the call-site receiver whenever thisArg is undefined,
+     whether it was omitted or written out — `bind` splits on
+     `thisArg === undefined`, not on the argument count. So a bound function
+     installed as an object method, `{ tag, run: resource.bind(fn) }`, sees the
+     holder as `this`, and only an explicitly non-undefined thisArg displaces
+     it. Probed against Node v24.0.1. *)
   Receiver := FBoundThis;
   if not Assigned(Receiver) then
     Receiver := AThisValue;
@@ -223,12 +270,11 @@ begin
       for I := 0 to AArgs.Length - 1 do
         CallArgs.Add(AArgs.GetElement(I));
 
-    PreviousContext := CurrentAsyncContext;
-    SetCurrentAsyncContext(FContext);
+    ContextToken := EnterAsyncContext(FContext);
     try
       Result := DispatchCall(Target, CallArgs, Receiver);
     finally
-      SetCurrentAsyncContext(PreviousContext);
+      LeaveAsyncContext(ContextToken);
     end;
   finally
     CallArgs.Free;
@@ -281,15 +327,16 @@ function TGocciaAsyncHooksNamespaceHost.CallInContext(
   const AContext: TGocciaAsyncContextSnapshot): TGocciaValue;
 var
   CallArgs: TGocciaArgumentsCollection;
-  I: Integer;
-  PreviousContext: TGocciaAsyncContextSnapshot;
+  ContextToken, I: Integer;
 begin
-  { Install before anything else runs. AContext was derived by the caller and
-    is reachable from nothing until it is the current context, so any
-    allocation in between — building the argument collection, or the error
-    object on the non-callable path — could collect it at a safe point. }
-  PreviousContext := CurrentAsyncContext;
-  SetCurrentAsyncContext(AContext);
+  { Enter before anything else runs, and through the saved-snapshot stack.
+    AContext was derived by the caller and is reachable from nothing until it
+    is the current context, so any allocation in between — the argument
+    collection, or the error object on the non-callable path — could collect
+    it; and the snapshot it displaces has no other root either, so parking it
+    in a local across the callback made a collection inside that callback free
+    it and the restore write a dangling pointer. }
+  ContextToken := EnterAsyncContext(AContext);
   try
     if not (Assigned(ACallback) and ACallback.IsCallable) then
       ThrowTypeError(SErrorAsyncHooksCallbackRequired,
@@ -304,7 +351,7 @@ begin
       CallArgs.Free;
     end;
   finally
-    SetCurrentAsyncContext(PreviousContext);
+    LeaveAsyncContext(ContextToken);
   end;
 end;
 
@@ -324,13 +371,30 @@ begin
   InitializeTempRoot(BoundRoot);
   AddTempRootIfNeeded(BoundRoot, Bound);
   try
+    { Node names every one of these `bound` — not `bound <fn>` — because the
+      wrapper it returns is a function declared under that name, and copies
+      the target's length onto it. Probed against Node v24.0.1. }
     BoundFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      Bound.Invoke, '', 0);
+      Bound.Invoke, BOUND_FUNCTION_NAME,
+      CallableLength(ATarget, AUsesCallerTarget));
     BoundFunction.CapturedRoot := Bound;
     Result := BoundFunction;
   finally
     RemoveTempRootIfNeeded(BoundRoot);
   end;
+end;
+
+{ The receiver a bind-family member was given, or nil when it was omitted or
+  written as undefined — the two cases Node treats alike. GetElement answers
+  undefined for an absent index, so an Assigned check alone can never see the
+  difference and the call-site-receiver fallback would be dead. }
+function TGocciaAsyncHooksNamespaceHost.ReceiverArgument(
+  const AArgs: TGocciaArgumentsCollection;
+  const AIndex: Integer): TGocciaValue;
+begin
+  Result := AArgs.GetElement(AIndex);
+  if Result is TGocciaUndefinedLiteralValue then
+    Result := nil;
 end;
 
 function TGocciaAsyncHooksNamespaceHost.StorageConstructor(
@@ -385,16 +449,18 @@ var
   Storage: TGocciaAsyncLocalStorageValue;
 begin
   Storage := RequireStorage(AThisValue);
-  { Node re-enables a disabled instance on run and on enterWith. }
-  Storage.Disabled := False;
   Result := CallInContext(AArgs.GetElement(1),
     TGocciaUndefinedLiteralValue.UndefinedValue, AArgs,
     RUN_FIRST_EXTRA_ARGUMENT,
     DeriveAsyncContext(CurrentAsyncContext, Storage, AArgs.GetElement(0)));
 end;
 
-{ Node: AsyncLocalStorage.prototype.getStore(). A bound store wins even when it
-  is undefined — `run(undefined, ...)` reports undefined, not the default. }
+{ Node: AsyncLocalStorage.prototype.getStore().
+
+  Purely a lookup in the current frame: a binding wins even when its value is
+  undefined (`run(undefined, ...)` reports undefined, not the default), and the
+  default value stands in only when there is no binding at all. There is no
+  per-instance enabled flag to consult — see StorageDisable. }
 function TGocciaAsyncHooksNamespaceHost.StorageGetStore(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
@@ -404,9 +470,6 @@ var
   Store: TGocciaValue;
 begin
   Storage := RequireStorage(AThisValue);
-  if Storage.Disabled then
-    Exit(Storage.DefaultValue);
-
   Snapshot := CurrentAsyncContext;
   if Assigned(Snapshot) and Snapshot.TryGetStore(Storage, Store) then
     Result := Store
@@ -425,7 +488,6 @@ var
   Storage: TGocciaAsyncLocalStorageValue;
 begin
   Storage := RequireStorage(AThisValue);
-  Storage.Disabled := False;
   SetCurrentAsyncContext(DeriveAsyncContext(CurrentAsyncContext, Storage,
     AArgs.GetElement(0)));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -451,8 +513,19 @@ begin
       TGocciaUndefinedLiteralValue.UndefinedValue));
 end;
 
-{ Node: AsyncLocalStorage.prototype.disable(). getStore reports the default
-  value until run or enterWith re-enables the instance. }
+{ Node: AsyncLocalStorage.prototype.disable().
+
+  Deletes the binding from the CURRENT frame and nothing more. Node v24 is the
+  AsyncContextFrame model, and every observable consequence follows from that
+  one edit: getStore reports the default value afterwards because no binding is
+  left here; a run or enterWith re-binds; and a continuation captured before
+  the disable still reports the store IT captured, because disable never
+  reached that frame.
+
+  An earlier per-instance `disabled` flag reproduced the first two and got the
+  third wrong in both directions — it masked already-captured bindings, and it
+  made exit() on a disabled instance report the default value where Node
+  reports undefined. Both were probed against Node v24.0.1. }
 function TGocciaAsyncHooksNamespaceHost.StorageDisable(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
@@ -460,7 +533,6 @@ var
   Storage: TGocciaAsyncLocalStorageValue;
 begin
   Storage := RequireStorage(AThisValue);
-  Storage.Disabled := True;
   SetCurrentAsyncContext(
     DeriveAsyncContextWithout(CurrentAsyncContext, Storage));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -474,11 +546,14 @@ begin
     RequireStorage(AThisValue).StorageName);
 end;
 
-{ Node: AsyncLocalStorage.bind(fn) — binds fn to the current context. }
+{ Node: AsyncLocalStorage.bind(fn) — binds fn to the current context. Node
+  routes it through AsyncResource.bind, so the same validateFunction check
+  rejects a non-callable here rather than at the first call. }
 function TGocciaAsyncHooksNamespaceHost.StorageStaticBind(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
+  RequireCallable(AArgs.GetElement(0));
   Result := CreateBoundFunction(AArgs.GetElement(0), nil,
     CurrentAsyncContext, False);
 end;
@@ -505,30 +580,37 @@ begin
   Result := Resource;
 end;
 
-{ Node: asyncResource.runInAsyncScope(fn[, thisArg, ...args]). }
+{ Node: asyncResource.runInAsyncScope(fn[, thisArg, ...args]).
+
+  Unlike bind, an omitted thisArg here is NOT replaced by the call-site
+  receiver — Node applies fn with whatever was passed, so an omitted one means
+  `this` is undefined. GetElement already answers undefined for an absent
+  index, which is that value. }
 function TGocciaAsyncHooksNamespaceHost.ResourceRunInAsyncScope(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 const
   RUN_IN_SCOPE_FIRST_EXTRA_ARGUMENT = 2;
 var
-  Receiver: TGocciaValue;
   Resource: TGocciaAsyncResourceValue;
 begin
   Resource := RequireResource(AThisValue);
-  Receiver := AArgs.GetElement(1);
-  if not Assigned(Receiver) then
-    Receiver := TGocciaUndefinedLiteralValue.UndefinedValue;
-  Result := CallInContext(AArgs.GetElement(0), Receiver, AArgs,
+  Result := CallInContext(AArgs.GetElement(0), AArgs.GetElement(1), AArgs,
     RUN_IN_SCOPE_FIRST_EXTRA_ARGUMENT, Resource.Context);
 end;
 
-{ Node: asyncResource.bind(fn[, thisArg]) — the resource's captured context. }
+{ Node: asyncResource.bind(fn[, thisArg]) — the resource's captured context.
+  An undefined thisArg leaves the call-site receiver in place; see
+  TGocciaAsyncBoundFunction.Invoke. }
 function TGocciaAsyncHooksNamespaceHost.ResourceBind(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+const
+  BIND_THIS_ARGUMENT = 1;
 begin
-  Result := CreateBoundFunction(AArgs.GetElement(0), AArgs.GetElement(1),
+  RequireCallable(AArgs.GetElement(0));
+  Result := CreateBoundFunction(AArgs.GetElement(0),
+    ReceiverArgument(AArgs, BIND_THIS_ARGUMENT),
     RequireResource(AThisValue).Context, False);
 end;
 
@@ -541,8 +623,10 @@ function TGocciaAsyncHooksNamespaceHost.ResourceStaticBind(
 const
   STATIC_BIND_THIS_ARGUMENT = 2;
 begin
+  RequireCallable(AArgs.GetElement(0));
   Result := CreateBoundFunction(AArgs.GetElement(0),
-    AArgs.GetElement(STATIC_BIND_THIS_ARGUMENT), CurrentAsyncContext, False);
+    ReceiverArgument(AArgs, STATIC_BIND_THIS_ARGUMENT), CurrentAsyncContext,
+    False);
 end;
 
 function TGocciaAsyncHooksNamespaceHost.ResourceAsyncId(
@@ -572,7 +656,7 @@ begin
   Result := RequireResource(AThisValue);
 end;
 
-function CreateAsyncHooksNamespace: TGocciaObjectValue;
+function CreateAsyncHooksNamespace(out AHostToken: TObject): TGocciaObjectValue;
 var
   DefaultExport, NamespaceObject: TGocciaObjectValue;
   Host: TGocciaAsyncHooksNamespaceHost;
@@ -584,6 +668,7 @@ begin
   if not Assigned(GAsyncHooksHosts) then
     GAsyncHooksHosts := TGocciaAsyncHooksHostList.Create(True);
   GAsyncHooksHosts.Add(Host);
+  AHostToken := Host;
 
   Host.FAsyncLocalStoragePrototype := TGocciaObjectValue.Create(
     TGocciaObjectValue.SharedObjectPrototype);
@@ -674,6 +759,16 @@ begin
   Result := NamespaceObject;
 end;
 
+{ Drops one namespace's host. The list owns its entries, so Remove frees it;
+  an unknown or already-released token is ignored so a double detach is safe. }
+procedure ReleaseAsyncHooksHost(const AHostToken: TObject);
+begin
+  if not (Assigned(AHostToken) and Assigned(GAsyncHooksHosts)) then
+    Exit;
+  GAsyncHooksHosts.Remove(AHostToken);
+end;
+
+{ Thread teardown: releases whatever survived, for a host that never detached. }
 procedure ClearAsyncHooksHosts;
 begin
   FreeAndNil(GAsyncHooksHosts);

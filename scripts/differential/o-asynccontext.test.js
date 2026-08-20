@@ -1,11 +1,13 @@
 // Async-context propagation through node:async_hooks.
 //
 // Scope is deliberately the propagation core — the part bun, Node and
-// GocciaScript agree on. The constructor options (`defaultValue`, `name`),
-// `disable()` re-enablement and `emitDestroy()`'s return value are covered by
-// tests/built-ins/AsyncHooks instead: bun 1.3.14 diverges from Node on all
-// four, so gating on bun there would report bun's gaps as GocciaScript
-// divergences. See the CLASSIFICATION entry in scripts/test-cli-differential.ts.
+// GocciaScript agree on. Everything about `disable()` and the constructor
+// options (`defaultValue`, `name`), plus `emitDestroy()`'s return value, is
+// covered by tests/built-ins/AsyncHooks instead: bun 1.3.14 diverges from Node
+// on all of them — it still models `disable()` as an instance-wide flag, so a
+// continuation captured before the disable loses its store — and gating on bun
+// there would report bun's gaps as GocciaScript divergences. See the
+// CLASSIFICATION entry in scripts/test-cli-differential.ts.
 
 import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 
@@ -237,5 +239,69 @@ describe("async context propagation", () => {
   test("a static named bind does not shadow Function.prototype.bind", () => {
     const read = ((value) => ["target", value]).bind(null, 1);
     expect(read()).toEqual(["target", 1]);
+  });
+
+  test("bind forwards the call-site receiver when thisArg is undefined", () => {
+    const als = new AsyncLocalStorage();
+    const read = ({ read() { return this.tag; } }).read;
+    let bound;
+    let explicit;
+    als.run("ctx", () => {
+      bound = AsyncResource.bind(read);
+      explicit = new AsyncResource("probe").bind(read, { tag: "explicit" });
+    });
+    expect(({ tag: "holder", method: bound }).method()).toBe("holder");
+    expect(({ tag: "holder", method: explicit }).method()).toBe("explicit");
+  });
+
+  test("bind rejects a non-callable at bind time", () => {
+    expect(() => AsyncResource.bind(42)).toThrow(TypeError);
+    expect(() => new AsyncResource("probe").bind(42)).toThrow(TypeError);
+    expect(() => AsyncLocalStorage.bind(42)).toThrow(TypeError);
+  });
+
+  test("disabling inside an inner run leaves the outer store intact", () => {
+    const als = new AsyncLocalStorage();
+    const seen = [];
+    als.run("outer", () => {
+      als.run("inner", () => {
+        als.disable();
+        seen.push(als.getStore());
+      });
+      seen.push(als.getStore());
+    });
+    expect(seen).toEqual([undefined, "outer"]);
+  });
+
+  test("an async generator body observes the resuming call's store", async () => {
+    const als = new AsyncLocalStorage();
+    const seen = [];
+    const source = {
+      async *values() {
+        seen.push(als.getStore());
+        yield 1;
+        seen.push(als.getStore());
+        await Promise.resolve();
+        seen.push(als.getStore());
+        yield 2;
+      },
+    };
+
+    await als.run("GEN", async () => {
+      for await (const value of source.values()) {
+        seen.push(als.getStore() + ":" + value);
+      }
+    });
+
+    const iterator = source.values();
+    await iterator.next();
+    await als.run("RESUMER", async () => {
+      await iterator.next();
+    });
+
+    expect(seen).toEqual([
+      "GEN", "GEN:1", "GEN", "GEN", "GEN:2",
+      undefined, "RESUMER", "RESUMER",
+    ]);
   });
 });

@@ -21,6 +21,12 @@ describe("AsyncLocalStorage.prototype.run", () => {
       .toEqual([1, 2, "ctx"]);
   });
 
+  test("rejects a non-callable callback", () => {
+    const als = new AsyncLocalStorage();
+    expect(() => als.run("ctx", 42)).toThrow(TypeError);
+    expect(als.getStore()).toBeUndefined();
+  });
+
   test("the store survives an await", async () => {
     const als = new AsyncLocalStorage();
     await als.run("ctx-1", async () => {

@@ -439,7 +439,7 @@ var
   Capability: TGocciaPromiseReactionCapability;
   HandlerResult: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
-  PreviousContext: TGocciaAsyncContextSnapshot;
+  ContextToken: Integer;
   procedure ResolveResult(const AValue: TGocciaValue);
   begin
     if Assigned(Capability) then
@@ -472,9 +472,14 @@ begin
     continuation was created, and leaves the enclosing context untouched. The
     restore is what keeps a nested drain — an `await` inside a handler pumps
     this queue re-entrantly — from leaking one continuation's bindings into
-    the frame that drained it. }
-  PreviousContext := CurrentAsyncContext;
-  SetCurrentAsyncContext(ATask.Context);
+    the frame that drained it.
+
+    EnterAsyncContext rather than a saved local: the displaced snapshot has to
+    stay reachable for the collector while the handler runs. It happens to be
+    reachable here anyway, through the queued root of the task that is still
+    in flight, but that is a property of the drain loop rather than of this
+    function — one reordering of RemoveQueuedRoots away from being false. }
+  ContextToken := EnterAsyncContext(ATask.Context);
   try
 
   Promise := nil;
@@ -565,7 +570,7 @@ begin
   end;
 
   finally
-    SetCurrentAsyncContext(PreviousContext);
+    LeaveAsyncContext(ContextToken);
   end;
 end;
 

@@ -26,6 +26,17 @@ describe("AsyncLocalStorage.prototype.enterWith", () => {
     });
   });
 
+  test("binds outside any run, with nothing to unwind it", () => {
+    // enterWith has no scope to leave, so this deliberately ends the test — and
+    // the file — with a context still installed. The engine drops the thread's
+    // async-context state when it is torn down; without that, the next file on
+    // the same worker inherited this snapshot and marking it walked a realm
+    // that no longer existed.
+    const als = new AsyncLocalStorage();
+    als.enterWith("outside-any-run");
+    expect(als.getStore()).toBe("outside-any-run");
+  });
+
   test("re-enables a disabled instance", () => {
     const als = new AsyncLocalStorage({ defaultValue: "DEF" });
     als.disable();

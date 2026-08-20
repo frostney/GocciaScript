@@ -35,6 +35,31 @@ describe("AsyncLocalStorage statics", () => {
     expect(snapshot((first) => [first, als.getStore()], 1)).toEqual([1, "snapshotted"]);
   });
 
+  test("bind rejects a non-callable at bind time", () => {
+    expect(() => AsyncLocalStorage.bind(42)).toThrow(TypeError);
+  });
+
+  test("a snapshot runner rejects a non-callable at call time", () => {
+    // snapshot() has no callback to validate, so the check lands on its runner.
+    const snapshot = AsyncLocalStorage.snapshot();
+    expect(() => snapshot(42)).toThrow(TypeError);
+  });
+
+  test("bind and snapshot report Node's name and length", () => {
+    const target = (first, second) => [first, second];
+    expect(AsyncLocalStorage.bind(target).name).toBe("bound");
+    expect(AsyncLocalStorage.bind(target).length).toBe(2);
+    // The runner takes (callback, ...args), so its length is one regardless.
+    expect(AsyncLocalStorage.snapshot().name).toBe("bound");
+    expect(AsyncLocalStorage.snapshot().length).toBe(1);
+  });
+
+  test("bind forwards the call-site receiver", () => {
+    const read = ({ read() { return this.tag; } }).read;
+    expect(({ tag: "holder", method: AsyncLocalStorage.bind(read) }).method())
+      .toBe("holder");
+  });
+
   test("does not shadow Function.prototype.bind for ordinary functions", () => {
     const target = { tag: "target" };
     const read = ((value) => [target.tag, value]).bind(null, 1);

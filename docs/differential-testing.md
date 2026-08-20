@@ -70,14 +70,16 @@ oracle instead of inheriting a default.
 
 `o-asynccontext.test.js` covers `node:async_hooks` propagation only, and stops
 there on purpose. Bun 1.3.14 does not honour the `defaultValue` or `name`
-constructor options, leaks the store bound by a `run` that follows a `disable`,
-and returns `undefined` rather than the resource from `emitDestroy`. Gating on
-bun for those four would report bun's gaps as GocciaScript divergences, so they
-are covered against Node's behaviour in `tests/built-ins/AsyncHooks` instead,
-where bun is not the oracle. Everything the suite does check — stores surviving
+constructor options, returns `undefined` rather than the resource from
+`emitDestroy`, and still models `disable()` as an instance-wide flag instead of
+Node's edit of the current context frame — so under bun a continuation captured
+before a `disable` loses its store, and a `run` after one leaks. Gating on bun
+for any of that would report bun's gaps as GocciaScript divergences, so it is
+covered against Node's behaviour in `tests/built-ins/AsyncHooks` instead, where
+bun is not the oracle. Everything the suite does check — stores surviving
 `await`, interleaved chains, several instances at once, `.then` / `.catch` /
-`.finally` continuations, `exit`, `enterWith`, and `AsyncResource` — bun and
-Node agree on.
+`.finally` continuations, `exit`, `enterWith`, `AsyncResource` receiver and
+validation semantics, and async-generator resumptions — bun and Node agree on.
 
 `h-modulemock.test.js` and `i-modulemock-isolation.test.js` are a pair: the
 first mocks `./mods/mockable.js` with a `vi.mock` factory, the second mocks

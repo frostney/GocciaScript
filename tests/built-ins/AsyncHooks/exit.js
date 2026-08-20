@@ -30,6 +30,11 @@ describe("AsyncLocalStorage.prototype.exit", () => {
     expect(als.exit((first, second) => [first, second], 1, 2)).toEqual([1, 2]);
   });
 
+  test("rejects a non-callable callback", () => {
+    const als = new AsyncLocalStorage();
+    expect(() => als.exit(42)).toThrow(TypeError);
+  });
+
   test("leaves other instances untouched", () => {
     const first = new AsyncLocalStorage();
     const second = new AsyncLocalStorage();

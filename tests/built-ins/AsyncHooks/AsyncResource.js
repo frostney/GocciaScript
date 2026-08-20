@@ -72,6 +72,52 @@ describe("AsyncResource", () => {
     expect(first.asyncId()).not.toBe(second.asyncId());
   });
 
+  test("bind forwards the call-site receiver when thisArg is omitted", () => {
+    // Node splits on `thisArg === undefined`, not on the argument count, so an
+    // omitted and an explicitly undefined thisArg behave alike: both leave the
+    // call site's own receiver in place. Probed against Node v24.0.1.
+    const resource = new AsyncResource("probe");
+    const read = ({ read() { return this.tag; } }).read;
+    expect(({ tag: "holder", method: resource.bind(read) }).method()).toBe("holder");
+    expect(({ tag: "holder", method: resource.bind(read, undefined) }).method())
+      .toBe("holder");
+  });
+
+  test("bind honours an explicit receiver", () => {
+    const resource = new AsyncResource("probe");
+    const read = ({ read() { return this.tag; } }).read;
+    const bound = resource.bind(read, { tag: "explicit" });
+    expect(({ tag: "holder", method: bound }).method()).toBe("explicit");
+  });
+
+  test("the static bind forwards the call-site receiver too", () => {
+    const read = ({ read() { return this.tag; } }).read;
+    expect(({ tag: "holder", method: AsyncResource.bind(read) }).method())
+      .toBe("holder");
+  });
+
+  test("runInAsyncScope does not substitute the call-site receiver", () => {
+    // Unlike bind: an omitted thisArg here really is undefined.
+    const resource = new AsyncResource("probe");
+    const read = ({ read() { return this; } }).read;
+    expect(resource.runInAsyncScope(read)).toBeUndefined();
+  });
+
+  test("bind rejects a non-callable at bind time, not at call time", () => {
+    const resource = new AsyncResource("probe");
+    expect(() => resource.bind(42)).toThrow(TypeError);
+    expect(() => AsyncResource.bind(42)).toThrow(TypeError);
+  });
+
+  test("bound functions report Node's name and the target's length", () => {
+    const resource = new AsyncResource("probe");
+    const target = (first, second) => [first, second];
+    expect(resource.bind(target).name).toBe("bound");
+    expect(resource.bind(target).length).toBe(2);
+    expect(AsyncResource.bind(target).name).toBe("bound");
+    expect(AsyncResource.bind(target).length).toBe(2);
+  });
+
   test("prototype methods reject a foreign receiver", () => {
     const foreign = { asyncId: AsyncResource.prototype.asyncId };
     expect(() => foreign.asyncId()).toThrow(TypeError);

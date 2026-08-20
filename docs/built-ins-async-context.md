@@ -38,12 +38,15 @@ const handle = async (request) =>
 | `getStore()` | The bound store, or the instance's `defaultValue` when nothing is bound. A store bound as `undefined` wins over the default value. |
 | `enterWith(store)` | Binds `store` for the rest of the current execution and for continuations created from it. There is no scope to leave, so the binding lasts until whatever installed the surrounding context restores it. Re-enables a disabled instance. |
 | `exit(callback, ...args)` | Calls `callback(...args)` with `undefined` bound — not with the default value — and restores the previous binding afterwards. |
-| `disable()` | `getStore()` reports the `defaultValue` until `run` or `enterWith` is called again. |
+| `disable()` | Deletes the binding from the current context. `getStore()` then reports the `defaultValue` until `run` or `enterWith` binds again. A continuation captured *before* the `disable` still carries the store it captured. |
 
 | Static | Behavior |
 |--------|----------|
-| `AsyncLocalStorage.bind(fn)` | Returns `fn` pinned to the context current at the `bind` call. |
-| `AsyncLocalStorage.snapshot()` | Returns `(fn, ...args) => fn(...args)`, run under the context current at the `snapshot` call. |
+| `AsyncLocalStorage.bind(fn)` | Returns `fn` pinned to the context current at the `bind` call. Throws `TypeError` at the `bind` call if `fn` is not callable. |
+| `AsyncLocalStorage.snapshot()` | Returns `(fn, ...args) => fn(...args)`, run under the context current at the `snapshot` call. It has no callback to validate, so a non-callable is a `TypeError` at the runner's call instead. |
+
+Every function these return is named `bound` and reports its target's `length`,
+as Node's do.
 
 ## AsyncResource
 
@@ -61,9 +64,9 @@ const later = resource.bind(() => requestContext.getStore());
 | Member | Behavior |
 |--------|----------|
 | `new AsyncResource(type, options?)` | Captures the current context. `type` and `options` are accepted and unused. |
-| `runInAsyncScope(fn, thisArg, ...args)` | Calls `fn` under the captured context and returns its result. |
-| `bind(fn, thisArg?)` | Returns `fn` pinned to the captured context. |
-| `AsyncResource.bind(fn, type?, thisArg?)` | Returns `fn` pinned to the context current at the `bind` call. |
+| `runInAsyncScope(fn, thisArg, ...args)` | Calls `fn` under the captured context and returns its result. Unlike `bind`, an omitted `thisArg` means `this` is `undefined` rather than the call site's receiver. |
+| `bind(fn, thisArg?)` | Returns `fn` pinned to the captured context. An undefined `thisArg` leaves the call site's own receiver in place, so a bound function installed as an object method still sees that object as `this`. Throws `TypeError` at the `bind` call if `fn` is not callable. |
+| `AsyncResource.bind(fn, type?, thisArg?)` | Returns `fn` pinned to the context current at the `bind` call, with the same receiver and validation rules. |
 | `asyncId()` / `triggerAsyncId()` | A number unique to the resource. Nothing else in the engine relates to it, and `triggerAsyncId` reports the resource's own id. |
 | `emitDestroy()` | Returns the resource. There are no destroy hooks to emit to. |
 
@@ -80,6 +83,10 @@ storage.run("registered", () => pending.then(handler));
 
 reaches `handler` with `"registered"` bound however `pending` is eventually
 settled.
+
+An async generator body observes the context of whichever call resumed it, in
+both executors and as in Node — a `for await` inside a `run` sees that run's
+store, and a generator resumed outside one sees no store.
 
 It does not travel into host-scheduled callbacks, because there are none:
 GocciaScript has no timer task queue and no general event loop, so there is no
