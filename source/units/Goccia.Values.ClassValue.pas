@@ -78,6 +78,14 @@ type
     // whose [[Environment]] is that environment, not the environment of
     // whatever scope happens to run `new`.
     FDefinitionScope: TGocciaScope;
+    // The script or module path that was current when this class was
+    // evaluated. TGocciaFunctionValue keeps the same thing as
+    // FSourceFilePath, for the same reasons: `import()` and `import.meta`
+    // resolve against the *defining* file, and coverage and call-stack frames
+    // are attributed to it. A class body runs code — field initializers and
+    // static blocks — outside any of its own methods, so the class value has
+    // to carry it too.
+    FDefinitionSourcePath: string;
     function GetPropertyGetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
     function GetPropertySetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
     function GetStaticPropertyGetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
@@ -191,6 +199,8 @@ type
     property Name: string read FName;
     property DefinitionScope: TGocciaScope read FDefinitionScope
       write FDefinitionScope;
+    property DefinitionSourcePath: string read FDefinitionSourcePath
+      write FDefinitionSourcePath;
     property SourceText: string read FSourceText write FSourceText;
     property CreationRealm: TGocciaRealm read FCreationRealm;
     property PrivateBrandToken: string read FPrivateBrandToken;
@@ -782,6 +792,7 @@ begin
   FNameDeleted := False;
   FLengthDeleted := False;
   FDefinitionScope := nil;
+  FDefinitionSourcePath := '';
   if Assigned(FSuperClass) then
     FClassPrototype.Prototype := FSuperClass.Prototype
   else if TGocciaObjectValue.SharedObjectPrototype <> nil then
