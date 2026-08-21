@@ -205,7 +205,7 @@ since those ES module builds routinely sit in packages that declare no type.
 
 A file classified as CommonJS raises:
 
-```
+```text
 Package "async-channel" resolved to a CommonJS file (index.js); GocciaScript loads only ES modules
 ```
 
