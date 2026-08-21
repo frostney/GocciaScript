@@ -80,16 +80,28 @@ function EnterAsyncContext(
   const ASnapshot: TGocciaAsyncContextSnapshot): Integer;
 procedure LeaveAsyncContext(const AToken: Integer);
 
-{ Drops every snapshot this thread is holding. Called when an engine is torn
-  down, because snapshots reference that engine's objects and the next engine
-  on the same thread must not inherit them.
-
-  `enterWith` is why this is not merely tidy: it installs a context with no
-  scope to leave, so a program that calls it outside a `run` deliberately
-  leaves one in effect when it ends. Without this reset the next engine on the
-  worker thread started with the previous engine's snapshot still current, and
-  marking it walked objects belonging to a realm that no longer exists. }
+{ Drops every snapshot this thread is holding. Thread teardown only: an engine
+  must use EnterEngineAsyncContext/LeaveEngineAsyncContext instead, which do
+  the same job for the engine's own span without reaching past it. }
 procedure ResetAsyncContextState;
+
+{ The bracket an engine holds for its whole lifetime.
+
+  Enter hides whatever the thread was already holding and starts the engine on
+  an empty context, so a worker thread reusing a slot cannot let one engine
+  inherit the snapshot the previous one left behind — `enterWith` installs a
+  context with no scope to leave, so a program that calls it outside a `run`
+  deliberately ends with one in effect, and marking it would walk objects
+  belonging to a realm that no longer exists.
+
+  Leave restores exactly what Enter hid. Engines nest on one thread — a
+  ShadowRealm owns a child engine, and freeing it can happen inside the outer
+  engine's `run` or a microtask callback — so the teardown has to put the outer
+  engine's context back rather than clear the thread. The displaced snapshot
+  waits on the same collector-marked stack EnterAsyncContext uses, which is
+  what keeps it alive while the inner engine runs. }
+function EnterEngineAsyncContext: Integer;
+procedure LeaveEngineAsyncContext(const AToken: Integer);
 
 { Both derivations tolerate a nil source snapshot and return nil when the
   result would be empty, so the nil-is-empty representation is closed. }
@@ -342,6 +354,23 @@ begin
   { The root source is dropped too: it registered with the collector this
     engine used, and the next engine gets a fresh registration on demand. }
   FreeAndNil(GSnapshotRoots);
+end;
+
+function EnterEngineAsyncContext: Integer;
+begin
+  Result := EnterAsyncContext(nil);
+end;
+
+procedure LeaveEngineAsyncContext(const AToken: Integer);
+begin
+  LeaveAsyncContext(AToken);
+  { The root source registered with the collector this engine used, so drop it
+    once nothing is left for it to mark. While an outer engine still holds a
+    context it has to stay: nothing else publishes that snapshot, and
+    EnsureSnapshotRoots is only reached from the next Set/Enter, which may
+    never come. }
+  if (not Assigned(GCurrentSnapshot)) and (GSavedSnapshotCount = 0) then
+    FreeAndNil(GSnapshotRoots);
 end;
 
 procedure CleanupAsyncContextThreadState;

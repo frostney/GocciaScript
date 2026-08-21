@@ -166,10 +166,12 @@ type
     // are initialized: a ~base~ constructor does it before its body (§10.2.2
     // step 5b), a ~derived~ one when super() returns (§13.3.7.1 step 11).
     // Reports True when a resolved superclass or a linked native super
-    // constructor is present. Known gap: `class A extends null {}` is
-    // ~derived~ per the spec but reports False here, because extends-null
-    // records no superclass. Tree-walk `extends null` is separately broken;
-    // do not lean on this predicate for it.
+    // constructor is present. `class A extends null {}` reports True, which is
+    // the spec-correct answer (§15.7.14 step 9a makes it ~derived~): the
+    // evaluator links Function.prototype as the native super constructor for
+    // it, and the construction paths recognise that sentinel and raise the
+    // TypeError §10.2.2 requires when the implicit derived constructor tries
+    // to call super().
     function HasDerivedConstructorKind: Boolean;
     function HasInstanceInitializerWork: Boolean;
     // ECMAScript: number of expected constructor parameters before the first
@@ -423,6 +425,30 @@ function GetNativePrototypeFromConstructor(
   const ANewTarget: TGocciaValue;
   const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
 
+type
+  { Runs a class's AST-declared instance elements against AInstance.
+
+    §15.7.10 ClassFieldDefinitionEvaluation records an evaluator-built class's
+    fields as expressions in InstancePropertyDefs, not as the closure-shaped
+    values RunFieldInitializers walks, and evaluating an expression needs an
+    evaluation context. Only the tree-walk evaluator has one, so it registers
+    this hook and every other holder of a TGocciaClassValue — including the
+    bytecode VM — reaches those elements through it. }
+  TGocciaClassInstanceElementsHook = procedure(
+    const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue);
+
+procedure RegisterClassInstanceElementsHook(
+  const AHook: TGocciaClassInstanceElementsHook);
+{ True when AClassValue's instance elements are AST-declared, which is exactly
+  the classes the evaluator built. A compiled class records field initializers
+  as closures instead and always reports False here. }
+function HasASTInstanceElements(
+  const AClassValue: TGocciaClassValue): Boolean;
+{ Runs them when there are any and an evaluator registered itself; reports
+  whether it ran anything. }
+function TryRunASTInstanceElements(const AClassValue: TGocciaClassValue;
+  const AInstance: TGocciaValue): Boolean;
+
 implementation
 
 uses
@@ -465,6 +491,33 @@ uses
   Goccia.Values.WeakMapValue,
   Goccia.Values.WeakRefValue,
   Goccia.Values.WeakSetValue;
+
+var
+  GClassInstanceElementsHook: TGocciaClassInstanceElementsHook;
+
+procedure RegisterClassInstanceElementsHook(
+  const AHook: TGocciaClassInstanceElementsHook);
+begin
+  GClassInstanceElementsHook := AHook;
+end;
+
+function HasASTInstanceElements(
+  const AClassValue: TGocciaClassValue): Boolean;
+begin
+  Result := Assigned(AClassValue) and
+    ((AClassValue.InstancePropertyDefs.Count > 0) or
+     (AClassValue.PrivateInstancePropertyDefs.Count > 0));
+end;
+
+function TryRunASTInstanceElements(const AClassValue: TGocciaClassValue;
+  const AInstance: TGocciaValue): Boolean;
+begin
+  Result := Assigned(GClassInstanceElementsHook) and
+    (AInstance is TGocciaObjectValue) and
+    HasASTInstanceElements(AClassValue);
+  if Result then
+    GClassInstanceElementsHook(AClassValue, AInstance);
+end;
 
 function ToNumberConstructorValue(
   const AValue: TGocciaValue): TGocciaNumberLiteralValue;

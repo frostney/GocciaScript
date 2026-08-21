@@ -194,7 +194,8 @@ A resolved file inside a package is classified before it is loaded:
 - A package whose manifest declares `"type": "module"` ships ES modules.
 - Otherwise the source text decides: a file carrying CommonJS markers
   (a `require(...)` call, `module.exports`, `exports.x`) and no ES module
-  markers (a statement-position `import` or `export`) is CommonJS.
+  markers (an `import` or `export` keyword followed by whitespace, `{`, `*`,
+  or a quote) is CommonJS.
 
 The source scan is a heuristic, and it is asymmetric on purpose. A file with
 both shapes — an interop shim calling `require` from an ES module — is read as
@@ -202,6 +203,16 @@ an ES module, which is what every other toolchain does with it. A file with
 neither is inert and loads either way. Reading the file text rather than
 trusting `"type"` is what makes the `module`-field deviation above work at all,
 since those ES module builds routinely sit in packages that declare no type.
+
+The scan matches raw text and does not tokenize, so it does not skip comments
+or string literals: a CommonJS bundle whose banner comment mentions `import` or
+`export` carries an ES module marker as far as the classifier is concerned and
+is not refused here. Such a file is loaded and then fails at its first
+`require`, with an `Undefined variable: require` reference error rather than the
+package-relative CommonJS message below. That is the deliberate direction of
+the asymmetry — a false *negative* costs a worse diagnostic, while tokenizing
+every candidate file to remove it would cost a parse of every resolved package
+entry.
 
 A file classified as CommonJS raises:
 

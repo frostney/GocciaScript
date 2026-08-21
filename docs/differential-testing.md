@@ -228,7 +228,8 @@ A differential suite that is handed to an external runtime uses only the
 suite named `*.goccia.test.js` is the exception, because it deliberately
 reaches for goccia-only globals — or asserts behavior that deliberately
 diverges from both external runtimes — and it is classified `skip` for both. A suite that needs the mocking API instead imports `vi` from
-`vitest`, which every runtime that can run it resolves for itself. A `.test.ts`
+`vitest`, which each runtime that can run it resolves its own way — Vitest to
+itself, goccia to its bundled compatibility shim. A `.test.ts`
 suite works under bun because bun transpiles TypeScript natively while goccia
 parses annotations as types-as-comments.
 

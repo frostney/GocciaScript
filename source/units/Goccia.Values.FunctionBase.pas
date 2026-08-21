@@ -1043,6 +1043,12 @@ var
     Assert(Intrinsic is TGocciaNativeFunctionValue,
       'Function.prototype.' + AName + ' must be a native function to carry ' +
       'its intrinsic kind');
+    // Production builds define PRODUCTION and compile with {$C-}
+    // (source/shared/Shared.inc), so the assertion above is gone there. The
+    // type test has to stand on its own rather than let an unchecked cast
+    // write IntrinsicKind through whatever the property actually holds.
+    if not (Intrinsic is TGocciaNativeFunctionValue) then
+      Exit;
     TGocciaNativeFunctionValue(Intrinsic).IntrinsicKind := AKind;
   end;
 

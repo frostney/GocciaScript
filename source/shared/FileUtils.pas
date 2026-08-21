@@ -19,7 +19,12 @@ function FindAllFilesExcludingDirectories(const ADirectory: string;
   const AFileExtensions: array of string;
   const AExcludedDirectoryNames: array of string): TStringList;
 { True when APath is rooted rather than interpreted against a working
-  directory: a leading path separator, a drive letter, or a UNC prefix.
+  directory. The test is platform-specific because the spellings are: on UNIX
+  only a leading '/' roots a path, and a backslash is an ordinary filename
+  character; on Windows a UNC prefix, a leading separator, or a drive letter
+  *followed by a separator* does, while the drive-relative `C:packages` is
+  resolved against that drive's working directory and is therefore not
+  absolute.
   (Several units still carry private copies of this predating the shared one;
   they are unchanged here rather than refactored in passing.) }
 function IsAbsoluteHostPath(const APath: string): Boolean;
@@ -46,15 +51,32 @@ uses
   TextEncoding;
 
 function IsAbsoluteHostPath(const APath: string): Boolean;
+{$IFDEF UNIX}
+begin
+  { A backslash is an ordinary filename character here, so `\packages` is a
+    relative path, not a rooted one. }
+  Result := (Length(APath) > 0) and (APath[1] = '/');
+end;
+{$ELSE}
 begin
   if Length(APath) = 0 then
     Exit(False);
-  if (APath[1] = '/') or (APath[1] = '\') then
+  { A UNC path is rooted at the share. }
+  if (Copy(APath, 1, 2) = '\\') or (Copy(APath, 1, 2) = '//') then
     Exit(True);
-  if (Length(APath) >= 2) and (APath[2] = ':') then
+  { A leading separator with no drive is root-relative rather than fully
+    qualified, but it is still rooted: it is not interpreted against the
+    working directory. }
+  if (APath[1] = '\') or (APath[1] = '/') then
     Exit(True);
-  Result := Copy(APath, 1, 2) = '\\';
+  { `C:\x` is rooted; `C:x` is drive-*relative* — resolved against that
+    drive's own working directory — so only the separator form counts. }
+  Result := (Length(APath) >= 3) and
+    (APath[2] = ':') and
+    ((APath[3] = '\') or (APath[3] = '/')) and
+    (UpCase(APath[1]) >= 'A') and (UpCase(APath[1]) <= 'Z');
 end;
+{$ENDIF}
 
 function ExpandHostFileName(const APath: string): string;
 begin

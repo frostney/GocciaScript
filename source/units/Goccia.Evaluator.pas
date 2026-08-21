@@ -3717,6 +3717,29 @@ begin
     AContext);
 end;
 
+{ ES2026 §10.2.2 [[Construct]] step 13.c: a ~derived~ constructor whose body
+  returned undefined must have initialized `this`, which only super() does.
+  LastSuperConstructorCalled is the record the method value keeps of the call
+  that just returned, so this has to run immediately after CallWithThisValue.
+
+  An implicit constructor is never a candidate: §15.7.14 step 15a synthesizes
+  one that forwards to super unconditionally, and it has no method value to
+  ask. }
+procedure RequireDerivedConstructorThisInitialized(
+  const AClassValue: TGocciaClassValue; const AResult: TGocciaValue);
+begin
+  if not ClassRequiresObjectConstructorReturn(AClassValue) then
+    Exit;
+  if Assigned(AResult) and not (AResult is TGocciaUndefinedLiteralValue) then
+    Exit;
+  if not Assigned(AClassValue.ConstructorMethod) then
+    Exit;
+  if AClassValue.ConstructorMethod.LastSuperConstructorCalled then
+    Exit;
+  ThrowReferenceError(
+    'Must call super constructor before returning from derived constructor');
+end;
+
 function InvokeConstructableWithReceiver(const AConstructor: TGocciaValue;
   const AArguments: TGocciaArgumentsCollection;
   const AReceiver: TGocciaValue;
@@ -3837,6 +3860,11 @@ begin
       SuperResult := ClassConstructor.ConstructorMethod.CallWithThisValue(
         AArguments, AReceiver, ConstructorThisValue, EffectiveNewTarget);
       ValidateClassConstructorReturn(ClassConstructor, SuperResult);
+      // ES2026 §10.2.2 step 13.c: a derived constructor returning undefined
+      // must have initialized `this`. The same check the `new` operator makes
+      // in InstantiateClass, so every route into a derived constructor body
+      // reports the missing super() rather than handing back a bare receiver.
+      RequireDerivedConstructorThisInitialized(ClassConstructor, SuperResult);
       if not (SuperResult is TGocciaObjectValue) and
          (ConstructorThisValue is TGocciaObjectValue) then
         SuperResult := ConstructorThisValue;
@@ -4206,6 +4234,10 @@ begin
         SuperResult := SuperClass.ConstructorMethod.CallWithThisValue(
           Arguments, AContext.Scope.ThisValue, ConstructorThisValue,
           AContext.Scope.FindNewTarget);
+        // §10.2.2 step 13.c again: the superclass constructor this super()
+        // just entered is itself derived, so returning without calling its own
+        // super() leaves `this` uninitialized.
+        RequireDerivedConstructorThisInitialized(SuperClass, SuperResult);
         if SuperResult is TGocciaObjectValue then
         begin
           AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
@@ -11449,11 +11481,21 @@ end;
 // anywhere up the superclass chain.
 //
 // The walk reads FSuperClass, which is resolved once at
-// ClassDefinitionEvaluation time. A later Object.setPrototypeOf on the
-// constructor therefore does not move this answer — deliberately: FSuperClass
-// is also what Instantiate and InstantiateClass drive construction from, so a
-// guard that disagreed with them would route a class into a path that then
-// built it from the other chain.
+// ClassDefinitionEvaluation time, and deliberately does not follow
+// GetConstructorPrototype. §15.7.14 step 9 fixes [[ConstructorKind]] and the
+// super chain when the class is defined; a later Object.setPrototypeOf on the
+// constructor changes static-method `super` lookups and nothing about
+// [[Construct]], so a guard that moved with it would decline exactly the
+// classes that must keep being redirected. Probed against Node v24.0.1:
+// `class WithMap extends Map {}; class Sub {}` with Sub retargeted onto
+// WithMap constructs an ordinary object with Sub.prototype and no Map
+// internals, which is what this guard's answer produces here.
+//
+// InstantiateClass's implicit-constructor branch does consult
+// GetConstructorPrototype, so the two disagree for a retargeted constructor.
+// That substitution is itself the deviation — it makes a retargeted base class
+// run the other class's constructor, which Node does not — and correcting it
+// belongs with the construction paths, not with this guard.
 function ClassChainReachesNativeConstruction(
   const AClassValue: TGocciaClassValue): Boolean;
 var
@@ -11468,6 +11510,33 @@ begin
     WalkClass := WalkClass.SuperClass;
   end;
   Result := False;
+end;
+
+{ The evaluation context a class's own definition environment supplies.
+
+  Every field is filled the way TGocciaFunctionValue builds a call context out
+  of its closure: a field initializer is guest code, so a context missing a
+  host callback is not a degraded context but a crashing one —
+  TGocciaImportCallExpression calls AContext.LoadModule with no assigned-check,
+  and CurrentFilePath is what `import()` and `import.meta` resolve against and
+  what coverage and call-stack frames are attributed to. }
+function BuildClassDefinitionContext(const AClassValue: TGocciaClassValue;
+  const ADefinitionScope: TGocciaScope): TGocciaEvaluationContext;
+begin
+  Result := Default(TGocciaEvaluationContext);
+  Result.Realm := AClassValue.CreationRealm;
+  Result.Scope := ADefinitionScope;
+  Result.OnError := ADefinitionScope.OnError;
+  Result.LoadModule := ADefinitionScope.LoadModule;
+  Result.LoadModuleSource := ADefinitionScope.LoadModuleSource;
+  Result.LoadDeferredModule := ADefinitionScope.LoadDeferredModule;
+  Result.ResolveModuleURL := ADefinitionScope.ResolveModuleURL;
+  Result.CurrentFilePath := AClassValue.DefinitionSourcePath;
+  Result.CoverageEnabled := (TGocciaCoverageTracker.Instance <> nil) and
+    TGocciaCoverageTracker.Instance.Enabled;
+  Result.StrictTypes := ADefinitionScope.EffectiveStrictTypes;
+  Result.NonStrictMode := ADefinitionScope.EffectiveNonStrictMode;
+  Result.CompatibilityNonStrictMode := Result.NonStrictMode;
 end;
 
 // ES2026 §7.3.14 Construct(F, argumentsList, newTarget) for a class the
@@ -11548,13 +11617,7 @@ begin
   { The class environment is the only context this construction can be
     anchored to — the caller is a native function with none of its own — and
     it is the one §15.7.10 ClassFieldDefinitionEvaluation step 2b names as the
-    initializers' [[Environment]] anyway. Every field is filled the way
-    TGocciaFunctionValue builds a call context out of its closure: a field
-    initializer is guest code, so a context missing a host callback is not a
-    degraded context but a crashing one — TGocciaImportCallExpression calls
-    AContext.LoadModule with no assigned-check, and CurrentFilePath is what
-    `import()` and `import.meta` resolve against and what coverage and
-    call-stack frames are attributed to.
+    initializers' [[Environment]] anyway.
 
     ApplyClassDefinitionSourceContext repairs the same four callbacks and the
     file path again around each initializer run, so removing either half alone
@@ -11562,20 +11625,7 @@ begin
     dead code to be tidied away: this one covers everything InstantiateClass
     does with the context outside an initializer run, and that one covers a
     superclass initialized from a context this function never built. }
-  EvalContext := Default(TGocciaEvaluationContext);
-  EvalContext.Realm := ClassValue.CreationRealm;
-  EvalContext.Scope := DefinitionScope;
-  EvalContext.OnError := DefinitionScope.OnError;
-  EvalContext.LoadModule := DefinitionScope.LoadModule;
-  EvalContext.LoadModuleSource := DefinitionScope.LoadModuleSource;
-  EvalContext.LoadDeferredModule := DefinitionScope.LoadDeferredModule;
-  EvalContext.ResolveModuleURL := DefinitionScope.ResolveModuleURL;
-  EvalContext.CurrentFilePath := ClassValue.DefinitionSourcePath;
-  EvalContext.CoverageEnabled := (TGocciaCoverageTracker.Instance <> nil) and
-    TGocciaCoverageTracker.Instance.Enabled;
-  EvalContext.StrictTypes := DefinitionScope.EffectiveStrictTypes;
-  EvalContext.NonStrictMode := DefinitionScope.EffectiveNonStrictMode;
-  EvalContext.CompatibilityNonStrictMode := EvalContext.NonStrictMode;
+  EvalContext := BuildClassDefinitionContext(ClassValue, DefinitionScope);
 
   { Same realm discipline as TGocciaClassValue.Instantiate: the intrinsics a
     field initializer allocates (object and array literals, errors) come from
@@ -11594,6 +11644,42 @@ begin
       SetCurrentRealm(PreviousRealm);
   end;
   Result := True;
+end;
+
+// The evaluator's half of TryRunASTInstanceElements: a class whose instance
+// elements are AST expressions can only have them run here, and a holder that
+// is not the evaluator — the bytecode VM driving a compiled subclass's super()
+// into a superclass the evaluator built, which is what a module's top-level
+// function declarations produce even in bytecode mode — has no context of its
+// own to run them in. Without this the fields are silently dropped in bytecode
+// mode and present in interpreted mode.
+procedure RunEvaluatorClassInstanceElements(
+  const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue);
+var
+  DefinitionScope: TGocciaScope;
+  EvalContext: TGocciaEvaluationContext;
+  PreviousRealm: TGocciaRealm;
+  SwapRealm: Boolean;
+begin
+  if not (AInstance is TGocciaObjectValue) then
+    Exit;
+  DefinitionScope := AClassValue.DefinitionScope;
+  if not Assigned(DefinitionScope) then
+    Exit;
+
+  EvalContext := BuildClassDefinitionContext(AClassValue, DefinitionScope);
+  PreviousRealm := CurrentRealm;
+  SwapRealm := Assigned(AClassValue.CreationRealm) and
+    (AClassValue.CreationRealm <> PreviousRealm);
+  if SwapRealm then
+    SetCurrentRealm(AClassValue.CreationRealm);
+  try
+    RunClassInstanceInitializers(AClassValue,
+      TGocciaObjectValue(AInstance), EvalContext);
+  finally
+    if SwapRealm then
+      SetCurrentRealm(PreviousRealm);
+  end;
 end;
 
 // Template literals without real interpolations are returned as static strings.
@@ -13241,5 +13327,6 @@ end;
 
 initialization
   RegisterClassConstructRedirectHook(RedirectEvaluatorClassConstruct);
+  RegisterClassInstanceElementsHook(RunEvaluatorClassInstanceElements);
 
 end.

@@ -135,9 +135,11 @@ describe("Function.prototype.apply", () => {
     });
 
     try {
-      // One-, two- and three-element arrays take the small-argument fast path;
-      // longer ones go through the generic list build. Both must observe the
-      // inherited accessor rather than substituting undefined for the hole.
+      // A hole disqualifies the small-argument fast path at every length, so
+      // all four of these go through the generic list build regardless of how
+      // short they are. Each must observe the inherited accessor rather than
+      // substituting undefined for the hole — including the bound wrapper,
+      // which reaches apply through a different callee.
       expect(collect.apply(undefined, [1, , 3])).toBe("1|inherited|3");
       expect(collect.apply(undefined, [1, ,])).toBe("1|inherited");
       expect(collect.apply(undefined, [1, , 3, 4])).toBe("1|inherited|3|4");
