@@ -105,15 +105,17 @@ field. Interpreted mode did exactly that until the shared Construct operation
 was routed into the same instantiation `new` uses, and the suite pins the
 newTarget and override-return shapes alongside it.
 
-Two shapes are deliberately absent. A class whose superclass chain reaches a
-built-in (`extends Array`, `extends Promise`) is a known interpreted-mode gap —
-the shared Construct operation declines it and builds it without instance
-elements, while `new` initializes them — so gating on bun would report a gap
-already tracked elsewhere. It is pinned in
-`tests/built-ins/Reflect/construct/native-chain-instance-elements.js`, which
-asserts that all the Construct routes agree with each other so that a partial
-fix cannot land unnoticed. `new.target` inside a field initializer is absent for
-the opposite reason: node, bun and goccia all agree it is `undefined` as a
+One shape is deliberately absent. A class whose superclass chain reaches a
+built-in (`extends Array`, `extends Promise`) is covered against node instead,
+in `tests/built-ins/Reflect/construct/native-chain-instance-elements.js`: the
+shared Construct operation declines such a class so that the built-in keeps its
+argument-validation ordering, and the instance elements are run afterwards
+against the receiver it allocated. That file asserts every Construct route
+agrees with `new`, so a partial fix cannot land unnoticed, and
+`tests/language/classes/native-chain-implicit-constructors.js` covers the
+intermediate classes in a longer chain. `new.target` inside a field initializer
+is absent for a different reason: node, bun and goccia all agree it is
+`undefined` as a
 script, but under `bun test` 1.4.0 the same class body reports it defined, so
 gating would report bun's transpile as a goccia divergence. It is covered
 against node in `tests/built-ins/Reflect/construct/instance-elements.js`.

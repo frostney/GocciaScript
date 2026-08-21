@@ -17,6 +17,7 @@ import {
   fnDeclClosureRead,
   fnDeclConstruct,
   makeEvaluatorBuiltBase,
+  makeFieldedSubclassOf,
   makeSubclassOf,
   fnDeclDerivedConstruct,
   fnDeclLocalImplicitSubclassConstruct,
@@ -189,6 +190,30 @@ describe("imported module functions construct module classes", () => {
     expect(implicit.label).toBe("id-evaluator-base");
     expect(implicit.n).toBe(5);
     expect(implicit.brand()).toBe("id-evaluator-brand");
+  });
+
+  // §15.7.14 step 15a: the evaluator-built class in the middle has no
+  // constructor of its own, so the compiled subclass's implicit constructor
+  // used to walk straight past it to the base that does — dropping the middle
+  // class's fields and its private brand.
+  test("a compiled subclass runs an evaluator-built middle class's fields", () => {
+    const Base = makeEvaluatorBuiltBase();
+    const Middle = makeFieldedSubclassOf(Base);
+
+    class Compiled extends Middle {
+      own = "compiled";
+    }
+
+    const instance = new Compiled(4);
+    expect(Object.keys(instance)).toEqual(["label", "n", "middle", "own"]);
+    expect(instance.middle).toBe("id-evaluator-middle");
+    expect(instance.middleBrand()).toBe("id-evaluator-middle-brand");
+    expect(instance.brand()).toBe("id-evaluator-brand");
+    expect(instance.n).toBe(4);
+
+    const constructed = Reflect.construct(Compiled, [6]);
+    expect(Object.keys(constructed)).toEqual(["label", "n", "middle", "own"]);
+    expect(constructed.middle).toBe("id-evaluator-middle");
   });
 
   test("entry-file construction of a derived module class initializes once", () => {

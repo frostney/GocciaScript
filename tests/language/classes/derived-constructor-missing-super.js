@@ -11,10 +11,10 @@ features: [class-inheritance, Reflect, class]
 // covers `this` *access*, so a body that touches neither has no error of its
 // own to raise. Probed against Node v24.0.1: every one of these throws.
 //
-// Known deviation, identical in both modes and therefore not a parity break: a
-// subclass with no constructor of its own (`class L extends Middle {}`) still
-// constructs successfully. Its implicit constructor forwards through a
-// different set of paths, none of which consult the flag yet.
+// A subclass with no constructor of its own is not exempt: §15.7.14 step 15a
+// gives it an implicit constructor whose super() enters the same body, so the
+// constructor that returned without initializing `this` is still the one the
+// check asks about.
 
 class Base {}
 
@@ -55,6 +55,33 @@ describe("a derived constructor that never calls super()", () => {
 
   test("construction through a bound wrapper throws", () => {
     expectMissingSuper(() => new (Middle.bind(null))());
+  });
+
+  test("a subclass with no constructor of its own throws", () => {
+    class Leafless extends Middle {}
+
+    expectMissingSuper(() => new Leafless());
+    expectMissingSuper(() => Reflect.construct(Leafless, []));
+    expectMissingSuper(() => new (Leafless.bind(null))());
+  });
+
+  test("the check reaches through a chain of implicit constructors", () => {
+    class Leafless extends Middle {}
+    class Deeper extends Leafless {}
+
+    expectMissingSuper(() => new Deeper());
+    expectMissingSuper(() => Reflect.construct(Deeper, []));
+  });
+
+  test("a subclass with fields of its own still throws", () => {
+    // The fields would otherwise be initialized against a receiver that
+    // §10.2.2 step 13.c says was never bound.
+    class Fielded extends Middle {
+      own = 1;
+    }
+
+    expectMissingSuper(() => new Fielded());
+    expectMissingSuper(() => Reflect.construct(Fielded, []));
   });
 
   test("a constructor that does call super() is unaffected", () => {

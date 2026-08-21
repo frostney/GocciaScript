@@ -11240,6 +11240,7 @@ var
   ConstructorThisValue: TGocciaValue;
   EffectiveNewTarget: TGocciaValue;
   InstancePrototype: TGocciaObjectValue;
+  CollapsedChain: TGocciaClassChain;
   function ConstructNativeSuperInstance(
     const AConstructor: TGocciaObjectValue): TGocciaObjectValue;
   var
@@ -11332,6 +11333,13 @@ var
   begin
     RunClassInstanceInitializers(AClassValue, Instance, AContext);
   end;
+  procedure RunCollapsedInstanceInitializers;
+  var
+    Index: Integer;
+  begin
+    for Index := High(CollapsedChain) downto 0 do
+      RunClassInstanceInitializers(CollapsedChain[Index], Instance, AContext);
+  end;
 begin
   CheckExecutionTimeout;
   IncrementInstructionCounter;
@@ -11367,9 +11375,18 @@ begin
     IncrementInstructionCounter;
     CheckInstructionLimit;
     NativeInstance := WalkClass.CreateNativeInstance(AArguments);
+    { A native super *constructor* — a built-in exposed as a function value
+      rather than as a class value, which is what Promise, Error and their
+      subclasses are — is invoked again by an explicit super(), and the
+      receiver it returns replaces this one wholesale. Building it here as
+      well ran the Promise executor twice for every
+      `class P extends Promise` with a constructor of its own. Only the
+      class-value built-ins reached through CreateNativeInstance above are
+      initialized in place by super(), so only those need pre-creating. }
     if (not Assigned(NativeInstance)) and
-       Assigned(WalkClass.NativeSuperConstructor) then
-      // The explicit super() path reuses this precreated native receiver.
+       Assigned(WalkClass.NativeSuperConstructor) and
+       not Assigned(AClassValue.ConstructorMethod) then
+      // The implicit super() path reuses this precreated native receiver.
       NativeInstance := ConstructNativeSuperInstance(
         WalkClass.NativeSuperConstructor);
     if Assigned(NativeInstance) then
@@ -11414,9 +11431,12 @@ begin
     end
     else
     begin
-      ImplicitSuperClass := AClassValue.SuperClass;
-      if AClassValue.GetConstructorPrototype is TGocciaClassValue then
-        ImplicitSuperClass := TGocciaClassValue(AClassValue.GetConstructorPrototype);
+      { §15.7.14 step 15a: this class runs an implicit constructor, and so does
+        every class between it and the first ancestor that has a constructor
+        body of its own. CollapsedChain is that stretch — the classes whose
+        instance elements the super construction below is about to step over. }
+      ImplicitSuperClass := ResolveImplicitConstructorChain(AClassValue,
+        CollapsedChain);
 
       // A compiled superclass has no AST ConstructorMethod; it runs its own
       // field initializers and constructor body against the instance.
@@ -11434,6 +11454,12 @@ begin
         ConstructedValue := ImplicitSuperClass.ConstructorMethod.CallWithThisValue(
           AArguments, Instance, ConstructorThisValue, EffectiveNewTarget);
         ValidateClassConstructorReturn(ImplicitSuperClass, ConstructedValue);
+        { §10.2.2 step 13.c applies to the constructor that returned, and the
+          borrowed one is exactly that: a subclass with no constructor of its
+          own, extending a class whose constructor never calls super(), still
+          finishes with `this` uninitialized. }
+        RequireDerivedConstructorThisInitialized(ImplicitSuperClass,
+          ConstructedValue);
         if IsUndefinedConstructedValue(ConstructedValue) then
           ApplyReplacementResult(ConstructorThisValue)
         else
@@ -11468,7 +11494,9 @@ begin
       // The implicit derived constructor (§15.7.14 step 15a) forwards to
       // super and then initializes its instance elements — so they run once
       // the super construction above has completed, against whatever receiver
-      // it left behind.
+      // it left behind. Every class the chain walk collapsed owes the same
+      // step, base-most first, before this class's own fields land.
+      RunCollapsedInstanceInitializers;
       if HasDerivedConstructorReturnRestriction then
         RunInstanceInitializers;
     end;
@@ -11489,20 +11517,13 @@ end;
 //
 // The walk reads FSuperClass, which is resolved once at
 // ClassDefinitionEvaluation time, and deliberately does not follow
-// GetConstructorPrototype. §15.7.14 step 9 fixes [[ConstructorKind]] and the
-// super chain when the class is defined; a later Object.setPrototypeOf on the
-// constructor changes static-method `super` lookups and nothing about
-// [[Construct]], so a guard that moved with it would decline exactly the
-// classes that must keep being redirected. Probed against Node v24.0.1:
-// `class WithMap extends Map {}; class Sub {}` with Sub retargeted onto
-// WithMap constructs an ordinary object with Sub.prototype and no Map
-// internals, which is what this guard's answer produces here.
-//
-// InstantiateClass's implicit-constructor branch does consult
-// GetConstructorPrototype, so the two disagree for a retargeted constructor.
-// That substitution is itself the deviation — it makes a retargeted base class
-// run the other class's constructor, which Node does not — and correcting it
-// belongs with the construction paths, not with this guard.
+// GetConstructorPrototype: this only decides which [[Construct]]
+// implementation runs, and both of them now agree about a retargeted
+// constructor. ResolveImplicitConstructorChain is where §13.3.7.3
+// GetSuperConstructor is applied — a ~derived~ class's super() follows the
+// mutated chain, a ~base~ class has no super() to follow it with — so a guard
+// that moved with the mutation would only decline classes that must keep being
+// redirected.
 function ClassChainReachesNativeConstruction(
   const AClassValue: TGocciaClassValue): Boolean;
 var
@@ -11575,25 +11596,21 @@ end;
 // A chain that reaches a built-in constructor stays on Instantiate, which is
 // what TGocciaVM.ConstructValue already does for the same shapes. Only
 // Instantiate implements the §10.1.13 GetPrototypeFromConstructor ordering
-// those constructors need — ArrayBuffer, SharedArrayBuffer and DataView
-// validate their arguments before newTarget.prototype may be observed — and
-// only Instantiate builds the native receiver exactly once for a derived class
-// whose constructor calls super() explicitly, which is a live bug in
-// InstantiateClass (the receiver is pre-created by the WalkClass loop and then
-// built again by super(), running a Promise executor twice).
+// those constructors need: ArrayBuffer, SharedArrayBuffer and DataView
+// validate their arguments before newTarget.prototype may be observed, which
+// tests/built-ins/ArrayBuffer/constructor.js asserts through exactly this
+// route.
 //
-// The cost of declining is precise, and larger than "Reflect.construct is
-// imperfect": such a class's instance elements are skipped by EVERY route
-// through ConstructValue, in interpreted mode only. `new` is NOT affected —
-// EvaluateNewExpression calls InstantiateClass directly and initializes them
-// — so the gap is reachable without writing Reflect at all, through any
-// species construction: SubclassOfArray.from(...) / .map(...) and
-// SubclassOfPromise.resolve(...).then(...) all hand back an instance whose own
-// fields are undefined. Bytecode mode is correct for all of them, so this is
-// also a mode divergence. Closing it means fixing InstantiateClass's two gaps
-// above, not widening this guard; the current behaviour is pinned in
-// tests/built-ins/Reflect/construct/native-chain-instance-elements.js
-// so that a partial fix cannot land unnoticed.
+// Declining used to cost such a class every instance element on EVERY route
+// through ConstructValue — Reflect.construct, a proxy without a construct
+// trap, a bound class, and every species construction (Array.from,
+// Array.prototype.map, Promise.prototype.then, ...) handed back an instance
+// whose own fields were undefined, while `new` was unaffected. It no longer
+// does: TGocciaClassValue.Instantiate runs those elements itself through the
+// TGocciaClassInstanceElementsHook the evaluator registers, at the §13.3.7.1
+// step 11 point, so declining here now costs nothing observable. The agreement
+// between all of these routes is pinned in
+// tests/built-ins/Reflect/construct/native-chain-instance-elements.js.
 function RedirectEvaluatorClassConstruct(const ATarget: TGocciaValue;
   const AArguments: TGocciaArgumentsCollection;
   const ANewTarget: TGocciaValue;
