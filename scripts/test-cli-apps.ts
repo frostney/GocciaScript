@@ -2224,6 +2224,302 @@ await section("Loader: --globals file...", async () => {
   }
 });
 
+/**
+ * Builds a throwaway project with a node_modules tree covering the shapes
+ * docs/module-resolution.md describes: an exports map with a wildcard, a
+ * transitive bare dependency behind "main", and a CommonJS-only package.
+ * Returns the project directory.
+ */
+const writeNodeModulesProject = (tmp: string): string => {
+  const project = join(tmp, "project");
+  const packageDirectory = (name: string): string => {
+    const directory = join(project, "node_modules", name);
+    mkdirSync(directory, { recursive: true });
+    return directory;
+  };
+
+  mkdirSync(project, { recursive: true });
+  writeFileSync(
+    join(project, "app.js"),
+    [
+      'import { chain } from "pkg-exports";',
+      'import { widen } from "pkg-exports/sub/widen";',
+      "console.log(chain() + \":\" + widen(21));",
+      "",
+    ].join("\n"),
+  );
+
+  const exportsPackage = packageDirectory("pkg-exports");
+  mkdirSync(join(exportsPackage, "src"), { recursive: true });
+  writeFileSync(
+    join(exportsPackage, "package.json"),
+    JSON.stringify({
+      name: "pkg-exports",
+      type: "module",
+      exports: { ".": { import: "./index.js" }, "./sub/*": "./src/*.ts" },
+    }),
+  );
+  writeFileSync(
+    join(exportsPackage, "index.js"),
+    ['import { label } from "pkg-main";', "export const chain = () => label;", ""].join("\n"),
+  );
+  writeFileSync(
+    join(exportsPackage, "src", "widen.ts"),
+    "export const widen = (value: number): number => value * 2;\n",
+  );
+
+  const mainPackage = packageDirectory("pkg-main");
+  writeFileSync(
+    join(mainPackage, "package.json"),
+    JSON.stringify({ name: "pkg-main", type: "module", main: "./entry.js" }),
+  );
+  writeFileSync(join(mainPackage, "entry.js"), 'export const label = "chained";\n');
+
+  const commonjsPackage = packageDirectory("pkg-commonjs");
+  writeFileSync(
+    join(commonjsPackage, "package.json"),
+    JSON.stringify({ name: "pkg-commonjs", main: "./index.js" }),
+  );
+  writeFileSync(
+    join(commonjsPackage, "index.js"),
+    ['const helper = require("./helper.js");', "module.exports = { helper };", ""].join("\n"),
+  );
+  writeFileSync(join(commonjsPackage, "helper.js"), "module.exports = 1;\n");
+
+  return project;
+};
+
+await section("Loader: bare specifiers stay sealed without --allow-node-modules...", async () => {
+  const tmp = makeTmp();
+  try {
+    const project = writeNodeModulesProject(tmp);
+    const proc = Bun.spawnSync([resolve(LOADER), "app.js", "--source-type=module"], {
+      cwd: project,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const out = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode === 0)
+      throw new Error(`A bare specifier must fail without the opt-in, got: ${out}`);
+    if (!out.includes('Cannot resolve bare module specifier "pkg-exports"'))
+      throw new Error(`Expected the sealed-default message, got: ${out}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Loader: --allow-node-modules resolves exports, wildcards, and transitive deps...", async () => {
+  const tmp = makeTmp();
+  try {
+    const project = writeNodeModulesProject(tmp);
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const proc = Bun.spawnSync(
+        [resolve(LOADER), "app.js", "--source-type=module", `--mode=${mode}`, "--allow-node-modules"],
+        { cwd: project, stdout: "pipe", stderr: "pipe" },
+      );
+      if (proc.exitCode !== 0 || !containsLine(proc.stdout.toString(), "chained:42"))
+        throw new Error(
+          `--allow-node-modules should resolve the ${mode} run: ${proc.stdout}${proc.stderr}`,
+        );
+    }
+
+    // The config-file spelling has to reach the resolver too, since a project
+    // that needs the capability wants it recorded, not retyped.
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({ "allow-node-modules": true }));
+    const configProc = Bun.spawnSync([resolve(LOADER), "app.js", "--source-type=module"], {
+      cwd: project,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (configProc.exitCode !== 0 || !containsLine(configProc.stdout.toString(), "chained:42"))
+      throw new Error(
+        `"allow-node-modules": true should resolve from a config file: ${configProc.stdout}${configProc.stderr}`,
+      );
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Loader: --allow-node-modules=<dir> caps the ancestor walk...", async () => {
+  const tmp = makeTmp();
+  try {
+    const project = writeNodeModulesProject(tmp);
+    // The ceiling names a directory below the one holding node_modules, so the
+    // walk can never reach the packages the unbounded form finds.
+    const inner = join(project, "src");
+    mkdirSync(inner, { recursive: true });
+    writeFileSync(join(inner, "app.js"), 'import "pkg-exports";\n');
+    const proc = Bun.spawnSync(
+      [resolve(LOADER), "src/app.js", "--source-type=module", `--allow-node-modules=${inner}`],
+      { cwd: project, stdout: "pipe", stderr: "pipe" },
+    );
+    const out = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode === 0)
+      throw new Error(`A ceiling below node_modules must not resolve, got: ${out}`);
+    if (!out.includes('Module not found: "pkg-exports"'))
+      throw new Error(`Expected a not-found failure inside the ceiling, got: ${out}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Loader: a relative config ceiling anchors to the config file...", async () => {
+  const tmp = makeTmp();
+  try {
+    const project = writeNodeModulesProject(tmp);
+    const foreign = join(tmp, "foreign");
+    mkdirSync(foreign, { recursive: true });
+
+    // "./" names the project directory because the config file lives there —
+    // not whatever directory the command happened to be run from. Running from
+    // a foreign cwd is the whole point: anchored to the cwd this would look
+    // for <foreign>/node_modules and find nothing.
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({ "allow-node-modules": "./" }));
+    const proc = Bun.spawnSync(
+      [resolve(LOADER), join(project, "app.js"), "--source-type=module"],
+      { cwd: foreign, stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0 || !containsLine(proc.stdout.toString(), "chained:42"))
+      throw new Error(
+        `A relative config ceiling should resolve from a foreign cwd: ${proc.stdout}${proc.stderr}`,
+      );
+
+    // And it really is a ceiling, not an ignored value: pointing it at a
+    // subdirectory that holds no node_modules must refuse.
+    const inner = join(project, "src");
+    mkdirSync(inner, { recursive: true });
+    writeFileSync(join(inner, "app.js"), 'import "pkg-exports";\n');
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({ "allow-node-modules": "./src" }));
+    const bounded = Bun.spawnSync(
+      [resolve(LOADER), join(inner, "app.js"), "--source-type=module"],
+      { cwd: foreign, stdout: "pipe", stderr: "pipe" },
+    );
+    const boundedOut = bounded.stdout.toString() + bounded.stderr.toString();
+    if (bounded.exitCode === 0 || !boundedOut.includes('Module not found: "pkg-exports"'))
+      throw new Error(`An anchored ceiling should bound the walk, got: ${boundedOut}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Loader: --allow-node-modules emits a capability-audit grant...", async () => {
+  const tmp = makeTmp();
+  try {
+    const project = writeNodeModulesProject(tmp);
+    const audit = join(tmp, "node-modules-audit.jsonl");
+    const proc = Bun.spawnSync(
+      [
+        resolve(LOADER),
+        "app.js",
+        "--source-type=module",
+        "--allow-node-modules=.",
+        `--audit-log=${audit}`,
+      ],
+      { cwd: project, stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0)
+      throw new Error(`Audited run should still resolve: ${proc.stdout}${proc.stderr}`);
+    const events = readJsonLines(audit);
+    // The grant is a host decision made once at configuration time, so there
+    // is exactly one event no matter how many packages the run resolves. The
+    // subject is the *expanded* ceiling, which is why the expectation goes
+    // through realpathSync: the engine reports the path it will actually
+    // compare against, not the spelling the flag was given.
+    if (
+      events.length !== 1 ||
+      events[0].kind !== "modules.node-modules" ||
+      events[0].decision !== "allow" ||
+      events[0].subject !== realpathSync(project)
+    )
+      throw new Error(`node_modules grant audit event mismatch: ${JSON.stringify(events)}`);
+
+    // The unbounded form reports an empty subject, which is how an auditor
+    // tells "walk the whole ancestor chain" from "confined to this tree".
+    const unboundedAudit = join(tmp, "unbounded-audit.jsonl");
+    const unbounded = Bun.spawnSync(
+      [
+        resolve(LOADER),
+        "app.js",
+        "--source-type=module",
+        "--allow-node-modules",
+        `--audit-log=${unboundedAudit}`,
+      ],
+      { cwd: project, stdout: "pipe", stderr: "pipe" },
+    );
+    if (unbounded.exitCode !== 0)
+      throw new Error(`Unbounded audited run should resolve: ${unbounded.stderr}`);
+    const unboundedEvents = readJsonLines(unboundedAudit);
+    if (
+      unboundedEvents.length !== 1 ||
+      unboundedEvents[0].kind !== "modules.node-modules" ||
+      unboundedEvents[0].subject !== ""
+    )
+      throw new Error(
+        `Unbounded grant should report an empty subject: ${JSON.stringify(unboundedEvents)}`,
+      );
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Loader: package resolution cannot escape the package directory...", async () => {
+  const tmp = makeTmp();
+  try {
+    const project = writeNodeModulesProject(tmp);
+    // A real file outside every package: a pass means refusal, not a miss.
+    writeFileSync(join(project, "node_modules", "escaped.js"), "export const escaped = 1;\n");
+
+    for (const specifier of [
+      "pkg-main/../escaped.js", // legacy subpath taken literally
+      "pkg-exports/sub/../../escaped", // pattern star value
+      "pkg-main/node_modules/escaped", // node_modules segment
+    ]) {
+      writeFileSync(join(project, "escape.js"), `import ${JSON.stringify(specifier)};\n`);
+      const proc = Bun.spawnSync(
+        [resolve(LOADER), "escape.js", "--source-type=module", "--allow-node-modules"],
+        { cwd: project, stdout: "pipe", stderr: "pipe" },
+      );
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode === 0)
+        throw new Error(`${specifier} escaped the package directory: ${out}`);
+      if (!out.includes(`Module not found: ${JSON.stringify(specifier)}`))
+        throw new Error(`${specifier} should be a plain not-found refusal, got: ${out}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Loader: a CommonJS package is refused by name, not parsed...", async () => {
+  const tmp = makeTmp();
+  try {
+    const project = writeNodeModulesProject(tmp);
+    writeFileSync(join(project, "cjs.js"), 'import "pkg-commonjs";\n');
+    const proc = Bun.spawnSync(
+      [resolve(LOADER), "cjs.js", "--source-type=module", "--allow-node-modules"],
+      { cwd: project, stdout: "pipe", stderr: "pipe" },
+    );
+    const out = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode === 0) throw new Error(`A CommonJS package must fail, got: ${out}`);
+    if (
+      !out.includes(
+        'Package "pkg-commonjs" resolved to a CommonJS file (index.js); GocciaScript loads only ES modules',
+      )
+    )
+      throw new Error(`Expected the named CommonJS refusal, got: ${out}`);
+    if (out.includes("SyntaxError"))
+      throw new Error(`A CommonJS package must not reach the parser, got: ${out}`);
+    // ADR 0108: the expanded path is a host-only diagnostic line, never part of
+    // the message a script can read. Matched by tail rather than by the full
+    // path the test built, because the platform may hand back a temp directory
+    // through a symlink (macOS /var -> /private/var) that the engine resolves.
+    if (!/Resolved to: .*[\\/]node_modules[\\/]pkg-commonjs[\\/]index\.js/.test(out))
+      throw new Error(`Expected the host-side resolved-path line, got: ${out}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --globals JSON5 file...", async () => {
   const tmp = makeTmp();
   try {

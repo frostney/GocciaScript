@@ -26,6 +26,7 @@ type
     FCompatibilityFlags: array[TGocciaCompatibility] of TFlagOption;
     FImportMap: TStringOption;
     FAliases: TRepeatableOption;
+    FAllowNodeModules: TOptionalStringOption;
     FTimeout: TIntegerOption;
     FMaxMemory: TInt64Option;
     FMaxInstructions: TInt64Option;
@@ -55,6 +56,7 @@ type
     property SourceType: TEnumOption<TGocciaSourceType> read FSourceType;
     property ImportMap: TStringOption read FImportMap;
     property Aliases: TRepeatableOption read FAliases;
+    property AllowNodeModules: TOptionalStringOption read FAllowNodeModules;
     property Timeout: TIntegerOption read FTimeout;
     property MaxMemory: TInt64Option read FMaxMemory;
     property MaxInstructions: TInt64Option read FMaxInstructions;
@@ -122,7 +124,7 @@ function TryApplyCompatibilityFlagArg(const AArg: string;
 implementation
 
 const
-  ENGINE_FIXED_OPTION_COUNT = 21;
+  ENGINE_FIXED_OPTION_COUNT = 22;
 
   SOURCE_COMPATIBILITY_FLAGS: array[TGocciaCompatibility]
     of TGocciaCompatibilityFlagDescriptor = (
@@ -212,6 +214,9 @@ begin
     'Path to import map JSON file', 'Engine');
   FAliases := TRepeatableOption.Create('alias',
     'Import alias (e.g. @/=./src/)', 'Engine');
+  FAllowNodeModules := TOptionalStringOption.Create('allow-node-modules',
+    'Resolve bare specifiers against node_modules, optionally confined to <dir>',
+    'Engine');
   FTimeout := TIntegerOption.Create('timeout',
     'Per-file timeout in milliseconds', 'Engine');
   FMaxMemory := TInt64Option.Create('max-memory',
@@ -263,6 +268,7 @@ begin
     FCompatibilityFlags[Flag].Free;
   FImportMap.Free;
   FAliases.Free;
+  FAllowNodeModules.Free;
   FTimeout.Free;
   FMaxMemory.Free;
   FMaxInstructions.Free;
@@ -302,6 +308,8 @@ begin
   Result[Index] := FImportMap;
   Inc(Index);
   Result[Index] := FAliases;
+  Inc(Index);
+  Result[Index] := FAllowNodeModules;
   Inc(Index);
   Result[Index] := FTimeout;
   Inc(Index);

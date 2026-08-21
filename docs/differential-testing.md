@@ -61,6 +61,11 @@ oracle instead of inheriting a default.
 | `g-filehook.test.js` | lifecycle | gate | advisory |
 | `h-modulemock.test.js` | mocks | gate | skip |
 | `i-modulemock-isolation.test.js` | mocks | gate | skip |
+| `j-tsspecifier.test.ts` | language | skip | gate |
+| `k-callgenerics.test.ts` | language | skip | gate |
+| `l-modulefndecl.test.js` | language | skip | gate |
+| `m-nodemods.test.js` | language | skip | gate |
+| `n-nodemods.goccia.test.js` | language | skip | skip |
 
 `h-modulemock.test.js` and `i-modulemock-isolation.test.js` are a pair: the
 first mocks `./mods/mockable.js` with a `vi.mock` factory, the second mocks
@@ -170,11 +175,30 @@ keeps them out of `scripts/check-test-structure.ts`.
 A differential suite that is handed to an external runtime uses only the
 `describe`/`test`/`expect` and hook globals that every runtime injects; a
 suite named `*.goccia.test.js` is the exception, because it deliberately
-reaches for goccia-only globals, and it is classified `skip` for both external
-runtimes. A suite that needs the mocking API instead imports `vi` from
+reaches for goccia-only globals — or asserts behavior that deliberately
+diverges from both external runtimes — and it is classified `skip` for both. A suite that needs the mocking API instead imports `vi` from
 `vitest`, which every runtime that can run it resolves for itself. A `.test.ts`
 suite works under bun because bun transpiles TypeScript natively while goccia
 parses annotations as types-as-comments.
+
+### Per-suite goccia flags
+
+The harness passes every suite the same goccia flags (`--source-type=module
+--compat-function --no-progress`). A suite that needs a capability the default
+profile seals names it in its classification's `gocciaFlags`, and only that
+suite gets it — enabling a capability for one file cannot quietly change what
+the others are testing. `m-nodemods.test.js` and `n-nodemods.goccia.test.js`
+use it for `--allow-node-modules`.
+
+A suite belongs in the bun-gated column only when the flag makes goccia do what
+the oracle already does natively. Bun resolves `node_modules` on its own, so
+`m-nodemods.test.js` compares two runtimes reading the same committed fixture
+under `scripts/differential/mods/nodemods/node_modules/` — a hand-written tree
+un-ignored in `.gitignore`, kept deliberately apart from the npm-managed
+`scripts/differential/node_modules` so `bun install` cannot prune it. The two
+behaviors bun does not share — the `module`-field preference and the named
+CommonJS refusal, both in [Module Resolution](module-resolution.md) — are in
+the `.goccia.test.js` half instead.
 
 The pinned oracle lives in the same directory: `scripts/differential/package.json`
 pins vitest to an exact version, `bun.lock` pins its dependencies, and

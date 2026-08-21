@@ -38,8 +38,15 @@
  *   suites work because bun transpiles TS natively while goccia parses
  *   annotations as types-as-comments.
  * - A differential suite that reaches for goccia-only globals (`mock`,
- *   `spyOn`) is named `*.goccia.test.js` and is classified `skip` for both
+ *   `spyOn`) — or that asserts a deliberate divergence from both external
+ *   runtimes — is named `*.goccia.test.js` and is classified `skip` for both
  *   external runtimes, so only mode parity is checked for it.
+ * - A differential suite that needs a goccia capability the default profile
+ *   seals (today: `--allow-node-modules`) names it in its classification's
+ *   `gocciaFlags`. The flag reaches only that suite, so enabling a capability
+ *   for one file cannot silently change what the other suites are testing.
+ *   External runtimes get no equivalent knob — a suite belongs here only when
+ *   the capability makes goccia match what the oracle already does natively.
  * - The goccia binary defaults to the built `GocciaTestRunner`; set GOCCIA_BIN
  *   to point somewhere else.
  * - A runtime that exceeds the per-file timeout (DIFFRUN_TIMEOUT seconds,
@@ -68,7 +75,13 @@ const VITEST_ENTRY = join(DIFFERENTIAL_DIR, "node_modules", "vitest", "vitest.mj
  * - `skip`: the differential suite is never handed to this runtime.
  */
 type Role = "gate" | "advisory" | "skip";
-type Classification = { kind: string; bun: Role; vitest: Role };
+type Classification = {
+  kind: string;
+  bun: Role;
+  vitest: Role;
+  /** Extra goccia flags for this suite only, on top of GFLAGS. */
+  gocciaFlags?: string[];
+};
 
 /**
  * Differential suite classification. `kind` names why the oracle was chosen:
@@ -130,6 +143,28 @@ const CLASSIFICATION: Record<string, Classification> = {
   // ECMAScript class and module semantics, and the testing API is incidental.
   // Vitest is skipped for the same reason as the other language suites.
   "l-modulefndecl.test.js": { kind: "language", bun: "gate", vitest: "skip" },
+  // Bare-specifier resolution against a committed node_modules fixture under
+  // `mods/nodemods/`. Bun gates: it resolves node_modules natively, which makes
+  // it the only oracle that can say whether goccia picked the same file.
+  // Vitest is skipped for the same reason as j-tsspecifier — resolution runs
+  // through vite there, not through the testing API vitest is the oracle for.
+  "m-nodemods.test.js": {
+    kind: "language",
+    bun: "gate",
+    vitest: "skip",
+    gocciaFlags: ["--allow-node-modules"],
+  },
+  // The two node_modules behaviours no external runtime shares: the
+  // "module"-field preference (Node ignores the field; bun resolves that
+  // package to its CommonJS "main") and the named CommonJS refusal (bun just
+  // loads the CommonJS file). Both are deliberate and documented, so only mode
+  // parity is checked.
+  "n-nodemods.goccia.test.js": {
+    kind: "language",
+    bun: "skip",
+    vitest: "skip",
+    gocciaFlags: ["--allow-node-modules"],
+  },
 };
 
 type Verdict = {
@@ -149,10 +184,10 @@ type Run = { verdict: Verdict | null; error: string | null };
 const scratch = mkdtemp("goccia-differential-");
 
 /** Runs one file under goccia and reads back its JSON result envelope. */
-function gocciaResults(path: string, bytecode: boolean): Run {
+function gocciaResults(path: string, bytecode: boolean, extraFlags: string[] = []): Run {
   const mode = bytecode ? ["--mode=bytecode"] : [];
   const outPath = join(scratch, `${basename(path)}${bytecode ? ".bc" : ".it"}.json`);
-  const proc = Bun.spawnSync([GOCCIA_BIN, path, `--output=${outPath}`, ...GFLAGS, ...mode], {
+  const proc = Bun.spawnSync([GOCCIA_BIN, path, `--output=${outPath}`, ...GFLAGS, ...extraFlags, ...mode], {
     stdout: "pipe",
     stderr: "pipe",
     timeout: TIMEOUT_MS,
@@ -435,8 +470,9 @@ const advisories: string[] = [];
 for (const path of files) {
   const name = basename(path);
   const classification = CLASSIFICATION[name];
-  const it = gocciaResults(path, false);
-  const bc = gocciaResults(path, true);
+  const gocciaFlags = classification?.gocciaFlags ?? [];
+  const it = gocciaResults(path, false, gocciaFlags);
+  const bc = gocciaResults(path, true, gocciaFlags);
 
   if (!classification) {
     console.log(
