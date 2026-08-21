@@ -263,11 +263,14 @@ function HasAsyncDisposals(const ATracker: TGocciaDisposalTracker): Boolean; for
 function CollectDeclaredPrivateNames(
   const AContext: TGocciaEvaluationContext): TStringList; forward;
 
+// A class value that carries its own [[Construct]] implementation — a typed
+// array, or a bytecode-compiled class whose constructor is a closure rather
+// than an AST method — cannot be built by InstantiateClass, which drives
+// construction from the AST constructor method and field tables.
 function ShouldUseNativeClassInstantiation(
   const AClassValue: TGocciaClassValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
-  Result := (AClassValue is TGocciaTypedArrayClassValue) or
-    (AClassValue is TGocciaTypedArrayIntrinsicClassValue);
+  Result := AClassValue.UsesOwnInstantiation;
 end;
 
 const
@@ -3813,7 +3816,12 @@ begin
   else if AConstructor is TGocciaClassValue then
   begin
     ClassConstructor := TGocciaClassValue(AConstructor);
-    if Assigned(ClassConstructor.ConstructorMethod) then
+    // A compiled class runs its own field initializers and constructor body;
+    // the AST tables this branch otherwise drives are empty for it.
+    if ClassConstructor.TryConstructOnReceiver(AArguments, AReceiver,
+       EffectiveNewTarget, SuperResult) then
+      ValidateClassConstructorReturn(ClassConstructor, SuperResult)
+    else if Assigned(ClassConstructor.ConstructorMethod) then
     begin
       if AReceiver is TGocciaObjectValue then
         RunClassInstanceInitializers(ClassConstructor,
@@ -4165,7 +4173,25 @@ begin
         end;
       end;
 
-      if Assigned(SuperClass) and Assigned(SuperClass.ConstructorMethod) then
+      // A compiled superclass runs its own field initializers and constructor
+      // body against the receiver; ConstructorMethod is nil for it, so without
+      // this the base initialization would be skipped silently.
+      if Assigned(SuperClass) and
+         SuperClass.TryConstructOnReceiver(Arguments, AContext.Scope.ThisValue,
+           AContext.Scope.FindNewTarget, SuperResult) then
+      begin
+        if SuperResult is TGocciaObjectValue then
+        begin
+          InitializeReplacementThis(TGocciaObjectValue(SuperResult),
+            AContext.Scope.ThisValue);
+          AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
+          ThisScope := AContext.Scope.FindFunctionOrModuleScope;
+          if Assigned(ThisScope) then
+            ThisScope.ThisValue := AContext.Scope.ThisValue;
+        end;
+        Result := AContext.Scope.ThisValue;
+      end
+      else if Assigned(SuperClass) and Assigned(SuperClass.ConstructorMethod) then
       begin
         SuperResult := SuperClass.ConstructorMethod.CallWithThisValue(
           Arguments, AContext.Scope.ThisValue, ConstructorThisValue,
@@ -11338,7 +11364,16 @@ begin
       if AClassValue.GetConstructorPrototype is TGocciaClassValue then
         ImplicitSuperClass := TGocciaClassValue(AClassValue.GetConstructorPrototype);
 
+      // A compiled superclass has no AST ConstructorMethod; it runs its own
+      // field initializers and constructor body against the instance.
       if Assigned(ImplicitSuperClass) and
+         ImplicitSuperClass.TryConstructOnReceiver(AArguments, Instance,
+           EffectiveNewTarget, ConstructedValue) then
+      begin
+        ValidateClassConstructorReturn(ImplicitSuperClass, ConstructedValue);
+        ApplyReplacementResult(ConstructedValue);
+      end
+      else if Assigned(ImplicitSuperClass) and
          Assigned(ImplicitSuperClass.ConstructorMethod) then
       begin
         ConstructedValue := ImplicitSuperClass.ConstructorMethod.CallWithThisValue(
