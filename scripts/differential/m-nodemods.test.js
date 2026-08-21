@@ -1,4 +1,4 @@
-// Differential suite L — bare-specifier resolution against node_modules.
+// Differential suite M — bare-specifier resolution against node_modules.
 //
 // The fixture packages are committed under ./mods/nodemods/node_modules, so
 // bun resolves them natively and goccia resolves them under the

@@ -372,6 +372,7 @@ uses
   TimingUtils,
 
   Goccia.Arithmetic,
+  Goccia.Builtins.Globals,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
@@ -776,6 +777,23 @@ var
   NameValue: TGocciaValue;
   MessageValue: TGocciaValue;
   ConstructorValue: TGocciaValue;
+
+  { The object in AValue's prototype chain that owns the "name" the read above
+    resolved to, or nil when nothing in the chain does. }
+  function OwnNameHolder: TGocciaObjectValue;
+  var
+    Current: TGocciaObjectValue;
+  begin
+    Result := nil;
+    Current := TGocciaObjectValue(AValue);
+    while Assigned(Current) do
+    begin
+      if Current.HasOwnProperty(PROP_NAME) then
+        Exit(Current);
+      Current := Current.Prototype;
+    end;
+  end;
+
 begin
   Result := DescribeThrowValue(AValue);
   if not (AValue is TGocciaObjectValue) then
@@ -792,7 +810,12 @@ begin
     Exit;
   if TGocciaStringLiteralValue(NameValue).Value <> 'Error' then
     Exit;
-  if TGocciaObjectValue(AValue).HasOwnProperty(PROP_NAME) then
+  { The value "Error" is not enough on its own: an author who wrote
+    `MyErr.prototype.name = 'Error'` chose that spelling deliberately. Only a
+    name that Error.prototype itself supplies is the inherited default, so ask
+    which object in the chain actually owns it rather than only checking the
+    instance. }
+  if OwnNameHolder <> GetErrorProto then
     Exit;
 
   { Only a declared class narrows the name: a built-in error's constructor

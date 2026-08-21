@@ -1,4 +1,4 @@
-// Differential suite M — the node_modules behaviours that are goccia's own.
+// Differential suite N — the node_modules behaviours that are goccia's own.
 //
 // Both are deliberate deviations recorded in docs/module-resolution.md, so
 // neither bun nor vitest can act as an oracle for them and this file is

@@ -126,6 +126,73 @@ describe.runIf(hasGoccia)("pattern matching GC safety", () => {
     expect(result).toBe(1);
   });
 
+  test("collecting inside an array rest subpattern keeps the rest array alive", () => {
+    // The rest array is built here, not by the caller, so the subject root the
+    // match expression installed does not cover it: a collection taken by the
+    // guard below could reclaim it before the binding reads it.
+    const check = (value) => {
+      Goccia.gc();
+      Goccia.gc();
+      return Array.isArray(value);
+    };
+
+    const result = match ([1, 2, 3, 4]) {
+      [const head, ...const rest] if (check(rest)): head + rest.length;
+      default: -1;
+    };
+
+    expect(result).toBe(4);
+  });
+
+  test("collecting inside an array rest custom matcher keeps the rest array alive", () => {
+    class Pair {
+      static [Symbol.customMatcher](subject) {
+        Goccia.gc();
+        Goccia.gc();
+        return Array.isArray(subject) && subject.length === 2;
+      }
+    }
+
+    const result = match ([0, 1, 2]) {
+      [const head, ...Pair]: head;
+      default: -1;
+    };
+
+    expect(result).toBe(0);
+  });
+
+  test("collecting inside an object rest subpattern keeps the remainder alive", () => {
+    const check = (value) => {
+      Goccia.gc();
+      Goccia.gc();
+      return Object.keys(value).length === 2;
+    };
+
+    const result = match ({ a: 1, b: 2, c: 3 }) {
+      { a: const a, ...const rest } if (check(rest)): a + rest.b + rest.c;
+      default: -1;
+    };
+
+    expect(result).toBe(6);
+  });
+
+  test("collecting inside an object rest custom matcher keeps the remainder alive", () => {
+    class TwoKeys {
+      static [Symbol.customMatcher](subject) {
+        Goccia.gc();
+        Goccia.gc();
+        return Object.keys(subject).length === 2;
+      }
+    }
+
+    const result = match ({ a: 1, b: 2, c: 3 }) {
+      { a: const a, ...TwoKeys }: a;
+      default: -1;
+    };
+
+    expect(result).toBe(1);
+  });
+
   test("collecting inside an is-expression pattern keeps the subject alive", () => {
     const key = () => {
       Goccia.gc();

@@ -2716,9 +2716,13 @@ type
       until it is made there too.
 
       Async context is deliberately NOT recorded per request. A body observes
-      the context of whichever call resumed it, and that already falls out of
-      the microtask seam: every resumption reaches the body through a promise
-      reaction, which carries the snapshot captured where it was registered.
+      the context of whichever call resumed it, and that falls out of the two
+      execution paths without any per-request bookkeeping: a request that finds
+      the queue idle is started synchronously on the resuming call's own stack,
+      under that call's context, while a request that had to wait — a queued
+      second next(), or a body suspended on await — reaches the body through a
+      promise reaction, which carries the snapshot captured where it was
+      registered.
       Probed against Node v24.0.1 across for-await, a generator created in one
       context and resumed in another, a queued second request overlapping a
       running one, and nested for-await under different stores; both executors
@@ -5766,9 +5770,16 @@ begin
       if not (SuperResult is TGocciaObjectValue) and
          (ConstructorThisValue is TGocciaObjectValue) then
         SuperResult := ConstructorThisValue;
+      // A constructor whose super() returned a replacement object had this
+      // class's instance elements run and stamped onto that object by
+      // InitializeCurrentCtorReceiver already; running them a second time
+      // would re-evaluate every initializer and re-stamp the private brand.
+      // Same guard TGocciaVMClassValue.TryConstructOnReceiver applies.
       if (SuperResult is TGocciaObjectValue) and
          (SuperResult <> AReceiver) and
-         (SuperResult = ConstructorThisValue) then
+         (SuperResult = ConstructorThisValue) and
+         not HasBytecodePrivateInitializersApplied(SuperResult,
+           ClassConstructor) then
         VMClassConstructor.FVM.RunClassInitializers(ClassConstructor, SuperResult);
     end
     else if Assigned(ClassConstructor.ConstructorMethod) then
@@ -6183,10 +6194,27 @@ var
   ConstructorThisValue: TGocciaValue;
   ImplicitSuperInitialized: Boolean;
   WasSuperAlreadyCalled: Boolean;
+  PreviousSuperClassSuperCalled: Boolean;
+  SuperClassCalledItsOwnSuper: Boolean;
   ReceiverPrototype: TGocciaObjectValue;
   function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
   begin
     Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
+  end;
+  { ES2026 §10.2.2 [[Construct]] step 13.c: a ~derived~ superclass constructor
+    that returns undefined must have initialized `this`, which only its own
+    super() does. The compiler emits an unconditional implicit `undefined`
+    return and OP_CHECK_DERIVED_THIS only guards `this` *access*, so a body
+    that calls neither reaches here with no error of its own. }
+  procedure RequireSuperClassThisInitialized(const AValue: TGocciaValue;
+    const ACalledItsOwnSuper: Boolean);
+  begin
+    if (Assigned(SuperClass.SuperClass) or
+        Assigned(SuperClass.NativeSuperConstructor)) and
+       IsUndefinedConstructedValue(AValue) and
+       not ACalledItsOwnSuper then
+      ThrowReferenceError(
+        'Must call super constructor before returning from derived constructor');
   end;
   procedure ValidateSuperConstructorResult(const AValue: TGocciaValue);
   begin
@@ -6291,9 +6319,22 @@ begin
     if not SuperClass.HasDerivedConstructorKind then
       TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
         SuperClass, AThisValue);
-    SuperResult := TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
-      TGocciaVMClassValue(SuperClass).FConstructorValue,
-      AArguments, AThisValue);
+    { The flag belongs to the constructor being entered, and it is read back
+      before being restored so this frame can tell whether that constructor
+      called its own super(). }
+    PreviousSuperClassSuperCalled :=
+      TGocciaVMClassValue(SuperClass).FVM.FCurrentConstructorSuperCalled;
+    TGocciaVMClassValue(SuperClass).FVM.FCurrentConstructorSuperCalled := False;
+    try
+      SuperResult := TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
+        TGocciaVMClassValue(SuperClass).FConstructorValue,
+        AArguments, AThisValue);
+    finally
+      SuperClassCalledItsOwnSuper :=
+        TGocciaVMClassValue(SuperClass).FVM.FCurrentConstructorSuperCalled;
+      TGocciaVMClassValue(SuperClass).FVM.FCurrentConstructorSuperCalled :=
+        PreviousSuperClassSuperCalled;
+    end;
     if SuperResult is TGocciaObjectValue then
       begin
         // §10.2.2 step 12: an object the super constructor *returns* replaces
@@ -6304,6 +6345,7 @@ begin
         Exit(SuperResult);
       end;
     ValidateSuperConstructorResult(SuperResult);
+    RequireSuperClassThisInitialized(SuperResult, SuperClassCalledItsOwnSuper);
     if TGocciaVMClassValue(SuperClass).FConstructorValue is TGocciaBytecodeFunctionValue then
     begin
       BytecodeConstructor := TGocciaBytecodeFunctionValue(
@@ -6328,11 +6370,19 @@ begin
 
   if Assigned(SuperClass.ConstructorMethod) then
   begin
-    // §10.2.2 step 5b again: pre-initialize only for a ~base~ superclass.
-    if (SuperClass is TGocciaVMClassValue) and
-       not SuperClass.HasDerivedConstructorKind then
-      TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
-        SuperClass, AThisValue);
+    // §10.2.2 step 5b again: pre-initialize only for a ~base~ superclass. The
+    // superclass need not be a compiled one: CallWithThisValue below runs only
+    // the constructor body, so an evaluator-built base superclass reaching
+    // this branch loses its instance elements unless they run here too.
+    if not SuperClass.HasDerivedConstructorKind then
+    begin
+      if SuperClass is TGocciaVMClassValue then
+        TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
+          SuperClass, AThisValue)
+      else if FCurrentCtorClass is TGocciaVMClassValue then
+        TGocciaVMClassValue(FCurrentCtorClass).FVM.RunClassInitializers(
+          SuperClass, AThisValue);
+    end;
     SuperResult := SuperClass.ConstructorMethod.CallWithThisValue(
       AArguments, AThisValue, ConstructorThisValue, FNewTarget);
     if SuperResult is TGocciaObjectValue then
@@ -6344,6 +6394,10 @@ begin
         Exit(SuperResult);
       end;
     ValidateSuperConstructorResult(SuperResult);
+    { An AST constructor records the same thing on its method value, which is
+      what the tree-walk evaluator reads. }
+    RequireSuperClassThisInitialized(SuperResult,
+      SuperClass.ConstructorMethod.LastSuperConstructorCalled);
     if ConstructorThisValue is TGocciaObjectValue then
     begin
         if (ConstructorThisValue <> AThisValue) and
@@ -6565,17 +6619,37 @@ function TGocciaVMClassValue.TryConstructOnReceiver(
 var
   ConstructorThisValue: TGocciaValue;
   PreviousConstructorSuperCalled: Boolean;
+  PreviousPendingNewTarget: TGocciaValue;
+  ConstructorSuperCalled: Boolean;
   function HasDerivedConstructorReturnRestriction: Boolean;
   begin
     Result := Assigned(SuperClass) or Assigned(NativeSuperConstructor);
+  end;
+  function EffectiveNewTarget: TGocciaValue;
+  begin
+    if Assigned(ANewTarget) then
+      Exit(ANewTarget);
+    Result := Self;
   end;
 begin
   Result := True;
 
   if not Assigned(FConstructorValue) then
   begin
-    AResult := FVM.InvokeImplicitSuperInitialization(Self, AReceiver,
-      AArguments);
+    // ES2026 §10.2.2 [[Construct]] step 5: the implicit constructor forwards
+    // newTarget up the chain, and InvokeImplicitSuperInitialization reads it
+    // off FPendingNewTarget to pick the receiver's prototype. Leaving whatever
+    // an earlier construction parked there would build the instance from the
+    // wrong constructor; native initialization can return without consuming
+    // the value, so it is restored rather than cleared.
+    PreviousPendingNewTarget := FVM.FPendingNewTarget;
+    FVM.FPendingNewTarget := EffectiveNewTarget;
+    try
+      AResult := FVM.InvokeImplicitSuperInitialization(Self, AReceiver,
+        AArguments);
+    finally
+      FVM.FPendingNewTarget := PreviousPendingNewTarget;
+    end;
     if not Assigned(AResult) then
       AResult := AReceiver;
     Exit;
@@ -6600,6 +6674,9 @@ begin
     AResult := FVM.InvokeFunctionValue(FConstructorValue, AArguments,
       AReceiver);
   finally
+    // Read the flag before restoring it: it belongs to the constructor that
+    // just returned, exactly as Instantiate captures it.
+    ConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
     FVM.FCurrentConstructorSuperCalled := PreviousConstructorSuperCalled;
   end;
 
@@ -6611,6 +6688,17 @@ begin
      not (AResult is TGocciaUndefinedLiteralValue) then
     ThrowTypeError('Derived constructor returned non-object',
       SSuggestNotConstructorType);
+
+  // ES2026 §10.2.2 step 13.c: a derived constructor that returns undefined
+  // must have initialized `this`. The compiler emits an unconditional implicit
+  // `undefined` return and OP_CHECK_DERIVED_THIS only guards `this` *access*,
+  // so a body that never calls super() and never touches `this` reaches here
+  // with no error of its own.
+  if HasDerivedConstructorReturnRestriction and
+     ((not Assigned(AResult)) or (AResult is TGocciaUndefinedLiteralValue)) and
+     not ConstructorSuperCalled then
+    ThrowReferenceError(
+      'Must call super constructor before returning from derived constructor');
 
   if FConstructorValue is TGocciaBytecodeFunctionValue then
     ConstructorThisValue := RegisterToValue(FVM.FLastClosureThisValue)
@@ -10562,6 +10650,15 @@ begin
     AClassValue.RunMethodInitializers(AInstance);
     AClassValue.RunFieldInitializers(AInstance);
     AClassValue.RunDecoratorFieldInitializers(AInstance);
+    { A class the tree-walk evaluator built keeps its instance elements as AST
+      expressions rather than as the closure-shaped initializers above, so
+      those three calls do nothing for it. Such a class still turns up under
+      the VM in bytecode mode — a module's top-level function declarations are
+      created and run by the evaluator, so a class declared inside one is a
+      plain TGocciaClassValue that a compiled subclass can extend — and
+      dropping its fields there was a mode divergence, not a missing fast
+      path. }
+    TryRunASTInstanceElements(AClassValue, AInstance);
   finally
     FPrivateInitializerReceiver := PreviousPrivateInitializerReceiver;
     FPrivateInitializerPreserveExisting :=

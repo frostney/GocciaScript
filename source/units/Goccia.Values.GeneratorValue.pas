@@ -79,9 +79,13 @@ type
       until it is made there too.
 
       Async context is deliberately NOT recorded per request. A body observes
-      the context of whichever call resumed it, and that already falls out of
-      the microtask seam: every resumption reaches the body through a promise
-      reaction, which carries the snapshot captured where it was registered.
+      the context of whichever call resumed it, and that falls out of the two
+      execution paths without any per-request bookkeeping: a request that finds
+      the queue idle is started synchronously on the resuming call's own stack,
+      under that call's context, while a request that had to wait — a queued
+      second next(), or a body suspended on await — reaches the body through a
+      promise reaction, which carries the snapshot captured where it was
+      registered.
       Probed against Node v24.0.1 across for-await, a generator created in one
       context and resumed in another, a queued second request overlapping a
       running one, and nested for-await under different stores; both executors

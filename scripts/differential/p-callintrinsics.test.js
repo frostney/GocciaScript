@@ -33,9 +33,7 @@ describe("user-defined call/apply/bind on function objects", () => {
   });
 
   test("own properties on a plain function run instead of the intrinsics", () => {
-    const host = function () {
-      return "host";
-    };
+    const host = () => "host";
     host.call = (...args) => `own call(${args.join(",")})`;
     host.apply = (thisArg, list) => `own apply(${thisArg},[${list.join(",")}])`;
     host.bind = (...args) => `own bind(${args.join(",")})`;
@@ -55,9 +53,7 @@ describe("user-defined call/apply/bind on function objects", () => {
         return `inherited apply(${tag},${list.length})`;
       },
     };
-    const host = function () {
-      return "host";
-    };
+    const host = () => "host";
     Object.setPrototypeOf(host, behaviour);
 
     expect(host.call("t")).toBe("inherited call(t)");
@@ -65,12 +61,15 @@ describe("user-defined call/apply/bind on function objects", () => {
   });
 
   test("a different built-in installed as `apply` keeps its own semantics", () => {
-    const inner = function () {
-      return `inner(thisIsArray=${Array.isArray(this)})`;
-    };
-    const host = function () {
-      return "host";
-    };
+    // Extracted from an object literal rather than written with `function`:
+    // the shorthand method is a real function with a dynamic `this`, which is
+    // what the receiver assertion below needs.
+    const inner = ({
+      m() {
+        return `inner(thisIsArray=${Array.isArray(this)})`;
+      },
+    }).m;
+    const host = () => "host";
     host.apply = Reflect.apply;
 
     // Reflect.apply(target, thisArgument, argumentsList): the receiver `host` is
@@ -82,9 +81,7 @@ describe("user-defined call/apply/bind on function objects", () => {
   });
 
   test("arity variants of a user-defined call are all forwarded", () => {
-    const host = function () {
-      return "host";
-    };
+    const host = () => "host";
     host.call = (...args) => args.length;
 
     expect(host.call()).toBe(0);
@@ -127,9 +124,11 @@ describe("user-defined call/apply/bind on function objects", () => {
   });
 
   test("shadowing an intrinsic does not disturb the intrinsic itself", () => {
-    const host = function (a, b) {
-      return `${this.tag}:${a}:${b}`;
-    };
+    const host = ({
+      m(a, b) {
+        return `${this.tag}:${a}:${b}`;
+      },
+    }).m;
     host.call = () => "shadowed";
     host.apply = () => "shadowed";
 
@@ -140,9 +139,11 @@ describe("user-defined call/apply/bind on function objects", () => {
 });
 
 describe("the Function.prototype intrinsics themselves", () => {
-  const collect = function (...args) {
-    return `${this === undefined ? "undefined" : this.tag}:${args.join(",")}`;
-  };
+  const collect = ({
+    m(...args) {
+      return `${this === undefined ? "undefined" : this.tag}:${args.join(",")}`;
+    },
+  }).m;
 
   test("call forwards the this value and every argument", () => {
     const receiver = { tag: "r" };
@@ -213,9 +214,7 @@ describe("the Function.prototype intrinsics themselves", () => {
   // never reach the callee as a distinguishable value, in any argument count and
   // through any of the entry points that build the list.
   test("apply turns argument-array holes into undefined", () => {
-    const args = function (...rest) {
-      return rest.map((value) => String(value)).join("|");
-    };
+    const args = (...rest) => rest.map((value) => String(value)).join("|");
 
     expect(args.apply(undefined, [1, , 3])).toBe("1|undefined|3");
     expect(args.apply(undefined, [, 2, 3])).toBe("undefined|2|3");
@@ -229,9 +228,7 @@ describe("the Function.prototype intrinsics themselves", () => {
   });
 
   test("holes stay undefined through bound functions and detached apply", () => {
-    const args = function (...rest) {
-      return rest.map((value) => String(value)).join("|");
-    };
+    const args = (...rest) => rest.map((value) => String(value)).join("|");
     const apply = Function.prototype.apply;
 
     expect(args.bind(undefined).apply(undefined, [1, , 3])).toBe("1|undefined|3");
@@ -243,9 +240,7 @@ describe("the Function.prototype intrinsics themselves", () => {
   });
 
   test("argument-array holes are read through the prototype chain", () => {
-    const args = function (...rest) {
-      return rest.map((value) => String(value)).join("|");
-    };
+    const args = (...rest) => rest.map((value) => String(value)).join("|");
     let reads = 0;
 
     Object.defineProperty(Array.prototype, 1, {
@@ -274,9 +269,7 @@ describe("the Function.prototype intrinsics themselves", () => {
   // one an engine loses the moment it reads the arguments in whatever order its
   // call sequence happens to evaluate.
   test("inherited index getters fire in ascending index order", () => {
-    const args = function (...rest) {
-      return rest.map((value) => String(value)).join("|");
-    };
+    const args = (...rest) => rest.map((value) => String(value)).join("|");
     let order = "";
     const define = (index) =>
       Object.defineProperty(Array.prototype, index, {
@@ -318,9 +311,7 @@ describe("the Function.prototype intrinsics themselves", () => {
   });
 
   test("a getter that truncates the argument array keeps the original count", () => {
-    const args = function (...rest) {
-      return rest.map((value) => String(value)).join("|");
-    };
+    const args = (...rest) => rest.map((value) => String(value)).join("|");
     let reading = null;
 
     Object.defineProperty(Array.prototype, 1, {
@@ -354,9 +345,7 @@ describe("the Function.prototype intrinsics themselves", () => {
   });
 
   test("apply uses the array's length, not its dense element count", () => {
-    const args = function (...rest) {
-      return rest.map((value) => String(value)).join("|");
-    };
+    const args = (...rest) => rest.map((value) => String(value)).join("|");
     const grown = [1, 2];
     grown.length = 5;
 

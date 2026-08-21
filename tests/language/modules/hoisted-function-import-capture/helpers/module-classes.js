@@ -149,3 +149,30 @@ export class Factory {
     return new Point(1, 2);
   }
 }
+
+// A class *created inside* a hoisted function declaration: in bytecode mode
+// the declaration runs in the tree-walk evaluator, so this class records its
+// instance elements as AST expressions rather than as compiled initializers.
+// Extending it from the entry file is what puts an evaluator-built superclass
+// under a compiled one.
+export function makeEvaluatorBuiltBase() {
+  return class EvaluatorBuiltBase {
+    label = PREFIX + "evaluator-base";
+
+    #brand = PREFIX + "evaluator-brand";
+
+    constructor(n) {
+      this.n = n;
+    }
+
+    brand() {
+      return this.#brand;
+    }
+  };
+}
+
+// Another evaluator-built class, this time with no constructor of its own, so
+// construction reaches the compiled superclass's *implicit* branch.
+export function makeSubclassOf(Base) {
+  return class EvaluatorBuiltSub extends Base {};
+}
