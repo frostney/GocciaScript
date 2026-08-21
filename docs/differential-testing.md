@@ -67,6 +67,7 @@ oracle instead of inheriting a default.
 | `m-nodemods.test.js` | language | skip | gate |
 | `n-nodemods.goccia.test.js` | language | skip | skip |
 | `o-asynccontext.test.js` | language | skip | gate |
+| `p-callintrinsics.test.js` | language | skip | gate |
 
 `o-asynccontext.test.js` covers `node:async_hooks` propagation only, and stops
 there on purpose. Bun 1.3.14 does not honour the `defaultValue` or `name`
@@ -83,6 +84,15 @@ surviving `await`, interleaved chains, several instances at once, `.then` /
 `.catch` / `.finally` continuations, `exit`, `enterWith`, bind-time callable
 validation, and async-generator resumptions — every bun since 1.3.14 and Node
 agree on.
+
+`p-callintrinsics.test.js` covers members named `call`, `apply` and `bind` that
+are not the `Function.prototype` intrinsics — static class methods, own and
+inherited function properties, and `Reflect.apply` installed as a function's own
+`apply` — alongside ordinary intrinsic use. That pairing is the point: the
+bytecode VM routes `.call`/`.apply`/`.bind` on a function receiver through call
+fast paths, and while those matched on the callee's *name* a user-defined member
+was silently redirected into the intrinsic in bytecode mode only. The suite fails
+in whichever mode stops distinguishing the two.
 
 `h-modulemock.test.js` and `i-modulemock-isolation.test.js` are a pair: the
 first mocks `./mods/mockable.js` with a `vi.mock` factory, the second mocks
