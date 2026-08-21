@@ -204,15 +204,33 @@ neither is inert and loads either way. Reading the file text rather than
 trusting `"type"` is what makes the `module`-field deviation above work at all,
 since those ES module builds routinely sit in packages that declare no type.
 
-The scan matches raw text and does not tokenize, so it does not skip comments
-or string literals: a CommonJS bundle whose banner comment mentions `import` or
-`export` carries an ES module marker as far as the classifier is concerned and
-is not refused here. Such a file is loaded and then fails at its first
-`require`, with an `Undefined variable: require` reference error rather than the
-package-relative CommonJS message below. That is the deliberate direction of
-the asymmetry — a false *negative* costs a worse diagnostic, while tokenizing
-every candidate file to remove it would cost a parse of every resolved package
-entry.
+Before the markers are looked for, a lexical pass replaces every comment,
+string body, template body, and regular expression literal with a single space,
+so a keyword the file only mentions counts for nothing. Every esbuild
+`__toCommonJS` bundle depends on that pass: it ends with the banner comment
+`// Annotate the CommonJS export names for ESM import in node:`, whose bare
+`export` and `import` words used to carry the whole file past the check. Such a
+bundle was loaded and then failed at its first `require`, with an
+`Undefined variable: require` reference error instead of the package-relative
+message below.
+
+The pass is lexical, not a parse, and it approximates in two places:
+
+- A `/` is read as a regular expression or as division from the last
+  significant character before it. That is right in every operand position and
+  wrong only for a literal opening straight after a block's closing brace,
+  which is then scanned as ordinary code — harmless unless its body holds a
+  quote. A literal that does not close on its own line was division after all,
+  and the slash is kept as code.
+- A source the pass cannot finish — an unterminated block comment or template
+  literal — is classified on its raw text instead, which restores the old
+  behaviour for that one file.
+
+What survives is a marker the file builds at runtime, `["exp" + "ort"]` or a
+keyword it only ever names in data. That remains a false *negative*, and it is
+the deliberate direction of the asymmetry: the file is loaded rather than
+refused, and removing the last of them would cost a parse of every resolved
+package entry.
 
 A file classified as CommonJS raises:
 

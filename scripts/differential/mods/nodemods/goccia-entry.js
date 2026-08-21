@@ -7,3 +7,5 @@
 export { modfieldLabel } from "modfield";
 
 export const importCommonJSOnlyPackage = () => import("cjsonly");
+
+export const importEsbuildBundledPackage = () => import("esbuildcjs");

@@ -155,11 +155,24 @@ function IsPathInsideDirectory(const APath, ADirectory: string): Boolean;
   deliberate: a file with both is being read as an ES module by every other
   toolchain, and a file with neither is inert and loads fine either way.
 
-  The scan matches raw text and does not tokenize, so an `import` or `export`
-  keyword inside a comment or a string literal counts as an ES module marker.
-  That direction is the safe one: the file is loaded rather than refused, and
-  fails on its own terms at the first `require`. Removing the false negative
-  would cost a parse of every resolved package entry. }
+  Comments, string and template bodies, and regular expression literals are
+  replaced with a space before the markers are looked for, so the words inside
+  them count for nothing. Every esbuild CommonJS bundle depends on this: its
+  banner comment reads "Annotate the CommonJS export names for ESM import in
+  node:", and on a raw scan those two words alone made the file pass as an ES
+  module.
+
+  The strip is a lexical pass, not a parse. Its one approximation is the
+  `/`: whether it opens a regular expression or divides is decided from the
+  last significant character, which is right everywhere except a literal
+  opening straight after a block's closing brace. Anything the pass cannot
+  finish — an
+  unterminated block comment or template literal — falls back to scanning the
+  raw text.
+
+  The remaining false negative is a marker built at runtime, `["exp" + "ort"]`
+  or a keyword the file only ever names in data. Removing that one would cost a
+  parse of every resolved package entry. }
 function LooksLikeCommonJSSource(const ASource: string): Boolean;
 
 { Whether a resolved file inside a package must be refused as CommonJS.
@@ -208,6 +221,21 @@ const
   COMMONJS_EXPORTS_NAME = 'exports';
   ESM_IMPORT_KEYWORD = 'import';
   ESM_EXPORT_KEYWORD = 'export';
+  ESCAPE_CHARACTER = '\';
+  BLOCK_COMMENT_CLOSE = '*/';
+  SOURCE_WHITESPACE_CHARACTERS = [' ', #9, #13, #10];
+  LINE_TERMINATOR_CHARACTERS = [#13, #10];
+  { Punctuators that close a value, so a `/` after one is division. The closing
+    brace is counted here because an object literal is by far the more common
+    thing to precede a slash; a regular expression opening right after a
+    block's closing brace is scanned as division instead, which only matters if
+    its body holds a quote or a slash pair. }
+  VALUE_CLOSING_CHARACTERS = [')', ']', '}'];
+  { The keywords a regular expression literal may legally follow. After any
+    other identifier the slash divides the value that identifier names. }
+  REGEXP_PRECEDING_KEYWORDS: array[0..13] of string = (
+    'await', 'case', 'delete', 'do', 'else', 'in', 'instanceof', 'new',
+    'of', 'return', 'throw', 'typeof', 'void', 'yield');
 
 type
   { SAX handler that keeps the four scalar fields the resolver reads and
@@ -898,22 +926,294 @@ begin
   Result := ContainsKeywordBefore(ASource, AObjectName, ['.', '[']);
 end;
 
+{ Whether a quoted string starting at AStart closes on its own line.
+
+  ANextIndex comes back as the position just past the closing quote. A string
+  that runs into a line terminator is not a string at all — the quote was a
+  character inside something this scan misread — so the caller keeps it as
+  ordinary code rather than swallowing the rest of the file. }
+function TrySkipQuotedString(const ASource: string; const AStart: Integer;
+  out ANextIndex: Integer): Boolean;
+var
+  Index, SourceLength: Integer;
+  Quote: Char;
+begin
+  Quote := ASource[AStart];
+  SourceLength := Length(ASource);
+  Index := AStart + 1;
+  while Index <= SourceLength do
+  begin
+    if ASource[Index] = ESCAPE_CHARACTER then
+    begin
+      { Also carries a line continuation past the terminator below. }
+      Inc(Index, 2);
+      Continue;
+    end;
+    if ASource[Index] = Quote then
+    begin
+      ANextIndex := Index + 1;
+      Exit(True);
+    end;
+    if ASource[Index] in LINE_TERMINATOR_CHARACTERS then
+      Break;
+    Inc(Index);
+  end;
+  ANextIndex := AStart;
+  Result := False;
+end;
+
+{ Whether a regular expression literal starting at AStart closes on its own
+  line. `[...]` is tracked because a `/` inside a character class does not end
+  the literal. Failing to close means the slash was division after all, which
+  is how an ambiguous `/` recovers without discarding any source. }
+function TrySkipRegExpLiteral(const ASource: string; const AStart: Integer;
+  out ANextIndex: Integer): Boolean;
+var
+  Index, SourceLength: Integer;
+  InCharacterClass: Boolean;
+begin
+  SourceLength := Length(ASource);
+  Index := AStart + 1;
+  InCharacterClass := False;
+  while Index <= SourceLength do
+  begin
+    if ASource[Index] = ESCAPE_CHARACTER then
+    begin
+      Inc(Index, 2);
+      Continue;
+    end;
+    if ASource[Index] in LINE_TERMINATOR_CHARACTERS then
+      Break;
+    if InCharacterClass then
+    begin
+      if ASource[Index] = ']' then
+        InCharacterClass := False;
+    end
+    else if ASource[Index] = '[' then
+      InCharacterClass := True
+    else if ASource[Index] = '/' then
+    begin
+      ANextIndex := Index + 1;
+      Exit(True);
+    end;
+    Inc(Index);
+  end;
+  ANextIndex := AStart;
+  Result := False;
+end;
+
+function IsRegExpPrecedingKeyword(const AWord: string): Boolean;
+var
+  Index: Integer;
+begin
+  for Index := Low(REGEXP_PRECEDING_KEYWORDS)
+    to High(REGEXP_PRECEDING_KEYWORDS) do
+    if AWord = REGEXP_PRECEDING_KEYWORDS[Index] then
+      Exit(True);
+  Result := False;
+end;
+
+{ Whether a `/` following the code emitted so far opens a regular expression
+  literal rather than dividing. The decision is made from the last significant
+  character instead of a token stream, which is the one place this scan
+  approximates: it is right for every operand-position slash and wrong only for
+  a literal that opens straight after a block's closing brace. }
+function SlashOpensRegExpLiteral(const ACode: string;
+  const ALength: Integer): Boolean;
+var
+  Scan, WordStart: Integer;
+begin
+  Scan := ALength;
+  while (Scan >= 1) and (ACode[Scan] in SOURCE_WHITESPACE_CHARACTERS) do
+    Dec(Scan);
+  if Scan < 1 then
+    Exit(True);
+
+  if not IsIdentifierPartCharacter(ACode[Scan]) then
+  begin
+    { `count++ / 2` divides; every other operator leaves an operand position. }
+    if (ACode[Scan] in ['+', '-']) and (Scan > 1) and
+       (ACode[Scan - 1] = ACode[Scan]) then
+      Exit(False);
+    Exit(not (ACode[Scan] in VALUE_CLOSING_CHARACTERS));
+  end;
+
+  WordStart := Scan;
+  while (WordStart >= 1) and IsIdentifierPartCharacter(ACode[WordStart]) do
+    Dec(WordStart);
+  Result := IsRegExpPrecedingKeyword(
+    Copy(ACode, WordStart + 1, Scan - WordStart));
+end;
+
+{ Replaces every comment, string body, template body, and regular expression
+  literal in ASource with a single space, leaving the code around them.
+
+  The space matters: it keeps the marker scan from gluing the two halves of
+  `imp/*x*/ort` into a keyword. Template substitutions stay as code, since
+  a substitution holds a real expression; the brace stack is what tells the
+  closing brace that ends one from the closing brace of an object literal
+  inside it.
+
+  Returns False when the scan cannot finish — an unterminated block comment or
+  template literal — so the caller can fall back to the raw text instead of
+  acting on a source it only half understood. }
+function StripCommentsAndLiterals(const ASource: string;
+  out AStripped: string): Boolean;
+var
+  Buffer: string;
+  BraceDepth, BufferLength, Index, NextIndex, SourceLength: Integer;
+  TemplateBraceDepths: array of Integer;
+  TemplateDepth: Integer;
+  InTemplateBody: Boolean;
+  Character: Char;
+
+  procedure EmitCharacter(const AValue: Char);
+  begin
+    Inc(BufferLength);
+    Buffer[BufferLength] := AValue;
+  end;
+
+begin
+  AStripped := '';
+  SourceLength := Length(ASource);
+  { Every branch consumes at least as many characters as it emits, so the
+    stripped text never outgrows the source. }
+  SetLength(Buffer, SourceLength);
+  BufferLength := 0;
+  BraceDepth := 0;
+  TemplateDepth := 0;
+  SetLength(TemplateBraceDepths, 0);
+  InTemplateBody := False;
+  Index := 1;
+
+  while Index <= SourceLength do
+  begin
+    Character := ASource[Index];
+
+    if InTemplateBody then
+    begin
+      if Character = ESCAPE_CHARACTER then
+        Inc(Index, 2)
+      else if Character = '`' then
+      begin
+        InTemplateBody := False;
+        Inc(Index);
+        EmitCharacter(' ');
+      end
+      else if (Character = '$') and (Index < SourceLength) and
+              (ASource[Index + 1] = '{') then
+      begin
+        InTemplateBody := False;
+        Inc(TemplateDepth);
+        if TemplateDepth > Length(TemplateBraceDepths) then
+          SetLength(TemplateBraceDepths, TemplateDepth);
+        TemplateBraceDepths[TemplateDepth - 1] := BraceDepth;
+        Inc(Index, 2);
+        EmitCharacter(' ');
+      end
+      else
+        Inc(Index);
+      Continue;
+    end;
+
+    if Character = '/' then
+    begin
+      if (Index < SourceLength) and (ASource[Index + 1] = '/') then
+      begin
+        Inc(Index, 2);
+        while (Index <= SourceLength) and
+              not (ASource[Index] in LINE_TERMINATOR_CHARACTERS) do
+          Inc(Index);
+        EmitCharacter(' ');
+        Continue;
+      end;
+
+      if (Index < SourceLength) and (ASource[Index + 1] = '*') then
+      begin
+        NextIndex := PosEx(BLOCK_COMMENT_CLOSE, ASource, Index + 2);
+        if NextIndex = 0 then
+          Exit(False);
+        Index := NextIndex + Length(BLOCK_COMMENT_CLOSE);
+        EmitCharacter(' ');
+        Continue;
+      end;
+
+      if SlashOpensRegExpLiteral(Buffer, BufferLength) and
+         TrySkipRegExpLiteral(ASource, Index, NextIndex) then
+      begin
+        Index := NextIndex;
+        EmitCharacter(' ');
+        Continue;
+      end;
+    end
+    else if (Character = '''') or (Character = '"') then
+    begin
+      if TrySkipQuotedString(ASource, Index, NextIndex) then
+      begin
+        Index := NextIndex;
+        EmitCharacter(' ');
+        Continue;
+      end;
+    end
+    else if Character = '`' then
+    begin
+      InTemplateBody := True;
+      Inc(Index);
+      EmitCharacter(' ');
+      Continue;
+    end
+    else if Character = '{' then
+      Inc(BraceDepth)
+    else if Character = '}' then
+    begin
+      if (TemplateDepth > 0) and
+         (BraceDepth = TemplateBraceDepths[TemplateDepth - 1]) then
+      begin
+        Dec(TemplateDepth);
+        InTemplateBody := True;
+        Inc(Index);
+        EmitCharacter(' ');
+        Continue;
+      end;
+      if BraceDepth > 0 then
+        Dec(BraceDepth);
+    end;
+
+    EmitCharacter(Character);
+    Inc(Index);
+  end;
+
+  if InTemplateBody then
+    Exit(False);
+
+  SetLength(Buffer, BufferLength);
+  AStripped := Buffer;
+  Result := True;
+end;
+
 function LooksLikeESModuleSource(const ASource: string): Boolean;
 begin
   { `import(` is dynamic import, which CommonJS files use too, so a bare '('
     after the keyword is not evidence either way. }
   Result := ContainsKeywordBefore(ASource, ESM_IMPORT_KEYWORD,
-      [' ', #9, #13, #10, '{', '*', '"', '''']) or
+      SOURCE_WHITESPACE_CHARACTERS + ['{', '*', '"', '''']) or
     ContainsKeywordBefore(ASource, ESM_EXPORT_KEYWORD,
-      [' ', #9, #13, #10, '{', '*']);
+      SOURCE_WHITESPACE_CHARACTERS + ['{', '*']);
 end;
 
 function LooksLikeCommonJSSource(const ASource: string): Boolean;
+var
+  Code: string;
 begin
-  Result := (ContainsCallTo(ASource, COMMONJS_REQUIRE_NAME) or
-    (Pos(COMMONJS_MODULE_EXPORTS, ASource) > 0) or
-    ContainsMemberAccess(ASource, COMMONJS_EXPORTS_NAME)) and
-    (not LooksLikeESModuleSource(ASource));
+  { A file that cannot be scanned cleanly is classified on its raw text, which
+    is what this function did for every file before the scan existed. }
+  if not StripCommentsAndLiterals(ASource, Code) then
+    Code := ASource;
+
+  Result := (ContainsCallTo(Code, COMMONJS_REQUIRE_NAME) or
+    (Pos(COMMONJS_MODULE_EXPORTS, Code) > 0) or
+    ContainsMemberAccess(Code, COMMONJS_EXPORTS_NAME)) and
+    (not LooksLikeESModuleSource(Code));
 end;
 
 function IsCommonJSModuleFile(const AManifest: TGocciaPackageManifest;

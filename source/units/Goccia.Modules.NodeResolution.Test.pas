@@ -55,6 +55,14 @@ type
     procedure TestMixedSourceIsReadAsESModule;
     procedure TestInertSourceIsNotCommonJS;
     procedure TestIdentifierEndingInRequireIsNotACall;
+
+    procedure TestEsbuildBannerIsNotAnESModuleMarker;
+    procedure TestStringLiteralMarkerIsNotAnESModuleMarker;
+    procedure TestBlockCommentSpanningLinesIsStripped;
+    procedure TestTemplateBodyIsStrippedButSubstitutionsAreNot;
+    procedure TestCommentedESModuleStaysAnESModule;
+    procedure TestRegExpLiteralDoesNotSwallowCode;
+    procedure TestUnterminatedCommentFallsBackToTheRawScan;
   public
     procedure SetupTests; override;
   end;
@@ -129,6 +137,21 @@ begin
   Test('inert source is not CommonJS', TestInertSourceIsNotCommonJS);
   Test('an identifier ending in require is not a require call',
     TestIdentifierEndingInRequireIsNotACall);
+
+  Test('an esbuild banner comment is not an ES module marker',
+    TestEsbuildBannerIsNotAnESModuleMarker);
+  Test('a marker inside a string literal does not count',
+    TestStringLiteralMarkerIsNotAnESModuleMarker);
+  Test('a block comment spanning lines is stripped',
+    TestBlockCommentSpanningLinesIsStripped);
+  Test('a template body is stripped but its substitutions are not',
+    TestTemplateBodyIsStrippedButSubstitutionsAreNot);
+  Test('a commented ES module stays an ES module',
+    TestCommentedESModuleStaysAnESModule);
+  Test('a regular expression literal does not swallow the code after it',
+    TestRegExpLiteralDoesNotSwallowCode);
+  Test('an unterminated comment falls back to the raw scan',
+    TestUnterminatedCommentFallsBackToTheRawScan);
 end;
 
 { ── Specifier splitting ────────────────────────────────────── }
@@ -633,6 +656,87 @@ procedure TNodeResolutionTests.TestIdentifierEndingInRequireIsNotACall;
 begin
   Expect<Boolean>(LooksLikeCommonJSSource(
     'const value = createRequire(import.meta.url);')).ToBe(False);
+end;
+
+{ ── Comment and literal stripping ──────────────────────────── }
+
+procedure TNodeResolutionTests.TestEsbuildBannerIsNotAnESModuleMarker;
+begin
+  { The banner every esbuild __toCommonJS bundle carries. Its bare "export" and
+    "import" words used to make the bundle pass as an ES module, so it was
+    loaded instead of refused and failed at its first require. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", ' +
+      '{ value: true }), mod);' + sLineBreak +
+    'var index_exports = {};' + sLineBreak +
+    'module.exports = __toCommonJS(index_exports);' + sLineBreak +
+    '// Annotate the CommonJS export names for ESM import in node:' +
+      sLineBreak +
+    '0 && (module.exports = {' + sLineBreak +
+    '  getToken' + sLineBreak +
+    '});')).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestStringLiteralMarkerIsNotAnESModuleMarker;
+begin
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const hint = "run: import x from ''y''";' + sLineBreak +
+    'module.exports = { hint };')).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestBlockCommentSpanningLinesIsStripped;
+begin
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    '/*' + sLineBreak +
+    ' * Historic note: this file used to read' + sLineBreak +
+    ' *   export const value = 1;' + sLineBreak +
+    ' */' + sLineBreak +
+    'module.exports = { value: 1 };')).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestTemplateBodyIsStrippedButSubstitutionsAreNot;
+begin
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'module.exports = {' + sLineBreak +
+    '  banner: `' + sLineBreak +
+    '    import { x } from "y";' + sLineBreak +
+    '    export const z = x;' + sLineBreak +
+    '  `,' + sLineBreak +
+    '};')).ToBe(True);
+  { A substitution holds real code, so what is inside it still counts. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const label = `name: ${exports.name}`;')).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestCommentedESModuleStaysAnESModule;
+begin
+  { The strip may not eat code: the require before the comments and the export
+    after them are both real, and a file carrying both is an ES module. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const legacy = require("./legacy.cjs");' + sLineBreak +
+    '/* interop shim for the legacy build */' + sLineBreak +
+    '// exports.legacy = legacy;' + sLineBreak +
+    'export const value = legacy;')).ToBe(False);
+end;
+
+procedure TNodeResolutionTests.TestRegExpLiteralDoesNotSwallowCode;
+begin
+  { The quotes and the escaped slash pair inside the literal must not be read
+    as a string or a comment; the export after it decides the file. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const legacy = require("./legacy.cjs");' + sLineBreak +
+    'const pattern = /["'']\/\//g;' + sLineBreak +
+    'export const value = legacy.replace(pattern, "");')).ToBe(False);
+end;
+
+procedure TNodeResolutionTests.TestUnterminatedCommentFallsBackToTheRawScan;
+begin
+  { A source the scan cannot finish is classified on its raw text, so the words
+    inside the unclosed comment count again. The file is loaded rather than
+    refused, which is the safe direction of the asymmetry. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'module.exports = { value: 1 };' + sLineBreak +
+    '/* export * from "./value.js";')).ToBe(False);
 end;
 
 begin
