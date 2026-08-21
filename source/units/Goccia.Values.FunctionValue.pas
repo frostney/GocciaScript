@@ -139,7 +139,8 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,
-  Goccia.Values.ToObject;
+  Goccia.Values.ToObject,
+  Goccia.VM.Exception;
 
 type
   TGocciaAsyncFunctionEvaluation = class(TGocciaObjectValue)
@@ -186,7 +187,16 @@ function TryRejectAsyncPromiseWithException(
   const AException: Exception): Boolean;
 begin
   Result := True;
-  if AException is TGocciaThrowValue then
+  { A hoisted module-level `async function` is an interpreter closure even
+    under the bytecode executor (the module loader creates it during linking),
+    so its body can call a compiled function whose JS throw leaves the VM as
+    EGocciaBytecodeThrow. That is a guest completion carrying the thrown value,
+    exactly like TGocciaThrowValue; without this branch the resume path treated
+    it as an engine fault, re-raised it into the microtask queue, and left the
+    async function's promise forever pending. }
+  if AException is EGocciaBytecodeThrow then
+    APromise.Reject(EGocciaBytecodeThrow(AException).ThrownValue)
+  else if AException is TGocciaThrowValue then
     APromise.Reject(TGocciaThrowValue(AException).Value)
   else if AException is TGocciaTypeError then
     APromise.Reject(CreateErrorObject(TYPE_ERROR_NAME, AException.Message))
