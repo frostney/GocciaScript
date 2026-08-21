@@ -241,18 +241,10 @@ describe("async context propagation", () => {
     expect(read()).toEqual(["target", 1]);
   });
 
-  test("bind forwards the call-site receiver when thisArg is undefined", () => {
-    const als = new AsyncLocalStorage();
-    const read = ({ read() { return this.tag; } }).read;
-    let bound;
-    let explicit;
-    als.run("ctx", () => {
-      bound = AsyncResource.bind(read);
-      explicit = new AsyncResource("probe").bind(read, { tag: "explicit" });
-    });
-    expect(({ tag: "holder", method: bound }).method()).toBe("holder");
-    expect(({ tag: "holder", method: explicit }).method()).toBe("explicit");
-  });
+  // Receiver forwarding for an undefined thisArg is NOT asserted here: bun
+  // 1.3.14 substitutes undefined where Node forwards the call-site receiver
+  // (fixed in bun 1.4.0), so gating on it makes the verdict depend on the
+  // oracle's version. Covered against Node in tests/built-ins/AsyncHooks.
 
   test("bind rejects a non-callable at bind time", () => {
     expect(() => AsyncResource.bind(42)).toThrow(TypeError);
@@ -260,18 +252,10 @@ describe("async context propagation", () => {
     expect(() => AsyncLocalStorage.bind(42)).toThrow(TypeError);
   });
 
-  test("disabling inside an inner run leaves the outer store intact", () => {
-    const als = new AsyncLocalStorage();
-    const seen = [];
-    als.run("outer", () => {
-      als.run("inner", () => {
-        als.disable();
-        seen.push(als.getStore());
-      });
-      seen.push(als.getStore());
-    });
-    expect(seen).toEqual([undefined, "outer"]);
-  });
+  // disable() semantics are NOT asserted here at all: bun 1.3.14 models
+  // disable as an instance-wide flag where Node edits the current context
+  // frame (bun 1.4.0 matches Node), so any disable-shaped assertion gates on
+  // the oracle's version. Covered against Node in tests/built-ins/AsyncHooks.
 
   test("an async generator body observes the resuming call's store", async () => {
     const als = new AsyncLocalStorage();
