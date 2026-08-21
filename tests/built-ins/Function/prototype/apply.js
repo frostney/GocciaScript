@@ -79,6 +79,176 @@ describe("Function.prototype.apply", () => {
     expect(fn.apply(undefined, { 0: "ignored", length: "bar" })).toBe(0);
   });
 
+  // CreateListFromArrayLike reads every index with Get, so an elision in the
+  // argument array is an absent property that resolves to undefined — never a
+  // hole that survives into the callee's parameters.
+  test("passes holes in a sparse argument array as undefined", () => {
+    const collect = (...args) => args.map((a) => String(a)).join("|");
+
+    expect(collect.apply(undefined, [1, , 3])).toBe("1|undefined|3");
+    expect(collect.apply(undefined, [, 2, 3])).toBe("undefined|2|3");
+    expect(collect.apply(undefined, [1, 2, ,])).toBe("1|2|undefined");
+    expect(collect.apply(undefined, [, , ,])).toBe(
+      "undefined|undefined|undefined",
+    );
+    expect(collect.apply(undefined, [,])).toBe("undefined");
+    expect(collect.apply(undefined, [, ,])).toBe("undefined|undefined");
+    expect(collect.apply(undefined, [1, , , 4])).toBe("1|undefined|undefined|4");
+    expect(collect.apply(undefined, [1, , 3, , 5])).toBe(
+      "1|undefined|3|undefined|5",
+    );
+  });
+
+  test("holes in a sparse argument array are strictly undefined", () => {
+    const isUndefined = (a, b, c) => [
+      a === undefined,
+      b === undefined,
+      c === undefined,
+    ];
+
+    expect(isUndefined.apply(undefined, [1, , 3])).toEqual([false, true, false]);
+    expect(isUndefined.apply(undefined, [, ,])).toEqual([true, true, true]);
+    expect(((...args) => args.length).apply(undefined, [,])).toBe(1);
+  });
+
+  test("bound functions receive sparse argument arrays as undefined", () => {
+    const collect = (...args) => args.map((a) => String(a)).join("|");
+    const bound = collect.bind(undefined);
+
+    expect(bound.apply(undefined, [1, , 3])).toBe("1|undefined|3");
+    expect(bound.apply(undefined, [, ,])).toBe("undefined|undefined");
+    expect(Function.prototype.apply.call(collect, undefined, [1, , 3])).toBe(
+      "1|undefined|3",
+    );
+  });
+
+  test("holes resolve through the array prototype chain", () => {
+    const collect = (...args) => args.map((a) => String(a)).join("|");
+    let reads = 0;
+
+    Object.defineProperty(Array.prototype, 1, {
+      get() {
+        reads += 1;
+        return "inherited";
+      },
+      configurable: true,
+    });
+
+    try {
+      // One-, two- and three-element arrays take the small-argument fast path;
+      // longer ones go through the generic list build. Both must observe the
+      // inherited accessor rather than substituting undefined for the hole.
+      expect(collect.apply(undefined, [1, , 3])).toBe("1|inherited|3");
+      expect(collect.apply(undefined, [1, ,])).toBe("1|inherited");
+      expect(collect.apply(undefined, [1, , 3, 4])).toBe("1|inherited|3|4");
+      expect(collect.bind(undefined).apply(undefined, [1, , 3])).toBe(
+        "1|inherited|3",
+      );
+      expect(reads).toBe(4);
+    } finally {
+      delete Array.prototype[1];
+    }
+  });
+
+  test("reads inherited index getters in ascending index order", () => {
+    const collect = (...args) => args.map((a) => String(a)).join("|");
+    let order = "";
+    const define = (index) =>
+      Object.defineProperty(Array.prototype, index, {
+        get() {
+          order += String(index);
+          return `g${index}`;
+        },
+        configurable: true,
+      });
+
+    define(0);
+    define(1);
+    define(2);
+
+    try {
+      const run = (fn) => {
+        order = "";
+        return `${fn()} order=${order}`;
+      };
+
+      expect(run(() => collect.apply(undefined, [, ,]))).toBe("g0|g1 order=01");
+      expect(run(() => collect.apply(undefined, [, , ,]))).toBe(
+        "g0|g1|g2 order=012",
+      );
+      expect(run(() => collect.apply(undefined, [, , , 4]))).toBe(
+        "g0|g1|g2|4 order=012",
+      );
+      expect(run(() => collect.bind(undefined).apply(undefined, [, , ,]))).toBe(
+        "g0|g1|g2 order=012",
+      );
+    } finally {
+      delete Array.prototype[0];
+      delete Array.prototype[1];
+      delete Array.prototype[2];
+    }
+  });
+
+  test("a getter that truncates the argument array keeps the original count", () => {
+    const collect = (...args) => args.map((a) => String(a)).join("|");
+    const argArray = [1, , 3];
+
+    Object.defineProperty(Array.prototype, 1, {
+      get() {
+        argArray.length = 1;
+        return "g";
+      },
+      configurable: true,
+    });
+
+    try {
+      // LengthOfArrayLike is read once, up front, so shrinking the array from
+      // inside a getter cannot change the argument count; index 2 is simply
+      // absent by the time it is read.
+      expect(collect.apply(undefined, argArray)).toBe("1|g|undefined");
+    } finally {
+      delete Array.prototype[1];
+    }
+  });
+
+  test("uses the array's length, not its dense element count", () => {
+    const collect = (...args) => args.map((a) => String(a)).join("|");
+    const grown = [1, 2];
+    grown.length = 5;
+
+    expect(collect.apply(undefined, grown)).toBe(
+      "1|2|undefined|undefined|undefined",
+    );
+
+    const emptyGrown = [];
+    emptyGrown.length = 3;
+    expect(collect.apply(undefined, emptyGrown)).toBe(
+      "undefined|undefined|undefined",
+    );
+
+    Object.defineProperty(Array.prototype, 3, {
+      get() {
+        return "p3";
+      },
+      configurable: true,
+    });
+
+    try {
+      expect(collect.apply(undefined, grown)).toBe("1|2|undefined|p3|undefined");
+    } finally {
+      delete Array.prototype[3];
+    }
+  });
+
+  test("throws RangeError for an array whose length exceeds the maximum", () => {
+    const fn = () => {};
+    const huge = [1, 2];
+    huge.length = 2000000;
+
+    expect(() => fn.apply(undefined, huge)).toThrow(RangeError);
+    expect(() => Reflect.apply(fn, undefined, huge)).toThrow(RangeError);
+  });
+
   test("throws RangeError for excessively large array-like length", () => {
     const fn = () => {};
     expect(() => fn.apply(undefined, { length: 2000000000 })).toThrow(RangeError);

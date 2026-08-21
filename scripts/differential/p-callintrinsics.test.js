@@ -208,6 +208,167 @@ describe("the Function.prototype intrinsics themselves", () => {
     expect(call.apply(collect, [receiver, 1, 2, 3])).toBe("r:1,2,3");
   });
 
+  // CreateListFromArrayLike reads every index of the argument array with Get,
+  // so an elision is an absent property that resolves to undefined. A hole must
+  // never reach the callee as a distinguishable value, in any argument count and
+  // through any of the entry points that build the list.
+  test("apply turns argument-array holes into undefined", () => {
+    const args = function (...rest) {
+      return rest.map((value) => String(value)).join("|");
+    };
+
+    expect(args.apply(undefined, [1, , 3])).toBe("1|undefined|3");
+    expect(args.apply(undefined, [, 2, 3])).toBe("undefined|2|3");
+    expect(args.apply(undefined, [1, 2, ,])).toBe("1|2|undefined");
+    expect(args.apply(undefined, [, , ,])).toBe("undefined|undefined|undefined");
+    expect(args.apply(undefined, [,])).toBe("undefined");
+    expect(args.apply(undefined, [, ,])).toBe("undefined|undefined");
+    expect(args.apply(undefined, [1, , , 4])).toBe("1|undefined|undefined|4");
+    expect(args.apply(undefined, [1, , 3, , 5])).toBe("1|undefined|3|undefined|5");
+    expect(((...rest) => rest.length).apply(undefined, [,])).toBe(1);
+  });
+
+  test("holes stay undefined through bound functions and detached apply", () => {
+    const args = function (...rest) {
+      return rest.map((value) => String(value)).join("|");
+    };
+    const apply = Function.prototype.apply;
+
+    expect(args.bind(undefined).apply(undefined, [1, , 3])).toBe("1|undefined|3");
+    expect(args.bind(undefined, 0).apply(undefined, [, 2])).toBe("0|undefined|2");
+    expect(apply.call(args, undefined, [1, , 3])).toBe("1|undefined|3");
+    expect(Reflect.apply(args, undefined, [1, , 3])).toBe("1|undefined|3");
+    expect(args(...[1, , 3])).toBe("1|undefined|3");
+    expect(((a, b, c) => b === undefined).apply(undefined, [1, , 3])).toBe(true);
+  });
+
+  test("argument-array holes are read through the prototype chain", () => {
+    const args = function (...rest) {
+      return rest.map((value) => String(value)).join("|");
+    };
+    let reads = 0;
+
+    Object.defineProperty(Array.prototype, 1, {
+      get() {
+        reads += 1;
+        return "inherited";
+      },
+      configurable: true,
+    });
+
+    try {
+      expect(args.apply(undefined, [1, , 3])).toBe("1|inherited|3");
+      expect(args.apply(undefined, [1, ,])).toBe("1|inherited");
+      expect(args.apply(undefined, [1, , 3, 4])).toBe("1|inherited|3|4");
+      expect(args.bind(undefined).apply(undefined, [1, , 3])).toBe("1|inherited|3");
+      expect(Reflect.apply(args, undefined, [1, , 3])).toBe("1|inherited|3");
+      expect(args(...[1, , 3])).toBe("1|inherited|3");
+      expect(reads).toBe(6);
+    } finally {
+      delete Array.prototype[1];
+    }
+  });
+
+  // The list is built index 0 upwards, so inherited getters must fire in
+  // ascending order — a detail only observable through their side effects, and
+  // one an engine loses the moment it reads the arguments in whatever order its
+  // call sequence happens to evaluate.
+  test("inherited index getters fire in ascending index order", () => {
+    const args = function (...rest) {
+      return rest.map((value) => String(value)).join("|");
+    };
+    let order = "";
+    const define = (index) =>
+      Object.defineProperty(Array.prototype, index, {
+        get() {
+          order += String(index);
+          return `g${index}`;
+        },
+        configurable: true,
+      });
+
+    define(0);
+    define(1);
+    define(2);
+
+    try {
+      const run = (fn) => {
+        order = "";
+        return `${fn()} order=${order}`;
+      };
+
+      expect(run(() => args.apply(undefined, [, ,]))).toBe("g0|g1 order=01");
+      expect(run(() => args.apply(undefined, [, , ,]))).toBe("g0|g1|g2 order=012");
+      expect(run(() => args.apply(undefined, [, , , 4]))).toBe("g0|g1|g2|4 order=012");
+      expect(run(() => args.bind(undefined).apply(undefined, [, , ,]))).toBe(
+        "g0|g1|g2 order=012",
+      );
+      expect(run(() => Function.prototype.apply.call(args, undefined, [, , ,]))).toBe(
+        "g0|g1|g2 order=012",
+      );
+      expect(run(() => Reflect.apply(args, undefined, [, , ,]))).toBe(
+        "g0|g1|g2 order=012",
+      );
+      expect(run(() => args(...[, , ,]))).toBe("g0|g1|g2 order=012");
+    } finally {
+      delete Array.prototype[0];
+      delete Array.prototype[1];
+      delete Array.prototype[2];
+    }
+  });
+
+  test("a getter that truncates the argument array keeps the original count", () => {
+    const args = function (...rest) {
+      return rest.map((value) => String(value)).join("|");
+    };
+    let reading = null;
+
+    Object.defineProperty(Array.prototype, 1, {
+      get() {
+        reading.length = 1;
+        return "g";
+      },
+      configurable: true,
+    });
+
+    const truncatingCall = (call) => {
+      reading = [1, , 3];
+      return call(reading);
+    };
+
+    try {
+      // The length is read once up front, so shrinking the array from inside a
+      // getter cannot shorten the argument list: index 2 is merely absent when
+      // its turn comes. Reading indices in descending order would instead
+      // report the pre-truncation index 2 and lose index 0.
+      expect(truncatingCall((a) => args.apply(undefined, a))).toBe("1|g|undefined");
+      expect(truncatingCall((a) => Reflect.apply(args, undefined, a))).toBe(
+        "1|g|undefined",
+      );
+      expect(truncatingCall((a) => args.bind(undefined).apply(undefined, a))).toBe(
+        "1|g|undefined",
+      );
+    } finally {
+      delete Array.prototype[1];
+    }
+  });
+
+  test("apply uses the array's length, not its dense element count", () => {
+    const args = function (...rest) {
+      return rest.map((value) => String(value)).join("|");
+    };
+    const grown = [1, 2];
+    grown.length = 5;
+
+    expect(args.apply(undefined, grown)).toBe("1|2|undefined|undefined|undefined");
+    expect(Reflect.apply(args, undefined, grown)).toBe(
+      "1|2|undefined|undefined|undefined",
+    );
+    expect(args.bind(undefined).apply(undefined, grown)).toBe(
+      "1|2|undefined|undefined|undefined",
+    );
+  });
+
   test("call and apply reject non-callable receivers", () => {
     const notCallable = { call: Function.prototype.call, apply: Function.prototype.apply };
     expect(() => notCallable.call(undefined)).toThrow(TypeError);
