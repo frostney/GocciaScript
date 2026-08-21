@@ -198,6 +198,16 @@ procedure RegisterProxyDispatchHooks(
   const AGetFunctionRealm: TGocciaProxyGetFunctionRealmHook);
 procedure RegisterFunctionConstructRedirectHook(
   const AHook: TGocciaFunctionConstructRedirectHook);
+// A class value built by the tree-walk evaluator keeps its instance elements
+// as AST field tables that only the evaluator can run, so its [[Construct]]
+// needs an evaluation context that TGocciaClassValue.Instantiate has no way
+// to produce. The evaluator registers this redirect so that every
+// Construct(F, args, newTarget) entry point — Reflect.construct, the proxy
+// [[Construct]] fallback, species construction — reaches the same
+// InstantiateClass the `new` operator does, instead of the initializer-less
+// fallback.
+procedure RegisterClassConstructRedirectHook(
+  const AHook: TGocciaFunctionConstructRedirectHook);
 
 // ES2026 §10.2.9 SetFunctionName property-key formatting shared by
 // interpreter and bytecode named-evaluation paths.
@@ -241,6 +251,7 @@ var
   GProxyGetPrototypeHook: TGocciaProxyGetPrototypeHook;
   GProxyGetFunctionRealmHook: TGocciaProxyGetFunctionRealmHook;
   GFunctionConstructRedirectHook: TGocciaFunctionConstructRedirectHook;
+  GClassConstructRedirectHook: TGocciaFunctionConstructRedirectHook;
 
 procedure RegisterProxyDispatchHooks(
   const APredicate: TGocciaProxyPredicate;
@@ -260,6 +271,12 @@ procedure RegisterFunctionConstructRedirectHook(
   const AHook: TGocciaFunctionConstructRedirectHook);
 begin
   GFunctionConstructRedirectHook := AHook;
+end;
+
+procedure RegisterClassConstructRedirectHook(
+  const AHook: TGocciaFunctionConstructRedirectHook);
+begin
+  GClassConstructRedirectHook := AHook;
 end;
 
 function IsRegisteredProxyValue(const AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
@@ -450,8 +467,19 @@ begin
       Result := GProxyConstructHook(EffectiveTarget, WorkingArgs,
         EffectiveNewTarget)
     else if EffectiveTarget is TGocciaClassValue then
-      Result := TGocciaClassValue(EffectiveTarget).Instantiate(WorkingArgs,
-        EffectiveNewTarget)
+    begin
+      // ES2026 §10.2.2 step 5b / §7.3.33 InitializeInstanceElements: the
+      // instance elements of a class defined in source have to be
+      // initialized here, and only the evaluator can run them. Without the
+      // redirect this fell through to an Instantiate that runs the
+      // constructor body alone, so every field, private field, and method
+      // initializer was silently dropped.
+      if not (Assigned(GClassConstructRedirectHook) and
+              GClassConstructRedirectHook(EffectiveTarget, WorkingArgs,
+                EffectiveNewTarget, Result)) then
+        Result := TGocciaClassValue(EffectiveTarget).Instantiate(WorkingArgs,
+          EffectiveNewTarget);
+    end
     else if EffectiveTarget is TGocciaNativeFunctionValue then
       Result := TGocciaNativeFunctionValue(EffectiveTarget).Construct(WorkingArgs,
         EffectiveNewTarget)

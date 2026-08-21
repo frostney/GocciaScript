@@ -187,6 +187,15 @@ const CLASSIFICATION: Record<string, Classification> = {
   // and the testing API is incidental. Vitest is skipped for the same reason as
   // the other language suites.
   "p-callintrinsics.test.js": { kind: "language", bun: "gate", vitest: "skip" },
+  // Construction through the abstract Construct operation rather than through
+  // `new` — Reflect.construct, a proxy without a construct trap, a bound class
+  // — where the instance elements are the half a second construction path
+  // drops: every field, private field, and method initializer went missing in
+  // interpreted mode until that path was routed into the same instantiation
+  // `new` uses. Bun gates: this is ECMAScript class construction semantics,
+  // and the testing API is incidental. Vitest is skipped for the same reason as
+  // the other language suites.
+  "q-reflectconstruct.test.js": { kind: "language", bun: "gate", vitest: "skip" },
 };
 
 type Verdict = {
