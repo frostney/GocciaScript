@@ -5728,7 +5728,11 @@ begin
     begin
       VMClassConstructor := TGocciaVMClassValue(ClassConstructor);
       VMClassConstructor.FVM.FPendingNewTarget := EffectiveNewTarget;
-      VMClassConstructor.FVM.RunClassInitializers(ClassConstructor, AReceiver);
+      // ES2026 §10.2.2 [[Construct]] step 5b: only a ~base~ constructor
+      // initializes its instance elements ahead of its body; a ~derived~ one
+      // does it when its own super() returns (§13.3.7.1 step 11).
+      if not ClassConstructor.HasDerivedConstructorKind then
+        VMClassConstructor.FVM.RunClassInitializers(ClassConstructor, AReceiver);
       SuperResult := VMClassConstructor.FVM.InvokeFunctionValue(
         VMClassConstructor.FConstructorValue, AArguments, AReceiver);
       ValidateClassConstructorReturn(ClassConstructor, SuperResult);
@@ -6257,17 +6261,22 @@ begin
      Assigned(TGocciaVMClassValue(SuperClass).FConstructorValue) then
   begin
     TGocciaVMClassValue(SuperClass).FVM.FPendingNewTarget := FNewTarget;
-    TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
-      SuperClass, AThisValue);
+    // ES2026 §10.2.2 [[Construct]] step 5b: only a ~base~ superclass
+    // initializes its instance elements ahead of its constructor body. A
+    // ~derived~ one does it when its own super() returns (§13.3.7.1 step 11,
+    // reached through InitializeCurrentCtorReceiver); running them here too
+    // put its fields before its base's constructor and evaluated them twice.
+    if not SuperClass.HasDerivedConstructorKind then
+      TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
+        SuperClass, AThisValue);
     SuperResult := TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
       TGocciaVMClassValue(SuperClass).FConstructorValue,
       AArguments, AThisValue);
     if SuperResult is TGocciaObjectValue then
       begin
-        if (SuperResult <> AThisValue) and
-           not HasBytecodePrivateInitializersApplied(SuperResult, SuperClass) then
-          TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
-            SuperClass, SuperResult);
+        // §10.2.2 step 12: an object the super constructor *returns* replaces
+        // the receiver but never inherits that constructor's instance
+        // elements — those were installed on the receiver it was called with.
         MarkCurrentConstructorSuperCalled;
         InitializeCurrentCtorReceiver(SuperResult);
         Exit(SuperResult);
@@ -6297,18 +6306,17 @@ begin
 
   if Assigned(SuperClass.ConstructorMethod) then
   begin
-    if SuperClass is TGocciaVMClassValue then
+    // §10.2.2 step 5b again: pre-initialize only for a ~base~ superclass.
+    if (SuperClass is TGocciaVMClassValue) and
+       not SuperClass.HasDerivedConstructorKind then
       TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
         SuperClass, AThisValue);
     SuperResult := SuperClass.ConstructorMethod.CallWithThisValue(
       AArguments, AThisValue, ConstructorThisValue, FNewTarget);
     if SuperResult is TGocciaObjectValue then
       begin
-        if (SuperResult <> AThisValue) and
-           (SuperClass is TGocciaVMClassValue) and
-           not HasBytecodePrivateInitializersApplied(SuperResult, SuperClass) then
-          TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
-            SuperClass, SuperResult);
+        // §10.2.2 step 12 again: the returned object does not receive the
+        // returning constructor's own instance elements.
         MarkCurrentConstructorSuperCalled;
         InitializeCurrentCtorReceiver(SuperResult);
         Exit(SuperResult);
@@ -6892,7 +6900,11 @@ begin
           if (ImplicitSuperClass is TGocciaVMClassValue) and
                   Assigned(TGocciaVMClassValue(ImplicitSuperClass).FConstructorValue) then
           begin
-            FVM.RunClassInitializers(ImplicitSuperClass, Instance);
+            // ES2026 §10.2.2 [[Construct]] step 5b: only a ~base~ superclass
+            // initializes its instance elements ahead of its constructor body; a
+            // ~derived~ one does it when its own super() returns (§13.3.7.1 step 11).
+            if not ImplicitSuperClass.HasDerivedConstructorKind then
+              FVM.RunClassInitializers(ImplicitSuperClass, Instance);
             if Assigned(ANewTarget) then
               TGocciaVMClassValue(ImplicitSuperClass).FVM.FPendingNewTarget := ANewTarget
             else
@@ -6918,7 +6930,11 @@ begin
 
             if Assigned(ConstructorToCall) then
             begin
-              FVM.RunClassInitializers(ImplicitSuperClass, Instance);
+              // ES2026 §10.2.2 [[Construct]] step 5b: only a ~base~ superclass
+              // initializes its instance elements ahead of its constructor body; a
+              // ~derived~ one does it when its own super() returns (§13.3.7.1 step 11).
+              if not ImplicitSuperClass.HasDerivedConstructorKind then
+                FVM.RunClassInitializers(ImplicitSuperClass, Instance);
               if Assigned(ANewTarget) then
                 ConstructedValue := ConstructorToCall.CallWithThisValue(
                   AArguments, Instance, ConstructorThisValue, ANewTarget)
@@ -6965,11 +6981,16 @@ begin
         FVM.FCurrentConstructorSuperCalled := PreviousConstructorSuperCalled;
       end;
 
+      { This is the no-constructor branch, so the class runs the implicit
+        default constructor of §15.7.14 step 15a: forward to super, then
+        initialize its own instance elements. That second half is owed whether
+        the class is ~base~ or ~derived~ — skipping it for a derived class
+        dropped every field of a subclass that declares no constructor.
+        InstantiateRegisters, the path a bytecode `new` takes, has always run
+        it unconditionally here; this is the same step. }
       if not Assigned(InitializerReplayReceiver) or
          (Instance <> InitializerReplayReceiver) then
-        if (not HasDerivedConstructorReturnRestriction) or
-           Assigned(NativeInstance) then
-          FVM.RunClassInitializers(Self, Instance);
+        FVM.RunClassInitializers(Self, Instance);
 
       if Assigned(InitializerReplayReceiver) and
          (Instance = InitializerReplayReceiver) then
@@ -7296,8 +7317,12 @@ begin
             if (ImplicitSuperClass is TGocciaVMClassValue) and
                     Assigned(TGocciaVMClassValue(ImplicitSuperClass).FConstructorValue) then
             begin
-              TGocciaVMClassValue(ImplicitSuperClass).FVM.RunClassInitializers(
-                ImplicitSuperClass, Instance);
+              // ES2026 §10.2.2 [[Construct]] step 5b: only a ~base~ superclass
+              // initializes its instance elements ahead of its constructor body; a
+              // ~derived~ one does it when its own super() returns (§13.3.7.1 step 11).
+              if not ImplicitSuperClass.HasDerivedConstructorKind then
+                TGocciaVMClassValue(ImplicitSuperClass).FVM.RunClassInitializers(
+                  ImplicitSuperClass, Instance);
               TGocciaVMClassValue(ImplicitSuperClass).FVM.FPendingNewTarget := Self;
               if TGocciaVMClassValue(ImplicitSuperClass).FConstructorValue is TGocciaBytecodeFunctionValue then
               begin
@@ -7351,7 +7376,11 @@ begin
               if Assigned(ConstructorToCall) then
               begin
                 EnsureBoxedArgs;
-                FVM.RunClassInitializers(ImplicitSuperClass, Instance);
+                // ES2026 §10.2.2 [[Construct]] step 5b: only a ~base~ superclass
+                // initializes its instance elements ahead of its constructor body; a
+                // ~derived~ one does it when its own super() returns (§13.3.7.1 step 11).
+                if not ImplicitSuperClass.HasDerivedConstructorKind then
+                  FVM.RunClassInitializers(ImplicitSuperClass, Instance);
                 ConstructedValue := ConstructorToCall.CallWithThisValue(
                   BoxedArgs, Instance, ConstructorThisValue, Self);
                 ValidateClassConstructorReturn(ImplicitSuperClass, ConstructedValue);
@@ -10610,7 +10639,11 @@ begin
   if (AClassValue is TGocciaVMClassValue) and
      Assigned(TGocciaVMClassValue(AClassValue).FConstructorValue) then
   begin
-    RunClassInitializers(AClassValue, AInstance);
+    // ES2026 §10.2.2 [[Construct]] step 5b: only a ~base~ constructor
+    // initializes its instance elements ahead of its body; a ~derived~
+    // one does it when its own super() returns (§13.3.7.1 step 11).
+    if not AClassValue.HasDerivedConstructorKind then
+      RunClassInitializers(AClassValue, AInstance);
     SuperResult := TGocciaVMClassValue(AClassValue).FVM.InvokeFunctionValue(
       TGocciaVMClassValue(AClassValue).FConstructorValue,
       AArguments, AInstance);
@@ -10623,8 +10656,9 @@ begin
     SuperResult := SelectImplicitSuperResult(SuperResult, ConstructorThisValue);
     if SuperResult is TGocciaObjectValue then
     begin
-      if SuperResult <> AInstance then
-        RunClassInitializers(AClassValue, SuperResult);
+      // §10.2.2 step 12: an object the constructor returns replaces the
+      // receiver wholesale — it never receives that constructor's own
+      // instance elements, which went on the receiver it was called with.
       Exit(SuperResult);
     end;
     Exit;
@@ -10633,15 +10667,20 @@ begin
   if (AClassValue is TGocciaVMClassValue) and
      Assigned(TGocciaVMClassValue(AClassValue).NativeSuperConstructor) then
   begin
-    RunClassInitializers(AClassValue, AInstance);
+    // ES2026 §10.2.2 [[Construct]] step 5b: only a ~base~ constructor
+    // initializes its instance elements ahead of its body; a ~derived~
+    // one does it when its own super() returns (§13.3.7.1 step 11).
+    if not AClassValue.HasDerivedConstructorKind then
+      RunClassInitializers(AClassValue, AInstance);
     SuperResult := InvokeConstructableWithReceiver(
       TGocciaVMClassValue(AClassValue).NativeSuperConstructor,
       AArguments, AInstance);
     ValidateImplicitSuperResult(SuperResult);
     if SuperResult is TGocciaObjectValue then
     begin
-      if SuperResult <> AInstance then
-        RunClassInitializers(AClassValue, SuperResult);
+      // §10.2.2 step 12: an object the constructor returns replaces the
+      // receiver wholesale — it never receives that constructor's own
+      // instance elements, which went on the receiver it was called with.
       Exit(SuperResult);
     end;
     Exit;
@@ -10649,13 +10688,18 @@ begin
 
   if Assigned(AClassValue.ConstructorMethod) then
   begin
-    RunClassInitializers(AClassValue, AInstance);
+    // ES2026 §10.2.2 [[Construct]] step 5b: only a ~base~ constructor
+    // initializes its instance elements ahead of its body; a ~derived~
+    // one does it when its own super() returns (§13.3.7.1 step 11).
+    if not AClassValue.HasDerivedConstructorKind then
+      RunClassInitializers(AClassValue, AInstance);
     SuperResult := AClassValue.ConstructorMethod.Call(AArguments, AInstance);
     ValidateImplicitSuperResult(SuperResult);
     if SuperResult is TGocciaObjectValue then
     begin
-      if SuperResult <> AInstance then
-        RunClassInitializers(AClassValue, SuperResult);
+      // §10.2.2 step 12: an object the constructor returns replaces the
+      // receiver wholesale — it never receives that constructor's own
+      // instance elements, which went on the receiver it was called with.
       Exit(SuperResult);
     end;
     Exit;
@@ -10770,7 +10814,11 @@ begin
   if (AClassValue is TGocciaVMClassValue) and
      Assigned(TGocciaVMClassValue(AClassValue).FConstructorValue) then
   begin
-    RunClassInitializers(AClassValue, AInstance);
+    // ES2026 §10.2.2 [[Construct]] step 5b: only a ~base~ constructor
+    // initializes its instance elements ahead of its body; a ~derived~
+    // one does it when its own super() returns (§13.3.7.1 step 11).
+    if not AClassValue.HasDerivedConstructorKind then
+      RunClassInitializers(AClassValue, AInstance);
     if TGocciaVMClassValue(AClassValue).FConstructorValue is TGocciaBytecodeFunctionValue then
     begin
       BytecodeConstructor := TGocciaBytecodeFunctionValue(
@@ -10789,8 +10837,9 @@ begin
           ConstructorThisValue);
         if SuperResult is TGocciaObjectValue then
         begin
-          if SuperResult <> AInstance then
-            RunClassInitializers(AClassValue, SuperResult);
+          // §10.2.2 step 12: an object the constructor returns replaces the
+          // receiver wholesale — it never receives that constructor's own
+          // instance elements, which went on the receiver it was called with.
           Exit(SuperResult);
         end;
         Exit;
@@ -10814,8 +10863,9 @@ begin
     SuperResult := SelectImplicitSuperResult(SuperResult, ConstructorThisValue);
     if SuperResult is TGocciaObjectValue then
     begin
-      if SuperResult <> AInstance then
-        RunClassInitializers(AClassValue, SuperResult);
+      // §10.2.2 step 12: an object the constructor returns replaces the
+      // receiver wholesale — it never receives that constructor's own
+      // instance elements, which went on the receiver it was called with.
       Exit(SuperResult);
     end;
     Exit;
@@ -10826,7 +10876,11 @@ begin
   begin
     BoxedArgs := MaterializeArguments(AArguments);
     try
-      RunClassInitializers(AClassValue, AInstance);
+      // ES2026 §10.2.2 [[Construct]] step 5b: only a ~base~ constructor
+      // initializes its instance elements ahead of its body; a ~derived~
+      // one does it when its own super() returns (§13.3.7.1 step 11).
+      if not AClassValue.HasDerivedConstructorKind then
+        RunClassInitializers(AClassValue, AInstance);
       SuperResult := InvokeConstructableWithReceiver(
         TGocciaVMClassValue(AClassValue).NativeSuperConstructor,
         BoxedArgs, AInstance);
@@ -10836,8 +10890,9 @@ begin
     ValidateImplicitSuperResult(SuperResult);
     if SuperResult is TGocciaObjectValue then
     begin
-      if SuperResult <> AInstance then
-        RunClassInitializers(AClassValue, SuperResult);
+      // §10.2.2 step 12: an object the constructor returns replaces the
+      // receiver wholesale — it never receives that constructor's own
+      // instance elements, which went on the receiver it was called with.
       Exit(SuperResult);
     end;
     Exit;
@@ -10847,7 +10902,11 @@ begin
   begin
     BoxedArgs := MaterializeArguments(AArguments);
     try
-      RunClassInitializers(AClassValue, AInstance);
+      // ES2026 §10.2.2 [[Construct]] step 5b: only a ~base~ constructor
+      // initializes its instance elements ahead of its body; a ~derived~
+      // one does it when its own super() returns (§13.3.7.1 step 11).
+      if not AClassValue.HasDerivedConstructorKind then
+        RunClassInitializers(AClassValue, AInstance);
       SuperResult := AClassValue.ConstructorMethod.Call(BoxedArgs, AInstance);
     finally
       ReleaseArguments(BoxedArgs);
@@ -10855,8 +10914,9 @@ begin
     ValidateImplicitSuperResult(SuperResult);
     if SuperResult is TGocciaObjectValue then
     begin
-      if SuperResult <> AInstance then
-        RunClassInitializers(AClassValue, SuperResult);
+      // §10.2.2 step 12: an object the constructor returns replaces the
+      // receiver wholesale — it never receives that constructor's own
+      // instance elements, which went on the receiver it was called with.
       Exit(SuperResult);
     end;
     Exit;

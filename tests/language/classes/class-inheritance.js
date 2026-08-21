@@ -339,7 +339,11 @@ test("default constructor throws when a derived superclass constructor returns p
   expect(() => new Leaf()).toThrow(TypeError);
 });
 
-test("super() replacement receives superclass initializers", () => {
+// ES2026 §10.2.2 [[Construct]] steps 5b and 12: a base constructor installs
+// its instance elements on the object allocated for it, then a returned object
+// replaces the receiver wholesale. The replacement therefore never carries the
+// base class's fields.
+test("super() replacement does not receive the returning class's initializers", () => {
   let leafPrototype;
 
   class Base {
@@ -365,7 +369,8 @@ test("super() replacement receives superclass initializers", () => {
   leafPrototype = Leaf.prototype;
 
   const leaf = new Leaf();
-  expect(leaf.readBase()).toBe("base");
+  expect(leaf.readBase()).toBeUndefined();
+  expect(Object.keys(leaf)).toEqual([]);
 });
 
 test("super() replacement initializes constructor layers in order", () => {

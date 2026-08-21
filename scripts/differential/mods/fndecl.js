@@ -28,6 +28,34 @@ export class Tagged extends Point {
   }
 }
 
+// ES2026 §15.7.10 ClassFieldDefinitionEvaluation step 2b: a field initializer
+// closes over the class's own definition environment. These two read PREFIX
+// from a *field* initializer rather than a constructor body, so constructing
+// them from the entry file — which has no PREFIX — is what shows the
+// initializer did not resolve against the scope that ran `new`.
+export class Labelled {
+  label = PREFIX + "labelled";
+
+  constructor(n) {
+    this.n = n;
+  }
+}
+
+export class StampedLabel extends Labelled {
+  stamp = PREFIX + "stamp";
+
+  #secret = PREFIX + "secret";
+
+  constructor(n) {
+    super(n);
+    this.tail = PREFIX + "tail";
+  }
+
+  secret() {
+    return this.#secret;
+  }
+}
+
 // A *derived* module class — it calls super(), and it owns both an instance
 // field with an observable side effect and a private field. Extending this one
 // rather than the base Point is what exercises the ordering rule that a derived
@@ -52,6 +80,63 @@ export class Counted extends Point {
   brand() {
     return this.#brand;
   }
+}
+
+// Implicit-constructor layers. A class with no constructor of its own takes the
+// implicit-default-constructor path (§15.7.14 step 15a), which is separate
+// machinery from an explicit super() — and in a module it is reached through
+// the linking-time function-declaration path as well.
+export class Overriding {
+  a = PREFIX + "a";
+
+  constructor() {
+    return { tag: PREFIX + "override" };
+  }
+}
+
+export class OverriddenMiddle extends Overriding {
+  b = PREFIX + "b";
+}
+
+export class OverriddenLeaf extends OverriddenMiddle {
+  c = PREFIX + "c";
+}
+
+let implicitTicks = 0;
+
+export function implicitTickCount() {
+  return implicitTicks;
+}
+
+export class ImplicitBase {
+  constructor() {
+    this.x = 1;
+  }
+}
+
+export class ImplicitMiddle extends ImplicitBase {
+  b = ++implicitTicks;
+}
+
+export class ExplicitOverMiddle extends ImplicitMiddle {
+  c = ++implicitTicks;
+
+  constructor() {
+    super();
+    this.C = 1;
+  }
+}
+
+export class ImplicitLeaf extends ExplicitOverMiddle {
+  d = ++implicitTicks;
+}
+
+export function fnDeclImplicitLeafConstruct() {
+  return new ImplicitLeaf();
+}
+
+export function fnDeclOverriddenLeafConstruct() {
+  return new OverriddenLeaf();
 }
 
 export function fnDeclConstruct() {
