@@ -63,6 +63,14 @@ type
     procedure TestCommentedESModuleStaysAnESModule;
     procedure TestRegExpLiteralDoesNotSwallowCode;
     procedure TestUnterminatedCommentFallsBackToTheRawScan;
+
+    procedure TestNonASCIIIdentifierBeforeASlashDivides;
+    procedure TestStringBeforeASlashDivides;
+    procedure TestLineSeparatorEndsALineComment;
+    procedure TestCarriageReturnEndsALineComment;
+    procedure TestSubstitutionBracesAreTrackedByDepth;
+    procedure TestNestedTemplateLiteralsAreTracked;
+    procedure TestUnterminatedTemplateFallsBackToTheRawScan;
   public
     procedure SetupTests; override;
   end;
@@ -152,6 +160,19 @@ begin
     TestRegExpLiteralDoesNotSwallowCode);
   Test('an unterminated comment falls back to the raw scan',
     TestUnterminatedCommentFallsBackToTheRawScan);
+
+  Test('a slash after a non-ASCII identifier divides',
+    TestNonASCIIIdentifierBeforeASlashDivides);
+  Test('a slash after a string literal divides', TestStringBeforeASlashDivides);
+  Test('U+2028 ends a line comment', TestLineSeparatorEndsALineComment);
+  Test('a carriage return ends a line comment',
+    TestCarriageReturnEndsALineComment);
+  Test('substitution braces are told apart by depth',
+    TestSubstitutionBracesAreTrackedByDepth);
+  Test('nested template literals are tracked',
+    TestNestedTemplateLiteralsAreTracked);
+  Test('an unterminated template falls back to the raw scan',
+    TestUnterminatedTemplateFallsBackToTheRawScan);
 end;
 
 { ── Specifier splitting ────────────────────────────────────── }
@@ -737,6 +758,70 @@ begin
   Expect<Boolean>(LooksLikeCommonJSSource(
     'module.exports = { value: 1 };' + sLineBreak +
     '/* export * from "./value.js";')).ToBe(False);
+end;
+
+procedure TNodeResolutionTests.TestNonASCIIIdentifierBeforeASlashDivides;
+begin
+  { `café` is a value, so the slash after it divides. Reading it as an operand
+    position would open a regular expression that closes on the next slash on
+    the line, taking the export with it and refusing a genuine ES module. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const café = 4; const x = café/2; export const v = 1; ' +
+    'const y = 6/3; module.exports = x;')).ToBe(False);
+end;
+
+procedure TNodeResolutionTests.TestStringBeforeASlashDivides;
+begin
+  { A stripped literal leaves a value behind, so the slash after it divides for
+    the same reason. On a placeholder the scan could see past, the literal
+    opened here would run to the slash in `1/2` and swallow the export. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'var a = "p"/2;export { a };var b = 1/2;module.exports = b;')).ToBe(False);
+end;
+
+procedure TNodeResolutionTests.TestLineSeparatorEndsALineComment;
+begin
+  { U+2028 is an ECMAScript line terminator, so the banner comment ends there
+    and the code on the next line is still code. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    '// Annotate the CommonJS export names for ESM import in node:' +
+    #$2028 + 'module.exports = { value: 1 };')).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestCarriageReturnEndsALineComment;
+begin
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    '// Annotate the CommonJS export names for ESM import in node:' +
+    #13#10 + 'module.exports = { value: 1 };')).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestSubstitutionBracesAreTrackedByDepth;
+begin
+  { The closing brace of the object literal is not the one that ends the
+    substitution. Counting templates instead of brace depth ends it early, and
+    the rest of the substitution — the only CommonJS marker here — is read as
+    template text and stripped. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const label = `${ format({ width: 2 }, exports.name) } ready`;'))
+    .ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestNestedTemplateLiteralsAreTracked;
+begin
+  { A substitution inside a substitution is still code. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const label = `outer ${ wrap(`inner ${ exports.name }`) } done`;'))
+    .ToBe(True);
+  { The body of the nested template is text, so the marker in it is not one. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'module.exports = `a ${ wrap(`export const b = 1;`) } c`;')).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestUnterminatedTemplateFallsBackToTheRawScan;
+begin
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'module.exports = { value: 1 };' + sLineBreak +
+    'const banner = `export * from "./value.js";')).ToBe(False);
 end;
 
 begin

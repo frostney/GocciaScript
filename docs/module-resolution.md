@@ -205,7 +205,7 @@ trusting `"type"` is what makes the `module`-field deviation above work at all,
 since those ES module builds routinely sit in packages that declare no type.
 
 Before the markers are looked for, a lexical pass replaces every comment,
-string body, template body, and regular expression literal with a single space,
+string body, template body, and regular expression literal with a placeholder,
 so a keyword the file only mentions counts for nothing. Every esbuild
 `__toCommonJS` bundle depends on that pass: it ends with the banner comment
 `// Annotate the CommonJS export names for ESM import in node:`, whose bare
@@ -214,21 +214,37 @@ bundle was loaded and then failed at its first `require`, with an
 `Undefined variable: require` reference error instead of the package-relative
 message below.
 
-The pass is lexical, not a parse, and it approximates in two places:
+The placeholder is chosen for what stood there. A string, template, or regular
+expression is an operand, so it collapses to a value; a comment is not, so it
+collapses to a space the scan looks past. That distinction is what keeps
+`var a = "p" / 2` dividing rather than opening a literal at the slash.
 
-- A `/` is read as a regular expression or as division from the last
-  significant character before it. That is right in every operand position and
-  wrong only for a literal opening straight after a block's closing brace,
-  which is then scanned as ordinary code — harmless unless its body holds a
-  quote. A literal that does not close on its own line was division after all,
-  and the slash is kept as code.
-- A source the pass cannot finish — an unterminated block comment or template
-  literal — is classified on its raw text instead, which restores the old
-  behaviour for that one file.
+The pass is lexical, not a parse, and it decides one thing by approximation:
+whether a `/` opens a regular expression or divides, read from the last
+significant character before it. Division needs a value in front, so an
+identifier — including a non-ASCII one such as `café` — a number, a closing
+bracket, a postfix `++`, or a collapsed literal all mean division, and every
+other punctuator leaves an operand position where a slash opens a literal. Two
+shapes still come out wrong:
 
-What survives is a marker the file builds at runtime, `["exp" + "ort"]` or a
-keyword it only ever names in data. That remains a false *negative*, and it is
-the deliberate direction of the asymmetry: the file is loaded rather than
+- A literal opening straight after a block's closing brace or a condition's
+  `)`, as in `if (ok) /re/.test(x)`, is read as division, and its body is then
+  scanned as ordinary code. A quote inside the body can open a string scan that
+  runs to the next quote on the line.
+- A division after an identifier that spells one of the keywords a literal may
+  follow, as in `const of = 4; of / 2`, is read as a literal.
+
+The second is the damaging one. If a second `/` follows on the line, the bogus
+literal closes and everything between the two is discarded along with any
+marker in it — enough, in principle, to turn a genuine ES module into a
+CommonJS refusal. Only when no second `/` follows is the slash kept as code and
+nothing lost. A source the pass cannot finish at all — an unterminated block
+comment or template literal — is classified on its raw text instead, which
+restores the pre-pass behaviour for that one file.
+
+What survives the pass is a marker the file builds at runtime, `["exp" + "ort"]`
+or a keyword it only ever names in data. That remains a false *negative*, and it
+is the deliberate direction of the asymmetry: the file is loaded rather than
 refused, and removing the last of them would cost a parse of every resolved
 package entry.
 
