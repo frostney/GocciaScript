@@ -76,9 +76,17 @@ threadvar
   //     displaced frame's entry stays covered too.
   //   * TGocciaVM.ExecuteModule / .ExecuteFunction and every
   //     TGocciaExecutionContextScope in the engine and the tree-walking
-  //     interpreter — FunctionValue is nil and Scope is the engine global
-  //     scope (an explicit AddRootObject) or the evaluation context's scope,
-  //     which the evaluator holds rooted across the same region.
+  //     interpreter — FunctionValue is nil, and Scope is a scope the collector
+  //     roots outright rather than one it reaches through a frame.  The VM
+  //     entries, TGocciaEngine and TGocciaInterpreter.Execute carry the engine
+  //     global scope (an explicit AddRootObject); the two module paths
+  //     (EvaluateModuleProgram and
+  //     TGocciaInterpreterAsyncModuleEvaluation.Resume) carry the *module*
+  //     scope, which TGocciaModule.SetEnvironment likewise registers with
+  //     AddRootObject for as long as the module holds it.  The async
+  //     evaluation additionally marks FContext.Scope itself, so the entry
+  //     stays covered without depending on the module's registration or on
+  //     the continuation's own bookkeeping.
   //   * TGocciaVM direct eval — Scope is the eval activation scope, temp-
   //     rooted around the whole eval, and FunctionValue is the caller
   //     closure's function value, covered as above.

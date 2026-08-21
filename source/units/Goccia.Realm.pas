@@ -148,9 +148,8 @@ threadvar
   //     either active root is released, so the entry names exactly the two
   //     objects the active-root stack is already holding.
   //   * TGocciaAsyncFunctionEvaluation.Resume — pushes FFunction and
-  //     FCallScope, both reachable from the evaluation object itself
-  //     (MarkReferences marks FFunction directly and FCallScope through
-  //     FContinuation), which the resuming await reaction keeps alive.
+  //     FCallScope, both marked directly by the evaluation object's own
+  //     MarkReferences, which the resuming await reaction keeps alive.
   //
   // Adding a push site that does not sit inside such a bracket means this
   // array becomes the last reference to a collectible object, and it then
