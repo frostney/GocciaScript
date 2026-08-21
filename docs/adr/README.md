@@ -121,3 +121,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0109 — Engine-integrity faults are never guest-catchable](0109-engine-integrity-faults-are-uncatchable.md)
 - [0110 — The growth gate collects before refusing, and store paths root their temporaries](0110-growth-gate-collects-before-refusing.md)
 - [0111 — Opt-in node_modules resolution](0111-opt-in-node-modules-resolution.md)
+- [0112 — Native AsyncLocalStorage over continuation snapshots](0112-native-async-local-storage.md)

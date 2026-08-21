@@ -20,9 +20,15 @@ type
     FFactory: TGocciaRuntimeNamespaceFactory;
     FNamespaceObject: TGocciaObjectValue;
     FRuntime: TGocciaRuntimeCore;
+    FExportsDefault: Boolean;
   public
+    { AExportsDefault opts a module into exporting the factory object's
+      `default` key as its default export. Off by default: a `goccia:` runtime
+      module is a namespace of named exports, and exporting one of them as
+      `default` as well would be an accident rather than a decision. }
     constructor Create(const ARuntime: TGocciaRuntimeCore;
-      const AModuleName: string; const AFactory: TGocciaRuntimeNamespaceFactory);
+      const AModuleName: string; const AFactory: TGocciaRuntimeNamespaceFactory;
+      const AExportsDefault: Boolean = False);
     destructor Destroy; override;
     function LoadModule: TGocciaModule;
   end;
@@ -37,9 +43,11 @@ uses
 
 constructor TGocciaRuntimeNamespaceModuleRegistration.Create(
   const ARuntime: TGocciaRuntimeCore; const AModuleName: string;
-  const AFactory: TGocciaRuntimeNamespaceFactory);
+  const AFactory: TGocciaRuntimeNamespaceFactory;
+  const AExportsDefault: Boolean);
 begin
   inherited Create;
+  FExportsDefault := AExportsDefault;
   if not Assigned(ARuntime) then
     raise Exception.Create('Runtime namespace module registration needs a runtime.');
   if not Assigned(AFactory) then
@@ -82,7 +90,7 @@ begin
   Module := TGocciaModule.Create(FModuleName);
   try
     for ExportName in FNamespaceObject.GetOwnPropertyKeys do
-      if ExportName <> KEYWORD_DEFAULT then
+      if (ExportName <> KEYWORD_DEFAULT) or FExportsDefault then
         Module.AddExportValue(ExportName,
           FNamespaceObject.GetProperty(ExportName));
     FModule := Module;

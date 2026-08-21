@@ -18,6 +18,7 @@ procedure ApplyLoaderRuntimeProfile(const ARuntime: TGocciaRuntimeCore;
 implementation
 
 uses
+  Goccia.RuntimeExtensions.AsyncHooks,
   Goccia.RuntimeExtensions.Console,
   Goccia.RuntimeExtensions.CSV,
   Goccia.RuntimeExtensions.Fetch,
@@ -50,6 +51,10 @@ begin
   ARuntime.Install(TGocciaTextEncodingRuntimeExtension.Create);
   ARuntime.Install(TGocciaURLRuntimeExtension.Create);
   ARuntime.Install(TGocciaFetchRuntimeExtension.Create);
+  { Pure context bookkeeping — no I/O, no clock, no way to observe anything
+    the running program did not already have. It carries no capability, so it
+    is on by default wherever the loader profile is. }
+  ARuntime.Install(TGocciaAsyncHooksRuntimeExtension.Create);
   if ATestingModule then
     ARuntime.Install(TGocciaTestingLibraryRuntimeExtension.CreateModuleOnly);
 end;

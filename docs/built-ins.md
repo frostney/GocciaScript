@@ -9,6 +9,7 @@
 - **Core vs runtime registration** — `TGocciaEngine` always registers core language built-ins (Math, Object, Array, String, Number, RegExp, JSON, Symbol, Set, Map, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, TypedArrays, Proxy, Reflect, Iterator, DisposableStack, etc.); `Goccia.Runtime` provides optional runtime globals (Console, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, AbortController/AbortSignal, EventTarget/Event) and import-only `goccia:` runtime modules
 - **Runtime opt-ins** — Testing, benchmarking, FFI, data-format APIs, and SemVer extend the runtime surface through concrete runtime extension classes
 - **Goccia runtime modules** — Non-standard data-format APIs and SemVer are named-export-only modules (`goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, `goccia:semver`); use namespace imports for `CSV.parse(...)`-style call sites
+- **Node-addressed modules** — `node:async_hooks` provides `AsyncLocalStorage` and `AsyncResource` at Node's own address, with engine-level async-context propagation; see [Async Context](built-ins-async-context.md)
 - **Sandbox modules** — `GocciaSandboxRunner` installs import-only `"fs"` and `"goccia"` modules for sandbox filesystem and shell/nested-execution access; they are not globals
 - **ECMAScript shims** — Legacy standard names such as global `parseInt`, `parseFloat`, `isNaN`, `isFinite`, `Date`, `__proto__`, and legacy getter/setter helpers are installed through Goccia.shims
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
@@ -945,6 +946,10 @@ Implements the [WHATWG URLSearchParams](https://developer.mozilla.org/en-US/docs
 ### Fetch runtime APIs
 
 The focused WHATWG `fetch`, `Headers`, `Response`, `AbortController`, `AbortSignal`, `EventTarget`, and `Event` surface is documented in [Fetch Runtime APIs](built-ins-fetch.md). `AbortSignal` inherits from `EventTarget`, so `addEventListener`, `onabort`, and the one-shot `abort` event are available; see [ADR 0104](adr/0104-whatwg-eventtarget-base.md).
+
+### Async context (`node:async_hooks`)
+
+`AsyncLocalStorage` and `AsyncResource` are provided by the loader runtime profile as the import-only module `node:async_hooks`, at Node's own address and with Node's named plus default exports. The engine propagates the async context, so a store survives `await` and every promise-reaction continuation. See [Async Context](built-ins-async-context.md) for the full surface and [ADR 0112](adr/0112-native-async-local-storage.md) for the mechanism and the scope cuts.
 
 ### DisposableStack / AsyncDisposableStack (`Goccia.Builtins.DisposableStack.pas`)
 

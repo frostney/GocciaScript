@@ -202,6 +202,13 @@ resourcestring
   SSuggestPromiseAnyRejected = 'Promise.any() requires at least one promise to fulfill';
   SSuggestCallbackRequired = 'pass a function as the argument';
 
+  // Runtime errors — node:async_hooks
+  SSuggestAsyncLocalStorageReceiver =
+    'call run(), getStore(), enterWith(), exit() and disable() on an ' +
+    'AsyncLocalStorage instance';
+  SSuggestAsyncResourceReceiver =
+    'call runInAsyncScope() and bind() on an AsyncResource instance';
+
   // Runtime errors — ArrayBuffer
   SSuggestArrayBufferThisType = 'ArrayBuffer methods must be called on an ArrayBuffer instance';
   SSuggestArrayBufferDetached = 'the ArrayBuffer has been detached (transferred) and can no longer be used';

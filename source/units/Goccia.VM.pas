@@ -2708,6 +2708,21 @@ type
   TGocciaBytecodeAsyncGeneratorObjectValue = class(TGocciaAsyncGeneratorBaseValue)
   private
     FInner: TGocciaBytecodeGeneratorObjectValue;
+    { Async-generator request queue. DUPLICATED: TGocciaAsyncGeneratorObjectValue
+      in Goccia.Values.GeneratorValue
+      carries the same queue with the same discipline for the other executor,
+      and the two must stay in step — a change to one is a bug in the other
+      until it is made there too.
+
+      Async context is deliberately NOT recorded per request. A body observes
+      the context of whichever call resumed it, and that already falls out of
+      the microtask seam: every resumption reaches the body through a promise
+      reaction, which carries the snapshot captured where it was registered.
+      Probed against Node v24.0.1 across for-await, a generator created in one
+      context and resumed in another, a queued second request overlapping a
+      running one, and nested for-await under different stores; both executors
+      match Node on all of them. See tests/built-ins/AsyncHooks/
+      async-generators.js, which locks that in, and ADR 0111. }
     FQueue: array of TGocciaBytecodeAsyncGeneratorRequest;
     FQueueHead: Integer;
     FQueueCount: Integer;
@@ -16197,7 +16212,11 @@ begin
              (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) then
           begin
             GlobalName := TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).Name;
-            if (GlobalName = 'bind') and
+            { Identity, not name: an own static named `bind` on a function
+              object is a different function, and matching on the name alone
+              silently redirected the call into Function.prototype.bind. }
+            if (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue)
+                 .IntrinsicKind = nikFunctionBind) and
                (FRegisters[A - 1].ObjectValue is TGocciaFunctionBase) then
             begin
               case B of
