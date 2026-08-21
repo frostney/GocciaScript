@@ -137,6 +137,24 @@ threadvar
   // engine and this is overwritten on each engine run, so it is not a
   // thread-exit leak (object-reference threadvar audit, #892).
   GCurrentRealm: TGocciaRealm;
+  // Non-owning function-execution-context stack for the tree-walking
+  // evaluator.  Both members are GC-managed objects held as raw pointers, and
+  // no root source marks this array; that is deliberate, and safe because
+  // every push site brackets its entry with roots the collector already walks:
+  //
+  //   * TGocciaFunctionValue.Call / .CallWithNewTarget,
+  //     TGocciaMethodValue.CallWithThisValue — push strictly inside
+  //     GC.PushActiveRoot(Self) + GC.PushActiveRoot(CallScope) and pop before
+  //     either active root is released, so the entry names exactly the two
+  //     objects the active-root stack is already holding.
+  //   * TGocciaAsyncFunctionEvaluation.Resume — pushes FFunction and
+  //     FCallScope, both reachable from the evaluation object itself
+  //     (MarkReferences marks FFunction directly and FCallScope through
+  //     FContinuation), which the resuming await reaction keeps alive.
+  //
+  // Adding a push site that does not sit inside such a bracket means this
+  // array becomes the last reference to a collectible object, and it then
+  // needs a real TGCRootSource (see TGocciaAsyncContextRoots for the shape).
   GCurrentFunctionContextStack: array of record
     Scope: TObject;
     FunctionValue: TObject;
