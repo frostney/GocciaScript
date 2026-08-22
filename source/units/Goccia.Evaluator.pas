@@ -244,7 +244,8 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.Values.ToObject,
   Goccia.Values.ToPrimitive,
-  Goccia.Values.TypedArrayValue;
+  Goccia.Values.TypedArrayValue,
+  Goccia.VM.Exception;
 
 procedure RunClassInstanceInitializers(const AClassValue: TGocciaClassValue;
   const AInstance: TGocciaObjectValue;
@@ -7725,7 +7726,13 @@ end;
 
 function PascalExceptionToErrorObject(const E: Exception): TGocciaValue;
 begin
-  if E is TGocciaTypeError then
+  { A JS throw that left the bytecode VM already carries the guest's completion
+    value. Synthesizing a fresh Error from the Pascal message would hand `catch`
+    a different object whose `message` is EGocciaBytecodeThrow's "Name: message"
+    rendering; the thrown value itself is what ES2026 §14.15.3 binds. }
+  if E is EGocciaBytecodeThrow then
+    Result := EGocciaBytecodeThrow(E).ThrownValue
+  else if E is TGocciaTypeError then
     Result := CreateErrorObject(TYPE_ERROR_NAME, E.Message)
   else if E is TGocciaReferenceError then
     Result := CreateErrorObject(REFERENCE_ERROR_NAME, E.Message)
