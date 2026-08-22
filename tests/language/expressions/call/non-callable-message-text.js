@@ -70,13 +70,22 @@ describe("non-callable callee messages", () => {
     );
   });
 
-  test("falls back to the value type when the callee is an expression", () => {
+  test("names a parenthesised literal callee by its source text", () => {
     expect(messageOf(() => (3)())).toBe("3 is not a function");
   });
 
   test("names a non-callable tag in a tagged template", () => {
     const t = 1;
     expect(messageOf(() => t`x`)).toBe("t is not a function");
+  });
+
+  test("reports a TypeError for a missing symbol-keyed tagged-template tag", () => {
+    // A symbol-keyed computed member returns raw nil for a missing property, so
+    // the tagged-template tag callee is Pascal nil here. The diagnostic must
+    // read its type name through a nil guard rather than dereferencing nil.
+    const obj = {};
+    const s = Symbol("missing");
+    expect(messageOf(() => obj[s]`text`)).toBe("obj[s] is not a function");
   });
 });
 

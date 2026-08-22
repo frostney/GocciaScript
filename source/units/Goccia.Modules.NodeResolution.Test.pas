@@ -1,6 +1,10 @@
 program Goccia.Modules.NodeResolution.Test;
 
 {$I Goccia.inc}
+{ This file contains non-ASCII source string literals (e.g. `café`); pin the
+  source codepage so they decode as UTF-8 on every target rather than through
+  the platform default. }
+{$codepage utf8}
 
 uses
   {$IFDEF UNIX}BaseUnix,{$ENDIF}
@@ -66,6 +70,7 @@ type
     procedure TestModuleExportsLooksLikeCommonJS;
     procedure TestESModuleSourceDoesNotLookLikeCommonJS;
     procedure TestMixedSourceIsReadAsESModule;
+    procedure TestMinifiedSideEffectImportIsReadAsESModule;
     procedure TestInertSourceIsNotCommonJS;
     procedure TestIdentifierEndingInRequireIsNotACall;
 
@@ -264,6 +269,8 @@ begin
     TestESModuleSourceDoesNotLookLikeCommonJS);
   Test('source with both shapes is read as an ES module',
     TestMixedSourceIsReadAsESModule);
+  Test('a minified space-free side-effect import is read as an ES module',
+    TestMinifiedSideEffectImportIsReadAsESModule);
   Test('inert source is not CommonJS', TestInertSourceIsNotCommonJS);
   Test('an identifier ending in require is not a require call',
     TestIdentifierEndingInRequireIsNotACall);
@@ -886,6 +893,16 @@ begin
   Expect<Boolean>(LooksLikeCommonJSSource(
     'const legacy = require("./legacy.js");' + sLineBreak +
     'export const value = legacy;')).ToBe(False);
+end;
+
+procedure TNodeResolutionTests.TestMinifiedSideEffectImportIsReadAsESModule;
+begin
+  { A minifier emits a space-free side-effect import (`import"./a.js";`). The
+    scan strips the string literal to a placeholder before matching, so the
+    keyword follower set must accept the placeholder or this ES module — whose
+    only ES marker is that import — is misclassified as CommonJS and refused. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'import"./polyfill.js";const x=require("y");')).ToBe(False);
 end;
 
 procedure TNodeResolutionTests.TestInertSourceIsNotCommonJS;

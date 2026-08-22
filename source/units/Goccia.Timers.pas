@@ -106,13 +106,17 @@ type
     IntervalDelay: Double;
     CallAt: Double;
     CreatedAt: Double;
-    { True while this entry's callback is on the stack. An advance reached from
-      inside that callback — through the microtask drain, or through an engine
-      wait an `await` in it started — must not pick the same entry again: an
-      interval stays in the queue while it runs, and the real-mode step chooses
-      the earliest timer without a due-time window, so it re-entered the same
+    { How many of this entry's callback frames are on the stack. A depth, not a
+      flag: an explicit nested advance can re-enter the same interval entry (the
+      fake-clock selectors do not skip a dispatching entry), so a Boolean cleared
+      by the inner frame would let a clear from the still-running outer callback
+      free the entry that frame is still holding. An advance reached from inside
+      that callback — through the microtask drain, or through an engine wait an
+      `await` in it started — must not pick the same entry again: an interval
+      stays in the queue while it runs, and the real-mode step chooses the
+      earliest timer without a due-time window, so it re-entered the same
       callback until the stack ran out. }
-    Dispatching: Boolean;
+    DispatchDepth: Integer;
     { Cancelled while its own callback was running. An interval stays in the
       queue while it runs — that is what lets an explicit nested advance
       re-enter it, as Vitest allows — so `clearInterval(id)` called from inside
@@ -353,9 +357,31 @@ uses
 
 const
   NANOSECONDS_PER_MILLISECOND = 1000000.0;
+  { Largest magnitude, in whole milliseconds, whose nanosecond count still fits
+    in the signed Int64 the host clock is published as (High(Int64) div 1e6).
+    A finite JavaScript date can legitimately reach 8.64e15 ms, which is far
+    beyond this, so a conversion is range-checked and rejected rather than
+    silently overflowing Int64 inside Round. }
+  MAX_CLOCK_MILLISECONDS = 9223372036854.0;
+  CLOCK_OUT_OF_RANGE_MESSAGE =
+    'The resulting time is too large to represent as a nanosecond clock.';
+  CLOCK_OUT_OF_RANGE_SUGGESTION =
+    'Keep the mocked time and any advance within about 9.2e12 milliseconds of ' +
+    'the epoch.';
 
 threadvar
   TimerQueueThreadInstance: TGocciaTimerQueue;
+
+{ Converts a millisecond clock value to the Int64 nanosecond count the host
+  environment is published with, rejecting a value that would overflow Int64
+  with a RangeError rather than wrapping. }
+function ClockMillisecondsToNanoseconds(const AMilliseconds: Double): Int64;
+begin
+  if IsNan(AMilliseconds) or IsInfinite(AMilliseconds) or
+     (Abs(AMilliseconds) > MAX_CLOCK_MILLISECONDS) then
+    ThrowRangeError(CLOCK_OUT_OF_RANGE_MESSAGE, CLOCK_OUT_OF_RANGE_SUGGESTION);
+  Result := Round(AMilliseconds * NANOSECONDS_PER_MILLISECOND);
+end;
 
 { TGocciaTimerRoots }
 
@@ -491,13 +517,13 @@ begin
       so performance.now() measures elapsed virtual time rather than the
       simulated date. }
     FHostEnvironment.OverrideClock(
-      True, Round(FNow * NANOSECONDS_PER_MILLISECOND),
-      True, Round((FNow - FAdjusted - FStart) * NANOSECONDS_PER_MILLISECOND))
+      True, ClockMillisecondsToNanoseconds(FNow),
+      True, ClockMillisecondsToNanoseconds(FNow - FAdjusted - FStart))
   else if FMockedDateOnly then
     { setSystemTime outside useFakeTimers freezes the date and nothing else,
       exactly as Vitest's Date-only mock does. }
     FHostEnvironment.OverrideClock(
-      True, Round(FMockedDate * NANOSECONDS_PER_MILLISECOND), False, 0)
+      True, ClockMillisecondsToNanoseconds(FMockedDate), False, 0)
   else
     FHostEnvironment.ClearClockOverride;
 end;
@@ -627,7 +653,7 @@ begin
   Result := nil;
   for I := 0 to FTimers.Count - 1 do
   begin
-    if FTimers[I].Dispatching then
+    if FTimers[I].DispatchDepth > 0 then
       Continue;
     if ATimeoutsOnly and (FTimers[I].Kind <> gtkTimeout) then
       Continue;
@@ -727,7 +753,7 @@ var
   Entry: TGocciaTimerEntry;
 begin
   Entry := FTimers[AIndex];
-  if not Entry.Dispatching then
+  if Entry.DispatchDepth = 0 then
   begin
     FTimers.Delete(AIndex);
     Exit;
@@ -760,9 +786,13 @@ end;
 
 procedure TGocciaTimerQueue.DiscardTimers;
 begin
+  { Drop the queue but keep any uncaught error: the engine's own idle teardown
+    (DiscardRuntimePending) runs this before an interpreted run's test runner
+    gets to call TakeUncaughtTimerError, so clearing it here loses a throwing
+    module-scope timer and lets the file pass. The error is cleared on read
+    (TakeUncaughtError) or at the engine boundary (ResetForEngine), which is the
+    point at which a leftover value would otherwise reach the next engine. }
   RetireAllEntries;
-  FUncaughtError := nil;
-  FHasUncaughtError := False;
 end;
 
 function TGocciaTimerQueue.CountTimers: Integer;
@@ -877,7 +907,7 @@ begin
     end;
   end;
 
-  ATimer.Dispatching := True;
+  Inc(ATimer.DispatchDepth);
   try
     ContextToken := EnterAsyncContext(ATimer.Context);
     try
@@ -933,12 +963,15 @@ begin
       LeaveAsyncContext(ContextToken);
     end;
   finally
-    ATimer.Dispatching := False;
+    Dec(ATimer.DispatchDepth);
     { Frees it: the in-flight list owns its entries. A timeout always lands
-      here; an interval only when its own callback cancelled it. }
+      here; an interval only when its own callback cancelled it. The cleared
+      interval is freed only once the last frame holding it unwinds, so a nested
+      re-entry that clears the entry cannot free it out from under the outer
+      frame still on the stack. }
     if Assigned(Owned) then
       FInFlight.Remove(Owned)
-    else if ATimer.Cleared then
+    else if ATimer.Cleared and (ATimer.DispatchDepth = 0) then
       FInFlight.Remove(ATimer);
   end;
 end;

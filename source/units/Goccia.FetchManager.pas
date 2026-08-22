@@ -905,8 +905,30 @@ begin
       spend the entire budget before the response ever arrived. Polling the
       real work first means the race is decided by whether the fetch completes
       at all, which is the outcome a suite writing that race expects. }
-    if HasPendingFetch or HasPendingAtomicsWaitAsyncCompletions then
+    if HasPendingFetch then
     begin
+      Sleep(FETCH_POLL_INTERVAL_MS);
+      Continue;
+    end;
+
+    { A pending async Atomics waiter is not, unlike a fetch, necessarily
+      resolved by outside work: a real-mode timer calling Atomics.notify can be
+      what wakes it, so timers must still run while one is pending. Service a due
+      timer first; only when none is runnable does this poll for a cross-thread
+      notify. Blocking timers here left an indefinite Atomics.waitAsync pending
+      forever, and CheckInstructionLimit never advanced the counter to break it. }
+    if HasPendingAtomicsWaitAsyncCompletions then
+    begin
+      if HasRunnableRealTimers then
+      begin
+        if TimersRun >= TIMER_LOOP_LIMIT then
+          RaiseRealTimerLoopLimit;
+        if RunOneRealTimer then
+        begin
+          Inc(TimersRun);
+          Continue;
+        end;
+      end;
       Sleep(FETCH_POLL_INTERVAL_MS);
       Continue;
     end;

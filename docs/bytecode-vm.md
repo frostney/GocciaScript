@@ -266,7 +266,7 @@ The call-site descriptor table is intentionally runtime-only, so a module
 executed straight from a compiled `.gbc` (rather than compiled in-process from
 source) has no descriptors: its non-callable/non-constructor faults fall back to
 the runtime-type-name form (`undefined is not a function`) and carry no
-suggestion, where an in-process compile would name the callee. This is the one
+suggestion, whereas an in-process compile would name the callee. This is the one
 diagnostic-parity gap left open. Serialising the table would close it at the
 cost of a new bytecode-format section (callee text, object/property text, kind,
 line, column per call site) and its verifier; that is a bounded but real format

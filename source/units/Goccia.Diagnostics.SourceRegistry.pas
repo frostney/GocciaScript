@@ -150,10 +150,11 @@ threadvar
   GActiveScope: TGocciaDiagnosticSourceScope;
 
 var
-  // Process-monotonic principal counter. Guarded by a critical section rather
-  // than InterLockedIncrement64 because FPC 3.2.2 only declares the 64-bit
-  // interlocked helpers under CPU64, and CI also builds i386-win32; a principal
-  // is minted once per module load, so the lock cost is irrelevant.
+  // Process-monotonic principal counter. Guarded by a critical section so
+  // engines on separate threads never collide on a principal value. A lock
+  // rather than InterLockedIncrement64 because FPC 3.2.2 only declares the
+  // 64-bit interlocked helpers under CPU64, and CI also builds i386-win32; a
+  // principal is minted once per module load, so the lock cost is irrelevant.
   GPrincipalCounter: Int64 = 0;
   GPrincipalLock: TRTLCriticalSection;
 
@@ -279,10 +280,11 @@ begin
     Exit;
   end;
 
+  Expanded := ExpandFileName(APath);
   if ACanonicalIdentity <> '' then
     Canonical := ACanonicalIdentity
   else
-    Canonical := '#path:' + ExpandFileName(APath);
+    Canonical := '#path:' + Expanded;
   // One registration per canonical identity: a later load under an alias finds
   // this entry and cannot mint a guest-owned copy. Ownership is monotonic: a
   // host enrollment upgrades an existing guest entry to host-owned, while a
@@ -291,6 +293,27 @@ begin
   begin
     if AIsHost then
       Existing.IsGuest := False;
+    Exit;
+  end;
+
+  // Reconcile a pre-existing entry reached through the path spellings. When a
+  // file is first registered without a canonical identity, its entry is keyed
+  // under '#path:'+Expanded plus the literal and expanded paths; a later
+  // identified registration under '#id:' has a different canonical key, so the
+  // TryGetValue(Canonical) miss above would otherwise mint a SECOND entry and
+  // leave those path aliases still pointing at the first. A host upgrade on the
+  // new '#id:' entry would then never reach the alias, so TryGetGuestWindow via
+  // the path spelling would keep returning the guest-owned entry — a host-source
+  // downgrade. Fold this registration into the existing entry instead: upgrade
+  // ownership (host wins, never downgrades) and add the canonical key as one
+  // more alias of the single owned entry.
+  if FEntries.TryGetValue(APath, Existing) or
+     FEntries.TryGetValue(Expanded, Existing) then
+  begin
+    if AIsHost then
+      Existing.IsGuest := False;
+    if not FEntries.ContainsKey(Canonical) then
+      FEntries.AddOrSetValue(Canonical, Existing);
     Exit;
   end;
 
@@ -343,7 +366,6 @@ begin
       LiteralAdded := True;
       AfterIndexCommit(2);
     end;
-    Expanded := ExpandFileName(APath);
     if (Expanded <> Canonical) and (Expanded <> APath) and
        (not FEntries.ContainsKey(Expanded)) then
     begin

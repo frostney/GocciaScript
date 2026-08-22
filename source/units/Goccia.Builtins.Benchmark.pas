@@ -234,7 +234,7 @@ begin
       ExpectedPrincipal, TGocciaThrowValue(AException).Suggestion));
   if AException is EGocciaBytecodeThrow then
     Exit(FormatThrowDetail(EGocciaBytecodeThrow(AException).ThrownValue, '',
-      nil, False, ExpectedPrincipal));
+      nil, False, ExpectedPrincipal, EGocciaBytecodeThrow(AException).Suggestion));
   Result := AException.Message;
 end;
 

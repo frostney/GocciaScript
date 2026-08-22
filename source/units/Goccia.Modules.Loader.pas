@@ -120,7 +120,8 @@ type
     function HasModuleStateForAddress(const AAddress: string): Boolean;
     function TryLoadGlobalModule(const AModulePath: string;
       out AModule: TGocciaModule): Boolean;
-    function DeferredGraphTouchesEvaluating(const AResolvedPath: string;
+    function DeferredGraphTouchesEvaluating(const AResolvedPath,
+      AImportingFilePath: string;
       const ASeen: TOrderedStringMap<Boolean>): Boolean;
     procedure EvaluateDeferredAsyncDependencies(const AResolvedPath,
       AImportingFilePath: string; const ASeen: TOrderedStringMap<Boolean>;
@@ -1895,7 +1896,7 @@ begin
   begin
     Seen := TOrderedStringMap<Boolean>.Create;
     try
-      if DeferredGraphTouchesEvaluating(CacheKey, Seen) then
+      if DeferredGraphTouchesEvaluating(CacheKey, ImportingFilePath, Seen) then
         raise EGocciaDeferredModuleNotReady.Create(
           DEFERRED_MODULE_NOT_READY_MESSAGE);
     finally
@@ -2226,7 +2227,8 @@ begin
 end;
 
 function TGocciaModuleLoader.DeferredGraphTouchesEvaluating(
-  const AResolvedPath: string; const ASeen: TOrderedStringMap<Boolean>): Boolean;
+  const AResolvedPath, AImportingFilePath: string;
+  const ASeen: TOrderedStringMap<Boolean>): Boolean;
 var
   AttributeType: string;
   Content: TGocciaModuleContent;
@@ -2269,7 +2271,11 @@ begin
   if not IsJavaScriptModuleResource(PhysicalPath) then
     Exit(False);
 
-  IsHostOwned := IsHostOwnedLoad(PhysicalPath, '');
+  { Propagate the importing path so a transitive dependency of a host-owned
+    module is itself recognized as host-owned. With an empty importer here, an
+    ordinary deferred dependency of a host module registered guest-owned, which
+    would expose host source in a guest runtime code frame. }
+  IsHostOwned := IsHostOwnedLoad(PhysicalPath, AImportingFilePath);
   if IsHostOwned then
     MarkHostOwnedAddress(PhysicalPath);
   Content := LoadResolvedContent(PhysicalPath, IsHostOwned);
@@ -2308,7 +2314,8 @@ begin
 
           ResolvedPath := ResolveModuleRequestWithAttribute(RequestedPath,
             RequestedAttributeType, PhysicalPath);
-          if DeferredGraphTouchesEvaluating(ResolvedPath, ASeen) then
+          if DeferredGraphTouchesEvaluating(ResolvedPath, PhysicalPath,
+             ASeen) then
             Exit(True);
         end;
       finally

@@ -321,6 +321,43 @@ describe("performance.now across the fake/real transition", () => {
   });
 });
 
+describe("a nested advance that self-clears an interval keeps the outer frame's entry alive", () => {
+  afterEach(() => {
+    useRealTimers();
+  });
+
+  // An interval stays in the queue while it runs, and the fake-clock selectors
+  // do not skip a dispatching entry, so a nested advance from inside the
+  // callback re-enters the same entry. When dispatch state was a Boolean, the
+  // inner frame cleared it on the way out; a clearInterval from the still-running
+  // outer callback then took the "not dispatching" branch and freed the entry
+  // the outer frame was about to read — a use-after-free. A depth counter keeps
+  // the entry marked in-flight until the last frame unwinds.
+  test("nested advance then an outer-frame self-clear does not free the live entry", () => {
+    useFakeTimers();
+
+    let runs = 0;
+    let id;
+    id = setInterval(() => {
+      runs += 1;
+      const mine = runs;
+      if (mine === 1) {
+        // Re-enter this same interval entry (inner frame, run 2), then clear it
+        // from the outer frame after the nested advance returns. The Boolean
+        // flag was left False by the inner frame, so this clear used to delete
+        // and free the entry the outer frame is about to read on the way out.
+        advanceTimersByTime(10);
+        clearInterval(id);
+      }
+    }, 10);
+
+    advanceTimersByTime(10);
+
+    expect(runs >= 2).toBe(true);
+    expect(getTimerCount()).toBe(0);
+  });
+});
+
 describe("the timer globals are the runner's", () => {
   test("they are reported as runtime globals", () => {
     const names = Goccia.runtimeGlobals;

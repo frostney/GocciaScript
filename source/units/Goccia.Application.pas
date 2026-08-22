@@ -52,7 +52,7 @@ begin
       UseColor, 0, TGocciaThrowValue(AException).Suggestion))
   else if AException is EGocciaBytecodeThrow then
     WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(AException).ThrownValue,
-      '', nil, UseColor, 0))
+      '', nil, UseColor, 0, EGocciaBytecodeThrow(AException).Suggestion))
   else
     WriteLn('Error: ', AException.Message);
 end;

@@ -12,7 +12,11 @@ class Boom extends Error {
 }
 
 if (globalThis.__gocciaArmTopLevelThrow) {
-  throw new Boom("boom");
+  // Expose the exact instance so the importing test can assert the rejection
+  // preserves its identity by reference, not merely its name and message.
+  const boom = new Boom("boom");
+  globalThis.__gocciaTopLevelThrowValue = boom;
+  throw boom;
 }
 
 export const unreached = true;

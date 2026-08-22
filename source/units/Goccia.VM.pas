@@ -7139,12 +7139,18 @@ begin
               TGocciaVMClassValue(ImplicitSuperClass).FVM.FPendingNewTarget := ANewTarget
             else
               TGocciaVMClassValue(ImplicitSuperClass).FVM.FPendingNewTarget := Self;
-            FVM.FCurrentConstructorSuperCalled := False;
+            { The superclass constructor runs on ImplicitSuperClass.FVM, so its
+              super()-called flag lives there, not on this frame's FVM. When the
+              two are the same VM this is identical; when they differ (a
+              superclass owned by another VM), reading this frame's flag reported
+              a stale value and raised a false super-not-called error. }
+            TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled := False;
             ConstructedValue := TGocciaVMClassValue(ImplicitSuperClass).FVM.InvokeFunctionValue(
               TGocciaVMClassValue(ImplicitSuperClass).FConstructorValue,
               AArguments, Instance);
             RequireImplicitSuperConstructorInitializedThis(ImplicitSuperClass,
-              ConstructedValue, FVM.FCurrentConstructorSuperCalled);
+              ConstructedValue,
+              TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled);
             if TGocciaVMClassValue(ImplicitSuperClass).FConstructorValue is TGocciaBytecodeFunctionValue then
               ConstructorThisValue := RegisterToValue(
                 TGocciaVMClassValue(ImplicitSuperClass).FVM.FLastClosureThisValue)
@@ -7614,7 +7620,10 @@ begin
                 TGocciaVMClassValue(ImplicitSuperClass).FVM.RunClassInitializers(
                   ImplicitSuperClass, Instance);
               TGocciaVMClassValue(ImplicitSuperClass).FVM.FPendingNewTarget := Self;
-              FVM.FCurrentConstructorSuperCalled := False;
+              { The super()-called flag belongs to the VM that runs the superclass
+                constructor (AImplicitSuperClass.FVM), not this frame's FVM; they
+                differ when the superclass is owned by another VM. }
+              TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled := False;
               if TGocciaVMClassValue(ImplicitSuperClass).FConstructorValue is TGocciaBytecodeFunctionValue then
               begin
                 BytecodeSuperConstructor := TGocciaBytecodeFunctionValue(
@@ -7631,7 +7640,7 @@ begin
                   ValidateClassConstructorRegister(ImplicitSuperClass, ReturnRegister);
                   RequireImplicitSuperConstructorInitializedThis(
                     ImplicitSuperClass, RegisterToValue(ReturnRegister),
-                    FVM.FCurrentConstructorSuperCalled);
+                    TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled);
                   if IsUndefinedConstructedRegister(ReturnRegister) then
                     ApplyReplacementRegister(ConstructorThisRegister)
                   else
@@ -7648,7 +7657,7 @@ begin
                   ValidateClassConstructorReturn(ImplicitSuperClass, ConstructedValue);
                   RequireImplicitSuperConstructorInitializedThis(
                     ImplicitSuperClass, ConstructedValue,
-                    FVM.FCurrentConstructorSuperCalled);
+                    TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled);
                   if IsUndefinedConstructedValue(ConstructedValue) then
                     ApplyReplacementRegister(ConstructorThisRegister)
                   else
@@ -7664,7 +7673,7 @@ begin
                 ValidateClassConstructorReturn(ImplicitSuperClass, ConstructedValue);
                 RequireImplicitSuperConstructorInitializedThis(
                   ImplicitSuperClass, ConstructedValue,
-                  FVM.FCurrentConstructorSuperCalled);
+                  TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled);
                 ApplyReplacementResult(ConstructedValue);
               end;
             end

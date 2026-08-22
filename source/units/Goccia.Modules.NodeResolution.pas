@@ -1347,9 +1347,15 @@ function LooksLikeESModuleSource(const ASource: string): Boolean;
 begin
   { `import(` is dynamic import, which CommonJS files use too, so a bare '('
     after the keyword is not evidence either way. Whitespace counts as a
-    follower in its own right, so the sets name only the punctuation. }
+    follower in its own right, so the sets name only the punctuation. The
+    stripped placeholders are followers too: a space-free side-effect import
+    (`import"./a.js";`) has its literal collapsed to STRIPPED_VALUE_PLACEHOLDER
+    before this scan, so without them a minified ES module whose only ES marker
+    is such an import is misread as CommonJS. The raw quotes stay for the
+    fallback path that classifies on unstripped source. }
   Result := ContainsKeywordBefore(ASource, ESM_IMPORT_KEYWORD,
-      ['{', '*', '"', ''''], True) or
+      ['{', '*', '"', '''', STRIPPED_VALUE_PLACEHOLDER,
+       STRIPPED_OPERAND_PLACEHOLDER], True) or
     ContainsKeywordBefore(ASource, ESM_EXPORT_KEYWORD, ['{', '*'], True);
 end;
 

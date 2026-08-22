@@ -91,7 +91,7 @@ an unrelated `try` around the `await` and left the awaited promise pending as
 well. The queue parks it and the runner attributes it to the test that scheduled
 it, reported as `uncaught exception in a timer callback`.
 
-Two consequences are worth stating plainly, because they are divergences from
+Four consequences are worth stating plainly, because they are divergences from
 Node rather than from Vitest:
 
 - **A delay is an ordering key, not a duration.** `setTimeout(fn, 5000)` inside

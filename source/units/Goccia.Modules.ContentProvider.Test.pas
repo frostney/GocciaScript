@@ -108,6 +108,7 @@ type
     procedure TestInterpreterReloadedModuleRetargetsCachedImport;
     procedure TestEngineReportsJSONLModuleLineNumbers;
     procedure TestEngineReportsTOMLModuleSyntaxErrors;
+    procedure TestFileSystemContentProviderInvalidUTF8OmitsHostPath;
     procedure TestFileSystemContentProviderPreservesUTF8JSONLText;
     procedure TestFileSystemContentProviderPreservesUTF8TOMLText;
     procedure TestFileSystemContentProviderPreservesUTF8YAMLText;
@@ -208,6 +209,8 @@ begin
     TestEngineReportsJSONLModuleLineNumbers);
   Test('Engine reports TOML module syntax errors',
     TestEngineReportsTOMLModuleSyntaxErrors);
+  Test('File system content provider UTF-8 error omits the host path',
+    TestFileSystemContentProviderInvalidUTF8OmitsHostPath);
   Test('File system content provider preserves UTF-8 JSONL text',
     TestFileSystemContentProviderPreservesUTF8JSONLText);
   Test('File system content provider preserves UTF-8 TOML text',
@@ -873,6 +876,57 @@ begin
     Resolver.Free;
     Provider.Free;
     Executor.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestFileSystemContentProviderInvalidUTF8OmitsHostPath;
+var
+  ContentProvider: TGocciaFileSystemModuleContentProvider;
+  TempDirectory: string;
+  BadPath: string;
+  Stream: TFileStream;
+  Bytes: TBytes;
+  Raised: Boolean;
+  MessageValue: string;
+begin
+  TempDirectory := CreateTempDirectory;
+  BadPath := IncludeTrailingPathDelimiter(TempDirectory) + 'invalid-utf8.txt';
+  { A valid ASCII prefix followed by a lone continuation byte ($FF is never a
+    valid UTF-8 byte), so decoding fails partway through. }
+  SetLength(Bytes, 4);
+  Bytes[0] := Ord('a');
+  Bytes[1] := Ord('b');
+  Bytes[2] := Ord('c');
+  Bytes[3] := $FF;
+  Stream := TFileStream.Create(BadPath, fmCreate);
+  try
+    Stream.WriteBuffer(Bytes[0], Length(Bytes));
+  finally
+    Stream.Free;
+  end;
+
+  ContentProvider := TGocciaFileSystemModuleContentProvider.Create;
+  try
+    Raised := False;
+    MessageValue := '';
+    try
+      ContentProvider.LoadContent(BadPath).Free;
+    except
+      on E: EConvertError do
+      begin
+        Raised := True;
+        MessageValue := E.Message;
+      end;
+    end;
+
+    Expect<Boolean>(Raised).ToBe(True);
+    { The offset is still reported so the failure is diagnosable. }
+    Expect<Boolean>(Pos('byte', MessageValue) > 0).ToBe(True);
+    { The resolved host path must not leak into a guest-reachable message. }
+    Expect<Boolean>(Pos(BadPath, MessageValue) > 0).ToBe(False);
+    Expect<Boolean>(Pos('invalid-utf8.txt', MessageValue) > 0).ToBe(False);
+  finally
+    ContentProvider.Free;
   end;
 end;
 

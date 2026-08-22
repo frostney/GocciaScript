@@ -219,8 +219,10 @@ begin
     Stream.Free;
   end;
   if not TryDecodeUTF8(Bytes, SourceText, ErrorOffset) then
-    raise EConvertError.CreateFmt('Invalid UTF-8 at byte %d in file "%s"',
-      [ErrorOffset, APath]);
+    { Report only the byte offset: this message reaches guest code through
+      TGocciaRuntimeError, and the resolved host path must not be disclosed
+      (ADR 0108). }
+    raise EConvertError.CreateFmt('Invalid UTF-8 at byte %d', [ErrorOffset]);
   if not TryGetFileLastModified(APath, LastModified) then
     LastModified := 0;
   Result := TGocciaModuleContent.Create(SourceText, LastModified,

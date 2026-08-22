@@ -10,6 +10,7 @@ uses
   HashMap,
 
   Goccia.Arguments.Collection,
+  Goccia.GarbageCollector,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -181,6 +182,13 @@ type
     // released in Destroy so held errors cannot retain diagnostic copies past
     // the ceiling.
     FErrorSourceExcerptCharged: Int64;
+    // The collector the excerpt bytes were reserved against. Destroy releases
+    // through THIS owner rather than TGarbageCollector.Instance: the thread-local
+    // Instance can be a different thread's collector (or nil after Shutdown) when
+    // the error is destroyed, which would decrement the wrong budget or lose the
+    // release entirely. Per the GC lifecycle invariant an object is freed before
+    // its collector shuts down, so this pointer stays valid until release.
+    FErrorSourceExcerptCollector: TGarbageCollector;
   public
     destructor Destroy; override;
     property HasErrorSourceLocation: Boolean read FHasErrorSourceLocation
@@ -199,6 +207,8 @@ type
       write FErrorSourcePrincipal;
     property ErrorSourceExcerptCharged: Int64 read FErrorSourceExcerptCharged
       write FErrorSourceExcerptCharged;
+    property ErrorSourceExcerptCollector: TGarbageCollector
+      read FErrorSourceExcerptCollector write FErrorSourceExcerptCollector;
   end;
 
 
@@ -213,7 +223,6 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Utils,
   Goccia.Values.ArgumentsObjectValue,
@@ -948,17 +957,16 @@ begin
 end;
 
 destructor TGocciaErrorObjectValue.Destroy;
-var
-  GC: TGarbageCollector;
 begin
-  // Return the excerpt's charged bytes to the --max-memory budget.
-  if FErrorSourceExcerptCharged > 0 then
-  begin
-    GC := TGarbageCollector.Instance;
-    if Assigned(GC) then
-      GC.ReleaseExternalBytes(FErrorSourceExcerptCharged);
-    FErrorSourceExcerptCharged := 0;
-  end;
+  // Return the excerpt's charged bytes to the collector that reserved them, not
+  // to this thread's TGarbageCollector.Instance: a cross-thread destructor would
+  // otherwise decrement another collector's budget, and a release after the
+  // reserving collector's Shutdown would be lost.
+  if (FErrorSourceExcerptCharged > 0) and
+     Assigned(FErrorSourceExcerptCollector) then
+    FErrorSourceExcerptCollector.ReleaseExternalBytes(FErrorSourceExcerptCharged);
+  FErrorSourceExcerptCharged := 0;
+  FErrorSourceExcerptCollector := nil;
   inherited;
 end;
 

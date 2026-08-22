@@ -35,6 +35,7 @@ type
     procedure TestErrorDisplayNameMapsReferenceErrorCorrectly;
     procedure TestGetDetailedMessageHandlesSingleSourceLine;
     procedure TestFormatThrowDetailRequiresExpectedPrincipal;
+    procedure TestIdentifiedHostRegistrationUpgradesPathAlias;
   public
     procedure SetupTests; override;
   end;
@@ -90,6 +91,8 @@ begin
   Test('FormatThrowDetail withholds a retained foreign excerpt without an ' +
     'explicit matching principal',
     TestFormatThrowDetailRequiresExpectedPrincipal);
+  Test('an identified host registration upgrades a prior guest path alias',
+    TestIdentifiedHostRegistrationUpgradesPathAlias);
 end;
 
 procedure TErrorTests.TestGetDetailedMessageShowsJSFriendlyErrorName;
@@ -388,17 +391,22 @@ const
 var
   ErrorObject: TGocciaErrorObjectValue;
   ScopeA, ScopeB: TGocciaDiagnosticSourceScope;
+  NameValue, MessageValue: TGocciaStringLiteralValue;
   Output: string;
 begin
   ScopeA := TGocciaDiagnosticSourceScope.Create;
   ScopeB := TGocciaDiagnosticSourceScope.Create;
+  NameValue := nil;
+  MessageValue := nil;
   ErrorObject := TGocciaErrorObjectValue.Create;
   try
     ErrorObject.HasErrorData := True;
-    ErrorObject.AssignProperty('name',
-      TGocciaStringLiteralValue.Create('Error'));
-    ErrorObject.AssignProperty('message',
-      TGocciaStringLiteralValue.Create('held across engines'));
+    { The error frees property descriptors, not their FValue references, so hold
+      these managed values in locals and free them after the error. }
+    NameValue := TGocciaStringLiteralValue.Create('Error');
+    ErrorObject.AssignProperty('name', NameValue);
+    MessageValue := TGocciaStringLiteralValue.Create('held across engines');
+    ErrorObject.AssignProperty('message', MessageValue);
     ErrorObject.HasErrorSourceLocation := True;
     ErrorObject.ErrorSourcePath := 'engine-a-secret.js';
     ErrorObject.ErrorSourceLine := 2;
@@ -427,8 +435,55 @@ begin
     Expect<Boolean>(Pos(SecretMarker, Output) > 0).ToBe(True);
   finally
     ErrorObject.Free;
+    NameValue.Free;
+    MessageValue.Free;
     ScopeB.Free;
     ScopeA.Free;
+  end;
+end;
+
+procedure TErrorTests.TestIdentifiedHostRegistrationUpgradesPathAlias;
+const
+  HostSecret = 'HOST_ONLY_SOURCE_LINE';
+var
+  Scope: TGocciaDiagnosticSourceScope;
+  Window: TStringList;
+  FirstLine: Integer;
+  PathSpelling: string;
+begin
+  { A guest first registers a file with no canonical identity (path-keyed), then
+    the host registers the SAME file with a canonical identity. The identified
+    host registration must reconcile the earlier path alias so a lookup by the
+    path spelling no longer resolves to a guest-owned entry — otherwise the host
+    source is disclosed through the path spelling. }
+  Scope := TGocciaDiagnosticSourceScope.Create;
+  Window := TStringList.Create;
+  try
+    PathSpelling := 'shared-source.js';
+
+    { Guest load: no canonical identity, so this is keyed under the path. }
+    Scope.Register(PathSpelling, '// guest first line' + sLineBreak +
+      '// guest second line', False);
+
+    { The guest-owned source is readable through the path spelling. }
+    Expect<Boolean>(Scope.TryGetGuestWindow(PathSpelling, 1, 0, 0, Window,
+      FirstLine)).ToBe(True);
+
+    { Host load of the same file, now with a canonical identity. }
+    Scope.Register(PathSpelling, '// host first line' + sLineBreak +
+      HostSecret, True, '#id:host-canonical');
+
+    { After the host upgrade the path spelling must no longer yield a guest
+      window: the alias was reconciled to the host-owned entry. }
+    Expect<Boolean>(Scope.TryGetGuestWindow(PathSpelling, 1, 0, 0, Window,
+      FirstLine)).ToBe(False);
+
+    { And the canonical identity resolves host-owned as well. }
+    Expect<Boolean>(Scope.TryGetGuestWindow('#id:host-canonical', 1, 0, 0,
+      Window, FirstLine)).ToBe(False);
+  finally
+    Window.Free;
+    Scope.Free;
   end;
 end;
 
