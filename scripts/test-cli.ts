@@ -3316,6 +3316,21 @@ console.log("Assertion failure text...");
       ["vi.hoisted(() => ({}))", "vi.hoisted is not supported"],
       ["vi.importMock('./x.js')", "vi.importMock is not supported"],
       ["vi.setConfig({})", "vi.setConfig is not supported"],
+      // The fake-timer family is implemented, but three of its members are not
+      // and must keep saying so by name rather than becoming absent properties:
+      // no requestAnimationFrame, no process.nextTick, and no real elapsed time
+      // for an auto-advancing clock to track. `setTimerTickMode("manual")` is
+      // accepted — it names the only behaviour there is — so the unsupported
+      // case has to ask for one of the others.
+      [
+        "vi.advanceTimersToNextFrame()",
+        "vi.advanceTimersToNextFrame is not supported",
+      ],
+      ["vi.runAllTicks()", "vi.runAllTicks is not supported"],
+      [
+        "vi.setTimerTickMode('interval')",
+        "vi.setTimerTickMode is not supported",
+      ],
       ["vi.importActual('./x.js')", "vi.importActual is not supported"],
       ["vi.resetModules()", "vi.resetModules is not supported"],
       ["vi.doMock('./x.js')", "vi.doMock is not supported"],
@@ -3973,6 +3988,101 @@ console.log("Runtime diagnostic parity...");
           );
       }
     }
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- Timers: containment and uncaught attribution ------------------------------
+
+// Two properties that only show up in the runner's output, so neither can be
+// asserted from inside a suite.
+console.log("Timers (containment and uncaught attribution)...");
+{
+  const tmp = mkdtemp("goccia-timers-");
+  try {
+    // A timer callback that throws is an uncaught error in Node, not something
+    // the frame that happened to be awaiting can catch. It must therefore leave
+    // the await alone AND still fail the test that scheduled it — reporting it
+    // at the await made an unrelated try/catch swallow it and left the awaited
+    // promise pending on top of that.
+    const uncaught = join(tmp, "uncaught.test.js");
+    writeFileSync(
+      uncaught,
+      [
+        'test("a throwing timer does not surface at an unrelated await", async () => {',
+        "  let caughtHere = null;",
+        "  setTimeout(() => { throw new Error('from-the-timer'); }, 0);",
+        "  try {",
+        "    const value = await new Promise((resolve) => setTimeout(() => resolve('resolved'), 5));",
+        "    console.log('AWAIT-RESULT: ' + value);",
+        "  } catch (error) {",
+        "    caughtHere = error.message;",
+        "  }",
+        "  console.log('CAUGHT-AT-AWAIT: ' + caughtHere);",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    const out = (
+      await $`${TESTRUNNER} ${uncaught} --no-progress 2>&1`.nothrow()
+    ).text();
+
+    if (!out.includes("AWAIT-RESULT: resolved"))
+      throw new Error(
+        `a throwing timer must not disturb the awaiting frame, got: ${out}`,
+      );
+    if (!out.includes("CAUGHT-AT-AWAIT: null"))
+      throw new Error(
+        `a throwing timer must not be catchable at the await, got: ${out}`,
+      );
+    if (!out.includes("uncaught exception in a timer callback"))
+      throw new Error(
+        `a throwing timer must fail the test that scheduled it, got: ${out}`,
+      );
+    if (!out.includes("from-the-timer"))
+      throw new Error(`the timer's own error must be named, got: ${out}`);
+
+    // The timer surface is the runner's alone. The loader gets neither the
+    // globals nor the module, so a sandboxed script cannot schedule anything.
+    const probe = join(tmp, "probe.js");
+    writeFileSync(
+      probe,
+      [
+        'console.log("setTimeout=" + typeof setTimeout);',
+        'console.log("setInterval=" + typeof setInterval);',
+        'console.log("clearTimeout=" + typeof clearTimeout);',
+        "",
+      ].join("\n"),
+    );
+    const loaderOut = (await $`${LOADER} ${probe} 2>&1`.nothrow()).text();
+    for (const absent of [
+      "setTimeout=undefined",
+      "setInterval=undefined",
+      "clearTimeout=undefined",
+    ]) {
+      if (!loaderOut.includes(absent))
+        throw new Error(
+          `GocciaScriptLoader must not expose the timer globals (${absent}), got: ${loaderOut}`,
+        );
+    }
+
+    const moduleProbe = join(tmp, "module-probe.js");
+    writeFileSync(
+      moduleProbe,
+      [
+        'import * as timers from "goccia:timers";',
+        "console.log(typeof timers);",
+        "",
+      ].join("\n"),
+    );
+    const moduleOut = (
+      await $`${LOADER} ${moduleProbe} --source-type=module 2>&1`.nothrow()
+    ).text();
+    if (moduleOut.includes("object"))
+      throw new Error(
+        `GocciaScriptLoader must not resolve goccia:timers, got: ${moduleOut}`,
+      );
   } finally {
     clean(tmp);
   }

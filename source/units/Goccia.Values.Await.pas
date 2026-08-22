@@ -58,26 +58,33 @@ end;
   itself: the virtual clock jumps to the next due timer, the timer fires, its
   microtasks drain, and the loop asks again. No real time passes.
 
-  Under fake timers this does nothing. A suite that turned the clock over to
-  `vi` decides when timers run, and an await that silently advanced it would
-  take that decision away. }
+  Three things it deliberately does not do. Under fake timers it runs nothing —
+  a suite that turned the clock over to `vi` decides when timers run, and an
+  await that silently advanced it would take that decision away. It runs
+  nothing for a queue belonging to another realm, so a ShadowRealm child's await
+  cannot execute its parent's callbacks. And an exception a callback throws does
+  not surface here: it is parked for the host, because in Node the awaiting
+  frame is not the one that sees it. }
 procedure RunTimersUntilPromiseSettled(const APromise: TGocciaPromiseValue);
 var
   Iterations: Integer;
-  Timers: TGocciaTimerQueue;
 begin
-  Timers := TGocciaTimerQueue.Instance;
-  if not Assigned(Timers) then
-    Exit;
   Iterations := 0;
   while Assigned(APromise) and (APromise.State = gpsPending) and
         (Iterations < TIMER_LOOP_LIMIT) do
   begin
-    if not Timers.RunOneRealTimer then
+    CheckExecutionTimeout;
+    CheckInstructionLimit;
+    if not RunOneRealTimer then
       Exit;
     Inc(Iterations);
     DrainMicrotasksUntilPromiseSettled(APromise);
   end;
+  { The budget ran out with timers still runnable: name that rather than let it
+    reach the caller as an ordinary unsettled promise. }
+  if Assigned(APromise) and (APromise.State = gpsPending) and
+     (Iterations >= TIMER_LOOP_LIMIT) and HasRunnableRealTimers then
+    RaiseRealTimerLoopLimit;
 end;
 
 procedure RejectPromiseWithException(const APromise: TGocciaPromiseValue;

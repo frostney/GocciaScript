@@ -6,12 +6,17 @@
 
     - under fake timers, one of the `vi` advance members (see
       Goccia.Builtins.Timers), and
-    - under real timers, the engine itself, at the two points where it would
-      otherwise have nothing left to do: an `await` whose promise is still
-      pending (Goccia.Values.Await) and the end-of-run idle drain
+    - under real timers, the engine itself, wherever it would otherwise have
+      nothing left to do: an `await` whose promise is still pending
+      (Goccia.Values.Await and Goccia.FetchManager), the end of each test
+      (Goccia.Builtins.TestingLibrary), and the engine's own idle point
       (Goccia.RuntimeExtensions.Timers).
 
   Either way no real time passes: the clock jumps to each timer's due time.
+  Work that is really outstanding still outranks it — a fetch in flight is
+  polled before the clock is allowed to move — and an exception a real-mode
+  callback throws is parked for the host rather than raised at whichever frame
+  happened to be waiting, which is not the one Node would report it at.
 
   The ordering, the due-time arithmetic and the loop guard are modelled on
   @sinonjs/fake-timers, which is what Vitest's fake timers wrap, and every rule
@@ -38,17 +43,57 @@ uses
 const
   { @sinonjs/fake-timers aborts a runAll() that keeps finding new timers, and
     Vitest configures the limit at 10000. The message is reproduced verbatim
-    because suites assert on it. }
+    because suites assert on it — built from the constant so the two cannot
+    drift apart. }
   TIMER_LOOP_LIMIT = 10000;
-  TIMER_LOOP_LIMIT_MESSAGE =
-    'Aborting after running 10000 timers, assuming an infinite loop!';
   { Node clamps a delay above the signed 32-bit range to 1ms, and so does the
     fake clock. }
   TIMER_MAX_DELAY = 2147483647.0;
   NEGATIVE_TICKS_MESSAGE = 'Negative ticks are not supported';
+  { One advance may legitimately fire a great many timers — a 10ms interval
+    advanced by an hour fires 360000 — so this bound is far above anything a
+    real suite reaches and exists only to stop the one shape that cannot
+    terminate: a timer whose period is zero, which reschedules itself at the
+    instant it just ran so the clock can never move past it. Vitest hangs
+    forever on that shape; aborting is the one place this deliberately does
+    better than the oracle. }
+  TIMER_TICK_LOOP_LIMIT = 1000000;
+  TICK_LOOP_LIMIT_MESSAGE =
+    'Aborting after firing %d timers in a single advance: a timer keeps ' +
+    'rescheduling itself at the current instant, so the clock cannot move ' +
+    'past it. A setInterval with a period of 0 does this.';
+  { Vitest lets a non-finite system time through and leaves Date.now() reporting
+    NaN. GocciaScript refuses it instead: the mocked clock reaches JavaScript as
+    an Int64 nanosecond count on the host environment, so there is no NaN to
+    propagate, and every arithmetic consumer of the virtual clock — range tests,
+    due-time shifting — silently stops working once one is admitted. }
+  NON_FINITE_SYSTEM_TIME_MESSAGE =
+    'The system time must be a finite number of milliseconds or a valid Date.';
+  NON_FINITE_SYSTEM_TIME_SUGGESTION =
+    'Pass a finite epoch value, as in setSystemTime(0) or ' +
+    'setSystemTime(new Date("2020-01-01")).';
+  { A real-mode drain that hits the bound has to say so in its own words: the
+    fake-clock message names an advance member the program never called. }
+  REAL_TIMER_LOOP_LIMIT_MESSAGE =
+    'Aborting after running %d timers, assuming an infinite loop of ' +
+    'self-rescheduling timers. Clear the timer, or drive it with ' +
+    'vi.useFakeTimers() so the test decides when it runs.';
 
 type
   TGocciaTimerKind = (gtkTimeout, gtkInterval);
+
+  { One advance operation's recorded exception.
+
+    The slot has to be per-operation rather than per-queue. A tick drains the
+    microtask queue between timers, and guest code reached from there can start
+    another advance or another engine wait re-entrantly; with one queue-wide
+    slot the outer tick's recorded exception was raised at the inner site, and
+    the outer tick then believed it had succeeded. Each operation pushes its own
+    slot and the enclosing ones stay saved — and stay marked — until it pops. }
+  TGocciaTimerThrowSlot = record
+    Value: TGocciaValue;
+    HasValue: Boolean;
+  end;
 
   { One scheduled callback. Owned by the queue's list, which frees it. }
   TGocciaTimerEntry = class
@@ -61,6 +106,20 @@ type
     IntervalDelay: Double;
     CallAt: Double;
     CreatedAt: Double;
+    { True while this entry's callback is on the stack. An advance reached from
+      inside that callback — through the microtask drain, or through an engine
+      wait an `await` in it started — must not pick the same entry again: an
+      interval stays in the queue while it runs, and the real-mode step chooses
+      the earliest timer without a due-time window, so it re-entered the same
+      callback until the stack ran out. }
+    Dispatching: Boolean;
+    { Cancelled while its own callback was running. An interval stays in the
+      queue while it runs — that is what lets an explicit nested advance
+      re-enter it, as Vitest allows — so `clearInterval(id)` called from inside
+      that very callback would otherwise delete and free the entry the
+      dispatcher is still holding. It is moved aside and marked instead, and
+      freed when the callback returns. }
+    Cleared: Boolean;
     { The async context in effect where the timer was registered. A timer
       callback is a continuation, so it runs under that context rather than
       under whatever the code advancing the clock happens to hold. }
@@ -77,48 +136,74 @@ type
   TGocciaTimerRoots = class(TGCRootSource)
   private
     FQueue: TGocciaTimerQueue;
-    FCollector: TGarbageCollector;
   public
     procedure MarkRootReferences; override;
-    property Collector: TGarbageCollector read FCollector;
   end;
 
   TGocciaTimerQueue = class
   private
     FTimers: TGocciaTimerEntryList;
-    FInFlight: TGocciaTimerEntry;
+    { Timeout entries whose callbacks are on the stack. They are extracted from
+      FTimers before dispatch, so this is what keeps them marked — and it is a
+      stack, not a slot, because a nested advance can start another one. }
+    FInFlight: TGocciaTimerEntryList;
     FRoots: TGocciaTimerRoots;
     FNextId: Double;
 
     FNow: Double;
     FStart: Double;
     FAdjusted: Double;
+    { Sub-millisecond remainder carried between advances, in nanoseconds. An
+      advance moves the clock by whole milliseconds and banks the fraction, so
+      two half-millisecond advances move it by one — probed: tick(1.5) then
+      tick(0.5) lands on 2 and fires a timer due there. }
+    FNanos: Double;
     FDuringTick: Boolean;
     FFaking: Boolean;
     FMockedDateOnly: Boolean;
     FMockedDate: Double;
 
     FHostEnvironment: TGocciaHostEnvironment;
+    FOwnerRealm: TObject;
 
-    FPendingThrow: TGocciaValue;
-    FHasPendingThrow: Boolean;
+    FThrow: TGocciaTimerThrowSlot;
+    FSavedThrows: TArray<TGocciaTimerThrowSlot>;
+    FSavedThrowCount: Integer;
+    { The value of an exception this queue is in the middle of raising. Held
+      until the next advance starts rather than released at the raise: the
+      exception object does not root what it carries, and the unwind runs
+      arbitrary `finally` blocks that can collect. }
+    FRaisedThrow: TGocciaValue;
+    { An exception from a real-mode timer. Not raised at whichever frame
+      happened to be waiting — in Node that frame is unaffected and the error is
+      an uncaught top-level one — so it is parked here for the host to report. }
+    FUncaughtError: TGocciaValue;
+    FHasUncaughtError: Boolean;
 
     procedure EnsureRoots;
     procedure PublishClock;
     procedure SetNow(const AValue: Double);
     function IndexOfId(const AId: Double): Integer;
     function IsEarlier(const ALeft, ARight: TGocciaTimerEntry): Boolean;
+    function IsDispatchable(const ATimer: TGocciaTimerEntry): Boolean;
     function FirstTimerInRange(const AFrom, ATo: Double): TGocciaTimerEntry;
     function FirstTimer: TGocciaTimerEntry;
+    function FirstRealTimer(const ATimeoutsOnly: Boolean): TGocciaTimerEntry;
     function LastTimer: TGocciaTimerEntry;
+    procedure RetireEntry(const AIndex: Integer);
+    procedure RetireAllEntries;
     procedure CallTimer(const ATimer: TGocciaTimerEntry;
       const ACaptureThrows: Boolean);
     procedure CapturePendingThrow(const AValue: TGocciaValue);
-    procedure RaisePendingThrow;
+    function PushThrowSlot: Integer;
+    function TakeThrowSlot(const AToken: Integer;
+      out AValue: TGocciaValue): Boolean;
+    procedure RaiseThrown(const AValue: TGocciaValue);
     procedure DrainMicrotasks;
     function DoTick(const AMilliseconds: Double;
       const AAsync: Boolean): Double;
     function DoNext(const AAsync, ACaptureThrows: Boolean): Double;
+    function RunOneRealTimerOfKind(const ATimeoutsOnly: Boolean): Boolean;
   public
     class function Instance: TGocciaTimerQueue;
     class procedure Initialize;
@@ -153,12 +238,35 @@ type
 
     { Runs the next due timer and drains microtasks after it. Real-timer mode
       only; returns False when nothing ran. This is what the engine calls where
-      a host event loop would have taken over. }
+      a host event loop would have taken over. An exception the callback threw
+      is parked in the uncaught slot rather than raised here. }
     function RunOneRealTimer: Boolean;
-    { Bounded real-timer drain for the end of a run. Stops at the loop limit
-      rather than raising: an uncleared interval must not turn a passing file
-      into a failing one on the way out. }
+    { Bounded real-timer drain for the end of a run.
+
+      Timeouts only, and it never raises. An uncleared interval is by
+      construction infinite, so running it here would burn the whole budget and
+      finish no sooner; and a shutdown path that threw would turn a passing file
+      into a failing one. Whatever a callback threw is parked in the uncaught
+      slot for the host to report. }
     procedure DrainRealTimers;
+
+    { An exception a real-mode timer callback threw, if any, cleared by the
+      read. The host attributes it: the test runner fails the test that was
+      running, or the file when none was. }
+    function TakeUncaughtError(out AValue: TGocciaValue): Boolean;
+    function HasUncaughtError: Boolean;
+
+    { The engine boundary, in both directions.
+
+      The queue is a thread singleton and outlives any one engine, but every
+      JavaScript value it holds belongs to the realm that put it there. Anything
+      left behind — a recorded exception, the value of one already raised, an
+      uncaught error nobody collected — is published to the NEXT engine's
+      collector by the root source, which then walks a value whose heap is gone.
+      That is an access violation on the second test file in a process, and it
+      is why this is separate from EndFakeTimers: `vi.useRealTimers()` must not
+      discard an uncaught error the runner has not reported yet. }
+    procedure ResetForEngine;
 
     { Fake-timer mode. }
     procedure BeginFakeTimers(const ANowMilliseconds: Double);
@@ -168,9 +276,19 @@ type
     function RealEpochMilliseconds: Double;
 
     { The engine whose Date, Temporal.Now and performance this queue drives
-      while a clock is mocked. Assigned by the runtime extension. }
+      while a clock is mocked. Assigned by the runtime extension.
+
+      Both are cleared on detach while that engine is still alive: the queue is
+      a thread singleton that outlives any one engine, so a stale pointer here
+      would have PublishClock writing into freed memory. }
     property HostEnvironment: TGocciaHostEnvironment read FHostEnvironment
       write FHostEnvironment;
+    { The realm this queue's timers belong to, as an opaque handle compared by
+      identity against Goccia.Realm's current realm. A ShadowRealm child runs on
+      the same thread and shares this singleton, so without the check the
+      child's `await` would run the parent realm's callbacks with the child's
+      realm installed — parent code observing child intrinsics. }
+    property OwnerRealm: TObject read FOwnerRealm write FOwnerRealm;
 
     property Faking: Boolean read FFaking;
     property MockedDateOnly: Boolean read FMockedDateOnly;
@@ -178,11 +296,38 @@ type
     property NowMilliseconds: Double read FNow;
   end;
 
+{ The loop-limit message the fake clock produces, built from the constant. }
+function TimerLoopLimitMessage: string;
+
 { Runs the next due real-mode timer on this thread's queue, if there is one.
-  False when nothing ran — no queue yet, fake timers on, or nothing pending.
-  This is the seam the engine's promise waits call: a real-mode timer is a
-  continuation no amount of microtask draining will produce. }
+  False when nothing ran — no queue yet, fake timers on, nothing pending, or the
+  queue belongs to a realm other than the one currently executing. This is the
+  seam the engine's promise waits call: a real-mode timer is a continuation no
+  amount of microtask draining will produce. }
 function RunOneRealTimer: Boolean;
+
+{ True when this thread's queue still holds real-mode timers the current realm
+  may run. Lets a caller tell "the bound stopped me" from "there was nothing
+  left", which is the difference between a timer diagnosis and an ordinary
+  unsettled promise. }
+function HasRunnableRealTimers: Boolean;
+
+{ Drops every timer on this thread's queue. Between-test isolation: a drain the
+  runner abandoned must not leave callbacks that fire inside the next test. }
+procedure DiscardRealTimers;
+
+{ Bounded real-mode drain the host runs where a program would otherwise be
+  finished. Returns False when the bound stopped it with timers still runnable. }
+function DrainRealTimersForHost: Boolean;
+
+{ An exception a real-mode timer threw, for the host to attribute. }
+function TakeUncaughtTimerError(out AValue: TGocciaValue): Boolean;
+
+{ Reports a wait that spent its whole timer budget with timers still runnable.
+  Lives here so callers that cannot reach the error helpers — the fetch manager
+  compiles on a lane without them — can still name the real cause instead of
+  letting it surface as an ordinary unsettled promise. }
+procedure RaiseRealTimerLoopLimit;
 
 implementation
 
@@ -198,6 +343,7 @@ uses
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
+  Goccia.Realm,
   Goccia.ThreadCleanupRegistry,
   Goccia.Timeout,
   Goccia.Values.Error,
@@ -237,9 +383,21 @@ begin
     Exit;
   for I := 0 to FQueue.FTimers.Count - 1 do
     MarkTimer(FQueue.FTimers[I]);
-  MarkTimer(FQueue.FInFlight);
-  if Assigned(FQueue.FPendingThrow) then
-    FQueue.FPendingThrow.MarkReferences;
+  for I := 0 to FQueue.FInFlight.Count - 1 do
+    MarkTimer(FQueue.FInFlight[I]);
+  { Every enclosing advance's recorded exception, not just the innermost one:
+    an outer tick's value has to survive the whole re-entrant window its
+    microtask drain opened. }
+  if FQueue.FThrow.HasValue and Assigned(FQueue.FThrow.Value) then
+    FQueue.FThrow.Value.MarkReferences;
+  for I := 0 to FQueue.FSavedThrowCount - 1 do
+    if FQueue.FSavedThrows[I].HasValue and
+       Assigned(FQueue.FSavedThrows[I].Value) then
+      FQueue.FSavedThrows[I].Value.MarkReferences;
+  if Assigned(FQueue.FRaisedThrow) then
+    FQueue.FRaisedThrow.MarkReferences;
+  if Assigned(FQueue.FUncaughtError) then
+    FQueue.FUncaughtError.MarkReferences;
 end;
 
 { TGocciaTimerQueue }
@@ -264,10 +422,12 @@ constructor TGocciaTimerQueue.Create;
 begin
   inherited Create;
   FTimers := TGocciaTimerEntryList.Create(True);
+  FInFlight := TGocciaTimerEntryList.Create(True);
   FNextId := 1;
   FNow := 0;
   FStart := 0;
   FAdjusted := 0;
+  FNanos := 0;
 end;
 
 destructor TGocciaTimerQueue.Destroy;
@@ -277,19 +437,36 @@ begin
     so by teardown the pointer may name a freed one; clearing the override is
     the detaching extension's job, while its engine is still alive. }
   FreeAndNil(FRoots);
+  FInFlight.Free;
   FTimers.Free;
   inherited;
 end;
 
 { The root source registers with whichever collector was current when it was
   built, so a thread whose collector was replaced between engines needs a fresh
-  one — the same rule the async-context roots follow. }
+  one — the same rule the async-context roots follow.
+
+  Two properties here are load-bearing.
+
+  The identity test asks the source which collector it is *registered with*.
+  Comparing against a separately remembered collector pointer is unsound: a
+  Shutdown/Initialize pair can put the next thread-local collector at the
+  address the previous one had, and the source then stays registered with the
+  dead collector while this believes it is current. The collector's destructor
+  nils the registration on every source it owns, so this test cannot match a
+  destroyed one.
+
+  And every caller must reach this BEFORE the value it wants published becomes
+  reachable only from the queue. AddTimer calls it first, while the callback and
+  arguments are still held by the caller's argument collection, so there is no
+  window in which an entry is in FTimers with no root source to mark it. }
 procedure TGocciaTimerQueue.EnsureRoots;
 var
   Collector: TGarbageCollector;
 begin
   Collector := TGarbageCollector.Instance;
-  if Assigned(FRoots) and (FRoots.Collector = Collector) then
+  if Assigned(Collector) and Assigned(FRoots) and
+     (FRoots.RegisteredCollector = Collector) then
     Exit;
 
   FreeAndNil(FRoots);
@@ -298,7 +475,6 @@ begin
 
   FRoots := TGocciaTimerRoots.Create;
   FRoots.FQueue := Self;
-  FRoots.FCollector := Collector;
 end;
 
 { The mocked clock reaches JavaScript through the engine's host environment,
@@ -351,6 +527,19 @@ begin
   Result := -1;
 end;
 
+procedure RequireFiniteEpoch(const AValue: Double);
+begin
+  if IsNan(AValue) or IsInfinite(AValue) then
+    ThrowTypeError(NON_FINITE_SYSTEM_TIME_MESSAGE,
+      NON_FINITE_SYSTEM_TIME_SUGGESTION);
+end;
+
+function TimerLoopLimitMessage: string;
+begin
+  Result := Format('Aborting after running %d timers, assuming an infinite ' +
+    'loop!', [TIMER_LOOP_LIMIT]);
+end;
+
 { The fake clock's ordering: due time, then registration order, then id. Two
   timers due at the same instant therefore fire in the order they were
   scheduled, and setSystemTime — which shifts every due time and creation time
@@ -365,6 +554,25 @@ begin
   Result := ALeft.Id < ARight.Id;
 end;
 
+{ A due time that is not a finite number can never select an entry. The
+  in-flight check is deliberately NOT here: re-entering a running timer is
+  something the fake clock permits, and a suite that calls an advance member
+  from inside a timer callback gets that nesting under Vitest too (probed: an
+  interval whose callback advances the clock re-enters itself three deep). Only
+  the real-mode selector excludes it, because only that one picks the earliest
+  timer with no window to bound the nesting. }
+function TGocciaTimerQueue.IsDispatchable(
+  const ATimer: TGocciaTimerEntry): Boolean;
+begin
+  Result := Assigned(ATimer) and
+    (not IsNan(ATimer.CallAt)) and (not IsInfinite(ATimer.CallAt));
+end;
+
+{ The range test is written as an explicit "inside" rather than as a negated
+  "outside". Every comparison against a NaN bound is false, so the negated form
+  skipped nothing and reported an arbitrary timer as due — which is how a NaN
+  clock turned into an unbounded DoTick recursion. Non-finite bounds now select
+  nothing at all. }
 function TGocciaTimerQueue.FirstTimerInRange(
   const AFrom, ATo: Double): TGocciaTimerEntry;
 var
@@ -372,10 +580,14 @@ var
   I: Integer;
 begin
   Result := nil;
+  if IsNan(AFrom) or IsNan(ATo) or IsInfinite(AFrom) or IsInfinite(ATo) then
+    Exit;
   for I := 0 to FTimers.Count - 1 do
   begin
     Candidate := FTimers[I];
-    if (Candidate.CallAt < AFrom) or (Candidate.CallAt > ATo) then
+    if not IsDispatchable(Candidate) then
+      Continue;
+    if not ((Candidate.CallAt >= AFrom) and (Candidate.CallAt <= ATo)) then
       Continue;
     if (Result = nil) or IsEarlier(Candidate, Result) then
       Result := Candidate;
@@ -388,8 +600,42 @@ var
 begin
   Result := nil;
   for I := 0 to FTimers.Count - 1 do
+    if IsDispatchable(FTimers[I]) and
+       ((Result = nil) or IsEarlier(FTimers[I], Result)) then
+      Result := FTimers[I];
+end;
+
+{ The real-mode selector, and the only one that skips a timer already on the
+  stack.
+
+  Real mode has no window to pick within: it takes the earliest timer whatever
+  its due time, because the whole point is to jump the clock to it. An interval
+  stays in the queue while its callback runs, so the moment that callback
+  reached an engine wait — an `await`, or a microtask drain that led to one —
+  this selector handed back the very same entry and the callback re-entered
+  itself, again and again, until the stack ran out. The fake-clock paths need no
+  such check: their range or their explicit advance bounds the nesting.
+
+  ATimeoutsOnly additionally skips intervals, for the end-of-run drain: an
+  uncleared interval is by construction never exhausted, so running it there
+  would spend the whole budget and finish no sooner than skipping it. }
+function TGocciaTimerQueue.FirstRealTimer(
+  const ATimeoutsOnly: Boolean): TGocciaTimerEntry;
+var
+  I: Integer;
+begin
+  Result := nil;
+  for I := 0 to FTimers.Count - 1 do
+  begin
+    if FTimers[I].Dispatching then
+      Continue;
+    if ATimeoutsOnly and (FTimers[I].Kind <> gtkTimeout) then
+      Continue;
+    if not IsDispatchable(FTimers[I]) then
+      Continue;
     if (Result = nil) or IsEarlier(FTimers[I], Result) then
       Result := FTimers[I];
+  end;
 end;
 
 function TGocciaTimerQueue.LastTimer: TGocciaTimerEntry;
@@ -398,10 +644,18 @@ var
 begin
   Result := nil;
   for I := 0 to FTimers.Count - 1 do
-    if (Result = nil) or IsEarlier(Result, FTimers[I]) then
+    if IsDispatchable(FTimers[I]) and
+       ((Result = nil) or IsEarlier(Result, FTimers[I])) then
       Result := FTimers[I];
 end;
 
+{ The truncation is not a shortcut — it is what the fake clock does. It computes
+  a due time with `parseInt(delay)`, which stringifies and cuts at the decimal
+  point, so a fractional delay loses its fraction. Probed rather than assumed,
+  because the opposite is the obvious guess: under Vitest 4.1.10
+  `setTimeout(fn, 1.5)` followed by `advanceTimersByTime(1)` fires the timer,
+  and a delay of 0.4 is due immediately. Fractions survive on the *advance*
+  side instead, through FNanos. }
 function NormalizedDelay(const AValue: Double): Double;
 begin
   if IsNan(AValue) or IsInfinite(AValue) then
@@ -459,7 +713,36 @@ begin
     Exit;
   Index := IndexOfId(AId);
   if Index >= 0 then
-    FTimers.Delete(Index);
+    RetireEntry(Index);
+end;
+
+{ Removes the entry at AIndex from the pending list, freeing it — unless its own
+  callback is on the stack, in which case it is moved to the in-flight list and
+  marked, so the dispatcher's frame keeps a live object to return through. A
+  callback that cancels its own interval once it has seen enough is by far the
+  common case, and it used to free the entry the dispatcher was about to touch
+  on the way out. }
+procedure TGocciaTimerQueue.RetireEntry(const AIndex: Integer);
+var
+  Entry: TGocciaTimerEntry;
+begin
+  Entry := FTimers[AIndex];
+  if not Entry.Dispatching then
+  begin
+    FTimers.Delete(AIndex);
+    Exit;
+  end;
+  Entry.Cleared := True;
+  FInFlight.Add(FTimers.Extract(Entry));
+end;
+
+{ Empties the pending list without freeing anything a dispatcher still holds. }
+procedure TGocciaTimerQueue.RetireAllEntries;
+var
+  I: Integer;
+begin
+  for I := FTimers.Count - 1 downto 0 do
+    RetireEntry(I);
 end;
 
 { Drops the queue and rewinds the clock to the instant fake timers were
@@ -470,17 +753,16 @@ procedure TGocciaTimerQueue.ClearAllTimers;
 begin
   if not FFaking then
     Exit;
-  FTimers.Clear;
-  FPendingThrow := nil;
-  FHasPendingThrow := False;
+  RetireAllEntries;
+  FNanos := 0;
   SetNow(FStart);
 end;
 
 procedure TGocciaTimerQueue.DiscardTimers;
 begin
-  FTimers.Clear;
-  FPendingThrow := nil;
-  FHasPendingThrow := False;
+  RetireAllEntries;
+  FUncaughtError := nil;
+  FHasUncaughtError := False;
 end;
 
 function TGocciaTimerQueue.CountTimers: Integer;
@@ -510,22 +792,63 @@ end;
   pending. Probed for each member separately, because the three do not agree. }
 procedure TGocciaTimerQueue.CapturePendingThrow(const AValue: TGocciaValue);
 begin
-  if FHasPendingThrow then
+  if FThrow.HasValue then
     Exit;
-  FPendingThrow := AValue;
-  FHasPendingThrow := True;
+  FThrow.Value := AValue;
+  FThrow.HasValue := True;
 end;
 
-procedure TGocciaTimerQueue.RaisePendingThrow;
-var
-  Value: TGocciaValue;
+{ Opens a fresh slot for one advance operation and saves the enclosing one.
+  Returns the depth to hand back to TakeThrowSlot. }
+function TGocciaTimerQueue.PushThrowSlot: Integer;
 begin
-  if not FHasPendingThrow then
+  { The value of an exception raised by the previous advance is released here
+    rather than at the raise itself: by now that exception has been caught or
+    has left the engine, and nothing else roots what it carried. }
+  FRaisedThrow := nil;
+
+  if FSavedThrowCount >= Length(FSavedThrows) then
+    SetLength(FSavedThrows, FSavedThrowCount * 2 + 8);
+  Result := FSavedThrowCount;
+  FSavedThrows[Result] := FThrow;
+  Inc(FSavedThrowCount);
+  FThrow.Value := nil;
+  FThrow.HasValue := False;
+end;
+
+{ Closes the slot AToken opened, restoring the enclosing one, and reports
+  whatever this operation recorded. The token is a depth rather than a pop
+  count, so an operation unwound by an exception cannot pop past its caller. }
+function TGocciaTimerQueue.TakeThrowSlot(const AToken: Integer;
+  out AValue: TGocciaValue): Boolean;
+var
+  I: Integer;
+begin
+  AValue := nil;
+  Result := False;
+  if (AToken < 0) or (AToken >= FSavedThrowCount) then
     Exit;
-  Value := FPendingThrow;
-  FPendingThrow := nil;
-  FHasPendingThrow := False;
-  raise TGocciaThrowValue.Create(Value);
+
+  Result := FThrow.HasValue;
+  AValue := FThrow.Value;
+
+  FThrow := FSavedThrows[AToken];
+  for I := AToken to FSavedThrowCount - 1 do
+  begin
+    FSavedThrows[I].Value := nil;
+    FSavedThrows[I].HasValue := False;
+  end;
+  FSavedThrowCount := AToken;
+end;
+
+{ The value stays in a marked field across the raise. A TGocciaThrowValue does
+  not root what it carries, and unwinding runs arbitrary `finally` blocks that
+  can allocate — so releasing the field first left the in-flight value
+  collectable. It is dropped at the next PushThrowSlot instead. }
+procedure TGocciaTimerQueue.RaiseThrown(const AValue: TGocciaValue);
+begin
+  FRaisedThrow := AValue;
+  raise TGocciaThrowValue.Create(AValue);
 end;
 
 procedure TGocciaTimerQueue.CallTimer(const ATimer: TGocciaTimerEntry;
@@ -547,10 +870,14 @@ begin
     if Index >= 0 then
     begin
       Owned := FTimers.Extract(FTimers[Index]);
-      FInFlight := Owned;
+      { Onto the in-flight stack, not into a single slot: a nested advance can
+        put another timeout in flight, and a slot would leave the outer one
+        unmarked for the rest of its own callback. }
+      FInFlight.Add(Owned);
     end;
   end;
 
+  ATimer.Dispatching := True;
   try
     ContextToken := EnterAsyncContext(ATimer.Context);
     try
@@ -606,8 +933,13 @@ begin
       LeaveAsyncContext(ContextToken);
     end;
   finally
-    FInFlight := nil;
-    Owned.Free;
+    ATimer.Dispatching := False;
+    { Frees it: the in-flight list owns its entries. A timeout always lands
+      here; an interval only when its own callback cancelled it. }
+    if Assigned(Owned) then
+      FInFlight.Remove(Owned)
+    else if ATimer.Cleared then
+      FInFlight.Remove(ATimer);
   end;
 end;
 
@@ -618,16 +950,38 @@ end;
 function TGocciaTimerQueue.DoTick(const AMilliseconds: Double;
   const AAsync: Boolean): Double;
 var
-  OldNow, Previous, TickFrom, TickTo: Double;
+  Fired: Integer;
+  NanosTotal, OldNow, Previous, TickFrom, TickTo: Double;
   Timer: TGocciaTimerEntry;
   WasDuringTick: Boolean;
 begin
+  { Ordered as the fake clock orders it: the non-finite refusal first, because
+    `NaN < 0` is false and a NaN would otherwise reach the arithmetic below and
+    turn every range test and the trailing re-check into nonsense. }
+  if IsNan(AMilliseconds) or IsInfinite(AMilliseconds) then
+    ThrowTypeError(NON_FINITE_SYSTEM_TIME_MESSAGE,
+      'Advance the timers by a finite number of milliseconds.');
   if AMilliseconds < 0 then
     ThrowTypeError(NEGATIVE_TICKS_MESSAGE);
+  if IsNan(FNow) or IsInfinite(FNow) then
+    ThrowTypeError(NON_FINITE_SYSTEM_TIME_MESSAGE,
+      NON_FINITE_SYSTEM_TIME_SUGGESTION);
 
+  { Whole milliseconds move the clock; the fraction is banked. Two advances of
+    half a millisecond therefore move it by one and fire a timer due there,
+    which a per-advance truncation would never do. }
+  NanosTotal := FNanos + Round(Frac(AMilliseconds) * NANOSECONDS_PER_MILLISECOND);
   TickTo := FNow + Int(AMilliseconds);
+  if NanosTotal >= NANOSECONDS_PER_MILLISECOND then
+  begin
+    TickTo := TickTo + 1;
+    NanosTotal := NanosTotal - NANOSECONDS_PER_MILLISECOND;
+  end;
+  FNanos := NanosTotal;
+
   TickFrom := FNow;
   Previous := FNow;
+  Fired := 0;
   WasDuringTick := FDuringTick;
   FDuringTick := True;
   try
@@ -639,6 +993,9 @@ begin
     begin
       CheckExecutionTimeout;
       CheckInstructionLimit;
+      Inc(Fired);
+      if Fired > TIMER_TICK_LOOP_LIMIT then
+        ThrowError(Format(TICK_LOOP_LIMIT_MESSAGE, [TIMER_TICK_LOOP_LIMIT]));
 
       TickFrom := Timer.CallAt;
       SetNow(Timer.CallAt);
@@ -664,6 +1021,10 @@ begin
     FDuringTick := WasDuringTick;
   end;
 
+  { Timers a callback scheduled strictly inside the remaining range still have
+    to run. The recursion terminates because it can only be entered with a timer
+    due at or before TickTo, and each pass either fires one or moves the clock
+    to TickTo. }
   Timer := FirstTimerInRange(TickFrom, TickTo);
   if Assigned(Timer) then
     DoTick(TickTo - FNow, AAsync)
@@ -675,9 +1036,23 @@ end;
 
 function TGocciaTimerQueue.Tick(const AMilliseconds: Double;
   const AAsync: Boolean): Double;
+var
+  Thrown: TGocciaValue;
+  HasThrown: Boolean;
+  Token: Integer;
 begin
-  Result := DoTick(AMilliseconds, AAsync);
-  RaisePendingThrow;
+  Token := PushThrowSlot;
+  try
+    Result := DoTick(AMilliseconds, AAsync);
+  finally
+    { Runs on the exception path too, so an operation cut short by a timeout or
+      an instruction limit still restores its caller's slot instead of leaving
+      its own recorded value to surface at an unrelated advance. That hard fault
+      wins: the recorded value is simply dropped. }
+    HasThrown := TakeThrowSlot(Token, Thrown);
+  end;
+  if HasThrown then
+    RaiseThrown(Thrown);
 end;
 
 function TGocciaTimerQueue.DoNext(const AAsync,
@@ -708,10 +1083,20 @@ end;
   itself lets an exception out, so a throwing timer leaves the rest of that
   instant pending. }
 function TGocciaTimerQueue.AdvanceToNextTimer(const AAsync: Boolean): Double;
+var
+  Thrown: TGocciaValue;
+  HasThrown: Boolean;
+  Token: Integer;
 begin
-  DoNext(AAsync, False);
-  DoTick(0, AAsync);
-  RaisePendingThrow;
+  Token := PushThrowSlot;
+  try
+    DoNext(AAsync, False);
+    DoTick(0, AAsync);
+  finally
+    HasThrown := TakeThrowSlot(Token, Thrown);
+  end;
+  if HasThrown then
+    RaiseThrown(Thrown);
   Result := FNow;
 end;
 
@@ -724,13 +1109,13 @@ var
 begin
   for I := 0 to TIMER_LOOP_LIMIT - 1 do
   begin
-    if FTimers.Count = 0 then
+    if not Assigned(FirstTimer) then
       Exit(FNow);
     CheckExecutionTimeout;
     CheckInstructionLimit;
     DoNext(AAsync, False);
   end;
-  ThrowError(TIMER_LOOP_LIMIT_MESSAGE);
+  ThrowError(TimerLoopLimitMessage);
   Result := FNow;
 end;
 
@@ -748,17 +1133,57 @@ begin
   Result := Tick(Timer.CallAt - FNow, AAsync);
 end;
 
-function TGocciaTimerQueue.RunOneRealTimer: Boolean;
+{ One real-mode step.
+
+  The exception a callback throws does NOT come out here. This is reached from
+  an engine wait — an `await`, or the runner draining a test's returned promise
+  — and in Node a timer callback that throws is an uncaught top-level error
+  while the frame that happened to be waiting carries on untouched. Raising it
+  at the wait made it catchable by an unrelated `try` around the `await`, and
+  left the awaited promise pending on top of that. It is parked instead, for the
+  host to attribute and report. }
+function TGocciaTimerQueue.RunOneRealTimerOfKind(
+  const ATimeoutsOnly: Boolean): Boolean;
+var
+  Thrown: TGocciaValue;
+  HasThrown: Boolean;
+  Timer: TGocciaTimerEntry;
+  Token: Integer;
+  WasDuringTick: Boolean;
 begin
   Result := False;
-  if FFaking or (FTimers.Count = 0) then
+  if FFaking then
     Exit;
-  { Capture-and-rethrow rather than letting the exception out of the step: the
-    caller is an engine wait, not a suite's advance member, and a timer that
-    threw must not leave the queue mid-step. }
-  DoNext(True, True);
-  RaisePendingThrow;
+  Timer := FirstRealTimer(ATimeoutsOnly);
+  if not Assigned(Timer) then
+    Exit;
+
+  Token := PushThrowSlot;
+  try
+    WasDuringTick := FDuringTick;
+    FDuringTick := True;
+    try
+      SetNow(Timer.CallAt);
+      CallTimer(Timer, True);
+      DrainMicrotasks;
+    finally
+      FDuringTick := WasDuringTick;
+    end;
+  finally
+    HasThrown := TakeThrowSlot(Token, Thrown);
+  end;
+
+  if HasThrown and not FHasUncaughtError then
+  begin
+    FUncaughtError := Thrown;
+    FHasUncaughtError := True;
+  end;
   Result := True;
+end;
+
+function TGocciaTimerQueue.RunOneRealTimer: Boolean;
+begin
+  Result := RunOneRealTimerOfKind(False);
 end;
 
 procedure TGocciaTimerQueue.DrainRealTimers;
@@ -768,49 +1193,91 @@ begin
   if FFaking then
     Exit;
   for I := 0 to TIMER_LOOP_LIMIT - 1 do
-    if not RunOneRealTimer then
+  begin
+    CheckExecutionTimeout;
+    CheckInstructionLimit;
+    if not RunOneRealTimerOfKind(True) then
       Exit;
+  end;
+end;
+
+function TGocciaTimerQueue.TakeUncaughtError(
+  out AValue: TGocciaValue): Boolean;
+begin
+  AValue := FUncaughtError;
+  Result := FHasUncaughtError;
+  FUncaughtError := nil;
+  FHasUncaughtError := False;
+end;
+
+function TGocciaTimerQueue.HasUncaughtError: Boolean;
+begin
+  Result := FHasUncaughtError;
 end;
 
 procedure TGocciaTimerQueue.BeginFakeTimers(const ANowMilliseconds: Double);
 begin
+  RequireFiniteEpoch(ANowMilliseconds);
   EnsureRoots;
   { Re-enabling installs a fresh clock: whatever was scheduled against the
     previous one is discarded rather than carried over, which is what a second
     useFakeTimers() does in Vitest. }
-  FTimers.Clear;
-  { A recorded exception belongs to the advance that recorded it. An advance
-    always rethrows and clears, so this only matters when one was cut short by
-    a timeout or an instruction limit — installing a clock must not inherit
-    that. }
-  FPendingThrow := nil;
-  FHasPendingThrow := False;
+  RetireAllEntries;
   FFaking := True;
   FMockedDateOnly := False;
   FNow := ANowMilliseconds;
   FStart := ANowMilliseconds;
   FAdjusted := 0;
+  FNanos := 0;
   PublishClock;
+end;
+
+procedure TGocciaTimerQueue.ResetForEngine;
+var
+  I: Integer;
+begin
+  EndFakeTimers;
+  FInFlight.Clear;
+  FThrow.Value := nil;
+  FThrow.HasValue := False;
+  for I := 0 to FSavedThrowCount - 1 do
+  begin
+    FSavedThrows[I].Value := nil;
+    FSavedThrows[I].HasValue := False;
+  end;
+  FSavedThrowCount := 0;
+  FRaisedThrow := nil;
+  FUncaughtError := nil;
+  FHasUncaughtError := False;
+  FNextId := 1;
 end;
 
 procedure TGocciaTimerQueue.EndFakeTimers;
 begin
-  FTimers.Clear;
-  FPendingThrow := nil;
-  FHasPendingThrow := False;
+  RetireAllEntries;
   FFaking := False;
   FMockedDateOnly := False;
   FNow := 0;
   FStart := 0;
   FAdjusted := 0;
+  FNanos := 0;
   PublishClock;
 end;
 
+{ The finite check lives here rather than only at the JavaScript boundary
+  because there are two boundaries: the Vitest shim's `vi.setSystemTime`, and
+  `goccia:timers`' own `setSystemTime`, which converts its argument and calls
+  straight through. Guarding only the shim left the second one able to install a
+  NaN clock — after which every due-time comparison is false, the range test
+  selects arbitrarily, and the trailing re-check in DoTick recurses on NaN until
+  the stack is gone. }
 procedure TGocciaTimerQueue.SetSystemTime(const AEpochMilliseconds: Double);
 var
   Difference: Double;
   I: Integer;
 begin
+  RequireFiniteEpoch(AEpochMilliseconds);
+
   if not FFaking then
   begin
     FMockedDateOnly := True;
@@ -838,12 +1305,77 @@ begin
   PublishClock;
 end;
 
+{ The queue this thread holds, but only when the realm currently executing is
+  the one whose timers it carries.
+
+  A ShadowRealm child engine runs on the same thread and shares this singleton.
+  Without the check, an `await` inside the child drained the PARENT realm's
+  timer callbacks with the child's realm installed as current, so parent code
+  ran against child intrinsics — a realm-isolation break, and one that no error
+  reports. A queue with no owner recorded is one no timer extension attached to;
+  it has no timers either, so the guard costs nothing there. }
+function OwningQueueForCurrentRealm: TGocciaTimerQueue;
+begin
+  Result := TGocciaTimerQueue.Instance;
+  if not Assigned(Result) then
+    Exit;
+  if Result.OwnerRealm <> TObject(CurrentRealm) then
+    Result := nil;
+end;
+
 function RunOneRealTimer: Boolean;
 var
   Queue: TGocciaTimerQueue;
 begin
-  Queue := TGocciaTimerQueue.Instance;
+  Queue := OwningQueueForCurrentRealm;
   Result := Assigned(Queue) and Queue.RunOneRealTimer;
+end;
+
+function HasRunnableRealTimers: Boolean;
+var
+  Queue: TGocciaTimerQueue;
+begin
+  Queue := OwningQueueForCurrentRealm;
+  Result := Assigned(Queue) and (not Queue.Faking) and
+    Assigned(Queue.FirstRealTimer(False));
+end;
+
+procedure DiscardRealTimers;
+var
+  Queue: TGocciaTimerQueue;
+begin
+  Queue := TGocciaTimerQueue.Instance;
+  { Fake timers are left alone. A suite that installs a clock in beforeEach and
+    schedules against it across a test owns that queue, and Vitest does not
+    reset it between tests either — only real-mode leftovers, which nothing is
+    waiting on, are dropped. }
+  if Assigned(Queue) and (not Queue.Faking) then
+    Queue.DiscardTimers;
+end;
+
+function DrainRealTimersForHost: Boolean;
+var
+  Queue: TGocciaTimerQueue;
+begin
+  Queue := OwningQueueForCurrentRealm;
+  if not Assigned(Queue) then
+    Exit(True);
+  Queue.DrainRealTimers;
+  Result := not Assigned(Queue.FirstRealTimer(True));
+end;
+
+function TakeUncaughtTimerError(out AValue: TGocciaValue): Boolean;
+var
+  Queue: TGocciaTimerQueue;
+begin
+  AValue := nil;
+  Queue := TGocciaTimerQueue.Instance;
+  Result := Assigned(Queue) and Queue.TakeUncaughtError(AValue);
+end;
+
+procedure RaiseRealTimerLoopLimit;
+begin
+  ThrowError(Format(REAL_TIMER_LOOP_LIMIT_MESSAGE, [TIMER_LOOP_LIMIT]));
 end;
 
 procedure CleanupTimerQueueThreadState;

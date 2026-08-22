@@ -27,10 +27,14 @@ uses
   Goccia.Scope,
   Goccia.Values.ObjectValue;
 
-{ Returns the `goccia:timers` namespace. AHostToken receives an opaque handle
-  for the per-namespace host state; pass it to ReleaseTimersHost when the
-  registration that owns it goes away. }
-function CreateTimersNamespace(out AHostToken: TObject): TGocciaObjectValue;
+{ Returns the `goccia:timers` namespace. AHostToken carries the extension's
+  host state: `var`, not `out`, so a token RegisterTimerGlobals already created
+  is reused. As an `out` parameter it was cleared on entry, so an engine that
+  installed the globals and then imported the module built a second host and
+  Detach released only that one — leaving the first on the thread's list for the
+  worker's lifetime. Both drove the same singleton queue, so nothing observed it
+  behaving differently; it was a bounded per-engine leak, not a split queue. }
+function CreateTimersNamespace(var AHostToken: TObject): TGocciaObjectValue;
 
 { Binds setTimeout, clearTimeout, setInterval and clearInterval into AScope.
   AHostToken is shared with CreateTimersNamespace when both halves are
@@ -151,14 +155,16 @@ begin
     ThrowError(NOT_FAKED_MESSAGE);
 end;
 
+{ A missing argument is zero — Vitest's own `advanceTimersByTime()` moves the
+  clock by nothing. A present but non-finite one is passed through so the queue
+  can refuse it: mapping it to zero here hid a bug in the caller behind a silent
+  no-op, and Vitest's alternative is to leave the clock reading NaN. }
 function TGocciaTimersHost.MillisecondArgument(
   const AArgs: TGocciaArgumentsCollection): Double;
 begin
   if AArgs.Length = 0 then
     Exit(0);
   Result := AArgs.GetElement(0).ToNumberLiteral.Value;
-  if IsNan(Result) then
-    Result := 0;
 end;
 
 function TGocciaTimersHost.Schedule(const AKind: TGocciaTimerKind;
@@ -261,7 +267,10 @@ var
   TimerQueue: TGocciaTimerQueue;
 begin
   TimerQueue := Queue;
-  { `setSystemTime()` with nothing to set means "freeze at now". }
+  { `setSystemTime()` with nothing to set means "freeze at now". A non-finite
+    argument is refused by the queue itself — this entry point hands its value
+    straight through, so the guard cannot live at the Vitest shim's boundary
+    alone. }
   if (AArgs.Length = 0) or
      (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
     TimerQueue.SetSystemTime(TimerQueue.RealEpochMilliseconds)
@@ -397,7 +406,7 @@ begin
       'clearInterval', 1), dtConst, True);
 end;
 
-function CreateTimersNamespace(out AHostToken: TObject): TGocciaObjectValue;
+function CreateTimersNamespace(var AHostToken: TObject): TGocciaObjectValue;
 var
   Host: TGocciaTimersHost;
   Namespace: TGocciaObjectValue;
@@ -410,7 +419,6 @@ var
   end;
 
 begin
-  AHostToken := nil;
   Host := EnsureHost(AHostToken);
 
   Namespace := TGocciaObjectValue.Create(

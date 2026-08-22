@@ -31,6 +31,19 @@ type
     procedure AfterConstruction; override;
     procedure BeforeDestruction; override;
     procedure MarkRootReferences; virtual; abstract;
+    // The collector this source is still registered with, or nil once that
+    // collector has been destroyed.
+    //
+    // A holder that caches a root source across engines has to key on this
+    // rather than on the collector it remembers separately. A
+    // Shutdown/Initialize pair can put the next thread-local collector at the
+    // address the previous one occupied, and a bare pointer compare against a
+    // remembered address then reports "same collector" for a source that is
+    // registered with the dead one — so the source is never rebuilt and
+    // nothing it publishes is ever marked again. Reading it here cannot report
+    // a stale match: the collector's destructor nils this field on every
+    // source it still owns.
+    function RegisteredCollector: TGarbageCollector;
   end;
 
   TGCManagedObject = class
@@ -427,6 +440,11 @@ begin
     FRootSourceOwner := nil;
   end;
   inherited;
+end;
+
+function TGCRootSource.RegisteredCollector: TGarbageCollector;
+begin
+  Result := FRootSourceOwner;
 end;
 
 procedure InitializeTempRoot(var ARoot: TGocciaTempRoot);
