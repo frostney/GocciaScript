@@ -68,12 +68,41 @@ describe("vitest compatibility shim", () => {
     expect(() => vi.hoisted(() => {})).toThrow("vi.hoisted");
   });
 
-  test("fake timers throw and name the reason", () => {
-    expect(() => vi.useFakeTimers()).toThrow("vi.useFakeTimers is not supported");
-    expect(() => vi.useFakeTimers()).toThrow("no fake-timer clock");
-    expect(() => vi.setSystemTime(0)).toThrow("vi.setSystemTime");
-    expect(() => vi.advanceTimersByTime(1)).toThrow("vi.advanceTimersByTime");
-    expect(() => vi.runAllTimers()).toThrow("vi.runAllTimers");
+  test("the fake-timer family is implemented and chains like Vitest's", () => {
+    expect(vi.useFakeTimers()).toBe(vi);
+    expect(vi.isFakeTimers()).toBe(true);
+    expect(vi.setSystemTime(0)).toBe(vi);
+    expect(Date.now()).toBe(0);
+    expect(vi.advanceTimersByTime(1)).toBe(vi);
+    expect(vi.runAllTimers()).toBe(vi);
+    expect(vi.runOnlyPendingTimers()).toBe(vi);
+    expect(vi.advanceTimersToNextTimer()).toBe(vi);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.useRealTimers()).toBe(vi);
+    expect(vi.isFakeTimers()).toBe(false);
+  });
+
+  test("advancing without fake timers reports the Vitest message", () => {
+    expect(() => vi.advanceTimersByTime(1)).toThrow(
+      "A function to advance timers was called but the timers APIs are not mocked",
+    );
+    expect(() => vi.runAllTimers()).toThrow("vi.useFakeTimers()");
+  });
+
+  test("the timer members the queue cannot honour throw by name", () => {
+    expect(() => vi.advanceTimersToNextFrame()).toThrow(
+      "vi.advanceTimersToNextFrame is not supported",
+    );
+    expect(() => vi.advanceTimersToNextFrame()).toThrow("requestAnimationFrame");
+    expect(() => vi.runAllTicks()).toThrow("vi.runAllTicks is not supported");
+    expect(() => vi.runAllTicks()).toThrow("process.nextTick");
+    expect(() => vi.setTimerTickMode("interval")).toThrow(
+      "vi.setTimerTickMode is not supported",
+    );
+
+    // The reason has to name the actual gap, not the timer queue, which is
+    // there.
+    expect(() => vi.runAllTicks()).toThrow("the timer queue is supported");
   });
 
   test("the async polling members throw for polling, not for fake timers", () => {
@@ -104,7 +133,6 @@ describe("vitest compatibility shim", () => {
   test("every unsupported member is a defined function, never a no-op", () => {
     expect(typeof vi.mock).toBe("function");
     expect(typeof vi.importActual).toBe("function");
-    expect(typeof vi.useFakeTimers).toBe("function");
     expect(typeof vi.hoisted).toBe("function");
     expect(typeof vi.resetModules).toBe("function");
   });
