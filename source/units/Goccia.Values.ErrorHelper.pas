@@ -9,6 +9,17 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
+{ Records engine-trusted throw provenance on an error object for its runtime
+  code frame: the top call frame's source location (skipping ASkipTop frames)
+  and, when that module is in the engine's own source scope, the ±context
+  window of its source. Bound to real frames, never to the guest-writable
+  `.stack` string, so a guest-forged error object gets neither and renders no
+  code frame. Every error factory must call this so the two executors and every
+  host agree on what a genuine error's frame shows. Safe to call with no active
+  call stack (records nothing). }
+procedure AttachErrorSourceProvenance(const AError: TGocciaObjectValue;
+  const ASkipTop: Integer);
+
 { Creates a JavaScript error object with the given name and message.
   ASkipTop controls how many frames to skip from the top of the call stack. }
 function CreateErrorObject(const AName, AMessage: string; const ASkipTop: Integer = 0): TGocciaObjectValue;
@@ -67,12 +78,106 @@ procedure ThrowError(const AMessage, ASuggestion: string); overload;
 implementation
 
 uses
+  Classes,
+
   Goccia.Builtins.Globals,
   Goccia.CallStack,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Diagnostics.SourceRegistry,
+  Goccia.GarbageCollector,
   Goccia.Values.Error,
   Goccia.Values.ObjectPropertyDescriptor;
+
+const
+  // Match FormatErrorWithSourceContext's context window so a captured excerpt
+  // and the entry-file fallback render the same number of lines.
+  ERROR_SOURCE_CONTEXT_BEFORE = 2;
+  ERROR_SOURCE_CONTEXT_AFTER = 2;
+  { TryGetGuestWindow bounds each retained line to 512 actual bytes. The joined
+    excerpt replaces the per-line headers with one header plus LF separators,
+    so five line caps are a conservative exact-representation ceiling. }
+  ERROR_SOURCE_EXCERPT_CAP_BYTES =
+    (ERROR_SOURCE_CONTEXT_BEFORE + 1 + ERROR_SOURCE_CONTEXT_AFTER) *
+    GOCCIA_DIAGNOSTIC_EXCERPT_MAX_LINE_BYTES;
+
+procedure AttachErrorSourceProvenance(const AError: TGocciaObjectValue;
+  const ASkipTop: Integer);
+var
+  ErrorObject: TGocciaErrorObjectValue;
+  Path, ExcerptText: string;
+  Line, Col, FirstLine: Integer;
+  Scope: TGocciaDiagnosticSourceScope;
+  Window: TStringList;
+  GC: TGarbageCollector;
+  ExcerptBytes: Int64;
+  Reserved: Boolean;
+begin
+  // Provenance lives only on the error subclass; a factory that builds a plain
+  // object simply carries none (and renders no frame).
+  if not (AError is TGocciaErrorObjectValue) then
+    Exit;
+  ErrorObject := TGocciaErrorObjectValue(AError);
+  if TGocciaCallStack.Instance = nil then
+    Exit;
+  if not TGocciaCallStack.Instance.TryGetTopThrowLocation(ASkipTop, Path,
+    Line, Col) then
+    Exit;
+  ErrorObject.HasErrorSourceLocation := True;
+  ErrorObject.ErrorSourcePath := Path;
+  ErrorObject.ErrorSourceLine := Line;
+  ErrorObject.ErrorSourceColumn := Col;
+  ErrorObject.ErrorSourceExcerpt := '';
+  ErrorObject.ErrorSourceExcerptFirstLine := 0;
+  ErrorObject.ErrorSourcePrincipal := 0;
+  // Capture the module's own ±context window from the ACTIVE scope — the engine
+  // actually executing — and only for GUEST-owned source (TryGetGuestWindow
+  // withholds transitively host-owned and cross-principal source). The excerpt travels
+  // on the error so the frame renders later, even after the engine is freed;
+  // its principal is stamped so a foreign renderer can refuse it.
+  Scope := TGocciaDiagnosticSourceRegistry.Current;
+  if not Assigned(Scope) then
+    Exit;
+  { Stamp the provenance principal even when no excerpt can be captured. The
+    entry-file fallback is authorized against this same explicit identity, and
+    a renderer supplied no/mismatched identity therefore gets location only. }
+  ErrorObject.ErrorSourcePrincipal := Scope.Principal;
+  Window := TStringList.Create;
+  try
+    if Scope.TryGetGuestWindow(Path, Line, ERROR_SOURCE_CONTEXT_BEFORE,
+      ERROR_SOURCE_CONTEXT_AFTER, Window, FirstLine) then
+    begin
+      ExcerptText := Window.Text;
+      ExcerptBytes := DiagnosticStringRetainedBytes(ExcerptText);
+      if ExcerptBytes > ERROR_SOURCE_EXCERPT_CAP_BYTES then
+        Exit;
+      // Charge exactly the retained UTF-16 allocation against --max-memory;
+      // the error object's destructor releases the same figure. The reservation
+      // may collect before refusing, so pass the not-yet-published error as an
+      // extra root. Refusal safely degrades to location-only.
+      GC := TGarbageCollector.Instance;
+      Reserved := False;
+      if Assigned(GC) then
+      begin
+        if not GC.TryReserveExternalBytes(ExcerptBytes, ErrorObject) then
+          Exit;
+        Reserved := True;
+      end;
+      try
+        ErrorObject.ErrorSourceExcerpt := ExcerptText;
+        ErrorObject.ErrorSourceExcerptFirstLine := FirstLine;
+        if Reserved then
+          ErrorObject.ErrorSourceExcerptCharged := ExcerptBytes;
+      except
+        if Reserved then
+          GC.ReleaseExternalBytes(ExcerptBytes);
+        raise;
+      end;
+    end;
+  finally
+    Window.Free;
+  end;
+end;
 
 function DOMExceptionLegacyCode(const AName: string): Integer;
 begin
@@ -142,10 +247,12 @@ var
   Proto: TGocciaObjectValue;
 begin
   Proto := GetErrorPrototype(AName);
+  // An error subclass instance so provenance can be attached below without
+  // enlarging every plain object (see TGocciaErrorObjectValue).
   if Assigned(Proto) then
-    Result := TGocciaObjectValue.Create(Proto)
+    Result := TGocciaErrorObjectValue.Create(Proto)
   else
-    Result := TGocciaObjectValue.Create;
+    Result := TGocciaErrorObjectValue.Create;
   Result.HasErrorData := True;
   Result.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AName));
   Result.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(AMessage));
@@ -153,6 +260,7 @@ begin
   if (TGocciaCallStack.Instance <> nil) then
     Result.ErrorStack :=
       TGocciaCallStack.Instance.CaptureStackTrace(AName, AMessage, ASkipTop);
+  AttachErrorSourceProvenance(Result, ASkipTop);
 end;
 
 function CreateErrorObjectInRealm(const AName, AMessage: string;

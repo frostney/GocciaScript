@@ -48,9 +48,11 @@ begin
   if AException is TGocciaError then
     WriteLn(FormatHostErrorDiagnostic(TGocciaError(AException), UseColor))
   else if AException is TGocciaThrowValue then
-    WriteLn(FormatThrowDetail(TGocciaThrowValue(AException).Value, '', nil, UseColor, TGocciaThrowValue(AException).Suggestion))
+    WriteLn(FormatThrowDetail(TGocciaThrowValue(AException).Value, '', nil,
+      UseColor, 0, TGocciaThrowValue(AException).Suggestion))
   else if AException is EGocciaBytecodeThrow then
-    WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(AException).ThrownValue, '', nil, UseColor))
+    WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(AException).ThrownValue,
+      '', nil, UseColor, 0))
   else
     WriteLn('Error: ', AException.Message);
 end;

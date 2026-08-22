@@ -147,6 +147,60 @@ type
     function ObjectPrototypeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
+  { An error object that also carries engine-recorded throw provenance for its
+    runtime code frame. Kept as a subclass so these fields exist ONLY on error
+    objects — adding them to the base TGocciaObjectValue would enlarge every
+    object's InstanceSize and inflate the GC's per-object byte accounting (which
+    charges InstanceSize), shifting --max-memory behaviour for all programs.
+
+    The provenance is set from the real top call frame when the engine creates
+    the error (Goccia.Values.ErrorHelper.AttachErrorSourceProvenance), NEVER
+    from the guest-writable `.stack` property. HasErrorSourceLocation is False
+    on a guest-forged plain object (which is not this class at all), so it
+    renders no code frame. }
+  TGocciaErrorObjectValue = class(TGocciaObjectValue)
+  private
+    FHasErrorSourceLocation: Boolean;
+    FErrorSourcePath: string;
+    FErrorSourceLine: Integer;
+    FErrorSourceColumn: Integer;
+    // The ±context window of the throwing module's source, captured at creation
+    // (LF-joined), with the absolute line number of its first line. Empty when
+    // the module was not in the engine's own source scope (e.g. the entry file,
+    // whose lines the host still holds); the header location is shown regardless.
+    FErrorSourceExcerpt: string;
+    FErrorSourceExcerptFirstLine: Integer;
+    // Durable identity of the source scope (principal) the excerpt was captured
+    // from — compared, never dereferenced. A renderer must explicitly supply
+    // that same principal; a mismatch or no supplied principal refuses source.
+    // A process-monotonic Int64 (not a scope
+    // pointer) so a freed-then-reallocated scope can never be mistaken for the
+    // one that stamped the excerpt. See Goccia.Diagnostics.SourceRegistry.
+    FErrorSourcePrincipal: Int64;
+    // Bytes of FErrorSourceExcerpt charged against the GC --max-memory budget,
+    // released in Destroy so held errors cannot retain diagnostic copies past
+    // the ceiling.
+    FErrorSourceExcerptCharged: Int64;
+  public
+    destructor Destroy; override;
+    property HasErrorSourceLocation: Boolean read FHasErrorSourceLocation
+      write FHasErrorSourceLocation;
+    property ErrorSourcePath: string read FErrorSourcePath
+      write FErrorSourcePath;
+    property ErrorSourceLine: Integer read FErrorSourceLine
+      write FErrorSourceLine;
+    property ErrorSourceColumn: Integer read FErrorSourceColumn
+      write FErrorSourceColumn;
+    property ErrorSourceExcerpt: string read FErrorSourceExcerpt
+      write FErrorSourceExcerpt;
+    property ErrorSourceExcerptFirstLine: Integer
+      read FErrorSourceExcerptFirstLine write FErrorSourceExcerptFirstLine;
+    property ErrorSourcePrincipal: Int64 read FErrorSourcePrincipal
+      write FErrorSourcePrincipal;
+    property ErrorSourceExcerptCharged: Int64 read FErrorSourceExcerptCharged
+      write FErrorSourceExcerptCharged;
+  end;
+
 
 implementation
 
@@ -890,6 +944,21 @@ begin
 
   FSymbolInsertionOrder.Free;
   FRegExpData.Free;
+  inherited;
+end;
+
+destructor TGocciaErrorObjectValue.Destroy;
+var
+  GC: TGarbageCollector;
+begin
+  // Return the excerpt's charged bytes to the --max-memory budget.
+  if FErrorSourceExcerptCharged > 0 then
+  begin
+    GC := TGarbageCollector.Instance;
+    if Assigned(GC) then
+      GC.ReleaseExternalBytes(FErrorSourceExcerptCharged);
+    FErrorSourceExcerptCharged := 0;
+  end;
   inherited;
 end;
 

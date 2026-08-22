@@ -453,7 +453,7 @@ begin
     under construction needs a temp root. }
   InitializeTempRoot(ResultRoot);
   try
-    Result := TGocciaObjectValue.Create(AProto);
+    Result := TGocciaErrorObjectValue.Create(AProto);
     AddTempRootIfNeeded(ResultRoot, Result);
     Result.HasErrorData := True;
     MessageText := '';
@@ -471,6 +471,7 @@ begin
     if (TGocciaCallStack.Instance <> nil) then
       Result.ErrorStack :=
         TGocciaCallStack.Instance.CaptureStackTrace(AName, MessageText, 1);
+    AttachErrorSourceProvenance(Result, 1);
 
     if AArgs.Length > 1 then
       InstallErrorCause(Result, AArgs.GetElement(1));
@@ -648,7 +649,7 @@ begin
   InitializeTempRoot(IteratorRoot);
   InitializeTempRoot(ErrorsArrayRoot);
 
-  Result := TGocciaObjectValue.Create(AProto);
+  Result := TGocciaErrorObjectValue.Create(AProto);
   AddTempRootIfNeeded(ResultRoot, Result);
   try
     Result.HasErrorData := True;
@@ -656,6 +657,7 @@ begin
       Result.ErrorStack :=
         TGocciaCallStack.Instance.CaptureStackTrace(AGGREGATE_ERROR_NAME,
           Message, 1);
+    AttachErrorSourceProvenance(Result, 1);
 
     if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
       Result.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(
@@ -736,13 +738,14 @@ begin
     fills. }
   InitializeTempRoot(ResultRoot);
   try
-  Result := TGocciaObjectValue.Create(AProto);
+  Result := TGocciaErrorObjectValue.Create(AProto);
   AddTempRootIfNeeded(ResultRoot, Result);
   Result.HasErrorData := True;
   if (TGocciaCallStack.Instance <> nil) then
     Result.ErrorStack :=
       TGocciaCallStack.Instance.CaptureStackTrace(SUPPRESSED_ERROR_NAME,
         Message, 1);
+  AttachErrorSourceProvenance(Result, 1);
 
   if (AArgs.Length > 2) and not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
     Result.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(

@@ -8,7 +8,11 @@ uses
 
   TestingPascalLibrary,
 
-  Goccia.Error;
+  Goccia.Diagnostics.SourceRegistry,
+  Goccia.Error,
+  Goccia.Error.Detail,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TErrorTests = class(TTestSuite)
@@ -30,6 +34,7 @@ type
     procedure TestErrorDisplayNameMapsTypeErrorCorrectly;
     procedure TestErrorDisplayNameMapsReferenceErrorCorrectly;
     procedure TestGetDetailedMessageHandlesSingleSourceLine;
+    procedure TestFormatThrowDetailRequiresExpectedPrincipal;
   public
     procedure SetupTests; override;
   end;
@@ -82,6 +87,9 @@ begin
     TestErrorDisplayNameMapsReferenceErrorCorrectly);
   Test('GetDetailedMessage handles single source line',
     TestGetDetailedMessageHandlesSingleSourceLine);
+  Test('FormatThrowDetail withholds a retained foreign excerpt without an ' +
+    'explicit matching principal',
+    TestFormatThrowDetailRequiresExpectedPrincipal);
 end;
 
 procedure TErrorTests.TestGetDetailedMessageShowsJSFriendlyErrorName;
@@ -371,6 +379,56 @@ begin
     end;
   finally
     SourceLines.Free;
+  end;
+end;
+
+procedure TErrorTests.TestFormatThrowDetailRequiresExpectedPrincipal;
+const
+  SecretMarker = 'A_ENGINE_PRIVATE_SOURCE_MARKER';
+var
+  ErrorObject: TGocciaErrorObjectValue;
+  ScopeA, ScopeB: TGocciaDiagnosticSourceScope;
+  Output: string;
+begin
+  ScopeA := TGocciaDiagnosticSourceScope.Create;
+  ScopeB := TGocciaDiagnosticSourceScope.Create;
+  ErrorObject := TGocciaErrorObjectValue.Create;
+  try
+    ErrorObject.HasErrorData := True;
+    ErrorObject.AssignProperty('name',
+      TGocciaStringLiteralValue.Create('Error'));
+    ErrorObject.AssignProperty('message',
+      TGocciaStringLiteralValue.Create('held across engines'));
+    ErrorObject.HasErrorSourceLocation := True;
+    ErrorObject.ErrorSourcePath := 'engine-a-secret.js';
+    ErrorObject.ErrorSourceLine := 2;
+    ErrorObject.ErrorSourceColumn := 3;
+    ErrorObject.ErrorSourceExcerpt := '// first' + sLineBreak +
+      SecretMarker + sLineBreak + '// third';
+    ErrorObject.ErrorSourceExcerptFirstLine := 1;
+    ErrorObject.ErrorSourcePrincipal := ScopeA.Principal;
+
+    { Execute has already restored the active scope before a host renders a
+      retained throw. Absence of ambient execution state must never authorize
+      the source stamped by another engine. }
+    Expect<Boolean>(TGocciaDiagnosticSourceRegistry.Current = nil).ToBe(True);
+    Output := FormatThrowDetail(ErrorObject, 'engine-b.js', nil, False,
+      ScopeB.Principal);
+    Expect<Boolean>(Pos('engine-a-secret.js:2:3', Output) > 0).ToBe(True);
+    Expect<Boolean>(Pos(SecretMarker, Output) > 0).ToBe(False);
+
+    Output := FormatThrowDetail(ErrorObject, 'engine-b.js', nil, False, 0);
+    Expect<Boolean>(Pos('engine-a-secret.js:2:3', Output) > 0).ToBe(True);
+    Expect<Boolean>(Pos(SecretMarker, Output) > 0).ToBe(False);
+
+    { The owning renderer still gets the retained code frame. }
+    Output := FormatThrowDetail(ErrorObject, 'engine-a-secret.js', nil, False,
+      ScopeA.Principal);
+    Expect<Boolean>(Pos(SecretMarker, Output) > 0).ToBe(True);
+  finally
+    ErrorObject.Free;
+    ScopeB.Free;
+    ScopeA.Free;
   end;
 end;
 
