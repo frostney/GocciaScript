@@ -6214,7 +6214,7 @@ var
        IsUndefinedConstructedValue(AValue) and
        not ACalledItsOwnSuper then
       ThrowReferenceError(
-        'Must call super constructor before returning from derived constructor');
+        SErrorSuperConstructorNotCalled);
   end;
   procedure ValidateSuperConstructorResult(const AValue: TGocciaValue);
   begin
@@ -6300,7 +6300,7 @@ begin
   end;
 
   if not (EffectiveSuper is TGocciaClassValue) then
-    ThrowTypeError('Super constructor is not a constructor',
+    ThrowTypeError(SErrorSuperNotConstructor,
       SSuggestNotConstructorType);
 
   SuperClass := TGocciaClassValue(EffectiveSuper);
@@ -6698,7 +6698,7 @@ begin
      ((not Assigned(AResult)) or (AResult is TGocciaUndefinedLiteralValue)) and
      not ConstructorSuperCalled then
     ThrowReferenceError(
-      'Must call super constructor before returning from derived constructor');
+      SErrorSuperConstructorNotCalled);
 
   if FConstructorValue is TGocciaBytecodeFunctionValue then
     ConstructorThisValue := RegisterToValue(FVM.FLastClosureThisValue)
@@ -6739,7 +6739,7 @@ var
   DelayNativePrototypeLookup: Boolean;
   NativeInstanceInitialized: Boolean;
   NativeInstanceConstructedByNativeSuper: Boolean;
-  CollapsedChain: TGocciaClassChain;
+  Chain: TGocciaImplicitConstructorChain;
   PreviousPendingNewTarget: TGocciaValue;
   function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
   begin
@@ -6818,7 +6818,7 @@ var
        IsUndefinedConstructedValue(AValue) and
        not ConstructorSuperCalled then
       ThrowReferenceError(
-        'Must call super constructor before returning from derived constructor');
+        SErrorSuperConstructorNotCalled);
   end;
   { §10.2.2 step 13.c applies to whichever constructor returned, and for a
     class with none of its own that is the superclass constructor its implicit
@@ -6837,7 +6837,7 @@ var
     if ASuperCalled then
       Exit;
     ThrowReferenceError(
-      'Must call super constructor before returning from derived constructor');
+      SErrorSuperConstructorNotCalled);
   end;
   procedure ApplyReplacementResult(const AValue: TGocciaValue);
   begin
@@ -6853,13 +6853,15 @@ var
   var
     Index: Integer;
   begin
-    for Index := High(CollapsedChain) downto 0 do
-      FVM.RunClassInitializers(CollapsedChain[Index], Instance);
+    for Index := High(Chain.Collapsed) downto 0 do
+      FVM.RunClassInitializers(Chain.Collapsed[Index], Instance);
   end;
 begin
   NativeClass := nil;
   NativeSuperConstructorForPrototype := nil;
   NativeIntrinsicPrototype := nil;
+  { Every hop is §13.3.7.3 GetSuperConstructor, so a retargeted constructor
+    resolves its receiver from what it now points at. }
   WalkClass := Self;
   while Assigned(WalkClass) do
   begin
@@ -6869,17 +6871,16 @@ begin
       NativeClass := WalkClass;
       Break;
     end;
-    if Assigned(WalkClass.NativeSuperConstructor) then
+    NativeSuperConstructorForPrototype := ImplicitSuperConstructorTarget(
+      WalkClass);
+    if Assigned(NativeSuperConstructorForPrototype) and
+       not (NativeSuperConstructorForPrototype is TGocciaClassValue) then
     begin
-      NativeSuperConstructorForPrototype := WalkClass.NativeSuperConstructor;
-      if WalkClass.NativeSuperConstructor is TGocciaClassValue then
-      begin
-        NativeClass := TGocciaClassValue(WalkClass.NativeSuperConstructor);
-        NativeIntrinsicPrototype := NativeClass.NativeInstanceDefaultPrototype;
-      end;
+      NativeIntrinsicPrototype := nil;
       Break;
     end;
-    WalkClass := WalkClass.SuperClass;
+    NativeSuperConstructorForPrototype := nil;
+    WalkClass := ImplicitSuperConstructorClass(WalkClass);
   end;
   DelayNativePrototypeLookup :=
     ShouldDelayNativePrototypeLookup(NativeClass, AArguments) or
@@ -6896,24 +6897,29 @@ begin
   NativeInstanceConstructedByNativeSuper := False;
   { §15.7.14 step 15a: this class runs an implicit constructor, and so does
     every class between it and the first ancestor with a constructor body of
-    its own. CollapsedChain is that stretch — the classes whose instance
+    its own. Chain.Collapsed is that stretch — the classes whose instance
     elements the super construction below would otherwise step over. }
-  ImplicitSuperClass := ResolveImplicitConstructorChain(Self, CollapsedChain);
+  ResolveImplicitConstructorChain(Self, Chain);
+  ImplicitSuperClass := Chain.HostClass;
 
   { Allocating the built-in receiver here short-circuits every constructor
     between this class and the built-in, so it may only reach past this class
     when there is nothing in between: the walk used to climb the whole chain,
     and each class it stepped over lost both halves of its implicit
     constructor. Anything further up is left to the implicit-super recursion
-    below, which allocates at the boundary and hands the receiver back down. }
-  if not (Assigned(FConstructorValue) and HasDerivedConstructorReturnRestriction) then
+    below, which allocates at the boundary and hands the receiver back down.
+    A retargeted super constructor is not pre-created at all — it is not the
+    one CreateNativeInstanceWithNewTarget knows about, and the implicit branch
+    constructs through it instead. }
+  if (not (Assigned(FConstructorValue) and HasDerivedConstructorReturnRestriction)) and
+     (not ImplicitSuperConstructorIsRetargeted(Chain)) then
   begin
     WalkClass := Self;
     NativeInstance := CreateNativeInstanceWithNewTarget(AArguments,
       EffectiveNewTarget);
     NativeInstanceConstructedByNativeSuper := Assigned(NativeInstance) and
       Assigned(NativeSuperConstructor);
-    if (not Assigned(NativeInstance)) and (Length(CollapsedChain) = 0) and
+    if (not Assigned(NativeInstance)) and (Length(Chain.Collapsed) = 0) and
        Assigned(ImplicitSuperClass) and
        (ImplicitSuperClass.NativeInstanceDefaultPrototype <> nil) then
     begin
@@ -7035,6 +7041,18 @@ begin
             end;
           end;
         end
+        else if ImplicitSuperConstructorIsUnusable(Chain) then
+          { §13.3.7.1 SuperCall step 3: super() reaching something that is not
+            a constructor is a TypeError. Object.setPrototypeOf is the only way
+            to put one there. }
+          ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType)
+        else if ImplicitSuperConstructorIsRetargeted(Chain) then
+          { A super constructor Object.setPrototypeOf moved there is not the
+            one the class was declared with, so none of the declared-native
+            branches below apply: §13.3.7.3 sends super() to the new target and
+            what it returns becomes the receiver. }
+          ApplyReplacementResult(InvokeConstructableWithReceiver(
+            Chain.SuperConstructor, AArguments, Instance, EffectiveNewTarget))
         else
         begin
           if (ImplicitSuperClass is TGocciaVMClassValue) and
@@ -7111,7 +7129,7 @@ begin
             end
             else if Assigned(NativeSuperConstructor) and
                     (NativeSuperConstructor = TGocciaFunctionBase.GetSharedPrototype) then
-              ThrowTypeError('Super constructor is not a constructor',
+              ThrowTypeError(SErrorSuperNotConstructor,
                 SSuggestNotConstructorType)
             else if Assigned(NativeSuperConstructor) and
                     (NativeSuperConstructor is TGocciaFunctionBase) and
@@ -7124,7 +7142,7 @@ begin
             else if (not Assigned(SuperClass)) and
                     (not Assigned(NativeSuperConstructor)) and
                     (Prototype.Prototype = nil) then
-              ThrowTypeError('Super constructor is not a constructor',
+              ThrowTypeError(SErrorSuperNotConstructor,
                 SSuggestNotConstructorType)
             else if Instance is TGocciaInstanceValue then
             begin
@@ -7180,7 +7198,6 @@ function TGocciaVMClassValue.InstantiateRegisters(
 var
   Instance: TGocciaObjectValue;
   RootedInstance: TGocciaObjectValue;
-  WalkClass: TGocciaClassValue;
   ImplicitSuperClass: TGocciaClassValue;
   NativeInstance: TGocciaObjectValue;
   ConstructorToCall: TGocciaMethodValue;
@@ -7195,7 +7212,7 @@ var
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
   NativeInstanceConstructedByNativeSuper: Boolean;
-  CollapsedChain: TGocciaClassChain;
+  Chain: TGocciaImplicitConstructorChain;
   PreviousPendingNewTarget: TGocciaValue;
   procedure EnsureBoxedArgs;
   begin
@@ -7312,7 +7329,7 @@ var
        IsUndefinedConstructedValue(AValue) and
        not ConstructorSuperCalled then
       ThrowReferenceError(
-        'Must call super constructor before returning from derived constructor');
+        SErrorSuperConstructorNotCalled);
   end;
   procedure RequireDerivedConstructorThisInitializedRegister(
     const AValue: TGocciaRegister);
@@ -7321,7 +7338,7 @@ var
        IsUndefinedConstructedRegister(AValue) and
        not ConstructorSuperCalled then
       ThrowReferenceError(
-        'Must call super constructor before returning from derived constructor');
+        SErrorSuperConstructorNotCalled);
   end;
   { §10.2.2 step 13.c applies to whichever constructor returned, and for a
     class with none of its own that is the superclass constructor its implicit
@@ -7340,14 +7357,14 @@ var
     if ASuperCalled then
       Exit;
     ThrowReferenceError(
-      'Must call super constructor before returning from derived constructor');
+      SErrorSuperConstructorNotCalled);
   end;
   procedure RunCollapsedInstanceInitializers;
   var
     Index: Integer;
   begin
-    for Index := High(CollapsedChain) downto 0 do
-      FVM.RunClassInitializers(CollapsedChain[Index], Instance);
+    for Index := High(Chain.Collapsed) downto 0 do
+      FVM.RunClassInitializers(Chain.Collapsed[Index], Instance);
   end;
   procedure ApplyReplacementResult(const AValue: TGocciaValue);
   begin
@@ -7379,28 +7396,28 @@ begin
     NativeInstanceConstructedByNativeSuper := False;
     { §15.7.14 step 15a: this class runs an implicit constructor, and so does
       every class between it and the first ancestor with a constructor body of
-      its own. CollapsedChain is that stretch. }
-    ImplicitSuperClass := ResolveImplicitConstructorChain(Self, CollapsedChain);
+      its own. Chain.Collapsed is that stretch. }
+    ResolveImplicitConstructorChain(Self, Chain);
+    ImplicitSuperClass := Chain.HostClass;
 
     { The receiver may only be allocated past this class when nothing sits in
       between — see the same walk in Instantiate. Climbing the chain here
       collapsed away the implicit constructor (§15.7.14 step 15a) of every
       class it stepped over. }
-    if not (Assigned(FConstructorValue) and HasDerivedConstructorReturnRestriction) then
+    if (not (Assigned(FConstructorValue) and HasDerivedConstructorReturnRestriction)) and
+       (not ImplicitSuperConstructorIsRetargeted(Chain)) then
     begin
-      WalkClass := Self;
       if Assigned(NativeSuperConstructor) then
       begin
         EnsureBoxedArgs;
         NativeInstance := CreateNativeInstanceWithNewTarget(BoxedArgs, Self);
         NativeInstanceConstructedByNativeSuper := Assigned(NativeInstance);
       end;
-      if (not Assigned(NativeInstance)) and (Length(CollapsedChain) = 0) and
+      if (not Assigned(NativeInstance)) and (Length(Chain.Collapsed) = 0) and
          Assigned(ImplicitSuperClass) and
          (ImplicitSuperClass.NativeInstanceDefaultPrototype <> nil) then
       begin
         EnsureBoxedArgs;
-        WalkClass := ImplicitSuperClass;
         NativeInstance := ImplicitSuperClass.CreateNativeInstance(BoxedArgs);
         NativeInstanceConstructedByNativeSuper := False;
       end;
@@ -7500,6 +7517,18 @@ begin
               TGocciaInstanceValue(Instance).InitializeNativeFromArguments(BoxedArgs);
               TGocciaInstanceValue(Instance).FinalizeNativeFromArguments(BoxedArgs);
             end;
+          end
+          else if ImplicitSuperConstructorIsUnusable(Chain) then
+            { §13.3.7.1 SuperCall step 3: super() reaching something that is
+              not a constructor is a TypeError. }
+            ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType)
+          else if ImplicitSuperConstructorIsRetargeted(Chain) then
+          begin
+            { §13.3.7.3 sends super() to whatever Object.setPrototypeOf moved
+              onto the constructor, and what it returns becomes the receiver. }
+            EnsureBoxedArgs;
+            ApplyReplacementResult(InvokeConstructableWithReceiver(
+              Chain.SuperConstructor, BoxedArgs, Instance, Self));
           end
           else
           begin
@@ -7610,7 +7639,7 @@ begin
               end
               else if Assigned(NativeSuperConstructor) and
                       (NativeSuperConstructor = TGocciaFunctionBase.GetSharedPrototype) then
-                ThrowTypeError('Super constructor is not a constructor',
+                ThrowTypeError(SErrorSuperNotConstructor,
                   SSuggestNotConstructorType)
               else if Assigned(NativeSuperConstructor) and
                       (NativeSuperConstructor is TGocciaFunctionBase) and
@@ -7626,7 +7655,7 @@ begin
                 if (not Assigned(SuperClass)) and
                    (not Assigned(NativeSuperConstructor)) and
                    (Prototype.Prototype = nil) then
-                  ThrowTypeError('Super constructor is not a constructor',
+                  ThrowTypeError(SErrorSuperNotConstructor,
                     SSuggestNotConstructorType);
                 EnsureBoxedArgs;
                 if Instance is TGocciaInstanceValue then
@@ -10831,6 +10860,8 @@ var
   TargetInstance: TGocciaValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
+  ImplicitSuperTarget: TGocciaObjectValue;
+  DelayReceiverPrototype: Boolean;
   function EffectiveNewTarget: TGocciaValue;
   begin
     if Assigned(FPendingNewTarget) then
@@ -10881,12 +10912,22 @@ var
     if ASuperCalled then
       Exit;
     ThrowReferenceError(
-      'Must call super constructor before returning from derived constructor');
+      SErrorSuperConstructorNotCalled);
   end;
 begin
   Result := AInstance;
   if not Assigned(AClassValue) then
     Exit;
+
+  { §13.3.7.3 GetSuperConstructor: this class's implicit super() resolves
+    through its own [[Prototype]] at call time, so a retargeted class forwards
+    to whatever Object.setPrototypeOf moved onto it. }
+  ImplicitSuperTarget := ImplicitSuperConstructorTarget(AClassValue);
+  if ImplicitSuperConstructorIsAbsent(AClassValue) or
+     (Assigned(ImplicitSuperTarget) and
+      ((ImplicitSuperTarget = TGocciaFunctionBase.GetSharedPrototype) or
+       (not ImplicitSuperTarget.IsConstructable))) then
+    ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
 
   if AClassValue.NativeInstanceDefaultPrototype <> nil then
   begin
@@ -10895,6 +10936,17 @@ begin
       ThrowTypeError(
         'Superclass constructor did not return an object',
         SSuggestNotConstructorType);
+    { ES2026 §10.2.2 steps 5-6 put newTarget's prototype on the receiver before
+      the built-in's own steps run, and §24.1.1.1 Map reads its `set` adder off
+      that receiver — so a foreign newTarget whose prototype has no adder has
+      to throw here rather than quietly populating through Map.prototype.
+      The families that validate their arguments before newTarget.prototype may
+      be observed (§10.1.13 ordering) keep the lookup after initialization. }
+    DelayReceiverPrototype := ShouldDelayNativePrototypeLookup(AClassValue,
+      AArguments);
+    if not DelayReceiverPrototype then
+      TGocciaObjectValue(TargetInstance).Prototype :=
+        GetProtoFromConstructor(EffectiveNewTarget);
     if TargetInstance is TGocciaInstanceValue then
     begin
       if AInstance is TGocciaInstanceValue then
@@ -10904,8 +10956,11 @@ begin
         TGocciaInstanceValue(TargetInstance).ClassValue := AClassValue;
       TGocciaInstanceValue(TargetInstance).InitializeNativeFromArguments(AArguments);
     end;
-    ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
-    TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
+    if DelayReceiverPrototype then
+    begin
+      ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
+      TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
+    end;
     if TargetInstance is TGocciaInstanceValue then
       TGocciaInstanceValue(TargetInstance).FinalizeNativeFromArguments(AArguments);
     Exit(TargetInstance);
@@ -10948,8 +11003,8 @@ begin
     Exit;
   end;
 
-  if (AClassValue is TGocciaVMClassValue) and
-     Assigned(TGocciaVMClassValue(AClassValue).NativeSuperConstructor) then
+  if Assigned(ImplicitSuperTarget) and
+     not (ImplicitSuperTarget is TGocciaClassValue) then
   begin
     // ES2026 §10.2.2 [[Construct]] step 5b: only a ~base~ constructor
     // initializes its instance elements ahead of its body; a ~derived~
@@ -10958,8 +11013,7 @@ begin
       RunClassInitializers(AClassValue, AInstance);
     { §10.2.2 step 5: the built-in allocates from newTarget's prototype, which
       is the class the construction started at — not this intermediate one. }
-    SuperResult := InvokeConstructableWithReceiver(
-      TGocciaVMClassValue(AClassValue).NativeSuperConstructor,
+    SuperResult := InvokeConstructableWithReceiver(ImplicitSuperTarget,
       AArguments, AInstance, EffectiveNewTarget);
     ValidateImplicitSuperResult(SuperResult);
     { §13.3.7.1 step 11: this is the implicit constructor's own super(), not a
@@ -10994,7 +11048,7 @@ begin
   end;
 
   TargetInstance := InvokeImplicitSuperInitialization(
-    AClassValue.SuperClass, AInstance, AArguments);
+    ImplicitSuperConstructorClass(AClassValue), AInstance, AArguments);
   if not Assigned(TargetInstance) then
     TargetInstance := AInstance;
   if not (AClassValue is TGocciaVMClassValue) and
@@ -11017,6 +11071,8 @@ var
   TargetInstance: TGocciaValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
+  ImplicitSuperTarget: TGocciaObjectValue;
+  DelayReceiverPrototype: Boolean;
   function EffectiveNewTarget: TGocciaValue;
   begin
     if Assigned(FPendingNewTarget) then
@@ -11082,12 +11138,22 @@ var
     if ASuperCalled then
       Exit;
     ThrowReferenceError(
-      'Must call super constructor before returning from derived constructor');
+      SErrorSuperConstructorNotCalled);
   end;
 begin
   Result := AInstance;
   if not Assigned(AClassValue) then
     Exit;
+
+  { §13.3.7.3 GetSuperConstructor: this class's implicit super() resolves
+    through its own [[Prototype]] at call time, so a retargeted class forwards
+    to whatever Object.setPrototypeOf moved onto it. }
+  ImplicitSuperTarget := ImplicitSuperConstructorTarget(AClassValue);
+  if ImplicitSuperConstructorIsAbsent(AClassValue) or
+     (Assigned(ImplicitSuperTarget) and
+      ((ImplicitSuperTarget = TGocciaFunctionBase.GetSharedPrototype) or
+       (not ImplicitSuperTarget.IsConstructable))) then
+    ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
 
   if AClassValue.NativeInstanceDefaultPrototype <> nil then
   begin
@@ -11098,6 +11164,13 @@ begin
         ThrowTypeError(
           'Superclass constructor did not return an object',
           SSuggestNotConstructorType);
+      { §10.2.2 steps 5-6 before the built-in's own steps — see the same
+        ordering in InvokeImplicitSuperInitialization. }
+      DelayReceiverPrototype := ShouldDelayNativePrototypeLookup(AClassValue,
+        BoxedArgs);
+      if not DelayReceiverPrototype then
+        TGocciaObjectValue(TargetInstance).Prototype :=
+          GetProtoFromConstructor(EffectiveNewTarget);
       if TargetInstance is TGocciaInstanceValue then
       begin
         if AInstance is TGocciaInstanceValue then
@@ -11107,8 +11180,11 @@ begin
           TGocciaInstanceValue(TargetInstance).ClassValue := AClassValue;
         TGocciaInstanceValue(TargetInstance).InitializeNativeFromArguments(BoxedArgs);
       end;
-      ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
-      TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
+      if DelayReceiverPrototype then
+      begin
+        ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
+        TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
+      end;
       if TargetInstance is TGocciaInstanceValue then
         TGocciaInstanceValue(TargetInstance).FinalizeNativeFromArguments(BoxedArgs);
       Exit(TargetInstance);
@@ -11192,8 +11268,8 @@ begin
     Exit;
   end;
 
-  if (AClassValue is TGocciaVMClassValue) and
-     Assigned(TGocciaVMClassValue(AClassValue).NativeSuperConstructor) then
+  if Assigned(ImplicitSuperTarget) and
+     not (ImplicitSuperTarget is TGocciaClassValue) then
   begin
     BoxedArgs := MaterializeArguments(AArguments);
     try
@@ -11205,8 +11281,7 @@ begin
       { §10.2.2 step 5: the built-in allocates from newTarget's prototype,
         which is the class the construction started at — not this intermediate
         one. }
-      SuperResult := InvokeConstructableWithReceiver(
-        TGocciaVMClassValue(AClassValue).NativeSuperConstructor,
+      SuperResult := InvokeConstructableWithReceiver(ImplicitSuperTarget,
         BoxedArgs, AInstance, EffectiveNewTarget);
     finally
       ReleaseArguments(BoxedArgs);
@@ -11249,7 +11324,7 @@ begin
   end;
 
   TargetInstance := InvokeImplicitSuperInitializationRegisters(
-    AClassValue.SuperClass, AInstance, AArguments);
+    ImplicitSuperConstructorClass(AClassValue), AInstance, AArguments);
   if not Assigned(TargetInstance) then
     TargetInstance := AInstance;
   if not (AClassValue is TGocciaVMClassValue) and
@@ -14552,7 +14627,7 @@ begin
       OP_CHECK_DERIVED_THIS:
         if not FCurrentConstructorSuperCalled then
           ThrowReferenceError(
-            'Must call super constructor before accessing this');
+            SErrorSuperConstructorNotCalled);
 
       OP_CREATE_ARGUMENTS:
         SetRegister(A, CreateArgumentsObjectFromCurrentFrame(B <> 0, C));

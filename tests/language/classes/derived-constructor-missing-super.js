@@ -99,6 +99,36 @@ describe("a derived constructor that never calls super()", () => {
     expect(Object.keys(new (Ok.bind(null))())).toEqual(["seq", "tail"]);
   });
 
+  test("both modes report the same message", () => {
+    // The two checks — reading `this` and returning without super() — live in
+    // different places and fire in different orders per mode, so they share one
+    // message rather than describing the route they took.
+    class TouchesThis extends Base {
+      constructor() {
+        this.x = 1;
+      }
+    }
+    class TouchesNothing extends Base {
+      constructor() {}
+    }
+
+    const messageOf = (build) => {
+      try {
+        build();
+      } catch (error) {
+        return error.message;
+      }
+      return "<no error>";
+    };
+
+    expect(messageOf(() => new TouchesThis())).toBe(
+      messageOf(() => new TouchesNothing()),
+    );
+    expect(messageOf(() => new TouchesThis())).toContain(
+      "Must call super constructor",
+    );
+  });
+
   test("an explicit object return stands in for super()", () => {
     // §10.2.2 step 13.a: returning an Object is the other way a derived
     // constructor can finish, and it is checked before step 13.c.

@@ -3738,7 +3738,7 @@ begin
   if AClassValue.ConstructorMethod.LastSuperConstructorCalled then
     Exit;
   ThrowReferenceError(
-    'Must call super constructor before returning from derived constructor');
+    SErrorSuperConstructorNotCalled);
 end;
 
 function InvokeConstructableWithReceiver(const AConstructor: TGocciaValue;
@@ -3760,6 +3760,7 @@ var
     NativeInstance: TGocciaObjectValue;
     NativeInstanceRooted: Boolean;
     ReceiverPrototype: TGocciaObjectValue;
+    ImplicitSuper: TGocciaObjectValue;
   begin
     NativeInstance := nil;
     NativeInstanceRooted := False;
@@ -3783,15 +3784,26 @@ var
           TGocciaInstanceValue(NativeInstance).FinalizeNativeFromArguments(AArguments);
         Result := NativeInstance;
       end
-      else if Assigned(ClassConstructor.SuperClass) then
-        Result := InvokeConstructableWithReceiver(ClassConstructor.SuperClass,
-          AArguments, AReceiver, AContext, EffectiveNewTarget)
-      else if Assigned(ClassConstructor.NativeSuperConstructor) then
-        Result := InvokeConstructableWithReceiver(
-          ClassConstructor.NativeSuperConstructor, AArguments, AReceiver,
-          AContext, EffectiveNewTarget)
-      else if AReceiver is TGocciaInstanceValue then
-        TGocciaInstanceValue(AReceiver).InitializeNativeFromArguments(AArguments);
+      else
+      begin
+        { §13.3.7.3 GetSuperConstructor: the implicit constructor's super()
+          resolves through this class's own [[Prototype]] at call time, so a
+          retargeted class forwards to what it now points at rather than to the
+          superclass it was declared with. }
+        if ImplicitSuperConstructorIsAbsent(ClassConstructor) then
+          ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
+        ImplicitSuper := ImplicitSuperConstructorTarget(ClassConstructor);
+        if Assigned(ImplicitSuper) then
+        begin
+          if (ImplicitSuper = TGocciaFunctionBase.GetSharedPrototype) or
+             (not ImplicitSuper.IsConstructable) then
+            ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
+          Result := InvokeConstructableWithReceiver(ImplicitSuper,
+            AArguments, AReceiver, AContext, EffectiveNewTarget);
+        end
+        else if AReceiver is TGocciaInstanceValue then
+          TGocciaInstanceValue(AReceiver).InitializeNativeFromArguments(AArguments);
+      end;
 
       ValidateClassConstructorReturn(ClassConstructor, Result);
       if Result is TGocciaObjectValue then
@@ -4099,6 +4111,7 @@ var
   ConstructorThisValue: TGocciaValue;
   CurrentCtorClassValue: TGocciaValue;
   CurrentCtorClass: TGocciaClassValue;
+  ResolvedSuperConstructor: TGocciaObjectValue;
   Roots: TGocciaActiveRootFrame;
   DirectEvalResult: TGocciaValue;
   PreviousCallSite: TGocciaCallSite;
@@ -4173,9 +4186,27 @@ begin
   // Handle super() calls specially
   if ACallExpression.Callee is TGocciaSuperExpression then
   begin
+    ResolvedSuperConstructor := nil;
     SuperClassValue := AContext.Scope.FindSuperConstructor;
     if not Assigned(SuperClassValue) then
       SuperClassValue := EvaluateExpression(ACallExpression.Callee, AContext);
+    { ES2026 §13.3.7.3 GetSuperConstructor reads the active function object's
+      [[GetPrototypeOf]] when super() runs, not the superclass the class was
+      declared with. The scope binding was captured at class-definition time,
+      so an Object.setPrototypeOf on the constructor since then has to be
+      picked up here — otherwise an explicit constructor over a retargeted
+      class calls the old superclass while an implicit one calls the new. }
+    CurrentCtorClassValue := AContext.Scope.FindOwningClass;
+    if CurrentCtorClassValue is TGocciaClassValue then
+    begin
+      if ImplicitSuperConstructorIsAbsent(
+           TGocciaClassValue(CurrentCtorClassValue)) then
+        ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
+      ResolvedSuperConstructor := ImplicitSuperConstructorTarget(
+        TGocciaClassValue(CurrentCtorClassValue));
+      if Assigned(ResolvedSuperConstructor) then
+        SuperClassValue := ResolvedSuperConstructor;
+    end;
     AddValueRoot(Roots, SuperClassValue);
     if SuperClassValue is TGocciaClassValue then
       SuperClass := TGocciaClassValue(SuperClassValue)
@@ -4184,6 +4215,12 @@ begin
     if (not Assigned(SuperClass)) and
        (not ((SuperClassValue is TGocciaObjectValue) and SuperClassValue.IsConstructable)) then
     begin
+      { §13.3.7.1 SuperCall step 3: a super constructor that is not a
+        constructor is a TypeError, which is what Object.setPrototypeOf onto a
+        plain object produces. A method with no superclass at all never parses
+        to a reachable super() and keeps the older diagnostic. }
+      if Assigned(ResolvedSuperConstructor) then
+        ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
       AContext.OnError('super() can only be called within a method with a superclass',
         ACallExpression.Line, ACallExpression.Column);
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -4609,7 +4646,7 @@ begin
          Assigned(TGocciaMethodCallScope(ScopeCursor).SuperClass) and
          not TGocciaMethodCallScope(ScopeCursor).SuperConstructorCalled then
         ThrowReferenceError(
-          'Must call super constructor before accessing this',
+          SErrorSuperConstructorNotCalled,
           'call super() before reading this or super properties');
       Break;
     end;
@@ -11240,7 +11277,7 @@ var
   ConstructorThisValue: TGocciaValue;
   EffectiveNewTarget: TGocciaValue;
   InstancePrototype: TGocciaObjectValue;
-  CollapsedChain: TGocciaClassChain;
+  Chain: TGocciaImplicitConstructorChain;
   function ConstructNativeSuperInstance(
     const AConstructor: TGocciaObjectValue): TGocciaObjectValue;
   var
@@ -11337,8 +11374,8 @@ var
   var
     Index: Integer;
   begin
-    for Index := High(CollapsedChain) downto 0 do
-      RunClassInstanceInitializers(CollapsedChain[Index], Instance, AContext);
+    for Index := High(Chain.Collapsed) downto 0 do
+      RunClassInstanceInitializers(Chain.Collapsed[Index], Instance, AContext);
   end;
 begin
   CheckExecutionTimeout;
@@ -11367,7 +11404,19 @@ begin
       Exit(AArguments.GetElement(0).Box);
   end;
 
+  { §15.7.14 step 15a: this class runs an implicit constructor, and so does
+    every class between it and the first ancestor that has a constructor body
+    of its own. The chain has to be resolved before the receiver is allocated,
+    because which constructor it selects decides whether allocating one here is
+    right at all. }
+  ResolveImplicitConstructorChain(AClassValue, Chain);
+  ImplicitSuperClass := Chain.HostClass;
+
   NativeInstance := nil;
+  { Only a class-value built-in — Array, Map, Set — is initialized in place by
+    a later super(); the walk pre-creates one because the receiver has to exist
+    before any constructor body runs. Every hop is §13.3.7.3 GetSuperConstructor
+    so that a retargeted constructor allocates from what it now points at. }
   WalkClass := AClassValue;
   while Assigned(WalkClass) do
   begin
@@ -11375,24 +11424,24 @@ begin
     IncrementInstructionCounter;
     CheckInstructionLimit;
     NativeInstance := WalkClass.CreateNativeInstance(AArguments);
-    { A native super *constructor* — a built-in exposed as a function value
-      rather than as a class value, which is what Promise, Error and their
-      subclasses are — is invoked again by an explicit super(), and the
-      receiver it returns replaces this one wholesale. Building it here as
-      well ran the Promise executor twice for every
-      `class P extends Promise` with a constructor of its own. Only the
-      class-value built-ins reached through CreateNativeInstance above are
-      initialized in place by super(), so only those need pre-creating. }
-    if (not Assigned(NativeInstance)) and
-       Assigned(WalkClass.NativeSuperConstructor) and
-       not Assigned(AClassValue.ConstructorMethod) then
-      // The implicit super() path reuses this precreated native receiver.
-      NativeInstance := ConstructNativeSuperInstance(
-        WalkClass.NativeSuperConstructor);
     if Assigned(NativeInstance) then
       Break;
-    WalkClass := WalkClass.SuperClass;
+    WalkClass := ImplicitSuperConstructorClass(WalkClass);
   end;
+
+  { A native super *constructor* — a built-in exposed as a function value,
+    which is what Promise, Error and their subclasses are — is invoked again by
+    an explicit super(), and the receiver it returns replaces this one
+    wholesale. So it may only be pre-created when no constructor body stands
+    between this class and it: Chain.SuperConstructor is set only when the walk
+    reached it without passing one, and this class must not declare one either.
+    Pre-creating regardless ran the Promise executor twice. }
+  if (not Assigned(NativeInstance)) and
+     Assigned(Chain.SuperConstructor) and
+     (not ImplicitSuperConstructorIsUnusable(Chain)) and
+     (not Assigned(AClassValue.ConstructorMethod)) then
+    // The implicit super() path reuses this precreated native receiver.
+    NativeInstance := ConstructNativeSuperInstance(Chain.SuperConstructor);
 
   if Assigned(NativeInstance) then
   begin
@@ -11427,20 +11476,28 @@ begin
          IsUndefinedConstructedValue(ConstructedValue) and
          not AClassValue.ConstructorMethod.LastSuperConstructorCalled then
         ThrowReferenceError(
-          'Must call super constructor before returning from derived constructor');
+          SErrorSuperConstructorNotCalled);
     end
     else
     begin
-      { §15.7.14 step 15a: this class runs an implicit constructor, and so does
-        every class between it and the first ancestor that has a constructor
-        body of its own. CollapsedChain is that stretch — the classes whose
-        instance elements the super construction below is about to step over. }
-      ImplicitSuperClass := ResolveImplicitConstructorChain(AClassValue,
-        CollapsedChain);
+      { §13.3.7.1 SuperCall step 3: super() reaching something that is not a
+        constructor is a TypeError, and Object.setPrototypeOf is the only way
+        to put one there. }
+      if ImplicitSuperConstructorIsUnusable(Chain) then
+        ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
 
+      { A super constructor Object.setPrototypeOf moved there is not the one
+        the class was declared with, so none of the declared-native branches
+        below apply: §13.3.7.3 sends super() to the new target, and what it
+        returns becomes the receiver. Probed against Node v24.0.1 — retargeting
+        onto Error sets the message and never runs the declared superclass. }
+      if ImplicitSuperConstructorIsRetargeted(Chain) then
+        ApplyReplacementResult(InvokeConstructableWithReceiver(
+          Chain.SuperConstructor, AArguments, Instance, AContext,
+          EffectiveNewTarget))
       // A compiled superclass has no AST ConstructorMethod; it runs its own
       // field initializers and constructor body against the instance.
-      if Assigned(ImplicitSuperClass) and
+      else if Assigned(ImplicitSuperClass) and
          ImplicitSuperClass.TryConstructOnReceiver(AArguments, Instance,
            EffectiveNewTarget, ConstructedValue) then
       begin
@@ -11471,7 +11528,7 @@ begin
       begin
         if AClassValue.NativeSuperConstructor =
            TGocciaFunctionBase.GetSharedPrototype then
-          ThrowTypeError('Super constructor is not a constructor',
+          ThrowTypeError(SErrorSuperNotConstructor,
             SSuggestNotConstructorType);
         ConstructedValue := InvokeConstructableWithReceiver(
           AClassValue.NativeSuperConstructor, AArguments, Instance, AContext,

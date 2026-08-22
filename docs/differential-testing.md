@@ -105,17 +105,23 @@ field. Interpreted mode did exactly that until the shared Construct operation
 was routed into the same instantiation `new` uses, and the suite pins the
 newTarget and override-return shapes alongside it.
 
-One shape is deliberately absent. A class whose superclass chain reaches a
-built-in (`extends Array`, `extends Promise`) is covered against node instead,
-in `tests/built-ins/Reflect/construct/native-chain-instance-elements.js`: the
-shared Construct operation declines such a class so that the built-in keeps its
-argument-validation ordering, and the instance elements are run afterwards
-against the receiver it allocated. That file asserts every Construct route
-agrees with `new`, so a partial fix cannot land unnoticed, and
-`tests/language/classes/native-chain-implicit-constructors.js` covers the
-intermediate classes in a longer chain. `new.target` inside a field initializer
-is absent for a different reason: node, bun and goccia all agree it is
-`undefined` as a
+It also covers the two ways a chain can stop being what it was declared as. A
+class whose superclass chain reaches a built-in (`extends Array`, `extends
+Promise`) has an implicit constructor for every class in between, and each of
+them owes the receiver its own instance elements; and
+`Object.setPrototypeOf` on a constructor moves where §13.3.7.3
+GetSuperConstructor sends `super()`, which can land on a built-in, on nothing,
+or on an object that is not a constructor at all. Node, bun and goccia agree on
+all of it. The wider matrices — every Construct route against `new`, longer
+chains, private fields — live against node in
+`tests/built-ins/Reflect/construct/native-chain-instance-elements.js`,
+`tests/language/classes/native-chain-implicit-constructors.js` and
+`tests/language/classes/constructor-prototype-retargeting.js`, because the
+shared Construct operation declines a native chain so the built-in keeps its
+argument-validation ordering and those files pin what that costs.
+
+`new.target` inside a field initializer is absent for a different reason: node,
+bun and goccia all agree it is `undefined` as a
 script, but under `bun test` 1.4.0 the same class body reports it defined, so
 gating would report bun's transpile as a goccia divergence. It is covered
 against node in `tests/built-ins/Reflect/construct/instance-elements.js`.

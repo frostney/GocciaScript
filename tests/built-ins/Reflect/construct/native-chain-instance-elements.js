@@ -184,6 +184,90 @@ describe("other built-in chains across Construct routes", () => {
   });
 });
 
+describe("a borrowed constructor's super() over a native chain", () => {
+  // A subclass with no constructor of its own borrows the one above it, and
+  // that borrowed body calls super() itself. Pre-building the native receiver
+  // as well ran the Promise executor twice, and left a second construction
+  // with no arguments to fail outright.
+  test("the executor runs once through a borrowed constructor", () => {
+    class Tagged extends Promise {
+      tag = "t";
+
+      constructor(executor) {
+        super(executor);
+      }
+    }
+    class Borrowing extends Tagged {}
+
+    let runs = 0;
+    const instance = new Borrowing((resolve) => {
+      runs += 1;
+      resolve(1);
+    });
+    expect(runs).toBe(1);
+    expect(instance.tag).toBe("t");
+    expect(instance instanceof Promise).toBe(true);
+    expect(Object.getPrototypeOf(instance)).toBe(Borrowing.prototype);
+
+    let reflectRuns = 0;
+    const constructed = Reflect.construct(Borrowing, [
+      (resolve) => {
+        reflectRuns += 1;
+        resolve(1);
+      },
+    ]);
+    expect(reflectRuns).toBe(1);
+    expect(constructed.tag).toBe("t");
+  });
+
+  test("a borrowed constructor that supplies its own executor constructs", () => {
+    // The borrowed constructor ignores the arguments and resolves itself, so
+    // there is exactly one construction to get right. (Chaining .then() off it
+    // is a different matter: §27.2.1.5 NewPromiseCapability needs the executor
+    // it passed to have been called, and Node rejects this shape too.)
+    class Tagged extends Promise {
+      constructor() {
+        super((resolve) => resolve(1));
+      }
+    }
+    class Borrowing extends Tagged {}
+
+    const instance = new Borrowing();
+    expect(instance instanceof Promise).toBe(true);
+    expect(Object.getPrototypeOf(instance)).toBe(Borrowing.prototype);
+    expect(instance instanceof Tagged).toBe(true);
+  });
+});
+
+describe("a foreign newTarget over an implicit native chain", () => {
+  // ES2026 §10.2.2 steps 5-6 put newTarget's prototype on the receiver before
+  // the built-in's own steps, and §24.1.1.1 Map then reads its `set` adder off
+  // that receiver. Populating through Map.prototype instead hid the failure.
+  // Probed against Node v24.0.1: a TypeError either way.
+  test("Map population reads the adder off newTarget's prototype", () => {
+    class First extends Map {}
+    class Second extends First {}
+    class Foreign {}
+
+    let name = "<no error>";
+    try {
+      Reflect.construct(Second, [[[1, 2]]], Foreign);
+    } catch (error) {
+      name = error.name;
+    }
+    expect(name).toBe("TypeError");
+  });
+
+  test("with no iterable there is no adder to look up", () => {
+    class First extends Map {}
+    class Second extends First {}
+    class Foreign {}
+
+    const constructed = Reflect.construct(Second, [], Foreign);
+    expect(Object.getPrototypeOf(constructed)).toBe(Foreign.prototype);
+  });
+});
+
 describe("private instance elements on a native chain", () => {
   test("Reflect.construct stamps the brand and runs the initializer", () => {
     class Tagged extends Array {

@@ -860,6 +860,38 @@ console.log("--max-instructions (bytecode)...");
   if (json.error?.type !== "InstructionLimitError") throw new Error(`Expected InstructionLimitError, got ${json.error?.type}`);
 }
 
+// -- super-constructor resolution terminates without the sandbox limits --------
+//
+// ES2026 §13.3.7.3 GetSuperConstructor resolves super() through the
+// constructor's [[Prototype]]. A resolver that fell back to the declared
+// superclass when that hop landed on a non-constructor walked the union of two
+// relations: each is acyclic on its own, their union is not. The union spun
+// forever inside one native call, so neither --timeout nor --max-instructions
+// could interrupt it. It has to terminate on its own.
+
+const retargetCycle =
+  "class Base { b = 1; }\n" +
+  "class Middle extends Base { m = 2; }\n" +
+  "class Leaf extends Middle { l = 3; }\n" +
+  "Object.setPrototypeOf(Leaf, {});\n" +
+  "Object.setPrototypeOf(Middle, Leaf);\n" +
+  "new Leaf();\n";
+
+for (const mode of ["interpreted", "bytecode"] as const) {
+  console.log(`super-constructor cycle terminates (${mode})...`);
+  const modeArgs = mode === "bytecode" ? ["--mode=bytecode"] : [];
+  const { exitCode, json } = runLoaderJson(retargetCycle, modeArgs, { timeout: 20_000 });
+  if (exitCode !== 1) throw new Error(`Retarget cycle exit code should be 1, got ${exitCode} (${mode})`);
+  if (json.error?.type !== "TypeError") {
+    throw new Error(`Expected TypeError for the retarget cycle, got ${json.error?.type} (${mode})`);
+  }
+  // And the sandbox limits stay effective for code that really is unbounded.
+  const bounded = runLoaderJson(retargetCycle, [...modeArgs, "--max-instructions=5000000"], { timeout: 20_000 });
+  if (bounded.json.error?.type !== "TypeError") {
+    throw new Error(`Retarget cycle should still be a TypeError under a limit, got ${bounded.json.error?.type} (${mode})`);
+  }
+}
+
 // -- --max-memory (Loader) ------------------------------------------------------
 
 console.log("--max-memory (default positive)...");

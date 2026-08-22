@@ -157,6 +157,7 @@ uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
   Goccia.Keywords.Reserved,
   Goccia.Modules,
   Goccia.Token,
@@ -1761,7 +1762,7 @@ begin
     begin
       OkJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, FlagReg);
       EmitReferenceError(ACtx,
-        'Must call super constructor before accessing this');
+        SErrorSuperConstructorNotCalled);
       PatchJumpTarget(ACtx, OkJump);
     end;
   finally
