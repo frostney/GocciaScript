@@ -93,6 +93,15 @@ describe("execution-context stack under collection", () => {
     expect(String({ toString() { collect(); return "s"; } })).toBe("s");
     const sym = { [Symbol.toPrimitive]() { collect(); return 3; } };
     expect(Number(sym)).toBe(3);
+
+    // The same hooks driven straight from the operators, whose operands are
+    // materialized into native temporaries the collector cannot see unless the
+    // opcode roots them. Exhaustive per-operator coverage lives in
+    // tests/language/expressions/operand-gc-roots/.
+    expect(box * 7).toBe(35);
+    expect(box - 2).toBe(3);
+    expect(box < 9).toBe(true);
+    expect(sym * 7).toBe(21);
   });
 
   test("error-path unwinding leaves no stale entries", () => {

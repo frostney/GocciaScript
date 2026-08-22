@@ -2311,6 +2311,62 @@ begin
   end;
 end;
 
+// Rooted slow-path entry points for the binary operators.
+//
+// Materializing an operand register allocates: RegisterToValue builds a fresh
+// TGocciaNumberLiteralValue for every grkInt other than the 0/1 singletons and
+// for every grkFloat (Goccia.VM.Registers.pas). That box lives only in a Pascal
+// temporary, and no root source walks Pascal temporaries — while the operator
+// helpers below re-enter guest code through ToPrimitive (valueOf / toString /
+// Symbol.toPrimitive), a collection there sweeps it and the freed block is
+// handed straight back to the hook's own allocation, so the surviving operand
+// silently reads the other operand's value (or dangles).
+//
+// Root both materialized operands for the duration of the helper, mirroring how
+// the AST interpreter's EvaluateBinary roots Left and Right around exactly the
+// same helper calls (AddValueRoot in Goccia.Evaluator.pas) — which is why only
+// bytecode mode was affected. The active-root stack is an O(1) array push/pop,
+// and these wrappers sit only on the non-scalar arm of each opcode: the scalar
+// fast paths never materialize a value and never re-enter, so they stay
+// allocation- and root-free.
+//
+// Materializing both operands before the call is safe: allocation alone never
+// collects (TGarbageCollector.RegisterObject only accounts), so nothing can run
+// between the two GetRegister calls and the pushes below.
+type
+  TGocciaVMBinaryValueOp = function(const ALeft, ARight: TGocciaValue): TGocciaValue;
+  TGocciaVMBinaryPredicateOp = function(const ALeft, ARight: TGocciaValue): Boolean;
+
+function VMRootedBinaryValue(const AOperation: TGocciaVMBinaryValueOp;
+  const ALeft, ARight: TGocciaValue): TGocciaValue;
+var
+  Roots: TGocciaActiveRootFrame;
+begin
+  Roots.Initialize;
+  Roots.Add(ALeft);
+  Roots.Add(ARight);
+  try
+    Result := AOperation(ALeft, ARight);
+  finally
+    Roots.Clear;
+  end;
+end;
+
+function VMRootedBinaryPredicate(const AOperation: TGocciaVMBinaryPredicateOp;
+  const ALeft, ARight: TGocciaValue): Boolean;
+var
+  Roots: TGocciaActiveRootFrame;
+begin
+  Roots.Initialize;
+  Roots.Add(ALeft);
+  Roots.Add(ARight);
+  try
+    Result := AOperation(ALeft, ARight);
+  finally
+    Roots.Clear;
+  end;
+end;
+
 function VMRegisterToStringFast(
   const AValue: TGocciaRegister): TGocciaStringLiteralValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
@@ -15642,7 +15698,10 @@ begin
               SetRegisterFast(A, EvaluateAddition(LeftValue, RightValue));
           end
           else
-            SetRegister(A, EvaluateAddition(LeftValue, RightValue));
+            // Rooted: at least one operand is an object, so EvaluateAddition
+            // re-enters guest code. See VMRootedBinaryValue.
+            SetRegister(A, VMRootedBinaryValue(@EvaluateAddition,
+              LeftValue, RightValue));
         end;
         end;
       end;
@@ -15665,7 +15724,7 @@ begin
         else
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
-          SetRegister(A, EvaluateSubtraction(
+          SetRegister(A, VMRootedBinaryValue(@EvaluateSubtraction,
             GetRegisterFast(B), GetRegisterFast(C)));
         end;
       end;
@@ -15902,7 +15961,7 @@ begin
         else
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
-          SetRegister(A, EvaluateMultiplication(
+          SetRegister(A, VMRootedBinaryValue(@EvaluateMultiplication,
             GetRegisterFast(B), GetRegisterFast(C)));
         end;
       end;
@@ -15919,7 +15978,7 @@ begin
         else
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
-          SetRegister(A, EvaluateDivision(
+          SetRegister(A, VMRootedBinaryValue(@EvaluateDivision,
             GetRegisterFast(B), GetRegisterFast(C)));
         end;
       end;
@@ -15936,7 +15995,7 @@ begin
         else
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
-          SetRegister(A, EvaluateModulo(
+          SetRegister(A, VMRootedBinaryValue(@EvaluateModulo,
             GetRegisterFast(B), GetRegisterFast(C)));
         end;
       end;
@@ -15953,7 +16012,7 @@ begin
         else
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
-          SetRegister(A, EvaluateExponentiation(
+          SetRegister(A, VMRootedBinaryValue(@EvaluateExponentiation,
             GetRegisterFast(B), GetRegisterFast(C)));
         end;
       end;
@@ -15983,7 +16042,7 @@ begin
             LongInt(FRegisters[B].IntValue) and
             LongInt(FRegisters[C].IntValue))
         else
-          SetRegister(A, EvaluateBitwiseAnd(
+          SetRegister(A, VMRootedBinaryValue(@EvaluateBitwiseAnd,
             GetRegister(B), GetRegister(C)));
 
       OP_BOR:
@@ -15993,7 +16052,7 @@ begin
             LongInt(FRegisters[B].IntValue) or
             LongInt(FRegisters[C].IntValue))
         else
-          SetRegister(A, EvaluateBitwiseOr(
+          SetRegister(A, VMRootedBinaryValue(@EvaluateBitwiseOr,
             GetRegister(B), GetRegister(C)));
 
       OP_BXOR:
@@ -16003,7 +16062,7 @@ begin
             LongInt(FRegisters[B].IntValue) xor
             LongInt(FRegisters[C].IntValue))
         else
-          SetRegister(A, EvaluateBitwiseXor(
+          SetRegister(A, VMRootedBinaryValue(@EvaluateBitwiseXor,
             GetRegister(B), GetRegister(C)));
 
       OP_SHL:
@@ -16013,7 +16072,7 @@ begin
             LongWord(FRegisters[B].IntValue) shl
             (LongWord(FRegisters[C].IntValue) and 31)))
         else
-          SetRegister(A, EvaluateLeftShift(
+          SetRegister(A, VMRootedBinaryValue(@EvaluateLeftShift,
             GetRegister(B), GetRegister(C)));
 
       OP_SHR:
@@ -16023,7 +16082,7 @@ begin
             LongInt(FRegisters[B].IntValue),
             LongWord(FRegisters[C].IntValue)))
         else
-          SetRegister(A, EvaluateRightShift(
+          SetRegister(A, VMRootedBinaryValue(@EvaluateRightShift,
             GetRegister(B), GetRegister(C)));
 
       OP_USHR:
@@ -16033,7 +16092,7 @@ begin
             FRegisters[B].IntValue) shr
             (LongWord(FRegisters[C].IntValue) and 31)))
         else
-          SetRegister(A, EvaluateUnsignedRightShift(
+          SetRegister(A, VMRootedBinaryValue(@EvaluateUnsignedRightShift,
             GetRegister(B), GetRegister(C)));
 
       OP_BNOT:
@@ -16076,7 +16135,8 @@ begin
             FRegisters[B].IntValue = FRegisters[C].IntValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FromBoolean(
-            Goccia.Arithmetic.IsLooselyEqual(GetRegister(B), GetRegister(C))));
+            VMRootedBinaryPredicate(@Goccia.Arithmetic.IsLooselyEqual,
+              GetRegister(B), GetRegister(C))));
 
       OP_LOOSE_NEQ:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
@@ -16084,7 +16144,8 @@ begin
             FRegisters[B].IntValue <> FRegisters[C].IntValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FromBoolean(
-            Goccia.Arithmetic.IsNotLooselyEqual(GetRegister(B), GetRegister(C))));
+            VMRootedBinaryPredicate(@Goccia.Arithmetic.IsNotLooselyEqual,
+              GetRegister(B), GetRegister(C))));
 
       OP_LT:
       begin
@@ -16113,8 +16174,8 @@ begin
                 TGocciaStringLiteralValue(LeftValue).Value,
                 TGocciaStringLiteralValue(RightValue).Value) < 0)
           else
-            FRegisters[A] := RegisterBoolean(
-              Goccia.Arithmetic.LessThan(LeftValue, RightValue));
+            FRegisters[A] := RegisterBoolean(VMRootedBinaryPredicate(
+              @Goccia.Arithmetic.LessThan, LeftValue, RightValue));
         end;
       end;
 
@@ -16145,8 +16206,8 @@ begin
                 TGocciaStringLiteralValue(LeftValue).Value,
                 TGocciaStringLiteralValue(RightValue).Value) > 0)
           else
-            FRegisters[A] := RegisterBoolean(
-              Goccia.Arithmetic.GreaterThan(LeftValue, RightValue));
+            FRegisters[A] := RegisterBoolean(VMRootedBinaryPredicate(
+              @Goccia.Arithmetic.GreaterThan, LeftValue, RightValue));
         end;
       end;
 
@@ -16177,8 +16238,8 @@ begin
                 TGocciaStringLiteralValue(LeftValue).Value,
                 TGocciaStringLiteralValue(RightValue).Value) <= 0)
           else
-            FRegisters[A] := RegisterBoolean(
-              Goccia.Arithmetic.LessThanOrEqual(LeftValue, RightValue));
+            FRegisters[A] := RegisterBoolean(VMRootedBinaryPredicate(
+              @Goccia.Arithmetic.LessThanOrEqual, LeftValue, RightValue));
         end;
       end;
 
@@ -16209,8 +16270,8 @@ begin
                 TGocciaStringLiteralValue(LeftValue).Value,
                 TGocciaStringLiteralValue(RightValue).Value) >= 0)
           else
-            FRegisters[A] := RegisterBoolean(
-              Goccia.Arithmetic.GreaterThanOrEqual(LeftValue, RightValue));
+            FRegisters[A] := RegisterBoolean(VMRootedBinaryPredicate(
+              @Goccia.Arithmetic.GreaterThanOrEqual, LeftValue, RightValue));
         end;
       end;
 
