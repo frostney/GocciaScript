@@ -69,6 +69,7 @@ oracle instead of inheriting a default.
 | `o-asynccontext.test.js` | language | skip | gate |
 | `p-callintrinsics.test.js` | language | skip | gate |
 | `q-reflectconstruct.test.js` | language | skip | gate |
+| `r-faketimers.test.js` | timers | gate | skip |
 
 `o-asynccontext.test.js` covers `node:async_hooks` propagation only, and stops
 there on purpose. Bun 1.3.14 does not honour the `defaultValue` or `name`
@@ -125,6 +126,19 @@ bun and goccia all agree it is `undefined` as a
 script, but under `bun test` 1.4.0 the same class body reports it defined, so
 gating would report bun's transpile as a goccia divergence. It is covered
 against node in `tests/built-ins/Reflect/construct/instance-elements.js`.
+
+`r-faketimers.test.js` covers the `vi` fake-timer family, and Vitest is the only
+possible oracle for it: Vitest's fake timers wrap `@sinonjs/fake-timers`, so what
+a tick does — whether microtasks interleave, how a nested zero-delay timer is
+scheduled, when `runOnlyPendingTimers` stops, what the loop guard says — is
+decided by that clock rather than by ECMAScript. Bun is skipped for the reason
+`e-mocks.test.js` records. Two shapes are deliberately absent. The **type of a
+timer id** is a documented divergence: Vitest runs in Node, whose fake clock
+returns a `Timeout` object, while GocciaScript returns a number as the web
+platform does, so the suite asserts on clearing rather than on the id. **Real-mode
+timers** are absent because there is nothing to compare — under Vitest they run
+on a real event loop and under GocciaScript the clock jumps to them; they are
+covered against the intended behaviour in `tests/built-ins/Timers` instead.
 
 `h-modulemock.test.js` and `i-modulemock-isolation.test.js` are a pair: the
 first mocks `./mods/mockable.js` with a `vi.mock` factory, the second mocks

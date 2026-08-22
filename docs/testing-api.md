@@ -63,6 +63,8 @@ The module namespace and the globals install independently. A host that applies 
 | `GocciaBenchmarkRunner` | Yes | No |
 | `GocciaScriptLoaderBare` | No — attaches no runtime | No |
 
+The [timer surface](#fake-timers) — `goccia:timers` and the `setTimeout` family — is narrower still: `GocciaTestRunner` only. The timers are deterministic and carry no ambient authority, but a scheduling surface is one a sandboxed script does not otherwise get, and the acceptance target for them is the runner. An embedder that wants them installs `TGocciaTimersRuntimeExtension`.
+
 An embedder gets the same split: `ApplyLoaderRuntimeProfile` with its default `ATestingModule = True` registers the module only, and `TGocciaTestingLibraryRuntimeExtension.CreateModuleOnly` is the direct spelling for hosts that assemble their own profile. Passing `AInjectGlobals = True` to that extension's ordinary constructor is what makes the globals appear, and the runner is the only host that does it.
 
 Outside the runner the assertions object is built lazily, on the first import that resolves. A script that never imports `goccia:test` pays nothing for its availability.
@@ -418,7 +420,9 @@ test("async error handling", () => {
 
 Both patterns work because GocciaScript's `await` is a synchronous drain --- the entire async function body executes within a single `.Call()`, and fetch-backed Promises are settled by pumping fetch completions while waiting. Place assertions inside `.then()` or `.catch()` handlers when using the Promise-return pattern.
 
-**Important:** If a test returns a Promise that is still pending after the microtask queue drains and all pending fetch completions have been pumped, the test **fails** with "Promise still pending after microtask drain". Since GocciaScript has no general event loop, a non-fetch pending Promise after drain will never settle --- this catches tests with missing assertions or broken async chains. This mirrors how Jest/Vitest fail tests with a timeout when the returned Promise never resolves.
+A Promise a timer will settle also works, and settles instantly: the [virtual timer queue](#fake-timers) is run to the next due timer wherever the engine would otherwise be waiting, so `await new Promise((r) => setTimeout(r, 5000))` returns without 5000 milliseconds passing. Under `vi.useFakeTimers()` it does not — the suite owns the clock there, and the test advances it explicitly.
+
+**Important:** If a test returns a Promise that is still pending after the microtask queue drains, all pending fetch completions have been pumped, and every real-mode timer has run, the test **fails** with "Promise still pending after microtask drain". Since GocciaScript has no event loop beyond those sources, such a Promise will never settle --- this catches tests with missing assertions or broken async chains. This mirrors how Jest/Vitest fail tests with a timeout when the returned Promise never resolves.
 
 When a returned Promise rejects, the failure line reports the reason as `Returned Promise rejected: <reason>`. An `Error` is named and described --- `Error: boom`, or the class name for a subclass that does not set its own `name`, such as `MyError: boom` --- because its `name` lives on the prototype and its `message` is non-enumerable, so serializing the object alone would render it as `{}`. Any other reason is serialized as a value.
 
@@ -612,14 +616,86 @@ Further divergences from Vitest worth knowing:
 | `vi.stubGlobal`, `vi.unstubAllGlobals` | Supported |
 | `vi.stubEnv`, `vi.unstubAllEnvs` | Supported, over an injected `process.env` |
 | `vi.clearAllMocks`, `vi.resetAllMocks`, `vi.restoreAllMocks` | Supported |
-| `vi.useFakeTimers` and the rest of the timer family | Throws |
-| `vi.waitFor`, `vi.waitUntil` | Throws — async polling, not the timer gap above |
+| The fake-timer family | Supported — see [Fake timers](#fake-timers) |
+| `vi.waitFor`, `vi.waitUntil` | Throws — async polling, which needs a suspension point |
 | `vi.hoisted` | Throws |
 | `vi.doMock`, `vi.doUnmock`, `vi.resetModules` | Throws |
 | `vi.importActual`, `vi.importMock` | Throws |
 | `vi.setConfig`, `vi.resetConfig` | Throws |
 
 `vi.stubGlobal` records the value a name held before its **first** stub, so restubbing the same name repeatedly still unwinds to the original, and `vi.unstubAllGlobals` deletes a name that did not exist rather than leaving it behind as an undefined global. `vi.stubEnv` and `vi.unstubAllEnvs` behave the same way over `process.env`, and match Vitest's remaining details: the value is coerced with `String()`, and an `undefined` value deletes the variable instead of setting it.
+
+#### Fake timers
+
+`GocciaTestRunner` provides `setTimeout`, `clearTimeout`, `setInterval` and `clearInterval` over a **virtual timer queue**, and the whole Vitest fake-timer family on top of it:
+
+| Member | Notes |
+|---|---|
+| `vi.useFakeTimers([config])` | Only `config.now` is read; see below |
+| `vi.useRealTimers()`, `vi.isFakeTimers()` | |
+| `vi.setSystemTime(dateOrMs)`, `vi.getMockedSystemTime()`, `vi.getRealSystemTime()` | |
+| `vi.advanceTimersByTime(ms)` / `vi.advanceTimersByTimeAsync(ms)` | |
+| `vi.advanceTimersToNextTimer()` / `vi.advanceTimersToNextTimerAsync()` | |
+| `vi.runAllTimers()` / `vi.runAllTimersAsync()` | |
+| `vi.runOnlyPendingTimers()` / `vi.runOnlyPendingTimersAsync()` | |
+| `vi.getTimerCount()`, `vi.clearAllTimers()` | |
+| `vi.advanceTimersToNextFrame`, `vi.runAllTicks` | Throw — no `requestAnimationFrame`, and no `process.nextTick` queue (promise jobs run on the engine microtask queue, which the `…Async` members already drain) |
+| `vi.setTimerTickMode` | `"manual"` is accepted and does nothing — it names the only behaviour there is. Every other mode throws: they advance the clock against real elapsed time, which no GocciaScript clock measures |
+
+Every implemented member returns `vi`, so calls chain; the three that throw are listed in the last row above. The semantics were probed against the pinned Vitest 4.1.10 — whose fake timers wrap `@sinonjs/fake-timers` — rather than read off its documentation, and are locked in by a [vitest-gated differential suite](differential-testing.md). The details worth knowing:
+
+- **`advanceTimersByTime` runs no microtasks between timers.** A promise callback a timer queued waits until the advance returns. The `…Async` variants drain the microtask queue before the first timer and again after each one, which is the ordering a suite awaiting between ticks depends on.
+- **Timers due at the same instant fire in registration order.** Ties break on creation time, then on id.
+- **A zero-delay timer scheduled from inside a running timer is due one virtual millisecond later**, not at the current instant. That is what keeps a `setTimeout(f, 0)` chain from looping forever inside one advance.
+- **An interval reschedules from its previous due time**, so it does not drift, and one advance fires every tick it crossed.
+- **`runAllTimers` gives up after 10000 timers** with `Aborting after running 10000 timers, assuming an infinite loop!`.
+- **`runOnlyPendingTimers` ticks to the latest due time among the timers pending when it was called** — so a timer one of them schedules inside that window still fires, and one scheduled beyond it stays pending.
+- **A throwing timer callback stops the run only for some members.** Under `advanceTimersByTime` and `runOnlyPendingTimers` the first exception is recorded, the remaining timers still run, the clock reaches the instant it was asked for, and the error is rethrown when the advance ends. Under `runAllTimers` and `advanceTimersToNextTimer` it stops there and everything behind it stays pending. The three genuinely differ in Vitest, and each was probed on its own.
+- **`setSystemTime` moves the wall clock without letting time pass.** Every pending timer keeps its remaining delay, forwards and backwards. It takes a number, a `Date`, or **anything else `new Date(...)` accepts** — a date string included.
+- **A fractional delay is truncated; a fractional advance is banked.** `setTimeout(fn, 1.5)` is due at 1ms, but `advanceTimersByTime(1.5)` followed by `advanceTimersByTime(0.5)` moves the clock by a full 2ms and fires a timer due there. Both halves are Vitest's, and the pairing is unintuitive enough to be worth stating.
+- **`Date`, `new Date()`, `Temporal.Now` and `performance.now()` all follow the mocked clock**, because it is installed on the [host environment](host-environment.md) rather than patched onto a global. `performance.now()` reports elapsed *virtual* time from the moment fake timers were installed, and a `setSystemTime` jump does not move it.
+- **`vi.setSystemTime` works without `vi.useFakeTimers`**, freezing `Date` only and leaving timers and monotonic time alone.
+- **Fake-timer state is not reset between tests.** Vitest leaves the clock installed for the rest of the file, and so does GocciaScript; each test file gets a fresh engine, so nothing leaks across files.
+- **`AbortSignal.timeout()` is not faked.** It runs on the infrastructure monotonic clock, so advancing the virtual clock will not fire it. That is parity, not a gap: Vitest does not fake it either, because it is not one of the globals its clock replaces. A suite that needs an abort under fake timers should drive an `AbortController` from a timer callback instead.
+
+Four shapes deliberately diverge from Vitest:
+
+- **A timer id is a number**, as it is on the web. Vitest runs in Node, where the fake clock hands back a `Timeout` object with `ref`/`unref`/`refresh`; GocciaScript has no Node timer object to imitate and no event loop for those methods to mean anything to. `clearTimeout` takes either, which is what suites actually depend on.
+- **`vi.useFakeTimers(config)` honours only `now`.** `toFake` has nothing to select from — there is one timer queue and it is always the faked one — and `shouldAdvanceTime` / `advanceTimeDelta` describe real elapsed time, which no GocciaScript clock measures. Both are ignored rather than rejected, so a suite that passes them still runs.
+- **A non-finite system time is refused.** `vi.setSystemTime(NaN)`, an out-of-range date, or a string `Date` cannot parse, all throw a `TypeError`. Vitest admits them and leaves `Date.now()` reporting `NaN`; here the mocked clock reaches JavaScript as an integer nanosecond count on the [host environment](host-environment.md), so there is nothing for a `NaN` to be, and every consumer of the virtual clock quietly stops working once one is admitted.
+- **An advance that can never finish is aborted.** A `setInterval` with a period of `0` re-arms at the instant it just ran, so the clock can never move past it; Vitest hangs forever on that shape and GocciaScript throws instead. Short of that the behaviour matches: every tick lands on the same instant, and the advance still finishes where it was asked to.
+
+##### Without fake timers
+
+The queue is still virtual when `vi.useFakeTimers()` was never called: no wall time passes, and the clock jumps to the next timer's due time whenever the engine would otherwise have nothing left to do. In practice that means an `await` on a promise a timer will settle:
+
+```javascript
+test("a timer settles the awaited promise", async () => {
+  const value = await new Promise((resolve) => setTimeout(() => resolve(42), 5000));
+  expect(value).toBe(42); // instantly — only the virtual clock moved
+});
+```
+
+A delay is therefore an ordering key, not a duration. A timer-driven suite runs at full speed and reproducibly, and an uncleared `setInterval` cannot hang the run: the drains skip intervals entirely, and every one of them is bounded.
+
+Four more rules make real mode predictable:
+
+- **Timers a test body schedules run at the end of that test**, not at some later idle point. A `setTimeout` written inside a `test()` fires once the body has returned, before the next test starts.
+- **Whatever is left over is dropped when the test ends.** An uncleared interval, or a chain longer than the drain reached, cannot fire inside the next test. Fake-timer state is untouched by this — that queue belongs to the suite.
+- **A timer callback that throws fails the test that scheduled it**, and nothing else: it is reported as `uncaught exception in a timer callback`. It is not delivered to whatever frame happened to be awaiting, so a `try`/`catch` around an unrelated `await` will not see it and that `await` still resolves normally. This is Node's shape — an uncaught top-level error — rather than an exception at the wait.
+- **Real outstanding work outranks virtual time.** While a `fetch` or an `Atomics.waitAsync` is still in flight, no timer runs. Without that rule `Promise.race([fetch(url), timeoutAfter(ms)])` resolved to the timeout every time, whatever `ms` was, because the virtual clock costs nothing to advance.
+
+`performance.now()` is worth one note of its own: while timers are faked it measures elapsed virtual time from the install, so it is not on the same timeline as `performance.timeOrigin` (which keeps reporting the real process origin). Leaving fake timers puts it back on the real timeline.
+
+##### `goccia:timers`
+
+The engine surface underneath is importable on its own, for a suite that does not use the Vitest shim:
+
+```javascript
+import { useFakeTimers, advanceTimersByTime, useRealTimers } from "goccia:timers";
+```
+
+It exports the same operations plus the four timer globals, but speaks in epoch milliseconds rather than `Date` objects and returns `undefined` rather than chaining. Wrapping that in Vitest's shapes is exactly what the `vi` members do.
 
 #### `process.env`
 
@@ -644,9 +720,7 @@ With no `process` at all, `vi.stubEnv` throws and names the two options rather t
 
 #### Why the other members throw
 
-The fake-timer family throws because there is no fake clock — timers run on the real event loop.
-
-`vi.waitFor` and `vi.waitUntil` throw for a different reason. They are async polling APIs, not timer APIs: each retries its callback on an interval until it passes or a timeout elapses, which needs execution to suspend and resume between attempts. GocciaScript's runner has no such primitive — `await` is a synchronous drain and there is no general event loop, as [Async Tests](#async-tests-promises) describes, so a poll loop would spin without anything ever being able to change the condition. Both members report that reason rather than the fake-timer one: a fake clock is not what is missing.
+`vi.waitFor` and `vi.waitUntil` throw even though fake timers now exist, because a fake clock is not what they need. They are async polling APIs: each retries its callback on an interval until it passes or a timeout elapses, which needs execution to suspend and resume between attempts. GocciaScript's runner has no such primitive — `await` is a synchronous drain, as [Async Tests](#async-tests-promises) describes, and the virtual timer queue only moves when a test moves it — so a poll loop would spin without anything ever being able to change the condition. Both members report that reason by name.
 
 `vi.resetModules` throws because the loader has no cache-eviction path.
 
@@ -686,6 +760,8 @@ expect(set).toEqual(new Set([2, 1]));
 | Missing export on a mock | Reported eagerly at link time | Reported lazily, at property access |
 | `process` | Not provided; inject one with `--global` / `--globals` when a suite needs it | The real process environment and the rest of the Node `process` API |
 | `import.meta.env` | Not available; `vi.stubEnv` writes to `process.env` | Vite populates it, and `vi.stubEnv` writes there |
+| Timer ids | Numbers, as on the web | Node `Timeout` objects with `ref`/`unref`/`refresh` |
+| Timers without `vi.useFakeTimers()` | Virtual: the clock jumps to the next due timer when the engine would otherwise wait, so a delay is an ordering key rather than a duration | Real elapsed time on the event loop |
 | 12-hour `Intl` time separator | U+202F (narrow no-break space) before AM/PM | U+0020 in Node 24 (ICU 77.1) and bun 1.3 |
 
 One of those rows is worth expanding, because it cost a debugging session before it was written down:
