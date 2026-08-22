@@ -64,6 +64,10 @@ type
     FHasTimeZoneOverride: Boolean;
     FNextChildStreamId: UInt64;
     FChildLock: TGocciaCriticalSection;
+    FHasEpochOverride: Boolean;
+    FEpochOverride: Int64;
+    FHasMonotonicOverride: Boolean;
+    FMonotonicOverride: Int64;
     procedure SetProviders(const AClock: IGocciaHostClock;
       const ARandom: IGocciaHostRandom;
       const AHasTimeZoneOverride: Boolean);
@@ -85,6 +89,26 @@ type
       const ARandom: IGocciaHostRandom);
     procedure UseDeterministicProfile;
     procedure ConfigureAsChildOf(const AParent: TGocciaHostEnvironment);
+
+    { A mocked clock, layered over the configured providers rather than
+      replacing them. The virtual timer queue installs one while fake timers
+      are on, so Date, Temporal.Now and performance all read the same simulated
+      instant; RealEpochNanoseconds still reaches the provider underneath,
+      which is what `vi.getRealSystemTime()` needs. Each half is independent:
+      freezing the date without faking timers leaves monotonic time real.
+
+      Not inherited by ConfigureAsChildOf — a child realm gets the real clock
+      until something mocks its own. }
+    procedure OverrideClock(const AHasEpoch: Boolean;
+      const AEpochNanoseconds: Int64; const AHasMonotonic: Boolean;
+      const AMonotonicNanoseconds: Int64);
+    procedure ClearClockOverride;
+    function HasClockOverride: Boolean;
+    { True only while monotonic time is mocked. A mocked monotonic clock is
+      measured from the mock's own origin, so a reader that subtracts a time
+      origin of its own — performance.now() — has to stop doing that. }
+    function HasMonotonicClockOverride: Boolean;
+    function RealEpochNanoseconds: Int64;
 
     function EpochNanoseconds: Int64; {$IFDEF FPC}inline;{$ENDIF}
     function MonotonicNanoseconds: Int64; {$IFDEF FPC}inline;{$ENDIF}
@@ -280,13 +304,48 @@ begin
   SetProviders(Clock, Random, HasTimeZoneOverride);
 end;
 
+procedure TGocciaHostEnvironment.OverrideClock(const AHasEpoch: Boolean;
+  const AEpochNanoseconds: Int64; const AHasMonotonic: Boolean;
+  const AMonotonicNanoseconds: Int64);
+begin
+  FHasEpochOverride := AHasEpoch;
+  FEpochOverride := AEpochNanoseconds;
+  FHasMonotonicOverride := AHasMonotonic;
+  FMonotonicOverride := AMonotonicNanoseconds;
+end;
+
+procedure TGocciaHostEnvironment.ClearClockOverride;
+begin
+  FHasEpochOverride := False;
+  FHasMonotonicOverride := False;
+end;
+
+function TGocciaHostEnvironment.HasClockOverride: Boolean;
+begin
+  Result := FHasEpochOverride or FHasMonotonicOverride;
+end;
+
+function TGocciaHostEnvironment.HasMonotonicClockOverride: Boolean;
+begin
+  Result := FHasMonotonicOverride;
+end;
+
+function TGocciaHostEnvironment.RealEpochNanoseconds: Int64;
+begin
+  Result := FClock.EpochNanoseconds;
+end;
+
 function TGocciaHostEnvironment.EpochNanoseconds: Int64;
 begin
+  if FHasEpochOverride then
+    Exit(FEpochOverride);
   Result := FClock.EpochNanoseconds;
 end;
 
 function TGocciaHostEnvironment.MonotonicNanoseconds: Int64;
 begin
+  if FHasMonotonicOverride then
+    Exit(FMonotonicOverride);
   Result := FClock.MonotonicNanoseconds;
 end;
 

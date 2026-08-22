@@ -87,9 +87,9 @@ type Classification = {
  * Differential suite classification. `kind` names why the oracle was chosen:
  * - `language` — ECMAScript syntax/semantics, where bun is a sound oracle and
  *   the testing API is incidental.
- * - `matcher` / `lifecycle` / `mocks` — testing-API semantics, where the
- *   product target is Vitest-exact behaviour and only vitest may decide. The
- *   `mocks` suite is not there yet: see its entry below.
+ * - `matcher` / `lifecycle` / `mocks` / `timers` — testing-API semantics, where
+ *   the product target is Vitest-exact behaviour and only vitest may decide.
+ *   The `mocks` suite is not there yet: see its entry below.
  */
 const CLASSIFICATION: Record<string, Classification> = {
   "a-typesyntax.test.ts": { kind: "language", bun: "gate", vitest: "skip" },
@@ -196,6 +196,14 @@ const CLASSIFICATION: Record<string, Classification> = {
   // and the testing API is incidental. Vitest is skipped for the same reason as
   // the other language suites.
   "q-reflectconstruct.test.js": { kind: "language", bun: "gate", vitest: "skip" },
+  // Fake timers. Vitest gates: what a tick does — the ordering, the microtask
+  // interleaving an `Async` advance adds, the loop guard, and how setSystemTime
+  // treats pending timers — is testing-API semantics decided by Vitest's own
+  // clock (@sinonjs/fake-timers), not by ECMAScript. Bun is skipped for the
+  // reason e-mocks records: the suite imports `vi` from a bare `vitest`
+  // specifier, which drops bun's injected globals and dies on
+  // `describe is not defined`.
+  "r-faketimers.test.js": { kind: "timers", bun: "skip", vitest: "gate" },
 };
 
 type Verdict = {
