@@ -38,6 +38,18 @@ resourcestring
   // Type errors — constructors
   SErrorNotConstructor = '''%s'' is not a constructor';
   SErrorValueNotConstructor = '%s is not a constructor';
+  SErrorSuperNotConstructor = 'Super constructor is not a constructor';
+
+  { ES2026 §10.2.2 [[Construct]] step 13.c and §13.3.7.1 SuperCall: a derived
+    constructor leaves `this` uninitialized until super() returns, and both
+    reading `this` and returning report it. Which of the two fires first is an
+    implementation detail — the interpreter reaches the return check for a body
+    that never touches `this`, the compiler's OP_CHECK_DERIVED_THIS reaches the
+    access check for one that does — so both modes and both checks share this
+    one message rather than describing the route they took. Node v24.0.1 words
+    it the same way for the same reason. }
+  SErrorSuperConstructorNotCalled = 'Must call super constructor in derived ' +
+    'class before accessing ''this'' or returning from derived constructor';
 
   // Type errors — iterables and spread
   SErrorSpreadRequiresIterable = 'Spread syntax requires an iterable';
