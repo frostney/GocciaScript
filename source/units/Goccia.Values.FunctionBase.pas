@@ -562,36 +562,49 @@ var
   Args: TGocciaArgumentsCollection;
   Handler: TGocciaValue;
   HandlerResult: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if not (ATarget is TGocciaObjectValue) then
     ThrowTypeError('Right-hand side of instanceof is not an object',
       'use a constructor function or an object with Symbol.hasInstance');
 
-  Handler := TGocciaObjectValue(ATarget).GetSymbolProperty(
-    TGocciaSymbolValue.WellKnownHasInstance);
-  if Assigned(Handler) and
-     not (Handler is TGocciaUndefinedLiteralValue) and
-     not (Handler is TGocciaNullLiteralValue) then
-  begin
-    if not Handler.IsCallable then
-      ThrowTypeError('Symbol.hasInstance must be callable',
-        'set Symbol.hasInstance to a function or remove it');
+  // The instance can be a boxed primitive — a fresh, native-only object — and
+  // the Symbol.hasInstance lookup below can run a user getter or proxy trap. Root
+  // the instance across that lookup so a collection forced from it cannot sweep
+  // the instance before it is handed to the handler. (The ordinary path exits via
+  // a fresh number never being TGocciaObjectValue, but the lookup itself is the
+  // re-entry point, so the root must span it.)
+  Roots.Initialize;
+  Roots.Add(AInstance);
+  try
+    Handler := TGocciaObjectValue(ATarget).GetSymbolProperty(
+      TGocciaSymbolValue.WellKnownHasInstance);
+    if Assigned(Handler) and
+       not (Handler is TGocciaUndefinedLiteralValue) and
+       not (Handler is TGocciaNullLiteralValue) then
+    begin
+      if not Handler.IsCallable then
+        ThrowTypeError('Symbol.hasInstance must be callable',
+          'set Symbol.hasInstance to a function or remove it');
 
-    Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
-    try
-      Args.Add(AInstance);
-      HandlerResult := DispatchCall(Handler, Args, ATarget);
-      Exit(HandlerResult.ToBooleanLiteral.Value);
-    finally
-      Args.Free;
+      Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
+      try
+        Args.Add(AInstance);
+        HandlerResult := DispatchCall(Handler, Args, ATarget);
+        Exit(HandlerResult.ToBooleanLiteral.Value);
+      finally
+        Args.Free;
+      end;
     end;
+
+    if not IsCallableForHasInstance(ATarget) then
+      ThrowTypeError('Right-hand side of instanceof is not callable',
+        'use a constructor function or define Symbol.hasInstance');
+
+    Result := OrdinaryHasInstance(ATarget, AInstance);
+  finally
+    Roots.Clear;
   end;
-
-  if not IsCallableForHasInstance(ATarget) then
-    ThrowTypeError('Right-hand side of instanceof is not callable',
-      'use a constructor function or define Symbol.hasInstance');
-
-  Result := OrdinaryHasInstance(ATarget, AInstance);
 end;
 
 { TGocciaFunctionBase }
