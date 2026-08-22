@@ -148,6 +148,33 @@ function IsValidExportsTarget(const ATarget: string): Boolean;
   first, so it compares real host paths rather than spellings. }
 function IsPathInsideDirectory(const APath, ADirectory: string): Boolean;
 
+{ True when APath lives strictly beneath ADirectory *on disk*, not merely in
+  spelling.
+
+  IsPathInsideDirectory compares normalized path strings, and a string
+  comparison cannot see a symbolic link: a package that ships
+  `linked/out.js -> ../../../outside.js` normalizes to a path inside the
+  package while naming a file outside it. The documented guarantee is that
+  nothing outside the package can satisfy an import of it, so the final gate
+  has to be phrased physically. This follows ADR 0071's precedent, where the
+  sandbox refuses a symlinked seed import rather than trusting where its name
+  appears to sit.
+
+  Both sides are canonicalized — the package root as well as the candidate —
+  which is what keeps pnpm-style layouts working. There `node_modules/<pkg>` is
+  itself a link into a content-addressed store, so canonicalizing only the
+  candidate would put every file in every pnpm package outside its own root.
+  Resolving the root too moves the whole comparison into the store, where a
+  store-internal file passes and a link that leaves the store still does not.
+
+  When either side cannot be canonicalized the lexical verdict stands alone.
+  That is the state of things on a host with no canonicalization (see
+  CanonicalHostPath) — never a weaker answer than before this check existed,
+  but the physical guarantee is only as good as the host's ability to resolve
+  links. docs/module-resolution.md records which hosts those are. }
+function IsPathPhysicallyInsideDirectory(const APath,
+  ADirectory: string): Boolean;
+
 { Heuristic CommonJS detection over module source text.
 
   True when the source carries CommonJS markers (`require(...)`,
@@ -640,6 +667,26 @@ begin
   Path := ExpandHostFileName(APath);
   Directory := IncludeTrailingPathDelimiter(ExpandHostFileName(ADirectory));
   Result := Copy(Path, 1, Length(Directory)) = Directory;
+end;
+
+function IsPathPhysicallyInsideDirectory(const APath,
+  ADirectory: string): Boolean;
+var
+  CanonicalDirectory, CanonicalPath: string;
+begin
+  { The lexical check still runs, and first: it is the cheaper refusal, and it
+    is the only one that can speak about a path the host cannot resolve. }
+  if not IsPathInsideDirectory(APath, ADirectory) then
+    Exit(False);
+
+  CanonicalDirectory := CanonicalHostPath(ADirectory);
+  CanonicalPath := CanonicalHostPath(APath);
+  if (CanonicalDirectory = '') or (CanonicalPath = '') then
+    Exit(True);
+
+  Result := Copy(CanonicalPath, 1,
+    Length(IncludeTrailingPathDelimiter(CanonicalDirectory))) =
+    IncludeTrailingPathDelimiter(CanonicalDirectory);
 end;
 
 { Walks a condition value — a string, a nested condition object, or an array of

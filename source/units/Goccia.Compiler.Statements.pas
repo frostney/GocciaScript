@@ -5927,20 +5927,36 @@ var
   ClosedCount, I: Integer;
   ThisReg: UInt16;
   OldRejectArgumentsInDirectEval: Boolean;
+  StrictCtx: TGocciaCompilationContext;
 begin
   OldRejectArgumentsInDirectEval := ACtx.Template.RejectArgumentsInDirectEval;
   ACtx.Template.RejectArgumentsInDirectEval := True;
   ACtx.Scope.BeginScope;
+  { ES2026 §15.7.1: a ClassBody is strict-mode code whatever the enclosing
+    script's mode is. An instance field initializer gets that for free — it is
+    compiled into the `<fields>` child template, whose StrictCode defaults to
+    True — but a static one is emitted straight into the enclosing template, so
+    under the non-strict compatibility profile it inherited the script's sloppy
+    flags and an assignment to an undeclared name compiled to a global create
+    instead of a throw. Both the compiler-wide flag and the context copy are
+    cleared, the same pair the computed-element-key path above clears. }
+  StrictCtx := ACtx;
+  StrictCtx.NonStrictMode := False;
+  StrictCtx.CompatibilityNonStrictMode := False;
+  if Assigned(ACtx.SetNonStrictMode) then
+    ACtx.SetNonStrictMode(False);
   try
     ThisReg := ACtx.Scope.DeclareLocal(KEYWORD_THIS, False);
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ThisReg, AClassReg, 0));
-    CompileFieldValueWithInferredName(ACtx, AExpression, ADest,
+    CompileFieldValueWithInferredName(StrictCtx, AExpression, ADest,
       AInferredName);
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx,
         EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
   finally
+    if Assigned(ACtx.SetNonStrictMode) then
+      ACtx.SetNonStrictMode(ACtx.CompatibilityNonStrictMode);
     ACtx.Template.RejectArgumentsInDirectEval :=
       OldRejectArgumentsInDirectEval;
   end;

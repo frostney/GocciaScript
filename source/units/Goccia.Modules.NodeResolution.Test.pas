@@ -3,8 +3,11 @@ program Goccia.Modules.NodeResolution.Test;
 {$I Goccia.inc}
 
 uses
+  {$IFDEF UNIX}BaseUnix,{$ENDIF}
+  Classes,
   SysUtils,
 
+  FileUtils,
   TestingPascalLibrary,
 
   Goccia.Modules.NodeResolution,
@@ -13,6 +16,12 @@ uses
 type
   TNodeResolutionTests = class(TTestSuite)
   private
+    FTempDirectories: TStringList;
+
+    function CreateTempDirectory: string;
+    procedure DeleteDirectoryTree(const APath: string);
+    procedure WriteFixtureFile(const APath, AText: string);
+    function TryCreateSymlink(const ATarget, ALinkPath: string): Boolean;
     procedure TestSplitsPlainPackageName;
     procedure TestSplitsPackageSubpath;
     procedure TestSplitsScopedPackageName;
@@ -42,6 +51,10 @@ type
     procedure TestNodeModulesSegmentIsRejected;
     procedure TestContainmentAcceptsPathsInsideTheDirectory;
     procedure TestContainmentRejectsSiblingAndEscapedPaths;
+    procedure TestPhysicalContainmentRejectsAnEscapingChildLink;
+    procedure TestPhysicalContainmentAllowsAnInPackageLink;
+    procedure TestPhysicalContainmentAllowsAStoreLinkedPackageRoot;
+    procedure TestPhysicalContainmentRejectsAnEscapeFromALinkedRoot;
 
     procedure TestModuleFieldIsPreferredOverMain;
     procedure TestMainIsUsedWhenNoModuleField;
@@ -72,8 +85,90 @@ type
     procedure TestNestedTemplateLiteralsAreTracked;
     procedure TestUnterminatedTemplateFallsBackToTheRawScan;
   public
+    procedure BeforeAll; override;
+    procedure AfterAll; override;
     procedure SetupTests; override;
   end;
+
+procedure TNodeResolutionTests.BeforeAll;
+begin
+  inherited BeforeAll;
+  FTempDirectories := TStringList.Create;
+end;
+
+procedure TNodeResolutionTests.AfterAll;
+var
+  I: Integer;
+begin
+  for I := 0 to FTempDirectories.Count - 1 do
+    DeleteDirectoryTree(FTempDirectories[I]);
+  FTempDirectories.Free;
+  inherited AfterAll;
+end;
+
+function TNodeResolutionTests.CreateTempDirectory: string;
+begin
+  Result := IncludeTrailingPathDelimiter(GetTempDir(False)) +
+    'goccia-node-containment-' + IntToStr(Random(MaxInt));
+  { The name is deterministic — nothing seeds the generator — so a run that
+    died before its teardown would otherwise poison every run after it: a
+    symlink fixture cannot be created over one that is already there, and the
+    test would fail on the leftover rather than on the code. }
+  DeleteDirectoryTree(Result);
+  ForceDirectories(Result);
+  FTempDirectories.Add(Result);
+end;
+
+procedure TNodeResolutionTests.DeleteDirectoryTree(const APath: string);
+var
+  EntryPath: string;
+  SearchRec: TSearchRec;
+begin
+  if not DirectoryExists(APath) then
+    Exit;
+
+  { faSymLink has to be asked for: without it FindFirst stats through a link
+    and silently drops any that no longer resolves, which is exactly what the
+    escape fixtures leave behind once their target is gone. }
+  if FindFirst(IncludeTrailingPathDelimiter(APath) + '*',
+    faAnyFile or faSymLink, SearchRec) = 0 then
+  begin
+    repeat
+      if (SearchRec.Name = '.') or (SearchRec.Name = '..') then
+        Continue;
+
+      EntryPath := IncludeTrailingPathDelimiter(APath) + SearchRec.Name;
+      { A symlink to a directory must be unlinked, not descended into and
+        emptied — otherwise the teardown deletes whatever it points at. }
+      if ((SearchRec.Attr and faDirectory) = faDirectory) and
+         (not FileUtils.HostPathIsSymlink(EntryPath)) then
+        DeleteDirectoryTree(EntryPath)
+      else
+        DeleteFile(EntryPath);
+    until FindNext(SearchRec) <> 0;
+    FindClose(SearchRec);
+  end;
+
+  RemoveDir(APath);
+end;
+
+procedure TNodeResolutionTests.WriteFixtureFile(const APath, AText: string);
+begin
+  ForceDirectories(ExtractFileDir(APath));
+  FileUtils.WriteUTF8FileText(APath, AText);
+end;
+
+function TNodeResolutionTests.TryCreateSymlink(const ATarget,
+  ALinkPath: string): Boolean;
+begin
+  {$IFDEF UNIX}
+  Result := fpSymlink(PAnsiChar(AnsiString(ATarget)),
+    PAnsiChar(AnsiString(ALinkPath))) = 0;
+  {$ELSE}
+  { Only the UNIX cases are registered; see SetupTests. }
+  Result := False;
+  {$ENDIF}
+end;
 
 procedure TNodeResolutionTests.SetupTests;
 begin
@@ -125,6 +220,33 @@ begin
     TestContainmentAcceptsPathsInsideTheDirectory);
   Test('Containment rejects sibling and escaped paths',
     TestContainmentRejectsSiblingAndEscapedPaths);
+  { Real symlinks on disk. Creating one needs an API this build only has on
+    UNIX, and on Windows it also needs a privilege an unelevated CI job does
+    not hold, so the cases are registered as skipped there rather than
+    reporting a pass they never ran. }
+  {$IFDEF UNIX}
+  Test('Physical containment rejects a package child linked outside it',
+    TestPhysicalContainmentRejectsAnEscapingChildLink);
+  Test('Physical containment allows a link inside the package',
+    TestPhysicalContainmentAllowsAnInPackageLink);
+  Test('Physical containment allows a store-linked package root',
+    TestPhysicalContainmentAllowsAStoreLinkedPackageRoot);
+  Test('Physical containment rejects an escape from a store-linked root',
+    TestPhysicalContainmentRejectsAnEscapeFromALinkedRoot);
+  {$ELSE}
+  Skip('Physical containment rejects a package child linked outside it',
+    TestPhysicalContainmentRejectsAnEscapingChildLink,
+    'creating a symlink is not available on this platform');
+  Skip('Physical containment allows a link inside the package',
+    TestPhysicalContainmentAllowsAnInPackageLink,
+    'creating a symlink is not available on this platform');
+  Skip('Physical containment allows a store-linked package root',
+    TestPhysicalContainmentAllowsAStoreLinkedPackageRoot,
+    'creating a symlink is not available on this platform');
+  Skip('Physical containment rejects an escape from a store-linked root',
+    TestPhysicalContainmentRejectsAnEscapeFromALinkedRoot,
+    'creating a symlink is not available on this platform');
+  {$ENDIF}
 
   Test('module field is preferred over main', TestModuleFieldIsPreferredOverMain);
   Test('main is used when there is no module field',
@@ -565,6 +687,106 @@ begin
   Expect<Boolean>(IsPathInsideDirectory(ParentDirectory + 'pkg-evil' +
     PathDelim + 'x.js', PackageDirectory)).ToBe(False);
   Expect<Boolean>(IsPathInsideDirectory('', PackageDirectory)).ToBe(False);
+end;
+
+{ ── Physical containment ───────────────────────────────────── }
+
+procedure TNodeResolutionTests.TestPhysicalContainmentRejectsAnEscapingChildLink;
+var
+  Candidate, PackageDirectory, Root: string;
+begin
+  { The shape a package would ship to escape itself: a link whose name sits
+    inside the package and whose target does not. The lexical check passes it,
+    which is exactly why the physical one exists. }
+  Root := IncludeTrailingPathDelimiter(CreateTempDirectory);
+  PackageDirectory := Root + 'pkg';
+  WriteFixtureFile(Root + 'outside.js', 'export const secret = 1;');
+  ForceDirectories(PackageDirectory + PathDelim + 'linked');
+  Candidate := PackageDirectory + PathDelim + 'linked' + PathDelim + 'out.js';
+
+  Expect<Boolean>(TryCreateSymlink('..' + PathDelim + '..' + PathDelim +
+    'outside.js', Candidate)).ToBe(True);
+
+  Expect<Boolean>(IsPathInsideDirectory(Candidate,
+    PackageDirectory)).ToBe(True);
+  Expect<Boolean>(IsPathPhysicallyInsideDirectory(Candidate,
+    PackageDirectory)).ToBe(False);
+end;
+
+procedure TNodeResolutionTests.TestPhysicalContainmentAllowsAnInPackageLink;
+var
+  Candidate, PackageDirectory, Root: string;
+begin
+  { A package is free to link to its own files, and plenty do. Only leaving the
+    package is refused. }
+  Root := IncludeTrailingPathDelimiter(CreateTempDirectory);
+  PackageDirectory := Root + 'pkg';
+  WriteFixtureFile(PackageDirectory + PathDelim + 'src' + PathDelim +
+    'real.js', 'export const value = 1;');
+  Candidate := PackageDirectory + PathDelim + 'alias.js';
+
+  Expect<Boolean>(TryCreateSymlink('src' + PathDelim + 'real.js',
+    Candidate)).ToBe(True);
+
+  Expect<Boolean>(IsPathPhysicallyInsideDirectory(Candidate,
+    PackageDirectory)).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestPhysicalContainmentAllowsAStoreLinkedPackageRoot;
+var
+  Candidate, PackageDirectory, Root, StorePackage: string;
+begin
+  { pnpm's layout: node_modules/<pkg> is itself a link into a
+    content-addressed store, and the package's real files live there.
+    Canonicalizing the candidate alone would put every one of them outside
+    their own package; canonicalizing the root too moves the comparison into
+    the store, where they belong. }
+  Root := IncludeTrailingPathDelimiter(CreateTempDirectory);
+  StorePackage := Root + 'store' + PathDelim + 'pkg@1.0.0' + PathDelim +
+    'node_modules' + PathDelim + 'pkg';
+  WriteFixtureFile(StorePackage + PathDelim + 'index.js',
+    'export const value = 1;');
+  WriteFixtureFile(StorePackage + PathDelim + 'lib' + PathDelim + 'deep.js',
+    'export const deep = 1;');
+  ForceDirectories(Root + 'node_modules');
+  PackageDirectory := Root + 'node_modules' + PathDelim + 'pkg';
+
+  Expect<Boolean>(TryCreateSymlink(StorePackage, PackageDirectory)).ToBe(True);
+
+  Candidate := PackageDirectory + PathDelim + 'index.js';
+  Expect<Boolean>(IsPathPhysicallyInsideDirectory(Candidate,
+    PackageDirectory)).ToBe(True);
+
+  Candidate := PackageDirectory + PathDelim + 'lib' + PathDelim + 'deep.js';
+  Expect<Boolean>(IsPathPhysicallyInsideDirectory(Candidate,
+    PackageDirectory)).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestPhysicalContainmentRejectsAnEscapeFromALinkedRoot;
+var
+  Candidate, PackageDirectory, Root, StorePackage: string;
+begin
+  { The two links composed: a store-linked package root whose store copy ships
+    an escaping child. Following only one of them would let this through. }
+  Root := IncludeTrailingPathDelimiter(CreateTempDirectory);
+  StorePackage := Root + 'store' + PathDelim + 'pkg@1.0.0' + PathDelim +
+    'node_modules' + PathDelim + 'pkg';
+  WriteFixtureFile(StorePackage + PathDelim + 'index.js',
+    'export const value = 1;');
+  WriteFixtureFile(Root + 'store' + PathDelim + 'other.js',
+    'export const secret = 1;');
+  ForceDirectories(Root + 'node_modules');
+  PackageDirectory := Root + 'node_modules' + PathDelim + 'pkg';
+
+  Expect<Boolean>(TryCreateSymlink(StorePackage, PackageDirectory)).ToBe(True);
+  Expect<Boolean>(TryCreateSymlink('..' + PathDelim + '..' + PathDelim + '..' +
+    PathDelim + 'other.js', StorePackage + PathDelim + 'escape.js')).ToBe(True);
+
+  Candidate := PackageDirectory + PathDelim + 'escape.js';
+  Expect<Boolean>(IsPathInsideDirectory(Candidate,
+    PackageDirectory)).ToBe(True);
+  Expect<Boolean>(IsPathPhysicallyInsideDirectory(Candidate,
+    PackageDirectory)).ToBe(False);
 end;
 
 { ── Target selection ───────────────────────────────────────── }
