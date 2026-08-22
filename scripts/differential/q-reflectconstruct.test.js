@@ -403,3 +403,164 @@ describe("other entries into Construct build the same instance", () => {
     expect(Object.getPrototypeOf(reflected)).toBe(Object.getPrototypeOf(built));
   });
 });
+
+describe("construction after Object.setPrototypeOf on the constructor", () => {
+  // ES2026 §13.3.7.3 GetSuperConstructor reads the active function object's
+  // [[GetPrototypeOf]] when super() runs, so a retarget moves every hop above
+  // it — and can point super() at something that is not a constructor at all,
+  // which §13.3.7.1 step 3 rejects. Every case here agrees under node, bun and
+  // goccia.
+  const expectSuperTypeError = (build) => {
+    let name = "<no error>";
+    try {
+      build();
+    } catch (error) {
+      name = error.name;
+    }
+    expect(name).toBe("TypeError");
+  };
+
+  test("a plain object is not a super constructor", () => {
+    class Declared {
+      constructor() {
+        this.who = "declared";
+      }
+    }
+    class Sub extends Declared {}
+    Object.setPrototypeOf(Sub, {});
+
+    expectSuperTypeError(() => new Sub());
+    expectSuperTypeError(() => Reflect.construct(Sub, []));
+  });
+
+  test("null leaves nothing to resolve super() through", () => {
+    class Declared {}
+    class Sub extends Declared {}
+    Object.setPrototypeOf(Sub, null);
+
+    expectSuperTypeError(() => new Sub());
+  });
+
+  test("a retarget crossing the declared chain still terminates", () => {
+    // The mutable [[Prototype]] relation and the fixed declared-superclass
+    // relation are each acyclic; a resolver that mixed them walked their union
+    // and could close on itself.
+    class Base {
+      b = 1;
+    }
+    class Middle extends Base {
+      m = 2;
+    }
+    class Leaf extends Middle {
+      l = 3;
+    }
+    Object.setPrototypeOf(Leaf, {});
+    Object.setPrototypeOf(Middle, Leaf);
+
+    expectSuperTypeError(() => new Leaf());
+  });
+
+  test("retargeting onto a built-in runs it and drops the declared super", () => {
+    class Declared {
+      constructor() {
+        this.who = "declared";
+      }
+    }
+    class Sub extends Declared {}
+    Object.setPrototypeOf(Sub, Error);
+
+    const instance = new Sub("boom");
+    expect(instance.message).toBe("boom");
+    expect(instance.who).toBe(undefined);
+  });
+
+  test("a retarget part-way up moves everything above it", () => {
+    class Base {
+      b = "b";
+    }
+    class Middle extends Base {
+      m = "m";
+    }
+    class Leaf extends Middle {
+      l = "l";
+    }
+    class Alt {
+      a = "a";
+    }
+    Object.setPrototypeOf(Middle, Alt);
+
+    expect(Object.keys(new Leaf())).toEqual(["a", "m", "l"]);
+  });
+
+  test("an explicit leaf constructor's super() follows the retarget too", () => {
+    class Base {
+      b = "b";
+    }
+    class Middle extends Base {
+      m = "m";
+    }
+    class Leaf extends Middle {
+      l = "l";
+
+      constructor() {
+        super();
+      }
+    }
+    class Alt {
+      a = "a";
+    }
+    Object.setPrototypeOf(Middle, Alt);
+
+    expect(Object.keys(new Leaf())).toEqual(["a", "m", "l"]);
+  });
+});
+
+describe("implicit constructors over a built-in chain", () => {
+  test("every class between the subclass and the built-in contributes", () => {
+    class Middle extends Array {
+      m = "m";
+    }
+    class Leaf extends Middle {
+      l = "l";
+    }
+
+    expect(Object.keys(new Leaf())).toEqual(["m", "l"]);
+    expect(Object.keys(Reflect.construct(Leaf, []))).toEqual(["m", "l"]);
+  });
+
+  test("a borrowed constructor's super() runs the executor once", () => {
+    class Tagged extends Promise {
+      tag = "t";
+
+      constructor(executor) {
+        super(executor);
+      }
+    }
+    class Borrowing extends Tagged {}
+
+    let runs = 0;
+    const instance = new Borrowing((resolve) => {
+      runs += 1;
+      resolve(1);
+    });
+    expect(runs).toBe(1);
+    expect(instance.tag).toBe("t");
+  });
+
+  test("a foreign newTarget decides where Map looks its adder up", () => {
+    class First extends Map {}
+    class Second extends First {}
+    class Foreign {}
+
+    let name = "<no error>";
+    try {
+      Reflect.construct(Second, [[[1, 2]]], Foreign);
+    } catch (error) {
+      name = error.name;
+    }
+    expect(name).toBe("TypeError");
+
+    const empty = Reflect.construct(Second, [], Foreign);
+    expect(Object.getPrototypeOf(empty)).toBe(Foreign.prototype);
+  });
+});
