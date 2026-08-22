@@ -920,8 +920,10 @@ begin
     end;
 
     Expect<Boolean>(Raised).ToBe(True);
-    { The offset is still reported so the failure is diagnosable. }
-    Expect<Boolean>(Pos('byte', MessageValue) > 0).ToBe(True);
+    { The exact zero-based byte offset TryDecodeUTF8 reports (the $FF is the
+      fourth byte, index 3) is preserved verbatim so the failure is
+      diagnosable; a wrong offset must fail this, not just a missing word. }
+    Expect<string>(MessageValue).ToBe('Invalid UTF-8 at byte 3');
     { The resolved host path must not leak into a guest-reachable message. }
     Expect<Boolean>(Pos(BadPath, MessageValue) > 0).ToBe(False);
     Expect<Boolean>(Pos('invalid-utf8.txt', MessageValue) > 0).ToBe(False);

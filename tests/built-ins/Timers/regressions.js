@@ -358,6 +358,58 @@ describe("a nested advance that self-clears an interval keeps the outer frame's 
   });
 });
 
+describe("an out-of-range clock target is refused before any state changes", () => {
+  afterEach(() => {
+    useRealTimers();
+  });
+
+  // 1e13 ms is finite, so it clears the finite-epoch gate, but it exceeds the
+  // ~9.2e12 ms the Int64 nanosecond clock can hold. The range check used to run
+  // only at publish time — AFTER FNow and every pending timer had already been
+  // shifted — so a caught rejection left FNow poisoned and every later advance
+  // republished it and threw again. The check now runs before any mutation.
+  const OUT_OF_RANGE = 1e13;
+
+  test("setSystemTime rejects an out-of-range target with a RangeError", () => {
+    useFakeTimers();
+
+    expect(() => setSystemTime(OUT_OF_RANGE)).toThrow(RangeError);
+    expect(() => setSystemTime(OUT_OF_RANGE)).toThrow("nanosecond clock");
+  });
+
+  test("a rejected setSystemTime leaves the clock and timers untouched", () => {
+    useFakeTimers();
+    setSystemTime(10);
+    const log = [];
+    setTimeout(() => log.push(Date.now()), 5);
+
+    try {
+      setSystemTime(OUT_OF_RANGE);
+    } catch (error) {
+      // refused, as asserted above
+    }
+
+    // The clock never moved and the pending timer's due time never shifted, so
+    // a following valid advance still fires it at exactly 15 rather than
+    // throwing on a poisoned FNow.
+    expect(Date.now()).toBe(10);
+    advanceTimersByTime(5);
+    expect(log).toEqual([15]);
+  });
+
+  test("useFakeTimers rejects an out-of-range start", () => {
+    expect(() => useFakeTimers(OUT_OF_RANGE)).toThrow(RangeError);
+  });
+
+  test("a rejected advance leaves the clock alone", () => {
+    useFakeTimers();
+    setSystemTime(0);
+
+    expect(() => advanceTimersByTime(OUT_OF_RANGE)).toThrow(RangeError);
+    expect(Date.now()).toBe(0);
+  });
+});
+
 describe("the timer globals are the runner's", () => {
   test("they are reported as runtime globals", () => {
     const names = Goccia.runtimeGlobals;

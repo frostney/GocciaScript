@@ -6808,6 +6808,8 @@ var
   InitializerReplayReceiver: TGocciaObjectValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
+  PreviousImplicitSuperCalled: Boolean;
+  ImplicitSuperCalled: Boolean;
   DelayNativePrototypeLookup: Boolean;
   NativeInstanceInitialized: Boolean;
   NativeInstanceConstructedByNativeSuper: Boolean;
@@ -7143,14 +7145,25 @@ begin
               super()-called flag lives there, not on this frame's FVM. When the
               two are the same VM this is identical; when they differ (a
               superclass owned by another VM), reading this frame's flag reported
-              a stale value and raised a false super-not-called error. }
+              a stale value and raised a false super-not-called error. Save and
+              restore that other VM's flag around the call — mirroring
+              TGocciaVMSuperConstructorValue.Call — so this construction never
+              leaks its reset into an unrelated in-flight construction on it. }
+            PreviousImplicitSuperCalled :=
+              TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled;
             TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled := False;
-            ConstructedValue := TGocciaVMClassValue(ImplicitSuperClass).FVM.InvokeFunctionValue(
-              TGocciaVMClassValue(ImplicitSuperClass).FConstructorValue,
-              AArguments, Instance);
+            try
+              ConstructedValue := TGocciaVMClassValue(ImplicitSuperClass).FVM.InvokeFunctionValue(
+                TGocciaVMClassValue(ImplicitSuperClass).FConstructorValue,
+                AArguments, Instance);
+              ImplicitSuperCalled :=
+                TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled;
+            finally
+              TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled :=
+                PreviousImplicitSuperCalled;
+            end;
             RequireImplicitSuperConstructorInitializedThis(ImplicitSuperClass,
-              ConstructedValue,
-              TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled);
+              ConstructedValue, ImplicitSuperCalled);
             if TGocciaVMClassValue(ImplicitSuperClass).FConstructorValue is TGocciaBytecodeFunctionValue then
               ConstructorThisValue := RegisterToValue(
                 TGocciaVMClassValue(ImplicitSuperClass).FVM.FLastClosureThisValue)
@@ -7289,6 +7302,7 @@ var
   InitializerReplayReceiver: TGocciaObjectValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
+  PreviousImplicitSuperCalled: Boolean;
   NativeInstanceConstructedByNativeSuper: Boolean;
   Chain: TGocciaImplicitConstructorChain;
   PreviousPendingNewTarget: TGocciaValue;
@@ -7622,8 +7636,16 @@ begin
               TGocciaVMClassValue(ImplicitSuperClass).FVM.FPendingNewTarget := Self;
               { The super()-called flag belongs to the VM that runs the superclass
                 constructor (AImplicitSuperClass.FVM), not this frame's FVM; they
-                differ when the superclass is owned by another VM. }
+                differ when the superclass is owned by another VM. Save and
+                restore that VM's flag around the call — mirroring
+                TGocciaVMSuperConstructorValue.Call — so resetting it here never
+                leaks into an unrelated in-flight construction on that VM. Every
+                branch reads the flag inside the try, before the finally restores
+                the saved value. }
+              PreviousImplicitSuperCalled :=
+                TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled;
               TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled := False;
+              try
               if TGocciaVMClassValue(ImplicitSuperClass).FConstructorValue is TGocciaBytecodeFunctionValue then
               begin
                 BytecodeSuperConstructor := TGocciaBytecodeFunctionValue(
@@ -7675,6 +7697,10 @@ begin
                   ImplicitSuperClass, ConstructedValue,
                   TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled);
                 ApplyReplacementResult(ConstructedValue);
+              end;
+              finally
+                TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled :=
+                  PreviousImplicitSuperCalled;
               end;
             end
             else

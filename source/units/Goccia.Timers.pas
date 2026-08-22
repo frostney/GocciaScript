@@ -372,14 +372,24 @@ const
 threadvar
   TimerQueueThreadInstance: TGocciaTimerQueue;
 
+{ Rejects a millisecond clock value that the Int64 nanosecond clock cannot
+  represent. Kept separate from the conversion so a caller can preflight a
+  target value BEFORE mutating any timer state: PublishClock converts FNow /
+  FMockedDate on every state change, so a value that only fails at conversion
+  time would otherwise be committed first and poison every later publish. }
+procedure RequireClockInRange(const AMilliseconds: Double);
+begin
+  if IsNan(AMilliseconds) or IsInfinite(AMilliseconds) or
+     (Abs(AMilliseconds) > MAX_CLOCK_MILLISECONDS) then
+    ThrowRangeError(CLOCK_OUT_OF_RANGE_MESSAGE, CLOCK_OUT_OF_RANGE_SUGGESTION);
+end;
+
 { Converts a millisecond clock value to the Int64 nanosecond count the host
   environment is published with, rejecting a value that would overflow Int64
   with a RangeError rather than wrapping. }
 function ClockMillisecondsToNanoseconds(const AMilliseconds: Double): Int64;
 begin
-  if IsNan(AMilliseconds) or IsInfinite(AMilliseconds) or
-     (Abs(AMilliseconds) > MAX_CLOCK_MILLISECONDS) then
-    ThrowRangeError(CLOCK_OUT_OF_RANGE_MESSAGE, CLOCK_OUT_OF_RANGE_SUGGESTION);
+  RequireClockInRange(AMilliseconds);
   Result := Round(AMilliseconds * NANOSECONDS_PER_MILLISECOND);
 end;
 
@@ -1010,6 +1020,16 @@ begin
     TickTo := TickTo + 1;
     NanosTotal := NanosTotal - NANOSECONDS_PER_MILLISECOND;
   end;
+  { Reject a target the published clock cannot represent before banking the
+    fraction or firing a single timer, so a rejected advance leaves the queue
+    unchanged rather than half-updated. Every intermediate SetNow lands between
+    FNow and TickTo, so both endpoints being in range covers them. The
+    monotonic value shifts with TickTo by the same FAdjusted+FStart offset. }
+  if FFaking then
+  begin
+    RequireClockInRange(TickTo);
+    RequireClockInRange(TickTo - FAdjusted - FStart);
+  end;
   FNanos := NanosTotal;
 
   TickFrom := FNow;
@@ -1251,6 +1271,10 @@ end;
 procedure TGocciaTimerQueue.BeginFakeTimers(const ANowMilliseconds: Double);
 begin
   RequireFiniteEpoch(ANowMilliseconds);
+  { Reject a start the published clock cannot represent before retiring the
+    previous queue or installing the fresh clock, so a rejected useFakeTimers()
+    leaves whatever was in place untouched. The monotonic value starts at 0. }
+  RequireClockInRange(ANowMilliseconds);
   EnsureRoots;
   { Re-enabling installs a fresh clock: whatever was scheduled against the
     previous one is discarded rather than carried over, which is what a second
@@ -1310,6 +1334,12 @@ var
   I: Integer;
 begin
   RequireFiniteEpoch(AEpochMilliseconds);
+  { Preflight the published wall clock before touching any state: both branches
+    below publish AEpochMilliseconds (as FMockedDate or as FNow), and the
+    faking branch leaves the monotonic value FNow-FAdjusted-FStart unchanged.
+    Rejecting an out-of-range target here keeps the queue exactly as it was
+    rather than leaving FNow/FMockedDate poisoned for every later publish. }
+  RequireClockInRange(AEpochMilliseconds);
 
   if not FFaking then
   begin
