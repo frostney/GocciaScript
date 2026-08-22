@@ -3316,8 +3316,6 @@ console.log("Assertion failure text...");
       ["vi.hoisted(() => ({}))", "vi.hoisted is not supported"],
       ["vi.importMock('./x.js')", "vi.importMock is not supported"],
       ["vi.setConfig({})", "vi.setConfig is not supported"],
-      ["vi.useFakeTimers()", "vi.useFakeTimers is not supported"],
-      ["vi.advanceTimersByTime(1)", "vi.advanceTimersByTime is not supported"],
       ["vi.importActual('./x.js')", "vi.importActual is not supported"],
       ["vi.resetModules()", "vi.resetModules is not supported"],
       ["vi.doMock('./x.js')", "vi.doMock is not supported"],

@@ -26,6 +26,7 @@ uses
   Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
   Goccia.Timeout,
+  Goccia.Timers,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.PromiseValue,
@@ -49,6 +50,34 @@ begin
   while Assigned(APromise) and (APromise.State = gpsPending) and
         Assigned(Queue) and Queue.HasPending do
     Queue.DrainOneJob;
+end;
+
+{ A real-mode timer is the one continuation an await can be waiting on that no
+  amount of microtask draining will produce. GocciaScript has no host event
+  loop to hand control back to, so the awaiting frame runs the timer queue
+  itself: the virtual clock jumps to the next due timer, the timer fires, its
+  microtasks drain, and the loop asks again. No real time passes.
+
+  Under fake timers this does nothing. A suite that turned the clock over to
+  `vi` decides when timers run, and an await that silently advanced it would
+  take that decision away. }
+procedure RunTimersUntilPromiseSettled(const APromise: TGocciaPromiseValue);
+var
+  Iterations: Integer;
+  Timers: TGocciaTimerQueue;
+begin
+  Timers := TGocciaTimerQueue.Instance;
+  if not Assigned(Timers) then
+    Exit;
+  Iterations := 0;
+  while Assigned(APromise) and (APromise.State = gpsPending) and
+        (Iterations < TIMER_LOOP_LIMIT) do
+  begin
+    if not Timers.RunOneRealTimer then
+      Exit;
+    Inc(Iterations);
+    DrainMicrotasksUntilPromiseSettled(APromise);
+  end;
 end;
 
 procedure RejectPromiseWithException(const APromise: TGocciaPromiseValue;
@@ -133,6 +162,8 @@ begin
       WaitForAtomicsPromise(Promise);
     if Promise.State = gpsPending then
       DrainMicrotasksUntilPromiseSettled(Promise);
+    if Promise.State = gpsPending then
+      RunTimersUntilPromiseSettled(Promise);
 
     if Promise.State = gpsFulfilled then
       Result := Promise.PromiseResult

@@ -83,7 +83,8 @@ uses
   Goccia.Builtins.Atomics,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
-  Goccia.Timeout;
+  Goccia.Timeout,
+  Goccia.Timers;
 
 const
   FETCH_POLL_INTERVAL_MS = 1;
@@ -873,15 +874,35 @@ function WaitForFetchPromise(const APromise: TGocciaPromiseValue): Boolean;
 var
   Manager: TGocciaFetchManager;
   HasPendingFetch: Boolean;
+  TimersRun: Integer;
 begin
   if not Assigned(APromise) then
     Exit(False);
 
+  TimersRun := 0;
   while APromise.State = gpsPending do
   begin
     DrainMicrotasksAndFetchCompletions;
     if APromise.State <> gpsPending then
       Exit(True);
+
+    { Despite the name this is the host's general "drive this promise to
+      settlement" wait — the test runner uses it for every async test's
+      returned promise — so the virtual timer queue belongs here alongside
+      fetch and Atomics.waitAsync. A real-mode timer is a continuation nothing
+      else will produce: the clock jumps to the next due timer rather than any
+      real time passing. Under fake timers this does nothing, because the
+      suite, not the engine, decides when those run.
+
+      Bounded by the limit the fake clock's runAll uses, for the same reason: a
+      timer that reschedules itself would otherwise keep this wait alive
+      forever. Past the bound the promise is reported unsettled, which is a
+      diagnosis; a hang is not. }
+    if (TimersRun < TIMER_LOOP_LIMIT) and RunOneRealTimer then
+    begin
+      Inc(TimersRun);
+      Continue;
+    end;
 
     Manager := TGocciaFetchManager.Instance;
     HasPendingFetch := Assigned(Manager) and Manager.HasPending;

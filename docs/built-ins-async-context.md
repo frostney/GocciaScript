@@ -89,14 +89,19 @@ An async generator body observes the context of whichever call resumed it, in
 both executors and as in Node — a `for await` inside a `run` sees that run's
 store, and a generator resumed outside one sees no store.
 
-It does not travel into host-scheduled callbacks, because there are none:
-GocciaScript has no timer task queue and no general event loop, so there is no
-`setTimeout` continuation for a context to reach. The `async_hooks` observer API
-(`createHook`, `executionAsyncId`, and the `init` / `before` / `after` /
-`destroy` callbacks) is not provided either — it describes an async-resource
-lifecycle this engine does not have. [ADR
-0112](adr/0112-native-async-local-storage.md) records both cuts and the
-snapshot mechanism behind the propagation.
+It travels into timer callbacks too. A `setTimeout` scheduled inside a `run`
+captures the snapshot at registration and runs under it, even though the `run`
+returned long before the timer fired — see [Fake
+timers](testing-api.md#fake-timers) for the queue itself. That is the third
+propagation seam, and it needed nothing new from the snapshot mechanism.
+
+The `async_hooks` observer API (`createHook`, `executionAsyncId`, and the `init`
+/ `before` / `after` / `destroy` callbacks) is not provided — it describes an
+async-resource lifecycle this engine does not have. [ADR
+0112](adr/0112-native-async-local-storage.md) records that cut and the snapshot
+mechanism behind the propagation; [ADR
+0113](adr/0113-deterministic-virtual-timer-queue.md) records the timer seam it
+predicted.
 
 ## Availability
 

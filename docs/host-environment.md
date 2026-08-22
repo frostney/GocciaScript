@@ -8,6 +8,7 @@
 - Pascal embedders inject implementations of `IGocciaHostClock` and `IGocciaHostRandom` before attaching runtime extensions or executing source.
 - `GocciaScriptLoader --host-environment=<module>` accepts the same providers as callable named JavaScript exports.
 - Child engines share the clock and receive derived random stream identifiers, so realms remain reproducible without replaying the parent stream.
+- A **clock override** layers a mocked epoch and/or monotonic time over the configured providers, which is how fake timers reach `Date`, `Temporal.Now`, and `performance` at once.
 - Timeouts, profiling, benchmarks, and other infrastructure continue to use the real clocks in `TimingUtils`.
 
 ## JavaScript Provider Modules
@@ -69,6 +70,14 @@ Engine.Execute;
 `Fork` must return a distinct random stream derived from both the provider's current stream identity and `AStreamId`. The engine shares the clock with child engines because wall and monotonic time belong to the host, while random state is isolated per child.
 
 For a fixed built-in profile, call `Engine.HostEnvironment.UseDeterministicProfile` instead of implementing providers. It supplies epoch and monotonic time `0`, `UTC`, and portable seeded SplitMix64 randomness.
+
+## Mocked Clocks
+
+A host environment can carry a **clock override**: a layer over the configured providers rather than a replacement for them. `OverrideClock` sets a mocked epoch time, a mocked monotonic time, or both; `ClearClockOverride` removes it; `RealEpochNanoseconds` still reads the provider underneath. This is the layer the [virtual timer queue](adr/0113-deterministic-virtual-timer-queue.md) installs a fake clock on, so `Date`, `Temporal.Now`, and `performance` all report the same simulated instant without any of them being patched.
+
+The two halves are independent. Freezing the date alone — `vi.setSystemTime()` outside `vi.useFakeTimers()` — leaves monotonic time real, so `performance.now()` keeps measuring elapsed wall time. Under fake timers both are mocked, and `performance.now()` reports elapsed **virtual** time from the moment the clock was installed, which a `setSystemTime` jump does not move.
+
+An override is not inherited by `ConfigureAsChildOf`, so a ShadowRealm child reads the real clock until something mocks one of its own.
 
 ## Default Compatibility
 
