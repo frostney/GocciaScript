@@ -61,6 +61,19 @@ type
 // TGocciaThrowValue and does nothing for any other exception.
 procedure ReraiseBytecodeThrow(const AException: Exception);
 
+// A JS throw that crosses an executor boundary arrives as a Pascal exception
+// carrying the guest's completion value: EGocciaBytecodeThrow (a compiled
+// callee's throw leaving the VM) or TGocciaThrowValue (the tree-walk
+// evaluator's throw). Both bind the thrown value itself — ES2026 §14.15.3 —
+// not a fresh Error synthesized from the Pascal message. This is the single
+// place that knows the boundary-exception class list, so every
+// exception→value/rejection/mark site can route through it: a new boundary
+// class is then covered everywhere by extending this one function instead of
+// every ladder by hand. Returns True and sets AValue to the identity-preserved
+// thrown value for such an exception; returns False (AValue := nil) otherwise.
+function UnwrapThrownValue(const AException: Exception;
+  out AValue: TGocciaValue): Boolean;
+
 implementation
 
 uses
@@ -73,6 +86,21 @@ begin
   if AException is EGocciaBytecodeThrow then
     raise TGocciaThrowValue.Create(EGocciaBytecodeThrow(AException).ThrownValue,
       EGocciaBytecodeThrow(AException).Suggestion);
+end;
+
+function UnwrapThrownValue(const AException: Exception;
+  out AValue: TGocciaValue): Boolean;
+begin
+  if AException is EGocciaBytecodeThrow then
+    AValue := EGocciaBytecodeThrow(AException).ThrownValue
+  else if AException is TGocciaThrowValue then
+    AValue := TGocciaThrowValue(AException).Value
+  else
+  begin
+    AValue := nil;
+    Exit(False);
+  end;
+  Result := True;
 end;
 
 procedure TGocciaBytecodeHandlerStack.Push(const ACatchIP: Integer;

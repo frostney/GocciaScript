@@ -223,7 +223,8 @@ uses
   Goccia.Values.IteratorSupport,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.VM.Exception;
 
 threadvar
   // Non-owning "current continuation" pointer: GC-managed and save/restored
@@ -403,6 +404,12 @@ begin
       end;
       Promise.Resolve(CreateIteratorResult(UnwrappedValue, Done));
     except
+      { A compiled callee (e.g. a sync iterable's bytecode `next`) throwing
+        inside this async-from-sync step leaves the VM as EGocciaBytecodeThrow;
+        it carries the thrown value, so reject with that identity rather than
+        synthesizing a fresh Error from the Pascal message. }
+      on E: EGocciaBytecodeThrow do
+        Promise.Reject(E.ThrownValue);
       on E: TGocciaThrowValue do
         Promise.Reject(E.Value);
       on E: TGocciaTypeError do
@@ -469,6 +476,11 @@ begin
       Result := ResolveIteratorResult(CreateIteratorResult(
         TGocciaUndefinedLiteralValue.UndefinedValue, True), True);
   except
+    { A compiled callee's throw crosses the boundary as EGocciaBytecodeThrow
+      carrying the thrown value; reject with that identity rather than a fresh
+      Error synthesized from the Pascal message. }
+    on E: EGocciaBytecodeThrow do
+      Result := PromiseReject(E.ThrownValue);
     on E: TGocciaThrowValue do
       Result := PromiseReject(E.Value);
     on E: TGocciaTypeError do
@@ -518,6 +530,11 @@ begin
     end;
     Result := ResolveIteratorResult(CreateIteratorResult(Value, True), False);
   except
+    { A compiled callee's throw crosses the boundary as EGocciaBytecodeThrow
+      carrying the thrown value; reject with that identity rather than a fresh
+      Error synthesized from the Pascal message. }
+    on E: EGocciaBytecodeThrow do
+      Result := PromiseReject(E.ThrownValue);
     on E: TGocciaThrowValue do
       Result := PromiseReject(E.Value);
     on E: TGocciaTypeError do
@@ -564,6 +581,11 @@ begin
     end;
     Result := PromiseReject(Value);
   except
+    { A compiled callee's throw crosses the boundary as EGocciaBytecodeThrow
+      carrying the thrown value; reject with that identity rather than a fresh
+      Error synthesized from the Pascal message. }
+    on E: EGocciaBytecodeThrow do
+      Result := PromiseReject(E.ThrownValue);
     on E: TGocciaThrowValue do
       Result := PromiseReject(E.Value);
     on E: TGocciaTypeError do

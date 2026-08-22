@@ -7331,6 +7331,7 @@ var
   CallArgs: TGocciaArgumentsCollection;
   CurrentError: TGocciaValue;
   HasError: Boolean;
+  ThrownVal: TGocciaValue;
 begin
   CurrentError := AExistingError;
   HasError := Assigned(AExistingError);
@@ -7349,12 +7350,23 @@ begin
           CallArgs.Free;
         end;
       except
-        on E: TGocciaThrowValue do
+        { A compiled [Symbol.dispose] throwing crosses the boundary as
+          EGocciaBytecodeThrow, a tree-walk dispose as TGocciaThrowValue;
+          UnwrapThrownValue yields the thrown value for either so disposal
+          records the guest's identity, not a synthesized Error. (The
+          SuppressedError-chaining behavior below is preserved verbatim from
+          the TGocciaThrowValue-only handler; its pre-existing chaining
+          semantics are out of scope here.) Anything that is not a boundary
+          throw re-raises unchanged, exactly as the narrower handler let it
+          propagate. }
+        on E: Exception do
         begin
+          if not UnwrapThrownValue(E, ThrownVal) then
+            raise;
           if HasError then
-            CurrentError := CreateSuppressedErrorObject(E.Value, CurrentError)
+            CurrentError := CreateSuppressedErrorObject(ThrownVal, CurrentError)
           else
-            CurrentError := E.Value;
+            CurrentError := ThrownVal;
           HasError := True;
         end;
       end;
@@ -7377,6 +7389,7 @@ var
   CurrentError: TGocciaValue;
   HasError: Boolean;
   CallResult: TGocciaValue;
+  ThrownVal: TGocciaValue;
 begin
   CurrentError := AExistingError;
   HasError := Assigned(AExistingError);
@@ -7402,12 +7415,19 @@ begin
             AwaitValue(CallResult);
         end;
       except
-        on E: TGocciaThrowValue do
+        { A compiled [Symbol.asyncDispose] throwing crosses the boundary as
+          EGocciaBytecodeThrow, a tree-walk dispose as TGocciaThrowValue;
+          UnwrapThrownValue yields the thrown value for either. Chaining and
+          re-raise semantics mirror the sync DisposeTrackedResources verbatim;
+          the pre-existing SuppressedError-chaining gap is out of scope. }
+        on E: Exception do
         begin
+          if not UnwrapThrownValue(E, ThrownVal) then
+            raise;
           if HasError then
-            CurrentError := CreateSuppressedErrorObject(E.Value, CurrentError)
+            CurrentError := CreateSuppressedErrorObject(ThrownVal, CurrentError)
           else
-            CurrentError := E.Value;
+            CurrentError := ThrownVal;
           HasError := True;
         end;
       end;
@@ -7779,12 +7799,16 @@ end;
 
 function PascalExceptionToErrorObject(const E: Exception): TGocciaValue;
 begin
-  { A JS throw that left the bytecode VM already carries the guest's completion
-    value. Synthesizing a fresh Error from the Pascal message would hand `catch`
-    a different object whose `message` is EGocciaBytecodeThrow's "Name: message"
-    rendering; the thrown value itself is what ES2026 §14.15.3 binds. }
-  if E is EGocciaBytecodeThrow then
-    Result := EGocciaBytecodeThrow(E).ThrownValue
+  { A JS throw that left an executor boundary already carries the guest's
+    completion value. Synthesizing a fresh Error from the Pascal message would
+    hand `catch` a different object whose `message` is the "Name: message"
+    rendering; the thrown value itself is what ES2026 §14.15.3 binds.
+    UnwrapThrownValue centralizes the boundary-exception class list; callers
+    here only ever reach this with a non-TGocciaThrowValue (their `catch` arms
+    handle TGocciaThrowValue first), so its TGocciaThrowValue branch is inert
+    at this site. }
+  if UnwrapThrownValue(E, Result) then
+    Exit
   else if E is TGocciaTypeError then
     Result := CreateErrorObject(TYPE_ERROR_NAME, E.Message)
   else if E is TGocciaReferenceError then
