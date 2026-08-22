@@ -45,8 +45,11 @@ resourcestring
   // retired for that reason; do not reintroduce it.
   SErrorCannotReadPropertiesOf = 'Cannot read properties of %s (reading ''%s'')';
 
-  // Type errors — constructors
-  SErrorNotConstructor = '''%s'' is not a constructor';
+  // Type errors — constructors.
+  // One Node-form (unquoted) constant for both modes; the slot holds the callee
+  // as written when known (via Goccia.Error.CallDiagnostics), else the type or
+  // constructor name. The quoted `'%s' is not a constructor` variant was
+  // retired so the two executors cannot drift.
   SErrorValueNotConstructor = '%s is not a constructor';
   SErrorSuperNotConstructor = 'Super constructor is not a constructor';
 

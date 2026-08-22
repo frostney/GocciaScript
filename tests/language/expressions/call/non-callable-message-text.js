@@ -73,6 +73,29 @@ describe("non-callable callee messages", () => {
   test("falls back to the value type when the callee is an expression", () => {
     expect(messageOf(() => (3)())).toBe("3 is not a function");
   });
+
+  test("names a non-callable tag in a tagged template", () => {
+    const t = 1;
+    expect(messageOf(() => t`x`)).toBe("t is not a function");
+  });
+});
+
+describe("non-constructor callable messages", () => {
+  test("an arrow used with new is reported by name, unquoted", () => {
+    const f = () => {};
+    expect(messageOf(() => new f())).toBe("f is not a constructor");
+  });
+
+  test("a method used with new is reported by name", () => {
+    const o = {
+      m() {},
+    };
+    expect(messageOf(() => new o.m())).toBe("o.m is not a constructor");
+  });
+
+  test("a non-constructable builtin used with new is reported by name", () => {
+    expect(messageOf(() => new Symbol())).toBe("Symbol is not a constructor");
+  });
 });
 
 describe("non-constructor callee messages", () => {

@@ -891,9 +891,10 @@ type
 { Describes a call/new callee for the shared "not callable"/"not a constructor"
   diagnostics. The tree-walk evaluator calls this at the throw site; the
   bytecode compiler calls it once per call site and stores the result on the
-  function template, so the VM produces the same text without the AST. }
-function CalleeDescriptorFor(
-  const ACallee: TGocciaExpression): TGocciaCalleeDescriptor;
+  function template, so the VM produces the same text without the AST. AKind
+  carries a tagged-template site through to the shared suggestion. }
+function CalleeDescriptorFor(const ACallee: TGocciaExpression;
+  const AKind: TGocciaCalleeKind = cckPlain): TGocciaCalleeDescriptor;
 
 implementation
 
@@ -960,16 +961,20 @@ begin
       TGocciaPrivateMemberExpression(AExpression).ObjectExpr).Cover(Result);
 end;
 
-function CalleeDescriptorFor(
-  const ACallee: TGocciaExpression): TGocciaCalleeDescriptor;
+function CalleeDescriptorFor(const ACallee: TGocciaExpression;
+  const AKind: TGocciaCalleeKind = cckPlain): TGocciaCalleeDescriptor;
 var
   Member: TGocciaMemberExpression;
 begin
   Result := EmptyCalleeDescriptor;
+  Result.Kind := AKind;
   if not Assigned(ACallee) then
     Exit;
   Result.CalleeText := NormalizeCalleeText(FullCalleeSpan(ACallee).Text);
-  if ACallee is TGocciaMemberExpression then
+  // A tagged template's fault is "the tag is not callable", not a missing
+  // method, so its member shape is not carried — the shared suggestion keys on
+  // Kind alone.
+  if (AKind = cckPlain) and (ACallee is TGocciaMemberExpression) then
   begin
     Member := TGocciaMemberExpression(ACallee);
     // Only a non-computed member has a statically known method name, and only

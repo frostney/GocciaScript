@@ -13,6 +13,7 @@ uses
   OrderedStringMap,
 
   Goccia.AST.Node,
+  Goccia.Diagnostics.SourceRegistry,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Evaluator.Context,
   Goccia.MicrotaskQueue,
@@ -56,6 +57,14 @@ type
     FFailedModuleErrorModifiedTimes: TOrderedStringMap<TDateTime>;
     FGlobalModules: TOrderedStringMap<TGocciaModule>;
     FGlobalModuleProviders: TOrderedStringMap<TGocciaGlobalModuleProvider>;
+    { Durable ownership by resolved module address. A host-owned import marks
+      its target here before reading it, so static, dynamic and deferred imports
+      inherit ownership even when they resolve long after host enrollment. }
+    FHostOwnedModuleAddresses: TOrderedStringMap<Boolean>;
+    { The address map propagates through ordinary imports; this identity map
+      makes a path alias of a host file inherit the same ownership before that
+      aliased module can import anything of its own. }
+    FHostOwnedModuleIdentities: TOrderedStringMap<Boolean>;
     FGlobalScope: TGocciaGlobalScope;
     FLinkingDepth: Integer;
     FLoadingModules: TOrderedStringMap<Boolean>;
@@ -65,6 +74,11 @@ type
     FRetiredModules: TGocciaModuleList;
     FVirtualModules: TGocciaVirtualModuleRegistry;
     FWarnedVirtualCollisions: TOrderedStringMap<Boolean>;
+    // This engine's own diagnostic source scope (its principal). Modules load
+    // into it; runtime errors capture their code frame from it when it is the
+    // active scope. Owned here so registration always targets the loading
+    // engine's scope, never a coexisting engine's.
+    FDiagnosticScope: TGocciaDiagnosticSourceScope;
     FOnError: TGocciaThrowErrorCallback;
     FOwnsContentProvider: Boolean;
     FOwnsResolver: Boolean;
@@ -79,15 +93,16 @@ type
     function InstantiateModule(const AModulePath,
       AImportingFilePath: string): TGocciaModule;
     function LoadJSONModule(const AResolvedPath, ACacheKey,
-      ASpecifier: string): TGocciaModule;
+      ASpecifier: string; var AIsHostOwned: Boolean): TGocciaModule;
     function LoadTextModule(const AResolvedPath,
-      ACacheKey: string; const ADefaultOnly: Boolean): TGocciaModule;
+      ACacheKey: string; const ADefaultOnly: Boolean;
+      var AIsHostOwned: Boolean): TGocciaModule;
     function LoadBytesModule(const AResolvedPath,
-      ACacheKey: string): TGocciaModule;
+      ACacheKey: string; const AIsHostOwned: Boolean): TGocciaModule;
     function ResolveModuleRequestWithAttribute(const AModulePath,
       AAttributeType, AImportingFilePath: string): string;
-    function LoadResolvedContent(
-      const AResolvedPath: string): TGocciaModuleContent;
+    function LoadResolvedContent(const AResolvedPath: string;
+      var AIsHostOwned: Boolean): TGocciaModuleContent;
     function LoadResolvedContentBytes(const AResolvedPath: string): TBytes;
     function TryGetResolvedLastModified(const AResolvedPath: string;
       out ALastModified: TDateTime): Boolean;
@@ -99,6 +114,9 @@ type
     function TryGetCachedFailedModuleError(const AResolvedPath,
       ACacheKey: string; out AValue: TGocciaValue): Boolean;
     function HasGlobalModuleRequest(const AModulePath: string): Boolean;
+    function IsHostOwnedLoad(const AResolvedPath,
+      AImportingFilePath: string): Boolean;
+    procedure MarkHostOwnedAddress(const AAddress: string);
     function HasModuleStateForAddress(const AAddress: string): Boolean;
     function TryLoadGlobalModule(const AModulePath: string;
       out AModule: TGocciaModule): Boolean;
@@ -143,6 +161,10 @@ type
     procedure ValidateStaticNamedImports(const AProgram: TGocciaProgram;
       const AModule: TGocciaModule);
     function LoadModule(const AModulePath,
+      AImportingFilePath: string): TGocciaModule;
+    { Host enrollment entry point. Ownership is stamped on the resolved root and
+      then inherited transitively from module/address context by every import. }
+    function LoadHostModule(const AModulePath,
       AImportingFilePath: string): TGocciaModule;
     function LoadModuleSourceValue(const AModulePath,
       AImportingFilePath: string): TGocciaValue;
@@ -208,6 +230,10 @@ type
       read FRuntimeModuleLoader write FRuntimeModuleLoader;
     property VirtualModules: TGocciaVirtualModuleRegistry
       read FVirtualModules;
+    { This engine's diagnostic source scope, activated by the engine around its
+      own execution so runtime-error code frames capture from it. }
+    property DiagnosticScope: TGocciaDiagnosticSourceScope
+      read FDiagnosticScope;
   end;
 
 implementation
@@ -448,9 +474,12 @@ begin
   FRetiredModules := TGocciaModuleList.Create;
   FVirtualModules := TGocciaVirtualModuleRegistry.Create;
   FWarnedVirtualCollisions := TOrderedStringMap<Boolean>.Create;
+  FDiagnosticScope := TGocciaDiagnosticSourceScope.Create;
   FLoadingModules := TOrderedStringMap<Boolean>.Create;
   FGlobalModules := TOrderedStringMap<TGocciaModule>.Create;
   FGlobalModuleProviders := TOrderedStringMap<TGocciaGlobalModuleProvider>.Create;
+  FHostOwnedModuleAddresses := TOrderedStringMap<Boolean>.Create;
+  FHostOwnedModuleIdentities := TOrderedStringMap<Boolean>.Create;
 
   if Assigned(AResolver) then
   begin
@@ -527,9 +556,12 @@ begin
   FRetiredModules.Free;
   FVirtualModules.Free;
   FWarnedVirtualCollisions.Free;
+  FDiagnosticScope.Free;
   FLoadingModules.Free;
   FGlobalModuleProviders.Free;
   FGlobalModules.Free;
+  FHostOwnedModuleIdentities.Free;
+  FHostOwnedModuleAddresses.Free;
   if FOwnsResolver then
     FResolver.Free;
   if FOwnsContentProvider then
@@ -741,12 +773,34 @@ begin
     'No module resolver configured and cannot resolve "%s"', [AModulePath]);
 end;
 
-function TGocciaModuleLoader.LoadResolvedContent(
-  const AResolvedPath: string): TGocciaModuleContent;
+function TGocciaModuleLoader.LoadResolvedContent(const AResolvedPath: string;
+  var AIsHostOwned: Boolean): TGocciaModuleContent;
 begin
   if FVirtualModules.Contains(AResolvedPath) then
-    Exit(FVirtualModules.LoadContent(AResolvedPath));
-  Result := FContentProvider.LoadContent(AResolvedPath);
+    Result := FVirtualModules.LoadContent(AResolvedPath)
+  else
+    Result := FContentProvider.LoadContent(AResolvedPath);
+  if Assigned(Result) and (Result.CanonicalIdentity <> '') then
+  begin
+    if FHostOwnedModuleIdentities.ContainsKey(Result.CanonicalIdentity) then
+      AIsHostOwned := True;
+    if AIsHostOwned then
+      FHostOwnedModuleIdentities.AddOrSetValue(Result.CanonicalIdentity, True);
+  end;
+  if AIsHostOwned then
+    MarkHostOwnedAddress(AResolvedPath);
+  // Record this module's already-read text in THIS engine's OWN scope (never a
+  // coexisting engine's). Ownership is decided HERE, at load: a virtual module
+  // is always host-injected (the guest has no API to add one), and any
+  // import whose importing module/address is host-owned is host source too —
+  // both are host-owned and never handed to a guest in a code frame. Everything
+  // else is the guest's own import, guest-owned. A runtime error captures its ±context
+  // window from here at creation, only for guest-owned source in the active
+  // scope — never from a guest-supplied stack string (see
+  // Goccia.Diagnostics.SourceRegistry).
+  if Assigned(Result) then
+    FDiagnosticScope.Register(AResolvedPath, Result.Text,
+      AIsHostOwned, Result.CanonicalIdentity, Result.IdentityRequired);
 end;
 
 function TGocciaModuleLoader.LoadResolvedContentBytes(
@@ -912,6 +966,42 @@ begin
     FGlobalModuleProviders.ContainsKey(AModulePath);
 end;
 
+procedure TGocciaModuleLoader.MarkHostOwnedAddress(const AAddress: string);
+begin
+  if AAddress = '' then
+    Exit;
+  FHostOwnedModuleAddresses.AddOrSetValue(AAddress, True);
+  FHostOwnedModuleAddresses.AddOrSetValue(ExpandFileName(AAddress), True);
+end;
+
+function TGocciaModuleLoader.IsHostOwnedLoad(const AResolvedPath,
+  AImportingFilePath: string): Boolean;
+var
+  ImportingModule: TGocciaModule;
+begin
+  Result := StartsStr('goccia:', AResolvedPath) or
+    FVirtualModules.Contains(AResolvedPath) or
+    FHostOwnedModuleAddresses.ContainsKey(AResolvedPath) or
+    FHostOwnedModuleAddresses.ContainsKey(ExpandFileName(AResolvedPath));
+  if Result then
+    Exit;
+
+  Result := FHostOwnedModuleAddresses.ContainsKey(AImportingFilePath) or
+    FHostOwnedModuleAddresses.ContainsKey(ExpandFileName(AImportingFilePath));
+  if Result then
+    Exit;
+
+  if FModules.TryGetValue(AImportingFilePath, ImportingModule) or
+     FModules.TryGetValue(ExpandFileName(AImportingFilePath),
+       ImportingModule) then
+    Result := ImportingModule.IsHostOwned
+  else if FGlobalModules.TryGetValue(AImportingFilePath,
+          ImportingModule) then
+    Result := ImportingModule.IsHostOwned
+  else
+    Result := False;
+end;
+
 function TGocciaModuleLoader.HasModuleStateForAddress(
   const AAddress: string): Boolean;
 const
@@ -945,7 +1035,11 @@ var
   Provider: TGocciaGlobalModuleProvider;
 begin
   if FGlobalModules.TryGetValue(AModulePath, AModule) then
+  begin
+    AModule.IsHostOwned := True;
+    MarkHostOwnedAddress(AModulePath);
     Exit(True);
+  end;
 
   if not FGlobalModuleProviders.TryGetValue(AModulePath, Provider) then
   begin
@@ -960,6 +1054,8 @@ begin
       0, 0, AModulePath, nil);
 
   FGlobalModules.AddOrSetValue(AModulePath, AModule);
+  AModule.IsHostOwned := True;
+  MarkHostOwnedAddress(AModulePath);
   Result := True;
 end;
 
@@ -1059,6 +1155,8 @@ begin
   FModules.AddOrSetValue(CacheKey, AModule);
   if CacheKey <> AResolvedPath then
     FModules.AddOrSetValue(AResolvedPath, AModule);
+  if AModule.IsHostOwned then
+    MarkHostOwnedAddress(AResolvedPath);
 end;
 
 procedure TGocciaModuleLoader.CopyModuleContents(const ASourceModule,
@@ -1137,6 +1235,21 @@ begin
   finally
     PreservedStates.Free;
   end;
+end;
+
+function TGocciaModuleLoader.LoadHostModule(const AModulePath,
+  AImportingFilePath: string): TGocciaModule;
+var
+  ResolvedPath: string;
+begin
+  if HasGlobalModuleRequest(AModulePath) then
+    ResolvedPath := AModulePath
+  else
+    ResolvedPath := ResolveModuleAddress(AModulePath, AImportingFilePath);
+  MarkHostOwnedAddress(ResolvedPath);
+  Result := LoadModule(AModulePath, AImportingFilePath);
+  if Assigned(Result) then
+    Result.IsHostOwned := True;
 end;
 
 procedure TGocciaModuleLoader.EvaluateLinkedModule(
@@ -1320,6 +1433,7 @@ var
   I: Integer;
   ImportingFilePath: string;
   IsDeferredEvaluation: Boolean;
+  IsHostOwned: Boolean;
   LoadState: TGocciaModuleLoadState;
   LoadSucceeded: Boolean;
   Module: TGocciaModule;
@@ -1766,6 +1880,10 @@ begin
       raise TGocciaRuntimeError.Create(E.Message, 0, 0, ImportingFilePath, nil);
   end;
 
+  IsHostOwned := IsHostOwnedLoad(ResolvedPath, ImportingFilePath);
+  if IsHostOwned then
+    MarkHostOwnedAddress(ResolvedPath);
+
   CacheKey := ResolvedPath;
   if AttributeType <> '' then
     CacheKey := EncodeImportSpecifierAttribute(ResolvedPath, AttributeType);
@@ -1794,19 +1912,20 @@ begin
 
   if AttributeType = 'json' then
   begin
-    Result := LoadJSONModule(ResolvedPath, CacheKey, RequestedModulePath);
+    Result := LoadJSONModule(ResolvedPath, CacheKey, RequestedModulePath,
+      IsHostOwned);
     Exit;
   end;
 
   if AttributeType = 'text' then
   begin
-    Result := LoadTextModule(ResolvedPath, CacheKey, True);
+    Result := LoadTextModule(ResolvedPath, CacheKey, True, IsHostOwned);
     Exit;
   end;
 
   if AttributeType = 'bytes' then
   begin
-    Result := LoadBytesModule(ResolvedPath, CacheKey);
+    Result := LoadBytesModule(ResolvedPath, CacheKey, IsHostOwned);
     Exit;
   end;
 
@@ -1816,17 +1935,19 @@ begin
     case VirtualContentType of
       vmctJSON:
         begin
-          Result := LoadJSONModule(ResolvedPath, CacheKey, RequestedModulePath);
+          Result := LoadJSONModule(ResolvedPath, CacheKey,
+            RequestedModulePath, IsHostOwned);
           Exit;
         end;
       vmctText:
         begin
-          Result := LoadTextModule(ResolvedPath, CacheKey, False);
+          Result := LoadTextModule(ResolvedPath, CacheKey, False,
+            IsHostOwned);
           Exit;
         end;
       vmctBytes:
         begin
-          Result := LoadBytesModule(ResolvedPath, CacheKey);
+          Result := LoadBytesModule(ResolvedPath, CacheKey, IsHostOwned);
           Exit;
         end;
     end;
@@ -1834,13 +1955,14 @@ begin
 
   if LowerCase(ExtractFileExt(ResolvedPath)) = EXT_JSON then
   begin
-    Result := LoadJSONModule(ResolvedPath, CacheKey, RequestedModulePath);
+    Result := LoadJSONModule(ResolvedPath, CacheKey, RequestedModulePath,
+      IsHostOwned);
     Exit;
   end;
 
   if IsTextAssetExtension(ExtractFileExt(ResolvedPath)) then
   begin
-    Result := LoadTextModule(ResolvedPath, CacheKey, False);
+    Result := LoadTextModule(ResolvedPath, CacheKey, False, IsHostOwned);
     Exit;
   end;
 
@@ -1850,6 +1972,7 @@ begin
   begin
     if Assigned(Module) then
     begin
+      Module.IsHostOwned := IsHostOwned;
       try
         FModules.Add(CacheKey, Module);
         ClearFailedModuleError(CacheKey);
@@ -1862,7 +1985,7 @@ begin
     end;
   end;
 
-  Content := LoadResolvedContent(ResolvedPath);
+  Content := LoadResolvedContent(ResolvedPath, IsHostOwned);
   try
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
@@ -1891,6 +2014,7 @@ begin
       LoadState := nil;
       try
         Module := TGocciaModule.Create(ResolvedPath);
+        Module.IsHostOwned := IsHostOwned;
         Module.LastModified := Content.LastModified;
         FModules.Add(CacheKey, Module);
         FLoadingModules.AddOrSetValue(CacheKey, True);
@@ -1983,6 +2107,7 @@ var
   CacheKey: string;
   Content: TGocciaModuleContent;
   I: Integer;
+  IsHostOwned: Boolean;
   ModuleParseResult: TGocciaSourcePipelineModuleResult;
   ModuleWarning: TGocciaSourcePipelineWarning;
   PipelineOptions: TGocciaSourcePipelineOptions;
@@ -2034,6 +2159,10 @@ begin
       raise TGocciaRuntimeError.Create(E.Message, 0, 0, AImportingFilePath, nil);
   end;
 
+  IsHostOwned := IsHostOwnedLoad(ResolvedPath, AImportingFilePath);
+  if IsHostOwned then
+    MarkHostOwnedAddress(ResolvedPath);
+
   CacheKey := ResolvedPath;
   if AttributeType <> '' then
     CacheKey := EncodeImportSpecifierAttribute(ResolvedPath, AttributeType);
@@ -2058,7 +2187,7 @@ begin
       'JavaScript ModuleSource objects require --experimental-js-module-source',
       0, 0, AImportingFilePath, nil);
 
-  Content := LoadResolvedContent(ResolvedPath);
+  Content := LoadResolvedContent(ResolvedPath, IsHostOwned);
   try
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
@@ -2103,6 +2232,7 @@ var
   Content: TGocciaModuleContent;
   ExistingModule: TGocciaModule;
   ExistingPromise: TGocciaPromiseValue;
+  IsHostOwned: Boolean;
   ModuleParseResult: TGocciaSourcePipelineModuleResult;
   PhysicalPath: string;
   PipelineOptions: TGocciaSourcePipelineOptions;
@@ -2139,7 +2269,10 @@ begin
   if not IsJavaScriptModuleResource(PhysicalPath) then
     Exit(False);
 
-  Content := LoadResolvedContent(PhysicalPath);
+  IsHostOwned := IsHostOwnedLoad(PhysicalPath, '');
+  if IsHostOwned then
+    MarkHostOwnedAddress(PhysicalPath);
+  Content := LoadResolvedContent(PhysicalPath, IsHostOwned);
   try
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
@@ -2198,6 +2331,7 @@ procedure TGocciaModuleLoader.EvaluateDeferredAsyncDependencies(
 var
   AttributeType: string;
   Content: TGocciaModuleContent;
+  IsHostOwned: Boolean;
   LoadedModule: TGocciaModule;
   ModuleParseResult: TGocciaSourcePipelineModuleResult;
   PhysicalPath: string;
@@ -2221,7 +2355,10 @@ begin
   if not IsJavaScriptModuleResource(PhysicalPath) then
     Exit;
 
-  Content := LoadResolvedContent(PhysicalPath);
+  IsHostOwned := IsHostOwnedLoad(PhysicalPath, AImportingFilePath);
+  if IsHostOwned then
+    MarkHostOwnedAddress(PhysicalPath);
+  Content := LoadResolvedContent(PhysicalPath, IsHostOwned);
   try
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
@@ -2292,6 +2429,7 @@ var
   AttributeType: string;
   Content: TGocciaModuleContent;
   ImportDecl: TGocciaImportDeclaration;
+  IsHostOwned: Boolean;
   ModuleParseResult: TGocciaSourcePipelineModuleResult;
   PhysicalPath: string;
   PipelineOptions: TGocciaSourcePipelineOptions;
@@ -2315,7 +2453,10 @@ begin
   if not IsJavaScriptModuleResource(PhysicalPath) then
     Exit;
 
-  Content := LoadResolvedContent(PhysicalPath);
+  IsHostOwned := IsHostOwnedLoad(PhysicalPath, AImportingFilePath);
+  if IsHostOwned then
+    MarkHostOwnedAddress(PhysicalPath);
+  Content := LoadResolvedContent(PhysicalPath, IsHostOwned);
   try
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
@@ -2378,6 +2519,7 @@ var
   AttributeType: string;
   CacheKey: string;
   DeferredModulePath: string;
+  IsHostOwned: Boolean;
   RequestedModulePath: string;
   ResolvedPath: string;
   Seen: TOrderedStringMap<Boolean>;
@@ -2412,6 +2554,10 @@ begin
           nil);
     end;
   end;
+
+  IsHostOwned := IsHostOwnedLoad(ResolvedPath, AImportingFilePath);
+  if IsHostOwned then
+    MarkHostOwnedAddress(ResolvedPath);
 
   CacheKey := ResolvedPath;
   if AttributeType <> '' then
@@ -2502,7 +2648,7 @@ begin
 end;
 
 function TGocciaModuleLoader.LoadJSONModule(const AResolvedPath, ACacheKey,
-  ASpecifier: string): TGocciaModule;
+  ASpecifier: string; var AIsHostOwned: Boolean): TGocciaModule;
 var
   Content: TGocciaModuleContent;
   HasDefaultKey: Boolean;
@@ -2513,7 +2659,7 @@ var
   JSONParser: TGocciaJSONParser;
   LoadSucceeded: Boolean;
 begin
-  Content := LoadResolvedContent(AResolvedPath);
+  Content := LoadResolvedContent(AResolvedPath, AIsHostOwned);
   try
     JSONParser := TGocciaJSONParser.Create;
     try
@@ -2537,6 +2683,7 @@ begin
       TGarbageCollector.Instance.AddTempRoot(ParsedValue);
     try
       Module := TGocciaModule.Create(AResolvedPath);
+      Module.IsHostOwned := AIsHostOwned;
       Module.LastModified := Content.LastModified;
       LoadSucceeded := False;
       try
@@ -2571,7 +2718,8 @@ begin
 end;
 
 function TGocciaModuleLoader.LoadTextModule(const AResolvedPath,
-  ACacheKey: string; const ADefaultOnly: Boolean): TGocciaModule;
+  ACacheKey: string; const ADefaultOnly: Boolean;
+  var AIsHostOwned: Boolean): TGocciaModule;
 var
   Content: TGocciaModuleContent;
   LoadSucceeded: Boolean;
@@ -2582,7 +2730,7 @@ var
   TextRoot: TGocciaTempRoot;
   MetadataRoot: TGocciaTempRoot;
 begin
-  Content := LoadResolvedContent(AResolvedPath);
+  Content := LoadResolvedContent(AResolvedPath, AIsHostOwned);
   try
     NormalizedText := NormalizeNewlinesToLF(Content.Text);
     { The metadata strings below are GC safe points; the content string (which
@@ -2613,6 +2761,7 @@ begin
     end;
 
     Module := TGocciaModule.Create(AResolvedPath);
+    Module.IsHostOwned := AIsHostOwned;
     Module.LastModified := Content.LastModified;
     LoadSucceeded := False;
     try
@@ -2644,7 +2793,7 @@ end;
 // backed by an immutable ArrayBuffer. Named imports are rejected naturally
 // because the synthetic module declares only the default export.
 function TGocciaModuleLoader.LoadBytesModule(const AResolvedPath,
-  ACacheKey: string): TGocciaModule;
+  ACacheKey: string; const AIsHostOwned: Boolean): TGocciaModule;
 var
   Buffer: TGocciaArrayBufferValue;
   Bytes: TBytes;
@@ -2665,6 +2814,7 @@ begin
     TGarbageCollector.Instance.AddTempRoot(TypedArray);
   try
     Module := TGocciaModule.Create(AResolvedPath);
+    Module.IsHostOwned := AIsHostOwned;
     Module.LastModified := LastModified;
     LoadSucceeded := False;
     try

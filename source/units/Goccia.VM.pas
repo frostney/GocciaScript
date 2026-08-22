@@ -5812,10 +5812,9 @@ begin
   begin
     if TGocciaNativeFunctionValue(AConstructor).NotConstructable then
       ThrowTypeError(
-        Format(SErrorNotConstructor,
+        Format(SErrorValueNotConstructor,
           [TGocciaNativeFunctionValue(AConstructor).Name]),
-        Format('''%s'' is not a constructor',
-          [TGocciaNativeFunctionValue(AConstructor).Name]));
+        SSuggestNotConstructorType);
     SuperResult := TGocciaNativeFunctionValue(AConstructor).Construct(
       AArguments, EffectiveNewTarget);
   end
@@ -9810,10 +9809,9 @@ begin
   begin
     if TGocciaNativeFunctionValue(AConstructor).NotConstructable then
       ThrowTypeError(
-        Format(SErrorNotConstructor,
+        Format(SErrorValueNotConstructor,
           [TGocciaNativeFunctionValue(AConstructor).Name]),
-        Format('''%s'' is not a constructor',
-          [TGocciaNativeFunctionValue(AConstructor).Name]));
+        SSuggestNotConstructorType);
     ConstructorName := TGocciaNativeFunctionValue(AConstructor).Name;
     if (TGocciaCallStack.Instance <> nil) then
       TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
@@ -9835,7 +9833,7 @@ begin
        (BytecodeFunction.FClosure.Template.IsGenerator or
         BytecodeFunction.FClosure.Template.IsAsync or
         BytecodeFunction.FClosure.Template.IsArrow) then
-      ThrowTypeError(Format(SErrorNotConstructor,
+      ThrowTypeError(Format(SErrorValueNotConstructor,
         [BytecodeFunction.GetProperty(PROP_NAME).ToStringLiteral.Value]),
         SSuggestNotConstructorType);
     if (BytecodeFunction.FConstructClassValue is TGocciaVMClassValue) and
@@ -9858,7 +9856,7 @@ begin
     ConstructorName := TGocciaFunctionBase(AConstructor).GetProperty(PROP_NAME)
       .ToStringLiteral.Value;
     if not TGocciaFunctionBase(AConstructor).IsConstructable then
-      ThrowTypeError(Format(SErrorNotConstructor, [ConstructorName]),
+      ThrowTypeError(Format(SErrorValueNotConstructor, [ConstructorName]),
         SSuggestNotConstructorType);
     // ES2026 §10.2.2 [[Construct]] for ordinary function objects:
     // OrdinaryCreateFromConstructor allocates a fresh object whose
@@ -14342,6 +14340,8 @@ var
   OperandRoots: TGocciaActiveRootFrame;
   SavedActiveTemplateProbe: PPointer;
   SavedActiveInstructionIPProbe: PInteger;
+  SavedConstructFrame: TGocciaCallFrame;
+  SavedConstructFrameOk: Boolean;
 
   procedure CurrentInstructionDebugLocation(out ALine, AColumn: Integer);
   begin
@@ -14366,12 +14366,14 @@ var
     EnterGocciaCallSite(SourcePath, DebugLine, DebugColumn, APrevious);
   end;
 
-  { Throw path only. Stamps the executing frame with this instruction's source
-    position so the error object's stack trace — and therefore the runner's
+  { Stamps the executing frame with this instruction's source position so the
+    error object's stack trace — and therefore the runner's
     `--> file:line:column` header and code frame — matches what the tree-walk
     evaluator reports for the same fault. Deferred frames carry no position of
-    their own (ADR 0074); paying the debug-map lookup here costs nothing on the
-    hot path. }
+    their own (ADR 0074). Called on failure paths and once per `new` reaching
+    ConstructValue (see StampCallSiteLocation) — never from an ordinary
+    call/property/index instruction, so the dispatch loop's throughput is
+    unaffected; the per-`new` debug-map lookup is the only steady-state cost. }
   procedure StampCurrentInstructionLocation;
   var
     SourcePath: string;
@@ -14464,14 +14466,23 @@ var
       NotConstructorSuggestion(CallSite.Callee, CalleeTypeName));
   end;
 
-  { ES2026 §7.2.5 IsConstructor, restricted to the shapes this VM can build:
-    everything else reaches the same "is not a constructor" rejection the
-    ConstructValue tail performs, only with the call site's own wording. }
+  { ES2026 §7.2.5 IsConstructor. False routes the construct site to
+    ThrowNotConstructorHere so the callee is named from the call-site
+    descriptor; True lets ConstructValue proceed. A callable that is not a
+    constructor (AArrow, AMethod, AGenerator, AAsync, or a native marked
+    NotConstructable) must return False here — otherwise it slips past to
+    ConstructValue's own generic rejection, which cannot name the callee. }
   function MayBeConstructor(const AValue: TGocciaValue): Boolean;
   begin
-    Result := Assigned(AValue) and (AValue is TGocciaObjectValue) and
-      (AValue.IsCallable or (AValue is TGocciaClassValue) or
-       (AValue is TGocciaProxyValue));
+    if not Assigned(AValue) then
+      Exit(False);
+    if AValue is TGocciaProxyValue then
+      Exit(True);
+    if AValue is TGocciaClassValue then
+      Exit(True);
+    if AValue is TGocciaFunctionBase then
+      Exit(TGocciaFunctionBase(AValue).IsConstructable);
+    Result := False;
   end;
 
 begin
@@ -14513,6 +14524,13 @@ begin
       SetCurrentRealm(ExecutionRealm);
     try
       Inc(FNativeExecutionDepth);
+      // Give the probed locals safe values before arming the probe: a throw in
+      // SetupNewFrame or the generator-resume preamble (before the dispatch
+      // loop assigns them) would otherwise make StampThrowLocation read an
+      // uninitialised Template pointer / garbage InstructionStartIP. A nil
+      // Template makes the stamp a no-op until the loop sets a real one.
+      Template := nil;
+      InstructionStartIP := 0;
       SavedActiveTemplateProbe := FActiveTemplateProbe;
       SavedActiveInstructionIPProbe := FActiveInstructionIPProbe;
       FActiveTemplateProbe := PPointer(@Template);
@@ -16966,13 +16984,26 @@ begin
              (GetRegister(A) is TGocciaBoundFunctionValue) or
              (GetRegister(A) is TGocciaProxyValue) then
           begin
+            if TGocciaCallStack.Instance <> nil then
+              SavedConstructFrameOk :=
+                TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
+            else
+              SavedConstructFrameOk := False;
             EnterCurrentInstructionCallSite(PreviousCallSite);
+            // Stamp the executing frame with this call's position so an error a
+            // native callee creates captures the call site (deferred frames are
+            // 0:0). Use the recorded call-site column, matching the tree-walk
+            // evaluator's per-call frame (the instruction line map resolves only
+            // to the enclosing statement). Snapshotted above and restored below.
+            StampCallSiteLocation(CurrentCallSite);
             try
               SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
                 TGocciaUndefinedLiteralValue.UndefinedValue));
             finally
               LeaveGocciaCallSite(PreviousCallSite);
             end;
+            if SavedConstructFrameOk and (TGocciaCallStack.Instance <> nil) then
+              TGocciaCallStack.Instance.SetTopFrame(SavedConstructFrame);
           end
           else
             SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
@@ -17265,13 +17296,23 @@ begin
              (GetRegister(A) is TGocciaBoundFunctionValue) or
              (GetRegister(A) is TGocciaProxyValue) then
           begin
+            if TGocciaCallStack.Instance <> nil then
+              SavedConstructFrameOk :=
+                TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
+            else
+              SavedConstructFrameOk := False;
             EnterCurrentInstructionCallSite(PreviousCallSite);
+            // See OP_CALL: stamp the recorded call-site position for a native
+            // callee's created error; snapshotted above, restored below.
+            StampCallSiteLocation(CurrentCallSite);
             try
               SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
                 GetRegister(A - 1)));
             finally
               LeaveGocciaCallSite(PreviousCallSite);
             end;
+            if SavedConstructFrameOk and (TGocciaCallStack.Instance <> nil) then
+              TGocciaCallStack.Instance.SetTopFrame(SavedConstructFrame);
           end
           else
             SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
@@ -17297,9 +17338,16 @@ begin
           if not MayBeConstructor(GetRegister(B)) then
             ThrowNotConstructorHere(GetRegister(B));
           { A native constructor can capture a stack trace (`new Error(...)`),
-            and this frame carries no position of its own. Stamp the construct
-            site first so the captured trace — and the diagnostic rendered from
-            it — locates the `new` expression. }
+            and this frame carries no position of its own. Snapshot the top
+            frame, stamp it at the construct site so a trace captured during
+            construction locates the `new`, then restore it on success so the
+            stamp does not leak onto a later throw in the same function
+            (`new Map(); JSON.parse('{')`). On a throw the frame unwinds. }
+          if TGocciaCallStack.Instance <> nil then
+            SavedConstructFrameOk :=
+              TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
+          else
+            SavedConstructFrameOk := False;
           StampCallSiteLocation(CurrentCallSite);
           CallArgs := AcquireArguments(C);
           try
@@ -17314,6 +17362,8 @@ begin
           finally
             ReleaseArguments(CallArgs);
           end;
+          if SavedConstructFrameOk and (TGocciaCallStack.Instance <> nil) then
+            TGocciaCallStack.Instance.SetTopFrame(SavedConstructFrame);
         end;
       end;
 
@@ -17334,6 +17384,13 @@ begin
         begin
           if not MayBeConstructor(GetRegister(B)) then
             ThrowNotConstructorHere(GetRegister(B));
+          // Snapshot/stamp/restore as in OP_CONSTRUCT, so a successful spread
+          // construct does not leave the caller frame stamped for a later throw.
+          if TGocciaCallStack.Instance <> nil then
+            SavedConstructFrameOk :=
+              TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
+          else
+            SavedConstructFrameOk := False;
           StampCallSiteLocation(CurrentCallSite);
           CallArgs := AcquireArguments(SpreadArray.Elements.Count);
           try
@@ -17348,6 +17405,8 @@ begin
           finally
             ReleaseArguments(CallArgs);
           end;
+          if SavedConstructFrameOk and (TGocciaCallStack.Instance <> nil) then
+            TGocciaCallStack.Instance.SetTopFrame(SavedConstructFrame);
         end;
       end;
 
@@ -18095,6 +18154,18 @@ begin
       // On error, wraps with SuppressedError in A.
       OP_USING_DISPOSE:
       begin
+        // Stamp the disposal site onto the top frame so an auto-SuppressedError
+        // created below (a double fault: dispose throws while an error is
+        // pending) records this location instead of the deferred frame's 0:0,
+        // matching the tree-walk interpreter. Snapshot/restore so it does not
+        // perturb the location seen by later instructions.
+        if TGocciaCallStack.Instance <> nil then
+          SavedConstructFrameOk :=
+            TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
+        else
+          SavedConstructFrameOk := False;
+        StampCurrentInstructionLocation;
+        try
         LeftValue := RegisterToValue(FRegisters[B]); // dispose method
         if Assigned(LeftValue) and not (LeftValue is TGocciaNullLiteralValue) and
            not (LeftValue is TGocciaUndefinedLiteralValue) and
@@ -18157,6 +18228,10 @@ begin
                 SetRegister(A, LeftValue);
             end;
           end;
+        end;
+        finally
+          if SavedConstructFrameOk and (TGocciaCallStack.Instance <> nil) then
+            TGocciaCallStack.Instance.SetTopFrame(SavedConstructFrame);
         end;
       end;
 
@@ -18505,7 +18580,7 @@ begin
             CreateErrorObject(SYNTAX_ERROR_NAME, E.Message),
             InitialFrameStackCount, InitialClosedNumericFrameCount,
             SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
         on E: TGocciaRuntimeError do
           HandleExceptionUnwind(
             CreateErrorObject(ERROR_NAME, E.Message),

@@ -12,6 +12,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
+  Goccia.Diagnostics.SourceRegistry,
   Goccia.Error.ThrowErrorCallback,
   Goccia.GarbageCollector,
   Goccia.Modules,
@@ -219,13 +220,21 @@ begin
 end;
 
 function BenchmarkExceptionMessage(const AException: Exception): string;
+var
+  Scope: TGocciaDiagnosticSourceScope;
+  ExpectedPrincipal: Int64;
 begin
+  Scope := TGocciaDiagnosticSourceRegistry.Current;
+  if Assigned(Scope) then
+    ExpectedPrincipal := Scope.Principal
+  else
+    ExpectedPrincipal := 0;
   if AException is TGocciaThrowValue then
     Exit(FormatThrowDetail(TGocciaThrowValue(AException).Value, '', nil, False,
-      TGocciaThrowValue(AException).Suggestion));
+      ExpectedPrincipal, TGocciaThrowValue(AException).Suggestion));
   if AException is EGocciaBytecodeThrow then
     Exit(FormatThrowDetail(EGocciaBytecodeThrow(AException).ThrownValue, '',
-      nil, False));
+      nil, False, ExpectedPrincipal));
   Result := AException.Message;
 end;
 

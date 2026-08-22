@@ -1001,11 +1001,14 @@ var
   EngineResult: TGocciaScriptResult;
   GC: TGarbageCollector;
   EngineResultRooted: Boolean;
+  ExpectedPrincipal: Int64;
+  PlainThrowDetail: string;
 begin
   ScriptResult := CreateDefaultScriptResult;
   GC := TGarbageCollector.Instance;
   EngineResult.Result := nil;
   EngineResultRooted := False;
+  ExpectedPrincipal := 0;
   if Assigned(GC) then
     GC.AddTempRoot(ScriptResult);
 
@@ -1034,6 +1037,7 @@ begin
       try
         Engine := CreateEngine(AFileName, Source, Executor);
         try
+          ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
           Engine.RegisterGlobal('__gocciaTestRunnerMode',
             TGocciaStringLiteralValue.Create('interpreted'));
           if FSilent.Present or GIsWorkerThread or IsJsonOutput then
@@ -1091,13 +1095,17 @@ begin
         end
         else if E is TGocciaThrowValue then
         begin
+          // Render the plain diagnostic once and reuse it for both result
+          // fields; only the console copy differs (it may be colored).
+          PlainThrowDetail := FormatThrowDetail(TGocciaThrowValue(E).Value,
+            AFileName, Source, False, ExpectedPrincipal,
+            TGocciaThrowValue(E).Suggestion);
           if (not GIsWorkerThread) and (not IsJsonOutput) then
-            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal, TGocciaThrowValue(E).Suggestion));
-          MarkLoadError(ScriptResult, AFileName,
-            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False, TGocciaThrowValue(E).Suggestion));
-          Result := MakeEmptyTestResult(ScriptResult,
-            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source,
-              False, TGocciaThrowValue(E).Suggestion));
+            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName,
+              Source, IsColorTerminal, ExpectedPrincipal,
+              TGocciaThrowValue(E).Suggestion));
+          MarkLoadError(ScriptResult, AFileName, PlainThrowDetail);
+          Result := MakeEmptyTestResult(ScriptResult, PlainThrowDetail);
         end
         else if E is EGocciaBytecodeThrow then
         begin
@@ -1105,16 +1113,16 @@ begin
             evaluator's TGocciaThrowValue and must render the same way; without
             this arm it fell through to the bare "Fatal error:" line and lost
             the location, code frame and suggestion. }
+          PlainThrowDetail := FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
+            AFileName, Source, False, ExpectedPrincipal,
+            EGocciaBytecodeThrow(E).Suggestion);
           if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
               AFileName, Source, IsColorTerminal,
+              ExpectedPrincipal,
               EGocciaBytecodeThrow(E).Suggestion));
-          MarkLoadError(ScriptResult, AFileName,
-            FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue, AFileName,
-              Source, False, EGocciaBytecodeThrow(E).Suggestion));
-          Result := MakeEmptyTestResult(ScriptResult,
-            FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue, AFileName,
-              Source, False, EGocciaBytecodeThrow(E).Suggestion));
+          MarkLoadError(ScriptResult, AFileName, PlainThrowDetail);
+          Result := MakeEmptyTestResult(ScriptResult, PlainThrowDetail);
         end
         else
         begin
@@ -1155,9 +1163,11 @@ var
   ResultValue: TGocciaValue;
   GC: TGarbageCollector;
   ResultValueRooted: Boolean;
+  ExpectedPrincipal: Int64;
   LexStart, CompileStart, CompileEnd, ExecEnd: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
   SourceText: string;
+  PlainThrowDetail: string;
   { The file as written. Source itself gains an appended runTests(...) call
     below, and quoting that in a code frame showed the runner's own epilogue as
     if the author had written it — a line the interpreted path, which calls
@@ -1168,6 +1178,7 @@ begin
   ResultValue := nil;
   GC := TGarbageCollector.Instance;
   ResultValueRooted := False;
+  ExpectedPrincipal := 0;
   SourcePipelineResult := nil;
   if Assigned(GC) then
     GC.AddTempRoot(ScriptResult);
@@ -1209,6 +1220,7 @@ begin
       try
         Engine := CreateEngine(AFileName, Source, Executor);
         try
+          ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
           Engine.RegisterGlobal('__gocciaTestRunnerMode',
             TGocciaStringLiteralValue.Create('bytecode'));
           if FSilent.Present or GIsWorkerThread or IsJsonOutput then
@@ -1302,12 +1314,14 @@ begin
         else if E is TGocciaThrowValue then
         begin
           if (not GIsWorkerThread) and (not IsJsonOutput) then
-            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, DiagnosticSource, IsColorTerminal, TGocciaThrowValue(E).Suggestion));
-          MarkLoadError(ScriptResult, AFileName,
-            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, DiagnosticSource, False, TGocciaThrowValue(E).Suggestion));
-          Result := MakeEmptyTestResult(ScriptResult,
-            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, DiagnosticSource,
-              False, TGocciaThrowValue(E).Suggestion));
+            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName,
+              DiagnosticSource, IsColorTerminal, ExpectedPrincipal,
+              TGocciaThrowValue(E).Suggestion));
+          PlainThrowDetail := FormatThrowDetail(TGocciaThrowValue(E).Value,
+            AFileName, DiagnosticSource, False, ExpectedPrincipal,
+            TGocciaThrowValue(E).Suggestion);
+          MarkLoadError(ScriptResult, AFileName, PlainThrowDetail);
+          Result := MakeEmptyTestResult(ScriptResult, PlainThrowDetail);
         end
         else if E is EGocciaBytecodeThrow then
         begin
@@ -1318,13 +1332,13 @@ begin
           if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
               AFileName, DiagnosticSource, IsColorTerminal,
+              ExpectedPrincipal,
               EGocciaBytecodeThrow(E).Suggestion));
-          MarkLoadError(ScriptResult, AFileName,
-            FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue, AFileName,
-              DiagnosticSource, False, EGocciaBytecodeThrow(E).Suggestion));
-          Result := MakeEmptyTestResult(ScriptResult,
-            FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue, AFileName,
-              DiagnosticSource, False, EGocciaBytecodeThrow(E).Suggestion));
+          PlainThrowDetail := FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
+            AFileName, DiagnosticSource, False, ExpectedPrincipal,
+            EGocciaBytecodeThrow(E).Suggestion);
+          MarkLoadError(ScriptResult, AFileName, PlainThrowDetail);
+          Result := MakeEmptyTestResult(ScriptResult, PlainThrowDetail);
         end
         else
         begin

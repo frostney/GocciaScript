@@ -157,6 +157,7 @@ uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.CallDiagnostics,
   Goccia.Error.Messages,
   Goccia.Keywords.Reserved,
   Goccia.Modules,
@@ -3858,10 +3859,11 @@ end;
   immediately before the emission: the key is the instruction's start PC,
   which is CodeCount at this moment. }
 procedure RecordCallSite(const ACtx: TGocciaCompilationContext;
-  const ACallSite: TGocciaExpression; const ACallee: TGocciaExpression);
+  const ACallSite: TGocciaExpression; const ACallee: TGocciaExpression;
+  const AKind: TGocciaCalleeKind = cckPlain);
 begin
   ACtx.Template.AddCallSite(UInt32(CurrentCodePosition(ACtx)),
-    CalleeDescriptorFor(ACallee), ACallSite.Line, ACallSite.Column);
+    CalleeDescriptorFor(ACallee, AKind), ACallSite.Line, ACallSite.Column);
 end;
 
 function TryCompileWithIdentifierCall(const ACtx: TGocciaCompilationContext;
@@ -4363,6 +4365,7 @@ begin
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
       CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
+      RecordCallSite(ACtx, AExpr, AExpr.Callee);
       EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg, 1));
       ACtx.Scope.FreeRegister;
     end
@@ -4370,6 +4373,7 @@ begin
     begin
       for I := 0 to ArgCount - 1 do
         ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
+      RecordCallSite(ACtx, AExpr, AExpr.Callee);
       EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt16(ArgCount), 0));
       for I := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
@@ -5583,6 +5587,9 @@ begin
   for I := 0 to AExpr.Expressions.Count - 1 do
     ACtx.CompileExpression(AExpr.Expressions[I], ACtx.Scope.AllocateRegister);
 
+  // Record the tag as the callee so a non-callable tag reports the tag by name
+  // and the shared tag-must-be-callable suggestion, matching the evaluator.
+  RecordCallSite(ACtx, AExpr, AExpr.Tag, cckTaggedTemplate);
   if IsMethodCall then
     EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt16(ArgCount),
       TailFlag))

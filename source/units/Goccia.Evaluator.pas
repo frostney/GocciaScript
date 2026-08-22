@@ -259,6 +259,33 @@ function HasAsyncDisposals(const ATracker: TGocciaDisposalTracker): Boolean; for
 function CollectDeclaredPrivateNames(
   const AContext: TGocciaEvaluationContext): TStringList; forward;
 
+// Stamp the executing call-stack frame with a runtime fault's own source
+// position, so an error created here traces to the failing expression rather
+// than to the enclosing function's call site. The bytecode VM does the same on
+// its throw paths (Goccia.VM.StampThrowLocation); doing it here keeps a nested
+// runtime error's `--> file:line:column` and code frame identical between the
+// two executors. Called only on throw paths, where the frame is about to unwind.
+procedure StampInterpreterThrowLocation(
+  const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer); {$IFDEF FPC}inline;{$ENDIF}
+begin
+  if TGocciaCallStack.Instance <> nil then
+    TGocciaCallStack.Instance.SetTopFrameLocation(AContext.CurrentFilePath,
+      ALine, AColumn);
+end;
+
+// The position the bytecode line map resolves a member-read fault to: the
+// base-most expression of the access chain. The compiler emits a line-map entry
+// as it descends to the base and none for the individual property reads, so a
+// read anywhere along `a.b.c` traces to `a`'s column. Walking to the same base
+// here keeps the interpreter's code-frame caret byte-identical with the VM's.
+function MemberChainBaseExpression(
+  const AExpr: TGocciaExpression): TGocciaExpression;
+begin
+  Result := AExpr;
+  while Result is TGocciaMemberExpression do
+    Result := TGocciaMemberExpression(Result).ObjectExpr;
+end;
+
 // A class value that carries its own [[Construct]] implementation — a typed
 // array, or a bytecode-compiled class whose constructor is a closure rather
 // than an AST method — cannot be built by InstantiateClass, which drives
@@ -3853,10 +3880,9 @@ begin
   begin
     if TGocciaNativeFunctionValue(AConstructor).NotConstructable then
       ThrowTypeError(
-        Format(SErrorNotConstructor,
+        Format(SErrorValueNotConstructor,
           [TGocciaNativeFunctionValue(AConstructor).Name]),
-        Format('''%s'' is not a constructor',
-          [TGocciaNativeFunctionValue(AConstructor).Name]));
+        SSuggestNotConstructorType);
     SuperResult := TGocciaNativeFunctionValue(AConstructor).Construct(
       AArguments, EffectiveNewTarget);
   end
@@ -4117,6 +4143,7 @@ var
   DirectEvalResult: TGocciaValue;
   PreviousCallSite: TGocciaCallSite;
   CalleeDescriptor: TGocciaCalleeDescriptor;
+  CalleeTypeName, ReceiverTypeName: string;
   function TryGetParenthesizedMemberReference(
     const AExpression: TGocciaExpression;
     out AMemberExpression: TGocciaMemberExpression): Boolean;
@@ -4530,12 +4557,22 @@ begin
       else
       begin
         { Same descriptor the bytecode compiler records per call site, so both
-          executors name the callee identically (Goccia.Error.CallDiagnostics). }
+          executors name the callee identically (Goccia.Error.CallDiagnostics).
+          This arm is also reached when Callee is nil, so its type name is read
+          through a nil guard, mirroring the VM's ValueTypeNameOrUndefined. }
         CalleeDescriptor := CalleeDescriptorFor(ACallExpression.Callee);
+        if Assigned(Callee) then
+          CalleeTypeName := Callee.TypeName
+        else
+          CalleeTypeName := 'undefined';
+        if Assigned(ThisValue) then
+          ReceiverTypeName := ThisValue.TypeName
+        else
+          ReceiverTypeName := CalleeTypeName;
         ThrowTypeError(
-          NotCallableMessage(CalleeDescriptor, Callee.TypeName),
-          NotCallableSuggestion(CalleeDescriptor, ThisValue.TypeName,
-            Callee.TypeName));
+          NotCallableMessage(CalleeDescriptor, CalleeTypeName),
+          NotCallableSuggestion(CalleeDescriptor, ReceiverTypeName,
+            CalleeTypeName));
       end;
     finally
       if (TGocciaCallStack.Instance <> nil) then
@@ -4736,6 +4773,7 @@ var
   ObjectEvaluated: Boolean;
   ShortCircuited: Boolean;
   Roots: TGocciaActiveRootFrame;
+  MemberBaseExpr: TGocciaExpression;
 begin
   Roots.Initialize;
   try
@@ -4906,7 +4944,13 @@ begin
     begin
       { Node's wording, shared with the bytecode VM's nullish-base path
         (Goccia.VM.ThrowNullishBasePropertyAccess) so the two executors report
-        an identical message and suggestion for the same fault. }
+        an identical message and suggestion for the same fault. Stamp the
+        executing frame with the access chain's base-most position so the trace
+        points at the access rather than the enclosing function's call site, and
+        so the caret column matches the VM's line map (MemberChainBaseExpression). }
+      MemberBaseExpr := MemberChainBaseExpression(AMemberExpression);
+      StampInterpreterThrowLocation(AContext, MemberBaseExpr.Line,
+        MemberBaseExpr.Column);
       if Obj is TGocciaNullLiteralValue then
         ThrowTypeError(
           Format(SErrorCannotReadPropertiesOfNull, [PropertyName]),
@@ -8611,10 +8655,9 @@ begin
     begin
       if TGocciaNativeFunctionValue(Target).NotConstructable then
         ThrowTypeError(
-          Format(SErrorNotConstructor,
+          Format(SErrorValueNotConstructor,
             [TGocciaNativeFunctionValue(Target).Name]),
-          Format('''%s'' is not a constructor',
-            [TGocciaNativeFunctionValue(Target).Name]));
+          SSuggestNotConstructorType);
       Result := TGocciaNativeFunctionValue(Target).Construct(BoundArgs,
         Target);
     end
@@ -8654,6 +8697,8 @@ var
   Roots: TGocciaActiveRootFrame;
   PreviousCallSite: TGocciaCallSite;
   NewCalleeDescriptor: TGocciaCalleeDescriptor;
+  SavedCallerFrame: TGocciaCallFrame;
+  CallerFrameStamped: Boolean;
 begin
   Roots.Initialize;
   CheckExecutionTimeout;
@@ -8691,14 +8736,25 @@ begin
     else
       CalleeName := '';
 
+    { One descriptor for every not-a-constructor throw below, so the message and
+      suggestion match the bytecode VM's construct-site diagnostics for the same
+      fault (Goccia.Error.CallDiagnostics). }
+    NewCalleeDescriptor := CalleeDescriptorFor(ANewExpression.Callee);
+
     if (TGocciaCallStack.Instance <> nil) then
     begin
       { A constructor that captures a stack trace (`new Error(...)`) skips its
         own frame, so the position the diagnostic ends up showing comes from
-        the caller's frame. Point that frame at the `new` expression, matching
-        what the bytecode VM stamps at its construct site. }
-      TGocciaCallStack.Instance.SetTopFrameLocation(AContext.CurrentFilePath,
-        ANewExpression.Line, ANewExpression.Column);
+        the caller's frame. Point that frame at the `new` expression for the
+        duration of the construction, matching what the bytecode VM stamps at
+        its construct site — but snapshot it first and restore it in the
+        finally, so the stamp does not leak into a later throw in the same
+        function (AE.g. `const m = new Map(); AReturn m.missing.x;`). }
+      CallerFrameStamped := TGocciaCallStack.Instance.TryGetTopFrame(
+        SavedCallerFrame);
+      if CallerFrameStamped then
+        TGocciaCallStack.Instance.SetTopFrameLocation(AContext.CurrentFilePath,
+          ANewExpression.Line, ANewExpression.Column);
       TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
         ANewExpression.Line, ANewExpression.Column);
     end;
@@ -8733,10 +8789,8 @@ begin
       begin
         if TGocciaNativeFunctionValue(Callee).NotConstructable then
           ThrowTypeError(
-            Format(SErrorNotConstructor,
-              [TGocciaNativeFunctionValue(Callee).Name]),
-            Format('''%s'' is not a constructor',
-              [TGocciaNativeFunctionValue(Callee).Name]));
+            NotConstructorMessage(NewCalleeDescriptor, Callee.TypeName),
+            NotConstructorSuggestion(NewCalleeDescriptor, Callee.TypeName));
         EnterGocciaCallSite(AContext.CurrentFilePath,
           ANewExpression.Line, ANewExpression.Column, PreviousCallSite);
         try
@@ -8757,8 +8811,9 @@ begin
         // the bound wrapper itself has no own `prototype` data property.
         FunctionCallee := TGocciaFunctionBase(Callee);
         if not FunctionCallee.IsConstructable then
-          ThrowTypeError(Format(SErrorNotConstructor, [CalleeName]),
-            SSuggestNotConstructorType);
+          ThrowTypeError(
+            NotConstructorMessage(NewCalleeDescriptor, Callee.TypeName),
+            NotConstructorSuggestion(NewCalleeDescriptor, Callee.TypeName));
         PrototypeTarget := FunctionCallee;
         while PrototypeTarget is TGocciaBoundFunctionValue do
           PrototypeTarget := TGocciaBoundFunctionValue(PrototypeTarget).OriginalFunction;
@@ -8793,17 +8848,18 @@ begin
         end
       end
       else
-      begin
-        { Same descriptor the bytecode compiler records per construct site, so
-          both executors name the callee identically. }
-        NewCalleeDescriptor := CalleeDescriptorFor(ANewExpression.Callee);
         ThrowTypeError(
           NotConstructorMessage(NewCalleeDescriptor, Callee.TypeName),
           NotConstructorSuggestion(NewCalleeDescriptor, Callee.TypeName));
-      end;
     finally
       if (TGocciaCallStack.Instance <> nil) then
+      begin
         TGocciaCallStack.Instance.Pop;
+        // Restore the caller frame's own location; the stamp above was scoped
+        // to this construction only.
+        if CallerFrameStamped then
+          TGocciaCallStack.Instance.SetTopFrame(SavedCallerFrame);
+      end;
     end;
     AddValueRoot(Roots, Result);
     CollectInterpreterMemoryPressure(Result);
@@ -11262,10 +11318,9 @@ var
     begin
       if TGocciaNativeFunctionValue(AConstructor).NotConstructable then
         ThrowTypeError(
-          Format(SErrorNotConstructor,
+          Format(SErrorValueNotConstructor,
             [TGocciaNativeFunctionValue(AConstructor).Name]),
-          Format('''%s'' is not a constructor',
-            [TGocciaNativeFunctionValue(AConstructor).Name]));
+          SSuggestNotConstructorType);
       ConstructedValue := TGocciaNativeFunctionValue(AConstructor).Construct(
         AArguments, EffectiveNewTarget);
     end
@@ -11781,6 +11836,7 @@ var
   I: Integer;
   CalleeName: string;
   TemplateKey: string;
+  TagCalleeDescriptor: TGocciaCalleeDescriptor;
 begin
   CheckExecutionTimeout;
   IncrementInstructionCounter;
@@ -11885,9 +11941,17 @@ begin
       if Assigned(Callee) and Callee.IsCallable then
         Result := DispatchCall(Callee, Arguments, ThisValue)
       else
+      begin
+        { Same descriptor the bytecode compiler records for a tagged-template
+          call site, so both executors name the tag and share the
+          tag-must-be-callable suggestion (Goccia.Error.CallDiagnostics). }
+        TagCalleeDescriptor := CalleeDescriptorFor(
+          ATaggedTemplateExpression.Tag, cckTaggedTemplate);
         ThrowTypeError(
-          Format(SErrorValueNotFunction, [Callee.TypeName]),
-          SSuggestTaggedTemplateCallable);
+          NotCallableMessage(TagCalleeDescriptor, Callee.TypeName),
+          NotCallableSuggestion(TagCalleeDescriptor, Callee.TypeName,
+            Callee.TypeName));
+      end;
     finally
       if (TGocciaCallStack.Instance <> nil) then
         TGocciaCallStack.Instance.Pop;

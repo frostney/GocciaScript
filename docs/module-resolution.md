@@ -283,6 +283,86 @@ resolution error rather than misbehaving:
 Loading CommonJS itself is not on the roadmap; see
 [VISION](../VISION.md#what-gocciascript-is-not).
 
+## Runtime code frames
+
+When an uncaught error terminates a run, the diagnostic can show a code frame —
+the source line the error came from, with a caret. That excerpt is bound to the
+engine's own record of where the error was created, never to the thrown value's
+`stack` string:
+
+- **Provenance, not `stack`.** When the engine creates an error it records, on
+  the error object, the top call frame's source location and a ±context excerpt
+  of that module's source, read from the module text the loader already parsed.
+  The excerpt travels on the error, so the frame renders even after the engine
+  is gone. A guest can overwrite an error's `.stack` property, or `throw` a
+  plain object with a fabricated `stack` — that string is never parsed to pick a
+  file or read one, so a forged frame discloses nothing and no host opens a
+  guest-named path. A thrown value with no engine-recorded provenance gets no
+  code frame (its message still shows).
+
+- **Principal / ownership — a guest never reads host source.** Ownership travels
+  with each module and is decided *at load time by the loader*, never inferred
+  from which engine happens to be running when a later error is captured. Every
+  host enrollment API stamps its root module host-owned: `--globals`,
+  `--host-environment`, `--module`, `--modules`, manifest/config variants, and
+  their embedding equivalents. Static imports, dynamic `import()`, and deferred
+  loads inherit the importing module's ownership transitively, even when guest
+  code calls an exported host function after enrollment has finished. A
+  host-injected virtual module is also host-owned because the guest has no API
+  to add one. Only a module reached from a guest-owned importer is guest-owned.
+  An excerpt is captured only from guest-owned source. A genuine error thrown
+  *inside* a host-owned module — directly, transitively, from a `--module` the
+  guest imported, or from an `Error` the host created and the guest threw later
+  (a "held" error) — shows its location line but **no source excerpt**.
+
+- **Canonical file identity.** Registry entries are keyed on canonical identity
+  obtained from the same open handle used to read the module: POSIX uses a
+  device-and-inode pair; Windows uses volume serial and file-index high/low. The key therefore
+  collapses symlinks, junctions, hardlinks, and case aliases instead of minting
+  a second copy with different ownership. Because host enrollment happens
+  before guest execution, the host registration wins that identity. If handle
+  identity cannot be obtained, the source is not retained under a lexical-path
+  fallback; source lookup for that scope fails closed to location-only.
+
+- **Bound to the executing engine, enforced again at render.** Each engine's
+  module loader owns exactly one source scope (identified by a durable,
+  process-monotonic *principal* — a value never reused, unlike a freed pointer),
+  and registration always targets the *loader's own* scope. Capture targets the
+  scope the engine *activates around its own execution* — including every
+  cross-engine transition (a ShadowRealm `evaluate`, `importValue`, or wrapped
+  function switches the active scope to the engine actually running and restores
+  it on return). An excerpt is *also* stamped with its principal and re-checked
+  when it is rendered. Every formatting host explicitly passes the principal
+  it expects; `Goccia.Error.Detail` authorizes the excerpt only when that value
+  equals the stamp. Supplying no principal (zero) means location-only — the
+  absence of an active execution scope is never authorization. Hosts that keep
+  an error beyond `Execute` must keep the originating engine's principal if
+  they intend to render its excerpt. Thus a child engine's error formatted by a
+  resumed parent is refused the child's source even though the error object
+  crossed the boundary. Capture-time filtering is not trusted alone. This
+  holds independently of the filesystem capability gate: an isolated child that cannot
+  `fs.readFileSync` a parent module also cannot obtain its source through a forged
+  or genuine code frame.
+
+- **Bounded, budgeted.** Retained source and each captured excerpt are charged
+  against the `--max-memory` budget and released when the scope or error is
+  freed. Accounting uses the actual retained UTF-16 representation, not
+  `Length()`: source entries include object/container storage, pointer slots,
+  and each separately allocated line string; excerpts include their string
+  allocation. The same byte figure drives the per-module/per-scope or excerpt
+  cap, the collector reservation, and the later release. A reservation refusal
+  degrades to location-only. Registry insertion is transactional: allocation or
+  indexing failure rolls back every partial key and reservation before the
+  exception leaves the loader.
+
+Implementation: `Goccia.Values.ErrorHelper` (provenance capture, principal stamp,
+budget), `Goccia.Diagnostics.SourceRegistry` (engine-owned, execution-activated
+scope with per-load ownership tags, canonical-identity keying, and byte budgets),
+`Goccia.ExecutionContext` (activates a scope on each cross-engine transition),
+`Goccia.Error.Detail` (rendering with render-time principal enforcement).
+The bytecode side is described in
+[Bytecode VM — Runtime Error Diagnostics](bytecode-vm.md#runtime-error-diagnostics).
+
 ## Related documents
 
 - [Build System](build-system.md) — the authoritative CLI and config reference

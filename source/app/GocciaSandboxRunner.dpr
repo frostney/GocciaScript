@@ -18,6 +18,7 @@ uses
   Goccia.CapabilityAudit,
   Goccia.CLI.Application,
   Goccia.CLI.Options,
+  Goccia.Diagnostics.SourceRegistry,
   Goccia.Engine,
   Goccia.Error,
   Goccia.Error.Detail,
@@ -790,6 +791,8 @@ var
   CloneRealm, ExecutionRealm: TGocciaRealm;
   PreviousOutputLines: TStrings;
   PreviousHostEnvironment: TGocciaHostEnvironment;
+  RenderScope: TGocciaDiagnosticSourceScope;
+  ExpectedPrincipal: Int64;
 begin
   FillChar(Result, SizeOf(Result), 0);
   Result.Ok := False;
@@ -842,6 +845,18 @@ begin
         PreviousHostEnvironment);
       ApplyVirtualModulesToEngine(Engine, '');
       FCurrentHostEnvironment := Engine.HostEnvironment;
+
+      { The recipient owns render authorization. A top-level runner invocation
+        explicitly authorizes the engine it just created. During nested
+        runScript, the parent scope is active before the child transition, so
+        the returned error string is authorized only for the parent and the
+        child's excerpt is withheld. Engine.Execute restores that same scope
+        before its exception reaches the formatter below. }
+      RenderScope := TGocciaDiagnosticSourceRegistry.Current;
+      if Assigned(RenderScope) then
+        ExpectedPrincipal := RenderScope.Principal
+      else
+        ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
 
       try
         PushTimeoutScope(tsFile, EngineOptions.Timeout.ValueOr(0));
@@ -906,7 +921,7 @@ begin
       on E: TGocciaThrowValue do
       begin
         Result.ErrorMessage := FormatThrowDetail(E.Value, AEntryPath, Source,
-          False, E.Suggestion);
+          False, ExpectedPrincipal, E.Suggestion);
         Result.FailureKind := sfkScriptError;
       end;
       { The same guest throw, as the bytecode VM delivers it.  Without this
@@ -916,7 +931,7 @@ begin
       on E: EGocciaBytecodeThrow do
       begin
         Result.ErrorMessage := FormatThrowDetail(E.ThrownValue, AEntryPath,
-          Source, False, E.Suggestion);
+          Source, False, ExpectedPrincipal, E.Suggestion);
         Result.FailureKind := sfkScriptError;
       end;
       { Whatever is left is a native error the engine does not model.

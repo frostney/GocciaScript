@@ -38,6 +38,7 @@ uses
   Goccia.Builtins.Temporal,
   Goccia.CapabilityAudit,
   Goccia.Constants,
+  Goccia.Diagnostics.SourceRegistry,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.ExecutionContext,
@@ -621,7 +622,10 @@ var
   ExportValue: TGocciaValue;
   Module: TGocciaModule;
 begin
-  Module := FModuleLoader.LoadModule(APath, FSourcePath);
+  // Host enrollment is durable on the root module/address. Every static,
+  // dynamic or deferred import from it inherits host ownership regardless of
+  // when the import resolves.
+  Module := FModuleLoader.LoadHostModule(APath, FSourcePath);
   ExportNames := Module.GetExportNames;
   for ExportName in ExportNames do
     if Module.TryGetExportValue(ExportName, ExportValue) then
@@ -764,7 +768,9 @@ var
   DefaultValue: TGocciaValue;
   Module: TGocciaModule;
 begin
-  Module := FModuleLoader.LoadModule(APath, FSourcePath);
+  // The manifest module is host-provided config. Durable ownership also covers
+  // imports its exported code may initiate after manifest evaluation returns.
+  Module := FModuleLoader.LoadHostModule(APath, FSourcePath);
   if not Module.TryGetExportValue(KEYWORD_DEFAULT, DefaultValue) then
     raise EArgumentException.Create(
       'Virtual modules manifest module must have a default export.');
@@ -1634,8 +1640,13 @@ end;
 function TGocciaEngine.ActivateRealmExecutionContext:
   TGocciaExecutionContextScope;
 begin
+  // Switching into this engine's realm (ShadowRealm evaluate/importValue/wrapped
+  // function) also makes this engine's diagnostic scope the active capture
+  // target, so a code frame captured while this engine runs comes from its own
+  // source — never the caller engine's — and is restored when the scope pops.
   Result := TGocciaExecutionContextScope.Create(
-    CreateExecutionContext(FRealm, FInterpreter.GlobalScope, FSourcePath));
+    CreateExecutionContext(FRealm, FInterpreter.GlobalScope, FSourcePath),
+    FModuleLoader.DiagnosticScope);
 end;
 
 procedure TGocciaEngine.RegisterGocciaScriptGlobal;
@@ -2379,19 +2390,28 @@ function TGocciaEngine.RunModuleForSourceType(
   const AFileName: string): TGocciaValue;
 var
   ModuleScope: TGocciaScope;
+  PrevScope: TGocciaDiagnosticSourceScope;
 begin
-  if FSourceType = stModule then
-  begin
-    ModuleScope := FInterpreter.GlobalScope.CreateChild(skModule,
-      'Module:' + AFileName);
-    ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    ModuleScope.NonStrictMode := False;
-    ModuleScope.ArgumentsObjectEnabled :=
-      cfArgumentsObject in FCompatibility;
-    Result := RunModuleInScope(AModule, ModuleScope);
-  end
-  else
-    Result := RunModule(AModule);
+  // Bytecode execution entry (the interpreter path uses Execute). Bind
+  // code-frame capture to this engine's own scope for the run, as Execute does.
+  PrevScope := TGocciaDiagnosticSourceRegistry.Activate(
+    FModuleLoader.DiagnosticScope);
+  try
+    if FSourceType = stModule then
+    begin
+      ModuleScope := FInterpreter.GlobalScope.CreateChild(skModule,
+        'Module:' + AFileName);
+      ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      ModuleScope.NonStrictMode := False;
+      ModuleScope.ArgumentsObjectEnabled :=
+        cfArgumentsObject in FCompatibility;
+      Result := RunModuleInScope(AModule, ModuleScope);
+    end
+    else
+      Result := RunModule(AModule);
+  finally
+    TGocciaDiagnosticSourceRegistry.Deactivate(PrevScope);
+  end;
 end;
 
 procedure TGocciaEngine.DiscardRuntimePending;
@@ -2413,6 +2433,7 @@ begin
     raise EInvalidOperation.CreateFmt(
       'Host module "%s" conflicts with a configured virtual module.',
       [AName]);
+  AModule.IsHostOwned := True;
   FInterpreter.GlobalModules.AddOrSetValue(AName, AModule);
 end;
 
@@ -2461,7 +2482,19 @@ var
   SavedVMGlobalScope: TGocciaScope;
   GC: TGarbageCollector;
   FloatingPointState: TGocciaFloatingPointState;
+  PrevDiagScope: TGocciaDiagnosticSourceScope;
 begin
+  // Bind runtime-error code-frame capture to THIS engine's source scope for the
+  // duration of its execution, restoring the caller's on exit. The previous
+  // scope is a per-invocation LOCAL (never an instance field): a host callback
+  // that re-enters this same engine's Execute must not overwrite an outer
+  // invocation's saved scope, or the outer restore would dangle after the
+  // engine is freed (use-after-free). Capture targets the active scope, so a
+  // nested (sandbox/ShadowRealm) child, a parent that resumes while a child
+  // stays alive, and a later sequential run each capture only their own guest
+  // source. See Goccia.Diagnostics.SourceRegistry.
+  PrevDiagScope := TGocciaDiagnosticSourceRegistry.Activate(
+    FModuleLoader.DiagnosticScope);
   EnterGocciaFloatingPointScope(FloatingPointState);
   try
   FillChar(FLastTiming, SizeOf(FLastTiming), 0);
@@ -2667,6 +2700,7 @@ begin
   Result := FLastTiming;
   finally
     LeaveGocciaFloatingPointScope(FloatingPointState);
+    TGocciaDiagnosticSourceRegistry.Deactivate(PrevDiagScope);
   end;
 end;
 
@@ -2680,7 +2714,10 @@ function TGocciaEngine.ExecuteProgram(const AProgram: TGocciaProgram): TGocciaVa
 var
   GC: TGarbageCollector;
   FloatingPointState: TGocciaFloatingPointState;
+  PrevScope: TGocciaDiagnosticSourceScope;
 begin
+  PrevScope := TGocciaDiagnosticSourceRegistry.Activate(
+    FModuleLoader.DiagnosticScope);
   EnterGocciaFloatingPointScope(FloatingPointState);
   try
     Result := FExecutor.ExecuteProgram(AProgram);
@@ -2695,6 +2732,7 @@ begin
     end;
   finally
     LeaveGocciaFloatingPointScope(FloatingPointState);
+    TGocciaDiagnosticSourceRegistry.Deactivate(PrevScope);
   end;
 end;
 

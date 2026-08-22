@@ -13,6 +13,11 @@ unit Goccia.Error.CallDiagnostics;
 interface
 
 type
+  { What kind of call site produced a non-callable fault. Selects the
+    suggestion: an ordinary call/new gets the shape-based suggestion, a tagged
+    template gets the tag-must-be-callable hint that both executors share. }
+  TGocciaCalleeKind = (cckPlain, cckTaggedTemplate);
+
   { A call site's callee, described well enough to build the same diagnostic
     from either executor.
 
@@ -27,6 +32,7 @@ type
     CalleeText: string;
     ObjectText: string;
     PropertyName: string;
+    Kind: TGocciaCalleeKind;
   end;
 
 { Longest callee text carried into a diagnostic. A callee spanning more than
@@ -72,6 +78,9 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions;
 
+// SSuggestTaggedTemplateCallable is declared in Goccia.Error.Suggestions and
+// used by NotCallableSuggestion below.
+
 resourcestring
   SSuggestMemberNotMethod =
     '''%s'' is of type ''%s'' which does not have method ''%s''';
@@ -87,6 +96,7 @@ begin
   Result.CalleeText := '';
   Result.ObjectText := '';
   Result.PropertyName := '';
+  Result.Kind := cckPlain;
 end;
 
 function NormalizeCalleeText(const AText: string): string;
@@ -171,7 +181,9 @@ end;
 function NotCallableSuggestion(const ADescriptor: TGocciaCalleeDescriptor;
   const AReceiverTypeName, ACalleeTypeName: string): string;
 begin
-  if (ADescriptor.PropertyName <> '') and (ADescriptor.ObjectText <> '') then
+  if ADescriptor.Kind = cckTaggedTemplate then
+    Result := SSuggestTaggedTemplateCallable
+  else if (ADescriptor.PropertyName <> '') and (ADescriptor.ObjectText <> '') then
     Result := Format(SSuggestMemberNotMethod,
       [ADescriptor.ObjectText, AReceiverTypeName, ADescriptor.PropertyName])
   else if ADescriptor.PropertyName <> '' then
