@@ -929,7 +929,8 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,
   Goccia.Values.SymbolValue,
-  Goccia.Values.ToPrimitive;
+  Goccia.Values.ToPrimitive,
+  Goccia.VM.Exception;
 
 var
   GTemplateSiteIdLock: TGocciaCriticalSection;
@@ -2665,6 +2666,13 @@ begin
         Promise.Resolve(Module.GetNamespaceObject);
       end;
     except
+      { A module whose top-level compiled code throws surfaces here as
+        EGocciaBytecodeThrow; its ThrownValue is the guest completion, so
+        reject import() with that identity to match the VM twin
+        (TGocciaVMDynamicImportStartValue.Call) rather than a synthesized
+        Error. }
+      on E: EGocciaBytecodeThrow do
+        Promise.Reject(E.ThrownValue);
       on E: TGocciaThrowValue do
         Promise.Reject(E.Value);
       on E: TGocciaSyntaxError do
