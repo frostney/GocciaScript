@@ -639,9 +639,10 @@ Further divergences from Vitest worth knowing:
 | `vi.runAllTimers()` / `vi.runAllTimersAsync()` | |
 | `vi.runOnlyPendingTimers()` / `vi.runOnlyPendingTimersAsync()` | |
 | `vi.getTimerCount()`, `vi.clearAllTimers()` | |
-| `vi.advanceTimersToNextFrame`, `vi.runAllTicks`, `vi.setTimerTickMode` | Throw — no `requestAnimationFrame`, no `process.nextTick`, and no real elapsed time for an auto-advancing clock to track |
+| `vi.advanceTimersToNextFrame`, `vi.runAllTicks` | Throw — no `requestAnimationFrame`, and no `process.nextTick` queue (promise jobs run on the engine microtask queue, which the `…Async` members already drain) |
+| `vi.setTimerTickMode` | `"manual"` is accepted and does nothing — it names the only behaviour there is. Every other mode throws: they advance the clock against real elapsed time, which no GocciaScript clock measures |
 
-Every member returns `vi`, so calls chain. The semantics were probed against the pinned Vitest 4.1.10 — whose fake timers wrap `@sinonjs/fake-timers` — rather than read off its documentation, and are locked in by a [vitest-gated differential suite](differential-testing.md). The details worth knowing:
+Every implemented member returns `vi`, so calls chain; the three that throw are listed in the last row above. The semantics were probed against the pinned Vitest 4.1.10 — whose fake timers wrap `@sinonjs/fake-timers` — rather than read off its documentation, and are locked in by a [vitest-gated differential suite](differential-testing.md). The details worth knowing:
 
 - **`advanceTimersByTime` runs no microtasks between timers.** A promise callback a timer queued waits until the advance returns. The `…Async` variants drain the microtask queue before the first timer and again after each one, which is the ordering a suite awaiting between ticks depends on.
 - **Timers due at the same instant fire in registration order.** Ties break on creation time, then on id.
@@ -650,15 +651,19 @@ Every member returns `vi`, so calls chain. The semantics were probed against the
 - **`runAllTimers` gives up after 10000 timers** with `Aborting after running 10000 timers, assuming an infinite loop!`.
 - **`runOnlyPendingTimers` ticks to the latest due time among the timers pending when it was called** — so a timer one of them schedules inside that window still fires, and one scheduled beyond it stays pending.
 - **A throwing timer callback stops the run only for some members.** Under `advanceTimersByTime` and `runOnlyPendingTimers` the first exception is recorded, the remaining timers still run, the clock reaches the instant it was asked for, and the error is rethrown when the advance ends. Under `runAllTimers` and `advanceTimersToNextTimer` it stops there and everything behind it stays pending. The three genuinely differ in Vitest, and each was probed on its own.
-- **`setSystemTime` moves the wall clock without letting time pass.** Every pending timer keeps its remaining delay, forwards and backwards.
+- **`setSystemTime` moves the wall clock without letting time pass.** Every pending timer keeps its remaining delay, forwards and backwards. It takes a number, a `Date`, or **anything else `new Date(...)` accepts** — a date string included.
+- **A fractional delay is truncated; a fractional advance is banked.** `setTimeout(fn, 1.5)` is due at 1ms, but `advanceTimersByTime(1.5)` followed by `advanceTimersByTime(0.5)` moves the clock by a full 2ms and fires a timer due there. Both halves are Vitest's, and the pairing is unintuitive enough to be worth stating.
 - **`Date`, `new Date()`, `Temporal.Now` and `performance.now()` all follow the mocked clock**, because it is installed on the [host environment](host-environment.md) rather than patched onto a global. `performance.now()` reports elapsed *virtual* time from the moment fake timers were installed, and a `setSystemTime` jump does not move it.
 - **`vi.setSystemTime` works without `vi.useFakeTimers`**, freezing `Date` only and leaving timers and monotonic time alone.
 - **Fake-timer state is not reset between tests.** Vitest leaves the clock installed for the rest of the file, and so does GocciaScript; each test file gets a fresh engine, so nothing leaks across files.
+- **`AbortSignal.timeout()` is not faked.** It runs on the infrastructure monotonic clock, so advancing the virtual clock will not fire it. That is parity, not a gap: Vitest does not fake it either, because it is not one of the globals its clock replaces. A suite that needs an abort under fake timers should drive an `AbortController` from a timer callback instead.
 
-Two shapes deliberately diverge from Vitest:
+Four shapes deliberately diverge from Vitest:
 
 - **A timer id is a number**, as it is on the web. Vitest runs in Node, where the fake clock hands back a `Timeout` object with `ref`/`unref`/`refresh`; GocciaScript has no Node timer object to imitate and no event loop for those methods to mean anything to. `clearTimeout` takes either, which is what suites actually depend on.
 - **`vi.useFakeTimers(config)` honours only `now`.** `toFake` has nothing to select from — there is one timer queue and it is always the faked one — and `shouldAdvanceTime` / `advanceTimeDelta` describe real elapsed time, which no GocciaScript clock measures. Both are ignored rather than rejected, so a suite that passes them still runs.
+- **A non-finite system time is refused.** `vi.setSystemTime(NaN)`, an out-of-range date, or a string `Date` cannot parse, all throw a `TypeError`. Vitest admits them and leaves `Date.now()` reporting `NaN`; here the mocked clock reaches JavaScript as an integer nanosecond count on the [host environment](host-environment.md), so there is nothing for a `NaN` to be, and every consumer of the virtual clock quietly stops working once one is admitted.
+- **An advance that can never finish is aborted.** A `setInterval` with a period of `0` re-arms at the instant it just ran, so the clock can never move past it; Vitest hangs forever on that shape and GocciaScript throws instead. Short of that the behaviour matches: every tick lands on the same instant, and the advance still finishes where it was asked to.
 
 ##### Without fake timers
 
@@ -671,7 +676,16 @@ test("a timer settles the awaited promise", async () => {
 });
 ```
 
-A delay is therefore an ordering key, not a duration. Two consequences follow: a timer-driven suite runs at full speed and reproducibly, and an uncleared `setInterval` does not hang the run — the end-of-run drain is bounded by the same 10000-timer limit and simply stops.
+A delay is therefore an ordering key, not a duration. A timer-driven suite runs at full speed and reproducibly, and an uncleared `setInterval` cannot hang the run: the drains skip intervals entirely, and every one of them is bounded.
+
+Four more rules make real mode predictable:
+
+- **Timers a test body schedules run at the end of that test**, not at some later idle point. A `setTimeout` written inside a `test()` fires once the body has returned, before the next test starts.
+- **Whatever is left over is dropped when the test ends.** An uncleared interval, or a chain longer than the drain reached, cannot fire inside the next test. Fake-timer state is untouched by this — that queue belongs to the suite.
+- **A timer callback that throws fails the test that scheduled it**, and nothing else: it is reported as `uncaught exception in a timer callback`. It is not delivered to whatever frame happened to be awaiting, so a `try`/`catch` around an unrelated `await` will not see it and that `await` still resolves normally. This is Node's shape — an uncaught top-level error — rather than an exception at the wait.
+- **Real outstanding work outranks virtual time.** While a `fetch` or an `Atomics.waitAsync` is still in flight, no timer runs. Without that rule `Promise.race([fetch(url), timeoutAfter(ms)])` resolved to the timeout every time, whatever `ms` was, because the virtual clock costs nothing to advance.
+
+`performance.now()` is worth one note of its own: while timers are faked it measures elapsed virtual time from the install, so it is not on the same timeline as `performance.timeOrigin` (which keeps reporting the real process origin). Leaving fake timers puts it back on the real timeline.
 
 ##### `goccia:timers`
 

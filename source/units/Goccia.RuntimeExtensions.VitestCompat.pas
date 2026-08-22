@@ -304,10 +304,10 @@ begin
     '  "on the engine microtask queue, which the async advance members " +' + LB +
     '  "already drain.";' + LB +
     'const NO_AUTO_ADVANCE =' + LB +
-    '  "the timer queue is supported, but every tick mode other than the " +' + LB +
-    '  "default advances the clock against real elapsed time, and no " +' + LB +
-    '  "GocciaScript clock measures that. Advance the timers explicitly " +' + LB +
-    '  "instead.";' + LB +
+    '  "the timer queue is supported, and the manual mode is already how it " +' + LB +
+    '  "behaves, so that one is accepted. Every other mode advances the " +' + LB +
+    '  "clock against real elapsed time, which no GocciaScript clock " +' + LB +
+    '  "measures. Advance the timers explicitly instead.";' + LB +
     'const ASYNC_POLLING =' + LB +
     '  "this member polls asynchronously, retrying its callback until the " +' + LB +
     '  "condition holds or a timeout elapses, which needs execution to " +' + LB +
@@ -459,8 +459,13 @@ begin
     '// Fake timers. The clock and the queue live in the engine; everything' + LB +
     '// here is the shape Vitest exposes them in — Date instead of epoch' + LB +
     '// milliseconds, and `vi` back for chaining.' + LB +
+    '// Vitest passes anything that is not already a Date through the Date' + LB +
+    '// constructor, so a date STRING is supported API — `Number(value)` on' + LB +
+    '// one produces NaN instead of an instant. The engine refuses a' + LB +
+    '// non-finite result rather than installing a NaN clock the way Vitest' + LB +
+    '// does; see docs/testing-api.md.' + LB +
     'const toEpochMilliseconds = (value) =>' + LB +
-    '  value instanceof Date ? value.getTime() : Number(value);' + LB +
+    '  (value instanceof Date ? value : new Date(value)).getTime();' + LB +
     LB +
     '// Only `now` is honoured. `toFake` has nothing to select from — there is' + LB +
     '// exactly one timer queue and it is always the faked one — and the' + LB +
@@ -547,7 +552,14 @@ begin
     '  advanceTimersToNextFrame:' + LB +
     '    unsupported("advanceTimersToNextFrame", NO_FRAME_CLOCK),' + LB +
     '  runAllTicks: unsupported("runAllTicks", NO_NEXT_TICK),' + LB +
-    '  setTimerTickMode: unsupported("setTimerTickMode", NO_AUTO_ADVANCE),' + LB +
+    LB +
+    '  // "manual" is not a mode this has to implement — it is a description' + LB +
+    '  // of the only behaviour there is, so asking for it is satisfied by' + LB +
+    '  // doing nothing. The auto-advancing modes are the unsupported ones.' + LB +
+    '  setTimerTickMode: (mode) => {' + LB +
+    '    if (mode === "manual") return vi;' + LB +
+    '    return unsupported("setTimerTickMode", NO_AUTO_ADVANCE)();' + LB +
+    '  },' + LB +
     LB +
     '  stubGlobal: stubGlobal,' + LB +
     '  unstubAllGlobals: unstubAllGlobals,' + LB +

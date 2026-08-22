@@ -56,8 +56,14 @@ begin
     this thread left pending. Each test file gets its own engine, which is what
     keeps fake-timer state from leaking across files without a reset hook of
     its own. }
-  Queue.EndFakeTimers;
+  Queue.ResetForEngine;
+  { Both pointers name objects this engine owns, and both are cleared in Detach
+    while it is still alive. Attaching a second engine over a queue that still
+    named the first would leave PublishClock writing into a freed host
+    environment; assigning here — rather than only when a clock is first mocked
+    — is what keeps the two in step. }
   Queue.HostEnvironment := Runtime.Engine.HostEnvironment;
+  Queue.OwnerRealm := Runtime.Engine.Realm;
 
   RegisterTimerGlobals(Runtime.Engine.Interpreter.GlobalScope, FHostToken);
   Runtime.RegisterRuntimeGlobalName('setTimeout');
@@ -74,28 +80,31 @@ begin
   Result := CreateTimersNamespace(FHostToken);
 end;
 
-{ Real-mode timers fire where a host event loop would have taken over: at the
-  end of the run, once every other extension is idle and the microtask queue is
-  the only thing left. Under fake timers nothing runs here — a timer the suite
-  never advanced to is a timer the suite did not want. }
+{ Real-mode timers fire where a host event loop would have taken over.
+
+  This is one of those points, not the only one and not the last: the engine
+  reaches runtime idle when the entry module has finished evaluating, which
+  under the test runner is *before* any test body has run. Timers a test
+  schedules are drained by the runner's own per-test lifecycle instead
+  (Goccia.Builtins.TestingLibrary), which is also what attributes a throwing
+  callback to the test that scheduled it.
+
+  Timeouts only, and nothing raises: DrainRealTimers skips intervals, because an
+  uncleared one is infinite and would spend the whole budget without finishing
+  any sooner, and it parks a thrown value for the host rather than propagating
+  it — a module-scope timer must not fail the file from inside a teardown path.
+  Under fake timers nothing runs here at all: a timer the suite never advanced
+  to is a timer the suite did not want. }
 procedure TGocciaTimersRuntimeExtension.WaitForIdle;
-var
-  Queue: TGocciaTimerQueue;
 begin
   inherited;
-  Queue := TGocciaTimerQueue.Instance;
-  if Assigned(Queue) then
-    Queue.DrainRealTimers;
+  DrainRealTimersForHost;
 end;
 
 procedure TGocciaTimersRuntimeExtension.DiscardPending;
-var
-  Queue: TGocciaTimerQueue;
 begin
   inherited;
-  Queue := TGocciaTimerQueue.Instance;
-  if Assigned(Queue) then
-    Queue.DiscardTimers;
+  DiscardRealTimers;
 end;
 
 procedure TGocciaTimersRuntimeExtension.Detach;
@@ -110,8 +119,9 @@ begin
   begin
     { The clock override has to come off before the host environment goes away,
       and the queue must stop pointing at a freed one. }
-    Queue.EndFakeTimers;
+    Queue.ResetForEngine;
     Queue.HostEnvironment := nil;
+    Queue.OwnerRealm := nil;
   end;
 
   ReleaseTimersHost(FHostToken);

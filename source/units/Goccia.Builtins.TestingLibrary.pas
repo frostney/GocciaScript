@@ -389,6 +389,7 @@ uses
   Goccia.MicrotaskQueue,
   Goccia.RegExp.Runtime,
   Goccia.Timeout,
+  Goccia.Timers,
   Goccia.Utils,
   Goccia.Values.AsymmetricMatcher,
   Goccia.Values.ClassHelper,
@@ -3908,6 +3909,7 @@ begin
             if (TGocciaMicrotaskQueue.Instance <> nil) then
               TGocciaMicrotaskQueue.Instance.ClearQueue;
             DiscardFetchCompletions;
+            DiscardRealTimers;
             raise;
           end;
           on E: Exception do
@@ -3919,6 +3921,7 @@ begin
               if (TGocciaMicrotaskQueue.Instance <> nil) then
                 TGocciaMicrotaskQueue.Instance.ClearQueue;
               DiscardFetchCompletions;
+              DiscardRealTimers;
               raise;
             end;
             if not FSuppressOutput then
@@ -4088,6 +4091,7 @@ var
   ExceptionDetail, ExceptionSummary: string;
   FailureRecorded: Boolean;
   TerminalUnwinding: Boolean;
+  TimerErrorValue: TGocciaValue;
   EffectiveSuiteName: string;
   HookFailed: Boolean;
   HookMessage: string;
@@ -4267,9 +4271,49 @@ begin
                 end
                 else
                   DrainMicrotasksAndFetchCompletions;
+
+                { Timers the body scheduled are work the body started, so they
+                  run here — at the end of the test that owns them — rather
+                  than at the engine's idle point, which under this runner is
+                  reached while the entry module is still evaluating and every
+                  test body is still ahead of it. Without this a
+                  `setTimeout` written inside a `test()` never ran at all and
+                  was discarded on the way out, silently.
+
+                  Timeouts only and bounded, so an uncleared interval cannot
+                  hold the test open. }
+                DrainRealTimersForHost;
+
+                { A throwing timer callback is an uncaught error in Node, not
+                  something the awaiting frame catches, so the queue parks it
+                  instead of raising it at whatever happened to be waiting.
+                  Attributing it is the runner's job, and this is the point
+                  where the test that scheduled it is still the current one. }
+                if TakeUncaughtTimerError(TimerErrorValue) then
+                begin
+                  RejectionReason := DescribeRejectionReason(TimerErrorValue);
+                  AssertionFailed('timer callback',
+                    'Uncaught exception in a timer callback: ' +
+                    RejectionReason);
+                  if FTestStats.CurrentSuiteName <> '' then
+                    AFailedTestDetails.Add('Test "' + TestCase.Name +
+                      '" in suite "' + FTestStats.CurrentSuiteName +
+                      '": uncaught exception in a timer callback: ' +
+                      RejectionReason)
+                  else
+                    AFailedTestDetails.Add('Test "' + TestCase.Name +
+                      '": uncaught exception in a timer callback: ' +
+                      RejectionReason);
+                  FailureRecorded := True;
+                end;
               finally
                 if Assigned(TestResult) then
                   RemoveTempRootIfNeeded(TestResult);
+                { Whatever the bounded drain left — an uncleared interval, or a
+                  chain it did not reach — belongs to this test and must not
+                  fire inside the next one. Fake-timer state is untouched: that
+                  queue belongs to the suite. }
+                DiscardRealTimers;
               end;
             except
               { Test-scope timeout: record TIMEOUT and let execution
@@ -4283,6 +4327,7 @@ begin
                   if (TGocciaMicrotaskQueue.Instance <> nil) then
                     TGocciaMicrotaskQueue.Instance.ClearQueue;
                   DiscardFetchCompletions;
+                  DiscardRealTimers;
                   AssertionFailed('test execution',
                     Format('Test exceeded per-test timeout of %dms',
                       [E.DurationMs]));
@@ -4311,6 +4356,7 @@ begin
                 if (TGocciaMicrotaskQueue.Instance <> nil) then
                   TGocciaMicrotaskQueue.Instance.ClearQueue;
                 DiscardFetchCompletions;
+                DiscardRealTimers;
                 TerminalUnwinding := True;
                 raise;
               end;
@@ -4326,12 +4372,14 @@ begin
                   if (TGocciaMicrotaskQueue.Instance <> nil) then
                     TGocciaMicrotaskQueue.Instance.ClearQueue;
                   DiscardFetchCompletions;
+                  DiscardRealTimers;
                   TerminalUnwinding := True;
                   raise;
                 end;
                 if (TGocciaMicrotaskQueue.Instance <> nil) then
                   TGocciaMicrotaskQueue.Instance.ClearQueue;
                 DiscardFetchCompletions;
+                DiscardRealTimers;
                 if E is TGocciaError then
                 begin
                   ExceptionDetail := TGocciaError(E).GetDetailedMessage;
@@ -4559,6 +4607,7 @@ begin
             if (TGocciaMicrotaskQueue.Instance <> nil) then
               TGocciaMicrotaskQueue.Instance.ClearQueue;
             DiscardFetchCompletions;
+            DiscardRealTimers;
             raise;
           end;
           on E: TGocciaThrowValue do
@@ -4575,6 +4624,7 @@ begin
               if (TGocciaMicrotaskQueue.Instance <> nil) then
                 TGocciaMicrotaskQueue.Instance.ClearQueue;
               DiscardFetchCompletions;
+              DiscardRealTimers;
               raise;
             end;
             AssertionFailed('callback execution', 'Callback threw an exception: ' + E.Message);

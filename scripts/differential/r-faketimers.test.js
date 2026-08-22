@@ -11,6 +11,18 @@
 // where the fake clock hands back a Node-shaped `Timeout` object; GocciaScript
 // hands back a number, as the web platform does. Both are cleared by passing
 // them to clearTimeout, which is the part a suite depends on.
+//
+// ---------------------------------------------------------------------------
+// Reading a failure after a Vitest bump
+// ---------------------------------------------------------------------------
+// Most of what is below is ordinary behaviour that any fake-timer
+// implementation would have to keep. A dozen assertions are not: they pin a
+// number, a string, or a workaround that belongs to @sinonjs/fake-timers and
+// to the way Vitest drives it, so a bump can move them without anything being
+// wrong with this engine. Each one carries a `PINNED:` note naming what it
+// depends on. If one of those fails after a bump, re-probe the pinned Vitest
+// and move the expectation; if anything WITHOUT such a note fails, the engine
+// regressed.
 
 import { vi } from "vitest";
 
@@ -86,6 +98,10 @@ describe("advancing", () => {
     expect(log).toEqual(["zero", "missing", "negative", "one"]);
   });
 
+  // PINNED: the `delay || (duringTick ? 1 : 0)` rule in the fake clock's
+  // addTimer. Nothing requires a nested zero-delay timer to land one
+  // millisecond later rather than on the current instant — it is how sinon
+  // stops a zero-delay chain from looping inside one tick.
   test("a zero-delay timer scheduled inside a callback lands on the next millisecond", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -124,6 +140,10 @@ describe("advancing", () => {
     expect(seen).toEqual([["x", 2]]);
   });
 
+  // PINNED: Vitest's own workaround for sinonjs/fake-timers#250 — it follows
+  // clock.next() with a zero-length tick so the whole instant fires. If
+  // upstream fixes the issue and Vitest drops the workaround, only the second
+  // and third timers move.
   test("advanceTimersToNextTimer fires every timer due at that instant", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -141,6 +161,7 @@ describe("advancing", () => {
     expect(Date.now()).toBe(20);
   });
 
+  // PINNED: the exact string thrown by the fake clock's doTick.
   test("a negative advance is refused", () => {
     vi.useFakeTimers();
 
@@ -164,6 +185,10 @@ describe("advancing", () => {
     expect(Date.now()).toBe(20);
   });
 
+  // PINNED: which advance members catch and which do not. The fake clock's
+  // tick records the first exception and carries on; its `next` has no handler,
+  // so runAllTimers and advanceTimersToNextTimer stop. That asymmetry is an
+  // implementation detail of sinon, not a rule about timers.
   test("stepping to a single timer stops at a throwing callback", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -206,6 +231,9 @@ describe("cancelling", () => {
     expect(() => clearInterval(undefined)).not.toThrow();
   });
 
+  // PINNED: the rewind half. clearAllTimers maps onto the clock's `reset`,
+  // which also restores `now` to the install instant — a suite would not
+  // predict that from the member's name.
   test("clearAllTimers drops everything pending and rewinds the clock", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1000);
@@ -290,6 +318,8 @@ describe("running", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  // PINNED: both the number and the sentence. 10000 is Vitest's configured
+  // loopLimit, not a property of timers, and the message is @sinonjs's.
   test("runAllTimers gives up on a self-rescheduling timer", () => {
     vi.useFakeTimers();
     let runs = 0;
@@ -305,6 +335,7 @@ describe("running", () => {
     expect(runs).toBe(10000);
   });
 
+  // PINNED: same asymmetry as above, from the other side.
   test("runAllTimers stops at a throwing callback", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -321,6 +352,7 @@ describe("running", () => {
     expect(Date.now()).toBe(5);
   });
 
+  // PINNED: same asymmetry again — runToLast goes through tick, so it catches.
   test("runOnlyPendingTimers keeps going past a throwing callback", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -336,6 +368,9 @@ describe("running", () => {
     expect(Date.now()).toBe(10);
   });
 
+  // PINNED: runToLast advances to the LATEST due time among the timers pending
+  // at the call, so what counts as "only pending" includes anything that
+  // becomes due inside that window.
   test("runOnlyPendingTimers stops at the timers that were pending", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -450,6 +485,8 @@ describe("the mocked system clock", () => {
     expect(vi.getMockedSystemTime()).toBe(null);
   });
 
+  // PINNED: that a second useFakeTimers() discards pending timers rather than
+  // carrying them over.
   test("re-enabling fake timers installs a fresh clock at the current instant", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -462,7 +499,183 @@ describe("the mocked system clock", () => {
   });
 });
 
+describe("fractional delays and advances", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // PINNED: the fake clock computes a due time with parseInt, which drops the
+  // fraction of a DELAY, while the fraction of an ADVANCE is banked in a
+  // nanosecond remainder and carried. The pairing is unintuitive enough that
+  // the opposite is the natural guess, so both halves are pinned together.
+  test("a fractional delay is truncated", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const log = [];
+    setTimeout(() => log.push(Date.now()), 1.5);
+
+    vi.advanceTimersByTime(1);
+    expect(log).toEqual([1]);
+  });
+
+  test("a delay below one millisecond is due immediately", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const log = [];
+    setTimeout(() => log.push(Date.now()), 0.4);
+
+    vi.advanceTimersByTime(0);
+    expect(log).toEqual([0]);
+  });
+
+  test("fractional advances accumulate", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const log = [];
+    setTimeout(() => log.push(Date.now()), 2);
+
+    vi.advanceTimersByTime(1.5);
+    expect(log).toEqual([]);
+    expect(Date.now()).toBe(1);
+
+    vi.advanceTimersByTime(0.5);
+    expect(log).toEqual([2]);
+    expect(Date.now()).toBe(2);
+  });
+});
+
+describe("zero-period intervals", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // PINNED: an interval reschedules by adding its period to the due time, so a
+  // period of zero re-arms at the instant it just ran. Every tick therefore
+  // lands on the same instant, and the advance still finishes where it was
+  // asked to. Node would clamp the period to 1ms; the fake clock does not, and
+  // the fake clock is the oracle here.
+  test("every tick lands on the same instant", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const stamps = [];
+    let runs = 0;
+    const id = setInterval(() => {
+      runs += 1;
+      stamps.push(Date.now());
+      if (runs >= 5) clearInterval(id);
+    }, 0);
+
+    vi.advanceTimersByTime(3);
+
+    expect(stamps).toEqual([0, 0, 0, 0, 0]);
+    expect(Date.now()).toBe(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("an advance keeps its own recorded exception", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // The recorded exception is per advance operation, not per clock: an advance
+  // called from inside a timer callback sees nothing of the enclosing one's
+  // error. Not pinned — a shared slot would be a bug in any implementation,
+  // and it was one here.
+  test("a nested advance does not steal the outer one's error", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const log = [];
+
+    setTimeout(() => {
+      log.push("first");
+      throw new Error("outer");
+    }, 5);
+    setTimeout(() => {
+      log.push("second");
+      let inner = null;
+      try {
+        vi.advanceTimersByTime(0);
+      } catch (error) {
+        inner = error.message;
+      }
+      log.push("inner=" + inner);
+    }, 10);
+
+    let outer = null;
+    try {
+      vi.advanceTimersByTime(20);
+    } catch (error) {
+      outer = error.message;
+    }
+    log.push("outer=" + outer);
+
+    expect(log).toEqual(["first", "second", "inner=null", "outer=outer"]);
+  });
+});
+
+describe("performance.now across the fake/real transition", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // PINNED: that a mocked monotonic clock starts at zero rather than continuing
+  // the process timeline, and that leaving fake timers puts it back rather than
+  // stranding it at whatever the advance reached.
+  test("it starts at zero when faked and returns to the real timeline after", () => {
+    const realBefore = performance.now();
+
+    vi.useFakeTimers();
+    expect(performance.now()).toBe(0);
+    vi.advanceTimersByTime(500);
+    expect(performance.now()).toBe(500);
+
+    vi.useRealTimers();
+    expect(performance.now() >= realBefore).toBe(true);
+    expect(typeof performance.timeOrigin).toBe("number");
+  });
+
+  // A setSystemTime jump is a change of date, not elapsed time.
+  test("setSystemTime does not move it", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const before = performance.now();
+
+    vi.setSystemTime(9999999);
+    expect(performance.now()).toBe(before);
+
+    vi.advanceTimersByTime(250);
+    expect(performance.now() - before).toBe(250);
+  });
+});
+
+describe("setSystemTime accepts what Date accepts", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Anything that is not already a Date goes through the Date constructor, so a
+  // date string is supported API. Not pinned: this is Vitest's documented
+  // signature, not an implementation detail.
+  test("an ISO string", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2020-01-01T00:00:00.000Z");
+
+    expect(Date.now()).toBe(1577836800000);
+  });
+
+  test("a Date and a number agree", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2020-01-01T00:00:00.000Z"));
+    const fromDate = Date.now();
+
+    vi.setSystemTime(1577836800000);
+    expect(Date.now()).toBe(fromDate);
+  });
+});
+
 describe("the unmocked guard", () => {
+  // PINNED: Vitest's own guard message, verbatim, from its FakeTimers wrapper.
   test("the advance members refuse to run without fake timers", () => {
     vi.useRealTimers();
     const message =
@@ -475,6 +688,8 @@ describe("the unmocked guard", () => {
     expect(() => vi.getTimerCount()).toThrow(message);
   });
 
+  // PINNED: Vitest returns its utils object from these; nothing about a timer
+  // queue requires it.
   test("every timer member chains by returning vi", () => {
     expect(vi.useFakeTimers()).toBe(vi);
     expect(vi.setSystemTime(0)).toBe(vi);

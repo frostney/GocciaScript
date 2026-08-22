@@ -55,19 +55,41 @@ this mode: a suite that turned the clock over to `vi` decided when its timers
 run, and an engine that quietly advanced it would take that decision back.
 
 Under **real timers** the clock still never tracks wall time. It jumps forward
-to the next timer's due time at the two points where the engine would otherwise
-have nothing left to do:
+to the next timer's due time at the points where the engine would otherwise have
+nothing left to do:
 
 - **an `await` on a promise a timer will settle.** GocciaScript drains awaits
   synchronously rather than parking, so `await new Promise(r => setTimeout(r,
-  10))` had nowhere to get its continuation from. The queue is now consulted in
-  the two places that drive a promise to settlement: `AwaitValue`
+  10))` had nowhere to get its continuation from. The queue is consulted in the
+  two places that drive a promise to settlement: `AwaitValue`
   (`Goccia.Values.Await`) for a synchronous await, and `WaitForFetchPromise`
   (`Goccia.FetchManager`), which despite its name is the host's general
   settle-this-promise wait and is what the test runner calls on every async
-  test's returned promise. In both, a real-mode timer sits alongside fetch and
-  `Atomics.waitAsync` as one more thing that can settle a pending promise.
-- **the end of the run**, through the timer extension's `WaitForIdle`.
+  test's returned promise.
+- **the end of each test**, through the runner's own per-test lifecycle
+  (`Goccia.Builtins.TestingLibrary`). This one is not optional. The engine's
+  runtime-idle point is reached when the *entry module* finishes evaluating,
+  which under the test runner is before a single test body has run — so a
+  `setTimeout` written inside a `test()` was never drained by it and was
+  discarded on the way out, silently. Draining where the test that scheduled it
+  is still the current one is also what lets a throwing callback be attributed
+  to that test.
+- **the engine's idle point**, through the timer extension's `WaitForIdle`,
+  which covers timers the entry module itself scheduled.
+
+Real outstanding work outranks virtual time. A timer costs nothing to advance
+to, so consulting the queue before polling fetch made
+`Promise.race([fetch(url), timeoutAfter(ms)])` resolve to the timeout every
+single time, whatever `ms` was, and let a live interval spend a whole budget
+before a response could arrive. Fetch and `Atomics.waitAsync` are therefore
+polled first, and the clock only moves when nothing real is outstanding.
+
+An exception from a real-mode callback does **not** surface at whichever frame
+was waiting. In Node a throwing timer is an uncaught top-level error and the
+awaiting frame is untouched; raising it at the wait instead made it catchable by
+an unrelated `try` around the `await` and left the awaited promise pending as
+well. The queue parks it and the runner attributes it to the test that scheduled
+it, reported as `uncaught exception in a timer callback`.
 
 Two consequences are worth stating plainly, because they are divergences from
 Node rather than from Vitest:
@@ -75,14 +97,23 @@ Node rather than from Vitest:
 - **A delay is an ordering key, not a duration.** `setTimeout(fn, 5000)` inside
   an `await` resolves instantly; only the virtual clock moved. This is what
   makes a timer-driven suite fast and reproducible, and it is the whole point.
-- **A self-rescheduling timer cannot hang the run.** Both drains are bounded by
+- **A self-rescheduling timer cannot hang the run.** Every drain is bounded by
   the same 10000-timer limit `runAllTimers` uses. The bound was not
   precautionary: without it, `convex-test`'s scheduler — which re-arms a
   `setTimeout(fn, 0)` after every batch — kept a promise wait alive forever
-  during the corpus suite's cleanup hook. Past the bound the promise wait
-  reports the promise as unsettled, which is a diagnosis; the end-of-run drain
-  stops silently, because a shutdown path must not turn a passing file into a
-  failing one. Node would keep the process alive instead.
+  during the corpus suite's cleanup hook. A wait that spends the whole budget
+  with timers still runnable *names that* rather than reporting an unsettled
+  promise, which read as a missing `await` and sent the reader looking in the
+  wrong place.
+- **Intervals are excluded from the idle drains entirely.** An uncleared one is
+  by construction never exhausted, so running it there would spend the whole
+  budget and finish no sooner than skipping it — and a throwing one propagating
+  out of a teardown path would turn a passing file into a failing one. Whatever
+  a callback threw is parked for the host, never raised from a shutdown path.
+- **Leftovers do not cross a test boundary.** Whatever a bounded drain did not
+  reach is dropped when the test ends, so a strand cannot fire inside the next
+  test. Fake-timer state is exempt: that queue belongs to the suite, and Vitest
+  does not reset it between tests either.
 
 `useFakeTimers()` installs a fresh clock and discards whatever was pending on
 the previous one, which is what a second `useFakeTimers()` does in Vitest. For
@@ -117,10 +148,34 @@ Each row below was probed against it and is locked in by
 | `setSystemTime` while faking | Moves the wall clock and shifts every pending timer's due time and creation time by the same delta, so remaining delays and ordering are preserved — forwards and backwards |
 | `setSystemTime` **without** `useFakeTimers` | Freezes `Date` only; timers and monotonic time are untouched, and `getMockedSystemTime()` reports the frozen date |
 | `performance.now()` under fake timers | Elapsed virtual time from the moment fake timers were installed — starts at 0, advances with a tick, and is **not** moved by `setSystemTime` |
+| A fractional **delay** | Truncated — the clock computes a due time with `parseInt`, so `setTimeout(fn, 1.5)` is due at 1 and a delay of 0.4 is due immediately |
+| A fractional **advance** | Banked, not truncated: `advanceTimersByTime(1.5)` then `(0.5)` moves the clock a full 2ms and fires a timer due there. The pairing with the row above is the opposite of the natural guess, which is why both were probed |
+| A `setInterval` with period 0 | Every tick lands on the instant the clock is already on, and the advance still finishes where it was asked to. Node clamps such a period to 1ms; the fake clock does not |
+| A nested advance called from inside a timer callback | Sees nothing of the enclosing advance's recorded exception — the record is per operation, not per clock |
+| `setSystemTime` with a string | Supported: anything not already a `Date` goes through the `Date` constructor |
+| `performance.now()` across the transition | 0 at install, elapsed virtual time while faked, back on the real timeline after `useRealTimers()` |
 | `getMockedSystemTime()` | A `Date` while mocked, `null` otherwise |
 | `getRealSystemTime()` | The real clock, even while one is mocked |
 | Every `vi` timer member | Returns `vi`, so calls chain |
 | Fake-timer state between tests | **Not** reset — Vitest leaves the clock installed across tests in a file, and resets only between files |
+
+Two shapes are refused where Vitest admits them, and both refusals exist because
+this clock is not a JavaScript number:
+
+- **A non-finite system time.** Vitest lets `setSystemTime(NaN)` — or a string
+  `Date` cannot parse — through, and `Date.now()` then reports `NaN` harmlessly.
+  Here the mocked clock reaches JavaScript as an `Int64` nanosecond count on the
+  host environment, and every consumer of the virtual clock is arithmetic: once
+  `NaN` was admitted, every due-time comparison was false, the range test
+  selected arbitrarily, and the trailing re-check in the tick recursed on `NaN`
+  until the process segfaulted. It is refused at the door instead, in the queue
+  rather than at either JavaScript boundary — there are two, and only one of
+  them goes through the Vitest shim's `Date` conversion.
+- **An advance that can never finish.** A zero-period interval re-arms at the
+  instant it just ran, so the clock cannot move past it; Vitest hangs forever.
+  The per-advance bound is far above anything a real suite reaches — a 10ms
+  interval advanced by an hour fires 360000 times — so it only ever catches that
+  shape.
 
 Two shapes were probed and deliberately **not** matched:
 
@@ -185,6 +240,34 @@ microtask queue does for a job. A pending timer's callback, arguments and
 captured snapshot are reachable from nothing else, so the queue publishes them
 through a `TGCRootSource` that is rebuilt when the thread's collector changes —
 the same rule `Goccia.AsyncContext` follows.
+
+Three properties of that machinery are load-bearing and were each wrong first.
+
+**The queue is a thread singleton, and a realm is not.** A ShadowRealm child
+runs on the same thread and shares it, so the drains ask whether the realm
+currently executing is the one whose timers the queue carries. Without that, an
+`await` inside the child ran the *parent's* callbacks with the child's realm
+installed — parent code against child intrinsics, reported by nothing. It is
+reachable: an ordinary `async` function suspends and resumes through a promise
+reaction, but `Array.fromAsync` awaits on the caller's own stack, so
+`realm.evaluate` of that shape reaches the drain.
+
+**A recorded exception belongs to one advance, not to the clock.** A tick drains
+microtasks between timers, and guest code reached from there can start another
+advance re-entrantly. With a single queue-wide slot the outer tick's exception
+was raised at the inner call and the outer tick then believed it had succeeded —
+so each operation pushes its own slot and the enclosing ones stay saved, and
+stay marked, until it pops. Vitest keeps it per operation too; that was probed
+rather than inferred.
+
+**A root source has to be keyed on the collector it is registered with**, not on
+one remembered beside it. A `Shutdown`/`Initialize` pair can put the next
+thread-local collector at the address the previous one had, and a bare pointer
+compare then reports "same collector" for a source registered with the dead one,
+leaving everything it publishes unmarked. `TGCRootSource.RegisteredCollector`
+reads the registration the collector's destructor nils, which cannot match a
+destroyed one. `Goccia.AsyncContext` had the same latent compare and is fixed
+with it.
 
 ## Availability
 
