@@ -132,7 +132,31 @@ checks enforce it, and a failure of any is an ordinary `Module not found:
 - **Containment.** The final expanded candidate is checked against the package
   directory before the extension probe and again after it. Segment validation
   rejects what is invalid on its face; this catches whatever any combination
-  still normalized into.
+  still normalized into. The pre-probe check compares normalized spellings,
+  because the candidate is a name that need not exist yet. The post-probe check
+  is **physical**: by then a real file has been found, and both it and the
+  package directory are canonicalized — every symbolic link on either path
+  resolved — before the comparison. A package that ships
+  `linked/out.js -> ../../../outside.js` normalizes to a path inside itself
+  while naming a file outside it, and only the physical check refuses that. It
+  follows the same principle as [ADR 0071](adr/0071-reject-symlinks-in-sandbox-seed-imports.md),
+  where the sandbox refuses a symlinked seed import rather than trusting where
+  its name appears to sit.
+
+  Canonicalizing the package directory as well as the candidate is what keeps
+  pnpm-style layouts working. There `node_modules/<pkg>` is itself a link into
+  a content-addressed store, so resolving only the candidate would place every
+  file in every pnpm package outside its own root; resolving both moves the
+  comparison into the store, where a store-internal file passes and a link that
+  leaves the store still does not.
+
+  **Platform support.** Canonicalization uses `realpath(3)` on Linux, macOS and
+  the BSDs, and `GetFinalPathNameByHandleW` on Windows, which follows both
+  symbolic links and directory junctions. Where a host cannot canonicalize a
+  path — the Lakon/WASI lane, whose in-memory filesystem has no links at all,
+  or a Windows file the process cannot open even for metadata — the normalized
+  spelling comparison stands on its own and the boundary is lexical for that
+  resolution.
 
 The legacy no-`exports` path is stricter here than Node, which would let
 `new URL(subpath, packageURL)` walk upward. A subpath containing `..` is never

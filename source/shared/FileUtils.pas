@@ -6,6 +6,7 @@ interface
 
 uses
   {$IFDEF UNIX}BaseUnix,{$ENDIF}
+  {$IFDEF MSWINDOWS}Windows,{$ENDIF}
   Classes,
   SysUtils;
 
@@ -35,6 +36,23 @@ function HostFileExists(const APath: string): Boolean;
 { True when APath itself is a symbolic link (UNIX) or a reparse
   point / junction (Windows). Does not follow the link. }
 function HostPathIsSymlink(const APath: string): Boolean;
+
+{ APath with every symbolic link along it resolved to the file it physically
+  names, or '' when the host cannot answer.
+
+  ExpandHostFileName only normalizes a *spelling*: it collapses `.` and `..`
+  and makes the path absolute, but it never touches the filesystem, so a path
+  that normalizes inside a directory can still resolve outside it through a
+  symlinked component. This resolves the links, which is what a containment
+  guarantee has to be phrased in.
+
+  '' means "unknown", never "root", and a caller must decide for itself what an
+  unknown means. It is returned when the path does not exist (POSIX
+  `realpath` and the Windows handle open both require it to), when the name
+  cannot be encoded for the host, and on builds with no canonicalization
+  available — currently the Lakon/WASI lane, whose filesystem is the virtual
+  one in SandboxVirtualFileSystem and has no symbolic links at all. }
+function CanonicalHostPath(const APath: string): string;
 
 { Read an entire file as strict UTF-8 source text. No BOM stripping or
   newline normalization is performed. Invalid UTF-8 raises EConvertError. }
@@ -112,6 +130,107 @@ begin
   Attr := FileGetAttr(APath);
   Result := (Attr <> -1) and ((Attr and faSymLink) <> 0);
 end;
+{$ENDIF}
+
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+{ POSIX.1-2008 realpath(3). The two-argument form is used rather than the
+  malloc'ing one so no libc `free` has to be bound as well; POSIX requires the
+  caller's buffer to hold PATH_MAX bytes, which HOST_PATH_MAX_BYTES is (Linux's
+  value — macOS and the BSDs cap lower). }
+function HostRealPath(APath: PAnsiChar; AResolved: PAnsiChar): PAnsiChar;
+  cdecl; external 'c' name 'realpath';
+{$ENDIF}
+
+{$IFDEF MSWINDOWS}
+{ FPC 3.2.2's Windows unit stops at the pre-Vista path API, so the one call
+  that follows reparse points has to be declared here. FILE_NAME_NORMALIZED
+  ($0) plus VOLUME_NAME_DOS ($0) is the drive-letter spelling; the result still
+  carries a `\\?\` (or `\\?\UNC\`) prefix, which the caller strips. }
+function GetFinalPathNameByHandleW(AFile: THandle; APath: PWideChar;
+  APathLength, AFlags: DWORD): DWORD;
+  stdcall; external 'kernel32.dll' name 'GetFinalPathNameByHandleW';
+{$ENDIF}
+
+function CanonicalHostPath(const APath: string): string;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+const
+  HOST_PATH_MAX_BYTES = 4096;
+var
+  Buffer: array[0..HOST_PATH_MAX_BYTES - 1] of AnsiChar;
+  PathBytes, ResolvedBytes: TBytes;
+  ErrorOffset, Length_: Integer;
+begin
+  Result := '';
+  if APath = '' then
+    Exit;
+  if not TryEncodeUTF8NullTerminated(APath, PathBytes, ErrorOffset) then
+    Exit;
+  FillChar(Buffer[0], SizeOf(Buffer), 0);
+  if HostRealPath(PAnsiChar(@PathBytes[0]), @Buffer[0]) = nil then
+    Exit;
+  Length_ := 0;
+  while (Length_ < SizeOf(Buffer)) and (Buffer[Length_] <> #0) do
+    Inc(Length_);
+  SetLength(ResolvedBytes, Length_);
+  if Length_ > 0 then
+    Move(Buffer[0], ResolvedBytes[0], Length_);
+  { A path the host handed back is bytes, and the host does not promise they
+    are UTF-8. A name this process cannot represent is one it cannot compare
+    either, so it stays "unknown" rather than becoming a lossy string. }
+  if not TryDecodeUTF8(ResolvedBytes, Result, ErrorOffset) then
+    Result := '';
+end;
+{$ELSE}
+{$IFDEF MSWINDOWS}
+const
+  DEVICE_PATH_PREFIX = '\\?\';
+  DEVICE_UNC_PATH_PREFIX = '\\?\UNC\';
+var
+  Handle: THandle;
+  Buffer: array of WideChar;
+  Needed: DWORD;
+begin
+  Result := '';
+  if APath = '' then
+    Exit;
+  { FILE_FLAG_BACKUP_SEMANTICS is what lets a *directory* be opened at all, and
+    zero desired access asks only for the metadata this needs — no read rights,
+    so an unreadable file still canonicalizes. Every share mode is granted so
+    the probe never blocks whoever else has the file open. }
+  Handle := CreateFileW(PWideChar(APath), 0,
+    FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE, nil,
+    OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0);
+  if Handle = INVALID_HANDLE_VALUE then
+    Exit;
+  try
+    Needed := GetFinalPathNameByHandleW(Handle, nil, 0, 0);
+    if Needed = 0 then
+      Exit;
+    { The probing call reports the length *including* the terminator and the
+      filling one reports it without, so a buffer of that size always holds the
+      answer. A second call that asks for more than it fits means the file was
+      renamed between the two, and an unknown beats a truncated path. }
+    SetLength(Buffer, Needed + 1);
+    Needed := GetFinalPathNameByHandleW(Handle, @Buffer[0], Needed, 0);
+    if (Needed = 0) or (Needed > DWORD(Length(Buffer) - 1)) then
+      Exit;
+    SetString(Result, PWideChar(@Buffer[0]), Integer(Needed));
+  finally
+    CloseHandle(Handle);
+  end;
+  if Copy(Result, 1, Length(DEVICE_UNC_PATH_PREFIX)) =
+     DEVICE_UNC_PATH_PREFIX then
+    Result := '\\' + Copy(Result, Length(DEVICE_UNC_PATH_PREFIX) + 1, MaxInt)
+  else if Copy(Result, 1, Length(DEVICE_PATH_PREFIX)) = DEVICE_PATH_PREFIX then
+    Result := Copy(Result, Length(DEVICE_PATH_PREFIX) + 1, MaxInt);
+end;
+{$ELSE}
+begin
+  { No canonicalization on this lane. Callers fall back to their lexical check;
+    see the interface comment. }
+  Result := '';
+end;
+{$ENDIF}
 {$ENDIF}
 
 function MatchesExtension(const AName: string; const AExtensions: array of string): Boolean;

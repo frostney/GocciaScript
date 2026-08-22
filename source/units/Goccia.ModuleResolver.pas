@@ -412,7 +412,11 @@ begin
   if not TryResolveWithExtensions(TargetCandidate, AResolvedPath) then
     raise EModuleNotFound.CreateNotFound(AModulePath, TargetCandidate);
 
-  if not IsPathInsideDirectory(AResolvedPath, PackageDirectory) then
+  { The post-probe gate is the physical one. The candidate above is a name that
+    may not exist yet, so only its spelling can be judged; by here a real file
+    has been found, and a real file is what a symlinked child of the package
+    would have escaped through. }
+  if not IsPathPhysicallyInsideDirectory(AResolvedPath, PackageDirectory) then
     raise EModuleNotFound.CreateNotFound(AModulePath, AResolvedPath);
 
   if IsCommonJSModuleFile(Manifest, AResolvedPath) then
