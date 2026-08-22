@@ -185,19 +185,20 @@ type
 function TryRejectAsyncPromiseWithException(
   const APromise: TGocciaPromiseValue;
   const AException: Exception): Boolean;
+var
+  ThrownVal: TGocciaValue;
 begin
   Result := True;
   { A hoisted module-level `async function` is an interpreter closure even
     under the bytecode executor (the module loader creates it during linking),
     so its body can call a compiled function whose JS throw leaves the VM as
     EGocciaBytecodeThrow. That is a guest completion carrying the thrown value,
-    exactly like TGocciaThrowValue; without this branch the resume path treated
-    it as an engine fault, re-raised it into the microtask queue, and left the
-    async function's promise forever pending. }
-  if AException is EGocciaBytecodeThrow then
-    APromise.Reject(EGocciaBytecodeThrow(AException).ThrownValue)
-  else if AException is TGocciaThrowValue then
-    APromise.Reject(TGocciaThrowValue(AException).Value)
+    exactly like TGocciaThrowValue; without this the resume path treated it as
+    an engine fault, re-raised it into the microtask queue, and left the async
+    function's promise forever pending. UnwrapThrownValue handles both boundary
+    classes, identity preserved. }
+  if UnwrapThrownValue(AException, ThrownVal) then
+    APromise.Reject(ThrownVal)
   else if AException is TGocciaTypeError then
     APromise.Reject(CreateErrorObject(TYPE_ERROR_NAME, AException.Message))
   else if AException is TGocciaReferenceError then
