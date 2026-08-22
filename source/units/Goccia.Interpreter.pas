@@ -297,6 +297,14 @@ begin
   if GCMarked then
     Exit;
   inherited;
+  { Resume pushes an execution context naming FContext.Scope, and that entry
+    holds the module scope as a raw pointer for the length of the resumption
+    (see the rooting note on GExecutionContextStack in
+    Goccia.ExecutionContext.pas). FContinuation marks the same scope, but that
+    is its bookkeeping, not this one's: mark it here so the execution-context
+    contract does not depend on the continuation's internals. }
+  if Assigned(FContext.Scope) then
+    FContext.Scope.MarkReferences;
   if Assigned(FPromise) then
     FPromise.MarkReferences;
   if Assigned(FContinuation) then
@@ -531,6 +539,7 @@ function TGocciaInterpreter.EvaluateModuleBody(
   out AProgramConsumed: Boolean): TGocciaValue;
 var
   AsyncEvaluation: TGocciaInterpreterAsyncModuleEvaluation;
+  AsyncEvaluationRoot: TGocciaTempRoot;
   I: Integer;
   CF: TGocciaControlFlow;
   ExecutionContext: TGocciaExecutionContextScope;
@@ -565,7 +574,19 @@ begin
       AsyncEvaluation := TGocciaInterpreterAsyncModuleEvaluation.Create(
         AProgram, AContext);
       AProgramConsumed := True;
-      Result := AsyncEvaluation.Start;
+      { Start runs the module body up to its first suspension, and guest code
+        in that prefix can collect. Only once a suspension attaches the await
+        reactions does the evaluation become reachable on its own (each handler
+        takes it as CapturedRoot), so until Start returns this local is the
+        only reference to it — the same window TGocciaFunctionValue's async
+        path roots around its own AsyncEvaluation.Start. }
+      InitializeTempRoot(AsyncEvaluationRoot);
+      AddTempRootIfNeeded(AsyncEvaluationRoot, AsyncEvaluation);
+      try
+        Result := AsyncEvaluation.Start;
+      finally
+        RemoveTempRootIfNeeded(AsyncEvaluationRoot);
+      end;
       if Assigned(AContext.CurrentModule) and
          (Result is TGocciaPromiseValue) then
         AContext.CurrentModule.EvaluationPromise := Result;

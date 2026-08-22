@@ -341,6 +341,14 @@ begin
   inherited;
   if Assigned(FFunction) then
     FFunction.MarkReferences;
+  { Resume publishes FFunction and FCallScope to the function-execution-context
+    facade, which holds both as raw pointers for the length of the resumption
+    (see the rooting note on GCurrentFunctionContextStack in Goccia.Realm.pas).
+    FContinuation marks the same scope, but that is its bookkeeping, not this
+    one's: mark it here so the facade's contract does not depend on the
+    continuation's internals. }
+  if Assigned(FCallScope) then
+    FCallScope.MarkReferences;
   if Assigned(FPromise) then
     FPromise.MarkReferences;
   if Assigned(FContinuation) then
