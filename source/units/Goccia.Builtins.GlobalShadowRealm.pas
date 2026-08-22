@@ -391,6 +391,16 @@ end;
 
 destructor TGocciaShadowRealmHost.Destroy;
 begin
+  // Install pinned FPrototype so ShadowRealm.prototype survives collection for
+  // the engine's whole life; the pin has to be released at teardown, or it
+  // outlives the engine as a dangling GC root. On a worker thread that runs
+  // several engines in sequence, the next collection after this engine is torn
+  // down would mark the freed prototype and walk into its torn-down realm
+  // graph (e.g. a module import binding left pointing at a released runtime
+  // module), faulting during MarkRoots. This mirrors FRealm.Free unpinning the
+  // intrinsic prototype graph at engine teardown.
+  if Assigned(FPrototype) and (TGarbageCollector.Instance <> nil) then
+    TGarbageCollector.Instance.UnpinObject(FPrototype);
   FChildRealms.Free;
   FWrappedHosts.Free;
   inherited;
