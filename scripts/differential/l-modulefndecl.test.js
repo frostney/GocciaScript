@@ -19,9 +19,12 @@ import {
   arrowClosureRead,
   arrowConstruct,
   arrowFieldRead,
+  arrowThrowAfterAwait,
+  asyncFailure,
   derivedTickCount,
   fnDeclArrowConstruct,
   fnDeclBoundConstruct,
+  fnDeclCatchAfterAwait,
   fnDeclClosureRead,
   fnDeclConstruct,
   fnDeclDerivedConstruct,
@@ -33,6 +36,8 @@ import {
   fnDeclNestedConstruct,
   fnDeclOverriddenLeafConstruct,
   fnDeclSpreadConstruct,
+  fnDeclThrowAfterAwait,
+  fnDeclThrowBeforeAwait,
   implicitTickCount,
 } from "./mods/fndecl.js";
 
@@ -270,5 +275,37 @@ describe("construction from module function declarations", () => {
 
   test("entry file: an all-implicit chain over a returning base still overrides", () => {
     expect(Object.keys(new OverriddenMiddle())).toEqual(["tag", "b"]);
+  });
+
+  // A module's async function declarations are linked, not compiled with the
+  // module body, so the callee's throw crosses machinery on its way out. Once
+  // the declaration has suspended at an await, the crossing happens on the
+  // resumed body — a different path from the one the pre-await throw takes.
+  test("an async module function declaration rejects with a callee's throw", async () => {
+    const settled = [];
+    for (const start of [
+      fnDeclThrowAfterAwait,
+      fnDeclThrowBeforeAwait,
+      arrowThrowAfterAwait,
+    ]) {
+      try {
+        await start();
+        settled.push("resolved");
+      } catch (error) {
+        settled.push(error);
+      }
+    }
+    expect(settled).toEqual([asyncFailure, asyncFailure, asyncFailure]);
+    for (const error of settled) {
+      expect(error.name).toBe("AsyncFailure");
+      expect(error.message).toBe("id-async");
+    }
+  });
+
+  test("catch in a resumed async declaration binds the thrown value itself", async () => {
+    const caught = await fnDeclCatchAfterAwait();
+    expect(caught).toBe(asyncFailure);
+    expect(caught.name).toBe("AsyncFailure");
+    expect(caught.message).toBe("id-async");
   });
 });
