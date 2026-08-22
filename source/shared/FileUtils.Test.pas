@@ -3,6 +3,7 @@ program FileUtils.Test;
 {$I Shared.inc}
 
 uses
+  {$IFDEF UNIX}BaseUnix,{$ENDIF}
   Classes,
   SysUtils,
 
@@ -32,6 +33,9 @@ type
     procedure TestMixedExtensionsAcrossDepths;
     procedure TestIsAbsoluteHostPathRootedForms;
     procedure TestIsAbsoluteHostPathRelativeForms;
+    procedure TestCanonicalHostPathIsUnknownForAMissingPath;
+    procedure TestCanonicalHostPathIsStableForARealFile;
+    procedure TestCanonicalHostPathFollowsASymlink;
   public
     procedure SetupTests; override;
     procedure BeforeEach; override;
@@ -58,6 +62,19 @@ begin
     TestIsAbsoluteHostPathRootedForms);
   Test('IsAbsoluteHostPath rejects paths read against a working directory',
     TestIsAbsoluteHostPathRelativeForms);
+  Test('CanonicalHostPath reports unknown for a path that does not exist',
+    TestCanonicalHostPathIsUnknownForAMissingPath);
+  Test('CanonicalHostPath is stable for a file that does exist',
+    TestCanonicalHostPathIsStableForARealFile);
+  { Creating a symlink needs an API this build only has on UNIX. }
+  {$IFDEF UNIX}
+  Test('CanonicalHostPath resolves a symlink to its target',
+    TestCanonicalHostPathFollowsASymlink);
+  {$ELSE}
+  Skip('CanonicalHostPath resolves a symlink to its target',
+    TestCanonicalHostPathFollowsASymlink,
+    'creating a symlink is not available on this platform');
+  {$ENDIF}
 end;
 
 procedure TFileUtilsTests.BeforeEach;
@@ -378,6 +395,51 @@ begin
   Expect<Boolean>(IsAbsoluteHostPath('\packages')).ToBe(False);
   Expect<Boolean>(IsAbsoluteHostPath('C:\packages')).ToBe(False);
   {$ENDIF}
+end;
+
+procedure TFileUtilsTests.TestCanonicalHostPathIsUnknownForAMissingPath;
+begin
+  { '' is the "cannot answer" signal, not a path. Callers branch on it, so a
+    name with nothing behind it must never come back as something. }
+  Expect<string>(CanonicalHostPath('')).ToBe('');
+  Expect<string>(CanonicalHostPath(FTempDir + PathDelim + 'absent.txt'))
+    .ToBe('');
+end;
+
+procedure TFileUtilsTests.TestCanonicalHostPathIsStableForARealFile;
+var
+  Canonical: string;
+begin
+  CreateTempFile('present.txt');
+
+  Canonical := CanonicalHostPath(FTempDir + PathDelim + 'present.txt');
+
+  Expect<Boolean>(Canonical <> '').ToBe(True);
+  { Canonicalizing an already-canonical path is the identity — the property the
+    containment comparison relies on when neither side carries a link. }
+  Expect<string>(CanonicalHostPath(Canonical)).ToBe(Canonical);
+  Expect<string>(ExtractFileName(Canonical)).ToBe('present.txt');
+end;
+
+procedure TFileUtilsTests.TestCanonicalHostPathFollowsASymlink;
+var
+  LinkPath, TargetCanonical: string;
+begin
+  CreateTempDir('inner');
+  CreateTempFile('inner' + PathDelim + 'target.txt');
+  LinkPath := FTempDir + PathDelim + 'link.txt';
+  TargetCanonical := CanonicalHostPath(
+    FTempDir + PathDelim + 'inner' + PathDelim + 'target.txt');
+
+  {$IFDEF UNIX}
+  Expect<Boolean>(fpSymlink(PAnsiChar(AnsiString('inner' + PathDelim +
+    'target.txt')), PAnsiChar(AnsiString(LinkPath))) = 0).ToBe(True);
+  {$ENDIF}
+
+  { The link and its target are two names for one file, and canonicalization is
+    what collapses them — the whole reason a containment check can be phrased
+    physically. }
+  Expect<string>(CanonicalHostPath(LinkPath)).ToBe(TargetCanonical);
 end;
 
 begin

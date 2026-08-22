@@ -16,6 +16,7 @@ uses
   Goccia.Executor,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
+  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.URL,
@@ -499,8 +500,19 @@ begin
     try
       Key := TGocciaStringLiteralValue.Create('storage-key');
       Store := TGocciaStringLiteralValue.Create('outer-store');
-      OuterContext := DeriveAsyncContext(nil, Key, Store);
-      SetCurrentAsyncContext(OuterContext);
+      // Key and Store live only in Pascal locals until the snapshot is
+      // installed as the current context; the derive itself allocates, so
+      // they need temp roots across it or a collection makes this test
+      // nondeterministic.
+      TGarbageCollector.Instance.AddTempRoot(Key);
+      TGarbageCollector.Instance.AddTempRoot(Store);
+      try
+        OuterContext := DeriveAsyncContext(nil, Key, Store);
+        SetCurrentAsyncContext(OuterContext);
+      finally
+        TGarbageCollector.Instance.RemoveTempRoot(Store);
+        TGarbageCollector.Instance.RemoveTempRoot(Key);
+      end;
       Expect<Boolean>(CurrentAsyncContext = OuterContext).ToBe(True);
 
       InnerEngine := TGocciaEngine.Create('<inner-async>', InnerSource,

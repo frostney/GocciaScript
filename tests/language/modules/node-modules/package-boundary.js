@@ -3,6 +3,16 @@
 // node_modules — so a passing test means the resolver refused, not that it
 // missed a file. The positive control at the end proves the wildcard the
 // escapes ride on actually works, which is what keeps the refusals meaningful.
+//
+// These are the *lexical* escapes. The physical one — a package shipping a
+// symlinked child that resolves outside itself — is covered in
+// source/units/Goccia.Modules.NodeResolution.Test.pas instead, because the
+// fixture has to be a real symlink: this suite's fixtures are committed files,
+// and a committed symlink materializes as an ordinary text file wherever git
+// checks out without symlink support (Windows without developer mode), which
+// would turn the escape into a file that legitimately lives inside the package
+// and silently invert the assertion. The Pascal tests create the link at run
+// time and are registered as skipped where that is not possible.
 import { wildcardLabel } from "pkg-escape-wildcard";
 import { insideLabel } from "pkg-escape-wildcard/sub/inside";
 

@@ -8124,6 +8124,25 @@ begin
     Result := AFallbackScope;
 end;
 
+// ES2026 §15.7.1: a ClassBody is always strict-mode code — "All parts of a
+// ClassDeclaration or a ClassExpression are strict mode code" — regardless of
+// how the enclosing script was configured. Strictness is therefore another
+// thing a class body takes from its own text rather than from wherever it is
+// evaluated: the construction routes hand an initializer the *caller's*
+// context, which under the non-strict compatibility profile still carries the
+// script's sloppy flags, and an initializer assigning to an undeclared name
+// then created a global instead of raising ReferenceError.
+//
+// Both flags are cleared, not only NonStrictMode: every behavioral gate ANDs
+// the pair (VarBindingNameCollectionMode, the identifier-assignment paths in
+// Goccia.AST.Expressions), so leaving the compatibility half set keeps part of
+// the sloppy semantics alive inside the class body.
+procedure ApplyClassBodyStrictness(var AContext: TGocciaEvaluationContext); {$IFDEF FPC}inline;{$ENDIF}
+begin
+  AContext.NonStrictMode := False;
+  AContext.CompatibilityNonStrictMode := False;
+end;
+
 // The scope is not the only thing a field initializer inherits from the class
 // definition rather than from the construction site. `import()` resolves its
 // specifier against, and `import.meta.url` reports, the module the code was
@@ -8165,6 +8184,7 @@ begin
     ClassInitializerScopeParent(AClassValue, AContext.Scope), AClassValue);
   LocalScope.ThisValue := AInstance;
   LocalContext.Scope := LocalScope;
+  ApplyClassBodyStrictness(LocalContext);
   ApplyClassDefinitionSourceContext(AClassValue, LocalContext);
 
   { ES2026 §7.3.33 InitializeInstanceElements only ever defines the fields of
@@ -8241,7 +8261,11 @@ var
   I: Integer;
   FOEntry: TGocciaClassFieldOrderEntry;
   Expr: TGocciaExpression;
+  LocalContext: TGocciaEvaluationContext;
 begin
+  LocalContext := AContext;
+  ApplyClassBodyStrictness(LocalContext);
+
   { §7.3.33 InitializeInstanceElements defines this class's fields only — each
     superclass initializes its own inside its own [[Construct]]. Walking the
     chain here re-ran an ancestor's private field initializers on a receiver
@@ -8260,7 +8284,7 @@ begin
       if FOEntry.IsComputed then
       begin
         if Assigned(FOEntry.Initializer) then
-          PropertyValue := EvaluateExpression(FOEntry.Initializer, AContext)
+          PropertyValue := EvaluateExpression(FOEntry.Initializer, LocalContext)
         else
           PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
         if FOEntry.ComputedKey is TGocciaSymbolValue then
@@ -8279,7 +8303,7 @@ begin
           FOEntry.Name, Expr) then
         begin
           if Assigned(Expr) then
-            PropertyValue := EvaluateExpression(Expr, AContext)
+            PropertyValue := EvaluateExpression(Expr, LocalContext)
           else
             PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
           InitializeRawPrivateInstanceProperty(AInstance, FOEntry.Name,
@@ -8290,7 +8314,7 @@ begin
       begin
         if AClassValue.InstancePropertyDefs.TryGetValue(FOEntry.Name, Expr) and Assigned(Expr) then
         begin
-          PropertyValue := EvaluateExpression(Expr, AContext);
+          PropertyValue := EvaluateExpression(Expr, LocalContext);
           AInstance.AssignProperty(FOEntry.Name, PropertyValue);
         end;
       end;
@@ -8300,10 +8324,10 @@ begin
   begin
     for Entry in AClassValue.InstancePropertyDefs do
     begin
-      PropertyValue := EvaluateExpression(Entry.Value, AContext);
+      PropertyValue := EvaluateExpression(Entry.Value, LocalContext);
       AInstance.AssignProperty(Entry.Key, PropertyValue);
     end;
-    InitializePrivateInstanceProperties(AInstance, AClassValue, AContext);
+    InitializePrivateInstanceProperties(AInstance, AClassValue, LocalContext);
   end;
 end;
 
@@ -9491,14 +9515,14 @@ var
 begin
   Continuation := CurrentGeneratorContinuation;
   ClassStrictContext := AContext;
-  ClassStrictContext.NonStrictMode := False;
+  ApplyClassBodyStrictness(ClassStrictContext);
   SuperClass := nil;
   SuperClassValue := nil;
   MethodSuperClass := nil;
   if Assigned(AClassDef.SuperClassExpression) then
   begin
     HeritageContext := AContext;
-    HeritageContext.NonStrictMode := False;
+    ApplyClassBodyStrictness(HeritageContext);
     SuperClassValue := EvaluateExpression(AClassDef.SuperClassExpression,
       HeritageContext);
     if SuperClassValue is TGocciaClassValue then
@@ -9746,14 +9770,14 @@ begin
   begin
     Elem := AClassDef.FElements[I];
     if Elem.Kind = cekStaticBlock then
-      ExecuteStaticBlock(Elem.StaticBlockBody, AContext, ClassValue)
+      ExecuteStaticBlock(Elem.StaticBlockBody, ClassStrictContext, ClassValue)
     else if ((Elem.Kind = cekField) or
              ((Elem.Kind = cekAccessor) and Elem.IsPrivate)) and
             Elem.IsStatic then
     begin
       if Assigned(Elem.FieldInitializer) then
       begin
-        StaticFieldContext := AContext;
+        StaticFieldContext := ClassStrictContext;
         StaticFieldScope := TGocciaClassInitScope.Create(AContext.Scope,
           ClassValue);
         StaticFieldScope.ThisValue := ClassValue;
@@ -11229,11 +11253,14 @@ procedure InitializePrivateInstanceProperties(const AInstance: TGocciaObjectValu
 var
   PropertyValue: TGocciaValue;
   Entry: TGocciaExpressionMap.TKeyValuePair;
+  LocalContext: TGocciaEvaluationContext;
 begin
+  LocalContext := AContext;
+  ApplyClassBodyStrictness(LocalContext);
   for Entry in AClassValue.PrivateInstancePropertyDefs do
   begin
     if Assigned(Entry.Value) then
-      PropertyValue := EvaluateExpression(Entry.Value, AContext)
+      PropertyValue := EvaluateExpression(Entry.Value, LocalContext)
     else
       PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
     if AInstance is TGocciaInstanceValue then
@@ -11648,8 +11675,10 @@ begin
   Result.CoverageEnabled := (TGocciaCoverageTracker.Instance <> nil) and
     TGocciaCoverageTracker.Instance.Enabled;
   Result.StrictTypes := ADefinitionScope.EffectiveStrictTypes;
-  Result.NonStrictMode := ADefinitionScope.EffectiveNonStrictMode;
-  Result.CompatibilityNonStrictMode := Result.NonStrictMode;
+  // The synthesized context stands in for the class's own definition context,
+  // so it is subject to the same rule as every other piece of class-body code:
+  // strict, whatever the defining scope's mode was.
+  ApplyClassBodyStrictness(Result);
 end;
 
 // ES2026 §7.3.14 Construct(F, argumentsList, newTarget) for a class the
