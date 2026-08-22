@@ -521,6 +521,8 @@ var
   ConstructorPrototype: TGocciaValue;
   CurrentObject: TGocciaObjectValue;
   CurrentPrototype: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
+  HopRoots: TGocciaActiveRootFrame;
 begin
   if not IsCallableForHasInstance(AConstructor) then
     Exit(False);
@@ -541,18 +543,37 @@ begin
     ThrowTypeError('Function has non-object prototype',
       'set the constructor prototype property to an object');
 
-  CurrentObject := TGocciaObjectValue(AInstance);
-  while True do
-  begin
-    CurrentPrototype := GetPrototypeOfObject(CurrentObject);
-    if (CurrentPrototype = nil) or
-       (CurrentPrototype is TGocciaNullLiteralValue) then
-      Exit(False);
-    if CurrentPrototype = ConstructorPrototype then
-      Exit(True);
-    if not (CurrentPrototype is TGocciaObjectValue) then
-      Exit(False);
-    CurrentObject := TGocciaObjectValue(CurrentPrototype);
+  // GetPrototypeOfObject can invoke a proxy getPrototypeOf trap — guest code
+  // that may force a collection. The walked prototype is held only in a Pascal
+  // local across that trap, and DispatchProxyGetPrototype dereferences the
+  // proxy's internal target for the post-trap invariant check, so an
+  // intermediate prototype reachable only through this walk (e.g. a fresh proxy
+  // returned by an outer trap) would be swept before use. Root the target
+  // prototype for the whole walk and the current object across each hop.
+  Roots.Initialize;
+  Roots.Add(ConstructorPrototype);
+  try
+    CurrentObject := TGocciaObjectValue(AInstance);
+    while True do
+    begin
+      HopRoots.Initialize;
+      HopRoots.Add(CurrentObject);
+      try
+        CurrentPrototype := GetPrototypeOfObject(CurrentObject);
+      finally
+        HopRoots.Clear;
+      end;
+      if (CurrentPrototype = nil) or
+         (CurrentPrototype is TGocciaNullLiteralValue) then
+        Exit(False);
+      if CurrentPrototype = ConstructorPrototype then
+        Exit(True);
+      if not (CurrentPrototype is TGocciaObjectValue) then
+        Exit(False);
+      CurrentObject := TGocciaObjectValue(CurrentPrototype);
+    end;
+  finally
+    Roots.Clear;
   end;
 end;
 
