@@ -834,7 +834,7 @@ begin
           else if E is TGocciaThrowValue then
             WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, ASource, IsColorTerminal, TGocciaThrowValue(E).Suggestion))
           else if E is EGocciaBytecodeThrow then
-            WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue, AFileName, ASource, IsColorTerminal))
+            WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue, AFileName, ASource, IsColorTerminal, EGocciaBytecodeThrow(E).Suggestion))
           else
             WriteLn('Fatal error: ', E.Message);
         end;

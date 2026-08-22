@@ -3349,6 +3349,107 @@ console.log("Assertion failure text...");
   }
 }
 
+// -- Runtime diagnostic parity (TestRunner) ------------------------------------
+
+// An uncaught runtime fault is reported by the runner, not by the suite, so the
+// rendered diagnostic is only observable from outside. It used to be a
+// different diagnostic per execution mode: interpreted runs printed the named
+// callee, a suggestion, a `--> file:line:column` header and a code frame, while
+// bytecode runs printed a bare "Fatal error: TypeError: undefined is not a
+// function". The two renderings are pinned together here — byte-for-byte
+// equality is the contract, because any drift in either mode is the defect.
+console.log("Runtime diagnostic parity...");
+{
+  const tmp = mkdtemp("goccia-diagnostic-parity-");
+  try {
+    const calleeSrc = join(tmp, "callee.test.js");
+    writeFileSync(calleeSrc, ["const obj = {};", "obj.missingMethod();", ""].join("\n"));
+
+    const renderings: Record<string, string> = {};
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${calleeSrc} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      for (const expected of [
+        "TypeError: obj.missingMethod is not a function",
+        "Suggestion: 'obj' is of type 'object' which does not have method 'missingMethod'",
+        "callee.test.js:2:18",
+        "2 | obj.missingMethod();",
+      ]) {
+        if (!out.includes(expected))
+          throw new Error(
+            `TestRunner (${mode}) should report "${expected}", got: ${out}`,
+          );
+      }
+      if (out.includes("Fatal error"))
+        throw new Error(
+          `TestRunner (${mode}) must render a thrown value as a diagnostic, not a fatal error, got: ${out}`,
+        );
+      // The header and code frame are the part that must match across modes;
+      // the results block below carries mode-specific timing lines.
+      renderings[mode] = out.slice(0, out.indexOf("Test Results Test Files:"));
+    }
+    if (renderings["--mode=interpreted"] !== renderings["--mode=bytecode"])
+      throw new Error(
+        `Both modes must render an identical diagnostic.\ninterpreted:\n${renderings["--mode=interpreted"]}\nbytecode:\n${renderings["--mode=bytecode"]}`,
+      );
+
+    // The code frame is read from a file, and the file it was read from used to
+    // be the entry every time: a module that threw while evaluating produced a
+    // header naming the module and an excerpt quoting whatever the entry file
+    // happened to have at that line number.
+    const dep = join(tmp, "dep.js");
+    writeFileSync(
+      dep,
+      [
+        "// dep filler 1",
+        "// dep filler 2",
+        "// dep filler 3",
+        "// dep filler 4",
+        "export const boom = (() => { throw new Error('dep exploded'); })();",
+        "",
+      ].join("\n"),
+    );
+    const entry = join(tmp, "entry.test.js");
+    writeFileSync(
+      entry,
+      [
+        "// entry filler 1",
+        "// entry filler 2",
+        "// entry filler 3",
+        "// entry filler 4",
+        "import { boom } from './dep.js';",
+        "console.log(boom);",
+        "",
+      ].join("\n"),
+    );
+
+    const frames: Record<string, string> = {};
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${entry} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      if (!out.includes("Error: dep exploded"))
+        throw new Error(`TestRunner (${mode}) should report the module's error, got: ${out}`);
+      if (!out.includes("dep.js:5:"))
+        throw new Error(`TestRunner (${mode}) should locate the fault in dep.js, got: ${out}`);
+      if (!out.includes("throw new Error('dep exploded')"))
+        throw new Error(
+          `TestRunner (${mode}) should quote dep.js in the code frame, got: ${out}`,
+        );
+      if (out.includes("entry filler") || out.includes("import { boom }"))
+        throw new Error(
+          `TestRunner (${mode}) must not quote the entry file for a fault in dep.js, got: ${out}`,
+        );
+      frames[mode] = out.slice(0, out.indexOf("Test Results Test Files:"));
+    }
+    if (frames["--mode=interpreted"] !== frames["--mode=bytecode"])
+      throw new Error(
+        `Both modes must render an identical module diagnostic.\ninterpreted:\n${frames["--mode=interpreted"]}\nbytecode:\n${frames["--mode=bytecode"]}`,
+      );
+  } finally {
+    clean(tmp);
+  }
+}
+
 // -- Global injection (TestRunner) ---------------------------------------------
 
 // The runner grew --global/--globals so a suite can be handed a host global it

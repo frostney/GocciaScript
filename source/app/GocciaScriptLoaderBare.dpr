@@ -1631,7 +1631,7 @@ begin
                 on E: EGocciaBytecodeThrow do
                 begin
                   WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue,
-                    DisplayName, Source, IsColorTerminal));
+                    DisplayName, Source, IsColorTerminal, E.Suggestion));
                   Result := 1;
                 end;
                 on E: TGocciaThrowValue do

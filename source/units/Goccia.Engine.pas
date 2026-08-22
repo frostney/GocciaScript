@@ -2749,6 +2749,14 @@ begin
     WriteLn(Format('  --> %s:%d:%d', [FSourcePath, Warning.Line,
       Warning.Column]));
   end;
+  { Standard output is block-buffered when it is not a terminal, and the hosts
+    that print these warnings also write diagnostics to the unbuffered
+    ErrOutput. With both redirected to one file, whatever is still sitting in
+    the stdout buffer surfaces after the next stderr write — which is how a
+    warning's `--> <path>` line came out cut mid-path with other output spliced
+    into it. Flushing at the end of the block keeps a warning whole. }
+  if APipelineResult.WarningCount > 0 then
+    Flush(Output);
 end;
 
 function TGocciaEngine.SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

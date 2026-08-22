@@ -202,6 +202,7 @@ uses
   Goccia.DisposalTracker,
   Goccia.EngineFault,
   Goccia.Error,
+  Goccia.Error.CallDiagnostics,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Evaluator.Assignment,
@@ -4115,6 +4116,7 @@ var
   Roots: TGocciaActiveRootFrame;
   DirectEvalResult: TGocciaValue;
   PreviousCallSite: TGocciaCallSite;
+  CalleeDescriptor: TGocciaCalleeDescriptor;
   function TryGetParenthesizedMemberReference(
     const AExpression: TGocciaExpression;
     out AMemberExpression: TGocciaMemberExpression): Boolean;
@@ -4527,35 +4529,13 @@ begin
       end
       else
       begin
-        MemberExpr := nil;
-        if ACallExpression.Callee is TGocciaMemberExpression then
-          MemberExpr := TGocciaMemberExpression(ACallExpression.Callee);
-
-        if Assigned(MemberExpr) and (MemberExpr.ObjectExpr is TGocciaIdentifierExpression) then
-          ThrowTypeError(
-            Format(SErrorMemberNotFunction,
-              [TGocciaIdentifierExpression(MemberExpr.ObjectExpr).Name,
-               MemberExpr.PropertyName]),
-            Format('''%s'' is of type ''%s'' which does not have method ''%s''',
-              [TGocciaIdentifierExpression(MemberExpr.ObjectExpr).Name,
-               ThisValue.TypeName,
-               MemberExpr.PropertyName]))
-        else if Assigned(MemberExpr) then
-          ThrowTypeError(
-            Format(SErrorMemberNotFunction,
-              [ThisValue.TypeName, MemberExpr.PropertyName]),
-            Format('''%s'' is of type ''%s'' which does not have method ''%s''',
-              [ThisValue.TypeName, ThisValue.TypeName, MemberExpr.PropertyName]))
-        else if ACallExpression.Callee is TGocciaIdentifierExpression then
-          ThrowTypeError(
-            Format(SErrorNotFunction,
-              [TGocciaIdentifierExpression(ACallExpression.Callee).Name]),
-            Format('''%s'' is of type ''%s'' and cannot be called as a function',
-              [TGocciaIdentifierExpression(ACallExpression.Callee).Name,
-               Callee.TypeName]))
-        else
-          ThrowTypeError(Format(SErrorValueNotFunction, [Callee.TypeName]),
-            SSuggestNotFunctionType);
+        { Same descriptor the bytecode compiler records per call site, so both
+          executors name the callee identically (Goccia.Error.CallDiagnostics). }
+        CalleeDescriptor := CalleeDescriptorFor(ACallExpression.Callee);
+        ThrowTypeError(
+          NotCallableMessage(CalleeDescriptor, Callee.TypeName),
+          NotCallableSuggestion(CalleeDescriptor, ThisValue.TypeName,
+            Callee.TypeName));
       end;
     finally
       if (TGocciaCallStack.Instance <> nil) then
@@ -4924,24 +4904,16 @@ begin
     end
     else if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
     begin
-      if AMemberExpression.ObjectExpr is TGocciaMemberExpression then
+      { Node's wording, shared with the bytecode VM's nullish-base path
+        (Goccia.VM.ThrowNullishBasePropertyAccess) so the two executors report
+        an identical message and suggestion for the same fault. }
+      if Obj is TGocciaNullLiteralValue then
         ThrowTypeError(
-          Format(SErrorCannotReadPropertyOf,
-            [PropertyName, Obj.ToStringLiteral.Value]),
-          Format('''%s'' evaluated to %s and does not have property ''%s''',
-            [TGocciaMemberExpression(AMemberExpression.ObjectExpr).PropertyName,
-             Obj.ToStringLiteral.Value, PropertyName]))
-      else if AMemberExpression.ObjectExpr is TGocciaIdentifierExpression then
-        ThrowTypeError(
-          Format(SErrorCannotReadPropertyOf,
-            [PropertyName, Obj.ToStringLiteral.Value]),
-          Format('''%s'' is %s and does not have property ''%s''',
-            [TGocciaIdentifierExpression(AMemberExpression.ObjectExpr).Name,
-             Obj.ToStringLiteral.Value, PropertyName]))
+          Format(SErrorCannotReadPropertiesOfNull, [PropertyName]),
+          SSuggestCheckNullBeforeAccess)
       else
-        ThrowTypeError(Format(
-          SErrorCannotReadPropertyOf,
-          [PropertyName, Obj.ToStringLiteral.Value]),
+        ThrowTypeError(
+          Format(SErrorCannotReadPropertiesOfUndefined, [PropertyName]),
           SSuggestCheckNullBeforeAccess);
     end
     else
@@ -8681,6 +8653,7 @@ var
   ReceiverInstance: TGocciaObjectValue;
   Roots: TGocciaActiveRootFrame;
   PreviousCallSite: TGocciaCallSite;
+  NewCalleeDescriptor: TGocciaCalleeDescriptor;
 begin
   Roots.Initialize;
   CheckExecutionTimeout;
@@ -8720,6 +8693,12 @@ begin
 
     if (TGocciaCallStack.Instance <> nil) then
     begin
+      { A constructor that captures a stack trace (`new Error(...)`) skips its
+        own frame, so the position the diagnostic ends up showing comes from
+        the caller's frame. Point that frame at the `new` expression, matching
+        what the bytecode VM stamps at its construct site. }
+      TGocciaCallStack.Instance.SetTopFrameLocation(AContext.CurrentFilePath,
+        ANewExpression.Line, ANewExpression.Column);
       TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
         ANewExpression.Line, ANewExpression.Column);
     end;
@@ -8815,18 +8794,12 @@ begin
       end
       else
       begin
-        if ANewExpression.Callee is TGocciaIdentifierExpression then
-          ThrowTypeError(
-            Format(SErrorNotConstructor,
-              [TGocciaIdentifierExpression(ANewExpression.Callee).Name]),
-            Format('''%s'' is of type ''%s'' and cannot be used with ''new''',
-              [TGocciaIdentifierExpression(ANewExpression.Callee).Name,
-               Callee.TypeName]))
-        else
-          ThrowTypeError(
-            Format(SErrorValueNotConstructor, [Callee.TypeName]),
-            Format('values of type ''%s'' cannot be used with ''new''',
-              [Callee.TypeName]));
+        { Same descriptor the bytecode compiler records per construct site, so
+          both executors name the callee identically. }
+        NewCalleeDescriptor := CalleeDescriptorFor(ANewExpression.Callee);
+        ThrowTypeError(
+          NotConstructorMessage(NewCalleeDescriptor, Callee.TypeName),
+          NotConstructorSuggestion(NewCalleeDescriptor, Callee.TypeName));
       end;
     finally
       if (TGocciaCallStack.Instance <> nil) then

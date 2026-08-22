@@ -166,6 +166,35 @@ The `--profile` option on GocciaScriptLoader enables language-level profiling of
 
 The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Coverage.pas`). When profiling is disabled, a predictable boolean guard remains in the dispatch loop. Enabled-mode overhead depends on the workload and profiling mode, so measure it on the corpus being investigated rather than relying on a fixed percentage.
 
+## Runtime Error Diagnostics
+
+A runtime fault must read identically in both execution modes. Two pieces of
+machinery keep that true, both of them cold-path only:
+
+- **Call-site descriptors.** `TGocciaFunctionTemplate` carries a runtime-only
+  table mapping a call/construct instruction's start PC to the callee as the
+  author wrote it (`Goccia.Error.CallDiagnostics.TGocciaCalleeDescriptor`) plus
+  the call expression's own line and column. The compiler fills it while
+  emitting `OP_CALL`, `OP_CALL_METHOD`, `OP_CONSTRUCT` and
+  `OP_CONSTRUCT_SPREAD`; the VM reads it only when the callee turns out not to
+  be callable or constructable, so `obj.missingMethod()` reports
+  `obj.missingMethod is not a function` rather than `undefined is not a
+  function`. The evaluator derives the same descriptor straight from the AST,
+  and both modes format the message and suggestion through the same functions.
+  The table is **not** serialised to `.gbc`: a module loaded from binary
+  bytecode falls back to the runtime-type-name form of the message.
+- **Throw-path source positions.** Deferred call frames carry no position
+  ([ADR 0074](adr/0074-deferred-bytecode-call-stack-frames.md)), which left
+  every bytecode-mode stack frame at `file:0:0` and the runner with no line to
+  render a code frame for. `TGocciaCallStack.SetTopFrameLocation` stamps the
+  executing frame with a position, and the VM calls it only where a fault is
+  being raised or a native constructor is about to run (`new Error(...)`
+  captures a trace). Those sites already pay a debug-map lookup, so the hot
+  dispatch path is unchanged. `TGocciaVM.StampThrowLocation` recovers the
+  current instruction for throw paths outside the dispatch loop through a
+  pointer probe into the innermost loop's `Template`/`InstructionStartIP`
+  locals, saved and restored once per native re-entry.
+
 ## Instruction Limit
 
 The dispatch loop supports an optional instruction counter (`Goccia.InstructionLimit.pas`). When armed, the counter increments on every dispatched instruction and the limit is checked at the top of each iteration. When disabled, only the guard read of the limit threadvar remains on the hot path. See [Embedding — Execution Limits](embedding.md#execution-limits) for the full API and interpreter-mode behavior.

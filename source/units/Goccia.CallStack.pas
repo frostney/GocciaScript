@@ -24,6 +24,10 @@ type
     FilePath: string;
     Line: Integer;
     Column: Integer;
+    // Set by SetTopFrameLocation: FilePath then names the source the position
+    // was taken from and wins over the template's own source file, which is
+    // what makes a cross-module throw report the module it happened in.
+    HasExplicitLocation: Boolean;
   end;
 
   TGocciaCallFrameArray = array of TGocciaCallFrame;
@@ -50,6 +54,16 @@ type
     // Hot-path push for the bytecode VM: stores the template pointer plus a
     // module-path fallback, deferring all string work to CaptureStackTrace.
     procedure PushTemplate(const ATemplate: Pointer; const AFallbackPath: string);
+    { Stamps the currently executing frame with a source position.
+
+      A deferred bytecode frame is pushed without one (ADR 0074 keeps the hot
+      call path free of debug-map lookups), so its trace reads `file:0:0` and
+      the diagnostic renderer has no line to show a code frame for. The VM
+      calls this on its throw paths only — where a debug-map lookup is already
+      paid for — so a runtime TypeError carries the same file:line:column the
+      tree-walk evaluator's per-call frame would have carried. }
+    procedure SetTopFrameLocation(const AFilePath: string;
+      const ALine, AColumn: Integer);
     procedure Pop;
 
     // Registers the resolver used to materialise deferred template frames.
@@ -115,6 +129,7 @@ begin
   FFrames[FCount].FilePath := AFilePath;
   FFrames[FCount].Line := ALine;
   FFrames[FCount].Column := AColumn;
+  FFrames[FCount].HasExplicitLocation := False;
   Inc(FCount);
 end;
 
@@ -127,7 +142,22 @@ begin
   FFrames[FCount].FilePath := AFallbackPath;
   FFrames[FCount].Line := 0;
   FFrames[FCount].Column := 0;
+  FFrames[FCount].HasExplicitLocation := False;
   Inc(FCount);
+end;
+
+procedure TGocciaCallStack.SetTopFrameLocation(const AFilePath: string;
+  const ALine, AColumn: Integer);
+begin
+  if FCount = 0 then
+    Exit;
+  FFrames[FCount - 1].Line := ALine;
+  FFrames[FCount - 1].Column := AColumn;
+  if AFilePath <> '' then
+  begin
+    FFrames[FCount - 1].FilePath := AFilePath;
+    FFrames[FCount - 1].HasExplicitLocation := True;
+  end;
 end;
 
 procedure TGocciaCallStack.Pop;
@@ -168,7 +198,10 @@ begin
     if Assigned(Frame.Template) and Assigned(FTemplateResolver) then
     begin
       FTemplateResolver(Frame.Template, ResolvedName, ResolvedPath);
-      if ResolvedPath = '' then
+      // An explicitly stamped location names the source the position came
+      // from, which for a cross-module throw is not the frame template's own
+      // source file.
+      if Frame.HasExplicitLocation or (ResolvedPath = '') then
         ResolvedPath := Frame.FilePath;
     end
     else

@@ -197,6 +197,14 @@ type
     FCurrentConstructorSuperCalled: Boolean;
     FPrivateInitializerReceiver: TGocciaValue;
     FPrivateInitializerPreserveExisting: Boolean;
+    // Probe into the innermost running dispatch loop's `Template` and
+    // `InstructionStartIP` locals, saved/restored once per native re-entry.
+    // Pointers, not copies: the dispatch loop must not pay a store per
+    // instruction just so a throw can find out where it happened, and both
+    // locals are live for exactly as long as the probe points at them.
+    // Read only on throw paths (StampThrowLocation).
+    FActiveTemplateProbe: PPointer;
+    FActiveInstructionIPProbe: PInteger;
     FStackRoot: TGocciaVMStackRoot;
     FStackRootRegistered: Boolean;
     FTempSavedStateRoots: TGocciaVMSavedStateRootArray;
@@ -279,6 +287,13 @@ type
     function ResolveDynamicUpvalueScope(const AIndex: Integer;
       const AName: string): TGocciaScope;
     function KeyDisplaySafe(const AKey: TGocciaRegister): string;
+    { Stamps the executing call-stack frame with the source position of the
+      instruction the VM is currently on, so an error created from here carries
+      a usable `file:line:column` in its stack trace. Deferred bytecode frames
+      are pushed without a position (ADR 0074); this recovers it on the throw
+      path only, where the debug-map lookup is free of hot-path cost. No-op
+      when the VM is not executing bytecode. }
+    procedure StampThrowLocation;
     procedure ThrowNullishBasePropertyAccess(const ABaseKind: TGocciaRegisterKind;
       const AKeyReg: TGocciaRegister; const AForWrite: Boolean);
     procedure RequireCoercibleBaseRegister(const ABaseReg,
@@ -448,7 +463,8 @@ type
       const AInitialFrameStackCount, AInitialClosedNumericFrameCount,
       ASavedHandlerCount: Integer;
       var AFrame: TGocciaVMCallFrame; var ATemplate: TGocciaFunctionTemplate;
-      var APrevCovLine: UInt32; var AProfileTimestamp: Int64);
+      var APrevCovLine: UInt32; var AProfileTimestamp: Int64;
+      const ASuggestion: string = '');
     procedure ExecuteGeneratorParameterPreamble(const AGenerator: TObject);
     function ExecuteClosureRegistersInternal(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
@@ -531,6 +547,7 @@ uses
   Goccia.DisposalTracker,
   Goccia.EngineFault,
   Goccia.Error,
+  Goccia.Error.CallDiagnostics,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Evaluator,
@@ -8963,12 +8980,31 @@ end;
 // Throw path only. Kept out of RequireCoercibleBaseRegister — and deliberately
 // not inlined — so the managed string local and its implicit exception frame stay
 // off every computed member access.
+procedure TGocciaVM.StampThrowLocation;
+var
+  ActiveTemplate: TGocciaFunctionTemplate;
+  PC: UInt32;
+begin
+  if (TGocciaCallStack.Instance = nil) or
+     (FActiveTemplateProbe = nil) or (FActiveInstructionIPProbe = nil) then
+    Exit;
+  ActiveTemplate := TGocciaFunctionTemplate(FActiveTemplateProbe^);
+  if (not Assigned(ActiveTemplate)) or (not Assigned(ActiveTemplate.DebugInfo)) then
+    Exit;
+  PC := UInt32(FActiveInstructionIPProbe^);
+  TGocciaCallStack.Instance.SetTopFrameLocation(
+    ActiveTemplate.DebugInfo.SourceFile,
+    Integer(ActiveTemplate.DebugInfo.GetLineForPC(PC)),
+    Integer(ActiveTemplate.DebugInfo.GetColumnForPC(PC)));
+end;
+
 procedure TGocciaVM.ThrowNullishBasePropertyAccess(
   const ABaseKind: TGocciaRegisterKind; const AKeyReg: TGocciaRegister;
   const AForWrite: Boolean);
 var
   KeyText: string;
 begin
+  StampThrowLocation;
   // The key has not been coerced yet, so it must be named without invoking user
   // code (ES2026 §6.2.5.5 GetValue step 3.a runs before step 3.c ToPropertyKey).
   KeyText := KeyDisplaySafe(AKeyReg);
@@ -12555,6 +12591,9 @@ var
   BrandValue: TGocciaValue;
   EmptyArgs: TGocciaArgumentsCollection;
 begin
+  if (AObject is TGocciaNullLiteralValue) or
+     (AObject is TGocciaUndefinedLiteralValue) then
+    StampThrowLocation;
   if AObject is TGocciaNullLiteralValue then
     ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull, [AKey]),
       SSuggestCheckNullBeforeAccess);
@@ -13216,7 +13255,7 @@ begin
   if not BindingObject.HasProperty(KeyStr) then
   begin
     if AStrict then
-      ThrowReferenceError(KeyStr + ' is not defined');
+      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]));
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
@@ -13244,7 +13283,7 @@ begin
     StillExists := BindingObject.HasProperty(KeyStr);
 
     if AStrict and not StillExists then
-      ThrowReferenceError(KeyStr + ' is not defined');
+      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]));
 
     if AStrict then
       SetPropertyValue(BindingObject, KeyStr, AValue)
@@ -14134,7 +14173,8 @@ procedure TGocciaVM.HandleExceptionUnwind(const AErrorValue: TGocciaValue;
   const AInitialFrameStackCount, AInitialClosedNumericFrameCount,
   ASavedHandlerCount: Integer;
   var AFrame: TGocciaVMCallFrame; var ATemplate: TGocciaFunctionTemplate;
-  var APrevCovLine: UInt32; var AProfileTimestamp: Int64);
+  var APrevCovLine: UInt32; var AProfileTimestamp: Int64;
+  const ASuggestion: string);
 var
   Handler: TGocciaBytecodeHandlerEntry;
   TargetHandlerCount: Integer;
@@ -14161,9 +14201,11 @@ begin
       SetRegister(Handler.CatchRegister, AErrorValue);
       Exit;
     end;
-    // Outermost frame: let the finally block handle teardown
+    // Outermost frame: let the finally block handle teardown. The suggestion
+    // travels with the throw so a host runner can render the same
+    // "Suggestion:" line the tree-walk evaluator's TGocciaThrowValue carries.
     if FFrameStackCount <= AInitialFrameStackCount then
-      raise EGocciaBytecodeThrow.Create(AErrorValue);
+      raise EGocciaBytecodeThrow.Create(AErrorValue, ASuggestion);
     // Intermediate trampoline frame: tear down and pop to parent
     TeardownCurrentFrame(ATemplate, AProfileTimestamp,
       FFrameStack[FFrameStackCount - 1].HandlerCount);
@@ -14298,6 +14340,8 @@ var
   // and then re-enter guest code (key coercion / custom-matcher lookup) before
   // consuming it. Re-Initialized per use, so sharing one record is safe.
   OperandRoots: TGocciaActiveRootFrame;
+  SavedActiveTemplateProbe: PPointer;
+  SavedActiveInstructionIPProbe: PInteger;
 
   procedure CurrentInstructionDebugLocation(out ALine, AColumn: Integer);
   begin
@@ -14320,6 +14364,114 @@ var
     else
       SourcePath := '';
     EnterGocciaCallSite(SourcePath, DebugLine, DebugColumn, APrevious);
+  end;
+
+  { Throw path only. Stamps the executing frame with this instruction's source
+    position so the error object's stack trace — and therefore the runner's
+    `--> file:line:column` header and code frame — matches what the tree-walk
+    evaluator reports for the same fault. Deferred frames carry no position of
+    their own (ADR 0074); paying the debug-map lookup here costs nothing on the
+    hot path. }
+  procedure StampCurrentInstructionLocation;
+  var
+    SourcePath: string;
+  begin
+    if TGocciaCallStack.Instance = nil then
+      Exit;
+    CurrentInstructionDebugLocation(DebugLine, DebugColumn);
+    if Assigned(Template) and Assigned(Template.DebugInfo) then
+      SourcePath := Template.DebugInfo.SourceFile
+    else
+      SourcePath := '';
+    TGocciaCallStack.Instance.SetTopFrameLocation(SourcePath, DebugLine,
+      DebugColumn);
+  end;
+
+  function CurrentCallSite: TGocciaCallSiteEntry;
+  begin
+    if Assigned(Template) then
+      Result := Template.CallSiteAt(UInt32(InstructionStartIP))
+    else
+    begin
+      Result.PC := 0;
+      Result.Callee := EmptyCalleeDescriptor;
+      Result.Line := 0;
+      Result.Column := 0;
+      Result.Recorded := False;
+    end;
+  end;
+
+  { Stamps the frame with the call expression's own position when the compiler
+    recorded one, which is what the tree-walk evaluator's per-call frame
+    carries; the instruction line map only resolves to the enclosing
+    statement. }
+  procedure StampCallSiteLocation(const ACallSite: TGocciaCallSiteEntry);
+  var
+    SourcePath: string;
+  begin
+    if not ACallSite.Recorded then
+    begin
+      StampCurrentInstructionLocation;
+      Exit;
+    end;
+    if TGocciaCallStack.Instance = nil then
+      Exit;
+    if Assigned(Template) and Assigned(Template.DebugInfo) then
+      SourcePath := Template.DebugInfo.SourceFile
+    else
+      SourcePath := '';
+    TGocciaCallStack.Instance.SetTopFrameLocation(SourcePath, ACallSite.Line,
+      ACallSite.Column);
+  end;
+
+  function ValueTypeNameOrUndefined(const AValue: TGocciaValue): string;
+  begin
+    if Assigned(AValue) then
+      Result := AValue.TypeName
+    else
+      Result := 'undefined';
+  end;
+
+  { The callee of the call instruction being executed is not callable. Uses the
+    descriptor the compiler recorded for this call site so the message names the
+    callee exactly as the evaluator's AST-derived one does. AReceiver is the
+    method call's `this` (nil for a plain call). }
+  procedure ThrowNotCallableHere(const ACallee, AReceiver: TGocciaValue);
+  var
+    CallSite: TGocciaCallSiteEntry;
+    CalleeTypeName, ReceiverTypeName: string;
+  begin
+    CallSite := CurrentCallSite;
+    CalleeTypeName := ValueTypeNameOrUndefined(ACallee);
+    if Assigned(AReceiver) then
+      ReceiverTypeName := AReceiver.TypeName
+    else
+      ReceiverTypeName := CalleeTypeName;
+    StampCallSiteLocation(CallSite);
+    ThrowTypeError(NotCallableMessage(CallSite.Callee, CalleeTypeName),
+      NotCallableSuggestion(CallSite.Callee, ReceiverTypeName, CalleeTypeName));
+  end;
+
+  procedure ThrowNotConstructorHere(const ACallee: TGocciaValue);
+  var
+    CallSite: TGocciaCallSiteEntry;
+    CalleeTypeName: string;
+  begin
+    CallSite := CurrentCallSite;
+    CalleeTypeName := ValueTypeNameOrUndefined(ACallee);
+    StampCallSiteLocation(CallSite);
+    ThrowTypeError(NotConstructorMessage(CallSite.Callee, CalleeTypeName),
+      NotConstructorSuggestion(CallSite.Callee, CalleeTypeName));
+  end;
+
+  { ES2026 §7.2.5 IsConstructor, restricted to the shapes this VM can build:
+    everything else reaches the same "is not a constructor" rejection the
+    ConstructValue tail performs, only with the call site's own wording. }
+  function MayBeConstructor(const AValue: TGocciaValue): Boolean;
+  begin
+    Result := Assigned(AValue) and (AValue is TGocciaObjectValue) and
+      (AValue.IsCallable or (AValue is TGocciaClassValue) or
+       (AValue is TGocciaProxyValue));
   end;
 
 begin
@@ -14361,6 +14513,10 @@ begin
       SetCurrentRealm(ExecutionRealm);
     try
       Inc(FNativeExecutionDepth);
+      SavedActiveTemplateProbe := FActiveTemplateProbe;
+      SavedActiveInstructionIPProbe := FActiveInstructionIPProbe;
+      FActiveTemplateProbe := PPointer(@Template);
+      FActiveInstructionIPProbe := @InstructionStartIP;
       SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
         AArg0, AArg1, AArg2, AUseFixedArgs, APushExecutionContext,
         Frame, Template, PrevCovLine, ProfileEntryTimestamp);
@@ -14752,7 +14908,7 @@ begin
         if Assigned(FGlobalScope) and
            not FGlobalScope.TryAssignExistingBinding(GlobalName,
              RegisterToValue(FRegisters[A])) then
-          ThrowReferenceError(GlobalName + ' is not defined');
+          ThrowReferenceError(Format(SErrorUndefinedVariable, [GlobalName]));
       end;
 
       OP_CLOSE_UPVALUE:
@@ -16801,6 +16957,10 @@ begin
           else
             for I := 0 to B - 1 do
               CallArgs.Add(GetRegister(A + 1 + I));
+          if not (Assigned(GetRegister(A)) and
+                  (GetRegister(A).IsCallable or
+                   (GetRegister(A) is TGocciaProxyValue))) then
+            ThrowNotCallableHere(GetRegister(A), nil);
           if (GetRegister(A) is TGocciaNativeFunctionValue) or
              (GetRegister(A) is TGocciaFunctionConstructorClassValue) or
              (GetRegister(A) is TGocciaBoundFunctionValue) or
@@ -17096,6 +17256,10 @@ begin
           else
             for I := 0 to B - 1 do
               CallArgs.Add(GetRegister(A + 1 + I));
+          if not (Assigned(GetRegister(A)) and
+                  (GetRegister(A).IsCallable or
+                   (GetRegister(A) is TGocciaProxyValue))) then
+            ThrowNotCallableHere(GetRegister(A), GetRegister(A - 1));
           if (GetRegister(A) is TGocciaNativeFunctionValue) or
              (GetRegister(A) is TGocciaFunctionConstructorClassValue) or
              (GetRegister(A) is TGocciaBoundFunctionValue) or
@@ -17130,6 +17294,13 @@ begin
         end
         else
         begin
+          if not MayBeConstructor(GetRegister(B)) then
+            ThrowNotConstructorHere(GetRegister(B));
+          { A native constructor can capture a stack trace (`new Error(...)`),
+            and this frame carries no position of its own. Stamp the construct
+            site first so the captured trace — and the diagnostic rendered from
+            it — locates the `new` expression. }
+          StampCallSiteLocation(CurrentCallSite);
           CallArgs := AcquireArguments(C);
           try
             for I := 0 to C - 1 do
@@ -17161,6 +17332,9 @@ begin
         end
         else
         begin
+          if not MayBeConstructor(GetRegister(B)) then
+            ThrowNotConstructorHere(GetRegister(B));
+          StampCallSiteLocation(CurrentCallSite);
           CallArgs := AcquireArguments(SpreadArray.Elements.Count);
           try
             for I := 0 to SpreadArray.Elements.Count - 1 do
@@ -17515,7 +17689,7 @@ begin
                 DebugLine, DebugColumn,
                 '', nil, SSuggestUseLetNotConst);
             end;
-            ThrowReferenceError(GlobalName + ' is not defined');
+            ThrowReferenceError(Format(SErrorUndefinedVariable, [GlobalName]));
           end;
         end;
       end;
@@ -18308,24 +18482,24 @@ begin
           HandleExceptionUnwind(E.ThrownValue,
             InitialFrameStackCount, InitialClosedNumericFrameCount,
             SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
         on E: TGocciaThrowValue do
           HandleExceptionUnwind(E.Value,
             InitialFrameStackCount, InitialClosedNumericFrameCount,
             SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
         on E: TGocciaTypeError do
           HandleExceptionUnwind(
             CreateErrorObject(TYPE_ERROR_NAME, E.Message),
             InitialFrameStackCount, InitialClosedNumericFrameCount,
             SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
         on E: TGocciaReferenceError do
           HandleExceptionUnwind(
             CreateErrorObject(REFERENCE_ERROR_NAME, E.Message),
             InitialFrameStackCount, InitialClosedNumericFrameCount,
             SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
         on E: TGocciaSyntaxError do
           HandleExceptionUnwind(
             CreateErrorObject(SYNTAX_ERROR_NAME, E.Message),
@@ -18337,12 +18511,14 @@ begin
             CreateErrorObject(ERROR_NAME, E.Message),
             InitialFrameStackCount, InitialClosedNumericFrameCount,
             SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
       end;
     end;
     Result := RegisterUndefined;
     finally
       Dec(FNativeExecutionDepth);
+      FActiveTemplateProbe := SavedActiveTemplateProbe;
+      FActiveInstructionIPProbe := SavedActiveInstructionIPProbe;
       try
       UnwindClosedNumericFrames(InitialClosedNumericFrameCount, Frame,
         Template, PrevCovLine, ProfileEntryTimestamp);

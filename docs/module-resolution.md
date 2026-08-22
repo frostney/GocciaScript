@@ -210,8 +210,8 @@ so a keyword the file only mentions counts for nothing. Every esbuild
 `__toCommonJS` bundle depends on that pass: it ends with the banner comment
 `// Annotate the CommonJS export names for ESM import in node:`, whose bare
 `export` and `import` words used to carry the whole file past the check. Such a
-bundle was loaded and then failed at its first `require`, with an
-`Undefined variable: require` reference error instead of the package-relative
+bundle was loaded and then failed at its first `require`, with a
+`require is not defined` reference error instead of the package-relative
 message below.
 
 The placeholder is chosen for what stood there. A string, template, or regular

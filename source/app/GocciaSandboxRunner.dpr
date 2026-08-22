@@ -916,7 +916,7 @@ begin
       on E: EGocciaBytecodeThrow do
       begin
         Result.ErrorMessage := FormatThrowDetail(E.ThrownValue, AEntryPath,
-          Source, False);
+          Source, False, E.Suggestion);
         Result.FailureKind := sfkScriptError;
       end;
       { Whatever is left is a native error the engine does not model.

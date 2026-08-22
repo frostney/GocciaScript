@@ -133,6 +133,26 @@ begin
   Result := True;
 end;
 
+{ Loads the frame file's own source so the code frame quotes the file the
+  header names. The caller only ever has the entry file's lines; when a module
+  throws during evaluation the frame belongs to the imported module, and using
+  the entry's lines silently printed unrelated code at the same line number.
+  Returns nil when the file cannot be read, which falls the caller back to the
+  lines it was given. }
+function TryLoadFrameSourceLines(const APath: string): TStringList;
+begin
+  Result := nil;
+  if (APath = '') or (not FileExists(APath)) then
+    Exit;
+  Result := TStringList.Create;
+  try
+    Result.LoadFromFile(APath);
+  except
+    on E: Exception do
+      FreeAndNil(Result);
+  end;
+end;
+
 function FormatThrowDetail(const AThrown: TGocciaValue;
   const AFileName: string; const ASourceLines: TStringList;
   const AUseColor: Boolean; const ASuggestion: string = ''): string;
@@ -141,20 +161,35 @@ var
   Line, Col: Integer;
   EffectiveFileName: string;
   StackText, MessageText, NameText: string;
+  FrameSourceLines, ContextLines: TStringList;
 begin
   if ExtractThrowLocation(AThrown, ErrorName, ErrorMessage, FrameFileName, Line, Col) and
-     Assigned(ASourceLines) and (Line > 0) and (Line <= ASourceLines.Count) then
+     (Line > 0) then
   begin
     if FrameFileName <> '' then
       EffectiveFileName := FrameFileName
     else
       EffectiveFileName := AFileName;
 
-    Result := FormatErrorWithSourceContext(
-      ErrorName, ErrorMessage, EffectiveFileName, Line, Col, ASourceLines,
-      AUseColor, ASuggestion);
-  end
-  else
+    FrameSourceLines := nil;
+    try
+      ContextLines := ASourceLines;
+      if (FrameFileName <> '') and (FrameFileName <> AFileName) then
+      begin
+        FrameSourceLines := TryLoadFrameSourceLines(FrameFileName);
+        if Assigned(FrameSourceLines) then
+          ContextLines := FrameSourceLines;
+      end;
+
+      if Assigned(ContextLines) and (Line <= ContextLines.Count) then
+        Exit(FormatErrorWithSourceContext(
+          ErrorName, ErrorMessage, EffectiveFileName, Line, Col, ContextLines,
+          AUseColor, ASuggestion));
+    finally
+      FrameSourceLines.Free;
+    end;
+  end;
+
   begin
     // Fallback when no parseable stack frame is available. Use the stack
     // string if present; otherwise render a static debug representation that

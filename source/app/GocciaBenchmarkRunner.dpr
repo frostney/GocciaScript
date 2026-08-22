@@ -551,9 +551,9 @@ begin
       on E: EGocciaBytecodeThrow do
       begin
         if not GIsWorkerThread then
-          WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue, AFileName, Source, IsColorTerminal));
+          WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue, AFileName, Source, IsColorTerminal, E.Suggestion));
         MakeErrorFileResult(AFileName,
-          FormatThrowDetail(E.ThrownValue, AFileName, Source, False), AReporter);
+          FormatThrowDetail(E.ThrownValue, AFileName, Source, False, E.Suggestion), AReporter);
       end;
       on E: Exception do
         MakeErrorFileResult(AFileName, E.Message, AReporter);
@@ -767,9 +767,9 @@ begin
     on E: EGocciaBytecodeThrow do
     begin
       if not GIsWorkerThread then
-        WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue, AFileName, ASource, IsColorTerminal));
+        WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue, AFileName, ASource, IsColorTerminal, E.Suggestion));
       MakeErrorFileResult(AFileName,
-        FormatThrowDetail(E.ThrownValue, AFileName, ASource, False), AReporter);
+        FormatThrowDetail(E.ThrownValue, AFileName, ASource, False, E.Suggestion), AReporter);
     end;
     on E: Exception do
       MakeErrorFileResult(AFileName, E.Message, AReporter);

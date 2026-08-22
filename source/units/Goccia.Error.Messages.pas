@@ -9,11 +9,18 @@ resourcestring
   SErrorIdentifierAlreadyDeclared = 'Identifier ''%s'' has already been declared';
   SErrorCannotAccessBeforeInit = 'Cannot access ''%s'' before initialization';
   SErrorAssignToConstant = 'Assignment to constant variable ''%s''';
-  SErrorUndefinedVariable = 'Undefined variable: %s';
+  // Node's wording. The bytecode VM already emitted this form, so the
+  // tree-walk evaluator uses the same constant and the two modes report an
+  // unresolved identifier identically.
+  SErrorUndefinedVariable = '%s is not defined';
 
-  // Type errors — function calls
-  SErrorMemberNotFunction = '%s.%s is not a function';
-  SErrorNotFunction = '''%s'' is not a function';
+  // Type errors — function calls.
+  // One form for every non-callable callee: what goes in the slot is the
+  // callee as the author wrote it when that is known, and the runtime type
+  // name otherwise. Both executors build it through
+  // Goccia.Error.CallDiagnostics so the text cannot drift between modes; the
+  // older per-shape variants ('obj.m is not a function' assembled from two
+  // parts, and a quoted-identifier form) were retired for that reason.
   SErrorValueNotFunction = '%s is not a function';
   SErrorSymbolToNumber = 'Cannot convert a Symbol value to a number';
   SErrorSymbolToString = 'Cannot convert a Symbol value to a string';
@@ -31,8 +38,11 @@ resourcestring
 
   SErrorNotANumber = 'Value is not a Number';
 
-  // Type errors — property access
-  SErrorCannotReadPropertyOf = 'Cannot read property ''%s'' of %s';
+  // Type errors — property access.
+  // Both executors use the "Cannot read properties of X (reading 'k')" form —
+  // Node's wording — so a nullish-base fault reads identically in interpreter
+  // and bytecode mode. The older "Cannot read property 'k' of X" phrasing was
+  // retired for that reason; do not reintroduce it.
   SErrorCannotReadPropertiesOf = 'Cannot read properties of %s (reading ''%s'')';
 
   // Type errors — constructors

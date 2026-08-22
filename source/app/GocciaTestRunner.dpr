@@ -45,6 +45,7 @@ uses
   Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
   Goccia.SourcePipeline,
+  Goccia.VM.Exception,
   Goccia.Builtins.TestingLibrary,
   Goccia.Builtins.Testing.Snapshots,
   Goccia.CLI.JSON.Reporter,
@@ -1098,6 +1099,23 @@ begin
             FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source,
               False, TGocciaThrowValue(E).Suggestion));
         end
+        else if E is EGocciaBytecodeThrow then
+        begin
+          { A JS throw that escapes the bytecode VM is the same verdict as the
+            evaluator's TGocciaThrowValue and must render the same way; without
+            this arm it fell through to the bare "Fatal error:" line and lost
+            the location, code frame and suggestion. }
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
+            WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
+              AFileName, Source, IsColorTerminal,
+              EGocciaBytecodeThrow(E).Suggestion));
+          MarkLoadError(ScriptResult, AFileName,
+            FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue, AFileName,
+              Source, False, EGocciaBytecodeThrow(E).Suggestion));
+          Result := MakeEmptyTestResult(ScriptResult,
+            FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue, AFileName,
+              Source, False, EGocciaBytecodeThrow(E).Suggestion));
+        end
         else
         begin
           if (not GIsWorkerThread) and (not IsJsonOutput) then
@@ -1140,6 +1158,11 @@ var
   LexStart, CompileStart, CompileEnd, ExecEnd: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
   SourceText: string;
+  { The file as written. Source itself gains an appended runTests(...) call
+    below, and quoting that in a code frame showed the runner's own epilogue as
+    if the author had written it — a line the interpreted path, which calls
+    runTests directly instead of appending it, never showed. }
+  DiagnosticSource: TStringList;
 begin
   ScriptResult := CreateDefaultScriptResult;
   ResultValue := nil;
@@ -1150,6 +1173,7 @@ begin
     GC.AddTempRoot(ScriptResult);
 
   Source := nil;
+  DiagnosticSource := nil;
   try
     if Assigned(APreloadedSource) then
       Source := APreloadedSource
@@ -1169,6 +1193,8 @@ begin
       end;
     end;
 
+    DiagnosticSource := TStringList.Create;
+    DiagnosticSource.Assign(Source);
     SourceText := StringListToSourceText(Source);
     if Source.Count > 0 then
       SourceText := SourceText + #10;
@@ -1276,12 +1302,29 @@ begin
         else if E is TGocciaThrowValue then
         begin
           if (not GIsWorkerThread) and (not IsJsonOutput) then
-            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal, TGocciaThrowValue(E).Suggestion));
+            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, DiagnosticSource, IsColorTerminal, TGocciaThrowValue(E).Suggestion));
           MarkLoadError(ScriptResult, AFileName,
-            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False, TGocciaThrowValue(E).Suggestion));
+            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, DiagnosticSource, False, TGocciaThrowValue(E).Suggestion));
           Result := MakeEmptyTestResult(ScriptResult,
-            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source,
+            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, DiagnosticSource,
               False, TGocciaThrowValue(E).Suggestion));
+        end
+        else if E is EGocciaBytecodeThrow then
+        begin
+          { A JS throw that escapes the bytecode VM is the same verdict as the
+            evaluator's TGocciaThrowValue and must render the same way; without
+            this arm it fell through to the bare "Fatal error:" line and lost
+            the location, code frame and suggestion. }
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
+            WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
+              AFileName, DiagnosticSource, IsColorTerminal,
+              EGocciaBytecodeThrow(E).Suggestion));
+          MarkLoadError(ScriptResult, AFileName,
+            FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue, AFileName,
+              DiagnosticSource, False, EGocciaBytecodeThrow(E).Suggestion));
+          Result := MakeEmptyTestResult(ScriptResult,
+            FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue, AFileName,
+              DiagnosticSource, False, EGocciaBytecodeThrow(E).Suggestion));
         end
         else
         begin
@@ -1298,6 +1341,7 @@ begin
       GC.RemoveTempRoot(ResultValue);
     if Assigned(GC) then
       GC.RemoveTempRoot(ScriptResult);
+    DiagnosticSource.Free;
     Source.Free;
   end;
 end;

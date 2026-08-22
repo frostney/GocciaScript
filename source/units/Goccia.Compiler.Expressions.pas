@@ -825,7 +825,7 @@ begin
   EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, CondReg,
     ACtx.Template.AddConstantString(REFERENCE_ERROR_NAME)));
   EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ArgReg,
-    ACtx.Template.AddConstantString(AExpr.Name + ' is not defined')));
+    ACtx.Template.AddConstantString(Format(SErrorUndefinedVariable, [AExpr.Name]))));
   EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, CondReg, CondReg, 1));
   EmitInstruction(ACtx, EncodeABC(OP_THROW, CondReg, 0, 0));
 
@@ -2564,7 +2564,7 @@ begin
   EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ErrorReg,
     ACtx.Template.AddConstantString(REFERENCE_ERROR_NAME)));
   EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, MessageReg,
-    ACtx.Template.AddConstantString(AExpr.Name + ' is not defined')));
+    ACtx.Template.AddConstantString(Format(SErrorUndefinedVariable, [AExpr.Name]))));
   EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, ErrorReg, ErrorReg, 1));
   EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
   ACtx.Scope.FreeRegister;
@@ -3850,6 +3850,20 @@ begin
   CompileSpreadArgsArrayFromList(ACtx, AExpr.Arguments, AArrayReg);
 end;
 
+{ Records the callee expression as the author wrote it against the call or
+  construct instruction about to be emitted, so that when the VM finds the
+  callee is not callable it can report "obj.method is not a function" rather
+  than "undefined is not a function" — the same text the tree-walk evaluator
+  builds from the AST (Goccia.Error.CallDiagnostics). Must be called
+  immediately before the emission: the key is the instruction's start PC,
+  which is CodeCount at this moment. }
+procedure RecordCallSite(const ACtx: TGocciaCompilationContext;
+  const ACallSite: TGocciaExpression; const ACallee: TGocciaExpression);
+begin
+  ACtx.Template.AddCallSite(UInt32(CurrentCodePosition(ACtx)),
+    CalleeDescriptorFor(ACallee), ACallSite.Line, ACallSite.Column);
+end;
+
 function TryCompileWithIdentifierCall(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const ADest: UInt16;
   const AArgCount: Integer; const AUseSpread: Boolean;
@@ -3880,6 +3894,7 @@ var
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
       CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
+      RecordCallSite(ACtx, AExpr, AExpr.Callee);
       if AIsMethodCall then
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg,
           CALL_FLAG_SPREAD or TailFlag))
@@ -3893,6 +3908,7 @@ var
       for ArgIndex := 0 to AArgCount - 1 do
         ACtx.CompileExpression(AExpr.Arguments[ArgIndex],
           ACtx.Scope.AllocateRegister);
+      RecordCallSite(ACtx, AExpr, AExpr.Callee);
       if AIsMethodCall then
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg,
           UInt16(AArgCount), TailFlag))
@@ -3984,6 +4000,7 @@ var
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
       CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
+      RecordCallSite(ACtx, AExpr, AExpr.Callee);
       if AIsMethodCall then
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg, 1))
       else
@@ -3996,6 +4013,7 @@ var
       for ArgIndex := 0 to ArgCount - 1 do
         ACtx.CompileExpression(AExpr.Arguments[ArgIndex],
           ACtx.Scope.AllocateRegister);
+      RecordCallSite(ACtx, AExpr, AExpr.Callee);
       if AIsMethodCall then
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg,
           UInt16(ArgCount), 0))
@@ -4430,6 +4448,7 @@ begin
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
       CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
+      RecordCallSite(ACtx, AExpr, AExpr.Callee);
       EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg,
         CALL_FLAG_SPREAD or MethodTailFlag));
       ACtx.Scope.FreeRegister;
@@ -4438,6 +4457,7 @@ begin
     begin
       for I := 0 to ArgCount - 1 do
         ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
+      RecordCallSite(ACtx, AExpr, AExpr.Callee);
       EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt16(ArgCount),
         MethodTailFlag));
       for I := 0 to ArgCount - 1 do
@@ -4507,6 +4527,7 @@ begin
       begin
         ArgsReg := ACtx.Scope.AllocateRegister;
         CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
+        RecordCallSite(ACtx, AExpr, AExpr.Callee);
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg, 1));
         ACtx.Scope.FreeRegister;
       end
@@ -4514,6 +4535,7 @@ begin
       begin
         for I := 0 to ArgCount - 1 do
           ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
+        RecordCallSite(ACtx, AExpr, AExpr.Callee);
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt16(ArgCount), 0));
         for I := 0 to ArgCount - 1 do
           ACtx.Scope.FreeRegister;
@@ -4560,6 +4582,7 @@ begin
       begin
         ArgsReg := ACtx.Scope.AllocateRegister;
         CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
+        RecordCallSite(ACtx, AExpr, AExpr.Callee);
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg,
           CALL_FLAG_SPREAD or MethodTailFlag));
         ACtx.Scope.FreeRegister;
@@ -4568,6 +4591,7 @@ begin
       begin
         for I := 0 to ArgCount - 1 do
           ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
+        RecordCallSite(ACtx, AExpr, AExpr.Callee);
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt16(ArgCount),
           MethodTailFlag));
         for I := 0 to ArgCount - 1 do
@@ -4613,6 +4637,7 @@ begin
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
       CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
+      RecordCallSite(ACtx, AExpr, AExpr.Callee);
       EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, ArgsReg,
         SpreadCallFlags(ACtx, AExpr, CurrentCodePosition(ACtx)) or MethodTailFlag));
       ACtx.Scope.FreeRegister;
@@ -4621,6 +4646,7 @@ begin
     begin
       for I := 0 to ArgCount - 1 do
         ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
+      RecordCallSite(ACtx, AExpr, AExpr.Callee);
       EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt16(ArgCount),
         CallFlags(ACtx, AExpr, CurrentCodePosition(ACtx)) or MethodTailFlag));
       for I := 0 to ArgCount - 1 do
@@ -5690,6 +5716,7 @@ begin
   begin
     ArgsReg := ACtx.Scope.AllocateRegister;
     CompileSpreadArgsArrayFromList(ACtx, AExpr.Arguments, ArgsReg);
+    RecordCallSite(ACtx, AExpr, AExpr.Callee);
     EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT_SPREAD, ADest, CtorReg,
       ArgsReg));
     ACtx.Scope.FreeRegister; // ArgsReg
@@ -5701,6 +5728,7 @@ begin
       raise Exception.Create('Compiler error: too many constructor arguments (>65535)');
     for I := 0 to ArgCount - 1 do
       ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
+    RecordCallSite(ACtx, AExpr, AExpr.Callee);
     EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, ADest, CtorReg, UInt16(ArgCount)));
     for I := 0 to ArgCount - 1 do
       ACtx.Scope.FreeRegister;
@@ -6048,7 +6076,7 @@ begin
     EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, CondReg,
       ACtx.Template.AddConstantString(REFERENCE_ERROR_NAME)));
     EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ArgReg,
-      ACtx.Template.AddConstantString(AExpr.Name + ' is not defined')));
+      ACtx.Template.AddConstantString(Format(SErrorUndefinedVariable, [AExpr.Name]))));
     EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, CondReg, CondReg, 1));
     EmitInstruction(ACtx, EncodeABC(OP_THROW, CondReg, 0, 0));
     PatchJumpTarget(ACtx, OkJump);
