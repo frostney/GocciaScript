@@ -55,6 +55,22 @@ type
     procedure TestMixedSourceIsReadAsESModule;
     procedure TestInertSourceIsNotCommonJS;
     procedure TestIdentifierEndingInRequireIsNotACall;
+
+    procedure TestEsbuildBannerIsNotAnESModuleMarker;
+    procedure TestStringLiteralMarkerIsNotAnESModuleMarker;
+    procedure TestBlockCommentSpanningLinesIsStripped;
+    procedure TestTemplateBodyIsStrippedButSubstitutionsAreNot;
+    procedure TestCommentedESModuleStaysAnESModule;
+    procedure TestRegExpLiteralDoesNotSwallowCode;
+    procedure TestUnterminatedCommentFallsBackToTheRawScan;
+
+    procedure TestNonASCIIIdentifierBeforeASlashDivides;
+    procedure TestStringBeforeASlashDivides;
+    procedure TestLineSeparatorEndsALineComment;
+    procedure TestCarriageReturnEndsALineComment;
+    procedure TestSubstitutionBracesAreTrackedByDepth;
+    procedure TestNestedTemplateLiteralsAreTracked;
+    procedure TestUnterminatedTemplateFallsBackToTheRawScan;
   public
     procedure SetupTests; override;
   end;
@@ -129,6 +145,34 @@ begin
   Test('inert source is not CommonJS', TestInertSourceIsNotCommonJS);
   Test('an identifier ending in require is not a require call',
     TestIdentifierEndingInRequireIsNotACall);
+
+  Test('an esbuild banner comment is not an ES module marker',
+    TestEsbuildBannerIsNotAnESModuleMarker);
+  Test('a marker inside a string literal does not count',
+    TestStringLiteralMarkerIsNotAnESModuleMarker);
+  Test('a block comment spanning lines is stripped',
+    TestBlockCommentSpanningLinesIsStripped);
+  Test('a template body is stripped but its substitutions are not',
+    TestTemplateBodyIsStrippedButSubstitutionsAreNot);
+  Test('a commented ES module stays an ES module',
+    TestCommentedESModuleStaysAnESModule);
+  Test('a regular expression literal does not swallow the code after it',
+    TestRegExpLiteralDoesNotSwallowCode);
+  Test('an unterminated comment falls back to the raw scan',
+    TestUnterminatedCommentFallsBackToTheRawScan);
+
+  Test('a slash after a non-ASCII identifier divides',
+    TestNonASCIIIdentifierBeforeASlashDivides);
+  Test('a slash after a string literal divides', TestStringBeforeASlashDivides);
+  Test('U+2028 ends a line comment', TestLineSeparatorEndsALineComment);
+  Test('a carriage return ends a line comment',
+    TestCarriageReturnEndsALineComment);
+  Test('substitution braces are told apart by depth',
+    TestSubstitutionBracesAreTrackedByDepth);
+  Test('nested template literals are tracked',
+    TestNestedTemplateLiteralsAreTracked);
+  Test('an unterminated template falls back to the raw scan',
+    TestUnterminatedTemplateFallsBackToTheRawScan);
 end;
 
 { ── Specifier splitting ────────────────────────────────────── }
@@ -633,6 +677,151 @@ procedure TNodeResolutionTests.TestIdentifierEndingInRequireIsNotACall;
 begin
   Expect<Boolean>(LooksLikeCommonJSSource(
     'const value = createRequire(import.meta.url);')).ToBe(False);
+end;
+
+{ ── Comment and literal stripping ──────────────────────────── }
+
+procedure TNodeResolutionTests.TestEsbuildBannerIsNotAnESModuleMarker;
+begin
+  { The banner every esbuild __toCommonJS bundle carries. Its bare "export" and
+    "import" words used to make the bundle pass as an ES module, so it was
+    loaded instead of refused and failed at its first require. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", ' +
+      '{ value: true }), mod);' + sLineBreak +
+    'var index_exports = {};' + sLineBreak +
+    'module.exports = __toCommonJS(index_exports);' + sLineBreak +
+    '// Annotate the CommonJS export names for ESM import in node:' +
+      sLineBreak +
+    '0 && (module.exports = {' + sLineBreak +
+    '  getToken' + sLineBreak +
+    '});')).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestStringLiteralMarkerIsNotAnESModuleMarker;
+begin
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const hint = "run: import x from ''y''";' + sLineBreak +
+    'module.exports = { hint };')).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestBlockCommentSpanningLinesIsStripped;
+begin
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    '/*' + sLineBreak +
+    ' * Historic note: this file used to read' + sLineBreak +
+    ' *   export const value = 1;' + sLineBreak +
+    ' */' + sLineBreak +
+    'module.exports = { value: 1 };')).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestTemplateBodyIsStrippedButSubstitutionsAreNot;
+begin
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'module.exports = {' + sLineBreak +
+    '  banner: `' + sLineBreak +
+    '    import { x } from "y";' + sLineBreak +
+    '    export const z = x;' + sLineBreak +
+    '  `,' + sLineBreak +
+    '};')).ToBe(True);
+  { A substitution holds real code, so what is inside it still counts. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const label = `name: ${exports.name}`;')).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestCommentedESModuleStaysAnESModule;
+begin
+  { The strip may not eat code: the require before the comments and the export
+    after them are both real, and a file carrying both is an ES module. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const legacy = require("./legacy.cjs");' + sLineBreak +
+    '/* interop shim for the legacy build */' + sLineBreak +
+    '// exports.legacy = legacy;' + sLineBreak +
+    'export const value = legacy;')).ToBe(False);
+end;
+
+procedure TNodeResolutionTests.TestRegExpLiteralDoesNotSwallowCode;
+begin
+  { The quotes and the escaped slash pair inside the literal must not be read
+    as a string or a comment; the export after it decides the file. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const legacy = require("./legacy.cjs");' + sLineBreak +
+    'const pattern = /["'']\/\//g;' + sLineBreak +
+    'export const value = legacy.replace(pattern, "");')).ToBe(False);
+end;
+
+procedure TNodeResolutionTests.TestUnterminatedCommentFallsBackToTheRawScan;
+begin
+  { A source the scan cannot finish is classified on its raw text, so the words
+    inside the unclosed comment count again. The file is loaded rather than
+    refused, which is the safe direction of the asymmetry. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'module.exports = { value: 1 };' + sLineBreak +
+    '/* export * from "./value.js";')).ToBe(False);
+end;
+
+procedure TNodeResolutionTests.TestNonASCIIIdentifierBeforeASlashDivides;
+begin
+  { `café` is a value, so the slash after it divides. Reading it as an operand
+    position would open a regular expression that closes on the next slash on
+    the line, taking the export with it and refusing a genuine ES module. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const café = 4; const x = café/2; export const v = 1; ' +
+    'const y = 6/3; module.exports = x;')).ToBe(False);
+end;
+
+procedure TNodeResolutionTests.TestStringBeforeASlashDivides;
+begin
+  { A stripped literal leaves a value behind, so the slash after it divides for
+    the same reason. On a placeholder the scan could see past, the literal
+    opened here would run to the slash in `1/2` and swallow the export. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'var a = "p"/2;export { a };var b = 1/2;module.exports = b;')).ToBe(False);
+end;
+
+procedure TNodeResolutionTests.TestLineSeparatorEndsALineComment;
+begin
+  { U+2028 is an ECMAScript line terminator, so the banner comment ends there
+    and the code on the next line is still code. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    '// Annotate the CommonJS export names for ESM import in node:' +
+    #$2028 + 'module.exports = { value: 1 };')).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestCarriageReturnEndsALineComment;
+begin
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    '// Annotate the CommonJS export names for ESM import in node:' +
+    #13#10 + 'module.exports = { value: 1 };')).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestSubstitutionBracesAreTrackedByDepth;
+begin
+  { The closing brace of the object literal is not the one that ends the
+    substitution. Counting templates instead of brace depth ends it early, and
+    the rest of the substitution — the only CommonJS marker here — is read as
+    template text and stripped. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const label = `${ format({ width: 2 }, exports.name) } ready`;'))
+    .ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestNestedTemplateLiteralsAreTracked;
+begin
+  { A substitution inside a substitution is still code. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const label = `outer ${ wrap(`inner ${ exports.name }`) } done`;'))
+    .ToBe(True);
+  { The body of the nested template is text, so the marker in it is not one. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'module.exports = `a ${ wrap(`export const b = 1;`) } c`;')).ToBe(True);
+end;
+
+procedure TNodeResolutionTests.TestUnterminatedTemplateFallsBackToTheRawScan;
+begin
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'module.exports = { value: 1 };' + sLineBreak +
+    'const banner = `export * from "./value.js";')).ToBe(False);
 end;
 
 begin

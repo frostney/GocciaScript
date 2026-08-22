@@ -5,6 +5,7 @@
 // classified `skip` for both. Mode parity is still checked.
 import {
   importCommonJSOnlyPackage,
+  importEsbuildBundledPackage,
   modfieldLabel,
 } from "./mods/nodemods/goccia-entry.js";
 
@@ -26,6 +27,24 @@ describe("node_modules resolution: goccia-specific behaviour", () => {
 
     expect(message).toBe(
       'Package "cjsonly" resolved to a CommonJS file (index.js); GocciaScript loads only ES modules',
+    );
+  });
+
+  test("an esbuild CommonJS bundle is refused by name despite its banner", async () => {
+    // esbuild ends every CommonJS output with "// Annotate the CommonJS export
+    // names for ESM import in node:". The source scan strips comments before
+    // looking for module markers, so those two words no longer make the bundle
+    // look like an ES module — without the strip this failed at `require`
+    // instead, with a ReferenceError naming an undefined variable.
+    let message = "";
+    try {
+      await importEsbuildBundledPackage();
+    } catch (error) {
+      message = error.message;
+    }
+
+    expect(message).toBe(
+      'Package "esbuildcjs" resolved to a CommonJS file (index.js); GocciaScript loads only ES modules',
     );
   });
 });
