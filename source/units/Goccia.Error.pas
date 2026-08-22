@@ -59,7 +59,8 @@ function FormatErrorWithSourceContext(
   const ALine, AColumn: Integer;
   const ASourceLines: TStringList;
   const AUseColor: Boolean = False;
-  const ASuggestion: string = ''): string;
+  const ASuggestion: string = '';
+  const AFirstLineNumber: Integer = 1): string;
 
 implementation
 
@@ -153,11 +154,12 @@ function FormatErrorWithSourceContext(
   const ALine, AColumn: Integer;
   const ASourceLines: TStringList;
   const AUseColor: Boolean = False;
-  const ASuggestion: string = ''): string;
+  const ASuggestion: string = '';
+  const AFirstLineNumber: Integer = 1): string;
 var
   Buffer: TStringBuffer;
   GutterWidth, LineNum, I: Integer;
-  FirstContextLine, LastContextLine: Integer;
+  FirstContextLine, LastContextLine, LastAbsLine: Integer;
   LineStr, Gutter, CaretStr: string;
 begin
   Buffer := TStringBuffer.Create(512);
@@ -180,15 +182,23 @@ begin
   Buffer.Append(Colorize(Format('--> %s:%d:%d', [AFileName, ALine, AColumn]), ANSI_CYAN, AUseColor));
   Buffer.Append(sLineBreak);
 
-  // Source context lines
-  if Assigned(ASourceLines) and (ALine > 0) and (ALine <= ASourceLines.Count) then
+  // Source context lines. ASourceLines may be either the whole file
+  // (AFirstLineNumber = 1) or a captured window whose first entry is absolute
+  // line AFirstLineNumber, so every access maps absolute line -> index via the
+  // base offset.
+  if Assigned(ASourceLines) then
+    LastAbsLine := AFirstLineNumber + ASourceLines.Count - 1
+  else
+    LastAbsLine := 0;
+  if Assigned(ASourceLines) and (ALine >= AFirstLineNumber) and
+     (ALine <= LastAbsLine) then
   begin
     FirstContextLine := ALine - CONTEXT_LINES_BEFORE;
-    if FirstContextLine < 1 then
-      FirstContextLine := 1;
+    if FirstContextLine < AFirstLineNumber then
+      FirstContextLine := AFirstLineNumber;
     LastContextLine := ALine + CONTEXT_LINES_AFTER;
-    if LastContextLine > ASourceLines.Count then
-      LastContextLine := ASourceLines.Count;
+    if LastContextLine > LastAbsLine then
+      LastContextLine := LastAbsLine;
 
     // Calculate gutter width based on largest line number
     GutterWidth := Length(IntToStr(LastContextLine));
@@ -200,12 +210,12 @@ begin
     begin
       Gutter := Format('%' + IntToStr(GutterWidth) + 'd | ', [LineNum]);
       Buffer.Append(Colorize(Gutter, ANSI_DIM, AUseColor));
-      Buffer.Append(ASourceLines[LineNum - 1]);
+      Buffer.Append(ASourceLines[LineNum - AFirstLineNumber]);
       Buffer.Append(sLineBreak);
     end;
 
     // Error line (bold)
-    LineStr := ASourceLines[ALine - 1];
+    LineStr := ASourceLines[ALine - AFirstLineNumber];
     Gutter := Format('%' + IntToStr(GutterWidth) + 'd | ', [ALine]);
     Buffer.Append(Colorize(Gutter, ANSI_DIM, AUseColor));
     Buffer.Append(Colorize(LineStr, ANSI_BOLD, AUseColor));
@@ -229,7 +239,7 @@ begin
     begin
       Gutter := Format('%' + IntToStr(GutterWidth) + 'd | ', [LineNum]);
       Buffer.Append(Colorize(Gutter, ANSI_DIM, AUseColor));
-      Buffer.Append(ASourceLines[LineNum - 1]);
+      Buffer.Append(ASourceLines[LineNum - AFirstLineNumber]);
       Buffer.Append(sLineBreak);
     end;
   end;

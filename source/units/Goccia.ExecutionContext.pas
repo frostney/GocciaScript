@@ -5,6 +5,7 @@ unit Goccia.ExecutionContext;
 interface
 
 uses
+  Goccia.Diagnostics.SourceRegistry,
   Goccia.Realm,
   Goccia.Scope,
   Goccia.Values.Primitives;
@@ -33,8 +34,16 @@ type
   TGocciaExecutionContextScope = class
   private
     FPopped: Boolean;
+    FHasDiagnostic: Boolean;
+    FPrevDiagnosticScope: TGocciaDiagnosticSourceScope;
   public
-    constructor Create(const AContext: TGocciaExecutionContext);
+    { When ADiagnosticScope is assigned, this scope also makes it the active
+      diagnostic capture target for its lifetime and restores the previous one
+      on Pop — so a cross-engine transition (ShadowRealm evaluate/importValue/
+      wrapped function) captures code frames from the engine actually running,
+      not from whichever engine happened to be active before the switch. }
+    constructor Create(const AContext: TGocciaExecutionContext;
+      const ADiagnosticScope: TGocciaDiagnosticSourceScope = nil);
     destructor Destroy; override;
     procedure Pop;
   end;
@@ -196,11 +205,16 @@ end;
 { TGocciaExecutionContextScope }
 
 constructor TGocciaExecutionContextScope.Create(
-  const AContext: TGocciaExecutionContext);
+  const AContext: TGocciaExecutionContext;
+  const ADiagnosticScope: TGocciaDiagnosticSourceScope);
 begin
   inherited Create;
   FPopped := False;
   TGocciaExecutionContextStack.Push(AContext);
+  FHasDiagnostic := Assigned(ADiagnosticScope);
+  if FHasDiagnostic then
+    FPrevDiagnosticScope :=
+      TGocciaDiagnosticSourceRegistry.Activate(ADiagnosticScope);
 end;
 
 destructor TGocciaExecutionContextScope.Destroy;
@@ -213,6 +227,12 @@ procedure TGocciaExecutionContextScope.Pop;
 begin
   if FPopped then
     Exit;
+  // Restore the diagnostic scope before unwinding the context, mirroring Create.
+  if FHasDiagnostic then
+  begin
+    TGocciaDiagnosticSourceRegistry.Deactivate(FPrevDiagnosticScope);
+    FHasDiagnostic := False;
+  end;
   TGocciaExecutionContextStack.Pop;
   FPopped := True;
 end;
