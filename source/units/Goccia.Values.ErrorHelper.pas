@@ -245,22 +245,36 @@ end;
 function CreateErrorObject(const AName, AMessage: string; const ASkipTop: Integer = 0): TGocciaObjectValue;
 var
   Proto: TGocciaObjectValue;
+  ResultRoot: TGocciaTempRoot;
 begin
   Proto := GetErrorPrototype(AName);
   // An error subclass instance so provenance can be attached below without
   // enlarging every plain object (see TGocciaErrorObjectValue).
-  if Assigned(Proto) then
-    Result := TGocciaErrorObjectValue.Create(Proto)
-  else
-    Result := TGocciaErrorObjectValue.Create;
-  Result.HasErrorData := True;
-  Result.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AName));
-  Result.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(AMessage));
+  { The error under construction must be a temp root: the property stores below
+    grow the shaped map at its collecting growth gate, CaptureStackTrace and the
+    diagnostic-excerpt reservation are GC safe points, and nothing else roots
+    this value yet — without the root a collection taken at any of them frees the
+    half-built error and the next field access dereferences freed memory (an
+    Access violation under -O3/-O4, where the collection lands mid-build). Mirror
+    the same guard the Error() constructor path already uses in Builtins.Globals. }
+  InitializeTempRoot(ResultRoot);
+  try
+    if Assigned(Proto) then
+      Result := TGocciaErrorObjectValue.Create(Proto)
+    else
+      Result := TGocciaErrorObjectValue.Create;
+    AddTempRootIfNeeded(ResultRoot, Result);
+    Result.HasErrorData := True;
+    Result.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AName));
+    Result.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(AMessage));
 
-  if (TGocciaCallStack.Instance <> nil) then
-    Result.ErrorStack :=
-      TGocciaCallStack.Instance.CaptureStackTrace(AName, AMessage, ASkipTop);
-  AttachErrorSourceProvenance(Result, ASkipTop);
+    if (TGocciaCallStack.Instance <> nil) then
+      Result.ErrorStack :=
+        TGocciaCallStack.Instance.CaptureStackTrace(AName, AMessage, ASkipTop);
+    AttachErrorSourceProvenance(Result, ASkipTop);
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 function CreateErrorObjectInRealm(const AName, AMessage: string;

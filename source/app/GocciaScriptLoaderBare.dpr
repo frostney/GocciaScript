@@ -1230,7 +1230,6 @@ begin
     Result := TGocciaModuleContent.Create(HarnessPrelude + sLineBreak +
       OriginalContent.Text, OriginalContent.LastModified,
       OriginalContent.CanonicalIdentity, OriginalContent.IdentityRequired);
-    OriginalContent.Free;
   except
     OriginalContent.Free;
     raise;
