@@ -4558,8 +4558,10 @@ begin
       begin
         { Same descriptor the bytecode compiler records per call site, so both
           executors name the callee identically (Goccia.Error.CallDiagnostics).
-          This arm is also reached when Callee is nil, so its type name is read
-          through a nil guard, mirroring the VM's ValueTypeNameOrUndefined. }
+          A non-callable callee reaches here as its runtime value (normally the
+          undefined value); the Assigned() check is a defensive nil guard only,
+          mirroring the VM's ValueTypeNameOrUndefined, so a raw nil from an
+          internal invariant violation degrades to "undefined". }
         CalleeDescriptor := CalleeDescriptorFor(ACallExpression.Callee);
         if Assigned(Callee) then
           CalleeTypeName := Callee.TypeName
@@ -12071,9 +12073,14 @@ begin
           tag-must-be-callable suggestion (Goccia.Error.CallDiagnostics). }
         TagCalleeDescriptor := CalleeDescriptorFor(
           ATaggedTemplateExpression.Tag, cckTaggedTemplate);
-        { This arm is also reached when Callee is nil (a missing symbol-keyed
-          computed property returns raw nil), so read its type name through a
-          nil guard, mirroring EvaluateCallWithOptionalShortCircuit. }
+        { A non-callable tag reaches here as its runtime value — normally the
+          undefined value (a missing property, symbol-keyed or not, reads as
+          `undefined`, never raw Pascal nil: GetSymbolPropertyWithReceiver and
+          GetPropertyWithContext both return TGocciaUndefinedLiteralValue for an
+          absent property). The Assigned() check is a defensive nil guard only,
+          mirroring EvaluateCallWithOptionalShortCircuit and the VM's
+          ValueTypeNameOrUndefined, so a raw nil from an internal invariant
+          violation degrades to "undefined" rather than dereferencing nil. }
         if Assigned(Callee) then
           TagCalleeTypeName := Callee.TypeName
         else

@@ -94,6 +94,12 @@ type
       test. Production leaves it empty; a test subclass raises after an index
       insertion to prove rollback removes every partial commit and charge. }
     procedure AfterIndexCommit(const AIndex: Integer); virtual;
+    { Companion seam for the alias-reconciliation path (a later identified
+      registration folding into an entry already keyed by path). Production
+      leaves it empty; a test subclass raises after the reconciliation has
+      flipped ownership flags and repointed aliases, to prove the except arm
+      restores every flag and binding and removes the canonical key. }
+    procedure AfterReconcileCommit; virtual;
   public
     constructor Create;
     destructor Destroy; override;
@@ -268,6 +274,8 @@ var
   GC: TGarbageCollector;
   Reserved: Boolean;
   CanonicalAdded, LiteralAdded, ExpandedAdded: Boolean;
+  ReconPriorByPathGuest, ReconPriorByExpandedGuest: Boolean;
+  ReconCanonicalAdded, ReconPathRepointed, ReconExpandedRepointed: Boolean;
 begin
   if APath = '' then
     Exit;
@@ -327,20 +335,76 @@ begin
       Unified := ByPath
     else
       Unified := ByExpanded;
-    if AIsHost then
-    begin
-      Unified.IsGuest := False;
-      if HavePath then
-        ByPath.IsGuest := False;
+
+    { Transactional reconciliation. This block both flips ownership flags
+      (host-wins upgrades) and repoints alias bindings onto the one owned entry;
+      if any step raised partway, a previously guest-owned window could be left
+      permanently suppressed (a half-applied host upgrade) or an alias left
+      half-repointed. Two guarantees keep it atomic:
+
+      1. The canonical key is inserted FIRST. It is the only NEW key here (the
+         TryGetValue(Canonical) miss above proved it absent), so it is the only
+         operation that can allocate and therefore the only one that can raise
+         under memory pressure. The literal/expanded repoints below target keys
+         that already exist (HavePath/HaveExpanded), so they set a slot in place
+         and never allocate; the IsGuest writes are plain field stores. Doing the
+         one allocating step before any mutation means a failure here leaves the
+         scope exactly as it was found.
+
+      2. The except arm still restores every ownership flag and alias binding
+         this block touches, and removes the canonical key if it was added, so
+         even a future mutation that unexpectedly allocated could not leave a
+         partial host upgrade or a stale alias behind. Unified is always ByPath
+         or ByExpanded, so restoring those two flags also restores Unified's. }
+    ReconPriorByPathGuest := False;
+    ReconPriorByExpandedGuest := False;
+    if HavePath then
+      ReconPriorByPathGuest := ByPath.IsGuest;
+    if HaveExpanded then
+      ReconPriorByExpandedGuest := ByExpanded.IsGuest;
+    ReconCanonicalAdded := False;
+    ReconPathRepointed := False;
+    ReconExpandedRepointed := False;
+    try
+      if not FEntries.ContainsKey(Canonical) then
+      begin
+        FEntries.AddOrSetValue(Canonical, Unified);
+        ReconCanonicalAdded := True;
+      end;
+      if AIsHost then
+      begin
+        Unified.IsGuest := False;
+        if HavePath then
+          ByPath.IsGuest := False;
+        if HaveExpanded then
+          ByExpanded.IsGuest := False;
+      end;
+      if HavePath and (ByPath <> Unified) then
+      begin
+        FEntries.AddOrSetValue(APath, Unified);
+        ReconPathRepointed := True;
+      end;
+      if HaveExpanded and (ByExpanded <> Unified) then
+      begin
+        FEntries.AddOrSetValue(Expanded, Unified);
+        ReconExpandedRepointed := True;
+      end;
+      AfterReconcileCommit;
+    except
+      { Restore in reverse: repoints target still-present keys and the flag
+        writes are field stores, so none of these can raise. }
+      if ReconExpandedRepointed then
+        FEntries.AddOrSetValue(Expanded, ByExpanded);
+      if ReconPathRepointed then
+        FEntries.AddOrSetValue(APath, ByPath);
       if HaveExpanded then
-        ByExpanded.IsGuest := False;
+        ByExpanded.IsGuest := ReconPriorByExpandedGuest;
+      if HavePath then
+        ByPath.IsGuest := ReconPriorByPathGuest;
+      if ReconCanonicalAdded then
+        FEntries.Remove(Canonical);
+      raise;
     end;
-    if HavePath and (ByPath <> Unified) then
-      FEntries.AddOrSetValue(APath, Unified);
-    if HaveExpanded and (ByExpanded <> Unified) then
-      FEntries.AddOrSetValue(Expanded, Unified);
-    if not FEntries.ContainsKey(Canonical) then
-      FEntries.AddOrSetValue(Canonical, Unified);
     Exit;
   end;
 
@@ -424,6 +488,10 @@ begin
 end;
 
 procedure TGocciaDiagnosticSourceScope.AfterIndexCommit(const AIndex: Integer);
+begin
+end;
+
+procedure TGocciaDiagnosticSourceScope.AfterReconcileCommit;
 begin
 end;
 

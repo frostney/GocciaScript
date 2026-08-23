@@ -67,6 +67,7 @@ type
     procedure TestRuntimeModuleLoaderFallsBackToPreviousLoader;
     procedure TestRuntimeRunScriptFromFileLoadsFile;
     procedure TestMalformedUTF8ModuleSurfacesGuestError;
+    procedure TestMalformedUTF8ModuleRejectsDynamicImport;
   public
     procedure SetupTests; override;
   end;
@@ -127,6 +128,9 @@ begin
     TestRuntimeRunScriptFromFileLoadsFile);
   Test('a malformed-UTF-8 module surfaces a guest error without the host path',
     TestMalformedUTF8ModuleSurfacesGuestError);
+  Test('a dynamic import of a malformed-UTF-8 module rejects in guest code ' +
+    'without the host path',
+    TestMalformedUTF8ModuleRejectsDynamicImport);
 end;
 
 function TRuntimeTests.CreateEmptySource: TStringList;
@@ -573,6 +577,100 @@ begin
     { The resolved host path must not leak into the guest-reachable message. }
     Expect<Boolean>(Pos(BadPath, MessageValue) > 0).ToBe(False);
     Expect<Boolean>(Pos('goccia-bad-utf8-module.js', MessageValue) > 0)
+      .ToBe(False);
+  finally
+    Engine.Free;
+    ModuleLoader.Free;
+    ContentProvider.Free;
+    Source.Free;
+    Executor.Free;
+    DeleteFile(BadPath);
+  end;
+end;
+
+procedure TRuntimeTests.TestMalformedUTF8ModuleRejectsDynamicImport;
+const
+  BAD_BYTES: array[0..3] of Byte = (Ord('a'), Ord('b'), Ord('c'), $FF);
+var
+  Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
+  ModuleLoader: TGocciaModuleLoader;
+  ContentProvider: TGocciaFileSystemModuleContentProvider;
+  Source: TStringList;
+  Stream: TFileStream;
+  GlobalObject: TGocciaObjectValue;
+  BadPath: string;
+  RejectedMessage, RejectedName: string;
+  WasRejected: Boolean;
+begin
+  { The sibling test above drives ModuleLoader.LoadModule directly and catches
+    the Pascal TGocciaRuntimeError — it verifies the conversion, but not that
+    the async-import rejection path actually delivers it to guest code. This
+    test runs GUEST source that does `import(badPath)` and captures the
+    rejection from inside a guest handler, so it fails if the dynamic-import
+    EConvertError-to-rejection wiring ever regresses. The guest-visible Error
+    must carry ONLY the decode message, never the resolved host path. }
+  BadPath := IncludeTrailingPathDelimiter(GetTempDir(False)) +
+    'goccia-bad-utf8-dyn.js';
+  Stream := TFileStream.Create(BadPath, fmCreate);
+  try
+    Stream.WriteBuffer(BAD_BYTES[0], Length(BAD_BYTES));
+  finally
+    Stream.Free;
+  end;
+
+  { A module (.mjs) so Execute drains the microtask queue before returning: the
+    import() promise rejects synchronously during evaluation and its handler
+    runs as a microtask. The bad path travels as a runtime string global, never
+    interpolated into source, so a Windows backslash path cannot corrupt it. }
+  Source := TStringList.Create;
+  Source.Add('globalThis.__importRejected = false;');
+  Source.Add('globalThis.__importErrName = "";');
+  Source.Add('globalThis.__importErrMessage = "";');
+  Source.Add('import(__BAD_PATH).then(');
+  Source.Add('  () => {},');
+  Source.Add('  (e) => {');
+  Source.Add('    globalThis.__importRejected = true;');
+  Source.Add('    globalThis.__importErrName = e && e.name ? e.name : String(e);');
+  Source.Add('    globalThis.__importErrMessage =');
+  Source.Add('      e && e.message !== undefined ? e.message : String(e);');
+  Source.Add('  },');
+  Source.Add(');');
+
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := nil;
+  ModuleLoader := nil;
+  ContentProvider := nil;
+  try
+    ContentProvider := TGocciaFileSystemModuleContentProvider.Create;
+    ModuleLoader := TGocciaModuleLoader.Create('<runtime-test>.mjs', nil,
+      ContentProvider);
+    Engine := TGocciaEngine.Create('<runtime-test>.mjs', Source, ModuleLoader,
+      Executor);
+
+    Engine.RegisterGlobal('__BAD_PATH',
+      TGocciaStringLiteralValue.Create(BadPath));
+
+    Engine.Execute;
+    Engine.WaitForRuntimeIdle;
+
+    GlobalObject := TGocciaObjectValue(Engine.Realm.GlobalObject);
+    WasRejected := GlobalObject.GetProperty('__importRejected')
+      .ToBooleanLiteral.Value;
+    RejectedName := GlobalObject.GetProperty('__importErrName')
+      .ToStringLiteral.Value;
+    RejectedMessage := GlobalObject.GetProperty('__importErrMessage')
+      .ToStringLiteral.Value;
+
+    { The guest handler ran: the import() rejected inside guest code. }
+    Expect<Boolean>(WasRejected).ToBe(True);
+    { A real guest Error object, not a host exception or undefined. }
+    Expect<string>(RejectedName).ToBe('Error');
+    { The exact decode message, verbatim ($FF is the fourth byte, index 3). }
+    Expect<string>(RejectedMessage).ToBe('Invalid UTF-8 at byte 3');
+    { The resolved host path must not leak into the guest-reachable message. }
+    Expect<Boolean>(Pos(BadPath, RejectedMessage) > 0).ToBe(False);
+    Expect<Boolean>(Pos('goccia-bad-utf8-dyn.js', RejectedMessage) > 0)
       .ToBe(False);
   finally
     Engine.Free;

@@ -80,9 +80,11 @@ describe("non-callable callee messages", () => {
   });
 
   test("reports a TypeError for a missing symbol-keyed tagged-template tag", () => {
-    // A symbol-keyed computed member returns raw nil for a missing property, so
-    // the tagged-template tag callee is Pascal nil here. The diagnostic must
-    // read its type name through a nil guard rather than dereferencing nil.
+    // A missing symbol-keyed computed member reads as `undefined` (§10.1.8.1
+    // [[Get]] returns undefined for an absent property), so the tag callee here
+    // is the undefined value, not callable. Both execution modes must name the
+    // tag from its source text and report "undefined is not a function"'s
+    // shared wording — this pins the tagged-template computed-member path.
     const obj = {};
     const s = Symbol("missing");
     expect(messageOf(() => obj[s]`text`)).toBe("obj[s] is not a function");
