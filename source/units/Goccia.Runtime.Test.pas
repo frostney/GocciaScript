@@ -11,10 +11,12 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.Engine,
+  Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Executor.Interpreter,
   Goccia.ModuleResolver,
   Goccia.Modules,
+  Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
   Goccia.Realm,
@@ -64,6 +66,7 @@ type
     procedure TestRuntimePreservesResolverExtensions;
     procedure TestRuntimeModuleLoaderFallsBackToPreviousLoader;
     procedure TestRuntimeRunScriptFromFileLoadsFile;
+    procedure TestMalformedUTF8ModuleSurfacesGuestError;
   public
     procedure SetupTests; override;
   end;
@@ -122,6 +125,8 @@ begin
     TestRuntimeModuleLoaderFallsBackToPreviousLoader);
   Test('Runtime RunScriptFromFile loads file',
     TestRuntimeRunScriptFromFileLoadsFile);
+  Test('a malformed-UTF-8 module surfaces a guest error without the host path',
+    TestMalformedUTF8ModuleSurfacesGuestError);
 end;
 
 function TRuntimeTests.CreateEmptySource: TStringList;
@@ -505,6 +510,77 @@ begin
     Expect<Double>(ScriptResult.Result.ToNumberLiteral.Value).ToBe(42);
   finally
     DeleteFile(TempFileName);
+  end;
+end;
+
+procedure TRuntimeTests.TestMalformedUTF8ModuleSurfacesGuestError;
+const
+  BAD_BYTES: array[0..3] of Byte = (Ord('a'), Ord('b'), Ord('c'), $FF);
+var
+  Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
+  ModuleLoader: TGocciaModuleLoader;
+  ContentProvider: TGocciaFileSystemModuleContentProvider;
+  Source: TStringList;
+  Stream: TFileStream;
+  BadPath: string;
+  Raised: Boolean;
+  MessageValue: string;
+begin
+  { A module whose bytes are not valid UTF-8 makes the content provider raise an
+    RTL EConvertError. Left unwrapped it escapes the guest as a host exception
+    that the async-import rejection path cannot convert, so a dynamic import() of
+    such a module could never reach a guest-visible error. The loader must
+    convert it into a TGocciaRuntimeError carrying ONLY the decode message — the
+    resolved host path must not leak into a guest-reachable message. }
+  BadPath := IncludeTrailingPathDelimiter(GetTempDir(False)) +
+    'goccia-bad-utf8-module.js';
+  Stream := TFileStream.Create(BadPath, fmCreate);
+  try
+    Stream.WriteBuffer(BAD_BYTES[0], Length(BAD_BYTES));
+  finally
+    Stream.Free;
+  end;
+
+  Source := CreateEmptySource;
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := nil;
+  ModuleLoader := nil;
+  ContentProvider := nil;
+  Raised := False;
+  MessageValue := '';
+  try
+    ContentProvider := TGocciaFileSystemModuleContentProvider.Create;
+    ModuleLoader := TGocciaModuleLoader.Create('<runtime-test>', nil,
+      ContentProvider);
+    Engine := TGocciaEngine.Create('<runtime-test>', Source, ModuleLoader,
+      Executor);
+    try
+      Engine.ModuleLoader.LoadModule(BadPath, '<runtime-test>');
+    except
+      { A guest-catchable runtime error, NOT the RTL EConvertError. }
+      on E: TGocciaRuntimeError do
+      begin
+        Raised := True;
+        MessageValue := E.Message;
+      end;
+    end;
+
+    Expect<Boolean>(Raised).ToBe(True);
+    { The exact decode message is preserved verbatim (the $FF is the fourth
+      byte, zero-based index 3). }
+    Expect<string>(MessageValue).ToBe('Invalid UTF-8 at byte 3');
+    { The resolved host path must not leak into the guest-reachable message. }
+    Expect<Boolean>(Pos(BadPath, MessageValue) > 0).ToBe(False);
+    Expect<Boolean>(Pos('goccia-bad-utf8-module.js', MessageValue) > 0)
+      .ToBe(False);
+  finally
+    Engine.Free;
+    ModuleLoader.Free;
+    ContentProvider.Free;
+    Source.Free;
+    Executor.Free;
+    DeleteFile(BadPath);
   end;
 end;
 

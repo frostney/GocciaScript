@@ -777,10 +777,23 @@ end;
 function TGocciaModuleLoader.LoadResolvedContent(const AResolvedPath: string;
   var AIsHostOwned: Boolean): TGocciaModuleContent;
 begin
-  if FVirtualModules.Contains(AResolvedPath) then
-    Result := FVirtualModules.LoadContent(AResolvedPath)
-  else
-    Result := FContentProvider.LoadContent(AResolvedPath);
+  // A content provider decodes the module's bytes as UTF-8 and raises
+  // EConvertError on malformed input (both the filesystem and virtual providers
+  // do this). Left unwrapped it propagates as a host exception that
+  // TryRejectAsyncPromiseWithException cannot turn into a rejection, so a
+  // dynamic import() of a bad-UTF-8 module would never reach a guest-visible
+  // error. Re-raise as a guest TGocciaRuntimeError carrying ONLY the conversion
+  // message (e.g. "Invalid UTF-8 at byte N"): the resolved host path is
+  // deliberately withheld so it cannot leak into a guest-reachable message.
+  try
+    if FVirtualModules.Contains(AResolvedPath) then
+      Result := FVirtualModules.LoadContent(AResolvedPath)
+    else
+      Result := FContentProvider.LoadContent(AResolvedPath);
+  except
+    on E: EConvertError do
+      raise TGocciaRuntimeError.Create(E.Message, 0, 0, '', nil);
+  end;
   if Assigned(Result) and (Result.CanonicalIdentity <> '') then
   begin
     if FHostOwnedModuleIdentities.ContainsKey(Result.CanonicalIdentity) then

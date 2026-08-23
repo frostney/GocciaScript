@@ -261,6 +261,8 @@ procedure TGocciaDiagnosticSourceScope.Register(const APath, AText: string;
 var
   Entry: TGocciaDiagnosticSourceEntry;
   Existing: TGocciaDiagnosticSourceEntry;
+  ByPath, ByExpanded, Unified: TGocciaDiagnosticSourceEntry;
+  HavePath, HaveExpanded: Boolean;
   Canonical, Expanded: string;
   Size: Int64;
   GC: TGarbageCollector;
@@ -304,16 +306,41 @@ begin
   // leave those path aliases still pointing at the first. A host upgrade on the
   // new '#id:' entry would then never reach the alias, so TryGetGuestWindow via
   // the path spelling would keep returning the guest-owned entry — a host-source
-  // downgrade. Fold this registration into the existing entry instead: upgrade
-  // ownership (host wins, never downgrades) and add the canonical key as one
-  // more alias of the single owned entry.
-  if FEntries.TryGetValue(APath, Existing) or
-     FEntries.TryGetValue(Expanded, Existing) then
+  // downgrade. Fold this registration into the existing entry instead.
+  //
+  // The literal and expanded spellings can already resolve to DIFFERENT entries
+  // — e.g. a relative literal keyed while the working directory was one path and
+  // the absolute expansion produced (or keyed) after a cwd change, so APath
+  // still names an old entry while Expanded names another. This registration
+  // asserts that APath expands to Expanded and both name the file identified by
+  // Canonical, so they are one open file: collapse every entry reached through
+  // either spelling onto a single owned entry, upgrade ownership on ALL of them
+  // when host (host wins, never downgrades), and repoint both spellings plus the
+  // canonical key at that one entry. Upgrading only the first spelling would
+  // leave the other guest-owned, and since TryGetGuestWindow checks the literal
+  // spelling first a stale literal alias could then disclose host source.
+  HavePath := FEntries.TryGetValue(APath, ByPath);
+  HaveExpanded := FEntries.TryGetValue(Expanded, ByExpanded);
+  if HavePath or HaveExpanded then
   begin
+    if HavePath then
+      Unified := ByPath
+    else
+      Unified := ByExpanded;
     if AIsHost then
-      Existing.IsGuest := False;
+    begin
+      Unified.IsGuest := False;
+      if HavePath then
+        ByPath.IsGuest := False;
+      if HaveExpanded then
+        ByExpanded.IsGuest := False;
+    end;
+    if HavePath and (ByPath <> Unified) then
+      FEntries.AddOrSetValue(APath, Unified);
+    if HaveExpanded and (ByExpanded <> Unified) then
+      FEntries.AddOrSetValue(Expanded, Unified);
     if not FEntries.ContainsKey(Canonical) then
-      FEntries.AddOrSetValue(Canonical, Existing);
+      FEntries.AddOrSetValue(Canonical, Unified);
     Exit;
   end;
 

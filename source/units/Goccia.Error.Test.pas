@@ -36,6 +36,7 @@ type
     procedure TestGetDetailedMessageHandlesSingleSourceLine;
     procedure TestFormatThrowDetailRequiresExpectedPrincipal;
     procedure TestIdentifiedHostRegistrationUpgradesPathAlias;
+    procedure TestHostRegistrationReconcilesDivergedPathAliasesAfterCwdChange;
   public
     procedure SetupTests; override;
   end;
@@ -93,6 +94,9 @@ begin
     TestFormatThrowDetailRequiresExpectedPrincipal);
   Test('an identified host registration upgrades a prior guest path alias',
     TestIdentifiedHostRegistrationUpgradesPathAlias);
+  Test('a host registration reconciles literal and expanded aliases that ' +
+    'diverged across a working-directory change',
+    TestHostRegistrationReconcilesDivergedPathAliasesAfterCwdChange);
 end;
 
 procedure TErrorTests.TestGetDetailedMessageShowsJSFriendlyErrorName;
@@ -482,6 +486,69 @@ begin
     Expect<Boolean>(Scope.TryGetGuestWindow('#id:host-canonical', 1, 0, 0,
       Window, FirstLine)).ToBe(False);
   finally
+    Window.Free;
+    Scope.Free;
+  end;
+end;
+
+procedure TErrorTests.TestHostRegistrationReconcilesDivergedPathAliasesAfterCwdChange;
+var
+  Scope: TGocciaDiagnosticSourceScope;
+  Window: TStringList;
+  FirstLine: Integer;
+  OldDir, DirA, DirB, ExpandedInB: string;
+begin
+  { A relative spelling registered under one working directory and the same
+    file's absolute expansion produced after a cwd change can leave the literal
+    and expanded keys pointing at two SEPARATE guest entries. An identified host
+    registration then names both spellings as one file. It must reconcile BOTH
+    aliases — upgrading only the first (the literal, which TryGetGuestWindow
+    consults first) would leave the expanded alias guest-owned and let a lookup
+    by the expanded spelling disclose the host's file. }
+  OldDir := GetCurrentDir;
+  Scope := TGocciaDiagnosticSourceScope.Create;
+  Window := TStringList.Create;
+  try
+    { Two real, distinct directories so SetCurrentDir/ExpandFileName resolve. }
+    DirA := GetCurrentDir;
+    DirB := ExpandFileName('..');
+    Expect<Boolean>(DirA <> DirB).ToBe(True);
+
+    { Guest load 1, cwd = DirA: keyed under the literal 'shared-cwd.js' and
+      DirA/shared-cwd.js. }
+    SetCurrentDir(DirA);
+    Scope.Register('shared-cwd.js', '// guest A line one' + sLineBreak +
+      '// guest A line two', False);
+
+    { Guest load 2, cwd = DirB: register the file's DirB expansion as an
+      absolute spelling, minting a SEPARATE entry keyed under DirB/shared-cwd.js. }
+    SetCurrentDir(DirB);
+    ExpandedInB := ExpandFileName('shared-cwd.js');
+    Scope.Register(ExpandedInB, '// guest B line one' + sLineBreak +
+      '// guest B line two', False);
+
+    { Both spellings currently disclose their own guest entry. }
+    Expect<Boolean>(Scope.TryGetGuestWindow('shared-cwd.js', 1, 0, 0, Window,
+      FirstLine)).ToBe(True);
+    Expect<Boolean>(Scope.TryGetGuestWindow(ExpandedInB, 1, 0, 0, Window,
+      FirstLine)).ToBe(True);
+
+    { Host load, still cwd = DirB: APath 'shared-cwd.js' resolves to the first
+      entry, its expansion DirB/shared-cwd.js to the second — two DIFFERENT
+      entries reconciled by one identified host registration. }
+    Scope.Register('shared-cwd.js', '// host line one' + sLineBreak +
+      '// host line two', True, '#id:host-cwd');
+
+    { Neither the literal nor the diverged expanded alias may still yield a
+      guest window: both were reconciled to the host-owned entry. }
+    Expect<Boolean>(Scope.TryGetGuestWindow('shared-cwd.js', 1, 0, 0, Window,
+      FirstLine)).ToBe(False);
+    Expect<Boolean>(Scope.TryGetGuestWindow(ExpandedInB, 1, 0, 0, Window,
+      FirstLine)).ToBe(False);
+    Expect<Boolean>(Scope.TryGetGuestWindow('#id:host-cwd', 1, 0, 0, Window,
+      FirstLine)).ToBe(False);
+  finally
+    SetCurrentDir(OldDir);
     Window.Free;
     Scope.Free;
   end;

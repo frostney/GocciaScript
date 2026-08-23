@@ -277,20 +277,32 @@ const
     vastly outnumber everything else that is not a separator. }
   FIRST_NON_ASCII_CHARACTER = #$0080;
   { What stripped text leaves behind. A string, template, or regular expression
-    is an operand, so it collapses to a value-closing punctuator and the slash
-    after it reads as division; the inside of a template collapses to an
+    is an operand, so it collapses to a marker that the slash scan reads as
+    value-closing (division follows); the inside of a template collapses to an
     operand-opening one, because a slash there opens a literal. A comment is
     neither, so it collapses to a space and the scan looks straight past it.
-    None of the three is a character any marker can be spelled with. }
-  STRIPPED_VALUE_PLACEHOLDER = ')';
-  STRIPPED_OPERAND_PLACEHOLDER = ',';
+
+    The value and operand markers are C0 control characters (#1/#2), NOT ')' and
+    ',' as they once were: those ordinary punctuators collide with real source.
+    `use(x.import, x)` strips to `import,` whose comma is a genuine operator, yet
+    a ',' operand marker made LooksLikeESModuleSource read it as the ESM
+    `import`-follower and wrongly suppress the CommonJS refusal. A C0 control
+    character cannot appear as a token, separator, or identifier part in valid
+    JavaScript, so a stripped literal is now unambiguously distinguishable from
+    any real character. The comment marker stays a space: whitespace is already a
+    legitimate token separator, so it collides with nothing. Consumers refer to
+    these by name (VALUE_CLOSING_CHARACTERS, the LooksLikeESModuleSource follower
+    set, SlashOpensRegExpLiteral) so the values live in exactly one place. }
+  STRIPPED_VALUE_PLACEHOLDER = #1;
+  STRIPPED_OPERAND_PLACEHOLDER = #2;
   STRIPPED_COMMENT_PLACEHOLDER = ' ';
-  { Punctuators that close a value, so a `/` after one is division. The closing
-    brace is counted here because an object literal is by far the more common
-    thing to precede a slash; a regular expression opening right after a
-    block's closing brace is scanned as division instead, which only matters if
-    its body holds a quote or a slash pair. }
-  VALUE_CLOSING_CHARACTERS = [')', ']', '}'];
+  { Punctuators that close a value, so a `/` after one is division. The stripped
+    value marker is included so a stripped string/template/regex still reads as a
+    value-closer. The closing brace is counted here because an object literal is
+    by far the more common thing to precede a slash; a regular expression opening
+    right after a block's closing brace is scanned as division instead, which
+    only matters if its body holds a quote or a slash pair. }
+  VALUE_CLOSING_CHARACTERS = [')', ']', '}', STRIPPED_VALUE_PLACEHOLDER];
   { The keywords a regular expression literal may legally follow. After any
     other identifier the slash divides the value that identifier names. }
   REGEXP_PRECEDING_KEYWORDS: array[0..13] of string = (

@@ -73,6 +73,7 @@ type
     procedure TestMinifiedSideEffectImportIsReadAsESModule;
     procedure TestInertSourceIsNotCommonJS;
     procedure TestIdentifierEndingInRequireIsNotACall;
+    procedure TestImportPropertyNameDoesNotLookLikeESModule;
 
     procedure TestEsbuildBannerIsNotAnESModuleMarker;
     procedure TestStringLiteralMarkerIsNotAnESModuleMarker;
@@ -274,6 +275,8 @@ begin
   Test('inert source is not CommonJS', TestInertSourceIsNotCommonJS);
   Test('an identifier ending in require is not a require call',
     TestIdentifierEndingInRequireIsNotACall);
+  Test('an "import" property name is not an ES module marker',
+    TestImportPropertyNameDoesNotLookLikeESModule);
 
   Test('an esbuild banner comment is not an ES module marker',
     TestEsbuildBannerIsNotAnESModuleMarker);
@@ -916,6 +919,28 @@ procedure TNodeResolutionTests.TestIdentifierEndingInRequireIsNotACall;
 begin
   Expect<Boolean>(LooksLikeCommonJSSource(
     'const value = createRequire(import.meta.url);')).ToBe(False);
+end;
+
+procedure TNodeResolutionTests.TestImportPropertyNameDoesNotLookLikeESModule;
+begin
+  { `import` used as an ordinary property name is not the ESM `import` keyword.
+    After stripping, `use(x.import, x)` reads as `import,` — but that comma is a
+    real operator, not a stripped string literal. When the stripped-literal
+    markers were the ordinary punctuators ')' and ',', the ESM follower set
+    matched this genuine comma and misread the file as an ES module, wrongly
+    suppressing the CommonJS refusal. Collision-free control-character markers
+    keep a genuine comma distinct from a stripped literal, so this classifies as
+    CommonJS. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const x=require("y"); use(x.import, x);')).ToBe(True);
+  { The `import`-followed-by-a-closing-paren shape is the same collision for the
+    old ')' value marker: `x.import)` must not read as ESM either. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const x=require("y"); (x.import);')).ToBe(True);
+  { The minified space-free side-effect import — the shape the marker follower
+    set exists to catch — must STILL classify as an ES module. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'import"./a.js";const x=require("y");')).ToBe(False);
 end;
 
 { ── Comment and literal stripping ──────────────────────────── }

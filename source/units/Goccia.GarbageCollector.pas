@@ -1231,20 +1231,36 @@ end;
 function TGarbageCollector.TryCollectForLimitedBytes(const ABytes: Int64;
   const AProtect: TGCManagedObject): Boolean;
 begin
-  if not ShouldForceLimitCollection(ABytes) then
-    Exit(False);
-  CollectForMemoryPressure(AProtect, True);
-  Result := (FBytesAllocated <= High(Int64) - ABytes) and
-    ((FMaxBytes <= 0) or (FBytesAllocated + ABytes <= FMaxBytes));
-  // Record the level this collection could not get below, so a retry of a
-  // request it already refused skips the walk that just proved fruitless.
-  // Collect clears this again — as do CollectYoung and the conditional
-  // invalidations on any counter drop (ReleaseExternalBytes,
-  // UnregisterObject) — so any ordinary collection re-arms forcing.
-  // The per-request-size term is pinned by the damper test's third arm in
-  // Goccia.GarbageCollector.Test.pas (a size-independent floor fails it).
-  if not Result then
-    FForcedCollectFloor := FBytesAllocated;
+  // Serialize the whole predicate/collect/fit-test/floor-write sequence on the
+  // GC's global collect lock, not just the reservation the reserve path wraps.
+  // This method is also reached directly from RequireNativeBytes
+  // (Goccia.MemoryLimit) with no lock held. A concurrent cross-thread
+  // ReleaseExternalBytes mutates FBytesAllocated and FForcedCollectFloor; if the
+  // fit test read those counters unlocked it could see a torn 64-bit total (on
+  // 32-bit targets) or a value a release changed mid-decision, yielding a stale
+  // fit result — and the floor write could resurrect a level a release just
+  // invalidated back to -1. The lock is recursive, so the reserve path that
+  // already holds it (TryReserveExternalBytes) and the Collect that
+  // CollectForMemoryPressure drives re-enter it safely.
+  CriticalSectionEnter(GCCollectLock);
+  try
+    if not ShouldForceLimitCollection(ABytes) then
+      Exit(False);
+    CollectForMemoryPressure(AProtect, True);
+    Result := (FBytesAllocated <= High(Int64) - ABytes) and
+      ((FMaxBytes <= 0) or (FBytesAllocated + ABytes <= FMaxBytes));
+    // Record the level this collection could not get below, so a retry of a
+    // request it already refused skips the walk that just proved fruitless.
+    // Collect clears this again — as do CollectYoung and the conditional
+    // invalidations on any counter drop (ReleaseExternalBytes,
+    // UnregisterObject) — so any ordinary collection re-arms forcing.
+    // The per-request-size term is pinned by the damper test's third arm in
+    // Goccia.GarbageCollector.Test.pas (a size-independent floor fails it).
+    if not Result then
+      FForcedCollectFloor := FBytesAllocated;
+  finally
+    CriticalSectionLeave(GCCollectLock);
+  end;
 end;
 
 function TGarbageCollector.TryReserveExternalBytes(
