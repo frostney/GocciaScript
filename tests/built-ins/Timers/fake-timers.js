@@ -243,6 +243,11 @@ describe("the mocked system clock", () => {
     );
     expect(Date.now()).toBe(frozen);
     expect(frozen).toBe(getMockedSystemTime());
+    // The frozen clock is exact by construction: Date.now() reconstructs the
+    // epoch from an Int64 nanosecond count, never a nanosecond-magnitude Double,
+    // so a repeated read lands on the same millisecond getMockedSystemTime()
+    // reports on every platform (this drifted by 1ms on i386-win32's x87 FPU).
+    expect(Date.now()).toBe(getMockedSystemTime());
   });
 
   test("setSystemTime moves Date and new Date together", () => {

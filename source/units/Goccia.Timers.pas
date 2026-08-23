@@ -357,6 +357,13 @@ uses
 
 const
   NANOSECONDS_PER_MILLISECOND = 1000000.0;
+  { The same ratio as an Int64 for the conversions that must stay integer-exact.
+    An absolute epoch in nanoseconds (~1.8e18 in 2026) is far past Double's 2^53
+    exact-integer range, so any epoch that reaches nanosecond magnitude through a
+    Double rounds differently on x87 (80-bit intermediates) than on SSE2 and
+    lands the clock on a neighbouring millisecond. The epoch<->nanosecond
+    conversions below therefore assemble the count with Int64 arithmetic. }
+  NANOSECONDS_PER_MILLISECOND_INT = Int64(1000000);
   { Largest magnitude, in whole milliseconds, whose nanosecond count still fits
     in the signed Int64 the host clock is published as (High(Int64) div 1e6).
     A finite JavaScript date can legitimately reach 8.64e15 ms, which is far
@@ -388,9 +395,26 @@ end;
   environment is published with, rejecting a value that would overflow Int64
   with a RangeError rather than wrapping. }
 function ClockMillisecondsToNanoseconds(const AMilliseconds: Double): Int64;
+var
+  WholeMilliseconds, FractionNanoseconds: Int64;
 begin
   RequireClockInRange(AMilliseconds);
-  Result := Round(AMilliseconds * NANOSECONDS_PER_MILLISECOND);
+  { Split the epoch into whole milliseconds and a sub-millisecond fraction so the
+    nanosecond count is assembled with Int64 arithmetic and never crosses a
+    Double at nanosecond magnitude. `Round(AMilliseconds * 1e6)` did exactly that
+    — the product for a 2026 epoch is ~1.8e18, past 2^53 — so the FPU rounded a
+    borderline value one way on x87 and another on SSE2, and a frozen clock read
+    back a different millisecond depending on the platform (and on x87, on
+    whether an intermediate stayed in an 80-bit register). RequireClockInRange
+    bounds |AMilliseconds| to MAX_CLOCK_MILLISECONDS, so Trunc is in Int64 range
+    and the whole-millisecond count is < 2^53 (hence exact as a Double); only the
+    fraction — always within (-1e6, 1e6) nanoseconds — touches a Double multiply,
+    where it is exact. Trunc and Frac both cut toward zero, so the two parts
+    reconstruct the value with the same sign for negative epochs too. }
+  WholeMilliseconds := Trunc(AMilliseconds);
+  FractionNanoseconds := Round(Frac(AMilliseconds) * NANOSECONDS_PER_MILLISECOND);
+  Result := WholeMilliseconds * NANOSECONDS_PER_MILLISECOND_INT +
+    FractionNanoseconds;
 end;
 
 { TGocciaTimerRoots }
@@ -561,11 +585,17 @@ end;
 
 function TGocciaTimerQueue.RealEpochMilliseconds: Double;
 begin
+  { Integer division on the Int64 nanosecond clock, not a Double divide. The real
+    epoch in nanoseconds (~1.8e18 in 2026) is well past Double's 2^53 exact range,
+    so `RealEpochNanoseconds / 1e6` first rounded the Int64 into a Double and then
+    divided — platform-dependent, and it fed the frozen FNow that
+    useFakeTimers() then published, so the whole clock inherited the drift. The
+    whole-millisecond result (~1.8e12) is < 2^53 and thus exact as a Double; `div`
+    already truncates toward zero, so the previous Int() is subsumed. }
   if Assigned(FHostEnvironment) then
-    Result := FHostEnvironment.RealEpochNanoseconds / NANOSECONDS_PER_MILLISECOND
+    Result := FHostEnvironment.RealEpochNanoseconds div NANOSECONDS_PER_MILLISECOND_INT
   else
     Result := 0;
-  Result := Int(Result);
 end;
 
 function TGocciaTimerQueue.IndexOfId(const AId: Double): Integer;
