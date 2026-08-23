@@ -540,6 +540,21 @@ end;
 
 procedure TGocciaTimerQueue.SetNow(const AValue: Double);
 begin
+  { Central choke point for every fake-clock advance: DoNext (and thus
+    AdvanceToNextTimer / RunAllTimers), the DoTick loop, and ClearAllTimers all
+    publish through here. Preflight the value BEFORE assigning FNow so a timer
+    due beyond the representable range (e.g. MAX_CLOCK_MILLISECONDS + 1) is
+    rejected while timer state is still intact, rather than poisoning FNow and
+    having PublishClock throw only at conversion time. Validate both halves
+    PublishClock converts while faking — the wall value and its monotonic
+    counterpart (FNow - FAdjusted - FStart) — since either can fall out of range
+    independently. The DoTick preflight is preserved so a rejected bulk advance
+    still avoids running any timer. }
+  if FFaking then
+  begin
+    RequireClockInRange(AValue);
+    RequireClockInRange(AValue - FAdjusted - FStart);
+  end;
   FNow := AValue;
   PublishClock;
 end;
