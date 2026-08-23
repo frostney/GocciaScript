@@ -937,10 +937,42 @@ begin
     old ')' value marker: `x.import)` must not read as ESM either. }
   Expect<Boolean>(LooksLikeCommonJSSource(
     'const x=require("y"); (x.import);')).ToBe(True);
+
+  { Root exclusion: a member-access `import`/`export` is a property name, never
+    the ESM keyword, no matter what follows. Chasing individual follower
+    characters (',' then ')' then the control-char markers) let each new shape
+    reintroduce the bug; excluding a preceding '.' at the keyword boundary closes
+    the whole class at once. Each case below carries a genuine CommonJS marker
+    (`require(...)`), so a correct classifier must return CommonJS. }
+  { Tagged template: `` x.import`t` `` strips to `x.import` + operand marker,
+    which is in the import follower set — the shape that motivated this fix. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const x=require("y"); x.import`t`;')).ToBe(True);
+  { Method-style call on the property. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const x=require("y"); x.import();')).ToBe(True);
+  { Further member access off the property. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const x=require("y"); x.import.y;')).ToBe(True);
+  { Optional chaining reaches the property too (`?.` ends in '.'). }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const x=require("y"); x?.import;')).ToBe(True);
+  { `export` has the same member-access hazard: `obj.export = 1` is a property
+    assignment whose trailing space would otherwise match the ESM `export `
+    follower and suppress the CommonJS refusal. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const x=require("y"); obj.export = 1;')).ToBe(True);
+
   { The minified space-free side-effect import — the shape the marker follower
     set exists to catch — must STILL classify as an ES module. }
   Expect<Boolean>(LooksLikeCommonJSSource(
     'import"./a.js";const x=require("y");')).ToBe(False);
+  { Genuine ESM markers must still be detected as ES modules (not CommonJS),
+    so the member-access exclusion does not over-reject real keywords. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'import x from "./x.js";const y=require("z");')).ToBe(False);
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'export const a = 1;const y=require("z");')).ToBe(False);
 end;
 
 { ── Comment and literal stripping ──────────────────────────── }

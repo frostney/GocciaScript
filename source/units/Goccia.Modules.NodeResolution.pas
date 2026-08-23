@@ -1015,7 +1015,8 @@ end;
   passes False, because whitespace before a `.` is not what it is looking for. }
 function ContainsKeywordBefore(const ASource, AKeyword: string;
   const AFollowers: TSysCharSet;
-  const ASeparatorFollows: Boolean = False): Boolean;
+  const ASeparatorFollows: Boolean = False;
+  const ARejectMemberAccessBefore: Boolean = False): Boolean;
 var
   Follower: Char;
   Index, KeywordLength, SourceLength: Integer;
@@ -1026,7 +1027,17 @@ begin
   while Index > 0 do
   begin
     if ((Index = 1) or (not IsIdentifierPartCharacter(ASource[Index - 1]))) and
-       (Index + KeywordLength <= SourceLength) then
+       (Index + KeywordLength <= SourceLength) and
+       { A keyword reached through member access (`x.import`) or optional
+         chaining (`x?.import`) is an ordinary property name, never the ESM
+         `import`/`export` keyword. Both spellings end in '.', so rejecting a
+         preceding '.' excludes every member-access use — `x.import`,
+         `x.import()`, `x.import.y`, `` x.import`t` ``, `obj.export = 1` — no
+         matter what follows. This is the root exclusion the ESM detector needs:
+         genuine keyword `import`/`export` is never preceded by '.', so nothing
+         legitimate is lost, and no follower-set tweak can reintroduce the bug. }
+       (not (ARejectMemberAccessBefore and (Index > 1) and
+             (ASource[Index - 1] = '.'))) then
     begin
       Follower := ASource[Index + KeywordLength];
       if (Follower in AFollowers) or
@@ -1364,11 +1375,18 @@ begin
     (`import"./a.js";`) has its literal collapsed to STRIPPED_VALUE_PLACEHOLDER
     before this scan, so without them a minified ES module whose only ES marker
     is such an import is misread as CommonJS. The raw quotes stay for the
-    fallback path that classifies on unstripped source. }
+    fallback path that classifies on unstripped source.
+
+    Both keyword checks pass ARejectMemberAccessBefore=True so a preceding '.'
+    (member access or optional chaining) disqualifies the match: `x.import` and
+    `obj.export` are property names in valid CommonJS, never ES-module markers,
+    whatever punctuation follows. Excluding them at the keyword boundary is the
+    root fix — it replaces the earlier, ever-growing effort to name every
+    follower character a member-access `import` could strip down to. }
   Result := ContainsKeywordBefore(ASource, ESM_IMPORT_KEYWORD,
       ['{', '*', '"', '''', STRIPPED_VALUE_PLACEHOLDER,
-       STRIPPED_OPERAND_PLACEHOLDER], True) or
-    ContainsKeywordBefore(ASource, ESM_EXPORT_KEYWORD, ['{', '*'], True);
+       STRIPPED_OPERAND_PLACEHOLDER], True, True) or
+    ContainsKeywordBefore(ASource, ESM_EXPORT_KEYWORD, ['{', '*'], True, True);
 end;
 
 function LooksLikeCommonJSSource(const ASource: string): Boolean;
