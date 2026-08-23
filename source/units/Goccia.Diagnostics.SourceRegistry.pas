@@ -276,6 +276,7 @@ var
   CanonicalAdded, LiteralAdded, ExpandedAdded: Boolean;
   ReconPriorByPathGuest, ReconPriorByExpandedGuest: Boolean;
   ReconCanonicalAdded, ReconPathRepointed, ReconExpandedRepointed: Boolean;
+  ReconcileAsHost: Boolean;
 begin
   if APath = '' then
     Exit;
@@ -323,10 +324,22 @@ begin
   // asserts that APath expands to Expanded and both name the file identified by
   // Canonical, so they are one open file: collapse every entry reached through
   // either spelling onto a single owned entry, upgrade ownership on ALL of them
-  // when host (host wins, never downgrades), and repoint both spellings plus the
-  // canonical key at that one entry. Upgrading only the first spelling would
-  // leave the other guest-owned, and since TryGetGuestWindow checks the literal
-  // spelling first a stale literal alias could then disclose host source.
+  // when host, and repoint both spellings plus the canonical key at that one
+  // entry. Upgrading only the first spelling would leave the other guest-owned,
+  // and since TryGetGuestWindow checks the literal spelling first a stale literal
+  // alias could then disclose host source.
+  //
+  // Ownership here is host-wins and DIRECTION-INDEPENDENT: the reconciled entry
+  // is host-owned when the NEW registration is host OR when ANY reached existing
+  // entry (ByPath/ByExpanded, hence Unified, which is always one of them) is
+  // host-owned. Keying host purely off AIsHost was wrong: a GUEST registration
+  // (AIsHost = False) that reconciled a mixed pair — a guest ByPath chosen as
+  // Unified while a host ByExpanded existed — would skip the upgrade and then
+  // repoint the host spelling at the guest entry, so TryGetGuestWindow disclosed
+  // the host source through that spelling. Deriving ReconcileAsHost from every
+  // reached entry keeps host ownership monotonic in EITHER order (new host over
+  // existing guest, new guest reconciling an existing host), so no reachable
+  // alias — including the canonical key just inserted — can ever be downgraded.
   HavePath := FEntries.TryGetValue(APath, ByPath);
   HaveExpanded := FEntries.TryGetValue(Expanded, ByExpanded);
   if HavePath or HaveExpanded then
@@ -362,6 +375,15 @@ begin
       ReconPriorByPathGuest := ByPath.IsGuest;
     if HaveExpanded then
       ReconPriorByExpandedGuest := ByExpanded.IsGuest;
+    { Host-wins, direction-independent: host if the new registration is host OR
+      any reached existing entry is host-owned. Pure reads of state captured
+      before any mutation, so the except arm needs nothing extra to unwind it —
+      it restores the IsGuest flags this derivation drives regardless. }
+    ReconcileAsHost := AIsHost;
+    if HavePath and (not ByPath.IsGuest) then
+      ReconcileAsHost := True;
+    if HaveExpanded and (not ByExpanded.IsGuest) then
+      ReconcileAsHost := True;
     ReconCanonicalAdded := False;
     ReconPathRepointed := False;
     ReconExpandedRepointed := False;
@@ -371,7 +393,7 @@ begin
         FEntries.AddOrSetValue(Canonical, Unified);
         ReconCanonicalAdded := True;
       end;
-      if AIsHost then
+      if ReconcileAsHost then
       begin
         Unified.IsGuest := False;
         if HavePath then

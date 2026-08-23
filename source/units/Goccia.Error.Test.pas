@@ -37,6 +37,9 @@ type
     procedure TestFormatThrowDetailRequiresExpectedPrincipal;
     procedure TestIdentifiedHostRegistrationUpgradesPathAlias;
     procedure TestHostRegistrationReconcilesDivergedPathAliasesAfterCwdChange;
+    procedure TestGuestRegistrationCannotDowngradeHostExpandedAlias;
+    procedure TestHostRegistrationUpgradesMixedGuestLiteralHostExpanded;
+    procedure TestGuestRegistrationPreservesHostLiteralWithGuestExpanded;
   public
     procedure SetupTests; override;
   end;
@@ -97,6 +100,13 @@ begin
   Test('a host registration reconciles literal and expanded aliases that ' +
     'diverged across a working-directory change',
     TestHostRegistrationReconcilesDivergedPathAliasesAfterCwdChange);
+  Test('a guest registration cannot downgrade a host expanded alias while ' +
+    'reconciling a guest literal alias',
+    TestGuestRegistrationCannotDowngradeHostExpandedAlias);
+  Test('a host registration upgrades a mixed guest-literal / host-expanded ' +
+    'alias pair', TestHostRegistrationUpgradesMixedGuestLiteralHostExpanded);
+  Test('a guest registration preserves a host literal alias while reconciling ' +
+    'a guest expanded alias', TestGuestRegistrationPreservesHostLiteralWithGuestExpanded);
 end;
 
 procedure TErrorTests.TestGetDetailedMessageShowsJSFriendlyErrorName;
@@ -546,6 +556,177 @@ begin
     Expect<Boolean>(Scope.TryGetGuestWindow(ExpandedInB, 1, 0, 0, Window,
       FirstLine)).ToBe(False);
     Expect<Boolean>(Scope.TryGetGuestWindow('#id:host-cwd', 1, 0, 0, Window,
+      FirstLine)).ToBe(False);
+  finally
+    SetCurrentDir(OldDir);
+    Window.Free;
+    Scope.Free;
+  end;
+end;
+
+procedure TErrorTests.TestGuestRegistrationCannotDowngradeHostExpandedAlias;
+var
+  Scope: TGocciaDiagnosticSourceScope;
+  Window: TStringList;
+  FirstLine: Integer;
+  OldDir, DirA, DirB, ExpandedInB: string;
+begin
+  { The finding case (host-source disclosure). Set up a MIXED alias pair for one
+    file: the literal spelling 'shared-mix.js' resolves to a GUEST entry, while
+    its expansion in the current cwd resolves to a SEPARATE HOST entry. A later
+    GUEST registration (AIsHost = False) naming both spellings as one file picks
+    the guest literal as Unified. If reconciliation keyed ownership off AIsHost
+    alone it would skip the host upgrade and then repoint the host expanded alias
+    at the guest entry, so TryGetGuestWindow would disclose the host source
+    through the expanded spelling. Host ownership must win from the reached host
+    entry regardless of the new registration's direction. }
+  OldDir := GetCurrentDir;
+  Scope := TGocciaDiagnosticSourceScope.Create;
+  Window := TStringList.Create;
+  try
+    DirA := GetCurrentDir;
+    DirB := ExpandFileName('..');
+    Expect<Boolean>(DirA <> DirB).ToBe(True);
+
+    { HOST load, cwd = DirB: register the file's DirB expansion as an absolute
+      spelling, minting a HOST entry keyed under DirB/shared-mix.js. }
+    SetCurrentDir(DirB);
+    ExpandedInB := ExpandFileName('shared-mix.js');
+    Scope.Register(ExpandedInB, '// host line one' + sLineBreak +
+      '// host line two', True);
+
+    { GUEST load, cwd = DirA: register the relative literal 'shared-mix.js',
+      minting a SEPARATE GUEST entry keyed under the literal and DirA/shared-mix.js. }
+    SetCurrentDir(DirA);
+    Scope.Register('shared-mix.js', '// guest line one' + sLineBreak +
+      '// guest line two', False);
+
+    { Precondition: the literal spelling is guest (discloses), the host expanded
+      spelling is host (withheld). }
+    Expect<Boolean>(Scope.TryGetGuestWindow('shared-mix.js', 1, 0, 0, Window,
+      FirstLine)).ToBe(True);
+    Expect<Boolean>(Scope.TryGetGuestWindow(ExpandedInB, 1, 0, 0, Window,
+      FirstLine)).ToBe(False);
+
+    { GUEST load, cwd = DirB, with a canonical identity: APath 'shared-mix.js'
+      resolves to the guest literal entry, its expansion DirB/shared-mix.js to the
+      host entry — a mixed pair reconciled by ONE identified GUEST registration. }
+    SetCurrentDir(DirB);
+    Scope.Register('shared-mix.js', '// guest reconcile line one' + sLineBreak +
+      '// guest reconcile line two', False, '#id:host-mix');
+
+    { No spelling may disclose after reconciliation: host ownership won from the
+      host expanded entry even though the new registration was a guest. Reverting
+      the host-wins derivation to key off AIsHost re-discloses both spellings. }
+    Expect<Boolean>(Scope.TryGetGuestWindow('shared-mix.js', 1, 0, 0, Window,
+      FirstLine)).ToBe(False);
+    Expect<Boolean>(Scope.TryGetGuestWindow(ExpandedInB, 1, 0, 0, Window,
+      FirstLine)).ToBe(False);
+    Expect<Boolean>(Scope.TryGetGuestWindow('#id:host-mix', 1, 0, 0, Window,
+      FirstLine)).ToBe(False);
+  finally
+    SetCurrentDir(OldDir);
+    Window.Free;
+    Scope.Free;
+  end;
+end;
+
+procedure TErrorTests.TestHostRegistrationUpgradesMixedGuestLiteralHostExpanded;
+var
+  Scope: TGocciaDiagnosticSourceScope;
+  Window: TStringList;
+  FirstLine: Integer;
+  OldDir, DirA, DirB, ExpandedInB: string;
+begin
+  { Reverse direction on the same mixed topology: a guest literal alias and a
+    host expanded alias reconciled by a HOST registration. Host ownership must
+    still cover every reached alias so no spelling discloses. }
+  OldDir := GetCurrentDir;
+  Scope := TGocciaDiagnosticSourceScope.Create;
+  Window := TStringList.Create;
+  try
+    DirA := GetCurrentDir;
+    DirB := ExpandFileName('..');
+    Expect<Boolean>(DirA <> DirB).ToBe(True);
+
+    SetCurrentDir(DirB);
+    ExpandedInB := ExpandFileName('shared-mix-host.js');
+    Scope.Register(ExpandedInB, '// host line one' + sLineBreak +
+      '// host line two', True);
+
+    SetCurrentDir(DirA);
+    Scope.Register('shared-mix-host.js', '// guest line one' + sLineBreak +
+      '// guest line two', False);
+
+    Expect<Boolean>(Scope.TryGetGuestWindow('shared-mix-host.js', 1, 0, 0,
+      Window, FirstLine)).ToBe(True);
+
+    SetCurrentDir(DirB);
+    Scope.Register('shared-mix-host.js', '// host reconcile line one' +
+      sLineBreak + '// host reconcile line two', True, '#id:host-mix-host');
+
+    Expect<Boolean>(Scope.TryGetGuestWindow('shared-mix-host.js', 1, 0, 0,
+      Window, FirstLine)).ToBe(False);
+    Expect<Boolean>(Scope.TryGetGuestWindow(ExpandedInB, 1, 0, 0, Window,
+      FirstLine)).ToBe(False);
+    Expect<Boolean>(Scope.TryGetGuestWindow('#id:host-mix-host', 1, 0, 0,
+      Window, FirstLine)).ToBe(False);
+  finally
+    SetCurrentDir(OldDir);
+    Window.Free;
+    Scope.Free;
+  end;
+end;
+
+procedure TErrorTests.TestGuestRegistrationPreservesHostLiteralWithGuestExpanded;
+var
+  Scope: TGocciaDiagnosticSourceScope;
+  Window: TStringList;
+  FirstLine: Integer;
+  OldDir, DirA, DirB, ExpandedInB: string;
+begin
+  { The other mixed direction: the literal spelling resolves to a HOST entry
+    (chosen as Unified) while the expanded spelling resolves to a SEPARATE GUEST
+    entry. A guest registration reconciling the pair must keep the host literal
+    host-owned AND fold the guest expanded entry to host — host wins from Unified,
+    and the previously guest-owned expanded entry must not survive as guest. }
+  OldDir := GetCurrentDir;
+  Scope := TGocciaDiagnosticSourceScope.Create;
+  Window := TStringList.Create;
+  try
+    DirA := GetCurrentDir;
+    DirB := ExpandFileName('..');
+    Expect<Boolean>(DirA <> DirB).ToBe(True);
+
+    { HOST load, cwd = DirA: literal 'shared-hg.js' keyed to a HOST entry (its
+      expansion is DirA/shared-hg.js, distinct from the DirB expansion below). }
+    SetCurrentDir(DirA);
+    Scope.Register('shared-hg.js', '// host line one' + sLineBreak +
+      '// host line two', True);
+
+    { GUEST load, cwd = DirB: register the DirB expansion as an absolute spelling,
+      minting a SEPARATE GUEST entry keyed under DirB/shared-hg.js. }
+    SetCurrentDir(DirB);
+    ExpandedInB := ExpandFileName('shared-hg.js');
+    Scope.Register(ExpandedInB, '// guest line one' + sLineBreak +
+      '// guest line two', False);
+
+    Expect<Boolean>(Scope.TryGetGuestWindow('shared-hg.js', 1, 0, 0, Window,
+      FirstLine)).ToBe(False);
+    Expect<Boolean>(Scope.TryGetGuestWindow(ExpandedInB, 1, 0, 0, Window,
+      FirstLine)).ToBe(True);
+
+    { GUEST load, cwd = DirB, identified: APath 'shared-hg.js' resolves to the
+      host literal entry (Unified), its expansion DirB/shared-hg.js to the guest
+      entry. Host wins; neither spelling may disclose afterward. }
+    Scope.Register('shared-hg.js', '// guest reconcile line one' + sLineBreak +
+      '// guest reconcile line two', False, '#id:host-hg');
+
+    Expect<Boolean>(Scope.TryGetGuestWindow('shared-hg.js', 1, 0, 0, Window,
+      FirstLine)).ToBe(False);
+    Expect<Boolean>(Scope.TryGetGuestWindow(ExpandedInB, 1, 0, 0, Window,
+      FirstLine)).ToBe(False);
+    Expect<Boolean>(Scope.TryGetGuestWindow('#id:host-hg', 1, 0, 0, Window,
       FirstLine)).ToBe(False);
   finally
     SetCurrentDir(OldDir);
