@@ -5,6 +5,7 @@ program Goccia.GarbageCollector.Test;
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
 
+  Classes,
   SysUtils,
 
   Goccia.GarbageCollector,
@@ -38,6 +39,24 @@ type
     property Child: TChildManaged read FChild write FChild;
   end;
 
+  { A foreign thread releasing external bytes against the MAIN thread's
+    collector — the shape of a TGocciaErrorObjectValue charged on collector A
+    but destroyed on worker thread B, which is the one cross-thread entry
+    point into a collector. Deliberately does NOT initialize its own
+    thread-local runtime: the error destructor releases through the reserving
+    collector pointer, not through this thread's TGarbageCollector.Instance. }
+  TCrossThreadReleaser = class(TThread)
+  private
+    FCollector: TGarbageCollector;
+    FChunkBytes: Int64;
+    FIterations: Integer;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const ACollector: TGarbageCollector;
+      const AChunkBytes: Int64; const AIterations: Integer);
+  end;
+
   TTestGarbageCollector = class(TTestSuite)
   public
     procedure SetupTests; override;
@@ -52,6 +71,7 @@ type
     procedure TestInnerFrameClearLeavesOuterFrameRootsIntact;
     procedure TestActiveRootStackGrowsPastInitialCapacity;
     procedure TestPushesOutsideTheGuardingTryLeakOnRaise;
+    procedure TestCrossThreadReleaseKeepsAccountingExact;
   end;
 
 var
@@ -86,6 +106,24 @@ begin
     FChild.MarkReferences;
 end;
 
+constructor TCrossThreadReleaser.Create(const ACollector: TGarbageCollector;
+  const AChunkBytes: Int64; const AIterations: Integer);
+begin
+  inherited Create(True);
+  FreeOnTerminate := False;
+  FCollector := ACollector;
+  FChunkBytes := AChunkBytes;
+  FIterations := AIterations;
+end;
+
+procedure TCrossThreadReleaser.Execute;
+var
+  I: Integer;
+begin
+  for I := 1 to FIterations do
+    FCollector.ReleaseExternalBytes(FChunkBytes);
+end;
+
 procedure TTestGarbageCollector.SetupTests;
 begin
   Test('CollectYoung traces references from old rooted objects',
@@ -108,6 +146,8 @@ begin
     TestActiveRootStackGrowsPastInitialCapacity);
   Test('A frame''s pushes must sit inside the try that clears it',
     TestPushesOutsideTheGuardingTryLeakOnRaise);
+  Test('Cross-thread releases keep the byte ledger exact under churn',
+    TestCrossThreadReleaseKeepsAccountingExact);
 end;
 
 procedure TTestGarbageCollector.TestDataDescriptorPushRootsProtectsValue;
@@ -566,6 +606,56 @@ begin
     if GParentDestructorCount = 0 then
       GC.RemoveRootObject(Parent);
   end;
+end;
+
+{ The tear this pins was real: before the accounting lock, an error object
+  charged on collector A but destroyed on worker thread B drove A's
+  FBytesAllocated concurrently with A's own allocations, and a lost update
+  skewed the total --max-memory is checked against. The worker here releases
+  a pre-charged reservation in small chunks while the owner thread churns
+  registrations and full collections against the same counters; any lost
+  update, torn 64-bit access, or deadlock between the collect and accounting
+  locks surfaces as an exact-balance failure (or a hang) below. }
+procedure TTestGarbageCollector.TestCrossThreadReleaseKeepsAccountingExact;
+const
+  CHUNK_BYTES = 64;
+  RELEASE_ITERATIONS = 20000;
+  CHURN_ITERATIONS = 20000;
+  CHURN_COLLECT_INTERVAL = 1000;
+var
+  BaselineBytes: Int64;
+  GC: TGarbageCollector;
+  I: Integer;
+  Releaser: TCrossThreadReleaser;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  BaselineBytes := GC.BytesAllocated;
+
+  { Charge everything the worker will release, up front, on this (the
+    reserving) thread — the error-excerpt shape: reserved on A, released
+    piecemeal from B. }
+  Expect<Boolean>(GC.TryReserveExternalBytes(
+    Int64(CHUNK_BYTES) * RELEASE_ITERATIONS)).ToBe(True);
+
+  Releaser := TCrossThreadReleaser.Create(GC, CHUNK_BYTES,
+    RELEASE_ITERATIONS);
+  try
+    Releaser.Start;
+    for I := 1 to CHURN_ITERATIONS do
+    begin
+      GC.RegisterObject(TChildManaged.Create);
+      if I mod CHURN_COLLECT_INTERVAL = 0 then
+        GC.Collect;
+    end;
+    Releaser.WaitFor;
+  finally
+    Releaser.Free;
+  end;
+
+  { Sweep the remaining churn garbage; the ledger must balance to the byte. }
+  GC.Collect;
+  Expect<Int64>(GC.BytesAllocated).ToBe(BaselineBytes);
 end;
 
 begin
