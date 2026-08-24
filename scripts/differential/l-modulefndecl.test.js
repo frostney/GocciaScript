@@ -9,7 +9,12 @@
 import {
   Counted,
   Factory,
+  ImplicitLeaf,
+  Labelled,
+  OverriddenLeaf,
+  OverriddenMiddle,
   Point,
+  StampedLabel,
   Tagged,
   arrowClosureRead,
   arrowConstruct,
@@ -21,11 +26,14 @@ import {
   fnDeclConstruct,
   fnDeclDerivedConstruct,
   fnDeclFieldRead,
+  fnDeclImplicitLeafConstruct,
   fnDeclLocalImplicitSubclassConstruct,
   fnDeclLocalSubclassConstruct,
   fnDeclLocalSubclassOfDerivedConstruct,
   fnDeclNestedConstruct,
+  fnDeclOverriddenLeafConstruct,
   fnDeclSpreadConstruct,
+  implicitTickCount,
 } from "./mods/fndecl.js";
 
 const ENTRY_PREFIX = "entry-";
@@ -175,17 +183,18 @@ describe("construction from module function declarations", () => {
     for (const instance of [first, second]) {
       expect(instance instanceof Counted).toBe(true);
       expect(instance instanceof Point).toBe(true);
-      // Sorted: the three runtimes disagree on own-property *order* for a
-      // derived class's field initializers, which is a separate question from
-      // whether each field is initialized exactly once.
-      expect(Object.keys(instance).sort()).toEqual([
+      // Exact insertion order: each class's fields are initialized when its own
+      // super() returns (ES2026 §13.3.7.1 step 11), so Point's `label` comes
+      // first, then Point's constructor writes, then Counted's `seq`, then
+      // Counted's body, then Local's `stamp`, then Local's body.
+      expect(Object.keys(instance)).toEqual([
         "label",
-        "local",
-        "owner",
-        "seq",
-        "stamp",
         "x",
         "y",
+        "seq",
+        "owner",
+        "stamp",
+        "local",
       ]);
       expect(instance.label).toBe("point");
       expect(instance.x).toBe(20);
@@ -200,5 +209,66 @@ describe("construction from module function declarations", () => {
 
     expect(second.seq - first.seq).toBe(1);
     expect(derivedTickCount() - ticksBefore).toBe(2);
+  });
+
+  // The entry file has no PREFIX binding. A field initializer resolved against
+  // the scope that ran `new` would throw a ReferenceError here instead.
+  test("entry file: a module class's field initializers read module bindings", () => {
+    const labelled = new Labelled(7);
+    expect(Object.keys(labelled)).toEqual(["label", "n"]);
+    expect(labelled.label).toBe("id-labelled");
+    expect(labelled.n).toBe(7);
+  });
+
+  test("entry file: a derived module class keeps module scope and field order", () => {
+    const stamped = new StampedLabel(9);
+    expect(stamped instanceof Labelled).toBe(true);
+    expect(Object.keys(stamped)).toEqual(["label", "n", "stamp", "tail"]);
+    expect(stamped.label).toBe("id-labelled");
+    expect(stamped.stamp).toBe("id-stamp");
+    expect(stamped.tail).toBe("id-tail");
+    expect(stamped.secret()).toBe("id-secret");
+  });
+
+  test("entry file: constructing a derived module class initializes it once", () => {
+    const ticksBefore = derivedTickCount();
+    const counted = new Counted(30);
+
+    expect(Object.keys(counted)).toEqual(["label", "x", "y", "seq", "owner"]);
+    expect(counted.brand()).toBe("id-counted");
+    expect(derivedTickCount() - ticksBefore).toBe(1);
+  });
+
+  // Classes with no constructor of their own take the implicit-default path
+  // (§15.7.14 step 15a), which is separate machinery from an explicit super().
+  // Every probe here is run from both sides of the import for that reason.
+  test("an override returned by a base constructor carries no fields from its own layer", () => {
+    for (const leaf of [fnDeclOverriddenLeafConstruct(), new OverriddenLeaf()]) {
+      // §10.2.2 step 12: Overriding's `a` went on the receiver it was called
+      // with, which the returned object replaced.
+      expect(Object.keys(leaf)).toEqual(["tag", "b", "c"]);
+      expect(leaf.tag).toBe("id-override");
+      expect(leaf.b).toBe("id-b");
+      expect(leaf.c).toBe("id-c");
+    }
+  });
+
+  test("an implicit layer below an explicit derived one initializes each layer once", () => {
+    for (const construct of [
+      fnDeclImplicitLeafConstruct,
+      () => new ImplicitLeaf(),
+    ]) {
+      const ticksBefore = implicitTickCount();
+      const leaf = construct();
+
+      expect(Object.keys(leaf)).toEqual(["x", "b", "c", "C", "d"]);
+      expect(implicitTickCount() - ticksBefore).toBe(3);
+      expect(leaf.c - leaf.b).toBe(1);
+      expect(leaf.d - leaf.c).toBe(1);
+    }
+  });
+
+  test("entry file: an all-implicit chain over a returning base still overrides", () => {
+    expect(Object.keys(new OverriddenMiddle())).toEqual(["tag", "b"]);
   });
 });

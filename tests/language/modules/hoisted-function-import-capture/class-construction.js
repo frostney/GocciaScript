@@ -6,7 +6,9 @@ features: [modules, compat-function, class]
 import {
   Counted,
   Factory,
+  Labelled,
   Point,
+  StampedLabel,
   Tagged,
   arrowConstruct,
   derivedTickCount,
@@ -82,17 +84,18 @@ describe("imported module functions construct module classes", () => {
     for (const instance of [first, second]) {
       expect(instance instanceof Counted).toBe(true);
       expect(instance instanceof Point).toBe(true);
-      // Sorted because the two modes disagree on own-property *order* for a
-      // derived class's field initializers, which is a separate question from
-      // whether each field is initialized exactly once.
-      expect(Object.keys(instance).sort()).toEqual([
+      // Exact insertion order: each class's fields land when its own super()
+      // returns (§13.3.7.1 step 11), so Point's `label`, then Point's
+      // constructor writes, then Counted's `seq`, then Counted's body, then
+      // Local's `stamp`, then Local's body.
+      expect(Object.keys(instance)).toEqual([
         "label",
-        "local",
-        "owner",
-        "seq",
-        "stamp",
         "x",
         "y",
+        "seq",
+        "owner",
+        "stamp",
+        "local",
       ]);
       expect(instance.label).toBe("point");
       expect(instance.x).toBe(20);
@@ -116,5 +119,33 @@ describe("imported module functions construct module classes", () => {
   test("constructing an imported class from the entry file is unchanged", () => {
     expect(Object.keys(new Point(1, 2))).toEqual(["label", "x", "y"]);
     expect(new Tagged(4).tag).toBe("id-tagged");
+  });
+
+  // The entry file has no PREFIX binding of its own. A field initializer that
+  // resolved against the scope running `new` would throw a ReferenceError here.
+  test("entry-file construction runs field initializers in the module scope", () => {
+    const labelled = new Labelled(7);
+    expect(Object.keys(labelled)).toEqual(["label", "n"]);
+    expect(labelled.label).toBe("id-labelled");
+    expect(labelled.n).toBe(7);
+  });
+
+  test("entry-file construction of a derived class keeps module scope and order", () => {
+    const stamped = new StampedLabel(9);
+    expect(stamped instanceof Labelled).toBe(true);
+    expect(Object.keys(stamped)).toEqual(["label", "n", "stamp", "tail"]);
+    expect(stamped.label).toBe("id-labelled");
+    expect(stamped.stamp).toBe("id-stamp");
+    expect(stamped.tail).toBe("id-tail");
+    expect(stamped.secret()).toBe("id-secret");
+  });
+
+  test("entry-file construction of a derived module class initializes once", () => {
+    const ticksBefore = derivedTickCount();
+    const counted = new Counted(30);
+
+    expect(Object.keys(counted)).toEqual(["label", "x", "y", "seq", "owner"]);
+    expect(counted.brand()).toBe("id-counted");
+    expect(derivedTickCount() - ticksBefore).toBe(1);
   });
 });

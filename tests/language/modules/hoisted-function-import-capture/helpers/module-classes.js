@@ -20,6 +20,34 @@ export class Tagged extends Point {
   }
 }
 
+// ES2026 §15.7.10 ClassFieldDefinitionEvaluation step 2b captures the class's
+// own definition environment as each field initializer's [[Environment]].
+// These two read PREFIX from a *field* initializer rather than a constructor
+// body, so constructing them from the entry file — which has no PREFIX — is
+// what proves the initializer did not resolve against the caller's scope.
+export class Labelled {
+  label = PREFIX + "labelled";
+
+  constructor(n) {
+    this.n = n;
+  }
+}
+
+export class StampedLabel extends Labelled {
+  stamp = PREFIX + "stamp";
+
+  #secret = PREFIX + "secret";
+
+  constructor(n) {
+    super(n);
+    this.tail = PREFIX + "tail";
+  }
+
+  secret() {
+    return this.#secret;
+  }
+}
+
 let derivedTicks = 0;
 
 export function derivedTickCount() {

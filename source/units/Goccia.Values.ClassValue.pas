@@ -15,6 +15,7 @@ uses
   Goccia.CapabilityAudit,
   Goccia.Constants,
   Goccia.Realm,
+  Goccia.Scope,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -71,6 +72,12 @@ type
     FNameDeleted: Boolean;
     FLengthDeleted: Boolean;
     FSourceText: string;
+    // ES2026 §15.7.14 ClassDefinitionEvaluation steps 1-2 and §15.7.10
+    // ClassFieldDefinitionEvaluation step 2b: the class environment that was
+    // current when this class was evaluated. A field initializer is a function
+    // whose [[Environment]] is that environment, not the environment of
+    // whatever scope happens to run `new`.
+    FDefinitionScope: TGocciaScope;
     function GetPropertyGetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
     function GetPropertySetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
     function GetStaticPropertyGetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
@@ -146,6 +153,16 @@ type
       const AReceiver: TGocciaValue; const ANewTarget: TGocciaValue;
       out AResult: TGocciaValue): Boolean; virtual;
     function EstimatedInstancePropertyCapacity: Integer;
+    // Approximates ES2026 §15.7.14 ClassDefinitionEvaluation step 19's
+    // [[ConstructorKind]] = ~derived~, which decides when instance elements
+    // are initialized: a ~base~ constructor does it before its body (§10.2.2
+    // step 5b), a ~derived~ one when super() returns (§13.3.7.1 step 11).
+    // Reports True when a resolved superclass or a linked native super
+    // constructor is present. Known gap: `class A extends null {}` is
+    // ~derived~ per the spec but reports False here, because extends-null
+    // records no superclass. Tree-walk `extends null` is separately broken;
+    // do not lean on this predicate for it.
+    function HasDerivedConstructorKind: Boolean;
     function HasInstanceInitializerWork: Boolean;
     // ECMAScript: number of expected constructor parameters before the first
     // default/rest. Built-in classes default to 0; user classes derive from
@@ -172,6 +189,8 @@ type
     function GetOwnStaticSymbolDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
 
     property Name: string read FName;
+    property DefinitionScope: TGocciaScope read FDefinitionScope
+      write FDefinitionScope;
     property SourceText: string read FSourceText write FSourceText;
     property CreationRealm: TGocciaRealm read FCreationRealm;
     property PrivateBrandToken: string read FPrivateBrandToken;
@@ -762,6 +781,7 @@ begin
   FConstructorMethod := nil;
   FNameDeleted := False;
   FLengthDeleted := False;
+  FDefinitionScope := nil;
   if Assigned(FSuperClass) then
     FClassPrototype.Prototype := FSuperClass.Prototype
   else if TGocciaObjectValue.SharedObjectPrototype <> nil then
@@ -801,6 +821,12 @@ begin
 
   if Assigned(FSuperClass) then
     FSuperClass.MarkReferences;
+
+  { The class environment outlives the class definition exactly the way a
+    function's closure outlives its declaration: field initializers are
+    closures over it, so it is reachable for as long as the class is. }
+  if Assigned(FDefinitionScope) then
+    FDefinitionScope.MarkReferences;
 
   if Assigned(FNativeSuperConstructor) then
     FNativeSuperConstructor.MarkReferences;
@@ -1606,6 +1632,11 @@ begin
         Inc(Result);
     WalkClass := WalkClass.SuperClass;
   end;
+end;
+
+function TGocciaClassValue.HasDerivedConstructorKind: Boolean;
+begin
+  Result := Assigned(FSuperClass) or Assigned(FNativeSuperConstructor);
 end;
 
 function TGocciaClassValue.HasInstanceInitializerWork: Boolean;
