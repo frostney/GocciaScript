@@ -11,6 +11,18 @@ uses
 
 function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList; overload;
 function FindAllFiles(const ADirectory: string; const AFileExtensions: array of string): TStringList; overload;
+
+{ FindAllFiles, but subdirectories whose name appears in
+  AExcludedDirectoryNames are not descended into. Case-sensitive, matching how
+  the names it excludes are spelled on disk. }
+function FindAllFilesExcludingDirectories(const ADirectory: string;
+  const AFileExtensions: array of string;
+  const AExcludedDirectoryNames: array of string): TStringList;
+{ True when APath is rooted rather than interpreted against a working
+  directory: a leading path separator, a drive letter, or a UNC prefix.
+  (Several units still carry private copies of this predating the shared one;
+  they are unchanged here rather than refactored in passing.) }
+function IsAbsoluteHostPath(const APath: string): Boolean;
 function ExpandHostFileName(const APath: string): string;
 function HostDirectoryExists(const APath: string): Boolean;
 function HostFileExists(const APath: string): Boolean;
@@ -32,6 +44,17 @@ implementation
 
 uses
   TextEncoding;
+
+function IsAbsoluteHostPath(const APath: string): Boolean;
+begin
+  if Length(APath) = 0 then
+    Exit(False);
+  if (APath[1] = '/') or (APath[1] = '\') then
+    Exit(True);
+  if (Length(APath) >= 2) and (APath[2] = ':') then
+    Exit(True);
+  Result := Copy(APath, 1, 2) = '\\';
+end;
 
 function ExpandHostFileName(const APath: string): string;
 begin
@@ -81,7 +104,20 @@ begin
   Result := False;
 end;
 
-function FindAllFiles(const ADirectory: string; const AFileExtensions: array of string): TStringList;
+function MatchesExcludedDirectory(const AName: string;
+  const AExcludedDirectoryNames: array of string): Boolean;
+var
+  I: Integer;
+begin
+  for I := Low(AExcludedDirectoryNames) to High(AExcludedDirectoryNames) do
+    if AName = AExcludedDirectoryNames[I] then
+      Exit(True);
+  Result := False;
+end;
+
+function FindAllFilesExcludingDirectories(const ADirectory: string;
+  const AFileExtensions: array of string;
+  const AExcludedDirectoryNames: array of string): TStringList;
 var
   SearchRec: TSearchRec;
   Files: TStringList;
@@ -96,9 +132,13 @@ begin
     repeat
       if (SearchRec.Attr and faDirectory) = faDirectory then
       begin
-        if (SearchRec.Name <> '.') and (SearchRec.Name <> '..') then
+        if (SearchRec.Name <> '.') and (SearchRec.Name <> '..') and
+           (not MatchesExcludedDirectory(SearchRec.Name,
+              AExcludedDirectoryNames)) then
         begin
-          SubdirFiles := FindAllFiles(Dir + PathDelim + SearchRec.Name, AFileExtensions);
+          SubdirFiles := FindAllFilesExcludingDirectories(
+            Dir + PathDelim + SearchRec.Name, AFileExtensions,
+            AExcludedDirectoryNames);
           try
             Files.AddStrings(SubdirFiles);
           finally
@@ -114,6 +154,17 @@ begin
   FindClose(SearchRec);
   Files.Sort;
   Result := Files;
+end;
+
+function FindAllFiles(const ADirectory: string; const AFileExtensions: array of string): TStringList;
+var
+  NoExclusions: array[0..0] of string;
+begin
+  { An empty open array literal is not spellable here, so a single entry no
+    directory name can equal stands in for "exclude nothing". }
+  NoExclusions[0] := '';
+  Result := FindAllFilesExcludingDirectories(ADirectory, AFileExtensions,
+    NoExclusions);
 end;
 
 function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList;

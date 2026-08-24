@@ -229,6 +229,13 @@ begin
     AParentEngine.ModuleLoader.Resolver.BaseDirectory;
   for AliasPair in AParentEngine.ModuleLoader.Resolver.Aliases do
     FEngine.ModuleLoader.Resolver.AddAlias(AliasPair.Key, AliasPair.Value);
+  // The node_modules capability travels with the aliases for the same reason:
+  // a child realm that resolved bare specifiers differently from its creator
+  // would make --allow-node-modules silently stop working inside importValue.
+  // It grants the child nothing the creating realm was not already given.
+  if AParentEngine.ModuleLoader.Resolver.NodeModulesEnabled then
+    FEngine.ModuleLoader.Resolver.AllowNodeModules(
+      AParentEngine.ModuleLoader.Resolver.NodeModulesCeiling);
   // SetDefaultGlobalBindings installs `eval` on the realm global. GocciaScript
   // keeps eval out of normal realms, so mirror the creating realm: when it
   // exposes `eval`, give the child its own realm-bound eval (which evaluates in

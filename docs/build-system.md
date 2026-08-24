@@ -179,6 +179,11 @@ printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
 # Add one-off import-map-style aliases from the CLI (relative targets use the invocation directory)
 ./build/GocciaScriptLoader app.js --alias @/=./src/ --alias config=./config/default.js
 
+# Resolve bare specifiers against node_modules (off by default; see docs/module-resolution.md).
+# Bare form walks up from each importing file; the value form caps the walk at that directory.
+./build/GocciaScriptLoader app.js --allow-node-modules
+./build/GocciaScriptLoader app.js --allow-node-modules=./project
+
 # The same module-resolution and virtual-module flags are available on the shared CLI hosts.
 ./build/GocciaTestRunner tests --import-map=imports.json --alias @/=./tests/helpers/
 ./build/GocciaBenchmarkRunner benchmarks --import-map=imports.json

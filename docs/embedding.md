@@ -215,9 +215,18 @@ import { formatDate } from "@/utils/dates";
 
 **Config file discovery is automatic for CLI apps** — `TGocciaCLIApplication` discovers `goccia.toml` / `goccia.json5` / `goccia.json` (priority order: TOML > JSON5 > JSON) from the entry file's directory upward and applies config values before execution. When embedding the engine directly, this does not happen automatically. To replicate it, use the general-purpose `CLI.ConfigFile` unit (`DiscoverConfigFile`, `ApplyConfigFile`). Note that `ApplyConfigFile` only handles `.json` by default — to support `.json5` and `.toml`, register their parsers first via `RegisterConfigParser` (see `Goccia.CLI.Application.pas` for the pattern). For import-map resolution only, use `TGocciaModuleResolver.DiscoverProjectConfig` and `LoadImportMap`. See [Configuration File](build-system.md#configuration-file-gocciajson) for the full reference.
 
+### Bare Specifiers and node_modules
+
+A bare specifier is refused for an embedded engine too; grant it explicitly, optionally capping the ancestor walk. See [Module Resolution](module-resolution.md) for the supported `exports` subset, the `module`-field deviation from Node, and the CommonJS refusal.
+
+```pascal
+Engine.AllowNodeModules;              // walk up from each importing file
+Engine.AllowNodeModules('/srv/app');  // ...but never above /srv/app
+```
+
 ### Custom Resolver
 
-For advanced resolution logic (e.g., `node_modules` lookup, URL imports, or in-memory modules), subclass `TGocciaModuleResolver` and override the `Resolve` method:
+For resolution logic outside that surface (URL imports, in-memory modules, or a package layout of your own), subclass `TGocciaModuleResolver` and override the `Resolve` method:
 
 ```pascal
 uses

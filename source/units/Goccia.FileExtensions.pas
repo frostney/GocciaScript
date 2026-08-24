@@ -11,6 +11,9 @@ const
   EXT_TSX  = '.tsx';
   EXT_MJS  = '.mjs';
   EXT_MTS  = '.mts';
+  { CommonJS-only source. Never a loadable module extension — it exists so the
+    node_modules resolver can name what it refuses (Goccia.Modules.NodeResolution). }
+  EXT_CJS  = '.cjs';
   EXT_JSON = '.json';
   EXT_JSON5 = '.json5';
   EXT_JSONC = '.jsonc';
