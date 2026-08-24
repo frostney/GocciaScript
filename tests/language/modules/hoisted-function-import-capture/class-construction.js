@@ -16,6 +16,8 @@ import {
   fnDeclBoundConstruct,
   fnDeclClosureRead,
   fnDeclConstruct,
+  makeEvaluatorBuiltBase,
+  makeSubclassOf,
   fnDeclDerivedConstruct,
   fnDeclLocalImplicitSubclassConstruct,
   fnDeclLocalSubclassConstruct,
@@ -138,6 +140,55 @@ describe("imported module functions construct module classes", () => {
     expect(stamped.stamp).toBe("id-stamp");
     expect(stamped.tail).toBe("id-tail");
     expect(stamped.secret()).toBe("id-secret");
+  });
+
+  // §10.2.2 step 5: an implicit constructor forwards newTarget up the chain,
+  // and the compiled superclass's implicit branch reads it back off the VM to
+  // pick the receiver's prototype. Constructing from the entry file is what
+  // makes the answer observable — the exotic Array receiver is allocated
+  // several links above the class `new` names.
+  test("an implicit compiled constructor forwards newTarget", () => {
+    class CompiledMid extends Array {}
+    const Sub = makeSubclassOf(CompiledMid);
+
+    const direct = new Sub();
+    expect(Object.getPrototypeOf(direct)).toBe(Sub.prototype);
+    expect(Array.isArray(direct)).toBe(true);
+
+    const Other = class Other extends CompiledMid {};
+    const redirected = Reflect.construct(Sub, [], Other);
+    expect(Object.getPrototypeOf(redirected)).toBe(Other.prototype);
+    expect(Array.isArray(redirected)).toBe(true);
+  });
+
+  // TGocciaMethodValue.CallWithThisValue runs only the constructor body, so a
+  // superclass whose instance elements are AST expressions loses them unless
+  // the VM hands them back to the evaluator. Interpreted mode never had the
+  // gap, which made this a mode divergence rather than a missing fast path.
+  test("a compiled subclass of an evaluator-built base runs the base's fields", () => {
+    const Base = makeEvaluatorBuiltBase();
+
+    class ExplicitSuper extends Base {
+      own = "explicit";
+
+      constructor() {
+        super(3);
+        this.tail = "explicit-tail";
+      }
+    }
+
+    class ImplicitSuper extends Base {}
+
+    const explicit = new ExplicitSuper();
+    expect(Object.keys(explicit)).toEqual(["label", "n", "own", "tail"]);
+    expect(explicit.label).toBe("id-evaluator-base");
+    expect(explicit.n).toBe(3);
+    expect(explicit.brand()).toBe("id-evaluator-brand");
+
+    const implicit = new ImplicitSuper(5);
+    expect(implicit.label).toBe("id-evaluator-base");
+    expect(implicit.n).toBe(5);
+    expect(implicit.brand()).toBe("id-evaluator-brand");
   });
 
   test("entry-file construction of a derived module class initializes once", () => {

@@ -256,10 +256,20 @@ begin
      `thisArg === undefined`, not on the argument count. So a bound function
      installed as an object method, `{ tag, run: resource.bind(fn) }`, sees the
      holder as `this`, and only an explicitly non-undefined thisArg displaces
-     it. Probed against Node v24.0.1. *)
-  Receiver := FBoundThis;
-  if not Assigned(Receiver) then
-    Receiver := AThisValue;
+     it. Probed against Node v24.0.1.
+
+     A snapshot runner is not a bound function in that sense: Node implements
+     snapshot() as `AsyncResource.bind((cb, ...args) => cb(...args))`, and the
+     plain `cb(...)` inside it passes no receiver at all. Installing a runner
+     as an object method must therefore not hand its holder to the callback. *)
+  if FUsesCallerTarget then
+    Receiver := TGocciaUndefinedLiteralValue.UndefinedValue
+  else
+  begin
+    Receiver := FBoundThis;
+    if not Assigned(Receiver) then
+      Receiver := AThisValue;
+  end;
 
   CallArgs := TGocciaArgumentsCollection.Create;
   try

@@ -3229,10 +3229,15 @@ console.log("Assertion failure text...");
         "}",
         "class ProtoNamed extends Error {}",
         "ProtoNamed.prototype.name = 'ProtoAssigned';",
+        // An explicit prototype name that happens to spell "Error" is still
+        // the author's answer, so the constructor name must not displace it.
+        "class ProtoErrorNamed extends Error {}",
+        "ProtoErrorNamed.prototype.name = 'Error';",
         'test("plain error", () => Promise.reject(new Error("boom")));',
         'test("subclass error", () => Promise.reject(new MyErr("boom")));',
         'test("named subclass error", () => Promise.reject(new NamedErr("boom")));',
         'test("prototype-named subclass error", () => Promise.reject(new ProtoNamed("boom")));',
+        'test("prototype-named Error subclass", () => Promise.reject(new ProtoErrorNamed("boom")));',
         'test("native error", () => Promise.reject(new TypeError("bad")));',
         'test("plain object", () => Promise.reject({ code: 42 }));',
         'test("message only", () => Promise.reject({ message: "hi" }));',
@@ -3256,6 +3261,13 @@ console.log("Assertion failure text...");
             `TestRunner (${mode}) should report "${expected}", got: ${rejectionOut}`,
           );
       }
+      // ProtoErrorNamed spells its prototype name "Error" on purpose, which
+      // reads identically to the inherited default; only the absence of the
+      // constructor name tells the two apart.
+      if (rejectionOut.includes("ProtoErrorNamed: boom"))
+        throw new Error(
+          `TestRunner (${mode}) must keep an explicitly assigned "Error" prototype name, got: ${rejectionOut}`,
+        );
     }
 
     // Every member the shim does not implement must keep throwing by name. The

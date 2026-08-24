@@ -30,6 +30,8 @@ type
     procedure TestMultipleFilesInMultipleSubdirs;
     procedure TestNoMatchingFilesAmongMany;
     procedure TestMixedExtensionsAcrossDepths;
+    procedure TestIsAbsoluteHostPathRootedForms;
+    procedure TestIsAbsoluteHostPathRelativeForms;
   public
     procedure SetupTests; override;
     procedure BeforeEach; override;
@@ -52,6 +54,10 @@ begin
   Test('Multiple files across multiple subdirectories', TestMultipleFilesInMultipleSubdirs);
   Test('No matching files among many non-matching returns empty', TestNoMatchingFilesAmongMany);
   Test('Mixed extensions across various depths', TestMixedExtensionsAcrossDepths);
+  Test('IsAbsoluteHostPath accepts the platform''s rooted spellings',
+    TestIsAbsoluteHostPathRootedForms);
+  Test('IsAbsoluteHostPath rejects paths read against a working directory',
+    TestIsAbsoluteHostPathRelativeForms);
 end;
 
 procedure TFileUtilsTests.BeforeEach;
@@ -339,6 +345,39 @@ begin
   finally
     Files.Free;
   end;
+end;
+
+{ A ceiling directory that is classified absolute is used verbatim; one that is
+  not is anchored to the directory the setting came from
+  (Goccia.Modules.Configuration AnchorCeilingDirectory), so misclassifying a
+  drive-relative or backslash-prefixed path silently moves the capability
+  boundary. The spellings are platform-specific, so the expectations are too. }
+procedure TFileUtilsTests.TestIsAbsoluteHostPathRootedForms;
+begin
+  { A leading '/' roots a path on both platforms. }
+  Expect<Boolean>(IsAbsoluteHostPath('/usr/local/lib')).ToBe(True);
+  {$IFNDEF UNIX}
+  Expect<Boolean>(IsAbsoluteHostPath('C:\packages')).ToBe(True);
+  Expect<Boolean>(IsAbsoluteHostPath('c:/packages')).ToBe(True);
+  Expect<Boolean>(IsAbsoluteHostPath('\\server\share\pkg')).ToBe(True);
+  Expect<Boolean>(IsAbsoluteHostPath('\packages')).ToBe(True);
+  {$ENDIF}
+end;
+
+procedure TFileUtilsTests.TestIsAbsoluteHostPathRelativeForms;
+begin
+  Expect<Boolean>(IsAbsoluteHostPath('')).ToBe(False);
+  Expect<Boolean>(IsAbsoluteHostPath('packages')).ToBe(False);
+  Expect<Boolean>(IsAbsoluteHostPath('./packages')).ToBe(False);
+  Expect<Boolean>(IsAbsoluteHostPath('../packages')).ToBe(False);
+  { Drive-relative: resolved against C:'s own working directory, not the root. }
+  Expect<Boolean>(IsAbsoluteHostPath('C:packages')).ToBe(False);
+  Expect<Boolean>(IsAbsoluteHostPath('C:')).ToBe(False);
+  {$IFDEF UNIX}
+  { A backslash is an ordinary filename character on UNIX. }
+  Expect<Boolean>(IsAbsoluteHostPath('\packages')).ToBe(False);
+  Expect<Boolean>(IsAbsoluteHostPath('C:\packages')).ToBe(False);
+  {$ENDIF}
 end;
 
 begin

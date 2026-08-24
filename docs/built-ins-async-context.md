@@ -45,8 +45,9 @@ const handle = async (request) =>
 | `AsyncLocalStorage.bind(fn)` | Returns `fn` pinned to the context current at the `bind` call. Throws `TypeError` at the `bind` call if `fn` is not callable. |
 | `AsyncLocalStorage.snapshot()` | Returns `(fn, ...args) => fn(...args)`, run under the context current at the `snapshot` call. It has no callback to validate, so a non-callable is a `TypeError` at the runner's call instead. |
 
-Every function these return is named `bound` and reports its target's `length`,
-as Node's do.
+Every function these return is named `bound`, as Node's are. A `bind` wrapper
+reports its target's `length`; a `snapshot` runner has no target and reports
+`1`, the arity of the `(fn, ...args)` runner itself.
 
 ## AsyncResource
 
@@ -100,7 +101,8 @@ snapshot mechanism behind the propagation.
 ## Availability
 
 `node:async_hooks` is installed by the loader runtime profile, so it resolves in
-`GocciaScriptLoader`, `GocciaTestRunner`, `GocciaREPL`, and
-`GocciaBenchmarkRunner` without a flag. It grants no capability — no I/O, no
+`GocciaScriptLoader`, `GocciaTestRunner`, `GocciaREPL`,
+`GocciaBenchmarkRunner`, and `GocciaSandboxRunner` (which applies that profile
+before installing its own sandbox extension) without a flag. It grants no capability — no I/O, no
 clock, no ambient authority — so nothing about it is gated. `GocciaScriptLoaderBare`
 attaches no runtime and therefore does not resolve it.

@@ -135,7 +135,12 @@ function HasInvalidPathSegment(const APath: string): Boolean;
   ERR_INVALID_PACKAGE_TARGET otherwise. }
 function IsValidExportsTarget(const ATarget: string): Boolean;
 
-{ True when APath is ADirectory itself or lives beneath it.
+{ True when APath lives strictly beneath ADirectory.
+
+  The comparison is against ADirectory plus a trailing separator, so ADirectory
+  itself does NOT pass: this answers "is this file inside the package", and
+  every caller passes a resolved file path. A caller that needs the directory
+  to count as inside itself must say so explicitly rather than assume it.
 
   The final containment gate: segment validation rejects the specifiers and
   targets that are invalid on their face, and this catches whatever a
@@ -148,7 +153,13 @@ function IsPathInsideDirectory(const APath, ADirectory: string): Boolean;
   True when the source carries CommonJS markers (`require(...)`,
   `module.exports`, `exports.x`) and no ES module markers. The asymmetry is
   deliberate: a file with both is being read as an ES module by every other
-  toolchain, and a file with neither is inert and loads fine either way. }
+  toolchain, and a file with neither is inert and loads fine either way.
+
+  The scan matches raw text and does not tokenize, so an `import` or `export`
+  keyword inside a comment or a string literal counts as an ES module marker.
+  That direction is the safe one: the file is loaded rather than refused, and
+  fails on its own terms at the first `require`. Removing the false negative
+  would cost a parse of every resolved package entry. }
 function LooksLikeCommonJSSource(const ASource: string): Boolean;
 
 { Whether a resolved file inside a package must be refused as CommonJS.

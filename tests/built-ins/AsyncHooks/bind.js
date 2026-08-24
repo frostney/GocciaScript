@@ -60,6 +60,21 @@ describe("AsyncLocalStorage statics", () => {
       .toBe("holder");
   });
 
+  test("a snapshot runner does not forward its own receiver", () => {
+    // Node implements snapshot() as AsyncResource.bind((cb, ...args) =>
+    // cb(...args)), and that plain call passes no receiver, so a runner
+    // installed as an object method must not hand its holder to the callback.
+    // Probed against Node v24.0.1.
+    const read = ({
+      read() {
+        return this === undefined ? "undefined" : "leaked";
+      },
+    }).read;
+    const runner = AsyncLocalStorage.snapshot();
+    expect(({ tag: "holder", run: runner }).run(read)).toBe("undefined");
+    expect(runner(read)).toBe("undefined");
+  });
+
   test("does not shadow Function.prototype.bind for ordinary functions", () => {
     const target = { tag: "target" };
     const read = ((value) => [target.tag, value]).bind(null, 1);

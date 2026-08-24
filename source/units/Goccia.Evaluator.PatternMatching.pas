@@ -572,6 +572,7 @@ var
   I: Integer;
   CurrentContext, NextContext: TGocciaEvaluationContext;
   RestArray: TGocciaArrayValue;
+  RestArrayRoot: TGocciaTempRoot;
   Success: Boolean;
 begin
   if not Assigned(ARestPattern) and not AHasRestWildcard and
@@ -601,9 +602,20 @@ begin
       RestArray := TGocciaArrayValue.Create;
       for I := AElements.Count to AItems.Count - 1 do
         RestArray.Elements.Add(AItems[I]);
-      if not TryMatchPatternInternal(RestArray, ARestPattern, CurrentContext,
-         NextContext) then
-        Exit(False);
+      { The rest array is derived here, so the caller's subject root does not
+        cover it and this local is its only reference. The subpattern below can
+        run guest code — a guard, a custom matcher, a computed key — and any of
+        that is a collecting safe point that would free it out from under the
+        binding. }
+      InitializeTempRoot(RestArrayRoot);
+      AddTempRootIfNeeded(RestArrayRoot, RestArray);
+      try
+        if not TryMatchPatternInternal(RestArray, ARestPattern, CurrentContext,
+           NextContext) then
+          Exit(False);
+      finally
+        RemoveTempRootIfNeeded(RestArrayRoot);
+      end;
       CurrentContext := NextContext;
     end;
 
@@ -640,6 +652,7 @@ var
   MatchedKeys: TStringList;
   MatchedSymbols: TList<TGocciaSymbolValue>;
   Remainder: TGocciaObjectValue;
+  RemainderRoot: TGocciaTempRoot;
   RestSubject: TGocciaObjectValue;
   Entry: TPair<string, TGocciaValue>;
   SymbolEntry: TPair<TGocciaSymbolValue, TGocciaValue>;
@@ -690,20 +703,30 @@ begin
         Exit(False);
 
       Remainder := TGocciaObjectValue.Create;
-      for Entry in RestSubject.GetEnumerablePropertyEntries do
-      begin
-        if MatchedKeys.IndexOf(Entry.Key) < 0 then
-          Remainder.AssignProperty(Entry.Key, Entry.Value);
-      end;
-      for SymbolEntry in RestSubject.GetEnumerableSymbolProperties do
-      begin
-        if not MatchedSymbols.Contains(SymbolEntry.Key) then
-          Remainder.AssignSymbolProperty(SymbolEntry.Key, SymbolEntry.Value);
-      end;
+      { Same reason the array rest subject is rooted: the remainder object is
+        derived here, is reachable from this local alone, and the subpattern
+        below can run guest code that collects. Rooted from creation because
+        the property copies below allocate too. }
+      InitializeTempRoot(RemainderRoot);
+      AddTempRootIfNeeded(RemainderRoot, Remainder);
+      try
+        for Entry in RestSubject.GetEnumerablePropertyEntries do
+        begin
+          if MatchedKeys.IndexOf(Entry.Key) < 0 then
+            Remainder.AssignProperty(Entry.Key, Entry.Value);
+        end;
+        for SymbolEntry in RestSubject.GetEnumerableSymbolProperties do
+        begin
+          if not MatchedSymbols.Contains(SymbolEntry.Key) then
+            Remainder.AssignSymbolProperty(SymbolEntry.Key, SymbolEntry.Value);
+        end;
 
-      if not TryMatchPatternInternal(Remainder, APattern.RestPattern,
-        CurrentContext, NextContext) then
-        Exit(False);
+        if not TryMatchPatternInternal(Remainder, APattern.RestPattern,
+          CurrentContext, NextContext) then
+          Exit(False);
+      finally
+        RemoveTempRootIfNeeded(RemainderRoot);
+      end;
       CurrentContext := NextContext;
     end;
 

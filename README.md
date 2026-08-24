@@ -132,7 +132,7 @@ Core built-ins include `Math`, `JSON`, `Object`, `Function`, `Array`, `Boolean`,
 
 Non-standard data-format APIs and SemVer are import-only Goccia runtime modules, not auto-installed globals: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. They expose named exports only; use `import * as CSV from "goccia:csv"` when you want the namespace-object shape. There is no default export.
 
-`node:async_hooks` is an import-only module too, at Node's own address and with Node's exports: `AsyncLocalStorage` and `AsyncResource`, named and on the default export. The engine propagates the async context, so a store bound with `run` survives `await` and every promise-reaction continuation. See the [Async Context reference](docs/built-ins-async-context.md) and [ADR 0112](docs/adr/0112-native-async-local-storage.md).
+`node:async_hooks` is an import-only module too, at Node's own address. It exports `AsyncLocalStorage` and `AsyncResource`, named and on the default export; the `async_hooks` observer API (`createHook`, `executionAsyncId`, and the rest) is out of scope. The engine propagates the async context, so a store bound with `run` survives `await` and every promise-reaction continuation. See the [Async Context reference](docs/built-ins-async-context.md) and [ADR 0112](docs/adr/0112-native-async-local-storage.md).
 
 Native FFI is an explicit unsafe runtime opt-in (`--unsafe-ffi` or the matching configuration key). It provides native-layout structures, unions, fixed-length arrays, callbacks, and guarded library lifetimes through GocciaScript's custom bidirectional ABI machinery. See the [FFI reference](docs/built-ins-ffi.md) and [ADR 0095](docs/adr/0095-custom-bidirectional-ffi-abi-engine.md).
 

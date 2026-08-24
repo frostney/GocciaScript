@@ -188,6 +188,9 @@ type
     FFunctionConstructor: TGocciaFunctionConstructorClassValue;
     FTypedArrayIntrinsic: TGocciaClassValue;
     FSuppressWarnings: Boolean;
+    { The async-context bracket this engine holds for its whole lifetime; see
+      EnterEngineAsyncContext. }
+    FAsyncContextToken: Integer;
     FLastTiming: TGocciaScriptResult;
     FLastSourceMap: TGocciaSourceMap;
     procedure SetStrictTypes(const AValue: Boolean);
@@ -856,6 +859,10 @@ procedure TGocciaEngine.Initialize(const AFileName: string;
   const ASourceLines: TStringList; const AModuleLoader: TGocciaModuleLoader;
   const AOwnsModuleLoader: Boolean);
 begin
+  { Not a valid token until EnterEngineAsyncContext returns one, so a
+    constructor that fails before then cannot make Destroy unwind past an
+    enclosing engine's entry. }
+  FAsyncContextToken := -1;
   FSourcePath := AFileName;
   FSourceLines := ASourceLines;
   FModuleLoader := AModuleLoader;
@@ -869,6 +876,11 @@ begin
   TGarbageCollector.Initialize;
   TGocciaCallStack.Initialize;
   TGocciaMicrotaskQueue.Initialize;
+
+  { Start on an empty async context and remember what this thread was holding,
+    so neither a reused worker-thread slot nor an enclosing engine leaks its
+    snapshot into this one. Destroy restores it. }
+  FAsyncContextToken := EnterEngineAsyncContext;
 
   // Per-realm intrinsic state (Array.prototype, ...) lives on FRealm.  The
   // execution-context stack makes it current after the global environment is
@@ -939,9 +951,11 @@ end;
 destructor TGocciaEngine.Destroy;
 begin
   { Async-context snapshots hold this engine's objects, and `enterWith` can
-    leave one installed with no scope to unwind it. Drop them before anything
-    else is torn down so the next engine on this thread cannot inherit them. }
-  ResetAsyncContextState;
+    leave one installed with no scope to unwind it. Drop everything this engine
+    left behind before anything else is torn down, and restore whatever was
+    current when it was constructed — engines nest on one thread, so clearing
+    the thread outright would strip an outer engine's context mid-run. }
+  LeaveEngineAsyncContext(FAsyncContextToken);
 
   if (TGarbageCollector.Instance <> nil) and Assigned(FInterpreter) then
     TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
@@ -1716,6 +1730,16 @@ end;
 procedure TGocciaEngine.AllowNodeModules(const ACeilingDirectory: string);
 begin
   Resolver.AllowNodeModules(ACeilingDirectory);
+  { The grant is a host decision, not a script action, so it is emitted once at
+    configuration time. The subject is the effective ceiling the resolver
+    normalized — empty when the walk is unbounded, which is the part an auditor
+    most needs to see. An embedding host that calls this API instead of going
+    through the CLI gets the same event; the CLI reaches the resolver directly,
+    so nothing is emitted twice. }
+  if Resolver.NodeModulesEnabled then
+    EmitCapabilityAudit(gckNodeModulesResolution, gcdAllow,
+      Resolver.NodeModulesCeiling,
+      'bare specifiers resolve against node_modules');
 end;
 
 procedure TGocciaEngine.SetAllowedFetchHosts(const AHosts: TStrings);
