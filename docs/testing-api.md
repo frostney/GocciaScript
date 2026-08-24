@@ -420,6 +420,8 @@ Both patterns work because GocciaScript's `await` is a synchronous drain --- the
 
 **Important:** If a test returns a Promise that is still pending after the microtask queue drains and all pending fetch completions have been pumped, the test **fails** with "Promise still pending after microtask drain". Since GocciaScript has no general event loop, a non-fetch pending Promise after drain will never settle --- this catches tests with missing assertions or broken async chains. This mirrors how Jest/Vitest fail tests with a timeout when the returned Promise never resolves.
 
+When a returned Promise rejects, the failure line reports the reason as `Returned Promise rejected: <reason>`. An `Error` is named and described --- `Error: boom`, or the class name for a subclass that does not set its own `name`, such as `MyError: boom` --- because its `name` lives on the prototype and its `message` is non-enumerable, so serializing the object alone would render it as `{}`. Any other reason is serialized as a value.
+
 **Testing intentionally-pending Promises:** When testing behavior around forever-pending Promises (e.g., verifying that `reject()` after `resolve(pendingPromise)` is ignored), never return the pending Promise. Instead, use a separate settled Promise chain to verify state after microtasks drain:
 
 ```javascript
