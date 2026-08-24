@@ -125,6 +125,26 @@ type
       const ARealm: TGocciaRealm): TGocciaObjectValue; virtual;
     function Instantiate(const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaValue = nil): TGocciaValue; virtual;
+    // True when this class value carries its own [[Construct]] implementation
+    // instead of the AST constructor method and field tables that the
+    // tree-walk instantiation path drives. Typed arrays allocate an exotic
+    // receiver, and a bytecode-compiled class holds its constructor as a
+    // closure rather than a TGocciaMethodValue; for both, `new` must go
+    // through Instantiate. The tree-walk evaluator is handed such classes in
+    // bytecode mode, because a module's top-level function declarations are
+    // created by the evaluator while linking (ES2026 §16.2.1.7.3.1
+    // InitializeEnvironment) and keep running there.
+    function UsesOwnInstantiation: Boolean; virtual;
+    // Runs this class's own [[Construct]] steps — field initializers and
+    // constructor body — against an already-allocated receiver, and reports
+    // whether it did. This is what `super()` from a tree-walk subclass and
+    // `new` through a bound wrapper need: they own the receiver, so they
+    // cannot call Instantiate. Returns False for class values whose
+    // construction the tree-walk path drives from the AST constructor method.
+    function TryConstructOnReceiver(
+      const AArguments: TGocciaArgumentsCollection;
+      const AReceiver: TGocciaValue; const ANewTarget: TGocciaValue;
+      out AResult: TGocciaValue): Boolean; virtual;
     function EstimatedInstancePropertyCapacity: Integer;
     function HasInstanceInitializerWork: Boolean;
     // ECMAScript: number of expected constructor parameters before the first
@@ -1602,6 +1622,20 @@ begin
     if not FDecoratorFieldInitializers[I].IsStatic then
       Exit(True);
 
+  Result := False;
+end;
+
+function TGocciaClassValue.UsesOwnInstantiation: Boolean;
+begin
+  Result := False;
+end;
+
+function TGocciaClassValue.TryConstructOnReceiver(
+  const AArguments: TGocciaArgumentsCollection;
+  const AReceiver: TGocciaValue; const ANewTarget: TGocciaValue;
+  out AResult: TGocciaValue): Boolean;
+begin
+  AResult := nil;
   Result := False;
 end;
 

@@ -122,6 +122,14 @@ const CLASSIFICATION: Record<string, Classification> = {
   // ambiguity for the toolchain this runner replaces. Vitest is skipped —
   // nothing here is testing-API semantics.
   "k-callgenerics.test.ts": { kind: "language", bun: "gate", vitest: "skip" },
+  // Construction and closure reads from a module's top-level function
+  // declarations, which are created while linking rather than compiled with the
+  // module body — the split that produced three bytecode-only bugs (the 0.11.0
+  // TDZ break, its 0.12.0 fix, and the 0.13.0 break where `new X()` inside such
+  // a declaration silently skipped the constructor body). Bun gates: this is
+  // ECMAScript class and module semantics, and the testing API is incidental.
+  // Vitest is skipped for the same reason as the other language suites.
+  "l-modulefndecl.test.js": { kind: "language", bun: "gate", vitest: "skip" },
 };
 
 type Verdict = {
