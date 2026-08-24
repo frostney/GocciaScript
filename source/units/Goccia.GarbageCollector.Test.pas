@@ -66,6 +66,7 @@ type
     procedure TestReservationCollectsBeyondPressureReserve;
     procedure TestReservationRefusesWhatCollectionCannotFit;
     procedure TestRepeatedRefusalCollectsOnlyOnce;
+    procedure TestTryCollectGrantsAlreadyFittingRequestWithoutWalking;
     procedure TestDataDescriptorPushRootsProtectsValue;
     procedure TestAccessorDescriptorPushRootsProtectsBothHalves;
     procedure TestInnerFrameClearLeavesOuterFrameRootsIntact;
@@ -136,6 +137,8 @@ begin
     TestReservationRefusesWhatCollectionCannotFit);
   Test('Repeated refusal of the same size collects only once',
     TestRepeatedRefusalCollectsOnlyOnce);
+  Test('An already-fitting request is granted without walking the heap',
+    TestTryCollectGrantsAlreadyFittingRequestWithoutWalking);
   Test('Data descriptor PushRoots keeps its value alive across a collection',
     TestDataDescriptorPushRootsProtectsValue);
   Test('Accessor descriptor PushRoots keeps getter and setter alive',
@@ -501,6 +504,35 @@ begin
   end;
 end;
 
+{ Pins the grant-without-walking arm of TryCollectForLimitedBytes: a request
+  that already fits must return True without a collection. The arm exists for
+  a cross-thread interleaving — a foreign release landing between a caller's
+  failed fit test and this call can make the request fit, and the force
+  predicate would otherwise read that as "nothing to force" and refuse a
+  grantable request — but the contract it establishes is directly observable
+  single-threaded, which is what this asserts. }
+procedure TTestGarbageCollector.TestTryCollectGrantsAlreadyFittingRequestWithoutWalking;
+const
+  BUDGET_HEADROOM_BYTES = 1024 * 1024;
+var
+  CollectionsBefore: Integer;
+  GC: TGarbageCollector;
+  PreviousMaxBytes: Int64;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  PreviousMaxBytes := GC.MaxBytes;
+  try
+    GC.MaxBytes := GC.BytesAllocated + BUDGET_HEADROOM_BYTES;
+    CollectionsBefore := GC.TotalCollections;
+    Expect<Boolean>(
+      GC.TryCollectForLimitedBytes(BUDGET_HEADROOM_BYTES div 2)).ToBe(True);
+    Expect<Integer>(GC.TotalCollections).ToBe(CollectionsBefore);
+  finally
+    GC.MaxBytes := PreviousMaxBytes;
+  end;
+end;
+
 procedure TTestGarbageCollector.TestRepeatedRefusalCollectsOnlyOnce;
 const
   BUDGET_HEADROOM_BYTES = 8 * 1024 * 1024;
@@ -619,7 +651,10 @@ end;
 procedure TTestGarbageCollector.TestCrossThreadReleaseKeepsAccountingExact;
 const
   CHUNK_BYTES = 64;
-  RELEASE_ITERATIONS = 20000;
+  { Sized so the releaser spans the owner-side churn (allocations plus 20
+    full collections) rather than finishing in its opening moments — the
+    exact-balance assertion only bites while the two sides actually overlap. }
+  RELEASE_ITERATIONS = 200000;
   CHURN_ITERATIONS = 20000;
   CHURN_COLLECT_INTERVAL = 1000;
 var
