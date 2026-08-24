@@ -24,6 +24,10 @@ type
     FilePath: string;
     Line: Integer;
     Column: Integer;
+    // Set by SetTopFrameLocation: FilePath then names the source the position
+    // was taken from and wins over the template's own source file, which is
+    // what makes a cross-module throw report the module it happened in.
+    HasExplicitLocation: Boolean;
   end;
 
   TGocciaCallFrameArray = array of TGocciaCallFrame;
@@ -50,6 +54,23 @@ type
     // Hot-path push for the bytecode VM: stores the template pointer plus a
     // module-path fallback, deferring all string work to CaptureStackTrace.
     procedure PushTemplate(const ATemplate: Pointer; const AFallbackPath: string);
+    { Stamps the currently executing frame with a source position.
+
+      A deferred bytecode frame is pushed without one (ADR 0074 keeps the hot
+      call path free of debug-map lookups), so its trace reads `file:0:0` and
+      the diagnostic renderer has no line to show a code frame for. The VM
+      calls this on its throw paths only — where a debug-map lookup is already
+      paid for — so a runtime TypeError carries the same file:line:column the
+      tree-walk evaluator's per-call frame would have carried. }
+    procedure SetTopFrameLocation(const AFilePath: string;
+      const ALine, AColumn: Integer);
+    { Snapshot / restore the whole top frame, for a caller that stamps the
+      executing frame's location for the duration of a nested operation (an
+      interpreter `new` whose native constructor captures a trace) and must
+      leave it exactly as it found it — otherwise the stamp leaks into the next
+      statement's diagnostics. }
+    function TryGetTopFrame(out AFrame: TGocciaCallFrame): Boolean;
+    procedure SetTopFrame(const AFrame: TGocciaCallFrame);
     procedure Pop;
 
     // Registers the resolver used to materialise deferred template frames.
@@ -60,6 +81,14 @@ type
       AErrorName and AMessage form the first line: "ErrorName: message".
       ASkipTop omits the topmost N frames (e.g. 1 to skip the Error constructor). }
     function CaptureStackTrace(const AErrorName, AMessage: string; const ASkipTop: Integer = 0): string;
+
+    { The resolved source location of the frame CaptureStackTrace would render
+      as the top (after skipping ASkipTop frames) — the engine's own record of
+      where a throw originated. Used to stamp trusted provenance on an error
+      object at creation, so a code frame is bound to real frames and never to
+      a guest-forged `.stack` string. False when there is no such frame. }
+    function TryGetTopThrowLocation(const ASkipTop: Integer;
+      out AFilePath: string; out ALine, AColumn: Integer): Boolean;
 
     property Count: Integer read FCount;
   end;
@@ -115,6 +144,7 @@ begin
   FFrames[FCount].FilePath := AFilePath;
   FFrames[FCount].Line := ALine;
   FFrames[FCount].Column := AColumn;
+  FFrames[FCount].HasExplicitLocation := False;
   Inc(FCount);
 end;
 
@@ -127,7 +157,35 @@ begin
   FFrames[FCount].FilePath := AFallbackPath;
   FFrames[FCount].Line := 0;
   FFrames[FCount].Column := 0;
+  FFrames[FCount].HasExplicitLocation := False;
   Inc(FCount);
+end;
+
+procedure TGocciaCallStack.SetTopFrameLocation(const AFilePath: string;
+  const ALine, AColumn: Integer);
+begin
+  if FCount = 0 then
+    Exit;
+  FFrames[FCount - 1].Line := ALine;
+  FFrames[FCount - 1].Column := AColumn;
+  if AFilePath <> '' then
+  begin
+    FFrames[FCount - 1].FilePath := AFilePath;
+    FFrames[FCount - 1].HasExplicitLocation := True;
+  end;
+end;
+
+function TGocciaCallStack.TryGetTopFrame(out AFrame: TGocciaCallFrame): Boolean;
+begin
+  Result := FCount > 0;
+  if Result then
+    AFrame := FFrames[FCount - 1];
+end;
+
+procedure TGocciaCallStack.SetTopFrame(const AFrame: TGocciaCallFrame);
+begin
+  if FCount > 0 then
+    FFrames[FCount - 1] := AFrame;
 end;
 
 procedure TGocciaCallStack.Pop;
@@ -139,6 +197,39 @@ end;
 class procedure TGocciaCallStack.SetTemplateResolver(const AResolver: TGocciaTemplateTraceResolver);
 begin
   FTemplateResolver := AResolver;
+end;
+
+function TGocciaCallStack.TryGetTopThrowLocation(const ASkipTop: Integer;
+  out AFilePath: string; out ALine, AColumn: Integer): Boolean;
+var
+  TopIndex: Integer;
+  Frame: TGocciaCallFrame;
+  ResolvedName, ResolvedPath: string;
+begin
+  AFilePath := '';
+  ALine := 0;
+  AColumn := 0;
+  Result := False;
+  if ASkipTop > 0 then
+    TopIndex := FCount - ASkipTop - 1
+  else
+    TopIndex := FCount - 1;
+  if (TopIndex < 0) or (TopIndex >= FCount) then
+    Exit;
+  Frame := FFrames[TopIndex];
+  // Same resolution CaptureStackTrace uses for a rendered frame.
+  if Assigned(Frame.Template) and Assigned(FTemplateResolver) then
+  begin
+    FTemplateResolver(Frame.Template, ResolvedName, ResolvedPath);
+    if Frame.HasExplicitLocation or (ResolvedPath = '') then
+      ResolvedPath := Frame.FilePath;
+  end
+  else
+    ResolvedPath := Frame.FilePath;
+  AFilePath := ResolvedPath;
+  ALine := Frame.Line;
+  AColumn := Frame.Column;
+  Result := True;
 end;
 
 function TGocciaCallStack.CaptureStackTrace(const AErrorName, AMessage: string; const ASkipTop: Integer = 0): string;
@@ -168,7 +259,10 @@ begin
     if Assigned(Frame.Template) and Assigned(FTemplateResolver) then
     begin
       FTemplateResolver(Frame.Template, ResolvedName, ResolvedPath);
-      if ResolvedPath = '' then
+      // An explicitly stamped location names the source the position came
+      // from, which for a cross-module throw is not the frame template's own
+      // source file.
+      if Frame.HasExplicitLocation or (ResolvedPath = '') then
         ResolvedPath := Frame.FilePath;
     end
     else

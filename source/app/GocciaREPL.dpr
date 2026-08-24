@@ -211,6 +211,7 @@ begin
               else if E is TGocciaThrowValue then
                 WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value,
                   REPL_FILE_NAME, Source, IsColorTerminal,
+                  Eng.ModuleLoader.DiagnosticScope.Principal,
                   TGocciaThrowValue(E).Suggestion))
               else
                 WriteLn('Error: ', E.Message);
@@ -266,6 +267,7 @@ begin
               else if E is TGocciaThrowValue then
                 WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value,
                   REPL_FILE_NAME, Source, IsColorTerminal,
+                  Eng.ModuleLoader.DiagnosticScope.Principal,
                   TGocciaThrowValue(E).Suggestion))
               else
                 WriteLn('Error: ', E.Message);

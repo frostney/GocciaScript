@@ -10,7 +10,14 @@
  */
 
 import { $ } from "bun";
-import { writeFileSync, readFileSync, existsSync } from "fs";
+import {
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  mkdirSync,
+  symlinkSync,
+  linkSync,
+} from "fs";
 import { join } from "path";
 import {
   LOADER,
@@ -3344,6 +3351,630 @@ console.log("Assertion failure text...");
       if (!line.includes("docs/testing-api.md"))
         throw new Error(`${call} should point at the docs, got: ${line}`);
     });
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- Runtime diagnostic parity (TestRunner) ------------------------------------
+
+// An uncaught runtime fault is reported by the runner, not by the suite, so the
+// rendered diagnostic is only observable from outside. It used to be a
+// different diagnostic per execution mode: interpreted runs printed the named
+// callee, a suggestion, a `--> file:line:column` header and a code frame, while
+// bytecode runs printed a bare "Fatal error: TypeError: undefined is not a
+// function". The two renderings are pinned together here — byte-for-byte
+// equality is the contract, because any drift in either mode is the defect.
+console.log("Runtime diagnostic parity...");
+{
+  const tmp = mkdtemp("goccia-diagnostic-parity-");
+  // The diagnostic (header + code frame) is everything before the results
+  // block. Guard the marker: if a run ever stops emitting it, slice(0, -1)
+  // would silently compare truncated output, so treat its absence as a failure
+  // rather than let the equality check pass on a coincidence.
+  const RESULTS_MARKER = "Test Results Test Files:";
+  const diagnosticPrefix = (out: string, label: string): string => {
+    const at = out.indexOf(RESULTS_MARKER);
+    if (at < 0)
+      throw new Error(`${label} produced no results block, got: ${out}`);
+    return out.slice(0, at);
+  };
+  try {
+    const calleeSrc = join(tmp, "callee.test.js");
+    writeFileSync(calleeSrc, ["const obj = {};", "obj.missingMethod();", ""].join("\n"));
+
+    const renderings: Record<string, string> = {};
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${calleeSrc} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      // A file whose top level throws is a failed file: the runner exits 1.
+      if (run.exitCode !== 1)
+        throw new Error(
+          `TestRunner (${mode}) should exit 1 on an uncaught throw, got ${run.exitCode}: ${out}`,
+        );
+      for (const expected of [
+        "TypeError: obj.missingMethod is not a function",
+        "Suggestion: 'obj' is of type 'object' which does not have method 'missingMethod'",
+        "callee.test.js:2:18",
+        "2 | obj.missingMethod();",
+      ]) {
+        if (!out.includes(expected))
+          throw new Error(
+            `TestRunner (${mode}) should report "${expected}", got: ${out}`,
+          );
+      }
+      if (out.includes("Fatal error"))
+        throw new Error(
+          `TestRunner (${mode}) must render a thrown value as a diagnostic, not a fatal error, got: ${out}`,
+        );
+      // The header and code frame are the part that must match across modes;
+      // the results block below carries mode-specific timing lines.
+      renderings[mode] = diagnosticPrefix(out, `TestRunner (${mode})`);
+    }
+    if (renderings["--mode=interpreted"] !== renderings["--mode=bytecode"])
+      throw new Error(
+        `Both modes must render an identical diagnostic.\ninterpreted:\n${renderings["--mode=interpreted"]}\nbytecode:\n${renderings["--mode=bytecode"]}`,
+      );
+
+    // The code frame is read from a file, and the file it was read from used to
+    // be the entry every time: a module that threw while evaluating produced a
+    // header naming the module and an excerpt quoting whatever the entry file
+    // happened to have at that line number.
+    const dep = join(tmp, "dep.js");
+    writeFileSync(
+      dep,
+      [
+        "// dep filler 1",
+        "// dep filler 2",
+        "// dep filler 3",
+        "// dep filler 4",
+        "export const boom = (() => { throw new Error('dep exploded'); })();",
+        "",
+      ].join("\n"),
+    );
+    const entry = join(tmp, "entry.test.js");
+    writeFileSync(
+      entry,
+      [
+        "// entry filler 1",
+        "// entry filler 2",
+        "// entry filler 3",
+        "// entry filler 4",
+        "import { boom } from './dep.js';",
+        "console.log(boom);",
+        "",
+      ].join("\n"),
+    );
+
+    const frames: Record<string, string> = {};
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${entry} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      if (run.exitCode !== 1)
+        throw new Error(
+          `TestRunner (${mode}) should exit 1 on a module that throws, got ${run.exitCode}: ${out}`,
+        );
+      if (!out.includes("Error: dep exploded"))
+        throw new Error(`TestRunner (${mode}) should report the module's error, got: ${out}`);
+      if (!out.includes("dep.js:5:"))
+        throw new Error(`TestRunner (${mode}) should locate the fault in dep.js, got: ${out}`);
+      if (!out.includes("throw new Error('dep exploded')"))
+        throw new Error(
+          `TestRunner (${mode}) should quote dep.js in the code frame, got: ${out}`,
+        );
+      if (out.includes("entry filler") || out.includes("import { boom }"))
+        throw new Error(
+          `TestRunner (${mode}) must not quote the entry file for a fault in dep.js, got: ${out}`,
+        );
+      frames[mode] = diagnosticPrefix(out, `TestRunner (${mode})`);
+    }
+    if (frames["--mode=interpreted"] !== frames["--mode=bytecode"])
+      throw new Error(
+        `Both modes must render an identical module diagnostic.\ninterpreted:\n${frames["--mode=interpreted"]}\nbytecode:\n${frames["--mode=bytecode"]}`,
+      );
+
+    // A `new` before an unrelated throw must not drag its location onto the
+    // throw: the constructor-site stamp is scoped to the construction, so
+    // `m.missing.x` reports its own line in both modes, identically.
+    const precedingNewSrc = join(tmp, "preceding-new.test.js");
+    writeFileSync(
+      precedingNewSrc,
+      [
+        "const make = () => {",
+        "  const m = new Map();",
+        "  return m.missing.x;",
+        "};",
+        "make();",
+        "",
+      ].join("\n"),
+    );
+    const precedingNew: Record<string, string> = {};
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${precedingNewSrc} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      if (!out.includes("preceding-new.test.js:3:"))
+        throw new Error(
+          `TestRunner (${mode}) should locate the fault at the m.missing.x line (3), not the new Map() line, got: ${out}`,
+        );
+      if (out.includes("preceding-new.test.js:2:"))
+        throw new Error(
+          `TestRunner (${mode}) leaked the new Map() location (line 2) onto a later throw, got: ${out}`,
+        );
+      precedingNew[mode] = diagnosticPrefix(out, `TestRunner (${mode})`);
+    }
+    if (precedingNew["--mode=interpreted"] !== precedingNew["--mode=bytecode"])
+      throw new Error(
+        `Both modes must render an identical preceding-new diagnostic.\ninterpreted:\n${precedingNew["--mode=interpreted"]}\nbytecode:\n${precedingNew["--mode=bytecode"]}`,
+      );
+
+    // A successful construct must not leave its constructor's position stamped
+    // on the caller frame: a later native error reports its own line, not the
+    // `new`'s. `new Map()` on line 1, `JSON.parse("{")` on line 2 — the syntax
+    // error must locate to line 2 in both modes (the bytecode twin of the
+    // round-2 `new`-stamp finding).
+    const constructSrc = join(tmp, "construct-stamp.test.js");
+    writeFileSync(
+      constructSrc,
+      ['new Map();', 'JSON.parse("{");', ""].join("\n"),
+    );
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${constructSrc} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      if (!out.includes("construct-stamp.test.js:2:"))
+        throw new Error(
+          `TestRunner (${mode}) should locate the JSON error at line 2 (JSON.parse), got: ${out}`,
+        );
+      if (out.includes("construct-stamp.test.js:1:"))
+        throw new Error(
+          `TestRunner (${mode}) leaked the new Map() position (line 1) onto the JSON error: ${out}`,
+        );
+    }
+
+    // The automatic SuppressedError from a block+disposer double-throw carries
+    // genuine provenance (built as an error object, not a bare object): both
+    // modes render a "SuppressedError" diagnostic with a location, and the
+    // interpreter shows the source frame.
+    const suppSrc = join(tmp, "suppressed.test.js");
+    writeFileSync(
+      suppSrc,
+      [
+        "const run = () => {",
+        '  { using d = { [Symbol.dispose]() { throw new Error("disposer boom"); } }; throw new Error("body boom"); }',
+        "};",
+        "run();",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${suppSrc} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      if (!out.includes("SuppressedError"))
+        throw new Error(`TestRunner (${mode}) should report a SuppressedError, got: ${out}`);
+      if (!out.includes("suppressed.test.js:"))
+        throw new Error(
+          `TestRunner (${mode}) should locate the SuppressedError, not print it bare, got: ${out}`,
+        );
+    }
+    {
+      const run = await $`${TESTRUNNER} ${suppSrc} --mode=interpreted --no-progress 2>&1`.nothrow();
+      if (!run.text().includes("throw new Error(\"body boom\")"))
+        throw new Error(
+          `TestRunner (interpreted) should render the SuppressedError's source frame, got: ${run.text()}`,
+        );
+    }
+
+    // A non-constructable super() reaches the class-construction machinery, not
+    // the ordinary call guard, so its message/location parity is governed there
+    // (a separate concern from these diagnostics). Pin only what this change
+    // owns: both modes render a TypeError diagnostic rather than a bare
+    // "Fatal error". Byte-level super() parity is tracked with the construction
+    // path, not here.
+    const superSrc = join(tmp, "super-call.test.js");
+    writeFileSync(
+      superSrc,
+      [
+        "class B extends null {",
+        "  constructor() {",
+        "    super();",
+        "  }",
+        "}",
+        "new B();",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${superSrc} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes("Fatal error"))
+        throw new Error(
+          `TestRunner (${mode}) must render the super() fault as a diagnostic, not a fatal error, got: ${out}`,
+        );
+      if (!out.includes("TypeError"))
+        throw new Error(
+          `TestRunner (${mode}) should report a TypeError for a non-constructable super(), got: ${out}`,
+        );
+    }
+
+    // Security: a code frame is rendered only from provenance the engine
+    // recorded on a genuine error at creation, never from the thrown value's
+    // guest-writable `stack` string. A forged `{ stack: "...at f (FILE:1:1)" }`
+    // object carries no provenance, so no host opens FILE and no frame is shown.
+    const secretPath = join(tmp, "SECRET_MUST_NOT_APPEAR.txt");
+    const secretMarker = "TOP_SECRET_FILE_CONTENTS_LEAKED";
+    writeFileSync(secretPath, `${secretMarker}\nline two of the secret file\n`);
+    const attackSrc = join(tmp, "attack.test.js");
+    // Point the forged frame at the secret file. If a host reads it, the marker
+    // (its line 1) shows up in the rendered code frame.
+    writeFileSync(
+      attackSrc,
+      [
+        `const forged = { name: "Error", message: "forged", stack: "Error: forged\\n    at f (${secretPath.replace(/\\/g, "\\\\")}:1:1)" };`,
+        "throw forged;",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${attackSrc} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes(secretMarker))
+        throw new Error(
+          `SECURITY: TestRunner (${mode}) read a file named by a thrown stack: ${out}`,
+        );
+    }
+    // Same attack through the loader and the sandbox runner (the sandbox path
+    // is the one that would otherwise bypass the sandbox.fs.path gate).
+    for (const bin of [LOADER, BARE]) {
+      const run = await $`${bin} ${attackSrc} 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes(secretMarker))
+        throw new Error(
+          `SECURITY: ${bin} read a file named by a thrown stack: ${out}`,
+        );
+    }
+
+    // A frame naming a FIFO must not make any host block on open(); the registry
+    // lookup misses and no filesystem call is made. Guard with a hard timeout so
+    // a regression hangs the suite visibly rather than silently.
+    if (process.platform !== "win32") {
+      const fifoPath = join(tmp, "frame.fifo");
+      const mk = await $`mkfifo ${fifoPath}`.nothrow();
+      if (mk.exitCode === 0) {
+        const fifoSrc = join(tmp, "fifo.test.js");
+        writeFileSync(
+          fifoSrc,
+          [
+            `const forged = { name: "Error", message: "f", stack: "Error: f\\n    at g (${fifoPath.replace(/\\/g, "\\\\")}:1:1)" };`,
+            "throw forged;",
+            "",
+          ].join("\n"),
+        );
+        const proc = Bun.spawnSync(
+          [TESTRUNNER, fifoSrc, "--mode=bytecode", "--no-progress"],
+          { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
+        );
+        // spawnSync kills a run that exceeds the timeout with a signal; a clean
+        // exit means the diagnostic rendered without ever opening the FIFO.
+        if (proc.signalCode)
+          throw new Error(
+            `SECURITY: TestRunner hung rendering a frame that names a FIFO (${proc.signalCode})`,
+          );
+      }
+    }
+
+    // Host-preload disclosure: a module the HOST preloaded (which the guest
+    // never imported) must not be readable through a forged frame. The guest
+    // never throws from it, so it is never a genuine error's provenance; the
+    // forged object has none. The preloaded module's private source must not
+    // appear.
+    const preloadMarker = "HOST_PRELOAD_PRIVATE_SOURCE_MARKER";
+    const preloadSrc = join(tmp, "preload.js");
+    writeFileSync(
+      preloadSrc,
+      [
+        `// ${preloadMarker}`,
+        "export const hostValue = 42;",
+        "",
+      ].join("\n"),
+    );
+    const preloadAttack = join(tmp, "preload-attack.js");
+    writeFileSync(
+      preloadAttack,
+      [
+        `const forged = { name: "Error", message: "p", stack: "Error: p\\n    at f (${preloadSrc.replace(/\\/g, "\\\\")}:1:1)" };`,
+        "throw forged;",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["", "--mode=bytecode"]) {
+      const run = await $`${LOADER} ${preloadAttack} --globals ${preloadSrc} ${mode} 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes(preloadMarker))
+        throw new Error(
+          `SECURITY: Loader (${mode || "interpreted"}) disclosed a host-preloaded module via a forged frame: ${out}`,
+        );
+    }
+
+    // Cross-run stale disclosure: in one TestRunner invocation over two files,
+    // file A loads a module carrying a secret; file B forges a frame naming that
+    // module. Each file runs in its own engine scope, and B's forged object has
+    // no provenance, so B must not surface A's module source.
+    const staleMarker = "PRIOR_RUN_MODULE_SOURCE_MARKER";
+    const staleDir = join(tmp, "stale");
+    mkdirSync(staleDir, { recursive: true });
+    writeFileSync(
+      join(staleDir, "secret-mod.js"),
+      [`// ${staleMarker}`, "export const v = 1;", ""].join("\n"),
+    );
+    writeFileSync(
+      join(staleDir, "a.test.js"),
+      ['import { v } from "./secret-mod.js";', "void v;", ""].join("\n"),
+    );
+    const secretModPath = join(staleDir, "secret-mod.js");
+    writeFileSync(
+      join(staleDir, "b.test.js"),
+      [
+        `const forged = { name: "Error", message: "b", stack: "Error: b\\n    at f (${secretModPath.replace(/\\/g, "\\\\")}:1:1)" };`,
+        "throw forged;",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${join(staleDir, "a.test.js")} ${join(staleDir, "b.test.js")} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes(staleMarker))
+        throw new Error(
+          `SECURITY: TestRunner (${mode}) disclosed a prior run's module source via a forged frame: ${out}`,
+        );
+    }
+
+    // Host-preload GENUINE-error exclusion: a real error thrown INSIDE a
+    // host-preloaded module (not forged) must still withhold that module's
+    // source from the guest — location line yes, source lines no. The guest
+    // calls a host global whose body throws; the host module's own source lines
+    // must not appear.
+    const hostBodyMarker = "HOST_MODULE_BODY_SOURCE_LINE";
+    const hostThrower = join(tmp, "host-thrower.js");
+    writeFileSync(
+      hostThrower,
+      [
+        `// ${hostBodyMarker}`,
+        "export const boom = () => {",
+        `  const secret = "${hostBodyMarker}";`,
+        "  return secret.length.toFixed.call(null).nope();",
+        "};",
+        "",
+      ].join("\n"),
+    );
+    const hostThrowerMain = join(tmp, "host-thrower-main.js");
+    writeFileSync(hostThrowerMain, ["boom();", ""].join("\n"));
+    for (const mode of ["", "--mode=bytecode"]) {
+      const run = await $`${LOADER} ${hostThrowerMain} --globals ${hostThrower} --compat-asi ${mode} 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes(hostBodyMarker))
+        throw new Error(
+          `SECURITY: Loader (${mode || "interpreted"}) disclosed a host module's source for an error thrown inside it: ${out}`,
+        );
+    }
+
+    // Held-error exclusion: a host-preloaded factory creates an Error; the guest
+    // throws it later. The excerpt (host module source) must not be shown.
+    const heldMarker = "HOST_HELD_FACTORY_SOURCE";
+    const heldHost = join(tmp, "held-host.js");
+    writeFileSync(
+      heldHost,
+      [`// ${heldMarker}`, 'export const makeHeld = () => new Error("held");', ""].join("\n"),
+    );
+    const heldMain = join(tmp, "held-main.js");
+    writeFileSync(heldMain, ["const e = makeHeld();", "throw e;", ""].join("\n"));
+    for (const mode of ["", "--mode=bytecode"]) {
+      const run = await $`${LOADER} ${heldMain} --globals ${heldHost} --compat-asi ${mode} 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes(heldMarker))
+        throw new Error(
+          `SECURITY: Loader (${mode || "interpreted"}) disclosed a host factory's source via a held error: ${out}`,
+        );
+    }
+
+    // Deferred import-chain ownership: the host-injected module has finished
+    // loading before guest execution starts. Calling its exported function
+    // later must still carry host ownership into import(), transitively; a
+    // synchronous host-preload depth counter cannot protect this shape.
+    const deferredMarker = "DEFERRED_HOST_IMPORT_PRIVATE_SOURCE_XZ";
+    const deferredSecret = join(tmp, "deferred-host-secret.js");
+    writeFileSync(
+      deferredSecret,
+      [
+        `// ${deferredMarker}`,
+        `throw new Error("deferred host import failed"); // ${deferredMarker}`,
+        "export const never = 1;",
+        "",
+      ].join("\n"),
+    );
+    const deferredGlobals = join(tmp, "deferred-globals.js");
+    writeFileSync(
+      deferredGlobals,
+      [
+        'export const loadDeferredHostModule = () => import("./deferred-host-secret.js");',
+        "",
+      ].join("\n"),
+    );
+    const deferredMain = join(tmp, "deferred-main.js");
+    writeFileSync(deferredMain, ["await loadDeferredHostModule();", ""].join("\n"));
+    for (const mode of ["", "--mode=bytecode"]) {
+      const run = await $`${LOADER} ${deferredMain} --globals ${deferredGlobals} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
+      const out = run.text();
+      if (run.exitCode === 0 || !out.includes("deferred-host-secret.js:2:"))
+        throw new Error(
+          `Loader (${mode || "interpreted"}) should locate the deferred host import failure, got: ${out}`,
+        );
+      if (out.includes(deferredMarker))
+        throw new Error(
+          `SECURITY: Loader (${mode || "interpreted"}) disclosed a deferred host import's source: ${out}`,
+        );
+    }
+
+    // Memory bound: a guest module of long lines whose factory throws a genuine
+    // TypeError, held many times, must not retain diagnostic excerpts past the
+    // --max-memory ceiling. At a tight budget the run must hit the ceiling
+    // (RangeError or the uncatchable "exceed the memory budget"), never
+    // HELD:500 (unbounded retention) and never a nil-deref crash.
+    const memDir = join(tmp, "mem");
+    mkdirSync(memDir, { recursive: true });
+    const longLine = "// " + "é😀".repeat(700);
+    const memLines: string[] = [];
+    for (let i = 0; i < 9; i++) memLines.push(longLine);
+    memLines.push("export const boom = () => { const z = null; return z.x; };");
+    for (let i = 0; i < 9; i++) memLines.push("// " + "B".repeat(2000));
+    writeFileSync(join(memDir, "mod.js"), memLines.join("\n") + "\n");
+    writeFileSync(
+      join(memDir, "main.js"),
+      [
+        'import { boom } from "./mod.js";',
+        "const held = [];",
+        "Array.from({ length: 500 }).forEach(() => { try { boom(); } catch (e) { held.push(e); } });",
+        'console.log("HELD:" + held.length);',
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["", "--mode=bytecode"]) {
+      const run = await $`${LOADER} ${join(memDir, "main.js")} --max-memory=262144 --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes("Object reference is Nil") || out.includes("Range check"))
+        throw new Error(
+          `Loader (${mode || "interpreted"}) crashed under a diagnostic memory bound: ${out}`,
+        );
+      if (out.includes("HELD:500"))
+        throw new Error(
+          `Loader (${mode || "interpreted"}) retained 500 diagnostic excerpts past --max-memory (unbounded): ${out}`,
+        );
+      if (!out.includes("RangeError") && !out.includes("exceed the memory budget"))
+        throw new Error(
+          `Loader (${mode || "interpreted"}) should hit the memory ceiling, got: ${out}`,
+        );
+    }
+
+    // Virtual-module ownership: a module the HOST injected (`--module`) is
+    // host-owned even though the GUEST imports it and a genuine error is thrown
+    // from inside it. The guest must see the fault's location but never the
+    // module's source text. (The guest has no API to inject a virtual module, so
+    // every virtual module is host-provided; ownership is decided at load, not
+    // inferred from who is running when the frame is captured.)
+    const vmMarker = "VIRTUAL_MODULE_BODY_SOURCE_XZ";
+    const vmMain = join(tmp, "vmodule-main.js");
+    writeFileSync(vmMain, ['import { boom } from "virtual:secret";', "boom();", ""].join("\n"));
+    const vmDef =
+      `virtual:secret=// ${vmMarker}\n` +
+      "export const boom = () => { const z = null; return z.x; };";
+    for (const mode of ["", "--mode=bytecode"]) {
+      const run = await $`${LOADER} ${vmMain} --module ${vmDef} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes(vmMarker))
+        throw new Error(
+          `SECURITY: Loader (${mode || "interpreted"}) disclosed a host --module's source to a guest: ${out}`,
+        );
+      if (!out.includes("virtual:secret:"))
+        throw new Error(
+          `Loader (${mode || "interpreted"}) should still locate the fault in the virtual module, got: ${out}`,
+        );
+    }
+
+    // Canonical-identity ownership: a second spelling of a host-preloaded file
+    // must resolve to its first, host-owned entry. POSIX uses device+inode;
+    // Windows uses volume serial + file index from the already-open handle.
+    const aliasMarker = "HOST_FILE_VIA_ALIAS_SOURCE_XZ";
+    const aliasChildMarker = "HOST_ALIAS_TRANSITIVE_IMPORT_SOURCE_XZ";
+    const hostDirectory = join(tmp, "canonical-host");
+    mkdirSync(hostDirectory, { recursive: true });
+    const aliasChildSource = [
+      `// ${aliasChildMarker}`,
+      `throw new Error("alias child failed"); // ${aliasChildMarker}`,
+      "export const never = 1;",
+      "",
+    ].join("\n");
+    writeFileSync(join(hostDirectory, "alias-child.js"), aliasChildSource);
+    // A symlink/hardlink module resolves a relative child beside the alias;
+    // a directory junction resolves it inside hostDirectory. Populate both
+    // locations with the same source so each platform exercises its real rule.
+    writeFileSync(join(tmp, "alias-child.js"), aliasChildSource);
+    const realHost = join(hostDirectory, "real-host.js");
+    writeFileSync(
+      realHost,
+      [
+        `// ${aliasMarker}`,
+        "export const boom = () => { const z = null; return z.x; };",
+        'export const loadAliasChild = () => import("./alias-child.js");',
+        "",
+      ].join("\n"),
+    );
+    const aliases: Array<{ path: string; label: string }> = [];
+    if (process.platform === "win32") {
+      const hardlink = join(tmp, "hardlink-host.js");
+      try {
+        linkSync(realHost, hardlink);
+        aliases.push({ path: hardlink, label: "hardlink" });
+      } catch {
+        // The filesystem may not support hardlinks in the CI workspace.
+      }
+      const junctionDirectory = join(tmp, "junction-host");
+      try {
+        symlinkSync(hostDirectory, junctionDirectory, "junction");
+        aliases.push({
+          path: join(junctionDirectory, "real-host.js"),
+          label: "junction",
+        });
+      } catch {
+        // Junction creation can be disabled by the runner's filesystem policy.
+      }
+    } else {
+      const symlink = join(tmp, "symlink-host.js");
+      try {
+        symlinkSync(realHost, symlink);
+        aliases.push({ path: symlink, label: "symlink" });
+      } catch {
+        // Some filesystems disallow symlinks; skip rather than false-fail.
+      }
+    }
+    for (const alias of aliases) {
+      if (!existsSync(alias.path)) continue;
+      const aliasMain = join(tmp, `${alias.label}-main.js`);
+      const relativeAlias = `./${alias.path
+        .slice(tmp.length + 1)
+        .replace(/\\/g, "/")}`;
+      writeFileSync(
+        aliasMain,
+        [`import { boom } from "${relativeAlias}";`, "boom();", ""].join("\n"),
+      );
+      for (const mode of ["", "--mode=bytecode"]) {
+        const run = await $`${LOADER} ${aliasMain} --globals ${realHost} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
+        const out = run.text();
+        if (out.includes(aliasMarker))
+          throw new Error(
+            `SECURITY: Loader (${mode || "interpreted"}) disclosed a host file's source via a Windows/POSIX ${alias.label}: ${out}`,
+          );
+      }
+
+      const transitiveMain = join(tmp, `${alias.label}-transitive-main.js`);
+      writeFileSync(
+        transitiveMain,
+        [
+          `import { loadAliasChild } from "${relativeAlias}";`,
+          "await loadAliasChild();",
+          "",
+        ].join("\n"),
+      );
+      for (const mode of ["", "--mode=bytecode"]) {
+        const run = await $`${LOADER} ${transitiveMain} --globals ${realHost} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
+        const out = run.text();
+        if (run.exitCode === 0 || !out.includes("alias-child.js:2:"))
+          throw new Error(
+            `Loader (${mode || "interpreted"}) should locate the ${alias.label} host child failure, got: ${out}`,
+          );
+        if (out.includes(aliasChildMarker))
+          throw new Error(
+            `SECURITY: Loader (${mode || "interpreted"}) disclosed source imported through a host ${alias.label}: ${out}`,
+          );
+      }
+    }
   } finally {
     clean(tmp);
   }

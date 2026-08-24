@@ -42,9 +42,16 @@ type
   EGocciaBytecodeThrow = class(Exception)
   private
     FThrownValue: TGocciaValue;
+    FSuggestion: string;
   public
-    constructor Create(const AThrownValue: TGocciaValue);
+    constructor Create(const AThrownValue: TGocciaValue;
+      const ASuggestion: string = '');
     property ThrownValue: TGocciaValue read FThrownValue;
+    { The engine-authored "Suggestion:" line of the diagnostic, carried across
+      the VM unwind so a throw that escapes to a host runner renders the same
+      hint the tree-walk evaluator's TGocciaThrowValue would. Empty for a
+      user-authored `throw`. }
+    property Suggestion: string read FSuggestion;
   end;
 
 // A JS throw escaping the bytecode VM through a native builtin arrives as
@@ -64,7 +71,8 @@ uses
 procedure ReraiseBytecodeThrow(const AException: Exception);
 begin
   if AException is EGocciaBytecodeThrow then
-    raise TGocciaThrowValue.Create(EGocciaBytecodeThrow(AException).ThrownValue);
+    raise TGocciaThrowValue.Create(EGocciaBytecodeThrow(AException).ThrownValue,
+      EGocciaBytecodeThrow(AException).Suggestion);
 end;
 
 procedure TGocciaBytecodeHandlerStack.Push(const ACatchIP: Integer;
@@ -132,7 +140,8 @@ begin
   Result := FCount = 0;
 end;
 
-constructor EGocciaBytecodeThrow.Create(const AThrownValue: TGocciaValue);
+constructor EGocciaBytecodeThrow.Create(const AThrownValue: TGocciaValue;
+  const ASuggestion: string);
 var
   MessageText: string;
   ErrorObject: TGocciaObjectValue;
@@ -156,6 +165,7 @@ begin
   end;
   inherited Create(MessageText);
   FThrownValue := AThrownValue;
+  FSuggestion := ASuggestion;
 end;
 
 end.

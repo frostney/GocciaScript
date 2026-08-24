@@ -1228,7 +1228,8 @@ begin
       Exit(OriginalContent);
 
     Result := TGocciaModuleContent.Create(HarnessPrelude + sLineBreak +
-      OriginalContent.Text, OriginalContent.LastModified);
+      OriginalContent.Text, OriginalContent.LastModified,
+      OriginalContent.CanonicalIdentity, OriginalContent.IdentityRequired);
   except
     OriginalContent.Free;
     raise;
@@ -1631,13 +1632,17 @@ begin
                 on E: EGocciaBytecodeThrow do
                 begin
                   WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue,
-                    DisplayName, Source, IsColorTerminal));
+                    DisplayName, Source, IsColorTerminal,
+                    Engine.ModuleLoader.DiagnosticScope.Principal,
+                    E.Suggestion));
                   Result := 1;
                 end;
                 on E: TGocciaThrowValue do
                 begin
                   WriteLn(ErrOutput, FormatThrowDetail(E.Value, DisplayName,
-                    Source, IsColorTerminal, E.Suggestion));
+                    Source, IsColorTerminal,
+                    Engine.ModuleLoader.DiagnosticScope.Principal,
+                    E.Suggestion));
                   Result := 1;
                 end;
               end;

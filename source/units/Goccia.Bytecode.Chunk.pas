@@ -10,7 +10,8 @@ uses
   CriticalSections,
   OrderedStringMap,
 
-  Goccia.Bytecode.Debug;
+  Goccia.Bytecode.Debug,
+  Goccia.Error.CallDiagnostics;
 
 type
   TGocciaBytecodeConstantKind = (
@@ -154,6 +155,22 @@ type
   end;
   PGocciaProtoReadCacheEntry = ^TGocciaProtoReadCacheEntry;
 
+  // One call/construct site's callee, as the author wrote it. Recorded by the
+  // compiler at emit time and read by the VM only on the throw path, so a
+  // non-callable callee is named identically in both execution modes (see
+  // Goccia.Error.CallDiagnostics).
+  TGocciaCallSiteEntry = record
+    PC: UInt32;
+    Callee: TGocciaCalleeDescriptor;
+    // The call expression's own position, which is where the tree-walk
+    // evaluator points a "not a function" diagnostic. The instruction line map
+    // resolves to the enclosing statement instead, so the position is carried
+    // here rather than read back off the debug info.
+    Line: Integer;
+    Column: Integer;
+    Recorded: Boolean;
+  end;
+
   TGocciaFunctionTemplate = class
   private
     FName: string;
@@ -217,6 +234,11 @@ type
     FPropertyReadCaches: array of TGocciaPropertyReadCacheEntry;
     FProtoReadCaches: array of TGocciaProtoReadCacheEntry;
     FPropertyReadSlotCount: Integer;
+    // Runtime-only, appended in ascending PC order by the compiler and never
+    // serialised to .gbc — a module loaded from binary bytecode simply falls
+    // back to the runtime-type-name form of the "is not a function" message.
+    FCallSites: array of TGocciaCallSiteEntry;
+    FCallSiteCount: Integer;
     function PropertyReadSlot(const AConstIndex: Integer): Integer;
     function GetFunctionCount: Integer;
   public
@@ -226,6 +248,17 @@ type
     function EmitInstruction(const AInstruction: UInt64;
       const AForceWide: Boolean = False): Integer;
     procedure PatchInstruction(const AIndex: Integer; const AInstruction: UInt64);
+    { Records the callee of the call/construct instruction that starts at APC.
+      APC must be the value CodeCount had immediately before the instruction
+      was emitted, which is what the VM sees as the instruction's start IP
+      (an OP_WIDE prefix included). Call sites must be recorded in ascending
+      PC order. }
+    procedure AddCallSite(const APC: UInt32;
+      const ACallee: TGocciaCalleeDescriptor; const ALine, AColumn: Integer);
+    { The call site recorded for the instruction starting at APC. Result.Recorded
+      is False when none was (binary-loaded bytecode, or a call the compiler
+      emits itself rather than from a source call expression). }
+    function CallSiteAt(const APC: UInt32): TGocciaCallSiteEntry;
     function AddConstantNil: UInt16;
     function AddConstantBoolean(const AValue: Boolean): UInt16;
     function AddConstantInteger(const AValue: Int64): UInt16;
@@ -455,6 +488,43 @@ begin
   FCode[FCodeCount] := UInt32(AInstruction and $FFFFFFFF);
   Result := FCodeCount;
   Inc(FCodeCount);
+end;
+
+procedure TGocciaFunctionTemplate.AddCallSite(const APC: UInt32;
+  const ACallee: TGocciaCalleeDescriptor; const ALine, AColumn: Integer);
+begin
+  if FCallSiteCount >= Length(FCallSites) then
+    SetLength(FCallSites, FCallSiteCount * 2 + 8);
+  FCallSites[FCallSiteCount].PC := APC;
+  FCallSites[FCallSiteCount].Callee := ACallee;
+  FCallSites[FCallSiteCount].Line := ALine;
+  FCallSites[FCallSiteCount].Column := AColumn;
+  FCallSites[FCallSiteCount].Recorded := True;
+  Inc(FCallSiteCount);
+end;
+
+function TGocciaFunctionTemplate.CallSiteAt(
+  const APC: UInt32): TGocciaCallSiteEntry;
+var
+  Low, High, Middle: Integer;
+begin
+  Result.PC := APC;
+  Result.Callee := EmptyCalleeDescriptor;
+  Result.Line := 0;
+  Result.Column := 0;
+  Result.Recorded := False;
+  Low := 0;
+  High := FCallSiteCount - 1;
+  while Low <= High do
+  begin
+    Middle := Low + (High - Low) div 2;
+    if FCallSites[Middle].PC = APC then
+      Exit(FCallSites[Middle])
+    else if FCallSites[Middle].PC < APC then
+      Low := Middle + 1
+    else
+      High := Middle - 1;
+  end;
 end;
 
 procedure TGocciaFunctionTemplate.PatchInstruction(const AIndex: Integer;

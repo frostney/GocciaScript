@@ -11,6 +11,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.CapabilityAudit,
+  Goccia.Diagnostics.SourceRegistry,
   Goccia.Engine,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
@@ -119,6 +120,18 @@ type
     property GatedElements: TCollectingElementList read FGatedElements;
   end;
 
+  { Raises at a deterministic index insertion, standing in for an allocator
+    failure during the registry's commit phase. }
+  TFailingDiagnosticSourceScope = class(TGocciaDiagnosticSourceScope)
+  private
+    FFailAtIndex: Integer;
+  protected
+    procedure AfterIndexCommit(const AIndex: Integer); override;
+  public
+    constructor Create(const AFailAtIndex: Integer);
+    property FailAtIndex: Integer read FFailAtIndex write FFailAtIndex;
+  end;
+
   TMemoryLimitTests = class(TTestSuite)
   private
     { The class the sandbox injection points raise, or nil for "raise nothing".
@@ -211,6 +224,10 @@ type
     procedure TestSandboxFsPromiseCannotSwallowIntegrityFault;
     procedure TestSandboxFsPromiseErrorsStayCatchable;
     procedure TestResponseJsonCannotSwallowAuditDeliveryFailure;
+    procedure TestDiagnosticIdentityFailureFailsClosed;
+    procedure TestDiagnosticCanonicalIdentityKeepsHostOwnership;
+    procedure TestDiagnosticSourceAccountingUsesRetainedBytes;
+    procedure TestDiagnosticRegistryCommitRollsBack;
   protected
     procedure BeforeEach; override;
   public
@@ -342,8 +359,31 @@ begin
   TGarbageCollector.Initialize;
 end;
 
+constructor TFailingDiagnosticSourceScope.Create(
+  const AFailAtIndex: Integer);
+begin
+  inherited Create;
+  FFailAtIndex := AFailAtIndex;
+end;
+
+procedure TFailingDiagnosticSourceScope.AfterIndexCommit(
+  const AIndex: Integer);
+begin
+  inherited AfterIndexCommit(AIndex);
+  if AIndex = FFailAtIndex then
+    raise EOutOfMemory.Create('injected diagnostic registry allocation failure');
+end;
+
 procedure TMemoryLimitTests.SetupTests;
 begin
+  Test('Diagnostic file identity failure disables source disclosure',
+    TestDiagnosticIdentityFailureFailsClosed);
+  Test('Diagnostic canonical identity preserves first host ownership',
+    TestDiagnosticCanonicalIdentityKeepsHostOwnership);
+  Test('Diagnostic source caps and reservations use retained UTF-16 bytes',
+    TestDiagnosticSourceAccountingUsesRetainedBytes);
+  Test('Diagnostic registry commit rolls back indexes and reservation',
+    TestDiagnosticRegistryCommitRollsBack);
   Test('The gate refuses a request larger than the remaining budget',
     TestGateRefusesOverBudgetRequest);
   Test('The gate permits a request that fits the remaining budget',
@@ -1784,6 +1824,193 @@ begin
   finally
     FInstallFailingAuditSink := False;
   end;
+end;
+
+procedure TMemoryLimitTests.TestDiagnosticIdentityFailureFailsClosed;
+var
+  FirstLine: Integer;
+  Scope: TGocciaDiagnosticSourceScope;
+  Window: TStringList;
+begin
+  Scope := TGocciaDiagnosticSourceScope.Create;
+  Window := TStringList.Create;
+  try
+    { A filesystem content provider explicitly requires a handle-derived
+      identity. Blank means that lookup failed; retaining it under a lexical
+      spelling would let a later alias bypass host ownership. }
+    Scope.Register('unidentified-host.js', 'HOST_SECRET', True, '', True);
+    Expect<Int64>(Scope.RetainedBytes).ToBe(0);
+
+    { Once any filesystem identity is unresolved, no source in this scope is
+      disclosed: a later successfully-identified path could still alias the
+      unknown host file. Locations remain available outside this registry. }
+    Scope.Register('apparently-guest.js', 'GUEST_SOURCE', False,
+      '#test:guest-file', True);
+    Expect<Boolean>(Scope.TryGetGuestWindow('apparently-guest.js', 1, 0, 0,
+      Window, FirstLine)).ToBe(False);
+    Expect<Integer>(Window.Count).ToBe(0);
+  finally
+    Window.Free;
+    Scope.Free;
+  end;
+end;
+
+procedure TMemoryLimitTests.TestDiagnosticCanonicalIdentityKeepsHostOwnership;
+var
+  FirstLine: Integer;
+  RetainedAfterHost: Int64;
+  Scope: TGocciaDiagnosticSourceScope;
+  Window: TStringList;
+begin
+  Scope := TGocciaDiagnosticSourceScope.Create;
+  Window := TStringList.Create;
+  try
+    Scope.Register('host-spelling.js', 'HOST_ALIAS_SECRET', True,
+      '#test:volume-and-file-index', True);
+    RetainedAfterHost := Scope.RetainedBytes;
+    Expect<Boolean>(RetainedAfterHost > 0).ToBe(True);
+
+    { The same opened-file identity under another spelling is not enrolled as
+      a second guest entry. First registration wins, so the host classification
+      is durable across symlinks, junctions, hardlinks, and case aliases. }
+    Scope.Register('guest-alias.js', 'HOST_ALIAS_SECRET', False,
+      '#test:volume-and-file-index', True);
+    Expect<Int64>(Scope.RetainedBytes).ToBe(RetainedAfterHost);
+    Expect<Boolean>(Scope.TryGetGuestWindow('guest-alias.js', 1, 0, 0,
+      Window, FirstLine)).ToBe(False);
+    Expect<Boolean>(Scope.TryGetGuestWindow('host-spelling.js', 1, 0, 0,
+      Window, FirstLine)).ToBe(False);
+  finally
+    Window.Free;
+    Scope.Free;
+  end;
+end;
+
+procedure TMemoryLimitTests.TestDiagnosticSourceAccountingUsesRetainedBytes;
+var
+  AccountedBytes, BaselineBytes: Int64;
+  GC: TGarbageCollector;
+  ManyLines: TStringList;
+  ManyLinesText, OneUnit, TwoUnits: string;
+  PreviousMaxBytes: Int64;
+  Probe, Scope: TGocciaDiagnosticSourceScope;
+  I: Integer;
+begin
+  OneUnit := UnicodeString(WideChar($00E9));
+  TwoUnits := UnicodeString(WideChar($D83D)) + WideChar($DE00);
+  Expect<Integer>(Length(OneUnit)).ToBe(1);
+  Expect<Integer>(Length(TwoUnits)).ToBe(2);
+  Expect<Int64>(DiagnosticStringRetainedBytes(TwoUnits) -
+    DiagnosticStringRetainedBytes(OneUnit)).ToBe(SizeOf(Char));
+
+  { Measure the exact retained representation once, then prove the same figure
+    is both the registry counter and the collector reservation. }
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  BaselineBytes := GC.BytesAllocated;
+  Scope := TGocciaDiagnosticSourceScope.Create;
+  try
+    Scope.Register('unicode.js', OneUnit + TwoUnits + sLineBreak + OneUnit,
+      False, '#test:unicode-source', True);
+    AccountedBytes := Scope.RetainedBytes;
+    Expect<Boolean>(AccountedBytes >
+      DiagnosticStringRetainedBytes(OneUnit + TwoUnits + sLineBreak +
+        OneUnit)).ToBe(True);
+    Expect<Int64>(GC.BytesAllocated - BaselineBytes).ToBe(AccountedBytes);
+  finally
+    Scope.Free;
+  end;
+  Expect<Int64>(GC.BytesAllocated).ToBe(BaselineBytes);
+
+  { One byte less than the measured retained figure must refuse the source and
+    must not leave any uncharged representation behind. }
+  Probe := TGocciaDiagnosticSourceScope.Create;
+  try
+    Probe.Register('probe.js', OneUnit + TwoUnits + sLineBreak + OneUnit,
+      False, '#test:probe-source', True);
+    AccountedBytes := Probe.RetainedBytes;
+  finally
+    Probe.Free;
+  end;
+  GC.Collect;
+  BaselineBytes := GC.BytesAllocated;
+  PreviousMaxBytes := GC.MaxBytes;
+  Scope := TGocciaDiagnosticSourceScope.Create;
+  try
+    GC.MaxBytes := BaselineBytes + AccountedBytes - 1;
+    Scope.Register('refused.js', OneUnit + TwoUnits + sLineBreak + OneUnit,
+      False, '#test:refused-source', True);
+    Expect<Int64>(Scope.RetainedBytes).ToBe(0);
+  finally
+    Scope.Free;
+    GC.MaxBytes := PreviousMaxBytes;
+  end;
+
+  { UTF-16 content length alone is below the per-module cap, but splitting
+    many short lines retains a header plus container slots for every line. The
+    actual representation crosses the cap and must therefore be rejected. }
+  ManyLines := TStringList.Create;
+  try
+    for I := 1 to 20000 do
+      ManyLines.Add(OneUnit);
+    ManyLinesText := ManyLines.Text;
+  finally
+    ManyLines.Free;
+  end;
+  Expect<Boolean>(DiagnosticStringRetainedBytes(ManyLinesText) <
+    GOCCIA_DIAGNOSTIC_SOURCE_CAP_BYTES).ToBe(True);
+  Scope := TGocciaDiagnosticSourceScope.Create;
+  try
+    Scope.Register('many-lines.js', ManyLinesText, False,
+      '#test:many-lines-source', True);
+    Expect<Int64>(Scope.RetainedBytes).ToBe(0);
+  finally
+    Scope.Free;
+  end;
+end;
+
+procedure TMemoryLimitTests.TestDiagnosticRegistryCommitRollsBack;
+var
+  BaselineBytes: Int64;
+  FirstLine: Integer;
+  GC: TGarbageCollector;
+  Raised: Boolean;
+  Scope: TFailingDiagnosticSourceScope;
+  Window: TStringList;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  BaselineBytes := GC.BytesAllocated;
+  Scope := TFailingDiagnosticSourceScope.Create(2);
+  Window := TStringList.Create;
+  try
+    Raised := False;
+    try
+      Scope.Register('transaction.js', 'const transaction = true;', False,
+        '#test:transaction-source', True);
+    except
+      on E: EOutOfMemory do
+        Raised := True;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+    Expect<Int64>(Scope.RetainedBytes).ToBe(0);
+    Expect<Int64>(GC.BytesAllocated).ToBe(BaselineBytes);
+    Expect<Boolean>(Scope.TryGetGuestWindow('transaction.js', 1, 0, 0,
+      Window, FirstLine)).ToBe(False);
+
+    { A retry of the same identity succeeds after disarming the injected
+      failure, proving the failed transaction left no inaccessible map entry. }
+    Scope.FailAtIndex := 0;
+    Scope.Register('transaction.js', 'const transaction = true;', False,
+      '#test:transaction-source', True);
+    Expect<Boolean>(Scope.RetainedBytes > 0).ToBe(True);
+    Expect<Boolean>(Scope.TryGetGuestWindow('transaction.js', 1, 0, 0,
+      Window, FirstLine)).ToBe(True);
+  finally
+    Window.Free;
+    Scope.Free;
+  end;
+  Expect<Int64>(GC.BytesAllocated).ToBe(BaselineBytes);
 end;
 
 begin

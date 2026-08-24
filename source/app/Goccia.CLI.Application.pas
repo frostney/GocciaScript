@@ -849,7 +849,7 @@ begin
     ManifestLoader.BindRuntime(AEngine.Interpreter.GlobalScope,
       AEngine.ThrowError);
 
-    ManifestModule := ManifestLoader.LoadModule(APath, APath);
+    ManifestModule := ManifestLoader.LoadHostModule(APath, APath);
     if not ManifestModule.TryGetExportValue(KEYWORD_DEFAULT, DefaultValue) then
       raise EArgumentException.Create(
         'Virtual modules manifest module must have a default export.');

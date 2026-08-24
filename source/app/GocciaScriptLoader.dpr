@@ -109,6 +109,7 @@ type
     FGlobalFiles: TRepeatableOption;
     FInlineGlobals: TRepeatableOption;
     FLastPaths: TStringList;
+    FLastDiagnosticPrincipal: Int64;
 
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
     procedure InitializeRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
@@ -566,6 +567,7 @@ begin
   try
     Engine := CreateEngine(AFileName, ASource, Executor);
     try
+      FLastDiagnosticPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
       Engine.SuppressWarnings := GIsWorkerThread or
         IsJsonOutput;
       ConfigureConsole(RuntimeConsole(Engine), ACapture);
@@ -625,6 +627,7 @@ begin
   try
     Engine := CreateEngine(AFileName, ASource, Executor);
     try
+      FLastDiagnosticPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
       ConfigureConsole(RuntimeConsole(Engine), ACapture);
       ApplyDataGlobalsToEngine(Engine);
 
@@ -699,6 +702,7 @@ begin
     try
       Engine := CreateEngine(AFileName, nil, Executor);
       try
+        FLastDiagnosticPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
         Engine.RetainModule(Module);
         RetainedModule := Module;
         Module := nil;
@@ -786,6 +790,7 @@ var
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
   StartTime: Int64;
 begin
+  FLastDiagnosticPrincipal := 0;
   FillChar(Report, SizeOf(Report), 0);
   Report.ResultValue := nil;
   Report.MemoryStats := DefaultCLIJSONMemoryStats;
@@ -832,9 +837,13 @@ begin
           else if E is TGocciaError then
             WriteLn(FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal))
           else if E is TGocciaThrowValue then
-            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, ASource, IsColorTerminal, TGocciaThrowValue(E).Suggestion))
+            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName,
+              ASource, IsColorTerminal, FLastDiagnosticPrincipal,
+              TGocciaThrowValue(E).Suggestion))
           else if E is EGocciaBytecodeThrow then
-            WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue, AFileName, ASource, IsColorTerminal))
+            WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
+              AFileName, ASource, IsColorTerminal, FLastDiagnosticPrincipal,
+              EGocciaBytecodeThrow(E).Suggestion))
           else
             WriteLn('Fatal error: ', E.Message);
         end;

@@ -166,6 +166,114 @@ The `--profile` option on GocciaScriptLoader enables language-level profiling of
 
 The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Coverage.pas`). When profiling is disabled, a predictable boolean guard remains in the dispatch loop. Enabled-mode overhead depends on the workload and profiling mode, so measure it on the corpus being investigated rather than relying on a fixed percentage.
 
+## Runtime Error Diagnostics
+
+A runtime fault must read identically in both execution modes. Three pieces of
+machinery keep that true:
+
+- **Call-site descriptors.** `TGocciaFunctionTemplate` carries a runtime-only
+  table mapping a call/construct instruction's start PC to the callee as the
+  author wrote it (a `TGocciaCalleeDescriptor` from `Goccia.Error.CallDiagnostics`)
+  plus the call expression's own line and column. The compiler fills it while
+  emitting `OP_CALL`, `OP_CALL_METHOD`, `OP_CONSTRUCT`, `OP_CONSTRUCT_SPREAD`
+  and tagged-template calls — a **compile-time cost paid once per call site** (a
+  descriptor copy plus a whitespace-normalising pass over the callee's source
+  text), not a per-instruction runtime cost. The VM reads the table only when
+  the callee turns out not to be callable or constructable, so
+  `obj.missingMethod()` reports `obj.missingMethod is not a function` rather
+  than `undefined is not a function`. The evaluator derives the same descriptor
+  straight from the AST, and both modes format the message and suggestion
+  through the same functions. The table is **not** serialised to `.gbc`: a
+  module loaded from binary bytecode falls back to the runtime-type-name form of
+  the message (see the note below).
+- **Throw-path source positions.** Deferred call frames carry no position
+  ([ADR 0074](adr/0074-deferred-bytecode-call-stack-frames.md)), which left
+  every bytecode-mode stack frame at `file:0:0` and the runner with no line to
+  render a code frame for. `TGocciaCallStack.SetTopFrameLocation` stamps the
+  executing frame with a position. The dispatch loop's ordinary
+  call/property/index instructions never call it, so their throughput is
+  unchanged; it runs on the failure paths (a fault about to be raised) and, in
+  addition, once per `new` reaching `ConstructValue` — a native constructor such
+  as `new Error(...)` captures its trace *during* construction, before any
+  throw, so its caller frame must be stamped up front (a small per-`new` cost: a
+  binary search over the function's call-site table plus two string
+  assignments). `TGocciaVM.StampThrowLocation` recovers the current instruction
+  for throw paths outside the dispatch loop through a pointer probe into the
+  innermost loop's `Template`/`InstructionStartIP` locals, saved and restored
+  once per native re-entry.
+- **Frame source is provenance-bound, not `stack`-selected.** A code frame is
+  rendered only from provenance the engine records on a genuine error *when it
+  is created* — the top call frame's source location, plus a ±context excerpt of
+  that module captured from the engine's own per-scope source store. Both are
+  carried on the error object (`TGocciaErrorObjectValue`, an error-only subclass
+  so the fields never enlarge the base object's GC-charged size). The thrown
+  value's `stack` string is guest-writable and is never parsed to choose a file,
+  a line, or an excerpt: a forged `throw { stack: "…at f (/etc/passwd:2:1)" }`
+  object is not engine-created, carries no provenance, and renders no code frame
+  at all — so no host ever opens a guest-named path and the sandbox's
+  `sandbox.fs.path` gate cannot be bypassed through diagnostics. See
+  `Goccia.Values.ErrorHelper.AttachErrorSourceProvenance`,
+  `Goccia.Diagnostics.SourceRegistry`, and docs/module-resolution.md
+  "Runtime code frames".
+- **Principal exclusion — no host source to a guest.** Ownership is decided at
+  load, not inferred at capture. Host enrollment (`--globals`,
+  `--host-environment`, `--module`, `--modules`, manifests/configs, and embedding
+  injection) stamps the root module host-owned. Static, dynamic, and deferred
+  imports inherit that ownership transitively from the importing module, even
+  when the load begins later from a host-exported function called by the guest.
+  A host-injected virtual module is host-owned; imports reached only from a guest
+  module are guest-owned. Entries use file identity from the handle that read
+  the content: POSIX device+inode or Windows volume-serial+file-index. Symlinks,
+  junctions, hardlinks, and case aliases therefore cannot mint a guest-owned
+  second copy. If identity lookup fails, there is no lexical-path fallback and
+  source disclosure for the scope fails closed. An excerpt is captured only
+  from guest-owned source, so a genuine error thrown inside a host module —
+  including a transitive import, a `--module` the guest imported, or a held
+  `Error` the host created — shows its location but no source excerpt.
+- **Executing-engine scope, enforced again at render.** Each engine's module
+  loader owns one scope, identified by a durable process-monotonic principal;
+  registration targets the loader's own scope, and capture targets the scope the
+  engine activates around its execution (`RunModuleForSourceType` for bytecode,
+  `Execute`/`ExecuteProgram` for the interpreter) — and around every cross-engine
+  transition (`ActivateRealmExecutionContext` for a ShadowRealm `evaluate`/
+  `importValue`/wrapped function activates the child scope and restores it on
+  return). The excerpt is additionally stamped with its principal and re-checked
+  when rendered: each host explicitly passes its expected principal to
+  `Goccia.Error.Detail`, which renders source only when the two values match.
+  Zero/no supplied principal means location-only; no active execution scope is
+  never treated as authorization. A child's error formatted by a resumed parent
+  is therefore refused the child's source even though the object crossed the
+  boundary. Because the excerpt is captured while its scope is live, a host may
+  still render it after `Engine.Free` only if it retained and supplies the
+  originating engine's principal.
+- **Byte-accurate diagnostic memory.** Retained module source is accounted as
+  its actual UTF-16 line representation, including entry/list storage, pointer
+  slots, and separately allocated line strings. A captured excerpt is charged
+  as its retained UTF-16 string allocation. The identical byte figure is used
+  for caps, `--max-memory` reservation, and release. Reservation refusal yields
+  location-only, and transactional registry insertion rolls back partial map
+  keys and the reservation if allocation fails during commit.
+- **Construct/native-call frame stamping.** A successful `OP_CONSTRUCT` /
+  `OP_CONSTRUCT_SPREAD` snapshots and restores the caller frame around
+  `ConstructValue`, so a constructor's position does not leak onto a later throw
+  (`new Map(); JSON.parse("{")` reports the JSON fault at its own line, not the
+  `new`). Native calls stamp the call site around the invoke, likewise restored,
+  so a native callee's error carries a location rather than `0:0`.
+
+### `.gbc` parity note
+
+The call-site descriptor table is intentionally runtime-only, so a module
+executed straight from a compiled `.gbc` (rather than compiled in-process from
+source) has no descriptors: its non-callable/non-constructor faults fall back to
+the runtime-type-name form (`undefined is not a function`) and carry no
+suggestion, where an in-process compile would name the callee. This is the one
+diagnostic-parity gap left open. Serialising the table would close it at the
+cost of a new bytecode-format section (callee text, object/property text, kind,
+line, column per call site) and its verifier; that is a bounded but real format
+change, deferred rather than taken here because the `.gbc` path is not on the
+default runner or test surface. Revisit if binary modules become a primary
+execution path.
+
 ## Instruction Limit
 
 The dispatch loop supports an optional instruction counter (`Goccia.InstructionLimit.pas`). When armed, the counter increments on every dispatched instruction and the limit is checked at the top of each iteration. When disabled, only the guard read of the limit threadvar remains on the hot path. See [Embedding — Execution Limits](embedding.md#execution-limits) for the full API and interpreter-mode behavior.

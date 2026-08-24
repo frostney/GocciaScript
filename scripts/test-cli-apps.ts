@@ -2104,6 +2104,52 @@ await section("Loader: --host-environment module controls time, zone, and random
   }
 });
 
+await section("Loader: --host-environment errors withhold provider source...", async () => {
+  const tmp = makeTmp();
+  try {
+    const marker = "HOST_ENVIRONMENT_PRIVATE_SOURCE_XZ";
+    const providerPath = join(tmp, "host-environment-secret.js");
+    writeFileSync(
+      providerPath,
+      [
+        "export const epochNanoseconds = () => 1700000000000000000n;",
+        "export const monotonicNanoseconds = () => 0n;",
+        'export const timeZoneIdentifier = () => "UTC";',
+        `export const random = () => new Map().get("x"); // ${marker}`,
+        "",
+      ].join("\n"),
+    );
+    const guestPath = join(tmp, "host-environment-guest.js");
+    writeFileSync(
+      guestPath,
+      ["Map.prototype.get = null;", "Math.random();", ""].join("\n"),
+    );
+
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const proc = Bun.spawnSync(
+        [
+          LOADER,
+          guestPath,
+          `--host-environment=${providerPath}`,
+          `--mode=${mode}`,
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode === 0 || !output.includes("host-environment-secret.js:4:"))
+        throw new Error(
+          `Loader host environment ${mode} should locate the provider throw, got: ${output}`,
+        );
+      if (output.includes(marker))
+        throw new Error(
+          `SECURITY: Loader host environment ${mode} disclosed provider source: ${output}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --global option...", async () => {
   const { json } = runLoaderJson("x + y;\n", ["--global", "x=10", "--global", "y=20"]);
   if (json.files?.[0]?.result !== 30) throw new Error(`--global x+y should be 30, got ${json.files?.[0]?.result}`);
@@ -5462,6 +5508,229 @@ await section("REPL: repeated tagged template execution (interpreted + bytecode)
 // ============================================================================
 // GocciaSandboxRunner
 // ============================================================================
+
+await section("SandboxRunner: a thrown stack cannot read a host file into the diagnostic...", async () => {
+  // A code frame's source must come from what the engine parsed, not from a
+  // path lifted out of a script-controlled `stack` string. In the sandbox this
+  // is load-bearing: reading such a path would bypass the sandbox.fs.path
+  // capability gate and hand guest code the contents of any host file through
+  // the reported ErrorMessage/ErrorOutput.
+  const tmp = makeTmp();
+  try {
+    const secretPath = join(tmp, "HOST_SECRET.txt");
+    const secretMarker = "SANDBOX_HOST_SECRET_LEAKED";
+    writeFileSync(secretPath, `${secretMarker}\nsecond line\n`);
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            `const forged = { name: "Error", message: "forged", stack: "Error: forged\\n    at f (${secretPath.replace(/\\/g, "\\\\")}:1:1)" };`,
+            "throw forged;",
+          ].join("\n"),
+        },
+      ],
+    }));
+    for (const [label, extraArgs] of [
+      ["interpreter", []],
+      ["bytecode", ["--mode=bytecode"]],
+    ] as const) {
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const combined = proc.stdout.toString() + proc.stderr.toString();
+      if (combined.includes(secretMarker))
+        throw new Error(
+          `SECURITY: SandboxRunner ${label} leaked a host file named by a thrown stack: ${combined}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("SandboxRunner: a nested isolated child cannot read the parent's module source...", async () => {
+  // Regression for the disclosure the source registry introduced: the parent
+  // imports a module (registering its source), then runs an ISOLATED child
+  // seeded with only its own file. The child forges a frame naming the parent's
+  // module. Because a code frame is bound to engine-recorded provenance (never
+  // the guest `.stack`) and each engine has its own source scope, the child gets
+  // no frame and the parent module's source never crosses the boundary — even
+  // though the child's own filesystem correctly cannot open that path either.
+  const tmp = makeTmp();
+  try {
+    // Appears ONLY as /parent_secret.js's source content; never in the child's
+    // own code or the forged stack string, so any occurrence in output is a leak.
+    const leakMarker = "LEAKED_PARENT_SOURCE_XZ";
+    const seed = join(tmp, "seed.json");
+    // The child names the parent module in a forged stack but never contains the
+    // leak marker itself. It first proves it cannot read that path through its
+    // own (isolated) filesystem, so the only channel under test is the code
+    // frame.
+    const childForge = [
+      'import fs from "fs";',
+      "let childCanRead = true;",
+      "try { fs.readFileSync('/parent_secret.js'); } catch (e) { childCanRead = false; }",
+      "console.log('childCanRead:' + childCanRead);",
+      'const forged = { name: "Error", message: "child forged", stack: "Error: child forged\\n    at f (/parent_secret.js:1:1)" };',
+      "throw forged;",
+    ].join("\n");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/parent_secret.js",
+          text: `export const secret = 1; // ${leakMarker}`,
+        },
+        { path: "/child.js", text: childForge },
+        {
+          path: "/main.js",
+          text: [
+            'import { secret } from "/parent_secret.js";',
+            'import { runScript } from "goccia";',
+            "void secret;",
+            // Isolated child seeded with ONLY its own file; no /parent_secret.js.
+            'const child = runScript("/child.js", { sandbox: true, seed: [{ path: "/child.js", text: ' +
+              JSON.stringify(childForge) +
+              " }] });",
+            "console.log(child.stdout);",
+            "console.log(child.stderr);",
+            "console.log(child.error);",
+          ].join("\n"),
+        },
+      ],
+    }));
+    for (const [label, extraArgs] of [
+      ["interpreter", []],
+      ["bytecode", ["--mode=bytecode"]],
+    ] as const) {
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const combined = proc.stdout.toString() + proc.stderr.toString();
+      if (combined.includes(leakMarker))
+        throw new Error(
+          `SECURITY: SandboxRunner ${label} nested child disclosed the parent module source: ${combined}`,
+        );
+      // The channel under test is the code frame, not the filesystem: confirm
+      // the isolated child genuinely cannot read the parent module directly.
+      if (!combined.includes("childCanRead:false"))
+        throw new Error(
+          `SandboxRunner ${label}: expected the isolated child to lack FS access to /parent_secret.js, got: ${combined}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("SandboxRunner: a legitimate error in the child's own module still renders its code frame...", async () => {
+  // Feature-survival counterpart to the disclosure test: a genuine throw inside
+  // a module the child itself loaded must still produce that module's code frame
+  // in both modes (the fix must not blanket-disable frames).
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/boom.js",
+          text: [
+            "// boom filler 1",
+            "// boom filler 2",
+            "export const boom = (() => { throw new Error('own module exploded'); })();",
+          ].join("\n"),
+        },
+        {
+          path: "/main.js",
+          text: ['import { boom } from "/boom.js";', "void boom;"].join("\n"),
+        },
+      ],
+    }));
+    for (const [label, extraArgs] of [
+      ["interpreter", []],
+      ["bytecode", ["--mode=bytecode"]],
+    ] as const) {
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const combined = proc.stdout.toString() + proc.stderr.toString();
+      if (!combined.includes("own module exploded"))
+        throw new Error(`SandboxRunner ${label} should report the module error, got: ${combined}`);
+      if (!combined.includes("boom.js:3:") ||
+          !combined.includes("throw new Error('own module exploded')"))
+        throw new Error(
+          `SandboxRunner ${label} should render the child's own module code frame, got: ${combined}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("SandboxRunner: a nested child's genuine module source is withheld when the parent surfaces its error...", async () => {
+  // Render-time principal enforcement. The child GENUINELY throws inside a
+  // module it loaded itself, so the child engine captures a real code-frame
+  // excerpt (guest-owned, stamped with the child's principal). The parent then
+  // reads `child.error` — a string formatted while the PARENT scope is active.
+  // Capture-time filtering alone cannot stop this (the excerpt is legitimate in
+  // the child); the renderer must refuse an excerpt whose principal is not the
+  // active one. The parent must see the fault's location but never the child's
+  // source line. A sibling test above proves the SAME child, run at top level,
+  // does render its frame — so this is enforcement, not a blanket disable.
+  const tmp = makeTmp();
+  try {
+    const childMarker = "NESTED_CHILD_MODULE_SOURCE_XZ";
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/lib.js",
+          text: [
+            `// ${childMarker}`,
+            "export const boom = () => { const z = null; return z.x; };",
+          ].join("\n"),
+        },
+        {
+          path: "/child.js",
+          text: ['import { boom } from "/lib.js";', "boom();"].join("\n"),
+        },
+        {
+          path: "/main.js",
+          text: [
+            'import { runScript } from "goccia";',
+            'const c = runScript("/child.js", { sandbox: true, seed: ["/child.js", "/lib.js"] });',
+            "console.log(c.error);",
+          ].join("\n"),
+        },
+      ],
+    }));
+    for (const [label, extraArgs] of [
+      ["interpreter", []],
+      ["bytecode", ["--mode=bytecode"]],
+    ] as const) {
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const combined = proc.stdout.toString() + proc.stderr.toString();
+      if (combined.includes(childMarker))
+        throw new Error(
+          `SECURITY: SandboxRunner ${label} disclosed a nested child's module source when the parent surfaced its error: ${combined}`,
+        );
+      // The location must still be reported (only the source excerpt is gated).
+      if (!combined.includes("/lib.js:"))
+        throw new Error(
+          `SandboxRunner ${label} should still locate the nested child's fault, got: ${combined}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
 
 await section("SandboxRunner: fs callback APIs and promises defer filesystem work...", async () => {
   const tmp = makeTmp();
