@@ -105,25 +105,17 @@ describe("AsyncLocalStorage under garbage collection", () => {
   });
 
   test("interleaved chains survive collections between their resumptions", async () => {
-    // The chains are `.then` chains rather than async callbacks on purpose.
-    // Collecting from inside a bytecode async function that has already
-    // resumed from a suspension faults the VM, independently of this module —
-    // `(async () => { await Promise.resolve(); Goccia.gc(); })()` alone
-    // reproduces it on 0.13.0. A `.then` handler runs as an ordinary microtask
-    // job, which is the seam under test here anyway.
     const als = new AsyncLocalStorage();
     const observed = [];
     const chain = (tag) =>
-      als.run(tag, () =>
-        Promise.resolve()
-          .then(() => {
-            collect();
-            observed.push(tag === als.getStore());
-          })
-          .then(() => {
-            collect();
-            observed.push(tag === als.getStore());
-          }));
+      als.run(tag, async () => {
+        await Promise.resolve();
+        collect();
+        observed.push(tag === als.getStore());
+        await Promise.resolve();
+        collect();
+        observed.push(tag === als.getStore());
+      });
     await Promise.all([chain("a"), chain("b"), chain("c")]);
     expect(observed).toEqual([true, true, true, true, true, true]);
   });
