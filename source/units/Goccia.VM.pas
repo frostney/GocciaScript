@@ -9369,6 +9369,35 @@ begin
     Exit;
   end;
 
+  // A plain class value reaching the VM was built by the tree-walk evaluator
+  // (a bytecode class is TGocciaVMClassValue, handled above), so it has to be
+  // constructed by InstantiateClass. RedirectEvaluatorClassConstruct in
+  // Goccia.Evaluator.pas makes the same decision for the shared ConstructValue
+  // that Reflect.construct and species construction use. The two guards are
+  // deliberately NOT identical, on three axes:
+  //
+  //  1. Eligibility. Here: SourceText <> ''. There: DefinitionScope assigned.
+  //     Both mean "written in source and built by the evaluator", but source
+  //     text is suppressed for shim modules (Goccia.Shims.pas sets
+  //     HideFunctionSourceText), so a shim-defined class is declined here and
+  //     admitted there.
+  //  2. Native chain. Here: only this class's own native markers. There: a
+  //     walk of the whole superclass chain. This guard is the laxer one, and
+  //     measurably so — for `class A extends Promise {...}; class B extends A
+  //     {...}`, B carries no native marker of its own, so it lands in
+  //     InstantiateClass and loses A's fields. Tightening this to the chain
+  //     walk does NOT fix that: Instantiate runs no instance elements at all
+  //     for an implicit constructor, so B would lose its own fields too. The
+  //     fix belongs in InstantiateClass (see the redirect's comment), which is
+  //     why this guard is left as it is rather than harmonized.
+  //  3. Anchor. Here: the running VM scope and the VM's own module callbacks
+  //     and current module path — the calling environment. There: the class's
+  //     DefinitionScope and defining file, because a native caller has no
+  //     environment of its own to offer. §15.7.10 step 2b wants the defining
+  //     one, and ClassInitializerScopeParent already prefers DefinitionScope
+  //     for the initializer scope either way; what is left is the host
+  //     callbacks, which the bytecode executor swaps per module while linking
+  //     and which therefore have to come from the VM here.
   if AConstructor is TGocciaClassValue then
   begin
     ClassConstructor := TGocciaClassValue(AConstructor);

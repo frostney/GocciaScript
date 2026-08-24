@@ -68,6 +68,7 @@ oracle instead of inheriting a default.
 | `n-nodemods.goccia.test.js` | language | skip | skip |
 | `o-asynccontext.test.js` | language | skip | gate |
 | `p-callintrinsics.test.js` | language | skip | gate |
+| `q-reflectconstruct.test.js` | language | skip | gate |
 
 `o-asynccontext.test.js` covers `node:async_hooks` propagation only, and stops
 there on purpose. Bun 1.3.14 does not honour the `defaultValue` or `name`
@@ -93,6 +94,29 @@ bytecode VM routes `.call`/`.apply`/`.bind` on a function receiver through call
 fast paths, and while those matched on the callee's *name* a user-defined member
 was silently redirected into the intrinsic in bytecode mode only. The suite fails
 in whichever mode stops distinguishing the two.
+
+`q-reflectconstruct.test.js` covers construction that does not go through the
+`new` operator — `Reflect.construct`, a proxy without a construct trap, a bound
+class — paired with the `new` spelling of the same class. Instance elements are
+what a second construction path drops: fields, private fields, and method
+initializers live outside the constructor body, so a path that only runs the
+body produces an instance that looks plausible and is missing every declared
+field. Interpreted mode did exactly that until the shared Construct operation
+was routed into the same instantiation `new` uses, and the suite pins the
+newTarget and override-return shapes alongside it.
+
+Two shapes are deliberately absent. A class whose superclass chain reaches a
+built-in (`extends Array`, `extends Promise`) is a known interpreted-mode gap —
+the shared Construct operation declines it and builds it without instance
+elements, while `new` initializes them — so gating on bun would report a gap
+already tracked elsewhere. It is pinned in
+`tests/built-ins/Reflect/construct/native-chain-instance-elements.js`, which
+asserts that all the Construct routes agree with each other so that a partial
+fix cannot land unnoticed. `new.target` inside a field initializer is absent for
+the opposite reason: node, bun and goccia all agree it is `undefined` as a
+script, but under `bun test` 1.4.0 the same class body reports it defined, so
+gating would report bun's transpile as a goccia divergence. It is covered
+against node in `tests/built-ins/Reflect/construct/instance-elements.js`.
 
 `h-modulemock.test.js` and `i-modulemock-isolation.test.js` are a pair: the
 first mocks `./mods/mockable.js` with a `vi.mock` factory, the second mocks
