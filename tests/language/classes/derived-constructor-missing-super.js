@@ -11,10 +11,10 @@ features: [class-inheritance, Reflect, class]
 // covers `this` *access*, so a body that touches neither has no error of its
 // own to raise. Probed against Node v24.0.1: every one of these throws.
 //
-// Known deviation, identical in both modes and therefore not a parity break: a
-// subclass with no constructor of its own (`class L extends Middle {}`) still
-// constructs successfully. Its implicit constructor forwards through a
-// different set of paths, none of which consult the flag yet.
+// A subclass with no constructor of its own is not exempt: §15.7.14 step 15a
+// gives it an implicit constructor whose super() enters the same body, so the
+// constructor that returned without initializing `this` is still the one the
+// check asks about.
 
 class Base {}
 
@@ -57,6 +57,33 @@ describe("a derived constructor that never calls super()", () => {
     expectMissingSuper(() => new (Middle.bind(null))());
   });
 
+  test("a subclass with no constructor of its own throws", () => {
+    class Leafless extends Middle {}
+
+    expectMissingSuper(() => new Leafless());
+    expectMissingSuper(() => Reflect.construct(Leafless, []));
+    expectMissingSuper(() => new (Leafless.bind(null))());
+  });
+
+  test("the check reaches through a chain of implicit constructors", () => {
+    class Leafless extends Middle {}
+    class Deeper extends Leafless {}
+
+    expectMissingSuper(() => new Deeper());
+    expectMissingSuper(() => Reflect.construct(Deeper, []));
+  });
+
+  test("a subclass with fields of its own still throws", () => {
+    // The fields would otherwise be initialized against a receiver that
+    // §10.2.2 step 13.c says was never bound.
+    class Fielded extends Middle {
+      own = 1;
+    }
+
+    expectMissingSuper(() => new Fielded());
+    expectMissingSuper(() => Reflect.construct(Fielded, []));
+  });
+
   test("a constructor that does call super() is unaffected", () => {
     class Ok extends Base {
       seq = 1;
@@ -70,6 +97,36 @@ describe("a derived constructor that never calls super()", () => {
     expect(Object.keys(new Ok())).toEqual(["seq", "tail"]);
     expect(Object.keys(Reflect.construct(Ok, []))).toEqual(["seq", "tail"]);
     expect(Object.keys(new (Ok.bind(null))())).toEqual(["seq", "tail"]);
+  });
+
+  test("both modes report the same message", () => {
+    // The two checks — reading `this` and returning without super() — live in
+    // different places and fire in different orders per mode, so they share one
+    // message rather than describing the route they took.
+    class TouchesThis extends Base {
+      constructor() {
+        this.x = 1;
+      }
+    }
+    class TouchesNothing extends Base {
+      constructor() {}
+    }
+
+    const messageOf = (build) => {
+      try {
+        build();
+      } catch (error) {
+        return error.message;
+      }
+      return "<no error>";
+    };
+
+    expect(messageOf(() => new TouchesThis())).toBe(
+      messageOf(() => new TouchesNothing()),
+    );
+    expect(messageOf(() => new TouchesThis())).toContain(
+      "Must call super constructor",
+    );
   });
 
   test("an explicit object return stands in for super()", () => {

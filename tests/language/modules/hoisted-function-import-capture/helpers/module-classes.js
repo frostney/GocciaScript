@@ -176,3 +176,19 @@ export function makeEvaluatorBuiltBase() {
 export function makeSubclassOf(Base) {
   return class EvaluatorBuiltSub extends Base {};
 }
+
+// An evaluator-built class with fields of its own and no constructor, meant to
+// sit *between* a compiled subclass and the constructor that actually runs.
+// §15.7.14 step 15a still owes it an implicit constructor, and the class it is
+// sandwiched between is what makes the omission observable.
+export function makeFieldedSubclassOf(Base) {
+  return class EvaluatorBuiltMiddle extends Base {
+    middle = PREFIX + "evaluator-middle";
+
+    #middleBrand = PREFIX + "evaluator-middle-brand";
+
+    middleBrand() {
+      return this.#middleBrand;
+    }
+  };
+}
