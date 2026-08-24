@@ -23,7 +23,14 @@ type
       happens to be named `bind` — an own static named `bind` on a function
       object (node:async_hooks installs two) is a different function and must
       not be redirected into TGocciaBoundFunctionValue. }
-    nikFunctionBind
+    nikFunctionBind,
+    { Function.prototype.call and Function.prototype.apply, marked for the same
+      reason as bind: the VM's OP_CALL_METHOD fast paths invoke the receiver
+      itself, so any other callable found under those names — `Reflect.apply`
+      assigned as a function's own `apply`, a future built-in named `call` —
+      must be called on its own terms instead. }
+    nikFunctionCall,
+    nikFunctionApply
   );
 
   TGocciaNativeFunctionValue = class(TGocciaFunctionBase)
