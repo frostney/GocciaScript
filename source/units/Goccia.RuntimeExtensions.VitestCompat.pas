@@ -63,6 +63,7 @@ uses
   Goccia.Error,
   Goccia.Keywords.Reserved,
   Goccia.Modules.Virtual,
+  Goccia.RuntimeExtensions.Timers,
   Goccia.SourcePipeline,
   Goccia.Values.Primitives;
 
@@ -76,6 +77,9 @@ const
   { The two callee spellings Vitest's own hoisting transform matches. }
   VI_NAMESPACE_NAME = 'vi';
   VITEST_NAMESPACE_NAME = 'vitest';
+  { The engine module the fake-timer half of `vi` is built on. Installed by the
+    same runtime profile, ahead of this extension. }
+  TIMERS_MODULE_SPECIFIER = TIMERS_MODULE_NAME;
   DOCS_REFERENCE =
     'See docs/testing-api.md (Vitest compatibility) for the supported surface.';
 
@@ -224,6 +228,27 @@ begin
     '  spyOn,' + LB +
     '} from "goccia:test";' + LB +
     LB +
+    '// The virtual timer queue. `goccia:timers` speaks in epoch milliseconds;' + LB +
+    '// wrapping those in Date and returning `vi` for chaining is this shim.' + LB +
+    'import {' + LB +
+    '  useFakeTimers as engineUseFakeTimers,' + LB +
+    '  useRealTimers as engineUseRealTimers,' + LB +
+    '  isFakeTimers as engineIsFakeTimers,' + LB +
+    '  setSystemTime as engineSetSystemTime,' + LB +
+    '  getMockedSystemTime as engineGetMockedSystemTime,' + LB +
+    '  getRealSystemTime as engineGetRealSystemTime,' + LB +
+    '  advanceTimersByTime as engineAdvanceTimersByTime,' + LB +
+    '  advanceTimersByTimeAsync as engineAdvanceTimersByTimeAsync,' + LB +
+    '  advanceTimersToNextTimer as engineAdvanceTimersToNextTimer,' + LB +
+    '  advanceTimersToNextTimerAsync as engineAdvanceTimersToNextTimerAsync,' + LB +
+    '  runAllTimers as engineRunAllTimers,' + LB +
+    '  runAllTimersAsync as engineRunAllTimersAsync,' + LB +
+    '  runOnlyPendingTimers as engineRunOnlyPendingTimers,' + LB +
+    '  runOnlyPendingTimersAsync as engineRunOnlyPendingTimersAsync,' + LB +
+    '  clearAllTimers as engineClearAllTimers,' + LB +
+    '  getTimerCount as engineGetTimerCount,' + LB +
+    '} from "' + TIMERS_MODULE_SPECIFIER + '";' + LB +
+    LB +
     'export {' + LB +
     '  describe,' + LB +
     '  test,' + LB +
@@ -268,14 +293,28 @@ begin
     '  "vi.mock with a factory is supported, but the factory is relocated " +' + LB +
     '  "into its own module scope, so there is no shared hoisted-variable " +' + LB +
     '  "scope for it to read.";' + LB +
-    'const FAKE_TIMERS =' + LB +
-    '  "GocciaScript has no fake-timer clock; timers run on the real event loop.";' + LB +
+    'const NO_FRAME_CLOCK =' + LB +
+    '  "the timer queue is supported, but this member drives ' +
+      'requestAnimationFrame, " +' + LB +
+    '  "which GocciaScript does not provide: there is no display to pace a " +' + LB +
+    '  "frame against.";' + LB +
+    'const NO_NEXT_TICK =' + LB +
+    '  "the timer queue is supported, but this member drains " +' + LB +
+    '  "process.nextTick, and GocciaScript has no process. Promise jobs run " +' + LB +
+    '  "on the engine microtask queue, which the async advance members " +' + LB +
+    '  "already drain.";' + LB +
+    'const NO_AUTO_ADVANCE =' + LB +
+    '  "the timer queue is supported, and the manual mode is already how it " +' + LB +
+    '  "behaves, so that one is accepted. Every other mode advances the " +' + LB +
+    '  "clock against real elapsed time, which no GocciaScript clock " +' + LB +
+    '  "measures. Advance the timers explicitly instead.";' + LB +
     'const ASYNC_POLLING =' + LB +
     '  "this member polls asynchronously, retrying its callback until the " +' + LB +
     '  "condition holds or a timeout elapses, which needs execution to " +' + LB +
     '  "suspend and resume between attempts. GocciaScript has no such " +' + LB +
-    '  "primitive: await is a synchronous drain and there is no general " +' + LB +
-    '  "event loop on which a pending condition could change.";' + LB +
+    '  "primitive: await is a synchronous drain, and the virtual timer queue " +' + LB +
+    '  "only moves when a test moves it, so a poll loop would spin without " +' + LB +
+    '  "anything being able to change the condition.";' + LB +
     'const CONFIG =' + LB +
     '  "GocciaScript has no runtime-mutable test configuration.";' + LB +
     LB +
@@ -417,6 +456,42 @@ begin
     '  return vi;' + LB +
     '};' + LB +
     LB +
+    '// Fake timers. The clock and the queue live in the engine; everything' + LB +
+    '// here is the shape Vitest exposes them in — Date instead of epoch' + LB +
+    '// milliseconds, and `vi` back for chaining.' + LB +
+    '// Vitest passes anything that is not already a Date through the Date' + LB +
+    '// constructor, so a date STRING is supported API — `Number(value)` on' + LB +
+    '// one produces NaN instead of an instant. The engine refuses a' + LB +
+    '// non-finite result rather than installing a NaN clock the way Vitest' + LB +
+    '// does; see docs/testing-api.md.' + LB +
+    'const toEpochMilliseconds = (value) =>' + LB +
+    '  (value instanceof Date ? value : new Date(value)).getTime();' + LB +
+    LB +
+    '// Only `now` is honoured. `toFake` has nothing to select from — there is' + LB +
+    '// exactly one timer queue and it is always the faked one — and the' + LB +
+    '// auto-advance options describe real elapsed time, which no GocciaScript' + LB +
+    '// clock ever measures.' + LB +
+    'const useFakeTimers = (config) => {' + LB +
+    '  engineUseFakeTimers(' + LB +
+    '    config && config.now !== undefined' + LB +
+    '      ? toEpochMilliseconds(config.now)' + LB +
+    '      : undefined,' + LB +
+    '  );' + LB +
+    '  return vi;' + LB +
+    '};' + LB +
+    LB +
+    'const setSystemTime = (value) => {' + LB +
+    '  engineSetSystemTime(' + LB +
+    '    value === undefined ? undefined : toEpochMilliseconds(value),' + LB +
+    '  );' + LB +
+    '  return vi;' + LB +
+    '};' + LB +
+    LB +
+    'const getMockedSystemTime = () => {' + LB +
+    '  const milliseconds = engineGetMockedSystemTime();' + LB +
+    '  return milliseconds === null ? null : new Date(milliseconds);' + LB +
+    '};' + LB +
+    LB +
     'export const vi = {' + LB +
     '  fn: registerMock,' + LB +
     '  spyOn: registerSpy,' + LB +
@@ -435,19 +510,56 @@ begin
     '  importMock: unsupported("importMock", NO_ACTUAL_MODULE),' + LB +
     '  hoisted: unsupported("hoisted", FACTORY_SCOPE),' + LB +
     LB +
-    '  useFakeTimers: unsupported("useFakeTimers", FAKE_TIMERS),' + LB +
-    '  useRealTimers: unsupported("useRealTimers", FAKE_TIMERS),' + LB +
-    '  isFakeTimers: unsupported("isFakeTimers", FAKE_TIMERS),' + LB +
-    '  setSystemTime: unsupported("setSystemTime", FAKE_TIMERS),' + LB +
-    '  getMockedSystemTime: unsupported("getMockedSystemTime", FAKE_TIMERS),' + LB +
-    '  getRealSystemTime: unsupported("getRealSystemTime", FAKE_TIMERS),' + LB +
-    '  advanceTimersByTime: unsupported("advanceTimersByTime", FAKE_TIMERS),' + LB +
-    '  advanceTimersByTimeAsync:' + LB +
-    '    unsupported("advanceTimersByTimeAsync", FAKE_TIMERS),' + LB +
-    '  advanceTimersToNextTimer:' + LB +
-    '    unsupported("advanceTimersToNextTimer", FAKE_TIMERS),' + LB +
-    '  runAllTimers: unsupported("runAllTimers", FAKE_TIMERS),' + LB +
-    '  runOnlyPendingTimers: unsupported("runOnlyPendingTimers", FAKE_TIMERS),' + LB +
+    '  useFakeTimers: useFakeTimers,' + LB +
+    '  useRealTimers: () => { engineUseRealTimers(); return vi; },' + LB +
+    '  isFakeTimers: () => engineIsFakeTimers(),' + LB +
+    '  setSystemTime: setSystemTime,' + LB +
+    '  getMockedSystemTime: getMockedSystemTime,' + LB +
+    '  getRealSystemTime: () => engineGetRealSystemTime(),' + LB +
+    '  getTimerCount: () => engineGetTimerCount(),' + LB +
+    '  clearAllTimers: () => { engineClearAllTimers(); return vi; },' + LB +
+    LB +
+    '  advanceTimersByTime: (ms) => {' + LB +
+    '    engineAdvanceTimersByTime(ms);' + LB +
+    '    return vi;' + LB +
+    '  },' + LB +
+    '  advanceTimersByTimeAsync: async (ms) => {' + LB +
+    '    engineAdvanceTimersByTimeAsync(ms);' + LB +
+    '    return vi;' + LB +
+    '  },' + LB +
+    '  advanceTimersToNextTimer: () => {' + LB +
+    '    engineAdvanceTimersToNextTimer();' + LB +
+    '    return vi;' + LB +
+    '  },' + LB +
+    '  advanceTimersToNextTimerAsync: async () => {' + LB +
+    '    engineAdvanceTimersToNextTimerAsync();' + LB +
+    '    return vi;' + LB +
+    '  },' + LB +
+    '  runAllTimers: () => { engineRunAllTimers(); return vi; },' + LB +
+    '  runAllTimersAsync: async () => { engineRunAllTimersAsync(); return vi; },' + LB +
+    '  runOnlyPendingTimers: () => {' + LB +
+    '    engineRunOnlyPendingTimers();' + LB +
+    '    return vi;' + LB +
+    '  },' + LB +
+    '  runOnlyPendingTimersAsync: async () => {' + LB +
+    '    engineRunOnlyPendingTimersAsync();' + LB +
+    '    return vi;' + LB +
+    '  },' + LB +
+    LB +
+    '  // The three timer members the queue cannot honour. Named errors rather' + LB +
+    '  // than absent properties, so a suite reaching for one is told which' + LB +
+    '  // part of the family is missing and why.' + LB +
+    '  advanceTimersToNextFrame:' + LB +
+    '    unsupported("advanceTimersToNextFrame", NO_FRAME_CLOCK),' + LB +
+    '  runAllTicks: unsupported("runAllTicks", NO_NEXT_TICK),' + LB +
+    LB +
+    '  // "manual" is not a mode this has to implement — it is a description' + LB +
+    '  // of the only behaviour there is, so asking for it is satisfied by' + LB +
+    '  // doing nothing. The auto-advancing modes are the unsupported ones.' + LB +
+    '  setTimerTickMode: (mode) => {' + LB +
+    '    if (mode === "manual") return vi;' + LB +
+    '    return unsupported("setTimerTickMode", NO_AUTO_ADVANCE)();' + LB +
+    '  },' + LB +
     LB +
     '  stubGlobal: stubGlobal,' + LB +
     '  unstubAllGlobals: unstubAllGlobals,' + LB +

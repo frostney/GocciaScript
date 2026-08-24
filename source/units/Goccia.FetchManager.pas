@@ -82,8 +82,10 @@ uses
 
   Goccia.Builtins.Atomics,
   Goccia.GarbageCollector,
+  Goccia.InstructionLimit,
   Goccia.MicrotaskQueue,
-  Goccia.Timeout;
+  Goccia.Timeout,
+  Goccia.Timers;
 
 const
   FETCH_POLL_INTERVAL_MS = 1;
@@ -873,23 +875,61 @@ function WaitForFetchPromise(const APromise: TGocciaPromiseValue): Boolean;
 var
   Manager: TGocciaFetchManager;
   HasPendingFetch: Boolean;
+  TimersRun: Integer;
 begin
   if not Assigned(APromise) then
     Exit(False);
 
+  TimersRun := 0;
   while APromise.State = gpsPending do
   begin
     DrainMicrotasksAndFetchCompletions;
     if APromise.State <> gpsPending then
       Exit(True);
 
+    CheckExecutionTimeout;
+    CheckInstructionLimit;
+
     Manager := TGocciaFetchManager.Instance;
     HasPendingFetch := Assigned(Manager) and Manager.HasPending;
-    if not HasPendingFetch and not HasPendingAtomicsWaitAsyncCompletions then
-      Exit(False);
 
-    CheckExecutionTimeout;
-    Sleep(FETCH_POLL_INTERVAL_MS);
+    { Work that is really outstanding outranks virtual time.
+
+      Despite the name this is the host's general "drive this promise to
+      settlement" wait — the test runner uses it for every async test's
+      returned promise — so the virtual timer queue belongs here alongside
+      fetch and Atomics.waitAsync. But it must not be reached FIRST. A real-mode
+      timer costs no real time, so running one while a fetch was still in
+      flight made `Promise.race([fetch(url), timeoutAfter(ms)])` resolve to the
+      timeout every single time, whatever ms was, and a live interval could
+      spend the entire budget before the response ever arrived. Polling the
+      real work first means the race is decided by whether the fetch completes
+      at all, which is the outcome a suite writing that race expects. }
+    if HasPendingFetch or HasPendingAtomicsWaitAsyncCompletions then
+    begin
+      Sleep(FETCH_POLL_INTERVAL_MS);
+      Continue;
+    end;
+
+    { Nothing real is outstanding, so the clock may jump to the next timer. A
+      real-mode timer is a continuation no amount of microtask draining will
+      produce. Under fake timers this does nothing, because the suite, not the
+      engine, decides when those run — and it does nothing for a queue owned by
+      another realm either. }
+    if TimersRun >= TIMER_LOOP_LIMIT then
+    begin
+      { Spending the whole budget with timers still runnable is a diagnosis of
+        its own, and one the caller cannot make: reported as an unsettled
+        promise it read as a missing `await` rather than as a timer that keeps
+        rescheduling itself. }
+      if HasRunnableRealTimers then
+        RaiseRealTimerLoopLimit;
+      Exit(False);
+    end;
+
+    if not RunOneRealTimer then
+      Exit(False);
+    Inc(TimersRun);
   end;
 
   Result := True;

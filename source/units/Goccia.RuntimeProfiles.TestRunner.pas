@@ -21,6 +21,7 @@ implementation
 
 uses
   Goccia.RuntimeExtensions.TestingLibrary,
+  Goccia.RuntimeExtensions.Timers,
   Goccia.RuntimeExtensions.VitestCompat,
   Goccia.RuntimeProfiles.Loader;
 
@@ -41,6 +42,13 @@ begin
     so that globals and `goccia:test` drive the same registry. Installing the
     loader's copy as well would register `goccia:test` twice. }
   ApplyLoaderRuntimeProfile(ARuntime, False);
+  { The timer globals and `goccia:timers` are runner-only. They are
+    deterministic and carry no ambient authority, but a scheduling surface is
+    still a surface, and the acceptance target — a Vitest suite draining a
+    setTimeout-based scheduler through fake timers — is the runner's.
+    Installed before the testing library so a real-mode timer drains after the
+    other extensions have gone idle. }
+  ARuntime.Install(TGocciaTimersRuntimeExtension.Create);
   ARuntime.Install(TGocciaTestingLibraryRuntimeExtension.Create(
     ASnapshotHost, ASnapshotUpdateMode, ASnapshotFormatter, True));
   { A suite written against Vitest imports from a bare `vitest` specifier,

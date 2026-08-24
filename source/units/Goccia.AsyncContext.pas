@@ -123,11 +123,8 @@ type
   { Publishes the current snapshot to the collector. One instance per thread,
     created the first time a binding takes effect on that thread. }
   TGocciaAsyncContextRoots = class(TGCRootSource)
-  private
-    FCollector: TGarbageCollector;
   public
     procedure MarkRootReferences; override;
-    property Collector: TGarbageCollector read FCollector write FCollector;
   end;
 
 const
@@ -210,13 +207,23 @@ begin
 end;
 
 { The root source registers with whichever collector is current when it is
-  built, so a thread whose collector was replaced needs a fresh one. }
+  built, so a thread whose collector was replaced needs a fresh one.
+
+  The identity test asks the source which collector it is *registered with*
+  rather than comparing against a collector remembered alongside it. A
+  remembered address is not an identity: TGarbageCollector.Shutdown followed by
+  Initialize can put the next thread-local collector where the previous one
+  was, and the stale compare then reported "same collector" for a source
+  registered with the dead one — leaving the current snapshot unmarked for the
+  rest of the thread's life. The collector's destructor nils the registration on
+  every source it owns, so this test cannot match a destroyed one. }
 procedure EnsureSnapshotRoots;
 var
   Collector: TGarbageCollector;
 begin
   Collector := TGarbageCollector.Instance;
-  if Assigned(GSnapshotRoots) and (GSnapshotRoots.Collector = Collector) then
+  if Assigned(Collector) and Assigned(GSnapshotRoots) and
+     (GSnapshotRoots.RegisteredCollector = Collector) then
     Exit;
 
   FreeAndNil(GSnapshotRoots);
@@ -224,7 +231,6 @@ begin
     Exit;
 
   GSnapshotRoots := TGocciaAsyncContextRoots.Create;
-  GSnapshotRoots.Collector := Collector;
 end;
 
 procedure SetCurrentAsyncContext(

@@ -99,6 +99,12 @@ Deliberately out of scope:
   travel into. When a host-scheduled callback surface is added, its scheduling
   point becomes a third seam; nothing about the snapshot representation has to
   change for that.
+
+  **Superseded by [ADR 0113](0113-deterministic-virtual-timer-queue.md).** The
+  virtual timer queue is that surface, and the prediction held: timer
+  registration captures the current snapshot and the queue installs it around
+  the callback through the same `EnterAsyncContext` / `LeaveAsyncContext` pair,
+  with nothing in `Goccia.AsyncContext` changed.
 - **The `async_hooks` observer API.** `createHook`, `executionAsyncId`,
   `triggerAsyncId`, and the `init`/`before`/`after`/`destroy` callbacks are not
   provided. They describe an async-resource lifecycle GocciaScript does not
