@@ -150,9 +150,12 @@ threadvar
   GActiveScope: TGocciaDiagnosticSourceScope;
 
 var
-  // Process-monotonic principal counter. Guarded by an interlocked increment
-  // so engines on separate threads never collide on a principal value.
+  // Process-monotonic principal counter. Guarded by a critical section rather
+  // than InterLockedIncrement64 because FPC 3.2.2 only declares the 64-bit
+  // interlocked helpers under CPU64, and CI also builds i386-win32; a principal
+  // is minted once per module load, so the lock cost is irrelevant.
   GPrincipalCounter: Int64 = 0;
+  GPrincipalLock: TRTLCriticalSection;
 
 type
   TUnicodeStringAllocationHeader = packed record
@@ -164,7 +167,13 @@ type
 
 function NextPrincipal: Int64;
 begin
-  Result := InterLockedIncrement64(GPrincipalCounter);
+  EnterCriticalSection(GPrincipalLock);
+  try
+    Inc(GPrincipalCounter);
+    Result := GPrincipalCounter;
+  finally
+    LeaveCriticalSection(GPrincipalLock);
+  end;
 end;
 
 function DiagnosticStringRetainedBytes(const AText: string): Int64;
@@ -435,5 +444,11 @@ class function TGocciaDiagnosticSourceRegistry.Current:
 begin
   Result := GActiveScope;
 end;
+
+initialization
+  InitCriticalSection(GPrincipalLock);
+
+finalization
+  DoneCriticalSection(GPrincipalLock);
 
 end.
