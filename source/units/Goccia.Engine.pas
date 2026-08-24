@@ -395,6 +395,7 @@ uses
   TimingUtils,
   UnicodeStringList,
 
+  Goccia.AsyncContext,
   Goccia.CallStack,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
@@ -937,6 +938,11 @@ end;
 
 destructor TGocciaEngine.Destroy;
 begin
+  { Async-context snapshots hold this engine's objects, and `enterWith` can
+    leave one installed with no scope to unwind it. Drop them before anything
+    else is torn down so the next engine on this thread cannot inherit them. }
+  ResetAsyncContextState;
+
   if (TGarbageCollector.Instance <> nil) and Assigned(FInterpreter) then
     TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
 

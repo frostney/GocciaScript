@@ -664,6 +664,13 @@ resourcestring
   SErrorThenNotFunction = 'then is not a function';
   SErrorPromiseChainingCycle = 'Chaining cycle detected for promise';
 
+  // node:async_hooks errors
+  SErrorAsyncLocalStorageReceiver =
+    'AsyncLocalStorage prototype method called on a non-AsyncLocalStorage object';
+  SErrorAsyncResourceReceiver =
+    'AsyncResource prototype method called on a non-AsyncResource object';
+  SErrorAsyncHooksCallbackRequired = 'callback is not a function';
+
   // Disposal method errors
   SErrorDisposePropertyNotFunction = 'Property [Symbol.%s] is not a function';
 

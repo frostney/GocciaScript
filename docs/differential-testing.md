@@ -66,6 +66,23 @@ oracle instead of inheriting a default.
 | `l-modulefndecl.test.js` | language | skip | gate |
 | `m-nodemods.test.js` | language | skip | gate |
 | `n-nodemods.goccia.test.js` | language | skip | skip |
+| `o-asynccontext.test.js` | language | skip | gate |
+
+`o-asynccontext.test.js` covers `node:async_hooks` propagation only, and stops
+there on purpose. Bun 1.3.14 does not honour the `defaultValue` or `name`
+constructor options, returns `undefined` rather than the resource from
+`emitDestroy`, models `disable()` as an instance-wide flag instead of Node's
+edit of the current context frame, and substitutes `undefined` where Node
+forwards `bind`'s call-site receiver — and because bun 1.4.0 fixes the last
+two, any assertion in that territory makes the verdict depend on which bun the
+harness happens to run under. Gating on bun for any of it would report the
+oracle's own gaps or version as GocciaScript divergences, so all of it is
+covered against Node's behaviour in `tests/built-ins/AsyncHooks` instead,
+where bun is not the oracle. Everything the suite does check — stores
+surviving `await`, interleaved chains, several instances at once, `.then` /
+`.catch` / `.finally` continuations, `exit`, `enterWith`, bind-time callable
+validation, and async-generator resumptions — every bun since 1.3.14 and Node
+agree on.
 
 `h-modulemock.test.js` and `i-modulemock-isolation.test.js` are a pair: the
 first mocks `./mods/mockable.js` with a `vi.mock` factory, the second mocks

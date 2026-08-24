@@ -671,6 +671,8 @@ expect(set).toEqual(new Set([2, 1]));
 
 **GocciaScript-specific behaviors** --- Some tests exercise GocciaScript extensions or intentional divergences from the spec (e.g., `Math.clamp`, emoji identifiers, arrow function `this` binding in object methods). These will fail in Vitest since standard JS doesn't support them. This is expected.
 
+**Async context** --- A suite whose library keeps per-request state in `AsyncLocalStorage` runs unchanged: `node:async_hooks` is present in `GocciaTestRunner`, and the engine propagates the context across `await` and every promise-reaction continuation. See [Async Context](built-ins-async-context.md) for the surface and the two things that are out of scope (host-scheduled callbacks and the `async_hooks` observer API).
+
 ### Known Vitest Divergences
 
 | Category | GocciaScript | Standard JS |
@@ -694,3 +696,4 @@ One of those rows is worth expanding, because it cost a debugging session before
 
 - [Testing](testing.md) --- test organization, directory layout, running tests, and test principles
 - [Built-ins](built-ins.md) --- test assertion built-in reference
+- [Async Context](built-ins-async-context.md) --- `node:async_hooks` for suites whose code under test carries per-request state

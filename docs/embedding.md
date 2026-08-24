@@ -10,7 +10,7 @@
 - **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, virtual modules, and host modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
 
-Native application embedding is an important secondary GocciaScript goal. `TGocciaRuntime` is the shared Pascal embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, and `URL`, plus import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, `goccia:semver`, and `goccia:test`, usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals or runtime modules.
+Native application embedding is an important secondary GocciaScript goal. `TGocciaRuntime` is the shared Pascal embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, and `URL`, plus import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, `goccia:semver`, `goccia:test`, and `node:async_hooks`, usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals or runtime modules.
 
 ## Quick Start
 
@@ -35,7 +35,7 @@ For files, load `app.js` into the `Source` list, pass the real filename to `TGoc
 
 ### Class Methods (One-Shot Execution)
 
-These helpers create, execute, and clean up in a single call. The `TGocciaEngine` methods create a core-language-only engine. The `TGocciaRuntime` methods attach the runtime layer for file loading, but they do not apply a runtime profile; install runtime extensions explicitly when scripts need runtime globals such as `console`, `fetch`, and `URL`, or import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, or `goccia:semver`.
+These helpers create, execute, and clean up in a single call. The `TGocciaEngine` methods create a core-language-only engine. The `TGocciaRuntime` methods attach the runtime layer for file loading, but they do not apply a runtime profile; install runtime extensions explicitly when scripts need runtime globals such as `console`, `fetch`, and `URL`, or import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, `goccia:semver`, or `node:async_hooks`.
 
 | Method | Description |
 |--------|-------------|
@@ -465,7 +465,7 @@ The CLI hosts based on `TGocciaCLIApplication` (ScriptLoader, TestRunner, Benchm
 
 ## Built-in Registration
 
-Core language built-ins (Math, Object, Array, JSON, Promise, Temporal, typed arrays, etc.) are registered by `TGocciaEngine`. Runtime globals that are not part of the language core (Console, TextEncoder/TextDecoder, URL, fetch, performance, etc.) and import-only runtime modules (`goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, `goccia:semver`, `goccia:test`) are provided by concrete runtime units. Hosts can call `ApplyLoaderRuntimeProfile` for the ordinary CLI runtime surface or install only the extension classes they need for a smaller runtime surface. `ApplyLoaderRuntimeProfile(ARuntime, False)` suppresses the `goccia:test` registration for a host that installs `TGocciaTestingLibraryRuntimeExtension` itself — the testing globals are opt-in through that extension and are never part of the profile. The `goccia:` modules expose named exports only; callers can use namespace imports such as `import * as CSV from "goccia:csv"` when they want namespace-style access.
+Core language built-ins (Math, Object, Array, JSON, Promise, Temporal, typed arrays, etc.) are registered by `TGocciaEngine`. Runtime globals that are not part of the language core (Console, TextEncoder/TextDecoder, URL, fetch, performance, etc.) and import-only runtime modules (`goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, `goccia:semver`, `goccia:test`, `node:async_hooks`) are provided by concrete runtime units. Hosts can call `ApplyLoaderRuntimeProfile` for the ordinary CLI runtime surface or install only the extension classes they need for a smaller runtime surface. `ApplyLoaderRuntimeProfile(ARuntime, False)` suppresses the `goccia:test` registration for a host that installs `TGocciaTestingLibraryRuntimeExtension` itself — the testing globals are opt-in through that extension and are never part of the profile. The `goccia:` modules expose named exports only; callers can use namespace imports such as `import * as CSV from "goccia:csv"` when they want namespace-style access.
 
 When you already have an engine, pass it to the runtime constructor:
 
