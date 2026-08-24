@@ -13322,11 +13322,14 @@ var
   Roots: TGocciaActiveRootFrame;
 begin
   BindingObject := ToObject(AObject);
-  // A fresh, native-only value is held across HasProperty, which runs the proxy
-  // `has` trap and re-enters guest code. Root it so a collection forced from the
-  // trap cannot sweep it before the store completes.
+  // Both the store value and the ToObject box (a fresh, native-only value when
+  // AObject is a primitive, reachable only through this local) are held across
+  // HasProperty, which runs the proxy `has` trap and re-enters guest code. Root
+  // them so a collection forced from the trap cannot sweep either before the
+  // store completes.
   Roots.Initialize;
   Roots.Add(AValue);
+  Roots.Add(BindingObject);
   try
     KeyStr := KeyToPropertyName(AKey);
     StillExists := BindingObject.HasProperty(KeyStr);
