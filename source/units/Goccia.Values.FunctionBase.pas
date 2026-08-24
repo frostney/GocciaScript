@@ -1253,8 +1253,16 @@ begin
   if TryCallStringFromCodePointApplyFast(AThisValue, ArgArray, Result) then
     Exit;
 
-  // Fast path: small arrays use specialized call methods (FunctionBase only)
-  if (AThisValue is TGocciaFunctionBase) and (ArgArray is TGocciaArrayValue) then
+  // Fast path: small dense hole-free arrays use specialized call methods
+  // (FunctionBase only). The gate is what keeps the direct element reads legal:
+  // on a dense hole-free array no read can reach an accessor, so no guest code
+  // runs between the reads and the call and these plain locals cannot be
+  // invalidated by a collection. A hole (ES2026 §7.3.19 step 6b resolves it with
+  // Get, which can invoke an inherited accessor) or a length grown past the
+  // element count sends the call down CreateListFromArrayLike instead, where the
+  // arguments collection is itself a GC root source and the reads are ascending.
+  if (AThisValue is TGocciaFunctionBase) and (ArgArray is TGocciaArrayValue) and
+     IsDenseHoleFreeArgumentArray(TGocciaArrayValue(ArgArray)) then
   begin
     ArrVal := TGocciaArrayValue(ArgArray);
     case ArrVal.Elements.Count of
