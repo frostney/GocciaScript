@@ -28,19 +28,6 @@ type
 
   TGocciaPatternBindingList = TList<TGocciaPatternBinding>;
 
-  TGocciaMatchEnvironment = class
-  private
-    FScope: TGocciaScope;
-    FBindings: TGocciaPatternBindingList;
-  public
-    constructor Create(const AParentScope: TGocciaScope);
-    destructor Destroy; override;
-    procedure Bind(const AName: string; const AValue: TGocciaValue;
-      const ADeclarationType: TGocciaDeclarationType);
-    property Scope: TGocciaScope read FScope;
-    property Bindings: TGocciaPatternBindingList read FBindings;
-  end;
-
 function MatchValueEquals(const ASubject, ACandidate: TGocciaValue): Boolean;
 function GetCustomMatcher(const AMatcher: TGocciaValue): TGocciaValue;
 procedure ThrowNoMatchingPattern;
@@ -53,34 +40,6 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
-
-{ TGocciaMatchEnvironment }
-
-constructor TGocciaMatchEnvironment.Create(const AParentScope: TGocciaScope);
-begin
-  inherited Create;
-  FScope := AParentScope.CreateChild(skBlock, 'PatternMatchScope');
-  FBindings := TGocciaPatternBindingList.Create;
-end;
-
-destructor TGocciaMatchEnvironment.Destroy;
-begin
-  FBindings.Free;
-  FScope.Free;
-  inherited;
-end;
-
-procedure TGocciaMatchEnvironment.Bind(const AName: string; const AValue: TGocciaValue;
-  const ADeclarationType: TGocciaDeclarationType);
-var
-  Binding: TGocciaPatternBinding;
-begin
-  FScope.DefineLexicalBinding(AName, AValue, ADeclarationType);
-  Binding.Name := AName;
-  Binding.Value := AValue;
-  Binding.DeclarationType := ADeclarationType;
-  FBindings.Add(Binding);
-end;
 
 // TC39 Pattern Matching: primitive/value patterns use SameValue, except bare
 // zero patterns which the parser marks for SameValueZero handling.
