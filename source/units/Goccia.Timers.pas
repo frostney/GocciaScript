@@ -106,13 +106,17 @@ type
     IntervalDelay: Double;
     CallAt: Double;
     CreatedAt: Double;
-    { True while this entry's callback is on the stack. An advance reached from
-      inside that callback — through the microtask drain, or through an engine
-      wait an `await` in it started — must not pick the same entry again: an
-      interval stays in the queue while it runs, and the real-mode step chooses
-      the earliest timer without a due-time window, so it re-entered the same
+    { How many of this entry's callback frames are on the stack. A depth, not a
+      flag: an explicit nested advance can re-enter the same interval entry (the
+      fake-clock selectors do not skip a dispatching entry), so a Boolean cleared
+      by the inner frame would let a clear from the still-running outer callback
+      free the entry that frame is still holding. An advance reached from inside
+      that callback — through the microtask drain, or through an engine wait an
+      `await` in it started — must not pick the same entry again: an interval
+      stays in the queue while it runs, and the real-mode step chooses the
+      earliest timer without a due-time window, so it re-entered the same
       callback until the stack ran out. }
-    Dispatching: Boolean;
+    DispatchDepth: Integer;
     { Cancelled while its own callback was running. An interval stays in the
       queue while it runs — that is what lets an explicit nested advance
       re-enter it, as Vitest allows — so `clearInterval(id)` called from inside
@@ -353,9 +357,65 @@ uses
 
 const
   NANOSECONDS_PER_MILLISECOND = 1000000.0;
+  { The same ratio as an Int64 for the conversions that must stay integer-exact.
+    An absolute epoch in nanoseconds (~1.8e18 in 2026) is far past Double's 2^53
+    exact-integer range, so any epoch that reaches nanosecond magnitude through a
+    Double rounds differently on x87 (80-bit intermediates) than on SSE2 and
+    lands the clock on a neighbouring millisecond. The epoch<->nanosecond
+    conversions below therefore assemble the count with Int64 arithmetic. }
+  NANOSECONDS_PER_MILLISECOND_INT = Int64(1000000);
+  { Largest magnitude, in whole milliseconds, whose nanosecond count still fits
+    in the signed Int64 the host clock is published as (High(Int64) div 1e6).
+    A finite JavaScript date can legitimately reach 8.64e15 ms, which is far
+    beyond this, so a conversion is range-checked and rejected rather than
+    silently overflowing Int64 inside Round. }
+  MAX_CLOCK_MILLISECONDS = 9223372036854.0;
+  CLOCK_OUT_OF_RANGE_MESSAGE =
+    'The resulting time is too large to represent as a nanosecond clock.';
+  CLOCK_OUT_OF_RANGE_SUGGESTION =
+    'Keep the mocked time and any advance within about 9.2e12 milliseconds of ' +
+    'the epoch.';
 
 threadvar
   TimerQueueThreadInstance: TGocciaTimerQueue;
+
+{ Rejects a millisecond clock value that the Int64 nanosecond clock cannot
+  represent. Kept separate from the conversion so a caller can preflight a
+  target value BEFORE mutating any timer state: PublishClock converts FNow /
+  FMockedDate on every state change, so a value that only fails at conversion
+  time would otherwise be committed first and poison every later publish. }
+procedure RequireClockInRange(const AMilliseconds: Double);
+begin
+  if IsNan(AMilliseconds) or IsInfinite(AMilliseconds) or
+     (Abs(AMilliseconds) > MAX_CLOCK_MILLISECONDS) then
+    ThrowRangeError(CLOCK_OUT_OF_RANGE_MESSAGE, CLOCK_OUT_OF_RANGE_SUGGESTION);
+end;
+
+{ Converts a millisecond clock value to the Int64 nanosecond count the host
+  environment is published with, rejecting a value that would overflow Int64
+  with a RangeError rather than wrapping. }
+function ClockMillisecondsToNanoseconds(const AMilliseconds: Double): Int64;
+var
+  WholeMilliseconds, FractionNanoseconds: Int64;
+begin
+  RequireClockInRange(AMilliseconds);
+  { Split the epoch into whole milliseconds and a sub-millisecond fraction so the
+    nanosecond count is assembled with Int64 arithmetic and never crosses a
+    Double at nanosecond magnitude. `Round(AMilliseconds * 1e6)` did exactly that
+    — the product for a 2026 epoch is ~1.8e18, past 2^53 — so the FPU rounded a
+    borderline value one way on x87 and another on SSE2, and a frozen clock read
+    back a different millisecond depending on the platform (and on x87, on
+    whether an intermediate stayed in an 80-bit register). RequireClockInRange
+    bounds |AMilliseconds| to MAX_CLOCK_MILLISECONDS, so Trunc is in Int64 range
+    and the whole-millisecond count is < 2^53 (hence exact as a Double); only the
+    fraction — always within (-1e6, 1e6) nanoseconds — touches a Double multiply,
+    where it is exact. Trunc and Frac both cut toward zero, so the two parts
+    reconstruct the value with the same sign for negative epochs too. }
+  WholeMilliseconds := Trunc(AMilliseconds);
+  FractionNanoseconds := Round(Frac(AMilliseconds) * NANOSECONDS_PER_MILLISECOND);
+  Result := WholeMilliseconds * NANOSECONDS_PER_MILLISECOND_INT +
+    FractionNanoseconds;
+end;
 
 { TGocciaTimerRoots }
 
@@ -491,30 +551,51 @@ begin
       so performance.now() measures elapsed virtual time rather than the
       simulated date. }
     FHostEnvironment.OverrideClock(
-      True, Round(FNow * NANOSECONDS_PER_MILLISECOND),
-      True, Round((FNow - FAdjusted - FStart) * NANOSECONDS_PER_MILLISECOND))
+      True, ClockMillisecondsToNanoseconds(FNow),
+      True, ClockMillisecondsToNanoseconds(FNow - FAdjusted - FStart))
   else if FMockedDateOnly then
     { setSystemTime outside useFakeTimers freezes the date and nothing else,
       exactly as Vitest's Date-only mock does. }
     FHostEnvironment.OverrideClock(
-      True, Round(FMockedDate * NANOSECONDS_PER_MILLISECOND), False, 0)
+      True, ClockMillisecondsToNanoseconds(FMockedDate), False, 0)
   else
     FHostEnvironment.ClearClockOverride;
 end;
 
 procedure TGocciaTimerQueue.SetNow(const AValue: Double);
 begin
+  { Central choke point for every fake-clock advance: DoNext (and thus
+    AdvanceToNextTimer / RunAllTimers), the DoTick loop, and ClearAllTimers all
+    publish through here. Preflight the value BEFORE assigning FNow so a timer
+    due beyond the representable range (e.g. MAX_CLOCK_MILLISECONDS + 1) is
+    rejected while timer state is still intact, rather than poisoning FNow and
+    having PublishClock throw only at conversion time. Validate both halves
+    PublishClock converts while faking — the wall value and its monotonic
+    counterpart (FNow - FAdjusted - FStart) — since either can fall out of range
+    independently. The DoTick preflight is preserved so a rejected bulk advance
+    still avoids running any timer. }
+  if FFaking then
+  begin
+    RequireClockInRange(AValue);
+    RequireClockInRange(AValue - FAdjusted - FStart);
+  end;
   FNow := AValue;
   PublishClock;
 end;
 
 function TGocciaTimerQueue.RealEpochMilliseconds: Double;
 begin
+  { Integer division on the Int64 nanosecond clock, not a Double divide. The real
+    epoch in nanoseconds (~1.8e18 in 2026) is well past Double's 2^53 exact range,
+    so `RealEpochNanoseconds / 1e6` first rounded the Int64 into a Double and then
+    divided — platform-dependent, and it fed the frozen FNow that
+    useFakeTimers() then published, so the whole clock inherited the drift. The
+    whole-millisecond result (~1.8e12) is < 2^53 and thus exact as a Double; `div`
+    already truncates toward zero, so the previous Int() is subsumed. }
   if Assigned(FHostEnvironment) then
-    Result := FHostEnvironment.RealEpochNanoseconds / NANOSECONDS_PER_MILLISECOND
+    Result := FHostEnvironment.RealEpochNanoseconds div NANOSECONDS_PER_MILLISECOND_INT
   else
     Result := 0;
-  Result := Int(Result);
 end;
 
 function TGocciaTimerQueue.IndexOfId(const AId: Double): Integer;
@@ -627,7 +708,7 @@ begin
   Result := nil;
   for I := 0 to FTimers.Count - 1 do
   begin
-    if FTimers[I].Dispatching then
+    if FTimers[I].DispatchDepth > 0 then
       Continue;
     if ATimeoutsOnly and (FTimers[I].Kind <> gtkTimeout) then
       Continue;
@@ -727,7 +808,7 @@ var
   Entry: TGocciaTimerEntry;
 begin
   Entry := FTimers[AIndex];
-  if not Entry.Dispatching then
+  if Entry.DispatchDepth = 0 then
   begin
     FTimers.Delete(AIndex);
     Exit;
@@ -760,9 +841,13 @@ end;
 
 procedure TGocciaTimerQueue.DiscardTimers;
 begin
+  { Drop the queue but keep any uncaught error: the engine's own idle teardown
+    (DiscardRuntimePending) runs this before an interpreted run's test runner
+    gets to call TakeUncaughtTimerError, so clearing it here loses a throwing
+    module-scope timer and lets the file pass. The error is cleared on read
+    (TakeUncaughtError) or at the engine boundary (ResetForEngine), which is the
+    point at which a leftover value would otherwise reach the next engine. }
   RetireAllEntries;
-  FUncaughtError := nil;
-  FHasUncaughtError := False;
 end;
 
 function TGocciaTimerQueue.CountTimers: Integer;
@@ -877,7 +962,7 @@ begin
     end;
   end;
 
-  ATimer.Dispatching := True;
+  Inc(ATimer.DispatchDepth);
   try
     ContextToken := EnterAsyncContext(ATimer.Context);
     try
@@ -933,12 +1018,15 @@ begin
       LeaveAsyncContext(ContextToken);
     end;
   finally
-    ATimer.Dispatching := False;
+    Dec(ATimer.DispatchDepth);
     { Frees it: the in-flight list owns its entries. A timeout always lands
-      here; an interval only when its own callback cancelled it. }
+      here; an interval only when its own callback cancelled it. The cleared
+      interval is freed only once the last frame holding it unwinds, so a nested
+      re-entry that clears the entry cannot free it out from under the outer
+      frame still on the stack. }
     if Assigned(Owned) then
       FInFlight.Remove(Owned)
-    else if ATimer.Cleared then
+    else if ATimer.Cleared and (ATimer.DispatchDepth = 0) then
       FInFlight.Remove(ATimer);
   end;
 end;
@@ -976,6 +1064,16 @@ begin
   begin
     TickTo := TickTo + 1;
     NanosTotal := NanosTotal - NANOSECONDS_PER_MILLISECOND;
+  end;
+  { Reject a target the published clock cannot represent before banking the
+    fraction or firing a single timer, so a rejected advance leaves the queue
+    unchanged rather than half-updated. Every intermediate SetNow lands between
+    FNow and TickTo, so both endpoints being in range covers them. The
+    monotonic value shifts with TickTo by the same FAdjusted+FStart offset. }
+  if FFaking then
+  begin
+    RequireClockInRange(TickTo);
+    RequireClockInRange(TickTo - FAdjusted - FStart);
   end;
   FNanos := NanosTotal;
 
@@ -1218,6 +1316,10 @@ end;
 procedure TGocciaTimerQueue.BeginFakeTimers(const ANowMilliseconds: Double);
 begin
   RequireFiniteEpoch(ANowMilliseconds);
+  { Reject a start the published clock cannot represent before retiring the
+    previous queue or installing the fresh clock, so a rejected useFakeTimers()
+    leaves whatever was in place untouched. The monotonic value starts at 0. }
+  RequireClockInRange(ANowMilliseconds);
   EnsureRoots;
   { Re-enabling installs a fresh clock: whatever was scheduled against the
     previous one is discarded rather than carried over, which is what a second
@@ -1277,6 +1379,12 @@ var
   I: Integer;
 begin
   RequireFiniteEpoch(AEpochMilliseconds);
+  { Preflight the published wall clock before touching any state: both branches
+    below publish AEpochMilliseconds (as FMockedDate or as FNow), and the
+    faking branch leaves the monotonic value FNow-FAdjusted-FStart unchanged.
+    Rejecting an out-of-range target here keeps the queue exactly as it was
+    rather than leaving FNow/FMockedDate poisoned for every later publish. }
+  RequireClockInRange(AEpochMilliseconds);
 
   if not FFaking then
   begin

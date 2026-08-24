@@ -6737,19 +6737,22 @@ begin
   if not Assigned(FVM.FPendingNewTarget) then
     FVM.FPendingNewTarget := Self;
 
-  // The super()-called flag belongs to the constructor being entered. Leaving
-  // it set on the way out makes the next constructor to run believe it has
-  // already called super().
-  PreviousConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
-  FVM.FCurrentConstructorSuperCalled := False;
+  // The super()-called flag belongs to the constructor being entered, which is
+  // this class's own (FConstructorValue) running on this class's VM. Spell the
+  // owner out as Self.FVM — identical to the bare FVM here, but consistent with
+  // the ImplicitSuperClass.FVM sub-paths so every flag access names the VM that
+  // owns the constructor it wraps. Leaving it set on the way out makes the next
+  // constructor to run believe it has already called super().
+  PreviousConstructorSuperCalled := Self.FVM.FCurrentConstructorSuperCalled;
+  Self.FVM.FCurrentConstructorSuperCalled := False;
   try
     AResult := FVM.InvokeFunctionValue(FConstructorValue, AArguments,
       AReceiver);
   finally
     // Read the flag before restoring it: it belongs to the constructor that
     // just returned, exactly as Instantiate captures it.
-    ConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
-    FVM.FCurrentConstructorSuperCalled := PreviousConstructorSuperCalled;
+    ConstructorSuperCalled := Self.FVM.FCurrentConstructorSuperCalled;
+    Self.FVM.FCurrentConstructorSuperCalled := PreviousConstructorSuperCalled;
   end;
 
   // ES2026 §10.2.2 step 13.b: a derived constructor may only return an Object
@@ -6808,6 +6811,8 @@ var
   InitializerReplayReceiver: TGocciaObjectValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
+  PreviousImplicitSuperCalled: Boolean;
+  ImplicitSuperCalled: Boolean;
   DelayNativePrototypeLookup: Boolean;
   NativeInstanceInitialized: Boolean;
   NativeInstanceConstructedByNativeSuper: Boolean;
@@ -7057,14 +7062,17 @@ begin
       FVM.FPendingNewTarget := ANewTarget;
       if not Assigned(FVM.FPendingNewTarget) then
         FVM.FPendingNewTarget := Self;
-      PreviousConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
-      FVM.FCurrentConstructorSuperCalled := False;
+      { This class's own constructor runs on this class's VM, so its
+        super()-called flag lives on Self.FVM — the same VM as the bare FVM,
+        named explicitly to match the ImplicitSuperClass.FVM sub-paths. }
+      PreviousConstructorSuperCalled := Self.FVM.FCurrentConstructorSuperCalled;
+      Self.FVM.FCurrentConstructorSuperCalled := False;
       try
         ConstructedValue := FVM.InvokeFunctionValue(
           FConstructorValue, AArguments, Instance);
-        ConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
+        ConstructorSuperCalled := Self.FVM.FCurrentConstructorSuperCalled;
       finally
-        FVM.FCurrentConstructorSuperCalled := PreviousConstructorSuperCalled;
+        Self.FVM.FCurrentConstructorSuperCalled := PreviousConstructorSuperCalled;
       end;
       if FConstructorValue is TGocciaBytecodeFunctionValue then
         ConstructorThisValue := RegisterToValue(FVM.FLastClosureThisValue)
@@ -7091,8 +7099,12 @@ begin
     InitializerReplayReceiver := nil;
     TGarbageCollector.Instance.AddTempRoot(RootedInstance);
     try
-      PreviousConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
-      FVM.FCurrentConstructorSuperCalled := False;
+      { This class has no own constructor; the implicit default constructor is
+        conceptually entered on this class's VM, so its flag lives on Self.FVM.
+        The inner ImplicitSuperClass paths save/restore their own VM's flag; this
+        wrapper protects Self.FVM's flag around the whole branch. }
+      PreviousConstructorSuperCalled := Self.FVM.FCurrentConstructorSuperCalled;
+      Self.FVM.FCurrentConstructorSuperCalled := False;
       try
         ConstructorToCall := nil;
         if Assigned(NativeInstance) then
@@ -7139,12 +7151,29 @@ begin
               TGocciaVMClassValue(ImplicitSuperClass).FVM.FPendingNewTarget := ANewTarget
             else
               TGocciaVMClassValue(ImplicitSuperClass).FVM.FPendingNewTarget := Self;
-            FVM.FCurrentConstructorSuperCalled := False;
-            ConstructedValue := TGocciaVMClassValue(ImplicitSuperClass).FVM.InvokeFunctionValue(
-              TGocciaVMClassValue(ImplicitSuperClass).FConstructorValue,
-              AArguments, Instance);
+            { The superclass constructor runs on ImplicitSuperClass.FVM, so its
+              super()-called flag lives there, not on this frame's FVM. When the
+              two are the same VM this is identical; when they differ (a
+              superclass owned by another VM), reading this frame's flag reported
+              a stale value and raised a false super-not-called error. Save and
+              restore that other VM's flag around the call — mirroring
+              TGocciaVMSuperConstructorValue.Call — so this construction never
+              leaks its reset into an unrelated in-flight construction on it. }
+            PreviousImplicitSuperCalled :=
+              TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled;
+            TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled := False;
+            try
+              ConstructedValue := TGocciaVMClassValue(ImplicitSuperClass).FVM.InvokeFunctionValue(
+                TGocciaVMClassValue(ImplicitSuperClass).FConstructorValue,
+                AArguments, Instance);
+              ImplicitSuperCalled :=
+                TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled;
+            finally
+              TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled :=
+                PreviousImplicitSuperCalled;
+            end;
             RequireImplicitSuperConstructorInitializedThis(ImplicitSuperClass,
-              ConstructedValue, FVM.FCurrentConstructorSuperCalled);
+              ConstructedValue, ImplicitSuperCalled);
             if TGocciaVMClassValue(ImplicitSuperClass).FConstructorValue is TGocciaBytecodeFunctionValue then
               ConstructorThisValue := RegisterToValue(
                 TGocciaVMClassValue(ImplicitSuperClass).FVM.FLastClosureThisValue)
@@ -7224,7 +7253,7 @@ begin
           end;
         end;
       finally
-        FVM.FCurrentConstructorSuperCalled := PreviousConstructorSuperCalled;
+        Self.FVM.FCurrentConstructorSuperCalled := PreviousConstructorSuperCalled;
       end;
 
       { This is the no-constructor branch, so the class runs the implicit
@@ -7283,6 +7312,7 @@ var
   InitializerReplayReceiver: TGocciaObjectValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
+  PreviousImplicitSuperCalled: Boolean;
   NativeInstanceConstructedByNativeSuper: Boolean;
   Chain: TGocciaImplicitConstructorChain;
   PreviousPendingNewTarget: TGocciaValue;
@@ -7517,8 +7547,10 @@ begin
         if not HasDerivedConstructorReturnRestriction then
           FVM.RunClassInitializers(Self, Instance);
         FVM.FPendingNewTarget := Self;
-        PreviousConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
-        FVM.FCurrentConstructorSuperCalled := False;
+        { This class's own constructor runs on this class's VM; name the owner
+          explicitly as Self.FVM to match the ImplicitSuperClass.FVM sub-paths. }
+        PreviousConstructorSuperCalled := Self.FVM.FCurrentConstructorSuperCalled;
+        Self.FVM.FCurrentConstructorSuperCalled := False;
         if FConstructorValue is TGocciaBytecodeFunctionValue then
         begin
           try
@@ -7530,7 +7562,7 @@ begin
               ReturnRegister := FVM.ExecuteClosureRegisters(
                 BytecodeConstructor.FClosure, RegisterObject(Instance),
                 AArguments);
-              ConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
+              ConstructorSuperCalled := Self.FVM.FCurrentConstructorSuperCalled;
               ConstructorThisRegister := FVM.FLastClosureThisValue;
               ApplyOwnConstructorThisRegister(ConstructorThisRegister);
               ApplyOwnConstructorRegister(ReturnRegister);
@@ -7541,14 +7573,14 @@ begin
               EnsureBoxedArgs;
               ConstructedValue := FVM.InvokeFunctionValue(
                 FConstructorValue, BoxedArgs, Instance);
-              ConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
+              ConstructorSuperCalled := Self.FVM.FCurrentConstructorSuperCalled;
               if FConstructorValue is TGocciaBytecodeFunctionValue then
                 ApplyOwnConstructorThisRegister(FVM.FLastClosureThisValue);
               ApplyOwnConstructorResult(ConstructedValue);
               RequireDerivedConstructorThisInitializedValue(ConstructedValue);
             end;
           finally
-            FVM.FCurrentConstructorSuperCalled :=
+            Self.FVM.FCurrentConstructorSuperCalled :=
               PreviousConstructorSuperCalled;
           end;
         end
@@ -7558,21 +7590,25 @@ begin
             EnsureBoxedArgs;
             ConstructedValue := FVM.InvokeFunctionValue(
               FConstructorValue, BoxedArgs, Instance);
-            ConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
+            ConstructorSuperCalled := Self.FVM.FCurrentConstructorSuperCalled;
             if FConstructorValue is TGocciaBytecodeFunctionValue then
               ApplyOwnConstructorThisRegister(FVM.FLastClosureThisValue);
             ApplyOwnConstructorResult(ConstructedValue);
             RequireDerivedConstructorThisInitializedValue(ConstructedValue);
           finally
-            FVM.FCurrentConstructorSuperCalled :=
+            Self.FVM.FCurrentConstructorSuperCalled :=
               PreviousConstructorSuperCalled;
           end;
         end;
       end
       else
       begin
-        PreviousConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
-        FVM.FCurrentConstructorSuperCalled := False;
+        { No own constructor: the implicit default constructor is conceptually
+          entered on this class's VM, so its flag lives on Self.FVM. The inner
+          ImplicitSuperClass paths save/restore their own VM's flag; this wrapper
+          protects Self.FVM's flag around the whole branch. }
+        PreviousConstructorSuperCalled := Self.FVM.FCurrentConstructorSuperCalled;
+        Self.FVM.FCurrentConstructorSuperCalled := False;
         try
           ConstructorToCall := nil;
 
@@ -7614,7 +7650,18 @@ begin
                 TGocciaVMClassValue(ImplicitSuperClass).FVM.RunClassInitializers(
                   ImplicitSuperClass, Instance);
               TGocciaVMClassValue(ImplicitSuperClass).FVM.FPendingNewTarget := Self;
-              FVM.FCurrentConstructorSuperCalled := False;
+              { The super()-called flag belongs to the VM that runs the superclass
+                constructor (AImplicitSuperClass.FVM), not this frame's FVM; they
+                differ when the superclass is owned by another VM. Save and
+                restore that VM's flag around the call — mirroring
+                TGocciaVMSuperConstructorValue.Call — so resetting it here never
+                leaks into an unrelated in-flight construction on that VM. Every
+                branch reads the flag inside the try, before the finally restores
+                the saved value. }
+              PreviousImplicitSuperCalled :=
+                TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled;
+              TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled := False;
+              try
               if TGocciaVMClassValue(ImplicitSuperClass).FConstructorValue is TGocciaBytecodeFunctionValue then
               begin
                 BytecodeSuperConstructor := TGocciaBytecodeFunctionValue(
@@ -7631,7 +7678,7 @@ begin
                   ValidateClassConstructorRegister(ImplicitSuperClass, ReturnRegister);
                   RequireImplicitSuperConstructorInitializedThis(
                     ImplicitSuperClass, RegisterToValue(ReturnRegister),
-                    FVM.FCurrentConstructorSuperCalled);
+                    TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled);
                   if IsUndefinedConstructedRegister(ReturnRegister) then
                     ApplyReplacementRegister(ConstructorThisRegister)
                   else
@@ -7648,7 +7695,7 @@ begin
                   ValidateClassConstructorReturn(ImplicitSuperClass, ConstructedValue);
                   RequireImplicitSuperConstructorInitializedThis(
                     ImplicitSuperClass, ConstructedValue,
-                    FVM.FCurrentConstructorSuperCalled);
+                    TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled);
                   if IsUndefinedConstructedValue(ConstructedValue) then
                     ApplyReplacementRegister(ConstructorThisRegister)
                   else
@@ -7664,8 +7711,12 @@ begin
                 ValidateClassConstructorReturn(ImplicitSuperClass, ConstructedValue);
                 RequireImplicitSuperConstructorInitializedThis(
                   ImplicitSuperClass, ConstructedValue,
-                  FVM.FCurrentConstructorSuperCalled);
+                  TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled);
                 ApplyReplacementResult(ConstructedValue);
+              end;
+              finally
+                TGocciaVMClassValue(ImplicitSuperClass).FVM.FCurrentConstructorSuperCalled :=
+                  PreviousImplicitSuperCalled;
               end;
             end
             else
@@ -7739,7 +7790,7 @@ begin
             end;
           end;
         finally
-          FVM.FCurrentConstructorSuperCalled := PreviousConstructorSuperCalled;
+          Self.FVM.FCurrentConstructorSuperCalled := PreviousConstructorSuperCalled;
         end;
 
         { Every class the chain walk collapsed owes §15.7.14 step 15a's second
@@ -13271,11 +13322,14 @@ var
   Roots: TGocciaActiveRootFrame;
 begin
   BindingObject := ToObject(AObject);
-  // A fresh, native-only value is held across HasProperty, which runs the proxy
-  // `has` trap and re-enters guest code. Root it so a collection forced from the
-  // trap cannot sweep it before the store completes.
+  // Both the store value and the ToObject box (a fresh, native-only value when
+  // AObject is a primitive, reachable only through this local) are held across
+  // HasProperty, which runs the proxy `has` trap and re-enters guest code. Root
+  // them so a collection forced from the trap cannot sweep either before the
+  // store completes.
   Roots.Initialize;
   Roots.Add(AValue);
+  Roots.Add(BindingObject);
   try
     KeyStr := KeyToPropertyName(AKey);
     StillExists := BindingObject.HasProperty(KeyStr);

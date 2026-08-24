@@ -144,7 +144,9 @@ describe("operator operands under collection", () => {
     expect(box(9) / box(4)).toBe(2.25);
     expect(box(9) < box(4)).toBe(false);
     expect(box(4) < box(9)).toBe(true);
-    expect(box(9) == box(9)).toBe(false); // distinct objects, ES2026 §7.2.13
+    const leftNine = box(9);
+    const rightNine = box(9);
+    expect(leftNine == rightNine).toBe(false); // distinct objects, ES2026 §7.2.13
   });
 
   test("hooks that allocate before collecting", () => {

@@ -120,7 +120,8 @@ type
     function HasModuleStateForAddress(const AAddress: string): Boolean;
     function TryLoadGlobalModule(const AModulePath: string;
       out AModule: TGocciaModule): Boolean;
-    function DeferredGraphTouchesEvaluating(const AResolvedPath: string;
+    function DeferredGraphTouchesEvaluating(const AResolvedPath,
+      AImportingFilePath: string;
       const ASeen: TOrderedStringMap<Boolean>): Boolean;
     procedure EvaluateDeferredAsyncDependencies(const AResolvedPath,
       AImportingFilePath: string; const ASeen: TOrderedStringMap<Boolean>;
@@ -776,10 +777,23 @@ end;
 function TGocciaModuleLoader.LoadResolvedContent(const AResolvedPath: string;
   var AIsHostOwned: Boolean): TGocciaModuleContent;
 begin
-  if FVirtualModules.Contains(AResolvedPath) then
-    Result := FVirtualModules.LoadContent(AResolvedPath)
-  else
-    Result := FContentProvider.LoadContent(AResolvedPath);
+  // A content provider decodes the module's bytes as UTF-8 and raises
+  // EConvertError on malformed input (both the filesystem and virtual providers
+  // do this). Left unwrapped it propagates as a host exception that
+  // TryRejectAsyncPromiseWithException cannot turn into a rejection, so a
+  // dynamic import() of a bad-UTF-8 module would never reach a guest-visible
+  // error. Re-raise as a guest TGocciaRuntimeError carrying ONLY the conversion
+  // message (e.g. "Invalid UTF-8 at byte N"): the resolved host path is
+  // deliberately withheld so it cannot leak into a guest-reachable message.
+  try
+    if FVirtualModules.Contains(AResolvedPath) then
+      Result := FVirtualModules.LoadContent(AResolvedPath)
+    else
+      Result := FContentProvider.LoadContent(AResolvedPath);
+  except
+    on E: EConvertError do
+      raise TGocciaRuntimeError.Create(E.Message, 0, 0, '', nil);
+  end;
   if Assigned(Result) and (Result.CanonicalIdentity <> '') then
   begin
     if FHostOwnedModuleIdentities.ContainsKey(Result.CanonicalIdentity) then
@@ -1895,7 +1909,7 @@ begin
   begin
     Seen := TOrderedStringMap<Boolean>.Create;
     try
-      if DeferredGraphTouchesEvaluating(CacheKey, Seen) then
+      if DeferredGraphTouchesEvaluating(CacheKey, ImportingFilePath, Seen) then
         raise EGocciaDeferredModuleNotReady.Create(
           DEFERRED_MODULE_NOT_READY_MESSAGE);
     finally
@@ -2226,7 +2240,8 @@ begin
 end;
 
 function TGocciaModuleLoader.DeferredGraphTouchesEvaluating(
-  const AResolvedPath: string; const ASeen: TOrderedStringMap<Boolean>): Boolean;
+  const AResolvedPath, AImportingFilePath: string;
+  const ASeen: TOrderedStringMap<Boolean>): Boolean;
 var
   AttributeType: string;
   Content: TGocciaModuleContent;
@@ -2269,7 +2284,11 @@ begin
   if not IsJavaScriptModuleResource(PhysicalPath) then
     Exit(False);
 
-  IsHostOwned := IsHostOwnedLoad(PhysicalPath, '');
+  { Propagate the importing path so a transitive dependency of a host-owned
+    module is itself recognized as host-owned. With an empty importer here, an
+    ordinary deferred dependency of a host module registered guest-owned, which
+    would expose host source in a guest runtime code frame. }
+  IsHostOwned := IsHostOwnedLoad(PhysicalPath, AImportingFilePath);
   if IsHostOwned then
     MarkHostOwnedAddress(PhysicalPath);
   Content := LoadResolvedContent(PhysicalPath, IsHostOwned);
@@ -2308,7 +2327,8 @@ begin
 
           ResolvedPath := ResolveModuleRequestWithAttribute(RequestedPath,
             RequestedAttributeType, PhysicalPath);
-          if DeferredGraphTouchesEvaluating(ResolvedPath, ASeen) then
+          if DeferredGraphTouchesEvaluating(ResolvedPath, PhysicalPath,
+             ASeen) then
             Exit(True);
         end;
       finally

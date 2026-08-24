@@ -121,15 +121,19 @@ type
   end;
 
   { Raises at a deterministic index insertion, standing in for an allocator
-    failure during the registry's commit phase. }
+    failure during the registry's commit phase. FFailReconcile arms the same
+    kind of failure at the end of the alias-reconciliation path instead. }
   TFailingDiagnosticSourceScope = class(TGocciaDiagnosticSourceScope)
   private
     FFailAtIndex: Integer;
+    FFailReconcile: Boolean;
   protected
     procedure AfterIndexCommit(const AIndex: Integer); override;
+    procedure AfterReconcileCommit; override;
   public
     constructor Create(const AFailAtIndex: Integer);
     property FailAtIndex: Integer read FFailAtIndex write FFailAtIndex;
+    property FailReconcile: Boolean read FFailReconcile write FFailReconcile;
   end;
 
   TMemoryLimitTests = class(TTestSuite)
@@ -228,6 +232,7 @@ type
     procedure TestDiagnosticCanonicalIdentityKeepsHostOwnership;
     procedure TestDiagnosticSourceAccountingUsesRetainedBytes;
     procedure TestDiagnosticRegistryCommitRollsBack;
+    procedure TestDiagnosticReconcileRollsBack;
   protected
     procedure BeforeEach; override;
   public
@@ -374,6 +379,14 @@ begin
     raise EOutOfMemory.Create('injected diagnostic registry allocation failure');
 end;
 
+procedure TFailingDiagnosticSourceScope.AfterReconcileCommit;
+begin
+  inherited AfterReconcileCommit;
+  if FFailReconcile then
+    raise EOutOfMemory.Create(
+      'injected diagnostic reconciliation allocation failure');
+end;
+
 procedure TMemoryLimitTests.SetupTests;
 begin
   Test('Diagnostic file identity failure disables source disclosure',
@@ -384,6 +397,8 @@ begin
     TestDiagnosticSourceAccountingUsesRetainedBytes);
   Test('Diagnostic registry commit rolls back indexes and reservation',
     TestDiagnosticRegistryCommitRollsBack);
+  Test('Diagnostic alias reconciliation rolls back ownership and bindings',
+    TestDiagnosticReconcileRollsBack);
   Test('The gate refuses a request larger than the remaining budget',
     TestGateRefusesOverBudgetRequest);
   Test('The gate permits a request that fits the remaining budget',
@@ -2011,6 +2026,61 @@ begin
     Scope.Free;
   end;
   Expect<Int64>(GC.BytesAllocated).ToBe(BaselineBytes);
+end;
+
+procedure TMemoryLimitTests.TestDiagnosticReconcileRollsBack;
+var
+  FirstLine: Integer;
+  Raised: Boolean;
+  RetainedBefore: Int64;
+  Scope: TFailingDiagnosticSourceScope;
+  Window: TStringList;
+begin
+  { Register a guest source with no canonical identity first, so it is keyed by
+    both path spellings under a '#path:' canonical. A later identified HOST
+    registration of the same file takes the alias-reconciliation branch: it
+    would upgrade the entry to host-owned (suppressing the guest window). Arm a
+    failure at the end of that branch and prove the whole reconciliation is
+    transactional — the entry stays guest-owned and the new canonical key is
+    gone, so a failed host registration cannot permanently suppress a
+    previously guest-owned window. }
+  TGarbageCollector.Instance.Collect;
+  Scope := TFailingDiagnosticSourceScope.Create(-1);
+  Window := TStringList.Create;
+  try
+    Scope.Register('reconcile.js', 'const reconcile = true;', False);
+    Expect<Boolean>(Scope.TryGetGuestWindow('reconcile.js', 1, 0, 0,
+      Window, FirstLine)).ToBe(True);
+    RetainedBefore := Scope.RetainedBytes;
+
+    Scope.FailReconcile := True;
+    Raised := False;
+    try
+      Scope.Register('reconcile.js', 'const reconcile = true;', True,
+        '#test:reconcile-id', True);
+    except
+      on E: EOutOfMemory do
+        Raised := True;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+    { Ownership flag restored: the window is still guest-visible. }
+    Expect<Boolean>(Scope.TryGetGuestWindow('reconcile.js', 1, 0, 0,
+      Window, FirstLine)).ToBe(True);
+    { The reconciliation path charges no bytes, and rollback adds none. }
+    Expect<Int64>(Scope.RetainedBytes).ToBe(RetainedBefore);
+
+    { Disarmed, the same host registration reconciles cleanly: the entry is now
+      host-owned, so it is no longer handed to a guest window, and the canonical
+      key the failed attempt rolled back is inserted this time. }
+    Scope.FailReconcile := False;
+    Scope.Register('reconcile.js', 'const reconcile = true;', True,
+      '#test:reconcile-id', True);
+    Expect<Boolean>(Scope.TryGetGuestWindow('reconcile.js', 1, 0, 0,
+      Window, FirstLine)).ToBe(False);
+  finally
+    Window.Free;
+    Scope.Free;
+  end;
 end;
 
 begin

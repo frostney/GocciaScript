@@ -277,20 +277,32 @@ const
     vastly outnumber everything else that is not a separator. }
   FIRST_NON_ASCII_CHARACTER = #$0080;
   { What stripped text leaves behind. A string, template, or regular expression
-    is an operand, so it collapses to a value-closing punctuator and the slash
-    after it reads as division; the inside of a template collapses to an
+    is an operand, so it collapses to a marker that the slash scan reads as
+    value-closing (division follows); the inside of a template collapses to an
     operand-opening one, because a slash there opens a literal. A comment is
     neither, so it collapses to a space and the scan looks straight past it.
-    None of the three is a character any marker can be spelled with. }
-  STRIPPED_VALUE_PLACEHOLDER = ')';
-  STRIPPED_OPERAND_PLACEHOLDER = ',';
+
+    The value and operand markers are C0 control characters (#1/#2), NOT ')' and
+    ',' as they once were: those ordinary punctuators collide with real source.
+    `use(x.import, x)` strips to `import,` whose comma is a genuine operator, yet
+    a ',' operand marker made LooksLikeESModuleSource read it as the ESM
+    `import`-follower and wrongly suppress the CommonJS refusal. A C0 control
+    character cannot appear as a token, separator, or identifier part in valid
+    JavaScript, so a stripped literal is now unambiguously distinguishable from
+    any real character. The comment marker stays a space: whitespace is already a
+    legitimate token separator, so it collides with nothing. Consumers refer to
+    these by name (VALUE_CLOSING_CHARACTERS, the LooksLikeESModuleSource follower
+    set, SlashOpensRegExpLiteral) so the values live in exactly one place. }
+  STRIPPED_VALUE_PLACEHOLDER = #1;
+  STRIPPED_OPERAND_PLACEHOLDER = #2;
   STRIPPED_COMMENT_PLACEHOLDER = ' ';
-  { Punctuators that close a value, so a `/` after one is division. The closing
-    brace is counted here because an object literal is by far the more common
-    thing to precede a slash; a regular expression opening right after a
-    block's closing brace is scanned as division instead, which only matters if
-    its body holds a quote or a slash pair. }
-  VALUE_CLOSING_CHARACTERS = [')', ']', '}'];
+  { Punctuators that close a value, so a `/` after one is division. The stripped
+    value marker is included so a stripped string/template/regex still reads as a
+    value-closer. The closing brace is counted here because an object literal is
+    by far the more common thing to precede a slash; a regular expression opening
+    right after a block's closing brace is scanned as division instead, which
+    only matters if its body holds a quote or a slash pair. }
+  VALUE_CLOSING_CHARACTERS = [')', ']', '}', STRIPPED_VALUE_PLACEHOLDER];
   { The keywords a regular expression literal may legally follow. After any
     other identifier the slash divides the value that identifier names. }
   REGEXP_PRECEDING_KEYWORDS: array[0..13] of string = (
@@ -1003,7 +1015,8 @@ end;
   passes False, because whitespace before a `.` is not what it is looking for. }
 function ContainsKeywordBefore(const ASource, AKeyword: string;
   const AFollowers: TSysCharSet;
-  const ASeparatorFollows: Boolean = False): Boolean;
+  const ASeparatorFollows: Boolean = False;
+  const ARejectMemberAccessBefore: Boolean = False): Boolean;
 var
   Follower: Char;
   Index, KeywordLength, SourceLength: Integer;
@@ -1014,7 +1027,17 @@ begin
   while Index > 0 do
   begin
     if ((Index = 1) or (not IsIdentifierPartCharacter(ASource[Index - 1]))) and
-       (Index + KeywordLength <= SourceLength) then
+       (Index + KeywordLength <= SourceLength) and
+       { A keyword reached through member access (`x.import`) or optional
+         chaining (`x?.import`) is an ordinary property name, never the ESM
+         `import`/`export` keyword. Both spellings end in '.', so rejecting a
+         preceding '.' excludes every member-access use — `x.import`,
+         `x.import()`, `x.import.y`, `` x.import`t` ``, `obj.export = 1` — no
+         matter what follows. This is the root exclusion the ESM detector needs:
+         genuine keyword `import`/`export` is never preceded by '.', so nothing
+         legitimate is lost, and no follower-set tweak can reintroduce the bug. }
+       (not (ARejectMemberAccessBefore and (Index > 1) and
+             (ASource[Index - 1] = '.'))) then
     begin
       Follower := ASource[Index + KeywordLength];
       if (Follower in AFollowers) or
@@ -1347,10 +1370,23 @@ function LooksLikeESModuleSource(const ASource: string): Boolean;
 begin
   { `import(` is dynamic import, which CommonJS files use too, so a bare '('
     after the keyword is not evidence either way. Whitespace counts as a
-    follower in its own right, so the sets name only the punctuation. }
+    follower in its own right, so the sets name only the punctuation. The
+    stripped placeholders are followers too: a space-free side-effect import
+    (`import"./a.js";`) has its literal collapsed to STRIPPED_VALUE_PLACEHOLDER
+    before this scan, so without them a minified ES module whose only ES marker
+    is such an import is misread as CommonJS. The raw quotes stay for the
+    fallback path that classifies on unstripped source.
+
+    Both keyword checks pass ARejectMemberAccessBefore=True so a preceding '.'
+    (member access or optional chaining) disqualifies the match: `x.import` and
+    `obj.export` are property names in valid CommonJS, never ES-module markers,
+    whatever punctuation follows. Excluding them at the keyword boundary is the
+    root fix — it replaces the earlier, ever-growing effort to name every
+    follower character a member-access `import` could strip down to. }
   Result := ContainsKeywordBefore(ASource, ESM_IMPORT_KEYWORD,
-      ['{', '*', '"', ''''], True) or
-    ContainsKeywordBefore(ASource, ESM_EXPORT_KEYWORD, ['{', '*'], True);
+      ['{', '*', '"', '''', STRIPPED_VALUE_PLACEHOLDER,
+       STRIPPED_OPERAND_PLACEHOLDER], True, True) or
+    ContainsKeywordBefore(ASource, ESM_EXPORT_KEYWORD, ['{', '*'], True, True);
 end;
 
 function LooksLikeCommonJSSource(const ASource: string): Boolean;

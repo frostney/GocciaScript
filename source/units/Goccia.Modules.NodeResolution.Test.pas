@@ -1,6 +1,10 @@
 program Goccia.Modules.NodeResolution.Test;
 
 {$I Goccia.inc}
+{ This file contains non-ASCII source string literals (e.g. `café`); pin the
+  source codepage so they decode as UTF-8 on every target rather than through
+  the platform default. }
+{$codepage utf8}
 
 uses
   {$IFDEF UNIX}BaseUnix,{$ENDIF}
@@ -66,8 +70,10 @@ type
     procedure TestModuleExportsLooksLikeCommonJS;
     procedure TestESModuleSourceDoesNotLookLikeCommonJS;
     procedure TestMixedSourceIsReadAsESModule;
+    procedure TestMinifiedSideEffectImportIsReadAsESModule;
     procedure TestInertSourceIsNotCommonJS;
     procedure TestIdentifierEndingInRequireIsNotACall;
+    procedure TestImportPropertyNameDoesNotLookLikeESModule;
 
     procedure TestEsbuildBannerIsNotAnESModuleMarker;
     procedure TestStringLiteralMarkerIsNotAnESModuleMarker;
@@ -264,9 +270,13 @@ begin
     TestESModuleSourceDoesNotLookLikeCommonJS);
   Test('source with both shapes is read as an ES module',
     TestMixedSourceIsReadAsESModule);
+  Test('a minified space-free side-effect import is read as an ES module',
+    TestMinifiedSideEffectImportIsReadAsESModule);
   Test('inert source is not CommonJS', TestInertSourceIsNotCommonJS);
   Test('an identifier ending in require is not a require call',
     TestIdentifierEndingInRequireIsNotACall);
+  Test('an "import" property name is not an ES module marker',
+    TestImportPropertyNameDoesNotLookLikeESModule);
 
   Test('an esbuild banner comment is not an ES module marker',
     TestEsbuildBannerIsNotAnESModuleMarker);
@@ -888,6 +898,16 @@ begin
     'export const value = legacy;')).ToBe(False);
 end;
 
+procedure TNodeResolutionTests.TestMinifiedSideEffectImportIsReadAsESModule;
+begin
+  { A minifier emits a space-free side-effect import (`import"./a.js";`). The
+    scan strips the string literal to a placeholder before matching, so the
+    keyword follower set must accept the placeholder or this ES module — whose
+    only ES marker is that import — is misclassified as CommonJS and refused. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'import"./polyfill.js";const x=require("y");')).ToBe(False);
+end;
+
 procedure TNodeResolutionTests.TestInertSourceIsNotCommonJS;
 begin
   Expect<Boolean>(LooksLikeCommonJSSource('')).ToBe(False);
@@ -899,6 +919,60 @@ procedure TNodeResolutionTests.TestIdentifierEndingInRequireIsNotACall;
 begin
   Expect<Boolean>(LooksLikeCommonJSSource(
     'const value = createRequire(import.meta.url);')).ToBe(False);
+end;
+
+procedure TNodeResolutionTests.TestImportPropertyNameDoesNotLookLikeESModule;
+begin
+  { `import` used as an ordinary property name is not the ESM `import` keyword.
+    After stripping, `use(x.import, x)` reads as `import,` — but that comma is a
+    real operator, not a stripped string literal. When the stripped-literal
+    markers were the ordinary punctuators ')' and ',', the ESM follower set
+    matched this genuine comma and misread the file as an ES module, wrongly
+    suppressing the CommonJS refusal. Collision-free control-character markers
+    keep a genuine comma distinct from a stripped literal, so this classifies as
+    CommonJS. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const x=require("y"); use(x.import, x);')).ToBe(True);
+  { The `import`-followed-by-a-closing-paren shape is the same collision for the
+    old ')' value marker: `x.import)` must not read as ESM either. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const x=require("y"); (x.import);')).ToBe(True);
+
+  { Root exclusion: a member-access `import`/`export` is a property name, never
+    the ESM keyword, no matter what follows. Chasing individual follower
+    characters (',' then ')' then the control-char markers) let each new shape
+    reintroduce the bug; excluding a preceding '.' at the keyword boundary closes
+    the whole class at once. Each case below carries a genuine CommonJS marker
+    (`require(...)`), so a correct classifier must return CommonJS. }
+  { Tagged template: `` x.import`t` `` strips to `x.import` + operand marker,
+    which is in the import follower set — the shape that motivated this fix. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const x=require("y"); x.import`t`;')).ToBe(True);
+  { Method-style call on the property. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const x=require("y"); x.import();')).ToBe(True);
+  { Further member access off the property. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const x=require("y"); x.import.y;')).ToBe(True);
+  { Optional chaining reaches the property too (`?.` ends in '.'). }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const x=require("y"); x?.import;')).ToBe(True);
+  { `export` has the same member-access hazard: `obj.export = 1` is a property
+    assignment whose trailing space would otherwise match the ESM `export `
+    follower and suppress the CommonJS refusal. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'const x=require("y"); obj.export = 1;')).ToBe(True);
+
+  { The minified space-free side-effect import — the shape the marker follower
+    set exists to catch — must STILL classify as an ES module. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'import"./a.js";const x=require("y");')).ToBe(False);
+  { Genuine ESM markers must still be detected as ES modules (not CommonJS),
+    so the member-access exclusion does not over-reject real keywords. }
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'import x from "./x.js";const y=require("z");')).ToBe(False);
+  Expect<Boolean>(LooksLikeCommonJSSource(
+    'export const a = 1;const y=require("z");')).ToBe(False);
 end;
 
 { ── Comment and literal stripping ──────────────────────────── }

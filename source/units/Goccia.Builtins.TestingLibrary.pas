@@ -4092,6 +4092,7 @@ var
   FailureRecorded: Boolean;
   TerminalUnwinding: Boolean;
   TimerErrorValue: TGocciaValue;
+  TimerErrorRoot: TGocciaTempRoot;
   EffectiveSuiteName: string;
   HookFailed: Boolean;
   HookMessage: string;
@@ -4291,7 +4292,18 @@ begin
                   where the test that scheduled it is still the current one. }
                 if TakeUncaughtTimerError(TimerErrorValue) then
                 begin
-                  RejectionReason := DescribeRejectionReason(TimerErrorValue);
+                  { TakeUncaughtTimerError clears the queue's root, so this value
+                    is now marked by nothing. DescribeRejectionReason reads guest
+                    properties through GetProperty, which can run arbitrary code
+                    and collect, so keep it rooted across that call. }
+                  InitializeTempRoot(TimerErrorRoot);
+                  Goccia.GarbageCollector.AddTempRootIfNeeded(TimerErrorRoot,
+                    TimerErrorValue);
+                  try
+                    RejectionReason := DescribeRejectionReason(TimerErrorValue);
+                  finally
+                    Goccia.GarbageCollector.RemoveTempRootIfNeeded(TimerErrorRoot);
+                  end;
                   AssertionFailed('timer callback',
                     'Uncaught exception in a timer callback: ' +
                     RejectionReason);

@@ -27,7 +27,10 @@ describe("interpreter dynamic import() of a module with a compiled top-level thr
 
     // A mangled rejection would be a plain Error named "Error" with message
     // "Boom: boom"; the identity-preserving path keeps the module's own Boom.
+    // Assert by reference: a fresh Boom with the same fields would still be a
+    // boundary-contract violation, and only an identity check catches it.
     expect(caught).not.toBe(null);
+    expect(caught).toBe(globalThis.__gocciaTopLevelThrowValue);
     expect(caught instanceof Error).toBe(true);
     expect(caught.name).toBe("Boom");
     expect(caught.message).toBe("boom");

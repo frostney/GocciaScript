@@ -612,13 +612,25 @@ end;
 procedure TGarbageCollector.RegisterObject(
   const AObject: TGCManagedObject);
 begin
-  AObject.GCIndex := FManagedObjects.Count;
-  FManagedObjects.Add(AObject);
-  Inc(FAllocationsSinceLastGC);
-  Inc(FBytesAllocated, AObject.InstanceSize);
-  Inc(FTotalBytesAllocated, AObject.InstanceSize);
-  if FBytesAllocated > FPeakBytesAllocated then
-    FPeakBytesAllocated := FBytesAllocated;
+  // Every FBytesAllocated read-modify-write must be serialized on GCCollectLock.
+  // A cross-thread ReleaseExternalBytes (an error charged on this collector but
+  // destroyed on another thread) drives FBytesAllocated concurrently with this
+  // allocation, so an unlocked Inc here can lose that release's update and tear
+  // the total the memory limit is checked against. This is the same recursive
+  // lock Collect and the external-byte reserve/release paths hold, so a
+  // collection this allocation may trigger re-enters it safely.
+  CriticalSectionEnter(GCCollectLock);
+  try
+    AObject.GCIndex := FManagedObjects.Count;
+    FManagedObjects.Add(AObject);
+    Inc(FAllocationsSinceLastGC);
+    Inc(FBytesAllocated, AObject.InstanceSize);
+    Inc(FTotalBytesAllocated, AObject.InstanceSize);
+    if FBytesAllocated > FPeakBytesAllocated then
+      FPeakBytesAllocated := FBytesAllocated;
+  finally
+    CriticalSectionLeave(GCCollectLock);
+  end;
 end;
 
 procedure TGarbageCollector.UnregisterObject(
@@ -631,35 +643,47 @@ begin
   if not Assigned(FManagedObjects) then
     Exit;
 
-  Idx := AObject.GCIndex;
-  if FCollecting and
-     ((Idx < 0) or (Idx >= FManagedObjects.Count) or
-      (FManagedObjects[Idx] <> AObject)) then
-    Exit;
+  // The FBytesAllocated Dec below (and the floor invalidation it feeds) is a
+  // read-modify-write that a cross-thread ReleaseExternalBytes drives against
+  // this same collector, so serialize the whole body on GCCollectLock — the
+  // same recursive lock Collect holds while it walks these lists and calls
+  // Recycle -> Free -> BeforeDestruction -> UnregisterObject, so that re-entry
+  // is safe. Without the lock the unlocked Dec here can lose a concurrent
+  // release's update and tear the total the memory limit checks.
+  CriticalSectionEnter(GCCollectLock);
+  try
+    Idx := AObject.GCIndex;
+    if FCollecting and
+       ((Idx < 0) or (Idx >= FManagedObjects.Count) or
+        (FManagedObjects[Idx] <> AObject)) then
+      Exit;
 
-  if Assigned(FPinnedObjects) then
-    FPinnedObjects.Remove(AObject);
-  if Assigned(FTempRoots) then
-    FTempRoots.Remove(AObject);
-  if Assigned(FQueuedRoots) then
-    FQueuedRoots.Remove(AObject);
-  if Assigned(FKeptObjects) then
-    FKeptObjects.Remove(AObject);
-  if Assigned(FRootObjects) then
-    FRootObjects.Remove(AObject);
-  ClearActiveRootEntries(AObject);
+    if Assigned(FPinnedObjects) then
+      FPinnedObjects.Remove(AObject);
+    if Assigned(FTempRoots) then
+      FTempRoots.Remove(AObject);
+    if Assigned(FQueuedRoots) then
+      FQueuedRoots.Remove(AObject);
+    if Assigned(FKeptObjects) then
+      FKeptObjects.Remove(AObject);
+    if Assigned(FRootObjects) then
+      FRootObjects.Remove(AObject);
+    ClearActiveRootEntries(AObject);
 
-  if (Idx >= 0) and (Idx < FManagedObjects.Count) and
-     (FManagedObjects[Idx] = AObject) then
-  begin
-    FManagedObjects[Idx] := nil;
-    AObject.GCIndex := -1;
-    Dec(FBytesAllocated, AObject.InstanceSize);
-    // Same invalidation as ReleaseExternalBytes: dropping below the recorded
-    // floor means that observation no longer bounds what a collection could
-    // reclaim and must not go on suppressing one.
-    if (FForcedCollectFloor >= 0) and (FBytesAllocated < FForcedCollectFloor) then
-      FForcedCollectFloor := -1;
+    if (Idx >= 0) and (Idx < FManagedObjects.Count) and
+       (FManagedObjects[Idx] = AObject) then
+    begin
+      FManagedObjects[Idx] := nil;
+      AObject.GCIndex := -1;
+      Dec(FBytesAllocated, AObject.InstanceSize);
+      // Same invalidation as ReleaseExternalBytes: dropping below the recorded
+      // floor means that observation no longer bounds what a collection could
+      // reclaim and must not go on suppressing one.
+      if (FForcedCollectFloor >= 0) and (FBytesAllocated < FForcedCollectFloor) then
+        FForcedCollectFloor := -1;
+    end;
+  finally
+    CriticalSectionLeave(GCCollectLock);
   end;
 end;
 
@@ -1159,7 +1183,16 @@ end;
 
 procedure TGarbageCollector.ResetPeakBytesAllocated;
 begin
-  FPeakBytesAllocated := FBytesAllocated;
+  // Reads FBytesAllocated and writes the sibling peak total, so take the same
+  // lock the mutators use: a concurrent cross-thread ReleaseExternalBytes would
+  // otherwise let this observe a torn 64-bit total (on 32-bit targets) or race
+  // the peak update in RegisterObject/TryReserveExternalBytes.
+  CriticalSectionEnter(GCCollectLock);
+  try
+    FPeakBytesAllocated := FBytesAllocated;
+  finally
+    CriticalSectionLeave(GCCollectLock);
+  end;
 end;
 
 function TGarbageCollector.ShouldForceLimitCollection(
@@ -1198,20 +1231,36 @@ end;
 function TGarbageCollector.TryCollectForLimitedBytes(const ABytes: Int64;
   const AProtect: TGCManagedObject): Boolean;
 begin
-  if not ShouldForceLimitCollection(ABytes) then
-    Exit(False);
-  CollectForMemoryPressure(AProtect, True);
-  Result := (FBytesAllocated <= High(Int64) - ABytes) and
-    ((FMaxBytes <= 0) or (FBytesAllocated + ABytes <= FMaxBytes));
-  // Record the level this collection could not get below, so a retry of a
-  // request it already refused skips the walk that just proved fruitless.
-  // Collect clears this again — as do CollectYoung and the conditional
-  // invalidations on any counter drop (ReleaseExternalBytes,
-  // UnregisterObject) — so any ordinary collection re-arms forcing.
-  // The per-request-size term is pinned by the damper test's third arm in
-  // Goccia.GarbageCollector.Test.pas (a size-independent floor fails it).
-  if not Result then
-    FForcedCollectFloor := FBytesAllocated;
+  // Serialize the whole predicate/collect/fit-test/floor-write sequence on the
+  // GC's global collect lock, not just the reservation the reserve path wraps.
+  // This method is also reached directly from RequireNativeBytes
+  // (Goccia.MemoryLimit) with no lock held. A concurrent cross-thread
+  // ReleaseExternalBytes mutates FBytesAllocated and FForcedCollectFloor; if the
+  // fit test read those counters unlocked it could see a torn 64-bit total (on
+  // 32-bit targets) or a value a release changed mid-decision, yielding a stale
+  // fit result — and the floor write could resurrect a level a release just
+  // invalidated back to -1. The lock is recursive, so the reserve path that
+  // already holds it (TryReserveExternalBytes) and the Collect that
+  // CollectForMemoryPressure drives re-enter it safely.
+  CriticalSectionEnter(GCCollectLock);
+  try
+    if not ShouldForceLimitCollection(ABytes) then
+      Exit(False);
+    CollectForMemoryPressure(AProtect, True);
+    Result := (FBytesAllocated <= High(Int64) - ABytes) and
+      ((FMaxBytes <= 0) or (FBytesAllocated + ABytes <= FMaxBytes));
+    // Record the level this collection could not get below, so a retry of a
+    // request it already refused skips the walk that just proved fruitless.
+    // Collect clears this again — as do CollectYoung and the conditional
+    // invalidations on any counter drop (ReleaseExternalBytes,
+    // UnregisterObject) — so any ordinary collection re-arms forcing.
+    // The per-request-size term is pinned by the damper test's third arm in
+    // Goccia.GarbageCollector.Test.pas (a size-independent floor fails it).
+    if not Result then
+      FForcedCollectFloor := FBytesAllocated;
+  finally
+    CriticalSectionLeave(GCCollectLock);
+  end;
 end;
 
 function TGarbageCollector.TryReserveExternalBytes(
@@ -1219,25 +1268,36 @@ function TGarbageCollector.TryReserveExternalBytes(
 begin
   if ABytes <= 0 then
     Exit(True);
-  Result := (FBytesAllocated <= High(Int64) - ABytes) and
-    ((FMaxBytes <= 0) or (FBytesAllocated + ABytes <= FMaxBytes));
-  if not Result then
-    Result := TryCollectForLimitedBytes(ABytes, AProtect);
-  if not Result then
-    Exit;
-  Inc(FBytesAllocated, ABytes);
-  Inc(FExternalBytes, ABytes);
-  Inc(FExternalBytesAllocatedSinceGC, ABytes);
-  Inc(FTotalBytesAllocated, ABytes);
-  if FBytesAllocated > FPeakBytesAllocated then
-    FPeakBytesAllocated := FBytesAllocated;
-  if (FExternalBytesAllocatedSinceGC >=
-      EXTERNAL_MEMORY_PRESSURE_ALLOCATION_INTERVAL) or
-     NeedsMemoryPressureCollection then
-  begin
-    FExternalPressurePending := True;
-    if Assigned(FMemoryPressureCountdown) then
-      FMemoryPressureCountdown^ := 0;
+  // External-byte accounting is a read-modify-write on FBytesAllocated and
+  // FExternalBytes that a cross-thread error destructor can drive concurrently
+  // through ReleaseExternalBytes on this same (reserving) collector. Serialize
+  // both sides on the GC's global collect lock so the two never tear each
+  // other's totals. The lock is recursive, so re-entering it from the Collect
+  // that TryCollectForLimitedBytes may trigger is safe.
+  CriticalSectionEnter(GCCollectLock);
+  try
+    Result := (FBytesAllocated <= High(Int64) - ABytes) and
+      ((FMaxBytes <= 0) or (FBytesAllocated + ABytes <= FMaxBytes));
+    if not Result then
+      Result := TryCollectForLimitedBytes(ABytes, AProtect);
+    if not Result then
+      Exit;
+    Inc(FBytesAllocated, ABytes);
+    Inc(FExternalBytes, ABytes);
+    Inc(FExternalBytesAllocatedSinceGC, ABytes);
+    Inc(FTotalBytesAllocated, ABytes);
+    if FBytesAllocated > FPeakBytesAllocated then
+      FPeakBytesAllocated := FBytesAllocated;
+    if (FExternalBytesAllocatedSinceGC >=
+        EXTERNAL_MEMORY_PRESSURE_ALLOCATION_INTERVAL) or
+       NeedsMemoryPressureCollection then
+    begin
+      FExternalPressurePending := True;
+      if Assigned(FMemoryPressureCountdown) then
+        FMemoryPressureCountdown^ := 0;
+    end;
+  finally
+    CriticalSectionLeave(GCCollectLock);
   end;
 end;
 
@@ -1245,21 +1305,31 @@ procedure TGarbageCollector.ReleaseExternalBytes(const ABytes: Int64);
 begin
   if ABytes <= 0 then
     Exit;
-  if ABytes >= FExternalBytes then
-  begin
-    Dec(FBytesAllocated, FExternalBytes);
-    FExternalBytes := 0;
-  end
-  else
-  begin
-    Dec(FExternalBytes, ABytes);
-    Dec(FBytesAllocated, ABytes);
+  // Serialize with TryReserveExternalBytes and Collect on the same lock: this
+  // runs on the reserving collector, which may be owned by another thread (an
+  // error object charged on thread A can be destroyed on thread B, which then
+  // releases here against collector A). Without the lock that release and
+  // collector A's own reserve/collect tear FBytesAllocated/FExternalBytes.
+  CriticalSectionEnter(GCCollectLock);
+  try
+    if ABytes >= FExternalBytes then
+    begin
+      Dec(FBytesAllocated, FExternalBytes);
+      FExternalBytes := 0;
+    end
+    else
+    begin
+      Dec(FExternalBytes, ABytes);
+      Dec(FBytesAllocated, ABytes);
+    end;
+    // Released bytes take the heap below the level the last forced collection
+    // observed, so that observation no longer bounds what a collection could
+    // reclaim and must not go on suppressing one.
+    if (FForcedCollectFloor >= 0) and (FBytesAllocated < FForcedCollectFloor) then
+      FForcedCollectFloor := -1;
+  finally
+    CriticalSectionLeave(GCCollectLock);
   end;
-  // Released bytes take the heap below the level the last forced collection
-  // observed, so that observation no longer bounds what a collection could
-  // reclaim and must not go on suppressing one.
-  if (FForcedCollectFloor >= 0) and (FBytesAllocated < FForcedCollectFloor) then
-    FForcedCollectFloor := -1;
 end;
 
 function TGarbageCollector.ExchangeMemoryPressureCountdown(

@@ -5,7 +5,9 @@ features: [Timers]
 
 import {
   advanceTimersByTime,
+  advanceTimersToNextTimer,
   getTimerCount,
+  runAllTimers,
   setSystemTime,
   useFakeTimers,
   useRealTimers,
@@ -318,6 +320,166 @@ describe("performance.now across the fake/real transition", () => {
     // Back on the process timeline, not stranded at 500.
     expect(performance.now() >= realBefore).toBe(true);
     expect(typeof performance.timeOrigin).toBe("number");
+  });
+});
+
+describe("a nested advance that self-clears an interval keeps the outer frame's entry alive", () => {
+  afterEach(() => {
+    useRealTimers();
+  });
+
+  // An interval stays in the queue while it runs, and the fake-clock selectors
+  // do not skip a dispatching entry, so a nested advance from inside the
+  // callback re-enters the same entry. When dispatch state was a Boolean, the
+  // inner frame cleared it on the way out; a clearInterval from the still-running
+  // outer callback then took the "not dispatching" branch and freed the entry
+  // the outer frame was about to read — a use-after-free. A depth counter keeps
+  // the entry marked in-flight until the last frame unwinds.
+  test("nested advance then an outer-frame self-clear does not free the live entry", () => {
+    useFakeTimers();
+
+    let runs = 0;
+    let id;
+    id = setInterval(() => {
+      runs += 1;
+      const mine = runs;
+      if (mine === 1) {
+        // Re-enter this same interval entry (inner frame, run 2), then clear it
+        // from the outer frame after the nested advance returns. The Boolean
+        // flag was left False by the inner frame, so this clear used to delete
+        // and free the entry the outer frame is about to read on the way out.
+        advanceTimersByTime(10);
+        clearInterval(id);
+      }
+    }, 10);
+
+    advanceTimersByTime(10);
+
+    expect(runs >= 2).toBe(true);
+    expect(getTimerCount()).toBe(0);
+  });
+});
+
+describe("an out-of-range clock target is refused before any state changes", () => {
+  afterEach(() => {
+    useRealTimers();
+  });
+
+  // 1e13 ms is finite, so it clears the finite-epoch gate, but it exceeds the
+  // ~9.2e12 ms the Int64 nanosecond clock can hold. The range check used to run
+  // only at publish time — AFTER FNow and every pending timer had already been
+  // shifted — so a caught rejection left FNow poisoned and every later advance
+  // republished it and threw again. The check now runs before any mutation.
+  const OUT_OF_RANGE = 1e13;
+
+  test("setSystemTime rejects an out-of-range target with a RangeError", () => {
+    useFakeTimers();
+
+    expect(() => setSystemTime(OUT_OF_RANGE)).toThrow(RangeError);
+    expect(() => setSystemTime(OUT_OF_RANGE)).toThrow("nanosecond clock");
+  });
+
+  test("a rejected setSystemTime leaves the clock and timers untouched", () => {
+    useFakeTimers();
+    setSystemTime(10);
+    const log = [];
+    setTimeout(() => log.push(Date.now()), 5);
+
+    try {
+      setSystemTime(OUT_OF_RANGE);
+    } catch (error) {
+      // refused, as asserted above
+    }
+
+    // The clock never moved and the pending timer's due time never shifted, so
+    // a following valid advance still fires it at exactly 15 rather than
+    // throwing on a poisoned FNow.
+    expect(Date.now()).toBe(10);
+    advanceTimersByTime(5);
+    expect(log).toEqual([15]);
+  });
+
+  test("useFakeTimers rejects an out-of-range start", () => {
+    expect(() => useFakeTimers(OUT_OF_RANGE)).toThrow(RangeError);
+  });
+
+  test("a rejected advance leaves the clock alone", () => {
+    useFakeTimers();
+    setSystemTime(0);
+
+    expect(() => advanceTimersByTime(OUT_OF_RANGE)).toThrow(RangeError);
+    expect(Date.now()).toBe(0);
+  });
+
+  // The DoTick preflight only guarded advanceTimersByTime. next()-driven paths
+  // (advanceTimersToNextTimer, runAllTimers) reached SetNow(timer.callAt) with
+  // no range check, so a timer due past the representable ceiling published a
+  // poisoned clock before throwing. SetNow now preflights every fake-clock
+  // advance, so these paths reject the target before firing anything.
+  const MAX_CLOCK = 9223372036854; // MAX_CLOCK_MILLISECONDS
+
+  // Each case asserts the rejected advance left FNow intact, not merely that it
+  // threw. Without the SetNow preflight, SetNow assigns the out-of-range value
+  // to FNow and only PublishClock throws afterwards — so the throw still happens
+  // while FNow is left poisoned. The follow-up small advance detects that: from
+  // an intact clock it stays in range and does not throw, but a poisoned FNow
+  // pushes the DoTick preflight past the ceiling and throws. (The clock value is
+  // not itself asserted here: this close to the ceiling it is no longer exactly
+  // representable through the Int64 nanosecond round-trip.)
+
+  test("advanceTimersToNextTimer refuses an out-of-range next target before firing", () => {
+    useFakeTimers(0);
+    advanceTimersByTime(MAX_CLOCK - 1000); // FNow near the ceiling, adjustment 0
+    const before = Date.now();
+    let fired = false;
+    setTimeout(() => {
+      fired = true;
+    }, 2000); // callAt = FNow + 2000, past the ceiling (wall out of range)
+
+    expect(() => advanceTimersToNextTimer()).toThrow(RangeError);
+    expect(fired).toBe(false);
+    expect(Date.now()).toBe(before); // FNow untouched, not the rejected target
+    expect(() => advanceTimersByTime(1)).not.toThrow(); // poisoned FNow would throw
+  });
+
+  test("runAllTimers refuses an out-of-range next target before firing", () => {
+    useFakeTimers(0);
+    setSystemTime(MAX_CLOCK - 100);
+    const before = Date.now();
+    let fired = false;
+    setTimeout(() => {
+      fired = true;
+    }, 2000); // callAt = MAX_CLOCK + 1900, past the ceiling (wall out of range)
+
+    expect(() => runAllTimers()).toThrow(RangeError);
+    expect(fired).toBe(false);
+    expect(Date.now()).toBe(before);
+    expect(getTimerCount()).toBe(1);
+    expect(() => advanceTimersByTime(1)).not.toThrow(); // poisoned FNow would throw
+  });
+
+  // Wall-clock value in range but its monotonic counterpart out of range: run
+  // virtual time up near the ceiling, then jump the wall clock back down. The
+  // wall value SetNow would publish stays small while the monotonic value
+  // (callAt minus the setSystemTime adjustment) still lands past the ceiling —
+  // the case the SECOND RequireClockInRange in SetNow guards. The follow-up
+  // advance proves FNow was not poisoned to the rejected target; without the
+  // monotonic preflight that later advance throws on the poisoned monotonic.
+  test("a next target with an in-range wall clock but out-of-range monotonic clock is refused", () => {
+    useFakeTimers(0);
+    advanceTimersByTime(MAX_CLOCK - 3000); // elapsed (monotonic) ~ MAX_CLOCK - 3000
+    setSystemTime(1000); // wall = 1000, monotonic preserved
+    let fired = false;
+    setTimeout(() => {
+      fired = true;
+    }, 3001); // callAt = 4001 (wall in range); monotonic = MAX_CLOCK + 1
+
+    expect(Date.now()).toBe(1000);
+    expect(() => advanceTimersToNextTimer()).toThrow(RangeError);
+    expect(fired).toBe(false);
+    expect(Date.now()).toBe(1000); // FNow intact at 1000, not poisoned to 4001
+    advanceTimersByTime(1);
+    expect(Date.now()).toBe(1001); // stays in range only from an intact clock
   });
 });
 

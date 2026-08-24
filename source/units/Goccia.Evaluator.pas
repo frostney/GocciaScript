@@ -4558,8 +4558,10 @@ begin
       begin
         { Same descriptor the bytecode compiler records per call site, so both
           executors name the callee identically (Goccia.Error.CallDiagnostics).
-          This arm is also reached when Callee is nil, so its type name is read
-          through a nil guard, mirroring the VM's ValueTypeNameOrUndefined. }
+          A non-callable callee reaches here as its runtime value (normally the
+          undefined value); the Assigned() check is a defensive nil guard only,
+          mirroring the VM's ValueTypeNameOrUndefined, so a raw nil from an
+          internal invariant violation degrades to "undefined". }
         CalleeDescriptor := CalleeDescriptorFor(ACallExpression.Callee);
         if Assigned(Callee) then
           CalleeTypeName := Callee.TypeName
@@ -4774,6 +4776,8 @@ var
   ShortCircuited: Boolean;
   Roots: TGocciaActiveRootFrame;
   MemberBaseExpr: TGocciaExpression;
+  SavedFrame: TGocciaCallFrame;
+  FrameStamped: Boolean;
 begin
   Roots.Initialize;
   try
@@ -4949,16 +4953,28 @@ begin
         points at the access rather than the enclosing function's call site, and
         so the caret column matches the VM's line map (MemberChainBaseExpression). }
       MemberBaseExpr := MemberChainBaseExpression(AMemberExpression);
+      { Snapshot the top frame before stamping and restore it as the throw
+        unwinds: the error captures the stamped position at creation, but
+        SetTopFrameLocation persists, so a try/catch that swallows this throw
+        would otherwise leave the stale member-access location on the frame for a
+        later unstamped ThrowTypeError to capture. Mirrors EvaluateNewExpression. }
+      FrameStamped := (TGocciaCallStack.Instance <> nil) and
+        TGocciaCallStack.Instance.TryGetTopFrame(SavedFrame);
       StampInterpreterThrowLocation(AContext, MemberBaseExpr.Line,
         MemberBaseExpr.Column);
-      if Obj is TGocciaNullLiteralValue then
-        ThrowTypeError(
-          Format(SErrorCannotReadPropertiesOfNull, [PropertyName]),
-          SSuggestCheckNullBeforeAccess)
-      else
-        ThrowTypeError(
-          Format(SErrorCannotReadPropertiesOfUndefined, [PropertyName]),
-          SSuggestCheckNullBeforeAccess);
+      try
+        if Obj is TGocciaNullLiteralValue then
+          ThrowTypeError(
+            Format(SErrorCannotReadPropertiesOfNull, [PropertyName]),
+            SSuggestCheckNullBeforeAccess)
+        else
+          ThrowTypeError(
+            Format(SErrorCannotReadPropertiesOfUndefined, [PropertyName]),
+            SSuggestCheckNullBeforeAccess);
+      finally
+        if FrameStamped then
+          TGocciaCallStack.Instance.SetTopFrame(SavedFrame);
+      end;
     end
     else
     begin
@@ -7332,9 +7348,17 @@ var
   CurrentError: TGocciaValue;
   HasError: Boolean;
   ThrownVal: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   CurrentError := AExistingError;
   HasError := Assigned(AExistingError);
+
+  { The accumulated error and each extracted thrown value live only in Pascal
+    locals; a later disposer runs guest code that can collect, so keep them
+    rooted across the remaining disposal calls until this returns. }
+  Roots.Initialize;
+  try
+    AddValueRoot(Roots, CurrentError);
 
   // Dispose in reverse order (LIFO)
   for I := ATracker.Count - 1 downto 0 do
@@ -7363,14 +7387,19 @@ begin
         begin
           if not UnwrapThrownValue(E, ThrownVal) then
             raise;
+          AddValueRoot(Roots, ThrownVal);
           if HasError then
             CurrentError := CreateSuppressedErrorObject(ThrownVal, CurrentError)
           else
             CurrentError := ThrownVal;
           HasError := True;
+          AddValueRoot(Roots, CurrentError);
         end;
       end;
     end;
+  end;
+  finally
+    Roots.Clear;
   end;
 
   if HasError then
@@ -7390,9 +7419,17 @@ var
   HasError: Boolean;
   CallResult: TGocciaValue;
   ThrownVal: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   CurrentError := AExistingError;
   HasError := Assigned(AExistingError);
+
+  { The accumulated error and each extracted thrown value live only in Pascal
+    locals; a later disposer or AwaitValue runs guest code that can collect, so
+    keep them rooted across the remaining disposal calls and awaits. }
+  Roots.Initialize;
+  try
+    AddValueRoot(Roots, CurrentError);
 
   // Dispose in reverse order (LIFO)
   for I := ATracker.Count - 1 downto 0 do
@@ -7424,11 +7461,13 @@ begin
         begin
           if not UnwrapThrownValue(E, ThrownVal) then
             raise;
+          AddValueRoot(Roots, ThrownVal);
           if HasError then
             CurrentError := CreateSuppressedErrorObject(ThrownVal, CurrentError)
           else
             CurrentError := ThrownVal;
           HasError := True;
+          AddValueRoot(Roots, CurrentError);
         end;
       end;
     end
@@ -7437,6 +7476,9 @@ begin
       // Null/undefined value in await using — ensure at least one await point
       AwaitValue(TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
+  end;
+  finally
+    Roots.Clear;
   end;
 
   if HasError then
@@ -7567,6 +7609,18 @@ begin
         CaughtError := E.Value;
         HasCaughtError := True;
         // Protect the caught error value from GC during disposal
+        if Assigned(GC) and Assigned(CaughtError) then
+          GC.AddTempRoot(CaughtError);
+        Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+      end;
+      on E: EGocciaBytecodeThrow do
+      begin
+        { A compiled callee's throw leaving the VM carries the guest completion,
+          exactly like TGocciaThrowValue. Capture it so a disposer that also
+          throws chains into a SuppressedError instead of the disposal error
+          replacing (and losing) this original throw during the finally. }
+        CaughtError := E.ThrownValue;
+        HasCaughtError := True;
         if Assigned(GC) and Assigned(CaughtError) then
           GC.AddTempRoot(CaughtError);
         Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -8598,6 +8652,20 @@ begin
         if not HasUsingDeclarations then
           raise;
         CaughtError := E.Value;
+        HasCaughtError := True;
+        if Assigned(GC) and Assigned(CaughtError) then
+          GC.AddTempRoot(CaughtError);
+        Result := TGocciaControlFlow.Normal(
+          TGocciaUndefinedLiteralValue.UndefinedValue);
+      end;
+      on E: EGocciaBytecodeThrow do
+      begin
+        { A compiled callee's throw carries the guest completion like
+          TGocciaThrowValue; capture it so a disposer that also throws chains a
+          SuppressedError rather than replacing (losing) this original throw. }
+        if not HasUsingDeclarations then
+          raise;
+        CaughtError := E.ThrownValue;
         HasCaughtError := True;
         if Assigned(GC) and Assigned(CaughtError) then
           GC.AddTempRoot(CaughtError);
@@ -9894,8 +9962,12 @@ begin
     for I := 0 to High(AClassDef.FElements) do
     begin
       SetLength(EvaluatedElementDecorators[I], Length(AClassDef.FElements[I].Decorators));
+      { A per-element decorator sits inside the class body, so it evaluates in the
+        class's always-strict context (as the computed keys above do); a
+        top-level class decorator sits outside the body and keeps the enclosing
+        context's strictness. }
       for J := 0 to High(AClassDef.FElements[I].Decorators) do
-        EvaluatedElementDecorators[I][J] := EvaluateExpression(AClassDef.FElements[I].Decorators[J], AContext);
+        EvaluatedElementDecorators[I][J] := EvaluateExpression(AClassDef.FElements[I].Decorators[J], ClassStrictContext);
     end;
 
     SetLength(EvaluatedClassDecorators, Length(AClassDef.FDecorators));
@@ -11890,6 +11962,7 @@ var
   CalleeName: string;
   TemplateKey: string;
   TagCalleeDescriptor: TGocciaCalleeDescriptor;
+  TagCalleeTypeName: string;
 begin
   CheckExecutionTimeout;
   IncrementInstructionCounter;
@@ -12000,10 +12073,22 @@ begin
           tag-must-be-callable suggestion (Goccia.Error.CallDiagnostics). }
         TagCalleeDescriptor := CalleeDescriptorFor(
           ATaggedTemplateExpression.Tag, cckTaggedTemplate);
+        { A non-callable tag reaches here as its runtime value — normally the
+          undefined value (a missing property, symbol-keyed or not, reads as
+          `undefined`, never raw Pascal nil: GetSymbolPropertyWithReceiver and
+          GetPropertyWithContext both return TGocciaUndefinedLiteralValue for an
+          absent property). The Assigned() check is a defensive nil guard only,
+          mirroring EvaluateCallWithOptionalShortCircuit and the VM's
+          ValueTypeNameOrUndefined, so a raw nil from an internal invariant
+          violation degrades to "undefined" rather than dereferencing nil. }
+        if Assigned(Callee) then
+          TagCalleeTypeName := Callee.TypeName
+        else
+          TagCalleeTypeName := 'undefined';
         ThrowTypeError(
-          NotCallableMessage(TagCalleeDescriptor, Callee.TypeName),
-          NotCallableSuggestion(TagCalleeDescriptor, Callee.TypeName,
-            Callee.TypeName));
+          NotCallableMessage(TagCalleeDescriptor, TagCalleeTypeName),
+          NotCallableSuggestion(TagCalleeDescriptor, TagCalleeTypeName,
+            TagCalleeTypeName));
       end;
     finally
       if (TGocciaCallStack.Instance <> nil) then

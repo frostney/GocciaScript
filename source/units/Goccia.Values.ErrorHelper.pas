@@ -167,7 +167,13 @@ begin
         ErrorObject.ErrorSourceExcerpt := ExcerptText;
         ErrorObject.ErrorSourceExcerptFirstLine := FirstLine;
         if Reserved then
+        begin
           ErrorObject.ErrorSourceExcerptCharged := ExcerptBytes;
+          // Record the reserving collector so Destroy releases through it even
+          // when the error is destroyed on another thread or after this thread's
+          // collector has been shut down.
+          ErrorObject.ErrorSourceExcerptCollector := GC;
+        end;
       except
         if Reserved then
           GC.ReleaseExternalBytes(ExcerptBytes);

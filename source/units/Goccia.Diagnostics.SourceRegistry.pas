@@ -94,6 +94,12 @@ type
       test. Production leaves it empty; a test subclass raises after an index
       insertion to prove rollback removes every partial commit and charge. }
     procedure AfterIndexCommit(const AIndex: Integer); virtual;
+    { Companion seam for the alias-reconciliation path (a later identified
+      registration folding into an entry already keyed by path). Production
+      leaves it empty; a test subclass raises after the reconciliation has
+      flipped ownership flags and repointed aliases, to prove the except arm
+      restores every flag and binding and removes the canonical key. }
+    procedure AfterReconcileCommit; virtual;
   public
     constructor Create;
     destructor Destroy; override;
@@ -150,10 +156,11 @@ threadvar
   GActiveScope: TGocciaDiagnosticSourceScope;
 
 var
-  // Process-monotonic principal counter. Guarded by a critical section rather
-  // than InterLockedIncrement64 because FPC 3.2.2 only declares the 64-bit
-  // interlocked helpers under CPU64, and CI also builds i386-win32; a principal
-  // is minted once per module load, so the lock cost is irrelevant.
+  // Process-monotonic principal counter. Guarded by a critical section so
+  // engines on separate threads never collide on a principal value. A lock
+  // rather than InterLockedIncrement64 because FPC 3.2.2 only declares the
+  // 64-bit interlocked helpers under CPU64, and CI also builds i386-win32; a
+  // principal is minted once per module load, so the lock cost is irrelevant.
   GPrincipalCounter: Int64 = 0;
   GPrincipalLock: TRTLCriticalSection;
 
@@ -260,11 +267,16 @@ procedure TGocciaDiagnosticSourceScope.Register(const APath, AText: string;
 var
   Entry: TGocciaDiagnosticSourceEntry;
   Existing: TGocciaDiagnosticSourceEntry;
+  ByPath, ByExpanded, Unified: TGocciaDiagnosticSourceEntry;
+  HavePath, HaveExpanded: Boolean;
   Canonical, Expanded: string;
   Size: Int64;
   GC: TGarbageCollector;
   Reserved: Boolean;
   CanonicalAdded, LiteralAdded, ExpandedAdded: Boolean;
+  ReconPriorByPathGuest, ReconPriorByExpandedGuest: Boolean;
+  ReconCanonicalAdded, ReconPathRepointed, ReconExpandedRepointed: Boolean;
+  ReconcileAsHost: Boolean;
 begin
   if APath = '' then
     Exit;
@@ -279,10 +291,11 @@ begin
     Exit;
   end;
 
+  Expanded := ExpandFileName(APath);
   if ACanonicalIdentity <> '' then
     Canonical := ACanonicalIdentity
   else
-    Canonical := '#path:' + ExpandFileName(APath);
+    Canonical := '#path:' + Expanded;
   // One registration per canonical identity: a later load under an alias finds
   // this entry and cannot mint a guest-owned copy. Ownership is monotonic: a
   // host enrollment upgrades an existing guest entry to host-owned, while a
@@ -291,6 +304,129 @@ begin
   begin
     if AIsHost then
       Existing.IsGuest := False;
+    Exit;
+  end;
+
+  // Reconcile a pre-existing entry reached through the path spellings. When a
+  // file is first registered without a canonical identity, its entry is keyed
+  // under '#path:'+Expanded plus the literal and expanded paths; a later
+  // identified registration under '#id:' has a different canonical key, so the
+  // TryGetValue(Canonical) miss above would otherwise mint a SECOND entry and
+  // leave those path aliases still pointing at the first. A host upgrade on the
+  // new '#id:' entry would then never reach the alias, so TryGetGuestWindow via
+  // the path spelling would keep returning the guest-owned entry — a host-source
+  // downgrade. Fold this registration into the existing entry instead.
+  //
+  // The literal and expanded spellings can already resolve to DIFFERENT entries
+  // — e.g. a relative literal keyed while the working directory was one path and
+  // the absolute expansion produced (or keyed) after a cwd change, so APath
+  // still names an old entry while Expanded names another. This registration
+  // asserts that APath expands to Expanded and both name the file identified by
+  // Canonical, so they are one open file: collapse every entry reached through
+  // either spelling onto a single owned entry, upgrade ownership on ALL of them
+  // when host, and repoint both spellings plus the canonical key at that one
+  // entry. Upgrading only the first spelling would leave the other guest-owned,
+  // and since TryGetGuestWindow checks the literal spelling first a stale literal
+  // alias could then disclose host source.
+  //
+  // Ownership here is host-wins and DIRECTION-INDEPENDENT: the reconciled entry
+  // is host-owned when the NEW registration is host OR when ANY reached existing
+  // entry (ByPath/ByExpanded, hence Unified, which is always one of them) is
+  // host-owned. Keying host purely off AIsHost was wrong: a GUEST registration
+  // (AIsHost = False) that reconciled a mixed pair — a guest ByPath chosen as
+  // Unified while a host ByExpanded existed — would skip the upgrade and then
+  // repoint the host spelling at the guest entry, so TryGetGuestWindow disclosed
+  // the host source through that spelling. Deriving ReconcileAsHost from every
+  // reached entry keeps host ownership monotonic in EITHER order (new host over
+  // existing guest, new guest reconciling an existing host), so no reachable
+  // alias — including the canonical key just inserted — can ever be downgraded.
+  HavePath := FEntries.TryGetValue(APath, ByPath);
+  HaveExpanded := FEntries.TryGetValue(Expanded, ByExpanded);
+  if HavePath or HaveExpanded then
+  begin
+    if HavePath then
+      Unified := ByPath
+    else
+      Unified := ByExpanded;
+
+    { Transactional reconciliation. This block both flips ownership flags
+      (host-wins upgrades) and repoints alias bindings onto the one owned entry;
+      if any step raised partway, a previously guest-owned window could be left
+      permanently suppressed (a half-applied host upgrade) or an alias left
+      half-repointed. Two guarantees keep it atomic:
+
+      1. The canonical key is inserted FIRST. It is the only NEW key here (the
+         TryGetValue(Canonical) miss above proved it absent), so it is the only
+         operation that can allocate and therefore the only one that can raise
+         under memory pressure. The literal/expanded repoints below target keys
+         that already exist (HavePath/HaveExpanded), so they set a slot in place
+         and never allocate; the IsGuest writes are plain field stores. Doing the
+         one allocating step before any mutation means a failure here leaves the
+         scope exactly as it was found.
+
+      2. The except arm still restores every ownership flag and alias binding
+         this block touches, and removes the canonical key if it was added, so
+         even a future mutation that unexpectedly allocated could not leave a
+         partial host upgrade or a stale alias behind. Unified is always ByPath
+         or ByExpanded, so restoring those two flags also restores Unified's. }
+    ReconPriorByPathGuest := False;
+    ReconPriorByExpandedGuest := False;
+    if HavePath then
+      ReconPriorByPathGuest := ByPath.IsGuest;
+    if HaveExpanded then
+      ReconPriorByExpandedGuest := ByExpanded.IsGuest;
+    { Host-wins, direction-independent: host if the new registration is host OR
+      any reached existing entry is host-owned. Pure reads of state captured
+      before any mutation, so the except arm needs nothing extra to unwind it —
+      it restores the IsGuest flags this derivation drives regardless. }
+    ReconcileAsHost := AIsHost;
+    if HavePath and (not ByPath.IsGuest) then
+      ReconcileAsHost := True;
+    if HaveExpanded and (not ByExpanded.IsGuest) then
+      ReconcileAsHost := True;
+    ReconCanonicalAdded := False;
+    ReconPathRepointed := False;
+    ReconExpandedRepointed := False;
+    try
+      if not FEntries.ContainsKey(Canonical) then
+      begin
+        FEntries.AddOrSetValue(Canonical, Unified);
+        ReconCanonicalAdded := True;
+      end;
+      if ReconcileAsHost then
+      begin
+        Unified.IsGuest := False;
+        if HavePath then
+          ByPath.IsGuest := False;
+        if HaveExpanded then
+          ByExpanded.IsGuest := False;
+      end;
+      if HavePath and (ByPath <> Unified) then
+      begin
+        FEntries.AddOrSetValue(APath, Unified);
+        ReconPathRepointed := True;
+      end;
+      if HaveExpanded and (ByExpanded <> Unified) then
+      begin
+        FEntries.AddOrSetValue(Expanded, Unified);
+        ReconExpandedRepointed := True;
+      end;
+      AfterReconcileCommit;
+    except
+      { Restore in reverse: repoints target still-present keys and the flag
+        writes are field stores, so none of these can raise. }
+      if ReconExpandedRepointed then
+        FEntries.AddOrSetValue(Expanded, ByExpanded);
+      if ReconPathRepointed then
+        FEntries.AddOrSetValue(APath, ByPath);
+      if HaveExpanded then
+        ByExpanded.IsGuest := ReconPriorByExpandedGuest;
+      if HavePath then
+        ByPath.IsGuest := ReconPriorByPathGuest;
+      if ReconCanonicalAdded then
+        FEntries.Remove(Canonical);
+      raise;
+    end;
     Exit;
   end;
 
@@ -343,7 +479,6 @@ begin
       LiteralAdded := True;
       AfterIndexCommit(2);
     end;
-    Expanded := ExpandFileName(APath);
     if (Expanded <> Canonical) and (Expanded <> APath) and
        (not FEntries.ContainsKey(Expanded)) then
     begin
@@ -375,6 +510,10 @@ begin
 end;
 
 procedure TGocciaDiagnosticSourceScope.AfterIndexCommit(const AIndex: Integer);
+begin
+end;
+
+procedure TGocciaDiagnosticSourceScope.AfterReconcileCommit;
 begin
 end;
 

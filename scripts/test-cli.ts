@@ -892,7 +892,8 @@ for (const mode of ["interpreted", "bytecode"] as const) {
   if (json.error?.type !== "TypeError") {
     throw new Error(`Expected TypeError for the retarget cycle, got ${json.error?.type} (${mode})`);
   }
-  // And the sandbox limits stay effective for code that really is unbounded.
+  // The instruction limit must not change the outcome for this program: it
+  // terminates on its own, so the TypeError is reported either way.
   const bounded = runLoaderJson(retargetCycle, [...modeArgs, "--max-instructions=5000000"], { timeout: 20_000 });
   if (bounded.json.error?.type !== "TypeError") {
     throw new Error(`Retarget cycle should still be a TypeError under a limit, got ${bounded.json.error?.type} (${mode})`);
