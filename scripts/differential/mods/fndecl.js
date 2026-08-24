@@ -232,3 +232,46 @@ export class Factory {
     return PREFIX + ORIGIN.x;
   }
 }
+
+// Async declarations whose body throws through a callee. A module's function
+// declarations are created at link time while `raiseAsyncFailure` next to them
+// is compiled with the module body, so in bytecode mode the throw crosses from
+// one machinery into the other — and it crosses back only once the async
+// function has already suspended at an await.
+export class AsyncFailure extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "AsyncFailure";
+  }
+}
+
+export const asyncFailure = new AsyncFailure(PREFIX + "async");
+
+const raiseAsyncFailure = () => {
+  throw asyncFailure;
+};
+
+export async function fnDeclThrowAfterAwait() {
+  await Promise.resolve(1);
+  raiseAsyncFailure();
+}
+
+export async function fnDeclThrowBeforeAwait() {
+  raiseAsyncFailure();
+  await Promise.resolve(1);
+}
+
+export async function fnDeclCatchAfterAwait() {
+  await Promise.resolve(1);
+  try {
+    raiseAsyncFailure();
+    return null;
+  } catch (error) {
+    return error;
+  }
+}
+
+export const arrowThrowAfterAwait = async () => {
+  await Promise.resolve(1);
+  raiseAsyncFailure();
+};
