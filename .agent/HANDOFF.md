@@ -1,6 +1,6 @@
 # Handoff
 
-Updated: 2026-08-25 (GET_LOCAL_PROP_CONST accepted, format v79)
+Updated: 2026-08-25 (int-literals lane stalled, no commit)
 
 ## Experiment
 
@@ -105,7 +105,7 @@ Json 24.96, Permute 21.86, Sieve 21.63, CD 20.41, Bounce 19.94, Havlak 19.09, To
 ## Lanes launching
 
 1. `optimize/inc-assign` — **accepted** (see above).
-2. `optimize/int-literals` — integer-valued number literals as `sltInteger`.
+2. `optimize/int-literals` — **stalled** (see below). No commit, no A/B.
 3. `optimize/add-num-imm` — **accepted** (see above).
 4. `optimize/hot-dispatch-extract` — **rejected** (see below).
 5. `optimize/get-local-prop` — **accepted** (see above).
@@ -119,10 +119,14 @@ Json 24.96, Permute 21.86, Sieve 21.63, CD 20.41, Bounce 19.94, Havlak 19.09, To
 - **Broader read-PIC:** still rejected (ADR 0088). Own+proto read ICs already ship.
 - **Write-IC:** landed this wave (`15e8eca7`). Own writable-data stores on `OP_SET_PROP_CONST` hit a shape-keyed IC; misses still go through `AssignProperty`. Broader read-PIC remains rejected (ADR 0088).
 - **`OP_SET_PROP_CONST`** uses the write IC for ordinary own writable data; `VMTrySetOwnWritableDataProperty` remains available for non-IC paths.
-- **Counted-for** now matches `i = i + 1` / `i += 1` and minus (`e6f3e177`), emitting `OP_ADD_INT` in the loop template. Untyped parameter limits still use generic `OP_LT`. Standalone assignment `i = i + 1` remains `OP_INC_NUMERIC`.
+- **Counted-for** now matches `i = i + 1` / `i += 1` and minus (`e6f3e177`), emitting `OP_ADD_INT` in the loop template. Untyped parameter limits still use generic `OP_LT`. Standalone assignment `i = i + 1` remains `OP_INC_NUMERIC`. Integer-valued number literals still type as `sltFloat` (`ExpressionType`); that remaining lane stalled before a patch.
 - **CALL:** bytecode→bytecode already trampolines; `ExecuteClosureRegisters0–3` are native ingress only. Revisit `OP_CALL_METHOD` staging only with AWFY transfer (ADR 0089 previously noise).
 - **Dispatch preamble:** ~10–15 predictable cold branches per opcode. A remaining DISPATCH idea is a **prod vs instrumented dual loop** that keeps one `case` and only strips coverage/profiler/`AStopAtIP` on the measured path — not a hot/cold case split.
 - **ALLOC:** do not revive value caches. Property-store `RegisterToValue` boxing is the live allocation tax.
+
+## Stalled this wave
+
+- **`optimize/int-literals`**. Subagent stopped after resume loops with no patch, no commit, and no A/B. Branch is still at baseline `56eb8849`. Hypothesis remains open: `ExpressionType` types every number literal as `sltFloat`, which can keep generic `OP_LT` / `OP_ADD_FLOAT` on integer-valued literals. Counted-for already emits `OP_ADD_INT` for `i = i + 1` updates, so a retry should target integer TypeHints and `OP_LT_INT` (especially literal limits and non-counted-for arithmetic), not re-measure the already-landed increment path. Not a reject — never measured.
 
 ## Rejected this wave
 
