@@ -1,6 +1,6 @@
 # Handoff
 
-Updated: 2026-08-25 (wave 1 established; lanes launching)
+Updated: 2026-08-25 (investigation folded; write-IC + counted-for lanes added)
 
 ## Experiment
 
@@ -43,11 +43,26 @@ Json 24.96, Permute 21.86, Sieve 21.63, CD 20.41, Bounce 19.94, Havlak 19.09, To
 1. `optimize/inc-assign` — compile `id = id + 1` as existing `OP_INC`.
 2. `optimize/int-literals` — integer-valued number literals as `sltInteger`.
 3. `optimize/add-num-imm` — `OP_ADD_NUM_IMM` mirroring `OP_SUB_NUM_IMM`.
-4. `optimize/hot-dispatch-extract` — shrink register pressure in the VM loop.
+4. `optimize/hot-dispatch-extract` — shrink register pressure / strip cold preamble in the VM loop.
 5. `optimize/get-local-prop` — fuse `GET_LOCAL` + `GET_PROP_CONST`.
+6. `optimize/write-ic` — own writable-data write IC (ADR 0088 leftover; requires AWFY transfer).
+7. `optimize/counted-for-assign` — widen `TryCompileCountedFor` to `i = i + 1`.
+
+## Investigation conclusions (do not contradict)
+
+- **NaN-box / tagged-pointer rewrite:** out of this wave (`TGocciaRegister` is a 16-byte fat union by design).
+- **Numeric loops already unboxed** on the generic scalar arm; remaining tax is dispatch + property-boundary boxing on store.
+- **Broader read-PIC:** still rejected (ADR 0088). Own+proto read ICs already ship.
+- **Write-IC:** unimplemented; prior isolated 30× AWFY was Richards +8%, Bounce +5%, Storage +3%. Re-measure interleaved; do not bundle with read-PIC.
+- **`OP_SET_PROP_CONST`** still calls full `AssignProperty` except literal-object fast path; `VMTrySetOwnWritableDataProperty` exists but is unused there.
+- **Counted-for** only matches `i++`, so AWFY/probe `i = i + 1` misses `OP_ADD_INT` loop microcode.
+- **CALL:** bytecode→bytecode already trampolines; `ExecuteClosureRegisters0–3` are native ingress only. Revisit `OP_CALL_METHOD` staging only with AWFY transfer (ADR 0089 previously noise).
+- **Dispatch preamble:** ~10–15 predictable cold branches per opcode; dual prod/instrumented loop is the DISPATCH bet, not jumptable surgery.
+- **ALLOC:** do not revive value caches. Property-store `RegisterToValue` boxing is the live allocation tax.
 
 ## Rejected (do not retry)
 
 - Broader read-side PIC (ADR 0088)
 - Value caches (ADR 0081)
 - String interning on `RuntimeCopy`
+- July 2026 pooled-collection call bypass (ADR 0089)
