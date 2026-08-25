@@ -223,6 +223,7 @@ begin
     OP_SUB_NUM_IMM:                    Result := 'OP_SUB_NUM_IMM';
     OP_JUMP_IF_NUM_NOT_LTE_IMM:        Result := 'OP_JUMP_IF_NUM_NOT_LTE_IMM';
     OP_CALL_SELF_NUM:                  Result := 'OP_CALL_SELF_NUM';
+    OP_ADD_NUM_IMM:                    Result := 'OP_ADD_NUM_IMM';
   else
     Result := Format('OP_UNKNOWN_%d', [AOp]);
   end;

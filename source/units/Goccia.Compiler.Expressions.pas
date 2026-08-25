@@ -2046,6 +2046,30 @@ begin
     Exit;
   end;
 
+  if AExpr.Operator = gttPlus then
+  begin
+    if HasExactNumberProof(ACtx.Scope, AExpr.Left) and
+       TrySignedInt16NumberLiteral(AExpr.Right, Immediate) then
+    begin
+      RegB := ACtx.Scope.AllocateRegister;
+      ACtx.CompileExpression(AExpr.Left, RegB);
+      EmitInstruction(ACtx, EncodeABC(OP_ADD_NUM_IMM, ADest, RegB,
+        UInt16(Immediate)));
+      ACtx.Scope.FreeRegister;
+      Exit;
+    end;
+    if HasExactNumberProof(ACtx.Scope, AExpr.Right) and
+       TrySignedInt16NumberLiteral(AExpr.Left, Immediate) then
+    begin
+      RegB := ACtx.Scope.AllocateRegister;
+      ACtx.CompileExpression(AExpr.Right, RegB);
+      EmitInstruction(ACtx, EncodeABC(OP_ADD_NUM_IMM, ADest, RegB,
+        UInt16(Immediate)));
+      ACtx.Scope.FreeRegister;
+      Exit;
+    end;
+  end;
+
   RegB := ACtx.Scope.AllocateRegister;
   RegC := ACtx.Scope.AllocateRegister;
 

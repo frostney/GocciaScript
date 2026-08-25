@@ -169,7 +169,8 @@ const
   //   v76 -> v77: debug info carries each function's declaration line and
   //               column, so coverage reports a function at the line it is
   //               declared on rather than at its first executed instruction.
-  GOCCIA_FORMAT_VERSION = 77;
+  //   v77 -> v78: added OP_ADD_NUM_IMM.
+  GOCCIA_FORMAT_VERSION = 78;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -442,7 +443,9 @@ type
     // A = destination, B = first contiguous argument register,
     // C = argument count (1..3). Valid only in a compiler-proven closed-world
     // numeric self-recursive template.
-    OP_CALL_SELF_NUM = 229
+    OP_CALL_SELF_NUM = 229,
+    // A = destination, B = proven Number source, C = signed Int16 immediate.
+    OP_ADD_NUM_IMM   = 230
   );
 
 function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
@@ -510,7 +513,7 @@ begin
     OP_GET_WITH_BINDING_STRICT, OP_SET_WITH_BINDING,
     OP_SET_WITH_BINDING_LOOSE, OP_SUPER_SET, OP_SUPER_BASE,
     OP_SUPER_SET_BASE, OP_DEFINE_STATIC_PROP_DYNAMIC,
-    OP_CONSTRUCT_SPREAD, OP_SUB_NUM_IMM, OP_SET_UPVALUE_REF,
+    OP_CONSTRUCT_SPREAD, OP_SUB_NUM_IMM, OP_ADD_NUM_IMM, OP_SET_UPVALUE_REF,
     OP_DYNAMIC_IMPORT_OPTIONS, OP_DYNAMIC_IMPORT_SOURCE_OPTIONS,
     OP_DYNAMIC_IMPORT_DEFER_OPTIONS, OP_TO_NUMBER, OP_TO_STRING,
     OP_NEG, OP_BNOT, OP_EQ, OP_NEQ, OP_LOOSE_EQ, OP_LOOSE_NEQ,
