@@ -1,12 +1,14 @@
 # Handoff
 
-Updated: 2026-08-25 (hot-dispatch-extract rejected)
+Updated: 2026-08-25 (OP_ADD_NUM_IMM accepted)
 
 ## Experiment
 
 - **Goal:** Goccia bytecode at 0.6×–0.8× of QuickJS *speed* (AWFY `goccia_over_qjs` ≈ 1.25–1.67).
 - **Current main CI** (`f4d403f0`, linux/x64 Azure): AWFY geomean `goccia_over_qjs` = **16.256** (speed **0.062×**). Need ~10–13×.
-- **Delivery branch:** `perf/bytecode-quickjs-gap` @ `3a2e2949` (skill adoption on `origin/main` `f4d403f0`).
+- **Delivery branch:** `perf/bytecode-quickjs-gap` @ `d099bdf9` (skill adoption on `origin/main` `f4d403f0`; first accepted code merge).
+- **Accepted code:** `ad0023da` `OP_ADD_NUM_IMM` (opcode **230**, format **v78**). Next free opcode **231**; `optimize/get-local-prop` must take 231 and bump format to v79 if it lands.
+- **Combined candidate binary:** `/tmp/goccia-combined-d099bdf9`.
 - **Baseline binary:** `/tmp/goccia-baseline-f4d403f0` (`--prod` loader, darwin/aarch64, FPC 3.2.2).
 - **QuickJS:** 2026-06-04 at `/tmp/quickjs/bin/qjs`.
 - **Lock:** `/tmp/gocciascript-perf-gate.lock`.
@@ -38,13 +40,28 @@ Fib is the best relative row because it already uses `OP_CALL_SELF_NUM` / `OP_SU
 
 Json 24.96, Permute 21.86, Sieve 21.63, CD 20.41, Bounce 19.94, Havlak 19.09, Towers 18.91, Richards 16.21. Mandelbrot 5.58 (best).
 
+## Accepted this wave
+
+- **`optimize/add-num-imm`** `ad0023da`, merged at `d099bdf9`. `OP_ADD_NUM_IMM` fuses proven `Number + Int16` (including `1 + i`) the same way `OP_SUB_NUM_IMM` does. Checksums matched. Isolated report: `/tmp/lane-add-num-imm-ab.json`. Combined re-measure vs `/tmp/goccia-baseline-f4d403f0` (7 interleaved reps, `/tmp/combined-add-num-imm-ab.json`):
+
+  | Probe | Base µs | Combined µs | Ratio |
+  | --- | ---: | ---: | ---: |
+  | loop-dispatch-floor | 126029 | 124766 | 0.990 |
+  | generic-plus-scalars | 63284 | 59013 | 0.933 |
+  | nbody-minimal | 67202 | 65455 | 0.974 |
+  | fib-recursive | 45487 | 44952 | 0.988 |
+
+  Geomean combined/base **0.971**. Isolated lane had loop-dispatch-floor 0.967 / generic-plus-scalars 0.970. AWFY `i++` loops are not expected to hit this opcode; transfer is the `i + K` / `1 + i` probes. Treat `d099bdf9` as the next combined baseline for later merges — do not add isolated percentages.
+
+  Overlap: `optimize/inc-assign` still owns whole-assignment `id = id + 1` → `OP_INC`. `OP_ADD_NUM_IMM` fires on the binary `+` expression. If both land, keep assignment matching first so `i = i + 1` stays one increment rather than add-immediate plus store.
+
 ## Lanes launching
 
 1. `optimize/inc-assign` — compile `id = id + 1` as existing `OP_INC`.
 2. `optimize/int-literals` — integer-valued number literals as `sltInteger`.
-3. `optimize/add-num-imm` — `OP_ADD_NUM_IMM` mirroring `OP_SUB_NUM_IMM`.
+3. `optimize/add-num-imm` — **accepted** (see above).
 4. `optimize/hot-dispatch-extract` — **rejected** (see below).
-5. `optimize/get-local-prop` — fuse `GET_LOCAL` + `GET_PROP_CONST`.
+5. `optimize/get-local-prop` — fuse `GET_LOCAL` + `GET_PROP_CONST` (must use opcode **231** / format **v79** if it lands after this merge).
 6. `optimize/write-ic` — own writable-data write IC (ADR 0088 leftover; requires AWFY transfer).
 7. `optimize/counted-for-assign` — widen `TryCompileCountedFor` to `i = i + 1`.
 
