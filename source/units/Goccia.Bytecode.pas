@@ -170,7 +170,11 @@ const
   //               column, so coverage reports a function at the line it is
   //               declared on rather than at its first executed instruction.
   //   v77 -> v78: added OP_ADD_NUM_IMM.
-  GOCCIA_FORMAT_VERSION = 78;
+  //   v78 -> v79: added OP_GET_LOCAL_PROP_CONST (opcode 231), a fused
+  //               decode of OP_GET_LOCAL + OP_GET_PROP_CONST for
+  //               `local.ident` that reuses the existing shape-lite
+  //               property-read IC.
+  GOCCIA_FORMAT_VERSION = 79;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -445,7 +449,10 @@ type
     // numeric self-recursive template.
     OP_CALL_SELF_NUM = 229,
     // A = destination, B = proven Number source, C = signed Int16 immediate.
-    OP_ADD_NUM_IMM   = 230
+    OP_ADD_NUM_IMM   = 230,
+    // A = destination, B = local slot holding the object, C = name-constant
+    // index. Fused OP_GET_LOCAL + OP_GET_PROP_CONST for `local.ident`.
+    OP_GET_LOCAL_PROP_CONST = 231
   );
 
 function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
@@ -496,7 +503,7 @@ begin
     OP_DIV_FLOAT, OP_MOD_FLOAT, OP_NEG_FLOAT, OP_EQ_INT, OP_NEQ_INT,
     OP_LT_INT, OP_GT_INT, OP_LTE_INT, OP_GTE_INT, OP_EQ_FLOAT,
     OP_NEQ_FLOAT, OP_LT_FLOAT, OP_GT_FLOAT, OP_LTE_FLOAT, OP_GTE_FLOAT,
-    OP_CONCAT, OP_GET_PROP_CONST, OP_GET_ITER, OP_ITER_NEXT,
+    OP_CONCAT, OP_GET_PROP_CONST, OP_GET_LOCAL_PROP_CONST, OP_GET_ITER, OP_ITER_NEXT,
     OP_CLASS_SET_SUPER, OP_CLASS_SET_FIELD_INITIALIZER,
     OP_CLASS_EXEC_STATIC_BLOCK, OP_UNPACK, OP_NOT, OP_TO_BOOL,
     OP_DEL_INDEX_LOOSE, OP_SET_INDEX_LOOSE, OP_GET_INDEX, OP_SET_INDEX,

@@ -238,8 +238,9 @@ type
     FRegExpProgramCaches: array of TObject;
     FRegExpProgramCacheCount: Integer;
     FGlobalReadCaches: array of TGocciaGlobalReadCacheEntry;
-    // Property/proto read caches use DENSE slots: OP_GET_PROP_CONST name
-    // constants are a small subset of the constant pool, so a per-constant
+    // Property/proto read caches use DENSE slots: OP_GET_PROP_CONST and
+    // OP_GET_LOCAL_PROP_CONST name constants are a small subset of the
+    // constant pool, so a per-constant
     // UInt16 map (0 = unassigned, else dense slot + 1) assigns slots on
     // first use and the entry arrays grow only to the number of distinct
     // property-name constants actually read. Both tiers share one slot id

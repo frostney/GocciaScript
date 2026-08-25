@@ -76,6 +76,8 @@ type
     procedure TestCompileFunction;
     procedure TestThisPropertyReadUsesLocalRegister;
     procedure TestThisPropertyReadRetainsDerivedGuard;
+    procedure TestLocalPropertyReadUsesFusedOpcode;
+    procedure TestOptionalLocalPropertyReadSkipsFusedOpcode;
     procedure TestStaticImportLoadsScaleWithDeclarations;
     procedure TestBinaryRoundTrip;
     procedure TestBinaryRoundTripClosedNumericSelfCall;
@@ -139,6 +141,10 @@ begin
     TestThisPropertyReadUsesLocalRegister);
   Test('this property read retains derived-constructor guard',
     TestThisPropertyReadRetainsDerivedGuard);
+  Test('local property read uses fused opcode',
+    TestLocalPropertyReadUsesFusedOpcode);
+  Test('optional local property read skips fused opcode',
+    TestOptionalLocalPropertyReadSkipsFusedOpcode);
   Test('Static import loads scale with declarations',
     TestStaticImportLoadsScaleWithDeclarations);
   Test('Binary round-trip', TestBinaryRoundTrip);
@@ -642,6 +648,42 @@ begin
   end;
 end;
 
+procedure TTestCompiler.TestLocalPropertyReadUsesFusedOpcode;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource('const read = (a) => a.x;');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_GET_LOCAL_PROP_CONST);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL_PROP_CONST)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_GET_PROP_CONST)).ToBe(0);
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(0);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestOptionalLocalPropertyReadSkipsFusedOpcode;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource('const read = (a) => a?.x;');
+  try
+    Expect<Boolean>(FindFunctionWithOp(Module.TopLevel,
+      OP_GET_LOCAL_PROP_CONST) = nil).ToBe(True);
+    Func := FindFunctionWithOp(Module.TopLevel, OP_GET_PROP_CONST);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
 procedure TTestCompiler.TestBinaryRoundTrip;
 var
   Original, Loaded: TGocciaBytecodeModule;
@@ -936,6 +978,9 @@ begin
   Expect<Boolean>(IsValidGocciaOpCode(99)).ToBe(False);
   Expect<Boolean>(IsValidGocciaOpCode(144)).ToBe(False);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CALL_SELF_NUM))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_GET_LOCAL_PROP_CONST))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_ADD_NUM_IMM))).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_GET_LOCAL_PROP_CONST)).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterA(OP_CLOSE_UPVALUE)).ToBe(False);
   Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_DEFINE_DATA_PROP)).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_DEFINE_METHOD_PROP)).ToBe(True);
