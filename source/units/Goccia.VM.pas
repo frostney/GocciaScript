@@ -1652,8 +1652,13 @@ begin
   // OrdinarySetWithOwnDescriptor with Receiver = O.  Exact class checks keep
   // exotic/overridden assignment semantics on the virtual fallback, while
   // exact descriptor checks keep lazy properties on their materializing path.
+  // TGocciaInstanceValue and TGocciaVMLiteralObjectValue share that ordinary
+  // own writable-data store (their AssignProperty overrides still handle
+  // accessors, inherited non-writable, and creation).
   Result := Assigned(AObject) and
-    (AObject.ClassType = TGocciaObjectValue) and
+    ((AObject.ClassType = TGocciaObjectValue) or
+     (AObject.ClassType = TGocciaVMLiteralObjectValue) or
+     (AObject.ClassType = TGocciaInstanceValue)) and
     AObject.Properties.TryGetValue(AName, Descriptor) and
     (Descriptor.ClassType = TGocciaPropertyDescriptorData) and
     Descriptor.Writable;
@@ -1756,10 +1761,12 @@ begin
   Result := RegisterObject(AValue);
 end;
 
-// Receivers whose own plain-data property reads are ordinary map lookups,
-// so the OP_GET_PROP_CONST inline cache may serve them without going
-// through their virtual GetProperty path. Exact-class checks exclude every
-// subclass with overridden lookup semantics (proxies, exotic objects).
+// Receivers whose own plain-data property reads and own writable-data
+// writes are ordinary map lookups, so the OP_GET_PROP_CONST /
+// OP_SET_PROP_CONST inline caches may serve them without going through
+// their virtual GetProperty / AssignProperty paths. Exact-class checks
+// exclude every subclass with overridden lookup or assignment semantics
+// (proxies, exotic objects).
 function VMPropertyReadCacheableReceiver(const AObject: TObject): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := (AObject.ClassType = TGocciaObjectValue) or
@@ -1809,6 +1816,8 @@ const
   // is treated as megamorphic: the cache stops being rewritten and reads use
   // the uncached own-data fast path instead.
   PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT = 16;
+  // Same saturation rule for OP_SET_PROP_CONST write-IC sites.
+  PROPERTY_WRITE_CACHE_POLYMORPHIC_LIMIT = 16;
 
 
 type
@@ -1851,6 +1860,52 @@ begin
   end;
   // A found entry implies a non-empty map, so a real shape exists; the
   // depth guard only blocks entries past a transition-capped prefix.
+  if (not Assigned(ReceiverShape)) or
+     (AEntryIndex >= ReceiverShape.Depth) then
+    Exit;
+  if (ACache^.Shape <> nil) and
+     (ACache^.Shape <> Pointer(ReceiverShape)) then
+    Inc(ACache^.MissStreak);
+  ACache^.Shape := Pointer(ReceiverShape);
+  ACache^.EntryIndex := AEntryIndex;
+end;
+
+// Validate a property-write inline cache entry against the receiver's shape
+// and store through the live map. Same shape-identity contract as
+// VMTryGetCachedOwnDataProperty; Writable is re-checked because freeze /
+// defineProperty can clear it without changing layout.
+function VMTrySetCachedOwnWritableDataProperty(
+  const AObject: TGocciaObjectValue;
+  const ACache: PGocciaPropertyWriteCacheEntry;
+  const AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Result := (ACache^.Shape = Pointer(
+      TGocciaShapedPropertyMap(AObject.Properties).Shape)) and
+    (ACache^.Shape <> nil) and
+    AObject.Properties.TryGetValueAtEntry(ACache^.EntryIndex, Descriptor) and
+    (Descriptor.ClassType = TGocciaPropertyDescriptorData) and
+    Descriptor.Writable;
+  if Result then
+  begin
+    TGocciaPropertyDescriptorData(Descriptor).Value := AValue;
+    if ACache^.MissStreak <> 0 then
+      ACache^.MissStreak := 0;
+  end;
+end;
+
+procedure VMPrimeOwnPropertyWriteCache(const AObject: TGocciaObjectValue;
+  const AEntryIndex: Integer; const ACache: PGocciaPropertyWriteCacheEntry);
+var
+  ReceiverShape: TGocciaShape;
+begin
+  ReceiverShape := TGocciaShapedPropertyMap(AObject.Properties).EnsureShape;
+  if ReceiverShape = DictionaryShapeSentinel then
+  begin
+    Inc(ACache^.MissStreak);
+    Exit;
+  end;
   if (not Assigned(ReceiverShape)) or
      (AEntryIndex >= ReceiverShape.Depth) then
     Exit;
@@ -14337,6 +14392,7 @@ var
   GlobalReadCache: PGocciaGlobalReadCacheEntry;
   DebugLine, DebugColumn: Integer;
   PropertyReadCache: PGocciaPropertyReadCacheEntry;
+  PropertyWriteCache: PGocciaPropertyWriteCacheEntry;
   ProtoReadCache: PGocciaProtoReadCacheEntry;
   AttributeType: string;
   SpecifierString: string;
@@ -15624,21 +15680,88 @@ begin
       OP_SET_PROP_CONST:
         if (FRegisters[A].Kind = grkObject) and Assigned(FRegisters[A].ObjectValue) then
         begin
-          GlobalName := Template.GetConstantUnchecked(B).StringValue;
           RightValue := RegisterToValue(FRegisters[C]);
           if FRegisters[A].ObjectValue is TGocciaVMClassValue then
             SetBytecodeHomeObject(RightValue,
               RegisterToValue(FRegisters[A]));
-          if IsBytecodePrivateKey(GlobalName) then
-            SetPropertyValue(FRegisters[A].ObjectValue, GlobalName, RightValue)
-          else if FRegisters[A].ObjectValue is TGocciaVMLiteralObjectValue then
+          // Own writable-data write IC: (shape, entry index), same receiver
+          // gate as the read cache. Hits skip the name hash. Accessors,
+          // proxies, private fields, deletion, and non-writable descriptors
+          // fall through to SetPropertyValue / AssignProperty.
+          PropertyWriteCache := Template.PropertyWriteCacheSlot(B);
+          if not (Assigned(PropertyWriteCache) and
+             (PropertyWriteCache^.MissStreak <
+              PROPERTY_WRITE_CACHE_POLYMORPHIC_LIMIT) and
+             VMPropertyReadCacheableReceiver(FRegisters[A].ObjectValue) and
+             VMTrySetCachedOwnWritableDataProperty(
+               TGocciaObjectValue(FRegisters[A].ObjectValue),
+               PropertyWriteCache, RightValue)) then
           begin
-            if not TGocciaVMLiteralObjectValue(FRegisters[A].ObjectValue)
-              .TrySetLiteralDataPropertyFast(GlobalName, RightValue) then
+            GlobalName := Template.GetConstantUnchecked(B).StringValue;
+            if IsBytecodePrivateKey(GlobalName) then
+              SetPropertyValue(FRegisters[A].ObjectValue, GlobalName, RightValue)
+            else if VMPropertyReadCacheableReceiver(FRegisters[A].ObjectValue) then
+            begin
+              if Assigned(PropertyWriteCache) and
+                 (PropertyWriteCache^.MissStreak <
+                  PROPERTY_WRITE_CACHE_POLYMORPHIC_LIMIT) then
+              begin
+                case VMProbeOwnProperty(
+                  TGocciaObjectValue(FRegisters[A].ObjectValue), GlobalName,
+                  KeyIndex, PrivateDescriptor) of
+                  oppData:
+                  if (PrivateDescriptor.ClassType =
+                      TGocciaPropertyDescriptorData) and
+                     PrivateDescriptor.Writable then
+                  begin
+                    TGocciaPropertyDescriptorData(PrivateDescriptor).Value :=
+                      RightValue;
+                    VMPrimeOwnPropertyWriteCache(
+                      TGocciaObjectValue(FRegisters[A].ObjectValue),
+                      KeyIndex, PropertyWriteCache);
+                  end
+                  else
+                    SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                      RightValue);
+                  oppNonData:
+                  begin
+                    Inc(PropertyWriteCache^.MissStreak);
+                    SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                      RightValue);
+                  end;
+                else
+                  if FRegisters[A].ObjectValue is TGocciaVMLiteralObjectValue then
+                  begin
+                    if not TGocciaVMLiteralObjectValue(
+                      FRegisters[A].ObjectValue)
+                      .TrySetLiteralDataPropertyFast(GlobalName, RightValue) then
+                      SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                        RightValue);
+                  end
+                  else
+                    SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                      RightValue);
+                end;
+              end
+              else if not VMTrySetOwnWritableDataProperty(
+                TGocciaObjectValue(FRegisters[A].ObjectValue), GlobalName,
+                RightValue) then
+              begin
+                if FRegisters[A].ObjectValue is TGocciaVMLiteralObjectValue then
+                begin
+                  if not TGocciaVMLiteralObjectValue(FRegisters[A].ObjectValue)
+                    .TrySetLiteralDataPropertyFast(GlobalName, RightValue) then
+                    SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                      RightValue);
+                end
+                else
+                  SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                    RightValue);
+              end;
+            end
+            else
               SetPropertyValue(FRegisters[A].ObjectValue, GlobalName, RightValue);
-          end
-          else
-            SetPropertyValue(FRegisters[A].ObjectValue, GlobalName, RightValue);
+          end;
         end
         else
           SetPropertyValue(GetRegister(A),
