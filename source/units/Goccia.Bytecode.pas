@@ -169,7 +169,12 @@ const
   //   v76 -> v77: debug info carries each function's declaration line and
   //               column, so coverage reports a function at the line it is
   //               declared on rather than at its first executed instruction.
-  GOCCIA_FORMAT_VERSION = 77;
+  //   v77 -> v78: added OP_GET_LOCAL_PROP_CONST (opcode 231), a fused
+  //               decode of OP_GET_LOCAL + OP_GET_PROP_CONST for
+  //               `local.ident` that reuses the existing shape-lite
+  //               property-read IC. Opcode 230 is left unused so a sibling
+  //               optimization lane can claim it without colliding.
+  GOCCIA_FORMAT_VERSION = 78;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -442,7 +447,11 @@ type
     // A = destination, B = first contiguous argument register,
     // C = argument count (1..3). Valid only in a compiler-proven closed-world
     // numeric self-recursive template.
-    OP_CALL_SELF_NUM = 229
+    OP_CALL_SELF_NUM = 229,
+    // A = destination, B = local slot holding the object, C = name-constant
+    // index. Fused OP_GET_LOCAL + OP_GET_PROP_CONST for `local.ident`.
+    // Opcode 230 is reserved for a sibling optimization lane.
+    OP_GET_LOCAL_PROP_CONST = 231
   );
 
 function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
@@ -475,7 +484,7 @@ function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
 begin
   Result := (AOp >= Ord(Low(TGocciaOpCode))) and
     (AOp <= Ord(High(TGocciaOpCode))) and
-    not (AOp in [99, 144..166]);
+    not (AOp in [99, 144..166, 230]);
 end;
 
 function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;
@@ -493,7 +502,7 @@ begin
     OP_DIV_FLOAT, OP_MOD_FLOAT, OP_NEG_FLOAT, OP_EQ_INT, OP_NEQ_INT,
     OP_LT_INT, OP_GT_INT, OP_LTE_INT, OP_GTE_INT, OP_EQ_FLOAT,
     OP_NEQ_FLOAT, OP_LT_FLOAT, OP_GT_FLOAT, OP_LTE_FLOAT, OP_GTE_FLOAT,
-    OP_CONCAT, OP_GET_PROP_CONST, OP_GET_ITER, OP_ITER_NEXT,
+    OP_CONCAT, OP_GET_PROP_CONST, OP_GET_LOCAL_PROP_CONST, OP_GET_ITER, OP_ITER_NEXT,
     OP_CLASS_SET_SUPER, OP_CLASS_SET_FIELD_INITIALIZER,
     OP_CLASS_EXEC_STATIC_BLOCK, OP_UNPACK, OP_NOT, OP_TO_BOOL,
     OP_DEL_INDEX_LOOSE, OP_SET_INDEX_LOOSE, OP_GET_INDEX, OP_SET_INDEX,

@@ -4684,6 +4684,7 @@ var
   EndJump, JumpIndex: Integer;
   NullishJumps: TGocciaCompilerJumpArray;
   NullishJumpCount: Integer;
+  IdentExpr: TGocciaIdentifierExpression;
 begin
   if AExpr.ObjectExpr is TGocciaSuperExpression then
   begin
@@ -4727,6 +4728,30 @@ begin
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
     Exit;
+  end;
+
+  if (not AExpr.Computed) and (not AExpr.Optional) and
+     (AExpr.ObjectExpr is TGocciaIdentifierExpression) then
+  begin
+    IdentExpr := TGocciaIdentifierExpression(AExpr.ObjectExpr);
+    if not ShouldTryWithBinding(ACtx.Scope, IdentExpr.Name) then
+    begin
+      LocalIdx := ACtx.Scope.ResolveLocal(IdentExpr.Name);
+      if LocalIdx >= 0 then
+      begin
+        Local := ACtx.Scope.GetLocal(LocalIdx);
+        if (not Local.IsImportBinding) and (not Local.IsGlobalBacked) then
+        begin
+          PropIdx := ACtx.Template.AddConstantString(AExpr.PropertyName);
+          if PropIdx <= High(UInt8) then
+          begin
+            EmitInstruction(ACtx, EncodeABC(OP_GET_LOCAL_PROP_CONST, ADest,
+              Local.Slot, UInt16(PropIdx)));
+            Exit;
+          end;
+        end;
+      end;
+    end;
   end;
 
   NullishJumpCount := 0;

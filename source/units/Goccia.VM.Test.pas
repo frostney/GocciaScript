@@ -40,6 +40,7 @@ type
     procedure TestExecuteArrayOps;
     procedure TestExecuteArrayPop;
     procedure TestExecuteObjectOps;
+    procedure TestExecuteLocalPropConst;
     procedure TestExecuteIndexedObjectOps;
     procedure TestExecuteClosureCall;
     procedure TestExecuteCapturedClosure;
@@ -83,6 +84,7 @@ begin
   Test('Execute array ops', TestExecuteArrayOps);
   Test('Execute array pop', TestExecuteArrayPop);
   Test('Execute object ops', TestExecuteObjectOps);
+  Test('Execute local property const', TestExecuteLocalPropConst);
   Test('Execute indexed object ops', TestExecuteIndexedObjectOps);
   Test('Execute closure call', TestExecuteClosureCall);
   Test('Execute captured closure', TestExecuteCapturedClosure);
@@ -363,6 +365,72 @@ begin
   finally
     VM.Free;
     DeleteTemplate.Free;
+    Template.Free;
+  end;
+end;
+
+procedure TTestGocciaVM.TestExecuteLocalPropConst;
+var
+  Template: TGocciaFunctionTemplate;
+  VM: TGocciaVM;
+  ResultValue: TGocciaValue;
+  NameIdx: UInt16;
+  RaisedExpected: Boolean;
+  ErrorObject: TGocciaObjectValue;
+begin
+  Template := TGocciaFunctionTemplate.Create('local-prop-const');
+  VM := TGocciaVM.Create;
+  try
+    Template.MaxRegisters := 2;
+    NameIdx := Template.AddConstantString('answer');
+    Template.EmitInstruction(EncodeABx(OP_NEW_OBJECT, 0, 0));
+    Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 1, 42));
+    Template.EmitInstruction(EncodeABC(OP_SET_PROP_CONST, 0, UInt8(NameIdx), 1));
+    Template.EmitInstruction(EncodeABC(OP_GET_LOCAL_PROP_CONST, 1, 0,
+      UInt8(NameIdx)));
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 1, 0, 0));
+
+    ResultValue := VM.ExecuteFunction(Template);
+    Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(42);
+  finally
+    VM.Free;
+    Template.Free;
+  end;
+
+  Template := TGocciaFunctionTemplate.Create('local-prop-const-tdz');
+  VM := TGocciaVM.Create;
+  try
+    Template.MaxRegisters := 2;
+    NameIdx := Template.AddConstantString('answer');
+    Template.EmitInstruction(EncodeABC(OP_LOAD_HOLE, 0, 0, 0));
+    Template.EmitInstruction(EncodeABC(OP_GET_LOCAL_PROP_CONST, 1, 0,
+      UInt8(NameIdx)));
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 1, 0, 0));
+
+    RaisedExpected := False;
+    try
+      VM.ExecuteFunction(Template);
+    except
+      on E: EGocciaBytecodeThrow do
+        if E.ThrownValue is TGocciaObjectValue then
+        begin
+          ErrorObject := TGocciaObjectValue(E.ThrownValue);
+          RaisedExpected :=
+            ErrorObject.GetProperty(PROP_NAME).ToStringLiteral.Value =
+              'ReferenceError';
+        end;
+      on E: TGocciaThrowValue do
+        if E.Value is TGocciaObjectValue then
+        begin
+          ErrorObject := TGocciaObjectValue(E.Value);
+          RaisedExpected :=
+            ErrorObject.GetProperty(PROP_NAME).ToStringLiteral.Value =
+              'ReferenceError';
+        end;
+    end;
+    Expect<Boolean>(RaisedExpected).ToBe(True);
+  finally
+    VM.Free;
     Template.Free;
   end;
 end;

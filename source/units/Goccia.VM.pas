@@ -14298,6 +14298,8 @@ function TGocciaVM.ExecuteClosureRegistersInternal(
   const AArg0, AArg1, AArg2: TGocciaRegister; const AUseFixedArgs: Boolean;
   const APushExecutionContext: Boolean; const AStopAtIP: Integer;
   const AStopGenerator: TObject): TGocciaRegister;
+label
+  LGetPropConstShared;
 var
   Frame: TGocciaVMCallFrame;
   SavedRegisterBase: Integer;
@@ -15506,7 +15508,17 @@ begin
         end;
       end;
 
+      OP_GET_LOCAL_PROP_CONST:
+      begin
+        FRegisters[A] := GetLocalRegister(B);
+        if FRegisters[A].Kind = grkHole then
+          ThrowReferenceError('Cannot access lexical binding before initialization');
+        B := A;
+        goto LGetPropConstShared;
+      end;
+
       OP_GET_PROP_CONST:
+      LGetPropConstShared:
         if (FRegisters[B].Kind = grkObject) and Assigned(FRegisters[B].ObjectValue) and
            (FRegisters[B].ObjectValue is TGocciaObjectValue) then
         begin
