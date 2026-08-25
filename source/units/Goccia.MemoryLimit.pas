@@ -130,6 +130,7 @@ end;
 function CanAllocateNativeBytes(const ABytes: Int64): Boolean;
 var
   GC: TGarbageCollector;
+  LiveBytes: Int64;
 begin
   if ABytes <= 0 then
     Exit(True);
@@ -138,11 +139,15 @@ begin
     one are unbounded by construction, and that is their choice to make. }
   if not Assigned(GC) or (GC.MaxBytes <= 0) then
     Exit(True);
+  { One snapshot for both tests: a cross-thread release between two reads
+    would split the decision across totals, and on 32-bit each read is a
+    locked load. }
+  LiveBytes := GC.BytesAllocated;
   { Overflow guard first: a JS-controlled length can multiply into a value
     that wraps, and a wrapped total would compare as comfortably in budget. }
-  if GC.BytesAllocated > High(Int64) - ABytes then
+  if LiveBytes > High(Int64) - ABytes then
     Exit(False);
-  Result := GC.BytesAllocated + ABytes <= GC.MaxBytes;
+  Result := LiveBytes + ABytes <= GC.MaxBytes;
 end;
 
 procedure RequireNativeBytes(const ABytes: Int64);

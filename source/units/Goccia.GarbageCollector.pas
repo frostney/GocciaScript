@@ -163,6 +163,15 @@ type
     // shared cache line entirely: each worker contends only with the rare
     // cross-thread release actually aimed at its collector.
     //
+    // Readers: every write to these counters goes through this lock, so a
+    // reader only has to avoid observing a half-applied cross-thread write.
+    // On 64-bit an aligned Int64 load cannot tear, so readers take nothing and
+    // BytesAllocated stays a bare field load on the per-allocation path; on
+    // 32-bit ReleaseExternalBytes splits its write into two stores and readers
+    // go through GetBytesAllocated, which takes this lock. Code that already
+    // holds the lock reads the fields directly — GetBytesAllocated must never
+    // be called from inside a section.
+    //
     // Lock order: the global GCCollectLock may be held when taking an
     // accounting lock (a sweep's aggregate byte settle, a swept destructor's
     // cross-collector release). NEVER take GCCollectLock — or a second
@@ -210,8 +219,19 @@ type
 
     function GetManagedObjectCount: Integer;
     function GetWatermark: Integer; {$IFDEF FPC}inline;{$ENDIF}
+    // Untorn read of the live-byte total for callers that hold no lock — see
+    // the reader rule at FAccountingLock. Never call it while holding the
+    // accounting lock; read FBytesAllocated directly there.
+    function GetBytesAllocated: Int64; {$IFDEF FPC}inline;{$ENDIF}
+    // Pressure predicate over an already-read live total, so the charge path
+    // can decide from the value it just committed instead of re-reading it
+    // through the locked accessor with the lock held.
+    function NeedsMemoryPressureCollection(
+      const ABytesAllocated: Int64): Boolean; overload;
     procedure ClearActiveRootEntries(const AObject: TGCManagedObject);
     procedure GrowActiveRootStack;
+    // Reads the live total and the forced-collect floor, so the caller must
+    // hold FAccountingLock across the decision it feeds.
     function ShouldForceLimitCollection(const ABytes: Int64): Boolean;
     // The one --max-memory fit predicate (overflow guard + ceiling test).
     // Caller must hold FAccountingLock ("Locked" suffix).
@@ -274,7 +294,7 @@ type
     // active root stack so a stack-held object survives the collection.
     procedure CollectIfNeeded(const AProtect: TGCManagedObject); overload;
 
-    function NeedsMemoryPressureCollection: Boolean;
+    function NeedsMemoryPressureCollection: Boolean; overload;
 
     // Collects when pressure has been latched by an external reservation or
     // when the live set has crossed the reserve below the ceiling. AForce
@@ -336,7 +356,12 @@ type
     // number of bytes currently tracked by the GC (InstanceSize per
     // registered object). Set MaxBytes to a positive value to impose
     // a ceiling; allocations that exceed it raise a RangeError.
-    property BytesAllocated: Int64 read FBytesAllocated;
+    //
+    // BytesAllocated reads through an accessor because it is the one counter a
+    // foreign thread writes (ReleaseExternalBytes). The peak and the lifetime
+    // total are written only by the owning thread, so no reader of theirs can
+    // catch a half-applied write and they stay direct field reads.
+    property BytesAllocated: Int64 read GetBytesAllocated;
     property PeakBytesAllocated: Int64 read FPeakBytesAllocated;
     property TotalBytesAllocated: Int64 read FTotalBytesAllocated;
     property MaxBytes: Int64 read FMaxBytes write FMaxBytes;
@@ -1142,7 +1167,35 @@ begin
   end;
 end;
 
+function TGarbageCollector.GetBytesAllocated: Int64;
+begin
+  {$IF SizeOf(Pointer) >= 8}
+  Result := FBytesAllocated;
+  {$ELSE}
+  // A 32-bit target splits the 64-bit write in a cross-thread
+  // ReleaseExternalBytes into two stores, and a load that lands between them
+  // yields a total no memory-limit decision may be made on. No 64-bit
+  // interlocked load is available: FPC 3.2.2 declares those only under CPU64,
+  // and CI builds i386-win32. Nothing between the two calls can raise, so the
+  // load needs no exception frame — which also keeps this accessor inlinable.
+  CriticalSectionEnter(FAccountingLock);
+  Result := FBytesAllocated;
+  CriticalSectionLeave(FAccountingLock);
+  {$ENDIF}
+end;
+
 function TGarbageCollector.NeedsMemoryPressureCollection: Boolean;
+begin
+  // Guards before the counter read: on 32-bit GetBytesAllocated takes the
+  // accounting lock, and the periodic VM/interpreter pressure polls must stay
+  // free when no limit is set or a collection is already underway.
+  if (FMaxBytes <= 0) or FCollecting or FMemoryLimitFiring then
+    Exit(False);
+  Result := NeedsMemoryPressureCollection(GetBytesAllocated);
+end;
+
+function TGarbageCollector.NeedsMemoryPressureCollection(
+  const ABytesAllocated: Int64): Boolean;
 var
   Reserve: Int64;
 begin
@@ -1160,7 +1213,7 @@ begin
   if Reserve >= FMaxBytes then
     Reserve := FMaxBytes div 2;
 
-  Result := FBytesAllocated >= (FMaxBytes - Reserve);
+  Result := ABytesAllocated >= (FMaxBytes - Reserve);
 end;
 
 procedure TGarbageCollector.CollectForMemoryPressure(
@@ -1403,7 +1456,7 @@ begin
     FPeakBytesAllocated := FBytesAllocated;
   if (FExternalBytesAllocatedSinceGC >=
       EXTERNAL_MEMORY_PRESSURE_ALLOCATION_INTERVAL) or
-     NeedsMemoryPressureCollection then
+     NeedsMemoryPressureCollection(FBytesAllocated) then
   begin
     FExternalPressurePending := True;
     if Assigned(FMemoryPressureCountdown) then
