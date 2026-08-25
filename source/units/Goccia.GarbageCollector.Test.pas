@@ -5,6 +5,7 @@ program Goccia.GarbageCollector.Test;
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
 
+  Classes,
   SysUtils,
 
   Goccia.GarbageCollector,
@@ -38,6 +39,24 @@ type
     property Child: TChildManaged read FChild write FChild;
   end;
 
+  { A foreign thread releasing external bytes against the MAIN thread's
+    collector — the shape of a TGocciaErrorObjectValue charged on collector A
+    but destroyed on worker thread B, which is the one cross-thread entry
+    point into a collector. Deliberately does NOT initialize its own
+    thread-local runtime: the error destructor releases through the reserving
+    collector pointer, not through this thread's TGarbageCollector.Instance. }
+  TCrossThreadReleaser = class(TThread)
+  private
+    FCollector: TGarbageCollector;
+    FChunkBytes: Int64;
+    FIterations: Integer;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const ACollector: TGarbageCollector;
+      const AChunkBytes: Int64; const AIterations: Integer);
+  end;
+
   TTestGarbageCollector = class(TTestSuite)
   public
     procedure SetupTests; override;
@@ -47,11 +66,13 @@ type
     procedure TestReservationCollectsBeyondPressureReserve;
     procedure TestReservationRefusesWhatCollectionCannotFit;
     procedure TestRepeatedRefusalCollectsOnlyOnce;
+    procedure TestTryCollectGrantsAlreadyFittingRequestWithoutWalking;
     procedure TestDataDescriptorPushRootsProtectsValue;
     procedure TestAccessorDescriptorPushRootsProtectsBothHalves;
     procedure TestInnerFrameClearLeavesOuterFrameRootsIntact;
     procedure TestActiveRootStackGrowsPastInitialCapacity;
     procedure TestPushesOutsideTheGuardingTryLeakOnRaise;
+    procedure TestCrossThreadReleaseKeepsAccountingExact;
   end;
 
 var
@@ -86,6 +107,24 @@ begin
     FChild.MarkReferences;
 end;
 
+constructor TCrossThreadReleaser.Create(const ACollector: TGarbageCollector;
+  const AChunkBytes: Int64; const AIterations: Integer);
+begin
+  inherited Create(True);
+  FreeOnTerminate := False;
+  FCollector := ACollector;
+  FChunkBytes := AChunkBytes;
+  FIterations := AIterations;
+end;
+
+procedure TCrossThreadReleaser.Execute;
+var
+  I: Integer;
+begin
+  for I := 1 to FIterations do
+    FCollector.ReleaseExternalBytes(FChunkBytes);
+end;
+
 procedure TTestGarbageCollector.SetupTests;
 begin
   Test('CollectYoung traces references from old rooted objects',
@@ -98,6 +137,8 @@ begin
     TestReservationRefusesWhatCollectionCannotFit);
   Test('Repeated refusal of the same size collects only once',
     TestRepeatedRefusalCollectsOnlyOnce);
+  Test('An already-fitting request is granted without walking the heap',
+    TestTryCollectGrantsAlreadyFittingRequestWithoutWalking);
   Test('Data descriptor PushRoots keeps its value alive across a collection',
     TestDataDescriptorPushRootsProtectsValue);
   Test('Accessor descriptor PushRoots keeps getter and setter alive',
@@ -108,6 +149,8 @@ begin
     TestActiveRootStackGrowsPastInitialCapacity);
   Test('A frame''s pushes must sit inside the try that clears it',
     TestPushesOutsideTheGuardingTryLeakOnRaise);
+  Test('Cross-thread releases keep the byte ledger exact under churn',
+    TestCrossThreadReleaseKeepsAccountingExact);
 end;
 
 procedure TTestGarbageCollector.TestDataDescriptorPushRootsProtectsValue;
@@ -461,6 +504,35 @@ begin
   end;
 end;
 
+{ Pins the grant-without-walking arm of TryCollectForLimitedBytes: a request
+  that already fits must return True without a collection. The arm exists for
+  a cross-thread interleaving — a foreign release landing between a caller's
+  failed fit test and this call can make the request fit, and the force
+  predicate would otherwise read that as "nothing to force" and refuse a
+  grantable request — but the contract it establishes is directly observable
+  single-threaded, which is what this asserts. }
+procedure TTestGarbageCollector.TestTryCollectGrantsAlreadyFittingRequestWithoutWalking;
+const
+  BUDGET_HEADROOM_BYTES = 1024 * 1024;
+var
+  CollectionsBefore: Integer;
+  GC: TGarbageCollector;
+  PreviousMaxBytes: Int64;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  PreviousMaxBytes := GC.MaxBytes;
+  try
+    GC.MaxBytes := GC.BytesAllocated + BUDGET_HEADROOM_BYTES;
+    CollectionsBefore := GC.TotalCollections;
+    Expect<Boolean>(
+      GC.TryCollectForLimitedBytes(BUDGET_HEADROOM_BYTES div 2)).ToBe(True);
+    Expect<Integer>(GC.TotalCollections).ToBe(CollectionsBefore);
+  finally
+    GC.MaxBytes := PreviousMaxBytes;
+  end;
+end;
+
 procedure TTestGarbageCollector.TestRepeatedRefusalCollectsOnlyOnce;
 const
   BUDGET_HEADROOM_BYTES = 8 * 1024 * 1024;
@@ -566,6 +638,59 @@ begin
     if GParentDestructorCount = 0 then
       GC.RemoveRootObject(Parent);
   end;
+end;
+
+{ The tear this pins was real: before the accounting lock, an error object
+  charged on collector A but destroyed on worker thread B drove A's
+  FBytesAllocated concurrently with A's own allocations, and a lost update
+  skewed the total --max-memory is checked against. The worker here releases
+  a pre-charged reservation in small chunks while the owner thread churns
+  registrations and full collections against the same counters; any lost
+  update, torn 64-bit access, or deadlock between the collect and accounting
+  locks surfaces as an exact-balance failure (or a hang) below. }
+procedure TTestGarbageCollector.TestCrossThreadReleaseKeepsAccountingExact;
+const
+  CHUNK_BYTES = 64;
+  { Sized so the releaser spans the owner-side churn (allocations plus 20
+    full collections) rather than finishing in its opening moments — the
+    exact-balance assertion only bites while the two sides actually overlap. }
+  RELEASE_ITERATIONS = 200000;
+  CHURN_ITERATIONS = 20000;
+  CHURN_COLLECT_INTERVAL = 1000;
+var
+  BaselineBytes: Int64;
+  GC: TGarbageCollector;
+  I: Integer;
+  Releaser: TCrossThreadReleaser;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  BaselineBytes := GC.BytesAllocated;
+
+  { Charge everything the worker will release, up front, on this (the
+    reserving) thread — the error-excerpt shape: reserved on A, released
+    piecemeal from B. }
+  Expect<Boolean>(GC.TryReserveExternalBytes(
+    Int64(CHUNK_BYTES) * RELEASE_ITERATIONS)).ToBe(True);
+
+  Releaser := TCrossThreadReleaser.Create(GC, CHUNK_BYTES,
+    RELEASE_ITERATIONS);
+  try
+    Releaser.Start;
+    for I := 1 to CHURN_ITERATIONS do
+    begin
+      GC.RegisterObject(TChildManaged.Create);
+      if I mod CHURN_COLLECT_INTERVAL = 0 then
+        GC.Collect;
+    end;
+    Releaser.WaitFor;
+  finally
+    Releaser.Free;
+  end;
+
+  { Sweep the remaining churn garbage; the ledger must balance to the byte. }
+  GC.Collect;
+  Expect<Int64>(GC.BytesAllocated).ToBe(BaselineBytes);
 end;
 
 begin

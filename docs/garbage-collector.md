@@ -153,6 +153,13 @@ Backing storage sized by the running script is checked against the ceiling *befo
 
 Each worker thread creates its own `TGarbageCollector` instance via `threadvar`. The `--max-memory` ceiling is propagated from the main thread's GC to each worker via `TGocciaThreadPool.MaxBytes` → `InitThreadRuntime(AMaxBytes)`.
 
+Two kinds of lock coordinate the collectors, with a strict order between them:
+
+- **The global collect lock** serializes `Collect`/`CollectYoung` across all collectors — the mark epoch (`GCCurrentMark`) is process-global and some intrinsic objects are shared, so two concurrent collections advancing the epoch mid-mark would unmark each other's live sets.
+- **A per-collector accounting lock** is a short-lived leaf lock for the byte counters a *foreign* thread can drive (`BytesAllocated`, the external-byte total, the forced-collect floor, the peak). The one cross-thread entry point into a collector is `ReleaseExternalBytes` through an error object's reserving-collector pointer (an error charged on collector A can be destroyed on worker thread B); everything else reaches a collector through the thread-local `Instance`, so the managed-object list and root sets are owner-thread-confined and unlocked. Keeping the counters on their own per-collector lock means one worker's full mark-and-sweep does not stall any other worker's per-allocation register/unregister — and workers never contend with each other on the allocation path at all, only with the rare cross-thread release aimed at their own collector.
+
+The order is collect lock → accounting lock, never the reverse (and never two accounting locks at once): a sweep settles its freed bytes — and a swept error destructor releases its cross-collector charge — under an accounting lock while the collect lock is held, and the reservation path drops the accounting lock before it collects. The accounting lock lives and dies with its collector; a cross-thread release entering it is safe on the same terms as the counter fields it guards, per the lifecycle invariant that a charged object is freed before its reserving collector shuts down.
+
 Key behavior on worker threads:
 
 - **Automatic GC collection is disabled** (`Enabled := False`) so worker execution does not collect between ordinary allocations. Explicit `Collect` calls still run under the global collector lock; `Goccia.gc()` therefore has the same observable behavior in worker threads as on the main thread. `GocciaTestRunner` still lets worker shutdown reclaim each thread-local GC heap instead of collecting after every file.
