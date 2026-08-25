@@ -1,14 +1,14 @@
 # Handoff
 
-Updated: 2026-08-25 (inc-assign accepted on top of ADD_NUM_IMM)
+Updated: 2026-08-25 (write-IC accepted on top of inc-assign)
 
 ## Experiment
 
 - **Goal:** Goccia bytecode at 0.6×–0.8× of QuickJS *speed* (AWFY `goccia_over_qjs` ≈ 1.25–1.67).
 - **Current main CI** (`f4d403f0`, linux/x64 Azure): AWFY geomean `goccia_over_qjs` = **16.256** (speed **0.062×**). Need ~10–13×.
-- **Delivery branch:** `perf/bytecode-quickjs-gap` @ `1c2e0412` (skill adoption on `origin/main` `f4d403f0`).
-- **Accepted code:** `ad0023da` `OP_ADD_NUM_IMM` (opcode **230**, format **v78**); `315bfd28` numeric `i = i + 1` → `OP_INC_NUMERIC`. Next free opcode **231**; `optimize/get-local-prop` must take 231 and bump format to v79 if it lands.
-- **Combined candidate binary:** `/tmp/goccia-combined-1c2e0412`. Previous combined head: `/tmp/goccia-combined-d099bdf9`.
+- **Delivery branch:** `perf/bytecode-quickjs-gap` @ `0293229e` (skill adoption on `origin/main` `f4d403f0`).
+- **Accepted code:** `ad0023da` `OP_ADD_NUM_IMM` (opcode **230**, format **v78**); `315bfd28` numeric `i = i + 1` → `OP_INC_NUMERIC`; `15e8eca7` own writable write IC. Next free opcode **231**; `optimize/get-local-prop` must take 231 and bump format to v79 if it lands.
+- **Combined candidate binary:** `/tmp/goccia-combined-0293229e`. Previous combined heads: `/tmp/goccia-combined-1c2e0412` (inc-assign), `/tmp/goccia-combined-d099bdf9` (ADD_NUM_IMM).
 - **Baseline binary:** `/tmp/goccia-baseline-f4d403f0` (`--prod` loader, darwin/aarch64, FPC 3.2.2).
 - **QuickJS:** 2026-06-04 at `/tmp/quickjs/bin/qjs`.
 - **Lock:** `/tmp/gocciascript-perf-gate.lock`.
@@ -32,7 +32,7 @@ Fib is the best relative row because it already uses `OP_CALL_SELF_NUM` / `OP_SU
 
 ## Profile facts (function-wrapped equivalents)
 
-- `loop-dispatch-floor`: 38% `OP_GET_LOCAL`, 15% `OP_LOAD_INT`, 11% `OP_SET_LOCAL`, 8% `OP_ADD_FLOAT`. Loop compare is generic `OP_LT`. Increment is `i = i + 1` (not `++`), so existing `OP_INC` is unused. Number literals type as `sltFloat` (`ExpressionType` in `Goccia.Compiler.Statements.pas`).
+- `loop-dispatch-floor`: 38% `OP_GET_LOCAL`, 15% `OP_LOAD_INT`, 11% `OP_SET_LOCAL`, 8% `OP_ADD_FLOAT` on the original baseline. Increment `i = i + 1` now compiles as `OP_INC_NUMERIC` (`315bfd28`); compare is still generic `OP_LT`. Number literals type as `sltFloat` (`ExpressionType` in `Goccia.Compiler.Statements.pas`).
 - `nbody-minimal`: 31% `OP_GET_LOCAL`, 12% `OP_GET_PROP_CONST`, 10% `OP_LOAD_HOLE`, 8% `OP_MOVE`. Hot pair `GET_LOCAL → GET_PROP_CONST` (11%). Generic `OP_MUL`/`OP_ADD` with 100% scalar hit rate.
 - Script-level `let` in a non-function profiled as `OP_GET_GLOBAL` (29% of opcodes) — not the AWFY/probe shape.
 
@@ -66,6 +66,18 @@ Json 24.96, Permute 21.86, Sieve 21.63, CD 20.41, Bounce 19.94, Havlak 19.09, To
 
   Geomean combined/prev **0.999** (fib/nbody overlap noise). Target still faster after ADD_NUM_IMM; checksums matched. Treat `1c2e0412` as the next combined baseline.
 
+- **`optimize/write-ic`** `15e8eca7`, merged at `0293229e`. Shape + entry-index write IC for own writable data on `OP_SET_PROP_CONST`; semantic misses still use `AssignProperty`. Isolated vs original baseline: Richards +21.14% speed, Bounce +8.42%, Storage +4.96%. Combined re-measure vs `/tmp/goccia-combined-1c2e0412` (7 interleaved reps, `/tmp/combined-write-ic-ab.json`):
+
+  | Target | Prev | Combined | Time ratio | Speed |
+  | --- | ---: | ---: | ---: | ---: |
+  | Richards | 396.332 ms | 307.419 ms | 0.776 | +28.9% |
+  | Bounce | 8.892 ms | 7.698 ms | 0.866 | +15.5% |
+  | Storage | 14.663 ms | 13.882 ms | 0.947 | +5.6% |
+  | loop-dispatch-floor | 114.154 ms | 113.167 ms | 0.991 | flat |
+  | propaccess-monomorphic | 16.467 ms | 14.238 ms | 0.865 | +15.7% |
+
+  Geomean combined/prev **0.886**. Checksums matched. Do not bundle with read-PIC (ADR 0088). Treat `0293229e` as the next combined baseline.
+
 ## Lanes launching
 
 1. `optimize/inc-assign` — **accepted** (see above).
@@ -73,7 +85,7 @@ Json 24.96, Permute 21.86, Sieve 21.63, CD 20.41, Bounce 19.94, Havlak 19.09, To
 3. `optimize/add-num-imm` — **accepted** (see above).
 4. `optimize/hot-dispatch-extract` — **rejected** (see below).
 5. `optimize/get-local-prop` — fuse `GET_LOCAL` + `GET_PROP_CONST` (must use opcode **231** / format **v79** if it lands after this merge).
-6. `optimize/write-ic` — own writable-data write IC (ADR 0088 leftover; requires AWFY transfer).
+6. `optimize/write-ic` — **accepted** (see above).
 7. `optimize/counted-for-assign` — widen `TryCompileCountedFor` to `i = i + 1`.
 
 ## Investigation conclusions (do not contradict)
@@ -81,9 +93,9 @@ Json 24.96, Permute 21.86, Sieve 21.63, CD 20.41, Bounce 19.94, Havlak 19.09, To
 - **NaN-box / tagged-pointer rewrite:** out of this wave (`TGocciaRegister` is a 16-byte fat union by design).
 - **Numeric loops already unboxed** on the generic scalar arm; remaining tax is dispatch + property-boundary boxing on store.
 - **Broader read-PIC:** still rejected (ADR 0088). Own+proto read ICs already ship.
-- **Write-IC:** unimplemented; prior isolated 30× AWFY was Richards +8%, Bounce +5%, Storage +3%. Re-measure interleaved; do not bundle with read-PIC.
-- **`OP_SET_PROP_CONST`** still calls full `AssignProperty` except literal-object fast path; `VMTrySetOwnWritableDataProperty` exists but is unused there.
-- **Counted-for** only matches `i++`, so AWFY/probe `i = i + 1` misses `OP_ADD_INT` loop microcode.
+- **Write-IC:** landed this wave (`15e8eca7`). Own writable-data stores on `OP_SET_PROP_CONST` hit a shape-keyed IC; misses still go through `AssignProperty`. Broader read-PIC remains rejected (ADR 0088).
+- **`OP_SET_PROP_CONST`** uses the write IC for ordinary own writable data; `VMTrySetOwnWritableDataProperty` remains available for non-IC paths.
+- **Counted-for** only matches `i++`, so AWFY/probe `i = i + 1` still misses `OP_ADD_INT` loop microcode. Assignment `i = i + 1` now emits `OP_INC_NUMERIC` outside that counted-for path.
 - **CALL:** bytecode→bytecode already trampolines; `ExecuteClosureRegisters0–3` are native ingress only. Revisit `OP_CALL_METHOD` staging only with AWFY transfer (ADR 0089 previously noise).
 - **Dispatch preamble:** ~10–15 predictable cold branches per opcode. A remaining DISPATCH idea is a **prod vs instrumented dual loop** that keeps one `case` and only strips coverage/profiler/`AStopAtIP` on the measured path — not a hot/cold case split.
 - **ALLOC:** do not revive value caches. Property-store `RegisterToValue` boxing is the live allocation tax.
