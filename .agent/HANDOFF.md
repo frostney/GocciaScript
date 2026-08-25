@@ -1,14 +1,14 @@
 # Handoff
 
-Updated: 2026-08-25 (OP_ADD_NUM_IMM accepted)
+Updated: 2026-08-25 (inc-assign accepted on top of ADD_NUM_IMM)
 
 ## Experiment
 
 - **Goal:** Goccia bytecode at 0.6×–0.8× of QuickJS *speed* (AWFY `goccia_over_qjs` ≈ 1.25–1.67).
 - **Current main CI** (`f4d403f0`, linux/x64 Azure): AWFY geomean `goccia_over_qjs` = **16.256** (speed **0.062×**). Need ~10–13×.
-- **Delivery branch:** `perf/bytecode-quickjs-gap` @ `d099bdf9` (skill adoption on `origin/main` `f4d403f0`; first accepted code merge).
-- **Accepted code:** `ad0023da` `OP_ADD_NUM_IMM` (opcode **230**, format **v78**). Next free opcode **231**; `optimize/get-local-prop` must take 231 and bump format to v79 if it lands.
-- **Combined candidate binary:** `/tmp/goccia-combined-d099bdf9`.
+- **Delivery branch:** `perf/bytecode-quickjs-gap` @ `1c2e0412` (skill adoption on `origin/main` `f4d403f0`).
+- **Accepted code:** `ad0023da` `OP_ADD_NUM_IMM` (opcode **230**, format **v78**); `315bfd28` numeric `i = i + 1` → `OP_INC_NUMERIC`. Next free opcode **231**; `optimize/get-local-prop` must take 231 and bump format to v79 if it lands.
+- **Combined candidate binary:** `/tmp/goccia-combined-1c2e0412`. Previous combined head: `/tmp/goccia-combined-d099bdf9`.
 - **Baseline binary:** `/tmp/goccia-baseline-f4d403f0` (`--prod` loader, darwin/aarch64, FPC 3.2.2).
 - **QuickJS:** 2026-06-04 at `/tmp/quickjs/bin/qjs`.
 - **Lock:** `/tmp/gocciascript-perf-gate.lock`.
@@ -53,11 +53,22 @@ Json 24.96, Permute 21.86, Sieve 21.63, CD 20.41, Bounce 19.94, Havlak 19.09, To
 
   Geomean combined/base **0.971**. Isolated lane had loop-dispatch-floor 0.967 / generic-plus-scalars 0.970. AWFY `i++` loops are not expected to hit this opcode; transfer is the `i + K` / `1 + i` probes. Treat `d099bdf9` as the next combined baseline for later merges — do not add isolated percentages.
 
-  Overlap: `optimize/inc-assign` still owns whole-assignment `id = id + 1` → `OP_INC`. `OP_ADD_NUM_IMM` fires on the binary `+` expression. If both land, keep assignment matching first so `i = i + 1` stays one increment rather than add-immediate plus store.
+  Overlap with inc-assign is resolved: assignment matching runs first, so `i = i + 1` emits `OP_INC_NUMERIC` rather than add-immediate plus store. `OP_ADD_NUM_IMM` still covers `i + K` for K ≠ 1 and non-assignment uses.
+
+- **`optimize/inc-assign`** `315bfd28`, merged at `1c2e0412`. Proven-numeric `id = id + 1` / `id = 1 + id` emits `OP_INC_NUMERIC`. Isolated vs original baseline: loop-dispatch-floor 0.930. Combined re-measure vs `/tmp/goccia-combined-d099bdf9` (7 interleaved reps, `/tmp/combined-inc-assign-ab.json`):
+
+  | Probe | Prev µs | Combined µs | Ratio |
+  | --- | ---: | ---: | ---: |
+  | loop-dispatch-floor | 117529 | 113682 | 0.967 |
+  | generic-plus-scalars | 57182 | 56515 | 0.988 |
+  | nbody-minimal | 65105 | 65914 | 1.012 |
+  | fib-recursive | 44025 | 45288 | 1.029 |
+
+  Geomean combined/prev **0.999** (fib/nbody overlap noise). Target still faster after ADD_NUM_IMM; checksums matched. Treat `1c2e0412` as the next combined baseline.
 
 ## Lanes launching
 
-1. `optimize/inc-assign` — compile `id = id + 1` as existing `OP_INC`.
+1. `optimize/inc-assign` — **accepted** (see above).
 2. `optimize/int-literals` — integer-valued number literals as `sltInteger`.
 3. `optimize/add-num-imm` — **accepted** (see above).
 4. `optimize/hot-dispatch-extract` — **rejected** (see below).
