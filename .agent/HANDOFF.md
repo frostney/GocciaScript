@@ -1,6 +1,6 @@
 # Handoff
 
-Updated: 2026-08-25 (investigation folded; write-IC + counted-for lanes added)
+Updated: 2026-08-25 (hot-dispatch-extract rejected)
 
 ## Experiment
 
@@ -43,7 +43,7 @@ Json 24.96, Permute 21.86, Sieve 21.63, CD 20.41, Bounce 19.94, Havlak 19.09, To
 1. `optimize/inc-assign` — compile `id = id + 1` as existing `OP_INC`.
 2. `optimize/int-literals` — integer-valued number literals as `sltInteger`.
 3. `optimize/add-num-imm` — `OP_ADD_NUM_IMM` mirroring `OP_SUB_NUM_IMM`.
-4. `optimize/hot-dispatch-extract` — shrink register pressure / strip cold preamble in the VM loop.
+4. `optimize/hot-dispatch-extract` — **rejected** (see below).
 5. `optimize/get-local-prop` — fuse `GET_LOCAL` + `GET_PROP_CONST`.
 6. `optimize/write-ic` — own writable-data write IC (ADR 0088 leftover; requires AWFY transfer).
 7. `optimize/counted-for-assign` — widen `TryCompileCountedFor` to `i = i + 1`.
@@ -57,8 +57,22 @@ Json 24.96, Permute 21.86, Sieve 21.63, CD 20.41, Bounce 19.94, Havlak 19.09, To
 - **`OP_SET_PROP_CONST`** still calls full `AssignProperty` except literal-object fast path; `VMTrySetOwnWritableDataProperty` exists but is unused there.
 - **Counted-for** only matches `i++`, so AWFY/probe `i = i + 1` misses `OP_ADD_INT` loop microcode.
 - **CALL:** bytecode→bytecode already trampolines; `ExecuteClosureRegisters0–3` are native ingress only. Revisit `OP_CALL_METHOD` staging only with AWFY transfer (ADR 0089 previously noise).
-- **Dispatch preamble:** ~10–15 predictable cold branches per opcode; dual prod/instrumented loop is the DISPATCH bet, not jumptable surgery.
+- **Dispatch preamble:** ~10–15 predictable cold branches per opcode. A remaining DISPATCH idea is a **prod vs instrumented dual loop** that keeps one `case` and only strips coverage/profiler/`AStopAtIP` on the measured path — not a hot/cold case split.
 - **ALLOC:** do not revive value caches. Property-store `RegisterToValue` boxing is the live allocation tax.
+
+## Rejected this wave
+
+- **`optimize/hot-dispatch-extract`** (first-level hot `case` + `ExecuteColdOpcode` nested helper). Checksums matched; fully reverted; no commit. Medians vs `/tmp/goccia-baseline-f4d403f0`, 7 interleaved reps (`/tmp/lane-hot-dispatch-ab.json`):
+
+  | Probe | Base µs | Cand µs | Ratio |
+  | --- | ---: | ---: | ---: |
+  | loop-dispatch-floor | 121819 | 123053 | 1.010 |
+  | generic-plus-scalars | 59864 | 455680 | 7.612 |
+  | nbody-minimal | 64089 | 233806 | 3.648 |
+  | fib-recursive | 44227 | 192440 | 4.351 |
+  | fixed-arg-call | 34331 | 35860 | 1.045 |
+
+  Do not retry a sparse hot `case` plus nested cold helper. High-numbered opcodes (`OP_ADD`, `OP_MUL`, `OP_SUB_NUM_IMM`, `OP_LOAD_HOLE`) became much more expensive while the all-hot floor stayed flat.
 
 ## Rejected (do not retry)
 
