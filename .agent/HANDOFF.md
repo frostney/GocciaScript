@@ -1,14 +1,14 @@
 # Handoff
 
-Updated: 2026-08-25 (counted-for i=i+1 accepted)
+Updated: 2026-08-25 (GET_LOCAL_PROP_CONST accepted, format v79)
 
 ## Experiment
 
 - **Goal:** Goccia bytecode at 0.6×–0.8× of QuickJS *speed* (AWFY `goccia_over_qjs` ≈ 1.25–1.67).
 - **Current main CI** (`f4d403f0`, linux/x64 Azure): AWFY geomean `goccia_over_qjs` = **16.256** (speed **0.062×**). Need ~10–13×.
-- **Delivery branch:** `perf/bytecode-quickjs-gap` @ `7a31bc96` (skill adoption on `origin/main` `f4d403f0`).
-- **Accepted code:** `ad0023da` `OP_ADD_NUM_IMM` (opcode **230**, format **v78**); `315bfd28` numeric `i = i + 1` → `OP_INC_NUMERIC`; `15e8eca7` own writable write IC; `e6f3e177` counted-for `i = i + 1` → `OP_ADD_INT`. Next free opcode **231**; `optimize/get-local-prop` must take 231 and bump format to v79 if it lands.
-- **Combined candidate binary:** `/tmp/goccia-combined-7a31bc96`. Previous combined heads: `/tmp/goccia-combined-0293229e` (write-IC), `/tmp/goccia-combined-1c2e0412` (inc-assign), `/tmp/goccia-combined-d099bdf9` (ADD_NUM_IMM).
+- **Delivery branch:** `perf/bytecode-quickjs-gap` @ `dc9e958e` (skill adoption on `origin/main` `f4d403f0`).
+- **Accepted code:** `ad0023da` `OP_ADD_NUM_IMM` (opcode **230**, format **v78**); `315bfd28` numeric `i = i + 1` → `OP_INC_NUMERIC`; `15e8eca7` own writable write IC; `e6f3e177` counted-for `i = i + 1` → `OP_ADD_INT`; `db9567bd` `OP_GET_LOCAL_PROP_CONST` (opcode **231**, format **v79**). Next free opcode **232**.
+- **Combined candidate binary:** `/tmp/goccia-combined-dc9e958e`. Previous combined heads: `/tmp/goccia-combined-7a31bc96` (counted-for), `/tmp/goccia-combined-0293229e` (write-IC), `/tmp/goccia-combined-1c2e0412` (inc-assign), `/tmp/goccia-combined-d099bdf9` (ADD_NUM_IMM).
 - **Baseline binary:** `/tmp/goccia-baseline-f4d403f0` (`--prod` loader, darwin/aarch64, FPC 3.2.2).
 - **QuickJS:** 2026-06-04 at `/tmp/quickjs/bin/qjs`.
 - **Lock:** `/tmp/gocciascript-perf-gate.lock`.
@@ -33,7 +33,7 @@ Fib is the best relative row because it already uses `OP_CALL_SELF_NUM` / `OP_SU
 ## Profile facts (function-wrapped equivalents)
 
 - `loop-dispatch-floor`: original baseline was 38% `OP_GET_LOCAL`, 15% `OP_LOAD_INT`, 11% `OP_SET_LOCAL`, 8% `OP_ADD_FLOAT`. Counted-for now matches `i = i + 1` and emits `OP_ADD_INT` (`e6f3e177`); standalone assignment still uses `OP_INC_NUMERIC`. Compare stays generic `OP_LT` when the limit is an untyped parameter. Number literals type as `sltFloat`.
-- `nbody-minimal`: 31% `OP_GET_LOCAL`, 12% `OP_GET_PROP_CONST`, 10% `OP_LOAD_HOLE`, 8% `OP_MOVE`. Hot pair `GET_LOCAL → GET_PROP_CONST` (11%). Generic `OP_MUL`/`OP_ADD` with 100% scalar hit rate.
+- `nbody-minimal`: original baseline was 31% `OP_GET_LOCAL`, 12% `OP_GET_PROP_CONST`, 10% `OP_LOAD_HOLE`, 8% `OP_MOVE`. Hot pair `GET_LOCAL → GET_PROP_CONST` (11%) now fuses as `OP_GET_LOCAL_PROP_CONST` (`db9567bd`). Generic `OP_MUL`/`OP_ADD` still 100% scalar hit rate.
 - Script-level `let` in a non-function profiled as `OP_GET_GLOBAL` (29% of opcodes) — not the AWFY/probe shape.
 
 ## CI AWFY worst rows (linux/x64, time ratio)
@@ -89,13 +89,26 @@ Json 24.96, Permute 21.86, Sieve 21.63, CD 20.41, Bounce 19.94, Havlak 19.09, To
 
   Repeat loop-dispatch-floor 111446 → 108555 (**0.974**). Geomean combined/prev **0.999**. Checksums matched. Treat `7a31bc96` as the next combined baseline.
 
+- **`optimize/get-local-prop`** `db9567bd`, merged at `dc9e958e`. `OP_GET_LOCAL_PROP_CONST` (opcode **231**, format **v79**) fuses `local.ident` and jumps into the existing `OP_GET_PROP_CONST` IC. Isolated lane used format v78 with 230 reserved; integrator kept `OP_ADD_NUM_IMM` as 230 and bumped format to v79. Isolated vs original baseline: nbody-minimal +1.75% (BA +2.28%), propaccess-monomorphic +4.2–5.5%. Combined re-measure vs `/tmp/goccia-combined-7a31bc96` (7 interleaved reps, `/tmp/combined-get-local-prop-ab.json`):
+
+  | Probe | Prev µs | Combined µs | Ratio | Speed |
+  | --- | ---: | ---: | ---: | ---: |
+  | nbody-minimal | 58515 | 57705 | 0.986 | +1.4% |
+  | loop-dispatch-floor | 106733 | 107265 | 1.005 | flat |
+  | propaccess-monomorphic | 13500 | 12731 | 0.943 | +6.0% |
+  | generic-plus-scalars | 54287 | 53303 | 0.982 | +1.9% |
+
+  Geomean combined/prev **0.979**. Checksums matched. Treat `dc9e958e` as the next combined baseline.
+
+  Rejected along the way: extracting the property-read IC into a nested helper (nbody +15%, propaccess +35%). Do not retry a helper call on the IC hit path.
+
 ## Lanes launching
 
 1. `optimize/inc-assign` — **accepted** (see above).
 2. `optimize/int-literals` — integer-valued number literals as `sltInteger`.
 3. `optimize/add-num-imm` — **accepted** (see above).
 4. `optimize/hot-dispatch-extract` — **rejected** (see below).
-5. `optimize/get-local-prop` — fuse `GET_LOCAL` + `GET_PROP_CONST` (must use opcode **231** / format **v79** if it lands after this merge).
+5. `optimize/get-local-prop` — **accepted** (see above).
 6. `optimize/write-ic` — **accepted** (see above).
 7. `optimize/counted-for-assign` — **accepted** (see above).
 
