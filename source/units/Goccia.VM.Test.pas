@@ -36,6 +36,7 @@ type
     procedure TestExecuteConstString;
     procedure TestExecuteComparisons;
     procedure TestExecuteSubtractNumberImmediate;
+    procedure TestExecuteAddNumberImmediate;
     procedure TestExecuteNumberImmediateBranch;
     procedure TestExecuteArrayOps;
     procedure TestExecuteArrayPop;
@@ -79,6 +80,7 @@ begin
   Test('Execute constant string', TestExecuteConstString);
   Test('Execute comparisons', TestExecuteComparisons);
   Test('Execute Number subtract immediate', TestExecuteSubtractNumberImmediate);
+  Test('Execute Number add immediate', TestExecuteAddNumberImmediate);
   Test('Execute Number immediate branch', TestExecuteNumberImmediateBranch);
   Test('Execute array ops', TestExecuteArrayOps);
   Test('Execute array pop', TestExecuteArrayPop);
@@ -235,6 +237,34 @@ begin
     Template.PatchInstruction(0, EncodeABx(OP_LOAD_CONST, 0, FloatIndex));
     ResultValue := VM.ExecuteFunction(Template);
     Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(9.5);
+  finally
+    VM.Free;
+    Template.Free;
+  end;
+end;
+
+procedure TTestGocciaVM.TestExecuteAddNumberImmediate;
+var
+  Template: TGocciaFunctionTemplate;
+  VM: TGocciaVM;
+  ResultValue: TGocciaValue;
+  FloatIndex: UInt16;
+begin
+  Template := TGocciaFunctionTemplate.Create('add-number-immediate');
+  VM := TGocciaVM.Create;
+  try
+    Template.MaxRegisters := 2;
+    Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 0, 7));
+    Template.EmitInstruction(EncodeABC(OP_ADD_NUM_IMM, 1, 0,
+      UInt16(Int16(-2))));
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 1, 0, 0));
+    ResultValue := VM.ExecuteFunction(Template);
+    Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(5);
+
+    FloatIndex := Template.AddConstantFloat(7.5);
+    Template.PatchInstruction(0, EncodeABx(OP_LOAD_CONST, 0, FloatIndex));
+    ResultValue := VM.ExecuteFunction(Template);
+    Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(5.5);
   finally
     VM.Free;
     Template.Free;

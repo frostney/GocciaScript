@@ -98,6 +98,7 @@ type
     procedure TestClosedNumericScalarSelfCallArityLimit;
     procedure TestMixedOrEscapedCallsCancelNumericProof;
     procedure TestKnownNumericLocalUsesSubtractImmediate;
+    procedure TestKnownNumericLocalUsesAddImmediate;
     procedure TestGenericAdditionDefersToPrimitiveToOpcode;
     procedure TestAssignmentClearsStaleNumericHint;
     procedure TestGlobalBackedAssignmentClearsStaleNumericHint;
@@ -168,6 +169,8 @@ begin
     TestMixedOrEscapedCallsCancelNumericProof);
   Test('Known numeric local uses subtract immediate',
     TestKnownNumericLocalUsesSubtractImmediate);
+  Test('Known numeric local uses add immediate',
+    TestKnownNumericLocalUsesAddImmediate);
   Test('Generic addition defers ToPrimitive to opcode',
     TestGenericAdditionDefersToPrimitiveToOpcode);
   Test('Assignment clears stale numeric hint', TestAssignmentClearsStaleNumericHint);
@@ -377,6 +380,7 @@ begin
     CountOp(ATemplate, OP_DIV_FLOAT) +
     CountOp(ATemplate, OP_MOD_FLOAT);
   Result := Result + CountOp(ATemplate, OP_SUB_NUM_IMM);
+  Result := Result + CountOp(ATemplate, OP_ADD_NUM_IMM);
 end;
 
 function TTestCompiler.HasLoadInt(const ATemplate: TGocciaFunctionTemplate;
@@ -1331,6 +1335,33 @@ begin
     Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(1);
     Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_FLOAT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestKnownNumericLocalUsesAddImmediate;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('let i = 2; i + 3;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_INT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource('let i = 2; 3 + i;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_INT)).ToBe(0);
   finally
     Module.Free;
   end;

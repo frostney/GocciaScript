@@ -15169,6 +15169,15 @@ begin
           raise Exception.Create(
             'Invalid non-numeric source for OP_SUB_NUM_IMM');
 
+      OP_ADD_NUM_IMM:
+        if FRegisters[B].Kind = grkInt then
+          FRegisters[A] := VMIntResult(FRegisters[B].IntValue + Int16(C))
+        else if FRegisters[B].Kind = grkFloat then
+          FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue + Int16(C))
+        else
+          raise Exception.Create(
+            'Invalid non-numeric source for OP_ADD_NUM_IMM');
+
       OP_MUL_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := VMIntResult(FRegisters[B].IntValue *
