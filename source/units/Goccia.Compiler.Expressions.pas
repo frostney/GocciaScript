@@ -252,6 +252,45 @@ begin
   Result := True;
 end;
 
+function IsNumberOneLiteral(const AExpr: TGocciaExpression): Boolean;
+var
+  NumberValue: Double;
+begin
+  Result := False;
+  if not (AExpr is TGocciaLiteralExpression) or
+     not (TGocciaLiteralExpression(AExpr).Value is
+       TGocciaNumberLiteralValue) then
+    Exit;
+  NumberValue := TGocciaNumberLiteralValue(
+    TGocciaLiteralExpression(AExpr).Value).Value;
+  Result := NumberValue = 1;
+end;
+
+function IsNumericSelfIncrementByOne(const AScope: TGocciaCompilerScope;
+  const AName: string; const AValue: TGocciaExpression): Boolean;
+var
+  Binary: TGocciaBinaryExpression;
+  IdentExpr: TGocciaExpression;
+begin
+  Result := False;
+  if not (AValue is TGocciaBinaryExpression) then
+    Exit;
+  Binary := TGocciaBinaryExpression(AValue);
+  if Binary.Operator <> gttPlus then
+    Exit;
+  if (Binary.Left is TGocciaIdentifierExpression) and
+     (TGocciaIdentifierExpression(Binary.Left).Name = AName) and
+     IsNumberOneLiteral(Binary.Right) then
+    IdentExpr := Binary.Left
+  else if (Binary.Right is TGocciaIdentifierExpression) and
+          (TGocciaIdentifierExpression(Binary.Right).Name = AName) and
+          IsNumberOneLiteral(Binary.Left) then
+    IdentExpr := Binary.Right
+  else
+    Exit;
+  Result := HasExactNumberProof(AScope, IdentExpr);
+end;
+
 function IsAnonymousFunctionNameExpression(
   const AExpr: TGocciaExpression): Boolean;
 begin
@@ -2489,6 +2528,40 @@ begin
       end;
       GlobalExistsReg := ACtx.Scope.AllocateRegister;
       EmitInstruction(ACtx, EncodeABx(OP_HAS_GLOBAL, GlobalExistsReg, NameIdx));
+    end;
+  end;
+
+  if (LocalIdx >= 0) and
+     IsNumericSelfIncrementByOne(ACtx.Scope, AExpr.Name, AExpr.Value) then
+  begin
+    Local := ACtx.Scope.GetLocal(LocalIdx);
+    if (not Local.IsGlobalBacked) and (not Local.IsImportBinding) then
+    begin
+      if Local.IsConst then
+      begin
+        if ShouldIgnoreNonStrictImmutableLocalAssignment(ACtx, Local) then
+          Exit;
+        EmitConstAssignmentError(ACtx);
+        Exit;
+      end;
+      Slot := Local.Slot;
+      if Local.IsCaptured then
+        EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, Slot, UInt16(Slot)));
+      EmitInstruction(ACtx, EncodeABC(OP_INC_NUMERIC, Slot, Slot, 0));
+      if Local.IsCaptured then
+        EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
+      if ADest <> Slot then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
+      EmitStrictLocalTypeCheck(ACtx, LocalIdx, ADest,
+        InferLocalType(AExpr.Value));
+      EmitExportBindingUpdates(ACtx, Local.ExportNames,
+        Local.ExportNameCount, ADest);
+      if not Local.IsStrictlyTyped then
+      begin
+        ValueType := InferredExpressionType(ACtx.Scope, AExpr.Value);
+        SetNonStrictLocalTypeHint(ACtx, LocalIdx, ValueType);
+      end;
+      Exit;
     end;
   end;
 
