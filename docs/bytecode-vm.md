@@ -166,7 +166,7 @@ The `--profile` option on GocciaScriptLoader enables language-level profiling of
 - `--profile=all` — both
 - `--profile-output=path.json` — JSON export
 
-The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Coverage.pas`). When profiling is disabled, a predictable boolean guard remains in the dispatch loop. Enabled-mode overhead depends on the workload and profiling mode, so measure it on the corpus being investigated rather than relying on a fixed percentage.
+The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Coverage.pas`). `ExecuteClosureRegistersInternal` selects a production dispatch loop when coverage, opcode profiling, stop-IP, and the instruction limit are all inactive; that loop omits those per-instruction checks. Any of them being active selects the instrumented loop, which keeps the previous guards. Enabled-mode overhead depends on the workload and profiling mode, so measure it on the corpus being investigated rather than relying on a fixed percentage.
 
 ## Runtime Error Diagnostics
 
@@ -278,7 +278,7 @@ execution path.
 
 ## Instruction Limit
 
-The dispatch loop supports an optional instruction counter (`Goccia.InstructionLimit.pas`). When armed, the counter increments on every dispatched instruction and the limit is checked at the top of each iteration. When disabled, only the guard read of the limit threadvar remains on the hot path. See [Embedding — Execution Limits](embedding.md#execution-limits) for the full API and interpreter-mode behavior.
+The dispatch loop supports an optional instruction counter (`Goccia.InstructionLimit.pas`). When armed, execution uses the instrumented loop: the counter increments on every dispatched instruction and the limit is checked at the top of each iteration. When the budget is inactive, production dispatch omits that poll entirely. See [Embedding — Execution Limits](embedding.md#execution-limits) for the full API and interpreter-mode behavior.
 
 ## Binary Format
 
