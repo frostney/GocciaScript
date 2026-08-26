@@ -38,6 +38,7 @@ type
     procedure TestExecuteSubtractNumberImmediate;
     procedure TestExecuteAddNumberImmediate;
     procedure TestExecuteNumberImmediateBranch;
+    procedure TestExecuteJumpIfNotLessThan;
     procedure TestExecuteArrayOps;
     procedure TestExecuteArrayPop;
     procedure TestExecuteObjectOps;
@@ -83,6 +84,7 @@ begin
   Test('Execute Number subtract immediate', TestExecuteSubtractNumberImmediate);
   Test('Execute Number add immediate', TestExecuteAddNumberImmediate);
   Test('Execute Number immediate branch', TestExecuteNumberImmediateBranch);
+  Test('Execute jump if not less than', TestExecuteJumpIfNotLessThan);
   Test('Execute array ops', TestExecuteArrayOps);
   Test('Execute array pop', TestExecuteArrayPop);
   Test('Execute object ops', TestExecuteObjectOps);
@@ -301,6 +303,38 @@ begin
 
     NaNIndex := Template.AddConstantFloat(NaN);
     Template.PatchInstruction(0, EncodeABx(OP_LOAD_CONST, 0, NaNIndex));
+    ResultValue := VM.ExecuteFunction(Template);
+    Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(7);
+  finally
+    VM.Free;
+    Template.Free;
+  end;
+end;
+
+procedure TTestGocciaVM.TestExecuteJumpIfNotLessThan;
+var
+  Template: TGocciaFunctionTemplate;
+  VM: TGocciaVM;
+  ResultValue: TGocciaValue;
+begin
+  Template := TGocciaFunctionTemplate.Create('jump-if-not-lt');
+  VM := TGocciaVM.Create;
+  try
+    Template.MaxRegisters := 3;
+    Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 0, 2));
+    Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 1, 5));
+    Template.EmitInstruction(EncodeABC(OP_JUMP_IF_NOT_LT, 0, 1,
+      UInt16(Int16(2))), True);
+    Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 2, 99));
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 2, 0, 0));
+    Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 2, 7));
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 2, 0, 0));
+
+    ResultValue := VM.ExecuteFunction(Template);
+    Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(99);
+
+    Template.PatchInstruction(0, EncodeAsBx(OP_LOAD_INT, 0, 5));
+    Template.PatchInstruction(1, EncodeAsBx(OP_LOAD_INT, 1, 2));
     ResultValue := VM.ExecuteFunction(Template);
     Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(7);
   finally
