@@ -41,7 +41,8 @@ type
       const AGlobalBackedTopLevel: Boolean = False;
       const AEnableConstantFolding: Boolean = True;
       const AEnableConstPropagation: Boolean = True;
-      const AEnableDeadBranchElimination: Boolean = True): TGocciaBytecodeModule;
+      const AEnableDeadBranchElimination: Boolean = True;
+      const ATraditionalForLoops: Boolean = False): TGocciaBytecodeModule;
     function CountOp(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): Integer;
     function CountOpRecursive(const ATemplate: TGocciaFunctionTemplate;
@@ -114,6 +115,9 @@ type
     procedure TestForOfSkipsHandlerWithoutAbruptClose;
     procedure TestForOfUsesHandlerForExpressionBody;
     procedure TestForOfUsesOneIteratorCloseHandler;
+    procedure TestCountedForLessThanUsesJumpIfNotLt;
+    procedure TestIfAndConditionalLessThanUseJumpIfNotLt;
+    procedure TestLessThanValueKeepsGenericCompare;
     procedure TestConstantIfEliminatesBranch;
     procedure TestConstantIfPrunesAbruptTail;
     procedure TestCoveragePreservesConstantBranch;
@@ -191,6 +195,12 @@ begin
   Test('for-of skips handler without abrupt close', TestForOfSkipsHandlerWithoutAbruptClose);
   Test('for-of uses handler for expression body', TestForOfUsesHandlerForExpressionBody);
   Test('for-of uses one iterator-close handler', TestForOfUsesOneIteratorCloseHandler);
+  Test('counted-for less-than uses jump-if-not-lt',
+    TestCountedForLessThanUsesJumpIfNotLt);
+  Test('if and conditional less-than use jump-if-not-lt',
+    TestIfAndConditionalLessThanUseJumpIfNotLt);
+  Test('less-than value keeps generic compare',
+    TestLessThanValueKeepsGenericCompare);
   Test('Constant if eliminates branch', TestConstantIfEliminatesBranch);
   Test('Constant if prunes abrupt tail', TestConstantIfPrunesAbruptTail);
   Test('Coverage preserves constant branch shape', TestCoveragePreservesConstantBranch);
@@ -268,7 +278,8 @@ function TTestCompiler.CompileSource(
   const AGlobalBackedTopLevel: Boolean;
   const AEnableConstantFolding: Boolean;
   const AEnableConstPropagation: Boolean;
-  const AEnableDeadBranchElimination: Boolean): TGocciaBytecodeModule;
+  const AEnableDeadBranchElimination: Boolean;
+  const ATraditionalForLoops: Boolean): TGocciaBytecodeModule;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -276,10 +287,17 @@ var
   Compiler: TGocciaCompiler;
   SourceLines: TStringList;
   Options: TGocciaCompilerOptimizationOptions;
+  ParserOptions: TGocciaParserOptions;
 begin
   Lexer := TGocciaLexer.Create(ASource, '<test>');
   SourceLines := CreateTextLines(ASource);
   Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
+  if ATraditionalForLoops then
+  begin
+    ParserOptions := Parser.Options;
+    ParserOptions.TraditionalForLoopsEnabled := True;
+    Parser.ApplyOptions(ParserOptions);
+  end;
   ProgramNode := Parser.Parse;
 
   Compiler := TGocciaCompiler.Create('<test>');
@@ -980,7 +998,10 @@ begin
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CALL_SELF_NUM))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_GET_LOCAL_PROP_CONST))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_ADD_NUM_IMM))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_NOT_LT))).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_GET_LOCAL_PROP_CONST)).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_JUMP_IF_NOT_LT)).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterC(OP_JUMP_IF_NOT_LT)).ToBe(False);
   Expect<Boolean>(GocciaOpCodeUsesRegisterA(OP_CLOSE_UPVALUE)).ToBe(False);
   Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_DEFINE_DATA_PROP)).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_DEFINE_METHOD_PROP)).ToBe(True);
@@ -1603,6 +1624,80 @@ begin
   try
     Expect<Integer>(CountOp(Module.TopLevel, OP_PUSH_FINALLY_HANDLER)).ToBe(1);
     Expect<Integer>(CountOp(Module.TopLevel, OP_POP_HANDLER)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestCountedForLessThanUsesJumpIfNotLt;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'for (let i = 0; i < 5; i = i + 1) { i; }',
+    False, False, False, False, False, False, True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP_IF_NOT_LT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_LT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_GTE_INT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource(
+    'const run = (n) => { let c = 0; for (let i = 0; i < n; i = i + 1) c = c + 1; return c; }; run(3);',
+    False, False, False, False, False, False, True);
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_JUMP_IF_NOT_LT);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_JUMP_IF_NOT_LT)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_LT)).ToBe(0);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestIfAndConditionalLessThanUseJumpIfNotLt;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let a = 1; let b = 2; if (a < b) { a; }',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP_IF_NOT_LT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_LT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource(
+    'let a = 1; let b = 2; a < b ? 1 : 0;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP_IF_NOT_LT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_LT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestLessThanValueKeepsGenericCompare;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let a = 1; let b = 2; a < b;',
+    False, False, False, False, False, False);
+  try
+    Expect<Boolean>((CountOp(Module.TopLevel, OP_LT) +
+      CountOp(Module.TopLevel, OP_LT_INT) +
+      CountOp(Module.TopLevel, OP_LT_FLOAT)) > 0).ToBe(True);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP_IF_NOT_LT)).ToBe(0);
   finally
     Module.Free;
   end;

@@ -353,6 +353,59 @@
               Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
         end;
 
+      OP_JUMP_IF_NOT_LT:
+        begin
+          if (FRegisters[A].Kind = grkInt) and (FRegisters[B].Kind = grkInt) then
+          begin
+            if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+            NumericComparisonResult := FRegisters[A].IntValue <
+              FRegisters[B].IntValue;
+          end
+          else if RegisterIsNumericScalar(FRegisters[A]) and
+                  RegisterIsNumericScalar(FRegisters[B]) then
+          begin
+            if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+            NumericComparisonResult := RegisterToDouble(FRegisters[A]) <
+              RegisterToDouble(FRegisters[B]);
+          end
+          else
+          begin
+            if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
+            LeftValue := GetRegisterFast(A);
+            RightValue := GetRegisterFast(B);
+            if (LeftValue is TGocciaStringLiteralValue) and
+               (RightValue is TGocciaStringLiteralValue) then
+              NumericComparisonResult :=
+                Goccia.Arithmetic.CompareStringValues(
+                  TGocciaStringLiteralValue(LeftValue).Value,
+                  TGocciaStringLiteralValue(RightValue).Value) < 0
+            else
+              NumericComparisonResult := VMRootedBinaryPredicate(
+                @Goccia.Arithmetic.LessThan, LeftValue, RightValue);
+          end;
+          if not NumericComparisonResult then
+          begin
+            if FCoverageEnabled and
+               (TGocciaCoverageTracker.Instance <> nil) and
+               Assigned(Template.DebugInfo) then
+              TGocciaCoverageTracker.Instance.RecordBranchHit(
+                Template.DebugInfo.SourceFile,
+                Template.DebugInfo.GetLineForPC(InstructionStartIP),
+                Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
+            JumpOffset := Int16(C);
+            Inc(Frame.IP, JumpOffset);
+            if JumpOffset < 0 then
+              CheckExecutionTimeout;
+          end
+          else if FCoverageEnabled and
+                  (TGocciaCoverageTracker.Instance <> nil) and
+                  Assigned(Template.DebugInfo) then
+            TGocciaCoverageTracker.Instance.RecordBranchHit(
+              Template.DebugInfo.SourceFile,
+              Template.DebugInfo.GetLineForPC(InstructionStartIP),
+              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
+        end;
+
       OP_JUMP_IF_NULLISH:
         if RegisterMatchesNullishKind(FRegisters[A], B) then
         begin

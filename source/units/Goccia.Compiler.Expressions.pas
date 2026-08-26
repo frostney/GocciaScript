@@ -40,6 +40,8 @@ procedure CompileMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaMemberExpression; const ADest: UInt16);
 procedure CompileConditional(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaConditionalExpression; const ADest: UInt16);
+function TryEmitJumpIfNotLessThan(const ACtx: TGocciaCompilationContext;
+  const ACondition: TGocciaExpression; out AJumpIndex: Integer): Boolean;
 procedure CompileArray(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaArrayExpression; const ADest: UInt16);
 procedure CompileObject(const ACtx: TGocciaCompilationContext;
@@ -4900,6 +4902,28 @@ begin
     ACtx.Scope.FreeRegister;
 end;
 
+function TryEmitJumpIfNotLessThan(const ACtx: TGocciaCompilationContext;
+  const ACondition: TGocciaExpression; out AJumpIndex: Integer): Boolean;
+var
+  Binary: TGocciaBinaryExpression;
+  LeftReg, RightReg: UInt16;
+begin
+  Result := False;
+  if not (ACondition is TGocciaBinaryExpression) then
+    Exit;
+  Binary := TGocciaBinaryExpression(ACondition);
+  if Binary.Operator <> gttLess then
+    Exit;
+  LeftReg := ACtx.Scope.AllocateRegister;
+  ACtx.CompileExpression(Binary.Left, LeftReg);
+  RightReg := ACtx.Scope.AllocateRegister;
+  ACtx.CompileExpression(Binary.Right, RightReg);
+  AJumpIndex := EmitJumpIfNotLessThan(ACtx, LeftReg, RightReg);
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  Result := True;
+end;
+
 procedure CompileConditional(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaConditionalExpression; const ADest: UInt16);
 var
@@ -4928,6 +4952,16 @@ begin
       PatchJumpTarget(ACtx, EndJump);
       Exit;
     end;
+  end;
+
+  if TryEmitJumpIfNotLessThan(ACtx, AExpr.Condition, ElseJump) then
+  begin
+    ACtx.CompileExpression(AExpr.Consequent, ADest);
+    EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+    PatchJumpTarget(ACtx, ElseJump);
+    ACtx.CompileExpression(AExpr.Alternate, ADest);
+    PatchJumpTarget(ACtx, EndJump);
+    Exit;
   end;
 
   ConditionReg := ACtx.Scope.AllocateRegister;
