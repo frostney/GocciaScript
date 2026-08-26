@@ -868,7 +868,7 @@ finally
 end;
 ```
 
-Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero (the default) skips all counter increments and limit comparisons — only the guard read of `GMaxInstructions` remains on the hot path.
+Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero (the default) leaves the instruction budget inactive, so bytecode production dispatch omits the per-instruction poll. A positive limit selects the instrumented loop, which increments and checks the counter on every dispatched instruction.
 
 ### Call Stack Depth Limit
 

@@ -52,11 +52,13 @@ begin
   State := CaptureInstructionLimitState;
 
   // A disabled budget remains a no-op through the captured handle.
+  Expect<Boolean>(InstructionLimitIsActive).ToBe(False);
   PollInstructionLimit(State);
 
   // Starting after capture updates the same live state. Exactly two polls are
   // accepted for a budget of two; the next poll raises before incrementing.
   StartInstructionLimit(2);
+  Expect<Boolean>(InstructionLimitIsActive).ToBe(True);
   PollInstructionLimit(State);
   PollInstructionLimit(State);
   RaisedExpected := False;
@@ -70,6 +72,7 @@ begin
 
   // Clearing after capture must disable the same handle immediately.
   ClearInstructionLimit;
+  Expect<Boolean>(InstructionLimitIsActive).ToBe(False);
   PollInstructionLimit(State);
 end;
 
