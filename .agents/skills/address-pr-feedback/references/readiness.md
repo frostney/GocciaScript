@@ -1,19 +1,25 @@
-# Pull-request convergence
+# Pull-request readiness
 
-`review-pr` owns one PR and one exact current head at a time. Re-read forge state
-after every thread action, commit, push, baseline update, automation response,
-or check transition; delegated output is evidence to verify, not gate state.
+`address-pr-feedback` owns one PR and one exact current head at a time. Re-read
+GitHub state after every thread action, commit, push, baseline update, automation
+response, or check transition; delegated output is evidence to verify, not gate
+state.
 
 ## Terminal exact-head gate
 
 Record the repository, PR number or URL, and final head object ID. A PR is
 `ready` only when all conditions are simultaneously observed for that head:
 
+- every required behavior has current observed functional evidence for the
+  final content;
+- every requirement without executable behavior has current evidence from code
+  review or the project gate;
+- the repository's declared gate passed for that same final content;
 - every required check is terminal and successful;
 - every intentionally active review automation has a terminal completed verdict
   explicitly tied to that head, with no newer incomplete or follow-up review;
 - no actionable current-head finding remains;
-- the forge reports zero unresolved review threads;
+- GitHub reports zero unresolved review threads;
 - every inline automation thread has a maintainer-workflow reply in that thread;
   and
 - no CI, verdict, finding, reply, or thread-readiness evidence belongs only to a
@@ -28,11 +34,11 @@ together.
 
 The bundled review helper owns GitHub mechanics: inspect current findings and
 thread state, wait while unchanged, publish an explicitly supplied inline reply,
-and resolve an explicitly selected thread. `review-pr` owns every judgment,
-source edit, validation choice, and convergence decision. Re-read the forge
-through the helper after each mutation and verify the final head, unresolved
-count, unanswered automation-thread count, findings, checks, and automation
-states.
+and resolve an explicitly selected thread. `address-pr-feedback` owns every
+judgment, source edit, validation choice, and decision to mark the PR ready.
+Re-read GitHub through the helper after each mutation and verify the final head,
+unresolved count, unanswered automation-thread count, findings, checks, and
+automation states.
 
 The helper flattens unhandled inline threads, non-empty exact-head automation
 reviews, and non-empty automation top-level comments into `findingSurfaces`.
@@ -44,7 +50,7 @@ carry their explicit weaker bindings for the workflow to validate.
 
 The helper is a transition source for this workflow loop, not another
 orchestrator. Its foreground wait stays silent while unchanged and returns only
-when review converges, evidence changes materially, the expected head is
+when review becomes ready, evidence changes materially, the expected head is
 invalidated, the deadline arrives, or an operational failure needs attention.
 
 ## Provider-neutral retry time
