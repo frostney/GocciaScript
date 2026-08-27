@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect, wait for, reply to, and resolve GitHub review activity."""
+"""Inspect, wait for, reply to, and resolve pull-request feedback."""
 
 from __future__ import annotations
 
@@ -350,8 +350,8 @@ def classify(expected_head: str, observation: dict[str, Any]) -> tuple[str, str]
         and observation.get("unresolvedThreads") == 0
         and observation.get("unansweredAutomationThreads") == 0
     ):
-        return "satisfied", "review convergence reached"
-    return "waiting", "review convergence is pending"
+        return "satisfied", "review gates satisfied"
+    return "waiting", "review gates are pending"
 
 
 def review_transition_key(observation: dict[str, Any]) -> dict[str, Any]:
