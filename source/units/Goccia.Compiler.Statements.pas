@@ -3332,7 +3332,11 @@ begin
   // writes are rejected; mutable captured bindings and bodies that create
   // closures (which can assign through the capture) fall back too. const
   // bindings cannot be assigned, so they remain snapshot-safe even when the
-  // body creates closures that capture the loop index.
+  // body creates closures that capture the loop index. Global-backed vars can
+  // still change through the global object from a callee the body analysis
+  // does not see.
+  if LimitLocal.IsGlobalBacked then
+    Exit;
   if ForBodyAssignsIdentifier(ABody, LimitIdent.Name) then
     Exit;
   if not LimitLocal.IsConst then
