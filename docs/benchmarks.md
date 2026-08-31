@@ -495,7 +495,7 @@ node scripts/jetstream-ci-report.js \
 ```
 
 `perf/jetstream/manifest.json` pins JetStream 3.0 commit
-`7769b693502fa80f28a97bbfacd3296e0513acc5`, driver version, process
+`c603c04db8505477867974a69789309ded2cc948`, driver version, process
 repetitions, and these six workloads: `hash-map`, `ai-astar`, `gaussian-blur`,
 `raytrace-public-class-fields`, `sync-fs`, and `lazy-collections`. The selection
 covers collections, control flow, numeric/array work, public class fields,
