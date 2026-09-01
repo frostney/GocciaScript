@@ -31,6 +31,7 @@ procedure ClearInstructionLimit;
 procedure PushInstructionLimitScope(const AMaxInstructions: Int64);
 procedure PopInstructionLimitScope;
 function CaptureInstructionLimitState: PGocciaInstructionLimitState; {$IFDEF FPC}inline;{$ENDIF}
+function InstructionLimitIsActive: Boolean; {$IFDEF FPC}inline;{$ENDIF}
 procedure IncrementInstructionCounter; {$IFDEF FPC}inline;{$ENDIF}
 procedure CheckInstructionLimit; {$IFDEF FPC}inline;{$ENDIF}
 procedure PollInstructionLimit(
@@ -113,6 +114,11 @@ end;
 function CaptureInstructionLimitState: PGocciaInstructionLimitState;
 begin
   Result := @GInstructionLimitState;
+end;
+
+function InstructionLimitIsActive: Boolean; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  Result := GInstructionLimitState.Active;
 end;
 
 procedure IncrementInstructionCounter; {$IFDEF FPC}inline;{$ENDIF}
