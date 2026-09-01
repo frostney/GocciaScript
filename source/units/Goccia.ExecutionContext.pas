@@ -19,7 +19,11 @@ type
     Scope: TGocciaScope;
     FunctionValue: TGocciaValue;
     ScriptOrModule: TObject;
-    SourcePath: string;
+  private
+    FSourcePathRef: Pointer;
+    function GetSourcePath: string; {$IFDEF FPC}inline;{$ENDIF}
+  public
+    property SourcePath: string read GetSourcePath;
   end;
 
   TGocciaExecutionContextStack = class
@@ -62,6 +66,12 @@ uses
   SysUtils;
 
 type
+  PGocciaInternedSourcePath = ^TGocciaInternedSourcePath;
+  TGocciaInternedSourcePath = record
+    Next: PGocciaInternedSourcePath;
+    Value: UnicodeString;
+  end;
+
   TGocciaExecutionContextStackEntry = record
     Context: TGocciaExecutionContext;
     PreviousRealm: TGocciaRealm;
@@ -112,6 +122,37 @@ threadvar
   // TGCRootSource (see TGocciaAsyncContextRoots for the shape).
   GExecutionContextStack: array of TGocciaExecutionContextStackEntry;
   GExecutionContextStackCount: Integer;
+  GInternedSourcePaths: PGocciaInternedSourcePath;
+
+function InternSourcePath(const ASourcePath: string): Pointer;
+var
+  Node: PGocciaInternedSourcePath;
+begin
+  { Pointer intern so TGocciaExecutionContext stays unmanaged: Push/Pop must
+    not FPC_COPY a UnicodeString on every VM call. }
+  if ASourcePath = '' then
+    Exit(nil);
+  Node := GInternedSourcePaths;
+  while Node <> nil do
+  begin
+    if Node.Value = ASourcePath then
+      Exit(@Node.Value);
+    Node := Node.Next;
+  end;
+  New(Node);
+  Node.Value := ASourcePath;
+  Node.Next := GInternedSourcePaths;
+  GInternedSourcePaths := Node;
+  Result := @Node.Value;
+end;
+
+function TGocciaExecutionContext.GetSourcePath: string;
+begin
+  if FSourcePathRef = nil then
+    Result := ''
+  else
+    Result := PUnicodeString(FSourcePathRef)^;
+end;
 
 function CreateExecutionContext(const ARealm: TGocciaRealm;
   const AScope: TGocciaScope; const ASourcePath: string;
@@ -122,7 +163,7 @@ begin
   Result.Scope := AScope;
   Result.FunctionValue := AFunctionValue;
   Result.ScriptOrModule := AScriptOrModule;
-  Result.SourcePath := ASourcePath;
+  Result.FSourcePathRef := InternSourcePath(ASourcePath);
 end;
 
 function RunningExecutionContext: TGocciaExecutionContext;
