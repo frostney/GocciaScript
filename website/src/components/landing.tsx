@@ -917,10 +917,10 @@ export function Landing({
               <h1>
                 A <span className="drop">drop</span> of
                 <br />
-                Java<span className="script">Script</span>, sandboxed.
+                Java<span className="script">Script</span>.
               </h1>
               <p className="hero-lede">
-                A sandbox-first{" "}
+                A JavaScript engine: a sandbox-first{" "}
                 <a
                   href="https://tc39.es/ecma262/"
                   target="_blank"
