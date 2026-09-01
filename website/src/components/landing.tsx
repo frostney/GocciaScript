@@ -915,9 +915,7 @@ export function Landing({
           <div className="hero-grid">
             <div>
               <h1>
-                A <span className="drop">drop</span> of
-                <br />
-                Java<span className="script">Script</span>.
+                A Java<span className="script">Script</span> engine.
               </h1>
               <p className="hero-lede">
                 A JavaScript engine: a sandbox-first{" "}
