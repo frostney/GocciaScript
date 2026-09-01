@@ -76,6 +76,8 @@ type
     procedure TestCompileFunction;
     procedure TestThisPropertyReadUsesLocalRegister;
     procedure TestThisPropertyReadRetainsDerivedGuard;
+    procedure TestLocalPropertyReadUsesFusedOpcode;
+    procedure TestOptionalLocalPropertyReadSkipsFusedOpcode;
     procedure TestStaticImportLoadsScaleWithDeclarations;
     procedure TestBinaryRoundTrip;
     procedure TestBinaryRoundTripClosedNumericSelfCall;
@@ -98,6 +100,7 @@ type
     procedure TestClosedNumericScalarSelfCallArityLimit;
     procedure TestMixedOrEscapedCallsCancelNumericProof;
     procedure TestKnownNumericLocalUsesSubtractImmediate;
+    procedure TestKnownNumericLocalUsesAddImmediate;
     procedure TestGenericAdditionDefersToPrimitiveToOpcode;
     procedure TestAssignmentClearsStaleNumericHint;
     procedure TestGlobalBackedAssignmentClearsStaleNumericHint;
@@ -138,6 +141,10 @@ begin
     TestThisPropertyReadUsesLocalRegister);
   Test('this property read retains derived-constructor guard',
     TestThisPropertyReadRetainsDerivedGuard);
+  Test('local property read uses fused opcode',
+    TestLocalPropertyReadUsesFusedOpcode);
+  Test('optional local property read skips fused opcode',
+    TestOptionalLocalPropertyReadSkipsFusedOpcode);
   Test('Static import loads scale with declarations',
     TestStaticImportLoadsScaleWithDeclarations);
   Test('Binary round-trip', TestBinaryRoundTrip);
@@ -168,6 +175,8 @@ begin
     TestMixedOrEscapedCallsCancelNumericProof);
   Test('Known numeric local uses subtract immediate',
     TestKnownNumericLocalUsesSubtractImmediate);
+  Test('Known numeric local uses add immediate',
+    TestKnownNumericLocalUsesAddImmediate);
   Test('Generic addition defers ToPrimitive to opcode',
     TestGenericAdditionDefersToPrimitiveToOpcode);
   Test('Assignment clears stale numeric hint', TestAssignmentClearsStaleNumericHint);
@@ -377,6 +386,7 @@ begin
     CountOp(ATemplate, OP_DIV_FLOAT) +
     CountOp(ATemplate, OP_MOD_FLOAT);
   Result := Result + CountOp(ATemplate, OP_SUB_NUM_IMM);
+  Result := Result + CountOp(ATemplate, OP_ADD_NUM_IMM);
 end;
 
 function TTestCompiler.HasLoadInt(const ATemplate: TGocciaFunctionTemplate;
@@ -633,6 +643,42 @@ begin
       Expect<Boolean>(CountOp(Func, OP_JUMP_IF_TRUE) > 0).ToBe(True);
       Expect<Boolean>(CountOp(Func, OP_THROW) > 0).ToBe(True);
     end;
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestLocalPropertyReadUsesFusedOpcode;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource('const read = (a) => a.x;');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_GET_LOCAL_PROP_CONST);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL_PROP_CONST)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_GET_PROP_CONST)).ToBe(0);
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(0);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestOptionalLocalPropertyReadSkipsFusedOpcode;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource('const read = (a) => a?.x;');
+  try
+    Expect<Boolean>(FindFunctionWithOp(Module.TopLevel,
+      OP_GET_LOCAL_PROP_CONST) = nil).ToBe(True);
+    Func := FindFunctionWithOp(Module.TopLevel, OP_GET_PROP_CONST);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
   finally
     Module.Free;
   end;
@@ -932,6 +978,9 @@ begin
   Expect<Boolean>(IsValidGocciaOpCode(99)).ToBe(False);
   Expect<Boolean>(IsValidGocciaOpCode(144)).ToBe(False);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CALL_SELF_NUM))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_GET_LOCAL_PROP_CONST))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_ADD_NUM_IMM))).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_GET_LOCAL_PROP_CONST)).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterA(OP_CLOSE_UPVALUE)).ToBe(False);
   Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_DEFINE_DATA_PROP)).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_DEFINE_METHOD_PROP)).ToBe(True);
@@ -1331,6 +1380,33 @@ begin
     Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(1);
     Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_FLOAT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestKnownNumericLocalUsesAddImmediate;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('let i = 2; i + 3;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_INT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource('let i = 2; 3 + i;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_INT)).ToBe(0);
   finally
     Module.Free;
   end;

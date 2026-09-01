@@ -1,0 +1,4 @@
+interface:
+  display_name: "Optimize Runtime"
+  short_description: "Run benchmark-gated runtime optimization waves"
+  default_prompt: "Use $optimize-runtime to measure GocciaScript bytecode, investigate bottlenecks, and keep only verified performance improvements."

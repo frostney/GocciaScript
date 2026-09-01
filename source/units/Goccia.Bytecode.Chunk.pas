@@ -135,6 +135,21 @@ type
   end;
   PGocciaPropertyReadCacheEntry = ^TGocciaPropertyReadCacheEntry;
 
+  // Runtime-only inline cache for OP_SET_PROP_CONST sites, indexed by the
+  // instruction's name-constant index. Same (shape, entry index) validation
+  // as the own-property read cache; hits store only own writable data
+  // properties. The descriptor kind and Writable flag are re-checked on
+  // every hit because data-to-accessor / writable-to-nonwritable
+  // redefinition keeps the entry index. Proxies, accessors, private
+  // fields, deletion, and non-ordinary receivers stay on AssignProperty.
+  // Not serialised to .gbc.
+  TGocciaPropertyWriteCacheEntry = record
+    Shape: Pointer;
+    EntryIndex: Integer;
+    MissStreak: Byte;
+  end;
+  PGocciaPropertyWriteCacheEntry = ^TGocciaPropertyWriteCacheEntry;
+
   // Runtime-only inline cache for OP_GET_PROP_CONST sites that resolve on
   // the receiver's prototype chain (methods on class prototype objects are
   // the dominant case). Shapes[0] is the receiver's own shape — proving
@@ -223,8 +238,9 @@ type
     FRegExpProgramCaches: array of TObject;
     FRegExpProgramCacheCount: Integer;
     FGlobalReadCaches: array of TGocciaGlobalReadCacheEntry;
-    // Property/proto read caches use DENSE slots: OP_GET_PROP_CONST name
-    // constants are a small subset of the constant pool, so a per-constant
+    // Property/proto read caches use DENSE slots: OP_GET_PROP_CONST and
+    // OP_GET_LOCAL_PROP_CONST name constants are a small subset of the
+    // constant pool, so a per-constant
     // UInt16 map (0 = unassigned, else dense slot + 1) assigns slots on
     // first use and the entry arrays grow only to the number of distinct
     // property-name constants actually read. Both tiers share one slot id
@@ -234,12 +250,19 @@ type
     FPropertyReadCaches: array of TGocciaPropertyReadCacheEntry;
     FProtoReadCaches: array of TGocciaProtoReadCacheEntry;
     FPropertyReadSlotCount: Integer;
+    // Write-IC slots are independent of the read/proto map so a GET of a
+    // name that is never written does not allocate a write entry, and the
+    // read-side PIC is not expanded (ADR 0088).
+    FPropertyWriteSlotMap: array of UInt32;
+    FPropertyWriteCaches: array of TGocciaPropertyWriteCacheEntry;
+    FPropertyWriteSlotCount: Integer;
     // Runtime-only, appended in ascending PC order by the compiler and never
     // serialised to .gbc — a module loaded from binary bytecode simply falls
     // back to the runtime-type-name form of the "is not a function" message.
     FCallSites: array of TGocciaCallSiteEntry;
     FCallSiteCount: Integer;
     function PropertyReadSlot(const AConstIndex: Integer): Integer;
+    function PropertyWriteSlot(const AConstIndex: Integer): Integer;
     function GetFunctionCount: Integer;
   public
     constructor Create(const AName: string);
@@ -284,6 +307,8 @@ type
       const AConstIndex: Integer): PGocciaPropertyReadCacheEntry; {$IFDEF FPC}inline;{$ENDIF}
     function ProtoReadCacheSlot(
       const AConstIndex: Integer): PGocciaProtoReadCacheEntry; {$IFDEF FPC}inline;{$ENDIF}
+    function PropertyWriteCacheSlot(
+      const AConstIndex: Integer): PGocciaPropertyWriteCacheEntry; {$IFDEF FPC}inline;{$ENDIF}
     function AddFunction(const AFunction: TGocciaFunctionTemplate): UInt16;
     procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt16;
       const AName: string = '');
@@ -821,6 +846,41 @@ begin
   if Slot < 0 then
     Exit(nil);
   Result := @FProtoReadCaches[Slot];
+end;
+
+function TGocciaFunctionTemplate.PropertyWriteSlot(
+  const AConstIndex: Integer): Integer;
+var
+  NewCapacity: Integer;
+begin
+  if (AConstIndex < 0) or (AConstIndex >= FConstantCount) then
+    Exit(-1);
+  if AConstIndex >= Length(FPropertyWriteSlotMap) then
+    SetLength(FPropertyWriteSlotMap, FConstantCount);
+  if FPropertyWriteSlotMap[AConstIndex] = 0 then
+  begin
+    if FPropertyWriteSlotCount >= Length(FPropertyWriteCaches) then
+    begin
+      NewCapacity := Length(FPropertyWriteCaches) * 2;
+      if NewCapacity < 4 then
+        NewCapacity := 4;
+      SetLength(FPropertyWriteCaches, NewCapacity);
+    end;
+    Inc(FPropertyWriteSlotCount);
+    FPropertyWriteSlotMap[AConstIndex] := UInt32(FPropertyWriteSlotCount);
+  end;
+  Result := Integer(FPropertyWriteSlotMap[AConstIndex]) - 1;
+end;
+
+function TGocciaFunctionTemplate.PropertyWriteCacheSlot(
+  const AConstIndex: Integer): PGocciaPropertyWriteCacheEntry;
+var
+  Slot: Integer;
+begin
+  Slot := PropertyWriteSlot(AConstIndex);
+  if Slot < 0 then
+    Exit(nil);
+  Result := @FPropertyWriteCaches[Slot];
 end;
 
 function TGocciaFunctionTemplate.AddFunction(
