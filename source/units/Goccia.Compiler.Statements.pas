@@ -2165,6 +2165,22 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
+function EmitJumpIfConditionFalse(const ACtx: TGocciaCompilationContext;
+  const ACondition: TGocciaExpression): Integer;
+var
+  CondReg: UInt16;
+begin
+  if TryEmitJumpIfNotLessThan(ACtx, ACondition, Result) then
+    Exit;
+  CondReg := ACtx.Scope.AllocateRegister;
+  try
+    ACtx.CompileExpression(ACondition, CondReg);
+    Result := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+  finally
+    ACtx.Scope.FreeRegister;
+  end;
+end;
+
 function CompileIfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaIfStatement): Boolean;
 var
@@ -2210,10 +2226,13 @@ begin
   try
     HasPatternBindings := CompileConditionWithPatternBindings(ACtx,
       AStmt.Condition, CondReg, PatternSubjectReg, PatternFailJumps);
-    if not HasPatternBindings then
+    if HasPatternBindings then
+      ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg)
+    else if not TryEmitJumpIfNotLessThan(ACtx, AStmt.Condition, ElseJump) then
+    begin
       ACtx.CompileExpression(AStmt.Condition, CondReg);
-
-    ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+      ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+    end;
     ConsequentAbrupt := ACtx.CompileStatement(AStmt.Consequent);
 
     if HasPatternBindings then
@@ -3346,6 +3365,7 @@ var
   LoopControl: TLoopControlState;
   IsAscending: Boolean;
   UseIntCompare: Boolean;
+  UseFusedLessThanExit: Boolean;
   ExitOpcode, ExitJumpOp, StepOpcode: TGocciaOpCode;
 begin
   Result := False;
@@ -3399,7 +3419,8 @@ begin
   // binding is snapshot-safe (see TryMatchCountedForLimit). Proven Number
   // limits use OP_GTE_INT/OP_LTE_INT; untyped stable locals use generic
   // OP_LT/OP_GT so mixed BigInt comparison keeps spec TypeError/compare
-  // behavior instead of RegisterToDouble.
+  // behavior instead of RegisterToDouble. Ascending `<` fuses compare and
+  // exit jump as OP_JUMP_IF_NOT_LT with the same generic semantics.
   if not TryMatchCountedForLimit(ACtx, CondExpr.Right, AStmt.Body, LoopName,
        UseIntCompare) then
     Exit;
@@ -3408,20 +3429,12 @@ begin
     gttLess:
       begin
         IsAscending := True;
-        if UseIntCompare then
-        begin
-          ExitOpcode := OP_GTE_INT;
-          ExitJumpOp := OP_JUMP_IF_TRUE;
-        end
-        else
-        begin
-          ExitOpcode := OP_LT;
-          ExitJumpOp := OP_JUMP_IF_FALSE;
-        end;
+        UseFusedLessThanExit := True;
       end;
     gttGreater:
       begin
         IsAscending := False;
+        UseFusedLessThanExit := False;
         if UseIntCompare then
         begin
           ExitOpcode := OP_LTE_INT;
@@ -3459,7 +3472,8 @@ begin
 
   LimitReg := ACtx.Scope.AllocateRegister;
   OneReg := ACtx.Scope.AllocateRegister;
-  CmpReg := ACtx.Scope.AllocateRegister;
+  if not UseFusedLessThanExit then
+    CmpReg := ACtx.Scope.AllocateRegister;
 
   ACtx.CompileExpression(CondExpr.Right, LimitReg);
   EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, OneReg, 1));
@@ -3468,8 +3482,13 @@ begin
   try
     LoopStart := CurrentCodePosition(ACtx);
 
-    EmitInstruction(ACtx, EncodeABC(ExitOpcode, CmpReg, StartReg, LimitReg));
-    ExitJump := EmitJumpInstruction(ACtx, ExitJumpOp, CmpReg);
+    if UseFusedLessThanExit then
+      ExitJump := EmitJumpIfNotLessThan(ACtx, StartReg, LimitReg)
+    else
+    begin
+      EmitInstruction(ACtx, EncodeABC(ExitOpcode, CmpReg, StartReg, LimitReg));
+      ExitJump := EmitJumpInstruction(ACtx, ExitJumpOp, CmpReg);
+    end;
 
     OuterSlot := StartReg;
     ACtx.Scope.BeginScope;
@@ -3499,7 +3518,8 @@ begin
     EndLoopControl(LoopControl);
   end;
 
-  ACtx.Scope.FreeRegister; // CmpReg
+  if not UseFusedLessThanExit then
+    ACtx.Scope.FreeRegister; // CmpReg
   ACtx.Scope.FreeRegister; // OneReg
   ACtx.Scope.FreeRegister; // LimitReg
   // StartReg is popped by EndScope of the outer for-scope below.
@@ -3860,7 +3880,6 @@ end;
 procedure CompileForStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForStatement);
 var
-  CondReg: UInt16;
   LoopStart, ExitJump, I: Integer;
   ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
@@ -4001,15 +4020,7 @@ begin
         end;
 
         if Assigned(AStmt.Condition) then
-        begin
-          CondReg := ACtx.Scope.AllocateRegister;
-          try
-            ACtx.CompileExpression(AStmt.Condition, CondReg);
-            ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-          finally
-            ACtx.Scope.FreeRegister;
-          end;
-        end;
+          ExitJump := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
 
         ACtx.CompileStatement(AStmt.Body);
 
@@ -4071,15 +4082,7 @@ begin
         ExitJump := -1;
 
         if Assigned(AStmt.Condition) then
-        begin
-          CondReg := ACtx.Scope.AllocateRegister;
-          try
-            ACtx.CompileExpression(AStmt.Condition, CondReg);
-            ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-          finally
-            ACtx.Scope.FreeRegister;
-          end;
-        end;
+          ExitJump := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
 
         ACtx.Scope.BeginScope;
         SetLoopContinueScopeDepth(ACtx);
@@ -4167,7 +4170,6 @@ end;
 procedure CompileWhileStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaWhileStatement);
 var
-  CondReg: UInt16;
   LoopStart, ExitJump: Integer;
   LoopControl: TLoopControlState;
 begin
@@ -4175,13 +4177,7 @@ begin
   try
     SetLabeledContinueCleanupBase(AStmt);
     LoopStart := CurrentCodePosition(ACtx);
-    CondReg := ACtx.Scope.AllocateRegister;
-    try
-      ACtx.CompileExpression(AStmt.Condition, CondReg);
-      ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-    finally
-      ACtx.Scope.FreeRegister;
-    end;
+    ExitJump := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
 
     ACtx.CompileStatement(AStmt.Body);
 

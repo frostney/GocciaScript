@@ -225,6 +225,7 @@ begin
     OP_CALL_SELF_NUM:                  Result := 'OP_CALL_SELF_NUM';
     OP_ADD_NUM_IMM:                    Result := 'OP_ADD_NUM_IMM';
     OP_GET_LOCAL_PROP_CONST:           Result := 'OP_GET_LOCAL_PROP_CONST';
+    OP_JUMP_IF_NOT_LT:                 Result := 'OP_JUMP_IF_NOT_LT';
   else
     Result := Format('OP_UNKNOWN_%d', [AOp]);
   end;

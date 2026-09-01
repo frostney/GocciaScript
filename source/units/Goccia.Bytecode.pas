@@ -174,7 +174,9 @@ const
   //               decode of OP_GET_LOCAL + OP_GET_PROP_CONST for
   //               `local.ident` that reuses the existing shape-lite
   //               property-read IC.
-  GOCCIA_FORMAT_VERSION = 79;
+  //   v79 -> v80: added OP_JUMP_IF_NOT_LT (opcode 232), a fused generic
+  //               `<` compare and jump used by for/if/conditional tests.
+  GOCCIA_FORMAT_VERSION = 80;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -452,7 +454,10 @@ type
     OP_ADD_NUM_IMM   = 230,
     // A = destination, B = local slot holding the object, C = name-constant
     // index. Fused OP_GET_LOCAL + OP_GET_PROP_CONST for `local.ident`.
-    OP_GET_LOCAL_PROP_CONST = 231
+    OP_GET_LOCAL_PROP_CONST = 231,
+    // A = left register, B = right register, C = signed Int16 jump offset
+    // when A < B is false. Generic `<` semantics (Number, BigInt, objects).
+    OP_JUMP_IF_NOT_LT = 232
   );
 
 function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
@@ -521,6 +526,7 @@ begin
     OP_SET_WITH_BINDING_LOOSE, OP_SUPER_SET, OP_SUPER_BASE,
     OP_SUPER_SET_BASE, OP_DEFINE_STATIC_PROP_DYNAMIC,
     OP_CONSTRUCT_SPREAD, OP_SUB_NUM_IMM, OP_ADD_NUM_IMM, OP_SET_UPVALUE_REF,
+    OP_JUMP_IF_NOT_LT,
     OP_DYNAMIC_IMPORT_OPTIONS, OP_DYNAMIC_IMPORT_SOURCE_OPTIONS,
     OP_DYNAMIC_IMPORT_DEFER_OPTIONS, OP_TO_NUMBER, OP_TO_STRING,
     OP_NEG, OP_BNOT, OP_EQ, OP_NEQ, OP_LOOSE_EQ, OP_LOOSE_NEQ,
