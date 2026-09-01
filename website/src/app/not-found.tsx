@@ -8,10 +8,17 @@ export const metadata: Metadata = {
     index: false,
     follow: false,
   },
-  // Override root layout's canonical and OpenGraph URLs — a 404 should
-  // not claim to be the homepage.
-  alternates: {},
-  openGraph: {},
+  // Explicitly unset canonical to prevent homepage canonical leak.
+  // Next.js metadata merging keeps parent values unless explicitly overridden.
+  alternates: {
+    canonical: null,
+  },
+  // Explicitly override OpenGraph to prevent homepage claims on 404.
+  openGraph: {
+    title: "404: Page Not Found",
+    description: "The requested page could not be found.",
+    url: undefined,
+  },
 };
 
 export default function NotFoundPage() {
