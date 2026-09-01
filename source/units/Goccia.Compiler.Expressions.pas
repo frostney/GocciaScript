@@ -2561,15 +2561,11 @@ begin
      IsNumericSelfIncrementByOne(ACtx.Scope, AExpr.Name, AExpr.Value) then
   begin
     Local := ACtx.Scope.GetLocal(LocalIdx);
-    if (not Local.IsGlobalBacked) and (not Local.IsImportBinding) then
+    // Const locals must use the generic assignment path so the RHS is
+    // evaluated before const-assignment / TDZ behavior (ES2026 §13.15.2).
+    if (not Local.IsGlobalBacked) and (not Local.IsImportBinding) and
+       (not Local.IsConst) then
     begin
-      if Local.IsConst then
-      begin
-        if ShouldIgnoreNonStrictImmutableLocalAssignment(ACtx, Local) then
-          Exit;
-        EmitConstAssignmentError(ACtx);
-        Exit;
-      end;
       Slot := Local.Slot;
       if Local.IsCaptured then
         EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, Slot, UInt16(Slot)));

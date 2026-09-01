@@ -32,7 +32,7 @@ Fib is the best relative row because it already uses `OP_CALL_SELF_NUM` / `OP_SU
 
 ## Profile facts (function-wrapped equivalents)
 
-- `loop-dispatch-floor`: original baseline was 38% `OP_GET_LOCAL`, 15% `OP_LOAD_INT`, 11% `OP_SET_LOCAL`, 8% `OP_ADD_FLOAT`. Counted-for now matches `i = i + 1` and emits `OP_ADD_INT` (`e6f3e177`); standalone assignment still uses `OP_INC_NUMERIC`. Loop/if `<` fuses as `OP_JUMP_IF_NOT_LT` (`d398e8c5`); `<=` loops (Sieve) still use the LTE jump. Number literals type as `sltFloat`.
+- `loop-dispatch-floor`: original baseline was 38% `OP_GET_LOCAL`, 15% `OP_LOAD_INT`, 11% `OP_SET_LOCAL`, 8% `OP_ADD_FLOAT`. Counted-for now matches `i = i + 1` and emits `OP_ADD_INT` for ascending loops and `OP_SUB_INT` for descending loops (`e6f3e177`); standalone assignment still uses `OP_INC_NUMERIC`. Loop/if `<` fuses as `OP_JUMP_IF_NOT_LT` (`d398e8c5`); `<=` loops (Sieve) still use the LTE jump. Number literals type as `sltFloat`.
 - `nbody-minimal`: original baseline was 31% `OP_GET_LOCAL`, 12% `OP_GET_PROP_CONST`, 10% `OP_LOAD_HOLE`, 8% `OP_MOVE`. Hot pair `GET_LOCAL → GET_PROP_CONST` (11%) now fuses as `OP_GET_LOCAL_PROP_CONST` (`db9567bd`). Generic `OP_MUL`/`OP_ADD` still 100% scalar hit rate.
 - Script-level `let` in a non-function profiled as `OP_GET_GLOBAL` (29% of opcodes) — not the AWFY/probe shape.
 
@@ -150,7 +150,7 @@ Json 24.96, Permute 21.86, Sieve 21.63, CD 20.41, Bounce 19.94, Havlak 19.09, To
 - **Broader read-PIC:** still rejected (ADR 0088). Own+proto read ICs already ship.
 - **Write-IC:** landed this wave (`15e8eca7`). Own writable-data stores on `OP_SET_PROP_CONST` hit a shape-keyed IC; misses still go through `AssignProperty`. Broader read-PIC remains rejected (ADR 0088).
 - **`OP_SET_PROP_CONST`** uses the write IC for ordinary own writable data; `VMTrySetOwnWritableDataProperty` remains available for non-IC paths.
-- **Counted-for** now matches `i = i + 1` / `i += 1` and minus (`e6f3e177`), emitting `OP_ADD_INT`. Loop `<` fuses as `OP_JUMP_IF_NOT_LT` (`d398e8c5`). Integer-valued number literals still type as `sltFloat`; wave-2 TypeHint retry was measured and rejected.
+- **Counted-for** now matches `i = i + 1` / `i += 1` and minus (`e6f3e177`), emitting `OP_ADD_INT` for ascending loops and `OP_SUB_INT` for descending loops. Loop `<` fuses as `OP_JUMP_IF_NOT_LT` (`d398e8c5`). Integer-valued number literals still type as `sltFloat`; wave-2 TypeHint retry was measured and rejected.
 - **CALL:** bytecode→bytecode already trampolines; `ExecuteClosureRegisters0–3` are native ingress only. Revisit `OP_CALL_METHOD` staging only with AWFY transfer (ADR 0089 previously noise).
 - **Dispatch preamble:** prod vs instrumented dual loop landed (`c776b95b`). Do not retry a sparse hot/cold opcode split or duplicating the full `case` (FPC register-pressure failure).
 - **ALLOC:** do not revive value caches. Property-store `RegisterToValue` boxing is the live allocation tax.

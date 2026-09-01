@@ -64,3 +64,16 @@ test("self-increment assignment result can be captured after writes", () => {
   };
   expect(f()).toEqual([11, 12, 12]);
 });
+
+test("const initializer self-increment is TDZ not const-assignment", () => {
+  expect(() => {
+    const x = (x = x + 1);
+  }).toThrow(ReferenceError);
+});
+
+test("initialized const self-increment throws TypeError", () => {
+  expect(() => {
+    const x = 1;
+    x = x + 1;
+  }).toThrow(TypeError);
+});

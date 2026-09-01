@@ -116,6 +116,8 @@ type
     procedure TestForOfUsesHandlerForExpressionBody;
     procedure TestForOfUsesOneIteratorCloseHandler;
     procedure TestCountedForLessThanUsesJumpIfNotLt;
+    procedure TestConstSelfIncrementUsesGenericAssignment;
+    procedure TestGlobalBackedCountedForLimitIsNotSnapshotted;
     procedure TestIfAndConditionalLessThanUseJumpIfNotLt;
     procedure TestLessThanValueKeepsGenericCompare;
     procedure TestConstantIfEliminatesBranch;
@@ -197,6 +199,10 @@ begin
   Test('for-of uses one iterator-close handler', TestForOfUsesOneIteratorCloseHandler);
   Test('counted-for less-than uses jump-if-not-lt',
     TestCountedForLessThanUsesJumpIfNotLt);
+  Test('const self-increment uses generic assignment',
+    TestConstSelfIncrementUsesGenericAssignment);
+  Test('global-backed counted-for limit is not snapshotted',
+    TestGlobalBackedCountedForLimitIsNotSnapshotted);
   Test('if and conditional less-than use jump-if-not-lt',
     TestIfAndConditionalLessThanUseJumpIfNotLt);
   Test('less-than value keeps generic compare',
@@ -1656,6 +1662,40 @@ begin
       Expect<Integer>(CountOp(Func, OP_JUMP_IF_NOT_LT)).ToBe(1);
       Expect<Integer>(CountOp(Func, OP_LT)).ToBe(0);
     end;
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstSelfIncrementUsesGenericAssignment;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('const x = (x = x + 1);');
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_INC_NUMERIC)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource('let x = 0; x = x + 1;');
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_INC_NUMERIC)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestGlobalBackedCountedForLimitIsNotSnapshotted;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let n = 5; for (let i = 0; i < n; i = i + 1) { i; }',
+    False, False, True, True, True, True, True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_INT)).ToBe(0);
+    Expect<Boolean>(CountOp(Module.TopLevel, OP_INC_NUMERIC) > 0).ToBe(True);
   finally
     Module.Free;
   end;
