@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { timestampFromEnv } from "../../scripts/lib/report-publishing";
 
 const directory = mkdtempSync(join(tmpdir(), "report-publishing-"));
 const website = resolve(import.meta.dir, "../..");
@@ -71,6 +72,22 @@ function publish(
     .split("\n")
     .map((line) => JSON.parse(line));
 }
+
+test("Unix timestamps respect the inclusive Date range and return null beyond it", () => {
+  const name = "REPORT_PUBLISHING_TEST_TIMESTAMP";
+  const previous = process.env[name];
+  try {
+    process.env[name] = "8640000000000";
+    expect(timestampFromEnv(name)).toBe("+275760-09-13T00:00:00.000Z");
+    for (const value of ["8640000000001", String(Number.MAX_SAFE_INTEGER)]) {
+      process.env[name] = value;
+      expect(timestampFromEnv(name)).toBeNull();
+    }
+  } finally {
+    if (previous === undefined) delete process.env[name];
+    else process.env[name] = previous;
+  }
+});
 
 describe("report publisher commands", () => {
   test("preserves GitHub metadata, namespace overrides, and daily paths across publishers", () => {
@@ -142,7 +159,7 @@ describe("report publisher commands", () => {
       {
         TEST262_PROFILE_ARTIFACT_ID: "invalid",
         GITHUB_RUN_NUMBER: "1.5",
-        TEST262_PROFILE_RUN_CREATED_AT: "invalid",
+        TEST262_PROFILE_RUN_CREATED_AT: "8640000000001",
         TEST262_RUN_CREATED_AT: "1788483600",
         TEST262_PROFILE_BLOB_PREFIX: " /// ",
         TEST262_BLOB_ACCESS: "PRIVATE",

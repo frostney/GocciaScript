@@ -17,7 +17,8 @@ export function timestampFromEnv(
   if (unixSeconds && /^\d+$/.test(value)) {
     const seconds = Number(value);
     if (Number.isSafeInteger(seconds) && seconds > 0) {
-      return new Date(seconds * 1000).toISOString();
+      const date = new Date(seconds * 1000);
+      return Number.isNaN(date.getTime()) ? null : date.toISOString();
     }
   }
   const time = Date.parse(value);
