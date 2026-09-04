@@ -14452,6 +14452,7 @@ var
   UseProdDispatch: Boolean;
   GC: TGarbageCollector;
   PreviousMemoryPressureCountdown: PInteger;
+  PreviousProfilingAllocations: Boolean;
   // Scratch active-root frame for opcode arms that materialize a fresh operand
   // and then re-enter guest code (key coercion / custom-matcher lookup) before
   // consuming it. Re-Initialized per use, so sharing one record is safe.
@@ -14634,6 +14635,10 @@ begin
       GC.ExchangeMemoryPressureCountdown(@FMemoryPressureCheckCountdown)
   else
     PreviousMemoryPressureCountdown := nil;
+  // Host callbacks can enter after module execution has finished. Scope the
+  // allocation switch to native VM entries; trampoline calls keep this state.
+  PreviousProfilingAllocations := GProfilingAllocations;
+  GProfilingAllocations := FProfilingFunctions;
   try
     FLastClosureThisValue := AThisValue;
     PushSavedStateRoot(SavedClosure, SavedNewTarget, SavedArgumentBase,
@@ -14937,6 +14942,7 @@ LInnerLoopsDone:
       end;
     end;
   finally
+    GProfilingAllocations := PreviousProfilingAllocations;
     if Assigned(GC) then
       GC.ExchangeMemoryPressureCountdown(
         PreviousMemoryPressureCountdown);
