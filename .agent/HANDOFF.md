@@ -182,3 +182,61 @@ Json 24.96, Permute 21.86, Sieve 21.63, CD 20.41, Bounce 19.94, Havlak 19.09, To
 - Value caches (ADR 0081)
 - String interning on `RuntimeCopy`
 - July 2026 pooled-collection call bypass (ADR 0089)
+
+## September audit: array callback roots
+
+Recorded 2026-09-05. Accepted runtime commit
+`457e2f89f8a6b9fe671b253071427bfcf4fd048e` on
+`codex/audit-array-callback-overhead` starts from
+`f33d9c6a061e6cb61dce65ffcf8514da1c051870`. The earlier sections describe the
+August wave. This experiment compares Goccia production binaries; it does not
+remeasure the QuickJS gap or establish a result on another architecture.
+
+Array callback dispatch now relies on the live argument containers specified by
+[ADR 0105](../docs/adr/0105-argument-collections-root-their-elements.md).
+The enclosing builtin arguments retain the callback and receiver; specialized
+callback arguments trace the element, index, array, and reduce accumulator.
+Nested calls borrow a different collection. The per-call dynamic root array and
+individual temporary-root hash operations are removed. Generator continuation
+restoration remains in its existing exception-safe scope.
+
+Measurements used FPC 3.2.2 production builds on macOS arm64, bytecode mode, a
+256 MiB limit, and the exclusive performance lock. The target and initial
+NBody/Richards guards used one discarded warmup and seven measured samples per
+binary in each AB/BA order. Full upstream NBody used one warmup per binary and
+four ABBA blocks, giving eight measured samples per binary. Every result passed
+its independent verifier. AWFY was pinned to
+`74306fec151070fd07157cefeacf19e7e0bcdc89`.
+
+| Workload | Baseline execution | Candidate execution |
+| --- | ---: | ---: |
+| 128-value map/reduce, 1,000 repetitions, AB median | 376.306 ms | 296.214 ms |
+| Same target, BA median | 378.230 ms | 296.752 ms |
+| Upstream NBody, 250,000 iterations, ABBA median | 17.014174 s | 16.523542 s |
+
+Target execution improved about 21%. Full NBody execution improved 2.88%; child
+process CPU, measured separately, fell from 16.922659 s to 16.484344 s (2.59%).
+CPU ranges were disjoint: baseline 16.902593–17.301686 s and candidate
+16.442337–16.585410 s. All four balanced blocks improved CPU. NBody execution
+ranges overlapped during transient scheduling delays. Richards remained a
+neutral guard; no suite score or Richards improvement is claimed.
+
+Rejected predecessors replaced all roots with an active frame (v1), then kept
+only callback/receiver frame roots (v2). Both improved the focused probe but
+failed to establish representative transfer. Their measurements are retained;
+neither implementation is part of the accepted commit. Source review confirmed
+all 26 callback dispatch sites retain the owning argument collections.
+
+Production and checked development builds each passed 12,819 tests and 28,580
+assertions in both executors. Focused Array/callback suites passed 592 tests and
+1,170 assertions per executor. Native GC tests passed 12/12, formatter checks
+passed all 463 files, and ordinary hooks passed. The measured source is unchanged.
+No other optimization was combined here; do not add isolated percentages.
+
+The array-callbacks worktree retains raw evidence under `tmp/audit/`:
+`comparison-no-extra-roots-v3.json`, `nbody-full-no-extra-roots-v3.json`,
+`acceptance-no-extra-roots-v3.json`, baseline VM/host profiles, and all four full
+correctness reports. The production candidate SHA-256 is
+`d079ad3b6427504334704df9dcdf65307da314b324d4a892baf276741f6c7874`.
+Index boxing and result allocation remain unchanged; profile them before a
+further runtime change.
