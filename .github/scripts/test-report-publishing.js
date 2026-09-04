@@ -6,17 +6,22 @@ const { join, resolve } = require('node:path');
 const { spawnSync } = require('node:child_process');
 const upsert = require('./upsert-pr-comment.js');
 
-test('report comments create or update using current and legacy markers', async () => {
+test('report comments find current and legacy markers on later pages', async () => {
   for (const previous of [null, '<!-- current --> old', '<!-- legacy --> old']) {
     const calls = [];
     const github = { rest: { issues: {
-      listComments: async issue => {
+      listComments: async ({ page = 1, ...issue }) => {
         assert.deepEqual(issue, { owner: 'owner', repo: 'repo', issue_number: 7 });
-        return { data: [{ id: 1, body: 'unrelated' }, { id: 2, body: previous }] };
+        return { data: page === 1 ? [{ id: 1, body: 'unrelated' }] : [{ id: 2, body: previous }] };
       },
       createComment: async args => calls.push(['create', args]),
       updateComment: async args => calls.push(['update', args]),
-    } } };
+    } }, paginate: async (method, issue) => {
+      assert.equal(method, github.rest.issues.listComments);
+      const first = await method(issue);
+      const second = await method({ ...issue, page: 2 });
+      return [...first.data, ...second.data];
+    } };
     await upsert({ github, context: { repo: { owner: 'owner', repo: 'repo' }, issue: { number: 7 } },
       body: '<!-- current --> new', markers: ['<!-- current -->', '<!-- legacy -->'] });
     assert.deepEqual(calls, [[previous ? 'update' : 'create', {
