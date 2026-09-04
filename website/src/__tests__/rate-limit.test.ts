@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 
 // The rate limiter reads `Date.now()` on each call, so we can drive its
@@ -95,6 +95,49 @@ describe("rateLimit — token-bucket window", () => {
     const fresh = rateLimit(b);
     expect(fresh.ok).toBe(true);
     expect(fresh.remaining).toBe(fresh.limit - 1);
+  });
+
+  test("large live populations do not rescan on every request and still expire", () => {
+    let now = 1_000_000;
+    Date.now = () => now;
+    const prefix = uniqueKey("population");
+    const initial = rateLimit(`${prefix}:0`);
+    for (let i = 1; i < 5_000; i++) rateLimit(`${prefix}:${i}`);
+
+    const store = (
+      globalThis as typeof globalThis & {
+        __GOCCIA_RL_BUCKETS__: Map<string, { count: number; resetAt: number }>;
+      }
+    ).__GOCCIA_RL_BUCKETS__;
+    const scan = spyOn(store, Symbol.iterator);
+    try {
+      now += 2_000;
+      const activeKey = `${prefix}:active`;
+      const active = rateLimit(activeKey);
+      let last = active;
+      for (let i = 0; i < 2_000; i++) last = rateLimit(activeKey);
+      expect(last.ok).toBe(false);
+      expect(last.resetAt).toBe(active.resetAt);
+      expect(scan).toHaveBeenCalledTimes(1);
+
+      now = initial.resetAt;
+      rateLimit(`${prefix}:after-expiry`);
+      expect(scan).toHaveBeenCalledTimes(2);
+      expect(store.has(`${prefix}:0`)).toBe(false);
+      expect(store.has(`${prefix}:4999`)).toBe(false);
+      expect(store.has(activeKey)).toBe(true);
+      expect(rateLimit(activeKey).ok).toBe(false);
+
+      now = active.resetAt;
+      const renewed = rateLimit(activeKey);
+      expect(renewed.ok).toBe(true);
+      expect(renewed.remaining).toBe(renewed.limit - 1);
+    } finally {
+      scan.mockRestore();
+      for (const key of store.keys()) {
+        if (key.startsWith(prefix)) store.delete(key);
+      }
+    }
   });
 });
 

@@ -25,6 +25,8 @@ function getBucketStore(): Map<string, Bucket> {
   return g.__GOCCIA_RL_BUCKETS__;
 }
 const buckets = getBucketStore();
+const CLEANUP_INTERVAL_MS = 1_000;
+let nextCleanupAt = 0;
 
 export type RateLimitResult = {
   ok: boolean;
@@ -41,11 +43,12 @@ export function rateLimit(key: string): RateLimitResult {
     buckets.set(key, b);
   }
   b.count += 1;
-  // Opportunistic GC: drop a few stale entries every so often so the map
-  // doesn't grow unbounded under traffic.
-  if (buckets.size > 4096) {
+  // A large active map rarely contains expired entries. Sweep at most once
+  // per second instead of scanning it again for every request in the window.
+  if (buckets.size > 4096 && now >= nextCleanupAt) {
+    nextCleanupAt = now + CLEANUP_INTERVAL_MS;
     for (const [k, v] of buckets) {
-      if (v.resetAt < now) buckets.delete(k);
+      if (v.resetAt <= now) buckets.delete(k);
     }
   }
   return {
