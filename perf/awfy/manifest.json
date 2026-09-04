@@ -48,6 +48,13 @@
   },
   "diagnosticProbes": [
     {
+      "name": "array-callbacks",
+      "file": "perf/probes/array-callbacks.js",
+      "focusAreas": ["array-callbacks", "gc-roots"],
+      "defaultInnerIterations": 1000,
+      "tags": ["array", "callback", "gc-roots"]
+    },
+    {
       "name": "propaccess-monomorphic",
       "file": "perf/probes/propaccess-monomorphic.js",
       "focusAreas": ["property-access", "primitive-coercion", "scalar-plus"],
