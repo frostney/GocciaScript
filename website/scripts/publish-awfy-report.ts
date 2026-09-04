@@ -7,7 +7,7 @@ import {
   awfyBlobReportPathForArtifactId,
   publishAwfyReportsToBlob,
 } from "../src/lib/awfy-blob-store";
-import { GITHUB_REPO_URL } from "../src/lib/github";
+import { currentRunMetadata, timestampFromEnv } from "./lib/report-publishing";
 
 type AwfyReport = {
   metadata?: {
@@ -46,26 +46,6 @@ type AwfyReport = {
 
 function log(message: string) {
   console.log(`[publish-awfy] ${message}`);
-}
-
-function numberFromEnv(name: string): number | null {
-  const value = process.env[name];
-  if (!value) return null;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
-function timestampFromEnv(name: string): string | null {
-  const value = process.env[name]?.trim();
-  if (!value) return null;
-  if (/^\d+$/.test(value)) {
-    const seconds = Number(value);
-    if (Number.isSafeInteger(seconds) && seconds > 0) {
-      return new Date(seconds * 1000).toISOString();
-    }
-  }
-  const time = Date.parse(value);
-  return Number.isNaN(time) ? null : new Date(time).toISOString();
 }
 
 function finiteRatio(value: unknown): number | null {
@@ -157,31 +137,11 @@ async function readEntryFromFile(
     throw new Error(`${filePath} is not a valid AWFY report`);
   }
 
-  const runId = numberFromEnv("GITHUB_RUN_ID");
-  const runNumber = numberFromEnv("GITHUB_RUN_NUMBER");
-  const artifactId =
-    numberFromEnv("AWFY_ARTIFACT_ID") ??
-    numberFromEnv("GITHUB_RUN_ID") ??
-    Date.now();
-  const repository = process.env.GITHUB_REPOSITORY ?? "frostney/GocciaScript";
-  const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
-  const headSha = process.env.GITHUB_SHA ?? "unknown";
-  const now = new Date().toISOString();
-  const createdAt = timestampFromEnv("AWFY_RUN_CREATED_AT") ?? now;
-
   return {
-    runId: runId ?? artifactId,
-    runNumber: runNumber ?? 0,
-    artifactId,
-    title: process.env.GITHUB_WORKFLOW ?? "CI",
-    headSha,
-    shortSha: headSha.slice(0, 8),
-    runUrl: runId
-      ? `${server}/${repository}/actions/runs/${runId}`
-      : GITHUB_REPO_URL,
-    createdAt,
-    updatedAt: now,
-    artifactCreatedAt: now,
+    ...currentRunMetadata(
+      "AWFY_ARTIFACT_ID",
+      timestampFromEnv("AWFY_RUN_CREATED_AT"),
+    ),
     summary: summaryFromReport(parsed),
     reportJson: `${JSON.stringify(parsed, null, 2)}\n`,
   };

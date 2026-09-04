@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 import { readFile } from "node:fs/promises";
-import { GITHUB_REPO_URL } from "../src/lib/github";
 import {
   publishTest262ReportsToBlob,
   type Test262BlobPublishEntry,
@@ -14,57 +13,20 @@ import {
   type Test262Report,
   type Test262TimelinePoint,
 } from "../src/lib/test262-dashboard";
+import { currentRunMetadata, timestampFromEnv } from "./lib/report-publishing";
 
 function log(message: string) {
   console.log(`[publish-test262] ${message}`);
 }
 
-function numberFromEnv(name: string): number | null {
-  const value = process.env[name];
-  if (!value) return null;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
-function timestampFromEnv(name: string): string | null {
-  const value = process.env[name]?.trim();
-  if (!value) return null;
-  if (/^\d+$/.test(value)) {
-    const seconds = Number(value);
-    if (Number.isSafeInteger(seconds) && seconds > 0) {
-      return new Date(seconds * 1000).toISOString();
-    }
-  }
-  const time = Date.parse(value);
-  return Number.isNaN(time) ? null : new Date(time).toISOString();
-}
-
 function pointFromCurrentRun(report: Test262Report): Test262TimelinePoint {
-  const runId = numberFromEnv("GITHUB_RUN_ID");
-  const runNumber = numberFromEnv("GITHUB_RUN_NUMBER");
-  const artifactId =
-    numberFromEnv("TEST262_ARTIFACT_ID") ??
-    numberFromEnv("GITHUB_RUN_ID") ??
-    Date.now();
-  const repository = process.env.GITHUB_REPOSITORY ?? "frostney/GocciaScript";
-  const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
-  const headSha = process.env.GITHUB_SHA ?? "unknown";
-  const now = new Date().toISOString();
-  const createdAt = timestampFromEnv("TEST262_RUN_CREATED_AT") ?? now;
+  const metadata = currentRunMetadata(
+    "TEST262_ARTIFACT_ID",
+    timestampFromEnv("TEST262_RUN_CREATED_AT"),
+  );
   return {
-    runId: runId ?? artifactId,
-    runNumber: runNumber ?? 0,
-    title: process.env.GITHUB_WORKFLOW ?? "CI",
-    headSha,
-    shortSha: headSha.slice(0, 8),
-    runUrl: runId
-      ? `${server}/${repository}/actions/runs/${runId}`
-      : GITHUB_REPO_URL,
-    createdAt,
-    updatedAt: now,
-    artifactId,
-    artifactCreatedAt: now,
-    jsonUrl: jsonUrlForArtifact(artifactId),
+    ...metadata,
+    jsonUrl: jsonUrlForArtifact(metadata.artifactId),
     summary: report.summary,
   };
 }

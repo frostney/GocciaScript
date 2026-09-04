@@ -1,5 +1,3 @@
-import { gunzipSync, gzipSync } from "node:zlib";
-import { BlobNotFoundError, get, put } from "@vercel/blob";
 import type {
   Test262Report,
   Test262TimelinePoint,
@@ -9,12 +7,21 @@ import {
   publishBlobHistorySnapshots,
   rebuildBlobHistorySnapshots,
 } from "./blob-history";
+import {
+  type BlobAccess,
+  type BlobReport,
+  blobAccess,
+  byCreatedAtThenRunNumber,
+  cleanBlobPrefix,
+  type ProfileReportKind,
+  publishProfileArtifacts,
+  putCompressedReportBlob,
+  putDailyBlobPointer,
+  readCompressedBlobText,
+} from "./report-blob";
 
-export type Test262BlobAccess = "public" | "private";
-export type Test262ProfileBlobReportKind =
-  | "aggregate"
-  | "markdown"
-  | "detailsArchive";
+export type Test262BlobAccess = BlobAccess;
+export type Test262ProfileBlobReportKind = ProfileReportKind;
 
 export type Test262BlobRun = Test262TimelinePoint & {
   reportPath: string;
@@ -30,12 +37,7 @@ export type Test262BlobPublishEntry = {
   reportJson: string;
 };
 
-export type Test262ProfileBlobReport = {
-  path: string;
-  url: string;
-  downloadUrl: string;
-  size: number;
-};
+export type Test262ProfileBlobReport = BlobReport;
 
 export type Test262ProfileBlobRun = {
   runId: number;
@@ -67,28 +69,20 @@ export type Test262ProfileBlobPublishEntry = Omit<
 
 const DEFAULT_PREFIX = "test262";
 const DEFAULT_PROFILE_PREFIX = "test262-profiles";
-const DEFAULT_ACCESS: Test262BlobAccess = "public";
-
-function cleanPrefix(value: string | undefined, fallback: string): string {
-  const trimmed = (value ?? fallback).trim().replace(/^\/+|\/+$/g, "");
-  return trimmed || fallback;
-}
 
 export function test262BlobPrefix(): string {
-  return cleanPrefix(process.env.TEST262_BLOB_PREFIX, DEFAULT_PREFIX);
+  return cleanBlobPrefix(process.env.TEST262_BLOB_PREFIX, DEFAULT_PREFIX);
 }
 
 export function test262ProfileBlobPrefix(): string {
-  return cleanPrefix(
+  return cleanBlobPrefix(
     process.env.TEST262_PROFILE_BLOB_PREFIX,
     DEFAULT_PROFILE_PREFIX,
   );
 }
 
 export function test262BlobAccess(): Test262BlobAccess {
-  return process.env.TEST262_BLOB_ACCESS === "private"
-    ? "private"
-    : DEFAULT_ACCESS;
+  return blobAccess(process.env.TEST262_BLOB_ACCESS);
 }
 
 export function test262BlobRunsPrefix(prefix = test262BlobPrefix()): string {
@@ -157,39 +151,6 @@ function profileDailyPathForRun(
   return test262ProfileBlobDailyPathForDay(run.createdAt.slice(0, 10), prefix);
 }
 
-async function streamToBytes(stream: ReadableStream<Uint8Array>) {
-  const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    total += value.byteLength;
-  }
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out;
-}
-
-async function readBlobBytes(
-  pathname: string,
-  access = test262BlobAccess(),
-): Promise<Uint8Array | null> {
-  try {
-    const result = await get(pathname, { access });
-    if (!result || result.statusCode !== 200 || !result.stream) return null;
-    return await streamToBytes(result.stream);
-  } catch (err) {
-    if (err instanceof BlobNotFoundError) return null;
-    throw err;
-  }
-}
-
 function isBlobRun(value: unknown): value is Test262BlobRun {
   if (!value || typeof value !== "object") return false;
   const run = value as Record<string, unknown>;
@@ -212,31 +173,20 @@ function isBlobRun(value: unknown): value is Test262BlobRun {
   );
 }
 
-function byCreatedAtThenRunNumber(
-  a: Pick<Test262TimelinePoint, "createdAt" | "runNumber">,
-  b: Pick<Test262TimelinePoint, "createdAt" | "runNumber">,
-): number {
-  return (
-    Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
-    a.runNumber - b.runNumber
-  );
-}
-
 export async function readTest262BlobReportJson(
   run: Pick<Test262BlobRun, "reportPath">,
 ): Promise<string | null> {
-  const bytes = await readBlobBytes(run.reportPath);
-  return bytes ? gunzipSync(bytes).toString("utf8") : null;
+  return readCompressedBlobText(run.reportPath, test262BlobAccess());
 }
 
 export async function readTest262BlobReportJsonByArtifactId(
   artifactId: number,
 ): Promise<string | null> {
   if (!Number.isSafeInteger(artifactId) || artifactId <= 0) return null;
-  const bytes = await readBlobBytes(
+  return readCompressedBlobText(
     test262BlobReportPathForArtifactId(artifactId),
+    test262BlobAccess(),
   );
-  return bytes ? gunzipSync(bytes).toString("utf8") : null;
 }
 
 export async function rebuildTest262BlobHistory(): Promise<number> {
@@ -267,29 +217,22 @@ export async function publishTest262ReportsToBlob(
       entry.point.artifactId,
       prefix,
     );
-    const compressed = gzipSync(`${entry.reportJson.trimEnd()}\n`);
-    const reportBlob = await put(reportPath, compressed, {
+    const reportBlob = await putCompressedReportBlob(
+      reportPath,
+      entry.reportJson,
       access,
-      allowOverwrite: true,
-      cacheControlMaxAge: 31_536_000,
-      contentType: "application/gzip",
-    });
+    );
     const published: Test262BlobRun = {
       ...entry.point,
       jsonUrl: `/api/test262/results/${entry.point.artifactId}`,
       reportPath,
       reportUrl: reportBlob.url,
       reportDownloadUrl: reportBlob.downloadUrl,
-      reportCompressedSize: compressed.byteLength,
+      reportCompressedSize: reportBlob.size,
       publishedAt: new Date().toISOString(),
     };
     const pathname = dailyPathForPoint(published, prefix);
-    const pointer = await put(pathname, JSON.stringify(published, null, 2), {
-      access,
-      allowOverwrite: true,
-      cacheControlMaxAge: 900,
-      contentType: "application/json",
-    });
+    const pointer = await putDailyBlobPointer(pathname, published, access);
     pointers.push({ pathname, etag: pointer.etag, run: published });
     publishedRuns.push(published);
   }
@@ -306,66 +249,16 @@ export async function publishTest262ProfileReportsToBlob(
   const publishedRuns: Test262ProfileBlobRun[] = [];
 
   for (const entry of entries) {
-    const aggregatePath = test262ProfileBlobReportPathForArtifactId(
-      entry.artifactId,
-      "aggregate",
-      prefix,
-    );
-    const aggregateCompressed = gzipSync(`${entry.aggregateJson.trimEnd()}\n`);
-    const aggregateBlob = await put(aggregatePath, aggregateCompressed, {
+    const profileReports = await publishProfileArtifacts(
+      entry,
+      (kind) =>
+        test262ProfileBlobReportPathForArtifactId(
+          entry.artifactId,
+          kind,
+          prefix,
+        ),
       access,
-      allowOverwrite: true,
-      cacheControlMaxAge: 31_536_000,
-      contentType: "application/gzip",
-    });
-    const profileReports: Test262ProfileBlobRun["profileReports"] = {
-      aggregate: {
-        path: aggregatePath,
-        url: aggregateBlob.url,
-        downloadUrl: aggregateBlob.downloadUrl,
-        size: aggregateCompressed.byteLength,
-      },
-    };
-
-    if (entry.markdown) {
-      const markdownPath = test262ProfileBlobReportPathForArtifactId(
-        entry.artifactId,
-        "markdown",
-        prefix,
-      );
-      const markdownBlob = await put(markdownPath, entry.markdown, {
-        access,
-        allowOverwrite: true,
-        cacheControlMaxAge: 31_536_000,
-        contentType: "text/markdown; charset=utf-8",
-      });
-      profileReports.markdown = {
-        path: markdownPath,
-        url: markdownBlob.url,
-        downloadUrl: markdownBlob.downloadUrl,
-        size: entry.markdown.byteLength,
-      };
-    }
-
-    if (entry.detailsArchive) {
-      const archivePath = test262ProfileBlobReportPathForArtifactId(
-        entry.artifactId,
-        "detailsArchive",
-        prefix,
-      );
-      const archiveBlob = await put(archivePath, entry.detailsArchive, {
-        access,
-        allowOverwrite: true,
-        cacheControlMaxAge: 31_536_000,
-        contentType: "application/gzip",
-      });
-      profileReports.detailsArchive = {
-        path: archivePath,
-        url: archiveBlob.url,
-        downloadUrl: archiveBlob.downloadUrl,
-        size: entry.detailsArchive.byteLength,
-      };
-    }
+    );
 
     const published: Test262ProfileBlobRun = {
       runId: entry.runId,
@@ -381,15 +274,10 @@ export async function publishTest262ProfileReportsToBlob(
       profileReports,
       publishedAt: new Date().toISOString(),
     };
-    await put(
+    await putDailyBlobPointer(
       profileDailyPathForRun(published, prefix),
-      JSON.stringify(published, null, 2),
-      {
-        access,
-        allowOverwrite: true,
-        cacheControlMaxAge: 900,
-        contentType: "application/json",
-      },
+      published,
+      access,
     );
     publishedRuns.push(published);
   }

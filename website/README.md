@@ -68,6 +68,23 @@ Two settings live outside this repo:
   logs that it skipped, and the release reaches the site on its next
   deployment instead.
 
+## Report publication
+
+CI publisher commands under `scripts/publish-*.ts` normalize report files and
+compute report-specific summaries before uploading them. `scripts/lib/report-publishing.ts` supplies the
+shared GitHub run metadata, timestamp parsing, and profile file arguments.
+`src/lib/report-blob.ts` owns byte reads, compression, upload options, and
+profile attachments; each `*-blob-store.ts` adapter owns its schema, environment
+settings, and storage paths. Requests continue reading published Blob data;
+publisher metadata and file processing remain in CI scripts.
+
+AWFY and Web Tooling overwrite one pointer per UTC day. JetStream retains a
+pointer per run within each day. Test262 keeps its distinct report path and
+profile namespace, with profile access controlled by `TEST262_BLOB_ACCESS`;
+benchmark profiles use `BENCHMARK_PROFILE_BLOB_ACCESS`. See the
+[benchmark guide](../docs/benchmarks.md) and [test262 guide](../docs/test262.md)
+for the report and publication contracts.
+
 ## Dashboard history snapshots
 
 AWFY, JetStream, and test262 history reads use optional monthly Blob snapshots

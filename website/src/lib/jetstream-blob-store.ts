@@ -1,12 +1,20 @@
-import { gunzipSync, gzipSync } from "node:zlib";
-import { BlobNotFoundError, get, put } from "@vercel/blob";
 import {
   listBlobHistory,
   publishBlobHistorySnapshots,
   rebuildBlobHistorySnapshots,
 } from "./blob-history";
+import {
+  type BlobAccess,
+  type BlobReport,
+  blobAccess,
+  byCreatedAtThenRunNumber,
+  cleanBlobPrefix,
+  putCompressedReportBlob,
+  putDailyBlobPointer,
+  readCompressedBlobText,
+} from "./report-blob";
 
-export type JetStreamBlobAccess = "public" | "private";
+export type JetStreamBlobAccess = BlobAccess;
 
 export type JetStreamReferenceRatios = {
   quickjs: number | null;
@@ -24,12 +32,7 @@ export type JetStreamBlobRunSummary = {
   targetNames: string[];
 };
 
-export type JetStreamBlobReport = {
-  path: string;
-  url: string;
-  downloadUrl: string;
-  size: number;
-};
+export type JetStreamBlobReport = BlobReport;
 
 export type JetStreamBlobRun = {
   runId: number;
@@ -53,21 +56,13 @@ export type JetStreamBlobPublishEntry = Omit<
 > & { reportJson: string };
 
 const DEFAULT_PREFIX = "jetstream";
-const DEFAULT_ACCESS: JetStreamBlobAccess = "public";
-
-function cleanPrefix(value: string | undefined, fallback: string): string {
-  const trimmed = (value ?? fallback).trim().replace(/^\/+|\/+$/g, "");
-  return trimmed || fallback;
-}
 
 export function jetStreamBlobPrefix(): string {
-  return cleanPrefix(process.env.JETSTREAM_BLOB_PREFIX, DEFAULT_PREFIX);
+  return cleanBlobPrefix(process.env.JETSTREAM_BLOB_PREFIX, DEFAULT_PREFIX);
 }
 
 export function jetStreamBlobAccess(): JetStreamBlobAccess {
-  return process.env.JETSTREAM_BLOB_ACCESS === "private"
-    ? "private"
-    : DEFAULT_ACCESS;
+  return blobAccess(process.env.JETSTREAM_BLOB_ACCESS);
 }
 
 export function jetStreamBlobRunsPrefix(
@@ -97,46 +92,6 @@ export function jetStreamBlobDailyPathForRun(
   return `${jetStreamBlobDailyPrefix(prefix)}/${day}/${runId}.json`;
 }
 
-function byCreatedAtThenRunNumber(
-  left: Pick<JetStreamBlobRun, "createdAt" | "runNumber">,
-  right: Pick<JetStreamBlobRun, "createdAt" | "runNumber">,
-): number {
-  return (
-    Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
-    left.runNumber - right.runNumber
-  );
-}
-
-async function streamToBytes(stream: ReadableStream<Uint8Array>) {
-  const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    total += value.byteLength;
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
-async function readBlobBytes(pathname: string): Promise<Uint8Array | null> {
-  try {
-    const result = await get(pathname, { access: jetStreamBlobAccess() });
-    if (!result || result.statusCode !== 200 || !result.stream) return null;
-    return await streamToBytes(result.stream);
-  } catch (error) {
-    if (error instanceof BlobNotFoundError) return null;
-    throw error;
-  }
-}
-
 function isJetStreamBlobRun(value: unknown): value is JetStreamBlobRun {
   if (!value || typeof value !== "object") return false;
   const run = value as Record<string, unknown>;
@@ -156,8 +111,7 @@ function isJetStreamBlobRun(value: unknown): value is JetStreamBlobRun {
 export async function readJetStreamBlobReportJson(
   run: Pick<JetStreamBlobRun, "report">,
 ): Promise<string | null> {
-  const bytes = await readBlobBytes(run.report.path);
-  return bytes ? gunzipSync(bytes).toString("utf8") : null;
+  return readCompressedBlobText(run.report.path, jetStreamBlobAccess());
 }
 
 function compactHistoryRun(run: JetStreamBlobRun): JetStreamBlobRun {
@@ -197,21 +151,14 @@ export async function publishJetStreamReportsToBlob(
       entry.artifactId,
       prefix,
     );
-    const compressed = gzipSync(`${entry.reportJson.trimEnd()}\n`);
-    const reportBlob = await put(reportPath, compressed, {
+    const reportBlob = await putCompressedReportBlob(
+      reportPath,
+      entry.reportJson,
       access,
-      allowOverwrite: true,
-      cacheControlMaxAge: 31_536_000,
-      contentType: "application/gzip",
-    });
+    );
     const published: JetStreamBlobRun = {
       ...entry,
-      report: {
-        path: reportPath,
-        url: reportBlob.url,
-        downloadUrl: reportBlob.downloadUrl,
-        size: compressed.byteLength,
-      },
+      report: reportBlob,
       publishedAt: new Date().toISOString(),
     };
     const pathname = jetStreamBlobDailyPathForRun(
@@ -219,12 +166,7 @@ export async function publishJetStreamReportsToBlob(
       entry.runId,
       prefix,
     );
-    const pointer = await put(pathname, JSON.stringify(published, null, 2), {
-      access,
-      allowOverwrite: true,
-      cacheControlMaxAge: 900,
-      contentType: "application/json",
-    });
+    const pointer = await putDailyBlobPointer(pathname, published, access);
     pointers.push({ pathname, etag: pointer.etag, run: published });
     publishedRuns.push(published);
   }
