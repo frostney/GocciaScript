@@ -204,7 +204,12 @@ async function load(kind: Kind) {
     ).listJetStreamBlobDailyRuns();
   return (await import("@/lib/test262-blob-store")).listTest262BlobDailyRuns();
 }
-async function publish(kind: Kind, id: number, createdAt?: string) {
+async function publish(
+  kind: Kind,
+  id: number,
+  createdAt?: string,
+  reportJson = '{"targets":[]}',
+) {
   const meta = metadata(id, createdAt);
   if (kind === "test262") {
     const report = { summary: conformanceSummary, results: [] };
@@ -225,7 +230,7 @@ async function publish(kind: Kind, id: number, createdAt?: string) {
   const entry = {
     ...meta,
     summary: workloadSummary,
-    reportJson: '{"targets":[]}',
+    reportJson,
   };
   if (kind === "jetstream")
     return (
@@ -502,4 +507,25 @@ test("oversized generations remain available through raw reads", async () => {
   expect(await rebuild("jetstream")).toBe(0);
   expect(snapshots()).toHaveLength(0);
   expect((await load("jetstream")).map((run) => run.runId)).toEqual([1]);
+});
+
+test("projects large JetStream reports without duplicating their raw payload in history", async () => {
+  const reportJson = JSON.stringify({
+    targets: [],
+    retainedPayload: "x".repeat(1024 * 1024),
+  });
+  await publish("jetstream", 1, undefined, reportJson);
+  const raw = blobs.get("jetstream/daily/2026-09-01/1.json");
+  expect(raw).toBeDefined();
+  expect(JSON.parse(raw?.body.toString() ?? "{}").reportJson).toBe(reportJson);
+  expect(snapshots()).toHaveLength(1);
+  gets.length = 0;
+  const runs = await load("jetstream");
+  expect(runs.map((run) => run.runId)).toEqual([1]);
+  expect("reportJson" in runs[0]).toBe(false);
+  expect(rawGets()).toHaveLength(0);
+  blobs.delete(snapshots()[0]);
+  expect(await rebuild("jetstream")).toBe(1);
+  expect(blobs.get("jetstream/daily/2026-09-01/1.json")).toEqual(raw);
+  expect(blobs.has("jetstream/runs/1/report.json.gz")).toBe(true);
 });

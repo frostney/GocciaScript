@@ -160,11 +160,21 @@ export async function readJetStreamBlobReportJson(
   return bytes ? gunzipSync(bytes).toString("utf8") : null;
 }
 
+function compactHistoryRun(run: JetStreamBlobRun): JetStreamBlobRun {
+  // Legacy pointers embed the full report as an extra field. The report artifact
+  // remains authoritative; the timeline needs only the declared run fields.
+  const { reportJson: _reportJson, ...history } = run as JetStreamBlobRun & {
+    reportJson?: unknown;
+  };
+  return history;
+}
+
 export async function rebuildJetStreamBlobHistory(): Promise<number> {
   return rebuildBlobHistorySnapshots(
     jetStreamBlobPrefix(),
     jetStreamBlobAccess(),
     isJetStreamBlobRun,
+    compactHistoryRun,
   );
 }
 
@@ -223,6 +233,7 @@ export async function publishJetStreamReportsToBlob(
     access,
     isJetStreamBlobRun,
     pointers,
+    compactHistoryRun,
   );
   return publishedRuns.sort(byCreatedAtThenRunNumber);
 }

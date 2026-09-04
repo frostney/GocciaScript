@@ -227,6 +227,7 @@ async function writeSnapshots<Run>(
   access: Access,
   isRun: (value: unknown) => value is Run,
   known = new Map<string, LoadedPointer<Run>>(),
+  projectRun: (run: Run) => Run = (run) => run,
 ): Promise<number> {
   let written = 0;
   for (const partition of partitions) {
@@ -254,7 +255,7 @@ async function writeSnapshots<Run>(
       pointers: pointers.map(({ pathname, etag, run }) => ({
         pathname,
         etag,
-        run,
+        run: run === null ? null : projectRun(run),
       })),
     });
     if (Buffer.byteLength(json) > SNAPSHOT_BYTES) continue;
@@ -278,12 +279,13 @@ export async function rebuildBlobHistorySnapshots<Run>(
   prefix: string,
   access: Access,
   isRun: (value: unknown) => value is Run,
+  projectRun?: (run: Run) => Run,
 ): Promise<number> {
   const { partitions } = partitionPointers(
     prefix,
     await listPointers(`${prefix}/daily/`),
   );
-  return writeSnapshots(partitions, access, isRun);
+  return writeSnapshots(partitions, access, isRun, undefined, projectRun);
 }
 
 export async function publishBlobHistorySnapshots<Run>(
@@ -291,6 +293,7 @@ export async function publishBlobHistorySnapshots<Run>(
   access: Access,
   isRun: (value: unknown) => value is Run,
   published: LoadedPointer<Run>[],
+  projectRun?: (run: Run) => Run,
 ): Promise<void> {
   try {
     const known = new Map(
@@ -308,7 +311,7 @@ export async function publishBlobHistorySnapshots<Run>(
         prefix,
         await listPointers(`${prefix}/daily/${month}-`),
       );
-      await writeSnapshots(partitions, access, isRun, known);
+      await writeSnapshots(partitions, access, isRun, known, projectRun);
     }
   } catch (error) {
     console.warn(
