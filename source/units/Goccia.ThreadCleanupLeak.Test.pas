@@ -2,9 +2,10 @@
   a thread tears down its runtime.
 
   FPC does not auto-finalize managed threadvars at thread exit, so the per-thread
-  member-definition arrays that every builtin and value type caches
-  (FStaticMembers / FPrototypeMembers : TArray<TGocciaMemberDefinition>, whose
-  records hold strings) stay allocated unless something clears them.
+  prototype-definition arrays that some value types retain
+  (FPrototypeMembers : TArray<TGocciaMemberDefinition>, whose records hold strings)
+  stay allocated unless something clears them. Builtin static-member definitions
+  are temporary constructor data and are released without registry cleanup.
   ShutdownThreadRuntime drains Goccia.ThreadCleanupRegistry on each worker thread,
   and the registry's finalization drains it on the main thread, so the registered
   ClearThreadvarMembers procs release those arrays on whichever thread tears down.
@@ -74,26 +75,22 @@ end;
 
 procedure TLeakTests.TestDrainReclaimsMemberDefinitionThreadvars;
 const
-  // One engine (with the heavyweight globals materialized below) populates many
-  // member-definition arrays (records with strings) whose combined heap is well
-  // above this floor, while collector/allocator noise around a single Collect
-  // stays at the ~1 KiB scale of the idempotent test's tolerance. The floor was
-  // 8 KiB when every builtin was constructed eagerly; lazy materialization
-  // (#747/#790) shrank the boot-time eager footprint, and on 32-bit targets the
-  // smaller records put the eager set just under 8 KiB. 4 KiB stays comfortably
-  // above noise on every target while still catching a regressed (no-op) drain.
+  // Materializing the lazy globals also builds the remaining retained prototype
+  // definitions (including Temporal.PlainDate). Their managed records and strings
+  // exceed this floor even without temporary builtin static-member arrays.
+  // Keep the floor above the idempotent test's collector/allocator tolerance so
+  // a regressed (no-op) drain still fails.
   MIN_RECLAIMED_BYTES = 4 * 1024;
 var
   Populated, Drained: Int64;
 begin
-  // Building a throwaway engine registers every builtin and value type, which
-  // populates this thread's FStaticMembers / FPrototypeMembers threadvars. The
-  // engine objects themselves are freed inside the call; the member-definition
-  // arrays are threadvars and outlive it (the leak this issue is about).
+  // Building a throwaway engine populates the retained FPrototypeMembers
+  // threadvars. The engine objects themselves are freed inside the call; the
+  // retained definition arrays outlive it (the leak this issue is about).
   // Materialize the heavyweight globals too: they are built lazily now
   // (#747/#790), so a bare engine constructor no longer populates their
   // member-definition threadvars. Touching them keeps this leak gate exercising
-  // the largest threadvar populators (Temporal's classes, Intl's constructors).
+  // retained prototype definitions such as Temporal.PlainDate's.
   EnsureSharedPrototypesInitialized(MaterializeLazyBuiltins);
   TGarbageCollector.Instance.Collect;
   Populated := Int64(GetHeapStatus.TotalAllocated);
@@ -116,7 +113,7 @@ var
   I: Integer;
 begin
   // Reading each lazy global through the scope forces its backing object to
-  // materialize, populating that builtin's member-definition threadvars.
+  // materialize, including any retained prototype-definition threadvars.
   for I := Low(LazyGlobals) to High(LazyGlobals) do
     AEngine.Interpreter.GlobalScope.GetValue(LazyGlobals[I]);
 end;

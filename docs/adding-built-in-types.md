@@ -167,6 +167,12 @@ The preferred pattern is:
 
 This keeps the JS-visible surface in one place and avoids repeating `RegisterNativeMethod`, `DefineProperty`, and `CreateWithoutPrototype` boilerplate in every type.
 
+Member definitions used only during construction belong in local arrays, or can
+be passed directly from `Members.ToDefinitions` while the collection is alive.
+`RegisterMemberDefinitions` copies the callbacks, values, names, and flags into
+the target's functions and descriptors; it does not retain the definition array.
+These temporary arrays do not need thread-local storage or thread cleanup hooks.
+
 **ExposePrototype** -- Must NOT free the created instance (it becomes the pinned method host). Look up the shared prototype through the realm rather than caching it:
 
 ```pascal

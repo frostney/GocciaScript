@@ -72,17 +72,7 @@ implementation
 uses
   SysUtils,
 
-  TimingUtils,
-
-  Goccia.ThreadCleanupRegistry;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
+  TimingUtils;
 
 constructor TGocciaConsole.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
@@ -116,11 +106,10 @@ begin
     Members.AddMethod(ConsoleGroupEnd, 0, gmkStaticMethod);
     Members.AddMethod(ConsoleTrace, -1, gmkStaticMethod);
     Members.AddMethod(ConsoleTable, -1, gmkStaticMethod);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 end;
@@ -397,8 +386,5 @@ begin
     EmitLine('table', GroupPrefix + FormatForDisplay(AArgs.GetElement(0)));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

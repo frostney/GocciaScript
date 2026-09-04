@@ -38,17 +38,8 @@ uses
   Goccia.Arguments.Validator,
   Goccia.Constants.NumericLimits,
   Goccia.NumberConversion,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 function ASCIIRadixDigitValue(const ACharacter: Char): Integer;
 begin
@@ -85,11 +76,10 @@ begin
     Members.AddMethod(NumberIsNaN, 1, gmkStaticMethod);
     Members.AddMethod(NumberIsInteger, 1, gmkStaticMethod);
     Members.AddMethod(NumberIsSafeInteger, 1, gmkStaticMethod);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 end;
 
 // ES2026 §21.1.2.13 Number.parseInt(string, radix)
@@ -430,8 +420,5 @@ begin
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

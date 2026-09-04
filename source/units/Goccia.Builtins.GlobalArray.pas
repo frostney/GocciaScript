@@ -41,7 +41,6 @@ uses
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Utils.Arrays,
@@ -62,9 +61,6 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.Values.ToObject,
   Goccia.VM.Exception;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 type
   TArrayFromAsyncSyncIteratorJob = class(TGocciaObjectValue)
@@ -91,11 +87,6 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure MarkReferences; override;
   end;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 constructor TArrayFromAsyncSyncIteratorJob.Create(
   const APromise: TGocciaPromiseValue; const AResultObj: TGocciaObjectValue;
@@ -290,11 +281,10 @@ begin
     Members.AddMethod(ArrayFrom, 1, gmkStaticMethod);
     Members.AddMethod(ArrayFromAsync, 1, gmkStaticMethod);
     Members.AddMethod(ArrayOf, -1, gmkStaticMethod);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 end;
 
 // ES2026 §23.1.2.2 Array.isArray(arg)
@@ -944,8 +934,5 @@ begin
   ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(Len));
   Result := ResultObj;
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.
