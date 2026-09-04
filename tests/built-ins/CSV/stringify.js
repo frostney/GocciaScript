@@ -170,3 +170,21 @@ describe("CSV.stringify error handling", () => {
     expect(() => CSV.stringify()).toThrow();
   });
 });
+
+describe.runIf(typeof Goccia !== "undefined")("CSV.stringify GC roots", () => {
+  test("keeps converted object and array rows through later callbacks", () => {
+    const calls = [];
+    const replacer = (key, value) => {
+      Goccia.gc();
+      calls.push(key);
+      return value + "!";
+    };
+    expect(CSV.stringify([{ a: "x", b: "y" }, { a: "z", b: "w" }], {}, replacer))
+      .toBe("a,b\nx!,y!\nz!,w!");
+    expect(calls).toEqual(["a", "b", "a", "b"]);
+    calls.length = 0;
+    expect(CSV.stringify([["x", "y"], ["z", "w"]], { headers: false }, replacer))
+      .toBe("x!,y!\nz!,w!");
+    expect(calls).toEqual([0, 1, 0, 1]);
+  });
+});
