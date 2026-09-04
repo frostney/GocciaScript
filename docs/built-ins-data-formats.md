@@ -136,6 +136,8 @@ After `import * as JSONL from "goccia:jsonl"`, `JSONL.parse(...)` and `JSONL.par
 
 TSV uses IANA `text/tab-separated-values` semantics, which differ fundamentally from CSV: instead of RFC 4180 double-quote escaping, TSV uses **backslash escaping** (`\t` for tab, `\n` for newline, `\r` for carriage return, `\\` for literal backslash). Unrecognized escape sequences preserve the backslash. The reviver, replacer, `parseChunk`, and edge case handling match CSV.
 
+CSV and TSV share callback selection, reviver argument construction, replacer row conversion, and chunk result assembly in `Goccia.Builtins.DelimitedText`. The adapters retain their own options, parser calls, reviver contexts, and stringifiers. Shared conversion roots intermediate values across callbacks; each adapter keeps the converted array rooted until serialization finishes.
+
 ## TOML (`goccia:toml`, `Goccia.Builtins.TOML.pas`)
 
 | Method | Description |

@@ -267,3 +267,27 @@ describe("TSV metadata", () => {
     expect(TSV[Symbol.toStringTag]).toBe("Module");
   });
 });
+
+describe.runIf(typeof Goccia !== "undefined")("TSV.parse GC roots", () => {
+  test("keeps revived rows and contexts through later callback collections", () => {
+    const rows = TSV.parse("a\tb\nx\ty\nz", {}, (key, value, context) => {
+      Goccia.gc();
+      return { key, value, context };
+    });
+
+    expect(rows[0].b).toEqual({
+      key: "b",
+      value: "y",
+      context: { row: 0, column: 1 },
+    });
+    expect(rows[1].b.value).toBe("");
+    const arrays = TSV.parse("x\ty\nz", { headers: false }, (key, value) => {
+      Goccia.gc();
+      return { key, value };
+    });
+    expect(arrays).toEqual([
+      [{ key: 0, value: "x" }, { key: 1, value: "y" }],
+      [{ key: 0, value: "z" }],
+    ]);
+  });
+});
