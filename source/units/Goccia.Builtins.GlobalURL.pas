@@ -44,19 +44,10 @@ uses
   Goccia.Arguments.Validator,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
-  Goccia.ThreadCleanupRegistry,
   Goccia.URL.Parser,
   Goccia.Values.ErrorHelper,
   Goccia.Values.URLSearchParamsValue,
   Goccia.Values.URLValue;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 { TGocciaGlobalURL }
 
@@ -75,11 +66,10 @@ begin
   try
     Members.AddNamedMethod(PROP_CAN_PARSE, CanParse, 1, gmkStaticMethod);
     Members.AddNamedMethod(PROP_PARSE, Parse, 1, gmkStaticMethod);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 end;
 
 // WHATWG URL §4.7.3 URL.canParse(url[, base]) -> boolean
@@ -164,8 +154,5 @@ begin
   // Initialize the shared URLSearchParams prototype lazily
   TGocciaURLSearchParamsValue.ExposePrototype(FBuiltinObject);
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

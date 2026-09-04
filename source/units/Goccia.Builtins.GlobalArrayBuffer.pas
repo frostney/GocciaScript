@@ -38,20 +38,11 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Values.DataViewValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
   Goccia.Values.TypedArrayValue;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 const
   NO_MAX_BYTE_LENGTH = -1;
@@ -70,11 +61,10 @@ begin
   Members := TGocciaMemberCollection.Create;
   try
     Members.AddMethod(ArrayBufferIsView, 1, gmkStaticMethod);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 end;
 
 // ES2026 §6.2.4.2 ToIndex(value) — local implementation for constructor path
@@ -164,8 +154,5 @@ begin
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.
