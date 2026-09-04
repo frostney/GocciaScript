@@ -25,6 +25,7 @@ type BlobListCall = {
 const getCalls: BlobGetCall[] = [];
 const putCalls: BlobPutCall[] = [];
 const listCalls: BlobListCall[] = [];
+let failedPutPath: string | null = null;
 
 class BlobNotFoundError extends Error {
   constructor() {
@@ -39,9 +40,14 @@ function textStream(text: string): ReadableStream<Uint8Array> {
 }
 
 function byteStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
-  const stream = new Response(Buffer.from(bytes)).body;
-  if (!stream) throw new Error("expected response body stream");
-  return stream;
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes.slice(0, 1));
+      controller.enqueue(bytes.slice(1, 7));
+      controller.enqueue(bytes.slice(7));
+      controller.close();
+    },
+  });
 }
 
 function summary(totalRun: number): Test262SuiteSummary {
@@ -86,6 +92,14 @@ mock.module("@vercel/blob", () => ({
   BlobNotFoundError,
   get: async (pathname: string, options: Record<string, unknown>) => {
     getCalls.push({ pathname, options });
+    if (pathname === "test262/runs/404.json.gz") throw new BlobNotFoundError();
+    if (pathname === "test262/runs/500.json.gz")
+      throw new Error("access denied");
+    if (pathname === "test262/runs/304.json.gz") return { statusCode: 304 };
+    if (pathname === "test262/runs/300.json.gz")
+      return { statusCode: 200, stream: null };
+    if (pathname === "test262/runs/400.json.gz")
+      return { statusCode: 200, stream: textStream("corrupt") };
     if (pathname === "test262/daily/2026-06-10.json") {
       return {
         statusCode: 200,
@@ -157,6 +171,7 @@ mock.module("@vercel/blob", () => ({
     options: Record<string, unknown>,
   ) => {
     putCalls.push({ pathname, body, options });
+    if (pathname === failedPutPath) throw new Error("upload failed");
     return {
       url: `https://blob.test/${pathname}`,
       downloadUrl: `https://blob.test/${pathname}?download=1`,
@@ -169,6 +184,7 @@ mock.module("@vercel/blob", () => ({
 }));
 
 function resetState() {
+  failedPutPath = null;
   getCalls.length = 0;
   putCalls.length = 0;
   listCalls.length = 0;
@@ -407,5 +423,28 @@ describe("test262 Blob store", () => {
         options: { access: "public" },
       },
     ]);
+  });
+
+  test("treats missing reports as absent and propagates transport and gzip failures", async () => {
+    resetState();
+    const { readTest262BlobReportJsonByArtifactId: read } =
+      await importBlobStore();
+    for (const id of [404, 304, 300, 999]) expect(await read(id)).toBeNull();
+    await expect(read(500)).rejects.toThrow("access denied");
+    await expect(read(400)).rejects.toThrow();
+    getCalls.length = 0;
+    for (const id of [0, -1, 1.5, Number.NaN])
+      expect(await read(id)).toBeNull();
+    expect(getCalls).toHaveLength(0);
+  });
+
+  test("does not publish a daily pointer when its report upload fails", async () => {
+    resetState();
+    const { publishTest262ReportsToBlob } = await importBlobStore();
+    failedPutPath = "test262/runs/1002.json.gz";
+    await expect(publishTest262ReportsToBlob([publishEntry()])).rejects.toThrow(
+      "upload failed",
+    );
+    expect(putCalls.map((call) => call.pathname)).toEqual([failedPutPath]);
   });
 });

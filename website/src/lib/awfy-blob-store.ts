@@ -1,14 +1,19 @@
-import { gunzipSync, gzipSync } from "node:zlib";
-import { BlobNotFoundError, get, list, put } from "@vercel/blob";
+import { list } from "@vercel/blob";
+import {
+  type BlobAccess,
+  type BlobReport,
+  blobAccess,
+  byCreatedAtThenRunNumber,
+  cleanBlobPrefix,
+  putCompressedReportBlob,
+  putDailyBlobPointer,
+  readBlobText,
+  readCompressedBlobText,
+} from "./report-blob";
 
-export type AwfyBlobAccess = "public" | "private";
+export type AwfyBlobAccess = BlobAccess;
 
-export type AwfyBlobReport = {
-  path: string;
-  url: string;
-  downloadUrl: string;
-  size: number;
-};
+export type AwfyBlobReport = BlobReport;
 
 export type AwfyBlobRunSummary = {
   targetCount: number;
@@ -51,21 +56,13 @@ export type AwfyBlobPublishEntry = Omit<
 };
 
 const DEFAULT_PREFIX = "awfy";
-const DEFAULT_ACCESS: AwfyBlobAccess = "public";
-
-function cleanPrefix(value: string | undefined, fallback: string): string {
-  const trimmed = (value ?? fallback).trim().replace(/^\/+|\/+$/g, "");
-  return trimmed || fallback;
-}
 
 export function awfyBlobPrefix(): string {
-  return cleanPrefix(process.env.AWFY_BLOB_PREFIX, DEFAULT_PREFIX);
+  return cleanBlobPrefix(process.env.AWFY_BLOB_PREFIX, DEFAULT_PREFIX);
 }
 
 export function awfyBlobAccess(): AwfyBlobAccess {
-  return process.env.AWFY_BLOB_ACCESS === "private"
-    ? "private"
-    : DEFAULT_ACCESS;
+  return blobAccess(process.env.AWFY_BLOB_ACCESS);
 }
 
 export function awfyBlobRunsPrefix(prefix = awfyBlobPrefix()): string {
@@ -97,51 +94,6 @@ function dailyPathForRun(
   return awfyBlobDailyPathForDay(run.createdAt.slice(0, 10), prefix);
 }
 
-function byCreatedAtThenRunNumber(
-  a: Pick<AwfyBlobRun, "createdAt" | "runNumber">,
-  b: Pick<AwfyBlobRun, "createdAt" | "runNumber">,
-): number {
-  return (
-    Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
-    a.runNumber - b.runNumber
-  );
-}
-
-async function streamToBytes(stream: ReadableStream<Uint8Array>) {
-  const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    total += value.byteLength;
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
-async function readBlobBytes(pathname: string): Promise<Uint8Array | null> {
-  try {
-    const result = await get(pathname, { access: awfyBlobAccess() });
-    if (!result || result.statusCode !== 200 || !result.stream) return null;
-    return await streamToBytes(result.stream);
-  } catch (error) {
-    if (error instanceof BlobNotFoundError) return null;
-    throw error;
-  }
-}
-
-async function readBlobText(pathname: string): Promise<string | null> {
-  const bytes = await readBlobBytes(pathname);
-  return bytes ? new TextDecoder().decode(bytes) : null;
-}
-
 function isAwfyBlobRun(value: unknown): value is AwfyBlobRun {
   if (!value || typeof value !== "object") return false;
   const run = value as Record<string, unknown>;
@@ -159,8 +111,7 @@ function isAwfyBlobRun(value: unknown): value is AwfyBlobRun {
 export async function readAwfyBlobReportJson(
   run: Pick<AwfyBlobRun, "report">,
 ): Promise<string | null> {
-  const bytes = await readBlobBytes(run.report.path);
-  return bytes ? gunzipSync(bytes).toString("utf8") : null;
+  return readCompressedBlobText(run.report.path, awfyBlobAccess());
 }
 
 export async function listAwfyBlobDailyRuns(
@@ -176,7 +127,7 @@ export async function listAwfyBlobDailyRuns(
     });
     cursor = page.cursor;
     for (const blob of page.blobs) {
-      const text = await readBlobText(blob.pathname);
+      const text = await readBlobText(blob.pathname, awfyBlobAccess());
       if (!text) continue;
       try {
         const parsed: unknown = JSON.parse(text);
@@ -202,13 +153,11 @@ export async function publishAwfyReportsToBlob(
       entry.artifactId,
       prefix,
     );
-    const compressed = gzipSync(`${entry.reportJson.trimEnd()}\n`);
-    const reportBlob = await put(reportPath, compressed, {
+    const reportBlob = await putCompressedReportBlob(
+      reportPath,
+      entry.reportJson,
       access,
-      allowOverwrite: true,
-      cacheControlMaxAge: 31_536_000,
-      contentType: "application/gzip",
-    });
+    );
 
     const published: AwfyBlobRun = {
       runId: entry.runId,
@@ -222,23 +171,13 @@ export async function publishAwfyReportsToBlob(
       updatedAt: entry.updatedAt,
       artifactCreatedAt: entry.artifactCreatedAt,
       summary: entry.summary,
-      report: {
-        path: reportPath,
-        url: reportBlob.url,
-        downloadUrl: reportBlob.downloadUrl,
-        size: compressed.byteLength,
-      },
+      report: reportBlob,
       publishedAt: new Date().toISOString(),
     };
-    await put(
+    await putDailyBlobPointer(
       dailyPathForRun(published, prefix),
-      JSON.stringify(published, null, 2),
-      {
-        access,
-        allowOverwrite: true,
-        cacheControlMaxAge: 900,
-        contentType: "application/json",
-      },
+      published,
+      access,
     );
     publishedRuns.push(published);
   }
