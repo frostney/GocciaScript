@@ -656,6 +656,7 @@ end;
 
 procedure TTestGocciaVM.TestRestoreAllocationProfiling;
 var
+  CallerObject: TGocciaObjectValue;
   Template: TGocciaFunctionTemplate;
   VM: TGocciaVM;
   PreviousEnabled, Profiled, Throws, RaisedExpected: Boolean;
@@ -695,9 +696,13 @@ begin
             CallerIndex).Allocations).ToBe(0);
           // The caller remains on the profiling stack after either exit path.
           GProfilingAllocations := True;
-          TGocciaObjectValue.Create;
-          Expect<Int64>(TGocciaProfiler.Instance.GetFunctionProfile(
-            CallerIndex).Allocations).ToBe(1);
+          CallerObject := TGocciaObjectValue.Create;
+          try
+            Expect<Int64>(TGocciaProfiler.Instance.GetFunctionProfile(
+              CallerIndex).Allocations).ToBe(1);
+          finally
+            CallerObject.Free;
+          end;
         end;
   finally
     GProfilingAllocations := False;
