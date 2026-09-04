@@ -6,6 +6,34 @@ features: [Array.prototype.map, Array.from, TypedArray, Iterator, Map, Set, Obje
 const hasGoccia = typeof Goccia !== "undefined";
 
 describe.runIf(hasGoccia)("native callback GC roots", () => {
+  test("nested proxy array callbacks keep receivers and arguments alive after throw", () => {
+    const receiver = { tag: "receiver" };
+    const callback = {
+      visit(value, index, array) {
+        try {
+          [value].forEach(() => {
+            Goccia.gc();
+            throw new Error("inner callback");
+          });
+        } catch (error) {
+          expect(error.message).toBe("inner callback");
+        }
+        Goccia.gc();
+        expect(this).toBe(receiver);
+        expect(array[index]).toBe(value);
+        return value.tag + this.tag;
+      },
+    };
+    const proxy = new Proxy(callback.visit, {
+      apply(target, thisArg, args) {
+        Goccia.gc();
+        return Reflect.apply(target, thisArg, args);
+      },
+    });
+    expect([{ tag: "first" }, { tag: "second" }].map(proxy, receiver))
+      .toEqual(["firstreceiver", "secondreceiver"]);
+  });
+
   test("Array prototype callbacks survive explicit GC across iterations", () => {
     let sum = 0;
     [1, 2].forEach((value) => {
