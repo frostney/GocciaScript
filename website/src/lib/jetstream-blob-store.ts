@@ -1,4 +1,8 @@
-import { list } from "@vercel/blob";
+import {
+  listBlobHistory,
+  publishBlobHistorySnapshots,
+  rebuildBlobHistorySnapshots,
+} from "./blob-history";
 import {
   type BlobAccess,
   type BlobReport,
@@ -7,7 +11,6 @@ import {
   cleanBlobPrefix,
   putCompressedReportBlob,
   putDailyBlobPointer,
-  readBlobBytes,
   readCompressedBlobText,
 } from "./report-blob";
 
@@ -111,31 +114,28 @@ export async function readJetStreamBlobReportJson(
   return readCompressedBlobText(run.report.path, jetStreamBlobAccess());
 }
 
+function compactHistoryRun(run: JetStreamBlobRun): JetStreamBlobRun {
+  // Legacy pointers embed the full report as an extra field. The report artifact
+  // remains authoritative; the timeline needs only the declared run fields.
+  const { reportJson: _reportJson, ...history } = run as JetStreamBlobRun & {
+    reportJson?: unknown;
+  };
+  return history;
+}
+
+export async function rebuildJetStreamBlobHistory(): Promise<number> {
+  return rebuildBlobHistorySnapshots(
+    jetStreamBlobPrefix(),
+    jetStreamBlobAccess(),
+    isJetStreamBlobRun,
+    compactHistoryRun,
+  );
+}
+
 export async function listJetStreamBlobDailyRuns(
   prefix = jetStreamBlobPrefix(),
 ): Promise<JetStreamBlobRun[]> {
-  const runs: JetStreamBlobRun[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await list({
-      cursor,
-      limit: 1000,
-      prefix: `${jetStreamBlobDailyPrefix(prefix)}/`,
-    });
-    cursor = page.cursor;
-    for (const blob of page.blobs) {
-      const bytes = await readBlobBytes(blob.pathname, jetStreamBlobAccess());
-      if (!bytes) continue;
-      try {
-        const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
-        if (isJetStreamBlobRun(parsed)) runs.push(parsed);
-      } catch {
-        // Ignore malformed historical pointers and retain the valid timeline.
-      }
-    }
-    if (!page.hasMore) break;
-  } while (cursor);
-  return runs.sort(byCreatedAtThenRunNumber);
+  return listBlobHistory(prefix, jetStreamBlobAccess(), isJetStreamBlobRun);
 }
 
 export async function publishJetStreamReportsToBlob(
@@ -144,6 +144,8 @@ export async function publishJetStreamReportsToBlob(
   const prefix = jetStreamBlobPrefix();
   const access = jetStreamBlobAccess();
   const publishedRuns: JetStreamBlobRun[] = [];
+  const pointers: { pathname: string; etag: string; run: JetStreamBlobRun }[] =
+    [];
   for (const entry of entries) {
     const reportPath = jetStreamBlobReportPathForArtifactId(
       entry.artifactId,
@@ -159,16 +161,21 @@ export async function publishJetStreamReportsToBlob(
       report: reportBlob,
       publishedAt: new Date().toISOString(),
     };
-    await putDailyBlobPointer(
-      jetStreamBlobDailyPathForRun(
-        entry.createdAt.slice(0, 10),
-        entry.runId,
-        prefix,
-      ),
-      published,
-      access,
+    const pathname = jetStreamBlobDailyPathForRun(
+      entry.createdAt.slice(0, 10),
+      entry.runId,
+      prefix,
     );
+    const pointer = await putDailyBlobPointer(pathname, published, access);
+    pointers.push({ pathname, etag: pointer.etag, run: published });
     publishedRuns.push(published);
   }
+  await publishBlobHistorySnapshots(
+    prefix,
+    access,
+    isJetStreamBlobRun,
+    pointers,
+    compactHistoryRun,
+  );
   return publishedRuns.sort(byCreatedAtThenRunNumber);
 }

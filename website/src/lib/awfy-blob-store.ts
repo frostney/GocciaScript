@@ -1,4 +1,8 @@
-import { list } from "@vercel/blob";
+import {
+  listBlobHistory,
+  publishBlobHistorySnapshots,
+  rebuildBlobHistorySnapshots,
+} from "./blob-history";
 import {
   type BlobAccess,
   type BlobReport,
@@ -7,7 +11,6 @@ import {
   cleanBlobPrefix,
   putCompressedReportBlob,
   putDailyBlobPointer,
-  readBlobText,
   readCompressedBlobText,
 } from "./report-blob";
 
@@ -114,31 +117,18 @@ export async function readAwfyBlobReportJson(
   return readCompressedBlobText(run.report.path, awfyBlobAccess());
 }
 
+export async function rebuildAwfyBlobHistory(): Promise<number> {
+  return rebuildBlobHistorySnapshots(
+    awfyBlobPrefix(),
+    awfyBlobAccess(),
+    isAwfyBlobRun,
+  );
+}
+
 export async function listAwfyBlobDailyRuns(
   prefix = awfyBlobPrefix(),
 ): Promise<AwfyBlobRun[]> {
-  const runs: AwfyBlobRun[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await list({
-      cursor,
-      limit: 1000,
-      prefix: `${awfyBlobDailyPrefix(prefix)}/`,
-    });
-    cursor = page.cursor;
-    for (const blob of page.blobs) {
-      const text = await readBlobText(blob.pathname, awfyBlobAccess());
-      if (!text) continue;
-      try {
-        const parsed: unknown = JSON.parse(text);
-        if (isAwfyBlobRun(parsed)) runs.push(parsed);
-      } catch {
-        // Ignore malformed historical pointers and retain the valid timeline.
-      }
-    }
-    if (!page.hasMore) break;
-  } while (cursor);
-  return runs.sort(byCreatedAtThenRunNumber);
+  return listBlobHistory(prefix, awfyBlobAccess(), isAwfyBlobRun);
 }
 
 export async function publishAwfyReportsToBlob(
@@ -147,6 +137,7 @@ export async function publishAwfyReportsToBlob(
   const prefix = awfyBlobPrefix();
   const access = awfyBlobAccess();
   const publishedRuns: AwfyBlobRun[] = [];
+  const pointers: { pathname: string; etag: string; run: AwfyBlobRun }[] = [];
 
   for (const entry of entries) {
     const reportPath = awfyBlobReportPathForArtifactId(
@@ -174,13 +165,12 @@ export async function publishAwfyReportsToBlob(
       report: reportBlob,
       publishedAt: new Date().toISOString(),
     };
-    await putDailyBlobPointer(
-      dailyPathForRun(published, prefix),
-      published,
-      access,
-    );
+    const pathname = dailyPathForRun(published, prefix);
+    const pointer = await putDailyBlobPointer(pathname, published, access);
+    pointers.push({ pathname, etag: pointer.etag, run: published });
     publishedRuns.push(published);
   }
 
+  await publishBlobHistorySnapshots(prefix, access, isAwfyBlobRun, pointers);
   return publishedRuns.sort(byCreatedAtThenRunNumber);
 }

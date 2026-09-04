@@ -85,6 +85,36 @@ benchmark profiles use `BENCHMARK_PROFILE_BLOB_ACCESS`. See the
 [benchmark guide](../docs/benchmarks.md) and [test262 guide](../docs/test262.md)
 for the report and publication contracts.
 
+## Dashboard history snapshots
+
+AWFY, JetStream, and test262 history reads use optional monthly Blob snapshots
+and at most eight simultaneous reads per report family. Raw daily pointers
+remain authoritative; missing or invalid snapshots fall back to those pointers.
+CI publishers populate snapshots after uploading reports and daily pointers.
+Request handling only reads Blob storage.
+
+To populate snapshots for existing history, run this from `website/` with
+`BLOB_READ_WRITE_TOKEN` configured:
+
+```bash
+bun run rebuild-history
+```
+
+The command uses the same `AWFY_BLOB_PREFIX` / `AWFY_BLOB_ACCESS`,
+`JETSTREAM_BLOB_PREFIX` / `JETSTREAM_BLOB_ACCESS`, and
+`TEST262_BLOB_PREFIX` / `TEST262_BLOB_ACCESS` settings as publication. It writes
+only missing or invalid snapshot generations, never raw reports or pointers.
+An unchanged rebuild reuses existing snapshots. Stale pointer reads, missing
+strong ETags, and oversized generations are skipped; retry after the underlying
+pointers become readable. Transport or upload failures exit nonzero.
+
+Snapshot generations are retained, with no automatic deletion or retention cap.
+Each stores at most 128 pointer records and 1 MiB of uncompressed JSON. Storage
+grows with publication frequency and with late arrivals that change sorted
+monthly partitions. Monitor the `history/v1/` prefixes alongside raw report
+storage. [ADR 0115](../docs/adr/0115-immutable-blob-history-snapshots.md) records
+the concurrency contract, fallback behavior, and storage tradeoff.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

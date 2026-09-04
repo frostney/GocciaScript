@@ -8,6 +8,7 @@
     "publish-awfy": "bun scripts/publish-awfy-report.ts",
     "publish-jetstream": "bun scripts/publish-jetstream-report.ts",
     "publish-web-tooling": "bun scripts/publish-web-tooling-report.ts",
+    "rebuild-history": "bun scripts/rebuild-history-snapshots.ts",
     "backfill-test262": "bun scripts/backfill-test262-dashboard.ts",
     "prebuild": "bun scripts/fetch-binaries.ts",
     "dev": "bun --bun next dev",

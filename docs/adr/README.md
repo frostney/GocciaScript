@@ -124,3 +124,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0112 — Native AsyncLocalStorage over continuation snapshots](0112-native-async-local-storage.md)
 - [0113 — Deterministic virtual timer queue](0113-deterministic-virtual-timer-queue.md)
 - [0114 — Unmanaged execution-context records](0114-unmanaged-execution-context-records.md)
+- [0115 — Immutable Blob history snapshots](0115-immutable-blob-history-snapshots.md)
