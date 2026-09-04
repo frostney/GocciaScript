@@ -1,9 +1,14 @@
 import { gunzipSync, gzipSync } from "node:zlib";
-import { BlobNotFoundError, get, list, put } from "@vercel/blob";
+import { BlobNotFoundError, get, put } from "@vercel/blob";
 import type {
   Test262Report,
   Test262TimelinePoint,
 } from "@/lib/test262-dashboard";
+import {
+  listBlobHistory,
+  publishBlobHistorySnapshots,
+  rebuildBlobHistorySnapshots,
+} from "./blob-history";
 
 export type Test262BlobAccess = "public" | "private";
 export type Test262ProfileBlobReportKind =
@@ -171,20 +176,6 @@ async function streamToBytes(stream: ReadableStream<Uint8Array>) {
   return out;
 }
 
-async function readBlobText(
-  pathname: string,
-  access = test262BlobAccess(),
-): Promise<string | null> {
-  try {
-    const result = await get(pathname, { access });
-    if (!result || result.statusCode !== 200 || !result.stream) return null;
-    return new TextDecoder().decode(await streamToBytes(result.stream));
-  } catch (err) {
-    if (err instanceof BlobNotFoundError) return null;
-    throw err;
-  }
-}
-
 async function readBlobBytes(
   pathname: string,
   access = test262BlobAccess(),
@@ -248,34 +239,18 @@ export async function readTest262BlobReportJsonByArtifactId(
   return bytes ? gunzipSync(bytes).toString("utf8") : null;
 }
 
+export async function rebuildTest262BlobHistory(): Promise<number> {
+  return rebuildBlobHistorySnapshots(
+    test262BlobPrefix(),
+    test262BlobAccess(),
+    isBlobRun,
+  );
+}
+
 export async function listTest262BlobDailyRuns(
   prefix = test262BlobPrefix(),
 ): Promise<Test262BlobRun[]> {
-  const access = test262BlobAccess();
-  const runs: Test262BlobRun[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await list({
-      cursor,
-      limit: 1000,
-      prefix: `${test262BlobDailyPrefix(prefix)}/`,
-    });
-    cursor = page.cursor;
-    for (const blob of page.blobs) {
-      const text = await readBlobText(blob.pathname, access);
-      if (!text) continue;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        continue;
-      }
-      if (isBlobRun(parsed)) runs.push(parsed);
-    }
-    if (!page.hasMore) break;
-  } while (cursor);
-
-  return runs.sort(byCreatedAtThenRunNumber);
+  return listBlobHistory(prefix, test262BlobAccess(), isBlobRun);
 }
 
 export async function publishTest262ReportsToBlob(
@@ -284,6 +259,8 @@ export async function publishTest262ReportsToBlob(
   const prefix = test262BlobPrefix();
   const access = test262BlobAccess();
   const publishedRuns: Test262BlobRun[] = [];
+  const pointers: { pathname: string; etag: string; run: Test262BlobRun }[] =
+    [];
 
   for (const entry of entries) {
     const reportPath = test262BlobReportPathForArtifactId(
@@ -306,19 +283,18 @@ export async function publishTest262ReportsToBlob(
       reportCompressedSize: compressed.byteLength,
       publishedAt: new Date().toISOString(),
     };
-    await put(
-      dailyPathForPoint(published, prefix),
-      JSON.stringify(published, null, 2),
-      {
-        access,
-        allowOverwrite: true,
-        cacheControlMaxAge: 900,
-        contentType: "application/json",
-      },
-    );
+    const pathname = dailyPathForPoint(published, prefix);
+    const pointer = await put(pathname, JSON.stringify(published, null, 2), {
+      access,
+      allowOverwrite: true,
+      cacheControlMaxAge: 900,
+      contentType: "application/json",
+    });
+    pointers.push({ pathname, etag: pointer.etag, run: published });
     publishedRuns.push(published);
   }
 
+  await publishBlobHistorySnapshots(prefix, access, isBlobRun, pointers);
   return publishedRuns.sort(byCreatedAtThenRunNumber);
 }
 

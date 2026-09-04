@@ -1,5 +1,10 @@
 import { gunzipSync, gzipSync } from "node:zlib";
-import { BlobNotFoundError, get, list, put } from "@vercel/blob";
+import { BlobNotFoundError, get, put } from "@vercel/blob";
+import {
+  listBlobHistory,
+  publishBlobHistorySnapshots,
+  rebuildBlobHistorySnapshots,
+} from "./blob-history";
 
 export type JetStreamBlobAccess = "public" | "private";
 
@@ -155,31 +160,18 @@ export async function readJetStreamBlobReportJson(
   return bytes ? gunzipSync(bytes).toString("utf8") : null;
 }
 
+export async function rebuildJetStreamBlobHistory(): Promise<number> {
+  return rebuildBlobHistorySnapshots(
+    jetStreamBlobPrefix(),
+    jetStreamBlobAccess(),
+    isJetStreamBlobRun,
+  );
+}
+
 export async function listJetStreamBlobDailyRuns(
   prefix = jetStreamBlobPrefix(),
 ): Promise<JetStreamBlobRun[]> {
-  const runs: JetStreamBlobRun[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await list({
-      cursor,
-      limit: 1000,
-      prefix: `${jetStreamBlobDailyPrefix(prefix)}/`,
-    });
-    cursor = page.cursor;
-    for (const blob of page.blobs) {
-      const bytes = await readBlobBytes(blob.pathname);
-      if (!bytes) continue;
-      try {
-        const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
-        if (isJetStreamBlobRun(parsed)) runs.push(parsed);
-      } catch {
-        // Ignore malformed historical pointers and retain the valid timeline.
-      }
-    }
-    if (!page.hasMore) break;
-  } while (cursor);
-  return runs.sort(byCreatedAtThenRunNumber);
+  return listBlobHistory(prefix, jetStreamBlobAccess(), isJetStreamBlobRun);
 }
 
 export async function publishJetStreamReportsToBlob(
@@ -188,6 +180,8 @@ export async function publishJetStreamReportsToBlob(
   const prefix = jetStreamBlobPrefix();
   const access = jetStreamBlobAccess();
   const publishedRuns: JetStreamBlobRun[] = [];
+  const pointers: { pathname: string; etag: string; run: JetStreamBlobRun }[] =
+    [];
   for (const entry of entries) {
     const reportPath = jetStreamBlobReportPathForArtifactId(
       entry.artifactId,
@@ -210,21 +204,25 @@ export async function publishJetStreamReportsToBlob(
       },
       publishedAt: new Date().toISOString(),
     };
-    await put(
-      jetStreamBlobDailyPathForRun(
-        entry.createdAt.slice(0, 10),
-        entry.runId,
-        prefix,
-      ),
-      JSON.stringify(published, null, 2),
-      {
-        access,
-        allowOverwrite: true,
-        cacheControlMaxAge: 900,
-        contentType: "application/json",
-      },
+    const pathname = jetStreamBlobDailyPathForRun(
+      entry.createdAt.slice(0, 10),
+      entry.runId,
+      prefix,
     );
+    const pointer = await put(pathname, JSON.stringify(published, null, 2), {
+      access,
+      allowOverwrite: true,
+      cacheControlMaxAge: 900,
+      contentType: "application/json",
+    });
+    pointers.push({ pathname, etag: pointer.etag, run: published });
     publishedRuns.push(published);
   }
+  await publishBlobHistorySnapshots(
+    prefix,
+    access,
+    isJetStreamBlobRun,
+    pointers,
+  );
   return publishedRuns.sort(byCreatedAtThenRunNumber);
 }
