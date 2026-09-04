@@ -250,11 +250,9 @@ begin
     and TGocciaProfiler.Instance.Enabled
     and (pmFunctions in TGocciaProfiler.Instance.Mode);
   FVM.GlobalBackedTopLevel := FGlobalBackedTopLevel;
-  GProfilingAllocations := FVM.ProfilingFunctions;
   try
     Result := FVM.ExecuteModule(TGocciaBytecodeModule(AModule));
   finally
-    GProfilingAllocations := False;
     GC.Enabled := WasEnabled;
   end;
 end;
