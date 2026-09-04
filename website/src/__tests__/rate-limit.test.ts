@@ -121,7 +121,7 @@ describe("rateLimit — token-bucket window", () => {
       expect(scan).toHaveBeenCalledTimes(1);
 
       now = initial.resetAt;
-      rateLimit(uniqueKey("after-expiry"));
+      rateLimit(`${prefix}:after-expiry`);
       expect(scan).toHaveBeenCalledTimes(2);
       expect(store.has(`${prefix}:0`)).toBe(false);
       expect(store.has(`${prefix}:4999`)).toBe(false);
