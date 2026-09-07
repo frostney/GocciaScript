@@ -47,7 +47,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -55,8 +54,6 @@ uses
   Goccia.Values.ToPrimitive;
 
 threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
   // ES2026 §20.4.2.2: the GlobalSymbolRegistry is one per agent (thread). Every
   // realm in the thread — the main realm, ShadowRealm child realms, and
   // $262.createRealm realms — shares it, so Symbol.for(key) yields the same
@@ -65,11 +62,6 @@ threadvar
   // realm can read it after teardown regardless of engine creation/teardown order.
   GSharedSymbolRegistry: TOrderedStringMap<TGocciaSymbolValue>;
   GSharedSymbolRegistryRefs: Integer;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 function SharedSymbolRegistry: TOrderedStringMap<TGocciaSymbolValue>;
 begin
@@ -105,11 +97,10 @@ begin
   try
     AddMethod(SymbolFor, 1, gmkStaticMethod, [gmfNotConstructable]);
     AddMethod(SymbolKeyFor, 1, gmkStaticMethod, [gmfNotConstructable]);
-    FStaticMembers := ToDefinitions;
+    RegisterMemberDefinitions(FSymbolFunction, ToDefinitions);
   finally
     Free;
   end;
-  RegisterMemberDefinitions(FSymbolFunction, FStaticMembers);
 
   // Register well-known symbol constants
   FSymbolFunction.RegisterConstant(SYMBOL_MATCH, TGocciaSymbolValue.WellKnownMatch);
@@ -263,8 +254,5 @@ begin
   { Step 4: Return undefined }
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

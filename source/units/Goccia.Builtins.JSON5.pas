@@ -77,7 +77,6 @@ uses
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Values.Error,
@@ -90,14 +89,6 @@ uses
   Goccia.Values.ToObject,
   Goccia.Values.WrapperPrimitives,
   Goccia.VM.Exception;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 function CopyByCodePoints(const AText: string;
   const AMaxChars: Integer): string;
@@ -143,12 +134,10 @@ begin
       TGocciaSymbolValue.WellKnownToStringTag,
       TGocciaStringLiteralValue.Create('JSON5'),
       [pfConfigurable]);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
   if ADefineGlobalBinding then
     AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 end;
@@ -764,8 +753,5 @@ begin
     end;
   end;
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

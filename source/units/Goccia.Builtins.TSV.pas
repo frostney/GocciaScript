@@ -43,21 +43,12 @@ implementation
 uses
   Goccia.Builtins.DelimitedText,
   Goccia.GarbageCollector,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 constructor TGocciaTSVBuiltin.Create(const AName: string;
   const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback;
@@ -77,12 +68,10 @@ begin
       TGocciaSymbolValue.WellKnownToStringTag,
       TGocciaStringLiteralValue.Create('TSV'),
       [pfConfigurable]);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
   if ADefineGlobalBinding then
     AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 end;
@@ -329,8 +318,5 @@ begin
     Result := TGocciaStringLiteralValue.Create(
       TGocciaTSVStringifier.Stringify(Data, Headers));
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

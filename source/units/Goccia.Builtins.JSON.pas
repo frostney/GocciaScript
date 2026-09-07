@@ -63,7 +63,6 @@ uses
   Goccia.Error.Suggestions,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Values.BigIntValue,
@@ -78,14 +77,6 @@ uses
   Goccia.Values.ToObject,
   Goccia.Values.WrapperPrimitives,
   Goccia.VM.Exception;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 constructor TGocciaJSONBuiltin.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
@@ -107,11 +98,10 @@ begin
       TGocciaSymbolValue.WellKnownToStringTag,
       TGocciaStringLiteralValue.Create('JSON'),
       [pfConfigurable]);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 end;
@@ -811,8 +801,5 @@ begin
     end;
   end;
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

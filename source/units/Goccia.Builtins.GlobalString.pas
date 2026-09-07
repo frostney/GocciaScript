@@ -35,20 +35,11 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 constructor TGocciaGlobalString.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
@@ -62,11 +53,10 @@ begin
     Members.AddMethod(StringFromCharCode, 1, gmkStaticMethod);
     Members.AddMethod(StringFromCodePoint, 1, gmkStaticMethod);
     Members.AddMethod(StringRaw, 1, gmkStaticMethod);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
   FromCharCodeValue := FBuiltinObject.GetProperty(PROP_FROM_CHAR_CODE);
   if FromCharCodeValue is TGocciaNativeFunctionValue then
     TGocciaNativeFunctionValue(FromCharCodeValue).IntrinsicKind :=
@@ -239,8 +229,5 @@ begin
 
   Result := TGocciaStringLiteralValue.Create(SB.ToString);
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

@@ -42,7 +42,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.ObjectModel.Types,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
@@ -51,17 +50,10 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.Values.ToPrimitive;
 
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
-
 constructor TGocciaGlobalBigInt.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
   PrototypeInitializer: TGocciaBigIntValue;
+  StaticMembers: TArray<TGocciaMemberDefinition>;
   Proto: TGocciaObjectValue;
 begin
   inherited Create(AName, AScope, AThrowError);
@@ -79,13 +71,13 @@ begin
   try
     AddMethod(BigIntAsIntN, 2, gmkStaticMethod, [gmfNotConstructable]);
     AddMethod(BigIntAsUintN, 2, gmkStaticMethod, [gmfNotConstructable]);
-    FStaticMembers := ToDefinitions;
+    StaticMembers := ToDefinitions;
   finally
     Free;
   end;
-  FStaticMembers[0].ExposedName := 'asIntN';
-  FStaticMembers[1].ExposedName := 'asUintN';
-  RegisterMemberDefinitions(FBigIntFunction, FStaticMembers);
+  StaticMembers[0].ExposedName := 'asIntN';
+  StaticMembers[1].ExposedName := 'asUintN';
+  RegisterMemberDefinitions(FBigIntFunction, StaticMembers);
 
   // Set up BigInt.prototype
   Proto := TGocciaObjectValue(TGocciaBigIntValue.SharedPrototype);
@@ -283,8 +275,5 @@ begin
 
   Result := TGocciaBigIntValue.Create(BigIntVal.Value.AsUintN(Bits));
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

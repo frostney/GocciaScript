@@ -82,7 +82,6 @@ uses
   Goccia.GarbageCollector,
   Goccia.NumberConversion,
   Goccia.NumberExponentiation,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
@@ -113,9 +112,6 @@ const
   MATH_PI = 3.141592653589793;
   MATH_SQRT1_2 = 0.7071067811865476;
   MATH_SQRT2 = 1.4142135623730951;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 function IsFiniteIntegral(const AValue: Double): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
@@ -388,11 +384,6 @@ begin
     Result := -Result;
 end;
 
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
-
 { TGocciaMath }
 
 constructor TGocciaMath.Create(const AName: string; const AScope: TGocciaScope;
@@ -458,11 +449,10 @@ begin
       TGocciaSymbolValue.WellKnownToStringTag,
       TGocciaStringLiteralValue.Create('Math'),
       [pfConfigurable]);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 end;
@@ -1472,8 +1462,5 @@ begin
     Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
   Result := TGocciaNumberLiteralValue.Create(Sum);
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

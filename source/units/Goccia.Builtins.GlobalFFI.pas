@@ -44,21 +44,12 @@ uses
   Goccia.Error.Suggestions,
   Goccia.FFI.DynamicLibrary,
   Goccia.FFI.Types,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FFILibrary,
   Goccia.Values.FFIPointer,
   Goccia.Values.FFIType,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 const
   {$IFDEF DARWIN}
@@ -93,11 +84,10 @@ begin
     Members.AddNamedMethod('metadata', FFIMetadata, 1, gmkStaticMethod);
     Members.AddAccessor(PROP_NULLPTR, FFINullptrGetter, nil, [pfConfigurable], gmkStaticGetter);
     Members.AddAccessor(PROP_SUFFIX, FFISuffixGetter, nil, [pfConfigurable], gmkStaticGetter);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtConst, True);
 end;
@@ -217,8 +207,5 @@ function TGocciaGlobalFFI.FFISuffixGetter(const AArgs: TGocciaArgumentsCollectio
 begin
   Result := TGocciaStringLiteralValue.Create(SHARED_LIBRARY_SUFFIX);
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

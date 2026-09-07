@@ -60,7 +60,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
@@ -77,14 +76,6 @@ uses
   Goccia.Values.ToObject,
   Goccia.Values.ToPrimitive,
   Goccia.Values.TypedArrayValue;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 type
   TPendingDefineProperty = record
@@ -228,11 +219,10 @@ begin
     Members.AddMethod(ObjectIsExtensible, 1, gmkStaticMethod);
     Members.AddMethod(ObjectSetPrototypeOf, 2, gmkStaticMethod);
     Members.AddMethod(ObjectGroupBy, 2, gmkStaticMethod);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
   FBuiltinObject.DefineProperty(PROP_LENGTH,
     TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(1),
       [pfConfigurable]));
@@ -1493,8 +1483,5 @@ begin
     RemoveTempRootIfNeeded(ItemsRoot);
   end;
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.
