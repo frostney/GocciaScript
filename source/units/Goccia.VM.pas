@@ -2127,105 +2127,6 @@ begin
   ATarget.CreateDataPropertyOrThrow(ASymbol, AValue);
 end;
 
-function VMTryParseArrayPropertyIndex(const AKey: string;
-  out AIndex: Int64): Boolean;
-var
-  Digit: Int64;
-  I: Integer;
-begin
-  AIndex := 0;
-  Result := False;
-  if AKey = '' then
-    Exit;
-  if (AKey[1] = '0') and (Length(AKey) > 1) then
-    Exit;
-
-  for I := 1 to Length(AKey) do
-  begin
-    if (AKey[I] < '0') or (AKey[I] > '9') then
-      Exit;
-    Digit := Ord(AKey[I]) - Ord('0');
-    if AIndex > (MAX_SAFE_INTEGER - Digit) div 10 then
-      Exit;
-    AIndex := AIndex * 10 + Digit;
-  end;
-
-  Result := AIndex < MAX_ARRAY_LENGTH;
-end;
-
-function VMOrderOwnPropertyStringKeys(const AKeys: TArray<string>):
-  TArray<string>;
-var
-  ParsedIndex, TempIndex: Int64;
-  NumericKeys: TArray<Int64>;
-  OtherKeys: TArray<string>;
-  I, J, K, Count: Integer;
-begin
-  SetLength(NumericKeys, Length(AKeys));
-  SetLength(OtherKeys, Length(AKeys));
-  Count := 0;
-  J := 0;
-
-  for I := 0 to High(AKeys) do
-  begin
-    if VMTryParseArrayPropertyIndex(AKeys[I], ParsedIndex) then
-    begin
-      NumericKeys[Count] := ParsedIndex;
-      Inc(Count);
-    end
-    else
-    begin
-      OtherKeys[J] := AKeys[I];
-      Inc(J);
-    end;
-  end;
-
-  for I := 1 to Count - 1 do
-  begin
-    TempIndex := NumericKeys[I];
-    K := I - 1;
-    while (K >= 0) and (NumericKeys[K] > TempIndex) do
-    begin
-      NumericKeys[K + 1] := NumericKeys[K];
-      Dec(K);
-    end;
-    NumericKeys[K + 1] := TempIndex;
-  end;
-
-  SetLength(Result, Count + J);
-  for I := 0 to Count - 1 do
-    Result[I] := IntToStr(NumericKeys[I]);
-  for I := 0 to J - 1 do
-    Result[Count + I] := OtherKeys[I];
-end;
-
-function VMOwnPropertyKeysAsValues(
-  const ASource: TGocciaObjectValue): TArray<TGocciaValue>;
-var
-  Count: Integer;
-  I: Integer;
-  StringKeys: TArray<string>;
-  SymbolKeys: TArray<TGocciaSymbolValue>;
-begin
-  if ASource is TGocciaProxyValue then
-    Exit(TGocciaProxyValue(ASource).GetOwnPropertyKeyValues);
-
-  StringKeys := VMOrderOwnPropertyStringKeys(ASource.GetAllPropertyNames);
-  SymbolKeys := ASource.GetOwnSymbols;
-  SetLength(Result, Length(StringKeys) + Length(SymbolKeys));
-  Count := 0;
-  for I := 0 to High(StringKeys) do
-  begin
-    Result[Count] := TGocciaStringLiteralValue.Create(StringKeys[I]);
-    Inc(Count);
-  end;
-  for I := 0 to High(SymbolKeys) do
-  begin
-    Result[Count] := SymbolKeys[I];
-    Inc(Count);
-  end;
-end;
-
 function VMCopyDataPropertyKeyExcluded(const AKey: TGocciaValue;
   const AExclusionKeys: TGocciaArrayValue): Boolean;
 var
@@ -2274,7 +2175,7 @@ begin
   try
     Roots.Add(ATarget);
     Roots.Add(SourceObject);
-    Keys := VMOwnPropertyKeysAsValues(SourceObject);
+    Keys := SourceObject.OwnPropertyKeyValues;
     for Key in Keys do
       Roots.Add(Key);
     for Key in Keys do
@@ -9594,8 +9495,7 @@ begin
     if Assigned(GC) then
       GC.AddTempRoot(Obj);
     // Dedup keys across the prototype chain via O(1) hash-set membership
-    // (native case-sensitive string equality); VMOrderOwnPropertyStringKeys
-    // (above) owns per-level enumeration order.
+    // (native case-sensitive string equality). Each object owns its key order.
     Visited := TOrderedStringMap<Boolean>.Create;
     try
       Current := Obj;
@@ -9607,7 +9507,7 @@ begin
           ThrowTypeError(Format(SErrorProtoChainDepthExceeded, ['for...in']),
             SSuggestPrototypeChainTooDeep);
 
-        Keys := VMOrderOwnPropertyStringKeys(Current.GetAllPropertyNames);
+        Keys := Current.GetOwnPropertyKeys;
         for Key in Keys do
         begin
           if Visited.ContainsKey(Key) then

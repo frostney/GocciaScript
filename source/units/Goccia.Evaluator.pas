@@ -302,11 +302,6 @@ const
   FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
 
 type
-  TForInArrayIndexKey = record
-    Key: string;
-    Index: Int64;
-  end;
-
   TGocciaTemplateObjectArrayValue = class(TGocciaArrayValue)
   public
     function GetOwnPropertyDescriptor(
@@ -405,88 +400,6 @@ begin
   Result := inherited TryDefineProperty(AName, ADescriptor);
 end;
 
-function TryParseForInArrayIndex(const AKey: string; out AIndex: Int64): Boolean;
-var
-  I, J, K: Integer;
-  Digit: Int64;
-  MaxIndex: Int64;
-begin
-  AIndex := 0;
-  Result := False;
-  if AKey = '' then
-    Exit;
-  if (AKey[1] = '0') and (Length(AKey) > 1) then
-    Exit;
-
-  MaxIndex := MAX_ARRAY_LENGTH - 1;
-  for I := 1 to Length(AKey) do
-  begin
-    if (AKey[I] < '0') or (AKey[I] > '9') then
-      Exit;
-    Digit := Ord(AKey[I]) - Ord('0');
-    if AIndex > (MaxIndex - Digit) div 10 then
-      Exit;
-    AIndex := AIndex * 10 + Digit;
-  end;
-
-  Result := True;
-end;
-
-function OrderForInPropertyKeys(const AKeys: TArray<string>): TArray<string>;
-var
-  IndexKeys: TArray<TForInArrayIndexKey>;
-  OtherKeys: TArray<string>;
-  IndexCount, OtherCount: Integer;
-  I, J, ResultIndex: Integer;
-  Index: Int64;
-  Current: TForInArrayIndexKey;
-begin
-  SetLength(IndexKeys, Length(AKeys));
-  SetLength(OtherKeys, Length(AKeys));
-  IndexCount := 0;
-  OtherCount := 0;
-
-  for I := 0 to High(AKeys) do
-  begin
-    if TryParseForInArrayIndex(AKeys[I], Index) then
-    begin
-      IndexKeys[IndexCount].Key := AKeys[I];
-      IndexKeys[IndexCount].Index := Index;
-      Inc(IndexCount);
-    end
-    else
-    begin
-      OtherKeys[OtherCount] := AKeys[I];
-      Inc(OtherCount);
-    end;
-  end;
-
-  for I := 1 to IndexCount - 1 do
-  begin
-    Current := IndexKeys[I];
-    J := I - 1;
-    while (J >= 0) and (IndexKeys[J].Index > Current.Index) do
-    begin
-      IndexKeys[J + 1] := IndexKeys[J];
-      Dec(J);
-    end;
-    IndexKeys[J + 1] := Current;
-  end;
-
-  SetLength(Result, IndexCount + OtherCount);
-  ResultIndex := 0;
-  for I := 0 to IndexCount - 1 do
-  begin
-    Result[ResultIndex] := IndexKeys[I].Key;
-    Inc(ResultIndex);
-  end;
-  for I := 0 to OtherCount - 1 do
-  begin
-    Result[ResultIndex] := OtherKeys[I];
-    Inc(ResultIndex);
-  end;
-end;
-
 procedure EnsureObjectPrototypeInitialized; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if TGocciaObjectValue.SharedObjectPrototype = nil then
@@ -506,104 +419,6 @@ begin
 
   Result := Assigned(AExcludedStringKeys) and
     (AExcludedStringKeys.IndexOf(AKey.ToStringLiteral.Value) >= 0);
-end;
-
-function TryParseArrayPropertyIndex(const AKey: string;
-  out AIndex: Int64): Boolean;
-var
-  Digit: Int64;
-  I: Integer;
-begin
-  AIndex := 0;
-  Result := False;
-  if AKey = '' then
-    Exit;
-  if (AKey[1] = '0') and (Length(AKey) > 1) then
-    Exit;
-
-  for I := 1 to Length(AKey) do
-  begin
-    if (AKey[I] < '0') or (AKey[I] > '9') then
-      Exit;
-    Digit := Ord(AKey[I]) - Ord('0');
-    if AIndex > (MAX_SAFE_INTEGER - Digit) div 10 then
-      Exit;
-    AIndex := AIndex * 10 + Digit;
-  end;
-
-  Result := AIndex < MAX_ARRAY_LENGTH;
-end;
-
-function OrderOwnPropertyStringKeys(const AKeys: TArray<string>):
-  TArray<string>;
-var
-  ParsedIndex, TempIndex: Int64;
-  NumericKeys: TArray<Int64>;
-  OtherKeys: TArray<string>;
-  I, J, K, Count: Integer;
-begin
-  SetLength(NumericKeys, Length(AKeys));
-  SetLength(OtherKeys, Length(AKeys));
-  Count := 0;
-  J := 0;
-
-  for I := 0 to High(AKeys) do
-  begin
-    if TryParseArrayPropertyIndex(AKeys[I], ParsedIndex) then
-    begin
-      NumericKeys[Count] := ParsedIndex;
-      Inc(Count);
-    end
-    else
-    begin
-      OtherKeys[J] := AKeys[I];
-      Inc(J);
-    end;
-  end;
-
-  for I := 1 to Count - 1 do
-  begin
-    TempIndex := NumericKeys[I];
-    K := I - 1;
-    while (K >= 0) and (NumericKeys[K] > TempIndex) do
-    begin
-      NumericKeys[K + 1] := NumericKeys[K];
-      Dec(K);
-    end;
-    NumericKeys[K + 1] := TempIndex;
-  end;
-
-  SetLength(Result, Count + J);
-  for I := 0 to Count - 1 do
-    Result[I] := IntToStr(NumericKeys[I]);
-  for I := 0 to J - 1 do
-    Result[Count + I] := OtherKeys[I];
-end;
-
-function OwnPropertyKeysAsValues(const ASource: TGocciaObjectValue):
-  TArray<TGocciaValue>;
-var
-  I, Count: Integer;
-  StringKeys: TArray<string>;
-  SymbolKeys: TArray<TGocciaSymbolValue>;
-begin
-  if ASource is TGocciaProxyValue then
-    Exit(TGocciaProxyValue(ASource).GetOwnPropertyKeyValues);
-
-  StringKeys := OrderOwnPropertyStringKeys(ASource.GetAllPropertyNames);
-  SymbolKeys := ASource.GetOwnSymbols;
-  SetLength(Result, Length(StringKeys) + Length(SymbolKeys));
-  Count := 0;
-  for I := 0 to High(StringKeys) do
-  begin
-    Result[Count] := TGocciaStringLiteralValue.Create(StringKeys[I]);
-    Inc(Count);
-  end;
-  for I := 0 to High(SymbolKeys) do
-  begin
-    Result[Count] := SymbolKeys[I];
-    Inc(Count);
-  end;
 end;
 
 // ES2026 §7.3.25 CopyDataProperties(target, source, excludedItems).
@@ -627,7 +442,7 @@ begin
 
   SourceObject := ToObject(ASource);
 
-  { The key list is the exposure this loop is built around. OwnPropertyKeysAsValues
+  { The key list is the exposure this loop is built around. OwnPropertyKeyValues
     hands back freshly created string values (and the source's symbols) in a plain
     Pascal array, which is not a root, and the very next thing the loop does is
     call a guest getter — arbitrary collecting script code. Without the frame the
@@ -647,7 +462,7 @@ begin
   try
     Roots.Add(ATarget);
     Roots.Add(SourceObject);
-    Keys := OwnPropertyKeysAsValues(SourceObject);
+    Keys := SourceObject.OwnPropertyKeyValues;
     for Key in Keys do
       Roots.Add(Key);
     for Key in Keys do
@@ -5846,8 +5661,7 @@ begin
     if Assigned(GC) then
       GC.AddTempRoot(Obj);
     // Dedup keys across the prototype chain via O(1) hash-set membership
-    // (native case-sensitive string equality); OrderForInPropertyKeys
-    // (above) owns per-level enumeration order.
+    // (native case-sensitive string equality). Each object owns its key order.
     Visited := TOrderedStringMap<Boolean>.Create;
     try
       Current := Obj;
@@ -5859,7 +5673,7 @@ begin
           ThrowTypeError(Format(SErrorProtoChainDepthExceeded, ['for...in']),
             SSuggestPrototypeChainTooDeep);
 
-        Keys := OrderForInPropertyKeys(Current.GetAllPropertyNames);
+        Keys := Current.GetOwnPropertyKeys;
         for Key in Keys do
         begin
           if Visited.ContainsKey(Key) then
