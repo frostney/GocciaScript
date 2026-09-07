@@ -24,12 +24,6 @@ type
     procedure ReadOptions(const AArgs: TGocciaArgumentsCollection;
       const AOptionsIndex: Integer; out ADelimiter: Char;
       out AHeaders: Boolean; out ASkipEmptyLines: Boolean);
-    function GetReviver(const AArgs: TGocciaArgumentsCollection;
-      const AReviverIndex: Integer): TGocciaValue;
-    function GetReplacer(const AArgs: TGocciaArgumentsCollection;
-      const AReplacerIndex: Integer): TGocciaValue;
-    function BuildChunkResultObject(
-      const AChunkResult: TGocciaCSVChunkParseResult): TGocciaValue;
   published
     function CSVParse(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -47,8 +41,7 @@ type
 implementation
 
 uses
-  Goccia.Constants.ErrorNames,
-  Goccia.Constants.PropertyNames,
+  Goccia.Builtins.DelimitedText,
   Goccia.GarbageCollector,
   Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
@@ -136,82 +129,13 @@ begin
     ASkipEmptyLines := TGocciaBooleanLiteralValue(Prop).Value;
 end;
 
-function TGocciaCSVBuiltin.GetReviver(
-  const AArgs: TGocciaArgumentsCollection;
-  const AReviverIndex: Integer): TGocciaValue;
-begin
-  Result := nil;
-  if AArgs.Length > AReviverIndex then
-  begin
-    Result := AArgs.GetElement(AReviverIndex);
-    if not Result.IsCallable then
-      Result := nil;
-  end;
-end;
-
-function TGocciaCSVBuiltin.GetReplacer(
-  const AArgs: TGocciaArgumentsCollection;
-  const AReplacerIndex: Integer): TGocciaValue;
-begin
-  Result := nil;
-  if AArgs.Length > AReplacerIndex then
-  begin
-    Result := AArgs.GetElement(AReplacerIndex);
-    if not Result.IsCallable then
-      Result := nil;
-  end;
-end;
-
-function TGocciaCSVBuiltin.BuildChunkResultObject(
-  const AChunkResult: TGocciaCSVChunkParseResult): TGocciaValue;
-var
-  ErrorValue: TGocciaValue;
-  ResultObject: TGocciaObjectValue;
-  ValuesRoot: TGocciaTempRoot;
-  ResultRoot: TGocciaTempRoot;
-  ErrorRoot: TGocciaTempRoot;
-begin
-  { CreateErrorObject allocates and property storage is charged on
-    assignment — both GC safe points — so the parsed values array, the result
-    object, and the error object are all rooted until the assignments below
-    store them. }
-  InitializeTempRoot(ValuesRoot);
-  InitializeTempRoot(ResultRoot);
-  InitializeTempRoot(ErrorRoot);
-  AddTempRootIfNeeded(ValuesRoot, AChunkResult.Values);
-  try
-    ResultObject := TGocciaObjectValue.Create;
-    AddTempRootIfNeeded(ResultRoot, ResultObject);
-    if AChunkResult.ErrorMessage = '' then
-      ErrorValue := TGocciaNullLiteralValue.NullValue
-    else
-    begin
-      ErrorValue := CreateErrorObject(SYNTAX_ERROR_NAME,
-        AChunkResult.ErrorMessage, 1);
-      AddTempRootIfNeeded(ErrorRoot, ErrorValue);
-    end;
-
-    ResultObject.AssignProperty(PROP_VALUES, AChunkResult.Values);
-    ResultObject.AssignProperty(PROP_READ,
-      TGocciaNumberLiteralValue.Create(AChunkResult.Read));
-    ResultObject.AssignProperty(PROP_DONE,
-      TGocciaBooleanLiteralValue.Create(AChunkResult.Done));
-    ResultObject.AssignProperty(PROP_ERROR, ErrorValue);
-    Result := ResultObject;
-  finally
-    RemoveTempRootIfNeeded(ErrorRoot);
-    RemoveTempRootIfNeeded(ResultRoot);
-    RemoveTempRootIfNeeded(ValuesRoot);
-  end;
-end;
-
 function TGocciaCSVBuiltin.CSVParse(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Args: TGocciaArgumentsCollection;
   Context: TGocciaObjectValue;
   Delimiter: Char;
+  FieldValue: string;
   FieldInfoRows: TArray<TArray<TGocciaCSVFieldInfo>>;
   Headers: Boolean;
   HeaderRow: TArray<TGocciaCSVFieldInfo>;
@@ -235,7 +159,7 @@ begin
 
   Text := AArgs.GetElement(0).ToStringLiteral.Value;
   ReadOptions(AArgs, 1, Delimiter, Headers, SkipEmptyLines);
-  Reviver := GetReviver(AArgs, 2);
+  Reviver := GetDelimitedTextCallback(AArgs, 2);
 
   { The reviver is arbitrary JS and every field string is charged against the
     memory ceiling, so both are GC safe points; the result array, the
@@ -280,21 +204,12 @@ begin
             Context.AssignProperty('column',
               TGocciaNumberLiteralValue.Create(J));
 
-            Args := TGocciaArgumentsCollection.CreateWithCapacity(3);
-            try
-              Args.Add(TGocciaStringLiteralValue.Create(Key));
-              if J < Length(FieldInfoRows[I]) then
-                Args.Add(
-                  TGocciaStringLiteralValue.Create(FieldInfoRows[I][J].Value))
-              else
-                Args.Add(TGocciaStringLiteralValue.Create(''));
-              Args.Add(Context);
-
-              ReviverResult := InvokeCallable(Reviver, Args,
-                TGocciaUndefinedLiteralValue.UndefinedValue);
-            finally
-              Args.Free;
-            end;
+            if J < Length(FieldInfoRows[I]) then
+              FieldValue := FieldInfoRows[I][J].Value
+            else
+              FieldValue := '';
+            ReviverResult := InvokeDelimitedTextReviver(Reviver,
+              TGocciaStringLiteralValue.Create(Key), FieldValue, Context);
             Obj.AssignProperty(Key, ReviverResult);
           end;
           ParsedResult.Elements.Add(Obj);
@@ -317,18 +232,9 @@ begin
             Context.AssignProperty('column',
               TGocciaNumberLiteralValue.Create(J));
 
-            Args := TGocciaArgumentsCollection.CreateWithCapacity(3);
-            try
-              Args.Add(TGocciaNumberLiteralValue.Create(J));
-              Args.Add(
-                TGocciaStringLiteralValue.Create(FieldInfoRows[I][J].Value));
-              Args.Add(Context);
-
-              ReviverResult := InvokeCallable(Reviver, Args,
-                TGocciaUndefinedLiteralValue.UndefinedValue);
-            finally
-              Args.Free;
-            end;
+            ReviverResult := InvokeDelimitedTextReviver(Reviver,
+              TGocciaNumberLiteralValue.Create(J),
+              FieldInfoRows[I][J].Value, Context);
             Row.Elements.Add(ReviverResult);
           end;
           ParsedResult.Elements.Add(Row);
@@ -384,7 +290,8 @@ begin
   try
     ChunkResult := FParser.ParseChunk(Text, Delimiter, Headers,
       SkipEmptyLines, StartOffset, EndOffset);
-    Result := BuildChunkResultObject(ChunkResult);
+    Result := BuildDelimitedTextChunkResult(ChunkResult.Values,
+      ChunkResult.Read, ChunkResult.Done, ChunkResult.ErrorMessage);
   except
     on E: EGocciaCSVParseError do
       ThrowSyntaxError(E.Message);
@@ -395,108 +302,31 @@ function TGocciaCSVBuiltin.CSVStringify(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Args: TGocciaArgumentsCollection;
-  Arr: TGocciaArrayValue;
   Data: TGocciaValue;
   Delimiter: Char;
   Headers: Boolean;
-  I, J: Integer;
-  Item: TGocciaValue;
-  Key: string;
-  Keys: TArray<string>;
-  Obj: TGocciaObjectValue;
   Replacer: TGocciaValue;
-  ReplacerResult: TGocciaValue;
   ReplacedArr: TGocciaArrayValue;
-  ReplacedObj: TGocciaObjectValue;
-  ReplacedRow: TGocciaArrayValue;
-  Row: TGocciaArrayValue;
   SkipEmptyLines: Boolean;
   ReplacedArrRoot: TGocciaTempRoot;
-  ReplacedRowRoot: TGocciaTempRoot;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'CSV.stringify',
     ThrowError);
 
   Data := AArgs.GetElement(0);
   ReadOptions(AArgs, 1, Delimiter, Headers, SkipEmptyLines);
-  Replacer := GetReplacer(AArgs, 2);
+  Replacer := GetDelimitedTextCallback(AArgs, 2);
 
   if Assigned(Replacer) and (Data is TGocciaArrayValue) then
   begin
-    { The replacer is arbitrary JS (a GC safe point); the replaced rows exist
-      only in this frame until stringified, so they need temp roots. }
     InitializeTempRoot(ReplacedArrRoot);
-    InitializeTempRoot(ReplacedRowRoot);
     try
-    Arr := TGocciaArrayValue(Data);
-    ReplacedArr := TGocciaArrayValue.Create;
-    AddTempRootIfNeeded(ReplacedArrRoot, ReplacedArr);
-
-    if (Arr.Elements.Count > 0) and
-       (Arr.Elements[0] is TGocciaObjectValue) and
-       not (Arr.Elements[0] is TGocciaArrayValue) then
-    begin
-      Keys := TGocciaObjectValue(Arr.Elements[0]).GetOwnPropertyKeys;
-      for I := 0 to Arr.Elements.Count - 1 do
-      begin
-        if not (Arr.Elements[I] is TGocciaObjectValue) then
-          Continue;
-        Obj := TGocciaObjectValue(Arr.Elements[I]);
-        ReplacedObj := TGocciaObjectValue.Create;
-        AddTempRootIfNeeded(ReplacedRowRoot, ReplacedObj);
-        for J := 0 to Length(Keys) - 1 do
-        begin
-          Key := Keys[J];
-          Item := Obj.GetProperty(Key);
-          if not Assigned(Item) then
-            Item := TGocciaUndefinedLiteralValue.UndefinedValue;
-
-          Args := TGocciaArgumentsCollection.CreateWithCapacity(2);
-          try
-            Args.Add(TGocciaStringLiteralValue.Create(Key));
-            Args.Add(Item);
-            ReplacerResult := InvokeCallable(Replacer, Args,
-              TGocciaUndefinedLiteralValue.UndefinedValue);
-          finally
-            Args.Free;
-          end;
-          ReplacedObj.AssignProperty(Key, ReplacerResult);
-        end;
-        ReplacedArr.Elements.Add(ReplacedObj);
-      end;
-    end
-    else
-    begin
-      for I := 0 to Arr.Elements.Count - 1 do
-      begin
-        if Arr.Elements[I] is TGocciaArrayValue then
-        begin
-          Row := TGocciaArrayValue(Arr.Elements[I]);
-          ReplacedRow := TGocciaArrayValue.Create;
-          AddTempRootIfNeeded(ReplacedRowRoot, ReplacedRow);
-          for J := 0 to Row.Elements.Count - 1 do
-          begin
-            Args := TGocciaArgumentsCollection.CreateWithCapacity(2);
-            try
-              Args.Add(TGocciaNumberLiteralValue.Create(J));
-              Args.Add(Row.Elements[J]);
-              ReplacerResult := InvokeCallable(Replacer, Args,
-                TGocciaUndefinedLiteralValue.UndefinedValue);
-            finally
-              Args.Free;
-            end;
-            ReplacedRow.Elements.Add(ReplacerResult);
-          end;
-          ReplacedArr.Elements.Add(ReplacedRow);
-        end;
-      end;
-    end;
-
-    Result := TGocciaStringLiteralValue.Create(
-      TGocciaCSVStringifier.Stringify(ReplacedArr, Delimiter, Headers));
+      ReplacedArr := ApplyDelimitedTextReplacer(TGocciaArrayValue(Data),
+        Replacer);
+      AddTempRootIfNeeded(ReplacedArrRoot, ReplacedArr);
+      Result := TGocciaStringLiteralValue.Create(
+        TGocciaCSVStringifier.Stringify(ReplacedArr, Delimiter, Headers));
     finally
-      RemoveTempRootIfNeeded(ReplacedRowRoot);
       RemoveTempRootIfNeeded(ReplacedArrRoot);
     end;
   end

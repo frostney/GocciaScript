@@ -414,3 +414,27 @@ describe("CSV metadata", () => {
     expect(CSV[Symbol.toStringTag]).toBe("Module");
   });
 });
+
+describe.runIf(typeof Goccia !== "undefined")("CSV.parse GC roots", () => {
+  test("keeps revived rows and contexts through later callback collections", () => {
+    const rows = CSV.parse("a,b\nx,y\nz", {}, (key, value, context) => {
+      Goccia.gc();
+      return { key, value, context };
+    });
+
+    expect(rows[0].b).toEqual({
+      key: "b",
+      value: "y",
+      context: { row: 0, column: 1, quoted: false },
+    });
+    expect(rows[1].b.value).toBe("");
+    const arrays = CSV.parse("x,y\nz", { headers: false }, (key, value) => {
+      Goccia.gc();
+      return { key, value };
+    });
+    expect(arrays).toEqual([
+      [{ key: 0, value: "x" }, { key: 1, value: "y" }],
+      [{ key: 0, value: "z" }],
+    ]);
+  });
+});

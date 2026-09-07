@@ -145,3 +145,21 @@ describe("TSV.stringify error handling", () => {
     expect(() => TSV.stringify()).toThrow();
   });
 });
+
+describe.runIf(typeof Goccia !== "undefined")("TSV.stringify GC roots", () => {
+  test("keeps converted object and array rows through later callbacks", () => {
+    const calls = [];
+    const replacer = (key, value) => {
+      Goccia.gc();
+      calls.push(key);
+      return value + "!";
+    };
+    expect(TSV.stringify([{ a: "x", b: "y" }, { a: "z", b: "w" }], {}, replacer))
+      .toBe("a\tb\nx!\ty!\nz!\tw!");
+    expect(calls).toEqual(["a", "b", "a", "b"]);
+    calls.length = 0;
+    expect(TSV.stringify([["x", "y"], ["z", "w"]], { headers: false }, replacer))
+      .toBe("x!\ty!\nz!\tw!");
+    expect(calls).toEqual([0, 1, 0, 1]);
+  });
+});
