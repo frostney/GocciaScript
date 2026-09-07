@@ -73,15 +73,6 @@ function NormalizeNewlinesToLF(const AText: string): string;
 function StringListToSourceText(const ALines: TStrings): string;
 function StringListToLFText(const ALines: TStrings): string;
 
-{ Release the per-thread is-ASCII memo. FPC does not auto-finalize managed
-  threadvars at thread exit. This unit's own finalization clears the main
-  thread's slots on process shutdown; because the unit stays free of engine
-  dependencies, that path works in every binary that links it (including the
-  shared JSON/numeric/config tools that never link the engine). Worker threads
-  are covered separately: the engine's Goccia.RegExp.VM registers this proc with
-  Goccia.ThreadCleanupRegistry, whose drain releases each worker's slots on exit. }
-procedure ClearAsciiMemo;
-
 implementation
 
 uses
@@ -384,10 +375,6 @@ function UTF16CodeUnitPairToString(const AFirst, ASecond: Cardinal): string;
 begin
   Result := Char(AFirst and $FFFF) + Char(ASecond and $FFFF);
 end;
-
-threadvar
-  GAsciiMemoStr0: string;
-  GAsciiMemoStr1: string;
 
 function UTF16StringsEqual(const ALeft, ARight: string): Boolean;
 begin
@@ -867,25 +854,5 @@ begin
 
   Result := Buffer.ToString;
 end;
-
-// Release the is-ASCII memo strings; FPC does not finalize managed threadvars at
-// thread exit. Run from this unit's own finalization on the main thread, and —
-// for worker threads — via Goccia.ThreadCleanupRegistry, where Goccia.RegExp.VM
-// registers it (see the declaration comment above).
-procedure ClearAsciiMemo;
-begin
-  GAsciiMemoStr0 := '';
-  GAsciiMemoStr1 := '';
-end;
-
-initialization
-
-finalization
-  // Main-thread cleanup, kept here because this generic unit has no engine
-  // dependency and so cannot self-register with Goccia.ThreadCleanupRegistry;
-  // it runs in every binary that links TextSemantics, including ones that never
-  // link the engine (Goccia.RegExp.VM registers the worker-thread path). FPC
-  // does not auto-finalize managed threadvars at thread exit.
-  ClearAsciiMemo;
 
 end.

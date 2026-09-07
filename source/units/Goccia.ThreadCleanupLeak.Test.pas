@@ -25,8 +25,6 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils,
 
-  TextSemantics,
-
   Goccia.Builtins.Atomics,
   Goccia.Builtins.DisposableStack,
   Goccia.Builtins.Semver,
@@ -169,7 +167,6 @@ begin
   Expect<Boolean>(IsThreadvarCleanupRegistered(@ClearSemverHosts)).ToBe(True);
   Expect<Boolean>(IsThreadvarCleanupRegistered(@ClearTimeZoneCache)).ToBe(True);
   Expect<Boolean>(IsThreadvarCleanupRegistered(@ClearRegExpInputMemo)).ToBe(True);
-  Expect<Boolean>(IsThreadvarCleanupRegistered(@ClearAsciiMemo)).ToBe(True);
 end;
 
 begin
