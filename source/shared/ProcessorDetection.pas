@@ -16,7 +16,8 @@ uses
   the native online processor count for both CLI and compliance workers. }
 
 {$IFDEF UNIX}
-function libc_sysconf(Name: Integer): Int64; cdecl; external 'c' name 'sysconf';
+// C long is pointer-sized on the supported UNIX targets.
+function libc_sysconf(Name: Integer): NativeInt; cdecl; external 'c' name 'sysconf';
 {$ENDIF}
 
 function GetProcessorCount: Integer;
@@ -28,7 +29,7 @@ const
   SC_NPROCESSORS_ONLN = 84;   { Linux }
   {$ENDIF}
 var
-  N: Int64;
+  N: NativeInt;
 {$ENDIF}
 begin
   {$IFDEF UNIX}
