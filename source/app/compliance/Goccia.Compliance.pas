@@ -106,6 +106,7 @@ uses
 
   FileUtils,
   Pipes,
+  ProcessorDetection,
   StringBuffer,
   TextEncoding,
 
@@ -389,9 +390,7 @@ end;
 
 function DefaultComplianceJobs: Integer;
 begin
-  Result := TThread.ProcessorCount;
-  if Result < 1 then
-    Result := 1;
+  Result := GetProcessorCount;
 end;
 
 procedure WriteJSONFile(const APath, AJSON: string);
