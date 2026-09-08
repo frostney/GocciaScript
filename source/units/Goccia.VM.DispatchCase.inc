@@ -592,8 +592,8 @@
            (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) and
            (FRegisters[C].Kind = grkObject) and
            (FRegisters[C].ObjectValue is TGocciaStringLiteralValue) then
-          SetRegisterFast(A, TGocciaStringLiteralValue.Create(
-            TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value +
+          SetRegisterFast(A, TGocciaStringLiteralValue.Concatenate(
+            TGocciaStringLiteralValue(FRegisters[B].ObjectValue),
             TGocciaStringLiteralValue(FRegisters[C].ObjectValue).Value))
         else
           SetRegisterFast(A, TGocciaStringLiteralValue.Create(
@@ -1405,9 +1405,17 @@
                 (not ((FRegisters[C].Kind = grkObject) and
                       Assigned(FRegisters[C].ObjectValue) and
                       (not FRegisters[C].ObjectValue.IsPrimitive))) then
-          SetRegisterFast(A, TGocciaStringLiteralValue.Create(
-            VMRegisterToStringFast(FRegisters[B]).Value +
-            VMRegisterToStringFast(FRegisters[C]).Value))
+          begin
+            if (FRegisters[B].Kind = grkObject) and
+               (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) then
+              SetRegisterFast(A, TGocciaStringLiteralValue.Concatenate(
+                TGocciaStringLiteralValue(FRegisters[B].ObjectValue),
+                VMRegisterToStringFast(FRegisters[C]).Value))
+            else
+              SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+                VMRegisterToStringFast(FRegisters[B]).Value +
+                VMRegisterToStringFast(FRegisters[C]).Value));
+          end
         else
         begin
           LeftValue := GetRegisterFast(B);

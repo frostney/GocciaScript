@@ -1,6 +1,59 @@
 # Handoff
 
-Updated: 2026-08-26 (wave 2 prod-dispatch + JUMP_IF_NOT_LT merged)
+Updated: 2026-09-05 (audit string accumulation optimization)
+
+## September audit: bounded string prefixes
+
+The accepted string implementation is `2128fc2df364098a1f7ffeebbac5e1422a369e2c`
+on `codex/audit-string-accumulators`, against baseline
+`f33d9c6a061e6cb61dce65ffcf8514da1c051870`. This is a Goccia-vs-Goccia
+comparison; no new QuickJS gap or cross-architecture result was measured.
+The August wave sections below retain their original historical context.
+
+The bytecode primitive-string concatenation paths retain immutable prefix
+links bounded at 32. Every append reserves its eventual materialization capacity,
+so reading `Value` does not collect or run guest code. Aliases and UTF-16 contents
+remain intact; ordinary literals remain flat. Under memory pressure, flattening
+the parent allows collection of unaliased intermediate prefixes. See
+[ADR 0116](../docs/adr/0116-bounded-string-prefixes.md) for the representation,
+measured limits, upstream pins, and profile evidence.
+
+Measurements used FPC 3.2.2 production loaders on macOS 26.5.2 arm64, bytecode
+mode, a 256 MiB GC budget, and `/tmp/gocciascript-perf-gate.lock`. Each order
+had one discarded warmup and seven interleaved measured samples, followed by
+reverse order. Engine execution medians in milliseconds were:
+
+| Workload | Baseline AB / BA | Candidate AB / BA |
+|---|---:|---:|
+| Append, 8,000 iterations | 473.3 / 461.9 | 25.3 / 25.9 |
+| JetStream Base64 worker kernel | 1432.0 / 1432.7 | 1111.3 / 1112.3 |
+
+Process CPU timing confirmed both target and transfer improvements. The Json
+parser guard initially varied by order; a five-parse invocation and seven ABBA
+blocks (14 measured samples per binary) found no repeatable regression. No Json
+speedup or whole-JetStream score is claimed. Conservative reserved capacity still
+reaches approximately 240 MiB and seven collections in the append probe; native
+heap allocation reported at completion falls from approximately 109 MiB to 5 MiB.
+Frequent reads force materialization, and bounded prefixes do not make arbitrary
+repeated appends asymptotically linear.
+
+Rejected: reserving flat capacity during `Value` reads. That design could collect
+an unrelated temporary operand during a primitive comparison. Its patch and
+reason are retained with the experiment, and it is absent from the accepted code.
+
+Validation passed in both executors and both production/development builds:
+12,820 tests and 28,654 assertions per run, plus 20 checked native primitive tests,
+formatting, and ordinary hooks. The independent Base64 checksum and AWFY Json's
+upstream verification passed. No other runtime candidate was combined with this
+change, and isolated percentages must not be added to predict a combined result.
+
+Artifacts are retained in the string-accumulators worktree under `tmp/audit/`:
+`string-paired.json`, `string-json-confirmation.json`, `candidate-metadata.json`,
+`baseline-host-sample-current.txt`, and baseline/candidate VM profile reports.
+The measured production candidate SHA-256 is
+`93a7f3c58a33feeec5be0e29516f337662a0257af74f52985e5861e6d61ba183`.
+The remaining representation cost is conservative reserved capacity and forced
+materialization on content reads; profile a real workload before changing either.
 
 ## Experiment
 

@@ -11,5 +11,16 @@ __gocciaRegisterProbe({
     }
     return s.length + ":" + h;
   },
-  verify: (checksum) => typeof checksum === "string" && checksum.indexOf(":") > 0,
+  verify: (checksum, innerIterations) => {
+    const chunks = [];
+    for (let i = 0; i < innerIterations; i = i + 1) {
+      chunks.push("chunk", String(i), ";");
+    }
+    const expected = chunks.join("");
+    let hash = 0;
+    for (let i = 0; i < expected.length; i = i + 791) {
+      hash = (hash + expected.charCodeAt(i)) | 0;
+    }
+    return checksum === expected.length + ":" + hash;
+  },
 });

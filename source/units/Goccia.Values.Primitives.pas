@@ -145,9 +145,20 @@ type
   private
     FValue: string;
     FChargedBytes: Int64;
+    FPrefix: TGocciaStringLiteralValue;
+    FLength: SizeInt;
+    FDepth: Integer;
+    constructor CreateConcatenation(const APrefix: TGocciaStringLiteralValue;
+      const ASuffix: string);
+    function ReserveBackingStore(const ABytes: Int64): Int64;
+    procedure Flatten;
+    function GetValue: string; {$IFDEF FPC}inline;{$ENDIF}
   public
     constructor Create(const AValue: string);
     destructor Destroy; override;
+    class function Concatenate(const APrefix: TGocciaStringLiteralValue;
+      const ASuffix: string): TGocciaStringLiteralValue; static;
+    procedure MarkReferences; override;
 
     function IsPrimitive: Boolean; override;
     function TypeName: string; override;
@@ -158,7 +169,7 @@ type
     function ToNumberLiteral: TGocciaNumberLiteralValue; override;
     function ToStringLiteral: TGocciaStringLiteralValue; override;
 
-    property Value: string read FValue;
+    property Value: string read GetValue;
   end;
 
   procedure PinPrimitiveSingletons;
@@ -629,17 +640,45 @@ begin
 end;
 
 constructor TGocciaStringLiteralValue.Create(const AValue: string);
-var
-  ChargedBytes: Int64;
-  GC: TGarbageCollector;
 begin
   inherited Create;
-  FChargedBytes := 0;
-  ChargedBytes := Int64(Length(AValue)) * SizeOf(Char);
+  FValue := AValue;
+  FLength := Length(AValue);
+  FChargedBytes := ReserveBackingStore(Int64(FLength) * SizeOf(Char));
+end;
+
+constructor TGocciaStringLiteralValue.CreateConcatenation(
+  const APrefix: TGocciaStringLiteralValue; const ASuffix: string);
+begin
+  inherited Create;
+  FPrefix := APrefix;
+  FValue := ASuffix;
+  FLength := APrefix.FLength + Length(ASuffix);
+  FDepth := APrefix.FDepth + 1;
+  // Reserve the eventual flat buffer as well as the currently retained suffix.
+  // Reading Value must remain a non-collecting operation: callers can hold
+  // unrelated primitive operands only in native locals across that read.
+  FChargedBytes := ReserveBackingStore(
+    (Int64(FLength) + Length(ASuffix)) * SizeOf(Char));
+end;
+
+function TGocciaStringLiteralValue.ReserveBackingStore(const ABytes: Int64): Int64;
+var
+  GC: TGarbageCollector;
+begin
+  Result := 0;
   GC := TGarbageCollector.Instance;
   if Assigned(GC) and not GC.MemoryLimitFiring then
   begin
-    if not GC.TryReserveExternalBytes(ChargedBytes, Self) then
+    if Assigned(FPrefix) and (GC.MaxBytes > 0) and
+       (GC.BytesAllocated > GC.MaxBytes - ABytes) then
+    begin
+      // Let the reservation's collection discard unaliased intermediate
+      // prefixes instead of keeping all their deferred capacity live.
+      FPrefix.Flatten;
+      FDepth := 1;
+    end;
+    if not GC.TryReserveExternalBytes(ABytes, Self) then
     begin
       // The RangeError itself allocates short strings. Suppress accounting
       // while constructing it so a failed reservation cannot recurse until
@@ -651,9 +690,73 @@ begin
         GC.MemoryLimitFiring := False;
       end;
     end;
-    FChargedBytes := ChargedBytes;
+    Result := ABytes;
   end;
-  FValue := AValue;
+end;
+
+class function TGocciaStringLiteralValue.Concatenate(
+  const APrefix: TGocciaStringLiteralValue;
+  const ASuffix: string): TGocciaStringLiteralValue;
+const
+  MIN_PREFIX_LENGTH = 256;
+  MAX_PREFIX_DEPTH = 32;
+begin
+  if APrefix.FLength < MIN_PREFIX_LENGTH then
+    Exit(TGocciaStringLiteralValue.Create(APrefix.Value + ASuffix));
+  // Bound both retained intermediate objects and the GC tracing depth.
+  if APrefix.FDepth >= MAX_PREFIX_DEPTH then
+    APrefix.Flatten;
+  Result := TGocciaStringLiteralValue.CreateConcatenation(APrefix, ASuffix);
+end;
+
+procedure TGocciaStringLiteralValue.Flatten;
+var
+  Current: TGocciaStringLiteralValue;
+  FlatValue: string;
+  Offset, SuffixLength, OriginalSuffixLength: SizeInt;
+  GC: TGarbageCollector;
+begin
+  if not Assigned(FPrefix) then
+    Exit;
+  // Capacity was reserved at creation. No GC or guest code may run here.
+  SetLength(FlatValue, FLength);
+  Offset := FLength;
+  Current := Self;
+  repeat
+    SuffixLength := Length(Current.FValue);
+    Dec(Offset, SuffixLength);
+    if SuffixLength > 0 then
+      Move(Current.FValue[1], FlatValue[Offset + 1],
+        SuffixLength * SizeOf(Char));
+    Current := Current.FPrefix;
+  until not Assigned(Current);
+  OriginalSuffixLength := Length(FValue);
+  FValue := FlatValue;
+  FPrefix := nil;
+  FDepth := 0;
+  if FChargedBytes > 0 then
+  begin
+    GC := TGarbageCollector.Instance;
+    if Assigned(GC) then
+      GC.ReleaseExternalBytes(Int64(OriginalSuffixLength) * SizeOf(Char));
+    Dec(FChargedBytes, Int64(OriginalSuffixLength) * SizeOf(Char));
+  end;
+end;
+
+function TGocciaStringLiteralValue.GetValue: string;
+begin
+  if Assigned(FPrefix) then
+    Flatten;
+  Result := FValue;
+end;
+
+procedure TGocciaStringLiteralValue.MarkReferences;
+begin
+  if GCMarked then
+    Exit;
+  inherited;
+  if Assigned(FPrefix) then
+    FPrefix.MarkReferences;
 end;
 
 destructor TGocciaStringLiteralValue.Destroy;
@@ -679,12 +782,12 @@ end;
 
 function TGocciaStringLiteralValue.RuntimeCopy: TGocciaValue;
 begin
-  Result := TGocciaStringLiteralValue.Create(FValue);
+  Result := TGocciaStringLiteralValue.Create(Value);
 end;
 
 function TGocciaStringLiteralValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
 begin
-  if FValue <> EMPTY_STRING then
+  if FLength > 0 then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -696,7 +799,7 @@ begin
   // shared NumericText.StringToNumber so this runtime coercion path and the
   // compiler's constant folding (Goccia.Compiler.ConstantValue) cannot drift.
   // Create stores the raw Double verbatim, preserving NaN, +/-Infinity, and -0.
-  Result := TGocciaNumberLiteralValue.Create(StringToNumber(FValue));
+  Result := TGocciaNumberLiteralValue.Create(StringToNumber(Value));
 end;
 
 function TGocciaStringLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;

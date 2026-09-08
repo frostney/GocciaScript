@@ -141,6 +141,17 @@ The formula is `min(physicalMemory / 2, platformCap)`.
 
 `BytesAllocated` sums `InstanceSize` of each `TGCManagedObject` registered with the GC. This covers the Delphi/FPC object instance (vtable, fields, padding). Backing storage allocated separately by an object splits into two cases. Storage with a clear owner and a release hook is **charged** to `BytesAllocated` through the `TryReserveExternalBytes` contract — string payloads (`TGocciaStringLiteralValue`) and `ArrayBuffer`/`SharedArrayBuffer` backing stores reserve on allocation and release when the owner is destroyed; `ArrayBuffer`/`SharedArrayBuffer` additionally release the freed bytes when a resize shrinks the backing store (`SetData`/`SetDataLength` release `-Delta` whenever `Delta < 0`), so the charge tracks the live payload rather than the peak. Either way they do count. Storage that is only **gated** (checked before allocation, never charged) does not — dynamic array element buffers in `TGocciaArrayValue` are bounded per-allocation by the growth gate below, not summed into `BytesAllocated`. The ceiling is therefore an approximate safety net, not a precise memory accounting system.
 
+Deferred string prefixes reserve their eventual flat buffer **plus** their
+retained suffix when created. `MarkReferences` traces the prefix, with at most
+32 links. Materialization consumes that reservation without collecting and
+releases the suffix charge; destruction releases the remaining reservation.
+When an append needs a collection to fit, it first materializes its prefix so
+the collection can reclaim unaliased intermediate nodes and their reservations.
+This accounting is deliberately conservative: a deferred string's charged
+capacity can exceed its currently allocated native buffer. It preserves
+non-collecting primitive reads while reducing physical copying; see
+[ADR 0116](adr/0116-bounded-string-prefixes.md).
+
 ### Gated growth points
 
 Backing storage sized by the running script is checked against the ceiling *before* it is allocated, without being charged to it (`Goccia.MemoryLimit`: `CanAllocateNativeBytes` / `RequireNativeBytes`, raising the host-catchable `TGocciaMemoryLimitError`). Two growth points are gated: array element extension (`ExtendElementsWithHoles`) and object property storage, where the map's entry and bucket arrays grow past a small-block threshold. Both belong to containers with no hook to release a reservation, so a charge would leak budget the engine could never give back; a gate bounds the peak instead. What is reported to the gate is the *transient* footprint — the block being allocated plus the block still live while it is — because `SetLength` may allocate and copy rather than extend in place, and compaction holds both entry arrays at once by construction.
