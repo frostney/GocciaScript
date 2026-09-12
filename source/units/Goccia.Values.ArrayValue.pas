@@ -241,35 +241,17 @@ function InvokeArrayCallback(const ACallback: TGocciaValue;
   const AThisArg: TGocciaValue): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
 var
   PreviousContinuation: TGocciaGeneratorContinuation;
-  CallbackRoot, ThisRoot: TGocciaTempRoot;
-  ArgRoots: array of TGocciaTempRoot;
-  I: Integer;
 begin
-  InitializeTempRoot(CallbackRoot);
-  InitializeTempRoot(ThisRoot);
-  AddTempRootIfNeeded(CallbackRoot, ACallback);
-  AddTempRootIfNeeded(ThisRoot, AThisArg);
-  SetLength(ArgRoots, ACallArgs.Length);
-  for I := 0 to High(ArgRoots) do
-    InitializeTempRoot(ArgRoots[I]);
-  for I := 0 to High(ArgRoots) do
-    AddTempRootIfNeeded(ArgRoots[I], ACallArgs.GetElement(I));
+  // The builtin's live arguments root the callback and receiver; ACallArgs
+  // roots its own slots. Nested dispatch cannot reuse either collection.
   PreviousContinuation := SuspendCurrentGeneratorContinuation;
   try
-    try
-      if Assigned(ATypedCallback) then
-        Result := ATypedCallback.Call(ACallArgs, AThisArg)
-      else
-        Result := InvokeCallable(ACallback, ACallArgs, AThisArg);
-    finally
-      RestoreCurrentGeneratorContinuation(PreviousContinuation);
-    end;
+    if Assigned(ATypedCallback) then
+      Result := ATypedCallback.Call(ACallArgs, AThisArg)
+    else
+      Result := InvokeCallable(ACallback, ACallArgs, AThisArg);
   finally
-    for I := High(ArgRoots) downto 0 do
-      RemoveTempRootIfNeeded(ArgRoots[I]);
-    SetLength(ArgRoots, 0);
-    RemoveTempRootIfNeeded(ThisRoot);
-    RemoveTempRootIfNeeded(CallbackRoot);
+    RestoreCurrentGeneratorContinuation(PreviousContinuation);
   end;
 end;
 
