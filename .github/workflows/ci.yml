@@ -30,6 +30,9 @@ jobs:
       - name: Check JavaScript test-suite structure
         run: bun run scripts/check-test-structure.ts
 
+      - name: Check CI report publishing helpers
+        run: node --test .github/scripts/test-report-publishing.js
+
   build:
     needs: toolchain
     runs-on: macos-latest
@@ -657,13 +660,7 @@ jobs:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
           TEST262_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
         run: |
-          if [ -z "${BLOB_READ_WRITE_TOKEN:-}" ]; then
-            echo "BLOB_READ_WRITE_TOKEN is not configured; skipping dashboard publish."
-            exit 0
-          fi
-          cd website
-          bun install --frozen-lockfile
-          bun run publish-test262 ../test262-results.json
+          bash ./.github/scripts/publish-website-report.sh run publish-test262 ../test262-results.json
 
       - name: Publish test262 profile reports
         if: github.ref == 'refs/heads/main' && hashFiles('test262-profile-aggregate.json') != '' && hashFiles('test262-profile-details/**') != ''
@@ -671,16 +668,10 @@ jobs:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
           TEST262_PROFILE_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
         run: |
-          if [ -z "${BLOB_READ_WRITE_TOKEN:-}" ]; then
-            echo "BLOB_READ_WRITE_TOKEN is not configured; skipping profile publish."
-            exit 0
-          fi
-          if [ -d test262-profile-details ]; then
+          if [ -n "${BLOB_READ_WRITE_TOKEN:-}" ] && [ -d test262-profile-details ]; then
             tar -czf test262-profile-details.tar.gz test262-profile-details
           fi
-          cd website
-          bun install --frozen-lockfile
-          bun scripts/publish-test262-profile-reports.ts \
+          bash ./.github/scripts/publish-website-report.sh scripts/publish-test262-profile-reports.ts \
             --aggregate ../test262-profile-aggregate.json \
             --markdown ../test262-profile-aggregate.md \
             --details-archive ../test262-profile-details.tar.gz
@@ -765,13 +756,7 @@ jobs:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
           AWFY_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
         run: |
-          if [ -z "${BLOB_READ_WRITE_TOKEN:-}" ]; then
-            echo "BLOB_READ_WRITE_TOKEN is not configured; skipping AWFY publish."
-            exit 0
-          fi
-          cd website
-          bun install --frozen-lockfile
-          bun run publish-awfy ../awfy-report.json
+          bash ./.github/scripts/publish-website-report.sh run publish-awfy ../awfy-report.json
 
       - name: Fail when AWFY validation failed
         if: steps.awfy-report.outcome == 'failure'
@@ -925,13 +910,7 @@ jobs:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
           JETSTREAM_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
         run: |
-          if [ -z "${BLOB_READ_WRITE_TOKEN:-}" ]; then
-            echo "BLOB_READ_WRITE_TOKEN is not configured; skipping JetStream publish."
-            exit 0
-          fi
-          cd website
-          bun install --frozen-lockfile
-          bun run publish-jetstream ../jetstream-report.json
+          bash ./.github/scripts/publish-website-report.sh run publish-jetstream ../jetstream-report.json
 
       - name: Fail when JetStream validation failed
         if: steps.jetstream-merge.outcome == 'failure'
@@ -1072,13 +1051,7 @@ jobs:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
           WEB_TOOLING_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
         run: |
-          if [ -z "${BLOB_READ_WRITE_TOKEN:-}" ]; then
-            echo "BLOB_READ_WRITE_TOKEN is not configured; skipping Web Tooling publish."
-            exit 0
-          fi
-          cd website
-          bun install --frozen-lockfile
-          bun run publish-web-tooling ../web-tooling-report.json
+          bash ./.github/scripts/publish-website-report.sh run publish-web-tooling ../web-tooling-report.json
 
   benchmark:
     needs: build
@@ -1240,14 +1213,10 @@ jobs:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
           BENCHMARK_PROFILE_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
         run: |
-          if [ -z "${BLOB_READ_WRITE_TOKEN:-}" ]; then
-            echo "BLOB_READ_WRITE_TOKEN is not configured; skipping benchmark profile publish."
-            exit 0
+          if [ -n "${BLOB_READ_WRITE_TOKEN:-}" ]; then
+            tar -czf benchmark-profile-details.tar.gz profile-baseline
           fi
-          tar -czf benchmark-profile-details.tar.gz profile-baseline
-          cd website
-          bun install --frozen-lockfile
-          bun scripts/publish-benchmark-profile-reports.ts \
+          bash ./.github/scripts/publish-website-report.sh scripts/publish-benchmark-profile-reports.ts \
             --aggregate ../benchmark-profile-aggregate.json \
             --markdown ../benchmark-profile-aggregate.md \
             --details-archive ../benchmark-profile-details.tar.gz
