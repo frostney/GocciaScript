@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { readFile } from "node:fs/promises";
 import {
   type BenchmarkProfileBlobPublishEntry,
   benchmarkProfileBlobDailyPathForDay,
@@ -7,67 +6,15 @@ import {
   benchmarkProfileBlobReportPathForArtifactId,
   publishBenchmarkProfileReportsToBlob,
 } from "../src/lib/benchmark-profile-blob-store";
-import { GITHUB_REPO_URL } from "../src/lib/github";
+import {
+  currentRunMetadata,
+  parseProfileArgs,
+  readProfileFiles,
+  timestampFromEnv,
+} from "./lib/report-publishing";
 
 function log(message: string) {
   console.log(`[publish-benchmark-profile] ${message}`);
-}
-
-function numberFromEnv(name: string): number | null {
-  const value = process.env[name];
-  if (!value) return null;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
-function timestampFromEnv(name: string): string | null {
-  const value = process.env[name]?.trim();
-  if (!value) return null;
-  if (/^\d+$/.test(value)) {
-    const seconds = Number(value);
-    if (Number.isSafeInteger(seconds) && seconds > 0) {
-      return new Date(seconds * 1000).toISOString();
-    }
-  }
-  const time = Date.parse(value);
-  return Number.isNaN(time) ? null : new Date(time).toISOString();
-}
-
-function parseArgs(args: string[]): {
-  aggregate: string;
-  markdown: string | null;
-  detailsArchive: string | null;
-} {
-  let aggregate: string | null = null;
-  let markdown: string | null = null;
-  let detailsArchive: string | null = null;
-
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--aggregate") aggregate = args[++i] ?? null;
-    else if (arg.startsWith("--aggregate=")) {
-      aggregate = arg.slice("--aggregate=".length);
-    } else if (arg === "--markdown") markdown = args[++i] ?? null;
-    else if (arg.startsWith("--markdown=")) {
-      markdown = arg.slice("--markdown=".length);
-    } else if (arg === "--details-archive") detailsArchive = args[++i] ?? null;
-    else if (arg.startsWith("--details-archive=")) {
-      detailsArchive = arg.slice("--details-archive=".length);
-    } else if (arg === "--help" || arg === "-h") {
-      usage();
-    } else {
-      throw new Error(`Unknown argument: ${arg}`);
-    }
-  }
-
-  if (!aggregate) usage();
-  return { aggregate, markdown, detailsArchive };
-}
-
-async function readJsonFile(filePath: string): Promise<string> {
-  const raw = await readFile(filePath, "utf8");
-  const parsed = JSON.parse(raw) as unknown;
-  return `${JSON.stringify(parsed, null, 2)}\n`;
 }
 
 async function readEntryFromFiles(
@@ -75,36 +22,16 @@ async function readEntryFromFiles(
   markdownPath: string | null,
   detailsArchivePath: string | null,
 ): Promise<BenchmarkProfileBlobPublishEntry> {
-  const runId = numberFromEnv("GITHUB_RUN_ID");
-  const runNumber = numberFromEnv("GITHUB_RUN_NUMBER");
-  const artifactId =
-    numberFromEnv("BENCHMARK_PROFILE_ARTIFACT_ID") ??
-    numberFromEnv("GITHUB_RUN_ID") ??
-    Date.now();
-  const repository = process.env.GITHUB_REPOSITORY ?? "frostney/GocciaScript";
-  const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
-  const headSha = process.env.GITHUB_SHA ?? "unknown";
-  const now = new Date().toISOString();
-  const createdAt = timestampFromEnv("BENCHMARK_PROFILE_RUN_CREATED_AT") ?? now;
-
   return {
-    runId: runId ?? artifactId,
-    runNumber: runNumber ?? 0,
-    artifactId,
-    title: process.env.GITHUB_WORKFLOW ?? "CI",
-    headSha,
-    shortSha: headSha.slice(0, 8),
-    runUrl: runId
-      ? `${server}/${repository}/actions/runs/${runId}`
-      : GITHUB_REPO_URL,
-    createdAt,
-    updatedAt: now,
-    artifactCreatedAt: now,
-    aggregateJson: await readJsonFile(aggregatePath),
-    markdown: markdownPath ? await readFile(markdownPath) : undefined,
-    detailsArchive: detailsArchivePath
-      ? await readFile(detailsArchivePath)
-      : undefined,
+    ...currentRunMetadata(
+      "BENCHMARK_PROFILE_ARTIFACT_ID",
+      timestampFromEnv("BENCHMARK_PROFILE_RUN_CREATED_AT"),
+    ),
+    ...(await readProfileFiles(
+      aggregatePath,
+      markdownPath,
+      detailsArchivePath,
+    )),
   };
 }
 
@@ -121,7 +48,7 @@ Environment:
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const args = parseProfileArgs(process.argv.slice(2), usage);
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
     throw new Error(
       "Set BLOB_READ_WRITE_TOKEN to publish benchmark profile Blob data",
