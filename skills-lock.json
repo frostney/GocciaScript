@@ -1,6 +1,12 @@
 {
   "version": 1,
   "skills": {
+    "address-pr-feedback": {
+      "source": "frostney/known-good-route",
+      "sourceType": "github",
+      "skillPath": "address-pr-feedback/SKILL.md",
+      "computedHash": "20a6d6f29d4178b73d3d5c2efa1f4844ecae15a4cd6662b3a8b0285d465099aa"
+    },
     "codebase-design": {
       "source": "mattpocock/skills",
       "sourceType": "github",
@@ -102,12 +108,6 @@
       "sourceType": "github",
       "skillPath": "skills/resolve-reviews/SKILL.md",
       "computedHash": "69d4d3389e626faa719849ffa52fb17ec96e59be88d658323d534dd8f2a41d4a"
-    },
-    "review-pr": {
-      "source": "frostney/known-good-route",
-      "sourceType": "github",
-      "skillPath": "review-pr/SKILL.md",
-      "computedHash": "bb24fd5746b255668c0f620baac818d2b03eb1ceb4c2e191df93f9025e22346b"
     },
     "roadmap-review": {
       "source": "frostney/known-good-route",
