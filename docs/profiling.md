@@ -89,6 +89,18 @@ Scalar Fast-Path:
 
 Per-function breakdown: self-time (exclusive — time in the function minus time in callees), total-time (inclusive), call count, and allocation count (heap-allocated `TGocciaValue` instances created during that function's execution).
 
+Allocation counts belong to the active profiled function, including allocations
+made by native built-ins on its behalf. Collection follows each native entry
+into the VM, so host-invoked benchmark callbacks and resumed generators or async
+functions are included after module execution finishes. Nested VM entries
+restore their caller's allocation-profiling state on return or exception;
+ordinary bytecode calls use the existing function profiling stack.
+
+With `--profile-deterministic`, BenchmarkRunner resets the counters after module
+registration and executes each registered benchmark once. The resulting
+function allocation counts describe that benchmark execution, including its
+setup and teardown, rather than the discarded registration phase.
+
 ```text
 Function Profile:
   Self Time    Total Time      Calls     Allocs  Function                       Location

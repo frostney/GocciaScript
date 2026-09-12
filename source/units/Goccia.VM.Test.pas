@@ -14,6 +14,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.ExecutionContext,
   Goccia.Modules,
+  Goccia.Profiler,
   Goccia.Realm,
   Goccia.Scope,
   Goccia.TestSetup,
@@ -46,6 +47,8 @@ type
     procedure TestExecuteIndexedObjectOps;
     procedure TestExecuteClosureCall;
     procedure TestExecuteCapturedClosure;
+    procedure TestProfileHostCallbackAllocations;
+    procedure TestRestoreAllocationProfiling;
     procedure TestDetachedModuleNamespaceImportRaisesSyntaxError;
   protected
     procedure BeforeEach; override;
@@ -92,6 +95,9 @@ begin
   Test('Execute indexed object ops', TestExecuteIndexedObjectOps);
   Test('Execute closure call', TestExecuteClosureCall);
   Test('Execute captured closure', TestExecuteCapturedClosure);
+  Test('Profile host callback allocations', TestProfileHostCallbackAllocations);
+  Test('Restore allocation profiling after return and throw',
+    TestRestoreAllocationProfiling);
   Test('Detached module namespace import raises SyntaxError',
     TestDetachedModuleNamespaceImportRaisesSyntaxError);
 end;
@@ -601,6 +607,108 @@ begin
     CallArgs.Free;
     VM.Free;
     Template.Free;
+  end;
+end;
+
+procedure TTestGocciaVM.TestProfileHostCallbackAllocations;
+var
+  Template, ChildTemplate: TGocciaFunctionTemplate;
+  VM: TGocciaVM;
+  Callback: TGocciaFunctionBase;
+  Arguments: TGocciaArgumentsCollection;
+  FirstAllocations: Int64;
+begin
+  TGocciaProfiler.Initialize;
+  Template := TGocciaFunctionTemplate.Create('register');
+  ChildTemplate := TGocciaFunctionTemplate.Create('allocate');
+  VM := TGocciaVM.Create;
+  Arguments := TGocciaArgumentsCollection.Create;
+  try
+    VM.ProfilingFunctions := True;
+    ChildTemplate.MaxRegisters := 1;
+    ChildTemplate.EmitInstruction(EncodeABC(OP_NEW_OBJECT, 0, 0, 0));
+    ChildTemplate.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+    Template.MaxRegisters := 1;
+    Template.AddFunction(ChildTemplate);
+    Template.EmitInstruction(EncodeABx(OP_CLOSURE, 0, 0));
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+    Callback := TGocciaFunctionBase(VM.ExecuteFunction(Template));
+    TGocciaProfiler.Instance.ResetCounts;
+
+    Callback.Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
+    FirstAllocations := TGocciaProfiler.Instance.GetFunctionProfile(
+      ChildTemplate.ProfileIndex).Allocations;
+    Expect<Boolean>(FirstAllocations > 0).ToBe(True);
+    Expect<Boolean>(GProfilingAllocations).ToBe(False);
+    Callback.Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
+    Expect<Int64>(TGocciaProfiler.Instance.GetFunctionProfile(
+      ChildTemplate.ProfileIndex).Allocations).ToBe(FirstAllocations * 2);
+    Expect<Int64>(TGocciaProfiler.Instance.GetFunctionProfile(
+      Template.ProfileIndex).Allocations).ToBe(0);
+    Expect<Boolean>(GProfilingAllocations).ToBe(False);
+  finally
+    Arguments.Free;
+    VM.Free;
+    Template.Free;
+    TGocciaProfiler.Shutdown;
+  end;
+end;
+
+procedure TTestGocciaVM.TestRestoreAllocationProfiling;
+var
+  CallerObject: TGocciaObjectValue;
+  Template: TGocciaFunctionTemplate;
+  VM: TGocciaVM;
+  PreviousEnabled, Profiled, Throws, RaisedExpected: Boolean;
+  CallerIndex: Integer;
+begin
+  TGocciaProfiler.Initialize;
+  Template := TGocciaFunctionTemplate.Create('allocate');
+  VM := TGocciaVM.Create;
+  try
+    Template.MaxRegisters := 1;
+    Template.EmitInstruction(EncodeABC(OP_NEW_OBJECT, 0, 0, 0));
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+    CallerIndex := TGocciaProfiler.Instance.RegisterTemplate('caller', '', 0);
+    for PreviousEnabled := False to True do
+      for Profiled := False to True do
+        for Throws := False to True do
+        begin
+          TGocciaProfiler.Instance.ResetCounts;
+          TGocciaProfiler.Instance.PushFunction(CallerIndex, 0);
+          GProfilingAllocations := PreviousEnabled;
+          VM.ProfilingFunctions := Profiled;
+          if Throws then
+            Template.PatchInstruction(1, EncodeABC(OP_THROW, 0, 0, 0))
+          else
+            Template.PatchInstruction(1, EncodeABC(OP_RETURN, 0, 0, 0));
+          RaisedExpected := False;
+          try
+            VM.ExecuteFunction(Template);
+          except
+            on E: EGocciaBytecodeThrow do
+              RaisedExpected := True;
+          end;
+          Expect<Boolean>(RaisedExpected).ToBe(Throws);
+          Expect<Boolean>(GProfilingAllocations).ToBe(PreviousEnabled);
+          // An unprofiled entry must not charge its objects to the caller.
+          Expect<Int64>(TGocciaProfiler.Instance.GetFunctionProfile(
+            CallerIndex).Allocations).ToBe(0);
+          // The caller remains on the profiling stack after either exit path.
+          GProfilingAllocations := True;
+          CallerObject := TGocciaObjectValue.Create;
+          try
+            Expect<Int64>(TGocciaProfiler.Instance.GetFunctionProfile(
+              CallerIndex).Allocations).ToBe(1);
+          finally
+            CallerObject.Free;
+          end;
+        end;
+  finally
+    GProfilingAllocations := False;
+    VM.Free;
+    Template.Free;
+    TGocciaProfiler.Shutdown;
   end;
 end;
 
