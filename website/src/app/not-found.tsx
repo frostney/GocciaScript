@@ -4,10 +4,7 @@ import Link from "next/link";
 export const metadata: Metadata = {
   title: "404: Page Not Found",
   description: "The requested page could not be found.",
-  robots: {
-    index: false,
-    follow: false,
-  },
+  robots: "noindex, nofollow",
   // Explicitly unset canonical to prevent homepage canonical leak.
   // Next.js metadata merging keeps parent values unless explicitly overridden.
   alternates: {
@@ -18,6 +15,12 @@ export const metadata: Metadata = {
     title: "404: Page Not Found",
     description: "The requested page could not be found.",
     url: undefined,
+  },
+  // Explicitly override Twitter metadata to prevent homepage claims on 404.
+  twitter: {
+    card: "summary",
+    title: "404: Page Not Found",
+    description: "The requested page could not be found.",
   },
 };
 
