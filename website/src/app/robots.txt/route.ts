@@ -1,12 +1,15 @@
 import { getSiteUrl } from "@/lib/site-url";
 
 export function GET() {
+  const siteUrl = getSiteUrl();
+  const sitemapUrl = new URL("/sitemap.xml", siteUrl).toString();
+  
   const body = [
     "User-agent: *",
     "Content-Signal: search=yes, ai-input=yes, ai-train=yes",
     "Allow: /",
     "Disallow: /api/",
-    `Sitemap: ${getSiteUrl()}/sitemap.xml`,
+    `Sitemap: ${sitemapUrl}`,
     "",
   ].join("\n");
 

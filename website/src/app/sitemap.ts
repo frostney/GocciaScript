@@ -12,7 +12,8 @@ export function buildSitemap(
   siteUrl = getSiteUrl(),
   appLastModified = APP_LAST_MODIFIED,
 ): MetadataRoute.Sitemap {
-  const normalizedSiteUrl = siteUrl.replace(/\/+$/, "");
+  const normalizedSiteUrl = siteUrl.replace(/\/+$/, "") + "/";
+  const baseSiteUrl = siteUrl.replace(/\/+$/, "");
 
   const top = [
     "/",
@@ -22,13 +23,13 @@ export function buildSitemap(
     "/playground",
     "/sandbox",
   ].map((path) => ({
-    url: `${normalizedSiteUrl}${path}`,
+    url: path === "/" ? normalizedSiteUrl : `${baseSiteUrl}${path}`,
     lastModified: appLastModified,
     changeFrequency: "weekly" as const,
     priority: path === "/" ? 1.0 : 0.8,
   }));
   const docs = docsSource.getPages().map((page) => ({
-    url: `${normalizedSiteUrl}${page.url}`,
+    url: `${baseSiteUrl}${page.url}`,
     lastModified: getDocLastModified(page),
     changeFrequency: "weekly" as const,
     priority: page.url === "/docs" ? 0.8 : 0.6,
