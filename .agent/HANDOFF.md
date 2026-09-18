@@ -7,8 +7,12 @@ Updated: 2026-09-05 (audit string accumulation optimization)
 The accepted string implementation is `2128fc2df364098a1f7ffeebbac5e1422a369e2c`
 on `codex/audit-string-accumulators`, against baseline
 `f33d9c6a061e6cb61dce65ffcf8514da1c051870`. This is a Goccia-vs-Goccia
-comparison; no new QuickJS gap or cross-architecture result was measured.
-The August wave sections below retain their original historical context.
+comparison. Local macOS arm64 reproduction measured the append and JetStream
+Base64 worker kernels below; no new QuickJS gap was measured there. Retained
+JetStream CI on Linux x64 reported an approximate 5.2% `ai-astar` reduction
+(main 1.78 → PR 1.69) that remains pending local reproduction before treating
+it as a merge or release signal. The August wave sections below retain their
+original historical context.
 
 The bytecode primitive-string concatenation paths retain immutable prefix
 links bounded at 32. Every append reserves its eventual materialization capacity,
