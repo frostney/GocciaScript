@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 
 import { readFile } from "node:fs/promises";
-import { GITHUB_REPO_URL } from "../src/lib/github";
 import {
   type JetStreamBlobPublishEntry,
   jetStreamBlobDailyPathForRun,
@@ -9,6 +8,7 @@ import {
   jetStreamBlobReportPathForArtifactId,
   publishJetStreamReportsToBlob,
 } from "../src/lib/jetstream-blob-store";
+import { currentRunMetadata, timestampFromEnv } from "./lib/report-publishing";
 
 type EngineStats = {
   ok?: number;
@@ -40,18 +40,6 @@ export type JetStreamReport = {
   }>;
   geomeanRatios?: Record<string, unknown>;
 };
-
-function numberFromEnv(name: string): number | null {
-  const parsed = Number(process.env[name]);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
-function timestampFromEnv(name: string): string | null {
-  const value = process.env[name]?.trim();
-  if (!value) return null;
-  const time = Date.parse(value);
-  return Number.isNaN(time) ? null : new Date(time).toISOString();
-}
 
 function finiteRatio(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value > 0
@@ -135,27 +123,11 @@ async function readEntry(filePath: string): Promise<JetStreamBlobPublishEntry> {
   if (!Array.isArray(report.targets)) {
     throw new Error(`${filePath} is not a valid JetStream report`);
   }
-  const runId = numberFromEnv("GITHUB_RUN_ID");
-  const artifactId =
-    numberFromEnv("JETSTREAM_ARTIFACT_ID") ?? runId ?? Date.now();
-  const repository = process.env.GITHUB_REPOSITORY ?? "frostney/GocciaScript";
-  const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
-  const headSha = process.env.GITHUB_SHA ?? "unknown";
-  const now = new Date().toISOString();
-  const createdAt = timestampFromEnv("JETSTREAM_RUN_CREATED_AT") ?? now;
   return {
-    runId: runId ?? artifactId,
-    runNumber: numberFromEnv("GITHUB_RUN_NUMBER") ?? 0,
-    artifactId,
-    title: process.env.GITHUB_WORKFLOW ?? "CI",
-    headSha,
-    shortSha: headSha.slice(0, 8),
-    runUrl: runId
-      ? `${server}/${repository}/actions/runs/${runId}`
-      : GITHUB_REPO_URL,
-    createdAt,
-    updatedAt: now,
-    artifactCreatedAt: now,
+    ...currentRunMetadata(
+      "JETSTREAM_ARTIFACT_ID",
+      timestampFromEnv("JETSTREAM_RUN_CREATED_AT", false),
+    ),
     summary: summaryFromReport(report),
     reportJson: `${JSON.stringify(report, null, 2)}\n`,
   };

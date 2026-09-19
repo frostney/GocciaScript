@@ -1,18 +1,18 @@
-import { gzipSync } from "node:zlib";
-import { put } from "@vercel/blob";
+import {
+  type BlobAccess,
+  type BlobReport,
+  blobAccess,
+  byCreatedAtThenRunNumber,
+  cleanBlobPrefix,
+  type ProfileReportKind,
+  publishProfileArtifacts,
+  putDailyBlobPointer,
+} from "./report-blob";
 
-export type BenchmarkProfileBlobAccess = "public" | "private";
-export type BenchmarkProfileBlobReportKind =
-  | "aggregate"
-  | "markdown"
-  | "detailsArchive";
+export type BenchmarkProfileBlobAccess = BlobAccess;
+export type BenchmarkProfileBlobReportKind = ProfileReportKind;
 
-export type BenchmarkProfileBlobReport = {
-  path: string;
-  url: string;
-  downloadUrl: string;
-  size: number;
-};
+export type BenchmarkProfileBlobReport = BlobReport;
 
 export type BenchmarkProfileBlobRun = {
   runId: number;
@@ -43,21 +43,16 @@ export type BenchmarkProfileBlobPublishEntry = Omit<
 };
 
 const DEFAULT_PREFIX = "benchmark-profiles";
-const DEFAULT_ACCESS: BenchmarkProfileBlobAccess = "public";
-
-function cleanPrefix(value: string | undefined, fallback: string): string {
-  const trimmed = (value ?? fallback).trim().replace(/^\/+|\/+$/g, "");
-  return trimmed || fallback;
-}
 
 export function benchmarkProfileBlobPrefix(): string {
-  return cleanPrefix(process.env.BENCHMARK_PROFILE_BLOB_PREFIX, DEFAULT_PREFIX);
+  return cleanBlobPrefix(
+    process.env.BENCHMARK_PROFILE_BLOB_PREFIX,
+    DEFAULT_PREFIX,
+  );
 }
 
 export function benchmarkProfileBlobAccess(): BenchmarkProfileBlobAccess {
-  return process.env.BENCHMARK_PROFILE_BLOB_ACCESS === "private"
-    ? "private"
-    : DEFAULT_ACCESS;
+  return blobAccess(process.env.BENCHMARK_PROFILE_BLOB_ACCESS);
 }
 
 export function benchmarkProfileBlobRunsPrefix(
@@ -100,16 +95,6 @@ function dailyPathForRun(
   );
 }
 
-function byCreatedAtThenRunNumber(
-  a: Pick<BenchmarkProfileBlobRun, "createdAt" | "runNumber">,
-  b: Pick<BenchmarkProfileBlobRun, "createdAt" | "runNumber">,
-): number {
-  return (
-    Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
-    a.runNumber - b.runNumber
-  );
-}
-
 export async function publishBenchmarkProfileReportsToBlob(
   entries: BenchmarkProfileBlobPublishEntry[],
 ): Promise<BenchmarkProfileBlobRun[]> {
@@ -118,66 +103,16 @@ export async function publishBenchmarkProfileReportsToBlob(
   const publishedRuns: BenchmarkProfileBlobRun[] = [];
 
   for (const entry of entries) {
-    const aggregatePath = benchmarkProfileBlobReportPathForArtifactId(
-      entry.artifactId,
-      "aggregate",
-      prefix,
-    );
-    const aggregateCompressed = gzipSync(`${entry.aggregateJson.trimEnd()}\n`);
-    const aggregateBlob = await put(aggregatePath, aggregateCompressed, {
+    const profileReports = await publishProfileArtifacts(
+      entry,
+      (kind) =>
+        benchmarkProfileBlobReportPathForArtifactId(
+          entry.artifactId,
+          kind,
+          prefix,
+        ),
       access,
-      allowOverwrite: true,
-      cacheControlMaxAge: 31_536_000,
-      contentType: "application/gzip",
-    });
-    const profileReports: BenchmarkProfileBlobRun["profileReports"] = {
-      aggregate: {
-        path: aggregatePath,
-        url: aggregateBlob.url,
-        downloadUrl: aggregateBlob.downloadUrl,
-        size: aggregateCompressed.byteLength,
-      },
-    };
-
-    if (entry.markdown) {
-      const markdownPath = benchmarkProfileBlobReportPathForArtifactId(
-        entry.artifactId,
-        "markdown",
-        prefix,
-      );
-      const markdownBlob = await put(markdownPath, entry.markdown, {
-        access,
-        allowOverwrite: true,
-        cacheControlMaxAge: 31_536_000,
-        contentType: "text/markdown; charset=utf-8",
-      });
-      profileReports.markdown = {
-        path: markdownPath,
-        url: markdownBlob.url,
-        downloadUrl: markdownBlob.downloadUrl,
-        size: entry.markdown.byteLength,
-      };
-    }
-
-    if (entry.detailsArchive) {
-      const archivePath = benchmarkProfileBlobReportPathForArtifactId(
-        entry.artifactId,
-        "detailsArchive",
-        prefix,
-      );
-      const archiveBlob = await put(archivePath, entry.detailsArchive, {
-        access,
-        allowOverwrite: true,
-        cacheControlMaxAge: 31_536_000,
-        contentType: "application/gzip",
-      });
-      profileReports.detailsArchive = {
-        path: archivePath,
-        url: archiveBlob.url,
-        downloadUrl: archiveBlob.downloadUrl,
-        size: entry.detailsArchive.byteLength,
-      };
-    }
+    );
 
     const published: BenchmarkProfileBlobRun = {
       runId: entry.runId,
@@ -193,15 +128,10 @@ export async function publishBenchmarkProfileReportsToBlob(
       profileReports,
       publishedAt: new Date().toISOString(),
     };
-    await put(
+    await putDailyBlobPointer(
       dailyPathForRun(published, prefix),
-      JSON.stringify(published, null, 2),
-      {
-        access,
-        allowOverwrite: true,
-        cacheControlMaxAge: 900,
-        contentType: "application/json",
-      },
+      published,
+      access,
     );
     publishedRuns.push(published);
   }
