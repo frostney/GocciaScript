@@ -122,6 +122,9 @@ jobs:
       - name: Check JavaScript test-suite structure
         run: bun run scripts/check-test-structure.ts
 
+      - name: Check CI report publishing helpers
+        run: node --test .github/scripts/test-report-publishing.js
+
   test:
     needs: build
     runs-on: ubuntu-latest
@@ -1044,28 +1047,9 @@ jobs:
             const marker = '<!-- benchmark-comparison -->';
             const body = marker + '\n' + inner;
 
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
+            await require('./.github/scripts/upsert-pr-comment.js')({
+              github, context, body, markers: [marker],
             });
-
-            const existing = comments.find(c => c.body && c.body.includes(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
 
   awfy-comment:
     needs: awfy-report
@@ -1099,28 +1083,9 @@ jobs:
             const markers = ['<!-- awfy-results -->', '<!-- awfy-smoke -->'];
             const body = fs.readFileSync('awfy-comment.md', 'utf8');
 
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
+            await require('./.github/scripts/upsert-pr-comment.js')({
+              github, context, body, markers: markers,
             });
-
-            const existing = comments.find(c => c.body && markers.some(marker => c.body.includes(marker)));
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
 
   jetstream-comment:
     needs: jetstream-report
@@ -1154,28 +1119,9 @@ jobs:
             const marker = '<!-- jetstream-results -->';
             const body = fs.readFileSync('jetstream-comment.md', 'utf8');
 
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
+            await require('./.github/scripts/upsert-pr-comment.js')({
+              github, context, body, markers: [marker],
             });
-
-            const existing = comments.find(c => c.body && c.body.includes(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
 
   web-tooling-comment:
     needs: web-tooling-report
@@ -1209,28 +1155,9 @@ jobs:
             const marker = '<!-- web-tooling-results -->';
             const body = fs.readFileSync('web-tooling-comment.md', 'utf8');
 
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
+            await require('./.github/scripts/upsert-pr-comment.js')({
+              github, context, body, markers: [marker],
             });
-
-            const existing = comments.find(c => c.body && c.body.includes(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
 
   timing-comment:
     needs: [test, benchmark, boot-timing]
@@ -1529,28 +1456,9 @@ jobs:
             const marker = '<!-- test262-results -->';
             const body = fs.readFileSync('test262-comment.md', 'utf8');
 
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
+            await require('./.github/scripts/upsert-pr-comment.js')({
+              github, context, body, markers: [marker],
             });
-
-            const existing = comments.find(c => c.body && c.body.includes(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
 
       - name: Fail on regression
         if: steps.build_comment.outcome == 'failure'

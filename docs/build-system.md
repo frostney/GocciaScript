@@ -668,6 +668,8 @@ RegExp embeds this generated UCD resource by default through `source/units/Gocci
 
 GitHub Actions CI is split into two workflow files:
 
+Report publication uses `.github/scripts/publish-website-report.sh` for the optional Blob token check and one website dependency installation per CI job. The workflow retains report arguments, timestamps, artifact conditions, and profile archive creation. Checked-out PR report jobs share `.github/scripts/upsert-pr-comment.js`; report builders retain their markdown and comment markers.
+
 ### `ci.yml` — Push to main + tags
 
 Job graph: `build -> test / toml-compliance / json5-compliance / test262 / awfy / jetstream / web-tooling / benchmark / cli -> artifacts/release`.
