@@ -38,6 +38,7 @@ import {
 import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-cli/rss";
+import { verifyAllocationProfiles } from "./test-cli-profiling";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
 
@@ -4859,6 +4860,8 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
 // GocciaBenchmarkRunner
 // ============================================================================
 
+await section("Allocation profiling: host callbacks and native re-entry...", verifyAllocationProfiles);
+
 {
   const tmp = makeTmp();
   const benchEnv = {
@@ -5112,8 +5115,8 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
         throw new Error("Deterministic profile should include opcode counts");
       if (!Array.isArray(profile.functions) || profile.functions.length === 0)
         throw new Error("Deterministic profile should include function counts");
-      if (!profile.functions.some((fn: Record<string, unknown>) => typeof fn.allocations === "number"))
-        throw new Error("Deterministic profile should include function allocation counts");
+      if (!profile.functions.some((fn: Record<string, unknown>) => typeof fn.allocations === "number" && fn.allocations > 0))
+        throw new Error("Deterministic profile should include positive function allocation counts");
     }
     const scriptRunProfileBench = join(tmp, "profile-deterministic-script-run.js");
     const scriptRunProfileOut = join(tmp, "profile-script-run.json");
