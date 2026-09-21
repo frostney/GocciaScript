@@ -41,7 +41,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.Lexer,
   Goccia.ObjectModel,
-  Goccia.SourceMap,
+  Goccia.OriginMap,
   Goccia.SourcePipeline,
   Goccia.SourceSpan,
   Goccia.Values.ArrayValue,
@@ -85,13 +85,16 @@ type
     FCount: Integer;
     FParent: Integer;
     FDepth: Integer;
-    FSourceMap: TGocciaSourceMap;
+    FOriginMap: TGocciaOriginMap;
+    FCoordinates: IGocciaSourceCoordinates;
     { A class body reaches the same method through more than one of the
       definition's maps, and the unified element array overlaps them again.
       Walking all of them and refusing to emit a node twice is more robust
       than picking one path and being wrong when the parser fills another. }
     FSeen: TDictionary<Pointer, Boolean>;
 
+    function MapOffset(const AOffset: Integer;
+      const ABias: TGocciaOriginBias): Integer;
     function Emit(const AKind: string;
       const ASpan: TGocciaSourceSpan): Integer;
     procedure Push(const AIndex: Integer);
@@ -108,7 +111,8 @@ type
     procedure VisitVariables(const AVariables: TArray<TGocciaVariableInfo>);
     procedure VisitFunctionBody(const ABody: TGocciaASTNode);
   public
-    constructor Create(const ASourceMap: TGocciaSourceMap);
+    constructor Create(const AOriginMap: TGocciaOriginMap;
+      const ACoordinates: IGocciaSourceCoordinates);
     destructor Destroy; override;
     procedure Run(const AProgram: TGocciaProgram);
     function NodeAt(const AIndex: Integer): TASTFlatNode;
@@ -155,10 +159,12 @@ end;
 
 { TASTFlattener }
 
-constructor TASTFlattener.Create(const ASourceMap: TGocciaSourceMap);
+constructor TASTFlattener.Create(const AOriginMap: TGocciaOriginMap;
+  const ACoordinates: IGocciaSourceCoordinates);
 begin
   inherited Create;
-  FSourceMap := ASourceMap;
+  FOriginMap := AOriginMap;
+  FCoordinates := ACoordinates;
   FParent := -1;
   FSeen := TDictionary<Pointer, Boolean>.Create;
 end;
@@ -176,10 +182,20 @@ begin
     FSeen.Add(Pointer(ANode), True);
 end;
 
+{ nil means no preprocessor ran, so the parsed text is the caller's own and
+  every offset in it already is an original one. }
+function TASTFlattener.MapOffset(const AOffset: Integer;
+  const ABias: TGocciaOriginBias): Integer;
+begin
+  if not Assigned(FOriginMap) then
+    Exit(AOffset);
+  FOriginMap.Map(AOffset, ABias, Result);
+end;
+
 function TASTFlattener.Emit(const AKind: string;
   const ASpan: TGocciaSourceSpan): Integer;
 var
-  MappedLine, MappedColumn: Integer;
+  Previous, Sibling: Integer;
 begin
   if FCount = Length(FNodes) then
     if FCount = 0 then
@@ -191,43 +207,46 @@ begin
   Inc(FCount);
 
   FNodes[Result].Kind := AKind;
-  FNodes[Result].StartOffset := ASpan.StartOffset;
-  FNodes[Result].EndOffset := ASpan.EndOffset;
-  FNodes[Result].StartLine := ASpan.StartLine;
-  FNodes[Result].StartColumn := ASpan.StartColumn;
-  FNodes[Result].EndLine := ASpan.EndLine;
-  FNodes[Result].EndColumn := ASpan.EndColumn;
+  { The parser measured this node in whatever text it was handed. Everything
+    the result carries is measured in the file the caller passed, so the two
+    offsets are mapped back here, once, and the line and column are then read
+    off the original — deriving them rather than translating them separately
+    is what keeps `loc` and the range the same answer. }
+  FNodes[Result].StartOffset := MapOffset(ASpan.StartOffset, obStart);
+  FNodes[Result].EndOffset := MapOffset(ASpan.EndOffset, obEnd);
+  FCoordinates.PositionAtOffset(FNodes[Result].StartOffset,
+    FNodes[Result].StartLine, FNodes[Result].StartColumn);
+  FCoordinates.PositionAtOffset(FNodes[Result].EndOffset,
+    FNodes[Result].EndLine, FNodes[Result].EndColumn);
   FNodes[Result].FirstChild := -1;
   FNodes[Result].LastChild := -1;
   FNodes[Result].NextSibling := -1;
 
-  { A preprocessor ran, so the offsets above index the generated source while
-    the author's line numbers live in the map. `loc` answers "where did
-    someone write this", which is what a finding is reported as, so it is
-    rebased; the offsets stay in the source the result hands back. }
-  if Assigned(FSourceMap) then
-  begin
-    if FSourceMap.Translate(FNodes[Result].StartLine,
-       FNodes[Result].StartColumn - 1, MappedLine, MappedColumn) then
-    begin
-      FNodes[Result].StartLine := MappedLine;
-      FNodes[Result].StartColumn := MappedColumn;
-    end;
-    if FSourceMap.Translate(FNodes[Result].EndLine,
-       FNodes[Result].EndColumn - 1, MappedLine, MappedColumn) then
-    begin
-      FNodes[Result].EndLine := MappedLine;
-      FNodes[Result].EndColumn := MappedColumn;
-    end;
-  end;
-
+  { Children are kept in source order, which for the three kinds that own a
+    statement list is also the order the walk produces them in. It is not for
+    a class: its elements are reached through several per-kind maps as well as
+    the element array, and whichever one a given member turns up in first
+    decides when it is emitted. Inserting by position costs a short scan over
+    a sibling list that is nearly always already sorted, and spares every
+    consumer from having to sort. }
   if FParent >= 0 then
   begin
-    if FNodes[FParent].LastChild < 0 then
+    Previous := -1;
+    Sibling := FNodes[FParent].FirstChild;
+    while (Sibling >= 0) and
+          (FNodes[Sibling].StartOffset <= FNodes[Result].StartOffset) do
+    begin
+      Previous := Sibling;
+      Sibling := FNodes[Sibling].NextSibling;
+    end;
+
+    FNodes[Result].NextSibling := Sibling;
+    if Previous < 0 then
       FNodes[FParent].FirstChild := Result
     else
-      FNodes[FNodes[FParent].LastChild].NextSibling := Result;
-    FNodes[FParent].LastChild := Result;
+      FNodes[Previous].NextSibling := Result;
+    if Sibling < 0 then
+      FNodes[FParent].LastChild := Result;
   end;
 end;
 
@@ -337,6 +356,22 @@ begin
 
   VisitExpression(ADefinition.SuperClassExpression);
 
+  { The element array first, because it is the only one of these in source
+    order — the per-kind maps below group by kind, and walking them first put
+    a class's children in an order that has nothing to do with the file. The
+    maps still run, because a parser that fills one without the other should
+    lose a body rather than have this quietly decide which is canonical. }
+  for I := 0 to High(ADefinition.FElements) do
+  begin
+    Element := ADefinition.FElements[I];
+    VisitExpression(Element.ComputedKeyExpression);
+    VisitExpression(Element.MethodNode);
+    VisitExpression(Element.GetterNode);
+    VisitExpression(Element.SetterNode);
+    VisitExpression(Element.FieldInitializer);
+    VisitStatement(Element.StaticBlockBody);
+  end;
+
   for I := 0 to ADefinition.Methods.CountFast - 1 do
     VisitExpression(ADefinition.Methods.EntryAt(I).Value);
   for I := 0 to ADefinition.StaticMethods.CountFast - 1 do
@@ -362,17 +397,6 @@ begin
 
   for I := 0 to High(ADefinition.Decorators) do
     VisitExpression(ADefinition.Decorators[I]);
-
-  for I := 0 to High(ADefinition.FElements) do
-  begin
-    Element := ADefinition.FElements[I];
-    VisitExpression(Element.ComputedKeyExpression);
-    VisitExpression(Element.MethodNode);
-    VisitExpression(Element.GetterNode);
-    VisitExpression(Element.SetterNode);
-    VisitExpression(Element.FieldInitializer);
-    VisitStatement(Element.StaticBlockBody);
-  end;
 end;
 
 procedure TASTFlattener.VisitExpression(const AExpression: TGocciaExpression);
@@ -708,27 +732,14 @@ end;
 
 { Materializing }
 
-{ Comment offsets come from the lexer, so their positions need the same
-  rebasing the tree's nodes get. AWantLine picks which half of the translated
-  pair to return, so one helper serves both. }
-function TranslatedCoordinate(const ASourceMap: TGocciaSourceMap;
-  const ALine, AColumn: Integer; const AWantLine: Boolean): Integer;
-var
-  MappedSourceLine, MappedSourceColumn: Integer;
+{ Comment offsets come from the lexer, so they index the parsed text and need
+  the same mapping back the tree's nodes get. }
+function MappedOffset(const AOriginMap: TGocciaOriginMap;
+  const AOffset: Integer; const ABias: TGocciaOriginBias): Integer;
 begin
-  if AWantLine then
-    Result := ALine
-  else
-    Result := AColumn;
-  if not Assigned(ASourceMap) then
-    Exit;
-  if not ASourceMap.Translate(ALine, AColumn - 1, MappedSourceLine,
-     MappedSourceColumn) then
-    Exit;
-  if AWantLine then
-    Result := MappedSourceLine
-  else
-    Result := MappedSourceColumn;
+  if not Assigned(AOriginMap) then
+    Exit(AOffset);
+  AOriginMap.Map(AOffset, ABias, Result);
 end;
 
 function CreatePositionObject(const ALine, AColumn: Integer): TGocciaObjectValue;
@@ -834,7 +845,6 @@ function TGocciaASTNamespaceHost.Parse(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   SourceText: string;
-  GeneratedText: string;
   SourceLines: TStringList;
   Options: TGocciaSourcePipelineOptions;
   PipelineResult: TGocciaSourcePipelineResult;
@@ -844,7 +854,8 @@ var
   Comments: TGocciaArrayValue;
   CommentSpans: TGocciaCommentSpanArray;
   Coordinates: IGocciaSourceCoordinates;
-  Span: TGocciaSourceSpan;
+  StartOffset, EndOffset: Integer;
+  StartLine, StartColumn, EndLine, EndColumn: Integer;
   ResultRoot: TGocciaTempRoot;
   I: Integer;
 begin
@@ -877,9 +888,12 @@ begin
   else
     Options.SourceType := stScript;
 
-  SourceLines := TStringList.Create;
+  { CreateTextLines keeps the exact text alongside the split lines, so the
+    string the pipeline parses is character for character the one returned as
+    `source` — a plain TStringList round trip loses a trailing newline, and
+    every offset would then be into a string the caller never sees. }
+  SourceLines := CreateTextLines(SourceText);
   try
-    SourceLines.Text := SourceText;
     try
       // The file name decides whether the JSX preprocessor warns about the
       // extension, and appears in a syntax error's location.
@@ -899,23 +913,18 @@ begin
     ResultObject := TGocciaObjectValue.Create;
     AddTempRootIfNeeded(ResultRoot, ResultObject);
 
-    { The text the offsets index. When no preprocessor ran that is the
-      caller's own string, returned unchanged — going back through the line
-      list would append a trailing newline the caller never wrote, and a rule
-      slicing `source` would be slicing something subtly not its file. When
-      one did run, it is the transformed text, which is genuinely a different
-      string. }
-    if Assigned(PipelineResult.SourceMap) then
-      GeneratedText := PipelineResult.GeneratedSourceLines.Text
-    else
-      GeneratedText := SourceText;
+    { The caller's own text, which is also the one every offset indexes. A
+      preprocessor may have rewritten it on the way to the parser, but nothing
+      the result carries is measured in that rewrite. }
     ResultObject.AssignProperty('source',
-      TGocciaStringLiteralValue.Create(GeneratedText));
+      TGocciaStringLiteralValue.Create(SourceText));
 
     Comments := TGocciaArrayValue.Create;
     ResultObject.AssignProperty('comments', Comments);
 
-    Flattener := TASTFlattener.Create(PipelineResult.SourceMap);
+    Coordinates := TGocciaSourceCoordinates.Create(SourceText);
+
+    Flattener := TASTFlattener.Create(PipelineResult.OriginMap, Coordinates);
     try
       Flattener.Run(PipelineResult.ProgramNode);
       ResultObject.AssignProperty('root', MaterializeNode(Flattener, 0));
@@ -924,28 +933,24 @@ begin
     end;
 
     CommentSpans := PipelineResult.Comments;
-    Coordinates := TGocciaSourceCoordinates.Create(GeneratedText);
     for I := 0 to High(CommentSpans) do
     begin
       CommentObject := TGocciaObjectValue.Create;
       Comments.SetElement(I, CommentObject);
-      Span := TGocciaSourceSpan.InSource(Coordinates,
-        CommentSpans[I].StartOffset, CommentSpans[I].EndOffset);
+      StartOffset := MappedOffset(PipelineResult.OriginMap,
+        CommentSpans[I].StartOffset, obStart);
+      EndOffset := MappedOffset(PipelineResult.OriginMap,
+        CommentSpans[I].EndOffset, obEnd);
+      Coordinates.PositionAtOffset(StartOffset, StartLine, StartColumn);
+      Coordinates.PositionAtOffset(EndOffset, EndLine, EndColumn);
       CommentObject.AssignProperty('kind',
         TGocciaStringLiteralValue.Create(CommentKindName(CommentSpans[I].Kind)));
       CommentObject.AssignProperty('start',
-        TGocciaNumberLiteralValue.Create(CommentSpans[I].StartOffset));
+        TGocciaNumberLiteralValue.Create(StartOffset));
       CommentObject.AssignProperty('end',
-        TGocciaNumberLiteralValue.Create(CommentSpans[I].EndOffset));
-      CommentObject.AssignProperty('loc', CreateLocObject(
-        TranslatedCoordinate(PipelineResult.SourceMap, Span.StartLine, Span.StartColumn,
-          True),
-        TranslatedCoordinate(PipelineResult.SourceMap, Span.StartLine, Span.StartColumn,
-          False),
-        TranslatedCoordinate(PipelineResult.SourceMap, Span.EndLine, Span.EndColumn,
-          True),
-        TranslatedCoordinate(PipelineResult.SourceMap, Span.EndLine, Span.EndColumn,
-          False)));
+        TGocciaNumberLiteralValue.Create(EndOffset));
+      CommentObject.AssignProperty('loc',
+        CreateLocObject(StartLine, StartColumn, EndLine, EndColumn));
     end;
 
     Result := ResultObject;

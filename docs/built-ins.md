@@ -847,7 +847,7 @@ as `eval` and the `Function` constructor inherit them. A file that needs
 
 | Property | Description |
 |----------|-------------|
-| `source` | The text the tree's offsets index into. With `jsx` on this is the transformed source, not the argument |
+| `source` | The text that was passed, returned unchanged. Every offset and position in the result indexes it |
 | `root` | The `Program` node |
 | `comments` | Every comment, in source order |
 
@@ -866,10 +866,17 @@ statement *list*, whose children are siblings of one another: `Program`,
 A syntax error in the parsed text is a `SyntaxError` naming its position; it
 does not abort the caller's own run unless the caller lets it.
 
-With `jsx` on, `loc` reports the position in the file as written, while
-`start` and `end` index the transformed `source`. See
-[ADR 0117](adr/0117-javascript-visible-ast-module.md) for what the module
-exposes, what it withholds, and why.
+With `jsx` on, the text is rewritten before it is parsed, but nothing in the
+result is measured in that rewrite: offsets and positions alike are mapped back
+to the file as written, so `source.slice(node.start, node.end)` is the node's
+own text. Comments the transformer removes — one between JSX attributes, or a
+child container holding nothing else — are not in `comments`, because the
+parser never sees them.
+
+See [ADR 0117](adr/0117-javascript-visible-ast-module.md) for what the module
+exposes, what it withholds, and why, and
+[ADR 0118](adr/0118-original-file-source-ranges.md) for the one coordinate
+system.
 
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 
