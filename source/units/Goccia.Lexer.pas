@@ -15,6 +15,22 @@ uses
   Goccia.Token;
 
 type
+  { Comment trivia, recorded only when a caller opts in with CollectComments.
+    The parser discards comments, so a tool that needs them — a lint rule
+    deciding where a blank line belongs, a doc extractor — would otherwise
+    have to re-scan the source and re-derive regex-versus-division for
+    itself. Recording here keeps that classification in the one place that
+    already makes it. }
+  TGocciaCommentKind = (gckLine, gckBlock);
+
+  TGocciaCommentSpan = record
+    Kind: TGocciaCommentKind;
+    StartOffset: Integer;  // 0-based, inclusive
+    EndOffset: Integer;    // 0-based, exclusive
+  end;
+
+  TGocciaCommentSpanArray = array of TGocciaCommentSpan;
+
   TGocciaLexicalGoal = (
     glgInputElementDiv,
     glgInputElementRegExp,
@@ -49,7 +65,12 @@ type
     FHashbangSkipped: Boolean;
     FEOFEmitted: Boolean;
     FScanTimeNanoseconds: Int64;
+    FCollectComments: Boolean;
+    FComments: TGocciaCommentSpanArray;
+    FCommentCount: Integer;
     function GetSourceLines: TStringList;
+    procedure RecordComment(const AKind: TGocciaCommentKind;
+      const AStartOffset, AEndOffset: Integer);
 
     function IsAtEnd: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function Advance: Char; {$IFDEF FPC}inline;{$ENDIF}
@@ -109,6 +130,12 @@ type
     // (issue #808).
     function HasGoalSensitiveTokenSince(const ACount: Integer): Boolean;
     function ScanNextToken(const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken;
+    { Off by default. A speculative parse can re-lex the same span, so the
+      recorded set is de-duplicated and ordered by start offset on the way
+      out rather than on the way in. }
+    function TakeComments: TGocciaCommentSpanArray;
+    property CollectComments: Boolean read FCollectComments
+      write FCollectComments;
     property ScanTimeNanoseconds: Int64 read FScanTimeNanoseconds;
     property Tokens: TObjectList<TGocciaToken> read FTokens;
     property Source: string read FSource;
@@ -619,19 +646,75 @@ begin
 end;
 
 // ES2026 §12.4 SingleLineComment :: // SingleLineCommentCharsₒₚₜ
-procedure TGocciaLexer.SkipComment;
+procedure TGocciaLexer.RecordComment(const AKind: TGocciaCommentKind;
+  const AStartOffset, AEndOffset: Integer);
 begin
+  if FCommentCount = Length(FComments) then
+    if FCommentCount = 0 then
+      SetLength(FComments, 32)
+    else
+      SetLength(FComments, FCommentCount * 2);
+  FComments[FCommentCount].Kind := AKind;
+  FComments[FCommentCount].StartOffset := AStartOffset;
+  FComments[FCommentCount].EndOffset := AEndOffset;
+  Inc(FCommentCount);
+end;
+
+function TGocciaLexer.TakeComments: TGocciaCommentSpanArray;
+var
+  I, J, Count: Integer;
+  Pivot: TGocciaCommentSpan;
+begin
+  SetLength(Result, FCommentCount);
+  if FCommentCount = 0 then
+    Exit;
+  Move(FComments[0], Result[0], FCommentCount * SizeOf(TGocciaCommentSpan));
+
+  // Insertion sort: re-lexing appends a span the scan already passed, so the
+  // array is near-sorted and the runs out of order are short.
+  for I := 1 to High(Result) do
+  begin
+    Pivot := Result[I];
+    J := I - 1;
+    while (J >= 0) and (Result[J].StartOffset > Pivot.StartOffset) do
+    begin
+      Result[J + 1] := Result[J];
+      Dec(J);
+    end;
+    Result[J + 1] := Pivot;
+  end;
+
+  Count := 1;
+  for I := 1 to High(Result) do
+    if Result[I].StartOffset <> Result[Count - 1].StartOffset then
+    begin
+      Result[Count] := Result[I];
+      Inc(Count);
+    end;
+  SetLength(Result, Count);
+end;
+
+procedure TGocciaLexer.SkipComment;
+var
+  StartOffset: Integer;
+begin
+  StartOffset := FCurrent - 1;
   // Skip '//'
   Advance;
   Advance;
 
   SkipUntilLineTerminator;
+
+  if FCollectComments then
+    RecordComment(gckLine, StartOffset, FCurrent - 1);
 end;
 
 procedure TGocciaLexer.SkipBlockComment;
 var
   C: Char;
+  StartOffset: Integer;
 begin
+  StartOffset := FCurrent - 1;
   // Skip '/*'
   Advance;
   Advance;
@@ -647,6 +730,8 @@ begin
       begin
         Inc(FCurrent);
         Inc(FColumn);
+        if FCollectComments then
+          RecordComment(gckBlock, StartOffset, FCurrent - 1);
         Exit;
       end;
     end
