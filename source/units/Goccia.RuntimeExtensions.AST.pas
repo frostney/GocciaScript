@@ -18,6 +18,7 @@ type
   TGocciaASTRuntimeExtension = class(TGocciaRuntimeExtension)
   private
     FASTModule: TGocciaRuntimeNamespaceModuleRegistration;
+    FHostToken: TObject;
     function MaterializeAST: TGocciaValue;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
@@ -41,12 +42,17 @@ procedure TGocciaASTRuntimeExtension.Detach;
 begin
   FASTModule.Free;
   FASTModule := nil;
+  { Release this extension's own host rather than leaving it for thread
+    teardown: several engines can live on one thread, and a detached one must
+    not keep its host alive until the thread ends. }
+  ReleaseASTHost(FHostToken);
+  FHostToken := nil;
   inherited;
 end;
 
 function TGocciaASTRuntimeExtension.MaterializeAST: TGocciaValue;
 begin
-  Result := CreateASTNamespace;
+  Result := CreateASTNamespace(FHostToken);
 end;
 
 end.

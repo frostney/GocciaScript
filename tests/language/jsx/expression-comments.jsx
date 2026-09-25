@@ -130,4 +130,30 @@ describe("JSX expression comments", () => {
     expect(el.children.length).toBe(1);
     expect(el.children[0].tag).toBe("span");
   });
+
+  test("an identifier named of before a comment still divides", () => {
+    const of = 8;
+    const block = <div>{of /* half */ / 2}</div>;
+    const line = (
+      <div>
+        {of // half
+          / 2}
+      </div>
+    );
+    expect(block.children[0]).toBe(4);
+    expect(line.children[0]).toBe(4);
+  });
+
+  test("of in a for-of header is still followed by a regex", () => {
+    const el = (
+      <div>
+        {(() => {
+          const found = [];
+          for (const match of /b+/.exec("abbc")) found.push(match);
+          return found.join("");
+        })()}
+      </div>
+    );
+    expect(el.children[0]).toBe("bb");
+  });
 });

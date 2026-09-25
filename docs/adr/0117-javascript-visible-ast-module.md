@@ -41,8 +41,12 @@ Ship `goccia:ast` as an experimental runtime module behind
 ```js
 import { parse } from "goccia:ast";
 
-const { source, root, comments } = parse(text, { jsx: false, asi: false });
+const { source, root, comments } = parse(text, { jsx: false });
 ```
+
+The options describe the text, not the language: which syntax `parse`
+accepts, ASI included, follows the compatibility flags the host was started
+with, as `eval` and the `Function` constructor do.
 
 `root` is a tree of nodes:
 

@@ -4897,15 +4897,11 @@ begin
         Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column));
       afcReady:
       begin
+        // Line/Column are the 'async' token, so FunctionStatement's
+        // SourceText already includes the prefix.
         Result := FunctionStatement(True, Check(gttStar), Line, Column);
         if Result is TGocciaFunctionDeclaration then
-        begin
           TGocciaFunctionDeclaration(Result).FunctionExpression.IsAsync := True;
-          // Override SourceText to include 'async' prefix (FunctionStatement
-          // sets it from the 'function' token; Line/Column are the 'async' token)
-          TGocciaFunctionDeclaration(Result).FunctionExpression.SourceText :=
-            ExtractSourceRange(Line, Column);
-        end;
       end;
     end;
   end

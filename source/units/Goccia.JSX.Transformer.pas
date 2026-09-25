@@ -32,7 +32,7 @@ type
   TGocciaJSXTransformer = class
   private
     type
-      TLastTokenKind = (ltkNone, ltkExpressionEnd, ltkOperator);
+      TLastTokenKind = (ltkNone, ltkExpressionEnd, ltkOperator, ltkLineBreak);
       TScanContext = (scSource, scAttributes, scChildren, scExpression);
   private
     FSource: string;
@@ -47,6 +47,9 @@ type
     FFactoryName: string;
     FFragmentName: string;
     FLastTokenKind: TLastTokenKind;
+    // The kind before the current run of line breaks, so a word at the start
+    // of a line can still be read against the token that preceded it.
+    FKindBeforeLineBreak: TLastTokenKind;
     FHasJSX: Boolean;
     FFileName: string;
     FJSXDepth: Integer;
@@ -79,6 +82,8 @@ type
     procedure CopyLineComment;
     procedure CopyBlockComment;
     function CopyIdentifierOrKeyword: string;
+    function TokenKindAfterWord(const AWord: string;
+      const AStart: Integer): TLastTokenKind;
     procedure CopyNumber;
     procedure CopyOperator;
 
@@ -555,14 +560,46 @@ begin
   while not IsAtEnd and IsIdentifierPart(CurrentChar) do
     CopyChar;
   Result := Copy(FSource, Start, FPos - Start);
+  FLastTokenKind := TokenKindAfterWord(Result, Start);
+end;
 
-  if (Result = KEYWORD_RETURN) or (Result = KEYWORD_THROW) or (Result = KEYWORD_CASE) or
-     (Result = KEYWORD_NEW) or (Result = KEYWORD_TYPEOF) or (Result = KEYWORD_VOID) or
-     (Result = KEYWORD_DELETE) or (Result = KEYWORD_IN) or (Result = KEYWORD_INSTANCEOF) or
-     (Result = KEYWORD_OF) or (Result = KEYWORD_YIELD) or (Result = KEYWORD_AWAIT) then
-    FLastTokenKind := ltkOperator
+// What a '/' after AWord would be: a regex after a word that expects an
+// operand, a division after one that ends an expression. Reads FLastTokenKind
+// as the token before AWord.
+//
+// `of` is the one contextual word here. It is a keyword only in a for-of
+// header, where it follows the end of a binding (`x`, `]`, `}`) — across a
+// line break too, or a binding itself named `of` — and a regex can follow
+// it; everywhere else it is an ordinary identifier, and `of / 2` divides.
+// AStart is the word's position in FSource.
+function TGocciaJSXTransformer.TokenKindAfterWord(const AWord: string;
+  const AStart: Integer): TLastTokenKind;
+
+  function FollowsWordOf: Boolean;
+  var
+    Index: Integer;
+  begin
+    Index := AStart - 1;
+    while (Index >= 1) and (FSource[Index] in [' ', #9, #10, #13]) do
+      Dec(Index);
+    Result := (Index >= 2) and (Copy(FSource, Index - 1, 2) = KEYWORD_OF) and
+      ((Index = 2) or not IsIdentifierPart(FSource[Index - 2]));
+  end;
+
+begin
+  if (AWord = KEYWORD_RETURN) or (AWord = KEYWORD_THROW) or (AWord = KEYWORD_CASE) or
+     (AWord = KEYWORD_NEW) or (AWord = KEYWORD_TYPEOF) or (AWord = KEYWORD_VOID) or
+     (AWord = KEYWORD_DELETE) or (AWord = KEYWORD_IN) or (AWord = KEYWORD_INSTANCEOF) or
+     (AWord = KEYWORD_YIELD) or (AWord = KEYWORD_AWAIT) then
+    Result := ltkOperator
+  else if (AWord = KEYWORD_OF) and
+          ((FLastTokenKind = ltkExpressionEnd) or
+           ((FLastTokenKind = ltkLineBreak) and
+            (FKindBeforeLineBreak = ltkExpressionEnd)) or
+           FollowsWordOf) then
+    Result := ltkOperator
   else
-    FLastTokenKind := ltkExpressionEnd;
+    Result := ltkExpressionEnd;
 end;
 
 procedure TGocciaJSXTransformer.CopyNumber;
@@ -653,7 +690,7 @@ end;
 
 function TGocciaJSXTransformer.IsJSXContext: Boolean;
 begin
-  Result := FLastTokenKind in [ltkNone, ltkOperator];
+  Result := FLastTokenKind in [ltkNone, ltkOperator, ltkLineBreak];
 end;
 
 function TGocciaJSXTransformer.IsJSXStart: Boolean;
@@ -1544,7 +1581,7 @@ begin
           CopyLineComment
         else if PeekAt(1) = '*' then
           CopyBlockComment
-        else if FLastTokenKind in [ltkNone, ltkOperator] then
+        else if FLastTokenKind in [ltkNone, ltkOperator, ltkLineBreak] then
           CopyRegexLiteral
         else
         begin
@@ -1609,13 +1646,7 @@ begin
           AdvanceInput;
         end;
         Ident := Copy(FSource, IdStart, FPos - IdStart);
-        if (Ident = KEYWORD_RETURN) or (Ident = KEYWORD_THROW) or (Ident = KEYWORD_CASE) or
-           (Ident = KEYWORD_NEW) or (Ident = KEYWORD_TYPEOF) or (Ident = KEYWORD_VOID) or
-           (Ident = KEYWORD_DELETE) or (Ident = KEYWORD_IN) or (Ident = KEYWORD_INSTANCEOF) or
-           (Ident = KEYWORD_OF) or (Ident = KEYWORD_YIELD) or (Ident = KEYWORD_AWAIT) then
-          FLastTokenKind := ltkOperator
-        else
-          FLastTokenKind := ltkExpressionEnd;
+        FLastTokenKind := TokenKindAfterWord(Ident, IdStart);
       end
       else if CurrentChar in ['0'..'9'] then
       begin
@@ -1808,7 +1839,9 @@ begin
     begin
       CopyChar;
       AddIdentityMapping;
-      FLastTokenKind := ltkOperator;
+      if FLastTokenKind <> ltkLineBreak then
+        FKindBeforeLineBreak := FLastTokenKind;
+      FLastTokenKind := ltkLineBreak;
       Continue;
     end;
 
@@ -1818,7 +1851,9 @@ begin
       if not IsAtEnd and (CurrentChar = #10) then
         CopyChar;
       AddIdentityMapping;
-      FLastTokenKind := ltkOperator;
+      if FLastTokenKind <> ltkLineBreak then
+        FKindBeforeLineBreak := FLastTokenKind;
+      FLastTokenKind := ltkLineBreak;
       Continue;
     end;
 

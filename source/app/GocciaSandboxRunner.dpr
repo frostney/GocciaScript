@@ -1164,37 +1164,27 @@ begin
     AHostPath := '';
 end;
 
-// A write that either replaces the file or leaves it as it was: the temporary
-// lands in the same directory, so the rename is within one filesystem.
+// A write that either replaces the file or leaves it as it was. The temporary
+// lands in the same directory, so the rename is within one filesystem, and
+// ReplaceHostFile refuses a symlink planted at the temporary's name.
 function TSandboxRunnerApp.WriteHostFile(const AHostPath: string;
   const ABytes: TBytes): Boolean;
 var
-  Temporary: string;
-  Stream: TFileStream;
+  ErrorMessage: string;
 begin
-  Result := False;
-  Temporary := AHostPath + '.goccia-write-back';
   try
     ForceDirectories(ExtractFilePath(AHostPath));
-    Stream := TFileStream.Create(Temporary, fmCreate);
-    try
-      if Length(ABytes) > 0 then
-        Stream.WriteBuffer(ABytes[0], Length(ABytes));
-    finally
-      Stream.Free;
-    end;
-    if FileExists(AHostPath) then
-      DeleteFile(AHostPath);
-    Result := RenameFile(Temporary, AHostPath);
+    Result := ReplaceHostFile(AHostPath, AHostPath + '.goccia-write-back',
+      ABytes, ErrorMessage);
   except
     on E: Exception do
     begin
-      WriteLn(ErrOutput, 'write-back: ' + AHostPath + ': ' + E.Message);
+      ErrorMessage := E.Message;
       Result := False;
     end;
   end;
-  if not Result and FileExists(Temporary) then
-    DeleteFile(Temporary);
+  if not Result then
+    WriteLn(ErrOutput, 'write-back: ' + AHostPath + ': ' + ErrorMessage);
 end;
 
 { The guest never writes to the host. It writes into its own filesystem, and

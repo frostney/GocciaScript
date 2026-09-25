@@ -109,7 +109,10 @@ longer act on it.
 - `--write-back` is the runner's second host-write, after `--diff-output`. It
   is the same authority — a path the host named on its own command line — with
   a different payload.
-- There is no tree-level transaction. Each file is replaced atomically; a
+- There is no tree-level transaction. Each file is replaced atomically — an
+  exclusively created temporary beside it, then one rename over it, so a
+  symlink at the temporary's name is refused rather than followed and the
+  original is never deleted first; a
   failure partway through the set leaves the earlier files written, and the
   summary says how many landed. A stronger guarantee would mean staging the
   whole tree, which is a cost every run would pay for a case a re-run already
