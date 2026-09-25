@@ -268,8 +268,12 @@ with body-level vars.
 {body}
 ```
 
-Body alone. The parser runs, fails (or doesn't), and the runner
-reads the exit code.
+Body alone. The runner executes it in process and records whether
+parsing, linking, or execution raised. Any raised error passes the test;
+the error type is not compared. A body that completes cleanly fails with
+`expected parse error, body executed cleanly`. Module-flagged negative
+tests of every phase use this template too, because top-level `import`
+cannot sit inside the negative-runtime `try` wrapper.
 
 ## Failure classification
 
