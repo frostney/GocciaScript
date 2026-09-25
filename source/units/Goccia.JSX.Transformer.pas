@@ -95,6 +95,7 @@ type
     procedure OpenParen;
     procedure CloseParen;
     function IsForOfKeyword(const AStart: Integer): Boolean;
+    function InForHeader: Boolean;
 
     function IsJSXContext: Boolean;
     function IsJSXStart: Boolean;
@@ -600,8 +601,10 @@ end;
 
 // The `of` at AStart is the for-of keyword when it sits at the top level of
 // the innermost open `for (...)` header, is that header's first, and follows
-// the end of a binding: `]`, `}`, or a name. The name cannot be a declaration
-// keyword or `in` — in `for (const of of xs)` the first `of` is the binding.
+// the end of a binding. The token kind says whether a binding just ended — a
+// name, `]`, `}`, or `)` — and comments leave it as it was. The word before
+// rules out a declaration keyword: in `for (const of of xs)` the first `of`
+// is the binding.
 function TGocciaJSXTransformer.IsForOfKeyword(const AStart: Integer): Boolean;
 var
   Header, Index, WordEnd: Integer;
@@ -610,28 +613,44 @@ begin
   Result := False;
   Header := High(FForHeaders);
   if (Header < 0) or (FForHeaders[Header].Depth <> FParenDepth) or
-     FForHeaders[Header].SawOf then
+     FForHeaders[Header].SawOf or (FLastTokenKind <> ltkExpressionEnd) then
     Exit;
 
+  // Back over whitespace and block comments to the word before, if any.
   Index := AStart - 1;
-  while (Index >= 1) and (FSource[Index] in [' ', #9, #10, #13]) do
-    Dec(Index);
-  if Index < 1 then
-    Exit;
-  if FSource[Index] in [']', '}'] then
-    Result := True
-  else if IsIdentifierPart(FSource[Index]) then
+  while Index >= 1 do
+    if FSource[Index] in [' ', #9, #10, #13] then
+      Dec(Index)
+    else if (Index >= 2) and (FSource[Index] = '/') and
+            (FSource[Index - 1] = '*') then
+    begin
+      Dec(Index, 2);
+      while (Index >= 2) and
+            not ((FSource[Index - 1] = '/') and (FSource[Index] = '*')) do
+        Dec(Index);
+      Dec(Index, 2);
+    end
+    else
+      Break;
+  Word := '';
+  if (Index >= 1) and IsIdentifierPart(FSource[Index]) then
   begin
     WordEnd := Index;
     while (Index >= 1) and IsIdentifierPart(FSource[Index]) do
       Dec(Index);
     Word := Copy(FSource, Index + 1, WordEnd - Index);
-    Result := (Word <> KEYWORD_CONST) and (Word <> KEYWORD_LET) and
-      (Word <> KEYWORD_VAR) and (Word <> KEYWORD_USING) and
-      (Word <> KEYWORD_IN);
   end;
+
+  Result := (Word <> KEYWORD_CONST) and (Word <> KEYWORD_LET) and
+    (Word <> KEYWORD_VAR) and (Word <> KEYWORD_USING);
   if Result then
     FForHeaders[Header].SawOf := True;
+end;
+
+function TGocciaJSXTransformer.InForHeader: Boolean;
+begin
+  Result := (Length(FForHeaders) > 0) and
+    (FForHeaders[High(FForHeaders)].Depth = FParenDepth);
 end;
 
 procedure TGocciaJSXTransformer.OpenParen;
@@ -1896,11 +1915,15 @@ begin
       Continue;
     end;
 
+    // A line break may start a statement, so it reads as an operator —
+    // except at the top level of a for header, where none can start and the
+    // token before still decides what `of` is.
     if C = #10 then
     begin
       CopyChar;
       AddIdentityMapping;
-      FLastTokenKind := ltkOperator;
+      if not InForHeader then
+        FLastTokenKind := ltkOperator;
       Continue;
     end;
 
@@ -1910,7 +1933,8 @@ begin
       if not IsAtEnd and (CurrentChar = #10) then
         CopyChar;
       AddIdentityMapping;
-      FLastTokenKind := ltkOperator;
+      if not InForHeader then
+        FLastTokenKind := ltkOperator;
       Continue;
     end;
 

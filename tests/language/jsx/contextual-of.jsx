@@ -47,6 +47,16 @@ describe("contextual of in the JSX preprocessor", () => {
     expect(el.children[0]).toBe("<b><i>");
   });
 
+  test("a comment between the binding and of keeps the keyword", () => {
+    const found = [];
+    for (const block /* the match */ of /<b>/.exec("<b>")) found.push(block);
+    for (const line // the match.
+      of /<i>/.exec("<i>")) found.push(line);
+    for ((found.last) of /<u>/.exec("<u>")) found.push(found.last);
+    const el = <b>{found.join("")}</b>;
+    expect(el.children[0]).toBe("<b><i><u>");
+  });
+
   test("a binding named of is followed by the keyword and a regex", () => {
     const found = [];
     for (const of of /<i>/.exec("<i>")) found.push(of);
