@@ -193,6 +193,84 @@ describe("ast.parse", () => {
     expect(handler.children[1].loc.start.line).toBe(6);
   });
 
+  test("with jsx on, the source is still the text that was passed", () => {
+    const source = "const a = <div>hi</div>;\n";
+
+    expect(parse(source, { jsx: true }).source).toBe(source);
+  });
+
+  test("with jsx on, offsets index the file and not the transform", () => {
+    const source = [
+      "const f = () => (",
+      "  <button",
+      "    onClick={() => {",
+      "      const next = 1;",
+      "      use(next);",
+      "    }}",
+      "  />",
+      ");",
+      "",
+    ].join("\n");
+    const result = parse(source, { jsx: true });
+    const handler = result.root.children[0].children[0];
+
+    expect(source.slice(handler.children[0].start, handler.children[0].end)).toBe(
+      "const next = 1;",
+    );
+    expect(source.slice(handler.children[1].start, handler.children[1].end)).toBe(
+      "use(next);",
+    );
+  });
+
+  test("a statement whose text ends at jsx ends where the element does", () => {
+    const source = "const a = <div>hi</div>;\nconst b = 2;\n";
+    const result = parse(source, { jsx: true });
+
+    expect(source.slice(result.root.children[0].start, result.root.children[0].end)).toBe(
+      "const a = <div>hi</div>;",
+    );
+    expect(source.slice(result.root.children[1].start, result.root.children[1].end)).toBe(
+      "const b = 2;",
+    );
+  });
+
+  test("with jsx on, a comment inside a copied expression keeps its offsets", () => {
+    const source = "const a = <div>{/* gone */ value /* kept */}</div>;\n";
+    const result = parse(source, { jsx: true });
+    const kept = result.comments[result.comments.length - 1];
+
+    expect(source.slice(kept.start, kept.end)).toBe("/* kept */");
+  });
+
+  test("an expression statement starts at its first token", () => {
+    const source = "use(next);\nx = 1;\n";
+    const result = parse(source);
+
+    expect(result.root.children.map((node) => source.slice(node.start, node.end))).toEqual([
+      "use(next);",
+      "x = 1;",
+    ]);
+  });
+
+  test("a case clause covers itself, not the switch it is in", () => {
+    const source = "switch (x) {\n  case 1:\n    a();\n    break;\n  default:\n    b();\n}\n";
+    const result = parse(source);
+    const cases = result.root.children[0].children;
+
+    expect(cases.map((node) => node.kind)).toEqual(["SwitchCase", "SwitchCase"]);
+    expect(source.slice(cases[0].start, cases[0].end)).toBe("case 1:\n    a();\n    break;");
+    expect(source.slice(cases[1].start, cases[1].end)).toBe("default:\n    b();");
+  });
+
+  test("a body block covers its braces and nothing else", () => {
+    const source = "class C {\n  m() {\n    return 1;\n  }\n}\n";
+    const result = parse(source);
+    const body = result.root.children[0].children[0];
+
+    expect(body.kind).toBe("BlockStatement");
+    expect(source.slice(body.start, body.end)).toBe("{\n    return 1;\n  }");
+  });
+
   test("a syntax error is a SyntaxError naming its position", () => {
     expect(() => parse("const a = ;\n")).toThrow(SyntaxError);
   });

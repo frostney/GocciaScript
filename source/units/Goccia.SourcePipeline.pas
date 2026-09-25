@@ -14,6 +14,7 @@ uses
   Goccia.AST.Node,
   Goccia.Constants,
   Goccia.Lexer,
+  Goccia.OriginMap,
   Goccia.SourceMap;
 
 type
@@ -60,6 +61,7 @@ type
   private
     FProgramNode: TGocciaProgram;
     FSourceMap: TGocciaSourceMap;
+    FOriginMap: TGocciaOriginMap;
     FGeneratedSourceLines: TStringList;
     FLexTimeNanoseconds: Int64;
     FParseTimeNanoseconds: Int64;
@@ -79,6 +81,10 @@ type
 
     property ProgramNode: TGocciaProgram read FProgramNode;
     property SourceMap: TGocciaSourceMap read FSourceMap;
+    { Which offsets of the generated source are which offsets of the original.
+      Assigned exactly when a preprocessor rewrote the text; nil means the two
+      are the same string. }
+    property OriginMap: TGocciaOriginMap read FOriginMap;
     property GeneratedSourceLines: TStringList read FGeneratedSourceLines;
     { Empty unless the run asked for comments. Ordered by start offset. }
     property Comments: TGocciaCommentSpanArray read FComments;
@@ -183,12 +189,14 @@ end;
 
 function ApplyPreprocessors(const ASource, AFileName: string;
   const AOptions: TGocciaSourcePipelineOptions;
-  out ASourceMap: TGocciaSourceMap): string;
+  out ASourceMap: TGocciaSourceMap;
+  out AOriginMap: TGocciaOriginMap): string;
 var
   JSXResult: TGocciaJSXTransformResult;
 begin
   Result := ASource;
   ASourceMap := nil;
+  AOriginMap := nil;
 
   // '.ts' sources never contain JSX, so '<' stays type syntax there: running
   // the transformer would rewrite generic annotations such as
@@ -201,6 +209,7 @@ begin
     JSXResult := TGocciaJSXTransformer.Transform(Result, AFileName);
     Result := JSXResult.Source;
     ASourceMap := JSXResult.SourceMap;
+    AOriginMap := JSXResult.OriginMap;
   end;
 end;
 
@@ -400,6 +409,7 @@ destructor TGocciaSourcePipelineResult.Destroy;
 begin
   FProgramNode.Free;
   FSourceMap.Free;
+  FOriginMap.Free;
   FGeneratedSourceLines.Free;
   inherited;
 end;
@@ -515,6 +525,7 @@ var
   Parser: TGocciaParser;
   ParserWarning: TGocciaParserWarning;
   PreprocessorSourceMap: TGocciaSourceMap;
+  PreprocessorOriginMap: TGocciaOriginMap;
   StartTime, ParseStart, ParseEnd, ParsePhaseTime: Int64;
   OrigLine, OrigCol, I: Integer;
 begin
@@ -529,7 +540,7 @@ begin
 
     try
       SourceText := ApplyPreprocessors(SourceText, AFileName, AOptions,
-        PreprocessorSourceMap);
+        PreprocessorSourceMap, PreprocessorOriginMap);
     except
       on E: TGocciaError do
       begin
@@ -541,6 +552,7 @@ begin
       end;
     end;
     Result.FSourceMap := PreprocessorSourceMap;
+    Result.FOriginMap := PreprocessorOriginMap;
     if Assigned(Result.FSourceMap) then
     begin
       Result.FSourceMap.SetSourceContent(0, OriginalSourceText);
@@ -761,6 +773,7 @@ var
   Source: string;
   OriginalSourceLines: TStringList;
   SourceMap: TGocciaSourceMap;
+  OriginMap: TGocciaOriginMap;
   OrigLine, OrigCol: Integer;
 begin
   Source := DynamicFunctionWrapperSource(AParametersSource, ABodySource, AKind);
@@ -768,7 +781,8 @@ begin
   OriginalSourceLines := CreateECMAScriptSourceLines(Source);
   try
     try
-      Source := ApplyPreprocessors(Source, AFileName, AOptions, SourceMap);
+      Source := ApplyPreprocessors(Source, AFileName, AOptions, SourceMap,
+        OriginMap);
     except
       on E: TGocciaError do
       begin
@@ -805,6 +819,7 @@ begin
       end;
     finally
       SourceMap.Free;
+      OriginMap.Free;
     end;
   finally
     OriginalSourceLines.Free;

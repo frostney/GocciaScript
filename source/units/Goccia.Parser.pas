@@ -244,7 +244,7 @@ type
 
     // Function body parsing: (params) { stmts } -> function expression
     function ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False): TGocciaExpression;
-    function ParseFunctionBodyBlock(const ALine, AColumn: Integer): TGocciaBlockStatement;
+    function ParseFunctionBodyBlock: TGocciaBlockStatement;
 
     // Destructuring pattern parsing
     function ParsePattern: TGocciaDestructuringPattern;
@@ -360,7 +360,13 @@ type
     function WhileStatement: TGocciaStatement;
     function DoWhileStatement: TGocciaStatement;
     function WithStatement: TGocciaStatement;
-    function FunctionStatement(const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False): TGocciaStatement;
+    { AStartLine/AStartColumn name the declaration's first token when it is
+      not the 'function' keyword — `async function` starts one token earlier,
+      and both the node's span and Function.prototype.toString have to say so. }
+    function FunctionStatement(const AIsAsync: Boolean = False;
+      const AIsGenerator: Boolean = False;
+      const AStartLine: Integer = 0;
+      const AStartColumn: Integer = 0): TGocciaStatement;
     function ReturnStatement: TGocciaStatement;
     function ThrowStatement: TGocciaStatement;
     function TryStatement: TGocciaStatement;
@@ -2884,8 +2890,7 @@ begin
           FInGeneratorFunction := 0;
           try
             if Match(gttLeftBrace) then
-              ArrowBody := ParseFunctionBodyBlock(Previous.Line,
-                Previous.Column)
+              ArrowBody := ParseFunctionBodyBlock
             else
               ArrowBody := Assignment;
           finally
@@ -4290,7 +4295,7 @@ begin
     SavedDirectLabelStart);
   try
     Result := TGocciaGetterExpression.Create(
-      ParseFunctionBodyBlock(Line, Column), SourceSpanAtPosition(Line, Column));
+      ParseFunctionBodyBlock, SourceSpanAtPosition(Line, Column));
   finally
     LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
       SavedDirectLabelStart);
@@ -4344,7 +4349,7 @@ begin
   EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
     SavedDirectLabelStart);
   try
-    Body := ParseFunctionBodyBlock(Line, Column);
+    Body := ParseFunctionBodyBlock;
     SetterIsStrict := (not EffectiveNonStrictModeEnabled) or
       HasUseStrictDirective(Body);
     ValidateParameterEarlyErrors(Params, Line, Column, True, False, False,
@@ -4395,7 +4400,7 @@ begin
     EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
       SavedDirectLabelStart);
     try
-      Body := ParseFunctionBodyBlock(ALine, AColumn);
+      Body := ParseFunctionBodyBlock;
       FunctionIsStrict := FStrictModeActive or HasUseStrictDirective(Body);
       ValidateParameterEarlyErrors(Parameters, ALine, AColumn,
         FunctionIsStrict, AIsAsync, AIsGenerator, FunctionIsStrict);
@@ -4414,9 +4419,14 @@ begin
   end;
 end;
 
-function TGocciaParser.ParseFunctionBodyBlock(const ALine,
-  AColumn: Integer): TGocciaBlockStatement;
+// Every caller has just consumed the opening brace, so Previous is it. Taking
+// the span from there rather than from the function's own position is what
+// makes a body block cover the braces and nothing else: a method's body used
+// to start at its name, so slicing that range gave back the whole method
+// definition rather than its body.
+function TGocciaParser.ParseFunctionBodyBlock: TGocciaBlockStatement;
 var
+  BraceLine, BraceColumn: Integer;
   Statements: TObjectList<TGocciaASTNode>;
   Stmt: TGocciaStatement;
   SavedStrictModeActive: Boolean;
@@ -4427,6 +4437,8 @@ var
   DirectiveHasForbiddenEscape: Boolean;
   PrologueHasForbiddenEscape: Boolean;
 begin
+  BraceLine := Previous.Line;
+  BraceColumn := Previous.Column;
   SavedStrictModeActive := FStrictModeActive;
   SavedStrictModeSourceActive := FStrictModeSourceActive;
   SavedAllowInExpression := FAllowInExpression;
@@ -4464,7 +4476,8 @@ begin
 
       Consume(gttRightBrace, 'Expected "}" after function body',
         SSuggestCloseBlock);
-      Result := TGocciaBlockStatement.Create(Statements, SourceSpanAtPosition(ALine, AColumn));
+      Result := TGocciaBlockStatement.Create(Statements,
+        SourceSpanAtPosition(BraceLine, BraceColumn));
     except
       Statements.Free;
       raise;
@@ -4522,7 +4535,7 @@ begin
       SavedDirectLabelStart);
     try
       if Match(gttLeftBrace) then
-        Body := ParseFunctionBodyBlock(Previous.Line, Previous.Column)
+        Body := ParseFunctionBodyBlock
       else
         Body := Assignment;
       if HasUseStrictDirective(Body) then
@@ -4585,8 +4598,7 @@ begin
         SavedDirectLabelStart);
       try
         if Match(gttLeftBrace) then
-          ArrowBody := ParseFunctionBodyBlock(Previous.Line,
-            Previous.Column)
+          ArrowBody := ParseFunctionBodyBlock
         else
           ArrowBody := Assignment;
       finally
@@ -4885,7 +4897,7 @@ begin
         Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column));
       afcReady:
       begin
-        Result := FunctionStatement(True, Check(gttStar));
+        Result := FunctionStatement(True, Check(gttStar), Line, Column);
         if Result is TGocciaFunctionDeclaration then
         begin
           TGocciaFunctionDeclaration(Result).FunctionExpression.IsAsync := True;
@@ -5260,9 +5272,16 @@ var
   Expr: TGocciaExpression;
   Line, Column: Integer;
 begin
+  { Where the statement starts, taken before the expression is parsed. An
+    expression node's own position is where the parser built *that* node, so a
+    call, a member access, an assignment and a postfix update all report the
+    operator rather than the operand it was applied to — `use(next);` would
+    start at the `(`. A statement starts at its first token, and this is the
+    parser's only chance to see it. }
+  Line := Peek.Line;
+  Column := Peek.Column;
+
   Expr := Expression;
-  Line := Expr.Line;
-  Column := Expr.Column;
 
   if (Expr is TGocciaCallExpression) and Check(gttLeftBrace) and
      (Previous.Line = Peek.Line) then
@@ -6494,14 +6513,24 @@ begin
   Result := TGocciaWithStatement.Create(ObjectExpr, BodyStmt, SourceSpanAtPosition(Line, Column));
 end;
 
-function TGocciaParser.FunctionStatement(const AIsAsync: Boolean; const AIsGenerator: Boolean): TGocciaStatement;
+function TGocciaParser.FunctionStatement(const AIsAsync: Boolean;
+  const AIsGenerator: Boolean; const AStartLine: Integer;
+  const AStartColumn: Integer): TGocciaStatement;
 var
   Line, Column: Integer;
   NameToken: TGocciaToken;
   FunctionExpr: TGocciaFunctionExpression;
 begin
-  Line := Previous.Line;
-  Column := Previous.Column;
+  if AStartLine > 0 then
+  begin
+    Line := AStartLine;
+    Column := AStartColumn;
+  end
+  else
+  begin
+    Line := Previous.Line;
+    Column := Previous.Column;
+  end;
 
   if not FFunctionDeclarationsEnabled then
   begin
@@ -6660,7 +6689,7 @@ var
   Parameters: TGocciaParameterArray;
   Body: TGocciaASTNode;
   Name: string;
-  Line, Column: Integer;
+  Line, Column, BraceLine, BraceColumn: Integer;
   Statements: TObjectList<TGocciaASTNode>;
   Stmt: TGocciaStatement;
   MethodGenericParams, MethodReturnType: string;
@@ -6697,6 +6726,11 @@ begin
 
     Consume(gttLeftBrace, 'Expected "{" before method body',
       SSuggestOpenBraceMethodBody);
+    // The body is the braces, not the method: a class method inlines the
+    // block ParseFunctionBodyBlock builds for everything else, so it has to
+    // take the same position for it.
+    BraceLine := Previous.Line;
+    BraceColumn := Previous.Column;
 
     EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
       SavedDirectLabelStart);
@@ -6722,7 +6756,8 @@ begin
 
         Consume(gttRightBrace, 'Expected "}" after method body',
           SSuggestCloseBlock);
-        Body := TGocciaBlockStatement.Create(Statements, SourceSpanAtPosition(Line, Column));
+        Body := TGocciaBlockStatement.Create(Statements,
+          SourceSpanAtPosition(BraceLine, BraceColumn));
         Result := TGocciaClassMethod.Create(Name, Parameters, Body, AIsStatic, SourceSpanAtPosition(Line, Column));
         Result.IsAsync := AIsAsync;
         Result.IsGenerator := AIsGenerator;
@@ -7389,15 +7424,10 @@ begin
       end;
       afcReady:
       begin
-        InnerDecl := FunctionStatement(True, Check(gttStar));
+        InnerDecl := FunctionStatement(True, Check(gttStar), AsyncLine,
+          AsyncColumn);
         if InnerDecl is TGocciaFunctionDeclaration then
-        begin
           TGocciaFunctionDeclaration(InnerDecl).FunctionExpression.IsAsync := True;
-          // Override SourceText to include 'async' prefix (FunctionStatement
-          // sets it from the 'function' token; AsyncLine/AsyncColumn are the 'async' token)
-          TGocciaFunctionDeclaration(InnerDecl).FunctionExpression.SourceText :=
-            ExtractSourceRange(AsyncLine, AsyncColumn);
-        end;
         if InnerDecl is TGocciaFunctionDeclaration then
         begin
           FunctionDecl := TGocciaFunctionDeclaration(InnerDecl);
@@ -9585,7 +9615,7 @@ var
   CaseClause: TGocciaCaseClause;
   TestExpression: TGocciaExpression;
   Statements: TObjectList<TGocciaStatement>;
-  Line, Column: Integer;
+  Line, Column, CaseLine, CaseColumn: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -9605,8 +9635,12 @@ begin
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
+    { A clause is one of the switch's statement lists, so it has to say where
+      it begins: the whole switch is not an answer a rule can slice. }
     if Match(gttCase) then
     begin
+      CaseLine := Previous.Line;
+      CaseColumn := Previous.Column;
       // Parse case value
       TestExpression := Expression;
       Consume(gttColon, 'Expected ":" after case value',
@@ -9614,6 +9648,8 @@ begin
     end
     else if Match(gttDefault) then
     begin
+      CaseLine := Previous.Line;
+      CaseColumn := Previous.Column;
       // Default case
       TestExpression := nil;
       Consume(gttColon, 'Expected ":" after default',
@@ -9633,7 +9669,8 @@ begin
       Statements.Add(StatementWithoutDirectLabels);
     end;
 
-    CaseClause := TGocciaCaseClause.Create(TestExpression, Statements, SourceSpanAtPosition(Line, Column));
+    CaseClause := TGocciaCaseClause.Create(TestExpression, Statements,
+      SourceSpanAtPosition(CaseLine, CaseColumn));
     Cases.Add(CaseClause);
   end;
 

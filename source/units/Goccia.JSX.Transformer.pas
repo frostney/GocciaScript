@@ -13,12 +13,17 @@ uses
   Goccia.Error,
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
+  Goccia.OriginMap,
   Goccia.SourceMap;
 
 type
   TGocciaJSXTransformResult = record
     Source: string;
     SourceMap: TGocciaSourceMap;
+    { Which bytes of the output are which bytes of the input. The source map
+      answers the debugger's question; this answers the editor's. See
+      [ADR 0118](../../docs/adr/0118-original-file-source-ranges.md). }
+    OriginMap: TGocciaOriginMap;
   end;
 
 procedure WarnIfJSXExtensionMismatch(const AFilePath: string);
@@ -38,6 +43,7 @@ type
     FOutputColumn: Integer;
     FOutput: TStringBuffer;
     FSourceMap: TGocciaSourceMap;
+    FOriginRuns: TGocciaOriginRuns;
     FFactoryName: string;
     FFragmentName: string;
     FLastTokenKind: TLastTokenKind;
@@ -62,9 +68,9 @@ type
 
     procedure Emit(const AText: string);
     procedure EmitMapped(const AText: string; const ASourceLine, ASourceColumn: Integer);
-    procedure EmitChar(const AChar: Char); {$IFDEF FPC}inline;{$ENDIF}
-    procedure EmitNewline;
+    procedure EmitSourceChar; {$IFDEF FPC}inline;{$ENDIF}
     procedure AddIdentityMapping;
+    procedure AnchorOrigin; {$IFDEF FPC}inline;{$ENDIF}
 
     procedure CopyChar;
     procedure CopyString(const AQuote: Char);
@@ -167,16 +173,24 @@ begin
     try
       Transformer.ScanPragmas;
       Transformer.TransformSource;
+      // The end of the input is a position every map needs and no copy
+      // records: a file whose last construct is JSX ends in synthesized text.
+      Transformer.AnchorOrigin;
       Result.Source := Transformer.FOutput.ToString;
       if Transformer.FHasJSX then
       begin
         Result.SourceMap := Transformer.FSourceMap;
         Transformer.FSourceMap := nil;
+        Result.OriginMap := TGocciaOriginMap.Create(Transformer.FOriginRuns,
+          Length(ASource));
       end
       else
       begin
+        // Nothing was rewritten, so the output is the input and every offset
+        // already is an original one. A map would say only that.
         Result.Source := ASource;
         Result.SourceMap := nil;
+        Result.OriginMap := nil;
       end;
     finally
       Transformer.FSourceMap.Free;
@@ -358,10 +372,20 @@ begin
   Emit(AText);
 end;
 
-procedure TGocciaJSXTransformer.EmitChar(const AChar: Char);
+{ The one way a character of the input reaches the output. Every copy this
+  transformer makes goes through here, which is what lets the origin map claim
+  that the bytes it records are byte-for-byte the input's: the claim is
+  structural rather than a convention every call site has to keep. Advancing
+  is the caller's, because several of them copy a character and then look at
+  it again. }
+procedure TGocciaJSXTransformer.EmitSourceChar;
+var
+  C: Char;
 begin
-  FOutput.AppendChar(AChar);
-  if AChar = #10 then
+  C := FSource[FPos];
+  FOriginRuns.NoteCopy(FOutput.Length, FPos - 1, 1);
+  FOutput.AppendChar(C);
+  if C = #10 then
   begin
     Inc(FOutputLine);
     FOutputColumn := 1;
@@ -370,23 +394,24 @@ begin
     Inc(FOutputColumn);
 end;
 
-procedure TGocciaJSXTransformer.EmitNewline;
-begin
-  EmitChar(#10);
-end;
-
 procedure TGocciaJSXTransformer.AddIdentityMapping;
 begin
   FSourceMap.AddMapping(FOutputLine, FOutputColumn - 1, 0,
     FLine - 1, FColumn - 1);
 end;
 
-procedure TGocciaJSXTransformer.CopyChar;
-var
-  C: Char;
+{ Ties the current output position to the current input position without
+  claiming any text between them. Placed at the edges of a construct that is
+  rewritten whole, so a range ending there still ends where the construct did
+  rather than at the last character that happened to be copied. }
+procedure TGocciaJSXTransformer.AnchorOrigin;
 begin
-  C := CurrentChar;
-  EmitChar(C);
+  FOriginRuns.NoteAnchor(FOutput.Length, FPos - 1);
+end;
+
+procedure TGocciaJSXTransformer.CopyChar;
+begin
+  EmitSourceChar;
   AdvanceInput;
 end;
 
@@ -849,7 +874,7 @@ var
   IsFragment, IsSelfClosing: Boolean;
   HadAttributes: Boolean;
   TagIsLowercase: Boolean;
-  TagEndLine: Integer;
+  TagEndLine, StartOffset: Integer;
 begin
   Inc(FJSXDepth);
   try
@@ -861,6 +886,7 @@ begin
     FHasJSX := True;
     StartLine := FLine;
     StartColumn := FColumn;
+    StartOffset := FPos;
 
     AdvanceInput;
 
@@ -876,6 +902,12 @@ begin
       TagName := ReadJSXTagName;
     end;
 
+    { An element is rewritten whole, so nothing inside the factory call is a
+      copy of anything. Its two edges still correspond exactly, and anchoring
+      them is what lets a statement whose text ends at an element — a `const`
+      with no semicolon, an expression statement closed by ASI — report the
+      range it actually covers. }
+    FOriginRuns.NoteAnchor(FOutput.Length, StartOffset - 1);
     EmitMapped(FFactoryName + '(', StartLine, StartColumn);
 
     if IsFragment then
@@ -884,6 +916,7 @@ begin
       Emit(', null');
       EmitJSXChildren('');
       Emit(')');
+      AnchorOrigin;
       FLastTokenKind := ltkExpressionEnd;
       Exit;
     end;
@@ -907,6 +940,7 @@ begin
       AdvanceInput;
       AdvanceInput;
       Emit(', null)');
+      AnchorOrigin;
       FLastTokenKind := ltkExpressionEnd;
       Exit;
     end;
@@ -917,6 +951,7 @@ begin
       Emit(', null');
       EmitJSXChildren(TagName);
       Emit(')');
+      AnchorOrigin;
       FLastTokenKind := ltkExpressionEnd;
       Exit;
     end;
@@ -932,6 +967,7 @@ begin
       if not HadAttributes then
         Emit('null');
       Emit(')');
+      AnchorOrigin;
       FLastTokenKind := ltkExpressionEnd;
       Exit;
     end;
@@ -943,6 +979,7 @@ begin
         Emit('null');
       EmitJSXChildren(TagName);
       Emit(')');
+      AnchorOrigin;
       FLastTokenKind := ltkExpressionEnd;
       Exit;
     end;
@@ -963,11 +1000,18 @@ type
   TAttrSegment = record
     Kind: TAttrSegmentKind;
     Content: string;
+    { Where this segment's text came from, in the segment's own coordinates.
+      An attribute list is accumulated into a buffer and emitted only once the
+      whole list has been read — the spreads in it decide whether it becomes
+      one object literal or an `Object.assign` — so the correspondences are
+      collected buffer-relative and shifted into the output when it lands. }
+    Runs: TGocciaOriginRuns;
   end;
 var
   Segments: array of TAttrSegment;
   SegmentCount: Integer;
   CurrentObjAttrs: TStringBuffer;
+  CurrentObjRuns: TGocciaOriginRuns;
   AttrCount: Integer;
   AttrName: string;
   Depth: Integer;
@@ -977,7 +1021,7 @@ var
   GuardPosition: Integer;
   HasSpread: Boolean;
   PendingNewlines, TriviaLine: Integer;
-  RawExpr, RawSlice: string;
+  ValuePrefix, RawExpr, RawSlice: string;
   SubResult: TGocciaJSXTransformResult;
 
   { Line terminators the trivia scan consumed are replayed into the object
@@ -1014,9 +1058,25 @@ var
       SetLength(Segments, SegmentCount);
       Segments[SegmentCount - 1].Kind := askObject;
       Segments[SegmentCount - 1].Content := CurrentObjAttrs.ToString;
+      Segments[SegmentCount - 1].Runs := CurrentObjRuns;
+      CurrentObjRuns.Reset;
       CurrentObjAttrs.Clear;
       AttrCount := 0;
     end;
+  end;
+
+  { An attribute value reaches the output unchanged apart from the JSX inside
+    it, so its own map is the sub-transform's — or, when there was no JSX to
+    rewrite, one run over the whole slice. }
+  procedure NoteAttributeValue(const ABufferOffset, AOriginalOffset: Integer;
+    const AResult: TGocciaJSXTransformResult);
+  begin
+    if Assigned(AResult.OriginMap) then
+      CurrentObjRuns.AppendShifted(AResult.OriginMap.Runs, ABufferOffset,
+        AOriginalOffset)
+    else
+      CurrentObjRuns.NoteCopy(ABufferOffset, AOriginalOffset,
+        Length(AResult.Source));
   end;
 
 begin
@@ -1026,6 +1086,8 @@ begin
   AttrCount := 0;
   PendingNewlines := ALeadingNewlines;
   CurrentObjAttrs := TStringBuffer.Create;
+  // A local record's unmanaged fields start as whatever was on the stack.
+  CurrentObjRuns.Reset;
   GuardPosition := 0;
   while not IsAtEnd do
   begin
@@ -1069,7 +1131,12 @@ begin
       Inc(SegmentCount);
       SetLength(Segments, SegmentCount);
       Segments[SegmentCount - 1].Kind := askSpread;
-      Segments[SegmentCount - 1].Content := Trim(Copy(FSource, ValueStart, FPos - ValueStart));
+      RawSlice := Copy(FSource, ValueStart, FPos - ValueStart);
+      Segments[SegmentCount - 1].Content := Trim(RawSlice);
+      // A spread is copied through untouched, so the whole segment is one run.
+      Segments[SegmentCount - 1].Runs.NoteCopy(0,
+        ValueStart - 1 + (Length(RawSlice) - Length(TrimLeft(RawSlice))),
+        Length(Segments[SegmentCount - 1].Content));
       if not IsAtEnd then
         AdvanceInput;
       Continue;
@@ -1176,9 +1243,16 @@ begin
             raise;
           end;
         end;
-        if Assigned(SubResult.SourceMap) then
+        try
+          ValuePrefix := ' ' + FormatPropertyKey(AttrName) + ': ';
+          NoteAttributeValue(CurrentObjAttrs.Length + Length(ValuePrefix),
+            ValueStart - 1 + (Length(RawSlice) - Length(TrimLeft(RawSlice))),
+            SubResult);
+          CurrentObjAttrs.Append(ValuePrefix + SubResult.Source);
+        finally
           SubResult.SourceMap.Free;
-        CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': ' + SubResult.Source);
+          SubResult.OriginMap.Free;
+        end;
         if not IsAtEnd then
           AdvanceInput;
       end;
@@ -1198,13 +1272,17 @@ begin
   end;
 
   if not HasSpread and (SegmentCount = 1) and (Segments[0].Kind = askObject) then
-    Emit(Segments[0].Content)
+  begin
+    FOriginRuns.AppendShifted(Segments[0].Runs, FOutput.Length, 0);
+    Emit(Segments[0].Content);
+  end
   else
   begin
     Emit('Object.assign({}');
     for I := 0 to SegmentCount - 1 do
     begin
       Emit(', ');
+      FOriginRuns.AppendShifted(Segments[I].Runs, FOutput.Length, 0);
       Emit(Segments[I].Content);
     end;
     Emit(')');
@@ -1363,7 +1441,7 @@ begin
       '{':
       begin
         Inc(Depth);
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
         FLastTokenKind := ltkOperator;
       end;
@@ -1372,44 +1450,44 @@ begin
         if Depth = 0 then
           Break;
         Dec(Depth);
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
         FLastTokenKind := ltkExpressionEnd;
       end;
       '''', '"':
       begin
         Quote := CurrentChar;
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
         while not IsAtEnd and (CurrentChar <> Quote) do
         begin
           if CurrentChar = '\' then
           begin
-            EmitChar(CurrentChar);
+            EmitSourceChar;
             AdvanceInput;
           end;
           if not IsAtEnd then
           begin
-            EmitChar(CurrentChar);
+            EmitSourceChar;
             AdvanceInput;
           end;
         end;
         if not IsAtEnd then
         begin
-          EmitChar(CurrentChar);
+          EmitSourceChar;
           AdvanceInput;
         end;
         FLastTokenKind := ltkExpressionEnd;
       end;
       '`':
       begin
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
         while not IsAtEnd and (CurrentChar <> '`') do
         begin
           if CurrentChar = '\' then
           begin
-            EmitChar(CurrentChar);
+            EmitSourceChar;
             AdvanceInput;
           end
           else if (CurrentChar = '$') and (PeekAt(1) = '{') then
@@ -1419,20 +1497,20 @@ begin
             // below, and counting it as an open brace here left the container
             // one level deep. Its real '}' was then swallowed as a close,
             // and the scan ran on past the end of the container.
-            EmitChar(CurrentChar);
+            EmitSourceChar;
             AdvanceInput;
-            EmitChar(CurrentChar);
+            EmitSourceChar;
             AdvanceInput;
           end;
           if not IsAtEnd and (CurrentChar <> '`') then
           begin
-            EmitChar(CurrentChar);
+            EmitSourceChar;
             AdvanceInput;
           end;
         end;
         if not IsAtEnd then
         begin
-          EmitChar(CurrentChar);
+          EmitSourceChar;
           AdvanceInput;
         end;
         FLastTokenKind := ltkExpressionEnd;
@@ -1443,7 +1521,7 @@ begin
           TransformJSXElement
         else
         begin
-          EmitChar(CurrentChar);
+          EmitSourceChar;
           AdvanceInput;
           FLastTokenKind := ltkOperator;
         end;
@@ -1470,11 +1548,11 @@ begin
           CopyRegexLiteral
         else
         begin
-          EmitChar(CurrentChar);
+          EmitSourceChar;
           AdvanceInput;
           if not IsAtEnd and (CurrentChar = '=') then
           begin
-            EmitChar(CurrentChar);
+            EmitSourceChar;
             AdvanceInput;
           end;
           FLastTokenKind := ltkOperator;
@@ -1482,23 +1560,23 @@ begin
       end;
       ')', ']':
       begin
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
         FLastTokenKind := ltkExpressionEnd;
       end;
       '(', '[', ',', ':', '?', ';', '~', '!':
       begin
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
         FLastTokenKind := ltkOperator;
       end;
       '+', '-':
       begin
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
         if not IsAtEnd and (CurrentChar = PeekAt(-1)) then
         begin
-          EmitChar(CurrentChar);
+          EmitSourceChar;
           AdvanceInput;
           FLastTokenKind := ltkExpressionEnd;
         end
@@ -1507,18 +1585,18 @@ begin
       end;
       '=':
       begin
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
         if not IsAtEnd and (CurrentChar = '>') then
         begin
-          EmitChar(CurrentChar);
+          EmitSourceChar;
           AdvanceInput;
         end;
         FLastTokenKind := ltkOperator;
       end;
       ' ', #9, #13, #10:
       begin
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
       end;
     else
@@ -1527,7 +1605,7 @@ begin
         IdStart := FPos;
         while not IsAtEnd and IsIdentifierPart(CurrentChar) do
         begin
-          EmitChar(CurrentChar);
+          EmitSourceChar;
           AdvanceInput;
         end;
         Ident := Copy(FSource, IdStart, FPos - IdStart);
@@ -1543,14 +1621,14 @@ begin
       begin
         while not IsAtEnd and (CurrentChar in ['0'..'9', '.', '_', 'a'..'f', 'A'..'F', 'n']) do
         begin
-          EmitChar(CurrentChar);
+          EmitSourceChar;
           AdvanceInput;
         end;
         FLastTokenKind := ltkExpressionEnd;
       end
       else
       begin
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
         FLastTokenKind := ltkOperator;
       end;
