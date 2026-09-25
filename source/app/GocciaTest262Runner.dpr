@@ -111,6 +111,14 @@ type
     HostEvalSourceType: TGocciaSourceType;
   end;
 
+  { One worker-owned result slot for the thread-pool path. A worker writes
+    only the slot it captured when it started the test, so the supervisor can
+    abandon a stalled worker and leak its slot instead of racing it. }
+  TTest262ResultSlot = class
+  public
+    Value: TTest262Result;
+  end;
+
   TTest262PrintHost = class
   private
     FLines: TStringList;
@@ -128,6 +136,7 @@ type
     FCases: TObjectList<TTest262Case>;
     FSelectedPaths: TStringList;
     FResults: array of TTest262Result;
+    FResultSlots: array of TTest262ResultSlot;
     FTotalDiscovered: Integer;
     FDurationNanoseconds: Int64;
     procedure ParseArguments;
@@ -1280,10 +1289,13 @@ end;
 procedure TTest262App.WorkerProc(const AFileName: string;
   const AIndex: Integer; out AConsoleOutput: string;
   out AErrorMessage: string; AData: Pointer);
+var
+  Slot: TTest262ResultSlot;
 begin
   AConsoleOutput := '';
   AErrorMessage := '';
-  ExecuteOne(FCases[AIndex], FResults[AIndex]);
+  Slot := FResultSlots[AIndex];
+  ExecuteOne(FCases[AIndex], Slot.Value);
 end;
 
 procedure TTest262App.WarmUpRuntime(const AEngine: TGocciaEngine);
@@ -1458,23 +1470,36 @@ begin
   for Slot := 0 to High(ResultPaths) do
     DeleteFile(ResultPaths[Slot]);
   {$ELSE}
+  SetLength(FResultSlots, FCases.Count);
+  for I := 0 to High(FResultSlots) do
+    FResultSlots[I] := TTest262ResultSlot.Create;
   Pool := TGocciaThreadPool.Create(FOptions.Jobs);
   try
     Pool.MaxBytes := FOptions.MaxMemoryBytes;
     Pool.ResetRuntimeBetweenItems := True;
     Pool.RunAll(FSelectedPaths, WorkerProc, nil,
       FOptions.TimeoutMs * 2 + 1000);
-    for I := 0 to High(Pool.Results) do
-      if (not Pool.Results[I].Success) and
-         (FResults[I].Id = '') then
+    for I := 0 to High(FResults) do
+      if (I <= High(Pool.Results)) and Pool.Results[I].Success then
       begin
+        FResults[I] := FResultSlots[I].Value;
+        FreeAndNil(FResultSlots[I]);
+      end
+      else
+      begin
+        // The test did not complete. A worker abandoned by the watchdog may
+        // still be writing this slot, so leave it allocated and never read it.
+        FResults[I] := Default(TTest262Result);
         FResults[I].Id := FCases[I].Id;
-        if StartsStr('TIMEOUT', Pool.Results[I].ErrorMessage) then
+        if I <= High(Pool.Results) then
+          FResults[I].Message := Pool.Results[I].ErrorMessage;
+        if StartsStr('TIMEOUT', FResults[I].Message) then
           FResults[I].Status := toTimeout
         else
           FResults[I].Status := toWrapperInfra;
-        FResults[I].Message := Pool.Results[I].ErrorMessage;
-        FResults[I].Diagnostic := Pool.Results[I].ErrorMessage;
+        if FResults[I].Message = '' then
+          FResults[I].Message := 'Test262 worker produced no result';
+        FResults[I].Diagnostic := FResults[I].Message;
       end;
   finally
     Pool.Free;
