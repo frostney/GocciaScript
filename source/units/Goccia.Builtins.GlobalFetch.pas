@@ -17,10 +17,16 @@ uses
   Goccia.Values.Primitives;
 
 type
+  { Returns the dispatching engine's current response-body ceiling, read at
+    request time because it is an engine setting a host may change after the
+    runtime is attached. }
+  TGocciaFetchMaxResponseBytesProvider = function: Integer of object;
+
   TGocciaGlobalFetch = class(TGocciaBuiltin)
   private
     FCapabilities: TGocciaCapabilities;
     FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
+    FMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider;
     function FetchCallback(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure ValidateHost(const AURLStr: string);
@@ -30,7 +36,8 @@ type
     constructor Create(const AName: string; const AScope: TGocciaScope;
       const AThrowError: TGocciaThrowErrorCallback;
       const ACapabilities: TGocciaCapabilities;
-      const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter);
+      const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
+      const AMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider);
 
     property Capabilities: TGocciaCapabilities read FCapabilities;
   end;
@@ -41,6 +48,7 @@ uses
   SysUtils,
 
   HTTPTypes,
+  NetworkAddress,
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
@@ -68,12 +76,14 @@ constructor TGocciaGlobalFetch.Create(const AName: string;
   const AScope: TGocciaScope;
   const AThrowError: TGocciaThrowErrorCallback;
   const ACapabilities: TGocciaCapabilities;
-  const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter);
+  const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
+  const AMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider);
 begin
   inherited Create(AName, AScope, AThrowError);
 
   FCapabilities := ACapabilities;
   FCapabilityAuditEmitter := ACapabilityAuditEmitter;
+  FMaxResponseBytesProvider := AMaxResponseBytesProvider;
 
   // Register fetch as a global function
   AScope.DefineLexicalBinding('fetch',
@@ -91,6 +101,18 @@ begin
   if not (((AParsed.Scheme = 'http') and (AParsed.Port = 80)) or
           ((AParsed.Scheme = 'https') and (AParsed.Port = 443))) then
     Result := Result + ':' + IntToStr(AParsed.Port);
+end;
+
+{ The host-side hint for a refused destination: a private address literal is
+  refused by the private-range rule rather than by a missing host grant. }
+function NetDenialSuggestion(const AHost: string): string;
+var
+  Address: TNetworkAddress;
+begin
+  if TryParseIPAddress(AHost, Address) and IsPrivateIPAddress(Address) then
+    Result := SSuggestFetchPrivateDestination
+  else
+    Result := SSuggestFetchAllowedHosts;
 end;
 
 procedure TGocciaGlobalFetch.ValidateHost(const AURLStr: string);
@@ -127,7 +149,7 @@ begin
         Format('the net capability does not allow port %d of this host',
           [Parsed.Port]));
     ThrowPermissionDenied(CapabilityName(gcNet), NetDenialScope(Parsed),
-      SSuggestFetchAllowedHosts);
+      NetDenialSuggestion(Parsed.Host));
   end;
 
   if Assigned(FCapabilityAuditEmitter) then
@@ -147,6 +169,7 @@ var
   Obj: TGocciaObjectValue;
   PropNames: TArray<string>;
   I: Integer;
+  Policy: TGocciaFetchPolicy;
 begin
   // Extract URL
   if AArgs.Length = 0 then
@@ -231,9 +254,15 @@ begin
   if Assigned(FCapabilityAuditEmitter) then
     FCapabilityAuditEmitter(gckNetDispatch, gcdAllow, URLStr,
       'fetch dispatch is allowed');
+  Policy.Capabilities := FCapabilities;
+  Policy.AuditEmitter := FCapabilityAuditEmitter;
+  if Assigned(FMaxResponseBytesProvider) then
+    Policy.MaxResponseBytes := FMaxResponseBytesProvider()
+  else
+    Policy.MaxResponseBytes := 0;
   try
     TGocciaFetchManager.Instance.StartFetch(URLStr, Method, RequestHeaders,
-      nil, Promise, Signal);
+      Policy, Promise, Signal);
   except
     on E: TGocciaTimeoutError do
       raise;

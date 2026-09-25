@@ -169,14 +169,12 @@ uses
   Math,
 
   CLI.Parser,
-  HTTPTypes,
   ProcessorDetection,
   TextEncoding,
   TextSemantics,
 
   Goccia.CLI.Help,
   Goccia.Coverage,
-  Goccia.FetchManager,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.JSON,
@@ -619,7 +617,6 @@ var
   ValueStr: string;
   MemoryLimit: Int64;
   ResponseLimit: Integer;
-  FetchPolicy: THTTPRequestPolicy;
   GC: TGarbageCollector;
 begin
   if not Assigned(AEngineOptions) then
@@ -665,35 +662,30 @@ begin
       GC.MaxBytes := GC.SuggestedMaxBytes;
   end;
 
-  { allowed-host and the other capability-bearing options were resolved into
-    the engine's capability set before the engine was created. }
+  { allowed-host, fetch-deny-private-ranges, and the other capability-bearing
+    options were resolved into the engine's capability set before the engine
+    was created. }
 
-  { fetch-deny-private-ranges / fetch-max-response-bytes: CLI flag > per-file
-    config > root config > defaults. Always assigned, for the same reason
-    max-memory is: the fetch manager is process-global, so leaving a previous
-    file's policy in place would silently apply it to the next one. }
-  FetchPolicy := DefaultHTTPPolicy;
-  FetchPolicy.DenyPrivateRanges := ResolveFlagOption(
-    AEngineOptions.FetchDenyPrivateRanges, AFileConfig);
-
+  { fetch-max-response-bytes: CLI flag > per-file config > root config >
+    default. An engine setting, not a capability; each request carries its
+    engine's value. }
+  ResponseLimit := 0;
   if AEngineOptions.FetchMaxResponseBytes.FromCommandLine then
-    FetchPolicy.MaxResponseBytes := AEngineOptions.FetchMaxResponseBytes.Value
+    ResponseLimit := AEngineOptions.FetchMaxResponseBytes.Value
   else if FindConfigEntry(AFileConfig, 'fetch-max-response-bytes',
     ValueStr) then
   begin
     if not TryStrToInt(ValueStr, ResponseLimit) then
       raise Exception.CreateFmt(
         'Invalid fetch-max-response-bytes value in config: %s', [ValueStr]);
-    FetchPolicy.MaxResponseBytes := ResponseLimit;
   end
   else if AEngineOptions.FetchMaxResponseBytes.Present then
-    FetchPolicy.MaxResponseBytes := AEngineOptions.FetchMaxResponseBytes.Value;
+    ResponseLimit := AEngineOptions.FetchMaxResponseBytes.Value;
 
-  if FetchPolicy.MaxResponseBytes < 0 then
+  if ResponseLimit < 0 then
     raise Exception.Create('fetch-max-response-bytes must be 0 or greater');
 
-  AEngine.FetchMaxResponseBytes := FetchPolicy.MaxResponseBytes;
-  SetFetchRequestPolicy(FetchPolicy);
+  AEngine.FetchMaxResponseBytes := ResponseLimit;
 end;
 
 procedure TGocciaCLIApplication.ConfigureCreatedEngine(

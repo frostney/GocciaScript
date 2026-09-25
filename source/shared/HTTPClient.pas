@@ -23,6 +23,8 @@ type
   THTTPHeaders = HTTPTypes.THTTPHeaders;
   THTTPResponse = HTTPTypes.THTTPResponse;
   EHTTPError = HTTPTypes.EHTTPError;
+  EHTTPDestinationDenied = HTTPTypes.EHTTPDestinationDenied;
+  THTTPHostCheck = HTTPTypes.THTTPHostCheck;
   THTTPRequestPolicy = HTTPTypes.THTTPRequestPolicy;
 
 const
@@ -1108,15 +1110,37 @@ var
     an observable side effect. The address check runs on the resolved value,
     because that is the only form in which "is this target internal" is a
     meaningful question. }
+  function DestinationScope(const AParsed: THTTPParsedURL): string;
+  begin
+    if Pos(':', AParsed.Host) > 0 then
+      Result := '[' + AParsed.Host + ']'
+    else
+      Result := AParsed.Host;
+    if not (((AParsed.Scheme = 'http') and (AParsed.Port = 80)) or
+            ((AParsed.Scheme = 'https') and (AParsed.Port = 443))) then
+      Result := Result + ':' + IntToStr(AParsed.Port);
+  end;
+
   function ResolveAndValidateDestination(
     const AParsed: THTTPParsedURL): string;
+  var
+    Reason: string;
   begin
     if Assigned(AAllowedHosts) and
        (AAllowedHosts.IndexOf(AParsed.Host) < 0) then
       raise EHTTPError.CreateFmt('fetch host not allowed: %s',
         [AParsed.Host]);
+    if Assigned(APolicy.HostCheck) and
+       not APolicy.HostCheck(AParsed.Host, AParsed.Port, '', Reason) then
+      raise EHTTPDestinationDenied.CreateDenied(DestinationScope(AParsed),
+        Reason);
 
     Result := ResolveHostToAddress(AParsed.Host);
+
+    if Assigned(APolicy.HostCheck) and
+       not APolicy.HostCheck(AParsed.Host, AParsed.Port, Result, Reason) then
+      raise EHTTPDestinationDenied.CreateDenied(DestinationScope(AParsed),
+        Reason);
 
     if APolicy.DenyPrivateRanges and IsPrivateNetworkAddress(Result) then
       raise EHTTPError.CreateFmt(

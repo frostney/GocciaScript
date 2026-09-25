@@ -16,6 +16,7 @@ type
     FBuiltinAbort: TGocciaGlobalAbort;
     FBuiltinEventTarget: TGocciaGlobalEventTarget;
     FBuiltinFetch: TGocciaGlobalFetch;
+    function EngineMaxResponseBytes: Integer;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
@@ -69,7 +70,8 @@ begin
   Runtime.RegisterRuntimeGlobalName(CONSTRUCTOR_ABORT_SIGNAL);
   FBuiltinFetch := TGocciaGlobalFetch.Create('Fetch',
     Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
-    Runtime.Engine.Capabilities, Runtime.Engine.EmitCapabilityAudit);
+    Runtime.Engine.Capabilities, Runtime.Engine.EmitCapabilityAudit,
+    EngineMaxResponseBytes);
 
   if not Assigned(Runtime.Engine.ObjectConstructor) then
     Exit;
@@ -97,6 +99,14 @@ begin
   TypeDef.AddSpeciesGetter := False;
   RegisterTypeDefinition(Runtime.Engine.Interpreter.GlobalScope, TypeDef,
     Runtime.SpeciesGetter, RuntimeConstructor);
+end;
+
+function TGocciaFetchRuntimeExtension.EngineMaxResponseBytes: Integer;
+begin
+  if Assigned(Runtime) then
+    Result := Runtime.Engine.FetchMaxResponseBytes
+  else
+    Result := 0;
 end;
 
 procedure TGocciaFetchRuntimeExtension.Detach;
