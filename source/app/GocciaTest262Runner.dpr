@@ -1612,7 +1612,9 @@ var
   CategoryTimeouts: TIntegerArray;
   DurationSeconds: Double;
   I: Integer;
+  Index: Integer;
   Lines: TStringList;
+  ReportedCategories: TStringList;
   Test262SHA: string;
 begin
   if FOptions.OutputPath = '' then
@@ -1620,6 +1622,7 @@ begin
   ForceDirectories(ExtractFileDir(FOptions.OutputPath));
   Categories := TStringList.Create;
   Lines := TStringList.Create;
+  ReportedCategories := TStringList.Create;
   try
     Categories.StrictDelimiter := True;
     Categories.Delimiter := ',';
@@ -1629,6 +1632,13 @@ begin
     BuildCategoryCounts(FResults, Categories, CategoryRun, CategoryPassed,
       CategoryFailed, CategoryInfrastructure, CategoryTimeouts);
     DurationSeconds := FDurationNanoseconds / 1000000000;
+    // Match the merged report: list only categories that ran, by name.
+    ReportedCategories.CaseSensitive := True;
+    ReportedCategories.Sorted := True;
+    ReportedCategories.Duplicates := dupIgnore;
+    for I := 0 to Categories.Count - 1 do
+      if CategoryRun[I] > 0 then
+        ReportedCategories.AddObject(Categories[I], TObject(PtrInt(I)));
 
     Lines.Add('{');
     Lines.Add('  "summary": {');
@@ -1645,18 +1655,20 @@ begin
     Lines.Add('    "durationSeconds": ' +
       Format('%.3f', [DurationSeconds], InvariantFormatSettings) + ',');
     Lines.Add('    "byCategory": [');
-    for I := 0 to Categories.Count - 1 do
+    for I := 0 to ReportedCategories.Count - 1 do
     begin
+      Index := Integer(PtrInt(ReportedCategories.Objects[I]));
       Lines.Add('      {');
-      Lines.Add('        "category": ' + JSONString(Categories[I]) + ',');
-      Lines.Add('        "run": ' + IntToStr(CategoryRun[I]) + ',');
-      Lines.Add('        "passed": ' + IntToStr(CategoryPassed[I]) + ',');
-      Lines.Add('        "failed": ' + IntToStr(CategoryFailed[I]) + ',');
+      Lines.Add('        "category": ' +
+        JSONString(ReportedCategories[I]) + ',');
+      Lines.Add('        "run": ' + IntToStr(CategoryRun[Index]) + ',');
+      Lines.Add('        "passed": ' + IntToStr(CategoryPassed[Index]) + ',');
+      Lines.Add('        "failed": ' + IntToStr(CategoryFailed[Index]) + ',');
       Lines.Add('        "wrapperInfra": ' +
-        IntToStr(CategoryInfrastructure[I]) + ',');
+        IntToStr(CategoryInfrastructure[Index]) + ',');
       Lines.Add('        "timeouts": ' +
-        IntToStr(CategoryTimeouts[I]));
-      if I < Categories.Count - 1 then
+        IntToStr(CategoryTimeouts[Index]));
+      if I < ReportedCategories.Count - 1 then
         Lines.Add('      },')
       else
         Lines.Add('      }');
@@ -1729,6 +1741,7 @@ begin
     Lines.Add('}');
     Lines.SaveToFile(FOptions.OutputPath);
   finally
+    ReportedCategories.Free;
     Lines.Free;
     Categories.Free;
   end;
