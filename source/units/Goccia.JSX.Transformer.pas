@@ -83,9 +83,11 @@ type
 
     procedure TransformJSXElement;
     function ReadJSXTagName: string;
-    procedure EmitJSXAttributes(out AHadAttributes: Boolean);
+    procedure EmitJSXAttributes(const ALeadingNewlines: Integer;
+      out AHadAttributes: Boolean);
     procedure EmitJSXChildren(const ATagName: string);
     function CollectJSXText: string;
+    function IsCommentOnlyJSXExpression(out AClosingBrace: Integer): Boolean;
     procedure CopyJSXExpression;
     procedure ExpectJSXClosingTag(const ATagName: string);
     function TrimJSXWhitespace(const AText: string): string;
@@ -93,6 +95,7 @@ type
     function FormatPropertyKey(const AName: string): string;
 
     procedure SkipWhitespace;
+    procedure SkipJSXAttributeTrivia;
     procedure ScanPragmas;
     procedure TransformSource;
   public
@@ -689,6 +692,44 @@ begin
     AdvanceInput;
 end;
 
+// Whitespace and comments between attributes. TSX allows a comment wherever
+// an attribute name could go, and `// biome-ignore ...` on the line above the
+// attribute it covers is the everyday case. Neither the comment nor the
+// whitespace around it reaches the output: an attribute list is collapsed
+// into one object literal, so this region carries no positions of its own.
+procedure TGocciaJSXTransformer.SkipJSXAttributeTrivia;
+begin
+  while not IsAtEnd do
+  begin
+    SkipWhitespace;
+    if IsAtEnd or (CurrentChar <> '/') then
+      Exit;
+
+    if PeekAt(1) = '/' then
+    begin
+      while not IsAtEnd and (CurrentChar <> #10) do
+        AdvanceInput;
+    end
+    else if PeekAt(1) = '*' then
+    begin
+      AdvanceInput;
+      AdvanceInput;
+      while not IsAtEnd and
+            not ((CurrentChar = '*') and (PeekAt(1) = '/')) do
+        AdvanceInput;
+      if not IsAtEnd then
+      begin
+        AdvanceInput;
+        AdvanceInput;
+      end;
+    end
+    else
+      // A lone '/' is the '/>' of a self-closing tag, or an error the
+      // attribute scan reports with its own position.
+      Exit;
+  end;
+end;
+
 function TGocciaJSXTransformer.ReadJSXTagName: string;
 var
   SB: TStringBuffer;
@@ -808,6 +849,7 @@ var
   IsFragment, IsSelfClosing: Boolean;
   HadAttributes: Boolean;
   TagIsLowercase: Boolean;
+  TagEndLine: Integer;
 begin
   Inc(FJSXDepth);
   try
@@ -852,6 +894,10 @@ begin
     else
       Emit(TagName);
 
+    // The gap between the tag name and the first attribute belongs to the
+    // attribute list's line accounting, so its line terminators are counted
+    // here and handed on rather than silently dropped.
+    TagEndLine := FLine;
     SkipWhitespace;
 
     IsSelfClosing := False;
@@ -876,7 +922,7 @@ begin
     end;
 
     Emit(', ');
-    EmitJSXAttributes(HadAttributes);
+    EmitJSXAttributes(FLine - TagEndLine, HadAttributes);
 
     SkipWhitespace;
     if not IsAtEnd and (CurrentChar = '/') and (PeekAt(1) = '>') then
@@ -910,7 +956,8 @@ begin
   end;
 end;
 
-procedure TGocciaJSXTransformer.EmitJSXAttributes(out AHadAttributes: Boolean);
+procedure TGocciaJSXTransformer.EmitJSXAttributes(
+  const ALeadingNewlines: Integer; out AHadAttributes: Boolean);
 type
   TAttrSegmentKind = (askObject, askSpread);
   TAttrSegment = record
@@ -929,8 +976,34 @@ var
   I: Integer;
   GuardPosition: Integer;
   HasSpread: Boolean;
+  PendingNewlines, TriviaLine: Integer;
   RawExpr, RawSlice: string;
   SubResult: TGocciaJSXTransformResult;
+
+  { Line terminators the trivia scan consumed are replayed into the object
+    literal the attribute list becomes. Without them the whole list collapses
+    onto one generated line, and since no source-map mapping is added inside
+    an attribute value, every position in a multi-line attribute expression —
+    the body of an inline event handler, most often — resolves back to the
+    tag's own line instead of the line it was written on. A newline inside an
+    object literal is insignificant, so replaying costs nothing. }
+  procedure AppendPendingNewlines;
+  var
+    Index: Integer;
+  begin
+    for Index := 1 to PendingNewlines do
+      CurrentObjAttrs.AppendChar(#10);
+    PendingNewlines := 0;
+  end;
+
+  procedure AppendAttributeSeparator;
+  begin
+    if AttrCount > 0 then
+      CurrentObjAttrs.AppendChar(',')
+    else
+      CurrentObjAttrs.AppendChar('{');
+    AppendPendingNewlines;
+  end;
 
   procedure FlushObjectAttrs;
   begin
@@ -951,21 +1024,31 @@ begin
   HasSpread := False;
   SegmentCount := 0;
   AttrCount := 0;
+  PendingNewlines := ALeadingNewlines;
   CurrentObjAttrs := TStringBuffer.Create;
   GuardPosition := 0;
   while not IsAtEnd do
   begin
     RequireScanProgress(GuardPosition, scAttributes);
-    SkipWhitespace;
+    TriviaLine := FLine;
+    SkipJSXAttributeTrivia;
+    Inc(PendingNewlines, FLine - TriviaLine);
     if IsAtEnd or (CurrentChar = '>') or ((CurrentChar = '/') and (PeekAt(1) = '>')) then
+    begin
+      if AttrCount > 0 then
+        AppendPendingNewlines;
       Break;
+    end;
 
     AHadAttributes := True;
 
     if (CurrentChar = '{') and (PeekAt(1) = '.') and (PeekAt(2) = '.') and (PeekAt(3) = '.') then
     begin
       HasSpread := True;
+      if AttrCount > 0 then
+        AppendPendingNewlines;
       FlushObjectAttrs;
+      PendingNewlines := 0;
 
       AdvanceInput;
       AdvanceInput;
@@ -1003,10 +1086,7 @@ begin
       end;
       if not IsAtEnd and (CurrentChar = '}') then
         AdvanceInput;
-      if AttrCount > 0 then
-        CurrentObjAttrs.AppendChar(',')
-      else
-        CurrentObjAttrs.AppendChar('{');
+      AppendAttributeSeparator;
       CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': ' + AttrName);
       Inc(AttrCount);
       Continue;
@@ -1029,10 +1109,7 @@ begin
       end;
     end;
 
-    if AttrCount > 0 then
-      CurrentObjAttrs.AppendChar(',')
-    else
-      CurrentObjAttrs.AppendChar('{');
+    AppendAttributeSeparator;
 
     SkipWhitespace;
 
@@ -1138,6 +1215,7 @@ procedure TGocciaJSXTransformer.EmitJSXChildren(const ATagName: string);
 var
   Text: string;
   ChildStartLine, ChildStartColumn: Integer;
+  ContainerEnd: Integer;
   GuardPosition: Integer;
 begin
   GuardPosition := 0;
@@ -1172,6 +1250,16 @@ begin
       ChildStartLine := FLine;
       ChildStartColumn := FColumn;
       AdvanceInput;
+      // A container holding nothing but comments is how JSX writes a comment
+      // between children. It has no child, so it contributes no argument: an
+      // emitted `, ` would leave an elision (`createElement("div", null, , x)`)
+      // that fails to parse.
+      if IsCommentOnlyJSXExpression(ContainerEnd) then
+      begin
+        while FPos <= ContainerEnd do
+          AdvanceInput;
+        Continue;
+      end;
       Emit(', ');
       FSourceMap.AddMapping(FOutputLine, FOutputColumn - 1, 0,
         ChildStartLine - 1, ChildStartColumn - 1);
@@ -1203,6 +1291,56 @@ begin
     AdvanceInput;
   end;
   Result := SB.ToString;
+end;
+
+// Looks ahead from just inside a child expression container for one whose
+// whole content is whitespace and comments — a block comment, a line comment,
+// or nothing at all. TSX gives such a container no child, and this decides
+// that before any output is produced, so the caller can drop the container
+// whole. AClosingBrace returns the position of the container's closing brace.
+//
+// The scan reads FSource directly instead of advancing the transformer: a
+// container that turns out to hold an expression must still be copied from its
+// first character, comments included.
+function TGocciaJSXTransformer.IsCommentOnlyJSXExpression(
+  out AClosingBrace: Integer): Boolean;
+var
+  Scan: Integer;
+begin
+  Result := False;
+  AClosingBrace := 0;
+  Scan := FPos;
+  while Scan <= Length(FSource) do
+  begin
+    if FSource[Scan] <= ' ' then
+      Inc(Scan)
+    else if (FSource[Scan] = '/') and (Scan < Length(FSource)) and
+            (FSource[Scan + 1] = '/') then
+    begin
+      while (Scan <= Length(FSource)) and (FSource[Scan] <> #10) do
+        Inc(Scan);
+    end
+    else if (FSource[Scan] = '/') and (Scan < Length(FSource)) and
+            (FSource[Scan + 1] = '*') then
+    begin
+      Inc(Scan, 2);
+      while (Scan < Length(FSource)) and
+            not ((FSource[Scan] = '*') and (FSource[Scan + 1] = '/')) do
+        Inc(Scan);
+      // Unterminated block comment: leave it to the ordinary copy path, which
+      // reports the container as unterminated where it actually opened.
+      if Scan >= Length(FSource) then
+        Exit;
+      Inc(Scan, 2);
+    end
+    else
+    begin
+      Result := FSource[Scan] = '}';
+      if Result then
+        AClosingBrace := Scan;
+      Exit;
+    end;
+  end;
 end;
 
 procedure TGocciaJSXTransformer.CopyJSXExpression;
@@ -1276,11 +1414,15 @@ begin
           end
           else if (CurrentChar = '$') and (PeekAt(1) = '{') then
           begin
+            // The substitution's own '}' is copied by this same loop, which
+            // runs to the closing backtick — so it never reaches the '}' arm
+            // below, and counting it as an open brace here left the container
+            // one level deep. Its real '}' was then swallowed as a close,
+            // and the scan ran on past the end of the container.
             EmitChar(CurrentChar);
             AdvanceInput;
             EmitChar(CurrentChar);
             AdvanceInput;
-            Inc(Depth);
           end;
           if not IsAtEnd and (CurrentChar <> '`') then
           begin
@@ -1312,7 +1454,19 @@ begin
         // exactly the same false-positive trigger as in TransformSource.
         // Without this case, '<name>' inside a regex body would be picked up
         // by the '<' arm above and recurse on non-JSX content.
-        if FLastTokenKind in [ltkNone, ltkOperator] then
+        //
+        // Comment leads are filtered first, as TransformSource does and as
+        // CopyRegexLiteral's contract assumes. A comment is neither operand
+        // nor operator, so FLastTokenKind carries across it and the token
+        // after the comment is still classified against the token before it.
+        // Without this, `{/* c */ value}` read the comment as a regex body
+        // and scanned on for a closing '/', and `{value /* c */}` read it as
+        // a division — either way swallowing the container's own '}'.
+        if PeekAt(1) = '/' then
+          CopyLineComment
+        else if PeekAt(1) = '*' then
+          CopyBlockComment
+        else if FLastTokenKind in [ltkNone, ltkOperator] then
           CopyRegexLiteral
         else
         begin

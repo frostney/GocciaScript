@@ -8479,6 +8479,24 @@ begin
   end;
 end;
 
+{ Tokens that can only continue a type from the left: a union or intersection
+  member, a function type's result, a conditional type's branches. None of them
+  can begin a statement or a type, so a line break before one is not a place a
+  semicolon could go — and TypeScript's own formatting puts the operator at the
+  head of its line:
+
+    export type GroupId =
+      | 'names'
+      | 'functions';
+
+  The mirror of TypeOperatorExpectsOperand above, which answers the same
+  question about the token *before* the break. }
+function TypeOperatorContinuesType(const AToken: TGocciaToken): Boolean;
+begin
+  Result := AToken.TokenType in [gttBitwiseOr, gttBitwiseAnd, gttArrow,
+    gttExtends, gttQuestion, gttColon];
+end;
+
 { Collects an annotation and then checks what it collected. The scan itself is
   unchanged — erasing is what types-as-comments is — but a collected span is now
   rejected when it is not type syntax at all; see ValidateTypeSyntaxTokens.
@@ -8569,10 +8587,13 @@ begin
       // own line, so without this the collector runs into the next statement:
       // `let v: number` / newline / `v = 5` collected "number v" and then took
       // the next line's assignment as the declaration's initializer. A break
-      // after a type operator ('|', '&', '=>', ...) still continues the type.
+      // after a type operator ('|', '&', '=>', ...) still continues the type,
+      // and so does a break *before* one, which is how TypeScript formats a
+      // multi-line union: each member's '|' leads its own line.
       if FAutomaticSemicolonInsertion and (Result <> '') and
          (Previous.Line < Peek.Line) and Assigned(PreviousTypeToken) and
-         not TypeOperatorExpectsOperand(PreviousTypeToken) then
+         not TypeOperatorExpectsOperand(PreviousTypeToken) and
+         not TypeOperatorContinuesType(Peek) then
         Exit;
 
       IsTerminator := False;
@@ -8869,12 +8890,30 @@ var
   // A relational expression like `var x = 1 < 2` followed by a new statement
   // still breaks at the newline, because its break sits after a complete
   // operand.
+  //
+  // The same reasoning covers the rest of a type body. A break after the '='
+  // of a type alias, or after a type operator that is still waiting for its
+  // operand, leaves an incomplete type; a break before an infix type operator
+  // is a break before a token that can start neither a statement nor a type.
+  // TypeScript's own formatting puts the operator at the head of its line, so
+  // both halves are needed for the ordinary multi-line union:
+  //
+  //   export type GroupId =
+  //     | 'names'
+  //     | 'functions';
+  //
+  // Without the '=' carve-out the skip ended after the '=' and the type body
+  // was left behind as runtime code; without the leading-operator carve-out it
+  // ended again at each '|', and the erased declaration's members were parsed
+  // as statements starting with '|'.
   function IsAutomaticSemicolonPoint: Boolean;
   begin
     Result := FAutomaticSemicolonInsertion and (Previous.Line < Peek.Line) and
-      not (Previous.TokenType in [gttLess, gttComma]) and
+      not (Previous.TokenType in [gttLess, gttComma, gttAssign]) and
+      not TypeOperatorExpectsOperand(Previous) and
       not (Peek.TokenType in [gttGreater, gttRightShift,
-        gttUnsignedRightShift]);
+        gttUnsignedRightShift]) and
+      not TypeOperatorContinuesType(Peek);
   end;
 
 begin
