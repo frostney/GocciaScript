@@ -8857,13 +8857,14 @@ await section("SandboxRunner: fetch, nested runScript, fetch completes without a
 });
 
 await section("SandboxRunner: a failing nested runScript keeps the parent's in-flight fetch...", async () => {
-  // The child's teardown detaches its own requests only. The parent's request
-  // is still in flight across the whole nested run and must settle afterwards
-  // with the parent's policy, rather than be discarded with the child's.
-  const child = [
-    "fetch('http://127.0.0.1:1/child').catch(() => {});",
-    "throw new Error('child failed');",
-  ].join("\n");
+  // A failed run discards its engine's pending requests, which used to mean
+  // every request on the thread. The parent's request is still in flight
+  // across the whole nested run and must settle afterwards with the parent's
+  // policy. The child starts no request of its own: a request abandoned at
+  // process exit can crash its still-running worker, independently of this
+  // fix, which would make this section flaky. The native fetch runtime
+  // extension test covers a discard that drops only the child's requests.
+  const child = "throw new Error('child failed');\n";
   const main = [
     "import { runScript } from 'goccia';",
     "const pending = fetch('http://127.0.0.1:1/parent');",
