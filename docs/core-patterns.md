@@ -63,6 +63,10 @@ MathObj.DefineProperty('PI', TGocciaNumberLiteralValue.Create(Pi), False);
 MathObj.DefineProperty('floor', TGocciaNativeFunction.Create(@MathFloor), False);
 ```
 
+### Ordered own property keys
+
+`TGocciaObjectValue.GetOwnPropertyKeys` owns string-key enumeration order. Ordinary objects return array indices in ascending numeric order followed by other strings in creation order; exotic values retain their own ordering. `OwnPropertyKeyValues` includes symbols and preserves a proxy trap's mixed string/symbol order. Both executors consume these existing value-layer operations for object spread, rest, and `for...in`, without sorting the returned keys again. Classes include their synthesized `length`, `name`, and `prototype` keys through their override, just as other exotic values include their virtual properties.
+
 ### Parser combinator (binary expressions)
 
 All left-associative binary operator parsers delegate to a shared `ParseBinaryExpression` helper:

@@ -37,18 +37,9 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 constructor TGocciaYAMLBuiltin.Create(const AName: string;
   const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback;
@@ -68,12 +59,10 @@ begin
       TGocciaSymbolValue.WellKnownToStringTag,
       TGocciaStringLiteralValue.Create('YAML'),
       [pfConfigurable]);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
   if ADefineGlobalBinding then
     AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 end;
@@ -121,8 +110,5 @@ begin
       ThrowSyntaxError(E.Message, SSuggestYAMLSyntax);
   end;
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

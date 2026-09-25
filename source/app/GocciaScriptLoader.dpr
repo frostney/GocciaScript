@@ -40,6 +40,7 @@ uses
   Goccia.Profiler.Report,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
+  Goccia.RuntimeExtensions.AST,
   Goccia.RuntimeExtensions.FFI,
   Goccia.RuntimeProfiles.Loader,
   Goccia.Scope,
@@ -334,6 +335,9 @@ begin
   if Assigned(EngineOptions) and
      ResolveFlagOption(EngineOptions.UnsafeFFI, AFileConfig) then
     Runtime.Install(TGocciaFFIRuntimeExtension.Create);
+  if Assigned(EngineOptions) and
+     ResolveFlagOption(EngineOptions.ExperimentalAST, AFileConfig) then
+    Runtime.Install(TGocciaASTRuntimeExtension.Create);
   ConsoleExtension := TGocciaConsoleRuntimeExtension(
     Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
   if LogFileOpen and Assigned(ConsoleExtension) and

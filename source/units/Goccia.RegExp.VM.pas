@@ -1420,15 +1420,6 @@ begin
 end;
 
 initialization
-  // FPC does not auto-finalize managed threadvars at thread exit. Register this
-  // unit's regex-input memo, and also the is-ASCII memo owned by the shared
-  // TextSemantics unit: TextSemantics is generic infrastructure that stays free
-  // of engine dependencies, so its per-thread memo is registered here instead
-  // (every engine binary links the regex VM). See ClearAsciiMemo in
-  // source/shared/TextSemantics.pas. The registry drain releases both memos on
-  // worker exit (ShutdownThreadRuntime) and on the main thread
-  // (Goccia.ThreadCleanupRegistry's finalization).
   RegisterThreadvarCleanup(@ClearRegExpInputMemo);
-  RegisterThreadvarCleanup(@ClearAsciiMemo);
 
 end.
