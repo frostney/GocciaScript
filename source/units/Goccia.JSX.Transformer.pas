@@ -79,6 +79,7 @@ type
     procedure CopyLineComment;
     procedure CopyBlockComment;
     function CopyIdentifierOrKeyword: string;
+    function TokenKindAfterWord(const AWord: string): TLastTokenKind;
     procedure CopyNumber;
     procedure CopyOperator;
 
@@ -555,14 +556,29 @@ begin
   while not IsAtEnd and IsIdentifierPart(CurrentChar) do
     CopyChar;
   Result := Copy(FSource, Start, FPos - Start);
+  FLastTokenKind := TokenKindAfterWord(Result);
+end;
 
-  if (Result = KEYWORD_RETURN) or (Result = KEYWORD_THROW) or (Result = KEYWORD_CASE) or
-     (Result = KEYWORD_NEW) or (Result = KEYWORD_TYPEOF) or (Result = KEYWORD_VOID) or
-     (Result = KEYWORD_DELETE) or (Result = KEYWORD_IN) or (Result = KEYWORD_INSTANCEOF) or
-     (Result = KEYWORD_OF) or (Result = KEYWORD_YIELD) or (Result = KEYWORD_AWAIT) then
-    FLastTokenKind := ltkOperator
+// What a '/' after AWord would be: a regex after a word that expects an
+// operand, a division after one that ends an expression. Reads FLastTokenKind
+// as the token before AWord.
+//
+// `of` is the one contextual word here. It is a keyword only in a for-of
+// header, where it follows the end of a binding (`x`, `]`, `}`) and a regex
+// can follow it; everywhere else it is an ordinary identifier, and `of / 2`
+// divides.
+function TGocciaJSXTransformer.TokenKindAfterWord(
+  const AWord: string): TLastTokenKind;
+begin
+  if (AWord = KEYWORD_RETURN) or (AWord = KEYWORD_THROW) or (AWord = KEYWORD_CASE) or
+     (AWord = KEYWORD_NEW) or (AWord = KEYWORD_TYPEOF) or (AWord = KEYWORD_VOID) or
+     (AWord = KEYWORD_DELETE) or (AWord = KEYWORD_IN) or (AWord = KEYWORD_INSTANCEOF) or
+     (AWord = KEYWORD_YIELD) or (AWord = KEYWORD_AWAIT) then
+    Result := ltkOperator
+  else if (AWord = KEYWORD_OF) and (FLastTokenKind = ltkExpressionEnd) then
+    Result := ltkOperator
   else
-    FLastTokenKind := ltkExpressionEnd;
+    Result := ltkExpressionEnd;
 end;
 
 procedure TGocciaJSXTransformer.CopyNumber;
@@ -1609,13 +1625,7 @@ begin
           AdvanceInput;
         end;
         Ident := Copy(FSource, IdStart, FPos - IdStart);
-        if (Ident = KEYWORD_RETURN) or (Ident = KEYWORD_THROW) or (Ident = KEYWORD_CASE) or
-           (Ident = KEYWORD_NEW) or (Ident = KEYWORD_TYPEOF) or (Ident = KEYWORD_VOID) or
-           (Ident = KEYWORD_DELETE) or (Ident = KEYWORD_IN) or (Ident = KEYWORD_INSTANCEOF) or
-           (Ident = KEYWORD_OF) or (Ident = KEYWORD_YIELD) or (Ident = KEYWORD_AWAIT) then
-          FLastTokenKind := ltkOperator
-        else
-          FLastTokenKind := ltkExpressionEnd;
+        FLastTokenKind := TokenKindAfterWord(Ident);
       end
       else if CurrentChar in ['0'..'9'] then
       begin

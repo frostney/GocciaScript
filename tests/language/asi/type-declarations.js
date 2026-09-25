@@ -3,6 +3,14 @@ description: A type declaration broken across lines is erased whole under ASI in
 features: [automatic-semicolon-insertion, types-as-comments]
 ---*/
 
+// `export` is only valid at module scope, so the exported form is declared
+// here rather than inside its test.
+export type ExportedGroupId =
+  | "names"
+  | "functions"
+
+const exportedGroup = "functions"
+
 describe("ASI type declarations", () => {
   test("a union with leading pipes is erased whole", () => {
     type GroupId =
@@ -15,13 +23,7 @@ describe("ASI type declarations", () => {
   });
 
   test("an exported union with leading pipes is erased whole", () => {
-    export type ExportedGroupId =
-      | "names"
-      | "functions"
-
-    const group = "functions"
-
-    expect(group).toBe("functions");
+    expect(exportedGroup).toBe("functions");
   });
 
   test("a type body broken right after the '=' is erased whole", () => {
