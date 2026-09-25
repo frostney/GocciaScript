@@ -89,6 +89,18 @@ Scalar Fast-Path:
 
 Per-function breakdown: self-time (exclusive — time in the function minus time in callees), total-time (inclusive), call count, and allocation count (heap-allocated `TGocciaValue` instances created during that function's execution).
 
+Allocation counts belong to the active profiled function, including allocations
+made by native built-ins on its behalf. Collection follows each native entry
+into the VM, so host-invoked benchmark callbacks and resumed generators or async
+functions are included after module execution finishes. Nested VM entries
+restore their caller's allocation-profiling state on return or exception;
+ordinary bytecode calls use the existing function profiling stack.
+
+With `--profile-deterministic`, BenchmarkRunner resets the counters after module
+registration and executes each registered benchmark once. The resulting
+function allocation counts describe that benchmark execution, including its
+setup and teardown, rather than the discarded registration phase.
+
 ```text
 Function Profile:
   Self Time    Total Time      Calls     Allocs  Function                       Location
@@ -197,4 +209,6 @@ The profiler's allocation count per function tells you *which JS function* drive
 | `Goccia.Profiler.Report.pas` | Console output, JSON export, and collapsed stack export |
 | `Goccia.Bytecode.OpCodeNames.pas` | Opcode ordinal to human-readable name (cold path, report generation only) |
 
-The profiler follows the same singleton pattern as `Goccia.Coverage.pas`: `Initialize`/`Instance`/`Shutdown`, boolean `Enabled` flag, zero overhead when disabled. Opcode counting and pair tracking use static arrays (no heap allocation in the hot path). Function profiling uses a timing stack for correct self-time calculation across recursive calls. Allocation tracking hooks into `TGocciaValue.AfterConstruction` via a global `GProfilingAllocations` boolean, attributing each allocation to the function on top of the profiler's timing stack.
+The profiler follows the same singleton pattern as `Goccia.Coverage.pas`: `Initialize`/`Instance`/`Shutdown`, boolean `Enabled` flag. The instance is per-thread, so parallel workers never share profiler state. Opcode counting and pair tracking use static arrays (no heap allocation in the hot path). Function profiling uses a timing stack for correct self-time calculation across recursive calls. Allocation tracking hooks into `TGocciaValue.AfterConstruction` via `GProfilingAllocations`, a per-thread (`threadvar`) boolean, attributing each allocation to the function on top of the profiler's timing stack.
+
+When profiling is disabled, the remaining cost is small but not zero: each allocation checks the per-thread `GProfilingAllocations` boolean, and each native VM entry (`ExecuteClosureRegistersInternal`) saves that flag, sets it from the VM's function-profiling state, and restores it on exit. A callback-heavy A/B run (6M `map`/`reduce` callbacks in bytecode mode) put that save/restore within run-to-run noise.
