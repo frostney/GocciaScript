@@ -1,5 +1,5 @@
 import { gunzipSync, gzipSync } from "node:zlib";
-import { BlobNotFoundError, get, put } from "@vercel/blob";
+import { BlobNotFoundError, get, type PutBlobResult, put } from "@vercel/blob";
 
 export type BlobAccess = "public" | "private";
 
@@ -117,12 +117,12 @@ export function putCompressedReportBlob(
   );
 }
 
-export async function putDailyBlobPointer(
+export function putDailyBlobPointer(
   path: string,
   value: unknown,
   access: BlobAccess,
-): Promise<void> {
-  await put(path, JSON.stringify(value, null, 2), {
+): Promise<PutBlobResult> {
+  return put(path, JSON.stringify(value, null, 2), {
     access,
     allowOverwrite: true,
     cacheControlMaxAge: 900,
