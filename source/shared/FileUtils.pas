@@ -166,6 +166,10 @@ function HostRealPath(APath: PAnsiChar; AResolved: PAnsiChar): PAnsiChar;
 function GetFinalPathNameByHandleW(AFile: THandle; APath: PWideChar;
   APathLength, AFlags: DWORD): DWORD;
   stdcall; external 'kernel32.dll' name 'GetFinalPathNameByHandleW';
+
+const
+  { Missing from FPC 3.2.2's Windows unit for the same reason. }
+  MOVEFILE_WRITE_THROUGH = $00000008;
 {$ENDIF}
 
 function CanonicalHostPath(const APath: string): string;
