@@ -682,8 +682,33 @@ async function runHistoricalRunner(
   reportPath: string,
   options: BackfillOptions,
 ) {
+  const nativeRunner = path.join(
+    worktree,
+    "source",
+    "app",
+    "GocciaTest262Runner.dpr",
+  );
   const tsRunner = path.join(worktree, "scripts", "run_test262_suite.ts");
   const pythonRunner = path.join(worktree, "scripts", "run_test262_suite.py");
+
+  // Commits with the native runner still ship run_test262_suite.ts, but only
+  // for shard merging and comment rendering, so check the native runner first.
+  if (await pathExists(nativeRunner)) {
+    log("using native GocciaTest262Runner from historical commit");
+    await runCommand("./build.pas", ["--clean", "test262runner"], {
+      cwd: worktree,
+    });
+    return await runCommand(
+      "./build/GocciaTest262Runner",
+      [
+        `--suite-dir=${suiteDir}`,
+        "--mode=bytecode",
+        `--jobs=${options.jobs}`,
+        `--output=${reportPath}`,
+      ],
+      { cwd: worktree, allowFailure: true },
+    );
+  }
 
   if (await pathExists(tsRunner)) {
     log("using TypeScript test262 runner from historical commit");
