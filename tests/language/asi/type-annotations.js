@@ -34,6 +34,22 @@ describe("ASI type annotations", () => {
     expect(value).toBe("kept");
   });
 
+  test("a union with each member's pipe leading its line continues", () => {
+    let value:
+      | string
+      | number = "kept"
+
+    expect(value).toBe("kept");
+  });
+
+  test("a leading-pipe union after an indexed type continues", () => {
+    let value:
+      | Array<string>["length"]
+      | undefined = 3
+
+    expect(value).toBe(3);
+  });
+
   test("an annotation broken right after the colon continues", () => {
     let value:
       number = 4

@@ -484,7 +484,7 @@ For TOML 1.1.0 checks against a prepared checkout of the official `toml-test` co
 ./build/GocciaTOMLComplianceRunner --suite-dir=/path/to/toml-test --output=tmp/toml-suite-results.json
 ```
 
-The runner verifies the checkout against `tests/compliance/toml-test.pin` without fetching or cloning. It launches its private worker mode once per case, applies a bounded `--jobs` limit, and classifies mismatches, false accepts, false rejects, timeouts, crashes, and infrastructure failures. Valid cases are compared with the official tagged JSON fixtures through `TGocciaTOMLParser.ParseDocument(...)`, preserving scalar distinctions such as `integer`, `float`, `datetime`, `datetime-local`, `date-local`, and `time-local`.
+The runner verifies the checkout against `tests/compliance/toml-test.pin` without fetching or cloning. It launches its private worker mode once per case, applies a bounded `--jobs` limit (defaulting to the online processor count through the same detector as TestRunner), and classifies mismatches, false accepts, false rejects, timeouts, crashes, and infrastructure failures. Valid cases are compared with the official tagged JSON fixtures through `TGocciaTOMLParser.ParseDocument(...)`, preserving scalar distinctions such as `integer`, `float`, `datetime`, `datetime-local`, `date-local`, and `time-local`.
 
 The runner prints a human summary, optionally writes the shared compliance JSON envelope with `--output`, and exits non-zero for compliance or infrastructure failures.
 

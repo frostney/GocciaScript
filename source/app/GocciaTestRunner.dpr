@@ -38,6 +38,7 @@ uses
   Goccia.Modules.Resolver,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
+  Goccia.RuntimeExtensions.AST,
   Goccia.RuntimeExtensions.FFI,
   Goccia.RuntimeExtensions.TestingLibrary,
   Goccia.RuntimeProfiles.TestRunner,
@@ -618,6 +619,9 @@ begin
   if Assigned(EngineOptions) and
      ResolveFlagOption(EngineOptions.UnsafeFFI, AFileConfig) then
     Runtime.Install(TGocciaFFIRuntimeExtension.Create);
+  if Assigned(EngineOptions) and
+     ResolveFlagOption(EngineOptions.ExperimentalAST, AFileConfig) then
+    Runtime.Install(TGocciaASTRuntimeExtension.Create);
   ConsoleExtension := TGocciaConsoleRuntimeExtension(
     Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
   if LogFileOpen and Assigned(ConsoleExtension) and

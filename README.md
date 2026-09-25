@@ -39,6 +39,13 @@ fs.writeFileSync("/out/result.txt", input.toUpperCase());
   --diff
 ```
 
+Nothing the script writes reaches the host unless the host asks for it:
+`--write-back` writes the files a successful run changed to the host paths they
+were seeded from, and without it the virtual filesystem is discarded. A program
+that only reports and a program that fixes are therefore the same program, and
+the difference is a word on the host's command line. See
+[ADR 0119](docs/adr/0119-host-applied-sandbox-write-back.md).
+
 The host can also define globals, virtual modules, allowed network hosts,
 instruction and memory limits, deterministic time/randomness, and
 application-specific APIs. See [Build System — Sandbox Runner](docs/build-system.md#gocciasandboxrunner-virtual-filesystem-sandbox)
@@ -131,6 +138,8 @@ Core built-ins include `Math`, `JSON`, `Object`, `Function`, `Array`, `Boolean`,
 `SuppressedError`, and `DOMException`.
 
 Non-standard data-format APIs and SemVer are import-only Goccia runtime modules, not auto-installed globals: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. They expose named exports only; use `import * as CSV from "goccia:csv"` when you want the namespace-object shape. There is no default export.
+
+`goccia:ast` is an experimental runtime module behind `--experimental-ast`. It exposes one `parse` function that returns a source file's statement structure — kinds, offsets, line/column, nesting — plus its comments, so a lint rule or a codemod can be a GocciaScript program. Every offset and position is into the text that was passed, including for a `.tsx` file the engine rewrote before parsing. See [Built-ins](docs/built-ins.md#ast--experimental-gocciabuiltinsastpas), [ADR 0117](docs/adr/0117-javascript-visible-ast-module.md), and [ADR 0118](docs/adr/0118-original-file-source-ranges.md).
 
 `node:async_hooks` is an import-only module too, at Node's own address. It exports `AsyncLocalStorage` and `AsyncResource`, named and on the default export; the `async_hooks` observer API (`createHook`, `executionAsyncId`, and the rest) is out of scope. The engine propagates the async context, so a store bound with `run` survives `await` and every promise-reaction continuation. See the [Async Context reference](docs/built-ins-async-context.md) and [ADR 0112](docs/adr/0112-native-async-local-storage.md).
 

@@ -46,7 +46,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.Error,
@@ -56,14 +55,6 @@ uses
   Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToPrimitive;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 { Helper: validate target is an object, throw TypeError if not }
 
@@ -102,11 +93,10 @@ begin
       TGocciaSymbolValue.WellKnownToStringTag,
       TGocciaStringLiteralValue.Create('Reflect'),
       [pfConfigurable]);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 
   if ADefineGlobalBinding then
     AScope.DefineLexicalBinding(AName, FBuiltinObject, dtConst, True);
@@ -684,8 +674,5 @@ begin
 
   Result := TGocciaBooleanLiteralValue.TrueValue;
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.
